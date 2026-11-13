@@ -57,6 +57,37 @@ def _page_table_rows(page_tables):
     return (pt.reshape(1, -1) if pt.dim() == 1 else pt).to(torch.int32).contiguous()
 
 
+class _MaskedPrefillTrace:
+    """The captured masked-bucket prefill of one bucket (Qwen36Model.prepare_prefill_traces_masked): its persistent
+    inputs, which a replay restages, and per variant (False: plain, True: with a prefill checkpoint) the trace id and
+    the trace outputs (hidden [1, 1, bucket, dim / TP], logits [1, 1, vocab])."""
+
+    def __init__(self, bucket, blocks):
+        self.bucket = bucket
+        self.blocks = blocks  # width of the chunk page table: KV blocks that the bucket's rows can fill
+        self.tok = self.cos = self.sin = self.csi = self.full_pt = self.chunk_pt = self.sel = None
+        self.sel_dtype = None
+        self.masks = None  # gdn.tp.PrefillMasks
+        self.checkpoint = None  # gdn.tp.PrefillCheckpoint.buffers, for a bucket that a KV block boundary falls inside
+        self.trace_ids = {}
+        self.outputs = {}
+
+    def variants(self):
+        return (False, True) if self.checkpoint is not None else (False,)
+
+    def free(self):
+        for t in (self.tok, self.cos, self.sin, self.csi, self.full_pt, self.chunk_pt, self.sel):
+            if t is not None:
+                ttnn.deallocate(t)
+        for part in (self.masks, self.checkpoint):
+            if part is not None:
+                part.free()
+        for out in self.outputs.values():
+            for t in out:
+                ttnn.deallocate(t)
+        self.outputs = {}
+
+
 class Qwen36Model:
     """Qwen3.5-9B text LM on Blackhole P150. HF_MODEL env var selects checkpoint."""
 
@@ -235,6 +266,12 @@ class Qwen36Model:
         self._bucket_cos_buf = None
         self._bucket_sin_buf = None
         self._gdn_batched_prev = None  # batched GDN bindings saved during bucket-trace capture
+        # Captured masked-bucket prefill (prepare_prefill_traces_masked): bucket -> _MaskedPrefillTrace, the GDN
+        # workspace the traces read, and the host tensors of the last replay's inputs (held until the device is idle).
+        self._masked_traces = {}
+        self._masked_traces_recorded = False
+        self._masked_trace_gdn = None
+        self._masked_trace_refs = []
         # Persistent B=1 GDN prefill scratch (batched serving): allocated once at warmup, its buffer
         # addresses are baked into the chunk-prefill trace and reused by every prefill_paged_slots
         # replay, so it is never freed/reallocated (only zeroed in place). See _bind_gdn_prefill_scratch.
@@ -1134,7 +1171,7 @@ class Qwen36Model:
                 token_ids[:, :actual_len], page_table, actual_len=actual_len, chunk_start=0, return_hidden=True
             )
             on_chunk(hidden, 0, actual_len)
-            ttnn.deallocate(hidden)
+            self._release_prefill_hidden(hidden)
             return logits
 
         self._reset_gdn_state_for_new_sequence()
@@ -1163,7 +1200,7 @@ class Qwen36Model:
                 token_ids[:, cs:actual_len], page_table, actual_len=tail_real, chunk_start=cs, return_hidden=True
             )
             on_chunk(hidden, cs, tail_real)
-            ttnn.deallocate(hidden)
+            self._release_prefill_hidden(hidden)
             return logits
         # Exact multiple of chunk_size: the last chunk supplies both the logits and the last hidden.
         logits = self._masked_bucket_logits_tp(last_hidden, chunk_size, chunk_size)
@@ -2993,65 +3030,84 @@ class Qwen36Model:
         vision_tokens=None,
         full_chunk=False,
         checkpoint_len=None,
+        inputs=None,
+        checkpoint=False,
     ):
         """TP (num_devices>1) masked fixed-bucket single-chunk prefill forward.
 
         flex_sdpa=True: flexible chunked SDPA (serving). flex_sdpa=False: host-int path (debug).
         Fills K/V for real blocks only. Returns hidden [1,1,bucket,dim].
         checkpoint_len: every GDN layer also computes its state after the first checkpoint_len tokens
-        (TPGatedDeltaNet.prefill_checkpoint)."""
-        block_size = get_block_size(self._paged_kv_caches)
-        tok = ttnn.from_torch(
-            token_buf.to(torch.int32),
-            dtype=ttnn.uint32,
-            device=self.device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
-        )
+        (TPGatedDeltaNet.prefill_checkpoint).
+        inputs: a _MaskedPrefillTrace. The forward then reads the inputs that a replay staged in its persistent tensors
+        instead of token_buf, valid_len, chunk_start, page_table and checkpoint_len, and makes no host write, so it can
+        be captured; ``checkpoint`` adds the trace's persistent checkpoint. The tensors stay allocated."""
+        if inputs is not None:
+            tok, cos, sin, csi_tensor = inputs.tok, inputs.cos, inputs.sin, inputs.csi
+            full_pt, chunk_pt = inputs.full_pt, inputs.chunk_pt
+            # The device chunk start places the SDPA; the host int only sizes a page table narrower than full_pt.
+            chunk_start = 0
+            gdn = dict(valid_len=None, gdn_masks=inputs.masks, gdn_checkpoint=inputs.checkpoint if checkpoint else None)
+        else:
+            tok = ttnn.from_torch(
+                token_buf.to(torch.int32),
+                dtype=ttnn.uint32,
+                device=self.device,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+            )
         x = self.embd(tok)
         x = ttnn.reshape(x, (1, 1, bucket, x.shape[-1]))
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(tok)
+        if inputs is None:
+            ttnn.deallocate(tok)
         # Trace-safe vision splice (fixed-shape where over the hidden-sharded persistent buffers,
         # sliced to bucket; identity when the mask is zero). The caller stages the buffers
         # (prefill_masked_bucket -> _set_vision_merge). No-op until a trace is captured.
         x = self._apply_vision_merge(x, length=bucket)
-        # rope_tp cos/sin for absolute positions [chunk_start, chunk_start+bucket).
-        cos_t, sin_t = self._rope_tp_cos_sin_torch(chunk_start, bucket)
-        cos = ttnn.from_torch(
-            cos_t,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
-        )
-        sin = ttnn.from_torch(
-            sin_t,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
-        )
-        full_pt = ttnn.from_torch(page_table, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
-        blk0 = chunk_start // block_size
-        blkN = num_blocks_in_seq(chunk_start + valid_len, block_size)
-        chunk_pt = ttnn.from_torch(
-            page_table[:, blk0:blkN].contiguous(), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
-        )
-        csi_tensor = (
-            ttnn.from_torch(
-                torch.tensor([chunk_start], dtype=torch.int32),
+        ck = None
+        if inputs is None:
+            block_size = get_block_size(self._paged_kv_caches)
+            # rope_tp cos/sin for absolute positions [chunk_start, chunk_start+bucket).
+            cos_t, sin_t = self._rope_tp_cos_sin_torch(chunk_start, bucket)
+            cos = ttnn.from_torch(
+                cos_t,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+            )
+            sin = ttnn.from_torch(
+                sin_t,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+            )
+            full_pt = ttnn.from_torch(page_table, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
+            blk0 = chunk_start // block_size
+            blkN = num_blocks_in_seq(chunk_start + valid_len, block_size)
+            chunk_pt = ttnn.from_torch(
+                page_table[:, blk0:blkN].contiguous(),
                 dtype=ttnn.int32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=self.device,
             )
-            if flex_sdpa
-            else None
-        )
-        checkpoint = None
-        if checkpoint_len:
-            from models.demos.blackhole.qwen36.tt.gdn.tp import PrefillCheckpoint
+            csi_tensor = (
+                ttnn.from_torch(
+                    torch.tensor([chunk_start], dtype=torch.int32),
+                    dtype=ttnn.int32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=self.device,
+                )
+                if flex_sdpa
+                else None
+            )
+            if checkpoint_len:
+                from models.demos.blackhole.qwen36.tt.gdn.tp import PrefillCheckpoint
 
-            checkpoint = PrefillCheckpoint(self.device, bucket, checkpoint_len, self.args.gdn_conv_kernel_size)
+                ck = PrefillCheckpoint(self.device, bucket, checkpoint_len, self.args.gdn_conv_kernel_size)
+            # full_chunk: GDN takes the traced body's conv (KDA) so eager == traced
+            gdn = dict(valid_len=None if full_chunk else valid_len, gdn_checkpoint=ck)
         _cap = getattr(self, "_capture_layer", None)
         for _li, layer in enumerate(self.layers):
             if layer.is_full_attention:
@@ -3067,18 +3123,13 @@ class Qwen36Model:
                     valid_len=valid_len,  # unused by full attention
                 )
             else:
-                x_new = layer.forward(
-                    x,
-                    mode="prefill",
-                    chunk_size=self.args.gdn_chunk_size,
-                    # full_chunk: GDN takes the traced body's conv (KDA) so eager == traced
-                    valid_len=None if full_chunk else valid_len,
-                    gdn_checkpoint=checkpoint,
-                )
+                x_new = layer.forward(x, mode="prefill", chunk_size=self.args.gdn_chunk_size, **gdn)
             ttnn.deallocate(x)
             x = x_new
             if _cap is not None and _li == _cap:  # debug: capture hidden after layer _cap
                 self._cap_chunk = ttnn.clone(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if inputs is not None:
+            return x
         # Deallocate per-chunk inputs; only hidden survives (avoids OOM in eager 64k loop).
         ttnn.deallocate(cos)
         ttnn.deallocate(sin)
@@ -3086,8 +3137,8 @@ class Qwen36Model:
         ttnn.deallocate(chunk_pt)
         if csi_tensor is not None:
             ttnn.deallocate(csi_tensor)
-        if checkpoint is not None:
-            checkpoint.free()
+        if ck is not None:
+            ck.free()
         return x
 
     def prefill_masked_bucket(
@@ -3116,6 +3167,9 @@ class Qwen36Model:
         ``stage_rope`` False keeps the RoPE table the caller staged (prefill_traced_chunked, from the whole prompt).
         ``checkpoint_len`` (TP): every GDN layer also computes its state after the segment's first checkpoint_len
         tokens (TPGatedDeltaNet.prefill_checkpoint).
+        TP with a captured masked-bucket trace for the bucket (record_prefill_traces_masked): the forward and the
+        logits replay it with the same operations; a returned hidden is then the trace's output, which the caller
+        hands to _release_prefill_hidden instead of freeing it.
         Returns host [1,1,vocab] logits at actual_len-1.
         """
         B_batch, _ = token_ids.shape
@@ -3123,10 +3177,13 @@ class Qwen36Model:
         if bucket is None:
             bucket = self._mask_bucket_for(actual_len)
         assert 1 <= actual_len <= bucket, f"actual_len {actual_len} not in [1, {bucket}]"
+        traced = self._masked_prefill_trace(bucket, checkpoint_len) if flex_sdpa else None
 
         if chunk_start == 0:
-            # chunk_start==0: new sequence, re-zero GDN. chunk_start>0: tail, keep carried state.
-            self._reset_gdn_state_for_new_sequence()
+            # chunk_start==0: new sequence, re-zero GDN (a replay starts from zero state itself). chunk_start>0: tail,
+            # keep carried state.
+            if traced is None:
+                self._reset_gdn_state_for_new_sequence()
             # Stage the per-request RoPE for this segment (M-RoPE for multimodal, 1D for text).
             # Only at the sequence start; a carried tail (chunk_start>0) keeps the table the
             # long-prompt entry (prefill_traced_chunked) already staged.
@@ -3145,6 +3202,12 @@ class Qwen36Model:
         # (text-only prompt, or a tail past the image) clears the mask inside _set_vision_merge so
         # the where is the identity. No-op without buffers.
         self._set_vision_merge(token_buf, vision_tokens, vis_row_offset)
+
+        if traced is not None:
+            hidden, logits = self._replay_masked_trace(
+                traced, token_buf, page_table, actual_len, chunk_start, checkpoint_len
+            )
+            return (logits, hidden) if return_hidden else logits
 
         hidden = self._forward_prefill_chunk_masked(
             token_buf,
@@ -3179,19 +3242,24 @@ class Qwen36Model:
         ttnn.deallocate(hidden)
         return logits.cpu()
 
-    def _masked_bucket_logits_tp(self, hidden, actual_len, bucket):
-        """TP: one-hot select row actual_len-1, norm, lm_head. Returns replicated [1,1,vocab]."""
-        sel = torch.zeros(1, 1, 1, bucket, dtype=torch.float32)
-        sel[0, 0, 0, actual_len - 1] = 1.0
-        sel_tt = ttnn.from_torch(
-            sel,
-            dtype=hidden.dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
-        )
+    def _masked_bucket_logits_tp(self, hidden, actual_len, bucket, sel=None):
+        """TP: one-hot select row actual_len-1, norm, lm_head. Returns replicated [1,1,vocab].
+        sel: a device tensor holding that one-hot ([1,1,1,bucket], hidden's dtype) in place of actual_len (a captured
+        trace); the caller owns it."""
+        sel_tt = sel
+        if sel is None:
+            sel_host = torch.zeros(1, 1, 1, bucket, dtype=torch.float32)
+            sel_host[0, 0, 0, actual_len - 1] = 1.0
+            sel_tt = ttnn.from_torch(
+                sel_host,
+                dtype=hidden.dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+            )
         x_last = ttnn.matmul(sel_tt, hidden)  # [1, 1, 1, dim]
-        ttnn.deallocate(sel_tt)
+        if sel is None:
+            ttnn.deallocate(sel_tt)
         x_last = ttnn.to_memory_config(x_last, ttnn.DRAM_MEMORY_CONFIG)
         x_last = self.norm(x_last, mode=Mode.PREFILL)
         logits = self._lm_head(x_last)
@@ -3290,6 +3358,244 @@ class Qwen36Model:
                 ttnn.deallocate(pt)
             ttnn.deallocate(k_full)
 
+    # ----------------------------------------------------------------------- #
+    # Captured masked-bucket prefill
+    # ----------------------------------------------------------------------- #
+    # An eager masked-bucket forward dispatches every operation of all layers from the host, which costs more than the
+    # device time of a 2048-token forward at TP=8. One trace per bucket (and one more per bucket that a KV block
+    # boundary falls inside, which also computes a prefill checkpoint) serves every length, start position, page
+    # table and checkpoint position: the operations are those of the eager masked forward, and what the eager forward
+    # builds on the host from those values (tokens, RoPE rows, page tables, the GDN masks, the logits row and the
+    # checkpoint selectors) is staged into persistent inputs before each replay. The trace starts by copying its
+    # initial GDN state (zeros or the workspace) from persistent buffers, so a new sequence costs no copies. K / V
+    # rows past the real blocks of the chunk page table go to the null block 0, which holds no request's data.
+
+    def _gdn_layers(self):
+        return [layer.attention for layer in self.layers if not layer.is_full_attention]
+
+    def _gdn_workspace(self):
+        return tuple(t for dn in self._gdn_layers() for t in (dn.rec_state, dn.conv_carry))
+
+    def _log_trace_region(self, label):
+        """Log the bytes of the trace region in use; never raises."""
+        try:
+            view = ttnn.get_memory_view(self.mesh_device, ttnn.BufferType.TRACE)
+            used = int(view.total_bytes_allocated_per_bank) * int(view.num_banks)
+            cap = int(view.total_bytes_per_bank) * int(view.num_banks)
+        except Exception as e:  # noqa: BLE001 - a log line only
+            logger.info(f"Trace region use after {label}: unavailable ({e})")
+            return
+        logger.info(f"Trace region use after {label}: {used / 2**20:.1f} of {cap / 2**20:.0f} MiB")
+
+    def prepare_prefill_traces_masked(self):
+        """Allocate the persistent inputs of the captured masked-bucket prefill of every bucket in
+        _PREFILL_MASK_BUCKETS, and the GDN layers' trace buffers, and compile every program of the traced forward by
+        running it eagerly on them. record_prefill_traces_masked captures the traces. TP, after
+        prepare_prefill_trace_chunked (the traces use its page-table width and vision-splice buffers) and before any
+        trace capture, with the batch-1 GDN workspace bound as prefills run. Idempotent."""
+        from models.demos.blackhole.qwen36.tt.gdn.tp import PrefillCheckpoint, PrefillMasks
+
+        if self._masked_traces:
+            return
+        if self.num_devices < 2 or self._chunked_prepared_key is None:
+            raise ValueError("the masked-bucket prefill traces need a TP mesh and prepare_prefill_trace_chunked first")
+        device = self.device
+        block_size = get_block_size(self._paged_kv_caches)
+        kconv = self.args.gdn_conv_kernel_size
+        buf_blocks = int(self._chunk_full_page_table_buf.shape[-1])
+        buckets = sorted(self._PREFILL_MASK_BUCKETS)
+        if self._vis_buf is None:
+            self._alloc_vision_merge_buffers(device, self.prefill_chunk_size)
+        for dn in self._gdn_layers():
+            dn.alloc_prefill_trace_buffers(checkpoint=buckets[-1] > block_size)
+        rep = ttnn.ReplicateTensorToMesh(device)
+
+        def up(t, dtype, layout):
+            return ttnn.from_torch(t, dtype=dtype, layout=layout, device=device, mesh_mapper=rep)
+
+        traces = {}
+        for b in buckets:
+            tr = _MaskedPrefillTrace(b, -(-b // block_size))
+            tr.tok = up(torch.zeros(1, b, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
+            cos_t, sin_t = self._rope_tp_cos_sin_torch(0, b)
+            tr.cos = up(cos_t, ttnn.bfloat16, ttnn.TILE_LAYOUT)
+            tr.sin = up(sin_t, ttnn.bfloat16, ttnn.TILE_LAYOUT)
+            tr.csi = up(torch.zeros(1, dtype=torch.int32), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+            tr.full_pt = up(torch.zeros(1, buf_blocks, dtype=torch.int32), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+            tr.chunk_pt = up(torch.zeros(1, tr.blocks, dtype=torch.int32), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+            tr.masks = PrefillMasks(device, b, kconv)
+            if b > block_size:  # vLLM's checkpoints are on block boundaries
+                tr.checkpoint = PrefillCheckpoint.buffers(device, b, kconv)
+            traces[b] = tr
+        # The logits row selector has the hidden's dtype, as _masked_bucket_logits_tp builds it.
+        hidden = self._forward_prefill_chunk_masked_tp(None, None, 0, None, buckets[0], inputs=traces[buckets[0]])
+        for tr in traces.values():
+            tr.sel_dtype = hidden.dtype
+            tr.sel = up(torch.zeros(1, 1, 1, tr.bucket, dtype=torch.float32), hidden.dtype, ttnn.TILE_LAYOUT)
+        ttnn.deallocate(hidden)
+        # Each variant twice: a capture must find every program compiled and every lazily allocated buffer allocated.
+        # The eager operations around a replay (staging the initial state, copying the logits out) compile here too.
+        for dn in self._gdn_layers():
+            dn.stage_prefill_init(carry=True)
+            dn.stage_prefill_init(carry=False)
+        for tr in traces.values():
+            for checkpoint in tr.variants():
+                for _ in range(2):
+                    hidden, logits = self._masked_trace_body(tr, checkpoint)
+                    ttnn.deallocate(ttnn.clone(logits))
+                    ttnn.deallocate(hidden)
+                    ttnn.deallocate(logits)
+        ttnn.synchronize_device(device)
+        self._reset_gdn_state_for_new_sequence()
+        self._masked_traces = traces
+        self._masked_trace_gdn = self._gdn_workspace()
+        logger.info(
+            f"Masked-bucket prefill traces prepared: buckets {buckets}, with a prefill checkpoint "
+            f"{[b for b in buckets if traces[b].checkpoint is not None]}"
+        )
+
+    def record_prefill_traces_masked(self):
+        """Capture the traces that prepare_prefill_traces_masked prepared. Allocates only the trace outputs, which a
+        replay's caller reads before the next replay. Idempotent."""
+        if not self._masked_traces:
+            raise ValueError("call prepare_prefill_traces_masked first")
+        if self._masked_traces_recorded:
+            return
+        device = self.device
+        with trace_allocation_tracker.corruptible_allocation_scope(device):
+            for tr in self._masked_traces.values():
+                for checkpoint in tr.variants():
+                    tid = ttnn.begin_trace_capture(device, cq_id=0)
+                    tr.outputs[checkpoint] = self._masked_trace_body(tr, checkpoint)
+                    ttnn.end_trace_capture(device, tid, cq_id=0)
+                    tr.trace_ids[checkpoint] = tid
+        self._reset_gdn_state_for_new_sequence()
+        self._masked_traces_recorded = True
+        self._log_trace_region("the masked-bucket prefill traces")
+
+    def release_prefill_traces_masked(self):
+        """Release the masked-bucket prefill traces, their inputs and outputs, and the GDN layers' trace buffers; later
+        masked-bucket prefills run eagerly."""
+        if not getattr(self, "_masked_traces", None):
+            return
+        ttnn.synchronize_device(self.device)
+        self._masked_trace_refs = []
+        for tr in self._masked_traces.values():
+            for tid in tr.trace_ids.values():
+                ttnn.release_trace(self.device, tid)
+            tr.free()
+        for dn in self._gdn_layers():
+            dn.free_prefill_trace_buffers()
+        self._masked_traces = {}
+        self._masked_traces_recorded = False
+        self._masked_trace_gdn = None
+
+    def _masked_trace_body(self, tr, checkpoint):
+        """The captured forward and logits of tr; returns (hidden, logits)."""
+        for dn in self._gdn_layers():
+            dn.load_prefill_init()
+        hidden = self._forward_prefill_chunk_masked_tp(None, None, 0, None, tr.bucket, inputs=tr, checkpoint=checkpoint)
+        return hidden, self._masked_bucket_logits_tp(hidden, None, tr.bucket, sel=tr.sel)
+
+    def _masked_prefill_trace(self, bucket, checkpoint_len):
+        """The _MaskedPrefillTrace that serves a masked-bucket prefill of ``bucket`` with or without a checkpoint, or
+        None (eager): no trace captured for it, a debug layer capture, or a GDN workspace other than the one the
+        traces read (the batched prefill scratch)."""
+        if not getattr(self, "_masked_traces_recorded", False):
+            return None
+        tr = self._masked_traces.get(bucket)
+        if tr is None or bool(checkpoint_len) not in tr.trace_ids:
+            return None
+        if getattr(self, "_capture_layer", None) is not None:
+            return None
+        if any(a is not b for a, b in zip(self._gdn_workspace(), self._masked_trace_gdn, strict=True)):
+            return None
+        return tr
+
+    def _replay_masked_trace(self, tr, token_buf, page_table, actual_len, chunk_start, checkpoint_len):
+        """Stage tr's inputs for ``actual_len`` real tokens of token_buf from ``chunk_start`` (a new sequence at 0,
+        otherwise continuing from the GDN workspace) and replay it. The caller has staged the RoPE table and the
+        vision-splice buffers. Returns (hidden: the trace's output, logits: a copy the caller frees)."""
+        from models.demos.blackhole.qwen36.tt.gdn.tp import PrefillCheckpoint, PrefillMasks
+
+        bucket, kconv = tr.bucket, self.args.gdn_conv_kernel_size
+        block_size = get_block_size(self._paged_kv_caches)
+        if chunk_start % block_size:
+            raise ValueError(f"a masked-bucket prefill from {chunk_start} starts inside a {block_size}-token KV block")
+        ck_host = None
+        if checkpoint_len:
+            if checkpoint_len >= actual_len:
+                raise ValueError(
+                    f"a prefill checkpoint after {checkpoint_len} tokens needs a prefill of more than {actual_len}"
+                )
+            ck_host = PrefillCheckpoint.host_tensors(bucket, checkpoint_len, kconv)
+        # The eager forward fills the real blocks [blk0, blkN) only; the trace fills tr.blocks blocks, the rest in
+        # the null block 0.
+        width = int(tr.full_pt.shape[-1])
+        blk0 = chunk_start // block_size
+        blkN = num_blocks_in_seq(chunk_start + actual_len, block_size)
+        row = page_table[:1].to(torch.int32)
+        if row.shape[1] < blkN:
+            raise ValueError(f"a page table of {row.shape[1]} blocks does not hold the prefill's {blkN} blocks")
+        pad = max(width, blk0 + tr.blocks) - row.shape[1]
+        if pad > 0:
+            row = torch.cat([row, torch.zeros(1, pad, dtype=torch.int32)], dim=1)
+        chunk_row = row[:, blk0 : blk0 + tr.blocks].clone()
+        chunk_row[:, blkN - blk0 :] = 0
+
+        if self._masked_trace_refs:
+            # The previous replay's input copies may still read their host tensors.
+            ttnn.synchronize_device(self.device)
+            self._masked_trace_refs = []
+        for dn in self._gdn_layers():
+            dn.stage_prefill_init(carry=chunk_start > 0)
+
+        rep = ttnn.ReplicateTensorToMesh(self.device)
+        refs = self._masked_trace_refs
+
+        def stage(t, dtype, layout, buf):
+            host = ttnn.from_torch(t, dtype=dtype, layout=layout, device=None, mesh_mapper=rep)
+            ttnn.copy_host_to_device_tensor(host, buf)
+            refs.append(host)
+
+        rm, tile = ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT
+        stage(token_buf.to(torch.int32), ttnn.uint32, rm, tr.tok)
+        cos_t, sin_t = self._rope_tp_cos_sin_torch(chunk_start, bucket)
+        stage(cos_t, ttnn.bfloat16, tile, tr.cos)
+        stage(sin_t, ttnn.bfloat16, tile, tr.sin)
+        stage(torch.tensor([chunk_start], dtype=torch.int32), ttnn.int32, rm, tr.csi)
+        stage(row[:, :width].contiguous(), ttnn.int32, rm, tr.full_pt)
+        stage(chunk_row, ttnn.int32, rm, tr.chunk_pt)
+        for t, buf, dtype in zip(
+            PrefillMasks.host_tensors(bucket, actual_len, kconv),
+            (tr.masks.conv_select, tr.masks.gate_mask, tr.masks.qkv_mask),
+            PrefillMasks.dtypes(),
+        ):
+            stage(t, dtype, tile, buf)
+        sel = torch.zeros(1, 1, 1, bucket, dtype=torch.float32)
+        sel[0, 0, 0, actual_len - 1] = 1.0
+        stage(sel, tr.sel_dtype, tile, tr.sel)
+        if ck_host is not None:
+            stage(ck_host[0], ttnn.float32, tile, tr.checkpoint.gate_mask)
+            stage(ck_host[1], ttnn.bfloat16, tile, tr.checkpoint.conv_select)
+
+        variant = ck_host is not None
+        if not getattr(self, "_masked_trace_logged", False):
+            self._masked_trace_logged = True
+            logger.info(f"Masked-bucket prefill trace replay active (first: bucket {bucket}, checkpoint {variant})")
+        ttnn.execute_trace(self.device, tr.trace_ids[variant], cq_id=0, blocking=False)
+        for dn in self._gdn_layers():
+            dn.note_traced_prefill(variant)
+        hidden, logits = tr.outputs[variant]
+        return hidden, ttnn.clone(logits)
+
+    def _release_prefill_hidden(self, hidden):
+        """Free a hidden from prefill_masked_bucket(return_hidden=True), unless it is a captured trace's output."""
+        for tr in self._masked_traces.values() if getattr(self, "_masked_traces", None) else ():
+            if any(hidden is out[0] for out in tr.outputs.values()):
+                return
+        ttnn.deallocate(hidden)
+
     @property
     def prefill_chunk_size(self):
         """Tokens per chunk of prefill_traced_chunked: the captured chunk trace's size, 2048 before a capture."""
@@ -3307,10 +3613,10 @@ class Qwen36Model:
         checkpoint_pos=0,
     ):
         """Prefill by replaying the captured per-chunk trace for each FULL 2048-token chunk, then
-        processing the final partial chunk eagerly with minimal padding. Only the real prompt
-        (token_ids[:, :actual_len]) is processed. Full chunks replay from the trace; the tail
-        (< chunk_size) is eager so GDN zero-pads to the next multiple of 128 (matching the
-        non-traced path) instead of repeating bucket padding through the recurrence (which
+        processing the final partial chunk as one masked-bucket forward (prefill_masked_bucket: a
+        captured trace per bucket when record_prefill_traces_masked ran, else eager). Only the real prompt
+        (token_ids[:, :actual_len]) is processed. The tail (< chunk_size) masks the GDN state to its real
+        tokens instead of repeating bucket padding through the recurrence (which
         corrupts decode state at long context). Next-token logit is at actual_len-1; returns host
         [1,1,vocab]. vision_tokens splice trace-safely: captured forward runs a FIXED-shape
         ttnn.where(mask, vision, text) over persistent buffers staged per chunk via copy_host_to_device
@@ -3333,8 +3639,9 @@ class Qwen36Model:
         passes the whole prompt for each segment, including one that ends inside an image.
 
         ``checkpoint_pos > 0`` (TP): every GDN layer also computes its state after checkpoint_pos tokens
-        (TPGatedDeltaNet.prefill_checkpoint) in the eager forward of the prefill's last chunk, which must contain it.
-        When that last chunk is a full one, it runs eagerly instead of replaying the chunk trace.
+        (TPGatedDeltaNet.prefill_checkpoint) in the masked-bucket forward of the prefill's last chunk, which must
+        contain it. When that last chunk is a full one, it runs as a masked-bucket forward instead of a chunk-trace
+        replay.
         """
         # Default to the standard 2048-token chunk when no trace is captured (e.g. the TP MVP,
         # which serves <=2048 prompts entirely via the masked bucket below and so needs no chunk
@@ -3374,7 +3681,7 @@ class Qwen36Model:
 
         # Short prompt (no full chunks): route the whole prompt through the SAME masked
         # fixed-bucket path the long-prompt tail uses. chunk_start=0 makes prefill_masked_bucket
-        # do the sequence-start GDN reset and run one masked forward — there is no trace to replay,
+        # start from zero GDN state and run one masked forward; there is no chunk to replay,
         # so the chunk-input plumbing below is skipped. This is the single bucketed+masked path
         # shared by short prompts and the long-prompt tail; prefill_dispatch routes every traced
         # prefill here so the short/long seam is defined once.
@@ -3411,7 +3718,7 @@ class Qwen36Model:
                     token_ids[:, start_pos:actual_len], page_table, return_hidden=True, **short
                 )
                 on_chunk(hidden, start_pos, tail_real)
-                ttnn.deallocate(hidden)
+                self._release_prefill_hidden(hidden)
                 return logits
             return self.prefill_masked_bucket(token_ids[:, start_pos:actual_len], page_table, **short)
 
@@ -3732,7 +4039,7 @@ class Qwen36Model:
                     checkpoint_len=checkpoint_len,
                 )
                 on_chunk(hidden, cs, tail_real)
-                ttnn.deallocate(hidden)
+                self._release_prefill_hidden(hidden)
                 return logits
             return self.prefill_masked_bucket(
                 token_ids[:, cs:actual_len],
@@ -3838,6 +4145,7 @@ class Qwen36Model:
         self._vfy_prepared_key = None
         if self._paged_kv_caches is None:
             return
+        self.release_prefill_traces_masked()
         if getattr(self, "_chunked_trace_id", None) is not None:
             ttnn.release_trace(self.device, self._chunked_trace_id)
             self._chunked_trace_id = None
