@@ -972,8 +972,8 @@ constexpr std::uint32_t pack_cfg_zwstride_word(const std::uint32_t pack_src_form
            ((TILE_NUM_FACES * FACE_C_DIM * FACE_R_DIM * x_stride) << PCK0_ADDR_CTRL_ZW_REG_0_Wstride_SHAMT);
 }
 
-// Per config word, the bits the kernel's CBs set differently. Fast tilize and hw_cleanup leave formats no CB has (no ok),
-// the other stride writers strides no CB has (strides_full: written whole, as the full reconfigure does).
+// Per config word, the bits the kernel's CBs set differently; the other stride writers leave strides no CB has (strides_full:
+// written whole, as the full reconfigure does). No ok under the unpack-to-DEST gate.
 struct llk_pack_reconfig_imm_t
 {
     bool ok;
@@ -991,19 +991,29 @@ constexpr llk_pack_reconfig_imm_t llk_pack_reconfig_imm(
     llk_pack_reconfig_imm_t m {false, false, 0, 0, 0, 0, 0, 0, 0};
     bool any = false;
     std::uint32_t f0 = 0, s0 = 0, l0 = 0, t0 = 0, a0 = 0, y0 = 0, z0 = 0;
-    for (std::size_t i = 0; i < n; i++)
+    // Fast tilize and hw_cleanup leave configs no CB has: fast tilize's fp32 path reconfigures each output through a
+    // Float16_b input, hw_cleanup configures Float16_b to Float16_b. Those enter the masks as extra entries after the CBs.
+    constexpr std::uint32_t f16b  = to_underlying(DataFormat::Float16_b);
+    const bool ftz_fp32           = is_fp32_dest_acc_en && pack_fast_tilize_linked<sync>;
+    const bool cleanup            = pack_strides_writer<4>;
+    const std::size_t entries     = n + (ftz_fp32 ? n : 0) + (cleanup ? 1 : 0);
+    for (std::size_t e = 0; e < entries; e++)
     {
-        const std::uint32_t src = pack_src_format[i];
-        const std::uint32_t dst = pack_dst_format[i];
-        if (src == to_underlying(DataFormat::Invalid) || dst == to_underlying(DataFormat::Invalid))
+        const std::size_t i     = e < n ? e : (e < 2 * n && ftz_fp32 ? e - n : 0);
+        const bool canonical    = e == entries - 1 && cleanup;
+        const std::uint32_t src = canonical ? f16b : (e < n ? pack_src_format[i] : f16b);
+        const std::uint32_t dst = canonical ? f16b : pack_dst_format[i];
+        if (src == to_underlying(DataFormat::Invalid) || dst == to_underlying(DataFormat::Invalid) || (e >= n && !canonical && pack_src_format[i] == to_underlying(DataFormat::Invalid)))
         {
             continue;
         }
+        const std::uint32_t faces   = canonical ? 4 : pack_num_faces[i];
+        const std::uint32_t partial = canonical ? 0 : pack_partial_face[i];
         const std::uint32_t f = pack_cfg_format_word(src, dst);
         // Word 0 after hw_configure on this output, and after a reconfigure to it (which writes it for block-float,
         // Lf8 and Int8 outputs only).
-        const std::uint32_t s_hw = pack_cfg_no_exp_section(dst) ? 0 : (pack_partial_face[i] ? 1u : pack_num_faces[i]) << THCON_SEC0_REG1_Exp_section_size_SHAMT;
-        const std::uint32_t s_rc = IS_BFP_FORMAT(masked_data_format(dst)) ? std::uint32_t(pack_num_faces[i]) << THCON_SEC0_REG1_Exp_section_size_SHAMT : s_hw;
+        const std::uint32_t s_hw = pack_cfg_no_exp_section(dst) ? 0 : (partial ? 1u : faces) << THCON_SEC0_REG1_Exp_section_size_SHAMT;
+        const std::uint32_t s_rc = IS_BFP_FORMAT(masked_data_format(dst)) ? faces << THCON_SEC0_REG1_Exp_section_size_SHAMT : s_hw;
         const std::uint32_t l = std::uint32_t(pack_is_fp8_e4m3(dst)) << THCON_SEC0_REG1_Pac_LF8_4b_exp_SHAMT;
         const std::uint32_t t = pack_exp_threshold_bits<is_fp32_dest_acc_en>(masked_data_format(dst));
         const std::uint32_t a = pack_dstacc_format(src, dst) << ALU_FORMAT_SPEC_REG2_Dstacc_SHAMT;
@@ -1011,7 +1021,7 @@ constexpr llk_pack_reconfig_imm_t llk_pack_reconfig_imm(
         const std::uint32_t z = pack_cfg_zwstride_word(src);
         if (!any)
         {
-            any = true;
+            any = e < n;
             f0 = f, s0 = s_hw, l0 = l, t0 = t, a0 = a, y0 = y, z0 = z;
         }
         m.format |= f ^ f0;
@@ -1023,12 +1033,18 @@ constexpr llk_pack_reconfig_imm_t llk_pack_reconfig_imm(
         m.zwstride |= z ^ z0;
     }
     m.ok = any;
-    if ((is_fp32_dest_acc_en && sync == DstSync::SyncHalf && pack_reconfig_u2d<sync>) || pack_fast_tilize_linked<sync> || pack_strides_writer<4>)
+    if (is_fp32_dest_acc_en && sync == DstSync::SyncHalf && pack_reconfig_u2d<sync>)
     {
         m.ok = false;
+        return m;
     }
     if (pack_fast_untilize_linked<sync> || pack_strides_writer<1> || pack_strides_writer<2> || pack_strides_writer<3> || pack_strides_writer<5> ||
         pack_strides_writer<6> || pack_strides_writer<7> || pack_strides_writer<8> || pack_strides_writer<9> || pack_strides_writer<10>)
+    {
+        m.strides_full = true;
+    }
+    // Fast tilize and hw_cleanup write the strides.
+    if (pack_fast_tilize_linked<sync> || pack_strides_writer<4>)
     {
         m.strides_full = true;
     }
@@ -1129,7 +1145,10 @@ TT_ALWAYS_INLINE void reconfig_packer_data_format_imm_and_state()
         pack_dest_rd_ctrl_bits<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format) << PCK_DEST_RD_CTRL_Read_32b_data_SHAMT>();
     if constexpr (IS_BFP_FORMAT(masked_data_format(pack_dst_format)))
     {
-        pack_cfg_rmw_imm<THCON_SEC0_REG1_Row_start_section_size_ADDR32, section_mask, num_faces << THCON_SEC0_REG1_Exp_section_size_SHAMT>();
+        pack_cfg_rmw_imm<
+            THCON_SEC0_REG1_Row_start_section_size_ADDR32,
+            section_mask & THCON_SEC0_REG1_Exp_section_size_MASK,
+            num_faces << THCON_SEC0_REG1_Exp_section_size_SHAMT>();
     }
     else if constexpr (pack_cfg_no_exp_section(pack_dst_format))
     {
