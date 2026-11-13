@@ -349,7 +349,7 @@ PERF_TEST_SCHEMAS = {
         },
     },
     "perf_eltwise_unary_typecast": {
-        "version": 4,
+        "version": 5,
         "columns": [
             "approx_mode",
             "dest_acc",
@@ -370,6 +370,7 @@ PERF_TEST_SCHEMAS = {
             "num_faces_A",
             "num_faces_B",
             "output_format",
+            "sfploadmacro",
             "stable_sort",
             "tile_cnt",
             "unpack_to_dest",
