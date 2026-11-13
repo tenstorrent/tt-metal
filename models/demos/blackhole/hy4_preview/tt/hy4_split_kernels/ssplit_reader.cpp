@@ -138,7 +138,14 @@ void kernel_main() {
         // indices row for this token (page = tok) -> idx_cb scratch
         {
             DeviceZoneScopedN("R_IDX");
-            noc.async_read(idx, idx_cb, idx_row_bytes, {.page_id = tok}, {.offset_bytes = 0});
+            // IDX_MOD > 0: the index tensor has IDX_MOD rows (one per user) shared by the NC owner blocks (query row
+            // tok = j*IDX_MOD + s)
+            constexpr uint32_t idx_mod = get_compile_time_arg_val(ssplit::reader_ct_arg::IDX_MOD);
+            uint32_t idx_page = tok;
+            if constexpr (idx_mod != 0) {
+                idx_page = tok % idx_mod;
+            }
+            noc.async_read(idx, idx_cb, idx_row_bytes, {.page_id = idx_page}, {.offset_bytes = 0});
             noc.async_read_barrier();
         }
 

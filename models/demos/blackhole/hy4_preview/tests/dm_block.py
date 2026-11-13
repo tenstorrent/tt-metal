@@ -55,7 +55,26 @@ class Block:
     -> [1,1,8*S,512] per column, rows (h,s): the merged attention output of the column's 8 heads (TP8 layout for o_proj)
     """
 
-    def __init__(self, md, S, G=None, kc=None, num_links=2, topo=ttnn.Topology.Ring, fid="hifi4"):
+    def __init__(
+        self,
+        md,
+        S,
+        G=None,
+        kc=None,
+        num_links=2,
+        topo=ttnn.Topology.Ring,
+        fid="hifi4",
+        v2=True,
+        tile=False,
+        softmax=False,
+        safe=False,
+    ):
+        self.safe = safe  # merge reference = true max over the sources and the sink (+18 us: ttnn.max over dim 0) instead of the sink
+        self.tile, self.softmax = (
+            tile,
+            softmax,
+        )  # tile: kernel writes TILE tiles in the owner layout [8j,S,8,544] (no tilize op); softmax: merge via ttnn.softmax over the sources of the lse
+        self.v2 = v2  # v2: kernel writes the owner layout directly (no slice/permute), tails = [scaled max, sum, 1.0], sink as a 9th source row
         from models.demos.gpt_oss.tt.ccl import CCLManager
 
         self.md, self.S, self.topo, self.nl = md, S, topo, num_links
@@ -71,6 +90,8 @@ class Block:
     # --- stages -------------------------------------------------------------------------------------------------
     def idx_rows(self, idx):
         """[1,1,S,K] -> [1,1,8S,K]: row (j,s) = idx[s] for every owner j (j-major). Once per index layer (shared layers reuse it)."""
+        if self.tile and os.environ.get("SS_IDXMOD", "0") == "1":
+            return idx
         return ttnn.repeat(idx, ttnn.Shape([1, 1, NC, 1]))
 
     def gather_q(self, q_pad):
@@ -88,12 +109,26 @@ class Block:
 
     def kernel(self, qg, kv, idx8):
         return self.mod.sparse_sdpa_split(
-            qg, kv, idx8, V, SCALE, self.kc, self.G, self.ckc, None, emit_stats=2
-        )  # [1,32,8S,544]
+            qg,
+            kv,
+            idx8,
+            V,
+            SCALE,
+            self.kc,
+            self.G,
+            self.ckc,
+            None,
+            emit_stats=3 if self.tile else 2,
+            owner_s=self.S if self.v2 else 0,
+        )  # v1 [1,32,8S,544] ; v2 [8j,1,8S,544] owner layout
 
     def to_owner(self, out):
         """[1,32,8S,544] RM (h, (j,s)) -> [8j,1,8S,544] TILE rows (h,s)"""
         S = self.S
+        if self.tile:
+            return out
+        if self.v2:
+            return ttnn.to_layout(out, ttnn.TILE_LAYOUT)
         o8 = ttnn.slice(out, [0, 0, 0, 0], [1, HL, NC * S, V + 32])
         o8 = ttnn.reshape(o8, [HL, NC, S, V + 32])
         o8 = ttnn.permute(o8, (1, 0, 2, 3))
@@ -108,6 +143,10 @@ class Block:
     def merge(self, x, sink):
         """x [1,8src,8S,544] TILE (cols 0..511 o normalised by the source's local sum, col 512 raw max, col 513 local sum); sink [1,1,8S,1]. -> [1,1,8S,512]"""
         R = HL * self.S
+        if self.tile:
+            return self.merge4(x, sink) if self.softmax else self.merge3(x, sink)
+        if self.v2:
+            return self.merge2(x, sink)
         o = ttnn.slice(x, [0, 0, 0, 0], [1, NC, R, V])
         m = ttnn.slice(x, [0, 0, 0, V], [1, NC, R, V + 1])
         l = ttnn.slice(x, [0, 0, 0, V + 1], [1, NC, R, V + 2])
@@ -118,6 +157,47 @@ class Block:
         den = ttnn.sum(w, dim=1, keepdim=True)
         den = ttnn.add(den, ttnn.exp(ttnn.subtract(sink, ttnn.multiply(M, SCALE))))
         return ttnn.multiply(num, ttnn.reciprocal(den))
+
+    def merge2(self, x, sinkrow):
+        """x [1,8src,8S,544] TILE: cols 0..511 o (normalised by the source's local sum), 512 scaled max, 513 local sum, 514 = 1.0; sinkrow [1,1,8S,544]: the sink as a 9th source (max = sink logit, sum = 1, o = 0)."""
+        R = HL * self.S
+        x9 = ttnn.concat([x, sinkrow], dim=1)  # [1,9,R,544]
+        m = ttnn.slice(x9, [0, 0, 0, V], [1, NC + 1, R, V + 1])
+        l = ttnn.slice(x9, [0, 0, 0, V + 1], [1, NC + 1, R, V + 2])
+        w = ttnn.multiply(l, ttnn.exp(ttnn.subtract(m, ttnn.max(m, dim=1, keepdim=True))))
+        acc = ttnn.sum(ttnn.multiply(x9, w), dim=1, keepdim=True)  # [1,1,R,544]: cols 0..511 numerator, 514 denominator
+        den = ttnn.slice(acc, [0, 0, 0, V + 2], [1, 1, R, V + 3])
+        return ttnn.multiply(ttnn.slice(acc, [0, 0, 0, 0], [1, 1, R, V]), ttnn.reciprocal(den))
+
+    def merge3(self, x, sinkcol):
+        """tile output: x [1,8*S,32,576] (src-major, then s) TILE: o cols 0..511, tail tiles ms @512, l @544 (col 0 of each; rows = heads, 8 real + 24 pad); sinkcol [1,S,32,1] (sink logit per head row, scaled domain) -> [1,S,32,512].
+        The softmax reference is the SINK instead of the max over the sources (ttnn.max over dim 0 costs 18 us, sum 2 us): w_c = l_c exp(ms_c - sink), den = sum_c w_c + 1 (the sink term e^0), no overflow while ms - sink < 88.
+        Reductions over the source dim are 4-10x faster with H=32 rows than with 8 (the H=8 shape takes the padded slow path), slices are fast only on tile-aligned columns.
+        """
+        S = self.S
+        W = V + 64
+        xr = ttnn.reshape(x, [NC, S, 32, W])
+        m = ttnn.slice(xr, [0, 0, 0, V], [NC, S, 32, V + 1])
+        l = ttnn.slice(xr, [0, 0, 0, V + 32], [NC, S, 32, V + 33])
+        if self.safe:
+            M = ttnn.maximum(ttnn.max(m, dim=0, keepdim=True), sinkcol)  # [1,S,32,1]
+            w = ttnn.multiply(l, ttnn.exp(ttnn.subtract(m, M)))
+            den = ttnn.add(ttnn.sum(w, dim=0, keepdim=True), ttnn.exp(ttnn.subtract(sinkcol, M)))
+        else:
+            w = ttnn.multiply(l, ttnn.exp(ttnn.subtract(m, sinkcol)))  # [8,S,32,1]
+            den = ttnn.add(ttnn.sum(w, dim=0, keepdim=True), 1.0)
+        f = ttnn.multiply(w, ttnn.reciprocal(den))
+        acc = ttnn.sum(ttnn.multiply(xr, f), dim=0, keepdim=True)  # [1,S,32,576]
+        return ttnn.slice(acc, [0, 0, 0, 0], [1, S, 32, V])
+
+    def merge4(self, x, sinkrow):
+        S = self.S
+        x9 = ttnn.concat([ttnn.reshape(x, [NC, S, HL, V + 32]), sinkrow], dim=0)
+        m = ttnn.slice(x9, [0, 0, 0, V], [NC + 1, S, HL, V + 1])
+        l = ttnn.slice(x9, [0, 0, 0, V + 1], [NC + 1, S, HL, V + 2])
+        f = ttnn.softmax(ttnn.add(m, ttnn.log(l)), dim=0)
+        o = ttnn.slice(x9, [0, 0, 0, 0], [NC + 1, S, HL, V])
+        return ttnn.sum(ttnn.multiply(o, f), dim=0, keepdim=True)
 
     def run(self, q_pad, kv, idx8, sink, upto=99):
         st = {}

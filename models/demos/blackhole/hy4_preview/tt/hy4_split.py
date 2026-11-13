@@ -44,7 +44,7 @@ def max_split(rows, grid_x, grid_y):
     return max(1, (grid_x * grid_y) // max(1, rows))
 
 
-def sparse_sdpa_split(q, kv, idx, v_dim, scale, k_chunk, split, ckc, sink, emit_stats=False):
+def sparse_sdpa_split(q, kv, idx, v_dim, scale, k_chunk, split, ckc, sink, emit_stats=False, owner_s=0):
     """q: bf16 ROW_MAJOR [1,H=32,S,D]; kv: fp8_e4m3 / bf16 ROW_MAJOR [1,1,R,D]; idx: uint32 ROW_MAJOR [1,1,S,TOPK]; sink: bf16 ROW_MAJOR [1,1,1,H].
     ``ckc``: the device compute kernel config (fidelity / approx / fp32 acc are read from it). -> bf16 ROW_MAJOR [1,H,S,v_dim].
     """
@@ -60,6 +60,9 @@ def sparse_sdpa_split(q, kv, idx, v_dim, scale, k_chunk, split, ckc, sink, emit_
     else:
         H, S, D = int(q.shape[1]), int(q.shape[2]), int(q.shape[3])
     topk = int(idx.shape[3])
+    q_heads = H  # q tensor head rows: 32 (padded) or 8 (real heads only; the other 24 rows are zero-filled in L1 by the kernel, QROWS = 8)
+    if q_heads == 8 and not qt:
+        H = 32
     assert H == 32 and v_dim == 512 and D in (512, 576)
     assert q.dtype == ttnn.bfloat16 and idx.dtype == ttnn.uint32 and kv.dtype in (ttnn.bfloat16, ttnn.fp8_e4m3)
     # SCALED_FP8 KV (the stock sparse_sdpa packed format): fp8 bytes, row = 512 fp8 latent + 4 fp32 scales + 64 bf16 rope = 656 B, stored at the 64 B aligned stride 704
@@ -73,7 +76,9 @@ def sparse_sdpa_split(q, kv, idx, v_dim, scale, k_chunk, split, ckc, sink, emit_
     n_cores = S * G
     RING = int(os.environ.get("SS_RING", "8"))
     QMODE = int(os.environ.get("SS_QMODE", "1"))
-    QROWS = int(os.environ.get("SS_QROWS", "32"))  # q head rows loaded (rest zero-filled); Hy4 pads 8 real heads to 32
+    QROWS = min(
+        int(os.environ.get("SS_QROWS", "32")), q_heads
+    )  # q head rows loaded (rest zero-filled); Hy4 pads 8 real heads to 32
     if qt:
         QMODE = 2
     assert n_cores <= grid.x * grid.y
@@ -106,10 +111,14 @@ def sparse_sdpa_split(q, kv, idx, v_dim, scale, k_chunk, split, ckc, sink, emit_
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         sink = _DUMMY_SINK[key]
-    cols = (
-        emit_stats == 2
-    )  # EMIT_STATS=2: stats ride in the output row tails: out [1,H,S,v_dim+32], col v_dim = raw max, v_dim+1 = sum (one tensor, no stats tensor)
+    cols = emit_stats in (
+        2,
+        3,
+    )  # EMIT_STATS=2: stats ride in the output row tails (one tensor, no stats tensor); 3: owner-layout TILE output, the compute skips the untilize
+    tile_out = emit_stats == 3
     emit_stats = int(emit_stats)
+    assert owner_s == 0 or (cols and S % owner_s == 0), "owner layout: emit_stats=2/3 and S = NC*owner_s query rows"
+    assert not tile_out or owner_s > 0
     use_sink = 0 if emit_stats else 1
     stats = (
         ttnn.allocate_tensor_on_device(
@@ -119,9 +128,13 @@ def sparse_sdpa_split(q, kv, idx, v_dim, scale, k_chunk, split, ckc, sink, emit_
         else None
     )
     out = ttnn.allocate_tensor_on_device(
-        ttnn.Shape([1, H, S, v_dim + 32 if cols else v_dim]),
+        ttnn.Shape(
+            ([S // owner_s, owner_s, 32, v_dim + 64] if tile_out else [S // owner_s, 1, 8 * owner_s, v_dim + 32])
+            if owner_s
+            else ([1, H, S, v_dim + 32] if cols else [1, H, S, v_dim])
+        ),
         bf,
-        ttnn.ROW_MAJOR_LAYOUT,
+        ttnn.TILE_LAYOUT if tile_out else ttnn.ROW_MAJOR_LAYOUT,
         md,
         ttnn.L1_MEMORY_CONFIG
         if os.environ.get("DSV41_SDPAOUT_L1", os.environ.get("DSV41_SDPA_L1")) == "1"
@@ -230,7 +243,11 @@ def sparse_sdpa_split(q, kv, idx, v_dim, scale, k_chunk, split, ckc, sink, emit_
             cb(K_ROPE_T, TILE, Skt * (DHt - vDHt), bf),
         ]
     if emit_stats:
-        cbs += [cb(M_OUT, TILE, 1, bf), cb(L_OUT, TILE, 1, bf), cb(STAT_SCR, 2048 if cols else 128, 1, bf)]
+        cbs += [
+            cb(M_OUT, TILE, 1, bf),
+            cb(L_OUT, TILE, 1, bf),
+            cb(STAT_SCR, 4096 if tile_out else (2048 if cols else 128), 1, bf),
+        ]
     bc = [0, 1, 1, 0, 0]
     reader_ct = [H, S, topk, k_chunk, D, Q_RM, K_RM, MASK_PART, IDX, CTRL, 2, kv_b, 4] + bc
     reader_ct += (
@@ -247,12 +264,15 @@ def sparse_sdpa_split(q, kv, idx, v_dim, scale, k_chunk, split, ckc, sink, emit_
             (Q_IN if qt else QROWS),
             QLAY,
             int(os.environ.get("SS_KSPLIT", "0")),
+            owner_s
+            if os.environ.get("SS_IDXMOD", "0") == "1"
+            else 0,  # idx rows shared by the owner blocks: measured SLOWER (8 rows hit one DRAM page: +8-9 us), default off: the caller repeats the idx rows once per index layer
         ]
         + _acc(q)
         + _acc(kv)
         + _acc(idx)
     )
-    writer_ct = [H, S, vDHt, OUT_RM, SCALE, COL_ID, NEGINF, 2] + bc
+    writer_ct = [H, S, vDHt, OUT_IM if tile_out else OUT_RM, SCALE, COL_ID, NEGINF, 2] + bc
     writer_ct += [
         int(scaled),
         D,
@@ -279,10 +299,12 @@ def sparse_sdpa_split(q, kv, idx, v_dim, scale, k_chunk, split, ckc, sink, emit_
         Q_RM,
         QROWS,
         QMODE,
-        (2 if cols else int(emit_stats)),
+        emit_stats,
         M_OUT,
         L_OUT,
         STAT_SCR,
+        owner_s,
+        _bits(scale),
     ]
     writer_ct += _acc(out) + _acc(kv) + _acc(sink) + _acc(q) + (_acc(stats) if (emit_stats and not cols) else _acc(out))
     fid = getattr(ckc, "math_fidelity", ttnn.MathFidelity.HiFi4)
