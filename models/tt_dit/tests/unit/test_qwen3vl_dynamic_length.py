@@ -93,14 +93,13 @@ def test_encoder_dynamic_length_default() -> None:
     """The MiniMax-H3 pipeline turns the encoder flag on only where it is tested; an explicit value always wins."""
     from ...pipelines.minimax_h3.pipeline_minimax_h3 import _resolve_encoder_dynamic_length as resolve
 
-    on = dict(dynamic_length=True, blackhole=True, task="t2va", topology=ttnn.Topology.Ring, mesh_shape=(4, 8))
+    on = dict(dynamic_length=True, blackhole=True, task="t2va", mesh_shape=(4, 8))
     assert resolve(None, **on)
     assert not resolve(False, **on)
     for change in (
         {"dynamic_length": False},
         {"blackhole": False},
         {"task": "ref2va"},
-        {"topology": ttnn.Topology.Linear},
         {"mesh_shape": (4, 32)},
     ):
         assert not resolve(None, **{**on, **change}), change

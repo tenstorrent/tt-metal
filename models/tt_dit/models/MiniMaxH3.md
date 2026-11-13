@@ -396,8 +396,8 @@ log records the choice (`dit_fsdp: on (dynamic ref2va)`).
 `MINIMAX_H3_DYNAMIC_LENGTH=1` or `create_pipeline(..., dynamic_length=True)`. The opt-in runs the denoise eagerly
 (an explicit `trace_denoise=True` beside it raises).
 
-**Prompt encoder.** On the Blackhole 4x8 ring the text encoder takes its row count at run time too
-(`encoder_dynamic_length`, on with `dynamic_length` there; off for ref2va, the line fabric, the quad and Wormhole).
+**Prompt encoder.** On the Blackhole 4x8 (ring or line) the text encoder takes its row count at run time too
+(`encoder_dynamic_length`, on with `dynamic_length` there; off for ref2va, the quad and Wormhole).
 One program set serves every prompt length, so the warm-up encodes each keyframe layout once and only the shortest
 and the longest prompt. `create_pipeline(..., encoder_dynamic_length=False)` keeps one program set per length.
 

@@ -9526,15 +9526,16 @@ H3_CAUSAL_DYNAMIC_TILE_ROWS = [t for pair in zip(range(20, 10, -1), range(1, 11)
 @pytest.mark.timeout(1800)
 @pytest.mark.parametrize("fp32_dest_acc_en", [False, True], ids=["bf16_acc", "fp32_acc"])
 @pytest.mark.parametrize("variant", list(H3_CAUSAL_DYNAMIC_VARIANTS))
-def test_ring_joint_attention_dynamic_local_n_causal_flat_cache(variant, fp32_dest_acc_en):
-    """Unbalanced causal attention, MHA and grouped GQA, on both compute paths: one cached program serves every
-    per-chip length in either direction, with a pinned chunk pair wider than the short shards. A hang fails the
-    test through its timeout."""
+@pytest.mark.parametrize("topology", [Topology.Ring, Topology.Linear], ids=["ring", "line"])
+def test_ring_joint_attention_dynamic_local_n_causal_flat_cache(topology, variant, fp32_dest_acc_en):
+    """Unbalanced causal attention, MHA and grouped GQA, on both compute paths and both fabrics: one cached program
+    serves every per-chip length in either direction, with a pinned chunk pair wider than the short shards. A hang
+    fails the test through its timeout."""
     from tests.ttnn.utils_for_testing import assert_program_cache_flat
 
     (q_heads_per_chip, kv_heads_per_chip), qk_chunks = H3_CAUSAL_DYNAMIC_VARIANTS[variant]
     mesh_config = _h3_dynamic_mesh_config()
-    runtime = open_ring_joint_sdpa_runtime(mesh_config)
+    runtime = open_ring_joint_sdpa_runtime(mesh_config, topology=topology)
     try:
         mesh = runtime.mesh_device
         runtime.compute_kernel_config = ttnn.init_device_compute_kernel_config(

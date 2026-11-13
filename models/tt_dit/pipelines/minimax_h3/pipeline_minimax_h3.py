@@ -284,12 +284,13 @@ def _resolve_dit_fsdp(preset: Mapping, *, dit_fsdp: bool | None, task: str, dyna
 
 
 def _resolve_encoder_dynamic_length(
-    requested: bool | None, *, dynamic_length: bool, blackhole: bool, task: str, topology, mesh_shape: tuple[int, ...]
+    requested: bool | None, *, dynamic_length: bool, blackhole: bool, task: str, mesh_shape: tuple[int, ...]
 ) -> bool:
-    """kwarg, else on with `dynamic_length` where the encoder's path is tested: Blackhole 4x8 ring, not ref2va."""
+    """kwarg, else on with `dynamic_length` where the encoder's path is tested: Blackhole 4x8 (ring or line), not
+    ref2va."""
     if requested is not None:
         return bool(requested)
-    return dynamic_length and blackhole and task != "ref2va" and topology == ttnn.Topology.Ring and mesh_shape == (4, 8)
+    return dynamic_length and blackhole and task != "ref2va" and mesh_shape == (4, 8)
 
 
 def _resolve_audio_t_shard(
@@ -657,7 +658,7 @@ class MiniMaxH3Pipeline:
         the precedence (kwarg > MINIMAX_H3_DYNAMIC_LENGTH > preset) and how the bucketed kwargs keep that path.
 
         `encoder_dynamic_length` does the same for the prompt encoder; None turns it on with `dynamic_length` on
-        the Blackhole 4x8 ring for t2va/fl2va only."""
+        the Blackhole 4x8 (ring or line) for t2va/fl2va only."""
         self.mesh_device = mesh_device
         self.weights_dir = Path(weights_dir)
         self.video_shift = VIDEO_SHIFT if video_shift is None else float(video_shift)
@@ -864,7 +865,6 @@ class MiniMaxH3Pipeline:
             dynamic_length=self.dynamic_length,
             blackhole=is_blackhole(),
             task=task,
-            topology=topology,
             mesh_shape=shape,
         )
         # The prompt-encoder warm-up without the layout x length product, where it is proven to miss nothing.
@@ -873,7 +873,6 @@ class MiniMaxH3Pipeline:
             dynamic_length=self.dynamic_length,
             blackhole=is_blackhole(),
             task=task,
-            topology=topology,
             mesh_shape=shape,
         )
 

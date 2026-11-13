@@ -324,7 +324,7 @@ def _assert_no_denoise_misses(pipeline, warm_s: int, measured_s: int) -> None:
 @pytest.mark.timeout(5400)
 @pytest.mark.parametrize(
     ("mesh_device", "device_params"),
-    [MESH_4X8_RING],
+    [MESH_4X8_RING, MESH_4X8_LINE],
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("encoder_dynamic_length", [None, False], ids=["encoder_default", "encoder_per_length"])
