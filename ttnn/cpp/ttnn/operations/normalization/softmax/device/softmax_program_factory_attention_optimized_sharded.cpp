@@ -7,6 +7,7 @@
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 #include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/work_split.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <ttnn/metal_v2_artifacts.hpp>
@@ -131,9 +132,7 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
     }
 
     // define core ranges (full sharded grid)
-    std::uint32_t num_cores_c = program_config.compute_with_storage_grid_size.x;
-    std::uint32_t num_cores_r = program_config.compute_with_storage_grid_size.y;
-    const CoreRangeSet all_device_cores{CoreRange({0, 0}, {num_cores_c - 1, num_cores_r - 1})};
+    const CoreRangeSet all_device_cores = input_tensor.shard_spec().value().grid;
 
     // ---- Resource names (program-scope; local to avoid unity-build symbol clashes) ----
     const KernelSpecName READER{"reader"};
@@ -467,7 +466,21 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
         num_tiles_in_attn_mask = tensor_args.mask->padded_shape()[-1] * tensor_args.mask->padded_shape()[-2] / tile_hw;
         num_tiles_of_attn_mask_needed_per_core = program_config.block_h * program_config.block_w;
     }
-    std::uint32_t num_cores_per_batch_index = 0;
+    const std::uint64_t batch_elements = static_cast<std::uint64_t>(shape[1]) * shape[2] * shape[3];
+    const std::uint64_t shard_elements = static_cast<std::uint64_t>(input_tensor.shard_spec().value().shape[0]) *
+                                          input_tensor.shard_spec().value().shape[1];
+    std::uint64_t accumulated_elements = 0;
+    std::uint32_t current_batch = 0;
+    std::uint32_t mask_batch_stride_tiles = 0;
+    if (has_mask) {
+        if (attributes.is_causal_mask) {
+            mask_batch_stride_tiles = tensor_args.mask->padded_shape()[-1] * tensor_args.mask->padded_shape()[-2] /
+                                      tile_width / tile_height;
+        } else {
+            mask_batch_stride_tiles = use_row_major_kernel ? tensor_args.mask->padded_shape()[-2]
+                                                           : tensor_args.mask->padded_shape()[-1] / tile_width;
+        }
+    }
 
     auto emit_reader_args = [&](const CoreCoord& core) {
         if (has_mask) {
@@ -481,35 +494,22 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
             }
         }
 
-        num_cores_per_batch_index++;
         if (attributes.is_scale_causal_mask_hw_dims_softmax) {
             mask_start_tile_id = (mask_start_tile_id + num_tiles_of_attn_mask_needed_per_core) % num_tiles_in_attn_mask;
-        } else if (num_cores_per_batch_index == num_cores_per_batch) {
-            num_cores_per_batch_index = 0;
-            if (has_mask) {
-                if (attributes.is_causal_mask) {
-                    mask_start_tile_id += tensor_args.mask->padded_shape()[-1] * tensor_args.mask->padded_shape()[-2] /
-                                          tile_width / tile_height;
-                } else {
-                    mask_start_tile_id += use_row_major_kernel ? tensor_args.mask->padded_shape()[-2]
-                                                               : tensor_args.mask->padded_shape()[-1] / tile_width;
-                }
+        } else {
+            accumulated_elements += shard_elements;
+            std::uint32_t next_batch = batch_elements > 0 ? accumulated_elements / batch_elements : 0;
+            if (next_batch != current_batch) {
+                current_batch = next_batch;
+                mask_start_tile_id = current_batch * mask_batch_stride_tiles;
             }
         }
     };
 
-    if (shard_orient == tt::tt_metal::ShardOrientation::COL_MAJOR) {
-        for (std::uint32_t core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
-            for (std::uint32_t core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
-                emit_reader_args(CoreCoord{core_idx_x, core_idx_y});
-            }
-        }
-    } else {
-        for (std::uint32_t core_idx_y = 0; core_idx_y < num_cores_r; core_idx_y++) {
-            for (std::uint32_t core_idx_x = 0; core_idx_x < num_cores_c; core_idx_x++) {
-                emit_reader_args(CoreCoord{core_idx_x, core_idx_y});
-            }
-        }
+    const auto cores = corerange_to_cores(
+        all_device_cores, std::nullopt, shard_orient == tt::tt_metal::ShardOrientation::ROW_MAJOR);
+    for (const auto& core : cores) {
+        emit_reader_args(core);
     }
 
     if (!reader_ra.runtime_arg_values.empty()) {

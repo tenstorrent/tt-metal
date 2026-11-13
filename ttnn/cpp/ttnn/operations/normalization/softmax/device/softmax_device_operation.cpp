@@ -206,8 +206,27 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
             TT_FATAL(
                 mask.padded_shape() == tensors_args.input_tensor.padded_shape(),
                 "Sharded mask shape must match input tensor shape");
+            TT_FATAL(
+                mask.shard_spec().has_value() && tensors_args.input_tensor.shard_spec().has_value(),
+                "Both input tensor and mask must have shard_spec when mask is sharded");
+            const auto& input_shard_spec = tensors_args.input_tensor.shard_spec().value();
+            const auto& mask_shard_spec = mask.shard_spec().value();
+            TT_FATAL(
+                input_shard_spec.shape == mask_shard_spec.shape,
+                "Sharded mask shard shape {} must match input tensor shard shape {}",
+                mask_shard_spec.shape,
+                input_shard_spec.shape);
+            TT_FATAL(
+                input_shard_spec.orientation == mask_shard_spec.orientation,
+                "Sharded mask orientation must match input tensor shard orientation");
+            TT_FATAL(
+                input_shard_spec.grid == mask_shard_spec.grid,
+                "Sharded mask core grid must match input tensor core grid");
         } else {
             if (mask.layout() == Layout::ROW_MAJOR) {
+                TT_FATAL(
+                    !attributes.is_causal_mask,
+                    "Row-major mask is not supported with is_causal_mask=True in sharded softmax; mask must have TILE layout.");
                 const auto tile_width = tensors_args.input_tensor.tensor_spec().tile().get_width();
                 const auto tile_height = tensors_args.input_tensor.tensor_spec().tile().get_height();
                 ttnn::Shape expected_shape(
@@ -272,6 +291,11 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
 
                         TT_FATAL(attributes.inplace, "Operation must be inplace for sharded multi-core program config");
                         if (!attributes.is_scale_causal_mask_hw_dims_softmax) {
+                            if (attributes.is_causal_mask) {
+                                TT_FATAL(
+                                    mask.layout() == Layout::TILE,
+                                    "Row-major mask is not supported with is_causal_mask=True in sharded softmax; mask must have TILE layout.");
+                            }
                             // grid
                             auto num_cores_c = program_config.compute_with_storage_grid_size.x;
                             auto num_cores_r = program_config.compute_with_storage_grid_size.y;
