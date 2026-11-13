@@ -799,6 +799,7 @@ inline void matmul_configure_mop_throttled(
  *         fidelity do NOT -- @ref matmul_throttle_drives_phases holds there, so the fallback would
  *         execute every fidelity phase math_fidelity times over, and those levels keep the throttled
  *         MOP. Pairing them with a tile the throttled MOP does not support wedges the math thread.
+ * @tparam ROW_MOP: Must be false: Wormhole has only the per-tile MOP (the row MOP is Blackhole's).
  * @param in0_tile_r_dim: Row dimension of an in0 tile.
  * @param in0_tile_c_dim: Column dimension of an in0 tile.
  * @param in1_tile_r_dim: Row dimension of an in1 tile.
@@ -806,7 +807,6 @@ inline void matmul_configure_mop_throttled(
  * @param partial_face: True when the tile has fewer than the full set of faces.
  * @param transpose: Non-zero to transpose in1 faces during the multiply.
  * @param ct_dim: Number of column tiles in the output block.
- * @tparam ROW_MOP: Must be false: Wormhole has only the per-tile MOP (the row MOP is Blackhole's).
  * @param rt_dim: Number of row tiles in the output block.
  * @note On the unpack thread, pair with @ref _llk_unpack_AB_matmul_init_ which feeds SrcA/SrcB.
  * @note @ref _llk_math_matmul_ runs the configured matmul with matching template args.
@@ -907,30 +907,18 @@ inline void _llk_math_matmul_uninit_()
  *
  * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
  * @tparam THROTTLE_LEVEL: Compute-throughput throttle level; must match the value used at init.
+ * @tparam ROW_MOP: Must be false, as at init.
  * @param dst_index: Base tile index into the destination register for the output block.
  * @param ct_dim: Number of column tiles in the output block.
- * @tparam ROW_MOP: Must be false, as at init.
  * @param rt_dim: Number of row tiles in the output block.
- * @param k_steps: Number of consecutive inner-dimension (K) steps to accumulate into the same output block, one
- *        unpacked in0/in1 set (one @ref _llk_unpack_AB_matmul_ call) per step. The same as k_steps calls with
- *        k_steps = 1.
  * @note Call @ref _llk_math_matmul_init_ with matching template args before this function, and
  *       @ref _llk_math_matmul_uninit_ after it to restore modified state.
  * @note On the unpack thread, @ref _llk_unpack_AB_matmul_ must feed the operand tiles into SrcA/SrcB.
  */
 template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0, bool ROW_MOP = false>
-inline void _llk_math_matmul_(std::uint32_t dst_index, const std::uint32_t ct_dim = 1, const std::uint32_t rt_dim = 1, const std::uint32_t k_steps = 1)
+inline void _llk_math_matmul_(std::uint32_t dst_index, const std::uint32_t ct_dim = 1, const std::uint32_t rt_dim = 1)
 {
     static_assert(!ROW_MOP, "The matmul row MOP is only implemented for Blackhole");
-    if (k_steps != 1)
-    {
-        for (std::uint32_t k = 0; k < k_steps; k++)
-        {
-            _llk_math_matmul_<math_fidelity, THROTTLE_LEVEL, ROW_MOP>(dst_index, ct_dim, rt_dim, 1 /*k_steps*/);
-        }
-        return;
-    }
-
     // Zero-flag leak guard. MVMUL reads ALU_ACC_CTRL_Zero_Flag_disabled_src, which for
     // denormal Src operands changes the result (flush vs keep — measured on WH n150 / BH p150b). Matmul is
     // a "runs-in-DEFAULT" op: it never sets the flag itself and relies on hw_configure / a format-changing
@@ -1093,5 +1081,17 @@ inline void _llk_math_matmul_(std::uint32_t dst_index, const std::uint32_t ct_di
             }
         }
         t++;
+    }
+}
+
+/**
+ * @brief @ref _llk_math_matmul_ for k_steps K steps into the same output block, one unpacked in0/in1 set per step.
+ */
+template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0, bool ROW_MOP = false>
+inline void _llk_math_matmul_(std::uint32_t dst_index, const std::uint32_t ct_dim, const std::uint32_t rt_dim, const std::uint32_t k_steps)
+{
+    for (std::uint32_t k = 0; k < k_steps; k++)
+    {
+        _llk_math_matmul_<math_fidelity, THROTTLE_LEVEL, ROW_MOP>(dst_index, ct_dim, rt_dim);
     }
 }

@@ -179,9 +179,7 @@ ALL_TEST_PARAMS = list(
             for fidelity, cfg in product(ALL_MATH_FIDELITIES, MATMUL_COMBINATIONS)
             if cfg.tile_dimensions.kt_dim == 1
         ),
-        # Blackhole row MOP (one MOP per reuse row instead of per tile), throttle 0: pairs with
-        # the first slice's throttle-0 rows for a per-tile vs per-row A/B.
-        # Wormhole has only the per-tile MOP: skipped there.
+        # Blackhole row MOP at throttle 0: A/B against the first slice's throttle-0 per-tile rows.
         (
             pytest.param(fidelity, cfg, 0, 1, True, marks=skip_for_wormhole)
             for fidelity, cfg in product(ALL_MATH_FIDELITIES, MATMUL_COMBINATIONS)

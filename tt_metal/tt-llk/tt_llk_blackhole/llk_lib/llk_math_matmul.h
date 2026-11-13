@@ -107,9 +107,7 @@ inline void matmul_configure_addrmod(
             .dest     = {.incr = static_cast<std::int16_t>(dest_tile_stride), .clr = 0, .cr = 1},
             .fidelity = {.incr = 0, .clr = 1},
         };
-        // As next_tile.set(ADDR_MOD_6), but the dest word goes through the instruction buffer: the DEST step depends
-        // on ct_dim / rt_dim, which may be run-time values (a kernel whose subblock shape is a runtime arg), and
-        // set() encodes every SETC16 as an immediate.
+        // next_tile.set(ADDR_MOD_6), but the dest word via TT_SETC16: its DEST step depends on run-time ct_dim / rt_dim.
         TTI_SETC16(addr_mod_t::addr_mod_src_reg_addr[ADDR_MOD_6], next_tile.srca.val() | (next_tile.srcb.val() << 8));
         TT_SETC16(addr_mod_t::addr_mod_dest_reg_addr[ADDR_MOD_6], next_tile.dest.val() | (next_tile.fidelity.val() << 13));
         TTI_SETC16(addr_mod_t::addr_mod_bias_reg_addr[ADDR_MOD_6], next_tile.bias.val());
@@ -509,9 +507,8 @@ inline void matmul_configure_mop(
         // B3A3 of a tile's last phase: clear the per-tile source, reset srca/srcb/fidelity, dest to the next tile (addr_mod_6).
         const std::uint32_t last_phase_op = TT_OP_MVMUL(reuse_a ? p_setrwc::CLR_A : p_setrwc::CLR_B, 0, ADDR_MOD_6, 0);
         tmp.set_last_inner_loop_instr(last_phase_op);
-        // B3A3 of the row's last tile: also release the source reused along the row, and reset srca/srcb/fidelity
-        // and dest (counter and CR) to the block base (addr_mod_3), which the per-tile path does with an end-of-row
-        // SETRWC(CLR_A/CLR_B, SET_ABD_F). Folding it into the MVMUL saves that instruction's bubble at every run.
+        // B3A3 of the row's last tile: also release the reused source and reset all counters to the block base
+        // (addr_mod_3), replacing the per-tile path's end-of-row SETRWC.
         tmp.set_last_outer_loop_instr(TT_OP_MVMUL(p_setrwc::CLR_AB, 0, ADDR_MOD_3, 0));
         tmp.program();
         return;

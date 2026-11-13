@@ -52,11 +52,7 @@ template <
     int THROTTLE_LEVEL = 0,
     bool ROW_MOP = false,
     std::uint32_t num_faces = 4 /*not used*/>
-inline void llk_math_matmul(
-    const uint dst_index,
-    const std::uint32_t ct_dim = 1,
-    const std::uint32_t rt_dim = 1,
-    const std::uint32_t k_steps = 1) {
+inline void llk_math_matmul(const uint dst_index, const std::uint32_t ct_dim = 1, const std::uint32_t rt_dim = 1) {
     static_assert(num_faces == 4, "num_faces other than 4 is not supported in llk_math_matmul");
     LLK_ASSERT(
         (ckernel::math::get_dest_max_matmul_tiles(dst_index, ct_dim, rt_dim) <
@@ -80,5 +76,18 @@ inline void llk_math_matmul(
         StateVal<OperationFpuMatmul::RtDim>(rt_dim),
         StateDiscard<uint>(dst_index)));
 
-    _llk_math_matmul_<math_fidelity, THROTTLE_LEVEL, ROW_MOP>(dst_index, ct_dim, rt_dim, k_steps);
+    _llk_math_matmul_<math_fidelity, THROTTLE_LEVEL, ROW_MOP>(dst_index, ct_dim, rt_dim);
+}
+
+// k_steps consecutive K steps into the same output block: the same as k_steps calls without k_steps.
+template <
+    MathFidelity math_fidelity,
+    int THROTTLE_LEVEL = 0,
+    bool ROW_MOP = false,
+    std::uint32_t num_faces = 4 /*not used*/>
+inline void llk_math_matmul(
+    const uint dst_index, const std::uint32_t ct_dim, const std::uint32_t rt_dim, const std::uint32_t k_steps) {
+    for (std::uint32_t k = 0; k < k_steps; k++) {
+        llk_math_matmul<math_fidelity, THROTTLE_LEVEL, ROW_MOP, num_faces>(dst_index, ct_dim, rt_dim);
+    }
 }

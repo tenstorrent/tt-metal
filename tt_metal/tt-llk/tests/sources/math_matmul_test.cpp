@@ -172,8 +172,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (int block = 0; block < NUM_BLOCKS; ++block)
                 {
-                    // The block's KT_DIM inner-dimension steps in one call (k_steps)
-                    _llk_math_matmul_<MATH_FIDELITY, THROTTLE_LEVEL, MATMUL_ROW_MOP>(DST_INDEX, CT_DIM, RT_DIM, KT_DIM);
+                    if constexpr (MATMUL_ROW_MOP)
+                    {
+                        // Row MOP: the block's KT_DIM K steps in one call
+                        _llk_math_matmul_<MATH_FIDELITY, THROTTLE_LEVEL, MATMUL_ROW_MOP>(DST_INDEX, CT_DIM, RT_DIM, KT_DIM);
+                    }
+                    else
+                    {
+                        for (std::uint32_t j = 0; j < KT_DIM; j++)
+                        {
+                            _llk_math_matmul_<MATH_FIDELITY, THROTTLE_LEVEL>(DST_INDEX, CT_DIM, RT_DIM);
+                        }
+                    }
                 }
             }
         }
@@ -187,8 +197,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     LLK_ASSERT(
                         (NUM_TILES_IN_BLOCK <= get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                         "Matmul block exceeds destination capacity");
-                    // The block's KT_DIM inner-dimension steps in one call (k_steps)
-                    _llk_math_matmul_<MATH_FIDELITY, THROTTLE_LEVEL, MATMUL_ROW_MOP>(DST_INDEX, CT_DIM, RT_DIM, KT_DIM);
+                    if constexpr (MATMUL_ROW_MOP)
+                    {
+                        // Row MOP: the block's KT_DIM K steps in one call
+                        _llk_math_matmul_<MATH_FIDELITY, THROTTLE_LEVEL, MATMUL_ROW_MOP>(DST_INDEX, CT_DIM, RT_DIM, KT_DIM);
+                    }
+                    else
+                    {
+                        for (std::uint32_t j = 0; j < KT_DIM; j++)
+                        {
+                            _llk_math_matmul_<MATH_FIDELITY, THROTTLE_LEVEL>(DST_INDEX, CT_DIM, RT_DIM);
+                        }
+                    }
                     _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
                 }
             }
