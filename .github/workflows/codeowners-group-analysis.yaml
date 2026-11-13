@@ -52,7 +52,19 @@ jobs:
        contains(github.event.pull_request.body, '[x] Ping pending code owners') &&
        (github.event.action == 'opened' ||
         github.event.changes.body != null))
-    runs-on: ubuntu-slim
+    # Command comments log in to OSPO Vault below, which needs a full runner for the tailnet join.
+    runs-on: >-
+      ${{ (github.event_name == 'issue_comment' &&
+           (startsWith(github.event.comment.body, '/codeowner') || startsWith(github.event.comment.body, '/ping')))
+          && 'ubuntu-latest' || 'ubuntu-slim' }}
+    # id-token: write lets this job log in to OSPO Vault (GitHub OIDC) for an org-read token.
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      id-token: write
+    env:
+      VAULT_URL: https://vault-ospo.eng-svc.aws.tenstorrent.com
     # Checkbox pings for the same PR are handled one at a time, so the cooldown
     # check below always sees the previous ping. Comment triggers have no
     # pull_request in the payload and keep a unique group (no queuing).
@@ -72,6 +84,51 @@ jobs:
       comment-author: ${{ steps.parse.outputs.comment-author || steps.parse-description.outputs.comment-author }}
       is-bypass-command: ${{ steps.parse.outputs.is-bypass-command || steps.parse-description.outputs.is-bypass-command }}
     steps:
+      # Private org membership needs org Members: read, so command comments get a short-lived token
+      # from OSPO Vault. Vault refuses pull_request_target (the checkbox); on that or any failure,
+      # the check falls back to write access.
+      - name: Join tailnet for OSPO Vault
+        id: tailnet
+        if: >-
+          github.event_name == 'issue_comment' &&
+          (startsWith(github.event.comment.body, '/codeowner') || startsWith(github.event.comment.body, '/ping'))
+        continue-on-error: true
+        timeout-minutes: 5
+        uses: tailscale/github-action@064b10558093f38325e838ddea35486bdc6b1d5c # v4.4.0
+        with:
+          oauth-client-id: ${{ vars.TS_VAULT_OSPO_CLIENT_ID }}
+          audience: ${{ vars.TS_VAULT_OSPO_AUDIENCE }}
+          tags: tag:tt-gha-vault-ospo
+          args: --accept-routes
+
+      - name: Wait for OSPO Vault listener
+        id: vault-ready
+        if: steps.tailnet.outcome == 'success'
+        continue-on-error: true
+        run: |
+          HEALTH_URL="${VAULT_URL}/v1/sys/health?standbyok=true&uninitcode=204&sealedcode=204"
+          for attempt in 1 2 3 4 5 6; do
+            if curl -fsS --max-time 5 "$HEALTH_URL" >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::warning::OSPO Vault ${VAULT_URL} did not become reachable over Tailscale"
+          exit 1
+
+      - name: Fetch org-read token from OSPO Vault
+        if: steps.vault-ready.outcome == 'success'
+        continue-on-error: true
+        uses: hashicorp/vault-action@892a26828f195e65540a40b4768ae4571f51ebfc # v4.0.0
+        with:
+          url: ${{ env.VAULT_URL }}
+          method: jwt
+          path: jwt-github
+          role: tt-metal-codeowners
+          jwtGithubAudience: ${{ env.VAULT_URL }}
+          secrets: |
+            github/token/tt-metal-codeowners-members-read token | CODEOWNERS_ORG_TOKEN
+
       - name: Parse comment and get PR info
         id: parse
         if: github.event_name == 'issue_comment'
@@ -95,21 +152,30 @@ jobs:
               -d '{"content": "eyes"}' \
               "https://api.github.com/repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions"
 
-            # Org membership needs an org-read token, which github.token can't be, so
-            # write access to this repo stands in for it: org developers have write,
-            # outside contributors only read. maintain reports as write, triage as read.
-            MEMBERSHIP_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${{ github.token }}" \
-                                   -H "Accept: application/vnd.github.v3+json" \
-                                   "https://api.github.com/repos/${{ github.repository }}/collaborators/$COMMENT_AUTHOR/permission")
-            REPO_PERMISSION=$(curl -s -H "Authorization: Bearer ${{ github.token }}" \
-                                   -H "Accept: application/vnd.github.v3+json" \
-                                   "https://api.github.com/repos/${{ github.repository }}/collaborators/$COMMENT_AUTHOR/permission" \
-                              | jq -r '.permission // "none"' 2>/dev/null || echo "none")
+            # Check if comment author is a member of tenstorrent organization, with the
+            # OSPO Vault org-read token (204 = member, private members included). Without
+            # it, write access to this repo stands in for membership.
+            IS_MEMBER=false
+            if [ -n "${CODEOWNERS_ORG_TOKEN:-}" ]; then
+              MEMBERSHIP_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $CODEOWNERS_ORG_TOKEN" \
+                                     -H "Accept: application/vnd.github.v3+json" \
+                                     "https://api.github.com/orgs/tenstorrent/members/$COMMENT_AUTHOR")
+              echo "Membership check for $COMMENT_AUTHOR: HTTP $MEMBERSHIP_HTTP_CODE"
+              [ "$MEMBERSHIP_HTTP_CODE" = "204" ] && IS_MEMBER=true
+            else
+              MEMBERSHIP_HTTP_CODE="no-org-token"
+              REPO_PERMISSION=$(curl -s -H "Authorization: Bearer ${{ github.token }}" \
+                                     -H "Accept: application/vnd.github.v3+json" \
+                                     "https://api.github.com/repos/${{ github.repository }}/collaborators/$COMMENT_AUTHOR/permission" \
+                                | jq -r '.permission // "none"' 2>/dev/null || echo "none")
+              echo "No org-read token; repo permission for $COMMENT_AUTHOR: $REPO_PERMISSION"
+              if [ "$REPO_PERMISSION" = "admin" ] || [ "$REPO_PERMISSION" = "write" ]; then
+                IS_MEMBER=true
+              fi
+            fi
 
-            echo "Repo permission for $COMMENT_AUTHOR: $REPO_PERMISSION (HTTP $MEMBERSHIP_HTTP_CODE)"
-
-            if [ "$REPO_PERMISSION" = "admin" ] || [ "$REPO_PERMISSION" = "write" ]; then
-              echo "✅ User $COMMENT_AUTHOR has write access to this repo"
+            if [ "$IS_MEMBER" = "true" ]; then
+              echo "✅ User $COMMENT_AUTHOR is a member of tenstorrent organization"
               echo "should-run=true" >> $GITHUB_OUTPUT
               echo "pr-number=$PR_NUMBER" >> $GITHUB_OUTPUT
 
@@ -229,7 +295,7 @@ jobs:
                 "https://api.github.com/repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions"
 
             else
-              echo "❌ User $COMMENT_AUTHOR does not have write access to this repo (permission: $REPO_PERMISSION, HTTP $MEMBERSHIP_HTTP_CODE)"
+              echo "❌ User $COMMENT_AUTHOR is not a member of tenstorrent organization (HTTP $MEMBERSHIP_HTTP_CODE)"
               echo "should-run=false" >> $GITHUB_OUTPUT
 
               # Add unauthorized reaction
@@ -241,7 +307,7 @@ jobs:
                 "https://api.github.com/repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions"
 
               # Post a reply comment explaining the restriction
-              REPLY_MESSAGE="❌ **Access Denied**: Only people with write access to this repository can use CodeOwners commands.\n\nIf you believe this is an error, please contact a repository maintainer."
+              REPLY_MESSAGE="❌ **Access Denied**: Only members of the \`tenstorrent\` organization can use CodeOwners commands.\n\nIf you believe this is an error, please contact a repository maintainer."
 
               # Create JSON payload for the reply
               TEMP_JSON_FILE=$(mktemp)
@@ -313,8 +379,8 @@ jobs:
             exit 0
           fi
 
-          # Same access rule as the comment commands: write access to this repo
-          # (stands in for org membership, which github.token can't read).
+          # OSPO Vault refuses pull_request_target, so the checkbox can't get the org-read
+          # token; write access to this repo stands in for org membership here.
           MEMBERSHIP_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${{ github.token }}" \
                                  -H "Accept: application/vnd.github.v3+json" \
                                  "https://api.github.com/repos/${{ github.repository }}/collaborators/$SENDER/permission")
@@ -962,7 +1028,7 @@ jobs:
           role: tt-metal-codeowners
           jwtGithubAudience: ${{ env.VAULT_URL }}
           secrets: |
-            github/token/tt-metal-codeowners-members-read token | CODEOWNERS_TEAMS_TOKEN
+            github/token/tt-metal-codeowners-members-read token | CODEOWNERS_ORG_TOKEN
 
       - name: Checkout scripts
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
@@ -1011,7 +1077,7 @@ jobs:
 
           TEAM_MEMBERS=""
           # Org-read token from OSPO Vault when the login above worked; github.token otherwise.
-          TEAMS_TOKEN="${CODEOWNERS_TEAMS_TOKEN:-${{ github.token }}}"
+          TEAMS_TOKEN="${CODEOWNERS_ORG_TOKEN:-${{ github.token }}}"
           if [ -n "$TEAMS" ]; then
             IFS='§' read -ra TEAM_ARRAY <<< "$TEAMS"
             for team_entry in "${TEAM_ARRAY[@]}"; do
@@ -1947,7 +2013,7 @@ jobs:
           # Get members of thirdparty-moreh team to exclude from selection (they're not in Slack)
           MOREH_TEAM_MEMBERS=""
           MOREH_MEMBERS_API="https://api.github.com/orgs/tenstorrent/teams/thirdparty-moreh/members"
-          TEAMS_TOKEN="${CODEOWNERS_TEAMS_TOKEN:-${{ github.token }}}"
+          TEAMS_TOKEN="${CODEOWNERS_ORG_TOKEN:-${{ github.token }}}"
           MOREH_MEMBERS_DATA=$(curl -s -H "Authorization: Bearer $TEAMS_TOKEN" \
                                    -H "Accept: application/vnd.github.v3+json" \
                                    "$MOREH_MEMBERS_API" 2>/dev/null)

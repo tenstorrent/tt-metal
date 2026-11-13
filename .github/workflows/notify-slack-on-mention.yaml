@@ -16,19 +16,22 @@ permissions:
   pull-requests: read
 
 jobs:
-  notify-slack:
+  check-mention:
     runs-on: ubuntu-slim
+    outputs:
+      has_mention: ${{ steps.check-mention.outputs.has_mention }}
+      mentioned: ${{ steps.check-mention.outputs.mentioned }}
+      needs_org_check: ${{ steps.check-mention.outputs.needs_org_check }}
     steps:
       - name: Check for @ mentions
         id: check-mention
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           # Org members can reach each other on Slack directly, so only mentions written by someone outside
           # the org, or by a bot, are relayed. The person classified is the sender, who wrote the comment or
           # made the edit.
           SENDER=$(jq -r '.sender.login // ""' "$GITHUB_EVENT_PATH")
           SENDER_TYPE=$(jq -r '.sender.type // ""' "$GITHUB_EVENT_PATH")
+          NEEDS_ORG_CHECK=false
           if [ "$SENDER_TYPE" != "Bot" ]; then
             # author_association describes the comment, issue or PR author. It settles a public member
             # without an API call, but only when the sender is that author.
@@ -37,23 +40,16 @@ jobs:
             if [ "$SENDER" = "$AUTHOR" ]; then
               ASSOCIATION=$(jq -r '(.comment.author_association // .issue.author_association // .pull_request.author_association // "")' "$GITHUB_EVENT_PATH")
             fi
-            if [ "$ASSOCIATION" != "MEMBER" ] && [ "$ASSOCIATION" != "OWNER" ]; then
-              # A private member reads as CONTRIBUTOR above, and an editor who is not the author has no
-              # association at all. github.token can't read private org membership, so write access to
-              # this repo stands in for it: org developers have write, outside contributors only read.
-              REPO_PERMISSION=$(curl -s --max-time 30 -H "Authorization: Bearer $GH_TOKEN" \
-                "https://api.github.com/repos/${{ github.repository }}/collaborators/$SENDER/permission" \
-                | jq -r '.permission // "none"' 2>/dev/null || echo "none")
-              if [ "$REPO_PERMISSION" = "admin" ] || [ "$REPO_PERMISSION" = "write" ]; then
-                ASSOCIATION="MEMBER"
-              fi
-            fi
             if [ "$ASSOCIATION" = "MEMBER" ] || [ "$ASSOCIATION" = "OWNER" ]; then
               echo "Skipping: $SENDER is an org $ASSOCIATION"
               echo "has_mention=false" >> "$GITHUB_OUTPUT"
               exit 0
             fi
+            # A private member reads as CONTRIBUTOR above, and an editor who is not the author has no
+            # association at all, so the notify-slack job asks the org (only if there is anything to relay).
+            NEEDS_ORG_CHECK=true
           fi
+          echo "needs_org_check=$NEEDS_ORG_CHECK" >> "$GITHUB_OUTPUT"
 
           MENTION_RE='(?<![A-Za-z0-9_])@[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*'
           # GitHub does not notify mentions inside code, so fenced blocks and inline code are dropped first.
@@ -87,8 +83,91 @@ jobs:
             echo "has_mention=false" >> "$GITHUB_OUTPUT"
           fi
 
+  notify-slack:
+    needs: check-mention
+    if: needs.check-mention.outputs.has_mention == 'true'
+    runs-on: ubuntu-latest
+    # id-token: write lets this job log in to OSPO Vault (GitHub OIDC) for an org-read token.
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+      id-token: write
+    env:
+      VAULT_URL: https://vault-ospo.eng-svc.aws.tenstorrent.com
+    steps:
+      # Private org membership needs org Members: read, so get a short-lived token from OSPO Vault.
+      # Vault refuses pull_request_target; on that or any failure, the check falls back to write access.
+      - name: Join tailnet for OSPO Vault
+        id: tailnet
+        if: needs.check-mention.outputs.needs_org_check == 'true' && github.event_name != 'pull_request_target'
+        continue-on-error: true
+        timeout-minutes: 5
+        uses: tailscale/github-action@064b10558093f38325e838ddea35486bdc6b1d5c # v4.4.0
+        with:
+          oauth-client-id: ${{ vars.TS_VAULT_OSPO_CLIENT_ID }}
+          audience: ${{ vars.TS_VAULT_OSPO_AUDIENCE }}
+          tags: tag:tt-gha-vault-ospo
+          args: --accept-routes
+
+      - name: Wait for OSPO Vault listener
+        id: vault-ready
+        if: steps.tailnet.outcome == 'success'
+        continue-on-error: true
+        run: |
+          HEALTH_URL="${VAULT_URL}/v1/sys/health?standbyok=true&uninitcode=204&sealedcode=204"
+          for attempt in 1 2 3 4 5 6; do
+            if curl -fsS --max-time 5 "$HEALTH_URL" >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::warning::OSPO Vault ${VAULT_URL} did not become reachable over Tailscale"
+          exit 1
+
+      - name: Fetch org-read token from OSPO Vault
+        if: steps.vault-ready.outcome == 'success'
+        continue-on-error: true
+        uses: hashicorp/vault-action@892a26828f195e65540a40b4768ae4571f51ebfc # v4.0.0
+        with:
+          url: ${{ env.VAULT_URL }}
+          method: jwt
+          path: jwt-github
+          role: tt-metal-codeowners
+          jwtGithubAudience: ${{ env.VAULT_URL }}
+          secrets: |
+            github/token/tt-metal-codeowners-members-read token | CODEOWNERS_ORG_TOKEN
+
+      - name: Skip senders in the org
+        id: org-check
+        if: needs.check-mention.outputs.needs_org_check == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          SENDER=$(jq -r '.sender.login // ""' "$GITHUB_EVENT_PATH")
+          IS_MEMBER=false
+          if [ -n "${CODEOWNERS_ORG_TOKEN:-}" ]; then
+            # 204 means member, private members included.
+            MEMBER_STATUS=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 \
+              -H "Authorization: Bearer $CODEOWNERS_ORG_TOKEN" \
+              "https://api.github.com/orgs/${{ github.repository_owner }}/members/$SENDER" || echo "000")
+            echo "Org membership for $SENDER: HTTP $MEMBER_STATUS"
+            [ "$MEMBER_STATUS" = "204" ] && IS_MEMBER=true
+          else
+            # No org-read token: write access to this repo stands in for membership.
+            REPO_PERMISSION=$(curl -s --max-time 30 -H "Authorization: Bearer $GH_TOKEN" \
+              "https://api.github.com/repos/${{ github.repository }}/collaborators/$SENDER/permission" \
+              | jq -r '.permission // "none"' 2>/dev/null || echo "none")
+            echo "No org-read token; repo permission for $SENDER: $REPO_PERMISSION"
+            if [ "$REPO_PERMISSION" = "admin" ] || [ "$REPO_PERMISSION" = "write" ]; then
+              IS_MEMBER=true
+            fi
+          fi
+          [ "$IS_MEMBER" = "true" ] && echo "Skipping: $SENDER is in the org"
+          echo "is_member=$IS_MEMBER" >> "$GITHUB_OUTPUT"
+
       - name: Fetch Slack users
-        if: steps.check-mention.outputs.has_mention == 'true'
+        if: steps.org-check.outputs.is_member != 'true'
         env:
           SLACK_BOT_TOKEN: ${{ secrets.CODEOWNERS_PING_BOT }}
         run: |
@@ -137,7 +216,7 @@ jobs:
           mv "$TEMP_USERS_FILE" "${RUNNER_TEMP}/slack_users.json"
 
       - name: Send notification to Slack
-        if: steps.check-mention.outputs.has_mention == 'true'
+        if: steps.org-check.outputs.is_member != 'true'
         env:
           SLACK_BOT_TOKEN: ${{ secrets.CODEOWNERS_PING_BOT }}
           SLACK_CHANNEL_ID: "C0AJF4YF5QF"
@@ -146,7 +225,7 @@ jobs:
           EVENT_NAME="${{ github.event_name }}"
           SENDER=$(jq -r '.sender.login // ""' "$GITHUB_EVENT_PATH")
           REPO="${{ github.repository }}"
-          MENTIONED_CSV="${{ steps.check-mention.outputs.mentioned }}"
+          MENTIONED_CSV="${{ needs.check-mention.outputs.mentioned }}"
           SLACK_USERS_FILE="${RUNNER_TEMP}/slack_users.json"
 
           find_slack_user_id() {
