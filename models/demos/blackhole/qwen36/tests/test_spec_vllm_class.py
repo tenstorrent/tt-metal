@@ -588,6 +588,7 @@ def test_capabilities():
     assert "device_propose" in caps["spec_requirements"]
     assert tuple(caps["spec_hidden_handoff"]) == ("on_device",)
     assert caps["supports_async_decode"] is True and caps["supports_async_spec_decode"] is True
+    assert caps["supports_chained_spec_verify"] is True
     assert caps["output_tokens_per_step"] == 1
     assert caps["supports_prefix_caching"] is True and caps["supports_chunked_prefill"] is True
     assert issubclass(CLS, Qwen36ForCausalLM)
@@ -752,6 +753,11 @@ def test_a_verify_read_from_device_false_is_read_through_its_event(gen_eng, expe
     assert _last(eng, "decode_forward")[3]["defer"] is False
     with expect_error(ValueError, "reload_inputs=False"):
         gen.decode_forward(**{**kw, "reload_inputs": False}, read_from_device=False)
+    # A chained verify hands the engine its predecessor's unread PendingVerify.
+    gen.decode_forward(**kw, read_from_device=False, spec_predecessor=out)
+    assert _last(eng, "decode_forward")[3]["predecessor"] is pending
+    with expect_error(ValueError, "must be a VerifyOutput"):
+        gen.decode_forward(**kw, read_from_device=False, spec_predecessor=pending)
 
 
 def test_decode_forward_logits_mode_carries_logits(gen_eng):

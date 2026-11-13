@@ -306,14 +306,14 @@ class GdnBlockState:
                 seen[entry[2]] = self._verify_group[i] + 1
         ctrl0, idx0 = self.layout.verify_tables([], torch.zeros(0, T), self.num_blocks, rows)
 
-        def table(host):
-            return ttnn.from_torch(
-                host, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.mesh, mesh_mapper=rep
-            )
+        def table(host, dtype):
+            return ttnn.from_torch(host, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.mesh, mesh_mapper=rep)
 
         groups = max(self._verify_group.values()) + 1
-        self._verify_ctrl = [table(ctrl0) for _ in range(groups)]
-        self._verify_idx = [table(idx0) for _ in range(groups)]
+        # The ctrl page is int32 (gdn_spec_step takes UINT32 or INT32): a chained verify writes it on the device from
+        # float32 words, where a held row's word is -1 (SPEC_STEP_HOLD).
+        self._verify_ctrl = [table(ctrl0, ttnn.int32) for _ in range(groups)]
+        self._verify_idx = [table(idx0, ttnn.uint32) for _ in range(groups)]
         for i, dn in self.layers.items():
             k = self._verify_group[i]
             dn.state_blocks.verify = SimpleNamespace(T=T, ctrl=self._verify_ctrl[k], idx=self._verify_idx[k])
@@ -321,11 +321,12 @@ class GdnBlockState:
         self._verify_staged = {}  # ("ctrl" | "idx", table group) -> the host table its device table holds
         self._verify_order = None  # (mamba_state group names, [table group of each mamba_state group])
 
-    def set_verify_blocks(self, mamba_state):
+    def set_verify_blocks(self, mamba_state, stage_ctrl=True):
         """Point the verify of every GDN layer at the blocks of ``mamba_state``: row r of group g reads its start state
         from start_blocks[r] and writes the state after query token t into windows[r, t] (verify_tables). Rows past the
-        windows, and padding rows (block 0), use vLLM's null block. The tables are rewritten before every verify; the
-        caller's previous verify has finished reading them (verify_traced synchronizes)."""
+        windows, and padding rows (block 0), use vLLM's null block. The tables are copied before every verify, after
+        the previous verify's replay on the same command queue, so they reach the device after it read them.
+        ``stage_ctrl`` False stages the window tables only: a chained verify's chain program writes the ctrl pages."""
         T = self.verify_tokens
         groups = self.groups(mamba_state)
         if self._verify_order is None or self._verify_order[0] != self._group_names:
@@ -352,8 +353,36 @@ class GdnBlockState:
             n = min(self.bmax, int(windows.shape[0]))
             ctrl, idx = self.layout.verify_tables(starts[:n], windows[:n, :T], self.num_blocks, self.bmax)
             k = self._verify_order[1][g]
-            tables += [(("ctrl", k), ctrl, self._verify_ctrl[k]), (("idx", k), idx, self._verify_idx[k])]
+            if stage_ctrl:
+                tables.append((("ctrl", k), ctrl, self._verify_ctrl[k]))
+            tables.append((("idx", k), idx, self._verify_idx[k]))
         self._stage_verify_tables(tables)
+
+    def ctrl_candidates(self, mamba_state):
+        """float32 [T * bmax, 2 * Nv * groups] of a chained verify: row c * bmax + r, columns 2 * Nv * k .. holds the
+        start-state words of row r's ctrl page in table group k (the Nv first float32 pages, then the Nv history pages)
+        if the unread predecessor committed c + 1 tokens: the words of verify_tables over
+        ``start_blocks_by_count[:, c]``. A held row's words are SPEC_STEP_HOLD for every count. Call set_verify_blocks
+        (with ``stage_ctrl`` False) first: it binds the group order."""
+        T, rows, nv = self.verify_tokens, self.bmax, self.dims.nv
+        out = torch.zeros(T * rows, 2 * nv * len(self._verify_ctrl), dtype=torch.int64)
+        for g, (_, windows) in enumerate(self.groups(mamba_state)):
+            by_count = getattr(mamba_state.groups[g], "start_blocks_by_count", None)
+            if by_count is None or by_count.shape[1] < T:
+                raise ValueError(f"a chained verify needs start_blocks_by_count [rows, {T}] in every MambaSpec group")
+            n = min(rows, int(windows.shape[0]))
+            k = self._verify_order[1][g]
+            for c in range(T):
+                ctrl, _ = self.layout.verify_tables(by_count[:n, c], windows[:n, :T], self.num_blocks, rows)
+                words = ctrl[0, 1 + rows : 1 + rows + 2 * rows * nv].to(torch.int64)
+                rec, hist = words[: rows * nv].reshape(rows, nv), words[rows * nv :].reshape(rows, nv)
+                out[c * rows : (c + 1) * rows, 2 * nv * k : 2 * nv * (k + 1)] = torch.cat([rec, hist], dim=1)
+        return out.to(torch.float32)
+
+    def ctrl_written(self):
+        """The ctrl pages now hold what a chain program wrote: the next verify copies its own."""
+        for k in range(len(self._verify_ctrl)):
+            self._verify_staged.pop(("ctrl", k), None)
 
     def _stage_verify_tables(self, tables):
         """Copy each (key, host table, device table) whose host table differs from the one staged last under that key: a
@@ -364,12 +393,14 @@ class GdnBlockState:
         for key, host, dev in tables:
             if key in self._verify_staged and torch.equal(self._verify_staged[key], host):
                 continue
-            h = ttnn.from_torch(host, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=rep)
+            dtype = ttnn.int32 if key[0] == "ctrl" else ttnn.uint32
+            h = ttnn.from_torch(host, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=rep)
             ttnn.copy_host_to_device_tensor(h, dev)
             self._verify_staged[key] = host.clone()
             refs.append(h)
-        # The copies may read the host tensors after they return; hold them until the next verify's tables.
-        self._verify_refs = refs
+        # The copies may read the host tensors after they return; hold them until the tables of the verify after next
+        # (a chained verify is staged while the one before it still runs).
+        self._verify_refs = [*self._verify_refs[-1:], refs]
 
     def clear_verify_blocks(self):
         """Point every verify row at the null block 0 (warmup and trace capture)."""

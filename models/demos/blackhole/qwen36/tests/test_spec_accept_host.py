@@ -384,8 +384,13 @@ def test_the_runners_commit_proposes_with_the_walks_counts(step):
 
     Runner = mr.TTModelRunner
     params = list(inspect.signature(Runner.commit_spec_acceptance).parameters)
-    if params != ["self", "model_input", "committed", "counts", "spec_hidden", "skip_req_ids"]:
-        pytest.skip("the plugin on the path is not the bfdb4d0 runner")
+    if params[:6] != ["self", "model_input", "committed", "counts", "spec_hidden", "skip_req_ids"] or params[
+        6:
+    ] not in (
+        [],
+        ["chain_successor"],
+    ):
+        pytest.skip("the plugin on the path is not the bfdb4d0 runner or its chained-verify successor")
     eng, log, state = step
     B, T, K, max_len = eng.B, eng.T, eng.K, 400
     state["ids"] = torch.tensor([[7, 8, 9, 10], [11, 12, 13, 14], [21, 22, 23, 24], [0, 0, 0, 0]])

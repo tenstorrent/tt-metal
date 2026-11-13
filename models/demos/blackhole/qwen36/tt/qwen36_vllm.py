@@ -596,6 +596,8 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         # ordinary decode returns host ids.
         "supports_async_decode": True,
         "supports_async_spec_decode": True,
+        # A greedy verify submitted over the unread one before it builds its rows on the device (spec_chain).
+        "supports_chained_spec_verify": True,
         "output_tokens_per_step": 1,
         "supports_sample_on_device": True,
         "spec_ids_are_sampled": True,
@@ -820,6 +822,12 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         accepted_counts = kwargs.pop("accepted_counts")
         spec_mode = kwargs.pop("spec_mode")
         check_spec_side_tensors(num_valid_drafts, accepted_counts, int(tokens.shape[0]), self._SPEC_K)
+        predecessor = kwargs.pop("spec_predecessor", None)
+        if predecessor is not None:
+            # A chained verify (supports_chained_spec_verify): the engine builds its rows from the unread verify.
+            if not isinstance(predecessor, VerifyOutput):
+                raise ValueError(f"spec_predecessor must be a VerifyOutput, got {type(predecessor).__name__}")
+            predecessor = predecessor.argmax_ids
         eng = self._ensure_ready()
         res = eng.decode_forward(
             tokens,
@@ -832,6 +840,7 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
             mamba_state=mamba_state,
             sampling=kwargs.get("sampling_params"),
             defer=defer,
+            predecessor=predecessor,
         )
         logits = res.logits if spec_mode == "logits" else None
         return VerifyOutput(spec_mode=res.spec_mode, argmax_ids=res.argmax_ids, hidden=None, logits=logits)
