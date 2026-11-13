@@ -11,10 +11,11 @@
 namespace ttnn::prim {
 
 struct MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory {
-    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+    static ttnn::device_operation::MeshWorkloadArtifacts create_mesh_workload_artifacts(
         const ttnn::prim::MatmulParams& operation_attributes,
         const ttnn::prim::MatmulInputs& tensor_args,
-        std::vector<ttnn::Tensor>& tensor_return_value);
+        std::vector<ttnn::Tensor>& tensor_return_value,
+        const ttnn::MeshCoordinateRangeSet& tensor_coords);
 };
 
 }  // namespace ttnn::prim
