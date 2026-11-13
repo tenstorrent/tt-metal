@@ -714,6 +714,22 @@ def spec_widths(K: int, chunk: int, widths=(), groups: int = 0) -> dict:
     return dict(w=w, lone=lone, wv=wv, cu=cu, ch=ch, mode=mode, ts=ts)
 
 
+def spec_mtp_pt_width(blocks_per_seq: int, cap_blocks: int, groups: int, private: bool = True, env=os.environ) -> int:
+    """GLM53_SPEC_MTP_PT_CAP (default "1"; GLM53_SPEC_MULTI with the private MTP caches only): the device width of the
+    MTP launches' page tables (SpecMTP pt_m / pt_mc) = one user's private-cache blocks (cap_blocks = ceil(cap / BLOCK),
+    cap = GLM53_SPEC_MAX_CTX: spec_room keeps every position the MTP layer touches below it), rounded up to 16 entries
+    (64-B rows), at most the backend's blocks per sequence. The MTP MLA program holds one table row in CBs (mk_mla
+    attention_cbs ASCR on every owner core: 256 + 4 x width B; the latent core's LCB_SCR likewise): at SEQ 1 M the full
+    row is 64 KB -- the 7,744 B static-CB clash of G 8 K 1 at 1 M (chain_mmtp_k1: the MTP catch-up's MLA, owner cores
+    1-3..3-4) -- vs 2 KB at a 32 K cap. The narrow rows are the full rows' first entries (every entry a kernel reads), so
+    the drafts are bitwise unchanged. The single-user step, the pool MTP cache and "0" keep the full width (unchanged).
+    """
+    full = int(blocks_per_seq)
+    if not groups or not private or env.get("GLM53_SPEC_MTP_PT_CAP", "1") != "1" or int(cap_blocks) <= 0:
+        return full
+    return min(full, -(-int(cap_blocks) // 16) * 16)
+
+
 def spec_multi_plan(K: int, live: int, widths=(), full: int = 16) -> dict:
     """GLM53_SPEC_MULTI (design: models/demos/glm53_flash/doc/perf/mtp_multi_user_design.md; pure): the multi-user
     speculative step's row layout for ``live`` speculating users on a build with decode programs at ``widths`` (its

@@ -33,6 +33,7 @@ import ttnn
 from models.autoports.zai_org_glm_5_3_flash.tt.config import DENSE_KDA, SPARSE_KDA
 from models.autoports.zai_org_glm_5_3_flash.tt.generator import (  # noqa: F401 (ttnn-free)
     mtp_prefill_span,
+    spec_mtp_pt_width,
     spec_multi_groups,
     spec_widths,
 )
@@ -632,6 +633,16 @@ class SpecMTP:
                 write_rows(mesh, self.pt_m, self.mtp_row(None).reshape(1, -1).repeat(32, 1), ttnn.int32)
             elif self.mtp_private:  # (GLM53_SPEC_MULTI: catch-up row u (K + 1) + j / chained row u = user u's cache)
                 pm, pc = self._mtp_private_tables()
+                # GLM53_SPEC_MTP_PT_CAP (generator.spec_mtp_pt_width): the tables only as wide as one user's cache -- the
+                # MTP MLA program's CBs hold a table row (1 M SEQ: 64 KB per owner core -> 2 KB at a 32 K cap); the rows
+                # are the full rows' first entries (the only ones read: positions < GLM53_SPEC_MAX_CTX)
+                wpt = spec_mtp_pt_width(int(pm.shape[-1]), self.mtp_cap_blocks, G, True)
+                if wpt < int(pm.shape[-1]):
+                    ttnn.deallocate(self.pt_m)
+                    ttnn.deallocate(self.pt_mc)
+                    z = torch.zeros(32, wpt, dtype=torch.int32)
+                    self.pt_m, self.pt_mc = dram_rows(mesh, z, ttnn.int32), dram_rows(mesh, z, ttnn.int32)
+                    pm, pc = pm[:, :wpt].contiguous(), pc[:, :wpt].contiguous()
                 write_rows(mesh, self.pt_m, pm, ttnn.int32)
                 write_rows(mesh, self.pt_mc, pc, ttnn.int32)
             self.eh = MkEh(mesh, self.source, cfg, self.ocfg)

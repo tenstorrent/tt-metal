@@ -52,6 +52,7 @@ from models.autoports.zai_org_glm_5_3_flash.tt.generator import (
     blocks_per_seq,
     mtp_fill_inputs,
     mtp_prefill_span,
+    spec_mtp_pt_width,
     spec_multi_groups,
     spec_multi_k_by_rows,
     spec_multi_plan,
@@ -1909,6 +1910,11 @@ def test_spec_widths_rules(monkeypatch):
     assert spec_widths(1, 16, ws, groups=2) == dict(w=4, lone=4, wv=4, cu=4, ch=4, mode="multi", ts=(4,))
     assert spec_widths(1, 16, ws, groups=8) == dict(w=16, lone=16, wv=16, cu=16, ch=16, mode="multi", ts=())
     assert spec_widths(1, 8, (), groups=4)["ch"] == 8 and spec_widths(1, 4, (), groups=2)["wv"] == 4
+    # GLM53_SPEC_MTP_PT_CAP: the multi-user private MTP tables at one user's cap blocks (16-entry rows), else full width
+    assert spec_mtp_pt_width(16384, 512, 8, True, {}) == 512 and spec_mtp_pt_width(16384, 4096, 4, True, {}) == 4096
+    assert spec_mtp_pt_width(16384, 1563, 8, True, {}) == 1568 and spec_mtp_pt_width(2048, 4096, 8, True, {}) == 2048
+    assert spec_mtp_pt_width(16384, 512, 0, True, {}) == 16384 and spec_mtp_pt_width(16384, 512, 8, False, {}) == 16384
+    assert spec_mtp_pt_width(16384, 512, 8, True, {"GLM53_SPEC_MTP_PT_CAP": "0"}) == 16384
     with expect_error(AssertionError, "must be a decode width of the build"):
         spec_widths(3, 16, ws, groups=3)
     with expect_error(AssertionError, "K \\+ 1 even"):
