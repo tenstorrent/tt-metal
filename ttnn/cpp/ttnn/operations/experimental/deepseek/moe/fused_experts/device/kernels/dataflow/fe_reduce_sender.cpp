@@ -121,8 +121,10 @@ void kernel_main() {
     const uint32_t staging_addr = get_write_ptr(cb_scratch_id);
 
     // The candidate exchange: one header per route, built once (route, sem_router increment, payload size), so a
-    // forward is one fused write + increment packet per route, every route's in flight at once. The increment is
-    // flushed behind the write at the merge core, so the slot has landed when sem_router counts it. Only the slot
+    // forward is one fused write + increment packet per route, every route's in flight at once. The merge core's
+    // router issues the increment after the write, in order (no flush: with one per chip arriving at each merge core,
+    // flushes held its router for each write's ack and serialized them), so the slot has landed when sem_router
+    // counts it. Only the slot
     // address (the iteration's half) changes from one forward to the next.
     namespace fabric_api = tt::tt_fabric::mesh::experimental;
     using tt::tt_fabric::common::experimental::UnicastFusedAtomicIncUpdateMask;
@@ -139,7 +141,7 @@ void kernel_main() {
                 safe_get_noc_addr(merge_x, merge_y, cand_addr, 0),
                 safe_get_noc_addr(merge_x, merge_y, get_semaphore(sem_router_id), 0),
                 1,
-                true},
+                false},
             cand_slot_bytes);
     }
 
@@ -161,7 +163,7 @@ void kernel_main() {
                         exchange_header[r],
                         slot,
                         tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
-                            safe_get_noc_addr(merge_x, merge_y, slot, 0), 0, 0, true});
+                            safe_get_noc_addr(merge_x, merge_y, slot, 0), 0, 0, false});
                 }
                 // The slot's bytes have left before the reducer may refill it (two forwards on).
                 noc_async_writes_flushed();
