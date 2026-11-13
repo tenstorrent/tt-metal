@@ -137,9 +137,10 @@ jobs:
           attest-sbom: "false"
           retries: "2"
           retry-delay-seconds: "15"
-          # Python packages ship TLS test fixtures (future, tornado, ...) that
-          # the crypto scan reports as private keys. Keys anywhere else still
-          # fail the gate.
+          # CPython's test suite (lib/python3.X/test/) and Python packages
+          # (future, tornado, ...) ship TLS test fixtures that the crypto scan
+          # reports as private keys. The first glob covers both, since * also
+          # matches /. Keys anywhere else still fail the gate.
           trivy-allowed-private-keys: |
-            */site-packages/*/test/*
+            */lib/python3*/test/*
             */site-packages/*/tests/*
