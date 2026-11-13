@@ -21,6 +21,8 @@ from models.demos.gemma4_31b_qb2.tt.decoder import Decoder
 
 HF_ID = "google/gemma-4-31B-it"
 HF_REVISION = "842da3794eaa0b77d5f08bae87a17459d91ff475"
+# Storage format of the tied LM head (the decoder projections are in decoder.WEIGHT_DTYPES).
+HEAD_DTYPE = ttnn.bfloat8_b
 
 
 def checkpoint_path():
@@ -97,7 +99,7 @@ class Gemma4Model:
         weight = reader.get("model.language_model.embed_tokens.weight")
         # The tied embedding has one physical layout for each consuming operation.
         self.embedding = self.tensor(weight, dim=1, layout=ttnn.ROW_MAJOR_LAYOUT)
-        self.head = self.tensor(weight.T.contiguous(), dim=1, dtype=ttnn.bfloat8_b)
+        self.head = self.tensor(weight.T.contiguous(), dim=1, dtype=HEAD_DTYPE)
         self.embedding_scale = torch.tensor(self.config.hidden_size**0.5, dtype=weight.dtype).item()
         norm = reader.get("model.language_model.norm.weight")
         self.norm = self.tensor(norm.reshape(1, 1, 1, -1))
