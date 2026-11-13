@@ -10,13 +10,11 @@
 #include <vector>
 
 #include <nanobind/nanobind.h>
-#include <nanobind/stl/pair.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
 
 #include "generic_op.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
-#include "ttnn-nanobind/program_spec.hpp"
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt_stl/reflection.hpp>
 
@@ -152,91 +150,6 @@ void bind_generic_operation_program_spec(nb::module_& mod) {
     using ttnn::experimental::MeshProgramSpec;
     using ttnn::experimental::ProgramRunArgs;
     using ttnn::experimental::ProgramSpec;
-    using ttnn::program_spec::TENSOR_ARGS_ATTRIBUTE;
-
-    nb::class_<MeshProgramSpec>(
-        mod,
-        "MeshProgramSpec",
-        R"doc(
-        Everything fixed about a mesh program: a ttnn.experimental.ProgramSpec for each mesh coordinate range.
-        generic_op raises if the MeshProgramSpec has no programs, if a range reaches outside the mesh, if two ranges
-        overlap, if a device in a range does not hold every tensor, or if the MeshProgramRunArgs does not give run
-        args for exactly these ranges. Lists are copied in and out.
-        )doc")
-        .def(
-            "__init__",
-            [](MeshProgramSpec* self, std::vector<std::pair<MeshCoordinateRange, ProgramSpec>> programs) {
-                new (self) MeshProgramSpec{.programs = std::move(programs)};
-            },
-            nb::kw_only(),
-            nb::arg("programs") = std::vector<std::pair<MeshCoordinateRange, ProgramSpec>>{})
-        .def_rw("programs", &MeshProgramSpec::programs, nb::rv_policy::copy);
-
-    // A Python ProgramRunArgs keeps its tensors alive in an attribute. A MeshProgramRunArgs holds C++ copies of its
-    // run args, so it keeps a copy of each of those attributes, in the order of its programs.
-    const auto set_programs = [](nb::pointer_and_handle<MeshProgramRunArgs> self,
-                                 const std::vector<std::pair<MeshCoordinateRange, nb::object>>& programs) {
-        std::vector<std::pair<MeshCoordinateRange, ProgramRunArgs>> run_args;
-        nb::list tensors;
-        run_args.reserve(programs.size());
-        for (std::size_t i = 0; i < programs.size(); ++i) {
-            const auto& [range, program_run_args] = programs[i];
-            // Unchecked, nb::cast would report only std::bad_cast.
-            if (!nb::isinstance<ProgramRunArgs>(program_run_args)) {
-                throw nb::type_error(("MeshProgramRunArgs: programs[" + std::to_string(i) + "] holds a " +
-                                      nb::cast<std::string>(program_run_args.type().attr("__name__")) +
-                                      ", not a ttnn.experimental.ProgramRunArgs")
-                                         .c_str());
-            }
-            run_args.emplace_back(range, nb::cast<const ProgramRunArgs&>(program_run_args));
-            tensors.append(nb::getattr(program_run_args, TENSOR_ARGS_ATTRIBUTE, nb::dict()).attr("copy")());
-        }
-        ttnn::program_spec::set_tensor_owners(self.h, tensors);
-        self.p->programs = std::move(run_args);
-    };
-    nb::class_<MeshProgramRunArgs>(
-        mod,
-        "MeshProgramRunArgs",
-        nb::dynamic_attr(),
-        R"doc(
-        The values of one mesh program run: a ttnn.experimental.ProgramRunArgs for each range of the
-        MeshProgramSpec. It keeps the tensors of its run args alive. Lists are copied in and out.
-        )doc")
-        .def(
-            "__init__",
-            [set_programs](
-                nb::pointer_and_handle<MeshProgramRunArgs> self,
-                const std::vector<std::pair<MeshCoordinateRange, nb::object>>& programs) {
-                new (self.p) MeshProgramRunArgs{};
-                set_programs(self, programs);
-            },
-            nb::kw_only(),
-            nb::arg("programs") = std::vector<std::pair<MeshCoordinateRange, nb::object>>{})
-        .def(
-            "__setattr__",
-            [](nb::handle self, const nb::str& name, nb::handle value) {
-                ttnn::program_spec::set_known_attribute(self, name, value, nb::type<MeshProgramRunArgs>());
-            },
-            nb::arg("name"),
-            nb::arg("value").none())
-        .def(
-            "__delattr__",
-            [](nb::handle self, const nb::str& name) { ttnn::program_spec::delete_known_attribute(self, name); },
-            nb::arg("name"))
-        .def_prop_rw(
-            "programs",
-            [](nb::pointer_and_handle<MeshProgramRunArgs> self) {
-                nb::object tensors = nb::getattr(self.h, TENSOR_ARGS_ATTRIBUTE);
-                nb::list programs;
-                for (std::size_t i = 0; i < self.p->programs.size(); ++i) {
-                    const auto& [range, run_args] = self.p->programs[i];
-                    nb::object run_args_copy = nb::cast(run_args, nb::rv_policy::copy);
-                    ttnn::program_spec::set_tensor_owners(run_args_copy, tensors[i].attr("copy")());
-                    programs.append(nb::make_tuple(range, run_args_copy));
-                }
-                return programs;
-            },
-            set_programs);
 
     const char* doc = R"doc(
         Runs a Metal 2.0 program, given as a ttnn.experimental.ProgramSpec (everything fixed about the program) and
