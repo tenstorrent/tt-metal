@@ -218,12 +218,15 @@ def _warm_build(config, loader, moe_mesh, cache, layer_ids, log, manifest_path, 
         stat = os.stat(path)
         if (stat.st_size, stat.st_mtime_ns) != (e["size"], e["mtime_ns"]):
             raise _WarmMiss(f"{path} changed since the cold load")
+        # Allocate with the caller's own ND config, the one the cold load used, not MemoryConfig.from_json: to_json
+        # cannot serialize an ND shard spec's shard_shape (it writes an "Unsupported type" string), and from_json
+        # aborts the process on it. The recorded JSON is informational only.
         t = ttnn.allocate_tensor_on_device(
             ttnn.Shape(e["shape"]),
             getattr(ttnn.DataType, e["dtype"]),
             getattr(ttnn.Layout, e["layout"]),
             device,
-            ttnn.MemoryConfig.from_json(e["memory_config"]),
+            nd_config,
         )
         held.append(t)
         if t.buffer_address() != e["address"]:

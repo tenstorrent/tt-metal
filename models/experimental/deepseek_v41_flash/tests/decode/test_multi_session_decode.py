@@ -33,6 +33,20 @@ Run (32-chip Galaxy, ttnn venv, from the repo root)::
     pytest models/experimental/deepseek_v41_flash/tests/decode/test_multi_session_decode.py
 
 ``DEEPSEEK_V4_MAX_NEW_TOKENS`` sets the tokens generated per user (default 64).
+
+``test_interleaved_sessions_match_solo_persistent_moe`` runs the model's persistent-MoE layout five times over: every
+layer's MoE on one persistent TP12 ``fused_experts`` launch on the 3x4 submesh at row 5, and five instances of
+everything else (embedding, Engram, attention, hyper-connections, norms, ``lm_head``), each one TP4 stage on a 1x4
+row above it (rows 0-4) and each a requester of that one launch. Five users in all, one per instance: instance ``i``
+decodes prompt ``i``. The MoE takes its requesters' rows in strict turn, so the instances step together, each from
+host threads of its own, and take the same number of steps: a user with a shorter prompt generates that many more
+than ``DEEPSEEK_V4_MAX_NEW_TOKENS`` tokens. Each instance then re-decodes the next instance's user with the same
+tokens, on another row beside other neighbours, and every position's logits (or picks) must match. It needs the
+TP12 expert cache
+(``tools/fill_expert_cache.py --all-layers --tp-size 12 --mesh-rows 3``)::
+
+    DEEPSEEK_V4_DEVICE_SAMPLING=1 DEEPSEEK_V4_MAX_NEW_TOKENS=256 pytest \\
+      models/experimental/deepseek_v41_flash/tests/decode/test_multi_session_decode.py -k persistent_moe
 """
 
 from __future__ import annotations
@@ -43,6 +57,7 @@ import queue
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 import torch
@@ -66,7 +81,9 @@ from models.experimental.deepseek_v41_flash.tests.decode.test_full_model_decode_
     _traced_max_seq,
 )
 from models.experimental.deepseek_v41_flash.tt import host_rs
-from models.experimental.deepseek_v41_flash.tt.config import DEFAULT_MODEL_DIR, load_config
+from models.experimental.deepseek_v41_flash.tt.config import CACHE_DIR, DEFAULT_MODEL_DIR, load_config
+from models.experimental.deepseek_v41_flash.tt.decode import persistent_moe as pmoe
+from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache
 from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader
 
 _TEXTS = (
@@ -85,6 +102,9 @@ _MAX_NEW_TOKENS = int(os.environ.get("DEEPSEEK_V4_MAX_NEW_TOKENS", "64"))
 _CHECKED = (0, _NUM_SESSIONS - 1)
 _MAX_IN_FLIGHT = 2 * _NUM_SESSIONS
 _PCC = 0.9999
+# The persistent-MoE layout: the TP12 MoE on rows 5-7 of the 8x4 mesh, one TP4 instance of everything else on each
+# of these rows above it, every instance a requester of the one MoE launch.
+_MOE_INSTANCE_ROWS = (0, 1, 2, 3, 4)
 
 
 def _pick(out: torch.Tensor) -> int:
@@ -186,9 +206,10 @@ def _generate_interleaved(model, prompts: dict[int, list[int]], max_new: int, ke
     return {"start": start, "steps": len(schedule), "generated": generated, "arrivals": arrivals, "logits": logits}
 
 
-def _log_throughput(run: dict, prompts: dict[int, list[int]], max_new: int) -> None:
+def _log_throughput(run: dict, prompts: dict[int, list[int]], max_new: int, label: str = "") -> float:
     """Per user: time to the first pick and the generation rate after it. In total: the users' rates
-    summed, and every decode step (prompt and generation) over the whole run's wall time."""
+    summed, and every decode step (prompt and generation) over the whole run's wall time. Returns the
+    users' summed rate; ``label`` prefixes every line."""
     total = 0.0
     for sid, ids in prompts.items():
         stamps = run["arrivals"][sid][len(ids) - 1 :]
@@ -196,13 +217,15 @@ def _log_throughput(run: dict, prompts: dict[int, list[int]], max_new: int) -> N
         rate = (len(stamps) - 1) / (stamps[-1] - stamps[0]) if len(stamps) > 1 else 0.0
         total += rate
         logger.info(
-            f"user {sid}: {len(ids)} prompt + {max_new} generated tokens, first token at {first:.2f} s, {rate:.2f} tok/s"
+            f"{label}user {sid}: {len(ids)} prompt + {max_new} generated tokens, first token at {first:.2f} s, "
+            f"{rate:.2f} tok/s"
         )
     wall = max(stamps[-1] for stamps in run["arrivals"].values()) - run["start"]
     logger.info(
-        f"total: {total:.2f} tok/s generated across {len(prompts)} users; "
+        f"{label}total: {total:.2f} tok/s generated across {len(prompts)} users; "
         f"{run['steps'] / wall:.2f} decode steps/s overall ({run['steps']} steps in {wall:.2f} s)"
     )
+    return total
 
 
 @pytest.mark.skipif(not _checkpoint_available(), reason=f"V4.1-Flash checkpoint not found under {DEFAULT_MODEL_DIR}")
@@ -290,3 +313,168 @@ def test_interleaved_sessions_match_solo(mesh_device, reset_seeds) -> None:
                 assert passing, f"user {sid} position {pos}: interleaved logits PCC {pcc} vs solo"
                 assert int(want.argmax()) == int(got.argmax()), f"user {sid} position {pos}: argmax differs"
             logger.info(f"user {sid}: {len(fed)} interleaved positions match the solo run")
+
+
+@pytest.mark.skipif(not _checkpoint_available(), reason=f"V4.1-Flash checkpoint not found under {DEFAULT_MODEL_DIR}")
+@pytest.mark.timeout(14400)
+@torch.no_grad()
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+            "num_command_queues": 2,
+            "l1_small_size": _L1_SMALL_SIZE,
+        }
+    ],
+    indirect=["device_params"],
+    ids=["fabric_1d"],
+)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True, ids=["tp4x5_persistent_moe12"])
+def test_interleaved_sessions_match_solo_persistent_moe(mesh_device, reset_seeds) -> None:
+    from transformers import AutoTokenizer
+
+    from models.experimental.deepseek_v4_flash.demo.server import _GIL_SWITCH_SECONDS
+
+    loader = DeepseekV4WeightLoader(DEFAULT_MODEL_DIR)
+    config = load_config(loader.snapshot_dir)
+    tokenizer = AutoTokenizer.from_pretrained(loader.snapshot_dir)
+    prompt_ids = [_tokenize_chat(tokenizer, text) for text in _TEXTS]
+    num_layers = min(
+        int(os.environ.get("DEEPSEEK_V4_DECODE_LAYERS", config.num_hidden_layers)), config.num_hidden_layers
+    )
+    _stage_engram_or_skip(loader, config)
+    if host_rs.enabled():
+        host_rs.build()
+    request_meshes = [
+        mesh_device.create_submesh(ttnn.MeshShape(1, 4), ttnn.MeshCoordinate(row, 0)) for row in _MOE_INSTANCE_ROWS
+    ]
+    moe_mesh = mesh_device.create_submesh(
+        ttnn.MeshShape(*pmoe.MOE_MESH_SHAPE), ttnn.MeshCoordinate(*pmoe.MOE_MESH_OFFSET)
+    )
+    with contextlib.ExitStack() as stack:
+        start = time.perf_counter()
+        moes = pmoe.build_moe_layers(config, loader, moe_mesh, WeightCache(CACHE_DIR), range(num_layers))
+        # Its sockets take L1 on every requester before the instances' layers do.
+        server = pmoe.PersistentMoE(moe_mesh, request_meshes, moes)
+        # The device cannot close until every requester has sent its stop; a no-op after the stop below.
+        stack.callback(server.stop)
+        logger.info(
+            f"persistent MoE launched over layers 0..{num_layers - 1} for {len(request_meshes)} requesters "
+            f"(rows {list(_MOE_INSTANCE_ROWS)}) in {time.perf_counter() - start:.0f}s"
+        )
+        models = []
+        for requester, mesh in enumerate(request_meshes):
+            model, lm_head, _, _ = _construct_model(
+                mesh_device,
+                stack,
+                loader=loader,
+                config=config,
+                num_stages=1,
+                submeshes=[mesh],
+                moe_server=server,
+                moe_requester=requester,
+            )
+            _assert_decode_parallelism(model, model.tp_size, 1, persistent_moe=True)
+            _assert_prefetch_rings(model)
+            models.append((model, lm_head))
+
+        def stop_all() -> None:
+            # Every instance's replays are issued before the stop requests queue behind them.
+            for model, _ in models:
+                model.shutdown()
+            server.stop()
+
+        stack.callback(stop_all)
+
+        # One user per instance, instance i decoding text i. The MoE serves its requesters in strict turn, so every
+        # instance has to take the same number of steps: a user with a shorter prompt generates that many more tokens.
+        num_users = len(models)
+        texts = list(range(num_users))
+        longest = max(len(prompt_ids[t]) for t in texts)
+        max_new = [longest + _MAX_NEW_TOKENS - len(prompt_ids[t]) for t in texts]
+        max_seq = _traced_max_seq(config, longest + _MAX_NEW_TOKENS, num_layers)
+        rope = _build_rope(config, loader.snapshot_dir, max_seq)
+        sids = []
+        for model, lm_head in models:
+            model.prepare_static_decode(
+                rope,
+                max_seq,
+                lm_head=lm_head,
+                num_sessions=1,
+                total_tokens=max_seq,
+                block_size=_PAGE_BLOCK_SIZE,
+                device_sampling=_DEVICE_SAMPLING,
+            )
+            if model.device_sampler is not None:
+                model.device_sampler.set_sampling(0.0, _SEED)
+            sids.append(model.open_session())
+        logger.info(f"sampling: {'device' if _DEVICE_SAMPLING else 'host'}, greedy")
+
+        # From here on every instance steps at once, each on a thread of its own (ttnn ops and socket reads release
+        # the GIL): one instance stepping alone would wait forever for the others' turns.
+        def capture(i: int) -> None:
+            # The first step compiles and captures every variant; its writes are dropped by the reset.
+            model = models[i][0]
+            model.activate_session(sids[i])
+            model.decode_traced(prompt_ids[texts[i]][0], 0)
+            model.reset_session(sids[i])
+
+        with ThreadPoolExecutor(num_users, thread_name_prefix="instance") as pool:
+            list(pool.map(capture, range(num_users)))
+        for (model, _), sid in zip(models, sids):
+            # The session's blocks for its whole run, before any replay (see the test above).
+            model.ensure_session_capacity(longest + _MAX_NEW_TOKENS - 2, sid)
+            if host_rs.enabled():
+                model.start_host_runtime()
+        logger.info(f"host runtime: {'Rust' if models[0][0].host_runtime_running else 'Python'}")
+        switch_interval = sys.getswitchinterval()
+        sys.setswitchinterval(_GIL_SWITCH_SECONDS)
+        stack.callback(sys.setswitchinterval, switch_interval)
+
+        prompts = [{sid: prompt_ids[t]} for sid, t in zip(sids, texts)]
+        with ThreadPoolExecutor(num_users, thread_name_prefix="instance") as pool:
+            runs = list(
+                pool.map(_generate_interleaved, [m for m, _ in models], prompts, max_new, [{sid} for sid in sids])
+            )
+
+        total = 0.0
+        for i, (sid, t, run) in enumerate(zip(sids, texts, runs)):
+            generated = run["generated"][sid]
+            if tokenizer.eos_token_id in generated:
+                generated = generated[: generated.index(tokenizer.eos_token_id)]
+            logger.info(f"instance {i} (row {_MOE_INSTANCE_ROWS[i]}) PROMPT    : {_TEXTS[t]!r}")
+            logger.info(f"instance {i} (row {_MOE_INSTANCE_ROWS[i]}) GENERATED : {tokenizer.decode(generated)!r}")
+            total += _log_throughput(run, prompts[i], max_new[i], label=f"instance {i} ")
+        steps = sum(run["steps"] for run in runs)
+        wall = max(max(s[-1] for s in run["arrivals"].values()) for run in runs) - min(run["start"] for run in runs)
+        logger.info(
+            f"all {num_users} instances: {total:.2f} tok/s generated across {num_users} users; "
+            f"{steps / wall:.2f} decode steps/s overall ({steps} steps in {wall:.2f} s)"
+        )
+
+        # Every instance re-decodes the next instance's user with the tokens it was fed: the same text on another
+        # row, beside different neighbours in each round of the MoE's turns, so a response delivered to the wrong
+        # requester (or a row that decodes differently) shows up as logits that differ from the first run's.
+        # Every user was fed the same number of tokens, so the instances again take the same number of steps.
+        fed = [prompt_ids[t] + run["generated"][sid][:-1] for sid, t, run in zip(sids, texts, runs)]
+
+        def redecode(i: int) -> list[torch.Tensor]:
+            model, sid = models[i][0], sids[i]
+            model.reset_session(sid)
+            return _decode_alone(model, sid, fed[(i + 1) % num_users])
+
+        with ThreadPoolExecutor(num_users, thread_name_prefix="instance") as pool:
+            redecoded = list(pool.map(redecode, range(num_users)))
+        for i, want_all in enumerate(redecoded):
+            src = (i + 1) % num_users
+            got_all = runs[src]["logits"][sids[src]]
+            where = f"instance {src}'s user (text {texts[src]}) re-decoded on instance {i}"
+            for pos, (want, got) in enumerate(zip(want_all, got_all)):
+                if got.dtype == torch.int32:
+                    assert _pick(want) == _pick(got), f"{where}, position {pos}: device pick differs"
+                    continue
+                passing, pcc = comp_pcc(want.float(), got.float(), _PCC)
+                assert passing, f"{where}, position {pos}: logits PCC {pcc} vs the first run"
+                assert int(want.argmax()) == int(got.argmax()), f"{where}, position {pos}: argmax differs"
+            logger.info(f"{where}: all {len(fed[src])} positions match the first run")

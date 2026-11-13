@@ -257,8 +257,13 @@ class DeepSeekV41Model(DeepSeekV4Model):
     gives that stage), which is the server's only requester. Each layer's FFN step is one
     ``persistent_moe_request`` in the stage's trace (:class:`~.decode.decoder_layer.DeepSeekV41PersistentMoeDecoderLayer`).
     The server takes requests from its requesters in strict turn, so the layers must all be on that one stage
-    (``num_stages=1``). One decode row per step: no ``verify_rows``, DSpark, prefill model, image tokens or
-    vision. :meth:`shutdown` stops the server's kernels, which must happen before the mesh closes.
+    (``num_stages=1``). One decode row per step: no ``verify_rows`` (so DSpark verifies its rounds as pipelined
+    single-row steps, its drafter on row 3), prefill model, image tokens or vision. :meth:`shutdown` stops the server's kernels, which must happen before the mesh closes.
+
+    ``moe_server`` (implies ``persistent_moe``) shares an already launched server among several models instead: this
+    model is its requester ``moe_requester``, on that requester's mesh unless ``submeshes`` gives it, and the server
+    must serve layers ``0 .. num_layers - 1``. Its requesters take strict turns, so every model on it has to step
+    together, and :meth:`shutdown` leaves it running: whoever launched it stops it once every model is done.
 
     Do not call :meth:`DeepSeekV4Model.__init__`. It builds V4 layers, reads ``compress_rates`` and
     ``mlp_layer_types``, and constructs ``hc_head``, none of which exist on this checkpoint.
@@ -291,11 +296,17 @@ class DeepSeekV41Model(DeepSeekV4Model):
         balance_dram_banks: bool = True,
         prefill_layer_submesh_ids: Optional[Sequence[int]] = None,
         persistent_moe: bool = False,
+        moe_server: Optional[pmoe.PersistentMoE] = None,
+        moe_requester: int = 0,
     ):
         self.config = config
+        if moe_server is not None:
+            persistent_moe = True
         self.persistent_moe = persistent_moe
-        self.moe_server: Optional[pmoe.PersistentMoE] = None
-        self.moe_mesh: Optional[ttnn.MeshDevice] = None
+        self.moe_server: Optional[pmoe.PersistentMoE] = moe_server
+        self.moe_requester = moe_requester
+        self._owns_moe_server = moe_server is None
+        self.moe_mesh: Optional[ttnn.MeshDevice] = None if moe_server is None else moe_server.moe_mesh
         if persistent_moe:
             if tuple(full_device.shape) != pmoe.GALAXY_MESH:
                 raise ValueError(f"persistent_moe needs the {pmoe.GALAXY_MESH} mesh, got {tuple(full_device.shape)}")
@@ -318,13 +329,16 @@ class DeepSeekV41Model(DeepSeekV4Model):
                     f"persistent_moe decodes one text row per step; unsupported: "
                     f"{[k for k, v in unsupported.items() if v]}"
                 )
-            if submeshes is None:
+            if submeshes is None and moe_server is not None:
+                submeshes = [moe_server.request_meshes[moe_requester]]
+            elif submeshes is None:
                 submeshes = [
                     full_device.create_submesh(ttnn.MeshShape(1, tp_size), ttnn.MeshCoordinate(pmoe.REQUESTER_ROW, 0))
                 ]
-            self.moe_mesh = full_device.create_submesh(
-                ttnn.MeshShape(*pmoe.MOE_MESH_SHAPE), ttnn.MeshCoordinate(*pmoe.MOE_MESH_OFFSET)
-            )
+            if moe_server is None:
+                self.moe_mesh = full_device.create_submesh(
+                    ttnn.MeshShape(*pmoe.MOE_MESH_SHAPE), ttnn.MeshCoordinate(*pmoe.MOE_MESH_OFFSET)
+                )
         self.image_rows = image_rows
         self.verify_rows = verify_rows
         self.balance_dram_banks = balance_dram_banks
@@ -435,7 +449,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
         self._mtp_pack = None
         self._mtp_hiddens = None
 
-        if persistent_moe:
+        if persistent_moe and moe_server is None:
             self._launch_moe_server(n)
 
         self._stage_and_require_engram_ram()
@@ -524,6 +538,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
                         decoder_layer_weights(loader, li, config),
                         current_device,
                         self.moe_server,
+                        requester=self.moe_requester,
                         cache=layer_cache,
                         weight_dtype=weight_dtype,
                         tp_size=tp_size,
@@ -532,7 +547,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
                         engram_sockets=engram_sockets.get(li),
                     )
                     _profile(current_device)
-                    logger.info(f"Layer {li} built: {_l1_report(current_device)}")
+                    logger.debug(f"Layer {li} built: {_l1_report(current_device)}")
                     continue
                 experts = DeepSeekV41PreloadedExperts(
                     config,
@@ -2417,8 +2432,6 @@ class DeepSeekV41Model(DeepSeekV4Model):
         group's ``verify_rows``-row selections on each stage, the stages' verify streams layout and the
         buffers of its traces (:meth:`_prepare_verify_traces`).
         """
-        if self.moe_server is not None:
-            raise NotImplementedError("speculative decode verifies several rows per step; persistent_moe takes one")
         if self._traces_compiled or self._traced_captured:
             raise RuntimeError("call prepare_spec_decode() before the decode traces are compiled")
         if self._slotted and self.verify_rows > 1:
@@ -2528,7 +2541,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
             return
         if self._lm_head_traced is None:
             raise ValueError("the drafter copies the decode lm_head: pass lm_head to prepare_static_decode()")
-        drafter_row = self.num_submeshes
+        # Under persistent_moe the stage is row 4 and the MoE rows 5-7, so the drafter takes the row above the stage.
+        drafter_row = pmoe.REQUESTER_ROW - 1 if self.moe_server is not None else self.num_submeshes
         if drafter_row >= self.mesh_devices // self.tp_size:
             raise ValueError(
                 f"the drafter runs on the row after the pipeline's {self.num_submeshes}, but the mesh has "
@@ -2921,7 +2935,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
             host.close()
         super().shutdown()
         # After the replay thread: the stop request queues behind every step already dispatched to the stage.
-        if self.moe_server is not None:
+        if self.moe_server is not None and self._owns_moe_server:
             self.moe_server.stop()
 
     def _launch_moe_server(self, num_layers: int) -> None:
@@ -2930,12 +2944,15 @@ class DeepSeekV41Model(DeepSeekV4Model):
         start = time.perf_counter()
 
         def log(layer):
-            logger.info(f"Layer {layer}'s MoE is on the TP12 MoE mesh ({time.perf_counter() - start:.0f}s so far)")
+            if (layer + 1) % 10 == 0 or layer == num_layers - 1:
+                logger.info(
+                    f"MoE of layers 0..{layer} on the TP12 MoE mesh ({time.perf_counter() - start:.0f}s so far)"
+                )
 
         moes = pmoe.build_moe_layers(self.config, self.loader, self.moe_mesh, self.cache, range(num_layers), log=log)
         self.moe_server = pmoe.PersistentMoE(self.moe_mesh, [self.submeshes[0]], moes)
         logger.info(f"persistent MoE launched over layers 0..{num_layers - 1} ({time.perf_counter() - start:.0f}s)")
-        logger.info(f"stage before its layers: {_l1_report(self.submeshes[0])}")
+        logger.debug(f"stage before its layers: {_l1_report(self.submeshes[0])}")
 
     def _send_step_row(self, tapped: dict, taps: dict, pkt: ttnn.Tensor) -> None:
         """On the output stage, inside a decode step: send the step's target-layer means ``[1, 1, 1, targets * D]``

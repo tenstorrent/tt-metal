@@ -3,7 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 """Speculative decode on the full ``DeepSeekV41Model``.
 
-Decode runs on the first seven 1x4 rows of the 8x4 mesh; DSpark runs alone on the eighth.
+``test_dspark_spec_decode`` runs the model's ``persistent_moe`` layout on the 8x4 mesh: one TP4 stage (row 4) holds
+every layer's Engram, attention, hyper-connections and norms, every layer's MoE runs on the persistent TP12
+``fused_experts`` launch on rows 5-7, and DSpark runs alone on row 3. It needs the TP12 expert cache
+(``tools/fill_expert_cache.py --all-layers --tp-size 12 --mesh-rows 3``). ``test_parallel_verify_rows`` keeps the
+seven-stage TP4 pipeline (rows 0-6, DSpark on row 7): the persistent MoE takes one row per request, so it has no
+parallel verify.
 
 One model serves three runs of the same conversation, each from position 0: the demo prompt, then
 whenever the model ends its answer (end of sentence) the next of ``_FOLLOW_UPS`` as a new user turn
@@ -21,26 +26,19 @@ after it, until ``DEEPSEEK_V4_SPEC_TOKENS`` (default 2000) tokens are generated 
    tokens/round, ms/round and tok/s per draft count, greedy as 0 drafts, is logged at the end. Temperature 0
    compares the counts on the same text.
 
-Runs 2 and 3 verify a round's ``DRAFTS + 1`` rows as pipelined single-token steps, then again with the
-parallel verify, all rows through every layer in one traced step (``DSparkSpeculator(parallel_verify=True)``,
-see ``DSPARK_PARALLEL_VERIFY.md``; eager with ``DEEPSEEK_V4_TRACED_DECODE=0``), and both rounds' splits
-are logged.
-``DEEPSEEK_V4_SPEC_VERIFY`` (``pipelined``, the default / ``parallel`` / ``both``) picks the modes; the model is
-built with the parallel verify's traces only when a mode needs them. The parallel verify is off by default
-until its rows match the single-row decode (``test_parallel_verify_rows``).
+Runs 2 and 3 verify a round's ``DRAFTS + 1`` rows as pipelined single-token steps. The persistent MoE takes one
+row per request, so the parallel verify (``DEEPSEEK_V4_SPEC_VERIFY=parallel`` / ``both``) skips this test.
 ``DEEPSEEK_V4_SPEC_EXACT=0`` logs a divergence from the baseline instead of failing.
 With the pipelined verify alone, every run is on the Rust host runtime (``model.start_host_runtime``), as the
 server runs, and an unbuilt extension (``host_rs/build.sh``) fails the test; ``DEEPSEEK_V41_RUST_HOST=0`` keeps the
 Python dispatch and reader instead.
 
-Progress logging while it runs:
-
-* every spec round logs its start position, the drafts it accepted and each phase's wall time
-  (``[spec] round ...``), and every verified row logs whether it accepted its draft (``[spec] round p=...: row ...``);
-* every greedy step logs every 200 tokens;
-* a phase that runs longer than ``DEEPSEEK_V4_SPEC_STALL_SECONDS`` (default 30) dumps the model's dispatch
-  state and every thread's stack (``[spec stall]``), which names the wait a hung round is sitting in;
-* ``DEEPSEEK_V4_SPEC_VERBOSE=0`` silences the per-round and per-row lines.
+Logging: by default each run logs one summary line (tokens, acceptance, tok/s), and the DSpark sweep ends with
+its table. ``DEEPSEEK_V4_SPEC_VERBOSE=1`` adds the progress lines: every spec round's start position, accepted
+drafts and phase times (``[spec] round ...``), every verified row (``[spec] round p=...: row ...``), each prefill,
+extend and end of sentence, the greedy loop every 200 tokens, and every run's decoded text. A phase that runs
+longer than ``DEEPSEEK_V4_SPEC_STALL_SECONDS`` (default 30) dumps the model's dispatch state and every thread's
+stack (``[spec stall]``) either way.
 
 The DSpark experts (bfloat8_b) come from ``tools/fill_expert_cache.py --dspark --dtype bfloat8_b``.
 
@@ -70,6 +68,7 @@ from models.experimental.deepseek_v41_flash.tests.decode.test_full_model_decode_
     _traced_max_seq,
 )
 from models.experimental.deepseek_v41_flash.tt import host_rs
+from models.experimental.deepseek_v41_flash.tt import spec as spec_module
 from models.experimental.deepseek_v41_flash.tt.config import DEFAULT_MODEL_DIR, load_config
 from models.experimental.deepseek_v41_flash.tt.engram_lookup import (
     ENGRAM_RAM_MARGIN,
@@ -86,14 +85,15 @@ DRAFTS = 4
 DRAFT_COUNTS = os.environ.get("DEEPSEEK_V4_SPEC_DRAFTS", "all")
 CORRUPT = 1 / 3
 VERIFY = os.environ.get("DEEPSEEK_V4_SPEC_VERIFY", "pipelined")
-# Log the greedy loop's progress (every 200 steps); the spec rounds log every phase regardless.
-_VERBOSE = os.environ.get("DEEPSEEK_V4_SPEC_VERBOSE", "1") not in ("0", "", "false", "False")
+# Progress lines: the spec rounds' and rows', each prefill / extend / end of sentence, the greedy loop every 200
+# steps and every run's text. Off: one summary line per run (see the module docstring).
+_VERBOSE = os.environ.get("DEEPSEEK_V4_SPEC_VERBOSE", "0") not in ("0", "", "false", "False")
 # 0: log a divergence from the baseline instead of failing (for throughput runs).
 EXACT = os.environ.get("DEEPSEEK_V4_SPEC_EXACT", "1") != "0"
 # The DSpark run's sampling (DSparkSpeculator.temperature / top_p); temperature 0 is greedy.
 TEMPERATURE = float(os.environ.get("DEEPSEEK_V4_SPEC_TEMPERATURE", "1"))
 TOP_P = float(os.environ.get("DEEPSEEK_V4_SPEC_TOP_P", "1"))
-# Decode rows; the eighth row is the drafter's.
+# test_parallel_verify_rows' decode rows; the eighth row is the drafter's.
 DECODE_STAGES = 7
 # Asked in order, one after each end of sentence, with the conversation so far as context.
 _FOLLOW_UPS = (
@@ -126,8 +126,12 @@ _FOLLOW_UPS = (
     ],
     indirect=["device_params"],
 )
-@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=["mesh_device"], ids=["tp4_8stage"])
-def test_dspark_spec_decode(mesh_device):
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=["mesh_device"], ids=["tp4_1stage_persistent_moe12"])
+def test_dspark_spec_decode(mesh_device, monkeypatch):
+    if VERIFY != "pipelined":
+        pytest.skip("the persistent TP12 MoE takes one row per request: no parallel verify")
+    # spec.py reads DEEPSEEK_V4_SPEC_VERBOSE at import, defaulting to on; this test defaults it off.
+    monkeypatch.setattr(spec_module, "_VERBOSE", _VERBOSE)
     loader = DeepseekV4WeightLoader(DEFAULT_MODEL_DIR)
     config = load_config(loader.snapshot_dir)
     tokenizer = AutoTokenizer.from_pretrained(loader.snapshot_dir)
@@ -145,7 +149,7 @@ def test_dspark_spec_decode(mesh_device):
     needed = len(prompt) + n_tokens + sum(len(turn) for turn in turns) + 2 * (most_drafts + 1)
     max_seq = _traced_max_seq(config, needed, config.num_hidden_layers)
     rope = _build_rope(config, loader.snapshot_dir, max_seq)
-    modes = {"pipelined": (False,), "parallel": (True,), "both": (False, True)}[VERIFY]
+    modes = (False,)  # pipelined verify only (see the skip above)
 
     with contextlib.ExitStack() as stack:
         model, lm_head, loader, config = _construct_model(
@@ -153,8 +157,8 @@ def test_dspark_spec_decode(mesh_device):
             stack,
             loader=loader,
             config=config,
-            num_stages=DECODE_STAGES,
-            verify_rows=DRAFTS + 1 if True in modes else 1,
+            num_stages=1,
+            persistent_moe=True,
         )
         model.prepare_static_decode(rope, max_seq, lm_head=lm_head)
         model.prepare_spec_decode(rope["main"])
@@ -168,7 +172,6 @@ def test_dspark_spec_decode(mesh_device):
 
         # 1. Plain greedy decode. Each end of sentence asks the next follow-up, until n_tokens are generated
         # or the follow-ups run out.
-        logger.info(f"[test] starting greedy baseline: prompt {len(prompt)} tokens, target {n_tokens}")
         out = model.decode_prompt_traced(prompt, 0)
         stream = list(prompt)  # stream[q] is the token at position q
         baseline = []  # the generated tokens, without the follow-ups
@@ -185,10 +188,11 @@ def test_dspark_spec_decode(mesh_device):
                 break
             if baseline[-1] == eos_id:
                 feed = [eos_id, *turns[asked - 1]]
-                logger.info(
-                    f"[test] greedy: end of sentence {asked}/{len(turns)} at {len(baseline)} tokens, "
-                    f"feeding a {len(feed)}-token user turn from {len(stream)}"
-                )
+                if _VERBOSE:
+                    logger.info(
+                        f"[test] greedy: end of sentence {asked}/{len(turns)} at {len(baseline)} tokens, "
+                        f"feeding a {len(feed)}-token user turn from {len(stream)}"
+                    )
                 out = model.decode_prompt_traced(feed, len(stream))
                 stream += feed
             else:
@@ -204,9 +208,10 @@ def test_dspark_spec_decode(mesh_device):
                     )
         greedy_tps = plain_steps / plain_seconds
         logger.info(
-            f"greedy: {len(baseline)} tokens, {baseline.count(eos_id)} end(s) of sentence, {greedy_tps:.2f} tok/s; "
-            f"{tokenizer.decode(stream[len(prompt):])!r}"
+            f"greedy: {len(baseline)} tokens, {baseline.count(eos_id)} end(s) of sentence, {greedy_tps:.2f} tok/s"
         )
+        if _VERBOSE:
+            logger.info(f"greedy output: {tokenizer.decode(stream[len(prompt):])!r}")
 
         def check(run: str, got: list[int], exact: bool) -> None:
             if got == baseline[: len(got)]:
@@ -222,20 +227,23 @@ def test_dspark_spec_decode(mesh_device):
         def converse(spec: DSparkSpeculator) -> list[int]:
             """The baseline's conversation through ``spec``: its generated tokens, without the follow-ups."""
             got = [spec.prefill(prompt)]
-            logger.info(
-                f"[spec] run start: {'parallel' if spec.parallel_verify else 'pipelined'} verify, "
-                f"prefill gave {got[0]}, pos {spec.position}"
-            )
+            if _VERBOSE:
+                logger.info(
+                    f"[spec] run start: {'parallel' if spec.parallel_verify else 'pipelined'} verify, "
+                    f"prefill gave {got[0]}, pos {spec.position}"
+                )
             while len(got) < n_tokens:
                 asked = got.count(eos_id)
                 if got[-1] == eos_id:
                     if asked > len(turns):
                         break
-                    logger.info(f"[spec] end of sentence {asked}/{len(turns)}: extending with the next user turn")
+                    if _VERBOSE:
+                        logger.info(f"[spec] end of sentence {asked}/{len(turns)}: extending with the next user turn")
                     got.append(spec.extend(turns[asked - 1]))
                 else:
                     got += spec.generate(n_tokens - len(got), stop_ids=(eos_id,))
-            logger.info(f"[spec] run done: {len(got)} tokens, pos {spec.position}")
+            if _VERBOSE:
+                logger.info(f"[spec] run done: {len(got)} tokens, pos {spec.position}")
             return got
 
         draft_counts = _draft_counts(model)
@@ -253,9 +261,8 @@ def test_dspark_spec_decode(mesh_device):
                 ]
 
             oracle = DSparkSpeculator(model, DRAFTS, propose=propose, parallel_verify=parallel_verify)
-            logger.info(f"[test] starting oracle run ({verify}): {DRAFTS} drafts/round, 1/3 corrupted")
             got = converse(oracle)
-            logger.info(f"oracle, {verify}: {oracle.stats.summary(DRAFTS)}")
+            logger.info(f"oracle ({DRAFTS} drafts, 1/3 corrupted), {verify}: {oracle.stats.summary(DRAFTS)}")
             check(f"oracle spec ({verify})", got, EXACT)
 
             # 3. The DSpark drafter, at every draft count (the parallel verify's traces take DRAFTS + 1 rows only).
@@ -264,16 +271,13 @@ def test_dspark_spec_decode(mesh_device):
                 spec = DSparkSpeculator(
                     model, drafts, parallel_verify=parallel_verify, temperature=TEMPERATURE, top_p=TOP_P
                 )
-                logger.info(
-                    f"[test] starting DSpark run ({verify}): {drafts} drafts/round, "
-                    f"temperature {TEMPERATURE}, top_p {TOP_P}"
-                )
                 got = converse(spec)
                 logger.info(
                     f"DSpark, {verify}, {drafts} drafts, temperature {TEMPERATURE}, top_p {TOP_P}: "
                     f"{spec.stats.summary(drafts)} (greedy {greedy_tps:.2f} tok/s)"
                 )
-                logger.info(f"DSpark output ({verify}, {drafts} drafts): {tokenizer.decode(got)!r}")
+                if _VERBOSE:
+                    logger.info(f"DSpark output ({verify}, {drafts} drafts): {tokenizer.decode(got)!r}")
                 if not parallel_verify:
                     sweep[drafts] = spec.stats
                 if TEMPERATURE == 0:
