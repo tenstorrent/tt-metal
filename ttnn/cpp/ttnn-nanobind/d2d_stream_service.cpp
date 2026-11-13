@@ -8,6 +8,7 @@
 #include <memory>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include <nanobind/nanobind.h>
 #include <nanobind/operators.h>
@@ -67,10 +68,13 @@ D2DStreamConfig make_config(
     uint32_t metadata_size_bytes,
     bool share_fabric_links,
     std::string fabric_link_group,
-    std::optional<D2DStageGateConfig> stage_gate = std::nullopt) {
+    std::optional<D2DStageGateConfig> stage_gate = std::nullopt,
+    std::vector<ttnn::D2DStreamTensorConfig> extra_tensors = {},
+    bool relay = false) {
     return D2DStreamConfig{
         .global_spec = global_spec,
         .mapper = std::move(mapper),
+        .extra_tensors = std::move(extra_tensors),
         .socket_mem_config = SocketMemoryConfig{socket_buffer_type, fifo_size_bytes},
         .sender_worker_cores = sender_worker_cores,
         .receiver_worker_cores = receiver_worker_cores,
@@ -78,7 +82,27 @@ D2DStreamConfig make_config(
         .share_fabric_links = share_fabric_links,
         .fabric_link_group = std::move(fabric_link_group),
         .stage_gate = stage_gate,
+        .relay = relay,
     };
+}
+
+// `extra_tensors` arrives as a list of (TensorSpec, CppTensorToMesh). Each mapper is
+// rebuilt from its config so the Python-side mappers stay valid and reusable.
+std::vector<ttnn::D2DStreamTensorConfig> make_extra_tensors(
+    const tt::tt_metal::distributed::MeshDevice& mesh, const nb::list& extra_tensors) {
+    std::vector<ttnn::D2DStreamTensorConfig> out;
+    out.reserve(extra_tensors.size());
+    for (nb::handle item : extra_tensors) {
+        auto entry = nb::cast<nb::tuple>(item);
+        TT_FATAL(entry.size() == 2, "extra_tensors entries must be (global_spec, mapper) pairs");
+        const auto& mapper = nb::cast<const ttnn::distributed::TensorToMesh&>(entry[1]);
+        out.push_back(ttnn::D2DStreamTensorConfig{
+            .global_spec = nb::cast<tt::tt_metal::TensorSpec>(entry[0]),
+            .mapper = std::make_unique<ttnn::distributed::TensorToMesh>(
+                ttnn::distributed::TensorToMesh::create(mesh, mapper.config())),
+        });
+    }
+    return out;
 }
 
 }  // namespace
@@ -182,6 +206,11 @@ void py_module_types(nb::module_& mod) {
     // ----- Sender handle (created only via D2DStreamService factories) -----
     nb::class_<D2DStreamServiceSender>(mod, "D2DStreamServiceSender")
         .def(
+            "get_backing_tensors",
+            &D2DStreamServiceSender::get_backing_tensors,
+            nb::rv_policy::reference_internal,
+            "Every backing tensor in segment order: the primary first, then each extra tensor.")
+        .def(
             "get_backing_tensor",
             &D2DStreamServiceSender::get_backing_tensor,
             nb::rv_policy::reference_internal,
@@ -244,6 +273,11 @@ void py_module_types(nb::module_& mod) {
 
     // ----- Receiver handle (created only via D2DStreamService factories) -----
     nb::class_<D2DStreamServiceReceiver>(mod, "D2DStreamServiceReceiver")
+        .def(
+            "get_backing_tensors",
+            &D2DStreamServiceReceiver::get_backing_tensors,
+            nb::rv_policy::reference_internal,
+            "Every backing tensor in segment order: the primary first, then each extra tensor.")
         .def(
             "get_backing_tensor",
             &D2DStreamServiceReceiver::get_backing_tensor,
@@ -337,7 +371,9 @@ void py_module_types(nb::module_& mod) {
                uint32_t metadata_size_bytes,
                bool share_fabric_links,
                const std::string& fabric_link_group,
-               const std::optional<D2DStageGateConfig>& stage_gate) {
+               const std::optional<D2DStageGateConfig>& stage_gate,
+               const nb::list& extra_tensors,
+               bool relay) {
                 auto cfg = make_config(
                     global_spec,
                     std::move(mapper),
@@ -348,7 +384,9 @@ void py_module_types(nb::module_& mod) {
                     metadata_size_bytes,
                     share_fabric_links,
                     fabric_link_group,
-                    stage_gate);
+                    stage_gate,
+                    make_extra_tensors(*sender_mesh, extra_tensors),
+                    relay);
                 return D2DStreamService::create_pair(sender_mesh, receiver_mesh, std::move(cfg));
             },
             nb::arg("sender_mesh"),
@@ -363,8 +401,14 @@ void py_module_types(nb::module_& mod) {
             nb::arg("share_fabric_links") = true,
             nb::arg("fabric_link_group") = "",
             nb::arg("stage_gate") = nb::none(),
+            nb::arg("extra_tensors") = nb::list(),
+            nb::arg("relay") = false,
             R"doc(
                 Build a sender+receiver pair in a SINGLE process (both meshes owned here).
+
+                `extra_tensors` is a list of (global_spec, mapper) pairs carried on the same
+                socket after the primary tensor, one DRAM-interleaved backing tensor each, any dtype/layout.
+                Both endpoints must pass the same list.
 
                 Returns:
                     Tuple[D2DStreamServiceSender, D2DStreamServiceReceiver]
@@ -385,7 +429,9 @@ void py_module_types(nb::module_& mod) {
                tt::tt_metal::BufferType socket_buffer_type,
                uint32_t metadata_size_bytes,
                bool share_fabric_links,
-               const std::string& fabric_link_group) {
+               const std::string& fabric_link_group,
+               const nb::list& extra_tensors,
+               bool relay) {
                 auto cfg = make_config(
                     global_spec,
                     std::move(mapper),
@@ -395,7 +441,10 @@ void py_module_types(nb::module_& mod) {
                     receiver_worker_cores,
                     metadata_size_bytes,
                     share_fabric_links,
-                    fabric_link_group);
+                    fabric_link_group,
+                    std::nullopt,
+                    make_extra_tensors(*sender_mesh, extra_tensors),
+                    relay);
                 // distributed_context left null -> the service uses get_current_world().
                 D2DEndpointConfig endpoints{
                     .sender_rank = Rank{sender_rank},
@@ -415,11 +464,17 @@ void py_module_types(nb::module_& mod) {
             nb::arg("metadata_size_bytes") = 0u,
             nb::arg("share_fabric_links") = true,
             nb::arg("fabric_link_group") = "",
+            nb::arg("extra_tensors") = nb::list(),
+            nb::arg("relay") = false,
             R"doc(
                 Build the SENDER endpoint in this (sender-rank) process. Must be called on
                 the rank equal to `sender_rank`; the matching `create_receiver` runs in the
                 `receiver_rank` process. Uses the current distributed world for the
                 cross-process socket rendezvous.
+
+                `extra_tensors` is a list of (global_spec, mapper) pairs carried on the same
+                socket after the primary tensor, one DRAM-interleaved backing tensor each, any dtype/layout.
+                Both endpoints must pass the same list.
 
                 Returns:
                     D2DStreamServiceSender
@@ -439,7 +494,10 @@ void py_module_types(nb::module_& mod) {
                uint32_t metadata_size_bytes,
                bool share_fabric_links,
                const std::string& fabric_link_group,
-               const std::optional<D2DStageGateConfig>& stage_gate) {
+               const std::optional<D2DStageGateConfig>& stage_gate,
+               const nb::list& extra_tensors,
+               bool relay,
+               bool reserve_links_for_later_service) {
                 auto cfg = make_config(
                     global_spec,
                     std::move(mapper),
@@ -450,7 +508,10 @@ void py_module_types(nb::module_& mod) {
                     metadata_size_bytes,
                     share_fabric_links,
                     fabric_link_group,
-                    stage_gate);
+                    stage_gate,
+                    make_extra_tensors(*receiver_mesh, extra_tensors),
+                    relay);
+                cfg.reserve_links_for_later_service = reserve_links_for_later_service;
                 D2DEndpointConfig endpoints{
                     .sender_rank = Rank{sender_rank},
                     .receiver_rank = Rank{receiver_rank},
@@ -470,11 +531,23 @@ void py_module_types(nb::module_& mod) {
             nb::arg("share_fabric_links") = true,
             nb::arg("fabric_link_group") = "",
             nb::arg("stage_gate") = nb::none(),
+            nb::arg("extra_tensors") = nb::list(),
+            nb::arg("relay") = false,
+            nb::arg("reserve_links_for_later_service") = true,
             R"doc(
                 Build the RECEIVER endpoint in this (receiver-rank) process. Must be called
                 on the rank equal to `receiver_rank`; the matching `create_sender` runs in
                 the `sender_rank` process. Uses the current distributed world for the
                 cross-process socket rendezvous.
+
+                `extra_tensors` is a list of (global_spec, mapper) pairs carried on the same
+                socket after the primary tensor, one DRAM-interleaved backing tensor each, any dtype/layout.
+                Both endpoints must pass the same list.
+
+                `reserve_links_for_later_service` (relay mode): whether this process builds another
+                D2D service on this mesh after the receiver, e.g. a middle pipeline stage's outbound
+                sender. Then the entry relays leave one fabric link per direction free for it. A terminal
+                stage passes False so its entry relays use every link.
 
                 Returns:
                     D2DStreamServiceReceiver

@@ -248,6 +248,34 @@ TEST(DistributedHostBufferTest, TransformWithLocalShape) {
     EXPECT_THAT(optional_buffer->view_as<int>(), Pointwise(Eq(), {14, 16, 18}));
 }
 
+// A transform keeps every entry's locality: a local coordinate that holds no shard is still local (and still empty)
+// afterwards, so it can be told apart from a coordinate that belongs to another host, and a shard can still be
+// emplaced there; a remote coordinate stays remote.
+TEST(DistributedHostBufferTest, TransformKeepsLocalityOfUnpopulatedShards) {
+    distributed::MeshShape global_shape(2, 2);
+    distributed::MeshShape local_shape(1, 2);
+    distributed::MeshCoordinate local_offset(1, 0);
+
+    auto buffer = DistributedHostBuffer::create(global_shape, local_shape, local_offset, /*context=*/nullptr);
+    buffer.emplace_shard(distributed::MeshCoordinate(1, 0), []() { return HostBuffer(std::vector<int>{1, 2, 3}); });
+
+    auto transformed_buffer = buffer.transform([](const HostBuffer& buffer) { return buffer; });
+
+    EXPECT_FALSE(transformed_buffer.is_local(distributed::MeshCoordinate(0, 0)));
+    EXPECT_FALSE(transformed_buffer.is_local(distributed::MeshCoordinate(0, 1)));
+    EXPECT_TRUE(transformed_buffer.is_local(distributed::MeshCoordinate(1, 0)));
+    EXPECT_TRUE(transformed_buffer.is_local(distributed::MeshCoordinate(1, 1)));
+    EXPECT_TRUE(transformed_buffer.get_shard(distributed::MeshCoordinate(1, 0)).has_value());
+    EXPECT_FALSE(transformed_buffer.get_shard(distributed::MeshCoordinate(1, 1)).has_value());
+    EXPECT_THAT(transformed_buffer.shard_coords(), ElementsAre(distributed::MeshCoordinate(1, 0)));
+
+    transformed_buffer.emplace_shard(
+        distributed::MeshCoordinate(1, 1), []() { return HostBuffer(std::vector<int>{4, 5, 6}); });
+    auto optional_buffer = transformed_buffer.get_shard(distributed::MeshCoordinate(1, 1));
+    ASSERT_TRUE(optional_buffer.has_value());
+    EXPECT_THAT(optional_buffer->view_as<int>(), Pointwise(Eq(), {4, 5, 6}));
+}
+
 TEST(DistributedHostBufferTest, Apply) {
     auto buffer = DistributedHostBuffer::create(distributed::MeshShape(2));
     EXPECT_EQ(buffer.shape().mesh_size(), 2);

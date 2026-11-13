@@ -11,7 +11,6 @@
 #include <cstdlib>
 #include <optional>
 #include <string>
-#include <variant>
 #include <vector>
 
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
@@ -34,36 +33,6 @@
 // recommended patterns for constructing ProgramSpec objects in production code.
 
 namespace tt::tt_metal::experimental::test_helpers {
-
-// ============================================================================
-// Test environment helpers
-// ============================================================================
-
-// Saves and overrides TT_METAL_SLOW_DISPATCH_MODE on construction;
-// restores to its prior state (set or unset) on destruction.
-// (Unit test need SLOW_DISPATCH_MODE=1 to make a MeshDevice successfully.)
-class ScopedSlowDispatchOverride {
-public:
-    ScopedSlowDispatchOverride() {
-        if (const char* prev = std::getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
-            prev_value_.emplace(prev);
-        }
-        setenv("TT_METAL_SLOW_DISPATCH_MODE", "1", /*overwrite=*/1);
-    }
-    ~ScopedSlowDispatchOverride() {
-        if (prev_value_) {
-            setenv("TT_METAL_SLOW_DISPATCH_MODE", prev_value_->c_str(), /*overwrite=*/1);
-        } else {
-            unsetenv("TT_METAL_SLOW_DISPATCH_MODE");
-        }
-    }
-
-    ScopedSlowDispatchOverride(const ScopedSlowDispatchOverride&) = delete;
-    ScopedSlowDispatchOverride& operator=(const ScopedSlowDispatchOverride&) = delete;
-
-private:
-    std::optional<std::string> prev_value_;
-};
 
 // ============================================================================
 // Constants

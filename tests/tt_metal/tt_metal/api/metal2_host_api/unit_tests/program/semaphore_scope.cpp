@@ -36,7 +36,7 @@ using test_helpers::ProgramSpecTestQuasar;
 // census, then resolve.
 SemScope ResolveScopeFor(MetalEnvImpl& env, const ProgramSpec& spec, const char* semaphore_name) {
     const CollectedSpecData collected = CollectSpecData(spec);
-    // Resolve against the mesh device's env, mirroring BuildProgramFromSpec; configure_mock_mode
+    // Resolve against the mesh device's env, mirroring BuildProgramFromSpec; the mock MetalEnv
     // in each test fixture sets that env's arch.
     return ResolveSemaphoreScopes(spec, collected.semaphore_binders, env).at(SemaphoreSpecName{semaphore_name});
 }

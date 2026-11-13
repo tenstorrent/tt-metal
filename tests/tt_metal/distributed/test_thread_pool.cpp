@@ -10,9 +10,13 @@
 #include <chrono>
 #include <functional>
 #include <limits>
+#include <memory>
 #include <stdexcept>
 #include <thread>
+#include <type_traits>
 #include <vector>
+
+#include <tt-metalium/mesh_device.hpp>
 
 #include "tt_metal/impl/threading/thread_pool.hpp"
 #include "impl/context/metal_context.hpp"
@@ -333,6 +337,63 @@ TEST(ThreadPoolTest, ParallelForPassThrough) {
             }),
         std::exception);
     EXPECT_EQ(calls, (std::vector<size_t>{0, 1, 2}));
+}
+
+// Owned by a job's capture; counts its own destruction so a test can check the job was destroyed exactly once.
+class DestructionCounter {
+public:
+    explicit DestructionCounter(std::atomic<uint32_t>& destroyed) : destroyed_(destroyed) {}
+    DestructionCounter(const DestructionCounter&) = delete;
+    DestructionCounter& operator=(const DestructionCounter&) = delete;
+    DestructionCounter(DestructionCounter&&) = delete;
+    DestructionCounter& operator=(DestructionCounter&&) = delete;
+    ~DestructionCounter() { destroyed_++; }
+
+private:
+    std::atomic<uint32_t>& destroyed_;
+};
+
+struct MoveOnlyJob {
+    std::unique_ptr<int> owned;
+    void operator()() {}
+};
+static_assert(!std::is_copy_constructible_v<MoveOnlyJob>);
+
+// Compiles only if MeshDevice's forwarder takes move-only jobs; it needs a device to run, so it is never called.
+[[maybe_unused]] void enqueue_move_only_job(MeshDevice& mesh_device) {
+    mesh_device.enqueue_to_thread_pool(MoveOnlyJob{});
+}
+
+// Jobs are run once and never copied, so both pools take move-only jobs, and destroy each one once.
+TEST(ThreadPoolTest, EnqueueMoveOnlyJobs) {
+    constexpr uint32_t num_jobs = 64;
+    std::vector<std::shared_ptr<ThreadPool>> pools = {
+        create_pool_per_device(), create_passthrough_thread_pool(DEFAULT_CONTEXT_ID)};
+    for (auto& thread_pool : pools) {
+        std::atomic<uint32_t> runs = 0;
+        std::atomic<uint32_t> destroyed = 0;
+        for (uint32_t job = 0; job < num_jobs; job++) {
+            thread_pool->enqueue([&runs, owned = std::make_unique<DestructionCounter>(destroyed)]() { runs++; });
+        }
+        thread_pool->wait();
+        EXPECT_EQ(runs.load(), num_jobs);
+        // A worker destroys a job before reporting it done.
+        EXPECT_EQ(destroyed.load(), num_jobs);
+    }
+}
+
+TEST(ThreadPoolTest, ParallelForMoveOnlyFunction) {
+    auto device_ids = one_call_per_device(2);
+    std::vector<std::shared_ptr<ThreadPool>> pools = {
+        create_pool_per_device(), create_passthrough_thread_pool(DEFAULT_CONTEXT_ID)};
+    for (auto& thread_pool : pools) {
+        std::atomic<uint32_t> runs = 0;
+        std::atomic<uint32_t> destroyed = 0;
+        thread_pool->parallel_for(
+            device_ids, [&runs, owned = std::make_unique<DestructionCounter>(destroyed)](size_t) { runs++; });
+        EXPECT_EQ(runs.load(), device_ids.size());
+        EXPECT_EQ(destroyed.load(), 1u);
+    }
 }
 
 }  // namespace

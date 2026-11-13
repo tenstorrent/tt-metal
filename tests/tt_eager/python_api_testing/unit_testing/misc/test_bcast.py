@@ -291,6 +291,67 @@ def test_bcast_h_block_sharded_batched_channel(device, batch, height_per_batch, 
     assert passing, pcc_msg
 
 
+def _sharded_h_bcast_mem_config(layout, end_x, end_y, shard_shape):
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(end_x, end_y))})
+    return ttnn.MemoryConfig(
+        layout, ttnn.BufferType.L1, ttnn.ShardSpec(grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    )
+
+
+def _exact_bf16(shape, start):
+    # Multiples of 1/8 in [-15.625, 15.625], so sums are exact in bfloat16.
+    n = torch.Size(shape).numel()
+    return ((torch.arange(start, start + n) % 251 - 125) / 8).reshape(shape).bfloat16()
+
+
+_BLOCK_1x2 = (ttnn.TensorMemoryLayout.BLOCK_SHARDED, 0, 1)
+_WIDTH_3x1 = (ttnn.TensorMemoryLayout.WIDTH_SHARDED, 2, 0)
+
+
+# Batches of b in its C dim: the sharded H factories counted b's batches from N alone and paired
+# rows of a with another batch's broadcast row (#63625).
+@pytest.mark.parametrize(
+    "a_shape, b_shape, sharding, shard_shape",
+    (
+        ([1, 2, 32, 64], [1, 2, 32, 64], _BLOCK_1x2, [32, 64]),
+        ([2, 1, 32, 64], [2, 1, 32, 64], _BLOCK_1x2, [32, 64]),
+        ([2, 2, 32, 64], [2, 1, 32, 64], _BLOCK_1x2, [64, 64]),
+        ([2, 3, 64, 96], [2, 3, 32, 96], _WIDTH_3x1, [384, 32]),
+        ([6, 1, 64, 96], [6, 1, 32, 96], _WIDTH_3x1, [384, 32]),
+        ([2, 3, 64, 96], [2, 1, 32, 96], _WIDTH_3x1, [384, 32]),
+        ([2, 3, 64, 96], [1, 1, 32, 96], _WIDTH_3x1, [384, 32]),
+        ([2, 1, 1, 32, 64], [2, 1, 1, 32, 64], (ttnn.TensorMemoryLayout.WIDTH_SHARDED, 1, 0), [64, 32]),
+    ),
+)
+def test_bcast_h_sharded_batches_of_b(device, a_shape, b_shape, sharding, shard_shape):
+    a = ttnn.from_torch(
+        _exact_bf16(a_shape, 0),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=_sharded_h_bcast_mem_config(*sharding, shard_shape),
+    )
+    b = ttnn.from_torch(_exact_bf16(b_shape, 7), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    out = ttnn.to_torch(ttnn.bcast(a, b, ttnn.BcastOpMath.ADD, ttnn.BcastOpDim.H))
+    expected = ttnn.to_torch(a) + ttnn.to_torch(b)[..., 0:1, :]
+    assert torch.equal(out, expected)
+
+
+# Four batches of b over the two cores along the shard height: the block-sharded offsets divided by
+# ncores / bN == 0.
+def test_bcast_h_block_sharded_more_batches_than_height_cores(device, expect_error):
+    a = ttnn.from_torch(
+        _exact_bf16([1, 4, 32, 64], 0),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=_sharded_h_bcast_mem_config(*_BLOCK_1x2, [64, 64]),
+    )
+    b = ttnn.from_torch(_exact_bf16([1, 4, 32, 64], 7), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(RuntimeError, "split evenly between the 4 batches"):
+        ttnn.bcast(a, b, ttnn.BcastOpMath.ADD, ttnn.BcastOpDim.H)
+
+
 @pytest.mark.parametrize(
     "orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR], ids=["row_major", "col_major"]
 )

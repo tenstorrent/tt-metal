@@ -259,7 +259,6 @@ CoreRanges compute_core_ranges_mcast_1d_row_wise(
     cr.all_cores = grid.shard_spec.grid.merge_ranges();
     cr.sender_cores = {start_core, start_core};
 
-    auto bbox = grid.shard_spec.grid.bounding_box();
     CoreCoord all_core_grid_size;
     CoreCoord none_core_grid_size;
     if (grid.use_two_stage_reduce) {
@@ -282,7 +281,7 @@ CoreRanges compute_core_ranges_mcast_1d_row_wise(
                 all_start_core = {end_core.x + 1, end_core.y};
             }
         } else {
-            if (end_core.x == bbox.end_coord.x) {
+            if (end_core.x == grid.grid_size.x - 1) {
                 all_start_core = {0, end_core.y + 1};
             } else {
                 all_start_core = {end_core.x + 1, end_core.y};
@@ -300,7 +299,7 @@ CoreRanges compute_core_ranges_mcast_1d_row_wise(
         } else {
             CoreCoord none_start_core;
             CoreCoord end_core = (*cr.all_to_all_cores.ranges().rbegin()).end_coord;
-            if (end_core.x == bbox.end_coord.x) {
+            if (end_core.x == grid.grid_size.x - 1) {
                 none_start_core = {0, end_core.y + 1};
             } else {
                 none_start_core = {end_core.x + 1, end_core.y};
@@ -322,7 +321,6 @@ CoreRanges compute_core_ranges_mcast_1d_col_wise(
     cr.all_cores = grid.shard_spec.grid.merge_ranges();
     cr.sender_cores = {start_core, start_core};
 
-    auto bbox = grid.shard_spec.grid.bounding_box();
     CoreCoord all_core_grid_size;
     CoreCoord none_core_grid_size;
     if (grid.use_two_stage_reduce) {
@@ -346,14 +344,14 @@ CoreRanges compute_core_ranges_mcast_1d_col_wise(
                 all_start_core = {end_core.x, end_core.y + 1};
             }
         } else {
-            if (end_core.y == bbox.end_coord.y) {
+            if (end_core.y == grid.grid_size.y - 1) {
                 all_start_core = {end_core.x + 1, 0};
             } else {
                 all_start_core = {end_core.x, end_core.y + 1};
             }
         }
-        cr.all_to_all_workers_except_sender = num_cores_to_corerangeset(
-            CoreCoord{start_core.x, start_core.y + 1}, workers.num_cores_all_to_all - 1, all_core_grid_size, false);
+        cr.all_to_all_workers_except_sender =
+            num_cores_to_corerangeset(all_start_core, workers.num_cores_all_to_all - 1, all_core_grid_size, false);
     }
 
     if (workers.num_none_all_to_all_workers > 0) {
@@ -364,7 +362,7 @@ CoreRanges compute_core_ranges_mcast_1d_col_wise(
         } else {
             CoreCoord none_start_core;
             CoreCoord end_core = (*cr.all_to_all_cores.ranges().rbegin()).end_coord;
-            if (end_core.y == bbox.end_coord.y) {
+            if (end_core.y == grid.grid_size.y - 1) {
                 none_start_core = {end_core.x + 1, 0};
             } else {
                 none_start_core = {end_core.x, end_core.y + 1};

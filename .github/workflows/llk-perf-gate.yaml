@@ -38,12 +38,20 @@ on:
         description: "PR to name in the report (labelling only; nothing is posted to it)"
         required: false
         type: string
+      placement_run_id:
+        description: "Stage 2 without the test limit, for this PR gate run's stage-1 regressions (posts to its PR)"
+        required: false
+        type: string
 permissions:
   actions: read
   contents: read
   checks: write
   packages: write
   pull-requests: write
+
+env:
+  # Stage 2 re-measures at most this many tests per arch, so its job stays short; see placement_check.py.
+  PLACEMENT_CAP: "1000"
 
 concurrency:
   group: llk-perf-gate-${{ github.event.pull_request.number || github.run_id }}-${{ (github.event.action == 'synchronize' || github.event.label.name == 'llk-perf-gate') && 'gate' || github.run_id }}
@@ -166,11 +174,250 @@ jobs:
       pr_number: ${{ inputs.pr_number || '' }}
     secrets: inherit
 
+  placement-plan:
+    name: "Stage 2: pick the tests to re-measure"
+    needs: [branch-point, llk-perf-gate]
+    if: >-
+      ${{ !cancelled() && (
+        (github.event_name == 'pull_request' && needs.llk-perf-gate.result != 'skipped') ||
+        (github.event_name == 'workflow_dispatch' && inputs.placement_run_id != '')
+      ) }}
+    runs-on: ubuntu-slim
+    outputs:
+      arches: ${{ steps.plan.outputs.arches }}
+      run: ${{ steps.source.outputs.run }}
+      head: ${{ steps.source.outputs.head }}
+      base: ${{ steps.source.outputs.base }}
+      pr: ${{ steps.source.outputs.pr }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        timeout-minutes: 20
+        with:
+          sparse-checkout: tt_metal/tt-llk/perf
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: '3.10'
+      - run: pip install pandas
+      - name: Find the stage-1 run and the commits
+        id: source
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SOURCE_RUN: ${{ inputs.placement_run_id || github.run_id }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BRANCH_POINT: ${{ needs.branch-point.outputs.sha }}
+        run: |
+          CAP="$PLACEMENT_CAP"
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            # The full check: every stage-1 regression of that run, no test limit.
+            CAP=1000000
+            PR_HEAD=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN}" --jq .head_sha)
+            PR_NUMBER=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN}" --jq '.pull_requests[0].number // empty')
+            BASE_REF=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq .base.ref)
+            BRANCH_POINT=$(gh api "repos/${GITHUB_REPOSITORY}/compare/${BASE_REF}...${PR_HEAD}" --jq .merge_base_commit.sha)
+          fi
+          echo "Stage 1 from run ${SOURCE_RUN}: PR #${PR_NUMBER}, head ${PR_HEAD}, branch point ${BRANCH_POINT}, cap ${CAP}"
+          {
+            echo "run=${SOURCE_RUN}"
+            echo "head=${PR_HEAD}"
+            echo "base=${BRANCH_POINT}"
+            echo "pr=${PR_NUMBER}"
+            echo "cap=${CAP}"
+          } >> "$GITHUB_OUTPUT"
+      - name: Download the stage-1 Blackhole report
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: llk-perf-gate-report-blackhole
+          merge-multiple: true
+          path: reports/blackhole
+          run-id: ${{ steps.source.outputs.run }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Check for stage-1 regressions
+        id: any
+        run: |
+          # Header plus at least one row; with none, there is nothing to re-measure and no data to download.
+          if [ "$(wc -l < reports/blackhole/perf_gate_report.regressions.csv 2>/dev/null || echo 0)" -gt 1 ]; then
+            echo "blackhole=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Download the PR head's Blackhole data
+        if: steps.any.outputs.blackhole == 'true'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: perf-data-blackhole-*-head
+          merge-multiple: true
+          path: head/blackhole
+          run-id: ${{ steps.source.outputs.run }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Pick the tests
+        id: plan
+        env:
+          CAP: ${{ steps.source.outputs.cap }}
+        run: |
+          # Blackhole only: same-code Wormhole runs are not repeatable yet (#62044).
+          ARCHES=()
+          for ARCH in blackhole; do
+            CANDIDATES="reports/${ARCH}/perf_gate_report.regressions.csv"
+            [ -f "$CANDIDATES" ] || continue
+            mkdir -p "nodes/${ARCH}"
+            python3 tt_metal/tt-llk/perf/placement_check.py nodes \
+              --candidates "$CANDIDATES" \
+              --map "head/${ARCH}/**/*.windowhash" \
+              --cap "$CAP" \
+              --out "nodes/${ARCH}/nodes.txt"
+            [ -s "nodes/${ARCH}/nodes.txt" ] && ARCHES+=("\"${ARCH}\"")
+          done
+          echo "arches=[$(IFS=,; echo "${ARCHES[*]}")]" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+        if: hashFiles('nodes/blackhole/nodes.txt') != ''
+        with:
+          name: placement-nodes-blackhole
+          path: |
+            nodes/blackhole/nodes.txt
+            nodes/blackhole/nodes.over
+
+  placement-measure-head:
+    name: "Stage 2: measure the PR head on ${{ matrix.arch }} at 5 code positions"
+    needs: placement-plan
+    if: ${{ !cancelled() && needs.placement-plan.outputs.arches != '[]' && needs.placement-plan.outputs.arches != '' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: ${{ fromJSON(needs.placement-plan.outputs.arches) }}
+    uses: ./.github/workflows/llk-perf-impl.yaml
+    with:
+      architecture: ${{ matrix.arch }}
+      ref: ${{ needs.placement-plan.outputs.head }}
+      artifact-suffix: "-head-placement"
+      speed-of-light: false
+      perf-run-types: L1_TO_L1
+      tests-yaml: ./tests/pipeline_reorg/llk_perf_placement_tests.yaml
+      node-list-artifact: placement-nodes-${{ matrix.arch }}
+      compile-quasar: false
+      upload-to-warehouse: false
+      pipeline: pr
+    secrets: inherit
+
+  placement-measure-base:
+    name: "Stage 2: measure the branch point on ${{ matrix.arch }} at 5 code positions"
+    needs: placement-plan
+    if: ${{ !cancelled() && needs.placement-plan.outputs.arches != '[]' && needs.placement-plan.outputs.arches != '' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: ${{ fromJSON(needs.placement-plan.outputs.arches) }}
+    uses: ./.github/workflows/llk-perf-impl.yaml
+    with:
+      architecture: ${{ matrix.arch }}
+      ref: ${{ needs.placement-plan.outputs.base }}
+      artifact-suffix: "-base-placement"
+      speed-of-light: false
+      perf-run-types: L1_TO_L1
+      tests-yaml: ./tests/pipeline_reorg/llk_perf_placement_tests.yaml
+      node-list-artifact: placement-nodes-${{ matrix.arch }}
+      compile-quasar: false
+      upload-to-warehouse: false
+      pipeline: pr
+    secrets: inherit
+
+  placement-gate:
+    name: "Stage 2: decide on ${{ matrix.arch }}"
+    needs: [placement-plan, placement-measure-head, placement-measure-base]
+    if: ${{ !cancelled() && needs.placement-plan.outputs.arches != '[]' && needs.placement-plan.outputs.arches != '' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: ${{ fromJSON(needs.placement-plan.outputs.arches) }}
+    runs-on: ubuntu-slim
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        timeout-minutes: 20
+        with:
+          sparse-checkout: tt_metal/tt-llk/perf
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: '3.10'
+      - run: pip install pandas
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: llk-perf-gate-report-${{ matrix.arch }}
+          path: stage1
+          run-id: ${{ needs.placement-plan.outputs.run }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: placement-nodes-${{ matrix.arch }}
+          path: nodes
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: perf-data-${{ matrix.arch }}-*-head-placement
+          merge-multiple: true
+          path: current
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: perf-data-${{ matrix.arch }}-*-base-placement
+          merge-multiple: true
+          path: baseline
+      - name: Decide
+        env:
+          ARCH: ${{ matrix.arch }}
+          THRESHOLD: "0.02"
+          HEAD_RESULT: ${{ needs.placement-measure-head.result }}
+          BASE_RESULT: ${{ needs.placement-measure-base.result }}
+          SOURCE_RUN: ${{ needs.placement-plan.outputs.run }}
+        run: |
+          mkdir -p current baseline
+          LIMIT_NOTE="The limit of ${PLACEMENT_CAP} tests per arch keeps this job short. To re-measure all of them, run the **LLK perf gate** workflow by hand with \`placement_run_id\` = \`${SOURCE_RUN}\`; it reuses this stage 1 and updates this comment."
+          python3 tt_metal/tt-llk/perf/placement_check.py decide \
+            --candidates stage1/perf_gate_report.regressions.csv \
+            --baseline baseline --current current \
+            --threshold "$THRESHOLD" --min-cycles 30 \
+            --over-cap nodes/nodes.over --limit-note "$LIMIT_NOTE" \
+            --arch "$ARCH" --report stage2.md || true
+          if [ "$HEAD_RESULT" != success ] || [ "$BASE_RESULT" != success ]; then
+            NOTE="> ⚠️ A stage-2 measuring job did not succeed (PR head: ${HEAD_RESULT}, branch point: ${BASE_RESULT}). What it did not measure is listed as not re-measured."
+            printf '%s\n\n%s\n' "$(head -1 stage2.md)" "$NOTE" > stage2.tmp
+            tail -n +2 stage2.md >> stage2.tmp
+            mv stage2.tmp stage2.md
+          fi
+          cat stage2.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Add stage 2 to the gate comment
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        if: ${{ needs.placement-plan.outputs.pr != '' }}
+        env:
+          ARCH: ${{ matrix.arch }}
+          PR_NUMBER: ${{ needs.placement-plan.outputs.pr }}
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = `<!-- llk-perf-gate:${process.env.ARCH} -->`;
+            const split = '<!-- llk-perf-gate-stage2 -->';
+            const { owner, repo } = context.repo;
+            const issue_number = Number(process.env.PR_NUMBER);
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number, per_page: 100,
+            });
+            const mine = comments.find((c) => c.user.type === 'Bot' && c.body.startsWith(marker));
+            const stage2 = fs.readFileSync('stage2.md', 'utf8');
+            if (!mine) {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body: `${marker}\n${split}\n${stage2}` });
+              return;
+            }
+            const body = `${mine.body.split(split)[0].trimEnd()}\n\n${split}\n${stage2}`;
+            await github.rest.issues.updateComment({ owner, repo, comment_id: mine.id, body });
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+        if: always()
+        with:
+          name: llk-perf-gate-stage2-${{ matrix.arch }}
+          path: |
+            stage2.md
+            stage2.json
+          if-no-files-found: ignore
+
   nightly-measure:
     name: "Nightly: measure the suite (non speed-of-light)"
     if: >-
       github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch'
-      && inputs.baseline_run_id == '' && inputs.perf_run_id == '')
+      && inputs.baseline_run_id == '' && inputs.perf_run_id == '' && inputs.placement_run_id == '')
     uses: ./.github/workflows/llk-perf-impl.yaml
     with:
       architecture: all
@@ -185,7 +432,8 @@ jobs:
     needs: nightly-measure
     if: >-
       ${{ !cancelled() && (github.event_name == 'schedule'
-      || (github.event_name == 'workflow_dispatch' && inputs.baseline_run_id == '')) }}
+      || (github.event_name == 'workflow_dispatch' && inputs.baseline_run_id == ''
+          && inputs.placement_run_id == '')) }}
     strategy:
       fail-fast: false
       matrix:

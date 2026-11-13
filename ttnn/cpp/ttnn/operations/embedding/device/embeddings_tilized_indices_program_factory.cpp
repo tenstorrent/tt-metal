@@ -8,7 +8,6 @@
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/math.hpp>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
@@ -53,7 +52,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsTilizedIndicesProgramFactory:
     uint32_t batch_size = a.logical_shape()[0];  // num rows
     uint32_t num_cols = a.logical_shape()[-1];
     uint32_t volume = num_cols * batch_size;
-    auto alignment = a.buffer()->alignment();
+    auto alignment = a.mesh_buffer().alignment();
 
     // setup problem and grid size
 
@@ -117,7 +116,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsTilizedIndicesProgramFactory:
 
     // The reader loads one full input page of indices (`input.get_aligned_page_size()`) into this scratch buffer,
     // then decodes faces via face_offset. Size it to the input's aligned page size to avoid Watcher NOC sanitize overflows.
-    uint32_t index_tile_page_size = a.buffer()->aligned_page_size();
+    uint32_t index_tile_page_size = a.mesh_buffer().aligned_page_size();
     spec.scratchpads.push_back(ScratchpadSpec{
         .unique_id = INDEX_SCRATCH,
         .size_per_node = index_tile_page_size,

@@ -65,7 +65,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
 
     _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /*is_int_fpu_en*/, PackMode::Default>(
-        TILE_NUM_FACES, formats.math);
+        ckernel::DEFAULT_TENSOR_SHAPE, formats.math);
     // The row mapping the test checks holds only with Dest address remapping off; an earlier pack_untilize
     // test on the same core leaves it on (Blackhole; a no-op on Wormhole).
     _llk_math_reconfig_remap_wrapper_(false /*remap_enable*/);

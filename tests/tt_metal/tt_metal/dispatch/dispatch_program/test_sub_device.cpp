@@ -508,7 +508,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceFixture, TensixTestSubDeviceCQOwnership) {
 
     // Helper functions to create fresh programs each time
     auto create_program_1 = [&]() {
-        tt_metal::Program program = tt_metal::CreateProgram(*this->devices_[0]);
+        tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
         // On sub device 1.
         tt_metal::CreateKernel(
             program,
@@ -520,7 +520,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceFixture, TensixTestSubDeviceCQOwnership) {
     };
 
     auto create_program_2 = [&]() {
-        tt_metal::Program program = tt_metal::CreateProgram(*this->devices_[0]);
+        tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
         // On sub device 2.
         tt_metal::CreateKernel(
             program,

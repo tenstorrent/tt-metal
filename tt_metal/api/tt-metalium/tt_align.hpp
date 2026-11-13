@@ -4,16 +4,11 @@
 
 #pragma once
 
-#include <type_traits>
+/**
+ * @file
+ * @brief Forwarding header; tt::align now lives in <tt-metalium/math.hpp>.
+ *
+ * @deprecated Include <tt-metalium/math.hpp> instead. This header will be removed after 2026-11-13.
+ */
 
-namespace tt {
-
-template <typename T1, typename T2>
-constexpr std::common_type_t<T1, T2> align(T1 addr, T2 alignment) {
-    static_assert(std::is_integral_v<T1>, "align() requires integral types");
-    static_assert(std::is_integral_v<T2>, "align() requires integral types");
-    using T = std::common_type_t<T1, T2>;
-    return ((static_cast<T>(addr) - 1) | (static_cast<T>(alignment) - 1)) + 1;
-}
-
-}  // namespace tt
+#include <tt-metalium/math.hpp>  // IWYU pragma: export

@@ -1,11 +1,15 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""One captured K3 KDA forward serves every user slot (#59977).
+"""One captured K3 KDA forward serves every user slot and every request on it (#59977).
 
-Two users alternate chunks on one layer's two slots. The capture is recorded once, on slot 0, and every
-replay takes its slot from the metadata the runtime refreshes per chunk, as `TtPrefillRuntime` does. A
-replay must read and advance only that slot's carry and slab entry, and match the eager path bit for
-bit. A slot-0-only test cannot see the defect this guards: a capture that pins its slot is exact there.
+Two users alternate chunks on one layer's two slots, then a new request starts on slot 0. The capture is
+recorded once, on slot 0, and every replay takes its slot and start from the metadata the runtime
+refreshes per chunk, as `TtPrefillRuntime` does. A replay must read and advance only that slot's carry
+and slab entry, and match the eager path bit for bit. A slot-0-only test cannot see the defect this
+guards: a capture that pins its slot is exact there.
+
+Nothing ever clears a slot. Every slot starts as noise, warm-up and capture leave slot 0 dirty, and a
+request head must still equal ttKDA run from a zero carry, bit for bit: the head loads zeros on device.
 """
 
 import pytest
@@ -21,7 +25,9 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     random_weights,
     read_slab_layer,
     reconstruct_sp_tp_tensor,
+    to_sp_input,
 )
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.kda_slabs import fill_slabs_with_noise, run_kda_chunk, zero_state_like
 from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import (
     KdaContractGeometry,
     KdaStates,
@@ -29,15 +35,21 @@ from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import (
     deallocate_state,
     device_scalar,
 )
-from models.demos.deepseek_v3_d_p.tt.kimi_k3.attention import K3AttnContext, TtK3KdaAttention
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_bit_identical
+from models.demos.deepseek_v3_d_p.tt.kda.state_contract import KDA_CONVOLUTION_PAGE_CHANNELS
+from models.demos.deepseek_v3_d_p.tt.kimi_k3.attention import TtK3KdaAttention
+from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
+    all_zero_bits,
+    assert_bit_identical,
+    make_actual_start,
+)
 
 pytestmark = run_for_blackhole()
 
 LAYER = 1
 NUM_SLOTS = 2
-# (slot, actual_start, length): users A (slot 0) and B (slot 1) alternate, each continuing its own carry.
-CHUNKS = [(0, 0, 128), (1, 0, 160), (0, 128, 96), (1, 160, 64)]
+# (slot, actual_start, length): users A (slot 0) and B (slot 1) alternate, each continuing its own carry; then
+# user C starts a new request on slot 0, over A's carry.
+CHUNKS = [(0, 0, 128), (1, 0, 160), (0, 128, 96), (1, 160, 64), (0, 0, 160)]
 
 
 def _host(tensor: ttnn.Tensor) -> list[torch.Tensor]:
@@ -69,7 +81,16 @@ def test_one_capture_serves_every_slot(mesh_device, sp_axis, tp_axis, device_par
     # head_dim 128, as Kimi-K3's, so the migration slabs' segment geometry applies and every commit exports.
     config = KDAConfig(hidden_size=256, num_heads=8, head_k_dim=128, head_v_dim=128, conv_kernel_size=4, norm_eps=1e-5)
     weights = random_weights(config)
-    layer = build_layer(mesh_device, config, weights, sp_axis, tp_axis, active_seq_len=capacity, summary_group_chunks=2)
+    layer = build_layer(
+        mesh_device,
+        config,
+        weights,
+        sp_axis,
+        tp_axis,
+        active_seq_len=capacity,
+        summary_group_chunks=2,
+        convolution_page_channels=KDA_CONVOLUTION_PAGE_CHANNELS,
+    )
     geometry = KdaContractGeometry.from_kda_config(config, mesh_shape=mesh_shape, sp_axis=sp_axis, tp_axis=tp_axis)
     slabs = KdaStates.allocate(mesh_device, geometry, layer_ids=(LAYER,), num_slots=NUM_SLOTS)
     scratch = allocate_native_state(mesh_device, geometry)
@@ -98,19 +119,30 @@ def test_one_capture_serves_every_slot(mesh_device, sp_axis, tp_axis, device_par
             deallocate_state(state)
         return snapshots
 
-    def observe(output, start, length):
+    def valid_output(output, start, length):
         physical = reconstruct_sp_tp_tensor(output, mesh_device, sp_axis, tp_axis, tp_dim=2, sp_dim=1)
         permutation = mla_row_permutation(start, sp, local_rows)
-        valid = physical[:, torch.argsort(permutation)][:, :length].clone()
-        return {"output": [valid], "slabs": _host(slabs.recurrent) + _host(slabs.convolution)}
+        return physical[:, torch.argsort(permutation)][:, :length].clone()
+
+    def fresh_head(index, start, length):
+        """The head chunk run by ttKDA itself from a zero carry: what a never-used slot would produce."""
+        hidden = to_sp_input(chunk_input(index, start), mesh_device, sp_axis)
+        zero = zero_state_like(scratch)
+        bounds = [make_actual_start(mesh_device, value) for value in (start, start + length)]
+        output, state = layer.forward(hidden, zero, *bounds)
+        result = [valid_output(output, start, length)] + _host(state.recurrent) + _host(state.convolution)
+        for tensor in (hidden, output, *bounds):
+            ttnn.deallocate(tensor)
+        deallocate_state(zero)
+        deallocate_state(state)
+        return result
 
     input_tt = upload(chunk_input(0, 0))
-    slot_tt, start_tt, end_tt = (device_scalar(mesh_device, value) for value in (0, 0, capacity))
-    # Eager and traced chunks read the same persistent scalars, rewritten before each chunk as the runtime
-    # rewrites its metadata, so the two paths differ only in the capture.
-    ctx = K3AttnContext(kda_scalars=(slot_tt, start_tt, end_tt), kda_states=slabs)
+    metadata = tuple(device_scalar(mesh_device, value) for value in (0, 0, capacity))
+    slot_tt, start_tt, end_tt = metadata
 
     def stage(index, slot, start, length):
+        """Rewrite the persistent input and metadata in place, as the runtime does before every chunk."""
         for destination, source in (
             (input_tt, upload(chunk_input(index, start))),
             (slot_tt, device_scalar(mesh_device, slot)),
@@ -120,42 +152,59 @@ def test_one_capture_serves_every_slot(mesh_device, sp_axis, tp_axis, device_par
             ttnn.copy(source, destination)
             ttnn.deallocate(source)
 
+    def check_chunk(label, index, slot, start, before, after):
+        other = 1 - slot
+        for got, want in zip(after[other], before[other], strict=True):
+            assert_bit_identical(want, got, name=f"{label} chunk {index}: slot {other} must be untouched")
+        assert any(
+            not torch.equal(got, want) for got, want in zip(after[slot], before[slot], strict=True)
+        ), f"{label} chunk {index}: slot {slot} did not advance"
+        if start == 0:
+            # Nothing reset the slot, so a head that matches the zero-carry run cannot have read it.
+            assert not all(
+                all_zero_bits(shard) for shard in before[slot]
+            ), f"{label} chunk {index}: head slot {slot} was already zero, so the test cannot see a stale read"
+
+    # A stale slot must not pass for a zeroed one: noise in every slot before any request starts.
+    fill_slabs_with_noise(mesh_device, slabs, seed=17)
     trace = None
     traced_output = None
     try:
+        # The eager pass builds its scalars from host ints, as an eager forward does; the traced pass replays the
+        # metadata path and must match it bit for bit.
         eager = []
         for index, (slot, start, length) in enumerate(CHUNKS):
             stage(index, slot, start, length)
             before = carries()
-            output = attention.forward(input_tt, ctx)
-            eager.append(observe(output, start, length))
-            ttnn.deallocate(output)
+            output = run_kda_chunk(attention, input_tt, slabs, None, slot, start, start + length)
             after = carries()
-            other = 1 - slot
-            for got, want in zip(after[other], before[other], strict=True):
-                assert_bit_identical(want, got, name=f"eager chunk {index}: slot {other} must be untouched")
-            assert any(
-                not torch.equal(got, want) for got, want in zip(after[slot], before[slot], strict=True)
-            ), f"eager chunk {index}: slot {slot} did not advance"
+            observed = [valid_output(output, start, length)] + after[slot]
+            ttnn.deallocate(output)
+            check_chunk("eager", index, slot, start, before, after)
+            if start == 0:
+                for shard, (want, got) in enumerate(zip(fresh_head(index, start, length), observed, strict=True)):
+                    assert_bit_identical(want, got, name=f"eager head chunk {index} slot {slot} vs zero carry {shard}")
+            eager.append(observed)
 
-        # One capture, recorded on slot 0. Warm until program and resource state settle first.
+        # One capture, recorded on slot 0 at a request head. Warm until program and resource state settle
+        # first. Nothing resets afterwards: warm-up and capture leave slot 0 dirty, and slot 1 still holds the
+        # eager pass's last carry, so every traced head starts on a stale slot.
         stage(0, 0, 0, capacity)
         for _ in range(2):
-            ttnn.deallocate(attention.forward(input_tt, ctx))
+            ttnn.deallocate(run_kda_chunk(attention, input_tt, slabs, metadata))
         trace = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-        traced_output = attention.forward(input_tt, ctx)
+        traced_output = run_kda_chunk(attention, input_tt, slabs, metadata)
         ttnn.end_trace_capture(mesh_device, trace, cq_id=0)
-        for slot in range(NUM_SLOTS):
-            slabs.zero_slot(slot)
 
-        # Every slot's carry is a batch of the slabs, so matching both whole slabs bit for bit covers both carries.
         for index, (slot, start, length) in enumerate(CHUNKS):
             stage(index, slot, start, length)
+            before = carries()
             ttnn.execute_trace(mesh_device, trace, cq_id=0, blocking=True)
-            observed = observe(traced_output, start, length)
-            for key in ("output", "slabs"):
-                for shard, (want, got) in enumerate(zip(eager[index][key], observed[key], strict=True)):
-                    assert_bit_identical(want, got, name=f"traced chunk {index} slot {slot} {key} {shard}")
+            after = carries()
+            observed = [valid_output(traced_output, start, length)] + after[slot]
+            check_chunk("traced", index, slot, start, before, after)
+            for shard, (want, got) in enumerate(zip(eager[index], observed, strict=True)):
+                assert_bit_identical(want, got, name=f"traced chunk {index} slot {slot} shard {shard}")
     finally:
         if trace is not None:
             ttnn.release_trace(mesh_device, trace)
@@ -163,5 +212,5 @@ def test_one_capture_serves_every_slot(mesh_device, sp_axis, tp_axis, device_par
             ttnn.deallocate(traced_output)
         deallocate_state(scratch)
         slabs.deallocate()
-        for tensor in (input_tt, slot_tt, start_tt, end_tt):
+        for tensor in (input_tt, *metadata):
             ttnn.deallocate(tensor)

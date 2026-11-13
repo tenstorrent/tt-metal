@@ -69,17 +69,16 @@ Rules:
   compared with CI numbers, and never mix speed-of-light and normal rows in
   one report.
 - `--enable-perf-counters` produces a different, mutually exclusive kind of
-  report. It compiles with `-DPERF_COUNTERS_COMPILED` (the WC build), which
-  reduces `ZONE_SCOPED` to metadata only: the run emits no wall-clock
-  `mean(<run type>)` columns, only `<RUN_TYPE>_..._pct` efficiency columns.
-  It also writes to the same `<module>.csv` path, overwriting the timing
-  report. Move the timing report out of the way first (see Refresh and
-  compare), run counters as a separate sweep, and validate the result as a
-  counter report. `--dump-perf-counters`
-  additionally writes raw counter values to `<module>.counters.csv`.
-- Perf counters are unavailable on Quasar. The build gate keeps the define off
-  there and `counters.h` `#error`s if it ever slips through, so the flag
-  yields no counter columns.
+  report. It compiles with `-DPERF_COUNTERS_COMPILED` (the WC build; NC
+  compiles no counter code): the run emits the wall-clock
+  `mean(<run type>)` columns plus the `<RUN_TYPE>_...` counter metric columns.
+  Run counters as a separate sweep (it lands in its own run directory, see
+  Refresh and compare) and validate the result as a counter report.
+  `--dump-perf-counters` additionally writes raw counter values to
+  `<module>.counters.csv`.
+- Perf counters work on Quasar too: four banks in every NEO and one l1_client
+  event CSR in place of the L1 bank (see
+  `docs/performance_counters/hardware_reference.md`).
 - SFPU sweep modules need `--mode perf`; the selector defaults to `accuracy`
   and deselects the perf sweep.
 - Do not pass `--coverage`. Instrumentation invalidates perf numbers.
@@ -128,16 +127,16 @@ finish, or every selected test was skipped.
    variants; duplicate keys are rejected, never merged. Markers are the
    zones the kernel declares — `INIT` and `TILE_LOOP` in the perf sources,
    plus the `KERNEL` zone that `trisc.cpp` wraps around every profiler build.
-   A counter report has no profiler-derived rows, so expect only the counter
-   zones `INIT` and `TILE_LOOP` there. An unexplained shortfall means an
+   A counter run's `.counters.csv` has no profiler-derived rows, so expect only
+   the counter zones `INIT` and `TILE_LOOP` there. An unexplained shortfall means an
    aborted or partly skipped sweep; a shortfall you can attribute to skips or
    collapse is fine.
 3. **Duplicate keys.** `combine_perf_reports()` warns when it collapses rows
    sharing a (sweep, marker) key. Differing metrics on a collapsed key are
    either run-to-run noise or a parameter that changes the kernel without
    being recorded as a column. Resolve which before shipping the report.
-4. **Plausibility.** Inspect `marker == TILE_LOOP`. Each `L1_CONGESTION` stage
-   should sit near its isolate. Values near 2048, 4096, or 8192, an isolate
+4. **Plausibility.** Inspect `marker == TILE_LOOP`.
+   Values near 2048, 4096, or 8192, an isolate
    orders of magnitude above the real stage, or a healthy first variant
    followed by slow ones all indicate handshake or wait-mask bugs — switch to
    `quasar-perf-test`.
@@ -146,13 +145,10 @@ finish, or every selected test was skipped.
 6. **Completeness, by report kind.** A timing report carries a
    `mean(<run type>)` column for every requested run type, and a
    `TEXT_SIZE(<run type>)` column only for `L1_TO_L1`, `UNPACK_ISOLATE`,
-   `MATH_ISOLATE`, and `PACK_ISOLATE`. `L1_CONGESTION` is deliberately absent
-   from the code-size map, so a missing `TEXT_SIZE(L1_CONGESTION)` is correct
-   rather than a defect. A counter report has no wall-clock means at all:
-   check its `<RUN_TYPE>_..._pct` columns, expect only the `INIT` and
-   `TILE_LOOP` markers, and note that its `.post.csv` is identical to the raw
-   file because normalization only rescales columns named `mean(...)` and
-   `std(...)`.
+   `MATH_ISOLATE`, and `PACK_ISOLATE`. A counter report carries the same columns and
+   markers plus the `<RUN_TYPE>_..._pct` counter columns; its wall-clock
+   means are counters on timing, so compare them only with other counter
+   reports.
 
 Never present metrics from a run whose pytest phase failed.
 
@@ -174,12 +170,11 @@ Report back, and keep alongside the CSV when it is archived:
   and the previous run is untouched, so a rerun that skips everything or dies
   before the consumer phase cannot leave an earlier CSV looking like the new
   result. Read the run you mean, not `latest`, when comparing two runs.
-- A counter run is still a separate report kind from a timing run, and the two
-  share no metric columns — but they now land in different run directories, so
-  one no longer replaces the other.
+- A counter run is a separate report kind from a timing run. It has the same
+  `mean(<run type>)` columns, but they are timed with counters on (a different
+  build), so compare its wall-clock means only with other counter reports.
 - Compare like with like: same architecture, same speed-of-light setting, same
-  `loop_factor` and marker, and the same report kind. Timing and counter
-  reports measure different things and share no metric columns.
+  `loop_factor` and marker, and the same report kind.
 - Repeat a run before attributing a small delta to a code change.
 
 ## Checklist

@@ -157,19 +157,19 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
     const auto scores_data_format = datatype_to_dataformat_converter(scores_tensor.dtype());
     const auto output_data_format = datatype_to_dataformat_converter(output_tensors.at(0).dtype());
 
-    const uint32_t input_page_size = input_tensor.buffer()->page_size();
-    const uint32_t output_page_size = output_tensors.at(0).buffer()->page_size();
-    const uint32_t scores_page_size = scores_tensor.buffer()->page_size();
+    const uint32_t input_page_size = input_tensor.mesh_buffer().page_size();
+    const uint32_t output_page_size = output_tensors.at(0).mesh_buffer().page_size();
+    const uint32_t scores_page_size = scores_tensor.mesh_buffer().page_size();
     const uint32_t scores_cb_rm_page_size =
-        round_up(scores_tensor.buffer()->aligned_page_size(), hal::get_l1_alignment());
-    const uint32_t expert_indices_page_size = expert_indices_tensor.buffer()->page_size();
-    const uint32_t expert_mapping_page_size = expert_mapping_tensor.buffer()->page_size();
+        round_up(scores_tensor.mesh_buffer().aligned_page_size(), hal::get_l1_alignment());
+    const uint32_t expert_indices_page_size = expert_indices_tensor.mesh_buffer().page_size();
+    const uint32_t expert_mapping_page_size = expert_mapping_tensor.mesh_buffer().page_size();
     const uint32_t expert_indices_cb_page_size =
-        round_up(expert_indices_tensor.buffer()->aligned_page_size(), hal::get_l1_alignment());
+        round_up(expert_indices_tensor.mesh_buffer().aligned_page_size(), hal::get_l1_alignment());
     const uint32_t expert_mapping_cb_page_size =
-        round_up(expert_mapping_tensor.buffer()->aligned_page_size(), hal::get_l1_alignment());
-    const uint32_t expert_indices_num_pages = expert_indices_tensor.buffer()->num_pages();
-    const uint32_t expert_mapping_num_pages = expert_mapping_tensor.buffer()->num_pages();
+        round_up(expert_mapping_tensor.mesh_buffer().aligned_page_size(), hal::get_l1_alignment());
+    const uint32_t expert_indices_num_pages = expert_indices_tensor.mesh_buffer().num_pages();
+    const uint32_t expert_mapping_num_pages = expert_mapping_tensor.mesh_buffer().num_pages();
 
     const auto expert_indices_data_format = datatype_to_dataformat_converter(expert_indices_tensor.dtype());
     const auto expert_mapping_data_format = datatype_to_dataformat_converter(expert_mapping_tensor.dtype());

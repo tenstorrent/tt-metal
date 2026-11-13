@@ -8,18 +8,21 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <map>
 #include <memory>
 #include <string>
 #include <vector>
 
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/experimental/context/metal_env.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/mock_device/mock_device.hpp>
 
+#include "distributed/mesh_device_impl.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/program/program_impl.hpp"
 #include "metal2_host_api/test_helpers/test_helpers.hpp"
@@ -31,28 +34,26 @@ using test_helpers::MakeMinimalGen1DMKernel;
 using test_helpers::MakeMinimalWorkUnit;
 
 // Fabric needs every chip open, so both mock chips are opened and the program is built on the first.
-// Fabric config and mock mode are process-global; TearDown restores both.
+// The fabric config is scoped to the test's own mock MetalEnv, so nothing needs restoring afterwards.
 class ProgramSpecFabricDefinesTest : public ::testing::TestWithParam<tt_fabric::FabricConfig> {
 protected:
     void SetUp() override {
-        experimental::configure_mock_mode(tt::ARCH::WORMHOLE_B0, 2);
-        tt_fabric::SetFabricConfig(GetParam());
-        devices_ = distributed::MeshDevice::create_unit_meshes({0, 1});
+        env_ = std::make_unique<MetalEnv>(MetalEnvDescriptor{
+            .mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 2)});
+        env_->configure_fabric({.fabric_config = GetParam()});
+        devices_ = distributed::MeshDevice::open_unit_meshes(*env_, std::array{0, 1});
     }
     void TearDown() override {
-        for (auto& [_, device] : devices_) {
-            device->close();
-        }
         devices_.clear();
-        tt_fabric::SetFabricConfig(tt_fabric::FabricConfig::DISABLED);
-        experimental::disable_mock_mode();
+        env_.reset();
     }
 
-    std::map<int, std::shared_ptr<distributed::MeshDevice>> devices_;
+    std::unique_ptr<MetalEnv> env_;  // outlives the meshes
+    std::map<ChipId, std::shared_ptr<distributed::MeshDevice>> devices_;
 };
 
 TEST_P(ProgramSpecFabricDefinesTest, CPU_DataMovementKernelGetsFabricKernelDefinesJITSmoke) {
-    const auto fabric_defines = MetalContext::instance().get_control_plane().get_fabric_kernel_defines();
+    const auto fabric_defines = devices_.at(0)->impl().metal_context().get_control_plane().get_fabric_kernel_defines();
     // Without fabric up the map is empty and the kernel would check nothing.
     ASSERT_TRUE(fabric_defines.contains("ROUTING_MODE"));
 

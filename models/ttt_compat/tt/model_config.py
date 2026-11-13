@@ -216,9 +216,16 @@ def should_pad_sampling_logits_to_power_of_2(
     return per_device_vocab > 0 and (per_device_vocab & (per_device_vocab - 1)) != 0
 
 
+def minimal_prefill_matmul_blocks(num_devices: int, grid) -> Tuple[int, int]:
+    if is_wormhole_b0() and num_devices == 1 and grid is not None and (grid.x, grid.y) == (8, 8):
+        return 4, 4
+    return 8, 1
+
+
 def disables_batched_prefill(base_model_name: str, device_name: str) -> bool:
     return (base_model_name == "Qwen3-32B" and device_name == "P150x4") or (
-        base_model_name == "Llama-3.1-8B" and device_name in ("P100", "P150", "P300", "P150x4", "P150x8")
+        base_model_name in ("Llama-3.1-8B", "Llama-3.2-1B", "Qwen3-0.6B")
+        and device_name in ("P100", "P150", "P300", "P150x4", "P150x8")
     )
 
 
@@ -579,6 +586,9 @@ class ModelArgs:
         "GATE_MM_OUTPUT",
     )
 
+    # Instance attribute set from DISTRIBUTED_PREFILL_NORM in __init__; see is_distributed_norm.
+    distributed_prefill_norm = False
+
     # GQA models padded to the tensor-parallel width when their KV heads do not divide it.
     PAD_HEADS_FOR_TP_MODELS = ("Qwen2.5-VL-3B", "Qwen2.5-VL-7B", "olmOCR-2-7B")
 
@@ -707,6 +717,10 @@ class ModelArgs:
         # Mathematically a no-op for softmax; keeps QK^T small enough for the bf16 score
         # intermediates of the decode SDPA kernel. See Attention._create_k_bias_shift.
         self.subtract_k_bias_post_rope = False
+        # Opt-in (DISTRIBUTED_PREFILL_NORM=1): distribute the prefill norm for dim <= 4096 too. Each device then
+        # normalizes its own shard instead of the gathered full width, which needs far less L1 for circular
+        # buffers (e.g. when the model shares its devices with another model). See is_distributed_norm.
+        self.distributed_prefill_norm = os.getenv("DISTRIBUTED_PREFILL_NORM") == "1"
 
         assert not os.getenv(
             "FAKE_DEVICE"
@@ -1189,23 +1203,7 @@ class ModelArgs:
                 fuse_batch=seq_len <= max_seq,
             )
 
-            def _get_xattn_kv_prefill_mem_cfg(seq_len):
-                # max(1, ...): KV replication (n_kv_heads < num_devices) makes the integer
-                # divide 0, which would build a 0-row shard config; clamp to one KV head/device.
-                M = max(1, self.n_kv_heads // self.num_devices) * seq_len
-                cores_x, cores_y = self.find_grid(M // ttnn.TILE_SIZE)
-                return ttnn.create_sharded_memory_config(
-                    (
-                        nearest_32(M // (cores_x * cores_y)),
-                        self.head_dim,
-                    ),
-                    ttnn.CoreGrid(y=cores_y, x=cores_x),
-                    ttnn.ShardStrategy.HEIGHT,
-                    ttnn.ShardOrientation.ROW_MAJOR,
-                    use_height_and_width_as_shard_shape=True,
-                )
-
-            self.model_config["XATTN_KV_PREFILL_MEM_CFG"] = _get_xattn_kv_prefill_mem_cfg
+            self.model_config["XATTN_KV_PREFILL_MEM_CFG"] = self.get_xattn_kv_prefill_mem_config
 
             if self.is_multimodal:
                 self.VISION_MAX_MM_SEQ = nearest_32(self.vision_chunk_ntok)
@@ -1529,10 +1527,15 @@ class ModelArgs:
         elif mode == Mode.PREFILL:
             if self.use_minimal_prefill_matmul(seq_len):
                 grid = self.mlp2_grid(seq_len)
+                m_block, subblock_w = minimal_prefill_matmul_blocks(
+                    self.num_devices, getattr(self, "max_grid_size", None)
+                )
                 return ttnn.MinimalMatmulConfig(
-                    M_block_size=8,
+                    M_block_size=m_block,
                     K_block_size=8,
                     N_block_size=8,
+                    subblock_h=1,
+                    subblock_w=subblock_w,
                     compute_with_storage_grid_size=ttnn.CoreCoord(grid[0], grid[1]),
                 )
             else:
@@ -1880,27 +1883,33 @@ class ModelArgs:
         elif mode == Mode.PREFILL:
             self.MAX_QKV_MM_SEQ_LEN = 2048
             if self.use_minimal_qkv_prefill_matmul(seq_len):
+                m_block, subblock_w = minimal_prefill_matmul_blocks(
+                    self.num_devices, getattr(self, "max_grid_size", None)
+                )
                 return ttnn.MinimalMatmulConfig(
-                    M_block_size=8,
+                    M_block_size=m_block,
                     K_block_size=8,
                     N_block_size=8,
+                    subblock_h=1,
+                    subblock_w=subblock_w,
                     compute_with_storage_grid_size=ttnn.CoreCoord(8, 10) if is_blackhole() else ttnn.CoreCoord(8, 8),
                 )
             else:
+                qkv_per_core_N = math.ceil(self.qkv_size / self.cluster_shape[1] / 32 / self.dram_shard_grid_width)
                 return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=(8, 10) if is_blackhole() else (8, 8),
                     in0_block_w=1,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
                     out_subblock_h=1,  # Must be divisible by per_core_M
-                    out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+                    out_subblock_w=(
+                        get_out_subblock_w(qkv_per_core_N, 1) if is_wormhole_b0() and self.num_devices == 1 else 1
+                    ),  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
                     # This branch is only reached when use_minimal_qkv_prefill_matmul() is False,
                     # i.e. seq_len <= 128, so the former `8 if seq_len >= MAX_QKV_MM_SEQ_LEN` arm
                     # (MAX_QKV_MM_SEQ_LEN == 2048) was unreachable and has been removed. At every
                     # reachable seq_len the max(1, ...) floor makes this 1.
                     # NOTE: P100 runs OOM in L1 with a larger per_core_M (workaround for issue #50656).
                     per_core_M=1 if self.device_name == "P100" else max(1, math.ceil(seq_len / ttnn.TILE_SIZE / 8)),
-                    per_core_N=math.ceil(
-                        self.qkv_size / self.cluster_shape[1] / 32 / self.dram_shard_grid_width
-                    ),  # N / TILE_WIDTH / grid width
+                    per_core_N=qkv_per_core_N,  # N / TILE_WIDTH / grid width
                     transpose_mcast=False,
                     fused_activation=None,
                     fuse_batch=seq_len <= self.MAX_QKV_MM_SEQ_LEN,
@@ -2782,7 +2791,11 @@ class ModelArgs:
             local_params = None
         return local_params
 
-    def is_distributed_norm(self, mode: Mode):
+    def is_distributed_norm(self, mode: Mode | str):
+        # RMSNorm.forward accepts "prefill"/"decode" strings too; compare them as Mode so DistributedNorm
+        # (which picks gather-or-not) and RMSNorm (which picks the gamma) always agree.
+        if isinstance(mode, str):
+            mode = Mode(mode)
         if not self.is_multichip:
             return False
         if all([dim > 1 for dim in list(self.mesh_device.shape)]):  # 2D grid
@@ -2790,6 +2803,8 @@ class ModelArgs:
         elif (
             self.dim > 4096 and mode == Mode.PREFILL
         ):  # Somewhere between 4k and 8k WH runs out of L1 if not distributed
+            return True
+        elif mode == Mode.PREFILL and self.distributed_prefill_norm:
             return True
         return False
 
@@ -3856,12 +3871,26 @@ class ModelArgs:
         rows, cols = self.find_grid(k // ttnn.TILE_SIZE)
         return ttnn.CoreGrid(x=cols, y=rows)
 
+    def get_xattn_kv_prefill_mem_config(self, seq_len):
+        M = max(1, self.n_kv_heads // self.num_devices) * seq_len
+        rows, cols = self.find_grid(M // ttnn.TILE_SIZE)
+        return ttnn.create_sharded_memory_config(
+            (
+                nearest_32(M // (rows * cols)),
+                self.head_dim,
+            ),
+            ttnn.CoreGrid(y=rows, x=cols),
+            ttnn.ShardStrategy.HEIGHT,
+            ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
     def find_grid(self, N):
         """
         Find the number of rows and columns for a grid of cores such that
         the total number of tiles N can be evenly divided among the cores.
         Each core will have the same integer number of tiles.
-        The grid size is limited to a maximum of 2 rows and 8 columns.
+        The grid is limited to 8x8 on Wormhole and to the device grid (at most 10 rows and 12 columns) on Blackhole.
 
         Parameters:
             N (int): Total number of tiles to be distributed.
@@ -3872,7 +3901,7 @@ class ModelArgs:
         Raises:
             AssertionError: If it's not possible to find such a grid configuration.
         """
-        # Harvested Blackhole boards (p150b: 11 columns) have a smaller grid than 10x12.
+        # Harvested Blackhole parts (P100, some P150) expose fewer than 12 columns.
         max_rows = 8 if is_wormhole_b0() else min(10, self.max_grid_size.y)
         max_cols = 8 if is_wormhole_b0() else min(12, self.max_grid_size.x)
         max_cores = max_rows * max_cols
@@ -5328,6 +5357,22 @@ def num_to_corerange(
         start_core,
         ttnn.CoreCoord(end_x, end_y),
     )
+
+
+def qk_fused_core_ranges(
+    batch: int,
+    row_size: int = 8,
+) -> Tuple[ttnn.CoreRange, ttnn.CoreRange]:
+    """
+    Core ranges for the fused QK ops: ``batch`` cores for Q, then ``batch`` cores for K.
+
+    ``rotary_embedding_llama_fused_qk`` reads the cos, sin and trans_mat shard that lands on
+    the core holding Q (or K) for that user, so every tensor it takes has to be sharded over
+    Q's cores followed by K's cores, in that order. This is the single definition of that
+    layout; callers that build a core grid for one of those tensors must use it.
+    """
+    k_start_core = ttnn.CoreCoord(batch % row_size, batch // row_size)
+    return num_to_corerange(batch, grid_x=row_size), num_to_corerange(batch, start_core=k_start_core, grid_x=row_size)
 
 
 def num_to_coregrid(x):

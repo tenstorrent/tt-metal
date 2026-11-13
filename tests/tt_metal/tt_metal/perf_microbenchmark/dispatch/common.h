@@ -20,7 +20,7 @@
 
 #include "llrt.hpp"
 #include "env_lib.hpp"
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
 
 #include "llrt/hal.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"

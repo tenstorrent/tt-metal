@@ -6,7 +6,6 @@
 
 #include <vector>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
-#include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include <hostdevcommon/fabric_common.h>
 
 namespace tt::tt_fabric {

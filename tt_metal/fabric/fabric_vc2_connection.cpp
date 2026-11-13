@@ -19,7 +19,6 @@
 #include <vector>
 
 #include "erisc_datamover_builder.hpp"
-#include "impl/program/program_impl.hpp"
 #include "llrt/tt_cluster.hpp"
 #include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
 #include "fabric_host_utils.hpp"

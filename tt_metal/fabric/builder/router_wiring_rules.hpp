@@ -35,8 +35,8 @@ struct IntermeshVCConfig;
  * landing can begin Y. `express_axis` decides which side of that rule the chord is on: a chord
  * along Y is protected Y, a chord along X is an X resource. Z egress requires a local Z role.
  * Non-express mode (ExpressAxis::NONE) preserves cardinal wiring and targets Z only for an
- * intermesh boundary. Boundary producers wire only on VC1; all other producer roles are
- * VC-independent.
+ * intermesh boundary. Boundary producers wire only on VC1 (on VC0 with intermesh_vc_disabled);
+ * all other producer roles are VC-independent.
  */
 bool wires_into(
     RoutingDirection producer_direction,
@@ -171,7 +171,8 @@ using RouterTurnSet = std::array<std::vector<ConnectionTarget>, builder_config::
 /**
  * @brief The one turn-set derivation for every router
  *
- * Boundary routers use the VC1 boundary template. Other routers derive turns through wires_into():
+ * Boundary routers use the boundary template (on VC1, or on VC0 to N and S only with intermesh_vc_disabled).
+ * Other routers derive turns through wires_into():
  * 1D uses the opposite direction, non-express 2D uses non-self cardinals, and express mode applies
  * its dimension-order and Z-role rules. Shape and turn derivations consume the same capability and
  * VC configuration objects so callers cannot describe one router inconsistently.

@@ -77,3 +77,61 @@ def test_resumed_prefill_retains_cached_prefix(cached_tokens, new_tokens, trace_
     cached_blocks = cached_tokens // block_size
     torch.testing.assert_close(prepared[:, :cached_blocks], original_pages[:, :cached_blocks])
     torch.testing.assert_close(pages, original_pages)
+
+
+@pytest.mark.parametrize("trace_enabled", [False, True])
+@pytest.mark.parametrize(
+    "prompt_lens,padded_len,block_size",
+    [([32, 32], 128, 32), ([65, 100, 128], 128, 64), ([129, 200], 256, 64), ([1025, 1500], 2048, 128)],
+)
+def test_batched_padded_prefill_preserves_unowned_cache(prompt_lens, padded_len, block_size, trace_enabled):
+    """Batched prefill must not write the pad tail into stale block IDs of reused rows either."""
+    kernel_blocks = padded_len // block_size
+    owned = [(n + block_size - 1) // block_size for n in prompt_lens]
+    pages = torch.full((len(prompt_lens), kernel_blocks + 2), 127, dtype=torch.int32)
+    for row, n in enumerate(owned):
+        pages[row, :n] = torch.arange(1 + 20 * row, 1 + 20 * row + n)
+    original_pages = pages.clone()
+    fake_kv = [[SimpleNamespace(shape=(128, 1, block_size, 32))]]
+    user_ids = list(range(len(prompt_lens)))
+
+    prepared = Generator._get_prefill_user_page_table(
+        None,
+        pages,
+        fake_kv,
+        prompt_lens,
+        trace_enabled=trace_enabled,
+        prefill_seq_len=padded_len,
+        use_batched_prefill=True,
+        user_id=user_ids,
+        padded_batch_size=len(prompt_lens),
+    )
+
+    assert prepared.shape == (len(prompt_lens), kernel_blocks)
+    for row, n in enumerate(owned):
+        torch.testing.assert_close(prepared[row, :n], pages[row, :n])
+        assert torch.all(prepared[row, n:] == -1)
+    assert not torch.any(prepared == 127)
+    torch.testing.assert_close(pages, original_pages)
+
+
+@pytest.mark.parametrize("trace_enabled", [False, True])
+def test_batched_prefill_accepts_one_length_for_all_rows(trace_enabled):
+    """qwen25_vl's batched prefill passes the padded batch length as a single int."""
+    block_size, padded_len = 64, 256
+    pages = torch.arange(1, 13, dtype=torch.int32).reshape(2, 6)
+    fake_kv = [[SimpleNamespace(shape=(128, 1, block_size, 32))]]
+
+    prepared = Generator._get_prefill_user_page_table(
+        None,
+        pages,
+        fake_kv,
+        padded_len,
+        trace_enabled=trace_enabled,
+        prefill_seq_len=padded_len,
+        use_batched_prefill=True,
+        user_id=[0, 1],
+        padded_batch_size=2,
+    )
+
+    torch.testing.assert_close(prepared, pages[:, : padded_len // block_size])

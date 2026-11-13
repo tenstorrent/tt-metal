@@ -465,13 +465,13 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
         .llk_k = llk_k,
         .row_split = row_split != 0};
     const uint32_t meta_addr =
-        tensor_args.has_valid_length_metadata() ? tensor_args.valid_length_tensor->buffer()->address() : 0u;
+        tensor_args.has_valid_length_metadata() ? tensor_args.valid_length_tensor->mesh_buffer().address() : 0u;
     const uint32_t valid_end_addr =
-        tensor_args.has_valid_end_metadata() ? tensor_args.valid_end_tensor->buffer()->address() : 0u;
+        tensor_args.has_valid_end_metadata() ? tensor_args.valid_end_tensor->mesh_buffer().address() : 0u;
     tt::tt_metal::SetCommonRuntimeArgs(
-        program, reader_kernel, {input.buffer()->address(), meta_addr, 0, 0, valid_end_addr});
+        program, reader_kernel, {input.mesh_buffer().address(), meta_addr, 0, 0, valid_end_addr});
     tt::tt_metal::SetCommonRuntimeArgs(program, compute_kernel, {0});
-    tt::tt_metal::SetCommonRuntimeArgs(program, writer_kernel, {indices.buffer()->address()});
+    tt::tt_metal::SetCommonRuntimeArgs(program, writer_kernel, {indices.mesh_buffer().address()});
     set_runtime_args(program, shared, input, operation_attributes.valid_length);
 
     return cached_program_t{std::move(program), std::move(shared)};
@@ -491,14 +491,14 @@ void TopkLargeIndicesProgramFactory::override_runtime_arguments(
     const auto& input = tensor_args.input_tensor;
     auto& reader_args = tt::tt_metal::GetCommonRuntimeArgs(cached_program.program, shared.reader_kernel_id);
     auto& writer_args = tt::tt_metal::GetCommonRuntimeArgs(cached_program.program, shared.writer_kernel_id);
-    reader_args[topk_common_args::input_address] = input.buffer()->address();
+    reader_args[topk_common_args::input_address] = input.mesh_buffer().address();
     reader_args[topk_common_args::metadata_address] =
-        tensor_args.has_valid_length_metadata() ? tensor_args.valid_length_tensor->buffer()->address() : 0u;
+        tensor_args.has_valid_length_metadata() ? tensor_args.valid_length_tensor->mesh_buffer().address() : 0u;
     // Refreshed alongside metadata_address: the bound lives in a device tensor whose buffer can move
     // between dispatches, and a stale address here would silently clamp the search to garbage.
     reader_args[topk_common_args::valid_end_address] =
-        tensor_args.has_valid_end_metadata() ? tensor_args.valid_end_tensor->buffer()->address() : 0u;
-    writer_args[topk_common_args::output_address] = tensor_return_value.buffer()->address();
+        tensor_args.has_valid_end_metadata() ? tensor_args.valid_end_tensor->mesh_buffer().address() : 0u;
+    writer_args[topk_common_args::output_address] = tensor_return_value.mesh_buffer().address();
 
     // The cache key fixes k, dtype, grid and compute body mode. Shape and valid_length
     // are runtime controls: update their common arguments when either changes, and

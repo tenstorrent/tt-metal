@@ -11,7 +11,7 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::moreh::moreh_nll_loss_step2 {
 
 void MorehNllLossStep2DeviceOperation::validate_inputs(
-    const operation_attributes_t& /*attributes*/, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const Tensor& input_tensor = tensor_args.input_tensor;
     const Tensor& target_tensor = tensor_args.target_tensor;
     const std::optional<Tensor>& weight_tensor = tensor_args.weight_tensor;
@@ -48,6 +48,15 @@ void MorehNllLossStep2DeviceOperation::validate_inputs(
             "divisor_tensor to nll_loss need to be allocated in buffers on device!");
         TT_FATAL((divisor_tensor.value().layout() == Layout::TILE), "divisor_tensor to nll_loss must be tilized");
         TT_FATAL(divisor_tensor.value().dtype() == DataType::BFLOAT16, "divisor tensor type must be bfloat16");
+    }
+
+    // With reduction "none" the preallocated output is written in the input's format and size.
+    if (operation_attributes.reduction == NONE && tensor_args.output_tensor.has_value()) {
+        TT_FATAL(
+            tensor_args.output_tensor->dtype() == input_tensor.dtype(),
+            "output_tensor dtype {} must match the input dtype {}",
+            tensor_args.output_tensor->dtype(),
+            input_tensor.dtype());
     }
 }
 

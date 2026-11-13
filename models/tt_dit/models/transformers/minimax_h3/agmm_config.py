@@ -21,6 +21,15 @@ these shapes need an entry rather than falling back.
 
 from __future__ import annotations
 
+import math
+from typing import NamedTuple
+
+import ttnn
+
+from ....utils.device_constants import BLACKHOLE_COMPUTE_GRID, WORMHOLE_COMPUTE_GRID, compute_grid_key
+from ....utils.matmul import agmm_worker_grid
+from .length_classes import LENGTH_CLASSES, length_class
+
 # M parallelizes over 12 cores when transposed (M > N) and 10 otherwise (the op reserves the mux axis).
 _TILE = 32
 _M_CORES_TRANSPOSED = 12
@@ -77,6 +86,82 @@ AGMM_BLOCK_SIZES: dict[tuple[int, int, int], tuple[int, int, int]] = {
     (7168, 1344, 11): (6, 8, 6),
     (7168, 1344, 12): (6, 8, 8),
 }
+
+
+# Blocking of the dynamic-length path per device compute grid, (K, N) layer and length class
+AGMM_PINNED_BLOCKING: dict[tuple[int, int], dict[tuple[int, int], dict[str, tuple[int, int, int]]]] = {
+    BLACKHOLE_COMPUTE_GRID: {
+        (5376, 5376): {"short": (4, 6, 16), "long": (4, 6, 16)},
+        (5376, 7168): {"short": (6, 3, 16), "long": (4, 3, 16)},
+        (7168, 1344): {"short": (6, 8, 6), "long": (6, 8, 6)},
+    },
+    WORMHOLE_COMPUTE_GRID: {
+        (5376, 5376): {"short": (10, 7, 8), "long": (8, 7, 12)},
+        (5376, 7168): {"short": (10, 7, 10), "long": (10, 7, 10)},
+        (7168, 1344): {"short": (10, 8, 6), "long": (12, 8, 6)},
+    },
+}
+
+
+class AgmmPin(NamedTuple):
+    """Frozen all-gather-matmul program of one layer: grid, blocking and orientation fixed for every M."""
+
+    config: ttnn.MinimalMatmulConfig
+    num_workers_per_link: int
+    transpose_core_grid: bool
+
+
+# Worker-grid orientation per layer. Blackhole 4x8: to_qkv non-transposed is 21 % faster at 15 s than the
+# transposed grid the op's `M > N` rule picks there, ff1 matches, to_out (N < M) transposed. Wormhole 4x8: every
+# layer transposed, faster for to_qkv and ff1 at both length classes.
+AGMM_PINNED_TRANSPOSED: dict[tuple[int, int], dict[tuple[int, int], bool]] = {
+    BLACKHOLE_COMPUTE_GRID: {(5376, 5376): False, (5376, 7168): False, (7168, 1344): True},
+    WORMHOLE_COMPUTE_GRID: {(5376, 5376): True, (5376, 7168): True, (7168, 1344): True},
+}
+
+
+def agmm_pins(k: int, n: int, *, full_grid: ttnn.CoreCoord, num_links: int) -> dict[str, AgmmPin]:
+    """The AGMM program of a `(K, N)` layer per length class: one worker-grid orientation at every length and
+    the class's `AGMM_PINNED_BLOCKING`; classes with the same blocking share one pin."""
+    device_grid = compute_grid_key(full_grid)
+    if device_grid not in AGMM_PINNED_BLOCKING:
+        raise ValueError(f"dynamic_length has no pinned AGMM blockings for the {device_grid} compute grid")
+    blockings = AGMM_PINNED_BLOCKING[device_grid]
+    if (k, n) not in blockings:
+        raise ValueError(f"dynamic_length has no pinned AGMM blocking for (K, N)={(k, n)}; TP=4 layouts only")
+    transposed = AGMM_PINNED_TRANSPOSED[device_grid][(k, n)]
+    grid = agmm_worker_grid(full_grid, transposed, num_links)
+    # in0 senders group along the M-parallel axis (grid.x transposed, grid.y not) into `num_links` groups.
+    in0_axis = grid.x if transposed else grid.y
+    workers = math.ceil(in0_axis / num_links)
+    pins: dict[tuple[int, int, int], AgmmPin] = {}
+    for cls in LENGTH_CLASSES:
+        blocking = blockings[(k, n)][cls.name]
+        if blocking not in pins:
+            m_block, k_block, n_block = blocking
+            config = ttnn.MinimalMatmulConfig(
+                M_block_size=m_block,
+                K_block_size=k_block,
+                N_block_size=n_block,
+                subblock_h=2,
+                subblock_w=2,
+                compute_with_storage_grid_size=grid,
+            )
+            pins[blocking] = AgmmPin(config, workers, transposed)
+    return {cls.name: pins[blockings[(k, n)][cls.name]] for cls in LENGTH_CLASSES}
+
+
+def agmm_kwargs(pins: dict[str, AgmmPin] | None, k: int, n: int, rows: int) -> dict:
+    """The linear's blocking kwargs for a `(K, N)` layer at `rows` per-device rows: the length class's pin,
+    else (legacy path) the length-keyed swept table."""
+    if pins is None:
+        return {"default_block_size": agmm_block_size(k, n, rows)}
+    pin = pins[length_class(rows).name]
+    return {
+        "matmul_config": pin.config,
+        "num_workers_per_link": pin.num_workers_per_link,
+        "transpose_core_grid": pin.transpose_core_grid,
+    }
 
 
 def agmm_block_size(k: int, n: int, m: int) -> tuple[int, int, int] | None:

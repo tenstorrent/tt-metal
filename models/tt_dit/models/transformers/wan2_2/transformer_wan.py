@@ -10,6 +10,7 @@ from pathlib import Path
 import torch
 from diffusers import WanTransformer3DModel as TorchWanTransformer3DModel
 from diffusers.models.transformers.transformer_wan import WanRotaryPosEmbed as TorchWanRotaryPosEmbed
+from huggingface_hub import constants as hf_constants
 from loguru import logger
 
 if not os.environ.get("TT_DIT_DEBUG"):
@@ -897,6 +898,9 @@ class WanCheckpoint:
             name,
             subfolder=subfolder,
             trust_remote_code=True,
+            # diffusers ignores HF_HUB_OFFLINE for sharded checkpoints and queries the hub for the shard
+            # list unless local_files_only is set (huggingface/diffusers#11948).
+            local_files_only=hf_constants.HF_HUB_OFFLINE,
         )
         torch_transformer.eval()
         self._config = torch_transformer.config

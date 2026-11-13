@@ -152,7 +152,7 @@ tt::tt_metal::ProgramDescriptor send_program_factory(
         // index 8 (semaphore address) become a Buffer* binding and an
         // absolute semaphore address, respectively.
         std::vector<uint32_t> writer_runtime_args = {
-            output_tensors.at(0).buffer()->address(),  // placeholder, replaced via Buffer* below
+            output_tensors.at(0).mesh_buffer().address(),  // placeholder, replaced via Buffer* below
             page_idx_start,
             page_idx_end,
             num_hops,
@@ -166,12 +166,12 @@ tt::tt_metal::ProgramDescriptor send_program_factory(
 
         if (dst_is_forward) {
             tt::tt_fabric::append_fabric_connection_rt_args(
-                this_fabric_id, next_fabric_id, link_idx, desc, c, writer_runtime_args);
+                *mesh_device, this_fabric_id, next_fabric_id, link_idx, desc, c, writer_runtime_args);
         }
         writer_runtime_args.emplace_back(!dst_is_forward);
         if (!dst_is_forward) {
             tt::tt_fabric::append_fabric_connection_rt_args(
-                this_fabric_id, next_fabric_id, link_idx, desc, c, writer_runtime_args);
+                *mesh_device, this_fabric_id, next_fabric_id, link_idx, desc, c, writer_runtime_args);
         }
 
         tt::tt_metal::KernelDescriptor::RTArgList writer_rt_args_builder;

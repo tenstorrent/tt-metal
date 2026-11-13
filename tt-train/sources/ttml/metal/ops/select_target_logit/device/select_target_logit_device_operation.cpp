@@ -28,10 +28,8 @@ void SelectTargetLogitDeviceOperation::validate_on_program_cache_miss(
 
     // The reader walks one row-major target page per batch-channel slice of the logit
     // (page = tile_row / Ht over NC * Ht rows) and sizes each page read from the target's
-    // inner dim, while the program cache is keyed on the logit shape alone. Pinning both the
-    // target's page width and its page count to the logit keeps every page index the reader
-    // can form inside the target allocation, and keeps a cached program valid for the target
-    // tensor it runs with.
+    // inner dim. Pinning both the target's page width and its page count to the logit keeps
+    // every page index the reader can form inside the target allocation.
     const auto& target_shape = tensor_args.target.logical_shape();
     TT_FATAL(
         target_shape[-1] == tensor_args.logit.logical_shape()[-2],
@@ -89,18 +87,16 @@ SelectTargetLogitDeviceOperation::tensor_return_value_t SelectTargetLogitDeviceO
     return ttnn::create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.logit.device());
 }
 
+// first_v and local_V are left out of the key: they only set the reader's shard-window runtime args, which
+// SelectTargetLogitProgramFactory::override_runtime_arguments re-applies on every cache hit for each device's
+// coordinate. Everything else is keyed: cluster_axis and the full spec of the logit, the target and the preallocated
+// output, including whether one is passed (TensorAccessorArgs bake each buffer's placement into the compile-time args).
+// value_or keeps nullopt distinct from axis 0 (libc++'s std::hash maps an empty optional and a 0 payload to the same
+// value); the sentinel can never be a valid axis.
 ttsl::hash::hash_t SelectTargetLogitDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    // first_v / local_V only affect runtime args (they're patched by override_runtime_arguments
-    // per coord). cluster_axis, however, determines the mesh-workload structure (one program per
-    // TP slab when set vs one per coordinate when unset) and the program-to-coordinate mapping,
-    // so it must be part of the hash. value_or keeps nullopt distinct from axis 0 (an optional
-    // hashes its payload directly, so nullopt and 0 would otherwise collide); the sentinel can
-    // never be a valid axis.
     return tt::tt_metal::operation::hash_operation<SelectTargetLogitDeviceOperation>(
-        args.cluster_axis.value_or(std::numeric_limits<uint32_t>::max()),
-        tensor_args.logit.dtype(),
-        tensor_args.logit.logical_shape());
+        args.cluster_axis.value_or(std::numeric_limits<uint32_t>::max()), tensor_args);
 }
 
 }  // namespace ttml::metal::ops::select_target_logit::device

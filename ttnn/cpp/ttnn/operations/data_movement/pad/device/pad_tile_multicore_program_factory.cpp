@@ -64,7 +64,7 @@ ttnn::device_operation::ProgramArtifacts PadTileMulticoreProgramFactory::create_
     auto cores_in_order = corerange_to_cores(all_cores, num_cores, true);
 
     tt::DataFormat dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-    uint32_t page_size = output.buffer()->page_size();
+    uint32_t page_size = output.mesh_buffer().page_size();
     uint32_t multi_buffering_size = 2;
 
     DataflowBufferSpec in0_dfb{

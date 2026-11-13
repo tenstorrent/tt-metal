@@ -659,6 +659,7 @@ void ring_attention_neighbor_halo_exchange_helper(
             writer_args.push_back(1u);
         }
         tt::tt_fabric::append_fabric_connection_rt_args(
+            *mesh_device,
             mesh_device->get_fabric_node_id(target_device_coord),
             mesh_device->get_fabric_node_id(transport_device_coord),
             halo.link_base + link,
@@ -1047,7 +1048,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             static_cast<uint32_t>(has_metadata),                // kHasMetadata
             num_links,                                          // kNumLinks
             static_cast<uint32_t>(effective_split_forwarding),  // kSplitForwardingEnabled
-            static_cast<uint32_t>(rank_mapping.full_mesh),      // kFullMeshRankMapping
+            rank_mapping_compile_time_arg(rank_mapping),        // kFullMeshRankMapping
             static_cast<uint32_t>(rank_mapping.orientation),    // kSnakeOrientation
             rank_mapping.mesh_rows,                             // kMeshRows
             rank_mapping.mesh_cols,                             // kMeshCols
@@ -1105,7 +1106,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             meta_cb_index,                                      // kCbMetaId
             num_links,                                          // kNumLinks
             static_cast<uint32_t>(effective_split_forwarding),  // kSplitForwardingEnabled
-            static_cast<uint32_t>(rank_mapping.full_mesh),      // kFullMeshRankMapping
+            rank_mapping_compile_time_arg(rank_mapping),        // kFullMeshRankMapping
             static_cast<uint32_t>(rank_mapping.orientation),    // kSnakeOrientation
             rank_mapping.mesh_rows,                             // kMeshRows
             rank_mapping.mesh_cols,                             // kMeshCols
@@ -1351,6 +1352,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         writer_args.push_back(static_cast<uint32_t>(neighbor_coord.has_value()));
         if (neighbor_coord.has_value()) {
             tt::tt_fabric::append_fabric_connection_rt_args(
+                *mesh_device,
                 mesh_device->get_fabric_node_id(target_device_coord),
                 mesh_device->get_fabric_node_id(*neighbor_coord),
                 placement.link,

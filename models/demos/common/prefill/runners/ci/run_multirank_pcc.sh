@@ -18,8 +18,13 @@ set -- "${POSITIONAL[@]+"${POSITIONAL[@]}"}"
 MODEL="${1:?${USAGE}}"
 RUN_NAME="${MODEL}${VARIANT}"
 # First entry is the default; membership is the validation. These models support sc1 only.
+# Kimi-K3's sc4 and sc1 are 4x4 stages, two per galaxy (its manifest's layout); its _8x4 configs keep the
+# one-stage-per-galaxy layout for hand comparisons. GLM-5.3's sc4 and sc1 are 8x4 stages, its production
+# layout; its _4x4 configs run 4x4 stages, two per galaxy.
 case "${MODEL}" in
   mistral4|gptoss120b) MODEL_CONFIGS="sc1" ;;
+  kimi_k3)             MODEL_CONFIGS="sc4 sc1 sc4_8x4 sc1_8x4" ;;
+  glm53)               MODEL_CONFIGS="sc4 sc1 sc4_4x4 sc1_4x4" ;;
   *)                   MODEL_CONFIGS="sc4 sc1" ;;
 esac
 CONFIG="${2:-${MODEL_CONFIGS%% *}}"
@@ -27,6 +32,8 @@ case " ${MODEL_CONFIGS} " in
   *" ${CONFIG} "*) ;;
   *) echo "${MODEL} does not support config '${CONFIG}' (supported: ${MODEL_CONFIGS})" >&2; exit 2 ;;
 esac
+# The galaxy count without the layout suffix: sc4_8x4 and sc4_4x4 run on sc4's descriptor.
+SCALE="${CONFIG%%_*}"
 
 : "${TT_METAL_HOME:?TT_METAL_HOME must be set}"
 : "${PREFILL_SUMMARIES:?PREFILL_SUMMARIES must be set by the blaze impl (shared /ci scratch for the KV table)}"
@@ -39,7 +46,7 @@ manifest_env() {
   python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["env"][sys.argv[2]])' "${MANIFEST}" "$1"
 }
 
-MGD="${MGD_DIR}/${CONFIG}_mgd.textproto"
+MGD="${MGD_DIR}/${SCALE}_mgd.textproto"
 
 CHUNK_SIZE=5120
 WARMUP_CHUNKS=10
@@ -57,6 +64,8 @@ PRODUCER_USERS="${PREFILL_PRODUCER_NUM_USERS:-1}"
 TCP_INTERFACE="${PREFILL_TCP_INTERFACE:-ens5f0np0}"
 # Non-zero for a pipeline-parallel model: the rank count its binding fixes. Set in the case block.
 PP_RANKS=0
+# Non-zero for a 4x4 layout: the galaxy count, two 4x4 stages (tray halves) on each.
+PP_4X4_HOSTS=0
 # PCC verdicts, rank logs and any rank binding, kept for the run's artifact upload.
 EVIDENCE_DIR="${PREFILL_SUMMARIES}/pcc/${RUN_NAME}"
 MTP_PCC_THRESHOLD=""
@@ -64,6 +73,8 @@ DFLASH_PCC_THRESHOLD=""
 TABLE_WAIT_DEFAULT=3600
 VARIANT_MAX_SEQ_LEN=""
 MTP=0
+# The manifest that holds a 4x4 run's stage layout when it is not the run's own (GLM-5.3's MTP variants).
+LAYOUT_MANIFEST=""
 DFLASH=0
 # sc1 runs a single galaxy, so both of these exist to shrink the sc4 model down to what one fits.
 SC1_MAX_SEQ_LEN=""
@@ -96,21 +107,53 @@ case "${MODEL}" in
   glm53)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/glm53_prefill_runner_kv}"
     MANIFEST="${MANIFEST_DIR}/glm53.json"
-    RUNNER_ENV="export TT_METAL_SHM_TRACKING_DISABLED=1; export LOGURU_LEVEL=ERROR;"
-    PCC_THRESHOLD=0.83
+    RUNNER_ENV="export LOGURU_LEVEL=ERROR;"
+    # The rank 2 KV cache PCC changes from run to run. On SC4 with the D2D relay (the GLM default) it ranged
+    # 0.8277-0.8337 over 17 runs; without the relay 0.8318-0.8331 over 13 runs. 0.82 keeps CI from failing on that.
+    # Tracked in https://github.com/tenstorrent/tt-metal/issues/62682.
+    PCC_THRESHOLD=0.82
     PRODUCER_ENV="export PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/glm53-1020k-last5120;"
     REQUEST_LEN=1044480
     if [ "${VARIANT#_mtp}" != "${VARIANT}" ]; then
       MTP=1
       MANIFEST="${MANIFEST_DIR}/glm53${VARIANT}.json"
-      SC1_MAX_SEQ_LEN=81920
-      SC1_REQUEST_LEN=${GOLDEN_LEN}
-      MTP_PCC_THRESHOLD=0.80
-      MTP_TRACE="${PREFILL_MTP_TRACE_DIR:-/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/mtp-tail-802cad1b-56320tok-L7-nozeropos0}"
-      PRODUCER_ENV="export PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/vllm-glm53-indexer-kcache-55k; \
-          export PREFILL_MTP_TRACE_DIR='${MTP_TRACE}'; export PREFILL_MTP_PCC=${MTP_PCC_THRESHOLD};"
-      [ "${CONFIG}" = sc1 ] && TABLE_WAIT_DEFAULT=5400
+      # 1M tail on CI SC4: MTP kvpe 0.955, MTP index 0.987 (GPU A-vs-A floor 0.985 / 0.994).
+      MTP_PCC_THRESHOLD=0.93
+      # Same 1M request and tail window as the trunk golden above, so the MTP compare reuses its window.
+      MTP_TRACE="${PREFILL_MTP_TRACE_DIR:-/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/mtp-tail-1M-last5120}"
+      PRODUCER_ENV+=" export PREFILL_MTP_TRACE_DIR='${MTP_TRACE}'; export PREFILL_MTP_PCC=${MTP_PCC_THRESHOLD};"
+      [ "${SCALE}" = sc1 ] && TABLE_WAIT_DEFAULT=5400
     fi
+    case "${CONFIG}" in
+      *_4x4)
+        # 4x4 stages, two per galaxy, bound by tt-run discovery as for Kimi-K3 below: 8 stages for sc4, two
+        # (all 78 layers) for sc1. glm53_4x4.json holds the layout: SP=4 on mesh axis 1, 2560-token chunks
+        # (640 tokens per chip, GLM's 8x4 per-chip load), TP-deduped KV and the slots it fits. Its 1064960
+        # window is a multiple of the deduped cache's 16 x 256 = 4096-token bank quantum and of the chunk.
+        # The trunk runs that manifest; the MTP variants export its layout over their own, keeping their
+        # slot counts.
+        LAYOUT_MANIFEST="${MANIFEST_DIR}/glm53_4x4.json"
+        if [ "${MTP}" -eq 0 ]; then
+          MANIFEST="${LAYOUT_MANIFEST}"
+        else
+          LAYOUT_4X4=""
+          for k in PREFILL_SP PREFILL_TP PREFILL_SP_AXIS PREFILL_CHUNK_SIZE PREFILL_TP_SHARD_KV; do
+            LAYOUT_4X4+=" export ${k}=$(MANIFEST="${LAYOUT_MANIFEST}" manifest_env "${k}");"
+          done
+          RUNNER_ENV+="${LAYOUT_4X4}"
+          PRODUCER_ENV+="${LAYOUT_4X4}"
+        fi
+        CHUNK_SIZE=$(MANIFEST="${LAYOUT_MANIFEST}" manifest_env PREFILL_CHUNK_SIZE)
+        PP_4X4_HOSTS=1
+        [ "${SCALE}" = sc4 ] && PP_4X4_HOSTS=4
+        PP_RANKS=$((2 * PP_4X4_HOSTS))
+        # The cache the runner resolves for a [4,4] SP-axis-1 stage on 16 visible chips. Checked
+        # non-empty on every host before launch.
+        GLM_CACHE="${PREFILL_TTNN_CACHE:-/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/GLM-5.3-Cache-prefill}"
+        PP_CACHE_DIR="${GLM_CACHE}/glm_5_3_bh_16dev/4x4_sp1"
+        RUNNER_ENV+=" export PREFILL_TTNN_CACHE='${GLM_CACHE}';"
+        ;;
+    esac
     ;;
   kimi_k3)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/kimi_k3_prefill_runner_kv}"
@@ -122,9 +165,8 @@ case "${MODEL}" in
     # the 5k..250k ones GLM-5.3 reports and sc4's 1M request adds 510k and 1M on top. Not a
     # baseline for sc4 -- 24 layers against 93 -- which is why the summary job reports sc4 alone.
     SC1_NUM_LAYERS=24
-    # sc1 is sc4's stage 0, so it opens sc4's slots.
-    SC1_NUM_USERS=$(manifest_env PREFILL_NUM_USERS)
-    RUNNER_ENV="export PREFILL_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-dequantized;"
+    RUNNER_ENV="export PREFILL_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-dequantized; \
+      export TT_METAL_SHM_TRACKING_DISABLED=1; export LOGURU_LEVEL=ERROR;"
     # The sc4 93-layer leg's KV PCC
     # collapsed to ~0 past layer ~24 on run 36717057668 with the Weka trace (it reads 0.900..0.994 on
     # run 36524165128), and the two candidates -- the Weka golden copy and the Weka TTNN cache -- give
@@ -134,13 +176,43 @@ case "${MODEL}" in
     PRODUCER_ENV+=" export PREFILL_PCC_GOLDEN_LEN=${GOLDEN_LEN};"
     REQUEST_LEN=1049600
     if [ "${VARIANT}" = _dspark ]; then
-      [ "${CONFIG}" = sc4 ] || { echo "${MODEL} runs sc4 only" >&2; exit 2; }
+      [ "${SCALE}" = sc4 ] || { echo "${MODEL} runs sc4 only" >&2; exit 2; }
       DFLASH=1
       MANIFEST="${MANIFEST_DIR}/kimi_k3_dspark.json"
       DFLASH_PCC_THRESHOLD="${PREFILL_DFLASH_PCC:-0.85}"
       PRODUCER_ENV="export PREFILL_DFLASH_PCC=${DFLASH_PCC_THRESHOLD};"
       TABLE_WAIT_DEFAULT=7200
     fi
+    # The manifests describe a 4x4 stage: SP=4 on mesh axis 1 (the tray half's ring), 2560-token chunks
+    # (640 tokens per chip), and the slots that layout fits. Runner and producer both read them.
+    CHUNK_SIZE=$(manifest_env PREFILL_CHUNK_SIZE)
+    case "${CONFIG}" in
+      sc4|sc1)
+        # Two ranks per galaxy, one per tray half, bound by tt-run discovery against the 4x4
+        # descriptor: 8 stages of 12 layers (9 on the last) for sc4, and sc4's first two for sc1, at
+        # sc4's slot count.
+        PP_4X4_HOSTS=1
+        [ "${SCALE}" = sc4 ] && PP_4X4_HOSTS=4
+        PP_RANKS=$((2 * PP_4X4_HOSTS))
+        # The cache the runner resolves for a [4,4] SP-axis-1 stage on 16 visible chips. Checked
+        # non-empty: weight_cache_path mkdirs it, so a failed run leaves an empty one behind.
+        K3_CACHE="${PREFILL_TTNN_CACHE:-/mnt/weka/model-cache/scratch/moonshotai/Kimi-K3-Cache/Kimi-K3-Cache-prefill}"
+        PP_CACHE_DIR="${K3_CACHE}/kimi_k3_bh_16dev/4x4_sp1"
+        RUNNER_ENV+=" export PREFILL_TTNN_CACHE='${K3_CACHE}';"
+        ;;
+      *_8x4)
+        # One 8x4 stage per galaxy, SP=8 on axis 0, at the 8x4 chunk and the slots #63502 measured
+        # for it (34 with the drafter). Exported to runner and producer, ahead of the manifest.
+        CHUNK_SIZE=5120
+        : "${PREFILL_NUM_USERS:=$([ "${DFLASH}" = 1 ] && echo 34 || echo 100)}"
+        export PREFILL_NUM_USERS
+        LAYOUT_8X4="export PREFILL_SP=8; export PREFILL_TP=4; export PREFILL_SP_AXIS=0; export PREFILL_CHUNK_SIZE=${CHUNK_SIZE};"
+        RUNNER_ENV+=" ${LAYOUT_8X4}"
+        PRODUCER_ENV+=" ${LAYOUT_8X4}"
+        ;;
+    esac
+    # sc1 opens sc4's slots.
+    SC1_NUM_USERS=${PREFILL_NUM_USERS:-$(manifest_env PREFILL_NUM_USERS)}
     ;;
   mistral4)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/mistral4_pp4_kv}"
@@ -171,8 +243,9 @@ if [ -n "${VARIANT}" ]; then
   [ "${MANIFEST##*/}" = "${RUN_NAME}.json" ] || { echo "${MODEL} has no ${VARIANT#_} variant" >&2; exit 2; }
   [ -f "${MANIFEST}" ] || { echo "no manifest for ${RUN_NAME} at ${MANIFEST}" >&2; exit 2; }
   export PIPELINE_DIR="${PIPELINE_DIR}${VARIANT}"
-  PRODUCER_ENV+=" export PREFILL_PCC_GOLDEN_LEN=${GOLDEN_LEN}; \
-      export PREFILL_PRODUCER_MAX_REQUESTS=1; export PREFILL_PRODUCER_MULTI_TURN_PROB=0;"
+  # A windowed (tail) golden rejects a length cap, so MTP, which compares the 1M tail, takes none.
+  [ "${MTP}" = 1 ] || PRODUCER_ENV+=" export PREFILL_PCC_GOLDEN_LEN=${GOLDEN_LEN};"
+  PRODUCER_ENV+=" export PREFILL_PRODUCER_MAX_REQUESTS=1; export PREFILL_PRODUCER_MULTI_TURN_PROB=0;"
   PERF_BASELINES=""
   REQUIRE_TPS=0
   EXPECTED_TPS=""
@@ -191,7 +264,7 @@ RUNNER_OVERRIDES="${VARIANT_MAX_SEQ_LEN:+export PREFILL_MAX_SEQ_LEN=${MAX_SEQ_LE
 SC4_MAX_SEQ_LEN=${MAX_SEQ_LEN}
 SC1_MAX_SEQ_LEN=${SC1_MAX_SEQ_LEN:-${MAX_SEQ_LEN}}
 NUM_LAYERS_ENV=""
-if [ "${CONFIG}" = sc1 ]; then
+if [ "${SCALE}" = sc1 ]; then
   MAX_SEQ_LEN=${SC1_MAX_SEQ_LEN}
   NUM_USERS=${SC1_NUM_USERS}
   RUNNER_OVERRIDES="export PREFILL_MAX_SEQ_LEN=${MAX_SEQ_LEN}; export PREFILL_NUM_USERS=${NUM_USERS};"
@@ -211,7 +284,7 @@ fi
 SC1_REQUEST_LEN=${SC1_REQUEST_LEN:-${REQUEST_LEN:-${SC1_MAX_SEQ_LEN}}}
 SC4_REQUEST_LEN=${REQUEST_LEN:-${SC4_MAX_SEQ_LEN}}
 REQUEST_LEN=${SC4_REQUEST_LEN}
-[ "${CONFIG}" = sc1 ] && REQUEST_LEN=${SC1_REQUEST_LEN}
+[ "${SCALE}" = sc1 ] && REQUEST_LEN=${SC1_REQUEST_LEN}
 echo "resolved shape for ${RUN_NAME}/${CONFIG}: max_seq_len=${MAX_SEQ_LEN} request_len=${REQUEST_LEN} num_users=${NUM_USERS}"
 
 REAL_CHUNKS=$((REQUEST_LEN / CHUNK_SIZE))
@@ -222,7 +295,7 @@ SC4_CHUNKS=$((SC4_REQUEST_LEN / CHUNK_SIZE))
 # one config yields the same chunk twice, and the summary drops chunks past a short window.
 PROBE_CHUNKS="${PROBE_CHUNKS:-$(printf '%s\n' 0 "$((50000 / CHUNK_SIZE))" "$((100000 / CHUNK_SIZE))" \
   "$((256000 / CHUNK_SIZE))" "$((SC1_CHUNKS / 2 - 1))" "$((SC1_CHUNKS - 1))" "$((SC4_CHUNKS / 2 - 1))" \
-  "$((SC4_CHUNKS - 1))" | sort -n -u | paste -sd,)}"
+  "$((SC4_CHUNKS - 1))" | sort -n -u | paste -sd, -)}"
 
 
 mkdir -p "${PIPELINE_DIR}"
@@ -239,23 +312,28 @@ GATE_LOG="${MR_DIR}/gates.log"
 export TABLE_PATH="${MR_DIR}/kv_chunk_table.pb"
 PCC_DIR="${MR_DIR}/pcc_verdict"
 RANKLOGS="${MR_DIR}/ranklogs"
-TIMING_DIR="${MR_DIR}/timing"
 PRODUCER_LOG="${MR_DIR}/producer.log"
-mkdir -p "${TIMING_DIR}"
+# Written by the rank-crash watchdog: the rank logs that showed a traceback.
+CRASH_FLAG="${MR_DIR}/rank_crashed"
+# Written by the stall watchdog: when it fired and what it collected.
+STALL_FLAG="${MR_DIR}/stalled"
 
 SUMMARY_DONE=0
 emit_summary() {
   [ "${SUMMARY_DONE}" = 1 ] && return 0
   SUMMARY_DONE=1
   python3 "${TT_METAL_HOME}/models/demos/common/prefill/runners/ci/summarize_ci_run.py" \
-    --ranklogs "${RANKLOGS}" --timing-dir "${TIMING_DIR}" --real-chunks "${REAL_CHUNKS}" \
-    --chunk-size "${CHUNK_SIZE}" \
+    --ranklogs "${RANKLOGS}" --real-chunks "${REAL_CHUNKS}" \
+    --chunk-size "${CHUNK_SIZE}" --pipeline-ranks "${EXPECTED_RANKS:-1}" \
     --probe-chunks "${PROBE_CHUNKS}" \
     --summary-name "${RUN_NAME}_${CONFIG}" \
     || echo "summary generation failed (non-fatal)"
 }
 
 cleanup() {
+  for pid in ${WATCHDOG_PID:-} ${STALL_WATCHDOG_PID:-}; do
+    kill "${pid}" 2>/dev/null || true
+  done
   if [ -n "${RUNNER_PID:-}" ] && kill -0 "${RUNNER_PID}" 2>/dev/null; then
     kill -- "-${RUNNER_PID}" 2>/dev/null || true
     timeout 10 tail --pid="${RUNNER_PID}" -f /dev/null 2>/dev/null || kill -KILL -- "-${RUNNER_PID}" 2>/dev/null || true
@@ -276,9 +354,20 @@ cleanup() {
       || echo "no drafter PCC lines -- were the dflash_* configs in the table?"
   fi
   mkdir -p "${EVIDENCE_DIR}"
-  for path in "${PCC_DIR}" "${RANKLOGS}" "${PRODUCER_LOG}" "${BINDING:-}"; do
+  for path in "${PCC_DIR}" "${RANKLOGS}" "${PRODUCER_LOG}" "${BINDING:-}" "${CRASH_FLAG}" "${STALL_FLAG}"; do
     [ -n "${path}" ] && [ -e "${path}" ] && cp -r "${path}" "${EVIDENCE_DIR}/" || true
   done
+  # A failed request leaves the Inspector's dump (written on a dispatch timeout) on each host's
+  # local disk; pull it onto the shared evidence dir so the upload carries it.
+  if [ -n "${RUNNER_PID:-}" ] && [ "${PROD_RC:-1}" != 0 ]; then
+    IFS=, read -r -a INSPECT_HOSTS <<< "${RESOLVED_HOSTS}"
+    timeout 120 "${MPIRUN}" -np "${#INSPECT_HOSTS[@]}" --host "$(printf '%s:1,' "${INSPECT_HOSTS[@]}" | sed 's/,$//')" \
+      --map-by slot --bind-to none --allow-run-as-root \
+      bash -lc "src='${TT_METAL_HOME}/generated/inspector'; \
+        [ -d \"\${src}\" ] || exit 0; \
+        dst='${EVIDENCE_DIR}/inspector/'\$(hostname); mkdir -p \"\${dst}\" && cp -r \"\${src}/.\" \"\${dst}/\"" \
+      || echo "inspector collection failed (non-fatal)"
+  fi
   if [ -d "${RANKLOGS}" ]; then
     echo "==================== ranklog tails ===================="
     find "${RANKLOGS}" -type f | sort | while read -r f; do
@@ -286,7 +375,7 @@ cleanup() {
       tail -n 40 "$f" 2>/dev/null || true
     done
     emit_summary
-    if [ "$(find "${TIMING_DIR}" -name '*.csv' 2>/dev/null | wc -l)" -ge 2 ]; then
+    if [ "${EXPECTED_RANKS:-1}" -ge 2 ]; then
       GANTT_DIR="${PREFILL_SUMMARIES}/plots"
       mkdir -p "${GANTT_DIR}"
       GANTT_PY=python3
@@ -302,7 +391,7 @@ cleanup() {
         fi
       fi
       "${GANTT_PY}" "${TT_METAL_HOME}/models/demos/deepseek_v3_d_p/scripts/plot_pipeline_trace.py" \
-        --timing-dir "${TIMING_DIR}" --real-chunks "${REAL_CHUNKS}" \
+        --ranklogs "${RANKLOGS}" --real-chunks "${REAL_CHUNKS}" \
         -o "${GANTT_DIR}/${RUN_NAME}_pipeline_gantt.png" \
         || echo "gantt render failed (non-fatal)"
       if [ -n "${GANTT_TMP}" ]; then
@@ -324,7 +413,34 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-if [ "${PP_RANKS}" -ne 0 ]; then
+if [ "${PP_4X4_HOSTS}" -ne 0 ]; then
+  # tt-run discovery binds two 4x4 meshes per host: it solves the descriptor (8 meshes for sc4, 2 for
+  # sc1) against the live cabling, so it picks the host ring order (the hostfile's order does not
+  # matter) and gives each rank its tray half's chips. Mock-checked on pod2 and pod6 against
+  # assemble_pipeline_binding.py predict: same halves per host, even meshes on the top half.
+  IFS=, read -r -a HOST_LIST <<< "${RESOLVED_HOSTS}"
+  [ "${#HOST_LIST[@]}" -eq "${PP_4X4_HOSTS}" ] || {
+    echo "${MODEL}/${CONFIG} requires exactly ${PP_4X4_HOSTS} cabled Galaxy hosts in ${TTRUN_DIR}/hostfile; got '${RESOLVED_HOSTS}'" >&2; exit 2;
+  }
+  if [ "${PP_4X4_HOSTS}" -eq 1 ]; then
+    MGD="${MGD_DIR%/ci}/pipeline_prefill_intragalaxy_2x4x4_sp1_mgd.textproto"
+  else
+    MGD="${MGD_DIR}/sc4_4x4_sp1_mgd.textproto"
+  fi
+  [ -f "${MGD}" ] || { echo "no mesh-graph descriptor for ${CONFIG} at ${MGD}" >&2; exit 2; }
+  # The stage shape comes from the manifest (the runner applies it under the launch line's exports);
+  # a manifest without it would bring 8x4 settings up on a 4x4 mesh.
+  LAYOUT_SOURCE="${LAYOUT_MANIFEST:-${MANIFEST}}"
+  [ "$(MANIFEST="${LAYOUT_SOURCE}" manifest_env PREFILL_SP_AXIS)" = 1 ] || { echo "${LAYOUT_SOURCE} does not set the 4x4 stage's PREFILL_SP_AXIS=1" >&2; exit 2; }
+  "${MPIRUN}" -np "${PP_4X4_HOSTS}" --host "$(printf '%s:1,' "${HOST_LIST[@]}" | sed 's/,$//')" --map-by slot \
+    --bind-to none --allow-run-as-root \
+    bash -lc "[ -n \"\$(ls -A '${PP_CACHE_DIR}' 2>/dev/null)\" ] || { echo \"\$(hostname): no 4x4 weight cache at ${PP_CACHE_DIR} (or set PREFILL_TTNN_CACHE)\" >&2; exit 1; }"
+  TTRUN_ARGS=(--force-rediscovery --mesh-graph-descriptor "${MGD}" --hosts "${RESOLVED_HOSTS}")
+  RUNNER_PLACEMENT=""
+  # Each producer rank reads its own stage's map (device_map_r<rank>.json); none can reach the others.
+  RUNNER_ENV+=" export PREFILL_MIGRATION_DEVICE_MAP_PATH='${MR_DIR}/device_map.json';"
+  PRODUCER_ENV+=" export PREFILL_MIGRATION_DEVICE_MAP_PATH='${MR_DIR}/device_map.json';"
+elif [ "${PP_RANKS}" -ne 0 ]; then
   # The CI controller has no chips: probe the allocated worker, and never reuse the template's
   # device IDs, since column enumeration is host-specific.
   [ -n "${RESOLVED_HOSTS}" ] && [[ "${RESOLVED_HOSTS}" != *,* ]] || {
@@ -367,8 +483,6 @@ setsid python3 "${TTRUN_PY}" \
     export PYTHONUNBUFFERED=1; \
     export PREFILL_MANIFEST='${MANIFEST}'; \
     export PREFILL_CHUNK_SIZE=${CHUNK_SIZE}; \
-    export PREFILL_SYNC_PER_CHUNK=1; \
-    export PREFILL_TIMING_DIR='${TIMING_DIR}'; \
     export PREFILL_ENABLE_MIGRATION=0; \
     export PREFILL_MIGRATION_TABLE_PATH='${TABLE_PATH}'; \
     ${RUNNER_OVERRIDES} \
@@ -378,6 +492,35 @@ setsid python3 "${TTRUN_PY}" \
     exec python3 -m models.demos.common.prefill.runners.prefill_runner" &
 RUNNER_PID=$!
 cd "${TT_METAL_HOME}"
+
+# A rank that dies leaves its peers blocked on it: mpirun waits for every rank, and a rank whose
+# device timed out can hang in teardown and never exit (run 40947298596 sat two hours after rank 1's
+# dispatch timeout until the job timeout killed the container, so the EXIT trap never copied the
+# rank logs). On the first uncaught exception in any rank or producer (the marker runner_utils'
+# install_crash_diagnostics prints; a handled exception's traceback does not count), give the other ranks a
+# grace period to write theirs, then stop both launches, killing a runner still alive 10 s after SIGTERM, as
+# cleanup() does; the script then fails through the EXIT trap as usual.
+RANK_CRASH_GRACE_SECS="${RANK_CRASH_GRACE_SECS:-60}"
+(
+  while kill -0 "${RUNNER_PID}" 2>/dev/null; do
+    CRASHED=$(find "${RANKLOGS}" -type f \( -name stderr -o -name '*.err' \) \
+      -exec grep -l -F "PREFILL_UNCAUGHT_EXCEPTION" {} + 2>/dev/null || true)
+    if [ -n "${CRASHED}" ]; then
+      printf '%s\n' "${CRASHED}" > "${CRASH_FLAG}"
+      echo "a rank crashed: ${CRASHED//$'\n'/ }; stopping all ranks in ${RANK_CRASH_GRACE_SECS}s" >&2
+      sleep "${RANK_CRASH_GRACE_SECS}"
+      kill -- "-${RUNNER_PID}" 2>/dev/null || true
+      timeout 10 tail --pid="${RUNNER_PID}" -f /dev/null 2>/dev/null || kill -KILL -- "-${RUNNER_PID}" 2>/dev/null || true
+      # The producer may not have launched yet; keep stopping it until the EXIT trap stops us.
+      while :; do
+        pkill -f -- "--output-filename ${RANKLOGS}/producer" 2>/dev/null || true
+        sleep 10
+      done
+    fi
+    sleep 10
+  done
+) &
+WATCHDOG_PID=$!
 
 # Bounds mesh bringup + weight load + warmup compile, not the chunk loop -- the table is published
 # once the runner starts serving. Scales with model depth, so it is sized for the deepest model on
@@ -390,28 +533,39 @@ TABLE_WAIT_SECS="${TABLE_WAIT_SECS:-${TABLE_WAIT_DEFAULT}}"
 WAITED=0
 while [ "${WAITED}" -lt "${TABLE_WAIT_SECS}" ]; do
   [ -f "${TABLE_PATH}" ] && break
-  kill -0 "${RUNNER_PID}" 2>/dev/null || { echo "runner exited before publishing the KV table"; wait "${RUNNER_PID}"; exit 1; }
-  if [ -n "${VARIANT}" ] && [ $((WAITED % 60)) -eq 0 ] && [ "${WAITED}" -gt 0 ]; then
-    CRASHED=$(find "${RANKLOGS}" -type f -name '*.err' 2>/dev/null \
-      -exec grep -l -F "Traceback (most recent call last)" {} + 2>/dev/null || true)
-    [ -z "${CRASHED}" ] || { echo "a rank crashed ${WAITED}s in, before the KV table was published: ${CRASHED}"; exit 1; }
-  fi
+  kill -0 "${RUNNER_PID}" 2>/dev/null || {
+    echo "runner exited before publishing the KV table"
+    [ -f "${CRASH_FLAG}" ] && echo "a rank crashed: $(tr '\n' ' ' < "${CRASH_FLAG}")"
+    wait "${RUNNER_PID}"; exit 1;
+  }
   sleep 5
   WAITED=$((WAITED + 5))
 done
 [ -f "${TABLE_PATH}" ] || { echo "KV table not published within ${TABLE_WAIT_SECS}s"; exit 1; }
 
 # A PP binding already fixed the rank count and host; only discovery has to parse them back out.
-if [ "${PP_RANKS}" -eq 0 ]; then
+if [ "${PP_RANKS}" -eq 0 ] || [ "${PP_4X4_HOSTS}" -ne 0 ]; then
   RANKFILE=$(ls -t "${TTRUN_CWD}"/generated/ttrun/*/rankfile 2>/dev/null | head -1)
   [ -f "${RANKFILE}" ] || { echo "tt-run rankfile not found under ${TTRUN_CWD}/generated/ttrun/*/rankfile"; exit 1; }
-  HOSTS=$(awk '/^rank[[:space:]]+[0-9]+=/ {n=$2; sub(/=.*/,"",n); h=$2; sub(/^[0-9]+=/,"",h); print n" "h}' "${RANKFILE}" | sort -n | awk '{printf "%s%s:1", (NR>1?",":""), $2}')
+  RANK_HOSTS=$(awk '/^rank[[:space:]]+[0-9]+=/ {n=$2; sub(/=.*/,"",n); h=$2; sub(/^[0-9]+=/,"",h); print n" "h}' "${RANKFILE}" | sort -n | awk '{print $2}')
+  # One --host entry per host with its rank count, in first-rank order.
+  HOSTS=$(printf '%s\n' "${RANK_HOSTS}" | awk 'NF && !($1 in n) {order[++k]=$1} NF {n[$1]++} END {for (i=1;i<=k;i++) printf "%s%s:%d", (i>1?",":""), order[i], n[order[i]]}')
   [ -n "${HOSTS}" ] || { echo "failed to parse producer host order from ${RANKFILE}"; exit 1; }
   echo "producer host order from tt-run discovery: ${HOSTS}"
-  EXPECTED_RANKS=$(printf '%s' "${HOSTS}" | tr ',' '\n' | grep -c .)
+  EXPECTED_RANKS=$(printf '%s\n' "${RANK_HOSTS}" | grep -c .)
+  if [ "${PP_RANKS}" -ne 0 ] && [ "${EXPECTED_RANKS}" -ne "${PP_RANKS}" ]; then
+    echo "tt-run discovery bound ${EXPECTED_RANKS} ranks; ${MODEL}/${CONFIG} needs ${PP_RANKS}"; exit 1
+  fi
+  # The binding tt-run solved, kept with the run's evidence.
+  BINDING="${RANKFILE%/*}/rank_bindings.yaml"
 fi
 
 PRODUCER_PLACEMENT=(-np "${EXPECTED_RANKS}" --map-by slot)
+# Producer rank r must share a host with runner rank r, which --map-by slot over HOSTS gives only
+# when each host's ranks are contiguous -- as tt-run binds a host's two 4x4 meshes.
+if [ "${PP_4X4_HOSTS}" -ne 0 ] && [ "$(printf '%s\n' "${RANK_HOSTS}" | uniq | wc -l)" -ne "${PP_4X4_HOSTS}" ]; then
+  echo "tt-run discovery interleaved hosts across ranks: ${RANK_HOSTS//$'\n'/ }"; exit 1
+fi
 if [ "${DFLASH}" = 1 ]; then
   mkdir -p "${TT_METAL_HOME}/generated/ttrun"
   cp "${RANKFILE}" "${TT_METAL_HOME}/generated/ttrun/producer_rankfile"
@@ -435,6 +589,65 @@ PY
     bash -lc "cd '${TT_METAL_HOME}'; export PYTHONPATH='${TT_METAL_HOME}'; exec python3 '${CHECK_PY}' '${TABLE_PATH}'"
 fi
 
+if [ -f "${CRASH_FLAG}" ]; then
+  echo "a rank crashed before the producer launched; tracebacks in: $(tr '\n' ' ' < "${CRASH_FLAG}")" >&2
+  exit 1
+fi
+
+# A hang that raises nothing -- no traceback for the crash watchdog, no op timeout -- otherwise runs to
+# the job timeout, which kills the container before the EXIT trap uploads a single rank log (run
+# 41537414509: all 8 GLM 4x4 ranks went silent in the first warmup chunk for two hours). Once the
+# request starts, the producer logs a push per chunk and the ranks keep writing, so no log growth for
+# PREFILL_STALL_SECS means the run is stuck. Then, before stopping it: every runner and producer prints
+# its Python stacks (faulthandler on SIGUSR1) into its rank log, and tt-triage dumps each host's devices
+# into TRIAGE_OUTPUT_DIR, which the job uploads. 0 disables it. Keep stall + triage under the leg's timeout.
+STALL_SECS="${PREFILL_STALL_SECS:-600}"
+STALL_TRIAGE_SECS="${PREFILL_STALL_TRIAGE_SECS:-600}"
+if [ "${STALL_SECS}" -gt 0 ]; then
+  (
+    # find fails until both paths exist, which pipefail and set -e would make fatal here.
+    log_bytes() { { find "${RANKLOGS}" "${PRODUCER_LOG}" -type f -printf '%s\n' 2>/dev/null || true; } | awk '{n += $1} END {print n + 0}'; }
+    on_hosts() {
+      IFS=, read -r -a STALL_HOSTS <<< "${RESOLVED_HOSTS}"
+      "${MPIRUN}" -np "${#STALL_HOSTS[@]}" --host "$(printf '%s:1,' "${STALL_HOSTS[@]}" | sed 's/,$//')" \
+        --map-by slot --bind-to none --tag-output --allow-run-as-root bash -lc "$1"
+    }
+    last=$(log_bytes)
+    since=$(date +%s)
+    while kill -0 "${RUNNER_PID}" 2>/dev/null; do
+      sleep 30
+      now=$(log_bytes)
+      if [ "${now}" != "${last}" ]; then
+        last=${now}
+        since=$(date +%s)
+        continue
+      fi
+      idle=$(($(date +%s) - since))
+      [ "${idle}" -ge "${STALL_SECS}" ] || continue
+      echo "STALL: no rank or producer log output for ${idle}s; collecting stacks and tt-triage, then stopping the run" >&2
+      echo "no log output for ${idle}s at $(date -u +%FT%TZ)" > "${STALL_FLAG}"
+      # Anchored on the interpreter, so the mpirun / bash wrappers whose command lines name the module
+      # are not signalled (SIGUSR1 would kill them).
+      on_hosts "pkill -USR1 -f '^python3 -m models.demos.common.prefill.runners.prefill_(runner|producer)' || true" \
+        || echo "stack dump signal failed (non-fatal)" >&2
+      sleep 15
+      on_hosts "D='${TRIAGE_OUTPUT_DIR:-${PREFILL_SUMMARIES}/triage}'/\$(hostname); mkdir -p \"\${D}\"; \
+        echo '${RUN_NAME}/${CONFIG} stall watchdog' > \"\${D}/job_info.txt\"; \
+        timeout ${STALL_TRIAGE_SECS} /opt/venv/bin/python3 '${TT_METAL_HOME}/tools/tt-triage.py' --disable-progress \
+          --triage-summary-path=\"\${D}/triage_summary.txt\" > \"\${D}/triage_output.txt\" 2>&1; \
+        echo \"tt-triage rc=\$? -> \${D}\"" \
+        || echo "tt-triage collection failed (non-fatal)" >&2
+      echo "stacks in the rank logs; tt-triage in ${TRIAGE_OUTPUT_DIR:-${PREFILL_SUMMARIES}/triage}" >> "${STALL_FLAG}"
+      kill -- "-${RUNNER_PID}" 2>/dev/null || true
+      while :; do
+        pkill -f -- "--output-filename ${RANKLOGS}/producer" 2>/dev/null || true
+        sleep 10
+      done
+    done
+  ) &
+  STALL_WATCHDOG_PID=$!
+fi
+
 set +e
 "${MPIRUN}" \
   --host "${HOSTS}" "${PRODUCER_PLACEMENT[@]}" --bind-to none --tag-output --allow-run-as-root \
@@ -445,6 +658,7 @@ set +e
     export PYTHONPATH=${CHILD_PYTHONPATH}; \
     export TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0; \
     export PYTHONUNBUFFERED=1; \
+    export OMP_NUM_THREADS=\$(nproc); \
     export PREFILL_CHUNK_SIZE=${CHUNK_SIZE}; \
     export PREFILL_MAX_SEQ_LEN=${MAX_SEQ_LEN}; \
     export PREFILL_NUM_USERS=${PRODUCER_USERS}; \
@@ -462,6 +676,15 @@ set +e
     exec python3 -m models.demos.common.prefill.runners.prefill_producer" 2>&1 | tee "${PRODUCER_LOG}"
 PROD_RC=${PIPESTATUS[0]}
 set -e
+
+if [ -f "${STALL_FLAG}" ]; then
+  echo "stopped by the stall watchdog (producer rc=${PROD_RC}): $(tr '\n' ' ' < "${STALL_FLAG}")" >&2
+  exit 1
+fi
+if [ "${PROD_RC}" -ne 0 ] && [ -f "${CRASH_FLAG}" ]; then
+  echo "stopped after a rank crashed (producer rc=${PROD_RC}); tracebacks in: $(tr '\n' ' ' < "${CRASH_FLAG}")" >&2
+  exit 1
+fi
 
 if [ "${DFLASH}" = 1 ] && [ "${PROD_RC}" -eq 0 ] && ! grep -q "min_dflash_pcc=" "${PRODUCER_LOG}"; then
   echo "no rank reported a drafter KV PCC: the dflash caches were never checked" >&2
@@ -493,7 +716,13 @@ if [ "${REQUIRE_TPS}" = 1 ] || [ -n "${EXPECTED_TPS}" ] || [ -f "${PERF_BASELINE
       *) echo "perf baseline WARN: power probe on ${RESOLVED_HOSTS%%,*} returned '${PERF_POWER}'" >&2; PERF_POWER="" ;;
     esac
   fi
-  python3 "${PERF_GATE}" \
+  # A crashed producer or runner still leaves a partial perf JSON, and its verdict must not mark the job
+  # non-retryable (CI_FAILURE_RECORDS, see models/common/ci_failure.py): only a complete run's verdict repeats.
+  GATE_ENV=()
+  if [ "${PROD_RC}" -ne 0 ] || [ "${RUNNER_RC}" -ne 0 ]; then
+    GATE_ENV=(-u CI_FAILURE_RECORDS)
+  fi
+  env ${GATE_ENV[@]+"${GATE_ENV[@]}"} python3 "${PERF_GATE}" \
     "${PREFILL_SUMMARIES}/perf_json/${RUN_NAME}_${CONFIG}.json" \
     --table "${PERF_BASELINES}" --model "${MODEL}" --config "${CONFIG}" --power "${PERF_POWER}" \
     --expected-tps "${EXPECTED_TPS}" --margin "${PREFILL_PERF_MARGIN:-}" \

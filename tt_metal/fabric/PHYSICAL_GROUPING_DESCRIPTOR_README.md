@@ -8,8 +8,8 @@ A Physical Grouping Descriptor specifies the hierarchical structure of physical 
 
 ### Where to look
 - Schema: [`tt_metal/fabric/protobuf/physical_grouping_descriptor.proto`](protobuf/physical_grouping_descriptor.proto)
-- Example textproto: [`tests/tt_metal/tt_fabric/physical_groupings/3_pod_16x8_bh_galaxy_physical_groupings.textproto`](../../tests/tt_metal/tt_fabric/physical_groupings/3_pod_16x8_bh_galaxy_physical_groupings.textproto)
-- C++ API: [`tt_metal/api/tt-metalium/experimental/fabric/physical_grouping_descriptor.hpp`](../../api/tt-metalium/experimental/fabric/physical_grouping_descriptor.hpp)
+- Example textproto: [`tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_rev_ab_physical_grouping_descriptor.textproto`](../../tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_rev_ab_physical_grouping_descriptor.textproto)
+- C++ API: [`tt_metal/api/tt-metalium/experimental/fabric/physical_grouping_descriptor.hpp`](../api/tt-metalium/experimental/fabric/physical_grouping_descriptor.hpp)
 - Tests: [`tests/tt_metal/tt_fabric/fabric_router/test_physical_grouping_descriptor.cpp`](../../tests/tt_metal/tt_fabric/fabric_router/test_physical_grouping_descriptor.cpp)
 
 ## Overview
@@ -592,7 +592,7 @@ Key test cases include:
 
 ## Examples
 
-See [`tests/tt_metal/tt_fabric/physical_groupings/examples/`](../../tests/tt_metal/tt_fabric/physical_groupings/examples/) for additional example files demonstrating different grouping patterns.
+See [`tests/tt_metal/tt_fabric/physical_groupings/`](../../tests/tt_metal/tt_fabric/physical_groupings/) for additional example files demonstrating different grouping patterns.
 
 ## Key Benefits
 
@@ -607,9 +607,12 @@ See [`tests/tt_metal/tt_fabric/physical_groupings/examples/`](../../tests/tt_met
 
 Physical grouping descriptor files are located in: `tests/tt_metal/tt_fabric/physical_groupings/`
 
-- **`3_pod_16x8_bh_galaxy_physical_groupings.textproto`**: Main configuration file for 3-pod 16x8 Blackhole Galaxy cluster
+- **`bh_galaxy_rev_ab_physical_grouping_descriptor.textproto`**: Blackhole Galaxy Rev A/B
+- **`wh_bh_rev_c_galaxy_physical_grouping_descriptor.textproto`**: Wormhole Galaxy and Blackhole Galaxy Rev C
+- **`wh_t3k_physical_grouping_descriptor.textproto`**: Wormhole T3K
+- **`default_physical_grouping_descriptor.textproto`**: Fallback used when no cluster-specific file matches
 - **`triple_16x8_quad_bh_galaxy_physical_groupings.textproto`**: Blitz pipelined 48-stage configuration
-- **`examples/`**: Directory containing example files demonstrating different grouping patterns
+- **`test_*.textproto`**: Inputs for the unit tests in `tests/tt_metal/tt_fabric/fabric_router/test_physical_grouping_descriptor.cpp`
 
 ## Schema Definition
 

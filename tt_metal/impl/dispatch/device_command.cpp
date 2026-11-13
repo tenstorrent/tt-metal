@@ -8,14 +8,13 @@
 
 #include <random>
 
-#include <tt_stl/aligned_allocator.hpp>
 #include <tt_stl/assert.hpp>
 #include "dispatch/dispatch_core_manager.hpp"
 #include "dispatch/dispatch_mem_map.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
 #include "dispatch/memcpy.hpp"
 #include "dispatch_settings.hpp"
-#include "tt_align.hpp"
+#include <tt-metalium/math.hpp>
 
 namespace tt::tt_metal {
 

@@ -7,7 +7,10 @@ import torch
 
 import ttnn
 from models.experimental.bevformer.model_config import (
+    BOX_CENTER,
     BOX_DTYPE,
+    BOX_VELOCITY,
+    CENTERS_FIRST,
     CODE_SIZE,
     CODE_XY,
     CODE_Z,
@@ -96,9 +99,11 @@ def test_nms_free_coder(device, reset_seeds, logits, batch_size, score_threshold
     cls_scores, bbox_preds = _head_outputs(LOGITS[logits], batch_size, torch.Generator().manual_seed(0))
     reference = NMSFreeCoder(score_threshold=score_threshold)
     tt_coder = TTNMSFreeCoder(device, score_threshold=score_threshold)
-    # The dtypes the head emits.
+    # The dtypes and box channel order the head emits.
     tt_cls_scores = ttnn.from_torch(cls_scores, dtype=SCORE_DTYPE, layout=ttnn.TILE_LAYOUT, device=device)
-    tt_bbox_preds = ttnn.from_torch(bbox_preds, dtype=BOX_DTYPE, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_bbox_preds = ttnn.from_torch(
+        bbox_preds[..., CENTERS_FIRST], dtype=BOX_DTYPE, layout=ttnn.TILE_LAYOUT, device=device
+    )
 
     tt_scores, tt_labels, tt_query_index, tt_boxes = (
         ttnn.to_torch(t) for t in tt_coder.topk(tt_cls_scores[-1], tt_bbox_preds[-1])
@@ -111,6 +116,10 @@ def test_nms_free_coder(device, reset_seeds, logits, batch_size, score_threshold
         assert_pcc(scores, tt_scores[i].float(), 0.99)
         torch.testing.assert_close(tt_scores[i].float(), scores, rtol=SCORE_RTOL, atol=0)
         assert_boxes_close(boxes, tt_boxes[i].float())
+        # The centers and velocities are gathered, not computed, so a lost bfloat16 part of the
+        # gather shows here while the PCC above still passes.
+        for channels in (BOX_CENTER, BOX_VELOCITY):
+            torch.testing.assert_close(tt_boxes[i][..., channels].float(), boxes[..., channels], rtol=0, atol=0)
 
     expected = reference.decode(cls_scores, bbox_preds)
     # The first decode compiles the range test; a second one must only hit the program cache.
@@ -136,7 +145,9 @@ def test_nms_free_coder_traced(device, reset_seeds, score_threshold):
     reference = NMSFreeCoder(score_threshold=score_threshold)
     tt_coder = TTNMSFreeCoder(device, score_threshold=score_threshold)
     tt_cls_scores = ttnn.from_torch(cls_scores, dtype=SCORE_DTYPE, layout=ttnn.TILE_LAYOUT, device=device)
-    tt_bbox_preds = ttnn.from_torch(bbox_preds, dtype=BOX_DTYPE, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_bbox_preds = ttnn.from_torch(
+        bbox_preds[..., CENTERS_FIRST], dtype=BOX_DTYPE, layout=ttnn.TILE_LAYOUT, device=device
+    )
 
     def run():
         scores, labels, _, boxes = tt_coder.topk(tt_cls_scores[-1], tt_bbox_preds[-1])

@@ -133,7 +133,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_ComputeHardwareConfigInversionAndEnumMapToInte
 
 TEST_F(ProgramSpecTestQuasar, CPU_UnpackToDestModePlacedAtDfbIdSlot) {
     // Regression test for the unpack_to_dest_mode sizing bug: the JIT consumer
-    // iterates hal::get_num_dataflow_buffers() slots, so BuildUnpackToDestModeVector
+    // iterates the device's num_dataflow_buffers() slots, so BuildUnpackToDestModeVector
     // must size the vector to that count and place each user-supplied mode at slot dfb_id.
     // Pre-fix code sized the vector to the number of DFBs, which produced silent
     // OOB reads downstream when num_dfbs < max_dfbs.
@@ -175,7 +175,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_UnpackToDestModePlacedAtDfbIdSlot) {
     const auto built_config_variant = consumer_kernel->config();
     const auto& built_config = std::get<experimental::quasar::QuasarComputeConfig>(built_config_variant);
 
-    EXPECT_EQ(built_config.unpack_to_dest_mode.size(), tt::tt_metal::hal::get_num_dataflow_buffers());
+    EXPECT_EQ(built_config.unpack_to_dest_mode.size(), env_->get_device_properties().num_dataflow_buffers());
     EXPECT_EQ(built_config.unpack_to_dest_mode[impl.get_dfb_handle("dfb_1")], UnpackToDestMode::UnpackToDestFp32);
     EXPECT_EQ(built_config.unpack_to_dest_mode[impl.get_dfb_handle("dfb_0")], UnpackToDestMode::Default);
 }

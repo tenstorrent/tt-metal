@@ -297,3 +297,48 @@ def test_moreh_mean_backward_callback(input_shape_dim, device):
 def test_moreh_mean_backward_create_input_grad(input_shape_dim, keepdim, create_input_grad, device):
     torch.manual_seed(2024)
     run_moreh_mean_backward(input_shape_dim, device, keepdim=keepdim, create_input_grad=create_input_grad)
+
+
+@pytest.mark.parametrize(
+    "input_shape, dim",
+    [
+        ([1, 1, TILE_HEIGHT, TILE_WIDTH], 3),
+        ([2, 3, TILE_HEIGHT * 2, TILE_WIDTH * 2], 2),
+        ([2, 3, TILE_HEIGHT * 2, TILE_WIDTH * 2], 3),
+        ([2, 3, TILE_HEIGHT * 2, TILE_WIDTH * 2], [2, 3]),
+        ([1, 1, TILE_HEIGHT * 2, 100], 3),
+        ([45, 22], 1),
+        ([3, 4, 5, 17, 22], 3),
+        ([3, 4, 5, 17, 22], [3, 4]),
+    ],
+)
+@pytest.mark.parametrize("output_grad_keepdim_shape", [False, True], ids=["squeezed", "keepdim_shaped"])
+@pytest.mark.parametrize("create_input_grad", [True, False])
+def test_moreh_mean_backward_keepdim_false_last_dims(
+    input_shape, dim, output_grad_keepdim_shape, create_input_grad, device
+):
+    """keepdim=False over one of the last two dims, with output_grad shaped as torch gives it (the reduced dims
+    dropped) and as the forward op returns it (the reduced dims kept as 1)."""
+    torch.manual_seed(2024)
+    torch_input = torch.rand(input_shape, requires_grad=True)
+    torch_output = torch.mean(torch_input, dim=dim, keepdim=False)
+    torch_output_grad = torch.rand(torch_output.shape).bfloat16().float()
+    torch_output.backward(torch_output_grad)
+    expected = torch_input.grad
+
+    output_grad = torch_output_grad
+    if output_grad_keepdim_shape:
+        output_grad = output_grad.reshape(torch.mean(torch_input, dim=dim, keepdim=True).shape)
+    ttnn_output_grad = create_ttnn_tilized_tensor(output_grad, device, ttnn.bfloat16)
+    if create_input_grad:
+        ttnn_input_grad = ttnn.operations.moreh.mean_backward(
+            ttnn_output_grad, dim=dim, keepdim=False, input_grad_shape=tuple(input_shape)
+        )
+    else:
+        ttnn_input_grad = create_ttnn_tilized_tensor(torch.empty(input_shape), device, ttnn.bfloat16)
+        ttnn.operations.moreh.mean_backward(ttnn_output_grad, dim=dim, keepdim=False, input_grad=ttnn_input_grad)
+    actual = ttnn.to_torch(ttnn_input_grad).float()
+
+    assert actual.shape == expected.shape
+    tolerance = 0.02 * expected.abs().max() + 0.02 * expected.abs()
+    assert ((actual - expected).abs() <= tolerance).all()

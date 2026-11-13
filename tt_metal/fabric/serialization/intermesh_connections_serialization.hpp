@@ -5,9 +5,6 @@
 #pragma once
 
 #include <vector>
-#include <tuple>
-#include <string>
-#include <utility>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 
 namespace tt::tt_fabric {

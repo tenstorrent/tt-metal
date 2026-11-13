@@ -20,6 +20,7 @@ from loguru import logger
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import mesh_shard_dims
 from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import COMPUTE_KERNEL_CONFIG_HIFI2
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.mtp_config import MTPConfig
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.utils import eh_proj_to_tt_layout
@@ -55,11 +56,6 @@ class TtFusedMTP(LightweightModule):
         it may be None only when the weights are loaded from ``weight_cache_path``.
         """
         super().__init__()
-        assert tp_axis == 1, (
-            f"tp_axis={tp_axis} unsupported: TtDistributedRmsNorm shards its weight with a hard-coded "
-            "dims=(None, 2) mapper (tt_distributed_rms_norm.py:_convert_and_cache_weight), so enorm/hnorm "
-            "shard over mesh columns whatever cluster_axis says. tp_axis=0 needs that fixed first."
-        )
         self.mesh_device = mesh_device
         self.mtp_config = mtp_config
         self.hidden_size = mtp_config.hidden_size
@@ -124,7 +120,7 @@ class TtFusedMTP(LightweightModule):
         With ``device=None`` this only writes cache files.
         """
         h = hidden_size
-        dims = (None, -2) if tp_axis == 1 else (-2, None)
+        dims = mesh_shard_dims(-2, tp_axis)
 
         def _to_ttnn(tensor: torch.Tensor, name: str) -> ttnn.Tensor:
             mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_device.shape, dims=dims)
@@ -175,7 +171,12 @@ class TtFusedMTP(LightweightModule):
         """Build the fused-MTP weight cache without copying anything to the device."""
         for name in ("enorm", "hnorm"):
             TtDistributedRmsNorm.build_ttnn_cache(
-                state_dict[name], mtp_config.hidden_size, mesh_device, cache_path, f"{cache_name_prefix}.{name}"
+                state_dict[name],
+                mtp_config.hidden_size,
+                mesh_device,
+                cache_path,
+                f"{cache_name_prefix}.{name}",
+                cluster_axis=tp_axis,
             )
         TtFusedMTP._convert_and_cache_eh_proj(
             state_dict["eh_proj"],

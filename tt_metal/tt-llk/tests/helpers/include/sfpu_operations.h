@@ -16,10 +16,10 @@
 // 1. Include the metal header below: #include "llk_sfpu/<operation>.h"
 // 2. Add the operation enum to SfpuType in llk_sfpu_types.h
 // 3. Add the if constexpr branches in call_unary_sfpu_operation_init() and call_unary_sfpu_operation() below
-#include "ckernel_sfpu_where.h"
 #include "llk_sfpu/ckernel_sfpu_abs.h"
 #include "llk_sfpu/ckernel_sfpu_activations.h"
 #include "llk_sfpu/ckernel_sfpu_add1.h"
+#include "llk_sfpu/ckernel_sfpu_add_int.h"
 #include "llk_sfpu/ckernel_sfpu_addcdiv.h"
 #include "llk_sfpu/ckernel_sfpu_addcmul.h"
 #include "llk_sfpu/ckernel_sfpu_atan2.h"
@@ -29,15 +29,14 @@
 #include "llk_sfpu/ckernel_sfpu_binary_fmod.h"
 #include "llk_sfpu/ckernel_sfpu_binary_max_min.h"
 #include "llk_sfpu/ckernel_sfpu_binary_remainder.h"
+#include "llk_sfpu/ckernel_sfpu_binop_with_unary.h"
 #include "llk_sfpu/ckernel_sfpu_bitwise_not.h"
 #include "llk_sfpu/ckernel_sfpu_cast_fp32_to_fp16a.h"
 #include "llk_sfpu/ckernel_sfpu_cbrt.h"
-#include "llk_sfpu/ckernel_sfpu_clamp.h"
-#include "llk_sfpu/ckernel_sfpu_copy_dest_values.h"
-#include "llk_sfpu/ckernel_sfpu_quant.h"
-#include "llk_sfpu/ckernel_sfpu_binop_with_unary.h"
 #include "llk_sfpu/ckernel_sfpu_celu.h"
+#include "llk_sfpu/ckernel_sfpu_clamp.h"
 #include "llk_sfpu/ckernel_sfpu_comp.h"
+#include "llk_sfpu/ckernel_sfpu_copy_dest_values.h"
 #include "llk_sfpu/ckernel_sfpu_digamma.h"
 #include "llk_sfpu/ckernel_sfpu_div_int32.h"
 #include "llk_sfpu/ckernel_sfpu_div_int32_floor.h"
@@ -61,6 +60,7 @@
 #include "llk_sfpu/ckernel_sfpu_i1.h"
 #include "llk_sfpu/ckernel_sfpu_identity.h"
 #include "llk_sfpu/ckernel_sfpu_isclose.h"
+#include "llk_sfpu/ckernel_sfpu_isinf_isnan.h"
 #include "llk_sfpu/ckernel_sfpu_lcm.h"
 #include "llk_sfpu/ckernel_sfpu_lerp.h"
 #include "llk_sfpu/ckernel_sfpu_lgamma.h"
@@ -76,10 +76,12 @@
 #include "llk_sfpu/ckernel_sfpu_negative.h"
 #include "llk_sfpu/ckernel_sfpu_polygamma.h"
 #include "llk_sfpu/ckernel_sfpu_prelu.h"
+#include "llk_sfpu/ckernel_sfpu_quant.h"
 #include "llk_sfpu/ckernel_sfpu_rdiv.h"
 #include "llk_sfpu/ckernel_sfpu_recip.h"
 #include "llk_sfpu/ckernel_sfpu_relu.h"
 #include "llk_sfpu/ckernel_sfpu_remainder.h"
+#include "llk_sfpu/ckernel_sfpu_rounding_ops.h"
 #include "llk_sfpu/ckernel_sfpu_rpow.h"
 #include "llk_sfpu/ckernel_sfpu_rsqrt.h"
 #include "llk_sfpu/ckernel_sfpu_rsub_int32.h"
@@ -92,14 +94,23 @@
 #include "llk_sfpu/ckernel_sfpu_silu.h"
 #include "llk_sfpu/ckernel_sfpu_snake_beta.h"
 #include "llk_sfpu/ckernel_sfpu_softplus.h"
+#ifndef SOFTPLUS_TEST_BETA
+#define SOFTPLUS_TEST_BETA       0x3f800000u /* beta = 1.0f */
+#define SOFTPLUS_TEST_BETA_RECIP 0x3f800000u /* 1/beta = 1.0f */
+#endif
+#ifndef SOFTPLUS_TEST_THRESHOLD
+#define SOFTPLUS_TEST_THRESHOLD 0x41a00000u /* threshold = 20.0f */
+#endif
 #include "llk_sfpu/ckernel_sfpu_softshrink.h"
 #include "llk_sfpu/ckernel_sfpu_softsign.h"
 #include "llk_sfpu/ckernel_sfpu_sqrt.h"
 #include "llk_sfpu/ckernel_sfpu_sqrt_custom.h"
 #include "llk_sfpu/ckernel_sfpu_square.h"
+#include "llk_sfpu/ckernel_sfpu_sub_int.h"
 #include "llk_sfpu/ckernel_sfpu_tanh.h"
 #include "llk_sfpu/ckernel_sfpu_tanh_derivative.h"
 #include "llk_sfpu/ckernel_sfpu_tanhshrink.h"
+#include "llk_sfpu/ckernel_sfpu_threshold.h"
 #include "llk_sfpu/ckernel_sfpu_topk.h"
 #include "llk_sfpu/ckernel_sfpu_trigonometry.h"
 #include "llk_sfpu/ckernel_sfpu_typecast.h"
@@ -107,12 +118,8 @@
 #include "llk_sfpu/ckernel_sfpu_unary_max_min.h"
 #include "llk_sfpu/ckernel_sfpu_unary_power.h"
 #include "llk_sfpu/ckernel_sfpu_unary_shift.h"
+#include "llk_sfpu/ckernel_sfpu_where.h"
 #include "llk_sfpu/ckernel_sfpu_xielu.h"
-#include "sfpu/ckernel_sfpu_add_int.h"
-#include "sfpu/ckernel_sfpu_isinf_isnan.h"
-#include "sfpu/ckernel_sfpu_rounding_ops.h"
-#include "sfpu/ckernel_sfpu_sub_int.h"
-#include "sfpu/ckernel_sfpu_threshold.h"
 
 // Test-only SFPU loop/adapter wrappers (calculate_sqrt_custom, calculate_expm1_cw,
 // calculate_mask_binary) used by the dispatch below.
@@ -1625,9 +1632,9 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
             (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS),
             dst_index,
             vector_mode,
-            0x3f800000u /* beta = 1.0f */,
-            0x3f800000u /* 1/beta = 1.0f */,
-            0x41a00000u /* threshold = 20.0f */);
+            SOFTPLUS_TEST_BETA,
+            SOFTPLUS_TEST_BETA_RECIP,
+            SOFTPLUS_TEST_THRESHOLD);
     }
     else if constexpr (OPERATION == SfpuType::sigmoid_appx)
     {

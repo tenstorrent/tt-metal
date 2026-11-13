@@ -102,7 +102,7 @@
     fi
   skus:
     bh_sc4:
-      timeout: 60
+      timeout: 40
   owner_id: U0845EV7A5U # Umair Cheema
   team: scaleout
   budget_type: e2e
@@ -429,6 +429,57 @@
   skus:
     bh_sc4:
       timeout: 10
+  owner_id: U08UBDUKH6Z # Neel Nyamagoudar
+  team: scaleout
+  budget_type: e2e
+  sp_config: sc4
+  release_ready: false
+
+# Per-mesh heterogeneous fabric config on the multihost SC4 cluster. The
+# llama8b-audio 4-mesh line MGD's dim_types imply a different config per mesh
+# (4x8 meshes -> FABRIC_2D_TORUS_Y, 4x2 meshes -> FABRIC_2D); the dedicated heterogeneous yaml's groups
+# (no topology specified) make each process run its own mesh's config. HW counterpart of
+# the CPU-only ControlPlaneFixture.TestLlamaLinePerMeshFabricConfig unit test,
+# and the SC4 analog of galaxy-fabric-per-mesh-torus-yx. --filter 'name.HeterogeneousFabric*' runs every per-mesh group:
+# unicast neighbor_exchange + all_to_all (intra & inter mesh) plus multicast all_to_all (intra only).
+- name: "Fabric per-mesh heterogeneous-config sanity (SC4)"
+  cmd: |
+    MGD="${TT_METAL_HOME}/tests/tt_metal/tt_fabric/custom_mesh_descriptors/llama8b_audio_4mesh_line_mesh_graph_descriptor.textproto"
+    FABRIC_BIN="${TT_METAL_HOME}/build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric"
+    FABRIC_CFG="${TT_METAL_HOME}/tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_per_mesh_heterogeneous.yaml"
+    mkdir -p "${PIPELINE_DIR}/ranklogs" "${TTRUN_CWD}"
+    RESOLVED_HOSTS=$(awk 'NF {printf "%s,", $1}' /etc/ttop/hostfile | sed 's/,$//')
+    test -f "${TTRUN_PY}" || { echo "ERROR: missing ${TTRUN_PY}"; exit 1; }
+    test -f "${MGD}" || { echo "ERROR: missing ${MGD}"; exit 1; }
+    test -x "${FABRIC_BIN}" || { echo "ERROR: missing ${FABRIC_BIN}"; exit 1; }
+    test -f "${FABRIC_CFG}" || { echo "ERROR: missing ${FABRIC_CFG}"; exit 1; }
+
+    cd "${TTRUN_CWD}"
+    LOG="${PIPELINE_DIR}/permesh_heterogeneous.log"
+    # tt_run.py does NOT propagate the test binary's exit code (an mpirun SIGABRT
+    # from a TT_THROW returns 0), so assert test_tt_fabric's own success marker
+    # rather than trusting the shell exit status.
+    python3 "${TTRUN_PY}" \
+      --skip-executable-check \
+      --tcp-interface ens5f0np0 \
+      --mesh-graph-descriptor "${MGD}" \
+      --hosts "${RESOLVED_HOSTS}" \
+      --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
+      "${FABRIC_BIN}" \
+      --test_config "${FABRIC_CFG}" \
+      --filter 'name.HeterogeneousFabric*' 2>&1 | tee "${LOG}"
+    if grep -qiE "Boundary exceeded|exited on signal|caught signal|signal 6|Aborted|terminate called|what\(\):|\bFATAL\b" "${LOG}"; then
+      echo "::error::per-mesh heterogeneous run crashed/aborted"; exit 1
+    fi
+    if grep -qE "Tests: [0-9]+ executed, [1-9][0-9]* failed|Result: FAILED" "${LOG}"; then
+      echo "::error::per-mesh heterogeneous run reported test failures"; exit 1
+    fi
+    if ! grep -q "All tests completed successfully" "${LOG}"; then
+      echo "::error::per-mesh heterogeneous run did not reach the success marker (incomplete/crashed)"; exit 1
+    fi
+  skus:
+    bh_sc4:
+      timeout: 20
   owner_id: U08UBDUKH6Z # Neel Nyamagoudar
   team: scaleout
   budget_type: e2e

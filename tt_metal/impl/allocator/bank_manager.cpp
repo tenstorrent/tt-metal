@@ -7,18 +7,16 @@
 #include <enchantum/enchantum.hpp>
 #include <tt-metalium/allocator.hpp>
 #include "allocator_state.hpp"
-#include <limits>
 #include <string>
-#include <string_view>
 #include <utility>
 #include <algorithm>
 
 #include "allocator/algorithms/allocator_algorithm.hpp"
 #include <tt_stl/assert.hpp>
 #include "buffer_types.hpp"
-#include "impl/context/metal_context.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "tt_metal/impl/allocator/algorithms/free_list_opt.hpp"
+#include "tt_metal/impl/allocator/algorithms/address_ranges.hpp"
 
 namespace tt::tt_metal {
 
@@ -263,23 +261,7 @@ std::vector<std::pair<DeviceAddr, DeviceAddr>> BankManager::merge_allocated_rang
         }
     }
 
-    // Sort allocated ranges across all dependent allocators by start address
-    std::sort(all_allocated_ranges.begin(), all_allocated_ranges.end(), [](const auto& a, const auto& b) {
-        return a.first < b.first;
-    });
-
-    // Coalesce overlaps across all dependent allocators
-    std::vector<std::pair<DeviceAddr, DeviceAddr>> coalesced_ranges;
-    coalesced_ranges.reserve(all_allocated_ranges.size());
-    for (const auto& r : all_allocated_ranges) {
-        if (coalesced_ranges.empty() || r.first > coalesced_ranges.back().second) {
-            coalesced_ranges.push_back(r);
-        } else {
-            coalesced_ranges.back().second = std::max(coalesced_ranges.back().second, r.second);
-        }
-    }
-
-    return coalesced_ranges;
+    return allocator::coalesce(std::move(all_allocated_ranges));
 }
 
 const std::vector<std::pair<DeviceAddr, DeviceAddr>>& BankManager::compute_merged_allocated_ranges(
@@ -329,27 +311,9 @@ std::vector<std::pair<DeviceAddr, DeviceAddr>> BankManager::compute_available_ad
     auto* alloc = this->get_allocator_from_id(allocator_id);
     TT_FATAL(alloc, "Allocator not initialized!");
 
-    // Helper for clamping ranges in-place according to address_limit
-    // This is needed because the allocator's available_addresses method does not clamp to address_limit
-    auto clamp_ranges = [address_limit](std::vector<std::pair<DeviceAddr, DeviceAddr>>& ranges) {
-        if (address_limit == 0) {
-            return;
-        }
-
-        // First pass: clamp ranges in-place
-        for (auto& r : ranges) {
-            r.first = std::max(r.first, address_limit);
-        }
-
-        // Second pass: remove empty ranges (where r.second <= r.first)
-        ranges.erase(
-            std::remove_if(ranges.begin(), ranges.end(), [](const auto& r) { return r.second <= r.first; }),
-            ranges.end());
-    };
-
-    // Current allocator's available ranges (clamped if needed)
+    // available_addresses includes addresses below address_limit
     std::vector<std::pair<DeviceAddr, DeviceAddr>> available_ranges = alloc->available_addresses(size_per_bank);
-    clamp_ranges(available_ranges);
+    allocator::trim_below(available_ranges, address_limit);
     std::sort(available_ranges.begin(), available_ranges.end(), [](const auto& a, const auto& b) {
         return a.first < b.first;
     });
@@ -363,95 +327,13 @@ std::vector<std::pair<DeviceAddr, DeviceAddr>> BankManager::compute_available_ad
     const auto& allocated_ranges_in_dependent_allocators =
         scoped_dependent_allocators.has_value() ? scoped_ranges : this->compute_merged_allocated_ranges(allocator_id);
 
-    // Helper for subtracting allocated ranges from available ranges
-    // Ranges consist of half-open intervals throughout: [start, end)
-    // Assumptions:
-    // - Each of 'available_ranges' and 'allocated_ranges' is individually sorted by start and internally
-    // non-overlapping
-    // Strategy:
-    // - Two-pointer sweep: advance a single shared pointer 'j' through allocated ranges across all available ranges.
-    //   Complexity O(|available_ranges| + |allocated_ranges|).
-    // Example:
-    //   available_ranges = [(10, 30)], allocated_ranges = [(12, 15), (18, 25)]
-    //   result           = [(10, 12), (15, 18), (25, 30)]
-    auto subtract_ranges = [](const std::vector<std::pair<DeviceAddr, DeviceAddr>>& available_ranges,
-                              const std::vector<std::pair<DeviceAddr, DeviceAddr>>& allocated_ranges) {
-        std::vector<std::pair<DeviceAddr, DeviceAddr>> out;
-        out.reserve(available_ranges.size());
-
-        // Monotonic pointer to scan all allocated ranges; we don't reset the pointer after each available range
-        // This assumes available and allocated ranges are sorted and non-overlapping
-        size_t j = 0;
-        for (const auto& available : available_ranges) {
-            DeviceAddr available_start = available.first;
-            DeviceAddr available_end = available.second;
-            // 1) Skip allocated ranges that are completely to the left of available range
-            //    available:            [s --- e)
-            //    allocated: [s --- e)
-            while (j < allocated_ranges.size() && allocated_ranges[j].second <= available_start) {
-                j++;
-            }
-
-            DeviceAddr cur_available_start = available_start;
-            // 2) Scan allocated ranges that might overlap current available range
-            //    Loop until we hit allocated ranges that are to the right of available range
-            //    ie. stop until we hit ranges like this:
-            //    available: [s --- e)
-            //    allocated:            [s --- e)
-            while (j < allocated_ranges.size() && allocated_ranges[j].first < available_end) {
-                DeviceAddr allocated_start = allocated_ranges[j].first;
-                DeviceAddr allocated_end = allocated_ranges[j].second;
-                // Case A: Gap exists before the allocated range
-                //   available: [cur --- e)
-                //   allocated:   [s ---
-                //   -> Keep free gap: [cur, allocated_s)
-                if (allocated_start > cur_available_start) {
-                    out.emplace_back(cur_available_start, allocated_start);
-                }
-                // Case B: The allocated range overlaps with rest of available range
-                //   available: [cur ----- e)
-                //   allocated:     [s ----- e)
-                //   -> No remaining free space in [cur, e). Update cur_available_start to available_end and break
-                if (allocated_end >= available_end) {
-                    cur_available_start = available_end;
-                    break;
-                }
-                // Case C: The allocated range ends before the end of available range
-                //   available: [cur ----- e)
-                //   allocated:   [s --- e)
-                //   -> Update cur_available_start to the end of allocated range
-                //      We continue scanning the next allocated range and emit any remaining free space at the tail
-                cur_available_start = allocated_end;
-                j++;
-            }
-            // 3) Emit remaining tail (if any) after scanning all allocated ranges
-            if (cur_available_start < available_end) {
-                out.emplace_back(cur_available_start, available_end);
-            }
-        }
-        return out;
-    };
-
     std::vector<std::pair<DeviceAddr, DeviceAddr>> updated_available_ranges =
-        subtract_ranges(available_ranges, allocated_ranges_in_dependent_allocators);
+        allocator::set_difference(available_ranges, allocated_ranges_in_dependent_allocators);
 
     // Also subtract additional occupied ranges (e.g., from device-level per-bank allocators passed at allocation time)
     if (!additional_occupied_ranges.empty()) {
-        // Sort and coalesce additional ranges before subtracting
-        auto sorted_additional = additional_occupied_ranges;
-        std::sort(sorted_additional.begin(), sorted_additional.end(), [](const auto& a, const auto& b) {
-            return a.first < b.first;
-        });
-        std::vector<std::pair<DeviceAddr, DeviceAddr>> coalesced;
-        coalesced.reserve(sorted_additional.size());
-        for (const auto& r : sorted_additional) {
-            if (coalesced.empty() || r.first > coalesced.back().second) {
-                coalesced.push_back(r);
-            } else {
-                coalesced.back().second = std::max(coalesced.back().second, r.second);
-            }
-        }
-        updated_available_ranges = subtract_ranges(updated_available_ranges, coalesced);
+        updated_available_ranges =
+            allocator::set_difference(updated_available_ranges, allocator::coalesce(additional_occupied_ranges));
     }
 
     return updated_available_ranges;
@@ -493,7 +375,7 @@ uint64_t BankManager::allocate_buffer(
     const auto& dependent_allocators = allocator_dependencies_.dependencies[allocator_id.get()];
 
     // If using single allocator strategy, Algorithm::allocate handles address limit, which means it can only be used
-    // with top-down allocation. Otherwise, address limit is used to clamp the available ranges regardless of bottom_up
+    // with top-down allocation. Otherwise, address limit is used to trim the available ranges regardless of bottom_up
     // vs. top-down allocation
     if (dependent_allocators.empty()) {
         auto address = alloc->allocate(size_per_bank, bottom_up, address_limit);
@@ -533,29 +415,8 @@ uint64_t BankManager::allocate_buffer(
     std::vector<std::pair<DeviceAddr, DeviceAddr>> available_ranges = this->compute_available_addresses(
         allocator_id, size_per_bank, address_limit, additional_occupied_ranges, scoped_dependent_allocators);
 
-    // Choose an address from the allowed ranges respecting alignment and direction
     // Addresses should already be aligned to alignment_bytes_
-    std::optional<DeviceAddr> chosen;
-    if (bottom_up) {
-        for (const auto& r : available_ranges) {
-            DeviceAddr s = r.first;
-            if (s + size_per_bank <= r.second) {
-                chosen = s;
-                break;
-            }
-        }
-    } else {
-        for (ssize_t i = static_cast<ssize_t>(available_ranges.size()) - 1; i >= 0; --i) {
-            const auto& r = available_ranges[static_cast<size_t>(i)];
-            // Test the window's width rather than forming r.second - size_per_bank first: DeviceAddr
-            // is unsigned, so a request wider than r.second wraps to a huge value that compares
-            // >= r.first, and the allocation "succeeds" at a nonsense address instead of reporting.
-            if (r.second - r.first >= size_per_bank) {
-                chosen = r.second - size_per_bank;
-                break;
-            }
-        }
-    }
+    std::optional<DeviceAddr> chosen = allocator::first_fit(available_ranges, size_per_bank, bottom_up);
 
     if (!chosen.has_value()) {
         auto mem_stats = alloc->get_statistics();

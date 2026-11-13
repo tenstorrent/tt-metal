@@ -22,7 +22,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     routed_expert_combine_overlap_arg,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import TtMoe
-from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
+from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, gate_bias_centered
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import (
     DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE,
     ROUTED_EXPERT_ACTIVATION_BY_NAME,
@@ -127,6 +127,7 @@ class TtPrefillBlock(LightweightModule):
                 not in (None, getattr(model_cfg, "EMB_SIZE", None)),
                 latent_use_norm=getattr(model_cfg, "LATENT_MOE_USE_NORM", True),
                 routed_expert_weights_dtype=routed_expert_weights_dtype,
+                gate_bias_centered=gate_bias_centered(model_cfg),
             ):
                 return False
 
@@ -152,6 +153,7 @@ class TtPrefillBlock(LightweightModule):
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat8_b,
         kv_only: bool = False,
+        use_fused_rmsnorm: Optional[bool] = None,
     ):
         """
         Build TTNN cache for this block (norms + MLA + FFN/MoE) without device copy.
@@ -177,9 +179,12 @@ class TtPrefillBlock(LightweightModule):
             mesh_device=mesh_device,
             cache_path=cache_path,
             cache_name_prefix=f"layer_{layer_idx}.attn_norm",
+            cluster_axis=tp_axis,
         )
 
         # Build MLA cache
+        if use_fused_rmsnorm is None:
+            use_fused_rmsnorm = getattr(model_cfg, "USE_FUSED_PREFILL_RMSNORM", False) and is_blackhole()
         ttMLA.build_ttnn_cache(
             state_dict=state_dict.get("mla_weights", {}),
             cache_path=cache_path,
@@ -190,6 +195,7 @@ class TtPrefillBlock(LightweightModule):
             sp_axis=sp_axis,
             tp_axis=tp_axis,
             kv_only=kv_only,
+            use_fused_rmsnorm=use_fused_rmsnorm,
         )
 
         if kv_only:
@@ -204,12 +210,13 @@ class TtPrefillBlock(LightweightModule):
             mesh_device=mesh_device,
             cache_path=cache_path,
             cache_name_prefix=f"layer_{layer_idx}.ffn_norm",
+            cluster_axis=tp_axis,
         )
 
         # Build FFN or MoE cache
         if is_moe:
             # Use static method (no device copy!)
-            mesh_config = extract_mesh_config(mesh_device)
+            mesh_config = extract_mesh_config(mesh_device, sp_axis)
             sp_factor = mesh_device.shape[sp_axis]
             seq_len_per_chip = seq_len // sp_factor
             experts_per_chip, _, _, _ = compute_constants(
@@ -239,6 +246,8 @@ class TtPrefillBlock(LightweightModule):
                 routed_emb_dim=getattr(model_cfg, "ROUTED_EXPERT_HIDDEN_SIZE", None),
                 latent_weights=state_dict.get("latent_weights"),
                 latent_use_norm=getattr(model_cfg, "LATENT_MOE_USE_NORM", True),
+                gate_bias_centered=gate_bias_centered(model_cfg),
+                sp_axis=sp_axis,
             )
         else:
             # Use static method (no device copy!)
@@ -247,6 +256,7 @@ class TtPrefillBlock(LightweightModule):
                 mesh_device=mesh_device,
                 cache_path=cache_path,
                 cache_name_prefix=f"layer_{layer_idx}.ffn",
+                tp_axis=tp_axis,
             )
 
         logger.info(f"Cache built for layer {layer_idx}")
@@ -276,6 +286,7 @@ class TtPrefillBlock(LightweightModule):
         layer_num: Optional[int] = None,
         max_seq_len: Optional[int] = None,
         kv_only: bool = False,
+        next_kv_only: bool = False,
         routing_use_l1_small_for_semaphores: bool = False,
         tp_shard_kv: Optional[bool] = None,
         sparse_kv_cache_format: MlaKvCacheFormat = MlaKvCacheFormat.BF16_RM,
@@ -295,18 +306,20 @@ class TtPrefillBlock(LightweightModule):
         assert not is_chunked or layer_num is not None, "chunked prefill requires layer_num (model layer count)"
         self.mesh_device = mesh_device
         self.num_links = num_links
-        # Per-axis CCL topology. A (row=SP-axis-0, col=TP-axis-1) tuple configures each mesh
-        # axis independently; a scalar applies to both. FABRIC_2D_TORUS_Y wraps ONLY the SP
-        # axis into a ring, so TP-axis collectives (RMS-norm, MLA, dense-FFN all-gather — all
+        # Per-axis CCL topology. A (mesh axis 0, mesh axis 1) tuple configures each mesh axis
+        # independently; a scalar applies to both. The single-axis torus fabrics wrap ONLY the SP
+        # axis into a ring (FABRIC_2D_TORUS_Y when SP is on mesh axis 0, FABRIC_2D_TORUS_X on a 4x4
+        # stage where SP is on axis 1), so TP-axis collectives (RMS-norm, MLA, dense-FFN all-gather — all
         # on cluster_axis=tp_axis) must stay Linear even when the SP-axis MoE dispatch/combine
         # run Ring. Applying Ring to the unwrapped TP axis deadlocks: get_usable_topology keeps
         # Ring (the coords span the axis) and the all-gather waits forever on a wrap link that
         # has no physical fabric edge. MoE receives the full `topology` and splits row/col itself.
         assert (
             not isinstance(topology, tuple) or len(topology) == 2
-        ), f"per-axis topology must be a 2-tuple (sp_axis_0, tp_axis_1), got {topology!r}"
-        tp_topology = topology[1] if isinstance(topology, tuple) else topology
-        self.topology = tp_topology  # forward()'s dense-FFN all-gather is on the TP axis (cluster_axis=1)
+        ), f"per-axis topology must be a 2-tuple (mesh axis 0, mesh axis 1), got {topology!r}"
+        tp_topology = topology[tp_axis] if isinstance(topology, tuple) else topology
+        self.topology = tp_topology  # forward()'s dense-FFN all-gather is on the TP axis
+        self.tp_axis = tp_axis
         self.kv_only = kv_only
         self.is_moe = layer_idx >= model_cfg.NUM_DENSE_LAYERS
 
@@ -376,10 +389,12 @@ class TtPrefillBlock(LightweightModule):
             slot_num=slot_num,
             layer_num=layer_num,
             kv_only=kv_only,
+            next_kv_only=next_kv_only,
             sparse_kv_cache_format=sparse_kv_cache_format,
             first_layer_idx=first_layer_idx,
             llama4_scale_cache=llama4_scale_cache,
             tp_shard_kv=tp_shard_kv,
+            use_fused_rmsnorm=use_fused_rmsnorm,
         )
 
         if kv_only:
@@ -439,6 +454,7 @@ class TtPrefillBlock(LightweightModule):
                 emb_dim=emb_dim,
                 num_links=num_links,
                 topology=tp_topology,  # dense FFN all-gather/reduce-scatter run on the TP axis
+                tp_axis=tp_axis,
                 weight_cache_path=weight_cache_path,
                 cache_name_prefix=f"layer_{layer_idx}.ffn",
                 # Same rule as the MoE shared expert in _build_moe: only Kimi-K3 names a
@@ -473,7 +489,7 @@ class TtPrefillBlock(LightweightModule):
         is_balanced=False,
         overlap_shared_expert_with_dispatch=True,
     ):
-        mesh_config = extract_mesh_config(mesh_device)
+        mesh_config = extract_mesh_config(mesh_device, sp_axis)
         sp_factor = mesh_device.shape[sp_axis]
         seq_len_per_chip = seq_len // sp_factor
 
@@ -520,8 +536,8 @@ class TtPrefillBlock(LightweightModule):
             overlap_routed_expert_with_combine=routed_expert_combine_overlap_arg(model_cfg),
             # Likewise only configs that opt in (Kimi K2.7, GLM 5.3) run dispatch_fabric2d / combine_fabric2d.
             moe_transport=moe_transport_arg(model_cfg),
-            combine_fwd_reduction=getattr(model_cfg, "COMBINE_FWD_REDUCTION", None),
-            dispatch_fwd_vc_pages=getattr(model_cfg, "DISPATCH_FWD_VC_PAGES", None),
+            dispatch_fwd_vc_pages=model_cfg.MOE_FWD_VC_PAGES,
+            combine_fwd_vc_pages=model_cfg.MOE_FWD_VC_PAGES,
             num_links=num_links,
             topology=topology,
             routed_expert_weights=state_dict.get("routed_expert_weights"),  # None if cache exists
@@ -543,6 +559,7 @@ class TtPrefillBlock(LightweightModule):
             # Only DeepSeek-V4 names one; None keeps the gate config's sigmoid default.
             gate_score_func=getattr(model_cfg, "SCORE_FUNC", None),
             gate_weights=state_dict.get("gate_weights"),  # None if cache exists
+            gate_bias_centered=gate_bias_centered(model_cfg),
             # DeepSeek-V4 hash layers route via a frozen tid2eid[input_ids] table; None elsewhere.
             gate_hash_table=state_dict.get("hash_table"),
             gate_fallback_mode=gate_fallback_mode,
@@ -554,6 +571,7 @@ class TtPrefillBlock(LightweightModule):
             overlap_shared_expert_with_dispatch=overlap_shared_expert_with_dispatch,
             routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
             is_balanced=is_balanced,
+            sp_axis=sp_axis,
         )
 
     def set_trace_controller(self, controller):
@@ -721,12 +739,16 @@ class TtPrefillBlock(LightweightModule):
         )
 
         if kv_only:
-            kv_cache = ttMLA.kv_cache_to_host(kvpe_cache, self.mesh_device) if return_kv_cache else None
+            kv_cache = (
+                ttMLA.kv_cache_to_host(kvpe_cache, self.mesh_device, sp_axis=self.mla.sp_axis)
+                if return_kv_cache
+                else None
+            )
             if return_indexer_indices:
                 return None, kv_cache, None
             return None, kv_cache
 
-        x = ttnn.add(x, mla_out)
+        x = ttnn.add(x, mla_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(mla_out)
         if _timing:
             ttnn.synchronize_device(self.mesh_device)
@@ -741,6 +763,7 @@ class TtPrefillBlock(LightweightModule):
             # post_attention_layernorm output (the FFN norm), TP-sharded on hidden.
             kv_intermediates["post_attn_norm"] = ttnn.clone(ffn_norm_out)
 
+        fold_residual = self.is_moe and not return_intermediates
         if self.is_moe:
             ffn_out = self._moe_path(
                 ffn_norm_out,
@@ -750,13 +773,18 @@ class TtPrefillBlock(LightweightModule):
                 actual_start=actual_start,
                 metadata=metadata,
                 cache_user_id=cache_user_id,
+                residual=x if fold_residual else None,
             )
         else:
             ffn_out = self._dense_ffn_path(ffn_norm_out)
 
         ttnn.deallocate(ffn_norm_out)
-        x = ttnn.add(x, ffn_out)
-        ttnn.deallocate(ffn_out)
+        if fold_residual:
+            ttnn.deallocate(x)
+            x = ffn_out
+        else:
+            x = ttnn.add(x, ffn_out)
+            ttnn.deallocate(ffn_out)
         if _timing:
             ttnn.synchronize_device(self.mesh_device)
             _t_ffn = time.perf_counter()
@@ -775,7 +803,9 @@ class TtPrefillBlock(LightweightModule):
                 return x, kv_intermediates, mla_indices
             return x, kv_intermediates
 
-        kv_cache = ttMLA.kv_cache_to_host(kvpe_cache, self.mesh_device) if return_kv_cache else None
+        kv_cache = (
+            ttMLA.kv_cache_to_host(kvpe_cache, self.mesh_device, sp_axis=self.mla.sp_axis) if return_kv_cache else None
+        )
         if return_indexer_indices:
             return x, kv_cache, mla_indices
         return x, kv_cache
@@ -789,6 +819,7 @@ class TtPrefillBlock(LightweightModule):
         actual_start: Optional[int] = None,
         metadata: Optional[ttnn.Tensor] = None,
         cache_user_id: int = 0,
+        residual: Optional[ttnn.Tensor] = None,
     ) -> ttnn.Tensor:
         """MoE FFN path: 4D TILE → 3D TILE → MoE → 3D TILE → 4D TILE.
 
@@ -805,6 +836,7 @@ class TtPrefillBlock(LightweightModule):
             metadata=metadata,
             # Only consumed by the env-gated routing dump, which names its files by KV slot.
             cache_user_id=cache_user_id,
+            residual=None if residual is None else ttnn.squeeze(residual, dim=0),
         )
 
         moe_out = ttnn.unsqueeze(moe_out, dim=0)
@@ -812,11 +844,11 @@ class TtPrefillBlock(LightweightModule):
 
     def _dense_ffn_path(self, ffn_norm_out: ttnn.Tensor) -> ttnn.Tensor:
         """Dense FFN path: all_gather to get full emb_dim → TtFfn (does reduce_scatter internally)."""
-        if self.mesh_device.shape[1] > 1:
+        if self.mesh_device.shape[self.tp_axis] > 1:
             gathered = ttnn.all_gather(
                 ffn_norm_out,
                 dim=-1,
-                cluster_axis=1,
+                cluster_axis=self.tp_axis,
                 num_links=self.num_links,
                 topology=self.topology,
             )

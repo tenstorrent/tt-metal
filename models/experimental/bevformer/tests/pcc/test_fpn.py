@@ -8,6 +8,7 @@ import torch
 from models.experimental.bevformer.model_config import FPN_KWARGS, NUM_CAMS, SPATIAL_SHAPES
 from models.experimental.bevformer.tests.common import (
     BACKBONE_OUTPUT_DTYPES,
+    BACKBONE_OUTPUT_LAYOUTS,
     assert_pcc,
     build_reference_fpn,
     from_conv_layout,
@@ -32,7 +33,10 @@ def test_fpn(device, reset_seeds):
 
     tt_model = TTFPN(parameters, device, input_dtypes=BACKBONE_OUTPUT_DTYPES)
     tt_outputs = tt_model(
-        [to_conv_layout(tensor, device, dtype) for tensor, dtype in zip(input_tensors, BACKBONE_OUTPUT_DTYPES)]
+        [
+            to_conv_layout(tensor, device, dtype, layout)
+            for tensor, dtype, layout in zip(input_tensors, BACKBONE_OUTPUT_DTYPES, BACKBONE_OUTPUT_LAYOUTS)
+        ]
     )
 
     for torch_output, tt_output in zip(torch_outputs, tt_outputs, strict=True):

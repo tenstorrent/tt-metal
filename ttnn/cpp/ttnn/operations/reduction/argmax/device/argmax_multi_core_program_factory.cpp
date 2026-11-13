@@ -12,7 +12,6 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 
@@ -215,7 +214,7 @@ ttnn::device_operation::ProgramArtifacts ArgMaxMultiCoreProgramFactory::create_p
         output_dfb_data_format = tt::DataFormat::RawUInt32;
     }
 
-    const auto src_is_dram = input.mesh_buffer().device_local_config().buffer_type == tt::tt_metal::BufferType::DRAM;
+    const auto src_is_dram = input.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     // NOC transactions need to be aligned.
     // So, for bfloat16 dtype, we need at least 16/32 units per core (depending on alignment) to avoid unaligned

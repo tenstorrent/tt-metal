@@ -34,6 +34,10 @@ void bind_indexed_entry_copy(nb::module_& mod) {
             Keyword Args:
                 index_scale (int): Multiplier applied to ``index[0]``; at least 1.
                 index_offset (int): Added after scaling.
+                zero_fill_at_zero (ttnn.Tensor, optional): One-element UINT32 ROW_MAJOR interleaved device tensor,
+                    read on device like ``index``. When it reads 0 the destination entry is filled with zeros, in
+                    either direction, without reading ``source``; any other value copies as usual. Defaults to None,
+                    which always copies.
 
             Returns:
                 ttnn.Tensor: ``destination``.
@@ -48,7 +52,8 @@ void bind_indexed_entry_copy(nb::module_& mod) {
         nb::arg("index").noconvert(),
         nb::kw_only(),
         nb::arg("index_scale"),
-        nb::arg("index_offset"));
+        nb::arg("index_offset"),
+        nb::arg("zero_fill_at_zero") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::kda::indexed_entry_copy::detail

@@ -3,22 +3,42 @@
 
 #include "transpose_hc_sharded_program_factory.hpp"
 
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
 #include <tt-logger/tt-logger.hpp>
 
+#include <algorithm>
 #include <map>
 #include <set>
 #include <utility>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 
 namespace ttnn::prim {
 
 namespace {
+
+// Nested so the names cannot collide with the sibling factories' in the unity build (this op's
+// factories share one translation unit).
+namespace hc_sharded {
+const DFBSpecName IN0{"in0"};
+const DFBSpecName OUT{"out"};
+const TensorParamName INPUT{"input"};
+const TensorParamName OUTPUT{"output"};
+const KernelSpecName READER{"reader"};
+const KernelSpecName WRITER{"writer"};
+}  // namespace hc_sharded
+
+// The per-core argument builders below return positional vectors: a fixed run of scalars (which
+// the factory passes on as named runtime args) followed by the per-core arrays the kernels index
+// by core / shard id (passed on as runtime varargs). These counts name the split point.
+constexpr size_t num_reader_scalar_args = 5;  // both paths
+constexpr size_t num_writer_scalar_args = 7;  // special case only
 
 std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime_args_hc_rm_sharded(
     const Tensor& input_tensor, uint32_t num_cores, uint32_t num_cores_x, uint32_t num_cores_y) {
@@ -264,7 +284,6 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
 
         const bool read_single_h_block_per_core = num_H_per_core == 1;
 
-        constexpr size_t num_reader_scalar_args = 5;
         const size_t num_non_repeat_args =
             non_repeat_stick_offset_values.size() + non_repeat_noc_x_values.size() + non_repeat_noc_y_values.size();
 
@@ -287,7 +306,6 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
             reader_runtime_args.end(), non_repeat_noc_y_values.begin(), non_repeat_noc_y_values.end());
 
         std::vector<uint32_t> writer_runtime_args;
-        constexpr size_t num_writer_scalar_args = 7;
         writer_runtime_args.reserve(num_writer_scalar_args + num_non_repeat_args);
         writer_runtime_args.insert(
             writer_runtime_args.end(),
@@ -321,17 +339,19 @@ inline bool hc_rm_sharded_is_special_case(uint32_t shard_height, uint32_t H, uin
 
 }  // namespace
 
-tt::tt_metal::ProgramDescriptor TransposeHCShardedProgramFactory::create_descriptor(
+ttnn::device_operation::ProgramArtifacts TransposeHCShardedProgramFactory::create_program_artifacts(
     const TransposeParams& /*operation_attributes*/, const TransposeInputs& tensor_args, Tensor& output_tensor) {
+    using namespace hc_sharded;
+
     const auto& input_tensor = tensor_args.input;
+    const auto& input = input_tensor.mesh_tensor();
+    const auto& output = output_tensor.mesh_tensor();
 
     TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operand to transpose_hc needs to be on device!");
     TT_ASSERT(input_tensor.is_allocated(), "Operand to transpose_hc needs to be allocated in a buffer on device!");
 
-    ProgramDescriptor desc;
-
-    tt::DataFormat src0_cb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
-    tt::DataFormat dst_cb_data_format = datatype_to_dataformat_converter(output_tensor.dtype());
+    tt::DataFormat src0_dfb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
+    tt::DataFormat dst_dfb_data_format = datatype_to_dataformat_converter(output_tensor.dtype());
 
     uint32_t W = input_tensor.logical_shape()[3], H = input_tensor.logical_shape()[2];
     uint32_t C = input_tensor.logical_shape()[1], N = input_tensor.logical_shape()[0];
@@ -354,61 +374,29 @@ tt::tt_metal::ProgramDescriptor TransposeHCShardedProgramFactory::create_descrip
     uint32_t num_cores_x = grid_size.x;
     uint32_t num_cores_y = grid_size.y;
 
-    uint32_t src0_cb_index = tt::CBIndex::c_0;
-    // Sharded CBs bound to the input/output buffers; override_runtime_arguments re-points them on a hit.
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = shard_height * stick_size_bytes,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(src0_cb_index),
-            .data_format = src0_cb_data_format,
-            .page_size = stick_size_bytes,
-        }}},
-        .buffer = input_tensor.buffer(),
+    ProgramSpec spec{.name = "transpose_hc_sharded"};
+
+    spec.tensor_parameters.push_back(TensorParameter{.unique_id = INPUT, .spec = input_tensor.tensor_spec()});
+    spec.tensor_parameters.push_back(TensorParameter{.unique_id = OUTPUT, .spec = output_tensor.tensor_spec()});
+
+    // Both buffers are built on the io tensors' own sharded L1 memory rather than on
+    // Program-lifetime storage; override_runtime_arguments re-points them on a cache hit. The
+    // kernels gather other cores' input shards through the NoC at this same L1 address, which
+    // holds because a borrowed buffer inherits the one sharded allocation's address on every core.
+    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = IN0,
+        .entry_size = stick_size_bytes,
+        .num_entries = shard_height,
+        .data_format_metadata = src0_dfb_data_format,
+        .borrowed_from = INPUT,
     });
-
-    uint32_t output_cb_index = tt::CBIndex::c_16;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = shard_height * stick_size_bytes,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(output_cb_index),
-            .data_format = dst_cb_data_format,
-            .page_size = stick_size_bytes,
-        }}},
-        .buffer = output_tensor.buffer(),
+    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = OUT,
+        .entry_size = stick_size_bytes,
+        .num_entries = shard_height,
+        .data_format_metadata = dst_dfb_data_format,
+        .borrowed_from = OUTPUT,
     });
-
-    std::vector<uint32_t> reader_compile_time_args;
-    if (is_special_case) {
-        reader_compile_time_args = {src0_cb_index, output_cb_index, stick_size_bytes};
-    } else {
-        reader_compile_time_args = {
-            src0_cb_index,
-            output_cb_index,
-            N,
-            H,
-            C,
-            stick_size_bytes,
-            static_cast<uint32_t>(row_major_orientation),
-            num_cores_x,
-            num_cores_y};
-    }
-
-    KernelDescriptor::Defines reader_defines;
-    if (is_special_case) {
-        reader_defines.emplace_back("USE_SPECIAL_CASE", "1");
-    }
-
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
-        "reader_unary_transpose_hc_sharded_rm.cpp";
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = all_cores;
-    reader_desc.compile_time_args = std::move(reader_compile_time_args);
-    reader_desc.defines = std::move(reader_defines);
-    reader_desc.config = ReaderConfigDescriptor{};
 
     // Writer kernel only exists in the special case path; the generic path puts
     // everything through the reader (writer args returned by the generic helper
@@ -421,7 +409,144 @@ tt::tt_metal::ProgramDescriptor TransposeHCShardedProgramFactory::create_descrip
         all_runtime_args = get_runtime_args_hc_rm_sharded(input_tensor, num_cores, num_cores_x, num_cores_y);
     }
 
-    reader_desc.runtime_args.reserve(num_cores);
+    // The array tail of each per-core argument vector rides as runtime varargs. The vararg count is
+    // one number per kernel, so it is the longest tail over all cores; shorter tails are zero-padded
+    // (the kernels index the arrays only up to their own per-core counts, never past them).
+    uint32_t reader_num_varargs = 0;
+    uint32_t writer_num_varargs = 0;
+    for (const auto& [reader_args, writer_args] : all_runtime_args) {
+        reader_num_varargs = std::max<uint32_t>(reader_num_varargs, reader_args.size() - num_reader_scalar_args);
+        if (is_special_case) {
+            writer_num_varargs = std::max<uint32_t>(writer_num_varargs, writer_args.size() - num_writer_scalar_args);
+        }
+    }
+
+    // ---- reader ----
+    KernelSpec reader{
+        .unique_id = READER,
+        .source =
+            "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
+            "reader_unary_transpose_hc_sharded_rm.cpp",
+        .hw_config = create_reader_datamovement_config(),
+        .advanced_options = {.num_runtime_varargs = reader_num_varargs},
+    };
+    if (is_special_case) {
+        reader.compiler_options.defines = {{"USE_SPECIAL_CASE", "1"}};
+        // Reader and writer split the gather of remote input shards into the resident output shard
+        // between them. Neither drives a FIFO on either buffer (both only peek the base pointers and
+        // move data through the NoC), so the producer / consumer labels are cosmetic: one of each
+        // per buffer satisfies the endpoint rule without a multi-binding.
+        reader.dfb_bindings = {
+            DFBBinding{
+                .dfb_spec_name = IN0,
+                .accessor_name = "in0",
+                .endpoint_type = DFBEndpointType::PRODUCER,
+            },
+            DFBBinding{
+                .dfb_spec_name = OUT,
+                .accessor_name = "out",
+                .endpoint_type = DFBEndpointType::PRODUCER,
+            },
+        };
+        reader.compile_time_args = {{"stick_size_bytes", stick_size_bytes}};
+        reader.runtime_arg_schema = {
+            .runtime_arg_names = {
+                "read_single_h_block_per_core",
+                "num_C_blocks_per_core",
+                "num_sticks_per_shard_core",
+                "num_cores_read",
+                "read_stick_stride"}};
+    } else {
+        // The reader is the only kernel on this path: it peeks the input base pointer and fills the
+        // resident output shard that nothing drains, so both buffers are self-looped onto it.
+        reader.dfb_bindings = {
+            DFBBinding{
+                .dfb_spec_name = IN0,
+                .accessor_name = "in0",
+                .endpoint_type = DFBEndpointType::PRODUCER,
+            },
+            DFBBinding{
+                .dfb_spec_name = IN0,
+                .accessor_name = "in0",
+                .endpoint_type = DFBEndpointType::CONSUMER,
+            },
+            DFBBinding{
+                .dfb_spec_name = OUT,
+                .accessor_name = "out",
+                .endpoint_type = DFBEndpointType::PRODUCER,
+            },
+            DFBBinding{
+                .dfb_spec_name = OUT,
+                .accessor_name = "out",
+                .endpoint_type = DFBEndpointType::CONSUMER,
+            },
+        };
+        reader.compile_time_args = {
+            {"N", N},
+            {"H", H},
+            {"C", C},
+            {"W_size_bytes", stick_size_bytes},
+            {"row_major", static_cast<uint32_t>(row_major_orientation)},
+            {"num_cores_x", num_cores_x},
+            {"num_cores_y", num_cores_y}};
+        reader.runtime_arg_schema = {
+            .runtime_arg_names = {"num_sticks_per_core", "start_id", "curr_c", "curr_h", "curr_n"}};
+    }
+    spec.kernels.push_back(std::move(reader));
+
+    // ---- writer (special case only) ----
+    if (is_special_case) {
+        spec.kernels.push_back(KernelSpec{
+            .unique_id = WRITER,
+            .source = "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
+                      "writer_unary_transpose_hc_sharded_rm.cpp",
+            .dfb_bindings =
+                {DFBBinding{
+                     .dfb_spec_name = IN0,
+                     .accessor_name = "in0",
+                     .endpoint_type = DFBEndpointType::CONSUMER,
+                 },
+                 DFBBinding{
+                     .dfb_spec_name = OUT,
+                     .accessor_name = "out",
+                     .endpoint_type = DFBEndpointType::CONSUMER,
+                 }},
+            .compile_time_args = {{"stick_size_bytes", stick_size_bytes}},
+            .runtime_arg_schema =
+                {.runtime_arg_names =
+                     {"read_single_h_block_per_core",
+                      "num_C_blocks_per_core",
+                      "num_sticks_per_shard_core",
+                      "num_cores_read",
+                      "read_stick_stride",
+                      "src_read_stick_offset",
+                      "dst_write_stick_offset"}},
+            .hw_config = create_writer_datamovement_config(),
+            .advanced_options = {.num_runtime_varargs = writer_num_varargs},
+        });
+    }
+
+    spec.work_units.push_back(WorkUnitSpec{
+        .name = "main",
+        .kernels = is_special_case ? Group<KernelSpecName>{READER, WRITER} : Group<KernelSpecName>{READER},
+        .target_nodes = all_cores,
+    });
+
+    // ---- run args ----
+    ProgramRunArgs run_args;
+    KernelRunArgs reader_run_args{.kernel = READER};
+    KernelRunArgs writer_run_args{.kernel = WRITER};
+
+    auto set_varargs = [](KernelRunArgs& kernel_run_args,
+                          const CoreCoord& core,
+                          const std::vector<uint32_t>& args,
+                          size_t num_scalar_args,
+                          uint32_t num_varargs) {
+        std::vector<uint32_t> varargs(args.begin() + num_scalar_args, args.end());
+        varargs.resize(num_varargs, 0);
+        kernel_run_args.advanced_options.runtime_varargs[core] = std::move(varargs);
+    };
+
     for (uint32_t i = 0; i < num_cores; i++) {
         CoreCoord core;
         if (row_major_orientation) {
@@ -429,48 +554,64 @@ tt::tt_metal::ProgramDescriptor TransposeHCShardedProgramFactory::create_descrip
         } else {
             core = {i / num_cores_y, i % num_cores_y};
         }
-        reader_desc.runtime_args.emplace_back(core, all_runtime_args[i].first);
-    }
+        const auto& [reader_args, writer_args] = all_runtime_args[i];
 
-    desc.kernels.push_back(std::move(reader_desc));
-
-    if (is_special_case) {
-        KernelDescriptor writer_desc;
-        writer_desc.kernel_source =
-            "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
-            "writer_unary_transpose_hc_sharded_rm.cpp";
-        writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-        writer_desc.core_ranges = all_cores;
-        writer_desc.compile_time_args = {src0_cb_index, output_cb_index, stick_size_bytes};
-        writer_desc.config = WriterConfigDescriptor{};
-        writer_desc.runtime_args.reserve(num_cores);
-        for (uint32_t i = 0; i < num_cores; i++) {
-            CoreCoord core;
-            if (row_major_orientation) {
-                core = {i % num_cores_x, i / num_cores_x};
-            } else {
-                core = {i / num_cores_y, i % num_cores_y};
-            }
-            writer_desc.runtime_args.emplace_back(core, all_runtime_args[i].second);
+        if (is_special_case) {
+            AddRuntimeArgsForNode(
+                reader_run_args.runtime_arg_values,
+                core,
+                {{"read_single_h_block_per_core", reader_args[0]},
+                 {"num_C_blocks_per_core", reader_args[1]},
+                 {"num_sticks_per_shard_core", reader_args[2]},
+                 {"num_cores_read", reader_args[3]},
+                 {"read_stick_stride", reader_args[4]}});
+            AddRuntimeArgsForNode(
+                writer_run_args.runtime_arg_values,
+                core,
+                {{"read_single_h_block_per_core", writer_args[0]},
+                 {"num_C_blocks_per_core", writer_args[1]},
+                 {"num_sticks_per_shard_core", writer_args[2]},
+                 {"num_cores_read", writer_args[3]},
+                 {"read_stick_stride", writer_args[4]},
+                 {"src_read_stick_offset", writer_args[5]},
+                 {"dst_write_stick_offset", writer_args[6]}});
+            set_varargs(writer_run_args, core, writer_args, num_writer_scalar_args, writer_num_varargs);
+        } else {
+            AddRuntimeArgsForNode(
+                reader_run_args.runtime_arg_values,
+                core,
+                {{"num_sticks_per_core", reader_args[0]},
+                 {"start_id", reader_args[1]},
+                 {"curr_c", reader_args[2]},
+                 {"curr_h", reader_args[3]},
+                 {"curr_n", reader_args[4]}});
         }
-        desc.kernels.push_back(std::move(writer_desc));
+        set_varargs(reader_run_args, core, reader_args, num_reader_scalar_args, reader_num_varargs);
     }
 
-    return desc;
+    run_args.kernel_run_args.push_back(std::move(reader_run_args));
+    if (is_special_case) {
+        run_args.kernel_run_args.push_back(std::move(writer_run_args));
+    }
+    run_args.tensor_args.emplace(INPUT, input);
+    run_args.tensor_args.emplace(OUTPUT, output);
+
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
-void TransposeHCShardedProgramFactory::override_runtime_arguments(
-    tt::tt_metal::Program& program,
+ProgramRunArgs TransposeHCShardedProgramFactory::override_runtime_arguments(
     const TransposeParams& /*operation_attributes*/,
     const TransposeInputs& tensor_args,
     Tensor& output_tensor,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    using namespace hc_sharded;
     // No custom compute_program_hash, so shape and shard spec are keyed and every reader/writer arg is
-    // pinned; only the buffer addresses move, and both ride on the sharded CBs pushed above (src0, out).
-    ProgramDescriptor cb_addr_only;
-    cb_addr_only.cbs.push_back(CBDescriptor{.buffer = tensor_args.input.buffer()});
-    cb_addr_only.cbs.push_back(CBDescriptor{.buffer = output_tensor.buffer()});
-    apply_descriptor_runtime_args(program, cb_addr_only);  // override-rebuild-ok: cb-addr-only
+    // pinned; only the buffer addresses move, and both ride on the borrowed buffers (in0, out), which
+    // re-resolve their L1 address from these tensor arguments.
+    ProgramRunArgs run_args;
+    run_args.tensor_args.emplace(INPUT, tensor_args.input.mesh_tensor());
+    run_args.tensor_args.emplace(OUTPUT, output_tensor.mesh_tensor());
+    return run_args;
 }
 
 }  // namespace ttnn::prim

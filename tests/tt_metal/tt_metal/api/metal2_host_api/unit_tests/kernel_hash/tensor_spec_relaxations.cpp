@@ -136,5 +136,39 @@ TEST_F(ProgramSpecTestGen1, CPU_DynamicTensorShape_ShardedKernelHashStableAcross
            "must be stable across shape variations.";
 }
 
+TEST_F(ProgramSpecTestGen1, CPU_RelaxTensorLayoutAlignment_InterleavedKernelHashStableAcrossAlignments) {
+    // relax_tensor_layout_alignment needs no resolver support: the TensorLayout alignment reaches the CTAs only
+    // through the page size and the sharded geometry. On interleaved TILE neither depends on it, so a
+    // program declared at an over-padded alignment builds the same binary as one declared at the
+    // default. That is what makes a cached binary valid for a tensor padded differently.
+    auto make_spec = [](const tt::tt_metal::Alignment& alignment) {
+        ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+        auto memory_config =
+            tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
+        auto tensor_layout = tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::BFLOAT16,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+            memory_config,
+            alignment);
+        TensorParameter tp{
+            .unique_id = TensorParamName{"input_tensor"},
+            .spec = tt::tt_metal::TensorSpec(tt::tt_metal::Shape{1, 1, 30, 30}, std::move(tensor_layout)),
+            .relaxations = TensorSpecRelaxations{.dynamic_tensor_shape = true, .relax_tensor_layout_alignment = true},
+        };
+        spec.tensor_parameters = {tp};
+        BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
+        return spec;
+    };
+    Program prog_default = MakeProgramFromSpec(*mesh_device_, make_spec(tt::tt_metal::Alignment{}));
+    Program prog_overpadded = MakeProgramFromSpec(*mesh_device_, make_spec(tt::tt_metal::Alignment{64, 64}));
+    // An upper-dimension alignment pads an outer dim instead ({1, 1, 30, 30} -> {1, 2, 32, 32}).
+    Program prog_upper_padded = MakeProgramFromSpec(*mesh_device_, make_spec(tt::tt_metal::Alignment{64, 64, 32, 32}));
+    const auto default_hash = prog_default.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash();
+    EXPECT_EQ(default_hash, prog_overpadded.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash())
+        << "Interleaved tile: the alignment must not reach the CTAs, so one binary serves both paddings.";
+    EXPECT_EQ(default_hash, prog_upper_padded.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash())
+        << "Interleaved tile: an upper-dimension alignment must not reach the CTAs either.";
+}
+
 }  // namespace
 }  // namespace tt::tt_metal::experimental

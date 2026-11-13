@@ -166,3 +166,72 @@ def test_step_matches_reference(dev, model, goldens, step_idx):
     p = pcc(o, ref)
     print(f"step {step_idx} (t={t01:.4f}) noise_pred pcc = {p:.5f}  max|d|={(o.float()-ref.float()).abs().max():.4f}")
     assert p > 0.98
+
+
+@pytest.mark.parametrize("tokens", [33, 256])
+def test_text_project_random_weights_tanh_gelu(dev, monkeypatch, tokens):
+    """Exercise the text projection with random weights, including padded rows."""
+    from models.experimental.qwen_image_2_1.reference.torch_dit import text_project
+
+    torch.manual_seed(63673)
+    hidden = DIT.hidden
+    state = {
+        "txt_in.text_norm.weight": torch.zeros(hidden),
+        "txt_in.in_layer.weight": (torch.randn(hidden, hidden) * (1.5 / hidden**0.5)).bfloat16(),
+        "txt_in.out_layer.weight": (torch.randn(hidden, hidden) / hidden**0.5).bfloat16(),
+    }
+
+    class Checkpoint:
+        def get(self, key, dtype):
+            return state[key].to(dtype)
+
+    # Construct only the projection state: the full constructor also loads the
+    # unrelated transformer blocks and timestep conditioning.
+    module = QwenImageDiT.__new__(QwenImageDiT)
+    module.dev, module.cfg = dev, DIT
+    module.ck_mm = ttnn.init_device_compute_kernel_config(
+        dev.arch(),
+        math_fidelity=DiTPrecision().mm_fidelity,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+    module.ck_norm = ttnn.init_device_compute_kernel_config(
+        dev.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+
+    def upload(value):
+        return ttnn.from_torch(
+            value, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+
+    module.txt_norm_w = upload((state["txt_in.text_norm.weight"] + 1).reshape(1, 1, 1, hidden))
+    module.txt_in_w = upload(state["txt_in.in_layer.weight"].T.contiguous())
+    module.txt_out_w = upload(state["txt_in.out_layer.weight"].T.contiguous())
+    activation_errors = []
+    gelu = ttnn.gelu
+
+    def capture_gelu(value, **kwargs):
+        expected = torch.nn.functional.gelu(ttnn.to_torch(value), approximate="tanh").float()
+        result = gelu(value, **kwargs)
+        activation_errors.append((ttnn.to_torch(result).float() - expected).abs().mean().item())
+        return result
+
+    monkeypatch.setattr(ttnn, "gelu", capture_gelu)
+    hidden_states = torch.randn(tokens, hidden).bfloat16()
+    expected = text_project(Checkpoint(), hidden_states).float()
+    result, length = module.text_project(hidden_states)
+    actual = ttnn.to_torch(result)[0, 0, :tokens].float()
+    assert length == tokens
+    block_pcc = pcc(actual, expected)
+    assert block_pcc > 0.999
+    print(
+        f"Qwen text projection mean_abs={(actual - expected).abs().mean().item():.8f}, "
+        f"max_abs={(actual - expected).abs().max().item():.8f}, PCC={block_pcc}, GELU mean_abs={activation_errors}"
+    )
+    assert len(activation_errors) == 1
+    assert activation_errors[0] < 0.002

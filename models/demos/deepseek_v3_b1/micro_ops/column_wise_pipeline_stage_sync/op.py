@@ -197,6 +197,7 @@ class ColumnWisePipelineStageSync:
 
                     link_index = 0
                     fabric_args = ttnn.setup_routing_plane_connection(
+                        mesh_device,
                         fabric_src_node_id,
                         [fabric_dst_node_one_id, fabric_dst_node_two_id],
                         [link_index, link_index],
@@ -227,6 +228,7 @@ class ColumnWisePipelineStageSync:
 
                     link_index = 0
                     fabric_args = ttnn.setup_routing_plane_connection(
+                        mesh_device,
                         fabric_src_node_id,
                         [fabric_dst_node_id],
                         [link_index],

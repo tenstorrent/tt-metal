@@ -67,9 +67,10 @@ class MyModelAdapter(PrefillModelAdapter):
         """Load and normalize the HF config from PREFILL_HF_MODEL (falling back to
         hf_model_default). The engine sets `.max_seq_len` on the returned config."""
 
-    def weight_cache_path(self, mesh_shape: tuple):
+    def weight_cache_path(self, mesh_shape: tuple, sp_axis: int = 0):
         """The TTNN weight-cache dir for this model + mesh (or None if disabled).
-        Mirror the layout the cache-populate run wrote so the runner reads the same files."""
+        Mirror the layout the cache-populate run wrote so the runner reads the same files.
+        `sp_axis` is the mesh axis SP runs on (PREFILL_SP_AXIS); raise if your model does not support it."""
 
     def allocate_kv_cache(self, *, mesh_device, hf_config, params: PrefillRunParams) -> KvCaches:
         """Allocate (and zero) this model's KV cache(s) on device and return them as a `KvCaches` — your
@@ -181,7 +182,7 @@ class PrefillRuntime:  # structural contract — not a base class you must inher
     # state as configs 1 and 2 this way (models/demos/deepseek_v3_d_p/tt/kda/KDA_STATE_MIGRATION.md).
     # If a layer's cache is not on the token axis, also override `layer_position_range(layer_idx,
     # real_len)` (default `(0, real_len)`): the driver issues one /migrate per run of consecutive layers
-    # with equal ranges and byte-verifies that range. Kimi-K3 returns the KDA version window there.
+    # with equal ranges and byte-verifies that range. Kimi-K3 returns its KDA window there.
 
     def set_layer_completion_sink(self, sink) -> None:
         """Register the per-layer completion sink. Required at any rank count, unless the runner runs
@@ -242,7 +243,11 @@ contract, validated on the first rank (`prefill_chunk.validate_chunks`):
 Each layer completion names one chunk, on either path, so a consumer retires each chunk on its own.
 
 The runner refuses F > 1 at startup, before the model loads, together with `PREFILL_MTP_LEVELS > 0`,
-`PREFILL_DFLASH=1` or `PREFILL_USE_TRACE=1`, and `PREFILL_LAYER_ACK_D2H=1` with `prefill_forward`.
+`PREFILL_DFLASH=1` or `PREFILL_USE_TRACE=1`, and `PREFILL_LAYER_ACK_D2H=1` with `prefill_forward`. An adapter
+whose `prefill_forward` handles them lifts the last two: `supports_packed_forward_trace = True` (it stages each
+chunk's inputs before a trace replay) and `supports_packed_forward_d2h_acks = True` (it sends one 12 B
+`(slot_id, actual_start, actual_end)` record per chunk per KV-writing layer through the D2H ack service, each
+chunk's records contiguous, since the decoder treats an identity change mid-chunk as a lost record).
 
 ---
 

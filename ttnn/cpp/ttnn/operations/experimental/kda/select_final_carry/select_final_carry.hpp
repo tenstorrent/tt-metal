@@ -4,6 +4,10 @@
 #pragma once
 
 #include <optional>
+#include <vector>
+
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/global_semaphore.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
@@ -15,9 +19,11 @@ ttnn::Tensor select_final_carry(
     const ttnn::Tensor& prefix_final,
     const ttnn::Tensor& actual_start,
     uint32_t local_rows,
+    uint32_t num_links,
+    const std::vector<tt::tt_metal::CoreCoord>& cores,
+    const std::vector<tt::tt_metal::GlobalSemaphore>& semaphores,
     const std::optional<ttnn::Tensor>& actual_end = std::nullopt,
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-    uint32_t sequence_parallel_axis = 0,
-    std::optional<uint32_t> num_links = std::nullopt);
+    uint32_t sequence_parallel_axis = 0);
 
 }  // namespace ttnn::experimental::kda
