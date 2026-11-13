@@ -381,7 +381,7 @@ def exp_inputs(device, num_tiles):
     return torch_input, input_tensor, ttnn.allocate_tensor_on_device(input_tensor.spec, device)
 
 
-def test_exp_from_the_design_example(device, expect_error):
+def test_the_exp_program(device, expect_error):
     torch_input, input_tensor, output_tensor = exp_inputs(device, 8)
     spec, run_args = exp_program(input_tensor, output_tensor)
     result = E.generic_op([input_tensor, output_tensor], spec, run_args)
