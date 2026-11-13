@@ -4816,7 +4816,7 @@
   },
   "attempt": 1,
   "attempts": 3,
-  "duration_s": 1042.8,
+  "duration_s": 1.8,
   "full_pending": true,
   "history": [
    {
@@ -4853,15 +4853,35 @@
     "s": 1042.8,
     "status": "PASS",
     "t": "2026-11-13T19:18:12"
+   },
+   {
+    "reused": [
+     "P.51#test_ladder",
+     "P.51#test_profile",
+     "P.51#test_decoder_skip_decode",
+     "P.51#test_determinism",
+     "P.51#test_contract",
+     "P.51#test_adapter_acks"
+    ],
+    "s": 1.8,
+    "status": "PASS",
+    "t": "2026-11-13T19:18:38"
    }
   ],
-  "last_run": "2026-11-13T19:18:10",
+  "last_run": "2026-11-13T19:18:37",
   "log": "/scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/logs/P.51.log",
   "rc": 0,
   "reason": [],
   "role": "perf",
   "stamp": {
-   "reused": [],
+   "reused": [
+    "P.51#test_ladder",
+    "P.51#test_profile",
+    "P.51#test_decoder_skip_decode",
+    "P.51#test_determinism",
+    "P.51#test_contract",
+    "P.51#test_adapter_acks"
+   ],
    "units": {
     "P.51#test_adapter_acks": "a9785354a56ef745",
     "P.51#test_contract": "e14ba93c6430c886",
@@ -4871,7 +4891,7 @@
     "P.51#test_profile": "a48a19042b5dc6d0"
    }
   },
-  "started": "2026-11-13T19:00:47",
+  "started": "2026-11-13T19:18:35",
   "status": "PASS",
   "units": {
    "P.51#test_adapter_acks": "PASS",
