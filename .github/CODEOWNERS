@@ -641,6 +641,9 @@ tests/ttnn/unit_tests/gtests/test_program_cache_l1.cpp @tenstorrent/metalium-dev
 tests/ttnn/unit_tests/gtests/test_multi_cq_multi_dev.cpp @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
 tests/ttnn/unit_tests/gtests/test_multiprod_queue.cpp @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
 tests/ttnn/unit_tests/gtests/test_command_list_tensor_prefetcher.cpp @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
+tests/ttnn/unit_tests/gtests/test_command_list.cpp @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
+tests/ttnn/unit_tests/gtests/multiprocess/test_host_all_gather.cpp @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
+tests/ttnn/unit_tests/gtests/multiprocess/test_tensor_to_string.cpp @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
 tests/ttnn/unit_tests/gtests/ttnn_test_fixtures.hpp @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
 tests/ttnn/unit_tests/gtests/common_test_utils.* @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
 tests/ttnn/unit_tests/gtests/tests_main.cpp @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
@@ -683,6 +686,7 @@ ttnn/cpp/ttnn/operations/core/data_movement_kernel/ @tenstorrent/metalium-develo
 ttnn/cpp/ttnn/operations/core/program_cache_l1.hpp @tenstorrent/metalium-developers-ops-leads @tenstorrent/metalium-developers-ttnn-core
 ttnn/cpp/ttnn/operations/core/work_split/ @tenstorrent/metalium-developers-ops-leads @tenstorrent/metalium-developers-ttnn-core
 ttnn/cpp/ttnn/operations/generic/ @tenstorrent/metalium-developers-ops-leads @tenstorrent/metalium-developers-ttnn-core
+# More framework tests and shared test helpers: ttnn-core stays, with the other tests/ttnn/ owners.
 tests/ttnn/unit_tests/gtests/test_codegen_gates_unallocated.cpp @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
 tests/ttnn/unit_tests/gtests/test_work_split_tilize.cpp @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
 tests/ttnn/unit_tests/gtests/sources.cmake @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
