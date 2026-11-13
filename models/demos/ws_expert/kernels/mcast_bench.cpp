@@ -24,7 +24,11 @@ void kernel_main() {
     auto wall = []() { return *reinterpret_cast<volatile uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L); };
     st[0] = wall();
     for (uint32_t i = 0; i < N; ++i) {
+#ifdef LOOPBACK
+        noc_async_write_multicast_loopback_src(src, get_noc_multicast_addr(x0, y0, x1, y1, dst + slot), B, nd);
+#else
         noc_async_write_multicast(src, get_noc_multicast_addr(x0, y0, x1, y1, dst + slot), B, nd);
+#endif
         if constexpr (BARRIER) {
             noc_async_write_barrier();
         }
