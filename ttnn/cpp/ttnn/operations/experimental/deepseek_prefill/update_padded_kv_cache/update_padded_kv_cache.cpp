@@ -22,7 +22,8 @@ ttnn::Tensor update_padded_kv_cache(
     std::optional<uint32_t> valid_global,
     std::optional<uint32_t> tp_axis,
     const std::optional<ttnn::Tensor>& rope,
-    const std::optional<ttnn::Tensor>& scales) {
+    const std::optional<ttnn::Tensor>& scales,
+    const std::optional<ttnn::Tensor>& paged_kv_table) {
     return ttnn::prim::update_padded_kv_cache(
         cache,
         input,
@@ -37,7 +38,10 @@ ttnn::Tensor update_padded_kv_cache(
         valid_global,
         tp_axis,
         rope,
-        scales);
+        scales,
+        /*input_row_offset=*/0,
+        /*input_rows=*/std::nullopt,
+        paged_kv_table);
 }
 
 // Per-element-tensor form: slot_idx/kv_actual_global read on-device from the two 1-element tensors
@@ -55,7 +59,8 @@ ttnn::Tensor update_padded_kv_cache(
     const std::optional<ttnn::Tensor>& rope,
     const std::optional<ttnn::Tensor>& scales,
     uint32_t input_row_offset,
-    std::optional<uint32_t> input_rows) {
+    std::optional<uint32_t> input_rows,
+    const std::optional<ttnn::Tensor>& paged_kv_table) {
     return ttnn::prim::update_padded_kv_cache(
         cache,
         input,
@@ -72,7 +77,8 @@ ttnn::Tensor update_padded_kv_cache(
         rope,
         scales,
         input_row_offset,
-        input_rows);
+        input_rows,
+        paged_kv_table);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cache
