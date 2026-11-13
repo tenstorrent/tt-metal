@@ -474,7 +474,9 @@ class Gemma4Generator:
             # Device-return outputs retain their own owners in outputs. Host
             # mode has consumed out; do not carry it into the next prefill.
             del out, tt_ids, tables, uploaded_rows
-        if self.mesh.num_program_cache_entries() != programs:
+        compiled = self.mesh.num_program_cache_entries() - programs
+        if compiled:
+            logger.info("Prefill {} from {} compiled {} programs: decode traces retired", prompt_lens, starts, compiled)
             # A prefill that compiled new programs created persistent device state (programs, semaphores, buffers)
             # that a captured decode trace may overlap, so the traces are rebuilt. A signature the program cache
             # already holds creates none: warm_prefill_shapes compiles every length class before serving, and
