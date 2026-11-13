@@ -155,6 +155,22 @@ def test_indexer_top_k_rides_the_activation_service_with_the_d2d_metadata(monkey
     assert made == [(16, ["ids", "idx"]), (16, ["ids"])]
 
 
+# Only a middle stage builds a sender after its receiver, so only its receivers keep a relay link free for it.
+@pytest.mark.parametrize("rank, reserve", [(1, True), (2, False)])
+def test_receivers_reserve_links_only_when_a_sender_follows(monkeypatch, rank, reserve):
+    reserved = []
+    services = SimpleNamespace(
+        create_receiver=lambda **kw: reserved.append(kw["reserve_links_for_later_service"]),
+        create_sender=lambda **kw: None,
+    )
+    monkeypatch.setattr(runner.ttnn, "D2DStreamService", services)
+    monkeypatch.setattr(runner.ttnn, "create_mesh_mapper", lambda *a: None)
+    monkeypatch.setattr(runner, "d2d_worker_cores", lambda *a: None)
+    monkeypatch.setattr(runner, "activation_global_spec", lambda *a: None)
+    runner.build_d2d_pipeline_endpoints(None, rank, 3, 32, 64)
+    assert reserved == [reserve]
+
+
 def _request_ids(forwards):
     return [c * F + k for c, f in enumerate(forwards) for k in range(len(f))]
 

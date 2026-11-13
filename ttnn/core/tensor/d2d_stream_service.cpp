@@ -620,6 +620,13 @@ public:
         return it->second.holder;
     }
 
+    // Whether try_claim would succeed now, without claiming.
+    bool is_free(const tt::tt_fabric::FabricNodeId& node, CoreCoord eth_core, const std::string& group) {
+        std::lock_guard lock(mutex_);
+        auto it = claims_.find({node, eth_core});
+        return it == claims_.end() || (!group.empty() && it->second.group == group);
+    }
+
     void release(const tt::tt_fabric::FabricNodeId& node, CoreCoord eth_core) {
         std::lock_guard lock(mutex_);
         auto it = claims_.find({node, eth_core});
@@ -696,12 +703,17 @@ void validate_fabric_link_group(const D2DStreamConfig& cfg) {
 }
 
 // Which end of a D2D stream a service is, for its router claims and their messages.
-enum class D2DServiceRole { Sender, Receiver };
+// Relay mode (D2DStreamConfig::relay) adds the relay kernels and their connections.
+enum class D2DServiceRole { Sender, Receiver, ExitRelayCable, ExitRelayCredit, EntryRelayCable, EntryRelayForward };
 
 constexpr const char* role_name(D2DServiceRole role) {
     switch (role) {
         case D2DServiceRole::Sender: return "sender";
         case D2DServiceRole::Receiver: return "receiver";
+        case D2DServiceRole::ExitRelayCable: return "exit relay (cable)";
+        case D2DServiceRole::ExitRelayCredit: return "exit relay (credit return)";
+        case D2DServiceRole::EntryRelayCable: return "entry relay (credit return over the cable)";
+        case D2DServiceRole::EntryRelayForward: return "entry relay (forward)";
     }
     return "unknown";
 }
@@ -710,6 +722,9 @@ constexpr const char* role_name(D2DServiceRole role) {
 // indices (from get_forwarding_link_indices), in order: the sender's lanes, or the
 // receiver's single credit-return link. Fails when none is free, and warns when
 // fewer than min(max_links, forwarding links) are.
+// keep_free: claim a link after the first only while at least this many of the
+// direction's later links stay free, so a service built later on the same chip (a
+// relay's mandatory credit connection) still finds a router in that direction.
 std::vector<uint32_t> claim_forwarding_links(
     const distributed::MeshDevice& mesh,
     const distributed::MeshCoordinate& coord,
@@ -718,7 +733,8 @@ std::vector<uint32_t> claim_forwarding_links(
     uint32_t max_links,
     D2DServiceRole service_role,
     const std::string& group,
-    FabricLinkClaims& claims) {
+    FabricLinkClaims& claims,
+    uint32_t keep_free = 0) {
     const char* role = role_name(service_role);
     const auto links = tt::tt_fabric::get_forwarding_link_indices(mesh, src, dst);
     TT_FATAL(!links.empty(), "D2DStreamService: no fabric link from the {} at coord {} toward its peer", role, coord);
@@ -731,11 +747,24 @@ std::vector<uint32_t> claim_forwarding_links(
         group.empty() ? std::string{} : fmt::format(", lease group '{}'", group));
     std::vector<uint32_t> claimed;
     std::string taken;  // "; "-separated, for the messages below
-    for (const uint32_t link : links) {
+    std::string kept;   // links left free for a later service (keep_free)
+    for (size_t i = 0; i < links.size(); ++i) {
+        const uint32_t link = links[i];
         if (claimed.size() == max_links) {
             break;
         }
         const CoreCoord eth = tt::tt_fabric::get_forwarding_eth_core(mesh, src, dst, link);
+        if (!claimed.empty() && keep_free > 0) {
+            uint32_t later_free = 0;
+            for (size_t j = i + 1; j < links.size(); ++j) {
+                later_free += fabric_link_registry().is_free(
+                    src, tt::tt_fabric::get_forwarding_eth_core(mesh, src, dst, links[j]), group);
+            }
+            if (later_free < keep_free) {
+                kept += fmt::format("{}link {} (eth {})", kept.empty() ? "" : ", ", link, eth);
+                break;
+            }
+        }
         if (auto other = claims.try_claim(src, eth, holder, group)) {
             taken += fmt::format("{}link {} (eth {}) held by the {}", taken.empty() ? "" : "; ", link, eth, *other);
             continue;
@@ -758,13 +787,14 @@ std::vector<uint32_t> claim_forwarding_links(
     if (claimed.size() < wanted) {
         log_warning(
             tt::LogMetal,
-            "D2DStreamService: the {} at coord {} ({}) uses {} of {} forwarding links toward its peer; skipped {}",
+            "D2DStreamService: the {} at coord {} ({}) uses {} of {} forwarding links toward its peer; skipped {}{}",
             role,
             coord,
             src,
             claimed.size(),
             wanted,
-            taken);
+            taken.empty() ? std::string{"none held"} : taken,
+            kept.empty() ? std::string{} : fmt::format("; left free for another service on the chip: {}", kept));
     }
     return claimed;
 }
@@ -1006,6 +1036,27 @@ struct RelayLocal {
     CommonPlan common;
     uint32_t max_lanes = 0;
     std::map<distributed::MeshCoordinate, std::vector<DeviceAddr>> receiver_tensor_addrs;  // sender side only, [segment]
+
+    // Fabric links of every relay-mode connection on this side, claimed in FabricLinkRegistry
+    // (claim_relay_links) so that no router serves two workers of one chip. A (node, link)
+    // pair is the connection's destination node and its index among
+    // get_forwarding_link_indices(this chip, node). Lane counts follow from what was claimed.
+    using NodeLink = std::pair<tt::tt_fabric::FabricNodeId, uint32_t>;
+    // Sender side: the plain sender at each non-exit coord, its lanes toward its exit chip.
+    std::map<distributed::MeshCoordinate, std::vector<uint32_t>> source_links;
+    // Sender side, per cable: the exit relay's cable lanes, and one credit connection per
+    // first-hop direction toward its sources.
+    std::vector<std::vector<uint32_t>> cable_links;
+    std::vector<std::map<tt::tt_fabric::RoutingDirection, NodeLink>> credit_links;
+    // Receiver side: the plain receiver at each non-entry coord, its credit link toward its entry chip.
+    std::map<distributed::MeshCoordinate, uint32_t> ack_links;
+    // Receiver side, per cable: the entry relay's credit link back over the cable, and its
+    // forward lanes per first-hop direction (destination node = the first target that way).
+    std::vector<uint32_t> entry_cable_links;
+    std::vector<std::map<tt::tt_fabric::RoutingDirection, std::pair<tt::tt_fabric::FabricNodeId, std::vector<uint32_t>>>>
+        forward_links;
+    // Receiver side: lanes from its entry relay to each non-entry coord (its receiver waits for this many).
+    std::map<distributed::MeshCoordinate, uint32_t> target_lanes;
 };
 
 }  // namespace CMAKE_UNIQUE_NAMESPACE
@@ -1972,6 +2023,14 @@ std::shared_ptr<RelayLocal> allocate_relay(
     return relay;
 }
 
+// Relay mode: claim every relay connection's routers (defined after the lane helpers below).
+void claim_relay_links(
+    const distributed::MeshDevice& mesh,
+    RelayLocal& relay,
+    const D2DStreamConfig& cfg,
+    bool is_sender,
+    FabricLinkClaims& claims);
+
 struct SenderSideResources {
     std::map<distributed::MeshCoordinate, DeviceAddr> data_ready_counter_addrs;
     std::map<distributed::MeshCoordinate, DeviceAddr> termination_addrs;
@@ -2008,8 +2067,8 @@ SenderSideResources build_sender_side(
 
     // Choose each coord's lanes first, before any allocation, so a chip with no free
     // router fails cleanly. One RISC + one link per lane, capped by config and by the
-    // forwarding links no other D2D service on the chip holds. Relay mode claims none:
-    // its kernels pick their own links in build_relay_sender.
+    // forwarding links no other D2D service on the chip holds. Relay mode claims its
+    // relay connections in claim_relay_links instead.
     TT_FATAL(cfg.max_sender_lanes >= 1, "D2DStreamService: max_sender_lanes must be >= 1");
     validate_fabric_link_group(cfg);
     LaneLinks lane_links_per_coord;
@@ -2073,6 +2132,7 @@ SenderSideResources build_sender_side(
     if (cfg.relay) {
         relay = allocate_relay(mesh, sender_socket, service_cores, backings, coords, common, cfg, /*is_sender=*/true);
         relay->receiver_tensor_addrs = receiver_tensor_addrs;
+        claim_relay_links(*mesh, *relay, cfg, /*is_sender=*/true, link_claims);
     }
     const std::vector<distributed::MeshCoordinate> no_coords;
 
@@ -2199,7 +2259,7 @@ ReceiverSideResources build_receiver_side(
 
     // Choose each coord's credit-return router first, before any allocation: one
     // forwarding link toward the sender that no other D2D service on the chip holds.
-    // Relay mode claims none, as on the sender.
+    // Relay mode claims its relay connections in claim_relay_links instead.
     validate_fabric_link_group(cfg);
     std::map<distributed::MeshCoordinate, uint32_t> ack_link_per_coord;
     const std::vector<distributed::MeshCoordinate> no_claim_coords;
@@ -2274,6 +2334,7 @@ ReceiverSideResources build_receiver_side(
     std::shared_ptr<RelayLocal> relay;
     if (cfg.relay) {
         relay = allocate_relay(mesh, receiver_socket, service_cores, backings, coords, common, cfg, /*is_sender=*/false);
+        claim_relay_links(*mesh, *relay, cfg, /*is_sender=*/false, link_claims);
     }
     const std::vector<distributed::MeshCoordinate> no_coords;
 
@@ -2380,14 +2441,10 @@ CoreCoord relay_noc(
     return tt::tt_metal::internal::get_device(*mesh, c)->worker_core_from_logical_core(service_cores.at(c));
 }
 
-// Lanes of the unchanged sender kernel at `src` toward its exit relay. Same rule as
-// build_sender_side; the exit relay waits for this many arrived increments.
-uint32_t relay_source_lanes(
-    const distributed::MeshDevice& mesh, const RelayLocal& relay, const distributed::MeshCoordinate& src, uint32_t p) {
-    const auto links = tt::tt_fabric::get_forwarding_link_indices(
-        mesh, relay.sender_nodes.at(src), relay.sender_nodes.at(relay.plan.cables[p].exit_coord));
-    TT_FATAL(!links.empty(), "D2DStreamService relay: no fabric link from coord {} to its exit chip", src);
-    return std::min<uint32_t>(relay.max_lanes, links.size());
+// Lanes of the plain sender kernel at `src` toward its exit relay: the links it
+// claimed (claim_relay_links). The exit relay waits for this many arrived increments.
+uint32_t relay_source_lanes(const RelayLocal& relay, const distributed::MeshCoordinate& src) {
+    return static_cast<uint32_t>(relay.source_links.at(src).size());
 }
 
 // tt::tt_metal::NUM_SEMAPHORES, which no public header exposes to ttnn.
@@ -2423,19 +2480,161 @@ bool relay_entry_two_lanes_fit(const distributed::MeshDevice& mesh, const RelayL
     return 2 * (1 + dirs[0].size() + dirs[1].size()) <= kSemaphoresPerCore;
 }
 
-// Lanes from the entry relay to target `t`. The receiver at `t` waits for this many increments.
-uint32_t relay_target_lanes(
-    const distributed::MeshDevice& mesh, const RelayLocal& relay, const distributed::MeshCoordinate& t, uint32_t p) {
-    return relay_entry_two_lanes_fit(mesh, relay, p) ? relay_target_link_lanes(mesh, relay, t, p) : 1u;
+// Lanes from the entry relay to target `t` (claim_relay_links). The receiver at `t` waits for this many increments.
+uint32_t relay_target_lanes(const RelayLocal& relay, const distributed::MeshCoordinate& t) {
+    return relay.target_lanes.at(t);
 }
 
-// Lanes over cable p (sender side only; the receiver side gets it from the peer).
-uint32_t relay_cable_lanes(const distributed::MeshDevice& mesh, const RelayLocal& relay, uint32_t p) {
-    const auto& cable = relay.plan.cables[p];
-    const auto links = tt::tt_fabric::get_forwarding_link_indices(
-        mesh, relay.sender_nodes.at(cable.exit_coord), relay.receiver_nodes.at(cable.entry_coord));
-    TT_FATAL(!links.empty(), "D2DStreamService relay: no fabric link on cable {}", p);
-    return std::min<uint32_t>({relay.max_lanes, static_cast<uint32_t>(links.size()), 2u});
+// Lanes over cable p: the links the exit relay claimed (sender side only; the receiver side gets it from the peer).
+uint32_t relay_cable_lanes(const RelayLocal& relay, uint32_t p) {
+    return static_cast<uint32_t>(relay.cable_links.at(p).size());
+}
+
+// Every connection a relay-mode service makes, claimed in FabricLinkRegistry like the
+// non-relay services' (claim_forwarding_links), so that two workers of one chip never share
+// a router: a router's worker channel serves one worker, and the other one waits forever
+// for a free slot. On a middle rank of a chain, the pairs at risk are the entry relay's
+// forward lanes and the exit relay's credit connections, and a plain receiver's credit link
+// and a plain sender's lanes. A chip's receiver-side service is created
+// before its sender-side one, so when a sender side follows (reserve_links_for_later_service),
+// receiver-side optional second lanes leave one link of their direction free for the sender
+// side's single-link connections; the sender side, created last, claims what is left. A connection that needs one link and finds none fails here,
+// before anything is built, naming the service that holds each router.
+void claim_relay_links(
+    const distributed::MeshDevice& mesh,
+    RelayLocal& relay,
+    const D2DStreamConfig& cfg,
+    bool is_sender,
+    FabricLinkClaims& claims) {
+    const auto& plan = relay.plan;
+    const auto& group = cfg.fabric_link_group;
+    const uint32_t ncables = static_cast<uint32_t>(plan.cables.size());
+    if (is_sender) {
+        relay.cable_links.assign(ncables, {});
+        relay.credit_links.assign(ncables, {});
+        // Exit relays first: each needs one credit connection per direction toward its sources, then its cable
+        // lanes; plain senders' lanes (up to max_lanes) take what the exit chips do not need.
+        for (uint32_t p = 0; p < ncables; ++p) {
+            const auto& cable = plan.cables[p];
+            const auto e = cable.exit_coord;
+            const auto exit_node = relay.sender_nodes.at(e);
+            const auto entry_node = relay.receiver_nodes.at(cable.entry_coord);
+            for (const auto& s : cable.slots) {
+                if (s == e) {
+                    continue;
+                }
+                const auto src_node = relay.sender_nodes.at(s);
+                const auto dir = tt::tt_fabric::pipeline_get_forwarding_direction(mesh, exit_node, src_node);
+                TT_FATAL(dir.has_value(), "D2DStreamService relay: no route from exit chip {} to coord {}", e, s);
+                if (relay.credit_links[p].contains(*dir)) {
+                    continue;
+                }
+                const auto link = claim_forwarding_links(
+                    mesh, e, exit_node, src_node, 1, D2DServiceRole::ExitRelayCredit, group, claims);
+                relay.credit_links[p].emplace(*dir, RelayLocal::NodeLink{src_node, link.front()});
+            }
+            relay.cable_links[p] = claim_forwarding_links(
+                mesh,
+                e,
+                exit_node,
+                entry_node,
+                std::min<uint32_t>(relay.max_lanes, 2u),
+                D2DServiceRole::ExitRelayCable,
+                group,
+                claims);
+        }
+        for (const auto& [c, pk] : plan.slot_of) {
+            const auto& cable = plan.cables[pk.first];
+            if (c == cable.exit_coord) {
+                continue;
+            }
+            relay.source_links[c] = claim_forwarding_links(
+                mesh,
+                c,
+                relay.sender_nodes.at(c),
+                relay.sender_nodes.at(cable.exit_coord),
+                relay.max_lanes,
+                D2DServiceRole::Sender,
+                group,
+                claims);
+        }
+        return;
+    }
+
+    relay.entry_cable_links.assign(ncables, 0);
+    relay.forward_links.assign(ncables, {});
+    for (uint32_t p = 0; p < ncables; ++p) {
+        const auto& cable = plan.cables[p];
+        const auto e = cable.entry_coord;
+        const auto entry_node = relay.receiver_nodes.at(e);
+        relay.entry_cable_links[p] = claim_forwarding_links(
+            mesh,
+            e,
+            entry_node,
+            relay.sender_nodes.at(cable.exit_coord),
+            1,
+            D2DServiceRole::EntryRelayCable,
+            group,
+            claims)
+                                         .front();
+        // Forward lanes per direction: the most any target that way can use (one each if two lanes would not fit
+        // the core's semaphores). When a later service on this chip needs a router
+        // (reserve_links_for_later_service), a second lane only while another link of that direction stays free.
+        const bool two_fit = relay_entry_two_lanes_fit(mesh, relay, p);
+        std::map<tt::tt_fabric::RoutingDirection, std::pair<tt::tt_fabric::FabricNodeId, uint32_t>> want;
+        for (const auto& t : cable.slots) {
+            if (t == e) {
+                continue;
+            }
+            const auto t_node = relay.receiver_nodes.at(t);
+            const auto dir = tt::tt_fabric::pipeline_get_forwarding_direction(mesh, entry_node, t_node);
+            TT_FATAL(dir.has_value(), "D2DStreamService relay: no route from entry chip {} to coord {}", e, t);
+            const uint32_t lanes = two_fit ? relay_target_link_lanes(mesh, relay, t, p) : 1u;
+            auto [it, added] = want.try_emplace(*dir, t_node, lanes);
+            it->second.second = std::max(it->second.second, lanes);
+        }
+        for (const auto& [dir, w] : want) {
+            relay.forward_links[p].emplace(
+                dir,
+                std::make_pair(
+                    w.first,
+                    claim_forwarding_links(
+                        mesh,
+                        e,
+                        entry_node,
+                        w.first,
+                        w.second,
+                        D2DServiceRole::EntryRelayForward,
+                        group,
+                        claims,
+                        /*keep_free=*/cfg.reserve_links_for_later_service ? 1u : 0u)));
+        }
+        for (const auto& t : cable.slots) {
+            if (t == e) {
+                continue;
+            }
+            const auto dir = *tt::tt_fabric::pipeline_get_forwarding_direction(mesh, entry_node, relay.receiver_nodes.at(t));
+            const uint32_t lanes = two_fit ? relay_target_link_lanes(mesh, relay, t, p) : 1u;
+            relay.target_lanes[t] =
+                std::min<uint32_t>(lanes, static_cast<uint32_t>(relay.forward_links[p].at(dir).second.size()));
+        }
+    }
+    for (const auto& [c, pk] : plan.slot_of) {
+        const auto& cable = plan.cables[pk.first];
+        if (c == cable.entry_coord) {
+            continue;
+        }
+        relay.ack_links[c] = claim_forwarding_links(
+                                 mesh,
+                                 c,
+                                 relay.receiver_nodes.at(c),
+                                 relay.receiver_nodes.at(cable.entry_coord),
+                                 1,
+                                 D2DServiceRole::Receiver,
+                                 group,
+                                 claims)
+                                 .front();
+    }
 }
 
 RelayPeer make_relay_peer(
@@ -2458,7 +2657,7 @@ RelayPeer make_relay_peer(
             .arrived_base = static_cast<uint32_t>(words.arrived_base),
             .md_base = static_cast<uint32_t>(words.md_base),
             .acked_base = static_cast<uint32_t>(words.acked_base),
-            .z_lanes = is_sender ? relay_cable_lanes(*mesh, relay, p) : 0u,
+            .z_lanes = is_sender ? relay_cable_lanes(relay, p) : 0u,
         });
     }
     for (const auto& slot : relay.staging) {
@@ -2492,7 +2691,99 @@ void check_relay_peer(const RelayPeer& peer, const RelayLocal& relay) {
     }
 }
 
-// Trade RelayPeer with the other process, in the same send/recv order as exchange_service_cores.
+// Every relay exchange message starts with this header: whether the side that sent it built its relay
+// state, and how many payload words follow (none when it failed). The words count lets a side that failed
+// before making its own plan still read the peer's payload.
+struct RelayExchangeHeader {
+    uint32_t status = 0;
+    uint32_t words = 0;
+};
+constexpr uint32_t kRelayStatusOk = 0x52454C59;      // 'RELY'
+constexpr uint32_t kRelayStatusFailed = 0x4641494C;  // 'FAIL'
+
+// One relay exchange message: the header, then this side's payload when it has one (nullopt: this
+// side failed to set up its relay).
+void send_relay_words(
+    const std::shared_ptr<distributed::multihost::DistributedContext>& ctx,
+    distributed::multihost::Rank peer_rank,
+    std::optional<std::vector<uint32_t>> words) {
+    const distributed::multihost::Tag tag{kRelayExchangeTag};
+    RelayExchangeHeader header{
+        .status = words.has_value() ? kRelayStatusOk : kRelayStatusFailed,
+        .words = words.has_value() ? static_cast<uint32_t>(words->size()) : 0u,
+    };
+    ctx->send(ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&header), sizeof(header)), peer_rank, tag);
+    if (header.words > 0) {
+        ctx->send(
+            ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(words->data()), words->size() * sizeof(uint32_t)),
+            peer_rank,
+            tag);
+    }
+}
+
+// The peer's relay exchange message: its payload, or nullopt when it reports a failed relay setup.
+std::optional<std::vector<uint32_t>> recv_relay_words(
+    const std::shared_ptr<distributed::multihost::DistributedContext>& ctx, distributed::multihost::Rank peer_rank) {
+    const distributed::multihost::Tag tag{kRelayExchangeTag};
+    RelayExchangeHeader header;
+    ctx->recv(ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&header), sizeof(header)), peer_rank, tag);
+    TT_FATAL(
+        header.status == kRelayStatusOk || header.status == kRelayStatusFailed,
+        "D2DStreamService relay: unexpected relay exchange status {:#x} from rank {}",
+        header.status,
+        *peer_rank);
+    if (header.status == kRelayStatusFailed) {
+        return std::nullopt;
+    }
+    std::vector<uint32_t> words(header.words, 0u);
+    if (!words.empty()) {
+        ctx->recv(
+            ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(words.data()), words.size() * sizeof(uint32_t)),
+            peer_rank,
+            tag);
+    }
+    return words;
+}
+
+// Trade relay words with the other process, in the same send/recv order as exchange_service_cores:
+// the sender sends first, the receiver receives first. Each side sends exactly one message and reads
+// exactly one, whether or not its own setup succeeded, so a failed side still unblocks its peer and
+// leaves no unread message on kRelayExchangeTag for a later service between the same ranks. Returns
+// the peer's payload, or nullopt when the peer failed.
+std::optional<std::vector<uint32_t>> trade_relay_words(
+    const std::shared_ptr<distributed::multihost::DistributedContext>& ctx,
+    bool is_sender,
+    distributed::multihost::Rank peer_rank,
+    std::optional<std::vector<uint32_t>> out) {
+    if (is_sender) {
+        send_relay_words(ctx, peer_rank, std::move(out));
+        return recv_relay_words(ctx, peer_rank);
+    }
+    auto in = recv_relay_words(ctx, peer_rank);
+    send_relay_words(ctx, peer_rank, std::move(out));
+    return in;
+}
+
+// Called from a side's failure path between the MeshSocket handshake and the relay exchange: tell the
+// peer, which is waiting in exchange_relay_peer (or in its own failure path), that this side's relay
+// setup failed, so it throws instead of waiting forever. Never throws, so the caller rethrows its own error.
+void report_relay_failure(
+    const std::shared_ptr<distributed::multihost::DistributedContext>& ctx,
+    bool is_sender,
+    distributed::multihost::Rank peer_rank) noexcept {
+    try {
+        (void)trade_relay_words(ctx, is_sender, peer_rank, std::nullopt);
+    } catch (const std::exception& e) {
+        log_error(
+            tt::LogMetal,
+            "D2DStreamService relay: could not tell rank {} that this side's relay setup failed: {}",
+            *peer_rank,
+            e.what());
+    }
+}
+
+// Trade RelayPeer with the other process (trade_relay_words). Throws when the peer reports that its
+// relay setup failed.
 RelayPeer exchange_relay_peer(
     const std::shared_ptr<distributed::multihost::DistributedContext>& ctx,
     bool is_sender,
@@ -2515,27 +2806,28 @@ RelayPeer exchange_relay_peer(
              c.z_lanes});
     }
     out.insert(out.end(), local.staging_addrs.begin(), local.staging_addrs.end());
-    std::vector<uint32_t> in(out.size(), 0u);
 
-    const distributed::multihost::Tag tag{kRelayExchangeTag};
-    const auto as_bytes = [](std::vector<uint32_t>& v) {
-        return ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(v.data()), v.size() * sizeof(uint32_t));
-    };
-    if (is_sender) {
-        ctx->send(as_bytes(out), peer_rank, tag);
-        ctx->recv(as_bytes(in), peer_rank, tag);
-    } else {
-        ctx->recv(as_bytes(in), peer_rank, tag);
-        ctx->send(as_bytes(out), peer_rank, tag);
-    }
+    const auto in = trade_relay_words(ctx, is_sender, peer_rank, out);
+    TT_FATAL(
+        in.has_value(),
+        "D2DStreamService relay: the {} (rank {}) failed to set up its relay side; see its log",
+        is_sender ? "receiver" : "sender",
+        *peer_rank);
+    TT_FATAL(
+        in->size() == out.size(),
+        "D2DStreamService relay: the {} (rank {}) sent {} relay words, this side expects {}",
+        is_sender ? "receiver" : "sender",
+        *peer_rank,
+        in->size(),
+        out.size());
 
     RelayPeer peer;
     const size_t n = local.cables.size();
     for (size_t p = 0; p < n; ++p) {
-        const uint32_t* w = in.data() + p * kRelayCableWords;
+        const uint32_t* w = in->data() + p * kRelayCableWords;
         peer.cables.push_back(RelayPeerCable{w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7], w[8], w[9]});
     }
-    peer.staging_addrs.assign(in.begin() + n * kRelayCableWords, in.end());
+    peer.staging_addrs.assign(in->begin() + n * kRelayCableWords, in->end());
     check_relay_peer(peer, relay);
     return peer;
 }
@@ -2664,8 +2956,8 @@ Program build_exit_relay_program(
     const auto num_slots = static_cast<uint32_t>(cable.slots.size());
     const uint32_t own_slot = relay.plan.slot_of.at(e).second;
 
-    const auto z_links = tt::tt_fabric::get_forwarding_link_indices(*mesh, exit_node, entry_node);
-    const uint32_t z_lanes = relay_cable_lanes(*mesh, relay, p);
+    const auto& z_links = relay.cable_links.at(p);  // claimed (claim_relay_links)
+    const uint32_t z_lanes = relay_cable_lanes(relay, p);
     const auto cable_dir = tt::tt_fabric::pipeline_get_forwarding_direction(*mesh, exit_node, entry_node);
 
     // Credit connections: one per first-hop direction toward the remote sources.
@@ -2682,8 +2974,7 @@ Program build_exit_relay_program(
         TT_FATAL(dir != cable_dir, "D2DStreamService relay: a credit route at {} leaves over the cable", e);
         const auto [it, added] = conn_of_dir.emplace(*dir, static_cast<uint32_t>(credit_conns.size()));
         if (added) {
-            credit_conns.emplace_back(
-                src_node, tt::tt_fabric::get_forwarding_link_indices(*mesh, exit_node, src_node).front());
+            credit_conns.push_back(relay.credit_links.at(p).at(*dir));  // claimed (claim_relay_links)
         }
         credit_conn[k] = it->second;
     }
@@ -2781,7 +3072,7 @@ Program build_exit_relay_program(
                 const auto src_noc = relay_noc(mesh, service_cores, s);
                 rt.insert(
                     rt.end(),
-                    {relay_source_lanes(*mesh, relay, s, p),
+                    {relay_source_lanes(relay, s),
                      static_cast<uint32_t>(src_node.chip_id),
                      *src_node.mesh_id,
                      static_cast<uint32_t>(src_noc.x),
@@ -2822,7 +3113,7 @@ Program build_entry_relay_program(
     const uint32_t own_slot = relay.plan.slot_of.at(e).second;
     const uint32_t z_lanes = peer.cables[p].z_lanes;
     TT_FATAL(z_lanes >= 1 && z_lanes <= 2, "D2DStreamService relay: bad cable lane count {} from the peer", z_lanes);
-    const auto z_link = tt::tt_fabric::get_forwarding_link_indices(*mesh, entry_node, exit_node).front();
+    const uint32_t z_link = relay.entry_cable_links.at(p);  // claimed (claim_relay_links)
 
     // Per lane: one connection per first-hop direction toward the targets that use that lane.
     std::vector<std::pair<tt::tt_fabric::FabricNodeId, uint32_t>> conns[2];
@@ -2844,12 +3135,12 @@ Program build_entry_relay_program(
         const auto t_node = relay.receiver_nodes.at(t);
         const auto dir = tt::tt_fabric::pipeline_get_forwarding_direction(*mesh, entry_node, t_node);
         TT_FATAL(dir.has_value(), "D2DStreamService relay: no route from entry chip {} to coord {}", e, t);
-        const auto links = tt::tt_fabric::get_forwarding_link_indices(*mesh, entry_node, t_node);
-        lanes[k] = relay_target_lanes(*mesh, relay, t, p);
+        const auto& [dir_node, dir_links] = relay.forward_links.at(p).at(*dir);  // claimed (claim_relay_links)
+        lanes[k] = relay_target_lanes(relay, t);
         for (uint32_t lane = 0; lane < lanes[k]; ++lane) {
             const auto [it, added] = conn_of_dir[lane].emplace(*dir, static_cast<uint32_t>(conns[lane].size()));
             if (added) {
-                conns[lane].emplace_back(t_node, links[lane]);
+                conns[lane].emplace_back(dir_node, dir_links[lane]);
             }
             conn_idx[lane][k] = it->second;
         }
@@ -3143,9 +3434,8 @@ void D2DStreamService::build_relay_sender(D2DStreamServiceSender& sender, const 
             common.metadata_enabled ? static_cast<uint32_t>(words.md_base + k * common.metadata_span_bytes) : 0u,
             exit_node,
             CMAKE_UNIQUE_NAMESPACE::relay_noc(mesh, impl.service_cores, cable.exit_coord));
-        const auto links = tt::tt_fabric::get_forwarding_link_indices(*mesh, src_node, exit_node);
-        const uint32_t lanes = CMAKE_UNIQUE_NAMESPACE::relay_source_lanes(*mesh, relay, c, p);
-        const std::vector<uint32_t> lane_links(links.begin(), links.begin() + lanes);
+        const std::vector<uint32_t>& lane_links = relay.source_links.at(c);  // claimed (claim_relay_links)
+        const auto lanes = static_cast<uint32_t>(lane_links.size());
         workload->add_program(
             tm_distributed::MeshCoordinateRange(c),
             CMAKE_UNIQUE_NAMESPACE::build_sender_program(
@@ -3236,8 +3526,6 @@ void D2DStreamService::build_relay_receiver(D2DStreamServiceReceiver& receiver, 
             static_cast<uint32_t>(relay.words[p].acked_base + k * relay.word_stride),
             entry_node,
             CMAKE_UNIQUE_NAMESPACE::relay_noc(mesh, impl.service_cores, cable.entry_coord));
-        const auto links = tt::tt_fabric::get_forwarding_link_indices(*mesh, t_node, entry_node);
-        TT_FATAL(!links.empty(), "D2DStreamService relay: no fabric link from coord {} to its entry chip", c);
         workload->add_program(
             tm_distributed::MeshCoordinateRange(c),
             CMAKE_UNIQUE_NAMESPACE::build_receiver_program(
@@ -3255,12 +3543,12 @@ void D2DStreamService::build_relay_receiver(D2DStreamServiceReceiver& receiver, 
                 /*share_fabric_links=*/true,
                 static_cast<uint32_t>(impl.link_grant_addrs.at(c)),
                 // The entry relay sends one bytes_sent increment per lane it uses for c.
-                CMAKE_UNIQUE_NAMESPACE::relay_target_lanes(*mesh, relay, c, p),
+                CMAKE_UNIQUE_NAMESPACE::relay_target_lanes(relay, c),
                 std::nullopt,
                 0u,
                 t_node,
                 entry_node,
-                links.front()));
+                relay.ack_links.at(c)));  // claimed (claim_relay_links)
     }
     // 2. Entry chips: the entry relay, in place of their receiver service.
     for (uint32_t p = 0; p < plan.cables.size(); ++p) {
@@ -3450,9 +3738,10 @@ std::unique_ptr<D2DStreamServiceSender> D2DStreamService::create_sender(
     // Build + assemble (shared with create_pair). The service cores move into the
     // handle Impl here, emptying the map sender_guard references.
     // The sender's routers (and so its lane count) are chosen in finalize_sender; the
-    // receiver process waits for the counts before building its kernels, so it hears
-    // about a failure here too.
+    // receiver process waits for the counts (relay mode: for the relay exchange) before
+    // building its kernels, so it hears about a failure here too.
     std::unique_ptr<D2DStreamServiceSender> sender_handle;
+    std::optional<CMAKE_UNIQUE_NAMESPACE::RelayPeer> relay_local;
     try {
         sender_handle = finalize_sender(
             sender_mesh,
@@ -3461,8 +3750,15 @@ std::unique_ptr<D2DStreamServiceSender> D2DStreamService::create_sender(
             receiver_tensor_addrs,
             sender_backings,
             cfg);
+        if (cfg.relay) {
+            const auto& s = *sender_handle->impl_;
+            relay_local =
+                CMAKE_UNIQUE_NAMESPACE::make_relay_peer(*s.relay, s.mesh_device, s.service_cores, /*is_sender=*/true);
+        }
     } catch (...) {
-        if (!cfg.relay) {
+        if (cfg.relay) {
+            CMAKE_UNIQUE_NAMESPACE::report_relay_failure(ctx, /*is_sender=*/true, endpoints.receiver_rank);
+        } else {
             CMAKE_UNIQUE_NAMESPACE::send_sender_lanes(ctx, endpoints.receiver_rank, mo.coords, /*lane_links=*/nullptr);
         }
         throw;
@@ -3474,12 +3770,10 @@ std::unique_ptr<D2DStreamServiceSender> D2DStreamService::create_sender(
     }
     if (cfg.relay) {
         const auto& s = *sender_handle->impl_;
-        const auto local =
-            CMAKE_UNIQUE_NAMESPACE::make_relay_peer(*s.relay, s.mesh_device, s.service_cores, /*is_sender=*/true);
         build_relay_sender(
             *sender_handle,
             RelayInfo{CMAKE_UNIQUE_NAMESPACE::exchange_relay_peer(
-                ctx, /*is_sender=*/true, endpoints.receiver_rank, local, *s.relay)});
+                ctx, /*is_sender=*/true, endpoints.receiver_rank, *relay_local, *s.relay)});
     }
     EnqueueMeshWorkload(
         sender_handle->impl_->mesh_device->mesh_command_queue(), *sender_handle->impl_->workload, /*blocking=*/false);
@@ -3545,22 +3839,35 @@ std::unique_ptr<D2DStreamServiceReceiver> D2DStreamService::create_receiver(
                                   : CMAKE_UNIQUE_NAMESPACE::recv_sender_lanes(ctx, endpoints.sender_rank, mo.coords);
 
     // Build + assemble (shared with create_pair). The service cores move into the
-    // handle Impl here, emptying the map receiver_guard references.
-    auto receiver_handle = finalize_receiver(
-        receiver_mesh,
-        std::move(receiver_socket),
-        std::move(receiver_service_cores),
-        receiver_backings,
-        cfg,
-        sender_lanes);
+    // handle Impl here, emptying the map receiver_guard references. In relay mode the
+    // sender waits in the relay exchange meanwhile, so a failure here is reported to it.
+    std::unique_ptr<D2DStreamServiceReceiver> receiver_handle;
+    std::optional<CMAKE_UNIQUE_NAMESPACE::RelayPeer> relay_local;
+    try {
+        receiver_handle = finalize_receiver(
+            receiver_mesh,
+            std::move(receiver_socket),
+            std::move(receiver_service_cores),
+            receiver_backings,
+            cfg,
+            sender_lanes);
+        if (cfg.relay) {
+            const auto& r = *receiver_handle->impl_;
+            relay_local =
+                CMAKE_UNIQUE_NAMESPACE::make_relay_peer(*r.relay, r.mesh_device, r.service_cores, /*is_sender=*/false);
+        }
+    } catch (...) {
+        if (cfg.relay) {
+            CMAKE_UNIQUE_NAMESPACE::report_relay_failure(ctx, /*is_sender=*/false, endpoints.sender_rank);
+        }
+        throw;
+    }
     if (cfg.relay) {
         const auto& r = *receiver_handle->impl_;
-        const auto local =
-            CMAKE_UNIQUE_NAMESPACE::make_relay_peer(*r.relay, r.mesh_device, r.service_cores, /*is_sender=*/false);
         build_relay_receiver(
             *receiver_handle,
             RelayInfo{CMAKE_UNIQUE_NAMESPACE::exchange_relay_peer(
-                ctx, /*is_sender=*/false, endpoints.sender_rank, local, *r.relay)});
+                ctx, /*is_sender=*/false, endpoints.sender_rank, *relay_local, *r.relay)});
     }
     EnqueueMeshWorkload(receiver_mesh->mesh_command_queue(), *receiver_handle->impl_->workload, /*blocking=*/false);
     receiver_handle->impl_->launched = true;

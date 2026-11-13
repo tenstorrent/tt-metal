@@ -16,6 +16,7 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     fabric2d_device_params,
+    torus_x_device_params,
     torus_xy_device_params,
     torus_y_device_params,
 )
@@ -104,12 +105,13 @@ def _check(name: str, dev_idx: int, actual: torch.Tensor, expected: torch.Tensor
     ],
 )
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links",
+    "mesh_device, device_params, num_links, sp_axis",
     [
         pytest.param(
             (4, 1),
             torus_y_device_params(),
             1,
+            0,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 1), topology="ring"),
             id="torus-y-4x1",
         ),
@@ -117,6 +119,7 @@ def _check(name: str, dev_idx: int, actual: torch.Tensor, expected: torch.Tensor
             (4, 2),
             fabric2d_device_params(),
             1,
+            0,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
             id="fabric2d-mesh-4x2",
         ),
@@ -124,6 +127,7 @@ def _check(name: str, dev_idx: int, actual: torch.Tensor, expected: torch.Tensor
             (2, 4),
             fabric2d_device_params(),
             1,
+            0,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
             id="fabric2d-mesh-2x4",
         ),
@@ -131,6 +135,7 @@ def _check(name: str, dev_idx: int, actual: torch.Tensor, expected: torch.Tensor
             (8, 4),
             fabric2d_device_params(),
             2,
+            0,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="fabric2d-8x4",
         ),
@@ -138,8 +143,18 @@ def _check(name: str, dev_idx: int, actual: torch.Tensor, expected: torch.Tensor
             (8, 4),
             torus_xy_device_params(),
             2,
+            0,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
+        ),
+        # One 4x4 prefill stage (a Galaxy tray half): the dispatch axis is mesh axis 1.
+        pytest.param(
+            (4, 4),
+            torus_x_device_params(),
+            2,
+            1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="torus-x-4x4-sp1",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -149,11 +164,11 @@ def test_offset_cumsum(
     device_params,
     n_routed_experts,
     num_links,
+    sp_axis,
     memory_config,
 ):
     """Test ttnn.offset_cumsum against PyTorch reference."""
-    mesh_config = extract_mesh_config(mesh_device)
-    sp_axis = mesh_config.sp_axis
+    mesh_config = extract_mesh_config(mesh_device, sp_axis)
     dispatch_group_size = mesh_config.dispatch_group_size
     num_dispatch_groups = mesh_config.num_dispatch_groups
     num_devices = num_dispatch_groups * dispatch_group_size
