@@ -42,12 +42,17 @@ Tensor FillPadDeviceOperation::create_output_tensors(
     return input_tensor;
 }
 
-ttnn::Tensor fill_pad(const Tensor& input, ttnn::PadValue fill_value, const MemoryConfig& output_memory_config) {
+ttnn::Tensor fill_pad(
+    const Tensor& input,
+    ttnn::PadValue fill_value,
+    const MemoryConfig& output_memory_config,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     using OperationType = ttnn::prim::FillPadDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .fill_value = fill_value,
             .output_mem_config = output_memory_config,
+            .sub_core_grids = sub_core_grids,
         },
         OperationType::tensor_args_t{.input = input});
 }

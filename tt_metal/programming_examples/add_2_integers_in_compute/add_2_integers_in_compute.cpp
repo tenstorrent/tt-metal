@@ -41,7 +41,7 @@ int main() {
     // A program is a collection of kernels. Note that unlike OpenCL/CUDA where every core must run the
     // same kernel at a given time. Metalium allows you to run different kernels on different cores
     // simultaneously.
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device);
     // We will only be using one Tensix core for this particular example. As Tenstorrent processors are a 2D grid of
     // cores we can specify the core coordinates as (0, 0).
     constexpr CoreCoord core = {0, 0};

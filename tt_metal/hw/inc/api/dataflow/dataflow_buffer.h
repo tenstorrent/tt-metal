@@ -33,6 +33,8 @@ struct noc_traits_t<DataflowBuffer<Pap, Cap>>;
 template <>
 struct noc_traits_t<DataflowBuffer>;
 #endif
+template <typename DFB>
+struct DataflowBufferReadView;
 #endif
 
 #include "api/dataflow/dfb_binding_token.h"
@@ -120,14 +122,18 @@ public:
     //   DataflowBuffer dfb(my_dfb_name);
 #ifdef ARCH_QUASAR
     // The token carries the pattern pair: DataflowBuffer dfb(dfb::out) deduces it.
-    DataflowBuffer(DFBBindingToken<Pap, Cap> token) : DataflowBuffer(static_cast<uint16_t>(token)) {}
+    DataflowBuffer(DFBBindingToken<Pap, Cap> token) : DataflowBuffer(static_cast<uint16_t>(token)) {
+        store_node_ranges(token.node_ranges(), token.num_node_ranges());
+    }
     // DataflowBuffer<> (UNKNOWN) accepts any token, e.g. std::optional<DataflowBuffer<>>::emplace(token).
     template <
         dfb::AccessPattern TokPap,
         dfb::AccessPattern TokCap,
         bool Agnostic = !pattern_known,
         std::enable_if_t<Agnostic, int> = 0>
-    DataflowBuffer(DFBBindingToken<TokPap, TokCap> token) : DataflowBuffer(static_cast<uint16_t>(token)) {}
+    DataflowBuffer(DFBBindingToken<TokPap, TokCap> token) : DataflowBuffer(static_cast<uint16_t>(token)) {
+        store_node_ranges(token.node_ranges(), token.num_node_ranges());
+    }
     // A known pair rejects any other pair's token (otherwise it would silently convert to an id).
     template <
         dfb::AccessPattern TokPap,
@@ -137,7 +143,9 @@ public:
     DataflowBuffer(DFBBindingToken<TokPap, TokCap>) = delete;
 #else
     template <dfb::AccessPattern TokPap, dfb::AccessPattern TokCap>
-    DataflowBuffer(DFBBindingToken<TokPap, TokCap> token) : DataflowBuffer(static_cast<uint16_t>(token)) {}
+    DataflowBuffer(DFBBindingToken<TokPap, TokCap> token) : DataflowBuffer(static_cast<uint16_t>(token)) {
+        store_node_ranges(token.node_ranges(), token.num_node_ranges());
+    }
 #endif
 
     // Relay local DFB (CrossNode / PrefetcherPipe bridge to compute). Same runtime object;
@@ -477,6 +485,7 @@ private:
 
 #ifndef COMPILE_FOR_TRISC
     friend struct noc_traits_t<DFB_CLASS>;
+    friend struct noc_traits_t<DataflowBufferReadView<DFB_CLASS>>;
 
     void write_barrier_impl(const Noc& noc) const;
 #ifdef ARCH_QUASAR
@@ -518,6 +527,20 @@ private:
     }
 
     uint16_t logical_dfb_id_;
+
+    // Watcher: the nodes this DFB exists on, for checking multicasts into it. Only a DFB built from a binding token
+    // knows them; one built from a bare id is not checked.
+#if defined(DEBUG_SANITIZE_NOC_ENABLED)
+    const DebugNodeRange* node_ranges_ = nullptr;
+    uint32_t num_node_ranges_ = 0;
+#endif
+    void store_node_ranges(
+        [[maybe_unused]] const DebugNodeRange* node_ranges, [[maybe_unused]] uint32_t num_node_ranges) {
+#if defined(DEBUG_SANITIZE_NOC_ENABLED)
+        node_ranges_ = node_ranges;
+        num_node_ranges_ = num_node_ranges;
+#endif
+    }
 
 #if defined(ARCH_QUASAR) && !DFB_IS_COMPUTE_MATH
     uint16_t stride_tiles_cache_ = 1;
@@ -591,9 +614,55 @@ struct noc_traits_t<DataflowBuffer> {
         static_assert(
             address_type == Noc::AddressType::NOC, "DataflowBuffer with mcast range cannot be used as L1 destination");
         // Use cached addresses for NOC APIs
-        auto local_addr = dst.get_noc_write_addr() + args.offset_bytes;
+        return multicast_addr(noc, args, dst.get_noc_write_addr());
+    }
+    // The rectangle's multicast address for local_addr, offset_bytes past it; shared with the read-pointer view.
+    static uint64_t multicast_addr(const Noc& noc, const dst_args_mcast_type& args, uint32_t local_addr) {
         return ::get_noc_multicast_addr(
-            args.noc_x_start, args.noc_y_start, args.noc_x_end, args.noc_y_end, local_addr, noc.get_noc_id());
+            args.noc_x_start,
+            args.noc_y_start,
+            args.noc_x_end,
+            args.noc_y_end,
+            local_addr + args.offset_bytes,
+            noc.get_noc_id());
+    }
+    // The nodes the DFB exists on, which Noc::async_write_multicast checks the rectangle against with Watcher.
+    static DebugMulticastNodeSet multicast_node_set([[maybe_unused]] const DFB_CLASS& dst) {
+#if defined(DEBUG_SANITIZE_NOC_ENABLED)
+        return {.ranges = dst.node_ranges_, .num_ranges = dst.num_node_ranges_};
+#else
+        return {};
+#endif
+    }
+};
+
+// A DataflowBuffer as a multicast destination at its read pointer rather than its write pointer, for a block the
+// receivers hold where the sender's read pointer is: read_ptr_view(dfb).
+template <typename DFB>
+struct DataflowBufferReadView {
+    const DFB& dfb;
+};
+
+template <typename DFB>
+constexpr DataflowBufferReadView<DFB> read_ptr_view(const DFB& dfb) {
+    return {dfb};
+}
+
+template <typename DFB>
+struct noc_traits_t<DataflowBufferReadView<DFB>> {
+    using dst_args_mcast_type = typename noc_traits_t<DFB>::dst_args_mcast_type;
+
+    template <Noc::AddressType address_type>
+    static auto dst_addr_mcast(
+        const DataflowBufferReadView<DFB>& dst, const Noc& noc, const dst_args_mcast_type& args) {
+        static_assert(
+            address_type == Noc::AddressType::NOC, "DataflowBuffer with mcast range cannot be used as L1 destination");
+        // Use cached addresses for NOC APIs
+        return noc_traits_t<DFB>::multicast_addr(noc, args, dst.dfb.get_noc_read_addr());
+    }
+    // The address is the DFB's, so it is checked against the DFB's nodes.
+    static DebugMulticastNodeSet multicast_node_set(const DataflowBufferReadView<DFB>& dst) {
+        return noc_traits_t<DFB>::multicast_node_set(dst.dfb);
     }
 };
 

@@ -26,6 +26,26 @@ run twice), so — unlike the cfg-parallel Flux/Qwen-Image pipelines — CFG is 
 Both nets stay resident on the full mesh and run sequentially, and the velocity is blended on-device
 (`v = gw·v_cond + (1-gw)·v_uncond` via `ttnn.lerp`).
 
+## Serving
+
+On a BH Galaxy (4x8), `Ideogram4Pipeline.create_pipeline(mesh_device=...)` warms the pipeline up before it returns.
+For each of the four 2K serving sizes (`SERVING_SIZES`: 2048x2048, 2048x1152, 1152x2048, 1360x2048, as (width, height)),
+it compiles every program a request runs and captures and keeps one denoising-step trace. After that:
+
+- a request at a warmed size (`traced=True`, the default) replays its kept trace, and compiles, captures and allocates
+  nothing;
+- a request at any other size raises `ValueError` ("size WxH was not warmed up").
+
+Open the mesh with `trace_region_size` of at least `required_trace_region_size(mesh_shape)` (128 MB on 4x8; the four
+kept 2K traces allocate 87 MB of it, 10.9 MB in each of the 8 DRAM banks). `create_pipeline` checks this before it loads the weights and raises a
+`ValueError` naming both sizes if the mesh reserves less. The warmed sizes are the pipeline's `resolutions` (by default
+the mesh preset's, as for Wan and Qwen-Image); `pipe.resolutions` lists them. Other meshes (e.g. the 2x4 LoudBox) have
+no default resolutions and do not warm.
+
+To serve other sizes, pass them as `resolutions=[(width, height), ...]`; the VAE supports the 14 Ideogram API sizes plus
+512x512 on a BH Galaxy. `run_warmup=False` skips the warmup; a traced request then needs `pipe.warmup(sizes=[...])`
+first, while untraced requests (`traced=False`) run at any supported size until the first warmup.
+
 ## Performance
 
 Measured on the Blackhole LoudBox (4×2), 512×512px, `V4_TURBO_12` (12 steps), program-cache warm, traced. Numbers are

@@ -291,6 +291,7 @@ set(HW_JIT_API_HEADERS
     inc/internal/debug/assert_common.h
     inc/internal/debug/dprint_buffer.h
     inc/internal/debug/fw_debug.h
+    inc/internal/debug/node_range.h
     inc/internal/debug/noc_zero_guard.h
     inc/internal/debug/sanitize.h
     inc/internal/debug/sanitize_multicast_destination.h

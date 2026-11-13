@@ -1171,7 +1171,8 @@ ttnn::device_operation::ProgramArtifacts TernaryDeviceOperation::TernaryProgramF
 
     // Each TensorParameter accepts a tensor whose logical shape and rank differ from the ones the
     // program was built for.  The program cache needs this.  compute_program_hash hashes only the
-    // logical height and width of each input, besides its dtype, memory config, alignment and tile.
+    // logical width of each input and whether its logical height is a single row, besides its dtype, memory
+    // config, alignment and tile.
     // One cached program therefore serves inputs that differ in their outer dims or in their rank,
     // for example [4,1,32,32] and [1,4,32,32], or [1,32,64] and [1,1,32,64].  The kernels tolerate
     // it.  They read every tensor tile by tile through its accessor, and every shape-dependent kernel

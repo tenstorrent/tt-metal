@@ -611,13 +611,7 @@ def test_large_layer_norm_wide_rows_with_weight_and_bias(device, h, w):
     assert torch.isfinite(output_tensor).all()
     assert output_tensor.count_nonzero() > 0
 
-    if device.arch() == ttnn.device.Arch.QUASAR:
-        try:
-            assert_output_accuracy(torch_output_tensor, output_tensor)
-        except AssertionError:
-            pytest.xfail("Quasar REDUCE_ROW truncates the fp32 running sum on every tile (#60931)")
-    else:
-        assert_output_accuracy(torch_output_tensor, output_tensor)
+    assert_output_accuracy(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("h, w", [(24, 42), (2048, 2048)])

@@ -22,7 +22,7 @@
     !defined(FORCE_WATCHER_OFF)
 
 // The condition above in one name, for code outside this header that exists only for the NoC sanitizer, such as
-// sanitize_multicast_destination.h.
+// sanitize_multicast_destination.h and the nodes a multicast destination keeps for it.
 #define DEBUG_SANITIZE_NOC_ENABLED
 
 #include "watcher_common.h"

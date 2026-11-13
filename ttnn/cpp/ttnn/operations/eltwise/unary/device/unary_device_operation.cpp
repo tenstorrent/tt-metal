@@ -13,6 +13,7 @@
 #include <bit>
 #include <cstdint>
 #include <variant>
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 using namespace tt::tt_metal;
 
@@ -326,7 +327,7 @@ tt::tt_metal::TensorSpec UnaryDeviceOperation::compute_output_specs(
     const auto output_layout = tensor_args.input.layout();
     return tt::tt_metal::TensorSpec(
         output_shape,
-        TensorLayout::fromPaddedShape(
+        tt::tt_metal::experimental::tensor_layout_from_padded_shape(
             args.output_dtype,
             PageConfig(output_layout),
             args.memory_config,

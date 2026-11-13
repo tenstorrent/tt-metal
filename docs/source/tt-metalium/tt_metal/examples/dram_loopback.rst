@@ -33,7 +33,7 @@ Program setup
 .. code-block:: cpp
 
    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
-   Program program = CreateProgram();
+   Program program = CreateProgram(*mesh_device);
 
 Operations in Metalium are almost always capable to be run asynchronously and the ordering of operations is managed by a command queue. The command queue, like the name suggests, is a FIFO queue of commands that are executed in order. Commands include operations run on the device such as upload/download of data and program execution. The mesh command queue handles operations across the entire mesh (in this case, our single device).
 
