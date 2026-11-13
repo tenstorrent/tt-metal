@@ -121,6 +121,8 @@ class MuseGlimmerForConditionalGeneration:
         self._ring_rows = None
         # Prefix cache: retained rings DECODE_B_PAD + 1 ... hold ring snapshots keyed by prompt-prefix hash.
         self._prefix = None
+        # Rows per prefill segment with a ring snapshot after each (0 = off): prefix_cache.segment_rows()
+        self._segment = prefix_cache.segment_rows()
 
     # vLLM's registry inspects these; execution only goes through prefill_forward / decode_forward.
     def embed_input_ids(self, input_ids):
@@ -301,6 +303,31 @@ class MuseGlimmerForConditionalGeneration:
         ttnn.deallocate(ring_tt)
         return logits
 
+    def _prefill_segmented(self, toks: torch.Tensor, page_row: torch.Tensor, ring: int, plan, digests):
+        """Prefill in segments of MUSE_PREFIX_SEGMENT rows, snapshotting the ring after each, so a later prompt that shares
+        only a prefix of this one (a subagent branch point) resumes from the nearest lower snapshot. Segment 1 is a plain
+        prefill of toks[:segment]; the next ones resume from the live ring (no restore); the last one (up to 1.5 segments,
+        so no tiny tail) is returned for sampling and snapshotted by the caller. UNTESTED ON DEVICE."""
+        seg, n = self._segment, toks.shape[0]
+        cur = plan.start
+        restore = plan.start > 0
+        while n - cur > seg * 3 // 2:
+            nxt = cur + seg
+            if cur == 0:
+                logits = self._prefill_one(toks[:nxt], page_row, ring)
+            else:
+                logits = self._prefill_resume(
+                    toks[:nxt], page_row, ring, PrefillPlan(cur, plan.snapshot_ring, plan.cached_tokens), restore=restore
+                )
+            ttnn.deallocate(logits)
+            self._snapshot(ring, toks[:nxt], digests[: nxt // prefix_cache.CACHE_ALIGN])
+            cur, restore = nxt, False
+        if cur == 0:
+            return self._prefill_one(toks, page_row, ring)
+        return self._prefill_resume(
+            toks, page_row, ring, PrefillPlan(cur, plan.snapshot_ring, plan.cached_tokens), restore=restore
+        )
+
     def _prefill_resume(self, tokens: torch.Tensor, page_row: torch.Tensor, ring: int, plan: PrefillPlan, restore=True):
         """Prefill tokens[plan.start:] on top of the cached prefix. UNTESTED ON DEVICE (host bookkeeping is tested).
 
@@ -414,7 +441,10 @@ class MuseGlimmerForConditionalGeneration:
             plan = digests = None
             if self._prefix is not None:
                 plan, digests = self._plan_prefill(toks, starts[i])
-            logits = self._prefill_one(toks, page_table[i], ring, plan)
+            if self._prefix is not None and self._segment:
+                logits = self._prefill_segmented(toks, page_table[i], ring, plan, digests)
+            else:
+                logits = self._prefill_one(toks, page_table[i], ring, plan)
             if self._prefix is not None:
                 self._snapshot(ring, toks, digests)
             if sampling_params is not None:

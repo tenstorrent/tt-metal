@@ -34,6 +34,14 @@ def retained_rings() -> int:
     return int(os.environ.get("MUSE_PREFIX_SNAPSHOTS", 32)) if enabled() else 0
 
 
+def segment_rows() -> int:
+    """MUSE_PREFIX_SEGMENT: rows per prefill segment (a multiple of 256) with a ring snapshot after each, 0 = off (default)."""
+    n = int(os.environ.get("MUSE_PREFIX_SEGMENT", 0)) if enabled() else 0
+    if n and n % CACHE_ALIGN:
+        raise ValueError(f"MUSE_PREFIX_SEGMENT must be a multiple of {CACHE_ALIGN}, got {n}")
+    return n
+
+
 def chain_hashes(tokens, salt: bytes = b"") -> list:
     """digests[k] identifies tokens[: (k + 1) * CACHE_ALIGN]: blake2b chained over CACHE_ALIGN-token blocks."""
     t = torch.as_tensor(tokens).reshape(-1).to(torch.int32).numpy()

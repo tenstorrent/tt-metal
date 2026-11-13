@@ -349,3 +349,35 @@ def test_ring_fill_len_is_the_prompt_rounded_to_256_and_fits_the_ring_pad():
         # the window of the last real rows survives a fill of f rows into a ring of window + RING_PAD_ROWS rows
         ring = 2048 + gv.RING_PAD_ROWS
         assert f - ring <= n - 2048
+
+
+# ---- mid-prompt snapshots (segmented prefill) ----------------------------------------------------------------------
+
+
+def test_segmented_prefill_snapshots_every_segment_and_a_branch_resumes_from_the_nearest_lower_one(monkeypatch):
+    a = _adapter(monkeypatch, snapshots=8)
+    a._segment = 16384
+    prompt = torch.arange(60_000)
+    call = _run(a, prompt, cached=0, slot=3)
+    live = a._row_ring[3]
+    # segments [0, 16384) plain, [16384, 32768) and [32768, 49152) resumed, the last 10,848 rows resumed and returned;
+    # snapshots at 16384, 32768, 49152 and the end (59904)
+    assert [(live, g) for g in (33, 34, 35, 36)] == a.copies
+    assert call["resume"].start == 49152 and call["tokens"].shape[0] == 60_000 - 49152
+    # a branch shares 20,000 tokens with that prompt and diverges: vLLM caches 19,968 of them; the nearest lower snapshot is 16384
+    branch = torch.cat([prompt[:20_000], torch.arange(500_000, 505_000)])
+    a.copies.clear()
+    call = _run(a, branch, cached=19_968, slot=5)
+    assert call["resume"] is not None and a.copies[0] == (33, a._row_ring[5])  # restores the 16384 snapshot
+    assert call["resume"].start == 16384 and call["tokens"].shape[0] == 25_000 - 16384  # 8,616 rows left: no more cut
+
+
+def test_segment_rows_must_be_a_multiple_of_256(monkeypatch, expect_error):
+    monkeypatch.setenv("MUSE_PREFIX_CACHE", "1")
+    monkeypatch.setenv("MUSE_PREFIX_SEGMENT", "1000")
+    with expect_error(ValueError, "multiple of 256"):
+        pc.segment_rows()
+    monkeypatch.setenv("MUSE_PREFIX_SEGMENT", "16384")
+    assert pc.segment_rows() == 16384
+    monkeypatch.delenv("MUSE_PREFIX_CACHE")
+    assert pc.segment_rows() == 0
