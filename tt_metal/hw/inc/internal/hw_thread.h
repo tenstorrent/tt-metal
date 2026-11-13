@@ -28,8 +28,8 @@ inline __attribute__((always_inline)) uint32_t read_hw_thread_idx() {
     uint64_t hartid;
     asm volatile("csrr %0, mhartid" : "=r"(hartid));
 #if defined(COMPILE_FOR_IDLE_ERISC)
-    // A Keraunos core interleaves its two CCEs: processor 2 * hart + cce (MEM_IERISC_CCE_BASE).
-    return static_cast<uint32_t>(hartid % MEM_IERISC_LOCAL_HARTS) * MEM_IERISC_CCES + PHYSICAL_CCE_ID;
+    // A Keraunos core interleaves its two CCEs: processor 2 * hart + eth_cce (MEM_IERISC_ETH_CCE_BASE).
+    return static_cast<uint32_t>(hartid % MEM_IERISC_LOCAL_HARTS) * MEM_IERISC_ETH_CCES + ETH_PHYSICAL_CCE_ID;
 #else
     return static_cast<uint32_t>(hartid);
 #endif

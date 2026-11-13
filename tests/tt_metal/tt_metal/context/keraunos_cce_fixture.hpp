@@ -40,7 +40,7 @@ constexpr const char* kKernelDir = "tests/tt_metal/tt_metal/test_kernels/misc/ke
 // Phase 2 of keraunos_plan.md moves this into a host-written routes table.
 constexpr uint64_t kHsioGlobalSramBase = 0x12'0680'0000ULL;
 
-// Status words the kernels write (see cce_idma_copy.cpp).
+// Status words the kernels write (see keraunos_cce_idma_copy.cpp).
 constexpr uint32_t kStarted = 0x1D3A0001;
 constexpr uint32_t kIssued = 0x1D3A0002;
 constexpr uint32_t kAcked = 0x1D3A0003;
@@ -55,7 +55,7 @@ constexpr uint32_t kRegionBytes = 0x2000;
 struct Hsio {
     CoreCoord logical;
     uint32_t hsio = 0;
-    uint32_t cce = 0;
+    uint32_t eth_cce = 0;
 };
 
 class KeraunosCceTest : public ::testing::Test {
@@ -82,10 +82,10 @@ protected:
     std::optional<Hsio> hsio_core(uint32_t hsio) const {
         const auto& chiplet = soc_desc_of(device_).get_arch_descriptor().get_keraunos();
         for (const auto& core : chiplet.cores) {
-            if (core.hsio == hsio && core.cce == 0) {
+            if (core.hsio == hsio && core.eth_cce == 0) {
                 const CoreCoord logical =
                     soc_desc_of(device_).get_logical_ethernet_core_from_physical({core.coord.x, core.coord.y});
-                return Hsio{logical, core.hsio, core.cce};
+                return Hsio{logical, core.hsio, core.eth_cce};
             }
         }
         return std::nullopt;
@@ -96,13 +96,13 @@ protected:
     uint64_t global_addr(const Hsio& c, uint32_t offset) const {
         const auto& arch = soc_desc_of(device_).get_arch_descriptor();
         return kHsioGlobalSramBase + static_cast<uint64_t>(c.hsio) * *arch.get_keraunos().tile_stride +
-               static_cast<uint64_t>(c.cce) * arch.get_eth_l1_size() + unreserved_ + offset;
+               static_cast<uint64_t>(c.eth_cce) * arch.get_eth_l1_size() + unreserved_ + offset;
     }
     uint64_t chiplet_local_addr(const Hsio& c, uint32_t offset) const {
         const auto& arch = soc_desc_of(device_).get_arch_descriptor();
         const auto& chiplet = arch.get_keraunos();
         return *chiplet.local_window + static_cast<uint64_t>(c.hsio) * *chiplet.tile_stride +
-               static_cast<uint64_t>(c.cce) * arch.get_eth_l1_size() + unreserved_ + offset;
+               static_cast<uint64_t>(c.eth_cce) * arch.get_eth_l1_size() + unreserved_ + offset;
     }
 
     void write_words(const Hsio& c, uint32_t offset, const std::vector<uint32_t>& words) {
@@ -156,7 +156,7 @@ protected:
     void add_idma_copy(Program& program, const Hsio& c, const IdmaArgs& a) {
         const KernelHandle k = CreateKernel(
             program,
-            std::string(kKernelDir) + "cce_idma_copy.cpp",
+            std::string(kKernelDir) + "keraunos_cce_idma_copy.cpp",
             c.logical,
             EthernetConfig{.eth_mode = Eth::IDLE, .noc = NOC::NOC_0, .processor = a.hart, .compile_args = {a.cmdbuf}});
         std::vector<uint32_t> args = split(a.src);

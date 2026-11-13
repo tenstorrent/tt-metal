@@ -38,7 +38,7 @@ namespace idle_eth_realtime_profiler_msgs {
 }
 
 HalCoreInfoType create_idle_eth_mem_map(bool programmable) {
-    static_assert(PROCESSOR_COUNT == MEM_IERISC_LOCAL_HARTS * MEM_IERISC_CCES);
+    static_assert(PROCESSOR_COUNT == MEM_IERISC_LOCAL_HARTS * MEM_IERISC_ETH_CCES);
     static_assert(decltype(DevicePrintMemoryLayout::buffer)::processor_count == PROCESSOR_COUNT);
     static_assert(sizeof(mailboxes_t) <= MEM_IERISC_MAILBOX_SIZE);
     static_assert(MEM_IERISC_KERNEL_BASE + MEM_IERISC_KERNEL_SIZE * MEM_IERISC_LOCAL_HARTS <= MEM_IERISC_L1_SIZE);
@@ -71,7 +71,7 @@ HalCoreInfoType create_idle_eth_mem_map(bool programmable) {
     std::vector<std::uint32_t> mem_map_sizes;
     mem_map_sizes.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT), 0);
     // Both CCE SRAMs. Unreserved space stays in CCE0's: CCE1's holds its own firmware and kernels.
-    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::BASE)] = MEM_IERISC_L1_SIZE * MEM_IERISC_CCES;
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::BASE)] = MEM_IERISC_L1_SIZE * MEM_IERISC_ETH_CCES;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::BARRIER)] = sizeof(std::uint32_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::MAILBOX)] = MEM_IERISC_MAILBOX_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::LAUNCH)] = sizeof(launch_msg_t);
@@ -100,24 +100,24 @@ HalCoreInfoType create_idle_eth_mem_map(bool programmable) {
         processors.reserve(PROCESSOR_COUNT);
         names.reserve(PROCESSOR_COUNT);
         for (uint32_t processor = 0; processor < PROCESSOR_COUNT; processor++) {
-            // Processor 2 * hart + cce. Firmware binary i (processor % 2) is CCE i's image, shared by
+            // Processor 2 * hart + eth_cce. Firmware binary i (processor % 2) is CCE i's image, shared by
             // its eight harts; crt0/TLS follow mhartid within it. A CCE's reset vector, image and
-            // scratch are all MEM_IERISC_CCE_BASE(cce) up.
+            // scratch are all MEM_IERISC_ETH_CCE_BASE(eth_cce) up.
             // l1_noc_offset stays 0. The ethernet coordinate selects the core, and the resolver adds
             // that core's window. A tag here would be added on top of that window.
-            const uint32_t cce_base = MEM_IERISC_CCE_BASE(processor % MEM_IERISC_CCES);
+            const uint32_t eth_cce_base = MEM_IERISC_ETH_CCE_BASE(processor % MEM_IERISC_ETH_CCES);
             processors.push_back(
-                {.fw_base_addr = cce_base + MEM_IERISC_FIRMWARE_BASE,
-                 .local_init_addr = cce_base + MEM_IERISC_INIT_LOCAL_L1_BASE_SCRATCH,
-                 .fw_launch_addr = cce_base + ETH_BOOT_HART_RESET_VECTOR,
-                 .fw_launch_addr_value = cce_base + MEM_IERISC_FIRMWARE_BASE,
+                {.fw_base_addr = eth_cce_base + MEM_IERISC_FIRMWARE_BASE,
+                 .local_init_addr = eth_cce_base + MEM_IERISC_INIT_LOCAL_L1_BASE_SCRATCH,
+                 .fw_launch_addr = eth_cce_base + ETH_BOOT_HART_RESET_VECTOR,
+                 .fw_launch_addr_value = eth_cce_base + MEM_IERISC_FIRMWARE_BASE,
                  .memory_load = ll_api::memory::Loading::CONTIGUOUS,
                  .l1_noc_offset = 0});
             names.emplace_back(fmt::format("DM{}", processor), fmt::format("DM{}", processor));
         }
         processor_classes.push_back(std::move(processors));
         processor_classes_names.push_back(std::move(names));
-        processor_classes_num_fw_binaries.push_back(/*one image per CCE*/ MEM_IERISC_CCES);
+        processor_classes_num_fw_binaries.push_back(/*one image per CCE*/ MEM_IERISC_ETH_CCES);
     }
 
     return {

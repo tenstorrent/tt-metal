@@ -217,7 +217,7 @@ void RunTest(
         fixture->log_file_name, get_expected_single_processor(hal, processor.core_type, thread_idx, num_pushes)));
 }
 
-void RunCceMultiWriterTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+void RunMimirCceMultiWriterTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     if (!hal.has_programmable_core_type(HalProgrammableCoreType::DRAM) || mesh_device->arch() != tt::ARCH::QUASAR) {
         GTEST_SKIP() << "CCE multi-writer ringbuf requires Quasar DRAM/CCE cores";
@@ -509,7 +509,7 @@ TEST_F(MeshWatcherFixture, TestWatcherRingBufferMpscSemaphoreRewind) {
 
 // All CCE harts push concurrently through the cached atomic lock. Sequential Drisc0..Drisc7
 // cases never contend that lock.
-TEST_F(MeshWatcherFixture, TestWatcherRingBufferCceMultiWriter) {
+TEST_F(MeshWatcherFixture, TestWatcherRingBufferMimirCceMultiWriter) {
     const auto& hal = MetalContext::instance().hal();
     if (!this->IsSlowDispatch()) {
         GTEST_SKIP() << "DRAM/CCE ringbuf requires Slow Dispatch";
@@ -518,7 +518,7 @@ TEST_F(MeshWatcherFixture, TestWatcherRingBufferCceMultiWriter) {
         GTEST_SKIP() << "CCE multi-writer ringbuf requires DRAM programmable cores";
     }
     for (auto& mesh_device : this->devices_) {
-        this->RunTestOnDevice(RunCceMultiWriterTest, mesh_device);
+        this->RunTestOnDevice(RunMimirCceMultiWriterTest, mesh_device);
     }
 }
 

@@ -1224,7 +1224,7 @@ TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizePartialRecord) {
         this->devices_[0]);
 }
 
-void RunCceSanitizeL1Overflow(
+void RunMimirCceSanitizeL1Overflow(
     MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     const auto& hal = MetalContext::instance().hal();
     if (tt::tt_metal::MetalContext::instance().rtoptions().watcher_noc_sanitize_disabled()) {
@@ -1248,7 +1248,7 @@ void RunCceSanitizeL1Overflow(
 
     CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/test_kernels/misc/cce_watcher_sanitize_l1.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/misc/mimir_cce_watcher_sanitize_l1.cpp",
         logical_core,
         DramConfig{.noc = tt_metal::NOC::NOC_0, .compile_args = {overflow_addr}});
     workload.add_program(device_range, std::move(program));
@@ -1283,6 +1283,6 @@ void RunCceSanitizeL1Overflow(
     EXPECT_EQ(exception, expected);
 }
 
-TEST_F(MeshWatcherFixture, CceTestWatcherSanitizeL1Overflow) {
-    this->RunTestOnDevice(RunCceSanitizeL1Overflow, this->devices_[0]);
+TEST_F(MeshWatcherFixture, MimirCceTestWatcherSanitizeL1Overflow) {
+    this->RunTestOnDevice(RunMimirCceSanitizeL1Overflow, this->devices_[0]);
 }

@@ -104,19 +104,19 @@ public:
         // (which XIPify's check_relaxed expects); --no-relax only stops the linker from acting on them.
         flags += "-Wl,--no-relax ";
         if (params.core_type == HalProgrammableCoreType::IDLE_ETH) {
-            // processor_id is the firmware index (= CCE) for firmware and the processor (2 * hart + cce)
+            // processor_id is the firmware index (= CCE) for firmware and the processor (2 * hart + eth_cce)
             // for kernels. Each CCE's image is linked into its own SRAM.
-            const uint32_t cce = params.processor_id % MEM_IERISC_CCES;
-            const uint32_t hart = params.processor_id / MEM_IERISC_CCES;
-            const DeviceAddr cce_base = MEM_IERISC_CCE_BASE(cce);
-            const DeviceAddr text = cce_base + MEM_IERISC_FIRMWARE_BASE;
-            const DeviceAddr data = cce_base + MEM_IERISC_GLOBAL_BASE;
-            const DeviceAddr tls = cce_base + MEM_IERISC_LOCAL_BASE;
+            const uint32_t eth_cce = params.processor_id % MEM_IERISC_ETH_CCES;
+            const uint32_t hart = params.processor_id / MEM_IERISC_ETH_CCES;
+            const DeviceAddr eth_cce_base = MEM_IERISC_ETH_CCE_BASE(eth_cce);
+            const DeviceAddr text = eth_cce_base + MEM_IERISC_FIRMWARE_BASE;
+            const DeviceAddr data = eth_cce_base + MEM_IERISC_GLOBAL_BASE;
+            const DeviceAddr tls = eth_cce_base + MEM_IERISC_LOCAL_BASE;
             if (params.is_fw) {
                 flags += fmt::format("-Wl,--defsym=__fw_text={} ", text);
                 flags += fmt::format("-Wl,--defsym=__text_size={} ", MEM_IERISC_FIRMWARE_SIZE);
             } else {
-                const DeviceAddr kn_text = cce_base + MEM_IERISC_KERNEL_BASE + hart * MEM_IERISC_KERNEL_SIZE;
+                const DeviceAddr kn_text = eth_cce_base + MEM_IERISC_KERNEL_BASE + hart * MEM_IERISC_KERNEL_SIZE;
                 flags += fmt::format("-Wl,--defsym=__kn_text={} ", kn_text);
                 flags += fmt::format("-Wl,--defsym=__text_size={} ", MEM_IERISC_KERNEL_SIZE);
                 flags += fmt::format("-Wl,--defsym=__kn_data={} ", data + MEM_IERISC_GLOBAL_SIZE * (1 + hart));
@@ -129,27 +129,27 @@ public:
             flags += fmt::format("-Wl,--defsym=__local_base={} ", tls);
             flags += fmt::format("-Wl,--defsym=__local_stride={} ", MEM_IERISC_LOCAL_SIZE);
         } else if (params.core_type == HalProgrammableCoreType::DRAM) {
-            const DeviceAddr cce_text = MEM_CCE_SRAM_LOCAL_BASE + MEM_CCE_FIRMWARE_BASE;
-            const DeviceAddr cce_data = MEM_CCE_SRAM_LOCAL_BASE + MEM_CCE_GLOBAL_BASE;
-            const DeviceAddr cce_tls = MEM_CCE_SRAM_LOCAL_BASE + MEM_CCE_LOCAL_BASE;
+            const DeviceAddr eth_cce_text = MEM_MIMIR_CCE_SRAM_LOCAL_BASE + MEM_MIMIR_CCE_FIRMWARE_BASE;
+            const DeviceAddr eth_cce_data = MEM_MIMIR_CCE_SRAM_LOCAL_BASE + MEM_MIMIR_CCE_GLOBAL_BASE;
+            const DeviceAddr eth_cce_tls = MEM_MIMIR_CCE_SRAM_LOCAL_BASE + MEM_MIMIR_CCE_LOCAL_BASE;
             if (params.is_fw) {
-                flags += fmt::format("-Wl,--defsym=__fw_text={} ", cce_text);
-                flags += fmt::format("-Wl,--defsym=__text_size={} ", MEM_CCE_FIRMWARE_SIZE);
+                flags += fmt::format("-Wl,--defsym=__fw_text={} ", eth_cce_text);
+                flags += fmt::format("-Wl,--defsym=__text_size={} ", MEM_MIMIR_CCE_FIRMWARE_SIZE);
             } else {
-                const DeviceAddr cce_kn_text =
-                    MEM_CCE_SRAM_LOCAL_BASE + MEM_CCE_KERNEL_BASE + params.processor_id * MEM_CCE_KERNEL_SIZE;
-                flags += fmt::format("-Wl,--defsym=__kn_text={} ", cce_kn_text);
-                flags += fmt::format("-Wl,--defsym=__text_size={} ", MEM_CCE_KERNEL_SIZE);
+                const DeviceAddr eth_cce_kn_text =
+                    MEM_MIMIR_CCE_SRAM_LOCAL_BASE + MEM_MIMIR_CCE_KERNEL_BASE + params.processor_id * MEM_MIMIR_CCE_KERNEL_SIZE;
+                flags += fmt::format("-Wl,--defsym=__kn_text={} ", eth_cce_kn_text);
+                flags += fmt::format("-Wl,--defsym=__text_size={} ", MEM_MIMIR_CCE_KERNEL_SIZE);
                 flags += fmt::format(
-                    "-Wl,--defsym=__kn_data={} ", cce_data + MEM_CCE_GLOBAL_SIZE * (1 + params.processor_id));
+                    "-Wl,--defsym=__kn_data={} ", eth_cce_data + MEM_MIMIR_CCE_GLOBAL_SIZE * (1 + params.processor_id));
             }
-            flags += fmt::format("-Wl,--defsym=__fw_data={} ", cce_data);
-            flags += fmt::format("-Wl,--defsym=__data_size={} ", MEM_CCE_GLOBAL_SIZE);
-            flags += fmt::format("-Wl,--defsym=__fw_tls={} ", cce_tls);
-            flags += fmt::format("-Wl,--defsym=__tls_size={} ", MEM_CCE_LOCAL_SIZE);
-            flags += fmt::format("-Wl,--defsym=__min_stack={} ", MEM_CCE_STACK_MIN_SIZE);
-            flags += fmt::format("-Wl,--defsym=__local_base={} ", cce_tls);
-            flags += fmt::format("-Wl,--defsym=__local_stride={} ", MEM_CCE_LOCAL_SIZE);
+            flags += fmt::format("-Wl,--defsym=__fw_data={} ", eth_cce_data);
+            flags += fmt::format("-Wl,--defsym=__data_size={} ", MEM_MIMIR_CCE_GLOBAL_SIZE);
+            flags += fmt::format("-Wl,--defsym=__fw_tls={} ", eth_cce_tls);
+            flags += fmt::format("-Wl,--defsym=__tls_size={} ", MEM_MIMIR_CCE_LOCAL_SIZE);
+            flags += fmt::format("-Wl,--defsym=__min_stack={} ", MEM_MIMIR_CCE_STACK_MIN_SIZE);
+            flags += fmt::format("-Wl,--defsym=__local_base={} ", eth_cce_tls);
+            flags += fmt::format("-Wl,--defsym=__local_stride={} ", MEM_MIMIR_CCE_LOCAL_SIZE);
         } else if (params.processor_class == HalProcessorClassType::DM) {
             const DeviceAddr dm_global_base = params.core_type == HalProgrammableCoreType::DISPATCH
                                                   ? MEM_DISPATCH_DM_GLOBAL_BASE
@@ -409,7 +409,7 @@ public:
         defines.push_back("ARCH_QUASAR");
         if (params.core_type == HalProgrammableCoreType::IDLE_ETH) {
             // Which CCE of the HSIO tile this firmware or kernel image runs on (see qa_hal_idle_eth.cpp).
-            defines.push_back(fmt::format("PHYSICAL_CCE_ID={}", params.processor_id % MEM_IERISC_CCES));
+            defines.push_back(fmt::format("ETH_PHYSICAL_CCE_ID={}", params.processor_id % MEM_IERISC_ETH_CCES));
         }
         // ttsim does not model the tensix global semaphore registers. UMD picks ttsim over RTL
         // emulation by the same .so test.
@@ -570,8 +570,8 @@ public:
 private:
     // One firmware image per CCE; a kernel links against the image of the CCE its processor is on.
     static std::string idle_eth_firmware_name(uint32_t processor_id) {
-        const uint32_t cce = processor_id % MEM_IERISC_CCES;
-        return cce == 0 ? "erisc" : fmt::format("erisc_cce{}", cce);
+        const uint32_t eth_cce = processor_id % MEM_IERISC_ETH_CCES;
+        return eth_cce == 0 ? "erisc" : fmt::format("eth_cce{}", eth_cce);
     }
 };
 

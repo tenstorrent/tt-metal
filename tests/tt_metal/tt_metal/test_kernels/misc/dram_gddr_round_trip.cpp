@@ -4,7 +4,7 @@
 
 #include "api/compile_time_args.h"
 #include "dev_mem_map.h"
-#include "experimental/cce_gddr.h"
+#include "experimental/gddr_cce.h"
 
 void kernel_main() {
     constexpr uint32_t src_buffer_address = get_compile_time_arg_val(0);
@@ -19,7 +19,7 @@ void kernel_main() {
 
     for (uint32_t slot = 0; slot < num_slots; slot++) {
         const uint64_t offset = static_cast<uint64_t>(slot_base + slot) * slot_stride;
-        experimental::cce_gddr_read(mimir_index, src_buffer_address + offset, staging_uncached_address, num_words);
-        experimental::cce_gddr_write(mimir_index, dst_buffer_address + offset, staging_uncached_address, num_words);
+        experimental::gddr_cce_read(mimir_index, src_buffer_address + offset, staging_uncached_address, num_words);
+        experimental::gddr_cce_write(mimir_index, dst_buffer_address + offset, staging_uncached_address, num_words);
     }
 }

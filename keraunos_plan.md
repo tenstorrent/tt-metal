@@ -33,7 +33,7 @@ Setup should go through existing grendelemulation, chippy and tt-metal APIs, the
   - `0x1_0022_…` → M1 D2D1, the direct link.
   - `0x1_0020_…` → M0 D2D1, which goes through M1.
   - M0 GDDR from K is therefore a multi-hop path.
-- **Device code today.** tt-metal has no Keraunos device API. `cce_gddr.h` and `CceSpaRoutes` are Mimir DRISC only. Keraunos tests hardcode `0x1206800000` and `0x1002200000000`.
+- **Device code today.** tt-metal has no Keraunos device API. `gddr_cce.h` and `MimirCceSpaRoutes` are Mimir DRISC only. Keraunos tests hardcode `0x1206800000` and `0x1002200000000`.
 - **Blackhole fabric paths** that Keraunos needs equivalents for:
   - local SRAM → remote SRAM bulk copy
   - remote 32-bit write or atomic increment (credits)
@@ -125,7 +125,7 @@ Interpretation:
 Any fix to `bringup_mmk.py` is expressed through the existing chippy helpers (`initialize_fabrics`, `set_ker_cce_remappers`-equivalent Python, `m2k_host_prepare_keraunos_d2d`) where possible.
 
 ## Phase 2: core goal paths with host-supplied routes
-1. **Routes table (tt-metal).** Replace the hardcoded MMK constants with a host-written `KeraunosSpaRoutes` table, following `hostdev/cce_spa_routes.h` and `risc_firmware_initializer.cpp:70–106`. It holds:
+1. **Routes table (tt-metal).** Replace the hardcoded MMK constants with a host-written `KeraunosSpaRoutes` table, following `hostdev/mimir_cce_spa_routes.h` and `risc_firmware_initializer.cpp:70–106`. It holds:
    - HSIO SRAM SPA base and tile stride
    - Mimir CCE SRAM BAR1 base and stride
    - Mimir GDDR route bases per Mimir as seen from K
@@ -139,7 +139,7 @@ Any fix to `bringup_mmk.py` is expressed through the existing chippy helpers (`i
    Every write is checked with a host readback. Every read is checked by comparing against a host-written pattern.
 
 ## Phase 3: extra paths
-1. **K CCE ↔ Mimir CCE SRAM.** Read and write M0/M1 CCE0/CCE1 SRAM over BAR1. Host checks through `read_cce_sram`.
+1. **K CCE ↔ Mimir CCE SRAM.** Read and write M0/M1 CCE0/CCE1 SRAM over BAR1. Host checks through `read_mimir_cce_sram`.
 2. **Mimir CCE → HSIO SRAM.** A Mimir CCE kernel (DRISC) stores into K HSIO SRAM using the Mimir-side SPA for the K window. Get that SPA from `mimir_cce_dma_m2k*` firmware and the Mimir ATT/endpoint table. Also test the read direction. This is the "worker → router channel" path.
 3. **Remote atomic increment.** Use `noc_atomic_increment` / `idma_l1_atomic_accum_cmdbuf` (`cmdbuff_api.hpp:1566/1597`). Cover:
    - K → other HSIO SRAM
@@ -162,7 +162,7 @@ Any fix to `bringup_mmk.py` is expressed through the existing chippy helpers (`i
    - Quasar `dev_mem_map.h`: add `MEM_IERISC1_*` bases at 4 MiB (firmware, kernel, local, mailbox view).
    - `qa_hal_idle_eth.cpp`: 16 processors in two processor classes, CCE0 and CCE1, each with its own firmware base and linker script.
    - Mailbox: keep it in CCE0 SRAM. CCE1 reaches it natively at 0, which is the Blackhole shared-mailbox model.
-   - `idle_erisc.cc`: a `PHYSICAL_CCE_ID` build define, and each CCE answers its own run/done slots.
+   - `idle_erisc.cc`: a `ETH_PHYSICAL_CCE_ID` build define, and each CCE answers its own run/done slots.
    - Firmware initializer: loads both images.
 4. **Tests:**
    - a CCE1 hart writes its own SRAM; the host reads it at tile + 4 MiB
@@ -172,7 +172,7 @@ Any fix to `bringup_mmk.py` is expressed through the existing chippy helpers (`i
 ## Phase 5: device APIs and fabric-shaped tests
 New header `tt_metal/hw/inc/experimental/keraunos_cce.h` (idle-eth, Quasar), named after the dataflow and fabric APIs:
 - **Identity and local addressing:**
-  - `my_cce()`, `my_hsio()`
+  - `my_eth_cce()`, `my_hsio()`
   - `own_sram(off)`, `peer_cce_sram(off)`
   - uncached variants of both
   These hide the 0/4 MiB difference.

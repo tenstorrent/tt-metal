@@ -61,8 +61,8 @@ Plan: `keraunos_plan.md`. Each entry records what was tried, what happened, and 
 ## Phase 1 probe ladder, first run (same session)
 - **Within Keraunos, all pass:** `KeraunosPaths.{CpuWritesOtherTileSram, IdmaWritesOtherTileSram, IdmaReadsOtherTileSram, CpuReadsOtherTileSram}` (HSIO0 ↔ HSIO1). CPU and IDMA reads of another HSIO tile work.
 - **Across D2D, all fail, writes included:**
-  - `IdmaWritesM1CceSram` and `IdmaWritesM1Gddr`: the IDMA completes and is acked, but the data never lands (host reads 0).
-  - `IdmaReadsM1CceSram` and `IdmaReadsM1Gddr`: time out (120 s). `CpuReadsM1CceSram` also times out.
+  - `IdmaWritesM1MimirCceSram` and `IdmaWritesM1Gddr`: the IDMA completes and is acked, but the data never lands (host reads 0).
+  - `IdmaReadsM1MimirCceSram` and `IdmaReadsM1Gddr`: time out (120 s). `CpuReadsM1MimirCceSram` also times out.
   - `EthernetKernelWritesMimirGddr` fails again (reads 0).
   - No iDMA/AXI error is latched on HSIO2 CCE0, and the emulator never stalled.
 - **D2D links are DOWN right after bring-up.** New probe `chippy/validation/metal_bringup/probe/d2d_link_status.py` reads `BLYNX_BOW_LL_TOP_RXINTERFACECONTROLSTATUS` (tile+0x26004, bits[1:0]==3 means RX_TRAINING_RUN; same gate as chip_init `wait_d2d_link_up`). Session 2026-11-06_20-1x:
@@ -76,8 +76,8 @@ Plan: `keraunos_plan.md`. Each entry records what was tried, what happened, and 
 - Waited with `d2d_link_status.py --wait 900`. All four endpoints came UP after 503 s (0x88ab).
 - Then ran the D2D probes. Same failures as before:
   - `EthernetKernelWritesMimirGddr`: FAIL (reads 0)
-  - `IdmaWritesM1CceSram`: FAIL (acked, data never lands)
-  - `IdmaReadsM1CceSram`: FAIL (120 s timeout)
+  - `IdmaWritesM1MimirCceSram`: FAIL (acked, data never lands)
+  - `IdmaReadsM1MimirCceSram`: FAIL (120 s timeout)
   - `IdmaWritesM1Gddr`: FAIL; this time it timed out (123 s) instead of acking
 - Links were still UP after the batch.
 - **Conclusion:** a down link at bring-up is real (the bring-up should wait for it), but it is not the cause of the failures.
@@ -125,8 +125,8 @@ Plan: `keraunos_plan.md`. Each entry records what was tried, what happened, and 
   - reporting CCE1's `mhartid`.
 
 ### UMD (left unstaged, PR draft in `tt_metal/third_party/umd/PR_DRAFT_keraunos_cce1.md`)
-- New descriptor field `keraunos.cces_per_core` (1 or 2, default 1). `mmk.yaml` sets it to 2 with `eth_l1_size` 8 MiB, so each ethernet core is a whole tile.
-- `keraunos_control_address(core, offset, cce_in_core)` selects CCE1's control slot, 16 MiB above CCE0's.
+- New descriptor field `keraunos.eth_cces_per_core` (1 or 2, default 1). `mmk.yaml` sets it to 2 with `eth_l1_size` 8 MiB, so each ethernet core is a whole tile.
+- `keraunos_control_address(core, offset, eth_cce_in_core)` selects CCE1's control slot, 16 MiB above CCE0's.
 - Reset vector:
   - A register-width write at the start of either CCE's SRAM (core offset 0 or 4 MiB, hart slots 0–7) programs that CCE's reset vectors.
   - Hart 0 broadcasts to all eight harts of that CCE.
@@ -146,18 +146,18 @@ Plan: `keraunos_plan.md`. Each entry records what was tried, what happened, and 
 - `MaxNumKernels` (startup slots) is 16.
 - Eth device-print is sized for 16 processors.
 - `MEM_IERISC_MAILBOX_SIZE` is 48 KiB.
-- `MEM_IERISC_CCES` = 2 and `MEM_IERISC_CCE_BASE(cce)` added.
+- `MEM_IERISC_ETH_CCES` = 2 and `MEM_IERISC_ETH_CCE_BASE(cce)` added.
 - HAL: two firmware images, one per CCE.
-  - Each image, plus its globals, TLS and kernels, is linked `MEM_IERISC_CCE_BASE(cce)` up.
-  - Firmware targets are `erisc` and `erisc_cce1`.
-  - The `PHYSICAL_CCE_ID` define selects the CCE.
+  - Each image, plus its globals, TLS and kernels, is linked `MEM_IERISC_ETH_CCE_BASE(cce)` up.
+  - Firmware targets are `erisc` and `eth_cce1`.
+  - The `ETH_PHYSICAL_CCE_ID` define selects the CCE.
   - CCE1's reset vector is written at core offset 4 MiB.
   - The BASE size is 8 MiB; UNRESERVED stays in CCE0's SRAM.
 - `idle_erisc.cc`:
   - Hart 0 of each CCE runs crt and `risc_init` for its own image.
   - Processor 0 is the only master.
   - Subordinate slots cover processors 1–15 (two words; the host seeds 15 INIT bytes).
-- `hw_thread.h`: the idle-eth processor index is `(mhartid % 8) * 2 + PHYSICAL_CCE_ID`.
+- `hw_thread.h`: the idle-eth processor index is `(mhartid % 8) * 2 + ETH_PHYSICAL_CCE_ID`.
 - Tests:
   - `KeraunosCce1.{Cce1HartWritesOwnSram, Cce1HartWritesOtherTileCce1Sram, Cce1IdmaCopyCce0ToCce1, Cce0Cce1PingPong}`
   - the existing all-hart tests now use processors 0–7 (four harts on each CCE).
@@ -168,7 +168,7 @@ Plan: `keraunos_plan.md`. Each entry records what was tried, what happened, and 
 | --- | --- | --- |
 | CCE reset, hold, release, reset vector | `sival_arch.utility.cce`: `cce_cores_hold/release`, `cce_reset_vector_set` | UMD `assert/deassert_risc_reset`, reset-vector write at core offset 0 / 4 MiB (`apply_keraunos_*`) |
 | CCE fabric/uncore bring-up | `gdb_stub.fabric_init.initialize_fabrics("hsio.T.cce.C")` | none (bring-up owns it) |
-| DMRISC windows (own, peer, uncached, HSIO identity) | `utility.cce._program_remap_entry` from `bringup_mmk.py`. SysEng's equivalent is `set_ker_cce_remappers` (firmware basic_init) | `MEM_IERISC_CCE_BASE`, `MEM_IERISC_UNCACHED_BASE` |
+| DMRISC windows (own, peer, uncached, HSIO identity) | `utility.cce._program_remap_entry` from `bringup_mmk.py`. SysEng's equivalent is `set_ker_cce_remappers` (firmware basic_init) | `MEM_IERISC_ETH_CCE_BASE`, `MEM_IERISC_UNCACHED_BASE` |
 | IDMA copy / addrgen | SysEng `libs/idma/include/cmdbuf_accel.h` (C) | `overlay/cmdbuff_api.hpp`, `addrgen_api.hpp`; same register map (tt-2.0.0) |
 | Status / error readback | `cce_read_error_status`, `probe/keraunos_cce_status.py` | none yet |
 | D2D link state | `utility.d2d.d2d_tile_addrs`, `probe/d2d_link_status.py` | none (UMD could gate device open on it) |
@@ -191,7 +191,7 @@ So the 16-hart firmware (two images, interleaved processors, shared mailbox) boo
 
 ## Mimir regression and Phase 3 atomics probe (log `.../scratchpad/atomics.log`)
 - **Mimir representatives, 11/11 pass:**
-  - `MimirEmu.{RuntimeFirmwareInitializesThroughPublicDeviceApi, CceSramChannelsDoNotAliasThroughMetalCluster, AllCcesCopyLocalMimirBlock}`
+  - `MimirEmu.{RuntimeFirmwareInitializesThroughPublicDeviceApi, MimirCceSramChannelsDoNotAliasThroughMetalCluster, AllCcesCopyLocalMimirBlock}`
   - `CceSramRoundTrip*` (8)
 
   The shared Quasar header changes did not break Mimir CCEs.

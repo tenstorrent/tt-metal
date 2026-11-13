@@ -410,9 +410,9 @@
 // One idle-ethernet core is a whole HSIO tile: CCE0's SRAM, then CCE1's. Each CCE sees CCE0's SRAM at
 // local 0 and CCE1's at local MEM_IERISC_L1_SIZE (the native layout bring-up programs), so a core
 // offset is the same address in either CCE's view. CCE1 runs its own image from its own SRAM, laid out
-// like CCE0's but MEM_IERISC_CCE_BASE(1) up. The mailbox is shared and lives in CCE0's SRAM.
-#define MEM_IERISC_CCES 2
-#define MEM_IERISC_CCE_BASE(cce) ((cce) * MEM_IERISC_L1_SIZE)
+// like CCE0's but MEM_IERISC_ETH_CCE_BASE(1) up. The mailbox is shared and lives in CCE0's SRAM.
+#define MEM_IERISC_ETH_CCES 2
+#define MEM_IERISC_ETH_CCE_BASE(eth_cce) ((eth_cce) * MEM_IERISC_L1_SIZE)
 // Offsets 0..63 are reset-vector registers, not SRAM. Reserve through 128 and start the mailbox there.
 #define MEM_IERISC_RESERVED_SIZE 128
 #define MEM_IERISC_MAILBOX_BASE MEM_IERISC_RESERVED_SIZE
@@ -499,62 +499,62 @@
 //
 //   - Local CPU (the hart itself): its own SRAM at 0. Kernels that must be host-visible store
 //     through MEM_L1_UNCACHED_BASE. On a CCE that is MEM_WORKER_UNCACHED_BASE.
-//   - Host / local AXI: CCE n's SRAM at 0x40000000 + n * MEM_CCE_L1_SIZE. The host path does not
+//   - Host / local AXI: CCE n's SRAM at 0x40000000 + n * MEM_MIMIR_CCE_L1_SIZE. The host path does not
 //     go through the hart cache, so this is not the uncached alias even where a numeric field
 //     happens to match. No define for it here: host code never forms this address, and UMD owns it.
 //   - Package-global SPA: 0x1280000000 + n * 4MB.
 //
-// Firmware is linked against the local CPU view, so MEM_CCE_SRAM_LOCAL_BASE is 0 and the offsets
+// Firmware is linked against the local CPU view, so MEM_MIMIR_CCE_SRAM_LOCAL_BASE is 0 and the offsets
 // below serve as both the hart's addresses and the Mimir-local HAL's. Metal cluster access uses
 // the DRAM-core coordinate plus this tag; UMD maps that tagged window onto the host AXI view.
 // A package-ATT descriptor does not use this tag. Its HAL l1_noc_offset is the CCE SRAM window
 // at 0x1280000000.
 //
-#define MEM_CCE_L1_NOC_OFFSET 0x2000000000ULL
-#define MEM_CCE_SRAM_LOCAL_BASE 0x0
-#define MEM_CCE_L1_BASE 0x0
-#define MEM_CCE_L1_SIZE (4 * 1024 * 1024)
-#define MEM_CCE_RESERVED_SIZE 128
+#define MEM_MIMIR_CCE_L1_NOC_OFFSET 0x2000000000ULL
+#define MEM_MIMIR_CCE_SRAM_LOCAL_BASE 0x0
+#define MEM_MIMIR_CCE_L1_BASE 0x0
+#define MEM_MIMIR_CCE_L1_SIZE (4 * 1024 * 1024)
+#define MEM_MIMIR_CCE_RESERVED_SIZE 128
 // Cached watcher semaphore. Give it a dedicated cache line: host-visible mailbox state is updated
 // through the uncached alias, and a cached writeback must not overwrite neighboring fields.
-#define MEM_CCE_WATCHER_RING_BUFFER_LOCK 64
-#define MEM_CCE_MAILBOX_BASE MEM_CCE_RESERVED_SIZE
+#define MEM_MIMIR_CCE_WATCHER_RING_BUFFER_LOCK 64
+#define MEM_MIMIR_CCE_MAILBOX_BASE MEM_MIMIR_CCE_RESERVED_SIZE
 // Must hold mailboxes_t as instantiated for CCE (COMPILE_FOR_DRISC, PROCESSOR_COUNT == 8):
 // profiler_msg_t.buffer[8], DevicePrintBuffer<1632, 8>, and watcher already sized to
 // MaxProcessorsPerCoreType. The static_assert in qa_hal_dram.cpp fires if this is too small.
-#define MEM_CCE_MAILBOX_SIZE 32768
-#define MEM_CCE_MAILBOX_END (MEM_CCE_MAILBOX_BASE + MEM_CCE_MAILBOX_SIZE)
-#define MEM_CCE_FIRMWARE_BASE MEM_CCE_MAILBOX_END
-#define MEM_CCE_FIRMWARE_SIZE (24 * 1024)
-#define MEM_CCE_GLOBAL_BASE (MEM_CCE_FIRMWARE_BASE + MEM_CCE_FIRMWARE_SIZE)
-#define MEM_CCE_GLOBAL_SIZE MEM_DM_GLOBAL_SIZE
+#define MEM_MIMIR_CCE_MAILBOX_SIZE 32768
+#define MEM_MIMIR_CCE_MAILBOX_END (MEM_MIMIR_CCE_MAILBOX_BASE + MEM_MIMIR_CCE_MAILBOX_SIZE)
+#define MEM_MIMIR_CCE_FIRMWARE_BASE MEM_MIMIR_CCE_MAILBOX_END
+#define MEM_MIMIR_CCE_FIRMWARE_SIZE (24 * 1024)
+#define MEM_MIMIR_CCE_GLOBAL_BASE (MEM_MIMIR_CCE_FIRMWARE_BASE + MEM_MIMIR_CCE_FIRMWARE_SIZE)
+#define MEM_MIMIR_CCE_GLOBAL_SIZE MEM_DM_GLOBAL_SIZE
 // crt0 indexes TLS by mhartid. One shared firmware image, one TLS slot per CCE hart.
-#define MEM_CCE_LOCAL_SIZE MEM_DM_LOCAL_SIZE
-#define MEM_CCE_LOCAL_HARTS 8
-// Global slot 0 is the firmware's .data/.bss (__fw_data); slots 1..MEM_CCE_LOCAL_HARTS are the
+#define MEM_MIMIR_CCE_LOCAL_SIZE MEM_DM_LOCAL_SIZE
+#define MEM_MIMIR_CCE_LOCAL_HARTS 8
+// Global slot 0 is the firmware's .data/.bss (__fw_data); slots 1..MEM_MIMIR_CCE_LOCAL_HARTS are the
 // per-hart kernel .data/.bss (__kn_data). Without the kernel slots, __kn_data would alias the TLS
 // base below.
-#define MEM_CCE_LOCAL_BASE (MEM_CCE_GLOBAL_BASE + MEM_CCE_GLOBAL_SIZE * (MEM_CCE_LOCAL_HARTS + 1))
-#define MEM_CCE_MAP_END (MEM_CCE_LOCAL_BASE + (MEM_CCE_LOCAL_SIZE * MEM_CCE_LOCAL_HARTS))
-#define MEM_CCE_INIT_LOCAL_L1_BASE_SCRATCH MEM_CCE_MAP_END
-#define MEM_CCE_INIT_LOCAL_L1_SCRATCH_SIZE (1 * 1024)
-#define MEM_CCE_BANK_TO_NOC_SCRATCH (MEM_CCE_INIT_LOCAL_L1_BASE_SCRATCH + MEM_CCE_INIT_LOCAL_L1_SCRATCH_SIZE)
-#define MEM_CCE_BANK_TO_NOC_SIZE (MEM_BANK_TO_NOC_XY_SIZE + MEM_BANK_OFFSET_SIZE)
+#define MEM_MIMIR_CCE_LOCAL_BASE (MEM_MIMIR_CCE_GLOBAL_BASE + MEM_MIMIR_CCE_GLOBAL_SIZE * (MEM_MIMIR_CCE_LOCAL_HARTS + 1))
+#define MEM_MIMIR_CCE_MAP_END (MEM_MIMIR_CCE_LOCAL_BASE + (MEM_MIMIR_CCE_LOCAL_SIZE * MEM_MIMIR_CCE_LOCAL_HARTS))
+#define MEM_MIMIR_CCE_INIT_LOCAL_L1_BASE_SCRATCH MEM_MIMIR_CCE_MAP_END
+#define MEM_MIMIR_CCE_INIT_LOCAL_L1_SCRATCH_SIZE (1 * 1024)
+#define MEM_MIMIR_CCE_BANK_TO_NOC_SCRATCH (MEM_MIMIR_CCE_INIT_LOCAL_L1_BASE_SCRATCH + MEM_MIMIR_CCE_INIT_LOCAL_L1_SCRATCH_SIZE)
+#define MEM_MIMIR_CCE_BANK_TO_NOC_SIZE (MEM_BANK_TO_NOC_XY_SIZE + MEM_BANK_OFFSET_SIZE)
 // Written by the host after drisc.cc has copied the bank tables out of the preceding scratch
 // range. It is persistent CCE-kernel configuration, not boot code or mailbox storage.
-#define MEM_CCE_SPA_ROUTES_SIZE 64
-#define MEM_CCE_SPA_ROUTES_BASE (MEM_CCE_BANK_TO_NOC_SCRATCH + MEM_CCE_BANK_TO_NOC_SIZE)
-#define MEM_CCE_KERNEL_CONFIG_BASE (MEM_CCE_SPA_ROUTES_BASE + MEM_CCE_SPA_ROUTES_SIZE)
-#define MEM_CCE_KERNEL_CONFIG_SIZE (2 * 1024)
-#define MEM_CCE_KERNEL_BASE ((MEM_CCE_KERNEL_CONFIG_BASE + MEM_CCE_KERNEL_CONFIG_SIZE + 63) & ~63)
-#define MEM_CCE_KERNEL_SIZE MEM_DM_KERNEL_SIZE
-#define MEM_CCE_STACK_MIN_SIZE MEM_DM_STACK_MIN_SIZE
+#define MEM_MIMIR_CCE_SPA_ROUTES_SIZE 64
+#define MEM_MIMIR_CCE_SPA_ROUTES_BASE (MEM_MIMIR_CCE_BANK_TO_NOC_SCRATCH + MEM_MIMIR_CCE_BANK_TO_NOC_SIZE)
+#define MEM_MIMIR_CCE_KERNEL_CONFIG_BASE (MEM_MIMIR_CCE_SPA_ROUTES_BASE + MEM_MIMIR_CCE_SPA_ROUTES_SIZE)
+#define MEM_MIMIR_CCE_KERNEL_CONFIG_SIZE (2 * 1024)
+#define MEM_MIMIR_CCE_KERNEL_BASE ((MEM_MIMIR_CCE_KERNEL_CONFIG_BASE + MEM_MIMIR_CCE_KERNEL_CONFIG_SIZE + 63) & ~63)
+#define MEM_MIMIR_CCE_KERNEL_SIZE MEM_DM_KERNEL_SIZE
+#define MEM_MIMIR_CCE_STACK_MIN_SIZE MEM_DM_STACK_MIN_SIZE
 // Cached local offset, same as the host HAL. Device code adds MEM_L1_UNCACHED_BASE.
-#define MEM_DRISC_MAILBOX_BASE MEM_CCE_MAILBOX_BASE
+#define MEM_DRISC_MAILBOX_BASE MEM_MIMIR_CCE_MAILBOX_BASE
 // Metal boot hart is 0. The value is a local CPU address, so it is the same on
 // every CCE. CCE_RESET_VECTOR_BASE itself names CCE0; UMD offsets it per CCE.
 #define CCE_RESET_VECTOR_BASE 0x02000000
-#define CCE_BOOT_HART_RESET_VECTOR CCE_RESET_VECTOR_BASE
+#define MIMIR_CCE_BOOT_HART_RESET_VECTOR CCE_RESET_VECTOR_BASE
 
 /////////////
 // Padding/alignment restriction needed in linker scripts for erisc

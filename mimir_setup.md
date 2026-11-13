@@ -119,16 +119,39 @@ emu run -t 3600 -- -sv tests/test_metal_server.py --disable-dpi    # mmk
 
 ## Use 'chippy' to load firmware
 
-There are 3 FW bring-up scripts:
+There are 4 FW bring-up scripts:
 - `bringup_mimir_1x1.py` -> Requires at least 1 Mimir chiplets. Brings up 2 CCEs & connections to adjacent DRAM.
 - `bringup_two_mimir.py` -> Requires at least 2 Mimir chiplets connected to each other. Brings up 2 CCEs in each mimir, connections to adjacent DRAM from each mimir & D2D connections between the mimirs.
-- `bringup_mmk.py` -> Requires at least 2 Mimir chiplets connected to each other & connected to 1 Keraunos. Brings up CCEs for all 3 chiplets, connections to adjacent DRAM from each mimir & D2D connections between all 3 chiplets.
+- `bringup_mmk.py` -> Requires at least 2 Mimir chiplets connected to each other & connected to 1 Keraunos. Brings up CCEs for all 3 chiplets, connections to adjacent DRAM from each mimir & D2D connections between all 3 chiplets. Host-only: it programs everything from Python and loads no firmware. Keraunos reaches Mimir 1 over D2D (CCE SRAM and GDDR) only with `bringup_mmk_fw.py`; with this script those accesses do not complete.
+- `bringup_mmk_fw.py` -> Same package and result as `bringup_mmk.py`, but SysEng's SMC firmware does the chip bring-up on all 3 chiplets (reset and PLL sequencing, D2D configuration and link-up, Mimir NOC init), and the host adds the rest. This is the `emu` default for the `mmk` model. It needs the SysEng firmware images, see below.
 
 Command:
 ```
 cd $CHIPPY_DIR
 uv run --project validation python validation/metal_bringup/<script> <emu_host> <emu_port>
 ```
+
+### SysEng firmware for `bringup_mmk_fw.py`
+
+`bringup_mmk_fw.py` loads SysEng's K2M-remap firmware (the `mimir_smc_k2m_chip_init` and `ker_smc_k2m_chip_init` SMC apps and their CCE blobs, the same images as the `mmk_m2k_dma_remap` test). The images are not in git. Build them once on a machine with apptainer (the `soc-l-#` machines); the output goes to `validation/firmware/build/bin/` in your chippy directory, so any machine that sees that directory can use them:
+
+```
+source /tools_soc/tt/bin/bashrc
+$CHIPPY_DIR/validation/metal_bringup/build_mmk_fw.sh
+```
+
+`bringup_mmk_fw.py` checks for the images and builds them itself only if apptainer is available where it runs (a container usually has none); otherwise it stops with this command. Rebuild after changing anything under `validation/firmware/`.
+
+With the `emu` tool nothing else is needed: `emu` runs `bringup_mmk_fw.py` for the `mmk` model, on `tests/test_metal_server.py` (rounded SiVal clocks). To run it by hand against a server:
+
+```
+cd $CHIPPY_DIR
+uv run --project validation python validation/metal_bringup/bringup_mmk_fw.py <emu_host> <emu_port>
+```
+
+Bring-up takes about 6 minutes on the emulator. The script returns once the host steps are done and leaves the server running; the CCE harts are held, ready for tt-metal.
+
+One known mismatch: SysEng's Mimir SMC app hard-codes 1.5 GB per GDDR channel (`mimir_smc_k2m_chip_init/src/main.c`, `.noc.channel_capacity`) when it sizes the D2D BAR2, ATT entry 5 and the CCE remappers, while the host tooling and tt-metal use 1 GB. The script re-applies the 1 GB values after the firmware finishes. If SysEng's app took the density from `fw_params` (as `chip_enable_fill_noc_from_fw_params()` does in other apps), the host could choose it and this step would go away.
 
 The first run downloads packages from `syseng-pypi.yyz2.tenstorrent.com`. If it fails with `invalid peer certificate: UnknownIssuer`, the machine (or container) does not trust the Tenstorrent IT root CA. Install it with the "Ubuntu / Debian" script on the [Tenstorrent Enterprise IT Root CA Certificate](https://tenstorrent.atlassian.net/wiki/spaces/IT/pages/1287454725) page. The script writes the cert to `/usr/local/share/ca-certificates/tenstorrent-enterprise-it-root-ca-2025-06.crt` and runs `sudo update-ca-certificates`. Inside a docker container this only changes the container, and must be redone if the container is recreated.
 

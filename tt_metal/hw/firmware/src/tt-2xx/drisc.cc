@@ -69,7 +69,7 @@ inline __attribute__((always_inline)) void signal_subordinate_completion() {
 
 inline void start_subordinate_kernel_run_early(uint32_t enables) __attribute__((used));
 inline void start_subordinate_kernel_run_early(uint32_t enables) {
-    for (uint32_t i = 1; i < MEM_CCE_LOCAL_HARTS; i++) {
+    for (uint32_t i = 1; i < MEM_MIMIR_CCE_LOCAL_HARTS; i++) {
         if (enables & (1u << i)) {
             *subordinate_sync_slot(i) = RUN_SYNC_MSG_GO;
         }
@@ -135,7 +135,7 @@ extern "C" uint32_t _start1() {
     }
 
     risc_init();
-    noc_bank_table_init(MEM_CCE_BANK_TO_NOC_SCRATCH);
+    noc_bank_table_init(MEM_MIMIR_CCE_BANK_TO_NOC_SCRATCH);
     noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
     for (uint32_t n = 0; n < NUM_NOCS; n++) {
         noc_local_state_init(n);

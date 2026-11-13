@@ -28,7 +28,7 @@ Each step leaves the current Mimir targets green. Those targets keep their descr
 
 The next work is local Keraunos kernels: a core writes its own SRAM, then a core writes SRAM on the other HSIO tiles. The Mimir link stays as `bringup_two_mimir.py` left it. Releasing Keraunos D2D2 waits for the later D2D step. `bringup_mmk.py` defaults to `MMK_KLINK_RELEASE=none`, which leaves K0 D2D2 in reset. `m1` also leaves the M0 → M1 GDDR copy working. `k0` and `both` release K0 D2D2 and stall that copy.
 
-The core count, the local SRAM window, and the reset registers come from the Keraunos spec and from chippy, the way the CCE hart count and `cce_control_address` offsets did. This sequence does not invent them from the five HSIO rows in the SPA table.
+The core count, the local SRAM window, and the reset registers come from the Keraunos spec and from chippy, the way the CCE hart count and `mimir_cce_control_address` offsets did. This sequence does not invent them from the five HSIO rows in the SPA table.
 
 ### Step 0. Baseline
 

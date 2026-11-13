@@ -75,7 +75,7 @@ inline __attribute__((always_inline)) void push_to_ring_buffer(uint32_t val) {
         watcher_ring_buf_sem_init(0);
     }
 #elif defined(ARCH_QUASAR)
-    auto* lock = reinterpret_cast<uint32_t tt_l1_ptr*>(MEM_CCE_WATCHER_RING_BUFFER_LOCK);
+    auto* lock = reinterpret_cast<uint32_t tt_l1_ptr*>(MEM_MIMIR_CCE_WATCHER_RING_BUFFER_LOCK);
     while (__atomic_exchange_n(lock, 1, __ATOMIC_ACQUIRE) != 0) {
     }
     uint32_t pos = buf->head++;
@@ -114,7 +114,7 @@ inline __attribute__((always_inline)) void init_ring_buffer() {
 #if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_DRISC)
     watcher_ring_buf_sem_init(0);
 #elif defined(ARCH_QUASAR)
-    auto* lock = reinterpret_cast<uint32_t tt_l1_ptr*>(MEM_CCE_WATCHER_RING_BUFFER_LOCK);
+    auto* lock = reinterpret_cast<uint32_t tt_l1_ptr*>(MEM_MIMIR_CCE_WATCHER_RING_BUFFER_LOCK);
     __atomic_store_n(lock, 0, __ATOMIC_RELAXED);
     auto* wrapper = GET_MAILBOX_ADDRESS_DEV(watcher.debug_ring_buf);
     auto* buf = reinterpret_cast<debug_mpsc_ring_buf_msg_t tt_l1_ptr*>(wrapper->data);

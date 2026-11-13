@@ -348,7 +348,7 @@ void RunEthTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::
     }
 }
 
-void RunCceTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+void RunMimirCceTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     const auto& hal = MetalContext::instance().hal();
     if (!fixture->IsSlowDispatch()) {
         GTEST_SKIP() << "CCE waypoints require Slow Dispatch";
@@ -425,8 +425,8 @@ TEST_F(MeshWatcherFixture, TestWatcherWaypointsEth) {
     }
 }
 
-TEST_F(MeshWatcherFixture, TestWatcherWaypointsCce) {
+TEST_F(MeshWatcherFixture, TestWatcherWaypointsMimirCce) {
     for (auto& mesh_device : this->devices_) {
-        this->RunTestOnDevice(CMAKE_UNIQUE_NAMESPACE::RunCceTest, mesh_device);
+        this->RunTestOnDevice(CMAKE_UNIQUE_NAMESPACE::RunMimirCceTest, mesh_device);
     }
 }

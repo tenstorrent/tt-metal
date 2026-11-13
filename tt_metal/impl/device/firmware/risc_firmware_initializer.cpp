@@ -37,7 +37,7 @@
 #include <experimental/fabric/control_plane.hpp>
 #include <experimental/fabric/fabric_types.hpp>
 #include "fabric/fabric_context.hpp"
-#include "hostdev/cce_spa_routes.h"
+#include "hostdev/mimir_cce_spa_routes.h"
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/math.hpp>
 #include "tt_align.hpp"
@@ -71,7 +71,7 @@ tt::umd::RiscType dram_core_teardown_reset_riscs(ARCH arch) {
 // Port this core uses to reach SPA instance `dest`. Local GDDR stays on D2D0: that is the window
 // the remapper claims. A recorded peer route selects the port. With no topology, Mimir 0 reaches
 // any other instance through D2D1 and every other sender uses D2D0.
-uint8_t cce_gddr_port(const tt::umd::SocDescriptor& soc, uint32_t channel, uint32_t sender, uint32_t dest) {
+uint8_t gddr_cce_port(const tt::umd::SocDescriptor& soc, uint32_t channel, uint32_t sender, uint32_t dest) {
     if (dest == sender) {
         return 0;
     }
@@ -89,7 +89,7 @@ uint8_t cce_gddr_port(const tt::umd::SocDescriptor& soc, uint32_t channel, uint3
     return 0;
 }
 
-CceSpaRoutes cce_spa_routes_for_channel(const metal_SocDescriptor& soc, uint32_t channel) {
+MimirCceSpaRoutes mimir_cce_spa_routes_for_channel(const metal_SocDescriptor& soc, uint32_t channel) {
     const auto& channels = soc.get_arch_descriptor().get_mimir_channels();
     uint32_t sender = channel;
     if (!channels.empty()) {
@@ -97,14 +97,14 @@ CceSpaRoutes cce_spa_routes_for_channel(const metal_SocDescriptor& soc, uint32_t
         sender = channels[channel].instance;
     }
     const tt::umd::GrendelAddressWindows windows{};
-    CceSpaRoutes routes{};
+    MimirCceSpaRoutes routes{};
     routes.gddr_d2d_base[0] = windows.dram_base;
-    routes.gddr_d2d_base[1] = windows.dram_base + CCE_GDDR_D2D_LANE_INSTANCES * windows.dram_stride;
+    routes.gddr_d2d_base[1] = windows.dram_base + MIMIR_CCE_GDDR_D2D_LANE_INSTANCES * windows.dram_stride;
     routes.gddr_instance_stride = windows.dram_stride;
     routes.sram_spa_base = windows.dram_l1_base;
     routes.sram_tile_stride = windows.dram_l1_stride;
-    for (uint32_t dest = 0; dest < CCE_SPA_ROUTES_MAX_INSTANCES; ++dest) {
-        routes.gddr_d2d[dest] = cce_gddr_port(soc, channel, sender, dest);
+    for (uint32_t dest = 0; dest < MIMIR_CCE_SPA_ROUTES_MAX_INSTANCES; ++dest) {
+        routes.gddr_d2d[dest] = gddr_cce_port(soc, channel, sender, dest);
     }
     return routes;
 }
@@ -1793,7 +1793,7 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
             if (cluster_.arch() == ARCH::QUASAR) {
                 const auto dram_channel = dram_channel_for_translated_core(soc_d, virtual_dram_core);
                 TT_FATAL(dram_channel.has_value(), "DRAM core {} has no programmable view", virtual_dram_core.str());
-                const CceSpaRoutes routes = cce_spa_routes_for_channel(soc_d, *dram_channel);
+                const MimirCceSpaRoutes routes = mimir_cce_spa_routes_for_channel(soc_d, *dram_channel);
                 const uint64_t routes_addr =
                     hal_.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::BANK_TO_NOC_SCRATCH) +
                     hal_.get_dev_size(HalProgrammableCoreType::DRAM, HalL1MemAddrType::BANK_TO_NOC_SCRATCH);

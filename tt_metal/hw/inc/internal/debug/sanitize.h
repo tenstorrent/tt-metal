@@ -301,7 +301,7 @@ inline uint16_t debug_valid_drisc_addr(uint64_t addr, uint64_t len, bool write) 
         return DebugSanitizeNocAddrOverflow;
     }
     const uint64_t local_addr = (addr >= MEM_L1_UNCACHED_BASE) ? (addr - MEM_L1_UNCACHED_BASE) : addr;
-    constexpr uint64_t mailbox_end = MEM_CCE_MAILBOX_END;
+    constexpr uint64_t mailbox_end = MEM_MIMIR_CCE_MAILBOX_END;
 #else
     if (addr < MEM_DRISC_L1_BASE) {
         return DebugSanitizeNocAddrUnderflow;

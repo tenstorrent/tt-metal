@@ -69,7 +69,7 @@ namespace HAL_BUILD {  // NOLINT(modernize-concat-nested-namespaces)
 #define GET_MAILBOX_ADDRESS_DEV_CACHED(x) (&(((mailboxes_t tt_l1_ptr*)MEM_DRISC_MAILBOX_BASE)->x))
 #else
 #define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr*)MEM_DRISC_MAILBOX_BASE)->x))
-#define GET_MAILBOX_ADDRESS_DEV_CACHED(x) (&(((mailboxes_t tt_l1_ptr*)MEM_CCE_MAILBOX_BASE)->x))
+#define GET_MAILBOX_ADDRESS_DEV_CACHED(x) (&(((mailboxes_t tt_l1_ptr*)MEM_MIMIR_CCE_MAILBOX_BASE)->x))
 #endif
 #elif defined(ARCH_QUASAR)
 #define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr*)(MEM_MAILBOX_BASE + MEM_L1_UNCACHED_BASE))->x))

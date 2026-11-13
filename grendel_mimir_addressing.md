@@ -23,7 +23,7 @@ Done in step 4. `GrendelTTDevice` is the device. It is built from a protocol (`T
 
 ### 2. CCE control is one implementation on the Mimir-local path
 
-Done in step 2. Reset vector, PF_CTRL and DMRISC remap offsets are relative to one CCE (`0x02000000`, `0x02200000`, `0x02202000`). The DRAM-core coordinate selects the CCE. `GrendelNocAddressResolver::cce_control_address` produces the flat config address, and the flat-address transport turns that into the access. On the Mimir-local path that is `MimirChippyMemoryMap`. Emulation and JTAG share that path.
+Done in step 2. Reset vector, PF_CTRL and DMRISC remap offsets are relative to one CCE (`0x02000000`, `0x02200000`, `0x02202000`). The DRAM-core coordinate selects the CCE. `GrendelNocAddressResolver::mimir_cce_control_address` produces the flat config address, and the flat-address transport turns that into the access. On the Mimir-local path that is `MimirChippyMemoryMap`. Emulation and JTAG share that path.
 
 ### 3. The descriptor selects the address space
 
@@ -41,7 +41,7 @@ Metal's DRAM firmware load asserts and deasserts `RiscType::ALL_NEO_DMS`. That i
 
 ### 6. Device-side addresses come from the host
 
-Done in step 7. `cce_gddr_*` and `cce_sram_*` read `CceSpaRoutes` immediately after the CCE bank-to-NOC staging range. The host fills that table per CCE after firmware has copied the staging tables, from the package windows and from `mimir_channels` routes. Local GDDR uses the D2D0 window. A recorded peer route selects the other port. With no topology, Mimir 0 still reaches other instances through D2D1. Tensix kernels still use the NOC/ATT and do not read this table.
+Done in step 7. `gddr_cce_*` and `mimir_cce_sram_*` read `MimirCceSpaRoutes` immediately after the CCE bank-to-NOC staging range. The host fills that table per CCE after firmware has copied the staging tables, from the package windows and from `mimir_channels` routes. Local GDDR uses the D2D0 window. A recorded peer route selects the other port. With no topology, Mimir 0 still reaches other instances through D2D1. Tensix kernels still use the NOC/ATT and do not read this table.
 
 ### 7. Metal picks behaviour from the descriptor
 
@@ -63,7 +63,7 @@ The Quasar choices in `risc_firmware_initializer.cpp` (reset CCE harts, leave th
 
 | What | Address space |
 | --- | --- |
-| Per-CCE offsets plus `cce_control_address` | CCE register plane relative to one CCE. Reset vector `0x02000000`, PF_CTRL `0x02200000`, DMRISC remap `0x02202000`. The DRAM core selects the CCE. |
+| Per-CCE offsets plus `mimir_cce_control_address` | CCE register plane relative to one CCE. Reset vector `0x02000000`, PF_CTRL `0x02200000`, DMRISC remap `0x02202000`. The DRAM core selects the CCE. |
 | `program_cce_dmrisc_remap` | Package windows for the channel's SPA instance. Config, both CCE SRAMs, then that Mimir's GDDR. |
 | Default `GrendelAddressWindows` | Package ATT flat addresses for qsr.s1. NEO L1, Quasar config, GDDR, CCE SRAM `0x1280000000`, Mimir config `0x1300000000`. |
 | `mimir_local` `FlatAddressTransport` (`MimirChippyMemoryMap`) | Chiplet-local AXI. Config at 0, CCE SRAM at `0x40000000`, GDDR at `0x800000000`, CCE SRAM tag `0x2000000000`. |
@@ -71,9 +71,9 @@ The Quasar choices in `risc_firmware_initializer.cpp` (reset CCE harts, leave th
 
 | Who is looking | CCE SRAM | GDDR |
 | --- | --- | --- |
-| Host, through Metal | DRAM core coordinate plus `MEM_CCE_L1_NOC_OFFSET` (`0x2000000000`), or `get_dev_noc_addr` | NOC worker endpoint plus the view's `address_offset` |
-| CCE kernel | Its own SRAM at local 0; another CCE's SRAM from `CceSpaRoutes` | The route base in `CceSpaRoutes`, through a volatile pointer |
-| Firmware link | `MEM_CCE_SRAM_LOCAL_BASE == 0` | — |
+| Host, through Metal | DRAM core coordinate plus `MEM_MIMIR_CCE_L1_NOC_OFFSET` (`0x2000000000`), or `get_dev_noc_addr` | NOC worker endpoint plus the view's `address_offset` |
+| CCE kernel | Its own SRAM at local 0; another CCE's SRAM from `MimirCceSpaRoutes` | The route base in `MimirCceSpaRoutes`, through a volatile pointer |
+| Firmware link | `MEM_MIMIR_CCE_SRAM_LOCAL_BASE == 0` | — |
 
 ## Proposed sequence
 
@@ -97,7 +97,7 @@ Run the emulator baseline on both a single Mimir (`mimir_1x1.yaml`, `bringup_mim
 
 Done. The contract suite is `tests/tt_metal/tt_metal/context/test_mimir_emu.cpp`. Shared helpers are `mimir_contract.hpp`. Raw `Cluster` access is `test_mimir_backend.cpp`. Both are listed in `sources.cmake`.
 
-The contract suite uses a unit `MeshDevice`, its slow-dispatch helpers, buffers, programs, and `write_cce_sram` / `read_cce_sram`. It skips unless the selected package has programmable DRAM cores, and it sizes itself from the descriptor (how many CCEs, how many Mimirs, which pairs can reach each other).
+The contract suite uses a unit `MeshDevice`, its slow-dispatch helpers, buffers, programs, and `write_mimir_cce_sram` / `read_mimir_cce_sram`. It skips unless the selected package has programmable DRAM cores, and it sizes itself from the descriptor (how many CCEs, how many Mimirs, which pairs can reach each other).
 
 Gtest names are unchanged: `MimirEmu.*`, `MimirEmuSameMimirDirect.*`, `MimirEmuCrossMimirNoc.*`, plus the two Cluster cases now compiled from the backend file.
 
@@ -105,7 +105,7 @@ Check: same pass and fail as the baseline. This suite is the yardstick for every
 
 ### Step 2. One CCE control plane
 
-Done. `GrendelNocAddressResolver::cce_control_address` takes a DRAM core and a per-CCE offset. `EmuTTDevice` and `GrendelJtagTTDevice` both write that flat address through `MimirChippyMemoryMap`. The chippy register-accessor overrides and `cce_control_addr` are gone.
+Done. `GrendelNocAddressResolver::mimir_cce_control_address` takes a DRAM core and a per-CCE offset. `EmuTTDevice` and `GrendelJtagTTDevice` both write that flat address through `MimirChippyMemoryMap`. The chippy register-accessor overrides and `cce_control_addr` are gone.
 
 Check: UMD reset tests on the mock and on SiVal, the Metal suite, and JTAG. Host-side, `GrendelNocAddressResolver.CceControlOffsetIsRelativeToOneCce` covers the address math.
 
@@ -113,7 +113,7 @@ Check: UMD reset tests on the mock and on SiVal, the Metal suite, and JTAG. Host
 
 Done. The descriptor key is `address_space`. `mimir_1x1.yaml` and `mimir_2x_package.yaml` set `mimir_local`. A descriptor that omits the key, including the Quasar simulation descriptors, stays `full_package`. `address_windows_for` is what `EmuTTDevice`, `GrendelJtagTTDevice`, and `RtlSimulationTTDevice` call. Emulation and JTAG reject `full_package` because their transport is still chiplet-local.
 
-Package windows, from `models/qsr.s1/att/address_map.csv`: CCE SRAM `0x1280000000` stride 4 MiB, Mimir config `0x1300000000` stride 128 MiB. CCE control is the per-CCE offset in that window. Package-mode HAL `l1_noc_offset` for a DRAM core is `0x1280000000`. Mimir-local keeps `MEM_CCE_L1_NOC_OFFSET` (`0x2000000000`). `RtlSimulationTTDevice` keeps its existing coordinate-plus-core-local-address protocol for every `full_package` descriptor; it does not infer an ATT geometry from the descriptor size.
+Package windows, from `models/qsr.s1/att/address_map.csv`: CCE SRAM `0x1280000000` stride 4 MiB, Mimir config `0x1300000000` stride 128 MiB. CCE control is the per-CCE offset in that window. Package-mode HAL `l1_noc_offset` for a DRAM core is `0x1280000000`. Mimir-local keeps `MEM_MIMIR_CCE_L1_NOC_OFFSET` (`0x2000000000`). `RtlSimulationTTDevice` keeps its existing coordinate-plus-core-local-address protocol for every `full_package` descriptor; it does not infer an ATT geometry from the descriptor size.
 
 Check: `GrendelNocAddressResolver.PackageCceSramMatchesGoldenAddressMap` and `PackageMimirConfigCarriesCceControl`. Behaviour on current Mimir hardware does not change.
 
@@ -127,7 +127,7 @@ Check: `GrendelFlatAddress.MimirLocalTranslatesToChipletAxi` and `GrendelFlatAdd
 
 Done. `mimir_channels` records, per DRAM channel, the SPA instance, the chippy chiplet id, and the D2D route to each peer. Emulation selects that id. The remap uses the package windows and that instance. JTAG no longer refuses a second Mimir: the second entry is a second TAP. A swapped `m0` / `m1` in this list is what MMK shows.
 
-Check: `SocArchDescriptor.Mimir1x1RecordsOneChiplet`, `SocArchDescriptor.Mimir2xRecordsMmKRoutes`, and `GrendelNocAddressResolver.CceDmriscRemapUsesPackageWindows`. On MMK, the two-Mimir descriptor with the chiplets reversed would program the wrong die.
+Check: `SocArchDescriptor.Mimir1x1RecordsOneChiplet`, `SocArchDescriptor.Mimir2xRecordsMmKRoutes`, and `GrendelNocAddressResolver.MimirCceDmriscRemapUsesPackageWindows`. On MMK, the two-Mimir descriptor with the chiplets reversed would program the wrong die.
 
 ### Step 6. Metal only resets harts
 
@@ -137,7 +137,7 @@ Check: two Metal runs in a row on each target, including teardown. The second ru
 
 ### Step 7. Device-side addresses come from the host
 
-Done. DRAM firmware load writes `CceSpaRoutes` immediately after the CCE bank-to-NOC staging range, after firmware has copied the bank tables. `core_info_msg_t` is unchanged: Blackhole sizes its DRAM mailbox to that struct. `cce_gddr_*` and `cce_sram_*` read the table. The kernels are unchanged and are not on the dataflow API. The GDDR port comes from `mimir_channels` when the descriptor has it.
+Done. DRAM firmware load writes `MimirCceSpaRoutes` immediately after the CCE bank-to-NOC staging range, after firmware has copied the bank tables. `core_info_msg_t` is unchanged: Blackhole sizes its DRAM mailbox to that struct. `gddr_cce_*` and `mimir_cce_sram_*` read the table. The kernels are unchanged and are not on the dataflow API. The GDDR port comes from `mimir_channels` when the descriptor has it.
 
 Check: the Metal kernel tests on both models, and the Quasar ZeBu regression so the Tensix path is unchanged.
 
@@ -158,7 +158,7 @@ Check: UMD `EmuTTDevice.*` on the mock and on SiVal, and the Metal contract suit
 Done. Every contract case opens a unit `MeshDevice`; none constructs a `Device` or initializes
 `MetalContext` directly. `write_gddr_view` and `read_gddr_view` use the mesh slow-dispatch API,
 and the tests keep calling those helpers. CCE and DRAM-view parameters come from the selected
-descriptor. `cce_gddr_address` traps on an instance outside `CCE_SPA_ROUTES_MAX_INSTANCES`.
+descriptor. `gddr_cce_address` traps on an instance outside `MIMIR_CCE_SPA_ROUTES_MAX_INSTANCES`.
 
 With no `mimir_channels`, CCE route setup uses the MMK wiring: Mimir 0 reaches other instances on
 D2D1 and every other Mimir uses D2D0. `TT_METAL_EMU_BRINGUP` is removed. Dispatch mode stays with
@@ -182,7 +182,7 @@ Check: the contract suite on the emulator and on JTAG with their existing variab
 
 ### Step 13. Emulator tests check through EmuTTDevice
 
-Done. `test_emu_tt_device.cpp` no longer opens a chippy transport or a `chippy::grendel::Mimir`. Writes are read back with `read_from_device` and with `GrendelTTDeviceTestAccess::read_flat` at the resolver's flat address. `read_flat_address` stays protected. CCE reset, PF_CTRL, and the DMRISC remap are read at `cce_control_address`.
+Done. `test_emu_tt_device.cpp` no longer opens a chippy transport or a `chippy::grendel::Mimir`. Writes are read back with `read_from_device` and with `GrendelTTDeviceTestAccess::read_flat` at the resolver's flat address. `read_flat_address` stays protected. CCE reset, PF_CTRL, and the DMRISC remap are read at `mimir_cce_control_address`.
 
 Check: UMD `EmuTTDevice.*` on the mock and on SiVal.
 
@@ -215,7 +215,7 @@ Check: the contract suite on JTAG silicon.
 
 - **CCE SRAM address on full Grendel.** The host and dispatch use the real NOC/ATT window. That window is the HAL `l1_noc_offset` for a DRAM core. The `0x2000000000` tag stays inside the Mimir-local UMD path.
 - **Who owns bring-up.** SMC firmware releases the CCE uncore and programs the DMRISC and MLA remaps. Metal only resets the cores. On the Mimir-local path, chippy fills the same role until SMC firmware is present.
-- **Kernel API.** CCE kernels keep `cce_gddr_*` and `cce_sram_*`. The host supplies the bases.
+- **Kernel API.** CCE kernels keep `gddr_cce_*` and `mimir_cce_sram_*`. The host supplies the bases.
 
 Steps 1 and 2 are useful on their own. Step 1 produces the shared suite, and step 2 removes a difference between emulation and JTAG that already exists.
 
@@ -241,8 +241,8 @@ The descriptor is the one the runtime will open. A chippy server uses `TT_METAL_
 Size the case from the descriptor:
 
 - The Mimir count is `metal_SocDescriptor::get_num_dram_channels()`, exposed as `num_mimirs_on(device)`. `IDevice::num_dram_channels()` is the Metal DRAM view count, not the Mimir count. Passing the view count to a kernel as the SPA instance index walks off the last die.
-- The CCE count is `num_cces_on(device)`: channel count times the DRAM grid height. The descriptor supplies that height. `mimir_index_for_cce` and `location_for_cce` divide by it.
-- The logical DRAM coordinate is `{view, endpoint index}` from `logical_cce_core(soc_desc, cce_index)`. `write_gddr_view` takes that view index. Launching CCE `n` at `{n / 2, n % 2}` hits the wrong core once a channel has a height other than 2.
+- The CCE count is `num_mimir_cces_on(device)`: channel count times the DRAM grid height. The descriptor supplies that height. `mimir_index_for_cce` and `location_for_mimir_cce` divide by it.
+- The logical DRAM coordinate is `{view, endpoint index}` from `logical_mimir_cce_core(soc_desc, mimir_cce_index)`. `write_gddr_view` takes that view index. Launching CCE `n` at `{n / 2, n % 2}` hits the wrong core once a channel has a height other than 2.
 - A cross-Mimir case needs two DRAM channels. The gtest suite name contains `CrossMimir`, because `is_cross_mimir_case()` keys off that. `mimir_1x1.yaml` on MMK only touches `m0` and is the one-Mimir configuration.
 
 ### Host DRAM and CCE SRAM
@@ -250,8 +250,8 @@ Size the case from the descriptor:
 - Write and read GDDR through `write_gddr_view` / `read_gddr_view`. The integer is the Metal view index. A contract test reaches DRAM through those helpers, or through `slow_dispatch::WriteToDRAMChannel` / `ReadFromDRAMChannel` on the unit mesh.
 - `WriteToDRAMChannel` rejects an address below the allocator's DRAM base (`get_base_allocator_addr(HalMemType::DRAM)`, the same value as `HalDramMemAddrType::UNRESERVED`). Kernel GDDR offsets start at that base. `kDramOffset` (`0x800`) is a displacement above it. The channel-alias test uses the base plus `kDramOffset`. Passing `0x800` by itself is inside the firmware-reserved region.
 - A DRAM view may be 512 MiB (`dram_view_size` 536870912). `dram_bank_size` stays 8 GiB. The second half's `address_offset` is 4 GiB (4294967296). `gddr_sweep_from_soc` treats a positive view smaller than 1 GiB as one slot whose stride is the view size. The view does not have to be a multiple of 1 GiB. Kernel slot math stays `(slot_base + slot) * slot_stride` in `uint64`. `slot_base` is the view's `address_offset` divided by the slot stride, so the 4 GiB half is slot 8 of a 512 MiB stride.
-- Host CCE SRAM goes through `write_cce_sram` and `read_cce_sram`. Pass a logical DRAM core and a HAL NOC address: `cce_sram_noc_addr(offset)` or `hal.get_dev_noc_addr(...)`. The helper applies the HAL offset. The chiplet-local AXI address `0x40000000 + cce_index * 0x400000` and an extra `MEM_CCE_L1_NOC_OFFSET` are both the wrong address in contract test code. Kernel-local SRAM stays 0.
-- Peer SRAM and peer GDDR in a CCE kernel use `cce_gddr.h`. `cce_gddr_address`, `cce_gddr_read`, and `cce_gddr_write` take the destination Mimir index and the offset. `cce_sram_*` takes the destination CCE index. The core's `CceSpaRoutes` selects the D2D port, so the kernel does not also take the sender's Mimir index. `CreateDevice` writes that table after the CCE bank-to-NOC staging range, from the package windows and `mimir_channels`. SPA bases stay out of the kernel. CCE kernels stay on these helpers, and porting a host test leaves the existing CCE kernels alone.
+- Host CCE SRAM goes through `write_mimir_cce_sram` and `read_mimir_cce_sram`. Pass a logical DRAM core and a HAL NOC address: `mimir_cce_sram_noc_addr(offset)` or `hal.get_dev_noc_addr(...)`. The helper applies the HAL offset. The chiplet-local AXI address `0x40000000 + mimir_cce_index * 0x400000` and an extra `MEM_MIMIR_CCE_L1_NOC_OFFSET` are both the wrong address in contract test code. Kernel-local SRAM stays 0.
+- Peer SRAM and peer GDDR in a CCE kernel use `gddr_cce.h`. `gddr_cce_address`, `gddr_cce_read`, and `gddr_cce_write` take the destination Mimir index and the offset. `cce_sram_*` takes the destination CCE index. The core's `MimirCceSpaRoutes` selects the D2D port, so the kernel does not also take the sender's Mimir index. `CreateDevice` writes that table after the CCE bank-to-NOC staging range, from the package windows and `mimir_channels`. SPA bases stay out of the kernel. CCE kernels stay on these helpers, and porting a host test leaves the existing CCE kernels alone.
 
 ### Live SiVal server
 
@@ -265,4 +265,4 @@ Size the case from the descriptor:
 - `EmuTTDevice` tests attach to a live server without INIT. Set `TT_UMD_EMU_INIT=1` only against the chippy mock.
 - Set `TT_UMD_EMU_DRAM=1` only after GDDR bring-up.
 - A per-hart reset mask releases every hart only when the request is the full `RiscType::ALL_NEO_DMS` mask: `(risc_type & ALL_NEO_DMS) == ALL_NEO_DMS`. Any non-zero overlap is not enough. `RiscType::DM0` releases bit 1 only (`1 << 1`). `DM7` releases bit 8.
-- CCE control offsets are relative to one CCE: reset vector `0x02000000`, PF_CTRL `0x02200000`, DMRISC remap `0x02202000`. The DRAM-core coordinate selects the CCE. Test code does not add `0x04000000` per Mimir or `0x01000000` per CCE, and it does not call `cce_control_addr`. Writing `CCE_RESET_VECTOR_BASE` through `write_to_device_reg` on a DRAM core programs that core's CCE. Read it back with `GrendelTTDeviceTestAccess::read_flat` at `cce_control_address`. The test does not open a chippy transport.
+- CCE control offsets are relative to one CCE: reset vector `0x02000000`, PF_CTRL `0x02200000`, DMRISC remap `0x02202000`. The DRAM-core coordinate selects the CCE. Test code does not add `0x04000000` per Mimir or `0x01000000` per CCE, and it does not call `cce_control_addr`. Writing `CCE_RESET_VECTOR_BASE` through `write_to_device_reg` on a DRAM core programs that core's CCE. Read it back with `GrendelTTDeviceTestAccess::read_flat` at `mimir_cce_control_address`. The test does not open a chippy transport.

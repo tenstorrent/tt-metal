@@ -79,7 +79,7 @@ TEST_F(KeraunosOverlay, AddrgenStridedIdma) {
     Program program = CreateProgram();
     const KernelHandle k = CreateKernel(
         program,
-        std::string(kKernelDir) + "cce_idma_addrgen_strided.cpp",
+        std::string(kKernelDir) + "keraunos_cce_idma_addrgen_strided.cpp",
         core->logical,
         EthernetConfig{.eth_mode = Eth::IDLE, .noc = NOC::NOC_0});
     std::vector<uint32_t> args = split(global_addr(*core, kSrcOffset));
@@ -164,7 +164,7 @@ protected:
         Program program = CreateProgram();
         const KernelHandle k = CreateKernel(
             program,
-            std::string(kKernelDir) + "cce_idma_atomic_accum.cpp",
+            std::string(kKernelDir) + "keraunos_cce_idma_atomic_accum.cpp",
             a->logical,
             EthernetConfig{.eth_mode = Eth::IDLE, .noc = NOC::NOC_0});
         std::vector<uint32_t> args = split(global_addr(*a, kSrcOffset));

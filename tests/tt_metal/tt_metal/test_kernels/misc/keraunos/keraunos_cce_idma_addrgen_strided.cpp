@@ -44,7 +44,7 @@ void kernel_main() {
     const uint64_t src_stride = get_arg_val<uint32_t>(6);
     const uint64_t dst_stride = get_arg_val<uint32_t>(7);
     volatile uint32_t* status =
-        reinterpret_cast<volatile uint32_t*>(MEM_IERISC_UNCACHED_BASE + get_arg_val<uint32_t>(8));
+        reinterpret_cast<volatile uint32_t*>(MEM_L1_UNCACHED_BASE + get_arg_val<uint32_t>(8));
 
     reset_cmdbuf_0();
     reset_addrgen_0();
