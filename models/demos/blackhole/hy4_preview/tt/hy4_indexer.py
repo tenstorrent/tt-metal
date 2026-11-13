@@ -15,7 +15,7 @@ from models.demos.blackhole.hy4_preview.tt.hy4_common import SENTINEL, compute_c
 
 
 class Hy4Indexer:
-    def __init__(self, md, cfg, host_w, rope, idx_rope_first=True, ln_eps=1e-6, wdtype=ttnn.bfloat16, wdtypes=None):
+    def __init__(self, md, cfg, host_w, rope, idx_rope_first=False, ln_eps=1e-6, wdtype=ttnn.bfloat16, wdtypes=None):
         wdtypes = wdtypes or {}
         self.md, self.cfg, self.rope, self.idx_rope_first, self.ln_eps = md, cfg, rope, idx_rope_first, ln_eps
         self.nh, self.d, self.rd, self.topk = (
