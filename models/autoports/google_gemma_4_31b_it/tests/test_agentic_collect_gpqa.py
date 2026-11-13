@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 import json
 
+import pytest
+
 from models.autoports.google_gemma_4_31b_it.tools.agentic_collect_gpqa import collect, explain_with_global_overhead, sha
 
 
