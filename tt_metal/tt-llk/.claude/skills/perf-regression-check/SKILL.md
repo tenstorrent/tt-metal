@@ -44,9 +44,12 @@ already cached) without running a sweep — cheap, use it to confirm the refs fi
   fires on large `TILE_LOOP` values. `0` disables the cycle clause.
 - **iterations**: `--iterations`, default `3` per side.
 - **speed of light**: `--speed-of-light`. The script applies it to both sides.
-- **asserts**: builds drop `LLK_ASSERT` by default, as CI perf does
-  (`TT_LLK_DISABLE_ASSERTS=1`, shown as `-noassert` in the build line).
-  `TT_LLK_DISABLE_ASSERTS=0` keeps them; the setting is part of the cache key.
+- **asserts**: builds drop `LLK_ASSERT` by default, as Wormhole/Blackhole CI
+  perf does (`TT_LLK_DISABLE_ASSERTS=1`, cache suffix `-noassert`).
+  `TT_LLK_DISABLE_ASSERTS=0` keeps them on both sides (suffix `-assert`).
+  With asserts off, the script refuses a commit whose `test_config.py`
+  predates the asserts toggle, because that side would still compile with
+  asserts; choose a newer baseline or compare both sides with asserts.
 
 ## What the script guarantees (so you do not have to)
 - **Your checkout is never touched.** Each commit is a separate sparse git worktree with
