@@ -10,16 +10,26 @@ program config.
 """
 from __future__ import annotations
 
+from typing import Optional
+
 import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.minimax_m3.tt.vision.common import as_linear_bias, as_linear_weight, linear, linear_compute_config
+from models.demos.minimax_m3.tt.vision.common import (
+    DRAM_PLACEMENT,
+    BlockPlacement,
+    as_linear_bias,
+    as_linear_weight,
+    linear,
+    linear_compute_config,
+    memory_config_kwargs,
+)
 
 
-def accurate_gelu(x: ttnn.Tensor) -> ttnn.Tensor:
-    """The accurate (erf) GELU of HF's `gelu`."""
-    return ttnn.gelu(x, fast_and_approximate_mode=False)
+def accurate_gelu(x: ttnn.Tensor, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor:
+    """Run the accurate (erf) GELU of HF's `gelu` into memory_config, or where x is when that is None."""
+    return ttnn.gelu(x, fast_and_approximate_mode=False, **memory_config_kwargs(memory_config))
 
 
 # The same GELU as a matmul's fused_activation: ttnn.gelu with fast_and_approximate_mode=False runs this unary.
@@ -87,7 +97,12 @@ class M3VLMLP(LightweightModule):
         """Construct from a torch MLP with fc1 and fc2, such as Hugging Face's MiniMaxM3VLVisionMLP."""
         return cls.from_linears(mesh_device, ref.fc1, ref.fc2, dtype=dtype)
 
-    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, placement: BlockPlacement = DRAM_PLACEMENT) -> ttnn.Tensor:
+        """Return fc2(gelu(fc1(x))), with fc1, GELU and fc2 writing placement's fc1_out, gelu_out and residual.
+
+        A gelu_out of None keeps GELU's output where fc1's is.
+        The projector's MLPs use the default placement, every output in DRAM.
+        """
         hidden = linear(
             x,
             self.fc1_weight,
@@ -95,7 +110,11 @@ class M3VLMLP(LightweightModule):
             self.compute_kernel_config,
             activation=accurate_gelu,
             fused_activation=ACCURATE_GELU_FUSED if self.fuse_gelu else None,
+            memory_config=placement.fc1_out,
+            activation_memory_config=placement.gelu_out,
         )
-        out = linear(hidden, self.fc2_weight, self.fc2_bias, self.compute_kernel_config)
+        out = linear(
+            hidden, self.fc2_weight, self.fc2_bias, self.compute_kernel_config, memory_config=placement.residual
+        )
         ttnn.deallocate(hidden)
         return out

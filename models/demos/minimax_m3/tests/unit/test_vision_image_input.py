@@ -166,12 +166,13 @@ def test_vision_model_forward_device_after_upload(monkeypatch):
     """forward runs push_pixel_values, then forward_device, with each module on the output of the one before.
 
     This holds for a grid's first image, which stages its RoPE tables, and for the next one. forward_device leaves its
-    input allocated, and forward_tower makes forward's calls up to the last block.
+    input allocated, and forward_tower makes forward's calls up to the last block. The stand-in blocks have no weights
+    to place activations by, so the test runs the model with activations "dram".
     """
     calls = []  # (kind, inputs) of each call since the log was cleared
 
     def logged(kind):
-        def call(*inputs):
+        def call(*inputs, **kwargs):
             calls.append((kind, inputs))
             return f"{kind}{sum(logged_kind == kind for logged_kind, _ in calls) - 1}"
 
@@ -186,7 +187,7 @@ def test_vision_model_forward_device_after_upload(monkeypatch):
     monkeypatch.setattr(ttnn, "ReplicateTensorToMesh", lambda mesh_device: None)
 
     def build():
-        return M3VLVisionModel(
+        model = M3VLVisionModel(
             None,
             CONFIG,
             padded_head_dim=96,  # head_dim 80 in whole tiles
@@ -195,6 +196,8 @@ def test_vision_model_forward_device_after_upload(monkeypatch):
             blocks=[logged("block_a"), logged("block_b")],
             projector=logged("projector"),
         )
+        model.activations = "dram"
+        return model
 
     def log(run):
         calls.clear()

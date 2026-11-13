@@ -96,6 +96,7 @@ The vision encoder (`tt/vision/`, one image per forward) has its own tests on on
 
 ```bash
 # The vision tests at the CI grids; M3_VISION_ALL_GRIDS=1 runs every grid of VISION_GRIDS (tests/unit/vision_helpers.py)
+# and the L1 clash test
 pytest models/demos/minimax_m3/tests/unit/ -k test_vision_
 # Wall time of the 32-layer encoder on one 672x672 image on an idle chip, on the device and end to end
 M3_VISION_TIMING=1 pytest -s models/demos/minimax_m3/tests/perf/test_vision_encoder_timing.py
@@ -220,8 +221,9 @@ short aliases (`CHUNK`, `CACHE`, `LAYERS`, `LAYER_IDS`, `LEVEL`, `STAGES`, `STAG
 | `PERF_SEQ`, `PERF_LAYERS`, `PERF_EXPERTS`, `PERF_REPS`, `REAL`, `TRACE_REGION` | `tests/perf/test_model_perf.py` | Synthetic model perf test shape / repetitions / real-weights switch / trace region bytes. |
 | `M3_CKPT` | `tests/unit/test_msa_layer_vs_ref.py` | Checkpoint dir for the real-weights MSA test (falls back to `HF_MODEL`; the test skips without either). Its config picks the variant whose dims / RoPE the test uses. |
 | `RUN_INDEXER_ACCURACY` | `tests/unit/test_indexer_score_msa_accuracy.py` | `1` = run the opt-in indexer accuracy sweep. |
-| `M3_VISION_ALL_GRIDS` | `tests/unit/test_vision_*_vs_ref.py` | `1` = run the vision device tests on every image grid of `VISION_GRIDS` (`tests/unit/vision_helpers.py`), not only the CI grids. |
+| `M3_VISION_ALL_GRIDS` | `tests/unit/test_vision_*_vs_ref.py` | `1` = run the vision device tests on every image grid of `VISION_GRIDS` (`tests/unit/vision_helpers.py`), not only the CI grids, and the L1 clash test of `test_vision_tower_vs_ref.py`. |
 | `M3_VISION_TIMING` | `tests/perf/test_vision_encoder_timing.py` | `1` = run the opt-in vision encoder timing test (builds the 32-layer encoder with random weights). |
+| `M3_VISION_ACTIVATIONS` | `tests/perf/test_vision_encoder_timing.py` | The timed encoder's `M3VLVisionModel.activations`: `l1` (the default), `l1_interleaved` or `dram`. The test fails if the L1 check sends the forward to DRAM. |
 | `REF_ATTN_Q_CHUNK`, `REF_FFN_TOKEN_CHUNK` | `reference/model.py` | Torch reference chunking (`256` query rows, `4096` FFN tokens) to bound host memory. |
 | `OFFLOAD_DIR` | `tests/golden_hf_first_token.py` | HF `accelerate` offload dir for the first-token golden (`/tmp/m3_offload`). |
 | `CI` | `tests/test_factory.py` | `true` = parametrize only the largest mesh shape that fits the runner. |

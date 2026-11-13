@@ -6,11 +6,13 @@ LayerNorm of the MiniMax-M3 vision tower, for pre_layrnorm and each layer's laye
 """
 from __future__ import annotations
 
+from typing import Optional
+
 import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.minimax_m3.tt.vision.common import hifi4_compute_config, to_device
+from models.demos.minimax_m3.tt.vision.common import hifi4_compute_config, memory_config_kwargs, to_device
 
 
 class M3VLLayerNorm(LightweightModule):
@@ -67,11 +69,13 @@ class M3VLLayerNorm(LightweightModule):
             eps=ref.eps,
         )
 
-    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor:
+        """Run LayerNorm on x into memory_config, or where x is when that is None."""
         return ttnn.layer_norm(
             x,
             weight=self.weight,
             bias=self.bias,
             epsilon=self.eps,
             compute_kernel_config=self.compute_kernel_config,
+            **memory_config_kwargs(memory_config),
         )

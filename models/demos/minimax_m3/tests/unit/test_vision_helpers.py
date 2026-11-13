@@ -53,7 +53,7 @@ def test_vision_parametrize_rejects_unknown_grid(expect_error):
     assert set(ATTENTION_CI_GRIDS) <= VISION_GRIDS.keys()
     for ci_grids in (CI_GRIDS, ATTENTION_CI_GRIDS):
         parametrize_vision_grids(ci_grids)
-    with expect_error(ValueError, r"grid ids \['h40w45'\] of ci_grids are not in VISION_GRIDS"):
+    with expect_error(ValueError, r"grid ids \['h40w45'\] of ci_grids are not among the \d+ grids"):
         parametrize_vision_grids(("h16w16", "h40w45"))
 
 

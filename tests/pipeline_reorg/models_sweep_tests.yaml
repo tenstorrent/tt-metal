@@ -217,6 +217,20 @@
   team: models
   budget_type: sweep
 
+- name: MiniMax-M3 vision all grids (1-card)
+  cmd: |
+    # The vision device tests at every image grid (M3_VISION_ALL_GRIDS=1, tests/unit/vision_helpers.py), with seeded
+    # random weights. The tier 1 entry "MiniMax-M3 vision unit tests (1-card)" runs them at the CI grids only.
+    M3_VISION_ALL_GRIDS=1 pytest --timeout 300 models/demos/minimax_m3/tests/unit/ -k "test_vision_ and 1x1"
+  model: minimax-m3
+  skus:
+    bh_p150:
+      timeout: 15
+      tier: 2
+  owner_id: U08HM8SL5U4 # Maciek Dragula
+  team: models
+  budget_type: sweep
+
 # Request behavior tests: real models, device sampling, no serving framework.
 
 - name: Llama 3.3-70B request behavior (Galaxy)

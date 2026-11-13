@@ -3,7 +3,7 @@
 """
 Device tests of TtMiniMaxM3VisionEncoder (vision/encoder.py) against the 2-layer reference of conftest.py.
 
-test_vision_encoder_vs_ref checks forward's output on noise images of the CI grids. M3_VISION_ALL_GRIDS=1 adds 84x56
+test_vision_encoder_vs_ref checks forward on noise images of the CI grids. M3_VISION_ALL_GRIDS=1 adds 756x560 and 84x56
 pixels (h4w6), a size small images resize to. test_vision_encoder_load_and_encode uses the encoder as load() and
 encode() will: one warm-up image, then two images read into their slots of one shared buffer. The reference has
 seeded random weights, so no checkpoint is needed. The encoder's host tests are in test_vision_encoder_api.py.
@@ -24,10 +24,9 @@ from models.demos.minimax_m3.vision.encoder import TtMiniMaxM3VisionEncoder, rea
 from ..test_factory import parametrize_mesh_with_fabric
 from .vision_helpers import CI_GRIDS, MAX_REL_L2, VISION_GRIDS, assert_close, grid_name
 
-# Resized image sizes in pixels as (height, width), by their patch grid: the CI grids of the vision tests, then h4w6.
-SIZES = {
-    grid_id: (h * PATCH_SIZE, w * PATCH_SIZE) for grid_id, (_, h, w) in VISION_GRIDS.items() if grid_id in CI_GRIDS
-}
+# Resized image sizes in pixels as (height, width), by their patch grid: the CI grids of the vision tests, and for the
+# full-grid run h40w54 and h4w6.
+SIZES = {g: (VISION_GRIDS[g][1] * PATCH_SIZE, VISION_GRIDS[g][2] * PATCH_SIZE) for g in (*CI_GRIDS, "h40w54")}
 SIZES["h4w6"] = (56, 84)
 HIDDEN = 6144  # values per vision token: MiniMax-M3's text hidden size, which the encoder's output must have
 NUM_LAYERS = 2

@@ -15,21 +15,31 @@ It follows Hugging Face's MiniMaxM3VLVisionModel and MiniMaxM3VLMultiModalProjec
         -> vision tokens (L / 4, 6144)
 
 There is no final LayerNorm and no attention window. The RoPE tables depend only on the image grid, so the model
-keeps them for the next images of that grid.
+keeps them for the next images of that grid. The blocks keep their activations in L1 where common.block_placement
+proves they fit. The tower's output is in DRAM.
 """
 from __future__ import annotations
 
+import re
+import traceback
 from collections import OrderedDict
 from typing import Dict, List, Mapping, Optional, Tuple
 
 import torch
+from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.tensor_utils import nearest_32
 from models.demos.minimax_m3.tt.vision.attention import M3VLAttention
 from models.demos.minimax_m3.tt.vision.block import M3VLBlock
-from models.demos.minimax_m3.tt.vision.common import to_device
+from models.demos.minimax_m3.tt.vision.common import (
+    DRAM_PLACEMENT,
+    BlockPlacement,
+    block_placement,
+    l1_free_for_activations,
+    to_device,
+)
 from models.demos.minimax_m3.tt.vision.config import MiniMaxM3VisionConfig
 from models.demos.minimax_m3.tt.vision.image_input import MERGE_SIZE, check_image_grid, check_image_input
 from models.demos.minimax_m3.tt.vision.layernorm import M3VLLayerNorm
@@ -40,6 +50,15 @@ from models.demos.minimax_m3.tt.vision.rope import rope_tensors
 
 # How many recent image grids keep their RoPE tables in DRAM, at least 1. Not tuned, as the tables are small.
 ROPE_CACHE_GRIDS = 16
+# tt-metal's error for an op whose buffers would overlap a tensor in L1. Its check of the circular-buffer region says
+# "circular buffers"; its check of the dataflow-buffer region, for ops built from program specs such as the matmul,
+# says "dataflow buffers". It reaches Python as a RuntimeError with this line in its message. The groups leave out the
+# program id, which is new for each program, so a clash that lasts gives the same reason for every image.
+L1_CLASH = re.compile(
+    r"(Statically allocated (?:circular|dataflow) buffers) in program \d+ (clash with L1 buffers[^\n]*)"
+)
+# Every DRAM_FALLBACK_WARN_EVERY-th fallback to DRAM_PLACEMENT is a warning, even with the last warning's reason.
+DRAM_FALLBACK_WARN_EVERY = 100
 
 # Weight names: transformers 5.12's MiniMaxM3VLModel names, as loader.load_vision_state_dict gives them.
 _TOWER = "vision_tower."
@@ -156,6 +175,11 @@ class M3VLVisionModel(LightweightModule):
         self.blocks = blocks
         self.projector = projector
         self._rope_cache = OrderedDict()  # (t, h, w) -> (cos, sin) on device, the least recently used first
+        # Where the blocks keep their activations, one of common.ACTIVATIONS, read at each forward. "l1" is the
+        # default; "l1_interleaved" and "dram" are for comparison.
+        self.activations = "l1"
+        self._dram_fallbacks = 0  # fallbacks to DRAM_PLACEMENT so far
+        self._warned_fallback = None  # the reason of the last fallback logged as a warning
 
     @classmethod
     def from_state_dict(
@@ -276,14 +300,69 @@ class M3VLVisionModel(LightweightModule):
         """
         return self._tower_device(self.push_pixel_values(pixel_values, image_grid_thw), image_grid_thw)
 
+    def placement(self, x_tt: ttnn.Tensor) -> BlockPlacement:
+        """Return the BlockPlacement that a forward gives the blocks for pixel values x_tt from push_pixel_values.
+
+        That is block_placement's, or DRAM_PLACEMENT with activations "dram". An L1 placement also needs
+        l1_free_for_activations to pass. Otherwise it is DRAM_PLACEMENT, and _log_dram_fallback logs why.
+        """
+        if self.activations == "dram" or not self.blocks:
+            return DRAM_PLACEMENT
+        placement = block_placement(self.blocks[0], x_tt.padded_shape[-2], self.activations)
+        if placement is DRAM_PLACEMENT:
+            return placement
+        free, why_not = l1_free_for_activations(self.device)
+        if free:
+            return placement
+        self._log_dram_fallback(why_not)
+        return DRAM_PLACEMENT
+
+    def _log_dram_fallback(self, reason: str) -> None:
+        """Log a fallback to DRAM_PLACEMENT with its reason and the model's running count of fallbacks.
+
+        It is a warning when the reason differs from the last warning's, and at every DRAM_FALLBACK_WARN_EVERY-th
+        fallback. Other repeats are logged at debug level.
+        """
+        self._dram_fallbacks += 1
+        message = f"the vision blocks keep their activations in DRAM (fallback {self._dram_fallbacks}): {reason}"
+        if reason != self._warned_fallback or self._dram_fallbacks % DRAM_FALLBACK_WARN_EVERY == 0:
+            self._warned_fallback = reason
+            logger.warning(message)
+        else:
+            logger.debug(message)
+
     def _tower_device(self, x_tt: ttnn.Tensor, image_grid_thw: torch.Tensor) -> ttnn.Tensor:
-        """Run forward_tower's device ops on pixel values from push_pixel_values, leaving x_tt allocated."""
+        """Run forward_tower's device ops on pixel values from push_pixel_values, leaving x_tt allocated.
+
+        The blocks get placement(x_tt). The last block writes the tower's output to DRAM. If an op's buffers clash
+        with the blocks' L1 tensors, the image runs again with DRAM_PLACEMENT, once.
+        """
+        placement = self.placement(x_tt)
+        if placement is DRAM_PLACEMENT:
+            return self._run_tower(x_tt, image_grid_thw, placement)
+        try:
+            return self._run_tower(x_tt, image_grid_thw, placement)
+        except RuntimeError as error:
+            clash = L1_CLASH.search(str(error))
+            if clash is None:
+                raise
+            # The failed run's frames hold the tensors it made: clearing them frees those tensors before the rerun.
+            traceback.clear_frames(error.__traceback__)
+            line = " ".join(clash.groups())  # tt-metal's line without the program id
+            reason = f"placement {placement.name} at {x_tt.padded_shape[-2]} rows failed: {line}"
+        self._log_dram_fallback(reason)
+        return self._run_tower(x_tt, image_grid_thw, DRAM_PLACEMENT)
+
+    def _run_tower(self, x_tt: ttnn.Tensor, image_grid_thw: torch.Tensor, placement: BlockPlacement) -> ttnn.Tensor:
+        """Run patch_embed, pre_layrnorm and the blocks with placement; the last block writes to DRAM."""
         x_tt = self.patch_embed(x_tt)
-        x_tt = self.pre_layrnorm(x_tt)
+        x_tt = self.pre_layrnorm(x_tt, memory_config=placement.block_input)
         cos_tt, sin_tt = self._rope_to_l1(*self._cached_rope(image_grid_thw))
         try:
-            for blk in self.blocks:
-                x_tt = blk(x_tt, cos_tt, sin_tt)
+            for i, blk in enumerate(self.blocks):
+                last = i == len(self.blocks) - 1
+                out_memory_config = ttnn.DRAM_MEMORY_CONFIG if last else None
+                x_tt = blk(x_tt, cos_tt, sin_tt, placement, out_memory_config=out_memory_config)
         finally:
             ttnn.deallocate(cos_tt)
             ttnn.deallocate(sin_tt)

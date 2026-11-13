@@ -4,11 +4,13 @@
 """Shared parts of the vision encoder's unit tests.
 
 Image grids, error bounds, copies to and from the chip, the comparison with the reference (check_close), Hugging
-Face's modules (hf_vision_modules) and a stand-in device for host tests.
+Face's modules (hf_vision_modules) and a stand-in device for host tests. Also the weight matmul's checks and circular
+buffers, for the tests of its program configs and of the L1 budget.
 """
 
 from __future__ import annotations
 
+import math
 import os
 from types import SimpleNamespace
 from typing import Mapping
@@ -37,15 +39,28 @@ VISION_GRIDS = {
     # masks 112 of its 256 keys
     "h12w12": (1, 12, 12),
     # 56x56, the smallest the processor makes: 16 patches and 4 tokens, every linear on ttnn's own config, and SDPA
-    # with one 128-key chunk, 112 of its keys masked
+    # with one 256-key chunk, 240 of its keys masked
     "h4w4": (1, 4, 4),
 }
-# The grids that the CI entry "MiniMax-M3 vision unit tests (1-card)" runs. h40w54 covers partial row tiles and the RoPE
-# op's reload kernels, which h16w16 does not. M3_VISION_ALL_GRIDS=1 adds the other grids, left out rather than skipped.
-CI_GRIDS = ("h16w16", "h40w54")
-# The attention test also runs h18w18 in CI. SDPA pads the keys to a multiple of its 128-key chunk and masks the padded
-# ones: 16 of 2176 at 2160 patches, too few for a broken mask to move the output past its bound, and 60 of 384 at 324.
+# The grids that the CI entry "MiniMax-M3 vision unit tests (1-card)" runs. On the 11x10, 12x10 and 13x10 core grids,
+# h36w36 covers what h16w16 does not: transposed matmul splits, the MLP's shards, partial row tiles, padded SDPA keys
+# and the RoPE op's reload kernels. M3_VISION_ALL_GRIDS=1 adds the other grids, left out rather than skipped.
+CI_GRIDS = ("h16w16", "h36w36")
+# The attention test also runs h18w18 in CI, where SDPA masks 188 of its 512 padded keys, the largest share in CI.
 ATTENTION_CI_GRIDS = CI_GRIDS + ("h18w18",)
+# The CI grids of the tower test of L1 against DRAM. Both use L1 on 11x10, 12x10 and 13x10, and h36w36 shards the MLP.
+# h36w36 also adds a partial tile row, a partial last shard, and splits that leave cores out on 12x10 and 13x10.
+L1_VS_DRAM_CI_GRIDS = ("h16w16", "h36w36")
+# The grids of that test with M3_VISION_ALL_GRIDS=1: VISION_GRIDS and three more for the MLP's other shard layouts,
+# whole shards on 11 columns, whole shards on 13 columns of 13x10, and a partial last shard on 12 columns.
+L1_VS_DRAM_ALL_GRIDS = {
+    **VISION_GRIDS,
+    "h32w44": (1, 32, 44),  # 448x616
+    "h32w52": (1, 32, 52),  # 448x728
+    "h36w40": (1, 36, 40),  # 504x560
+}
+# The grids of common.L1_GRIDS by test id, without "AxB": the 1-card leg selects "1x1", which "11x10" would contain.
+L1_GRID_IDS = {f"x{x}y{y}": (x, y) for x, y in common.L1_GRIDS}
 # Twice the largest relative L2 error per test, measured on one P150 with a 12x10 compute grid at the grids of
 # VISION_GRIDS from 256 patches up, each logged 4-place value taken at the top of its rounding (0.0059 as 0.00595).
 MAX_REL_L2 = {
@@ -60,18 +75,16 @@ MAX_REL_L2 = {
 }
 
 
-def parametrize_vision_grids(ci_grids=CI_GRIDS):
-    """Parametrize grid_thw over ci_grids, or over all of VISION_GRIDS when M3_VISION_ALL_GRIDS=1.
+def parametrize_vision_grids(ci_grids=CI_GRIDS, grids=VISION_GRIDS):
+    """Parametrize grid_thw over ci_grids, or over all of grids when M3_VISION_ALL_GRIDS=1.
 
-    Raises ValueError for a ci_grids id that VISION_GRIDS lacks, which would silently drop its tests.
+    Raises ValueError for a ci_grids id that grids lacks, which would silently drop its tests.
     """
-    unknown = sorted(set(ci_grids) - VISION_GRIDS.keys())
+    unknown = sorted(set(ci_grids) - grids.keys())
     if unknown:
-        raise ValueError(f"grid ids {unknown} of ci_grids are not in VISION_GRIDS")
+        raise ValueError(f"grid ids {unknown} of ci_grids are not among the {len(grids)} grids to take them from")
     run_all = os.getenv("M3_VISION_ALL_GRIDS") == "1"
-    params = [
-        pytest.param(grid, id=grid_id) for grid_id, grid in VISION_GRIDS.items() if run_all or grid_id in ci_grids
-    ]
+    params = [pytest.param(grid, id=grid_id) for grid_id, grid in grids.items() if run_all or grid_id in ci_grids]
     return pytest.mark.parametrize("grid_thw", params)
 
 
@@ -179,3 +192,120 @@ def assert_close(name: str, ref: torch.Tensor, out: torch.Tensor, min_pcc: float
     line, passed = check_close(name, ref, out, min_pcc, max_rel_l2)
     logger.info(line)
     assert passed, line
+
+
+def matmul_cb_bytes(config, k_tiles: int, fp32_dest_acc: bool, bias: bool = True, out_sharded: bool = False) -> int:
+    """Return the circular-buffer bytes per core of the 2D multicast matmul for a linear_program_config config.
+
+    As matmul_multicore_reuse_mcast_2d_program_factory.cpp sizes them, in 2 KB bf16 tiles: the in0 and in1 K blocks,
+    doubled when K has more than one block, the output block and a bias row. With fp32 accumulation the partial sums
+    get their own 4 KB tiles. A block-sharded output's buffer is the output tensor itself, so the output block then
+    takes no room. A block-sharded input keeps its K-block buffers.
+    """
+    depth = 2 if k_tiles > config.in0_block_w else 1
+    block = config.out_block_h * config.out_block_w
+    tiles = depth * config.in0_block_w * (config.out_block_h + config.out_block_w)
+    if not out_sharded:
+        tiles += block
+    if bias:
+        tiles += config.out_block_w
+    return 2048 * tiles + (4096 * block if fp32_dest_acc else 0)
+
+
+def matmul_sharded_output(config, m_tiles: int, n_tiles: int):
+    """Return the memory config that ttnn gives a matmul's output in L1 block shards for this config.
+
+    Blocks of per_core_M x per_core_N tiles start at core (0, 0). M runs along the grid's columns with transpose_mcast
+    (COL_MAJOR), and along its rows without (ROW_MAJOR), as matmul_device_operation.cpp derives it.
+    """
+    blocks_m, blocks_n = math.ceil(m_tiles / config.per_core_M), math.ceil(n_tiles / config.per_core_N)
+    columns, rows = (blocks_m, blocks_n) if config.transpose_mcast else (blocks_n, blocks_m)
+    cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(columns - 1, rows - 1))})
+    orientation = ttnn.ShardOrientation.COL_MAJOR if config.transpose_mcast else ttnn.ShardOrientation.ROW_MAJOR
+    shape = (config.per_core_M * ttnn.TILE_SIZE, config.per_core_N * ttnn.TILE_SIZE)
+    return ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, ttnn.ShardSpec(cores, shape, orientation)
+    )
+
+
+def matmul_config_problems(
+    config, rows, in_features, out_features, grid, fp32_dest_acc, in0_shards=None, out_sharded=False
+) -> list[str]:
+    """Return the names of the checks that the matmul config fails, or [] if it passes them all.
+
+    The checks are those of the matmul device op and its 2D multicast factory, and that the circular buffers fit in
+    LINEAR_L1_BYTES. The input and output are interleaved, in DRAM or L1, unless in0_shards gives the input's
+    block-sharded memory config or out_sharded is True. A sharded input must also hold exactly the split's blocks,
+    whole along K, so that no core needs a relay buffer.
+    """
+    m_tiles, k_tiles, n_tiles = (math.ceil(d / ttnn.TILE_SIZE) for d in (rows, in_features, out_features))
+    blocks_m, blocks_n = math.ceil(m_tiles / config.per_core_M), math.ceil(n_tiles / config.per_core_N)
+    blocks_x, blocks_y = (blocks_m, blocks_n) if config.transpose_mcast else (blocks_n, blocks_m)
+    grid_size = config.compute_with_storage_grid_size
+    checks = {
+        "the config's grid is the device's": (grid_size.x, grid_size.y) == grid,
+        "K blocks divide K": k_tiles % config.in0_block_w == 0,
+        "subblocks divide the output block": config.out_block_h % config.out_subblock_h == 0
+        and config.out_block_w % config.out_subblock_w == 0,
+        "output blocks divide the core's block": config.per_core_M % config.out_block_h == 0
+        and config.per_core_N % config.out_block_w == 0,
+        "a subblock fits half the dest register": config.out_subblock_h * config.out_subblock_w
+        <= (4 if fp32_dest_acc else 8),
+        "per_core_M at most M": config.per_core_M <= m_tiles,
+        "the split fits the grid": blocks_x <= grid[0] and blocks_y <= grid[1],
+        # As ttnn's own 2D configs for DRAM operands.
+        "a 2D split": blocks_x >= 2 and blocks_y >= 2,
+        # A sharded input needs fused batches, which with one batch change nothing; the encoder passes it only then.
+        "fuse_batch for a sharded input only": config.fuse_batch == (in0_shards is not None),
+        "no fused activation": config.fused_activation is None,
+        "the buffers fit LINEAR_L1_BYTES": matmul_cb_bytes(config, k_tiles, fp32_dest_acc, out_sharded=out_sharded)
+        <= common.LINEAR_L1_BYTES,
+    }
+    if in0_shards is not None:
+        spec = in0_shards.shard_spec
+        box = spec.grid.bounding_box()
+        size = box.grid_size()
+        shard_m, shard_k = spec.shape[0] // ttnn.TILE_SIZE, spec.shape[1] // ttnn.TILE_SIZE
+        shards_m, shards_k = (size.x, size.y) if config.transpose_mcast else (size.y, size.x)
+        checks.update(
+            {
+                "the input in L1 block shards": in0_shards.memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
+                and in0_shards.buffer_type == ttnn.BufferType.L1,
+                "COL_MAJOR shards with transpose_mcast, else ROW_MAJOR": (
+                    spec.orientation == ttnn.ShardOrientation.COL_MAJOR
+                )
+                == config.transpose_mcast,
+                "per_core_M is the shard height": config.per_core_M == shard_m,
+                "K blocks divide the shard width": shard_k % config.in0_block_w == 0,
+                "the shards from core (0, 0), inside the grid": (box.start.x, box.start.y) == (0, 0)
+                and box.end.x < grid[0]
+                and box.end.y < grid[1],
+                "one shard per block of M": shards_m == blocks_m,
+                "one K shard per block of N, no relay buffer": shards_k == blocks_n,
+                "whole K shards": shards_k * shard_k == k_tiles,
+            }
+        )
+    if out_sharded:
+        checks.update(
+            {
+                "a sharded output's subblock one tile high or as wide as the block": config.out_subblock_w
+                == config.per_core_N
+                or config.out_subblock_h == 1,
+                "a sharded output's block one tile high or as wide as the core's": config.out_block_w
+                == config.per_core_N
+                or config.out_block_h == 1,
+                # The factory's limit on a sharded output's tiles.
+                "a sharded output's block at most 65535 tiles": config.per_core_M * config.per_core_N <= 65535,
+            }
+        )
+    return [name for name, passed in checks.items() if not passed]
+
+
+def assert_matmul_config_valid(
+    config, rows, in_features, out_features, grid, fp32_dest_acc, in0_shards=None, out_sharded=False
+):
+    """Assert that the config passes every check of matmul_config_problems."""
+    problems = matmul_config_problems(
+        config, rows, in_features, out_features, grid, fp32_dest_acc, in0_shards=in0_shards, out_sharded=out_sharded
+    )
+    assert not problems, f"{config} fails: {problems}"
