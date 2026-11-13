@@ -20,7 +20,7 @@ from ....parallel.manager import CCLManager
 from ....utils.matmul import get_matmul_core_grid
 from ....utils.substate import rename_substate
 from ....utils.tensor import bf16_tensor
-from . import lofi
+from . import ff_bf8, lofi
 from .agmm_config import agmm_kwargs, agmm_pins
 from .attention_minimax_h3 import MiniMaxH3Attention
 from .mmrs_config import has_mmrs_config, pinned_mmrs_config, register_mmrs_config
@@ -540,6 +540,7 @@ class MiniMaxH3TransformerBlock(Module):
                 **self._ff1_kwargs(normed),
                 **({"addcmul_b_tile_row_map": tile_map} if gate_map_on else {}),
                 **({"addcmul_b_col_offset_tiles": _GATE_MLP * h_tiles} if gate_map_on and s2l else {}),
+                **ff_bf8.ff_kwargs(),
             )
         _log_gate_map_once(to_out=attn_gate_map is not None, ff2=False)
         ff_out = self.ff(
@@ -550,6 +551,7 @@ class MiniMaxH3TransformerBlock(Module):
             force_transpose=False,
             use_persistent_buffer=self.use_persistent_ccl_buffers,
             **self._ff1_kwargs(normed),
+            **ff_bf8.ff_kwargs(),
         )
         return ttnn.addcmul(residual, ff_out, modulation(_GATE_MLP))
 

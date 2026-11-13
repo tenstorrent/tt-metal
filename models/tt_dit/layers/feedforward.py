@@ -124,6 +124,8 @@ class ParallelFeedForward(Module):
         matmul_config=None,
         num_workers_per_link=None,
         transpose_core_grid: bool | None = None,
+        ff1_output_dtype=None,
+        ff2_output_dtype=None,
     ) -> ttnn.Tensor:
         """
         Expects x to be replicated.
@@ -133,6 +135,7 @@ class ParallelFeedForward(Module):
         `transpose_core_grid` are forwarded to ff1 only, for callers that have measured block sizes for their
         ff1 shape; ff2 keeps the generic path.
         `ff2_compute_kernel_config` (default: `compute_kernel_config`) lets ff2 run another config than ff1.
+        `ff1_output_dtype` / `ff2_output_dtype` (default None: each op's own choice) set ff1's / ff2's output dtype.
         """
         ff1_out = self.ff1(
             x,
@@ -144,12 +147,15 @@ class ParallelFeedForward(Module):
             matmul_config=matmul_config,
             num_workers_per_link=num_workers_per_link,
             transpose_core_grid=transpose_core_grid,
+            **({} if ff1_output_dtype is None else {"dtype": ff1_output_dtype}),
         )
         ff2_config = compute_kernel_config if ff2_compute_kernel_config is None else ff2_compute_kernel_config
+        ff2_extra = {} if ff2_output_dtype is None else {"dtype": ff2_output_dtype}
         return self.ff2(
             ff1_out,
             compute_kernel_config=ff2_config,
             use_persistent_buffer=use_persistent_buffer,
+            **ff2_extra,
         )
 
     def forward_fused_addcmul(
@@ -171,6 +177,8 @@ class ParallelFeedForward(Module):
         mmrs_config=None,
         addcmul_b_tile_row_map: ttnn.Tensor | None = None,
         addcmul_b_col_offset_tiles: int = 0,
+        ff1_output_dtype=None,
+        ff2_output_dtype=None,
     ) -> ttnn.Tensor:
         """Fused FFN forward with addcmul fused at the RS final write step.
 
@@ -182,6 +190,7 @@ class ParallelFeedForward(Module):
         `ff2_compute_kernel_config` (default: `compute_kernel_config`) goes to ff2 only, and `mmrs_config` is
         ff2's frozen fused MM+RS blocking.
         `addcmul_b_tile_row_map`: see `RowParallelLinear.forward_fused_addcmul` (forwarded only when given).
+        `ff1_output_dtype` / `ff2_output_dtype` (default None: each op's own choice) set ff1's / ff2's output dtype.
         """
         map_kwargs = {} if addcmul_b_tile_row_map is None else {"addcmul_b_tile_row_map": addcmul_b_tile_row_map}
         if addcmul_b_col_offset_tiles:
@@ -197,8 +206,10 @@ class ParallelFeedForward(Module):
             matmul_config=matmul_config,
             num_workers_per_link=num_workers_per_link,
             transpose_core_grid=transpose_core_grid,
+            **({} if ff1_output_dtype is None else {"dtype": ff1_output_dtype}),
         )
         ff2_config = compute_kernel_config if ff2_compute_kernel_config is None else ff2_compute_kernel_config
+        ff2_extra = {} if ff2_output_dtype is None else {"dtype": ff2_output_dtype}
         return self.ff2.forward_fused_addcmul(
             ff1_out,
             addcmul_a,
@@ -208,4 +219,5 @@ class ParallelFeedForward(Module):
             use_persistent_buffer=use_persistent_buffer,
             mmrs_config=mmrs_config,
             **map_kwargs,
+            **ff2_extra,
         )
