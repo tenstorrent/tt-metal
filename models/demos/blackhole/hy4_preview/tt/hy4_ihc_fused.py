@@ -65,7 +65,8 @@ class Hy4IHCFused:
         # packed fn tiles Wp_j[c, 8i + m] = fn[m, i*D + 32j + c], bf16 (hc_scale is applied after the RMS scaling: diagonal tile SD)
         fnb = fn8.float().reshape(8, 4, self.NT, 32)  # [m, i, tile, c]
         wp = fnb.permute(2, 3, 1, 0).reshape(self.NT, 32, 32)  # [tile, c, (i, m)]
-        self.wt = up(wp.reshape(1, 1, self.NT * 32, 32), ttnn.bfloat16)
+        self.wdt = ttnn.bfloat8_b if os.environ.get("HY4_IHC_W8", "0") == "1" else ttnn.bfloat16
+        self.wt = up(wp.reshape(1, 1, self.NT * 32, 32), self.wdt)
         # per core k: page 2k = base (rows replicated, columns 0..7), page 2k + 1 = hc_scale per column (pre x4, post x4), rows replicated
         b = torch.zeros(NC, 2, 32, 32)
         b[:, 0, :, :8] = base8.float()
@@ -217,7 +218,7 @@ class Hy4IHCFused:
         cbs = (
             [
                 _cb(core_set, X, G * GPC, 4096, f32),
-                _cb(core_set, W, GPC, 2048, bf16),
+                _cb(core_set, W, GPC, 1088 if self.wdt == ttnn.bfloat8_b else 2048, self.wdt),
                 _cb(core_set, BASE, 1, 4096, f32),
                 _cb(core_set, RECV, RR // 2, 4096, f32),
                 _cb(core_set, PART, 1, 4096, f32),
@@ -249,7 +250,6 @@ class Hy4IHCFused:
                     _cb(core_set, XR, G * GPC, 4096, f32),
                     _cb(core_set, YC, GPC, 2048, bf16),
                     _cb(core_set, MC, G, 4096, f32),
-                    _cb(core_set, INC, G * GPC, 4096, f32),
                 ]
                 if EXPAND
                 else []
@@ -279,7 +279,7 @@ class Hy4IHCFused:
             + [int(os.environ.get("HY4_IHC_ABL", "0")), DBG, EXPAND, XR, YC, MC]
             + _acc(y_t)
             + _acc(q_t)
-            + [DUAL],
+            + [DUAL, 1088 if self.wdt == ttnn.bfloat8_b else 2048],
             rt,
             ttnn.ReaderConfigDescriptor(),
             common=[
@@ -312,12 +312,9 @@ class Hy4IHCFused:
             fp32_dest_acc_en=True,
             dst_full_sync_en=True,
         )
-        if EXPAND and not (
-            int(os.environ.get("HY4_IHC_CABL", "0")) & 16
-        ):  # exact SFPU add needs unpack-to-dest fp32; the matmul form (CABL&16) must not have it
+        if EXPAND:  # the exact fp32 SFPU add of the expand needs the stream tiles unpacked straight into dest
             modes = [ttnn.UnpackToDestMode.Default] * 64
             modes[XR] = ttnn.UnpackToDestMode.UnpackToDestFp32
-            modes[INC] = ttnn.UnpackToDestMode.UnpackToDestFp32
             cfg.unpack_to_dest_mode = modes
         compute = _kernel(
             "ihc_pre_compute.cpp",
@@ -386,6 +383,7 @@ class Hy4IHCFused:
             DBG,
             int(os.environ.get("HY4_IHC_CABL", "0")),
             os.environ.get("HY4_IHC_FID", "HiFi4"),
+            str(self.wdt),
             tuple(_acc(x)),
             tuple(_acc(self.wt)),
             tuple(_acc(self.base)),

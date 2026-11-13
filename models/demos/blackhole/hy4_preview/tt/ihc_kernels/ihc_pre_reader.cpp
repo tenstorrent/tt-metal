@@ -89,7 +89,9 @@ void kernel_main() {
 
     Noc noc;
     const auto x_acc = TensorAccessor(x_args, x_addr, TILE);
-    const auto w_acc = TensorAccessor(w_args, w_addr, 2048);
+    constexpr uint32_t WPAGE =
+        get_compile_time_arg_val(q_args.next_compile_time_args_offset() + 1);  // 2048 (bf16) or 1088 (bfp8_b)
+    const auto w_acc = TensorAccessor(w_args, w_addr, WPAGE);
     const auto b_acc = TensorAccessor(b_args, b_addr, TILE);
     const auto n_acc = TensorAccessor(n_args, n_addr, TILE);
     const auto p_acc = TensorAccessor(p_args, p_addr, TILE);
@@ -132,7 +134,7 @@ void kernel_main() {
     // 0 and 1), x: issued FIRST
     if constexpr (!(ABL & 1)) {
         for (uint32_t n = 0; n < GPC; ++n) {
-            noc.async_read(w_acc, cbw, 2048, {.page_id = k * GPC + n, .offset_bytes = 0}, {.offset_bytes = n * 2048});
+            noc.async_read(w_acc, cbw, WPAGE, {.page_id = k * GPC + n, .offset_bytes = 0}, {.offset_bytes = n * WPAGE});
         }
     }
     // stream tensor [1,1,4T,D] fp32 TILE: tile row g holds the rows (4*tl + i) of the tokens 8g .. 8g+7 -> one 4 KB

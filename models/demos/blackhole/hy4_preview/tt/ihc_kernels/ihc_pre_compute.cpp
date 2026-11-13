@@ -126,28 +126,6 @@ void kernel_main() {
         // = XR copied EXACTLY (unpack-to-dest fp32), dest[i] += dest[DT/2 + i] on the SFPU (exact fp32 add)
         for (uint32_t n0 = 0; n0 < NX; n0 += DT / 2) {
             const uint32_t nn = (NX - n0 < DT / 2) ? NX - n0 : DT / 2;
-            if constexpr (CABL & 16) {  // matmul form: x_new = I @ XR + M @ Y (both fp32 HiFi4)
-                tile_regs_acquire();
-                reconfig_data_format(cb_cst, cb_xr);
-                matmul_init(cb_cst, cb_xr);
-                for (uint32_t i = 0; i < nn; ++i) {
-                    matmul_tiles(cb_cst, cb_xr, C_IDENT, n0 + i, i);
-                }
-                reconfig_data_format(cb_y, cb_m);
-                matmul_init(cb_m, cb_y);
-                for (uint32_t i = 0; i < nn; ++i) {
-                    matmul_tiles(cb_m, cb_y, (n0 + i) / GPC, (n0 + i) % GPC, i);
-                }
-                tile_regs_commit();
-                tile_regs_wait();
-                x.reserve_back(nn);
-                for (uint32_t i = 0; i < nn; ++i) {
-                    pack_tile(i, cb_x);
-                }
-                x.push_back(nn);
-                tile_regs_release();
-                continue;
-            }
             reconfig_data_format(cb_y, cb_m);  // matmul: in1 -> srcA, in0 -> srcB (M fp32, Y bf16)
             matmul_init(cb_m, cb_y);
             tile_regs_acquire();
@@ -333,13 +311,8 @@ void kernel_main() {
     mul_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_sd, 0, 0);
     add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_base);
     add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_base, 0, 0);
-    if constexpr (CABL & 2) {
-        sigmoid_tile_init<true>();
-        sigmoid_tile<VectorMode::R, true>(0);
-    } else {
-        sigmoid_tile_init();
-        sigmoid_tile<VectorMode::R>(0);  // rows 0..15 only (T <= 16)
-    }
+    sigmoid_tile_init();
+    sigmoid_tile<VectorMode::R>(0);  // rows 0..15 only (T <= 16)
     add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_cst);
     add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_cst, C_OFF, 0);
     mul_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_cst);
