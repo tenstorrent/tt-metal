@@ -134,9 +134,9 @@ void PerformDeviceWork(
 
     MetalEnv child_env;
 
-    auto child_num_devices = child_env.get_num_pcie_devices();
-    log_info(tt::LogTest, "{}: TT_VISIBLE_DEVICES={}, num_devices={}", child_name, visible_devices, child_num_devices);
-    if (child_num_devices != expected_num_chips) {
+    auto child_num_chips = child_env.get_num_available_devices();
+    log_info(tt::LogTest, "{}: TT_VISIBLE_DEVICES={}, num_chips={}", child_name, visible_devices, child_num_chips);
+    if (child_num_chips != expected_num_chips) {
         _exit(kExitBadNumDevices);
     }
 

@@ -219,6 +219,17 @@ public:
             .mesh_shape = MeshShape{2, 2},
             .mesh_offset = GetParam(),
         }) {}
+
+    void SetUp() override {
+        const auto system_mesh_shape = tt::tt_metal::MetalContext::instance().get_system_mesh().shape();
+        const auto& offset = GetParam();
+        if (system_mesh_shape.dims() != 2 || offset[0] + 2 > system_mesh_shape[0] ||
+            offset[1] + 2 > system_mesh_shape[1]) {
+            GTEST_SKIP() << fmt::format(
+                "Skipping: a 2x2 mesh at offset {} does not fit in SystemMesh {}", offset, system_mesh_shape);
+        }
+        MeshDeviceFixtureBase::SetUp();
+    }
 };
 
 TEST_P(MeshDevice2x2WithOffsetReshapeTest, From2x2To1x4ThenBackTo2x2) {

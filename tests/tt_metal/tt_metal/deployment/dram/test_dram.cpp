@@ -721,6 +721,10 @@ static void run_chips_in_parallel(uint32_t chips_to_test, RunOneChipFn run_one_c
 }
 
 TEST_F(MeshDispatchFixture, DramDeployment_PersistentOptimalWorkersAllDramBanks) {
+    // The DRAM kernels hard-code Blackhole NOC word and bank sizes (deployment/kernels/common_dram.hpp).
+    if (arch_ != tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "DRAM deployment tests only support Blackhole";
+    }
     if (g_stop_requested.load()) {
         GTEST_SKIP() << "Test interrupted by user.";
     }
@@ -997,6 +1001,9 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentOptimalWorkersAllDramBanks)
 }
 
 TEST_F(MeshDispatchFixture, DramDeployment_PersistentAllWorkersSingleDramSequentialSweep) {
+    if (arch_ != tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "DRAM deployment tests only support Blackhole";
+    }
     if (g_stop_requested.load()) {
         GTEST_SKIP() << "Test interrupted by user.";
     }
@@ -1335,6 +1342,9 @@ TEST_F(MeshDispatchFixture, DramDeployment_PersistentAllWorkersSingleDramSequent
 }
 
 TEST_F(MeshDispatchFixture, DramDeployment_PersistentPartitionedWorkersAllDramBanks) {
+    if (arch_ != tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "DRAM deployment tests only support Blackhole";
+    }
     if (g_stop_requested.load()) {
         GTEST_SKIP() << "Test interrupted by user.";
     }
