@@ -9,8 +9,7 @@
 #include "cce_test_status_abi.h"
 
 // cce_scoped_lock_{producer,consumer} kernel ABI. Both kernels and the host (dram/test_mimir_dm_scoped_lock.cpp)
-// include it. Args, modes, codes, polls and status words are append-only: a later stage adds entries after the last one
-// and never renumbers.
+// include it.
 namespace cce_scoped_lock_abi {
 
 using cce_test_status_abi::kLineBytes;
@@ -98,8 +97,6 @@ inline constexpr uint32_t kFlagPeerSignalled = 1u << 0, kFlagLanded = 1u << 1, k
 // or the consumer's poll of the probe words for the external producer's stores (kModeNonSnoopingProducer).
 inline constexpr uint32_t kPollNone = 0, kPollPeer = 1, kPollData = 2;
 
-// A status offset that is not a 64 B aligned line between the end of the harts' kernel text and the end of the
-// hart-cacheable port gets no status line at all, so the host deadline reports it.
 // kCodeDone: every wait and poll succeeded. Otherwise the code names the first that used its budget, and the hart
 // stops there.
 inline constexpr uint32_t kCodeDone = 1, kCodePeerTimeout = 2, kCodeDataTimeout = 3, kCodeBadArgs = 4;

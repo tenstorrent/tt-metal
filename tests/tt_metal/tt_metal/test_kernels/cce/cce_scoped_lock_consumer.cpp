@@ -16,14 +16,14 @@
 
 namespace abi = cce_scoped_lock_abi;
 using cce_scoped_lock::lock_lines_valid;
+using cce_scoped_lock::new_values_visible;
 using cce_scoped_lock::ring_wrap_valid;
 using cce_scoped_lock::Status;
 using cce_scoped_lock::write_status;
 using cce_test::arg_u64;
-using cce_test::DataCheck;
+using cce_test::cached_tl1_words;
 using cce_test::own_tl1_words;
 using cce_test::poll_bounded;
-using cce_test::status_line_valid;
 
 // One value per probe line, as read.
 struct ProbeRead {
@@ -44,21 +44,9 @@ static void store_result_line(volatile uint32_t* result_words, uint32_t result_l
     }
 }
 
-// Whether every probe word of `probe_words` reads kNewBase + line.
-static bool all_probe_words_new(const volatile uint32_t* probe_words, DataCheck& check) {
-    check = DataCheck{};
-    for (uint32_t line = 0; line < abi::kNumLines; ++line) {
-        check.record(line * abi::kWordsPerLine, probe_words[line * abi::kWordsPerLine], abi::kNewBase + line);
-    }
-    return check.mismatched_words == 0;
-}
-
 void kernel_main() {
     const uint32_t mode = get_arg_val<uint32_t>(abi::kArgMode);
     const uint32_t status_offset = get_arg_val<uint32_t>(abi::kArgStatusOffset);
-    if (!status_line_valid(status_offset)) {
-        return;
-    }
     const uint64_t budget_cycles = arg_u64(abi::kArgPollBudgetLo, abi::kArgPollBudgetHi);
     const uint32_t region_offset = get_arg_val<uint32_t>(abi::kArgRegionOffset);
     const uint32_t lock_first_line = get_arg_val<uint32_t>(abi::kArgLockFirstLine);
@@ -114,7 +102,7 @@ void kernel_main() {
             status.flags |= abi::kFlagPeerSignalled;
             asm volatile("fence r, r" ::: "memory");
             const uintptr_t slot_address = region_offset + (round % ring_slots) * slot_bytes;
-            const volatile uint32_t* slot_words = reinterpret_cast<const volatile uint32_t*>(slot_address);
+            const volatile uint32_t* slot_words = cached_tl1_words(slot_address);
             scoped_lock_acquire_cache_ops(slot_address, slot_bytes);
             for (uint32_t word = 0; word < slot_bytes / sizeof(uint32_t); ++word) {
                 status.check.record((round << 8) | word, slot_words[word], abi::ring_word(round, word));
@@ -157,7 +145,9 @@ void kernel_main() {
         if (status.code == abi::kCodeDone && mode == abi::kModeNonSnoopingProducer) {
             status.last_poll = abi::kPollData;
             status.last_poll_ready = poll_bounded(
-                [uncached_probe, &status] { return all_probe_words_new(uncached_probe, status.check); },
+                [uncached_probe, &status] {
+                    return new_values_visible(uncached_probe, 0, abi::kNumLines, status.check);
+                },
                 budget_cycles,
                 status.poll_cycles);
             if (status.last_poll_ready) {

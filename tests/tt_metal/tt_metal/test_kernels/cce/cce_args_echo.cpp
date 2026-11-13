@@ -4,6 +4,7 @@
 
 #include "api/compile_time_args.h"
 #include "dev_mem_map.h"
+#include "experimental/cce_hart.h"
 #include "risc_common.h"
 
 void kernel_main() {
@@ -19,10 +20,8 @@ void kernel_main() {
     uint32_t hart_id;
     asm volatile("csrr %0, mhartid" : "=r"(hart_id));
 
-    const uint64_t slot_address = static_cast<uint64_t>(echo_base_offset) +
-                                  static_cast<uint64_t>(MEM_L1_UNCACHED_BASE) +
-                                  static_cast<uint64_t>(hart_id) * slot_bytes;
-    volatile uint32_t* slot = reinterpret_cast<volatile uint32_t*>(slot_address);
+    volatile uint32_t* slot = experimental::cce_hart::own_tl1_words(
+        static_cast<uint64_t>(echo_base_offset) + static_cast<uint64_t>(hart_id) * slot_bytes);
 
     slot[1] = hart_id;
     slot[2] = ct_marker;
