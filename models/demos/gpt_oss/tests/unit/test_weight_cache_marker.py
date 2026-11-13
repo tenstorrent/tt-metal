@@ -32,6 +32,7 @@ def _args(tmp_path, routed=False):
         setattr(a, name, getattr(ModelArgs, name))
     a._settings = ModelArgs._settings
     a._routed_decode_bf8_layers = ModelArgs._routed_decode_bf8_layers
+    a._dense_moe_decode_version = types.MethodType(ModelArgs._dense_moe_decode_version, a)
     a.weight_cache_path = lambda dtype: tmp_path
     a._routed_prefill_weights_version = lambda: "1" if routed else None
     a.weight_cache_is_complete = types.MethodType(ModelArgs.weight_cache_is_complete, a)

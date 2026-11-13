@@ -74,7 +74,8 @@ def _pc2d(gx, gy, bw, pm, pn, sw=1):
 class GroupedMoE:
     def __init__(self, mesh, moe, hidden, rows=256, share=None):
         """moe: per layer dict(gate, up [hidden, E x 736] BFP4, down [E x 736, hidden] BFP4, gate_bias / up_bias
-        [1, E x 736], down_bias [E, hidden]) on DRAM (BatchedVerify.moe); gate / up / down are only read here.
+        [1, E x 736], down_bias [E, hidden], optional tile_transposed: gate / up / down in transposed tiles,
+        DenseDecodeExpertWeights.tile_transposed) on DRAM (BatchedVerify.moe); gate / up / down are only read here.
         rows: the routed pass's rows (32 .. 256, a multiple of 32). share: another GroupedMoE whose relaid weights and
         rows-independent buffers (table, A_g, Y_g) this one uses (passes of different row counts, run one at a time)."""
         assert rows % TILE == 0 and TILE <= rows <= 1024
@@ -93,6 +94,9 @@ class GroupedMoE:
         self.ku = self.nt // E  # local column tiles per expert (23: gmoe_common.hpp NU_EXPERT)
         assert self.ku == 23, f"{self.ku} column tiles per expert; the gmoe kernels are built for 23"
         self.nu_down = hidden // TILE
+        # the weight tiles are stored transposed (K-GPTQ): the gate|up and down matmuls transpose them back
+        self.w_transposed = share.w_transposed if share is not None else bool(moe[0].get("tile_transposed", False))
+        self.w_defines = [("GMOE_W_TRANSPOSED", "1")] if self.w_transposed else []
         rep = ttnn.ReplicateTensorToMesh(mesh)
 
         def zeros(shape, dtype, mc):
@@ -302,7 +306,7 @@ class GroupedMoE:
             ),
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "gmoe_gu_compute.cpp"), core_ranges=cores, compile_time_args=cct,
-                runtime_args=[], defines=gmajor,
+                runtime_args=[], defines=gmajor + self.w_defines,
                 config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True,
                                                     math_approx_mode=False),
             ),
@@ -344,7 +348,7 @@ class GroupedMoE:
             ),
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "gmoe_down_compute.cpp"), core_ranges=cores, compile_time_args=cct,
-                runtime_args=[],
+                runtime_args=[], defines=self.w_defines,
                 config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True,
                                                     math_approx_mode=False),
             ),
