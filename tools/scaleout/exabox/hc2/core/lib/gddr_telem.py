@@ -22,13 +22,14 @@
 #     GDDR WARN <bdf> (tray N): corrected errors rose on GDDR 3 (read +5) ...                 any corrected-count rise
 #     GDDR: <n> chips read at start and end; ...                                              one overall line, last
 #   A counter lower at the end than at the start was cleared by a reset in the run: the end value counts as the rise.
-import os, sys
+import os
+import sys
 
-N = 8   # Blackhole GDDR channels
+N = 8  # Blackhole GDDR channels
 FIELDS = ["max_temp", "temp", "corr_rd", "corr_wr", "uncorr"]
 
 
-def tray(bdf):   # tray 1-4 from the PCI bus byte, as lib/tdp.sh's tdp_tray and run.sh's rk_tray
+def tray(bdf):  # tray 1-4 from the PCI bus byte, as lib/tdp.sh's tdp_tray and run.sh's rk_tray
     try:
         bus = int(bdf.split(":")[-2], 16)
     except (ValueError, IndexError):
@@ -38,9 +39,11 @@ def tray(bdf):   # tray 1-4 from the PCI bus byte, as lib/tdp.sh's tdp_tray and 
 
 def decode(t):
     """A pyluwen Telemetry (or any object with its attribute names) -> the read line's fields; '-' where missing."""
+
     def get(name):
         v = getattr(t, name, None)
         return v if isinstance(v, int) else None
+
     out = {}
     m = get("max_gddr_temp")
     out["max_temp"] = str(m) if m is not None else "-"
@@ -75,14 +78,14 @@ def devices(sysfs=None):
         names = os.listdir(d)
     except OSError:
         return None
-    for n in names:   # tt-kmd's class devices: tenstorrent!<index> -> device -> the PCI function
+    for n in names:  # tt-kmd's class devices: tenstorrent!<index> -> device -> the PCI function
         i = n.rsplit("!", 1)[-1]
         if i.isdigit():
             out.append((int(i), short_bdf(os.path.basename(os.path.realpath(os.path.join(d, n, "device"))))))
     return sorted(out) or None
 
 
-def config_dead(bdf, sysfs=None):   # vendor id ffff: the chip fell off the bus (lspci rev ff)
+def config_dead(bdf, sysfs=None):  # vendor id ffff: the chip fell off the bus (lspci rev ff)
     sysfs = sysfs or os.environ.get("TRAY_GDDR_SYS", "/sys")
     try:
         with open(os.path.join(sysfs, "bus", "pci", "devices", "0000:" + bdf, "config"), "rb") as f:
@@ -95,13 +98,16 @@ def read(skip=()):
     skip = {short_bdf(b if b.count(":") == 2 else "0000:" + b) for b in skip if b}
     try:
         import pyluwen
-    except Exception as e:   # bundle boxes without PyPI: no pyluwen
+    except Exception as e:  # bundle boxes without PyPI: no pyluwen
         print(f"unavailable no pyluwen: {e}", flush=True)
         return
     devs = devices()
-    if devs is None and skip:   # which index is a hung chip is unknown: open none
-        print(f"unavailable no sysfs map of /dev/tenstorrent to PCI addresses, and {', '.join(sorted(skip))} hung in this run: "
-              "no chip opened before the end reset", flush=True)
+    if devs is None and skip:  # which index is a hung chip is unknown: open none
+        print(
+            f"unavailable no sysfs map of /dev/tenstorrent to PCI addresses, and {', '.join(sorted(skip))} hung in this run: "
+            "no chip opened before the end reset",
+            flush=True,
+        )
         return
     if devs is None:
         try:
@@ -110,7 +116,7 @@ def read(skip=()):
             print(f"unavailable pci_scan failed: {e}", flush=True)
             return
     rows = []
-    for i, bdf in devs:   # one chip at a time: a chip that does not answer costs only its own line
+    for i, bdf in devs:  # one chip at a time: a chip that does not answer costs only its own line
         if bdf in skip:
             rows.append((bdf, f"{bdf} unavailable hung in this run: not opened before the end reset"))
             continue
@@ -154,7 +160,7 @@ def ints(s):
     return [None if x == "-" else int(x) for x in s.split(",")] if s else [None] * N
 
 
-def rise(a, b):   # the counter's rise; a reset in the run clears it (b < a): then all of b is new
+def rise(a, b):  # the counter's rise; a reset in the run clears it (b < a): then all of b is new
     if a is None or b is None:
         return None
     return b - a if b >= a else b
@@ -164,8 +170,11 @@ def diff(start_path, end_path):
     s, swhy = parse(start_path)
     e, ewhy = parse(end_path)
     if not s or not e:
-        print("GDDR: telemetry unavailable (" + "; ".join(x for x in (f"start: {swhy}" if not s else "",
-              f"end: {ewhy}" if not e else "") if x) + "); no GDDR error check this run")
+        print(
+            "GDDR: telemetry unavailable ("
+            + "; ".join(x for x in (f"start: {swhy}" if not s else "", f"end: {ewhy}" if not e else "") if x)
+            + "); no GDDR error check this run"
+        )
         return
     per, warns, unread, sat, ncmp = [], [], [], [], 0
     hot = None
@@ -189,14 +198,23 @@ def diff(start_path, end_path):
         cr = ",".join("-" if x is None else f"+{x}" for x in rd)
         cw = ",".join("-" if x is None else f"+{x}" for x in wr)
         nu = "-" if new_u is None else ("none" if new_u == 0 else f"0x{new_u:04x}")
-        per.append(f"GDDR {tag}: corr rd {cr} wr {cw} (GDDR 0-7); new uncorr {nu}; uncorr at start "
-                   f"{a['uncorr']}; max temp {a['max_temp']} -> {b['max_temp']} C")
+        per.append(
+            f"GDDR {tag}: corr rd {cr} wr {cw} (GDDR 0-7); new uncorr {nu}; uncorr at start "
+            f"{a['uncorr']}; max temp {a['max_temp']} -> {b['max_temp']} C"
+        )
         if new_u:
-            ch = [f"GDDR {c} {'read' if bit == 0 else 'write'}" for c in range(N) for bit in (0, 1)
-                  if new_u >> (2 * c + bit) & 1]
+            ch = [
+                f"GDDR {c} {'read' if bit == 0 else 'write'}"
+                for c in range(N)
+                for bit in (0, 1)
+                if new_u >> (2 * c + bit) & 1
+            ]
             warns.append(f"GDDR WARN {tag}: new uncorrected error(s) on {', '.join(ch)} during the run")
-        up = [f"GDDR {c} ({', '.join(x for x in (f'read +{rd[c]}' if rd[c] else '', f'write +{wr[c]}' if wr[c] else '') if x)})"
-              for c in range(N) if rd[c] or wr[c]]
+        up = [
+            f"GDDR {c} ({', '.join(x for x in (f'read +{rd[c]}' if rd[c] else '', f'write +{wr[c]}' if wr[c] else '') if x)})"
+            for c in range(N)
+            if rd[c] or wr[c]
+        ]
         if up:
             warns.append(f"GDDR WARN {tag}: corrected errors rose on {'; '.join(up)}")
     for l in per + warns:

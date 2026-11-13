@@ -5,7 +5,7 @@
 
 """dram_dbi.py: G3b, run.sh's DRAM byte/DBI pattern check, right after G3.
 
-R03 (notes/run-sh-coverage.md): BHFT ft_ddr_stress failed one chip in GDDR ctrl D (bank 3),
+R03 (run.sh's coverage table): BHFT ft_ddr_stress failed one chip in GDDR ctrl D (bank 3),
 channel B, byte 1, READ and READ_DBI, 3/6 loops, with training passing; run.sh had no DRAM byte/DBI pattern stress.
 GDDR6 DBI-DC sends a byte inverted when it has more than 4 zero bits, so the patterns that flip DBI from beat to beat
 are byte pairs on either side of that line (0x00/0xFF, 0x01/0xFE, 0xE0/0x1F), alternated every 1, 2, 4 and 8 bytes,
@@ -21,8 +21,8 @@ its DRAM bank (GDDR controller A-H), the byte offset in the 32-byte burst, the X
 """
 import time
 
-ROWS, ROW_B = 4096, 2048        # 8 MB per chip; a row is one 2 KB DRAM page
-HOPS = 8                        # DRAM-to-DRAM copies per pass on the device (reads and writes every page each hop)
+ROWS, ROW_B = 4096, 2048  # 8 MB per chip; a row is one 2 KB DRAM page
+HOPS = 8  # DRAM-to-DRAM copies per pass on the device (reads and writes every page each hop)
 PAIRS = [(0x00, 0xFF), (0x01, 0xFE), (0xE0, 0x1F), (0xFE, 0x01), (0x55, 0xAA)]
 PERIODS = [1, 2, 4, 8]
 
@@ -61,16 +61,31 @@ def dbi_check(ttnn, torch, mesh, chips, wall_s, nb=8, hops=HOPS, beat=None, say=
     names, table = patterns(torch)
     row_bank = torch.arange(ROWS) % nb
     byte_off = torch.arange(ROW_B) % 32
-    new = lambda: dict(passes=0, bad_passes=0, bad=0, first_pass=None, first_t=None, per_bank=[0] * nb,  # noqa: E731
-                       per_byte=[0] * 32, xor=0, pats={})
+    new = lambda: dict(
+        passes=0,
+        bad_passes=0,
+        bad=0,
+        first_pass=None,
+        first_t=None,
+        per_bank=[0] * nb,  # noqa: E731
+        per_byte=[0] * 32,
+        xor=0,
+        pats={},
+    )
     st = {i: new() for i in chips}
     t0 = time.monotonic()
     k, copy, cerr, last = 0, "clone", None, 0.0
     while time.monotonic() - t0 + last < wall_s or k == 0:
         p0 = time.monotonic()
         gold, pat = pass_data(torch, table, nb, k)
-        x = ttnn.from_torch(gold.view(torch.int32).view(ROWS, ROW_B // 4), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT,
-                            device=mesh, memory_config=D, mesh_mapper=ttnn.ReplicateTensorToMesh(mesh))
+        x = ttnn.from_torch(
+            gold.view(torch.int32).view(ROWS, ROW_B // 4),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh,
+            memory_config=D,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+        )
         try:
             for _ in range(hops if copy == "clone" else 0):
                 try:
@@ -83,8 +98,10 @@ def dbi_check(ttnn, torch, mesh, chips, wall_s, nb=8, hops=HOPS, beat=None, say=
                 ttnn.deallocate(x)
                 x = y
             ttnn.synchronize_device(mesh)
-            got = [ttnn.to_torch(d).contiguous().view(torch.uint8).reshape(ROWS, ROW_B)
-                   for d in ttnn.get_device_tensors(x.cpu())]
+            got = [
+                ttnn.to_torch(d).contiguous().view(torch.uint8).reshape(ROWS, ROW_B)
+                for d in ttnn.get_device_tensors(x.cpu())
+            ]
         finally:
             ttnn.deallocate(x)
         for i, g in enumerate(got):
@@ -114,6 +131,14 @@ def dbi_check(ttnn, torch, mesh, chips, wall_s, nb=8, hops=HOPS, beat=None, say=
         if beat:
             beat(f"dbi pass {k}")
     el = time.monotonic() - t0
-    return dict(passes=k, hops=(hops if copy == "clone" else 0), copy=copy, **({"copy_error": cerr} if cerr else {}),
-                mb=round(ROWS * ROW_B / 2**20, 1), patterns=len(names), wall_s=round(el, 1), banks=nb,
-                chips={str(i): dict(chips.get(i, {}), **s) for i, s in st.items()})
+    return dict(
+        passes=k,
+        hops=(hops if copy == "clone" else 0),
+        copy=copy,
+        **({"copy_error": cerr} if cerr else {}),
+        mb=round(ROWS * ROW_B / 2**20, 1),
+        patterns=len(names),
+        wall_s=round(el, 1),
+        banks=nb,
+        chips={str(i): dict(chips.get(i, {}), **s) for i, s in st.items()},
+    )

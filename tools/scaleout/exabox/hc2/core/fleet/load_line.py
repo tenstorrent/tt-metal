@@ -37,26 +37,32 @@ import statistics
 import sys
 from datetime import datetime
 
-from chunk_sched import load as load_rows, nchunks, tray_of
-from fleet_py import BDF_RE, c8_faults   # fault cut-off: first-fault epochs from fault_times.tsv and in-sample
+from chunk_sched import load as load_rows
+from chunk_sched import nchunks, tray_of
+from fleet_py import BDF_RE, c8_faults  # fault cut-off: first-fault epochs from fault_times.tsv and in-sample
 
-AT_LIMIT = 0.97   # mean power >= 97% of TDP or mean current >= 97% of TDC
-TDP_RULE = 95.0   # chunks 2-5 whose chips average >= 95% of their own TDP are power-limited, not short
-MED_WARN = 0.50   # a chip whose median W over the stage's polls is under 50% of the box's median chip is a
-                  # LOAD WARN naming it by BDF and tray 1-4 (never a FAIL); its own power limit is not part of the judgment
-MED_MIN_N = 10    # polls a chip needs in the stage for that median (~6 s apart): a 4-5 poll quiet-burst's median is one phase
-THROTTLE = 0.97   # a chip whose mean clock is under 97% of the stage's top chip clock is clock-throttled
-CHIP_MIN_N = 3    # C8 samples a chip needs in the stage (~6 s apart) to be judged
-SKIP_S = 5        # each stage's first 5 s (the ramp) is left out of the means
-TRAY_LOW = 0.80   # a tray whose chip-sum stays under 80% of its chips' own
-                  # power limits for more than half the stage's load is LOAD LOW: the stage never loaded it (a warn, never a pass).
-                  # Set from run.sh's own C8 records (84 stage records of 46 runs):
-                  # healthy trays' medians run 84-110% (clock-throttled chips hold some heavy-burst trays at 84-90%, which
-                  # 0.90 warned on 12 times); never-loaded trays sit at 28-30%; one box-wide weak heavy burst (176 vs 261
-                  # TFLOP/s per chip) read 74-81%. 0.80 warns on 0 of 324 healthy tray-stages, on 3/3 never-loaded trays and
-                  # on 3/4 trays of that weak burst.
-CAP_W = (10, 1000)    # a plausible chip power limit in W; power1_max 4293967296 uW (c01u14's sentinel) is a limit not read
-CHIP_W_MAX = 1000     # a chip power reading over this (0xffffffff uW = 4295 W) is implausible and ignored
+AT_LIMIT = 0.97  # mean power >= 97% of TDP or mean current >= 97% of TDC
+TDP_RULE = 95.0  # chunks 2-5 whose chips average >= 95% of their own TDP are power-limited, not short
+MED_WARN = 0.50  # a chip whose median W over the stage's polls is under 50% of the box's median chip is a
+# LOAD WARN naming it by BDF and tray 1-4 (never a FAIL); its own power limit is not part of the judgment
+MED_MIN_N = (
+    10  # polls a chip needs in the stage for that median (~6 s apart): a 4-5 poll quiet-burst's median is one phase
+)
+THROTTLE = 0.97  # a chip whose mean clock is under 97% of the stage's top chip clock is clock-throttled
+CHIP_MIN_N = 3  # C8 samples a chip needs in the stage (~6 s apart) to be judged
+SKIP_S = 5  # each stage's first 5 s (the ramp) is left out of the means
+TRAY_LOW = 0.80  # a tray whose chip-sum stays under 80% of its chips' own
+# power limits for more than half the stage's load is LOAD LOW: the stage never loaded it (a warn, never a pass).
+# Set from run.sh's own C8 records (84 stage records of 46 runs):
+# healthy trays' medians run 84-110% (clock-throttled chips hold some heavy-burst trays at 84-90%, which
+# 0.90 warned on 12 times); never-loaded trays sit at 28-30%; one box-wide weak heavy burst (176 vs 261
+# TFLOP/s per chip) read 74-81%. 0.80 warns on 0 of 324 healthy tray-stages, on 3/3 never-loaded trays and
+# on 3/4 trays of that weak burst.
+CAP_W = (
+    10,
+    1000,
+)  # a plausible chip power limit in W; power1_max 4293967296 uW (c01u14's sentinel) is a limit not read
+CHIP_W_MAX = 1000  # a chip power reading over this (0xffffffff uW = 4295 W) is implausible and ignored
 
 
 def rows(path):
@@ -68,7 +74,7 @@ def rows(path):
                 continue
             try:
                 t, w = float(f[0]), [int(v) for v in f[1:5]]
-            except ValueError:   # NA / ERR in a tray column: that poll is skipped
+            except ValueError:  # NA / ERR in a tray column: that poll is skipped
                 continue
             psu = [int(v) for v in f[10:14]] if len(f) >= 14 and all(v.isdigit() for v in f[10:14]) else None
             out.append((t, w, psu))
@@ -93,12 +99,14 @@ def c8_limits(path):
 
 def c8_rows(path):
     """[(epoch, bdf, W, A)] from C8's telemetry; a value not read ("-") or a sentinel (over 2000 W or A) is None."""
+
     def val(x, scale):
         try:
             v = float(x) / scale
         except ValueError:
             return None
         return v if 0 <= v < 2000 else None
+
     out = []
     try:
         for ln in open(path):
@@ -145,12 +153,27 @@ def at_limit(c8, lim, start, end):
         if (tdp and w is not None and w >= AT_LIMIT * tdp) or (tdc and i is not None and i >= AT_LIMIT * tdc):
             n_at += 1
         else:
-            not_at.append(dict(bdf=short(b), tray=tray_of(b), power_w=None if w is None else round(w, 1), tdp_w=tdp,
-                               current_a=None if i is None else round(i, 1), tdc_a=tdc))
+            not_at.append(
+                dict(
+                    bdf=short(b),
+                    tray=tray_of(b),
+                    power_w=None if w is None else round(w, 1),
+                    tdp_w=tdp,
+                    current_a=None if i is None else round(i, 1),
+                    tdc_a=tdc,
+                )
+            )
     lo = min(pct) if pct else None
-    return dict(chips=chips, at_limit=n_at, not_at_limit=not_at, no_limit=nolim, start=start, end=end,
-                tdp_pct_mean=round(sum(p for p, _ in pct) / len(pct), 1) if pct else None,
-                tdp_pct_min=dict(bdf=short(lo[1]), tray=tray_of(lo[1]), pct=round(lo[0], 1)) if lo else None)
+    return dict(
+        chips=chips,
+        at_limit=n_at,
+        not_at_limit=not_at,
+        no_limit=nolim,
+        start=start,
+        end=end,
+        tdp_pct_mean=round(sum(p for p, _ in pct) / len(pct), 1) if pct else None,
+        tdp_pct_min=dict(bdf=short(lo[1]), tray=tray_of(lo[1]), pct=round(lo[0], 1)) if lo else None,
+    )
 
 
 def topup_plan(c8, lim, start, end, steps, gain=1.0):
@@ -164,7 +187,9 @@ def topup_plan(c8, lim, start, end, steps, gain=1.0):
         return r, []
     out = []
     for c in r["not_at_limit"]:
-        d = [(AT_LIMIT * lv - v) / v for v, lv in ((c["power_w"], c["tdp_w"]), (c["current_a"], c["tdc_a"])) if v and lv]
+        d = [
+            (AT_LIMIT * lv - v) / v for v, lv in ((c["power_w"], c["tdp_w"]), (c["current_a"], c["tdc_a"])) if v and lv
+        ]
         if not d:
             continue
         out.append(dict(c, extra=max(1, min(steps, math.ceil(steps * gain * max(min(d), 0.0))))))
@@ -179,8 +204,11 @@ def limit_text(r):
     f = lambda v: "?" if v is None else f"{v:.0f}"
     s = f"{r['at_limit']}/{r['chips']} chips at their power or current limit (mean >= {AT_LIMIT:.0%} of TDP or TDC)"
     if r["not_at_limit"]:
-        s += "; not at it: " + ", ".join(f"{c['bdf']} (tray {c['tray'] or '?'}) {f(c['power_w'])}/{f(c['tdp_w'])} W "
-                                         f"{f(c['current_a'])}/{f(c['tdc_a'])} A" for c in r["not_at_limit"])
+        s += "; not at it: " + ", ".join(
+            f"{c['bdf']} (tray {c['tray'] or '?'}) {f(c['power_w'])}/{f(c['tdp_w'])} W "
+            f"{f(c['current_a'])}/{f(c['tdc_a'])} A"
+            for c in r["not_at_limit"]
+        )
     if r["no_limit"]:
         s += f"; {len(r['no_limit'])} chip(s) with no limit read: " + " ".join(r["no_limit"])
     return s
@@ -213,7 +241,9 @@ def swing_text(telem, rs, start, end):
     tt = telem_trays(telem, start, end)
     if tt:
         s = "per-tray swing (chip sum, 1 s) " + ", ".join(
-            f"tray {u} {min(v) / 1000:.2f}-{max(v) / 1000:.2f} kW ({(max(v) - min(v)) / 1000:.2f})" for u, v in sorted(tt.items()))
+            f"tray {u} {min(v) / 1000:.2f}-{max(v) / 1000:.2f} kW ({(max(v) - min(v)) / 1000:.2f})"
+            for u, v in sorted(tt.items())
+        )
     else:
         s = "per-tray swing not read (no telem rows)"
     bm = [w for t, w, _ in rs if start <= t <= end]
@@ -230,10 +260,14 @@ def line(power, result, label, c8=None, limits=None, telem=None):
     except (OSError, ValueError, AttributeError):
         res, b = None, {}
     tf = b.get("tflops_per_chip")
-    tail = f"{tf:g} TFLOP/s per chip (matmul FLOPs over a time that includes any gaps)" if tf is not None else "TFLOP/s not reported (no burst)"
-    if b.get("op"):   # the op that ran, and why minimal_matmul did not
+    tail = (
+        f"{tf:g} TFLOP/s per chip (matmul FLOPs over a time that includes any gaps)"
+        if tf is not None
+        else "TFLOP/s not reported (no burst)"
+    )
+    if b.get("op"):  # the op that ran, and why minimal_matmul did not
         tail += f", op {b['op']}" + (f" (fallback: {b['fallback']})" if b.get("fallback") else "")
-    if b.get("load"):   # the load and its gap, and any part of it that fell back
+    if b.get("load"):  # the load and its gap, and any part of it that fell back
         tail += f", load {b['load']}" + (f" ({b['gap']})" if b.get("gap") else "")
         tail += f" (load fallback: {b['load_fallback']})" if b.get("load_fallback") else ""
     t0, sec = b.get("t0"), b.get("seconds")
@@ -250,7 +284,7 @@ def line(power, result, label, c8=None, limits=None, telem=None):
         tail += "; " + swing_text(telem, rs, t0 - 25, t0 + sec)
     if t0 is None or sec is None or not rs:
         return f"LOAD {label}: box power not read ({len(rs)} polls), {tail}"
-    box = all(p for _, _, p in rs)   # the PSU sum is the box's kW (the tray sensors cap at 2550 W each)
+    box = all(p for _, _, p in rs)  # the PSU sum is the box's kW (the tray sensors cap at 2550 W each)
     tot = (lambda w, p: sum(p)) if box else (lambda w, p: sum(w))
     idle = [tot(w, p) for t, w, p in rs if t0 - 25 <= t < t0]
     step = [tot(w, p) for t, w, p in rs if t0 <= t <= t0 + 10]
@@ -274,12 +308,17 @@ def tdp_text(r, k):
     if not r or r.get("tdp_pct_mean") is None:
         return ""
     lo = r["tdp_pct_min"]
-    s = (f"; chips mean {r['tdp_pct_mean']:.1f}% of their own TDP (lowest {lo['bdf']} (tray {lo['tray'] or '?'}) "
-         f"{lo['pct']:.0f}%, not judged)")
+    s = (
+        f"; chips mean {r['tdp_pct_mean']:.1f}% of their own TDP (lowest {lo['bdf']} (tray {lo['tray'] or '?'}) "
+        f"{lo['pct']:.0f}%, not judged)"
+    )
     if k == 0:
         return s + ", chunk 1 holds the ramp, not judged"
-    return s + (f", power-limited at default TDP (goal 8: >= {TDP_RULE:.0f}%)" if r["tdp_pct_mean"] >= TDP_RULE else
-                f", BELOW {TDP_RULE:.0f}%: the chips have headroom, the load is short (goal 8)")
+    return s + (
+        f", power-limited at default TDP (goal 8: >= {TDP_RULE:.0f}%)"
+        if r["tdp_pct_mean"] >= TDP_RULE
+        else f", BELOW {TDP_RULE:.0f}%: the chips have headroom, the load is short (goal 8)"
+    )
 
 
 def kw_why(k, kw, rec, launch_per_s=None, min_kw=None):
@@ -292,8 +331,10 @@ def kw_why(k, kw, rec, launch_per_s=None, min_kw=None):
     if rec["tdp_pct_mean"] >= TDP_RULE:
         return s + f"power-limit ceiling at default TDP (chips mean {rec['tdp_pct_mean']:.1f}% of limit)"
     lo, f = rec["tdp_pct_min"], lambda v, p: "?" if v is None else f"{v:.{p}f}"  # noqa: E731
-    return s + (f"load stall (launches/s {'?' if launch_per_s is None else f'{launch_per_s:g}'}, min box kW {f(min_kw, 2)}, "
-                f"lowest chip {lo['bdf']} tray {lo['tray'] or '?'} at {lo['pct']:.0f}% of limit)")
+    return s + (
+        f"load stall (launches/s {'?' if launch_per_s is None else f'{launch_per_s:g}'}, min box kW {f(min_kw, 2)}, "
+        f"lowest chip {lo['bdf']} tray {lo['tray'] or '?'} at {lo['pct']:.0f}% of limit)"
+    )
 
 
 def chunk_lines(rows_path, c8, limits, label, out=None):
@@ -306,8 +347,11 @@ def chunk_lines(rows_path, c8, limits, label, out=None):
     for r in rws:
         if r.get("event") == "chunk" and "start" in r and "end" in r:
             rec = at_limit(c8r, lim, r["start"], r["end"])
-            lines.append(f"LOAD {label} chunk {r['k'] + 1}/{n} ({(r['end'] - r['start']) / 60:.1f} min): "
-                         + limit_text(rec) + tdp_text(rec, r["k"]))
+            lines.append(
+                f"LOAD {label} chunk {r['k'] + 1}/{n} ({(r['end'] - r['start']) / 60:.1f} min): "
+                + limit_text(rec)
+                + tdp_text(rec, r["k"])
+            )
             recs.append(dict(chunk=r["k"] + 1, **(rec or {})))
     if out:
         json.dump(recs, open(out, "w"))
@@ -316,12 +360,14 @@ def chunk_lines(rows_path, c8, limits, label, out=None):
 
 def c8_chip_rows(path):
     """[(epoch, bdf, W, A, MHz)] from C8's telemetry (c8_rows() plus the aiclk column); a value not read is None."""
+
     def val(x, scale):
         try:
             v = float(x) / scale
         except ValueError:
             return None
         return v if 0 <= v < 2000 else None
+
     out = []
     try:
         for ln in open(path):
@@ -347,7 +393,7 @@ def stage_windows(src):
         return w, (round(sum(tf) / len(tf), 1) if tf else None)
     try:
         r = json.load(open(src))
-        bs = r.get("cycles") or [r.get("burst") or {}]   # ub0_repro.py --cycles: every cycle's burst
+        bs = r.get("cycles") or [r.get("burst") or {}]  # ub0_repro.py --cycles: every cycle's burst
     except (OSError, ValueError, AttributeError):
         return [], None
     w = [(b["t0"], b["t0"] + b["seconds"]) for b in bs if b.get("t0") is not None and b.get("seconds") is not None]
@@ -384,21 +430,38 @@ def chip_lines(c8, lim, wins, label, tflops=None):
     for b in sorted(per):
         tdp, tdc = lim.get(b, (None, None))
         w, i, m = (mean(x) for x in per[b])
-        hit = [h for h, ok in (("power", tdp and w is not None and w >= AT_LIMIT * tdp),
-                                ("current", tdc and i is not None and i >= AT_LIMIT * tdc),
-                                ("clock", top and m is not None and m < THROTTLE * top)) if ok] or ["none"]
+        hit = [
+            h
+            for h, ok in (
+                ("power", tdp and w is not None and w >= AT_LIMIT * tdp),
+                ("current", tdc and i is not None and i >= AT_LIMIT * tdc),
+                ("clock", top and m is not None and m < THROTTLE * top),
+            )
+            if ok
+        ] or ["none"]
         hits["+".join(hit)] = hits.get("+".join(hit), 0) + 1
-        parts.append(f"{short(b)} (tray {tray_of(b) or '?'}) {f(w, '')}/{f(tdp, '')} W {f(i, '')}/{f(tdc, '')} A {f(m, '')} MHz: "
-                     + "+".join(hit))
+        parts.append(
+            f"{short(b)} (tray {tray_of(b) or '?'}) {f(w, '')}/{f(tdp, '')} W {f(i, '')}/{f(tdc, '')} A {f(m, '')} MHz: "
+            + "+".join(hit)
+        )
         if b in med and box and med[b] < MED_WARN * box:
-            warns.append(f"LOAD WARN {short(b)} (tray {tray_of(b) or '?'}): stage {label}: median {med[b]:.0f} W over "
-                         f"{len(per[b][0])} polls, under {MED_WARN:.0%} of the box median chip {box:.0f} W: the load "
-                         "does not reach this chip")
-    tf = f"{tflops:g} TFLOP/s per chip (stage mean, the same ops on every chip)" if tflops is not None else "TFLOP/s not reported"
-    jd = (f"box median chip {box:.0f} W" if box else
-          f"per-chip median not judged (under {MED_MIN_N} polls per chip)")
-    s = (f"LOAD {label} chips: {len(per)} chips, {tf}; {jd}; limit hit: " + ", ".join(f"{k} {v}" for k, v in sorted(hits.items()))
-         + "; per chip W/power limit, A/current limit, MHz: " + "; ".join(parts))
+            warns.append(
+                f"LOAD WARN {short(b)} (tray {tray_of(b) or '?'}): stage {label}: median {med[b]:.0f} W over "
+                f"{len(per[b][0])} polls, under {MED_WARN:.0%} of the box median chip {box:.0f} W: the load "
+                "does not reach this chip"
+            )
+    tf = (
+        f"{tflops:g} TFLOP/s per chip (stage mean, the same ops on every chip)"
+        if tflops is not None
+        else "TFLOP/s not reported"
+    )
+    jd = f"box median chip {box:.0f} W" if box else f"per-chip median not judged (under {MED_MIN_N} polls per chip)"
+    s = (
+        f"LOAD {label} chips: {len(per)} chips, {tf}; {jd}; limit hit: "
+        + ", ".join(f"{k} {v}" for k, v in sorted(hits.items()))
+        + "; per chip W/power limit, A/current limit, MHz: "
+        + "; ".join(parts)
+    )
     return [s] + warns
 
 
@@ -481,7 +544,8 @@ def target_lines(sweeps, caps, wins, label, faults=None, box_cut=None):
     LOAD LOW WARN when the sum is under TRAY_LOW in more than half the sweeps; LOAD UNREAD WARN when unread or ignored
     readings leave that open (neither a pass nor a fail). Chip telemetry only: the BMC's Power_UBBn pegs at 2550 W.
     A sweep at or after the first fault of any chip of a tray (a box-wide HANG or bare fault line: every tray)
-    never counts, and a tray left with under CHIP_MIN_N pre-fault sweeps reads 'too short to judge', never LOW or UNREAD."""
+    never counts, and a tray left with under CHIP_MIN_N pre-fault sweeps reads 'too short to judge', never LOW or UNREAD.
+    """
     faults = faults or {}
     if not wins:
         return [f"LOAD TARGET {label}: no load window, trays not checked"]
@@ -495,16 +559,26 @@ def target_lines(sweeps, caps, wins, label, faults=None, box_cut=None):
     if not sw or not trays:
         return [f"LOAD TARGET {label}: no C8 sweep inside the load, trays not checked"]
     if len(sw) < CHIP_MIN_N:
-        return [f"LOAD TARGET {label}: {len(sw)} C8 sweep(s) inside the load, under {CHIP_MIN_N}: too short to judge, trays not checked"]
+        return [
+            f"LOAD TARGET {label}: {len(sw)} C8 sweep(s) inside the load, under {CHIP_MIN_N}: too short to judge, trays not checked"
+        ]
     nm = lambda b: f"{short(b)} (tray {u})"  # noqa: E731
     summ, out = [], []
     for u in sorted(trays):
         # a sweep at or after the first fault of any chip of this tray (box-wide cut: every tray) is dropped
-        tcut = min((t for t in [faults.get(b) for b in trays[u]] + ([box_cut] if box_cut is not None else []) if t is not None),
-                  default=None)
+        tcut = min(
+            (
+                t
+                for t in [faults.get(b) for b in trays[u]] + ([box_cut] if box_cut is not None else [])
+                if t is not None
+            ),
+            default=None,
+        )
         sw_u = [r for t, r in swt if tcut is None or t < tcut]
         if len(sw_u) < CHIP_MIN_N:
-            summ.append(f"tray {u} too short to judge ({len(sw_u)} pre-fault sweep(s){' of ' + str(len(sw)) + ', cut at its first fault' if tcut is not None else ''})")
+            summ.append(
+                f"tray {u} too short to judge ({len(sw_u)} pre-fault sweep(s){' of ' + str(len(sw)) + ', cut at its first fault' if tcut is not None else ''})"
+            )
             continue
         chips = sorted(trays[u])
         nocap = [b for b in chips if caps.get(b, (None,))[0] is None]
@@ -529,35 +603,60 @@ def target_lines(sweeps, caps, wins, label, faults=None, box_cut=None):
         n = len(sw_u)
         med = sorted(sums)[len(sums) // 2] if sums else None
         pct = f", median {med:.0f}/{tgt:.0f} W ({med / tgt:.0%})" if med is not None else ""
-        cw = "; ".join(f"{nm(b)} {sum(per[b]) / len(per[b]):.0f}/{caps[b][0]:.0f} W" if per[b] and caps.get(b, (None,))[0]
-                       else f"{nm(b)} unread" for b in chips)
+        cw = "; ".join(
+            f"{nm(b)} {sum(per[b]) / len(per[b]):.0f}/{caps[b][0]:.0f} W"
+            if per[b] and caps.get(b, (None,))[0]
+            else f"{nm(b)} unread"
+            for b in chips
+        )
         src = "/".join(sorted({caps[b][1] for b in chips if caps.get(b, (None,))[0]})) or "power limit"
-        ign = ("; implausible readings ignored: " + ", ".join(f"{nm(b)} {k}x" for b, k in sorted(impl.items()))) if impl else ""
+        ign = (
+            ("; implausible readings ignored: " + ", ".join(f"{nm(b)} {k}x" for b, k in sorted(impl.items())))
+            if impl
+            else ""
+        )
         if low * 2 > n:
             v = "LOW"
-            out.append(f"LOAD LOW WARN tray {u} ({label}): its {len(chips)} chips summed under {TRAY_LOW:.0%} of their own "
-                       f"{src} sum ({tgt:.0f} W) in {low} of {n} C8 sweeps of the load{pct}: this stage did not load tray {u} "
-                       f"to its limit, so its result there is not a clean pass (a warn, not a failed check); per chip mean W/own "
-                       f"limit: {cw}{ign}")
-        elif (n - ok) * 2 > n:   # the unread or ignored sweeps could make it LOW
+            out.append(
+                f"LOAD LOW WARN tray {u} ({label}): its {len(chips)} chips summed under {TRAY_LOW:.0%} of their own "
+                f"{src} sum ({tgt:.0f} W) in {low} of {n} C8 sweeps of the load{pct}: this stage did not load tray {u} "
+                f"to its limit, so its result there is not a clean pass (a warn, not a failed check); per chip mean W/own "
+                f"limit: {cw}{ign}"
+            )
+        elif (n - ok) * 2 > n:  # the unread or ignored sweeps could make it LOW
             v = "UNREAD"
             what = [f"power limit not read for {', '.join(nm(b) for b in nocap)}"] if nocap else []
-            what += ["power not read for " + ", ".join(f"{nm(b)} in {k} of {n} sweeps" for b, k in sorted(unread.items()))] if unread else []
-            what += ["implausible power ignored for " + ", ".join(f"{nm(b)} in {k} of {n} sweeps" for b, k in sorted(impl.items()))] if impl else []
-            out.append(f"LOAD UNREAD WARN tray {u} ({label}): load at target not judged, only {ok + low} of {n} C8 sweeps "
-                       f"read in full ({'; '.join(what)}): neither a pass nor a failed check")
+            what += (
+                ["power not read for " + ", ".join(f"{nm(b)} in {k} of {n} sweeps" for b, k in sorted(unread.items()))]
+                if unread
+                else []
+            )
+            what += (
+                [
+                    "implausible power ignored for "
+                    + ", ".join(f"{nm(b)} in {k} of {n} sweeps" for b, k in sorted(impl.items()))
+                ]
+                if impl
+                else []
+            )
+            out.append(
+                f"LOAD UNREAD WARN tray {u} ({label}): load at target not judged, only {ok + low} of {n} C8 sweeps "
+                f"read in full ({'; '.join(what)}): neither a pass nor a failed check"
+            )
         else:
             v = "at target"
         summ.append(f"tray {u} {v} ({src}), under {TRAY_LOW:.0%} in {low}/{n} sweeps{pct}")
-    return [f"LOAD TARGET {label}: each tray's chip-sum against its chips' own power limits (read only; chip telemetry, "
-            f"not the BMC board power): " + "; ".join(summ)] + out
-
+    return [
+        f"LOAD TARGET {label}: each tray's chip-sum against its chips' own power limits (read only; chip telemetry, "
+        f"not the BMC board power): " + "; ".join(summ)
+    ] + out
 
 
 def warn_kn(runs):
     """--mode=long's per-chip LOAD WARN k/N: runs is one load.txt per run; a chip counts once per run that
     has a LOAD WARN naming it, in any stage. A LOAD WARN only: never a FAIL, never numeric or bus-bar."""
     import re
+
     rx = re.compile(r"^LOAD WARN (\S+) \(tray (\S+)\): stage (.*?): median")
     hit = {}
     for k, path in enumerate(runs):
@@ -573,20 +672,33 @@ def warn_kn(runs):
     n = len(runs)
     if not hit:
         return [f"LOAD WARN k/N: no chip under {MED_WARN:.0%} of the box median chip in {n} run(s)"]
-    return [f"LOAD WARN k/N {len(r)}/{n} {b} (tray {t}): " + "; ".join(f"run {k + 1}: " + ", ".join(r[k]) for k in sorted(r))
-            for (b, t), r in sorted(hit.items(), key=lambda x: (-len(x[1]), x[0]))]
+    return [
+        f"LOAD WARN k/N {len(r)}/{n} {b} (tray {t}): "
+        + "; ".join(f"run {k + 1}: " + ", ".join(r[k]) for k in sorted(r))
+        for (b, t), r in sorted(hit.items(), key=lambda x: (-len(x[1]), x[0]))
+    ]
 
 
 if __name__ == "__main__":
     if sys.argv[1:2] == ["target"]:
         # argv[6] is $FL_OUT/fault_times.tsv; sweeps at/after a chip's first fault never feed the verdict
         first, box = fault_cut(sys.argv[3], sys.argv[6]) if len(sys.argv) > 6 and sys.argv[6] else ({}, None)
-        print("\n".join(target_lines(c8_sweeps(sys.argv[3]), own_caps(sys.argv[4]), stage_windows(sys.argv[2])[0], sys.argv[5],
-                                     first, box)))
+        print(
+            "\n".join(
+                target_lines(
+                    c8_sweeps(sys.argv[3]),
+                    own_caps(sys.argv[4]),
+                    stage_windows(sys.argv[2])[0],
+                    sys.argv[5],
+                    first,
+                    box,
+                )
+            )
+        )
     elif sys.argv[1:2] == ["chips"]:
         w, tf = stage_windows(sys.argv[2])
         print("\n".join(chip_lines(c8_chip_rows(sys.argv[3]), c8_limits(sys.argv[4]), w, sys.argv[5], tf)))
-    elif sys.argv[1:2] == ["warnkn"]:   # <load.txt of each run...>: per-chip LOAD WARN k/N for --mode=long's summary
+    elif sys.argv[1:2] == ["warnkn"]:  # <load.txt of each run...>: per-chip LOAD WARN k/N for --mode=long's summary
         print("\n".join(warn_kn(sys.argv[2:])))
     elif sys.argv[1:2] == ["chunks"]:
         print("\n".join(chunk_lines(*sys.argv[2:7])))

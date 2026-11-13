@@ -24,7 +24,7 @@ import os
 import re
 import sys
 
-BAD = re.compile(r"absent|(?<!non-)critical|fail|ac lost|non-?recoverable|not present", re.I)   # never "Non-Critical"
+BAD = re.compile(r"absent|(?<!non-)critical|fail|ac lost|non-?recoverable|not present", re.I)  # never "Non-Critical"
 RED_LOST = re.compile(r"redundancy lost|non-?redundant|insufficient", re.I)
 RED_DEGR = re.compile(r"degraded", re.I)
 
@@ -86,7 +86,11 @@ def judge(when, sdr, wtxt, power=None, rated=4000.0, pct=90.0, box_kw=14.0):
         line += f"; box {sum(w.values()) / 1000:.2f} kW (PSU sum)"
     pk = peaks(power) if power else None
     if pk:
-        line += "; stage peak " + ", ".join(f"PSU{i} {x} W" for i, x in sorted(pk[0].items())) + f", box {pk[1] / 1000:.2f} kW"
+        line += (
+            "; stage peak "
+            + ", ".join(f"PSU{i} {x} W" for i, x in sorted(pk[0].items()))
+            + f", box {pk[1] / 1000:.2f} kW"
+        )
     out.append(line)
     for i in sorted(bad):
         out.append(f"PSU FINDING PSU{i}: {', '.join(bad[i])} ({when})")
@@ -97,11 +101,13 @@ def judge(when, sdr, wtxt, power=None, rated=4000.0, pct=90.0, box_kw=14.0):
     elif any(RED_DEGR.search(v) for v in red):
         out.append(f"PSU WARN redundancy degraded: PSU_Redundancy {red[0]} ({names}) ({when})")
     top = dict(w)
-    for i, x in (pk[0].items() if pk else []):
+    for i, x in pk[0].items() if pk else []:
         top[i] = max(top.get(i, 0), x)
     for i in sorted(top):
         if top[i] > rated * pct / 100:
-            out.append(f"PSU WARN PSU{i} at {top[i]:.0f} W, {100 * top[i] / rated:.0f}% of its {rated:.0f} W rating ({when})")
+            out.append(
+                f"PSU WARN PSU{i} at {top[i]:.0f} W, {100 * top[i] / rated:.0f}% of its {rated:.0f} W rating ({when})"
+            )
     bx = max(sum(w.values()), pk[1] if pk else 0)
     if bx > box_kw * 1000:
         out.append(f"PSU WARN box at {bx / 1000:.2f} kW, above {box_kw:g} kW ({when})")
@@ -118,8 +124,15 @@ def main(argv):
         return 2
     rd = lambda p: open(p, errors="replace").read() if os.path.exists(p) else ""
     e = os.environ
-    for line in judge(argv[1], rd(argv[2]), rd(argv[3]), argv[4] if len(argv) > 4 else None,
-                      float(e.get("PSU_RATED_W") or 4000), float(e.get("PSU_WARN_PCT") or 90), float(e.get("PSU_BOX_WARN_KW") or 14)):
+    for line in judge(
+        argv[1],
+        rd(argv[2]),
+        rd(argv[3]),
+        argv[4] if len(argv) > 4 else None,
+        float(e.get("PSU_RATED_W") or 4000),
+        float(e.get("PSU_WARN_PCT") or 90),
+        float(e.get("PSU_BOX_WARN_KW") or 14),
+    ):
         print(line)
     return 0
 

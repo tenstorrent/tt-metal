@@ -107,7 +107,7 @@ tdp_start() {
     tdp_say "TDP WARN: --tdp=$TDP is above max_tdp_limit on $m: tt-metal caps the limit at max_tdp_limit"; fi
   lib=${TRAY_TDP_TTNN_DIR:-$("${PY:-python3}" -c 'import importlib.util as u, os; s = u.find_spec("ttnn"); print(os.path.dirname(s.origin) if s and s.origin else "")' 2>/dev/null)}
   if [ -z "$lib" ] || ! grep -raqs --include='*.so*' TT_METAL_TDP_LIMIT_WATTS "$lib"; then
-    tdp_say "TDP WARN: --tdp had no effect: this tt-metal (${lib:-ttnn not found}) predates PR 52394 (no TT_METAL_TDP_LIMIT_WATTS)"
+    tdp_say "TDP WARN: --tdp had no effect: this tt-metal (${lib:-ttnn not found}) is too old to take a power limit (no TT_METAL_TDP_LIMIT_WATTS)"
   fi
   fw=$( [ -s "${OUT:-}/fw.txt" ] && declare -F fw_major > /dev/null && fw_major "$OUT/fw.txt")
   if [ -n "$fw" ] && [ "$fw" != - ] && [ "$(printf '%s\n' "$fw" 19.11.0 | sort -V | head -1)" != 19.11.0 ]; then

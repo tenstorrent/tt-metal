@@ -57,8 +57,13 @@ def report(samples, clocks, high_mv, tray):
     for b, v in samples.items():
         mv = [x for _, x in v]
         ck = clocks.get(b)
-        rows[b] = dict(n=len(mv), mean=round(statistics.fmean(mv)), lo=min(mv), hi=max(mv),
-                       clk=round(statistics.median(ck)) if ck else None)
+        rows[b] = dict(
+            n=len(mv),
+            mean=round(statistics.fmean(mv)),
+            lo=min(mv),
+            hi=max(mv),
+            clk=round(statistics.median(ck)) if ck else None,
+        )
     if not rows:
         return []
     out = []
@@ -66,14 +71,18 @@ def report(samples, clocks, high_mv, tray):
     for b in sorted(rows):
         by_tray.setdefault(tray.get(b, "?"), []).append(b)
     for t in sorted(by_tray):
-        cells = ", ".join(f"{b} {rows[b]['mean']} [{rows[b]['lo']}-{rows[b]['hi']}] @{rows[b]['clk'] or '-'}" for b in by_tray[t])
+        cells = ", ".join(
+            f"{b} {rows[b]['mean']} [{rows[b]['lo']}-{rows[b]['hi']}] @{rows[b]['clk'] or '-'}" for b in by_tray[t]
+        )
         out.append(f"VCORE tray {t} under load (heavy chunk; mean [min-max] mV @ AICLK MHz): {cells}")
     means = [r["mean"] for r in rows.values()]
     med = statistics.median(means)
     cks = [r["clk"] for r in rows.values() if r["clk"]]
     mck = statistics.median(cks) if cks else None
-    out.append(f"VCORE box under load: {len(rows)} chips, median of chip means {med:.0f} mV (range {min(means)}-{max(means)}),"
-               f" median AICLK {f'{mck:.0f} MHz' if mck else 'not read'}")
+    out.append(
+        f"VCORE box under load: {len(rows)} chips, median of chip means {med:.0f} mV (range {min(means)}-{max(means)}),"
+        f" median AICLK {f'{mck:.0f} MHz' if mck else 'not read'}"
+    )
     if len(rows) < 3:
         return out
     for b in sorted(rows, key=lambda x: (-rows[x]["mean"], x)):
@@ -83,8 +92,10 @@ def report(samples, clocks, high_mv, tray):
         ck = "AICLK not read"
         if r["clk"]:
             ck = f"AICLK {r['clk']} MHz (box median {mck:.0f}{', lowest on the box' if r['clk'] == min(cks) and len(set(cks)) > 1 else ''})"
-        out.append(f"VCORE HIGH {b} (tray {tray.get(b, '?')}): mean {r['mean']} mV under load, {r['mean'] - med:.0f} mV over the"
-                   f" box median {med:.0f} mV (flag at +{high_mv} mV, FLEET_VCORE_HIGH_MV), {ck}; report only")
+        out.append(
+            f"VCORE HIGH {b} (tray {tray.get(b, '?')}): mean {r['mean']} mV under load, {r['mean'] - med:.0f} mV over the"
+            f" box median {med:.0f} mV (flag at +{high_mv} mV, FLEET_VCORE_HIGH_MV), {ck}; report only"
+        )
     return out
 
 

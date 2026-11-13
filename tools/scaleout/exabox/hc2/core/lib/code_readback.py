@@ -61,8 +61,8 @@ TENSIX_REGIONS = [
 # false CODE FAIL on data words.
 ETH_TEXT_END = [((18, 6), None), ((18, 10), 0x78000), ((19, 7), 0x7A000), (None, 0x7B000)]
 ETH_TEXT_END_LOW = 0x78000
-ETH_REGIONS = [("ERISC", "basefw", 0x70000, 0xB000)]   # run() without fw_of: 19.7 and later
-ETH_SKIP = {0x7CC70, 0x7CC74}    # base-FW and metal heartbeats count by design (only an explicit --region reaches them)
+ETH_REGIONS = [("ERISC", "basefw", 0x70000, 0xB000)]  # run() without fw_of: 19.7 and later
+ETH_SKIP = {0x7CC70, 0x7CC74}  # base-FW and metal heartbeats count by design (only an explicit --region reaches them)
 SMOKE_CORES = {"tensix": 2, "eth": 1}
 
 
@@ -113,7 +113,7 @@ def to_words(data):
     else:
         b = bytes(bytearray(int(x) & 0xFF for x in data))
     n = len(b) // 4
-    return list(struct.unpack(f"<{n}I", b[:4 * n]))
+    return list(struct.unpack(f"<{n}I", b[: 4 * n]))
 
 
 def elf_words(path):
@@ -121,16 +121,16 @@ def elf_words(path):
     b = open(path, "rb").read()
     if b[:4] != b"\x7fELF" or b[4] != 1 or b[5] != 1:
         raise ValueError(f"{path}: not a 32-bit little-endian ELF")
-    phoff, = struct.unpack_from("<I", b, 28)
+    (phoff,) = struct.unpack_from("<I", b, 28)
     phentsize, phnum = struct.unpack_from("<HH", b, 42)
     out = {}
     for i in range(phnum):
         p_type, p_off, p_vaddr, _pa, p_filesz, _ms, p_flags, _al = struct.unpack_from("<8I", b, phoff + i * phentsize)
         if p_type != 1 or not (p_flags & 1):
             continue
-        seg = b[p_off:p_off + p_filesz]
+        seg = b[p_off : p_off + p_filesz]
         for j in range(0, len(seg) - 3, 4):
-            out[p_vaddr + j], = struct.unpack_from("<I", seg, j)
+            (out[p_vaddr + j],) = struct.unpack_from("<I", seg, j)
     return out
 
 
@@ -139,14 +139,15 @@ def load_elfs(elf_dir, riscs):
     if not elf_dir:
         return got
     for r in riscs:
-        hits = sorted(glob.glob(os.path.join(elf_dir, r.lower() + "*.elf")) +
-                      glob.glob(os.path.join(elf_dir, r.lower(), "*.elf")))
+        hits = sorted(
+            glob.glob(os.path.join(elf_dir, r.lower() + "*.elf")) + glob.glob(os.path.join(elf_dir, r.lower(), "*.elf"))
+        )
         if hits:
             got[r] = elf_words(hits[0])
     return got
 
 
-BUS_TO_TRAY = {0x00: 1, 0x40: 2, 0xC0: 3, 0x80: 4}    # as run.sh rk_tray and fleet/chunk_sched.py
+BUS_TO_TRAY = {0x00: 1, 0x40: 2, 0xC0: 3, 0x80: 4}  # as run.sh rk_tray and fleet/chunk_sched.py
 
 
 def tray_of(bdf):
@@ -160,6 +161,7 @@ def tray_of(bdf):
 def _umd():
     sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
     import numeric_check
+
     return numeric_check
 
 
@@ -216,7 +218,9 @@ def eth_regions(fw_of):
     end = min([e or ETH_TEXT_END_LOW for e in ends.values()] or [ETH_TEXT_END_LOW])
     vers = Counter(str(v) if eth_text_end(v) else f"{v or 'unread'} (layout unknown)" for v in fw_of.values())
     why = ", ".join(f"{v} on {n} chip{'s' if n > 1 else ''}" for v, n in sorted(vers.items())) or "no chip"
-    return [("ERISC", "basefw", 0x70000, end - 0x70000)], f"CODE INFO ERISC basefw voted 0x70000-{end:#x}: tt_fw_bundle_ver {why}"
+    return [
+        ("ERISC", "basefw", 0x70000, end - 0x70000)
+    ], f"CODE INFO ERISC basefw voted 0x70000-{end:#x}: tt_fw_bundle_ver {why}"
 
 
 def fw_from_sysfs(bdf_of, sys_root="/sys", timeout_s=2.0):
@@ -244,13 +248,17 @@ class Reader:
         """size bytes as words: one block read, word reads when the block read fails (not on a timeout)."""
         if self.rb is not None:
             try:
-                return to_words(timed(self.t, lambda: self.rb(loc, addr, device_id=dev.id, num_bytes=size, context=self.ctx)))
+                return to_words(
+                    timed(self.t, lambda: self.rb(loc, addr, device_id=dev.id, num_bytes=size, context=self.ctx))
+                )
             except ReadTimeout:
                 raise
             except Exception:
                 pass
-        return [timed(self.t, lambda a=a: int(self.rw(loc, a, device_id=dev.id, context=self.ctx)))
-                for a in range(addr, addr + size, 4)]
+        return [
+            timed(self.t, lambda a=a: int(self.rw(loc, a, device_id=dev.id, context=self.ctx)))
+            for a in range(addr, addr + size, 4)
+        ]
 
 
 def vote(vals):
@@ -263,20 +271,36 @@ def vote(vals):
     return (w if c >= need else None), need
 
 
-def run(ctx, devices, bdf_of, budget_s=5.0, cursor_file=None, scope="plain", elf_dir=None, regions=None,
-        read_timeout_s=2.0, read_word=None, read_block=None, out=print, now=time.monotonic, fw_of=None):
+def run(
+    ctx,
+    devices,
+    bdf_of,
+    budget_s=5.0,
+    cursor_file=None,
+    scope="plain",
+    elf_dir=None,
+    regions=None,
+    read_timeout_s=2.0,
+    read_word=None,
+    read_block=None,
+    out=print,
+    now=time.monotonic,
+    fw_of=None,
+):
     t0 = now()
     rd = Reader(ctx, read_word, read_block, read_timeout_s)
     t_regions = [r for r in (regions or []) if not r[0].upper().startswith("ERISC")] if regions else TENSIX_REGIONS
     e_regions = [r for r in (regions or []) if r[0].upper().startswith("ERISC")] if regions else ETH_REGIONS
-    if not regions and fw_of is not None:     # the ERISC code end of the firmware each chip runs (ETH_TEXT_END)
+    if not regions and fw_of is not None:  # the ERISC code end of the firmware each chip runs (ETH_TEXT_END)
         e_regions, line = eth_regions({int(d.id): fw_of.get(int(d.id)) for d in devices})
         out(line)
     elfs = load_elfs(elf_dir, sorted({r[0] for r in t_regions + e_regions}))
     bdf = {int(d.id): (bdf_of.get(int(d.id)) or "").replace("0000:", "", 1) for d in devices}
     name = {c: f"{b or f'chip{c}'} tray {tray_of(b)}" for c, b in bdf.items()}
     for c in sorted(c for c, b in bdf.items() if not b):
-        out(f"CODE INFO chip{c} tray ?: BDF unknown (no cluster descriptor BDF, no UMD open line); lines name it chip{c}")
+        out(
+            f"CODE INFO chip{c} tray ?: BDF unknown (no cluster descriptor BDF, no UMD open line); lines name it chip{c}"
+        )
 
     # every core of the box once, by kind and x,y (the kernel window by logical core); each chip's own location object
     # and NOC0 x,y per core
@@ -284,8 +308,10 @@ def run(ctx, devices, bdf_of, budget_s=5.0, cursor_file=None, scope="plain", elf
     k_regions = [r for r in t_regions if r[1] == "kernel"]
     t_regions = [r for r in t_regions if r[1] != "kernel"]
     num = lambda k: tuple(int(v) if v.isdigit() else 0 for v in k.split(","))
-    for kind, blocks, regs in (("tensix", ("functional_workers",), t_regions or k_regions),
-                               ("eth", ("active_eth", "eth"), e_regions)):
+    for kind, blocks, regs in (
+        ("tensix", ("functional_workers",), t_regions or k_regions),
+        ("eth", ("active_eth", "eth"), e_regions),
+    ):
         if not regs:
             continue
         seen, lseen = [], []
@@ -304,7 +330,7 @@ def run(ctx, devices, bdf_of, budget_s=5.0, cursor_file=None, scope="plain", elf
                 loc_of[(int(d.id), kind, xy)] = loc
                 if (kind, xy) not in seen:
                     seen.append((kind, xy))
-                if kind == "tensix" and k_regions and "," in xy:     # this chip's logical core: rank in its own grid
+                if kind == "tensix" and k_regions and "," in xy:  # this chip's logical core: rank in its own grid
                     lk = f"L{xs.index(num(xy)[0])},{ys.index(num(xy)[1])}"
                     loc_of[(int(d.id), "kernel", lk)], phys[(int(d.id), "kernel", lk)] = loc, xy
                     if lk not in lseen:
@@ -312,11 +338,11 @@ def run(ctx, devices, bdf_of, budget_s=5.0, cursor_file=None, scope="plain", elf
         seen.sort(key=lambda k: num(k[1]))
         lseen.sort(key=lambda k: num(k[1:]))
         if scope == "smoke":
-            seen, lseen = seen[:SMOKE_CORES[kind]], lseen[:SMOKE_CORES[kind]]
+            seen, lseen = seen[: SMOKE_CORES[kind]], lseen[: SMOKE_CORES[kind]]
         ph = [(kind, xy, regs) for kind, xy in seen] if (kind != "tensix" or t_regions) else []
         lg = [("kernel", lk, k_regions) for lk in lseen]
-        for i in range(max(len(ph), len(lg))):        # core-major: NOC0 core i's firmware, then logical core i's kernel
-            cores += ph[i:i + 1] + lg[i:i + 1]
+        for i in range(max(len(ph), len(lg))):  # core-major: NOC0 core i's firmware, then logical core i's kernel
+            cores += ph[i : i + 1] + lg[i : i + 1]
 
     T = len(cores)
     start = rstart = 0
@@ -324,23 +350,33 @@ def run(ctx, devices, bdf_of, budget_s=5.0, cursor_file=None, scope="plain", elf
         try:
             cur = json.load(open(cursor_file))
             start = int(cur.get("next", 0)) % max(T, 1)
-            if int(cur.get("total", T)) == T:          # a region index is only good for the same core list
+            if int(cur.get("total", T)) == T:  # a region index is only good for the same core list
                 rstart = max(int(cur.get("region", 0)), 0)
         except Exception:
             start = rstart = 0
-    res = {"cores_total": T, "start": start, "start_region": rstart, "cores_done": 0, "regions_done": 0,
-           "fail": [], "warn": [], "info": Counter(), "words": 0, "chips": len(devices)}
+    res = {
+        "cores_total": T,
+        "start": start,
+        "start_region": rstart,
+        "cores_done": 0,
+        "regions_done": 0,
+        "fail": [],
+        "warn": [],
+        "info": Counter(),
+        "words": 0,
+        "chips": len(devices),
+    }
     dead = set()
     done = rdone = 0
-    stop = None            # region of the core the budget stopped in (resumed there next run)
+    stop = None  # region of the core the budget stopped in (resumed there next run)
     for i in range(T):
         if now() - t0 >= budget_s and (done or rdone):
             break
         kind, xy, regs = cores[(start + i) % T]
-        at = lambda c: phys.get((c, kind, xy), xy)        # the chip's own NOC0 x,y (the kernel window's key is logical)
+        at = lambda c: phys.get((c, kind, xy), xy)  # the chip's own NOC0 x,y (the kernel window's key is logical)
         r0 = rstart if i == 0 and rstart < len(regs) else 0
         for ri in range(r0, len(regs)):
-            if now() - t0 >= budget_s and rdone:      # budget between regions: a slow core stops here, resumed next run
+            if now() - t0 >= budget_s and rdone:  # budget between regions: a slow core stops here, resumed next run
                 stop = ri
                 break
             risc, rname, base, size = regs[ri]
@@ -360,11 +396,13 @@ def run(ctx, devices, bdf_of, budget_s=5.0, cursor_file=None, scope="plain", elf
                     out(msg)
                 except Exception as e:
                     res["info"]["read error"] += 1
-                    out(f"CODE INFO {name[cid]} core {at(cid)} {risc} {rname} read error {type(e).__name__}: {str(e)[:120]}")
+                    out(
+                        f"CODE INFO {name[cid]} core {at(cid)} {risc} {rname} read error {type(e).__name__}: {str(e)[:120]}"
+                    )
             if not reads:
                 continue
             nw = min(len(w) for w in reads.values())
-            dev_words = {}    # cid -> [(addr, got, expected, how)]
+            dev_words = {}  # cid -> [(addr, got, expected, how)]
             elf = elfs.get(risc, {})
             for j in range(nw):
                 addr = base + 4 * j
@@ -381,18 +419,25 @@ def run(ctx, devices, bdf_of, budget_s=5.0, cursor_file=None, scope="plain", elf
                         dev_words.setdefault(c, []).append((addr, v, maj, "majority"))
                 if maj is None and want is None:
                     res["info"]["no consensus"] += 1
-            if kind == "kernel":       # the same other value on 2+ chips: another program's word or config, not corruption
+            if kind == "kernel":  # the same other value on 2+ chips: another program's word or config, not corruption
                 shared = Counter((a, g) for bad in dev_words.values() for a, g, _e, how in bad if how == "majority")
                 var = {ag for ag, k in shared.items() if k >= 2}
                 if var:
                     vc = sorted({c for c, bad in dev_words.items() for b in bad if (b[0], b[1]) in var})
                     res["info"]["kernel variant"] += len(var)
                     fa, fg = min(var)
-                    out(f"CODE INFO kernel core {xy} {rname} {len(var)} words read the same other value on 2+ chips "
+                    out(
+                        f"CODE INFO kernel core {xy} {rname} {len(var)} words read the same other value on 2+ chips "
                         f"(another program or its config, not a fault; first addr 0x{fa:x} got 0x{fg:08x}): "
-                        f"{', '.join(f'{name[c]} core {at(c)}' for c in vc)}")
-                    dev_words = {c: kept for c, kept in ((c, [b for b in bad if (b[0], b[1]) not in var])
-                                                         for c, bad in dev_words.items()) if kept}
+                        f"{', '.join(f'{name[c]} core {at(c)}' for c in vc)}"
+                    )
+                    dev_words = {
+                        c: kept
+                        for c, kept in (
+                            (c, [b for b in bad if (b[0], b[1]) not in var]) for c, bad in dev_words.items()
+                        )
+                        if kept
+                    }
             byid = {int(d.id): d for d in devices}
             for c, bad in dev_words.items():
                 try:
@@ -410,10 +455,24 @@ def run(ctx, devices, bdf_of, budget_s=5.0, cursor_file=None, scope="plain", elf
                 res["info"]["volatile"] += len(bad) - len(conf)
                 if conf:
                     a, g, e, how = conf[0]
-                    msg = (f"CODE FAIL {name[c]} core {at(c)} {risc} {rname} addr {a:#x} words {len(conf)} "
-                           f"(got {g:#010x}, {how} {e:#010x})")
-                    res["fail"].append({"bdf": bdf[c] or f"chip{c}", "tray": tray_of(bdf[c]), "core": at(c), "risc": risc,
-                                        "region": rname, "addr": a, "words": len(conf), "got": g, "expected": e, "by": how})
+                    msg = (
+                        f"CODE FAIL {name[c]} core {at(c)} {risc} {rname} addr {a:#x} words {len(conf)} "
+                        f"(got {g:#010x}, {how} {e:#010x})"
+                    )
+                    res["fail"].append(
+                        {
+                            "bdf": bdf[c] or f"chip{c}",
+                            "tray": tray_of(bdf[c]),
+                            "core": at(c),
+                            "risc": risc,
+                            "region": rname,
+                            "addr": a,
+                            "words": len(conf),
+                            "got": g,
+                            "expected": e,
+                            "by": how,
+                        }
+                    )
                     out(msg)
         if stop is not None:
             break
@@ -431,9 +490,13 @@ def run(ctx, devices, bdf_of, budget_s=5.0, cursor_file=None, scope="plain", elf
     res["next"], res["next_region"] = nxt, stop_region
     res["seconds"] = round(now() - t0, 2)
     info = ", ".join(f"{k} {v}" for k, v in sorted(res["info"].items())) or "none"
-    part = (f" from region {rstart}" if rstart and T else "") + (f" next core {nxt} region {stop_region}" if stop_region else "")
-    out(f"CODE SUMMARY scope {scope} cores {done} of {T} (from {start}){part} regions {rdone} chips {len(devices)} "
+    part = (f" from region {rstart}" if rstart and T else "") + (
+        f" next core {nxt} region {stop_region}" if stop_region else ""
+    )
+    out(
+        f"CODE SUMMARY scope {scope} cores {done} of {T} (from {start}){part} regions {rdone} chips {len(devices)} "
         f"words {res['words']} fail {len(res['fail'])} warn {len(res['warn'])} info: {info} elf {','.join(sorted(elfs)) or 'none'} "
-        f"in {res['seconds']} s")
+        f"in {res['seconds']} s"
+    )
     res["info"] = dict(res["info"])
     return res

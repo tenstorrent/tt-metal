@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
 """tray_lanes.py: chunk_load.py --trays N[,N..], load only the chosen trays of a
 4x8 galaxy while all 32 chips stay enumerated. chunk_load.py opens the full mesh as always, then one submesh per chosen
 tray (a "lane": the tray's own 2x4 block, read from the mesh map, never assumed), and runs its load on the lanes only:
@@ -17,7 +21,7 @@ TRAYS = (1, 2, 3, 4)
 # keeps its first Lane argument's object (acc = add(acc, d) keeps that lane's counter); these return None there
 # instead, and an op whose Lane argument is None on a lane (an event recorded while it was off) skips that lane.
 OFF_NONE = {"record_event", "deallocate", "synchronize_device", "event_synchronize", "wait_for_event"}
-ACTIVE = None   # None: every lane; else the lane indices ops run on
+ACTIVE = None  # None: every lane; else the lane indices ops run on
 
 
 @contextlib.contextmanager
@@ -29,9 +33,11 @@ def only(lanes):
         yield
     finally:
         ACTIVE = old
-JOIN = {"get_device_tensors"}                         # ttnn functions whose per-lane lists are joined
-MESH_JOIN = {"get_device_ids", "get_devices"}         # mesh methods whose per-lane lists are joined
-MESH_FIRST = {"compute_with_storage_grid_size", "arch", "num_dram_channels"}   # the same on every lane: lane 0's
+
+
+JOIN = {"get_device_tensors"}  # ttnn functions whose per-lane lists are joined
+MESH_JOIN = {"get_device_ids", "get_devices"}  # mesh methods whose per-lane lists are joined
+MESH_FIRST = {"compute_with_storage_grid_size", "arch", "num_dram_channels"}  # the same on every lane: lane 0's
 
 
 def parse_trays(s):
@@ -52,18 +58,23 @@ def parse_trays(s):
 
 def tray_boxes(coord_tray, trays):
     """{(r, c): tray or None} for every mesh coordinate -> {tray: (r0, c0, h, w)}, each chosen tray's block. Raises
-    ValueError when a chosen tray has no chip in the map or its chips do not fill one rectangle (a submesh needs one)."""
+    ValueError when a chosen tray has no chip in the map or its chips do not fill one rectangle (a submesh needs one).
+    """
     out = {}
     for t in trays:
         cs = [rc for rc, tt in coord_tray.items() if tt == t]
         if not cs:
-            raise ValueError(f"tray {t}: no chip of it in the mesh map (its BDFs unknown: no UMD map, or the tray is not enumerated)")
+            raise ValueError(
+                f"tray {t}: no chip of it in the mesh map (its BDFs unknown: no UMD map, or the tray is not enumerated)"
+            )
         r0, r1 = min(r for r, _ in cs), max(r for r, _ in cs)
         c0, c1 = min(c for _, c in cs), max(c for _, c in cs)
         h, w = r1 - r0 + 1, c1 - c0 + 1
         if h * w != len(cs):
-            raise ValueError(f"tray {t}: its {len(cs)} chips do not fill one rectangle of the mesh (rows {r0}-{r1}, "
-                             f"columns {c0}-{c1}): no submesh for it")
+            raise ValueError(
+                f"tray {t}: its {len(cs)} chips do not fill one rectangle of the mesh (rows {r0}-{r1}, "
+                f"columns {c0}-{c1}): no submesh for it"
+            )
         out[t] = (r0, c0, h, w)
     shapes = {(h, w) for _, _, h, w in out.values()}
     if len(shapes) > 1:
@@ -73,8 +84,15 @@ def tray_boxes(coord_tray, trays):
 
 def describe(trays, chips, all_trays=TRAYS):
     """The log line: the loaded trays with their chips' BDFs, and the trays left enumerated but unloaded."""
+
     def bdfs(t):
-        return " ".join(sorted(str(c["pci"]).replace("0000:", "", 1) for c in chips if c.get("tray") == t and c.get("pci"))) or "?"
+        return (
+            " ".join(
+                sorted(str(c["pci"]).replace("0000:", "", 1) for c in chips if c.get("tray") == t and c.get("pci"))
+            )
+            or "?"
+        )
+
     left = [t for t in all_trays if t not in trays]
     s = "chunk_load: loading tray " + "; tray ".join(f"{t} ({bdfs(t)})" for t in trays)
     return s + (f"; tray {','.join(map(str, left))} enumerated, not loaded (no kernels)" if left else "")
@@ -82,6 +100,7 @@ def describe(trays, chips, all_trays=TRAYS):
 
 class Lane:
     """One object per lane (a submesh, or a tensor, mapper, semaphore or event made on the lanes)."""
+
     __slots__ = ("v",)
 
     def __init__(self, v):
@@ -90,7 +109,7 @@ class Lane:
     def __getattr__(self, name):
         xs = [getattr(x, name) for x in self.v]
         if not all(callable(x) for x in xs):
-            return xs[0]   # an attribute (shape, dtype): the same on every lane
+            return xs[0]  # an attribute (shape, dtype): the same on every lane
         if name in MESH_JOIN:
             return lambda *a, **k: [y for f in xs for y in f(*a, **k)]
         if name in MESH_FIRST:
@@ -133,9 +152,12 @@ def _kept(i, a, name, obj=None):
 def _fan(fs, a, k, name="", obj=None):
     """fs: one callable per lane (a bound method) or one for all; runs it per lane on that lane's arguments."""
     n = len(fs) if isinstance(fs, list) else _lanes(a, k)
-    return Lane(_kept(i, a, name, obj) if _off(i, a, k) else
-                (fs[i] if isinstance(fs, list) else fs)(*[_at(x, i) for x in a], **{kk: _at(v, i) for kk, v in k.items()})
-                for i in range(n))
+    return Lane(
+        _kept(i, a, name, obj)
+        if _off(i, a, k)
+        else (fs[i] if isinstance(fs, list) else fs)(*[_at(x, i) for x in a], **{kk: _at(v, i) for kk, v in k.items()})
+        for i in range(n)
+    )
 
 
 class Fn:
@@ -167,7 +189,7 @@ class Lanes:
 
 
 def wrap(v, name):
-    if isinstance(v, (types.ModuleType, types.SimpleNamespace)):   # ttnn.experimental
+    if isinstance(v, (types.ModuleType, types.SimpleNamespace)):  # ttnn.experimental
         return Lanes(v)
     if callable(v):
         return Fn(v, name)

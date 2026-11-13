@@ -43,7 +43,7 @@ import subprocess
 import sys
 import time
 
-TRAY_BUS = {1: 0x11, 2: 0x13, 3: 0x0D, 4: 0x0F}      # tray N = UBB N-1 (ub0_repro.py CPLD_BUS)
+TRAY_BUS = {1: 0x11, 2: 0x13, 3: 0x0D, 4: 0x0F}  # tray N = UBB N-1 (ub0_repro.py CPLD_BUS)
 HEALTHY, BUSBAR = ("ff", "7c"), ("00", "78")
 REF = "healthy ff/7c, busbar 00/78"
 CALL_S, DEADLINE_S, MAX_READS = 15, 90, 4
@@ -59,9 +59,9 @@ def decode(reg1e, dbg5f, dbg58=None):
     """(state, text) for one tray's reg 0x1E / dbg 0x5F (/ dbg 0x58) as two-digit hex strings or None."""
     if reg1e is None:
         return "UNREAD", "no stable read"
-    if dbg5f is None and dbg58 is not None:   # an old capture with dbg 0x58 but no dbg 0x5F
+    if dbg5f is None and dbg58 is not None:  # an old capture with dbg 0x58 but no dbg 0x5F
         return "UNREAD", "no stable read"
-    if dbg5f is None:          # live read: reg 0x1E only
+    if dbg5f is None:  # live read: reg 0x1E only
         if reg1e == "ff":
             return "ALIVE", "all chips alive; " + NOT_READ
         if reg1e == "00":
@@ -80,11 +80,16 @@ def decode(reg1e, dbg5f, dbg58=None):
     if (reg1e, dbg5f) == HEALTHY:
         return "HEALTHY", "rails good"
     if low and dbg58 is not None and not oc_n:
-        return "HOTSWAP_OC", f"12 V-{'/'.join(low)} hot-swap PG low with an over-current warning: the tray's hot-swap tripped on its load{tail}"
+        return (
+            "HOTSWAP_OC",
+            f"12 V-{'/'.join(low)} hot-swap PG low with an over-current warning: the tray's hot-swap tripped on its load{tail}",
+        )
     if (reg1e, dbg5f) == BUSBAR:
         full = dbg58 is not None and en and oc_n
-        return "BUSBAR_SIG", ("12 V-B hot-swap PG low, tray off: matches the busbar signature"
-                              + (" in full (power enable on, no over-current)" if full else tail))
+        return "BUSBAR_SIG", (
+            "12 V-B hot-swap PG low, tray off: matches the busbar signature"
+            + (" in full (power enable on, no over-current)" if full else tail)
+        )
     if low and reg1e != "ff":
         return "TRAY_12V_LOST", f"12 V-{'/'.join(low)} hot-swap PG low, tray off; not the 00/78 busbar reading{tail}"
     if dbg5f == HEALTHY[1] and reg1e != "ff":
@@ -119,7 +124,8 @@ class Reader:
         """read() until two in a row agree: (value or None, number of reads)."""
         prev, n = None, 0
         while n < (1 if self.dry else MAX_READS):
-            v = read(); n += 1
+            v = read()
+            n += 1
             if v is not None and v == prev:
                 return v, n
             prev = v
@@ -131,17 +137,28 @@ class Reader:
 
 def row(tray, reg1e, dbg5f, dbg58, reads=None):
     state, text = decode(reg1e, dbg5f, dbg58)
-    return dict(tray=tray, ubb=tray - 1, bus=f"0x{TRAY_BUS[tray]:02X}", reg1e=reg1e, dbg5f=dbg5f, dbg58=dbg58,
-                state=state, text=text, reads=reads)
+    return dict(
+        tray=tray,
+        ubb=tray - 1,
+        bus=f"0x{TRAY_BUS[tray]:02X}",
+        reg1e=reg1e,
+        dbg5f=dbg5f,
+        dbg58=dbg58,
+        state=state,
+        text=text,
+        reads=reads,
+    )
 
 
 def line(r):
-    return (f"tray {r['tray']} bus {r['bus']}: reg1e={r['reg1e'] or '??'} dbg5f={r['dbg5f'] or '??'} "
-            f"dbg58={r['dbg58'] or '??'} -> {r['state']}: {r['text']}")
+    return (
+        f"tray {r['tray']} bus {r['bus']}: reg1e={r['reg1e'] or '??'} dbg5f={r['dbg5f'] or '??'} "
+        f"dbg58={r['dbg58'] or '??'} -> {r['state']}: {r['text']}"
+    )
 
 
 def summary(rows, label="cpld reg1e/dbg5f"):
-    if all(r["dbg5f"] is None for r in rows):      # live read: reg 0x1E only
+    if all(r["dbg5f"] is None for r in rows):  # live read: reg 0x1E only
         parts = [f"tray {r['tray']} {r['reg1e'] or '??'} {r['state']}" for r in rows]
         return f"SUMMARY {label} ({LIVE_REF}): " + "; ".join(parts)
     parts = [f"tray {r['tray']} {r['reg1e'] or '??'}/{r['dbg5f'] or '??'} {r['state']}" for r in rows]
@@ -162,8 +179,11 @@ def parse_file(path):
         if tray is None:
             continue
         val = {}
-        for key, pat in (("reg1e", r"reg(?:0x)?1[eE]=([0-9a-fA-F]{2})\b"), ("dbg5f", r"dbg(?:0x)?5[fF]=([0-9a-fA-F]{2})\b"),
-                         ("dbg58", r"dbg(?:0x)?58=([0-9a-fA-F]{2})\b")):
+        for key, pat in (
+            ("reg1e", r"reg(?:0x)?1[eE]=([0-9a-fA-F]{2})\b"),
+            ("dbg5f", r"dbg(?:0x)?5[fF]=([0-9a-fA-F]{2})\b"),
+            ("dbg58", r"dbg(?:0x)?58=([0-9a-fA-F]{2})\b"),
+        ):
             v = re.search(pat, ln)
             val[key] = v.group(1).lower() if v else None
         got[tray] = row(tray, val["reg1e"], val["dbg5f"], val["dbg58"])
@@ -190,7 +210,9 @@ def main():
     rd = Reader(ipmi, a.dry_run)
     ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     if a.dry_run:
-        print(f"dry run: the reads cpld_5f.py makes after a loss, before the reset (writes {a.out or '.'}/cpld_reg1e_dbg5f.txt)")
+        print(
+            f"dry run: the reads cpld_5f.py makes after a loss, before the reset (writes {a.out or '.'}/cpld_reg1e_dbg5f.txt)"
+        )
     want = TRAY_BUS
     if a.trays:
         try:
@@ -198,7 +220,9 @@ def main():
         except (ValueError, KeyError):
             p.error(f"--trays {a.trays!r}: trays are 1-4, comma-separated")
     # each tray's line is printed and flushed as soon as it is read: a caller's timeout (a slow BMC) keeps what was read
-    text = [f"# {ts} tray CPLD reg 0x1E after a loss, before the reset, reads only ({LIVE_REF}); decode: cpld_5f.py --help"]
+    text = [
+        f"# {ts} tray CPLD reg 0x1E after a loss, before the reset, reads only ({LIVE_REF}); decode: cpld_5f.py --help"
+    ]
     if not a.dry_run:
         print(text[0], flush=True)
     rows = []

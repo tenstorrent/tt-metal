@@ -41,7 +41,7 @@ def rd32(fd, off):
     if p in (None, ctypes.c_void_p(-1).value):
         raise OSError(ctypes.get_errno(), "mmap resource0 at 0x%x" % base)
     try:
-        return ctypes.c_uint32.from_address(p + off - base).value   # one aligned 32-bit load
+        return ctypes.c_uint32.from_address(p + off - base).value  # one aligned 32-bit load
     finally:
         libc.munmap(p, page)
 

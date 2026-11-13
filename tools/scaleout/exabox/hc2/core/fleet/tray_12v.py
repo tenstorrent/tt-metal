@@ -23,10 +23,10 @@ import argparse
 import csv
 import time
 
-MASK_S = 40.0      # +-40 s around every reset
+MASK_S = 40.0  # +-40 s around every reset
 COLLAPSE_W = 50.0  # a tray at or below this ...
-HOLD_W = 600.0     # ... while every other tray holds at least this
-NEAR_S = 3.0       # other trays' samples within this of the collapse sample
+HOLD_W = 600.0  # ... while every other tray holds at least this
+NEAR_S = 3.0  # other trays' samples within this of the collapse sample
 
 
 def tray_of(bdf):
@@ -72,7 +72,7 @@ def hms(t):
 
 
 def read_csv(path):
-    vr, ubb = [], []   # (epoch, tray, state), (epoch, tray, watts)
+    vr, ubb = [], []  # (epoch, tray, state), (epoch, tray, watts)
     with open(path, newline="") as fh:
         for r in csv.DictReader(fh):
             if (r.get("flags") or "").strip() in ("err", "na") or not (r.get("value") or "").strip():
@@ -88,7 +88,7 @@ def read_csv(path):
                     vr.append((t, tray, st))
             elif s.startswith("Power_UBB"):
                 try:
-                    ubb.append((t, int(s[len("Power_UBB"):]) + 1, float(r["value"])))
+                    ubb.append((t, int(s[len("Power_UBB") :]) + 1, float(r["value"])))
                 except ValueError:
                     continue
     return vr, ubb
@@ -122,8 +122,10 @@ def judge(csv_path, resets_path=None, loads_path=None, map_path=None):
     for u in sorted(glitch):
         ev = glitch[u]
         states = ",".join(sorted({s for _, s in ev}))
-        lines.append("12V FAIL %s: CPLD vr_pg %s under load (%d sample(s), first %s, last %s; not within %d s of a reset)"
-                     % (name(u), states, len(ev), hms(ev[0][0]), hms(ev[-1][0]), MASK_S))
+        lines.append(
+            "12V FAIL %s: CPLD vr_pg %s under load (%d sample(s), first %s, last %s; not within %d s of a reset)"
+            % (name(u), states, len(ev), hms(ev[0][0]), hms(ev[-1][0]), MASK_S)
+        )
     by_tray = {}
     for t, u, w in ubb:
         by_tray.setdefault(u, []).append((t, w))
@@ -147,14 +149,32 @@ def judge(csv_path, resets_path=None, loads_path=None, map_path=None):
             coll.setdefault(u, []).append((t, w, min(held)))
     for u in sorted(coll):
         ev = coll[u]
-        lines.append("12V FAIL %s: Power_UBB%d %d W while the other trays held >= %d W (min %d W; %d sample(s), first %s, "
-                     "last %s; a 12 V collapse, flagged even if it recovered)"
-                     % (name(u), u - 1, min(w for _, w, _ in ev), HOLD_W, min(h for _, _, h in ev), len(ev),
-                        hms(ev[0][0]), hms(ev[-1][0])))
+        lines.append(
+            "12V FAIL %s: Power_UBB%d %d W while the other trays held >= %d W (min %d W; %d sample(s), first %s, "
+            "last %s; a 12 V collapse, flagged even if it recovered)"
+            % (
+                name(u),
+                u - 1,
+                min(w for _, w, _ in ev),
+                HOLD_W,
+                min(h for _, _, h in ev),
+                len(ev),
+                hms(ev[0][0]),
+                hms(ev[-1][0]),
+            )
+        )
     n = len({(t, u) for t, u, _ in ubb})
-    lines.append("12V log: %d Power_UBB and %d vr_pg samples, %d load window(s), %d reset(s) masked +-%d s; %s"
-                 % (n, len(vr), len(loads), len(resets), MASK_S,
-                    "%d tray(s) flagged" % len(set(glitch) | set(coll)) if (glitch or coll) else "no tray flagged"))
+    lines.append(
+        "12V log: %d Power_UBB and %d vr_pg samples, %d load window(s), %d reset(s) masked +-%d s; %s"
+        % (
+            n,
+            len(vr),
+            len(loads),
+            len(resets),
+            MASK_S,
+            "%d tray(s) flagged" % len(set(glitch) | set(coll)) if (glitch or coll) else "no tray flagged",
+        )
+    )
     return lines
 
 

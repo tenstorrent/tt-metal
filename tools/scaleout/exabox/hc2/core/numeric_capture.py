@@ -26,9 +26,11 @@ the unit tests drive it with fake chips that inject faults.
 """
 import re
 
-BANKS = 8   # Blackhole DRAM channels: interleaved pages go round robin over them
-CAP_RE = re.compile(r"^NUMERIC-CAPTURE (?:[0-9a-fA-F]{4}:)?(\S+) tray (\S+): (written-wrong|read-path|transient|not-held)\b.*?"
-                    r"recompute (ok|fail)")
+BANKS = 8  # Blackhole DRAM channels: interleaved pages go round robin over them
+CAP_RE = re.compile(
+    r"^NUMERIC-CAPTURE (?:[0-9a-fA-F]{4}:)?(\S+) tray (\S+): (written-wrong|read-path|transient|not-held)\b.*?"
+    r"recompute (ok|fail)"
+)
 MAP_RE = re.compile(r", map (held|counter)\b")
 
 
@@ -41,8 +43,8 @@ class Ring:
     def hold(self, j, launch, t):
         lst = self.held.setdefault(j, [])
         lst.append((launch, t))
-        out = [x for _, x in lst[:-self.n]]
-        del lst[:-self.n]
+        out = [x for _, x in lst[: -self.n]]
+        del lst[: -self.n]
         return out
 
     def due(self, launch):
@@ -125,13 +127,24 @@ def capture(ad, torch, cs, j, i, ctl, held, pv=None):
         else:
             launch, t, pos = first
             reads = [pos] + [wrong(torch, ad.read(t, i).reshape(-1, W), wi2) for _ in range(2)]
-            ev.update({"class": classify(reads, torch), "launch": launch, "reads_wrong": [len(r) for r in reads],
-                       "map_from": "held output"})
+            ev.update(
+                {
+                    "class": classify(reads, torch),
+                    "launch": launch,
+                    "reads_wrong": [len(r) for r in reads],
+                    "map_from": "held output",
+                }
+            )
         ev["wrong"] = len(pos)
-        ev["loc"] = word_map(cs, pv, pos[:, 0].tolist(), pos[:, 1].tolist(), H, W, ad.grid, ad.phys) if len(pos) else None
+        ev["loc"] = (
+            word_map(cs, pv, pos[:, 0].tolist(), pos[:, 1].tolist(), H, W, ad.grid, ad.phys) if len(pos) else None
+        )
         x, w = ad.inputs(j)
-        ev["dram"] = dict(x=same(torch, ad.read(x, i), ad.read(x, ctl)), w=same(torch, ad.read(w, i), ad.read(w, ctl)),
-                          ref=same(torch, wi, wc))
+        ev["dram"] = dict(
+            x=same(torch, ad.read(x, i), ad.read(x, ctl)),
+            w=same(torch, ad.read(w, i), ad.read(w, ctl)),
+            ref=same(torch, wi, wc),
+        )
         o = ad.rerun(j)
         try:
             ri, rc = ad.read(o, i).reshape(-1, W), ad.read(o, ctl).reshape(-1, W)
@@ -151,8 +164,10 @@ def line(ev, bdf, tray, op_name="heavy"):
     bad_d = [k for k in ("x", "w", "ref") if d.get(k) is False]
     dram = ("fail (" + ",".join(bad_d) + " differ from the control chip's)") if bad_d else ("ok" if d else "not read")
     rec = ("fail" if rc.get("chip") else "ok") if rc else "not run"
-    s = (f"NUMERIC-CAPTURE {bdf} tray {tray}: {ev.get('class', 'error')}, {op_name} op {ev.get('op', 0)}, "
-         f"{ev.get('wrong', '?')} wrong words")
+    s = (
+        f"NUMERIC-CAPTURE {bdf} tray {tray}: {ev.get('class', 'error')}, {op_name} op {ev.get('op', 0)}, "
+        f"{ev.get('wrong', '?')} wrong words"
+    )
     if loc.get("first"):
         f = loc["first"]
         s += f", first ({f['row']},{f['col']}) tile ({f['tile'][0]},{f['tile'][1]})"
@@ -179,8 +194,9 @@ def parse(lines):
         m = CAP_RE.match(ln.strip())
         if m:
             mp = MAP_RE.search(ln)
-            out.setdefault(m.group(1).lower(), []).append(dict(cls=m.group(3), recompute=m.group(4),
-                                                               map=mp.group(1) if mp else None, line=ln.strip()))
+            out.setdefault(m.group(1).lower(), []).append(
+                dict(cls=m.group(3), recompute=m.group(4), map=mp.group(1) if mp else None, line=ln.strip())
+            )
     return out
 
 

@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # The health-check core: run.sh's stage engine and every file it needs, one path per line, relative to
-# traytest/ (../ = repo top). These files move under hc/ and are copied as-is to other repos; everything run.sh
+# traytest/hc/. These files are copied as-is to other repos; everything run.sh
 # uses that is not listed here must be listed in ../HC_STAYS (local-only features, wired in as hooks).
 # tests/test_hc_clean.sh checks that each path exists and that run.sh's file closure is covered.
 
@@ -39,6 +39,7 @@ lib/fw_check.sh
 lib/gddr.sh
 lib/gddr_telem.py
 lib/glxcan.sh
+lib/hc.sh
 lib/heavy_logs.sh
 lib/hsc_check.sh
 lib/hsc_dump.sh
@@ -73,6 +74,7 @@ fleet/chunk_sched.py
 fleet/drop_shapes.py
 fleet/eth_map.txt
 fleet/ethmask.py
+fleet/fabric_repro.py
 fleet/final_verdict.py
 fleet/fleet_py.py
 fleet/gate.sh
@@ -86,31 +88,30 @@ fleet/maxutil_pack.sh
 fleet/on_hang.sh
 fleet/psu_check.py
 fleet/psu_fast.py
+fleet/pv/
 fleet/pv.py
+fleet/pv_holders.py
 fleet/repair_rec.py
 fleet/run_times.py
 fleet/stage_load.py
 fleet/stages.tsv
 fleet/stop_signal.py
 fleet/tray_12v.py
+fleet/tray_lanes.py
 fleet/tray_why.py
 fleet/vcore_chips.py
 
 # the h3 model load (runtime files only)
-../h3/h3.sh
-../h3/power-profile.sh
-../h3/power_profile.py
-../h3/synth_gen.py
-../h3/synth_weights.py
-../h3/tables.py
-../h3/pcie_traffic.py
-../h3/random-table.tsv
-../h3/full-cooldowns.tsv
-../h3/pcie-traffic.tsv
-../h3/config/
-../h3/tt-metal.sha
-../h3/requirements-wheel.txt
-fleet/tray_lanes.py
-lib/broker_yield.sh
-lib/hold.sh
-lib/holdfile.sh
+h3/h3.sh
+h3/power-profile.sh
+h3/power_profile.py
+h3/synth_gen.py
+h3/synth_weights.py
+h3/tables.py
+h3/pcie_traffic.py
+h3/random-table.tsv
+h3/full-cooldowns.tsv
+h3/pcie-traffic.tsv
+h3/config/
+h3/tt-metal.sha
+h3/requirements-wheel.txt

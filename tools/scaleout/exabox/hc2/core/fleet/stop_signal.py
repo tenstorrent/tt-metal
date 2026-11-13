@@ -36,8 +36,11 @@ def _raise(name):
         signal.signal(s, signal.SIG_IGN)
     t0 = time.time()
     print(f"{_st['tag']} SIGNAL {name} {t0:.0f} closing the device", file=sys.stderr, flush=True)
-    atexit.register(lambda: print(f"{_st['tag']} SIGNAL-EXIT {name} {time.time() - t0:.1f} after the signal",
-                                  file=sys.stderr, flush=True))
+    atexit.register(
+        lambda: print(
+            f"{_st['tag']} SIGNAL-EXIT {name} {time.time() - t0:.1f} after the signal", file=sys.stderr, flush=True
+        )
+    )
     raise StopSignal(name)
 
 
@@ -47,8 +50,11 @@ def _on_signal(signum, _frame):
         if _st["got"] is None:
             _st["got"] = name
             msg = "closing once it is open" if _st["phase"] == "open" else "exiting once it is closed"
-            print(f"{_st['tag']} SIGNAL {name} {time.time():.0f} during the {_st['phase']}: {msg}",
-                  file=sys.stderr, flush=True)
+            print(
+                f"{_st['tag']} SIGNAL {name} {time.time():.0f} during the {_st['phase']}: {msg}",
+                file=sys.stderr,
+                flush=True,
+            )
         return
     _raise(name)
 
@@ -89,13 +95,16 @@ class closing:
         return self
 
     def __exit__(self, tp, e, tb):
-        _st["armed"], _st["phase"] = self.prev   # after the close a later signal raises as before (fabric_repro reads on)
+        (
+            _st["armed"],
+            _st["phase"],
+        ) = self.prev  # after the close a later signal raises as before (fabric_repro reads on)
         sig = _st["raised"] or _st["got"]
-        if tp is not None and not issubclass(tp, StopSignal) and sig:   # the close failed after a signal
+        if tp is not None and not issubclass(tp, StopSignal) and sig:  # the close failed after a signal
             print(f"{_st['tag']} SIGNAL {sig}: the close failed: {tp.__name__}: {e}", file=sys.stderr, flush=True)
             traceback.print_exception(tp, e, tb, file=sys.stderr)
             if _st["raised"]:
-                raise StopSignal(sig) from None   # exit 143/130 for the signal, not 1 for the close error
+                raise StopSignal(sig) from None  # exit 143/130 for the signal, not 1 for the close error
         if _st["got"] is not None and not _st["raised"] and (tp is None or not issubclass(tp, StopSignal)):
             _raise(_st["got"])
         return False

@@ -8,10 +8,10 @@ rk_sudo_l() { [ -n "${RK_SUDO_L+x}" ] || RK_SUDO_L=$(timeout 15 sudo -n -l 2> /d
 # rk_can_root: root, or sudo -n -l lists ALL (sysfs rescan, tt-kmd re-probe, any ipmitool command)
 rk_can_root() { [ "$(id -u)" = 0 ] || rk_sudo_l | grep -qE 'NOPASSWD: *(.*, *)?ALL *(,|$)'; }
 # rk_glx_host_ok: the explicit allow list for a glx_reset that runs on sudoers rules short of ALL: the host names the
-# site hook HC_GLX_HOSTS (an extended regex of short host names, set outside the core) matches. Unset or empty: no host is
-# on the list, so anything short of root keeps NO RESET.
-rk_glx_host_ok() { local h=${TRAY_REPRO_HOST:-$(hostname -s)}
-  [ -n "${HC_GLX_HOSTS:-}" ] && [[ $h =~ ^($HC_GLX_HOSTS)$ ]]; }
+# pattern below matches. Anything else keeps NO RESET.
+declare -F hc_site > /dev/null || . "$(dirname "${BASH_SOURCE[0]}")/hc.sh"   # the allow list is site data (glx_hosts)
+rk_glx_host_ok() { local h=${TRAY_REPRO_HOST:-$(hostname -s)} re; re=$(hc_site glx_hosts)
+  [ -n "$re" ] && [[ $h =~ ^($re)$ ]]; }
 # rk_can_glx: how tt-smi -glx_reset can run here. RK_GLX_SUDO: "" (tt-smi as is; root, sudo ALL, or sudo -n -l lists
 # the ipmitool raw 0x30 0x8B forms tt-smi issues, A67/A89-style) or "sudo -n" (sudo -n -l lists tt-smi).
 # 1 with RK_GLX_CAN_WHY when none applies: then no reset runs at all.

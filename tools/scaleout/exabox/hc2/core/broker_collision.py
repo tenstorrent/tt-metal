@@ -29,7 +29,14 @@ submit + wait + runtime (the status table has no end column).
 env (tests only): BROKER_STATUS_CMD, BROKER_HEALTH_CMD (shell commands printing the status text / health JSON),
 BROKER_CGROUP (default /proc/self/cgroup).
 """
-import argparse, json, os, pwd, re, subprocess, sys, time
+import argparse
+import json
+import os
+import pwd
+import re
+import subprocess
+import sys
+import time
 
 STATUS_CMD = "tt-device-mcp status 50"
 HEALTH_CMD = "curl -s -m 10 --unix-socket /run/tt-device-broker/broker.sock http://x/health"
@@ -78,10 +85,20 @@ def parse(text, now):
         end = None if status in ACTIVE else st + (secs(rt) if rt != "-" else 0)
         kill = re.match(r"\[([^\]]*)\]", cmd)
         chips = re.search(r"chips?\s*\[?([\d][\d, ]*)\]?", cmd)
-        j = dict(job=jid, owner=owner, tenant="🔧" not in icon, status=status, exit=ex, submit=sub, start=st, end=end,
-                 kill_reason=kill.group(1) if kill else None, chips=chips.group(1).strip(" ,") if chips else None,
-                 command=cmd[:200])
-        old = jobs.get(jid)   # a job listed twice (RUNNING and RECENT): the active row wins
+        j = dict(
+            job=jid,
+            owner=owner,
+            tenant="🔧" not in icon,
+            status=status,
+            exit=ex,
+            submit=sub,
+            start=st,
+            end=end,
+            kill_reason=kill.group(1) if kill else None,
+            chips=chips.group(1).strip(" ,") if chips else None,
+            command=cmd[:200],
+        )
+        old = jobs.get(jid)  # a job listed twice (RUNNING and RECENT): the active row wins
         if old is None or status in ACTIVE:
             jobs[jid] = j
     return list(jobs.values())
@@ -130,7 +147,7 @@ def foreign(a, now):
         if not j["tenant"] or j["job"] in own or (rx and rx.search(j["command"])):
             continue
         if j["owner"] == a.user and j["end"] is not None:
-            continue   # our own job that has ended
+            continue  # our own job that has ended
         if j["status"] == "queued" and a.ignore_queued:
             continue
         if j["end"] is None or j["end"] >= a.since:
@@ -144,12 +161,25 @@ def record(a, jobs, now):
     for j in jobs:
         if j["job"] in seen:
             continue
-        row = dict(key=f"{a.key}-collision-j{j['job']}" if a.key else f"collision-j{j['job']}", verdict="COLLISION",
-                   box=os.uname().nodename.split(".")[0], job=j["job"], owner=j["owner"], status=j["status"],
-                   exit=j["exit"], submit_local=local(j["submit"]), start_local=local(j["start"]),
-                   end_local=local(j["end"]) if j["end"] is not None else "running", end_estimated=j["end"] is not None,
-                   kill_reason=j["kill_reason"], chips=j["chips"], command=j["command"], seen_local=local(now),
-                   since_local=local(a.since), note="foreign broker job: quiet restarts from zero; nothing cancelled")
+        row = dict(
+            key=f"{a.key}-collision-j{j['job']}" if a.key else f"collision-j{j['job']}",
+            verdict="COLLISION",
+            box=os.uname().nodename.split(".")[0],
+            job=j["job"],
+            owner=j["owner"],
+            status=j["status"],
+            exit=j["exit"],
+            submit_local=local(j["submit"]),
+            start_local=local(j["start"]),
+            end_local=local(j["end"]) if j["end"] is not None else "running",
+            end_estimated=j["end"] is not None,
+            kill_reason=j["kill_reason"],
+            chips=j["chips"],
+            command=j["command"],
+            seen_local=local(now),
+            since_local=local(a.since),
+            note="foreign broker job: quiet restarts from zero; nothing cancelled",
+        )
         line = json.dumps(row, ensure_ascii=False)
         print(line, flush=True)
         if a.rows:
@@ -171,7 +201,10 @@ def healthy():
         return False, "health unreadable"
     off = h.get("off_bus")
     ok = h.get("fsm_state") == "healthy" and not h.get("held") and not off
-    return ok, f"fsm={h.get('fsm_state')} held={h.get('held')} off_bus={off} running={h.get('running')} queued={h.get('queued')}"
+    return (
+        ok,
+        f"fsm={h.get('fsm_state')} held={h.get('held')} off_bus={off} running={h.get('running')} queued={h.get('queued')}",
+    )
 
 
 def busy(jobs, a):
@@ -190,8 +223,11 @@ def main():
     p.add_argument("--own-file", help="file of our job ids (whitespace separated)")
     p.add_argument("--own-re", help="regex: a job whose command matches it is ours")
     p.add_argument("--user", default=None, help="broker owner whose ended jobs are ours (default: the calling user)")
-    p.add_argument("--ignore-queued", action="store_true",
-                   help="queued jobs are no collision (we run inside a broker job: they cannot start before we end)")
+    p.add_argument(
+        "--ignore-queued",
+        action="store_true",
+        help="queued jobs are no collision (we run inside a broker job: they cannot start before we end)",
+    )
     p.add_argument("--rows", help="append COLLISION JSON rows here")
     p.add_argument("--seen", help="file of job ids already recorded (no second row)")
     p.add_argument("--key", default="", help="row key prefix")
@@ -202,7 +238,7 @@ def main():
     now = time.time()
     a.since = now if a.since is None else a.since
     a.user = a.user or me()
-    if a.mode == "queued":   # a queued job waits for our job to end: that is what this mode looks for
+    if a.mode == "queued":  # a queued job waits for our job to end: that is what this mode looks for
         a.ignore_queued = False
         jobs = foreign(a, now)
         if jobs is None:
@@ -212,22 +248,25 @@ def main():
         if q:
             print(", ".join(f"{j['job']} ({j['owner']})" for j in q))
         return 0 if q else 1
-    a.ignore_queued = a.ignore_queued or bool(self_job())   # inside a broker job a queued job waits for us
+    a.ignore_queued = a.ignore_queued or bool(self_job())  # inside a broker job a queued job waits for us
     jobs = foreign(a, now)
     if jobs is None:
         log("broker status unreadable")
         return 2
-    hit = record(a, jobs, now) > 0 or busy(jobs, a)   # a job already in --seen that has ended is no new collision
+    hit = record(a, jobs, now) > 0 or busy(jobs, a)  # a job already in --seen that has ended is no new collision
     if a.mode == "check":
         return 11 if busy(jobs, a) else 10 if hit else 0
     if not hit:
-        return 0   # no foreign job: nothing to wait for (the caller's own chip and holder checks still run)
+        return 0  # no foreign job: nothing to wait for (the caller's own chip and holder checks still run)
     t0, ok_since = now, None
     while True:
         if busy(jobs, a):
             ok_since = None
-            log("foreign job(s) active: " + ", ".join(f"{j['job']} ({j['owner']}, {j['status']})" for j in jobs if j["end"] is None)
-                + "; waiting, nothing cancelled")
+            log(
+                "foreign job(s) active: "
+                + ", ".join(f"{j['job']} ({j['owner']}, {j['status']})" for j in jobs if j["end"] is None)
+                + "; waiting, nothing cancelled"
+            )
         else:
             ok, why = healthy()
             if not ok:

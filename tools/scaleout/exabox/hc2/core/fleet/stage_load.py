@@ -49,18 +49,26 @@ def c5(d):
         pass
     per = []
     for lab, (ba, bb) in sorted(pairs.items(), key=lambda kv: int(kv[0][1:])):
-        g = [r["GBps_total"] for r in jsonl(os.path.join(d, f"{lab}.rows"))
-             if r.get("event") == "iter" and isinstance(r.get("GBps_total"), (int, float))]
+        g = [
+            r["GBps_total"]
+            for r in jsonl(os.path.join(d, f"{lab}.rows"))
+            if r.get("event") == "iter" and isinstance(r.get("GBps_total"), (int, float))
+        ]
         if g:
-            per.append(dict(pair=lab, bdf_a=ba, tray_a=tray_of(ba), bdf_b=bb, tray_b=tray_of(bb),
-                            gbps=round(sum(g) / len(g), 1)))
+            per.append(
+                dict(
+                    pair=lab, bdf_a=ba, tray_a=tray_of(ba), bdf_b=bb, tray_b=tray_of(bb), gbps=round(sum(g) / len(g), 1)
+                )
+            )
     rec = dict(op="all_gather", tflops_per_chip=0, pairs=per)
     s = "0 TFLOP/s per chip, op all_gather (pairwise link check, no matmul); "
     if not per:
         return rec, s + f"link GB/s not read ({len(pairs)} pairs listed, none with a row)"
     lo, hi = min(per, key=lambda p: p["gbps"]), max(per, key=lambda p: p["gbps"])
-    return rec, s + (f"{len(per)} pairs, link GB/s {lo['gbps']:g}-{hi['gbps']:g}, slowest "
-                     f"{lk(lo['bdf_a'])} <-> {lk(lo['bdf_b'])}")
+    return rec, s + (
+        f"{len(per)} pairs, link GB/s {lo['gbps']:g}-{hi['gbps']:g}, slowest "
+        f"{lk(lo['bdf_a'])} <-> {lk(lo['bdf_b'])}"
+    )
 
 
 STAGES = {"C5": c5}
@@ -69,7 +77,7 @@ STAGES = {"C5": c5}
 def main(stage, d):
     try:
         rec, s = STAGES[stage](d)
-    except Exception as e:   # a malformed row: say so, never fail the run
+    except Exception as e:  # a malformed row: say so, never fail the run
         rec, s = {}, f"TFLOP/s not reported ({type(e).__name__}: {str(e)[:100]})"
     rec["stage"] = stage
     try:

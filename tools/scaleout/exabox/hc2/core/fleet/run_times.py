@@ -36,9 +36,9 @@ def runs_of(lines):
             if i < 0:
                 continue
             if kind == "stage":
-                runs.append({"stage": parse_line(ln[i + len(tag):]), "part": []})
+                runs.append({"stage": parse_line(ln[i + len(tag) :]), "part": []})
             elif runs:
-                runs[-1]["part"] = parse_line(ln[i + len(tag):])
+                runs[-1]["part"] = parse_line(ln[i + len(tag) :])
     return runs
 
 
@@ -70,8 +70,17 @@ def table(runs):
             vals[k].append(sum(s for _, s in r["stage"]))
     if ("total", "run total") in vals:
         order.append(("total", "run total"))
-    return [(kind, name, len(vals[(kind, name)]), statistics.median(vals[(kind, name)]),
-             min(vals[(kind, name)]), max(vals[(kind, name)])) for kind, name in order]
+    return [
+        (
+            kind,
+            name,
+            len(vals[(kind, name)]),
+            statistics.median(vals[(kind, name)]),
+            min(vals[(kind, name)]),
+            max(vals[(kind, name)]),
+        )
+        for kind, name in order
+    ]
 
 
 def main(argv):

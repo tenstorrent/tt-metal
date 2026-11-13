@@ -29,7 +29,7 @@ def umd_map_from_text(text):
     """UMD's 'Opening local chip ids/PCIe ids: {0, 1, ...}/[0, 1, ...]' line -> {logical (metal) id: PCIe id}."""
     m = None
     for m in UMD_MAP_RE.finditer(text or ""):
-        pass                                    # the last open in the log wins
+        pass  # the last open in the log wins
     if not m:
         return {}
     lg = [int(v) for v in m.group(1).replace(" ", "").split(",") if v != ""]
@@ -59,10 +59,10 @@ class NumericCheck:
     def __init__(self, torch, ttnn, mesh, every, budget_s, cpu_rows, log, max_checks=0):
         self.torch, self.ttnn, self.mesh, self.log = torch, ttnn, mesh, log
         self.every, self.budget_s, self.cpu_rows, self.max_checks = every, budget_s, cpu_rows, max_checks
-        self.golden = {}                 # activation index -> golden torch tensor (one chip's output)
-        self.golden_info = {}            # activation index -> how it was chosen (agree count, CPU pcc, max err)
-        self.cpu_inputs = {}             # activation index -> (x, w) CPU bf16 tensors for the CPU slice check
-        self.chips = {}                  # mesh index -> per-chip counters
+        self.golden = {}  # activation index -> golden torch tensor (one chip's output)
+        self.golden_info = {}  # activation index -> how it was chosen (agree count, CPU pcc, max err)
+        self.cpu_inputs = {}  # activation index -> (x, w) CPU bf16 tensors for the CPU slice check
+        self.chips = {}  # mesh index -> per-chip counters
         self.checks, self.spent, self.error, self.off = [], 0.0, None, False
         self.ids = self._metal_ids()
 
@@ -106,7 +106,7 @@ class NumericCheck:
 
     def _set_golden(self, k, outs):
         torch = self.torch
-        reps = []                                   # [(tensor, [mesh indices])]
+        reps = []  # [(tensor, [mesh indices])]
         for i, t in enumerate(outs):
             for rep in reps:
                 if rep[0].shape == t.shape and torch.equal(rep[0], t):
@@ -119,7 +119,7 @@ class NumericCheck:
         info = dict(agree=len(agree), of=len(outs), variants=len(reps), finite=bool(torch.isfinite(g.float()).all()))
         ref = self._cpu_slice(k)
         if ref is not None:
-            gs = g.float()[..., :ref.shape[-2], :]
+            gs = g.float()[..., : ref.shape[-2], :]
             d = (gs - ref).abs()
             info["cpu_rows"] = int(ref.shape[-2])
             info["cpu_max_abs_err"] = float(d.max()) if bool(torch.isfinite(d).all()) else float("nan")
@@ -133,9 +133,11 @@ class NumericCheck:
         if len(agree) * 2 <= len(outs):
             info["warning"] = "no majority: golden is the largest group only"
         self.golden[k], self.golden_info[k] = g, info
-        self.log(f"NUMERIC golden act{k}: {info['agree']}/{info['of']} chips bit-identical ({info['variants']} "
-                 f"distinct outputs), CPU {info.get('cpu_rows', 0)}-row slice pcc {info.get('cpu_pcc')} "
-                 f"max abs err {info.get('cpu_max_abs_err')}" + (f"; {info['warning']}" if "warning" in info else ""))
+        self.log(
+            f"NUMERIC golden act{k}: {info['agree']}/{info['of']} chips bit-identical ({info['variants']} "
+            f"distinct outputs), CPU {info.get('cpu_rows', 0)}-row slice pcc {info.get('cpu_pcc')} "
+            f"max abs err {info.get('cpu_max_abs_err')}" + (f"; {info['warning']}" if "warning" in info else "")
+        )
 
     def check(self, y, n, k, t_burst):
         """Compare matmul n's output y (activation k) on every chip with the golden. Returns seconds spent."""
@@ -150,9 +152,22 @@ class NumericCheck:
             gf = g.float()
             bad = []
             for i, t in enumerate(outs):
-                c = self.chips.setdefault(i, dict(metal=self.ids[i] if i < len(self.ids) else i, checks=0, mismatched=0,
-                                                  first_iter=None, first_s=None, bad_elems=0, max_bad_elems=0,
-                                                  max_abs_err=0.0, nan=0, inf=0, first_check_bad=None))
+                c = self.chips.setdefault(
+                    i,
+                    dict(
+                        metal=self.ids[i] if i < len(self.ids) else i,
+                        checks=0,
+                        mismatched=0,
+                        first_iter=None,
+                        first_s=None,
+                        bad_elems=0,
+                        max_bad_elems=0,
+                        max_abs_err=0.0,
+                        nan=0,
+                        inf=0,
+                        first_check_bad=None,
+                    ),
+                )
                 c["checks"] += 1
                 if t.shape == g.shape and torch.equal(t, g):
                     if c["first_check_bad"] is None:
@@ -183,17 +198,24 @@ class NumericCheck:
             self.spent += dt
             self.checks.append(dict(iter=n, act=k, s=round(dt, 2), t_burst=round(t_burst, 2), bad=len(bad)))
             if bad or len(self.checks) <= 2:
-                self.log(f"NUMERIC check {len(self.checks)} matmul {n} act{k} ({dt:.1f}s): "
-                         + (f"{len(bad)} chip(s) MISMATCH: " + "; ".join(bad[:8]) if bad else
-                            f"{len(outs)}/{len(outs)} chips bit-exact"))
+                self.log(
+                    f"NUMERIC check {len(self.checks)} matmul {n} act{k} ({dt:.1f}s): "
+                    + (
+                        f"{len(bad)} chip(s) MISMATCH: " + "; ".join(bad[:8])
+                        if bad
+                        else f"{len(outs)}/{len(outs)} chips bit-exact"
+                    )
+                )
             return dt
-        except Exception as e:      # the check failed, not the chip: stop checking, never stop the load
+        except Exception as e:  # the check failed, not the chip: stop checking, never stop the load
             dt = time.monotonic() - t0
             self.spent += dt
             self.off = True
             self.error = f"{type(e).__name__}: {str(e)[:300]}"
-            self.log(f"NUMERIC check error at matmul {n} (checks off for the rest of this try, load goes on): "
-                     f"{self.error}")
+            self.log(
+                f"NUMERIC check error at matmul {n} (checks off for the rest of this try, load goes on): "
+                f"{self.error}"
+            )
             return dt
 
     def result(self, ids, tray_of, umd_map=None):
@@ -205,19 +227,35 @@ class NumericCheck:
             dev = umd_map.get(c["metal"], c["metal"]) if umd_map else c["metal"]
             pci = ids.get(dev)
             tray = tray_of(pci) if pci else None
-            chips[str(i)] = dict(c, dev=dev, pci=pci, tray=tray, ubb=None if tray is None else tray - 1,
-                                 max_abs_err=None if c["max_abs_err"] == float("inf") else round(c["max_abs_err"], 6))
-        return dict(schema=1, enabled=True, every=self.every, budget_s=self.budget_s, cpu_rows=self.cpu_rows,
-                    checks=len(self.checks), check_iters=[c["iter"] for c in self.checks],
-                    check_s=round(self.spent, 2), map_source=src, golden={str(k): v for k, v in self.golden_info.items()},
-                    error=self.error, chips=chips,
-                    mismatched_chips=sorted(int(i) for i, c in chips.items() if c["mismatched"]))
+            chips[str(i)] = dict(
+                c,
+                dev=dev,
+                pci=pci,
+                tray=tray,
+                ubb=None if tray is None else tray - 1,
+                max_abs_err=None if c["max_abs_err"] == float("inf") else round(c["max_abs_err"], 6),
+            )
+        return dict(
+            schema=1,
+            enabled=True,
+            every=self.every,
+            budget_s=self.budget_s,
+            cpu_rows=self.cpu_rows,
+            checks=len(self.checks),
+            check_iters=[c["iter"] for c in self.checks],
+            check_s=round(self.spent, 2),
+            map_source=src,
+            golden={str(k): v for k, v in self.golden_info.items()},
+            error=self.error,
+            chips=chips,
+            mismatched_chips=sorted(int(i) for i, c in chips.items() if c["mismatched"]),
+        )
 
 
 # SFPU ops in the heavy numeric vote: each checked heavy matmul output's first H x W
 # block, height-sharded one 32-row shard per core (shard s on core x,y = s % gx, s // gx, ROW_MAJOR), goes through one
 # SFPU op per launch, rotating these; every chip's result must be bit-identical, like the matmul's.
-SFPU_OPS = ("exp", "reciprocal", "sqrt", "gelu")   # sqrt runs on abs(x): a NaN would never compare equal to itself
+SFPU_OPS = ("exp", "reciprocal", "sqrt", "gelu")  # sqrt runs on abs(x): a NaN would never compare equal to itself
 
 
 def sfpu_layout(gx, gy, w=64):
@@ -249,8 +287,10 @@ def cores_from_counter(torch, counter, gx):
 def sfpu_vote(torch, outs, gx):
     """Cross-chip bit-exact vote of one SFPU output per chip (bf16 compared by int16 view). The majority output is the
     reference; {chip index: {'elems': n, 'cores': {'x,y': n}}} for each chip off it; {} with no strict majority."""
+
     def bits(t):
         return t.view(torch.int16) if t.dtype == torch.bfloat16 else t
+
     keys = [hash(bits(t).numpy().tobytes()) for t in outs]
     top = max(set(keys), key=keys.count) if keys else None
     if top is None or keys.count(top) * 2 <= len(keys):
@@ -285,6 +325,8 @@ def sfpu_lines(bad, ids, tray_of, umd_map, metal_ids, op):
         metal = metal_ids[i] if i < len(metal_ids) else i
         dev = umd_map.get(metal, metal) if umd_map else metal
         pci = ids.get(dev)
-        out.append(f"NUMERIC FAIL {pci or '?'} (tray {(tray_of(pci) if pci else None) or '?'}) chip {dev} [sfpu:{op}]: "
-                   f"{b['elems']} elements off the cross-chip majority" + sfpu_cores_text({op: b["cores"]}))
+        out.append(
+            f"NUMERIC FAIL {pci or '?'} (tray {(tray_of(pci) if pci else None) or '?'}) chip {dev} [sfpu:{op}]: "
+            f"{b['elems']} elements off the cross-chip majority" + sfpu_cores_text({op: b["cores"]})
+        )
     return out

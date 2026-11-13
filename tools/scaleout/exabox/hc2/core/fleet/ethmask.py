@@ -14,10 +14,27 @@
 #   ethmask.py up <devnode>:<ch>[,<ch>...]...         read-only: exit 0 when every named channel reads port_status 1 (PORT_UP)
 #   ethmask.py kept <disc.json> <chA> <chB>           no device: exit 0 when that discovery saw exactly one link, chA <-> chB
 # In tray-test for run.sh --repro link-a (lib/fleet.sh fl_linka); tt_umd is imported only by the device commands.
-import json, sys, time
+import json
+import sys
+import time
 
 PORT, TRAIN = 0x7CC04, 0x7CC08
-ETH_NOC0 = [(1, 1), (16, 1), (2, 1), (15, 1), (3, 1), (14, 1), (4, 1), (13, 1), (5, 1), (12, 1), (6, 1), (11, 1), (7, 1), (10, 1)]
+ETH_NOC0 = [
+    (1, 1),
+    (16, 1),
+    (2, 1),
+    (15, 1),
+    (3, 1),
+    (14, 1),
+    (4, 1),
+    (13, 1),
+    (5, 1),
+    (12, 1),
+    (6, 1),
+    (11, 1),
+    (7, 1),
+    (10, 1),
+]
 
 
 def r32(d, c, a):
@@ -30,7 +47,9 @@ def r8(d, c, a):
 
 def chip(n):
     import tt_umd as u
-    d = u.TTDevice.create(int(n)); d.init_tt_device()
+
+    d = u.TTDevice.create(int(n))
+    d.init_tt_device()
     sd = u.SocDescriptor(d)
     cores = {}
     for ch, n0 in enumerate(sd.get_cores(u.CoreType.ETH, u.CoordSystem.NOC0)):
@@ -48,11 +67,17 @@ def kept(path, ka, kb):
 
 def info(d, c):
     t = c["tr"]
-    return {"noc0": list(c["noc0"]), "translated": list(t), "phys_idx": ETH_NOC0.index(tuple(c["noc0"])) if tuple(c["noc0"]) in ETH_NOC0 else None,
-            "port_status": r32(d, t, PORT), "train_status": r32(d, t, TRAIN),
-            "local_asic": (r32(d, t, 0x7CFD4) << 32) | r32(d, t, 0x7CFD8),
-            "remote_asic": (r32(d, t, 0x7CFF4) << 32) | r32(d, t, 0x7CFF8),
-            "remote_chan_phys": r8(d, t, 0x7CFE2), "remote_chan_logical": r8(d, t, 0x7CFE3)}
+    return {
+        "noc0": list(c["noc0"]),
+        "translated": list(t),
+        "phys_idx": ETH_NOC0.index(tuple(c["noc0"])) if tuple(c["noc0"]) in ETH_NOC0 else None,
+        "port_status": r32(d, t, PORT),
+        "train_status": r32(d, t, TRAIN),
+        "local_asic": (r32(d, t, 0x7CFD4) << 32) | r32(d, t, 0x7CFD8),
+        "remote_asic": (r32(d, t, 0x7CFF4) << 32) | r32(d, t, 0x7CFF8),
+        "remote_chan_phys": r8(d, t, 0x7CFE2),
+        "remote_chan_logical": r8(d, t, 0x7CFE3),
+    }
 
 
 def show(nodes):
@@ -76,9 +101,17 @@ def stats(specs):
         out[n] = {}
         for ch in (int(x) for x in chs.split(",")):
             t = cores[ch]["tr"]
-            out[n][ch] = {"port_status": r32(d, t, PORT), "pcs_link": r32(d, t, 0xFFB9800C), "rx_link_up": r32(d, t, 0x7CE04),
-                          "retrain": r32(d, t, 0x7CE00), "rx_bad_fcs": r64(d, t, 0x7CE60), "corr_cw": r64(d, t, 0x7CE90),
-                          "uncorr_cw": r64(d, t, 0x7CE98), "heartbeat": hex(r32(d, t, 0x7CC70)), "err_stat": hex(r32(d, t, 0xFFB980D8))}
+            out[n][ch] = {
+                "port_status": r32(d, t, PORT),
+                "pcs_link": r32(d, t, 0xFFB9800C),
+                "rx_link_up": r32(d, t, 0x7CE04),
+                "retrain": r32(d, t, 0x7CE00),
+                "rx_bad_fcs": r64(d, t, 0x7CE60),
+                "corr_cw": r64(d, t, 0x7CE90),
+                "uncorr_cw": r64(d, t, 0x7CE98),
+                "heartbeat": hex(r32(d, t, 0x7CC70)),
+                "err_stat": hex(r32(d, t, 0xFFB980D8)),
+            }
         del d
     return out
 
@@ -98,23 +131,41 @@ elif cmd == "kept":
     sys.exit(0 if ok else 1)
 elif cmd == "disc":
     import tt_umd as u
+
     cd = u.TopologyDiscovery.create_cluster_descriptor()
     conn = cd.get_ethernet_connections()
-    print(json.dumps({"chips": sorted(cd.get_all_chips()), "bdfs": {int(k): v for k, v in cd.get_chip_pci_bdfs().items()},
-                      "active": {int(c): sorted(cd.get_active_eth_channels(c)) for c in cd.get_all_chips()},
-                      "links": {int(c): {int(ch): [int(rc), int(rch)] for ch, (rc, rch) in sorted(v.items())} for c, v in conn.items()}}), flush=True)
+    print(
+        json.dumps(
+            {
+                "chips": sorted(cd.get_all_chips()),
+                "bdfs": {int(k): v for k, v in cd.get_chip_pci_bdfs().items()},
+                "active": {int(c): sorted(cd.get_active_eth_channels(c)) for c in cd.get_all_chips()},
+                "links": {
+                    int(c): {int(ch): [int(rc), int(rch)] for ch, (rc, rch) in sorted(v.items())}
+                    for c, v in conn.items()
+                },
+            }
+        ),
+        flush=True,
+    )
 elif cmd == "drop":
     A, ca, B, cb = sys.argv[2], int(sys.argv[3]), sys.argv[4], int(sys.argv[5])
     val = int(sys.argv[6]) if len(sys.argv) > 6 else 3
-    da, coa = chip(A); db, cob = chip(B)
+    da, coa = chip(A)
+    db, cob = chip(B)
     ia, ib = info(da, coa[ca]), info(db, cob[cb])
-    ok = (ia["remote_asic"] == ib["local_asic"] and ib["remote_asic"] == ia["local_asic"]
-          and ia["port_status"] == 1 and ib["port_status"] == 1
-          and ib["phys_idx"] in (ia["remote_chan_phys"], ia["remote_chan_logical"])
-          and ia["phys_idx"] in (ib["remote_chan_phys"], ib["remote_chan_logical"]))
+    ok = (
+        ia["remote_asic"] == ib["local_asic"]
+        and ib["remote_asic"] == ia["local_asic"]
+        and ia["port_status"] == 1
+        and ib["port_status"] == 1
+        and ib["phys_idx"] in (ia["remote_chan_phys"], ia["remote_chan_logical"])
+        and ia["phys_idx"] in (ib["remote_chan_phys"], ib["remote_chan_logical"])
+    )
     res = {"A": [A, ca, ia], "B": [B, cb, ib], "pair_verified": ok, "value": val}
     if not ok:
-        print(json.dumps({**res, "error": "not one verified PORT_UP link; nothing written"}), flush=True); sys.exit(6)
+        print(json.dumps({**res, "error": "not one verified PORT_UP link; nothing written"}), flush=True)
+        sys.exit(6)
     for d, c in ((da, coa[ca]), (db, cob[cb])):
         d.noc_write(c["tr"][0], c["tr"][1], PORT, val.to_bytes(4, "little"))
     res["readback_0s"] = [r32(da, coa[ca]["tr"], PORT), r32(db, cob[cb]["tr"], PORT)]
@@ -123,4 +174,5 @@ elif cmd == "drop":
     print(json.dumps(res), flush=True)
     sys.exit(0 if res["readback_5s"] == [val, val] else 7)
 else:
-    print("ethmask.py: show, drop, disc, stats, up or kept", file=sys.stderr); sys.exit(2)
+    print("ethmask.py: show, drop, disc, stats, up or kept", file=sys.stderr)
+    sys.exit(2)

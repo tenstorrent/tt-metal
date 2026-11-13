@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+
 # SPDX-License-Identifier: Apache-2.0
 """h3/pcie_traffic.py: LTX-like PCIe traffic inside the synthetic H3 steps, and the AER reads around them.
 
@@ -38,7 +40,9 @@ TRAYS = {0x00: 1, 0x40: 2, 0xC0: 3, 0x80: 4}
 # fit in the step (smoke job 193913's 600 s H3 window went 585.8 s to the reload, 11 of 52 chunks, and ran
 # no gen). The first chunk always runs, so a short window still moves and checks some reload traffic.
 RELOAD_RESERVE_S = 420
-OFF_WARNING = "WARNING: H3 PCIe traffic (weight reloads, per-gen writes and checked readbacks) DISABLED by --no-pcie-traffic"
+OFF_WARNING = (
+    "WARNING: H3 PCIe traffic (weight reloads, per-gen writes and checked readbacks) DISABLED by --no-pcie-traffic"
+)
 
 
 # ---- table and generator ----
@@ -51,7 +55,9 @@ def read_table(path: str, mode: str) -> dict:
                 continue
             seed, reload_mb, gen_mb, chunk_mb = (int(x) for x in p[1:5])
             if chunk_mb <= 0 or reload_mb < 0 or gen_mb < 0 or reload_mb % chunk_mb:
-                raise ValueError(f"{path}: mode {mode}: reload_mb {reload_mb} must be whole chunks of {chunk_mb} MB, gen_mb {gen_mb} >= 0")
+                raise ValueError(
+                    f"{path}: mode {mode}: reload_mb {reload_mb} must be whole chunks of {chunk_mb} MB, gen_mb {gen_mb} >= 0"
+                )
             return {"seed": seed, "reload_mb": reload_mb, "gen_mb": gen_mb, "chunk_mb": chunk_mb}
     raise ValueError(f"{path}: no row for mode {mode}")
 
@@ -140,7 +146,9 @@ def chip_bdfs(device_ids: list[int], descriptor: str | None, root: str | None = 
             for k, v in (y.get("chip_to_bus_id") or {}).items():
                 bus[int(k)] = int(v, 16) if isinstance(v, str) else int(v)
         except Exception as error:  # noqa: BLE001 - the chips then go by id, and the line says why
-            print(f"H3 PCIE INFO cluster descriptor {descriptor} unreadable ({type(error).__name__}: {error}); chips by id")
+            print(
+                f"H3 PCIE INFO cluster descriptor {descriptor} unreadable ({type(error).__name__}: {error}); chips by id"
+            )
     by_dev = chips_by_dev(root)
     by_bus = {int(b.split(":")[-2], 16): b for b in by_dev.values() if b.count(":") == 2}
     out = []
@@ -157,7 +165,8 @@ def chip_bdfs(device_ids: list[int], descriptor: str | None, root: str | None = 
 # ---- the traffic ----
 class Traffic:
     """Moves and checks the traffic through a transport: write(block) -> handle, shards(handle) -> one shard per chip
-    in chip order, read_shard(shard) -> that chip's words, free(handle). emit gets each line; clock is time.time (tests pass a fake)."""
+    in chip order, read_shard(shard) -> that chip's words, free(handle). emit gets each line; clock is time.time (tests pass a fake).
+    """
 
     def __init__(self, transport, bdfs: list[str], row: dict, emit, clock=time.time):
         self.t, self.bdfs, self.row, self.emit, self.clock = transport, bdfs, row, emit, clock
@@ -195,8 +204,10 @@ class Traffic:
                 d = "H2D"
             else:
                 d = "H2D/D2H"
-            line = (f"H3 PCIE FAIL {name(self.bdfs[c])} direction={d} {what} first bad offset=0x{w * 4:x}"
-                    f" (wrote 0x{int(s[w]):08x}, read 0x{int(g[w]):08x}; {bad.size} bad words of {s.size})")
+            line = (
+                f"H3 PCIE FAIL {name(self.bdfs[c])} direction={d} {what} first bad offset=0x{w * 4:x}"
+                f" (wrote 0x{int(s[w]):08x}, read 0x{int(g[w]):08x}; {bad.size} bad words of {s.size})"
+            )
             self.fails.append(line)
             self.emit(line)
         return d2h, ok
@@ -217,8 +228,10 @@ class Traffic:
         self.total["H2D"] += box
         self.total["D2H"] += box
         rate = lambda s: f"{box / s:.2f}" if s > 0 else "-"  # noqa: E731
-        return (f"{head} H2D {box:.2f} GB box {per_chip_bytes / GB:.3f} GB/chip {rate(h2d_s)} GB/s"
-                f" D2H {box:.2f} GB box {per_chip_bytes / GB:.3f} GB/chip {rate(d2h_s)} GB/s chips={self.n}{extra}")
+        return (
+            f"{head} H2D {box:.2f} GB box {per_chip_bytes / GB:.3f} GB/chip {rate(h2d_s)} GB/s"
+            f" D2H {box:.2f} GB box {per_chip_bytes / GB:.3f} GB/chip {rate(d2h_s)} GB/s chips={self.n}{extra}"
+        )
 
     def reload(self, stop_at: float, reserve: float = 0.0, min_chunks: int = 0) -> bool:
         """The step-start weight reload; stops between chunks at stop_at - reserve, after at least min_chunks chunks.
@@ -230,12 +243,27 @@ class Traffic:
                 break
             a, b, good = self._round("reload", k, self.gen)
             h2d, d2h, done, ok = h2d + a, d2h + b, done + 1, ok and good
-        cut = "" if done == n_chunks else (f" cut at stop-at{f' minus {reserve:.0f} s for setup and gens' if reserve else ''}"
-                                           f" after {done} of {n_chunks} chunks")
-        self.emit(self._line(f"H3 PCIE RELOAD {start:.0f} {self.clock() - start:.1f}s seed={self.row['seed']}",
-                             done * self.gen.words * 4, h2d, d2h, f" chunks={done}/{n_chunks} ok={int(ok)}{cut}"))
+        cut = (
+            ""
+            if done == n_chunks
+            else (
+                f" cut at stop-at{f' minus {reserve:.0f} s for setup and gens' if reserve else ''}"
+                f" after {done} of {n_chunks} chunks"
+            )
+        )
+        self.emit(
+            self._line(
+                f"H3 PCIE RELOAD {start:.0f} {self.clock() - start:.1f}s seed={self.row['seed']}",
+                done * self.gen.words * 4,
+                h2d,
+                d2h,
+                f" chunks={done}/{n_chunks} ok={int(ok)}{cut}",
+            )
+        )
         for c, b in enumerate(self.bdfs):
-            self.emit(f"H3 PCIE CHIP {name(b)} reload H2D {done * self.gen.words * 4 / GB:.3f} GB D2H {done * self.gen.words * 4 / GB:.3f} GB")
+            self.emit(
+                f"H3 PCIE CHIP {name(b)} reload H2D {done * self.gen.words * 4 / GB:.3f} GB D2H {done * self.gen.words * 4 / GB:.3f} GB"
+            )
         return ok
 
     def before_gen(self, n: int) -> None:
@@ -256,12 +284,18 @@ class Traffic:
         d2h_s, ok = self._read_check(h, lambda c: self.ggen.chunk(c, "gen", n), f"gen {n} data")
         self.t.free(h)
         self.gen_handle = None
-        self.emit(self._line(f"H3 PCIE GEN {n} seed={self.row['seed'] + 1}", self.gwords * 4, self.h2d_s, d2h_s, f" ok={int(ok)}"))
+        self.emit(
+            self._line(
+                f"H3 PCIE GEN {n} seed={self.row['seed'] + 1}", self.gwords * 4, self.h2d_s, d2h_s, f" ok={int(ok)}"
+            )
+        )
         return ok
 
     def summary(self) -> str:
-        return (f"H3 PCIE TOTAL H2D {self.total['H2D']:.1f} GB D2H {self.total['D2H']:.1f} GB box, "
-                f"{self.total['H2D'] / max(self.n, 1):.2f} GB/chip each way, chips={self.n} fails={len(self.fails)}")
+        return (
+            f"H3 PCIE TOTAL H2D {self.total['H2D']:.1f} GB D2H {self.total['D2H']:.1f} GB box, "
+            f"{self.total['H2D'] / max(self.n, 1):.2f} GB/chip each way, chips={self.n} fails={len(self.fails)}"
+        )
 
 
 class TtnnTransport:
@@ -272,9 +306,14 @@ class TtnnTransport:
 
     def write(self, block):
         ttnn = self.ttnn
-        return ttnn.from_torch(self.torch.from_numpy(block.view("int32")), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT,
-                               device=self.mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                               mesh_mapper=ttnn.ShardTensorToMesh(self.mesh, dim=0))
+        return ttnn.from_torch(
+            self.torch.from_numpy(block.view("int32")),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh, dim=0),
+        )
 
     def shards(self, handle):
         return self.ttnn.get_device_tensors(handle)
@@ -299,8 +338,10 @@ def for_mesh(ttnn, torch, mesh_device, mode: str, emit):
         emit(f"H3 PCIE INFO no cluster descriptor ({type(error).__name__}: {error}); chips by id")
         desc = None
     bdfs = chip_bdfs(ids, desc)
-    emit(f"H3 PCIE PLAN seed={row['seed']} reload {row['reload_mb']} MB/chip in {row['chunk_mb']} MB chunks, gen "
-         f"{row['gen_mb']} MB/chip each way, chips={len(ids)}: " + " ".join(f"{i}={b}" for i, b in zip(ids, bdfs)))
+    emit(
+        f"H3 PCIE PLAN seed={row['seed']} reload {row['reload_mb']} MB/chip in {row['chunk_mb']} MB chunks, gen "
+        f"{row['gen_mb']} MB/chip each way, chips={len(ids)}: " + " ".join(f"{i}={b}" for i, b in zip(ids, bdfs))
+    )
     return Traffic(TtnnTransport(ttnn, torch, mesh_device), bdfs, row, emit)
 
 
@@ -368,8 +409,10 @@ def aer_diff(before: str, after: str) -> list[str]:
         via = f" (root port {port})" if kind == "chip" else ""
         if d > 0:
             rises += 1
-            lines.append(f"H3 AER FINDING {who}{via}: correctable AER +{d} during the step"
-                         f" ({cb.get('TOTAL_ERR_COR', 0)} -> {ca.get('TOTAL_ERR_COR', 0)}{'; ' + keys if keys else ''})")
+            lines.append(
+                f"H3 AER FINDING {who}{via}: correctable AER +{d} during the step"
+                f" ({cb.get('TOTAL_ERR_COR', 0)} -> {ca.get('TOTAL_ERR_COR', 0)}{'; ' + keys if keys else ''})"
+            )
         else:
             lines.append(f"H3 AER {who}{via}: correctable {ca.get('TOTAL_ERR_COR', 0)}, +0 during the step")
     n_chip = sum(1 for k in set(b) | set(a) if k[0] == "chip")

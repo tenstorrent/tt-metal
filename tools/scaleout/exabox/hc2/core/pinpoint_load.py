@@ -6,7 +6,7 @@
 """pinpoint_load.py: the numeric pinpoint under run.sh's max-load stage load.
 
 a06u02 47:00.0 (tray 2) and a07u08 84:00.0 give wrong DRAM bank 3 results only inside run.sh's heavy stage: the solo
-pinpoint got 0/86..0/93 and an uncapped 7200 s pinpoint 0 in 14509 heavy matmuls (notes/a06u02-47-numeric.md). So each
+pinpoint got 0/86..0/93 and an uncapped 7200 s pinpoint 0 in 14509 heavy matmuls. So each
 pinpoint check runs under the max-load stage's own load: lib/pinpoint.sh passes `fl_load_args heavy` (the one load
 definition, lib/fleet.sh) as --load-args, and numeric_pinpoint.py builds that op with ub0_repro.heavy_op (lofi_all with the
 fused SFPU epilogue, the PCIe write on cq 1, the DRAM add; no all_gather: the pinpoint opens no fabric) on the whole
@@ -22,8 +22,8 @@ import argparse
 import json
 import time
 
-TEMP_MAX = 150.0   # fleet_py.TEMP_MAX: hotter is a garbage read (all ones scales to 4.29e6)
-W_MAX = 1000.0     # a 4293 W reading once seen was a garbage read
+TEMP_MAX = 150.0  # fleet_py.TEMP_MAX: hotter is a garbage read (all ones scales to 4.29e6)
+W_MAX = 1000.0  # a 4293 W reading once seen was a garbage read
 
 
 def parse(s, heavy, ub):
@@ -39,7 +39,7 @@ def parse(s, heavy, ub):
     p.add_argument("--sfpu-par", type=int, default=1)
     p.add_argument("--sfpu-act", default=ub.SFPU_ACT)
     p.add_argument("--cqs", type=int, default=2)
-    p.add_argument("--variant", default="")   # only no-gap runs here (its 0 ms gap); named in the load line
+    p.add_argument("--variant", default="")  # only no-gap runs here (its 0 ms gap); named in the load line
     a, _ = p.parse_known_args(s.split())
     a.burst_steps = max(1, a.burst_steps)
     return a
@@ -52,6 +52,7 @@ def plaus(v, hi):
 def read_chip(dev):
     """(W, C) from the chip's hwmon (sysfs, opens no device); None where unreadable."""
     import ub0_repro as ub
+
     return ub.hwmon(dev, "power1_input", 1e6), ub.hwmon(dev, "temp1_input", 1e3)
 
 
@@ -69,26 +70,54 @@ class Load:
             return self.op
         self.free()
         import ub0_repro as ub
+
         la, ttnn = self.la, self.ttnn
         try:
             x = w = None
-            if ub.HEAVY.get(la.heavy, 0) is None:   # the plain matmul load (tests): its own small x and w
+            if ub.HEAVY.get(la.heavy, 0) is None:  # the plain matmul load (tests): its own small x and w
                 rep, D = ttnn.ReplicateTensorToMesh(mesh), ttnn.DRAM_MEMORY_CONFIG
-                x, w = (ttnn.from_torch(self.torch.randn(*s, dtype=self.torch.bfloat16), dtype=ttnn.bfloat16,
-                                        layout=ttnn.TILE_LAYOUT, device=mesh, memory_config=D, mesh_mapper=rep)
-                        for s in ((1, 1, 32, k), (1, 1, k, 32)))
+                x, w = (
+                    ttnn.from_torch(
+                        self.torch.randn(*s, dtype=self.torch.bfloat16),
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.TILE_LAYOUT,
+                        device=mesh,
+                        memory_config=D,
+                        mesh_mapper=rep,
+                    )
+                    for s in ((1, 1, 32, k), (1, 1, k, 32))
+                )
                 self.held += [x, w]
-            ns = argparse.Namespace(heavy=la.heavy, heavy_act=la.sfpu_act if la.sfpu_par else None,
-                                    heavy_pcie_mb=la.heavy_pcie_mb, m=32, k=k, n=32, topo="none")
+            ns = argparse.Namespace(
+                heavy=la.heavy,
+                heavy_act=la.sfpu_act if la.sfpu_par else None,
+                heavy_pcie_mb=la.heavy_pcie_mb,
+                m=32,
+                k=k,
+                n=32,
+                topo="none",
+            )
             op, _, d = ub.heavy_op(ns, ttnn, self.torch, mesh, x, w, cq1=self.cq1, fabric=False, cq_why=self.cq_why)
             self.held += list(getattr(op, "tensors", ()))
-            fb = [v for v in ((getattr(op, "ran", None) or {}).get(f) for f in ("fallback", "sfpu", "extras_fallback")) if v]
+            fb = [
+                v
+                for v in ((getattr(op, "ran", None) or {}).get(f) for f in ("fallback", "sfpu", "extras_fallback"))
+                if v
+            ]
             self.op, self.mesh = op, mesh
-            self.desc = (f"{la.heavy}: {d}; bursts of {la.burst_steps} with {la.burst_gap_ms:g} ms gaps, whole mesh"
-                         + (f" ({'; '.join(fb)})" if fb else ""))
-            self.log(f"load: {self.desc}" + (f"; WARNING: dev load variant {self.la.variant}: only no-gap runs in pinpoint "
-                                             f"(dram-mm and host-stress do not)" if getattr(self.la, "variant", "") else ""))
-        except Exception as e:   # the load cannot run here: the checks go on solo, and the report says so
+            self.desc = f"{la.heavy}: {d}; bursts of {la.burst_steps} with {la.burst_gap_ms:g} ms gaps, whole mesh" + (
+                f" ({'; '.join(fb)})" if fb else ""
+            )
+            self.log(
+                f"load: {self.desc}"
+                + (
+                    f"; WARNING: dev load variant {self.la.variant}: only no-gap runs in pinpoint "
+                    f"(dram-mm and host-stress do not)"
+                    if getattr(self.la, "variant", "")
+                    else ""
+                )
+            )
+        except Exception as e:  # the load cannot run here: the checks go on solo, and the report says so
             self.off = f"{type(e).__name__}: {str(e)[:160]}"
             self.log(f"load off: {self.off}; the checks run without it")
             self.free()
@@ -164,9 +193,9 @@ class Tele:
             except Exception:
                 w = c = None
             pw, pc = plaus(w, W_MAX), plaus(c, TEMP_MAX)
-            if (w is not None and pw is None) or (c is not None and pc is None):   # read but implausible (all ones,
-                self.dropped += 1                                                    # out of range): a fault of its own,
-                self.fault.setdefault(bdf, self.n)                                   # no later temperature counts
+            if (w is not None and pw is None) or (c is not None and pc is None):  # read but implausible (all ones,
+                self.dropped += 1  # out of range): a fault of its own,
+                self.fault.setdefault(bdf, self.n)  # no later temperature counts
             w, c = pw, pc
             if w is not None:
                 row["w"][bdf] = round(w, 1)
@@ -198,12 +227,21 @@ class Tele:
                 p.update(c=c, c_launch=row["launch"], c_split=row["split"])
         with open(self.path, "a") as f:
             f.write(json.dumps(row, sort_keys=True) + "\n")
-        tg = ", ".join(f"{b} tray {self.chips[b].get('tray')} {row['w'].get(b, '-')} W {row['c'].get(b, '-')} C"
-                       for b in sorted(self.targets) if b in self.chips)
-        self.log(f"LOAD launch {row['launch']} {row['split']}: box {row['box_kw']} kW ({row['chips_w']} chips' W); {tg}")
+        tg = ", ".join(
+            f"{b} tray {self.chips[b].get('tray')} {row['w'].get(b, '-')} W {row['c'].get(b, '-')} C"
+            for b in sorted(self.targets)
+            if b in self.chips
+        )
+        self.log(
+            f"LOAD launch {row['launch']} {row['split']}: box {row['box_kw']} kW ({row['chips_w']} chips' W); {tg}"
+        )
 
     def summary(self):
-        return dict(launches=self.n, box_kw_mean=round(sum(self.kw) / len(self.kw), 3) if self.kw else None,
-                    box_kw_max=max(self.kw) if self.kw else None, dropped_reads=self.dropped,
-                    faults={b: n for b, n in sorted(self.fault.items())},
-                    chips={b: p for b, p in sorted(self.peak.items())})
+        return dict(
+            launches=self.n,
+            box_kw_mean=round(sum(self.kw) / len(self.kw), 3) if self.kw else None,
+            box_kw_max=max(self.kw) if self.kw else None,
+            dropped_reads=self.dropped,
+            faults={b: n for b, n in sorted(self.fault.items())},
+            chips={b: p for b, p in sorted(self.peak.items())},
+        )

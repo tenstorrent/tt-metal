@@ -119,7 +119,7 @@
 #                 recorded way for that bdf. --known <bdf>[,<bdf>]: a try with only those chips' known faults is a
 #                 miss, the loop goes on. Options before --repro (--known-dropped-tray, --since, --hwmon-guard,
 #                 --hold, --hold-timeout, --heavy-logs, --dry-run) go to every try.
-#   run.sh [--mode=quick|full] [--dry-run]   the fleet hardware test (lib/fleet.sh, notes/fleet-test-plan.md);
+#   run.sh [--mode=quick|full] [--dry-run]   the fleet hardware test (lib/fleet.sh);
 #                 no --mode is quick. Gates, C0 preflight, C1 AER/dmesg/SEL deltas + journal/SEL/SDR history, C3 ETH/QSFP counts + ETH ports,
 #                 C2 start glx_reset (tt-smi -glx_reset) and health recount, then the bus-bar stage first in every mode (set by
 #                 FLEET_BUSBAR_ORDER): two 60 s clock-checked quiets each
@@ -260,7 +260,7 @@ RK_STEP_S=${TRAY_REPRO_RESET_STEP_S:-600}
 # them (work/task504/leg.sh, rc 124). Plain run.sh is capped at 1800 s (under 30 min per host).
 # Stages start only while RS_C9_S + RS_TAIL_S (+ RS_SWEEP_S below, rs_keep) stay free for C9, the sweep and the RESULT; the C9 step's bound shrinks to what is
 # left less RS_TAIL_S (at least 60 s). 0 = no budget (default outside plain/quick, and with --hold).
-# Timing (notes/run-sh-timing.md, 35 healthy plain passes 10-25/26): C9's reset and recheck take 44-47 s, fl_c3 c9 31-50 s
+# Timing (35 healthy plain passes on record): C9's reset and recheck take 44-47 s, fl_c3 c9 31-50 s
 # and the RESULT 10-18 s; the last stage gate (host link check post) comes at 351-385 s left of 1800. RS_C9_S 180 +
 # RS_TAIL_S 120 = 300 s kept lets every median and p90 pass start every stage; C2 keeps the whole RK_STEP_S (600 s).
 # RS_SWEEP_S: the after-fault per-link PINPOINT sweep's share, kept free with C9's once a fault sets
@@ -371,6 +371,8 @@ rr_final() {
 }
 # layout: run.sh at the repo root, its code under traytest/; a flat copy (the tests) has lib/ beside it
 TT_TOP=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")"); TT_DIR=$TT_TOP; [ -d "$TT_TOP/traytest/lib" ] && TT_DIR=$TT_TOP/traytest
+. "$TT_DIR/lib/hc.sh"   # the hc core hooks (HC_SETUP, HC_HOLDFILE, HC_HOLD, HC_BROKER_YIELD, HC_SITE_FILE), off unless set
+[ -n "${FLEET_MAXUTIL_SKIP:-}" ] || FLEET_MAXUTIL_SKIP=$(hc_site maxutil_skip)
 # a subshell killed before its own 'trap - EXIT' (hb_start's heartbeat under a loaded CPU) runs this inherited trap
 # on its way out (bash runs the EXIT trap on a fatal signal): only run.sh's own shell does the exit work; rc kept for vd_exit
 trap 'RS_XRC=$?; [ "$BASHPID" = "$$" ] || exit "$RS_XRC"; (exit "$RS_XRC"); vd_exit; rs_sw_stop; declare -F by_stop > /dev/null && by_stop; declare -F pg_reap > /dev/null && pg_reap exit; declare -F fl_psu_reap > /dev/null && fl_psu_reap; declare -F pf_reap > /dev/null && pf_reap; { declare -F mg_recover > /dev/null && [ ${#MG_REMOVED[@]} -gt 0 ] && mg_recover; }; declare -F tdp_exit > /dev/null && tdp_exit; hb_stop; fault_exit; declare -F kp_restore > /dev/null && kp_restore; rr_final' EXIT   # kp_restore: lib/kmd_policy.sh (--kmd-power-policy); pg_reap: lib/pgroups.sh; fl_psu_reap: lib/psu_check.sh; pf_reap: lib/psu_fast.sh; fault_exit: lib/fault_capture.sh (a no-op before a fault, and when sourced)
@@ -384,7 +386,7 @@ declare -F pg_traps > /dev/null || . "$TT_DIR/lib/pgroups.sh"; pg_traps
 # producer in 'cmd | head -1' still stops by SIGPIPE (an ignored PIPE would be inherited). rs_dying and pg_traps ignore it
 trap ':' PIPE
 declare -F hd_dump > /dev/null || . "$TT_DIR/lib/hsc_dump.sh"   # tray power dump before a glx_reset
-declare -F hf_check > /dev/null || . "$TT_DIR/lib/holdfile.sh"   # the user's hold file (rk_gate, start)
+declare -F hf_check > /dev/null || if [ -n "${HC_HOLDFILE:-}" ]; then . "$HC_HOLDFILE"; else hc_holdfile_off; fi   # the user's hold file (rk_gate, start)
 # A TERM or INT (a leg's timeout: GNU timeout sends TERM, rc 124 to its caller) printed no RESULT line (one
 # host's plain run: TERM in C9 and the log ends at 'heavy logs: ... skipped'). rs_traps:
 # pg_traps, then TERM/INT/HUP go to rs_dying: reap the recorded groups (pg_reap), stop this shell's own other descendants (by
@@ -553,7 +555,7 @@ rs_c9_share() {
 # rs_c9_loss <where>: a chip lost in a load stage before C9 (fl_lost): C9 needs its warm reset,
 # the settle wait and a whole recovery round, so RS_C9_S becomes at least RK_WARM_S + RK_SETTLE_S + RK_ROUND_S (60 + 60 +
 # 240 = 360 s); fault capture and the pre-reset steps end by the moved HL_DEADLINE. A clean run keeps 180 s (section 5).
-RK_WARM_S=${TRAY_REPRO_WARM_S:-60}   # C9's glx_reset took 44-52 s on record (notes/run-sh-timing.md)
+RK_WARM_S=${TRAY_REPRO_WARM_S:-60}   # C9's glx_reset took 44-52 s on record
 rs_c9_loss() {
   local m; RS_FAULT=${RS_FAULT:-chips lost in $1}; [ "${RS_RUN_S:-0}" -gt 0 ] 2> /dev/null || return 0
   m=$(( RK_WARM_S + RK_SETTLE_S + RK_ROUND_S )); [ "$m" -gt "$RK_STEP_S" ] && m=$RK_STEP_S
@@ -749,10 +751,9 @@ rk_can_glx() {
   RK_GLX_CAN_WHY="no root, and sudo -n -l lists neither tt-smi nor ipmitool raw 0x30 0x8B"; return 1
 }
 # rk_glx_host_ok: the explicit allow list for a glx_reset that runs on sudoers rules short of ALL: the host names in the
-# site hook HC_GLX_HOSTS (an extended regex, set outside the core). Unset or empty: no host is on the list, so anything
-# short of root keeps NO RESET.
-rk_glx_host_ok() { local h=${TRAY_REPRO_HOST:-$(hostname -s)}
-  [ -n "${HC_GLX_HOSTS:-}" ] && [[ $h =~ ^($HC_GLX_HOSTS)$ ]]; }
+# regex below (site hosts whose sudo rules allow it). Anything else keeps NO RESET.
+rk_glx_host_ok() { local h=${TRAY_REPRO_HOST:-$(hostname -s)} re; re=$(hc_site glx_hosts)
+  [ -n "$re" ] && [[ $h =~ ^($re)$ ]]; }
 rk_noglx() { [ "${TRAY_REPRO_NO_GLX:-}" = 1 ]; }   # TRAY_REPRO_NO_GLX=1: no tray re-power (glx_reset), warm resets still run
 rk_noglx_say() {  # [$1 "<bdf> <chip> <state>" lines, default rk_snap] [$2 context]: the one line for a skipped tray re-power
   local a=${1-$(rk_snap)} m   # every chip not answering, and every chip off PCIe altogether (rk_offbus), by BDF and tray 1-4
@@ -1837,7 +1838,7 @@ case " $* " in *" --stub "*) . ./lib/stubhost.sh; SYS=$TRAY_REPRO_SYS ;; esac   
 # RK_SETTLE_S was set above from the caller's env, before the stub set its 1 s settle; read it
 # again so a stub reset waits 1 s, not 60. A real run's value is unchanged (60 s unless TRAY_REPRO_RESET_SETTLE_S is set).
 [ -n "${TRAY_STUB:-}" ] && { RK_SETTLE_S=$TRAY_REPRO_RESET_SETTLE_S; echo "stub mode: reset settle ${RK_SETTLE_S} s"; }
-. ./lib/holdfile.sh   # the user's holds and allowlist: a held host runs nothing, exit 10
+if [ -n "${HC_HOLDFILE:-}" ]; then . "$HC_HOLDFILE"; else hc_holdfile_off; fi   # the user's holds and allowlist: a held host runs nothing, exit 10
 hf_stop() { hf_check || { echo "NOT RUN: hold: $HF_WHY (TRAYTEST_HOLD_FILE, lib/holdfile.sh)" >&2; vd_say "NOT RUN (hold: $HF_WHY)"; exit 10; }; }   # runs after --help (help always prints) and before any device step
 . ./lib/sudo_route.sh   # no or partial passwordless sudo is output line 1, then the summary and RESULT
 case " $* " in *" -h "*|*" --help "*) ;; *) sudo_route_check hsc clear cpld sensors drop rescan; if [ -n "$SR_LINE" ]; then echo "$SR_LINE"; fi ;; esac
@@ -1951,7 +1952,7 @@ RUN_LOCK=${TRAY_RUN_LOCK:-/run/lock/tray-test-run.lock}; unset TRAY_RUN_LOCK_HEL
 if command -v flock > /dev/null && { [ -e "$RUN_LOCK" ] || : > "$RUN_LOCK"; } 2> /dev/null && exec 9< "$RUN_LOCK"; then
   if flock -w 3 9; then export TRAY_RUN_LOCK_HELD=$RUN_LOCK; else TRAY_RUN_LOCK_BUSY=1; echo "run lock $RUN_LOCK: held by another run" >&2; fi   # BUSY: no TDP open (lib/tdp.sh)
 else echo "WARNING: no run lock ($RUN_LOCK): other runs' gates cannot see this run" >&2; fi
-[ -n "${UB0_PYTHON:-}" ] || [ -x venv/bin/python ] || echo "first run: setting up ./venv (about 375 MB of pip packages and the SFPI compiler; a few minutes)..."
+[ -n "${UB0_PYTHON:-}" ] || [ -z "${HC_SETUP:-}" ] || [ -x "${HC_VENV:-venv}/bin/python" ] || echo "first run: setting up ./venv (about 375 MB of pip packages and the SFPI compiler; a few minutes)..."
 H=$(hostname -s); say() { echo "$(date '+%F %T %Z') $H: $*"; }
 FL_BOOT_UP0=$(cut -d' ' -f1 "${FLEET_PROC:-/proc}/uptime" 2> /dev/null); FL_BOOT_UP0=${FL_BOOT_UP0%%.*}   # uptime at run start (lib/fleet.sh fl_boot_recount)
 # the KMD power_policy value run's header prints (bank-3-only numeric fails were tied to it)
@@ -1963,7 +1964,8 @@ TRAY_IDLE_GRACE_MS=$(cat /sys/module/tenstorrent/parameters/idle_power_down_grac
 # stderr goes on as before; its 'setup: offline:' line (the venv cache it fell back to) also goes in the run log.
 su_run() {
   local e rc l why=""; e=$(mktemp "${TMPDIR:-/tmp}/tray-setup.XXXXXX") || e=""
-  bash ./setup.sh > /dev/null 2> "${e:-/dev/stderr}"; rc=$?
+  if [ -n "${HC_SETUP:-}" ]; then bash -c "$HC_SETUP" > /dev/null 2> "${e:-/dev/stderr}"; rc=$?
+  else python3 -c 'import ttnn' > /dev/null 2> "${e:-/dev/stderr}"; rc=$?; fi   # no HC_SETUP: the caller's env must have ttnn
   if [ -n "$e" ]; then
     while IFS= read -r l || [ -n "$l" ]; do
       case $l in "setup: offline: "*) echo "$l" ;; *) echo "$l" >&2 ;; esac
@@ -1980,8 +1982,8 @@ RS_SU0=$(date +%s); hb_start setup; [ -n "${TRAY_STUB:-}" ] || su_run; hb_stop
 # setup's seconds always print, apart from the run budget (a TRAY_VENV_CACHE hit or a ready ./venv: about 1 s)
 if [ "$RS_RUN_S" -gt 0 ] 2> /dev/null && [ $(( $(date +%s) - RS_SU0 )) -ge 30 ]; then
   echo "setup: $(( $(date +%s) - RS_SU0 )) s (./venv install), not counted in TRAY_REPRO_RUN_S=$RS_RUN_S"
-else echo "setup: $(( $(date +%s) - RS_SU0 )) s (./venv ready$([ -L venv ] && echo ", TRAY_VENV_CACHE $(readlink venv)"))"; fi
-PY=${UB0_PYTHON:-$PWD/venv/bin/python}
+else echo "setup: $(( $(date +%s) - RS_SU0 )) s (./venv ready$([ -L "${HC_VENV:-venv}" ] && echo ", TRAY_VENV_CACHE $(readlink "${HC_VENV:-venv}")"))"; fi
+PY=${UB0_PYTHON:-${HC_VENV:-$PWD/venv}/bin/python}; [ -n "${HC_SETUP:-}" ] || PY=${UB0_PYTHON:-python3}
 OUT=${TRAY_RUN_OUT:-${TRAY_RUN_PARENT:-$TT_TOP}/run_${H}_$(date -u +%Y%m%dT%H%M%SZ)}; mkdir -p "$OUT" 2> /dev/null \
   || { echo "run.sh: ERROR: cannot create the run dir $OUT: set TRAY_RUN_PARENT to a writable dir" >&2; exit 1; }   # stop here, not at an unbound KC_DIR; TRAY_RUN_PARENT: reliability.sh; TRAY_RUN_OUT: --mode=long gives each leg its own dir
 # every setsid child's process group goes in TRAY_PGID_FILE; a broker preemption's TERM reaps them (lib/pgroups.sh)
@@ -2006,7 +2008,7 @@ rs_sw_stop; rs_stopwatch   # again, now that TRAY_PGID_FILE (and the sudo caller
 [ -n "$KC_DIR" ] && [ "${#AS[@]}" -gt 0 ] && AS+=(TT_METAL_CACHE="$KC_DIR")
 . ./lib/umd_index.sh; . ./lib/heavy_logs.sh; . ./lib/fault_capture.sh; . ./lib/link_check.sh   # functions only: heavy_logs_init below starts them
 . ./lib/mce_guard.sh   # the MCE guard: armed after the start reset, acts on a chip hang
-. ./lib/hold.sh; hold_init   # --hold: refused under Slurm; armed only with --hold
+if [ -n "${HC_HOLD:-}" ]; then . "$HC_HOLD"; else hc_hold_off; fi; hold_init   # --hold: refused under Slurm; armed only with --hold
 . ./lib/bmc_heat.sh   # BMC heat poll and the drop's BMC/CPLD snapshot: functions only
 . ./lib/pinpoint.sh   # the numeric pinpoint after a NUMERIC FAIL: functions only
 . ./lib/tools_probe.sh; _tl=$(mktemp); tools_locate "$PY" > "$_tl"; while IFS= read -r l; do say "$l"; done < "$_tl"; rm -f "$_tl"; UB0_TRIAGE=${CS_TRIAGE:-${UB0_TRIAGE:-}}   # tt-triage/ttexalens
@@ -2066,7 +2068,7 @@ try_infra() {  # <rc> <log>: "test-infra: <why>" when the test binary could not 
 }
 try_run() {  # <try> <log> <cmd...>: the try in its own process group (setsid: pgid = pid), waited for up to
              # its limit (default 900 s + q min). Sets rc; past the limit try_hung runs and TRY_HUNG is set (rc 124)
-             # TRY_FAB_LIMIT_S (notes/test-design/stage2-design.md; set by the
+             # TRY_FAB_LIMIT_S (the stage-2 design's hang limit; set by the
              # bus-bar quiet-burst tries): once the log shows set_fabric_config(...) returned, the no-progress limit is this
              # (180 s) instead of TRY_LIMIT_S (900 s, kept while the fabric is set up: clean setups on one site took 702-903 s);
              # until "AICLK before burst" it also allows TRY_FAB_IDLE_S, the open quiet (idle plus clock-check cap), which
@@ -2346,7 +2348,7 @@ if [ "$KD_ON" = 1 ] && { [ "$RK_RC" = 9 ] || grep -aq '^RESULT: INCOMPLETE' "$OU
   printf '%s; %s\n' "$(cat "$OUT/result.line")" "$(kd_tag)" > "$OUT/result.line.kd" && mv "$OUT/result.line.kd" "$OUT/result.line"   # the known drop, named too
 fi
 [ -n "$FLEET" ] && { [ "$RK_RC" = 9 ] || [ -n "$RS_BUDGET_INC" ]; } && fl_vd_sum fin   # finished stages' VERDICT lines, then what was not reached, before RESULT: INCOMPLETE
-_r=$(if [ -n "$FLEET" ]; then fl_result_say "$OUT/result.line"; else cat "$OUT/result.line"; fi); echo "$_r; $(pp_tag)$(tdp_tag)${SR_TAG:-}${TRAY_STUB:+; STUB MODE: fake devices, not a real test}"; RS_DONE=1   # SR_TAG: the sudo status (lib/sudo_route.sh); power_policy on the RESULT line; tdp_tag: --tdp refused by a gate
+_r=$(if [ -n "$FLEET" ]; then fl_result_say "$OUT/result.line"; else cat "$OUT/result.line"; fi); echo "$_r; $(pp_tag)$(tdp_tag)${SR_TAG:-}${FL_PV_SKIP:+; power virus SKIPPED (another process held a Tenstorrent device, or the holder scan was incomplete; see the WARNING above)}${TRAY_STUB:+; STUB MODE: fake devices, not a real test}"; RS_DONE=1   # SR_TAG: the sudo status (lib/sudo_route.sh); power_policy on the RESULT line; tdp_tag: --tdp refused by a gate
 [ -z "$FLEET" ] && [ -n "${RK_RESET_FAILS:-}" ] && echo "$RK_RESET_FAILS"   # --mode prints them with its findings
 pinpoint_summary   # the NUMERIC-PINPOINT VERDICT lines, if any
 gd_summary   # GDDR WARN lines (new uncorrected errors, a corrected-error rise) and one GDDR: line

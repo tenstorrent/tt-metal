@@ -7,7 +7,7 @@
 # tt-umd reads each TT_VISIBLE_DEVICES token as an index into its own list of chips sorted by PCI address
 # (LC_ALL=C sort of the BDF string; tt-umd enumerate_devices), never as the /dev/tenstorrent number. On every recorded
 # 32-chip open that list is [0..15, 24..31, 16..23]: /dev 16-23 = c1-c8:00.0 (tray 3) but UMD index 16-23 = 81-88:00.0
-# (tray 4), so an open by /dev number put the other tray's twin chip under the label (notes/runsh-open-map-7023.md).
+# (tray 4), so an open by /dev number put the other tray's twin chip under the label.
 # The index is computed from sysfs at each open (a chip off the bus shifts every later index), as bin/umd-index does.
 # /dev numbers stay for ethmask TTDevice.create and tt-smi labels. Functions only; uses SYS (run.sh: /sys).
 #   rk_umd <bdf>...                  comma list of UMD indices, in argument order; exit 1 if a chip has no tt-kmd node

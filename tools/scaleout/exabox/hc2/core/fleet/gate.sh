@@ -10,7 +10,7 @@
 # node open (a container that only maps it, with idle or no device-holding processes, gets a WARNING and does not count);
 # a wan pod is scheduled on
 # this node (the kubelet's /var/log/pods/wan_* dirs, where the host has them; local reads only, no kubectl).
-#   gate.sh [OWN_PGID]   prints "gate ok" or "gate busy: <why>"; exit 0 ok, 10 device held or another broker job, 11 other run/container/pod
+#   gate.sh [OWN_PGID [RUN_PID]]   prints "gate ok" or "gate busy: <why>"; exit 0 ok, 10 device held or another broker job, 11 other run/container/pod
 # In a tt-device-mcp broker job: the job's own processes never count, another broker job (a ttdev-job-*.scope
 #   that is not this one) is busy (10), and a workload matched by name only is CPU load (holds no device) printed to stderr
 #   as "host load: ..." and not counted. Outside a broker job the name check below still refuses (11).
@@ -20,7 +20,7 @@
 #   TRAY_RUN_LOCK (run.sh's host-wide run lock, default /run/lock/tray-test-run.lock), TRAY_RUN_LOCK_HELD (set by the run.sh that holds it),
 #   FLEET_SELF_CGROUP (test hook: this gate's cgroup file, default /proc/$$/cgroup)
 set -u
-own=${1:-}; PROC=${FLEET_PROC:-/proc}; DEVD=${FLEET_DEVD:-/dev/tenstorrent}; SHM=${FLEET_SHM:-/dev/shm}
+own=${1:-}; run=${2:-}; PROC=${FLEET_PROC:-/proc}; DEVD=${FLEET_DEVD:-/dev/tenstorrent}; SHM=${FLEET_SHM:-/dev/shm}
 . "$(dirname "$(readlink -f "$0")")/../lib/sudo_l.sh"   # never sudo -n true; find, crictl and docker take varying arguments
 S=(); [ "$(id -u)" = 0 ] || { sudo_all && S=(sudo -n); }
 jobof() { sed -n 's#.*/ttdev-job-\([^/]*\)\.scope.*#\1#p' "$1" 2>/dev/null | head -1; }   # $1 a cgroup file: its broker job id
@@ -34,7 +34,19 @@ why=""; rc=0
 # when the only holder is tt-fabric-manager-agent, pass at once with a WARNING (default
 # wait 0 s; FLEET_AGENT_WAIT_S>0 polls that long first). Any other holder still refuses (10). The agent is never signalled. env: FLEET_AGENT_WAIT_S (0), FLEET_AGENT_IVL (15)
 AW=${FLEET_AGENT_WAIT_S:-0}; AI=${FLEET_AGENT_IVL:-15}; t0=$SECONDS; warn=""
-lockowners() {  # pids owning a chip's UMD lock, $SHM/*CHIP_IN_USE*: a robust pthread mutex
+# A job of this run
+# (setsid, so outside OWN_PGID) can still be closing the device for a moment after fl_watch saw its leader exit. A holder
+# that descends from RUN_PID (the run.sh, 2nd argument) is this run's own: wait up to FLEET_GATE_OWN_WAIT_S (10) s for it to
+# go, then count it as busy as before. A holder pid gone before it is named holds nothing: skipped.
+OW=${FLEET_GATE_OWN_WAIT_S:-10}
+mine() {  # $1 pid: a descendant of RUN_PID, by the ppid chain in $PROC/<pid>/stat
+  local q=$1 h=0 s; [ -n "$run" ] || return 1
+  while [[ $q =~ ^[0-9]+$ ]] && [ "$q" -gt 1 ] && [ $h -lt 64 ]; do
+    [ "$q" = "$run" ] && return 0
+    s=$(cat "$PROC/$q/stat" 2>/dev/null) || return 1; s=${s##*) }; read -r _ q _ <<< "$s"; h=$((h + 1))
+  done; return 1
+}
+lockowners() {  # pids owning a chip's UMD lock, $SHM/*CHIP_IN_USE* (trays note 86589dd8893b7e39): a robust pthread mutex
   # at offset 0, not an flock, read as load_test.sh's lockowners: int __lock @0 (owner TID | OWNER_DIED 0x40000000), int
   # __owner @8 (owner TID; 0x7fffffff/0x7ffffffe: use __lock's TID); the TID's Tgid is the process. Unowned or stale: none.
   local f w lk tid
@@ -48,15 +60,21 @@ lockowners() {  # pids owning a chip's UMD lock, $SHM/*CHIP_IN_USE*: a robust pt
   done | sort -u
 }
 while :; do
-  why=""; rc=0; other=0; agent=0
+  why=""; rc=0; other=0; agent=0; own_left=""
   lo=" $(lockowners | paste -sd' ') "
   fd=" $("${S[@]}" find "$PROC"/[0-9]*/fd -lname "$DEVD/*" 2>/dev/null | sed -n 's#.*/\([0-9][0-9]*\)/fd/.*#\1#p' | sort -u | paste -sd' ') "
   for p in $(tr ' ' '\n' <<< "$fd $lo" | grep . | sort -u); do
     c=$(cat "$PROC/$p/comm" 2>/dev/null); case $c in tt-telemetry*|tt_telemetry*) continue ;; esac; ours "$p" && continue   # tt-telemetry.service runs /usr/bin/tt_telemetry_server (comm tt_telemetry_se)
-    if agentp "$p" "$c"; then agent=1; else other=1; fi
     h=""; [[ $fd == *" $p "* ]] && h="holds $DEVD"; [[ $lo == *" $p "* ]] && h="${h:+$h, }owns a $SHM CHIP_IN_USE lock"
+    if mine "$p"; then own_left="$own_left; pid $p ($c, this run's own job, still open after ${OW}s) $h"; continue; fi
+    [ -e "$PROC/$p" ] || continue   # gone since the scan: it holds nothing now
+    if agentp "$p" "$c"; then agent=1; else other=1; fi
     why="$why; pid $p ($c, $(ps -o user= -p "$p" 2>/dev/null | tr -d ' ')) $h"; rc=10
   done
+  if [ -n "$own_left" ]; then   # this run's own job still closing: wait for it alone, else it counts as busy
+    [ $other = 0 ] && [ $agent = 0 ] && [ $((SECONDS - t0)) -lt "$OW" ] && { sleep 1; continue; }
+    why="$why$own_left"; rc=10; other=1
+  fi
   [ $rc = 10 ] && [ $other = 0 ] && [ $agent = 1 ] || break
   if [ $((SECONDS - t0)) -ge "$AW" ]; then warn="WARNING: only tt-fabric-manager-agent held $DEVD (waited ${AW}s); going ahead"; why=""; rc=0; break; fi
   sleep "$AI"
