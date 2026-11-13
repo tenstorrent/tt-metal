@@ -33,9 +33,12 @@ env:
   KERNEL_PATHS: >-
     tt_metal/tt-llk/tt_llk_wormhole_b0 tt_metal/tt-llk/common tt_metal/tt-llk/tools
     tt_metal/tt-llk/tests :!tt_metal/tt-llk/tests/python_tests/quasar
-    :!tt_metal/tt-llk/tests/python_tests/fuser/quasar :!tt_metal/tt-llk/tests/sources/quasar
-    tt_metal/hw/inc tt_metal/hw/ckernels/wormhole_b0 tt_metal/hostdevcommon/api
-    ttnn/cpp/ttnn/operations/experimental tt_metal/sfpi-version
+    :!tt_metal/tt-llk/tests/python_tests/fuser/quasar :!tt_metal/tt-llk/tests/python_tests/fuser/tests/quasar
+    :!tt_metal/tt-llk/tests/sources/quasar
+    tt_metal/hw/inc :!tt_metal/hw/inc/internal/tt-2xx/quasar
+    tt_metal/hw/ckernels/wormhole_b0 tt_metal/hostdevcommon/api
+    ttnn/cpp/ttnn/operations/experimental :!ttnn/cpp/ttnn/operations/experimental/quasar
+    tt_metal/sfpi-version
   # The check itself: a change here runs every cell.
   CHECK_PATHS: .github/workflows/llk-sfpu-ulp-pr-check.yaml tests/pipeline_reorg/llk_sfpu_ulp_pr_gate_tests.yaml
 
