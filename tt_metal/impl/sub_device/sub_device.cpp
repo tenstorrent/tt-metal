@@ -4,7 +4,7 @@
 
 #include <tt_stl/fmt.hpp>
 #include <tt_stl/assert.hpp>
-#include <core_coord.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include <sub_device.hpp>
 #include <tt_stl/span.hpp>
 #include <algorithm>
@@ -12,7 +12,7 @@
 #include <cstdint>
 #include <utility>
 
-#include "hal_types.hpp"
+#include <tt-metalium/hal_types.hpp>
 #include "llrt/hal_types.hpp"
 #include "impl/sub_device/sub_device_impl.hpp"
 

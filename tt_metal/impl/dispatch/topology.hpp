@@ -11,7 +11,7 @@
 #include <unordered_set>
 #include <vector>
 
-#include "core_coord.hpp"
+#include <tt-metalium/core_coord.hpp>
 #include "device/device_impl.hpp"
 #include "tt-metalium/program.hpp"
 #include "tt_metal/impl/dispatch/kernel_config/fd_kernel.hpp"

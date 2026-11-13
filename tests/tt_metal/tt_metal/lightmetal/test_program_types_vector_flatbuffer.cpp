@@ -8,7 +8,7 @@
 #include <vector>
 
 #include <flatbuffers/flatbuffers.h>
-#include <core_coord.hpp>
+#include <tt-metalium/core_coord.hpp>
 
 #include "flatbuffer/program_types_to_flatbuffer.hpp"
 #include "flatbuffer/program_types_from_flatbuffer.hpp"

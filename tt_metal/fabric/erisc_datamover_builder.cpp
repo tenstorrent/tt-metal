@@ -38,7 +38,7 @@
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/llrt/hal.hpp"
 
-#include "core_coord.hpp"
+#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-umd/types/core_coordinates.hpp>

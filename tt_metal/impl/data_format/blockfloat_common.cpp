@@ -16,12 +16,12 @@
 #include "bfp_tile_encode.hpp"
 #include "common/executor.hpp"
 #include "constants.hpp"
-#include "hal_types.hpp"
+#include <tt-metalium/hal_types.hpp>
 #include "impl/context/metal_context.hpp"
 #include "math.hpp"
 #include "tile.hpp"
 #include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
-#include "tt_backend_api_types.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
 
 namespace {
 

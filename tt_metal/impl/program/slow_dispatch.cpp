@@ -15,9 +15,9 @@
 #include <tt_stl/fmt.hpp>
 
 #include "circular_buffer_constants.h"
-#include "core_coord.hpp"
+#include <tt-metalium/core_coord.hpp>
 #include "device.hpp"
-#include "hal_types.hpp"
+#include <tt-metalium/hal_types.hpp>
 #include "hostdev/remote_dfb_constants.h"
 #include "impl/buffers/circular_buffer.hpp"
 #include "impl/context/metal_context.hpp"

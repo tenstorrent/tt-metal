@@ -14,7 +14,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
-#include "hal_types.hpp"
+#include <tt-metalium/hal_types.hpp>
 #include "jit_build/build.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include <tt-umd/types/arch.hpp>

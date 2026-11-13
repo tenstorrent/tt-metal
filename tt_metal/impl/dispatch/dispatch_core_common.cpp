@@ -5,7 +5,6 @@
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include <tt_stl/assert.hpp>
 #include <tt_stl/reflection.hpp>
-#include "dispatch_core_common.hpp"
 #include <tt-umd/types/arch.hpp>
 #include <tt-umd/types/core_coordinates.hpp>
 

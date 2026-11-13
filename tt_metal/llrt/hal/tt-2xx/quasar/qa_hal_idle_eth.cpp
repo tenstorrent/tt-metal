@@ -16,7 +16,7 @@ using namespace tt::tt_metal::quasar::idle_eth;
 #include "quasar/qa_hal.hpp"
 #include "quasar/qa_hal_eth_asserts.hpp"
 #include "dev_mem_map.h"
-#include "hal_types.hpp"
+#include "llrt/hal_types.hpp"
 #include "llrt/hal.hpp"
 #include "noc/noc_parameters.h"
 #include <tt-umd/types/core_coordinates.hpp>

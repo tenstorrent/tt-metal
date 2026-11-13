@@ -21,7 +21,7 @@
 #include "buffer.hpp"
 #include "buffer_types.hpp"
 #include "device.hpp"
-#include "hal_types.hpp"
+#include <tt-metalium/hal_types.hpp>
 #include "math.hpp"
 #include "mesh_buffer.hpp"
 #include "mesh_device.hpp"

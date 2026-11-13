@@ -4,7 +4,7 @@
 
 #include "gtest/gtest.h"
 #include "command_queue_fixture.hpp"
-#include "hal_types.hpp"
+#include <tt-metalium/hal_types.hpp>
 #include "llrt.hpp"
 #include "dispatch_test_utils.hpp"
 #include "tests/tt_metal/tt_metal/common/host_transfer_stats_scope.hpp"

@@ -26,7 +26,7 @@
 #include "hostdevcommon/dprint_common.h"
 #include "hostdevcommon/kernel_structs.h"
 #include "hostdev/device_print_structures.h"
-#include "tt_backend_api_types.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
 
 #include "elf_file.hpp"
 #include "dwarf_die.hpp"

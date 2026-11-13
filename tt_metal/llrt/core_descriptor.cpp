@@ -16,7 +16,7 @@
 
 #include <tt_stl/assert.hpp>
 #include "common/core_coord.hpp"
-#include "hal.hpp"
+#include "llrt/hal.hpp"
 #include "llrt/metal_soc_descriptor.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/dispatch/dispatch_core_common.hpp"

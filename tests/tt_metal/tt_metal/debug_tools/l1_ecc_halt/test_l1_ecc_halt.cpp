@@ -25,7 +25,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 
-#include "hal_types.hpp"
+#include <tt-metalium/hal_types.hpp>
 #include "hostdev/l1_ecc_halt_constants.h"
 #include "impl/context/metal_context.hpp"
 #include <internal/l1_ecc_halt.hpp>

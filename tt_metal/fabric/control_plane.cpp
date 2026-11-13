@@ -28,14 +28,14 @@
 #include <tt_stl/assert.hpp>
 
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
-#include "core_coord.hpp"
+#include <tt-metalium/core_coord.hpp>
 #include "tools/scaleout/factory_system_descriptor/utils.hpp"
 #include "hostdevcommon/fabric_common.h"
 #include "fabric_host_utils.hpp"
 #include "tt_metal/llrt/hal/generated/fabric_telemetry.hpp"
 #include "distributed_context.hpp"
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
-#include "hal_types.hpp"
+#include <tt-metalium/hal_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "mesh_coord.hpp"
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>

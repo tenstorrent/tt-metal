@@ -12,7 +12,7 @@ using namespace tt::tt_metal::wormhole::active_eth;
 
 #include "eth_l1_address_map.h"
 #include "eth_fw_api.h"
-#include "hal_types.hpp"
+#include "llrt/hal_types.hpp"
 #include "llrt/hal.hpp"
 #include <tt-umd/types/core_coordinates.hpp>
 #include "wormhole/wh_hal.hpp"

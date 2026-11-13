@@ -17,7 +17,7 @@ using namespace tt::tt_metal::blackhole::active_eth;
 #include "blackhole/bh_hal_eth_asserts.hpp"
 #include "dev_mem_map.h"
 #include "eth_fw_api.h"
-#include "hal_types.hpp"
+#include "llrt/hal_types.hpp"
 #include "tensix.h"
 #include "llrt/hal.hpp"
 #include <tt-umd/types/core_coordinates.hpp>

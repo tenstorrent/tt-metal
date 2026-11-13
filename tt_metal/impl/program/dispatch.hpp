@@ -15,7 +15,7 @@
 #include <utility>
 #include <vector>
 
-#include "core_coord.hpp"
+#include <tt-metalium/core_coord.hpp>
 #include "dispatch/dispatch_settings.hpp"
 #include "kernel_types.hpp"
 #include "program_impl.hpp"

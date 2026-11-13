@@ -39,7 +39,7 @@
 #include "host_api.hpp"
 #include "mesh_config.hpp"
 #include "mesh_trace.hpp"
-#include "profiler_types.hpp"
+#include <tt-metalium/profiler_types.hpp>
 #include <experimental/fabric/routing_table_generator.hpp>
 #include "shape_base.hpp"
 #include <tt_stl/cleanup.hpp>

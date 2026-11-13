@@ -15,7 +15,7 @@
 #include <utility>
 #include <vector>
 
-#include "core_coord.hpp"
+#include <tt-metalium/core_coord.hpp>
 #include "llrt/hal.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include <tt_stl/strong_type.hpp>

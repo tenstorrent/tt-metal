@@ -12,7 +12,7 @@
 
 #include <tt_stl/assert.hpp>
 #include "allocator/allocator.hpp"
-#include "core_coord.hpp"
+#include <tt-metalium/core_coord.hpp>
 #include "device.hpp"
 #include "device/device_manager.hpp"
 #include "impl/context/metal_context.hpp"
@@ -22,7 +22,7 @@
 #include "dispatch/dispatch_settings.hpp"
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include "impl/dispatch/dispatch_core_manager.hpp"
-#include "hal_types.hpp"
+#include <tt-metalium/hal_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "sub_device_types.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"

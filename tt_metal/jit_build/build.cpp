@@ -42,7 +42,7 @@
 #include "common/executor.hpp"
 #include "common/stable_hash.hpp"
 #include "env_lib.hpp"
-#include "hal_types.hpp"
+#include <tt-metalium/hal_types.hpp>
 #include "llrt/hal.hpp"
 #include "hostdev/profiler_common.h"
 #include "llrt/rtoptions.hpp"

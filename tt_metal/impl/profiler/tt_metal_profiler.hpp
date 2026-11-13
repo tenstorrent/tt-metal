@@ -9,7 +9,7 @@
 
 #include <tt-metalium/tt_metal_profiler.hpp>
 
-#include "profiler_types.hpp"
+#include "impl/profiler/profiler_types.hpp"
 
 namespace tt::tt_metal {
 class IDevice;

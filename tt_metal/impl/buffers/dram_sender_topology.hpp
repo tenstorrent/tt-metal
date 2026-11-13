@@ -17,7 +17,7 @@
 #include <utility>
 #include <vector>
 
-#include <core_coord.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device_types.hpp>
 #include <tt-metalium/hal_types.hpp>
 
