@@ -37,15 +37,18 @@ from helpers.test_variant_parameters import TILE_COUNT, TemplateParameter
 
 @dataclass
 class MXFP4_DECODER(TemplateParameter):
-    """sfpi: the six-instruction sfpi loop. macro: the SFPLOADMACRO decoder (silicon only; ttsim lacks it)."""
+    """The ckernel_sfpu_mxfp4_decode.h decoder: sfpi (the six-instruction sfpi loop), macro (3-issue
+    SFPLOADMACRO), macro2 (2-load SFPLOADMACRO) or macro2_replay (macro2 from the replay buffer, as the
+    Blaze K3 decode runs it). The SFPLOADMACRO ones are silicon only; ttsim lacks the instruction.
+    """
 
     decoder: str = "sfpi"
 
     def convert_to_cpp(self) -> str:
-        return {
-            "macro": "#define MXFP4_DECODER_MACRO",
-            "macro2": "#define MXFP4_DECODER_MACRO2",
-        }.get(self.decoder, "")
+        return f"#define MXFP4_DECODER {DECODERS.index(self.decoder)}"
+
+
+DECODERS = ["sfpi", "macro", "macro2", "macro2_replay"]
 
 
 ON_SIMULATOR = bool(os.environ.get("TT_METAL_SIMULATOR")) and not os.environ.get(
@@ -118,7 +121,7 @@ FORMATS = [InputOutputFormat(DataFormat.Bfp4_b, DataFormat.Float16_b)]
     formats=FORMATS,
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     variant=["packed", "direct", "direct_raw"],
-    decoder=["sfpi", "macro", "macro2"],
+    decoder=DECODERS,
 )
 def test_mxfp4_carry_decode(formats, dest_acc, variant, decoder):
     if decoder.startswith("macro") and ON_SIMULATOR:

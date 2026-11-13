@@ -2,7 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// MXFP8 (E4M3 or E5M2) stored as remapped bfloat8_b, restored by an SFPU bit decode.
+// MXFP8 (E4M3 or E5M2) stored as remapped bfloat8_b, restored by an SFPU bit decode (mxfp8_decode_tile in
+// tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_mxfp8_decode.h).
 //
 // Unpack A (Bfp8_b) -> datacopy to Dest -> SFPU on Pack -> pack Float16_b.
 // The unpacker normalizes the 7-bit magnitude m: the FP32 image is 2^(q+k) * (1 + w/64), w = mantissa bits
@@ -87,48 +88,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_pack_common.h"
 #include "sfpi.h"
 
+#include "ckernel_sfpu_mxfp8_decode.h"
+
 namespace
 {
-#ifndef MXFP8_E5M2
-// E4M3: b = bits 19..17 (3 bits), g(b) in 0..11 read from a nibble table with a register shift.
-// Per vector: load, shft (s = U >> 15: low 5 bits = 4b), shft by register (LUT << s), shft (>> 28),
-// shft (<< 23), and (clear b), iadd, store.
-inline void mxfp8_decode_tile()
-{
-    const sfpi::vUInt lut  = 0x013478ABu; // nibble b at bits 31-4b..28-4b: g = 0, 1, 3, 4, 7, 8, 10, 11
-    const sfpi::vUInt keep = 0xFFF1FFFFu; // ~(7 << 17)
-#pragma GCC unroll 8
-    for (int d = 0; d < 32; d++)
-    {
-        sfpi::vUInt u = sfpi::as<sfpi::vUInt>(sfpi::vFloat(sfpi::dst_reg[0]));
-        sfpi::vUInt s = u >> 15;
-        sfpi::vUInt g = lut << s;
-        g             = (g >> 28) << 23;
-        u             = (u & keep) + g;
-        sfpi::dst_reg[0] = sfpi::as<sfpi::vFloat>(u);
-        sfpi::dst_reg++;
-    }
-}
+#ifdef MXFP8_E5M2
+constexpr bool kE5M2 = true;
 #else
-// E5M2: b = bits 20..17 (4 bits). out = U + 127 * t - (popcount(b) << 23), t = U & (15 << 17), popcount from
-// a 2-bit table (popcount(15) wraps to 0, but b = 15 only occurs on the inf/NaN slots the host never writes).
-inline void mxfp8_decode_tile()
-{
-    const sfpi::vUInt lut = 0x166B6BBCu; // 2-bit entry b at bits 31-2b..30-2b: popcount(b) & 3
-    const sfpi::vUInt mb  = 0x001E0000u;
-#pragma GCC unroll 8
-    for (int d = 0; d < 32; d++)
-    {
-        sfpi::vUInt u = sfpi::as<sfpi::vUInt>(sfpi::vFloat(sfpi::dst_reg[0]));
-        sfpi::vUInt t = u & mb;
-        sfpi::vUInt s = u >> 16;
-        sfpi::vUInt p = lut << s;
-        p             = (p >> 30) << 23;
-        u             = u + (t << 7) - t - p;
-        sfpi::dst_reg[0] = sfpi::as<sfpi::vFloat>(u);
-        sfpi::dst_reg++;
-    }
-}
+constexpr bool kE5M2 = false;
 #endif
 } // namespace
 
@@ -156,7 +123,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         const std::uint64_t e1 = ckernel::read_wall_clock();
         ckernel::tensix_sync();
         const std::uint64_t t0 = ckernel::read_wall_clock();
-        mxfp8_decode_tile();
+        ckernel::sfpu::mxfp8_decode_tile<kE5M2>();
         ckernel::tensix_sync();
         const std::uint64_t t1 = ckernel::read_wall_clock();
         decode_cycles += t1 - t0;
