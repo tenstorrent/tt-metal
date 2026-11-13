@@ -963,7 +963,7 @@ ALWI void matmul_block_fe(
 #ifdef ARCH_BLACKHOLE
 // the cb ids, ct and rt of a plain call where they are constant expressions (pk-state's front-end dispatch); a call
 // with template arguments is not a macro call
-#define MATMUL_FE_C(x) (__builtin_constant_p(x) ? ::ckernel::matmul_fe_cb(x) : 0xFFu)
+#define MATMUL_FE_C(x) (__builtin_constant_p(::ckernel::matmul_fe_cb(x)) ? ::ckernel::matmul_fe_cb(x) : 0xFFu)
 #define MATMUL_FE_NARG(...) MATMUL_FE_NARG_(__VA_ARGS__, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0)
 #define MATMUL_FE_NARG_(_1, _2, _3, _4, _5, _6, _7, _8, _9, _10, N, ...) N
 #define MATMUL_FE_CAT(a, b) MATMUL_FE_CAT_(a, b)
