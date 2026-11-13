@@ -184,8 +184,8 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
         StateVal<Operand<Exu::Pack>::PartialFace>(false),
         StateDiscard<std::uint32_t>(get_local_cb_interface(output_id).fifo_page_size)));
     LLK_ASSERT_FP32_DEST_ACC_EN_MATCHES(is_fp32_dest_acc_en);
-    constexpr std::uint32_t skip =
-        ckernel::packer::llk_pack_reconfig_skip<is_fp32_dest_acc_en, DST_SYNC_MODE>(pack_src_format, pack_dst_format);
+    constexpr std::uint32_t skip = ckernel::packer::llk_pack_reconfig_skip_all<is_fp32_dest_acc_en, DST_SYNC_MODE>(
+        pack_src_format, pack_dst_format, pack_tile_num_faces, pack_partial_face);
     _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en, skip>(
         pack_src_format[output_id],
         pack_dst_format[output_id],

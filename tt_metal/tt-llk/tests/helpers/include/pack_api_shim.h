@@ -264,7 +264,8 @@ inline void pack_reconfig_data_format(const std::uint32_t new_output)
     const std::uint32_t num_faces  = get_output_num_faces(output_id);
     LLK_ASSERT_FP32_DEST_ACC_EN_MATCHES(is_fp32_dest_acc_en);
 #if PACK_API_SHIM_PR
-    constexpr std::uint32_t skip = ckernel::packer::llk_pack_reconfig_skip<is_fp32_dest_acc_en, DST_SYNC_MODE>(pack_src_format, pack_dst_format);
+    constexpr std::uint32_t skip = ckernel::packer::llk_pack_reconfig_skip_all<is_fp32_dest_acc_en, DST_SYNC_MODE>(
+        pack_src_format, pack_dst_format, pack_tile_num_faces, pack_partial_face);
     _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en, skip>(
 #else
     _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en>(

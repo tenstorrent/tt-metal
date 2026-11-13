@@ -590,6 +590,8 @@ constexpr std::uint32_t LLK_PACK_RECONFIG_SKIP_PAC_LF8       = 2;
 constexpr std::uint32_t LLK_PACK_RECONFIG_SKIP_EXP_THRESHOLD = 4;
 constexpr std::uint32_t LLK_PACK_RECONFIG_SKIP_DSTACC        = 8;
 constexpr std::uint32_t LLK_PACK_RECONFIG_SKIP_STRIDES       = 16;
+// Every write, the drain included: the reconfigure is a no-op (llk_pack_reconfig_skip_all).
+constexpr std::uint32_t LLK_PACK_RECONFIG_SKIP_ALL = 32;
 // A header with stride writes of its own (other pack programs, custom matmul and SDPA packs) specializes its tag, so the
 // reconfigure keeps its stride write in that kernel.
 template <int tag>
@@ -672,6 +674,55 @@ constexpr std::uint32_t llk_pack_reconfig_skip(const unsigned char (&pack_src_fo
         skip &= ~LLK_PACK_RECONFIG_SKIP_STRIDES;
     }
     return skip;
+}
+
+// The whole reconfigure, its drain included, where every pack output has one format pair and face count and no partial
+// face: hw_configure wrote the same values and the other writers of those fields are other programs, which the stride
+// writers already exclude. Fast tilize writes a Float16_b input; the tile header register has no reader on Blackhole.
+template <bool is_fp32_dest_acc_en, DstSync sync, std::size_t n>
+constexpr std::uint32_t llk_pack_reconfig_skip_all(
+    const unsigned char (&pack_src_format)[n],
+    const unsigned char (&pack_dst_format)[n],
+    const std::uint8_t (&pack_tile_num_faces)[n],
+    const std::uint8_t (&pack_partial_face)[n])
+{
+    constexpr std::uint32_t every =
+        LLK_PACK_RECONFIG_SKIP_PAC_LF8 | LLK_PACK_RECONFIG_SKIP_EXP_THRESHOLD | LLK_PACK_RECONFIG_SKIP_DSTACC | LLK_PACK_RECONFIG_SKIP_STRIDES;
+    const std::uint32_t skip = llk_pack_reconfig_skip<is_fp32_dest_acc_en, sync>(pack_src_format, pack_dst_format);
+    if (skip != every || pack_fast_tilize_linked<sync>)
+    {
+        return skip;
+    }
+    bool any                 = false;
+    std::uint32_t src0       = 0;
+    std::uint32_t dst0       = 0;
+    std::uint32_t num_faces0 = 0;
+    for (std::size_t i = 0; i < n; i++)
+    {
+        const std::uint32_t src = pack_src_format[i];
+        const std::uint32_t dst = pack_dst_format[i];
+        if (src == to_underlying(DataFormat::Invalid) || dst == to_underlying(DataFormat::Invalid))
+        {
+            continue;
+        }
+        if (pack_partial_face[i] != 0)
+        {
+            return skip;
+        }
+        if (!any)
+        {
+            any        = true;
+            src0       = src;
+            dst0       = dst;
+            num_faces0 = pack_tile_num_faces[i];
+            continue;
+        }
+        if (src != src0 || dst != dst0 || pack_tile_num_faces[i] != num_faces0)
+        {
+            return skip;
+        }
+    }
+    return any ? (skip | LLK_PACK_RECONFIG_SKIP_ALL) : skip;
 }
 
 template <bool is_fp32_dest_acc_en>
