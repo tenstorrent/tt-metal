@@ -14,7 +14,6 @@
 // distributed_unit_tests does both.
 
 #include <mpi.h>
-#include <signal.h>
 #include <spawn.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -22,6 +21,7 @@
 #include <array>
 #include <cerrno>
 #include <chrono>
+#include <csignal>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -39,8 +39,6 @@
 #include <tt-metalium/mesh_device.hpp>
 
 #include "tt_metal/distributed/host_h2h_socket.hpp"
-
-extern char** environ;
 
 namespace tt::tt_metal::distributed {
 namespace {
@@ -183,12 +181,14 @@ protected:
         const std::vector<std::string>& extra_env = {}) const {
         std::vector<std::string> env = child_environment(extra_env);
         std::vector<char*> envp;
+        envp.reserve(env.size() + 1);
         for (auto& var : env) {
             envp.push_back(var.data());
         }
         envp.push_back(nullptr);
         std::vector<std::string> argv_storage = args;
         std::vector<char*> argv;
+        argv.reserve(argv_storage.size() + 1);
         for (auto& arg : argv_storage) {
             argv.push_back(arg.data());
         }
