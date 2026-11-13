@@ -42,6 +42,12 @@ void kernel_main() {
     constexpr uint32_t sem_local_loaded_id = get_compile_time_arg_val(11);
     constexpr uint32_t rows_per_group = get_compile_time_arg_val(12);   // 0: round-robin rows (see Geom::place)
     constexpr bool own_from_input = get_compile_time_arg_val(13) != 0;  // native HEIGHT: own slice in the input shard
+    // Perf 1 (pre-send critical path): own items xb < dram_items are read straight from the input tensor, so the first
+    // packets do not wait for the members' own-slice load (member launch skew ~1.1 us); the later own items come from
+    // the members' landing slots after sem_local_loaded, as before. 2 = the port CB's two batches (every item is
+    // >= item_min_chunks chunks). Native HEIGHT reads the own slice in place from its resident shard: nothing to wait.
+    constexpr uint32_t dram_items = own_from_input ? 0 : get_compile_time_arg_val(14);
+    constexpr auto x_args = TensorAccessorArgs<15>();
     constexpr uint32_t chunk_bytes = run_pages * page_bytes;
     constexpr uint32_t cb = agrms_cb::cb_port_chunks;
 
@@ -166,19 +172,54 @@ void kernel_main() {
             from_input);
     };
 
+    // own item from the input tensor (same chunks, same order as the sender's walk over the landing slots)
+    const auto x_acc = TensorAccessor(x_args, x_addr, page_bytes);
+    auto stream_item_input = [&](const Entry& e, uint32_t xb) {
+        for_each_chunk_of_item_src(g, e, xb, [&](uint32_t r, uint32_t col, uint32_t bytes, bool last) {
+            if (batch == 0) {
+                need = group - pos % group;
+                cb_reserve_back(cb, run_pages * need);
+                wptr = get_write_ptr(cb);
+            }
+            uint32_t dst = wptr + batch * chunk_bytes;
+            const uint32_t page0 = r * Wt_lp + col;
+            for (uint32_t b = 0; b < bytes; b += page_bytes, dst += page_bytes) {
+#ifndef AGRMS_ABLATE_NOREAD
+                noc_async_read(x_acc.get_noc_addr(page0 + b / page_bytes), dst, page_bytes);
+#endif
+            }
+            if (++batch == need || last) {
+                noc_async_read_barrier();
+                cb_push_back(cb, run_pages * batch);
+                pos += batch;
+                batch = 0;
+            }
+        });
+    };
+
     if (has_out) {
         // the own slice is in the members' landing slots once every local member has loaded it
-        {
-            AGRMS_ZONE("AG_LOCAL_WAIT");
-            noc_semaphore_wait_min(
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_local_loaded_id)),
-                local_loaded_expected);
-        }
+        bool local_ready = false;
+        auto await_local = [&]() {
+            if (!local_ready) {
+                AGRMS_ZONE("AG_LOCAL_WAIT");
+                noc_semaphore_wait_min(
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_local_loaded_id)),
+                    local_loaded_expected);
+                local_ready = true;
+            }
+        };
         const uint32_t steps = n_xb + (E_out - 1) * relay_lag;
         const Entry own = out_entry(0);
         for (uint32_t t = 0; t < steps; ++t) {
             if (t < n_xb && !own.empty()) {
-                stream_item(own, t, own_from_input);
+                if (t < dram_items) {
+                    AGRMS_ZONE("AG_INPUT_ITEM");
+                    stream_item_input(own, t);
+                } else {
+                    await_local();
+                    stream_item(own, t, own_from_input);
+                }
             }
             if (has_in && t >= relay_lag) {
                 const int32_t s = static_cast<int32_t>(t - relay_lag);
@@ -201,7 +242,11 @@ void kernel_main() {
         }
     }
     if (has_in) {
-        noc_semaphore_wait_min(arrived, total_in);
+        {
+            AGRMS_ZONE("AG_FINAL_ARRIVAL");  // the last relayed items from upstream (wait only)
+            noc_semaphore_wait_min(arrived, total_in);
+        }
+        AGRMS_ZONE("AG_FINAL_NOTIFY");
         notify_until(0x7FFFFFFF);
     }
     noc_async_atomic_barrier();

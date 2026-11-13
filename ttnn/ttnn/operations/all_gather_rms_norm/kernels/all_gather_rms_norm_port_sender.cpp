@@ -10,7 +10,10 @@
 //
 // Raw fabric API (documented helper bypass, op_design.md -> Helpers considered and rejected): kernel_lib's
 // ccl::FabricStream arms a fixed payload size and its signal() closes the connection; chunks here vary in size and
-// the ready goes out on the same open connection that then carries the data.
+// the ready goes out on the same open connection that then carries the data. Perf 1 (measured, keep): the ready is
+// sent after routing header 0 only; the chunk count and the header ring (byte copies of header 0) are built in the
+// shadow of the peer's ready. FabricStream routes its headers before it can signal: focus case 23.81 -> 22.83 us
+// together with the port reader's input-direct first items (changelog Perf 1).
 
 #include <cstdint>
 
@@ -96,31 +99,61 @@ void kernel_main() {
         return unpack_entry(get_arg_val<uint32_t>(out_idx + e), get_arg_val<uint32_t>(segidx_idx + e), segs_idx);
     };
 
-    uint32_t chunks_left = 0;
-    for (uint32_t e = 0; e < E_out; ++e) {
-        const Entry en = out_entry(e);
-        chunks_left += en.rows_in(0, R_t) * g.chunks_per_row(en);
-    }
-
+    // Pre-send critical path (Perf 1): everything in the call is shifted by when the first packet leaves, so the
+    // ready goes out as early as possible. Header 0 alone is routed before the fence (a 2D fabric_set_unicast_route
+    // costs ~0.36 us); the chunk count and the rest of the header ring are built while the peer's ready is in flight.
+    // Every header of the ring goes to the same one-hop destination, so headers 1.. are byte copies of the routed
+    // header 0 (its command fields are rewritten for every packet). Routing each header measured 1.46 us of setup
+    // in front of the fence.
     auto conn = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(a);  // appended last
     volatile tt_l1_ptr PACKET_HEADER_TYPE* hdrs[num_headers];
-    for (uint32_t h = 0; h < num_headers; ++h) {
-        hdrs[h] = PacketHeaderPool::allocate_header();
-        route_one_hop(hdrs[h], dst_chip_id, dst_mesh_id);
-    }
     {
-        AGRMS_ZONE("AG_FENCE");  // open + ready out + own ready in
-        conn.open();
+        AGRMS_ZONE("AG_SETUP_HDR0");
+        hdrs[0] = PacketHeaderPool::allocate_header();
+        route_one_hop(hdrs[0], dst_chip_id, dst_mesh_id);
+    }
+    uint32_t chunks_left = 0;
+    {
+        AGRMS_ZONE("AG_FENCE");  // open + ready out + (count, header ring) + own ready in
+        {
+            AGRMS_ZONE("AG_OPEN");
+            conn.open();
+        }
         // Fence between calls: this program running here means every earlier command on this chip is done, so the
         // peer may now write into my members' L1: say so. Then send nothing until the peer has said the same.
         if (send_ready) {
+            AGRMS_ZONE("AG_READY_OUT");
             hdrs[0]->to_noc_unicast_atomic_inc(
                 NocUnicastAtomicIncCommandHeader{get_noc_addr(ready_x, ready_y, ready_addr), 1, true});
             conn.wait_for_empty_write_slot();
             conn.send_payload_flush_blocking_from_address(
                 reinterpret_cast<uint32_t>(hdrs[0]), sizeof(PACKET_HEADER_TYPE));
         }
+        {
+            AGRMS_ZONE("AG_SETUP_REST");  // in the shadow of the peer's ready: chunk count + header ring copies
+            for (uint32_t e = 0; e < E_out; ++e) {
+                const Entry en = out_entry(e);
+                chunks_left += en.rows_in(0, R_t) * g.chunks_per_row(en);
+            }
+            constexpr uint32_t n_words = sizeof(PACKET_HEADER_TYPE) / sizeof(uint32_t);
+            const tt_l1_ptr uint32_t* s0 =
+                reinterpret_cast<const tt_l1_ptr uint32_t*>(const_cast<PACKET_HEADER_TYPE*>(hdrs[0]));
+            uint32_t words[n_words];
+#pragma GCC unroll 64
+            for (uint32_t i = 0; i < n_words; ++i) {
+                words[i] = s0[i];
+            }
+            for (uint32_t h = 1; h < num_headers; ++h) {
+                hdrs[h] = PacketHeaderPool::allocate_header();
+                tt_l1_ptr uint32_t* d = reinterpret_cast<tt_l1_ptr uint32_t*>(const_cast<PACKET_HEADER_TYPE*>(hdrs[h]));
+#pragma GCC unroll 64
+                for (uint32_t i = 0; i < n_words; ++i) {
+                    d[i] = words[i];
+                }
+            }
+        }
         if (chunks_left > 0) {
+            AGRMS_ZONE("AG_READY_WAIT");
             volatile tt_l1_ptr uint32_t* ready = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ready_addr);
             noc_semaphore_wait_min(ready, 1);
             noc_semaphore_inc(get_noc_addr(ready_addr), 0u - 1u);
@@ -154,6 +187,7 @@ void kernel_main() {
                 }
             });
         };
+        AGRMS_ZONE("AG_SEND");  // every packet of the call (own + relayed items)
         const uint32_t steps = n_xb + (E_out - 1) * relay_lag;
         const Entry own = out_entry(0);
         for (uint32_t t = 0; t < steps; ++t) {
@@ -174,6 +208,7 @@ void kernel_main() {
             }
         }
     }
+    AGRMS_ZONE("AG_CLOSE");
     conn.close();
     noc_async_write_barrier();
     noc_async_atomic_barrier();

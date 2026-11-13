@@ -160,4 +160,40 @@ FORCE_INLINE void for_each_chunk_of_item(const Geom& g, const Entry& e, uint32_t
     }
 }
 
+// The same chunk walk as for_each_chunk_of_item (same order, same chunk sizes, so the sender's walk over the landing
+// addresses pairs with it chunk for chunk), reporting each chunk's source in the INPUT tensor instead:
+// f(tile_row r, slice column of the chunk's first tile, bytes, is_last_chunk). An entry's segments tile its column
+// range [c0, c1) contiguously in member order, so segment s starts at c0 + sum(len of segments < s).
+template <typename F>
+FORCE_INLINE void for_each_chunk_of_item_src(const Geom& g, const Entry& e, uint32_t xb, F&& f) {
+    const uint32_t r0 = xb * g.xfer_rows;
+    const uint32_t rows = g.item_rows(xb);
+    if (e.nseg == 0 || e.rows_in(r0, rows) == 0) {
+        return;
+    }
+    uint32_t r_last = r0 + rows - 1;
+    if (!e.has_row(r_last)) {
+        --r_last;
+    }
+    uint32_t col0 = e.c0;
+    for (uint32_t s = 0; s < e.nseg; ++s) {
+        const uint32_t len = get_arg_val<uint32_t>(e.seg + s) & 0xFFF;
+        const uint32_t nch = g.chunks_of(len);
+        const uint32_t base_n = len / nch, rem = len - base_n * nch;
+        const bool last_seg = s + 1 == e.nseg;
+        for (uint32_t r = r0; r < r0 + rows; ++r) {
+            if (e.has_row(r)) {
+                const bool last_row = last_seg && r == r_last;
+                uint32_t col = col0;
+                for (uint32_t c = 0; c < nch; ++c) {
+                    const uint32_t n = base_n + (c < rem ? 1 : 0);
+                    f(r, col, n * g.page_bytes, last_row && c + 1 == nch);
+                    col += n;
+                }
+            }
+        }
+        col0 += len;
+    }
+}
+
 }  // namespace agrms_port

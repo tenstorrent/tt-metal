@@ -589,3 +589,14 @@ transpose_dest + finalize) straight into `cb_inv_rms`. Same k² messages, 1/16 o
 Knob `ROW_PARTIALS` (env `AGRMS_ROW_PARTIALS=0`: column form, A/B only). Group-rectangle multicast was not built: the
 harvested worker columns (virtual x {1–3}, {5–7}, {11–15} on this QB2) differ per chip, and the CB addresses require
 one logical core set on every chip, so a logical rectangle is not a valid multicast rectangle everywhere.
+
+### Perf 1 deviation — pre-send critical path
+- Port sender: route header 0 only → `conn.open()` → ready out → (chunk count + headers 1.. as byte copies of header 0,
+  in the shadow of the peer's ready) → wait own ready. The ready used to wait behind 1.46 µs of per-header routing.
+- Port reader: own items `xb < PORT_INPUT_ITEMS` (2, the port CB's two batches) are read from the input tensor
+  (`TensorAccessor`, CT 15+) with the same chunk walk (`for_each_chunk_of_item_src`). `sem_local_loaded` gates only
+  the first own item read from the members' landing slots. Native HEIGHT (`own_from_input`) keeps the in-place shard
+  read and uses no input items. The own slice is read from DRAM twice for those two items (once by the member, once
+  by the port: ~2 × 6 × 4 tiles per port). That costs less than waiting for the member launch skew.
+- Fabric multicast of the far slice (instead of relay) does not work on the QB2 ring mock: the snake turns a corner
+  every hop. See changelog Perf 1.

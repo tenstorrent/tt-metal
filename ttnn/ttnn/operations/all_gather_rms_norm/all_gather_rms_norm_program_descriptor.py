@@ -65,6 +65,11 @@ PORT_GROUP_CAP = 8  # chunks per port batch
 # the link's columns), so its packets carry the link's full run (6 tiles instead of 3 on the focus case). 0 = the
 # Phase 0 column split (A/B only).
 FAR_ROW_SPLIT = os.environ.get("AGRMS_FAR_ROW_SPLIT", "1") == "1"
+# Pre-send critical path (Perf 1): the port reader reads its first PORT_INPUT_ITEMS own items straight from the input
+# tensor (not from the members' landing slots), so the first packets do not wait for the members' own-slice load.
+# 2 = the port CB's two batches; measured 1 / 2 / 3 / all = 23.00 / 22.83 / 22.92 / 23.18 us on the focus case.
+# (env: perf probes; 0 = every own item from the landing slots, the pre-Perf-1 path)
+PORT_INPUT_ITEMS = int(os.environ.get("AGRMS_PORT_INPUT_ITEMS", "2"))
 RELAY_LAG = int(
     os.environ.get("AGRMS_RELAY_LAG", "2")
 )  # (env: perf probes) steps between a relay item's upstream send and its relay (>= 1)
@@ -983,6 +988,7 @@ def create_mesh_program_descriptor(
         ITEM_MIN_CHUNKS,
         FAR_ROW_SPLIT,
         PORT_CB_BYTES,
+        PORT_INPUT_ITEMS,
         tuple(input_tensor.shape),
         str(x_dtype),
         str(gamma.dtype) if has_gamma else None,
@@ -1139,6 +1145,7 @@ def create_mesh_program_descriptor(
                     args += [ready_addr, 0, 0, 0, 0, 0, 0, 0, 0]
                 psender_rt[x][y] = args
         reader_port_ct = port_ct + [SEM_ARRIVAL, SEM_LOCAL_LOADED, rows_per_group, 1 if native_h else 0]
+        reader_port_ct += [PORT_INPUT_ITEMS] + list(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
         sender_port_ct = port_ct + [SEM_ARRIVAL, rows_per_group]
         kernels += [
             ttnn.KernelDescriptor(

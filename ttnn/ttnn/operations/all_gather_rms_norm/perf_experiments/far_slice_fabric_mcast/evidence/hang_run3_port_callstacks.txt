@@ -1,0 +1,32 @@
+0 3-2 (2,0) brisc _port_sender_mcast noc_semaphore_wait_min () @dataflow_api.h 1988:19 | #1 kernel_main () @all_gather_rms_norm_port_sender_mcast.cpp 171:35
+0 3-2 (2,0) ncrisc _port_reader_mcast cb_pages_reservable_at_back () @dataflow_api.h 384:85 | #1 kernel_main::tag (19) @all_gather_rms_norm_port_reader_mcast.cpp 135:56 | #2 agrms_port::for_each_chunk_of_item<kernel_main()::<lambda(const agrms_port::Entry&, uint32_t, bool)>::<lambda(uint32_t, uint32_t, uint32_t, bool)> > () @all_gather_rms_norm_port_walk.hpp 154:22 | #3 kernel_main::tag (19) @all_gather_rms_norm_port_reader_mcast.cpp 128:31
+0 6-2 (4,0) brisc _port_sender_mcast noc_semaphore_wait_min () @dataflow_api.h 1988:19 | #1 kernel_main () @all_gather_rms_norm_port_sender_mcast.cpp 171:35
+0 6-2 (4,0) ncrisc _port_reader_mcast #0 0x0000DE7C in @all_gather_rms_norm_port_reader_mcast.cpp 90:92
+0 12-2 (7,0) brisc _port_sender_mcast noc_semaphore_wait_min () @dataflow_api.h 1988:19 | #1 kernel_main () @all_gather_rms_norm_port_sender_mcast.cpp 171:35
+0 12-2 (7,0) ncrisc _port_reader_mcast #0 0x0000DE40 in @all_gather_rms_norm_port_walk.hpp 108:73
+0 3-3 (2,1) brisc _port_sender_mcast noc_semaphore_wait_min () @dataflow_api.h 1988:19 | #1 kernel_main () @all_gather_rms_norm_port_sender_mcast.cpp 171:35
+0 3-3 (2,1) ncrisc _port_reader_mcast #0 0x0000DD44 in @all_gather_rms_norm_port_reader_mcast.cpp 121:16
+1 3-2 (2,0) brisc _port_sender_mcast noc_semaphore_wait_min () @dataflow_api.h 1988:30 | #1 kernel_main () @all_gather_rms_norm_port_sender_mcast.cpp 171:35
+1 3-2 (2,0) ncrisc _port_reader_mcast #0 0x0000DE44 in @all_gather_rms_norm_port_walk.hpp 109:9
+1 5-2 (4,0) brisc _port_sender_mcast noc_semaphore_wait_min () @dataflow_api.h 1988:30 | #1 kernel_main () @all_gather_rms_norm_port_sender_mcast.cpp 171:35
+1 5-2 (4,0) ncrisc _port_reader_mcast #0 0x0000DE8C in @all_gather_rms_norm_port_walk.hpp 38:9
+1 11-2 (7,0) brisc _port_sender_mcast noc_semaphore_wait_min () @dataflow_api.h 1988:19 | #1 kernel_main () @all_gather_rms_norm_port_sender_mcast.cpp 171:35
+1 11-2 (7,0) ncrisc _port_reader_mcast #0 0x0000DD3C in @all_gather_rms_norm_port_reader_mcast.cpp 121:24
+1 3-3 (2,1) brisc _port_sender_mcast noc_semaphore_wait_min () @dataflow_api.h 1988:19 | #1 kernel_main () @all_gather_rms_norm_port_sender_mcast.cpp 171:35
+1 3-3 (2,1) ncrisc _port_reader_mcast #0 0x0000DE44 in @all_gather_rms_norm_port_walk.hpp 109:9
+2 3-2 (2,0) brisc _port_sender_mcast noc_semaphore_wait_min () @dataflow_api.h 1988:19 | #1 kernel_main () @all_gather_rms_norm_port_sender_mcast.cpp 171:35
+2 3-2 (2,0) ncrisc _port_reader_mcast #0 0x0000DDEC in @all_gather_rms_norm_port_reader_mcast.cpp 97:13
+2 6-2 (4,0) brisc _port_sender_mcast tt::tt_fabric::WorkerToFabricEdmSenderBase<false, 0, 0>::get_num_free_write_slots () @edm_fabric_worker_adapters.hpp 297:50 | #1 tt::tt_fabric::WorkerToFabricEdmSenderBase<false, 0, 0>::edm_has_space_for_packet<1> () @edm_fabric_worker_adapters.hpp 306:46 | #2 tt::tt_fabric::WorkerToFabricEdmSenderBase<false, 0, 0>::wait_for_empty_write_slot () @edm_fabric_worker_adapters.hpp 311:50 | #3 kernel_main::tag (19) @all_gather_rms_norm_port_sender_mcast.cpp 194:47
+2 6-2 (4,0) ncrisc _port_reader_mcast #0 0x0000DE20 in @all_gather_rms_norm_port_reader_mcast.cpp 88:77
+2 11-2 (7,0) brisc _port_sender_mcast tt::tt_fabric::WorkerToFabricEdmSenderBase<false, 0, 0>::get_num_free_write_slots () @edm_fabric_worker_adapters.hpp 296:63 | #1 tt::tt_fabric::WorkerToFabricEdmSenderBase<false, 0, 0>::edm_has_space_for_packet<1> () @edm_fabric_worker_adapters.hpp 306:46 | #2 tt::tt_fabric::WorkerToFabricEdmSenderBase<false, 0, 0>::wait_for_empty_write_slot () @edm_fabric_worker_adapters.hpp 311:50 | #3 kernel_main::tag (19) @all_gather_rms_norm_port_sender_mcast.cpp 194:47
+2 11-2 (7,0) ncrisc _port_reader_mcast #0 0x0000DDE8 in @dataflow_api.h 1507:74
+2 3-3 (2,1) brisc _port_sender_mcast invalidate_l1_cache () @cache.h 14:44 | #1 noc_semaphore_wait_min () @dataflow_api.h 1987:32 | #2 kernel_main () @all_gather_rms_norm_port_sender_mcast.cpp 171:35
+2 3-3 (2,1) ncrisc _port_reader_mcast cb_pages_reservable_at_back () @dataflow_api.h 384:85 | #1 kernel_main::tag (19) @all_gather_rms_norm_port_reader_mcast.cpp 135:56 | #2 agrms_port::for_each_chunk_of_item<kernel_main()::<lambda(const agrms_port::Entry&, uint32_t, bool)>::<lambda(uint32_t, uint32_t, uint32_t, bool)> > () @all_gather_rms_norm_port_walk.hpp 154:22 | #3 kernel_main::tag (19) @all_gather_rms_norm_port_reader_mcast.cpp 128:31
+3 3-2 (2,0) brisc _port_sender_mcast tt::tt_fabric::WorkerToFabricEdmSenderBase<false, 0, 0>::get_num_free_write_slots () @edm_fabric_worker_adapters.hpp 296:5 | #1 tt::tt_fabric::WorkerToFabricEdmSenderBase<false, 0, 0>::edm_has_space_for_packet<1> () @edm_fabric_worker_adapters.hpp 306:46 | #2 tt::tt_fabric::WorkerToFabricEdmSenderBase<false, 0, 0>::wait_for_empty_write_slot () @edm_fabric_worker_adapters.hpp 311:50 | #3 kernel_main::tag (19) @all_gather_rms_norm_port_sender_mcast.cpp 194:47
+3 3-2 (2,0) ncrisc _port_reader_mcast #0 0x0000DFFC in @all_gather_rms_norm_port_reader_mcast.cpp 121:35
+3 5-2 (4,0) brisc _port_sender_mcast invalidate_l1_cache () @cache.h 14:44 | #1 noc_semaphore_wait_min () @dataflow_api.h 1987:32 | #2 kernel_main () @all_gather_rms_norm_port_sender_mcast.cpp 171:35
+3 5-2 (4,0) ncrisc _port_reader_mcast #0 0x0000DDFC in @all_gather_rms_norm_port_reader_mcast.cpp 90:32
+3 10-2 (7,0) brisc _port_sender_mcast noc_semaphore_wait_min () @dataflow_api.h 1988:19 | #1 kernel_main () @all_gather_rms_norm_port_sender_mcast.cpp 171:35
+3 10-2 (7,0) ncrisc _port_reader_mcast #0 0x0000DD58 in @dataflow_api.h 109:23
+3 3-3 (2,1) brisc _port_sender_mcast tt::tt_fabric::WorkerToFabricEdmSenderBase<false, 0, 0>::get_num_free_write_slots () @edm_fabric_worker_adapters.hpp 296:63 | #1 tt::tt_fabric::WorkerToFabricEdmSenderBase<false, 0, 0>::edm_has_space_for_packet<1> () @edm_fabric_worker_adapters.hpp 306:46 | #2 tt::tt_fabric::WorkerToFabricEdmSenderBase<false, 0, 0>::wait_for_empty_write_slot () @edm_fabric_worker_adapters.hpp 311:50 | #3 kernel_main::tag (19) @all_gather_rms_norm_port_sender_mcast.cpp 194:47
+3 3-3 (2,1) ncrisc _port_reader_mcast #0 0x0000DE40 in @all_gather_rms_norm_port_walk.hpp 108:73

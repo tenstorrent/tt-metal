@@ -1,0 +1,32 @@
+0 3-2 (2,0) brisc _port_sender_mcast noc_semaphore_wait_min () @dataflow_api.h 1988:19 | #1 kernel_main () @all_gather_rms_norm_port_sender_mcast.cpp 152:35
+0 3-2 (2,0) ncrisc _port_reader_mcast #0 0x0000DDBC in @all_gather_rms_norm_port_reader_mcast.cpp 90:92
+0 6-2 (4,0) brisc _port_sender_mcast noc_semaphore_wait_min () @dataflow_api.h 1988:19 | #1 kernel_main () @all_gather_rms_norm_port_sender_mcast.cpp 152:35
+0 6-2 (4,0) ncrisc _port_reader_mcast #0 0x0000DF3C in @all_gather_rms_norm_port_reader_mcast.cpp 121:35
+0 12-2 (7,0) brisc _port_sender_mcast noc_semaphore_wait_min () @dataflow_api.h 1988:19 | #1 kernel_main () @all_gather_rms_norm_port_sender_mcast.cpp 152:35
+0 12-2 (7,0) ncrisc _port_reader_mcast #0 0x0000DD70 in @all_gather_rms_norm_port_walk.hpp 80:50
+0 3-3 (2,1) brisc _port_sender_mcast noc_semaphore_wait_min () @dataflow_api.h 1988:19 | #1 kernel_main () @all_gather_rms_norm_port_sender_mcast.cpp 152:35
+0 3-3 (2,1) ncrisc _port_reader_mcast #0 0x0000DDBC in @all_gather_rms_norm_port_reader_mcast.cpp 90:92
+1 3-2 (2,0) brisc _port_sender_mcast noc_semaphore_wait_min () @dataflow_api.h 1988:19 | #1 kernel_main () @all_gather_rms_norm_port_sender_mcast.cpp 152:35
+1 3-2 (2,0) ncrisc _port_reader_mcast #0 0x0000DD00 in @dataflow_api.h 1507:33
+1 5-2 (4,0) brisc _port_sender_mcast noc_semaphore_wait_min () @dataflow_api.h 1988:19 | #1 kernel_main () @all_gather_rms_norm_port_sender_mcast.cpp 152:35
+1 5-2 (4,0) ncrisc _port_reader_mcast #0 0x0000DF4C in @all_gather_rms_norm_port_reader_mcast.cpp 121:35
+1 11-2 (7,0) brisc _port_sender_mcast noc_semaphore_wait_min () @dataflow_api.h 1988:19 | #1 kernel_main () @all_gather_rms_norm_port_sender_mcast.cpp 152:35
+1 11-2 (7,0) ncrisc _port_reader_mcast #0 0x0000DC6C in @all_gather_rms_norm_port_reader_mcast.cpp 121:24
+1 3-3 (2,1) brisc _port_sender_mcast noc_semaphore_wait_min () @dataflow_api.h 1988:30 | #1 kernel_main () @all_gather_rms_norm_port_sender_mcast.cpp 152:35
+1 3-3 (2,1) ncrisc _port_reader_mcast #0 0x0000DCC4 in @noc_nonblocking_api.h 1201:46
+2 3-2 (2,0) brisc _port_sender_mcast noc_semaphore_wait_min () @dataflow_api.h 1988:30 | #1 kernel_main () @all_gather_rms_norm_port_sender_mcast.cpp 152:35
+2 3-2 (2,0) ncrisc _port_reader_mcast #0 0x0000DDCC in @all_gather_rms_norm_port_walk.hpp 38:9
+2 6-2 (4,0) brisc _port_sender_mcast noc_semaphore_wait_min () @dataflow_api.h 1988:19 | #1 kernel_main () @all_gather_rms_norm_port_sender_mcast.cpp 152:35
+2 6-2 (4,0) ncrisc _port_reader_mcast #0 0x0000DF38 in @all_gather_rms_norm_port_reader_mcast.cpp 121:35
+2 11-2 (7,0) brisc _port_sender_mcast noc_semaphore_wait_min () @dataflow_api.h 1988:19 | #1 kernel_main () @all_gather_rms_norm_port_sender_mcast.cpp 152:35
+2 11-2 (7,0) ncrisc _port_reader_mcast #0 0x0000DDCC in @all_gather_rms_norm_port_walk.hpp 38:9
+2 3-3 (2,1) brisc _port_sender_mcast noc_semaphore_wait_min () @dataflow_api.h 1988:30 | #1 kernel_main () @all_gather_rms_norm_port_sender_mcast.cpp 152:35
+2 3-3 (2,1) ncrisc _port_reader_mcast #0 0x0000DDDC in @all_gather_rms_norm_port_walk.hpp 38:36
+3 3-2 (2,0) brisc _port_sender_mcast invalidate_l1_cache () @cache.h 14:44 | #1 noc_semaphore_wait_min () @dataflow_api.h 1987:32 | #2 kernel_main () @all_gather_rms_norm_port_sender_mcast.cpp 152:35
+3 3-2 (2,0) ncrisc _port_reader_mcast cb_pages_reservable_at_back () @dataflow_api.h 384:85 | #1 kernel_main::tag (19) @all_gather_rms_norm_port_reader_mcast.cpp 135:56 | #2 agrms_port::for_each_chunk_of_item<kernel_main()::<lambda(const agrms_port::Entry&, uint32_t, bool)>::<lambda(uint32_t, uint32_t, uint32_t, bool)> > () @all_gather_rms_norm_port_walk.hpp 154:22 | #3 kernel_main::tag (19) @all_gather_rms_norm_port_reader_mcast.cpp 128:31
+3 5-2 (4,0) brisc _port_sender_mcast invalidate_l1_cache () @cache.h 14:44 | #1 noc_semaphore_wait_min () @dataflow_api.h 1987:32 | #2 kernel_main () @all_gather_rms_norm_port_sender_mcast.cpp 152:35
+3 5-2 (4,0) ncrisc _port_reader_mcast #0 0x0000DD80 in @all_gather_rms_norm_port_walk.hpp 108:73
+3 10-2 (7,0) brisc _port_sender_mcast noc_semaphore_wait_min () @dataflow_api.h 1988:19 | #1 kernel_main () @all_gather_rms_norm_port_sender_mcast.cpp 152:35
+3 10-2 (7,0) ncrisc _port_reader_mcast #0 0x0000DD64 in @all_gather_rms_norm_port_walk.hpp 105:9
+3 3-3 (2,1) brisc _port_sender_mcast noc_semaphore_wait_min () @dataflow_api.h 1988:19 | #1 kernel_main () @all_gather_rms_norm_port_sender_mcast.cpp 152:35
+3 3-3 (2,1) ncrisc _port_reader_mcast #0 0x0000DC70 in @all_gather_rms_norm_port_reader_mcast.cpp 120:16

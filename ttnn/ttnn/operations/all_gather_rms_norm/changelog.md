@@ -220,3 +220,93 @@
   in `perf_measure.py`. Unit dir: acceptance 32/32, precision 15 + 1 skipped, native shard 6/6, debug 7/7.
 - Issues encountered: none.
 - Tests added: none (the symmetric path is covered by the existing acceptance cases, now on the row form).
+
+## Perf 1 — pre-send critical path (perf tournament, round 1)
+- Date: 2026-11-13. Focus case: LOOSE_CASES[0], per-device (1,1,640,384) bf16 TILE INTERLEAVED, fp32_dest_acc_en=True,
+  gamma bf16 ROW_MAJOR, Ring, 2 links, QB2 1×4 ring under FABRIC_2D_TORUS_XY. All numbers are from the eval CCL
+  harness (`perf_measure.py` / the ablation probe, 5 experiments = 2500 calls, fastest chip, `eval.ccl_perf compare`).
+
+### Measured breakdown (before)
+- Whole op 23.81 µs (slowest 24.74). Ablations (`AGRMS_ABLATE`): TRANSPORT-only 19.81, LOCAL-only 11.56, EMPTY 0.78,
+  NOREAD (port reader skips its NoC reads) 22.31. Exposed OVERLAP = 23.81 − 19.81 = 4.0 µs.
+- Per-chip zone timeline (µs from kernel start, the same on all 4 chips within ~0.3 µs):
+  - port sender setup: **AG_SETUP_HDRS 1.46 µs** (routing 4 packet headers, ~0.36 µs each), so the fence started at
+    1.64 and ended at 2.8–3.2; the own-slice load ended at ~2.0 (member launch skew within a chip is up to 1.1 µs);
+    first packet at ~2.9–3.5;
+  - TRANSPORT streaming to the last member landing at ~20.1: 30 packets per port (20 own + 10 relayed), ~0.33–0.48
+    µs per 12 KiB packet (~37 GB/s against 48.5 for the link); relay arrival waits of 0.9–1.5 µs from step 4 on; port
+    sender done at 16.5–17.4;
+  - OVERLAP tail after the last landing (4.25 µs): partial ready +0.83, exchange done +0.88, combine +0.6, normalize
+    +0.5, store +1.35.
+- Ranked: (1) TRANSPORT streaming (17 µs against a 7.6 µs link roofline), (2) the OVERLAP tail (4.25 µs), (3) the
+  pre-send path (~2.9 µs, of which 1.46 µs was header routing in front of the fence).
+- Instrumentation: the existing `AGRMS_ZONE` probes (compiled in only with `AGRMS_PROFILE_ZONES=1`, so the macro costs
+  nothing when off) are extended with `AG_SETUP_HDR0`, `AG_OPEN`, `AG_READY_OUT`, `AG_SETUP_REST`, `AG_READY_WAIT`,
+  `AG_SEND`, `AG_CLOSE` (port sender), `AG_INPUT_ITEM`, `AG_FINAL_ARRIVAL`, `AG_FINAL_NOTIFY` (port reader).
+  `ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp` (`MaybeDeviceZoneScope`) does not exist in this tree, so the op's
+  own gated macro is used. With every zone on, the 500-call harness overflows the port cores' profiler buffers
+  ("programs per chip 570, expected 600"). For a timeline, run 1 experiment and read the first, untraced call.
+
+### Portfolio (hard cap: 2 experiments)
+1. **TRANSPORT: far slice by fabric multicast** (2D line mcast, write-and-forward to p±1 and p±2) instead of the
+   store-and-forward relay: 30 → 20 packets per port, no relay reads or relay waits.
+2. **TRANSPORT handshake + OVERLAP data availability: shorten the pre-send critical path**: (a) route one header and
+   copy it, (b) send the first own items without waiting for the members' own-slice load, (c) send the ready before
+   the rest of the setup.
+
+### Verdicts
+| idea | verdict | focus fastest / slowest (µs) | domain |
+|---|---|---|---|
+| far-slice fabric mcast | **BLOCKED** | — (hangs) | the QB2 1×4 ring mock is a snake over the 2×2 torus. The mesh positions 0..3 are fabric nodes D0, D1, D3, D2, and the ring turns a corner at every hop (E, S, W, N). A 2-hop line mcast in one direction never reaches p+2. A 2D mcast (N/S spine, E/W branch) covers only half the chips per direction. A 2-hop unicast injected on the 1-hop link is misrouted. Three runs hung in the fence or in the slot wait (`perf_experiments/far_slice_fabric_mcast/evidence/`). Expressible only on a straight ring axis (Galaxy 8×4 TP axis), which is untested here. A QB2-specific variant (whole slice as a spine+branch mcast, unicast to the E/W neighbour) is designed but not built: it raises the E/W link load from 1.5 to 2 slices (link floor 7.6 → 10.1 µs). |
+| pre-send critical path | **WIN** | 23.80 / 24.76 → **22.83 / 24.03** | applies everywhere, no exceptions found |
+
+Pre-send menu (focus, fastest / slowest µs; same precision everywhere):
+| variant | fastest | slowest |
+|---|---|---|
+| baseline | 23.80 | 24.76 |
+| A: route one header, copy the rest | 23.74 | 24.70 |
+| C: ready out before the count / copies | 23.70 | 24.75 |
+| D2: first 2 own items read from the input tensor | 23.64 | 24.56 |
+| A+D2 / C+D2 | 23.26 / 22.97 | 24.18 / 24.02 |
+| **A+C+D2 (graduated)** | **22.83** | **24.03** |
+| A+C+D1 / D3 / all items from the input | 23.00 / 22.92 / 23.18 | 23.99 / 24.02 / 24.16 |
+| + host chunk count / early `open_start` / header copies as local NoC writes | 22.83 / 22.82 / 22.82 | null |
+| + copy each header at its first use | 23.10 | regression |
+| + input items pushed per chunk (D1 / D2 / D3) | 23.68 / 25.05 / 26.32 | regression (the DRAM reads serialize) |
+| (b) as per-item member readiness (early semaphores, 1 / 2 / 3 items) | 23.36 / 23.31 / 23.33 | ~0.5 µs worse than D2: all ports and members read DRAM at once, and D2 makes the port independent of the members' launch skew |
+
+The levers only pay off together: each alone is worth 0.06–0.17 µs, because removing one wait exposes the next.
+The first packet moved from 3.3–3.6 to 2.3–2.6 µs on every chip. The ready goes out at ~1.05 µs instead of ~2.3. What
+binds now is the peer's ready arriving at ~2.0 µs.
+
+### What graduated (one unqualified path; the code it replaced is deleted)
+- `all_gather_rms_norm_port_sender.cpp`: the sender routes header 0 only, then opens the connection and sends the
+  ready. In the shadow of the peer's ready it counts the chunks and fills headers 1.. as word copies of header 0. The
+  per-header routing loop is deleted.
+- `all_gather_rms_norm_port_reader.cpp` + `all_gather_rms_norm_port_walk.hpp` (`for_each_chunk_of_item_src`): the port
+  reader reads own items `xb < PORT_INPUT_ITEMS` (= 2) straight from the input tensor through a `TensorAccessor`. The
+  chunks, order and batches are the same as the sender's walk. The reader waits on `sem_local_loaded` only before the
+  first own item it takes from the members' L1.
+- Host: `PORT_INPUT_ITEMS = 2` (env `AGRMS_PORT_INPUT_ITEMS` for A/B), port reader CT arg 14 plus the input's
+  `TensorAccessorArgs` (CT 15+), and the program hash key.
+- Carve-out (it has no meaning there, not a perf guard): native HEIGHT_SHARDED already reads the own slice in place from
+  its resident input shard (`own_from_input`), so the input-direct items are 0 there and only A and C act.
+- Whole op (harness, 5 experiments): focus **23.81 → 22.83 µs** (slowest 24.74 → 24.03; `compare`: win, noise 0.05);
+  640×512 33.84 → **32.92** (slowest 34.97); 640×1792 78.02 → **75.36** (slowest 78.48). The "before" numbers are from
+  Refinement 5's changelog; the subagent's same-session baselines were 34.04 and 78.29. Other cells, from the subagent's
+  copy: focus Linear 36.30 → 35.29, focus 1 link 35.82 → 34.79, focus HEIGHT_SHARDED native 33.82 → 33.58 µs.
+
+### No-regression / golden
+- Unit dir on the graduated op: acceptance 32/32, native shard 6/6, debug 7/7, precision baseline 15 passed + 1 skipped.
+- Golden guard slice (one cell per dtype × memory_layout × topology × num_links × alignment × cluster_axis ×
+  fp32_dest_acc_en, shapes rotated over 34 shapes, plus the 3 loose cases): 183 passed, 36 xfailed (EXCLUSIONS), 0
+  failed. Random 1,500-cell sample of `test_op` (seed 1): 375 passed, 1060 skipped (INVALID / not buildable on this
+  mesh), 65 xfailed, 0 failed. The three perf cases pass their golden check in `perf_measure.py`.
+- Precision: unchanged. The same bytes move (raw input tiles), and the compute is untouched.
+
+### Helper bypasses
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| ccl::FabricStream (kernel_lib/ccl) | capability | it arms one fixed payload size and routes its header(s) before it can send anything. There is no way to send a fence ready on the open connection after routing one header and build the rest of the header ring (copies of a routed header) in the shadow of the peer's ready, and `signal()` closes the connection. This extends the port sender's existing documented raw-fabric bypass. | not measured (cannot express the pre-send order; the old raw path with every header routed up front was 23808) | 22830 | all_gather_rms_norm_port_sender.cpp:105-155 |
+
+No raw LLK in the compute kernels changed.
