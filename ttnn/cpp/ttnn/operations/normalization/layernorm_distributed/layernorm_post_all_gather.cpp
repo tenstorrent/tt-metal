@@ -20,7 +20,8 @@ ttnn::Tensor layer_norm_post_all_gather(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const ttnn::prim::LayerNormProgramConfig>& program_config,
-    const std::optional<const DataType>& dtype) {
+    const std::optional<const DataType>& dtype,
+    const std::optional<bool>& use_2d_core_grid) {
     auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch()
                                                                    : ttnn::GetDefaultDevice()->arch();
     auto kernel_config_val =
@@ -50,7 +51,7 @@ ttnn::Tensor layer_norm_post_all_gather(
         memory_config.value_or(input_tensor.memory_config()),
         kernel_config_val,
         dtype,
-        std::nullopt,  // use_2d_core_grid - LayerNorm doesn't expose this parameter
+        use_2d_core_grid,
         program_config.value_or(ttnn::prim::LayerNormDefaultProgramConfig{}));
 }
 
