@@ -292,6 +292,9 @@ class Gemma4ForCausalLM:
         elif (
             self.entry is None or state is not self.cur_state or self.generator.traces.get(id(state)) is not self.entry
         ):
+            # Steps that keep the loaded inputs rely on the plugin reloading them after anything that changes the
+            # trace: a prefill (note_prefill_submitted; one that compiles programs retires every trace) and any
+            # change of the live rows (a different covering trace). This check turns a broken contract into an error.
             raise ValueError("A retired decode trace requires current scheduler inputs")
         elif reload_page_table:
             tables = self._tables(state, [table[:rows] for table in page_tables_per_layer])
