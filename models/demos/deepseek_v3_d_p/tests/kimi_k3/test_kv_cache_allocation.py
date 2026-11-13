@@ -5,14 +5,14 @@
 
 K3 keeps its bf8 TILE kvpe cache and gets no index cache. K3.1 gets a scaled-FP8 kvpe cache and a
 bf8 TILE indexer key cache with the kvpe cache's slabs and SP/TP split, on its full-attention layers
-only. Both get the same KDA state slabs. The device test runs every PP4 stage at K3's
-``max_seq_len`` and logs each model's per-chip DRAM cost of one user.
+only. Both get the same KDA state slabs. The device test allocates every PP4 stage at K3's
+``max_seq_len`` and asserts each model's cache layouts, that K3's caches are unchanged, and that one more
+K3.1 user costs exactly its kvpe and index rows more per chip than one more K3 user.
 """
 
 from __future__ import annotations
 
 import pytest
-from loguru import logger
 from ttnn.device import is_blackhole
 
 import ttnn
@@ -155,20 +155,9 @@ def test_caches_per_stage_and_per_chip_footprint(mesh_device):
                 _free(caches)
             # The marginal user: allocation granularity leaves a few KiB that do not scale with users.
             per_user[(adapter.name, first)] = footprint[1] - footprint[0]
-            logger.info(f"{adapter.name} stage@{first}: 1 user {footprint[0]} B, 2 users {footprint[1]} B per chip")
 
         extra = per_user[("kimi_k3_1", first)] - per_user[("kimi_k3", first)]
         expected = (
             slabs * tokens_per_chip * (K31_KVPE_BYTES_PER_TOKEN + K31_INDEX_BYTES_PER_TOKEN - K3_KVPE_BYTES_PER_TOKEN)
         )
         assert extra == expected, (extra, expected)
-
-    view = ttnn.get_memory_view(mesh_device, ttnn.BufferType.DRAM)
-    logger.info(f"DRAM per chip {view.total_bytes_per_bank * view.num_banks} B; max_seq_len {MAX_SEQ_LEN}, 8x4 tpaxis1")
-    for (name, first), size in sorted(per_user.items()):
-        logger.info(f"FOOTPRINT {name} stage@{first}: {size} B per chip per user ({size / 2**20:.1f} MiB)")
-    worst = {name: max(size for (n, _), size in per_user.items() if n == name) for name in ("kimi_k3", "kimi_k3_1")}
-    logger.info(
-        f"FOOTPRINT worst stage per user: K3 {worst['kimi_k3']} B, K3.1 {worst['kimi_k3_1']} B; "
-        f"K3.1 users at K3's per-chip cache budget for 100 users: {100 * worst['kimi_k3'] // worst['kimi_k3_1']}"
-    )
