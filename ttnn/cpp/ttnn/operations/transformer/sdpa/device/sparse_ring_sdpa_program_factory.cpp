@@ -270,6 +270,7 @@ struct BalanceConfig {
     uint32_t cores = 0;       // SDPA cores
     uint32_t q_blocks = 0;    // Q blocks per head
     uint32_t cost_words = 0;  // cost words per core in a table page
+    uint32_t unit_cost = 0;   // fixed cost per unit (sparse_balance::kUnitCost, plus the pooled entries' work)
     uint32_t swappable = 0;   // full Q blocks (a partial last block never moves)
     uint32_t devices = 1;     // cost pages (devices) the balance kernel reads
     uint32_t scratch_bytes = 0;
@@ -319,11 +320,14 @@ bool same_dram_banks_on_every_device(tt::tt_metal::distributed::MeshDevice* mesh
 
 BalanceConfig make_balance_config(const SparseRingSDPAParams& args, const SparseRingSDPAInputs& tensor_args) {
     BalanceConfig c;
-    // Kept-only route without dense_blocks only: dense_blocks already spread the dense rows over the devices, and the
-    // pooled route measured slower with balancing on balanced masks.
-    if (!args.dense_blocks.empty() || tensor_args.pooled_route()) {
+    // Off with dense_blocks: they already spread the dense rows over the devices.
+    if (!args.dense_blocks.empty()) {
         return c;
     }
+    // Pooled route: every unit also processes the pooled entries (one per block of the mask row), about 1.5 x their
+    // count / 64 in kept-block units (calibrated on the pooled-minus-kept time at 5-15 s).
+    const uint32_t mask_blocks = tensor_args.block_mask.logical_shape()[3];
+    c.unit_cost = sparse_balance::kUnitCost + (tensor_args.pooled_route() ? tt::div_up(mask_blocks * 3, 128) : 0u);
     const uint32_t q_tiles = tensor_args.input_q.padded_shape()[2] / tt::constants::TILE_HEIGHT;
     const uint32_t mask_row_bytes = tensor_args.block_mask.logical_shape()[3] * sizeof(uint32_t);
     const CoreCoord grid = args.program_config.compute_with_storage_grid_size;
@@ -1727,6 +1731,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         {"balance", balance ? 1u : 0u},
         {"balance_remote", balancing.remote ? 1u : 0u},
         {"balance_cost_words", balancing.cost_words},
+        {"balance_unit_cost", balancing.unit_cost},
         {"balance_sem_table", balance_sems.table},
         {"balance_sem_import", balance_sems.import},
         {"balance_sem_costs", balance_sems.costs},

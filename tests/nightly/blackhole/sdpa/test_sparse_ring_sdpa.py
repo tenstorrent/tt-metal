@@ -1247,18 +1247,19 @@ def balance_mask(geo, S, H, *, kind, density=0.1, seed=0, heavy_rows=16, heavy=0
     return mask
 
 
+@pytest.mark.parametrize("pooled", [False, True], ids=["kept_only", "pooled"])
 @pytest.mark.parametrize("kind", BALANCE_MASKS)
 @pytest.mark.parametrize("geom", ["r1024k256", "r1184k256"])
-def test_balance(runtime, geom, kind):
-    """Load balancing (kept-only route): rows ~90 % dense scattered over the heads the reference checks, a dense
+def test_balance(runtime, geom, kind, pooled):
+    """Load balancing (kept-only and pooled routes): rows ~90 % dense scattered over the heads the reference checks, a dense
     prefix on shard 0 and a causal mask, against the reference (r1184: a partial last block, which never moves between
     devices). Every case deals units to cores out of order and with per-core counts that differ from the static split
     (host-checked)."""
     case = Case(runtime, GEOMETRIES[geom])
     checked = sorted({0, 1, case.H // 2, case.H - 1})
     mask = balance_mask(case.geo, case.S, case.H, kind=kind, seed=40, heads=checked)
-    r = case.run(*case.inputs(40), mask, want_dense=False, pooled=False)
-    tag = f"balance {kind} {geom}"
+    r = case.run(*case.inputs(40), mask, want_dense=False, pooled=pooled)
+    tag = f"balance {kind} {_mode(pooled)} {geom}"
     _check(tag, r, _density(mask, case.geo, case.S), dense_min=None, ref_min=0.999)
 
 

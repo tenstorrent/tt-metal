@@ -477,7 +477,7 @@ void kernel_main() {
             noc.async_read_barrier();
             invalidate_l1_cache();
             const uint32_t c = sparse_ring_bits::row_cost<has_block_counts>(row_addr, geo, counts_table, ring_size) +
-                               sparse_balance::kUnitCost;
+                               get_named_compile_time_arg_val("balance_unit_cost");
             costs[f - static_q_start] = c < sparse_balance::kMaxUnitCost ? c : sparse_balance::kMaxUnitCost;
         }
         if (static_q_end > static_q_start) {
