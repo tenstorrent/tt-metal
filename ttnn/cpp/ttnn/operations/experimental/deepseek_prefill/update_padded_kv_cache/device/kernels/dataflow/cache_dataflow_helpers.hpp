@@ -7,8 +7,10 @@
 
 #include "api/core_local_mem.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/debug/assert.h"
 #include "api/dataflow/noc.h"
 #include "api/tensor/tensor_accessor.h"
+#include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/chip_position/kernels/chip_position.hpp"
 
 namespace kv_cache_dataflow {
 
@@ -22,6 +24,20 @@ inline uint32_t read_metadata(Noc& noc, const CircularBuffer& scratch, uint32_t 
     // Trace replay overwrites metadata at fixed addresses. DMA completion does not evict the RISC cache.
     invalidate_l1_cache();
     return CoreLocalMem<volatile uint32_t>(scratch.get_write_ptr())[0];
+}
+
+// This chip's position on the linearized sp*tp axis: from the whole-mesh chip table appended to the compile-time
+// args, or, without one (a per-chip program), common runtime arg 0.
+inline uint32_t linear_coord_from_chip_table() {
+    constexpr uint32_t size = get_named_compile_time_arg_val("chip_table_size");
+    if constexpr (size == 0) {
+        return get_common_arg_val<uint32_t>(0);
+    } else {
+        constexpr uint32_t offset = get_named_compile_time_arg_val("chip_table_offset");
+        const uint32_t index = deepseek_prefill::chip_table_index<true>();
+        ASSERT(index < size);
+        return kernel_compile_time_args[offset + index];
+    }
 }
 
 }  // namespace kv_cache_dataflow
