@@ -1,13 +1,13 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Kimi-K3 and Kimi-K3.1 stacks on synthetic weights, with the caches the runner allocates for them.
+"""Kimi-K3.1 stacks on synthetic weights, with the caches the runner allocates for them.
 
-For the tests that have no golden: K3.1 has neither a CPU reference nor a vLLM trace, so its variants
-of K3's depth, chunked-prefill and pipeline-split tests check what the stack wrote (every cache slot
-its own, carries stored, rows past a prompt's end untouched), that a repeated request is bit-identical,
-and that a split stack matches the undivided one. The same tests run K3 through the identical path --
-K3.1 is K3 with Gated DSA on its 24 full-attention layers -- as the baseline.
+For the K3.1 checks that need no reference: what the stack wrote (every cache slot its own, carries
+stored, rows past a prompt's end untouched), that a repeated request is bit-identical, and that a split
+stack matches the undivided one. K3.1 is K3 with Gated DSA on its 24 full-attention layers, run through
+K3's stack; accuracy against vLLM is the golden tests' job (`test_k31_golden.py`, the depth ladder's
+K3.1 rungs).
 
 One deliberate substitution: every layer's FFN is K3's dense FFN (`dense_ffn_config`). A synthetic
 LatentMoE layer is 896 routed experts at 33 M parameters each, ~59 GB per layer; the MoE is the same
@@ -25,11 +25,10 @@ from models.demos.common.prefill.adapter import PrefillRunParams, get_adapter
 from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32 import random_mla_weights
 from models.demos.deepseek_v3_d_p.reference.kimi_k3.attn_res.weights import layer_query_names, output_query_names
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Config, kimi_k3_1_hf_config
-from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, kimi_k3_hf_config, kimi_k3_kda_config
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, kimi_k3_kda_config
 from models.demos.deepseek_v3_d_p.tests.kda.utils import random_weights as random_kda_weights
 from models.demos.deepseek_v3_d_p.tt.attn_res.weights import CHECKPOINT_PREFIX
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
-from models.demos.deepseek_v3_d_p.tt.mla.indexer import resolve_has_indexer
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor
 from models.demos.deepseek_v3_d_p.utils.test_utils import gather_cache_natural
@@ -42,12 +41,12 @@ CHUNK = 5120
 CACHE_LEN = 40960
 STD = 0.02
 
-MODEL_CONFIGS = {"kimi_k3": KimiK3Config, "kimi_k3_1": KimiK31Config}
-HF_CONFIGS = {"kimi_k3": kimi_k3_hf_config, "kimi_k3_1": kimi_k3_1_hf_config}
+MODEL_CONFIGS = {"kimi_k3_1": KimiK31Config}
+HF_CONFIGS = {"kimi_k3_1": kimi_k3_1_hf_config}
 
 
 def placements(models=tuple(MODEL_CONFIGS), **device_params) -> list:
-    """`(model, mesh_device, device_params)` on 8x4 Fabric2D, each model at its own L1_SMALL; extra
+    """`(model, mesh_device, device_params)` on 8x4 Fabric2D at the model's L1_SMALL; extra
     `device_params` (e.g. a trace test's `trace_region_size`) are added to every placement."""
     return [
         pytest.param(
@@ -78,7 +77,6 @@ def synthetic_state_dict(config, first_layer_idx: int, num_layers: int) -> dict:
     """Embedding, final norm, AttnRes queries, and per layer: norms, MLA/DSA or KDA, dense FFN."""
     hidden, inter = config.hidden_size, config.intermediate_size
     mla_layers = set(KimiK3Config.mla_layer_ids())
-    has_indexer = resolve_has_indexer(config)
     layers, attn_res = [], {}
     for layer_idx in range(first_layer_idx, first_layer_idx + num_layers):
         generator = torch.Generator().manual_seed(2026 + layer_idx)
@@ -92,9 +90,7 @@ def synthetic_state_dict(config, first_layer_idx: int, num_layers: int) -> dict:
             },
         }
         if layer_idx in mla_layers:
-            # K3 is the same attention minus the indexer, whose fields K3's config does not carry.
-            mla = random_mla_weights(config if has_indexer else kimi_k3_1_hf_config(), seed=layer_idx)
-            layer["mla_weights"] = mla if has_indexer else {k: v for k, v in mla.items() if "indexer." not in k}
+            layer["mla_weights"] = random_mla_weights(config, seed=layer_idx)
         else:
             layer["kda_weights"] = random_kda_weights(kimi_k3_kda_config())
         layers.append(layer)
@@ -138,8 +134,8 @@ def build_stack(
 ):
     """A rank's `TtKimiK3Transformer` and its caches from the serving allocator (`allocate_kv_cache`).
 
-    Dense bf8 kvpe for K3; TP-deduped scaled-FP8 kvpe plus the bf8 indexer key cache for K3.1; the KDA
-    slabs for both, attached to the model as the runner's compile() does. `num_users` is the slot count of
+    TP-deduped scaled-FP8 kvpe, the bf8 indexer key cache, and the KDA slabs, attached to the model as
+    the runner's compile() does. `num_users` is the slot count of
     every cache and slab and the model's user slots.
     """
     adapter = get_adapter(model)
@@ -195,7 +191,7 @@ def release(transformer, caches) -> None:
 
 def token_ids(num_tokens: int, seed: int = 7) -> list[int]:
     return torch.randint(
-        0, kimi_k3_hf_config().vocab_size, (num_tokens,), generator=torch.Generator().manual_seed(seed)
+        0, kimi_k3_1_hf_config().vocab_size, (num_tokens,), generator=torch.Generator().manual_seed(seed)
     ).tolist()
 
 

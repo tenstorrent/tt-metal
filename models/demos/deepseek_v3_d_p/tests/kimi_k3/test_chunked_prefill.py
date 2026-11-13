@@ -386,11 +386,11 @@ def test_chunked_prefill_carries_kda_state(mesh_device, device_params, num_layer
     assert not failures, "chunked prefill diverged from the model: " + "; ".join(failures)
 
 
-# --- Synthetic weights (K3 and K3.1) ------------------------------------------------------------------
+# --- Synthetic weights (K3.1) -------------------------------------------------------------------------
 #
-# K3.1 has no golden, so this is K3's chunked test with the oracle-free half of its checks: after every
+# K3's chunked test with the oracle-free half of its checks, for K3.1: after every
 # chunk each KDA layer's carry is stored on every chip as finite, nonzero values, and device DRAM does not
-# grow after the first chunk; at the end the kvpe and (K3.1) index cache hold every real token's row in
+# grow after the first chunk; at the end the kvpe and index caches hold every real token's row in
 # token order and nothing past the last chunk; and the same prompt prefilled again with DIFFERENT padding
 # ids past its end is bit-identical in outputs, carries and every real token's cache rows. The last chunk
 # ends off the chunk grid and off the 32-token tile grid, as a prompt's real length does, so a layer that
@@ -474,7 +474,7 @@ def test_synthetic_chunked_prefill_carries_state(model, mesh_device, device_para
     logger.info(f"  {model} DRAM drift over chunks 1..{SYNTHETIC_CHUNKS - 1}: {growth} B")
     assert growth == 0, f"device DRAM grew {growth} bytes across chunks 1..{SYNTHETIC_CHUNKS - 1}: {footprints}"
 
-    assert set(kv) == ({"kvpe", "index"} if model == "kimi_k3_1" else {"kvpe"})
+    assert set(kv) == {"kvpe", "index"}
     for name, slots in kv.items():
         assert torch.isfinite(slots).all(), f"non-finite {name} cache"
         assert slots[:, :SYNTHETIC_END].abs().amax(dim=-1).gt(0).all(), f"a real token's {name} row is unwritten"
