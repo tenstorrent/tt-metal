@@ -10,22 +10,32 @@ sections: debug info names the build directory.
 ``python_tests``, with BASE and HEAD the two artefacts directories (``tt-llk-build``)::
 
     python -m helpers.ulp_affected --records PATH --base BASE --head HEAD \\
-        --base-table T --nodes OUT"""
+        --base-table T --nodes OUT [--all]
+
+``--all`` picks every cell, for a change to the check itself: it would otherwise pick
+none, and a broken card job would merge green."""
 
 import argparse
 import hashlib
 import json
 import struct
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from .llk_params import MathOperation
 from .ulp_budget_diff import resolve
-from .ulp_table import BudgetKey, from_plain, load_table, to_plain
+from .ulp_table import BudgetKey, Row, from_plain, load_table, measured_arch, to_plain
 
 # Set by --ulp-variants.
 VARIANTS_PATH: Path | None = None
+
+# The 32-bit little-endian ELF header and section header fields the digest reads.
+ELF32_LE_MAGIC = b"\x7fELF\x01\x01"  # magic, ELFCLASS32, ELFDATA2LSB
+E_SHOFF = 0x20  # offset of the section header table
+E_SHENTSIZE = 0x2E  # section header size, then e_shnum
+SHF_ALLOC = 0x2
+SHT_NOBITS = 8  # has no bytes in the file
 
 
 @dataclass(frozen=True)
@@ -63,18 +73,18 @@ def loaded_digest(elf: Path) -> str:
     """SHA-256 over each allocated section of a 32-bit little-endian ELF: its type,
     address and size, and its bytes unless it is NOBITS."""
     data = Path(elf).read_bytes()
-    if data[:6] != b"\x7fELF\x01\x01":
+    if not data.startswith(ELF32_LE_MAGIC):
         raise ValueError(f"{elf}: not a 32-bit little-endian ELF")
-    (shoff,) = struct.unpack_from("<I", data, 0x20)
-    entry_size, count = struct.unpack_from("<HH", data, 0x2E)
+    (shoff,) = struct.unpack_from("<I", data, E_SHOFF)
+    entry_size, count = struct.unpack_from("<HH", data, E_SHENTSIZE)
     digest = hashlib.sha256()
     for i in range(count):
         _, kind, flags, addr, offset, size = struct.unpack_from(
             "<6I", data, shoff + i * entry_size
         )
-        if flags & 0x2:  # SHF_ALLOC
+        if flags & SHF_ALLOC:
             digest.update(struct.pack("<3I", kind, addr, size))
-            if kind != 8:  # SHT_NOBITS has no bytes in the file
+            if kind != SHT_NOBITS:
                 digest.update(data[offset : offset + size])
     return digest.hexdigest()
 
@@ -90,6 +100,13 @@ def build_digest(root: Path, build: str) -> str | None:
     return hashlib.sha256(parts.encode()).hexdigest()
 
 
+def _judged_by(table, cell: Built) -> Row | None:
+    """The row the sweep judges *cell* by: resolved under this session's architecture,
+    as the sweep resolves it, and with no ``note``, which judges nothing."""
+    row = resolve(table, cell.op, replace(cell.key, arch=measured_arch()))
+    return None if row is None else replace(row, note=None)
+
+
 def select(cells, head: Path, base: Path, base_table, head_table):
     """``(cell, why)`` for each cell the change can move, in record order."""
     picked = []
@@ -103,9 +120,7 @@ def select(cells, head: Path, base: Path, base_table, head_table):
         why = []
         if now != was:
             why.append("new build" if was is None else "rebuilt")
-        if resolve(base_table, cell.op, cell.key) != resolve(
-            head_table, cell.op, cell.key
-        ):
+        if _judged_by(base_table, cell) != _judged_by(head_table, cell):
             why.append("row changed")
         if why:
             picked.append((cell, " and ".join(why)))
@@ -114,11 +129,17 @@ def select(cells, head: Path, base: Path, base_table, head_table):
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="python -m helpers.ulp_affected")
-    parser.add_argument("--records", type=Path, required=True, help="--ulp-variants'")
+    parser.add_argument(
+        "--records",
+        type=Path,
+        required=True,
+        help="records written by pytest --ulp-variants",
+    )
     parser.add_argument("--base", type=Path, required=True, help="the parent's build")
     parser.add_argument("--head", type=Path, required=True, help="the change's build")
     parser.add_argument("--base-table", type=Path, required=True)
     parser.add_argument("--nodes", type=Path, required=True, help="picked node ids")
+    parser.add_argument("--all", action="store_true", help="pick every cell")
     args = parser.parse_args(argv)
     try:
         cells = read_built(args.records)
@@ -127,6 +148,9 @@ def main(argv=None) -> int:
         # The head table is this session's (CHIP_ARCH).
         tables = load_table(args.base_table), load_table()
         picked = select(cells, args.head, args.base, *tables)
+        if args.all:
+            why = dict(picked)
+            picked = [(cell, why.get(cell, "the check changed")) for cell in cells]
     except (ValueError, OSError) as refused:
         print(f"cannot select: {refused}")
         return 2
