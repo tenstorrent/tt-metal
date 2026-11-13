@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from types import SimpleNamespace
 
 import pytest
@@ -26,24 +27,24 @@ _PIPELINES = [LTXPipeline, LTXDistilledPipeline, LTXOneStagePipeline, LTXTwoStag
 
 
 @pytest.mark.parametrize("pipeline_class", _PIPELINES)
-def test_construction_raises_before_any_device_use(pipeline_class: type[LTXPipeline]) -> None:
-    with pytest.raises(ValueError, match=_RULE):
+def test_construction_raises_before_any_device_use(pipeline_class: type[LTXPipeline], expect_error: Callable) -> None:
+    with expect_error(ValueError, _RULE):
         pipeline_class(None, None, None, offload_weights=True, trace=True)
 
 
 @pytest.mark.parametrize("pipeline_class", _PIPELINES)
-def test_generate_goes_through_the_base(pipeline_class: type[LTXPipeline]) -> None:
+def test_generate_goes_through_the_base(pipeline_class: type[LTXPipeline], expect_error: Callable) -> None:
     assert pipeline_class.__call__ is Pipeline.__call__
     pipeline = object.__new__(pipeline_class)
     pipeline.offload_weights = True
     pipeline.trace = True
-    with pytest.raises(ValueError, match=_RULE):
+    with expect_error(ValueError, _RULE):
         pipeline.generate("a prompt")
 
 
 @pytest.mark.parametrize("pipeline_class", _PIPELINES)
-def test_has_no_per_call_eager_run(pipeline_class: type[LTXPipeline]) -> None:
-    with pytest.raises(NotImplementedError, match="no per-call eager run"):
+def test_has_no_per_call_eager_run(pipeline_class: type[LTXPipeline], expect_error: Callable) -> None:
+    with expect_error(NotImplementedError, "no per-call eager run"):
         object.__new__(pipeline_class).run_untraced("a prompt")
 
 
@@ -125,14 +126,16 @@ def test_create_pipeline_defaults_and_new_names_log_nothing(monkeypatch: pytest.
 
 
 @pytest.mark.parametrize("kwargs", [{"traced": True, "trace": False}, {"dynamic_load": True, "offload_weights": False}])
-def test_a_deprecated_name_that_contradicts_the_new_one_raises(monkeypatch: pytest.MonkeyPatch, kwargs: dict) -> None:
-    with pytest.raises(TypeError, match="pass only"):
+def test_a_deprecated_name_that_contradicts_the_new_one_raises(
+    monkeypatch: pytest.MonkeyPatch, kwargs: dict, expect_error: Callable
+) -> None:
+    with expect_error(TypeError, "pass only"):
         _create(monkeypatch, **kwargs)
 
 
-def test_deprecated_names_still_meet_the_trace_rule() -> None:
+def test_deprecated_names_still_meet_the_trace_rule(expect_error: Callable) -> None:
     kwargs = {"dynamic_load": True, "traced": True}
     offload_weights = pipeline_ltx._renamed_keyword(kwargs, "dynamic_load", "offload_weights", None)  # noqa: SLF001
     trace = pipeline_ltx._renamed_keyword(kwargs, "traced", "trace", None)  # noqa: SLF001
-    with pytest.raises(ValueError, match=_RULE):
+    with expect_error(ValueError, _RULE):
         LTXPipeline(None, None, None, offload_weights=offload_weights, trace=trace)

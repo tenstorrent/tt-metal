@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import gc
+from collections.abc import Callable
 
 import pytest
 from loguru import logger
@@ -35,8 +36,8 @@ class _FakePipeline(Pipeline):
         return "output"
 
 
-def test_conflict_raises_at_construction() -> None:
-    with pytest.raises(ValueError, match=_RULE):
+def test_conflict_raises_at_construction(expect_error: Callable) -> None:
+    with expect_error(ValueError, _RULE):
         _FakePipeline(offload_weights=True, trace=True)
 
 
@@ -48,19 +49,19 @@ def test_other_combinations_construct_and_run(offload_weights: bool, trace: bool
     assert pipeline.calls == [{"prompts": ["a"], "traced": trace}]
 
 
-def test_conflict_raises_at_call_without_init() -> None:
+def test_conflict_raises_at_call_without_init(expect_error: Callable) -> None:
     pipeline = object.__new__(_FakePipeline)
     assert pipeline.offload_weights is False
     pipeline.offload_weights = True
     pipeline.trace = True
-    with pytest.raises(ValueError, match=_RULE):
+    with expect_error(ValueError, _RULE):
         pipeline(prompts=["a"])
 
 
-def test_conflict_raises_at_call_after_attributes_change() -> None:
+def test_conflict_raises_at_call_after_attributes_change(expect_error: Callable) -> None:
     pipeline = _FakePipeline(offload_weights=False, trace=True)
     pipeline.offload_weights = True
-    with pytest.raises(ValueError, match=_RULE):
+    with expect_error(ValueError, _RULE):
         pipeline(prompts=["a"])
     assert pipeline.calls == []
 
@@ -73,16 +74,16 @@ def test_registering_exclusions_makes_the_pipeline_offload() -> None:
     assert pipeline.offload_weights is True
 
 
-def test_registering_on_a_traced_pipeline_raises() -> None:
+def test_registering_on_a_traced_pipeline_raises(expect_error: Callable) -> None:
     pipeline = _FakePipeline(offload_weights=False, trace=True)
-    with pytest.raises(ValueError, match=_RULE):
+    with expect_error(ValueError, _RULE):
         pipeline.register_evictable(_FakeModule())
 
 
-def test_refused_exclusion_is_not_registered_on_the_module() -> None:
+def test_refused_exclusion_is_not_registered_on_the_module(expect_error: Callable) -> None:
     pipeline = _FakePipeline(offload_weights=False, trace=True)
     loaded, evicted = _FakeModule(), _FakeModule()
-    with pytest.raises(ValueError, match=_RULE):
+    with expect_error(ValueError, _RULE):
         pipeline.register_coresident_exclusions(loaded, evicted)
     assert loaded.exclusions == []
     assert pipeline.offload_weights is False
@@ -232,17 +233,17 @@ def test_run_untraced_on_an_offloading_pipeline() -> None:
     assert pipeline.calls == [{"prompts": ["a"], "traced": False}]
 
 
-def test_run_untraced_cannot_be_asked_to_trace() -> None:
+def test_run_untraced_cannot_be_asked_to_trace(expect_error: Callable) -> None:
     pipeline = _FakePipeline(offload_weights=False, trace=True)
-    with pytest.raises(TypeError, match="traced"):
+    with expect_error(TypeError, "traced"):
         pipeline.run_untraced(prompts=["a"], traced=True)
     assert pipeline.calls == []
 
 
 @pytest.mark.parametrize("entry", ["__call__", "run_untraced"])
-def test_component_flags_cannot_widen_trace(entry: str) -> None:
+def test_component_flags_cannot_widen_trace(entry: str, expect_error: Callable) -> None:
     pipeline = _FakePipeline(offload_weights=True, trace=False)
-    with pytest.raises(ValueError, match="encoder_traced, vae_traced cannot be set"):
+    with expect_error(ValueError, "encoder_traced, vae_traced cannot be set"):
         getattr(pipeline, entry)(prompts=["a"], vae_traced=True, encoder_traced=True)
     assert pipeline.calls == []
     getattr(pipeline, entry)(prompts=["a"], vae_traced=False, encoder_traced=None)
@@ -255,8 +256,8 @@ def test_component_flags_narrow_a_traced_pipeline() -> None:
     assert pipeline.calls == [{"prompts": ["a"], "traced": True, "vae_traced": True, "encoder_traced": False}]
 
 
-def test_subclass_cannot_define_call() -> None:
-    with pytest.raises(TypeError, match="must implement _run, not __call__"):
+def test_subclass_cannot_define_call(expect_error: Callable) -> None:
+    with expect_error(TypeError, "must implement _run, not __call__"):
 
         class _Bypass(Pipeline):
             def __call__(self) -> None:
@@ -278,14 +279,25 @@ def test_resident_untraced_pipeline_says_so_once(offload_weights: bool, trace: b
     assert [m for m in messages if "running untraced" in m] == (expected if logged else [])
 
 
-@pytest.mark.parametrize("flag", ["traced", "vae_traced"])
-def test_subclass_cannot_default_a_trace_flag_to_on(flag: str) -> None:
-    namespace: dict = {}
-    exec(f"def _run(self, *, {flag}=True): pass", namespace)  # noqa: S102
-    with pytest.raises(TypeError, match=f"must not default {flag} to True"):
-        type("_Widening", (Pipeline,), {"_run": namespace["_run"]})
-    exec(f"def _run(self, *, {flag}=None): pass", namespace)  # noqa: S102
-    type("_Narrowing", (Pipeline,), {"_run": namespace["_run"]})
+def _run_with_traced_on(self: Pipeline, *, traced: bool = True) -> None:
+    pass
+
+
+def _run_with_a_component_flag_on(self: Pipeline, *, vae_traced: bool = True) -> None:
+    pass
+
+
+def _run_with_flags_unset(self: Pipeline, *, traced: bool | None = None, vae_traced: bool | None = None) -> None:
+    pass
+
+
+@pytest.mark.parametrize(
+    ("flag", "run"), [("traced", _run_with_traced_on), ("vae_traced", _run_with_a_component_flag_on)]
+)
+def test_subclass_cannot_default_a_trace_flag_to_on(flag: str, run: object, expect_error: Callable) -> None:
+    with expect_error(TypeError, f"must not default {flag} to True"):
+        type("_Widening", (Pipeline,), {"_run": run})
+    type("_Narrowing", (Pipeline,), {"_run": _run_with_flags_unset})
 
 
 def test_trace_region_warning_survives_a_failing_read(monkeypatch: pytest.MonkeyPatch) -> None:

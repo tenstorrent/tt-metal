@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from types import SimpleNamespace
 
 import pytest
@@ -51,15 +52,17 @@ def test_offloading_the_text_encoder_runs_eager(monkeypatch: pytest.MonkeyPatch)
     assert (config.offloads_weights, config.trace) == (False, True)
 
 
-def test_an_explicit_trace_is_kept_for_the_pipeline_to_refuse(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_an_explicit_trace_is_kept_for_the_pipeline_to_refuse(
+    monkeypatch: pytest.MonkeyPatch, expect_error: Callable
+) -> None:
     config = _config(monkeypatch, blackhole=False, checkpoint=_EDIT, trace=True)
     assert (config.offloads_weights, config.trace) == (True, True)
-    with pytest.raises(ValueError, match=_RULE):
+    with expect_error(ValueError, _RULE):
         QwenImagePipeline(device=None, config=config)
 
 
-def test_construction_raises_before_any_device_use() -> None:
-    with pytest.raises(ValueError, match=_RULE):
+def test_construction_raises_before_any_device_use(expect_error: Callable) -> None:
+    with expect_error(ValueError, _RULE):
         QwenImagePipeline(device=None, config=SimpleNamespace(offloads_weights=True, trace=True))
 
 
@@ -80,7 +83,7 @@ def test_text_encoder_names_the_modules_it_offloads() -> None:
     assert _encoder(offload=True, offload_vision=False, vision=None).offloaded_modules == ("encoder", None)
 
 
-def test_registering_what_the_text_encoder_offloads() -> None:
+def test_registering_what_the_text_encoder_offloads(expect_error: Callable) -> None:
     pipeline = object.__new__(QwenImagePipeline)
     pipeline.trace = True
     pipeline.register_evictable(*_encoder(offload=False, offload_vision=True, vision=None).offloaded_modules)
@@ -90,7 +93,7 @@ def test_registering_what_the_text_encoder_offloads() -> None:
         pass
 
     vision = _Vision()
-    with pytest.raises(ValueError, match=_RULE):
+    with expect_error(ValueError, _RULE):
         pipeline.register_evictable(*_encoder(offload=False, offload_vision=True, vision=vision).offloaded_modules)
 
 
