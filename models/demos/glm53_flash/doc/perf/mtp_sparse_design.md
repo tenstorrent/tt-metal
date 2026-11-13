@@ -62,9 +62,7 @@ It also shows the protocol breaks without the save/restore at K 3.
   - the per-slot store (not `GLM53_DSA_PAGED_POOLS`);
   - no dense window;
   - the in-trace MTP fill (`GLM53_SPEC_MTP_PREFILL` 1).
-- Refused: multi-user K >= 2. Its chained launch row u addresses DSA slot u, but the user's state lives in slot
-  u (K + 1). Fixing this is v2: a row-to-slot stride define in `ix_dm1` / `att_dsa_shard_dm0` / the select readers,
-  or chained rows laid out at u (K + 1).
+- Multi-user K >= 2 is v2 (below); v1 refused it.
 - Deviation from the reference: the chained drafts run the MTP indexer themselves instead of reusing draft 1's
   selection. This affects draft quality only; the verify keeps the output exact.
 
@@ -96,3 +94,62 @@ No new L1 buffers are expected:
 - **Single-user `glm53_flash_mtp`:** add `GLM53_SPEC_MTP_SPARSE: "1"` and drop `GLM53_SPEC_MAX_CTX: "262144"`.
 - **`glm53_flash_mtp_mu`:** v1 serves G 8 K 1 sparse: `GLM53_SPEC_K 1`, `GLM53_SPEC_MULTI_USERS 8`,
   `GLM53_SPEC_MTP_SPARSE 1`, and no `GLM53_SPEC_MAX_CTX`. G 4 K 3 stays dense and capped until v2.
+
+## v2: multi-user at any K, the alternate step, the partial-entry seed
+
+### Chained rows on strided slots (mk_mla rev 74)
+
+A multi-user chained launch has row u = user u (`spec_widths` ch: the smallest width >= G), but user u's DSA state
+lives on its group base, generator slot u (K + 1). v2 adds `MLA_DSA_SLOT_STRIDE = S` for plain rows:
+
+| Piece | Change |
+|---|---|
+| `ix_dm1.cpp` | plain row t writes the ring / pooled keys of slot t S (`#error` with ONE_SLOT or the paged pools) |
+| `att_dsa_shard_dm0.cpp`, `att_dsa_dm0.cpp` | plain row t scores the pooled keys of slot t S |
+| `mk_mla.py` | `dsa_state["slot_stride"]` -> the define on the index and reader programs; `dsa_slot_addrs` bound-checks the last strided slot (`stride_rows`: the live rows) |
+| `spec_mtp.py` | `pt_vc`: the chained rows' LOCAL page table (row u = user u's local row; `set_page_tables` writes it); `_chain` launches with `slot_stride = K + 1`, `stride_rows = G` |
+| `generator.spec_mtp_sparse_refusals` | multi-user K >= 2 allowed (only G (K + 1) > 16 refused) |
+
+Page tables and positions stay per launch row (`pt_vc`, `mpos_ch` row u); only the DSA state is strided. The ring
+protocol is unchanged: SPEC_MODE 4 already addresses user u's ring at slot u (K + 1).
+
+### The alternate step (GLM53_SPEC_MULTI_ALT = "G:K")
+
+The served 4 x 3 step declined every step at 5..8 live users (smtp3a 2026-11-13, c8: 244 declines, 24.7 tok/s/u plain
+at width 16). `GLM53_SPEC_MULTI_ALT=8:1` builds a second `SpecMTP` (8 users x 1 draft) on the same build with `share=`
+the primary: one MTP layer, one sparse latent pool / DSA state (both per generator slot), one MkEh. `SpecSwitch` makes
+one step current; every attribute not defined on it is the current step's.
+
+| Rule | Where |
+|---|---|
+| The alternate's group stride divides the primary's (2 | 4): the primary's bases 0 / 4 / 8 / 12 are alternate bases, no request ever moves | `generator.spec_multi_alt` |
+| New requests take the primary's free bases, then the alternate's others (0, 4, 8, 12, 2, 6, 10, 14) | `_admit`, `spec_all_slots` |
+| The step serving the live users: the first whose bases hold all of them (partial groups) | `_spec_multi_pick` / `spec_pick_step` |
+| A step switch leaves the running speculation first, then `spec_select` | `_propose_multi`, `_spec_seed` |
+| The plugin's block is always 1 + effective_k (3) wide; the alternate offers `num_valid` 1 and verifies columns 0..1 (columns 2..3 padded -1) | `_fused_rows`, `_spec_ids` |
+| k_by_rows ((4, 3), (8, 1), (16, 1)) already caps 5..8 live rows at 1 draft | `spec_multi_k_by_rows` |
+
+Requires `GLM53_SPEC_MTP_SPARSE=1` (the dense private MTP caches are per group index, not per slot).
+
+### The partial-entry seed
+
+`_spec_seed` entered every group base (`spec_enter` without slots): with partial groups and fewer live users than G it
+raised "the entering bases [0, 4, 8, 12] must be exactly the live slots" (smtp3a: 20 of 52 entries unseeded). It now
+enters the picked step's live subset.
+
+### Narrow widths with multi-user speculation
+
+A plain step's width is the smallest captured width covering slots 0..max live slot. Users on group bases
+0 / 4 / 8 / 12 therefore decode plain steps at width 16 as soon as one sits on slot 8 or 12; narrow width 4 serves
+only a lone user on slot 0 (native width 8: users on 0 / 4). Nothing in the step breaks the narrow widths (the chained
+launch runs at ch = 4 when width 4 is built: the MTP layer's t = 4 programs on the narrow phases). The lever for plain
+steps is fewer of them: partial groups + the alternate step keep speculating as users come and go (smtp3a: 512 fused
+vs 46 fallback steps at c4).
+
+### Memory
+
+| | Per chip |
+|---|---|
+| `pt_vc` (v2) | 32 rows x bps_local int32 (64 KiB at 1 M) |
+| The alternate step | its own verify / MTP-catch-up programs, heads, records, `pt_v`, the 16-row flat MTP residual (1 MiB); no second MTP layer or state |
+| L1 | no new buffer expected: the alternate's persistent buffers are row views (`_seed_persist`); measured by the chain's GLM53_L1_REPORT rows |

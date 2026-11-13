@@ -22,6 +22,9 @@
 //   base); per group the one-slot rules (ring / pooled-key base = that slot, q0 = the group's first active row's pool,
 //   ring tile rows 4 (q - q0) ..); rows stay in row order on the one index core (or the lane baton), so a group's rows
 //   are written in order and groups never share a slot.
+// MLA_DSA_SLOT_STRIDE = S (rev 74; plain rows only, GLM53_SPEC_MTP_SPARSE multi-user K >= 2: the MTP layer's chained
+//   rows): row t is user t, whose DSA state lives on its group base, slot t S (the generator slot u (K + 1)) -- the
+//   ring and pooled-key addressing of slot t S instead of slot t; the page-table row and cur_pos stay row t's.
 // MLA_DSA_SHARD_LINE (rev 59, the TP8 sequence-sharded split-K: kernels/mla/dsa_shard.hpp): afterwards, once the
 //   all-gather landed (AGC_SEM, >= 1), the q tiles of both passes: head tile g of token t = the 8-row q pieces of chips
 //   4 g .. 4 g + 3 in y_ag -> q_asm (4 tiles per round trip through the pool-tile scratch), then QASM_SEM += 1 on this
@@ -117,6 +120,12 @@ void kernel_main() {
         noc_async_read_barrier();
     }
 #endif
+#if defined(MLA_DSA_SLOT_STRIDE)
+#if defined(MLA_DSA_ONE_SLOT) || defined(MLA_DSA_PAGED_POOLS)
+#error "MLA_DSA_SLOT_STRIDE: plain rows on the per-slot store only (not a one-slot verify, not the paged pools)"
+#endif
+    static_assert(MLA_DSA_SLOT_STRIDE >= 2 && MLA_DSA_SLOT_STRIDE <= 16, "MLA_DSA_SLOT_STRIDE: 2..16 slots per row");
+#endif
 #if defined(MLA_DSA_ONE_SLOT)
 #if !defined(MLA_DSA_IX_ROWS) || (defined(MLA_ATT_LANES) && !defined(MLA_DSA_ONE_SLOT_BATON))
 #error "MLA_DSA_ONE_SLOT: the row-granular index writes on one index core (or the lane baton)"
@@ -191,6 +200,9 @@ void kernel_main() {
         const uint32_t grp = static_cast<uint32_t>(p / 4 - q0);  // >= 0: positions rise with the row
         ASSERT(p / 4 >= q0 && 4 * grp + 3 < 32);
         const uint32_t roff = mla::row_off(4 * grp);  // ring tile rows 4 grp .. + 3 (64-B aligned: 128 grp / + 1 KB)
+#elif defined(MLA_DSA_SLOT_STRIDE)
+        const uint32_t slot = t * MLA_DSA_SLOT_STRIDE;  // plain row t = the user on group base t S (rev 74)
+        const uint32_t roff = 0;
 #else
         const uint32_t slot = t;
         const uint32_t roff = 0;

@@ -16,6 +16,7 @@
 // with
 //   MLA_ATT_LANES, rev 40: this core's lane takes tokens lane, lane + LANES, ...; c / C are lane-local; a dense token's
 //   row tiles go in batches of <= NKMAX as kernels/mla/att_dm0.cpp's lanes path).
+// MLA_DSA_SLOT_STRIDE = S (rev 74, plain rows; ix_dm1.cpp): row t scores the pooled keys of slot t S.
 // MLA_DSA_ONE_SLOT (rev 56, Stage 17's speculative verify): every row scores the launch's slot (s0),
 // kernels/mla/ix_dm1.cpp.
 
@@ -232,6 +233,8 @@ void kernel_main() {
                     ((t / MLA_DSA_GROUP_ROWS) * MLA_DSA_GROUP_ROWS * TP_TILES + c + (i0 + j) * C) * 4;
 #elif defined(MLA_DSA_ONE_SLOT)
                 const uint32_t tile0 = (c + (i0 + j) * C) * 4;
+#elif defined(MLA_DSA_SLOT_STRIDE)  // rev 74: plain row t = the user on group base t S (ix_dm1.cpp)
+                const uint32_t tile0 = (t * MLA_DSA_SLOT_STRIDE * TP_TILES + c + (i0 + j) * C) * 4;
 #else
                 const uint32_t tile0 = (t * TP_TILES + c + (i0 + j) * C) * 4;
 #endif

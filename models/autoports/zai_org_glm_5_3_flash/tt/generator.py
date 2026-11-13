@@ -681,9 +681,10 @@ def spec_mtp_sparse_refusals(K: int, groups: int, drafter: str, *, shard: bool, 
       per chip like the main layers');
     * the per-slot pooled-key store (not GLM53_DSA_PAGED_POOLS) and no dense window (GLM53_DSA_DENSE_WINDOW: a window
       store of its own is not built);
-    * the in-trace MTP fill (GLM53_SPEC_MTP_PREFILL "trace", the default; "launch" fills the dense cache only);
-    * multi-user (GLM53_SPEC_MULTI) only at K 1: the chained MTP rows address launch row u = user u, while a group's
-      DSA state lives in slot u (K + 1) (ix_dm1.cpp's plain rows take slot = row): no chained launch at K 1."""
+    * the in-trace MTP fill (GLM53_SPEC_MTP_PREFILL "trace", the default; "launch" fills the dense cache only).
+    Multi-user (GLM53_SPEC_MULTI) at any K (v2): the chained MTP rows (launch row u = user u) address their users' DSA
+    state on the group bases u (K + 1) through mk_mla rev 74's slot stride (ix_dm1.cpp / att_dsa_shard_dm0.cpp
+    MLA_DSA_SLOT_STRIDE) and their page-table rows through SpecMTP.pt_vc (row u = user u's local row)."""
     why = []
     if drafter != "mtp":
         why.append(f"drafter {drafter!r} (the MTP drafter only)")
@@ -695,9 +696,56 @@ def spec_mtp_sparse_refusals(K: int, groups: int, drafter: str, *, shard: bool, 
         why.append("GLM53_DSA_DENSE_WINDOW=1 (no MTP window store)")
     if prefill != "trace":
         why.append(f"GLM53_SPEC_MTP_PREFILL={prefill!r} (the in-trace MTP fill writes the sharded store)")
-    if int(groups) and int(K) != 1:
-        why.append(f"GLM53_SPEC_MULTI with K {K} (multi-user: K 1 only -- the chained rows' DSA slot)")
+    if int(groups) and int(groups) * (int(K) + 1) > 16:
+        why.append(f"GLM53_SPEC_MULTI G {groups} x (K {K} + 1) > 16 rows (the B 16 build's slots)")
     return why
+
+
+def spec_multi_alt(env=os.environ) -> tuple | None:
+    """GLM53_SPEC_MULTI_ALT = "G:K" (default unset; GLM53_SPEC_MULTI + GLM53_SPEC_MTP_SPARSE): the backend also builds an
+    ALTERNATE multi-user step of G users x K drafts next to the primary one (GLM53_SPEC_MULTI_USERS x GLM53_SPEC_K) on
+    the same build, sharing the sparse MTP layer and its per-slot state (tt/spec_mtp.py SpecSwitch). The served adapter
+    speculates with the primary step while the live users sit on its group bases and with the alternate one while they
+    sit on the alternate's (generator_vllm_stack._spec_multi_active): "8:1" next to the primary 4 x 3 serves 5..8 live
+    users with one draft each (the plugin's k_by_rows: ((4, 3), (8, 1), (16, 1)) -- spec_multi_k_by_rows), where the
+    4 x 3 step declined every step (smtp3a c8 2026-11-13: 244 declines, 24.7 tok/s/u plain at width 16). The primary's
+    bases must be a subset of the alternate's (G' (K' + 1) | G (K + 1)): a user placed for the primary step is also an
+    alternate user, so a request never moves. None: one step."""
+    v = (env.get("GLM53_SPEC_MULTI_ALT", "") or "").strip()
+    if not v or v == "0":
+        return None
+    try:
+        G, K = (int(x) for x in v.split(":"))
+    except ValueError:
+        raise ValueError(f"GLM53_SPEC_MULTI_ALT={v!r}: 'G:K' (e.g. '8:1')") from None
+    if env.get("GLM53_SPEC_MULTI", "0") != "1" or env.get("GLM53_SPEC_MTP_SPARSE", "0") != "1":
+        raise ValueError(
+            "GLM53_SPEC_MULTI_ALT: with GLM53_SPEC_MULTI=1 and GLM53_SPEC_MTP_SPARSE=1 (the shared MTP state)"
+        )
+    G0, K0 = spec_multi_groups(env), int(env.get("GLM53_SPEC_K", "0") or 0)
+    if not (1 <= K <= 3 and G >= 2 and G * (K + 1) <= 16 and (K + 1) % 2 == 0):
+        raise ValueError(f"GLM53_SPEC_MULTI_ALT={v!r}: G x (K + 1) <= 16, K in 1..3, K + 1 even")
+    if (K0 + 1) % (K + 1) or (G, K) == (G0, K0) or G * (K + 1) < G0 * (K0 + 1):
+        raise ValueError(f"GLM53_SPEC_MULTI_ALT={v!r}: its group stride K + 1 must divide the primary's {K0 + 1} (the "
+                         f"primary's bases {G0} x {K0 + 1} on the alternate's, which reach as far) and differ from "
+                         "it")  # fmt: skip
+    return G, K
+
+
+def spec_pick_step(steps, live, room=None, partial: bool = True):
+    """the multi-user step that serves the live generator slots (pure; GLM53_SPEC_MULTI_ALT): steps = [(K, G, bases)]
+    in preference order (the primary first), live = the live slots -> (step index, the entering bases) of the FIRST
+    step whose bases hold every live slot (partial: any non-empty subset; else exactly), room(i) its context check;
+    None when no step serves them (the step decodes plainly)"""
+    lv = sorted(int(v) for v in live)
+    if not lv:
+        return None
+    for i, (_K, _G, bases) in enumerate(steps):
+        b = sorted(int(v) for v in bases)
+        if (set(lv) <= set(b)) if partial else (lv == b):
+            if room is None or room(i):
+                return i, lv
+    return None
 
 
 def mtp_ring_grp(c: int, n: int) -> int:
@@ -2528,6 +2576,47 @@ class Glm53Generator(_ReadinessGenerator):
             return ()
         return tuple(int(s) for s in getattr(sp, "slots", (0,))) if self.spec_groups() else (0,)
 
+    # GLM53_SPEC_MULTI_ALT (spec_multi_alt): the backend holds two multi-user steps (tt/spec_mtp.py SpecSwitch: the
+    # primary + the alternate, one current); every entry point above / below acts on the CURRENT step. The served adapter
+    # picks the step for its live users (spec_steps / spec_pick_step) and selects it between entries (spec_select).
+    def spec_steps(self) -> list:
+        """[(K, G, group bases)] of the backend's multi-user steps in preference order (the primary first); one entry
+        without GLM53_SPEC_MULTI_ALT, none without a multi-user step"""
+        sp = getattr(self.backend, "spec", None)
+        if sp is None or not self.spec_groups():
+            return []
+        steps = getattr(sp, "steps", None) or [sp]
+        return [(int(x.K), int(x.groups), tuple(int(v) for v in x.slots)) for x in steps]
+
+    def spec_current(self) -> int:
+        """the index (into spec_steps) of the current step"""
+        return int(getattr(getattr(self.backend, "spec", None), "cur", 0) or 0)
+
+    def spec_select(self, i: int) -> None:
+        """make step i (spec_steps) the current one: only between speculations (no binding speculating)"""
+        sp = getattr(self.backend, "spec", None)
+        if int(i) == self.spec_current():
+            return
+        if sp is None or not hasattr(sp, "select"):
+            raise ValueError(f"spec_select({i}): the backend has one speculative step")
+        if any(getattr(b, "spec", None) is not None for b in self._bindings.values()):
+            raise RuntimeError("spec_select: leave the running speculation first (its candidate rows are the step's)")
+        sp.select(int(i))
+        self.counters["spec_selects"] = self.counters.get("spec_selects", 0) + 1
+
+    def spec_k_max(self) -> int:
+        """the most drafts any of the backend's steps makes (the plugin's effective_k: GLM53_SPEC_K, the primary's)"""
+        steps = self.spec_steps()
+        return max((k for k, _g, _b in steps), default=self.spec_k())
+
+    def spec_all_slots(self) -> tuple:
+        """every multi-user step's group bases, the primary's first, then the alternate's others (the served adapter
+        places new requests in this order: the users that can speculate sit there, no slot moves)"""
+        out = []
+        for _k, _g, bases in self.spec_steps():
+            out += [s for s in bases if s not in out]
+        return tuple(out) if out else self.spec_slots()
+
     def _spec_limit(self, b) -> int:
         """the positions a speculative step may touch: the context, and the drafter's own cache capacity when the step
         has one (SpecMTP.pos_cap: GLM53_DF2_CACHE_CAP)"""
@@ -2535,16 +2624,17 @@ class Glm53Generator(_ReadinessGenerator):
         cap = getattr(getattr(self.backend, "spec", None), "pos_cap", None)
         return min(limit, int(cap)) if cap else limit
 
-    def spec_room(self, kv_cache) -> bool:
-        """the next speculative step of slot 0 fits (its verify + the next drafts: positions up to L + 2K)"""
+    def spec_room(self, kv_cache, step: int | None = None) -> bool:
+        """the next speculative step of slot 0 fits (its verify + the next drafts: positions up to L + 2K); step (the
+        multi-user steps, spec_steps): that step's users / K instead of the current one's"""
         b = self._binding(kv_cache)
         sp = getattr(self.backend, "spec", None)
         if sp is not None and self.spec_groups():  # GLM53_SPEC_MULTI: every user's next step fits
             lim = self._spec_limit(b)
-            bases = self.spec_slots()
+            K, _G, bases = self.spec_steps()[self.spec_current() if step is None else int(step)]
             if getattr(sp, "partial", False):  # GLM53_SPEC_PARTIAL: the live bases only (an empty one holds no request)
                 bases = [s for s in bases if b.slots[s].active and not b.slots[s].finished]
-            return all(int(b.slots[s].seq_len) + 2 * int(sp.K) + 1 <= lim for s in bases)
+            return all(int(b.slots[s].seq_len) + 2 * int(K) + 1 <= lim for s in bases)
         return sp is not None and int(b.slots[0].seq_len) + 2 * int(sp.K) + 1 <= self._spec_limit(b)
 
     def spec_enter(self, kv_cache, slot: int = 0, slots: Optional[Sequence[int]] = None):
@@ -3020,8 +3110,14 @@ class Glm53Generator(_ReadinessGenerator):
         self.last_batch_timing = None
         # GLM53_SPEC_MULTI (spec_k with the backend's G-user step): the G prompts go to the group bases (no slot moves)
         multi = bool(spec_k) and self.spec_groups() > 0
-        if multi and slots is None and n == len(self.spec_slots()):
-            slots = list(self.spec_slots())
+        if multi and slots is None:
+            # the first step (spec_steps: the primary, then GLM53_SPEC_MULTI_ALT's) with room for the n users -> current;
+            # the users on its first n group bases (n < G: GLM53_SPEC_PARTIAL's inactive groups)
+            steps = self.spec_steps()
+            pick = next((i for i, (_k, g, _b) in enumerate(steps) if g >= n), None)
+            if pick is not None and (n == steps[pick][1] or self.spec_partial_groups()):
+                self.spec_select(pick)
+                slots = list(steps[pick][2][:n])
         slots = list(slots) if slots is not None else list(range(n))
         if len(slots) != n or len(set(slots)) != n or any(not 0 <= s < b.max_batch for s in slots):
             raise ValueError(f"need {n} distinct slots in [0, {b.max_batch})")
@@ -3082,7 +3178,8 @@ class Glm53Generator(_ReadinessGenerator):
                 self._emit(b, s, outputs[i], p0, next_input, user_of, feed)
             t_first = _time.perf_counter()
             if spec_k and multi:  # GLM53_SPEC_MULTI: the G users' speculative steps, then the plain loop
-                spec_stats = self._spec_decode_groups(b, slots, outputs, int(spec_k), user_of, feed)
+                spec_stats = self._spec_decode_groups(b, slots, outputs, int(self.spec_k()), user_of, feed)
+                spec_stats["spec_step"] = self.spec_steps()[self.spec_current()][:2]  # (K, G) of the step that ran
                 spec_stats["spec_mtp_prefill_rows"] = spec_rows
             elif spec_k:  # Stage 17 M0: the speculative steps first; the plain loop below decodes whatever they leave
                 if spec_rows is not None:
@@ -3171,10 +3268,14 @@ class Glm53Generator(_ReadinessGenerator):
         why = []
         if mm is not None and any(m is not None for m in mm):  # (the MTP-cache fill embeds token ids, not image rows)
             why.append("a text prompt (no image rows: the MTP-cache prefill embeds the placeholder ids)")
-        if self.spec_k() != K:
-            why.append(f"the backend's speculative step with K = {K} (GLM53_SPEC_K; the backend has {self.spec_k()})")
-        if self.spec_groups():  # GLM53_SPEC_MULTI: exactly G prompts, on the group bases
-            if list(slots) != list(self.spec_slots()):
+        if self.spec_k_max() != K:
+            why.append(
+                f"the backend's speculative step with K = {K} (GLM53_SPEC_K; the backend has {self.spec_k_max()})"
+            )
+        if self.spec_groups():  # GLM53_SPEC_MULTI: exactly G prompts on the group bases (GLM53_SPEC_PARTIAL: a subset)
+            bases = list(self.spec_slots())
+            sub = self.spec_partial_groups() and bool(slots) and set(slots) <= set(bases)
+            if list(slots) != bases and not sub:
                 why.append(f"{self.spec_groups()} prompts on the group bases {list(self.spec_slots())} "
                            f"(GLM53_SPEC_MULTI; slots {list(slots)})")  # fmt: skip
         elif list(slots) != [0]:

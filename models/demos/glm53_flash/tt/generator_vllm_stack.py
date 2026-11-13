@@ -880,8 +880,8 @@ class GLM53StackForCausalLM:
             self._spec_admit(gslots, gen_starts, extra.get("prefix_attach", {}), plan["vision"] if plan else ())
         armed = False
         if self.spec and self.spec_multi_capable and callable(getattr(self.gen.backend, "arm_mtp_prefill", None)):
-            # GLM53_SPEC_MULTI: every group base of the call fills its user's MTP cache
-            bases = set(self.gen.spec_slots())
+            # GLM53_SPEC_MULTI: every group base of the call fills its user's MTP cache (every step's bases)
+            bases = set(self.gen.spec_all_slots())
             for i, g in enumerate(gslots):
                 if g in bases and g not in self._no_spec:
                     armed = bool(self.gen.backend.arm_mtp_prefill(g, tokens[i, : ends[i]].to(torch.int64))) or armed
@@ -1129,13 +1129,25 @@ class GLM53StackForCausalLM:
         """the backend's multi-user step serves any non-empty subset of its groups (Glm53Generator.spec_partial_groups)"""
         return self.spec_multi_capable and self.gen.spec_partial_groups()
 
-    def _spec_multi_active(self, kv):
-        """spec_multi_gate over the binding's live slots -> the speculating group bases, or None"""
+    def _spec_multi_pick(self, kv):
+        """spec_multi_gate over the binding's live slots, per multi-user step in preference order (Glm53Generator
+        .spec_steps: the primary, then GLM53_SPEC_MULTI_ALT's alternate) -> (step index, the speculating group bases) of
+        the first step whose bases hold every live user, or None"""
         b = self.gen._binding(kv)
         live = [s for s in range(b.max_batch) if b.slots[s].active and not b.slots[s].finished]
-        bases = list(self.gen.spec_slots())
-        return spec_multi_gate(live, bases, {s: self._speculable(s) for s in live}, self._no_spec,
-                               bool(bases) and self.gen.spec_room(kv), partial=self._spec_partial())  # fmt: skip
+        spec_ok = {s: self._speculable(s) for s in live}
+        steps = self.gen.spec_steps() or [(self.gen.spec_k(), self.gen.spec_groups(), tuple(self.gen.spec_slots()))]
+        for i, (_k, _g, bases) in enumerate(steps):
+            act = spec_multi_gate(live, list(bases), spec_ok, self._no_spec,
+                                  bool(bases) and self.gen.spec_room(kv, step=i), partial=self._spec_partial())  # fmt: skip
+            if act is not None:
+                return i, act
+        return None
+
+    def _spec_multi_active(self, kv):
+        """_spec_multi_pick's speculating group bases, or None"""
+        p = self._spec_multi_pick(kv)
+        return None if p is None else p[1]
 
     def _spec_multi_ok(self, kv) -> bool:
         """GLM53_SPEC_MULTI gate (spec_multi_gate): v1 = the live requests are exactly the G group bases; with the
@@ -1168,7 +1180,14 @@ class GLM53StackForCausalLM:
         if os.environ.get("GLM53_STACK_VLLM_SPEC_SEED", "1") != "1" or not self._spec_gate(kv):
             return
         try:
-            self.gen.spec_enter(kv)
+            if self.spec_multi_capable:  # GLM53_SPEC_MULTI: the live users' own step and bases -- with partial groups
+                # a subset (a joining user while others run: spec_enter's default, every base, refused it -- smtp3a
+                # 2026-11-13: "no MTP seed" on 20 of 52 entries); the step selected first (no speculation runs here)
+                i, act = self._spec_multi_pick(kv)
+                self.gen.spec_select(i)
+                self.gen.spec_enter(kv, slots=act)
+            else:
+                self.gen.spec_enter(kv)
         except ValueError as e:  # (page coverage / context: no seed; the speculation simply starts without it)
             logger.warning(f"GLM53 stack spec: no MTP seed ({e})")
             return
@@ -1257,11 +1276,12 @@ class GLM53StackForCausalLM:
         cache length), else None"""
         b = self.gen._binding(kv)
         sp = getattr(b, "spec", None)
-        K = self.gen.spec_k()
+        K = self.gen.spec_k()  # (the CURRENT step's: GLM53_SPEC_MULTI_ALT's alternate drafts fewer than the block's
+        # effective_k -- its rows' columns past K are the plugin's padding, position -1)
         B, W = (int(v) for v in tok.shape)
         live = [i for i in range(B) if int(pos[i, 0]) >= 0]
         bases = list(self._spec_active or self.gen.spec_slots())  # (partial groups: the entered subset)
-        if sp is None or "groups" not in sp or W != K + 1 or sorted(alias[i] for i in live) != bases:
+        if sp is None or "groups" not in sp or W < K + 1 or sorted(alias[i] for i in live) != bases:
             return None
         out = {}
         for i in live:
@@ -1269,9 +1289,11 @@ class GLM53StackForCausalLM:
             mine = sp["groups"][g]
             if int(nv[i]) != K or p0 != int(b.slots[g].seq_len) or int(tok[i, 0]) != int(mine["bonus"]):
                 return None
-            if [int(v) for v in tok[i, 1:].tolist()] != [int(v) for v in mine["drafts"]]:
+            if [int(v) for v in tok[i, 1 : K + 1].tolist()] != [int(v) for v in mine["drafts"]][:K]:
                 return None
-            if [int(v) for v in pos[i].tolist()] != list(range(p0, p0 + W)):
+            if [int(v) for v in pos[i, : K + 1].tolist()] != list(range(p0, p0 + K + 1)):
+                return None
+            if any(int(v) >= 0 for v in pos[i, K + 1 :].tolist()):  # (a padded column carries position -1)
                 return None
             out[i] = g
         return out
@@ -1283,8 +1305,9 @@ class GLM53StackForCausalLM:
         if isinstance(r, dict):
             ids = torch.zeros(B, W, dtype=torch.int32)
             self._spec_n = {}
-            for i, g in r.items():
-                ids[i] = torch.tensor([int(v) for v in rec[g]["a"][:W]], dtype=torch.int32)
+            for i, g in r.items():  # (the step's K + 1 verify ids; columns past them -- a smaller K -- padding 0)
+                a = [int(v) for v in rec[g]["a"][:W]]
+                ids[i, : len(a)] = torch.tensor(a, dtype=torch.int32)
                 self._spec_n[g] = int(rec[g]["n"])
                 self.spec_stats["committed"] += int(rec[g]["n"]) + 1
             self.spec_stats["fused"] += 1
@@ -1382,10 +1405,14 @@ class GLM53StackForCausalLM:
         length -- the bootstrap's drafts (entering) or the last fused step's, which continue exactly its committed
         block per user; else every row declines (the speculation is left: the next step decodes plainly)"""
         rows = {i: self._alias[i] for i in live}
-        active = self._spec_multi_active(kv) if K == self.gen.spec_k() else None
+        pick = self._spec_multi_pick(kv) if K == self.gen.spec_k_max() else None  # (K: the plugin's effective_k)
+        active = pick[1] if pick is not None else None
         ok = active is not None and sorted(rows.values()) == active
-        if ok and self._spec_active is not None and active != self._spec_active:
-            self._spec_stop(kv)  # (partial groups: a user joined / left -> leave, enter the new set below)
+        if ok and ((self._spec_active is not None and active != self._spec_active)
+                   or pick[0] != self.gen.spec_current()):  # fmt: skip
+            # (partial groups: a user joined / left; GLM53_SPEC_MULTI_ALT: the users moved to the other step) -> leave,
+            # enter the new set below
+            self._spec_stop(kv)
         last = {i: int(ac[i]) - 1 for i in live}
         if ok:
             ok = all(int(cp[i, last[i]]) == int(b.slots[g].seq_len) for i, g in rows.items())
@@ -1402,6 +1429,7 @@ class GLM53StackForCausalLM:
             d = {g: list(sp["groups"][g]["drafts"]) for g in rows.values()}
         elif ok:
             try:
+                self.gen.spec_select(pick[0])  # (no speculation runs: _spec_stop above / never entered)
                 d = self.gen.spec_enter(kv, slots=active) if self._spec_partial() else self.gen.spec_enter(kv)
             except ValueError as e:  # (a refusal of the generator's: page coverage / context -> decline this step)
                 logger.warning(f"GLM53 stack spec: no multi-user bootstrap ({e})")
@@ -1415,8 +1443,9 @@ class GLM53StackForCausalLM:
             self.spec_stats["declines"] += 1
             return DraftOutput(draft_token_ids=drafts, num_valid=nvalid)
         for i, g in rows.items():
-            drafts[i] = torch.tensor([int(v) for v in d[g][:K]], dtype=torch.int32)
-            nvalid[i] = K
+            kk = min(K, len(d[g]))  # (the current step's drafts: GLM53_SPEC_MULTI_ALT's alternate makes fewer)
+            drafts[i, :kk] = torch.tensor([int(v) for v in d[g][:kk]], dtype=torch.int32)
+            nvalid[i] = kk
         self.spec_stats["proposals"] += 1
         return DraftOutput(draft_token_ids=drafts, num_valid=nvalid)
 
@@ -1466,9 +1495,9 @@ class GLM53StackForCausalLM:
                 )
             free = [x for x in range(n) if x not in taken]
             if self.spec and self.spec_multi_capable:  # GLM53_SPEC_MULTI: the free group bases first (the users that
-                # can speculate sit there: no slot moves in v1)
-                bases = set(self.gen.spec_slots())
-                free.sort(key=lambda x: (x not in bases, x))
+                # can speculate sit there: no slot moves) -- the primary step's, then GLM53_SPEC_MULTI_ALT's others
+                order = {x: i for i, x in enumerate(self.gen.spec_all_slots())}
+                free.sort(key=lambda x: (order.get(x, len(order)), x))
             if not free:
                 raise RuntimeError(f"no free generator slot for the prefill batch {slots} (live {sorted(live)})")
             lowest = free[0]
@@ -1526,7 +1555,7 @@ class GLM53StackForCausalLM:
             raise ValueError(f"release_request({slot}) outside the {self.max_batch} slots")
         g = self._alias[int(slot)]
         self._spec_settle()
-        if (self.spec and self.spec_multi_capable and g in self.gen.spec_slots()
+        if (self.spec and self.spec_multi_capable and g in self.gen.spec_all_slots()
                 and getattr(self.gen._binding(self.kv_cache), "spec", None) is not None):  # fmt: skip
             # GLM53_SPEC_MULTI: the other users' committed KDA rows sit in their candidate rows -> leave (every user's
             # row to its base), not abort; this request's own copy is dead state

@@ -54,10 +54,13 @@ from models.autoports.zai_org_glm_5_3_flash.tt.generator import (
     mtp_fill_inputs,
     mtp_prefill_span,
     spec_mtp_pt_width,
+    spec_mtp_sparse_refusals,
+    spec_multi_alt,
     spec_multi_groups,
     spec_multi_k_by_rows,
     spec_multi_plan,
     spec_partial,
+    spec_pick_step,
     spec_sampled_verify,
     spec_sampler_pages,
     spec_step_caps,
@@ -2126,6 +2129,26 @@ class _MockSpecMulti:
         return recs
 
 
+class _MockSpecSwitch:
+    """tt/spec_mtp.py SpecSwitch on the mock (GLM53_SPEC_MULTI_ALT): the primary and the alternate multi-user steps, one
+    current; every attribute the current step's, group_of any step's"""
+
+    def __init__(self, steps):
+        self.__dict__.update(steps=list(steps), cur=0)
+
+    def __getattr__(self, name):
+        return getattr(self.__dict__["steps"][self.__dict__["cur"]], name)
+
+    def __setattr__(self, name, value):
+        setattr(self.__dict__["steps"][self.__dict__["cur"]], name, value)
+
+    def select(self, i: int) -> None:
+        self.__dict__["cur"] = int(i)
+
+    def group_of(self, slot):
+        return next((u for u in (x.group_of(slot) for x in self.steps) if u is not None), None)
+
+
 class _MockSpecMultiBackend(_MockSpecBackend):
     """the spec mock with the multi-user step (G users) and one armed MTP-cache prefill per group base"""
 
@@ -2282,6 +2305,26 @@ def test_spec_multi_refusals_and_room(monkeypatch):
     t = gen.last_batch_timing
     assert out == plain and [len(o) for o in out] == [osl, osl]
     assert 0 < t["spec_emitted_u"][0] < osl - 1 and backend.decodes > 0 and backend.spec.counters["leaves"] == 1
+    # GLM53_SPEC_MTP_SPARSE v2: multi-user at any K (the chained rows' slot stride), only G (K + 1) <= 16 refused
+    sh = dict(shard=True, paged=False, window=False, prefill="trace")
+    assert spec_mtp_sparse_refusals(3, 4, "mtp", **sh) == [] and spec_mtp_sparse_refusals(1, 8, "mtp", **sh) == []
+    assert any("> 16 rows" in w for w in spec_mtp_sparse_refusals(3, 8, "mtp", **sh))
+    # GLM53_SPEC_MULTI_ALT: the alternate step "G:K" next to the primary; the step pick by where the live users sit
+    e = {"GLM53_SPEC_MULTI": "1", "GLM53_SPEC_MTP_SPARSE": "1", "GLM53_SPEC_MULTI_USERS": "4", "GLM53_SPEC_K": "3"}
+    assert spec_multi_alt(e) is None and spec_multi_alt({**e, "GLM53_SPEC_MULTI_ALT": "8:1"}) == (8, 1)
+    for bad in ("2:3", "4:3", "8:2", "8", "16:1"):  # (narrower, the primary itself, K + 1 odd, no K, > 16 rows)
+        with expect_error(ValueError, "GLM53_SPEC_MULTI_ALT"):
+            spec_multi_alt({**e, "GLM53_SPEC_MULTI_ALT": bad})
+    with expect_error(ValueError, "GLM53_SPEC_MTP_SPARSE=1"):
+        spec_multi_alt({**e, "GLM53_SPEC_MTP_SPARSE": "0", "GLM53_SPEC_MULTI_ALT": "8:1"})
+    steps = [(3, 4, (0, 4, 8, 12)), (1, 8, tuple(range(0, 16, 2)))]
+    assert spec_pick_step(steps, [4, 0]) == (0, [0, 4]) and spec_pick_step(steps, [0, 2]) == (1, [0, 2])
+    assert spec_pick_step(steps, [0, 4, 8, 12, 2, 6]) == (1, [0, 2, 4, 6, 8, 12])
+    assert spec_pick_step(steps, [1]) is None and spec_pick_step(steps, []) is None
+    assert spec_pick_step(steps, [0, 4], room=lambda i: i == 1) == (1, [0, 4])  # (no room on the primary: K 3)
+    assert spec_pick_step(steps, [0, 4], partial=False) is None and spec_pick_step(
+        steps[:1], [0, 4, 8, 12], partial=False
+    ) == (0, [0, 4, 8, 12])
     # the served step's gate (spec_multi_gate): v1 = exactly the G bases; partial groups = any non-empty subset of them;
     # every live slot speculable and allowed, every next step fitting; a live slot off the bases declines for everyone
     sp = {0: True, 2: True}
@@ -2657,7 +2700,113 @@ def test_served_spec_multi_user_flow():
         sb.append(int(ids[1, 0]))
         pb_ += 1
     assert sb == want(pb, sb)
+    _served_alt_flow()
     assert "ttnn" not in sys.modules
+
+
+def _served_alt_flow():
+    """GLM53_SPEC_MULTI_ALT on the served path (tt/spec_mtp.py SpecSwitch, 8-slot mock): the primary 2 x 3 step (bases
+    0 / 4) and the alternate 4 x 1 step (bases 0 / 2 / 4 / 6). New requests take the primary's bases, then the
+    alternate's; two users speculate on the primary (3 drafts), the third and fourth move everyone to the alternate (the
+    seed selects it; 1 draft per row in the plugin's K = 3 block, columns 2..3 padded -1), after two releases the two
+    left speculate on the primary again -- every stream equals plain greedy"""
+    mb, K0 = 8, 3
+
+    class _AltBackend(_MockSpecMultiBackend):
+        def allocate_decode_io(self, kv):
+            io = super().allocate_decode_io(kv)
+            self.spec = _MockSpecSwitch([self.spec, _MockSpecMulti(self, 1, 4, self.good)])
+            return io
+
+    be = _AltBackend(mb, K0, 2, lambda step: K0)
+    gen = Glm53Generator(be, tokenizer=SimpleNamespace(stop_token_ids=()), max_batch=mb, max_seq_len=SEQ)
+    ad = GLM53StackForCausalLM(gen, mb, SEQ, spec=True)
+    kv = ad.allocate_kv_cache((mb * SEQ // BLOCK_SIZE + mb, 1, BLOCK_SIZE, LATENT_DIM), torch.bfloat16, 45)
+    ad.warmup_model_prefill(kv_cache=kv, enable_trace=True, can_sample_on_device=True)
+    ad.warmup_model_decode(kv_cache=kv, enable_trace=True, max_batch_size=mb, num_blocks=BPS, can_sample_on_device=True)
+    assert gen.spec_steps() == [(3, 2, (0, 4)), (1, 4, (0, 2, 4, 6))] and gen.spec_all_slots() == (0, 4, 2, 6)
+    assert gen.spec_k_max() == 3 and gen.spec_current() == 0
+    ps = [_prompt(100 - 7 * i, 5 + 11 * i) for i in range(4)]
+    tab = torch.zeros(mb, BPS, dtype=torch.int32)
+    for i in range(4):
+        bl = _blocks(i, 400)
+        tab[i, : len(bl)] = torch.tensor(bl, dtype=torch.int32)
+    st, nxt = {}, {}
+    want = lambda p, s: [(p[-1] + 1 + i) % VOCAB for i in range(len(s))]  # noqa: E731
+
+    def pre(i):
+        out, _ = ad.prefill_forward(_history([ps[i]]), page_table=tab[i : i + 1], kv_cache=kv, prompt_lens=[len(ps[i])],
+                                    start_pos=[0], empty_slots=[i], sampling_params=_greedy(1))  # fmt: skip
+        st[i], nxt[i] = [int(out[0, 0])], len(ps[i])
+
+    def plain(users):
+        tok, pos = torch.zeros(mb, 1, dtype=torch.int64), torch.full((mb,), -1, dtype=torch.int64)
+        for i in users:
+            tok[i, 0], pos[i] = st[i][-1], nxt[i]
+        ids = ad.decode_forward(tok, pos, page_table=tab, kv_cache=kv, sampling_params=_greedy(mb))
+        for i in users:
+            st[i].append(int(ids[i, 0]))
+            nxt[i] += 1
+
+    def blk(rows):
+        ct = torch.full((mb, 1 + K0), PLACEHOLDER_TOKEN_ID, dtype=torch.int32)
+        cp = torch.full((mb, 1 + K0), -1, dtype=torch.int32)
+        ac = torch.ones(mb, dtype=torch.int32)
+        for i, (toks, p) in rows.items():
+            ct[i, : len(toks)] = torch.tensor(toks, dtype=torch.int32)
+            cp[i, :] = torch.arange(p, p + 1 + K0)
+            ac[i] = len(toks)
+        return ct, cp, ac
+
+    def rounds(n, users, k):
+        ct, cp, ac = blk({i: ([st[i][-1]], nxt[i]) for i in users})
+        for _ in range(n):
+            do = ad.propose_draft_tokens(K0, ct, cp, ac)
+            assert do.num_valid.tolist() == [k if i in users else 0 for i in range(mb)], do.num_valid.tolist()
+            tok = torch.zeros(mb, 1 + K0, dtype=torch.int32)
+            pos = torch.full((mb, 1 + K0), -1, dtype=torch.int32)
+            nv = torch.zeros(mb, dtype=torch.int32)
+            dr = torch.full((mb, K0), PLACEHOLDER_TOKEN_ID, dtype=torch.int32)
+            for i in users:  # (the runner's block: K0 columns, the row's k real drafts, the rest padded -1)
+                tok[i, 0], pos[i, 0], nv[i] = st[i][-1], nxt[i], k
+                for j in range(k):
+                    x = int(do.draft_token_ids[i, j])
+                    tok[i, 1 + j], pos[i, 1 + j], dr[i, j] = x, nxt[i] + 1 + j, x
+            out = ad.decode_forward(tok, pos, page_table=tab, kv_cache=kv, sampling_params=_greedy(mb),
+                                    num_valid_drafts=nv, accepted_counts=torch.ones(mb, dtype=torch.int32),
+                                    spec_mode="argmax_ids")  # fmt: skip
+            ids = out.argmax_ids
+            assert tuple(ids.shape) == (mb, 1 + K0), tuple(ids.shape)
+            committed, counts = accept_greedy_walk(ids, dr[:, : int(ids.shape[1]) - 1], nv)
+            new = {i: [int(v) for v in committed[i, : int(counts[i])].tolist()] for i in users}
+            ct, cp, ac = blk({i: (new[i], nxt[i] + 1) for i in users})
+            for i in users:
+                assert 1 <= len(new[i]) <= k + 1, (i, new[i], k)
+                st[i].extend(new[i])
+                nxt[i] += len(new[i])
+
+    pre(0)
+    pre(1)
+    assert ad._alias[:2] == [0, 4] and ad.spec_stats["seeds"] == 1  # (the primary's second base; both live: seeded)
+    plain([0, 1])
+    rounds(4, [0, 1], 3)  # the primary: 3 drafts each, all right (good = K)
+    assert be.spec.steps[0].counters["steps"] == 4 and ad.spec_stats["fused"] == 4
+    pre(2)  # -> generator slot 2 (the alternate's first other base); 3 live: no step's exact bases -> no seed
+    assert ad._alias[2] == 2 and ad.spec_stats["seeds"] == 1 and getattr(gen._binding(kv), "spec", None) is None
+    pre(3)  # -> slot 6: the 4 live users are the alternate's bases -> the seed selects it
+    assert ad._alias[3] == 6 and ad.spec_stats["seeds"] == 2 and gen.spec_current() == 1
+    plain([0, 1, 2, 3])
+    rounds(3, [0, 1, 2, 3], 1)  # the alternate: 1 draft per row in the K0 block
+    assert be.spec.steps[1].counters["steps"] == 3 and ad.spec_stats["fused"] == 7
+    ad.release_request(3)  # (speculating: leave, not abort)
+    ad.release_request(2)
+    assert getattr(gen._binding(kv), "spec", None) is None
+    plain([0, 1])
+    rounds(2, [0, 1], 3)  # back on the primary (the proposal selects it)
+    assert gen.spec_current() == 0 and be.spec.steps[0].counters["steps"] == 6 and gen.counters["spec_selects"] == 2
+    assert ad.spec_stats["fallback"] == 0
+    for i in range(4):
+        assert st[i] == want(ps[i], st[i]), (i, st[i][:12])
 
 
 class _MockSpecPrefixBackend(_MockPrefixBackend, _MockSpecBackend):

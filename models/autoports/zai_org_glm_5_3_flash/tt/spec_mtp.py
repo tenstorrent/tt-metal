@@ -499,7 +499,10 @@ class SpecMTP:
     in the same one-replay step -- enter(rows) / set_page_tables(rows) take the users' rows, read() / leave() return
     their G records (group order)."""
 
-    def __init__(self, be, kv, *, K: int, drafter: str = "mtp"):
+    def __init__(self, be, kv, *, K: int, drafter: str = "mtp", share: "SpecMTP | None" = None):
+        """share (GLM53_SPEC_MULTI_ALT, generator.spec_multi_alt): another multi-user step on the same backend whose MTP
+        layer, its sparse latent pool / DSA state (GLM53_SPEC_MTP_SPARSE: per generator slot, so every step's users find
+        their rows), MkEh and the MTP head norm this step reuses -- one MTP layer in DRAM / L1 for both steps"""
         from models.autoports.zai_org_glm_5_3_flash.tests.common import CACHE_DIR, MANIFEST
         from models.autoports.zai_org_glm_5_3_flash.tt.optimized_decoder import (
             FdTileCacheSource,
@@ -629,6 +632,14 @@ class SpecMTP:
         self.pt_mc = self.pt_m
         if G and drafter == "mtp":
             self.pt_mc = dram_rows(mesh, torch.zeros(32, kv.blocks_per_seq, dtype=torch.int32), ttnn.int32)
+        # GLM53_SPEC_MTP_SPARSE multi-user K >= 2 (v2): the chained MTP rows' LOCAL page table (row u = user u's local
+        # row, as pt_v's rows u (K + 1) + j) -- the chained launch's plain rows index the table by launch row while their
+        # DSA state lives on the group bases (mk_mla rev 74 slot_stride K + 1: ix_dm1.cpp / att_dsa_shard_dm0.cpp)
+        self.pt_vc = None
+        if G and K >= 2 and self.mtp_sparse and self.shard is not None:
+            self.pt_vc = ttnn.from_torch(torch.zeros(self.shard[0] * 32, kv.extra["bps_local"], dtype=torch.int32),
+                                         dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh, memory_config=DRAM,
+                                         mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0))  # fmt: skip
         self._pt_rows = None
         lb = float(be._kda0().lower_bound)
         m = torch.ones(1, 1, wv, 1)
@@ -677,7 +688,16 @@ class SpecMTP:
         self.mtp = self.mtp_cache = self.eh = self.w_mtp = None
         self.pf_scratch, self._pfw = (0, 0), None
         self.mtp_cap_blocks = 0  # (GLM53_SPEC_MULTI + the private MTP cache: the blocks of each user's)
-        if drafter == "mtp":
+        if drafter == "mtp" and share is not None:  # GLM53_SPEC_MULTI_ALT: the other step's MTP layer / state / MkEh
+            assert (
+                self.mtp_sparse and share.mtp_sparse and share.mtp is not None
+            ), "GLM53_SPEC_MULTI_ALT: both steps on the sparse MTP layer (GLM53_SPEC_MTP_SPARSE=1: its state per slot)"
+            self.mtp, self.mtp_cache, self.mtp_st = share.mtp, share.mtp_cache, share.mtp_st
+            self.eh, self.w_mtp, self.pf_scratch, self._pfw = share.eh, share.w_mtp, share.pf_scratch, share._pfw
+            self.source, self.ocfg = share.source, share.ocfg
+            for t in sorted({cu, ch}):
+                self.eh.buffers(t)
+        elif drafter == "mtp":
             # (GLM53_SPEC_MULTI: a width t > 4 other than the full width has no sparse_dsa fabric phase of its own -- it
             # runs on the full width's, TPMla.fabric -- so only the shared phases are named)
             mts = tuple(sorted({cu, ch})) if not G else tuple(sorted(t for t in {cu, ch} if t <= 4 or t == be.chunk))
@@ -1126,7 +1146,12 @@ class SpecMTP:
         x0 = eh.norm_h_proj(src, mode=3, t=t, sel=sel, sel_rows=rows)
         eh.expand(x0, self.R_c[i], t=t)
         live = self.mpos_ch[i] if self.mtp_mode in ("verify", "multi") else "verify"
-        if (
+        if self.mtp_sparse and self.groups:  # (v2: row u = user u on pt_vc row u, its DSA state on slot u (K + 1):
+            # the plain rows at mk_mla rev 74's slot stride; rows past the G users inactive, positions -1)
+            st = dict(self.mtp_st, s0=0, slot_stride=self.K + 1, stride_rows=self.groups)
+            self._dsa(dict(mla=self.mtp.mla, moe=self.mtp.moe), self.R_c[i], self.mtp_cache, self.pt_vc,
+                      self.mpos_ch[i], t, False, dbg=i + 1, live=live, dsa_state=st)  # fmt: skip
+        elif (
             self.mtp_sparse
         ):  # (single user: row 0 = slot 0 in plain mode, pt_v row 0 = its local row; rows 1.. inactive)
             self._dsa(dict(mla=self.mtp.mla, moe=self.mtp.moe), self.R_c[i], self.mtp_cache, self.pt_v, self.mpos_ch[i],
@@ -1401,6 +1426,12 @@ class SpecMTP:
                 torch.cat([torch.as_tensor(lt).reshape(G, -1)[by_row] for lt in local]).to(torch.int32).contiguous(),
                 dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=ttnn.ShardTensorToMesh(self.mesh, dim=0)),
                 self.pt_v)  # fmt: skip
+            if self.pt_vc is not None:  # (v2 sparse chained rows: row u = user u's local row)
+                by_user = [min(r, G - 1) for r in range(32)]
+                ttnn.copy_host_to_device_tensor(ttnn.from_torch(
+                    torch.cat([torch.as_tensor(lt).reshape(G, -1)[by_user] for lt in local]).to(torch.int32).contiguous(),
+                    dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=ttnn.ShardTensorToMesh(self.mesh, dim=0)),
+                    self.pt_vc)  # fmt: skip
         if not self.mtp_private and not self.mtp_sparse and self.drafter == "mtp":
             if self.pt_m is not self.pt_v:
                 write_rows(self.mesh, self.pt_m, host, ttnn.int32)
@@ -1534,3 +1565,50 @@ class SpecMTP:
         be.write(kv.extra["io"].cur_pos, pos[: kv.max_batch])
         self.counters["leaves"] += 1
         return rec
+
+
+class SpecSwitch:
+    """GLM53_SPEC_MULTI_ALT (generator.spec_multi_alt): the backend's multi-user speculative steps on one build -- the
+    primary (GLM53_SPEC_MULTI_USERS users x GLM53_SPEC_K drafts) and the alternate (e.g. 8 x 1), built with share= so
+    they hold ONE MTP layer and its per-slot sparse state; one step is current (select between speculations only:
+    Glm53Generator.spec_select). Every attribute or call not defined here is the current step's (K, groups, slots,
+    enter / step / read / leave / abort, the counters); the backend-wide calls reach every step."""
+
+    def __init__(self, steps):
+        assert len(steps) >= 2 and all(int(getattr(x, "groups", 0) or 0) for x in steps), "multi-user steps only"
+        self.__dict__["steps"] = list(steps)
+        self.__dict__["cur"] = 0
+
+    def __getattr__(self, name):
+        d = self.__dict__
+        if "steps" not in d:  # (copy / pickle probes before __init__)
+            raise AttributeError(name)
+        return getattr(d["steps"][d["cur"]], name)
+
+    def __setattr__(self, name, value):
+        setattr(self.__dict__["steps"][self.__dict__["cur"]], name, value)
+
+    def select(self, i: int) -> None:
+        assert 0 <= int(i) < len(self.steps), (i, len(self.steps))
+        self.__dict__["cur"] = int(i)
+
+    def group_of(self, slot):
+        """a group base of ANY step (the TP prefill arms its request's MTP fill: generator_vllm_stack places the users
+        on the bases of every step) -> that step's group index, else None"""
+        for x in self.steps:
+            u = x.group_of(slot)
+            if u is not None:
+                return u
+        return None
+
+    def set_table(self, value) -> None:  # (every step keeps its users' page-table rows current)
+        for x in self.steps:
+            x.set_table(value)
+
+    def prepare(self) -> None:
+        for x in self.steps:
+            x.prepare()
+
+    def release(self) -> None:
+        for x in self.steps:
+            x.release()

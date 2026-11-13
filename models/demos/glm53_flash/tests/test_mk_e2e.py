@@ -429,6 +429,10 @@ def _spec_ab_multi(gen, backend, mesh_device, tok, prompts, plains, plain_timing
         f"{sum(len(p) - 1 for p in prompts)}); ids equal per user {[r[0] is None for r in res]}"
     )
     logger.info(f"MK_SPEC_MULTI_TEXT user 0: {tok.decode([t for t in souts[0] if 0 <= t < tok.vocab_size])!r}")
+    logger.info(
+        f"MK_SPEC_MULTI_STEP: (K, G) {st.get('spec_step')} of the steps {[s[:2] for s in gen.spec_steps()]} "
+        f"for {G} live users (GLM53_SPEC_MULTI_ALT / _PARTIAL)"
+    )
     logger.info(f"MK_SPEC backend spec counters: {backend.spec.counters}")
     tie = float(os.environ.get("GLM53_MK_SPEC_TIE", "1.0"))
     assert steps > 0, "the multi-user speculative path ran no step"
@@ -641,7 +645,11 @@ def test_mk_e2e(mesh_device, monkeypatch):
     spec_k = int(os.environ.get("GLM53_SPEC_K", "0") or 0)
     if spec_k > 0 and getattr(backend, "spec", None) is not None and backend.spec.drafter == "mtp":
         G = gen.spec_groups()  # GLM53_SPEC_MULTI: the backend's step serves G users (0: one user)
-        if G and live == G and sampling is None and mm_in is None:
+        # (GLM53_SPEC_MULTI_ALT / GLM53_SPEC_PARTIAL: any live count up to the largest step's users; generate_batch
+        # picks the step -- the primary while its G covers them, else the alternate -- and its first `live` bases)
+        g_max = max((g for _k, g, _b in gen.spec_steps()), default=G)
+        multi_ok = bool(G) and (live == G or (live <= g_max and gen.spec_partial_groups()))
+        if multi_ok and sampling is None and mm_in is None:
             _spec_ab_multi(gen, backend, mesh_device, tok, prompts, outs, timing, step_ms, spec_k, stop)
         elif sampling is not None and gen.spec_samples() and live == max(1, G) and mm_in is None:
             # GLM53_SPEC_SAMPLED + GLM53_MK_TEMP: the sampled verify speculates on sampled requests (no ids gate: a draw

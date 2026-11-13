@@ -678,6 +678,12 @@ class StackBackend(ModelBackend):
 
                         spec_ts = set(spec_widths(k_spec, self.chunk, tuple(self.narrow_widths) + tuple(self.native_widths),
                                                   groups=spec_multi_groups())["ts"])  # fmt: skip
+                        from models.autoports.zai_org_glm_5_3_flash.tt.generator import spec_multi_alt
+
+                        alt = spec_multi_alt()  # (GLM53_SPEC_MULTI_ALT: the alternate step's row counts too)
+                        if alt is not None:
+                            spec_ts |= set(spec_widths(alt[1], self.chunk, tuple(self.narrow_widths)
+                                                       + tuple(self.native_widths), groups=alt[0])["ts"])  # fmt: skip
                     ts = tuple(sorted({self.chunk} | set(self.narrow_widths) | spec_ts))
                     d = TPD.TPDsaLayer(self.mesh, self.cfg, L, source, OptimizedDecoderConfig(), moe=moe, ts=ts,
                                        share=dsa_share, dsa=self.dsa_decode, defer=self.dsa_defer,
@@ -1169,6 +1175,19 @@ class StackBackend(ModelBackend):
             # ops path (the kind's defaults); the rung-3 mk path only by GLM53_DF2_LAYER=mk once its silicon numerics pass)
             self.spec = SpecMTP(self, kv, K=int(os.environ["GLM53_SPEC_K"]),
                                 drafter=os.environ.get("GLM53_SPEC_KIND") or os.environ.get("GLM53_SPEC_DRAFTER", "mtp"))  # fmt: skip
+            # GLM53_SPEC_MULTI_ALT = "G:K" (generator.spec_multi_alt): an alternate multi-user step on the same build
+            # (e.g. 8 users x 1 draft next to the primary 4 x 3), sharing the primary's sparse MTP layer and state;
+            # SpecSwitch makes one current (the served adapter picks it by where its live users sit)
+            from models.autoports.zai_org_glm_5_3_flash.tt.generator import spec_multi_alt
+
+            alt = spec_multi_alt()
+            if alt is not None:
+                from models.autoports.zai_org_glm_5_3_flash.tt.spec_mtp import SpecSwitch
+                from models.autoports.zai_org_glm_5_3_flash.tt.spec_mtp import env as _spec_env
+
+                with _spec_env(GLM53_SPEC_MULTI_USERS=str(alt[0])):
+                    second = SpecMTP(self, kv, K=int(alt[1]), drafter=self.spec.drafter, share=self.spec)
+                self.spec = SpecSwitch([self.spec, second])
         if self.pos_c:  # per-chunk page tables (rows 4c..4c+3 at rows 0..3)
             host = (torch.arange(rows * kv.blocks_per_seq, dtype=torch.int32) % kv.num_blocks).reshape(rows, -1)
             if shard_pt:

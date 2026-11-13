@@ -23,6 +23,8 @@
 //   with MLA_ATT_LANES].
 // Rev 60 (W, T > 4): token lanes (att_common.hpp LANES) -- this core's lane takes tokens t0, t0 + LANES, ..; c / C are
 //   lane-local; CB_ASEL holds one page per lane token (page j = t / LANES).
+// Rev 74 MLA_DSA_SLOT_STRIDE = S (plain rows; GLM53_SPEC_MTP_SPARSE multi-user chained MTP rows, ix_dm1.cpp): row t
+//   scores the pooled keys of slot t S (its user's group base); its page-table row / cur_pos stay row t's.
 // Rev 61 MLA_DSA_ONE_SLOT (Stage 17's speculative verify on the shard, dsa/spec_on_shard_design.md): the rows are
 //   consecutive positions of the launch's slot -> every row scores that slot's local pooled keys (att_dsa_dm0.cpp's
 //   rev 56 addressing); each row's closed-pool bound stays its own (n_closed_local(p)), and IXR_SEM (ix_dm1: every
@@ -253,6 +255,8 @@ void kernel_main() {
                     ((t / MLA_DSA_GROUP_ROWS) * MLA_DSA_GROUP_ROWS * TP_TILES + c + (i0 + j) * C) * 4;
 #elif defined(MLA_DSA_ONE_SLOT)
                 const uint32_t tile0 = (c + (i0 + j) * C) * 4;
+#elif defined(MLA_DSA_SLOT_STRIDE)  // rev 74: plain row t = the user on group base t S (ix_dm1.cpp)
+                const uint32_t tile0 = (t * MLA_DSA_SLOT_STRIDE * TP_TILES + c + (i0 + j) * C) * 4;
 #else
                 const uint32_t tile0 = (t * TP_TILES + c + (i0 + j) * C) * 4;
 #endif

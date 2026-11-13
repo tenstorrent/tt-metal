@@ -134,15 +134,16 @@ def test_mtp_ring_grp_matches_generator():
 
 
 def test_mtp_sparse_refusals():
-    """v1 scope (generator.spec_mtp_sparse_refusals): single user any K, multi-user K 1; the shard, the per-slot store,
-    no dense window, the in-trace MTP fill"""
+    """the scope (generator.spec_mtp_sparse_refusals): single user any K, multi-user any K (v2: the chained rows on
+    strided slots) up to G (K + 1) = 16 rows; the shard, the per-slot store, no dense window, the in-trace MTP fill"""
     try:
         from models.autoports.zai_org_glm_5_3_flash.tt.generator import spec_mtp_sparse_refusals as why
     except Exception:
         return
     ok = dict(shard=True, paged=False, window=False, prefill="trace")
     assert why(3, 0, "mtp", **ok) == [] and why(1, 0, "mtp", **ok) == [] and why(1, 8, "mtp", **ok) == []
-    assert len(why(3, 4, "mtp", **ok)) == 1  # multi-user K 3: the chained rows' DSA slot (v2)
+    assert why(3, 4, "mtp", **ok) == [] and why(3, 2, "mtp", **ok) == []  # v2: multi-user K 3 (strided slots)
+    assert len(why(3, 8, "mtp", **ok)) == 1  # 8 x (3 + 1) rows > 16
     for bad in (dict(shard=False), dict(paged=True), dict(window=True), dict(prefill="launch")):
         assert len(why(3, 0, "mtp", **dict(ok, **bad))) == 1, bad
     assert why(3, 0, "dflash2", **ok)
