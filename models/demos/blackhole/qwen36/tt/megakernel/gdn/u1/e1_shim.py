@@ -793,6 +793,10 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
                 f'uint32_t gdn_gb_gd_l1() {{ return g_gb_xs + {XSC + 8192}u; }}\n'
                 f'void gdn_in_wait() {{\n  {CRD}\n'
                 f'  const auto pre = {wacc("pre_w", 4096)};\n'
+                # E1_GB_PUSHDIR (hang arm, default off): the upward in-proj pushes on the writer / NOC0 (gb_dm.hpp writer_push_up)
+                + (f'  gb::writer_push_up(g_ab + {OGB}, {("get_write_ptr(41)" if gb["gin_addr"] == "cb41" else str(int(gb["gin_addr"])) + "u")}, '
+                   f'g_gb_xs - 6u * 2048u, (volatile tt_l1_ptr uint32_t*){S["in_ready"]}, {IRT("g_gdn_l")});\n'
+                   if os.environ.get("E1_GB_PUSHDIR", "0") == "1" else '') +
                 f'  gb::writer_layer<{B}, {T}, {Nv}, {VB}, {GB_RN}, {Kt}, {(Nv // Nk) * VB // int(os.environ.get("E1_GB_RSPLIT", "1"))}>(g_ab + {OGB}, g_gdn_l, pre, {GBC["out"]}u, g_gb_xs + {XSC}u);\n}}\n')
         GB_WINIT = (f'  g_gb_xs = get_write_ptr({GBC["qpx"]}) + 6u * 2048u; g_ab[{OGB} + 145] = get_read_ptr({GBC["out"]});\n'
                     f'  gb::g_gb_coef = get_write_ptr({ids["coef"][0]});\n')
@@ -948,6 +952,8 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         d_r = d_r + [("GDN_GB_DIRECT", "1")] + ([("GB_KQPUSH", os.environ.get("E1_GB_KQPUSH", "0"))]) + (
             [("GB_PULL_NOC", os.environ["E1_GB_PULL_NOC"])] if "E1_GB_PULL_NOC" in os.environ else [])
         d_w = d_w + [("GB_KQPUSH", os.environ.get("E1_GB_KQPUSH", "0"))]
+        if os.environ.get("E1_GB_PUSHDIR", "0") == "1":   # hang arm: upward in-proj pushes on the writer / NOC0
+            d_r, d_w = d_r + [("GB_PUSHDIR", "1")], d_w + [("GB_PUSHDIR", "1")]
         if os.environ.get("E1_GB_GDIRECT", "1") == "1":   # gate rows straight into the head's coef slots / gate page (no DRAM)
             d_w = d_w + [("GB_GATE_DIRECT", "1"), ("GDN_GB_GATE_DIRECT", "1"), ("GB_COEF_REP", "9")]
         if os.environ.get("E1_GBC_GEARLY", "0") == "1":   # GBCOST: gate rows built while the convs run (bit-identical)

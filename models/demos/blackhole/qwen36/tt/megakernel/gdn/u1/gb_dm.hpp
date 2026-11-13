@@ -30,6 +30,12 @@
 #ifndef GB_MCAST
 #define GB_MCAST 0
 #endif
+#ifndef GB_PUSHDIR
+#define GB_PUSHDIR 0  // hang arm (E1_GB_PUSHDIR): the in-proj tile pushes whose consumer sits in a HIGHER row than this core
+                      // (row 8 -> row 9: the long way round the column Y ring on the reader's NOC1, one hop on NOC0) are
+                      // issued by the writer (BRISC / NOC0, writer_push_up) instead of the reader. Same bytes, same QIN
+                      // counter protocol (each side: tiles, write barrier, then its +1s); only the NoC / RISC changes
+#endif
 #ifndef GB_NOROOT
 #define GB_NOROOT 0  // GTEXT2 (program.py, AR corners / Σ reducer DM): this core never holds an L2 root (asserted at the hook)
 #endif
@@ -162,12 +168,18 @@ inline void reader_layer(volatile tt_l1_ptr uint32_t* pb, uint32_t L, const WAcc
         for (uint32_t i = 0; i < np; ++i) {
             const uint32_t* e = const_cast<const uint32_t*>(pb + kPush + 3 * i);
             const uint32_t xy = e[1];
+#if GB_PUSHDIR
+            if ((xy >> 16) > my_y[0]) continue;  // the writer's (NOC0, short way up)
+#endif
             noc_async_write(gin_l1 + e[0] * gpx::kTB, get_noc_addr(xy & 0xFFFFu, xy >> 16, qin_l1 + e[2] * gpx::kTB),
                             gpx::kTB);
         }
         noc_async_write_barrier();
         for (uint32_t i = 0; i < np; ++i) {
             const uint32_t xy = pb[kPush + 3 * i + 1];
+#if GB_PUSHDIR
+            if ((xy >> 16) > my_y[0]) continue;
+#endif
             noc_semaphore_inc(get_noc_addr(xy & 0xFFFFu, xy >> 16, reinterpret_cast<uint32_t>(pb + kQinCnt)), 1);
         }
     }
@@ -274,6 +286,32 @@ inline void pull_knq(volatile tt_l1_ptr uint32_t* pb, uint32_t L, uint32_t knq_l
 }
 
 // ---------------- writer ----------------
+#if GB_PUSHDIR
+// GB_PUSHDIR: the pushes of this core's landed in-proj tiles to consumers in a higher row, on the writer's NoC (NOC0 runs
+// +y: one hop up). Called from the writer's gdn_in_wait() before writer_layer (the writer is idle there: its first OUT
+// tile needs the consumers' QIN anyway). The source tiles stay valid: the next in-proj lands only after every GDN core
+// finished this layer, which needs every QIN count. No up-push on this core: nothing is waited for.
+inline void writer_push_up(volatile tt_l1_ptr uint32_t* pb, uint32_t gin_l1, uint32_t qin_l1,
+                           volatile tt_l1_ptr uint32_t* in_ready, uint32_t in_target) {
+    const uint32_t np = pb[kNpush];
+    uint32_t n = 0;
+    for (uint32_t i = 0; i < np; ++i) n += (pb[kPush + 3 * i + 1] >> 16) > my_y[0];
+    if (!n) return;
+    noc_semaphore_wait_min(in_ready, in_target);
+    for (uint32_t i = 0; i < np; ++i) {
+        const uint32_t* e = const_cast<const uint32_t*>(pb + kPush + 3 * i);
+        const uint32_t xy = e[1];
+        if ((xy >> 16) <= my_y[0]) continue;
+        noc_async_write(gin_l1 + e[0] * gpx::kTB, get_noc_addr(xy & 0xFFFFu, xy >> 16, qin_l1 + e[2] * gpx::kTB), gpx::kTB);
+    }
+    noc_async_write_barrier();
+    for (uint32_t i = 0; i < np; ++i) {
+        const uint32_t xy = pb[kPush + 3 * i + 1];
+        if ((xy >> 16) <= my_y[0]) continue;
+        noc_semaphore_inc(get_noc_addr(xy & 0xFFFFu, xy >> 16, reinterpret_cast<uint32_t>(pb + kQinCnt)), 1);
+    }
+}
+#endif
 inline uint32_t tg_elem(uint32_t row, uint32_t col) {
     return ((row >> 4) * 2 + (col >> 4)) * 256 + (row & 15) * 16 + (col & 15);
 }
