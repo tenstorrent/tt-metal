@@ -519,7 +519,7 @@ class Decoder:
         if name in ("qkv", "o", "down"):
             return ttnn.to_memory_config(self.decode_weights[name], ttnn.DRAM_MEMORY_CONFIG)
         full = ttnn.to_memory_config(self.decode_weights["qkv" if name == "qk" else "gate_up"], ttnn.DRAM_MEMORY_CONFIG)
-        n = full.shape[-1]
+        k, n = full.shape[-2], full.shape[-1]
         if name == "qk":
             # Tied K=V: the decode copy packs [q | k | v] per rank, prefill takes [q | k].
             width = n - self.kv_heads * self.head_dim
@@ -1036,7 +1036,18 @@ class Decoder:
         result = ttnn.concat(users, dim=0) if batch > 1 else users[0]
         return (result, next_history) if return_history else result
 
-    def decode_forward(self, x, *, positions, page_table, kv_cache, rope_positions=None, cyclic_cache=True, rope=None):
+    def decode_forward(
+        self,
+        x,
+        *,
+        positions,
+        page_table,
+        kv_cache,
+        rope_positions=None,
+        cyclic_cache=True,
+        rope=None,
+        update_positions=None,
+    ):
         """One token per user; all runtime data inputs and outputs are device tensors.
 
         rope: optional (cos, sin, memory) from decode_rope_tables, looked up once per step for all layers of a kind.
@@ -1082,20 +1093,24 @@ class Decoder:
         v = ttnn.to_memory_config(v, vmem)
         bounded = cyclic_cache and self.sliding and page_table.padded_shape[1] > kv_cache[0].shape[0]
         modulo = {"cache_position_modulo": self.SLIDING_WINDOW_PAGES * self.PAGE_SIZE} if bounded else {}
-        if bounded:
-            # Fused update still enforces logical pages <= physical pages.
-            # Native separate updates support a bounded pool explicitly. The
-            # documented cyclic table repeats its first nine private pages.
-            ttnn.experimental.paged_update_cache(
-                kv_cache[0], k, update_idxs_tensor=positions, page_table=page_table, **modulo
-            )
-            ttnn.experimental.paged_update_cache(
-                kv_cache[1], v, update_idxs_tensor=positions, page_table=page_table, **modulo
-            )
-        else:
-            ttnn.experimental.paged_fused_update_cache(
-                kv_cache[0], k, kv_cache[1], v, update_idxs_tensor=positions, page_table=page_table
-            )
+        # Rows that write into the same cache tile (a speculative block's columns of one user) must be updated by
+        # separate calls: concurrent writers to one tile lose updates. update_positions holds one index tensor per
+        # call, with -1 for the rows a call skips.
+        for update_idxs in update_positions or [positions]:
+            if bounded:
+                # Fused update still enforces logical pages <= physical pages.
+                # Native separate updates support a bounded pool explicitly. The
+                # documented cyclic table repeats its first nine private pages.
+                ttnn.experimental.paged_update_cache(
+                    kv_cache[0], k, update_idxs_tensor=update_idxs, page_table=page_table, **modulo
+                )
+                ttnn.experimental.paged_update_cache(
+                    kv_cache[1], v, update_idxs_tensor=update_idxs, page_table=page_table, **modulo
+                )
+            else:
+                ttnn.experimental.paged_fused_update_cache(
+                    kv_cache[0], k, kv_cache[1], v, update_idxs_tensor=update_idxs, page_table=page_table
+                )
         ttnn.deallocate(k)
         ttnn.deallocate(v)
         q = ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG)
