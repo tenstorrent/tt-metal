@@ -13,14 +13,14 @@ from typing import Sequence, Tuple
 
 import torch
 
-# Resolution at which the nominal nuScenes intrinsics below are calibrated.
+# Resolution at which the nominal intrinsics below are calibrated.
 CAMERA_IMAGE_SIZE = (1600, 900)
 
 
-NUSCENES_NARROW_FOCAL_PX = 1266.4
-NUSCENES_NARROW_PRINCIPAL_PX = (816.3, 491.5)
-NUSCENES_WIDE_FOCAL_PX = 809.2
-NUSCENES_WIDE_PRINCIPAL_PX = (829.2, 481.8)
+NARROW_FOCAL_PX = 1266.4
+NARROW_PRINCIPAL_PX = (816.3, 491.5)
+WIDE_FOCAL_PX = 809.2
+WIDE_PRINCIPAL_PX = (829.2, 481.8)
 
 
 @dataclass(frozen=True)
@@ -40,27 +40,27 @@ def _narrow(name: str, yaw_deg: float) -> CameraSpec:
     return CameraSpec(
         name=name,
         yaw_deg=yaw_deg,
-        focal_px=(NUSCENES_NARROW_FOCAL_PX, NUSCENES_NARROW_FOCAL_PX),
-        principal_px=NUSCENES_NARROW_PRINCIPAL_PX,
+        focal_px=(NARROW_FOCAL_PX, NARROW_FOCAL_PX),
+        principal_px=NARROW_PRINCIPAL_PX,
         reference_size=CAMERA_IMAGE_SIZE,
     )
 
 
-_NUSCENES_CAMERAS = {
+_SURROUND_CAMERAS = {
     "CAM_FRONT": _narrow("CAM_FRONT", 0.0),
     "CAM_FRONT_RIGHT": _narrow("CAM_FRONT_RIGHT", -55.0),
     "CAM_FRONT_LEFT": _narrow("CAM_FRONT_LEFT", 55.0),
     "CAM_BACK": CameraSpec(
         name="CAM_BACK",
         yaw_deg=180.0,
-        focal_px=(NUSCENES_WIDE_FOCAL_PX, NUSCENES_WIDE_FOCAL_PX),
-        principal_px=NUSCENES_WIDE_PRINCIPAL_PX,
+        focal_px=(WIDE_FOCAL_PX, WIDE_FOCAL_PX),
+        principal_px=WIDE_PRINCIPAL_PX,
         reference_size=CAMERA_IMAGE_SIZE,
     ),
     "CAM_BACK_LEFT": _narrow("CAM_BACK_LEFT", 110.0),
     "CAM_BACK_RIGHT": _narrow("CAM_BACK_RIGHT", -110.0),
 }
-NUSCENES_CAMERA_ORDER = (
+SURROUND_CAMERA_ORDER = (
     "CAM_FRONT",
     "CAM_FRONT_RIGHT",
     "CAM_FRONT_LEFT",
@@ -68,7 +68,7 @@ NUSCENES_CAMERA_ORDER = (
     "CAM_BACK_LEFT",
     "CAM_BACK_RIGHT",
 )
-NUSCENES_CAMERA_RIG = tuple(_NUSCENES_CAMERAS[name] for name in NUSCENES_CAMERA_ORDER)
+SURROUND_CAMERA_RIG = tuple(_SURROUND_CAMERAS[name] for name in SURROUND_CAMERA_ORDER)
 
 
 def ring_camera_rig(

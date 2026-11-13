@@ -16,6 +16,7 @@ from models.experimental.bevformer.tt.tt_common import (
     grid_shard_tiles,
     is_pointwise,
     largest_divisor,
+    reduced_grid,
     signpost,
 )
 from models.experimental.bevformer.tt.tt_modulated_deform_conv import TTModulatedDeformConv2dDevice
@@ -67,6 +68,10 @@ class TTModulatedDeformConv2dPack:
         # conv_offset a ROW_MAJOR one in DRAM.
         self.input_memory_config = None
         conv_offset_memory_config = ttnn.DRAM_MEMORY_CONFIG
+        # A reduced grid's L1 holds neither a camera's whole input for conv_offset nor the DCN's L1
+        # copy of it: conv_offset runs in the DRAM slices conv2d chooses, and the DCN reads its
+        # input and offsets from DRAM.
+        self.reduced_grid = reduced_grid(device)
         if sharded_input:
             rows = offset_args.batch_size * offset_args.input_height * offset_args.input_width
             self.input_memory_config = grid_height_sharded(
@@ -92,6 +97,8 @@ class TTModulatedDeformConv2dPack:
             input_layout=ttnn.ROW_MAJOR_LAYOUT,
             input_memory_config=conv_offset_memory_config,
             act_block_h=None if self.input_memory_config is None else ttnn.TILE_SIZE,
+            dram_activation=self.reduced_grid,
+            dram_conv_slices=0 if self.reduced_grid else None,
             output_dtype=ttnn.bfloat16,
             output_layout=ttnn.ROW_MAJOR_LAYOUT,
         )
@@ -112,11 +119,17 @@ class TTModulatedDeformConv2dPack:
             # The DCN's reads are many small scattered sticks, which L1 serves far faster than
             # DRAM; conv_offset's weights are prepared for a DRAM input, so only the DCN gets the
             # L1 copy.
-            x_dcn = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
+            x_dcn = x if self.reduced_grid else ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
         offset_mask, out_h, out_w = self.conv_offset(x)
-        # conv2d's L1 path returns its output sharded, and the DCN op takes offset_mask only
-        # interleaved; in L1, which serves the op's small per-row reads faster than DRAM.
-        offset_mask = ttnn.sharded_to_interleaved(offset_mask, ttnn.L1_MEMORY_CONFIG)
+        if self.reduced_grid:
+            # conv2d's DRAM path emits TILE when it runs one slice, whatever layout it was asked for.
+            offset_mask = ttnn.to_layout(
+                ttnn.to_memory_config(offset_mask, ttnn.DRAM_MEMORY_CONFIG), ttnn.ROW_MAJOR_LAYOUT
+            )
+        else:
+            # conv2d's L1 path returns its output sharded, and the DCN op takes offset_mask only
+            # interleaved; in L1, which serves the op's small per-row reads faster than DRAM.
+            offset_mask = ttnn.sharded_to_interleaved(offset_mask, ttnn.L1_MEMORY_CONFIG)
         offset_mask = ttnn.reshape(offset_mask, (self.batch_size, out_h, out_w, offset_mask.shape[-1]))
 
         # At stride 1 the input has the output's height and width.
@@ -412,6 +425,18 @@ def _for_cameras(args, cameras):
     group = type(args)(args)
     group["batch_size"] = cameras
     return group
+
+
+def _tree_for_cameras(args, cameras):
+    """A copy of the module args tree ``args`` with every module's batch set to ``cameras``."""
+    if isinstance(args, dict):
+        tree = type(args)({key: _tree_for_cameras(value, cameras) for key, value in args.items()})
+        if "batch_size" in tree:
+            tree["batch_size"] = cameras
+        return tree
+    if isinstance(args, (list, tuple)):
+        return type(args)(_tree_for_cameras(value, cameras) for value in args)
+    return args
 
 
 class TTCameraBottleneck:
@@ -869,6 +894,9 @@ class TTBottleneck:
             # conv1, a 1x1 conv in DRAM along with conv2, runs as ttnn.linear, which emits TILE.
             x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
         x, _, _ = self.conv2(x)
+        if reduced_grid(self.conv1.device):
+            # A reduced grid's L1 holds the downsample's buffers only without conv2's output.
+            x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         # Before conv3, whose output may stay in L1 for the add and would crowd the downsample's.
         if self.is_downsample:
             x_identity, _, _ = self.downsample(x_identity, subsampled=self.shared_subsample)
@@ -922,6 +950,12 @@ class TTResNet:
         stem_act_block_h = stage_config.pop("stem_act_block_h")
         stem_conv_height_slices = stage_config.pop("stem_conv_height_slices")
         stem_maxpool_height_slices = stage_config.pop("stem_maxpool_height_slices")
+        # With per_camera every conv is built for one camera and __call__ runs the cameras one by
+        # one: a slice of the whole batch's activations does not fit a reduced grid's L1 even one
+        # output row high (tt_resnet_kwargs).
+        self.per_camera = stage_config.pop("per_camera", False)
+        if self.per_camera:
+            conv_args = _tree_for_cameras(conv_args, 1)
         weights_dtype = stage_config["weights_dtype"]
         self.out_indices = out_indices
         self.maxpool_args = conv_args.maxpool
@@ -1004,6 +1038,21 @@ class TTResNet:
 
     def __call__(self, x):
         """``x`` the images, ``(N, 3, H, W)`` bfloat16 ROW_MAJOR in DRAM, as torch lays them out."""
+        if not self.per_camera:
+            return self._forward(x)
+        n, c, h, w = x.shape
+        levels = []
+        for camera in range(n):
+            image = ttnn.slice(x, [camera, 0, 0, 0], [camera + 1, c, h, w])
+            levels.append(self._forward(image))
+        outs = []
+        for level in zip(*levels):
+            outs.append(ttnn.concat(list(level), dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG))
+            for camera_level in level:
+                ttnn.deallocate(camera_level)
+        return tuple(outs)
+
+    def _forward(self, x):
         signpost(header="TTNN ResNet Forward Start")
         signpost(header="ResNet Stem Start")
         # The stem conv reads its input through conv2d's DRAM slicing, which fetches a ROW_MAJOR
@@ -1042,6 +1091,7 @@ class TTResNet:
             ceil_mode=False,
             dram_slice_config=self.maxpool_slice_config,
             output_layout=ttnn.TILE_LAYOUT,
+            config_tensor_in_dram=reduced_grid(self.conv1.device),
         )
         # The pool writes NHWC tiles with its rows padded to whole tiles; flattening them copies, so it
         # happens once here rather than in both of layer1's first linears.

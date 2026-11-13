@@ -25,6 +25,7 @@ Sections:
 """
 
 import math
+import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -38,6 +39,32 @@ if TYPE_CHECKING:
 
 VARIANTS = {name: load_builtin_config(name) for name in ("tiny", "small", "base")}
 _VARIANT = selected_config()
+
+# BEVFORMER_NUM_LAYERS=N keeps the first N encoder and decoder layers and, in each ResNet layer, the
+# first block, which alone strides and projects the shortcut, and N repeats of the block after it.
+# Repeated layers run the same kernels on the same shapes, so a reduced model still launches every
+# kernel of the full one, for simulator bring-up; it is not the trained detector, nor does a
+# checkpoint load into it.
+NUM_LAYERS_ENV = "BEVFORMER_NUM_LAYERS"
+
+
+def _num_layers_from_env():
+    value = os.environ.get(NUM_LAYERS_ENV, "")
+    if value == "":
+        return None
+    num_layers = int(value)
+    if num_layers < 1:
+        raise ValueError(f"{NUM_LAYERS_ENV} must be at least 1, got {num_layers}")
+    return num_layers
+
+
+NUM_LAYERS = _num_layers_from_env()
+
+
+def _reduced(count):
+    return count if NUM_LAYERS is None else min(count, NUM_LAYERS)
+
+
 VARIANT = _VARIANT.variant
 MODEL_CONFIG = _VARIANT
 
@@ -45,7 +72,7 @@ MODEL_CONFIG = _VARIANT
 
 CAMERA_ORDER = _VARIANT.camera_order
 NUM_CAMS = _VARIANT.num_cameras
-# nuScenes' camera images, (width, height), the size their intrinsics are calibrated at.
+# The camera images, (width, height), the size their intrinsics are calibrated at.
 CAMERA_IMAGE_SIZE = _VARIANT.camera_image_size
 # The camera images as the variant scales them, (width, height): CAMERA_IMAGE_SIZE for base.
 RAW_IMAGE_SIZE = tuple(round(size * _VARIANT.image_scale) for size in CAMERA_IMAGE_SIZE)
@@ -93,6 +120,7 @@ RESNET_KWARGS = dict(
     with_cp=False,
     zero_init_residual=True,
     init_cfg=None,
+    max_stage_blocks=None if NUM_LAYERS is None else 1 + NUM_LAYERS,
 )
 
 # 256-channel levels, one per backbone output, and for base a fourth from an extra stride-2 conv
@@ -128,7 +156,7 @@ EMBED_DIMS = _VARIANT.embed_dims
 NUM_HEADS = _VARIANT.num_heads
 FEEDFORWARD_CHANNELS = _VARIANT.feedforward_channels
 NUM_LEVELS = _VARIANT.num_levels
-# (x_min, y_min, z_min, x_max, y_max, z_max) in metres: nuScenes' range, which the BEV grid, the
+# (x_min, y_min, z_min, x_max, y_max, z_max) in metres: the detection range, which the BEV grid, the
 # encoder's pillars and the head's box centers share.
 PC_RANGE = _VARIANT.point_cloud_range
 CAN_BUS_DIMS = _VARIANT.can_bus_dims
@@ -140,7 +168,7 @@ ROTATE_CENTER = _VARIANT.rotate_center
 
 # SCA is the spatial cross-attention into the cameras, TSA the temporal self-attention over the
 # previous BEV.
-ENCODER_NUM_LAYERS = _VARIANT.encoder_num_layers
+ENCODER_NUM_LAYERS = _reduced(_VARIANT.encoder_num_layers)
 # The SCA's sampling points per head and level, split over the pillar's heights.
 SCA_NUM_POINTS = _VARIANT.spatial_num_points
 NUM_POINTS_IN_PILLAR = _VARIANT.num_points_in_pillar
@@ -148,7 +176,7 @@ TSA_NUM_POINTS = _VARIANT.temporal_num_points
 
 # --- Decoder and head ---------------------------------------------------------------------------
 
-DECODER_NUM_LAYERS = _VARIANT.decoder_num_layers
+DECODER_NUM_LAYERS = _reduced(_VARIANT.decoder_num_layers)
 DECODER_NUM_POINTS = _VARIANT.decoder_num_points
 NUM_QUERY = _VARIANT.num_query
 NUM_CLASSES = len(_VARIANT.class_names)
@@ -317,10 +345,30 @@ CONV2_ACT_BLOCK_H = 32
 FPN_OUTPUT_CONV_ACT_BLOCK_H = 32
 
 
-def tt_resnet_kwargs():
+def tt_resnet_kwargs(reduced_grid=False):
     """TTResNet's memory and precision arguments for this configuration, which
     ``create_resnet_parameters`` records in the backbone's parameters. TTResNet's ``out_indices``
-    defaults to all four layers; pass ``RESNET_KWARGS["out_indices"]`` for the variant's outputs."""
+    defaults to all four layers; pass ``RESNET_KWARGS["out_indices"]`` for the variant's outputs.
+
+    On a ``reduced_grid`` (``tt_common.reduced_grid``) the L1 plan above does not fit: every layer
+    runs one camera at a time with its activations in DRAM, its spatial convs and the stem's conv
+    and pool in the slice counts conv2d and max_pool2d choose for the grid's L1 (a count of 0), with
+    their own act_block_h, and the DCNs read an interleaved input."""
+    if reduced_grid:
+        return dict(
+            dram_activation_stages=(0, 1, 2, 3),
+            dram_conv_slices=0,
+            camera_groups={},
+            block_sharded_stages=BLOCK_SHARDED_STAGES,
+            fp32_acc_stages=FP32_ACC_STAGES,
+            dcn_sharded_input_stages=(),
+            stem_act_block_h=None,
+            stem_conv_height_slices=0,
+            stem_maxpool_height_slices=0,
+            per_camera=True,
+            conv2_act_block_h=None,
+            weights_dtype=_ttnn_dtype("CONV_WEIGHT_DTYPE"),
+        )
     return dict(
         dram_activation_stages=DRAM_ACTIVATION_STAGES,
         dram_conv_slices=DRAM_CONV_SLICES,
@@ -336,9 +384,20 @@ def tt_resnet_kwargs():
     )
 
 
-def tt_fpn_kwargs():
+def tt_fpn_kwargs(num_levels=None, reduced_grid=False):
     """TTFPN's memory and precision arguments for this configuration, which
-    ``create_fpn_parameters`` records in the FPN's parameters."""
+    ``create_fpn_parameters`` records in the FPN's parameters. On a ``reduced_grid`` the FPN runs one
+    camera at a time and all ``num_levels`` levels keep their activations in DRAM, their output convs
+    in the slice counts conv2d chooses, with its own act_block_h."""
+    if reduced_grid:
+        return dict(
+            dram_activation_levels=tuple(range(num_levels)),
+            dram_conv_slices=0,
+            output_conv_dram_conv_slices={},
+            output_conv_act_block_h=None,
+            per_camera=True,
+            weights_dtype=_ttnn_dtype("CONV_WEIGHT_DTYPE"),
+        )
     return dict(
         dram_activation_levels=DRAM_ACTIVATION_LEVELS,
         dram_conv_slices=DRAM_CONV_SLICES,
