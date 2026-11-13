@@ -107,6 +107,46 @@ def test_one_hot_weights_return_the_slot_row_plus_bias(device, tokens, memory_co
     assert torch.equal(got[tokens:], bias.reshape(1, HIDDEN).expand(got.shape[0] - tokens, HIDDEN))
 
 
+@pytest.mark.parametrize(
+    "table_rows, rows, memory_config",
+    [
+        (32, 288, ttnn.L1_MEMORY_CONFIG),
+        (128, 480, ttnn.L1_MEMORY_CONFIG),
+        (330, 896, ttnn.DRAM_MEMORY_CONFIG),
+        (4096, 8416, ttnn.DRAM_MEMORY_CONFIG),
+    ],
+    ids=["32", "128", "330", "4096"],
+)
+def test_gather_returns_the_table_rows(device, table_rows, rows, memory_config):
+    """Without weights and bias the call gathers, as the routed dispatch uses it, from a table with
+    fewer rows than the output, half of which repeats one table row: bit for bit what ttnn.embedding
+    returns, and every finite normal value the table's own. Their shared pack turns -0.0 into 0.0,
+    NaN into inf and denormals into 0."""
+    generator = torch.Generator().manual_seed(table_rows)
+    table = torch.randn(table_rows, HIDDEN, generator=generator).bfloat16()
+    table[0, :4] = -0.0
+    table[1, :4] = float("nan")
+    table[1, 4:8] = torch.tensor(1, dtype=torch.int16).view(torch.bfloat16)
+    index = torch.randint(0, table_rows, (rows,), generator=generator)
+    index[:4] = 0
+    index[4:8] = 1
+    index[rows // 2 :] = index[0]
+    rows_device = device_rows(table, device, memory_config)
+    index_device = ttnn.from_torch(
+        index.reshape(1, rows).to(torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+
+    output = routed_combine(rows_device, index_device, num_tokens=rows, memory_config=memory_config)
+    embedded = ttnn.embedding(index_device, rows_device, layout=ttnn.TILE_LAYOUT)
+
+    assert list(output.shape) == [1, 1, rows, HIDDEN]
+    got = ttnn.to_torch(output).reshape(rows, HIDDEN)
+    assert torch.equal(got.view(torch.int16), ttnn.to_torch(embedded).reshape(rows, HIDDEN).view(torch.int16))
+    want = table[index]
+    normal = torch.isfinite(want) & (want.abs() >= torch.finfo(torch.bfloat16).tiny)
+    assert torch.equal(got[normal].view(torch.int16), want[normal].view(torch.int16))
+
+
 @pytest.mark.parametrize("tokens", [330, 4096])
 def test_router_weights_are_no_less_precise_than_the_stock_combine(device, tokens):
     """With softmax-like weights, the error against a float64 sum of the same rows and weights is no
@@ -136,6 +176,33 @@ def test_router_weights_are_no_less_precise_than_the_stock_combine(device, token
     combined_error, stock_error = token_error(output), token_error(stock)
     assert combined_error.max() <= stock_error.max()
     assert combined_error.mean() <= stock_error.mean()
+
+
+@pytest.mark.parametrize("tokens, columns, block_rows", [(4096, 11, 12), (1000, 11, 3)])
+def test_sharded_output_matches_the_interleaved_call(device, tokens, columns, block_rows):
+    """The writer addresses the output by page id, so a block-sharded output, laid out as the model's
+    split layer norm reads it, holds the interleaved call's values bit for bit, the tile padding
+    included; at 4096 tokens the last column of cores holds 8 of its 12 tile rows."""
+    generator = torch.Generator().manual_seed(tokens)
+    values = torch.rand(tokens, TOP_K, generator=generator).sort(-1, descending=True).values * 0.5
+    rows, combine_index, combine_weights = selection(tokens, values, generator, device)
+    expert_rows = device_rows(torch.randn(rows, HIDDEN, generator=generator).bfloat16(), device)
+    _, bias = make_bias(generator, device)
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(columns - 1, 7))})
+    sharded = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, (block_rows * 32, HIDDEN // 8), ttnn.ShardOrientation.COL_MAJOR),
+    )
+
+    def call(memory_config):
+        output = routed_combine(
+            expert_rows, combine_index, combine_weights, bias, num_tokens=tokens, memory_config=memory_config
+        )
+        assert output.memory_config() == memory_config
+        return padded_output(ttnn.to_memory_config(output, ttnn.L1_MEMORY_CONFIG), tokens)
+
+    assert torch.equal(call(sharded), call(ttnn.L1_MEMORY_CONFIG))
 
 
 def test_program_cache_reuse(device):
@@ -241,6 +308,21 @@ INVALID_CALLS = {
         {},
         "expert_rows has 96 rows, fewer than the 128 that 64 tokens at top_k 2 fill",
     ),
+    "weights_without_bias": (
+        dict(bias=lambda device: None),
+        {},
+        "combine_weights and bias come together, or neither for a gather",
+    ),
+    "bias_without_weights": (
+        dict(combine_weights=lambda device: None),
+        {},
+        "combine_weights and bias come together, or neither for a gather",
+    ),
+    "gather_top_k": (
+        dict(combine_weights=lambda device: None, bias=lambda device: None),
+        {},
+        "a gather, without weights and bias, takes top_k 1, got 2",
+    ),
     "index_dtype": (
         dict(combine_index=_tensor((TOP_K, TOKENS), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, torch.int32)),
         {},
@@ -274,19 +356,6 @@ INVALID_CALLS = {
         dict(bias=_tensor((1, 1, 1, HIDDEN // 2), ttnn.bfloat16, ttnn.TILE_LAYOUT)),
         {},
         "bias must be 1 x 1 x 1 x 768",
-    ),
-    "memory_config": (
-        {},
-        dict(
-            memory_config=ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                ttnn.BufferType.L1,
-                ttnn.ShardSpec(
-                    ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 1))}), (32, HIDDEN), ttnn.ShardOrientation.ROW_MAJOR
-                ),
-            )
-        ),
-        "memory_config must be interleaved",
     ),
     "bfloat16_accumulation": (
         {},

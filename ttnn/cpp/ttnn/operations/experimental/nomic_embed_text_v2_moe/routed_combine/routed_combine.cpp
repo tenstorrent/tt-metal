@@ -11,8 +11,8 @@ namespace ttnn::experimental::nomic_embed_text_v2_moe {
 Tensor routed_combine(
     const Tensor& expert_rows,
     const Tensor& combine_index,
-    const Tensor& combine_weights,
-    const Tensor& bias,
+    const std::optional<Tensor>& combine_weights,
+    const std::optional<Tensor>& bias,
     uint32_t num_tokens,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {

@@ -4,7 +4,8 @@
 
 // Every core: for each unit, tilizes each slot's 32 gathered row segments, then builds each output
 // tile in DST as the bias broadcast down the rows plus each slot's tile times its weights broadcast
-// along the columns, accumulated in fp32, and packs it to bf16 once.
+// along the columns, accumulated in fp32, and packs it to bf16 once. A gather (combine 0) tilizes the
+// one slot's segments straight into the output.
 
 #include <cstdint>
 
@@ -16,6 +17,7 @@
 #include "api/dataflow/dataflow_buffer.h"
 
 void kernel_main() {
+    constexpr bool combine = get_named_compile_time_arg_val("combine") == 1;
     constexpr uint32_t top_k = get_named_compile_time_arg_val("top_k");
     constexpr uint32_t hidden_tiles = get_named_compile_time_arg_val("hidden_tiles");
     constexpr uint32_t chunk_tiles = get_named_compile_time_arg_val("chunk_tiles");
@@ -35,6 +37,20 @@ void kernel_main() {
     DataflowBuffer weights_cb(weights_cb_id);
     DataflowBuffer bias_cb(bias_cb_id);
     DataflowBuffer output_cb(output_cb_id);
+
+    if constexpr (!combine) {
+        compute_kernel_hw_startup(rows_cb_id, output_cb_id);
+        fast_tilize_init(rows_cb_id, chunk_tiles, output_cb_id);
+        for (uint32_t unit = first_unit; unit < first_unit + num_units; ++unit) {
+            rows_cb.wait_front(chunk_tiles);
+            output_cb.reserve_back(chunk_tiles);
+            fast_tilize_block(rows_cb_id, chunk_tiles, output_cb_id);
+            output_cb.push_back(chunk_tiles);
+            rows_cb.pop_front(chunk_tiles);
+        }
+        fast_tilize_uninit(rows_cb_id, output_cb_id, chunk_tiles);
+        return;
+    }
 
     compute_kernel_hw_startup(tiles_cb_id, weights_cb_id, output_cb_id);
     // The reader fills the bias tiles of the chunks this core covers; the rest stay unread.
