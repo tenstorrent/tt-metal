@@ -164,8 +164,10 @@ PrefetcherPipeSpaceImpl::PrefetcherPipeSpaceImpl(
     device_(&device),
     config_(std::move(config)),
     // Quasar reserves lane slots up front; the active count (default 1) is raised per pipe by the
-    // first multi-thread receiver bind. WH/BH stay single-lane.
-    credit_lane_capacity_(device.arch() == tt::ARCH::QUASAR ? PREFETCHER_PIPE_MAX_CREDIT_LANES : 1u) {
+    // first multi-thread receiver bind. WH/BH stay single-lane, and so does a space with DRAM senders,
+    // whose senders credit one lane per receiver.
+    credit_lane_capacity_(
+        device.arch() == tt::ARCH::QUASAR && config_.num_dram_senders == 0 ? PREFETCHER_PIPE_MAX_CREDIT_LANES : 1u) {
     TT_FATAL(config_.buffer_type == BufferType::L1, "PrefetcherPipeSpace: buffer_type must be BufferType::L1");
     TT_FATAL(config_.ring_size > 0, "PrefetcherPipeSpace: ring_size must be > 0");
     const uint32_t l1_alignment = l1_alignment_for(device_);
@@ -600,10 +602,9 @@ void PrefetcherPipeSpaceImpl::set_dram_sender_cores(std::span<const CoreCoord> d
     }
     validate_dram_senders_across_mesh(device_, sender_mapping);
 
-    const auto& hal = device_->impl().metal_env().get_hal();
     TT_FATAL(
-        hal.has_programmable_core_type(HalProgrammableCoreType::DRAM),
-        "set_dram_sender_cores requires programmable DRAM cores");
+        device_->impl().dram_sender_placement().has_value(),
+        "set_dram_sender_cores: this device runs no DRAM-sender endpoints");
     const uint32_t alignment = config_page_alignment_for(device_);
 
     // Reserve each sender's state before a pipe on it is carved. A later carve on that sender only
@@ -890,7 +891,7 @@ void PrefetcherPipeImpl::build_dram_sender_config_pages() {
         write_dram_sender_l1(
             *mesh_device, target_device, sender_core_, sender_page_addr, std::as_bytes(std::span(sender_page)));
 
-        const CoreCoord sender_virtual = target_device->virtual_core_from_logical_core(sender_core_, CoreType::DRAM);
+        const CoreCoord sender_virtual = dram_sender_virtual_core(*mesh_device, target_device, sender_core_);
         PrefetcherPipeConfigPages& pages = device_pages[mesh_device->get_view().find_device(target_device->id())];
         for (uint32_t r = 0; r < num_receivers; ++r) {
             const uint32_t sender_acked_slot = sender_page_addr + layout.acked_offset + r * l1_alignment;

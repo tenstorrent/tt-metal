@@ -24,6 +24,7 @@
 #include "device.hpp"
 #include "dispatch_core_common.hpp"
 #include "kernel_config/fd_kernel.hpp"
+#include "kernel_config/tensor_prefetcher.hpp"
 #include "program/program_impl.hpp"
 #include "program.hpp"
 #include <experimental/fabric/fabric.hpp>
@@ -150,6 +151,15 @@ static const std::vector<DispatchKernelNode> quasar_single_chip_1cq = {
     {1, 0, 0, 0, DISPATCH_HD, {0, x, x, x}, {2, x, x, x}, k_quasar_noc},
     {2, 0, 0, 0, DISPATCH_S, {0, x, x, x}, {1, x, x, x}, k_quasar_noc},
 };
+
+// The CQ kernels above plus the Tensor prefetcher's reader and pusher, which share the dispatch engine and
+// its L1. They come last so the CQ kernels keep the same data-movement cores.
+static const std::vector<DispatchKernelNode> quasar_single_chip_1cq_tensor_prefetcher = [] {
+    std::vector<DispatchKernelNode> nodes = quasar_single_chip_1cq;
+    nodes.push_back({3, 0, 0, 0, TENSOR_PREFETCHER_READER, {x, x, x, x}, {4, x, x, x}, k_quasar_noc});
+    nodes.push_back({4, 0, 0, 0, TENSOR_PREFETCHER_PUSHER, {3, x, x, x}, {x, x, x, x}, k_quasar_noc});
+    return nodes;
+}();
 
 static const std::vector<DispatchKernelNode> quasar_single_chip_2cq = {
     {0, 0, 0, 0, PREFETCH_HD, {x, x, x, x}, {1, 2, x, x}, k_quasar_noc},
@@ -461,7 +471,15 @@ std::vector<DispatchKernelNode> DispatchTopology::generate_nodes(
     auto populate_single_device = [&]() {
         const bool is_quasar = this->descriptor_.cluster().arch() == tt::ARCH::QUASAR;
         if (num_hw_cqs == 1) {
-            return is_quasar ? quasar_single_chip_1cq : single_chip_arch_1cq;
+            if (!is_quasar) {
+                return single_chip_arch_1cq;
+            }
+            return dispatch_engine_hosts_tensor_prefetcher(
+                       dispatch_core_manager_.get_dispatch_core_type(),
+                       num_hw_cqs,
+                       descriptor_.metal_context().dispatch_mem_map())
+                       ? quasar_single_chip_1cq_tensor_prefetcher
+                       : quasar_single_chip_1cq;
         }
         if (is_quasar) {
             return quasar_single_chip_2cq;

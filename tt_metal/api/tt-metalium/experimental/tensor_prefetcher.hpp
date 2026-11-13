@@ -3,15 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Experimental Start / Queue / Stop lifecycle API for the queueable Tensor
-// prefetcher (DRISC). A long-running DRISC kernel on every DRAM sender core
-// reads requests off a per-core H2D socket; each request names a set of
+// prefetcher. Long-running device kernels serve requests that each name a set of
 // DRAM-sender PrefetcherPipes and a per-tensor work list. The host can keep
 // queueing new requests after Start returns; each pipe's ring state (write
-// cursors, credit counters) is preserved in its config page in DRISC L1, so
+// cursors, credit counters) is preserved on the device between requests, so
 // successive requests can target different pipe sets and switch back and forth.
 //
-// State (Program(s), sockets, host worker thread, held tensor refs) lives on
-// MeshDeviceImpl. Only one prefetcher may be active per mesh device at a time.
+// State (device kernels, request transport, host worker thread, held tensor refs)
+// lives on MeshDeviceImpl. Only one prefetcher may be active per mesh device at a time.
 
 #pragma once
 
@@ -66,7 +65,8 @@ struct TensorPrefetcherConfig {
 };
 
 // Returns true if the Tensor prefetcher is supported on `mesh_device`. Both must hold:
-//   - programmable DRAM cores are available (Blackhole with firmware >= 19.12.0.0), and
+//   - the device can run DRAM-sender endpoints: Blackhole with firmware >= 19.12.0.0, or
+//     Quasar running fast dispatch with one command queue, and
 //   - the streaming profiler is off. TT_METAL_STREAMING_PROFILER=1 parks a resident relay
 //     on the same free DRAM subchannel a bank's first prefetch sender uses, with both of
 //     that DRISC's NIUs in stream mode, so the two cannot coexist.
@@ -136,10 +136,10 @@ struct TensorPrefetcherInput {
     std::optional<TensorPrefetcherGroupSelector> group_selector = std::nullopt;
 };
 
-// Build per-device Programs (two DRISC kernels per DRAM bank), allocate
-// the per-(device, sender) H2D sockets, and spawn the host worker thread that
-// drains the request queue. Returns immediately. No prefetch work is scheduled
-// yet — kernels park on socket_wait_for_pages.
+// Start the prefetcher's device kernels where they are not already running (on
+// Blackhole, two per DRAM bank), open the per-device request transport, and spawn
+// the host worker thread that drains the request queue. Returns immediately. No
+// prefetch work is scheduled yet; the kernels wait for requests.
 //
 // Each queued pipe set selects which of the provisioned senders receive its PREFETCH
 // requests. Single-sender pipe sets leave the second sender for each bank idle;
@@ -151,8 +151,7 @@ struct TensorPrefetcherInput {
 //
 // Preconditions (TT_FATAL):
 //   - No other prefetcher is currently active on this mesh device.
-//   - DRAM programmable cores are available on this mesh (Blackhole with firmware
-//     >= 19.12.0.0).
+//   - IsTensorPrefetcherSupported(mesh_device).
 void StartTensorPrefetcher(distributed::MeshDevice& mesh_device, const TensorPrefetcherConfig& config);
 
 // Queue one prefetch request. Non-blocking.

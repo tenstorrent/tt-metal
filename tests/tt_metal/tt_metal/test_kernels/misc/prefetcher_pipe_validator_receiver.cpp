@@ -116,12 +116,10 @@ void kernel_main() {
     DPRINT("PIPE_VALIDATOR_LOOP_DONE bank={} recv_idx={}\n", bank_id, recv_idx_in_bank);
 
     // Bounded-poll for an entry the sender pushed past the last one this receiver consumed.
-    for (uint32_t spin = 0; spin < prefetcher_validator::kExtraPollCycles; ++spin) {
-        if (pipe.has_unconsumed_entries()) {
-            DPRINT("PIPE_VALIDATOR_OVERFLOW: sender pushed an extra entry past the expected last one\n");
-            while (true) {
-                ;
-            }
+    if (prefetcher_validator::extra_entry_within_poll_window([&] { return pipe.has_unconsumed_entries(); })) {
+        DPRINT("PIPE_VALIDATOR_OVERFLOW: sender pushed an extra entry past the expected last one\n");
+        while (true) {
+            ;
         }
     }
 
