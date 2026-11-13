@@ -282,8 +282,6 @@
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_dflash_kv_cache_mock -k "seq5k and 1user and 2layers" -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_mistral4_kv_cache_table -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_kimi_k3_kv_cache_table -vvv --tb=short
-      # Allocates on the 8x4 mesh, so it runs here and not in the host-only contract section of the K3 suite.
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/kimi_k3/test_kv_cache_allocation.py::test_caches_per_stage_and_per_chip_footprint -vvv --tb=short
     '
   test_type: kv_cache_table
   test_tags: [kimi_k2_7, kimi_k3, kimi_k3_1, glm_5_3, mistral4, kv_cache]
@@ -291,9 +289,9 @@
   skus:
     bh_sc1:
       # +4 min on the Kimi/GLM/dflash baseline of 20 for the Mistral row this leg now also runs; +2 for the
-      # Kimi-K3 / K3.1 merged-table rows (40 s pytest, 50 s with device open) and +1 for the K3 / K3.1 cache
-      # footprint (10 s, 19 s), measured on bh-glx-120-b08u02 2026-11-13, each about x2 for a cold JIT.
-      timeout: 27
+      # Kimi-K3 / K3.1 merged-table rows (40 s pytest, 50 s with device open, measured on bh-glx-120-b08u02
+      # 2026-11-13, about x2 for a cold JIT).
+      timeout: 26
       tier: 2
       release_ready: false
   owner_id: U08RL15T4N8 # Danilo Djekic
@@ -309,8 +307,9 @@
   # galaxy allocations were spending ~22 min of setup to run ~7 min of tests. Measured test-step
   # times on run 36717057668: 77 / 150 / 114 / 92 s.
   #
-  # fabric_profile torus_xy is required by [2/5]..[5/5]. [1/5] is host-only -- no mesh device, no
-  # fabric -- and rides along for free rather than paying its own setup. It keeps its mpirun wrapper:
+  # fabric_profile torus_xy is required by [2/5]..[5/5] and by [1/5]'s 8x4 checks (the K3 / K3.1 cache
+  # allocation and the AttnRes torus checks); the rest of [1/5] is host tests that ride along rather than
+  # paying their own setup. It keeps its mpirun wrapper:
   # the runner's container hook drives the step through its host-execution path and does not handle
   # a bare command (it failed 4 runs out of 4, 0 s in, before pytest ran).
   fabric_profile: torus_xy
@@ -348,8 +347,7 @@
           models/demos/deepseek_v3_d_p/tests/test_chunked_trace_helpers.py::test_single_file_read_past_the_end_raises \
           models/demos/deepseek_v3_d_p/tests/kimi_k3/test_kda_golden.py \
           models/demos/deepseek_v3_d_p/tests/test_kv_ack.py \
-          models/demos/deepseek_v3_d_p/tests/attn_res/model/test_attn_res_pipeline_split.py \
-          --deselect models/demos/deepseek_v3_d_p/tests/kimi_k3/test_kv_cache_allocation.py::test_caches_per_stage_and_per_chip_footprint
+          models/demos/deepseek_v3_d_p/tests/attn_res/model/test_attn_res_pipeline_split.py
         # K3.1 real checkpoint: the indexer lands under the names TtIndexer loads. The test skips when the
         # checkpoint is not mounted, so the section fails unless both tests passed.
         set -o pipefail
