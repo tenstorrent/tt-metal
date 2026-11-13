@@ -16,6 +16,8 @@
 
 #include <chrono>
 #include <cstdint>
+#include <exception>
+#include <memory>
 #include <string>
 #include <thread>
 #include <unordered_set>
@@ -26,6 +28,9 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-logger/tt-logger.hpp>
+#include <tt-umd/pcie/device_event_reader.hpp>
+#include <tt-umd/pcie/pci_device.hpp>
+#include <tt-umd/tt_device/tt_device.hpp>
 
 #include "device_fixture.hpp"
 #include "distributed/mesh_device_impl.hpp"
@@ -84,6 +89,71 @@ protected:
             tt::CoreType::ARC, CoordSystem::TRANSLATED);
         // With NOC translation on, ARC has the same coordinates on both NOCs.
         arc_ = tt_cxy_pair(chip_, arc.at(0).x, arc.at(0).y);
+        // Created before any send, since a reader sees only the events that arrive after it.
+        const int pci_device_num = MetalContext::instance()
+                                       .get_cluster()
+                                       .get_driver()
+                                       ->get_tt_device(chip_)
+                                       ->get_pci_device()
+                                       ->get_device_num();
+        try {
+            events_ = std::make_unique<tt::umd::DeviceEventReader>(pci_device_num);
+            if (!events_->is_firmware_attached()) {
+                events_.reset();
+            }
+        } catch (const std::exception& e) {
+            events_.reset();
+            log_info(tt::LogTest, "No device events from KMD: {}", e.what());
+        }
+        log_info(tt::LogTest, "Device events {}", events_ ? "checked" : "not checked");
+    }
+
+    // After ARC took s's record: finds the event it raised, and checks it and the record left in s's L1.
+    void expect_event(const Sender& s, const CoreCoord& msg_xy) {
+        if (!events_) {
+            return;
+        }
+        const CoreCoord t = translated(s);
+        const auto source = static_cast<uint16_t>(t.x | t.y << noc_id_bits);
+        const std::vector<uint32_t> record = record_words(s, msg_xy);
+        const auto deadline = std::chrono::steady_clock::now() + arc_take_deadline;
+        while (std::chrono::steady_clock::now() < deadline) {
+            const auto left =
+                std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now());
+            for (const tt::umd::DeviceEvent& e : events_->read_for(16, left).events) {
+                if (e.source != source) {
+                    continue;
+                }
+                EXPECT_EQ(e.type, record[1]) << s.name;
+                EXPECT_EQ(e.cause, record[2]) << s.name;
+                EXPECT_EQ(e.data[0], record[3]) << s.name;
+                EXPECT_EQ(e.data[1], record[4]) << s.name;
+                EXPECT_EQ(e.data[2], record[5]) << s.name;
+                // ARC clears only the magic, so the host can read the rest of the record from the core.
+                std::vector<uint32_t> in_l1(record.size(), 0);
+                MetalContext::instance().get_cluster().read_core(
+                    in_l1.data(),
+                    in_l1.size() * sizeof(uint32_t),
+                    tt_cxy_pair(chip_, t.x, t.y),
+                    s.read_addr + (record_addr(s) - s.local_addr));
+                std::vector<uint32_t> expected = record;
+                expected[0] = 0;
+                EXPECT_EQ(in_l1, expected) << s.name << ": record in L1";
+                log_info(
+                    tt::LogTest,
+                    "{}: event seq {} source 0x{:x} type 0x{:x} cause 0x{:x} data 0x{:x} 0x{:x} 0x{:x}",
+                    s.name,
+                    e.seq,
+                    e.source,
+                    e.type,
+                    e.cause,
+                    e.data[0],
+                    e.data[1],
+                    e.data[2]);
+                return;
+            }
+        }
+        ADD_FAILURE() << s.name << ": no device event from translated (" << t.x << ", " << t.y << ")";
     }
 
     bool in_pmm_grid(const CoreCoord& xy) const { return xy.x < arc_pmm_grid_x && xy.y < arc_pmm_grid_y; }
@@ -270,6 +340,8 @@ protected:
         if (!taken) {
             EXPECT_EQ(word, sent) << s.name << ": message with physical coordinates did not land";
             EXPECT_EQ(magic, l1_ecc_halt_record_magic) << s.name << ": record magic changed";
+        } else {
+            expect_event(s, p);
         }
         std::vector<uint32_t> after = snapshot();
         after[arc_pmm_grid_x * p.y + p.x] = before[arc_pmm_grid_x * p.y + p.x];
@@ -387,6 +459,8 @@ protected:
     distributed::MeshDevice* mesh_device_{};
     ChipId chip_{};
     tt_cxy_pair arc_{};
+    // Null when KMD or ARC firmware does not publish device events.
+    std::unique_ptr<tt::umd::DeviceEventReader> events_;
 };
 
 // Baseline: a Tensix kernel's message lands like the BRISC halt handler's.
