@@ -53,6 +53,9 @@ using tt::tt_metal::experimental::PrefetcherPipeParameter;
 using tt::tt_metal::experimental::PrefetcherPipeParamName;
 using tt::tt_metal::experimental::ProgramRunArgs;
 using tt::tt_metal::experimental::ProgramSpec;
+using tt::tt_metal::experimental::ScratchpadBinding;
+using tt::tt_metal::experimental::ScratchpadSpec;
+using tt::tt_metal::experimental::ScratchpadSpecName;
 using tt::tt_metal::experimental::SemaphoreBinding;
 using tt::tt_metal::experimental::SemaphoreSpec;
 using tt::tt_metal::experimental::SemaphoreSpecName;
@@ -3516,8 +3519,9 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
     const DFBSpecName INTERM0_ALIAS_DFB{"intermed0_reload_alias"};
     const DFBSpecName BIAS_DFB{"bias"};
     const DFBSpecName IN0_TRANSPOSED_DFB{"in0_transposed"};
-    const DFBSpecName SPARSITY_IN0_DFB{"sparsity_in0"};
-    const DFBSpecName SPARSITY_IN1_DFB{"sparsity_in1"};
+
+    const ScratchpadSpecName SPARSITY_IN0_SCRATCH{"sparsity_in0"};
+    const ScratchpadSpecName SPARSITY_IN1_SCRATCH{"sparsity_in1"};
 
     const TensorParamName IN0{"in0"};
     const TensorParamName IN1{"in1"};
@@ -3820,18 +3824,19 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
     }
 
     // The mask page, one copy per kernel that scans it. The in0 sender and the in1 sender/writer
-    // share a node, and a node hosts one producer and one consumer of a buffer, so each gets its own,
-    // which it fills and reads itself (a self-loop).
+    // share a node and each re-reads the mask pages on its own schedule, so each gets its own copy,
+    // which it fills and reads itself. No kernel exchanges FIFO credits on a copy, so each copy is a
+    // kernel-private scratchpad. (A data movement kernel bound as both PRODUCER and CONSUMER of one
+    // DFB is a self-loop, which Gen2 (Quasar) rejects.)
     const uint32_t mask_aligned_page_size =
         use_sparsity ? static_cast<uint32_t>(sparsity->mask.mesh_buffer().get_reference_buffer()->aligned_page_size())
                      : 0u;
+    Group<ScratchpadSpec> scratchpads;
     if (use_sparsity) {
-        for (const auto& name : {SPARSITY_IN0_DFB, SPARSITY_IN1_DFB}) {
-            dataflow_buffers.push_back(DataflowBufferSpec{
+        for (const auto& name : {SPARSITY_IN0_SCRATCH, SPARSITY_IN1_SCRATCH}) {
+            scratchpads.push_back(ScratchpadSpec{
                 .unique_id = name,
-                .entry_size = mask_aligned_page_size,
-                .num_entries = 1,
-                .data_format_metadata = tt::DataFormat::Float16_b,
+                .size_per_node = mask_aligned_page_size,
             });
         }
     }
@@ -3877,14 +3882,12 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
     Group<KernelSpec> kernels;
 
     // The kernel that scans the mask fills its own copy of the mask page and reads it back.
-    auto add_sparsity_bindings = [&](KernelSpec& k, const DFBSpecName& mask_dfb) {
+    auto add_sparsity_bindings = [&](KernelSpec& k, const ScratchpadSpecName& mask_scratch) {
         if (!use_sparsity) {
             return;
         }
-        k.dfb_bindings.push_back(DFBBinding{
-            .dfb_spec_name = mask_dfb, .accessor_name = "sparsity", .endpoint_type = DFBEndpointType::PRODUCER});
-        k.dfb_bindings.push_back(DFBBinding{
-            .dfb_spec_name = mask_dfb, .accessor_name = "sparsity", .endpoint_type = DFBEndpointType::CONSUMER});
+        k.scratchpad_bindings.push_back(
+            ScratchpadBinding{.scratchpad_spec_name = mask_scratch, .accessor_name = "sparsity"});
         k.tensor_bindings.push_back(TensorBinding{.tensor_parameter_name = SPARSITY, .accessor_name = "sparsity"});
     };
 
@@ -4012,7 +4015,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
                 k.tensor_bindings = {
                     TensorBinding{.tensor_parameter_name = IN0, .accessor_name = "in0"},
                 };
-                add_sparsity_bindings(k, SPARSITY_IN0_DFB);
+                add_sparsity_bindings(k, SPARSITY_IN0_SCRATCH);
                 k.runtime_arg_schema = {.runtime_arg_names = {"in0_tensor_start_tile_id", "last_block_h"}};
             }
             return k;
@@ -4122,7 +4125,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
         if (use_sparsity) {
             in1_sender.compile_time_args.insert({"sparsity_pagesize", mask_aligned_page_size});
         }
-        add_sparsity_bindings(in1_sender, SPARSITY_IN1_DFB);
+        add_sparsity_bindings(in1_sender, SPARSITY_IN1_SCRATCH);
 
         Group<std::string> in1_sender_rta_names = {
             "in1_tensor_start_tile_id",
@@ -4487,6 +4490,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
         .name = "matmul_multi_core_reuse_mcast_1d_in0",
         .kernels = std::move(kernels),
         .dataflow_buffers = std::move(dataflow_buffers),
+        .scratchpads = std::move(scratchpads),
         .tensor_parameters = std::move(tensor_parameters),
         .work_units = std::move(work_units),
         .advanced_options = {.prefetcher_pipe_parameters = std::move(in1_pipe_relay.parameters)},

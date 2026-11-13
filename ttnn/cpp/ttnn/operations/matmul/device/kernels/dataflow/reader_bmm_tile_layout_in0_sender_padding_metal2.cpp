@@ -12,14 +12,21 @@
 //
 // Two regions of the legacy kernel are gated behind defines here rather than behind a compile-time
 // arg, because each needs a resource that only exists when the feature is on:
-//   * SPARSITY  - the sparsity dataflow buffer and its tensor accessor. A binding that the host
-//                 does not declare produces no dfb::/tensor:: token at all, so the references must
+//   * SPARSITY  - the sparsity scratchpad and its tensor accessor. A binding that the host
+//                 does not declare produces no scratch::/tensor:: token at all, so the references must
 //                 not reach C++ name lookup. The legacy kernel guarded these with
 //                 `if constexpr (batchB > 0)`, which still looks names up in the discarded branch.
 //   * FUSE_OP   - the CCL fused-op receiver. MatmulOpReceiver consumes *positional* runtime args
 //                 through an index it advances by reference, and it lives outside this op's
 //                 directory (ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp), so it cannot
 //                 be fed from named arguments without changing a file this port may not touch.
+//
+// BATCH_VALID_DFB (Quasar only) gates the batch_valid dataflow buffer, through which this kernel tells
+// the compute kernel on its node which batches to skip; WH/BH use the BRISC mailbox for that. Like
+// SPARSITY, it is a define because a binding that the host does not declare produces no dfb:: token.
+// A factory that sets get_batch_from_reader on Quasar must bind the buffer and set the define for each
+// kernel that uses the buffer; this kernel rejects a Quasar build that sets get_batch_from_reader
+// without the define.
 
 #include <stdint.h>
 
@@ -33,8 +40,9 @@
 #ifndef ARCH_QUASAR
 // ckernel.h / ckernel_defs.h are compute(TRISC)-only: they pull in ckernel_addrmod.h -> ckernel_trisc_id.h,
 // which #errors without COMPILE_FOR_TRISC on a DM build. They are needed here only for the BRISC->compute
-// batch-valid mailbox handoff (ckernel::mailbox_write below), which has no Quasar equivalent. Guard both
-// out on Quasar (matches the DM-side handoff guard for the other matmul readers).
+// batch-valid mailbox handoff (ckernel::mailbox_write below). Quasar has no such mailbox and uses the
+// batch_valid dataflow buffer instead. Guard both out on Quasar (matches the DM-side handoff guard for
+// the other matmul readers).
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #endif
@@ -42,6 +50,7 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "api/core_local_mem.h"
+#include "api/scratchpad.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args_metal2.hpp"
 
@@ -178,21 +187,28 @@ void kernel_main() {
 
     // sparsity accessor
 #ifdef SPARSITY
-    DataflowBuffer dfb_sparsity(dfb::sparsity);
+    // This kernel's own copy of one sparsity page: the NoC writes it and only this kernel reads it back.
+    Scratchpad<volatile uint16_t> sparsity(scratch::sparsity);
     const auto s_sparsity = TensorAccessor(tensor::sparsity);
+    // On Quasar the data movement core reads the scratchpad through its cache while the NoC writes it
+    // straight to SRAM, so the cache can hold stale data from an earlier read; the scoped_lock
+    // invalidates the cache line before each read. No-op on WH/BH.
+    const auto read_sparsity = [&sparsity](uint32_t i) -> uint16_t {
+        const auto sparsity_lock = sparsity.scoped_lock(i, 1);
+        return sparsity[i];
+    };
+#endif
+
+#ifdef BATCH_VALID_DFB
+    // One entry per batch to the compute kernel on this node: nonzero when the batch is valid.
+    DataflowBuffer dfb_batch_valid(dfb::batch_valid);
+#elif defined(ARCH_QUASAR)
+    static_assert(!get_batch_from_reader, "get_batch_from_reader on Quasar requires BATCH_VALID_DFB");
 #endif
 
 #ifdef IN0_SHARDED
     uint32_t in0_start_address = dfb_in0.get_write_ptr();
 #endif  // IN0_SHARDED
-
-#ifdef SPARSITY
-    uint32_t l1_write_addr_sparsity = 0;
-    if constexpr (batchB > 0 && !use_indices) {
-        dfb_sparsity.reserve_back(1);
-        l1_write_addr_sparsity = dfb_sparsity.get_write_ptr();
-    }
-#endif
 
     // Counts the in0 multicasts actually issued (one per non-zero sparsity entry). Used to validate
     // count_nonzero(sparsity) == num_batch_compute when nnz is supplied (see num_batch_compute above).
@@ -214,7 +230,7 @@ void kernel_main() {
         [[maybe_unused]] const uint32_t in0_batch_start_tile_id = in0_tensor_start_tile_id;
 #ifdef SPARSITY
         if constexpr (batchB > 0 && !use_indices) {
-            noc.async_read(s_sparsity, dfb_sparsity, sparsity_pagesize, {.page_id = b}, {.offset_bytes = 0});
+            noc.async_read(s_sparsity, sparsity, sparsity_pagesize, {.page_id = b}, {.offset_bytes = 0});
             noc.async_read_barrier();
         }
 #endif
@@ -222,8 +238,7 @@ void kernel_main() {
         for (uint32_t bB = 0; bB < batch_loop_lim; ++bB) {
 #ifdef SPARSITY
             if constexpr (batchB > 0 && !use_indices) {
-                volatile auto is_batch_valid =
-                    ((reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr_sparsity))[bB]) != 0;
+                volatile auto is_batch_valid = read_sparsity(bB) != 0;
 
                 if constexpr (get_batch_from_reader) {
                     if constexpr (in0_mcast.active) {
@@ -233,11 +248,19 @@ void kernel_main() {
 
                     // We need to pass the value to compute cores regardless of the value of is_batch_valid
 #ifndef ARCH_QUASAR
-                    // No BRISC->compute mailbox on Quasar; the compute kernel treats every batch as valid
-                    // there (see bmm_large_block_zm_fused_bias_activation_metal2.cpp ARCH_QUASAR guard).
+                    // No BRISC->compute mailbox on Quasar; there the value goes through dfb::batch_valid.
                     ckernel::mailbox_write(ckernel::ThreadId::UnpackThreadId, static_cast<uint32_t>(is_batch_valid));
                     ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, static_cast<uint32_t>(is_batch_valid));
                     ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, static_cast<uint32_t>(is_batch_valid));
+#elif defined(BATCH_VALID_DFB)
+                    dfb_batch_valid.reserve_back(1);
+                    {
+                        // Releasing the lock makes the store visible in SRAM before push_back hands the
+                        // entry to the compute kernel.
+                        const auto batch_valid_lock = dfb_batch_valid.scoped_write_lock(1);
+                        batch_valid_lock.get_ptr<volatile uint16_t>()[0] = static_cast<uint16_t>(is_batch_valid);
+                    }
+                    dfb_batch_valid.push_back(1);
 #endif
                 }
 
@@ -432,13 +455,6 @@ void kernel_main() {
     // by construction, since every iterated group is active.)
     if constexpr (!get_batch_from_reader && batchB > 0 && !use_indices) {
         ASSERT(num_valid_batches == num_batch_compute);
-    }
-
-    // For completeness, we empty the sparsity buffer if it was reserved earlier
-    if constexpr (batchB > 0 && !use_indices) {
-        dfb_sparsity.push_back(1);
-        dfb_sparsity.wait_front(1);
-        dfb_sparsity.pop_front(1);
     }
 #endif  // SPARSITY
 }
