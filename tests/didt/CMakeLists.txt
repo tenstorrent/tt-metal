@@ -1,1 +1,2 @@
 add_subdirectory(max_util_workload)
+add_subdirectory(power_virus)
