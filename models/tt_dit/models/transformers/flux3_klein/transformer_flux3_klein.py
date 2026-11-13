@@ -241,14 +241,11 @@ class Flux3KleinModulation(Module):
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         for embedder in ("time_in", "ref_time_in") if self.ref_time_in is not None else ("time_in",):
             for src, dst in (("in_layer", "linear_1"), ("out_layer", "linear_2")):
-                if f"{embedder}.{src}.weight" in state:
-                    state[f"{embedder}.{dst}.weight"] = state.pop(f"{embedder}.{src}.weight")
-        weights = [state.pop(f"{prefix}.weight", None) for prefix, _ in MOD_SOURCES]
-        if all(w is not None for w in weights):
-            state["lin.weight"] = torch.cat(weights, dim=0)
-            state["lin.bias"] = torch.cat(
-                [torch.full([HIDDEN], 1.0 if i in MOD_SCALE_CHUNKS else 0.0) for i in range(MOD_CHUNKS)]
-            )
+                state[f"{embedder}.{dst}.weight"] = state.pop(f"{embedder}.{src}.weight")
+        state["lin.weight"] = torch.cat([state.pop(f"{prefix}.weight") for prefix, _ in MOD_SOURCES], dim=0)
+        state["lin.bias"] = torch.cat(
+            [torch.full([HIDDEN], 1.0 if i in MOD_SCALE_CHUNKS else 0.0) for i in range(MOD_CHUNKS)]
+        )
         prepare_chunked_linear_output(state, prefix="lin", device_count=self.tp_factor, chunks=MOD_CHUNKS)
 
     def _sinusoid(self, t: ttnn.Tensor) -> ttnn.Tensor:
