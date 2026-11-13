@@ -437,11 +437,11 @@ models:
     bh_quietbox_2: 80
   demo:
     bh_galaxy: 470
-    # K3.1 mirrors K3's CI coverage (user decision 2026-11-07). Allocated 2354 -> 2553 (+199): the K3.1 synthetic
-    # suite (+27 min), the K3.1 sparse MLA section of the K3 accuracy suite (+12 min) and the K3.1 depth L24 /
+    # K3.1 mirrors K3's CI coverage (user decision 2026-11-07). Allocated 2354 -> 2561 (+207): the K3.1 synthetic
+    # suite (+35 min), the K3.1 sparse MLA section of the K3 accuracy suite (+12 min) and the K3.1 depth L24 /
     # L24-128k sections of the K3 transformer suite (+70 +90 min, K3's own L24 depth / chunked bounds). Budget
-    # 2375 -> 2553 (+178): the other 21 min were unallocated headroom before these legs.
-    bh_sc1: 2553
+    # 2375 -> 2561 (+186): the other 21 min were unallocated headroom before these legs.
+    bh_sc1: 2561
     bh_sc1_high_power: 498
     bh_sc4: 60
     wh_n150: 500

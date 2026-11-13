@@ -587,22 +587,31 @@
   budget_type: demo
   sp_config: sc1
 
-- name: "(Kimi-K3.1) synthetic-weight DSA block determinism and pipeline split"
+- name: "(Kimi-K3.1) synthetic-weight DSA block determinism, chunked prefill and pipeline split"
   # K3.1 = K3 with Gated DSA on its 24 full-attention layers, run through K3's stack. Its accuracy against vLLM is
   # gated in the K3 transformer suite above (k31_depth_ladder L24 / L24-128k: per-layer outputs, every kvpe slot,
   # the index cache and top-k recall, 2 and 26 chunks). This leg covers what that golden does not, on synthetic
   # weights (tests/kimi_k3/synthetic.py, dense-FFN stand-in on every layer; no checkpoint, no TTNN cache, no trace):
-  # [1/2] a repeated request is bit-identical, a pipeline stage's KV-only last layer writes its caches, and a
-  # DSA-only window reads the earlier chunk from its caches; [2/2] a stack split at layer 12 is bit-identical to
-  # the undivided one (the golden runs one stage). Measured on bh-glx-120-b08u02 (2026-11-13), pytest time per
-  # section incl. synthetic weight generation: DSA block 2 windows ~4 min, split ~6.5 min (~10.5 min), plus the
-  # job's ~5.5 min "Setup multihost job".
+  # [1/3] a repeated request is bit-identical, a pipeline stage's KV-only last layer writes its caches, and a
+  # DSA-only window reads the earlier chunk from its caches; [2/3] device DRAM stable across chunks, and outputs,
+  # KDA carries and caches independent of the padding past an unaligned end (the golden runs each prompt once,
+  # with one padding); [3/3] a stack split at layer 12 is bit-identical to the undivided one (the golden runs one
+  # stage). Measured on bh-glx-120-b08u02 (2026-11-13), pytest time per section incl. synthetic weight
+  # generation: DSA block 2 windows ~4 min, chunked ~2.5 min, split ~6.5 min (~13 min), plus the job's ~5.5 min
+  # "Setup multihost job".
   cmd: |
     # Stops at the first failure, as the suites above.
     k31_dsa_block() (
       timeout -k 2m 12m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/kimi_k3/test_kimi_k3_1_dsa_block.py -vvv --tb=short
+      '
+    )
+
+    k31_chunked_prefill() (
+      timeout -k 2m 8m mpirun --bind-to none --pernode --tag-output bash -lc '
+        export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/kimi_k3/test_chunked_prefill.py::test_synthetic_chunked_prefill_carries_state -vvv --tb=short
       '
     )
 
@@ -613,18 +622,20 @@
       '
     )
 
-    echo "===== [1/2] (Kimi-K3.1) DSA block windows, deterministic, KV-only last layer, prefix from caches ====="
+    echo "===== [1/3] (Kimi-K3.1) DSA block windows, deterministic, KV-only last layer, prefix from caches ====="
     k31_dsa_block || exit $?
-    echo "===== [2/2] (Kimi-K3.1) pipeline split at layer 12 vs undivided ====="
+    echo "===== [2/3] (Kimi-K3.1) chunked prefill L4, 4 chunks to an unaligned end, DRAM and padding independence ====="
+    k31_chunked_prefill || exit $?
+    echo "===== [3/3] (Kimi-K3.1) pipeline split at layer 12 vs undivided ====="
     k31_pipeline_split || exit $?
-    echo "===== all 2 sections passed ====="
+    echo "===== all 3 sections passed ====="
   test_type: k31_transformer_suite
-  test_tags: [kimi_k3_1, transformer, k31_dsa_block, k31_pipeline_split]
+  test_tags: [kimi_k3_1, transformer, k31_dsa_block, k31_chunked_prefill, k31_pipeline_split]
   test_group: module
   skus:
     bh_sc1:
-      # Exactly the sum of the per-section bounds (12 + 15).
-      timeout: 27
+      # Exactly the sum of the per-section bounds (12 + 8 + 15).
+      timeout: 35
       tier: 2
       release_ready: false
   owner_id: U0ACLAM77PS  # Kosta Grujcic, K3's suite owner; K3.1's owner to be confirmed
