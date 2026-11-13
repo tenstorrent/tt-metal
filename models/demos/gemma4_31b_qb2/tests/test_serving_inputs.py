@@ -213,3 +213,15 @@ def test_decode_releases_only_its_slot_history_despite_page_id_collision(remap):
     if remap is not None:
         model.note_state_slots_moved({source: dest for dest, source in enumerate(remap)})
         assert model.prefill_slot_keys == {1: 1}
+
+
+def test_kv_pool_follows_max_model_len():
+    """The pool is one request of the served context plus the sliding windows and in-flight prefill tokens."""
+    full = Gemma4ForCausalLM.get_max_tokens_all_users(max_num_seqs=32, max_model_len=262144)
+    half = Gemma4ForCausalLM.get_max_tokens_all_users(max_num_seqs=32, max_model_len=131072)
+    assert full == Gemma4ForCausalLM.get_max_tokens_all_users(max_num_seqs=32)
+    assert full - half == 131072
+    assert full == 262144 + 5 * (
+        (Decoder.SLIDING_WINDOW_PAGES * Decoder.PAGE_SIZE * 32 + (Decoder.SLIDING_WINDOW_PAGES - 1) * Decoder.PAGE_SIZE)
+        + 2 * Gemma4ForCausalLM.MAX_PREFILL_TOKENS
+    )
