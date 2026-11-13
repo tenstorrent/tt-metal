@@ -394,7 +394,7 @@ def test_depth_ladder_matches_golden(mesh_device, device_params, num_layers):
 # * The prompt is the trace's 8192 prompt ids then its 2048 decoded ids, teacher-forced:
 #   two chunks, so chunk 1's DSA layers read chunk 0's KV and its KDA layers continue chunk 0's carry. The bar
 #   is held per chunk on prompt rows (chunk 0 [0, 5120), chunk 1 [5120, 8192)), as the chunked K3 test holds it
-#   per chunk; rows past the prompt line up with vLLM's decode steps and are logged, not gated.
+#   per chunk; rows past the prompt (vLLM's decode steps) feed the model but are not scored.
 #
 # The bar is K3's, per layer by depth: SHALLOW_LAYER_PCC through layer 11, DEEP_LAYER_PCC through layer 23 (K3's
 # depth-24 bar, set for the second seal). KV: KV_CACHE_PCC at every DSA layer. Measured at 10K
@@ -410,7 +410,7 @@ def test_depth_ladder_matches_golden(mesh_device, device_params, num_layers):
 # * Top-k (tt_metal_tracker-ao3i.5.2): each DSA layer's device top-2048 against `dsa/dsa_topk_indices_layer_i`,
 #   scored as set recall |device ∩ trace| / |trace| per query row (test_ttnn_csa*.py's measure), averaged
 #   over the prompt rows at positions >= INDEX_TOPK. Rows before that select every causal key on both sides
-#   (recall 1 by construction, checked) and decode rows are logged. Bar K31_TOPK_RECALL, per golden (below).
+#   (recall 1 by construction, checked). Bar K31_TOPK_RECALL, per golden (below).
 #
 #     scripts/run_safe_pytest.sh \
 #         "models/demos/deepseek_v3_d_p/tests/kimi_k3/test_transformer_depth.py::test_k31_depth_ladder_matches_golden[blackhole-L24-torus-xy-8x4]"
@@ -508,35 +508,28 @@ def test_k31_depth_ladder_matches_golden(rung, mesh_device, device_params):
     def pcc(want, got):
         return float(str(comp_pcc(want, got)[1]).split()[-1])
 
-    # Scored chunk by chunk, so host memory holds one chunk's taps. Prompt rows are gated; the teacher-forced
-    # decode rows are logged. The trace ends one row short of the sequence: it has no row for the last
-    # decoded id, which vLLM never fed back.
-    scores, decode = {}, {}  # (global layer, chunk) -> PCC
+    # Scored chunk by chunk on the prompt rows, so host memory holds one chunk's taps.
+    scores = {}  # (global layer, chunk) -> PCC
 
     def score(c, taps):
-        lo, hi = c * chunk, min((c + 1) * chunk, real_len)
-        split = min(max(prompt_len - lo, 0), hi - lo)
+        lo = c * chunk
+        hi = min(lo + chunk, prompt_len)
+        if hi <= lo:
+            return
         for layer, got in sorted(taps.items()):
             golden = trace.decoder_output(layer, lo, hi)
-            got = got[: golden.shape[0]].float()
-            if split:
-                scores[(layer, c)] = pcc(golden[:split], got[:split])
-            if split < golden.shape[0]:
-                decode[(layer, c)] = pcc(golden[split:], got[split:])
-            seal = " <- seal" if layer % KimiK3Config.ATTN_RES_BLOCK_SIZE == 0 else ""
-            logger.info(
-                f"K31 {rung} chunk {c} layer {layer}: prompt {scores.get((layer, c), float('nan')):.6f}  "
-                f"decode {decode.get((layer, c), float('nan')):.6f}{seal}"
-            )
+            scores[(layer, c)] = pcc(golden, got[: hi - lo].float())
 
-    # Per DSA layer, the top-k recall of every trace row, filled chunk by chunk (the indices are not kept).
-    recall = {}  # global layer -> [trace rows] float
+    # Per DSA layer, the top-k recall of every prompt row, filled chunk by chunk (the indices are not kept).
+    recall = {}  # global layer -> [prompt rows] float
     topk_miscounted = []
 
     def score_topk(c, topk):
         lo = c * chunk
+        if lo >= prompt_len:
+            return
         for layer, got in sorted(topk.items()):
-            want = trace.rows("dsa", f"dsa_topk_indices_layer_{layer}", lo, min(lo + chunk, real_len)).long()
+            want = trace.rows("dsa", f"dsa_topk_indices_layer_{layer}", lo, min(lo + chunk, prompt_len)).long()
             n = want.shape[0]
             got = got[:n]
             # Every device row selects min(position + 1, top-k) keys, as every trace row does.
@@ -544,9 +537,8 @@ def test_k31_depth_ladder_matches_golden(rung, mesh_device, device_params):
             miscounted = int(((got < 2**31).sum(dim=1) != want_count).sum())
             if miscounted:
                 topk_miscounted.append(f"layer {layer} chunk {c}: {miscounted} rows")
-            recall.setdefault(layer, torch.full((trace_rows,), float("nan")))[lo : lo + n] = topk_recall(got, want)
+            recall.setdefault(layer, torch.full((prompt_len,), float("nan")))[lo : lo + n] = topk_recall(got, want)
 
-    trace_rows = real_len - 1
     topk = {}
     dsa_mlas = {
         first + local: layer.attention.mla
@@ -593,7 +585,7 @@ def test_k31_depth_ladder_matches_golden(rung, mesh_device, device_params):
             if slot is not None
         }
         kv = {
-            name: cache_rows(mesh_device, cache, chunk, real_len)
+            name: cache_rows(mesh_device, cache, chunk, prompt_len)
             for name, cache in (("kvpe", kv_caches.kvpe), ("index", kv_caches.index))
             if cache is not None
         }
@@ -605,50 +597,23 @@ def test_k31_depth_ladder_matches_golden(rung, mesh_device, device_params):
             kv_caches.kda_states.deallocate()
         runtime.release_trace()  # the sub-device managers, before the fixture closes the mesh
 
-    # The per-layer curve over context: worst prompt chunk and worst decode chunk per layer.
-    for layer in range(first, first + num_layers):
-        per_chunk = {c: v for (l, c), v in scores.items() if l == layer}
-        worst_c = min(per_chunk, key=per_chunk.get)
-        dec = [v for (l, _), v in decode.items() if l == layer]
-        seal = " <- seal" if layer % KimiK3Config.ATTN_RES_BLOCK_SIZE == 0 else ""
-        logger.info(
-            f"K31 {rung} layer {layer} vs decoder_output_layer_{layer}: chunk0 {per_chunk[0]:.6f}  "
-            f"worst chunk {worst_c} {per_chunk[worst_c]:.6f}  decode {min(dec) if dec else float('nan'):.6f}{seal}"
-        )
-
     kv_failures = []
     for slot, layer in sorted(slots.items()):
-        golden = trace.kv_cache(layer, 0, real_len)
-        got = kv["kvpe"][slot, : golden.shape[0]]
         lora, rope = cache_half_pccs(
-            golden[:prompt_len], got[:prompt_len], KimiK3Config.KV_LORA_RANK, pe_interleave=False
+            trace.kv_cache(layer, 0, prompt_len), kv["kvpe"][slot], KimiK3Config.KV_LORA_RANK, pe_interleave=False
         )
-        dec_lora, dec_rope = cache_half_pccs(
-            golden[prompt_len:], got[prompt_len:], KimiK3Config.KV_LORA_RANK, pe_interleave=False
-        )
-        line = f"K31 {rung} kvpe slot {slot} (layer {layer}): lora={lora:.6f} rope={rope:.6f}"
-        line += f"  decode lora={dec_lora:.6f} rope={dec_rope:.6f}"
-        want_index = trace.rows("indexer", f"indexer_k_layer_{layer}", 0, real_len)
-        got_index = kv["index"][slot, : want_index.shape[0]]
-        index = pcc(want_index[:prompt_len], got_index[:prompt_len])
-        line += f"  index key={index:.6f}  decode {pcc(want_index[prompt_len:], got_index[prompt_len:]):.6f}"
-        logger.info(line)
+        index = pcc(trace.rows("indexer", f"indexer_k_layer_{layer}", 0, prompt_len), kv["index"][slot])
         if min(lora, rope) < KV_CACHE_PCC:
             kv_failures.append(f"slot {slot} (layer {layer}): lora={lora:.6f} rope={rope:.6f}")
         if index < KV_CACHE_PCC:
             kv_failures.append(f"slot {slot} (layer {layer}): index key={index:.6f}")
 
     # Top-k recall per DSA layer: gated on the prompt rows past the first top-k; the rows before it are checked
-    # for completeness, the teacher-forced decode rows logged.
+    # for completeness.
     topk_k = KimiK31Config.INDEX_TOPK
     topk_failures = []
     for layer, per_row in sorted(recall.items()):
-        full, gated, dec = per_row[:topk_k], per_row[topk_k:prompt_len], per_row[prompt_len:]
-        logger.info(
-            f"K31 {rung} layer {layer} top-{topk_k} recall vs dsa_topk_indices: prompt rows [{topk_k}, {prompt_len}) "
-            f"mean {gated.mean():.6f} p1 {gated.quantile(0.01):.4f} min {gated.min():.4f}  "
-            f"rows [0, {topk_k}) min {full.min():.4f}  decode mean {dec.mean():.6f}"
-        )
+        full, gated = per_row[:topk_k], per_row[topk_k:]
         if gated.mean() < K31_TOPK_RECALL[golden_path] or full.min() < 1:
             topk_failures.append(f"layer {layer}: {gated.mean():.6f} (rows < {topk_k}: min {full.min():.4f})")
 
