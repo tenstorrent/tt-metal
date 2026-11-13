@@ -679,9 +679,10 @@ PERF_TEST_SCHEMAS = {
         },
     },
     "perf_transpose_dest": {
-        "version": 4,
+        "version": 5,
         "columns": [
             "dest_acc",
+            "dest_sync",
             "formats.input_A",
             "formats.input_B",
             "formats.output",
