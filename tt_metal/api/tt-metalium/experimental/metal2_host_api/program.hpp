@@ -121,13 +121,6 @@ void SetProgramRunArgsPerDevice(
     const distributed::MeshCoordinateRange& program_range,
     const distributed::MeshCoordinate& device,
     const ProgramRunArgs& values);
-// Drops one device's values of the named args in `names` (their values are ignored): they follow the program's own
-// run args again.
-void ClearProgramRunArgsPerDevice(
-    distributed::MeshWorkload& workload,
-    const distributed::MeshCoordinateRange& program_range,
-    const distributed::MeshCoordinate& device,
-    const ProgramRunArgs& names);
 
 // Fast-path partial update: refresh ONLY the TensorArgs of an existing Program.
 // All other ProgramRunArgs (named/vararg RTAs and CRTAs, DFB params) retain their current values
