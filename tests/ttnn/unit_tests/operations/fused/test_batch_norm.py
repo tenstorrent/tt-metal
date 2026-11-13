@@ -12,7 +12,7 @@ from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs imp
 )
 from itertools import product
 from tt_py_test_utils_common.utility_functions import comp_pcc, is_wormhole_b0
-from tests.ttnn.utils_for_testing import assert_numeric_metrics
+from tests.ttnn.utils_for_testing import assert_numeric_metrics, merge_gate_subset
 
 TEST_PADDING_VALUE = -42
 pytestmark = pytest.mark.use_module_device
@@ -473,24 +473,23 @@ def test_batch_norm_output_Default(input_shapes, device):
     assert_numeric_metrics(torch_result, tt_output, pcc_threshold=0.99, rtol=0.1, atol=4.0, frobenius_threshold=0.15)
 
 
+# Shape [1, 8, 24, 42], training with weight and bias, bf16/bf16 and fp32/fp32.
 @pytest.mark.parametrize(
-    "input_shapes",
-    [
-        torch.Size([3, 17, 47, 32]),
-        torch.Size([1, 8, 24, 42]),
-    ],
-)
-@pytest.mark.parametrize(
-    "training, weight, bias",
-    [
-        (True, True, True),
-        (True, False, False),
-        (False, True, True),
-        (False, False, False),
-    ],
-)
-@pytest.mark.parametrize(
-    "input_dtype, param_dtype", [("bfloat16", "bfloat16"), ("bfloat16", "float32"), ("float32", "float32")]
+    *merge_gate_subset(
+        {
+            "input_dtype, param_dtype": [("bfloat16", "bfloat16"), ("bfloat16", "float32"), ("float32", "float32")],
+            "training, weight, bias": [
+                (True, True, True),
+                (True, False, False),
+                (False, True, True),
+                (False, False, False),
+            ],
+            "input_shapes": [torch.Size([3, 17, 47, 32]), torch.Size([1, 8, 24, 42])],
+        },
+        keep=lambda input_shapes, training, weight, bias, input_dtype, param_dtype: (
+            input_shapes == torch.Size([1, 8, 24, 42]) and training and weight and bias and input_dtype == param_dtype
+        ),
+    )
 )
 def test_batch_norm_compute_config(input_shapes, training, weight, bias, input_dtype, param_dtype, device):
     N, H, W, C = input_shapes
@@ -811,6 +810,7 @@ def test_batch_norm_aliased_running_and_affine_tensors(device):
     assert_numeric_metrics(torch_output, tt_output, pcc_threshold=1.0, rtol=0.0, atol=0.0, frobenius_threshold=0.0)
 
 
+@pytest.mark.merge_gate
 def test_batch_norm_program_cache_shape_collision(device):
     """Covers #46018: program cache collision in BatchNormOperation.
 
@@ -878,6 +878,7 @@ def test_batch_norm_program_cache_shape_collision(device):
         device.disable_and_clear_program_cache()
 
 
+@pytest.mark.merge_gate
 def test_batch_norm_training_avoids_variance_cancellation(device):
     """Regression test for #45968: avoid bf16 E[x^2] - E[x]^2 cancellation in training mode."""
 
@@ -1124,14 +1125,19 @@ def test_batch_norm_fpu_running_statistics(input_shapes, weight, bias, check_mea
         )
 
 
+# Gate the var-only row, with fp32 acc on and off.
 @pytest.mark.parametrize(
-    "check_mean, check_var",
-    [
-        (True, False),  # mean-only: batch_var must still be drained
-        (False, True),  # var-only: batch_mean must still be drained (FPU)
-    ],
+    *merge_gate_subset(
+        {
+            "fp32_dest_acc_en": [False, True],
+            "check_mean, check_var": [
+                (True, False),  # mean-only: batch_var must still be drained
+                (False, True),  # var-only: batch_mean must still be drained (FPU)
+            ],
+        },
+        keep=lambda check_mean, check_var, **_: check_var and not check_mean,
+    )
 )
-@pytest.mark.parametrize("fp32_dest_acc_en", [False, True])
 def test_batch_norm_running_statistics_drain(check_mean, check_var, fp32_dest_acc_en, device):
     """Regression for CB drain hangs when a running stat is absent.
 
@@ -1154,9 +1160,11 @@ def test_batch_norm_running_statistics_drain(check_mean, check_var, fp32_dest_ac
 
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
-        math_fidelity=ttnn.MathFidelity.LoFi
-        if not fp32_dest_acc_en
-        else (ttnn.MathFidelity.HiFi3 if is_wormhole_b0() else ttnn.MathFidelity.HiFi4),
+        math_fidelity=(
+            ttnn.MathFidelity.LoFi
+            if not fp32_dest_acc_en
+            else (ttnn.MathFidelity.HiFi3 if is_wormhole_b0() else ttnn.MathFidelity.HiFi4)
+        ),
         math_approx_mode=False,
         fp32_dest_acc_en=fp32_dest_acc_en,
     )
@@ -1236,6 +1244,7 @@ def test_batch_norm_running_statistics_drain(check_mean, check_var, fp32_dest_ac
         )
 
 
+@pytest.mark.merge_gate
 def test_batch_norm_running_var_bessel_correction(device):
     """
     Test that ttnn.batch_norm training mode applies Bessel's correction factor m / (m - 1)

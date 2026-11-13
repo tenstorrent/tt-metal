@@ -1666,6 +1666,7 @@ BF16_NEGATIVE_MASK_SHAPES = [(1, 640, 32, 32, 32), (1, 640, 128, 128, 32)]
 BF16_NEGATIVE_MASK_SANITY_SHAPES = [(1, 640, 32, 32, 32)]
 
 
+@pytest.mark.merge_gate
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE_SDXL_BG_N_MASK, indirect=True)
 @pytest.mark.parametrize("N, C, H, W, num_groups", BF16_NEGATIVE_MASK_SANITY_SHAPES)
 def test_group_norm_bf16_negative_mask(device, N, C, H, W, num_groups):
@@ -1756,6 +1757,7 @@ def test_group_norm_bf16_negative_mask(device, N, C, H, W, num_groups):
 # Stays in sanity at full size (#62486): it is the only test that builds the writer's
 # NEGATIVE_MASK_SYNTHESIZE branch. The op synthesizes the negative mask only when L1 is too tight for
 # the normal layout, and the ballast below is sized for this 128x128 input, so the shape cannot shrink.
+@pytest.mark.merge_gate
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE_SDXL_BG_N_MASK, indirect=True)
 @pytest.mark.parametrize("N, C, H, W, num_groups", [(1, 640, 128, 128, 32)])
 def test_group_norm_auto_negative_mask_synthesis(device, N, C, H, W, num_groups):

@@ -741,6 +741,7 @@ def test_group_norm_non_tile_aligned_garbage_padding_DRAM(device):
     assert max_abs_err < 0.08, f"max abs error {max_abs_err} with garbage padding rows (see #50682)"
 
 
+@pytest.mark.merge_gate
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
 def test_group_norm_non_tile_aligned_dirty_padding_is_ignored_DRAM(device):
     # The same logical rows with different padding bytes must give bit-identical output -- unlike an
