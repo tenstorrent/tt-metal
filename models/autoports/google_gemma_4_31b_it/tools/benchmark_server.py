@@ -344,6 +344,7 @@ def main():
             "--tool-call-parser",
             "gemma4",
             "--enable-auto-tool-choice",
+            "--enable-prompt-tokens-details",
             "--override-generation-config",
             '{"top_k":32}',
             "--served-model-name",
