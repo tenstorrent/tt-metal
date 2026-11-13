@@ -3,10 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """The training loop of ``ttml.unified_trainer.Trainer``: hook order, gradient accumulation, validation
-scheduling, max_steps, failures and cleanup. Device-free."""
+scheduling, the stopping criteria, failures and cleanup. Device-free."""
 
 import pytest
-from unified_trainer_fakes import FakeTrainer, RaiseAt, Recorder, make_config
+from unified_trainer_fakes import FakeTrainer, RaiseAt, Recorder, after_epochs, after_steps, make_config
 
 TRAIN_BATCH = ["on_train_batch_start", "on_forward_start", "on_forward_end", "on_backward_start", "on_backward_end"]
 STEP = ["on_optimizer_step_start", "on_optimizer_step_end"]
@@ -20,6 +20,11 @@ VALIDATION = [
 ]
 
 
+def validation_every(steps):
+    """The ``metrics`` section of a run that validates every ``steps`` optimizer steps."""
+    return {"validation": {"steps_freq": steps}}
+
+
 def run(trainer, **config):
     trainer.setup(make_config(**config))
     try:
@@ -30,7 +35,7 @@ def run(trainer, **config):
 
 def test_hook_order_with_accumulation_and_validation():
     recorder = Recorder()
-    run(FakeTrainer([recorder]), gradient_accumulation_steps=2, val_steps_freq=1)
+    run(FakeTrainer([recorder]), gradient_accumulation_steps=2, metrics=validation_every(1))
 
     window = TRAIN_BATCH + ["on_train_batch_end"] + TRAIN_BATCH + STEP + VALIDATION
     assert recorder.hooks() == [
@@ -55,9 +60,9 @@ def test_window_loss_is_the_mean_of_its_micro_batches():
     assert recorder.args("on_step_end") == [(1,), (2,)]
 
 
-def test_validation_runs_before_training_and_every_val_steps_freq_steps():
+def test_validation_runs_before_training_and_every_steps_freq_steps():
     recorder = Recorder()
-    run(FakeTrainer([recorder]), val_steps_freq=2)
+    run(FakeTrainer([recorder]), metrics=validation_every(2))
     # Before training, then after steps 2 and 4; each is the mean of the validation losses.
     assert recorder.args("on_validation_end") == [(4.0,), (4.0,), (4.0,)]
     hooks = recorder.hooks()
@@ -68,7 +73,7 @@ def test_validation_runs_before_training_and_every_val_steps_freq_steps():
 
 def test_no_validation_without_data_or_frequency():
     for trainer, config in (
-        (FakeTrainer([Recorder()], val_losses=None), {"val_steps_freq": 1}),
+        (FakeTrainer([Recorder()], val_losses=None), {"metrics": validation_every(1)}),
         (FakeTrainer([Recorder()]), {}),
     ):
         recorder = trainer.callback_handler.callbacks[0]
@@ -78,29 +83,72 @@ def test_no_validation_without_data_or_frequency():
 
 def test_empty_validation_set_reports_zero():
     recorder = Recorder()
-    run(FakeTrainer([recorder], val_losses=[]), val_steps_freq=1)
+    run(FakeTrainer([recorder], val_losses=[]), metrics=validation_every(1))
     assert recorder.args("on_validation_end")[0] == (0.0,)
 
 
-def test_max_steps_ends_the_run_mid_epoch():
+def test_an_epoch_limit_ends_the_run_after_that_many_epochs():
     recorder = Recorder()
-    run(FakeTrainer([recorder]), max_steps=3, num_epochs=2)
+    run(FakeTrainer([recorder]), stopping_criteria=after_epochs(3))
+    # 4 steps an epoch.
+    assert recorder.args("on_step_end") == [(step,) for step in range(1, 13)]
+    assert recorder.hooks().count("on_train_epoch_start") == recorder.hooks().count("on_train_epoch_end") == 3
+    assert recorder.hooks()[-1] == "on_train_end"
+
+
+def test_a_step_limit_ends_the_run_mid_epoch():
+    recorder = Recorder()
+    run(FakeTrainer([recorder]), stopping_criteria=after_steps(3))
     assert recorder.args("on_step_end") == [(1,), (2,), (3,)]
     assert recorder.hooks().count("on_train_epoch_start") == 1
-    assert recorder.hooks()[-1] == "on_train_end"
+    # The epoch it ends in still ends, and so does the run.
+    assert recorder.hooks()[-2:] == ["on_train_epoch_end", "on_train_end"]
+
+
+@pytest.mark.parametrize("limit, epochs", [(4, 1), (6, 2), (8, 2), (9, 3)])
+def test_a_step_limit_takes_as_many_epochs_as_its_steps(limit, epochs):
+    recorder = Recorder()
+    run(FakeTrainer([recorder]), stopping_criteria=after_steps(limit))
+    # 4 steps an epoch: a limit at the end of an epoch starts no other.
+    assert recorder.args("on_step_end") == [(step,) for step in range(1, limit + 1)]
+    assert recorder.hooks().count("on_train_epoch_start") == recorder.hooks().count("on_train_epoch_end") == epochs
+
+
+def test_a_step_limit_counts_optimizer_steps_not_batches():
+    recorder = Recorder()
+    run(FakeTrainer([recorder]), gradient_accumulation_steps=2, stopping_criteria=after_steps(3))
+    # 2 steps an epoch, of 2 batches each: the third step is in the second epoch.
+    assert recorder.args("on_step_end") == [(1,), (2,), (3,)]
+    assert recorder.hooks().count("on_train_batch_start") == 6
+    assert recorder.hooks().count("on_train_epoch_start") == 2
+
+
+def test_a_step_limit_no_epoch_gets_closer_to_is_rejected(expect_error):
+    recorder = Recorder()
+    trainer = FakeTrainer([recorder], train_losses=[1.0])
+    config = make_config(gradient_accumulation_steps=2, stopping_criteria=after_steps(3))
+    with expect_error(ValueError, "stopping_criteria: an epoch of 1 batches makes no optimizer step"):
+        trainer.setup(config)
+    # Before the device opens.
+    assert recorder.hooks() == ["on_setup_error"] and "device.open" not in trainer.events
+    trainer.cleanup()
+
+    # An epoch limit ends such a run, without a step.
+    run(trainer, gradient_accumulation_steps=2, stopping_criteria=after_epochs(2))
+    assert recorder.hooks().count("on_train_epoch_end") == 2 and "on_step_end" not in recorder.hooks()
 
 
 def test_a_partial_window_never_leaks_into_the_next_epoch():
     recorder = Recorder()
     trainer = FakeTrainer([recorder], train_losses=[1.0, 2.0, 3.0])
-    run(trainer, gradient_accumulation_steps=2, num_epochs=2)
+    run(trainer, gradient_accumulation_steps=2, stopping_criteria=after_epochs(2))
     # One full window per epoch; the third batch's loss is dropped, not added to the next epoch's window.
     assert recorder.args("on_optimizer_step_end") == [(1.5,), (1.5,)]
 
 
 def test_gradients_are_zeroed_at_each_epoch_start():
     trainer = FakeTrainer(train_losses=[1.0, 2.0, 3.0])
-    trainer.setup(make_config(gradient_accumulation_steps=2, num_epochs=2))
+    trainer.setup(make_config(gradient_accumulation_steps=2, stopping_criteria=after_epochs(2)))
     trainer.train()
     # Per epoch: one zero at the start and one after its single optimizer step.
     assert (trainer.optimizer.steps, trainer.optimizer.zero_grads) == (2, 4)
@@ -134,7 +182,30 @@ class Steps:
 def test_a_resumed_run_trains_on_the_batches_after_its_step(tmp_path, train_losses, step, expected):
     steps = Steps()
     trainer = FakeTrainer([steps], train_losses=train_losses)
-    trainer.setup(make_config(gradient_accumulation_steps=2, num_epochs=2))
+    trainer.setup(make_config(gradient_accumulation_steps=2, stopping_criteria=after_epochs(2)))
+    try:
+        trainer.save_checkpoint(str(tmp_path), {"step": step}, optimizer=True)
+        trainer.resume_from_checkpoint(str(tmp_path))
+        trainer.train()
+    finally:
+        trainer.cleanup()
+    assert steps.steps == expected
+
+
+@pytest.mark.parametrize(
+    "step, expected",
+    [
+        # Two steps per epoch, and a limit of 3 steps: the steps of the checkpoint count towards it.
+        (1, [(2, 0, 1.5), (3, 1, 3.5)]),
+        (2, [(3, 1, 3.5)]),
+        (3, []),
+        (5, []),
+    ],
+)
+def test_a_resumed_run_ends_at_the_step_limit_of_the_run_it_continues(tmp_path, step, expected):
+    steps = Steps()
+    trainer = FakeTrainer([steps])
+    trainer.setup(make_config(gradient_accumulation_steps=2, stopping_criteria=after_steps(3)))
     try:
         trainer.save_checkpoint(str(tmp_path), {"step": step}, optimizer=True)
         trainer.resume_from_checkpoint(str(tmp_path))
@@ -213,7 +284,7 @@ def test_cleanup_after_a_failed_model_load_closes_the_device(expect_error):
 def test_cleanup_drops_the_run_and_keeps_the_host_state():
     recorder = Recorder()
     trainer = FakeTrainer([recorder])
-    run(trainer, val_steps_freq=1)
+    run(trainer, metrics=validation_every(1))
     assert trainer.config is None and trainer.logger is None
     assert (trainer.global_step, trainer.epoch, trainer.step_loss) == (0, 0, None)
     for attr in ("model", "optimizer", "train_dataloader", "val_dataloader", "device_manager"):

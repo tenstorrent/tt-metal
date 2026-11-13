@@ -25,7 +25,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         action="append",
         default=[],
         metavar="KEY=VALUE",
-        help="override a recipe field, e.g. --set model.lora.r=16 or --set max_steps=20; repeatable",
+        help="override a recipe field, e.g. --set model.lora.r=16 or --set stopping_criteria.limit=20; repeatable",
     )
     args = parser.parse_args(argv)
 

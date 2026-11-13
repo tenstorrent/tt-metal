@@ -40,7 +40,10 @@ from .configs import (
     OptimizerConfig,
     SFTTrainerConfig,
     StepSave,
+    StoppingCriteria,
     TrainerConfig,
+    TrainMetricsConfig,
+    ValidationMetricsConfig,
     load_config,
 )
 from .implementations import SFTTrainer, Trainer
@@ -70,8 +73,11 @@ __all__ = [
     "SFTTrainer",
     "SFTTrainerConfig",
     "StepSave",
+    "StoppingCriteria",
+    "TrainMetricsConfig",
     "Trainer",
     "TrainerConfig",
     "UnsupportedTrainingConfig",
+    "ValidationMetricsConfig",
     "load_config",
 ]

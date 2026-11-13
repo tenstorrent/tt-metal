@@ -25,13 +25,14 @@ class JobCallback:
 
     def on_train_start(self, trainer):
         self.batches_per_epoch = len(trainer.train_dataloader)
-        self.label = f"Epoch {trainer.epoch + 1}/{trainer.config.num_epochs}"
+        stopping = trainer.config.stopping_criteria
+        self.label = f"Epoch {trainer.epoch + 1}/{stopping.limit}" if stopping.type == "epoch" else "Epoch"
 
     def on_optimizer_step_end(self, trainer, window_loss):
         self._running = window_loss if self._running is None else self._running + window_loss
 
     def on_step_end(self, trainer, global_step):
-        steps_freq = trainer.config.metrics.steps_freq
+        steps_freq = trainer.config.metrics.train.steps_freq
         if global_step % steps_freq == 0:
             loss = trainer.loss_to_float(self._running) / steps_freq
             self.metrics.append((global_step, trainer.epoch, loss, trainer.current_learning_rate()))
@@ -55,7 +56,7 @@ class JobCallback:
 
 def job_config(tmp_path, **overrides):
     return make_config(
-        metrics={"steps_freq": 2},
+        metrics={"train": {"steps_freq": 2}},
         checkpoint={"save_strategy": {"type": "step", "frequency": 2}, "project_dir": str(tmp_path)},
         **overrides,
     )

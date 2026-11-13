@@ -19,9 +19,10 @@ from .device import DeviceConfig
 from .loader import apply_override, load_config
 from .logging import LoggingConfig
 from .lora import LoraConfig
-from .metrics import MetricsConfig
+from .metrics import MetricsConfig, TrainMetricsConfig, ValidationMetricsConfig
 from .model import ModelConfig
 from .optimizer import OPTIMIZERS, AdamWConfig, OptimizerConfig
+from .stopping import StoppingCriteria
 from .trainer import SFTTrainerConfig, TrainerConfig
 
 __all__ = [
@@ -44,7 +45,10 @@ __all__ = [
     "OptimizerConfig",
     "SFTTrainerConfig",
     "StepSave",
+    "StoppingCriteria",
+    "TrainMetricsConfig",
     "TrainerConfig",
+    "ValidationMetricsConfig",
     "apply_override",
     "load_config",
 ]

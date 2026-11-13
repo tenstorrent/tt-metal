@@ -39,12 +39,13 @@ class MetricsCallback(Callback):
         self._running_steps += 1
 
     def on_step_end(self, trainer: Any, global_step: int) -> None:
-        if global_step % trainer.config.metrics.steps_freq == 0:
+        config = trainer.config.metrics.train
+        if global_step % config.steps_freq == 0:
             available = {
                 "loss": trainer.loss_to_float(self._running_loss) / self._running_steps,
                 "learning_rate": trainer.current_learning_rate(),
             }
-            metrics = _select(available, trainer.config.metrics.train_metrics, "train")
+            metrics = _select(available, config.metric_names, "train")
             if metrics:
                 trainer.logger.log_metrics(metrics, step=global_step, commit=False)
             self._running_loss = None
@@ -53,7 +54,8 @@ class MetricsCallback(Callback):
         trainer.logger.log_metrics({}, step=global_step, commit=True)
 
     def on_validation_end(self, trainer: Any, val_loss: Any) -> None:
-        metrics = _select({"loss": trainer.loss_to_float(val_loss)}, trainer.config.metrics.val_metrics, "val")
+        names = trainer.config.metrics.validation.metric_names
+        metrics = _select({"loss": trainer.loss_to_float(val_loss)}, names, "val")
         if metrics:
             trainer.logger.log_metrics(metrics, step=trainer.global_step, commit=False)
 

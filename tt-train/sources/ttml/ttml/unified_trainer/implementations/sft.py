@@ -80,7 +80,7 @@ class SFTTrainer(Trainer):
                 f"dataset.id: the train split has {train.num_examples} examples of at most max_length="
                 f"{self.config.max_length} tokens, fewer than one batch of {self.config.batch_size}"
             )
-        if self.config.val_steps_freq == 0:
+        if self.config.metrics.validation.steps_freq == 0:
             return train, None
         return train, get_dataset_provider(self.config, "validation", tokenizer)
 

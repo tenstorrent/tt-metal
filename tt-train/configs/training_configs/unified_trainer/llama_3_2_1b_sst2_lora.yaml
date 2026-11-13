@@ -20,17 +20,21 @@ device:
 
 max_length: 64
 batch_size: 8
-num_epochs: 1
-max_steps: 500
-val_steps_freq: 50
 seed: 0
+
+stopping_criteria:
+  type: step
+  limit: 500
 
 optimizer:
   type: adamw
   lr: 1.0e-4
 
 metrics:
-  steps_freq: 10
+  train:
+    steps_freq: 10
+  validation:
+    steps_freq: 50
 
 checkpoint:
   save_strategy:

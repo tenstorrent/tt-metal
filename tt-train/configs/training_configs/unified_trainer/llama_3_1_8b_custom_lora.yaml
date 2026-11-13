@@ -28,9 +28,11 @@ device:
 
 max_length: 256
 batch_size: 4
-num_epochs: 1
-val_steps_freq: 100
 seed: 0
+
+stopping_criteria:
+  type: epoch
+  limit: 1
 
 optimizer:
   type: adamw
@@ -38,7 +40,10 @@ optimizer:
   weight_decay: 0.01
 
 metrics:
-  steps_freq: 10
+  train:
+    steps_freq: 10
+  validation:
+    steps_freq: 100
 
 checkpoint:
   save_strategy:

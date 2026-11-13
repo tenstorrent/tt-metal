@@ -132,6 +132,8 @@ def sft_config(
     rows=None,
     lora=None,
     gradient_checkpointing=False,
+    validation_steps_freq=4,
+    max_steps=8,
     **overrides,
 ):
     rows = rows or [{"instruction": "Say the word.", "output": "tenstorrent"}] * 16
@@ -152,9 +154,8 @@ def sft_config(
         "max_length": MAX_LENGTH,
         "optimizer": {"lr": 1e-2},
         "batch_size": 2,
-        "max_steps": 8,
-        "val_steps_freq": 4,
-        "metrics": {"steps_freq": 1},
+        "stopping_criteria": {"type": "step", "limit": max_steps},
+        "metrics": {"train": {"steps_freq": 1}, "validation": {"steps_freq": validation_steps_freq}},
         "checkpoint": {
             "save_strategy": {"type": "step", "frequency": 4},
             "project_dir": str(tmp_path / "run"),
@@ -363,7 +364,7 @@ def test_init_restores_the_adapters(tiny_llama, tmp_path, no_open_device, char_t
     ids = sample_ids()
     first = SFTTrainer(callbacks=[CheckpointCallback()])
     try:
-        first.setup(sft_config(tiny_llama, tmp_path, lora=lora(ATTENTION), max_steps=2, val_steps_freq=0))
+        first.setup(sft_config(tiny_llama, tmp_path, lora=lora(ATTENTION), max_steps=2, validation_steps_freq=0))
         first.train()
         trained = trained_logits(first, ids)
     finally:
@@ -384,7 +385,7 @@ def test_init_restores_the_adapters(tiny_llama, tmp_path, no_open_device, char_t
                 lora=lora(ATTENTION),
                 optimizer={"lr": 0.0},
                 max_steps=1,
-                val_steps_freq=0,
+                validation_steps_freq=0,
             )
         )
         second.train()
@@ -419,9 +420,9 @@ def test_a_resumed_run_trains_as_the_run_it_continues(tiny_llama, tmp_path, no_o
                     checkpoint=checkpoint,
                     lora=dropout_lora,
                     rows=rows,
-                    num_epochs=2,
+                    stopping_criteria={"type": "epoch", "limit": 2},
                     gradient_accumulation_steps=2,
-                    val_steps_freq=0,
+                    validation_steps_freq=0,
                 )
             )
             trainer.train()

@@ -66,6 +66,7 @@ class Trainer(ABC):
             self._check_config()
             self._seed()
             self.train_dataloader, self.val_dataloader = self._load_dataloaders()
+            self._check_stopping_criteria()
             self.device_manager = self._create_device_manager()
             self.model = self._load_model()
             self.optimizer = self._load_optimizer()
@@ -108,8 +109,8 @@ class Trainer(ABC):
                 self.validate()
 
             self._train_mode()
-            for epoch in range(first_epoch, self.config.num_epochs):
-                if self._reached_max_steps():
+            for epoch in self._epochs(first_epoch):
+                if self._reached_step_limit():
                     break
                 self.epoch = epoch
                 self.callback_handler("on_train_epoch_start")
@@ -145,12 +146,12 @@ class Trainer(ABC):
 
                         accumulation_step = 0
                         self.global_step += 1
-                        if self._validation_enabled() and self.global_step % self.config.val_steps_freq == 0:
+                        if self._validation_enabled() and self.global_step % self._validation_steps_freq() == 0:
                             self.validate()
                         self.callback_handler("on_step_end", self.global_step)
 
                     self.callback_handler("on_train_batch_end")
-                    if self._reached_max_steps():
+                    if self._reached_step_limit():
                         break
 
                 self.callback_handler("on_train_epoch_end")
@@ -176,10 +177,33 @@ class Trainer(ABC):
         self._train_mode()
 
     def _validation_enabled(self) -> bool:
-        return self.val_dataloader is not None and self.config.val_steps_freq > 0
+        return self.val_dataloader is not None and self._validation_steps_freq() > 0
 
-    def _reached_max_steps(self) -> bool:
-        return 0 < self.config.max_steps <= self.global_step
+    def _validation_steps_freq(self) -> int:
+        return self.config.metrics.validation.steps_freq
+
+    def _epochs(self, first: int) -> Iterable[int]:
+        """The epochs the loop trains, from epoch ``first`` on: up to the limit of an epoch criterion. A step
+        criterion sets no last epoch; the loop ends once ``_reached_step_limit``."""
+        stopping = self.config.stopping_criteria
+        return range(first, stopping.limit) if stopping.type == "epoch" else itertools.count(first)
+
+    def _reached_step_limit(self) -> bool:
+        """Whether the run made the optimizer steps a step criterion limits it to. It then ends where it is, in
+        the middle of an epoch too; that epoch still gets its ``on_train_epoch_end``."""
+        stopping = self.config.stopping_criteria
+        return stopping.type == "step" and self.global_step >= stopping.limit
+
+    def _check_stopping_criteria(self) -> None:
+        """Raise if the run would never end: a step limit, on epochs too short to make an optimizer step."""
+        if self.config.stopping_criteria.type != "step":
+            return
+        batches, accumulation_steps = len(self.train_dataloader), self.config.gradient_accumulation_steps
+        if batches < accumulation_steps:
+            raise ValueError(
+                f"stopping_criteria: an epoch of {batches} batches makes no optimizer step with "
+                f"gradient_accumulation_steps={accumulation_steps}, so the run would never reach its step limit"
+            )
 
     def _start_position(self) -> tuple[int, int]:
         """The epoch the loop starts in, and the batch of it: after the ``global_step`` steps a resumed run made.
@@ -212,7 +236,10 @@ class Trainer(ABC):
 
     @abstractmethod
     def _load_dataloaders(self) -> tuple[Iterable, Optional[Iterable]]:
-        """Return ``(train_dataloader, val_dataloader)``; ``val_dataloader`` is ``None`` without validation data."""
+        """Return ``(train_dataloader, val_dataloader)``; ``val_dataloader`` is ``None`` without validation data.
+
+        ``len(train_dataloader)`` is the batches of an epoch.
+        """
 
     @abstractmethod
     def _create_device_manager(self) -> Any:

@@ -15,7 +15,7 @@ From the command line, with a recipe from `tt-train/configs/training_configs/uni
 ```bash
 python -m ttml.unified_trainer \
   --config tt-train/configs/training_configs/unified_trainer/llama_3_2_1b_sst2_lora.yaml \
-  --set max_steps=100 --set model.lora.r=8
+  --set stopping_criteria.limit=100 --set model.lora.r=8
 ```
 
 Each `--set key=value` overrides one field; dotted keys reach into sections, and values are parsed as YAML.
@@ -97,15 +97,53 @@ Unknown fields are errors, so a typo fails instead of being ignored. Required fi
 | `max_length` | | Tokens per example: a multiple of 32, at most the model's `max_position_embeddings`. |
 | `batch_size` | | Examples per micro-batch. |
 | `gradient_accumulation_steps` | `1` | Micro-batches per optimizer step. |
-| `num_epochs` | `1` | |
-| `max_steps` | `0` | Stop after this many optimizer steps; 0 runs every epoch. |
+| `stopping_criteria` | `type: epoch`, `limit: 1` | When the run ends; see [Stopping criteria](#stopping-criteria). |
 | `max_grad_norm` | `0.0` | Clip the global gradient norm to this; 0 disables clipping. |
-| `val_steps_freq` | `0` | Validate before training and every this many optimizer steps; 0 disables validation. |
 | `seed` | `0` | Seeds initialization, LoRA dropout and data shuffling. |
 | `optimizer` | | One optimizer, or a list (see [Several optimizers](#several-optimizers)). Each takes `lr` (constant), `modules`, and `type`, which picks the optimizer and the other fields it takes. `adamw` (the default, and the only one supported so far) takes `weight_decay` (0.0, decoupled), `beta1`, `beta2`, `epsilon`, `amsgrad` and `stochastic_rounding`; unset, those keep ttml's defaults. |
-| `metrics` | | `steps_freq` (10): train metrics are averaged over and logged every this many steps. `train_metrics` (`[loss]`, `learning_rate` also works), `val_metrics` (`[loss]`). |
+| `metrics` | | Two sections, `train` and `validation`, each with `steps_freq` and `metric_names`; see [Metrics and validation](#metrics-and-validation). |
 | `logging` | | `log_level` (`INFO`), `use_wandb` (false), `wandb_project`, `wandb_run_name`, `wandb_tags`. |
 | `checkpoint` | | See [Checkpoints](#checkpoints). |
+
+### Stopping criteria
+
+`stopping_criteria` ends the run after `limit` epochs or optimizer steps, as its `type` says. Both fields are required
+in the section; without the section, the run trains for one epoch.
+
+```yaml
+stopping_criteria:
+  type: step
+  limit: 500
+```
+
+| `type` | The run ends after |
+|---|---|
+| `epoch` | `limit` passes over the train data. |
+| `step` | `limit` optimizer steps, over as many epochs as they take. It ends in the middle of an epoch if the limit falls there. |
+
+A resumed run counts the steps and epochs of the run it continues. A step limit needs every epoch to make an optimizer
+step, so `setup` rejects one on train data with fewer batches than `gradient_accumulation_steps`.
+
+### Metrics and validation
+
+The `metrics` section has a `train` and a `validation` section with the same fields:
+
+```yaml
+metrics:
+  train:
+    steps_freq: 10
+    metric_names: [loss, learning_rate]
+  validation:
+    steps_freq: 50
+    metric_names: [loss]
+```
+
+| Field | `train` | `validation` |
+|---|---|---|
+| `steps_freq` | `10`. The metrics are averaged over and logged every this many optimizer steps. | `0`. The run validates before training and every this many optimizer steps; 0 disables validation. |
+| `metric_names` | `[loss]`; `learning_rate` also works. | `[loss]`. |
+
+Train metrics are logged as `train/<name>` and validation metrics as `val/<name>`.
 
 ### Several optimizers
 
@@ -152,7 +190,9 @@ The `checkpoint` section:
 Each strategy is a section whose `type` picks it, and with it the other fields it takes:
 
 ```yaml
-val_steps_freq: 50
+metrics:
+  validation:
+    steps_freq: 50
 checkpoint:
   save_strategy:
     type: step
@@ -176,7 +216,7 @@ A field another `type` doesn't take is an error, so to change the type with `--s
 | `rotation_strategy` | Keeps |
 |---|---|
 | `last` | The `keep_n` (3) most recent checkpoints. |
-| `best` | The `keep_n` (3) with the best `metric` (`val/loss`, from the latest validation, so it needs `val_steps_freq`): the lowest with `mode: min` (the default), the highest with `mode: max`. And the latest checkpoint. |
+| `best` | The `keep_n` (3) with the best `metric` (`val/loss`, from the latest validation, so it needs `metrics.validation.steps_freq`): the lowest with `mode: min` (the default), the highest with `mode: max`. And the latest checkpoint. |
 | `none` | Every checkpoint. |
 
 Rotation never deletes the checkpoint just saved, and only deletes checkpoints of the same run: an earlier run's in the

@@ -16,6 +16,7 @@ from ttml.unified_trainer import (
     OptimizerConfig,
     SFTTrainerConfig,
     StepSave,
+    StoppingCriteria,
     load_config,
 )
 from ttml.unified_trainer.configs import apply_override
@@ -40,13 +41,12 @@ def test_defaults_name_no_lora_and_save_no_checkpoints():
     assert config.checkpoint.save_strategy.type == "none"
     assert config.checkpoint.init_strategy is None
     assert not config.checkpoint.save_optim
-    assert (config.num_epochs, config.gradient_accumulation_steps, config.max_steps, config.val_steps_freq) == (
-        1,
-        1,
-        0,
-        0,
-    )
-    assert config.metrics.train_metrics == ["loss"]
+    assert config.gradient_accumulation_steps == 1
+    # One epoch unless asked for otherwise.
+    assert (config.stopping_criteria.type, config.stopping_criteria.limit) == ("epoch", 1)
+    assert (config.metrics.train.steps_freq, config.metrics.train.metric_names) == (10, ["loss"])
+    # No validation unless asked for.
+    assert (config.metrics.validation.steps_freq, config.metrics.validation.metric_names) == (0, ["loss"])
     assert not config.logging.use_wandb
     assert len(config.optimizer) == 1 and config.optimizer[0].modules is None
     assert isinstance(config.optimizer[0], AdamWConfig) and config.optimizer[0].weight_decay == 0.0
@@ -58,6 +58,10 @@ def test_defaults_name_no_lora_and_save_no_checkpoints():
         {"epochs": 2},
         {"master_dtype": "float32"},
         {"gradient_checkpointing": True},
+        {"val_steps_freq": 10},
+        {"num_epochs": 2},
+        {"max_steps": 100},
+        {"stopping_criteria": {"type": "step", "limit": 100, "patience": 3}},
         {"dataset": {"id": "sst2", "split": "train"}},
         {"dataset": {"id": "custom", "custom_options": {"train_dataset_path": "train.jsonl", "delimiter": ","}}},
         {"model": {"name": "m", "revision": "main"}},
@@ -69,13 +73,19 @@ def test_defaults_name_no_lora_and_save_no_checkpoints():
         {"checkpoint": {"save_every": 10}},
         {"checkpoint": {"save_strategy": {"type": "none", "frequency": 10}}},
         {"checkpoint": {"rotation_strategy": {"type": "last", "metric": "val/loss"}}},
-        {"metrics": {"log_freq": 10}},
+        {"metrics": {"steps_freq": 10}},
+        {"metrics": {"train": {"steps_freq": 10, "metrics": ["loss"]}}},
+        {"metrics": {"validation": {"steps_freq": 10, "split": "validation"}}},
         {"logging": {"wandb_watch_mode": "all"}},
     ],
     ids=[
         "top level",
         "master weights",
         "a model field at the top level",
+        "a metrics field at the top level",
+        "epochs at the top level",
+        "steps at the top level",
+        "stopping criteria",
         "dataset",
         "custom options",
         "model",
@@ -88,6 +98,8 @@ def test_defaults_name_no_lora_and_save_no_checkpoints():
         "save strategy",
         "rotation strategy",
         "metrics",
+        "train metrics",
+        "validation metrics",
         "logging",
     ],
 )
@@ -124,6 +136,15 @@ def test_unknown_fields_are_rejected(overrides, expect_error):
         ({"optimizer": {"lr": 1e-4, "modules": []}}, "optimizer.0.modules"),
         ({"max_length": 0}, "max_length"),
         ({"gradient_accumulation_steps": 0}, "gradient_accumulation_steps"),
+        ({"stopping_criteria": 100}, "stopping_criteria"),
+        ({"stopping_criteria": {"limit": 100}}, "stopping_criteria.type"),
+        ({"stopping_criteria": {"type": "step"}}, "stopping_criteria.limit"),
+        ({"stopping_criteria": {"type": "loss", "limit": 1}}, "stopping_criteria.type"),
+        ({"stopping_criteria": {"type": "epoch", "limit": 0}}, "stopping_criteria.limit"),
+        ({"stopping_criteria": {"type": "step", "limit": 1.5}}, "stopping_criteria.limit"),
+        ({"metrics": {"train": {"steps_freq": 0}}}, "metrics.train.steps_freq"),
+        ({"metrics": {"validation": {"steps_freq": -1}}}, "metrics.validation.steps_freq"),
+        ({"metrics": {"validation": {"metric_names": "loss"}}}, "metrics.validation.metric_names"),
         ({"model": {"name": "m", "lora": {"r": 0, "alpha": 8, "target_modules": ["q_proj"]}}}, "model.lora.r"),
         ({"model": {"name": "m", "lora": {"r": 4, "alpha": 8, "target_modules": []}}}, "model.lora.target_modules"),
         (
@@ -158,7 +179,7 @@ def test_the_optimizer_type_picks_its_config():
 
 def test_each_checkpoint_strategy_type_takes_its_own_options():
     checkpoint = sft(
-        val_steps_freq=10,
+        metrics={"validation": {"steps_freq": 10}},
         checkpoint={
             "save_strategy": {"type": "epoch"},
             "rotation_strategy": {"type": "best", "keep_n": 2},
@@ -171,7 +192,7 @@ def test_each_checkpoint_strategy_type_takes_its_own_options():
 
 
 def test_best_rotation_needs_validation(expect_error):
-    with expect_error(ValidationError, "best ranks checkpoints by validation, so set val_steps_freq"):
+    with expect_error(ValidationError, "best ranks checkpoints by validation, so set metrics.validation.steps_freq"):
         sft(checkpoint={"rotation_strategy": {"type": "best"}})
 
 
@@ -257,6 +278,28 @@ def test_the_checkpoint_section_names_the_checkpoint_a_run_starts_from():
     assert config.model_dump(mode="json")["checkpoint"]["init_strategy"] == init
 
 
+@pytest.mark.parametrize("criteria", [{"type": "epoch", "limit": 3}, {"type": "step", "limit": 500}])
+def test_the_stopping_criteria_limit_epochs_or_steps(criteria):
+    assert sft().model_dump(mode="json")["stopping_criteria"] == {"type": "epoch", "limit": 1}
+    assert sft(stopping_criteria=criteria).model_dump(mode="json")["stopping_criteria"] == criteria
+    assert sft(stopping_criteria=StoppingCriteria(**criteria)).stopping_criteria.limit == criteria["limit"]
+
+
+def test_the_metrics_section_has_the_same_fields_for_training_and_validation():
+    assert sft().model_dump(mode="json")["metrics"] == {
+        "train": {"steps_freq": 10, "metric_names": ["loss"]},
+        "validation": {"steps_freq": 0, "metric_names": ["loss"]},
+    }
+    metrics = {
+        "train": {"steps_freq": 5, "metric_names": ["loss", "learning_rate"]},
+        "validation": {"steps_freq": 50, "metric_names": []},
+    }
+    assert sft(metrics=metrics).model_dump(mode="json")["metrics"] == metrics
+    # Setting one of the two keeps the other's defaults.
+    config = sft(metrics={"validation": {"steps_freq": 50}})
+    assert (config.metrics.train.steps_freq, config.metrics.validation.steps_freq) == (10, 50)
+
+
 def test_the_device_section_names_the_mesh_a_single_chip_unless_set():
     assert sft().device.mesh == (1, 1)
     assert sft().model_dump(mode="json")["device"] == {"mesh": [1, 1]}
@@ -281,6 +324,7 @@ def test_a_config_needs_a_dataset_and_a_model(section, expect_error):
             {"model": {"lora": {"target_modules": ["q_proj", "k_proj"]}}},
         ),
         ("checkpoint.save_strategy={type: none}", {"checkpoint": {"save_strategy": {"type": "none"}}}),
+        ("stopping_criteria.limit=20", {"stopping_criteria": {"limit": 20}}),
         (
             "dataset.custom_options.column_mapping={output: answer}",
             {"dataset": {"custom_options": {"column_mapping": {"output": "answer"}}}},

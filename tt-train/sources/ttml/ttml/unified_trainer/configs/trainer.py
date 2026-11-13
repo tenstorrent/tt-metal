@@ -11,6 +11,7 @@ from .logging import LoggingConfig
 from .metrics import MetricsConfig
 from .model import ModelConfig
 from .optimizer import OptimizerConfigs
+from .stopping import StoppingCriteria
 
 
 class TrainerConfig(BaseModel):
@@ -27,12 +28,9 @@ class TrainerConfig(BaseModel):
     # must get an optimizer. `type` picks one (see ``OPTIMIZERS``), and with it the other fields it takes.
     optimizer: OptimizerConfigs
     batch_size: int = Field(gt=0)
-    num_epochs: int = Field(default=1, gt=0)
     gradient_accumulation_steps: int = Field(default=1, gt=0)
-    # Validate before training and every this many optimizer steps; 0 disables validation.
-    val_steps_freq: int = Field(default=0, ge=0)
-    # End the run after this many optimizer steps; 0 runs every epoch to the end.
-    max_steps: int = Field(default=0, ge=0)
+    # When the run ends: after a number of epochs or of optimizer steps. One epoch unless set.
+    stopping_criteria: StoppingCriteria = Field(default_factory=lambda: StoppingCriteria(type="epoch", limit=1))
     seed: int = Field(default=0, ge=0)
 
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
@@ -42,9 +40,10 @@ class TrainerConfig(BaseModel):
     @model_validator(mode="after")
     def _check_best_rotation(self) -> "TrainerConfig":
         # The metrics a checkpoint carries come from validation.
-        if self.checkpoint.rotation_strategy.type == "best" and self.val_steps_freq == 0:
+        if self.checkpoint.rotation_strategy.type == "best" and self.metrics.validation.steps_freq == 0:
             raise ValueError(
-                "checkpoint.rotation_strategy: best ranks checkpoints by validation, so set val_steps_freq"
+                "checkpoint.rotation_strategy: best ranks checkpoints by validation, so set "
+                "metrics.validation.steps_freq"
             )
         return self
 

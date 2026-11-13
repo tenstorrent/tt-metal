@@ -25,6 +25,16 @@ def make_config(**overrides: Any) -> TrainerConfig:
     return TrainerConfig.model_validate({**fields, **overrides})
 
 
+def after_epochs(limit: int) -> dict:
+    """The ``stopping_criteria`` of a run that ends after ``limit`` epochs."""
+    return {"type": "epoch", "limit": limit}
+
+
+def after_steps(limit: int) -> dict:
+    """The ``stopping_criteria`` of a run that ends after ``limit`` optimizer steps."""
+    return {"type": "step", "limit": limit}
+
+
 class FakeDevice:
     def __init__(self, events: list[str]) -> None:
         self.events = events
