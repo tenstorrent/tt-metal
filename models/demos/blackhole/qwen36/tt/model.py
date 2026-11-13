@@ -1966,11 +1966,14 @@ class Qwen36Model:
         rope_deltas=None,
         sample_plan=None,
         accept_rows=None,
+        step_staged=False,
     ):
         """verify_traced's staging and replays (the verify trace, and the sampler trace with ``sample_plan``), enqueued
         without waiting; the caller enqueues what follows and reads the outputs (_vfy_ids_out, the sampler's draws,
         _vfy_rows_out). ``accept_rows``: {spec_step STEP_* row: B ints}, the rows of the step buffer that only the device
-        acceptance reads (spec_accept.StepAccept), staged in the same copy; None stages zeros."""
+        acceptance reads (spec_accept.StepAccept), staged in the same copy; None stages zeros. ``step_staged``: a chain
+        program (spec_chain.ChainInputs) enqueued before wrote the step buffer, so ``tokens`` and ``positions`` are not
+        staged, and the caller checked the grouped KV write over every position the rows can take."""
         assert getattr(self, "_vfy_trace_id", None) is not None, "call record_verify_trace first"
         T, B = self._vfy_T, self._vfy_B
         if sample_plan is not None and self._vfy_sampler is None:
@@ -1994,7 +1997,7 @@ class Qwen36Model:
             if pt.shape[1] < W:
                 pt = torch.cat([pt, torch.zeros(B, W - pt.shape[1], dtype=torch.int32)], dim=1)
             pt = pt.contiguous()
-        if self._vfy_kv_grouped:
+        if self._vfy_kv_grouped and not step_staged:
             chk = positions if inactive is None else [-1 if x else int(p) for p, x in zip(positions, inactive)]
             self._vfy_check_kv_writes(pt, chk)
         # Only this method and prepare_verify_trace write the table buffers, so an unchanged table is not copied again.
@@ -2006,14 +2009,15 @@ class Qwen36Model:
             self._vfy_pt_host = pt.clone()  # the caller may reuse its table tensor
 
         # The rows' tokens, positions and RoPE table rows, and the acceptance rows: one copy into the step buffer.
-        _h = ttnn.from_torch(
-            self._vfy_step_host(tokens, positions, rope_deltas, accept_rows),
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=None,
-            mesh_mapper=rep,
-        )
-        ttnn.copy_host_to_device_tensor(_h, self._vfy_step_buf)
+        if not step_staged:
+            _h = ttnn.from_torch(
+                self._vfy_step_host(tokens, positions, rope_deltas, accept_rows),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=None,
+                mesh_mapper=rep,
+            )
+            ttnn.copy_host_to_device_tensor(_h, self._vfy_step_buf)
         if self.gdn_blocks is None:
             self._stage_verify_selectors(mi_prev, B, rep)
         if sample_plan is not None:

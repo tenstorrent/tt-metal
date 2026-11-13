@@ -167,17 +167,24 @@ def step(monkeypatch):
     def read(tensors):
         e = log["enqueue"][-1]
         tokens = torch.tensor(e.tokens).reshape(-1)
-        stepbuf = _step_buffer(tokens, [0] * (B * T), [0] * (B * T), e.accept, B, T)
+        stepbuf = _step_buffer(tokens, [0] * (B * T), [0] * (B * T), e.accept or {}, B, T)
         draws = None if state["draws"] is None else _lanes(state["draws"])
-        pt_rows = log["pt_rows"][-1]
-        o = TorchOps(_lanes(state["ids"]), stepbuf, pt_rows, B, K, eng._scratch_block, ROWS, draws=draws)
-        pack, _ = graph(o, B, K, pack_width(B * T))
-        out = {"ids": _lanes(state["ids"]), "draws": draws, "pack": pack.to(torch.int64)}
+        out = {"ids": _lanes(state["ids"]), "draws": draws}
+        if e.accept is not None:
+            pt_rows = log["pt_rows"][-1]
+            o = TorchOps(_lanes(state["ids"]), stepbuf, pt_rows, B, K, eng._scratch_block, ROWS, draws=draws)
+            out["pack"] = graph(o, B, K, pack_width(B * T))[0].to(torch.int64)
         out.update({f"d{k}": state["drafts"][k].reshape(1, 1, B, 1) for k in range(K)})
         return [out[t] for t in tensors]
 
     eng._read_device0 = read
+    # The reads land at the event; the stand-in device has run everything by the time they are enqueued.
+    eng._read_device0_async = lambda tensors: SimpleNamespace(event="event", result=lambda r=read(tensors): r)
     return eng, log, state
+
+
+def _one_enqueue_pending(eng):
+    return [p for p in eng._pending if p.plan is not None]
 
 
 def _verify(eng, tokens, starts, nv, spec_mode="argmax_ids", sampling=None, **kw):
@@ -225,7 +232,7 @@ def test_a_greedy_step_runs_verify_acceptance_and_drafter_in_one_enqueue(step):
     want = torch.stack(state["drafts"], dim=1).to(torch.int32)
     want[2] = 0
     assert torch.equal(out.draft_token_ids, want) and out.num_valid.tolist() == [3, 3, 0, 3]
-    assert eng._offered == {0, 1, 3} and eng._step_pending is None
+    assert eng._offered == {0, 1, 3} and not eng._pending
     mtp = [h for buf, h in log["staged"] if buf == "mtp_pt"][-1]
     assert bool(mtp[2].eq(eng._scratch_block).all()) and torch.equal(mtp[0], eng._last_pt[0]), "padding row on scratch"
 
@@ -308,7 +315,7 @@ def test_steps_whose_propose_depends_on_the_count_stage_the_drafter_from_the_hos
     elif why == "all_declined":
         eng._no_draft = set(range(B))
     _verify(eng, tokens, starts, nv, **kw)
-    assert log["enqueue"] == [] and log["traces"] == [] and eng._step_pending is None
+    assert log["enqueue"] == [] and log["traces"] == [] and not _one_enqueue_pending(eng)
 
 
 def test_a_b1_step_the_runner_withholds_or_that_could_reseed_eagerly_stays_on_the_host(monkeypatch):
@@ -335,9 +342,9 @@ def test_the_next_verify_drops_drafts_no_propose_took(step):
     state["ids"] = torch.zeros(eng.B, eng.T, dtype=torch.int64)
     tokens = torch.zeros(eng.B, eng.T, dtype=torch.int64)
     _verify(eng, tokens, [100, 200, 300, 400], [3] * eng.B)
-    assert eng._step_pending is not None
+    assert _one_enqueue_pending(eng)
     _verify(eng, tokens, [100, 200, 300, 400], [3] * eng.B, one_enqueue=False)
-    assert eng._step_pending is None and (eng.one_enqueue_steps, eng.verify_steps) == (1, 2)
+    assert not _one_enqueue_pending(eng) and (eng.one_enqueue_steps, eng.verify_steps) == (1, 2)
 
 
 def test_a_propose_that_declines_other_rows_drafts_on_the_host(step):
@@ -377,8 +384,13 @@ def test_the_runners_commit_proposes_with_the_walks_counts(step):
 
     Runner = mr.TTModelRunner
     params = list(inspect.signature(Runner.commit_spec_acceptance).parameters)
-    if params != ["self", "model_input", "committed", "counts", "spec_hidden", "skip_req_ids"]:
-        pytest.skip("the plugin on the path is not the bfdb4d0 runner")
+    if params[:6] != ["self", "model_input", "committed", "counts", "spec_hidden", "skip_req_ids"] or params[
+        6:
+    ] not in (
+        [],
+        ["chain_successor"],
+    ):
+        pytest.skip("the plugin on the path is not the bfdb4d0 runner or its chained-verify successor")
     eng, log, state = step
     B, T, K, max_len = eng.B, eng.T, eng.K, 400
     state["ids"] = torch.tensor([[7, 8, 9, 10], [11, 12, 13, 14], [21, 22, 23, 24], [0, 0, 0, 0]])
@@ -463,3 +475,55 @@ def test_the_step_trace_never_frees_an_input(monkeypatch):
     o._keep(part)
     o._keep(acc.draws)
     assert o.owned == [part]
+
+
+def test_a_deferred_verify_enqueues_its_reads_and_reads_them_once(step):
+    """defer=True returns the one-enqueue verify unread (a PendingVerify): the traces are enqueued, nothing is read
+    until result(), which masks the columns past each row's valid drafts as the synchronous verify does, and the next
+    propose returns the device drafts from the same reads."""
+    eng, log, state = step
+    state["ids"] = torch.tensor([[7, 8, 9, 10], [11, 12, 13, 14], [0, 0, 0, 0], [21, 22, 23, 24]])
+    tokens = torch.tensor([[1, 7, 8, 5], [2, 11, 12, 13], [0, 0, 0, 0], [3, 9, 9, 9]])
+    starts, nv = [100, 200, -1, 300], [3, 3, 0, 2]
+    reads = []
+    sync_read = eng._read_device0_async
+
+    def counted(tensors):
+        handle = sync_read(tensors)
+        reads.append(0)
+
+        def result():
+            reads[-1] += 1
+            return handle.result()
+
+        return SimpleNamespace(event=handle.event, result=result)
+
+    eng._read_device0_async = counted
+    res = _verify(eng, tokens, starts, nv, defer=True)
+    pending = res.argmax_ids
+    assert isinstance(pending, spec_engine.PendingVerify) and pending.event == "event"
+    assert log["traces"] == ["step", "drafter"] and reads == [0]
+    ids = pending.result()
+    assert (
+        ids[0].tolist() == [7, 8, 9, 10] and ids[3].tolist() == [21, 22, 23, -1] and ids[2].tolist() == [0, -1, -1, -1]
+    )
+    assert pending.result().tolist() == ids.tolist() and reads == [1]
+    out, counts = _walk_and_propose(eng, SimpleNamespace(argmax_ids=ids), tokens, starts, nv)
+    assert counts.tolist() == [3, 4, 1, 1] and reads == [1]
+    want = torch.stack(state["drafts"], dim=1).to(torch.int32)
+    want[2] = 0
+    assert torch.equal(out.draft_token_ids, want) and eng.one_enqueue_host_proposes == 0
+
+
+def test_a_deferred_verify_that_stages_its_drafter_from_the_host_reads_its_ids_only(step):
+    """A deferred argmax_ids verify that is not a one-enqueue step (a row fits at some counts only) enqueues the
+    verify and reads its ids only; its propose stages the drafter from the host."""
+    eng, log, state = step
+    B = eng.B
+    state["ids"] = torch.zeros(B, eng.T, dtype=torch.int64)
+    tokens = torch.zeros(B, eng.T, dtype=torch.int64)
+    starts = [100, 200, eng.nb * eng.block_size - 1 - eng.K - 2, 400]
+    res = _verify(eng, tokens, starts, [3] * B, defer=True)
+    assert isinstance(res.argmax_ids, spec_engine.PendingVerify) and res.argmax_ids.plan is None
+    assert log["traced"] == [] and len(log["enqueue"]) == 1 and log["traces"] == []
+    assert res.argmax_ids.result().shape == (B, eng.T)

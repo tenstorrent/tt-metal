@@ -19,6 +19,7 @@ EOS or length cut (a count below the matched drafts) occur. The block ids follow
     MESH_DEVICE=P150x8 HF_MODEL=<Qwen3.8-27B dir> pytest models/demos/blackhole/qwen36/tests/test_mtp_gdn_blocks.py
 """
 
+import dataclasses
 import os
 import time
 from types import SimpleNamespace
@@ -211,6 +212,9 @@ class Pair:
             **({} if sampling is None else {"sampling_params": sampling}),
             **_decode_flags(),
         )
+        if spec_mode == "argmax_ids":
+            # read_from_device=False leaves an argmax_ids verify unread, as the plugin reads it.
+            res = dataclasses.replace(res, argmax_ids=self.spec.read_decode_output(res.argmax_ids))
         if sampling is not None:
             self.check_draws(plan, res, sampling)
         for r, (v, a) in plan.items():
