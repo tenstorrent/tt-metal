@@ -268,9 +268,10 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
     auto& impl = program.impl();  // non-const: get_kernels/get_kernel_groups/get_program_config_sizes
     const auto& hw = MetalContext::instance().hal();
     auto& metal_context = MetalContext::instance(impl.get_context_id());
+    const tt::ARCH arch = metal_context.get_cluster().arch();
     const auto& rtoptions = MetalEnvAccessor(metal_context.get_env()).impl().get_rtoptions();
     std::string quasar_arch_include;
-    if (metal_context.get_cluster().arch() == tt::ARCH::QUASAR) {
+    if (arch == tt::ARCH::QUASAR) {
         auto variant = metal_context.get_cluster().get_quasar_ip_variant();
         const std::string lower_variant = [&]() {
             std::string result = std::string(enchantum::to_string(variant));
@@ -400,7 +401,7 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
             kd.bindings.is_metal2 = k.is_metal2_kernel();
             kd.bindings.rta_names = k.get_runtime_arg_names();
             kd.bindings.crta_names = k.get_common_runtime_arg_names();
-            k.process_dataflow_buffer_binding_handles([&kd](
+            k.process_dataflow_buffer_binding_handles([&kd, arch](
                                                           const std::string& name,
                                                           uint16_t id,
                                                           bool is_relay,
@@ -409,14 +410,14 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                                                           uint8_t /*pap*/,
                                                           uint8_t /*cap*/) {
                 kd.bindings.dfb.push_back(
-                    DfbBinding{name, id, is_relay, pipe, llk ? serialize_llk_metadata(*llk) : ""});
+                    DfbBinding{name, id, is_relay, pipe, llk ? serialize_llk_metadata(*llk, arch) : ""});
             });
             k.process_semaphore_binding_handles(
                 [&kd](const std::string& name, uint16_t id, auto scope, uint32_t harts) {
                     kd.bindings.sem.push_back(
                         SemBinding{name, id, static_cast<tt_emule::SemScope>(static_cast<uint8_t>(scope)), harts});
                 });
-            k.process_tensor_binding_handles([&kd](
+            k.process_tensor_binding_handles([&kd, arch](
                                                  const std::string& name,
                                                  uint32_t cta_off,
                                                  bool is_per_node,
@@ -428,18 +429,19 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                     "Tensor binding '{}' is bound to a per-node tensor, which emulation does not support yet",
                     name);
                 // num_rt needs no handling: crta_vararg_offset (below) already counts those words.
-                kd.bindings.tensor.push_back(TensorBinding{name, cta_off, addr_offset, serialize_llk_metadata(llk)});
+                kd.bindings.tensor.push_back(
+                    TensorBinding{name, cta_off, addr_offset, serialize_llk_metadata(llk, arch)});
             });
             k.process_prefetcher_pipe_binding_handles([&kd](const std::string& name, uint8_t prefetcher_pipe_id) {
                 kd.bindings.prefetcher_pipe.push_back(PrefetcherPipeBinding{name, prefetcher_pipe_id});
             });
-            k.process_scratchpad_binding_handles([&kd](
+            k.process_scratchpad_binding_handles([&kd, arch](
                                                      const std::string& name,
                                                      uint32_t size_bytes,
                                                      uint32_t addr_crta_word,
                                                      const std::optional<LLKMetadata>& llk) {
                 kd.bindings.scratch.push_back(
-                    ScratchBinding{name, size_bytes, addr_crta_word, llk ? serialize_llk_metadata(*llk) : ""});
+                    ScratchBinding{name, size_bytes, addr_crta_word, llk ? serialize_llk_metadata(*llk, arch) : ""});
             });
             kd.bindings.crta_vararg_offset = k.get_crta_layout().vararg_section_offset;
             k.process_tensor_binding_sequences([&kd](const std::string& name, const std::vector<std::string>& members) {

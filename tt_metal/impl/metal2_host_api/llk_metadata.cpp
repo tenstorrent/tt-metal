@@ -14,16 +14,17 @@
 
 namespace tt::tt_metal {
 
-std::string serialize_llk_metadata(const LLKMetadata& metadata) {
+std::string serialize_llk_metadata(const LLKMetadata& metadata, tt::ARCH arch) {
     const Tile& tile = metadata.tile;
     const uint32_t face_r_dim = tile.get_face_shape()[0];
     const uint32_t num_faces = tile.get_num_faces();
     const uint32_t num_faces_c_dim = std::min(tile.get_width() / constants::FACE_WIDTH, num_faces);
     const uint32_t num_faces_r_dim = num_faces / num_faces_c_dim;
+    const hw_format_t format = host_data_format_to_hw(metadata.format, arch);
     return fmt::format(
         "::binding_details::LLKMetadata{{.format = {}u, .face_r_dim = {}u, .face_c_dim = {}u, "
         ".num_faces_r_dim = {}u, .num_faces_c_dim = {}u}}",
-        host_data_format_to_hw(metadata.format),
+        format,
         face_r_dim,
         constants::FACE_WIDTH,
         num_faces_r_dim,

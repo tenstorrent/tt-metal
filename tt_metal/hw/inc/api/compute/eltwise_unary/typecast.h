@@ -72,11 +72,20 @@ inline constexpr bool _typecast_is_sfpu_no_op_(DataFormat src, DataFormat dst) {
  *
  * For input/output to be UInt32, Int32, or Float32, Dest must be in 32 bit mode.
  *
- * For input/output to be Int8, the caller must additionally declare the circular buffers as UInt8 instead
- * of Int8, so the raw 2's complement byte is zero-extended instead of being decoded as sign-magnitude,
- * and must put Dest in 32 bit mode, which is enforced by a static_assert. The kernels below do the sign
- * handling themselves on that raw byte.
- * Int8 is not available on Quasar.
+ * On Quasar, an Int8, Int16, or UInt8 source must be unpacked to Dest. typecast_tile static_asserts
+ * UnpackToDestEn for those sources. The SM8 / SM16 / U8 load decodes the datum in place, and an
+ * FPU widen first makes that load read the wrong bits.
+ *
+ * Int8 takes a different circular-buffer convention per architecture, because the two SFPU
+ * implementations disagree on how an Int8 byte in L1 is encoded:
+ *  - Wormhole/Blackhole: declare the circular buffers as UInt8 instead of Int8, so the raw 2's
+ *    complement byte is zero-extended instead of being decoded as sign-magnitude, and put Dest in
+ *    32 bit mode, which is enforced by a static_assert. The kernels below do the sign handling
+ *    themselves on that raw byte.
+ *  - Quasar: declare the circular buffers as Int8 and unpack the source to Dest. Int8 is a native
+ *    Dest format there and its datums are sign-magnitude, which is what the shared kernel's SM8
+ *    load and store decode, so the byte needs no reinterpretation on that path. Sign-magnitude
+ *    has no -128, so the range is [-127, 127].
  *
  * Return value: None
  *
@@ -93,11 +102,6 @@ ALWI void typecast_tile(uint32_t idst) {
     constexpr DataFormat out_format = static_cast<DataFormat>(OUT_DTYPE);
 
 #ifdef ARCH_QUASAR
-    // The shared Quasar kernel loads and stores Int8 as sign-magnitude, but callers configure Int8 CBs
-    // as UInt8. The byte would be decoded wrong with no error. Reject it here.
-    static_assert(
-        in_format != DataFormat::Int8 && out_format != DataFormat::Int8, "Int8 typecast is not supported on Quasar");
-
     // An MX endpoint is unpacked to / packed from Float16_b by the format, so at the SFPU level an MX
     // format behaves as Float16_b. Route through that effective format: MX <-> Float16_b (and MX <-> MX)
     // collapse to a pure format no-op, and so does MX <-> Float32, which reaches the Float16_b <-> Float32
@@ -108,6 +112,13 @@ ALWI void typecast_tile(uint32_t idst) {
     constexpr DataFormat effective_output_format =
         detail::_typecast_is_mx_format_(out_format) ? DataFormat::Float16_b : out_format;
     constexpr bool is_sfpu_no_op = detail::_typecast_is_sfpu_no_op_(effective_input_format, effective_output_format);
+    constexpr bool narrow_int_src = effective_input_format == DataFormat::Int8 ||
+                                    effective_input_format == DataFormat::Int16 ||
+                                    effective_input_format == DataFormat::UInt8;
+    // Kernel-wide flag. A chain that typecasts a narrow value an earlier SFPU op already wrote
+    // would trip this; no such chain is legal today, because those loads need the L1 encoding.
+    static_assert(
+        !narrow_int_src || UnpackToDestEn, "Quasar Int8, Int16, and UInt8 typecast sources must unpack to Dest");
     if constexpr (effective_input_format != effective_output_format && !is_sfpu_no_op) {
         // Single unified Quasar typecast kernel, templated on the effective source/destination formats.
         MATH(SFPU_UNARY_CALL(

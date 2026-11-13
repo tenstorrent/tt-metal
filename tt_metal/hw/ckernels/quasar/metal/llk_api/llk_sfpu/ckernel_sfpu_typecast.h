@@ -54,6 +54,10 @@ inline void init_typecast() {
         .dest = {.incr = ckernel::math::SFP_ROWS},
     }
         .set(ADDR_MOD_6);
+    // Largest |x| whose nearest-even result still fits the int16 convert, which saturates at 32767.
+    // 32768 stays on SFPCAST. Loaded once: the immediate does not fit one SFPLOADI.
+    // Float16_b does not read it.
+    sfpi::vConstFloatPrgm0 = 32767.5f;
 }
 
 // Load one SFPU pass worth of rows from Dest as VTYPE (vFloat for floats, vSMag/vInt for ints —
@@ -140,9 +144,12 @@ inline auto _typecast_narrow_to_int8_(sfpi::vInt value) {
 // Convert one SFPU pass worth of rows from SRC_FMT to DST_FMT. The (src,dst) classes pick the
 // sequence (load to fp32 for floats, to sign-mag int32 for ints; store sfpmem mode sets the output):
 //   float->float : narrow via convert<fp16> (-> fp16), else store the loaded fp32 as-is.
-//   float->int   : convert<vSMag> fp32 -> sign-mag int32, then narrow to 8-bit / 16-bit if needed.
+//   float->int   : one SFP_STOCH_RND to the narrow int (it rounds the full float and saturates).
+//                  Int32 has no such mode. Below 32767.5, SFPCAST keeps only 8 fraction bits, so
+//                  that range uses the int16 convert. From 32767.5 up a float32 has no finer bit.
+//                  Float16_b already has only those 8 bits, so it stays on SFPCAST.
 //   int->float   : convert<vFloat> int32 -> fp32, then narrow via convert<fp16> for an fp16 dst.
-//   int->int     : narrow to 8-bit if needed, else the store sfpmem mode widens/narrows.
+//   int->int     : unsigned destinations clamp negatives to 0, then narrow to 8-bit if needed.
 template <DataFormat SRC_FMT, DataFormat DST_FMT>
 inline void _calculate_typecast_arith_sfp_rows_() {
     constexpr bool src_float = _typecast_is_float_<SRC_FMT>();
@@ -155,21 +162,39 @@ inline void _calculate_typecast_arith_sfp_rows_() {
         }
         _typecast_store_<DST_FMT>(value);
     } else if constexpr (src_float && !dst_float) {
-        // The direct fp32 -> narrow-int convert modes round to all-zeros on Quasar, so compose two
-        // proven steps: fp32 -> sign-mag int32, then narrow from int32. Clamp negatives to 0 first
-        // for unsigned targets (CC sign test predicates the zero-write) so the int32 is non-negative.
+        // Narrow modes round the whole float and saturate. Unsigned modes drop the sign, so the ReLU stays.
         sfpi::vFloat value = _typecast_load_<sfpi::vFloat, SRC_FMT>();
 
         if constexpr (_typecast_is_unsigned_int_<DST_FMT>()) {
             value = sfpi::rectified_linear_unit(value);
         }
 
-        // fp32 -> sign-magnitude int32 (SFPCAST, round-nearest-even)
-        sfpi::vSMag int_value = sfpi::convert<sfpi::vSMag>(value, sfpi::RoundMode::NearestEven);
-        if constexpr (_typecast_is_int8_<DST_FMT>()) {
-            _typecast_store_<DST_FMT>(_typecast_narrow_to_int8_<DST_FMT>(sfpi::as<sfpi::vInt>(int_value)));
+        if constexpr (DST_FMT == DataFormat::Int8) {
+            _typecast_store_<DST_FMT>(sfpi::convert<sfpi::vSMag8>(value, sfpi::RoundMode::NearestEven));
+        } else if constexpr (DST_FMT == DataFormat::UInt8) {
+            _typecast_store_<DST_FMT>(sfpi::convert<sfpi::vUInt8>(value, sfpi::RoundMode::NearestEven));
+        } else if constexpr (DST_FMT == DataFormat::Int16) {
+            _typecast_store_<DST_FMT>(sfpi::convert<sfpi::vSMag16>(value, sfpi::RoundMode::NearestEven));
+        } else if constexpr (DST_FMT == DataFormat::UInt16) {
+            _typecast_store_<DST_FMT>(sfpi::convert<sfpi::vUInt16>(value, sfpi::RoundMode::NearestEven));
+        } else if constexpr (DST_FMT == DataFormat::Int32) {
+            // Float16_b (and MX, routed as Float16_b) has at most 8 significant bits, so the int16
+            // convert cannot change a non-NaN result. Keep the single SFPCAST.
+            if constexpr (SRC_FMT == DataFormat::Float16_b) {
+                _typecast_store_<DST_FMT>(sfpi::convert<sfpi::vSMag>(value, sfpi::RoundMode::NearestEven));
+            } else {
+                // Only |x| < 32767.5 can have a fraction bit finer than 1/256, and that is the range
+                // mode 7 covers. 32767.5 itself rounds to 32768, which mode 7 cannot hold.
+                sfpi::vSMag int_value = sfpi::convert<sfpi::vSMag>(value, sfpi::RoundMode::NearestEven);
+                v_if(sfpi::abs(value) < sfpi::vConstFloatPrgm0) {
+                    int_value =
+                        sfpi::as<sfpi::vSMag>(sfpi::convert<sfpi::vSMag16>(value, sfpi::RoundMode::NearestEven));
+                }
+                v_endif;
+                _typecast_store_<DST_FMT>(int_value);
+            }
         } else {
-            // Int32/16-bit dst: the store sfpmem mode narrows a 16-bit dst; int32 stores as-is.
+            sfpi::vSMag int_value = sfpi::convert<sfpi::vSMag>(value, sfpi::RoundMode::NearestEven);
             _typecast_store_<DST_FMT>(int_value);
         }
     } else if constexpr (!src_float && dst_float) {
@@ -181,7 +206,12 @@ inline void _calculate_typecast_arith_sfp_rows_() {
         _typecast_store_<DST_FMT>(float_value);
     } else {
         // 8-bit dst rounds-and-narrows; a 16-bit dst is narrowed by the store sfpmem mode.
+        // int32_to_uint8 and the unsigned store drop the sign. Clamp first, as the float path ReLUs.
         sfpi::vInt value = _typecast_load_<sfpi::vInt, SRC_FMT>();
+        if constexpr (_typecast_is_unsigned_int_<DST_FMT>() && !_typecast_is_unsigned_int_<SRC_FMT>()) {
+            v_if(value < 0) { value = 0; }
+            v_endif;
+        }
         if constexpr (_typecast_is_int8_<DST_FMT>()) {
             _typecast_store_<DST_FMT>(_typecast_narrow_to_int8_<DST_FMT>(value));
         } else {

@@ -154,6 +154,9 @@ struct KernelSpec {
     //     (Float32, Int32, UInt32 or RawUInt32). On Gen1 it requires enable_32_bit_dest for every format.
     //   - If the DFB's data_format_metadata is Float32 and enable_32_bit_dest is set, unpack_modes must
     //     have an entry for it (either mode; no default is assumed).
+    //   - On Quasar, if the DFB's data_format_metadata is Int16 and enable_32_bit_dest is set,
+    //     unpack_modes must be UnpackToDest. UnpackToSrc is the FPU datacopy, which cannot take
+    //     Int16 in a 32-bit Dest. UnpackToDest is the SFPU typecast path.
     //
     // Invariant for DataMovementHardwareConfig:
     // - Every config_2xx->disable_dfb_implicit_sync_for entry names a DFB in this kernel's dfb_bindings.
