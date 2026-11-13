@@ -8,13 +8,13 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import skip_for_blackhole
-from tests.nightly.t3000.ccl.test_minimal_matmul_strided_reduce_scatter_async import (
+from models.tt_dit.tests.models.wan2_2.runners.minimal_matmul_strided_rs import (
     MinimalMatmulStridedReduceScatterTestConfig,
     create_global_semaphores,
     run_minimal_matmul_strided_reduce_scatter_impl,
 )
-from tests.nightly.t3000.ccl.test_strided_reduce_scatter_async import run_reduce_scatter_impl
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
+from models.tt_dit.tests.models.wan2_2.runners.strided_reduce_scatter import run_reduce_scatter_impl
+from tt_py_test_utils_common.comparison_funcs import comp_pcc
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Strided reduce-scatter: t3000 (1×8)
