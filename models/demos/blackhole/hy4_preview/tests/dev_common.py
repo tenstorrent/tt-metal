@@ -41,3 +41,31 @@ def rep(md, t, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16):
 
 def dev0(t):
     return ttnn.to_torch(ttnn.get_device_tensors(t)[0])
+
+
+def traced_us(md, fn, n=15, rep_=10):
+    """median us per call: fn() x rep_ inside one trace, n replays timed one by one."""
+    import statistics
+    import time
+
+    def body():
+        for _ in range(rep_):
+            o = fn()
+            for t in o if isinstance(o, (tuple, list)) else [o]:
+                if isinstance(t, ttnn.Tensor):
+                    ttnn.deallocate(t)
+
+    body()
+    ttnn.synchronize_device(md)
+    tid = ttnn.begin_trace_capture(md, cq_id=0)
+    body()
+    ttnn.end_trace_capture(md, tid, cq_id=0)
+    ttnn.synchronize_device(md)
+    ts = []
+    for _ in range(n):
+        t0 = time.perf_counter()
+        ttnn.execute_trace(md, tid, cq_id=0, blocking=False)
+        ttnn.synchronize_device(md)
+        ts.append((time.perf_counter() - t0) / rep_ * 1e6)
+    ttnn.release_trace(md, tid)
+    return statistics.median(ts)

@@ -6,7 +6,16 @@ import time
 import torch
 
 import ttnn
-from models.demos.blackhole.hy4_preview.tests.dev_common import ACTS, close_mesh, dev0, open_mesh, p, pcc, rep
+from models.demos.blackhole.hy4_preview.tests.dev_common import (
+    ACTS,
+    close_mesh,
+    dev0,
+    open_mesh,
+    p,
+    pcc,
+    rep,
+    traced_us,
+)
 from models.demos.blackhole.hy4_preview.tt import hy4_dense as D
 
 acts = torch.load(ACTS + "acts_l0_l1.pt")
@@ -50,6 +59,11 @@ try:
             p(
                 f"   replicated check: dev31 vs dev0 maxabs {(ttnn.to_torch(devs[31]).float().reshape(T,6144)-got).abs().max():.4f}"
             )
+            us_p = traced_us(md, lambda: dense.forward(tx), n=7, rep_=5)
+            us_a = traced_us(md, lambda: D.allreduce_cols(dense.forward(tx)), n=7, rep_=5)
+            p(
+                f"dense layer0 decode={decode} T={T} traced: partial matmuls {us_p:.1f} us, with column all-reduce {us_a:.1f} us"
+            )
             ttnn.deallocate(tx)
         del dense
     # ---- layer-1 shared expert (limit 10)
@@ -80,6 +94,10 @@ try:
             r_ = sh_ref(x)
             p(
                 f"shared expert L1 decode={decode} T={T}: PCC {pcc(got, r_):.6f} maxabs {(got-r_).abs().max():.4f} ref rms {r_.pow(2).mean().sqrt():.4f}"
+            )
+            us_a = traced_us(md, lambda: D.allreduce_cols(sh.forward(tx)), n=7, rep_=5)
+            p(
+                f"shared expert decode={decode} T={T} traced with all-reduce {us_a:.1f} us, partial {traced_us(md, lambda: sh.forward(tx), n=7, rep_=5):.1f} us"
             )
             ttnn.deallocate(tx)
         del sh
