@@ -3,12 +3,13 @@
 
 """The K3.1 golden is K3's golden format and K3's contract, and it is the trace it was converted from. Host only.
 
-`convert_golden.py` rewrites Miguel's chunked vLLM trace into the per-stream layout `golden.GoldenTrace`
-reads. Pinned here: the conversion round-trips through both readers that consume a golden — K3's
-`GoldenTrace` (the *_matches_golden tests) and the runner producer's KV loaders (the PCC gate) — and the
-converted K3.1 golden is the source trace row for row where it copies a stream (all 24 DSA layers' KV and
-indexer keys, which the runner gate scores; the FFN output of layers 23 and 92, which no gate scores, pinned as
-the input of the rebuild), and enters at the K3.1 checkpoint's own token embedding.
+The golden is Miguel's chunked vLLM trace rewritten into the per-stream layout `golden.GoldenTrace` reads, by a
+one-shot converter kept outside the repo (the golden's `converted_from` metadata names its source and version).
+Pinned here, through both readers that consume a golden — K3's `GoldenTrace` (the *_matches_golden tests) and
+the runner producer's loaders (the PCC gate): the converted K3.1 golden is the source trace row for row where it
+copies a stream (all 24 DSA layers' KV and indexer keys, which the runner gate scores; the FFN output of layers
+23 and 92, which no gate scores, pinned as the input of the rebuild), and enters at the K3.1 checkpoint's own
+token embedding.
 
 And `decoder_output_layer_i` means what it means in K3's golden (`test_golden_contract.py`): the AttnRes running
 sum after layer i, restarted at each seal, which is what the stack's layer tap returns. The K3.1 tracer records
@@ -17,18 +18,15 @@ rebuild is checked against a stream the tracer wrote independently: the sealed b
 `attn_res/residual_layer_{12k}`, whose slot k is the running sum at the end of block k-1.
 """
 
-import json
 import os
 from pathlib import Path
 
 import pytest
 import torch
-from safetensors.torch import save_file
 
 from models.common.utility_functions import comp_pcc
 from models.demos.common.prefill.runners.runner_utils import load_trace_golden_span, load_trace_token_ids
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
-from models.demos.deepseek_v3_d_p.tests.kimi_k3.convert_golden import LAYOUT, SOURCE_LAYOUT, convert
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.golden import TRACE_K31, GoldenTrace, embedding_rows, resolve_trace
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.test_golden_contract import GOLDEN_PCC, ROWS
 from models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k3_1 import KimiK31Adapter
@@ -39,77 +37,6 @@ from models.demos.deepseek_v3_d_p.tt.runners.prefill_kv_validation import (
     index_golden_present,
     kvpe_golden_present,
 )
-
-
-def _write_chunked(root: Path, streams: dict[str, tuple[str, torch.Tensor]], shard_rows: int) -> None:
-    """A minimal `chunked_group_a_v1` trace: `streams` maps key -> (stream dir under root, tensor)."""
-    index = {"format_version": 1, "layout": SOURCE_LAYOUT, "chunk_rows": shard_rows, "tensor_streams": {}}
-    for key, (stream_dir, tensor) in streams.items():
-        chunks = []
-        for start in range(0, tensor.shape[0], shard_rows):
-            end = min(start + shard_rows, tensor.shape[0])
-            path = f"{stream_dir}/rows_{start:08d}_{end:08d}.safetensors"
-            (root / path).parent.mkdir(parents=True, exist_ok=True)
-            save_file({key: tensor[start:end].contiguous()}, str(root / path))
-            chunks.append({"row_start": start, "row_end": end, "path": path})
-        index["tensor_streams"][key] = {
-            "row_count": tensor.shape[0],
-            "dtype": str(tensor.dtype).removeprefix("torch."),
-            "shape_tail": list(tensor.shape[1:]),
-            "chunks": chunks,
-        }
-    (root / "index.json").write_text(json.dumps(index))
-    (root / "metadata.json").write_text(json.dumps({"layout": SOURCE_LAYOUT, "token_ids": list(range(10))}))
-
-
-def test_converter_round_trips_through_both_golden_readers(tmp_path, expect_error):
-    """Every stream lands where `GoldenTrace` and the producer look for it, bit for bit, shards joined in order;
-    `decoder_output` becomes the running sum of `attn_output` and the FFN output, restarted at the seal (layer 12),
-    and the FFN output is kept as `ffn_output`."""
-    layers = KimiK3Config.ATTN_RES_BLOCK_SIZE + 2
-    ffn = [torch.randn(10, 8).to(torch.bfloat16) for _ in range(layers)]
-    attn = [torch.randn(10, 8).to(torch.bfloat16) for _ in range(layers)]
-    kv = torch.randn(10, 6).to(torch.bfloat16)
-    topk = torch.randint(-1, 10, (3, 4), dtype=torch.int32)
-    src, dst = tmp_path / "chunked", tmp_path / "golden"
-    streams = {
-        "kv_post_transform_layer_3": ("kv_cache/layer_3", kv),
-        "topk_indices": ("topk/indices", topk),
-    }
-    for i in range(layers):
-        streams[f"decoder_output_layer_{i}"] = (f"decoder_io/decoder_output_layer_{i}", ffn[i])
-        streams[f"attn_output_layer_{i}"] = (f"attn_output/attn_output_layer_{i}", attn[i])
-    _write_chunked(src, streams, shard_rows=4)
-    convert(src, dst, log=lambda _: None)
-
-    assert {path.stat().st_mode & 0o777 for path in dst.rglob("*.safetensors")} == {0o664}
-    trace = GoldenTrace(dst)
-    assert trace.metadata["layout"] == LAYOUT and trace.metadata["converted_from"]["path"] == str(src)
-    for i in range(layers):
-        running = running if i % KimiK3Config.ATTN_RES_BLOCK_SIZE else torch.zeros(10, 8, dtype=torch.bfloat16)
-        running = (running + attn[i]) + ffn[i]  # bf16, attention then FFN
-        assert torch.equal(trace.decoder_output(i).to(torch.bfloat16), running), i
-        assert torch.equal(trace.rows("ffn_output", f"ffn_output_layer_{i}").to(torch.bfloat16), ffn[i]), i
-        assert torch.equal(trace.rows("attn_output", f"attn_output_layer_{i}").to(torch.bfloat16), attn[i]), i
-    assert torch.equal(trace.kv_cache(3).to(torch.bfloat16), kv)
-    assert torch.equal(trace.rows("topk", "topk_indices").to(torch.int32), topk)
-    assert kvpe_golden_present(dst, 3) and not kvpe_golden_present(dst, 7)
-    assert torch.equal(_load_golden_kv_post(dst, 3, 7, start=2).to(torch.bfloat16), kv[2:9])
-
-    with expect_error(FileExistsError, "already holds a trace"):
-        convert(src, dst, log=lambda _: None)
-    # `layers` keeps the first N layers' streams and every stream that is not per layer.
-    convert(src, tmp_path / "golden_l12", log=lambda _: None, layers=KimiK3Config.ATTN_RES_BLOCK_SIZE)
-    short = GoldenTrace(tmp_path / "golden_l12")
-    assert short.metadata["converted_from"]["layers"] == KimiK3Config.ATTN_RES_BLOCK_SIZE
-    assert short.has("decoder_io", "decoder_output_layer_11") and not short.has("decoder_io", "decoder_output_layer_12")
-    assert torch.equal(short.decoder_output(11), trace.decoder_output(11)) and short.has("topk", "topk_indices")
-    assert short.has_kv_cache(3)
-    # A layer without its attention output has no running sum: refused, not guessed.
-    del streams["attn_output_layer_5"]
-    _write_chunked(tmp_path / "chunked2", streams, shard_rows=4)
-    with expect_error(ValueError, "no running sum"):
-        convert(tmp_path / "chunked2", tmp_path / "golden2", log=lambda _: None)
 
 
 @pytest.fixture(scope="module")
