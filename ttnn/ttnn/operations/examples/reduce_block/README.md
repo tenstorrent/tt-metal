@@ -150,4 +150,6 @@ baseline = `reduce_tile`, lever = `accumulate_via_add` (the library opt-in); spe
 the device_perf sweep on that board, `bh-qb-15-special-adamjanovic-for-reservation-139410`, 2026-10-19 (details in `report.md`).
 Other boards: bh-50 (older library) — the *Measured result* table above.
 Reproduce: `scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_reduce_block.py::test_reduce_block_regimes`
-(same regimes on any board; asserts only what held on every measured board, `measure` regimes only log).
+(same regimes on any board; each regime asserts against a bound derived from the speedup measured on the running
+arch by `perf_test_utils.regime_bound`, with one confirmation pass; an arch with no measured number and `measure`
+regimes only log).

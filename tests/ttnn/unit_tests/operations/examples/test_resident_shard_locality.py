@@ -9,15 +9,17 @@ See ttnn/ttnn/operations/examples/resident_shard_locality/README.md.
     scripts/run_safe_pytest.sh --run-all \\
         tests/ttnn/unit_tests/operations/examples/test_resident_shard_locality.py::test_resident_shard_locality_correctness
 
-    # predefined sweep -> report.md (device kernel duration per variant x case)
-    scripts/run_safe_pytest.sh --run-all \\
+    # predefined sweep (device kernel duration per variant x case): a measurement sweep, skipped unless
+    # RSL_SWEEPS=1 (or EXAMPLES_SWEEPS=1); printed, and written to a file only when RSL_REPORT names one
+    RSL_SWEEPS=1 RSL_REPORT=ttnn/ttnn/operations/examples/resident_shard_locality/report.md \\
+        scripts/run_safe_pytest.sh --run-all \\
         tests/ttnn/unit_tests/operations/examples/test_resident_shard_locality.py::test_resident_shard_locality_device_perf
 
     # only the wide-row / partial-width cases (RSL_SUITE=base: only the original cases), printed
-    RSL_SUITE=wide RSL_REPORT= scripts/run_safe_pytest.sh --run-all \\
+    RSL_SWEEPS=1 RSL_SUITE=wide scripts/run_safe_pytest.sh --run-all \\
         tests/ttnn/unit_tests/operations/examples/test_resident_shard_locality.py::test_resident_shard_locality_device_perf
 
-    # helps / does-not-help boundaries (asserted)
+    # helps / does-not-help boundaries (asserted on Blackhole, logged elsewhere)
     scripts/run_safe_pytest.sh --run-all \\
         tests/ttnn/unit_tests/operations/examples/test_resident_shard_locality.py::test_resident_shard_locality_regimes
 """
@@ -41,6 +43,16 @@ import torch
 import ttnn
 from loguru import logger
 
+from tests.ttnn.unit_tests.operations.examples.perf_test_utils import (
+    arch_label,
+    check_regime,
+    chip_freq_mhz,
+    grid_xy,
+    interleaved_ns,
+    require_cores,
+    require_grid,
+    sweep_gate,
+)
 from ttnn.operations.examples.resident_shard_locality import (
     VARIANTS,
     alias_eligible,
@@ -54,15 +66,13 @@ from ttnn.operations.examples.resident_shard_locality.program_descriptor_with_in
     local_l1_bytes,
 )
 
-_DURATION_KEY = "DEVICE KERNEL DURATION [ns]"
-_DEVICE_CSV = os.path.join(os.environ.get("TT_METAL_HOME", "."), "generated/profiler/.logs/profile_log_device.csv")
-_EXAMPLE_DIR = Path(__file__).resolve().parents[5] / "ttnn/ttnn/operations/examples/resident_shard_locality"
-
-# Cases: (id, layout, cores, shard_rows, shard_width). cores: "grid" = every Tensix core of the
-# compute grid (for "block": the whole grid as rows x cols); an int = that many Tensix cores
-# row-major, capped at the grid. shard_rows = sticks per Tensix core; shard_width = elements per
-# stick (per stick piece for BLOCK_SHARDED); bf16, so bytes per stick = 2 x shard_width.
-# An optional 6th field is the dtype ("bf16" default, or "fp32": 4 bytes per element).
+# Cases: (id, memory_layout, cores, shard_rows, shard_width). memory_layout: "height" =
+# TensorMemoryLayout::HEIGHT_SHARDED, "block" = TensorMemoryLayout::BLOCK_SHARDED. cores: "grid" = every
+# Tensix core of the compute grid (for "block": the whole grid as rows x cols, so K = grid columns); an
+# int = exactly that many Tensix cores row-major (a grid with fewer skips the case). shard_rows = sticks
+# per Tensix core; shard_width = elements per stick (per stick piece for BLOCK_SHARDED); bf16, so bytes
+# per stick = 2 x shard_width. An optional 6th field is the dtype ("bf16" default, or "fp32": 4 bytes
+# per element).
 _DEFAULT_CASES = [
     # HEIGHT_SHARDED, shard height not a multiple of 32: the re-split crosses shard boundaries
     ("h12x128", "height", "grid", 12, 128),
@@ -107,46 +117,75 @@ _TORCH_DTYPES = {"bf16": torch.bfloat16, "fp32": torch.float32}
 
 
 def _case(case):
-    """(id, layout, cores, shard_rows, shard_width, dtype) with the dtype defaulted to bf16."""
+    """(id, memory_layout, cores, shard_rows, shard_width, dtype) with the dtype defaulted to bf16."""
     return tuple(case) + ("bf16",) * (6 - len(case))
 
 
 def _custom_case():
-    """CLI override (RSL_LAYOUT / RSL_CORES / RSL_SHARD_ROWS / RSL_SHARD_WIDTH), else None."""
+    """CLI override (RSL_MEMORY_LAYOUT / RSL_CORES / RSL_SHARD_ROWS / RSL_SHARD_WIDTH), else None."""
     if "RSL_SHARD_ROWS" not in os.environ:
         return None
-    layout = os.environ.get("RSL_LAYOUT", "height")
+    memory_layout = os.environ.get("RSL_MEMORY_LAYOUT", "height")
     cores = os.environ.get("RSL_CORES", "grid")
     if cores != "grid":
-        cores = tuple(int(c) for c in cores.split(",")) if layout == "block" else int(cores)
+        cores = tuple(int(c) for c in cores.split(",")) if memory_layout == "block" else int(cores)
     rows, width = int(os.environ["RSL_SHARD_ROWS"]), int(os.environ["RSL_SHARD_WIDTH"])
     dtype = os.environ.get("RSL_DTYPE", "bf16")
-    return (f"{layout[0]}{rows}x{width}{'' if dtype == 'bf16' else dtype}", layout, cores, rows, width, dtype)
+    return (
+        f"{memory_layout[0]}{rows}x{width}{'' if dtype == 'bf16' else dtype}",
+        memory_layout,
+        cores,
+        rows,
+        width,
+        dtype,
+    )
 
 
-def _resolve_cores(device, layout, cores):
-    grid = device.compute_with_storage_grid_size()
+def _fits(device, memory_layout, cores):
+    """True when the case's shard grid fits this compute grid ("grid" always does)."""
     if cores == "grid":
-        return grid.x * grid.y if layout == "height" else (grid.y, grid.x)
-    if layout == "height":
-        return min(cores, grid.x * grid.y)
+        return True
+    x, y = grid_xy(device)
+    if memory_layout == "height":
+        return cores <= x * y
+    rows, cols = cores
+    return rows <= y and cols <= x
+
+
+def _require_fits(device, memory_layout, cores, what):
+    """Skip (never shrink) a case whose fixed Tensix-core count or shard grid exceeds this compute grid."""
+    if cores == "grid":
+        return
+    if memory_layout == "height":
+        require_cores(device, cores, what=what)
+    else:
+        rows, cols = cores
+        require_grid(device, min_x=cols, min_y=rows, what=what)
+
+
+def _resolve_cores(device, memory_layout, cores):
+    """'grid' -> the whole compute grid (a count for height, (rows, cols) for block); else unchanged.
+    Callers check `_fits` / `_require_fits` first: a fixed count is never capped to the grid."""
+    if cores == "grid":
+        x, y = grid_xy(device)
+        return x * y if memory_layout == "height" else (y, x)
     return cores
 
 
-def _n_cores(layout, cores):
-    return cores if layout == "height" else cores[0] * cores[1]
+def _n_cores(memory_layout, cores):
+    return cores if memory_layout == "height" else cores[0] * cores[1]
 
 
-def _make_input(device, layout, cores, shard_rows, shard_width, seed=0, dtype="bf16"):
+def _make_input(device, memory_layout, cores, shard_rows, shard_width, seed=0, dtype="bf16"):
     torch.manual_seed(seed)
-    shape = tensor_shape(layout, cores, shard_rows, shard_width)
+    shape = tensor_shape(memory_layout, cores, shard_rows, shard_width)
     torch_input = torch.randn(shape, dtype=torch.float32).to(_TORCH_DTYPES[dtype])
     tt_input = ttnn.from_torch(
         torch_input,
         dtype=_DTYPES[dtype],
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
-        memory_config=sharded_memory_config(device, layout, cores, shard_rows, shard_width),
+        memory_config=sharded_memory_config(device, memory_layout, cores, shard_rows, shard_width),
     )
     return tt_input, torch_input
 
@@ -163,62 +202,19 @@ def _check(tt_input, torch_input, variant, kernel_iters=1, swap_nocs=False):
     )
 
 
-def _read_kernel_ns(device):
-    ttnn.ReadDeviceProfiler(device)
-    per_chip = ttnn.get_latest_programs_perf_data() or {}
-    total, found = 0.0, False
-    for programs in per_chip.values():
-        for program in programs:
-            entry = (getattr(program, "program_analyses_results", None) or {}).get(_DURATION_KEY)
-            if entry is not None:
-                total += float(entry.duration)
-                found = True
-    return total if found else None
-
-
-def _measure(device, runners, trials, kernel_iters):
-    """{label: [ns per pass, ...]}; one untimed launch each first (JIT), then `trials` rotated rounds."""
-    for run in runners.values():
-        run()
-    ttnn.synchronize_device(device)
-    _read_kernel_ns(device)
-    samples = {label: [] for label in runners}
-    for _ in range(trials):
-        for label, run in runners.items():
-            run()
-            ns = _read_kernel_ns(device)
-            assert ns is not None, f"device profiler produced no duration for {label} (profiler build?)"
-            samples[label].append(ns / kernel_iters)
-    return samples
-
-
-def _arch_label(device):
-    arch = str(device.arch()).rsplit(".", 1)[-1]
-    return {"WORMHOLE_B0": "WH_B0", "BLACKHOLE": "BH"}.get(arch, arch)
-
-
-def _chip_freq_mhz():
-    try:
-        with open(_DEVICE_CSV) as f:
-            header = f.readline()
-    except OSError:
-        return None
-    for part in header.split(","):
-        if "CHIP_FREQ" in part:
-            return int(float(part.split(":")[1]))
-    return None
-
-
 def _git_sha():
     try:
-        return subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], cwd=_EXAMPLE_DIR, text=True).strip()
+        return subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"], cwd=Path(__file__).resolve().parent, text=True
+        ).strip()
     except (OSError, subprocess.CalledProcessError):
         return "unknown"
 
 
-def _units(layout, cores, shard_rows, shard_width):
-    """Work units the resplit deals out: tile-rows x page columns x column chunks."""
-    total_rows, width = tensor_shape(layout, cores, shard_rows, shard_width)
+def _units(memory_layout, cores, shard_rows, shard_width):
+    """Work units the resplit deals out: tile-rows x page columns x column chunks (a page here is one
+    stick, or one shard-width piece of a stick for BLOCK_SHARDED; it is not a tile)."""
+    total_rows, width = tensor_shape(memory_layout, cores, shard_rows, shard_width)
     chunks = chunk_plan(shard_width)[1]
     return -(-total_rows // 32) * (width // shard_width) * chunks
 
@@ -227,31 +223,40 @@ def _units(layout, cores, shard_rows, shard_width):
 # Correctness (the only pass/fail)
 # ---------------------------------------------------------------------------------------
 
-_CORRECTNESS_IDS = ("h72x544", "h64x544", "b311x320", "b23x848", "h3x8192", "h24x4064", "b13x632f32", "b221x400")
-_CORRECTNESS_CASES = [c for c in _DEFAULT_CASES if c[0] in _CORRECTNESS_IDS] + [
-    c for c in _WIDE_CASES if c[0] in _CORRECTNESS_IDS and c[0] not in {d[0] for d in _DEFAULT_CASES}
-]
+# Every case of the measurement sweep is correctness-checked here, because the sweep itself is opt-in.
+# The cases in _FULL_CHECK_IDS also run with kernel_iters=2 and with the NoCs swapped; the rest get the
+# one plain launch per variant that the sweep's correctness gate gave them.
+_FULL_CHECK_IDS = ("h72x544", "h64x544", "b311x320", "b23x848", "h3x8192", "h24x4064", "b13x632f32", "b221x400")
+_CORRECTNESS_CASES = _DEFAULT_CASES + [c for c in _WIDE_CASES if c[0] not in {d[0] for d in _DEFAULT_CASES}]
 
 
 @pytest.mark.parametrize("case", _CORRECTNESS_CASES, ids=[c[0] for c in _CORRECTNESS_CASES])
 def test_resident_shard_locality_correctness(device, case):
-    """Every variant is a bit-exact copy (tilize -> untilize of bf16), also with kernel_iters=2."""
-    _, layout, cores, shard_rows, shard_width, dtype = _case(case)
-    cores = _resolve_cores(device, layout, cores)
-    tt_input, torch_input = _make_input(device, layout, cores, shard_rows, shard_width, dtype=dtype)
+    """Every variant is a bit-exact copy (tilize -> untilize); _FULL_CHECK_IDS also with kernel_iters=2
+    and with the reader / writer NoCs swapped."""
+    case_id, memory_layout, cores, shard_rows, shard_width, dtype = _case(case)
+    _require_fits(device, memory_layout, cores, what=case_id)
+    cores = _resolve_cores(device, memory_layout, cores)
+    tt_input, torch_input = _make_input(device, memory_layout, cores, shard_rows, shard_width, dtype=dtype)
     for variant in _variants_for(shard_rows, shard_width):
         _check(tt_input, torch_input, variant)
-        _check(tt_input, torch_input, variant, kernel_iters=2)
-        _check(tt_input, torch_input, variant, swap_nocs=True)
+        if case_id in _FULL_CHECK_IDS:
+            _check(tt_input, torch_input, variant, kernel_iters=2)
+            _check(tt_input, torch_input, variant, swap_nocs=True)
 
 
 # ---------------------------------------------------------------------------------------
-# Sweep -> report.md
+# Measurement sweep (opt-in) -> printed report, written to RSL_REPORT when set
 # ---------------------------------------------------------------------------------------
 
 
+@sweep_gate("RSL_SWEEPS")
 def test_resident_shard_locality_device_perf(device):
-    """Correctness-gate every variant, then measure device kernel duration; perf never fails a test."""
+    """Correctness-gate every variant, then measure device kernel duration; perf never fails a test.
+
+    A measurement sweep: skipped unless RSL_SWEEPS=1 (the CLI sets it) or EXAMPLES_SWEEPS=1. The report
+    is logged; it is written to a file only when RSL_REPORT is a non-empty path. Cases whose fixed
+    Tensix-core count or shard grid does not fit this compute grid are skipped and listed in the report."""
     custom = _custom_case()
     suite = os.environ.get("RSL_SUITE", "all")
     wide_only = [c for c in _WIDE_CASES if c[0] not in {d[0] for d in _DEFAULT_CASES}]
@@ -262,10 +267,13 @@ def test_resident_shard_locality_device_perf(device):
     kernel_iters = int(os.environ.get("RSL_KERNEL_ITERS", "1"))
     swap_nocs = os.environ.get("RSL_SWAP_NOCS", "0") == "1"
 
-    rows_out = []
-    for case_id, layout, cores, shard_rows, shard_width, dtype in cases:
-        cores = _resolve_cores(device, layout, cores)
-        tt_input, torch_input = _make_input(device, layout, cores, shard_rows, shard_width, dtype=dtype)
+    rows_out, skipped = [], []
+    for case_id, memory_layout, cores, shard_rows, shard_width, dtype in cases:
+        if not _fits(device, memory_layout, cores):
+            skipped.append(f"{case_id} ({cores} Tensix cores)")
+            continue
+        cores = _resolve_cores(device, memory_layout, cores)
+        tt_input, torch_input = _make_input(device, memory_layout, cores, shard_rows, shard_width, dtype=dtype)
         variants = _variants_for(shard_rows, shard_width, selected)
         for variant in variants:
             _check(tt_input, torch_input, variant, kernel_iters, swap_nocs)
@@ -273,14 +281,19 @@ def test_resident_shard_locality_device_perf(device):
             v: (lambda v=v: resident_shard_copy(tt_input, variant=v, kernel_iters=kernel_iters, swap_nocs=swap_nocs))
             for v in variants
         }
-        samples = _measure(device, runners, trials, kernel_iters)
-        rows_out.append((case_id, layout, cores, shard_rows, shard_width, dtype, {v: samples[v] for v in variants}))
+        samples = interleaved_ns(device, runners, trials=trials, warmup=1, per_launch_divisor=kernel_iters)
+        rows_out.append(
+            (case_id, memory_layout, cores, shard_rows, shard_width, dtype, {v: samples[v] for v in variants})
+        )
+    if not rows_out:
+        x, y = grid_xy(device)
+        pytest.skip(f"no case fits the {x}x{y} grid: {', '.join(skipped)}")
 
-    grid = device.compute_with_storage_grid_size()
-    freq = _chip_freq_mhz()
+    x, y = grid_xy(device)
+    freq = chip_freq_mhz()
     header = (
-        f"box={socket.gethostname()}  arch={_arch_label(device)}  grid={grid.x}x{grid.y}  "
-        f"clock={freq} MHz  N={trials} ({'median' if trials > 1 else 'single pass'})  "
+        f"box={socket.gethostname()}  arch={arch_label(device)}  grid={x}x{y}  "
+        f"clock={f'{freq:.0f}' if freq else 'unknown'} MHz  N={trials} ({'median' if trials > 1 else 'single pass'})  "
         f"kernel-iters={kernel_iters} ({'per-launch latency' if kernel_iters == 1 else 'steady-state'})  "
         f"date={datetime.date.today().isoformat()}  sha={_git_sha()}  "
         f"NoCs: reader {'NoC1' if swap_nocs else 'NoC0'} / writer {'NoC0' if swap_nocs else 'NoC1'}"
@@ -294,28 +307,31 @@ def test_resident_shard_locality_device_perf(device):
         "Sticks per Tensix core = shard height; bytes per stick = shard width x bytes per element. "
         "`resplit` deals out work units (32 sticks x one column chunk) over the same Tensix cores.",
         "",
-        "| Case | Memory layout | Tensix cores | Shard [sticks, elements] | B per stick | resplit units | Method | ns | vs resplit | Correct |",
+        "| Case | TensorMemoryLayout | Tensix cores | Shard [sticks, elements] | B per stick | resplit units | Method | ns | vs resplit | Correct |",
         "|---|---|---:|---|---:|---:|---|---:|---:|---|",
     ]
-    for case_id, layout, cores, shard_rows, shard_width, dtype, results in rows_out:
+    for case_id, memory_layout, cores, shard_rows, shard_width, dtype, results in rows_out:
         base = statistics.median(results["resplit"]) if "resplit" in results else None
-        n = _n_cores(layout, cores)
+        n = _n_cores(memory_layout, cores)
         stick_bytes = shard_width * elem_bytes(_DTYPES[dtype])
-        memory_layout = "HEIGHT_SHARDED" if layout == "height" else f"BLOCK_SHARDED {cores[0]}x{cores[1]}"
+        tml = "HEIGHT_SHARDED" if memory_layout == "height" else f"BLOCK_SHARDED {cores[0]}x{cores[1]}"
+        units = _units(memory_layout, cores, shard_rows, shard_width)
         for variant in VARIANTS:
             if variant not in results:
                 if variant in selected and variant == "local_alias":
                     lines.append(
-                        f"| {case_id} | {memory_layout} | {n} | [{shard_rows}, {shard_width}] | {stick_bytes} | "
-                        f"{_units(layout, cores, shard_rows, shard_width)} | local_alias | n/a (shard not whole tiles) | | |"
+                        f"| {case_id} | {tml} | {n} | [{shard_rows}, {shard_width}] | {stick_bytes} | "
+                        f"{units} | local_alias | n/a (shard not whole tiles) | | |"
                     )
                 continue
             med = statistics.median(results[variant])
             vs = f"{base / med:.2f}x" if base else ""
             lines.append(
-                f"| {case_id} | {memory_layout} | {n} | [{shard_rows}, {shard_width}] | {stick_bytes} | "
-                f"{_units(layout, cores, shard_rows, shard_width)} | {variant} | {med:.0f} | {vs} | yes |"
+                f"| {case_id} | {tml} | {n} | [{shard_rows}, {shard_width}] | {stick_bytes} | "
+                f"{units} | {variant} | {med:.0f} | {vs} | yes |"
             )
+    if skipped:
+        lines += ["", f"Skipped (shard grid larger than this {x}x{y} grid): {', '.join(skipped)}"]
     lines += _l1_table(rows_out)
     plain = selected == VARIANTS and trials == 1 and kernel_iters == 1 and not swap_nocs
     default_run = custom is None and suite == "all" and plain
@@ -323,22 +339,22 @@ def test_resident_shard_locality_device_perf(device):
         lines += _mechanism_table(device)
     report = "\n".join(lines) + "\n"
     logger.info("\n" + report)
-    path = os.environ.get("RSL_REPORT")
-    if path is None and default_run:
-        path = str(_EXAMPLE_DIR / "report.md")
+    path = os.environ.get("RSL_REPORT", "")
     if path:
         Path(path).write_text(report)
         logger.info(f"report written to {path}")
 
 
 def _l1_table(rows_out):
-    """Per-Tensix-core CB bytes of `local` for the cases wider than one chunk or not whole tiles wide."""
+    """Per-Tensix-core circular-buffer (CB) bytes of `local` for the cases wider than one chunk or not
+    whole tiles wide."""
     lines = [
         "",
         "## L1 per Tensix core: `local` staging one column chunk vs staging the whole row",
         "",
-        "CBs only (input staging, tiled, output staging; 2 chunks deep each, tile-sized pages); the input "
-        "and output shards come on top. Whole-row staging = the same 3 CBs, 2 deep, one chunk = the whole padded width.",
+        "Circular buffers (CBs) only (input staging, tiled, output staging; 2 chunks deep each; one page = one "
+        "tile); the input and output shards come on top. Whole-row staging = the same 3 CBs, 2 deep, one chunk = "
+        "the whole padded width.",
         "",
         "| Case | dtype | Width tiles | Chunks x tiles | local CB KB | whole-row CB KB | Shards in+out KB |",
         "|---|---|---:|---|---:|---:|---:|",
@@ -361,11 +377,12 @@ def _l1_table(rows_out):
 
 # Mechanism: the same [72, 544] HEIGHT_SHARDED shards on a growing number of Tensix cores (row-major),
 # with the default NoCs and with the reader/writer NoCs swapped. local never leaves its Tensix core.
+# Counts larger than the compute grid are left out.
 _MECHANISM_CORES = (1, 2, 13, 26, 65, 130)
 
 
 def _mechanism_table(device):
-    grid = device.compute_with_storage_grid_size()
+    x, y = grid_xy(device)
     lines = [
         "",
         "## Mechanism: resplit cost vs Tensix cores and NoC direction ([72, 544] HEIGHT_SHARDED shards)",
@@ -375,7 +392,7 @@ def _mechanism_table(device):
         "| Tensix cores | resplit ns | resplit swapped ns | local ns | resplit / local | resplit swapped / local |",
         "|---:|---:|---:|---:|---:|---:|",
     ]
-    for n in (c for c in _MECHANISM_CORES if c <= grid.x * grid.y):
+    for n in (c for c in _MECHANISM_CORES if c <= x * y):
         tt_input, torch_input = _make_input(device, "height", n, 72, 544)
         runners = {
             "resplit": lambda: resident_shard_copy(tt_input, variant="resplit"),
@@ -383,7 +400,7 @@ def _mechanism_table(device):
             "local": lambda: resident_shard_copy(tt_input, variant="local"),
         }
         _check(tt_input, torch_input, "resplit", swap_nocs=True)
-        med = {k: statistics.median(v) for k, v in _measure(device, runners, 3, 1).items()}
+        med = {k: statistics.median(v) for k, v in interleaved_ns(device, runners, trials=3, warmup=1).items()}
         lines.append(
             f"| {n} | {med['resplit']:.0f} | {med['swapped']:.0f} | {med['local']:.0f} | "
             f"{med['resplit'] / med['local']:.2f}x | {med['swapped'] / med['local']:.2f}x |"
@@ -392,45 +409,106 @@ def _mechanism_table(device):
 
 
 # ---------------------------------------------------------------------------------------
-# Regimes (asserted): helps -> speedup >= max(1.05, 1 + half the measured gain);
-# does_not_help -> speedup <= 1.05. Speedup = resplit ns / local ns (or local / local_alias).
+# Regimes (asserted): speedup = baseline ns / lever ns (resplit / local, or local / local_alias),
+# interleaved A,B,A,B... trials per variant, verdict from `perf_test_utils.check_regime`.
+# The bound each regime is asserted against is derived from the speedup measured on the architecture it
+# runs on (`perf_test_utils.regime_bound`): "helps" asserts half the measured gain but never closer than
+# 10% to the measurement; "does_not_help" asserts <= max(1.0, 1.10 x the highest measured value). Every
+# number below was measured on Blackhole p150b, 13x10 = 130 Tensix cores (ranges: the regime test's
+# runs in the comment / README.md / report.md); there is no Wormhole number, so on Wormhole every regime
+# is logged, not asserted. A missed bound is re-measured once and re-checked on the pooled samples.
+# "grid" cases use the whole compute grid (BLOCK_SHARDED: rows x cols = the grid, K = grid columns), so
+# they build on any grid; a fixed Tensix-core count skips on a grid that is too small.
 # ---------------------------------------------------------------------------------------
 
+_REGIME_TRIALS = 7
+
 _REGIMES = [
-    # (id, layout, cores, shard_rows, shard_width, dtype, baseline, lever, kind, threshold)  BH p150b, 13x10
-    ("helps_height_72x544", "height", "grid", 72, 544, "bf16", "resplit", "local", "helps", 5.9),  # 10.9x
-    ("helps_block_311x320", "block", "grid", 311, 320, "bf16", "resplit", "local", "helps", 3.1),  # 5.3x
-    # 0.6-0.75x: <= 2 sticks of >= 8 KB per Tensix core
-    ("does_not_help_height_1x8192", "height", 128, 1, 8192, "bf16", "resplit", "local", "does_not_help", 1.05),
-    ("helps_alias_32x1024", "height", "grid", 32, 1024, "bf16", "local", "local_alias", "helps", 1.27),  # 1.55x
+    # (id, memory_layout, cores, shard_rows, shard_width, dtype, baseline, lever, kind, measured speedup)
+    ("helps_height_72x544", "height", "grid", 72, 544, "bf16", "resplit", "local", "helps", {"bh": (10.71, 10.9)}),
+    ("helps_block_311x320", "block", "grid", 311, 320, "bf16", "resplit", "local", "helps", {"bh": (5.29, 5.47)}),
+    # <= 2 sticks of >= 8 KB per Tensix core; needs 128 Tensix cores
+    (
+        "does_not_help_height_1x8192",
+        "height",
+        128,
+        1,
+        8192,
+        "bf16",
+        "resplit",
+        "local",
+        "does_not_help",
+        {"bh": (0.6, 0.75)},
+    ),
+    (
+        "helps_alias_32x1024",
+        "height",
+        "grid",
+        32,
+        1024,
+        "bf16",
+        "local",
+        "local_alias",
+        "helps",
+        {"bh": (1.55, 1.56)},
+    ),
     # wide rows (127 / 160 tiles per stick), W chunked into <= 32-tile column chunks
-    ("helps_height_wide_24x4064", "height", "grid", 24, 4064, "bf16", "resplit", "local", "helps", 4.4),  # 7.8x
-    ("helps_height_wide_17x5120", "height", "grid", 17, 5120, "bf16", "resplit", "local", "helps", 6.1),  # 11.2x
+    (
+        "helps_height_wide_24x4064",
+        "height",
+        "grid",
+        24,
+        4064,
+        "bf16",
+        "resplit",
+        "local",
+        "helps",
+        {"bh": (7.8, 7.94)},
+    ),
+    (
+        "helps_height_wide_17x5120",
+        "height",
+        "grid",
+        17,
+        5120,
+        "bf16",
+        "resplit",
+        "local",
+        "helps",
+        {"bh": (11.1, 11.2)},
+    ),
     # partial-width BLOCK shards (shard width not a multiple of 32), K = grid columns
-    ("helps_block_13x632_fp32", "block", "grid", 13, 632, "fp32", "resplit", "local", "helps", 1.56),  # 2.1x
-    ("helps_block_221x400", "block", "grid", 221, 400, "bf16", "resplit", "local", "helps", 3.35),  # 5.7x
-    ("helps_block_23x848", "block", "grid", 23, 848, "bf16", "resplit", "local", "helps", 3.6),  # 6.3x
-    ("helps_block_16x848", "block", "grid", 16, 848, "bf16", "resplit", "local", "helps", 2.6),  # 4.2x
+    ("helps_block_13x632_fp32", "block", "grid", 13, 632, "fp32", "resplit", "local", "helps", {"bh": (2.1, 2.13)}),
+    ("helps_block_221x400", "block", "grid", 221, 400, "bf16", "resplit", "local", "helps", {"bh": (5.66, 5.7)}),
+    ("helps_block_23x848", "block", "grid", 23, 848, "bf16", "resplit", "local", "helps", {"bh": (6.28, 6.3)}),
+    ("helps_block_16x848", "block", "grid", 16, 848, "bf16", "resplit", "local", "helps", {"bh": (4.2, 4.25)}),
 ]
 
 
 @pytest.mark.parametrize("regime", _REGIMES, ids=[r[0] for r in _REGIMES])
 def test_resident_shard_locality_regimes(device, regime):
-    """Interleaved A/B of baseline vs lever, median of 5 rounds; both correctness-checked first."""
-    rid, layout, cores, shard_rows, shard_width, dtype, baseline, lever, kind, threshold = regime
-    cores = _resolve_cores(device, layout, cores)
-    tt_input, torch_input = _make_input(device, layout, cores, shard_rows, shard_width, dtype=dtype)
+    """Interleaved A/B of baseline vs lever, both correctness-checked first; verdict from `check_regime`."""
+    rid, memory_layout, cores, shard_rows, shard_width, dtype, baseline, lever, kind, measured = regime
+    _require_fits(device, memory_layout, cores, what=rid)
+    cores = _resolve_cores(device, memory_layout, cores)
+    tt_input, torch_input = _make_input(device, memory_layout, cores, shard_rows, shard_width, dtype=dtype)
     for variant in (baseline, lever):
         _check(tt_input, torch_input, variant)
     runners = {v: (lambda v=v: resident_shard_copy(tt_input, variant=v)) for v in (baseline, lever)}
-    samples = _measure(device, runners, 5, 1)
-    b, l = statistics.median(samples[baseline]), statistics.median(samples[lever])
-    speedup = b / l
-    logger.info(
-        f"REGIME {rid} [{_arch_label(device)}] {baseline}={b:.0f}ns {lever}={l:.0f}ns speedup={speedup:.2f}x "
-        f"(threshold {'>=' if kind == 'helps' else '<='} {threshold})"
+
+    def measure():
+        samples = interleaved_ns(device, runners, trials=_REGIME_TRIALS)
+        return samples[baseline], samples[lever]
+
+    tml = "HEIGHT_SHARDED" if memory_layout == "height" else f"BLOCK_SHARDED {cores[0]}x{cores[1]}"
+    check_regime(
+        device,
+        rid,
+        kind,
+        measured,
+        measure,
+        detail=(
+            f"{tml} [{shard_rows}, {shard_width}] {dtype}, {_n_cores(memory_layout, cores)} Tensix cores, "
+            f"{baseline} vs {lever}"
+        ),
     )
-    if kind == "helps":
-        assert speedup >= threshold, f"{rid}: expected >= {threshold}x, got {speedup:.2f}x"
-    else:
-        assert speedup <= threshold, f"{rid}: expected <= {threshold}x, got {speedup:.2f}x"

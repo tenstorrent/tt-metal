@@ -1,18 +1,20 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""CLI: measure per-core DRAM read vs read-once+multicast of a shared input on your own shape.
+"""CLI: measure per-Tensix-core DRAM read vs read-once+multicast of a shared input on your own shape.
 
     # streamed shared input (chunk-by-chunk multicast with a per-chunk handshake)
-    python -m ttnn.operations.examples.shared_input_reuse [--chunk-rows 16] [--d-cols 4] [--chunks 19] [--trials 10]
+    python -m ttnn.operations.examples.shared_input_reuse [--chunk-rows 16] [--d-cols 4] [--chunks 19] [--trials 10] \\
+        [--report PATH]
 
     # resident window (one-shot multicast of a small w every Tensix core keeps in L1, out = x * w)
     python -m ttnn.operations.examples.shared_input_reuse --window [--cores 16,32,64,full] \\
         [--window-tiles 1,8,32,128,256] [--stream-mb 16,64] [--window-chunk 32] [--repeats 3] [--trials 3]
 
 Runs the matching test through scripts/run_safe_pytest.sh (device lock, in-process profiler, post-run reset) and
-prints the table. Run from the repo root with the env active. The streamed mode rewrites report.md unless
-SIR_REPORT points elsewhere; the window mode only prints.
+prints the table. Run from the repo root with the env active. Nothing is written by default: the streamed
+mode also writes its Markdown report to --report PATH when given; the window mode only prints. The window
+sweep is an opt-in measurement sweep, so --window sets SIR_SWEEPS=1 for the test run.
 """
 
 import argparse
@@ -29,6 +31,7 @@ def main():
     ap.add_argument("--d-cols", type=int, default=4, help="streamed: input width in tiles (tile-cols). Default 4.")
     ap.add_argument("--chunks", type=int, default=19, help="streamed: number of chunks. Default 19.")
     ap.add_argument("--trials", type=int, default=None, help="profiled rounds (median). Default 10 / 3 (window).")
+    ap.add_argument("--report", help="streamed: also write the Markdown report here. Default: print only.")
     ap.add_argument("--window", action="store_true", help="measure the resident-window one-shot broadcast instead.")
     ap.add_argument("--cores", default="16,32,64,full", help="window: Tensix-core counts ('full' = whole grid).")
     ap.add_argument("--window-tiles", default="1,8,32,128,256", help="window: w width in tiles (2048 B each).")
@@ -53,6 +56,7 @@ def main():
             SIR_WIN_VARIANTS=args.variants,
             SIR_WIN_REPEATS=str(args.repeats),
             SIR_TRIALS=str(args.trials or 3),
+            SIR_SWEEPS="1",  # the window sweep is a measurement sweep, skipped unless enabled
         )
         test = f"{_TESTS}::test_shared_input_reuse_window_sweep"
         print(
@@ -65,6 +69,7 @@ def main():
             SIR_D_COLS=str(args.d_cols),
             SIR_CHUNKS=str(args.chunks),
             SIR_TRIALS=str(args.trials or 10),
+            SIR_REPORT=args.report or "",  # empty: print only
         )
         test = f"{_TESTS}::test_shared_input_reuse_device_perf"
         print(f"[shared_input_reuse] chunk_rows={args.chunk_rows} d_cols={args.d_cols} chunks={args.chunks}")

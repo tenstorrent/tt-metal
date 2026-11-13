@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from .program_descriptor_with_inline_kernels import (
-    LAYOUTS,
+    MEMORY_LAYOUTS,
     VARIANTS,
     alias_eligible,
     create_program_descriptor,
@@ -13,7 +13,7 @@ from .program_descriptor_with_inline_kernels import (
 )
 
 __all__ = [
-    "LAYOUTS",
+    "MEMORY_LAYOUTS",
     "VARIANTS",
     "alias_eligible",
     "create_program_descriptor",

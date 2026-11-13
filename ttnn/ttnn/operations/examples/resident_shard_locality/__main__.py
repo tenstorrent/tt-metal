@@ -4,15 +4,18 @@
 """CLI: re-measure resplit vs local vs local_alias on your own shard spec.
 
     python -m ttnn.operations.examples.resident_shard_locality \\
-        [--layout height|block] [--cores grid|N|ROWS,COLS] [--shard-rows S --shard-width W] [--dtype bf16|fp32]
+        [--memory-layout height|block] [--cores grid|N|ROWS,COLS] [--shard-rows S --shard-width W]
+        [--dtype bf16|fp32]
         [--suite all|base|wide]
         [--variant all|resplit|local|local_alias ...] [--trials N] [--kernel-iters K]
         [--swap-nocs] [--report PATH]
 
-Without --shard-rows/--shard-width it runs the predefined sweep (--suite: all, the original
-cases only, or only the wide-row / partial-width cases). The flags become env
-overrides for the device-perf test, which runs through scripts/run_safe_pytest.sh (device
-lock, in-process profiler, post-run reset). Run from the repo root with python_env active.
+--memory-layout picks the TensorMemoryLayout of the custom shard: height = HEIGHT_SHARDED, block =
+BLOCK_SHARDED. Without --shard-rows/--shard-width it runs the predefined sweep (--suite: all, the
+original cases only, or only the wide-row / partial-width cases). The flags become env overrides for
+the device-perf test (a measurement sweep, opt-in: the CLI sets RSL_SWEEPS=1), which runs through
+scripts/run_safe_pytest.sh (device lock, in-process profiler, post-run reset). The report is printed;
+it is written to a file only with --report PATH. Run from the repo root with python_env active.
 """
 
 import argparse
@@ -20,7 +23,7 @@ import os
 import subprocess
 import sys
 
-from .program_descriptor_with_inline_kernels import LAYOUTS, VARIANTS
+from .program_descriptor_with_inline_kernels import MEMORY_LAYOUTS, VARIANTS
 
 _TEST = (
     "tests/ttnn/unit_tests/operations/examples/test_resident_shard_locality.py"
@@ -42,9 +45,12 @@ def main():
     ap.add_argument(
         "--kernel-iters", type=_positive, default=1, help="in-kernel repeats; 1 = per-launch latency, large = steady"
     )
-    ap.add_argument("--report", help="also write the Markdown report here")
+    ap.add_argument("--report", help="also write the Markdown report here (default: print only)")
     ap.add_argument(
-        "--layout", choices=LAYOUTS, default="height", help="HEIGHT_SHARDED or BLOCK_SHARDED; default height"
+        "--memory-layout",
+        choices=MEMORY_LAYOUTS,
+        default="height",
+        help="TensorMemoryLayout of the custom shard: height = HEIGHT_SHARDED, block = BLOCK_SHARDED; default height",
     )
     ap.add_argument(
         "--cores",
@@ -70,21 +76,22 @@ def main():
         RSL_KERNEL_ITERS=str(args.kernel_iters),
         RSL_SWAP_NOCS="1" if args.swap_nocs else "0",
         RSL_SUITE=args.suite,
+        RSL_SWEEPS="1",  # the device-perf test is a measurement sweep, skipped unless enabled
     )
-    for key in ("RSL_LAYOUT", "RSL_CORES", "RSL_SHARD_ROWS", "RSL_SHARD_WIDTH", "RSL_DTYPE", "RSL_REPORT"):
+    for key in ("RSL_MEMORY_LAYOUT", "RSL_CORES", "RSL_SHARD_ROWS", "RSL_SHARD_WIDTH", "RSL_DTYPE", "RSL_REPORT"):
         env.pop(key, None)
     if args.shard_rows is not None:
         env.update(
-            RSL_LAYOUT=args.layout,
+            RSL_MEMORY_LAYOUT=args.memory_layout,
             RSL_CORES=args.cores,
             RSL_SHARD_ROWS=str(args.shard_rows),
             RSL_SHARD_WIDTH=str(args.shard_width),
             RSL_DTYPE=args.dtype,
         )
-    env["RSL_REPORT"] = args.report or ""  # empty: print only, never overwrite the committed report.md
+    env["RSL_REPORT"] = args.report or ""  # empty: print only
     cmd = ["scripts/run_safe_pytest.sh", "--run-all", _TEST]
     shard = (
-        f"[{args.shard_rows}, {args.shard_width}] {args.dtype} {args.layout} cores={args.cores}"
+        f"[{args.shard_rows}, {args.shard_width}] {args.dtype} {args.memory_layout} Tensix cores={args.cores}"
         if args.shard_rows
         else f"sweep ({args.suite})"
     )

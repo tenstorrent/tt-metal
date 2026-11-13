@@ -19,6 +19,8 @@ import torch
 import ttnn
 from ttnn.operations.examples.split_reader import make_row_sharded_memory_config, row_gather_copy
 
+from tests.ttnn.unit_tests.operations.examples.perf_test_utils import check_regime, require_grid
+
 TILE = 32
 TILE_BYTES = TILE * TILE * 2
 NUM_CORES = int(os.environ.get("SR_CORES", "8"))
@@ -151,7 +153,7 @@ def test_split_reader_device_perf(device):
 
 
 # ---------------------------------------------------------------------------
-# When the split reader helps / when its gain shrinks (numbers below: WH B0 n150; BH p150b in README.md).
+# When the split reader helps / when its gain shrinks (numbers below: WH B0 n150 and BH p150b; README.md).
 #
 # Baseline = split_reader=False (NCRISC issues every read); lever = split_reader=True
 # (BRISC also issues the second half of every block). 8 source Tensix cores x 8 tiles,
@@ -168,25 +170,35 @@ def test_split_reader_device_perf(device):
 #
 # No configuration reachable through row_gather_copy's arguments is flat (<= 1.05x) on
 # WH B0 and BH: because the reader barriers after every tile, a second issuing RISC-V always
-# doubles the reads in flight. The diminished case asserts the gain stays well below the
-# issue-bound one instead.
+# doubles the reads in flight. The diminished case is therefore a "does_not_help" regime against
+# its own measured gain: it asserts the gain does not grow past what was measured (plus the noise
+# margin), i.e. stays well below the issue-bound one.
 #
-# A trial = mean per-launch durations over _LAUNCHES_PER_TRIAL launches of one variant
-# (one profiler window). Baseline/lever trials are interleaved A,B,A,B and the median
-# of _N_TRIALS trials per variant is compared.
+# The assert: `measured` is the speedup measured per architecture ("wh" Wormhole B0, "bh" Blackhole).
+# perf_test_utils.check_regime derives the bound from the number measured on THIS architecture
+# (perf_test_utils.regime_bound: "helps" asserts at least the lower of half the measured gain and the
+# measured number less a 10% noise margin; "does_not_help" asserts at most the measured high plus that
+# margin), re-measures once before failing, and only logs on an architecture with no measured number.
+#
+# Sampling stays local (not perf_test_utils.interleaved_ns) because one profiler window also yields the
+# NCRISC and BRISC kernel lifetimes, which are logged next to the verdict. A trial = mean per-launch
+# durations over _LAUNCHES_PER_TRIAL launches of one variant (one profiler window); baseline and lever
+# trials alternate, the starting variant rotating per trial, and check_regime compares the medians of the
+# DEVICE KERNEL DURATION samples over _N_TRIALS trials per variant.
+#
+# Grid: the source shards sit on logical Tensix cores (0,0)..(7,0) and the op needs a second row, so the
+# regimes need a grid of at least 8 columns x 2 rows (every Wormhole and Blackhole board has it).
 # ---------------------------------------------------------------------------
 
 _N_TRIALS = 12
 _LAUNCHES_PER_TRIAL = 5
 _REGIME_CORES, _REGIME_TILES_PER_CORE, _REGIME_BLOCK_TILES = 8, 8, 8
 
-# (regime id, transaction_bytes, kind, threshold). helps -> speedup >= 1 + 0.5*(measured-1);
-# diminished -> speedup <= threshold (well below the issue-bound gain).
-# Thresholds hold on every measured board (WH B0 n150, BH p150b); `measure` regimes flip between boards and only log
-# - numbers per board in README.md.
+# (regime id, transaction_bytes, kind, measured speedup per arch)
 _REGIMES = [
-    ("helps_issue_bound_32B", 32, "helps", 1.4),  # WH 1.84x, BH 1.90x
-    ("diminished_2048B", 2048, "diminished", 1.75),  # WH 1.38x, BH 1.61x - stays well below the issue-bound gain
+    ("helps_issue_bound_32B", 32, "helps", {"wh": 1.84, "bh": 1.90}),
+    # stays well below the issue-bound gain
+    ("diminished_2048B", 2048, "does_not_help", {"wh": 1.38, "bh": 1.61}),
 ]
 
 
@@ -216,9 +228,10 @@ def _median(trials, key):
     return statistics.median(t[key] for t in trials)
 
 
-@pytest.mark.parametrize("regime,transaction_bytes,kind,threshold", _REGIMES, ids=[r[0] for r in _REGIMES])
-def test_split_reader_regimes(device, regime, transaction_bytes, kind, threshold):
+@pytest.mark.parametrize("regime,transaction_bytes,kind,measured", _REGIMES, ids=[r[0] for r in _REGIMES])
+def test_split_reader_regimes(device, regime, transaction_bytes, kind, measured):
     """split off (baseline) vs on (lever) where NCRISC is issue-bound and where it is not."""
+    require_grid(device, _REGIME_CORES, 2, what=f"split_reader regime {regime} (sources on row 0, a second row)")
     torch_input, tt_input = _regime_input(device)
     expected = _expected(torch_input)
     runs = {
@@ -236,29 +249,33 @@ def test_split_reader_regimes(device, regime, transaction_bytes, kind, threshold
     for run_fn in runs.values():
         assert torch.equal(expected, ttnn.to_torch(run_fn()).to(torch.float32))
 
-    for _ in range(N_WARMUP):
-        runs[False]()
-        runs[True]()
-    ttnn.synchronize_device(device)
-    _read_kernel_metrics(device)  # flush warmup window
-    off, on = [], []
-    for _ in range(_N_TRIALS):
-        off.append(_trial_metrics(device, runs[False]))
-        on.append(_trial_metrics(device, runs[True]))
+    def measure():
+        for _ in range(N_WARMUP):
+            runs[False]()
+            runs[True]()
+        ttnn.synchronize_device(device)
+        _read_kernel_metrics(device)  # flush warmup window
+        trials = {False: [], True: []}
+        for trial in range(_N_TRIALS):
+            for enabled in (False, True) if trial % 2 == 0 else (True, False):
+                trials[enabled].append(_trial_metrics(device, runs[enabled]))
+        off, on = trials[False], trials[True]
+        logger.info(
+            f"split_reader {regime} per-RISC-V kernel lifetimes (medians): off NCRISC {_median(off, 'ncrisc'):.1f} ns | "
+            f"on NCRISC {_median(on, 'ncrisc'):.1f} ns, BRISC {_median(on, 'brisc'):.1f} ns"
+        )
+        return [t["device"] for t in off], [t["device"] for t in on]
 
-    b_med, l_med = _median(off, "device"), _median(on, "device")
-    speedup = b_med / l_med
     reads = _REGIME_CORES * _REGIME_TILES_PER_CORE * (TILE_BYTES // transaction_bytes)
-    b_dev = [t["device"] for t in off]
-    l_dev = [t["device"] for t in on]
-    logger.info(
-        f"[{device.arch()}] split_reader {regime}: tx={transaction_bytes} B reads/launch={reads} "
-        f"(cores={_REGIME_CORES} tiles/core={_REGIME_TILES_PER_CORE} block={_REGIME_BLOCK_TILES}) | "
-        f"off median {b_med:.1f} ns (min {min(b_dev):.1f} max {max(b_dev):.1f}; NCRISC {_median(off, 'ncrisc'):.1f}) | "
-        f"on median {l_med:.1f} ns (min {min(l_dev):.1f} max {max(l_dev):.1f}; NCRISC {_median(on, 'ncrisc'):.1f} "
-        f"BRISC {_median(on, 'brisc'):.1f}) | speedup {speedup:.2f}x | trials {_N_TRIALS}x{_LAUNCHES_PER_TRIAL} launches"
+    check_regime(
+        device,
+        regime,
+        kind,
+        measured,
+        measure,
+        detail=(
+            f"tx={transaction_bytes} B reads/launch={reads} ({_REGIME_CORES} source Tensix cores, "
+            f"{_REGIME_TILES_PER_CORE} tiles per source, block={_REGIME_BLOCK_TILES} tiles), "
+            f"{_LAUNCHES_PER_TRIAL} launches per trial | baseline split_reader=False -> lever split_reader=True"
+        ),
     )
-    if kind == "helps":
-        assert speedup >= threshold, f"{regime}: expected >= {threshold}x, got {speedup:.2f}x"
-    else:
-        assert speedup <= threshold, f"{regime}: expected <= {threshold}x, got {speedup:.2f}x"

@@ -136,5 +136,7 @@ of the same A/B.
 - **Why the floor is higher:** at 2,048 B the split's critical RISC-V (BRISC: half the reads + all DRAM writes)
   takes 12.0 µs vs the baseline NCRISC's 19.0 µs (ratio 1.58); on WH B0 it is 18.1 vs 24.1 µs (1.33). BRISC's
   DRAM-write share costs relatively less on BH p150b; this is an observation from the lifetimes, not isolated.
-- **No flat regime on either board.** The regimes test therefore asserts the 2,048 B gain stays below 1.75× on
-  every board (the issue-bound gain is 1.90× here), not ≤ 1.05×.
+- **No flat regime on either board.** The regimes test therefore asserted the 2,048 B gain stays below 1.75× on
+  every board (the issue-bound gain is 1.90× here), not ≤ 1.05×. It now runs as a `does_not_help` regime against
+  its own measured gain per architecture (WH B0 1.38×, BH p150b 1.61×, plus the 10% noise margin of
+  `perf_test_utils.regime_bound`).

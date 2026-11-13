@@ -141,7 +141,7 @@ void kernel_main() {
     CircularBuffer gather(cb_gather);
     CircularBuffer combined(cb_combined);
     CircularBuffer result(cb_result);
-    // Every core allocates these CBs at the same L1 address, so a sender addresses a peer's slot
+    // Every Tensix core allocates these circular buffers (CBs) at the same L1 address, so a sender addresses a peer's slot
     // with its own base. Each CB is consumed in whole blocks, so every block starts at the base.
     const uint32_t gather_base = gather.get_write_ptr();
     const uint32_t result_base = result.get_write_ptr();
@@ -260,6 +260,10 @@ void kernel_main() {
             try_allgather();
         }
     }
+    // The semaphore increments above are acknowledged (non-posted) atomics. The poll loop ends as
+    // soon as the last wave's totals are here, which can be before the last increment this Tensix
+    // core issued is acknowledged, so wait for the acknowledgements before returning.
+    noc_async_atomic_barrier();
 }
 """
 

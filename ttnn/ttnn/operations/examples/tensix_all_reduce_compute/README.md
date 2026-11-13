@@ -105,7 +105,7 @@ slower on BH p150b.
   `test_tensix_all_reduce_compute_device_perf` (N=5, kernel-iters 100) for the 2/4/16-block rows;
   `bh-qb-15-special-adamjanovic-for-reservation-139410`, 2026-10-19.
 
-Reproduce (same regimes on any board; asserts only what held on every measured board, `measure` regimes only log):
+Reproduce (same regimes on any board; each regime asserts only on an architecture it was measured on, with a bound derived from that number by `perf_test_utils.regime_bound`; others and `measure` regimes only log):
 ```bash
 scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_tensix_all_reduce_compute.py::test_tensix_all_reduce_compute_regimes
 ```

@@ -90,7 +90,9 @@ board as measured since — on WH B0 n150 the gain stays ~1.7× from Kt = 1 to K
 Kt = 1 and falls to 1.10× by Kt = 4. See *When it helps* below.
 
 ## Run the predefined sweep (regenerates `report.md`)
+The test writes a report only when `MOS_REPORT` names a path (the CLI sets it from `--report PATH`):
 ```bash
+MOS_REPORT=ttnn/ttnn/operations/examples/matmul_output_subblock/report.md \
 scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_matmul_output_subblock.py::test_matmul_output_subblock_device_perf
 ```
 Correctness (every subblock shape computes the identical C):
@@ -144,4 +146,4 @@ kernel-iters 20, DEVICE KERNEL DURATION per matmul, 11 interleaved trials, media
 `test_matmul_output_subblock_device_perf` on the same board. BH p150b rows — the same regimes test plus K /
 output-size sweep runs on that board, `bh-qb-15-special-adamjanovic-for-reservation-139410`, 2026-10-19 (details in `report.md`).
 Reproduce: `scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_matmul_output_subblock.py::test_matmul_output_subblock_regimes`
-(same regimes on any board; asserts only what held on every measured board, `measure` regimes only log).
+(same regimes on any board; each regime is asserted against a bound derived from the speedup measured on that architecture by `perf_test_utils.regime_bound`, `measure` regimes and an architecture with no measured number log only, and a missed bound is re-measured once).

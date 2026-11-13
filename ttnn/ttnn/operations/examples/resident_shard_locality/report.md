@@ -4,7 +4,7 @@ box=bh-50-special-adamjanovic-for-reservation-143315  arch=BH  grid=13x10  clock
 
 Tilize -> untilize of an L1-sharded ROW_MAJOR bf16 tensor; output sharded the same way. Sticks per Tensix core = shard height; bytes per stick = shard width x 2. `resplit` deals out work units (32 sticks x one column chunk) over the same Tensix cores.
 
-| Case | Memory layout | Tensix cores | Shard [sticks, elements] | B per stick | resplit units | Method | ns | vs resplit | Correct |
+| Case | TensorMemoryLayout | Tensix cores | Shard [sticks, elements] | B per stick | resplit units | Method | ns | vs resplit | Correct |
 |---|---|---:|---|---:|---:|---|---:|---:|---|
 | h12x128 | HEIGHT_SHARDED | 130 | [12, 128] | 256 | 49 | resplit | 3842 | 1.00x | yes |
 | h12x128 | HEIGHT_SHARDED | 130 | [12, 128] | 256 | 49 | local | 1454 | 2.64x | yes |
@@ -97,7 +97,7 @@ padding) and stages only the current chunk, 2 chunks deep. Every row is a bit-ex
 tilize, UnpackToDestFp32, fp32 Dest). The earlier rows of this report are unchanged by this addition: their
 widths give the same chunk plan as before.
 
-| Case | Memory layout | Tensix cores | Shard [sticks, elements] | B per stick | resplit units | Method | ns | vs resplit | Correct |
+| Case | TensorMemoryLayout | Tensix cores | Shard [sticks, elements] | B per stick | resplit units | Method | ns | vs resplit | Correct |
 |---|---|---:|---|---:|---:|---|---:|---:|---|
 | h24x4064 | HEIGHT_SHARDED | 130 | [24, 4064] | 8128 | 392 | resplit | 80170 | 1.00x | yes |
 | h24x4064 | HEIGHT_SHARDED | 130 | [24, 4064] | 8128 | 392 | local | 10231 | 7.84x | yes |
@@ -120,7 +120,7 @@ widths give the same chunk plan as before.
 
 ## L1 per Tensix core: `local` staging one column chunk vs staging the whole row
 
-CBs only (input staging, tiled, output staging; 2 chunks deep each, tile-sized pages); the input and output shards come on top. Whole-row staging = the same 3 CBs, 2 deep, one chunk = the whole padded width.
+Circular buffers (CBs) only (input staging, tiled, output staging; 2 chunks deep each; one page = one tile); the input and output shards come on top. Whole-row staging = the same 3 CBs, 2 deep, one chunk = the whole padded width.
 
 | Case | dtype | Width tiles | Chunks x tiles | local CB KB | whole-row CB KB | Shards in+out KB |
 |---|---|---:|---|---:|---:|---:|

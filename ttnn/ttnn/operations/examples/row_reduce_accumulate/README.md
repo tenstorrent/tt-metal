@@ -187,4 +187,6 @@ baseline = `reduce_fold`, lever = `dest_accum_pairs`; speedup = baseline_ns / le
 device_perf sweep, 2026-10-12. BH p150b rows — the same regimes test and device_perf sweep on that board (distribution
 `signal`; perf is data-independent), `bh-qb-15-special-adamjanovic-for-reservation-139410`, 2026-10-19 (details in `report.md`).
 Reproduce: `scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_row_reduce_accumulate.py::test_row_reduce_accumulate_regimes`
-(same regimes on any board; asserts only what held on every measured board, `measure` regimes only log).
+(same regimes on any board; each regime asserts against a bound derived from the speedup measured on the running
+arch by `perf_test_utils.regime_bound`, with one confirmation pass; an arch with no measured number and `measure`
+regimes only log).

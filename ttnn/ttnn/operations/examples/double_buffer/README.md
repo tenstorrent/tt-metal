@@ -159,7 +159,9 @@ and **never reaches a clean flat**, even on the full grid. bf16 (2048 B per tile
   `bh-qb-15-special-adamjanovic-for-reservation-139410`, 2026-10-19, commit `f74ee7aad64`.
 
 Reproduce: `scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_double_buffer.py::test_double_buffer_regimes`
-(same regimes on any board; asserts only what held on every measured board, `measure` regimes only log).
+(same regimes on any board; each asserts against the bound `perf_test_utils.regime_bound` derives from the
+number measured on that architecture, an architecture without a measured number only logs; the 64-Tensix-core
+regime skips on a grid with fewer Tensix cores).
 
 ## Run the predefined sweep (regenerates the report numbers)
 ```bash

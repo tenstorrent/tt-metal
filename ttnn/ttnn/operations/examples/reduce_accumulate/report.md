@@ -3,7 +3,7 @@
 box=bgd-lab-t3003-special-mstaletovic-for-reservation-40918  arch=WH_B0  cores=1  placement=single-core sharded-L1  N=5 (median)  kernel-iters=200 (steady-state)
 problem: SUM/mean reduce of N tiles, built as pairwise add_tiles accumulate + SFPU finalize, vs the reduce library (FPU). Widths are the tile count reduced. Output fp32, input bf16, HiFi4.
 
-variants: helper (standard reduce library) | fast (accumulate + SFPU finalize) | dispatch (fast when N >= per-dim threshold [row=4, col=8, scalar=8], else helper).
+variants: helper (standard reduce library) | fast (accumulate + SFPU finalize) | dispatch (fast when N >= per-dim threshold [row=4, col=8, scalar=8 in the code of this run; now per arch: WH B0 8/8/8, BH 16/8/8 tiles], else helper).
 dims: row (reduce width, REDUCE_ROW) | col (reduce height, REDUCE_COL) | scalar (reduce both).
 perf measured at accum=fp32 (data-independent; bf16 accum within noise).
 
@@ -68,10 +68,10 @@ perf measured at accum=fp32 (data-independent; bf16 accum within noise).
 | fast.bf16 | 3.5e-03 \| 0.9u | 1.4e-03 \| 0.4u | 1.3e-03 \| 0.3u | 3.7e-04 \| 0.1u | 8.1e-04 \| 0.2u | 4.4e-04 \| 0.1u |
 | dispatch.bf16 | 4.3e-03 \| 1.1u | 2.5e-03 \| 0.6u | 2.6e-03 \| 0.7u | 3.7e-04 \| 0.1u | 8.1e-04 \| 0.2u | 4.4e-04 \| 0.1u |
 
-Notes: the fast path's crossover is DIM-DEPENDENT (measured `dispatch` thresholds: row=4, col=8, scalar=8 tiles) — the FPU REDUCE_COL datapath is cheaper than REDUCE_ROW, so col needs more tiles and wins less (max ~1.7x vs ~2.9x for row/scalar). `dispatch` falls back to the library below the threshold, so it is never slower. It generalizes to all three dims (SFPU `sfpu_reduce` does REDUCE_ROW/COL; scalar is ROW then COL). Accuracy: fast ~= helper in fp32 and MORE accurate in bf16 (SFPU collapses columns in fp32 before one rounding); on **scalar** fast multiplies by 1/N once vs the library's AVG-scalar 1/sqrt(N)-twice, so it is ~100x more accurate in fp32.
+Notes: the fast path's crossover is DIM-DEPENDENT (`dispatch` thresholds in the code of this run: row=4, col=8, scalar=8 tiles; the code now uses WH B0 row/col/scalar 8/8/8 and BH 16/8/8 tiles, from the 2026-10 sections below) — the FPU REDUCE_COL datapath is cheaper than REDUCE_ROW, so col needs more tiles and wins less (max ~1.7x vs ~2.9x for row/scalar). `dispatch` falls back to the library below the threshold, so it is never slower. It generalizes to all three dims (SFPU `sfpu_reduce` does REDUCE_ROW/COL; scalar is ROW then COL). Accuracy: fast ~= helper in fp32 and MORE accurate in bf16 (SFPU collapses columns in fp32 before one rounding); on **scalar** fast multiplies by 1/N once vs the library's AVG-scalar 1/sqrt(N)-twice, so it is ~100x more accurate in fp32.
 
 ## 2026-10-12 - regime measurements (Wormhole B0 n150)
-Source: `test_reduce_accumulate_regimes` and a `test_reduce_accumulate_device_perf` sweep (`RA_ACCUMS=fp32`, 10 trials), single core, bf16 in, fp32 accumulation, 200 kernel iters. Median ns per reduce (min-max over 11 trials for the regime test); box = reservation n150.
+Source: `test_reduce_accumulate_regimes` and a `test_reduce_accumulate_device_perf` sweep (`RA_ACCUMS=fp32`, 10 trials), single Tensix core, bf16 in, fp32 accumulation, 200 kernel iters. Median ns per reduce (min-max over 11 trials for the regime test); box = reservation n150.
 
 | dim | tiles | helper | fast | dispatch | fast/helper speedup |
 |---|---:|---:|---:|---:|---:|
@@ -95,7 +95,7 @@ Source: `test_reduce_accumulate_regimes` and a `test_reduce_accumulate_device_pe
 | scalar | 32 | 5862 | 2008 | 1998 | 2.92x |
 
 Three runs of the regime test gave identical speedups to +-0.01x: row32 1.96/1.96/1.96, col32 1.72/1.72/1.72, scalar32 2.93/2.93/2.93, row1 0.50/0.50/0.50, row4 0.83/0.83/0.83, col4 0.81/0.81/0.81, scalar4 0.95/0.95/0.95.
-Differences from the 2026-07-13 table above: the `helper` row numbers are ~30% lower now (row 32t 3650 vs 5328 ns), so the row win is 1.96x not 2.87x and the row crossover is 8 tiles, not 4. `dispatch` row at 4 tiles is 0.83x (threshold row=4 is stale on this build). col and scalar match the old table.
+Differences from the 2026-07-13 table above: the `helper` row numbers are ~30% lower now (row 32t 3650 vs 5328 ns), so the row win is 1.96x not 2.87x and the row crossover is 8 tiles, not 4. `dispatch` row at 4 tiles is 0.83x (this run's code still used the old row=4 threshold; it is now row=8 on WH B0). col and scalar match the old table.
 
 ## Blackhole p150b — bh-qb-15-special-adamjanovic-for-reservation-139410 (2026-10-19)
 
@@ -105,7 +105,7 @@ Differences from the 2026-07-13 table above: the `helper` row numbers are ~30% l
 | commit | `f74ee7aad64` + arch-agnostic regimes tests, Release build |
 | metric / method | same as the blocks above: `test_reduce_accumulate_device_perf` (N=5 median, kernel-iters 200, bf16 in, fp32 out, HiFi4; perf at accum=fp32) and `test_reduce_accumulate_regimes` (11 interleaved trials, median, min-max) |
 
-### Sweep (`test_reduce_accumulate_device_perf`) — median ns per reduce; speedup vs helper; `dispatch` uses the code's thresholds row=4, col=8, scalar=8
+### Sweep (`test_reduce_accumulate_device_perf`) — median ns per reduce; speedup vs helper; `dispatch` used the thresholds then in the code, row=4, col=8, scalar=8 (now row=16, col=8, scalar=8 on BH p150b)
 
 #### dim = row
 
@@ -181,14 +181,15 @@ Differences from the 2026-07-13 table above: the `helper` row numbers are ~30% l
 | not_scalar_4t | scalar | 4 | 589 (588-592) | 609 (609-610) | 0.97x | does_not_help (≤ 1.05) |
 
 (helps_col_8t and not_row_8t ns are the device_perf sweep medians; the regime run's per-trial spread for those two was not captured.)
+The `assert ≥` / `≤` values in the verdict column are the hand-written bounds that run used; the regimes test now derives each bound from the speedup measured on the running arch (`perf_test_utils.regime_bound`).
 
 ### Reading it
 - Crossovers move per dim: row needs 16 tiles on BH p150b (1.24x; 0.89x at 8) vs 8 on WH B0 n150; col and scalar
   pay from 8 tiles on both, but col much more strongly on BH p150b (1.35x at 8, 2.97x at 32 vs WH 1.05x / 1.71x).
 - The WH ordering "REDUCE_COL is the cheaper library datapath" is reversed on BH p150b: library ~36 ns per reduced tile
   for row vs ~62 for col vs ~97 for scalar; `fast` is ~8.5 ns per tile for every dim with a ~530 ns fixed finalize.
-- The code's `dispatch` row threshold (4) is wrong on BH p150b as well as on WH B0 n150: `dispatch` row is 0.69x at
-  4 tiles and 0.89x at 8; a correct BH row threshold is 16. col=8 and scalar=8 are right on BH p150b.
+- `dispatch` with the then-code row threshold (4) was slower than `helper` on BH p150b as on WH B0 n150 (0.69x at
+  4 tiles, 0.89x at 8), so the code's BH p150b thresholds are now row=16, col=8, scalar=8 tiles (WH B0: 8/8/8).
 - Accuracy matches the WH B0 n150 tables in fp32 for row/col; scalar helper fp32 error is ~4x lower on BH p150b
   (3.5e-04 – 4.3e-04 vs 1.4e-03 – 1.7e-03), so the scalar fp32 advantage of `fast` is ~50x here, not ~100x. bf16
   accumulation: `fast` still beats `helper` at ≥ 8 tiles (row 32t 2.0e-03 vs 1.1e-02).

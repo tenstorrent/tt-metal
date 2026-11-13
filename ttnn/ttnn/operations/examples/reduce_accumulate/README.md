@@ -28,7 +28,7 @@ dimensions, checks it against the library, and works out where it wins.
 |---|---|
 | `helper` *(baseline)* | the standard reduce library (`compute_kernel_lib::reduce`, FPU matmul-with-ones), AVG so the `1/N` scaler is applied per dim |
 | `fast` | pairwise `add_tiles(acc_to_dest)` accumulate (copy-seed for odd `N`) → SFPU `sfpu_reduce` finalize in DEST → `mul_unary_tile` for the `1/N` mean |
-| `dispatch` | picks `fast` when `N ≥` a **per-dim** threshold (measured), else `helper` — so it's never slower than the library |
+| `dispatch` | picks `fast` when `N ≥` a **per-dim, per-arch** threshold (measured; `_DISPATCH_MIN`, see *When it helps*), else `helper` — so it's never slower than the library at the measured widths |
 
 ## Measured result — one overview
 *Illustrative — see the **First profiled on** stamp and [`report.md`](report.md); re-run the CLI for your box.
@@ -59,7 +59,8 @@ Single core, bf16 input, fp32 output/accumulation, HiFi4.*
   finalize over the accumulate, so it only wins once there are enough tiles; and the FPU **`REDUCE_COL`
   datapath is cheaper** than `REDUCE_ROW`, so **col needs more tiles (≥8) and wins the least (1.71× vs
   ~2.9×)**. A flat threshold would mis-dispatch col/scalar at ~4 tiles (fast is *slower* there), so the
-  dispatch is per-dim (row=4, col=8, scalar=8) and `dispatch` is consequently never slower than the library.
+  dispatch is per-dim (row=4, col=8, scalar=8 on this 2026-07-13 build; the code's thresholds are now per arch, see
+  *When it helps*) and `dispatch` is consequently never slower than the library.
 - **Accuracy: equal in fp32, better in bf16.** In fp32 both are near-exact. In bf16 the fast path is *more*
   accurate (the SFPU collapses the 32 columns in fp32 internally before one output rounding): row/col bf16
   @32t are ~3–5.5× lower error. For **scalar** it is dramatically better even in fp32 — the fast path
@@ -126,7 +127,7 @@ to amortize its fixed finalize; the crossover is per dim **and** per arch — WH
 | Sweep col, same widths | 0.51 / 0.61 / 0.81 / 1.05 / 1.37 / 1.71× | 0.54 / 0.69 / 0.96 / 1.35 / 2.04 / 2.97× |
 | Sweep scalar, same widths | 0.46 / 0.64 / 0.94 / 1.40 / 2.11 / 2.92× | 0.48 / 0.66 / 0.97 / 1.48 / 2.39 / 3.73× |
 | **Boundary** (first width where `fast` ≥ 1.05×) | row 8 · col 8 (1.05×; 1.37× at 16) · scalar 8 tiles | **row 16** · col 8 · scalar 8 tiles |
-| `dispatch` thresholds in the code (row = 4, col = 8, scalar = 8) | row = 4 is wrong: `dispatch` row @4t = 0.83× of `helper`; use row = 8 | row = 4 is wrong: 0.69× @4t and 0.89× @8t; use row = 16 |
+| `dispatch` thresholds in the code (`_DISPATCH_MIN`, chosen by the input tensor's device arch) | row 8 · col 8 · scalar 8 tiles | **row 16** · col 8 · scalar 8 tiles |
 
 **Why the boards differ:** per reduced tile (from the 1 → 32 tile sweeps), the library costs ~102 ns (row), ~83 ns
 (col), ~173 ns (scalar) on WH B0 n150 but ~36 / ~62 / ~97 ns on BH p150b, while `fast` costs ~30 ns per tile on
@@ -136,8 +137,8 @@ WH B0 n150 and ~8.5 ns on BH p150b for every dim. BH's library REDUCE_ROW is the
 
 - **Helps (>= ~8 tiles reduced per output tile; row >= 16 on BH p150b):** the library pays its matmul-with-ones datapath once per input tile (about 100 ns per tile for REDUCE_ROW on WH B0 n150, ~36 ns on BH p150b), while the fast path pays about 30 ns per tile on WH B0 n150 (~8.5 ns on BH p150b) for `add_tiles` plus a fixed finalize, so the gap grows with tile count.
 - **Does not help (< ~8 tiles reduced):** the fast path has a fixed cost of roughly 800-900 ns on WH B0 n150 (~460-610 ns on BH p150b) (pack, SFPU finalize, `mul_unary_tile`) that the library's 1-4 tile reduce never pays, so at 4 tiles the fast path is still 0.8-0.95x (0.69-0.97x on BH p150b).
-- **Measured crossover on WH B0 (this build):** row 8 tiles (1.10x), col 8 tiles (1.05x), scalar 8 tiles (1.40x); at 4 tiles all three dims are still slower (0.81-0.95x). The row crossover is ~8 tiles, not 4: the table at the top (row `helper` 968 ns at 4 tiles) was measured on an older library, whose REDUCE_ROW is now ~20-30% cheaper (here 3652 ns at 32 tiles, not 5328 ns). The per-dim `dispatch` thresholds in the code (row=4) are therefore stale on this build: `dispatch` row at 4 tiles measured 0.83x of `helper`.
-- **Measured crossover on BH p150b:** row 16 tiles (1.24x; 0.89x at 8), col 8 tiles (1.35x), scalar 8 tiles (1.48x); col is just under 1.0x at 4 tiles (0.96x); scalar at 4 tiles is flat (0.97x on the old reduce helper, 571 -> 543 ns = 1.05x on the current one). The code's row=4 threshold is wrong here too (`dispatch` row 0.69x at 4 tiles, 0.89x at 8).
+- **Measured crossover on WH B0 (this build):** row 8 tiles (1.10x), col 8 tiles (1.05x), scalar 8 tiles (1.40x); at 4 tiles all three dims are still slower (0.81-0.95x). The row crossover is ~8 tiles, not 4: the table at the top (row `helper` 968 ns at 4 tiles) was measured on an older library, whose REDUCE_ROW is now ~20-30% cheaper (here 3652 ns at 32 tiles, not 5328 ns). The code's WH B0 `dispatch` thresholds are therefore row 8, col 8, scalar 8 tiles (with the earlier row=4 threshold, `dispatch` row at 4 tiles measured 0.83x of `helper`).
+- **Measured crossover on BH p150b:** row 16 tiles (1.24x; 0.89x at 8), col 8 tiles (1.35x), scalar 8 tiles (1.48x); col is just under 1.0x at 4 tiles (0.96x); scalar at 4 tiles is flat (0.97x on the old reduce helper, 571 -> 543 ns = 1.05x on the current one). The code's BH p150b `dispatch` thresholds are therefore row 16, col 8, scalar 8 tiles (with the earlier row=4 threshold, `dispatch` row measured 0.69x at 4 tiles, 0.89x at 8). Any other arch, or `dispatch_min(dim)` with no arch, uses the larger value per dim (row 16, col 8, scalar 8 tiles).
 
 *How measured:* WH B0 n150 rows — `test_reduce_accumulate_regimes` (single Tensix core, sharded L1, bf16 input, fp32
 accumulation, HiFi4, 200 in-kernel iters, 11 interleaved trials per variant, median; `helper` = baseline, `fast` =
@@ -145,4 +146,6 @@ lever, speedup = helper_ns / fast_ns; min-max in `report.md`) and the `RA_ACCUMS
 BH p150b rows — the same regimes test and device_perf sweep on that board, `bh-qb-15-special-adamjanovic-for-reservation-139410`,
 2026-10-19 (details in `report.md`).
 Reproduce: `scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_reduce_accumulate.py::test_reduce_accumulate_regimes`
-(same regimes on any board; asserts only what held on every measured board, `measure` regimes only log).
+(same regimes on any board; each regime asserts against a bound derived from the speedup measured on the running
+arch by `perf_test_utils.regime_bound`, with one confirmation pass; an arch with no measured number and `measure`
+regimes only log).

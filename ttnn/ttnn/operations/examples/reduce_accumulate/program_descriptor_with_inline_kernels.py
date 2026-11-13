@@ -19,9 +19,11 @@ Variants:
   helper   — the standard reduce library (FPU matmul-with-ones datapath), the thing the fast path would
              replace. AVG pool type so the 1/N scaler is handled by the library per dimension.
   fast     — the accumulate + SFPU-finalize path above.
-  dispatch — pick per width: `fast` when N >= DISPATCH_MIN_TILES, else `helper`. This is the "universally
+  dispatch — pick per width: `fast` when N >= dispatch_min(dim, arch), else `helper`. This is the "universally
              good" routing a shared reduce helper would use — the fast path wins only once there are
              enough tiles to amortize its finalize over (below that the single matmul-reduce is cheaper).
+             The threshold is per reduce dim and per architecture of the input tensor's device
+             (`_DISPATCH_MIN`: Wormhole B0 row/col/scalar 8/8/8 tiles, Blackhole 16/8/8 tiles).
 
 Everything is sharded in L1 on one Tensix core (no DRAM in the fast path). Correctness is the only
 pass/fail; perf (device kernel ns) and accuracy (vs the fp64 mean) are measured and reported.
@@ -48,16 +50,49 @@ DIMS = tuple(_DIM_ID)
 DTYPES = ("fp32", "bf16")  # accumulation (DEST / SFPU) dtype; input is always bf16
 
 # The fast path amortizes its within-tile finalize over the cross-tile accumulation, so it only wins
-# once there are enough tiles — and the crossover is DIMENSION-DEPENDENT (measured): the FPU
-# REDUCE_COL datapath is cheaper than REDUCE_ROW, so col needs more tiles before the fast path pulls
-# ahead. `dispatch` falls back to the single matmul-reduce below the per-dim threshold. A flat
-# threshold would mis-dispatch col/scalar at ~4 tiles (fast still slower there).
-_DISPATCH_MIN = {"row": 4, "col": 8, "scalar": 8}
+# once enough tiles are reduced per output tile — and the crossover depends on the reduce dim AND the
+# architecture, because the library's per-tile cost per dim differs between boards (on Wormhole B0
+# REDUCE_COL is the cheaper library datapath, on Blackhole REDUCE_ROW is). `dispatch` falls back to the
+# single matmul-reduce below the threshold for (arch, dim). Values: fewest reduced tiles (input tiles
+# per output tile) at which `fast` measured faster than `helper`, from the 1/2/4/8/16/32-tile sweeps in
+# README.md "When it helps" (WH B0 n150 2026-10-12, BH p150b 2026-10-19):
+#   wh  row 8 (1.10x; 0.85x at 4) · col 8 (1.05x; 0.81x at 4) · scalar 8 (1.40x; 0.94x at 4)
+#   bh  row 16 (1.24x; 0.89x at 8) · col 8 (1.35x; 0.96x at 4) · scalar 8 (1.48x; 0.97x at 4)
+_DISPATCH_MIN = {
+    "wh": {"row": 8, "col": 8, "scalar": 8},
+    "bh": {"row": 16, "col": 8, "scalar": 8},
+}
+# Any other (or unknown) architecture: the larger threshold of the measured ones per dim, so `dispatch`
+# picks the library path unless the fast path won on every measured board.
+_DISPATCH_MIN_FALLBACK = {dim: max(table[dim] for table in _DISPATCH_MIN.values()) for dim in _DIM_ID}
 
 
-def dispatch_min(dim):
-    """Fewest reduced tiles at which the fast path beats the reduce library, per reduce dim (measured)."""
-    return _DISPATCH_MIN[dim]
+def _arch_key(arch):
+    """Normalize `arch` to a `_DISPATCH_MIN` key ("wh" / "bh"), or None when it is not one of them.
+
+    Accepts None, a key ("wh" / "bh"), an arch name ("WORMHOLE_B0", "BLACKHOLE", "Arch.BLACKHOLE", any
+    case), a `ttnn.Arch` value, or anything with an `.arch()` method (a ttnn device)."""
+    if arch is None:
+        return None
+    if hasattr(arch, "arch"):
+        try:
+            arch = arch.arch()
+        except Exception:
+            return None
+    name = str(arch).rsplit(".", 1)[-1].upper()
+    return {"WH": "wh", "WORMHOLE_B0": "wh", "BH": "bh", "BLACKHOLE": "bh"}.get(name)
+
+
+def dispatch_min(dim, arch=None):
+    """Fewest reduced tiles at which `dispatch` takes the fast path, for reduce dim `dim` on `arch`.
+
+    `arch` is a ttnn device, a `ttnn.Arch`, an arch name or a key "wh" (Wormhole B0) / "bh" (Blackhole).
+    Default None, and any architecture without a measured row, give the conservative threshold: the
+    larger of the measured values per dim (row 16, col 8, scalar 8 tiles)."""
+    if dim not in _DIM_ID:
+        raise ValueError(f"dim must be one of {DIMS}, got {dim!r}")
+    table = _DISPATCH_MIN.get(_arch_key(arch), _DISPATCH_MIN_FALLBACK)
+    return table[dim]
 
 
 def elements_reduced(dim, num_tiles):
@@ -262,10 +297,10 @@ def _scratch_cb(cb_id, data_format, num=1):
     return ttnn.CBDescriptor(total_size=ts * num, core_ranges=_single_core(), format_descriptors=[fmt])
 
 
-def _resolve(variant, dim, num_tiles):
-    """dispatch picks the physical path by (dim, width); helper/fast are themselves."""
+def _resolve(variant, dim, num_tiles, arch=None):
+    """dispatch picks the physical path by (arch, dim, width); helper/fast are themselves."""
     if variant == "dispatch":
-        return "fast" if num_tiles >= dispatch_min(dim) else "helper"
+        return "fast" if num_tiles >= dispatch_min(dim, arch) else "helper"
     return variant
 
 
@@ -283,7 +318,7 @@ def create_program_descriptor(
     if output_tensor.dtype != ttnn.float32 or output_tensor.layout != ttnn.TILE_LAYOUT:
         raise ValueError("output must be float32 TILE_LAYOUT")
 
-    path = _resolve(variant, dim, num_tiles)
+    path = _resolve(variant, dim, num_tiles, input_tensor.device())
     dim_id = _DIM_ID[dim]
     fp32_dest = accum == "fp32"
     fidelity = math_fidelity or ttnn.MathFidelity.HiFi4  # default HiFi4; pass to sweep the fidelity axis

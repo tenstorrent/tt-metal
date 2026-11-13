@@ -25,6 +25,9 @@ The measure path translates flags into env overrides and runs the device-perf te
 scripts/run_safe_pytest.sh (device lock, profiler, post-run reset). The report path drives the
 full capture -> tt-npe -> aggregate -> HTML pipeline in noc_report.py. Run from the repo root
 with the Python env active.
+
+--write-split / --swap-columns also set NP_SWEEPS=1: those two measurement sweeps are skipped on a
+plain pytest run (sweep_gate in the test file).
 """
 
 import argparse
@@ -63,7 +66,8 @@ def main():
         "--cores",
         type=int,
         default=None,
-        help="line length (<= min grid dim). Default 8; with --write-split/--swap-columns: the whole grid.",
+        help="Tensix cores in the line (<= min grid dim). Default 8; with --write-split/--swap-columns: every "
+        "Tensix core of the grid (--placement grid) or the longest line.",
     )
     ap.add_argument(
         "--block", type=int, default=16, help="pages issued per NoC barrier (in-flight pressure). Default 16."
@@ -94,6 +98,7 @@ def main():
             NP_OUT_MEM=args.out_mem,
             NP_WS_TRIALS=str(args.trials),
             NP_SW_TRIALS=str(args.trials),
+            NP_SWEEPS="1",  # both measurement sweeps are opt-in (sweep_gate); this path is the opt-in
         )
         if args.cores is not None:
             env["NP_CORES"] = str(args.cores)

@@ -157,4 +157,4 @@ median; `math zone` = MATH-thread (TRISC_1) ns per SFPU call from the `DeviceZon
 unpack/copy/pack/CB handshake; speedup = baseline_ns / lever_ns; min-max in `report.md`), 2026-10-12. BH p150b rows —
 the same regimes test on that board, `bh-qb-15-special-adamjanovic-for-reservation-139410`, 2026-10-19 (details in `report.md`).
 Reproduce: `scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_sfpu_tile_scope.py::test_sfpu_tile_scope_regimes`
-(same regimes on any board; asserts only what held on every measured board, `measure` regimes only log).
+(same regimes on any board; each regime is asserted against a bound derived from the speedup measured on that architecture by `perf_test_utils.regime_bound`, an architecture with no measured number logs only, and a missed bound is re-measured once).

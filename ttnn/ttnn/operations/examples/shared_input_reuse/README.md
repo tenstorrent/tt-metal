@@ -37,10 +37,11 @@ and at scale the DRAM interface saturates.
 
 ## CLI — measure your own shapes/params
 ```bash
-python -m ttnn.operations.examples.shared_input_reuse [--chunk-rows 16] [--d-cols 4] [--chunks 19] [--trials 10]
+python -m ttnn.operations.examples.shared_input_reuse [--chunk-rows 16] [--d-cols 4] [--chunks 19] [--trials 10] [--report PATH]
 ```
-The streamed mode runs `test_shared_input_reuse_device_perf`, which rewrites `report.md`; set `SIR_REPORT=<path>` to
-keep the committed report. For the resident window, see the [second situation](#cli-resident-window).
+The streamed mode runs `test_shared_input_reuse_device_perf`, which prints its table and writes nothing unless
+`--report PATH` (the test's `SIR_REPORT`) names a file. For the resident window, see the
+[second situation](#cli-resident-window).
 
 | Flag | Type | Default | Meaning |
 |---|---|---|---|
@@ -48,6 +49,7 @@ keep the committed report. For the resident window, see the [second situation](#
 | `--d-cols` | int | 4 | input width in tiles (tile-cols) |
 | `--chunks` | int | 19 | number of chunks (rows / chunk-rows) |
 | `--trials` | int | 10 | profiled rounds; report shows median |
+| `--report` | path | *(print only)* | also write the Markdown report to this path |
 
 ## Measured result
 *Illustrative — re-run the CLI for your box.* Shared input = 19×16×4 = 1216 tiles ≈ 2.4 MB bf16,
@@ -163,7 +165,11 @@ The 8-tile regime (`measure_chunk8tiles_1216tiles`, formerly `does_not_help_chun
 since the 26-core p150b measured 1.50×; `does_not_help_chunk1tile_1216tiles` (1-tile chunks, `d_cols` = 1: WH B0
 n150 0.70×, 26-core BH p150b 0.64×) carries the does-not-help assertion.
 
-Reproduce (same regimes on any board; asserts only what held on every measured board, `measure` regimes only log):
+Reproduce (same regimes on any board, median of 10 interleaved windows × 5 launches per variant). Each regime is
+asserted against a bound derived from the speedup measured on the running board's architecture
+(`perf_test_utils.regime_bound`: half the measured gain for "helps", ≤ max(1.0, 1.10 × the measured value) for
+"does not help"), with one confirmation pass; an architecture with no measured number, and `measure` regimes, only
+log:
 ```bash
 scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_shared_input_reuse.py::test_shared_input_reuse_regimes
 ```
@@ -205,8 +211,8 @@ python -m ttnn.operations.examples.shared_input_reuse --window [--cores 16,32,64
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--window` | off | run the resident-window sweep (`test_shared_input_reuse_window_sweep`) |
-| `--cores` | `16,32,64,full` | Tensix cores (the squarest rectangle from (0,0); `full` = the whole compute grid) |
+| `--window` | off | run the resident-window sweep (`test_shared_input_reuse_window_sweep`, an opt-in measurement sweep: the CLI sets `SIR_SWEEPS=1`) |
+| `--cores` | `16,32,64,full` | Tensix cores (the squarest rectangle from (0,0); `full` = the whole compute grid; counts that do not fit the grid are skipped) |
 | `--window-tiles` | `1,8,32,128,256` | w width in tiles (2048 B each) = x width |
 | `--stream-mb` | `16,64` | MiB of x (raised to one tile-row per Tensix core when smaller) |
 | `--window-chunk` | 32 | window tiles per DRAM batch / multicast (and per handshake in `lockstep_mcast`) |
@@ -215,18 +221,20 @@ python -m ttnn.operations.examples.shared_input_reuse --window [--cores 16,32,64
 
 ### Measured result — BH p150b, 13×10 = 130 Tensix cores
 `bh-50-special-adamjanovic-for-reservation-143315`, 2026-10-30; median over 3 DRAM placements × 3 × 5 launches
-(regimes: 10 × 5). Full sweep in [`report.md`](report.md).
+(regimes: 10 × 5). Full sweep in [`report.md`](report.md). The regime rows are asserted on Blackhole only (no
+Wormhole number), against bounds derived from these speedups as above; the 32-Tensix-core regime skips on a grid
+with fewer Tensix cores.
 
 | Regime | Tensix cores · window · x | r | `per_core` → `oneshot_mcast` |
 |---|---|---|---|
-| **Helps** (regime, assert ≥ 1.10×) | 130 · 128 tiles (256 KB) · 65 MiB | 0.5 | 437 387 → 364 948 ns **1.20×** |
+| **Helps** (regime) | 130 · 128 tiles (256 KB) · 65 MiB | 0.5 | 437 387 → 364 948 ns **1.20×** |
 | **Helps** | 130 · 128 tiles · 32.5 MiB | 1.0 | 271 336 → 179 437 ns **1.51×** |
 | **Helps** | 130 · 32 tiles (64 KB) · 16 MiB | 0.5 | 111 065 → 91 589 ns **1.21×** |
 | **Helps** | 64 · 128 tiles · 16 MiB | 1.0 | 139 440 → 103 124 ns **1.35×** |
 | **Helps** | 32 · 128 tiles · 16 MiB | 0.5 | 130 046 → 110 874 ns **1.17×** |
 | **Helps** | 16 · 256 tiles (512 KB) · 16 MiB | 0.5 | 187 858 → 152 786 ns **1.23×** |
-| **Does not help** (regime, assert ≤ 1.05×) | 130 · 8 tiles (16 KB) · 16 MiB | 0.125 | 92 383 → 92 609 ns **1.00×** |
-| **Does not help** (regime, assert ≤ 1.05×) | 32 · 128 tiles · 64 MiB | 0.125 | 442 016 → 442 592 ns **1.00×** (sweep 0.96×) |
+| **Does not help** (regime) | 130 · 8 tiles (16 KB) · 16 MiB | 0.125 | 92 383 → 92 609 ns **1.00×** |
+| **Does not help** (regime) | 32 · 128 tiles · 64 MiB | 0.125 | 442 016 → 442 592 ns **1.00×** (sweep 0.96×) |
 | **Does not help** | 130 · 32 tiles · 64 MiB | 0.125 | 373 774 → 358 502 ns **1.04×** |
 | **Does not help** | 64 · 1 tile (2 KB) · 16 MiB | 0.008 | 93 771 → 97 776 ns **0.96×** |
 | **Does not help** (regime, `lockstep_mcast`, 1-tile chunks) | 130 · 32 tiles · 16 MiB | 0.5 | 124 342 → 141 805 ns **0.88×** |

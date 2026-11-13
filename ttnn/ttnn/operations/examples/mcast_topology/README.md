@@ -176,7 +176,7 @@ ns were not kept. More WH B0 n150 points (8×1, 8×2, 16×64, 56×56, …) are i
   regime, plus a probe with the same measurement code for the other rows; `bh-qb-15-special-adamjanovic-for-reservation-139410`, 2026-10-19.
 - BH P150b (bh-49) / P100a: `test_mcast_topology_device_perf`, boxes and dates under *Measured result* above.
 
-Reproduce (same regimes on any board; asserts only what held on every measured board, `measure` regimes only log):
+Reproduce (same regimes on any board; each regime asserts only on an architecture it was measured on, with a bound derived from that number by `perf_test_utils.regime_bound`; others and `measure` regimes only log):
 ```bash
 scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_mcast_topology.py::test_mcast_topology_regimes
 ```

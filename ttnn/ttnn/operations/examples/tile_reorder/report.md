@@ -16,7 +16,7 @@ WH B0 n150 numbers live in [`README.md`](README.md) (*When it helps / when it do
 on the WH B0 8×8 grid). `(3840, 1024)` = 3840 tiles = 120 tile-rows → one tile-row (32 tiles) per Tensix core on
 12×10, the BH equivalent of the WH B0 shape.
 
-| case | shape | output | scatter median ns | relocate median ns | speedup | current test asserts |
+| case | shape | output | scatter median ns | relocate median ns | speedup | test asserted at the time |
 |---|---|---|---|---|--:|---|
 | helps_l1_interleaved_out | (3840, 1024) | L1 interleaved | 38446 | 25612 | **1.50×** | ≥ 1.20× |
 | flat_l1_local_shard_out | (3840, 1024) | L1 `HEIGHT_SHARDED`, 1 tile-row per Tensix core | 25645 | 25448 | 1.01× | ≤ 1.05× |

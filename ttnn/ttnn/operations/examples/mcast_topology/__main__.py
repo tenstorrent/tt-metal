@@ -3,7 +3,7 @@
 
 """CLI: measure work-split topology (and the multicast shape it forces) on YOUR matmul shape.
 
-    python -m ttnn.operations.examples.mcast_topology [--mt 8] [--nt 32] [--kt 4] [--trials 5]
+    python -m ttnn.operations.examples.mcast_topology [--mt 8] [--nt 32] [--kt 4] [--trials 5] [--report PATH]
 
 Runs the device-perf test through scripts/run_safe_pytest.sh (device lock, in-process profiler,
 post-run reset) and prints the per-variant core occupancy + device kernel duration. Run from the
@@ -29,6 +29,7 @@ def main():
         default="all",
         help="which method(s) to run: all | per_core_dram | mcast_1d_pair (comma-separated). Default all.",
     )
+    ap.add_argument("--report", help="append the result table to this Markdown file; default: print only")
     args = ap.parse_args()
 
     env = dict(
@@ -39,6 +40,8 @@ def main():
         MCT_TRIALS=str(args.trials),
         MCT_VARIANTS=args.variant,
     )
+    if args.report:
+        env["MCT_REPORT"] = args.report
     cmd = ["scripts/run_safe_pytest.sh", "--run-all", _TEST]
     print(f"[mcast_topology] M={args.mt}t N={args.nt}t K={args.kt}t trials={args.trials} variant={args.variant}")
     print(f"[mcast_topology] {' '.join(cmd)}")

@@ -37,6 +37,12 @@ import pytest
 import torch
 
 import ttnn
+from tests.ttnn.unit_tests.operations.examples.perf_test_utils import (
+    check_regime,
+    interleaved_ns,
+    read_kernel_ns,
+    require_grid,
+)
 from ttnn.operations.examples.mcast_topology import mcast_topology, VARIANTS
 from ttnn.operations.examples.mcast_topology.mcast_topology import PROBES, core_assignment, layout
 
@@ -56,11 +62,9 @@ SELECTED = VARIANTS if _sel == "all" else tuple(v for v in VARIANTS if v in _sel
 N_WARMUP = 3
 N_PROFILE_ITERS = int(os.environ.get("MCT_TRIALS", "5"))
 _INNER = 5
-_DURATION_KEY = "DEVICE KERNEL DURATION [ns]"
-REPORT_PATH = os.environ.get(
-    "MCT_REPORT",
-    str(Path(__file__).resolve().parents[5] / "ttnn/ttnn/operations/examples/mcast_topology/report.md"),
-)
+# The device-perf test appends its table to this file only when the caller names one (the CLI's --report);
+# a plain run never writes into the tracked report.md.
+REPORT_PATH = os.environ.get("MCT_REPORT")
 
 
 def _operands(device, mt=MT, nt=NT, kt=KT):
@@ -92,31 +96,16 @@ def _expected_probes(device, a, b, variant, mt=MT, nt=NT, kt=KT):
     return out
 
 
-def _read_kernel_ns(device):
-    ttnn.ReadDeviceProfiler(device)
-    per_chip = ttnn.get_latest_programs_perf_data()
-    total, found = 0.0, False
-    for programs in (per_chip or {}).values():
-        for program in programs:
-            results = getattr(program, "program_analyses_results", None) or {}
-            entry = results.get(_DURATION_KEY)
-            if entry is None:
-                continue
-            total += float(entry.duration)
-            found = True
-    return total if found else None
-
-
 def _measure_ns(device, run_fn):
     for _ in range(N_WARMUP):
         run_fn()
     ttnn.synchronize_device(device)
-    _read_kernel_ns(device)
+    read_kernel_ns(device)
     samples = []
     for _ in range(N_PROFILE_ITERS):
         for _ in range(_INNER):
             run_fn()
-        total = _read_kernel_ns(device)
+        total = read_kernel_ns(device)
         if total is None:
             return None, None
         samples.append(total / _INNER)
@@ -185,50 +174,39 @@ def test_mcast_topology_device_perf(device):
         logger.info(line)
         lines.append(line)
 
-    Path(REPORT_PATH).parent.mkdir(parents=True, exist_ok=True)
-    with open(REPORT_PATH, "a") as f:
-        f.write(f"\n## {arch} — {box}\n\n```\n{header}\n" + "\n".join(lines) + "\n```\n")
+    if REPORT_PATH:
+        Path(REPORT_PATH).parent.mkdir(parents=True, exist_ok=True)
+        with open(REPORT_PATH, "a") as f:
+            f.write(f"\n## {arch} — {box}\n\n```\n{header}\n" + "\n".join(lines) + "\n```\n")
 
 
-def _measure_interleaved_ns(device, run_fns, trials=10):
-    """Median/min/max ns per op per callable, windows interleaved A,B,A,B,... to limit drift."""
-    for fn in run_fns.values():
-        for _ in range(N_WARMUP):
-            fn()
-    ttnn.synchronize_device(device)
-    _read_kernel_ns(device)
-    samples = {k: [] for k in run_fns}
-    for _ in range(trials):
-        for k, fn in run_fns.items():
-            for _ in range(_INNER):
-                fn()
-            total = _read_kernel_ns(device)
-            assert total is not None, f"profiler produced no data for {k}"
-            samples[k].append(total / _INNER)
-    return {k: (statistics.median(v), min(v), max(v)) for k, v in samples.items()}
-
-
-# (Mt, Nt, Kt, regime, threshold). bf16 tiles. Gr x Gc = largest divisors of Mt / Nt fitting the grid.
-#   helps:          Mt=8, Nt=32, Kt=4 -> 8x8 = 64 Tensix cores, lines of 8
-#   does_not_help:  Mt=4, Nt=4,  Kt=4 -> 4x4 = 16 Tensix cores, lines of 4
-#                   Mt=2, Nt=2,  Kt=4 -> 2x2 =  4 Tensix cores, lines of 2
-# Thresholds hold on every measured board (WH B0 n150, BH p150b); `measure` regimes flip between boards and only log
-# -- numbers per board in README.md.
+# (Mt, Nt, Kt, regime, measured). bf16 tiles. Gr x Gc = largest divisors of Mt / Nt fitting the grid, so each
+# case fixes the grid it needs (columns x rows of Tensix cores); a smaller grid is a different experiment and
+# the case is skipped:
+#   helps:          Mt=8, Nt=32, Kt=4 -> 8x8 = 64 Tensix cores, lines of 8 (needs 8 columns x 8 rows)
+#   does_not_help:  Mt=4, Nt=4,  Kt=4 -> 4x4 = 16 Tensix cores, lines of 4 (needs 4 columns x 4 rows)
+#                   Mt=2, Nt=2,  Kt=4 -> 2x2 =  4 Tensix cores, lines of 2 (needs 2 columns x 2 rows)
+# The bound is derived from the per-arch measured speedup (per_core_dram ns / mcast_1d_pair ns) by
+# `perf_test_utils.regime_bound` (helps: half the measured gain, never closer than the noise margin;
+# does_not_help: at most the measured value plus the noise margin, never below 1.0). An architecture without a
+# measured number is logged, not asserted; a missed bound is re-measured once and the samples are pooled.
+# `measure` regimes flip between boards and only log -- numbers per board in README.md.
 _REGIME_CASES = [
-    pytest.param(8, 32, 4, "helps", 1.45, id="helps_8x8_64cores"),  # WH 1.87x, BH 2.01x
-    pytest.param(4, 4, 4, "does_not_help", 1.08, id="does_not_help_4x4_16cores"),  # WH 1.03x, BH 0.80x
-    pytest.param(2, 2, 4, "does_not_help", 1.0, id="does_not_help_2x2_4cores"),  # WH 0.73x, BH 0.65x
+    pytest.param(8, 32, 4, "helps", {"wh": 1.87, "bh": 2.01}, (8, 8), id="helps_8x8_64cores"),
+    pytest.param(4, 4, 4, "does_not_help", {"wh": 1.03, "bh": 0.80}, (4, 4), id="does_not_help_4x4_16cores"),
+    pytest.param(2, 2, 4, "does_not_help", {"wh": 0.73, "bh": 0.65}, (2, 2), id="does_not_help_2x2_4cores"),
 ]
 
 
-@pytest.mark.parametrize("mt,nt,kt,regime,threshold", _REGIME_CASES)
-def test_mcast_topology_regimes(device, mt, nt, kt, regime, threshold):
-    """When two 1-D multicasts beat per-core DRAM reads, and when they do not.
+@pytest.mark.parametrize("mt,nt,kt,regime,measured,min_grid", _REGIME_CASES)
+def test_mcast_topology_regimes(device, mt, nt, kt, regime, measured, min_grid, request):
+    """When two 1-D multicasts beat per-Tensix-core DRAM reads, and when they do not.
 
     The saving is DRAM reads removed (line length x fewer); the cost is the per-line semaphore
-    handshake and the sender's serial read. With short lines (few cores per row/column) the saving is
+    handshake and the sender's serial read. With short lines (few Tensix cores per row/column) the saving is
     small and the fixed handshake cost is not amortized.
     """
+    require_grid(device, *min_grid, what=f"Mt={mt} Nt={nt} work split")
     lay = layout(device, mt, nt)
     tt_a, tt_b, a, b = _operands(device, mt, nt, kt)
 
@@ -241,18 +219,15 @@ def test_mcast_topology_regimes(device, mt, nt, kt, regime, threshold):
                 assert torch.equal(have, want.to(torch.bfloat16).to(torch.float32)), f"{variant}: wrong probe"
         fns[variant] = lambda v=variant: mcast_topology(tt_a, tt_b, variant=v)
 
-    res = _measure_interleaved_ns(device, fns)
-    base, mc = res["per_core_dram"][0], res["mcast_1d_pair"][0]
-    speedup = base / mc
-    arch = {"WORMHOLE_B0": "WH_B0", "BLACKHOLE": "BH"}.get(str(device.arch()).rsplit(".", 1)[-1], str(device.arch()))
-    logger.info(
-        f"[{arch}] [mcast_topology regimes] {regime}: Mt={mt} Nt={nt} Kt={kt} split={lay['rows']}x{lay['cols']} "
-        f"({lay['cores']} Tensix cores) | per_core_dram {base:.0f} ns "
-        f"[{res['per_core_dram'][1]:.0f}-{res['per_core_dram'][2]:.0f}]  mcast_1d_pair {mc:.0f} ns "
-        f"[{res['mcast_1d_pair'][1]:.0f}-{res['mcast_1d_pair'][2]:.0f}]  speedup {speedup:.2f}x  "
-        f"trials=10x{_INNER}"
+    def measure():
+        samples = interleaved_ns(device, fns, trials=10, launches=_INNER, warmup=N_WARMUP)
+        return samples["per_core_dram"], samples["mcast_1d_pair"]
+
+    check_regime(
+        device,
+        request.node.callspec.id,
+        regime,
+        measured,
+        measure,
+        detail=f"Mt={mt} Nt={nt} Kt={kt} split={lay['rows']}x{lay['cols']} ({lay['cores']} Tensix cores)",
     )
-    if regime == "helps":
-        assert speedup >= threshold, f"expected speedup >= {threshold:.2f}x, got {speedup:.2f}x"
-    else:
-        assert speedup <= threshold, f"expected speedup <= {threshold:.2f}x (no gain), got {speedup:.2f}x"

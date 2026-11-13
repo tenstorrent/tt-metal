@@ -26,8 +26,6 @@ os.environ.setdefault("TT_METAL_DEVICE_PROFILER", "1")
 os.environ.setdefault("TT_METAL_PROFILER_MID_RUN_DUMP", "1")
 os.environ.setdefault("TT_METAL_PROFILER_CPP_POST_PROCESS", "1")
 
-import statistics
-
 import pytest
 import torch
 
@@ -37,6 +35,12 @@ from ttnn.operations.examples.double_buffer import double_buffer, VARIANTS
 from loguru import logger
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.unit_tests.operations.examples.perf_test_utils import (
+    check_regime,
+    interleaved_ns,
+    read_kernel_ns,
+    require_cores,
+)
 
 TILE = 32
 # The "transfer size" axis: bytes per tile (the NoC transaction size) is set by the
@@ -60,8 +64,6 @@ DTYPE, DTYPE_PCC = _DTYPES[DTYPE_NAME]
 N_WARMUP = 5
 N_PROFILE_ITERS = int(os.environ.get("DB_TRIALS", "20"))
 
-_DURATION_KEY = "DEVICE KERNEL DURATION [ns]"
-
 
 def _make_input(device, dtype=DTYPE):
     torch.manual_seed(0)
@@ -73,35 +75,15 @@ def _make_input(device, dtype=DTYPE):
     return tt_input
 
 
-def _read_kernel_ns(device):
-    """Sum of on-device kernel duration over programs dispatched since the last read.
-
-    ReadDeviceProfiler finishes the queue before reading and *consumes* the window,
-    so a flush-read then a work-read brackets exactly the ops run in between.
-    """
-    ttnn.ReadDeviceProfiler(device)
-    per_chip = ttnn.get_latest_programs_perf_data()
-    total, found = 0.0, False
-    for programs in (per_chip or {}).values():
-        for program in programs:
-            results = getattr(program, "program_analyses_results", None) or {}
-            entry = results.get(_DURATION_KEY)
-            if entry is None:
-                continue
-            total += float(entry.duration)
-            found = True
-    return total if found else None
-
-
 def _measure_ns(device, run_fn):
     """Average ns/op: warm up, flush, run N, read, divide by N."""
     for _ in range(N_WARMUP):
         run_fn()
     ttnn.synchronize_device(device)
-    _read_kernel_ns(device)  # flush the warmup window
+    read_kernel_ns(device)  # flush the warmup window (ReadDeviceProfiler consumes the window)
     for _ in range(N_PROFILE_ITERS):
         run_fn()
-    total_ns = _read_kernel_ns(device)
+    total_ns = read_kernel_ns(device)
     return total_ns / N_PROFILE_ITERS if total_ns is not None else None
 
 
@@ -189,20 +171,29 @@ def test_double_buffer_device_perf(device):
 
 
 # ---------------------------------------------------------------------------
-# When batching + double buffering helps / when it does not (numbers below: WH B0 n150; BH p150b in README.md).
+# When batching + double buffering helps / when it does not. `measured` holds the speedup (trap ns /
+# lever ns) measured per architecture: "wh" = WH B0 n150 (8x8 = 64 Tensix cores), "bh" = BH p150b
+# (12x10 = 120 Tensix cores). Per-board tables: README.md / report.md.
 #
-# Baseline = the trap (block=1, single_buffered: one read, barrier, one-tile CB).
-# Lever    = block=4, double_buffered (4 reads per barrier, CB = 2*4 tiles).
+# Baseline = the trap (block=1, single_buffered: one read, barrier, one-tile circular buffer).
+# Lever    = block=4, double_buffered (4 reads per barrier, circular buffer = 2*4 tiles).
 #
-#   helps_1core      1 Tensix core, 256 tiles bf16: latency-bound (~6.5 GB/s) -> ~2.8x
-#   helps_8cores     8 Tensix cores, 512 tiles/core: aggregate trap BW ~51 GB/s, far below
-#                    the DRAM ceiling, so every core still gains                  -> ~2.8x
-#   does_not_help    64 Tensix cores, 64 tiles/core: the trap alone already moves ~190 GB/s
-#                    (DRAM peak), so there is no idle NoC time left to recover     -> ~0.98x
+#   helps_1core      1 Tensix core, 256 tiles bf16: latency-bound (~6.5 GB/s on WH B0)
+#   helps_8cores     8 Tensix cores, 512 tiles per Tensix core: aggregate trap BW ~51 GB/s on WH B0,
+#                    far below the DRAM ceiling, so every Tensix core still gains
+#   small_64cores    64 Tensix cores, 64 tiles per Tensix core: on WH B0 the trap alone already moves
+#                    ~190 GB/s (DRAM peak), so there is no idle NoC time left to recover; BH p150b's
+#                    ~2.2x higher DRAM ceiling leaves a small gain
 #
-# A trial = mean device kernel duration over _LAUNCHES_PER_TRIAL launches of one
-# variant (one profiler window). Baseline/lever trials are interleaved A,B,A,B and
-# the median of _N_TRIALS trials per variant is compared.
+# Measurement: perf_test_utils.interleaved_ns - N_WARMUP warm-up rounds, then _N_TRIALS trials per
+# variant, a trial = mean device kernel duration over _LAUNCHES_PER_TRIAL launches of one variant
+# (one profiler window), variants interleaved with a rotating start; medians compared.
+#
+# Assertion (perf_test_utils.check_regime): the bound is derived from the number measured on THIS
+# architecture by perf_test_utils.regime_bound (helps: speedup >= min(half the measured gain,
+# measured / 1.10), not asserted when that is below 1.02x; does_not_help: speedup <= max(1.0,
+# measured x 1.10)). An architecture with no measured number is logged, not asserted. A missed bound
+# is re-measured once and judged on the pooled samples.
 # ---------------------------------------------------------------------------
 
 _N_TRIALS = 12
@@ -210,43 +201,21 @@ _LAUNCHES_PER_TRIAL = 5
 _BASE_CFG = dict(variant="single_buffered", block=1)
 _LEVER_CFG = dict(variant="double_buffered", block=4)
 
-# (regime id, shape, cores, kind, threshold). helps -> 1 + 0.5*(measured-1) (floor 1.05);
-# does_not_help -> <= bound.
-# Thresholds hold on every measured board (WH B0 n150, BH p150b); `measure` regimes flip between boards and only log
-# - numbers per board in README.md.
+# (regime id, shape, Tensix cores, kind, measured speedup per arch)
 _REGIMES = [
-    ("helps_1core_256tiles", (512, 512), 1, "helps", 1.8),  # WH 2.63x, BH 2.95x
-    ("helps_8cores_512tiles_per_core", (2048, 2048), 8, "helps", 1.85),  # WH 2.73x, BH 2.77x
-    # WH 0.98x, BH 1.08x - at most a small gain once DRAM is near saturation
-    ("small_64cores_64tiles_per_core", (2048, 2048), 64, "does_not_help", 1.15),
+    ("helps_1core_256tiles", (512, 512), 1, "helps", {"wh": 2.63, "bh": 2.95}),
+    ("helps_8cores_512tiles_per_core", (2048, 2048), 8, "helps", {"wh": 2.73, "bh": 2.77}),
+    # at most a small gain once DRAM is near saturation
+    ("small_64cores_64tiles_per_core", (2048, 2048), 64, "does_not_help", {"wh": 0.98, "bh": 1.08}),
 ]
 
 
-def _trial_ns(device, run_fn):
-    for _ in range(_LAUNCHES_PER_TRIAL):
-        run_fn()
-    total = _read_kernel_ns(device)
-    assert total is not None, "profiler produced no data (profiler-enabled build?)"
-    return total / _LAUNCHES_PER_TRIAL
-
-
-def _interleaved(device, run_base, run_lever):
-    for _ in range(N_WARMUP):
-        run_base()
-        run_lever()
-    ttnn.synchronize_device(device)
-    _read_kernel_ns(device)  # flush warmup window
-    base, lever = [], []
-    for _ in range(_N_TRIALS):
-        base.append(_trial_ns(device, run_base))
-        lever.append(_trial_ns(device, run_lever))
-    return base, lever
-
-
-@pytest.mark.parametrize("regime,shape,cores,kind,threshold", _REGIMES, ids=[r[0] for r in _REGIMES])
-def test_double_buffer_regimes(device, regime, shape, cores, kind, threshold):
+@pytest.mark.parametrize("regime,shape,cores,kind,measured", _REGIMES, ids=[r[0] for r in _REGIMES])
+def test_double_buffer_regimes(device, regime, shape, cores, kind, measured):
     """Trap (block=1, single_buffered) vs lever (block=4, double_buffered) where the
     pipeline is latency-bound and where DRAM bandwidth is already saturated."""
+    # A fixed Tensix-core count: the regime at fewer Tensix cores is a different experiment.
+    require_cores(device, cores, what=f"double_buffer {regime}")
     torch.manual_seed(0)
     torch_input = torch.rand(shape, dtype=torch.float32) * 2.0 - 1.0
     tt_input = ttnn.from_torch(
@@ -258,19 +227,25 @@ def test_double_buffer_regimes(device, regime, shape, cores, kind, threshold):
     for run_fn in (run_base, run_lever):
         assert_with_pcc(expected, ttnn.to_torch(run_fn()).to(torch.float32), 0.9999)
 
-    base, lever = _interleaved(device, run_base, run_lever)
-    b_med, l_med = statistics.median(base), statistics.median(lever)
-    speedup = b_med / l_med
     num_pages = (shape[0] // TILE) * (shape[1] // TILE)
     traffic = 2 * num_pages * tt_input.buffer_aligned_page_size()
-    logger.info(
-        f"[{device.arch()}] double_buffer {regime}: shape={shape} tiles={num_pages} cores={cores} "
-        f"tiles/core={num_pages // cores} | trap median {b_med:.1f} ns (min {min(base):.1f} max {max(base):.1f}, "
-        f"{traffic / b_med:.1f} GB/s) | block4+double median {l_med:.1f} ns (min {min(lever):.1f} "
-        f"max {max(lever):.1f}, {traffic / l_med:.1f} GB/s) | speedup {speedup:.2f}x | "
-        f"trials {_N_TRIALS}x{_LAUNCHES_PER_TRIAL} launches"
+
+    def measure():
+        samples = interleaved_ns(
+            device,
+            {"base": run_base, "lever": run_lever},
+            trials=_N_TRIALS,
+            launches=_LAUNCHES_PER_TRIAL,
+            warmup=N_WARMUP,
+        )
+        return samples["base"], samples["lever"]
+
+    check_regime(
+        device,
+        f"double_buffer {regime}",
+        kind,
+        measured,
+        measure,
+        detail=f"shape={shape} tiles={num_pages} Tensix cores={cores} tiles per Tensix core={num_pages // cores} "
+        f"DRAM traffic={traffic} B per launch (GB/s = bytes / ns)",
     )
-    if kind == "helps":
-        assert speedup >= threshold, f"{regime}: expected >= {threshold}x, got {speedup:.2f}x"
-    else:
-        assert speedup <= threshold, f"{regime}: expected <= {threshold}x, got {speedup:.2f}x"

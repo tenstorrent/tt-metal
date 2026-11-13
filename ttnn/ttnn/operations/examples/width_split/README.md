@@ -71,7 +71,10 @@ Add `--layout row_major` for the same op on `Layout::ROW_MAJOR` sticks (defaults
 --wts 2,4,8,16,32,64 --ks 1,2,4`; the table adds stick bytes, piece bytes per DRAM transfer, the transfer count
 and transfers per second).
 `--rows` is the tile-row count `R_t`, `--wts` the tile-columns `Wt`, `--ks` the split factors (a `k` is
-kept when it divides `Wt` and `R_t · k ≤ max-oversub × grid`). The table prints Tensix cores, tiles per
+kept when it divides `Wt`, `k` ≤ the grid's Tensix cores, `R_t · k ≤ max-oversub × grid` and its circular buffers fit
+the 900 KiB = 921 600 B per-Tensix-core L1 budget that `validate_reduce` enforces; a `Wt` whose `k = 1` baseline does
+not fit is skipped). The reduce sweeps are opt-in: `--reduce` sets `WS_SWEEPS=1`; run the tests directly with
+`EXAMPLES_SWEEPS=1 scripts/run_safe_pytest.sh ...`. The table prints Tensix cores, tiles per
 slice, ns, DRAM GB/s (input + output bytes ÷ time) and the speedup vs `k = 1`.
 
 ## Takeaway for your own kernels
@@ -137,7 +140,9 @@ and out; baseline = `single_core`, lever = `width_split` (1 tile per Tensix core
   `bh-qb-15-special-adamjanovic-for-reservation-139410`, 2026-10-19, commit `f74ee7aad64`.
 
 Reproduce: `scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_width_split.py::test_width_split_regimes`
-(same regimes on any board; asserts only what held on every measured board, `measure` regimes only log).
+(same regimes on any board; each asserts against the bound `perf_test_utils.regime_bound` derives from the
+number measured on that architecture, an architecture without a measured number only logs, `measure` regimes
+only log; the `R_t = 64` reduce regimes skip on a grid where both variants land on the same Tensix-core count).
 
 
 ## Reduce case — when the row needs a cross-core combine

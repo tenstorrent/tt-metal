@@ -19,7 +19,7 @@ perf = median ns per whole-block reduce (fp32 accum). accuracy = bf16 accum, max
 Variants: reduce_tile = library default (ReduceAlgorithm::Auto -> ReduceTile, FPU matmul-with-ones); acc_via_add = library with the opt-in ReduceAlgorithm::AccumulateViaAdd; inline = the same algorithm as a hand-written standalone kernel with the one-time init hoisted OUT of the kernel_iters loop. The library no longer runs the heavy binary_op_init_common per call (that is a once-per-kernel boot init); per reduce() call acc_via_add does only a light format reconfig + SFPU-macro load, so it now matches inline to within a small fixed per-call cost. Accuracy of acc_via_add matches inline (same algorithm). AccumulateViaAdd uses one DST register per output tile, so it reduces an arbitrary block without the REDUCE_COL DST/chunk limit the library default chunks around.
 
 ## 2026-10-12 - regime measurements (Wormhole B0 n150)
-Source: `test_reduce_block_regimes`, single core, bf16 in, fp32 accumulation, HiFi4, 200 kernel iters, 11 interleaved trials per variant; median ns per whole-block reduce (min-max in parentheses). The table at the top of this file was measured on Blackhole.
+Source: `test_reduce_block_regimes`, single Tensix core, bf16 in, fp32 accumulation, HiFi4, 200 kernel iters, 11 interleaved trials per variant; median ns per whole-block reduce (min-max in parentheses). The table at the top of this file was measured on Blackhole.
 
 | dim | block (Ht,Wt,NC) | reduced tiles | out tiles | reduce_tile | accumulate_via_add | inline | speedup (via_add / inline) |
 |---|---|---:|---:|---:|---:|---:|---|
@@ -74,6 +74,7 @@ Three runs of the regime test gave speedups identical to +-0.01x (row32 2.09x x3
 | scalar | (2,2,1) | 4 | 1 | 593 (592-593) | 550 (549-550) | 515 | 1.08x / 1.15x | measure (logged only — verdict differs by arch) — WH 1.02x |
 
 (row (2,8,1) ns are the device_perf sweep medians; the regime run's spread for it and for the two 2-tile col/scalar rows was not captured.)
+The `assert ≥` / `≤` values in the verdict column are the hand-written bounds that run used; the regimes test now derives each bound from the speedup measured on the running arch (`perf_test_utils.regime_bound`).
 
 ### Reading it
 - Crossovers move per dim: col and scalar pay from 4 reduced tiles on BH p150b (1.11x / 1.08x), row still loses at

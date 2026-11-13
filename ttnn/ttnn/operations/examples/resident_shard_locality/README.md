@@ -54,13 +54,13 @@ python -m ttnn.operations.examples.resident_shard_locality [options]
 | `--variant` | `{all,resplit,local,local_alias}` (one or more) | `all` | which method(s) to run and compare; `local_alias` is skipped (shown as n/a) when the shard is not whole tiles |
 | `--trials` | int | `1` | measured passes (median); raise to 3 only if a number looks implausible |
 | `--kernel-iters` | int | `1` | in-kernel loop count — **1 = per-launch latency; large = steady-state throughput** |
-| `--report` | path | *(print only)* | also write a report file (the CLI never overwrites the committed `report.md`) |
+| `--report` | path | *(print only)* | also write the Markdown report to this path; without it nothing is written |
 
 **Example-specific flags:**
 
 | Flag | Type | Default | Meaning |
 |---|---|---|---|
-| `--layout` | `{height,block}` | `height` | `TensorMemoryLayout::HEIGHT_SHARDED` or `BLOCK_SHARDED` |
+| `--memory-layout` | `{height,block}` | `height` | `TensorMemoryLayout` of the custom shard: `height` = `TensorMemoryLayout::HEIGHT_SHARDED`, `block` = `TensorMemoryLayout::BLOCK_SHARDED` |
 | `--cores` | `grid` \| N \| `ROWS,COLS` | `grid` | Tensix cores: whole compute grid, N row-major (height), or a ROWS×COLS rectangle (block) |
 | `--shard-rows` | int (sticks) | *(sweep)* | sticks per Tensix core (shard height) |
 | `--shard-width` | int (elements) | *(sweep)* | elements per stick (shard width); bytes per stick = this × 2 (bf16) or × 4 (fp32) |
@@ -74,11 +74,11 @@ python -m ttnn.operations.examples.resident_shard_locality [options]
 python -m ttnn.operations.examples.resident_shard_locality --shard-rows 72 --shard-width 544
 
 # a BLOCK_SHARDED 4x4 grid, median of 3
-python -m ttnn.operations.examples.resident_shard_locality --layout block --cores 4,4 --shard-rows 50 --shard-width 96 --trials 3
+python -m ttnn.operations.examples.resident_shard_locality --memory-layout block --cores 4,4 --shard-rows 50 --shard-width 96 --trials 3
 
 # a wide HEIGHT row (127 tiles per stick) and a partial-width fp32 BLOCK shard
 python -m ttnn.operations.examples.resident_shard_locality --shard-rows 24 --shard-width 4064
-python -m ttnn.operations.examples.resident_shard_locality --layout block --shard-rows 13 --shard-width 632 --dtype fp32
+python -m ttnn.operations.examples.resident_shard_locality --memory-layout block --shard-rows 13 --shard-width 632 --dtype fp32
 
 # is the resplit penalty NoC direction? (ablation)
 python -m ttnn.operations.examples.resident_shard_locality --cores 13 --shard-rows 72 --shard-width 544 --swap-nocs
@@ -140,8 +140,12 @@ resident_shard_locality   box=bh-50  arch=BH  clock=1350MHz   N=1   kernel-iters
   copy behind compute).
 
 ## When it helps / when it does not
-Measured on device by `test_resident_shard_locality_regimes` (interleaved A/B, median of 5; asserts the
-direction). Conditions in portable units: sticks per Tensix core, bytes per stick, Tensix cores.
+Measured on device by `test_resident_shard_locality_regimes` (interleaved A/B, median of 5 when these numbers
+were taken). The test now takes the median of 7 interleaved trials per variant and asserts the direction
+against a bound derived from these BH numbers (`perf_test_utils.regime_bound`: half the measured gain for
+"helps", ≤ max(1.0, 1.10 × the measured value) for "does not help"), with one confirmation pass; on an
+architecture with no measured number (Wormhole) it logs without asserting. `[1, 8192]` needs 128 Tensix cores
+and skips on a smaller grid. Conditions in portable units: sticks per Tensix core, bytes per stick, Tensix cores.
 
 | Regime | Condition | Shape(s) | Baseline ns | Lever ns | Speedup | Trials | Board |
 |---|---|---|---|---|---|---|---|
@@ -173,9 +177,14 @@ chunked (3 × 16 KB 1.74×, 17 × 10 KB 11.2×, 24 × 8 KB 7.9×). `local_alias`
 legal domain; its gain shrinks as tile-rows per Tensix core grow (1.21× at 3).
 
 ## Run the predefined sweep (regenerates `report.md`)
+The sweep is opt-in (`RSL_SWEEPS=1`; the CLI sets it) and writes a report only to the path in `RSL_REPORT`:
 ```bash
-scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_resident_shard_locality.py
+RSL_SWEEPS=1 RSL_REPORT=ttnn/ttnn/operations/examples/resident_shard_locality/report.md \
+    scripts/run_safe_pytest.sh --run-all \
+    tests/ttnn/unit_tests/operations/examples/test_resident_shard_locality.py::test_resident_shard_locality_device_perf
 ```
+or `python -m ttnn.operations.examples.resident_shard_locality --report ttnn/ttnn/operations/examples/resident_shard_locality/report.md`.
+Sweep cases on 128 Tensix cores (the sub-tile-row rows) are left out on a smaller grid.
 
 ## Code
 `program_descriptor_with_inline_kernels.py`: `chunk_plan()` (balanced ≤ 32-tile column chunks) and

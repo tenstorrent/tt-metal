@@ -116,11 +116,11 @@ Wt = 4 tiles 1.54×.
 
 ### Regimes (`test_width_split_regimes` on BH p150b)
 
-| regime | W | Wt (tiles) | width_split Tensix cores | single_core median ns | width_split median ns | speedup | current test asserts |
+| regime | W | Wt (tiles) | width_split Tensix cores | single_core median ns | width_split median ns | speedup | current test asserts (bound from `regime_bound`) |
 |---|--:|--:|--:|---|---|--:|---|
-| helps_wt64 | 2048 | 64 | 64 | 11092.4 (11078.4–11112.2) | 1536.4 (1513.6–1548.8) | 7.22× | ≥ 3.5× |
-| measure_wt2 | 64 | 2 | 2 | 1217.1 (1206.0–1237.8) | 1031.2 (1023.2–1039.6) | 1.18× | measure (logged only — verdict differs by arch) — WH 0.99× |
-| does_not_help_wt1 | 32 | 1 | 1 | 1025.4 | 1010.2 | 1.02× (device_perf sweep) | ≤ 1.05× |
+| helps_wt64 | 2048 | 64 | 64 | 11092.4 (11078.4–11112.2) | 1536.4 (1513.6–1548.8) | 7.22× | helps, `measured` WH 6.19× / BH 7.22× |
+| measure_wt2 | 64 | 2 | 2 | 1217.1 (1206.0–1237.8) | 1031.2 (1023.2–1039.6) | 1.18× | measure (logged only — verdict differs by arch) — WH 0.89–0.99× |
+| does_not_help_wt1 | 32 | 1 | 1 | 1025.4 | 1010.2 | 1.02× (device_perf sweep) | does_not_help, `measured` WH 1.00× / BH 1.02× |
 
 ### Reading it
 - **Wt = 2 tiles already pays on BH p150b (1.17–1.18×)**, where WH B0 n150 is flat (0.89–0.99×). The launch
@@ -232,9 +232,9 @@ DRAM-bound large cells move ±15% between runs; the `width_split_reduce` / basel
 
 | regime | R_t | Wt | k | Tensix cores | tiles per slice | row_split_reduce median ns | width_split_reduce median ns | speedup (runs) | test asserts |
 |---|--:|--:|--:|---|--:|---|---|---|---|
-| reduce_helps_rt1_wt32_k8 | 1 | 32 | 8 | 1 → 8 | 4 | 8 737.0 (8 692.0–8 759.8) | 3 697.7 (3 668.2–3 757.8) | 2.36× (2.34–2.37, 5 runs) | ≥ 1.68× |
-| reduce_does_not_help_rt64_wt16_k2 | 64 | 16 | 2 | 64 → 128 | 8 | 13 583.7 (13 417.2–13 691.4) | 13 833.7 (13 609.0–13 985.2) | 0.98× (0.98–0.99, 2 runs) | ≤ 1.05× |
-| reduce_measure_rt64_wt8_k2 | 64 | 8 | 2 | 64 → 128 | 4 | 7 233.6 (6 996.4–7 339.6) | 6 956.8 (6 889.8–7 069.8) | 1.04× (1.03–1.04, 5 runs) | measure (logged only) |
+| reduce_helps_rt1_wt32_k8 | 1 | 32 | 8 | 1 → 8 | 4 | 8 737.0 (8 692.0–8 759.8) | 3 697.7 (3 668.2–3 757.8) | 2.36× (2.34–2.37, 5 runs) | helps, `measured` BH 2.34–2.36× (WH logged only) |
+| reduce_does_not_help_rt64_wt16_k2 | 64 | 16 | 2 | 64 → 128 | 8 | 13 583.7 (13 417.2–13 691.4) | 13 833.7 (13 609.0–13 985.2) | 0.98× (0.98–0.99, 2 runs) | does_not_help, `measured` BH 0.98× (skips on ≤ 65 Tensix cores) |
+| reduce_measure_rt64_wt8_k2 | 64 | 8 | 2 | 64 → 128 | 4 | 7 233.6 (6 996.4–7 339.6) | 6 956.8 (6 889.8–7 069.8) | 1.04× (1.03–1.04, 5 runs) | measure (logged only; skips on ≤ 65 Tensix cores) |
 
 The elementwise regimes on this 130-Tensix-core board: helps_wt64 7.08–7.11×, measure_wt2 1.18×,
 does_not_help_wt1 1.00–1.01× (same verdicts as the 120-Tensix-core p150b block above).
@@ -359,9 +359,9 @@ The field shapes: `2048 × 256` (R_t = 64, 512 B sticks) **0.65×** (k = 2 is 1.
 
 | regime | R_t | W | k | Tensix cores | piece | row_split_reduce median ns | width_split_reduce median ns | speedup | test asserts |
 |---|--:|--:|--:|---|--:|---|---|---|---|
-| reduce_rm_helps_rt1_w2048_k4 | 1 | 2 048 | 4 | 1 → 4 | 1 024 B | 12 802.5 (12 751.6–12 827.2) | 6 871.6 (6 844.4–6 913.4) | 1.86× | ≥ 1.43× |
-| reduce_rm_does_not_help_rt64_w256_k2 | 64 | 256 | 2 | 64 → 128 | 256 B | 8 566.1 (8 429.0–8 690.2) | 13 031.6 (12 899.0–13 182.0) | 0.66× | ≤ 1.05× |
-| reduce_rm_measure_rt64_w2048_k2 | 64 | 2 048 | 2 | 64 → 128 | 2 048 B | 50 470.8 (50 107.8–50 806.6) | 46 952.5 (46 574.2–47 712.4) | 1.07× | measure (logged only) |
+| reduce_rm_helps_rt1_w2048_k4 | 1 | 2 048 | 4 | 1 → 4 | 1 024 B | 12 802.5 (12 751.6–12 827.2) | 6 871.6 (6 844.4–6 913.4) | 1.86× | helps, `measured` BH 1.86–1.88× (WH logged only) |
+| reduce_rm_does_not_help_rt64_w256_k2 | 64 | 256 | 2 | 64 → 128 | 256 B | 8 566.1 (8 429.0–8 690.2) | 13 031.6 (12 899.0–13 182.0) | 0.66× | does_not_help, `measured` BH 0.65× (skips on ≤ 65 Tensix cores) |
+| reduce_rm_measure_rt64_w2048_k2 | 64 | 2 048 | 2 | 64 → 128 | 2 048 B | 50 470.8 (50 107.8–50 806.6) | 46 952.5 (46 574.2–47 712.4) | 1.07× | measure (logged only; skips on ≤ 65 Tensix cores) |
 
 The six earlier regimes in the same run: helps_wt64 7.09×, measure_wt2 1.18×, does_not_help_wt1 1.00×,
 reduce_helps_rt1_wt32_k8 2.36×, reduce_does_not_help_rt64_wt16_k2 0.98×, reduce_measure_rt64_wt8_k2 1.05×.

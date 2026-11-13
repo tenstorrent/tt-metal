@@ -17,13 +17,13 @@ See ttnn/ttnn/operations/examples/width_split/README.md.
         tests/ttnn/unit_tests/operations/examples/test_width_split.py::test_width_split_device_perf
 
     # reduce case (per-row mean subtracted from the row): row_split_reduce vs width_split_reduce,
-    # sweeping tile-rows R_t x Wt x split factor k
-    scripts/run_safe_pytest.sh --run-all \\
+    # sweeping tile-rows R_t x Wt x split factor k (a measurement sweep: skipped unless switched on)
+    EXAMPLES_SWEEPS=1 scripts/run_safe_pytest.sh --run-all \\
         tests/ttnn/unit_tests/operations/examples/test_width_split.py::test_width_split_reduce_device_perf
 
-    # reduce case on ROW_MAJOR sticks (W bf16 datums per DRAM page): R_t x W x k, with DRAM transfer
-    # size and count per configuration
-    scripts/run_safe_pytest.sh --run-all \\
+    # reduce case on Layout::ROW_MAJOR sticks (W bf16 datums per DRAM page): R_t x W x k, with DRAM
+    # transfer size and count per configuration (a measurement sweep: skipped unless switched on)
+    EXAMPLES_SWEEPS=1 scripts/run_safe_pytest.sh --run-all \\
         tests/ttnn/unit_tests/operations/examples/test_width_split.py::test_width_split_reduce_rm_device_perf
 
     # helps / does-not-help regimes (elementwise, reduce and ROW_MAJOR reduce cases)
@@ -39,8 +39,6 @@ os.environ.setdefault("TT_METAL_PROFILER_MID_RUN_DUMP", "1")
 os.environ.setdefault("TT_METAL_PROFILER_CPP_POST_PROCESS", "1")
 os.environ.setdefault("TT_METAL_LOGGER_LEVEL", "error")  # quiet the per-read profiler histograms
 
-import statistics
-
 import pytest
 import torch
 
@@ -51,11 +49,21 @@ from ttnn.operations.examples.width_split import (
     VARIANTS,
     REDUCE_VARIANTS,
     reduce_active_cores,
+    reduce_cb_bytes,
+    reduce_fits_l1,
 )
 
 from loguru import logger
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.unit_tests.operations.examples.perf_test_utils import (
+    check_regime,
+    grid_cores,
+    grid_xy,
+    interleaved_ns,
+    read_kernel_ns,
+    sweep_gate,
+)
 
 TILE = 32
 _DTYPES = {"bfloat8_b": (ttnn.bfloat8_b, 0.99), "bfloat16": (ttnn.bfloat16, 0.9999), "float32": (ttnn.float32, 0.9999)}
@@ -69,8 +77,6 @@ KERNEL_ITERS = int(os.environ.get("WS_ITERS", "1"))
 N_WARMUP = 5
 N_PROFILE_ITERS = int(os.environ.get("WS_TRIALS", "20"))
 
-_DURATION_KEY = "DEVICE KERNEL DURATION [ns]"
-
 
 def _make_input(device, w, dtype=DTYPE):
     torch.manual_seed(0)
@@ -80,28 +86,14 @@ def _make_input(device, w, dtype=DTYPE):
     )
 
 
-def _read_kernel_ns(device):
-    ttnn.ReadDeviceProfiler(device)
-    per_chip = ttnn.get_latest_programs_perf_data()
-    total, found = 0.0, False
-    for programs in (per_chip or {}).values():
-        for program in programs:
-            entry = (getattr(program, "program_analyses_results", None) or {}).get(_DURATION_KEY)
-            if entry is None:
-                continue
-            total += float(entry.duration)
-            found = True
-    return total if found else None
-
-
 def _measure_ns(device, run_fn):
     for _ in range(N_WARMUP):
         run_fn()
     ttnn.synchronize_device(device)
-    _read_kernel_ns(device)  # flush warmup window
+    read_kernel_ns(device)  # flush warmup window
     for _ in range(N_PROFILE_ITERS):
         run_fn()
-    total = _read_kernel_ns(device)
+    total = read_kernel_ns(device)
     return total / N_PROFILE_ITERS if total is not None else None
 
 
@@ -166,7 +158,8 @@ def test_width_split_device_perf(device):
 
 WSR_ROWS = tuple(int(x) for x in os.environ.get("WSR_ROWS", "1,16,64,128").split(","))
 WSR_WTS = tuple(int(x) for x in os.environ.get("WSR_WTS", "4,8,16,32,64").split(","))
-# k values tried per cell; each is kept only if it divides Wt, k <= Wt and R_t * k <= WSR_MAX_OVERSUB * grid
+# k values tried per cell; each is kept only if it divides Wt, k <= Wt, k <= the grid's Tensix cores,
+# R_t * k <= WSR_MAX_OVERSUB * grid Tensix cores and its circular buffers fit L1 (see _sweep_cells)
 WSR_KS = tuple(int(x) for x in os.environ.get("WSR_KS", "1,2,4,8,16,32,64").split(","))
 WSR_MAX_OVERSUB = float(os.environ.get("WSR_MAX_OVERSUB", "2"))
 
@@ -192,13 +185,33 @@ def _check_reduce(expected, out, what=""):
     assert max_err < 0.03, f"{what}: max abs error {max_err:.4f} (a wrong combine shifts whole rows by their offset)"
 
 
-def _reduce_cells(device):
-    grid = device.compute_with_storage_grid_size()
-    n = grid.x * grid.y
-    for rows_t in WSR_ROWS:
-        for wt in WSR_WTS:
-            ks = [k for k in WSR_KS if k > 1 and k <= wt and wt % k == 0 and rows_t * k <= WSR_MAX_OVERSUB * n]
+def _sweep_cells(device, rows_list, wts, ks_list, row_major):
+    """(R_t, Wt, [k > 1 ...]) per sweep cell. A k is kept when it divides Wt, k <= Wt, k <= the grid's
+    Tensix cores, R_t * k <= WSR_MAX_OVERSUB * grid Tensix cores, and the reduce program's circular
+    buffers fit L1 (`reduce_fits_l1`, the same check `validate_reduce` raises on). A cell whose k = 1
+    baseline (row_split_reduce) does not fit is skipped with a log line, not run."""
+    n = grid_cores(device)
+    for rows_t in rows_list:
+        for wt in wts:
+            if not reduce_fits_l1(wt, 1, row_major):
+                logger.info(
+                    f"skip R_t={rows_t} Wt={wt}: row_split_reduce needs {reduce_cb_bytes(wt, 1, row_major)} B of "
+                    "circular buffers per Tensix core, over the L1 budget (validate_reduce would reject it)"
+                )
+                continue
+            ks = [
+                k
+                for k in ks_list
+                if 1 < k <= min(wt, n)
+                and wt % k == 0
+                and rows_t * k <= WSR_MAX_OVERSUB * n
+                and reduce_fits_l1(wt, k, row_major)
+            ]
             yield rows_t, wt, ks
+
+
+def _reduce_cells(device):
+    return _sweep_cells(device, WSR_ROWS, WSR_WTS, WSR_KS, row_major=False)
 
 
 # (R_t tile-rows, Wt tiles, k, kernel_iters): one slice per Tensix core, multi-row groups
@@ -225,9 +238,11 @@ def test_width_split_reduce_correctness(device, rows_t, wt, k, iters):
         _check_reduce(expected, out, f"{variant} R_t={rows_t} Wt={wt} k={k} iters={iters}")
 
 
+@sweep_gate("WS_SWEEPS")
 def test_width_split_reduce_device_perf(device):
     """Sweep R_t x Wt x k: row_split_reduce (k=1 baseline) vs width_split_reduce at every legal k.
-    Every measured configuration is also checked for correctness. Perf is reported, never asserted."""
+    Every measured configuration is also checked for correctness. Perf is reported, never asserted.
+    A measurement sweep: runs only with EXAMPLES_SWEEPS=1 or WS_SWEEPS=1 (the CLI's --reduce sets it)."""
     grid = device.compute_with_storage_grid_size()
     rows = []
     for rows_t, wt, ks in _reduce_cells(device):
@@ -250,8 +265,10 @@ def test_width_split_reduce_device_perf(device):
     lines = [
         "",
         "=== width_split reduce case (y = x - mean_W(x)) — row_split_reduce vs width_split_reduce ===",
-        f"    dtype=bfloat16 TILE, DRAM interleaved in/out  grid={grid.x}x{grid.y}={grid.x*grid.y}  arch={device.arch()}  "
+        f"    dtype=bfloat16 Layout::TILE, TensorMemoryLayout::INTERLEAVED DRAM in/out  "
+        f"grid={grid.x}x{grid.y}={grid.x*grid.y} Tensix cores  arch={device.arch()}  "
         f"iters={KERNEL_ITERS}  trials={N_PROFILE_ITERS}",
+        "    cores = active Tensix cores; tiles/slice = tiles per Tensix core per tile-row",
         "    DRAM GB/s = (input + output bytes) / time = 2 * R_t * Wt * 2048 B / ns",
         f"    {'R_t':>4}  {'Wt':>3}  {'variant':<19}  {'k':>3}  {'cores':>5}  {'tiles/slice':>11}  {'ns/op':>10}  "
         f"{'GB/s':>6}  {'vs k=1':>7}",
@@ -280,12 +297,7 @@ WSRM_KS = tuple(int(x) for x in os.environ.get("WSRM_KS", "1,2,4").split(","))
 
 
 def _rm_cells(device):
-    grid = device.compute_with_storage_grid_size()
-    n = grid.x * grid.y
-    for rows_t in WSRM_ROWS:
-        for wt in WSRM_WTS:
-            ks = [k for k in WSRM_KS if k > 1 and k <= wt and wt % k == 0 and rows_t * k <= WSR_MAX_OVERSUB * n]
-            yield rows_t, wt, ks
+    return _sweep_cells(device, WSRM_ROWS, WSRM_WTS, WSRM_KS, row_major=True)
 
 
 # (R_t tile-rows, Wt tiles, k, kernel_iters): 128 B sticks, the field shapes (2048 x 256 and
@@ -312,9 +324,11 @@ def test_width_split_reduce_rm_correctness(device, rows_t, wt, k, iters):
         _check_reduce(expected, ttnn.to_torch(out_t).to(torch.float32), f"RM {variant} R_t={rows_t} Wt={wt} k={k}")
 
 
+@sweep_gate("WS_SWEEPS")
 def test_width_split_reduce_rm_device_perf(device):
-    """Sweep R_t x W x k on ROW_MAJOR sticks: row_split_reduce (k=1) vs width_split_reduce.
-    Every measured configuration is also checked for correctness. Perf is reported, never asserted."""
+    """Sweep R_t x W x k on Layout::ROW_MAJOR sticks: row_split_reduce (k=1) vs width_split_reduce.
+    Every measured configuration is also checked for correctness. Perf is reported, never asserted.
+    A measurement sweep: runs only with EXAMPLES_SWEEPS=1 or WS_SWEEPS=1 (the CLI's --reduce sets it)."""
     grid = device.compute_with_storage_grid_size()
     rows = []
     for rows_t, wt, ks in _rm_cells(device):
@@ -337,8 +351,10 @@ def test_width_split_reduce_rm_device_perf(device):
     lines = [
         "",
         "=== width_split reduce case on ROW_MAJOR sticks (y = x - mean_W(x)) — row_split_reduce vs width_split_reduce ===",
-        f"    dtype=bfloat16 ROW_MAJOR, DRAM interleaved in/out  grid={grid.x}x{grid.y}={grid.x*grid.y}  "
+        f"    dtype=bfloat16 Layout::ROW_MAJOR, TensorMemoryLayout::INTERLEAVED DRAM in/out  "
+        f"grid={grid.x}x{grid.y}={grid.x*grid.y} Tensix cores  "
         f"arch={device.arch()}  iters={KERNEL_ITERS}  trials={N_PROFILE_ITERS}",
+        "    cores = active Tensix cores",
         "    stick B = W * 2; piece B = stick B / k (bytes per DRAM transfer); transfers = 2 * 32 * R_t * k (read + write)",
         "    DRAM GB/s = 2 * R_t * 32 * stick B / ns;  Mxfer/s = transfers / ns * 1000",
         f"    {'R_t':>4}  {'W':>5}  {'stick B':>7}  {'variant':<19}  {'k':>2}  {'cores':>5}  {'piece B':>7}  "
@@ -356,78 +372,69 @@ def test_width_split_reduce_rm_device_perf(device):
 
 
 # ---------------------------------------------------------------------------
-# When width-splitting helps / when it does not (numbers below: WH B0 n150; BH p150b in README.md).
+# When width-splitting helps / when it does not. `measured` holds the speedup (baseline ns / lever
+# ns) measured per architecture: "wh" = WH B0 n150 (8x8 = 64 Tensix cores), "bh" = BH p150b (12x10 =
+# 120 Tensix cores for the elementwise regimes, 13x10 = 130 for the reduce ones). Per-board tables:
+# README.md / report.md.
 #
 #   helps          Wt=64 (W=2048): single_core serializes 64 tiles; width_split puts
-#                  1 tile on each of 64 Tensix cores.            measured ~6.0x
+#                  1 tile on each of 64 Tensix cores (min(Wt, grid) Tensix cores).
 #   measure        Wt=2  (W=64):   the whole tensor is 2 tiles — one 8-tile read block
 #                  on one Tensix core costs ~2.1 us, dominated by the ~1.8 us fixed
-#                  per-launch cost; a 2nd Tensix core only adds its own startup.  WH ~0.98x, BH 1.18x
+#                  per-launch cost; a 2nd Tensix core only adds its own startup (WH B0); BH p150b gains.
 #
-# A trial = mean device kernel duration over _LAUNCHES_PER_TRIAL launches of one
-# variant (one profiler window). Baseline/lever trials are interleaved A,B,A,B and
-# the median of _N_TRIALS trials per variant is compared.
+# Measurement: perf_test_utils.interleaved_ns - N_WARMUP warm-up rounds, then _N_TRIALS
+# trials per variant, a trial = mean device kernel duration over _LAUNCHES_PER_TRIAL launches of one
+# variant (one profiler window), variants interleaved with a rotating start; medians compared.
+#
+# Assertion (perf_test_utils.check_regime): the bound is derived from the number measured on THIS
+# architecture by perf_test_utils.regime_bound (helps: speedup >= min(half the measured gain,
+# measured / 1.10), not asserted when that is below 1.02x; does_not_help: speedup <= max(1.0,
+# measured x 1.10)). An architecture with no measured number is logged, not asserted. A missed bound
+# is re-measured once and judged on the pooled samples. `measure` regimes only log.
+#
+# The R_t = 64 reduce regimes contrast 64 -> 128 Tensix cores (measured on a 130-Tensix-core grid).
+# On a grid of <= 65 Tensix cores (WH B0) both variants land on the same Tensix-core count, so the
+# contrast does not exist there and they skip.
 # ---------------------------------------------------------------------------
 
 _N_TRIALS = 12
 _LAUNCHES_PER_TRIAL = 5
 
-# (regime id, W, kind, min speedup | max speedup). Thresholds: helps -> 1 + 0.5*(measured-1),
-# floor 1.05; does_not_help -> <= 1.05; measure -> correctness only, speedup logged.
-# Thresholds hold on every measured board (WH B0 n150, BH p150b); `measure` regimes flip between boards and only log
-# - numbers per board in README.md.
+# (regime id, op, params, kind, measured speedup per arch)
 _REGIMES = [
-    ("helps_wt64", "eltwise", (2048,), "helps", 3.5),  # WH 6.19x, BH 7.22x
-    ("measure_wt2", "eltwise", (64,), "measure", None),  # WH 0.99x, BH 1.18x - verdict differs
-    ("does_not_help_wt1", "eltwise", (32,), "does_not_help", 1.05),  # WH 1.00x, BH 1.02x (one Tensix core either way)
+    ("helps_wt64", "eltwise", (2048,), "helps", {"wh": 6.19, "bh": 7.22}),
+    # verdict differs between boards: WH B0 runs 0.89-0.99x, BH p150b 1.18x
+    ("measure_wt2", "eltwise", (64,), "measure", {"wh": (0.89, 0.99), "bh": 1.18}),
+    # one Tensix core either way
+    ("does_not_help_wt1", "eltwise", (32,), "does_not_help", {"wh": 1.00, "bh": 1.02}),
     # reduce case (x - mean_W(x)): params = (R_t tile-rows, Wt tiles, split factor k).
     # helps: 1 tile-row on 1 -> 8 Tensix cores, 4 tiles per slice.            BH p150b 2.34-2.36x
-    ("reduce_helps_rt1_wt32_k8", "reduce", (1, 32, 8), "helps", 1.68),
+    ("reduce_helps_rt1_wt32_k8", "reduce", (1, 32, 8), "helps", {"bh": (2.34, 2.36)}),
     # does not help: 64 tile-rows already on 64 of 130 Tensix cores (DRAM ~60% of its ceiling);
     # doubling to 128 Tensix cores (8 tiles per slice) buys nothing.               BH p150b 0.98x
-    ("reduce_does_not_help_rt64_wt16_k2", "reduce", (64, 16, 2), "does_not_help", 1.05),
+    ("reduce_does_not_help_rt64_wt16_k2", "reduce", (64, 16, 2), "does_not_help", {"bh": 0.98}),
     # the same with 4-tile slices sits on the edge.                       BH p150b 1.03-1.04x
-    ("reduce_measure_rt64_wt8_k2", "reduce", (64, 8, 2), "measure", None),
-    # reduce case on ROW_MAJOR sticks: params = (R_t tile-rows, Wt tiles, k); stick = Wt * 64 B,
+    ("reduce_measure_rt64_wt8_k2", "reduce", (64, 8, 2), "measure", {"bh": (1.03, 1.04)}),
+    # reduce case on Layout::ROW_MAJOR sticks: params = (R_t tile-rows, Wt tiles, k); stick = Wt * 64 B,
     # each Tensix core reads / writes 32 pieces of stick / k B per tile-row whatever k is.
     # helps: 1 tile-row of 4096 B sticks on 1 -> 4 Tensix cores, 1024 B pieces.   BH p150b 1.86-1.88x
-    ("reduce_rm_helps_rt1_w2048_k4", "reduce_rm", (1, 64, 4), "helps", 1.43),
+    ("reduce_rm_helps_rt1_w2048_k4", "reduce_rm", (1, 64, 4), "helps", {"bh": (1.86, 1.88)}),
     # does not help: 64 tile-rows of 512 B sticks (2048 x 256) on 64 -> 128 Tensix cores, 256 B
     # pieces: 2x the DRAM transfers, ~1 ns each across the grid.                  BH p150b 0.65x
-    ("reduce_rm_does_not_help_rt64_w256_k2", "reduce_rm", (64, 8, 2), "does_not_help", 1.05),
+    ("reduce_rm_does_not_help_rt64_w256_k2", "reduce_rm", (64, 8, 2), "does_not_help", {"bh": 0.65}),
     # 4096 B sticks with the tile-rows on half the grid: 2048 B pieces, at the edge. BH p150b 1.04-1.08x
-    ("reduce_rm_measure_rt64_w2048_k2", "reduce_rm", (64, 64, 2), "measure", None),
+    ("reduce_rm_measure_rt64_w2048_k2", "reduce_rm", (64, 64, 2), "measure", {"bh": (1.04, 1.08)}),
 ]
 
 
-def _trial_ns(device, run_fn):
-    for _ in range(_LAUNCHES_PER_TRIAL):
-        run_fn()
-    total = _read_kernel_ns(device)
-    assert total is not None, "profiler produced no data (profiler-enabled build?)"
-    return total / _LAUNCHES_PER_TRIAL
-
-
-def _interleaved(device, run_base, run_lever):
-    for _ in range(N_WARMUP):
-        run_base()
-        run_lever()
-    ttnn.synchronize_device(device)
-    _read_kernel_ns(device)  # flush warmup window
-    base, lever = [], []
-    for _ in range(_N_TRIALS):
-        base.append(_trial_ns(device, run_base))
-        lever.append(_trial_ns(device, run_lever))
-    return base, lever
-
-
-@pytest.mark.parametrize("regime,op,params,kind,threshold", _REGIMES, ids=[r[0] for r in _REGIMES])
-def test_width_split_regimes(device, regime, op, params, kind, threshold):
+@pytest.mark.parametrize("regime,op,params,kind,measured", _REGIMES, ids=[r[0] for r in _REGIMES])
+def test_width_split_regimes(device, regime, op, params, kind, measured):
     """Baseline vs width split where splitting pays and where it does not. Checks correctness of
-    both, then asserts the speedup band.
+    both, then checks the speedup against the bound derived from the measured number (check_regime).
       eltwise: single_core vs width_split (relu, H=32, W=params[0]).
       reduce:  row_split_reduce vs width_split_reduce (x - mean_W(x), R_t x Wt, split factor k).
-      reduce_rm: the same on ROW_MAJOR sticks (stick pieces read, tilize, untilize, pieces written)."""
+      reduce_rm: the same on Layout::ROW_MAJOR sticks (stick pieces read, tilize, untilize, pieces written)."""
     if op == "eltwise":
         (w,) = params
         tt_input = _make_input(device, w, dtype=ttnn.bfloat16)
@@ -437,36 +444,51 @@ def test_width_split_regimes(device, regime, op, params, kind, threshold):
             assert_with_pcc(expected, out, 0.9999)
         run_base = lambda: width_split(tt_input, variant="single_core")
         run_lever = lambda: width_split(tt_input, variant="width_split")
-        shape_desc = f"W={w} Wt={w // TILE} cores={_active_cores(device, 'width_split', w)}"
-        names = ("single_core", "width_split")
+        lever_cores = _active_cores(device, "width_split", w)
+        detail = f"W={w} Wt={w // TILE} | single_core -> width_split on {lever_cores} Tensix cores"
     else:
         rows_t, wt, k = params
+        base_cores = reduce_active_cores(device, rows_t, wt, "row_split_reduce", 1)
+        lever_cores = reduce_active_cores(device, rows_t, wt, "width_split_reduce", k)
+        if lever_cores <= base_cores:
+            x, y = grid_xy(device)
+            pytest.skip(
+                f"{regime}: on this {x}x{y} grid both variants run on {base_cores} Tensix cores, so the "
+                f"baseline-vs-width-split contrast this regime measures (more Tensix cores per tile-row) does not exist"
+            )
         layout = ttnn.ROW_MAJOR_LAYOUT if op == "reduce_rm" else ttnn.TILE_LAYOUT
         tt_input, expected = _make_reduce_input(device, rows_t, wt, layout=layout)
         for variant in REDUCE_VARIANTS:
             _check_reduce(expected, ttnn.to_torch(width_split_reduce(tt_input, variant=variant, k=k)).to(torch.float32))
         run_base = lambda: width_split_reduce(tt_input, variant="row_split_reduce")
         run_lever = lambda: width_split_reduce(tt_input, variant="width_split_reduce", k=k)
-        shape_desc = (
-            f"{'ROW_MAJOR stick=' + str(wt * 64) + 'B piece=' + str(wt * 64 // k) + 'B ' if op == 'reduce_rm' else ''}"
-            f"R_t={rows_t} Wt={wt} k={k} tiles/slice={wt // k} cores "
-            f"{reduce_active_cores(device, rows_t, wt, 'row_split_reduce', 1)} -> "
-            f"{reduce_active_cores(device, rows_t, wt, 'width_split_reduce', k)}"
+        stick = f"Layout::ROW_MAJOR stick={wt * 64}B piece={wt * 64 // k}B " if op == "reduce_rm" else ""
+        detail = (
+            f"{stick}"
+            f"R_t={rows_t} Wt={wt} k={k} tiles/slice={wt // k} | row_split_reduce -> width_split_reduce on "
+            f"{base_cores} -> {lever_cores} Tensix cores"
         )
-        names = ("row_split_reduce", "width_split_reduce")
 
-    base, lever = _interleaved(device, run_base, run_lever)
-    b_med, l_med = statistics.median(base), statistics.median(lever)
-    speedup = b_med / l_med
-    logger.info(
-        f"[{device.arch()}] width_split {regime}: {shape_desc} | "
-        f"{names[0]} median {b_med:.1f} ns (min {min(base):.1f} max {max(base):.1f}) | "
-        f"{names[1]} median {l_med:.1f} ns (min {min(lever):.1f} max {max(lever):.1f}) | "
-        f"speedup {speedup:.2f}x | trials {_N_TRIALS}x{_LAUNCHES_PER_TRIAL} launches"
-    )
-    if kind == "helps":
-        assert speedup >= threshold, f"{regime}: expected >= {threshold}x, got {speedup:.2f}x"
-    elif kind == "measure":
-        pass  # verdict differs by arch: correctness checked and speedup logged above, no perf assert
-    else:
-        assert speedup <= threshold, f"{regime}: expected <= {threshold}x, got {speedup:.2f}x"
+    def measure():
+        samples = interleaved_ns(
+            device,
+            {"base": run_base, "lever": run_lever},
+            trials=_N_TRIALS,
+            launches=_LAUNCHES_PER_TRIAL,
+            warmup=N_WARMUP,
+        )
+        return samples["base"], samples["lever"]
+
+    check_regime(device, f"width_split {regime}", kind, measured, measure, detail=detail)
+
+
+def test_width_split_reduce_rejects_oversized_tile_row(device, expect_error):
+    """A `Layout::TILE` row whose circular buffers do not fit the per-Tensix-core L1 budget is rejected with
+    a ValueError by validate_reduce(), before the output tensor or the program is built. Wt = 220 tiles at
+    k = 1 needs 2 * 220 + 2 * 4 + 2 + 3 = 453 tiles = 927 744 B, over the 921 600 B budget."""
+    wt = 220
+    assert not reduce_fits_l1(wt, 1, False)
+    assert reduce_cb_bytes(wt, 1, False) == 453 * 2048
+    tt_input, _ = _make_reduce_input(device, 1, wt)
+    with expect_error(ValueError, "L1 budget"):
+        width_split_reduce(tt_input, variant="row_split_reduce")

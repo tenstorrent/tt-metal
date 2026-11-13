@@ -362,6 +362,8 @@ Three runs of the regime test: bf16-fp32 32t 1.34/1.34/1.34x, fp32-fp32 32t 1.57
 | not_bf16_4t | 4 | bf16-fp32 | 356 | 430 | 0.83x | sweep / probe — not asserted |
 | measure_bf16_8t | 8 | bf16-fp32 | 499 (499-502) | 470 (467-470) | 1.06x | measure (logged only — verdict differs by arch) — WH 0.87x |
 
+The `assert ≥` / `≤` values in the verdict column are the hand-written bounds that run used; the regimes test now derives each bound from the speedup measured on the running arch (`perf_test_utils.regime_bound`).
+
 ### Reading it
 - `dest_accum_pairs` pays more and sooner on BH p150b: 1.97x (bf16 input) / 1.77x (fp32 input) at 32 tiles vs WH B0
   n150 1.34x / 1.57x, and the crossover is 8 tiles for both inputs (1.06x / 1.05x) vs 16 / 8 on WH B0 n150.

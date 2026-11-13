@@ -28,8 +28,8 @@ to ~grid-x faster (Wt >> grid). See README.md for the numbers and the crossover.
 A second pair, `width_split_reduce()` (row_split_reduce vs width_split_reduce), covers the case
 the elementwise op hides: a per-row reduction + per-row apply, where a width split makes the k
 Tensix cores that share a tile-row pay one combine round per row. See the bottom of this file
-and README.md's "Reduce case". The same pair also accepts a ROW_MAJOR input (one DRAM page = one
-stick of W datums): there, splitting the row also splits every stick into k smaller DRAM transfers.
+and README.md's "Reduce case". The same pair also accepts a `Layout::ROW_MAJOR` input (one DRAM page =
+one stick of W datums): there, splitting the row also splits every stick into k smaller DRAM transfers.
 """
 
 from pathlib import Path
@@ -248,13 +248,79 @@ CB_SCALER = 1
 CB_SEND = 2
 CB_GATHER = 3
 CB_STAT = 4
-CB_RM_IN = 5  # ROW_MAJOR only: 32 stick pieces of the slice, before tilize
-CB_Y = 6  # ROW_MAJOR only: tiled result, before untilize
+CB_RM_IN = 5  # Layout::ROW_MAJOR only: 32 stick pieces of the slice, before tilize
+CB_Y = 6  # Layout::ROW_MAJOR only: tiled result, before untilize
 SEM_ARRIVED = 0
 TILE_BYTES = TILE * TILE * 2  # bf16 tile
 
-# Tiles per NoC barrier / CB push / DST block: one half-sync DST bank with fp32 accumulation.
+# Tiles per NoC barrier / circular-buffer push / DST block: one half-sync DST bank with fp32 accumulation.
 REDUCE_BLOCK = 4
+
+# Per-Tensix-core L1 budget for the reduce program's circular buffers, in bytes (900 KiB = 450 bf16
+# tiles). Hand-picked, not derived from the device's L1 size or the allocator's base address: it is
+# the bound the Layout::ROW_MAJOR path has always used, now applied to both Layouts.
+REDUCE_CB_BUDGET_BYTES = 900 * 1024
+
+
+def _reduce_block(slice_tiles):
+    return min(REDUCE_BLOCK, slice_tiles)
+
+
+def _reduce_slice_ok(slice_tiles):
+    """A slice is processed in blocks of _reduce_block() tiles, so it must be a whole number of them."""
+    return slice_tiles >= 1 and slice_tiles % _reduce_block(slice_tiles) == 0
+
+
+def reduce_cb_tiles(slice_tiles, k, row_major):
+    """{circular-buffer index: pages} the reduce program allocates on EVERY active Tensix core.
+
+    Every circular-buffer page is one bf16 tile (TILE_BYTES = 2048 B) on both Layouts, so pages x
+    TILE_BYTES is each buffer's size in bytes. create_reduce_program_descriptor() builds its
+    circular buffers from this table, so validate_reduce() checks exactly what is allocated.
+    `k` is the group size actually used (row_split_reduce always runs with k = 1)."""
+    if row_major:
+        # Layout::ROW_MAJOR: the reader prefetches 2 slices of stick pieces, compute tilizes one
+        # slice into cb_in, applies into cb_y and untilizes into cb_out (2 slices for the writer).
+        return {
+            CB_RM_IN: 2 * slice_tiles,
+            CB_IN: slice_tiles,
+            CB_SCALER: 1,
+            CB_SEND: 1,
+            CB_GATHER: 2 * k,
+            CB_STAT: 1,
+            CB_Y: slice_tiles,
+            CB_OUT: 2 * slice_tiles,
+        }
+    # Layout::TILE: cb_in holds two whole slices (resident from reduce to apply + the next
+    # tile-row's prefetch); cb_out is double-buffered in blocks.
+    return {
+        CB_IN: 2 * slice_tiles,
+        CB_SCALER: 1,
+        CB_SEND: 1,
+        CB_GATHER: 2 * k,
+        CB_STAT: 1,
+        CB_OUT: 2 * _reduce_block(slice_tiles),
+    }
+
+
+def reduce_cb_bytes(wt, k, row_major):
+    """Total bytes of circular buffers per Tensix core for a row of `wt` tiles split k ways."""
+    return sum(reduce_cb_tiles(wt // k, k, row_major).values()) * TILE_BYTES
+
+
+def reduce_fits_l1(wt, k, row_major):
+    """True when the reduce program's circular buffers for (wt, k, Layout) fit REDUCE_CB_BUDGET_BYTES
+    on every Tensix core and the slice is a whole number of blocks. Sweeps filter with this, so they
+    skip exactly the combinations validate_reduce() rejects for size."""
+    return _reduce_slice_ok(wt // k) and reduce_cb_bytes(wt, k, row_major) <= REDUCE_CB_BUDGET_BYTES
+
+
+def _widest_fitting_wt(k, row_major):
+    """Largest Wt (tiles) whose k-way split fits the budget, or 0 when none does."""
+    for slice_tiles in range(REDUCE_CB_BUDGET_BYTES // TILE_BYTES, 0, -1):
+        if reduce_fits_l1(slice_tiles * k, k, row_major):
+            return slice_tiles * k
+    return 0
 
 
 def validate_reduce(input_tensor, k):
@@ -271,10 +337,32 @@ def validate_reduce(input_tensor, k):
     wt = w // TILE
     if k < 1 or wt % k:
         raise ValueError(f"width_split reduce: split factor k={k} must divide Wt={wt}")
-    if k > _grid_cores(input_tensor.device()):
+    grid_cores = _grid_cores(input_tensor.device())
+    if k > grid_cores:
         raise ValueError(f"width_split reduce: k={k} exceeds the Tensix grid")
-    if input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT and 6 * (wt // k) * TILE_BYTES > 900 * 1024:
-        raise ValueError(f"width_split reduce: ROW_MAJOR slice of {wt // k} tiles does not fit L1 (6 slices of CBs)")
+    slice_tiles = wt // k
+    if not _reduce_slice_ok(slice_tiles):
+        raise ValueError(
+            f"width_split reduce: slice of {slice_tiles} tiles must be a multiple of {_reduce_block(slice_tiles)}"
+        )
+    # Bound the circular buffers on both Layouts BEFORE anything is allocated: a slice too wide for L1
+    # otherwise fails at program build, after the output tensor exists.
+    row_major = input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
+    footprint = reduce_cb_bytes(wt, k, row_major)
+    if footprint > REDUCE_CB_BUDGET_BYTES:
+        layout_name = "Layout::ROW_MAJOR" if row_major else "Layout::TILE"
+        widest = _widest_fitting_wt(k, row_major)
+        fitting_ks = [kk for kk in range(1, grid_cores + 1) if wt % kk == 0 and reduce_fits_l1(wt, kk, row_major)]
+        hint = (
+            f"the smallest split factor that fits Wt={wt} is k={fitting_ks[0]} (variant='width_split_reduce')"
+            if fitting_ks
+            else f"no split factor k <= {grid_cores} (the Tensix grid) that divides Wt={wt} fits"
+        )
+        raise ValueError(
+            f"width_split reduce: {layout_name} circular buffers need {footprint} B per Tensix core "
+            f"(slice of {slice_tiles} tiles, k={k}), over the {REDUCE_CB_BUDGET_BYTES} B L1 budget; "
+            f"at k={k} the widest row that fits is Wt={widest} tiles (W={widest * TILE} elements); {hint}"
+        )
 
 
 def reduce_layout(device, rows_t, wt, variant, k):
@@ -298,12 +386,13 @@ def create_reduce_program_descriptor(input_tensor, output_tensor, *, variant, k=
     h, w = list(input_tensor.shape)
     rows_t, wt = h // TILE, w // TILE
     groups, k, slice_tiles, row_ranges = reduce_layout(device, rows_t, wt, variant, k)
-    blk = min(REDUCE_BLOCK, slice_tiles)
-    if slice_tiles % blk:
+    blk = _reduce_block(slice_tiles)
+    if not _reduce_slice_ok(slice_tiles):
         raise ValueError(f"width_split reduce: slice of {slice_tiles} tiles must be a multiple of {blk}")
 
-    # page_bytes = one DRAM page: a tile (TILE) or one stick of W bf16 datums (ROW_MAJOR). CB pages
-    # are always tiles: the ROW_MAJOR path stages 32 stick pieces as S tile-sized pages.
+    # page_bytes = one DRAM page: a tile (Layout::TILE) or one stick of W bf16 datums
+    # (Layout::ROW_MAJOR). Circular-buffer pages are always tiles: the ROW_MAJOR path stages 32
+    # stick pieces as S tile-sized pages.
     page_bytes = input_tensor.buffer_aligned_page_size()
     row_major = input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
     cores = _ordered_cores(device, groups * k)
@@ -320,32 +409,12 @@ def create_reduce_program_descriptor(input_tensor, output_tensor, *, variant, k=
 
     # cb_in holds two whole slices: the slice stays resident from reduce to apply, and the reader
     # can prefetch the next tile-row's slice meanwhile. cb_gather: 2 rows x k partial slots.
-    # ROW_MAJOR: the reader prefetches into cb_rm_in (2 slices) instead, compute tilizes one slice
-    # into cb_in, applies into cb_y and untilizes into cb_out (2 slices, so the writer drains one
-    # tile-row's sticks while compute produces the next).
-    if row_major:
-        cbs = [
-            cb(CB_RM_IN, 2 * slice_tiles),
-            cb(CB_IN, slice_tiles),
-            cb(CB_SCALER, 1),
-            cb(CB_SEND, 1),
-            cb(CB_GATHER, 2 * k),
-            cb(CB_STAT, 1),
-            cb(CB_Y, slice_tiles),
-            cb(CB_OUT, 2 * slice_tiles),
-        ]
-        defines = [("WS_ROW_MAJOR", "1"), ("WS_RM_SLICE", str(slice_tiles))]
-    else:
-        cbs = [
-            cb(CB_IN, 2 * slice_tiles),
-            cb(CB_SCALER, 1),
-            cb(CB_SEND, 1),
-            cb(CB_GATHER, 2 * k),
-            cb(CB_STAT, 1),
-            cb(CB_OUT, 2 * blk),
-        ]
-        defines = []
-    # ROW_MAJOR: each Tensix core owns slice_tiles * 32 datums of every stick = slice_tiles * 64 B,
+    # Layout::ROW_MAJOR: the reader prefetches into cb_rm_in (2 slices) instead, compute tilizes one
+    # slice into cb_in, applies into cb_y and untilizes into cb_out (2 slices, so the writer drains
+    # one tile-row's sticks while compute produces the next). Sizes: reduce_cb_tiles().
+    cbs = [cb(index, tiles) for index, tiles in reduce_cb_tiles(slice_tiles, k, row_major).items()]
+    defines = [("WS_ROW_MAJOR", "1"), ("WS_RM_SLICE", str(slice_tiles))] if row_major else []
+    # Layout::ROW_MAJOR: each Tensix core owns slice_tiles * 32 datums of every stick = slice_tiles * 64 B,
     # starting slice_start * 64 B into the stick (always a multiple of the 64 B DRAM alignment).
     slice_bytes = slice_tiles * TILE * 2
 
@@ -365,8 +434,9 @@ def create_reduce_program_descriptor(input_tensor, output_tensor, *, variant, k=
             slice_start = m * slice_tiles
             rm_args = [slice_bytes, slice_start * TILE * 2] if row_major else []
             reader_rt[c.x][c.y] = [in_addr, wt, slice_tiles, slice_start, row_start, num_rows, blk] + rm_args
-            writer_rt[c.x][c.y] = [out_addr, wt, slice_tiles, slice_start, row_start, num_rows, blk, k, m] + noc_xy
-            writer_rt[c.x][c.y] = list(writer_rt[c.x][c.y]) + rm_args
+            writer_rt[c.x][c.y] = (
+                [out_addr, wt, slice_tiles, slice_start, row_start, num_rows, blk, k, m] + noc_xy + rm_args
+            )
             compute_rt[c.x][c.y] = [slice_tiles, num_rows, k, blk]
 
     reader = ttnn.KernelDescriptor(
