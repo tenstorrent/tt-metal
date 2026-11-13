@@ -901,6 +901,47 @@ fixes:
     closed at L09 leave-one-out and add-one, the device-time cost of switching it if known from tt/settings.py''s notes)
     and a recommendation: which site to A/B on the device first. NO fixed accuracy numbers as limits (F138); the +-25 %
     match is a check of the emulation, not of the model.'
+- id: FIX.31
+  title: 'Framework: count every device run once, fix gates prove only their claim, bookkeeping out of the code key, API
+    crashes are infra, back-to-back gates in one process, watch follows a gate'
+  gate:
+  - FIX.30
+  status: held
+  t: '2026-11-13T17:34:49'
+  text: 'OWNER 2026-11-13: bookkeeping eats the Galaxy. Evidence (Nov 6-13): device busy 24.6 h of ~168 h; FIX.30 ran X.3
+    one-process units via a raw devjob (7m40s PASS) that its own gate could not count, so the gate had to run them again
+    (~8 min); FIX.30 also got a generic determinism unit (442 s) unrelated to its claim; three Cloudflare 403 agent crashes
+    used the free retries and then a gate ran on an unchanged tree. Four changes, each with a selftest, CPU only: (1) every
+    device run through scripts/run_safe_pytest.sh files its result in the stamp store by command + env key + code key (core/stamps.py),
+    so a gate reuses a matching unit however it was launched (devjob, gate --check, by hand); a unit is reused only on an
+    exact stamp match and a PASS, never a FAIL/HANG. (2) overseer fix builds the fix tasks gate from the fixs claim: its
+    selftests plus only the device units named with the fix (a new option), not every unit of the --gate tasks chained;
+    keep the current behaviour only when the fix names no units. (3) split gate.py / batch.py / scripts/run_safe_pytest.sh
+    / scripts/lib/tt_safe_run.sh into what changes a measurement and what is bookkeeping (pass lists, reporting, memory
+    precheck, logging); only the measuring part is in code_key (F162); a selftest shows a bookkeeping-only edit keeps every
+    stamp and a measuring edit invalidates them. (4) an agent exit with an API/auth error (e.g. 403, 529, overloaded) is
+    INFRA: back off and retry, never counted as an attempt, never followed by a gate on an unchanged tree. (5) OWNER 2026-11-13
+    (added): gates that run back to back are ONE run: orchestrator.pending_full_gates (the quick-accepted picks full gates)
+    and the milestone gate after them (X.3) collect every pending unit of every task, drop the units whose stamp already
+    passed, and run the rest in ONE process on ONE loaded model (FIX.29s one-process mechanism), each unit once even when
+    several tasks name it (same command + env key); each task then gets its own verdict and metrics from its own units,
+    and a failing unit fails only the tasks that name it. Today each pick is its own gate with its own model load (~210
+    GB, minutes each): P.49/P.50/P.51 shared the ladder and profile by stamp but still loaded the model three times. Also
+    (seen 2026-11-13 on FIX.30 --continue): core/batch.parse refuses any run without --no-precompile, so X.3s units (ladder
+    s56320, profile = wall run && clean-wall full prefill, positions) all ran as separate pytest processes, ~4 model loads
+    where tests.one_process promises one; the batcher must precompile once and then batch, never silently fall back,
+    and the gate log must say why a unit did not batch. Selftest:
+    three tasks with overlapping units -> one process, one load, each shared unit run once, per-task verdicts correct. (6)
+    watch follows a live gate too: python -m ...watch exits 3 ORCHESTRATOR NOT RUNNING while a gate --continue or a chain
+    script holds the device; it must treat a running gate (its pid, unit progress) as live and wake on its result. Selftest
+    for both. Proof: the selftests; then this tasks gate with every device unit reused from FIX.30s run (0 device minutes
+    when the code key is unchanged) - report how many units were reused vs run. Never loosen a check; never reset the board.'
+  hold: after the full gate (P.49/P.50/P.51/X.3) and the push of model_bringup (owner 2026-11-13)
+  paths:
+  - models/demos/common/bringup
+  - models/demos/deepseek_v41_flash_d_p/bringup
+  - scripts/run_safe_pytest.sh
+  - scripts/lib/tt_safe_run.sh
 classified:
   L.smoke:
     kind: framework

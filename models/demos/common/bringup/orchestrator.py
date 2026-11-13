@@ -157,9 +157,13 @@ CRASH_RETRIES, CRASH_WAIT_S = 2, 60  # F170: an agent that died without changing
 # attempts. These signatures stop the run at once with a reason for the person.
 INFRA_FAILURES = re.compile(
     r"Timed out while waiting for active ethernet core|Try resetting the board|No Tenstorrent devices|"
-    r"Failed to open device|fabric router .* timed out|Device \d+: .*timed out waiting for .*firmware",
+    r"Failed to open device|fabric router .* timed out|Device \d+: .*timed out waiting for .*firmware|"
+    r"SAFE_PYTEST_INFRA: host memory[^\n]*",
     re.I,
 )
+# FIX.30: a device process not started for lack of host memory (scripts/run_safe_pytest.sh, core/hostmem.py): no retry,
+# no box check, never a reset; the run stops until the memory is back
+HOST_MEMORY = re.compile(r"SAFE_PYTEST_INFRA: host memory")
 # The prefill engine the contract step plugs a model into; its agent may change it (owner, F29).
 CONTRACT_SHARED = "models/demos/common/prefill"
 # A spec's ``prior`` (an earlier bring-up of the same checkpoint on another mesh or configuration): per role, the prior's
@@ -1116,6 +1120,8 @@ class Orchestrator:
         key = stamps.code_key(self.spec.repo, self.spec)
         res = run_gate(self.spec, self.led, tid, commit=True, reuse=reuse, on_unit=on_unit)
         sig = self.infra_failure(res) if res.verdict in ("FAIL", "HANG") else None
+        if sig and HOST_MEMORY.search(sig):  # FIX.30: a retry would find the same memory; a box check cannot help
+            raise InfraStop(tid, sig)
         if sig and reuse is None:  # F170 (audit items 7, 17): one automatic retry of the stopped unit, not a run stop
             if not TEST_TIMEOUT.search(sig) and not self.box_ok(tid):
                 raise InfraStop(tid, sig)
@@ -1517,7 +1523,13 @@ class Orchestrator:
         return m.group(0) if m else None
 
     def stop_for_infra(self, tid: str, sig: str) -> int:
-        if TEST_TIMEOUT.search(sig):
+        if HOST_MEMORY.search(sig):  # FIX.30
+            why = (
+                f"the host has too little free memory for the gate's device process ({sig}). Do NOT reset the board or "
+                "reload the driver: free the host memory (leaked kernel / driver memory needs infra, #exabox-infra), "
+                "then resume (only the stopped unit and the ones after it run)"
+            )
+        elif TEST_TIMEOUT.search(sig):
             why = (
                 f"the test ran past its pytest timeout ({sig!r}) twice (one automatic retry, F170): check the machine's "
                 "load (CPU jobs next to the gate) and the log for a slow path, or raise box.test_timeout_s; then "
