@@ -73,6 +73,7 @@
 #include "program_command_sequence.hpp"
 #include "program_device_map.hpp"
 #include "program_impl.hpp"
+#include "emulated_program_runner.hpp"  // emule::compile_program
 #include "slow_dispatch.hpp"
 #include "tt-metalium/program.hpp"
 #include <tt_stl/span.hpp>
@@ -3407,12 +3408,14 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                 Inspector::program_kernel_compile_finished(this, device, kernel, build_options, binary_root);
             }
         }
-#ifdef TT_METAL_USE_EMULE
+        // The emulator builds the kernels here, as a silicon compile does, so a build error surfaces from compile.
+        // Under real fast dispatch each kernel also gets its text binary for the dispatcher to move.
+        Program program(shared_from_this());
         if (cluster.runs_dispatch_firmware()) {
-            Program program(shared_from_this());
             emule::prepare_fd_program(device, program, build_env.build_key());
+        } else {
+            emule::compile_program(device, program);
         }
-#endif
         compiled_.insert(build_env.build_key());
         Inspector::program_compile_finished(this, device, build_env.build_key());
         return;
