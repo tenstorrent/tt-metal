@@ -45,7 +45,7 @@ mc, ccl = mesh_4x8(), CCLManager(md, num_links=int(os.environ.get("LINKS", "1"))
 res(event="open", devices=[d for d in md.get_device_ids()], fab=FAB)
 
 W = torch.load(f"{LMH}/head_weights.pt")
-R = torch.load(f"{LMH}/head_ref.pt")
+R = torch.load(f"{LMH}/" + os.environ.get("REF", "head_ref.pt"))
 X = R["X"][:NROWS]  # [N,4,D] bf16
 top1, marg = R["top1"][:NROWS], R["marg"][:NROWS]
 sub = [i for i in R["sub"] if i < NROWS]
@@ -166,11 +166,44 @@ for v in VARIANTS:
             top1_agree_margin_ge_0p05=float(agree[marg >= 0.05].mean()),
             n_flip=int((1 - agree).sum()),
             n_flip_margin_ge_0p01=int((1 - agree)[marg >= 0.01].sum()),
+            flip_margins=[round(float(m), 4) for m in marg[agree == 0][:20]],
             pcc_min=min(pc),
             pcc_mean=sum(pc) / len(pc),
             max_abs_err=mad,
             regret_mean=sum(reg) / len(reg),
             regret_max=max(reg),
+        )
+    if "nacc" in STAGES:  # final-layer: device RMSNorm of the hc_head output + lm_head (no streams are dumped)
+        HCr = R["HC"][:NROWS]
+        T = max(TS)
+        toks = []
+        for i in range(0, HCr.shape[0], T):
+            ch = HCr[i : i + T]
+            n = ch.shape[0]
+            if n < T:
+                ch = torch.cat([ch, ch[-1:].repeat(T - n, 1)])
+            y = ttnn.from_torch(
+                ch.reshape(1, 1, T, DIM).float(),
+                device=md,
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(md),
+            )
+            ms2 = ttnn.mean(ttnn.multiply(y, y), dim=-1, keepdim=True)
+            h = ttnn.typecast(
+                ttnn.multiply(ttnn.multiply(y, ttnn.rsqrt(ttnn.add(ms2, 1e-5))), head.norm_w), ttnn.bfloat16
+            )
+            toks.append(head.gather_logits(head.matmul_only(h))[:n].argmax(-1))
+        tk = torch.cat(toks)
+        agree = (tk == top1).float()
+        res(
+            event="nacc",
+            variant=name,
+            rows=int(HCr.shape[0]),
+            top1_agree=float(agree.mean()),
+            n_flip=int((1 - agree).sum()),
+            flip_margins=[round(float(m), 4) for m in marg[agree == 0][:20]],
         )
     if "lat" in STAGES:
         for T in TS:
