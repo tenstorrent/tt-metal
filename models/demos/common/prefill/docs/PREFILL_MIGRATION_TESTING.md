@@ -1,7 +1,7 @@
 # Prefill KV-migration — configuration and gates
 
 The prefill side on its own terms: the files that configure it, two gates that can be run against it
-directly with **no decode side present**, and a third that adds one. The tt-llm-engine launch harness
+directly with **no decode side present**, a third that adds one, and a fourth for the reverse leg. The tt-llm-engine launch harness
 generates and invokes this underneath; this document is the layer beneath that. It is also the path to take when integrating a new
 model, because the gates isolate failures that the harness necessarily reports as one.
 
@@ -13,6 +13,7 @@ Assumes the model is already integrated — adapter registered, golden trace sta
 | **1 — mock migration** | Prefill writes correct KV (precondition for everything) and the KV-chunk address table is correct, read device-lessly | tt-metal tree only |
 | **2 — loopback migration** | The real DRAM → transport → DRAM copy, and the destination slots read back by the driver (`--verify-migration`, default `dst-bytes`) | + tt-llm-engine binaries |
 | **3 — prefill → decode via KV Manager** | A real cross-pod migration through tt-d-gen's KVM fleet, checked byte for byte by `migration_chunk_digest` | + a decode side and a KVM fleet |
+| **4 — decode → prefill via KV Manager** | A second turn whose prefix prefill pulls back from decode (tt-d-gen D2P), checked byte for byte the same way | + tt-d-gen's engine driving both workers |
 
 Gate 2 covers the same ground as the harness's own prefill-loopback stage. The difference is only that the
 harness drives it end to end instead of three terminals.
@@ -612,9 +613,58 @@ the handoff, so compare it by PCC on the decode side instead.
 
 ---
 
+## Gate 4 — decode → prefill through tt-d-gen's KV Manager
+
+The reverse leg: a conversation's second turn, whose prefix decode still holds, lands in a prefill slot
+without prefill recomputing it. tt-d-gen owns the whole exchange (`runtime.d2p_enabled` on both workers;
+tt-d-gen `docs/d2p_migration.md`): decode offers the prefix it holds, prefill parks and pulls the range it
+lacks through decode's KVM, then prefills only the new turn from that position and sends it back to decode
+as in Gate 3. Nothing in this tree takes part beyond what Gate 3 already needs: the runner accepts a chunk
+whose `actual_start` is the pulled length and attends over the slot's `[0, actual_start)` as it does for a
+local multi-turn continuation (above), the K3.1 indexer scores against the indexer keys already in its
+cache, and every KDA layer loads its carry from the slot. `migration_driver` has no pull mode: this gate
+runs through tt-d-gen's workers, not the producer.
+
+**Recurrent state.** For a recurrent model (Kimi-K3, K3.1) the pulled KV is only usable with the KDA state
+that stands at the same position, and the KV Manager moves the `Snapshot` configs whole. tt-d-gen's
+checkpoint mode gives decode a state to offer: decode copies its state into a shadow slot every
+`state_checkpoint_interval` tokens (the ring then holds `2 × max_slots` KV slots) and offers the prefix up
+to its last checkpoint, which is a multiple of `kv_block_size` and so satisfies the runner's 32-aligned
+start. The prefill worker config carries `recurrent_state` and `d2p_enabled`. tt-d-gen's sample pairs are
+`models/kimi-k3.1/dynamo.disagg.reload.checkpoints.d2p.decode.json` and
+`dynamo.disagg.reload.d2p.prefill.json`.
+
+**Proof the pull happened.** On the prefill worker `tt_engine_migrated_tokens_total` rises by the pulled
+length and `tt_engine_prompt_tokens_prefilled_total` by the new turn only; decode's log carries the
+reverse-leg `HARNESS_KV` record with the pulled range. A turn that logs "prefilling locally" pulled nothing.
+
+**Byte check.** The same digest as Gate 3 with the sides swapped. After the second turn, with the KVM fleet
+down and before any board reset, on every host of each side:
+
+```bash
+# decode hosts: the conversation's decode slot, positions [0, M) where M is the pulled length
+python -m models.demos.common.prefill.runners.migration_chunk_digest digest \
+    --table <decode table .pb> --device-map <this host's device map> \
+    --slot <decode slot> --positions <M> --configs 00,01 --out <shared dir>/decode_$(hostname).json
+# prefill hosts: the slot the pull landed in, the same positions
+python -m models.demos.common.prefill.runners.migration_chunk_digest digest \
+    --table <prefill table .pb> --device-map <this host's device map> \
+    --slot <prefill slot> --positions <M> --configs 00,01 --out <shared dir>/prefill_$(hostname).json
+python -m models.demos.common.prefill.runners.migration_chunk_digest compare \
+    --src '<shared dir>/decode_*.json' --dst '<shared dir>/prefill_*.json'
+```
+
+Prefill continued the turn in the same slot, but only at positions `>= M`, so `[0, M)` still holds the
+pulled bytes. The slots and `M` come from the engine's pull record (the `Landed` range) or the worker
+logs. Leave the KDA configs out here too: prefill advanced that state when it computed the new turn. The
+check that covers it is a token one: at temperature 0, the second turn with `d2p_enabled` off on the
+prefill worker (it recomputes the prefix from 0) must produce the same first tokens as the pulled run.
+
+---
+
 ## Runtime hooks each gate requires
 
-Both gates run off the optional runtime hooks in `ADDING_A_PREFILL_MODEL.md` §2. Implement only what the
+The gates run off the optional runtime hooks in `ADDING_A_PREFILL_MODEL.md` §2. Implement only what the
 gates you intend to run require.
 
 | Gate | Hook | Signature requirement |

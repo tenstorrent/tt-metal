@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Byte-exact P->D check of a KV migration, one host at a time.
+"""Byte-exact check of a KV migration between two systems, one host at a time: prefill -> decode, or a decode ->
+prefill pull with the sides swapped (PREFILL_MIGRATION_TESTING.md, Gates 3 and 4).
 
 digest: hash every chunk of the chosen configs for positions [0, P) of one slot, on this host's chips, addressed
 through a published KV chunk table and this host's device map (``mesh chip unique_id`` lines), read with
@@ -11,9 +12,10 @@ compare: merge every host's digest per side and compare the two sides key by key
 and on any chunk that only one side hashed (a host left out of a digest). Two files of one side that hash the
 same chunk differently are an error, not a merge.
 
-Run digest after a P->D run with the KV Manager fleet down and before any board reset: device DRAM keeps its
-contents after the processes exit. Decode writes slot 1 only at positions >= P after the migration, so [0, P)
-still holds the migrated bytes. The KDA configs are left out: decode advances that state after the handoff.
+Run digest after the run with the KV Manager fleet down and before any board reset: device DRAM keeps its
+contents after the processes exit. The receiving side writes its slot only at positions >= P after the
+migration, so [0, P) still holds the migrated bytes. The KDA configs are left out: the receiver advances that
+state as soon as it runs.
 
   python -m models.demos.common.prefill.runners.migration_chunk_digest digest --table T.pb --device-map /tmp/x.txt --slot S --positions P --configs 00,01 --out F
   python -m models.demos.common.prefill.runners.migration_chunk_digest compare --src 'prefill_*.json' --dst 'decode_*.json'
