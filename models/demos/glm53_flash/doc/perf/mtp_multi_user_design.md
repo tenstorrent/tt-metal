@@ -174,3 +174,35 @@ build WITHOUT narrow widths (and without S1_DRAM) has not run at 1 M yet. Valida
 (_logs/mesh/chain_mmtp_k1.sh): the 8x4 layer tests U 8 K 1 / U 4 K 1, then the e2e G 8 K 1 on B 16 without narrow widths
 at 1 M, else 256 K, else 128 K (GLM53_SPEC_L1_DEBUG / GLM53_L1_REPORT attribute the L1), G 4 K 1 on a B 8 build, G 4 K 3
 on B 16 at the fitting SEQ, and the single-user K 3 knob-off regression.
+
+## 8. Serving the multi-user step: what AgentX needs (2026-11-13)
+
+The served path (generator_vllm_stack.py) already drives batch 2 through the plugin's contract: spec_plan_for gives
+the B 16 launch spec_multi_k_by_rows, `_propose_multi` hands K drafts to every live row, `_fused_rows` maps the
+verify block's rows onto the group bases, `_admit` places new requests on free group bases first and a released base
+leaves. Two rules keep it out of agentic traffic:
+
+1. The verify head is greedy (tt/spec_mtp.py head_clone: top-1), so only greedy requests speculate. vLLM takes
+   temperature 1.0 / top_p 0.95 from the checkpoint's generation_config and AgentX (AIPerf) sends none of its own:
+   every AgentX request is sampled. The single-user MTP AgentX of 2026-11-12 shows it: 87 fused verifies against
+   76,364 declines.
+2. The step speculates only while EXACTLY G requests are live on the group bases, and the first to finish ends it for
+   all. At AgentX c 8 some request is almost always prefilling (TTFT P50 20 s), so exactly-G steps are rare.
+
+Device work, in order (each lands behind its own capability, so the adapter turns it on without a contract change):
+
+- Sampled verify (Glm53Generator.spec_samples(); the adapter's GLM53_SPEC_SAMPLED declares spec_ids_are_sampled).
+  The verify head draws every candidate column from the device sampler under its row's own temperature / top-k /
+  top-p / seed: head_clone(sample=True) with a per-verify-row parameter view (user u's params on rows u g .. u g + K)
+  and an RNG stream per row. SpecCtl's accept is unchanged: it compares the column's token with the draft, which with
+  one-hot (greedy) drafts is exact rejection sampling; the bonus / correction is the column's draw. The plugin keeps
+  penalised rows plain and walks the ids as it does for greedy rows. Draws are the head's top-DEVICE_TOP_K
+  truncation (10 on the 8x4), the same distribution plain decode already serves.
+- Partial groups (Glm53Generator.spec_partial_groups()): the step serves any non-empty subset of the G bases. An
+  inactive group's verify rows are skipped (SpecCtl: no accept, no committed-row move, its KDA / MTP rows untouched);
+  spec_enter(slots=subset) seeds only the joining groups (BOOT per group); a user that finishes leaves its group
+  without leaving the others. The adapter (spec_multi_gate(partial=True)) re-enters whenever the active set changes.
+
+Adapter (this branch): spec_multi_gate (one host-tested rule for both modes), the two capability probes (False until
+the backend sets ``samples`` / ``partial`` on its spec step), the GLM53_SPEC_SAMPLED refusal over a greedy verify
+head, and `_spec_active` (the entered subset) for `_fused_rows`.

@@ -127,6 +127,38 @@ def spec_enabled(env=os.environ) -> bool:
 
 
 SPEC = spec_enabled()
+# GLM53_SPEC_SAMPLED=1 (default off; needs the device sampler, DEVICE_TOP_K > 1): the verify answers with the device
+# sampler's draw per candidate column under each row's own temperature / top-k / top-p / seed, so the plugin's id walk is
+# exact rejection sampling against the MTP layer's greedy drafts and SAMPLED requests speculate too
+# (SPEC_DECODE_CONTRACT.md: spec_ids_are_sampled; penalised rows stay plain, the plugin's rule). The served AgentX traffic
+# is sampled (vLLM takes temperature 1.0 / top_p 0.95 from the checkpoint's generation_config): greedy-only speculation
+# never engages there (MTP AgentX 2026-11-12: 87 fused verifies vs 76,364 declines). It needs the backend's sampled verify
+# head (Glm53Generator.spec_samples(); tt/spec_mtp.py head_clone is top-1 today): the adapter refuses to start with the
+# knob on and a greedy verify head -- it would answer sampled rows with the target argmax.
+SPEC_SAMPLED = SPEC and DEVICE_TOP_K > 1 and os.environ.get("GLM53_SPEC_SAMPLED", "0") == "1"
+
+
+def spec_multi_gate(live, bases, speculable: dict, no_spec, room: bool, *, partial: bool = False):
+    """GLM53_SPEC_MULTI's step gate -> the group bases that speculate this step (sorted), or None (a plain decode).
+    v1 (``partial`` False: batch 2's fixed G): the live generator slots are exactly the G group bases. ``partial`` (the
+    backend's Glm53Generator.spec_partial_groups(): an inactive group's verify rows skipped on device, a joining group
+    seeded alone): any non-empty subset of the bases. Either way every live slot is speculable (greedy, or sampled under
+    spec_ids_are_sampled) and allowed (not in ``no_spec``: a prefix-attached / image request), and every user's next step
+    fits (``room``: GLM53_SPEC_MAX_CTX); a live slot off the bases declines the step for everyone (one launch serves every
+    live row)"""
+    live, bases = sorted(int(v) for v in live), sorted(int(v) for v in bases)
+    if not bases or not live or not room:
+        return None
+    if partial:
+        if not set(live) <= set(bases):
+            return None
+    elif live != bases:
+        return None
+    if any(not speculable.get(s, False) or s in no_spec for s in live):
+        return None
+    return live
+
+
 SPEC_ASYNC_ENV = "GLM53_STACK_VLLM_SPEC_ASYNC"
 
 
@@ -552,6 +584,8 @@ class GLM53StackForCausalLM:
         # deferred verify readback (supports_async_spec_decode above: spec_async_enabled)
         "supports_spec_decode": SPEC,
         "spec_requirements": ["device_propose"] if SPEC else [],
+        # GLM53_SPEC_SAMPLED: the verify's ids are the device sampler's per-column draws (sampled requests speculate)
+        "spec_ids_are_sampled": SPEC_SAMPLED,
     }
 
     # model_runner.py:2301-2320: the one captured decode width (fixed user slots, no smaller bucket); set by
@@ -584,6 +618,15 @@ class GLM53StackForCausalLM:
         self._spec_lock = threading.Lock()  # (the plugin may finalize a verify off the engine thread)
         self.spec_stats = dict(fused=0, fallback=0, committed=0, enters=0, proposals=0, declines=0, seeds=0,
                                deferred=0)  # fmt: skip
+        # GLM53_SPEC_SAMPLED: sampled rows speculate on a sampled verify head only (spec_ids_are_sampled is a class
+        # declaration: refuse the launch rather than answer sampled rows with the target argmax)
+        self.spec_sampled = self.spec and SPEC_SAMPLED
+        if self.spec_sampled and not self.gen.spec_samples():
+            raise RuntimeError(
+                "GLM53_SPEC_SAMPLED=1 declares spec_ids_are_sampled, but the backend's verify head is greedy "
+                "(Glm53Generator.spec_samples() False: tt/spec_mtp.py head_clone draws top-1 only)"
+            )
+        self._spec_active = None  # GLM53_SPEC_MULTI: the group bases of the running speculation (the gate at its entry)
 
     # ================================================================================= construction
     @classmethod
@@ -1054,13 +1097,19 @@ class GLM53StackForCausalLM:
         if getattr(self.gen._binding(kv), "spec", None) is not None:
             self.gen.spec_leave(kv)
         self._spec_n = None
+        self._spec_active = None
+
+    def _speculable(self, g: int) -> bool:
+        """generator slot g's request may be answered by a verify: greedy, or sampled when the verify samples on device
+        (GLM53_SPEC_SAMPLED; penalised requests the plugin keeps plain itself)"""
+        return bool(self._greedy.get(g, False)) or self.spec_sampled
 
     def _spec_lone(self, kv) -> bool:
         """generator slot 0 holds the only live request, a greedy one that may speculate, and the next step fits the
         context"""
         b = self.gen._binding(kv)
         live = [s for s in range(b.max_batch) if b.slots[s].active and not b.slots[s].finished]
-        return (live == [0] and bool(self._greedy.get(0, False)) and 0 not in self._no_spec
+        return (live == [0] and self._speculable(0) and 0 not in self._no_spec
                 and self.gen.spec_room(kv))  # fmt: skip
 
     @property
@@ -1069,14 +1118,23 @@ class GLM53StackForCausalLM:
         on the group bases, one step) -- the opt-in plan's multi-row verifies run on it"""
         return bool(self.spec) and self.gen.spec_groups() > 0
 
-    def _spec_multi_ok(self, kv) -> bool:
-        """GLM53_SPEC_MULTI v1 gate: the live requests are exactly the G group bases, every one greedy and allowed to
-        speculate, and every user's next step fits (the context, GLM53_SPEC_MAX_CTX: Glm53Generator.spec_room)"""
+    def _spec_partial(self) -> bool:
+        """the backend's multi-user step serves any non-empty subset of its groups (Glm53Generator.spec_partial_groups)"""
+        return self.spec_multi_capable and self.gen.spec_partial_groups()
+
+    def _spec_multi_active(self, kv):
+        """spec_multi_gate over the binding's live slots -> the speculating group bases, or None"""
         b = self.gen._binding(kv)
         live = [s for s in range(b.max_batch) if b.slots[s].active and not b.slots[s].finished]
         bases = list(self.gen.spec_slots())
-        return (bool(bases) and live == bases and all(bool(self._greedy.get(s, False)) for s in bases)
-                and not set(bases) & self._no_spec and self.gen.spec_room(kv))  # fmt: skip
+        return spec_multi_gate(live, bases, {s: self._speculable(s) for s in live}, self._no_spec,
+                               bool(bases) and self.gen.spec_room(kv), partial=self._spec_partial())  # fmt: skip
+
+    def _spec_multi_ok(self, kv) -> bool:
+        """GLM53_SPEC_MULTI gate (spec_multi_gate): v1 = the live requests are exactly the G group bases; with the
+        backend's partial groups any non-empty subset of them; every one speculable and allowed, every next step fitting
+        """
+        return self._spec_multi_active(kv) is not None
 
     def _spec_gate(self, kv) -> bool:
         return self._spec_multi_ok(kv) if self.spec_multi_capable else self._spec_lone(kv)
@@ -1195,7 +1253,7 @@ class GLM53StackForCausalLM:
         K = self.gen.spec_k()
         B, W = (int(v) for v in tok.shape)
         live = [i for i in range(B) if int(pos[i, 0]) >= 0]
-        bases = list(self.gen.spec_slots())
+        bases = list(self._spec_active or self.gen.spec_slots())  # (partial groups: the entered subset)
         if sp is None or "groups" not in sp or W != K + 1 or sorted(alias[i] for i in live) != bases:
             return None
         out = {}
@@ -1317,7 +1375,10 @@ class GLM53StackForCausalLM:
         length -- the bootstrap's drafts (entering) or the last fused step's, which continue exactly its committed
         block per user; else every row declines (the speculation is left: the next step decodes plainly)"""
         rows = {i: self._alias[i] for i in live}
-        ok = K == self.gen.spec_k() and sorted(rows.values()) == list(self.gen.spec_slots()) and self._spec_multi_ok(kv)
+        active = self._spec_multi_active(kv) if K == self.gen.spec_k() else None
+        ok = active is not None and sorted(rows.values()) == active
+        if ok and self._spec_active is not None and active != self._spec_active:
+            self._spec_stop(kv)  # (partial groups: a user joined / left -> leave, enter the new set below)
         last = {i: int(ac[i]) - 1 for i in live}
         if ok:
             ok = all(int(cp[i, last[i]]) == int(b.slots[g].seq_len) for i, g in rows.items())
@@ -1334,12 +1395,13 @@ class GLM53StackForCausalLM:
             d = {g: list(sp["groups"][g]["drafts"]) for g in rows.values()}
         elif ok:
             try:
-                d = self.gen.spec_enter(kv)
+                d = self.gen.spec_enter(kv, slots=active) if self._spec_partial() else self.gen.spec_enter(kv)
             except ValueError as e:  # (a refusal of the generator's: page coverage / context -> decline this step)
                 logger.warning(f"GLM53 stack spec: no multi-user bootstrap ({e})")
                 ok = False
             else:
                 self._spec_n = None
+                self._spec_active = active
                 self.spec_stats["enters"] += 1
         if not ok:
             self._spec_stop(kv)

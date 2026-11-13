@@ -67,6 +67,7 @@ from models.demos.glm53_flash.tt.generator_vllm_stack import (
     cache_defaults,
     declare_multimodal_class,
     row_params,
+    spec_multi_gate,
     spec_plan_for,
     trim_page_rows,
 )
@@ -2197,7 +2198,7 @@ def test_spec_multi_generate_equals_plain_greedy(K, G, mb, pattern):
     assert gen.generate_batch(prompts, 8, enable_trace=True) == [p[:8] for p in plain]
 
 
-def test_spec_multi_refusals_and_room():
+def test_spec_multi_refusals_and_room(monkeypatch):
     """GLM53_SPEC_MULTI's generate_batch(spec_k=K): exactly G greedy prompts on the group bases; near the context end a
     step no longer fits for some user: the speculation ends, the plain loop finishes every user with the same ids"""
     K, G, mb = 1, 2, 4
@@ -2217,6 +2218,24 @@ def test_spec_multi_refusals_and_room():
     t = gen.last_batch_timing
     assert out == plain and [len(o) for o in out] == [osl, osl]
     assert 0 < t["spec_emitted_u"][0] < osl - 1 and backend.decodes > 0 and backend.spec.counters["leaves"] == 1
+    # the served step's gate (spec_multi_gate): v1 = exactly the G bases; partial groups = any non-empty subset of them;
+    # every live slot speculable and allowed, every next step fitting; a live slot off the bases declines for everyone
+    sp = {0: True, 2: True}
+    assert spec_multi_gate([2, 0], [0, 2], sp, set(), True) == [0, 2]
+    assert spec_multi_gate([0], [0, 2], sp, set(), True) is None
+    assert spec_multi_gate([0], [0, 2], sp, set(), True, partial=True) == [0]
+    assert spec_multi_gate([0, 1], [0, 2], {**sp, 1: True}, set(), True, partial=True) is None
+    assert spec_multi_gate([0, 2], [0, 2], {0: True, 2: False}, set(), True) is None
+    assert spec_multi_gate([0, 2], [0, 2], sp, {2}, True) is None
+    assert spec_multi_gate([0, 2], [0, 2], sp, set(), False) is None
+    assert spec_multi_gate([], [0, 2], sp, set(), True, partial=True) is None
+    # GLM53_SPEC_SAMPLED over a greedy verify head (spec_samples() False) refuses the launch
+    import models.demos.glm53_flash.tt.generator_vllm_stack as gvs
+
+    assert gen.spec_samples() is False and gen.spec_partial_groups() is False
+    monkeypatch.setattr(gvs, "SPEC_SAMPLED", True)
+    with expect_error(RuntimeError, "GLM53_SPEC_SAMPLED=1 declares spec_ids_are_sampled"):
+        gvs.GLM53StackForCausalLM(gen, mb, 4096, spec=True)
     assert "ttnn" not in sys.modules
 
 

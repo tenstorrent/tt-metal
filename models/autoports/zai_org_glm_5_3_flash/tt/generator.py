@@ -2365,6 +2365,18 @@ class Glm53Generator(_ReadinessGenerator):
         """the users G of the backend's multi-user speculative step (0: the single-user step / none)"""
         return int(getattr(getattr(self.backend, "spec", None), "groups", 0) or 0)
 
+    def spec_samples(self) -> bool:
+        """the speculative step's verify head draws every candidate column from the device sampler under the row's own
+        temperature / top-k / top-p / seed (the served adapter's spec_ids_are_sampled, GLM53_SPEC_SAMPLED). False until
+        the backend's step sets ``samples``: tt/spec_mtp.py head_clone is top-1 (greedy) only"""
+        return bool(getattr(getattr(self.backend, "spec", None), "samples", False))
+
+    def spec_partial_groups(self) -> bool:
+        """the multi-user step serves any non-empty subset of its G group bases (an inactive group's verify rows skipped
+        on device, a joining group seeded alone through spec_enter(slots=)). False until the backend's step sets
+        ``partial``: batch 2 serves exactly G live users"""
+        return bool(getattr(getattr(self.backend, "spec", None), "partial", False))
+
     def spec_slots(self) -> tuple:
         """the generator slots the speculating users occupy: (0,), or the G group bases (0, K + 1, 2 (K + 1), ..)"""
         sp = getattr(self.backend, "spec", None)
