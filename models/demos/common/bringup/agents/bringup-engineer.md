@@ -33,6 +33,11 @@ You start with no memory of earlier steps. Everything you need is in the brief a
    `python -m models.demos.common.bringup.devjob start <name> -- scripts/run_safe_pytest.sh ...`, then
    `python -m models.demos.common.bringup.devjob wait <name>` (rc of the run, or 75 = still running: call it again),
    `devjob tail <name>` for its log. Never kill a device job, one of yours or another's; one device job at a time.
+   Several model-level tests (each loads the model, ~4-5 min on a Galaxy): run them in ONE process, the model loaded
+   once (FIX.29, owner): `scripts/run_safe_pytest.sh --one-process --run-all <test file> <test file> ...` (also under
+   devjob). A model test you write takes the model through the model's loader (hooks.device_model, the adapter) and
+   declares `BATCH_SHARED = True` at module level, so it can share; a switch it needs other than the load's is a
+   per-call argument of the loaded model (e.g. `use_decoder_skip`), never a reload. The gate does the same by itself.
 4. Always use 2D fabric. Open meshes with `ttnn.FabricConfig.FABRIC_2D` (the spec's `box.device_params` does this for
    the gates), and configure CCLs, dispatch and combine for 2D fabric. Never open a device, or write a test or a
    module, with `FABRIC_1D` or `FABRIC_1D_RING`.

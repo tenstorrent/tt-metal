@@ -42,6 +42,12 @@ the long-range caches decode / the prefix cache hold; missing = actual_start: no
 history-cache row below it is written, and a chunk starting below it is an encoder replay (windows truncated at
 actual_start). Other DECODER_SKIP values refuse a global_write_start above actual_start (ValueError).
 
+Model load (FIX.29, OWNER 2026-11-13 "LOAD THE MODEL ONLY ONCE"): ``load_model`` is the model's one load path; the
+runtime and the bring-up hook (bringup/hooks.py device_model: the ladder, determinism, the model's tests) both call it.
+Inside a bring-up batch process (testing/batch.py: one pytest process running several tests) it returns the batch's
+model, so the contract tests' adapter path and every other test of a gate share one load; elsewhere (the engine,
+a test of its own) it builds the model as asked.
+
 Import-light: all device / model imports happen inside the methods.
 """
 
@@ -115,6 +121,35 @@ def served_layer_ids(first_layer_idx: int, num_layers: int) -> list[int]:
     return ids
 
 
+def load_model(
+    mesh_device, layers, *, max_seq: int, chunk: int, lm_head: bool = False, weight_cache=None, checkpoint=None
+):
+    """The model's one load path (module docstring "Model load"): TtDS41Model of ``layers`` with RoPE tables for
+    ``max_seq`` positions; in a bring-up batch the batch's model (loaded once for the longest sequence its tests need,
+    with the LM head when one needs it), else a new model. Never a second copy of the weights in one process.
+    ``checkpoint``: the checkpoint directory (default: the run's, model_path())."""
+    from models.demos.common.bringup.testing import batch
+
+    ck = str(checkpoint or model_path())
+
+    def load(seq, head):
+        from models.demos.deepseek_v41_flash_d_p.tt.model import TtDS41Model
+
+        return TtDS41Model(
+            mesh_device, ck, list(layers), max_seq=seq, chunk=chunk, lm_head=head, weight_cache=weight_cache
+        )
+
+    return batch.shared_model(
+        mesh_device,
+        layers,
+        seq=int(max_seq),
+        lm_head=bool(lm_head),
+        load=load,
+        config={"chunk": int(chunk), "weight_cache": str(weight_cache), "checkpoint": ck},
+        spec=bringup_spec(),
+    )
+
+
 @dataclass
 class DS41KvCaches(KvCaches):
     contract: object  # kv_contract.DS41ContractKV
@@ -129,7 +164,6 @@ class DS41PrefillRuntime:
     def __init__(self, *, mesh_device, hf_config, params: PrefillRunParams):
         import ttnn
         from models.demos.deepseek_v41_flash_d_p.tt.attention import WindowGeometry
-        from models.demos.deepseek_v41_flash_d_p.tt.model import TtDS41Model
 
         assert params.is_first_rank and params.is_last_rank, "single-rank only"
         assert tuple(params.mesh_shape) == tuple(mesh_device.shape), (params.mesh_shape, tuple(mesh_device.shape))
@@ -137,14 +171,9 @@ class DS41PrefillRuntime:
         assert m % c == 0, (m, c)
         self.mesh_device, self.config = mesh_device, params
         self.layer_ids = served_layer_ids(params.first_layer_idx, params.num_layers)
-        self.model = TtDS41Model(
-            mesh_device,
-            model_path(),
-            self.layer_ids,
-            max_seq=m,
-            chunk=c,
-            lm_head=False,
-            weight_cache=params.weight_cache_path,
+        # FIX.29: through the one load path (in a bring-up batch: the batch's model, loaded once)
+        self.model = load_model(
+            mesh_device, self.layer_ids, max_seq=m, chunk=c, lm_head=False, weight_cache=params.weight_cache_path
         )
         # FIX.17: DEEP_LAYERS=tail skips layers 21-39 until the prompt's end; the engine reads every layer's window KV
         assert not self.model.deep, "DEEP_LAYERS=tail is not served: the engine needs every layer's whole history"

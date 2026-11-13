@@ -754,6 +754,28 @@ def run_units(
     sids = {u: sid for u, _, _, sid in plan if sid}
     n = len(plan)
     note = on_unit or (lambda *a: None)
+
+    def would_run(u, cmd, sid) -> bool:
+        """FIX.29: the unit runs in this gate (not filtered out, not kept, not reused): the loop's own tests."""
+        if only is not None and u not in only:
+            return False
+        uenv = dict(env, **{M.TASK_ENV: unit_base(u)})
+        d = delta.get(u) if delta is not None and not fresh and u not in rerun else None
+        if only is None and _kept(d, unders, cmd, uenv, limits, len(plan) == 1):
+            return False
+        rec = None if store is None or fresh or u in rerun else store.get(u, sid)
+        return not (reusable(rec, limits, len(plan) == 1) and only is None)
+
+    # FIX.29: the units that run, grouped into processes (core/batch.gate_groups): {unit: its group}
+    groups = {}
+    if spec.get("tests.one_process"):
+        todo = [(u, c) for u, c, _, sid in plan if would_run(u, c, sid)]
+        for g in batch.gate_groups(todo, env):
+            if len(g) > 1:
+                for u, _ in g:
+                    groups[u] = g
+    shared: dict[str, dict] = {}  # unit -> its result in a group's batch process (rc, metrics, files, log, s)
+    loads = {"n": 0, "seen": False}  # FIX.29: model loads of this gate's processes (gate_model_loads)
     with open(log, "a" if only else "w") as f:
         f.write(f"$ {gate_command(task, tasks)}\n")
         for k, (u, cmd, st, sid) in enumerate(plan, 1):
@@ -795,13 +817,27 @@ def run_units(
             before = M.load(tid, results)
             seen = {p: p.stat().st_mtime_ns for p in outputs_in(results, task) if p.exists()}
             t0 = time.time()
-            run = batch.unit_command(cmd, spec) if spec.get("tests.one_process") else None
-            if run:  # F259: the unit's runs (a clean wall and its profiled run) in one process, the model loaded once
-                f.write(f"# {u}: its runs in one process (F259, tests.one_process)\n$ {run}\n")
+            if u in groups and u not in shared:  # FIX.29: the unit's group in one process, the model loaded once
+                shared.update(
+                    _run_group(spec, groups[u], env, log, results, tid, f, lambda x: {M.TASK_ENV: unit_base(x)})
+                )
+            if u in shared:
+                r = shared[u]
+                f.write(f"# {u}: run in the gate's shared process (FIX.29), {r['s']:.0f} s there\n")
+                f.write(r["text"])
                 f.flush()
-            rc = subprocess.run(
-                run or cmd, shell=True, cwd=spec.repo, env=uenv, stdout=f, stderr=subprocess.STDOUT
-            ).returncode
+                rc = r["rc"]
+                if r.get("first"):
+                    loads["n"] += r["loads"]
+                    loads["seen"] = True
+            else:
+                run = batch.unit_command(cmd, spec) if spec.get("tests.one_process") else None
+                if run:  # F259: the unit's runs (a clean wall and its profiled run) in one process, the model once
+                    f.write(f"# {u}: its runs in one process (F259, tests.one_process)\n$ {run}\n")
+                    f.flush()
+                rc = subprocess.run(
+                    run or cmd, shell=True, cwd=spec.repo, env=uenv, stdout=f, stderr=subprocess.STDOUT
+                ).returncode
             if rc == SAFE_HANG_RC and _uses_safe_runner(cmd):  # F204: before the next unit's mesh open wipes it
                 kept = hangdump.keep(spec.repo, hangdump.dest_for(log, u))
                 f.write(f"\n# {u}: HANG; triage + inspector kept in {kept}\n")
@@ -819,14 +855,27 @@ def run_units(
                         f"\n# {u}: WAIVED (owner, tests.unit_waivers): every failure matches the waiver: {waived}\n"
                     )
                     rc = 0
-            if store is not None:
+            if u in shared:
+                got = dict(shared[u]["metrics"])
+            else:
                 got = {k: v for k, v in M.load(tid, results).items() if before.get(k) != v}
+                if batch.LOADS_METRIC in got:  # FIX.29: the model loads of the unit's processes (a running total)
+                    t0_loads = int((before.get(batch.LOADS_METRIC) or {}).get("total") or 0)
+                    loads["n"] += int(got[batch.LOADS_METRIC].get("total") or 0) - t0_loads
+                    loads["seen"] = True
+            if loads["seen"]:  # FIX.29: the model loads of this gate's processes so far
+                gl = {"value": loads["n"], "t": time.strftime("%Y-%m-%dT%H:%M:%S")}
+                got[batch.GATE_LOADS_METRIC] = gl
+                _merge_metrics(results, tid, {batch.GATE_LOADS_METRIC: gl})
+            if store is not None:
                 ok = unit_ok(limits, got, len(plan) == 1)
                 hang = rc == SAFE_HANG_RC and _uses_safe_runner(cmd)
                 outs = [
                     p
                     for p in outputs_in(results, task)
-                    if p.exists() and p.name != f"{tid}.json" and seen.get(p) != p.stat().st_mtime_ns
+                    if p.exists()
+                    and p.name != f"{tid}.json"
+                    and (p.name in shared[u]["files"] if u in shared else seen.get(p) != p.stat().st_mtime_ns)
                 ]
                 verdict = "PASS" if rc == 0 and ok else ("HANG" if hang else "FAIL")
                 rec = {"stamp": st, "verdict": verdict, "rc": rc, "s": round(time.time() - t0, 1), "metrics": got}
@@ -846,6 +895,67 @@ def run_units(
             if rc != 0 or stop:
                 break
     return rc, reused, sids
+
+
+def _run_group(spec: Spec, group: list, env: dict, log: Path, results: Path, tid: str, f, unit_env) -> dict:
+    """FIX.29: the gate units of ``group`` [(unit, command)] in ONE batch process (core/batch.gate_entries,
+    testing/batch.run_plan): the mesh opened and the model loaded once. Each unit's output goes to its own log, then
+    into the gate log at the unit's turn. {unit: {"rc", "metrics", "files", "text", "s", "loads", "first"}}: rc as the
+    unit's own process would give it (a hang: SAFE_HANG_RC for the run it hung in; a unit the process never reached:
+    1, the reason in its text); ``loads`` the process's model loads, on the group's first unit (``first``)."""
+    d = log.parent / f"{log.stem}.shared"
+    d.mkdir(parents=True, exist_ok=True)
+    names = [u for u, _ in group]
+    logs = {u: d / f"{re.sub(r'[^A-Za-z0-9_.-]', '_', u)}.log" for u in names}
+    for u, c in group:
+        logs[u].write_text(f"$ {c}\n# FIX.29: in one process with {', '.join(x for x in names if x != u)}\n")
+    entries = batch.gate_entries(group, env, {u: unit_env(u) for u in names}, logs)
+    plan = batch.write_plan(d / "plan.json", entries, stop_on_fail=True)
+    hint = batch.hints([r for _, c in group for r in batch.parse_all(c)], spec)
+    cmd = batch.command(plan)
+    blog = d / "process.log"
+    f.write(
+        f"# FIX.29: units {', '.join(names)} in one process (tests.one_process)\n$ {cmd}\n# its own output: {blog}\n"
+    )
+    f.flush()
+    t0 = time.time()
+    with open(blog, "w") as bf:
+        penv = dict(env, **unit_env(names[0]), **hint)
+        prc = subprocess.run(cmd, shell=True, cwd=spec.repo, env=penv, stdout=bf, stderr=subprocess.STDOUT).returncode
+    got = batch.load_results(plan)
+    runs, running = got.get("runs") or {}, got.get("running")
+    btext = blog.read_text(errors="replace")
+    out = {}
+    for k, u in enumerate(names):
+        mine = [e for e in entries if e["unit"] == u]
+        rs = [runs.get(e["name"]) for e in mine]
+        text = logs[u].read_text(errors="replace")
+        metrics, files, secs = {}, [], 0.0
+        for r in rs:
+            if r and r.get("rc") is not None:
+                metrics.update(r.get("metrics") or {})
+                files += r.get("files") or []
+                secs += float(r.get("s") or 0)
+        if all(r and r.get("rc") is not None for r in rs):
+            rc = next((r["rc"] for r in rs if r["rc"]), 0)
+        elif prc == SAFE_HANG_RC and any(e["name"] == running for e in mine):
+            rc = SAFE_HANG_RC
+            text += f"\n# FIX.29: the shared process hung in this unit; its output:\n{btext}"
+        elif prc == SAFE_HANG_RC and running is None and not runs:
+            rc = SAFE_HANG_RC  # (hung before any run: the mesh open or the first load)
+            text += f"\n# FIX.29: the shared process hung before its first run; its output:\n{btext}"
+        else:
+            failed = [n for n, r in runs.items() if r and r.get("rc")]
+            why = f"run {failed[0]} failed first in the shared process" if failed else f"the process ended (rc {prc})"
+            rc = 1
+            text += f"\n# FIX.29: {u} not run: {why}; the process's output:\n{btext}"
+        out[u] = {
+            "rc": rc, "metrics": metrics, "files": files, "text": text, "s": secs,
+            "loads": sum(int((r or {}).get("loads") or 0) for r in runs.values()), "first": k == 0,
+        }  # fmt: skip
+    f.write(f"# FIX.29: the shared process of {', '.join(names)}: rc {prc}, {time.time() - t0:.0f} s\n")
+    f.flush()
+    return out
 
 
 def _delta_rec(verdict: str, under: str, cmd: str, uenv: dict, sid, metrics: dict, secs: float) -> dict:

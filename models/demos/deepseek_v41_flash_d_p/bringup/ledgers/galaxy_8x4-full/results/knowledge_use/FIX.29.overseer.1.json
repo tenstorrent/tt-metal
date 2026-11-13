@@ -1,0 +1,41 @@
+{
+ "used": [],
+ "contradicted": [],
+ "missing": [],
+ "cited_only": [
+  "DS41-242",
+  "DS41-243"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "FIX.29",
+  "role": "overseer",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-13T09:17:04",
+  "head": "53e0be96872",
+  "touched": [
+   "models/demos/common/bringup/agents/bringup-engineer.md",
+   "models/demos/common/bringup/core/batch.py",
+   "models/demos/common/bringup/core/gate.py",
+   "models/demos/common/bringup/selftest/test_gate_one_process.py",
+   "models/demos/common/bringup/selftest/test_model_determinism.py",
+   "models/demos/common/bringup/selftest/test_one_process.py",
+   "models/demos/common/bringup/testing/batch.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/FIX.29.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/FIX.29.overseer.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_determinism.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_prefill_end.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_window_snapshot.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/runners/adapter.py",
+   "scripts/run_safe_pytest.sh"
+  ]
+ }
+}

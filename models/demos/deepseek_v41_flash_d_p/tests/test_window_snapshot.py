@@ -45,6 +45,7 @@ from models.demos.common.bringup.testing.harness import mesh_parametrize, spec
 from models.demos.deepseek_v41_flash_d_p.tt.settings import settings
 
 WIDTH = 512
+BATCH_SHARED = True  # FIX.29: takes the model of a bring-up batch process (core/batch.shareable)
 
 
 def _set(monkeypatch, **kw):

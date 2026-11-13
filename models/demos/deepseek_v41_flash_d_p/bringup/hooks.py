@@ -1339,17 +1339,39 @@ def device_model(mesh, spec, layers, lm_head=True):
         return HybridDeviceModel(mesh, spec, layers, lm_head=lm_head)
     from models.demos.common.bringup.reference.golden import hf_path
     from models.demos.deepseek_v41_flash_d_p.tt.experts import expert_cache_dir
-    from models.demos.deepseek_v41_flash_d_p.tt.model import TtDS41Model
+    from models.demos.deepseek_v41_flash_d_p.tt.runners.adapter import load_model
 
-    return TtDS41Model(
+    # FIX.29: the model's one load path, the serving adapter's (in a bring-up batch: the batch's model, loaded once)
+    return load_model(
         mesh,
-        hf_path(spec),
         layers,
         max_seq=_max_seq(spec),
         chunk=_chunk(spec),
         lm_head=lm_head,
         weight_cache=expert_cache_dir(spec),
+        checkpoint=hf_path(spec),
     )
+
+
+# FIX.29: device_model goes through testing/batch.shared_model itself (tt/runners/adapter.load_model), so the framework's
+# batch.device_model asks it directly: the hook's and the serving runtime's loads share one cache entry
+SHARED_LOADER = True
+
+
+def batch_settings() -> dict:
+    """FIX.29: every switch's value a load would read now, from the environment (a frozen HOST_GLUE snapshot does not
+    hide a test's monkeypatch): a batch reloads when a load-time value differs from its model's."""
+    from models.demos.deepseek_v41_flash_d_p.tt.settings import settings as _settings
+
+    return {name: _settings._read(name) for name in _settings.table}
+
+
+def batch_call_settings() -> tuple:
+    """FIX.29: switches the model reads per call, never at load (a test may change them on the batch's model):
+    PREFILL_END (tt/attention.prefill_end, read on every chunk). DECODER_SKIP is read at load (the decoder lists,
+    replay128's tail model); the tests run decode on a model loaded with off through use_decoder_skip (host lists
+    only, FIX.28), so the shipped value stays the load's."""
+    return ("PREFILL_END",)
 
 
 def settings():

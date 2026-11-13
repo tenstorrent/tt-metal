@@ -56,6 +56,7 @@ from models.demos.deepseek_v41_flash_d_p.tests.bringup.contract import caches as
 from models.demos.deepseek_v41_flash_d_p.tests.bringup.contract import server_rules as R
 
 S = spec()
+BATCH_SHARED = True  # FIX.29: takes the model of a bring-up batch process (core/batch.shareable)
 pytestmark = device_timeout(S)
 N_SLOTS = 2
 

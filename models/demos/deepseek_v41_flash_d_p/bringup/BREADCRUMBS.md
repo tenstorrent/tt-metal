@@ -771,3 +771,66 @@ The one this change broke (test_seeded: `git add state.json`) is fixed.
   `contract_checks_failed_decoder_skip == 0`, `acks_early_decoder_skip == 0`,
   `unwritten_records_changed_decoder_skip == 0`, `decode_acks_failures == 0` (tasks.yaml not edited).
 - Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate FIX.28 --spec models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --check`.
+
+## FIX.29 (overseer fix, OWNER 2026-11-13: "LOAD THE MODEL ONLY ONCE") - one model load per gate
+
+What changed
+- One load path for the model: `tt/runners/adapter.load_model` (TtDS41Model). Both the bring-up hook
+  (`bringup/hooks.py device_model`) and the serving runtime (`DS41PrefillRuntime.__init__`) call it, so the
+  contract tests still build the model through the engine's adapter, and that is the same load as everyone else's.
+  load_model goes through `testing/batch.shared_model`: outside a batch process it just loads (and counts); inside one
+  it returns the batch's model (loaded once, RoPE for the longest sequence any test needs, the LM head if one needs it).
+- `testing/batch.shared_model` (framework): one cache per process; reuse only when key / mesh / layers / config
+  (chunk, expert cache, checkpoint) / load-time switch values (hooks.batch_settings, read from the environment) match
+  and the seq / LM head suffice; else a warned, counted reload. hooks.batch_call_settings = (PREFILL_END,): read per
+  chunk, so a test may change it on the shared model. Every real load records `model_loads` (value: this process;
+  `total`: running total across processes, DS41-242). After each run: Settings snapshots re-read (a run's monkeypatch
+  is undone), gc, the run's changed metrics and result files written to the plan results.
+- `core/batch.py`: `shareable()` = SHARED_TESTS (now also test_contract.py, test_contract_acks.py) or a test file
+  declaring `BATCH_SHARED = True` (tests/test_determinism.py, test_decoder_skip_decode.py,
+  bringup/contract/test_adapter_acks.py, test_prefill_end.py, test_window_snapshot.py). `gate_groups` /
+  `gate_entries`: consecutive units of one model configuration form one process (determinism runs first: FIX.25's
+  cold sequence); hints now always cover target.seq and the ladders' seqs.
+- `core/gate.py run_units` + `_run_group`: the units that will run (not kept / reused) are grouped; a group of >= 2
+  runs as ONE batch process (logs/<task>.check.shared/: plan, results, per-unit logs, process.log); each unit then gets
+  its own rc, metrics, result files and log section, so verdicts, stamps and the delta work as before; a unit the
+  process never reached gets rc 1 with the reason. `gate_model_loads` = model loads of this gate's processes.
+- test_decoder_skip_decode: no longer loads with DECODER_SKIP=decode (monkeypatch); it asserts the model is as loaded
+  (shipped off), runs `use_decoder_skip("decode")` / off per request, and restores `loaded_skip` at the end. Truly
+  load-time switches (a different process / reload): DECODER_SKIP=exact / replay128 (replay128 builds the tail
+  model), DEEP_LAYERS, WINDOW_KV_KEEP, every weight / format switch; decode is host lists only (FIX.28).
+- (2) Agents' command: `scripts/run_safe_pytest.sh --one-process --run-all <test> <test> ...` (one process, the
+  model loaded once; BRINGUP_BATCH_KEEP_GOING=1 runs past a failure). bringup-engineer.md rule 3 tells agents.
+- Diagnostic only: `BRINGUP_INJECT=rowshift2` (testing/batch.inject): the run's 2nd embed call gets its ids rolled
+  by one (an off-by-one, once: not repeatable), undone after the run. Never in a gate.
+
+Measured (8x4, 40 layers, FIX.28's gate command as is)
+- Loads: 5 (FIX.28, one per unit) -> 1 (gate_model_loads 1; load 214 s).
+- Wall: FIX.28 units 352 + 342 + 340 + 485 + 468 = 1987 s (33 min) -> FIX.29 gate 728 s (12 min; the shared process
+  717 s: determinism 331 incl. the load, ladder 68, contract 23, acks 133, decode 137).
+- Metrics vs results/FIX.28.json: 502 identical (every err_*, top5, determinism 0 / 0, contract, acks,
+  served_bytes_differ 0 of 20,912, ...); 10 differ, all timing or new: prefill_seconds / chunk_seconds_c10 68.1 ->
+  10.3 s (the ladder's first chunk is no longer the process's cold one), model_load_s 206.8 -> 213.6,
+  determinism_s 96.2 -> 95.7, determinism_s_decoder_skip 15.9 -> 16.8, decode_test_chunk_wall_ms off / decode
+  287.0 / 191.1 -> 284.5 / 187.3; new: gate_model_loads 1, model_loads 1, model_shared 1.
+- Injected failure still caught in the shared process (BRINGUP_INJECT=rowshift2, `--one-process`):
+  model test_determinism FAIL ("identical inputs gave different outputs ... first differing chunk 1", max |diff|
+  4.5); test_contract FAIL (producer read-back PCC compress_kv 0.736 < 0.937, index_k 0.850 < 0.946);
+  test_adapter_acks FAIL (layer 0 snapshot pcc 0.170 < 0.998); test_decoder_skip_decode FAIL (novel N 300: 128 of
+  128 records differ off vs decode). Contract, acks and decode ran in one process past each other's failure
+  (BRINGUP_BATCH_KEEP_GOING=1), one load.
+- CPU selftests: selftest/test_gate_one_process.py (one process, gate_model_loads 1; separate processes count 2 and
+  fail; a failing shared run fails its unit and stops), test_one_process.py / test_model_determinism.py updated
+  (the contract test may share now). The full selftest suite's other failures are the same at HEAD (checked on a
+  clean worktree of HEAD for the gate-related files).
+
+Shared / not shared, and why
+- Shared in one process: the mesh, the model weights, the program cache, the engram table.
+- Not shared: each test's KV caches and states (freed after each run; the adapter's slabs are never freed by the
+  model, only its own buffers), its environment, results, log and pytest session (test modules re-imported).
+- Still another process / load: a unit with another switch value in its command (model_key), a test that sets a
+  load-time switch itself (reload, warned and counted in gate_model_loads), a test file not declared shareable.
+
+Re-run
+- `PYTHONPATH=$PWD python -m models.demos.common.bringup gate FIX.29 --spec models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --check`
+- Several tests by hand: `scripts/run_safe_pytest.sh --one-process --run-all <test files>`

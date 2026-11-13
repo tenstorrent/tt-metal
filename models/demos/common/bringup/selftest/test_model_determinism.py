@@ -90,9 +90,9 @@ def test_every_model_level_gate_runs_it_first_in_its_first_shared_process_unit()
 def test_a_gate_without_a_shared_unit_gets_its_own_first_unit():
     fix = _t("scripts/run_safe_pytest.sh --run-all --no-precompile models/x/tests/test_prefill_end.py", "overseer_fix")
     assert [u for u, _ in gate_units(fix)] == ["A.1#test_determinism", "A.1"]  # a fix step's device gate
-    t = _t(CONTRACT, step="contract")
-    assert [u for u, _ in gate_units(t)] == ["A.1#test_determinism", "A.1"]
-    assert gate_units(t)[0][1] == B.DETERMINISM_CMD
+    t = _t(CONTRACT, step="contract")  # FIX.29: the contract test shares the model: the check joins its unit, first
+    assert [u for u, _ in gate_units(t)] == ["A.1"]
+    assert gate_units(t)[0][1] == f"{B.DETERMINISM_CMD} && {CONTRACT}"
     # a unit with a model switch (another configuration) is not where the shipped model's check runs
     sw = _t(f"DS41_X=on {LADDER}")
     assert [u for u, _ in gate_units(sw)] == ["A.1#test_determinism", "A.1"]

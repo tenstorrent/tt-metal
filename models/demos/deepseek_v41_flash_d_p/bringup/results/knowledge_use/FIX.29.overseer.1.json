@@ -1,0 +1,16 @@
+{
+  "used": [
+    {"id": "DS41-240", "how": "the moved contract / acks tests keep judging only what DECODER_SKIP=decode serves; checked they run decode per request on the shared off-loaded model (use_decoder_skip), not by loading with decode"}
+  ],
+  "contradicted": [],
+  "missing": [
+    "core/metrics.record stamps t to the second, so a gate's per-unit diff misses a same-value record in the same second (now DS41-242)",
+    "which DeepSeek-V4.1 switches are read at load and which per call (now hooks.batch_call_settings and DS41-243)"
+  ],
+  "overseer": [
+    {"id": "FIX.29", "answer": "done", "evidence": "gate FIX.29 --check PASS: gate_model_loads 1 (FIX.28: 5), wall 728 s vs 1987 s, 502 metrics identical to results/FIX.28.json (10 differ: timings / new counters), determinism 0 / 0; injected rowshift2 caught by model test_determinism, test_contract, test_adapter_acks, test_decoder_skip_decode (generated/devjobs/fix29_inject*, BREADCRUMBS FIX.29)"},
+    {"id": "OV-3", "answer": "n/a", "evidence": "no kernel, fork or weight touched; no padding"},
+    {"id": "OV-23", "answer": "n/a", "evidence": "no Python-built op added or touched"},
+    {"id": "OV-25", "answer": "done", "evidence": "no fork suite run on the 8x4; only the gate and the injected-failure batch runs"}
+  ]
+}
