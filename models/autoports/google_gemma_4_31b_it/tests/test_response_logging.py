@@ -14,6 +14,32 @@ SPEC.loader.exec_module(MODULE)
 
 
 class LoggingTests(unittest.IsolatedAsyncioTestCase):
+    async def test_request_and_timing_join_to_response(self):
+        request = b'{"messages":[{"role":"user","content":"test"}]}'
+        response = json.dumps(
+            {"id": "joined", "choices": [{"finish_reason": "stop"}], "usage": {"completion_tokens": 1}}
+        ).encode()
+
+        async def receive():
+            return {"type": "http.request", "body": request}
+
+        async def send(message):
+            pass
+
+        async def app(scope, receive, send):
+            self.assertEqual((await receive())["body"], request)
+            await send(
+                {"type": "http.response.start", "status": 200, "headers": [(b"content-type", b"application/json")]}
+            )
+            await send({"type": "http.response.body", "body": response})
+
+        with patch.object(MODULE.LOGGER, "info") as log:
+            await MODULE.ResponseLoggingMiddleware(app)({"type": "http", "path": "/v1/chat/completions"}, receive, send)
+            timing = json.loads(log.call_args_list[0].args[1])
+            self.assertEqual(timing["id"], "joined")
+            self.assertEqual(timing["request"].encode(), request)
+            self.assertLessEqual(timing["start"], timing["end"])
+
     async def test_stream_delivered_before_app_finishes(self):
         delivered = asyncio.Event()
         messages = []

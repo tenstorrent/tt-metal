@@ -11,7 +11,7 @@ export XDG_CACHE_HOME="$PWD/bringup/artifacts/xdg-cache"
 export VLLM_SERVER_DEV_MODE=1
 HF_SNAPSHOT=$(python_env/bin/python models/autoports/google_gemma_4_31b_it/tools/serving_paths.py snapshot)
 export VLLM_DEBUG_LOG_API_SERVER_RESPONSE=false
-exec timeout 7200 python_env/bin/python -m readiness_check.run_vllm_server \
+exec timeout "${GEMMA4_SERVER_LIFETIME_SECONDS:-7200}" python_env/bin/python -m readiness_check.run_vllm_server \
   --model-dir models/autoports/google_gemma_4_31b_it \
   --hf-model "$HF_SNAPSHOT" --mesh-device P300x2 \
   --max-model-len 262144 --max-num-seqs 1 --block-size 32 \

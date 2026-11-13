@@ -373,7 +373,7 @@ def main():
             "source_sha256_at_launch": launch_hashes,
             "tt_metal_commit_at_launch": launch_commit,
             "startup_seconds": None,
-            "bounded_seconds": 7200,
+            "bounded_seconds": int(env.get("GEMMA4_SERVER_LIFETIME_SECONDS", "7200")),
         }
         write(STATE, state)
         while time.monotonic() - start < 1900:

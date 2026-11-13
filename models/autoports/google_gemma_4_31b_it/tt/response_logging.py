@@ -2,6 +2,7 @@
 """Log complete eval JSON after delivery without buffering streaming responses."""
 import json
 import logging
+import time
 
 LOGGER = logging.getLogger("vllm.entrypoints.serve.middleware.log_response")
 
@@ -16,9 +17,18 @@ class ResponseLoggingMiddleware:
         capture = False
         complete = False
         parts = []
+        started = time.time()
+        completed = None
+        request_parts = []
+
+        async def observe_receive():
+            message = await receive()
+            if message["type"] == "http.request":
+                request_parts.append(message.get("body", b""))
+            return message
 
         async def forward(message):
-            nonlocal capture, complete
+            nonlocal capture, complete, completed
             # Delivery precedes accounting. In particular SSE chunks are never
             # held until generation finishes, unlike vLLM's debug HTTP logger.
             await send(message)
@@ -28,13 +38,26 @@ class ResponseLoggingMiddleware:
             elif message["type"] == "http.response.body" and capture:
                 parts.append(message.get("body", b""))
                 complete = not message.get("more_body", False)
+                if complete:
+                    completed = time.time()
 
-        await self.app(scope, receive, forward)
+        await self.app(scope, observe_receive, forward)
         if capture and complete:
             try:
                 body = b"".join(parts).decode("utf-8")
                 parsed = json.loads(body)
                 if parsed.get("id") and parsed.get("choices") and parsed.get("usage"):
+                    LOGGER.info(
+                        "eval_call=%s",
+                        json.dumps(
+                            {
+                                "id": parsed["id"],
+                                "start": started,
+                                "end": completed,
+                                "request": b"".join(request_parts).decode("utf-8"),
+                            }
+                        ),
+                    )
                     LOGGER.info("response_body={%s}", body)
             except Exception:
                 # Logging occurs after successful delivery and cannot change it.

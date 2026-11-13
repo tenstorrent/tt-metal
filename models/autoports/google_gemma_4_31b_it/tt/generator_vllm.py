@@ -13,6 +13,7 @@ from .benchmark_phases import PhaseRecorder
 from .generator import Gemma4Generator
 from .kv_pool_budget import PRIOR_TURN_TOKENS_PER_USER, TARGET_TOKENS_PER_USER, get_pool_token_budget
 from .model import Gemma4Model
+from .serving_memory import validate_pool_memory
 
 
 class Gemma4ForCausalLM:
@@ -137,7 +138,21 @@ class Gemma4ForCausalLM:
         return result
 
     def allocate_kv_cache_per_layer(self, per_layer_specs):
-        self._memory_event("before_serving_cache")
+        allocator = self._memory_event("before_serving_cache")
+        tile_bytes = {ttnn.bfloat16: 2048, ttnn.bfloat8_b: 1088, ttnn.bfloat4_b: 576}
+        memory_plan = validate_pool_memory(
+            allocator=allocator,
+            device_ids=self.mesh.get_device_ids(),
+            cache_specs=[
+                (per_layer_specs[index][2], per_layer_specs[index][0], tile_bytes[layer.cache_dtype])
+                for index, layer in zip(self.model.layer_indices, self.model.layers)
+            ],
+            batch=self.batch,
+            context=self.context,
+        )
+        print(json.dumps({"event": "serving_pool_launch_validation", **memory_plan}), flush=True)
+        if not memory_plan["fits"]:
+            raise RuntimeError("Fixed serving KV pool exceeds launch free memory after recorded reserves")
         cache = []
         width = (self.context + 127) // 128 * 4
         maps, tables = [], []
@@ -277,6 +292,7 @@ class Gemma4ForCausalLM:
             "num_banks",
             "total_bytes_allocated_per_bank",
             "total_bytes_per_bank",
+            "total_bytes_free_per_bank",
             "largest_contiguous_bytes_free_per_bank",
         )
         print(
@@ -291,6 +307,7 @@ class Gemma4ForCausalLM:
             ),
             flush=True,
         )
+        return {name: int(getattr(view, name)) for name in fields}
 
     def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device):
         if kv_cache is not self.kv_cache:
