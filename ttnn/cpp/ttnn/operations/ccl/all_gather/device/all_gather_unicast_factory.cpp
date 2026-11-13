@@ -249,11 +249,15 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
     auto dir_neighbor = [&](uint32_t dir) { return dir == 0 ? fwd_coord : bwd_coord; };
     auto dir_active = [&](uint32_t dir) { return dir_neighbor(dir).has_value(); };
 
-    // Reader/writer kernels + CB run on worker cores only; the mux kernel runs on its own cores (created only
-    // for a direction that has a neighbor).
+    // The reader/writer kernels and the walk's CB run on the worker cores only. The mux kernel and its map's CB (index
+    // 0 there) run on their own cores, one per link and direction with a neighbor.
     std::set<CoreRange> worker_core_set;
+    std::set<CoreRange> mux_core_set;
     for (uint32_t link = 0; link < num_links; ++link) {
         for (uint32_t dir = 0; dir < num_directions; ++dir) {
+            if (dir_active(dir)) {
+                mux_core_set.emplace(mux_core(link, dir));
+            }
             for (uint32_t w = 0; w < workers_per_dir; ++w) {
                 worker_core_set.emplace(worker_core(link, dir, w));
             }
@@ -262,16 +266,20 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
     const CoreRangeSet worker_core_range(worker_core_set);
 
     // Fabric mux config. One worker per direction needs 4 buffers per channel to keep the link busy (2 are 12-14%
-    // slower); from 2 workers, 2 buffers are within 3% of 4. The mux map runs up from the allocator base and stays
-    // below the floor of the L1_SMALL region, where the semaphores live.
+    // slower); from 2 workers, 2 buffers are within 3% of 4. The mux map goes in program-local L1 (a circular buffer
+    // on the mux cores), so it stays clear of persistent L1 there and the program's L1 validation keeps it below L1
+    // buffers; its addresses are offsets until the mux publishes the map's base. It must be placed before
+    // add_fabric_mux_v2_to_program and append_client_connection_rt_args, which read its CB index and semaphore id.
     const uint8_t num_buffers_per_channel = workers_per_dir == 1 ? 4 : 2;
-    const tt::tt_fabric::FabricMuxV2Config mux_config(
+    tt::tt_fabric::FabricMuxV2Config mux_config(
         *mesh_device,
         static_cast<uint8_t>(workers_per_dir),
         num_buffers_per_channel,
         tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device),
-        mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1),
-        ::ttnn::ccl::l1_small_floor_address(*mesh_device));
+        /*base_l1_address=*/0);
+    if (!mux_core_set.empty()) {
+        mux_config.place_in_program_local_l1(desc, CoreRangeSet(mux_core_set));
+    }
 
     ////////////////////////////////////////////////////////////////
     // Circular Buffer and Kernel creation
