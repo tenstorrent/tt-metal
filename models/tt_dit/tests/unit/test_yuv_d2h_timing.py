@@ -103,6 +103,9 @@ def test_planes_to_host_defers_assembly(monkeypatch, fake_device, defer):
     """The fused-path entry point returns the same bytes eagerly or deferred; deferred skips the host assembly."""
     monkeypatch.setattr(dt, "ENABLED", True)
     monkeypatch.setattr(ttnn, "using_distributed_env", lambda: False)
+    events = []
+    monkeypatch.setattr(ttnn, "record_event", lambda dev, cq, device_range=None: events.append(dev) or "event")
+    monkeypatch.setattr(ttnn, "event_synchronize", lambda event: events.remove(mesh))
     planes, expected = _planes()
     mesh = type("Mesh", (), {"shape": (TP, SP)})()
     with dt.span(mesh, "decode TOTAL", root=True):
@@ -111,3 +114,4 @@ def test_planes_to_host_defers_assembly(monkeypatch, fake_device, defer):
     labels = [c.label for c in dt.roots()[-1].children]
     assert len(labels) == (1 if defer else 2)
     np.testing.assert_array_equal(out.result() if defer else out, expected)
+    assert events == []  # a deferred readback waits on its own event, not the whole device

@@ -40,6 +40,7 @@ def stub_device(monkeypatch):
 
     monkeypatch.setattr(ttnn, "using_distributed_env", lambda: False)
     monkeypatch.setattr(ttnn.experimental, "rgb_to_yuv", rgb_to_yuv)
+    monkeypatch.setattr(ttnn, "clip", lambda tensor, lo, hi: tensor)
     monkeypatch.setattr(ttnn, "permute", no_device_op)
     monkeypatch.setattr(ttnn, "reshape", no_device_op)
     monkeypatch.setattr(yuv_d2h, "_yuv_planar_d2h", planar_d2h)

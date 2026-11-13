@@ -66,7 +66,7 @@ def _run_block(monkeypatch, fuse_residual, can_fuse=True):
     return out, calls
 
 
-def test_block_unfused_by_default(monkeypatch):
+def test_block_unfused_when_off(monkeypatch):
     out, calls = _run_block(monkeypatch, fuse_residual=False)
     assert calls == [("conv1", None), ("conv2", None), ("add", ("x", "conv2_out"))]
     assert out == "add_out"
