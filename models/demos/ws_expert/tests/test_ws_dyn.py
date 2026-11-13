@@ -55,8 +55,10 @@ def run_dyn(device, cfg: DCfg, Ms, seed=0):
     n = cfg.nexp
     NC = cfg.NCL * cfg.GC
     s = read_stamps(st, NC)
-    t0 = int(s[:, 0].min())
-    ends = ((s[:, 1 : 2 + n] - t0) & 0xFFFFFFFF).double()
+    ref = int(s[0, 0])
+    rel = ((s - ref + (1 << 31)) & 0xFFFFFFFF) - (1 << 31)  # wrap-safe (32-bit wall clock)
+    t0 = int(rel[:, 0].min())
+    ends = (rel[:, 1 : 2 + n] - t0).double()
     e_max = ends.max(dim=0).values
     R = [(m + 31) // 32 for m in Ms]
     tile_ops = [r * (2 * cfg.PAIRS * cfg.KT + cfg.HT * cfg.PAIRS) for r in R]
@@ -104,4 +106,17 @@ def test_ws_dyn(device, case):
     report(case, cfg, Ms, r)
     logger.info(f"UNPACK per expert per core: tilize / x wait / down mean {[round(v) for v in r['unpack']]} max {[round(v) for v in r['unpack_max']]}")
     logger.info(f"expert ends {r['ends']}")
+    assert r["pcc"] > 0.999
+
+
+SWEEP_M = [32, 64, 96, 128, 192, 256, 320, 384, 448, 512, 586, 640, 768, 896, 1024, 1280, 1536, 2048, 2560, 3072, 3584,
+           4096, 4608, 5000]
+
+
+@pytest.mark.parametrize("M", SWEEP_M)
+def test_ws_dyn_sweep(device, M):
+    cfg = DCfg(nexp=8)
+    r = run_dyn(device, cfg, [M] * cfg.nexp)
+    report(f"sweep M {M}", cfg, [M] * cfg.nexp, r)
+    logger.info(f"UNPACK per expert per core: tilize / x wait / down mean {[round(v) for v in r['unpack']]} max {[round(v) for v in r['unpack_max']]}")
     assert r["pcc"] > 0.999

@@ -207,6 +207,17 @@ void kernel_main() {
         const uint16_t a = (uint16_t)reg_read(xacked);
         x_popped_pages += (uint16_t)(a - x_last);
         x_last = a;
+        // keep the walk at the expert of the next credit target even with nothing popped (a cluster with no x blocks
+        // would otherwise hold it at expert 0, and with it the plan ring: idle clusters' compute waited forever)
+        while (w_e < NEXP) {
+            volatile tt_l1_ptr uint32_t* p = ready(w_e);
+            if (!p || x_credited + NX < w_base + p[H_NBE]) {
+                break;
+            }
+            w_base += p[H_NBE];
+            ++w_e;
+            did = true;
+        }
         while (x_credited < x_popped_pages / BK) {
             const uint32_t nxt = x_credited + NX;
             bool known = false, past_end = false;

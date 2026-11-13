@@ -20,13 +20,13 @@
 namespace ws_plan {
 
 constexpr uint32_t PRE_L = 1, PRE_R = 2, SEND_L = 4, SEND_R = 8, DN = 16;
-constexpr uint32_t MAXOP = 48, MAXOWN = 16, MAXMY = 16;
+constexpr uint32_t MAXOP = 96, MAXOWN = 40, MAXMY = 40;
 // plan slot layout (uint32 words)
 constexpr uint32_t H_READY = 0, H_R = 1, H_M = 2, H_NOP = 3, H_NOWN = 4, H_NBE = 5, H_NMY = 6;
 constexpr uint32_t OFF_OP = 8;                        // MAXOP x (k0, k1, flags)
 constexpr uint32_t OFF_OWN = OFF_OP + 3 * MAXOP;      // MAXOWN owned rows (production order)
 constexpr uint32_t OFF_MY = OFF_OWN + MAXOWN;         // MAXMY x (local block index, r, k, n)
-constexpr uint32_t SLOT_WORDS = 256;
+constexpr uint32_t SLOT_WORDS = 512;
 static_assert(OFF_MY + 4 * MAXMY <= SLOT_WORDS);
 constexpr uint32_t NSLOT = 3;
 // control words after the slots: done counters (expert + 1) of the plan's readers
@@ -80,53 +80,44 @@ inline void make(const Geo& g, uint32_t M, uint32_t k, uint32_t j, volatile uint
         if (k + 1 < na) {
             boundary(g, R, na, k + 1, e, e_right);
         }
-        // pieces in K order: start piece (maybe split), full rows, end piece (maybe split)
-        uint32_t pk0[MAXOWN + 2], pk1[MAXOWN + 2], prow[MAXOWN + 2], pfl[MAXOWN + 2], np = 0;
-        for (uint32_t f = s; f < e;) {
-            const uint32_t r = f / g.KT;
-            uint32_t end = (r + 1) * g.KT;
-            if (end > e) {
-                end = e;
-            }
-            const uint32_t k0 = f - r * g.KT, k1 = end - r * g.KT;
-            uint32_t fl = 0;
-            if (k0 > 0) {  // the row began in the left cluster
-                fl |= s_right ? PRE_L : SEND_L;
-            }
-            if (k1 < g.KT) {  // the row goes on in the right cluster
-                fl |= e_right ? SEND_R : PRE_R;
-            }
-            prow[np] = r;
-            pk0[np] = k0;
-            pk1[np] = k1;
-            pfl[np] = fl;
-            ++np;
-            f = end;
-        }
-        // program: sends, full rows, receivers; DN after each produced row
+        // program: sends, full rows, receivers (3 passes over the pieces in K order, regenerated each pass: no
+        // arrays on the small BRISC stack); a DN op after each produced row
         for (uint32_t pass = 0; pass < 3; ++pass) {
-            for (uint32_t i = 0; i < np; ++i) {
-                const uint32_t fl = pfl[i];
+            for (uint32_t f = s; f < e;) {
+                const uint32_t r = f / g.KT;
+                uint32_t end = (r + 1) * g.KT;
+                if (end > e) {
+                    end = e;
+                }
+                const uint32_t k0 = f - r * g.KT, k1 = end - r * g.KT;
+                f = end;
+                uint32_t fl = 0;
+                if (k0 > 0) {  // the row began in the left cluster
+                    fl |= s_right ? PRE_L : SEND_L;
+                }
+                if (k1 < g.KT) {  // the row goes on in the right cluster
+                    fl |= e_right ? SEND_R : PRE_R;
+                }
                 const uint32_t cls = (fl & (SEND_L | SEND_R)) ? 0 : ((fl & (PRE_L | PRE_R)) ? 2 : 1);
                 if (cls != pass) {
                     continue;
                 }
-                p[OFF_OP + 3 * nop] = pk0[i];
-                p[OFF_OP + 3 * nop + 1] = pk1[i];
+                p[OFF_OP + 3 * nop] = k0;
+                p[OFF_OP + 3 * nop + 1] = k1;
                 p[OFF_OP + 3 * nop + 2] = fl;
                 ++nop;
-                for (uint32_t kk = pk0[i]; kk < pk1[i]; kk += g.BK) {  // x blocks of this piece
+                for (uint32_t kk = k0; kk < k1; kk += g.BK) {  // x blocks of this piece
                     if (nbe % g.GC == j) {
                         p[OFF_MY + 4 * nmy] = nbe;
-                        p[OFF_MY + 4 * nmy + 1] = prow[i];
+                        p[OFF_MY + 4 * nmy + 1] = r;
                         p[OFF_MY + 4 * nmy + 2] = kk;
-                        p[OFF_MY + 4 * nmy + 3] = pk1[i] - kk < g.BK ? pk1[i] - kk : g.BK;
+                        p[OFF_MY + 4 * nmy + 3] = k1 - kk < g.BK ? k1 - kk : g.BK;
                         ++nmy;
                     }
                     ++nbe;
                 }
                 if (pass > 0) {
-                    p[OFF_OWN + nown++] = prow[i];
+                    p[OFF_OWN + nown++] = r;
                     p[OFF_OP + 3 * nop] = 0;
                     p[OFF_OP + 3 * nop + 1] = 0;
                     p[OFF_OP + 3 * nop + 2] = DN;

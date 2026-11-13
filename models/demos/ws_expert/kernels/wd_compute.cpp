@@ -3,10 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // ws_expert dynamic-M compute (TRISC): wx_compute.cpp with the per-expert program read from the plan ring the BRISC
-// fills (ws_plan.hpp: computed on device from each expert's M). At the start of expert e it tilizes this core's x
-// blocks of expert e + 1 (expert 0's before the loop), then runs the plan's ops; after the expert it posts its done
-// word (expert + 1) so the slot can be reused.
-// RT: 0 stamps. CT: 0 KT, 1 NPAIR, 2 BK, 3 NEXP, 4 KTD, 5 DCOLS, 6 plan buffer addr
+// fills (ws_plan.hpp: computed on device from each expert's M), and posts its done word (expert + 1) after each expert
+// so the slot can be reused. x tilize: before every gate/up piece it tilizes this core's own x blocks whose stream
+// index is within LOOK blocks of its consumption point (in this expert and the next), as one
+// batch when there are >= 2 or one is within NX (its ring slot may already be free): staging stays bounded for any M,
+// and every block is tilized >= NX - (a piece's blocks) ahead of its use.
+// RT: 0 stamps. CT: 0 KT, 1 NPAIR, 2 BK, 3 NEXP, 4 KTD, 5 DCOLS, 6 plan buffer addr, 7 NX, 8 LOOK
 #ifndef DN_LAG
 #define DN_LAG 0
 #endif
@@ -44,6 +46,8 @@ constexpr uint32_t nexp = get_compile_time_arg_val(3);
 constexpr uint32_t ktd = get_compile_time_arg_val(4);
 constexpr uint32_t dcols = get_compile_time_arg_val(5);
 constexpr uint32_t planbuf = get_compile_time_arg_val(6);
+constexpr uint32_t NX = get_compile_time_arg_val(7);
+constexpr uint32_t LOOK = get_compile_time_arg_val(8);
 constexpr uint32_t gw = 2 * npair;
 constexpr uint32_t DB = 4;
 static_assert(gw == DB && dcols % DB == 0);
@@ -97,6 +101,11 @@ FORCE_INLINE void down_row() {
     SRCB_TO_X();
 }
 
+FORCE_INLINE volatile uint32_t* plan_peek(uint32_t e) {
+    volatile uint32_t* p = reinterpret_cast<volatile uint32_t*>(planbuf) + (e % ws_plan::NSLOT) * ws_plan::SLOT_WORDS;
+    return p[ws_plan::H_READY] == e + 1 ? p : nullptr;
+}
+
 FORCE_INLINE volatile uint32_t* plan_of(uint32_t e) {
     volatile uint32_t* p = reinterpret_cast<volatile uint32_t*>(planbuf) + (e % ws_plan::NSLOT) * ws_plan::SLOT_WORDS;
     while (p[ws_plan::H_READY] != e + 1) {
@@ -117,28 +126,47 @@ void kernel_main() {
     cb_wait_front(wd_cb, ktd * dcols);
     UNPACK(stamps[0] = wall());
     DataflowBuffer xrm_dfb(xrm_cb), xst_dfb(xst_cb);
-    {
-        const uint32_t npro = plan_of(0)[ws_plan::H_NMY];
-        if (npro) {
-            tilize_batch(xrm_dfb, xst_dfb, npro);
-        } else {
-            matmul_block_init(xr_cb, w_cb, false, gw, 1, kt);
+    // x tilize window: next own block to tilize (expert, own index, cluster blocks before that expert); x consumed
+    uint32_t til_e = 0, til_i = 0, til_base = 0, cons = 0;
+    auto maybe_tilize = [&](uint32_t cur_e) {
+        uint32_t e = til_e, i = til_i, base = til_base, n = 0, first = 0;
+        // (blocking reads only: the three TRISCs must take the same decisions - a non-blocking peek at a plan the BRISC
+        // is still writing let them diverge (UNPACK in a tilize batch, MATH in a matmul: hang). Plan e + 1 always
+        // arrives: the plan ring only waits for expert e - 1, which this core finished.)
+        while (e < nexp && e <= cur_e + 1) {
+            volatile uint32_t* p = plan_of(e);
+            if (i >= p[ws_plan::H_NMY]) {
+                base += p[ws_plan::H_NBE];
+                ++e;
+                i = 0;
+                continue;
+            }
+            const uint32_t sidx = base + p[ws_plan::OFF_MY + 4 * i];
+            if (sidx >= cons + LOOK) {
+                break;
+            }
+            if (n == 0) {
+                first = sidx;
+            }
+            ++n;
+            ++i;
         }
-    }
+        if (n >= 2 || (n == 1 && first < cons + NX)) {
+            const uint32_t a = wall();
+            tilize_batch(xrm_dfb, xst_dfb, n);
+            t_til += wall() - a;
+            til_e = e;
+            til_i = i;
+            til_base = base;
+        }
+    };
+    matmul_block_init(xr_cb, w_cb, false, gw, 1, kt);
     uint32_t produced = 0, consumed = 0;
     for (uint32_t e = 0; e < nexp; ++e) {
         if (e == 2) {
             t_til = t_xw = t_dn = 0;
         }
         volatile uint32_t* pl = plan_of(e);
-        if (e + 1 < nexp) {
-            const uint32_t n = plan_of(e + 1)[ws_plan::H_NMY];
-            if (n) {
-                const uint32_t a = wall();
-                tilize_batch(xrm_dfb, xst_dfb, n);
-                t_til += wall() - a;
-            }
-        }
         const uint32_t e_start = produced;
         const uint32_t nop = pl[ws_plan::H_NOP];
         for (uint32_t p = 0; p < nop; ++p) {
@@ -154,6 +182,7 @@ void kernel_main() {
                 }
                 continue;
             }
+            maybe_tilize(e);
             tile_regs_acquire();
             if (flags & F_PRE) {
                 const uint32_t pin_cb = (flags & 1) ? pinl_cb : pinr_cb;
@@ -176,6 +205,7 @@ void kernel_main() {
                     matmul_block(xr_cb, w_cb, i, (k + i) * gw, 0, false, gw, 1, kt);
                 }
                 cb_pop_front(xr_cb, BK);
+                ++cons;
             }
             tile_regs_commit();
             if (flags & F_SEND) {
@@ -215,6 +245,17 @@ void kernel_main() {
             }
         }
         PACK(stamps[1 + e] = wall());
+        // move the tilize pointer past this expert before its plan slot can be reused (its blocks are all tilized:
+        // the expert consumed them all); else a later peek would wait for a plan that never comes back
+        while (til_e <= e) {
+            volatile uint32_t* tp = plan_of(til_e);
+            if (til_i < tp[ws_plan::H_NMY]) {
+                break;
+            }
+            til_base += tp[ws_plan::H_NBE];
+            ++til_e;
+            til_i = 0;
+        }
         UNPACK(ctrl[ws_plan::DONE_T0] = e + 1);
         MATH(ctrl[ws_plan::DONE_T1] = e + 1);
         PACK(ctrl[ws_plan::DONE_T2] = e + 1);

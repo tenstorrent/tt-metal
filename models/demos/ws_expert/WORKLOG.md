@@ -121,3 +121,43 @@ Results (90 cores, weights resident, cycles / expert over experts 1..15, util ti
 | Poisson(586) (537..653) | 31,384 | 78.9 / 76.2 | 565 |
 | mixed 5..1000 (mean 457) | 31,543 | 59.0 / 56.9 | 5,941 |
 Host-planned at the same ring (NX 15): 31,267 at constant 586.
+
+## M sweep 32..5000 (2026-11-13; dynamic M, MMAX 5120, 90 cores, weights resident, 8 experts of constant M)
+Changes for large M: plan limits raised (slot 512 words), the gather reads each row tile's 32 ids (128 B) from the
+expert's index table instead of keeping tables in L1, and x is tilized in a window (own blocks within LOOK = 30 of
+the consumption point, this expert and the next) instead of one batch an expert (staging would have needed ~36 blocks
+at M 5000; now 7 for any M).
+Hangs found with run_safe_pytest --dev + tt-triage callstacks:
+- the window peeked (non-blocking) at later experts' plans: the three TRISCs took different decisions (UNPACK in a
+  tilize batch, MATH in a matmul). Now blocking reads of this expert's and the next one's plan only.
+- clusters with no x blocks (small M) never moved the NCRISC's credit walk, whose expert is part of its done word:
+  the plan ring stopped after 3 experts and those clusters' compute waited for plan 3. The walk now advances past
+  planned experts whose blocks lie before the next credit target, popped or not.
+| M | R | active cores | cycles / expert | us | util tile (90 cores) | util useful | util on active cores |
+|---|---|---|---|---|---|---|---|
+| 32 | 1 | 10 | 22,671 | 16.8 | 5.6 | 5.6 | 51 |
+| 64 | 2 | 10 | 28,778 | 21.3 | 8.9 | 8.9 | 80 |
+| 96 | 3 | 10 | 42,945 | 31.8 | 8.9 | 8.9 | 80 |
+| 128 | 4 | 20 | 28,622 | 21.2 | 17.9 | 17.9 | 81 |
+| 192 | 6 | 30 | 28,607 | 21.2 | 26.8 | 26.8 | 80 |
+| 256 | 8 | 40 | 29,117 | 21.6 | 35.2 | 35.2 | 79 |
+| 320 | 10 | 50 | 30,581 | 22.7 | 41.9 | 41.9 | 75 |
+| 384 | 12 | 60 | 28,609 | 21.2 | 53.7 | 53.7 | 81 |
+| 448 | 14 | 70 | 34,461 | 25.5 | 52.0 | 52.0 | 67 |
+| 512 | 16 | 80 | 28,613 | 21.2 | 71.6 | 71.6 | 81 |
+| 586 | 19 | 90 | 31,634 | 23.4 | 76.9 | 74.1 | 77 |
+| 640 | 20 | 90 | 33,746 | 25.0 | 75.9 | 75.9 | 76 |
+| 768 | 24 | 90 | 39,959 | 29.6 | 76.9 | 76.9 | 77 |
+| 896 | 28 | 90 | 47,378 | 35.1 | 75.6 | 75.6 | 76 |
+| 1024 | 32 | 90 | 52,306 | 38.8 | 78.3 | 78.3 | 78 |
+| 1280 | 40 | 90 | 66,427 | 49.2 | 77.1 | 77.1 | 77 |
+| 1536 | 48 | 90 | 78,703 | 58.3 | 78.1 | 78.1 | 78 |
+| 2048 | 64 | 90 | 104,105 | 77.1 | 78.7 | 78.7 | 79 |
+| 2560 | 80 | 90 | 133,570 | 98.9 | 76.7 | 76.7 | 77 |
+| 3072 | 96 | 90 | 158,018 | 117.1 | 77.8 | 77.8 | 78 |
+| 3584 | 112 | 90 | 187,421 | 138.8 | 76.5 | 76.5 | 77 |
+| 4096 | 128 | 90 | 210,383 | 155.8 | 77.9 | 77.9 | 78 |
+| 4608 | 144 | 90 | 234,753 | 173.9 | 78.5 | 78.5 | 79 |
+| 5000 | 157 | 90 | 258,622 | 191.6 | 77.7 | 77.3 | 78 |
+Below M 576 the R / 2 active-cluster rule (no row across three clusters) leaves clusters idle: the active cores
+still run at ~80%.

@@ -4,14 +4,15 @@
 //
 // ws_expert dynamic-M BRISC (NOC0). Plans every expert for this core from its M (ws_plan.hpp) into the 3-slot plan
 // ring (a slot is reused once all readers - compute's three threads, the NCRISC and this RISC - finished the expert
-// three back), loading the expert's row index table beside it. Then a non-blocking loop over:
+// three back). Then a non-blocking loop over:
 //   P  planning (as far ahead as the ring allows),
-//   Q1 x gather: this core's x blocks in stream order (plan's own blocks): 32 token rows x n K-tiles into CB 7,
+//   Q1 x gather: this core's x blocks in stream order (plan's own blocks): the row tile's 32 token ids (128 B of the
+//      expert's index table), then 32 token rows x n K-tiles into CB 7,
 //   Q2 compute outputs in each expert's program order: partials out, h multicasts, DN ops' down outputs (the last
 //      expert's to DRAM).
 // RT: 0 J, 1 left x, 2 left y, 3 right x, 4 right y, 5 out addr, 6 x addr, 7 idx addr, 8 counts addr, 9 k (cluster)
 // CT: 0 NPAIR, 1 NS, 2 KTD, 3 GC, 4 NEXP, 5 hring, 6 hflags, 7 pinL, 8-11 column rect NOC0, 12 h tile bytes,
-//     13 DCOLS, 14 HT, 15 pinR, 16 BK, 17 RMAX, 18 x row bytes, 19 idx L1 (3 slots of RMAX * 32 words),
+//     13 DCOLS, 14 HT, 15 pinR, 16 BK, 17 RMAX, 18 x row bytes, 19 idx L1 (32 words),
 //     20 plan buffer, 21 counts L1, 22 KT, 23 NCL, then TensorAccessorArgs(out), (x), (idx), (counts)
 #ifndef DN_LAG
 #define DN_LAG 0
@@ -76,9 +77,6 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* plan = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(planbuf);
     volatile tt_l1_ptr uint32_t* ctrl = plan + CTRL;
     auto slot = [&](uint32_t e) { return plan + (e % NSLOT) * SLOT_WORDS; };
-    auto idx_of = [&](uint32_t e) {
-        return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(idx_l1 + (e % NSLOT) * RMAX * 32 * 4);
-    };
 
     volatile tt_l1_ptr uint32_t* grant_l = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_GRANT_L));
     volatile tt_l1_ptr uint32_t* grant_r = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_GRANT_R));
@@ -112,8 +110,6 @@ void kernel_main() {
         volatile tt_l1_ptr uint32_t* p = slot(planned);
         p[H_READY] = 0;
         make(geo, counts[planned], K, J, p);
-        noc_async_read_page(planned, is, (uint32_t)idx_of(planned));
-        noc_async_read_barrier();
         asm volatile("fence" ::: "memory");
         p[H_READY] = planned + 1;
         ++planned;
@@ -130,11 +126,13 @@ void kernel_main() {
         }
         volatile tt_l1_ptr uint32_t* p = slot(g_e);
         const uint32_t r = p[OFF_MY + 4 * g_b + 1], k = p[OFF_MY + 4 * g_b + 2], n = p[OFF_MY + 4 * g_b + 3];
-        volatile tt_l1_ptr uint32_t* idx = idx_of(g_e);
+        noc_async_read(is.get_noc_addr(g_e) + r * 32 * 4, idx_l1, 32 * 4);  // this row tile's 32 token ids
+        noc_async_read_barrier();
+        volatile tt_l1_ptr uint32_t* idx = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(idx_l1);
         cb_reserve_back(xrm_cb, BK);
         uint32_t l1 = get_write_ptr(xrm_cb);
         for (uint32_t i = 0; i < 32; ++i, l1 += BK * 64) {
-            noc_async_read(xs.get_noc_addr(idx[r * 32 + i]) + k * 64, l1, n * 64);
+            noc_async_read(xs.get_noc_addr(idx[i]) + k * 64, l1, n * 64);
         }
         noc_async_read_barrier();
         cb_push_back(xrm_cb, BK);

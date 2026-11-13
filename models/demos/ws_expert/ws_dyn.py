@@ -16,7 +16,7 @@ from models.demos.ws_expert.bench_util import TILE_BYTES, cb, crs, kpath, stamps
 from models.demos.ws_expert.ws_expert import noc, noc_rects, sharded_l1
 
 PRE_L, PRE_R, SEND_L, SEND_R, DN = 1, 2, 4, 8, 16
-NSLOT, SLOT_WORDS = 3, 256
+NSLOT, SLOT_WORDS = 3, 512
 PLAN_WORDS = NSLOT * SLOT_WORDS + 16
 
 
@@ -29,8 +29,9 @@ class DCfg:
     GC: int = 10
     BK: int = 12
     NX: int = 15
-    MMAX: int = 1024
-    T: int = 4096
+    MMAX: int = 5120
+    T: int = 8192
+    LOOK: int = 30  # compute tilizes its own x blocks up to LOOK blocks past its consumption point
     glu: int = 3
     dn_lag: int = 1
     x_dt: object = ttnn.bfloat16
@@ -117,7 +118,12 @@ def check_plans(cfg, M):
 
 
 def xst_blocks(cfg):
-    """x staging blocks so the next expert's tilize batch always fits (any M <= MMAX)."""
+    """x staging: own blocks tilized ahead (window LOOK) plus those waiting for a ring slot, any M."""
+    return -(-cfg.LOOK // cfg.GC) + 4
+
+
+def xst_blocks_expert_batch(cfg):
+    """(old: one batch an expert) x staging blocks so the next expert's tilize batch always fits (any M <= MMAX)."""
     need = 1
     for M in range(1, cfg.MMAX + 1):
         for k in range(cfg.NCL):
@@ -141,7 +147,7 @@ def build(device, cfg: DCfg, x_t, idx_t, counts_t, w_t, wd_t, out_t, XST):
     xprog = sharded_l1(device, C, [cfg.GC, 4], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, torch.int32)
     pinl = sharded_l1(device, C, [2 * GW * 32, 32], ttnn.float32, ttnn.TILE_LAYOUT)
     pinr = sharded_l1(device, C, [2 * GW * 32, 32], ttnn.float32, ttnn.TILE_LAYOUT)
-    idx_l1 = sharded_l1(device, C, [NSLOT, cfg.RMAX * 32], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, torch.int32)
+    idx_l1 = sharded_l1(device, C, [2, 32], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, torch.int32)  # one row tile's ids
     planbuf = sharded_l1(device, C, [1, PLAN_WORDS], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, torch.int32)
     counts_l1 = sharded_l1(device, C, [1, max(4, cfg.nexp)], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, torch.int32)
     st = stamps_tensor(device, C)
@@ -228,7 +234,7 @@ def build(device, cfg: DCfg, x_t, idx_t, counts_t, w_t, wd_t, out_t, XST):
         ttnn.KernelDescriptor(
             kernel_source=kpath("wd_compute.cpp"),
             core_ranges=cset,
-            compile_time_args=[KT, NPAIR, BK, cfg.nexp, KTD, DC, planbuf.buffer_address()],
+            compile_time_args=[KT, NPAIR, BK, cfg.nexp, KTD, DC, planbuf.buffer_address(), NX, cfg.LOOK],
             named_compile_time_args=[("expert_activation", 0)],
             defines=act_defs
             + lag
