@@ -59,7 +59,6 @@ class Flux3KleinRequest:
     guidance: float | None = None
     images: tuple = ()
     cache: DBCacheConfig | None = None
-    return_final_tokens: bool = False
 
 
 @dataclass
@@ -69,7 +68,6 @@ class Flux3KleinResult:
     seed: int
     timings: dict[str, float]
     cached_steps: int = 0
-    final_tokens: torch.Tensor | None = None
 
 
 def make_noise(seed: int, h: int, w: int) -> torch.Tensor:
@@ -293,20 +291,10 @@ class Flux3KleinPipeline:
         image = Image.fromarray(rows.reshape(size, size, 3).numpy())
         ttnn.deallocate(u8)
         ttnn.deallocate(decoded)
-        final_tokens = None
-        if request.return_final_tokens:
-            final_tokens = tensor.to_torch(state, mesh_axes=[None, self._sp_axis, None])[0][: h * w].clone()
         ttnn.deallocate(state)
         timings["to_host"] = time.time() - t0
         logger.info(f"FLUX 3 Klein {request.model} {size}x{size} refs {len(request.images)}: {timings}")
-        return Flux3KleinResult(
-            image=image,
-            prompt=prompt,
-            seed=seed,
-            timings=timings,
-            cached_steps=cached_steps,
-            final_tokens=final_tokens,
-        )
+        return Flux3KleinResult(image=image, prompt=prompt, seed=seed, timings=timings, cached_steps=cached_steps)
 
     def _upload_rows(self, rows: torch.Tensor, sp_factor: int) -> ttnn.Tensor:
         rows = pad_rows(rows.to(torch.bfloat16), ttnn.core.roundup(rows.shape[0], sp_factor * TILE))
