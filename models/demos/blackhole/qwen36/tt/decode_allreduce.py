@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Replicated decode residual for the TP=8 decode and MTP verify of Qwen3.8-27B.
+"""Replicated decode residual for the TP=8 MTP verify of Qwen3.8-27B.
 
 Without it, the decode residual is fractured ([1, 1, R, dim / tp] per device): every norm all-gathers it and every
 sublayer reduce-scatters its row-parallel output back into it, then adds the residual (2 collectives and 1 add per
@@ -9,8 +9,8 @@ shard [32, dim / 40]); norms run locally on it, and each sublayer's row-parallel
 all_reduce_async that also adds the residual (one_shot=True, residual_tensor=).
 
 Only the shape the operation was tested at takes this path: a (1, 8) mesh on a 1D fabric (one_shot routes by hop
-count), dim 5120, dense MLP, at most one tile of rows. Prefill keeps the fractured residual: it produces only KV and GDN state, so the residual layout stays private to
-each forward.
+count), dim 5120, dense MLP, at most one tile of rows. Prefill and the plain decode keep the fractured residual; the
+residual layout stays private to each forward.
 """
 
 from loguru import logger
@@ -190,8 +190,8 @@ def get_decode_allreduce(args, tt_ccl):
     inst = None
     if reason is None:
         inst = DecodeResidualAllReduce(tt_ccl.mesh_device, args, tt_ccl)
-        logger.info(f"decode and verify run on the replicated RES40 residual (num_links={inst.num_links})")
+        logger.info(f"the MTP verify runs on the replicated RES40 residual (num_links={inst.num_links})")
     else:
-        logger.info(f"decode and verify keep the fractured residual: {reason}")
+        logger.info(f"the MTP verify keeps the fractured residual: {reason}")
     tt_ccl._qwen36_decode_ar = inst
     return inst

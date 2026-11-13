@@ -261,14 +261,15 @@ class Qwen36DecoderLayer:
         # full-dim activation they expect. This is the weight-load amortization that makes verifying
         # K+1 tokens cost ~one decode step instead of ~K+1.
         _norm_mode = Mode.DECODE if (decode_cfg or mode != "prefill") else Mode.PREFILL
-        # A full-width input in a decode or decode-config forward is the replicated residual of
-        # decode_allreduce.DecodeResidualAllReduce (the model entered it); a fractured one takes the path below.
+        # A full-width input in a decode-mode forward is the replicated residual of
+        # decode_allreduce.DecodeResidualAllReduce, which only the MTP verify enters; a fractured one takes the path
+        # below.
         dar = self._decode_ar
         if dar is not None and not (_norm_mode == Mode.DECODE and x.shape[-1] == self.args.dim):
             dar = None
-        gdn_verify = not self.is_full_attention and gdn_recurrent and not gdn_seed
-        if dar is not None and mode == "prefill" and not gdn_verify:
-            raise ValueError("the replicated decode residual reaches a layer only in decode or the GDN verify")
+        verify = spec_verify_mode if self.is_full_attention else (gdn_recurrent and not gdn_seed)
+        if dar is not None and not verify:
+            raise ValueError("the replicated decode residual reaches a layer only in the MTP verify")
         if self.num_devices > 1:
             # TP: DistributedNorm uses the framework's per-norm memory configs.
             _attn_norm_config = self.args.get_norm_config("attn", _norm_mode)
@@ -376,7 +377,7 @@ class Qwen36DecoderLayer:
                             sp=sp,
                         )
                 else:
-                    attn_output = self.attention.forward_decode(attn_input, **dar_kw)
+                    attn_output = self.attention.forward_decode(attn_input)
         elif self.is_full_attention:
             attn_output = self.attention.forward(
                 attn_input,

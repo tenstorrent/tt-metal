@@ -1,15 +1,16 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Host-only (no device): the replicated decode residual of the TP=8 decode and MTP verify (tt/decode_allreduce.py).
+"""Host-only (no device): the replicated decode residual of the TP=8 MTP verify (tt/decode_allreduce.py).
 
 * Which models and meshes take it (a (1, 8) mesh on a 1D fabric, dim 5120, dense MLP) and that the model and its layers
   share one instance per TT_CCL.
 * DecodeResidualAllReduce.all_reduce: one all_reduce_async with one_shot and the residual, on the RES40 layout.
-* Qwen36DecoderLayer.forward: a full-width decode or GDN-verify input runs the local norms and hands each sublayer the
-  residual-adding all-reduce, with no separate add; a fractured input keeps the old path.
-* TPGatedDeltaNet: the decode and verify on vLLM KV cache blocks end in that all-reduce.
-* Qwen36Model: a verify or decode of one tile of rows on vLLM KV cache blocks enters the replicated residual, and the
-  verify tail takes its final norm and drafter feed from it.
+* Qwen36DecoderLayer.forward: a full-width verify input (attention spec_verify_mode, GDN verify) runs the local norms and
+  hands each sublayer the residual-adding all-reduce, with no separate add; a fractured input keeps the old path; any
+  other full-width input (plain decode, seed) is refused.
+* TPGatedDeltaNet: the verify on vLLM KV cache blocks ends in that all-reduce.
+* Qwen36Model: a verify of one tile of rows on vLLM KV cache blocks enters the replicated residual, and the verify tail
+  takes its final norm and drafter feed from it.
 The device numerics are in tests/ttnn/unit_tests/operations/ccl/test_all_reduce_async_{residual,one_shot}.py and
 test_decode_allreduce.py.
 """
@@ -213,6 +214,8 @@ def _layer(is_full_attention, dar, calls):
 def _forward(layer, x, step):
     if step == "decode":
         return layer.forward(x, mode="decode")
+    if step == "attn_verify":
+        return layer.forward(x, mode="decode", alias_kv_write=True, spec_verify_mode=True, n_users=2)
     if step == "verify":
         return layer.forward(x, mode="prefill", valid_len=8, gdn_recurrent=True, decode_cfg=True, n_users=2)
     return layer.forward(x, mode="prefill", valid_len=2, gdn_recurrent=True, gdn_seed=True, decode_cfg=True, n_users=2)
@@ -229,8 +232,7 @@ def no_add(monkeypatch):
 @pytest.mark.parametrize(
     "is_full_attention, step, mixer",
     [
-        (True, "decode", "attention.forward_decode"),
-        (False, "decode", "attention.forward_decode"),
+        (True, "attn_verify", "attention.forward_decode"),
         (False, "verify", "attention.forward_verify_recurrent"),
     ],
 )
@@ -261,10 +263,11 @@ def test_a_fractured_input_keeps_the_gathering_norms_and_the_adds(no_add, step):
     assert len(no_add) == 2 and dar.norms == [] and dar.bound == []
 
 
-def test_the_seed_refuses_a_replicated_input(no_add, expect_error):
-    layer = _layer(False, FakeDar(), [])
-    with expect_error(ValueError, "replicated decode residual"):
-        _forward(layer, FT((1, 1, 2, DIM), "x"), "seed")
+@pytest.mark.parametrize("is_full_attention, step", [(True, "decode"), (False, "decode"), (False, "seed")])
+def test_a_replicated_input_outside_the_verify_is_refused(no_add, expect_error, is_full_attention, step):
+    layer = _layer(is_full_attention, FakeDar(), [])
+    with expect_error(ValueError, "only in the MTP verify"):
+        _forward(layer, FT((1, 1, 2, DIM), "x"), step)
 
 
 @pytest.fixture
@@ -273,20 +276,18 @@ def gdn_layer(monkeypatch):
 
     reduce_scatters = []
     monkeypatch.setattr(ttnn.experimental.kda, "gdn_spec_step", lambda *a, **k: "gated")
-    monkeypatch.setattr(ttnn.experimental.kda, "gdn_decode_step", lambda *a, **k: "gated")
     monkeypatch.setattr(ttnn, "reshape", lambda t, shape: FT(shape, "view"))
     monkeypatch.setattr(ttnn, "deallocate", lambda t: None)
     monkeypatch.setattr(tp.tpc, "matmul_1d_decode", lambda *a, **k: FT((1, 1, 32, 64), "qkvzab"))
     monkeypatch.setattr(tp, "tt_all_reduce", lambda partial, *a, **k: reduce_scatters.append(partial) or "fractured")
     layer = SimpleNamespace(
         Nv=6, Nk=2, Dk=128, Dv=128, K=4, qkvz_dim_tp=64, scale=1.0, mesh=None, tt_ccl=None, cfg=None,
-        tw=dict.fromkeys(["qkvz", "conv_taps_rows", "conv_taps_packed", "dt_bias_fp32", "neg_exp_A_fp32", "norm_w_1d", "out"]),
+        tw=dict.fromkeys(["qkvz", "conv_taps_rows", "dt_bias_fp32", "neg_exp_A_fp32", "norm_w_1d", "out"]),
         args=SimpleNamespace(gdn_qkvz_decode_1d_progcfg=None, ccl_topology=lambda: None),
-        state_blocks=SimpleNamespace(verify=SimpleNamespace(T=4, ctrl="ctrl", idx="idx"), rec_k="rk", rec_v="rv", hist="h", idx="idx"),
+        state_blocks=SimpleNamespace(verify=SimpleNamespace(T=4, ctrl="ctrl", idx="idx"), rec_k="rk", rec_v="rv", hist="h"),
         _row_proj=lambda gated, w: FT((1, 8, DIM), "partial"),
     )  # fmt: skip
-    for name in ("_forward_verify_blocks", "_forward_decode_blocks"):
-        setattr(layer, name, getattr(tp.TPGatedDeltaNet, name).__get__(layer))
+    layer._forward_verify_blocks = tp.TPGatedDeltaNet._forward_verify_blocks.__get__(layer)
     return tp, layer, reduce_scatters
 
 
@@ -299,25 +300,22 @@ class RecordingAllReduce:
         return "replicated"
 
 
-def test_gdn_on_vllm_blocks_ends_in_the_residual_all_reduce(gdn_layer):
+def test_the_gdn_verify_on_vllm_blocks_ends_in_the_residual_all_reduce(gdn_layer):
     tp, layer, reduce_scatters = gdn_layer
     ar = RecordingAllReduce()
     x = FT((1, 1, 8, DIM), "x")
     assert tp.TPGatedDeltaNet.forward_verify_recurrent(layer, x, 8, pre_gathered=True, n_users=2, decode_ar=ar) == (
         "replicated"
     )
-    assert tp.TPGatedDeltaNet.forward_decode(layer, x, decode_ar=ar) == "replicated"
-    assert [p.shape for p in ar.partials] == [(1, 1, 8, DIM), (1, 1, 8, DIM)] and reduce_scatters == []
+    assert [p.shape for p in ar.partials] == [(1, 1, 8, DIM)] and reduce_scatters == []
     assert tp.TPGatedDeltaNet.forward_verify_recurrent(layer, x, 8, pre_gathered=True, n_users=2) == "fractured"
-    assert tp.TPGatedDeltaNet.forward_decode(layer, x) == "fractured" and len(reduce_scatters) == 2
+    assert len(reduce_scatters) == 1
 
 
-def test_gdn_without_vllm_blocks_refuses_the_residual_all_reduce(gdn_layer, expect_error):
+def test_the_gdn_verify_without_vllm_blocks_refuses_the_residual_all_reduce(gdn_layer, expect_error):
     tp, layer, _ = gdn_layer
     layer.state_blocks = None
     x = FT((1, 1, 8, DIM), "x")
-    with expect_error(ValueError, "vLLM KV cache blocks"):
-        tp.TPGatedDeltaNet.forward_decode(layer, x, decode_ar=RecordingAllReduce())
     with expect_error(ValueError, "vLLM KV cache blocks"):
         tp.TPGatedDeltaNet.forward_verify_recurrent(layer, x, 8, pre_gathered=True, n_users=2, decode_ar=object())
 
@@ -334,7 +332,7 @@ def _model(dar, blocks=(True, True)):
     return model
 
 
-def test_a_forward_enters_the_replicated_residual_only_with_one_tile_of_rows_on_vllm_blocks():
+def test_a_verify_enters_the_replicated_residual_only_with_one_tile_of_rows_on_vllm_blocks():
     dar = object()
     assert _model(dar)._residual_ar(32) is dar
     assert _model(dar)._residual_ar(33) is None

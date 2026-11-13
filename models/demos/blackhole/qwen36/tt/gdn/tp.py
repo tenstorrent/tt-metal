@@ -1502,13 +1502,9 @@ class TPGatedDeltaNet:
             **tpc.prefill_rs_kwargs(self.args),
         )
 
-    def forward_decode(self, x, decode_ar=None):
-        """decode_ar: a decode_allreduce.ResidualAllReduce when x is the norm of the replicated decode residual; it sums
-        the out-projection partials and adds the residual. Only with the state in vLLM KV cache blocks."""
+    def forward_decode(self, x):
         if self.state_blocks is not None:
-            return self._forward_decode_blocks(x, decode_ar)
-        if decode_ar is not None:
-            raise ValueError("the replicated decode residual needs the GDN state in vLLM KV cache blocks")
+            return self._forward_decode_blocks(x)
         tw, Nk, Nv, Dk, Dv = self.tw, self.Nk, self.Nv, self.Dk, self.Dv
         Bmax = self.B
         _L1 = ttnn.L1_MEMORY_CONFIG  # keep decode conv→recurrence→norm/gate chain L1-resident
@@ -1640,7 +1636,7 @@ class TPGatedDeltaNet:
         )
         return out
 
-    def _forward_decode_blocks(self, x, decode_ar=None):
+    def _forward_decode_blocks(self, x):
         """Decode rows [0, B) on the state in vLLM KV cache blocks: ONE gdn_decode_step does the causal conv on the
         packed history, the gates, the recurrence and the gated norm, reading and writing the pages that
         state_blocks.idx names for each row. Then the out-projection and all-reduce of forward_decode."""
@@ -1677,8 +1673,6 @@ class TPGatedDeltaNet:
         partial = self._row_proj(gated, tw["out"])
         ttnn.deallocate(gated)
         partial = ttnn.reshape(partial, (1, 1, B, partial.shape[-1]))
-        if decode_ar is not None:
-            return decode_ar.all_reduce(partial)
         return tt_all_reduce(
             partial,
             self.mesh,

@@ -1001,10 +1001,6 @@ class Qwen36Model:
         if self.num_devices > 1:
             # TP expects [1,1,B,dim_frac]; embd yields [B,1,dim_frac].
             x = ttnn.reshape(x, (1, 1, x.shape[0] * x.shape[1], x.shape[-1]))
-            # The MTP drafter consumes the fractured hidden (return_hidden), so that caller keeps the fractured residual.
-            dar = None if return_hidden else self._residual_ar(x.shape[-2])
-            if dar is not None:
-                x = dar.enter(x)
         _cap = getattr(self, "_capture_layer", None)
         for _li, layer in enumerate(self.layers):
             if layer.is_full_attention:
@@ -1289,9 +1285,9 @@ class Qwen36Model:
         return cos, sin
 
     def _residual_ar(self, rows):
-        """The DecodeResidualAllReduce a decode or verify forward of ``rows`` rows runs on, or None for the fractured
-        residual: the replicated residual is one tile of rows, and its GDN path exists only with the GDN state in vLLM
-        KV cache blocks (bound before any decode or verify trace is captured)."""
+        """The DecodeResidualAllReduce a verify forward of ``rows`` rows runs on, or None for the fractured residual:
+        the replicated residual is one tile of rows, and its GDN path exists only with the GDN state in vLLM KV cache
+        blocks (bound before any verify trace is captured)."""
         if self._decode_ar is None or rows > ttnn.TILE_SIZE:
             return None
         if any(layer.attention.state_blocks is None for layer in self.layers if not layer.is_full_attention):
@@ -1306,8 +1302,8 @@ class Qwen36Model:
         drafter feed (spec_feed_rows); its programs are the inner norm's, already compiled by the
         self.norm call.
 
-        A full-width x is the replicated decode residual: the final norm is the decode step's local norm and the feed
-        is this device's dim/tp span of its output (mesh_partition, as Qwen36MTP.forward_decode re-fractures)."""
+        A full-width x is the replicated decode residual: the final norm is its local norm and the feed is this
+        device's dim/tp span of its output (mesh_partition, as Qwen36MTP.forward_decode re-fractures)."""
         if self._decode_ar is not None and x.shape[-1] == self.args.dim:
             normed = self._final_norm_decode(x)  # [1,1,R,dim] DRAM, replicated
             ttnn.deallocate(x)
@@ -1341,7 +1337,7 @@ class Qwen36Model:
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         dar = self._residual_ar(rows)
         if dar is not None:
-            x = dar.enter(x)  # every layer and _spec_tail then run on the replicated residual, as the decode step
+            x = dar.enter(x)  # every layer and _spec_tail then run on the replicated residual
         for layer in self.layers:
             if layer.is_full_attention:
                 # Hybrid verify: every row is a pseudo-user of its own sequence. cur_pos for row u*T+j is
