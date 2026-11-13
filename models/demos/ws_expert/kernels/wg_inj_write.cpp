@@ -51,7 +51,7 @@ void kernel_main() {
 #endif
             }
             noc_async_write_barrier();
-            noc_semaphore_inc(get_noc_addr(tx, ty, warr), 1);
+            noc_semaphore_inc(get_noc_addr(tx, ty, warr + (n & 1) * 16), 1);
         }
     }
     noc_async_atomic_barrier();

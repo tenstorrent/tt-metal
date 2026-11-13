@@ -89,7 +89,7 @@ def build(device, cfg: GCfg, x_t, idx_t, counts_t, wgu_t, wd_t, out_t, fab=None)
     else:
         icred = sharded_l1(device, INJ, [cfg.G * NT, 4], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, torch.int32)
     # L1 tensors (same address on every core)
-    warr = sharded_l1(device, C, [1, 4], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, torch.int32)  # landed weight slices
+    warr = sharded_l1(device, C, [2, 4], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, torch.int32)  # landed slices a slot
     wgu_ring = sharded_l1(device, C, [2 * WGU * 32, 32], cfg.w_dt, ttnn.TILE_LAYOUT)
     wd_ring = sharded_l1(device, C, [2 * WDN * 32, 32], cfg.w_dt, ttnn.TILE_LAYOUT)
     hring = sharded_l1(device, C, [NS * KTD * 32, 32], cfg.h_dt, ttnn.TILE_LAYOUT)

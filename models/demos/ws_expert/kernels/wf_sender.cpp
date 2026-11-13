@@ -84,7 +84,7 @@ void kernel_main() {
                         get_read_ptr(0),
                         CHB,
                         tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
-                            get_noc_addr(tx, ty, dst), get_noc_addr(tx, ty, warr), 1, true});
+                            get_noc_addr(tx, ty, dst), get_noc_addr(tx, ty, warr + (n & 1) * 16), 1, true});
                 }
                 noc_async_writes_flushed();  // (payload read out of CB 0 and the header out of L1)
                 t_send += wall() - a2;

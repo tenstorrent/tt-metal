@@ -129,3 +129,87 @@ def test_ws_fab_send(mesh_device, RD, SCB):
         f"senders cb wait / send / credit wait / total | reader reserve / issue / barrier / total (kcyc): {[[v // 1000 for v in x] for x in r['snd']]}"
     )
     assert min(r["pcs"]) > 0.999
+
+
+def run_all(mesh, cfg: GCfg, ac, Ms, seed=0):
+    """Step 2: every chip runs the groups (same tokens on every chip here) and owns experts e % 8."""
+    from models.demos.ws_expert.ws_fab import build_all
+
+    torch.manual_seed(seed)
+    x = torch.randn(cfg.T + 1, cfg.H)
+    x[cfg.T] = 0
+    idx = torch.full((cfg.nexp, cfg.RMAX * 32), cfg.T, dtype=torch.int32)
+    for e, M in enumerate(Ms):
+        idx[e, :M] = torch.randperm(cfg.T)[:M].to(torch.int32)
+    counts = torch.tensor(Ms, dtype=torch.int32).reshape(1, -1)
+    wg = torch.randn(cfg.nexp, cfg.H, cfg.I) / cfg.H**0.5
+    wu = torch.randn(cfg.nexp, cfg.H, cfg.I) / cfg.H**0.5
+    wd = torch.randn(cfg.nexp, cfg.I, cfg.H) / cfg.I**0.5
+    rm = lambda t, dt: ttnn.from_torch(t, dtype=dt, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh)
+    x_t, idx_t, counts_t = rm(x, ttnn.bfloat16), rm(idx, ttnn.uint32), rm(counts, ttnn.uint32)
+    ws_t = to_dev(slice_layout(cfg, ac.CHT, wg, wu, wd), cfg.w_dt, mesh)
+    out_t = to_dev(torch.zeros(cfg.G * cfg.RMAX * 32, cfg.H), cfg.out_dt, mesh)
+    mpd, io, st, sst = build_all(mesh, cfg, ac, x_t, idx_t, counts_t, ws_t, out_t)
+    ttnn.generic_op(io, mpd)
+    ttnn.synchronize_device(mesh)
+    wgu = torch.cat([interleave_gu(wg[e], wu[e]) for e in range(cfg.nexp)], 0)
+    wguq = quantize(wgu, cfg.w_dt).reshape(cfg.nexp, cfg.H, -1)
+    wdq = quantize(wd.reshape(-1, cfg.H), cfg.w_dt).reshape(cfg.nexp, cfg.I, cfg.H)
+    refs = []
+    for g in range(cfg.G):
+        e = max(range(g, cfg.nexp, cfg.G))
+        X = quantize(x[idx[e].long()].to(torch.bfloat16).float(), cfg.x_dt)
+        wgq = wguq[e].reshape(cfg.H, -1, 2, 32)[:, :, 0].reshape(cfg.H, cfg.I)
+        wuq = wguq[e].reshape(cfg.H, -1, 2, 32)[:, :, 1].reshape(cfg.H, cfg.I)
+        h = quantize(torch.nn.functional.silu(X @ wgq) * (X @ wuq), cfg.h_dt)
+        refs.append((e, (h @ wdq[e])[: Ms[e]]))
+    NC = cfg.G * cfg.GC
+    R = [(m + 31) // 32 for m in Ms]
+    done = [e for e in range(cfg.nexp) if e >= cfg.G]
+    ops = sum(R[e] * (2 * cfg.PAIRS * cfg.KT + cfg.HT * cfg.PAIRS) for e in done)
+    clk = aiclk_mhz(0)
+    outs = ttnn.get_device_tensors(out_t)
+    sts = ttnn.get_device_tensors(st)
+    ssts = ttnn.get_device_tensors(sst)
+    per_chip = []
+    for ci in range(len(outs)):
+        out = ttnn.to_torch(outs[ci]).float()
+        pcs = [pcc(out[g * cfg.RMAX * 32 : g * cfg.RMAX * 32 + Ms[e]], ref) for g, (e, ref) in enumerate(refs)]
+        s = (ttnn.to_torch(sts[ci]).to(torch.int64) & 0xFFFFFFFF).reshape(NC, -1)
+        rel = ((s - int(s[0, 0]) + (1 << 31)) & 0xFFFFFFFF) - (1 << 31)
+        t0 = int(rel[:, 0].min())
+        first = last = 0
+        for g in range(cfg.G):
+            n_g = len(range(g, cfg.nexp, cfg.G))
+            rg = rel[g * cfg.GC : (g + 1) * cfg.GC]
+            first = max(first, int((rg[:, 1] - t0).max()))
+            last = max(last, int((rg[:, n_g] - t0).max()))
+        span = last - first
+        snd = (ttnn.to_torch(ssts[ci]).to(torch.int64)[:, :8] // 1000).tolist()
+        per_chip.append(
+            dict(
+                pcc=min(pcs),
+                per_expert=span / len(done),
+                util=ops * 16 / (NC * span),
+                wait=(s[:, 40:44].double().mean(dim=0) / 1000).round().tolist(),
+                snd=snd,
+            )
+        )
+    return per_chip, clk
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize("device_params", [FAB], indirect=True)
+@pytest.mark.parametrize("M", [586, 2048])
+def test_ws_fab_all(mesh_device, M):
+    from models.demos.ws_expert.ws_fab import ACfg
+
+    cfg = GCfg(nexp=32, G=4)
+    pcs, clk = run_all(mesh_device, cfg, ACfg(), [M] * cfg.nexp)
+    for ci, r in enumerate(pcs):
+        logger.info(
+            f"WSA M {M} chip {ci}: {r['per_expert']:.0f} cyc/expert ({r['per_expert'] / clk:.2f} us), util tile "
+            f"{100 * r['util']:.1f}%, pcc {r['pcc']:.5f}; waits (K) tilize/x/weight/h {r['wait']}; "
+            f"senders (local, branches) cb/send/cred/total|rd res/issue/bar/total {r['snd']}"
+        )
+    assert min(r["pcc"] for r in pcs) > 0.999

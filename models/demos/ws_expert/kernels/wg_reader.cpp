@@ -44,7 +44,9 @@ void kernel_main() {
     constexpr uint32_t counts_l1 = get_compile_time_arg_val(17);
     constexpr uint32_t icred = get_compile_time_arg_val(18);
     constexpr uint32_t hring = get_compile_time_arg_val(19), htile = get_compile_time_arg_val(20);
-    constexpr uint32_t warr_addr = get_compile_time_arg_val(21);  // landed weight slices (written by other chips)
+    // landed weight slices a ring slot (word (n & 1) * 4: expert n's slot counts n / 2 + 1 once it landed; written by
+    // other chips - per slot because consecutive experts come from different owners and may land out of order)
+    constexpr uint32_t warr_addr = get_compile_time_arg_val(21);
     constexpr uint32_t BPR = KT / BK, HALF = GC / 2;
     constexpr uint32_t WGU = KT * 2, WDN = KTD * DCOLS;
 
@@ -73,7 +75,7 @@ void kernel_main() {
     auto qw = [&]() -> bool {
         bool did = false;
         invalidate_l1_cache();
-        if (w_n < nexp_g && *warr >= w_n + 1 && cb_pages_reservable_at_back(w_cb, WGU) &&
+        if (w_n < nexp_g && warr[(w_n & 1) * 4] >= w_n / 2 + 1 && cb_pages_reservable_at_back(w_cb, WGU) &&
             cb_pages_reservable_at_back(wd_cb, WDN)) {
             cb_reserve_back(w_cb, WGU);
             cb_push_back(w_cb, WGU);

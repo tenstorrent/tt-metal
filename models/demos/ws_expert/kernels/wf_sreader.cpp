@@ -8,7 +8,7 @@
 // chip's DRAM into CB 0 (SCB chunks of CHT tiles) for the fabric sender (NCRISC), RD_DEPTH chunks in flight (one
 // transaction id each). The slices are stored chunk-contiguous (ws_fab.slice_layout): chunk q = (e GC + j) NCH + u
 // is one read of CHT tiles from bank q % 8 (576 B page reads were issue-bound at ~10 GB/s a sender).
-// RT: 0 slices addr, 1 (unused), 2 ntargets, 3.. targets (c | x << 8 | y << 16)
+// RT: 0 slices addr, 1 own (reads experts e % NOWN == own), 2 ntargets, 3.. targets (c | x << 8 | y << 16)
 // CT: 0 NEXP, 1 KT, 2 KTD, 3 DCOLS, 4 PAIRS, 5 HT, 6 CHT, 7 G, 8 GC, then TensorAccessorArgs(slices)
 #include "api/dataflow/dataflow_api.h"
 
@@ -41,7 +41,11 @@ void kernel_main() {
         cb_push_back(0, CHT);
         ++pushed;
     };
+    const uint32_t own = get_arg_val<uint32_t>(1);  // this chip's experts: e % NOWN == own
     for (uint32_t e = 0; e < NEXP; ++e) {
+        if (e % NOWN != own) {
+            continue;
+        }
         const uint32_t g = e % G;
         for (uint32_t t = 0; t < nt; ++t) {
             const uint32_t c = get_arg_val<uint32_t>(3 + t) & 0xFF;
