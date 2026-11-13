@@ -302,7 +302,7 @@ class Hy4IHCFused:
             + _acc(dbg)
             + [DBG, DBGW, EXPAND, X, NT]
             + _acc(x_new)
-            + [PART, RECV, SLOT, NC, p0.x, p0.y, GX, DUAL],
+            + [PART, RECV, SLOT, NC, p0.x, p0.y, GX, DUAL, TOT],
             rt,
             ttnn.WriterConfigDescriptor(),
             common=[out.buffer_address(), rm_t.buffer_address(), dbg.buffer_address(), x_new.buffer_address()],

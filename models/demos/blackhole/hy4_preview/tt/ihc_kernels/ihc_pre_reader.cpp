@@ -71,6 +71,7 @@ void kernel_main() {
     constexpr uint32_t SB = RR * 64;                                        // slot bytes
     constexpr uint32_t SWD = RR * 16;                                       // slot words
     constexpr uint32_t FLAG2 = 0xC0DE1234u;  // exchange 2 (slot memory only)
+    constexpr uint32_t FLAGD = 0xD04E5AFEu;  // the writer kernel finished its half of the R tile
     constexpr uint32_t FLAG1 = 0x4B1C0DE1u;  // exchange 1: a FINITE fp32 (it is summed by matmuls), word 255 of a face
 
     if constexpr (ABL & 128) {
@@ -337,7 +338,9 @@ void kernel_main() {
         noc_async_write(slot_base + k * SW * 4, dst, SW * 4);
     }
     STAMP(10)
-    for (uint32_t kk = 0; kk < NC; ++kk) {
+    constexpr uint32_t NK = DUAL ? 16 : NC;  // with the writer kernel (DUAL) the reader waits for / transposes the
+                                             // slots 0..15, the writer the slots 16..31
+    for (uint32_t kk = 0; kk < NK; ++kk) {
         if constexpr (ABL & 4) {
             break;
         }
@@ -357,10 +360,23 @@ void kernel_main() {
         for (uint32_t kk = 0; kk < 16; ++kk) {
             Rt[kk] = st[kk * SW];
         }
+        if constexpr (!DUAL) {
 #pragma GCC unroll 16
-        for (uint32_t kk = 16; kk < NC; ++kk) {
-            Rt[256 + kk - 16] = st[kk * SW];
+            for (uint32_t kk = 16; kk < NC; ++kk) {
+                Rt[256 + kk - 16] = st[kk * SW];
+            }
         }
+    }
+    if constexpr (DUAL) {
+        volatile tt_l1_ptr uint32_t* done =
+            slots + 1792;  // slot_base + 7168 B: set by the writer once the second half of R is built
+        for (uint32_t spin = 0; spin < 20000000u; ++spin) {
+            invalidate_l1_cache();
+            if (done[0] == FLAGD) {
+                break;
+            }
+        }
+        done[0] = 0;
     }
     cbtot.push_back(1);
     STAMP(7)
@@ -373,4 +389,6 @@ void kernel_main() {
         noc_async_write(slot_base + 6144, d_acc.get_noc_addr(k, 0), 64);
         noc_async_write_barrier();
     }
+    noc_async_write_barrier();
+    noc_async_atomic_barrier();  // end every kernel with both NoCs drained (next kernel on these cores)
 }

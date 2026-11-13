@@ -27,15 +27,12 @@
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/dataflow/circular_buffer.h"
 
-// rsqrt on rows 0..15 only (faces 0 and 1): the tokens (T <= 16) live there; rsqrt_tile() always does all four faces
-ALWI void rsqrt_tile_rows(uint32_t idst) {
+// rsqrt on rows 0..15 only (faces 0 and 1; VM = R) or on face 0 only (rows 0..15 x columns 0..15; VM = None): the
+// tokens (T <= 16) live in the rows 0..15; rsqrt_tile() always does all four faces
+template <VectorMode VM>
+ALWI void rsqrt_tile_vm(uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_rsqrt,
-        (APPROX, 8 /* ITERATIONS */, DST_ACCUM_MODE, false),
-        idst,
-        VectorMode::R));
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_rsqrt, (APPROX, 8 /* ITERATIONS */, DST_ACCUM_MODE, false), idst, VM));
 }
 
 // exact fp32 add of two dest tiles on rows 0..15 only (faces 0 and 1): the 4T <= 16 stream rows of T <= 4 tokens live
@@ -158,59 +155,90 @@ void kernel_main() {
     x.wait_front(NX);
     w.wait_front(GPC);
 
-    // ---- squares ----
-    for (uint32_t n0 = 0; n0 < NX; n0 += DT) {
-        const uint32_t nn = (NX - n0 < DT) ? NX - n0 : DT;
+    // ---- Z_g = sum_j X_{g,j} @ Wp_j  and  SQ_{g,j} = X_{g,j}^2 (one section when the dest holds them all: dest
+    // 0..NX-1 squares, NX.. Z) ----
+    if constexpr (NX + G <= DT) {
+        reconfig_data_format(cb_w, cb_x);  // matmul: in1 -> srcA, in0 -> srcB (formats differ here: x fp32, W bf16)
+        matmul_init(cb_x, cb_w);
+        tile_regs_acquire();
+        for (uint32_t g = 0; g < G; ++g) {
+            for (uint32_t j = 0; j < GPC; ++j) {
+                matmul_tiles(cb_x, cb_w, g * GPC + j, j, NX + g);
+            }
+        }
         reconfig_data_format(cb_x, cb_x);
         mul_init(cb_x, cb_x);
-        tile_regs_acquire();
-        for (uint32_t i = 0; i < nn; ++i) {
-            mul_tiles(cb_x, cb_x, n0 + i, n0 + i, i);
+        for (uint32_t i = 0; i < NX; ++i) {
+            mul_tiles(cb_x, cb_x, i, i, i);
         }
         tile_regs_commit();
         tile_regs_wait();
-        sq.reserve_back(nn);
-        for (uint32_t i = 0; i < nn; ++i) {
+        sq.reserve_back(NX);
+        for (uint32_t i = 0; i < NX; ++i) {
             pack_tile(i, cb_sq);
         }
-        sq.push_back(nn);
+        sq.push_back(NX);
+        z.reserve_back(G);
+        for (uint32_t g = 0; g < G; ++g) {
+            pack_tile(NX + g, cb_z);
+        }
+        z.push_back(G);
+        tile_regs_release();
+    } else {
+        for (uint32_t n0 = 0; n0 < NX; n0 += DT) {
+            const uint32_t nn = (NX - n0 < DT) ? NX - n0 : DT;
+            reconfig_data_format(cb_x, cb_x);
+            mul_init(cb_x, cb_x);
+            tile_regs_acquire();
+            for (uint32_t i = 0; i < nn; ++i) {
+                mul_tiles(cb_x, cb_x, n0 + i, n0 + i, i);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            sq.reserve_back(nn);
+            for (uint32_t i = 0; i < nn; ++i) {
+                pack_tile(i, cb_sq);
+            }
+            sq.push_back(nn);
+            tile_regs_release();
+        }
+        reconfig_data_format(cb_w, cb_x);
+        matmul_init(cb_x, cb_w);
+        tile_regs_acquire();
+        for (uint32_t g = 0; g < G; ++g) {
+            for (uint32_t j = 0; j < GPC; ++j) {
+                matmul_tiles(cb_x, cb_w, g * GPC + j, j, g);
+            }
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        z.reserve_back(G);
+        for (uint32_t g = 0; g < G; ++g) {
+            pack_tile(g, cb_z);
+        }
+        z.push_back(G);
         tile_regs_release();
     }
     STAMP(1)
-    // ---- Z_g = sum_j X_{g,j} @ Wp_j ----
-    reconfig_data_format(cb_w, cb_x);  // matmul: in1 -> srcA, in0 -> srcB (formats differ here: x fp32, W bf16)
-    matmul_init(cb_x, cb_w);
-    tile_regs_acquire();
-    for (uint32_t g = 0; g < G; ++g) {
-        for (uint32_t j = 0; j < GPC; ++j) {
-            matmul_tiles(cb_x, cb_w, g * GPC + j, j, g);
-        }
-    }
-    tile_regs_commit();
-    tile_regs_wait();
-    z.reserve_back(G);
-    for (uint32_t g = 0; g < G; ++g) {
-        pack_tile(g, cb_z);
-    }
-    z.push_back(G);
-    tile_regs_release();
     STAMP(2)
     // ---- ZM_g = Z_g * MASK ----
-    z.wait_front(G);
-    reconfig_data_format(cb_z, cb_cst);
-    mul_init(cb_z, cb_cst);
-    tile_regs_acquire();
-    for (uint32_t g = 0; g < G; ++g) {
-        mul_tiles(cb_z, cb_cst, g, C_MASK, g);
+    {
+        z.wait_front(G);
+        reconfig_data_format(cb_z, cb_cst);
+        mul_init(cb_z, cb_cst);
+        tile_regs_acquire();
+        for (uint32_t g = 0; g < G; ++g) {
+            mul_tiles(cb_z, cb_cst, g, C_MASK, g);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        zm.reserve_back(G);
+        for (uint32_t g = 0; g < G; ++g) {
+            pack_tile(g, cb_zm);
+        }
+        zm.push_back(G);
+        tile_regs_release();
     }
-    tile_regs_commit();
-    tile_regs_wait();
-    zm.reserve_back(G);
-    for (uint32_t g = 0; g < G; ++g) {
-        pack_tile(g, cb_zm);
-    }
-    zm.push_back(G);
-    tile_regs_release();
     STAMP(3)
     // ---- U = sum_g SELALL_g @ ZM_g   and   Q_g = sum_j SQ_{g,j} @ ONES8  (one section: U in dest 0, Q_g in dest 1 +
     // g) ----
@@ -303,7 +331,7 @@ void kernel_main() {
     if constexpr (CABL & 1) {
         rsqrt_tile<RsqrtMode::Fast>(0);
     } else {
-        rsqrt_tile_rows(0);
+        rsqrt_tile_vm<VectorMode::None>(0);
     }
     mul_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_raw);
     mul_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_raw, 0, 0);
@@ -312,7 +340,7 @@ void kernel_main() {
     add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_base);
     add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_base, 0, 0);
     sigmoid_tile_init();
-    sigmoid_tile<VectorMode::R>(0);  // rows 0..15 only (T <= 16)
+    sigmoid_tile<VectorMode::None>(0);  // face 0 only: rows 0..15 (T <= 16) x columns 0..15 (pre | post)
     add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_cst);
     add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_cst, C_OFF, 0);
     mul_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_cst);
@@ -390,11 +418,7 @@ void kernel_main() {
     binop_with_scalar_tile_init();
     add_unary_tile(0, EPS_2_BITS);
     rsqrt_tile_init();
-    if constexpr (CABL & 4) {
-        rsqrt_tile<RsqrtMode::Fast>(0);
-    } else {
-        rsqrt_tile_rows(0);
-    }
+    rsqrt_tile_vm<VectorMode::R>(0);
     tile_regs_commit();
     tile_regs_wait();
     rs.reserve_back(1);

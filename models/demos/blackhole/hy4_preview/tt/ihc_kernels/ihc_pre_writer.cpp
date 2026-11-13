@@ -41,12 +41,14 @@ void kernel_main() {
     constexpr uint32_t MW = get_compile_time_arg_val(XB + 6);
     constexpr uint32_t DUAL = get_compile_time_arg_val(
         XB + 7);  // 1: this kernel sends half of the exchange writes (the reader the other half)
+    constexpr uint32_t cb_tot = get_compile_time_arg_val(XB + 8);
     constexpr uint32_t RR = T <= 2 ? 2 : (T <= 4 ? 4 : (T <= 8 ? 8 : 16));
     constexpr uint32_t SB = RR * 64;
     constexpr uint32_t SWD = RR * 16;
     constexpr uint32_t SW = 36;
     constexpr uint32_t FLAG1 = 0x4B1C0DE1u;
     constexpr uint32_t FLAG2 = 0xC0DE1234u;
+    constexpr uint32_t FLAGD = 0xD04E5AFEu;
     const uint32_t k = get_arg_val<uint32_t>(0);
     const uint32_t j0 = k * GPC;
     const uint32_t o_addr = get_common_arg_val<uint32_t>(0);
@@ -61,7 +63,8 @@ void kernel_main() {
     const auto m_acc = TensorAccessor(m_args, m_addr, ROWBYTES);
     const auto d_acc = TensorAccessor(d_args, d_addr, 4096);
     const auto xo_acc = TensorAccessor(xo_args, xo_addr, 4096);
-    experimental::CB out(cb_out), rm(cb_rm), dbgb(cb_dbg), cbx(cb_x), cbpart(cb_part), cbr(cb_recv), cbslot(cb_slot);
+    experimental::CB out(cb_out), rm(cb_rm), dbgb(cb_dbg), cbx(cb_x), cbpart(cb_part), cbr(cb_recv), cbslot(cb_slot),
+        cbtot(cb_tot);
     volatile tt_l1_ptr uint32_t* ts = nullptr;
     if constexpr (DBG) {
         dbgb.reserve_back(1);
@@ -137,6 +140,26 @@ void kernel_main() {
             const uint64_t dst = get_noc_addr(MX0 + (kk % MW), MY0 + kk / MW, slot_base + k * SW * 4);
             noc_async_write(slot_base + k * SW * 4, dst, SW * 4);
         }
+        // second half (columns 16..31 = face 1) of the R tile R[t, kk] = slot kk, token t: wait for the slots 16..31,
+        // transpose, tell the reader
+        for (uint32_t kk = 16; kk < NC; ++kk) {
+            for (uint32_t spin = 0; spin < 20000000u; ++spin) {
+                invalidate_l1_cache();
+                if (slots[kk * SW + SW - 1] == FLAG2) {
+                    break;
+                }
+            }
+        }
+        volatile tt_l1_ptr uint32_t* R = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cbtot.get_write_ptr());
+        for (uint32_t t = 0; t < T; ++t) {
+            volatile tt_l1_ptr uint32_t* Rt = R + ((((t) >> 4) << 9) + (((t) & 15) << 4));
+            volatile tt_l1_ptr uint32_t* st = slots + t;
+#pragma GCC unroll 16
+            for (uint32_t kk = 16; kk < NC; ++kk) {
+                Rt[256 + kk - 16] = st[kk * SW];
+            }
+        }
+        slots[1792] = FLAGD;
     }
     out.wait_front(ng);
     STAMP(3)
@@ -191,4 +214,6 @@ void kernel_main() {
         noc_async_write_barrier();
     }
     out.pop_front(ng);
+    noc_async_write_barrier();
+    noc_async_atomic_barrier();  // end every kernel with both NoCs drained (next kernel on these cores)
 }
