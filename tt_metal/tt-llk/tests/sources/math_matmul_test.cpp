@@ -593,7 +593,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(
             formats.pack_dst, in0_tile_r_dim < FACE_R_DIM ? in0_tile_r_dim : FACE_R_DIM, TILE_C_DIM, num_faces);
 #if MATMUL_PR_LLK
-        _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en, !matmul_true_main_key>();
+        _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
 #else
         _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
 #endif
