@@ -268,10 +268,8 @@ void enumerate_core_rt_args(
             uint32_t sh = tt::round_up(spec.shape[0], tile_height) / tile_height;
             uint32_t sw = tt::round_up(spec.shape[1], tile_width) / tile_width;
             const auto& pshape = tensor.padded_shape();
-            uint32_t D = pshape.rank() >= 5 ? pshape[-5] : 1;
-            uint32_t N = pshape[-4], C = pshape[-3];
             uint32_t Ht = pshape[-2] / tile_height, Wt = pshape[-1] / tile_width;
-            uint32_t unrolled_Ht = D * N * C * Ht;
+            uint32_t unrolled_Ht = pshape.volume() / (pshape[-2] * pshape[-1]) * Ht;
             uint32_t last_h = sh - (tt::round_up(unrolled_Ht, sh) - unrolled_Ht);
             uint32_t last_w = sw - (tt::round_up(Wt, sw) - Wt);
 
