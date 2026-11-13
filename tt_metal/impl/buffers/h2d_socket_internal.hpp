@@ -50,8 +50,9 @@ inline void publish_staged(ttsl::Span<distributed::H2DSocket* const> sockets) {
     H2DSocketTryWriteAccess::publish_staged(sockets);
 }
 
-// True when the socket writes through its own receiver window (posted on Blackhole silicon); false when no
-// TLB was free and it fell back to cluster.write_core, or when it was attached from another process.
+// True when the socket writes through its own receiver window (posted on Blackhole silicon for Tensix and DRAM
+// receivers; an L2CPU receiver's LIM window is not posted); false when no TLB was free and it fell back to
+// cluster.write_core, or when it was attached from another process.
 inline bool writes_through_window(const distributed::H2DSocket& socket) {
     return H2DSocketTryWriteAccess::writes_through_window(socket);
 }
