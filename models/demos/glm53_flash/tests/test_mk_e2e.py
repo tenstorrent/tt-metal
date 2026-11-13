@@ -781,7 +781,7 @@ def test_mk_e2e(mesh_device, monkeypatch):
 def _pf_bench(backend, mesh_device, tok, n_rep: int) -> None:
     """GLM53_MK_PF_BENCH: wall ms of one TP prefill chunk per captured key, device-synchronised before and after (the
     host's input writes + the trace replay; head-less where the key has a head-less trace, as a non-final chunk runs).
-    Cases per bucket c: start 0 with c and c / 2 + 1 valid rows (the padded cost), and start w - c for every sparse
+    Cases per bucket c: start 0 with c and c / 2 + 2 valid rows (the padded cost), and start w - c for every sparse
     window w (the window's last chunk: the most context it reads). The first replay of each case is discarded."""
     tpp = getattr(backend, "tpp", None)
     if tpp is None:
@@ -794,7 +794,7 @@ def _pf_bench(backend, mesh_device, tok, n_rep: int) -> None:
     windows = sorted(int(t) for t in (getattr(tpp, "sparse_ts", None) or []))
     res = []
     for c in sorted(int(x) for x in tpp.buckets):
-        cases = [(0, c), (0, c // 2 + 1)]
+        cases = [(0, c), (0, c // 2 + 2)]  # (half-full: last row c / 2 + 1 stays off every chip slice boundary)
         cases += [(w - c, c) for w in windows if w > c and (w - c) % align == 0 and w <= tpp.max_seq]
         for s, nv in cases:
             toks = torch.zeros(c, dtype=torch.int64)
