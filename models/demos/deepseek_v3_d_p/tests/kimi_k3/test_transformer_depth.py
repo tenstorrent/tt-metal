@@ -390,43 +390,42 @@ def test_depth_ladder_matches_golden(mesh_device, device_params, num_layers):
 #
 # * The stack is the runner's PP4 rank 0 (`k31_stage.first_stage_params`: K3.1 TTNN weight cache, scaled-FP8
 #   kvpe, bf8 indexer key cache, the K3 manifest's knobs), run eager so the tap can read every layer. The model
-#   is too large for one galaxy, so the ladder covers PP4 stage 0: L1/L5/L12 are prefixes of it (a single-rank
-#   stack, which builds its last layer whole so it has a residual to score), L24 is the stage.
+#   is too large for one galaxy, so the ladder covers PP4 stage 0, layers 0-23.
 # * The prompt is the trace's 8192 prompt ids then its 2048 decoded ids, teacher-forced:
 #   two chunks, so chunk 1's DSA layers read chunk 0's KV and its KDA layers continue chunk 0's carry. The bar
 #   is held per chunk on prompt rows (chunk 0 [0, 5120), chunk 1 [5120, 8192)), as the chunked K3 test holds it
-#   per chunk; rows past the prompt line up with vLLM's decode steps and are logged, not gated.
+#   per chunk; rows past the prompt (vLLM's decode steps) feed the model but are not scored.
 #
 # The bar is K3's, per layer by depth: SHALLOW_LAYER_PCC through layer 11, DEEP_LAYER_PCC through layer 23 (K3's
-# depth-24 bar, set for the second seal). KV: KV_CACHE_PCC at every DSA layer. Measured at 10K
-# (tt_metal_tracker-ao3i.5.1): worst 0.9966 (layers 0-11), 0.9869 (12-23).
+# depth-24 bar, set for the second seal). KV: KV_CACHE_PCC at every DSA layer. Measured at 10K:
+# worst 0.9966 (layers 0-11), 0.9869 (12-23).
 #
 # The DSA indexer, per DSA layer, as GLM-5.3's runner gate and the package's indexer tests measure it:
 #
-# * Key cache (tt_metal_tracker-ao3i.5.3): the trace's `indexer/indexer_k_layer_i` is the post-LayerNorm key in
+# * Key cache: the trace's `indexer/indexer_k_layer_i` is the post-LayerNorm key in
 #   the natural basis (its own fp8 cache dequantizes to it at PCC 0.9996). K3.1's decode reads its cache in that
-#   basis, so the device key is compared as stored (`index_hadamard=False`, tt_metal_tracker-ao3i.5.9): a
+#   basis, so the device key is compared as stored (`index_hadamard=False`): a
 #   Hadamard-rotated cache reads PCC -0.22..0.17 and fails. PCC on the prompt rows, as the producer's index check does.
 #   Bar KV_CACHE_PCC, the KV cache's (the producer holds the index cache to the same threshold as the kvpe).
-# * Top-k (tt_metal_tracker-ao3i.5.2): each DSA layer's device top-2048 against `dsa/dsa_topk_indices_layer_i`,
+# * Top-k: each DSA layer's device top-2048 against `dsa/dsa_topk_indices_layer_i`,
 #   scored as set recall |device ∩ trace| / |trace| per query row (test_ttnn_csa*.py's measure), averaged
 #   over the prompt rows at positions >= INDEX_TOPK. Rows before that select every causal key on both sides
-#   (recall 1 by construction, checked) and decode rows are logged. Bar K31_TOPK_RECALL, per golden (below).
+#   (recall 1 by construction, checked). Bar K31_TOPK_RECALL, per golden (below).
 #
 #     scripts/run_safe_pytest.sh \
-#         "models/demos/deepseek_v3_d_p/tests/kimi_k3/test_transformer_depth.py::test_k31_depth_ladder_matches_golden[blackhole-L5-torus-xy-8x4]"
+#         "models/demos/deepseek_v3_d_p/tests/kimi_k3/test_transformer_depth.py::test_k31_depth_ladder_matches_golden[blackhole-L24-torus-xy-8x4]"
 def k31_layer_pcc(layer: int) -> float:
     """K3's per-layer bar for a layer of PP4 stage 0 (see above)."""
     assert layer < 2 * KimiK3Config.ATTN_RES_BLOCK_SIZE, f"layer {layer}: K3 sets no bar past depth 24"
     return SHALLOW_LAYER_PCC if layer < KimiK3Config.ATTN_RES_BLOCK_SIZE else DEEP_LAYER_PCC
 
 
-# The package's indexer overlap floor (test_ttnn_csa_indexer._assert_topk_overlap). Measured at 10K
-# (tt_metal_tracker-ao3i.5.2): mean recall 0.913 (layer 51) .. 0.971. The trace's cut is crowded (~150 of 2048
+# The package's indexer overlap floor (test_ttnn_csa_indexer._assert_topk_overlap). Measured at 10K:
+# mean recall 0.913 (layer 51) .. 0.971. The trace's cut is crowded (~150 of 2048
 # selected keys within 1% of the row's score spread above it), and through layer 47 >= 98% of the trace keys the
 # device misses rank >= 1500 of 2048 by trace score: near-ties a bf8 key/query moves across the cut. From layer 55
 # on, 6-11% of misses come from the trace's top half, in rows owned mostly by newline/','/'.' tokens: the
-# frequent-token hidden-state error that sets in at layers 48-59 (tt_metal_tracker-ao3i.5.5), not the indexer
+# frequent-token hidden-state error that sets in at layers 48-59, not the indexer
 # (its key cache stays >= 0.992 there). 0.95, the CSA chunked floor, would fail layers 3, 7, 51 and 63-92 on that.
 #
 # Near-tie recall falls with the number of candidates, so one floor cannot serve both goldens: at 128K the cut holds
@@ -434,12 +433,11 @@ def k31_layer_pcc(layer: int) -> float:
 # 11-23 keep the 10K signature (>= 94% of misses rank >= 1500, median margin 0.3-0.6% of the spread): mean 0.928-0.941 at LoFi.
 # Layers 3 and 7 carry ~3x the later layers' per-key score error at both lengths (miss margin p50 ~1.2%, p90 ~3.4% of
 # the spread, unchanged from 10K), so the crowding costs them more. The first layers' larger score error and the
-# trend toward 1M are tt_metal_tracker-ao3i.5.7; its largest device step, the score matmul's LoFi, is now HiFi2
-# (``index_score_math_fidelity``, tt_metal_tracker-ao3i.2.7): layers 3 / 7 0.867 / 0.875 at 128K (0.834 / 0.837 at
+# trend toward 1M are not fully explained; the largest device step in that error, the score matmul's LoFi, is now
+# HiFi2 (``index_score_math_fidelity``): layers 3 / 7 0.867 / 0.875 at 128K (0.834 / 0.837 at
 # LoFi), 0.944 / 0.952 at 10K (0.929 / 0.936). The 128K floor is 0.85, ~1.7 points under them, as 0.9 sits ~1.3
 # under the 10K minimum (layer 51, LoFi-measured; HiFi2 raised every measured layer); a fallback to LoFi fails it.
-# Unlike 0.9, 0.85 comes from this measurement alone, not from an external reference (0.8 at LoFi: orchestrator
-# decision, tt_metal_tracker-ao3i.5.2).
+# Unlike 0.9, 0.85 comes from this measurement alone, not from an external reference (the LoFi-era floor was 0.8).
 K31_TOPK_RECALL = {TRACE_K31: 0.9, TRACE_K31_128K: 0.85}
 
 
@@ -481,15 +479,9 @@ def test_topk_recall_counts_each_trace_key_once():
     assert topk_recall(got, want).tolist() == pytest.approx([2 / 3, 1.0, 0.0, 1.0])
 
 
-# rung -> (golden, layers of PP4 stage 0). "L24-128k" is K3's long-context check (test_chunked_prefill.py's L24:
+# rung -> golden; both run all of PP4 stage 0. "L24-128k" is K3's long-context check (test_chunked_prefill.py's L24:
 # layers 0-23 over every chunk) on the 128K trace.
-K31_RUNGS = {
-    "L1": (TRACE_K31, 1),
-    "L5": (TRACE_K31, 5),
-    "L12": (TRACE_K31, 12),
-    "L24": (TRACE_K31, 24),
-    "L24-128k": (TRACE_K31_128K, 24),
-}
+K31_RUNGS = {"L24": TRACE_K31, "L24-128k": TRACE_K31_128K}
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi-K3.1 runs on Blackhole only")
@@ -497,7 +489,7 @@ K31_RUNGS = {
 @pytest.mark.parametrize("mesh_device, device_params", k31_stage.PLACEMENT, indirect=True)
 @pytest.mark.parametrize("rung", list(K31_RUNGS))
 def test_k31_depth_ladder_matches_golden(rung, mesh_device, device_params):
-    golden_path, num_layers = K31_RUNGS[rung]
+    golden_path = K31_RUNGS[rung]
     trace = resolve_trace(golden_path)
     assert trace is not None, f"no K3.1 golden at {golden_path}"
     chunk = k31_stage.CHUNK
@@ -506,8 +498,8 @@ def test_k31_depth_ladder_matches_golden(rung, mesh_device, device_params):
     prompt_len, real_len = len(trace.metadata["token_ids"]), len(ids)
     num_chunks = -(-real_len // chunk)
     prompt = ids + [MTP_PAD_TOKEN_ID] * (num_chunks * chunk - real_len)
-    hf_config, params = k31_stage.first_stage_params(num_layers, max_seq_len=-(-real_len // CACHE_LEN) * CACHE_LEN)
-    first = params.first_layer_idx
+    hf_config, params = k31_stage.first_stage_params(max_seq_len=-(-real_len // CACHE_LEN) * CACHE_LEN)
+    first, num_layers = params.first_layer_idx, params.num_layers
     runtime = k31_stage.ADAPTER.build_runtime(mesh_device=mesh_device, hf_config=hf_config, params=params)
     kv_caches = k31_stage.ADAPTER.allocate_kv_cache(mesh_device=mesh_device, hf_config=hf_config, params=params)
     runtime.compile(kv_caches)
@@ -515,35 +507,28 @@ def test_k31_depth_ladder_matches_golden(rung, mesh_device, device_params):
     def pcc(want, got):
         return float(str(comp_pcc(want, got)[1]).split()[-1])
 
-    # Scored chunk by chunk, so host memory holds one chunk's taps. Prompt rows are gated; the teacher-forced
-    # decode rows are logged. The trace ends one row short of the sequence: it has no row for the last
-    # decoded id, which vLLM never fed back.
-    scores, decode = {}, {}  # (global layer, chunk) -> PCC
+    # Scored chunk by chunk on the prompt rows, so host memory holds one chunk's taps.
+    scores = {}  # (global layer, chunk) -> PCC
 
     def score(c, taps):
-        lo, hi = c * chunk, min((c + 1) * chunk, real_len)
-        split = min(max(prompt_len - lo, 0), hi - lo)
+        lo = c * chunk
+        hi = min(lo + chunk, prompt_len)
+        if hi <= lo:
+            return
         for layer, got in sorted(taps.items()):
             golden = trace.decoder_output(layer, lo, hi)
-            got = got[: golden.shape[0]].float()
-            if split:
-                scores[(layer, c)] = pcc(golden[:split], got[:split])
-            if split < golden.shape[0]:
-                decode[(layer, c)] = pcc(golden[split:], got[split:])
-            seal = " <- seal" if layer % KimiK3Config.ATTN_RES_BLOCK_SIZE == 0 else ""
-            logger.info(
-                f"K31 {rung} chunk {c} layer {layer}: prompt {scores.get((layer, c), float('nan')):.6f}  "
-                f"decode {decode.get((layer, c), float('nan')):.6f}{seal}"
-            )
+            scores[(layer, c)] = pcc(golden, got[: hi - lo].float())
 
-    # Per DSA layer, the top-k recall of every trace row, filled chunk by chunk (the indices are not kept).
-    recall = {}  # global layer -> [trace rows] float
+    # Per DSA layer, the top-k recall of every prompt row, filled chunk by chunk (the indices are not kept).
+    recall = {}  # global layer -> [prompt rows] float
     topk_miscounted = []
 
     def score_topk(c, topk):
         lo = c * chunk
+        if lo >= prompt_len:
+            return
         for layer, got in sorted(topk.items()):
-            want = trace.rows("dsa", f"dsa_topk_indices_layer_{layer}", lo, min(lo + chunk, real_len)).long()
+            want = trace.rows("dsa", f"dsa_topk_indices_layer_{layer}", lo, min(lo + chunk, prompt_len)).long()
             n = want.shape[0]
             got = got[:n]
             # Every device row selects min(position + 1, top-k) keys, as every trace row does.
@@ -551,9 +536,8 @@ def test_k31_depth_ladder_matches_golden(rung, mesh_device, device_params):
             miscounted = int(((got < 2**31).sum(dim=1) != want_count).sum())
             if miscounted:
                 topk_miscounted.append(f"layer {layer} chunk {c}: {miscounted} rows")
-            recall.setdefault(layer, torch.full((trace_rows,), float("nan")))[lo : lo + n] = topk_recall(got, want)
+            recall.setdefault(layer, torch.full((prompt_len,), float("nan")))[lo : lo + n] = topk_recall(got, want)
 
-    trace_rows = real_len - 1
     topk = {}
     dsa_mlas = {
         first + local: layer.attention.mla
@@ -600,7 +584,7 @@ def test_k31_depth_ladder_matches_golden(rung, mesh_device, device_params):
             if slot is not None
         }
         kv = {
-            name: cache_rows(mesh_device, cache, chunk, real_len)
+            name: cache_rows(mesh_device, cache, chunk, prompt_len)
             for name, cache in (("kvpe", kv_caches.kvpe), ("index", kv_caches.index))
             if cache is not None
         }
@@ -612,50 +596,23 @@ def test_k31_depth_ladder_matches_golden(rung, mesh_device, device_params):
             kv_caches.kda_states.deallocate()
         runtime.release_trace()  # the sub-device managers, before the fixture closes the mesh
 
-    # The per-layer curve over context: worst prompt chunk and worst decode chunk per layer.
-    for layer in range(first, first + num_layers):
-        per_chunk = {c: v for (l, c), v in scores.items() if l == layer}
-        worst_c = min(per_chunk, key=per_chunk.get)
-        dec = [v for (l, _), v in decode.items() if l == layer]
-        seal = " <- seal" if layer % KimiK3Config.ATTN_RES_BLOCK_SIZE == 0 else ""
-        logger.info(
-            f"K31 {rung} layer {layer} vs decoder_output_layer_{layer}: chunk0 {per_chunk[0]:.6f}  "
-            f"worst chunk {worst_c} {per_chunk[worst_c]:.6f}  decode {min(dec) if dec else float('nan'):.6f}{seal}"
-        )
-
     kv_failures = []
     for slot, layer in sorted(slots.items()):
-        golden = trace.kv_cache(layer, 0, real_len)
-        got = kv["kvpe"][slot, : golden.shape[0]]
         lora, rope = cache_half_pccs(
-            golden[:prompt_len], got[:prompt_len], KimiK3Config.KV_LORA_RANK, pe_interleave=False
+            trace.kv_cache(layer, 0, prompt_len), kv["kvpe"][slot], KimiK3Config.KV_LORA_RANK, pe_interleave=False
         )
-        dec_lora, dec_rope = cache_half_pccs(
-            golden[prompt_len:], got[prompt_len:], KimiK3Config.KV_LORA_RANK, pe_interleave=False
-        )
-        line = f"K31 {rung} kvpe slot {slot} (layer {layer}): lora={lora:.6f} rope={rope:.6f}"
-        line += f"  decode lora={dec_lora:.6f} rope={dec_rope:.6f}"
-        want_index = trace.rows("indexer", f"indexer_k_layer_{layer}", 0, real_len)
-        got_index = kv["index"][slot, : want_index.shape[0]]
-        index = pcc(want_index[:prompt_len], got_index[:prompt_len])
-        line += f"  index key={index:.6f}  decode {pcc(want_index[prompt_len:], got_index[prompt_len:]):.6f}"
-        logger.info(line)
+        index = pcc(trace.rows("indexer", f"indexer_k_layer_{layer}", 0, prompt_len), kv["index"][slot])
         if min(lora, rope) < KV_CACHE_PCC:
             kv_failures.append(f"slot {slot} (layer {layer}): lora={lora:.6f} rope={rope:.6f}")
         if index < KV_CACHE_PCC:
             kv_failures.append(f"slot {slot} (layer {layer}): index key={index:.6f}")
 
     # Top-k recall per DSA layer: gated on the prompt rows past the first top-k; the rows before it are checked
-    # for completeness, the teacher-forced decode rows logged.
+    # for completeness.
     topk_k = KimiK31Config.INDEX_TOPK
     topk_failures = []
     for layer, per_row in sorted(recall.items()):
-        full, gated, dec = per_row[:topk_k], per_row[topk_k:prompt_len], per_row[prompt_len:]
-        logger.info(
-            f"K31 {rung} layer {layer} top-{topk_k} recall vs dsa_topk_indices: prompt rows [{topk_k}, {prompt_len}) "
-            f"mean {gated.mean():.6f} p1 {gated.quantile(0.01):.4f} min {gated.min():.4f}  "
-            f"rows [0, {topk_k}) min {full.min():.4f}  decode mean {dec.mean():.6f}"
-        )
+        full, gated = per_row[:topk_k], per_row[topk_k:]
         if gated.mean() < K31_TOPK_RECALL[golden_path] or full.min() < 1:
             topk_failures.append(f"layer {layer}: {gated.mean():.6f} (rows < {topk_k}: min {full.min():.4f})")
 

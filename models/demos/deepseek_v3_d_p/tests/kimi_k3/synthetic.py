@@ -3,8 +3,8 @@
 
 """Kimi-K3.1 stacks on synthetic weights, with the caches the runner allocates for them.
 
-For the K3.1 checks that need no reference: what the stack wrote (carries stored, rows past a prompt's
-end untouched), that a repeated request is bit-identical, and that a split stack matches the undivided
+For the K3.1 checks that need no reference: what the stack wrote (carries stored, rows past the last
+chunk untouched), that a repeated request is bit-identical, and that a split stack matches the undivided
 one. K3.1 is K3 with Gated DSA on its 24 full-attention layers, run through
 K3's stack; accuracy against vLLM is the golden tests' job (`test_k31_golden.py`, the depth ladder's
 K3.1 rungs).
@@ -124,7 +124,6 @@ def build_stack(
     first_layer_idx: int,
     num_layers: int,
     *,
-    seq_len: int = CHUNK,
     is_first_rank: bool = True,
     is_last_rank: bool = True,
     kv_only_last_layer: bool = False,
@@ -145,7 +144,7 @@ def build_stack(
         is_first_rank=is_first_rank,
         is_last_rank=is_last_rank,
         max_seq_len=CACHE_LEN,
-        chunk_size=seq_len,
+        chunk_size=CHUNK,
         num_users=num_users,
         capacity_factor=2,
         num_links=1,
@@ -163,7 +162,7 @@ def build_stack(
         DENSE_FFN_CONFIG,
         state_dict,
         num_layers=num_layers,
-        seq_len=seq_len,
+        seq_len=CHUNK,
         first_layer_idx=first_layer_idx,
         is_first_rank=is_first_rank,
         is_last_rank=is_last_rank,

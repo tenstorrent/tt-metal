@@ -282,8 +282,6 @@
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_dflash_kv_cache_mock -k "seq5k and 1user and 2layers" -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_mistral4_kv_cache_table -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_kv_cache_table.py::test_kimi_k3_kv_cache_table -vvv --tb=short
-      # Allocates on the 8x4 mesh, so it runs here and not in the host-only contract section of the K3 suite.
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/kimi_k3/test_kv_cache_allocation.py::test_caches_per_stage_and_per_chip_footprint -vvv --tb=short
     '
   test_type: kv_cache_table
   test_tags: [kimi_k2_7, kimi_k3, kimi_k3_1, glm_5_3, mistral4, kv_cache]
@@ -291,9 +289,9 @@
   skus:
     bh_sc1:
       # +4 min on the Kimi/GLM/dflash baseline of 20 for the Mistral row this leg now also runs; +2 for the
-      # Kimi-K3 / K3.1 merged-table rows (40 s pytest, 50 s with device open) and +1 for the K3 / K3.1 cache
-      # footprint (10 s, 19 s), measured on bh-glx-120-b08u02 2026-11-13, each about x2 for a cold JIT.
-      timeout: 27
+      # Kimi-K3 / K3.1 merged-table rows (40 s pytest, 50 s with device open, measured on bh-glx-120-b08u02
+      # 2026-11-13, about x2 for a cold JIT).
+      timeout: 26
       tier: 2
       release_ready: false
   owner_id: U08RL15T4N8 # Danilo Djekic
@@ -309,8 +307,9 @@
   # galaxy allocations were spending ~22 min of setup to run ~7 min of tests. Measured test-step
   # times on run 36717057668: 77 / 150 / 114 / 92 s.
   #
-  # fabric_profile torus_xy is required by [2/5]..[5/5]. [1/5] is host-only -- no mesh device, no
-  # fabric -- and rides along for free rather than paying its own setup. It keeps its mpirun wrapper:
+  # fabric_profile torus_xy is required by [2/5]..[5/5] and by [1/5]'s 8x4 checks (the K3 / K3.1 cache
+  # allocation and the AttnRes torus checks); the rest of [1/5] is host tests that ride along rather than
+  # paying their own setup. It keeps its mpirun wrapper:
   # the runner's container hook drives the step through its host-execution path and does not handle
   # a bare command (it failed 4 runs out of 4, 0 s in, before pytest ran).
   fabric_profile: torus_xy
@@ -335,7 +334,6 @@
         export KIMI_K3_CKPT=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-dequantized
         python3 -m pytest -vvv --tb=short \
           models/demos/deepseek_v3_d_p/tests/kimi_k3/test_golden_contract.py \
-          models/demos/deepseek_v3_d_p/tests/kimi_k3/test_k31_golden.py \
           models/demos/deepseek_v3_d_p/tests/kimi_k3/test_layer_schedule.py \
           models/demos/deepseek_v3_d_p/tests/kimi_k3/test_cache_contract.py \
           models/demos/deepseek_v3_d_p/tests/kimi_k3/test_runtime_contract.py \
@@ -348,13 +346,7 @@
           models/demos/deepseek_v3_d_p/tests/test_chunked_trace_helpers.py::test_single_file_read_past_the_end_raises \
           models/demos/deepseek_v3_d_p/tests/kimi_k3/test_kda_golden.py \
           models/demos/deepseek_v3_d_p/tests/test_kv_ack.py \
-          models/demos/deepseek_v3_d_p/tests/attn_res/model/test_attn_res_pipeline_split.py \
-          --deselect models/demos/deepseek_v3_d_p/tests/kimi_k3/test_kv_cache_allocation.py::test_caches_per_stage_and_per_chip_footprint
-        # K3.1 real checkpoint: the indexer lands under the names TtIndexer loads. The test skips when the
-        # checkpoint is not mounted, so the section fails unless both tests passed.
-        set -o pipefail
-        python3 -m pytest -vvv --tb=short models/demos/deepseek_v3_d_p/tests/kimi_k3/test_k31_weights.py | tee /tmp/k31_weights.out
-        grep -qE "\b2 passed" /tmp/k31_weights.out || { echo "::error::test_k31_weights.py did not pass (skipped?): is the K3.1 checkpoint mounted?"; exit 1; }
+          models/demos/deepseek_v3_d_p/tests/attn_res/model/test_attn_res_pipeline_split.py
         python3 -m pytest -vvv --tb=short -k "torusxy-mesh-8x4" \
           models/demos/deepseek_v3_d_p/tests/attn_res/model/test_forward_loop.py::test_split_loop_matches_reference
         # AttnRes determinism on the full torus: each op, then a whole block of reads, many runs without a sync.
@@ -398,10 +390,18 @@
 
     # K3.1's counterpart of [3/5]: its 24 full-attention layers are Gated DSA, so K3's MLA chunked tests become
     # test_sparse_mla.py's kimi_k3_1 8x4 matrix vs MLACPU (8 tests, random weights + on-the-fly CPU truth).
-    # Measured 4.4 min pytest time on bh-glx-110-c10u14 (2026-11-07). Last, so a K3.1 failure masks no K3 section.
+    # Measured 4.4 min pytest time on bh-glx-110-c10u14 (2026-11-07). First the K3.1 assets the runner and the
+    # depth ladder read (golden trace, real checkpoint), a few seconds. Last, so a K3.1 failure (a missing K3.1
+    # golden or checkpoint included) masks no K3 section.
     k31_dsa_mla() (
       timeout -k 2m 12m mpirun --bind-to none --pernode --tag-output bash -lc '
+        set -eo pipefail
         export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest -vvv --tb=short models/demos/deepseek_v3_d_p/tests/kimi_k3/test_k31_golden.py
+        # K3.1 real checkpoint: the indexer lands under the names TtIndexer loads. The test skips when the
+        # checkpoint is not mounted, so the section fails unless both tests passed.
+        python3 -m pytest -vvv --tb=short models/demos/deepseek_v3_d_p/tests/kimi_k3/test_k31_weights.py | tee /tmp/k31_weights.out
+        grep -qE "\b2 passed" /tmp/k31_weights.out || { echo "::error::test_k31_weights.py did not pass (skipped?): is the K3.1 checkpoint mounted?"; exit 1; }
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla.py -k "kimi_k3_1 and shape-8x4" -vvv --tb=short
       '
     )
@@ -414,7 +414,7 @@
     k3_mla || exit $?
     echo "===== [4/5] (Kimi-K3-2.8T) MLA chunked accuracy 55k@5k vs golden trace ====="
     k3_mla_trace || exit $?
-    echo "===== [5/5] (Kimi-K3.1) sparse MLA accuracy, chunked 5k@1k, pad overflow, determinism ====="
+    echo "===== [5/5] (Kimi-K3.1) golden and checkpoint, sparse MLA accuracy, chunked 5k@1k, pad overflow, determinism ====="
     k31_dsa_mla || exit $?
     echo "===== all 5 sections passed ====="
   test_type: k3_accuracy_suite
@@ -498,7 +498,7 @@
   # reads `variant.ttnn_cache_env` and nothing else, with no fallback to the share, so without it
   # the fixture points at the checkpoint dir and the section dies on `TTNN cache incomplete`.
   #
-  # [4/5] and [5/5] are K3.1's counterparts of [1/5] and [2/5] (tt_metal_tracker-ao3i.6.1), last so a
+  # [4/5] and [5/5] are K3.1's counterparts of [1/5] and [2/5], last so a
   # K3.1 failure masks no K3 section: test_k31_depth_ladder_matches_golden, layers 0-23 (PP4 stage 0)
   # on K3.1's real weights against its vLLM trace -- L24 on the 10K trace (two chunks), L24-128k on the
   # 128K trace (26 chunks, K3's long-context check). Each keeps its K3 counterpart's bound; measured

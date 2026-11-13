@@ -380,7 +380,7 @@ def test_compile_rejects_slabs_that_do_not_match_the_runtime(monkeypatch, expect
 
 
 def test_only_k3_1_moves_the_indexer_score_off_the_op_default():
-    """K3.1 scores at HiFi2 (tt_metal_tracker-ao3i.2.7); the other DSA configs keep the op's default (None passed,
+    """K3.1 scores at HiFi2; the other DSA configs keep the op's default (None passed,
     as before), so their indexer is unchanged."""
     from models.demos.deepseek_v3_d_p.reference.deepseek_v3_2_config import deepseek_v32_hf_config
     from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import glm_5_3_hf_config
