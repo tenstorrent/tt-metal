@@ -29,11 +29,11 @@ void RotaryEmbeddingHfDeviceOperation::validate_on_program_cache_miss(
 
     auto* ref_device = input_tensor.device();
     TT_FATAL(input_tensor.storage_type() == ttnn::StorageType::DEVICE, "Input must be on device!");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Input must be allocated in buffer on device!");
+    TT_FATAL(input_tensor.is_allocated(), "Input must be allocated in buffer on device!");
     TT_FATAL(cos.storage_type() == ttnn::StorageType::DEVICE, "Cos must be on device!");
-    TT_FATAL(cos.buffer() != nullptr, "Cos must be allocated in buffer on device!");
+    TT_FATAL(cos.is_allocated(), "Cos must be allocated in buffer on device!");
     TT_FATAL(sin.storage_type() == ttnn::StorageType::DEVICE, "Sin must be on device!");
-    TT_FATAL(sin.buffer() != nullptr, "Sin must be allocated in buffer on device!");
+    TT_FATAL(sin.is_allocated(), "Sin must be allocated in buffer on device!");
     TT_FATAL(input_tensor.device() == ref_device, "All tensors must be on same device!");
     TT_FATAL(cos.device() == ref_device, "All tensors must be on same device!");
     TT_FATAL(sin.device() == ref_device, "All tensors must be on same device!");
@@ -48,6 +48,19 @@ void RotaryEmbeddingHfDeviceOperation::validate_on_program_cache_miss(
         input_tensor.padded_shape()[-1],
         TILE_WIDTH,
         TILE_WIDTH * 2);
+
+    // Both factories take the rotate_half midpoint from the padded width, so a head_dim that carries implicit
+    // tile padding rotates at the padded midpoint instead of its own and silently corrupts the head.
+    const uint32_t logical_X = input_tensor.logical_shape()[-1];
+    const uint32_t padded_X = input_tensor.padded_shape()[-1];
+    TT_FATAL(
+        logical_X == padded_X,
+        "Input logical head_dim ({}) has implicit tile padding (padded to {}), which would rotate at {} "
+        "instead of {}.",
+        logical_X,
+        padded_X,
+        padded_X / 2,
+        logical_X / 2);
     uint32_t X = input_tensor.padded_shape()[-1];
     TT_FATAL(cos.dtype() == sin.dtype(), "Cos and Sin dtypes must match");
     TT_FATAL(cos.padded_shape() == sin.padded_shape(), "Cos and Sin shapes must match");

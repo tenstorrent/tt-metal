@@ -6,7 +6,7 @@
 #include "tensor/flatbuffer/tensor_spec_flatbuffer.hpp"
 
 #include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>

@@ -1,17 +1,18 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Per-operator PCC validation for the router and the expert FFN.
+"""Per-operator PCC validation for the router, and negative controls for the expert FFN.
 
 The router's softmax feeds a top-2 selection, so an error large enough to reorder two
 near-tied experts is not a small error: it sends the token to a different pair of
 4.7M-parameter experts. Hence the explicit kernel config on the softmax and fp32 held through
 the top-k selection.
 
-The expert chain is the dense-all-experts formulation from ARCHITECTURE.md section 4, which
-replaces upstream's data-dependent ragged loop with two matmuls over every expert, a GELU, a
-multiply and a reduce. The matmuls are tested through TtNomicExperts and TtNomicRouter, which
-run them under the program configs of tt/matmul_config.py, and the other operators on their own.
+The router's matmul is tested through TtNomicRouter, which runs it under the program config of
+tt/matmul_config.py, and the other operators on their own. The experts run upstream's ragged loop
+as this port's own ops, which have their own tests under
+tests/ttnn/nightly/unit_tests/operations/experimental/nomic_embed_text_v2_moe/; the pass itself is
+tested in test_ttnn_experts.py.
 
 Measured results are tabulated in docs/OPERATOR_MAPPING.md.
 """
@@ -23,8 +24,7 @@ import ttnn
 
 from models.common.metrics import compute_max_abs_error, compute_pcc
 from models.common.utility_functions import run_for_blackhole
-from models.experimental.nomic_embed_text_v2_moe.tt.common import pack_expert_weights, to_device
-from models.experimental.nomic_embed_text_v2_moe.tt.experts import STACKED_MAX_TOKENS, TtNomicExperts
+from models.experimental.nomic_embed_text_v2_moe.tt.common import to_device
 from models.experimental.nomic_embed_text_v2_moe.tt.model_config import OpGroup
 from models.experimental.nomic_embed_text_v2_moe.tt.router import PADDING_LOGIT, SCORED_COLUMNS, TtNomicRouter
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -125,33 +125,33 @@ def test_softmax_zeroes_the_padding_scores(device, tt_config, config, batch, seq
 def test_softmax_needs_both_hifi4_and_fp32_accumulation(device, tt_config, config):
     """Negative control: neither half of the kernel config is optional here.
 
-    HiFi4 alone still misses the budget, so the fp32 accumulator is not a refinement on top of
-    it. numeric_stable changes the reduction order rather than the fidelity and measures like
-    the stock config. All four variants score above 0.9996 PCC, so only max-abs separates them.
+    HiFi4 without the fp32 accumulator misses the budget, and so does the fp32 accumulator at
+    HiFi2. All three variants score above 0.9996 PCC, so only max-abs separates them.
     """
     logits = torch.randn(1, 1, 1024, config.num_experts)
     ref = logits.softmax(dim=-1)
     logits_tt = to_device(logits, device, dtype=tt_config.router_dtype)
-    hifi4_only = ttnn.init_device_compute_kernel_config(
-        device.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi4,
-        math_approx_mode=False,
-        fp32_dest_acc_en=False,
-        packer_l1_acc=False,
-    )
 
-    def max_abs(**kwargs):
-        return compute_max_abs_error(ttnn.to_torch(ttnn.softmax(logits_tt, dim=-1, **kwargs)).float(), ref)
+    def kernel_config(math_fidelity, fp32_dest_acc_en):
+        return ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=math_fidelity,
+            math_approx_mode=False,
+            fp32_dest_acc_en=fp32_dest_acc_en,
+            packer_l1_acc=False,
+        )
 
-    ported = max_abs(compute_kernel_config=tt_config.compute_kernel_config(OpGroup.SOFTMAX))
-    without_fp32_acc = max_abs(compute_kernel_config=hifi4_only)
-    stock = max_abs()
-    stable = max_abs(numeric_stable=True)
+    def max_abs(compute_kernel_config):
+        out = ttnn.softmax(logits_tt, dim=-1, compute_kernel_config=compute_kernel_config)
+        return compute_max_abs_error(ttnn.to_torch(out).float(), ref)
+
+    ported = max_abs(tt_config.compute_kernel_config(OpGroup.SOFTMAX))
+    without_fp32_acc = max_abs(kernel_config(ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=False))
+    without_hifi4 = max_abs(kernel_config(ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=True))
 
     assert ported < SOFTMAX_MAX_ABS, f"the port's own config missed its budget at {ported:.3e}"
     assert without_fp32_acc > SOFTMAX_MAX_ABS, f"HiFi4 alone should miss it, got {without_fp32_acc:.3e}"
-    assert stock > without_fp32_acc, f"HiFi4 should beat the stock config, got {stock:.3e}"
-    assert stable > SOFTMAX_MAX_ABS, f"numeric_stable is not a substitute, got {stable:.3e}"
+    assert without_hifi4 > SOFTMAX_MAX_ABS, f"fp32 accumulation at HiFi2 should miss it, got {without_hifi4:.3e}"
 
 
 @pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
@@ -224,10 +224,10 @@ def test_topk_on_bfloat8_b_is_silently_wrong(device, config):
 def test_bfloat8_b_cast_reads_the_tile_padding(device, config):
     """Negative control: a bfloat8_b cast mixes a tile's padding into its shared exponents.
 
-    A transposed expert pass casts its (1, E, 1, t) gate to bfloat8_b, so that the gate multiply
-    runs two bfloat8_b operands. At t=300 the last tile holds 12 real columns, and 16 columns share
-    one exponent, so padding left stale by the permute crushed the real gates beside it: module
-    PCC 0.984. TtNomicExperts zeroes the padding first, and the fill writes in place.
+    The transposed dense expert pass the routed one replaced cast its permuted (1, E, 1, t) gate to
+    bfloat8_b. At t=300 the last tile holds 12 real columns, and 16 columns share one exponent, so
+    padding left stale by the permute crushed the real gates beside it: module PCC 0.984. Zeroing
+    the padding first fixes it, and the fill writes in place.
     """
     tokens, edge = 300, slice(288, 300)
     gate_host = torch.rand(1, config.num_experts, 1, tokens)
@@ -244,219 +244,25 @@ def test_bfloat8_b_cast_reads_the_tile_padding(device, config):
     assert compute_max_abs_error(gate_host, zeroed) < 1e-2
 
 
-@pytest.mark.needs_weights
-@pytest.mark.parametrize("batch, seqlen", TOKEN_SHAPES)
-def test_one_hot_reproduces_the_scatter(device, tt_config, config, state_dict, batch, seqlen):
-    """aten.zeros_like + aten.scatter_ -> TtNomicRouter.dense_weights, bit for bit with ttnn.scatter.
-
-    The dense (T, E) result is what the expert gate multiply consumes: exactly moe_top_k non-zero
-    entries per row, carrying the softmax weights unrenormalized. ttnn.scatter into a zeroed
-    bfloat16 destination is the oracle; the one-hot sum has to match it exactly, not to a PCC.
-    """
-    router = TtNomicRouter(device, config, tt_config, state_dict, ROUTER_PREFIX)
-    probabilities = router_probabilities(batch * seqlen, config.num_experts)
-    probabilities_tt = to_device(probabilities, device, dtype=tt_config.router_dtype)
-    values, indices = ttnn.topk(probabilities_tt, k=config.moe_top_k, dim=-1)
-
-    dense = ttnn.to_torch(router.dense_weights(probabilities_tt, indices)).float()
-    scattered = ttnn.scatter(
-        to_device(torch.zeros_like(probabilities), device),
-        dim=-1,
-        index=indices,
-        src=ttnn.typecast(values, tt_config.activation_dtype),
-    )
-
-    assert torch.equal(dense, ttnn.to_torch(scattered).float())
-    assert torch.equal((dense != 0).sum(-1), torch.full(dense.shape[:-1], config.moe_top_k))
-    assert (dense.sum(-1) < 1.0).all(), "the top-k weights must reach the gate unrenormalized"
-    ref_values, ref_indices = torch.topk(probabilities, config.moe_top_k, dim=-1)
-    assert_with_pcc(torch.zeros_like(probabilities).scatter_(-1, ref_indices, ref_values), dense, OPERATOR_PCC)
-
-
-def test_scatter_rejects_float32(device, config, expect_error):
-    """Negative control: ttnn.scatter takes no fp32, one reason the router builds its dense row
-    from a one-hot instead.
-
-    The cast to bfloat16 still lands after the selection rather than before it, which is what
-    test_rounding_probabilities_to_bfloat16_before_topk_flips_routing measures.
-    """
-    probabilities = to_device(router_probabilities(512, config.num_experts), device, dtype=ttnn.float32)
-    values, indices = ttnn.topk(ttnn.typecast(probabilities, ttnn.bfloat16), k=config.moe_top_k, dim=-1)
-
-    with expect_error(RuntimeError, "input_dtype == DataType::FLOAT32"):
-        ttnn.scatter(ttnn.zeros_like(probabilities), dim=-1, index=indices, src=values)
-
-
 # Experts.
 
 
 @pytest.mark.needs_weights
-@pytest.mark.parametrize("batch, seqlen", [*TOKEN_SHAPES, (3, 100), (3, 110)])
-def test_expert_matmuls(device, tt_config, config, state_dict, batch, seqlen):
-    """aten.matmul -> both expert projections, as a pass of this many tokens runs them.
-
-    Every token runs through every expert, which is what removes upstream's data-dependent
-    gather. Up to STACKED_MAX_TOKENS the experts sit side by side: w1 is one matmul of x and every
-    expert's (H, F) slab with the GELU fused, and w2 one matmul over K = E*F, which sums the
-    experts. Above, the tokens are the columns: w1 is one minimal_matmul of the stacked weight and
-    x^T, and w2 a batched matmul writing bfloat8_b. 1x128, 2x37 and 3x100 take the first, 2x512 and
-    3x110 the second; 2x37, 3x100 and 3x110 are off the tile grid, 3x100 at the stacked limit's 10
-    tile rows. The chain runs as a pass runs it, each operator on the previous one's output: on a
-    stacked pass the gate spread from random top-k routing, multiplied in place into the GELU
-    output, resharded and fed to w2 with the shared bias.
-    """
-    experts = TtNomicExperts(device, config, tt_config, state_dict, EXPERTS_PREFIX)
-    w1, w2 = pack_expert_weights(state_dict[EXPERTS_PREFIX + "mlp.w1"], state_dict[EXPERTS_PREFIX + "mlp.w2"], config)
-    tokens = batch * seqlen
-    experts_count, ffn = config.num_experts, config.intermediate_size
-    x = torch.randn(1, 1, tokens, config.hidden_size)
-    x_tt = to_device(x, device)
-
-    ref_hidden = torch.matmul(x, w1)
-    ref_activated = torch.nn.functional.gelu(ref_hidden, approximate="none")
-    if tokens <= STACKED_MAX_TOKENS:
-        top = torch.rand(tokens, experts_count).topk(config.moe_top_k, dim=-1)
-        dense = torch.zeros(1, 1, tokens, experts_count)
-        dense[0, 0].scatter_(-1, top.indices, torch.rand(tokens, config.moe_top_k) * 0.5)
-        dense = dense.to(torch.bfloat16).float()
-        bias = state_dict[EXPERTS_PREFIX + "bias"].float()
-
-        activated = experts.stacked_w1(x_tt)
-        side_by_side = ttnn.to_torch(activated).float().reshape(1, tokens, experts_count, ffn).transpose(1, 2)
-        assert_with_pcc(ref_activated, side_by_side, OPERATOR_PCC)
-        gate = experts.stacked_gate(to_device(dense, device))
-        product = ttnn.to_torch(activated).float() * ttnn.to_torch(gate).float()
-        ttnn.multiply_(activated, gate)
-        assert_with_pcc(product, ttnn.to_torch(activated).float(), OPERATOR_PCC)
-        summed = ttnn.to_torch(experts.stacked_w2(experts.stacked_w2_input(activated), experts.bias)).float()
-        ref_summed = torch.matmul(ref_activated * dense.permute(0, 3, 2, 1), w2).sum(dim=1, keepdim=True) + bias
-        assert_with_pcc(ref_summed, summed, OPERATOR_PCC)
-        return
-
-    hidden = experts.transposed_w1(x_tt)
-    activated = ttnn.gelu(hidden, variant=tt_config.expert_gelu)
-    out = experts.transposed_w2(activated)
-
-    def tokens_on_rows(tensor: ttnn.Tensor, width: int) -> torch.Tensor:
-        """(1, E, t, width) from the transposed layout."""
-        got = ttnn.to_torch(tensor).float()
-        return got.reshape(1, experts_count, width, tokens).transpose(-2, -1)
-
-    assert_with_pcc(ref_hidden, tokens_on_rows(hidden, ffn), OPERATOR_PCC)
-    assert_with_pcc(ref_activated, tokens_on_rows(activated, ffn), OPERATOR_PCC)
-    assert_with_pcc(torch.matmul(ref_activated, w2), tokens_on_rows(out, config.hidden_size), OPERATOR_PCC)
-
-
-@pytest.mark.needs_weights
-@pytest.mark.parametrize("tokens", [32, 74, 128, 256])
-def test_stacked_gate_spreads_the_routing_weights_exactly(device, tt_config, config, state_dict, tokens):
-    """The 0/1 spread matmul repeats each routing weight over its expert's F columns, bit for bit.
-
-    The gate multiplies a stacked pass's GELU output before w2, so its error lands on every expert
-    output it scales. The spread has one non-zero term per sum, which the fp32 accumulator holds
-    exactly from HiFi3 up (HiFi2 drops low bits of the weight, up to 3.9e-3), and it is written in
-    bfloat16, which holds every bfloat16 weight.
-    """
-    experts = TtNomicExperts(device, config, tt_config, state_dict, EXPERTS_PREFIX)
-    weights = torch.rand(1, 1, tokens, config.num_experts).to(torch.bfloat16).float()
-    spread = ttnn.to_torch(experts.stacked_gate(to_device(weights, device))).float()
-    exact = weights.repeat_interleave(config.intermediate_size, dim=-1)
-    assert torch.equal(spread, exact), f"max abs {float((spread - exact).abs().max()):.3e}"
-
-
-# One pass per block shape of matmul_config.expert_w1_gelu_config, by token tiles a core holds: 1
-# (200 tokens, off the tile grid), 2, 3, 5 and 7 raised to 6 and 8, 9, 11 raised to 12, and 12.
-FUSED_W1_TOKENS = [200, 500, 1024, 1600, 2300, 3072, 3584, 4096]
-
-# GELU's minimum is about -0.17, near x = -0.75. bfloat8_b rounds it to -0.25 where a 16-value
-# block's largest magnitude is 16 to 32, a step of 0.25, and to less in any other block, so no
-# GELU output reads below this. The w1 product reaches -25.
-GELU_FLOOR = -0.25
-
-
-@pytest.mark.needs_weights
-@pytest.mark.parametrize("tokens", FUSED_W1_TOKENS)
-def test_transposed_w1_fuses_the_gelu_at_every_block_shape(device, tt_config, config, state_dict, tokens):
-    """The transposed w1 with its GELU fused, against the same product with the GELU as its own op.
-
-    A 2D multicast ttnn.matmul applies the fused GELU from the packer (matmul_config.gelu_on_packer),
-    in a block shape set by the token tiles each core holds; each pass here lands on another one.
-    A program that dropped the activation would still return the finite product, as sparse_matmul
-    does, so the floor below is asserted as well as the agreement.
-    """
-    experts = TtNomicExperts(device, config, tt_config, state_dict, EXPERTS_PREFIX)
-    x_tt = to_device(torch.randn(1, 1, tokens, config.hidden_size), device)
-
-    fused = ttnn.to_torch(experts.transposed_w1(x_tt, tt_config.expert_gelu)).float()
-    product = experts.transposed_w1(x_tt)
-    separate = ttnn.to_torch(ttnn.gelu(product, variant=tt_config.expert_gelu)).float()
-    raw_min = float(ttnn.to_torch(product).float().min())
-
-    assert raw_min < 4 * GELU_FLOOR, f"the product only reaches {raw_min:.3f}, too close to GELU's floor to test it"
-    assert float(fused.min()) >= GELU_FLOOR, f"fused output reaches {float(fused.min()):.3f}: the GELU was not applied"
-    assert_with_pcc(separate, fused, OPERATOR_PCC)
-
-
-@pytest.mark.needs_weights
-def test_transposed_expert_weights_are_a_shape_error(device, tt_config, config, state_dict, expect_error):
+def test_transposed_expert_weights_are_a_shape_error(device, config, state_dict, expect_error):
     """Negative control: on the packed operand, the w2 misorientation is loud.
 
     Viewing w2 as (E, H, F) instead of (E, F, H) succeeds in torch, because E*F*H is symmetric
-    in F and H, and the reference computes uncorrelated noise from it without raising. Packing
-    to a 4D operand moves the mistake into the matmul's inner-dimension check, so
-    pack_expert_weights is what turns a silent failure into a loud one.
+    in F and H, and the reference computes uncorrelated noise from it without raising. Packed
+    to a 4D operand, the misoriented view fails the matmul's inner-dimension check instead. The
+    port stores w2 transposed per expert, the mistake's own shape, so its guard is
+    test_ttnn_experts.py::test_misoriented_w2_decorrelates.
     """
     w2 = state_dict[EXPERTS_PREFIX + "mlp.w2"]
     transposed = w2.view(config.num_experts, config.hidden_size, config.intermediate_size).unsqueeze(0)
     activated = to_device(torch.randn(1, config.num_experts, 128, config.intermediate_size), device)
 
     with expect_error(RuntimeError, "width of the first tensor must be equal to the height"):
-        ttnn.matmul(
-            activated,
-            to_device(transposed.contiguous(), device),
-            compute_kernel_config=tt_config.compute_kernel_config(OpGroup.EXPERT_W2),
-        )
-
-
-@pytest.mark.parametrize("batch, seqlen", [(2, 512), (3, 110)])
-def test_gate_multiply_and_expert_reduce(device, tt_config, config, batch, seqlen):
-    """aten.mul + aten.sum over the expert axis -> ttnn.mul + fast_reduce_nc(dims=[1]), transposed.
-
-    A transposed pass, above STACKED_MAX_TOKENS, has the tokens on the columns: each expert's
-    (H, T) output is weighted by the dense (1, 1, T, E) routing weights permuted to (1, E, 1, T),
-    whose singleton row broadcasts over the hidden axis, with the gate's tile padding zeroed as
-    the pass does. Only moe_top_k of the E slots are non-zero, so the reduce is a weighted sum over
-    two experts even though eight were computed. A stacked pass weights before w2 instead
-    (test_expert_matmuls).
-
-    Left to allocate its output, fast_reduce_nc returns the tile-padded token count, not T: at
-    T=330 the output is 352 columns, the trailing 22 zero. The data is right, the logical shape
-    is not, so TtNomicExperts passes it an output of the logical shape. ttnn.sum(dim=1,
-    keepdim=True) reaches the same PCC without the quirk.
-    """
-    tokens = batch * seqlen
-    experts, hidden = config.num_experts, config.hidden_size
-    per_expert = torch.randn(1, experts, hidden, tokens)
-    probabilities = router_probabilities(tokens, experts)
-    values, indices = torch.topk(probabilities, config.moe_top_k, dim=-1)
-    dense = torch.zeros_like(probabilities).scatter_(-1, indices, values)
-
-    # In place: the fill returns a tensor on the same buffer.
-    gate = ttnn.fill_implicit_tile_padding(ttnn.permute(to_device(dense, device), (0, 3, 1, 2)), 0.0)
-    gated = ttnn.multiply(to_device(per_expert, device), gate)
-    summed = ttnn.experimental.fast_reduce_nc(
-        gated, dims=[1], compute_kernel_config=tt_config.compute_kernel_config(OpGroup.REDUCE)
-    )
-
-    ref_gated = per_expert * dense.permute(0, 3, 1, 2)
-    padded = -(-tokens // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
-    reduced = ttnn.to_torch(summed).float()
-    assert tuple(gate.shape) == (1, experts, 1, tokens)
-    assert tuple(summed.shape) == (1, 1, hidden, padded)
-    if padded > tokens:
-        assert reduced[..., tokens:].abs().max() == 0, "fast_reduce_nc padding is expected to be zero"
-    assert_with_pcc(ref_gated, gated, OPERATOR_PCC)
-    assert_with_pcc(ref_gated.sum(dim=1, keepdim=True), reduced[..., :tokens], OPERATOR_PCC)
+        ttnn.matmul(activated, to_device(transposed.contiguous(), device))
 
 
 @pytest.mark.needs_weights

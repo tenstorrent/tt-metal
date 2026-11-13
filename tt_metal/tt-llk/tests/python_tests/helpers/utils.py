@@ -725,6 +725,16 @@ def _mxfp_block_aware_compare(
     return is_valid | both_nan
 
 
+def result_tensor(res_from_L1, output_format: DataFormat, golden=None) -> torch.Tensor:
+    """The device result as a tensor of *output_format*'s torch dtype. With *golden*,
+    first assert the result has as many datums as the golden."""
+    if golden is not None:
+        assert len(res_from_L1) == len(
+            golden
+        ), f"result has {len(res_from_L1)} datums, golden has {len(golden)}"
+    return torch.tensor(res_from_L1, dtype=format_dict[output_format])
+
+
 def passed_test(
     golden_tensor,
     res_tensor,

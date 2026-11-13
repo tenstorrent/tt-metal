@@ -104,7 +104,7 @@ static void validate_direct_tensors_every_invocation(
     const ReduceScatterMinimalDirectDeviceOperation::tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor must be on device!");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Input tensor must be allocated in a buffer on device!");
+    TT_FATAL(input_tensor.is_allocated(), "Input tensor must be allocated in a buffer on device!");
     auto* mesh_device = input_tensor.device();
     TT_FATAL(mesh_device != nullptr, "Input tensor must be on a mesh device!");
 
@@ -115,7 +115,7 @@ static void validate_direct_tensors_every_invocation(
         }
         const auto& tensor = maybe.value();
         TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "Persistent {} tensor must be on device!", what);
-        TT_FATAL(tensor.buffer() != nullptr, "Persistent {} tensor must be allocated in a buffer on device!", what);
+        TT_FATAL(tensor.is_allocated(), "Persistent {} tensor must be allocated in a buffer on device!", what);
         TT_FATAL(
             tensor.device() == mesh_device,
             "Persistent {} tensor must live on the same mesh device as the input",

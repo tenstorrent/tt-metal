@@ -45,7 +45,7 @@ void RecvAsyncH2DDeviceOperation::validate_on_program_cache_miss(
     // socket page size must match the tensor's aligned page size. The H2DSocket's page size
     // is configured by the host before the op runs; we cross-check here so program-cache
     // misses surface mis-configuration loudly.
-    const uint32_t tensor_page_size = output_tensor.buffer()->aligned_page_size();
+    const uint32_t tensor_page_size = output_tensor.mesh_buffer().aligned_page_size();
     const uint32_t socket_page_size = h2d_socket->get_page_size();
     TT_FATAL(
         socket_page_size == 0 || socket_page_size == tensor_page_size,

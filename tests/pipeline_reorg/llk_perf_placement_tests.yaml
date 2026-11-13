@@ -1,0 +1,18 @@
+# Stage 2 of the LLK perf gate (llk-perf-gate.yaml), Blackhole only: re-measure the tests stage 1 flagged
+# with the TRISC code at 5 positions. llk-perf-impl sets LLK_PERF_NODE_LIST to the tests to run.
+
+- name: llk_perf_placement_blackhole
+  split_group: 1
+  team: llk
+  budget_type: perf_placement
+  cmd: |
+    set -euo pipefail
+    if [ ! -x ./tests/run_llk_perf_placement.sh ]; then
+      echo "::warning::This commit predates stage 2 of the perf gate; nothing to measure."
+      exit 0
+    fi
+    ./tests/run_llk_perf_placement.sh
+  skus:
+    bh_p150b_civ2:
+      timeout: 60
+  owner_id: U09UC143684 # Nemanja Divnic

@@ -28,7 +28,7 @@ FORCE_INLINE uint32_t riscv_copy(uint32_t dst, uint32_t src, uint32_t bytes) {
 // Word stores where all three are 4 B multiples, else halfword stores: every gated dtype is 2 or 4 B. A source the
 // NOC wrote needs invalidate_l1_cache() first, once per NOC wait rather than per copy.
 FORCE_INLINE uint32_t riscv_copy_elements(uint32_t dst, uint32_t src, uint32_t bytes) {
-    if (((dst | src | bytes) & 3) == 0) {
+    if (((dst | src | bytes) & (sizeof(uint32_t) - 1)) == 0) {
         return riscv_copy<uint32_t>(dst, src, bytes);
     }
     return riscv_copy<uint16_t>(dst, src, bytes);

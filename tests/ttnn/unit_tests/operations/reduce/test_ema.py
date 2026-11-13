@@ -14,7 +14,11 @@ TEST_PADDING_VALUE = -42
 
 @pytest.mark.parametrize(
     "T, B, C, cores_y, cores_x",
-    [(2048, 2, 4096, 0, 0), (2048, 2, 4096, 4, 4), (10, 3, 18, 0, 0)],  # base case  # custom grid  # implicit padding
+    [
+        (2048, 2, 4096, 0, 0),  # base case
+        (2048, 2, 4096, 4, 4),  # custom grid
+        pytest.param(10, 3, 18, 0, 0, marks=pytest.mark.merge_gate),  # implicit padding
+    ],
 )
 def test_ema(device, T, B, C, cores_y, cores_x):
     torch.manual_seed(0)

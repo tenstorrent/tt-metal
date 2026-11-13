@@ -5,13 +5,12 @@
 #include "relay_mux.hpp"
 #include "context/context_descriptor.hpp"
 #include "dispatch/kernel_config/fd_kernel.hpp"
-#include "dispatch_core_common.hpp"
 #include "fabric/fabric_host_utils.hpp"
 #include "fabric/fabric_context.hpp"
 #include "hal_types.hpp"
 #include <bit>
 #include <tt-logger/tt-logger.hpp>
-#include "tt_align.hpp"
+#include <tt-metalium/math.hpp>
 #include "tt_metal.hpp"
 #include <tt-umd/types/core_coordinates.hpp>
 #include <algorithm>
@@ -81,7 +80,7 @@ void RelayMux::GenerateStaticConfigs() {
         static_config_.buffer_base_address.value(),
         mux_config_core);
 
-    mux_ct_args_ = mux_kernel_config_->get_fabric_mux_compile_time_args_for_relay_mux(control_plane);
+    mux_ct_args_ = mux_kernel_config_->get_fabric_mux_compile_time_args_for_relay_mux();
 
     uint32_t mux_buffer_end = mux_kernel_config_->get_memory_map_end_address();
     TT_ASSERT(mux_buffer_end < l1_size, "RelayMux Buffer End {} Exceeds Max L1 {}", mux_buffer_end, l1_size);

@@ -11,7 +11,7 @@ from helpers.golden_generators import (
     TransposeGolden,
     get_golden_generator,
 )
-from helpers.llk_params import DestAccumulation, DestSync, Transpose, format_dict
+from helpers.llk_params import DestAccumulation, DestSync, Transpose
 from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
@@ -28,7 +28,7 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     UNPACK_TRANS_FACES,
 )
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 TRANSPOSE_DEST_FLOAT_FORMATS = input_output_formats(
     [
@@ -249,12 +249,7 @@ def transpose_dest_int8(
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    torch_format = format_dict[formats.output_format]
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     assert torch.equal(res_tensor, golden_tensor), "Assert against golden failed"
 
@@ -352,18 +347,13 @@ def transpose_dest(formats, dest_acc, math_transpose_faces, unpack_to_dest):
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    torch_format = format_dict[formats.output_format]
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     if (
         unpack_to_dest == True
         and dest_acc == DestAccumulation.Yes
-        and formats.input_format in (DataFormat.Int32, DataFormat.Float32)
-        and formats.output_format in (DataFormat.Int32, DataFormat.Float32)
+        and formats.input_format.is_32_bit()
+        and formats.output_format.is_32_bit()
     ):
         is_equal = torch.equal(res_tensor, golden_tensor)
         assert is_equal, "Assert against golden failed"

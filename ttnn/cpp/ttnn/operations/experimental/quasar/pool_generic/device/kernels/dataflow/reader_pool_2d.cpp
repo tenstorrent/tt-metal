@@ -103,34 +103,12 @@ ALWI void read_kernel_with_top_left_index(
                 const uint32_t stick_offset = ind + w_offset + h * dilation_h * in_w_padded;
                 const uint32_t read_offset =
                     in_l1_read_base_addr + (stick_offset * shard_width_bytes + c_i * MAX_BYTES_PER_REDUCTION);
-#ifdef ARCH_QUASAR
-                // Quasar sim: a local self-loopback NOC read (self_ep, src_coord==dst_coord) into in_cb drops
-                // data / reads stale SRAM. The window gather is a same-core L1->L1 copy, so do it with a direct
-                // RISC copy for reliable data. read_offset and the in_cb write ptr are L1-aligned (>=16B) and
-                // read_bytes is L1-aligned, so a uint32 word copy is safe. (NOTE: the 64c-after-32c failure is
-                // NOT this path -- CPU and NOC reads BOTH see the same wrong TL1 data at base, so the input
-                // tensor's L1 data is genuinely stale after 32c, a host-upload/L1-alloc issue, not the gather.)
-                {
-                    volatile tt_l1_ptr uint32_t* rp_src = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(read_offset);
-                    volatile tt_l1_ptr uint32_t* rp_dst =
-                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in_cb.get_write_ptr() + write_offset);
-                    const uint32_t rp_nwords = (read_bytes * w_multiple) >> 2;
-                    for (uint32_t rp_i = 0; rp_i < rp_nwords; ++rp_i) {
-                        rp_dst[rp_i] = rp_src[rp_i];
-                    }
-                    // Write back the CPU-store copy to TL1 so the compute unpack (which reads in_cb from TL1)
-                    // sees it. Without this, compute reduces stale/zero in_cb.
-                    flush_l2_cache_range(
-                        reinterpret_cast<uintptr_t>(rp_dst), static_cast<size_t>(read_bytes * w_multiple));
-                }
-#else
                 noc.async_read(
                     self_ep,
                     in_cb,
                     read_bytes * w_multiple,
                     experimental::local_addr(read_offset),
                     {.offset_bytes = write_offset});
-#endif
                 // if compute is using tilize_reconfig we will only untilize the needed number of tiles rather
                 // than the entire MAX_TILES_PER_REDUCTION, thus we use a different offset for the write address
                 if constexpr (tilize_reconfig) {

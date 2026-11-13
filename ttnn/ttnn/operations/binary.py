@@ -196,8 +196,12 @@ def _integral_float_scalars_as_int(input_tensor_a, input_tensor_b):
     if not torch.is_tensor(tensor_operand) or tensor_operand.dtype not in _promotable_integer_dtypes():
         return input_tensor_a, input_tensor_b
 
+    # The binding receives a Python float as a C++ float, so the device sees it rounded to float32.
     def as_int(value):
-        return int(value) if isinstance(value, float) and value.is_integer() else value
+        if not isinstance(value, float):
+            return value
+        bound = torch.tensor(value, dtype=torch.float32).item()
+        return int(bound) if bound.is_integer() else value
 
     return as_int(input_tensor_a), as_int(input_tensor_b)
 
@@ -856,13 +860,15 @@ def _golden_function_squared_difference(
 ):
     import torch
 
-    input_tensor_a = apply_activations(input_tensor_a, input_tensor_a_activations)
+    input_tensor_a, input_tensor_b = _integral_float_scalars_as_int(input_tensor_a, input_tensor_b)
+    input_tensor_a, input_tensor_b = _integer_path_scalars(input_tensor_a, input_tensor_b)
+    input_tensor_a = apply_activations(input_tensor_a, input_tensor_a_activations, input_tensor_b)
     input_tensor_b = apply_activations(input_tensor_b, input_tensor_b_activations, input_tensor_a)
-    if integer_golden.is_unsigned_dtype(input_tensor_a.dtype):
+    tensor_operand = _tensor_operand(input_tensor_a, input_tensor_b)
+    if integer_golden.is_unsigned_dtype(tensor_operand.dtype):
         # Widen unsigned subtraction and square before restoring TTNN wraparound.
-        output_tensor = integer_golden.binary(
-            input_tensor_a, input_tensor_b, lambda a, b: torch.square(torch.sub(a, b))
-        )
+        wide_a, wide_b = _matched_operands(input_tensor_a, input_tensor_b, tensor_operand)
+        output_tensor = integer_golden.binary(wide_a, wide_b, lambda a, b: torch.square(torch.sub(a, b)))
     else:
         output_tensor = torch_squared_difference(input_tensor_a, input_tensor_b)
     output_tensor = apply_activations(output_tensor, activations)

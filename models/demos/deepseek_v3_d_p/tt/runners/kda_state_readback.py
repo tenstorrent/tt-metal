@@ -26,14 +26,14 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, kimi_k3_kda_config
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import (
-    KdaContractGeometry,
     assemble_convolution,
     assemble_recurrent,
     convolution_segment_to_torch,
     recurrent_segment_to_torch,
 )
+from models.demos.deepseek_v3_d_p.tt.kimi_k3.kda_geometry import kimi_k3_kda_geometry
 from models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k3 import KimiK3Adapter
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import kda_position, kda_segments_per_layer
 
@@ -100,7 +100,6 @@ def read_layer(table, config_id: int, kind: str, layer: int, slot: int, geometry
     if unique_id is None:
         return None, "remote"
     segments = {}
-    # Window 0: every version window aliases the same bytes.
     for segment in range(kda_segments_per_layer(geometry, kind)):
         loc = table.lookup(layer, kda_position(geometry, kind, segment), slot, config_id)
         uid = resolve_unique_id(table.get_device_group(loc.device_group_index).fabric_node_ids, device_map)
@@ -139,9 +138,7 @@ def main(argv=None) -> int:
     row = args.real_len // GOLDEN_PERIOD - 1
     golden_dir = Path(args.golden)
     adapter = KimiK3Adapter()
-    geometry = KdaContractGeometry.from_kda_config(
-        kimi_k3_kda_config(), mesh_shape=(args.sp, args.tp), sp_axis=0, tp_axis=1
-    )
+    geometry = kimi_k3_kda_geometry((args.sp, args.tp), sp_axis=0, tp_axis=1)
 
     table = ttnn.experimental.disaggregation.import_from_protobuf_file(args.table)
     device_map = load_device_map(args.device_map)

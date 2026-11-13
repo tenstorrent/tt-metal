@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/cpp/ttnn/kernel_lib/index_tile_dataflow.hpp"
+#ifdef TOPK_PAD_LAST_TILE_W
+#include "topk_fill_width_padding.hpp"
+#endif
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -51,6 +54,11 @@ void kernel_main() {
             dfb_in0.reserve_back(onetile);
             noc.async_read(s, dfb_in0, tile_bytes_in0, {.page_id = (i * Wt) + j}, {.offset_bytes = 0});
             noc.async_read_barrier();
+#ifdef TOPK_PAD_LAST_TILE_W
+            if (j == Wt - 1) {
+                topk_fill_width_padding(dfb_in0.get_write_ptr());
+            }
+#endif
             dfb_in0.push_back(onetile);
 #if GENERATE_INDICES
             // Generate corresponding index tile for position tracking during sort

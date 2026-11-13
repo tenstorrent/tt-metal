@@ -17,6 +17,7 @@ from models.tt_dit.parallel.config import ParallelFactor, VaeHWParallelConfig
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils.check import assert_quality
 from models.tt_dit.utils.conv3d import ConvDims, conv_pad_height, conv_pad_width
+from models.tt_dit.utils.ltx import skip_without_checkpoint
 from models.tt_dit.utils.tensor import fast_device_to_host, typed_tensor_2dshard
 from models.tt_dit.utils.test import skip_if_unsupported_num_links
 
@@ -205,7 +206,7 @@ def test_ltx_latent_upsampler_real_checkpoint(
     skip_if_unsupported_num_links(mesh_device, num_links)
     ckpt = _resolve_upsampler_checkpoint()
     if ckpt is None:
-        pytest.skip("real upsampler checkpoint not in local HF cache")
+        skip_without_checkpoint("real upsampler checkpoint not in local HF cache")
 
     with safe_open(ckpt, framework="pt") as f:
         cfg = json.loads(f.metadata()["config"])

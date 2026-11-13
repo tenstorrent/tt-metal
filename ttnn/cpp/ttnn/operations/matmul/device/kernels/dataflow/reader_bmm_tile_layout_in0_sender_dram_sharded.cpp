@@ -140,8 +140,8 @@ void kernel_main() {
     DataflowBuffer dfb_in0(dfb::in0);
     // The resident in0 width shard: only its L1 base address is needed (no FIFO traffic).
     const LocalTensorAccessor<uint32_t> in0_shard(tensor::in0_shard);
-    Semaphore sender_sem(sem::in0_mcast_sender);
-    Semaphore receiver_sem(sem::in0_mcast_receiver);
+    Semaphore<> sender_sem(sem::in0_mcast_sender);
+    Semaphore<> receiver_sem(sem::in0_mcast_receiver);
 #ifdef IN0_MULTISHARD
     // A storage core that does no compute assembles its multi-shard block here: its in0 slot is
     // inside the multicast rectangle and receives the other senders' blocks.

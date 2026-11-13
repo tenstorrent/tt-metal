@@ -1,0 +1,52 @@
+# --- Meshes ---------------------------------------------------------------
+# Single-galaxy 3-mesh ring: per-mesh fabric configs from each mesh's dim_types, on different torus axes:
+#   - M_Y: 2x2 RING,LINE -> FABRIC_2D_TORUS_Y      [mesh 0 and mesh 2]
+#   - M_X: 2x4 LINE,RING -> FABRIC_2D_TORUS_X      [mesh 1]
+# 16 ASICs on one 32-ASIC galaxy, ring-connected (0 -> 1 -> 2 -> 0). Checks that meshes on different torus
+# configs coexist and route inter-mesh without hanging.
+mesh_descriptors {
+  name: "M_Y"
+  arch: BLACKHOLE
+  device_topology { dims: [ 2, 2 ] dim_types: [ RING, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels {
+    count: 2
+    policy: RELAXED
+  }
+}
+mesh_descriptors {
+  name: "M_X"
+  arch: BLACKHOLE
+  device_topology { dims: [ 2, 4 ] dim_types: [ LINE, RING ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels {
+    count: 2
+    policy: RELAXED
+  }
+}
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M_Y" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M_X" mesh_id: 1 } }
+  instances { mesh { mesh_descriptor: "M_Y" mesh_id: 2 } }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "M_Y" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M_X" mesh_id: 1 } }
+    channels { count: 4 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M_X" mesh_id: 1 } }
+    nodes { mesh { mesh_descriptor: "M_Y" mesh_id: 2 } }
+    channels { count: 4 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M_Y" mesh_id: 2 } }
+    nodes { mesh { mesh_descriptor: "M_Y" mesh_id: 0 } }
+    channels { count: 4 policy: RELAXED }
+  }
+}
+
+# --- Instantiation ----------------------------------------------------------
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }

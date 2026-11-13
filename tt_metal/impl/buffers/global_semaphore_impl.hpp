@@ -16,6 +16,7 @@ namespace tt::tt_metal {
 
 class GlobalSemaphore;
 namespace distributed {
+class MeshCommandQueue;
 class MeshDevice;
 }  // namespace distributed
 
@@ -23,8 +24,9 @@ class MeshDevice;
 // This can be updated in the future to be its own container with optimized dispatch functions
 class GlobalSemaphoreImpl {
 public:
+    // The semaphore is created on `mesh_cq`'s device.
     GlobalSemaphoreImpl(
-        distributed::MeshDevice& device,
+        distributed::MeshCommandQueue& mesh_cq,
         CoreRangeSet cores,
         std::optional<uint32_t> initial_value,
         BufferType buffer_type);
@@ -32,7 +34,7 @@ public:
     // Dedicated constructor for creating a global semaphore **without allocation**.
     // The instantiation of GlobalSemphore will be emplaced onto the address specified.
     GlobalSemaphoreImpl(
-        distributed::MeshDevice& device,
+        distributed::MeshCommandQueue& mesh_cq,
         CoreRangeSet cores,
         std::optional<uint32_t> initial_value,
         BufferType buffer_type,
@@ -52,11 +54,16 @@ public:
 
     DeviceAddr address() const;
 
-    void reset_semaphore_value(uint32_t reset_value) const;
+    // `mesh_cq` must belong to this semaphore's device. It is only used with fast dispatch; it is ignored on slow
+    // dispatch / simulator.
+    void reset_semaphore_value(uint32_t reset_value, distributed::MeshCommandQueue& mesh_cq) const;
 
 private:
     void setup_buffer(
-        std::optional<uint32_t> initial_value, BufferType buffer_type, std::optional<uint64_t> address);
+        std::optional<uint32_t> initial_value,
+        BufferType buffer_type,
+        std::optional<uint64_t> address,
+        distributed::MeshCommandQueue& mesh_cq);
 
     std::shared_ptr<distributed::MeshBuffer> buffer_;
     distributed::MeshDevice* device_;

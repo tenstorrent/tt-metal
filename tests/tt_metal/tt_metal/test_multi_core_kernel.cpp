@@ -24,8 +24,11 @@ using namespace tt::tt_metal;
 namespace {
 
 std::tuple<Program, KernelHandle, KernelHandle> create_program(
-    uint32_t single_tile_size, const CoreRange& all_cores, const std::vector<uint32_t>& eltwise_unary_args) {
-    Program program = CreateProgram();
+    distributed::MeshDevice& mesh_device,
+    uint32_t single_tile_size,
+    const CoreRange& all_cores,
+    const std::vector<uint32_t>& eltwise_unary_args) {
+    Program program = CreateProgram(mesh_device);
 
     CoreCoord start_core = all_cores.start_coord;
     CoreCoord end_core = all_cores.end_coord;
@@ -98,7 +101,7 @@ TEST_F(UnitMeshFixture, MultiCoreKernelSameRuntimeArgs) {
     vector<uint32_t> compute_kernel_args = {uint(num_tiles), /*use_dfbs=*/false};
 
     auto [program, reader_kernel_id, writer_kernel_id] =
-        create_program(single_tile_size, all_cores, compute_kernel_args);
+        create_program(this->device(), single_tile_size, all_cores, compute_kernel_args);
 
     std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
         src_dram_buffer->size(), 100, std::chrono::system_clock::now().time_since_epoch().count());
@@ -145,7 +148,7 @@ TEST_F(UnitMeshFixture, MultiCoreKernelUniqueRuntimeArgs) {
     vector<uint32_t> compute_kernel_args = {uint(num_tiles), /*use_dfbs=*/false};
 
     auto [program, reader_kernel_id, writer_kernel_id] =
-        create_program(single_tile_size, all_cores, compute_kernel_args);
+        create_program(this->device(), single_tile_size, all_cores, compute_kernel_args);
 
     std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
         src_dram_buffer->size(), 100, std::chrono::system_clock::now().time_since_epoch().count());

@@ -12,21 +12,46 @@
 
 namespace ckernel::sfpu {
 
-inline void celu_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
+// Programs the Cody-Waite constants of expm1_cw_clamped into vConstFloatPrgm0/1/2, which calculate_celu
+// reads on every row. Nothing else may program Prgm0..2 between this init and calculate_celu; on Wormhole
+// sfpu_reciprocal_init owns all three (its Newton-seed coefficients), so no reciprocal may run in between.
+inline void celu_init() {
+    math::reset_counters(p_setrwc::SET_ABD_F);
+    expm1_cw_init_prgm_consts();
+}
 
 // celu(x) = x for x>=0, alpha*(exp(x/alpha)-1) for x<0
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
-inline void calculate_celu(std::uint32_t param0, std::uint32_t param1) {
-    sfpi::vFloat alpha = Converter::as_float(param0);
-    sfpi::vFloat alpha_recip = Converter::as_float(param1);
-// unroll 2: with expm1_cw_clamped inlined the loop body is large enough that
-// partial unroll outperforms both full (unroll 8) and no-unroll (~0.8us on WH)
-#pragma GCC unroll 2
+// NEG_ALPHA: alpha < 0 makes x / alpha positive and unbounded on the x < 0 branch. The helper
+// clamps only the negative side, and its 2^k reconstruction writes k + 127 into an 8-bit exponent
+// field, so past k = 128 it wraps and the result flips sign instead of overflowing. At 89 the
+// helper is already +inf (k = 128), so alpha * (+inf) is the -inf the reference gives everywhere
+// beyond the overflow point. The clamp is an SFPSWAP, which orders +NaN above every number and so
+// turns a NaN argument into 89; a non-finite x (exponent field all ones) is therefore passed
+// through unchanged, which keeps NaN and gives -inf for x = -inf, as the reference does.
+template <bool is_fp32_dest_acc_en, int ITERATIONS, bool NEG_ALPHA>
+sfpi_inline void celu_loop(sfpi::vFloat alpha, sfpi::vFloat alpha_recip) {
+    // expm1's top Horner coefficient, loaded once and held in an LReg for the whole loop (the three
+    // Cody-Waite constants come from Prgm0/1/2, see the init above; sfpi (as of 7.93.0) never hoists a literal out
+    // of a loop by itself). With alpha_recip live as well there is no LReg for the second one, so it
+    // stays a per-row literal.
+    sfpi::vFloat h_top1 = CW_EXPM1_H_TOP1;
+    constexpr float h_top0 = CW_EXPM1_H_TOP0;
+// Full unroll: measured fastest on WH (each of unroll 4, 2 and 1 is slower). sfpi replays the
+// repeated row body, so the code grows little.
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
-        sfpi::vFloat result = alpha * expm1_cw_clamped(alpha_recip * x);
+        sfpi::vFloat arg = alpha_recip * x;
+        if constexpr (NEG_ALPHA) {
+            arg = sfpi::min(arg, 89.0f);
+        }
+        sfpi::vFloat result = alpha * expm1_cw_clamped_prgm(arg, h_top1, h_top0);
 
+        if constexpr (NEG_ALPHA) {
+            v_if(!sfpi::is_finite(x)) { result = x; }
+            v_endif;
+        }
         v_if(x >= 0.0f) { result = x; }
         v_endif;
 
@@ -35,6 +60,20 @@ inline void calculate_celu(std::uint32_t param0, std::uint32_t param1) {
         }
         sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
+    }
+}
+
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
+sfpi_inline void calculate_celu(std::uint32_t param0, std::uint32_t param1) {
+    sfpi::vFloat alpha = Converter::as_float(param0);
+    sfpi::vFloat alpha_recip = Converter::as_float(param1);
+    // param0 is the alpha bit pattern, a literal in the generated kernel: the sign test is decided
+    // on the RISC, outside the loop, so alpha > 0 (the default) keeps the unclamped instruction
+    // stream.
+    if (param0 & 0x80000000u) {
+        celu_loop<is_fp32_dest_acc_en, ITERATIONS, true>(alpha, alpha_recip);
+    } else {
+        celu_loop<is_fp32_dest_acc_en, ITERATIONS, false>(alpha, alpha_recip);
     }
 }
 

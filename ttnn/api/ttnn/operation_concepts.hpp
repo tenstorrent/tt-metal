@@ -131,9 +131,10 @@ concept MeshWorkloadSpecFactoryConcept = requires {
     &T::create_mesh_workload_artifacts;
 } && !ProgramFactoryConcept<T> && !MeshWorkloadFactoryConcept<T> && !ProgramDescriptorFactoryConcept<T>;
 
-// Base spec factory: cache hit refreshes only tensor bindings. SPMD-shaped -- one ProgramSpec,
-// replicated across the mesh. A factory whose programs differ per device is a
-// MeshWorkloadSpecFactoryConcept instead.
+// Base spec factory: cache hit refreshes only tensor and PrefetcherPipe bindings. SPMD-shaped -- one
+// ProgramSpec, replicated across the mesh. A factory whose programs differ per device is a
+// MeshWorkloadSpecFactoryConcept instead. Every spec factory's PrefetcherPipeArguments must name pipes
+// in operation_attributes_t::prefetcher_pipes, which the cache hit rebinds them from.
 template <typename T>
 concept ProgramSpecFactoryConcept =
     requires { &T::create_program_artifacts; } && !ProgramFactoryConcept<T> && !MeshWorkloadFactoryConcept<T> &&

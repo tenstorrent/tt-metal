@@ -160,7 +160,7 @@ TEST_F(MeshDeviceFixture, TensixInitializeLegalSemaphores) {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-        tt_metal::Program program = tt_metal::CreateProgram();
+        tt_metal::Program program = tt_metal::CreateProgram(*device);
         workload.add_program(device_range, std::move(program));
         CoreRange core_range({0, 0}, {1, 1});
         unit_tests::initialize_semaphores::create_and_read_max_num_semaphores(device, workload, core_range);
@@ -172,7 +172,7 @@ TEST_F(MeshDeviceFixture, TensixInitializeIllegalSemaphores) {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-        tt_metal::Program program = tt_metal::CreateProgram();
+        tt_metal::Program program = tt_metal::CreateProgram(*device);
         workload.add_program(device_range, std::move(program));
         CoreRange core_range({0, 0}, {1, 1});
         unit_tests::initialize_semaphores::try_creating_semaphores_out_of_bounds(device, workload);
@@ -184,7 +184,7 @@ TEST_F(MeshDeviceFixture, TensixCreateMultipleSemaphoresOnSameCore) {
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*this->devices_[0]);
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
 
@@ -220,7 +220,7 @@ TEST_F(MeshDeviceFixture, TensixCreateSemaphoreOnMultipleRanges) {
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*this->devices_[0]);
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
 

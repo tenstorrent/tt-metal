@@ -164,7 +164,8 @@ class SeqParallel:
 
     def conv_predecessor(self, xin):
         """The previous row's last three conv-input rows: [1, 3, C] ROW_MAJOR bf16 (row 0's is unused).
-        xin: the ROW_MAJOR [1, T, C] conv input (qkv_causal_conv1d_silu's `input`); not consumed."""
+        xin: ROW_MAJOR bf16 [1, n, C] whose last three rows are this row's last three conv-input rows: the
+        conv input's last tile row as kda_conv_prefill passes it (n = 32), or the whole input; not consumed."""
         T, C = xin.shape[1], xin.shape[2]
         outgoing = ttnn.slice(xin, (0, T - CONV_HISTORY, 0), (1, T, C), memory_config=ttnn.DRAM_MEMORY_CONFIG)
         gathered = self.gather_rows(outgoing, dim=1)  # [1, 3R, C]

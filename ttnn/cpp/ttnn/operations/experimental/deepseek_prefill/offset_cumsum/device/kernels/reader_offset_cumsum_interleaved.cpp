@@ -36,16 +36,17 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/tile_constants.h"
+#include "ckernel.h"
 
 // The kernel is bound by scalar L1 accesses, not NOC traffic. Both helpers walk N columns at a time so
 // the running sums stay in registers while each row is still read contiguously.
 
 // sums[i0 + j] = sum over the H rows of in[.][i0 + j]
 template <uint32_t N, uint32_t H, uint32_t in_stride>
-FORCE_INLINE void sum_columns(volatile tt_l1_ptr uint32_t* in, volatile tt_l1_ptr uint32_t* sums, uint32_t i0) {
+FORCE_INLINE void sum_columns(const uint32_t* in, uint32_t* sums, uint32_t i0) {
     uint32_t acc[N] = {};
     for (uint32_t h = 0; h < H; h++) {
-        volatile tt_l1_ptr uint32_t* src = in + h * in_stride + i0;
+        const uint32_t* src = in + h * in_stride + i0;
 #pragma GCC unroll N
         for (uint32_t j = 0; j < N; j++) {
             acc[j] += src[j];
@@ -60,9 +61,9 @@ FORCE_INLINE void sum_columns(volatile tt_l1_ptr uint32_t* in, volatile tt_l1_pt
 // rows[r][i0 + j] = base[i0 + j] + sum over rows 0..r-1 of in[.][i0 + j]
 template <uint32_t N, uint32_t H, uint32_t in_stride, uint32_t row_stride>
 FORCE_INLINE void emit_rows(
-    volatile tt_l1_ptr uint32_t* in,
-    volatile tt_l1_ptr uint32_t* base,
-    volatile tt_l1_ptr uint32_t* rows,
+    const uint32_t* in,
+    const uint32_t* base,
+    uint32_t* rows,
     uint32_t i0) {
     uint32_t acc[N];
 #pragma GCC unroll N
@@ -70,8 +71,8 @@ FORCE_INLINE void emit_rows(
         acc[j] = base[i0 + j];
     }
     for (uint32_t r = 0; r < H; r++) {
-        volatile tt_l1_ptr uint32_t* src = in + r * in_stride + i0;
-        volatile tt_l1_ptr uint32_t* dst = rows + r * row_stride + i0;
+        const uint32_t* src = in + r * in_stride + i0;
+        uint32_t* dst = rows + r * row_stride + i0;
 #pragma GCC unroll N
         for (uint32_t j = 0; j < N; j++) {
             dst[j] = acc[j];
@@ -133,14 +134,17 @@ void kernel_main() {
 
     // All H input rows, at input_page_size stride, so the input is read from DRAM once.
     constexpr uint32_t in_stride = input_page_size / sizeof(uint32_t);
-    volatile tt_l1_ptr uint32_t* in = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_in0.get_write_ptr());
+    // Plain (non-volatile) L1 views: the input arrives by DMA and is made visible by invalidate_l1_cache after
+    // the read barrier; outputs are fenced before the NoC reads them. Volatile accesses cost several cycles each.
+    const uint32_t* in = reinterpret_cast<const uint32_t*>(cb_in0.get_write_ptr());
     for (uint32_t h = 0; h < H; h++) {
         noc.async_read(src_accessor, cb_in0, input_page_size, {.page_id = h}, {.offset_bytes = h * input_page_size});
     }
     noc.async_read_barrier();
+    invalidate_l1_cache();
 
     // running_sum holds totals, then becomes the expert region offsets
-    volatile tt_l1_ptr uint32_t* running_sum = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_out0.get_write_ptr());
+    uint32_t* running_sum = reinterpret_cast<uint32_t*>(cb_out0.get_write_ptr());
     for (uint32_t i0 = 0; i0 < W_blocked; i0 += COLS) {
         sum_columns<COLS, H, in_stride>(in, running_sum, i0);
     }
@@ -149,6 +153,9 @@ void kernel_main() {
     }
 
     // 1. Write totals to DRAM. The barrier is required: step 2 overwrites running_sum in place.
+    // A store can retire before it lands in L1 and the NoC command can race ahead of it: a blocking load of the
+    // last word drains the stores first (same trick as masked_bincount).
+    (void)ckernel::load_blocking(running_sum + (W - 1));
     noc.async_write(
         use<CircularBuffer::AddrSelector::WRITE_PTR>(cb_out0),
         dst_totals_accessor,
@@ -175,6 +182,7 @@ void kernel_main() {
 
     // 3. Write expert region offsets (shared component, before adding any local offset) to DRAM.
     //    running_sum is only read from here on, so this write shares the final barrier.
+    (void)ckernel::load_blocking(running_sum + (W - 1));
     noc.async_write(
         use<CircularBuffer::AddrSelector::WRITE_PTR>(cb_out0),
         dst_expert_region_accessor,
@@ -185,13 +193,14 @@ void kernel_main() {
     // 4. Row r is expert_region + (rows 0..r-1). `offsets` is written from row row_idx of the same
     //    buffer, so the two outputs cannot disagree.
     constexpr uint32_t row_stride = all_offsets_page_size / sizeof(uint32_t);
-    volatile tt_l1_ptr uint32_t* rows = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_rows.get_write_ptr());
+    uint32_t* rows = reinterpret_cast<uint32_t*>(cb_rows.get_write_ptr());
     for (uint32_t i0 = 0; i0 < W_blocked; i0 += COLS) {
         emit_rows<COLS, H, in_stride, row_stride>(in, running_sum, rows, i0);
     }
     for (uint32_t i0 = W_blocked; i0 < W; i0++) {
         emit_rows<1, H, in_stride, row_stride>(in, running_sum, rows, i0);
     }
+    (void)ckernel::load_blocking(rows + (H - 1) * row_stride + (W - 1));
     for (uint32_t r = 0; r < H; r++) {
         noc.async_write(
             use<CircularBuffer::AddrSelector::WRITE_PTR>(cb_rows),

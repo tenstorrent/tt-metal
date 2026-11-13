@@ -37,13 +37,25 @@ from models.demos.minimax_m3.tt.attention.weights import load_attention_weights
 from models.demos.minimax_m3.tt.ccl import CCLManager
 from models.demos.minimax_m3.tt.model import create_rope_setup
 from models.demos.minimax_m3.utils.general_utils import get_default_num_links
+from models.demos.minimax_m3.utils.model_variant import load_config, select_variant
 from models.demos.minimax_m3.utils.weight_conversion import convert_hf_qkv_to_meta_format_partial
 from tests.ttnn.unit_tests.operations.sdpa.sparse_sdpa_msa_test_utils import sparse_attention_ref_msa_sampled_tokens
 
 from ..test_factory import parametrize_mesh_with_fabric
 
-HIDDEN, NQ, NKV, NIDX, HEAD_DIM, IDX_DIM, ROTARY_DIM, THETA, EPS = 6144, 64, 4, 4, 128, 128, 64, 5_000_000.0, 1e-6
-BLOCK, TOPK = 128, 16
+# Dims, RoPE and MSA parameters from the config of the variant the test checkpoint (M3_CKPT / HF_MODEL) belongs to
+# (utils/model_variant.py).
+_CFG = load_config(select_variant(os.environ.get("M3_CKPT")).name)
+_SPARSE = _CFG["sparse_attention_config"]
+HIDDEN, NQ, NKV, HEAD_DIM = (
+    _CFG["hidden_size"],
+    _CFG["num_attention_heads"],
+    _CFG["num_key_value_heads"],
+    _CFG["head_dim"],
+)
+ROTARY_DIM, THETA, EPS = _CFG["rotary_dim"], float(_CFG["rope_theta"]), _CFG["rms_norm_eps"]
+NIDX, IDX_DIM = _SPARSE["sparse_num_index_heads"], _SPARSE["sparse_index_dim"]
+BLOCK, TOPK = _SPARSE["sparse_block_size"], _SPARSE["sparse_topk_blocks"]
 
 
 def _rotate_half(x):
@@ -82,19 +94,17 @@ def test_msa_layer_vs_ref(mesh_device, device_params, seq_len, reset_seeds):
     torch.manual_seed(0)
     x = torch.randn(1, S, HIDDEN) * 0.1
 
-    # REAL layer-3 (first MSA layer) attention weights from the checkpoint (bf16 -> fp32 here; loaded
-    # as bf16 on device below). Real attention structure gives well-separated block scores, so the
+    # REAL layer-3 (an MSA layer) attention weights from the checkpoint (bf16, or dequantized to bf16 for a
+    # quantized checkpoint -> fp32 here; loaded as bf16 on device below). Real attention structure gives well-separated block scores, so the
     # indexer top-16 is STABLE across bf16/fp32 (random weights give near-tie scores where the top-16
     # cutoff flips spuriously between precisions).
-    import json as _json
-
-    from safetensors import safe_open
+    from models.demos.minimax_m3.reference.model import SafetensorsWeights
 
     base = os.environ.get("M3_CKPT") or os.environ.get("HF_MODEL")
     if not base:
         pytest.skip("set HF_MODEL (or M3_CKPT) to a MiniMax-M3 checkpoint for the real-weights MSA test")
-    wmap = _json.load(open(f"{base}/model.safetensors.index.json"))["weight_map"]
-    pre = "language_model.model.layers.3.self_attn."
+    ckpt = SafetensorsWeights(base, dtype=torch.float32)
+    pre = "model.layers.3.self_attn."
     names = {
         "q": "q_proj",
         "k": "k_proj",
@@ -107,13 +117,7 @@ def test_msa_layer_vs_ref(mesh_device, device_params, seq_len, reset_seeds):
         "iq_norm": "index_q_norm",
         "ik_norm": "index_k_norm",
     }
-    _handles, w = {}, {}
-    for short, nm in names.items():
-        key = pre + nm + ".weight"
-        shard = wmap[key]
-        if shard not in _handles:
-            _handles[shard] = safe_open(f"{base}/{shard}", framework="pt")
-        w[short] = _handles[shard].get_tensor(key).float()
+    w = {short: ckpt.get(pre + nm + ".weight") for short, nm in names.items()}
 
     # HF-convention partial RoPE cos/sin (rotary_dim 64) for the torch ref.
     inv_freq = 1.0 / (THETA ** (torch.arange(0, ROTARY_DIM, 2).float() / ROTARY_DIM))
@@ -186,8 +190,6 @@ def test_msa_layer_vs_ref(mesh_device, device_params, seq_len, reset_seeds):
         head_dim=HEAD_DIM,
         rotary_dim=ROTARY_DIM,
         rms_norm_eps=EPS,
-        use_qk_norm=True,
-        use_gemma_norm=True,
         max_seq_len=max(S, 128),
         max_local_batch_size=1,
     )

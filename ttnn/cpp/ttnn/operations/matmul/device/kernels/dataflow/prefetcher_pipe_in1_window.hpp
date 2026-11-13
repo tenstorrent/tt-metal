@@ -33,9 +33,9 @@ FORCE_INLINE void publish_in1_block_from_pipe(
     const Noc& noc,
     uint32_t block,
     uint32_t in1_block_num_tiles) {
-    in1_relay.reserve_back(in1_block_num_tiles);
+    in1_relay.reserve_back(static_cast<uint16_t>(in1_block_num_tiles));
     pipe.wait_front(block + 1 < kIn1PipeWindowBlocks ? block + 1 : kIn1PipeWindowBlocks);
-    in1_relay.push_back(in1_block_num_tiles);
+    in1_relay.push_back(static_cast<uint16_t>(in1_block_num_tiles));
     if (block + 1 >= kIn1PipeWindowBlocks) {
         // Waits for compute to pop that block's tiles before acking the sender.
         pipe.pop_front(1, noc);

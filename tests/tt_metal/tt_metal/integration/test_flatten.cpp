@@ -93,7 +93,7 @@ bool flatten(
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
     CoreCoord core = {0, 0};
 
@@ -211,7 +211,7 @@ bool flatten_stress(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload workload;
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
     CoreCoord core = mesh_device->worker_core_from_logical_core({0, 0});
 
@@ -288,7 +288,9 @@ bool flatten_stress(
         distributed::EnqueueWriteMeshBuffer(cq, src_dram_buffer, *src_vec, false);
         // Share ownership of buffer with program
         AssignGlobalBufferToProgram(
-            std::shared_ptr<Buffer>(src_dram_buffer->get_backing_buffer()), program_on_workload);
+            std::shared_ptr<Buffer>(
+                src_dram_buffer, src_dram_buffer->get_device_buffer(distributed::MeshCoordinate(0, 0))),
+            program_on_workload);
         // Main thread gives up ownership of buffer and src data (this is what python does)
         src_dram_buffer.reset();
         src_vec.reset();

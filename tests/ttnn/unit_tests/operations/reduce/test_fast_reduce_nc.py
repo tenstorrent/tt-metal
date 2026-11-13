@@ -108,14 +108,7 @@ def test_fast_reduce_nc_with_prgm_caching(dims, device):
         # shift input/output tensor by creating very small tensor between loop
         inp = torch.rand(1, 1, 32, 32)
         test_tensor = (
-            ttnn.Tensor(
-                inp.reshape(-1).tolist(),
-                inp.shape,
-                ttnn.bfloat16,
-                ttnn.ROW_MAJOR_LAYOUT,
-            )
-            .to(ttnn.TILE_LAYOUT)
-            .to(device)
+            ttnn.from_torch(inp, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT).to(ttnn.TILE_LAYOUT).to(device)
         )
         shard_spec_1_cores_grid = ttnn.CoreRangeSet(
             {
@@ -238,3 +231,13 @@ def test_fast_reduce_nc_rejects_hw_dims(device, dims, expect_error):
     x, _, _ = get_tensors([1, 1, 32, 128], [1, 1, 32, 128], device, with_padding=False)
     with expect_error(RuntimeError, "FastReduceNC reduces only outer dims"):
         ttnn.experimental.fast_reduce_nc(x, dims=dims)
+
+
+@pytest.mark.parametrize("input_shape", [[1, 8, 128, 4096], [1, 32, 128, 2880]], ids=["dense8", "experts32"])
+def test_fast_reduce_nc_float32_default_config(input_shape, device):
+    torch.manual_seed(0)
+    torch_input = torch.randn(input_shape, dtype=torch.float32)
+    x = ttnn.from_torch(torch_input, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    out = ttnn.to_torch(ttnn.experimental.fast_reduce_nc(x, dims=[1]))
+    ref = torch.sum(torch_input.double(), dim=1, keepdim=True).float()
+    torch.testing.assert_close(out, ref, rtol=1e-4, atol=1e-5)

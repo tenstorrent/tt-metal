@@ -43,7 +43,7 @@ void validate_matmul_operand_basics(
         input_tensor_a.storage_type() == StorageType::DEVICE and input_tensor_b.storage_type() == StorageType::DEVICE,
         "Operands to matmul need to be on device!");
     TT_FATAL(
-        input_tensor_a.buffer() != nullptr and input_tensor_b.buffer() != nullptr,
+        input_tensor_a.is_allocated() and input_tensor_b.is_allocated(),
         "Operands to matmul need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.device() == input_tensor_b.device(), "Operands to matmul need to be on the same device!");
     TT_FATAL(
@@ -117,6 +117,27 @@ void validate_matmul_in0_column_window(
         offset,
         offset + b_shape[-2],
         a_shape[-1]);
+}
+
+// Sharded A with transpose_a: the sharded readers hand the shard to compute in stored tile order and compute only
+// transposes inside each tile, so the tile grid stays untransposed. Only the interleaved readers reorder tiles, with
+// their strides, and a sharded A can also hold the tiles of a K row on other cores. One tile per batch keeps the
+// stored order right on every route, so it is the only layout accepted.
+void validate_matmul_sharded_in0_transpose_a(
+    const MatmulParams& attributes,
+    const Tensor& input_tensor_a,
+    const ttnn::Shape& a_shape_padded,
+    const tt::tt_metal::Tile& in0_tile) {
+    if (!attributes.transpose_a || !input_tensor_a.is_sharded() ||
+        input_tensor_a.memory_config().buffer_type() == BufferType::DRAM) {
+        return;
+    }
+    TT_FATAL(
+        a_shape_padded[-2] == in0_tile.get_height() && a_shape_padded[-1] == in0_tile.get_width(),
+        "transpose_a with an L1-sharded input A supports one tile per batch, got padded [M, K] = [{}, {}]. "
+        "Use an interleaved input A.",
+        a_shape_padded[-2],
+        a_shape_padded[-1]);
 }
 
 // Bfloat4 Tile Size: checks that a bfloat4 input has each tile dim >= 4. Only A's height
@@ -406,6 +427,7 @@ void validate_matmul_bias_shape(
     const std::optional<const Tensor>& optional_bias,
     const tt::tt_metal::Tile& in0_tile,
     const tt::tt_metal::Tile& in1_tile,
+    const ttnn::Shape& a_shape,
     const ttnn::Shape& a_shape_padded,
     const ttnn::Shape& b_shape,
     const ttnn::Shape& b_shape_padded,
@@ -441,6 +463,27 @@ void validate_matmul_bias_shape(
         expected_bias_height,
         in0_tile.get_height(),
         is_reuse_config ? Mt : 1);
+    // Guard logical h: padded-h check accepts anything that pads to the right tile count; sub-tile bias rows silently read padding.
+    const uint32_t logical_m = a_shape[-2];
+    // Batched DRAM-sharded factory hardcodes row_broadcast_bias=1, so it only honors [1, N] regardless of Mt.
+    const bool is_batched_dram_sharded_config = std::holds_alternative<
+        operations::matmul::MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig>(chosen_program_config);
+    const bool non_reuse_accepts_per_row_bias = Mt == 1 && !is_batched_dram_sharded_config;
+    const bool bias_h_ok =
+        is_reuse_config ? (bias_shape[-2] == logical_m)
+                        : (bias_shape[-2] == 1 || (non_reuse_accepts_per_row_bias && bias_shape[-2] == logical_m));
+    TT_FATAL(
+        bias_h_ok,
+        "Unsupported bias shape: logical bias h ({}) must be {} (M={}, Mt={}, is_reuse={}).",
+        bias_shape[-2],
+        is_reuse_config
+            ? fmt::format("{} (reuse: per-row bias [M, N])", logical_m)
+            : (non_reuse_accepts_per_row_bias
+                   ? fmt::format("1 or {} (non-reuse Mt==1: broadcast [1, N] or per-row [M, N])", logical_m)
+                   : std::string("1 (broadcast-only path: non-reuse Mt>1 or batched DRAM-sharded)")),
+        logical_m,
+        Mt,
+        is_reuse_config);
     TT_FATAL(
         bias_shape_padded[-1] == b_shape_padded[-1],
         "Unsupported bias shape: padded last dimension of bias, {}, not "
@@ -1878,7 +1921,7 @@ void validate_matmul_mcast2d_config(
         // args. The width/height-specific validation below is gated on those layouts, so ND
         // DRAM in1 skips it (no shard_spec() access).
         const bool in1_is_nd_dram = tensor_b_memory_layout == TensorMemoryLayout::ND_SHARDED &&
-                                    input_tensor_b.buffer()->buffer_type() == tt_metal::BufferType::DRAM;
+                                    input_tensor_b.memory_config().buffer_type() == tt_metal::BufferType::DRAM;
         TT_FATAL(
             tensor_b_memory_layout == TensorMemoryLayout::WIDTH_SHARDED ||
                 tensor_b_memory_layout == TensorMemoryLayout::HEIGHT_SHARDED || in1_is_nd_dram,
@@ -1888,10 +1931,10 @@ void validate_matmul_mcast2d_config(
         if (tensor_b_memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
             // Height-sharded in1 is only supported for DRAM batched matmuls
             TT_FATAL(
-                input_tensor_b.buffer()->buffer_type() == tt_metal::BufferType::DRAM,
+                input_tensor_b.memory_config().buffer_type() == tt_metal::BufferType::DRAM,
                 "{}: HEIGHT_SHARDED input B is only supported in DRAM, got: {}",
                 config_name,
-                input_tensor_b.buffer()->buffer_type());
+                input_tensor_b.memory_config().buffer_type());
             TT_FATAL(
                 !program_config.fuse_batch,
                 "{}: HEIGHT_SHARDED input B requires fuse_batch=false for batched matmul",
@@ -1939,7 +1982,7 @@ void validate_matmul_mcast2d_config(
                 batches_per_bank * num_banks,
                 B);
         }
-        if (input_tensor_b.buffer()->buffer_type() != tt_metal::BufferType::DRAM) {
+        if (input_tensor_b.memory_config().buffer_type() != tt_metal::BufferType::DRAM) {
             const auto tensor_a_memory_layout = input_tensor_a.memory_config().memory_layout();
             TT_FATAL(
                 (input_tensor_a.memory_config().is_sharded() &&
@@ -1955,6 +1998,44 @@ void validate_matmul_mcast2d_config(
                 config_name,
                 program_config.per_core_N,
                 (input_tensor_b.shard_spec().value().shape[1] / in1_tile.get_width()));
+            // The in1 CB view of the shard holds at most two K blocks, and the sender multicasts the resident shard
+            // from a single address. With more than one row of cores, every K block after the first is stale data on
+            // the receivers. On a single row there is no multicast, so two K blocks still work; three or more hang.
+            const auto K = operations::matmul::utilities::get_K_dim(a_shape_padded, in0_tile);
+            const auto M =
+                operations::matmul::utilities::get_M_dim(a_shape_padded, in0_tile, program_config.fuse_batch);
+            const bool single_row_of_cores = div_up(M, program_config.per_core_M) == 1;
+            const uint32_t max_k_blocks = single_row_of_cores ? 2 : 1;
+            const uint32_t num_k_blocks = div_up(K, program_config.in0_block_w);
+            TT_FATAL(
+                num_k_blocks <= max_k_blocks,
+                "{}: non-DRAM sharded input B supports at most {} K block(s) here, got {}: in0_block_w ({}), K ({} "
+                "tiles). Use in0_block_w = K{}",
+                config_name,
+                max_k_blocks,
+                num_k_blocks,
+                program_config.in0_block_w,
+                K,
+                single_row_of_cores ? " or K / 2." : ".");
+            // The sender pushes the shard once, but compute pops one in1 block per batch, h-block, w-block and
+            // K-block, so any outer loop beyond a single iteration pops data that was never pushed and hangs.
+            const uint32_t batch = program_config.fuse_batch ? 1u : get_batch_size(a_shape_padded);
+            const uint32_t num_h_blocks = program_config.per_core_M / program_config.out_block_h;
+            const uint32_t num_w_blocks = program_config.per_core_N / program_config.out_block_w;
+            TT_FATAL(
+                batch * num_h_blocks * num_w_blocks == 1,
+                "{}: non-DRAM sharded input B requires a single output block per core: batch ({}) * per_core_M / "
+                "out_block_h ({}) * per_core_N / out_block_w ({}) must be 1. Use fuse_batch=true with batch 1 and "
+                "out_block_h = per_core_M, out_block_w = per_core_N.",
+                config_name,
+                batch,
+                num_h_blocks,
+                num_w_blocks);
+            TT_FATAL(
+                !attributes.transpose_b,
+                "{}: transpose_b is not supported with non-DRAM sharded input B; the shards are consumed in their "
+                "stored layout",
+                config_name);
         }
         if (tensor_b_memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
             TT_FATAL(
@@ -2221,17 +2302,17 @@ void validate_matmul_mcast1d_config(
         TT_FATAL(
             input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
                 (input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&
-                 input_tensor_b.buffer()->buffer_type() == tt_metal::BufferType::DRAM) ||
+                 input_tensor_b.memory_config().buffer_type() == tt_metal::BufferType::DRAM) ||
                 // Receiver-contiguous Tensor prefetcher: in1 is an NdShardSpec DRAM
                 // weight (reported as ND_SHARDED) whose data is delivered via the
                 // global CB or PrefetcherPipe receivers, not read directly per its DRAM
                 // layout. The weight's own layout is irrelevant to the matmul in this case.
-                (in1_delivered && input_tensor_b.buffer()->buffer_type() == tt_metal::BufferType::DRAM),
+                (in1_delivered && input_tensor_b.memory_config().buffer_type() == tt_metal::BufferType::DRAM),
             "{}: Input tensor B must be width sharded, DRAM interleaved, or a DRAM weight fed "
             "via a global circular buffer or prefetcher_pipes when using gather_in0.",
             config_name);
         if (!attributes.global_cb.has_value() && input_tensor_b.is_sharded()) {
-            if (input_tensor_b.buffer()->buffer_type() == tt_metal::BufferType::L1) {
+            if (input_tensor_b.memory_config().buffer_type() == tt_metal::BufferType::L1) {
                 TT_FATAL(
                     input_tensor_a.shard_spec().value().grid == input_tensor_b.shard_spec().value().grid,
                     "{}: input A and B must be sharded on the same cores for gather_in0, got A: {} vs B: {}",
@@ -2317,7 +2398,68 @@ void validate_matmul_mcast1d_config(
         TT_FATAL(!optional_bias.has_value(), "{}: Bias is not supported when using gather_in0.", config_name);
     } else {
         const auto device_grid_1d = input_tensor_a.device()->compute_with_storage_grid_size();
-        check_tensor_in_grid(input_tensor_a, device_grid_1d);
+        if (input_tensor_a.is_sharded()) {
+            // Anchor on allowed_worker_cores (matches factory at
+            // matmul_multicore_reuse_mcast_1d_program_factory.cpp:6944-6967).
+            const auto& worker = program_config.allowed_worker_cores.value();
+            CoreCoord start_core = worker.bounding_box().start_coord;
+            if (attributes.sub_device_id.has_value()) {
+                start_core = input_tensor_a.device()
+                                 ->worker_cores(
+                                     tt::tt_metal::HalProgrammableCoreType::TENSIX,
+                                     attributes.sub_device_id.value())
+                                 .bounding_box()
+                                 .start_coord;
+            }
+            const auto worker_bbox = worker.bounding_box();
+            const auto cwsg = worker_bbox.grid_size();
+            const CoreRangeSet matmul_core_rect(
+                CoreRange(start_core, CoreCoord(start_core.x + cwsg.x - 1, start_core.y + cwsg.y - 1)));
+            const uint32_t M =
+                operations::matmul::utilities::get_M_dim(a_shape_padded, in0_tile, program_config.fuse_batch);
+            const auto& shard_grid = input_tensor_a.shard_spec().value().grid;
+            // mcast_in0 pins exact count; mcast_in1 allows shard >= div_up(M, per_core_M) since the
+            // factory writes args only to the first `expected_cores` row-major cores.
+            const uint32_t expected_cores =
+                program_config.mcast_in0 ? shard_grid.num_cores() : tt::div_up(M, program_config.per_core_M);
+            TT_FATAL(
+                shard_grid.num_cores() >= expected_cores,
+                "{}: sharded in0 has {} cores but factory needs at least {}.",
+                config_name,
+                shard_grid.num_cores(),
+                expected_cores);
+            // Containment: every shard core must lie inside allowed_worker_cores (strictly tighter than
+            // the old device-grid check this branch replaces).
+            const auto shard_cores = tt::tt_metal::corerange_to_cores(shard_grid, std::nullopt, /*row_wise=*/true);
+            for (const auto& c : shard_cores) {
+                TT_FATAL(
+                    worker.contains(c),
+                    "{}: sharded in0 core {} is outside allowed_worker_cores {}.",
+                    config_name,
+                    c,
+                    worker);
+            }
+            // Factory writes per-core args row-major in the bbox rect; the first `expected_cores`
+            // row-major cores of the shard must match that enumeration (#60249 catch).
+            const auto expected_grid = tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(
+                start_core, expected_cores, matmul_core_rect, /*row_wise=*/true);
+            const auto expected_cores_vec =
+                tt::tt_metal::corerange_to_cores(expected_grid, std::nullopt, /*row_wise=*/true);
+            const std::vector<CoreCoord> shard_first_n(shard_cores.begin(), shard_cores.begin() + expected_cores);
+            TT_FATAL(
+                shard_first_n == expected_cores_vec,
+                "{}: first {} row-major cores of sharded in0 grid {} must match factory core set {} "
+                "(row-major from sub-device origin {}, cwsg {}x{}).",
+                config_name,
+                expected_cores,
+                shard_grid,
+                expected_grid,
+                start_core,
+                cwsg.x,
+                cwsg.y);
+        } else {
+            check_tensor_in_grid(input_tensor_a, device_grid_1d);
+        }
         if (!attributes.global_cb.has_value()) {
             check_tensor_in_grid(input_tensor_b, device_grid_1d);
         }
@@ -2399,7 +2541,7 @@ void validate_matmul_mcast1d_config(
                 program_config.out_block_h,
                 per_core_N);
         }
-        if (input_tensor_b.buffer()->buffer_type() == tt_metal::BufferType::L1 &&
+        if (input_tensor_b.memory_config().buffer_type() == tt_metal::BufferType::L1 &&
             input_tensor_b.memory_config().is_sharded()) {
             TT_FATAL(
                 input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
@@ -2412,6 +2554,23 @@ void validate_matmul_mcast1d_config(
                 config_name,
                 input_tensor_b.shard_spec().value().shape[1] / in1_tile.get_width(),
                 program_config.per_core_N);
+            TT_FATAL(
+                !attributes.transpose_b,
+                "{}: transpose_b is not supported with L1-sharded input B; the shards are consumed in their stored "
+                "layout",
+                config_name);
+            if (program_config.mcast_in0) {
+                // The in1 sender pushes the shard once, but compute pops one in1 block per batch, h-block, w-block
+                // and K-block, so more than one output block per core hangs.
+                validate_mcast_in0_one_output_block_per_worker(program_config, "L1-sharded input B");
+                TT_FATAL(
+                    program_config.fuse_batch || get_batch_size(a_shape_padded) == 1,
+                    "{}: mcast_in0 L1-sharded input B requires one effective activation batch, but fuse_batch={} and "
+                    "activation batch size={}",
+                    config_name,
+                    program_config.fuse_batch,
+                    get_batch_size(a_shape_padded));
+            }
             if (optional_bias.has_value()) {
                 TT_FATAL(
                     input_tensor_b.shard_spec().value().shape[1] == optional_bias.value().shard_spec().value().shape[1],
@@ -2652,6 +2811,7 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
     validate_matmul_operand_basics(input_tensor_a, input_tensor_b, in0_tile, in1_tile);
     validate_matmul_matrix_dimensions(a_shape, b_shape, a_shape_padded, b_shape_padded, in0_tile, in1_tile);
     validate_matmul_bfloat4_tile_dims(input_tensor_a, input_tensor_b, in0_tile, in1_tile);
+    validate_matmul_sharded_in0_transpose_a(attributes, input_tensor_a, a_shape_padded, in0_tile);
     validate_matmul_optional_tensors(attributes, args);
 
     // ---- choose + normalize the program config ----
@@ -2699,7 +2859,7 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
     validate_matmul_mcast1d_subdevice_worker_grid(input_tensor_a, attributes, chosen_program_config);
     validate_matmul_input_count(attributes, input_tensors, input_tensor_b, chosen_program_config);
     validate_matmul_bias_shape(
-        optional_bias, in0_tile, in1_tile, a_shape_padded, b_shape, b_shape_padded, chosen_program_config);
+        optional_bias, in0_tile, in1_tile, a_shape, a_shape_padded, b_shape, b_shape_padded, chosen_program_config);
     validate_matmul_untilize_out(attributes, chosen_program_config);
 
     // ---- per-config validation: one std::visit over the chosen program config ----
@@ -2853,6 +3013,9 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
         // for missing allowed_worker_cores was emitted at the entry point above.
         operations::matmul::normalize_program_config(
             chosen_program_config, input_tensor_a.device()->compute_with_storage_grid_size());
+        // launch() computes output specs before validate_on_program_cache_miss, and the branches below
+        // divide by per_core_M / per_core_N.
+        validate_matmul_compute_grid_and_per_core_dims(input_tensor_a, chosen_program_config);
         return std::visit(
             [&](const auto& program_config) -> MatmulDeviceOperation::spec_return_value_t {
                 using ProgramConfigType = std::decay_t<decltype(program_config)>;
@@ -3234,6 +3397,14 @@ MatmulParams create_matmul_attributes(
     TT_FATAL(device != nullptr, "Operand to matmul must be on device");
     auto arch = device->arch();
     const bool has_user_grid = parameters.user_core_coord.has_value();
+    if (has_user_grid) {
+        // The auto-generated configs split work by core_grid.x * core_grid.y.
+        TT_FATAL(
+            parameters.user_core_coord->x > 0 && parameters.user_core_coord->y > 0,
+            "matmul: core_grid must be non-zero, got ({}, {})",
+            parameters.user_core_coord->x,
+            parameters.user_core_coord->y);
+    }
     const bool has_program_config = parameters.program_config.has_value();
     bool are_inputs_low_precision_df =
         ((input_tensor_a.dtype() == DataType::BFLOAT8_B || input_tensor_a.dtype() == DataType::BFLOAT4_B) &&
@@ -3322,6 +3493,21 @@ MatmulParams create_matmul_attributes(
         parameters.in0_column_offset};
 }
 
+namespace {
+
+// A gather_in0 matmul over prefetcher_pipes runs its ring's kernels on boxes around the ring within the
+// sub-device that holds it. Recording the active sub-device manager, which lays the sub-devices out, puts
+// that layout in the program-cache key.
+void record_gather_in0_sub_device_manager(MatmulParams& attributes, const Tensor& input_tensor_a) {
+    const auto* program_config = std::get_if<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(
+        &attributes.program_config.value());
+    if (program_config != nullptr && program_config->gather_in0 && !attributes.prefetcher_pipes.empty()) {
+        attributes.gather_in0_sub_device_manager_id = input_tensor_a.device()->get_active_sub_device_manager_id();
+    }
+}
+
+}  // namespace
+
 MatmulDeviceOperation::tensor_return_value_t matmul(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
@@ -3346,6 +3532,7 @@ MatmulDeviceOperation::tensor_return_value_t matmul(
     }
     operations::matmul::normalize_program_config(
         normalized_attributes.program_config.value(), input_tensor_a.device()->compute_with_storage_grid_size());
+    record_gather_in0_sub_device_manager(normalized_attributes, input_tensor_a);
     return ttnn::device_operation::launch<MatmulDeviceOperation>(
         normalized_attributes, {{input_tensor_a, input_tensor_b}, {bias}, {optional_output_tensor}});
 }
@@ -3368,6 +3555,7 @@ MatmulDeviceOperation::tensor_return_value_t matmul(
     }
     operations::matmul::normalize_program_config(
         normalized_attributes.program_config.value(), input_tensors.at(0).device()->compute_with_storage_grid_size());
+    record_gather_in0_sub_device_manager(normalized_attributes, input_tensors.at(0));
     // validate requires optional_input_tensors.size() == 1; this path has no bias.
     return ttnn::device_operation::launch<MatmulDeviceOperation>(
         normalized_attributes, {input_tensors, {std::nullopt}, {optional_output_tensor}});

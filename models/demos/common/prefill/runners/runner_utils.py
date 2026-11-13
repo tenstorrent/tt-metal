@@ -187,6 +187,18 @@ def indexer_indices_global_spec(per_chip_shape, mesh_shape) -> ttnn.TensorSpec:
     )
 
 
+def export_d2d_pipeline_descriptor(receivers, rank: int, service_id: str, master_rank: int):
+    """Collective: the master writes every rank's D2D receivers to one file for the engine.
+
+    `receivers` lists this rank's receivers, one per pipeline stage it receives into. Returns the
+    file on the master (it removes the file when dropped) and None elsewhere.
+    """
+    descriptor = ttnn.D2DStreamService.export_pipeline_descriptor(service_id, receivers, root=master_rank)
+    if descriptor is not None:
+        logger.info(f"[pp rank {rank}] [d2d] pipeline descriptor service_id={service_id!r} -> {descriptor.path}")
+    return descriptor
+
+
 def resolve_trace_dir(path) -> Path:
     path = Path(path)
     if (path / "metadata.json").exists():

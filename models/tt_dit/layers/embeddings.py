@@ -20,7 +20,7 @@ ACT2CLS = {
     "silu": ttnn.silu,
     "mish": ttnn.mish,
     "gelu": ttnn.gelu,
-    "gelu_tanh": partial(ttnn.gelu, fast_and_approximate_mode=True),
+    "gelu_tanh": partial(ttnn.gelu, variant=ttnn.GeluVariant.Tanh),
     "relu": ttnn.relu,
 }
 
@@ -207,7 +207,7 @@ class CombinedTimestepGuidanceTextProjEmbeddings(Module):
         exponent = exponent / half_dim
         factor = torch.exp(exponent)
 
-        return ttnn.unsqueeze_to_4D(bf16_tensor(factor, device=self.mesh_device))
+        return ttnn.unsqueeze_to_4D(typed_tensor(factor, dtype=ttnn.float32, device=self.mesh_device))
 
     # In order to avoid calling `unsqueeze` in this function, we expect already unsqueezed rank two
     # `timestep` and `guidance` tensors.

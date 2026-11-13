@@ -4,37 +4,26 @@
 
 #include "impl/metal2_host_api/program_spec/construction/resource/resource.hpp"
 
-#include <algorithm>
 #include <cstdint>
 #include <limits>
-#include <map>
 #include <memory>
-#include <numeric>
 #include <optional>
-#include <set>
 #include <string>
-#include <string_view>
 #include <unordered_map>
-#include <unordered_set>
 #include <utility>
-#include <variant>
 #include <vector>
 
-#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_distribution_spec.hpp>
 #include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>  // fmt::formatter<tt::DataFormat> for TT_FATAL messages
+#include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
 #include <hostdevcommon/tensor_accessor/arg_config.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
 
-#include "impl/metal2_host_api/helpers.hpp"
 #include "impl/metal2_host_api/llk_metadata.hpp"
-#include "impl/context/metal_context.hpp"
+#include <tt-metalium/math.hpp>
 
 namespace tt::tt_metal::experimental {
 
@@ -99,6 +88,13 @@ ResolvedTensorParameter ResolveTensorParameterStaticCTAs(
     const bool dyn_page = tensor_parameter.relaxations.dynamic_tensor_shape &&
                           !tensor_parameter.relaxations.match_page_size && !is_sharded &&
                           spec.layout() == Layout::ROW_MAJOR;
+    // dynamic_tensor_shape's runtime accessor fields would have no reader: a per-node binding builds only a
+    // LocalTensorAccessor, which reads just its base address.
+    const bool is_per_node = per_core_allocation::is_per_core_allocation(memory_config);
+    TT_FATAL(
+        !is_per_node || !tensor_parameter.relaxations.dynamic_tensor_shape,
+        "TensorParameter '{}' is per-node allocated, which does not support dynamic_tensor_shape",
+        tensor_parameter.unique_id);
 
     tensor_accessor::ArgsConfig args_config;
     if (is_sharded) {
@@ -125,7 +121,7 @@ ResolvedTensorParameter ResolveTensorParameterStaticCTAs(
         aligned_page_size,
         std::numeric_limits<uint32_t>::max());
 
-    ResolvedTensorParameter result{.llk_metadata = LLKMetadataFromTensorSpec(spec)};
+    ResolvedTensorParameter result{.is_per_node = is_per_node, .llk_metadata = LLKMetadataFromTensorSpec(spec)};
     std::vector<uint32_t>& cta_payload = result.cta_payload;
 
     // Common header (always emitted, sharded or not):
@@ -218,10 +214,13 @@ ResolvedTensorParameter ResolveTensorParameterStaticCTAs(
 //  1. Walk the kernel's tensor_bindings in declaration order
 //  2. Pack each binding's CTA payload into a contiguous positional buffer
 //  3. Assign each binding a slot in the kernel's TensorBinding section of the CRTA buffer.
-//     The section is structurally separate, immediately following the user-named CRTAs.
+//     The section is structurally separate, immediately following the user-named CRTAs
+//     (base_named_crta_words: the scalars, then the arrays).
 //     Each binding occupies (1 + extra_crta_words) words: the always-present base address
 //     word, plus any runtime accessor field words (e.g. shape, when dynamic_tensor_shape
 //     is set on a sharded TensorParameter).
+//     A per-node binding instead takes one address slot in each node's RTA buffer, in a section
+//     immediately following the user-named RTAs, and no CRTA words.
 //  4. Record the resulting CRTA buffer layout (the three section sizes) on the output, so
 //     the headergen and runtime can consult it directly instead of re-summing the bindings.
 //
@@ -230,7 +229,8 @@ ResolvedTensorParameter ResolveTensorParameterStaticCTAs(
 TensorBindingsForKernel ResolveTensorBindingsForKernel(
     const KernelSpec& kernel,
     const std::unordered_map<TensorParamName, ResolvedTensorParameter>& resolved_tensor_parameters,
-    size_t base_named_crta_count,
+    size_t base_named_crta_words,
+    size_t base_named_rta_words,
     uint32_t base_cta_offset) {
     TensorBindingsForKernel out;
     out.handles.reserve(kernel.tensor_bindings.size());
@@ -238,7 +238,8 @@ TensorBindingsForKernel ResolveTensorBindingsForKernel(
     // Absolute word index into the unified positional CTA buffer:
     //   [ CTA varargs (base_cta_offset words) | TensorBinding payloads ... ]
     uint32_t cta_word_offset = base_cta_offset;
-    size_t crta_word_index = base_named_crta_count;
+    size_t crta_word_index = base_named_crta_words;
+    size_t rta_word_index = base_named_rta_words;
     uint32_t binding_section_words = 0;
     for (const auto& binding : kernel.tensor_bindings) {
         const ResolvedTensorParameter& resolved = resolved_tensor_parameters.at(binding.tensor_parameter_name);
@@ -248,23 +249,32 @@ TensorBindingsForKernel ResolveTensorBindingsForKernel(
         handle.accessor_name = binding.accessor_name;
         handle.tensor_parameter_name = binding.tensor_parameter_name.get();
         handle.cta_offset = cta_word_offset;
-        handle.addr_crta_offset = static_cast<uint32_t>(crta_word_index * sizeof(uint32_t));
-        handle.num_runtime_field_crta_words = resolved.extra_crta_words;
-        handle.runtime_field_is_page_size = resolved.runtime_field_is_page_size;
         handle.llk_metadata = resolved.llk_metadata;
+        handle.is_per_node = resolved.is_per_node;
+        if (resolved.is_per_node) {
+            handle.addr_rta_offset = static_cast<uint32_t>(rta_word_index * sizeof(uint32_t));
+            ++rta_word_index;
+        } else {
+            handle.addr_crta_offset = static_cast<uint32_t>(crta_word_index * sizeof(uint32_t));
+            handle.num_runtime_field_crta_words = resolved.extra_crta_words;
+            handle.runtime_field_is_page_size = resolved.runtime_field_is_page_size;
+            const uint32_t binding_words = 1u + resolved.extra_crta_words;
+            crta_word_index += binding_words;
+            binding_section_words += binding_words;
+        }
 
         out.cta_words.insert(out.cta_words.end(), binding_ctas.begin(), binding_ctas.end());
         cta_word_offset += static_cast<uint32_t>(binding_ctas.size());
-        const uint32_t binding_words = 1u + resolved.extra_crta_words;
-        crta_word_index += binding_words;
-        binding_section_words += binding_words;
 
         out.handles.push_back(std::move(handle));
     }
 
-    out.crta_layout.num_named_words = static_cast<uint32_t>(base_named_crta_count);
+    out.crta_layout.num_named_words = static_cast<uint32_t>(base_named_crta_words);
     out.crta_layout.binding_section_words = binding_section_words;
-    out.crta_layout.vararg_section_offset = static_cast<uint32_t>(base_named_crta_count) + binding_section_words;
+    out.crta_layout.vararg_section_offset = static_cast<uint32_t>(base_named_crta_words) + binding_section_words;
+    out.rta_layout.num_named_words = static_cast<uint32_t>(base_named_rta_words);
+    out.rta_layout.binding_section_words = static_cast<uint32_t>(rta_word_index - base_named_rta_words);
+    out.rta_layout.vararg_section_offset = static_cast<uint32_t>(rta_word_index);
 
     return out;
 }

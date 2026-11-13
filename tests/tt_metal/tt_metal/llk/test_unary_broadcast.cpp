@@ -488,7 +488,7 @@ void run_single_core_unary_broadcast(distributed::MeshDevice& mesh_device, const
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload workload;
-    Program program = tt_metal::CreateProgram();
+    Program program = tt_metal::CreateProgram(mesh_device);
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
     CoreCoord core = {0, 0};

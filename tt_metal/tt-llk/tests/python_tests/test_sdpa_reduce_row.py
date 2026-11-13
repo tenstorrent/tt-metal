@@ -47,7 +47,7 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
 )
 from helpers.tilize_untilize import tilize_block, untilize_block
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 # Number of columns folded into one reduced row. sdpa.h: one tile is "8x32", so each logical row
 # spans 32 columns.
@@ -145,7 +145,7 @@ def test_sdpa_reduce_row(
     )
     res_from_L1 = configuration.run().result
 
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = result_tensor(res_from_L1, formats.output_format)
     res_tensor = untilize_block(res_tensor, formats.output_format, input_dimensions)
 
     # Validate ONLY column 0 (the op's defined output lane). Every other lane is undefined.

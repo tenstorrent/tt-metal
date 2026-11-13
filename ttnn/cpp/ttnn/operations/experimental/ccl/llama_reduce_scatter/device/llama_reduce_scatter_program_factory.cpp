@@ -706,6 +706,7 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_desc
             if (plan.forward_fabric_node_id.has_value()) {
                 const auto target_device_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
                 tt::tt_fabric::append_fabric_connection_rt_args<ProgramDescriptor>(
+                    *mesh_device,
                     target_device_fabric_node_id,
                     plan.forward_fabric_node_id.value(),
                     core_args.link_idx,
@@ -717,6 +718,7 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_desc
             if (plan.backward_fabric_node_id.has_value()) {
                 const auto target_device_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
                 tt::tt_fabric::append_fabric_connection_rt_args<ProgramDescriptor>(
+                    *mesh_device,
                     target_device_fabric_node_id,
                     plan.backward_fabric_node_id.value(),
                     core_args.link_idx,
@@ -791,11 +793,10 @@ void LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::override_runtime_
     const std::optional<ttnn::MeshCoordinate>&) {
     // This hook replaces binding patching, so the globally allocated circular buffers are refreshed here by
     // CBIndex, then the caller semaphore, which is not in the program hash.
-    TT_FATAL(tensor_args.input_tensor.buffer() != nullptr, "llama_reduce_scatter input tensor must have a buffer");
-    TT_FATAL(tensor_return_value.buffer() != nullptr, "llama_reduce_scatter output tensor must have a buffer");
+    TT_FATAL(tensor_args.input_tensor.is_allocated(), "llama_reduce_scatter input tensor must have a buffer");
+    TT_FATAL(tensor_return_value.is_allocated(), "llama_reduce_scatter output tensor must have a buffer");
     TT_FATAL(
-        tensor_args.intermediate_packet_buffer.buffer() != nullptr,
-        "llama_reduce_scatter packet buffer must have a buffer");
+        tensor_args.intermediate_packet_buffer.is_allocated(), "llama_reduce_scatter packet buffer must have a buffer");
 
     constexpr uint32_t kExpectedGlobalCbs = 3;
     uint32_t updated_global_cbs = 0;

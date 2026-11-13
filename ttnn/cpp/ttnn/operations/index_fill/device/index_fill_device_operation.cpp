@@ -6,16 +6,17 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 namespace ttnn::operations::index_fill {
 
-void IndexFillOperation::validate(
+void IndexFillOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
     const auto& index = tensor_args.index;
     const uint32_t dim = operation_attributes.dim;
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Index fill: Input must be on device");
-    TT_FATAL(input.buffer() != nullptr, "Index fill: Input must be allocated in buffer on device");
+    TT_FATAL(input.is_allocated(), "Index fill: Input must be allocated in buffer on device");
     TT_FATAL(input.layout() == Layout::ROW_MAJOR, "Index fill: Only supporting row major layout");
 
     auto input_mem_layout = input.memory_config().memory_layout();
@@ -40,12 +41,7 @@ void IndexFillOperation::validate(
     // is that the column shard WIDTH (shard_spec.shape[1]) — and hence the column shard count
     // KW — matches between input and output. The row sharding (BLOCK's shard height) may
     // differ freely, since rows are distributed by the accessor, not by the page formula.
-    bool input_is_col_sharded =
-        (input_mem_layout == TensorMemoryLayout::WIDTH_SHARDED ||
-         input_mem_layout == TensorMemoryLayout::BLOCK_SHARDED);
-    bool out_is_col_sharded =
-        (out_mem_layout == TensorMemoryLayout::WIDTH_SHARDED || out_mem_layout == TensorMemoryLayout::BLOCK_SHARDED);
-    if (input_is_col_sharded && out_is_col_sharded) {
+    if (is_col_sharded(input_mem_layout) && is_col_sharded(out_mem_layout)) {
         TT_FATAL(
             input.shard_spec().has_value() && operation_attributes.memory_config.shard_spec().has_value(),
             "Index fill: both input and output must have a shard spec when both are column-sharded");
@@ -59,7 +55,7 @@ void IndexFillOperation::validate(
 
     // Validate index tensor properties expected by the kernel.
     TT_FATAL(index.storage_type() == StorageType::DEVICE, "Index fill: Index tensor must be on device");
-    TT_FATAL(index.buffer() != nullptr, "Index fill: Index tensor must be allocated in buffer on device");
+    TT_FATAL(index.is_allocated(), "Index fill: Index tensor must be allocated in buffer on device");
     TT_FATAL(index.logical_shape().rank() == 1, "Index fill: Index tensor must be 1D");
     TT_FATAL(
         index.dtype() == DataType::UINT32,
@@ -69,7 +65,7 @@ void IndexFillOperation::validate(
         index.device() == input.device(),
         "Index fill: Index tensor must be on the same device as input");
 
-    TT_FATAL(dim < input.logical_shape().rank() && dim >= 0, "Index fill: Invalid dimension");
+    TT_FATAL(dim < input.logical_shape().rank(), "Index fill: Invalid dimension");
 
     // Check that value variant type matches input tensor dtype
     const auto& value = operation_attributes.value;
@@ -90,17 +86,13 @@ void IndexFillOperation::validate(
         input_dtype,
         value_is_float ? "float" : "int");
 }
-void IndexFillOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate(operation_attributes, tensor_args);
-}
 
 IndexFillOperation::spec_return_value_t IndexFillOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& old_spec = tensor_args.input.tensor_spec();
     return tt::tt_metal::TensorSpec(
         old_spec.logical_shape(),
-        tt::tt_metal::TensorLayout(
+        tt::tt_metal::experimental::tensor_layout_with_custom_alignment(
             old_spec.tensor_layout().get_data_type(),
             old_spec.tensor_layout().get_page_config(),
             operation_attributes.memory_config,

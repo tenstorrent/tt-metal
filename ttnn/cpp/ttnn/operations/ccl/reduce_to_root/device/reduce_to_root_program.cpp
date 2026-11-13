@@ -85,8 +85,13 @@ inline void fabric_mux_ct_args(
     std::vector<uint32_t>& worker_ct_args) {
     worker_ct_args.push_back(mux_kernel_config.get_num_buffers(channel_type));  // fabric_mux_num_buffers_per_channel
     worker_ct_args.push_back(
-        mux_kernel_config.get_buffer_size_bytes(channel_type));        // fabric_mux_channel_buffer_size_bytes
-    worker_ct_args.push_back(mux_kernel_config.get_status_address());  // fabric_mux_status_address
+        mux_kernel_config.get_buffer_size_bytes(channel_type));  // fabric_mux_channel_buffer_size_bytes
+    // A mux in program-local L1 publishes its map's address in a semaphore, which its clients wait on in place of the
+    // status word; every other mux address is then an offset from that address.
+    worker_ct_args.push_back(
+        mux_kernel_config.is_in_program_local_l1()
+            ? mux_kernel_config.get_l1_base_semaphore_id()
+            : mux_kernel_config.get_status_address());  // fabric_mux_status_address or l1_base_semaphore_id
     worker_ct_args.push_back(
         mux_kernel_config.get_termination_signal_address());  // fabric_mux_termination_signal_address
     worker_ct_args.push_back(num_workers_per_direction);      // num_mux_clients
@@ -212,7 +217,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
     uint32_t head_dim_v = input_num_tiles * tile_width;
     // auto q_shape = {1, 1, 8, 512} ; //{1, B, PNH, DH};
     // auto k_shape = {1, 8, 256, 512}; //{B, NKV, S, DH};
-    uint32_t PNH = 8;  // q_shape[2],
+    uint32_t PNH = 8;                            // q_shape[2],
     uint32_t DH = input_num_tiles * tile_width;  // k_shape[3];
     uint32_t DHt = DH / tile_width;
     uint32_t vDHt = use_mla ? head_dim_v / tile_width : DHt;
@@ -468,9 +473,6 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
     std::vector<uint32_t> compute_ct_args;
 
     // 1. Setup muxes for each device type
-    const uint32_t l1_unreserved_base_address =
-        mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    const size_t mux_base_l1_address = l1_unreserved_base_address;
     const uint32_t num_workers_per_direction = 4;
     const auto buffer_size_bytes_full_size_channel =
         tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device);
@@ -488,8 +490,11 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
 
     CoreRangeSet mux_core_range_set = CoreRangeSet(mux_cores);
 
+    // The mux's map goes in program-local L1 (a circular buffer on the mux cores), so it stays clear of persistent
+    // L1 there; its addresses are offsets until the mux publishes the map's base.
     tt::tt_fabric::FabricMuxConfig mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
-        num_workers_per_direction, 0, 2, 0, buffer_size_bytes_full_size_channel, mux_base_l1_address);
+        *mesh_device, num_workers_per_direction, 0, 2, 0, buffer_size_bytes_full_size_channel, /*base_l1_address=*/0);
+    mux_kernel_config.place_in_program_local_l1(program, mux_core_range_set);
 
     auto mux_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -705,7 +710,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
                 const auto src_node_id = mesh_device->get_fabric_node_id(send_coord);
                 const auto dst_node_id = mesh_device->get_fabric_node_id(receive_coord);
                 mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
-                    src_node_id, dst_node_id, link_idx, program, {mux_logical_core});
+                    *mesh_device, src_node_id, dst_node_id, link_idx, program, {mux_logical_core});
                 tt::tt_metal::SetRuntimeArgs(program, mux_kernel_id, {mux_logical_core}, mux_rt_args);
             }
         }
@@ -721,15 +726,15 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
 
             if (is_sender_device) {
                 reader_runtime_args = {
-                    input_tensor_l.buffer()->address(),
-                    input_tensor_s.buffer()->address(),
-                    input_tensor_m.buffer()->address(),
+                    input_tensor_l.mesh_buffer().address(),
+                    input_tensor_s.mesh_buffer().address(),
+                    input_tensor_m.mesh_buffer().address(),
                     core_noc_x,
                     core_noc_y};
                 tt::tt_metal::SetRuntimeArgs(program, reader_kernel, c, reader_runtime_args);
 
                 writer_runtime_args = {
-                    intermediate_tensor.buffer()->address(),
+                    intermediate_tensor.mesh_buffer().address(),
                     semaphore_round1.address(),
                     core_noc_x,
                     core_noc_y,
@@ -753,10 +758,10 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
                     mesh_device->worker_core_from_logical_core(all_mux_cores[start_idx + 1]);
                 reader_runtime_args = {
                     0,  // fabric_2_idx,
-                    input_tensor_l.buffer()->address(),
-                    input_tensor_s.buffer()->address(),
-                    input_tensor_m.buffer()->address(),
-                    intermediate_tensor.buffer()->address(),
+                    input_tensor_l.mesh_buffer().address(),
+                    input_tensor_s.mesh_buffer().address(),
+                    input_tensor_m.mesh_buffer().address(),
+                    intermediate_tensor.mesh_buffer().address(),
                     semaphore_round1.address(),
                     semaphore_round2.address(),
                     core_noc_x,
@@ -790,9 +795,9 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
 
                 tt::tt_metal::SetRuntimeArgs(program, reader_kernel, c, reader_runtime_args);
                 writer_runtime_args = {
-                    output_tensor_l.buffer()->address(),
-                    output_tensor_s.buffer()->address(),
-                    output_tensor_m.buffer()->address(),
+                    output_tensor_l.mesh_buffer().address(),
+                    output_tensor_s.mesh_buffer().address(),
+                    output_tensor_m.mesh_buffer().address(),
                     core_noc_x,
                     core_noc_y};
                 tt::tt_metal::SetRuntimeArgs(program, writer_kernel, c, writer_runtime_args);
@@ -801,10 +806,10 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
                 CoreCoord mux_virtual_core_bwd =
                     mesh_device->worker_core_from_logical_core(all_mux_cores[start_idx + 1]);
                 reader_runtime_args = {
-                    input_tensor_l.buffer()->address(),
-                    input_tensor_s.buffer()->address(),
-                    input_tensor_m.buffer()->address(),
-                    intermediate_tensor.buffer()->address(),
+                    input_tensor_l.mesh_buffer().address(),
+                    input_tensor_s.mesh_buffer().address(),
+                    input_tensor_m.mesh_buffer().address(),
+                    intermediate_tensor.mesh_buffer().address(),
                     semaphore_round1.address(),
                     core_noc_x,
                     core_noc_y};
@@ -822,7 +827,7 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
 
                 tt::tt_metal::SetRuntimeArgs(program, reader_kernel, c, reader_runtime_args);
                 writer_runtime_args = {
-                    intermediate_tensor.buffer()->address(), semaphore_round2.address(), core_noc_x, core_noc_y};
+                    intermediate_tensor.mesh_buffer().address(), semaphore_round2.address(), core_noc_x, core_noc_y};
                 fabric_mux_rt_args(
                     c == termination_master,
                     tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
@@ -886,13 +891,13 @@ void ReduceToRootOp::ReduceToRoot::override_runtime_arguments(
             for (const auto& core : shared_variables.cores) {
                 // Update reader runtime args - input tensor addresses
                 auto& reader_runtime_args = reader_runtime_args_by_core[core.x][core.y];
-                reader_runtime_args[0] = input_tensor_l.buffer()->address();
-                reader_runtime_args[1] = input_tensor_s.buffer()->address();
-                reader_runtime_args[2] = input_tensor_m.buffer()->address();
+                reader_runtime_args[0] = input_tensor_l.mesh_buffer().address();
+                reader_runtime_args[1] = input_tensor_s.mesh_buffer().address();
+                reader_runtime_args[2] = input_tensor_m.mesh_buffer().address();
 
                 // Update writer runtime args - intermediate tensor address and semaphore
                 auto& writer_runtime_args = writer_runtime_args_by_core[core.x][core.y];
-                writer_runtime_args[0] = intermediate_tensors_l[0].buffer()->address();
+                writer_runtime_args[0] = intermediate_tensors_l[0].mesh_buffer().address();
                 writer_runtime_args[1] = shared_variables.semaphores[0].address();
             }
         }
@@ -907,18 +912,18 @@ void ReduceToRootOp::ReduceToRoot::override_runtime_arguments(
             for (const auto& core : shared_variables.cores) {
                 // Update reader runtime args
                 auto& reader_runtime_args = reader_runtime_args_by_core[core.x][core.y];
-                reader_runtime_args[1] = input_tensor_l.buffer()->address();
-                reader_runtime_args[2] = input_tensor_s.buffer()->address();
-                reader_runtime_args[3] = input_tensor_m.buffer()->address();
-                reader_runtime_args[4] = intermediate_tensors_l[0].buffer()->address();
+                reader_runtime_args[1] = input_tensor_l.mesh_buffer().address();
+                reader_runtime_args[2] = input_tensor_s.mesh_buffer().address();
+                reader_runtime_args[3] = input_tensor_m.mesh_buffer().address();
+                reader_runtime_args[4] = intermediate_tensors_l[0].mesh_buffer().address();
                 reader_runtime_args[5] = shared_variables.semaphores[0].address();
                 reader_runtime_args[6] = shared_variables.semaphores[1].address();
 
                 // Update writer runtime args - output tensor addresses
                 auto& writer_runtime_args = writer_runtime_args_by_core[core.x][core.y];
-                writer_runtime_args[0] = output_tensors_l[0].buffer()->address();
-                writer_runtime_args[1] = output_tensors_l[1].buffer()->address();
-                writer_runtime_args[2] = output_tensors_l[2].buffer()->address();
+                writer_runtime_args[0] = output_tensors_l[0].mesh_buffer().address();
+                writer_runtime_args[1] = output_tensors_l[1].mesh_buffer().address();
+                writer_runtime_args[2] = output_tensors_l[2].mesh_buffer().address();
             }
         }
 
@@ -932,15 +937,15 @@ void ReduceToRootOp::ReduceToRoot::override_runtime_arguments(
             for (const auto& core : shared_variables.cores) {
                 // Update reader runtime args
                 auto& reader_runtime_args = reader_runtime_args_by_core[core.x][core.y];
-                reader_runtime_args[0] = input_tensor_l.buffer()->address();
-                reader_runtime_args[1] = input_tensor_s.buffer()->address();
-                reader_runtime_args[2] = input_tensor_m.buffer()->address();
-                reader_runtime_args[3] = intermediate_tensors_l[0].buffer()->address();
+                reader_runtime_args[0] = input_tensor_l.mesh_buffer().address();
+                reader_runtime_args[1] = input_tensor_s.mesh_buffer().address();
+                reader_runtime_args[2] = input_tensor_m.mesh_buffer().address();
+                reader_runtime_args[3] = intermediate_tensors_l[0].mesh_buffer().address();
                 reader_runtime_args[4] = shared_variables.semaphores[0].address();
 
                 // Update writer runtime args - intermediate and output tensor addresses
                 auto& writer_runtime_args = writer_runtime_args_by_core[core.x][core.y];
-                writer_runtime_args[0] = intermediate_tensors_l[0].buffer()->address();
+                writer_runtime_args[0] = intermediate_tensors_l[0].mesh_buffer().address();
                 writer_runtime_args[1] = shared_variables.semaphores[1].address();
             }
         }

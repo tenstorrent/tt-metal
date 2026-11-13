@@ -142,3 +142,60 @@ def test_moreh_matmul_1d_callback(input_shape, dtype, device):
 def test_moreh_dot_optional_output_tensor(input_shape, dtype, device):
     torch.manual_seed(3072)
     run_moreh_dot_test(input_shape, dtype, device, use_optional_output=True)
+
+
+@pytest.mark.parametrize(
+    "dtype_a, dtype_b",
+    (
+        (ttnn.bfloat8_b, ttnn.bfloat8_b),
+        (ttnn.bfloat16, ttnn.bfloat8_b),
+        (ttnn.bfloat8_b, ttnn.bfloat16),
+    ),
+)
+@pytest.mark.parametrize("input_shape", ([1, 1, 1, 10], [1, 1, 1, 323]))
+def test_moreh_dot_rejects_unsupported_input_dtype(input_shape, dtype_a, dtype_b, device, expect_error):
+    torch.manual_seed(3072)
+    tt_input = ttnn.from_torch(torch.rand(input_shape), device=device, dtype=dtype_a, layout=ttnn.TILE_LAYOUT)
+    tt_other = ttnn.from_torch(torch.rand(input_shape), device=device, dtype=dtype_b, layout=ttnn.TILE_LAYOUT)
+    with expect_error(RuntimeError, "only BFLOAT16 is supported|must match input_a dtype"):
+        ttnn.operations.moreh.dot(tt_input, tt_other)
+
+
+@pytest.mark.parametrize("dtype", (ttnn.int32, ttnn.float32))
+@pytest.mark.parametrize("use_optional_output", (False, True))
+@pytest.mark.parametrize("input_shape", ([1, 1, 1, 32], [1, 1, 1, 323]))
+def test_moreh_dot_output_dtype(input_shape, dtype, use_optional_output, device):
+    torch.manual_seed(3072)
+    torch_input = torch.randint(-2, 3, input_shape).to(torch.bfloat16)
+    torch_other = torch.randint(-2, 3, input_shape).to(torch.bfloat16)
+    tt_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    tt_other = ttnn.from_torch(torch_other, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
+    if use_optional_output:
+        torch_out_dtype = torch.int32 if dtype == ttnn.int32 else torch.float32
+        optional_output = ttnn.from_torch(
+            torch.zeros([1, 1, 1, 1], dtype=torch_out_dtype), device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT
+        )
+        tt_out = ttnn.operations.moreh.dot(tt_input, tt_other, output=optional_output)
+        tt_results = [tt_out, optional_output]
+    else:
+        tt_out = ttnn.operations.moreh.dot(tt_input, tt_other, dtype=dtype)
+        tt_results = [tt_out]
+
+    expected = torch.matmul(torch_input.float().reshape(-1), torch_other.float().reshape(-1)).item()
+    for tt_result in tt_results:
+        assert tt_result.dtype == dtype
+        actual = ttnn.to_torch(tt_result).reshape(-1)[0].item()
+        logger.debug(f"actual={actual} expected={expected}")
+        assert abs(actual - expected) <= 1.0 + 0.02 * abs(expected)
+
+
+def test_moreh_dot_dtype_conflicts_with_optional_output(device, expect_error):
+    input_shape = [1, 1, 1, 32]
+    tt_input = ttnn.from_torch(torch.rand(input_shape), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    tt_other = ttnn.from_torch(torch.rand(input_shape), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    optional_output = ttnn.from_torch(
+        torch.zeros([1, 1, 1, 1], dtype=torch.int32), device=device, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT
+    )
+    with expect_error(RuntimeError, "does not match the output tensor dtype"):
+        ttnn.operations.moreh.dot(tt_input, tt_other, dtype=ttnn.bfloat16, output=optional_output)

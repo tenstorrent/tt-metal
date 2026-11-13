@@ -93,7 +93,7 @@ void TypecastDeviceOperation::validate_on_program_cache_miss(
         static_cast<int>(input_tensor.storage_type()));
 
     TT_FATAL(
-        input_tensor.buffer() != nullptr,
+        input_tensor.is_allocated(),
         "Operands to Typecast need to be allocated in buffers on the device. Buffer is null.");
 
     if (input_tensor.layout() == Layout::ROW_MAJOR) {
@@ -111,9 +111,9 @@ void TypecastDeviceOperation::validate_on_program_cache_miss(
 
     if (input_tensor.is_sharded()) {
         const uint32_t l1_alignment = hal::get_l1_alignment();
-        const uint32_t page_size_bytes = input_tensor.buffer()->page_size();
+        const uint32_t page_size_bytes = input_tensor.mesh_buffer().page_size();
         TT_FATAL(
-            page_size_bytes == input_tensor.buffer()->aligned_page_size(),
+            page_size_bytes == input_tensor.mesh_buffer().aligned_page_size(),
             "Typecast operation requires sharded input tensor page size ({} bytes) to be aligned to L1 ({} bytes)",
             page_size_bytes,
             l1_alignment);

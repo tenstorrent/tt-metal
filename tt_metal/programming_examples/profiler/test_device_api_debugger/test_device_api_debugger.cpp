@@ -22,7 +22,7 @@ void RunFillUpAllBuffers(const std::shared_ptr<distributed::MeshDevice>& mesh_de
     // Mesh workload + device range span the mesh; program encapsulates kernels
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
     constexpr uint32_t buffer_page_size = 4096;
     constexpr uint32_t buffer_size = buffer_page_size * 4;

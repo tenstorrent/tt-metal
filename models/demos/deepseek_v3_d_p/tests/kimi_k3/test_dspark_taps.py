@@ -22,6 +22,7 @@ from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, 
 from models.demos.deepseek_v3_d_p.tests.attn_res.checkpoint_utils import load_attn_res_state_dict
 from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import resolve_model_root
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.golden import TRACE_1M, resolve_checkpoint, resolve_trace
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.kda_slabs import attach_kda_states
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.test_transformer_depth import (
     DEEP_LAYER_PCC,
     PLACEMENTS,
@@ -39,7 +40,6 @@ from models.demos.deepseek_v3_d_p.tt.kimi_k3.residual import TtAttnResResidual
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import cache_root
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor
-from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import allocate_mla_kvpe_cache
 
 # The same taps test_dflash_golden_pcc feeds the drafter.
@@ -72,7 +72,6 @@ def test_dspark_taps_match_golden(mesh_device, device_params, num_layers):
         hidden_size=KimiK3Config.EMB_SIZE,
         eps=KimiK3Config.RMS_NORM_EPS,
         tp_axis=TP_AXIS,
-        tt_ccl=get_tt_ccl(mesh_device),
         weights=load_attn_res_weights(
             mesh_device,
             load_attn_res_state_dict(checkpoint, num_layers, root),
@@ -107,6 +106,7 @@ def test_dspark_taps_match_golden(mesh_device, device_params, num_layers):
         max_seq_len=SEQ_LEN,
         weight_cache_path=cache,
     )
+    slabs = attach_kda_states(mesh_device, model, sp_axis=SP_AXIS, tp_axis=TP_AXIS)
     kvpe = None
     if model.schedule.num_mla_layers:
         kvpe = allocate_mla_kvpe_cache(
@@ -137,8 +137,8 @@ def test_dspark_taps_match_golden(mesh_device, device_params, num_layers):
     try:
         model.forward(tokens_tt, kvpe_cache=kvpe, on_layer_hidden=tap)
     finally:
-        if model.kda_states is not None:
-            model.kda_states.deallocate()
+        if slabs is not None:
+            slabs.deallocate()
 
     for t in targets:
         with safe_open(taps_dir / f"tap_layer_{t}.safetensors", framework="pt") as f:

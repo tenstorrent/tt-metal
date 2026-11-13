@@ -715,6 +715,9 @@ def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
 
 
+_EAGER_QUERY_BLOCK = 1024
+
+
 def eager_attention_forward(
     module: nn.Module,
     query: torch.Tensor,
@@ -727,23 +730,28 @@ def eager_attention_forward(
 ):
     key_states = repeat_kv(key, module.num_key_value_groups)
     value_states = repeat_kv(value, module.num_key_value_groups)
-    attn_weights = torch.matmul(query, key_states.transpose(2, 3)) * scaling
-    if attention_mask is not None:
-        attn_weights = attn_weights + attention_mask
+    outputs = []
+    # Softmax is per query row, so blocking the rows is exact. Unblocked, the fp32 scores and their
+    # copies take ~190 GB per Pro layer at 10k tokens; the weights are not returned for the same reason.
+    for start in range(0, query.shape[-2], _EAGER_QUERY_BLOCK):
+        rows = slice(start, start + _EAGER_QUERY_BLOCK)
+        attn_weights = torch.matmul(query[..., rows, :], key_states.transpose(2, 3)) * scaling
+        if attention_mask is not None:
+            attn_weights = attn_weights + attention_mask[..., rows, :]
 
-    sinks = module.sinks.reshape(1, -1, 1, 1).expand(query.shape[0], -1, query.shape[-2], -1)
-    combined_logits = torch.cat([attn_weights, sinks], dim=-1)
+        sinks = module.sinks.reshape(1, -1, 1, 1).expand(query.shape[0], -1, attn_weights.shape[-2], -1)
+        combined_logits = torch.cat([attn_weights, sinks], dim=-1)
 
-    # This was not in the original implementation and slightly affect results; it prevents overflow in BF16/FP16
-    # when training with bsz>1 we clamp max values.
+        # This was not in the original implementation and slightly affect results; it prevents overflow in BF16/FP16
+        # when training with bsz>1 we clamp max values.
 
-    combined_logits = combined_logits - combined_logits.max(dim=-1, keepdim=True).values
-    probs = F.softmax(combined_logits, dim=-1, dtype=combined_logits.dtype)
-    scores = probs[..., :-1]  # we drop the sink here
-    attn_weights = nn.functional.dropout(scores, p=dropout, training=module.training).to(value_states.dtype)
-    attn_output = torch.matmul(attn_weights, value_states)
-    attn_output = attn_output.transpose(1, 2).contiguous()
-    return attn_output, attn_weights
+        combined_logits = combined_logits - combined_logits.max(dim=-1, keepdim=True).values
+        probs = F.softmax(combined_logits, dim=-1, dtype=combined_logits.dtype)
+        scores = probs[..., :-1]  # we drop the sink here
+        attn_weights = nn.functional.dropout(scores, p=dropout, training=module.training).to(value_states.dtype)
+        outputs.append(torch.matmul(attn_weights, value_states))
+    attn_output = torch.cat(outputs, dim=-2).transpose(1, 2).contiguous()
+    return attn_output, None
 
 
 COMPRESSOR_CLASSES = {

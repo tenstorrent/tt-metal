@@ -8,7 +8,7 @@
 
 #if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC)
 #include "api/dataflow/dataflow_api.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #elif defined(COMPILE_FOR_TRISC)
 #include <cstdint>
 #ifndef REDUCE_OP
@@ -24,7 +24,7 @@
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/eltwise_binary.h"
 #include "../kernel_includes/tt_metal/include/compute_kernel_api/deepseek_moe_gate.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #endif
 
 namespace deepseek_v3_ops {
@@ -36,9 +36,9 @@ namespace deepseek_v3_ops {
 // Input: router logits [16, 16] + bias [16, 16] + indices [16, 16]
 // Output: top8 scores [1, 16] + top8 indices [1, 16] (only first 8 valid)
 //
-// CB States:
+// DFB States:
 //   NCRISC: No-op (sharded buffer setup done in kernel file via setup_sharded_buffer)
-//   BRISC: Waits for output CBs (scores, indices)
+//   BRISC: Waits for output DFBs (scores, indices)
 //   TRISC: Computes sigmoid (optional), bias add, sorting, normalization
 // ============================================================================
 struct DeepseekMoeGate {
@@ -50,29 +50,29 @@ struct DeepseekMoeGate {
     struct ReaderCTArgs {};
 
     // Writer CTArgs (BRISC)
-    template <uint32_t output_cb_, uint32_t output_indices_cb_>
+    template <const auto& output_dfb_, const auto& output_indices_dfb_>
     struct WriterCTArgs {
-        static constexpr uint32_t output_cb = output_cb_;
-        static constexpr uint32_t output_indices_cb = output_indices_cb_;
+        static constexpr auto output_dfb = output_dfb_;
+        static constexpr auto output_indices_dfb = output_indices_dfb_;
     };
 
     // Compute CTArgs (TRISC)
     // enable_sigmoid must be compile-time (template parameter for deepseek_moe_gate<>)
     template <
-        uint32_t input_cb_,
-        uint32_t bias_cb_,
-        uint32_t input_indices_cb_,
-        uint32_t output_cb_,
-        uint32_t output_indices_cb_,
+        const auto& input_dfb_,
+        const auto& bias_dfb_,
+        const auto& input_indices_dfb_,
+        const auto& output_dfb_,
+        const auto& output_indices_dfb_,
         uint32_t eps_,
         uint32_t scaling_factor_,
         uint32_t enable_sigmoid_>
     struct ComputeCTArgs {
-        static constexpr uint32_t input_cb = input_cb_;
-        static constexpr uint32_t bias_cb = bias_cb_;
-        static constexpr uint32_t input_indices_cb = input_indices_cb_;
-        static constexpr uint32_t output_cb = output_cb_;
-        static constexpr uint32_t output_indices_cb = output_indices_cb_;
+        static constexpr auto input_dfb = input_dfb_;
+        static constexpr auto bias_dfb = bias_dfb_;
+        static constexpr auto input_indices_dfb = input_indices_dfb_;
+        static constexpr auto output_dfb = output_dfb_;
+        static constexpr auto output_indices_dfb = output_indices_dfb_;
         static constexpr uint32_t eps = eps_;
         static constexpr uint32_t scaling_factor = scaling_factor_;
         static constexpr bool enable_sigmoid = enable_sigmoid_ == 1;
@@ -101,60 +101,60 @@ struct DeepseekMoeGate {
             // ================================================================
             // BRISC: Wait for compute to finish
             // ================================================================
-            CircularBuffer output_indices_cb(CTArgs::output_indices_cb);
-            CircularBuffer output_cb(CTArgs::output_cb);
-            output_indices_cb.wait_front(1);
-            output_cb.wait_front(1);
+            DataflowBuffer output_indices_dfb(CTArgs::output_indices_dfb);
+            DataflowBuffer output_dfb(CTArgs::output_dfb);
+            output_indices_dfb.wait_front(1);
+            output_dfb.wait_front(1);
 
 #elif defined(COMPILE_FOR_TRISC)
             // ================================================================
             // TRISC: Compute gate logic
             // ================================================================
 
-            // Input indices CB should have the same tile shape as the input CB
-            reconfig_full_operand(CTArgs::input_indices_cb, CTArgs::bias_cb);
-            // Output indices CB should have the same tile shape as the output CB
-            pack_reconfig_data_format<true>(CTArgs::output_cb);
+            // Input indices DFB should have the same tile shape as the input DFB
+            reconfig_full_operand(CTArgs::input_indices_dfb, CTArgs::bias_dfb);
+            // Output indices DFB should have the same tile shape as the output DFB
+            pack_reconfig_data_format<true>(CTArgs::output_dfb);
 
-            CircularBuffer input_indices_cb(CTArgs::input_indices_cb);
-            CircularBuffer bias_cb(CTArgs::bias_cb);
-            CircularBuffer input_cb(CTArgs::input_cb);
-            CircularBuffer output_cb(CTArgs::output_cb);
-            CircularBuffer output_indices_cb(CTArgs::output_indices_cb);
+            DataflowBuffer input_indices_dfb(CTArgs::input_indices_dfb);
+            DataflowBuffer bias_dfb(CTArgs::bias_dfb);
+            DataflowBuffer input_dfb(CTArgs::input_dfb);
+            DataflowBuffer output_dfb(CTArgs::output_dfb);
+            DataflowBuffer output_indices_dfb(CTArgs::output_indices_dfb);
 
             // Init portion
-            input_indices_cb.wait_front(1);
-            bias_cb.wait_front(1);
+            input_indices_dfb.wait_front(1);
+            bias_dfb.wait_front(1);
 
             // Compute portion
-            copy_init(CTArgs::input_indices_cb);
+            copy_init(CTArgs::input_indices_dfb);
 
             tile_regs_acquire();
 
             // Copy indices (already transposed to cols)
-            copy_tile(CTArgs::input_indices_cb, 0, 1);
+            copy_tile(CTArgs::input_indices_dfb, 0, 1);
 
-            reconfig_data_format_srca(CTArgs::input_cb);  // Assumes same tile shape as input indices CB
-            deepseek_moe_gate_init<CTArgs::enable_sigmoid>(CTArgs::input_cb, CTArgs::bias_cb);
-            input_cb.wait_front(1);
+            reconfig_data_format_srca(CTArgs::input_dfb);  // Assumes same tile shape as input indices DFB
+            deepseek_moe_gate_init<CTArgs::enable_sigmoid>(CTArgs::input_dfb, CTArgs::bias_dfb);
+            input_dfb.wait_front(1);
             deepseek_moe_gate<CTArgs::enable_sigmoid>(
-                CTArgs::input_cb, CTArgs::bias_cb, CTArgs::eps, CTArgs::scaling_factor);
+                CTArgs::input_dfb, CTArgs::bias_dfb, CTArgs::eps, CTArgs::scaling_factor);
             // Pop input tile
-            input_cb.pop_front(1);
+            input_dfb.pop_front(1);
 
             tile_regs_commit();
 
-            output_cb.reserve_back(1);
-            output_indices_cb.reserve_back(1);
+            output_dfb.reserve_back(1);
+            output_indices_dfb.reserve_back(1);
 
             tile_regs_wait();
 
-            pack_tile(0, CTArgs::output_cb);
-            output_cb.push_back(1);
+            pack_tile(0, CTArgs::output_dfb);
+            output_dfb.push_back(1);
 
-            pack_reconfig_data_format(CTArgs::output_indices_cb);  // Assumes same tile shape as output CB
-            pack_tile(1, CTArgs::output_indices_cb);
-            output_indices_cb.push_back(1);
+            pack_reconfig_data_format(CTArgs::output_indices_dfb);  // Assumes same tile shape as output DFB
+            pack_tile(1, CTArgs::output_indices_dfb);
+            output_indices_dfb.push_back(1);
 
             tile_regs_release();
 #endif

@@ -127,6 +127,16 @@ public:
     // This will never be run in runtime & NullTensorBindingToken is not constructible.
     explicit TensorAccessor(const tensor_accessor::NullTensorBindingToken&) : TensorAccessor(size_t{0}, uint32_t{0}) {}
 
+    // Exists only to turn a "no matching constructor" error into an actionable one.
+    template <uint32_t CTA_OFFSET, uint32_t ADDR_RTA_OFFSET>
+    explicit TensorAccessor(tensor_accessor::PerNodeTensorBindingToken<CTA_OFFSET, ADDR_RTA_OFFSET>) :
+        TensorAccessor(size_t{0}, uint32_t{0}) {
+        static_assert(
+            !std::is_same_v<DSpec, DSpec>,
+            "A per-node tensor binding cannot build a TensorAccessor: each node knows only its own address. "
+            "Use LocalTensorAccessor instead.");
+    }
+
     constexpr const auto& dspec() const {
         if constexpr (DSpec::is_static) {
             return StaticDspec::instance;
@@ -705,6 +715,12 @@ TensorAccessor(tensor_accessor::TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>
         ADDR_CRTA_OFFSET>>;
 
 TensorAccessor(const tensor_accessor::NullTensorBindingToken&) -> TensorAccessor<tensor_accessor::NullDSpec>;
+
+// Lets the static_assert in the matching ctor fire: without a guide, deduction fails first with an
+// opaque "no matching function" error. NullDSpec is arbitrary; the ctor never compiles.
+template <uint32_t CTA_OFFSET, uint32_t ADDR_RTA_OFFSET>
+TensorAccessor(tensor_accessor::PerNodeTensorBindingToken<CTA_OFFSET, ADDR_RTA_OFFSET>)
+    -> TensorAccessor<tensor_accessor::NullDSpec>;
 
 template <std::size_t CTA_OFFSET, std::size_t CRTA_OFFSET>
 TensorAccessor(const TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>& args, size_t, uint32_t)

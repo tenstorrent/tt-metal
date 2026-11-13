@@ -10,8 +10,8 @@
 #include "ttnn/tensor/tensor.hpp"
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/math.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 
 namespace ttnn::prim {
 
@@ -91,7 +91,7 @@ tt::tt_metal::ProgramDescriptor ConcatS2SMultiProgramFactory::create_descriptor(
 
     // Assume inputs and output have the same element size and alignment.
     const uint32_t element_size = input_tensors[0].element_size();
-    const uint32_t alignment = input_tensors[0].buffer()->alignment();
+    const uint32_t alignment = input_tensors[0].mesh_buffer().alignment();
 
     uint32_t page_size;
     uint32_t elements_per_page_width;

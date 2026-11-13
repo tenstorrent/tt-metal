@@ -78,7 +78,7 @@ void SortDeviceOperation::validate_on_program_cache_miss(
     const auto input_lshape = input.logical_shape();
     const auto input_pshape = input.padded_shape();
 
-    TT_FATAL(input.buffer() != nullptr, "Operands need to be allocated in buffers on the device. Buffer is null.");
+    TT_FATAL(input.is_allocated(), "Operands need to be allocated in buffers on the device. Buffer is null.");
     TT_FATAL(
         input.storage_type() == StorageType::DEVICE,
         "Operation requires input to be on Device. Input storage type: {}",

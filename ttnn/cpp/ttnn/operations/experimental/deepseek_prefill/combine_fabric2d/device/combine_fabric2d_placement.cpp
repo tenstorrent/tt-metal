@@ -14,6 +14,7 @@
 #include <tt-metalium/experimental/device.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/mesh_coord.hpp>
+#include <internal/mesh_device.hpp>
 #include <tt_stl/assert.hpp>
 
 namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d {
@@ -145,7 +146,7 @@ DevicePlacement decide_device_placement(
     uint32_t num_links,
     uint32_t untilizers_per_group,
     bool with_collector) {
-    auto* dev = mesh->get_device(coord);
+    auto* dev = tt::tt_metal::internal::get_device(*mesh, coord);
     const auto self_node = mesh->get_fabric_node_id(coord);
 
     std::map<StreamId, WorkerCandidate> candidates;

@@ -42,7 +42,7 @@ void DropoutDeviceOperation::validate_on_program_cache_miss(
         static_cast<int>(input_tensor.storage_type()));
 
     TT_FATAL(
-        input_tensor.buffer() != nullptr,
+        input_tensor.is_allocated(),
         "Operands to dropout need to be allocated in buffers on the device. Buffer is null.");
 
     TT_FATAL(

@@ -36,6 +36,7 @@ from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, 
 from models.demos.deepseek_v3_d_p.tests.attn_res.checkpoint_utils import load_attn_res_state_dict
 from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import resolve_model_root
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.golden import TRACE_100K, resolve_checkpoint, resolve_trace
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.kda_slabs import attach_kda_states
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.test_transformer_depth import (
     PLACEMENTS,
     SEQ_LEN,
@@ -126,6 +127,7 @@ def test_prefill_cost(mesh_device, device_params, num_layers, num_chunks):
         tp_shard_kv=num_chunks > 1,
     )
 
+    slabs = attach_kda_states(mesh_device, model, sp_axis=SP_AXIS, tp_axis=TP_AXIS)
     kvpe = None
     if model.schedule.num_mla_layers:
         kvpe = allocate_mla_kvpe_cache(
@@ -151,8 +153,8 @@ def test_prefill_cost(mesh_device, device_params, num_layers, num_chunks):
     ]
 
     def once():
-        """One whole prefill: every chunk, in order, as a request would arrive."""
-        model.reset_streams()
+        """One whole prefill: every chunk, in order, as a request would arrive. Chunk 0 starts at 0, so
+        its KDA layers load zero carries on device: the head-of-request reset is part of the measurement."""
         for index, tokens in enumerate(chunks):
             start = index * SEQ_LEN if num_chunks > 1 else None
             out = model.forward(tokens, kvpe_cache=kvpe, actual_start=start)
@@ -190,7 +192,6 @@ def test_prefill_cost(mesh_device, device_params, num_layers, num_chunks):
         # far, so chunk N should cost more than chunk N-1 while the KDA layers stay flat. Profiling each
         # chunk separately is the only way to see that curve.
         if num_chunks > 1:
-            model.reset_streams()
             per_chunk = []
             for index, tokens in enumerate(chunks):
 
@@ -215,8 +216,8 @@ def test_prefill_cost(mesh_device, device_params, num_layers, num_chunks):
             )
 
     finally:
-        if model.kda_states is not None:
-            model.kda_states.deallocate()
+        if slabs is not None:
+            slabs.deallocate()
 
     logger.info(
         f"PERF L{num_layers:2d} x {num_chunks:2d}chunk ({total_len:6d} tok): eager {eager_ms:9.2f} ms "

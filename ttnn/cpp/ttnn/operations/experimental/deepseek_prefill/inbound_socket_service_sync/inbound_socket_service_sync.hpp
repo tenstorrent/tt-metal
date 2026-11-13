@@ -39,7 +39,8 @@ std::vector<Tensor> inbound_socket_service_sync(
 
 // Same op, but draining a D2DStreamServiceReceiver (disaggregated-prefill
 // device->device path). The receiver exposes the same getters as
-// H2DStreamService. Same return contract and the same optional destinations.
+// H2DStreamService. Same return contract and the same optional destinations, plus
+// one output per extra tensor the receiver was built with, between overhang and metadata.
 std::vector<Tensor> inbound_socket_service_sync(
     const ttnn::D2DStreamServiceReceiver& service,
     uint32_t metadata_size_bytes = 0,

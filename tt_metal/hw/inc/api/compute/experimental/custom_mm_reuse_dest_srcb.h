@@ -111,7 +111,7 @@ ALWI void custom_mm_reuse_dest_srcb_block_init_short(
  * | in1_tile_index   | First weight tile to read                                       | uint32_t | < CB size                      | True     |
  * | isrc             | DEST row of the first in0 tile                                  | uint32_t | < half DEST                    | True     |
  * | idst             | DEST row of the first output tile. The caller must zero DEST at idst first: the MVMULs accumulate (+=) and nothing in this call clears DEST | uint32_t | < half DEST                    | True     |
- * | kt_dim           | Inner dimension in tiles. All kt_dim in0 tiles must be DEST-resident at once: kt_dim * src_tile_stride + nt_dim * 16 <= CUSTOM_MM_MAX_DEST_ROWS, and the producing custom_mm's ct_dim caps it at 16 | uint32_t | even; see bound                | True     |
+ * | kt_dim           | Inner dimension in tiles. All kt_dim in0 tiles must be DEST-resident at once: kt_dim * src_tile_stride + nt_dim * 16 <= CUSTOM_MM_MAX_DEST_ROWS, and the producing custom_mm's ct_dim caps it at 16 | uint32_t | 1 to 256; see bound            | True     |
  * | nt_dim           | Output width in tiles                                           | uint32_t | 1 to 16                        | True     |
  * | in1_k_stride     | Weight tiles between consecutive K rows (nt_dim if contiguous)  | uint32_t | >= nt_dim                      | True     |
  * | src_tile_stride  | DEST rows between consecutive in0 tiles                         | uint32_t | 32 for a Dense custom_mm, 64 for Default   | True     |

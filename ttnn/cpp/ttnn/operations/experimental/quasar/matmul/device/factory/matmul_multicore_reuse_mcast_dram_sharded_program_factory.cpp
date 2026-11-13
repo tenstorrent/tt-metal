@@ -15,7 +15,6 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/math.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/compute_throttle_utils.hpp"
@@ -183,9 +182,8 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
     uint32_t num_blocks = K / in0_block_w;
     bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
 
-    tt::DataFormat interm0_data_format = packer_l1_acc_en
-                                             ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)
-                                             : (fp32_dest_acc_en ? tt::DataFormat::Float32 : output_data_format);
+    tt::DataFormat interm0_data_format = operations::experimental::quasar::matmul::utilities::get_interm_data_format(
+        packer_l1_acc_en, fp32_dest_acc_en, output_data_format);
 
     uint32_t in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);
     uint32_t in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);

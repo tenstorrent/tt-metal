@@ -66,6 +66,7 @@ from helpers.golden_generators import (
     round_to_dest_width,
 )
 from helpers.llk_params import (
+    ALL_MATH_FIDELITIES,
     DestAccumulation,
     MathFidelity,
     MathOperation,
@@ -124,12 +125,7 @@ def _fidelities(mathop):
     the other three and fail only here. It was missing from every sweep in the suite.
     """
     if mathop == MathOperation.Elwmul:
-        return [
-            MathFidelity.LoFi,
-            MathFidelity.HiFi2,
-            MathFidelity.HiFi3,
-            MathFidelity.HiFi4,
-        ]
+        return list(ALL_MATH_FIDELITIES)
     return [MathFidelity.LoFi]
 
 

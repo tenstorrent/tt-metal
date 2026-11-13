@@ -40,7 +40,7 @@ void validate_runtime_args(const operation_attributes_t& attrs, const tensor_arg
     // Shape is intentionally omitted from the program hash and patched through runtime args, so keep
     // these checks on both cache miss and cache hit.
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "topk_large_indices input must be on device");
-    TT_FATAL(input.buffer() != nullptr, "topk_large_indices input must have an allocated buffer");
+    TT_FATAL(input.is_allocated(), "topk_large_indices input must have an allocated buffer");
 
     auto* device = input.device();
     const auto selected_subdevice_id = attrs.subdevice_id.value_or(device->get_sub_device_ids().at(0));
@@ -92,7 +92,7 @@ void validate_runtime_args(const operation_attributes_t& attrs, const tensor_arg
             "is read on-device; a scalar supplied alongside it would be ignored)");
         const auto& m = *tensor_args.valid_length_tensor;
         TT_FATAL(
-            m.storage_type() == StorageType::DEVICE && m.buffer() != nullptr,
+            m.storage_type() == StorageType::DEVICE && m.is_allocated(),
             "topk_large_indices valid_length_tensor must be allocated on device");
         TT_FATAL(
             m.device() == tensor_args.input_tensor.device(),
@@ -127,7 +127,7 @@ void validate_runtime_args(const operation_attributes_t& attrs, const tensor_arg
             "valid-length derivation produces");
         const auto& m = *tensor_args.valid_end_tensor;
         TT_FATAL(
-            m.storage_type() == StorageType::DEVICE && m.buffer() != nullptr,
+            m.storage_type() == StorageType::DEVICE && m.is_allocated(),
             "topk_large_indices valid_end_tensor must be allocated on device");
         TT_FATAL(
             m.device() == tensor_args.input_tensor.device(),

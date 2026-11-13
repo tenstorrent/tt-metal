@@ -75,6 +75,21 @@ GROUP_NORM_DRAM_SHAPES = [
     # (21, 128, 480, 848, 32, 140, 8, 8), Failing on single device CI.
 ]
 
+GROUP_NORM_DRAM_SANITY_SHAPES = [
+    shape
+    for shape in GROUP_NORM_DRAM_SHAPES
+    if shape[:4]
+    not in {
+        (1, 1536, 8, 8),
+        (1, 1152, 128, 128),
+        (1, 512, 64, 64),
+        (1, 512, 128, 128),
+        (1, 256, 256, 256),
+        (1, 256 // 4, 256, 256),
+        (1, 512 // 4, 256, 256),
+    }
+]
+
 
 GROUP_NORM_NO_INPUT_MASK_DRAM_SHAPES = [
     (8, 768, 1, 512, 32, 2, 8, 8),  # base case
@@ -157,6 +172,12 @@ SDXL_BASE_GROUP_NORM_SPLIT_SHAPES = [
         4,
     ),  # Can fit in 4 slice, split= 0.3ms i2s = 0.1ms GN = 0.6ms, s2i = 0.421ms = 5.6ms + 1ms for concat = 6.6ms (original is 6.1ms)
     # (1, 128, 1024, 1024, 32, 32), # does not fit -> input is [16384, 4] per core (~130kB) gets tilized internally to [16384, 32] which is ~1MB, and 2 buffers are of that size (cb_x and cb_in). in addition to that, RM stick of size 4 is not L1 aligned
+]
+
+# The split path (channel slices, one group_norm per slice, concat) does not depend on the spatial size.
+# Sanity runs it at 128x64; the SDXL shapes above run nightly (#62486).
+SDXL_BASE_GROUP_NORM_SPLIT_SANITY_SHAPES = [
+    (1, 512, 128, 64, 32, 4),
 ]
 
 GROUP_NORM_DRAM_OFT_PARAMS = [
@@ -294,7 +315,7 @@ def run_group_norm_DRAM(
 
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
-@pytest.mark.parametrize("N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x", GROUP_NORM_DRAM_SHAPES)
+@pytest.mark.parametrize("N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x", GROUP_NORM_DRAM_SANITY_SHAPES)
 @pytest.mark.parametrize("statistics_mode", STATISTICS_MODES)
 def test_group_norm_DRAM(
     device,
@@ -325,6 +346,28 @@ def test_group_norm_DRAM(
         perf_test_mode=perf_test_mode,
         specify_grid=specify_grid,
     )
+
+
+@pytest.mark.requires_grid_size((6, 8))
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+@pytest.mark.parametrize("statistics_mode", STATISTICS_MODES)
+def test_group_norm_DRAM_batch_ends_mid_column(device, statistics_mode):
+    # Each 12-core reduction group has a four-core partial column.
+    run_group_norm_DRAM(device, 2, 320, 16, 24, 32, 1, 8, 6, statistics_mode, use_input_mask=True)
+
+
+@pytest.mark.requires_grid_size((2, 3))
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
+@pytest.mark.parametrize("statistics_mode", STATISTICS_MODES)
+@pytest.mark.parametrize(
+    "n,c,h,w,groups,grid_y,grid_x",
+    [
+        pytest.param(3, 64, 1, 64, 1, 3, 2, id="sender_only_mid"),
+        pytest.param(8, 320, 1, 160, 32, 8, 10, id="sender_only_first", marks=pytest.mark.requires_grid_size((10, 8))),
+    ],
+)
+def test_group_norm_DRAM_sender_only_rectangle(device, statistics_mode, n, c, h, w, groups, grid_y, grid_x):
+    run_group_norm_DRAM(device, n, c, h, w, groups, 1, grid_y, grid_x, statistics_mode, use_input_mask=True)
 
 
 # Post-commit smoke coverage for the ROW_MAJOR path; the full sweep over GROUP_NORM_ROW_MAJOR_SHAPES
@@ -673,7 +716,9 @@ def test_group_norm_non_tile_aligned_garbage_padding_DRAM(device):
         pytest.skip()
 
     torch.manual_seed(0)
-    N, C, HW, G, padded = 1, 1024, 200, 32, 224
+    # 256 channels, not the 1024 of the issue: the check is the padding rows (200 logical over 224 padded), and
+    # the channel count only scales the work (4 min on the simulator at 1024, #62486).
+    N, C, HW, G, padded = 1, 256, 200, 32, 224
 
     real = torch.rand((N, 1, HW, C), dtype=torch.bfloat16)
     ref = torch.nn.functional.group_norm(real.view(N, HW, C).permute(0, 2, 1).reshape(N, C, 1, HW).float(), G)
@@ -727,7 +772,7 @@ def test_group_norm_non_tile_aligned_dirty_padding_is_ignored_DRAM(device):
 
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
-@pytest.mark.parametrize("N, C, H, W, num_groups, num_splits", SDXL_BASE_GROUP_NORM_SPLIT_SHAPES)
+@pytest.mark.parametrize("N, C, H, W, num_groups, num_splits", SDXL_BASE_GROUP_NORM_SPLIT_SANITY_SHAPES)
 @pytest.mark.parametrize("specify_grid", [True])
 def test_sdxl_base_group_norm_split(device, N, C, H, W, num_groups, num_splits, specify_grid):
     torch.manual_seed(0)

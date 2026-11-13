@@ -181,6 +181,10 @@ enum NocScatterWriteChunkEncoding : uint8_t {
     CHUNK_ENCODING_LAST = CHUNK_ENCODING_SEMINC_FLUSH
 };
 
+// Width of one chunk's NocScatterWriteChunkEncoding. Chunk i sits at bit i * width.
+static constexpr uint8_t NOC_SCATTER_CHUNK_ENCODING_BITS = 2;
+static constexpr uint8_t NOC_SCATTER_CHUNK_ENCODING_MASK = (1u << NOC_SCATTER_CHUNK_ENCODING_BITS) - 1;
+
 constexpr uint8_t expand_encoding_to_all_chunks(NocScatterWriteChunkEncoding encoding) {
     const uint8_t e = static_cast<uint8_t>(encoding);
     return e | (e << 2) | (e << 4) | (e << 6);
@@ -188,7 +192,7 @@ constexpr uint8_t expand_encoding_to_all_chunks(NocScatterWriteChunkEncoding enc
 
 inline void set_chunk_encoding(uint8_t& chunk_encoding, NocScatterWriteChunkEncoding encoding, uint32_t chunk_index) {
     const uint8_t e = static_cast<uint8_t>(encoding);
-    chunk_encoding |= (e << (chunk_index * 2));
+    chunk_encoding |= (e << (chunk_index * NOC_SCATTER_CHUNK_ENCODING_BITS));
 }
 
 #define NOC_SCATTER_WRITE_MAX_CHUNKS 4
@@ -436,6 +440,30 @@ public:
             PackedPayloadAndSendType result;
             result.payload_size_bytes = static_cast<uint16_t>(raw & 0xFFFF);
             result.noc_send_type = static_cast<NocSendType>((raw >> 16) & 0xFF);
+            return result;
+        }
+
+        // The same 4 bytes as one word, for a reader that loads them early and takes the fields later (unpack): one
+        // register to hold instead of three.
+        static uint32_t load_word(const volatile Derived* hdr) {
+            return *reinterpret_cast<const volatile uint32_t*>(
+                reinterpret_cast<uintptr_t>(hdr) + offsetof(PacketHeaderBase, payload_size_bytes));
+        }
+
+        // The fields of a word from load_word, the source channel included.
+        struct Unpacked {
+            uint16_t payload_size_bytes;
+            NocSendType noc_send_type;
+            uint8_t src_ch_id;
+        };
+        static Unpacked unpack(uint32_t raw) {
+            constexpr size_t word_offset = offsetof(PacketHeaderBase, payload_size_bytes);
+            static_assert(offsetof(PacketHeaderBase, noc_send_type) == word_offset + 2);
+            static_assert(offsetof(PacketHeaderBase, src_ch_id) == word_offset + 3);
+            Unpacked result;
+            result.payload_size_bytes = static_cast<uint16_t>(raw & 0xFFFF);
+            result.noc_send_type = static_cast<NocSendType>((raw >> 16) & 0xFF);
+            result.src_ch_id = static_cast<uint8_t>(raw >> 24);
             return result;
         }
     };
@@ -1331,7 +1359,7 @@ static_assert(false, "UDM mode does not support 1D routing - use 2D routing inst
     ((ROUTING_MODE & (ROUTING_MODE_2D | ROUTING_MODE_TORUS)) != 0))
 // 2D routing with UDM
 #if defined(FABRIC_EXPRESS_ENABLED)
-// Express routing with UDM is not supported.
+// Express routing (on either axis) with UDM is not supported.
 //
 // UDM records the source's first-hop direction in the packet (udm_control.initial_direction) and uses
 // it to pick a downstream mux. The mux fabric is cardinal-only by construction --

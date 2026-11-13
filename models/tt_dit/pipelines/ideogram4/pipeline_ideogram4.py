@@ -111,12 +111,14 @@ __all__ = ["Ideogram4DecodeStage", "Ideogram4Sampler", "cfg_blend", "interleave_
 # =============================================================================
 
 import gc as _gc
+import hashlib
 from collections.abc import Sequence
 from dataclasses import dataclass
 
 import transformers as _tf
 from diffusers.image_processor import VaeImageProcessor
 from diffusers.models.autoencoders.autoencoder_kl import AutoencoderKL as _AutoencoderKL
+from huggingface_hub import snapshot_download
 from loguru import logger as _dq_log
 from PIL import Image
 from safetensors.torch import load_file as _load_file
@@ -127,13 +129,7 @@ from ...models.transformers.transformer_ideogram4 import Ideogram4Transformer, r
 from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, VAEParallelConfig
 from ...parallel.manager import CCLManager
 from ...reference.ideogram4 import modeling_ideogram4
-from ...reference.ideogram4.constants import (
-    IMAGE_POSITION_OFFSET,
-    LLM_TOKEN_INDICATOR,
-    OUTPUT_IMAGE_INDICATOR,
-    QWEN3_VL_ACTIVATION_LAYERS,
-    SEQUENCE_PADDING_INDICATOR,
-)
+from ...reference.ideogram4.constants import IMAGE_POSITION_OFFSET, QWEN3_VL_ACTIVATION_LAYERS
 from ...reference.ideogram4.dequant import dequant_fp8_state_dict
 from ..cfg import create_submeshes
 from ..events import DenoiseStep, PipelineEventCallback, SectionEnd, SectionStart, null_callback
@@ -141,23 +137,32 @@ from ..pipeline_api import PipelineAPIMixin
 
 # Opt-out switch for the bf16 dequant cache (default on). Dequantizing the fp8
 # checkpoints (encoder + 2 transformers) dominates pipeline build time; caching the
-# bf16 result next to the source makes subsequent builds skip both the fp8 load and
-# the dequant. Set IDEOGRAM4_DEQUANT_CACHE=0 to force a fresh dequant.
+# bf16 result makes subsequent builds skip both the fp8 load and the dequant. Set
+# IDEOGRAM4_DEQUANT_CACHE=0 to force a fresh dequant.
 _DEQUANT_CACHE = os.environ.get("IDEOGRAM4_DEQUANT_CACHE", "1") != "0"
+
+
+def _dequant_cache_path(path: str) -> str:
+    """Where the bf16 copy of ``path`` is cached: under TT_DIT_CACHE_DIR (default ~/.cache/tt-dit),
+    never beside the source, which may be a shared or read-only HuggingFace cache. Keyed by the
+    source's resolved path, so files with the same name in different checkpoints do not collide."""
+    root = os.environ.get("TT_DIT_CACHE_DIR") or os.path.expanduser("~/.cache/tt-dit")
+    source = os.path.realpath(path)
+    digest = hashlib.sha256(source.encode()).hexdigest()[:16]
+    return os.path.join(root, "ideogram4", "dequant", f"{digest}-{os.path.basename(source)}")
 
 
 def _dq(path):
     """Load + dequantize an fp8 checkpoint to bf16, caching the bf16 result on disk.
 
-    The cache file lives beside the source (``<path>.dequant-bf16.safetensors``) and is
-    validated against the source's size+mtime (stamped into the safetensors metadata), so
-    it is transparently rebuilt if the source weights change. Cache write failures (e.g.
-    read-only weights dir) fall back to in-memory dequant without erroring.
+    The cache file (see ``_dequant_cache_path``) is validated against the source's size+mtime
+    (stamped into the safetensors metadata), so it is transparently rebuilt if the source
+    weights change. Cache write failures fall back to in-memory dequant without erroring.
     """
     if not _DEQUANT_CACHE:
         return dequant_fp8_state_dict(_load_file(path))
 
-    cache_path = path + ".dequant-bf16.safetensors"
+    cache_path = _dequant_cache_path(path)
     try:
         st = os.stat(path)
         stamp = f"{st.st_size}:{int(st.st_mtime)}"
@@ -177,6 +182,7 @@ def _dq(path):
 
     sd = dequant_fp8_state_dict(_load_file(path))
     try:
+        os.makedirs(os.path.dirname(cache_path), exist_ok=True)
         tmp = cache_path + ".tmp"
         _save_file(sd, tmp, metadata={"src_stamp": stamp})
         os.replace(tmp, cache_path)
@@ -190,22 +196,86 @@ def _dq(path):
 # the reference rejects (does NOT truncate) prompts longer than this, so we do the same.
 MAX_TEXT_TOKENS = 2048
 
+# The encoder readback slices the text rows rounded up to a multiple of this, which bounds the
+# number of slice programs to MAX_TEXT_TOKENS / _TEXT_READBACK_BUCKET.
+_TEXT_READBACK_BUCKET = 256
+
+# The four 2K serving sizes, as (width, height): the resolutions a BH Galaxy pipeline warms by default.
+SERVING_SIZES: tuple[tuple[int, int], ...] = ((2048, 2048), (2048, 1152), (1152, 2048), (1360, 2048))
+
 # SP shards the sequence across the ring; each per-device shard must be tile-aligned, i.e. the
 # padded length is a multiple of tile_size * sp_factor. This is exactly the shared tt_dit helper
 # get_padded_vision_seq_len(N, num_devices) (ring SDPA pads+masks any partial tail internally).
 
 _DEFAULT_WEIGHTS_DIR = os.environ.get("IDEOGRAM4_WEIGHTS")
 _DEFAULT_QWEN_REPO = "Qwen/Qwen3-VL-8B-Instruct"
+_WEIGHTS_SUBFOLDERS = ("text_encoder", "tokenizer", "transformer", "unconditional_transformer", "vae")
+
+
+def _resolve_weights_dir(weights: str) -> str:
+    """A local directory as is, or a HuggingFace repo id snapshot-downloaded (cached)."""
+    if os.path.isdir(weights):
+        return weights
+    _dq_log.info(f"Resolving HuggingFace repo {weights} (auto-download if missing)")
+    return snapshot_download(repo_id=weights, allow_patterns=[f"{sub}/*" for sub in _WEIGHTS_SUBFOLDERS])
+
 
 # Per-mesh-shape parallelism presets (Blackhole). Ideogram is always cfg-parallel factor 1
 # (both distilled nets resident on the full mesh, sequential CFG); tp/sp are (factor, mesh_axis).
 _PRESETS: dict[tuple[int, ...], dict] = {
     # BH loudbox 2x4 (mesh-shape convention shared with the other BH pipelines): SP4 (axis 1) x
     # TP2 (axis 0). SP takes the size-4 axis since Ideogram is SP-heavy (full-mesh sequential CFG).
+    # No default resolutions: call warmup(sizes) or run untraced.
     (2, 4): {"tp": (2, 0), "sp": (4, 1), "num_links": 2, "topology": ttnn.Topology.Linear},
-    # BH Galaxy 4x8, 2D torus Ring: TP4 (axis 0) x SP8 (axis 1).
-    (4, 8): {"tp": (4, 0), "sp": (8, 1), "num_links": 2, "topology": ttnn.Topology.Ring},
+    # BH Galaxy 4x8, 2D torus Ring: TP4 (axis 0) x SP8 (axis 1). The pipeline warms the four 2K
+    # serving sizes at load. Their four kept step traces allocate 10.9 MB in each of the 8 DRAM banks
+    # (87 MB), which filled 87% of a 100 MB region (12.5 MB per bank; jobs 179862, 180015).
+    # trace_region_size is what the mesh must be opened with for them: 128 MB (16 MB per bank, 68% used).
+    (4, 8): {
+        "tp": (4, 0),
+        "sp": (8, 1),
+        "num_links": 2,
+        "topology": ttnn.Topology.Ring,
+        "resolutions": SERVING_SIZES,
+        "trace_region_size": 128_000_000,
+    },
 }
+
+
+def _preset(mesh_shape) -> dict:
+    preset = _PRESETS.get(tuple(mesh_shape))
+    if preset is None:
+        raise ValueError(f"no Ideogram4 parallelism preset for mesh shape {tuple(mesh_shape)}; known: {list(_PRESETS)}")
+    return preset
+
+
+def required_trace_region_size(mesh_shape) -> int:
+    """The ``trace_region_size`` (bytes) to open a mesh of this shape with, so that the step traces of
+    its default resolutions fit; 0 when it has none."""
+    return _preset(mesh_shape).get("trace_region_size", 0)
+
+
+def _check_trace_region(mesh_device: ttnn.MeshDevice, mesh_shape, sizes: Sequence[tuple[int, int]]) -> None:
+    """Raise before any device work if warming ``sizes`` would overflow the mesh's trace region.
+
+    Only the mesh's default resolutions have a measured requirement, so the check applies when
+    ``sizes`` includes one of them; other sizes are left to ttnn's own check at capture. A trace
+    region of 0 (ttnn's dynamic trace allocation in DRAM) is not checked.
+    """
+    defaults = _preset(mesh_shape).get("resolutions", ())
+    if not any(tuple(size) in defaults for size in sizes):
+        return
+    need = required_trace_region_size(mesh_shape)
+    view = ttnn.get_memory_view(mesh_device, ttnn.BufferType.TRACE)
+    # Each bank reserves trace_region_size / num_banks, rounded up to whole trace pages.
+    reserved = view.total_bytes_per_bank * view.num_banks
+    if 0 < reserved < need:
+        msg = (
+            f"Ideogram4: the mesh reserves {reserved / 1e6:.0f} MB of trace region, but warming {list(sizes)} "
+            f"needs {need / 1e6:.0f} MB; open the mesh with trace_region_size >= {need} "
+            f"(required_trace_region_size({tuple(mesh_shape)}))"
+        )
+        raise ValueError(msg)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -219,6 +289,7 @@ class Ideogram4PipelineConfig:
     vae_parallel_config: VAEParallelConfig
     height: int
     width: int
+    resolutions: tuple[tuple[int, int], ...]
     weights_dir: str
     qwen_repo: str
 
@@ -229,16 +300,23 @@ class Ideogram4PipelineConfig:
         mesh_shape: ttnn.MeshShape,
         topology: ttnn.Topology | None = None,
         num_links: int | None = None,
-        height: int = 512,
-        width: int = 512,
+        height: int | None = None,
+        width: int | None = None,
+        resolutions: Sequence[tuple[int, int]] | None = None,
         weights_dir: str = _DEFAULT_WEIGHTS_DIR,
         qwen_repo: str = _DEFAULT_QWEN_REPO,
     ) -> Ideogram4PipelineConfig:
-        preset = _PRESETS.get(tuple(mesh_shape))
-        if preset is None:
-            raise ValueError(
-                f"no Ideogram4 parallelism preset for mesh shape {tuple(mesh_shape)}; known: {list(_PRESETS)}"
-            )
+        """The preset for ``mesh_shape``. ``resolutions`` are the (width, height) sizes the pipeline
+        warms at load; by default the preset's (the four 2K ``SERVING_SIZES`` on 4x8, none on 2x4).
+        ``height`` and ``width`` are the size of a call that names none: by default the first
+        resolution, as in Wan, or 512x512 when there are no resolutions."""
+        preset = _preset(mesh_shape)
+        if resolutions is None:
+            resolutions = preset.get("resolutions", ())
+        if height is None and width is None and resolutions:
+            width, height = resolutions[0]
+        height = 512 if height is None else height
+        width = 512 if width is None else width
         tp, sp = preset["tp"], preset["sp"]
         return cls(
             topology=topology if topology is not None else preset["topology"],
@@ -249,9 +327,37 @@ class Ideogram4PipelineConfig:
             vae_parallel_config=VAEParallelConfig.from_tuple(tp),
             height=height,
             width=width,
+            resolutions=tuple((int(w), int(h)) for w, h in resolutions),
             weights_dir=weights_dir,
             qwen_repo=qwen_repo,
         )
+
+
+@dataclass(kw_only=True)
+class _SizeState:
+    """Device state of one warmed (width, height), allocated before any trace capture."""
+
+    grid_h: int
+    grid_w: int
+    num_img: int
+    padded_len: int
+    z: ttnn.Tensor  # [1, num_img, in_ch] replicated latent, updated in place by every step
+    cos: ttnn.Tensor  # [1, 1, L, head_dim] SP-sharded, prompt-independent
+    sin: ttnn.Tensor
+    img_mask: ttnn.Tensor  # [1, L, 1] SP-sharded
+    idx: ttnn.Tensor  # [1, L] uint32 SP-sharded image indicator
+    uncond_logical_n: ttnn.Tensor
+    tracer: Tracer | None = None
+
+
+@dataclass(kw_only=True)
+class _SeqBuffers:
+    """Per-request conditioning of one padded length, rewritten in place by every request.
+    Sizes with the same padded length share it."""
+
+    llm: ttnn.Tensor  # [1, L, llm_features_dim] SP-sharded
+    cond_llm_mask: ttnn.Tensor  # [1, L, 1] SP-sharded
+    uncond_llm_mask: ttnn.Tensor  # all zeros
 
 
 class Ideogram4Pipeline(PipelineAPIMixin):
@@ -263,7 +369,10 @@ class Ideogram4Pipeline(PipelineAPIMixin):
     sequentially, and CFG is blended on-device (cfg_blend) rather than across submeshes.
     """
 
-    def __init__(self, *, device: ttnn.MeshDevice, config: Ideogram4PipelineConfig) -> None:
+    def __init__(self, *, device: ttnn.MeshDevice, config: Ideogram4PipelineConfig, run_warmup: bool = True) -> None:
+        if run_warmup and config.resolutions:
+            # Before loading the weights, so a server with too small a trace region fails fast.
+            _check_trace_region(device, device.shape, config.resolutions)
         self._config = config
         dit_pc = config.dit_parallel_config
         # Single full-mesh submesh (cfg-parallel factor 1): both the conditional and
@@ -280,21 +389,27 @@ class Ideogram4Pipeline(PipelineAPIMixin):
         # hi-res win (4k/16k tok) where activations dominate. Derived from the mesh-shape preset.
         self.sp_axis = dit_pc.sequence_parallel.mesh_axis
         self.sp_factor = dit_pc.sequence_parallel.factor
+        # The padding rows of the constant-length sequence are masked only by ring SDPA's logical_n.
+        assert self.sp_factor > 1, "Ideogram4Pipeline requires sequence parallelism (sp_factor > 1)"
         self.topology = config.topology
-        weights_dir = config.weights_dir
-        if not weights_dir:
+        if not config.weights_dir:
             raise ValueError(
-                "Ideogram4 weights directory not set: pass weights_dir=... to create_pipeline "
-                "or set the IDEOGRAM4_WEIGHTS environment variable to the fp8 checkpoint dir."
+                "Ideogram4 weights not set: pass weights_dir=... to create_pipeline or set the "
+                "IDEOGRAM4_WEIGHTS environment variable to the fp8 checkpoint dir or HuggingFace repo id."
             )
+        weights_dir = _resolve_weights_dir(config.weights_dir)
         self.weights_dir = weights_dir
         qwen_repo = config.qwen_repo
         self.model_config = modeling_ideogram4.Ideogram4Config()
         self.patch, self.ae = 2, 8
         cfg = self.model_config
 
+        # The encoder and VAE run eagerly between step-trace replays, so they get their own CCL
+        # manager: the traced transformers' semaphores and ping-pong buffers are never touched
+        # outside their traces, and stay the same at every replay.
         ccl = CCLManager(mesh_device, num_links=config.num_links, topology=config.topology)
         self.ccl = ccl
+        self.dit_ccl = CCLManager(mesh_device, num_links=config.num_links, topology=config.topology)
         self._image_processor = VaeImageProcessor(vae_scale_factor=self.patch * self.ae)
         from ...utils.padding import PaddingConfig
 
@@ -317,7 +432,7 @@ class Ideogram4Pipeline(PipelineAPIMixin):
         self._enc_mrope = qcfg.rope_scaling["mrope_section"]
         # transformers >=4.57 moved rope_theta to the top-level config; older versions
         # kept it inside rope_scaling. Accept both.
-        self._enc_rope_theta = qcfg.rope_scaling.get("rope_theta", qcfg.rope_theta)
+        self._enc_rope_theta = qcfg.rope_scaling.get("rope_theta") or qcfg.rope_theta
         self.encoder = Qwen3VlTextEncoder(
             vocab_size=qcfg.vocab_size,
             hidden_size=qcfg.hidden_size,
@@ -342,6 +457,11 @@ class Ideogram4Pipeline(PipelineAPIMixin):
         )
         self.encoder.load_torch_state_dict(enc_sd)
         del enc_sd
+        # The encoder always runs at MAX_TEXT_TOKENS, so its RoPE tables are a constant.
+        enc_cos, enc_sin = create_rope_tensors(
+            1, MAX_TEXT_TOKENS, None, self._enc_head_dim, self._enc_rope_theta, self._enc_mrope
+        )
+        self._enc_rope = (bf16_tensor(enc_cos, device=mesh_device), bf16_tensor(enc_sin, device=mesh_device))
         _gc.collect()
 
         # --- conditional + unconditional denoisers (TP=4, both resident) ---
@@ -357,7 +477,7 @@ class Ideogram4Pipeline(PipelineAPIMixin):
                 llm_features_dim=cfg.llm_features_dim,
                 norm_eps=cfg.norm_eps,
                 mesh_device=mesh_device,
-                ccl_manager=ccl,
+                ccl_manager=self.dit_ccl,
                 parallel_config=dit_pc,
                 padding_config=padding_config,
             )
@@ -369,11 +489,13 @@ class Ideogram4Pipeline(PipelineAPIMixin):
         self.cond = _build_dit("transformer")
         self.uncond = _build_dit("unconditional_transformer")
 
-        # Combined-step trace (lazily captured on the first denoise step), covering both
-        # transformer forwards + velocity gathers + CFG blend + Euler update in ONE trace.
-        # Tracing eliminates the 34-layer x 2-branch op-dispatch host overhead per step; a
-        # single trace keeps all persistent-buffer allocation BEFORE capture (no corruption).
-        self._step_tracer = None
+        # Serving state, filled by warmup(): per-size constants and step trace (keyed by
+        # (width, height)), and the per-request buffers of each padded length. The conditional
+        # logical_n is written by every request; allocated here, before any capture.
+        self._sizes: dict[tuple[int, int], _SizeState] = {}
+        self._seq_buffers: dict[int, _SeqBuffers] = {}
+        self._cond_logical_n = self._logical_n(0, on_host=False)
+        self.num_trace_captures = 0
 
         # --- VAE decoder (TP=4) ---
         vae_sd = _load_file(f"{weights_dir}/vae/diffusion_pytorch_model.safetensors")
@@ -403,28 +525,45 @@ class Ideogram4Pipeline(PipelineAPIMixin):
         del akl, vae_sd
         _gc.collect()
 
+        if run_warmup and config.resolutions:
+            self.warmup(sizes=config.resolutions)
+
     @classmethod
     def create_pipeline(
         cls,
         *,
         mesh_device: ttnn.MeshDevice,
-        height: int = 512,
-        width: int = 512,
+        height: int | None = None,
+        width: int | None = None,
         weights_dir: str = _DEFAULT_WEIGHTS_DIR,
         qwen_repo: str = _DEFAULT_QWEN_REPO,
         topology: ttnn.Topology | None = None,
         num_links: int | None = None,
+        resolutions: Sequence[tuple[int, int]] | None = None,
+        run_warmup: bool = True,
     ) -> Ideogram4Pipeline:
+        """Build the pipeline and, by default, warm it up to serve.
+
+        ``resolutions`` ((width, height) pairs; default the mesh preset's) are warmed at load with
+        ``warmup``, which compiles every program of each size and captures and keeps its step trace,
+        so no request at those sizes compiles or captures after this returns, and a request at any
+        other size raises. On a BH Galaxy (4x8) the default is the four 2K ``SERVING_SIZES``, which
+        need a mesh opened with ``trace_region_size`` >= ``required_trace_region_size(mesh_shape)``
+        (128 MB); other meshes have none. A call that names no size runs at ``height`` x ``width``,
+        by default the first resolution (512x512 without resolutions). ``run_warmup=False`` skips the warmup: then call ``warmup``
+        yourself before traced requests, or run untraced at any size.
+        """
         config = Ideogram4PipelineConfig.default(
             mesh_shape=mesh_device.shape,
             height=height,
             width=width,
+            resolutions=resolutions,
             weights_dir=weights_dir,
             qwen_repo=qwen_repo,
             topology=topology,
             num_links=num_links,
         )
-        return cls(device=mesh_device, config=config)
+        return cls(device=mesh_device, config=config, run_warmup=run_warmup)
 
     @classmethod
     def from_pretrained(
@@ -438,7 +577,8 @@ class Ideogram4Pipeline(PipelineAPIMixin):
         **kw,
     ):
         """Back-compat factory. Prefer create_pipeline; the tp_axis/num_links/topology now come
-        from the mesh-shape preset (tp_axis is ignored, preset is authoritative)."""
+        from the mesh-shape preset (tp_axis is ignored, preset is authoritative). Like
+        create_pipeline, it warms the configured resolutions unless ``run_warmup=False``."""
         return cls.create_pipeline(
             mesh_device=mesh_device, weights_dir=weights_dir, num_links=num_links, topology=topology, **kw
         )
@@ -460,7 +600,7 @@ class Ideogram4Pipeline(PipelineAPIMixin):
         letting _encode raise mid-generation). Same tokenization _encode uses."""
         return int(self._tokenize(prompt).shape[1])
 
-    def _encode(self, prompt: str):
+    def _encode(self, prompt: str, *, warm_readback: bool = False):
         """Tokenize + run the device encoder -> real interleaved llm_features (host) + n_text.
 
         CONSTANT-SHAPE: the token ids are padded to exactly ``MAX_TEXT_TOKENS`` and the
@@ -469,6 +609,8 @@ class Ideogram4Pipeline(PipelineAPIMixin):
         The Qwen3-VL encoder is CAUSAL (model_qwen3vl: is_causal=(attention_bias is None),
         and we pass attention_mask=None), so the real rows [0:n_text] are unaffected by the
         trailing pad. We slice the taps back to [:, :n_text] and return the real-length feats.
+
+        ``warm_readback`` compiles the readback slice of every row bucket (see below).
         """
         ids = self._tokenize(prompt)
         n_text = ids.shape[1]
@@ -483,109 +625,280 @@ class Ideogram4Pipeline(PipelineAPIMixin):
             pad_id = 0
         if n_text < MAX_TEXT_TOKENS:
             ids = torch.nn.functional.pad(ids, (0, MAX_TEXT_TOKENS - n_text), value=int(pad_id))
-        cos, sin = create_rope_tensors(
-            1, MAX_TEXT_TOKENS, None, self._enc_head_dim, self._enc_rope_theta, self._enc_mrope
-        )
         tt_ids = ttnn.from_torch(ids, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.mesh_device)
-        taps = self.encoder.forward(
-            tt_ids,
-            attention_mask=None,
-            pos_embeds=(bf16_tensor(cos, device=self.mesh_device), bf16_tensor(sin, device=self.mesh_device)),
-        )
+        taps = self.encoder.forward(tt_ids, attention_mask=None, pos_embeds=self._enc_rope)
+        ttnn.deallocate(tt_ids)
         # taps: 13 x [1, MAX_TEXT_TOKENS, 4096], REPLICATED across the whole mesh.
-        # Read back cheaply: slice to the real text rows [0:n_text] ON DEVICE (causal => pad rows
-        # never influence the real rows, and the model masks them anyway), then read a SINGLE
-        # replica via get_device_tensors(t)[0]. The old `to_torch(mesh_axes=[None,None,None])`
-        # built a composer over every mesh axis, so ttnn.to_torch pulled ALL N device copies to
-        # host and discarded N-1 (~1.4 s/chip => ~45 s on a 32-chip galaxy). Slicing to n_text
-        # first and reading one replica moves ~n_text/2048 x 1/N the bytes; values are identical
-        # (same device-0 data). Interleave to [1, n_text, 53248] (element = f*13 + l) on host.
-        taps_t = [
-            ttnn.to_torch(ttnn.get_device_tensors(ttnn.slice(t, [0, 0, 0], [1, n_text, t.shape[-1]]))[0]) for t in taps
-        ]
+        # Read back cheaply: slice to the real text rows ON DEVICE (causal => pad rows never
+        # influence the real rows, and the model masks them anyway), then read a SINGLE replica
+        # via get_device_tensors(t)[0]. Reading every replica pulls all N device copies to host
+        # (~1.4 s/chip => ~45 s on a 32-chip galaxy). The slice is rounded up to a whole bucket of
+        # rows so that only MAX_TEXT_TOKENS / _TEXT_READBACK_BUCKET slice programs exist, all
+        # compiled by warmup, instead of one per prompt length; the host drops the extra rows.
+        # Interleave to [1, n_text, 53248] (element = f*13 + l) on host.
+        rows = min(MAX_TEXT_TOKENS, -(-n_text // _TEXT_READBACK_BUCKET) * _TEXT_READBACK_BUCKET)
+        taps_t = []
+        for t in taps:
+            part = ttnn.slice(t, [0, 0, 0], [1, rows, t.shape[-1]])
+            taps_t.append(ttnn.to_torch(ttnn.get_device_tensors(part)[0])[:, :n_text])
+            ttnn.deallocate(part)
+        if warm_readback:
+            for bucket in range(_TEXT_READBACK_BUCKET, MAX_TEXT_TOKENS + 1, _TEXT_READBACK_BUCKET):
+                ttnn.deallocate(ttnn.slice(taps[0], [0, 0, 0], [1, bucket, taps[0].shape[-1]]))
+        for t in taps:
+            ttnn.deallocate(t)
         return interleave_layer_taps(taps_t).to(torch.bfloat16), n_text
 
+    def _seq_host(self, t: torch.Tensor, seq_dim: int) -> ttnn.Tensor:
+        """bf16 host tensor sharded on the SP axis along ``seq_dim``, for an in-place device write."""
+        return bf16_tensor(t, device=self.mesh_device, mesh_axis=self.sp_axis, shard_dim=seq_dim, on_host=True)
+
     def _seq_dev(self, t: torch.Tensor, seq_dim: int) -> ttnn.Tensor:
-        """bf16 device tensor: shard on the SP axis along ``seq_dim`` when SP>1, else replicate."""
-        if self.sp_factor > 1:
-            return bf16_tensor(t, device=self.mesh_device, mesh_axis=self.sp_axis, shard_dim=seq_dim)
-        return bf16_tensor(t, device=self.mesh_device)
+        """bf16 device tensor sharded on the SP axis along ``seq_dim``."""
+        return bf16_tensor(t, device=self.mesh_device, mesh_axis=self.sp_axis, shard_dim=seq_dim)
 
     def _idx_dev(self, t: torch.Tensor, seq_dim: int) -> ttnn.Tensor:
-        """uint32 device tensor (embedding index): shard on the SP axis when SP>1, else replicate."""
-        if self.sp_factor > 1:
-            mesh_axes = [self.sp_axis if d == seq_dim else None for d in range(t.ndim)]
-            return tensor.from_torch(t, device=self.mesh_device, dtype=ttnn.uint32, mesh_axes=mesh_axes)
-        return tensor.from_torch(t, device=self.mesh_device, dtype=ttnn.uint32)
+        """uint32 device tensor (embedding index) sharded on the SP axis."""
+        mesh_axes = [self.sp_axis if d == seq_dim else None for d in range(t.ndim)]
+        return tensor.from_torch(t, device=self.mesh_device, dtype=ttnn.uint32, mesh_axes=mesh_axes)
 
-    def _branch(self, n_pre, num_img, grid_h, grid_w, llm_real):
-        """Build the per-branch device tensors with a CONSTANT [image | text | pad] layout.
+    def _logical_n(self, n: int, *, on_host: bool) -> ttnn.Tensor:
+        """Ring-SDPA ``logical_n`` as a [1,1,1,1] uint32 ROW_MAJOR replicated tensor. The kernels read
+        it on device each dispatch, so they compile once per size for any prompt length, and a trace
+        reads whatever value was last written into the buffer."""
+        return tensor.from_torch(
+            torch.tensor([n], dtype=torch.int64).reshape(1, 1, 1, 1),
+            device=self.mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_axes=[None, None, None, None],
+            on_host=on_host,
+        )
 
-        The total length ``L = get_padded_vision_seq_len(num_img + MAX_TEXT_TOKENS, sp_factor)`` is the
-        same for every prompt (cond/uncond, any n_text), so the per-token tensors are allocated
-        once and reused -> no shape-keyed persistent-output-buffer leak / DRAM fragmentation.
+    def _host_repl(self, t: torch.Tensor) -> ttnn.Tensor:
+        """bf16 HOST tensor replicated across the mesh. A tracer copies it into its captured slot."""
+        return tensor.from_torch(
+            t.to(torch.bfloat16),
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_axes=[None] * t.ndim,
+            on_host=True,
+        )
 
-        Layout (image-FIRST):
-          [0 : num_img]              -> image tokens   (OUTPUT_IMAGE_INDICATOR)
-          [num_img : num_img+n_pre]  -> real text      (LLM_TOKEN_INDICATOR)
-          [num_img+n_pre : L]        -> pad            (SEQUENCE_PADDING_INDICATOR -> both masks 0)
+    def _step_inputs(self, z: ttnn.Tensor, t_val: float, gw: float, smt: float) -> tuple:
+        """The per-step arguments of a size's step function: the resident latent (updated in place,
+        so its address never changes and the tracer skips the copy), then t_sin and the two scalars
+        guidance weight and step size ``s - t`` as host tensors."""
+        t_sin = Ideogram4Transformer.sinusoidal_embedding(torch.tensor([t_val]), self.model_config.emb_dim)
+        return (
+            z,
+            self._host_repl(t_sin.unsqueeze(1)),
+            self._host_repl(torch.tensor([[[float(gw)]]])),
+            self._host_repl(torch.tensor([[[float(smt)]]])),
+        )
 
-        This reorder (text-AFTER-image instead of text-before) is LOSSLESS: the denoiser uses
-        FULL attention + per-token MRoPE (permutation-equivariant), so each token's output is
-        identical regardless of position in the sequence as long as it keeps its own position_ids.
-        The REAL length ``seq = num_img + n_pre`` is returned as ``seq`` and passed to the model
-        as ``spatial_sequence_length`` (ring-SDPA ``logical_n``), masking the trailing pad. We do
-        NOT pass L as spatial_sequence_length.
-        """
+    # ------------------------------------------------------------------------------------------
+    # Per-size state. A request's sequence has the constant layout [image | text | pad] of length
+    # L = get_padded_vision_seq_len(num_img + MAX_TEXT_TOKENS, sp_factor), the same for any prompt.
+    # Everything that depends only on the size (positions -> cos/sin, image mask, embedding index,
+    # the unconditional logical_n, the latent buffer) is built once per size; the prompt only
+    # changes the text features, the text mask and the conditional logical_n, which every request
+    # writes in place into buffers allocated before any trace capture.
+    # ------------------------------------------------------------------------------------------
+
+    def _build_size_state(self, width: int, height: int) -> _SizeState:
         cfg = self.model_config
-        seq = n_pre + num_img  # REAL length (logical_n); image + real text, no pad
-        # Constant total length across all prompts (image + MAX text, SP-aligned).
+        grid_h, grid_w = height // (self.patch * self.ae), width // (self.patch * self.ae)
+        num_img = grid_h * grid_w
         L = get_padded_vision_seq_len(num_img + MAX_TEXT_TOKENS, self.sp_factor)
 
-        # Indicator: PAD sentinel everywhere, then stamp image-front + real-text region.
-        ind = torch.full((1, L), SEQUENCE_PADDING_INDICATOR, dtype=torch.long)
-        ind[:, :num_img] = OUTPUT_IMAGE_INDICATOR
-        if n_pre:
-            ind[:, num_img : num_img + n_pre] = LLM_TOKEN_INDICATOR
-
-        llm = torch.zeros(1, L, cfg.llm_features_dim, dtype=torch.bfloat16)
-        if n_pre and llm_real is not None:
-            llm[:, num_img : num_img + n_pre] = llm_real
-
         pos = torch.zeros(1, L, 3, dtype=torch.long)
-        # Image grid-positions occupy the FRONT [0:num_img].
         hh = torch.arange(grid_h).repeat_interleave(grid_w)
         ww = torch.arange(grid_w).repeat(grid_h)
         pos[:, :num_img, 0] = IMAGE_POSITION_OFFSET
         pos[:, :num_img, 1] = IMAGE_POSITION_OFFSET + hh
         pos[:, :num_img, 2] = IMAGE_POSITION_OFFSET + ww
-        # Text positions occupy [num_img : num_img+n_pre]; pad rows keep position 0 (inert).
-        if n_pre:
-            tp = torch.arange(n_pre)
-            pos[:, num_img : num_img + n_pre] = torch.stack([tp, tp, tp], dim=1)
+        # Every row after the image takes text position 0, 1, 2, ... whether it holds text or
+        # padding. The real text rows keep the positions the reference gives them, and the padding
+        # rows, which logical_n masks out of attention and whose outputs are never read, no longer
+        # depend on the prompt length, so cos/sin are a per-size constant.
+        pos[:, num_img:] = torch.arange(L - num_img).unsqueeze(-1).expand(-1, 3)
 
+        head_dim = cfg.emb_dim // cfg.num_heads
         rope = modeling_ideogram4.Ideogram4MRoPE(
-            head_dim=cfg.emb_dim // cfg.num_heads, base=cfg.rope_theta, mrope_section=cfg.mrope_section
+            head_dim=head_dim, base=cfg.rope_theta, mrope_section=cfg.mrope_section
         )
         cos, sin = rope(pos)
-        cos4 = cos.unsqueeze(1).to(torch.bfloat16)  # [1, 1, L, head_dim]
-        sin4 = sin.unsqueeze(1).to(torch.bfloat16)
         # Denoiser uses interleaved RoPE (rotary_embedding_llama); permute cos/sin to match.
-        cos4, sin4 = rope_halfsplit_to_interleaved(cos4, sin4, cfg.emb_dim // cfg.num_heads)
-        llm_mask = (ind == LLM_TOKEN_INDICATOR).float().unsqueeze(-1)  # [1, L, 1]
-        img_mask = (ind == OUTPUT_IMAGE_INDICATOR).float().unsqueeze(-1)
-        idx = (ind == OUTPUT_IMAGE_INDICATOR).to(torch.int32)  # [1, L]
-        return dict(
-            llm=self._seq_dev(llm, 1),
+        cos4, sin4 = rope_halfsplit_to_interleaved(
+            cos.unsqueeze(1).to(torch.bfloat16), sin.unsqueeze(1).to(torch.bfloat16), head_dim
+        )  # [1, 1, L, head_dim]
+        is_img = torch.arange(L).unsqueeze(0) < num_img  # [1, L]
+        return _SizeState(
+            grid_h=grid_h,
+            grid_w=grid_w,
+            num_img=num_img,
+            padded_len=L,
+            z=tensor.from_torch(
+                torch.zeros(1, num_img, cfg.in_channels), device=self.mesh_device, mesh_axes=[None, None, None]
+            ),
             cos=self._seq_dev(cos4, 2),
             sin=self._seq_dev(sin4, 2),
-            llm_mask=self._seq_dev(llm_mask, 1),
-            img_mask=self._seq_dev(img_mask, 1),
-            idx=self._idx_dev(idx, 1),
-            seq=seq,
-            padded_len=L,
-            n_pre=n_pre,
+            img_mask=self._seq_dev(is_img.float().unsqueeze(-1), 1),
+            idx=self._idx_dev(is_img.to(torch.int32), 1),
+            # The unconditional sequence is the image alone.
+            uncond_logical_n=self._logical_n(num_img, on_host=False),
         )
+
+    def _build_seq_buffers(self, L: int) -> _SeqBuffers:
+        cfg = self.model_config
+        return _SeqBuffers(
+            llm=self._seq_dev(torch.zeros(1, L, cfg.llm_features_dim, dtype=torch.bfloat16), 1),
+            cond_llm_mask=self._seq_dev(torch.zeros(1, L, 1), 1),
+            uncond_llm_mask=self._seq_dev(torch.zeros(1, L, 1), 1),
+        )
+
+    def _write_prompt(self, st: _SizeState, sb: _SeqBuffers, llm_real: torch.Tensor, n_text: int) -> None:
+        """Write one prompt's conditioning into the buffers the step trace reads, in place."""
+        L, num_img = st.padded_len, st.num_img
+        llm = torch.zeros(1, L, self.model_config.llm_features_dim, dtype=torch.bfloat16)
+        llm[:, num_img : num_img + n_text] = llm_real
+        llm_mask = torch.zeros(1, L, 1)
+        llm_mask[:, num_img : num_img + n_text] = 1
+        ttnn.copy_host_to_device_tensor(self._seq_host(llm, 1), sb.llm)
+        ttnn.copy_host_to_device_tensor(self._seq_host(llm_mask, 1), sb.cond_llm_mask)
+        ttnn.copy_host_to_device_tensor(self._logical_n(num_img + n_text, on_host=True), self._cond_logical_n)
+
+    def _velocity(self, model, st: _SizeState, sb: _SeqBuffers, x_sp, t_sin, llm_mask, logical_n) -> ttnn.Tensor:
+        """Transformer forward + SP-axis gather + image-token slice -> [1, num_img, in_ch] replicated."""
+        out = model(
+            x=x_sp,
+            # The unconditional branch reads the conditional features too; its all-zero text mask
+            # zeroes them before they are used (llm_cond_norm(llm_features * llm_token_mask)).
+            llm_features=sb.llm,
+            t_sin=t_sin,
+            cos=st.cos,
+            sin=st.sin,
+            image_indicator_index=st.idx,
+            llm_token_mask=llm_mask,
+            output_image_mask=st.img_mask,
+            spatial_sequence_length=logical_n,
+        )  # [1, L/sp, in_ch] sequence-sharded
+        out = self.dit_ccl.all_gather_persistent_buffer(out, dim=1, mesh_axis=self.sp_axis)
+        # Image tokens are at the FRONT [0:num_img].
+        return ttnn.slice(out, [0, 0, 0], [1, st.num_img, self.model_config.in_channels])
+
+    def _step_fn(self, st: _SizeState, sb: _SeqBuffers):
+        """The whole denoising step of one size, captured as one trace: build x from z on device,
+        both transformer forwards and their velocity gathers, the CFG blend and the Euler update,
+        written back into z in place."""
+        pad_rows = st.padded_len - st.num_img
+
+        def step_fn(z_dev, t_sin, gw, smt):
+            # The model masks every non-image row of x to 0, so padding z with zeros to L and
+            # SP-sharding it on device gives the transformer input; cond and uncond share it.
+            x_sp = ttnn.pad(z_dev, [(0, 0), (0, pad_rows), (0, 0)], value=0.0)
+            x_sp = ttnn.mesh_partition(x_sp, dim=1, cluster_axis=self.sp_axis)  # [1, L/sp, in_ch]
+            v_cond = self._velocity(self.cond, st, sb, x_sp, t_sin, sb.cond_llm_mask, self._cond_logical_n)
+            v_uncond = self._velocity(self.uncond, st, sb, x_sp, t_sin, sb.uncond_llm_mask, st.uncond_logical_n)
+            v = cfg_blend(v_cond, v_uncond, gw)
+            # Euler update z <- z + v * (s - t), as Ideogram4Sampler.step, with the step size a device
+            # tensor so one trace serves every step and preset.
+            ttnn.copy(z_dev + v * smt, z_dev)
+            return z_dev
+
+        return step_fn
+
+    def _free_size_state(self, st: _SizeState, sb: _SeqBuffers | None) -> None:
+        for t in (st.z, st.cos, st.sin, st.img_mask, st.idx, st.uncond_logical_n):
+            ttnn.deallocate(t)
+        if sb is not None:
+            for t in (sb.llm, sb.cond_llm_mask, sb.uncond_llm_mask):
+                ttnn.deallocate(t)
+
+    def _check_size(self, width: int, height: int) -> None:
+        # The latent grid is (height, width) // (patch*ae); a non-divisible size would silently
+        # floor (e.g. 513 -> a 512px image), so reject it up front with a clear error.
+        vae_patch = self.patch * self.ae
+        if height % vae_patch != 0 or width % vae_patch != 0:
+            raise ValueError(f"height and width must be multiples of {vae_patch} (patch*ae); got {height}x{width}")
+        # Before any device work, rather than after the denoising loop.
+        self.decode_stage.vae_decoder.check_output_size(width, height)
+
+    @property
+    def resolutions(self) -> tuple[tuple[int, int], ...]:
+        """The (width, height) sizes a traced call may ask for: the warmed ones (``warmed_sizes``).
+
+        Unlike Wan's ``resolutions`` (the configured sizes), these are the sizes actually warmed: empty
+        after ``run_warmup=False`` until ``warmup`` runs, and they grow with each ``warmup`` call.
+        """
+        return self.warmed_sizes
+
+    @property
+    def warmed_sizes(self) -> tuple[tuple[int, int], ...]:
+        """The (width, height) sizes ``warmup`` prepared, in warmup order."""
+        return tuple(self._sizes)
+
+    @torch.no_grad()
+    def warmup(self, sizes: Sequence[tuple[int, int]] | None = None) -> None:
+        """Prepare the pipeline to serve ``sizes`` ((width, height) pairs; default the configured size).
+
+        Runs in two phases so that no buffer that must outlive a trace is allocated after one is
+        captured (a trace replay may overwrite memory allocated after its capture):
+
+        1. Eager, at every size: compiles every program a request runs (encoder, text readback,
+           both transformers, the step, the VAE decode), prepares the Conv2d weights of each VAE
+           size, allocates every CCL buffer, and builds the per-size constants and the per-request
+           buffers the step reads.
+        2. Captures one denoising-step trace per size, kept until ``release_traces``.
+
+        Afterwards a request at a warmed size compiles nothing, captures nothing and keeps no new
+        device allocation; a request at any other size raises. Calling it again re-captures every
+        trace, adding the new sizes.
+        """
+        if sizes is None:
+            sizes = [(self._config.width, self._config.height)]
+        sizes = [(int(w), int(h)) for w, h in sizes]
+        for w, h in sizes:
+            self._check_size(w, h)
+        # Every warmed size's trace is re-captured, not only the new ones.
+        _check_trace_region(self.mesh_device, self.mesh_device.shape, [*self._sizes, *sizes])
+
+        # No trace may be live while phase 1 allocates.
+        self.release_traces()
+
+        llm_real, n_text = self._encode("warmup", warm_readback=True)
+        for size in sizes:
+            if size in self._sizes:
+                continue
+            _dq_log.info(f"Ideogram4 warmup: eager run at {size[0]}x{size[1]}")
+            st = self._build_size_state(*size)
+            self._sizes[size] = st
+            if st.padded_len not in self._seq_buffers:
+                self._seq_buffers[st.padded_len] = self._build_seq_buffers(st.padded_len)
+            sb = self._seq_buffers[st.padded_len]
+            self._write_prompt(st, sb, llm_real, n_text)
+            self._step_fn(st, sb)(
+                *(a if a is st.z else a.to(self.mesh_device) for a in self._step_inputs(st.z, 0.5, 3.0, 0.0))
+            )
+            self.decode_stage.decode(st.z, grid_h=st.grid_h, grid_w=st.grid_w)
+            ttnn.synchronize_device(self.mesh_device)
+
+        for size, st in self._sizes.items():
+            _dq_log.info(f"Ideogram4 warmup: capturing the step trace at {size[0]}x{size[1]}")
+            sb = self._seq_buffers[st.padded_len]
+            st.tracer = Tracer(self._step_fn(st, sb), device=self.mesh_device, prep_run=False, clone_prep_inputs=False)
+            st.tracer(*self._step_inputs(st.z, 0.5, 3.0, 0.0), tracer_execute_on_capture=False)
+            self.num_trace_captures += 1
+        ttnn.synchronize_device(self.mesh_device)
+
+    def release_traces(self) -> None:
+        """Release every kept step trace (the per-size buffers stay allocated)."""
+        for st in self._sizes.values():
+            if st.tracer is not None:
+                st.tracer.release_trace()
+                st.tracer = None
 
     @torch.no_grad()
     def __call__(
@@ -601,7 +914,14 @@ class Ideogram4Pipeline(PipelineAPIMixin):
         preset: str = "V4_TURBO_12",
         guidance_scale: float | None = None,
         on_event: PipelineEventCallback | None = None,
+        latents: torch.Tensor | None = None,
     ) -> list[Image.Image]:
+        """Generate one image.
+
+        ``traced=True`` replays the step trace ``warmup`` captured for the size and raises for a size
+        that was not warmed up. ``traced=False`` runs the step eagerly: at a warmed size it uses the
+        warmed buffers; before any warmup it works at any size, with buffers freed afterwards.
+        """
         on_event = on_event if on_event is not None else null_callback
         assert len(prompts) == 1, "Ideogram4 pipeline generates one image per call"
         prompt = prompts[0]
@@ -611,25 +931,24 @@ class Ideogram4Pipeline(PipelineAPIMixin):
             _dq_log.warning("Ideogram4 ignores negative_prompts (its unconditional net takes no text)")
         height = height if height is not None else self._config.height
         width = width if width is not None else self._config.width
-
-        # The latent grid is (height, width) // (patch*ae); a non-divisible size would silently
-        # floor (e.g. 513 -> a 512px image), so reject it up front with a clear error.
-        vae_patch = self.patch * self.ae  # 16
-        if height % vae_patch != 0 or width % vae_patch != 0:
-            raise ValueError(f"height and width must be multiples of {vae_patch} (patch*ae); got {height}x{width}")
+        self._check_size(width, height)
 
         cfg = self.model_config
         dev = self.mesh_device
-        grid_h, grid_w = height // (self.patch * self.ae), width // (self.patch * self.ae)
-        num_img = grid_h * grid_w
-
-        on_event(SectionStart("total"))
-        on_event(SectionStart("encoder"))
-        llm_real, n_text = self._encode(prompt)
-        ttnn.synchronize_device(dev)
-        on_event(SectionEnd("encoder"))
-        cond_b = self._branch(n_text, num_img, grid_h, grid_w, llm_real)
-        uncond_b = self._branch(0, num_img, grid_h, grid_w, None)
+        st = self._sizes.get((width, height))
+        if st is None and (traced or self._sizes):
+            # After warmup, building a size's buffers or compiling its programs would allocate while
+            # the kept traces are live, which their replays may overwrite.
+            raise ValueError(
+                f"size {width}x{height} was not warmed up; warmed sizes are {list(self._sizes)}. "
+                f"Call warmup(sizes=[...]) with every size to serve before the first request."
+            )
+        temporary = st is None
+        if temporary:
+            st = self._build_size_state(width, height)
+            sb = self._build_seq_buffers(st.padded_len)
+        else:
+            sb = self._seq_buffers[st.padded_len]
 
         sampler = Ideogram4Sampler.from_preset(preset, height=height, width=width)
         if num_inference_steps is not None and num_inference_steps != sampler.num_steps:
@@ -643,163 +962,44 @@ class Ideogram4Pipeline(PipelineAPIMixin):
                 f"guidance schedule at every step (the model was distilled for that schedule; a "
                 f"constant override may degrade quality)"
             )
-        # Seed the initial noise from the per-call seed via an explicit generator, so z is
-        # reproducible regardless of any other RNG use between here and now.
-        z = torch.randn(1, num_img, cfg.in_channels, dtype=torch.float32, generator=torch.Generator().manual_seed(seed))
-
-        def _branch_velocity(model, br, x_full):
-            """Transformer forward + on-device SP-axis gather + image-token slice ->
-            [1, num_img, in_ch] (device, replicated). All CCL ops are inside the trace so the
-            ping-pong semaphore sequence the trace records stays self-consistent on replay."""
-            out = model(
-                x=x_full,
-                llm_features=br["llm"],
-                t_sin=br["t_sin"],
-                cos=br["cos"],
-                sin=br["sin"],
-                image_indicator_index=br["idx"],
-                llm_token_mask=br["llm_mask"],
-                output_image_mask=br["img_mask"],
-                spatial_sequence_length=br["seq"],
-            )  # [1, padded_len/sp, in_ch] sequence-sharded
-            if self.sp_factor > 1:
-                out = self.ccl.all_gather_persistent_buffer(out, dim=1, mesh_axis=self.sp_axis)
-            # Image tokens are at the FRONT [0:num_img] (constant [image | text | pad] layout).
-            return ttnn.slice(out, [0, 0, 0], [1, num_img, cfg.in_channels])
-
-        # The ENTIRE per-step computation runs in a SINGLE trace: build x from z on device,
-        # cond forward, uncond forward, the two SP-axis velocity gathers, the asymmetric-CFG
-        # blend and the Euler update. Capturing all of it in one trace is what makes tracing
-        # CORRECT here: the Tracer runs a prep pass that allocates every persistent buffer
-        # (the x pad/partition output, both branches' ring-SDPA / all-gather buffers, the
-        # blend/Euler temporaries) BEFORE capture, so no device buffer is allocated while a
-        # trace is active ("Allocating device buffers is unsafe ... may be corrupted once a
-        # trace is executed"). Per-step inputs: the resident device latent z (the previous
-        # step's output, copied into the captured z slot in place -> the latent NEVER round-
-        # trips to host mid-loop), a HOST t_sin, and 3 scalar HOST tensors (gw, 1-gw, s-t).
-        # The trace RETURNS the next z (device), fed straight back next step; z is read back
-        # to host exactly ONCE, after the loop, for decode.
-        # Constant total length L (same for cond/uncond now that the layout is [image|text|pad]).
-        L = cond_b["padded_len"]
-        assert uncond_b["padded_len"] == L
-
-        # Number of trailing (text|pad) rows to append to z to reach the constant length L.
-        # Image tokens are at the FRONT [0:num_img]; the model masks all non-image rows to 0
-        # (forward: x = input_proj(x * output_image_mask) * output_image_mask), so appending
-        # zeros here is numerically identical to the host-built [image|zeros...] tensor.
-        _x_pad_rows = L - num_img
-
-        def _x_full_from_z(z_dev):
-            """Build the SP-sharded transformer x input ON DEVICE from the replicated latent z.
-
-            z_dev: [1, num_img, in_ch] replicated. Pads trailing rows to the constant length L
-            (image-first layout), then SP-shards dim 1 across the SP axis via mesh_partition
-            (the inverse of the SP all-gather -> each device gets its [1, L/sp, in_ch] shard).
-            Replaces the per-step HOST rebuild + host->device copy of x_cond/x_uncond. cond and
-            uncond consume IDENTICAL x (conditioning lives only in llm/masks/idx/logical_n), and
-            the block never mutates x in place, so a single shared tensor feeds both branches.
-            """
-            x_full = ttnn.pad(z_dev, [(0, 0), (0, _x_pad_rows), (0, 0)], value=0.0)  # [1, L, in_ch] repl
-            if self.sp_factor > 1:
-                x_full = ttnn.mesh_partition(x_full, dim=1, cluster_axis=self.sp_axis)  # [1, L/sp, in_ch]
-            return x_full
-
-        def step_fn(z_dev, t_sin, gw, smt):
-            # t_sin feeds both branches' adaln; share the same per-step embedding.
-            cond_b["t_sin"] = t_sin
-            uncond_b["t_sin"] = t_sin
-            # Build the (padded, SP-sharded) x input on device from the resident z (no host round-trip).
-            x_sp = _x_full_from_z(z_dev)
-            v_cond = _branch_velocity(self.cond, cond_b, x_sp)
-            v_uncond = _branch_velocity(self.uncond, uncond_b, x_sp)
-            # Asymmetric CFG via lerp: v = gw*v_cond + (1-gw)*v_uncond. gw is a 1-element
-            # device tensor so it can be updated per step inside the trace.
-            v = cfg_blend(v_cond, v_uncond, gw)
-            # Euler update via the sampler's step() (production path), with the per-step size s-t
-            # passed as a device tensor so it re-patches inside the trace -> next z [1, num_img, in_ch].
-            z_next = sampler.step(z_dev, v, scale=smt)
-            # Write the update back INTO the resident z buffer in place, so the SAME buffer is
-            # both this step's input (pad reads it at the top) and the running state the next
-            # replay reads. The trace records read(z_dev) -> ... -> copy(z_next -> z_dev); on
-            # replay this executes as an in-place recurrence with NO host feedback and NO
-            # post-capture device allocation (the caller reuses the identical z buffer each
-            # step, so the Tracer's _update_input is a no-op -> no ttnn.copy from the host side).
-            ttnn.copy(z_next, z_dev)
-            return z_dev
-
-        def _scalar_host(val):
-            # 1-element bf16 HOST tensor, replicated across the mesh; the tracer moves it into
-            # its captured device slot each step (no new device allocation on replay).
-            return tensor.from_torch(
-                torch.tensor([[[float(val)]]], dtype=torch.bfloat16),
-                device=dev,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                mesh_axes=[None, None, None],
-                on_host=True,
+        # Initial noise: caller-supplied latents (e.g. one CPU-drawn tensor shared across runs, so
+        # only the prompt varies), else drawn from the per-call seed via an explicit generator so z
+        # is reproducible regardless of any other RNG use between here and now.
+        if latents is not None:
+            expected = (1, st.num_img, cfg.in_channels)
+            if tuple(latents.shape) != expected:
+                raise ValueError(f"latents shape {tuple(latents.shape)} != {expected} for {height}x{width}")
+            z = latents.detach().to(device="cpu", dtype=torch.float32).clone()
+        else:
+            z = torch.randn(
+                1, st.num_img, cfg.in_channels, dtype=torch.float32, generator=torch.Generator().manual_seed(seed)
             )
 
-        def _host_repl(t: torch.Tensor):
-            # bf16 HOST tensor replicated across the mesh (for t_sin, which the model consumes
-            # replicated, not SP-sharded). The tracer moves it onto its captured device slot.
-            return tensor.from_torch(
-                t.to(torch.bfloat16),
-                device=dev,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                mesh_axes=[None] * t.ndim,
-                on_host=True,
-            )
+        on_event(SectionStart("total"))
+        on_event(SectionStart("encoder"))
+        llm_real, n_text = self._encode(prompt)
+        self._write_prompt(st, sb, llm_real, n_text)
+        ttnn.synchronize_device(dev)
+        on_event(SectionEnd("encoder"))
 
+        # The latent stays resident in st.z for the whole loop: written once here, then updated in
+        # place by every step (step_fn ends with copy(z_next -> z)), and read once for decode.
+        ttnn.copy_host_to_device_tensor(self._host_repl(z), st.z)
+        step_fn = None if traced else self._step_fn(st, sb)
         self.step_trace = []
-        # The latent z stays RESIDENT ON DEVICE across the whole loop in a SINGLE persistent
-        # buffer. It is uploaded once here (replicated) and thereafter the trace updates it
-        # IN PLACE each step (step_fn: read z -> ... -> ttnn.copy(z_next, z_dev)). No per-step
-        # device->host readback, no per-step host x rebuild, and no host-side feedback of the
-        # output -> the caller passes the identical z buffer every step, so the Tracer's
-        # _update_input sees a matching buffer_address and is a no-op, so nothing is allocated on
-        # device once the trace is live. The x transformer input is built on device from z each step
-        # (pad -> SP mesh_partition), inside the trace.
-        z_dev = _host_repl(z).to(dev)  # [1, num_img, in_ch] replicated, device-resident persistent
-        z_out = z_dev
-        steps = list(reversed(range(sampler.num_steps)))
         _verbose = getattr(self, "_verbose_steps", False)
         on_event(SectionStart("denoising"))
-        for n, i in enumerate(steps):
+        for n, i in enumerate(reversed(range(sampler.num_steps))):
             on_event(SectionStart(f"denoising_step_{n}"))
             t_val, s_val = sampler.times_for_step(i)
             gw = sampler.guidance_weight(i) if guidance_scale is None else guidance_scale
-            smt = s_val - t_val
-            t_sin = Ideogram4Transformer.sinusoidal_embedding(torch.tensor([t_val]), cfg.emb_dim).unsqueeze(1)
-            # Always pass the persistent z buffer. step_fn updates it in place and returns the
-            # same buffer, so its address never changes across steps; on replay the Tracer sees a
-            # matching buffer_address and skips the input copy (no host->device copy, no device
-            # allocation once the trace is live) -- the same reuse the removed None-path gave, but
-            # via the stock Tracer. t_sin + 3 scalars are HOST tensors.
-            z_arg = z_dev
-            args = (
-                z_arg,
-                _host_repl(t_sin),
-                _scalar_host(gw),
-                _scalar_host(smt),
-            )
+            args = self._step_inputs(st.z, t_val, gw, s_val - t_val)
             if traced:
-                if self._step_tracer is None:
-                    # step_fn writes its result back into z_dev in place (ttnn.copy(z_next, z_dev)),
-                    # so the prep pass MUST run on a clone; otherwise it applies step 0's Euler
-                    # update to the real z_dev and the executed trace applies it a second time,
-                    # double-counting the first step. Cloning only affects the one prep input; the
-                    # per-step buffer reuse keys on z_dev's address at _execute time, not on the
-                    # prep clone, so it is unaffected.
-                    self._step_tracer = Tracer(step_fn, device=dev, clone_prep_inputs=True)
-                z_out = self._step_tracer(*args)
+                st.tracer(*args)
             else:
-                # Untraced: move the host inputs onto device and run the step eagerly (no
-                # capture/replay). Same device computation, just per-op host dispatch each step.
-                z_out = step_fn(*(a.to(dev) if isinstance(a, ttnn.Tensor) and a.device() is None else a for a in args))
+                step_fn(*(a if a is st.z else a.to(dev) for a in args))
 
-            # z stays on device; only read it back for the (optional) per-step std log.
-            z_std = float(tensor.to_torch(z_out, mesh_axes=[None, None, None]).float().std()) if _verbose else 0.0
+            z_std = float(tensor.to_torch(st.z, mesh_axes=[None, None, None]).float().std()) if _verbose else 0.0
             self.step_trace.append((t_val, s_val, gw, 0.0, z_std, 0.0))
             if _verbose:
                 _dq_log.info(
@@ -807,32 +1007,13 @@ class Ideogram4Pipeline(PipelineAPIMixin):
                 )
             on_event(DenoiseStep(step=n, total=sampler.num_steps, sigma=t_val))
             on_event(SectionEnd(f"denoising_step_{n}"))
-        on_event(SectionEnd("denoising"))
-        # One readback after the loop for decode (z never touched host inside the loop).
-        z_host = tensor.to_torch(z_out, mesh_axes=[None, None, None]).float()
         ttnn.synchronize_device(dev)
-
-        # Release the combined-step trace BEFORE decode. The trace bakes in this call's
-        # CCLManager ping-pong semaphores/buffers and the closed-over per-branch fixed tensors;
-        # the next __call__ re-runs the (untraced) encoder and rebuilds those branch tensors,
-        # advancing the shared CCL state out from under a persisted trace. Releasing here also
-        # means decode's device allocations happen with no active trace (the "allocating
-        # buffers while a trace is active is unsafe" hazard). Re-capturing per call keeps each
-        # loop self-consistent and frees the trace region for the next run.
-        if self._step_tracer is not None:
-            self._step_tracer.release_trace()
-            self._step_tracer = None
-
-        # Free the large per-call device tensors now that the denoise loop + trace are done (the
-        # [1, L, 53248] llm tensors dominate): a long-lived server would otherwise depend on GC
-        # timing and fragment DRAM. Safe here — z was read back above and the trace is released.
-        for br in (cond_b, uncond_b):
-            for key in ("llm", "cos", "sin", "llm_mask", "img_mask", "idx"):
-                ttnn.deallocate(br[key])
-        ttnn.deallocate(z_out)
+        on_event(SectionEnd("denoising"))
 
         on_event(SectionStart("vae"))
-        decoded = self.decode_stage.decode(bf16_tensor(z_host, device=dev), grid_h=grid_h, grid_w=grid_w)
+        decoded = self.decode_stage.decode(st.z, grid_h=st.grid_h, grid_w=st.grid_w)
+        if temporary:
+            self._free_size_state(st, sb)
         # [-1,1] float [B,3,H,W] -> list[PIL.Image] (VaeImageProcessor denorm+clamp), matching
         # the Flux1/QwenImage pipelines' return contract.
         images = self._image_processor.postprocess(decoded.float(), output_type="pil")

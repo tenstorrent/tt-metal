@@ -332,12 +332,21 @@ public:
     static FabricType infer_fabric_type_from_dim_types(const proto::MeshDescriptor* mesh_desc);
     static FabricType infer_fabric_type_from_dim_types(const proto::SwitchDescriptor* switch_desc);
 
+    // Default fabric config derived from a mesh's (or switch's) device_topology dim_types. Always 2D-family (1D is
+    // explicit-only): FABRIC_2D, or FABRIC_2D_TORUS_X/Y/XY per its ring axes (dim 0 -> Y, dim 1 -> X).
+    FabricConfig default_fabric_config_from_dim_types(MeshId mesh_id) const;
+
     // Many-to-many pinning groups parsed from the MGD's top-level `pinnings` section, keyed by local
     // mesh id. Each entry may bind multiple logical fabric nodes to multiple physical ASIC positions
     // (all-to-all). Groups are split by mesh at construction (regex and literal entries).
     const std::map<MeshId, std::vector<AsicPinningGroup>>& get_pinnings() const { return pinnings_; }
 
+    // Textproto file this descriptor was loaded from; unset for string / programmatic / merged descriptors.
+    const std::optional<std::filesystem::path>& get_file_path() const { return file_path_; }
+
 private:
+    std::optional<std::filesystem::path> file_path_;
+
     // Descriptor fast lookup
     std::shared_ptr<const proto::MeshGraphDescriptor> proto_;
     std::unordered_map<std::string, const proto::MeshDescriptor*> mesh_desc_by_name_;

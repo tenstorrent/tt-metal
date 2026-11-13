@@ -66,8 +66,8 @@ inline void llk_unpack_AB_init(const std::uint32_t operandA, const std::uint32_t
  * @tparam BType: Broadcast type for SrcB; one of {NONE, ROW, COL, SCALAR}.
  * @param operandA: The logical dataflow buffer id for source A. Used to derive L1 addresses for SrcA unpacking.
  * @param operandB: The logical dataflow buffer id for source B. Used to derive L1 addresses for SrcB unpacking.
- * @param tile_index_a: Tile index within the operandA dataflow buffer to read from
- * @param tile_index_b: Tile index within the operandB dataflow buffer to read from
+ * @param tile_index_a: Position of the tile within this consumer's operandA batch; scaled by the ring stride
+ * @param tile_index_b: Position of the tile within this consumer's operandB batch; scaled by the ring stride
  * @param bcast_row_idx: Present for API compatibility with Blackhole binary `llk_unpack_AB` (ROW uses it there).
  *     Unused on Quasar; row selection within the B tile is not implemented in this wrapper.
  */
@@ -96,10 +96,11 @@ inline void llk_unpack_AB(
     const LocalDFBInterface& local_dfb_interface_a = get_local_dfb_interface(operandA_id);
     const LocalDFBInterface& local_dfb_interface_b = get_local_dfb_interface(operandB_id);
 
-    const std::uint32_t l1_tile_idx_a =
-        local_dfb_interface_a.tc_slots[local_dfb_interface_a.tc_idx].cursor_entry_idx + tile_index_a;
-    const std::uint32_t l1_tile_idx_b =
-        local_dfb_interface_b.tc_slots[local_dfb_interface_b.tc_idx].cursor_entry_idx + tile_index_b;
+    // Consecutive tiles of a batch are stride_size_tiles entries apart, as in llk_unpack_A and on the pack side.
+    const std::uint32_t l1_tile_idx_a = local_dfb_interface_a.tc_slots[local_dfb_interface_a.tc_idx].cursor_entry_idx +
+                                        tile_index_a * local_dfb_interface_a.stride_size_tiles;
+    const std::uint32_t l1_tile_idx_b = local_dfb_interface_b.tc_slots[local_dfb_interface_b.tc_idx].cursor_entry_idx +
+                                        tile_index_b * local_dfb_interface_b.stride_size_tiles;
 
     WAYPOINT("UABW");
     if constexpr (BType == BroadcastType::NONE) {

@@ -42,10 +42,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "sfpu/experimental/ckernel_sfpu_fill_negative_zero.h"
 
 /**
- * @brief Make a preserved negative-zero bit pattern observable through the packer.
- *
- * Encode only exact negative zero as -1 before packing the compacted result.
- * Positive zero stays zero, so it cannot satisfy the host's negative-zero check.
+ * @brief Encode exact negative zero as -1 so the packer cannot canonicalize it to +0.
  */
 inline void encode_negative_zero()
 {
@@ -65,10 +62,7 @@ inline void encode_negative_zero()
 }
 
 /**
- * @brief Populate eight DST slots, then run the SFPU body in place on one runtime-selected slot.
- *
- * The standard unary dispatcher supplies DST addressing and synchronization.
- * Surrounding tiles remain occupied to detect writes outside the selected tile.
+ * @brief Fill eight DST slots, then run block_max8 in place on one slot; the others detect stray writes.
  */
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -77,7 +71,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     _llk_math_hw_configure_<false>(formats.math, formats.math);
     _llk_math_pack_sync_init_<DstSync::SyncHalf, false>();
-    _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, false, BroadcastType::NONE, false, PackMode::Default>(TILE_NUM_FACES, formats.math);
+    _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, false, BroadcastType::NONE, false, PackMode::Default>(
+        ckernel::DEFAULT_TENSOR_SHAPE, formats.math);
     _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
     for (std::uint32_t base = 0; base < params.TILE_CNT; base += DEST_NUM_TILES_FP16_HALF)
     {
@@ -105,10 +100,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_pack_common.h"
 
 /**
- * @brief Pack all occupied slots with the ordinary full-tile packer for host inspection.
- *
- * The pooled result occupies the first 128 physical elements of its tile.
- * Remaining elements of that tile are scratch; other tiles must be unchanged.
+ * @brief Pack all eight slots; the pooled result is the first 128 elements of its tile.
  */
 void run_kernel(RUNTIME_PARAMETERS params)
 {

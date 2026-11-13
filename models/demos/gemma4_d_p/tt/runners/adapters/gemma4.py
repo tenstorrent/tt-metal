@@ -6,6 +6,7 @@
 import os
 
 from models.demos.common.prefill.adapter import PrefillModelAdapter
+from models.demos.gemma4_d_p.tt.dflash_config import DEFAULT_DFLASH_MODEL, load_dflash_config
 
 
 class Gemma4ServiceConfig:
@@ -13,9 +14,12 @@ class Gemma4ServiceConfig:
     FABRIC_PAYLOAD_SIZE = 8192
     MESH_SHAPE = (8, 4)
     # Validation runs may set GEMMA4_TEST_CHUNK_SIZE to test another chunk size.
-    CHUNK_SIZE = int(os.environ.get("GEMMA4_TEST_CHUNK_SIZE", 8192))
+    CHUNK_SIZE = int(os.environ.get("GEMMA4_TEST_CHUNK_SIZE", 4096))
     MAX_SEQ_LEN = 262144
     MAX_USER_SLOTS = 6
+    # Packed forwards (PREFILL_FORWARD_TOKENS_BUDGET above the chunk size; manifest_batched.json): 2048-token chunks.
+    BATCHED_CHUNK_SIZE = 2048
+    MAX_FORWARD_CHUNKS = 4
 
 
 def is_global_layer_by_index(layer_idx):
@@ -30,15 +34,18 @@ def validate_params(params):
         "is_first_rank": True,
         "is_last_rank": True,
         "max_seq_len": Gemma4ServiceConfig.MAX_SEQ_LEN,
-        "chunk_size": Gemma4ServiceConfig.CHUNK_SIZE,
+        "chunk_size": Gemma4ServiceConfig.CHUNK_SIZE
+        if params.forward_chunks == 1
+        else Gemma4ServiceConfig.BATCHED_CHUNK_SIZE,
         "sp_axis": 0,
         "tp_axis": 1,
         "use_trace": True,
-        "dflash_enabled": False,
     }
     for name, value in expected.items():
         if getattr(params, name) != value:
             raise ValueError(f"Gemma4 prefill requires {name}={value}, got {getattr(params, name)}")
+    if not 1 <= params.forward_chunks <= Gemma4ServiceConfig.MAX_FORWARD_CHUNKS:
+        raise ValueError(f"Gemma4 prefill serves 1 to {Gemma4ServiceConfig.MAX_FORWARD_CHUNKS} chunks per forward")
     if not 1 <= params.num_users <= Gemma4ServiceConfig.MAX_USER_SLOTS:
         raise ValueError(f"Gemma4 prefill requires 1 to {Gemma4ServiceConfig.MAX_USER_SLOTS} KV slots")
 
@@ -50,6 +57,12 @@ class Gemma4PrefillAdapter(PrefillModelAdapter):
     ttnn_cache_default = ""
     prefill_trace_default = "/mnt/models/huggingface/gpu_traces/gemma4_d_p/gutenberg-135"
     pipeline_activation_emb_tp_sharded = False
+    supports_dflash = True
+    dflash_model_default = DEFAULT_DFLASH_MODEL
+    dflash_rope_convention = "half_split"
+    supports_packed_forward = True
+    supports_packed_forward_trace = True
+    supports_packed_forward_d2h_acks = True
 
     @property
     def hf_model_id(self):
@@ -79,12 +92,23 @@ class Gemma4PrefillAdapter(PrefillModelAdapter):
             mesh_shape=mesh_shape,
         )
 
+    def _draft_config_for_cache(self, config_id):
+        config = load_dflash_config(os.getenv("DFLASH_HF_MODEL") or self.dflash_model_default)
+        if not 36 <= config_id < 36 + 2 * config.num_key_value_heads:
+            raise ValueError(f"Invalid Gemma4 cache config {config_id}")
+        return config
+
     def cache_layer_rows(self, config_id, num_layers):
+        if config_id >= 36:
+            draft = self._draft_config_for_cache(config_id)
+            return {layer: layer for layer in range(num_layers, num_layers + draft.num_hidden_layers)}
         if not 0 <= config_id < 36:
             raise ValueError(f"Invalid Gemma4 cache config {config_id}")
         return {layer: layer for layer in range(num_layers) if is_global_layer_by_index(layer) == (config_id < 4)}
 
     def cache_head_dim(self, config_id):
+        if config_id >= 36:
+            return self._draft_config_for_cache(config_id).head_dim
         if not 0 <= config_id < 36:
             raise ValueError(f"Invalid Gemma4 cache config {config_id}")
         return 640 if config_id < 4 else 256
@@ -102,12 +126,20 @@ class Gemma4PrefillAdapter(PrefillModelAdapter):
             max_seq_len=params.max_seq_len,
             prefill_chunk_size=params.chunk_size,
             bank_aligned=True,
+            dflash_config=(
+                load_dflash_config(params.dflash_checkpoint_path or self.dflash_model_default)
+                if params.dflash_enabled
+                else None
+            ),
         )
 
     def build_runtime(self, *, mesh_device, hf_config, params):
         validate_params(params)
-        from models.demos.gemma4_d_p.tt.runners.runtime import Gemma4PrefillRuntime
+        if params.forward_chunks > 1:
+            from models.demos.gemma4_d_p.tt.runners.batched_runtime import Gemma4BatchedPrefillRuntime as runtime_class
+        else:
+            from models.demos.gemma4_d_p.tt.runners.runtime import Gemma4PrefillRuntime as runtime_class
 
-        return Gemma4PrefillRuntime(
+        return runtime_class(
             mesh_device=mesh_device, hf_model_id=self.hf_model_id, tt_cache_path=self.tt_cache_path, config=params
         )

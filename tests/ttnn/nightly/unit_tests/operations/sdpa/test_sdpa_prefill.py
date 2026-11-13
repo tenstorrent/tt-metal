@@ -510,7 +510,7 @@ def test_sdpa_noncausal_mask(
 
 # Provided masks run on the streaming compute kernel (apply_provided_mask_streaming). Covers
 # non-block-float (bf16) and block-float (bfp8/bfp4) mask dtypes — the latter exercise the
-# unpacker data-format reconfig in the dense-mask copy path (copy_tile_to_dst_init_short_with_dt),
+# unpacker data-format reconfig in the dense-mask copy path (reconfig_data_format_srca before copy_init),
 # which is required so block-float source tiles are not mis-decoded as fp16. Also covers
 # broadcast-batch/head and K-padded (s=160) shapes.
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])

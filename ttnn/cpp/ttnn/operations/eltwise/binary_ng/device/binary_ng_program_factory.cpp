@@ -532,9 +532,9 @@ void for_each_core_runtime_args(
 
     const bool row_major_inputs =
         CMAKE_UNIQUE_NAMESPACE::should_use_row_major_path(operation_attributes, b, rt_has_sharding);
-    const uint32_t a_alignment = a.buffer()->alignment();
-    const uint32_t b_alignment = b.has_value() ? b->buffer()->alignment() : a_alignment;
-    const uint32_t c_alignment = c.buffer()->alignment();
+    const uint32_t a_alignment = a.mesh_buffer().alignment();
+    const uint32_t b_alignment = b.has_value() ? b->mesh_buffer().alignment() : a_alignment;
+    const uint32_t c_alignment = c.mesh_buffer().alignment();
 
     const uint32_t tile_height = c.tensor_spec().tile().get_height();
     const uint32_t tile_width = c.tensor_spec().tile().get_width();
@@ -549,9 +549,9 @@ void for_each_core_runtime_args(
     uint32_t writer_stride_size_bytes = 0;
 
     if (row_major_inputs) {
-        const uint32_t c_aligned_page_size = c.buffer()->aligned_page_size();
-        const uint32_t a_aligned_page_size = a.buffer()->aligned_page_size();
-        const uint32_t b_aligned_page_size = b.has_value() ? b->buffer()->aligned_page_size() : a_aligned_page_size;
+        const uint32_t c_aligned_page_size = c.mesh_buffer().aligned_page_size();
+        const uint32_t a_aligned_page_size = a.mesh_buffer().aligned_page_size();
+        const uint32_t b_aligned_page_size = b.has_value() ? b->mesh_buffer().aligned_page_size() : a_aligned_page_size;
 
         const uint32_t c_row_width_elements_aligned = c_aligned_page_size / c.element_size();
         const uint32_t a_row_width_elements_aligned = a_aligned_page_size / a.element_size();
@@ -691,7 +691,7 @@ void for_each_core_runtime_args(
     // between noop and work across differently-shaped cache hits.
     const size_t noop_reader_len = row_major_inputs ? 26 : 24;
     const size_t noop_writer_len = row_major_inputs ? 14 : (b.has_value() ? 11 : 12);
-    const size_t noop_compute_len = (op_type == BinaryOpType::ISCLOSE) ? 5 : 4;
+    const size_t noop_compute_len = (op_type == BinaryOpType::ISCLOSE || op_type == BinaryOpType::REQUANT) ? 5 : 4;
 
     // Scratch lists reused for every core; each core below reassigns all three in full before fn().
     RuntimeArgList reader_runtime_args;
@@ -765,7 +765,7 @@ void for_each_core_runtime_args(
                     cND,
                     current_block,
                     num_rows_per_tile,
-                    static_cast<uint32_t>(c.buffer()->aligned_page_size()),
+                    static_cast<uint32_t>(c.mesh_buffer().aligned_page_size()),
                     c_alignment,
                     tiles_per_row_width,
                     writer_stride_size_bytes};
@@ -814,7 +814,7 @@ void for_each_core_runtime_args(
                     cND,
                     current_block,
                     num_rows_per_tile,
-                    static_cast<uint32_t>(c.buffer()->aligned_page_size()),
+                    static_cast<uint32_t>(c.mesh_buffer().aligned_page_size()),
                     c_alignment,
                     tiles_per_row_width,
                     writer_stride_size_bytes};
@@ -840,8 +840,8 @@ void for_each_core_runtime_args(
         if (row_major_inputs) {
             const std::variant<uint32_t, Buffer*> b_addr =
                 b.has_value() ? std::variant<uint32_t, Buffer*>{b->buffer()} : std::variant<uint32_t, Buffer*>{0u};
-            const uint32_t b_page_size = b.has_value() ? static_cast<uint32_t>(b->buffer()->aligned_page_size())
-                                                       : static_cast<uint32_t>(a.buffer()->aligned_page_size());
+            const uint32_t b_page_size = b.has_value() ? static_cast<uint32_t>(b->mesh_buffer().aligned_page_size())
+                                                       : static_cast<uint32_t>(a.mesh_buffer().aligned_page_size());
             const uint32_t bD_arg = b.has_value() ? bD : 1u;
             const uint32_t bN_arg = b.has_value() ? bN : 1u;
             const uint32_t bC_arg = b.has_value() ? bC : 1u;
@@ -866,7 +866,7 @@ void for_each_core_runtime_args(
                 current_block,
                 num_rows_per_tile,
                 common_row_width_elements,
-                static_cast<uint32_t>(a.buffer()->aligned_page_size()),
+                static_cast<uint32_t>(a.mesh_buffer().aligned_page_size()),
                 b_page_size,
                 a_alignment,
                 b_alignment,
@@ -900,6 +900,11 @@ void for_each_core_runtime_args(
                 bWt,
                 col_group,
             };
+        }
+
+        if (op_type == BinaryOpType::REQUANT) {
+            compute_runtime_args.push_back(std::bit_cast<uint32_t>(
+                operation_attributes.post_activations[0].get_param_if<float>(1).value_or(0.0f)));
         }
 
         fn(core, reader_runtime_args, writer_runtime_args, compute_runtime_args, /*has_work=*/true);
@@ -981,38 +986,44 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
 
     auto compute_kernel_defines = op_config.as_defines(a_dtype);
 
-    // Quant/requant rounding depends on the output dtype. For uint8, we need fp32->uint8 rounding instead
-    // of the default fp32->int8. The packer narrows the int32 SFPU result to uint8.
+    // Quant/requant round to nearest even for every output dtype. The init picks the clamp range:
+    // [0, 255] for uint8 and [-128, 127] otherwise. The packer narrows the int32 SFPU result to uint8.
     // For int8 output, the SFPU crafts an offset-128 byte and stores through the UInt8 packer path.
     const char* quant_zp_arg = "(get_arg_val<uint32_t>(QUANT_ZERO_POINT_RT_ARGS_IDX));";
+    // Requant also takes the output zero point, added after rounding.
+    const char* requant_zp_args =
+        "(get_arg_val<uint32_t>(QUANT_ZERO_POINT_RT_ARGS_IDX), "
+        "get_arg_val<uint32_t>(QUANT_OUT_ZERO_POINT_RT_ARGS_IDX));";
     const bool int8_in = is_quant_op && a_dtype == DataType::INT8;
-    const auto set_sfpu_op = [&](const std::string& init_fn, const std::string& op_fn) {
-        compute_kernel_defines["BINARY_SFPU_INIT"] = init_fn + quant_zp_arg;
+    const auto set_sfpu_op = [&](const std::string& init_fn, const std::string& op_fn, const char* zp_args) {
+        compute_kernel_defines["BINARY_SFPU_INIT"] = init_fn + zp_args;
         compute_kernel_defines["BINARY_SFPU_OP"] = op_fn;
     };
     if (operation_attributes.binary_op_type == BinaryOpType::QUANT) {
         if (c_dtype == DataType::UINT8) {
             compute_kernel_defines["BINARY_SFPU_INIT"] = std::string("quant_uint8_tile_init") + quant_zp_arg;
         } else if (c_dtype == DataType::INT8) {
-            set_sfpu_op("quant_int8_tile_init", "quant_int8_tile");
+            set_sfpu_op("quant_int8_tile_init", "quant_int8_tile", quant_zp_arg);
         }
     } else if (operation_attributes.binary_op_type == BinaryOpType::DEQUANT) {
         if (int8_in) {
-            set_sfpu_op("dequant_int8_tile_init", "dequant_int8_tile");
+            set_sfpu_op("dequant_int8_tile_init", "dequant_int8_tile", quant_zp_arg);
         }
     } else if (operation_attributes.binary_op_type == BinaryOpType::REQUANT) {
         if (c_dtype == DataType::INT8) {
             set_sfpu_op(
                 int8_in ? "requant_int8_in_int8_out_tile_init" : "requant_int8_tile_init",
-                int8_in ? "requant_int8_in_int8_out_tile" : "requant_int8_tile");
+                int8_in ? "requant_int8_in_int8_out_tile" : "requant_int8_tile",
+                requant_zp_args);
         } else if (c_dtype == DataType::UINT8) {
-            // uint8 output uses the standard packer narrowing (int32 SFPU result -> uint8), so it reuses
-            // the int32-output op body; only the init differs, to select FP32_TO_UINT8 rounding.
+            // uint8 output uses the standard packer narrowing (int32 SFPU result -> uint8). It reuses
+            // the int32-output op body; only the init differs, to select the [0, 255] clamp.
             set_sfpu_op(
                 int8_in ? "requant_int8_in_uint8_out_tile_init" : "requant_uint8_tile_init",
-                int8_in ? "requant_int8_in_tile" : "requant_tile");
+                int8_in ? "requant_int8_in_tile" : "requant_tile",
+                requant_zp_args);
         } else if (int8_in) {
-            set_sfpu_op("requant_int8_in_tile_init", "requant_int8_in_tile");
+            set_sfpu_op("requant_int8_in_tile_init", "requant_int8_in_tile", requant_zp_args);
         }
     }
 
@@ -1109,6 +1120,8 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
             } else if (post_activations[0].type() == unary::UnaryOpType::ZERO_POINT) {
                 // Zero-point is passed as the 4th run-time kernel argument
                 compute_kernel_defines["QUANT_ZERO_POINT_RT_ARGS_IDX"] = "3";
+                // Requant also passes its output zero point as the 5th run-time kernel argument
+                compute_kernel_defines["QUANT_OUT_ZERO_POINT_RT_ARGS_IDX"] = "4";
                 unary::utils::update_macro_defines(unary::UnaryOpType::ZERO_POINT, compute_kernel_defines);
             } else {
                 add_activation_defines(compute_kernel_defines, post_activations, "POST", input_dtype);

@@ -24,7 +24,7 @@ void RunFillUpAllBuffers(
     // Mesh workload + device range span the mesh; program encapsulates kernels
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
     constexpr int loop_size = 200;
     constexpr int enqueue_times = 2;

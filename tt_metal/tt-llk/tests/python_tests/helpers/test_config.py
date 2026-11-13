@@ -3,8 +3,10 @@
 
 import fcntl
 import glob
+import json
 import os
 import re
+import secrets
 import shlex
 import shutil
 import struct
@@ -17,6 +19,7 @@ from enum import Enum
 from hashlib import sha256
 from pathlib import Path
 from typing import Any, ClassVar, List
+from uuid import uuid4
 
 import numpy as np
 import pytest
@@ -25,7 +28,10 @@ from ttexalens.tt_exalens_lib import (
     TTException,
     load_elf,
     parse_elf,
+    read_from_device,
     read_word_from_device,
+    write_to_device,
+    write_words_to_device,
 )
 
 from . import device as device_module
@@ -42,15 +48,14 @@ from .device import (
     TRISC_CORES,
     BootMode,
     RiscCore,
-    commit_brisc_command,
     commit_tensix_soft_reset,
     exalens_device_setup,
+    get_soft_reset_mask,
     handle_if_assert_hit,
     reset_mailboxes,
     set_tensix_soft_reset,
-    wait_brisc_boot_ready,
+    soft_reset_bits,
 )
-from .device_io import read_from_device, write_to_device, write_words_to_device
 from .device_print import aux_size_for
 from .format_config import (
     BLACKHOLE_DATA_FORMAT_ENUM_VALUES,
@@ -68,7 +73,6 @@ from .golden_generators import (
     get_golden_proxied,
 )
 from .llk_params import (
-    BriscCmd,
     DestAccumulation,
     L1Accumulation,
     Mailboxes,
@@ -118,6 +122,11 @@ class TestOutcome:
     # Lines emitted by DEVICE_PRINT() during this run.
     # Empty if it's disabled.
     device_print_lines: list = field(default_factory=list)
+
+
+LLK_CODE_SHIFT = int(os.environ.get("LLK_CODE_SHIFT", "0"))
+# The link flag that applies it; the object cache key leaves it out, so every position reuses the objects.
+CODE_SHIFT_FLAG = "-Wl,--defsym=__llk_code_shift="
 
 
 class TestConfig:
@@ -222,6 +231,9 @@ class TestConfig:
 
     # CLI perf counter flags
     ENABLE_PERF_COUNTERS: ClassVar[bool] = False
+    # The readout token of the last counting launch (counters.h launch_word), 1..0xFFFF. It starts at a random value in each
+    # process, so a readout an earlier session left in L1 does not carry the token a rerun expects.
+    _LAUNCH_TOKEN: ClassVar[int] = secrets.randbelow(0xFFFF)
     # One run observes one group of 8 L1 interfaces; sweep this to cover all of them.
     PERF_L1_MUX_GROUP: ClassVar[int] = int(os.environ.get("LLK_PERF_L1_MUX_GROUP", "0"))
     # Quasar has no L1 counter bank; one l1_client event (subport*8 + event, -1 = none) rides in its slot.
@@ -266,6 +278,18 @@ class TestConfig:
 
     # Size of one full zone block (data + sync/pad)
     PERF_COUNTERS_ZONE_SIZE: ClassVar[int] = _PERF_COUNTERS_ZONE_DATA_BYTES + 40
+
+    # counters.h PERF_COUNTERS_LAUNCH_WORD_ADDR, Quasar's launch word: the word after the zone blocks.
+    _PERF_COUNTERS_QUASAR_COUNTED_ZONES: ClassVar[int] = (
+        PERF_COUNTERS_ZONES_BASE + PERF_COUNTERS_MAX_ZONES * PERF_COUNTERS_ZONE_SIZE
+    )
+    # counters.h LAUNCH_TOKEN_SHIFT: the launch word's token sits above the zone bits (the sync word's above its flag).
+    _LAUNCH_TOKEN_SHIFT: ClassVar[int] = 8
+    # counters.h LAUNCH_WORD_*: the Wormhole/Blackhole launch word is STREAM_SCRATCH_1 of overlay stream 0.
+    _LAUNCH_WORD_OVERLAY_BASE: ClassVar[int] = 0xFFB40000
+    _LAUNCH_WORD_SCRATCH_INDEX_WORMHOLE: ClassVar[int] = 249
+    _LAUNCH_WORD_SCRATCH_INDEX_BLACKHOLE: ClassVar[int] = 37
+    _STREAM_REG_BYTES: ClassVar[int] = 4
 
     # Device print buffer. It sits above loaders, and under RUNTIME_ARGS_START.
     # Coverage builds extend TRISC sections past this address; device print
@@ -377,12 +401,63 @@ class TestConfig:
         return f"-{variant}" if variant else ""
 
     @staticmethod
+    def _perf_counters_suffix() -> str:
+        """Counters on compiles BRISC and the kernels differently (counters.h), so its artefacts never mix with counters off."""
+        if not TestConfig.ENABLE_PERF_COUNTERS:
+            return ""
+        return f"-counters-l1mux{TestConfig.PERF_L1_MUX_GROUP}-l1client{TestConfig.PERF_L1_CLIENT_SEL}"
+
+    @staticmethod
+    def runs_on_ttsim() -> bool:
+        return TestConfig.TEST_TARGET.runs_on_ttsim()
+
+    @staticmethod
+    def counted_zones_address() -> int | None:
+        """counters.h COUNTED_ZONES_REG, or None on ttsim (no overlay registers, counters compiled out)."""
+        if TestConfig.runs_on_ttsim():
+            return None
+        match TestConfig.CHIP_ARCH:
+            case ChipArchitecture.WORMHOLE:
+                index = TestConfig._LAUNCH_WORD_SCRATCH_INDEX_WORMHOLE
+            case ChipArchitecture.BLACKHOLE:
+                index = TestConfig._LAUNCH_WORD_SCRATCH_INDEX_BLACKHOLE
+            case _:
+                return TestConfig._PERF_COUNTERS_QUASAR_COUNTED_ZONES
+        return (
+            TestConfig._LAUNCH_WORD_OVERLAY_BASE + index * TestConfig._STREAM_REG_BYTES
+        )
+
+    @staticmethod
     def resolve_artefacts_path() -> Path:
-        """Use $RUNNER_TEMP/tt-llk-build in GHA, else tempfile.gettempdir()/tt-llk-build."""
+        """Resolve the build root, isolating hardware-free sessions from device builds."""
         runner_temp = os.environ.get("RUNNER_TEMP")
-        if runner_temp:
-            return Path(runner_temp) / "tt-llk-build"
-        return TestConfig.DEFAULT_ARTEFACTS_PATH
+        if os.environ.get("LLK_HARDWARE_FREE") == "1":
+            # Inherit one private tree across xdist workers, outside the normal build tree.
+            run_id = os.environ.get("LLK_HARDWARE_FREE_RUN_ID")
+            if not run_id:
+                run_id = uuid4().hex
+                os.environ["LLK_HARDWARE_FREE_RUN_ID"] = run_id
+            base = (
+                Path(runner_temp)
+                if runner_temp
+                else TestConfig.DEFAULT_ARTEFACTS_PATH.parent
+            )
+            root = base / f"tt-llk-hardware-free-{run_id}"
+        elif runner_temp:
+            root = Path(runner_temp) / "tt-llk-build"
+        else:
+            root = TestConfig.DEFAULT_ARTEFACTS_PATH
+        # A gathering build compiles every kernel and the shared firmware differently, and the
+        # artefact cache is keyed by variant, not by compile options: keep it in its own tree.
+        if TestConfig.gathering_build():
+            root = root / "gathering"
+        return root
+
+    @staticmethod
+    def gathering_build() -> bool:
+        """tt-metal's JIT switch: the LLK tests build in the gathering configuration tt-metal
+        ships. "1" only, like TT_METAL_DISABLE_SFPLOADMACRO."""
+        return os.environ.get("TT_METAL_ENABLE_GATHERING") == "1"
 
     @staticmethod
     def setup_paths(sources_path: Path):
@@ -414,7 +489,10 @@ class TestConfig:
 
         # A Quasar IP variant compiles the shared objects differently, so it gets its own directory.
         variant_suffix = TestConfig._quasar_variant_suffix()
-        TestConfig.SHARED_DIR = TestConfig.ARTEFACTS_DIR / f"shared{variant_suffix}"
+        TestConfig.SHARED_DIR = (
+            TestConfig.ARTEFACTS_DIR
+            / f"shared{variant_suffix}{TestConfig._perf_counters_suffix()}"
+        )
         TestConfig.SHARED_OBJ_DIR = TestConfig.SHARED_DIR / "obj"
         TestConfig.SHARED_ELF_DIR = TestConfig.SHARED_DIR / "elf"
         # Profiler builds need separate shared artefacts (trisc.cpp compiles differently with -DLLK_PROFILER)
@@ -520,9 +598,8 @@ class TestConfig:
                 # Some SFPU kernels include their neighbours unqualified
                 # ("ckernel_sfpu_exp.h") rather than as "llk_sfpu/<name>.h", which only
                 # resolves with this on the path. Its order against tt-llk's common/inc/sfpu
-                # no longer matters: tests/hardware_free/kernels/test_sfpu_header_location.py
-                # keeps each SFPU kernel in only one of the two, and the few basenames in both
-                # (its FORWARDED list) are plain forwards to the tt-llk copy.
+                # does not matter: tests/hardware_free/kernels/test_sfpu_header_location.py
+                # keeps each SFPU header in only one of the two.
                 "-I../../hw/ckernels/blackhole/metal/llk_api/llk_sfpu",
                 # Keep this list to include roots every Blackhole test needs: INCLUDES is a session-wide
                 # ClassVar, so anything added here lands in the compile command for every Blackhole test. A
@@ -534,6 +611,17 @@ class TestConfig:
                 "-I../../hw/ckernels/quasar/metal/llk_api",
                 "-I../../hw/ckernels/quasar/metal/llk_api/llk_sfpu",
             ]
+            # The variant's register headers, as the JIT build picks them (qa_hal.cpp).
+            # Saturn has none yet.
+            register_header_version = {
+                "": "2.0.0",
+                "horizon": "2.0.1",
+                "trinity": "2.0.2",
+            }.get(quasar_variant())
+            if register_header_version:
+                hw_specific_includes.append(
+                    f"-I../../hw/inc/internal/tt-2xx/tt-{register_header_version}/meta"
+                )
 
         if detailed_artefacts:
             TestConfig.OPTIONS_ALL += (
@@ -731,14 +819,19 @@ class TestConfig:
 
         For a ``tt_llk_quasar`` tree, prepend the selected variant's header root
         and expose the tree root for qualified includes of the base headers.
+        The in-tree Quasar tree has no ``common/inc/sfpu``: its eltwise SFPU kernels are in
+        ``llk_sfpu`` and its experimental ones under ``common/inc/experimental``. A Quasar tree
+        that still ships the directory keeps it as a root.
         """
         root = Path(arch_root)
         roots = [
             root / "llk_lib",
             root / "llk_lib" / "hal",
             root / "common" / "inc",
-            root / "common" / "inc" / "sfpu",
         ]
+        sfpu = root / "common" / "inc" / "sfpu"
+        if root.name != "tt_llk_quasar" or sfpu.is_dir():
+            roots.append(sfpu)
         if root.name == "tt_llk_quasar":
             roots.append(root)
             variant = quasar_variant()
@@ -910,10 +1003,21 @@ class TestConfig:
 
     @staticmethod
     def resolve_worker_tensix_location():
-        """Bind TENSIX_LOCATION from the card once Exalens has a context."""
+        """Bind TENSIX_LOCATION from the card once Exalens has a context.
+
+        ttsim hosts a private chip in each xdist process, and a test only
+        touches one core, so every worker uses the first functional core. The
+        xdist index is not a core index there: ``-n`` can exceed the
+        descriptor, and a restarted worker (``gw32``, ``gw33``, ...) still has
+        a core. Silicon and the RTL server share one device, so the index
+        still selects a distinct core and a worker past the card is still an
+        error.
+        """
         index = TestConfig._PENDING_WORKER_INDEX
         if index is None:
             return
+        if TestConfig.runs_on_ttsim():
+            index = 0
         TestConfig.TENSIX_LOCATION = device_module.tensix_location_for_worker(index)
         TestConfig._PENDING_WORKER_INDEX = None
 
@@ -1259,6 +1363,9 @@ class TestConfig:
             "temp_elfs",
             # Host-side determinism-check opt-out; does not affect the compiled kernel.
             "expected_nondeterministic",
+            # Which zones a launch counts and its readout token, written before it (counters.h launch_word).
+            "counted_zones",
+            "launch_token",
         ]
 
         if not TestConfig.SPEED_OF_LIGHT:
@@ -1327,8 +1434,16 @@ class TestConfig:
             *src_include_append,
         ]
 
+        # Counters on compiles every variant differently (counters.h), so it hashes apart from counters off.
+        counters = (
+            [TestConfig._perf_counters_suffix()]
+            if TestConfig.ENABLE_PERF_COUNTERS
+            else []
+        )
         self.variant_id = sha256(
-            str(" | ".join(temp_str + ["<<search-dirs>>"] + search_dirs)).encode()
+            str(
+                " | ".join(temp_str + ["<<search-dirs>>"] + search_dirs + counters)
+            ).encode()
         ).hexdigest()
 
     def resolve_shared_compile_options(self) -> tuple[str, str, str]:
@@ -1381,12 +1496,7 @@ class TestConfig:
             else "-DLLK_BOOT_MODE_BRISC "
         )
         # ttsim models no counter or overlay registers; the RTL emulator does, so it keeps them.
-        sim_path = (
-            os.environ.get("TT_METAL_SIMULATOR")
-            or os.environ.get("TT_UMD_SIMULATOR_PATH")
-            or ""
-        )
-        if TestConfig.TEST_TARGET.run_simulator and sim_path.endswith(".so"):
+        if TestConfig.runs_on_ttsim():
             OPTIONS_COMPILE += "-DTT_METAL_TTSIM "
 
         NON_COVERAGE_OPTIONS_COMPILE = OPTIONS_COMPILE
@@ -1409,6 +1519,22 @@ class TestConfig:
 
         if os.environ.get("TT_METAL_DISABLE_SFPLOADMACRO") == "1":
             OPTIONS_COMPILE += "-DDISABLE_SFPLOADMACRO "
+
+        # Extra -D flags for every kernel part, e.g. LLK_EXTRA_DEFINES="INP_FLOAT32" to build
+        # the ttnn float32-input arm of kernels that branch on it.
+        for define in os.environ.get("LLK_EXTRA_DEFINES", "").split(","):
+            if define.strip():
+                OPTIONS_COMPILE += f"-D{define.strip()} "
+
+        if TestConfig.gathering_build():
+            # Every RISC, the shared firmware included, so boot.h leaves gathering on everywhere.
+            gathering_options = "-DENABLE_GATHERING "
+            if TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE:
+                # As tt-metal's JIT build does on Blackhole only: the compiler's own replay
+                # optimisation turns unrolled SFPU loops into records it never brackets.
+                gathering_options += "-mno-tt-tensix-optimize-replay "
+            OPTIONS_COMPILE += gathering_options
+            NON_COVERAGE_OPTIONS_COMPILE += gathering_options
 
         return (OPTIONS_COMPILE, MEMORY_LAYOUT_LD_SCRIPT, NON_COVERAGE_OPTIONS_COMPILE)
 
@@ -1449,13 +1575,10 @@ class TestConfig:
                 run_shell_command(compile_command, TestConfig.TESTS_WORKING_DIR)
 
             if TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR:
-                # Both builds get the mux group: BRISC writes the counter config and runs the startup
-                # sequence either way (see counters.h); only PERF_COUNTERS_COMPILED tells them apart.
-                perf_cnt_flag = (
-                    f"-DLLK_PERF_L1_MUX_GROUP={TestConfig.PERF_L1_MUX_GROUP} "
-                )
+                # Only counters on compiles counter code into BRISC (counters.h).
+                perf_cnt_flag = ""
                 if TestConfig.ENABLE_PERF_COUNTERS:
-                    perf_cnt_flag += "-DPERF_COUNTERS_COMPILED "
+                    perf_cnt_flag = f"-DPERF_COUNTERS_COMPILED -DLLK_PERF_L1_MUX_GROUP={TestConfig.PERF_L1_MUX_GROUP} "
                 compile_command = (  # brisc.elf : brisc.cpp
                     f"{TestConfig.GXX} {TestConfig.ARCH_NON_COMPUTE} {TestConfig.OPTIONS_ALL} {TestConfig.OPTIONS_LINK} {local_non_coverage} "
                     f'{"-DCOVERAGE " if TestConfig.WITH_COVERAGE else ""}'
@@ -1694,7 +1817,32 @@ class TestConfig:
             ) from e
 
     def _compile_kernel_part(self, name, compile_command, source):
-        run_shell_command(compile_command, TestConfig.TESTS_WORKING_DIR, source)
+        cache = os.environ.get("LLK_OBJ_CACHE")
+        if not cache:
+            run_shell_command(compile_command, TestConfig.TESTS_WORKING_DIR, source)
+            return
+        head = compile_command[: compile_command.index("-x")]
+        root = str(TestConfig.ARTEFACTS_DIR)
+        key = [
+            token.replace(root, "<artefacts>")
+            for token in head
+            if not token.startswith(CODE_SHIFT_FLAG)
+        ]
+        digest = sha256((json.dumps(key) + source).encode()).hexdigest()[:32]
+        obj = Path(cache) / f"{digest}.o"
+        if not obj.exists():
+            obj.parent.mkdir(parents=True, exist_ok=True)
+            partial = obj.with_suffix(f".{os.getpid()}.tmp")
+            run_shell_command(
+                head + ["-c", "-x", "c++", "-", "-o", str(partial)],
+                TestConfig.TESTS_WORKING_DIR,
+                source,
+            )
+            os.replace(partial, obj)
+        run_shell_command(
+            head + [str(obj), "-lc", "-lgcc", "-o", compile_command[-1]],
+            TestConfig.TESTS_WORKING_DIR,
+        )
 
     def build_elfs(self):
 
@@ -1762,18 +1910,18 @@ class TestConfig:
                 if self.requires_vector_ext and name == "unpack":
                     optional_kernel_flags += f" {TestConfig.QUASAR_VECTOR_MARCH}"
 
-                # Both builds get the L1 selection (mux group on tt-1xx, l1_client event on Quasar): the
-                # counters off build compiles the same zone code with the counters stopped (counters.h).
-                if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR:
-                    optional_kernel_flags += (
-                        f" -DLLK_PERF_L1_CLIENT_SEL={TestConfig.PERF_L1_CLIENT_SEL}"
-                    )
-                else:
-                    optional_kernel_flags += (
-                        f" -DLLK_PERF_L1_MUX_GROUP={TestConfig.PERF_L1_MUX_GROUP}"
-                    )
+                # Only counters on compiles counter code, with its L1 selection (mux group on tt-1xx, l1_client
+                # event on Quasar); counters off keeps each zone's rendezvous alone (counters.h).
                 if TestConfig.ENABLE_PERF_COUNTERS:
                     optional_kernel_flags += " -DPERF_COUNTERS_COMPILED"
+                    if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR:
+                        optional_kernel_flags += (
+                            f" -DLLK_PERF_L1_CLIENT_SEL={TestConfig.PERF_L1_CLIENT_SEL}"
+                        )
+                    else:
+                        optional_kernel_flags += (
+                            f" -DLLK_PERF_L1_MUX_GROUP={TestConfig.PERF_L1_MUX_GROUP}"
+                        )
 
                 coverage_args = (
                     [
@@ -1822,6 +1970,7 @@ class TestConfig:
                         f"-T{TestConfig.LINKER_SCRIPTS / name}.ld",
                         f"-T{TestConfig.LINKER_SCRIPTS / 'sections.ld'}",
                     ],
+                    ([f"{CODE_SHIFT_FLAG}{LLK_CODE_SHIFT}"] if LLK_CODE_SHIFT else []),
                     # -lgcc pulls in libgcc soft-float/integer helpers (e.g. __mulsf3)
                     # that -nostdlib drops; only referenced helpers are linked.
                     ["-x", "c++", "-", "-lc", "-lgcc", "-o"],
@@ -1913,17 +2062,42 @@ class TestConfig:
 
     BRISC_ELF_LOADED: ClassVar[bool] = False
     LAST_LOADED_ELFS: ClassVar[Path] = Path()
-    # Max BRISC bring-up attempts after a reset. A board-wide `tt-smi -r 0`
-    # can leave a core slow-to-boot or wedged; each attempt re-issues the
-    # soft-reset kick (re-polling alone cannot recover a wedged core).
-    BRISC_BOOT_MAX_ATTEMPTS: ClassVar[int] = 3
+    # Wormhole: the _start addresses of the loaded TRISC ELFs, written again before every launch (device_setup copies them
+    # into the TRISC reset PCs and the TRISCs clear them).
+    TRISC_START_VALUES: ClassVar[list[int]] = []
 
-    def run_elf_files(self) -> list:
-        boot_mode = (
+    def _write_launch_word(self, counted_zones: int):
+        """Counters on only: the launch word counters.h reads (launch_word), and on Quasar the bank registers."""
+        if counted_zones:
+            TestConfig._LAUNCH_TOKEN = TestConfig._LAUNCH_TOKEN % 0xFFFF + 1
+            self.launch_token = TestConfig._LAUNCH_TOKEN
+        counted_zones_addr = TestConfig.counted_zones_address()
+        if counted_zones_addr is not None:
+            write_words_to_device(
+                TestConfig.TENSIX_LOCATION,
+                counted_zones_addr,
+                [counted_zones | self.launch_token << TestConfig._LAUNCH_TOKEN_SHIFT],
+                safe_mode=False,  # a register on Wormhole and Blackhole
+            )
+        if (
+            counted_zones_addr is not None
+            and TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR
+            and counted_zones
+        ):
+            # imported here: counters.py imports this module
+            from .counters import configure_quasar_counters
+
+            configure_quasar_counters(TestConfig.TENSIX_LOCATION)
+
+    def resolved_boot_mode(self) -> BootMode:
+        return (
             CHIP_DEFAULT_BOOT_MODES[TestConfig.CHIP_ARCH]
             if self.boot_mode == BootMode.DEFAULT
             else self.boot_mode
         )
+
+    def run_elf_files(self) -> list:
+        boot_mode = self.resolved_boot_mode()
 
         VARIANT_ELF_DIR = (
             TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id / "elf"
@@ -1955,83 +2129,38 @@ class TestConfig:
         ):
             raise ValueError("Quasar only supports TRISC boot mode")
 
-        brisc_cmd_timeout = (
-            TestConfig.SIMULATOR_TIMEOUT if TestConfig.TEST_TARGET.run_simulator else 1
-        )
-
-        if boot_mode == BootMode.BRISC:
-            if not TestConfig.BRISC_ELF_LOADED:
-                commit_tensix_soft_reset(1, location=TestConfig.TENSIX_LOCATION)
-                load_elf(
-                    elf_file=str((TestConfig.SHARED_ELF_DIR / "brisc.elf").absolute()),
-                    location=TestConfig.TENSIX_LOCATION,
-                    risc_name="brisc",
-                    verify_write=True,
-                )
-                # Bring BRISC up, retrying the soft-reset kick until it reaches
-                # its polling loop. A board-wide `tt-smi -r 0` can leave a core
-                # slow-to-boot or wedged; re-polling alone never recovers a
-                # wedged core, so each attempt re-asserts then de-asserts the
-                # BRISC soft reset. BRISC_ELF_LOADED is latched only after
-                # boot-ready succeeds, so a failed bring-up is retried on the
-                # next test instead of poisoning the rest of this worker's run.
-                last_err = None
-                for attempt in range(TestConfig.BRISC_BOOT_MAX_ATTEMPTS):
-                    if attempt:
-                        commit_tensix_soft_reset(1, location=TestConfig.TENSIX_LOCATION)
-                    # Pre-clear BriscCounter so we cannot latch onto a stale
-                    # boot-ready sentinel left in L1 by a prior pytest process —
-                    # mailboxes live at fixed L1 addresses outside any ELF
-                    # section, so they survive ELF reload.
-                    write_words_to_device(
-                        TestConfig.TENSIX_LOCATION,
-                        device_module.Mailboxes.BriscCounter.value,
-                        [0],
-                    )
-                    commit_tensix_soft_reset(
-                        0, [RiscCore.BRISC], TestConfig.TENSIX_LOCATION
-                    )
-                    try:
-                        wait_brisc_boot_ready(
-                            TestConfig.TENSIX_LOCATION, timeout=brisc_cmd_timeout
-                        )
-                    except TimeoutError as err:
-                        last_err = err
-                        continue
-                    TestConfig.BRISC_ELF_LOADED = True
-                    break
-                else:
-                    raise TimeoutError(
-                        f"BRISC bring-up did not become ready after "
-                        f"{TestConfig.BRISC_BOOT_MAX_ATTEMPTS} attempts"
-                    ) from last_err
-
-            # Reset only TRISCs, BRISC stays alive in its polling loop
-            commit_brisc_command(
-                TestConfig.TENSIX_LOCATION,
-                BriscCmd.RESET_TRISCS,
-                timeout=brisc_cmd_timeout,
+        # BRISC boot: BRISC already put all four cores back in reset when the last launch ended (brisc.cpp), unless it hung.
+        commit_tensix_soft_reset(1, location=TestConfig.TENSIX_LOCATION)
+        if boot_mode == BootMode.BRISC and not TestConfig.BRISC_ELF_LOADED:
+            load_elf(
+                elf_file=str((TestConfig.SHARED_ELF_DIR / "brisc.elf").absolute()),
+                location=TestConfig.TENSIX_LOCATION,
+                risc_name="brisc",
+                verify_write=True,
             )
-        else:
-            commit_tensix_soft_reset(1, location=TestConfig.TENSIX_LOCATION)
+            TestConfig.BRISC_ELF_LOADED = True
+
+        # Counters on: every launch names the zones it counts (counters.h launch_word), 0 unless a perf run counts
+        # them, then with a new token that the readouts store, so a result is never one an earlier launch left.
+        self.launch_token = 0
+        if TestConfig.ENABLE_PERF_COUNTERS:
+            self._write_launch_word(getattr(self, "counted_zones", 0))
 
         if TestConfig.LAST_LOADED_ELFS != VARIANT_ELF_DIR:
-            # A failed load or start address update leaves the TRISCs on two variants
+            # A failed load leaves the TRISCs on two variants
             TestConfig.LAST_LOADED_ELFS = Path()
 
+            TestConfig.TRISC_START_VALUES = []
             for i, elf_file_path in enumerate(self.temp_elfs):
                 if TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE:
-                    start_address = load_elf(
-                        elf_file=elf_file_path,
-                        location=TestConfig.TENSIX_LOCATION,
-                        risc_name=f"trisc{i}",
-                        return_start_address=True,
-                        verify_write=False,
-                    )
-                    write_words_to_device(
-                        TestConfig.TENSIX_LOCATION,
-                        TestConfig.TRISC_START_ADDRS[i],
-                        [start_address],
+                    TestConfig.TRISC_START_VALUES.append(
+                        load_elf(
+                            elf_file=elf_file_path,
+                            location=TestConfig.TENSIX_LOCATION,
+                            risc_name=f"trisc{i}",
+                            return_start_address=True,
+                            verify_write=False,
+                        )
                     )
                 else:
                     load_elf(
@@ -2046,27 +2175,25 @@ class TestConfig:
                         verify_write=False,
                     )
 
-            if (
-                boot_mode == BootMode.BRISC
-                and TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE
-            ):
-                commit_brisc_command(
-                    TestConfig.TENSIX_LOCATION,
-                    BriscCmd.UPDATE_START_ADDR_CACHE_AND_START,
-                    timeout=brisc_cmd_timeout,
-                )
-                TestConfig.LAST_LOADED_ELFS = VARIANT_ELF_DIR
-                return
-
             TestConfig.LAST_LOADED_ELFS = VARIANT_ELF_DIR
+
+        if TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE:
+            # The TRISCs clear their start addresses after reading them, so every launch writes them again.
+            write_words_to_device(
+                TestConfig.TENSIX_LOCATION,
+                TestConfig.TRISC_START_ADDRS[0],
+                TestConfig.TRISC_START_VALUES,
+            )
 
         match boot_mode:
             case BootMode.BRISC:
-                commit_brisc_command(
-                    TestConfig.TENSIX_LOCATION,
-                    BriscCmd.START_TRISCS,
-                    timeout=brisc_cmd_timeout,
-                )
+                launch_done = device_module.launch_done_address()
+                if launch_done is not None:
+                    write_words_to_device(
+                        TestConfig.TENSIX_LOCATION, launch_done, [0], safe_mode=False
+                    )
+                # Not a committed write: a short kernel can be done and back in reset before a readback.
+                set_tensix_soft_reset(0, [RiscCore.BRISC], TestConfig.TENSIX_LOCATION)
             case BootMode.TRISC:
                 reset_mailboxes(TestConfig.TENSIX_LOCATION)
                 set_tensix_soft_reset(0, [RiscCore.TRISC0], TestConfig.TENSIX_LOCATION)
@@ -2086,14 +2213,6 @@ class TestConfig:
         """
 
         mailboxes = {core for core in device_module.Mailboxes}
-        if self.CHIP_ARCH != ChipArchitecture.QUASAR:
-            mailboxes -= {
-                device_module.Mailboxes.BriscCommand0,
-                device_module.Mailboxes.BriscCommand1,
-                device_module.Mailboxes.BriscCounter,
-                device_module.Mailboxes.BriscBread0,
-                device_module.Mailboxes.BriscBread1,
-            }
         timeout = (
             TestConfig.SIMULATOR_TIMEOUT
             if TestConfig.TEST_TARGET.run_simulator
@@ -2109,21 +2228,67 @@ class TestConfig:
         span = max(mailbox.value for mailbox in mailboxes) + 4 - base
         word_index = {mailbox: (mailbox.value - base) // 4 for mailbox in mailboxes}
 
-        completed = set()
-        end_time = time.time() + timeout
-        while time.time() < end_time:
+        def completed_mailboxes():
             words = np.frombuffer(
                 read_from_device(TestConfig.TENSIX_LOCATION, base, num_bytes=span),
                 dtype=np.uint32,
             )
-            for mailbox in mailboxes - completed:
-                if words[word_index[mailbox]] == KERNEL_COMPLETE:
-                    completed.add(mailbox)
+            return {
+                mailbox
+                for mailbox in mailboxes
+                if words[word_index[mailbox]] == KERNEL_COMPLETE
+            }
+
+        # Quasar kernels also signal completion in registers outside L1 (host_signal in boot.h), so the wait never
+        # reads their L1. The TRISC at mailbox word n signals in slot n (trisc.cpp: mailbox_offset / 4).
+        signal_addrs = {
+            mailbox: device_module.host_signal_address(word_index[mailbox])
+            for mailbox in mailboxes
+        }
+        if not all(addr is not None for addr in signal_addrs.values()):
+            signal_addrs = None
+
+        # BRISC boot: BRISC marks the launch done and puts itself and the TRISCs back in soft reset once every TRISC is
+        # done (brisc.cpp). Silicon polls the launch done register, simulators the soft reset register; neither reads L1.
+        brisc_launch = self.resolved_boot_mode() == BootMode.BRISC
+        if brisc_launch:
+            brisc_done_mask = get_soft_reset_mask([RiscCore.BRISC, *TRISC_CORES])
+            # Silicon: the overlay register BRISC marks the launch done in, off L1 and the Tensix register bus.
+            launch_done = device_module.launch_done_address()
+
+        end_time = time.time() + timeout
+        while time.time() < end_time:
+            if brisc_launch and launch_done is not None:
+                # BRISC puts the cores in reset right after marking the launch done: read that only once it is marked.
+                done = (
+                    read_word_from_device(TestConfig.TENSIX_LOCATION, launch_done)
+                    & device_module.HOST_SIGNAL_MASK
+                    == KERNEL_COMPLETE
+                    and soft_reset_bits(TestConfig.TENSIX_LOCATION) & brisc_done_mask
+                    == brisc_done_mask
+                )
+            elif brisc_launch:
+                done = (
+                    soft_reset_bits(TestConfig.TENSIX_LOCATION) & brisc_done_mask
+                    == brisc_done_mask
+                )
+            elif signal_addrs is not None:
+                done = all(
+                    read_word_from_device(TestConfig.TENSIX_LOCATION, addr)
+                    == KERNEL_COMPLETE
+                    for addr in signal_addrs.values()
+                )
+            else:
+                done = completed_mailboxes() == mailboxes
 
             if poll_callback is not None:
                 poll_callback()
 
-            if completed == mailboxes:
+            if done:
+                if brisc_launch and completed_mailboxes() != mailboxes:
+                    raise RuntimeError(
+                        f"BRISC put the TRISCs in reset before {', '.join(m.name for m in mailboxes - completed_mailboxes())} finished"
+                    )
                 return
 
         handle_if_assert_hit(
@@ -2131,7 +2296,11 @@ class TestConfig:
             core_loc=TestConfig.TENSIX_LOCATION,
         )
 
-        trisc_hangs = [mailbox.name for mailbox in (mailboxes - completed)]
+        trisc_hangs = [mailbox.name for mailbox in (mailboxes - completed_mailboxes())]
+        if brisc_launch:
+            trisc_hangs.append(
+                f"BRISC (soft reset 0x{soft_reset_bits(TestConfig.TENSIX_LOCATION):x})"
+            )
         raise TimeoutError(
             f"Timeout reached: waited {timeout} seconds for {', '.join(trisc_hangs)}"
         )

@@ -5,7 +5,6 @@
 #pragma once
 
 #include <mpi.h>
-#include <memory>
 #include <optional>
 #include "api/tt-metalium/distributed_context.hpp"
 

@@ -96,7 +96,6 @@ void kernel_main() {
                 }
             }
             if constexpr (mode == 2) {
-                // The reuse unpacker processes two K tiles per MOP iteration.
                 // Consume both producer tiles at DEST rows 0 and 32, weighted
                 // by 2*I and I (input indices 2 and 4), into a disjoint accumulator.
                 if (block % 2 == 0) {

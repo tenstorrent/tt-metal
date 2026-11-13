@@ -45,6 +45,13 @@ std::vector<dspf2d::ChunkDescriptor> forwarding_descriptors(
 std::vector<dspf2d::ChunkDescriptor> outgoing_descriptors(
     StreamId stream, uint32_t my_pos, uint32_t ring_extent, uint32_t num_links);
 
+// The chunks the upstream chip on `stream` writes straight into `my_pos`'s output, one per origin 1 .. extent/2 hops
+// upstream: its own share for this chip, then every chunk it forwards whose destination is this chip. Built from
+// generate_assignments and forwarding_descriptors for the upstream chip, the lists its program is built from, so the
+// receive count the reader derives from them is what the upstream sender sends.
+std::vector<dspf2d::ChunkDescriptor> incoming_final_descriptors(
+    const std::vector<uint32_t>& ring_chip_ids, StreamId stream, uint32_t my_pos, uint32_t num_links);
+
 // A fwd_section holds no per-chunk addresses, so a chunk is found by counting the chunks before it. What
 // a chip writes and what the downstream chip reads must therefore agree in descriptor identity and order,
 // or the reader waits for a chunk that is never written. The chips exchange nothing at run time, so this checks
@@ -67,25 +74,36 @@ constexpr uint32_t forward_descriptors_per_stream(uint32_t ring_extent) {
     return m * (m - 1) / 2;
 }
 
+// The forwarding region is one channel per MOVEMENT CLASS: the (hops upstream, hops downstream) pair a page
+// is in. That is the same set the forward descriptors enumerate -- a descriptor is an (origin, destination)
+// pair crossing this chip -- so a channel index IS an index into that list. Two properties follow from
+// splitting by class rather than anything coarser, and both are load-bearing:
+//
+//   DRAIN. A class with dst == +1 is delivered to the next chip's OUTPUT, so draining it needs no space
+//   anywhere, and every other class moves one hop into a class nearer +1. The graph is a forest of paths,
+//   never a cycle, so a blocked chip always has a legal move and capacity is not a correctness parameter.
+//
+//   ORDER. Each class at a chip is fed by exactly one class on the chip before it, so a channel has a
+//   single producer and stays a dense FIFO, which is what lets both chips derive page positions from the
+//   same running count with nothing exchanged.
+
+constexpr uint32_t num_vcs(uint32_t ring_extent) { return forward_descriptors_per_stream(ring_extent); }
+
+// The (src, dst) hop offsets of every channel, in channel order.
+std::vector<std::pair<int32_t, int32_t>> forwarding_classes(uint32_t ring_extent);
+
+// The channel a page in channel `vc` lands in on the next chip, or VC_NONE when it is delivered there.
+uint32_t vc_after_hop(uint32_t vc, uint32_t ring_extent);
+
+// The channel this chip's own tokens for a destination `distance` hops away land in downstream, or
+// VC_NONE at distance 1, which is a final write.
+uint32_t vc_for_own(uint32_t distance, uint32_t ring_extent);
+
 // A stream's fwd_section is its slice of the DRAM forwarding buffer: fwd_pages_per_stream pages starting
-// at page stream * fwd_pages_per_stream. Each page is one token plus its fwd_meta. The upstream chip's
-// sender writes it and this chip's reader reads it.
-//
-// Pages one stream's fwd_section must hold. A chunk's length depends on expert_offsets, which is on
-// device; reading it back while building the program would break trace capture, so this is an upper bound
-// that does not depend on the data.
-//
-// One origin sends one destination at most seq_len_per_chip * min(num_experts_per_tok,
-// experts_per_chip) tokens, because a token picks distinct experts and the destination hosts
-// experts_per_chip of them. The destinations a fwd_section carries sit at distance 1..m-1. A destination
-// at distance dd is fed by m-dd origins: exactly one is a full m away and splits across every stream, and
-// the rest split across the num_links streams going that way. One spare page per chunk covers rounding
-// when a chunk is split.
-uint32_t fwd_pages_per_stream(
-    uint32_t ring_extent,
-    uint32_t num_links,
-    uint32_t seq_len_per_chip,
-    uint32_t num_experts_per_tok,
-    uint32_t experts_per_chip);
+// at page stream * fwd_pages_per_stream, divided into num_vcs channels of fwd_vc_pages each. Each page is
+// one token plus its fwd_meta.
+constexpr uint32_t fwd_pages_per_stream(uint32_t ring_extent, uint32_t fwd_vc_pages) {
+    return num_vcs(ring_extent) * fwd_vc_pages;
+}
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d

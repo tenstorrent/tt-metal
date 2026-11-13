@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
-import struct
 from dataclasses import dataclass
 
 import pytest
@@ -41,6 +40,7 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     TYPECAST_FORMATS,
     UNPACKER_ENGINE_SEL,
+    fp32_bits,
 )
 from helpers.tile_constants import (
     DEFAULT_TILE_C_DIM,
@@ -48,6 +48,7 @@ from helpers.tile_constants import (
     FACE_C_DIM,
     MAX_NUM_FACES,
 )
+from helpers.utils import result_tensor
 
 
 # rand has no element-wise golden, so these check its properties: range, uniformity, per-lane and
@@ -63,7 +64,7 @@ class RandCase:
         return self.name
 
 
-_RAND_FLOAT_FORMATS = (DataFormat.Float16, DataFormat.Float32, DataFormat.Float16_b)
+_RAND_FLOAT_FORMATS = (DataFormat.Float32, DataFormat.Float16_b)
 
 # Exponent <= 31 cannot absorb the 2^-31 normalization, forcing the per-row SFPMULI body.
 _RAND_PER_ROW_NORMALIZE_SCALE = 2.0**-96
@@ -71,12 +72,8 @@ _RAND_PER_ROW_NORMALIZE_SCALE = 2.0**-96
 RAND_CASES = (
     RandCase("unit", 1.0, 2.0, _RAND_FLOAT_FORMATS),
     RandCase("signed", -4.0, 8.0, _RAND_FLOAT_FORMATS),
-    # Float16 cannot represent 2^-96.
     RandCase(
-        "per_row_normalize",
-        0.0,
-        _RAND_PER_ROW_NORMALIZE_SCALE,
-        (DataFormat.Float32, DataFormat.Float16_b),
+        "per_row_normalize", 0.0, _RAND_PER_ROW_NORMALIZE_SCALE, _RAND_FLOAT_FORMATS
     ),
     RandCase("zero_scale", 1.5, 0.0, _RAND_FLOAT_FORMATS),
 )
@@ -104,10 +101,6 @@ _RAND_COL_MIN_DISTINCT_DIVISOR = 4
 _RAND_CORR_MAX_ROW_OFFSET = 8
 _RAND_CORR_MAX_COL_OFFSET = 4
 _RAND_MAX_OFFSET_CORRELATION = 0.08
-
-
-def _fp32_bits(value: float) -> int:
-    return struct.unpack("<I", struct.pack("<f", value))[0]
 
 
 def generate_rand_combinations():
@@ -269,8 +262,8 @@ def _rand_config(
                 DEST_SYNC(dest_sync),
                 TYPECAST_FORMATS(),
                 RAND_RANGE(
-                    rand_from_bits=_fp32_bits(case.from_value),
-                    rand_scale_bits=_fp32_bits(case.scale),
+                    rand_from_bits=fp32_bits(case.from_value),
+                    rand_scale_bits=fp32_bits(case.scale),
                 ),
                 RAND_SEED(rand_seed=seed),
             ],
@@ -302,9 +295,9 @@ def _rand_config(
 
 def _run_rand(configuration, format_variant: QuasarSfpuVariant, element_count: int):
     res_from_L1 = configuration.run().result
-    values = torch.tensor(
-        res_from_L1, dtype=format_dict[format_variant.formats.output_format]
-    ).to(torch.float64)
+    values = result_tensor(res_from_L1, format_variant.formats.output_format).to(
+        torch.float64
+    )
     assert (
         values.numel() == element_count
     ), f"result has {values.numel()} elements, expected {element_count}"

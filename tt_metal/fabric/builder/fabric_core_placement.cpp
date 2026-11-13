@@ -5,9 +5,6 @@
 #include "tt_metal/fabric/builder/fabric_core_placement.hpp"
 #include <tt-logger/tt-logger.hpp>
 
-#include <vector>
-#include <functional>
-
 namespace tt::tt_fabric::core_placement {
 
 namespace {

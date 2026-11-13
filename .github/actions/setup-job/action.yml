@@ -167,7 +167,7 @@ runs:
         # then sparse and carries no tools/ directory.
         SRC_ROOT=$([ "${{ inputs.env-from-image }}" = "true" ] && echo /work || pwd)
         HANG_REPORT="/opt/venv/bin/python3 $SRC_ROOT/.github/scripts/utils/hang_report.py"
-        TRIAGE="/opt/venv/bin/python3 $SRC_ROOT/tools/tt-triage.py --disable-progress --path=$TT_TRIAGE_DUMP_RISC_DEBUG_SIGNALS_PATH --triage-summary-path=$TT_TRIAGE_SUMMARY_PATH --llm-output-path=$TT_TRIAGE_LLM_OUTPUT_PATH --sqlite-output-path=$TT_TRIAGE_SQLITE_OUTPUT_PATH"
+        TRIAGE="/opt/venv/bin/python3 $SRC_ROOT/tools/tt-triage.py --disable-progress --dump-mismatch --path=$TT_TRIAGE_DUMP_RISC_DEBUG_SIGNALS_PATH --triage-summary-path=$TT_TRIAGE_SUMMARY_PATH --llm-output-path=$TT_TRIAGE_LLM_OUTPUT_PATH --sqlite-output-path=$TT_TRIAGE_SQLITE_OUTPUT_PATH"
         # Only run triage on the first hang of a job: the device isn't reset between
         # tests, so subsequent tests and hangs are on a poisoned device and produce unreliable triage.
         TRIAGE_SENTINEL=generated/.tt_triage_already_ran

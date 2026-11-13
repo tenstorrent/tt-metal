@@ -21,8 +21,8 @@
 #include "noc/noc_overlay_parameters.h"
 #include "noc/noc_parameters.h"
 #include "rtoptions.hpp"
-#include "tensix.h"
 #include "hal_2xx_common.hpp"
+#include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"  // dfb::NUM_DFBS
 #include "internal/tt-2xx/quasar/overlay/remapper_common.hpp"
 #include "internal/tt-2xx/quasar/tensix_neo_reg.h"
 
@@ -328,6 +328,8 @@ public:
         } else if (variant == IpVariant::SATURN) {
             includes.push_back("tt_metal/hw/inc/internal/tt-2xx/tt-2.0.3/meta");
         }
+        // Saturn has no register headers yet, so it gets no include path here. Once they are added, add a
+        // Saturn branch for their version.
         includes.push_back("tt_metal/tt-llk/tt_llk_quasar/common/inc");
         includes.push_back("tt_metal/tt-llk/tt_llk_quasar/");
         includes.push_back("tt_metal/tt-llk/tt_llk_quasar/llk_lib");
@@ -502,6 +504,22 @@ public:
     }
 };
 
+namespace quasar {
+
+std::uint32_t get_l1_size(IpVariant variant) {
+    switch (variant) {
+        case IpVariant::GRENDEL: return get_grendel_l1_size();
+        case IpVariant::HORIZON: return get_horizon_l1_size();
+        case IpVariant::TRINITY: return get_trinity_l1_size();
+        // Saturn has no register headers yet. Once they are added, read its L1 size from them the way the
+        // other variants do: add a qa_hal_saturn_l1.cpp and list it in QA_HAL_VARIANT_L1_SOURCES (sources.cmake).
+        case IpVariant::SATURN: TT_THROW("Saturn has no register headers to read the L1 size from");
+    }
+    TT_THROW("Unknown Quasar IP variant {}", enchantum::to_string(variant));
+}
+
+}  // namespace quasar
+
 void Hal::initialize_qa(
     std::uint32_t profiler_dram_bank_size_per_risc_bytes, bool enable_dram_backed_cq, IpVariant quasar_arch_variant) {
     using namespace quasar;
@@ -514,11 +532,12 @@ void Hal::initialize_qa(
         static_cast<int>(HalProgrammableCoreType::DISPATCH) == static_cast<int>(ProgrammableCoreType::DISPATCH));
 
     this->quasar_arch_variant_ = quasar_arch_variant;
-    this->core_info_.push_back(quasar::create_tensix_mem_map());
+    this->core_info_.push_back(quasar::create_tensix_mem_map(quasar_arch_variant));
     this->core_info_.push_back(quasar::create_active_eth_mem_map());
     this->core_info_.push_back(quasar::create_idle_eth_mem_map());
     ensure_hal_core_info_slots(this->core_info_, this->core_info_.front());
-    this->core_info_[static_cast<std::size_t>(HalProgrammableCoreType::DISPATCH)] = quasar::create_dispatch_mem_map();
+    this->core_info_[static_cast<std::size_t>(HalProgrammableCoreType::DISPATCH)] =
+        quasar::create_dispatch_mem_map(quasar_arch_variant);
     this->core_info_[static_cast<std::size_t>(HalProgrammableCoreType::TENSIX)].num_physical_riscs_ =
         static_cast<uint32_t>(TensixProcessorTypes::COUNT);
     this->core_info_[static_cast<std::size_t>(HalProgrammableCoreType::ACTIVE_ETH)].num_physical_riscs_ =
@@ -658,6 +677,7 @@ void Hal::initialize_qa(
     this->virtualizes_non_worker_cores_ = true;
     this->tensix_harvest_axis_ = static_cast<HalTensixHarvestAxis>(tensix_harvest_axis);
     this->has_tile_counter_registers_ = true;
+    this->num_dataflow_buffers_ = ::dfb::NUM_DFBS;
     this->supports_implicit_dfb_sync_ = true;
     this->num_tile_counters_ = NOC_NUM_TILE_COUNTERS;
 

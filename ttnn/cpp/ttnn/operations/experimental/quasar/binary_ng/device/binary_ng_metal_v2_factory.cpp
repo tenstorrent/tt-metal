@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Deprecated on Quasar: this factory runs only what the native gate refuses, and it gets no new work.
+//
 // Metal 2.0 / DataflowBuffer (DFB) program factory for binary_ng's no-broadcast (SubtileBroadcastType::
 // NONE), tiled path.
 //
@@ -35,8 +37,8 @@
 //   - The descriptor's `has_sharding` TensorAccessor CTA -> a HAS_SHARDING #define (the DFB kernels
 //     read it as a macro).
 //
-// Deferred to the descriptor (rejected by matches_metal_v2_slice, NOT handled here): row-major (non-tile)
-// layout, tensor-scalar (no input_tensor_b), where-op, quantization, and mixed lhs/rhs dtype. Mixed
+// Not supported (rejected by matches_metal_v2_slice, NOT handled here): row-major (non-tile)
+// layout, where-op, quantization, and mixed lhs/rhs dtype. Mixed
 // sharded/interleaved layouts AND width sharding ARE handled: the borrow path is taken only when all
 // three operands are co-resident L1 shards with one memory config; everything else (interleaved output OR
 // input, or a different shard spec) takes the NoC path via sharding-aware TensorAccessors. A borrowed
@@ -167,7 +169,7 @@ constexpr const char* kComputeIncludeCommon =
 constexpr const char* kComputeIncludeDfb =
     "ttnn/cpp/ttnn/operations/experimental/quasar/binary_ng/device/kernels_dfb/compute";
 
-// Per-broadcast-type kernel-source seam (the DFB analogue of the descriptor's BinaryNgKernelConfig):
+// Per-broadcast-type kernel-source seam:
 // it maps a SubtileBroadcastType to the reader/writer/compute kernel sources. NONE, ROW_A/ROW_B,
 // COL_A/COL_B, and SCALAR_A/SCALAR_B are wired; the remaining (mixed ROW/COL) broadcast variants follow
 // when their DFB kernels are added.
@@ -241,9 +243,7 @@ DfbKernelSources select_dfb_kernel_sources(SubtileBroadcastType subtile_broadcas
         "binary_ng Metal 2.0 factory: unsupported subtile broadcast type {}", static_cast<int>(subtile_broadcast_type));
 }
 
-// --- Small pure helpers mirrored from the descriptor factory's anonymous namespace. They live in
-// that .cpp's anonymous namespace (not the shared header), so they are reimplemented here to avoid
-// touching the proven descriptor path. Keep behavior identical to binary_ng_program_factory.cpp. ---
+// --- Small pure helpers. ---
 
 // For rank > 5, dims are collapsed into a single dim. Mirrors extract_nD_dims in the descriptor factory.
 uint32_t extract_nD_dims(const Tensor& x, int out_rank) {
@@ -271,12 +271,10 @@ std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> get_shape_dims(cons
         tt::div_up(shape[-1], tile.get_width())};
 }
 
-// Compute-kernel {freq, tile_start} for the subtile-broadcast reuse loop. Mirrors
-// calculate_compute_kernel_args in binary_ng_program_factory.cpp (anonymous namespace there, so
-// reimplemented here like the other small helpers). For COL it returns {Wt, start_tw}: the compute
-// broadcasts the column tile once and reuses it across a full tile-row (freq = Wt), starting at this
-// core's column offset (start_tw). ROW/NONE need no reuse ({1, 0}); SCALAR reuses across the whole
-// HtWt block. Kept as a full switch so a later SCALAR/mixed wiring reuses it unchanged.
+// Compute-kernel {freq, tile_start} for the subtile-broadcast reuse loop. For COL it returns {Wt, start_tw}: the
+// compute broadcasts the column tile once and reuses it across a full tile-row (freq = Wt), starting at this core's
+// column offset (start_tw). ROW/NONE need no reuse ({1, 0}); SCALAR reuses across the whole HtWt block. Kept as a full
+// switch so a later SCALAR/mixed wiring reuses it unchanged.
 std::tuple<uint32_t, uint32_t> calculate_compute_kernel_args(
     SubtileBroadcastType broadcast_type, uint32_t start_tile_id, uint32_t Ht, uint32_t Wt) {
     const uint32_t start_t = start_tile_id % (Ht * Wt);
@@ -362,16 +360,16 @@ ProgramArtifacts create_no_bcast_artifacts(
     const DataType input_dtype = op.input_dtype;
     const auto op_type = op.binary_op_type;
 
-    Buffer* a_buffer = a.buffer();
+    const auto* a_buffer = &a.mesh_buffer();
     Buffer* b_buffer = is_scalar ? nullptr : b_opt->buffer();
-    Buffer* c_buffer = c.buffer();
+    const auto* c_buffer = &c.mesh_buffer();
     TT_FATAL(
         a_buffer != nullptr && (is_scalar || b_buffer != nullptr) && c_buffer != nullptr,
         "binary_ng Metal 2.0 no-bcast factory requires allocated device buffers");
 
     // --- Borrow vs NoC routing. The borrow facts come from the shared get_shard_volumes helper -- the
-    // same one the descriptor factory and compute_program_hash use -- so this factory and the descriptor
-    // agree on what "native L1 sharding" means: get_shard_volumes is is_native_L1_sharding plus an
+    // same one compute_program_hash uses -- so this factory and the hash agree on what "native L1
+    // sharding" means: get_shard_volumes is is_native_L1_sharding plus an
     // uneven-shard guard (an unevenly-sharded output additionally requires all three operands to share one
     // shard spec), so it returns nullopt both for a non-native config and for an uneven output the
     // all-or-nothing borrow cannot serve; it reports a per-operand shard volume only for an operand that is
@@ -407,7 +405,7 @@ ProgramArtifacts create_no_bcast_artifacts(
     const bool has_sharding = borrow_shards;
 
     // --- Dtypes / data formats / tile sizes (mirrors the descriptor factory). For a scalar there is no
-    // `b`, so b_dtype is derived exactly as the descriptor does (binary_ng_program_factory.cpp): the
+    // `b`, so b_dtype is derived as follows: the
     // scalar is packed as bf16 for block-float a, else the sfpu path keeps a_dtype, else bf16. b_tile
     // borrows a's tile geometry (a single bf16 scalar tile). ---
     const DataType a_dtype = a.dtype();
@@ -488,7 +486,7 @@ ProgramArtifacts create_no_bcast_artifacts(
         const bool is_subtile_broadcast = op.subtile_broadcast_type != SubtileBroadcastType::NONE;
 
         // PACK_RELU fast path (no-broadcast only). Other single post-acts expand to the SFPU post chain
-        // (as in the descriptor factory; ZERO_POINT/quant routes to the descriptor).
+        // (ZERO_POINT/quant is not supported).
         if (lhs_activations.empty() && rhs_activations.empty() && post_activations.size() == 1) {
             compute_defines["PROCESS_POST_ACTIVATIONS(i)"] = "";
             if (post_activations[0].type() == unary::UnaryOpType::RELU && !is_subtile_broadcast) {
@@ -535,7 +533,7 @@ ProgramArtifacts create_no_bcast_artifacts(
     const m2::KernelSpecName WRITER{"binary_ng_writer"};
     const m2::KernelSpecName COMPUTE{"binary_ng_compute"};
 
-    // Per-broadcast-type kernel-source selection (the descriptor's BinaryNgKernelConfig analogue): the
+    // Per-broadcast-type kernel-source selection: the
     // no-broadcast (NONE) triple, the ROW subtile-broadcast reader/compute for ROW_A / ROW_B, the COL
     // subtile-broadcast reader/compute for COL_A / COL_B, and the SCALAR subtile-broadcast reader/compute
     // for SCALAR_A / SCALAR_B.
@@ -684,7 +682,7 @@ ProgramArtifacts create_no_bcast_artifacts(
     // OTHER_OP) operand off BCAST_INPUT (1 = ROW_A_COL_B, 0 = ROW_B_COL_A) and reads the ROW operand's
     // llk_post via the dfb::llk_post accessor (bound to c_5 / c_6 by bcast_lhs / bcast_rhs above), so it
     // needs no SRC_BCAST[_B]. SRC_BCAST_COL and SRC_BCAST_ROW_B carry the same value (a is COL <=> b is
-    // ROW, and vice versa), matching the descriptor factory (binary_ng_program_factory.cpp).
+    // ROW, and vice versa).
     if (is_mixed_bcast) {
         const std::string src_bcast_col = op.subtile_broadcast_type == SubtileBroadcastType::ROW_B_COL_A ? "1" : "0";
         reader_defines["SRC_BCAST_COL"] = src_bcast_col;

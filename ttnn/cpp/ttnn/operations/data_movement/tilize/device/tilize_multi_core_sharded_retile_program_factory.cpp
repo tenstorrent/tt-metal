@@ -83,8 +83,8 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreShardedRetileProgramFact
     const bool fp32_llk_acc = a.dtype() == DataType::FLOAT32 || a.dtype() == DataType::FP8_E4M3 ||
                               output.dtype() == DataType::FP8_E4M3 || output.dtype() == DataType::BFLOAT8_B;
 
-    TT_FATAL(a.buffer() != nullptr, "Input buffer should be allocated on device!");
-    TT_FATAL(output.buffer() != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(a.is_allocated(), "Input buffer should be allocated on device!");
+    TT_FATAL(output.is_allocated(), "Output buffer should be allocated on device!");
 
     const bool output_is_interleaved = output.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED;
 

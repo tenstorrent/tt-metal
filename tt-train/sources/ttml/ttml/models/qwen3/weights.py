@@ -321,7 +321,7 @@ def load_weights_from_hf(
     sharded_mappers: dict = {}
     if sharded:
         device = ttml.autograd.AutoContext.get_instance().get_device()
-        replicate_mapper = ttml.core.distributed.replicate_tensor_to_mesh_mapper(device)
+        replicate_mapper = ttml.core.distributed.replicate_to_mesh_mapper(device)
         for name in ttml_params:
             sharding = Sharding.from_tensor(ttml_params[name])
             mapper = sharding.derive_mapper()

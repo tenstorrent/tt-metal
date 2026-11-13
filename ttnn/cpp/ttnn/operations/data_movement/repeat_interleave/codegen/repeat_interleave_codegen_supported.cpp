@@ -51,7 +51,7 @@ bool supported_by_codegen(
     // three -- Tensor::is_sharded() is false off-device and memory_config() reads the spec, not a
     // buffer. Reject up front so a host tensor takes native's own validation rather than tripping
     // over Tensor::device() in rm_cb_budget() or a null buffer in the program factory.
-    if (input.storage_type() != StorageType::DEVICE || input.buffer() == nullptr) {
+    if (input.storage_type() != StorageType::DEVICE || !input.is_allocated()) {
         return false;
     }
 

@@ -11,30 +11,6 @@
 ////////////////////////////////////////
 // clang-format off
 /**
- * Initializes the transaction ID starts array where each element in the array is the start transaction ID for a
- * receiver channel
- *
- * Return value: constexpr std::array<uint8_t, NUM_RECEIVER_CHANNELS>
- *
- * | Template Argument                | Description                              | Type                  | Valid Range                        |
- * |----------------------------------|------------------------------------------|-----------------------|------------------------------------|
- * | NUM_RECEIVER_CHANNELS            | number of receiver channels              | size_t                | 1 to MAX_NUM_RECEIVER_CHANNELS - 1 |
- * | NUM_TRANSACTION_IDS_PER_CHANNEL  | number of transaction IDs per channel    | size_t                | 1 to 16                            |
- */
-// clang-format on
-template <size_t NUM_RECEIVER_CHANNELS, size_t NUM_TRANSACTION_IDS_PER_CHANNEL>
-constexpr auto initialize_receiver_channel_trid_starts() -> std::array<uint8_t, NUM_RECEIVER_CHANNELS> {
-    std::array<uint8_t, NUM_RECEIVER_CHANNELS> arr{};
-    size_t trid_start = 0;
-    for (size_t i = 0; i < NUM_RECEIVER_CHANNELS; i++) {
-        arr[i] = trid_start;
-        trid_start += NUM_TRANSACTION_IDS_PER_CHANNEL;
-    }
-    return arr;
-}
-
-// clang-format off
-/**
  * constexpr function that will take the first n elements from an input array and assign those values
  * to a constexpr output array
  *

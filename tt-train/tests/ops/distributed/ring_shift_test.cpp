@@ -15,12 +15,12 @@
 #include <array>
 #include <core/xtensor_utils.hpp>
 #include <tt-metalium/distributed_context.hpp>
-#include <tt-umd/cluster.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "core/distributed/socket_manager.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ops/distributed/comm_ops.hpp"
+#include "test_utils/mesh_utils.hpp"
 #include "test_utils/random_data.hpp"
 #include "ttnn/distributed/create_socket.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
@@ -29,33 +29,29 @@
 
 using ttml::ttnn_fixed::distributed::RingShiftDirection;
 
-auto check_32_chips() {
-    auto cluster_desc = tt::umd::Cluster::create_cluster_descriptor();
-    auto all_chips = cluster_desc->get_all_chips();
-    return all_chips.size() == 32;
-}
-
 class GalaxyRingShiftTest : public ::testing::Test {
 public:
+    static inline const tt::tt_metal::distributed::MeshShape kMeshShape{8, 4};
+
     static void SetUpTestSuite() {
-        if (check_32_chips()) {
-            ttml::autograd::ctx().initialize_distributed_context(0, nullptr);
-            ttml::ttnn_fixed::distributed::enable_fabric(32);
-            ttml::autograd::ctx().open_device(tt::tt_metal::distributed::MeshShape(8, 4));
+        if (ttml::test_utils::system_supports_mesh(kMeshShape)) {
+            if (!ttml::autograd::ctx().is_distributed_context_initialized()) {
+                ttml::autograd::ctx().initialize_distributed_context(0, nullptr);
+            }
+            ttml::ttnn_fixed::distributed::enable_fabric(static_cast<uint32_t>(kMeshShape.mesh_size()));
+            ttml::autograd::ctx().open_device(kMeshShape);
             ttml::autograd::ctx().set_seed(42);
             ttml::autograd::ctx().initialize_socket_manager(ttnn::distributed::SocketType::FABRIC);
         }
     }
     static void TearDownTestSuite() {
-        if (check_32_chips()) {
+        if (ttml::test_utils::system_supports_mesh(kMeshShape)) {
             ttml::autograd::ctx().close_device();
         }
     }
 
     void SetUp() override {
-        if (!check_32_chips()) {
-            GTEST_SKIP() << "Skipping Galaxy specific tests";
-        }
+        SKIP_UNLESS_MESH_SUPPORTED(kMeshShape);
     }
 };
 
@@ -87,7 +83,7 @@ static void TestRingShift(
     const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, shard_dim, cluster_axis);
     const auto tt_tensor =
         core::from_xtensor<float, ttnn::DataType::BFLOAT16>(xtensor, device, ttnn::Layout::TILE, mapper.get());
-    auto tensor = autograd::create_tensor(tt_tensor);
+    auto tensor = autograd::create_tensor(tt_tensor, /* requires_grad */ test_backward_grad);
 
     // Get original sharded tensors for comparison
     const auto original_xtensors = core::to_xtensor<float>(tensor->get_value(), core::IdentityComposer{});

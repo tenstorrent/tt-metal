@@ -37,9 +37,10 @@ from helpers.test_variant_parameters import (
     SDPA_EXP_SCALE,
     SDPA_OP,
     SDPA_SOFTPLUS_PARAMS,
+    fp32_bits,
 )
 from helpers.tilize_untilize import tilize_block, untilize_block
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 TILE_DIMENSIONS = [TILE_DIM, TILE_DIM]
 
@@ -97,10 +98,6 @@ CORRECTION_TILE_NAMES = ("prev_max", "worker_max", "cur_max", "prev_sum", "worke
 CORRECTION_SCALE_BF16_VALUES = (0x3F80, 0x3E80)  # (1.0, 0.25)
 
 
-def _f32_bits(value: float) -> int:
-    return struct.unpack("<I", struct.pack("<f", value))[0]
-
-
 def _bf16_to_float(pattern: int) -> float:
     return struct.unpack("<f", struct.pack("<I", pattern << 16))[0]
 
@@ -118,12 +115,14 @@ def _ramp(lo: float, hi: float) -> torch.Tensor:
 
 # Most paths that pack into bf16 share one pair because packer rounding is the main source of error.
 # Correction is not limited by rounding precision because it accumulates across five tiles.
+# Softplus reaches beta*x = -12 (~6e-6). atol is capped at ~3e-8, so a 0 in the tail
+# fails on rtol rather than hiding under the floor. fp32 rtol is 2x the measured 1.61e-4.
 _TOLERANCES = {
     # op, approx (None where the body ignores it): bf16-packed, fp32 end-to-end
     (SdpaOp.Correction, None): ((1.5e-4, 2.5e-2), (1.0e-6, 2.5e-7)),
     (SdpaOp.ExpAccurate, None): ((4.0e-6, 1.2e-2), (1.2e-7, 2.5e-7)),
     (SdpaOp.ExpPoly, None): ((4.0e-6, 1.2e-2), (4.0e-6, 8.0e-6)),
-    (SdpaOp.Softplus, None): ((1.0e-4, 1.0e-2), (1.0e-4, 4.0e-3)),
+    (SdpaOp.Softplus, None): ((3.0e-8, 1.0e-2), (3.0e-8, 3.2e-4)),
     (SdpaOp.RecipIter, False): ((2.5e-3, 1.2e-2), (1.2e-7, 2.5e-7)),
     (SdpaOp.RecipIter, True): ((2.5e-3, 1.2e-2), (2.5e-3, 1.2e-2)),
 }
@@ -194,11 +193,9 @@ def _stimulus(variant: Variant) -> torch.Tensor:
         span = 8.0 / abs(scale)
         return _ramp(0.0, span) if scale < 0.0 else _ramp(-span, 0.0)
 
-    # Softplus. The bound keeps |beta*x| inside the residual polynomial's [0, 5] fit domain, so
-    # the test measures the polynomial rather than the clamp beyond it. Where beta*x clears the
-    # threshold the body writes nothing and the golden returns x, so a low threshold covers the
-    # pass-through arm without needing its own stimulus.
-    bound = 4.0 / variant.softplus.beta
+    # Softplus. |beta*x| passes 5 (the old flush). A low threshold still hits the
+    # pass-through arm, where the body writes nothing and the golden returns x.
+    bound = 12.0 / variant.softplus.beta
     return _ramp(-bound, bound)
 
 
@@ -210,9 +207,9 @@ def _templates(variant: Variant):
         DEST_SYNC(variant.dest_sync),
         SDPA_EXP_SCALE(scale_bf16=variant.exp_scale_bf16),
         SDPA_SOFTPLUS_PARAMS(
-            softplus_beta_bits=_f32_bits(variant.softplus.beta),
-            softplus_beta_reciprocal_bits=_f32_bits(1.0 / variant.softplus.beta),
-            softplus_threshold_bits=_f32_bits(variant.softplus.threshold),
+            softplus_beta_bits=fp32_bits(variant.softplus.beta),
+            softplus_beta_reciprocal_bits=fp32_bits(1.0 / variant.softplus.beta),
+            softplus_threshold_bits=fp32_bits(variant.softplus.threshold),
         ),
     ]
 
@@ -288,7 +285,7 @@ def test_sfpu_sdpa(variant, precision):
     )
     res_from_L1 = configuration.run().result
 
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = result_tensor(res_from_L1, formats.output_format)
     res_tensor = untilize_block(res_tensor, formats.output_format, TILE_DIMENSIONS)
 
     unexpected = _footprint_violations(src_A.view(TILE_DIM, TILE_DIM), res_tensor)
@@ -403,7 +400,7 @@ def test_sfpu_sdpa_correction(dest_config, scale_bf16):
     )
     res_from_L1 = configuration.run().result
 
-    res_flat = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_flat = result_tensor(res_from_L1, formats.output_format)
     res_tiles = [
         untilize_block(
             res_flat[i * ELEMENTS_PER_TILE : (i + 1) * ELEMENTS_PER_TILE],

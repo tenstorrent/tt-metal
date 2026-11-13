@@ -30,21 +30,27 @@ class GLM53Config:
     # routed-expert matmul shape, expert count and activation (6144x2048, 256 experts, top-8, no
     # pre-projection, SiLU). Re-measure if any of those change.
     ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD = 320
-    # Opts this model into TtMoe's routed expert / combine_fabric2d overlap (Blackhole, traced only). Every
+    # Opts this model into TtMoe's routed expert / combine_fabric2d overlap (Blackhole, traced and untraced). Every
     # config that does not name it runs the routed expert then combine as separate ops.
     ROUTED_EXPERT_COMBINE_OVERLAP = True
+    # Whether to use the fabric2d-optimized dispatch and combine ops in MoE
+    # True = use them if the mesh allows, False = use older ops
+    MOE_FABRIC2D_TRANSPORT = True
     INTERMEDIATE_SIZE = 12288  # Dense FFN hidden dimension
 
     # MoE configuration
     NUM_ROUTED_EXPERTS = 256
     NUM_EXPERTS_PER_TOKEN = 8
-    # Divisor on combine_fabric2d's forwarding region -- see DeepSeekV3Config.COMBINE_FWD_REDUCTION for
-    # what it trades. Measured 8x4 over 1x-64x: 16 costs this model 4.3% on hot_expert traffic and
-    # nothing on balanced, for 40 -> 20 MB a chip.
-    COMBINE_FWD_REDUCTION = 16
+    # Depth of the MoE forwarding buffers. Any value would make model functional,
+    # but larger values make it faster and consume more DRAM, so it's a compromise.
+    MOE_FWD_VC_PAGES = 64
     NUM_SHARED_EXPERTS = 1
     NUM_EXPERT_GROUPS = 1
     NUM_LIMITED_GROUPS = 1
+    # Cache the noaux_tc correction bias mean-centred (see centre_gate_bias). The checkpoint biases sit on
+    # per-layer offsets of ~8-34 with a spread of only ~0.06-0.15, so bf16 keeps just 3-9 distinct values a
+    # layer; centred it keeps 78-173. Every config that does not name it keeps the uncentred cache file.
+    MOE_GATE_BIAS_CENTERED = True
 
     # Gate-test device-mode scores bar. pcc_scores sorts both sides, so this measures the
     # selected-weight distribution rather than slot alignment; 160 experts, top-8 floors at

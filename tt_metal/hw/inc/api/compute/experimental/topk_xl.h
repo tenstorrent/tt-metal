@@ -400,7 +400,7 @@ ALWI void topk_xl_reinit_mop_after_copy() {
 }
 
 /**
- * Restore the subset of unfused TopK state clobbered by copy_tile_init.
+ * Restore the subset of unfused TopK state clobbered by copy_init.
  *
  * In addition to the shared MOP Expander, unfused rebuild consumes ADDR_MOD_3,
  * which copy init rewrites, and ADDR_MOD_2, which is (re)established for the

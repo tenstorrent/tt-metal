@@ -267,11 +267,38 @@ void py_module(nb::module_& m, nb::module_& m_modules) {
             },
             "Create GPT2 model");
 
+        // Explicit __call__ bindings, as for GPT-2 above: the distributed models only override
+        // operator()(TensorPtr, optional<TensorPtr>), so ModuleBase's (TensorPtr, TensorPtr) binding would reach
+        // its "Not implemented" default.
+        auto py_distributed_gpt2_model =
+            static_cast<nb::class_<ttml::models::distributed::gpt2::DistributedTransformer, models::BaseTransformer>>(
+                py_distributed_gpt2.attr("DistributedGPT2Transformer"));
+        py_distributed_gpt2_model.def(
+            "__call__",
+            [](ttml::models::distributed::gpt2::DistributedTransformer& self,
+               const ttml::autograd::TensorPtr& tensor,
+               const std::optional<ttml::autograd::TensorPtr>& mask) { return self(tensor, mask); },
+            nb::arg("tensor"),
+            nb::arg("mask").none(),
+            "Model forward pass. With mask=None the fused SDPA applies the causal mask itself.");
+
         auto py_distributed_llama = py_distributed.def_submodule("llama");
         py_distributed_llama.def(
             "create_llama_model",
             [](const models::llama::LlamaConfig& config) { return ttml::models::distributed::llama::create(config); },
             "Create Llama model");
+
+        auto py_distributed_llama_model =
+            static_cast<nb::class_<ttml::models::distributed::llama::DistributedLlama, models::BaseTransformer>>(
+                py_distributed_llama.attr("DistributedLlama"));
+        py_distributed_llama_model.def(
+            "__call__",
+            [](ttml::models::distributed::llama::DistributedLlama& self,
+               const ttml::autograd::TensorPtr& tensor,
+               const std::optional<ttml::autograd::TensorPtr>& mask) { return self(tensor, mask); },
+            nb::arg("tensor"),
+            nb::arg("mask").none(),
+            "Model forward pass. With mask=None the fused SDPA applies the causal mask itself.");
 
         auto py_distributed_pp = py_distributed.def_submodule("pipeline_parallel");
         auto py_distributed_pp_llama = py_distributed_pp.def_submodule("llama");

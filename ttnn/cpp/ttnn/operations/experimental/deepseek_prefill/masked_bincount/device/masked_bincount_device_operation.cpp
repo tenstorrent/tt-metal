@@ -23,9 +23,9 @@ void MaskedBincountDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         input_tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
         "Input tensor must be interleaved!");
-    // The op splits the token rows across a fixed 8x8 (64-core) grid, so the token count must be
-    // divisible by 64 (which also keeps every core's row range tile-aligned in aggregate).
-    constexpr uint32_t kNumCores = 64;
+    // The op splits the token rows across a fixed 8-core row (see the program factory), so the token count
+    // must be divisible by 8.
+    constexpr uint32_t kNumCores = 8;
     const uint32_t tokens = input_tensor.logical_shape()[0];
     TT_FATAL(
         tokens % kNumCores == 0,

@@ -132,9 +132,15 @@ inline void _llk_unpack_tilize_to_dest_set_counters_(const std::uint32_t l1_tile
  * @param dst_tile_idx: DEST tile index of the first tile, relative to the section base. dst_tile_idx + block_ct_dim must
  *        not exceed the section capacity (@ref get_dest_max_tiles). Pack reads the tiles back from the same indices.
  * @note Call @ref _llk_unpack_tilize_to_dest_init_ before this function.
+ * @note Leaves the UNP_A source and DEST face index at 0 on return. The run addresses L1 and DEST through them and
+ *       the MOP steps the DEST one per tile, while the tile placers of the other unpack families set only TILE_SEL,
+ *       so a leftover would shift their first tile, in this program or the next one on the core (tt-metal #62275).
  */
 inline void _llk_unpack_tilize_to_dest_(const std::uint32_t l1_tile_idx, const std::uint32_t dst_tile_idx)
 {
     _llk_unpack_tilize_to_dest_set_counters_(l1_tile_idx, dst_tile_idx);
     ckernel_template::run_bank0_sw_cntl(instrn_buffer);
+    // Clear the face index the run addressed through (see the @note above).
+    TTI_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::FACE_SEL, p_unpacr::UNP_A, 0 /*Value*/);
+    TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::FACE_SEL, p_unpacr::UNP_A, 0 /*Value*/);
 }

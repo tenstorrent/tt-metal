@@ -21,8 +21,8 @@ inline void calculate_logsigmoid(
 {
     // The four highest polynomial coefficients, loaded once and kept in the four LRegs the row leaves free
     // (sfpi (through 7.89.0) never lifts a literal out of a loop by itself, so each otherwise costs an SFPLOADI pair
-    // per row). LRegs only, no programmable constants: ttnn's logsigmoid_tile_init is the bare binary
-    // init, and the fast exp that produces exp(-x) right before this op owns the Prgm registers.
+    // per row). LRegs only, no programmable constants: the Blackhole logsigmoid_init is empty, and the fast
+    // exp that produces exp(-x) right before this op owns the Prgm registers.
     sfpi::vFloat c5 = -0.00028794066747650504f;
     sfpi::vFloat c6 = 5.3185409342404455e-05f;
     sfpi::vFloat c7 = 7.1853546614875086e-06f;

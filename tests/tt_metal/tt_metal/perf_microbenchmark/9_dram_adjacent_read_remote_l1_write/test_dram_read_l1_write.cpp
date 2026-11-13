@@ -124,7 +124,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
     std::vector<CoreCoord> all_l1_writer_cores_ordered,
     uint32_t bank_start_id,
     const uint32_t& input_buffer_addr) {
-    tt_metal::Program program = tt_metal::Program();
+    tt_metal::Program program = tt_metal::CreateProgram(*device);
 
     uint32_t start_tile_id = 0;
     uint32_t kt = k / 32;
@@ -362,7 +362,12 @@ void get_optimal_dram_bank_to_reader_assignment(
     std::vector<CoreCoord>& all_worker_cores_ordered,
     CoreRangeSet& all_worker_cores,
     tt_metal::NOC noc) {
-    all_worker_cores_ordered = device->get_optimal_dram_bank_to_logical_worker_assignment(noc);
+    const auto bank_to_core = device->get_optimal_dram_bank_to_logical_worker_assignment(
+        noc, tt_metal::distributed::MeshCoordinate::zero_coordinate(device->shape().dims()));
+    all_worker_cores_ordered.resize(bank_to_core.size());
+    for (const auto& [bank, core] : bank_to_core) {
+        all_worker_cores_ordered.at(bank) = core;
+    }
     std::set<CoreRange> all_cores_set;
     for (const auto& worker_core : all_worker_cores_ordered) {
         all_cores_set.insert(CoreRange(worker_core));

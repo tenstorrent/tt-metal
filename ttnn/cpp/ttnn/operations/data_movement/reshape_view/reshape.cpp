@@ -34,6 +34,7 @@
 #include "reshape_force.hpp"
 #include "codegen/reshape_codegen_device_operation.hpp"
 #include "codegen/reshape_codegen_supported.hpp"
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 namespace ttnn::operations::data_movement {
 namespace detail {
@@ -449,7 +450,7 @@ ttnn::Tensor reshape_tiled(
             MemoryConfig interleaved_output_mem_config{TensorMemoryLayout::INTERLEAVED, memory_config.buffer_type()};
             auto interleaved_output_spec = tt::tt_metal::TensorSpec(
                 requested_shape_3d,
-                tt::tt_metal::TensorLayout::fromPaddedShape(
+                tt::tt_metal::experimental::tensor_layout_from_padded_shape(
                     tensor3d.dtype(),
                     tensor3d.tensor_spec().page_config(),
                     interleaved_output_mem_config,
@@ -513,7 +514,7 @@ ttnn::Tensor reshape_tiled(
         // passed here ends up baked into the layout's alignment, so synthetic_spec.physical_shape()
         // exactly matches the requested padded shape, even if compute_padded_shape ever produced
         // dimensions that exceed tile alignment (e.g., due to shard-aware padding).
-        auto synthetic_layout = tt::tt_metal::TensorLayout::fromPaddedShape(
+        auto synthetic_layout = tt::tt_metal::experimental::tensor_layout_from_padded_shape(
             tensor3d.dtype(),
             tensor3d.tensor_spec().page_config(),
             MemoryConfig(updated_mem_config.buffer_type()),
@@ -580,9 +581,11 @@ std::optional<reshape_codegen::LaunchPlan> routed_codegen_plan(
         return std::nullopt;
     }
     auto planned = reshape_codegen::plan_codegen(tensor, logical_shape, mem_config, sub_core_grid);
-    if (!planned.has_value() ||
-        reshape_codegen::is_demoted(
-            tensor, logical_shape, reshape_codegen::reshape_core_grid(tensor, sub_core_grid).num_cores(), *planned)) {
+    if (!planned.has_value()) {
+        return std::nullopt;
+    }
+    const uint32_t num_cores = reshape_codegen::reshape_core_grid(tensor, sub_core_grid).num_cores();
+    if (reshape_codegen::is_demoted(tensor, logical_shape, mem_config, num_cores, *planned)) {
         return std::nullopt;
     }
     return planned;
@@ -606,6 +609,7 @@ ttnn::Tensor reshape_dispatch(
     const auto [logical_shape, padded_shape] =
         operations::data_movement::shape_corrector(tensor, logical_input_shape, padded_input_shape);
 
+    // Skips the arch gate like the gather/repeat/untilize forced entries, so a caller can force codegen on any arch.
     if (impl == ReshapeImpl::CODEGEN) {
         const char* violation =
             reshape_codegen::call_contract_violation(tensor, logical_shape, padded_shape, pad_value);

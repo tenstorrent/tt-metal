@@ -9,7 +9,8 @@
 
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/buffer.hpp>
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
+#include <internal/mesh_device.hpp>
 
 namespace ttnn::send_recv_utils {
 
@@ -23,13 +24,13 @@ uint32_t handshake_page_size(uint32_t max_alignment) { return tt::align(handshak
 tt::tt_metal::IDevice* resolve_target_device(
     const Tensor& tensor, const std::optional<ttnn::MeshCoordinate>& coord, const std::string& op_name) {
     TT_FATAL(coord.has_value(), "{}: the program factory requires a per-device mesh dispatch coordinate", op_name);
-    return tensor.device()->get_device(*coord);
+    return tt::tt_metal::internal::get_device(*tensor.device(), *coord);
 }
 
 uint32_t socket_max_alignment(const ttnn::Tensor& tensor, const tt::tt_metal::distributed::MeshSocket& mesh_socket) {
     return std::max(
         tensor.buffer()->allocator()->get_alignment(mesh_socket.get_config().socket_mem_config.socket_storage_type),
-        tensor.buffer()->alignment());
+        tensor.mesh_buffer().alignment());
 }
 
 void validate_fifo_size(
@@ -59,7 +60,7 @@ void validate(
         "{} op requires a {} socket",
         op_name,
         enchantum::to_string(socket_type));
-    validate_fifo_size(mesh_socket, op_name, min_fifo_size.value_or(input_tensor.buffer()->aligned_page_size()));
+    validate_fifo_size(mesh_socket, op_name, min_fifo_size.value_or(input_tensor.mesh_buffer().aligned_page_size()));
 }
 
 template <tt::tt_metal::distributed::SocketEndpoint socket_type>

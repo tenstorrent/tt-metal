@@ -13,10 +13,10 @@ from pydantic import BaseModel
 
 from models.common.llama_models import sample_top_p
 from models.common.weight_cache import build_cached_state_dict, mark_weight_cache_complete, weight_cache_is_complete
-from models.tt_transformers.tt.common import ImageMedia, InterleavedTextMedia, Role
-from models.tt_transformers.tt.generator import create_submeshes
+from models.ttt_compat.tt.common import ImageMedia, InterleavedTextMedia, Role
+from models.ttt_compat.tt.generator import create_submeshes
 
-IMG_PATH = Path("models/tt_transformers/demo/sample_prompts/llama_models").resolve()
+IMG_PATH = Path("models/ttt_compat/demo/sample_prompts/llama_models").resolve()
 
 import os
 import time
@@ -31,8 +31,8 @@ from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.demos.utils.model_targets import resolve_perf_targets
 from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from models.tt_transformers.tt.common import hf_multimodal_encode
-from models.tt_transformers.tt.model_config import DecodersPrecision
+from models.ttt_compat.tt.common import hf_multimodal_encode
+from models.ttt_compat.tt.model_config import DecodersPrecision
 
 
 class UserMessage(BaseModel):

@@ -3,7 +3,7 @@
 """Real Kimi-K3 correctness and cost of the KDA state migration adapter.
 
 Two paths are measured against the layer they follow: the production per-layer slab export/import
-(`KdaStates.export_layer` / `import_layer`, what `KdaStateCache.commit` runs inside the trace) and the
+(`KdaStates.export_layer` / `import_layer`, what a K3 KDA layer runs inside the trace) and the
 whole-tensor native <-> single-layer contract conversion. Both must round-trip bit-identically.
 """
 
@@ -22,7 +22,6 @@ import torch
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import KDAReferenceState
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, fabric_1d_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.perf.test_layer_perf import _trace_wall_samples_ms
 from models.demos.deepseek_v3_d_p.tests.kda.reference_cache import load_or_compute_cpu_reference
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
@@ -30,6 +29,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     KimiK3TestCase,
     LayerNrmseThresholds,
     check_kimi_k3_accuracy,
+    kda_device_params,
     make_kimi_k3_device_case,
     make_kimi_k3_test_case,
 )
@@ -41,6 +41,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import (
     allocate_native_state,
     contract_memory_configs,
     deallocate_state,
+    device_scalar,
     export_state,
     import_state,
 )
@@ -49,17 +50,16 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import ass
 pytestmark = [run_for_blackhole(), pytest.mark.perf]
 
 _DEVICE_OVERRIDES = {"l1_small_size": 24576, "trace_region_size": 256 * 1024 * 1024}
-# LoudBox shapes on the unwrapped 1D fabric (the KDA perf leg's profile) and the 8x4 galaxy on the 2D
-# fabric the Kimi-K3 chunked tests run on. A 1D fabric on a 2x4 sub-mesh of a galaxy fails router sync,
-# so a galaxy runs the 8x4 case.
+# LoudBox shapes on the 2D fabric of their shape and the 8x4 galaxy on TorusXY, as Kimi-K3 runs. A galaxy
+# runs the 8x4 case.
 _LAYOUTS = [
-    pytest.param((1, 8), 1, fabric_1d_device_params(**_DEVICE_OVERRIDES), id="SP1xTP8"),
-    pytest.param((2, 4), 1, fabric_1d_device_params(**_DEVICE_OVERRIDES), id="SP2xTP4"),
-    pytest.param((2, 4), 0, fabric_1d_device_params(**_DEVICE_OVERRIDES), id="SP4xTP2"),
+    pytest.param((1, 8), 1, kda_device_params((1, 8), **_DEVICE_OVERRIDES), id="SP1xTP8"),
+    pytest.param((2, 4), 1, kda_device_params((2, 4), **_DEVICE_OVERRIDES), id="SP2xTP4"),
+    pytest.param((2, 4), 0, kda_device_params((2, 4), **_DEVICE_OVERRIDES), id="SP4xTP2"),
     pytest.param(
         (8, 4),
         1,
-        fabric2d_device_params(**_DEVICE_OVERRIDES),
+        kda_device_params((8, 4), **_DEVICE_OVERRIDES),
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
         id="SP8xTP4",
     ),
@@ -175,16 +175,16 @@ def _physical_contract(state: KdaState, slabs: KdaStates, geometry: KdaContractG
     recurrent_pages = {tensor.buffer_aligned_page_size() for tensor in ttnn.get_device_tensors(state.recurrent)}
     convolution_pages = {tensor.buffer_aligned_page_size() for tensor in ttnn.get_device_tensors(state.convolution)}
     assert recurrent_pages == {4096}
-    assert convolution_pages == {128}
+    assert convolution_pages == {geometry.convolution_segment_bytes}
     assert slabs.convolution.buffer_aligned_page_size() == geometry.convolution_segment_bytes
     return {
         "recurrent_nd_shard_shape": [1, 1, geometry.head_dim, 32],
-        "convolution_nd_shard_shape": [1, geometry.conv_history, 64],
+        "convolution_nd_shard_shape": [1, 1, geometry.convolution_slab_row_width],
         "recurrent_page_bytes": 4096,
-        "convolution_page_bytes": 128,
+        "convolution_page_bytes": geometry.convolution_segment_bytes,
         "convolution_slab_page_bytes": slabs.convolution.buffer_aligned_page_size(),
         "recurrent_pages_per_segment": geometry.recurrent_segment_bytes // 4096,
-        "convolution_pages_per_segment": geometry.convolution_segment_bytes // 128,
+        "convolution_pages_per_segment": 1,
         "recurrent_segments_per_device": geometry.recurrent_shards_per_layer,
         "convolution_segments_per_device": geometry.convolution_shards_per_layer,
     }
@@ -220,6 +220,7 @@ def test_kimi_k3_state_adapter_cost(
             output,
             mesh_device,
             tensor_parallel_axis,
+            page_channels=layer.convolution_page_channels,
             pcc_threshold=_PCC_THRESHOLD,
             nrmse=LayerNrmseThresholds(output=0.03, recurrent=0.04, convolution=KIMI_K3_CONVOLUTION_NRMSE),
         )
@@ -233,15 +234,16 @@ def test_kimi_k3_state_adapter_cost(
     ttnn.synchronize_device(mesh_device)
     allocation_ms = (time.perf_counter() - allocation_start) * 1e3
     physical = _physical_contract(contract, slabs, geometry)
+    slot = device_scalar(mesh_device, 0)  # the export reads its slot on device, as the traced commit does
 
     # Production path, cold: one export at the layer's commit and one import back.
     cold = {
-        "slab_export": _eager_ms(mesh_device, lambda: slabs.export_layer(real_state, 0, _LAYER_IDX)),
-        "slab_import": _eager_ms(mesh_device, lambda: slabs.import_layer(imported, 0, _LAYER_IDX)),
+        "slab_export": _eager_ms(mesh_device, lambda: slabs.export_layer(real_state, slot, _LAYER_IDX)),
+        "slab_import": _eager_ms(mesh_device, lambda: slabs.import_layer(imported, slot, _LAYER_IDX)),
         "contract_export": _eager_ms(mesh_device, lambda: export_state(real_state, contract, geometry)),
         "contract_import": _eager_ms(mesh_device, lambda: import_state(contract, imported, geometry)),
     }
-    slabs.import_layer(imported, 0, _LAYER_IDX)
+    slabs.import_layer(imported, slot, _LAYER_IDX)
     ttnn.synchronize_device(mesh_device)
     _assert_mesh_equal(real_state.recurrent, imported.recurrent, name=f"{layout} slab S round trip")
     _assert_mesh_equal(real_state.convolution, imported.convolution, name=f"{layout} slab conv round trip")
@@ -251,17 +253,17 @@ def test_kimi_k3_state_adapter_cost(
     _assert_mesh_equal(real_state.convolution, imported.convolution, name=f"{layout} contract conv round trip")
 
     patterned = _patterned_state(mesh_device, geometry)
-    slabs.export_layer(patterned, 0, _LAYER_IDX)
-    slabs.import_layer(imported, 0, _LAYER_IDX)
+    slabs.export_layer(patterned, slot, _LAYER_IDX)
+    slabs.import_layer(imported, slot, _LAYER_IDX)
     ttnn.synchronize_device(mesh_device)
     _assert_mesh_equal(patterned.recurrent, imported.recurrent, name=f"{layout} patterned slab S")
     _assert_mesh_equal(patterned.convolution, imported.convolution, name=f"{layout} patterned slab conv")
 
-    slabs.export_layer(real_state, 0, _LAYER_IDX)
+    slabs.export_layer(real_state, slot, _LAYER_IDX)
     export_state(real_state, contract, geometry)
     operations = {
-        "slab_export": lambda: slabs.export_layer(real_state, 0, _LAYER_IDX),
-        "slab_import": lambda: slabs.import_layer(imported, 0, _LAYER_IDX),
+        "slab_export": lambda: slabs.export_layer(real_state, slot, _LAYER_IDX),
+        "slab_import": lambda: slabs.import_layer(imported, slot, _LAYER_IDX),
         "contract_export": lambda: export_state(real_state, contract, geometry),
         "contract_import": lambda: import_state(contract, imported, geometry),
     }
@@ -299,4 +301,5 @@ def test_kimi_k3_state_adapter_cost(
     deallocate_state(initial_state)
     deallocate_state(real_state)
     slabs.deallocate()
+    ttnn.deallocate(slot)
     ttnn.deallocate(actual_start)

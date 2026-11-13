@@ -871,7 +871,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         }
         // Tensor bias is of shape {output_channels}
         TT_FATAL(bias.has_value(), "Bias tensor must be provided when has_bias is true");
-        TT_FATAL(bias.value().buffer() != nullptr, "Bias tensor buffer must not be null");
+        TT_FATAL(bias.value().is_allocated(), "Bias tensor buffer must not be null");
         auto bias_shape_without_padding = bias.value().logical_shape();
         TT_FATAL(bias_shape_without_padding[0] == 1, "Bias should have batch == 1");
     }
@@ -887,8 +887,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         a.storage_type() == StorageType::DEVICE && b.storage_type() == StorageType::DEVICE,
         "Operands to large matmul need to be on device!");
     TT_FATAL(a.device() == b.device(), "Operands to conv need to be on the same device!");
-    TT_FATAL(
-        a.buffer() != nullptr && b.buffer() != nullptr, "Operands to conv need to be allocated in buffers on device!");
+    TT_FATAL(a.is_allocated() && b.is_allocated(), "Operands to conv need to be allocated in buffers on device!");
     if (has_bias) {
         TT_FATAL(bias.value().storage_type() == StorageType::DEVICE, "Bias should be on device");
         TT_FATAL(bias.value().device() == a.device(), "Bias should be on the same device as act tensor");
@@ -1211,7 +1210,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         conv_reader_indices_tensor, parallel_config, block_sharded, a.device(), config_tensors_in_dram);
     log_trace(tt::LogOp, "Conv2D Config Tensor : {}", conv_reader_indices_tensor);
 
-    tt::tt_metal::Buffer* conv_reader_indices_buffer = conv_reader_indices_tensor.buffer();
+    const auto* conv_reader_indices_buffer = &conv_reader_indices_tensor.mesh_buffer();
     const uint32_t reader_indices_actual_page_size = conv_reader_indices_buffer->page_size();
     // Release the sole-owner MeshTensor (the source Tensor is left deallocated; ~Tensor will not
     // force-free the device buffer that the cached program still references).

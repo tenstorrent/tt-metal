@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""MiniMax-M3 MSA (sparse) attention — the real model forward for the sparse layers (3-59).
+"""MiniMax-M3 MSA (sparse) attention — the real model forward for the sparse_attention_freq==1 layers.
 
 Unlike the dense path (ring_joint, which reads the KV cache + gathers across SP *internally*),
 ``sparse_sdpa_msa`` is a pure dense-context kernel: it takes full-length K/V tensors and has no
@@ -29,6 +29,7 @@ from loguru import logger
 import ttnn
 from models.demos.minimax_m3.utils.profiler_utils import zone
 
+from ..compute_configs import matmul_compute_config
 from .operations import apply_qk_norm_per_head, apply_rope
 
 # sparse_sdpa_msa's per-core L1 block cache for the gathered K/V (as many slots as fit in free L1). On: at small SP
@@ -96,8 +97,9 @@ def index_branch_forward(
         128-wide index head), same as main attention. Our apply_rope(rope_mats=main 64-wide) matches.
       * norm: index_q_norm/index_k_norm gains ship in the checkpoint, applied per-head.
     """
+    mm_config = matmul_compute_config(hidden_states.device())
     iq = _split_index_heads(
-        ttnn.linear(hidden_states, weights.index_q_proj), index_dim
+        ttnn.linear(hidden_states, weights.index_q_proj, compute_kernel_config=mm_config), index_dim
     )  # [1, n_idx_local, S, index_dim]
     iq = apply_qk_norm_per_head(iq, weights.index_q_norm, rms_norm_eps)
     iq = apply_rope(
@@ -110,7 +112,7 @@ def index_branch_forward(
     )
 
     ik = _split_index_heads(
-        ttnn.linear(hidden_states, weights.index_k_proj), index_dim
+        ttnn.linear(hidden_states, weights.index_k_proj, compute_kernel_config=mm_config), index_dim
     )  # [1, 1, S, index_dim] (shared)
     ik = apply_qk_norm_per_head(ik, weights.index_k_norm, rms_norm_eps)
     ik = apply_rope(

@@ -19,6 +19,10 @@ void PostAllGatherDeviceOperation::validate_on_program_cache_miss(
     const auto& gamma = tensor_args.gamma;
     const auto& beta = tensor_args.beta;
 
+    TT_FATAL(
+        a.padded_shape()[-1] > 0 && a.padded_shape()[-2] > 0,
+        "Input must have non-zero height and width, got shape {}",
+        a.padded_shape());
     TT_FATAL(!a.is_sharded(), "DIT layernorm post-all-gather does not support sharded inputs.");
     TT_FATAL(a.layout() == Layout::TILE, "Input tensor must have TILE layout, got: {}", a.layout());
     TT_FATAL(
@@ -26,7 +30,7 @@ void PostAllGatherDeviceOperation::validate_on_program_cache_miss(
         "Input tensor must be BFLOAT16, BFLOAT8_B, or FLOAT32, got: {}",
         a.dtype());
     TT_FATAL(a.storage_type() == StorageType::DEVICE, "Operands must be on device.");
-    TT_FATAL(a.buffer() != nullptr, "Operands must be allocated in buffers on device.");
+    TT_FATAL(a.is_allocated(), "Operands must be allocated in buffers on device.");
 
     TT_FATAL(stats.layout() == Layout::TILE, "Stats tensor must have TILE layout, got: {}", stats.layout());
     TT_FATAL(
@@ -34,7 +38,7 @@ void PostAllGatherDeviceOperation::validate_on_program_cache_miss(
             stats.dtype() == DataType::FLOAT32,
         "Stats tensor must be BF16, BF8_B, or FLOAT32.");
     TT_FATAL(stats.storage_type() == StorageType::DEVICE, "Operands must be on device.");
-    TT_FATAL(stats.buffer() != nullptr, "Operands must be allocated in buffers on device.");
+    TT_FATAL(stats.is_allocated(), "Operands must be allocated in buffers on device.");
 
     TT_FATAL(
         stats.padded_shape()[-1] % (2 * TILE_WIDTH) == 0,
@@ -60,7 +64,7 @@ void PostAllGatherDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(beta.has_value(), "Beta must be provided when gamma is provided.");
         const auto& gamma_tensor = gamma.value();
         TT_FATAL(gamma_tensor.storage_type() == StorageType::DEVICE, "Gamma must be on device.");
-        TT_FATAL(gamma_tensor.buffer() != nullptr, "Gamma must be allocated on device.");
+        TT_FATAL(gamma_tensor.is_allocated(), "Gamma must be allocated on device.");
         TT_FATAL(
             gamma_tensor.dtype() == DataType::BFLOAT16 || gamma_tensor.dtype() == DataType::FLOAT32,
             "Gamma must be BF16 or FLOAT32.");
@@ -68,7 +72,7 @@ void PostAllGatherDeviceOperation::validate_on_program_cache_miss(
 
         const auto& beta_tensor = beta.value();
         TT_FATAL(beta_tensor.storage_type() == StorageType::DEVICE, "Beta must be on device.");
-        TT_FATAL(beta_tensor.buffer() != nullptr, "Beta must be allocated on device.");
+        TT_FATAL(beta_tensor.is_allocated(), "Beta must be allocated on device.");
         TT_FATAL(
             beta_tensor.dtype() == DataType::BFLOAT16 || beta_tensor.dtype() == DataType::FLOAT32,
             "Beta must be BF16 or FLOAT32.");

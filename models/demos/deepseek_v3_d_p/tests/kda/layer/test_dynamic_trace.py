@@ -7,13 +7,13 @@ import torch
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     KIMI_K3_CONVOLUTION_NRMSE,
     LayerNrmseThresholds,
     assert_matches_reference,
     build_layer,
     deallocate_state,
+    kda_device_params,
     mla_row_permutation,
     reference_case,
     to_sp_input,
@@ -22,21 +22,16 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import ass
 
 
 @pytest.mark.parametrize(
-    "mesh_device,sp_axis,tp_axis,local_rows",
+    "mesh_device,sp_axis,tp_axis,local_rows,device_params",
     [
-        ((1, 8), 0, 1, 2560),
-        ((2, 4), 0, 1, 2560),
-        ((2, 4), 1, 0, 2560),
-        ((2, 4), 0, 1, 640),
-        ((4, 2), 0, 1, 640),
-        ((4, 2), 0, 1, 2560),
+        ((1, 8), 0, 1, 2560, kda_device_params((1, 8))),
+        ((2, 4), 0, 1, 2560, kda_device_params((2, 4))),
+        ((2, 4), 1, 0, 2560, kda_device_params((2, 4))),
+        ((2, 4), 0, 1, 640, kda_device_params((2, 4))),
+        ((4, 2), 0, 1, 640, kda_device_params((4, 2))),
+        ((4, 2), 0, 1, 2560, kda_device_params((4, 2))),
     ],
-    indirect=["mesh_device"],
-)
-@pytest.mark.parametrize(
-    "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
-    indirect=True,
+    indirect=["mesh_device", "device_params"],
 )
 def test_changing_actual_start_single_capture(mesh_device, sp_axis, tp_axis, device_params, local_rows):
     p = tuple(mesh_device.shape)[sp_axis]
@@ -94,6 +89,7 @@ def test_changing_actual_start_single_capture(mesh_device, sp_axis, tp_axis, dev
                 sp_axis=sp_axis,
                 tp_axis=tp_axis,
                 config=config,
+                page_channels=layer.convolution_page_channels,
                 label=f"dynamic SP{p} actual_start_value={actual_start_value}",
                 state_linf_threshold=0.65 if local_rows == 2560 else 0.6,
                 nrmse=LayerNrmseThresholds(output=0.02, recurrent=0.03, convolution=0.003),
@@ -137,6 +133,7 @@ def test_changing_actual_start_single_capture(mesh_device, sp_axis, tp_axis, dev
                 sp_axis=sp_axis,
                 tp_axis=tp_axis,
                 config=config,
+                page_channels=layer.convolution_page_channels,
                 label=f"dynamic continuation SP{p} chunk={chunk}",
                 state_linf_threshold=0.65 if local_rows == 2560 else 0.6,
                 nrmse=LayerNrmseThresholds(output=0.02, recurrent=0.03, convolution=0.003),
@@ -158,8 +155,8 @@ def test_changing_actual_start_single_capture(mesh_device, sp_axis, tp_axis, dev
 @pytest.mark.parametrize(
     "mesh_device,tp_axis,device_params",
     [
-        pytest.param((1, 8), 1, fabric_1d_device_params(), id="SP1xTP8"),
-        pytest.param((8, 1), 0, fabric_1d_device_params(), id="SP1xTP8-transposed"),
+        pytest.param((1, 8), 1, kda_device_params((1, 8)), id="SP1xTP8"),
+        pytest.param((8, 1), 0, kda_device_params((8, 1)), id="SP1xTP8-transposed"),
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -205,6 +202,7 @@ def test_production_local_trace(mesh_device, tp_axis, device_params, local_rows)
                     sp_axis=axis,
                     tp_axis=tp_axis,
                     config=config,
+                    page_channels=layer.convolution_page_channels,
                     label=f"compact SP{sp} start={actual_start}",
                     state_linf_threshold=None,
                     pcc_threshold=0.9995,

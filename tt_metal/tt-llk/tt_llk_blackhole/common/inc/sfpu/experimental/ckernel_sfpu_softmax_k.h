@@ -101,12 +101,13 @@ inline void _softmax_k_()
     TTI_SFPNOP;
     sfpu::horizontal_reduce();
 
-    // Broadcast the column-0 sum across all eight SFPU columns.
+    // Broadcast the column-0 sum across all eight SFPU columns. LREG_MASK is
+    // all ones in SFPU col 0 and zero elsewhere, so one SFPAND zeroes the
+    // discarded cols 1..7 bitwise (a multiply would make an Inf/NaN there NaN).
     TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG7, 0);
     _build_lane_mask_col0_();
     TTI_SFPMOV(0, p_sfpu::LREG7, p_sfpu::LREG0, 0);
-    TTI_SFPMUL(p_sfpu::LREG0, LREG_MASK, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
-    TTI_SFPNOP;
+    TTI_SFPAND(0, LREG_MASK, p_sfpu::LREG0, 0);
 
     TTI_SFPSHFT2(0, p_sfpu::LREG0, p_sfpu::LREG2, SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
     TTI_SFPNOP;

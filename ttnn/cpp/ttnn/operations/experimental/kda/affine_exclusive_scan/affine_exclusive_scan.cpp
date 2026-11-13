@@ -19,10 +19,10 @@ ttnn::Tensor affine_exclusive_scan(
     uint32_t sequence_parallel_axis,
     const std::optional<Tensor>& actual_end) {
     TT_FATAL(
-        summaries.storage_type() == StorageType::DEVICE && summaries.buffer() != nullptr,
+        summaries.storage_type() == StorageType::DEVICE && summaries.is_allocated(),
         "affine_exclusive_scan: summaries must be an allocated device tensor");
     TT_FATAL(
-        initial_state.storage_type() == StorageType::DEVICE && initial_state.buffer() != nullptr,
+        initial_state.storage_type() == StorageType::DEVICE && initial_state.is_allocated(),
         "affine_exclusive_scan: initial_state must be an allocated device tensor");
     const auto output_memory_config = memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
     const auto kernel_config = init_device_compute_kernel_config(
