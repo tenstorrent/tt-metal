@@ -225,8 +225,11 @@ TEST_F(L1EccHaltTest, MretWithAliasedBranchReturns) {
 TEST_F(L1EccHaltTest, WatchdogHaltIsReleasedOnReopen) {
     auto& ctx = MetalContext::instance();
     const tt_cxy_pair arc = arc_target();
-    const uint32_t x = test_target_.x;
-    const uint32_t y = test_target_.y;
+    // The handler's message, and so its mailbox word, carry the core's NOC0 coordinates.
+    const auto noc0 = ctx.get_cluster().get_soc_desc(test_target_.chip).translate_coord_to(
+        tt_xy_pair(test_target_.x, test_target_.y), tt::CoordSystem::TRANSLATED, tt::CoordSystem::NOC0);
+    const uint32_t x = noc0.x;
+    const uint32_t y = noc0.y;
     // The core's PMM mailbox word keeps the last message until an ARC reset, across processes. Clearing it first
     // means a match below comes from this run.
     const uint32_t pmm_clear = arc_pmm_message(x, y, 0, 0);

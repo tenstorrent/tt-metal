@@ -228,8 +228,14 @@ inline __attribute__((always_inline)) uint32_t read_ecc_view(EccView view) {
 inline __attribute__((always_inline)) void send_pmm_message(tt_l1_ptr l1_ecc_halt_slot_t* slot) {
     const uint32_t noc = noc_index;
     constexpr uint32_t cmd_buf = BRISC_WR_CMD_BUF;
-    // The PMM picks the mailbox word from the NOC0 x/y in the message, whichever NOC carries it.
-    slot->pmm_message = arc_pmm_message(my_x[0], my_y[0], arc_pmm_flag0, MEM_L1_ECC_HALT_BASE);
+    // The PMM picks the mailbox word from the NOC0 x/y in the message, whichever NOC carries it. These are the core's
+    // physical coordinates, NOC0's NOC_NODE_ID; my_x and my_y are translated.
+    const uint32_t node_id = NOC_CMD_BUF_READ_REG(0, 0, NOC_NODE_ID);
+    slot->pmm_message = arc_pmm_message(
+        node_id & NOC_NODE_ID_MASK,
+        (node_id >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK,
+        arc_pmm_flag0,
+        MEM_L1_ECC_HALT_BASE);
     // The record and the message must be in L1 before the NoC reads them.
     asm volatile("fence" ::: "memory");
     while (!noc_cmd_buf_ready(noc, cmd_buf));
