@@ -24,15 +24,32 @@ inline constexpr std::uint64_t df_bit(DataFormat df)
     return 1ULL << to_underlying(df);
 }
 
+// 2x-packed MxFp4 Source register formats exist only on base Quasar, not on the 4-row variant.
+inline constexpr bool kHasMxFp4x2SrcFormats = MATH_ROWS == 8;
+
+inline constexpr bool _is_mxfp4x2_src_fmt_(const DataFormat fmt)
+{
+    return fmt == DataFormat::MxFp4_2x_A || fmt == DataFormat::MxFp4_2x_B;
+}
+
 // Set of Source register DataFormats compatible with Float32 Dest register format
 inline constexpr std::uint64_t kFp32DestCompatibleMask = df_bit(DataFormat::Float16_b) | df_bit(DataFormat::Float16) | df_bit(DataFormat::Tf32) |
-                                                         df_bit(DataFormat::Float32) | df_bit(DataFormat::MxFp4_2x_A) | df_bit(DataFormat::MxFp4_2x_B);
+                                                         df_bit(DataFormat::Float32) |
+                                                         (kHasMxFp4x2SrcFormats ? df_bit(DataFormat::MxFp4_2x_A) | df_bit(DataFormat::MxFp4_2x_B) : 0);
+
+// 2x-packed Int8 Source register formats exist only on the 4-row variant (HAS_INT8_2X_SRC_FORMAT on the unpack side).
+inline constexpr bool kHasInt8x2SrcFormats = MATH_ROWS == 4;
+
+inline constexpr bool _is_int8x2_src_fmt_(const DataFormat fmt)
+{
+    return fmt == DataFormat::Int8_2x || fmt == DataFormat::UInt8_2x;
+}
 
 // Set of Source register DataFormats compatible with Int32 Dest register format
 // Int16 is absent from the list because, for the FPU, it is supported only for MOV ops and is
 // not compatible with 32bit Dest register mode.
-inline constexpr std::uint64_t kInt32DestCompatibleMask =
-    df_bit(DataFormat::Int8) | df_bit(DataFormat::UInt8) | df_bit(DataFormat::Int32) | df_bit(DataFormat::Int8_2x) | df_bit(DataFormat::UInt8_2x);
+inline constexpr std::uint64_t kInt32DestCompatibleMask = df_bit(DataFormat::Int8) | df_bit(DataFormat::UInt8) | df_bit(DataFormat::Int32) |
+                                                          (kHasInt8x2SrcFormats ? df_bit(DataFormat::Int8_2x) | df_bit(DataFormat::UInt8_2x) : 0);
 
 /**
  * @brief Determines whether the source register format and Float32 destination register format are a supported combination
@@ -80,6 +97,13 @@ inline bool _is_src_fmt_int32_dest_compatible_(const DataFormat src_reg_fmt)
 template <bool EN_32BIT_DEST>
 inline void _configure_alu_formats_(DataFormat srcA_format, DataFormat srcB_format, bool en_int32_dest_format, DataFormat dest_acc_override_fmt)
 {
+    LLK_ASSERT(
+        kHasInt8x2SrcFormats || (!_is_int8x2_src_fmt_(srcA_format) && !_is_int8x2_src_fmt_(srcB_format)),
+        "Int8_2x/UInt8_2x Source register formats exist only on the 4-row Quasar variant");
+    LLK_ASSERT(
+        kHasMxFp4x2SrcFormats || (!_is_mxfp4x2_src_fmt_(srcA_format) && !_is_mxfp4x2_src_fmt_(srcB_format)),
+        "MxFp4_2x_A/B Source register formats exist only on base Quasar");
+
     alu_config_u alu_config               = {0};
     const std::uint8_t SRCA_FORMAT_MASKED = masked_data_format(to_underlying(srcA_format));
     const std::uint8_t SRCB_FORMAT_MASKED = masked_data_format(to_underlying(srcB_format));

@@ -270,6 +270,7 @@ inline void _llk_unpack_tilize_init_(
 
     if (!_llk_unpack_tilize_is_strided_(tensor_shape))
     {
+        LLK_ASSERT(tensor_shape.face_r_dim == FACE_R_DIM && tensor_shape.face_c_dim == FACE_C_DIM, "UNPACR_TILIZE requires a 16x16x4 Buffer Descriptor");
         _llk_unpack_tilize_mop_config_<UNP_SEL, EN_32BIT_DEST>(buf_desc_id, run_tiles);
         return;
     }
