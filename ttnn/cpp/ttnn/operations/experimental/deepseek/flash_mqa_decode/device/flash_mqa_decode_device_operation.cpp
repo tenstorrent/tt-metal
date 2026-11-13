@@ -5,7 +5,9 @@
 #include "flash_mqa_decode_device_operation.hpp"
 
 #include <cmath>
+#include <utility>
 
+#include <tt-metalium/constants.hpp>
 #include <tt_stl/assert.hpp>
 
 #include "ttnn/device_operation.hpp"
@@ -123,6 +125,43 @@ void FlashMqaDecodeDeviceOperation::validate_on_program_cache_miss(
             sink.logical_shape());
     }
 
+    TT_FATAL(
+        tensor_args.cos.has_value() == tensor_args.sin.has_value(),
+        "flash_mqa_decode: cos and sin must both be provided or both omitted");
+    if (tensor_args.cos.has_value()) {
+        TT_FATAL(
+            q.device()->arch() == tt::ARCH::BLACKHOLE,
+            "flash_mqa_decode: fused inverse RoPE is only supported on Blackhole");
+        const auto& cos = tensor_args.cos.value();
+        const auto& sin = tensor_args.sin.value();
+        for (const auto& [t, name] : {std::pair{&cos, "cos"}, std::pair{&sin, "sin"}}) {
+            TT_FATAL(t->storage_type() == StorageType::DEVICE, "flash_mqa_decode: {} must be on device", name);
+            TT_FATAL(
+                t->layout() == Layout::TILE && t->dtype() == DataType::BFLOAT16 &&
+                    t->tensor_spec().tile().get_height() == 32 && t->tensor_spec().tile().get_width() == 32,
+                "flash_mqa_decode: {} must be bfloat16 32x32 TILE",
+                name);
+            const auto& s = t->logical_shape();
+            TT_FATAL(
+                s.rank() == 4 && s[0] == 1 && s[1] == 1 && s[2] >= 1,
+                "flash_mqa_decode: {} must be [1, 1, >=1, rope_dim], got {}",
+                name,
+                s);
+        }
+        const uint32_t rope_dim = cos.logical_shape()[3];
+        TT_FATAL(
+            sin.logical_shape()[3] == rope_dim,
+            "flash_mqa_decode: cos ({}) and sin ({}) must have the same rope_dim",
+            rope_dim,
+            sin.logical_shape()[3]);
+        TT_FATAL(
+            rope_dim > 0 && rope_dim % tt::constants::TILE_WIDTH == 0 && rope_dim <= 64 && rope_dim <= head_dim,
+            "flash_mqa_decode: rope_dim ({}) must be a multiple of {} in [32, 64] and at most head_dim ({})",
+            rope_dim,
+            tt::constants::TILE_WIDTH,
+            head_dim);
+    }
+
     auto* device = q.device();
     const auto grid = device->compute_with_storage_grid_size();
     TT_FATAL(
@@ -167,7 +206,9 @@ ttnn::Tensor flash_mqa_decode(
     uint32_t k_chunk_size,
     uint32_t num_s_blocks,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
-    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    const std::optional<ttnn::Tensor>& cos,
+    const std::optional<ttnn::Tensor>& sin) {
     using OperationType = ttnn::operations::experimental::deepseek::flash_mqa_decode::FlashMqaDecodeDeviceOperation;
     auto kernel_config_val = init_device_compute_kernel_config(
         q.device()->arch(),
@@ -191,6 +232,8 @@ ttnn::Tensor flash_mqa_decode(
         .lengths = lengths,
         .selected_kv = selected_kv,
         .attention_sink = attention_sink,
+        .cos = cos,
+        .sin = sin,
     };
     return ttnn::device_operation::launch<OperationType>(attrs, tensor_args);
 }

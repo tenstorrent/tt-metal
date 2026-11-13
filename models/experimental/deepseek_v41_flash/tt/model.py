@@ -2110,9 +2110,16 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 # is a FIFO consumed in layer order, so a request may only follow its layer's
                 # predecessors' -- which holds since each layer is queued exactly once, in order.
                 if is_first or recv:
-                    layer.prefetch_weights()
+                    attn = layer.self_attn
+                    ratio = attn.compress_ratio
+                    select = attn.is_index_source and (ratio == 1 or (ratio == 2 and r2_select))
+                    layer.prefetch_weights(one_row=self._decode_batch == 1, fused_qkv=not select or ratio in dense)
                 if not is_last and ids[li + 1] == stage:
-                    self.layers[li + 1].prefetch_weights()
+                    nxt = self.layers[li + 1]
+                    attn = nxt.self_attn
+                    ratio = attn.compress_ratio
+                    select = attn.is_index_source and (ratio == 1 or (ratio == 2 and r2_select))
+                    nxt.prefetch_weights(one_row=self._decode_batch == 1, fused_qkv=not select or ratio in dense)
             if is_first:
                 pkt = sm["pkt"]
                 ttnn.experimental.recv_async_h2d(pkt, self._pkt_socket)
@@ -3763,7 +3770,9 @@ class DeepSeekV41Model(DeepSeekV4Model):
         ids, layers = self.layer_submesh_ids, sm["layers"]
         first, last = layers[0], layers[-1]
         if self.use_prefetcher:
-            self.layers[first].prefetch_weights(one_row=t == 1)
+            self.layers[first].prefetch_weights(
+                one_row=t == 1, fused_qkv=not self.layers[first].self_attn.is_index_source
+            )
         for li in layers:
             if cfg.compress_ratios[li]:
                 sm["scaches"][li].new_kv_rows = sm["scaches"][li].new_key_rows = None
@@ -3808,7 +3817,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
         for li in layers:
             layer = self.layers[li]
             if self.use_prefetcher and li != last:
-                self.layers[li + 1].prefetch_weights(one_row=t == 1)
+                nxt = self.layers[li + 1]
+                nxt.prefetch_weights(one_row=t == 1, fused_qkv=not nxt.self_attn.is_index_source)
             if li in sm.get("taps", {}):
                 row = self._collapse_streams(streams, sm["tap_weights"])  # [1, T, 1, D]
                 row = ttnn.reshape(ttnn.to_layout(row, ttnn.ROW_MAJOR_LAYOUT), [1, 1, t, hidden])
@@ -4129,9 +4139,25 @@ class DeepSeekV41Model(DeepSeekV4Model):
             if self.use_prefetcher:
                 # As the traced step: the stage's first layer, then each layer queues its successor.
                 if li == layers[0]:
-                    layer.prefetch_weights(one_row=t == 1)
+                    first_attn = layer.self_attn
+                    first_r = first_attn.compress_ratio
+                    first_count = (pos + 1) // first_r if first_r else 0
+                    first_select = first_attn.is_index_source and first_count > 0
+                    layer.prefetch_weights(
+                        one_row=t == 1,
+                        fused_qkv=not first_select
+                        or (DENSE_SELECT and t == 1 and first_count <= first_attn.index_topk),
+                    )
                 if li != layers[-1]:
-                    self.layers[li + 1].prefetch_weights(one_row=t == 1)
+                    nxt = self.layers[li + 1]
+                    next_attn = nxt.self_attn
+                    next_r = next_attn.compress_ratio
+                    next_count = (pos + 1) // next_r if next_r else 0
+                    next_select = next_attn.is_index_source and next_count > 0
+                    nxt.prefetch_weights(
+                        one_row=t == 1,
+                        fused_qkv=not next_select or (DENSE_SELECT and t == 1 and next_count <= next_attn.index_topk),
+                    )
             if li in sm.get("taps", {}):
                 row = self._collapse_streams(streams, sm["tap_weights"])  # [1, T, 1, D]
                 row = ttnn.reshape(ttnn.to_layout(row, ttnn.ROW_MAJOR_LAYOUT), [1, 1, t, hidden])

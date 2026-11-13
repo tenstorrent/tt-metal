@@ -718,7 +718,9 @@ H2DSocketImpl::H2DSocketImpl(
 
 H2DSocketImpl::~H2DSocketImpl() noexcept {
     try {
-        barrier(1000);
+        if (!receiver_abandoned_) {
+            barrier(1000);
+        }
     } catch (const std::exception& e) {
         log_warning(LogMetal, "H2DSocket destructor: barrier failed with exception: {}", e.what());
     } catch (...) {
@@ -1181,6 +1183,8 @@ uint32_t H2DSocket::try_stage_impl(const uint8_t* const* pages, uint32_t num_pag
 
 void H2DSocket::notify_receiver_unfenced() { pimpl_->notify_receiver_unfenced(); }
 
+void H2DSocket::abandon_receiver() { pimpl_->abandon_receiver(); }
+
 void H2DSocket::barrier(std::optional<uint32_t> timeout_ms) { pimpl_->barrier(timeout_ms); }
 
 std::vector<MeshCoreCoord> H2DSocket::get_active_cores() const { return {pimpl_->get_recv_core()}; }
@@ -1209,6 +1213,8 @@ void H2DSocketTryWriteAccess::publish_staged(ttsl::Span<distributed::H2DSocket* 
     }
     tt_driver_atomics::sfence();
 }
+
+void H2DSocketDramRecvAccess::abandon_receiver(distributed::H2DSocket& socket) { socket.abandon_receiver(); }
 
 std::unique_ptr<distributed::H2DSocket> H2DSocketDramRecvAccess::create(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,

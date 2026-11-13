@@ -20,7 +20,9 @@ Tensor flash_mqa_decode(
     uint32_t k_chunk_size,
     uint32_t num_s_blocks,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config) {
+    const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config,
+    const std::optional<Tensor>& cos,
+    const std::optional<Tensor>& sin) {
     return ttnn::prim::flash_mqa_decode(
         q,
         kv,
@@ -33,7 +35,9 @@ Tensor flash_mqa_decode(
         k_chunk_size,
         num_s_blocks,
         memory_config,
-        compute_kernel_config);
+        compute_kernel_config,
+        cos,
+        sin);
 }
 
 }  // namespace ttnn::experimental::deepseek

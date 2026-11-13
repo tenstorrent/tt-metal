@@ -39,6 +39,8 @@ struct FlashMqaDecodeDeviceOperation {
         const Tensor& lengths;
         std::optional<Tensor> selected_kv;
         std::optional<Tensor> attention_sink;
+        std::optional<Tensor> cos;
+        std::optional<Tensor> sin;
     };
 
     using spec_return_value_t = tt::tt_metal::TensorSpec;
@@ -75,6 +77,8 @@ ttnn::Tensor flash_mqa_decode(
     uint32_t k_chunk_size,
     uint32_t num_s_blocks,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
-    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config);
+    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    const std::optional<ttnn::Tensor>& cos,
+    const std::optional<ttnn::Tensor>& sin);
 
 }  // namespace ttnn::prim

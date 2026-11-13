@@ -1988,6 +1988,11 @@ void TensorPrefetcherManager::stop(bool force) {
         // would block forever. They keep running until the device is closed or reset, which is
         // why this path is documented as last-resort. Host state is released so the close path
         // sees an inactive prefetcher and does not try to stop it again (which would hang).
+        // The abandoned kernels will never ack what is still in flight, so each socket's
+        // destructor would otherwise time out on its drain barrier, one after another.
+        for (auto& socket : sockets_) {
+            experimental::detail::abandon_receiver(*socket);
+        }
         sockets_.clear();
         programs_.clear();
         devices_.clear();

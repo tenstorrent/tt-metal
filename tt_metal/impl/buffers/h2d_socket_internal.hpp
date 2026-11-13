@@ -61,6 +61,7 @@ struct H2DSocketDramRecvAccess {
         uint32_t config_l1_local_addr,
         uint32_t data_l1_local_addr,
         uint64_t dram_l1_noc_offset);
+    static void abandon_receiver(distributed::H2DSocket& socket);
 };
 
 // Construct an H2DSocket for a DRAM-core recv. The caller owns the L1 layout
@@ -78,5 +79,9 @@ inline std::unique_ptr<distributed::H2DSocket> create_h2d_socket_for_dram_recv(
     return H2DSocketDramRecvAccess::create(
         mesh_device, recv_core, fifo_size, config_l1_local_addr, data_l1_local_addr, dram_l1_noc_offset);
 }
+
+// Mark a DRAM-recv socket's receiver kernel as abandoned (wedged, or never to read again), so
+// destroying the socket does not wait out a drain barrier for acks that will never come.
+inline void abandon_receiver(distributed::H2DSocket& socket) { H2DSocketDramRecvAccess::abandon_receiver(socket); }
 
 }  // namespace tt::tt_metal::experimental::detail

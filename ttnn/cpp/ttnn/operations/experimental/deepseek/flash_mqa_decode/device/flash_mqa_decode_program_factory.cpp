@@ -42,6 +42,8 @@ tt::tt_metal::ProgramDescriptor FlashMqaDecodeDeviceOperation::ProgramFactory::c
     const auto& lengths = tensor_args.lengths;
     const bool has_selected = tensor_args.selected_kv.has_value();
     const bool has_sink = tensor_args.attention_sink.has_value();
+    const bool has_rope = tensor_args.cos.has_value();
+    const uint32_t rope_tiles = has_rope ? tensor_args.cos->logical_shape()[3] / TILE_WIDTH : 0;
     auto* device = q.device();
 
     const uint32_t heads = q.logical_shape()[2];
@@ -96,6 +98,8 @@ tt::tt_metal::ProgramDescriptor FlashMqaDecodeDeviceOperation::ProgramFactory::c
     constexpr uint8_t cb_reader_lengths = tt::CBIndex::c_12;
     constexpr uint8_t cb_writer_lengths = tt::CBIndex::c_13;
     constexpr uint8_t cb_sink_scratch = tt::CBIndex::c_14;
+    constexpr uint8_t cb_cs = tt::CBIndex::c_15;
+    constexpr uint8_t cb_cs_raw = tt::CBIndex::c_16;
 
     tt::tt_metal::ProgramDescriptor desc;
     const auto add_cb = [&](uint8_t index,
@@ -134,17 +138,24 @@ tt::tt_metal::ProgramDescriptor FlashMqaDecodeDeviceOperation::ProgramFactory::c
         tiny_desc,
         FaceGeometry{.face_r_dim = kHeadsPerCore, .num_faces = tiny_tile.get_num_faces()});
     add_cb(cb_q_rm, DHt, bf16_df, tiny_tile_bytes, tiny_desc);
-    constexpr uint32_t lengths_page_bytes = 32;
+    constexpr uint32_t lengths_page_bytes = 64;
     add_cb(cb_lengths, 1, tt::DataFormat::UInt32, lengths_page_bytes, std::nullopt);
     add_cb(cb_reader_lengths, 1, tt::DataFormat::UInt32, lengths_page_bytes, std::nullopt);
     add_cb(cb_writer_lengths, 1, tt::DataFormat::UInt32, lengths_page_bytes, std::nullopt);
     add_cb(cb_sink_scratch, 1, bf16_df, sink_tile_bytes, full_desc);
+    if (has_rope) {
+        constexpr uint32_t cs_raw_chunk_bytes = 64;
+        add_cb(cb_cs, rope_tiles, bf16_df, tiny_tile_bytes, tiny_desc);
+        add_cb(cb_cs_raw, 4 * rope_tiles, bf16_df, cs_raw_chunk_bytes, std::nullopt);
+    }
 
     desc.semaphores.push_back(SemaphoreDescriptor{
         .id = kReducerSemaphoreId, .core_type = tt::CoreType::WORKER, .core_ranges = all_cores, .initial_value = 0});
 
     Buffer* selected_buffer = has_selected ? tensor_args.selected_kv->buffer() : nullptr;
     Buffer* sink_buffer = has_sink ? tensor_args.attention_sink->buffer() : nullptr;
+    Buffer* cos_buffer = has_rope ? tensor_args.cos->buffer() : nullptr;
+    Buffer* sin_buffer = has_rope ? tensor_args.sin->buffer() : nullptr;
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source = kReaderKernelPath;
@@ -163,16 +174,22 @@ tt::tt_metal::ProgramDescriptor FlashMqaDecodeDeviceOperation::ProgramFactory::c
         {"max_ring_first_tile_row", (kv_rows - ring_capacity) / TILE_HEIGHT},
         {"selected_capacity", selected_capacity},
         {"selected_first_tile_row", args.selected_row_offset / TILE_HEIGHT},
+        {"has_rope", has_rope ? 1u : 0u},
+        {"rope_tiles", rope_tiles},
         {"cb_q_rm", cb_q_rm},
         {"cb_k_in", cb_k_in},
         {"cb_mask", cb_mask},
         {"cb_lengths", cb_lengths},
         {"cb_lengths_scratch", cb_reader_lengths},
+        {"cb_cs", cb_cs},
+        {"cb_cs_raw", cb_cs_raw},
     };
     TensorAccessorArgs(q.buffer()).append_to(reader_desc.compile_time_args);
     TensorAccessorArgs(kv.buffer()).append_to(reader_desc.compile_time_args);
     TensorAccessorArgs(selected_buffer).append_to(reader_desc.compile_time_args);
     TensorAccessorArgs(lengths.buffer()).append_to(reader_desc.compile_time_args);
+    TensorAccessorArgs(cos_buffer).append_to(reader_desc.compile_time_args);
+    TensorAccessorArgs(sin_buffer).append_to(reader_desc.compile_time_args);
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source = kWriterKernelPath;
@@ -221,8 +238,11 @@ tt::tt_metal::ProgramDescriptor FlashMqaDecodeDeviceOperation::ProgramFactory::c
         {"k_chunk_size", args.k_chunk_size},
         {"num_s_blocks", num_s_blocks},
         {"num_tree_steps", num_tree_steps},
+        {"heads_per_core", kHeadsPerCore},
         {"scale_fp32", std::bit_cast<uint32_t>(args.scale)},
         {"dst_size", kDstSize},
+        {"has_rope", has_rope ? 1u : 0u},
+        {"rope_tiles", rope_tiles},
         {"cb_q_in", cb_q_in},
         {"cb_q_rm", cb_q_rm},
         {"cb_k_in", cb_k_in},
@@ -235,6 +255,7 @@ tt::tt_metal::ProgramDescriptor FlashMqaDecodeDeviceOperation::ProgramFactory::c
         {"cb_interm_ms", cb_interm_ms},
         {"cb_out_rm", cb_out_rm},
         {"cb_lengths", cb_lengths},
+        {"cb_cs", cb_cs},
     };
 
     for (const auto& core : cores) {
@@ -248,6 +269,10 @@ tt::tt_metal::ProgramDescriptor FlashMqaDecodeDeviceOperation::ProgramFactory::c
                 selected_buffer != nullptr ? std::variant<uint32_t, Buffer*>{selected_buffer}
                                            : std::variant<uint32_t, Buffer*>{0u},
                 lengths.buffer(),
+                cos_buffer != nullptr ? std::variant<uint32_t, Buffer*>{cos_buffer}
+                                      : std::variant<uint32_t, Buffer*>{0u},
+                sin_buffer != nullptr ? std::variant<uint32_t, Buffer*>{sin_buffer}
+                                      : std::variant<uint32_t, Buffer*>{0u},
                 s_block,
                 head_group});
 

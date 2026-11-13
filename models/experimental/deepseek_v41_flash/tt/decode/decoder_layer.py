@@ -188,10 +188,11 @@ class DeepSeekV41DecoderLayer(DeepSeekV4DecoderLayer):
             bias_in_l1=hc_bias_in_l1,
         )
 
-    def prefetch_weights(self, *, index_sparse: bool = False, one_row: bool = True):
+    def prefetch_weights(self, *, index_sparse: bool = False, one_row: bool = True, fused_qkv: Optional[bool] = None):
         """Queue this layer's ring requests: Engram's wkv, attention's q_a, q_b, kv, o_a, o_b, then the
         shared expert's down -- the order :meth:`decode` pops them. ``one_row``: the step decodes one row
-        (see :meth:`~.attention.DeepSeekV41Attention.prefetch_weights`); a verify block's does not.
+        (see :meth:`~.attention.DeepSeekV41Attention.prefetch_weights`); a verify block's does not. ``fused_qkv``
+        selects whether a one-row step queues attention_qkv_decode's slabs.
 
         Only weights on a ring (see :func:`~.decode_prefetch.prefetch_rings`) are queued. The
         router gate and the shared gate/up are not: their matmuls read the DRAM ND-sharded
@@ -199,7 +200,7 @@ class DeepSeekV41DecoderLayer(DeepSeekV4DecoderLayer):
         """
         if self.engram is not None:
             self.engram.wkv.fetch_weights()
-        self.self_attn.prefetch_weights(one_row=one_row)
+        self.self_attn.prefetch_weights(one_row=one_row, fused_qkv=fused_qkv)
         # None when ``fused_experts`` runs the shared expert from DRAM itself.
         if self.mlp.shared_experts is None:
             return
@@ -260,7 +261,15 @@ class DeepSeekV41DecoderLayer(DeepSeekV4DecoderLayer):
             post, comb, collapsed, attn_pre = self.attn_hc(hidden_streams, pre_mix=pre_mix)
             _l1("attn_hc")
         with _region("INPUT_NORM"):
-            if s == 1:
+            if b == 1 and s == 1 and self.device.arch() == ttnn.Arch.BLACKHOLE:
+                normed = ttnn.experimental.deepseek.sharded_rmsnorm(
+                    collapsed,
+                    self.input_layernorm.weight,
+                    epsilon=self.input_layernorm.eps,
+                    output_layout=ttnn.ROW_MAJOR_LAYOUT,
+                )
+                ttnn.deallocate(collapsed)
+            elif s == 1:
                 normed = self.input_layernorm(collapsed)
             else:
                 # The hyper-connection leaves the rows in DRAM, one tile-row each; the norm packs one tile-row.
@@ -281,7 +290,25 @@ class DeepSeekV41DecoderLayer(DeepSeekV4DecoderLayer):
             post, comb, collapsed, ffn_pre = self.ffn_hc(hidden_streams, pre_mix=attn_pre)
             _l1("ffn_hc")
         with _region("POST_NORM"):
-            if s == 1:
+            if b == 1 and s == 1 and self.device.arch() == ttnn.Arch.BLACKHOLE:
+                # When fused_experts also runs the router and shared expert, decode_static skips
+                # all_gather_for_matmul for ROW_MAJOR input and passes it directly to fused_experts,
+                # whose broadcast reader expects DRAM-interleaved (or replicated HEIGHT_SHARDED).
+                post_mem = (
+                    ttnn.DRAM_MEMORY_CONFIG
+                    if self.mlp is not None and self.mlp.fused_router and self.mlp.fused_shared is not None
+                    else None
+                )
+                norm_in = collapsed
+                collapsed = ttnn.experimental.deepseek.sharded_rmsnorm(
+                    norm_in,
+                    self.post_attention_layernorm.weight,
+                    epsilon=self.post_attention_layernorm.eps,
+                    memory_config=post_mem,
+                    output_layout=ttnn.ROW_MAJOR_LAYOUT,
+                )
+                ttnn.deallocate(norm_in)
+            elif s == 1:
                 collapsed = self.post_attention_layernorm(collapsed)
             else:
                 packed = ttnn.reshape(collapsed, [1, 1, s, self.config.hidden_size])
@@ -362,12 +389,12 @@ class DeepSeekV41PersistentMoeDecoderLayer(DeepSeekV41DecoderLayer):
         self.moe_server = moe_server
         self.requester = requester
 
-    def prefetch_weights(self, *, index_sparse: bool = False, one_row: bool = True):
+    def prefetch_weights(self, *, index_sparse: bool = False, one_row: bool = True, fused_qkv: Optional[bool] = None):
         """Queue this layer's ring requests: Engram's wkv, then attention's -- the order :meth:`decode` pops them.
         The MoE's weights live on the server."""
         if self.engram is not None:
             self.engram.wkv.fetch_weights()
-        self.self_attn.prefetch_weights(one_row=one_row)
+        self.self_attn.prefetch_weights(one_row=one_row, fused_qkv=fused_qkv)
 
     def moe(self, normed: ttnn.Tensor, post=None, comb=None, streams=None) -> ttnn.Tensor:
         """The server's MoE of ``normed`` ``[1, 1, 1, D]``: the reduced row as ``[1, 1, 1, D]`` bf16 ROW_MAJOR in
@@ -377,18 +404,27 @@ class DeepSeekV41PersistentMoeDecoderLayer(DeepSeekV41DecoderLayer):
         row (``mix_streams``, on the stream-collapse cores as the partials arrive) and returns the new streams, in
         ``streams``' spec, which must be the server's :meth:`~.persistent_moe.PersistentMoE.streams_memory_config`."""
         d = self.config.hidden_size
-        row = ttnn.to_memory_config(normed, ttnn.DRAM_MEMORY_CONFIG)
+        row = normed
+        if row.memory_config() != ttnn.DRAM_MEMORY_CONFIG:
+            row = ttnn.to_memory_config(row, ttnn.DRAM_MEMORY_CONFIG)
         if row.layout != ttnn.ROW_MAJOR_LAYOUT:
-            tiled = row
-            row = ttnn.to_layout(tiled, ttnn.ROW_MAJOR_LAYOUT)
-            ttnn.deallocate(tiled)
+            prev = row
+            row = ttnn.to_layout(prev, ttnn.ROW_MAJOR_LAYOUT)
+            if prev is not normed and prev.buffer_address() != row.buffer_address():
+                ttnn.deallocate(prev)
         if row.dtype != ttnn.bfloat16:
-            cast = row
-            row = ttnn.typecast(cast, ttnn.bfloat16)
-            ttnn.deallocate(cast)
-        row = ttnn.reshape(row, [1, 1, 1, d])
+            prev = row
+            row = ttnn.typecast(prev, ttnn.bfloat16)
+            if prev is not normed and prev.buffer_address() != row.buffer_address():
+                ttnn.deallocate(prev)
+        if list(row.shape) != [1, 1, 1, d]:
+            prev = row
+            row = ttnn.reshape(prev, [1, 1, 1, d])
+            if prev is not normed and prev.buffer_address() != row.buffer_address():
+                ttnn.deallocate(prev)
         out = self.moe_server.request(self.requester, self.layer_idx, row, streams=streams, post=post, comb=comb)
-        ttnn.deallocate(row)
+        if row is not normed and row.buffer_address() != normed.buffer_address():
+            ttnn.deallocate(row)
         return out
 
     def _fuses_post(self, post: ttnn.Tensor, comb: ttnn.Tensor, streams: ttnn.Tensor) -> bool:
@@ -429,7 +465,16 @@ class DeepSeekV41PersistentMoeDecoderLayer(DeepSeekV41DecoderLayer):
         with _region("ATTN_HC"):
             post, comb, collapsed, attn_pre = self.attn_hc(hidden_streams, pre_mix=pre_mix)
         with _region("INPUT_NORM"):
-            normed = self.input_layernorm(collapsed)
+            if self.device.arch() == ttnn.Arch.BLACKHOLE:
+                normed = ttnn.experimental.deepseek.sharded_rmsnorm(
+                    collapsed,
+                    self.input_layernorm.weight,
+                    epsilon=self.input_layernorm.eps,
+                    output_layout=ttnn.ROW_MAJOR_LAYOUT,
+                )
+                ttnn.deallocate(collapsed)
+            else:
+                normed = self.input_layernorm(collapsed)
         with _region("ATTENTION"):
             attn_out = self.self_attn.decode(normed, scache=scache, **attn_inputs)
         with _region("ATTN_MIX"):
@@ -441,7 +486,17 @@ class DeepSeekV41PersistentMoeDecoderLayer(DeepSeekV41DecoderLayer):
         with _region("FFN_HC"):
             post, comb, collapsed, ffn_pre = self.ffn_hc(hidden_streams, pre_mix=attn_pre)
         with _region("POST_NORM"):
-            normed = self.post_attention_layernorm(collapsed)
+            if self.device.arch() == ttnn.Arch.BLACKHOLE:
+                normed = ttnn.experimental.deepseek.sharded_rmsnorm(
+                    collapsed,
+                    self.post_attention_layernorm.weight,
+                    epsilon=self.post_attention_layernorm.eps,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    output_layout=ttnn.ROW_MAJOR_LAYOUT,
+                )
+                ttnn.deallocate(collapsed)
+            else:
+                normed = self.post_attention_layernorm(collapsed)
         if self._fuses_post(post, comb, hidden_streams):
             # FFN_MIX runs inside the request, as the partials arrive.
             with _region("MOE"):

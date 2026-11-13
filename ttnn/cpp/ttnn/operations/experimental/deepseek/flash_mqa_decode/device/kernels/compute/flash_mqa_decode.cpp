@@ -6,8 +6,10 @@
 
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/experimental/deepseek_compute_kernel_hw_startup.h"
+#include "api/compute/experimental/rope_sfpu.h"
 #include "api/compute/experimental/sdpa.h"
 #include "api/compute/eltwise_unary/exp.h"
+#include "api/compute/tile_move_copy.h"
 #include "api/compute/tilize.h"
 #include "ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/operations/experimental/deepseek/flash_mqa_decode/device/kernels/flash_mqa_decode_common.hpp"
@@ -19,8 +21,11 @@ void kernel_main() {
     constexpr uint32_t k_chunk_size = get_named_compile_time_arg_val("k_chunk_size");
     constexpr uint32_t num_s_blocks = get_named_compile_time_arg_val("num_s_blocks");
     constexpr uint32_t num_tree_steps = get_named_compile_time_arg_val("num_tree_steps");
+    constexpr uint32_t heads_per_core = get_named_compile_time_arg_val("heads_per_core");
     constexpr uint32_t scale_fp32 = get_named_compile_time_arg_val("scale_fp32");
     constexpr uint32_t dst_size = get_named_compile_time_arg_val("dst_size");
+    constexpr bool has_rope = get_named_compile_time_arg_val("has_rope") == 1;
+    constexpr uint32_t rope_tiles = get_named_compile_time_arg_val("rope_tiles");
     constexpr uint32_t cb_q_in = get_named_compile_time_arg_val("cb_q_in");
     constexpr uint32_t cb_q_rm = get_named_compile_time_arg_val("cb_q_rm");
     constexpr uint32_t cb_k_in = get_named_compile_time_arg_val("cb_k_in");
@@ -33,6 +38,7 @@ void kernel_main() {
     constexpr uint32_t cb_interm_ms = get_named_compile_time_arg_val("cb_interm_ms");
     constexpr uint32_t cb_out_rm = get_named_compile_time_arg_val("cb_out_rm");
     constexpr uint32_t cb_lengths = get_named_compile_time_arg_val("cb_lengths");
+    constexpr uint32_t cb_cs = get_named_compile_time_arg_val("cb_cs");
 
     const uint32_t s_block = get_arg_val<uint32_t>(0);
 
@@ -154,15 +160,65 @@ void kernel_main() {
             cb_ms_in, cb_interm_ms, cb_interm_ms, cb_out_in, cb_interm_out, cb_interm_out);
     }
     if (s_block == 0) {
-        sdpa_tail<
-            exp_approx_mode,
-            true,
-            block_size,
-            num_blocks,
-            scale_fp32,
-            VectorMode::C,
-            /*dense=*/false,
-            /*untilize=*/true>(cb_ms_in, cb_interm_ms, cb_out_ms, cb_out_in, cb_interm_out, cb_out_rm);
+        if constexpr (has_rope) {
+            constexpr uint32_t rope_wt = has_rope ? rope_tiles : 1;
+            constexpr uint32_t rope_tail_block = 4;
+            constexpr uint32_t rope_tail_blocks = vDHt / rope_tail_block;
+            static_assert(vDHt % rope_tail_block == 0 && rope_wt <= rope_tail_block);
+            static_assert(rope_tail_block + rope_wt <= dst_size);
+
+            sdpa_tail_ms_reduce<exp_approx_mode, true, rope_tail_block, scale_fp32, VectorMode::C, true, false>(
+                cb_ms_in, cb_interm_ms, cb_out_ms, cb_out_in);
+            pack_untilize_dest_init<rope_tail_block, vDHt, false, TILE_C_DIM, false, false>(cb_out_rm);
+            cb_reserve_back(cb_out_rm, vDHt);
+            for (uint32_t b = 0; b < rope_tail_blocks; ++b) {
+                if (b > 0) {
+                    tile_regs_acquire();
+                }
+                cb_wait_front(cb_interm_out, rope_tail_block);
+                cb_wait_front(cb_out_in, rope_tail_block);
+                sdpa_mul_bcast_col_reuse_tiles<rope_tail_block>(cb_interm_out, cb_out_in, 0, 0);
+                cb_pop_front(cb_interm_out, rope_tail_block);
+                cb_pop_front(cb_out_in, rope_tail_block);
+                if (b + 1 == rope_tail_blocks) {
+                    sdpa_bcast_col_reuse_postamble();
+                    cb_wait_front(cb_cs, rope_wt);
+                    copy_init(cb_cs);
+                    for (uint32_t t = 0; t < rope_wt; ++t) {
+                        copy_tile(cb_cs, t, rope_tail_block + t);
+                    }
+                    cb_pop_front(cb_cs, rope_wt);
+                    rope_sfpu_fused_init();
+                    rope_sfpu_init();
+                    rope_sfpu_inplace_fused_rows<
+                        1,
+                        rope_wt,
+                        (rope_tail_block - rope_wt) * ROPE_SFPU_TILE_ROWS,
+                        ROPE_SFPU_TILE_ROWS,
+                        rope_tail_block * ROPE_SFPU_TILE_ROWS,
+                        ROPE_SFPU_TILE_ROWS,
+                        false,
+                        heads_per_core,
+                        false>(0);
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_untilize_dest<rope_tail_block, vDHt, false, false, TILE_C_DIM, 0, false>(cb_out_rm, 1, b);
+                tile_regs_release();
+            }
+            cb_push_back(cb_out_rm, vDHt);
+            pack_untilize_uninit(cb_out_rm);
+        } else {
+            sdpa_tail<
+                exp_approx_mode,
+                true,
+                block_size,
+                num_blocks,
+                scale_fp32,
+                VectorMode::C,
+                /*dense=*/false,
+                /*untilize=*/true>(cb_ms_in, cb_interm_ms, cb_out_ms, cb_out_in, cb_interm_out, cb_out_rm);
+        }
     } else {
         sdpa_tail<exp_approx_mode, false, block_size, num_blocks, scale_fp32, VectorMode::C>(
             cb_ms_in, cb_interm_ms, cb_out_ms, cb_out_in, cb_interm_out, cb_out_o);

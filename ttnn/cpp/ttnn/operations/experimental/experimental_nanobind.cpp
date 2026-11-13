@@ -134,6 +134,8 @@
 #include "ttnn/operations/experimental/deepseek/attention_qkv_decode/attention_qkv_decode_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek/all_gather_for_matmul/all_gather_for_matmul_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek/width_sharded_all_reduce/width_sharded_all_reduce_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek/sharded_rmsnorm/sharded_rmsnorm_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek/compress_pool_decode/compress_pool_decode_nanobind.hpp"
 
 namespace ttnn::operations::experimental {
 
@@ -267,6 +269,8 @@ void py_module(nb::module_& mod) {
     deepseek::detail::bind_attention_qkv_decode(mod);
     deepseek::detail::bind_all_gather_for_matmul(mod);
     deepseek::detail::bind_width_sharded_all_reduce(mod);
+    deepseek::detail::bind_sharded_rmsnorm(mod);
+    deepseek::detail::bind_compress_pool_decode(mod);
     topk_large_indices::detail::bind_topk_large_indices(mod);
     topk_router_gpt::detail::bind_topk_router_gpt(mod);
     deepseek::mla::detail::bind_matmul_wo(mod);
