@@ -111,7 +111,8 @@ inline void fetch_weight_one(
     uint32_t ct_w_addr_base,
     uint32_t k_shards = 1,
     uint32_t col_shards = 0,
-    uint32_t k_shard_first = 0) {
+    uint32_t k_shard_first = 0,
+    bool reverse_pieces = false) {
     const uint32_t pieces = reserve_tiles < slice_tiles ? slice_tiles / reserve_tiles : 1u;
     const uint32_t piece_bytes = slice_tiles / pieces * tile_bytes;
     const uint32_t k_shard_bytes = slice_tiles / k_shards * tile_bytes;
@@ -132,8 +133,10 @@ inline void fetch_weight_one(
 
     CircularBuffer cb_weights(cb_weights_id);
     ShardView w_shard(w);
-    // Read piece p into L1 at `dst`, tagged with `trid`.
-    auto issue_piece = [&](uint32_t p, uint32_t dst, uint32_t trid) {
+    // Read the slice's piece p (or, reverse_pieces, its piece pieces - 1 - p: the compute takes them in that order)
+    // into L1 at `dst`, tagged with `trid`.
+    auto issue_piece = [&](uint32_t slot_p, uint32_t dst, uint32_t trid) {
+        const uint32_t p = reverse_pieces ? pieces - 1u - slot_p : slot_p;
         const uint32_t piece_end = (p + 1u) * piece_bytes;
         for (uint32_t b = p * piece_bytes; b < piece_end;) {
             const uint32_t k_shard = b / k_shard_bytes;
@@ -847,6 +850,9 @@ inline void run_reader_loop(
             constexpr uint32_t kSplit = FE_ROUTED_SPLIT;
             const uint32_t half = cores_per_expert / 2u;
             const bool routed_partner = kSplit > 1u && local_idx >= half && local_idx < half + num_producers;
+            // Odd groups read their K-pieces in reverse: piece k of I-tile c sits on bank (6k + c) % 8, so in order
+            // every group's first pieces load banks 0, 1, 4, 5 twice as hard as the rest; staggered, all 8 evenly.
+            const bool reverse_pieces = kSplit > 1u && (expert_group & 1u) != 0u;
             for (uint32_t s = 0; swiglu_core && s < i_shards_per_core; ++s) {
                 fetch_weight_one(
                     noc,
@@ -860,7 +866,9 @@ inline void run_reader_loop(
                     gate_up_args,
                     ct_gu_addr_base,
                     gate_up_k_shards / kSplit,
-                    gate_up_col_shards);
+                    gate_up_col_shards,
+                    0,
+                    reverse_pieces);
             }
             if (routed_partner) {
                 fetch_weight_one(
@@ -876,7 +884,8 @@ inline void run_reader_loop(
                     ct_gu_addr_base,
                     gate_up_k_shards / kSplit,
                     gate_up_col_shards,
-                    gate_up_k_shards / kSplit);
+                    gate_up_k_shards / kSplit,
+                    reverse_pieces);
             }
             if (shared_core && swiglu_core) {
                 fetch_shared_gate_up_tile();
