@@ -148,12 +148,12 @@ one, add its row here. A row can go once ttsim closes that gap.
 | ttsim gap | Where | What the harness does on ttsim |
 |---|---|---|
 | No BRISC reads of the TRISC PC buffers | `brisc.cpp`, `trisc.cpp` | The TRISCs do not park on their PC buffer. BRISC polls the L1 mailboxes instead. |
-| No overlay stream registers (the launch done flag) | `brisc.cpp`, `device.py` `launch_done_address()` | BRISC writes no launch done flag. The host waits on the L1 mailboxes and the soft reset register. |
+| No overlay stream registers (the launch done flag) | `brisc.cpp`, `device.py` `launch_done_address()` | BRISC writes no launch done flag. The host polls only the soft reset register, then checks the L1 mailboxes once after BRISC puts the cores in reset. |
 | No Quasar cluster control scratch registers 28 to 31 | `boot.h` `host_signal`, `device.py` `host_signal_address()` | Quasar completion stays in the L1 mailboxes only. |
-| No perf counter registers or counted zones register | `counters.h` (`launch_word`, `configure_hardware`, `arm_all_counters`, `freeze_all_counters`, `read_all_counters`), `test_config.py` `counted_zones_address()` | Counter work compiles out, and the host writes no counted zones. |
-| No Tensix semaphore reads (Quasar barrier reset) | `barrier.h` `reset_semaphores()` | The reset is skipped. |
+| No perf counter registers or Wormhole/Blackhole counted zones register (STREAM\_SCRATCH\_1) | `counters.h` (`launch_word`, `configure_hardware`, `arm_all_counters`, `freeze_all_counters`, `read_all_counters`), `test_config.py` `counted_zones_address()` | Counter work compiles out. The host skips `configure_quasar_counters`, writes no counted zones word, and skips the counter readout in `_read_counters_of_launch`. |
+| No Quasar bank-1 semaphore reads (barrier semaphores 8–11) | `barrier.h` `reset_semaphores()` | The reset of the profiler-barrier semaphores (8–11) is skipped in `LLK_PROFILER` builds. |
 | No debug feature disable register | `counters.h` `clear_debug_features()` | The clear is skipped. |
-| Blackhole `PACK_GLOBAL_CFG_CTL`: any access aborts | `tt_llk_blackhole/common/inc/cpack_common.h` (production LLK) | The fast tile end drain write for L1 accumulate is skipped. |
+| Blackhole `PACK_GLOBAL_CFG_CTL`: any access aborts | `tt_llk_blackhole/common/inc/cpack_common.h` (production LLK), `tt_metal/llrt/hal/tt-1xx/blackhole/bh_hal.cpp` (tt-metal JIT builds) | The fast tile end drain write for L1 accumulate is skipped. |
 | No timing of the Wormhole L1 port that TRISC1 and TRISC2 fetch through | `brisc.cpp` | TRISC1 is not released first. |
 | BRISC resets the TRISCs as soon as their L1 mailboxes read complete | `trisc.cpp` `_start` | Coverage builds write the mailbox after `gcov_dump`. |
 | No simulation server (ttsim runs in process) | `llk_pytest_plugin.py` | ttsim is initialized when the plugin is imported, and `--reset-simulator-per-test` is rejected. |
