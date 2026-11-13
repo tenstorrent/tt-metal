@@ -222,6 +222,13 @@ def main():
         mode = "+".join(filter(None, ["DP" if use_ddp else "", "TP" if use_tp else ""]))
         print(f"{mode} enabled: mesh={dict(zip(mesh.axis_names, mesh.shape))}")
 
+    # Under DP+TP the column-parallel LoRA input is replicated across tp and sharded across dp, a layout ttml's dropout
+    # refuses (its copies need one mask and its shards different ones), so LoRA trains without dropout there.
+    lora_dropout = LORA_DROPOUT
+    if use_ddp and use_tp and lora_dropout > 0.0:
+        print(f"LoRA dropout {lora_dropout} -> 0.0: dropout cannot mask DP+TP activations")
+        lora_dropout = 0.0
+
     # ── Model ─────────────────────────────────────────────────────────────────
     yaml_config = None
     if args.model_config is not None:
@@ -253,7 +260,7 @@ def main():
         target_modules=LORA_TARGET_MODULES,
         is_bias_trainable=LORA_IS_BIAS_TRAINABLE,
         trainable_modules=LORA_TRAINABLE_MODULES,
-        lora_dropout=LORA_DROPOUT,
+        lora_dropout=lora_dropout,
     )
     model = LoraModel(model, lora_config)
 

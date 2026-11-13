@@ -5,7 +5,9 @@
 #include "swiglu_op.hpp"
 
 #include <cstdlib>
+#include <tt_stl/assert.hpp>
 #include <ttnn/operations/eltwise/binary/binary.hpp>
+#include <variant>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/graph_utils.hpp"
@@ -35,6 +37,22 @@ ttnn::Tensor flatten_leading(const ttnn::Tensor& t) {
 bool force_swiglu_composite() {
     // Benchmark-only override for model-level A/B without changing production call sites.
     return std::getenv("TTML_SWIGLU_FORCE_COMPOSITE") != nullptr;
+}
+
+// Whether `w2` (stored [out, in]) is sharded along its input features across a mesh axis of size > 1, as a
+// row-parallel weight is. The matmul with it then leaves each device a partial sum still to be added up.
+bool is_row_parallel(const ttnn::Tensor& w2) {
+    using Shard = tt::tt_metal::distributed::MeshMapperConfig::Shard;
+    const auto placements = core::distributed::placements_per_axis(w2);
+    const auto mesh_shape = w2.device()->shape();
+    const int rank = static_cast<int>(w2.logical_shape().rank());
+    for (size_t axis = 0; axis < placements.size(); ++axis) {
+        const auto* shard = std::get_if<Shard>(&placements[axis]);
+        if (mesh_shape[axis] > 1 && shard != nullptr && (shard->dim < 0 ? shard->dim + rank : shard->dim) == rank - 1) {
+            return true;
+        }
+    }
+    return false;
 }
 
 }  // namespace
@@ -111,6 +129,12 @@ autograd::TensorPtr swiglu(
     float dropout_scaler = 1.0F;
     bool use_per_device_seed = false;
     if (dropout_prob > 0.0F) {
+        // A partial sum's label cannot say it is one, so its seeding would be read wrong, and masking each partial
+        // differently is not a dropout of their sum anyway.
+        TT_FATAL(
+            !is_row_parallel(w2->get_value()),
+            "swiglu cannot apply dropout when w2 is sharded along its input features: each device then holds a partial "
+            "sum still to be added up across devices, so apply dropout after that sum");
         use_per_device_seed = dropout_seed_per_device(swiglu_result);
         dropout_seed = static_cast<uint32_t>(autograd::ctx().get_generator()());
         dropout_scaler = 1.0F / (1.0F - dropout_prob);

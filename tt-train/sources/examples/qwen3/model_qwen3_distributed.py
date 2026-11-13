@@ -100,11 +100,12 @@ def tp_padded_vocab_size(vocab_size):
     resulting shard has to be a multiple of 32 for the tile layout — that is,
     the padded size must be a multiple of ``32 * tp_size``.
 
-    The trailing padded rows stay on device and are absorbed by
-    ``vocab_parallel_cross_entropy_loss``, so ``config.vocab_size`` itself is
-    free to be arbitrary.
+    The trailing padded rows stay on device. ``vocab_parallel_cross_entropy_loss``
+    does not mask them, so the logits of a tied LM head over the padded vocab give
+    them probability unless they are masked (``ttml.models.vocab_padding.VocabPaddingMask``
+    does that for Llama and DeepSeek).
     """
-    align = 32 * ttml.mesh().axis_size("tp")
+    align = ttnn.TILE_SIZE * ttml.mesh().axis_size("tp")
     return ((vocab_size + align - 1) // align) * align
 
 

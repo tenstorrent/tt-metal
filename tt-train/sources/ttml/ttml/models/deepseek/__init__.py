@@ -16,7 +16,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal, Optional
 
+import ttnn
 import ttml
+from ttml.common.utils import round_up_to_tile
 from ttml.modules import AbstractModuleBase, ColumnParallelLinear, Embedding, LinearLayer, ModuleList
 
 from .. import RunnerType, memory_efficient_runner
@@ -90,8 +92,7 @@ class DeepSeek(AbstractModuleBase):
         if config.use_tp:
             tp_size = ttml.mesh().axis_size("tp")
             self._validate_tp(config, tp_size)
-            align = 32 * tp_size
-            self.padded_vocab_size = ((config.vocab_size + align - 1) // align) * align
+            self.padded_vocab_size = round_up_to_tile(config.vocab_size, ttnn.TILE_SIZE * tp_size)
             self.head = ColumnParallelLinear(
                 config.dim,
                 self.padded_vocab_size,
@@ -101,7 +102,7 @@ class DeepSeek(AbstractModuleBase):
             )
             self._vocab_padding_mask = VocabPaddingMask(config.vocab_size, self.padded_vocab_size, "tp")
         else:
-            self.padded_vocab_size = ((config.vocab_size + 31) // 32) * 32
+            self.padded_vocab_size = round_up_to_tile(config.vocab_size)
             self.head = LinearLayer(config.dim, self.padded_vocab_size, has_bias=False)
 
         self.tok_emb = Embedding(self.padded_vocab_size, config.dim)

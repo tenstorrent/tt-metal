@@ -256,6 +256,10 @@ def average_gradients(parameters, axis_names: tuple[str, ...]):
     mesh axis listed in ``axis_names`` are skipped for that axis — the FSDP
     backward hook already reduce-scattered the grad into shard shape.
 
+    A parameter sharded on a listed axis by its own label (MoE experts placed on
+    "dp", say) is skipped for that axis too: each rank holds a different slice, so
+    averaging would mix unrelated parameters. synchronize_gradients does the same.
+
     Args:
         parameters: A ``NamedParameters`` mapping (e.g. ``model.parameters()``).
         axis_names: Tuple of mesh axis names to reduce over.
@@ -273,8 +277,14 @@ def average_gradients(parameters, axis_names: tuple[str, ...]):
         if not param.is_grad_initialized():
             continue
 
-        # Drop axes on which this particular parameter is FSDP-sharded
-        axes_for_param = tuple(a for a in axes if not _param_is_fsdp_sharded(param, a))
+        # Drop axes on which this particular parameter is sharded: by FSDP, or by its own label. The label read is the
+        # parameter's, not its gradient's, which ops may label otherwise.
+        value = param.get_value(ttml.autograd.PreferredPrecision.NATIVE)
+        axes_for_param = tuple(
+            a
+            for a in axes
+            if not _param_is_fsdp_sharded(param, a) and not ttml.core.distributed.is_sharded_on_axis(value, a)
+        )
         if not axes_for_param:
             continue
 

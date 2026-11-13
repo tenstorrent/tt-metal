@@ -192,11 +192,15 @@ class FSDPState:
         gathered shape. We reduce-scatter each grad into a shard-shaped grad,
         explicitly deallocate the gathered value and gathered grad, and
         restore the sharded m_value (in that order, so ``set_grad``'s shape
-        check sees the shard-shaped m_value).
+        check sees the shard-shaped m_value). A managed parameter with no
+        grad (frozen, like LoRA's base weights, or unused) is resharded too.
         """
+        gathered = self.sharded_state == _ShardedState.UNSHARDED
         for parameter, shard_dim in self.managed:
             param_tensor = parameter.tensor
             if not param_tensor.is_grad_initialized():
+                if gathered:
+                    self._reshard_param(param_tensor)
                 continue
             # Pull a Python-side handle to the gathered grad before we reduce
             # it; we'll explicitly deallocate it after set_grad to release the
@@ -213,19 +217,8 @@ class FSDPState:
             # matching the implicit averaging a DDP all-reduce would do.
             reduced = ttnn.multiply(reduced, 1.0 / float(self.axis_size))
 
-            # Swap m_value to the cached shard and free the gathered weight,
-            # then set_grad to the reduced shard. Order matters: set_grad
-            # shape-checks against m_value, so m_value must be shard-shape
-            # before we install a shard-shape grad.
-            gathered_value = param_tensor.get_value(ttml.autograd.PreferredPrecision.NATIVE)
-            shard = self._cached_shards.get(id(param_tensor))
-            if shard is not None:
-                param_tensor.set_value(shard)
+            self._reshard_param(param_tensor)
             param_tensor.set_grad(reduced)
-
-            # Explicit deallocate of the now-unreferenced full-size buffers.
-            # Without this, Python GC may keep them around for too long
-            ttnn.deallocate(gathered_value)
             ttnn.deallocate(gathered_grad)
 
         self.sharded_state = _ShardedState.SHARDED
@@ -268,21 +261,18 @@ class FSDPState:
             ttnn.deallocate(shard_grad)
 
     def _reshard_all_params(self) -> None:
-        """Swap managed params back to their cached shard tensors.
-
-        We grab the current gathered value before swapping so we can
-        ``ttnn.deallocate`` it explicitly rather than relying on Python GC —
-        this makes the memory-saving property of ``reshard_after_forward``
-        actually take effect on the device side at the moment we expect.
-        """
+        """Swap managed params back to their cached shard tensors."""
         for parameter, _shard_dim in self.managed:
-            param_tensor = parameter.tensor
-            shard = self._cached_shards.get(id(param_tensor))
-            if shard is None:
-                raise RuntimeError("FSDP: managed parameter has no cached shard. This should never happen.")
-            gathered = param_tensor.get_value(ttml.autograd.PreferredPrecision.NATIVE)
-            param_tensor.set_value(shard)
-            ttnn.deallocate(gathered)
+            self._reshard_param(parameter.tensor)
+
+    def _reshard_param(self, param_tensor: Any) -> None:
+        """Swap a gathered param back to its cached shard and free the gathered value."""
+        shard = self._cached_shards.get(id(param_tensor))
+        if shard is None:
+            raise RuntimeError("FSDP: managed parameter has no cached shard. This should never happen.")
+        gathered = param_tensor.get_value(ttml.autograd.PreferredPrecision.NATIVE)
+        param_tensor.set_value(shard)
+        ttnn.deallocate(gathered)
 
 
 # ---------------------------------------------------------------------------
@@ -563,9 +553,7 @@ def fully_shard(
             (``re.search``) in the parameter's dotted names relative to ``module``; a
             tied parameter matches if any of its names does.
             Raises if a matched parameter is already sharded on
-            ``mesh_axis``. The training loop must average their gradients over
-            ``mesh_axis`` with ``ttml.sync_gradients``; ``SFTTrainer`` and
-            ``GRPOTrainer`` already do.
+            ``mesh_axis``.
     Returns:
         ``module`` (modified in place).
     """

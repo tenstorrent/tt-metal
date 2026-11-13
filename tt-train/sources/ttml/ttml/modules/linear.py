@@ -30,7 +30,7 @@ def _input_layout_error(layer: str, x, expected: str, cluster_axis: int) -> Valu
 
 def enter_tp_region(x, cluster_axis: int, sequence_parallel: bool):
     expected = SEQUENCE_DIM if sequence_parallel else None
-    if ttml.mesh().shape[cluster_axis] > 1 and ttml.Sharding.from_tensor(x).shard_dim(cluster_axis) != expected:
+    if ttml.mesh().shape[cluster_axis] > 1 and ttml.sharding.shard_dim(x, cluster_axis) != expected:
         layout = "sharded along the sequence" if sequence_parallel else "replicated"
         raise _input_layout_error("A column-parallel layer", x, layout, cluster_axis)
     if sequence_parallel:
@@ -44,7 +44,7 @@ def shard_features(x, cluster_axis: int):
     if ttml.mesh().shape[cluster_axis] == 1:
         return x
     feature_dim = len(x.shape()) - 1
-    dim = ttml.Sharding.from_tensor(x).shard_dim(cluster_axis)
+    dim = ttml.sharding.shard_dim(x, cluster_axis)
     if dim is None:
         return ttml.ops.distributed.scatter(x, feature_dim, cluster_axis)
     if dim != feature_dim:

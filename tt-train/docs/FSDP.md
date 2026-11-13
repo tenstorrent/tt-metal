@@ -273,7 +273,7 @@ step.
 
 Each replicated parameter is replaced with its local shard, keeping its
 placement on every other axis, so a TP-sharded weight stays TP-sharded. A
-materialized parameter is partitioned on device (`ttnn.mesh_partition`). A
+materialized parameter is partitioned on device (`ttml.core.distributed.mesh_partition`). A
 lazy one gets a mapper with `Shard{shard_dim}` on the FSDP axis instead, so
 `ttml.materialize_module` allocates it already sharded.
 
@@ -412,11 +412,6 @@ roughly the order I'd tackle them:
 - [ ] **Sharding-aware `clip_grad_norm`.** Square the per-rank shard
   grads, all-reduce the squared-sums on the FSDP axis, take the global
   sqrt, then scale per-rank shards by `min(1, max_norm / global_norm)`.
-
-- [ ] **Lazy init.** An eagerly built model holds every parameter in full
-  before `fully_shard` partitions it, which doesn't allow for a model with
-  weights not fitting in a single chip memory. Need lazy init infra to enable training of a model
-  like Qwen-32B or Llama-70B on a single galaxy.
 
 - [ ] **Muon + FSDP.** Newton–Schulz needs the full weight matrix.
   Either materialize full weight inside Muon's step (one extra

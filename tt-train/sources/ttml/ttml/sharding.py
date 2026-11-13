@@ -36,6 +36,16 @@ def _fatal_message(error: BaseException) -> str:
     return text.splitlines()[0] if text else str(error).splitlines()[0]
 
 
+def shard_dim(tensor: ttml.autograd.Tensor, axis: int) -> int | None:
+    """The tensor dim ``tensor`` is sharded along across mesh axis ``axis``, or None where it is replicated.
+
+    ``Sharding.from_tensor(tensor).shard_dim(axis)`` without building the whole layout, for checks run on every forward.
+    """
+    value = tensor.get_value(ttml.autograd.PreferredPrecision.NATIVE)
+    placement = ttml.core.distributed.placements_per_axis(value)[axis]
+    return placement.dim % len(value.shape) if isinstance(placement, ttnn.PlacementShard) else None
+
+
 class Sharding:
     """A tensor's mesh layout, read off its label when made."""
 
@@ -43,13 +53,21 @@ class Sharding:
         topology = value.tensor_topology()
         self._label_placements = list(topology.placements())
         self._label_shape = list(topology.distribution_shape())
-        self._mesh_shape = list(_mesh_device().shape)
         self._local_shape = list(value.shape)
+        self._mesh_shape = []
+        self._placements = ()
         self._per_axis_error = None
+        if value.storage_type() != ttnn.StorageType.DEVICE or not value.is_allocated():
+            # Its label is read against the mesh it is on, so there is nothing to read.
+            self._per_axis_error = (
+                "cannot read the placement per mesh axis of a tensor that is not allocated on a device mesh (a host "
+                "tensor, or a deallocated one)"
+            )
+            return
+        self._mesh_shape = list(_mesh_device().shape)
         try:
             self._placements = tuple(ttml.core.distributed.placements_per_axis(value))
         except RuntimeError as e:
-            self._placements = ()
             self._per_axis_error = _fatal_message(e)
 
     @classmethod

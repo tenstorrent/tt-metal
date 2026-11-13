@@ -58,15 +58,20 @@ class DeepSeekMLP(AbstractModuleBase):
             self.w3 = LinearLayer(dim, inter_dim, has_bias=False)
             self.w2 = LinearLayer(inter_dim, dim, has_bias=False)
 
-    def forward(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
-        if self._tp_axis is not None:
-            x = enter_tp_region(x, self._tp_axis, sequence_parallel=False)
-        out = ttml.ops.swiglu.swiglu(
+    def partial_forward(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
+        """The SwiGLU on this rank's slice of the MLP, without the tensor-parallel collectives: across the tp axis its
+        output is a partial sum still to be added up, and the gradient it sends ``x`` is partial too."""
+        return ttml.ops.swiglu.swiglu(
             x,
             self.w1.weight.tensor,
             self.w2.weight.tensor,
             self.w3.weight.tensor,
         )
+
+    def forward(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
+        if self._tp_axis is not None:
+            x = enter_tp_region(x, self._tp_axis, sequence_parallel=False)
+        out = self.partial_forward(x)
         if self._tp_axis is not None:
             out = exit_tp_region(out, self._tp_axis, sequence_parallel=False)
         return out

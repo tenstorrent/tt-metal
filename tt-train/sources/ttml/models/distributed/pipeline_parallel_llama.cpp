@@ -4,6 +4,9 @@
 
 #include "pipeline_parallel_llama.hpp"
 
+#include <algorithm>
+#include <variant>
+
 #include "autograd/tensor.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "modules/embedding_module.hpp"
@@ -15,6 +18,14 @@
 namespace ttml::models::distributed::pipeline_parallel_llama {
 
 namespace {
+
+// Whether `topology` shards its tensor on some mesh axis.
+bool has_shard(const tt::tt_metal::TensorTopology& topology) {
+    const auto& placements = topology.placements();
+    return std::any_of(placements.begin(), placements.end(), [](const auto& placement) {
+        return std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(placement);
+    });
+}
 
 void initialize_weights_tensor_parallel(PipelineParallelLlama& model) {
     auto params = model.parameters();
@@ -28,12 +39,21 @@ void initialize_weights_tensor_parallel(PipelineParallelLlama& model) {
     for (auto& [name, tensor_ptr] : params) {
         const auto& tensor = tensor_ptr->get_value();
         if (name.find("weight") != std::string::npos) {
+            // By value: set_value below replaces the tensor `tensor` refers to.
+            const auto topology = tensor.tensor_topology();
             auto tensor_shape = tensor.logical_shape();
             tensor_shape[0] *= tp_size;
             auto weight_xtensor = init::normal_init(tensor_shape, {0.F, 0.02F});
             const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 0, tp_axis);
-            tensor_ptr->set_value(ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(
-                weight_xtensor, device, ttnn::Layout::TILE, mapper.get()));
+            auto value = ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(
+                weight_xtensor, device, ttnn::Layout::TILE, mapper.get());
+            // The dim-0 mapper labels every weight Shard(0). A tensor-parallel weight gets back the label its module
+            // gave it, which names the dim it is sharded along: ops read it, and the LM head's logits must read as
+            // sharded along the vocab for vocab_parallel_cross_entropy_loss. Each device's shape is unchanged.
+            if (has_shard(topology)) {
+                value.update_tensor_topology(topology);
+            }
+            tensor_ptr->set_value(value);
         } else if (name.find("bias") != std::string::npos) {
             init::constant_init(tensor_ptr, tensor.logical_shape(), 0.F);
         }

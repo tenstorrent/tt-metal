@@ -80,7 +80,7 @@ def causal_mask(seq_len: int):
 def per_rank(tensor) -> np.ndarray:
     """Every tp rank's copy of ``tensor`` stacked along dim 1, which is 1 on every tensor here, so SP
     and TP tensors compare rank by rank whatever their placement. The layout is imposed by a composer
-    rather than read off the tensor: activation and gradient topologies are stale after collectives."""
+    rather than read off the tensor, so the comparison does not depend on how each op labelled its output."""
     mesh = ttml.mesh()
     dims = [0] * len(mesh.shape)
     dims[mesh.axis_index("tp")] = 1
@@ -155,7 +155,7 @@ class TestMatchesTensorParallel:
         assert_same_grads(sp_model, tp_model)
 
     def test_gradients_after_an_optimizer_step(self):
-        """The optimizer rewrites each parameter's mesh topology in place; the sync must not read it."""
+        """SP and TP still agree on the gradients of a second step, taken after an optimizer update."""
         tp_model, sp_model = paired_models()
         optimizers = [adamw(model) for model in (tp_model, sp_model)]
         for step in range(2):

@@ -24,6 +24,8 @@ from ttml.modules import (
     VocabParallelEmbedding,
 )
 
+from ttml.common.utils import round_up_to_tile
+
 from .. import EmbeddingPlacement, RunnerType, WeightTyingType, memory_efficient_runner
 from .autograd_ops import SliceLastDim
 from ..vocab_padding import VocabPaddingMask
@@ -223,8 +225,7 @@ class Llama(AbstractModuleBase):
             mesh = ttml.mesh()
             self.tp_size = mesh.axis_size("tp")
             self._tp_axis = mesh.axis_index("tp")
-            align = 32 * self.tp_size
-            self.padded_vocab_size = ((config.vocab_size + align - 1) // align) * align
+            self.padded_vocab_size = round_up_to_tile(config.vocab_size, ttnn.TILE_SIZE * self.tp_size)
             # No gather after LM head, because vocab_parallel_cross_entropy_loss
             # expects a vocab-sharded tensor. Under SP the head input is sequence-sharded
             # and the column-parallel input gather restores the full sequence, so the
@@ -261,7 +262,7 @@ class Llama(AbstractModuleBase):
                 )
         else:
             self.tp_size = 1
-            self.padded_vocab_size = ((config.vocab_size + 31) // 32) * 32
+            self.padded_vocab_size = round_up_to_tile(config.vocab_size)
             self.fc = LinearLayer(
                 config.hidden_size,
                 self.padded_vocab_size,
