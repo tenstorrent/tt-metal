@@ -18,14 +18,11 @@ from ttnn.device import is_blackhole
 import ttnn
 from models.demos.common.prefill.adapter import PrefillRunParams, get_adapter
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.k31_stage import MAX_SEQ_LEN, MESH, STAGES
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.layer_schedule import KimiK3LayerSchedule
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, allocate_mla_kvpe_cache
 
-MAX_SEQ_LEN = 1_064_960
-MESH = (8, 4)
 SP_AXIS, TP_AXIS = 0, 1
-# PP4 split (first layer, layer count); every stage owns 6 full-attention layers.
-STAGES = ((0, 24), (24, 24), (48, 24), (72, 21))
 # Per token per full-attention layer, in DRAM: bf8 TILE row of 512+64 = 18 tiles of 1088 B per 32
 # tokens; the scaled-FP8 row is 512 fp8 + 4 fp32 scales + 64 bf16 = 656 B, padded to 704; the index
 # key is 4 bf8 tiles (128 wide) per 32 tokens.

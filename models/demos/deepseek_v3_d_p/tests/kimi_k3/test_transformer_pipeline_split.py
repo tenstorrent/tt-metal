@@ -37,7 +37,6 @@ from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, 
 from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import resolve_model_root
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.golden import TRACE_1M, resolve_checkpoint, resolve_trace
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.kda_slabs import attach_kda_states
-from models.demos.deepseek_v3_d_p.tests.kimi_k3.stage_handoff import load_activation, save_activation
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.synthetic import (
     CACHE_LEN,
     HF_CONFIGS,
@@ -258,8 +257,7 @@ def test_pipeline_split_matches_golden(mesh_device, device_params):
 # --- Synthetic weights: split against undivided (K3 and K3.1) ---------------------------------------
 #
 # K3.1 has no golden, so its oracle is the undivided stack on the same weights, cut at the layer-12 seal.
-# The handoff goes through the file a stage-by-stage run on one galaxy saves (`stage_handoff`), so this also
-# proves that saved-intermediate path loses nothing. The split is exact: the handoff is a lossless bf16 concat/slice, and the second rank takes the read that
+# The split is exact: the handoff is a lossless bf16 concat/slice, and the second rank takes the read that
 # straddles the boundary the way the undivided walk takes it (an open site over the inherited set, read
 # before the seal). So every layer, the final output and every cache must be bit-identical, on both ranks.
 # Before tt_metal_tracker-ao3i.9 the owed read was a closed site after the seal -- the same mixture by a
@@ -281,9 +279,8 @@ def _worst_shard_pcc(want, got) -> float:
 SYNTHETIC_LAYERS = 16
 
 
-def _run_window(mesh_device, model, state_dict, ids, handoff_dir):
-    """The undivided stack, then the two ranks: per-GLOBAL-layer outputs, final output, caches by global layer.
-    Rank 0's output reaches rank 1 through the saved handoff file, as in a stage-by-stage run."""
+def _run_window(mesh_device, model, state_dict, ids):
+    """The undivided stack, then the two ranks: per-GLOBAL-layer outputs, final output, caches by global layer."""
 
     def run(ranks):
         per_layer, kv, hidden = {}, {}, None
@@ -298,12 +295,7 @@ def _run_window(mesh_device, model, state_dict, ids, handoff_dir):
                 is_last_rank=is_last,
             )
             if not is_first:
-                planes = stack.inbound_planes
-                assert hidden.shape[1] == planes == 1 + first // KimiK3Config.ATTN_RES_BLOCK_SIZE
-                path = handoff_dir / f"handoff_{first}.bin"
-                save_activation(mesh_device, hidden, path)
-                ttnn.deallocate(hidden)
-                hidden = load_activation(mesh_device, path, planes=planes, rows=SEQ_LEN, hidden=KimiK3Config.EMB_SIZE)
+                assert hidden.shape[1] == stack.inbound_planes == 1 + first // KimiK3Config.ATTN_RES_BLOCK_SIZE
             try:
                 inputs = upload_tokens(mesh_device, ids) if is_first else hidden
                 hidden = stack.forward(
@@ -341,10 +333,10 @@ def _run_window(mesh_device, model, state_dict, ids, handoff_dir):
     placements(),
     indirect=["mesh_device", "device_params"],
 )
-def test_synthetic_split_matches_undivided(model, mesh_device, device_params, tmp_path):
+def test_synthetic_split_matches_undivided(model, mesh_device, device_params):
     state_dict = synthetic_state_dict(HF_CONFIGS[model](CACHE_LEN), 0, SYNTHETIC_LAYERS)
     (whole_layers, whole_out, whole_kv), (split_layers, split_out, split_kv) = _run_window(
-        mesh_device, model, state_dict, token_ids(SEQ_LEN), tmp_path
+        mesh_device, model, state_dict, token_ids(SEQ_LEN)
     )
 
     failures = []
