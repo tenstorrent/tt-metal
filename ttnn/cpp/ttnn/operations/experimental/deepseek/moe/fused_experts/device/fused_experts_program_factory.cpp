@@ -753,6 +753,18 @@ ProgramDescriptor build_program_descriptor(
     // Per-core staging for one expert's weighted down output. Serial: kOutTilesPerCore tiles,
     // double-buffered. Parallel: shards_per_core * 2 tiles for the reduce ping-pong.
     const uint32_t wtmp_cb_bytes = (parallel_experts ? 1u : 2u) * acc_tiles * out_tile_bytes;
+    // The shared expert's gate_up, K-split: where a group owns one shared I-tile, kSharedSplit cores from
+    // shared_first_local on (non-producers, idle while the router runs) each read and multiply a K-range of its
+    // [K, 2] shard; the first of them, the aggregator, sums the others' 2 partial tiles (written into its cb_wtmp,
+    // counted on sem_shared_part) and runs the SwiGLU. One core alone reads at its own NoC's rate, ~28 GB/s.
+    constexpr uint32_t kSharedSplit = 4;
+    const uint32_t shared_split = has_shared && parallel_experts && shared_slots == 1u &&
+                                          cores_per_expert == 2u * kGridY && shared_first_local == num_producers &&
+                                          shared_first_local + kSharedSplit < cores_per_expert &&
+                                          k_tiles % (kSharedSplit * shared_chunk_k) == 0u &&
+                                          (kSharedSplit - 1u) * kOutTilesPerCore * out_tile_bytes <= wtmp_cb_bytes
+                                      ? kSharedSplit
+                                      : 1u;
     // Group-0 reduce scratch: the other (num_expert_groups-1) groups unicast their H-slice here.
     // Allocated on every core so L1 addresses match; unused on non-root groups.
     const uint32_t reduce_cb_bytes =
@@ -936,6 +948,17 @@ ProgramDescriptor build_program_descriptor(
     for (uint32_t s : {sem_gather_id, sem_bcast_id, sem_reduce_id}) {
         desc.semaphores.push_back(SemaphoreDescriptor{
             .id = s,
+            .core_type = CoreType::WORKER,
+            .core_ranges = all_cores,
+            .initial_value = 0,
+        });
+    }
+    // sem_shared_part: on a group's shared aggregator, one bump per partial that has landed (see shared_split). Id 10
+    // is otherwise only the control core's, outside the grid.
+    constexpr uint32_t sem_shared_part_id = 10;
+    if (shared_split > 1u) {
+        desc.semaphores.push_back(SemaphoreDescriptor{
+            .id = sem_shared_part_id,
             .core_type = CoreType::WORKER,
             .core_ranges = all_cores,
             .initial_value = 0,
@@ -1992,6 +2015,12 @@ ProgramDescriptor build_program_descriptor(
                             writer_args.end(), {persistent->out_ready1_sem_addr, persistent->out_staging});
                     }
                 }
+                // The group's shared aggregator (see shared_split), last.
+                const uint32_t agg_idx = g * cores_per_expert + shared_first_local;
+                const auto agg_noc =
+                    device->worker_core_from_logical_core(CoreCoord{agg_idx / GRID_Y, agg_idx % GRID_Y});
+                writer_args.push_back(static_cast<uint32_t>(agg_noc.x));
+                writer_args.push_back(static_cast<uint32_t>(agg_noc.y));
                 writer_desc.emplace_runtime_args(core, writer_args);
             }
         }
@@ -2554,6 +2583,11 @@ ProgramDescriptor build_program_descriptor(
         }
     }
 
+    for (auto& kernel : desc.kernels) {
+        kernel.defines.emplace_back("FE_SHARED_SPLIT", std::to_string(shared_split) + "u");
+        kernel.defines.emplace_back("FE_SEM_SHARED_PART", std::to_string(sem_shared_part_id));
+        kernel.defines.emplace_back("FE_CB_WTMP", std::to_string(static_cast<uint32_t>(cb_wtmp)));
+    }
     return desc;
 }
 }  // namespace
