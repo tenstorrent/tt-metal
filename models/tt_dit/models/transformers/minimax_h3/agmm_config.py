@@ -54,7 +54,7 @@ AGMM_BLOCK_SIZES: dict[tuple[int, int, int], tuple] = {
     (5376, 5376, 2): (2, 7, 16),
     (5376, 5376, 3): (4, 6, 16),
     (5376, 5376, 4): (6, 7, 16),
-    (5376, 5376, 5): (6, 7, 16),
+    (5376, 5376, 5): (5, 7, 16, (1, 4)),  # MINIMAX_H3_QKV_AGMM_LEGACY=1: (6, 7, 16), see below
     (5376, 5376, 6): (6, 3, 16),
     (5376, 5376, 7): (4, 6, 16),
     (5376, 5376, 8): (4, 6, 16),
@@ -89,14 +89,22 @@ AGMM_BLOCK_SIZES: dict[tuple[int, int, int], tuple] = {
 }
 
 
-# ff1 at 15 rows per core (5 s on 4x8): M_block 5 (5 + 5 + 5 rows, subblock 1 x 2) and one N block over the 22 columns per
-# core, same K_block 3 as before, so every output tile accumulates in the same order (bit-identical). The previous entry
-# stays reachable for A/B with MINIMAX_H3_FF1_AGMM_LEGACY=1 (unset or 0: the new entry; other values raise at import).
-_FF1_AGMM_LEGACY_VALUE = os.environ.get("MINIMAX_H3_FF1_AGMM_LEGACY", "0").strip()
-if _FF1_AGMM_LEGACY_VALUE not in ("", "0", "1"):
-    raise ValueError(f"MINIMAX_H3_FF1_AGMM_LEGACY={_FF1_AGMM_LEGACY_VALUE!r}: expected 0 or 1")
-_FF1_AGMM_LEGACY = _FF1_AGMM_LEGACY_VALUE == "1"
-_FF1_AGMM_LEGACY_BLOCKS: dict[tuple[int, int, int], tuple] = {(5376, 7168, 5): (6, 3, 16)}
+# At 15 rows per core (5 s on 4x8), M_block 5 (5 + 5 + 5 rows) with a one-row subblock beats M_block 6 (6 + 6 + 3)
+# on both all-gather matmuls. ff1 also takes one N block over its 22 columns per core (subblock 1 x 2); to_qkv keeps
+# its one N block of 16 (subblock 1 x 4). K_block is unchanged in both, so every output tile accumulates in the same
+# order (bit-identical). The previous entries stay reachable for A/B: MINIMAX_H3_FF1_AGMM_LEGACY=1 /
+# MINIMAX_H3_QKV_AGMM_LEGACY=1 (unset or 0: the new entry; other values raise at import).
+def _legacy_switch(name: str) -> bool:
+    value = os.environ.get(name, "0").strip()
+    if value not in ("", "0", "1"):
+        raise ValueError(f"{name}={value!r}: expected 0 or 1")
+    return value == "1"
+
+
+_AGMM_LEGACY_BLOCKS: dict[tuple[int, int, int], tuple] = {
+    **({(5376, 7168, 5): (6, 3, 16)} if _legacy_switch("MINIMAX_H3_FF1_AGMM_LEGACY") else {}),
+    **({(5376, 5376, 5): (6, 7, 16)} if _legacy_switch("MINIMAX_H3_QKV_AGMM_LEGACY") else {}),
+}
 
 
 # Blocking of the dynamic-length path per (K, N) layer and length class; to_qkv and to_out take one
@@ -175,6 +183,4 @@ def agmm_block_size(k: int, n: int, m: int) -> tuple[int, int, int] | None:
     if not divisors:
         return None
     key = (k, n, max(divisors))
-    if _FF1_AGMM_LEGACY and key in _FF1_AGMM_LEGACY_BLOCKS:
-        return _FF1_AGMM_LEGACY_BLOCKS[key]
-    return AGMM_BLOCK_SIZES[key]
+    return _AGMM_LEGACY_BLOCKS.get(key, AGMM_BLOCK_SIZES[key])
