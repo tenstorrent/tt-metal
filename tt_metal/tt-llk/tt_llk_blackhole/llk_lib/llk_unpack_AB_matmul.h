@@ -503,11 +503,11 @@ __attribute__((always_inline)) inline void _llk_unpack_AB_matmul_init_(
             TTI_RESOURCEDECL(1, 0x19F, 14);
             set_ttsync_enables<TRACK_GPR | TRACK_TENSIX_INSTRUCTIONS>();
             unpack_matmul_ttsync_on = 1;
+            // the enable takes effect only after a drain; once on, the row GPR stores need none
+            TTI_STALLWAIT(p_stall::STALL_THREAD, p_stall::TRISC_CFG);
+            TTI_NOP;
+            tensix_sync();
         }
-        // The RISC's config writes land before the first UNPACR; the NOP keeps tensix_sync until a latched TRISC_CFG stall clears.
-        TTI_STALLWAIT(p_stall::STALL_THREAD, p_stall::TRISC_CFG);
-        TTI_NOP;
-        tensix_sync();
     }
 }
 
