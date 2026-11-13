@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <limits>
 #include <set>
 #include <tuple>
 #include <unordered_map>
@@ -547,6 +548,13 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
     TT_FATAL(!stats_is_fp32, "dit_fused_distributed_groupnorm requires bf16 stats");
     const uint32_t two_pass_reciprocal = std::bit_cast<uint32_t>(
         1.0f / static_cast<float>(std::max(1U, num_channels_per_group * num_rows_per_group / tile_w)));
+    // A spatial extent that is not whole tiles leaves padding rows in the last tile row. The readers
+    // zero them and the sender corrects the statistics, which cover the padded extent, for the zeros.
+    const uint32_t logical_H = input_tensor.logical_shape()[2];
+    const bool has_pad_rows = logical_H != H;
+    const uint32_t pad_row_first_page = has_pad_rows ? (Ht - 1) * Wt : std::numeric_limits<uint32_t>::max();
+    const uint32_t pad_row_valid_rows = has_pad_rows ? logical_H - ((Ht - 1) * tile_h) : tile_h;
+    const uint32_t pad_stats_scale = std::bit_cast<uint32_t>(static_cast<float>(H) / static_cast<float>(logical_H));
     const std::vector<uint32_t> size_args = {
         per_core_Mt,                              // PER_CORE_M
         block_ht,                                 // BLOCK_H
@@ -556,6 +564,9 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
         two_pass_reciprocal,                      // TWO_PASS_RECIPROCAL
         per_core_Mt * per_core_Nt,                // PER_CORE_MN
         num_rows_per_group,                       // NUM_ROWS_PER_GROUP
+        pad_row_first_page,                       // PAD_ROW_FIRST_PAGE
+        pad_row_valid_rows,                       // PAD_ROW_VALID_ROWS
+        pad_stats_scale,                          // PAD_STATS_SCALE
     };
     // The kernels read these from size_args instead; zero them so they don't enter the kernel hash.
     const auto zero_size_args = [](std::unordered_map<std::string, uint32_t>& named_ct) {

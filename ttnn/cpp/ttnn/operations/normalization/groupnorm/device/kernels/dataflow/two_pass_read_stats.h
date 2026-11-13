@@ -10,6 +10,7 @@
 #include "api/core_local_mem.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc.h"
+#include "welford_combine.h"
 
 template <
     std::uint32_t TilesPerRow,
@@ -26,7 +27,10 @@ inline void read_two_pass_stats_block(
     std::uint32_t ring_end,
     std::uint32_t start_tile,
     std::uint32_t row_stride,
-    std::uint32_t rows) {
+    std::uint32_t rows,
+    // Pages at and after pad_first_page get their rows from pad_valid_rows on zeroed; 32 zeroes none.
+    std::uint32_t pad_first_page = 0xFFFFFFFF,
+    std::uint32_t pad_valid_rows = 32) {
     // Calibrated batch sizes, not hardware limits on outstanding NOC reads.
 #if defined(ARCH_WORMHOLE)
     // The FP32 input-alias path is faster with per-tile publication.
@@ -68,6 +72,17 @@ inline void read_two_pass_stats_block(
             }
         }
         noc.async_read_barrier();
+        // Only bfloat16 and float32 tiles; the fused op, the only one with padding, takes bfloat16.
+        if constexpr (TileBytes == 32 * 32 * 2 || TileBytes == 32 * 32 * 4) {
+            if (pad_valid_rows < 32) {
+                for (std::uint32_t i = 0; i < count; ++i) {
+                    const std::uint32_t offset = tile + i;
+                    if (start_tile + ((offset / TilesPerRow) * row_stride) >= pad_first_page) {
+                        zero_tile_rows_from<TileBytes / (32 * 32)>(address + (i * TileBytes), pad_valid_rows);
+                    }
+                }
+            }
+        }
         input.push_back(count);
         if constexpr (HasAlias) {
             alias.push_back(count);
