@@ -268,7 +268,7 @@ own cores. The script cannot replace the hung worker or reset the card.
 Reset the card before running more device tests after a hang:
 
 ```bash
-tt-smi -r
+python3 -c "import tt_umd; tt_umd.WarmResetWithRecovery.warm_reset(max_attempts=3)"
 ```
 
 
@@ -295,7 +295,7 @@ core — run only when you can reset the card afterward)
 make check-hang
 ```
 
-The hang check runs `tt-smi -r` when it finishes. If a previous run left the
+The hang check runs a UMD warm reset when it finishes. If a previous run left the
 core wedged, reset the card before `make check`.
 
 ## Exit status

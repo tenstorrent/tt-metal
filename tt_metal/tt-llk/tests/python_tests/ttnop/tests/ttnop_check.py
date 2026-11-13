@@ -14,7 +14,6 @@ the golden still passes but the tensor is not bit-exact vs the clean run.
 
 import fcntl
 import os
-import subprocess
 import sys
 from pathlib import Path
 
@@ -25,6 +24,7 @@ sys.path[:0] = [str(TTNOP_RUNTIME), str(PYTHON_TESTS)]
 os.environ.setdefault("LLK_HOME", str(PYTHON_TESTS.parents[1]))
 
 import torch
+import tt_umd
 from cave import Injector
 from helpers.chip_architecture import get_chip_architecture
 from helpers.format_config import DataFormat, InputOutputFormat
@@ -221,10 +221,11 @@ def check_hang(config, baseline, injector, scans):
 
 
 def reset_after_hang():
-    """`tt-smi -r` is what actually clears a jal-self hang on this card."""
-    print("running tt-smi -r (that is what clears the hang)")
-    subprocess.run(["tt-smi", "-r"], check=True, timeout=180)
-    print("    tt-smi -r done. Check complete.")
+    """A card warm reset is what actually clears a jal-self hang."""
+    print("running UMD warm reset (that is what clears the hang)")
+    if not tt_umd.WarmResetWithRecovery.warm_reset(max_attempts=3):
+        raise RuntimeError("UMD warm reset failed")
+    print("    warm reset done. Check complete.")
 
 
 def main():
@@ -238,7 +239,7 @@ def main():
     try:
         baseline = run(config)
     except TimeoutError:
-        print("PLEASE DO tt-smi -r  (core is hung from a previous run)")
+        print("PLEASE RESET THE CARD  (core is hung from a previous run)")
         raise
     import scanner
 
