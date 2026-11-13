@@ -220,19 +220,14 @@ inline __attribute__((always_inline)) bool bufferHasRoom(uint32_t additional_slo
 }
 
 #if !defined(ARCH_QUASAR)
-// Read the live HIGH word, LOW, then HIGH again; if HIGH moved, LOW wrapped in between, so re-read LOW. LOW wraps every
-// 2^32 cycles, and a plain HIGH-then-LOW read that straddles the wrap pairs the old HIGH with the new LOW: a timestamp
-// 2^32 cycles early, which the host reports as an orphan or mismatched ZONE_END. The latched
-// RISCV_DEBUG_REG_WALL_CLOCK_H is not used because it is shared by the RISCs of a core and re-latched by any of them
-// reading LOW.
+// HIGH then LOW tears when LOW wraps in between. Read HIGH, LOW, HIGH; if HIGH moved, LOW's top bit picks its HIGH.
+// Not the latched WALL_CLOCK_H: it is shared by the RISCs of a core.
 inline __attribute__((always_inline)) void read_wall_clock(uint32_t& time_high, uint32_t& time_low) {
     volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
     const uint32_t high = p_reg[WALL_CLOCK_HIGH_INDEX];
     time_low = p_reg[WALL_CLOCK_LOW_INDEX];
     time_high = p_reg[WALL_CLOCK_HIGH_INDEX];
-    if (time_high != high) {
-        time_low = p_reg[WALL_CLOCK_LOW_INDEX];
-    }
+    time_high -= (time_high - high) & (time_low >> 31);
 }
 #endif
 
