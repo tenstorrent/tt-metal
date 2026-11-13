@@ -104,12 +104,12 @@ _GALAXY = "SP8xTP4"
 # 42340900388 at dbc10eb0a4c, bh-glx-120-d08u08: 388.8 us) times the new/old ratio measured at that same old commit on
 # one off-pool Galaxy at 130 W (bh-glx-120-b07u08, 2026-11-08, interleaved medians 411.7 -> 621.8 us). That Galaxy runs
 # this layer ~6% slower than the pool; an earlier A/B on bh-glx-110-c10u14 (392.9 -> 591.8 us) agrees.
-# The untraced boundary reference stays 645 us, the c10u14 A/B reading (374.8 -> 644.6 us): untraced follows the
-# host's dispatch, and the two Galaxies' new/old ratios disagree (c10u14 1.72, b07u08 398.0 -> 631.8 us = 1.59), so
-# the pool's value (382.1 us old) scales to ~657 or ~607 us by one or the other; the band covers both.
+# The untraced boundary reference is the pool's own reading: runs 42490578916 and 42494997776 (two runners) read
+# 592.6 / 590.7 us. Untraced follows the host's dispatch, so off-pool A/B ratios do not transfer: c10u14 374.8 ->
+# 644.6 us (1.72), b07u08 398.0 -> 631.8 us (1.59), bh-glx-120-b08u02 391 -> 654 us (1.67).
 _GALAXY_REFERENCE_E2E_US = {
     "traced": {"boundary": 587.0, "ordinary": 118.0},
-    "untraced": {"boundary": 645.0, "ordinary": 150.0},
+    "untraced": {"boundary": 592.0, "ordinary": 150.0},
 }
 # LoudBox references, per SKU: a run opts in with ATTN_RES_PERF_SKU, so a box of another SKU never
 # gates against them. To gate a layout, add its CI numbers here and drop it from _REPORT_ONLY_LAYOUTS.
