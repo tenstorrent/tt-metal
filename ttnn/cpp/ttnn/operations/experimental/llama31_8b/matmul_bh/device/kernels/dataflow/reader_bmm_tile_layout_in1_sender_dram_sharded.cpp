@@ -34,7 +34,8 @@ void kernel_main() {
 #endif
     const uint32_t dram_bank_id = get_arg(args::dram_bank_id);
     const uint32_t vc = get_arg(args::vc);
-    const uint32_t dram_reader_index = get_arg(args::dram_reader_index);
+    const uint32_t column_offset_tiles = get_arg(args::column_offset_tiles);
+    const uint32_t row_read_tiles = get_arg(args::row_read_tiles);
     const uint32_t num_shard_to_write_back = get_arg(args::num_shard_to_write_back);
     const uint32_t reshard_tensor_start_offset = get_arg(args::reshard_tensor_start_offset);
 
@@ -48,10 +49,8 @@ void kernel_main() {
     constexpr auto out_reshard_tensor_stride_w_bytes = get_arg(args::out_reshard_tensor_stride_w_bytes);
     constexpr auto per_core_M = get_arg(args::per_core_M);
     constexpr auto out_subblock_h = get_arg(args::out_subblock_h);
-    constexpr auto out_subblock_w = get_arg(args::out_subblock_w);
     constexpr uint32_t out_tile_bytes = get_tile_size(dfb::out);
-    constexpr uint32_t out_row_tiles = out_tensor_stride_w_bytes / out_tile_bytes;
-    constexpr auto workers_per_bank = get_arg(args::workers_per_bank);
+    constexpr auto k_rows_per_block = get_arg(args::k_rows_per_block);
     constexpr auto bank_row_stride_tiles = get_arg(args::bank_row_stride_tiles);
     constexpr auto reader_width_tiles = get_arg(args::reader_width_tiles);
 
@@ -61,18 +60,8 @@ void kernel_main() {
 #endif
 
     constexpr uint32_t in1_block_size_bytes = in1_num_pages * in1_page_size;
-#ifdef SPLIT_DRAM_BANK
-    static_assert(workers_per_bank > 1);
     constexpr uint32_t tiles_per_k_row = reader_width_tiles;
-    constexpr uint32_t k_rows_per_block = in1_block_num_tiles / tiles_per_k_row;
     constexpr uint32_t in1_tile_size_bytes = in1_block_size_bytes / in1_block_num_tiles;
-    const uint32_t shard_column_offset_tiles = dram_reader_index * tiles_per_k_row;
-#ifdef IN1_UNEVEN_READERS
-    const uint32_t uneven_left =
-        shard_column_offset_tiles < bank_row_stride_tiles ? bank_row_stride_tiles - shard_column_offset_tiles : 0;
-    const uint32_t uneven_row_tiles = uneven_left < tiles_per_k_row ? uneven_left : tiles_per_k_row;
-#endif
-#endif
 
     const Noc noc;
     DataflowBuffer dfb_in1(dfb::in1);
@@ -119,16 +108,10 @@ void kernel_main() {
     uint32_t l1_write_addr_in1_offset = 0;
     const uint32_t l1_write_addr_in1_start = dfb_in1.get_write_ptr();
     l1_write_addr_in1 = l1_write_addr_in1_start;
+    uint32_t source_tile = column_offset_tiles;
+    const uint32_t read_size = row_read_tiles * in1_tile_size_bytes;
     for (uint32_t block = 0; block < num_blocks; ++block) {
-#ifdef SPLIT_DRAM_BANK
         for (uint32_t row = 0; row < k_rows_per_block; ++row) {
-            const uint32_t source_tile =
-                (block * k_rows_per_block + row) * bank_row_stride_tiles + shard_column_offset_tiles;
-#ifdef IN1_UNEVEN_READERS
-            const uint32_t read_size = uneven_row_tiles * in1_tile_size_bytes;
-#else
-            const uint32_t read_size = tiles_per_k_row * in1_tile_size_bytes;
-#endif
             const uint32_t read_offset = source_tile * in1_tile_size_bytes;
             noc.async_read<NocOptions::TXN_ID, tiles_per_k_row * in1_tile_size_bytes>(
                 dram_bank,
@@ -137,25 +120,9 @@ void kernel_main() {
                 {.bank_id = dram_bank_id, .offset_bytes = read_offset},
                 {},
                 NocOptVals{.vc = vc, .trid = curr_block_trid});
-#ifdef IN1_UNEVEN_READERS
             l1_write_addr_in1 += tiles_per_k_row * in1_tile_size_bytes;
-#else
-            l1_write_addr_in1 += read_size;
-#endif
+            source_tile += bank_row_stride_tiles;
         }
-#else
-        for (uint32_t h = 0; h < in1_num_pages; ++h) {
-            noc.async_read<NocOptions::TXN_ID, NOC_MAX_BURST_SIZE>(
-                dram_bank,
-                CoreLocalMem<uint32_t>(l1_write_addr_in1),
-                in1_page_size,
-                {.bank_id = dram_bank_id, .offset_bytes = l1_read_addr_in1},
-                {},
-                NocOptVals{.vc = vc, .trid = curr_block_trid});
-            l1_read_addr_in1 += in1_page_size;
-            l1_write_addr_in1 += in1_page_size;
-        }
-#endif
 
         if (block > 0) {
             noc.async_read_barrier<NocOptions::TXN_ID>({.trid = static_cast<uint8_t>(block_trid_to_wait)});
@@ -182,10 +149,7 @@ void kernel_main() {
     dfb_in3.reserve_back(in1_block_w);
     uint32_t l1_write_addr_in3 = dfb_in3.get_write_ptr();
     uint32_t l1_read_addr_in3 = 0;
-#ifdef SPLIT_DRAM_BANK
-    constexpr uint32_t in3_tile_size_bytes = (in3_num_pages * in3_page_size) / reader_width_tiles;
-    l1_read_addr_in3 = dram_reader_index * reader_width_tiles * in3_tile_size_bytes;
-#endif
+    l1_read_addr_in3 = column_offset_tiles * get_arg(args::in3_tile_size_bytes);
     const BankView bias_bank(bias_accessor);
     noc.set_async_read_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
         bias_bank, in3_page_size, {.bank_id = dram_bank_id, .offset_bytes = 0}, NocOptVals{.vc = vc});
@@ -239,22 +203,12 @@ void kernel_main() {
         const bool reshard_is_local = noc.is_local_bank(in0_mcast_sender_noc_x, in0_mcast_sender_noc_y);
 #endif
 
+        static_assert(out_subblock_h == 1);
         for (uint32_t h = 0; h < per_core_M; ++h) {
-            constexpr bool contiguous_rows = out_subblock_h == 1 || out_subblock_w == out_row_tiles;
             uint32_t written = 0;
             while (written < per_core_N_reshard_bytes) {
                 uint32_t source = l1_read_addr_out;
                 uint32_t bytes = per_core_N_reshard_bytes;
-                if constexpr (!contiguous_rows) {
-                    const uint32_t col = (l1_read_addr_out_offset + written) / out_tile_bytes;
-                    const uint32_t tile = (h / out_subblock_h) * out_subblock_h * out_row_tiles +
-                                          (col / out_subblock_w) * out_subblock_h * out_subblock_w +
-                                          (h % out_subblock_h) * out_subblock_w + col % out_subblock_w;
-                    source = dfb_out.get_read_ptr() + tile * out_tile_bytes;
-                    const uint32_t subblock_bytes = (out_subblock_w - col % out_subblock_w) * out_tile_bytes;
-                    const uint32_t remaining = per_core_N_reshard_bytes - written;
-                    bytes = subblock_bytes < remaining ? subblock_bytes : remaining;
-                }
 #ifdef ARCH_QUASAR
                 if (reshard_is_local) {
                     local_l1_copy(l1_uncached(reshard_dest_local_addr + written), l1_uncached(source), bytes);

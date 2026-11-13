@@ -16,6 +16,7 @@
 #include "ttnn/operations/experimental/llama31_8b/matmul_bh/device/factory/mcast_1d.hpp"
 #include "ttnn/operations/experimental/llama31_8b/matmul_bh/device/factory/mcast_2d.hpp"
 #include "ttnn/operations/experimental/llama31_8b/matmul_bh/device/factory/minimal.hpp"
+#include "ttnn/operations/experimental/llama31_8b/matmul_bh/device/tables/dram_sharded_plan.hpp"
 #include "ttnn/operations/experimental/llama31_8b/matmul_bh/device/tables/mcast_1d_plan.hpp"
 #include "ttnn/operations/experimental/llama31_8b/matmul_bh/device/tables/mcast_2d_plan.hpp"
 #include "ttnn/operations/experimental/llama31_8b/matmul_bh/device/tables/minimal_plan.hpp"
@@ -24,6 +25,7 @@
 
 namespace ttnn::prim::llama31_8b_matmul_bh {
 
+using dram_sharded::DramShardedPlan;
 using dram_sharded::DramShardedReadOptions;
 using mcast_1d::Mcast1DPlan;
 using mcast_2d::Mcast2DPlan;
@@ -41,6 +43,7 @@ struct BhMatmul2DRoute {
 struct BhMatmulDramShardedRoute {
     operations::matmul::MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig program_config;
     DramShardedReadOptions read_options;
+    const DramShardedPlan* plan;
 };
 
 namespace detail {
@@ -181,20 +184,21 @@ struct DramShardedRow {
     DataType output_dtype;
     uint32_t workers_per_bank;
     DramShardedReadOptions read_options;
+    const DramShardedPlan* plan;
 };
 
 inline const std::array<DramShardedRow, 5>& dram_sharded_rows() {
     static const std::array<DramShardedRow, 5> table = {{
         {32, 4096, 16032, DataType::BFLOAT16, DataType::BFLOAT8_B, 2, 8, MathFidelity::HiFi2, false, DataType::BFLOAT8_B, 2,
-         {.uneven_readers = true, .streamed_write_back = true}},
+         {.uneven_readers = true, .streamed_write_back = true}, &dram_sharded::kDsPlanLmHeadDec},
         {32, 4096, 14336, DataType::BFLOAT16, DataType::BFLOAT4_B, 2, 7, MathFidelity::LoFi, false, DataType::BFLOAT16, 2,
-         {.uneven_readers = true, .streamed_write_back = true}},
+         {.uneven_readers = true, .streamed_write_back = true}, &dram_sharded::kDsPlanFf13Dec},
         {32, 14336, 4096, DataType::BFLOAT8_B, DataType::BFLOAT8_B, 7, 2, MathFidelity::HiFi2, false, DataType::BFLOAT16, 2,
-         {.uneven_readers = true, .streamed_write_back = true}},
+         {.uneven_readers = true, .streamed_write_back = true}, &dram_sharded::kDsPlanFf2Dec},
         {32, 4096, 6144, DataType::BFLOAT16, DataType::BFLOAT8_B, 4, 6, MathFidelity::HiFi2, true, DataType::BFLOAT16, 3,
-         {.uneven_readers = true, .streamed_write_back = true}},
+         {.uneven_readers = true, .streamed_write_back = true}, &dram_sharded::kDsPlanQkvDec},
         {32, 4096, 4096, DataType::BFLOAT16, DataType::BFLOAT8_B, 4, 4, MathFidelity::HiFi2, true, DataType::BFLOAT16, 3,
-         {.uneven_readers = true, .streamed_write_back = true}},
+         {.uneven_readers = true, .streamed_write_back = true}, &dram_sharded::kDsPlanWoDec},
     }};
     return table;
 }
@@ -469,13 +473,18 @@ inline std::optional<BhMatmulDramShardedRoute> bh_matmul_route_dram_sharded(
             r.fp32_dest_acc_en != fp32_dest_acc_en || r.output_dtype != params.output_dtype.value_or(a.dtype())) {
             continue;
         }
+        const auto& in0_shard = a.shard_spec();
+        if (!in0_shard.has_value() || in0_shard->shape[1] != r.in0_block_w * tt::constants::TILE_WIDTH ||
+            in0_shard->grid.num_cores() != r.plan->in0_storage_cores) {
+            return std::nullopt;
+        }
         const auto* readers = ds_reader_table(N / tt::constants::TILE_WIDTH, K / tt::constants::TILE_WIDTH);
         if (readers == nullptr || !ds_readers_match_device(a, *readers)) {
             return std::nullopt;
         }
         auto pc = *cfg;
         pc.num_workers_per_dram_bank = r.workers_per_bank;
-        return BhMatmulDramShardedRoute{.program_config = pc, .read_options = r.read_options};
+        return BhMatmulDramShardedRoute{.program_config = pc, .read_options = r.read_options, .plan = r.plan};
     }
     return std::nullopt;
 }

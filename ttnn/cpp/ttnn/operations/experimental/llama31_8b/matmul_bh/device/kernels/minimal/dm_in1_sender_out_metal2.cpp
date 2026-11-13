@@ -107,11 +107,7 @@ void kernel_main() {
 #endif
 
     const TensorShape2D in1_shape(K_tiles, N_tiles, padded_K_tiles, padded_N_tiles);
-#ifdef MM_WINDOW_BLOCKS
-    const TensorShape2D out_shape(MM_WINDOW_TOTAL_M_TILES, N_tiles, MM_WINDOW_TOTAL_M_TILES, padded_N_tiles);
-#else
     const TensorShape2D out_shape(M_tiles, N_tiles, padded_M_tiles, padded_N_tiles);
-#endif
     const TensorShape2D out0_shape(M_tiles, N_tiles_per_chunk, padded_M_tiles, N_tiles_per_chunk);
 
     constexpr uint32_t K_num_blocks = padded_K_tiles / K_block_tiles;
@@ -170,26 +166,9 @@ void kernel_main() {
 #endif
     OpSignaler srs_fuse_signaler;
     uint32_t mm_progress_counters_base = 0;
-#ifdef MM_WINDOW_BLOCKS
-    uint32_t M_window_start_tile = 0;
-    uint32_t rs_credit_counters_base = 0;
-    uint32_t num_rs_readers = 0;
-#endif
     if constexpr (is_output_writer) {
         srs_fuse_signaler = OpSignaler(srs_fuse_signaler_rt_args_idx);
         mm_progress_counters_base = get_arg_val<uint32_t>(srs_fuse_signaler_rt_args_idx++);
-#ifdef MM_WINDOW_BLOCKS
-        M_window_start_tile = get_arg_val<uint32_t>(srs_fuse_signaler_rt_args_idx++);
-        rs_credit_counters_base = get_arg_val<uint32_t>(srs_fuse_signaler_rt_args_idx++);
-        num_rs_readers = get_arg_val<uint32_t>(srs_fuse_signaler_rt_args_idx++);
-        if constexpr (is_output_writer) {
-            volatile tt_l1_ptr uint32_t* credits =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rs_credit_counters_base);
-            for (uint32_t r = 0; r < num_rs_readers; r++) {
-                credits[r] = 0;
-            }
-        }
-#endif
     }
 #endif
 
@@ -209,23 +188,6 @@ void kernel_main() {
     for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
         uint32_t m_tile = M_start_tile + m_block_iter * M_block_tiles;
         uint32_t m_tile_end = std::min(m_tile + M_block_tiles, M_end_tile);
-#ifdef MM_WINDOW_BLOCKS
-        if constexpr (is_output_writer) {
-            if (m_block_iter >= MM_WINDOW_BLOCKS) {
-                const uint32_t blocks_released_needed = m_block_iter - MM_WINDOW_BLOCKS + 1;
-                volatile tt_l1_ptr uint32_t* credits =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rs_credit_counters_base);
-                for (uint32_t r = 0; r < num_rs_readers; r++) {
-                    if (credits[r] < blocks_released_needed) {
-                        noc_semaphore_wait_min(&credits[r], blocks_released_needed);
-                    }
-                }
-            }
-            const uint32_t rows_in_block = m_tile_end - m_tile;
-            m_tile = M_window_start_tile + (m_block_iter % MM_WINDOW_BLOCKS) * M_block_tiles;
-            m_tile_end = m_tile + rows_in_block;
-        }
-#endif
 #ifdef FUSE_AG
         if constexpr (is_injector_core) {
             fused_op_receiver.reset();

@@ -15,6 +15,7 @@ set(TTNN_OP_EXPERIMENTAL_LLAMA31_8B_API_HEADERS
     matmul_bh/device/matmul_bh_l1.hpp
     matmul_bh/device/matmul_bh_device_operation.hpp
     matmul_bh/device/matmul_bh_shapes.hpp
+    matmul_bh/device/tables/dram_sharded_plan.hpp
     matmul_bh/device/tables/mcast_1d_plan.hpp
     matmul_bh/device/tables/mcast_2d_plan.hpp
     matmul_bh/device/tables/minimal_plan.hpp

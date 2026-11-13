@@ -40,7 +40,8 @@ ttnn::device_operation::ProgramArtifacts DramShardedProgramFactory::create_progr
     TT_FATAL(route.has_value(), "llama31_8b.matmul_bh: no DRAM-sharded program for this call");
     MatmulParams routed = operation_attributes;
     routed.program_config = route->program_config;
-    return dram_sharded::create_program_artifacts(routed, tensor_args, tensor_return_value, route->read_options);
+    return dram_sharded::create_program_artifacts(
+        routed, tensor_args, tensor_return_value, route->read_options, *route->plan);
 }
 
 bool covers(const MatmulParams& operation_attributes, const MatmulInputs& tensor_args) {
