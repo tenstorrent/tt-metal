@@ -7,6 +7,7 @@
 #include <mpi.h>
 #include <mpi-ext.h>
 
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -180,6 +181,21 @@ static double operation_timeout_seconds() {
     return (end != v && s > 0.0) ? s : 0.0;
 }
 
+// Teardown plan P10: a deadline for MPI_Init itself. MPI_Init is a cross-rank wire-up — a rank blocks in it until
+// every peer also calls MPI_Init — and it is not a DistributedContext collective, so the operation timeout cannot
+// reach it: a peer that never starts (a dead rank, or a start-up skew past any sane bound) would hang the job at
+// start-up. 0 (the default) keeps the unbounded wait, so a legitimately slow start is left alone; a positive value
+// bounds the wait for a peer to join MPI_Init.
+static double distributed_init_timeout_seconds() {
+    const char* v = std::getenv("TT_METAL_DISTRIBUTED_INIT_TIMEOUT_SECONDS");
+    if (v == nullptr || *v == '\0') {
+        return 0.0;
+    }
+    char* end = nullptr;
+    const double s = std::strtod(v, &end);
+    return (end != v && s > 0.0) ? s : 0.0;
+}
+
 // Drive a non-blocking request to completion, giving up after the operation timeout. On expiry the collective
 // cannot finish because a peer is wedged or gone, and every other rank is still waiting on it, so we tear the whole
 // job down (MPI_Abort, the P1 rule) rather than return locally and leave the peers hung; we also throw so the
@@ -315,8 +331,39 @@ inline void init_env(int& argc, char**& argv) {
                 });
             }
         }
+        // Teardown plan P10: bound MPI_Init so a peer that never joins the wire-up cannot hang the job at start-up.
+        // MPI is not yet initialized, so we cannot MPI_Abort from here; instead a watchdog thread _Exit()s this rank
+        // when the deadline passes (the launcher then ends every other rank). Disabled by default (timeout 0), so a
+        // legitimately slow start is untouched; the watchdog is cancelled the moment MPI_Init returns.
+        const double init_timeout = distributed_init_timeout_seconds();
+        std::atomic<bool> init_complete{false};
+        std::thread init_watchdog;
+        if (init_timeout > 0.0) {
+            init_watchdog = std::thread([init_timeout, &init_complete] {
+                const auto deadline = std::chrono::steady_clock::now() + std::chrono::duration<double>(init_timeout);
+                while (std::chrono::steady_clock::now() < deadline) {
+                    if (init_complete.load(std::memory_order_acquire)) {
+                        return;
+                    }
+                    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                }
+                if (!init_complete.load(std::memory_order_acquire)) {
+                    std::fprintf(
+                        stderr,
+                        "[MPIContext] MPI_Init did not complete within TT_METAL_DISTRIBUTED_INIT_TIMEOUT_SECONDS=%.0f "
+                        "s; a peer never joined the wire-up. Exiting so the launcher ends the job.\n",
+                        init_timeout);
+                    std::_Exit(EXIT_FAILURE);
+                }
+            });
+        }
         int provided = 0;
-        if (MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &provided) != MPI_SUCCESS) {
+        const int init_rc = MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &provided);
+        init_complete.store(true, std::memory_order_release);
+        if (init_watchdog.joinable()) {
+            init_watchdog.join();
+        }
+        if (init_rc != MPI_SUCCESS) {
             TT_THROW("MPI_Init_thread failed");
         }
         provided_thread_level = provided;
@@ -335,6 +382,10 @@ inline void init_env(int& argc, char**& argv) {
 
         // Teardown plan P1: a C++ rank that leaves through an uncaught exception (a TT_FATAL becomes one) must not
         // let its peers hang in a barrier. Abort the job so prterun ends every rank with a code instead.
+        // Teardown plan P8: end with _Exit, not std::abort(). std::abort() raises SIGABRT, which writes a core dump;
+        // with the core limit raised that can take tens of seconds, and the whole job waits for this rank to finish
+        // dumping before it ends. _Exit terminates immediately with no core dump (MPI_Abort has already signalled the
+        // other ranks), so the error path never stalls the job on a core write.
         std::set_terminate([] {
             std::fprintf(stderr, "[MPIContext] std::terminate: uncaught exception; aborting the distributed job\n");
             int inited = 0;
@@ -344,7 +395,7 @@ inline void init_env(int& argc, char**& argv) {
             if (inited != 0 && finalized == 0) {
                 MPI_Abort(MPI_COMM_WORLD, 1);
             }
-            std::abort();
+            std::_Exit(EXIT_FAILURE);
         });
 
         // Teardown plan P20: an error with no communicator (a peer's socket closing across hosts) is consulted on

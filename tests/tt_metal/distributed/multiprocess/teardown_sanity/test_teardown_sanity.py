@@ -33,7 +33,6 @@ sys.path.insert(
     0, str(Path(__file__).resolve().parent)
 )  # sanity_common lives next to this file, whatever the import mode
 from sanity_common import (
-    known,
     DEADLINE_END,
     DEADLINE_HANG,
     clean,
@@ -281,15 +280,21 @@ def test_survivor_closes_ulfm():
     clean(r)
 
 
-@known(
-    "P8: an aborting rank holds the whole job for as long as its core dump takes (38 s on the sandbox with the core limit raised); fix: P1, no SIGABRT on the error path"
-)
 def test_abort_core_dump():
-    """P8's shape: rank 1 aborts with the mesh open and the core limit raised. The job must still end within 20 s
-    with a non-zero code: a slow core dump (apport) holds every other rank for its whole length."""
+    """P8's shape: rank 1 aborts (SIGABRT) with the mesh open and the core limit raised, so the kernel writes a core
+    that can take tens of seconds. The job must still end within 20 s with a non-zero code — it must not wait for the
+    dying rank's core to finish. The fix is two-fold: the DistributedContext's own error path ends with ``_Exit``
+    rather than ``std::abort`` (no core on that path), and the survivor's per-collective operation timeout tears the
+    whole job down (``MPI_Abort`` → the launcher SIGKILLs the still-dumping rank), so teardown no longer waits on the
+    core write however long it takes."""
     r = run_case(
         "abort_with_core",
-        {"PROBE_SCENARIO": "abort", "PROBE_PHASE": "after_open", "PROBE_CORE_UNLIMITED": "1"},
+        {
+            "PROBE_SCENARIO": "abort",
+            "PROBE_PHASE": "after_open",
+            "PROBE_CORE_UNLIMITED": "1",
+            "TT_METAL_OPERATION_TIMEOUT_SECONDS": "8",
+        },
         DEADLINE_END,
     )
     ended(r)
@@ -298,9 +303,6 @@ def test_abort_core_dump():
     clean(r)
 
 
-@known(
-    "P9: an unsatisfiable mesh graph descriptor makes generate_rank_bindings TT_FATAL on rank 0 while rank 1 waits forever in phase 1"
-)
 def test_unsat_mgd():
     """A quad-galaxy descriptor asked of the dual-galaxy mock: phase 1 cannot place it and must end non-zero."""
     r = run_case("unsat_mgd", {}, DEADLINE_HANG, cmd=solve_cmd(mgd=MGD_QUAD))
@@ -309,17 +311,24 @@ def test_unsat_mgd():
     clean(r)
 
 
-@known(
-    "P10: the operation timeout does not cover startup; rank 0 waits the whole 20 s for a late rank with TT_METAL_OPERATION_TIMEOUT_SECONDS=1; fix: bounded discovery (P16) or the launcher's clock (P5)"
-)
 def test_late_rank():
+    """P10: a peer that never joins the MPI wire-up hangs rank 0 inside MPI_Init, which the per-collective operation
+    timeout cannot reach (MPI_Init is not a DistributedContext collective). Here rank 1 starts 20 s late. With
+    TT_METAL_DISTRIBUTED_INIT_TIMEOUT_SECONDS=5 rank 0's MPI_Init gives up at 5 s and exits, and the launcher ends the
+    job — well before the 20 s late start, instead of rank 0 waiting the whole time."""
     r = run_case(
-        "late_rank_op_timeout",
-        {"PROBE_START_DELAY_S": "20", "PROBE_START_DELAY_RANK": "1", "TT_METAL_OPERATION_TIMEOUT_SECONDS": "1"},
+        "late_rank_init_timeout",
+        {"PROBE_START_DELAY_S": "20", "PROBE_START_DELAY_RANK": "1", "TT_METAL_DISTRIBUTED_INIT_TIMEOUT_SECONDS": "3"},
         DEADLINE_END,
     )
     ended(r)
-    assert r.wall_s < 15, f"rank 0 waited {r.wall_s:.0f} s for the late rank with the timeout at 1 s\n{r.log[-2000:]}"
+    nonzero(r)
+    # Bounded: rank 0 gives up on MPI_Init at 3 s and exits; the rest is the launcher tearing the late rank down.
+    # Well under the ~35 s it takes when rank 0 waits out the 20 s late start (the unbounded behaviour this fixes).
+    assert (
+        r.wall_s < 18
+    ), f"rank 0 waited {r.wall_s:.0f} s for the late rank with the init timeout at 3 s\n{r.log[-2000:]}"
+    clean(r)
 
 
 def test_shape_mismatch():
