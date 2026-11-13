@@ -17,7 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 import torch
 
 import ttnn
-from models.demos.blackhole.hy4_preview.config import Hy4Config
+from models.demos.blackhole.hy4_preview.config import DENSE, FULL, Hy4Config
 from models.demos.blackhole.hy4_preview.tt import hy4_dense as D
 from models.demos.blackhole.hy4_preview.tt.hy4_attention import Hy4Attention
 from models.demos.blackhole.hy4_preview.tt.hy4_common import compute_cfg, upload
@@ -158,7 +158,7 @@ class Hy4ChainLayer:
             self.attn.indexer.idx_rope_first = ch.idx_rope_first
         self.t_attn = time.time() - t0
         t0 = time.time()
-        if self.spec.mlp == "DENSE":
+        if self.spec.mlp == DENSE:
             t = lambda k: sd[k].T.contiguous().to(torch.bfloat16)[None, None]
             self.dense = D.make_dense(
                 md, t("mlp.gate_proj.weight"), t("mlp.up_proj.weight"), t("mlp.down_proj.weight"), decode=False
@@ -192,7 +192,7 @@ class Hy4ChainLayer:
     def _mlp_prefill(self, h):
         """h [1,1,n,D] bf16 (normed) -> y [1,1,n,D] bf16 replicated over the columns."""
         ch = self.ch
-        if self.spec.mlp == "DENSE":
+        if self.spec.mlp == DENSE:
             return D.allreduce_cols(self.dense.forward(h))
         from models.demos.blackhole.hy4_preview.tt.hy4_prefill_moe import COLS, moe_cols
 
@@ -222,10 +222,10 @@ class Hy4ChainLayer:
         h = self._norm(raw, self.w_in)
         ttnn.deallocate(raw)
         src = self.spec.indexer_source
-        ids_in = None if self.spec.indexer == "FULL" else ids_by_layer[src]
+        ids_in = None if self.spec.indexer == FULL else ids_by_layer[src]
         a, ids = self.attn.prefill_chunk(h, start, ids_in=ids_in)
         ttnn.deallocate(h)
-        if self.spec.indexer == "FULL":
+        if self.spec.indexer == FULL:
             if self.L in ids_by_layer:
                 ttnn.deallocate(ids_by_layer[self.L])
             ids_by_layer[self.L] = ids
