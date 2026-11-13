@@ -20,7 +20,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_sdpa_bw(
     uint32_t ring_size,
     uint32_t ring_axis,
     uint32_t step,
-    AttentionMaskType mask_type,
+    const ops::RingStepMasks& step_masks,
     RingDirection ring_direction,
     const std::optional<ttnn::Tensor>& preallocated_grad_query,
     const std::optional<ttnn::Tensor>& preallocated_grad_key,
@@ -36,7 +36,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_sdpa_bw(
         ring_size,
         ring_axis,
         step,
-        mask_type,
+        step_masks,
         ring_direction,
         preallocated_grad_query);
 
@@ -51,7 +51,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_sdpa_bw(
         ring_size,
         ring_axis,
         step,
-        mask_type,
+        step_masks,
         ring_direction,
         preallocated_grad_key,
         preallocated_grad_value);

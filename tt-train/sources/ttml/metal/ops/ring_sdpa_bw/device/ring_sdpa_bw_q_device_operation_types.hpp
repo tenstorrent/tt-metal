@@ -5,6 +5,7 @@
 #pragma once
 
 #include "metal/common/const_utils.hpp"
+#include "metal/ops/common/ring_sdpa_utils.hpp"
 #include "metal/ttnn_all_includes.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn_fixed/distributed/ttnn_ops.hpp"
@@ -19,7 +20,7 @@ struct RingSDPABwQParams {
     uint32_t ring_size = 0;
     uint32_t ring_axis = 0;
     uint32_t step = 0;
-    ttml::metal::AttentionMaskType mask_type = ttml::metal::AttentionMaskType::None;
+    RingStepMasks step_masks = contiguous_ring_step_masks(ttml::metal::AttentionMaskType::None);
     RingDirection ring_direction =
         ttnn_fixed::distributed::RingShiftDirection::Backward;  // Direction K/V is shifting in the ring
 };

@@ -36,7 +36,7 @@ RingSDPAFwProgramFactory::cached_mesh_workload_t RingSDPAFwProgramFactory::creat
     const uint32_t ring_axis = operation_attributes.ring_axis;
     const uint32_t ring_size = operation_attributes.ring_size;
     const uint32_t step = operation_attributes.step;
-    const auto mask_type = operation_attributes.mask_type;
+    const auto& step_masks = operation_attributes.step_masks;
     const auto ring_direction = operation_attributes.ring_direction;
 
     TT_FATAL(ring_axis < mesh_shape.dims(), "Ring axis {} must be < mesh dimensions {}", ring_axis, mesh_shape.dims());
@@ -49,12 +49,11 @@ RingSDPAFwProgramFactory::cached_mesh_workload_t RingSDPAFwProgramFactory::creat
         uint32_t device_ring_id = mesh_coord[ring_axis];
 
         // Check if this device should execute at this step and which mask to use
-        auto [should_execute, effective_mask_type] =
-            get_device_execution_info(device_ring_id, step, ring_size, mask_type, ring_direction);
-
-        if (!should_execute) {
+        const auto step_mask = get_ring_step_mask(device_ring_id, step, ring_size, ring_direction, step_masks);
+        if (!step_mask.has_value()) {
             continue;
         }
+        const auto effective_mask_type = step_mask.value();
 
         // Create SDPA forward operation with the effective mask type
         // No explicit mask tensor needed - SDPA kernel generates causal mask internally
@@ -94,6 +93,7 @@ RingSDPAFwProgramFactory::cached_mesh_workload_t RingSDPAFwProgramFactory::creat
         shared_vars[single_coord_range] = std::move(ring_vars);
     }
 
+    TT_FATAL(!shared_vars.empty(), "Ring SDPA step {}: no device executes under these step masks", step);
     return cached_mesh_workload_t(std::move(mesh_workload), std::move(shared_vars));
 }
 
@@ -115,7 +115,7 @@ void RingSDPAFwProgramFactory::override_runtime_arguments(
     const uint32_t ring_axis = operation_attributes.ring_axis;
     const uint32_t ring_size = operation_attributes.ring_size;
     const uint32_t step = operation_attributes.step;
-    const auto mask_type = operation_attributes.mask_type;
+    const auto& step_masks = operation_attributes.step_masks;
     const auto ring_direction = operation_attributes.ring_direction;
 
     // Iterate over cached programs and update runtime arguments
@@ -127,9 +127,9 @@ void RingSDPAFwProgramFactory::override_runtime_arguments(
 
         // Determine effective mask type for this device
         uint32_t device_ring_id = start_coord[ring_axis];
-        auto [should_execute, effective_mask_type] =
-            get_device_execution_info(device_ring_id, step, ring_size, mask_type, ring_direction);
-        (void)should_execute;  // Already filtered in create_mesh_workload
+        const auto step_mask = get_ring_step_mask(device_ring_id, step, ring_size, ring_direction, step_masks);
+        TT_FATAL(step_mask.has_value(), "Cached ring SDPA program found for a device that skips step {}", step);
+        const auto effective_mask_type = step_mask.value();
 
         // Create SDPA attributes and tensor args
         std::optional<ttnn::Tensor> mask_opt = std::nullopt;

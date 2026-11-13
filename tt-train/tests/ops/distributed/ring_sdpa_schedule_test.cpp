@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Host-side tests for the ring SDPA causal schedule (get_device_execution_info).
+ * Host-side tests for the ring SDPA causal schedule (get_device_execution_info, and
+ * get_ring_step_mask with the contiguous and striped step masks).
  *
  * The function is pure, so these run without any device. They pin the schedule
  * both program factories share — in particular the Forward-direction source
@@ -14,13 +15,20 @@
 #include <gtest/gtest.h>
 
 #include <initializer_list>
+#include <vector>
 
 #include "metal/ops/common/ring_sdpa_utils.hpp"
+#include "ops/distributed/ring_attention_sdpa.hpp"
 
 namespace {
 
 using ttml::metal::AttentionMaskType;
+using ttml::metal::ops::contiguous_ring_step_masks;
 using ttml::metal::ops::get_device_execution_info;
+using ttml::metal::ops::get_ring_step_mask;
+using ttml::metal::ops::RingStepMasks;
+using ttml::ops::distributed::detail::kStripedOnQuery;
+using ttml::ops::distributed::detail::kStripedOnShiftedQuery;
 using ttml::ttnn_fixed::distributed::RingShiftDirection;
 
 uint32_t source_device(uint32_t device, uint32_t step, uint32_t ring_size, RingShiftDirection direction) {
@@ -130,4 +138,104 @@ TEST(RingSDPAScheduleTest, CausalScheduleInvariants) {
             }
         }
     }
+}
+
+// Striped ring of 4, Backward direction (src = (d + step) mod 4): every device runs a causal
+// block at every step under exactly one of the two striped tables, the shifted-query one
+// exactly when src > d.
+TEST(RingSDPAScheduleTest, StripedRing4BackwardTable) {
+    struct Row {
+        uint32_t device;
+        uint32_t step;
+        bool shifted;
+    };
+    static constexpr Row kRows[] = {
+        {0, 0, false},
+        {0, 1, true},
+        {0, 2, true},
+        {0, 3, true},  // device 0: src 1, 2, 3 > 0
+        {1, 0, false},
+        {1, 1, true},
+        {1, 2, true},
+        {1, 3, false},  // src 2, 3 > 1; src 0 < 1
+        {2, 0, false},
+        {2, 1, true},
+        {2, 2, false},
+        {2, 3, false},  // src 3 > 2; src 0, 1 < 2
+        {3, 0, false},
+        {3, 1, false},
+        {3, 2, false},
+        {3, 3, false},  // device 3: every src <= 3
+    };
+    for (const auto& row : kRows) {
+        const auto on_query =
+            get_ring_step_mask(row.device, row.step, 4U, RingShiftDirection::Backward, kStripedOnQuery);
+        const auto on_shifted =
+            get_ring_step_mask(row.device, row.step, 4U, RingShiftDirection::Backward, kStripedOnShiftedQuery);
+        EXPECT_NE(on_query.has_value(), on_shifted.has_value()) << "device " << row.device << " step " << row.step;
+        EXPECT_EQ(on_shifted.has_value(), row.shifted) << "device " << row.device << " step " << row.step;
+        EXPECT_EQ(on_query.value_or(on_shifted.value_or(AttentionMaskType::None)), AttentionMaskType::Causal)
+            << "device " << row.device << " step " << row.step;
+    }
+}
+
+// Token-level check of the whole striped ring attention: global token p lives on device p mod N
+// as local row p div N. At each (device d, step) the scheduled block is a causal SDPA call over
+// local rows, on the query itself (row l sees keys m <= l) or on the query shifted up one row
+// (kernel row r is query r + 1 and sees keys m <= r; the last kernel row is junk and discarded).
+// Every causally visible (query, key) pair of the global sequence must be computed exactly once
+// and no masked pair ever, for both ring directions and ring sizes that are and are not powers
+// of two.
+TEST(RingSDPAScheduleTest, StripedCoversCausalTriangleExactlyOnce) {
+    for (auto direction : {RingShiftDirection::Forward, RingShiftDirection::Backward}) {
+        for (uint32_t ring_size : {1U, 2U, 3U, 4U, 5U, 8U}) {
+            for (uint32_t local_len : {1U, 2U, 5U}) {
+                const uint32_t seq_len = ring_size * local_len;
+                std::vector<int> count(static_cast<size_t>(seq_len) * seq_len, 0);
+                for (uint32_t device = 0; device < ring_size; ++device) {
+                    for (uint32_t step = 0; step < ring_size; ++step) {
+                        const auto on_query = get_ring_step_mask(device, step, ring_size, direction, kStripedOnQuery);
+                        const auto on_shifted =
+                            get_ring_step_mask(device, step, ring_size, direction, kStripedOnShiftedQuery);
+                        ASSERT_NE(on_query.has_value(), on_shifted.has_value());
+                        ASSERT_EQ(
+                            on_query.value_or(on_shifted.value_or(AttentionMaskType::None)), AttentionMaskType::Causal);
+                        const bool shifted = on_shifted.has_value();
+                        const uint32_t src = source_device(device, step, ring_size, direction);
+                        for (uint32_t row = 0; row < local_len; ++row) {
+                            // Real local query row this kernel row computes, if any.
+                            const uint32_t query_row = shifted ? row + 1U : row;
+                            if (query_row >= local_len) {
+                                continue;  // junk row of the shifted query
+                            }
+                            for (uint32_t key_row = 0; key_row <= row; ++key_row) {
+                                const uint32_t q = query_row * ring_size + device;
+                                const uint32_t k = key_row * ring_size + src;
+                                ++count[static_cast<size_t>(q) * seq_len + k];
+                            }
+                        }
+                    }
+                }
+                for (uint32_t q = 0; q < seq_len; ++q) {
+                    for (uint32_t k = 0; k < seq_len; ++k) {
+                        EXPECT_EQ(count[static_cast<size_t>(q) * seq_len + k], k <= q ? 1 : 0)
+                            << "ring " << ring_size << " local " << local_len << " direction "
+                            << static_cast<int>(direction) << " query " << q << " key " << k;
+                    }
+                }
+            }
+        }
+    }
+}
+
+// The program hash must tell a skipped step from an unmasked one.
+TEST(RingSDPAScheduleTest, StepMasksHashDistinguishesSkipFromNone) {
+    const RingStepMasks skip_after{.src_before = AttentionMaskType::None, .src_self = AttentionMaskType::None};
+    const RingStepMasks none_after{
+        .src_before = AttentionMaskType::None,
+        .src_self = AttentionMaskType::None,
+        .src_after = AttentionMaskType::None};
+    EXPECT_NE(skip_after.to_hash(), none_after.to_hash());
+    EXPECT_NE(kStripedOnQuery.to_hash(), kStripedOnShiftedQuery.to_hash());
+    EXPECT_NE(kStripedOnQuery.to_hash(), contiguous_ring_step_masks(AttentionMaskType::Causal).to_hash());
 }

@@ -5,9 +5,12 @@
 #pragma once
 
 #include <cstdint>
+#include <initializer_list>
+#include <optional>
 #include <string_view>
 #include <tt-metalium/constants.hpp>
 #include <tt_stl/assert.hpp>
+#include <tt_stl/reflection.hpp>
 #include <utility>
 
 #include "metal/common/const_utils.hpp"
@@ -16,47 +19,78 @@
 
 namespace ttml::metal::ops {
 
-// Determine if a device should execute at this ring step and which mask type to use.
-// Shared by the ring_sdpa_fw and ring_sdpa_bw program factories, which must agree on
-// the schedule: the backward relies on skipping exactly the (device, step) pairs the
-// forward skipped.
-// Returns: (should_execute, mask_type_to_use)
-//
-// At step s, device d processes the K/V chunk originating from source device:
+// Source device of the K/V a device holds at a ring step:
 // - Backward ring direction: src = (d + s) mod ring_size
 // - Forward ring direction:  src = (d - s) mod ring_size
-// Causal logic on the source chunk:
-// - src == d: diagonal chunk, apply causal mask
-// - src < d:  earlier chunk, full attention (no mask)
-// - src > d:  later chunk, fully masked, skip
+inline uint32_t get_ring_source_device(
+    uint32_t device_ring_id,
+    uint32_t step,
+    uint32_t ring_size,
+    ttnn_fixed::distributed::RingShiftDirection ring_direction) {
+    if (ring_direction == ttnn_fixed::distributed::RingShiftDirection::Backward) {
+        return (device_ring_id + step) % ring_size;
+    }
+    // Reduce step mod ring_size before subtracting so the uint32 expression cannot
+    // underflow: plain (d - s + ring_size) wraps mod 2^32 when s > d, which is only
+    // correct for power-of-2 ring sizes.
+    return (device_ring_id + ring_size - (step % ring_size)) % ring_size;
+}
+
+// Mask a device applies at one ring step, keyed by where its current K/V came from
+// relative to it in the ring. std::nullopt means the device skips the step.
+struct RingStepMasks {
+    std::optional<AttentionMaskType> src_before = std::nullopt;  // src < d
+    std::optional<AttentionMaskType> src_self = std::nullopt;    // src == d
+    std::optional<AttentionMaskType> src_after = std::nullopt;   // src > d
+
+    bool operator==(const RingStepMasks&) const = default;
+
+    // Explicit so that a skip never hashes like AttentionMaskType::None.
+    ttsl::hash::hash_t to_hash() const {
+        const auto encode = [](const std::optional<AttentionMaskType>& mask) -> uint32_t {
+            return mask.has_value() ? 1U + static_cast<uint32_t>(mask.value()) : 0U;
+        };
+        return ttsl::hash::hash_objects(
+            ttsl::hash::hash_t{0}, encode(src_before), encode(src_self), encode(src_after));
+    }
+};
+
+// Contiguous sharding (rank d holds the d-th slice of the sequence). Causal: the diagonal
+// chunk is causal, earlier chunks are unmasked, later chunks are skipped. Any other mask
+// applies to every chunk.
+inline RingStepMasks contiguous_ring_step_masks(AttentionMaskType mask_type) {
+    if (mask_type == AttentionMaskType::Causal) {
+        return {.src_before = AttentionMaskType::None, .src_self = AttentionMaskType::Causal};
+    }
+    return {.src_before = mask_type, .src_self = mask_type, .src_after = mask_type};
+}
+
+// Mask a device applies at this ring step, or std::nullopt if it skips the step. Shared by
+// the ring_sdpa_fw and ring_sdpa_bw program factories, which must agree: the backward relies
+// on skipping exactly the (device, step) pairs the forward skipped.
+inline std::optional<AttentionMaskType> get_ring_step_mask(
+    uint32_t device_ring_id,
+    uint32_t step,
+    uint32_t ring_size,
+    ttnn_fixed::distributed::RingShiftDirection ring_direction,
+    const RingStepMasks& masks) {
+    const uint32_t src_device = get_ring_source_device(device_ring_id, step, ring_size, ring_direction);
+    if (src_device < device_ring_id) {
+        return masks.src_before;
+    }
+    return src_device == device_ring_id ? masks.src_self : masks.src_after;
+}
+
+// Contiguous schedule as (should_execute, mask_type_to_use).
 inline std::pair<bool, AttentionMaskType> get_device_execution_info(
     uint32_t device_ring_id,
     uint32_t step,
     uint32_t ring_size,
     AttentionMaskType mask_type,
     ttnn_fixed::distributed::RingShiftDirection ring_direction) {
-    if (mask_type != AttentionMaskType::Causal) {
-        // Non-causal: all devices execute with full attention
-        return {true, AttentionMaskType::None};
-    }
-
-    uint32_t src_device = 0;
-    if (ring_direction == ttnn_fixed::distributed::RingShiftDirection::Backward) {
-        src_device = (device_ring_id + step) % ring_size;
-    } else {
-        // Reduce step mod ring_size before subtracting so the uint32 expression cannot
-        // underflow: plain (d - s + ring_size) wraps mod 2^32 when s > d, which is only
-        // correct for power-of-2 ring sizes.
-        src_device = (device_ring_id + ring_size - (step % ring_size)) % ring_size;
-    }
-
-    if (src_device == device_ring_id) {
-        return {true, AttentionMaskType::Causal};  // Diagonal: use causal mask
-    } else if (src_device < device_ring_id) {
-        return {true, AttentionMaskType::None};  // Earlier: full attention (no mask)
-    } else {
-        return {false, AttentionMaskType::None};  // Later: skip
-    }
+    const auto mask =
+        get_ring_step_mask(device_ring_id, step, ring_size, ring_direction, contiguous_ring_step_masks(mask_type));
+    return {mask.has_value(), mask.value_or(AttentionMaskType::None)};
 }
 
 // Common attribute validation for the ring SDPA device operations. The ring factories
@@ -69,9 +103,11 @@ inline void validate_ring_attributes(const RingAttrs& attrs, const ttnn::Tensor&
     TT_FATAL(attrs.step < attrs.ring_size, "Step {} must be < ring_size {}", attrs.step, attrs.ring_size);
     // The ring path has no way to feed a mask tensor to the underlying SDPA kernels, so
     // Arbitrary would silently degrade to full attention.
-    TT_FATAL(
-        attrs.mask_type != AttentionMaskType::Arbitrary,
-        "Ring SDPA does not support Arbitrary attention masks, use None or Causal");
+    for (const auto& mask : {attrs.step_masks.src_before, attrs.step_masks.src_self, attrs.step_masks.src_after}) {
+        TT_FATAL(
+            mask != AttentionMaskType::Arbitrary,
+            "Ring SDPA does not support Arbitrary attention masks, use None or Causal");
+    }
 
     const auto mesh_shape = query.device()->shape();
     TT_FATAL(

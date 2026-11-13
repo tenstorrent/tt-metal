@@ -270,6 +270,28 @@ static xt::xarray<float> create_causal_mask(size_t seq_len) {
     return mask;
 }
 
+// Striped layout: global token p lives on rank p mod N as local row p div N, so the device-order
+// sequence (rank-major after sharding) at position d * S_local + l holds global token l * N + d.
+// Reorders (B, H, S, D) along S: forward maps natural order to the striped device order,
+// inverse maps it back.
+static xt::xarray<float> striped_permute(const xt::xarray<float>& x, size_t ring_size, bool forward) {
+    const size_t B = x.shape()[0], H = x.shape()[1], S = x.shape()[2], D = x.shape()[3];
+    const size_t local = S / ring_size;
+    xt::xarray<float> out = xt::empty<float>(x.shape());
+    for (size_t bh = 0; bh < B * H; ++bh) {
+        for (size_t d = 0; d < ring_size; ++d) {
+            for (size_t l = 0; l < local; ++l) {
+                const size_t device_pos = d * local + l;
+                const size_t global_pos = l * ring_size + d;
+                const size_t from = forward ? global_pos : device_pos;
+                const size_t to = forward ? device_pos : global_pos;
+                std::copy_n(x.data() + (bh * S + from) * D, D, out.data() + (bh * S + to) * D);
+            }
+        }
+    }
+    return out;
+}
+
 static void TestRingAttention(
     const size_t batch,
     const size_t num_heads,
@@ -277,8 +299,12 @@ static void TestRingAttention(
     const size_t head_dim,
     const bool test_backward = false,
     const float rtol = 1e-2F,
-    const float atol = 5e-1F) {
+    const float atol = 5e-1F,
+    const ttml::ops::distributed::RingAttentionLayout layout = ttml::ops::distributed::RingAttentionLayout::Contiguous,
+    const float input_low = 0.0F,
+    const float input_high = 2.0F) {
     using namespace ttml;
+    const bool striped = layout == ops::distributed::RingAttentionLayout::Striped;
 
     auto* device = &autograd::ctx().get_device();
     auto mesh_shape = device->shape();
@@ -297,9 +323,11 @@ static void TestRingAttention(
     const auto query_seed = rng();
     const auto key_seed = rng();
     const auto value_seed = rng();
-    xt::xarray<float> query_xt = ttml::test_utils::make_uniform_xarray<float>(qkv_shape, 0.0F, 2.0F, query_seed);
-    xt::xarray<float> key_xt = ttml::test_utils::make_uniform_xarray<float>(qkv_shape, 0.0F, 2.0F, key_seed);
-    xt::xarray<float> value_xt = ttml::test_utils::make_uniform_xarray<float>(qkv_shape, 0.0F, 2.0F, value_seed);
+    xt::xarray<float> query_xt =
+        ttml::test_utils::make_uniform_xarray<float>(qkv_shape, input_low, input_high, query_seed);
+    xt::xarray<float> key_xt = ttml::test_utils::make_uniform_xarray<float>(qkv_shape, input_low, input_high, key_seed);
+    xt::xarray<float> value_xt =
+        ttml::test_utils::make_uniform_xarray<float>(qkv_shape, input_low, input_high, value_seed);
 
     // Reference mask (full causal): the op is exercised with AttentionMaskType::Causal,
     // where the device generates the causal mask internally.
@@ -311,12 +339,17 @@ static void TestRingAttention(
     const auto key_mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, /*dim=*/2, cp_axis);
     const auto value_mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, /*dim=*/2, cp_axis);
 
-    auto query_tt =
-        core::from_xtensor<float, ttnn::DataType::BFLOAT16>(query_xt, device, ttnn::Layout::TILE, query_mapper.get());
-    auto key_tt =
-        core::from_xtensor<float, ttnn::DataType::BFLOAT16>(key_xt, device, ttnn::Layout::TILE, key_mapper.get());
-    auto value_tt =
-        core::from_xtensor<float, ttnn::DataType::BFLOAT16>(value_xt, device, ttnn::Layout::TILE, value_mapper.get());
+    // The device sees the sequence in the layout under test; the reference stays in natural order.
+    auto to_device_layout = [&](const xt::xarray<float>& x) { return striped ? striped_permute(x, cp_size, true) : x; };
+    auto from_device_layout = [&](const xt::xarray<float>& x) {
+        return striped ? striped_permute(x, cp_size, false) : x;
+    };
+    auto query_tt = core::from_xtensor<float, ttnn::DataType::BFLOAT16>(
+        to_device_layout(query_xt), device, ttnn::Layout::TILE, query_mapper.get());
+    auto key_tt = core::from_xtensor<float, ttnn::DataType::BFLOAT16>(
+        to_device_layout(key_xt), device, ttnn::Layout::TILE, key_mapper.get());
+    auto value_tt = core::from_xtensor<float, ttnn::DataType::BFLOAT16>(
+        to_device_layout(value_xt), device, ttnn::Layout::TILE, value_mapper.get());
 
     auto query_tensor = autograd::create_tensor(query_tt, /* requires_grad */ true);
     auto key_tensor = autograd::create_tensor(key_tt, /* requires_grad */ true);
@@ -325,7 +358,7 @@ static void TestRingAttention(
     // No explicit mask tensor: the op rejects one in CP mode; causal masking comes from
     // mask_type and is generated on device.
     auto output_tensor = ops::distributed::ring_attention_sdpa(
-        query_tensor, key_tensor, value_tensor, /*mask=*/std::nullopt, ttml::metal::AttentionMaskType::Causal);
+        query_tensor, key_tensor, value_tensor, /*mask=*/std::nullopt, ttml::metal::AttentionMaskType::Causal, layout);
 
     // Gather output from all devices
     auto output_xtensors = core::to_xtensor<float>(output_tensor->get_value(), core::IdentityComposer{});
@@ -347,20 +380,23 @@ static void TestRingAttention(
         }
     }
 
+    gathered_output = from_device_layout(gathered_output);
+    // xt::allclose does not reject NaN/inf on its own.
+    EXPECT_TRUE(xt::all(xt::isfinite(gathered_output))) << "Ring attention output has non-finite values";
     EXPECT_TRUE(xt::allclose(ref_result.output, gathered_output, rtol, atol))
         << "Ring attention output does not match reference SDPA output";
 
     if (test_backward) {
         const auto grad_seed = rng();
         xt::xarray<float> grad_output_xt =
-            ttml::test_utils::make_uniform_xarray<float>(qkv_shape, 0.0F, 2.0F, grad_seed);
+            ttml::test_utils::make_uniform_xarray<float>(qkv_shape, input_low, input_high, grad_seed);
 
         auto ref_grads = reference_sdpa_backward(
             query_xt, key_xt, value_xt, ref_result.attention_weights, grad_output_xt, ref_result.scale);
 
         const auto grad_mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, /*dim=*/2, cp_axis);
         auto grad_tt = core::from_xtensor<float, ttnn::DataType::BFLOAT16>(
-            grad_output_xt, device, ttnn::Layout::TILE, grad_mapper.get());
+            to_device_layout(grad_output_xt), device, ttnn::Layout::TILE, grad_mapper.get());
 
         output_tensor->set_grad(grad_tt);
         output_tensor->backward();
@@ -399,6 +435,10 @@ static void TestRingAttention(
         // implementation at <= 0.7x of this grade across 32 seeds, while softmax-backward
         // math errors (wrong u, double scale) overshoot it 25-1000x, so detection
         // power is intact.
+        gathered_dQ = from_device_layout(gathered_dQ);
+        gathered_dK = from_device_layout(gathered_dK);
+        gathered_dV = from_device_layout(gathered_dV);
+
         const float bw_rtol = 3e-2F;
         const float bw_atol = 5e-2F;
         // dK is the only gradient whose accumulation length is the query sequence
@@ -414,6 +454,10 @@ static void TestRingAttention(
             return "max_abs_diff=" + std::to_string(max_abs) + " max_rel_diff=" + std::to_string(max_rel) +
                    " ref_amax=" + std::to_string(ref_amax);
         };
+        EXPECT_TRUE(
+            xt::all(xt::isfinite(gathered_dQ)) && xt::all(xt::isfinite(gathered_dK)) &&
+            xt::all(xt::isfinite(gathered_dV)))
+            << "Ring attention gradients have non-finite values";
         EXPECT_TRUE(xt::allclose(ref_grads.dQ, gathered_dQ, bw_rtol, bw_atol))
             << "Ring attention dQ gradient does not match reference: " << report(ref_grads.dQ, gathered_dQ);
         EXPECT_TRUE(xt::allclose(ref_grads.dK, gathered_dK, bw_rtol, dk_atol))
@@ -491,4 +535,63 @@ TEST_F(GalaxyRingSDPATest, LargerSequenceCausalMaskBackward) {
         /*seq_len=*/256,
         /*head_dim=*/64,
         /*test_backward=*/true);
+}
+
+// Striped layout (causal load balancing): global token p on rank p mod N as local row p div N.
+// The host permutes Q/K/V/dO into that layout and un-permutes the results, so the reference is
+// unchanged. Ranks with K/V from a later rank run the strict-causal block on the query shifted
+// up one row; every rank runs a causal block at every step. S_local = 128 (4 tiles).
+TEST_F(GalaxyRingSDPATest, StripedCausalMaskBackward) {
+    TestRingAttention(
+        /*batch=*/1,
+        /*num_heads=*/4,
+        /*seq_len=*/1024,
+        /*head_dim=*/64,
+        /*test_backward=*/true,
+        /*rtol=*/1e-2F,
+        /*atol=*/5e-1F,
+        ttml::ops::distributed::RingAttentionLayout::Striped);
+}
+
+TEST_F(GalaxyRingSDPATest, StripedLargerBatchCausalMaskBackward) {
+    TestRingAttention(
+        /*batch=*/4,
+        /*num_heads=*/8,
+        /*seq_len=*/1024,
+        /*head_dim=*/64,
+        /*test_backward=*/true,
+        /*rtol=*/1e-2F,
+        /*atol=*/5e-1F,
+        ttml::ops::distributed::RingAttentionLayout::Striped);
+}
+
+// S_local = 96 is an odd number of tiles.
+TEST_F(GalaxyRingSDPATest, StripedOddTileCountCausalMaskBackward) {
+    TestRingAttention(
+        /*batch=*/1,
+        /*num_heads=*/4,
+        /*seq_len=*/768,
+        /*head_dim=*/64,
+        /*test_backward=*/true,
+        /*rtol=*/1e-2F,
+        /*atol=*/5e-1F,
+        ttml::ops::distributed::RingAttentionLayout::Striped);
+}
+
+// Zero-mean inputs put the attention logits near 0 (with U(0, 2) inputs every row's logsumexp is
+// about 8 or more, so a spurious partial result with a logsumexp near 0, e.g. a wrong fill value
+// when the shifted results are realigned, would carry weight e^-8 and hide inside the tolerance).
+// Outputs are O(1), so the forward check is tight.
+TEST_F(GalaxyRingSDPATest, StripedZeroMeanInputsCausalMaskBackward) {
+    TestRingAttention(
+        /*batch=*/1,
+        /*num_heads=*/4,
+        /*seq_len=*/1024,
+        /*head_dim=*/64,
+        /*test_backward=*/true,
+        /*rtol=*/1e-2F,
+        /*atol=*/2e-2F,
+        ttml::ops::distributed::RingAttentionLayout::Striped,
+        /*input_low=*/-1.0F,
+        /*input_high=*/1.0F);
 }

@@ -24,7 +24,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_sdpa_bw(
     uint32_t ring_size,
     uint32_t ring_axis,
     uint32_t step,
-    AttentionMaskType mask_type = AttentionMaskType::None,
+    const ops::RingStepMasks& step_masks = ops::contiguous_ring_step_masks(AttentionMaskType::None),
     RingDirection ring_direction = RingDirection::Backward,
     const std::optional<ttnn::Tensor>& preallocated_grad_query = std::nullopt,
     const std::optional<ttnn::Tensor>& preallocated_grad_key = std::nullopt,

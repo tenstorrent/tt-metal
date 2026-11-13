@@ -16,7 +16,10 @@
 namespace ttml::modules::distributed {
 
 DistributedGroupedQueryAttention::DistributedGroupedQueryAttention(const GQAConfig& config) :
-    m_embedding_dim(config.embedding_dim), m_num_heads(config.num_heads), m_num_groups(config.num_groups) {
+    m_embedding_dim(config.embedding_dim),
+    m_num_heads(config.num_heads),
+    m_num_groups(config.num_groups),
+    m_cp_layout(config.cp_layout) {
     const auto& pctx = autograd::ctx().get_parallelism_context();
     auto tp_axis = pctx.get_tp_axis();
     auto tp_size = pctx.get_tp_size();
@@ -115,7 +118,12 @@ ttml::autograd::TensorPtr DistributedGroupedQueryAttention::operator()(
             !mask.has_value(),
             "Non-causal mask is not supported in CP mode for now, pass nullopt if you want to use causal mask");
         attention = ops::distributed::ring_attention_sdpa(
-            query_with_heads, key_with_heads, value_with_heads, std::nullopt, ttml::metal::AttentionMaskType::Causal);
+            query_with_heads,
+            key_with_heads,
+            value_with_heads,
+            std::nullopt,
+            ttml::metal::AttentionMaskType::Causal,
+            m_cp_layout);
     } else {
         attention = ops::scaled_dot_product_attention(query_with_heads, key_with_heads, value_with_heads, mask);
     }

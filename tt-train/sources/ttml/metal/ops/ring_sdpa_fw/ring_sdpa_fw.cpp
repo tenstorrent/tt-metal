@@ -15,7 +15,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_sdpa_fw(
     uint32_t ring_size,
     uint32_t ring_axis,
     uint32_t step,
-    AttentionMaskType mask_type,
+    const ops::RingStepMasks& step_masks,
     ops::ring_sdpa_fw::RingDirection ring_direction,
     const std::optional<ttnn::Tensor>& preallocated_output,
     const std::optional<ttnn::Tensor>& preallocated_intermediates) {
@@ -26,7 +26,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_sdpa_fw(
         ring_size,
         ring_axis,
         step,
-        mask_type,
+        step_masks,
         ring_direction,
         preallocated_output,
         preallocated_intermediates);

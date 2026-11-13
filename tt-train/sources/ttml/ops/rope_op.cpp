@@ -193,7 +193,8 @@ std::pair<ttnn::Tensor, ttnn::Tensor> gen_freqs(
     uint32_t sequence_length,
     float theta,
     const RopeScalingParams& p,
-    const ttnn::distributed::TensorToMesh* mesh_mapper) {
+    const ttnn::distributed::TensorToMesh* mesh_mapper,
+    uint32_t striped_cp_size) {
     // pair indices: 0,0,1,1,2,2,... size=head_dim
     xt::xarray<uint32_t> pair_idx_u = xt::arange<uint32_t>(head_dim) / 2u;  // integer divide
     xt::xarray<float> pair_idx = xt::cast<float>(pair_idx_u);
@@ -209,9 +210,14 @@ std::pair<ttnn::Tensor, ttnn::Tensor> gen_freqs(
         inv_freq = apply_rope_scaling(inv_freq, p);  // [D]
     }
 
-    // positions column vector [L,1]
-    // positions column vector [L,1]
+    // positions column vector [L,1]. With the striped CP layout (striped_cp_size > 1) the rows are in
+    // device order, so that sharding them over the CP axis gives each rank its tokens' positions.
     xt::xarray<float> pos = xt::arange<float>(static_cast<float>(sequence_length));
+    if (striped_cp_size > 1U) {
+        for (uint32_t i = 0; i < sequence_length; ++i) {
+            pos(i) = static_cast<float>(distributed::striped_global_position(i, sequence_length, striped_cp_size));
+        }
+    }
     pos.reshape({sequence_length, 1u});  // member reshape
 
     // θ = pos * inv_freq  -> broadcast to [L,D]
@@ -248,7 +254,11 @@ ttnn::Tensor gen_trans_mat() {
 }
 
 RotaryEmbeddingParams build_rope_params(
-    uint32_t sequence_length, uint32_t head_dim, float theta, RopeScalingParams scaling_params) {
+    uint32_t sequence_length,
+    uint32_t head_dim,
+    float theta,
+    RopeScalingParams scaling_params,
+    distributed::RingAttentionLayout cp_layout) {
     if (head_dim % 32U != 0U) {
         throw std::invalid_argument(fmt::format("RoPE head_dim must be divisible by 32, but is {}", head_dim));
     }
@@ -263,6 +273,7 @@ RotaryEmbeddingParams build_rope_params(
     // If ParallelismContext is initialized and CP is enabled, shard freqs across the CP axis.
     std::shared_ptr<ttnn::distributed::TensorToMesh> mapper;
     uint32_t local_seq_len = sequence_length;
+    uint32_t striped_cp_size = 1U;
 
     if (autograd::ctx().is_parallelism_context_initialized()) {
         auto& pctx = autograd::ctx().get_parallelism_context();
@@ -279,10 +290,14 @@ RotaryEmbeddingParams build_rope_params(
 
             auto* device = &autograd::ctx().get_device();
             mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, /*dim=*/2, cp_axis.value());
+            if (cp_layout == distributed::RingAttentionLayout::Striped) {
+                striped_cp_size = cp_size;
+            }
         }
     }
 
-    auto [sin_freqs, cos_freqs] = gen_freqs(head_dim, sequence_length, theta, scaling_params, mapper.get());
+    auto [sin_freqs, cos_freqs] =
+        gen_freqs(head_dim, sequence_length, theta, scaling_params, mapper.get(), striped_cp_size);
     auto trans_mat = gen_trans_mat();
     return {
         .cos_cache = cos_freqs,

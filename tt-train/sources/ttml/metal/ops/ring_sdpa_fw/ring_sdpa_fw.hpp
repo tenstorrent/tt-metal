@@ -18,7 +18,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_sdpa_fw(
     uint32_t ring_size,
     uint32_t ring_axis,
     uint32_t step,
-    AttentionMaskType mask_type = AttentionMaskType::None,
+    const ops::RingStepMasks& step_masks = ops::contiguous_ring_step_masks(AttentionMaskType::None),
     ops::ring_sdpa_fw::RingDirection ring_direction = ops::ring_sdpa_fw::RingDirection::Backward,
     const std::optional<ttnn::Tensor>& preallocated_output = std::nullopt,
     const std::optional<ttnn::Tensor>& preallocated_intermediates = std::nullopt);

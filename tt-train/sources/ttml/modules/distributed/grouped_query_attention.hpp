@@ -8,6 +8,7 @@
 
 #include "autograd/tensor.hpp"
 #include "modules/module_base.hpp"
+#include "ops/distributed/ring_attention_layout.hpp"
 #include "ops/rope_op.hpp"
 
 namespace ttml::modules::distributed {
@@ -18,6 +19,8 @@ struct GQAConfig {
     uint32_t num_groups{};
     float dropout_prob{};
     std::reference_wrapper<const ops::RotaryEmbeddingParams> rope_params;
+    // Sequence layout across the CP ring; must match the data order and the RoPE params.
+    ops::distributed::RingAttentionLayout cp_layout = ops::distributed::RingAttentionLayout::Contiguous;
 };
 
 class DistributedGroupedQueryAttention : public ModuleBase {
@@ -27,6 +30,7 @@ private:
     uint32_t m_num_local_heads{};
     uint32_t m_num_local_groups{};
     uint32_t m_num_groups{};
+    ops::distributed::RingAttentionLayout m_cp_layout = ops::distributed::RingAttentionLayout::Contiguous;
     std::shared_ptr<ModuleBase> m_q_linear;
     std::shared_ptr<ModuleBase> m_kv_linear;
     std::shared_ptr<ModuleBase> m_out_linear;

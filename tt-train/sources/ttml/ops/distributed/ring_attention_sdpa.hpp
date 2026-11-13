@@ -7,6 +7,7 @@
 #include "autograd/tensor.hpp"
 #include "metal/ops/ring_sdpa_bw/ring_sdpa_bw.hpp"
 #include "metal/ops/ring_sdpa_fw/ring_sdpa_fw.hpp"
+#include "ops/distributed/ring_attention_layout.hpp"
 
 namespace ttml::ops::distributed {
 
@@ -40,6 +41,8 @@ namespace ttml::ops::distributed {
  *             - Step 0: causal mask (local K/V)
  *             - Steps where source device < current device: full attention
  *             - Steps where source device > current device: skip (no computation)
+ * @param layout Sequence layout across the ring (see RingAttentionLayout). Striped requires a causal
+ *             mask.
  * @return Attention output tensor (B, H, S_local, D)
  *
  * Note: KV is passed in the ring (rather than Q) because in GQA, num_groups << num_heads,
@@ -50,9 +53,17 @@ autograd::TensorPtr ring_attention_sdpa(
     const autograd::TensorPtr& key,
     const autograd::TensorPtr& value,
     const std::optional<autograd::TensorPtr>& mask = std::nullopt,
-    const ttml::metal::AttentionMaskType mask_type = ttml::metal::AttentionMaskType::Causal);
+    const ttml::metal::AttentionMaskType mask_type = ttml::metal::AttentionMaskType::Causal,
+    RingAttentionLayout layout = RingAttentionLayout::Contiguous);
 
 namespace detail {
+
+// Striped layout step masks: causal on the query for K/V from ranks <= d, causal on the query
+// shifted up one row for K/V from later ranks. Every device runs under exactly one of the two.
+inline constexpr ttml::metal::ops::RingStepMasks kStripedOnQuery{
+    .src_before = ttml::metal::AttentionMaskType::Causal, .src_self = ttml::metal::AttentionMaskType::Causal};
+inline constexpr ttml::metal::ops::RingStepMasks kStripedOnShiftedQuery{
+    .src_after = ttml::metal::AttentionMaskType::Causal};
 
 /**
  * Online-softmax merge of one ring step's partial attention result (exposed for testing).

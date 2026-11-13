@@ -40,7 +40,7 @@ RingSDPABwQProgramFactory::cached_mesh_workload_t RingSDPABwQProgramFactory::cre
     const uint32_t ring_axis = operation_attributes.ring_axis;
     const uint32_t ring_size = operation_attributes.ring_size;
     const uint32_t step = operation_attributes.step;
-    const auto mask_type = operation_attributes.mask_type;
+    const auto& step_masks = operation_attributes.step_masks;
     const auto ring_direction = operation_attributes.ring_direction;
 
     tt::tt_metal::distributed::MeshWorkload mesh_workload;
@@ -49,12 +49,11 @@ RingSDPABwQProgramFactory::cached_mesh_workload_t RingSDPABwQProgramFactory::cre
     for (const auto& mesh_coord : ttnn::MeshCoordinateRange(mesh_shape)) {
         uint32_t device_ring_id = mesh_coord[ring_axis];
 
-        auto [should_execute, effective_mask_type] =
-            get_device_execution_info(device_ring_id, step, ring_size, mask_type, ring_direction);
-
-        if (!should_execute) {
+        const auto step_mask = get_ring_step_mask(device_ring_id, step, ring_size, ring_direction, step_masks);
+        if (!step_mask.has_value()) {
             continue;
         }
+        const auto effective_mask_type = step_mask.value();
 
         // Create SDPA backward Q with mask_type (no explicit mask tensor needed)
         sdpa_q::operation_attributes_t sdpa_attrs{.mask_type = effective_mask_type, .dropout_probability = 0.0F};
@@ -96,6 +95,7 @@ RingSDPABwQProgramFactory::cached_mesh_workload_t RingSDPABwQProgramFactory::cre
         shared_vars[single_coord_range] = std::move(ring_vars);
     }
 
+    TT_FATAL(!shared_vars.empty(), "Ring SDPA step {}: no device executes under these step masks", step);
     return cached_mesh_workload_t(std::move(mesh_workload), std::move(shared_vars));
 }
 
@@ -120,7 +120,7 @@ void RingSDPABwQProgramFactory::override_runtime_arguments(
     const uint32_t ring_axis = operation_attributes.ring_axis;
     const uint32_t ring_size = operation_attributes.ring_size;
     const uint32_t step = operation_attributes.step;
-    const auto mask_type = operation_attributes.mask_type;
+    const auto& step_masks = operation_attributes.step_masks;
     const auto ring_direction = operation_attributes.ring_direction;
 
     for (auto& [coord_range, program] : cached_workload.workload.get_programs()) {
@@ -129,9 +129,9 @@ void RingSDPABwQProgramFactory::override_runtime_arguments(
 
         // Determine effective mask type for this device
         uint32_t device_ring_id = start_coord[ring_axis];
-        auto [should_execute, effective_mask_type] =
-            get_device_execution_info(device_ring_id, step, ring_size, mask_type, ring_direction);
-        (void)should_execute;  // Already filtered in create_mesh_workload
+        const auto step_mask = get_ring_step_mask(device_ring_id, step, ring_size, ring_direction, step_masks);
+        TT_FATAL(step_mask.has_value(), "Cached ring SDPA program found for a device that skips step {}", step);
+        const auto effective_mask_type = step_mask.value();
 
         // Create SDPA attributes and tensor args
         sdpa_q::operation_attributes_t sdpa_attrs{.mask_type = effective_mask_type, .dropout_probability = 0.0F};

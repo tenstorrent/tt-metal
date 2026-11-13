@@ -75,7 +75,7 @@ ttsl::hash::hash_t RingSDPAFwDeviceOperation::compute_program_hash(
         attrs.ring_size,
         attrs.ring_axis,
         attrs.step,
-        attrs.mask_type,
+        attrs.step_masks,
         static_cast<int>(attrs.ring_direction),
         tensor_args.query.logical_shape(),
         tensor_args.query.dtype(),
@@ -93,7 +93,7 @@ ttml::metal::ops::ring_sdpa_fw::RingSDPAFwDeviceOperation::tensor_return_value_t
     uint32_t ring_size,
     uint32_t ring_axis,
     uint32_t step,
-    ttml::metal::AttentionMaskType mask_type,
+    const ttml::metal::ops::RingStepMasks& step_masks,
     ttml::metal::ops::ring_sdpa_fw::RingDirection ring_direction,
     const std::optional<ttnn::Tensor>& preallocated_output,
     const std::optional<ttnn::Tensor>& preallocated_intermediates) {
@@ -103,7 +103,7 @@ ttml::metal::ops::ring_sdpa_fw::RingSDPAFwDeviceOperation::tensor_return_value_t
         .ring_size = ring_size,
         .ring_axis = ring_axis,
         .step = step,
-        .mask_type = mask_type,
+        .step_masks = step_masks,
         .ring_direction = ring_direction};
 
     auto tensor_args = OperationType::tensor_args_t{

@@ -269,6 +269,12 @@ LlamaConfig read_config(const YAML::Node& config) {
     llama_config.theta = config["theta"].as<float>(500000.0F);
     llama_config.runner_type = common::transformer::read_runner_type(config);
     llama_config.weight_tying = common::transformer::read_weight_tying_type(config);
+    const auto cp_layout = config["cp_layout"].as<std::string>("contiguous");
+    if (cp_layout != "contiguous" && cp_layout != "striped") {
+        throw std::runtime_error(fmt::format("cp_layout must be 'contiguous' or 'striped', got '{}'", cp_layout));
+    }
+    llama_config.cp_layout = cp_layout == "striped" ? ops::distributed::RingAttentionLayout::Striped
+                                                    : ops::distributed::RingAttentionLayout::Contiguous;
     // Read RoPE NTK-aware scaling parameters if they exist
     if (config["rope_scaling"]) {
         const auto& rope_scaling = config["rope_scaling"];
@@ -301,6 +307,9 @@ YAML::Node write_config(const LlamaConfig& llama_config) {
     config["vocab_size"] = llama_config.vocab_size;
     config["max_sequence_length"] = llama_config.max_sequence_length;
     config["theta"] = llama_config.theta;
+    if (llama_config.cp_layout == ops::distributed::RingAttentionLayout::Striped) {
+        config["cp_layout"] = "striped";
+    }
     // Add RoPE scaling parameters if they are set
     if (llama_config.scaling_factor != 0.0F && llama_config.original_context_length != 0U) {
         YAML::Node rope_scaling;

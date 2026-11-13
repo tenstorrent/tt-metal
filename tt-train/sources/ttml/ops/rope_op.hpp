@@ -5,6 +5,7 @@
 #pragma once
 
 #include "autograd/tensor.hpp"
+#include "ops/distributed/ring_attention_layout.hpp"
 
 // Forward declaration to avoid heavy include in files that only need the pointer type
 namespace ttnn::distributed {
@@ -42,7 +43,8 @@ std::pair<ttnn::Tensor, ttnn::Tensor> gen_freqs(
     uint32_t sequence_length,
     float theta,
     const RopeScalingParams& rope_scaling_params,
-    const ttnn::distributed::TensorToMesh* mesh_mapper = nullptr);
+    const ttnn::distributed::TensorToMesh* mesh_mapper = nullptr,
+    uint32_t striped_cp_size = 1U);
 
 ttnn::Tensor gen_trans_mat();
 
@@ -50,7 +52,9 @@ RotaryEmbeddingParams build_rope_params(
     uint32_t sequence_length,
     uint32_t head_dim,
     float theta = 10000.0F,
-    RopeScalingParams rope_scaling_params = RopeScalingParams{});
+    RopeScalingParams rope_scaling_params = RopeScalingParams{},
+    // With CP enabled, the sequence layout across the CP ring: Striped permutes the positions to match.
+    distributed::RingAttentionLayout cp_layout = distributed::RingAttentionLayout::Contiguous);
 // Throws an exception if the input is bad, parameters are bad, or the two are
 // incompatible with one another.
 void validate_rope_input_and_params(const autograd::TensorPtr& input, const RotaryEmbeddingParams& rope_params);

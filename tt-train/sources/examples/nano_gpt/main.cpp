@@ -483,6 +483,19 @@ int main(int argc, char **argv) {
     fmt::print("Seed {}\n", ttml::autograd::ctx().get_seed());
     auto sequence_length =
         std::visit([](auto &&arg) { return arg.max_sequence_length; }, model_config.transformer_config);
+    // Striped CP layout (transformer_config.cp_layout, Llama only): the data must be laid out like the model expects.
+    const bool cp_striped = std::visit(
+        [](const auto &arg) {
+            if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, ttml::models::llama::LlamaConfig>) {
+                return arg.cp_layout == ttml::ops::distributed::RingAttentionLayout::Striped;
+            } else {
+                return false;
+            }
+        },
+        model_config.transformer_config);
+    if (cp_striped && (!device_config.enable_cp || multihost_config.pipeline_parallel_config)) {
+        throw std::runtime_error("transformer_config.cp_layout: striped requires enable_cp and no pipeline parallelism");
+    }
 
     std::variant<std::string, YAML::Node> text_or_tokens;
 
@@ -566,7 +579,7 @@ int main(int argc, char **argv) {
     CachedHostData cached_data;
 
     std::function<BatchType(std::vector<DatasetSample> && samples)> collate_fn =
-        [sequence_length, device, &cached_data](std::vector<DatasetSample> &&samples) {
+        [sequence_length, device, cp_striped, &cached_data](std::vector<DatasetSample> &&samples) {
             auto start_timer = std::chrono::high_resolution_clock::now();
             const uint32_t batch_size = samples.size();
             std::vector<uint32_t> &data = cached_data.data;
@@ -588,6 +601,24 @@ int main(int argc, char **argv) {
             auto create_data_and_targets = [&]() -> std::tuple<TensorPtr, TensorPtr> {
                 if (is_pctx_initialized()) {
                     const auto &pctx = ttml::autograd::ctx().get_parallelism_context();
+                    if (cp_striped) {
+                        // Striped CP layout: reorder every sequence so that sharding the sequence dim over
+                        // the CP axis gives rank d the tokens d, N + d, 2N + d, ... (targets follow their
+                        // tokens, so each (token, next token) pair is kept; the per-token loss is unchanged).
+                        const uint32_t cp_size = pctx.get_cp_size();
+                        auto to_striped = [&](std::vector<uint32_t> &values) {
+                            std::vector<uint32_t> natural = values;
+                            for (uint32_t b = 0; b < batch_size; ++b) {
+                                const size_t row = static_cast<size_t>(b) * sequence_length;
+                                for (uint32_t i = 0; i < sequence_length; ++i) {
+                                    values[row + i] = natural
+                                        [row + ttml::ops::distributed::striped_global_position(i, sequence_length, cp_size)];
+                                }
+                            }
+                        };
+                        to_striped(data);
+                        to_striped(targets);
+                    }
                     const auto &mesh_device = ttml::autograd::ctx().get_device();
                     const uint32_t BATCH_DIM = 0;
                     const uint32_t SEQUENCE_DIM_DATA = 3;
