@@ -1863,7 +1863,7 @@ class TPGatedDeltaNet:
         e_parts = {u: up(e, self._verify_win_buf.dtype) for u, (_, e) in states.items()}
         self._write_spec_rows(ring_parts, e_parts)
 
-    def _forward_verify_blocks(self, x, valid_len, n_users):
+    def _forward_verify_blocks(self, x, valid_len, n_users, decode_ar=None):
         """Speculative verify of n_users rows x T = valid_len / n_users tokens on the state in vLLM KV cache blocks:
         ONE gdn_spec_step reads each row's full state (recurrent state and packed history) from its start block and
         writes the full state after every token into the block that the verify tables name (state_blocks.verify,
@@ -1912,6 +1912,8 @@ class TPGatedDeltaNet:
         partial = self._row_proj(gated, tw["out"])
         ttnn.deallocate(gated)
         partial = ttnn.reshape(partial, (1, 1, valid_len, partial.shape[-1]))
+        if decode_ar is not None:
+            return decode_ar.all_reduce(partial)
         return tt_all_reduce(
             partial,
             self.mesh,
@@ -1922,7 +1924,9 @@ class TPGatedDeltaNet:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    def forward_verify_recurrent(self, x, valid_len, pre_gathered=False, n_users=1, state_blk_idx=None, conv_sel=None):
+    def forward_verify_recurrent(
+        self, x, valid_len, pre_gathered=False, n_users=1, state_blk_idx=None, conv_sel=None, decode_ar=None
+    ):
         """Batched hybrid spec-decode verify for GDN: advance B users x T candidate rows at once.
 
         x : [1, 1, bucket, dim] prefill-normed input; the first ``valid_len`` rows are real and
@@ -1944,11 +1948,15 @@ class TPGatedDeltaNet:
         commits later by index.
 
         With the state in vLLM KV cache blocks (state_blocks bound) the verify reads and writes the blocks instead
-        (_forward_verify_blocks); state_blk_idx and conv_sel are not used.
+        (_forward_verify_blocks); state_blk_idx and conv_sel are not used. Only then may decode_ar (a
+        decode_allreduce.ResidualAllReduce, x the norm of the replicated decode residual) sum the out-projection
+        partials and add the residual.
         """
         if self.state_blocks is not None:
             assert pre_gathered, "the verify on KV cache blocks takes the decode-config (full-dim) norm output"
-            return self._forward_verify_blocks(x, valid_len, n_users)
+            return self._forward_verify_blocks(x, valid_len, n_users, decode_ar)
+        if decode_ar is not None:
+            raise ValueError("the replicated decode residual needs the GDN state in vLLM KV cache blocks")
         assert valid_len <= tpc.TILE_SIZE, f"verify bucket {valid_len} exceeds one tile"
         assert n_users == self.B, f"spec verify runs the whole decode batch: n_users={n_users}, B={self.B}"
         assert valid_len % n_users == 0, f"valid_len {valid_len} is not {n_users} whole user row-groups"
