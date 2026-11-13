@@ -224,7 +224,9 @@ class Gemma4Model:
             x = x[:, :, last_row : last_row + 1, :]
         return self.terminal(x)
 
-    def decode_device(self, tokens, positions, *, page_tables, kv_cache, batch, rope_positions=None):
+    def decode_device(
+        self, tokens, positions, *, page_tables, kv_cache, batch, rope_positions=None, update_positions=None
+    ):
         if len(kv_cache) != len(self.layers):
             raise ValueError("Expected one cache pair per loaded layer")
         x = self.embed(tokens, batch=batch)
@@ -244,6 +246,7 @@ class Gemma4Model:
                 rope_positions=rope_positions,
                 rope=rope[layer.kind],
                 cyclic_cache=i not in page_tables,
+                update_positions=update_positions,
             )
         logits = self.terminal(x)
         # Common samplers own a 32-row tile; inactive padding stays internal.
