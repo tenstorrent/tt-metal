@@ -27,39 +27,36 @@
 inline void _llk_unpack_reduce_col_tilizeA_strided_mop_config_(
     const std::uint32_t buf_desc_id_0, const std::uint32_t buf_desc_id_1, const std::uint32_t full_ct_dim, const TensorShape& tensor_shape)
 {
-    const std::uint32_t idx_inc = ckernel::unpack::UNPACR_STRIDE_MAX_ROWS * tensor_shape.num_faces_c_dim * full_ct_dim;
-
     constexpr std::uint32_t kIndex18BitMask = 0x3FFFF; // index field is 18 bits wide
-    // 18-bit two's complement of (idx_inc - 1)
-    const std::uint32_t idx_dec = (1u - idx_inc) & kIndex18BitMask;
 
-    constexpr std::uint32_t replay_buf_len = 15;
+    const std::uint32_t idx_inc         = ckernel::unpack::UNPACR_STRIDE_MAX_ROWS * tensor_shape.num_faces_c_dim * full_ct_dim;
+    const std::uint32_t num_faces       = tensor_shape.total_num_faces();
+    const std::uint32_t num_faces_c_dim = tensor_shape.num_faces_c_dim;
+    const std::uint32_t replay_buf_len  = 4 * num_faces - 1;
 
-    load_replay_buf<0, replay_buf_len>(
-        [buf_desc_id_0, idx_inc, idx_dec]
+    load_replay_buf(
+        0 /*start_idx*/,
+        replay_buf_len,
+        false /*exec_while_loading*/,
+        0 /*set_mutex*/,
+        0 /*last*/,
+        [buf_desc_id_0, idx_inc, num_faces, num_faces_c_dim]
         {
+            const auto face_start = [idx_inc, num_faces_c_dim](const std::uint32_t f) { return (f / num_faces_c_dim) * 2 * idx_inc + (f % num_faces_c_dim); };
+
             // Face 0
             TT_UNPACR0_STRIDE(ckernel::unpack::UNPACR_STRIDE_MAX_ROWS /*Src_Reg_Y_Cntr_Incr*/, 0, 0, 0, 0, buf_desc_id_0, 0 /*Set Dvalid*/);
             TT_INC_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, idx_inc);
             TT_UNPACR0_STRIDE(0 /*Src_Reg_Y_Cntr_Incr*/, 0, 0, 0, 0, buf_desc_id_0, 1 /*Set Dvalid*/);
 
-            // Face 1
-            TT_INC_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, idx_dec);
-            TT_UNPACR0_STRIDE(ckernel::unpack::UNPACR_STRIDE_MAX_ROWS /*Src_Reg_Y_Cntr_Incr*/, 0, 0, 0, 0, buf_desc_id_0, 0 /*Set Dvalid*/);
-            TT_INC_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, idx_inc);
-            TT_UNPACR0_STRIDE(0 /*Src_Reg_Y_Cntr_Incr*/, 0, 0, 0, 0, buf_desc_id_0, 1 /*Set Dvalid*/);
-
-            // Face 2
-            TT_INC_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, idx_inc - 1);
-            TT_UNPACR0_STRIDE(ckernel::unpack::UNPACR_STRIDE_MAX_ROWS /*Src_Reg_Y_Cntr_Incr*/, 0, 0, 0, 0, buf_desc_id_0, 0 /*Set Dvalid*/);
-            TT_INC_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, idx_inc);
-            TT_UNPACR0_STRIDE(0 /*Src_Reg_Y_Cntr_Incr*/, 0, 0, 0, 0, buf_desc_id_0, 1 /*Set Dvalid*/);
-
-            // Face 3
-            TT_INC_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, idx_dec);
-            TT_UNPACR0_STRIDE(ckernel::unpack::UNPACR_STRIDE_MAX_ROWS /*Src_Reg_Y_Cntr_Incr*/, 0, 0, 0, 0, buf_desc_id_0, 0 /*Set Dvalid*/);
-            TT_INC_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, idx_inc);
-            TT_UNPACR0_STRIDE(0 /*Src_Reg_Y_Cntr_Incr*/, 0, 0, 0, 0, buf_desc_id_0, 1 /*Set Dvalid*/);
+            for (std::uint32_t face = 1; face < num_faces; face++)
+            {
+                const std::uint32_t move = (face_start(face) - face_start(face - 1) - idx_inc) & kIndex18BitMask;
+                TT_INC_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, move);
+                TT_UNPACR0_STRIDE(ckernel::unpack::UNPACR_STRIDE_MAX_ROWS /*Src_Reg_Y_Cntr_Incr*/, 0, 0, 0, 0, buf_desc_id_0, 0 /*Set Dvalid*/);
+                TT_INC_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, idx_inc);
+                TT_UNPACR0_STRIDE(0 /*Src_Reg_Y_Cntr_Incr*/, 0, 0, 0, 0, buf_desc_id_0, 1 /*Set Dvalid*/);
+            }
         });
 
     std::uint32_t unpack_srcB_face = TT_OP_UNPACR1_FACE_INC(0, 0, 0, 0, buf_desc_id_1, 1 /*Set Dvalid*/);
@@ -113,8 +110,6 @@ inline void _llk_unpack_reduce_col_tilizeA_strided_tiny_tiles_mop_config_(const 
 /**
  * @brief Initializes unpacker to tilize a tile for SrcA and unpack a single face for SrcB (scalar), compatible with math reduce column kernels.
  *
- * Supports 32x32 tiles and tiny Nx32 tiles with N <= 8.
- *
  * @tparam POOL_TYPE: Type of reduce pool op, values = <MAX/SUM/AVG>
  * @param buf_desc_id_0: Buffer descriptor ID for the operand that will be tilized into srcA
  * @param buf_desc_id_1: Buffer descriptor ID for scaler operand that will be unpacked into srcB
@@ -146,11 +141,8 @@ inline void _llk_unpack_reduce_col_tilizeA_strided_init_(
     cfg[THCON_UNPACKER0_REG1_UNPACK_TILIZE_SRC_Z_STRIDE_ADDR32] = unpk_cfg.val[0];
     cfg[THCON_UNPACKER0_REG2_UNPACK_STRIDE_OFFSET_0_ADDR32]     = unpk_cfg.val[2];
 
-    if (tensor_shape.total_num_faces() == NUM_FACES)
+    if (tensor_shape.face_r_dim == FACE_R_DIM || tensor_shape.total_num_faces() == NUM_FACES)
     {
-        LLK_ASSERT(
-            tensor_shape.total_row_dim() == TILE_R_DIM && tensor_shape.total_col_dim() == TILE_C_DIM,
-            "Four face unpack reduce col tilizeA strided only supports 32x32 tiles");
         cfg_rmw(THCON_UNPACKER0_REG1_UNPACK_STRIDE_NO_WRITE_RMW, 0);
         _llk_unpack_reduce_col_tilizeA_strided_mop_config_(buf_desc_id_0, buf_desc_id_1, full_ct_dim, tensor_shape);
     }
@@ -186,7 +178,8 @@ inline void _llk_unpack_reduce_col_tilizeA_strided_(
     TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, start_l1_tile_idx_0 * tensor_shape.num_faces_c_dim);
     TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, 0);
 
-    TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_B, start_l1_tile_idx_1);
+    const std::uint32_t hw_tiles_per_sw_tile = (tensor_shape.total_num_faces() == NUM_FACES) ? 1 : tensor_shape.total_num_faces();
+    TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_B, start_l1_tile_idx_1 * hw_tiles_per_sw_tile);
     TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_B, 0);
 
     ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
