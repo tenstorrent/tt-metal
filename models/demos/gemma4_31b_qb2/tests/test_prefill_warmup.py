@@ -73,16 +73,26 @@ def test_warmup_removes_compilation_and_keeps_the_trace(generator, qb2_mesh):
     assert kept == cold == kept_after_other == rebuilt
 
 
-def test_warmup_prefills_every_32_token_length_once_and_retires_the_traces():
+def test_warmup_covers_padded_lengths_last_rows_and_continuations_then_retires_the_traces():
+    from types import SimpleNamespace
+
     generator = object.__new__(Gemma4Generator)
     events = []
     generator.prefill_forward = lambda tokens, **kw: events.append(
-        (int(tokens.shape[1]), kw["prompt_lens"], kw["slots"])
+        (int(tokens.shape[1]), kw["prompt_lens"], kw.get("start_positions"), kw.get("history_keys"))
     )
     generator._retire_traces = lambda **kwargs: events.append("retire")
-    from types import SimpleNamespace
-
     generator.model = SimpleNamespace(tensor=lambda *a, **k: object(), config=SimpleNamespace(vocab_size=8))
     generator._merge_prefill_rows = lambda rows: events.append(("merge", len(rows)))
-    generator.warm_prefill_shapes(None, None, 128)
-    assert events == [(n, [n], [0]) for n in (32, 64, 96, 128)] + [("merge", b) for b in range(2, 33)] + ["retire"]
+    state = SimpleNamespace(prefill_history={-1: object()})
+    generator.warm_prefill_shapes(state, None, 1408)
+    from_zero = [(n, [n], None, None) for n in range(128, 1409, 128)]
+    last_rows = [(n, [n], None, None) for n in (*range(1, 33), *range(129, 161))]
+    continuations = []
+    for chunk in (128, 256):
+        for previous_end in (1152, 1153):
+            continuations.append((1152 + chunk, [previous_end], None, [-1]))
+            continuations.append((1152 + chunk, [1152 + chunk], [previous_end], [-1]))
+    merges = [("merge", b) for b in range(2, 33)]
+    assert events == from_zero + last_rows + continuations + merges + ["retire"]
+    assert state.prefill_history == {}

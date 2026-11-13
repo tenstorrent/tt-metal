@@ -196,12 +196,37 @@ class Gemma4Model:
         return logits
 
     def prefill_device(
-        self, tokens, *, sequence_length, page_tables, kv_cache, all_logits=False, start_pos=0, histories=None
+        self,
+        tokens,
+        *,
+        sequence_length,
+        page_tables,
+        kv_cache,
+        all_logits=False,
+        start_pos=0,
+        histories=None,
+        host_rows=None,
+        valid_length=None,
     ):
+        """sequence_length is the (page-padded) length of the chunk; valid_length (<= it) is its logical length.
+
+        With host_rows (the host page-table row of each table key) the position-dependent ops take runtime values (see
+        Decoder.prefill_chunk_inputs) and the logits row is selected by a device-valued slice, so the programs depend only
+        on the padded chunk length.
+        """
         if len(kv_cache) != len(self.layers):
             raise ValueError("Expected one cache pair per loaded layer")
         x = self.embed(tokens, sequence_length=sequence_length)
+        rope, fills = {}, {}
         for i, (layer, cache) in enumerate(zip(self.layers, kv_cache)):
+            inputs = None
+            if host_rows is not None:
+                key = i if i in page_tables else layer.kind
+                if layer.kind not in rope:
+                    rope[layer.kind] = layer.prefill_chunk_inputs(sequence_length, start_pos)
+                if key not in fills:
+                    fills[key] = layer.prefill_chunk_inputs(sequence_length, start_pos, host_rows[key])
+                inputs = [dict(f, rope=r["rope"]) for r, f in zip(rope[layer.kind], fills[key])]
             # This hidden stream is private to this invocation. Completed
             # chunks can reuse it once their input reads and KV fills finish.
             x = layer.prefill_forward(
@@ -212,15 +237,37 @@ class Gemma4Model:
                 start_pos=start_pos,
                 history=histories[i] if histories is not None else None,
                 return_history=histories is not None,
+                chunk_inputs=inputs,
+                padded_tails=host_rows is not None,
             )
             if histories is not None:
                 x, histories[i] = x
         if not all_logits:
             # An unaligned slice begin untilizes its entire input. Copy
             # the aligned final tile first, then select its logical row.
-            tile_start = (sequence_length - 1) // 32 * 32
-            x = x[:, :, tile_start:sequence_length, :]
-            last_row = sequence_length - 1 - tile_start
+            valid = sequence_length if valid_length is None else valid_length
+            tile_start = (valid - 1) // 32 * 32
+            last_row = valid - 1 - tile_start
+            if host_rows is None:
+                x = x[:, :, tile_start:sequence_length, :]
+            else:
+                # The 32-row group holding the last token, selected by a device-valued offset (one program for every
+                # logical length of this padded chunk length).
+                width = x.shape[3]
+                upload = lambda values: ttnn.from_torch(
+                    torch.tensor(values, dtype=torch.int32),
+                    dtype=ttnn.uint32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=self.mesh,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+                )
+                x = ttnn.slice(
+                    x,
+                    upload([0, 0, tile_start, 0]),
+                    upload([1, 1, tile_start + 32, width]),
+                    slice_dim=2,
+                    num_devices=x.shape[2] // 32,
+                )
             x = x[:, :, last_row : last_row + 1, :]
         return self.terminal(x)
 

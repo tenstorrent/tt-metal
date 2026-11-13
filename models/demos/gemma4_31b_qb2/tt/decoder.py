@@ -15,6 +15,8 @@ The bounded ring supports forward decoding with complete live history, not
 arbitrary rollback into evicted tokens. Page-ID changes require live KV migration.
 """
 
+import torch
+
 import ttnn
 from models.demos.gemma4_31b_qb2.tt.sdpa_l1 import BLACKHOLE_L1_BYTES, full_sdpa_fp32_l1_end
 from models.demos.gpt_oss.tt.ccl import CCLManager
@@ -805,7 +807,7 @@ class Decoder:
             ttnn.to_memory_config(x, memory), cos, sin, is_decode_mode=True, memory_config=memory_config or memory
         )
 
-    def _prefill_qkv(self, x, start):
+    def _prefill_qkv(self, x, start, rope=None):
         tied = not self.sliding
         fused = self._pref_linear(self._input_norm(x, "input_layernorm", False), "qk" if tied else "qkv")
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
@@ -823,7 +825,9 @@ class Decoder:
             del k
         # Only a start-zero, whole-width prefix can alias the table buffer.
         rope_shape = ttnn.Shape([1, 1, x.shape[2], self.head_dim])
-        if start == 0:
+        if rope is not None:
+            cos, sin = rope
+        elif start == 0:
             cos = ttnn.reshape(self.cos, rope_shape, rope_shape)
             sin = ttnn.reshape(self.sin, rope_shape, rope_shape)
         else:
@@ -840,10 +844,68 @@ class Decoder:
             v = self._norm(v)
         return (q, k, v)
 
+    def prefill_chunk_inputs(self, seq, start_pos, host_row=None):
+        """Per-chunk inputs that depend on the absolute position, as device tensors (runtime values, not program attributes).
+
+        A Python slice of the rope tables or the page table, or a Python start index, is part of the program hash, so each
+        new (length, start) compiled new programs. Here the rope rows are gathered by position ids, the cache-fill page ids
+        are uploaded as a row, and the chunk start is a one-element tensor; the programs then depend on the chunk length only.
+        """
+        chunks = []
+        for start in range(0, seq, self.PREFILL_CHUNK):
+            length = min(start + self.PREFILL_CHUNK, seq) - start
+            absolute = start_pos + start
+            if host_row is None:
+                ids = ttnn.from_torch(
+                    torch.arange(absolute, absolute + length, dtype=torch.int32).reshape(1, length),
+                    dtype=ttnn.uint32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=self.device,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+                )
+                shape = ttnn.Shape([1, 1, length, self.head_dim])
+                rope = tuple(
+                    ttnn.to_layout(ttnn.reshape(ttnn.embedding(ids, table), shape), ttnn.TILE_LAYOUT)
+                    for table in (self.decode_cos, self.decode_sin)
+                )
+                chunks.append(dict(rope=rope))
+                continue
+            first = absolute // self.PAGE_SIZE
+            fill = ttnn.from_torch(
+                host_row[:, first : first + length // self.PAGE_SIZE].to(torch.int32),
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.device,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+            )
+            chunk_start = ttnn.from_torch(
+                torch.tensor([absolute], dtype=torch.int32),
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.device,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+            )
+            chunks.append(dict(fill=fill, start=chunk_start))
+        return chunks
+
     def prefill_forward(
-        self, x, *, page_table, kv_cache, consume_input=False, start_pos=0, history=None, return_history=False
+        self,
+        x,
+        *,
+        page_table,
+        kv_cache,
+        consume_input=False,
+        start_pos=0,
+        history=None,
+        return_history=False,
+        chunk_inputs=None,
+        padded_tails=False,
     ):
-        """Prefill a page-aligned span, optionally retaining sliding history for a continuation."""
+        """Prefill a page-aligned span, optionally retaining sliding history for a continuation.
+
+        chunk_inputs (prefill_chunk_inputs) makes the position-dependent ops runtime-valued; padded_tails keeps the
+        returned history to whole pages (the rows after a logical end are overwritten by the continuation's rewind).
+        """
         if start_pos < 0 or start_pos % self.PAGE_SIZE:
             raise ValueError("Prefill start must be a nonnegative cache-page boundary")
         if start_pos and self.sliding and history is None:
@@ -893,12 +955,16 @@ class Decoder:
                 if pad:
                     inp = ttnn.pad(inp, [(0, 0), (0, 0), (0, pad), (0, 0)], value=0.0)
                 absolute_start = start_pos + start
-                q, k, v = self._prefill_qkv(inp, absolute_start)
+                prepared = None if chunk_inputs is None else chunk_inputs[start // self.PREFILL_CHUNK]
+                q, k, v = self._prefill_qkv(inp, absolute_start, None if prepared is None else prepared["rope"])
                 if not self.sliding:
                     q = ttnn.typecast(q, ttnn.bfloat8_b)
                 sdpa_config = self._prefill_sdpa_config(q, kv_cache[0], pt, start=absolute_start)
                 length = inp.shape[2]
-                fill_pt = pt[:, absolute_start // self.PAGE_SIZE : (absolute_start + length) // self.PAGE_SIZE]
+                if prepared is None:
+                    fill_pt = pt[:, absolute_start // self.PAGE_SIZE : (absolute_start + length) // self.PAGE_SIZE]
+                else:
+                    fill_pt = prepared["fill"]
                 ttnn.experimental.paged_fill_cache(
                     kv_cache[0], ttnn.typecast(k, kv_cache[0].dtype), fill_pt, batch_idx=0
                 )
@@ -937,12 +1003,17 @@ class Decoder:
                         compute_kernel_config=self.pref_compute,
                     )
                 else:
+                    start_arg = (
+                        {"chunk_start_idx": absolute_start}
+                        if prepared is None
+                        else {"chunk_start_idx_tensor": prepared["start"]}
+                    )
                     attn = ttnn.transformer.chunked_scaled_dot_product_attention(
                         q,
                         kv_cache[0],
                         kv_cache[1],
                         pt,
-                        chunk_start_idx=absolute_start,
+                        **start_arg,
                         scale=1.0,
                         program_config=sdpa_config,
                         compute_kernel_config=self.pref_compute,
@@ -953,7 +1024,7 @@ class Decoder:
                         # can replay its partial page without losing the prior window.
                         tails = []
                         for index, value in enumerate((k, v)):
-                            live = value[:, :, : end - start, :]
+                            live = value if padded_tails else value[:, :, : end - start, :]
                             joined = ttnn.concat([previous_kv[index], live], dim=2) if previous_kv is not None else live
                             tail_start = max(0, joined.shape[2] - (self.window + self.PAGE_SIZE))
                             tails.append(joined[:, :, tail_start:, :])
