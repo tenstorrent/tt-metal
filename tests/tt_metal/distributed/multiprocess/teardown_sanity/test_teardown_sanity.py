@@ -136,9 +136,6 @@ def test_use_before_init():
 # ---------------------------------------------------------------------------------------------------------------
 # rows that fail today. Each marker names the error of the plan and its fix; drop the marker with the fix.
 # ---------------------------------------------------------------------------------------------------------------
-@known(
-    "P1: a rank that raises leaves the others in their barrier forever; fix: abort on an uncaught exception in the DistributedContext"
-)
 def test_raise_after_open():
     r = run_case("raise_after_open", {"PROBE_SCENARIO": "raise", "PROBE_PHASE": "after_open"}, DEADLINE_HANG)
     ended(r)
@@ -146,9 +143,6 @@ def test_raise_after_open():
     clean(r)
 
 
-@known(
-    "P21: a TT_FATAL inside open on one rank (a shape the descriptor cannot hold) leaves its peer in the discovery barrier forever"
-)
 def test_bad_shape():
     r = run_case("bad_shape_rank1", {"PROBE_MESH_SHAPE_VICTIM": "9x9"}, DEADLINE_HANG)
     ended(r)
@@ -156,9 +150,6 @@ def test_bad_shape():
     clean(r)
 
 
-@known(
-    "P21: a rank whose descriptor describes another machine makes the mapper TT_FATAL on one rank while the other waits forever"
-)
 def test_bad_descriptor(tmp_path):
     r = run_case("conflicting_descriptor", {}, DEADLINE_HANG, cmd=legacy_cmd(mapping=conflict_mapping(tmp_path)))
     ended(r)
@@ -214,9 +205,6 @@ def test_dead_peer_in_open():
     assert "FAULT NOT DELIVERED" not in r.signal_sent, r  # the victim really was killed inside open
 
 
-@known(
-    "P6: Ctrl-C at tt-run in the deadlock leaves prterun running (seen in CI with the wheel's tt-run; a sandbox tt-run cleaned up)"
-)
 def test_ctrl_c_in_deadlock():
     """SIGINT at tt-run while the ranks sit in the send/barrier deadlock: tt-run ends and nothing may be left."""
     r = run_case(
@@ -232,7 +220,6 @@ def test_ctrl_c_in_deadlock():
     clean(r)
 
 
-@known("P6: Ctrl-C at tt-run while a rank waits in the context init SIGKILLs prterun and leaves that rank behind")
 def test_ctrl_c_in_init():
     """SIGINT at tt-run while rank 0 waits in MPI_Init for a rank 1 that starts 75 s late: nothing may be left."""
     r = run_case(
@@ -248,7 +235,6 @@ def test_ctrl_c_in_init():
     clean(r)
 
 
-@known("P7: SIGTERM at tt-run is not forwarded; prterun and the ranks stay in the deadlock")
 def test_sigterm_at_ttrun():
     r = run_case(
         "sigterm_at_ttrun",
@@ -281,9 +267,6 @@ def rank_saw(r, rank: int, marker: str) -> None:
     ), f"rank {rank} never printed {marker!r}; it ended at {r.reached.get(rank)!r}\n{r.log[-3000:]}"
 
 
-@known(
-    "P3: the survivor of a dead peer crashes inside its own close (the context barrier throws out of close_impl), so the device is never closed; fix: no collective in close after a detected failure"
-)
 def test_survivor_closes_ulfm():
     """Opt-in ULFM so the death is delivered as an error (the only mode in which the survivor runs on); rank 1 killed
     with the mesh open, rank 0 records the error and goes on to close: its close must complete."""
@@ -339,7 +322,6 @@ def test_late_rank():
     assert r.wall_s < 15, f"rank 0 waited {r.wall_s:.0f} s for the late rank with the timeout at 1 s\n{r.log[-2000:]}"
 
 
-@known("P17: a mesh-shape disagreement between ranks (4x4 against 8x4) is accepted silently and the job exits 0")
 def test_shape_mismatch():
     r = run_case("shape_mismatch", {"PROBE_MESH_SHAPE_VICTIM": "4x4"}, DEADLINE_END)
     ended(r)
