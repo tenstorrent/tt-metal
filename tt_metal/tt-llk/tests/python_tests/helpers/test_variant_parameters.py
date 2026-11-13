@@ -2763,6 +2763,21 @@ class PACK_SRC_FROM_OUTPUT(TemplateParameter):
 
 
 @dataclass
+class PACK_INIT_LIVE(TemplateParameter):
+    """pack_init_live_test.cpp: "<B format>/<B packer input>/<init mode n|l|c|z|m>": the second output and the default inits between outputs."""
+
+    pack_init_live: str
+
+    def convert_to_cpp(self) -> str:
+        fmt, src, mode = self.pack_init_live.split("/")
+        return (
+            f"constexpr DataFormat alt_pack_dst = DataFormat::{fmt};\n"
+            f"constexpr DataFormat alt_pack_src = DataFormat::{src};\n"
+            f"constexpr char init_mode = '{mode}';"
+        )
+
+
+@dataclass
 class PACK_BLOCK_ALT(TemplateParameter):
     """pack_block_alt_test.cpp: pack_block_alt is "<alt format>/<l1 acc: a|n>/<form: h|m>": the second output's format, packer L1 accumulate on it, and head (llk_pack_block's form of the first block of an output) or main (every tile one by one)."""
 

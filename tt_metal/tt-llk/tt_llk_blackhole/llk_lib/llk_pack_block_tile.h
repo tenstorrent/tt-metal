@@ -67,6 +67,69 @@ inline void llk_pack_init_impl(
         pack_src_reg_format, face_r_dim, tile_c_dim, num_faces, num_tiles, is_input_8bit_format);
 }
 
+// llk_pack_init_live for this kernel: CBs of different widths keep the full init at half sync with fp32 DEST and an unpack to
+// DEST, the contention class. dep: a template argument of the caller.
+template <auto dep, bool is_fp32_dest_acc_en, DstSync sync = DST_SYNC_MODE>
+constexpr bool llk_pack_init_live_kernel()
+{
+    return ckernel::packer::llk_pack_init_live<dep, sync>(pack_src_format, pack_dst_format) &&
+           (ckernel::packer::llk_pack_width_single(pack_src_format, pack_dst_format) ||
+            !(is_fp32_dest_acc_en && sync == DstSync::SyncHalf && ckernel::packer::pack_reconfig_u2d<sync>));
+}
+
+// The compute API's default init of an output (metal llk_pack_init, the tt-llk pack API shim). counted: the call passed a
+// tile count, so it may write a MOP other than hw_configure's one-tile MOP (pack_mop_dirty); a kernel whose inits pass none
+// never writes the flag, which then folds.
+template <PackMode pack_mode, bool zero_output, bool skip_addrmod_config, bool skip_packer_strides, bool counted, bool is_fp32_dest_acc_en>
+inline void llk_pack_init_of_output(const std::uint32_t output_id, const std::uint32_t num_tiles, const bool is_input_8bit_format)
+{
+    if constexpr (zero_output || pack_mode != PackMode::Default)
+    {
+        ckernel::packer::pack_mop_dirty = true;
+    }
+    else if constexpr (counted)
+    {
+        if (num_tiles != 1)
+        {
+            ckernel::packer::pack_mop_dirty = true;
+        }
+    }
+    if constexpr (pack_mode == PackMode::Default && llk_pack_init_live_kernel<pack_mode, is_fp32_dest_acc_en>())
+    {
+        if (!LLK_PACK_OTHER_PROGRAM_ACTIVE())
+        {
+            constexpr std::uint32_t live =
+                1 | (ckernel::packer::llk_pack_mop_live<pack_mode, DST_SYNC_MODE>(pack_src_format, pack_dst_format, pack_tile_face_r_dim, pack_tile_num_faces) ? 2 : 0) |
+                (ckernel::packer::llk_pack_width_single(pack_src_format, pack_dst_format) ? 0 : 4);
+            llk_pack_init_impl<pack_mode, zero_output, true, true, live>(
+                pack_src_format[output_id], pack_tile_face_r_dim[output_id], pack_tile_c_dim[output_id], pack_tile_num_faces[output_id], num_tiles, is_input_8bit_format);
+            return;
+        }
+    }
+    llk_pack_init_impl<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides>(
+        pack_src_format[output_id], pack_tile_face_r_dim[output_id], pack_tile_c_dim[output_id], pack_tile_num_faces[output_id], num_tiles, is_input_8bit_format);
+}
+
+// After the compute API's hw_configure: where the kernel's default inits keep its program, its address modes, X counter and,
+// with llk_pack_mop_live, one-tile MOP.
+template <bool is_fp32_dest_acc_en>
+inline void llk_pack_hw_configure_live(const std::uint32_t face_r_dim, const std::uint32_t tile_c_dim, const std::uint32_t num_faces)
+{
+    if constexpr (llk_pack_init_live_kernel<is_fp32_dest_acc_en, is_fp32_dest_acc_en>())
+    {
+        if (!LLK_PACK_OTHER_PROGRAM_ACTIVE())
+        {
+            _llk_pack_configure_addrmod_<PackMode::Default>();
+            if constexpr (ckernel::packer::llk_pack_mop_live<is_fp32_dest_acc_en, DST_SYNC_MODE>(
+                              pack_src_format, pack_dst_format, pack_tile_face_r_dim, pack_tile_num_faces))
+            {
+                _llk_pack_mop_config_<PackMode::Default, false>(face_r_dim, tile_c_dim, num_faces, 1);
+            }
+            TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
+        }
+    }
+}
+
 template <bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default, bool w_invalidate = true>
 inline void llk_pack_impl(std::uint32_t tile_index, std::uint32_t pack_tile_addr)
 {

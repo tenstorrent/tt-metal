@@ -24,20 +24,12 @@ inline void llk_pack_dummy([[maybe_unused]] const std::uint32_t pack_output) {}
 
 #include "llk_pack_block_tile.h"
 
-// counted: the call passed a tile count, so it may write a MOP other than hw_configure's one-tile MOP (pack_mop_dirty). A
-// kernel whose inits pass none never writes the flag, which then folds.
+// counted: the call passed a tile count (llk_pack_init_of_output).
 template <PackMode pack_mode, bool zero_output, bool skip_addrmod_config, bool skip_packer_strides, bool counted>
 inline void llk_pack_init_body(
     const std::uint32_t pack_output, const std::uint32_t num_tiles, const std::uint32_t input_operand) {
     // TODO (https://github.com/tenstorrent/tt-metal/issues/18948): Revisit for narrow_tile
     const std::uint32_t output_id = get_output_id(pack_output);
-    if constexpr (zero_output || pack_mode != PackMode::Default) {
-        ckernel::packer::pack_mop_dirty = true;
-    } else if constexpr (counted) {
-        if (num_tiles != 1) {
-            ckernel::packer::pack_mop_dirty = true;
-        }
-    }
 
     if constexpr (!skip_addrmod_config) {
         LLK_ASSERT_BLOCK(are_packers_configured_correctly(pack_src_format[output_id], pack_dst_format[output_id]));
@@ -49,33 +41,8 @@ inline void llk_pack_init_body(
     if constexpr (pack_mode == PackMode::Tilize) {
         is_input_8bit_format = IS_8BIT_FORMAT(static_cast<std::uint32_t>(unpack_src_format[input_operand]));
     }
-    constexpr bool width_single = ckernel::packer::llk_pack_width_single(pack_src_format, pack_dst_format);
-    if constexpr (pack_mode == PackMode::Default && llk_pack_init_live_kernel<pack_mode>()) {
-        if (!LLK_PACK_OTHER_PROGRAM_ACTIVE()) {
-            constexpr std::uint32_t live =
-                1 |
-                (ckernel::packer::llk_pack_mop_live<pack_mode, DST_SYNC_MODE>(
-                     pack_src_format, pack_dst_format, pack_tile_face_r_dim, pack_tile_num_faces)
-                     ? 2
-                     : 0) |
-                (width_single ? 0 : 4);
-            llk_pack_init_impl<pack_mode, zero_output, true, true, live>(
-                pack_src_format[output_id],
-                get_output_face_r_dim(output_id),
-                get_output_tile_c_dim(output_id),
-                get_output_num_faces(output_id),
-                num_tiles,
-                is_input_8bit_format);
-            return;
-        }
-    }
-    llk_pack_init_impl<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides>(
-        pack_src_format[output_id],
-        get_output_face_r_dim(output_id),
-        get_output_tile_c_dim(output_id),
-        get_output_num_faces(output_id),
-        num_tiles,
-        is_input_8bit_format);
+    llk_pack_init_of_output<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides, counted, DST_ACCUM_MODE>(
+        output_id, num_tiles, is_input_8bit_format);
 }
 
 template <

@@ -289,9 +289,10 @@ inline void main_pack_init(const std::uint32_t pack_output, const std::uint32_t 
         is_input_8bit_format);
 }
 
-// The compute API's llk_pack_init (llk_pack_tile_api.h lines 32 and 63): the PR's llk_pack_init_impl (llk_pack_block_tile.h) on the PR's LLK.
-template <PackMode pack_mode = PackMode::Default, bool zero_output = false, bool skip_addrmod_config = false, bool skip_packer_strides = false>
-inline void pack_init(const std::uint32_t pack_output, const std::uint32_t num_tiles = 1, [[maybe_unused]] const std::uint32_t input_operand = 0)
+// The compute API's llk_pack_init overloads (llk_pack_tile_api.h): on the PR's LLK, llk_pack_init_of_output (llk_pack_block_tile.h);
+// counted: an overload that passes a tile count.
+template <PackMode pack_mode, bool zero_output, bool skip_addrmod_config, bool skip_packer_strides, bool counted>
+inline void pack_init_body(const std::uint32_t pack_output, const std::uint32_t num_tiles, [[maybe_unused]] const std::uint32_t input_operand)
 {
 #if PACK_API_SHIM_PR
     const std::uint32_t output_id = get_output_id(pack_output);
@@ -304,17 +305,45 @@ inline void pack_init(const std::uint32_t pack_output, const std::uint32_t num_t
     {
         is_input_8bit_format = IS_8BIT_FORMAT(static_cast<std::uint32_t>(unpack_src_format[input_operand]));
     }
-    llk_pack_init_impl<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides>(
-        pack_src_format[output_id],
-        get_output_face_r_dim(output_id),
-        get_output_tile_c_dim(output_id),
-        get_output_num_faces(output_id),
-        num_tiles,
-        is_input_8bit_format);
+    llk_pack_init_of_output<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides, counted, is_fp32_dest_acc_en>(
+        output_id, num_tiles, is_input_8bit_format);
 #else
     main_pack_init<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides>(pack_output, num_tiles, input_operand);
 #endif
 }
+
+template <PackMode pack_mode = PackMode::Default, bool zero_output = false, bool skip_addrmod_config = false, bool skip_packer_strides = false>
+inline void pack_init(const std::uint32_t pack_output, const std::uint32_t num_tiles, const std::uint32_t input_operand)
+{
+    pack_init_body<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides, true>(pack_output, num_tiles, input_operand);
+}
+
+template <PackMode pack_mode = PackMode::Default, bool zero_output = false, bool skip_addrmod_config = false, bool skip_packer_strides = false>
+inline void pack_init(const std::uint32_t pack_output, const std::uint32_t num_tiles)
+{
+    pack_init_body<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides, true>(pack_output, num_tiles, 0);
+}
+
+template <PackMode pack_mode = PackMode::Default, bool zero_output = false, bool skip_addrmod_config = false, bool skip_packer_strides = false>
+inline void pack_init(const std::uint32_t pack_output)
+{
+    pack_init_body<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides, false>(pack_output, 1, 0);
+}
+
+#if PACK_API_SHIM_PR
+// The compute API's llk_pack_hw_configure (llk_pack_common_api.h) on the PR's LLK, the output's page in 16 byte words.
+template <bool is_fp32_dest_acc_en>
+inline void pack_hw_configure(const std::uint32_t pack_output, const std::uint32_t tile_size)
+{
+    const std::uint32_t output_id  = get_output_id(pack_output);
+    const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
+    const std::uint32_t tile_c_dim = get_output_tile_c_dim(output_id);
+    const std::uint32_t num_faces  = get_output_num_faces(output_id);
+    _llk_pack_hw_configure_<is_fp32_dest_acc_en, PackMode::Default>(
+        pack_src_format[output_id], pack_dst_format[output_id], tile_size, face_r_dim, tile_c_dim, num_faces, get_output_partial_face(output_id), 0);
+    llk_pack_hw_configure_live<is_fp32_dest_acc_en>(face_r_dim, tile_c_dim, num_faces);
+}
+#endif
 
 // The compute API's llk_pack_reconfig_data_format(new_output) (llk_pack_common_api.h): on the PR's LLK with its skip mask.
 template <bool is_fp32_dest_acc_en>
