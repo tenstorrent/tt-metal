@@ -758,7 +758,10 @@ ProgramDescriptor build_program_descriptor(
     // [K, 2] shard; the first of them, the aggregator, sums the others' 2 partial tiles (written into its cb_wtmp,
     // counted on sem_shared_part) and runs the SwiGLU. One core alone reads at its own NoC's rate, ~28 GB/s.
     constexpr uint32_t kSharedSplit = 4;
-    const uint32_t shared_split = has_shared && parallel_experts && shared_slots == 1u &&
+    // Off for now: a profiled persistent run hung with it on (not reproduced unprofiled); see the kernels'
+    // FE_SHARED_SPLIT paths, which stay compiled out at 1.
+    constexpr bool kSharedSplitEnabled = false;
+    const uint32_t shared_split = kSharedSplitEnabled && has_shared && parallel_experts && shared_slots == 1u &&
                                           cores_per_expert == 2u * kGridY && shared_first_local == num_producers &&
                                           shared_first_local + kSharedSplit < cores_per_expert &&
                                           k_tiles % (kSharedSplit * shared_chunk_k) == 0u &&
