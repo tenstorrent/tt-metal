@@ -454,19 +454,13 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
 }
 
 # Wormhole Galaxy. Same axes as Blackhole -- the shape arguments for TP=4 are architectural, not
-# per-chip -- but two things differ and both are memory, not parallelism:
+# per-chip -- but these differ:
 #
-#   * `coresident: False`. A Wormhole chip has 12 GB of DRAM against Blackhole's 32 GB, and the DiT
-#     alone fills it. Keeping the text encoder resident beside it (~1.6 GB/device) overflows by a
-#     couple of MB, so each stage is evicted before the next loads. The cost is a text-encoder
-#     reload per request, which is the trade the Residency note above describes.
+#   * `coresident: False`. A Wormhole chip has 12 GB of DRAM against Blackhole's 32 GB, so each stage is
+#     evicted before the next loads. The cost is a text-encoder reload per request, which is the trade
+#     the Residency note above describes.
+#   * `dit_fsdp: True`: the DiT weights are sharded across the SP axis too and gathered layer by layer.
 #   * `num_links: 4`, matching the 4 KB router payload the Wormhole Galaxy meshes open with.
-#   * ref2va arena caps for a 12 GB chip. The transformer rebuilds a cap-sized source table every
-#     forward (sum of caps x hidden/TP x bf16): the Blackhole caps make that 322336 rows = 866 MB per
-#     device, and a 15 s target with a 5 s video reference (19136 rows/device) then OOMs at the
-#     first step by 768 B (2026-09-29). These caps keep a full 15 s of reference video and cut the
-#     prompt arena to 16384 tokens: 9 images or one video fit, three 5 s videos (~18K tokens) do not.
-#     Table: 243456 rows = 654 MB; resident prefix 130528 rows instead of 209408.
 #
 # There is no (4, 32) entry: the quad is a Blackhole configuration.
 # TODO: Try to figure out how we can keep components of the the model coresident throughout generation
@@ -480,7 +474,12 @@ _PRESETS_WH: dict[tuple[int, ...], dict] = {
         "topology": ttnn.Topology.Ring,
         "coresident": False,
         "dit_fsdp": True,
-        # Bucketed: dynamic length is unmeasured on Wormhole.
+        # Dynamic length by default, as on the Blackhole 4x8; the bucket ladder stays as the backup path and the
+        # admission cap.
+        "dynamic_length": True,
+        # Allocated per request: kept resident, it leaves no room for ref2va's token refiner at the 61440-token
+        # prompt cap on a 12 GB chip.
+        "resident_kv_gather_pair": False,
         "bucket_denoise": True,
         "use_persistent_ccl_buffers": False,
         "bucket_ladder": {"t2va": MINIMAX_H3_BUCKET_LADDER_4X8, "ref2va": MINIMAX_H3_REF2VA_BUCKET_LADDER_4X8},
@@ -647,8 +646,8 @@ class MiniMaxH3Pipeline:
         max_sequence_length: int | None = None,
     ) -> None:
         """`dynamic_length` serves every packed length up to `max_sequence_length` with one program set per
-        length class (eager only). It is the Blackhole 4x8 preset's default; `_resolve_denoise_path` has the
-        precedence (kwarg > MINIMAX_H3_DYNAMIC_LENGTH > preset) and how the bucketed kwargs keep that path."""
+        length class (eager only). It is the 4x8 presets' default on both architectures; `_resolve_denoise_path` has
+        the precedence (kwarg > MINIMAX_H3_DYNAMIC_LENGTH > preset) and how the bucketed kwargs keep that path."""
         self.mesh_device = mesh_device
         self.weights_dir = Path(weights_dir)
         self.video_shift = VIDEO_SHIFT if video_shift is None else float(video_shift)
@@ -691,6 +690,8 @@ class MiniMaxH3Pipeline:
             if use_persistent_ccl_buffers is None
             else use_persistent_ccl_buffers
         )
+        # Dynamic length: keep the capacity-sized K/V gather pair across requests (False: allocate it per request).
+        self.resident_kv_gather_pair = preset.get("resident_kv_gather_pair", True)
         assert self.use_persistent_ccl_buffers or not self.trace_denoise, (
             "use_persistent_ccl_buffers=False relies on a host sync before each all-gather-matmul, which a traced "
             "denoise does not replay"
@@ -936,8 +937,8 @@ class MiniMaxH3Pipeline:
         `tp_axis`/`sp_axis`/`num_links`/`topology` to override it.
 
         `trace_denoise`, `bucket_denoise`, `use_persistent_ccl_buffers` and `bucket_ladder` default to the mesh preset;
-        `arena_caps` and `adaln_slot_roles` default to the task's envelope. `dynamic_length` (the Blackhole 4x8
-        preset's default; kwarg > MINIMAX_H3_DYNAMIC_LENGTH=0|1 > preset) replaces the bucket ladder by the live
+        `arena_caps` and `adaln_slot_roles` default to the task's envelope. `dynamic_length` (the 4x8
+        presets' default; kwarg > MINIMAX_H3_DYNAMIC_LENGTH=0|1 > preset) replaces the bucket ladder by the live
         padded length up to `max_sequence_length`; passing any bucketed kwarg instead keeps that path. `dit_fsdp`
         (MINIMAX_H3_DIT_FSDP=0|1 > kwarg > preset) is on by default for dynamic-length ref2va, see `_resolve_dit_fsdp`.
         """
@@ -2337,7 +2338,7 @@ class MiniMaxH3Pipeline:
         `condition_spec` is the only thing the tasks differ by here, and only `ref2va` passes one.
         """
         transformer = self._prepare_transformer()
-        if self.dynamic_length:
+        if self.dynamic_length and self.resident_kv_gather_pair:
             self._bind_kv_gather_pair(transformer)
         dram_probe.report("after transformer load, before denoise")
         with self._track_cache_misses(on_event, "denoising"):
