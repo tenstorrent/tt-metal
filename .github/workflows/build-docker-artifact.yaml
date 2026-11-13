@@ -457,6 +457,12 @@ jobs:
           # specific-registry problem.
           retries: "2"
           retry-delay-seconds: "15"
+          # Python packages ship TLS test fixtures (future, tornado, ...) that
+          # the crypto scan reports as private keys. Keys anywhere else still
+          # fail the gate.
+          trivy-allowed-private-keys: |
+            */site-packages/*/test/*
+            */site-packages/*/tests/*
 
   # Build ManyLinux image (runs in parallel with Ubuntu)
   manylinux:
@@ -543,6 +549,12 @@ jobs:
           harbor-prefix: ${{ inputs.harbor-prefix }}
           retries: "2"
           retry-delay-seconds: "15"
+          # Python packages ship TLS test fixtures (future, tornado, ...) that
+          # the crypto scan reports as private keys. Keys anywhere else still
+          # fail the gate.
+          trivy-allowed-private-keys: |
+            */site-packages/*/test/*
+            */site-packages/*/tests/*
 
   build-llk-images:
     name: "🐳️ Build LLK Docker images"
