@@ -279,24 +279,41 @@ void FusedExpertsDeviceOperation::validate_on_program_cache_miss(
                 gate.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
             "fused_experts: router_weight must be ND-sharded in L1 (over the router cores) or DRAM");
         TT_FATAL(
-            static_cast<uint32_t>(gate.logical_shape()[-2]) == hidden_dim &&
-                static_cast<uint32_t>(gate.logical_shape()[-1]) == num_weights_arg,
-            "fused_experts: router_weight must be [{}, {}] (hidden x experts), got [{}, {}]",
-            hidden_dim,
-            num_weights_arg,
-            gate.logical_shape()[-2],
-            gate.logical_shape()[-1]);
-        TT_FATAL(
             num_weights_arg % tt::constants::TILE_WIDTH == 0,
             "fused_experts: router_weight needs a whole number of 32-expert tile columns, got {} experts",
             num_weights_arg);
-        const auto& nd = gate.memory_config().nd_shard_spec();
-        TT_FATAL(
-            nd.has_value() && static_cast<uint32_t>(nd->shard_shape[-2]) == hidden_dim &&
-                static_cast<uint32_t>(nd->shard_shape[-1]) == tt::constants::TILE_WIDTH,
-            "fused_experts: router_weight must be ND-sharded [{}, {}] (one 32-expert tile column per shard)",
-            hidden_dim,
-            tt::constants::TILE_WIDTH);
+        if (attributes.persistent.has_value()) {
+            // The persistent op's router is sharded by expert over its chips: each chip's router_weight is its own
+            // [hidden, 32] tile column of the gate (see FusedPersistentParams), K-split over its partial cores.
+            TT_FATAL(
+                static_cast<uint32_t>(gate.logical_shape()[-2]) == hidden_dim &&
+                    static_cast<uint32_t>(gate.logical_shape()[-1]) == tt::constants::TILE_WIDTH &&
+                    num_weights_arg == tt::constants::TILE_WIDTH * x.device()->shape().mesh_size(),
+                "fused_experts: the persistent op's router_weight is each chip's [{}, {}] column of the gate, {} "
+                "experts over {} chips; got [{}, {}]",
+                hidden_dim,
+                tt::constants::TILE_WIDTH,
+                num_weights_arg,
+                x.device()->shape().mesh_size(),
+                gate.logical_shape()[-2],
+                gate.logical_shape()[-1]);
+        } else {
+            TT_FATAL(
+                static_cast<uint32_t>(gate.logical_shape()[-2]) == hidden_dim &&
+                    static_cast<uint32_t>(gate.logical_shape()[-1]) == num_weights_arg,
+                "fused_experts: router_weight must be [{}, {}] (hidden x experts), got [{}, {}]",
+                hidden_dim,
+                num_weights_arg,
+                gate.logical_shape()[-2],
+                gate.logical_shape()[-1]);
+            const auto& nd = gate.memory_config().nd_shard_spec();
+            TT_FATAL(
+                nd.has_value() && static_cast<uint32_t>(nd->shard_shape[-2]) == hidden_dim &&
+                    static_cast<uint32_t>(nd->shard_shape[-1]) == tt::constants::TILE_WIDTH,
+                "fused_experts: router_weight must be ND-sharded [{}, {}] (one 32-expert tile column per shard)",
+                hidden_dim,
+                tt::constants::TILE_WIDTH);
+        }
         TT_FATAL(bias.storage_type() == StorageType::DEVICE, "fused_experts: router_bias must be on device");
         TT_FATAL(
             bias.layout() == tt::tt_metal::Layout::ROW_MAJOR && bias.dtype() == tt::tt_metal::DataType::BFLOAT16,
@@ -646,9 +663,8 @@ void FusedExpertsDeviceOperation::validate_on_program_cache_miss(
             "fused_experts: the persistent op takes its token row into the one-row L1 replica, got {}",
             x.memory_config());
         TT_FATAL(
-            tensor_args.router_weight.has_value() &&
-                tensor_args.router_weight->buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
-            "fused_experts: the persistent op runs the router from a DRAM gate (an L1 gate cannot change per layer)");
+            tensor_args.router_weight.has_value(),
+            "fused_experts: the persistent op runs the router (each layer's gate column from the layer table)");
         TT_FATAL(
             tensor_args.shared_gate_up_weights.has_value(),
             "fused_experts: the persistent op needs the fused shared expert");
@@ -760,6 +776,7 @@ tt::tt_metal::operation::Hash FusedExpertsDeviceOperation::compute_program_hash(
         attributes.persistent.has_value() ? attributes.persistent->input_socket_config_addresses
                                           : std::vector<uint32_t>{},
         attributes.persistent.has_value() ? attributes.persistent->partials_addresses : std::vector<uint32_t>{},
+        attributes.persistent.has_value() ? attributes.persistent->sub_parts : 0u,
         attributes.persistent.has_value() ? attributes.persistent->sum_core_noc_xs
                                           : std::vector<std::vector<uint32_t>>{},
         attributes.persistent.has_value() ? attributes.persistent->sum_core_noc_ys
@@ -900,7 +917,6 @@ FusedExpertsDeviceOperation::invoke(
         const uint32_t num_chips = static_cast<uint32_t>(mesh->shape().mesh_size());
         TT_FATAL(
             row_bytes % num_links == 0, "fused_experts: a {} B row does not split into {} parts", row_bytes, num_links);
-        const uint32_t part_bytes = row_bytes / num_links;
         FusedPersistentParams persistent{
             .num_layers = static_cast<uint32_t>(persistent_layer_table->logical_shape()[-2]),
             .socket_core = socket_core,
@@ -942,8 +958,9 @@ FusedExpertsDeviceOperation::invoke(
                 k,
                 mesh->shape(),
                 receivers.size());
-            // The partials buffer: on every chip of the requester, one L1 shard per link -- num_chips slots of that
-            // link's part of a row, then a flag word per chip -- on that link's sum core.
+            // The partials buffer: on every chip of the requester, one L1 shard per sum core -- num_chips slots of
+            // that core's columns of a row (the row split evenly over the shards, in order), then a flag word per
+            // chip. A link's part of a row covers sub_parts consecutive shards.
             TT_FATAL(
                 partials.storage_type() == StorageType::DEVICE && partials.device() != mesh &&
                     partials.memory_config().buffer_type() == tt::tt_metal::BufferType::L1 &&
@@ -953,13 +970,22 @@ FusedExpertsDeviceOperation::invoke(
             const auto& shard = partials.shard_spec().value();
             const auto sum_cores = corerange_to_cores(shard.grid, std::nullopt, /*row_wise=*/true);
             const uint32_t shard_bytes = partials.buffer()->aligned_size_per_bank();
+            const auto num_parts = static_cast<uint32_t>(sum_cores.size());
             TT_FATAL(
-                sum_cores.size() == num_links && shard_bytes >= num_chips * (part_bytes + 4u),
-                "fused_experts: requester {}'s partials need {} shards (one per link) of at least {} B, got {} of {} B",
+                num_parts % num_links == 0 && row_bytes % num_parts == 0 &&
+                    (persistent.sub_parts == 0 || persistent.sub_parts == num_parts / num_links),
+                "fused_experts: requester {}'s partials have {} shards, which must split the {} links' parts evenly, "
+                "alike for every requester",
                 k,
-                num_links,
-                num_chips * (part_bytes + 4u),
-                sum_cores.size(),
+                num_parts,
+                num_links);
+            persistent.sub_parts = num_parts / num_links;
+            const uint32_t sub_bytes = row_bytes / num_parts;
+            TT_FATAL(
+                shard_bytes >= num_chips * (sub_bytes + 4u),
+                "fused_experts: requester {}'s partials shards need at least {} B, got {} B",
+                k,
+                num_chips * (sub_bytes + 4u),
                 shard_bytes);
             auto* requester = partials.device();
             persistent.partials_addresses.push_back(static_cast<uint32_t>(partials.buffer()->address()));

@@ -46,7 +46,10 @@ from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache
 from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader, resolve_snapshot_dir
 
 PCC = 0.95
-# The persistent op runs the very same kernels as the one-shot op, so the two should agree to rounding.
+# The persistent op runs the one-shot op's expert kernels, so the two agree to rounding wherever they pick the same
+# experts. Its router is its own (sharded over the chips, its partial sums added in fp32), so on a near-tie -- a step
+# whose torch reference offers alternative top-k sets (ROUTING_TIE) -- the two may pick different experts, and the
+# step is held to the torch check alone.
 PCC_VS_OP = 0.9999
 PARENT_MESH = (8, 4)
 MOE_SUBMESH = (3, 4)
@@ -143,6 +146,12 @@ def _reference(x, provider, weights, config, experts):
     return candidates, margin
 
 
+def _single_senders(rows):
+    """Per requester row, whether one of its chips sends every request to all the MoE chips (PersistentMoE's
+    ``single_senders``): one multicast does it only from the row right above the MoE."""
+    return [row == MOE_OFFSET[0] - 1 for row in rows]
+
+
 def _pcc(a, b):
     return torch.corrcoef(torch.stack([a.flatten(), b.flatten()]))[0, 1].item()
 
@@ -225,7 +234,7 @@ def test_moe_persistent_tp12(mesh_device):
     ttnn.synchronize_device(moe_mesh)
 
     # Step s comes from requester s % num_requesters; each round every requester's request is in flight at once.
-    moe_op = PersistentMoE(moe_mesh, request_meshes, moes, socket_core, request_core)
+    moe_op = PersistentMoE(moe_mesh, request_meshes, moes, socket_core, request_core, _single_senders(REQUEST_ROWS))
     outs = []
     try:
         for first in range(0, len(STEPS), num_requesters):
@@ -241,6 +250,7 @@ def test_moe_persistent_tp12(mesh_device):
                     f"step {s} layer {STEPS[s]} requester {s % num_requesters}: "
                     f"PCC {_pcc(one_shot[s], outs[-1])} vs the one-shot op"
                 )
+        hc_pccs = _hc_post_round(moe_op, hidden, outs, num_requesters)
     finally:
         moe_op.stop()
 
@@ -254,15 +264,81 @@ def test_moe_persistent_tp12(mesh_device):
         pcc_torch = pccs[best]
         pcc_one_shot_torch = max(_pcc(c, one_shot[s]) for c in candidates[s])
         pcc_op = _pcc(one_shot[s], outs[s])
-        failed |= pcc_torch < PCC or pcc_op < PCC_VS_OP
+        near_tie = len(candidates[s]) > 1
+        failed |= pcc_torch < PCC or (pcc_op < PCC_VS_OP and not near_tie)
         routing = "exact top-k" if best == 0 else f"tie-broken top-k {best} of {len(pccs) - 1} alternatives"
         report.append(
             f"step {s} layer {layer}: persistent vs torch {pcc_torch:.5f} ({routing}; exact top-k {pccs[0]:.5f}), "
-            f"one-shot vs torch {pcc_one_shot_torch:.5f}, persistent vs one-shot {pcc_op:.6f}, "
-            f"top-k margin {margins[s]:.2e}"
+            f"one-shot vs torch {pcc_one_shot_torch:.5f}, persistent vs one-shot {pcc_op:.6f}"
+            f"{' (near-tie, not checked)' if near_tie else ''}, top-k margin {margins[s]:.2e}"
         )
     logger.info("\n" + "\n".join(report))
-    assert not failed, f"PCC below {PCC} vs torch or {PCC_VS_OP} vs the one-shot op:\n" + "\n".join(report)
+    assert not failed, f"PCC below {PCC} vs torch, or {PCC_VS_OP} vs the one-shot op off a near-tie:\n" + "\n".join(
+        report
+    )
+    assert min(hc_pccs) >= HC_PCC, f"fused HC post step: PCC {hc_pccs} vs mix_streams' math on the plain output"
+
+
+HC_STREAMS = 4
+HC_PCC = 0.9999
+
+
+def _hc_post_round(moe_op, hidden, outs, num_requesters) -> list:
+    """Steps 0 .. num_requesters - 1 again, one per requester, with the hyper-connection post step fused into the
+    request: each requester's new streams against ``post[h] * out + comb.T @ streams`` on that step's plain output."""
+    pccs = []
+    pending = []
+    for s in range(num_requesters):
+        mesh = moe_op.request_meshes[s]
+        streams = torch.randn(1, 1, HC_STREAMS, hidden.shape[1]).to(torch.bfloat16)
+        post = (2 * torch.rand(1, 1, HC_STREAMS, 1)).to(torch.bfloat16)
+        comb = torch.softmax(torch.randn(1, 1, HC_STREAMS, HC_STREAMS), dim=-1).to(torch.bfloat16)
+        rep = ttnn.ReplicateTensorToMesh(mesh)
+        tt_streams = ttnn.from_torch(
+            streams,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh,
+            memory_config=moe_op.streams_memory_config(mesh, HC_STREAMS),
+            mesh_mapper=rep,
+        )
+        tt_post, tt_comb = (
+            ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh, mesh_mapper=rep)
+            for t in (post, comb)
+        )
+        moe_op.upload(s, hidden[s])
+        out = moe_op.request(s, STEPS[s], streams=tt_streams, post=tt_post, comb=tt_comb)
+        x = outs[s].reshape(1, -1)
+        mix = comb[0, 0].float().T @ streams[0, 0].float()
+        expected = post[0, 0].float() * x + mix
+        pending.append((s, out, expected, (tt_streams, tt_post, tt_comb), (x, mix, post, comb, streams)))
+    dump = []
+    for s, out, expected, inputs, terms in pending:
+        got = None
+        for t in ttnn.get_device_tensors(out):
+            got = ttnn.to_torch(t).reshape(expected.shape).float()
+            pccs.append(_pcc(expected, got))
+        # Which term is off: what the device's output implies for x and for the mix, given the other.
+        x, mix, post, _, _ = terms
+        p = post[0, 0].float()
+        x_implied = (got - mix) / p
+        mix_implied = got - p * x
+        logger.info(
+            f"step {s} with the HC post step fused: PCC {pccs[-1]:.6f} (last chip); implied x vs x per stream "
+            f"{[round(_pcc(x_implied[h], x[0]), 5) for h in range(got.shape[0])]}, implied mix vs mix per stream "
+            f"{[round(_pcc(mix_implied[h], mix[h]), 5) for h in range(got.shape[0])]}, |x| {x.abs().mean():.3e}, "
+            f"|mix| {mix.abs().mean():.3e}, |err| {(got - expected).abs().mean():.3e}"
+        )
+        dump.append({"got": got, "expected": expected, "terms": terms})
+        ttnn.deallocate(out)
+        for t in inputs:
+            ttnn.deallocate(t)
+    if min(pccs) < HC_PCC:
+        path = os.path.join("generated", "hc_post_dump.pt")
+        os.makedirs("generated", exist_ok=True)
+        torch.save(dump, path)
+        logger.info(f"fused HC post step below {HC_PCC}: tensors saved to {path}")
+    return pccs
 
 
 @pytest.mark.skipif(_snapshot() is None, reason=f"V4.1-Flash checkpoint not found under {DEFAULT_MODEL_DIR}")
@@ -344,7 +420,7 @@ def test_moe_persistent_tp12_all_layers(mesh_device):
         ttnn.deallocate(out)
     ttnn.synchronize_device(moe_mesh)
 
-    moe_op = PersistentMoE(moe_mesh, request_meshes, moes, socket_core, request_core)
+    moe_op = PersistentMoE(moe_mesh, request_meshes, moes, socket_core, request_core, _single_senders(REQUEST_ROWS))
     outs = []
     try:
         for first in range(0, len(steps), num_requesters):
@@ -366,18 +442,19 @@ def test_moe_persistent_tp12_all_layers(mesh_device):
         best = max(range(len(pccs)), key=pccs.__getitem__)
         pcc_anchor = _pcc(expected[s], candidates[s][0])
         pcc_op = _pcc(one_shot[s], outs[s])
-        if pccs[best] < PCC or pcc_op < PCC_VS_OP or pcc_anchor < PCC_VS_OP:
+        near_tie = len(candidates[s]) > 1
+        if pccs[best] < PCC or (pcc_op < PCC_VS_OP and not near_tie) or pcc_anchor < PCC_VS_OP:
             failed.append(s)
         routing = "exact top-k" if best == 0 else f"tie-broken top-k {best} of {len(pccs) - 1} alternatives"
         report.append(
             f"step {s} layer {layer} requester {s % num_requesters}: persistent vs torch {pccs[best]:.5f} ({routing}; "
-            f"exact top-k {pccs[0]:.5f}), persistent vs one-shot {pcc_op:.6f}, torch vs checkpoint reference "
-            f"{pcc_anchor:.6f}"
+            f"exact top-k {pccs[0]:.5f}), persistent vs one-shot {pcc_op:.6f}"
+            f"{' (near-tie, not checked)' if near_tie else ''}, torch vs checkpoint reference {pcc_anchor:.6f}"
         )
     logger.info("\n" + "\n".join(report))
     assert not failed, (
-        f"steps {failed}: PCC below {PCC} vs torch, or {PCC_VS_OP} vs the one-shot op or between torch and the "
-        "checkpoint's reference"
+        f"steps {failed}: PCC below {PCC} vs torch, or {PCC_VS_OP} vs the one-shot op off a near-tie or between torch "
+        "and the checkpoint's reference"
     )
 
 
@@ -494,7 +571,9 @@ def test_moe_persistent_tp12_perf(mesh_device):
     # time, waiting for its response.
     for num_requesters in (1, len(request_meshes)):
         meshes = request_meshes[-num_requesters:]
-        moe_op = PersistentMoE(moe_mesh, meshes, moes, socket_core, request_core)
+        moe_op = PersistentMoE(
+            moe_mesh, meshes, moes, socket_core, request_core, _single_senders(REQUEST_ROWS[-num_requesters:])
+        )
         mismatched = []
         name = f"persistent, {num_requesters} requester{'s' if num_requesters > 1 else ''}"
         try:

@@ -354,9 +354,13 @@ class DeepSeekV41PersistentMoeDecoderLayer(DeepSeekV41DecoderLayer):
             self.engram.wkv.fetch_weights()
         self.self_attn.prefetch_weights(one_row=one_row)
 
-    def moe(self, normed: ttnn.Tensor) -> ttnn.Tensor:
+    def moe(self, normed: ttnn.Tensor, post=None, comb=None, streams=None) -> ttnn.Tensor:
         """The server's MoE of ``normed`` ``[1, 1, 1, D]``: the reduced row as ``[1, 1, 1, D]`` bf16 ROW_MAJOR in
-        DRAM, replicated over the mesh. ``normed`` is not consumed."""
+        DRAM, replicated over the mesh. ``normed`` is not consumed.
+
+        With ``post``, ``comb`` and ``streams`` the request also runs the FFN hyper-connection's post step on the
+        row (``mix_streams``, on the stream-collapse cores as the partials arrive) and returns the new streams, in
+        ``streams``' spec, which must be the server's :meth:`~.persistent_moe.PersistentMoE.streams_memory_config`."""
         d = self.config.hidden_size
         row = ttnn.to_memory_config(normed, ttnn.DRAM_MEMORY_CONFIG)
         if row.layout != ttnn.ROW_MAJOR_LAYOUT:
@@ -368,9 +372,22 @@ class DeepSeekV41PersistentMoeDecoderLayer(DeepSeekV41DecoderLayer):
             row = ttnn.typecast(cast, ttnn.bfloat16)
             ttnn.deallocate(cast)
         row = ttnn.reshape(row, [1, 1, 1, d])
-        out = self.moe_server.request(self.requester, self.layer_idx, row)
+        out = self.moe_server.request(self.requester, self.layer_idx, row, streams=streams, post=post, comb=comb)
         ttnn.deallocate(row)
         return out
+
+    def _fuses_post(self, post: ttnn.Tensor, comb: ttnn.Tensor, streams: ttnn.Tensor) -> bool:
+        """Whether the MoE request can run the FFN post step itself (see :meth:`moe`)."""
+        return (
+            post.dtype == ttnn.bfloat16
+            and comb.dtype == ttnn.bfloat16
+            and post.layout == ttnn.TILE_LAYOUT
+            and comb.layout == ttnn.TILE_LAYOUT
+            and streams.dtype == ttnn.bfloat16
+            and streams.layout == ttnn.ROW_MAJOR_LAYOUT
+            and streams.memory_config()
+            == self.moe_server.streams_memory_config(self.device, num_streams=streams.shape[2])
+        )
 
     def decode(
         self,
@@ -409,6 +426,13 @@ class DeepSeekV41PersistentMoeDecoderLayer(DeepSeekV41DecoderLayer):
             post, comb, collapsed, ffn_pre = self.ffn_hc(hidden_streams, pre_mix=attn_pre)
         with _region("POST_NORM"):
             normed = self.post_attention_layernorm(collapsed)
+        if self._fuses_post(post, comb, hidden_streams):
+            # FFN_MIX runs inside the request, as the partials arrive.
+            with _region("MOE"):
+                streams_out = self.moe(normed, post=post, comb=comb, streams=hidden_streams)
+            ttnn.deallocate(normed)
+            ttnn.deallocate(hidden_streams)
+            return streams_out, ffn_pre
         with _region("MOE"):
             mlp_out = self.moe(normed)
         ttnn.deallocate(normed)

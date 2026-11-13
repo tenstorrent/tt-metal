@@ -24,7 +24,8 @@ from typing import Mapping, Sequence
 import torch
 import ttnn
 
-from models.experimental.deepseek_v4_flash.tt.common import CCL_TOPOLOGY
+from models.experimental.deepseek_v4_flash.tt.common import CCL_TOPOLOGY, width_sharded_l1_config
+from models.experimental.deepseek_v4_flash.tt.decode.hyperconnection import _HC_COLLAPSE_CORES
 
 from .moe import DeepSeekV41PreloadedExperts, DeepSeekV41SparseMoeBlock
 
@@ -33,6 +34,10 @@ STOP_LAYER = 0xFFFFFFFF
 HEADER_BYTES = 64
 # The worker grid and router row the op multicasts each row over: 12 x (8 + 1).
 REPLICA_GRID = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 8))])
+# The op's router is sharded by expert over the MoE chips: chip m scores the gate's tile column m (experts
+# [32m, 32m + 32)), K-split over the router row's first ROUTER_PARTS cores, which hold each layer's slice in L1.
+ROUTER_PARTS = 10
+ROUTER_PART_CORES = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 8), ttnn.CoreCoord(ROUTER_PARTS - 1, 8))])
 
 
 def default_socket_core(mesh) -> ttnn.CoreCoord:
@@ -83,8 +88,12 @@ class PersistentMoE:
     A layer's row of the table is its rank among the sorted layer ids, so a server may hold any subset of the
     model's layers. Each requester's request socket runs from ``request_core`` on each of its chips to
     ``socket_core`` on the MoE chips of the same column, with a one-page FIFO; its partials buffer (see
-    :meth:`partials_buffer`) on ``request_core`` and its left neighbour on every one of its chips. The sockets and
+    :meth:`partials_buffer`) on the hyper-connection's stream-collapse cores on every one of its chips. The sockets and
     buffers allocate L1, so build this before any trace capture on the requesters.
+
+    ``single_senders`` (per requester, default all False) has a requester's first chip send its every request to
+    all the MoE chips -- one multicast, for a requester mesh right above the MoE -- instead of each chip down its
+    own column, so the MoE chips start each row together (see the sharded router).
 
     The op takes requests in strict turn (requester 0, 1, ..., then 0 again), so with several requesters each
     sends its next request only after the others have sent theirs. Use :meth:`request` (or :meth:`upload` and
@@ -98,6 +107,7 @@ class PersistentMoE:
         moes,
         socket_core: ttnn.CoreCoord | None = None,
         request_core: ttnn.CoreCoord | None = None,
+        single_senders: Sequence[bool] | None = None,
     ):
         if not isinstance(moes, Mapping):
             moes = dict(enumerate(moes))
@@ -119,6 +129,8 @@ class PersistentMoE:
             assert moe.experts.tp_size == TP_SIZE, f"layer {layer}: experts at TP{moe.experts.tp_size}"
         assert experts.fused_all_reduce_axes is not None, "the persistent op reduces over the whole mesh"
 
+        # Each layer's gate, one [D, 32] column per MoE chip in L1 on its partial cores (see ROUTER_PART_CORES).
+        self.router_columns = [self.router_column(moes[layer], moe_mesh) for layer in self.layer_ids]
         rows = []
         for row, layer in enumerate(self.layer_ids):
             moe = moes[layer]
@@ -126,7 +138,7 @@ class PersistentMoE:
                 row,
                 moe.fused_shared.gate_up.buffer_address(),
                 moe.fused_shared.down.buffer_address(),
-                moe.gate.fused_gate_weight.buffer_address(),
+                self.router_columns[row].buffer_address(),
                 moe.gate.ranking_bias().buffer_address(),
             ]
             header += [0] * (HEADER_BYTES // 4 - len(header))
@@ -164,9 +176,13 @@ class PersistentMoE:
         for request_mesh in self.request_meshes:
             if tuple(request_mesh.shape)[1] != moe_cols:
                 raise ValueError(f"a requester must span the MoE's {moe_cols} columns, got {tuple(request_mesh.shape)}")
+            # Each MoE chip starts a row when its page arrives, and the sharded router has every chip wait for the
+            # latest one, so pages sent by several requester chips start the MoE at their skew. A single sender (its
+            # first chip) starts every MoE chip at once; one multicast reaches them only from the row right above.
+            single = single_senders is not None and single_senders[len(self.request_tx)]
             request_connections = [
                 ttnn.SocketConnection(
-                    ttnn.MeshCoreCoord(ttnn.MeshCoordinate(0, c), self.request_core),
+                    ttnn.MeshCoreCoord(ttnn.MeshCoordinate(0, 0 if single else c), self.request_core),
                     ttnn.MeshCoreCoord(ttnn.MeshCoordinate(r, c), self.socket_core),
                 )
                 for c in range(moe_cols)
@@ -185,9 +201,10 @@ class PersistentMoE:
         self.inputs = [self.request_input(j) for j in range(len(self.request_meshes))]
 
         shared = first.fused_shared
-        self.scratch = ttnn.experimental.deepseek.moe.fused_experts(
+        # Kept to relaunch the kernels after a stop (see :meth:`start`): the mesh is time-shared with the prefill MoE.
+        self._launch = lambda: ttnn.experimental.deepseek.moe.fused_experts(
             self.replica,
-            router_weight=first.gate.fused_gate_weight,
+            router_weight=self.router_columns[0],
             router_bias=first.gate.ranking_bias(),
             gate_up_weights=experts.gate_up_weights,
             down_weights=experts.down_weights,
@@ -210,19 +227,51 @@ class PersistentMoE:
             persistent_input_sockets=self.request_rx,
             persistent_partials=self.partials,
         )
+        self.scratch = self._launch()
         self.stopped = False
 
-    # The partials buffer's parts: one per fabric link of the op, each summed on its own core.
-    PARTS = 2
+    @staticmethod
+    def router_column(moe, moe_mesh):
+        """``moe``'s gate split by expert over ``moe_mesh``: chip m (in mesh order, the op's chip index) holds the
+        gate's tile column m, ``[D, 32]``, in L1, height-sharded over :data:`ROUTER_PART_CORES` (its K slices). The
+        tile columns are the gate's own tiles, so its bfloat8_b blocks carry over exactly."""
+        gate = moe.gate.fused_gate_weight
+        weight = ttnn.to_torch(ttnn.get_device_tensors(gate)[0])
+        weight = weight.reshape(-1, weight.shape[-2], weight.shape[-1])[0]
+        d, e = weight.shape
+        chips = moe_mesh.get_num_devices()
+        assert e == 32 * chips, f"the sharded router needs {32 * chips} experts over {chips} chips, got {e}"
+        assert d % (32 * ROUTER_PARTS) == 0, f"the sharded router splits K={d} into {ROUTER_PARTS} tile slices"
+        columns = torch.stack([weight[:, 32 * m : 32 * (m + 1)] for m in range(chips)]).unsqueeze(1)
+        return ttnn.from_torch(
+            columns,
+            dtype=gate.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=moe_mesh,
+            mesh_mapper=ttnn.ShardTensorToMesh(moe_mesh, dim=0),
+            memory_config=ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(ROUTER_PART_CORES, [d // ROUTER_PARTS, 32], ttnn.ShardOrientation.ROW_MAJOR),
+            ),
+        )
+
+    # The partials buffer's parts: one per stream-collapse core, which holds those columns of the residual streams
+    # (so the request can fuse the hyper-connection post step); the op's two fabric links send half each.
+    PARTS = _HC_COLLAPSE_CORES
+
+    def streams_memory_config(self, request_mesh, num_streams: int = 4) -> ttnn.MemoryConfig:
+        """The residual streams' ``[hc, D]`` ROW_MAJOR width-sharded L1 config, whose shards the partials buffer's
+        line up with (see :meth:`request`'s ``streams``)."""
+        return width_sharded_l1_config(num_streams, self.hidden, request_mesh, num_cores=self.PARTS, tile_height=1)
 
     def partials_buffer(self, request_mesh, num_chips: int):
         """A requester's partials buffer, zeroed: on every one of its chips, one L1 shard per part of the row, on
-        ``request_core``'s left neighbour (part 0) and ``request_core`` (part 1), of ``num_chips`` slots of that
-        part (the MoE chips' partials, in their order) then a flag word per chip."""
+        the stream-collapse cores in shard order, of ``num_chips`` slots of that part (the MoE chips' partials, in
+        their order) then a flag word per chip."""
         part_bytes = self.row_bytes // self.PARTS
         words = num_chips * (part_bytes + 4) // 4
-        x, y = self.request_core.x, self.request_core.y
-        cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(x - 1, y), ttnn.CoreCoord(x, y))])
+        cores = self.streams_memory_config(request_mesh).shard_spec.grid
         return ttnn.from_torch(
             torch.zeros(self.PARTS, words, dtype=torch.int32),
             dtype=ttnn.uint32,
@@ -264,18 +313,25 @@ class PersistentMoE:
         except KeyError:
             raise KeyError(f"layer {layer} is not on this persistent MoE (it serves {self.layer_ids})") from None
 
-    def request(self, requester: int, layer: int, tensor=None):
+    def request(self, requester: int, layer: int, tensor=None, streams=None, post=None, comb=None):
         """Dispatches ``requester``'s request for ``layer`` (a model layer id) without waiting for it; returns its
         output, the reduced row in ``tensor``'s spec, replicated over the requester's chips. ``tensor`` is a
-        ``[1, 1, 1, D]`` bf16 ROW_MAJOR DRAM-interleaved row (one page), :meth:`request_input`'s by default."""
-        return self._send(requester, self.row_of_layer(layer), tensor)
+        ``[1, 1, 1, D]`` bf16 ROW_MAJOR DRAM-interleaved row (one page), :meth:`request_input`'s by default.
 
-    def _send(self, requester: int, row: int, tensor=None):
+        With ``streams`` ``[1, 1, hc, D]`` (in :meth:`streams_memory_config`), ``post`` ``[1, 1, hc, 1]`` and
+        ``comb`` ``[1, 1, hc, hc]`` (bf16 TILE) the output is instead the hyper-connection's new streams,
+        ``post[h] * row + sum_g comb[g, h] * streams[g]`` (``mix_streams``), in ``streams``' spec."""
+        return self._send(requester, self.row_of_layer(layer), tensor, streams=streams, post=post, comb=comb)
+
+    def _send(self, requester: int, row: int, tensor=None, streams=None, post=None, comb=None):
         return ttnn.experimental.deepseek.moe.persistent_moe_request(
             self.inputs[requester] if tensor is None else tensor,
             layer=row,
             request_socket=self.request_tx[requester],
             partials=self.partials[requester],
+            streams=streams,
+            post=post,
+            comb=comb,
         )
 
     @staticmethod
@@ -300,3 +356,14 @@ class PersistentMoE:
             ttnn.deallocate(self._send(j, STOP_LAYER))
         for mesh in self.request_meshes + [self.moe_mesh]:
             ttnn.synchronize_device(mesh)
+
+    def start(self):
+        """Relaunches the kernels after :meth:`stop` (a no-op while they run), on the same sockets, buffers and layer
+        table: the kernels leave the request sockets' read state, the partials' flags and their go words as a fresh
+        launch expects them. The mesh is free between the two, e.g. for
+        :class:`~..prefill.persistent_moe.PersistentPrefillMoE`'s requests."""
+        if not self.stopped:
+            return
+        ttnn.deallocate(self.scratch)
+        self.scratch = self._launch()
+        self.stopped = False
