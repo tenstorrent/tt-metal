@@ -55,19 +55,22 @@ enum CompileTimeArg : uint32_t {
     kNumFixedCompileTimeArgs,
 };
 
-constexpr uint32_t my_transport_rank = get_compile_time_arg_val(kMyTransportRank);
+// Per-chip values (the transport rank, the target counts per direction, the unicast route) are common runtime args,
+// not compile-time args, so every chip of a mesh runs the same binary (one program for the whole mesh; see the
+// program factory).
+uint32_t my_transport_rank;  // common arg 0
 constexpr uint32_t reserved_packet_header_cb_id = get_compile_time_arg_val(kReservedPacketHeaderCbId);
 constexpr uint32_t cb_output_id = get_compile_time_arg_val(kCbOutputId);
 constexpr uint32_t packet_size_in_pages = get_compile_time_arg_val(kPacketSizeInPages);
 constexpr uint32_t output_page_size = get_compile_time_arg_val(kOutputPageSize);
-constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(kNumTargetsForwardDirection);
-constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(kNumTargetsBackwardDirection);
+uint32_t num_targets_forward_direction;   // common arg 1
+uint32_t num_targets_backward_direction;  // common arg 2
 constexpr bool fuse_op = get_compile_time_arg_val(kFuseOp);
 constexpr Topology topology = static_cast<Topology>(get_compile_time_arg_val(kTopology));
 constexpr uint32_t num_inputs = get_compile_time_arg_val(kNumInputs);
 constexpr bool direction = get_compile_time_arg_val(kDirection);  // 1 is forward, 0 is backward
-constexpr uint32_t unicast_route_arg0 = get_compile_time_arg_val(kUnicastRouteArg0);
-constexpr uint32_t unicast_route_arg1 = get_compile_time_arg_val(kUnicastRouteArg1);
+uint32_t unicast_route_arg0;                                      // common arg 3
+uint32_t unicast_route_arg1;                                      // common arg 4
 // Trace-safe metadata path: when set, the writer recomputes the gather extent (valid_pages) on-device
 // from kv_actual_isl[0] (a 1-element uint32 DRAM tensor) so it stays matched to the reader's on-device
 // recompute (else they desync under a placeholder host logical_n). When false neither this nor the
@@ -89,9 +92,6 @@ static_assert(!partial_readiness_enabled || num_inputs == 1, "partial readiness 
 static_assert(
     !partial_readiness_enabled || !split_forwarding_enabled,
     "partial readiness and split forwarding are mutually exclusive");
-static_assert(
-    !partial_readiness_enabled || (num_targets_forward_direction > 0 && num_targets_backward_direction > 0),
-    "partial readiness requires both ring directions");
 
 template <typename AddrGenType, typename FabricSender>
 FORCE_INLINE void write_bank_owned_slices(
@@ -138,6 +138,13 @@ FORCE_INLINE void discard_bank_owned_slices(
 }
 
 void kernel_main() {
+    my_transport_rank = get_common_arg_val<uint32_t>(0);
+    num_targets_forward_direction = get_common_arg_val<uint32_t>(1);
+    num_targets_backward_direction = get_common_arg_val<uint32_t>(2);
+    unicast_route_arg0 = get_common_arg_val<uint32_t>(3);
+    unicast_route_arg1 = get_common_arg_val<uint32_t>(4);
+    // partial readiness requires both ring directions
+    ASSERT(!partial_readiness_enabled || (num_targets_forward_direction > 0 && num_targets_backward_direction > 0));
     constexpr auto outputs_args = make_tensor_accessor_args_tuple<num_inputs, kNumFixedCompileTimeArgs + num_inputs>();
     constexpr uint32_t kMetaArgsOffset = has_metadata
                                              ? std::get<num_inputs - 1>(outputs_args).next_compile_time_args_offset()
@@ -252,7 +259,7 @@ void kernel_main() {
     cb_packet_header.push_back(1);
 
     // pre-populate packet headers
-    constexpr ccl_routing_utils::line_unicast_route_info_t unicast_route_info = {
+    const ccl_routing_utils::line_unicast_route_info_t unicast_route_info = {
         .dst_mesh_id = static_cast<uint16_t>(unicast_route_arg0),
         .dst_chip_id = static_cast<uint16_t>(unicast_route_arg1)};
 
@@ -264,7 +271,7 @@ void kernel_main() {
         fabric_connection.is_logically_connected() ? (direction == 1 ? &fabric_connection.get_backward_connection()
                                                                      : &fabric_connection.get_forward_connection())
                                                    : nullptr;
-    constexpr uint32_t num_targets_in_direction =
+    const uint32_t num_targets_in_direction =
         direction == 1 ? num_targets_backward_direction : num_targets_forward_direction;
 
     const uint64_t out_ready_sem_noc_addr_in_pkt =
@@ -274,7 +281,7 @@ void kernel_main() {
         tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, static_cast<uint32_t>(1)});
     ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_sem_inc, unicast_route_info);
     const auto signal_output_ready = [&]() {
-        if constexpr (num_targets_in_direction) {
+        if (num_targets_in_direction) {
             fabric_direction_connection->wait_for_empty_write_slot();
             fabric_direction_connection->send_payload_flush_blocking_from_address(
                 packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
@@ -282,7 +289,7 @@ void kernel_main() {
     };
 
     uint32_t slice_writes = 0;
-    constexpr uint32_t my_tensor_rank =
+    const uint32_t my_tensor_rank =
         ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
             my_transport_rank, mesh_rows, mesh_cols, snake_orientation);
 
@@ -301,7 +308,7 @@ void kernel_main() {
             for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; ++bh_idx) {
                 const uint32_t output_page_base =
                     bh_idx * output_pages_per_batch_head + my_tensor_rank * input_pages_per_batch_head;
-                if constexpr (num_targets_in_direction) {
+                if (num_targets_in_direction) {
                     if constexpr (partial_readiness_enabled) {
                         const uint32_t first_pages = ring_attention_all_gather::midpoint_prefix_pages(
                             input_valid_pages[input_idx], input_tensor_Wt[input_idx]);
@@ -370,7 +377,7 @@ void kernel_main() {
                     if (num_pages_to_read == 2) {
                         uint32_t second_tile_id = tile_id_start + row_offset + pages_read_in_row;
 
-                        if constexpr (num_targets_in_direction) {
+                        if (num_targets_in_direction) {
                             scatter_fabric_write_unidir(
                                 tile_id,
                                 second_tile_id,
@@ -389,7 +396,7 @@ void kernel_main() {
                     } else {
                         ASSERT(num_pages_to_read == 1);
 
-                        if constexpr (num_targets_in_direction) {
+                        if (num_targets_in_direction) {
                             fabric_write_unidir(
                                 tile_id,
                                 output_addrgens[input_idx],
@@ -431,9 +438,9 @@ void kernel_main() {
 
     uint32_t writes_expected = 0;
     if constexpr (topology == Topology::Linear) {
-        if constexpr (direction == 1 && num_targets_backward_direction) {
+        if (direction == 1 && num_targets_backward_direction) {
             writes_expected = num_targets_forward_direction;
-        } else if constexpr (direction == 0 && num_targets_forward_direction) {
+        } else if (direction == 0 && num_targets_forward_direction) {
             writes_expected = num_targets_backward_direction;
         }
     } else if constexpr (topology == Topology::Ring) {

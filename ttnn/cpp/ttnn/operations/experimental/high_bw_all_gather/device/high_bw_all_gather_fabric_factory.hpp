@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <memory>
+
 #include "high_bw_all_gather_device_operation_types.hpp"
 
 #include "ttnn/device_operation.hpp"
