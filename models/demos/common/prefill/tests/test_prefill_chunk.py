@@ -20,7 +20,7 @@ from models.demos.common.prefill.prefill_chunk import (
     decode_forward_metadata,
     decode_media_refs,
     forward_metadata_words,
-    max_media_refs,
+    media_refs_capacity,
     metadata_size_bytes,
     pack_forward_metadata,
     packed_forward_capabilities,
@@ -283,11 +283,11 @@ def test_media_refs_example_bytes():
     assert decode_media_refs(raw, 1, 2) == [ref]
 
 
-def test_max_media_refs_fill_the_socket_page():
-    assert max_media_refs(1, 512) == 11
+def test_media_refs_capacity_fills_the_socket_page():
+    assert media_refs_capacity(1, 512) == 11
     assert metadata_size_bytes(1, max_refs=11) <= 512 < metadata_size_bytes(1, max_refs=12)
-    assert max_media_refs(8, 512) == 9
-    assert max_media_refs(8, 64) == 0
+    assert media_refs_capacity(8, 512) == 9
+    assert media_refs_capacity(8, 64) == 0
 
 
 def test_media_refs_off_keeps_the_bytes():

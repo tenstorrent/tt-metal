@@ -74,7 +74,7 @@ def media_refs_size_bytes(max_refs: int) -> int:
     return _REF_COUNT.size + max_refs * REF_BYTES if max_refs else 0
 
 
-def max_media_refs(forward_chunks: int, page_bytes: int) -> int:
+def media_refs_capacity(forward_chunks: int, page_bytes: int) -> int:
     """Most refs whose H2D metadata fits ``page_bytes``, the socket page it must fit."""
     return max(0, (page_bytes - metadata_size_bytes(forward_chunks) - _REF_COUNT.size) // REF_BYTES)
 
