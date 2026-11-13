@@ -1035,6 +1035,44 @@ constexpr llk_pack_reconfig_imm_t llk_pack_reconfig_imm(
     return m;
 }
 
+// The kernel's distinct (packer input, output, face count) triples: a run-time output's reconfigure picks its immediate
+// sequence among them (llk_pack_reconfig_data_format's table path); n above the capacity means too many to list.
+struct llk_pack_reconfig_profiles_t
+{
+    std::uint32_t n;
+    std::uint8_t src[8], dst[8], faces[8];
+};
+
+template <std::size_t n>
+constexpr llk_pack_reconfig_profiles_t llk_pack_reconfig_profiles(
+    const unsigned char (&pack_src_format)[n], const unsigned char (&pack_dst_format)[n], const unsigned char (&pack_num_faces)[n])
+{
+    llk_pack_reconfig_profiles_t p {0, {}, {}, {}};
+    for (std::size_t i = 0; i < n; i++)
+    {
+        if (pack_src_format[i] == to_underlying(DataFormat::Invalid) || pack_dst_format[i] == to_underlying(DataFormat::Invalid))
+        {
+            continue;
+        }
+        bool seen = false;
+        for (std::uint32_t k = 0; k < p.n && k < 8; k++)
+        {
+            seen = seen || (p.src[k] == pack_src_format[i] && p.dst[k] == pack_dst_format[i] && p.faces[k] == pack_num_faces[i]);
+        }
+        if (!seen)
+        {
+            if (p.n < 8)
+            {
+                p.src[p.n]   = pack_src_format[i];
+                p.dst[p.n]   = pack_dst_format[i];
+                p.faces[p.n] = pack_num_faces[i];
+            }
+            p.n++;
+        }
+    }
+    return p;
+}
+
 // The bits of mask in one config word, set to val's: one RMWCIB per byte the mask touches.
 template <std::uint32_t addr, std::uint32_t mask, std::uint32_t val>
 TT_ALWAYS_INLINE void pack_cfg_rmw_imm()
