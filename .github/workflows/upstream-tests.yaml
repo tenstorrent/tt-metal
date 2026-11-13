@@ -219,7 +219,7 @@ jobs:
           ls -la .
       # Do not set up docker buildx because of https://github.com/docker/setup-buildx-action/issues/57
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
@@ -269,7 +269,7 @@ jobs:
           tar --zstd -xf ttm_any.tar.zst -C _tt-metal/
           ls -hal _tt-metal/build/tools/scaleout/run_cabling_generator
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}

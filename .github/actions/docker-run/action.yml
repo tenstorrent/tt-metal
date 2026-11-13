@@ -93,7 +93,7 @@ runs:
         TT_METAL_DOCKER_IMAGE_TAG: ${{ env.TT_METAL_DOCKER_IMAGE_TAG }}
     - name: Docker login
       if: ${{ steps.registry.outputs.login-required == 'true' }}
-      uses: docker/login-action@v3
+      uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
       with:
         registry: ${{ steps.registry.outputs.registry }}
         username: ${{ inputs.docker_username }}

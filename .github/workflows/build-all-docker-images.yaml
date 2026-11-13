@@ -348,7 +348,7 @@ jobs:
           fetch-depth: 1
           submodules: recursive
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: https://ghcr.io
           username: ${{ github.actor }}
@@ -410,14 +410,14 @@ jobs:
           sparse-checkout-cone-mode: false
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: https://ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Login to Harbor Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: harbor.ci.tenstorrent.net
           username: ${{ secrets.HARBOR_PUSH_USER }}

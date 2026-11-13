@@ -78,7 +78,7 @@ jobs:
             env.HTTP_PROXY=${{ env.PROXY_HTTP }}
             env.HTTPS_PROXY=${{ env.PROXY_HTTPS }}
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: https://ghcr.io
           username: ${{ github.actor }}
@@ -254,7 +254,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Docker login
-        uses: docker/login-action@v3
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: https://ghcr.io
           username: ${{ github.actor }}
