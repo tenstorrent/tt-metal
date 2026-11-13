@@ -116,8 +116,7 @@ ttnn::device_operation::ProgramArtifacts TypecastRowMajorChunkedProgramFactory::
     const TensorParamName OUTPUT{"output"};
     const KernelSpecName READER{"reader"};
     const KernelSpecName WRITER{"writer"};
-    const KernelSpecName COMPUTE_GROUP_1{"compute_group_1"};
-    const KernelSpecName COMPUTE_GROUP_2{"compute_group_2"};
+    const KernelSpecName COMPUTE{"compute"};
 
     constexpr uint32_t num_input_pages = 2;   // Always use double buffering
     constexpr uint32_t num_output_pages = 2;  // Always use double buffering
@@ -199,25 +198,27 @@ ttnn::device_operation::ProgramArtifacts TypecastRowMajorChunkedProgramFactory::
 
     const char* const path = "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute/eltwise_typecast.cpp";
 
-    // One KernelSpec per legacy compute KernelDescriptor: the per-group chunk count stays a
-    // compile-time arg, so the work-split multiplicity is preserved.
+    // One compute kernel for both core groups: the chunk count per core (rows * total chunks per
+    // row) is a runtime arg, so the groups differ only in their runtime args and the binary does
+    // not depend on the row count.
     // Field values carried over from the legacy ComputeConfigDescriptor: math_fidelity=HiFi4,
     // fp32_dest_acc_en, bfp8_pack_precise, math_approx_mode=false. dst_full_sync_en was left at its
     // legacy default (false) = double_buffer_dest true, which is also the Metal 2.0 default.
-    const auto make_compute = [&](const KernelSpecName& id, uint32_t per_core_block_cnt) {
+    const auto make_compute = [&](const KernelSpecName& id) {
         return KernelSpec{
             .unique_id = id,
             .source = path,
-            .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
+            .compiler_options =
+                {.defines = {{"TYPECAST_RUNTIME_BLOCK_CNT", "1"}}, .opt_level = KernelBuildOptLevel::O3},
             .dfb_bindings =
                 {DFBBinding{.dfb_spec_name = IN_DFB, .accessor_name = "in", .endpoint_type = DFBEndpointType::CONSUMER},
                  DFBBinding{
                      .dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::PRODUCER}},
             .compile_time_args =
-                {{"per_core_block_cnt", per_core_block_cnt},  // rows * total_chunks_per_row
-                 {"per_core_block_dim", 1u},
+                {{"per_core_block_dim", 1u},
                  {"in_data_format", static_cast<uint32_t>(datatype_to_dataformat_converter(input.dtype()))},
                  {"out_data_format", static_cast<uint32_t>(datatype_to_dataformat_converter(output.dtype()))}},
+            .runtime_arg_schema = {.runtime_arg_names = {"per_core_block_cnt"}},
             // No bfp_pack_precision_mode on Quasar (TT-2.x.x; MXFP replaces BFP). WH/BH keep the
             // legacy config, with the BFP pack knob in config_1xx.
             .hw_config = [&]() -> ComputeHardwareConfig {
@@ -244,17 +245,15 @@ ttnn::device_operation::ProgramArtifacts TypecastRowMajorChunkedProgramFactory::
         };
     };
 
-    Group<KernelSpec> kernels = {reader, writer};
+    Group<KernelSpec> kernels = {reader, writer, make_compute(COMPUTE)};
     Group<WorkUnitSpec> work_units;
     if (!core_group_1.ranges().empty()) {
-        kernels.push_back(make_compute(COMPUTE_GROUP_1, num_rows_per_core_group_1 * chunks_per_row_total));
         work_units.push_back(WorkUnitSpec{
-            .name = "typecast_rm_group_1", .kernels = {READER, WRITER, COMPUTE_GROUP_1}, .target_nodes = core_group_1});
+            .name = "typecast_rm_group_1", .kernels = {READER, WRITER, COMPUTE}, .target_nodes = core_group_1});
     }
     if (!core_group_2.ranges().empty()) {
-        kernels.push_back(make_compute(COMPUTE_GROUP_2, num_rows_per_core_group_2 * chunks_per_row_total));
         work_units.push_back(WorkUnitSpec{
-            .name = "typecast_rm_group_2", .kernels = {READER, WRITER, COMPUTE_GROUP_2}, .target_nodes = core_group_2});
+            .name = "typecast_rm_group_2", .kernels = {READER, WRITER, COMPUTE}, .target_nodes = core_group_2});
     }
 
     // Assign runtime args to cores (distributing rows)
@@ -263,6 +262,7 @@ ttnn::device_operation::ProgramArtifacts TypecastRowMajorChunkedProgramFactory::
 
     KernelRunArgs reader_run_args{.kernel = READER};
     KernelRunArgs writer_run_args{.kernel = WRITER};
+    KernelRunArgs compute_run_args{.kernel = COMPUTE};
     for (const auto& core : cores_vec) {
         bool is_group_1 = core_group_1.contains(core);
         uint32_t num_rows_for_core = is_group_1 ? num_rows_per_core_group_1 : num_rows_per_core_group_2;
@@ -276,6 +276,10 @@ ttnn::device_operation::ProgramArtifacts TypecastRowMajorChunkedProgramFactory::
             writer_run_args.runtime_arg_values,
             core,
             {{"num_rows", num_rows_for_core}, {"start_row_id", start_row_id}});
+        AddRuntimeArgsForNode(
+            compute_run_args.runtime_arg_values,
+            core,
+            {{"per_core_block_cnt", num_rows_for_core * chunks_per_row_total}});
 
         row_idx += num_rows_for_core;
     }
@@ -288,9 +292,8 @@ ttnn::device_operation::ProgramArtifacts TypecastRowMajorChunkedProgramFactory::
         .work_units = std::move(work_units),
     };
 
-    // The compute kernels have no runtime args, so they need no KernelRunArgs entry.
     ProgramRunArgs run_args;
-    run_args.kernel_run_args = {std::move(reader_run_args), std::move(writer_run_args)};
+    run_args.kernel_run_args = {std::move(reader_run_args), std::move(writer_run_args), std::move(compute_run_args)};
     run_args.tensor_args = {{INPUT, input.mesh_tensor()}, {OUTPUT, output.mesh_tensor()}};
 
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
