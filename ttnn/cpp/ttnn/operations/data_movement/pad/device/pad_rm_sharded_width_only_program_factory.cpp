@@ -18,6 +18,7 @@ using namespace tt::constants;
 namespace ttnn::prim {
 using ttnn::operations::data_movement::float_to_uint16;
 using ttnn::operations::data_movement::pack_two_uint16_into_uint32;
+using ttnn::operations::data_movement::pack_two_bfloat16_into_uint32;
 
 namespace {
 // Names are prefixed per factory: all seven pad factories land in one unity-build
@@ -105,12 +106,11 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedWidthOnlyProgramFactory::cr
 
     uint32_t padding_value_as_u32;
     if (input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16) {
-        uint16_t bfloat_pad_value_bits = std::bit_cast<uint16_t>(bfloat16(pad_value));
-        padding_value_as_u32 = *reinterpret_cast<uint32_t*>(&bfloat_pad_value_bits);
+        padding_value_as_u32 = pack_two_bfloat16_into_uint32({bfloat16(pad_value), bfloat16(pad_value)});
     } else if (input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32) {
         padding_value_as_u32 = *reinterpret_cast<const uint32_t*>(&pad_value);
     } else if (input_tensor.dtype() == tt::tt_metal::DataType::UINT16) {
-        padding_value_as_u32 = pack_two_uint16_into_uint32({0, float_to_uint16(pad_value)});
+        padding_value_as_u32 = pack_two_uint16_into_uint32({float_to_uint16(pad_value), float_to_uint16(pad_value)});
     } else if (
         input_tensor.dtype() == tt::tt_metal::DataType::INT32 ||
         input_tensor.dtype() == tt::tt_metal::DataType::UINT32) {

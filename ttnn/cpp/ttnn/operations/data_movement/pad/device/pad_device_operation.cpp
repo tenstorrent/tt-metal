@@ -44,12 +44,25 @@ bool can_use_sharded_optimized_factory(const PadParams& operation_attributes, co
     if (operation_attributes.sub_core_grids.has_value()) {
         return false;
     }
-    if (operation_attributes.output_padded_shape[-1] != operation_attributes.output_mem_config.shard_spec()->shape[1]) {
+    if (!operation_attributes.output_mem_config.shard_spec().has_value()) {
         return false;
     }
-    if (operation_attributes.output_mem_config.shard_spec().value().shape[0] <
-        input_tensor.shard_spec().value().shape[0]) {
+    const auto& output_shard = operation_attributes.output_mem_config.shard_spec().value();
+    const auto& input_shard = input_tensor.shard_spec().value();
+    if (operation_attributes.output_padded_shape[-1] != output_shard.shape[1]) {
+        return false;
+    }
+    if (output_shard.shape[0] < input_shard.shape[0]) {
         // Note this case causes the sharded optimized PadRmShardedWidthOnlyProgramFactory{} to hang.
+        return false;
+    }
+    if (output_shard.orientation != ShardOrientation::ROW_MAJOR) {
+        return false;
+    }
+    if (!output_shard.grid.has_value() || !input_shard.grid.has_value()) {
+        return false;
+    }
+    if (output_shard.grid.value() != input_shard.grid.value()) {
         return false;
     }
     return true;
