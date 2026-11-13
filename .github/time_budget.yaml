@@ -443,8 +443,9 @@ models:
     # 2375 -> 2561 (+186): the other 21 min were unallocated headroom before these legs.
     # 2561 -> 2575 (+14) for K3 / K3.1 contract tests the legs did not run: the traced DSA replay section of the
     # K3.1 synthetic suite (+12, 6.6 min measured) and in the KV cache table leg the K3 / K3.1 merged-table rows
-    # (+2, 50 s measured), both on bh-glx-120-b08u02 2026-11-13. The other K3.1 contract tests, the cache
-    # footprint test included, joined [1/5] of the K3 accuracy suite within its 12 min bound.
+    # (+2, 50 s measured), both on bh-glx-120-b08u02 2026-11-13. Within existing bounds of the K3 accuracy suite:
+    # the K3.1 golden and checkpoint checks open its K3.1 section [5/5]; the other K3.1 contract tests, the cache
+    # footprint test included, joined [1/5].
     bh_sc1: 2575
     bh_sc1_high_power: 498
     bh_sc4: 60
