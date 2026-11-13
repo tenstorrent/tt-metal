@@ -8,7 +8,8 @@
 // Defines: REC_FUSED (a port that is also an
 // accumulator, acc_on_ports: this RISC also runs the port's L1 hand-off and the accumulator's output writes),
 // REC_ACC_LUT (per-chip roles: a home chip's accumulator cells from a DRAM table), REC_SHARED (the shared landing pool:
-// slot grants instead of rings - REC_G, REC_GIDH, REC_GREC).
+// slot grants instead of rings - REC_G, REC_GIDH, REC_GREC), REC_FILL (MOE_FILL=piggyback, P.53: expert replica copy
+// pieces ride on this port's connection as extra packets - REC_F_OFF, REC_F_NSTG, REC_F_CHUNK, REC_F_TABB).
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
@@ -95,9 +96,10 @@ void kernel_main() {
     } else {
         rec::wait_released(bar_addr, call);  // (the accumulator's reader on this core zeroes it)
     }
-    uint32_t n_inj = 0, n_ret = 0;
+    uint32_t n_inj = 0, n_ret = 0, my_pid = 0;
     {  // (the device plan: this port's counts at its id)
         const uint32_t plan = get_arg_val<uint32_t>(a++), pid = get_arg_val<uint32_t>(a++);
+        my_pid = pid;
         const uint32_t sc = (area + MISC + 832 + 63) & ~63u;
         noc_async_read(
             TensorAccessor(plan_args, plan, moe_block_plan_words::kPlanBytes).get_noc_addr(0),
@@ -259,6 +261,58 @@ void kernel_main() {
         } while (static_cast<int32_t>(bw[0] - tgt) < 0);
         bw[1] = bw[1] + 1;
     }
+#ifdef REC_FILL
+    // MOE_FILL=piggyback (P.53): this call's fill jobs (the last kernel args; the host schedules the pieces, so a
+    // copy's progress is known without a read-back). Job j: pieces [p0, p1) of run table `table` (expert_slot_copy's
+    // tables: runs cut in REC_F_CHUNK pieces, numbered across the runs) read from this chip's DRAM into REC_F_NSTG
+    // staging slots, then written into chip dst's DRAM (the same buffers there) through this port's connection; a
+    // piece goes only when no row of the combine was sent this round and fewer than f_cap packets sit in the channel
+    // (the rows keep the link). After the main loop the rest of the call's pieces go out while the port drains - a
+    // bounded amount the host chose (the exit waits on no other core for them). `last`: after the job's last piece a
+    // flushed atomic increment of word `me` of the done words on chip dst's core rxy (the copy has landed).
+    constexpr uint32_t F_NSTG = REC_F_NSTG, F_CHUNK = REC_F_CHUNK, F_TABB = REC_F_TABB;
+    const uint32_t f_w[2] = {get_arg_val<uint32_t>(a), get_arg_val<uint32_t>(a + 1)};
+    const uint32_t f_runs = get_arg_val<uint32_t>(a + 2), f_tabb = get_arg_val<uint32_t>(a + 3);
+    const uint32_t f_done = get_arg_val<uint32_t>(a + 4), f_nj = get_arg_val<uint32_t>(a + 5) & 0xFF;
+    const uint32_t f_cap = get_arg_val<uint32_t>(a + 5) >> 8;
+    const uint32_t f_job0 = a + 6;
+    const uint32_t f_tab = area + REC_F_OFF, f_stg = f_tab + F_TABB;
+    const volatile tt_l1_ptr uint32_t* ftab = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(f_tab);
+    uint32_t f_j = 0;  // (the current job)
+    bool f_live = false;
+    uint32_t f_dst = 0, f_p1 = 0, f_last = 0, f_rxy = 0;
+    uint32_t f_rd = 0, f_ok = 0, f_sd = 0, f_fl = 0;  // pieces read-issued, read, sent, sent and flushed (absolute)
+    uint32_t f_r = 0, f_o = 0, f_n = 0;               // the next read: run, byte offset in it; the table's runs
+    uint32_t f_in = 0, f_tl = 0;  // (pieces sent in the main loop / after it: counted into the done words' tail)
+    uint64_t f_da[F_NSTG];
+    uint32_t f_len[F_NSTG];
+    auto f_load = [&]() {  // job f_j: its table into L1, the cursor at its first piece
+        const uint32_t jb = f_job0 + 4 * f_j;
+        const uint32_t w0 = get_arg_val<uint32_t>(jb);
+        const uint32_t table = w0 & 0xFF, p0 = get_arg_val<uint32_t>(jb + 1);
+        f_dst = (w0 >> 8) & 0xFF;
+        f_last = (w0 >> 16) & 1;
+        f_p1 = get_arg_val<uint32_t>(jb + 2);
+        f_rxy = get_arg_val<uint32_t>(jb + 3);
+        const InterleavedAddrGen<true> rg = {.bank_base_address = f_runs, .page_size = f_tabb};
+        noc_async_read(rg.get_noc_addr(table), f_tab, f_tabb);
+        noc_async_read_barrier();
+        invalidate_l1_cache();
+        f_n = ftab[0];
+        f_r = 0;
+        f_o = 0;
+        for (uint32_t g = 0; f_r < f_n; ++f_r) {  // (skip to piece p0)
+            const uint32_t np = (ftab[1 + f_r * 6 + 5] + F_CHUNK - 1) / F_CHUNK;
+            if (g + np > p0) {
+                f_o = (p0 - g) * F_CHUNK;
+                break;
+            }
+            g += np;
+        }
+        f_rd = f_ok = f_sd = f_fl = p0;
+        f_live = true;
+    };
+#endif
 
     volatile tt_l1_ptr uint32_t* cred = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(area + CRED);
     volatile tt_l1_ptr uint32_t* used = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(area + USED);
@@ -306,7 +360,80 @@ void kernel_main() {
             sentm >>= 1;
         }
         unflushed = 0;
+#ifdef REC_FILL
+        f_fl = f_sd;  // (the sent pieces left L1: their staging slots are free)
+#endif
     };
+#ifdef REC_FILL
+    // one fill step: issue the reads the free staging slots allow, note finished reads, send one piece if may_send
+    // and the channel holds fewer than cap packets; true: a packet went out
+    auto f_step = [&](bool may_send, uint32_t cap) -> bool {
+        if (f_j >= f_nj) {
+            return false;
+        }
+        if (!f_live) {
+            if (f_fl != f_sd) {
+                return false;  // (the last job's pieces still in the staging slots: after the next flush)
+            }
+            f_load();
+        }
+        while (f_rd < f_p1 && f_rd - f_fl < F_NSTG) {
+            const volatile tt_l1_ptr uint32_t* e = ftab + 1 + f_r * 6;
+            const uint32_t w = e[0], bytes = e[5];
+            const uint32_t len = bytes - f_o < F_CHUNK ? bytes - f_o : F_CHUNK;
+            const uint32_t sl = f_rd % F_NSTG;
+            noc_async_read(get_noc_addr_from_bank_id<true>(e[1], f_w[w] + e[2] + f_o), f_stg + sl * F_CHUNK, len);
+            f_da[sl] = get_noc_addr_from_bank_id<true>(e[3], f_w[w] + e[4] + f_o);
+            f_len[sl] = len;
+            f_o += len;
+            if (f_o >= bytes) {
+                f_o = 0;
+                ++f_r;
+            }
+            ++f_rd;
+        }
+        if (f_ok != f_rd && ncrisc_noc_reads_flushed(noc_index)) {
+            f_ok = f_rd;
+        }
+        bool out = false;
+        uint32_t fr = 0;
+        if (may_send && f_sd < f_ok && unflushed < NH && (fr = conn.get_num_free_write_slots()) > 0 &&
+            conn.num_buffers_per_channel - fr < cap) {
+            const uint32_t sl = f_sd % F_NSTG;
+            auto* h = hdr_at(f_dst, sent % NH);
+            h->to_noc_unicast_write(NocUnicastCommandHeader{f_da[sl]}, f_len[sl]);
+            conn.send_current_slot_non_blocking(f_stg + sl * F_CHUNK, f_len[sl], reinterpret_cast<uint32_t>(h));
+            ++sent;
+            ++unflushed;
+            ++f_sd;
+            ++(cap > 0xFFu ? f_tl : f_in);
+            out = true;
+        }
+        if (f_sd == f_p1) {  // (the job's pieces all sent: its done increment, then the next job)
+            if (f_last) {
+                if (unflushed >= NH) {
+                    flush();
+                }
+                auto* h = hdr_at(f_dst, sent % NH);
+                h->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{
+                    get_noc_addr(f_rxy & 0xFFFF, f_rxy >> 16, f_done + 4 * me), 1, true});
+                conn.wait_for_empty_write_slot();
+                conn.send_payload_flush_blocking_from_address(
+                    reinterpret_cast<uint32_t>(h), sizeof(PACKET_HEADER_TYPE));
+                out = true;
+            }
+            f_live = false;
+            ++f_j;
+        }
+        return out;
+    };
+    auto f_more = [&]() { return f_j < f_nj; };
+    const uint32_t F_CAP = f_cap;
+#else
+    constexpr uint32_t F_CAP = 0;
+    auto f_step = [&](bool, uint32_t) { return false; };
+    auto f_more = [&]() { return false; };
+#endif
     // credits: a snapshot of the cumulative consumed counts of source s's rings (one per accumulator) written over
     // s's credit array for my chip: one small packet returns any number of rows (idle sends: at least CRED_IDLE rows,
     // or rows waiting CRED_AGE cycles - fewer, fuller snapshots)
@@ -493,6 +620,10 @@ void kernel_main() {
                 did = true;
             }
         }
+        // (a fill piece only in a round that sent no row: the combine's rows keep the connection)
+        if (f_step(!did, F_CAP)) {
+            did = true;
+        }
         if (unflushed >= NH || (!did && unflushed)) {
             flush();
             did = true;
@@ -501,6 +632,19 @@ void kernel_main() {
             give_back(true);
         }
     }
+    // (the rest of this call's fill pieces, while the credits drain: the host bounds them)
+    while (f_more()) {
+        if (!f_step(true, 0xFFFFu) || unflushed >= NH) {
+            flush();
+        }
+    }
+#ifdef REC_FILL
+    if (f_nj) {  // (the split of this call's pieces, on my chip's done-words core: words N + pid / N + 8 + pid)
+        const uint32_t rx = f_rxy & 0xFFFF, ry = f_rxy >> 16;
+        noc_semaphore_inc(get_noc_addr(rx, ry, f_done + 4 * (N + my_pid)), f_in);
+        noc_semaphore_inc(get_noc_addr(rx, ry, f_done + 4 * (N + 8 + my_pid)), f_tl);
+    }
+#endif
     flush();
     misc[1] = returned;
 #ifdef REC_FUSED

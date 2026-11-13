@@ -761,3 +761,54 @@ The one this change broke (test_seeded: `git add state.json`) is fixed.
 - Gotcha: `measure --part` names are the A/B runs (determinism, quick, p51200), not the test file stems.
 - Re-run: `gate P.52 --spec <spec> --check --unit 'P.52#test_moe_replicas'` (likewise test_expert_slot_copy,
   test_moe_counts); `python -m models.demos.common.bringup.orchestrator measure --spec <spec> --task P.52`.
+
+## P.53 (perf, attempt 1): MOE_FILL=piggyback, the replica fill carried by the combine's port senders
+- Expected per chunk (written before any device run; perf_guide sections 1-2, 4 "moved time"): the change removes
+  P.47's serial expert_slot_copy programs from the chunk. Per copy round on the 8x4 (32 copies, one a chip) that is
+  2.79 ms device a round (0.71-0.78 ms for one copy alone); with the copies hidden in the combine's idle link time the
+  device saving is up to that, minus what the carrying combines grow (the owner's mark: < 5 % of a ~1.5 ms combine,
+  i.e. < ~0.08 ms a carrying call). The links carry ~10 % during the combine, but the copy also adds DRAM reads on the
+  source and writes on the destination while the experts stream their weights (weight-bound): that, not the link,
+  is the likely cost. Host: ~0 (runtime args only, no launch; set_replicas enqueues no program). With
+  MOE_REPLICAS=runtime and nothing filled (the gate's ladder / profile: no set_replicas in the harness) the A/B
+  measures ~0 by construction: the fill path with no job only adds one empty check a port round.
+- Design as built (MOE_FILL=piggyback; MOE_FILL default serial = P.47, the owner's text and tasks.yaml keep_default):
+  - Kernel (routed_experts_combine port writer, `REC_FILL`): the port's own RISC (RISCV_0, NoC1) reads the pieces from
+    its chip's DRAM into 4 staging slots at the end of its arena (16 KB run table + 4 x 10880 B) and sends them on the
+    connection it already holds, to the destination's DRAM. A piece goes only in a main-loop round that sent no row and
+    while the channel holds < MOE_FILL_CAP packets; whatever of the call's budget is left goes out after the main loop
+    while the credits drain (bounded by the host's budget; no wait on another core: no new hang path in the kernel).
+    Not "an idle core hands pieces to the port": the port's own sender reads (no hand-off protocol); measured enough.
+  - Host schedules the pieces (tt/expert_fill.py FillQueue): progress lives on the host, the jobs are runtime args each
+    call (no read-back, no host transfer in the layer loop). One layer's copies a call, never on that layer's own call,
+    MOE_FILL_PIECES (125 = 1/16 slot) a source port a call, split over its jobs (<= 4). Copies ride link 0 of the
+    first hop only: the next call's start-barrier increments to the destination travel the same connection and route,
+    so after one more MoE call the pieces (and the flushed done increment) have landed; the layer's slot map then
+    flips by a device copy of a map staged at set_replicas. set_replicas unmaps changed chips at once (host write, as
+    P.47) and the entry waits one call (superseded pieces fenced).
+  - MOE_REPLICA_DEMO=rotate (diagnostic, default off): a new 32-copy neighbour table on one layer before every chunk run
+    (tt/model.py begin_chunk -> adapter.replica_demo), for step 3 only.
+- Step 1 microbenchmark (tests/test_moe_fill_piggyback.py; carrier layer 20, copies into layer 19; combine device time,
+  slowest chip, median; fill on / off alternating in one window behind 100 matmuls, DS41-243): no job -0.5 %. Added %
+  (hidden % of pieces), cap 4: 1/4 slot a call pair -1.3 (92.5), neighbour 32 +0.2 (95.1), random 32 +88 (55.5);
+  1/8 -0.2 / -0.5 / +2.6 (86.6); 1/16 -0.7 / 0.0 / -0.6 (96.6); 1/32 +0.8 / -0.1 / -0.2 (100). cap 1: random 1/16 +23.
+  Whole slot a call (earlier run, no lead): +90 % pair .. +760 % random. Every slot bit-exact, done words exact, 100
+  calls back to back no hang, carrier outputs bit-identical. PASS (< 5 %) at <= 1/8 slot a call; DS41-241.
+- Step 2 (same test, section 3): set_replicas(neighbour table) queues 32 copies, none mapped; the filled layer's own call
+  while pending carries none and its output is unchanged; mapped after 18 carrier calls (1 wait + 16 + 1 fence);
+  slots bit-exact; output with the table bit-identical to none mapped, rows reach the spare slots; half the chips
+  changed: unmapped at once, mapped after 18 calls; emptied: unmapped. All checks ok.
+- Step 3: NOT measured. The first profile (MOE_FILL=serial + MOE_REPLICA_DEMO=rotate, rung last) hung the board in the
+  timed runs (DS41-242). Per the owner's safety rule: stopped, no reset, no further device run (so no final gate
+  --check after the clang-format pass; the format changed whitespace only, the unit test_moe_fill_piggyback passed on
+  the code before it).
+- What limits it: a call can hide ~1/8-1/16 of a slot a source port; one layer's copies a call; at most 4 copies a
+  source port a call; the fill rides link 0 only. A 32-copy table needs ~18 MoE calls (< one chunk's 21 prefill MoE
+  layers); tables for many layers at once queue (one layer a call).
+- Re-run: `gate P.53 --spec <spec> --check --unit 'P.53#test_moe_fill_piggyback'` (~9 min: devjob); step 3 (after the
+  owner's reset): `DS41_MOE_REPLICAS=runtime DS41_MOE_FILL={serial,piggyback} DS41_ENGRAM_TABLE=resident
+  DS41_MOE_REPLICA_DEMO=rotate BRINGUP_PROFILE_WALL=1 scripts/run_safe_pytest.sh --run-all --no-precompile
+  models/demos/common/bringup/tests/test_profile.py` (and BRINGUP_POS=51200).
+- stock ttnn.matmul instead of ttnn.bringup.mhc_post: tests/test_moe_fill_piggyback.py only, a timing lead (100
+  matmuls 4096^3 on 11 x 10 = 110 cores ahead of each profiled window), not a model path. Cores of the change: none
+  added (the combine's 8 port cores a chip; the 110-core cap holds).

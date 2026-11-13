@@ -22,6 +22,7 @@ void RoutedExpertsCombineDeviceOperation::validate_on_program_cache_miss(
             t.out.logical_shape()[-1] == p.W && t.out.logical_shape()[-2] == p.S,
         "routed_experts_combine: out [.., S, Hr] bf16 row-major");
     TT_FATAL(t.lut.has_value() == p.plan->perchip, "routed_experts_combine: the accumulator LUT iff per-chip roles");
+    TT_FATAL(t.fill_done.has_value() == p.fill, "routed_experts_combine: MOE_FILL's done words iff fill");
     TT_FATAL(
         t.flat.arena.buffer()->aligned_size_per_bank() >= p.plan->arena_bytes + kWriterWordsRows * 64,
         "routed_experts_combine: the arena holds {} B a core, the combine and the writers' words need {} B",
@@ -40,6 +41,7 @@ ttsl::hash::hash_t RoutedExpertsCombineDeviceOperation::compute_program_hash(
         p.flat_config.activation,
         p.flat_config.layout,
         p.plan_key,
+        p.fill,
         t.plan.tensor_spec(),
         t.table.tensor_spec(),
         t.out.tensor_spec(),

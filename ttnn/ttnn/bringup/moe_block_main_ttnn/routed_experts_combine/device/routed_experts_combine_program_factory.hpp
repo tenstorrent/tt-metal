@@ -22,6 +22,7 @@ struct RoutedExpertsCombineFactory {
         CombineHandles combine;
         flat_routed_expert::FlatProgramHandles flat;
         std::array<uint32_t, 3> report{};  // (the arena, table and bar addresses the y writers' report holds)
+        ChipCoord chip{};                  // (this program's chip: MOE_FILL's per-call args)
     };
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 

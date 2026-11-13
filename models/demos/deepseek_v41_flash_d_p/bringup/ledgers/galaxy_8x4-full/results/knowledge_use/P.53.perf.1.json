@@ -1,0 +1,103 @@
+{
+ "used": [
+  {
+   "id": "DS41-230",
+   "how": "the unmap at set_replicas stays a host write on CQ0 (ordered after every program before it); the flip is a device copy of a staged map",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-224",
+   "how": "the carrying port is chosen with the same first_hop as the combine's own routing (torus), never by position",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-118",
+   "how": "no second fabric connection: the copy uses the port's already-open connection, link 0 only",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-127",
+   "how": "fill pieces sized by expert_slot_copy_chunk_bytes (the 10880 B payload the mesh opens with)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-228",
+   "how": "step 3 planned on rung last (golden prefix) and BRINGUP_POS, with a routing-independent table (the demo) since positions use random ids",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-202",
+   "how": "both test layers share one MoE block (one resources); released together at the end",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "a single op's device time from back-to-back calls includes host-dispatch waits unless work is queued ahead (added as DS41-243)",
+  "expert_slot_copy (P.47) had never run inside the full model's chunk loop; repeated tables hung the board (added as DS41-242)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "no padding or inflated work: pieces are exact run-table chunks (the last piece of a run is short)"
+  },
+  {
+   "id": "OV-23",
+   "answer": "n/a",
+   "evidence": "no Python-built program added or touched: the change is in the C++ op routed_experts_combine (cached mesh workload, runtime args patched per call)"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork regression suite run on the 8x4; only the new model test test_moe_fill_piggyback"
+  }
+ ],
+ "cited_only": [
+  "DS41-241",
+  "DS41-242",
+  "DS41-243"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "moe_replication",
+  "task": "P.53",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-13T00:57:25",
+  "head": "c8acdd2b829",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.53.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.53.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_moe_fill_piggyback.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/expert_fill.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/model.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/moe_block_main_adapter.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/README.md",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/common/moe_block_resources.cpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/common/moe_block_resources.hpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/routed_experts_combine/device/combine_program.cpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/routed_experts_combine/device/combine_program.hpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/routed_experts_combine/device/kernels/dataflow/combine_port_writer.cpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/routed_experts_combine/device/routed_experts_combine_device_operation.cpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/routed_experts_combine/device/routed_experts_combine_device_operation_types.hpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/routed_experts_combine/device/routed_experts_combine_program_factory.cpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/routed_experts_combine/device/routed_experts_combine_program_factory.hpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/routed_experts_combine/routed_experts_combine.cpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/routed_experts_combine/routed_experts_combine.hpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/routed_experts_combine/routed_experts_combine_nanobind.cpp"
+  ]
+ }
+}

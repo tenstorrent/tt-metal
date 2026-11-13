@@ -1320,6 +1320,10 @@ class TtDS41Model:
             replay = True  # (DeepSeek's Encoder SWA Bounded Replay: every window truncated at the replay start)
         self._write_from = g if g > start else None
         self._counts_start = int(start)  # (MOE_COUNTS: the chunk sync() files the counts under)
+        if settings.get("MOE_REPLICA_DEMO") == "rotate":  # (diagnostic, P.53 step 3: a replica table change a chunk)
+            from .moe_block_main_adapter import replica_demo
+
+            replica_demo(self.mesh)
         self._skip = bool(self.decoder) and last is False and self.skip_mode != "off"
         # WINDOW_KV_KEEP=snapshot128 (P.42): every chunk not marked not-last rewrites the served window snapshots;
         # DECODER_SKIP=decode (P.51): every chunk (the encoder's windows are decode's handoff; the decoder's never run)

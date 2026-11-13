@@ -522,6 +522,42 @@ TABLE = {
         "expert's slots (own + copies) by a hash of the token (router_rows.hpp slot_of; the gate weight from the "
         "expert before the map): an even split. No copies: the off path's outputs bit for bit",
     ),
+    "MOE_FILL": Setting(
+        "serial",
+        ("serial", "piggyback"),
+        "P.53 (owner 2026-11-12, EXPERIMENTAL, MOE_REPLICAS=runtime only; default serial: the owner's, tasks.yaml "
+        "ab.keep_default). How set_replicas fills a spare slot. serial = "
+        "P.47's expert_slot_copy, one program in program order (0.71-0.78 ms a 19 MiB copy alone, 2.79 ms with all 32 "
+        "chips copying), then the slot map. piggyback = the copy rides on the combine's fabric port senders "
+        "(routed_experts_combine's port writer, REC_FILL): set_replicas only queues the copy; every following MoE "
+        "call of ANOTHER layer carries MOE_FILL_PIECES pieces of it (the source chip's port facing the first hop to "
+        "the destination, link 0: a piece only in a round that sent no row, while its fabric channel holds fewer than "
+        "MOE_FILL_CAP packets; the call's remaining pieces while the port drains) and the slot map flips one MoE call "
+        "after the copy's last piece (its flushed done increment and the next call's start barrier on the same route: "
+        "the slot is filled before any token can reach it). Outputs bit-identical to serial once mapped",
+    ),
+    "MOE_FILL_PIECES": Setting(
+        "125",
+        None,
+        "MOE_FILL=piggyback: the copy pieces (expert_slot_copy chunks, 10880 B at the 8x4's fabric payload) a source "
+        "port carries in one combine call, split over its copies (a 19 MiB slot is 2000 pieces: 16 calls at 125; P.53's "
+        "microbenchmark: <= 1/16 slot a call hides 94-100 % of the pieces in the combine's main loop); 0 = the whole "
+        "copy in one call",
+    ),
+    "MOE_FILL_CAP": Setting(
+        "4",
+        None,
+        "MOE_FILL=piggyback: a fill piece leaves during the combine's main loop only while the port's fabric channel "
+        "holds fewer than this many packets (1: only an empty channel; P.53: 4 hid more pieces than 1)",
+    ),
+    "MOE_REPLICA_DEMO": Setting(
+        "off",
+        ("off", "rotate"),
+        "diagnostic (P.53 step 3: the fill's cost in a chunk; MOE_REPLICAS=runtime only). rotate = before every chunk "
+        "one MoE layer (the built ones in turn) gets a new replica table, a copy a chip (chip k: a home slot of chip "
+        "k + 1), through set_replicas - MOE_FILL decides how it is filled. Outputs stay bit-identical (a replica holds "
+        "the same expert). off = no table (the model never calls set_replicas itself)",
+    ),
     "MOE_COUNTS": Setting(
         "off",
         ("off", "on"),

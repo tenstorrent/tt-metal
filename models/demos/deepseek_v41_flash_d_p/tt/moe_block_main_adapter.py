@@ -218,6 +218,45 @@ def flush_counts(mesh, start: int, chunk: int) -> dict | None:
 # ---------------------------------------------------------------------------------------------------------------------
 # MOE_REPLICAS (P.46 / P.47)
 _SLOT_TABLES: dict = {}  # (id(mesh), plan layouts, epc, tile bytes) -> (mesh, expert_slots.SlotTables)
+_FILLQ: dict = {}  # MOE_FILL=piggyback: id(resources) -> (resources, expert_fill.FillQueue)
+_MAIN_LAYERS: list = []  # MOE_REPLICA_DEMO: the main (not at_chunk) layers built with replicas, in build order
+
+
+def fill_piggyback() -> bool:
+    return replicas_on() and settings.get("MOE_FILL") == "piggyback"
+
+
+def fill_queue(res):
+    """MOE_FILL=piggyback: the resources' fill queue (expert_fill.FillQueue), made with the fill path enabled."""
+    hit = _FILLQ.get(id(res))
+    if hit is None or hit[0] is not res:
+        from .expert_fill import FillQueue
+
+        mb = _mb()
+        mb.set_combine_fill(res, True)
+        q = FillQueue(mb, res, int(settings.get("MOE_FILL_PIECES")), int(settings.get("MOE_FILL_CAP")))
+        hit = _FILLQ[id(res)] = (res, q)
+    return hit[1]
+
+
+_DEMO = [0]
+
+
+def replica_demo(mesh) -> None:
+    """MOE_REPLICA_DEMO=rotate (diagnostic, P.53's step 3): before every chunk run (i-th call), one layer (the built
+    ones in turn) gets a new table of a copy a chip - chip k holds home slot (i // layers) % epc of chip (k + 1) %
+    chips (a neighbour; every destination changes, so every chip copies once a chunk, also when a harness re-runs the
+    same chunk)."""
+    layers = [m for m in _MAIN_LAYERS if m.mesh is mesh]
+    if not layers:
+        return
+    i = _DEMO[0]
+    _DEMO[0] += 1
+    m = layers[i % len(layers)]
+    n = mesh.get_num_devices()
+    s = (i // len(layers)) % m.epc
+    copies = [(int(m.perm[((k + 1) % n) * m.epc + s]), k) for k in range(n)]
+    m.set_replicas(copies)
 
 
 def replicas_on() -> bool:
@@ -286,6 +325,8 @@ class TtMoEBlockMainLayer:
         self.copies = []  # (checkpoint expert, chip r C + c): the spare slots filled and mapped
         self._views = []  # (at_chunk's copies of this layer: they share the copies, set_replicas updates them too)
         self._bias = None  # (the router bias in candidate order, for the slot map's writes)
+        self._staged = None  # (MOE_FILL=piggyback: the slot map staged on the device for the flip, and its table)
+        self._staged_for = None
         self.dims, self.act = block_dims(cfg, slots=rows * cols * self.spc)
         self.dtypes = block_dtypes()
         self.perm = expert_permutation(rows, cols, self.epc)
@@ -303,6 +344,10 @@ class TtMoEBlockMainLayer:
         blk = self.block()
         self.gidx, self.w_gu, self.w_d = self._routed(blk)
         self.head_w = None  # (the head's weights: at the layer's first call, planned by the block's head)
+        if self.replicas:
+            _MAIN_LAYERS.append(self)
+            if fill_piggyback():
+                fill_queue(blk.resources)
         logger.info(
             f"MOE_BLOCK_MAIN layer={layer} experts={cfg.n_experts} ({self.epc} a chip"
             + (f", {self.spc} slots: {len(self.copies)} copies" if self.replicas else "")
@@ -534,6 +579,8 @@ class TtMoEBlockMainLayer:
             assert int(where[x]) // self.epc != k, f"expert {x}'s copy on its own chip {k}"
             new[k] = x
         old = {k: x for x, k in self.copies}
+        if fill_piggyback():
+            return self._set_replicas_piggyback(new, old, where)
         if new == old:
             return 0
         jobs = []
@@ -559,16 +606,81 @@ class TtMoEBlockMainLayer:
                 m._write_slot_map()
         return len(jobs)
 
-    def _write_slot_map(self) -> None:
-        """The router bias rewritten with the current slot map (a host write on CQ0: after every program before it)."""
+    def _set_replicas_piggyback(self, new: dict, old: dict, where) -> int:
+        """MOE_FILL=piggyback (P.53, tt/expert_fill.py): the destinations whose expert changes are unmapped at once (a
+        host write, ordered after every program before it), the new table's map staged on the device, and the copies
+        queued: other layers' MoE calls carry them, the map flips one MoE call after the last piece. A pending table of
+        this layer is superseded. Returns the copies queued."""
+        q = fill_queue(self.block().resources)
+        pend = q.pending(self)
+        q.q = [e for e in q.q if e.owner is not self]
+        target = sorted((x, k) for k, x in new.items())
+        keep = {k: x for k, x in old.items() if new.get(k) == x}
+        members = [self] + list(self._views)
+        if keep != old:  # (unmap what changes before any piece can reach it)
+            self.copies = sorted((x, k) for k, x in keep.items())
+            for m in members:
+                m.copies = self.copies
+                if m.head_w is not None:
+                    m._write_slot_map()
+        tabs = self.slot_tables()
+        jobs = []
+        for k in sorted(new):
+            if keep.get(k) != new[k]:
+                home, slot = divmod(int(where[new[k]]), self.epc)
+                jobs.append((home, k, tabs.fill_table(slot)))
+        if not jobs:
+            if pend or target != self.copies:
+                self.flip_replicas(target)
+            return 0
+        done = {id(self.w_gu)}
+        for m in members[1:]:  # (a view with weights of its own: serial copies into them now, mapped at the flip)
+            if id(m.w_gu) not in done:
+                done.add(id(m.w_gu))
+                _mb().expert_slot_copy(m.w_gu, m.w_d, m.w_gu, m.w_d, m.slot_tables().runs, m.block().resources, jobs)
+        for m in members:
+            if m.head_w is not None:
+                m._stage_slot_map(target)
+        q.add(
+            self, [(self.w_gu, self.w_d, tabs.runs)], jobs, target, _mb().expert_slot_copy_chunk_bytes(q.res), tabs.host
+        )
+        return len(jobs)
+
+    def _host_map(self, copies) -> ttnn.Tensor:
         E = len(self.perm)
         host = torch.zeros(E + 32, 32, dtype=torch.float32)
         host[:E] = self._bias.reshape(E, 1)
-        host[E:] = slot_map_words(self.perm, self.epc, self.spc, self.copies).reshape(32, 32)
-        t = ttnn.from_torch(
+        host[E:] = slot_map_words(self.perm, self.epc, self.spc, copies).reshape(32, 32)
+        return ttnn.from_torch(
             host, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh)
         )
-        ttnn.copy_host_to_device_tensor(t, self.head_w.router_bias)
+
+    def _stage_slot_map(self, copies) -> None:
+        """MOE_FILL=piggyback: copies' slot map written to the staging tensor (a host write at set_replicas, outside the
+        layer loop; nothing reads the staging tensor until the flip)."""
+        from .expert_fill import staged_map
+
+        if self._staged is None:
+            self._staged = staged_map(self.mesh, self.head_w.router_bias)
+        ttnn.copy_host_to_device_tensor(self._host_map(copies), self._staged)
+        self._staged_for = list(copies)
+
+    def flip_replicas(self, copies) -> None:
+        """MOE_FILL=piggyback: the layer's table from now on (its copies landed): the staged map copied into the router
+        bias on the device (a host write only when no map was staged for it, e.g. the head built after set_replicas)."""
+        copies = sorted(copies)
+        for m in [self] + list(self._views):
+            m.copies = copies
+            if m.head_w is None:
+                continue
+            if m._staged is not None and m._staged_for == copies:
+                ttnn.copy(m._staged, m.head_w.router_bias)
+            else:
+                m._write_slot_map()
+
+    def _write_slot_map(self) -> None:
+        """The router bias rewritten with the current slot map (a host write on CQ0: after every program before it)."""
+        ttnn.copy_host_to_device_tensor(self._host_map(self.copies), self.head_w.router_bias)
 
     def _head_weights(self, blk):
         if self.head_w is None:
@@ -691,6 +803,11 @@ class TtMoEBlockMainLayer:
         assert x.layout == ttnn.TILE_LAYOUT
         blk = self.block()
         weights = self._head_weights(blk)
+        # MOE_FILL=piggyback (P.53): this call's combine carries queued copies of other layers (tt/expert_fill.py)
+        fq = _FILLQ.get(id(blk.resources)) if self.replicas else None
+        fq = fq[1] if fq is not None and fq[0] is blk.resources else None
+        if fq is not None:
+            fq.before(self.layer)
         xq = None
         if xq_ready:
             xb_, xq = self.input_buffers()
@@ -708,6 +825,8 @@ class TtMoEBlockMainLayer:
             y = self._own_rows(blk, xb, weights, fed=fed)
         if xb is not x:
             dealloc(xb)
+        if fq is not None:
+            fq.after()
         if not self.fold:
             y32 = ttnn.typecast(y, ttnn.float32, memory_config=DRAM)
             dealloc(y)

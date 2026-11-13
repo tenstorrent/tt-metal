@@ -86,7 +86,24 @@ each default off (= the source's program):
   byte offsets of the shard); the run tables are the caller's (DeepSeek-V4.1: models/demos/deepseek_v41_flash_d_p/tt/
   expert_slots.py from the flat plan's facts).
 
+- `set_combine_fill(resources, enabled, gate_up=None, down=None, runs=None, jobs=[], cap=1)` (P.53, MOE_FILL=piggyback):
+  routed_experts_combine's port senders carry expert_slot_copy run-table pieces as extra fabric packets (jobs [(src,
+  dst, table, p0, p1, last)], kept for every following call until replaced; at most 4 a port; `last`: a flushed done
+  increment, `combine_fill_done(resources)`); `combine_fill_port(resources, src, dst)`: the carrying port. Enabled is a
+  program of its own; with no job it is bit-identical to the stock combine.
+
 ## Measured
+
+combine fill (P.53, Galaxy 8x4, FABRIC_2D_TORUS_XY, DeepSeek-V4.1, carrier layer 20's combine on a random 5120-token
+chunk, copies into layer 19's spare slots, 2000 pieces of 10880 B a slot; device time of routed_experts_combine on the
+real-time profiler, slowest chip, median, fill-off and fill-on calls alternating in one window behind 100 matmuls;
+models/demos/deepseek_v41_flash_d_p/tests/test_moe_fill_piggyback.py): the fill path with no job -0.5 % (noise). Added
+device time / pieces hidden in the main loop, cap 4: a whole slot a call +50 % (pair) to +900 % (random); 1/4 slot a
+call pair -1.3 % / 92.5 %, neighbour 32 +0.2 % / 95.1 %, random 32 (4 copies on a source) +88 % / 55.5 %; 1/8 pair
+-0.2 %, neighbour -0.5 %, random +2.6 % / 86.6 %; 1/16 (125 pieces) pair -0.7 %, neighbour 0.0 %, random -0.6 % /
+96.6 %; 1/32 all within +-0.2 %, 100 %. cap 1 hides less (random 1/16 +23 %). Every copied slot bit-exact, 100 calls
+back to back without a hang, every combine output bit-identical with and without copies.
+
 
 combine_snap_split (FIX.23 on the replica branch, Galaxy 8x4, DeepSeek-V4.1, 40 layers, chunk 5120, q = 2^-19, 17
 accumulators, D 6 - the plan unchanged, the accumulators' L1 + 10 tokens x 5 tiles x 4 KB): routed_experts_combine
@@ -123,6 +140,9 @@ runner smoke (tt-d-gen engine): pass.
   fabric payload of one combine row (`models/demos/moe_block_main/tt/moe_impl.py`).
 - The ops take the whole compute grid unless `set_max_grid` caps it; the flat expert's fixed (unshaped) gate/up
   rectangles need 12 columns on a Galaxy chip (a shaped plan, e.g. DeepSeek-V4.1's 48 cores, fits 11).
+- The combine fill (P.53) carries one weight set (one layer's gate_up / down) a call, at most 4 jobs a port, on link 0
+  of the first hop's direction only; it hides only while the pieces a port carries a call stay small (<= ~1/8 of a
+  19 MiB slot at 8x4: above that the tail after the main loop and the link share show as combine time).
 - Kernels are main's of 2026-11-06 (`f93403fa228`); this branch's kernel APIs may differ (JIT errors show at first
   use).
 

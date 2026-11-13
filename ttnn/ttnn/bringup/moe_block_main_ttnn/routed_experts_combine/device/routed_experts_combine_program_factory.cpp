@@ -51,6 +51,25 @@ void set_report(
     sv.report = report_addrs(b);
 }
 
+void set_fill(
+    tt::tt_metal::Program& program,
+    RoutedExpertsCombineFactory::shared_variables_t& sv,
+    const RoutedExpertsCombineParams& p,
+    const RoutedExpertsCombineInputs& t) {
+    if (!p.fill) {
+        return;
+    }
+    TT_FATAL(t.fill_done.has_value(), "routed_experts_combine: MOE_FILL without its done words");
+    set_combine_fill_args(
+        program,
+        sv.combine,
+        *p.plan,
+        sv.chip,
+        *t.out.device(),
+        p.fill_call.get(),
+        static_cast<uint32_t>(t.fill_done->buffer()->address()));
+}
+
 }  // namespace routed_experts_combine_factory_detail
 
 RoutedExpertsCombineFactory::cached_mesh_workload_t RoutedExpertsCombineFactory::create_mesh_workload(
@@ -80,9 +99,10 @@ RoutedExpertsCombineFactory::cached_mesh_workload_t RoutedExpertsCombineFactory:
                 "routed_experts_combine: {} y writers in the program, {} planned",
                 sv.flat.y_writers.size(),
                 p.flat.writers.size());
-            sv.combine =
-                add_combine_program(program, *p.plan, ChipCoord{coord[0], coord[1]}, mesh_device, bufs, p.flat);
+            sv.chip = ChipCoord{coord[0], coord[1]};
+            sv.combine = add_combine_program(program, *p.plan, sv.chip, mesh_device, bufs, p.flat, p.fill);
             set_report(program, sv, p, bufs);
+            set_fill(program, sv, p, t);
             const ttnn::MeshCoordinateRange r(coord, coord);
             workload.add_program(r, std::move(program));
             shared.emplace(r, std::move(sv));
@@ -105,6 +125,7 @@ void RoutedExpertsCombineFactory::override_runtime_arguments(
         if (sv.report != report_addrs(bufs)) {
             set_report(program, sv, p, bufs);
         }
+        set_fill(program, sv, p, t);
     }
 }
 

@@ -33,6 +33,8 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
 
+#include "ttnn/tensor/tensor.hpp"
+
 #include "combine_host.hpp"
 #include "../../common/mesh_routing.hpp"
 #include "../../common/port_placement.hpp"
@@ -52,6 +54,26 @@ namespace ttnn::operations::bringup::moe_block_main::routed_experts_combine {
 
 // Circular buffer indices on the combine's cores (disjoint from the flat expert's cells; all bound to the arena).
 inline constexpr uint8_t kCbInj = 0, kCbRow = 1, kCbMeta = 2, kCbTab = 3, kCbAcc = 4, kCbOut = 5, kCbW = 6;
+
+// MOE_FILL=piggyback (P.53): expert replica copies carried by the combine's port senders as extra fabric packets.
+// One job: chip src's port facing the first hop toward chip dst (link 0) reads pieces [p0, p1) of run table `table`
+// (expert_slot_copy's tables and chunking: each run cut in expert_slot_copy_chunk_bytes pieces, numbered across the
+// table's runs) from its own DRAM and writes them into chip dst's DRAM (fill.gu / fill.d: the same buffers on every
+// chip), sending a piece only when no row of its own is waiting; `last`: after the job's last piece, a flushed atomic
+// increment of word src of chip dst's done words (the fill's completion, cumulative).
+struct CombineFillJob {
+    uint32_t src = 0, dst = 0, table = 0, p0 = 0, p1 = 0;
+    bool last = false;
+};
+inline constexpr uint32_t kFillMaxJobs = 4;                  // jobs a port a call
+inline constexpr uint32_t kFillArgs = 6 + 4 * kFillMaxJobs;  // the port sender's fill args (the last ones)
+inline constexpr uint32_t kFillStages = 4;                   // pieces staged in a port's L1 (read, then sent)
+inline constexpr uint32_t kFillTabBytes = 16384;             // a run table's L1 copy on a port
+struct CombineFillCall {
+    Tensor gu, d, runs;  // the copied layer's routed weights (read on src, written on dst) and the run tables
+    std::vector<CombineFillJob> jobs;
+    uint32_t cap = 1;  // a piece goes only while the port's fabric channel holds fewer than cap packets (main loop)
+};
 
 // What the combine is planned from (k3 TtK3TokenSplitMoE.__init__: combine_auto on the flat plan's free cells).
 struct CombinePlanInputs {
@@ -105,7 +127,8 @@ struct CombinePlan {
     uint32_t lut_off = 0, lut_bytes = 0;
     uint32_t tab_off_port = 0, tab_off_acc = 0;  // CB_TAB on the ports / accumulators
     uint32_t row_off = 0, meta_off = 0, acc_off = 0, out_off = 0, w_off = 0;
-    uint32_t loc_off = 0;  // the accumulators' local ring
+    uint32_t loc_off = 0;     // the accumulators' local ring
+    uint32_t fill_chunk = 0;  // MOE_FILL=piggyback: a fill piece's bytes (expert_slot_copy's chunk: the fabric payload)
 
     PortCores port_core;                                             // (chip, dir, link) -> logical core
     std::map<ChipCoord, std::vector<tt::tt_metal::CoreCoord>> accs;  // per chip, accumulator o's logical cell
@@ -172,6 +195,14 @@ struct CombineHandles {
     tt::tt_metal::CoreCoord collector;
     uint32_t counts_offset = 0;
     std::vector<CombineArg> l1_args;
+    // MOE_FILL=piggyback: per port of this chip (port id order) the sender's kernel, core and first fill arg index
+    struct FillPort {
+        tt::tt_metal::KernelHandle kernel;
+        tt::tt_metal::CoreCoord core;
+        uint32_t index;
+        uint32_t dir, li;
+    };
+    std::vector<FillPort> fill_ports;
 };
 
 // The combine's kernels, CBs and runtime args on chip `chip` of `program` (the flat expert's go on its own cells).
@@ -181,7 +212,22 @@ CombineHandles add_combine_program(
     ChipCoord chip,
     tt::tt_metal::distributed::MeshDevice& mesh_device,
     const CombineBuffers& buffers,
-    const FlatHandoff& flat);
+    const FlatHandoff& flat,
+    bool fill = false);
+
+// MOE_FILL=piggyback: the port senders' fill args of chip `chip` for this call (call: none = no job; done: the fill's
+// done words' address). Written on every call (create and cache hit).
+void set_combine_fill_args(
+    tt::tt_metal::Program& program,
+    const CombineHandles& h,
+    const CombinePlan& plan,
+    ChipCoord chip,
+    tt::tt_metal::distributed::MeshDevice& mesh_device,
+    const CombineFillCall* call,
+    uint32_t done_addr);
+
+// MOE_FILL=piggyback: the arena offset of a port's fill table and staging slots (they end at the arena's end).
+uint32_t combine_fill_offset(const CombinePlan& plan);
 
 // Re-applies the buffers' addresses (a program-cache hit): a source's args (and the arena's CBs) only when its address
 // moved.

@@ -134,6 +134,8 @@ std::shared_ptr<const CombinePlan> make_combine_plan(
         resources.dims().top_k);
     plan->S = in.S;
     plan->W = in.W;
+    plan->fill_chunk =
+        std::min<uint32_t>(static_cast<uint32_t>(resources.fabric_max_payload_bytes()), 16384u) / 64u * 64u;
     const uint32_t N = mesh.topo.num_chips();
     TT_FATAL(N <= kMaxChips, "routed_experts_combine: {} chips > {}", N, kMaxChips);
     plan->pc = row_slot(in.W);
@@ -442,7 +444,8 @@ CombineHandles add_combine_program(
     ChipCoord ch,
     tt::tt_metal::distributed::MeshDevice& mesh_device,
     const CombineBuffers& bufs,
-    const FlatHandoff& flat) {
+    const FlatHandoff& flat,
+    bool fill) {
     using namespace combine_program_detail;
     const auto& topo = plan.topo;
     const uint32_t N = topo.num_chips(), L = plan.L, A = plan.A;
@@ -621,6 +624,14 @@ CombineHandles add_combine_program(
             }
         };
         pool_defs(defs);
+        if (fill) {  // (MOE_FILL=piggyback: its table and staging slots at the end of the port's arena)
+            const uint32_t off = combine_fill_offset(plan);
+            defs["REC_FILL"] = "1";
+            defs["REC_F_OFF"] = std::to_string(off);
+            defs["REC_F_NSTG"] = std::to_string(kFillStages);
+            defs["REC_F_CHUNK"] = std::to_string(plan.fill_chunk);
+            defs["REC_F_TABB"] = std::to_string(kFillTabBytes);
+        }
         accessor(ct, defs, "CMB_PLAN_CT", CombineBuf::Plan);
         accessor(ct, defs, "CMB_HC_CT", CombineBuf::Hcache);
         if (plan.perchip) {
@@ -699,6 +710,11 @@ CombineHandles add_combine_program(
                 }
                 a.lit(static_cast<uint32_t>(bt.size() / 3));
                 a.lits(bt);
+            }
+            if (fill) {  // (the fill args: written on every call, set_combine_fill_args)
+                h.fill_ports.push_back(
+                    {k, p.core, static_cast<uint32_t>(a.v.size()), static_cast<uint32_t>(p.dir), p.li});
+                a.lits(std::vector<uint32_t>(kFillArgs, 0u));
             }
             set_args(program, k, p.core, a, bufs, h);
         }
@@ -839,6 +855,70 @@ CombineHandles add_combine_program(
         at(CombineBuf::Arena, st.MISC + (plan.fused ? 640u : 512u));
     }
     return h;
+}
+
+uint32_t combine_fill_offset(const CombinePlan& plan) {
+    const uint32_t need = kFillTabBytes + kFillStages * plan.fill_chunk;
+    const uint32_t used = plan.fused ? plan.inj_off + plan.QP * plan.pc.slot : plan.tab_off_port + kTabCbBytes;
+    const uint32_t off = (plan.arena_bytes - need) / 64 * 64;
+    TT_FATAL(
+        plan.arena_bytes >= need && off >= align64(used),
+        "routed_experts_combine: MOE_FILL needs {} B at the end of a port's arena, the port uses {} of {} B",
+        need,
+        used,
+        plan.arena_bytes);
+    return off;
+}
+
+void set_combine_fill_args(
+    tt::tt_metal::Program& program,
+    const CombineHandles& h,
+    const CombinePlan& plan,
+    ChipCoord ch,
+    tt::tt_metal::distributed::MeshDevice& mesh_device,
+    const CombineFillCall* call,
+    uint32_t done_addr) {
+    const auto& topo = plan.topo;
+    const uint32_t me = topo.index(ch);
+    for (const auto& fp : h.fill_ports) {
+        auto& rt = tt::tt_metal::GetRuntimeArgs(program, fp.kernel, fp.core);
+        uint32_t* w = &rt[fp.index];
+        std::fill(w, w + kFillArgs, 0u);
+        if (call == nullptr) {
+            continue;
+        }
+        uint32_t nj = 0;
+        for (const auto& jb : call->jobs) {
+            if (jb.src != me || jb.p1 < jb.p0) {
+                continue;
+            }
+            const ChipCoord b = topo.coord(jb.dst);
+            // (the port facing the first hop toward dst, on link 0: the route the call's start barrier and ring
+            // layouts to dst take, so a later call's packets on it land after these pieces)
+            if (fp.li != 0 || static_cast<uint32_t>(*first_hop(ch, b, topo)) != fp.dir) {
+                continue;
+            }
+            TT_FATAL(nj < kFillMaxJobs, "routed_experts_combine: more than {} fill jobs on one port", kFillMaxJobs);
+            const auto rx = mesh_device.worker_core_from_logical_core(plan.accs.at(b).at(0));
+            uint32_t* j = w + 6 + 4 * nj;
+            j[0] = jb.table | jb.dst << 8 | (jb.last ? 1u : 0u) << 16;
+            j[1] = jb.p0;
+            j[2] = jb.p1;
+            j[3] = static_cast<uint32_t>(rx.x) | static_cast<uint32_t>(rx.y) << 16;
+            ++nj;
+        }
+        if (nj == 0) {
+            continue;
+        }
+        const uint32_t tabb = static_cast<uint32_t>(call->runs.buffer()->aligned_page_size());
+        TT_FATAL(tabb <= kFillTabBytes, "routed_experts_combine: a fill run table of {} B > {}", tabb, kFillTabBytes);
+        w[0] = static_cast<uint32_t>(call->gu.buffer()->address());
+        w[1] = static_cast<uint32_t>(call->d.buffer()->address());
+        w[2] = static_cast<uint32_t>(call->runs.buffer()->address());
+        w[3] = tabb;
+        w[4] = done_addr;
+        w[5] = nj | std::max<uint32_t>(call->cap, 1u) << 8;
+    }
 }
 
 void override_combine_addresses(tt::tt_metal::Program& program, const CombineHandles& h, const CombineBuffers& bufs) {

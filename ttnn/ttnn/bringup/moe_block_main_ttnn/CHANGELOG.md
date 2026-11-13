@@ -169,3 +169,28 @@ API port to this tree (main's API of 2026-11-06 that this base, origin/main `b78
   expert_slot_copy/device/kernels/dataflow/{slot_copy_common.hpp,slot_copy_reader.cpp,slot_copy_writer.cpp},
   CMakeLists.txt, moe_block_nanobind.cpp, common/{common_nanobind.cpp,sources.cmake}, common/tile_gather.{hpp,cpp}
   (deleted); tests: models/demos/deepseek_v41_flash_d_p/tests/test_expert_slot_copy.py
+
+### MOE_FILL=piggyback: expert replica copies carried by the combine's port senders (2026-11-13, deepseek_v41_flash_d_p P.53)
+- What: `set_combine_fill(resources, enabled, gate_up, down, runs, jobs, cap)` (default: never called = the source's
+  program, bit for bit). Enabled, routed_experts_combine's port writer is built with `REC_FILL` (a program of its own
+  in the cache: `RoutedExpertsCombineParams.fill` is hashed) and carries jobs [(src, dst, table, p0, p1, last)]: chip
+  src's port facing the first hop toward dst (link 0) reads pieces [p0, p1) of expert_slot_copy's run table (each run
+  cut in expert_slot_copy_chunk_bytes pieces) from its DRAM into 4 staging slots at the end of its arena (16 KB table +
+  4 x 10880 B) and writes them into dst's DRAM through its own fabric connection: a piece only in a main-loop round
+  that sent no row and while its channel holds fewer than `cap` packets; the call's rest after the main loop, while
+  the credits drain (bounded by the host's p1 - p0: the exit waits on no other core). `last`: a flushed atomic
+  increment of word src of the done words (`combine_fill_done`: persistent, the collector cell, [1, chips + 16]; words
+  chips + p / chips + 8 + p count port p's pieces sent inside / after the main loop). The jobs are runtime args
+  rewritten on every call (create and cache hit). `combine_fill_port(resources, src, dst)`: the carrying port's
+  direction. `MoEBlockResources::set_op_input / op_input / clear_op_input`: a generic per-call input slot (the fill's).
+- Why: P.47's expert_slot_copy is its own program, serial with the model (2.79 ms for 32 copies); the combine's port
+  cores hold every router's one worker channel for the whole ~0.9-1.4 ms program and use ~10 % of the links, so the
+  copy can ride there.
+- Measured: README "Measured" (combine fill).
+- Cores: none added (the 8 port cores' RISCV_0 senders; their reads on NoC1).
+- Needed by: deepseek_v41_flash_d_p P.53 (MOE_FILL=piggyback; tt/expert_fill.py schedules the pieces)
+- Files: routed_experts_combine/{routed_experts_combine.{hpp,cpp},routed_experts_combine_nanobind.cpp},
+  routed_experts_combine/device/{combine_program.{hpp,cpp},routed_experts_combine_device_operation{.cpp,_types.hpp},
+  routed_experts_combine_program_factory.{hpp,cpp}}, routed_experts_combine/device/kernels/dataflow/
+  combine_port_writer.cpp, common/moe_block_resources.{hpp,cpp}; tests:
+  models/demos/deepseek_v41_flash_d_p/tests/test_moe_fill_piggyback.py

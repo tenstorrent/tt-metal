@@ -43,6 +43,15 @@ ttnn::Tensor routed_experts_combine(
     const flat_routed_expert::FlatLayoutOptions& layout = {},
     const CombineConfig& combine = {});
 
+// MOE_FILL=piggyback (P.53): expert replica copies carried by the combine's port senders (CombineFillJob). enabled:
+// the next calls on these resources build the port senders with the fill path (a program of its own in the cache);
+// call: the jobs every following call carries until it is replaced (nullopt: none). The jobs are runtime args only.
+void set_combine_fill(MoEBlockResources& resources, bool enabled, const std::optional<CombineFillCall>& call);
+// The fill's done words (after a call with the fill enabled): uint32 [1, chips + 16] on the combine's collector cell,
+// word s of chip d counting the completed copies from chip s; words chips + p / chips + 8 + p: the pieces chip d's
+// port p sent inside the combine's main loop / after it (all cumulative, never reset).
+ttnn::Tensor combine_fill_done(MoEBlockResources& resources);
+
 // The combine's L1 plan at a dispatch row group: the flat expert's config fitted into the combine's arena (the
 // largest free L1 block less what stays below it, or combine.arena_bytes), the static CBs below the arena and the
 // combine's plan. head_port_cb: the fused head's static CBs when it runs in the same arena (the arena stays above

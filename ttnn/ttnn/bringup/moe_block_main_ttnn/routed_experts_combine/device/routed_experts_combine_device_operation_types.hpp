@@ -48,18 +48,23 @@ struct RoutedExpertsCombineParams {
     // The plans: functions of the fields above, the mesh and the resources (not hashed).
     std::shared_ptr<const CombinePlan> plan;
     std::shared_ptr<const flat_routed_expert::FlatRoutedExpertPlan> flat_plan;
+    // MOE_FILL=piggyback: the port senders carry fill packets (REC_FILL; hashed); fill_call: this call's jobs and
+    // buffers (runtime args only, written on every call; none: no job)
+    bool fill = false;
+    std::shared_ptr<const CombineFillCall> fill_call;
 
-    static constexpr auto attribute_names = std::forward_as_tuple("S", "W", "plan_key");
-    auto attribute_values() const { return std::forward_as_tuple(S, W, plan_key); }
+    static constexpr auto attribute_names = std::forward_as_tuple("S", "W", "plan_key", "fill");
+    auto attribute_values() const { return std::forward_as_tuple(S, W, plan_key, fill); }
 };
 
 struct RoutedExpertsCombineInputs {
-    Tensor plan;                // the device plan [1, 1024] uint32 (the fused head's planner)
-    Tensor table;               // the hand-off table [rows_cap / 32, 64] uint32 (the fused head's planner)
-    Tensor out;                 // y_own [1, 1, S, Hr] bf16 row-major (persistent, the resources')
-    Tensor bar;                 // the start barrier / zero gate words (persistent, every worker core)
-    Tensor hcache;              // the senders' routed header cache (persistent DRAM)
-    std::optional<Tensor> lut;  // per-chip accumulator roles: the senders' accumulator LUT (persistent DRAM)
+    Tensor plan;                      // the device plan [1, 1024] uint32 (the fused head's planner)
+    Tensor table;                     // the hand-off table [rows_cap / 32, 64] uint32 (the fused head's planner)
+    Tensor out;                       // y_own [1, 1, S, Hr] bf16 row-major (persistent, the resources')
+    Tensor bar;                       // the start barrier / zero gate words (persistent, every worker core)
+    Tensor hcache;                    // the senders' routed header cache (persistent DRAM)
+    std::optional<Tensor> lut;        // per-chip accumulator roles: the senders' accumulator LUT (persistent DRAM)
+    std::optional<Tensor> fill_done;  // MOE_FILL=piggyback: the fill's done words (persistent, the collector's cell)
     // the flat routed expert's: x = the dispatched rows, arena = the call's arena (every worker core: the flat
     // expert's buffers on its cells, the combine's on its own, the y writers' words), output = its (unwritten) y
     flat_routed_expert::FlatRoutedExpertInputs flat;

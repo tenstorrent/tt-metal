@@ -9,6 +9,7 @@
 #include <nanobind/stl/array.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
+#include <nanobind/stl/tuple.h>
 #include <nanobind/stl/vector.h>
 
 #include "ttnn-nanobind/bind_function.hpp"
@@ -258,6 +259,62 @@ void bind_routed_experts_combine(nb::module_& mod) {
         L1 bytes a core the block's own programs that run while its arena is allocated (the dispatch, the flat experts
         + the combine) take for their static circular buffers: what the arena must stay above.
         )doc");
+    mod.def(
+        "set_combine_fill",
+        [](MoEBlockResources& resources,
+           bool enabled,
+           const std::optional<ttnn::Tensor>& gate_up,
+           const std::optional<ttnn::Tensor>& down,
+           const std::optional<ttnn::Tensor>& runs,
+           const std::vector<std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, bool>>& jobs,
+           uint32_t cap) {
+            std::optional<CombineFillCall> call;
+            if (!jobs.empty()) {
+                TT_FATAL(gate_up && down && runs, "set_combine_fill: jobs need gate_up, down and runs");
+                call = CombineFillCall{.gu = *gate_up, .d = *down, .runs = *runs, .cap = cap};
+                for (const auto& [s, d, t, p0, p1, last] : jobs) {
+                    call->jobs.push_back(
+                        CombineFillJob{.src = s, .dst = d, .table = t, .p0 = p0, .p1 = p1, .last = last});
+                }
+            }
+            set_combine_fill(resources, enabled, call);
+        },
+        nb::arg("resources"),
+        nb::arg("enabled"),
+        nb::arg("gate_up") = nb::none(),
+        nb::arg("down") = nb::none(),
+        nb::arg("runs") = nb::none(),
+        nb::arg("jobs") = std::vector<std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, bool>>{},
+        nb::arg("cap") = 1,
+        R"doc(
+            MOE_FILL=piggyback (P.53): expert replica copies carried by routed_experts_combine's port senders as extra
+            fabric packets. enabled: the next combine calls on these resources build the port senders with the fill
+            path; jobs [(src chip, dst chip, run table, p0, p1, last)]: every following call carries them (until the
+            next set_combine_fill): chip src's port facing the first hop toward dst (link 0) reads pieces [p0, p1)
+            (expert_slot_copy's run tables, each run cut in expert_slot_copy_chunk_bytes pieces numbered across the
+            table) from gate_up / down on src and writes them to the same tensors on dst, a piece only in a round
+            that sent no row and while its fabric channel holds fewer than cap packets; the rest of the call's pieces
+            while the port drains. last: then a flushed increment of combine_fill_done's word src on dst. At most 4
+            jobs a port.
+        )doc");
+    mod.def(
+        "combine_fill_done",
+        &combine_fill_done,
+        nb::arg("resources"),
+        "MOE_FILL=piggyback: the fill's done words, uint32 [1, chips] a chip (word s: copies from chip s completed).");
+    mod.def(
+        "combine_fill_port",
+        [](MoEBlockResources& resources, uint32_t src, uint32_t dst) {
+            const auto& topo = resources.topology();
+            TT_FATAL(src < topo.num_chips() && dst < topo.num_chips() && src != dst, "combine_fill_port: chips");
+            return static_cast<uint32_t>(*first_hop(topo.coord(src), topo.coord(dst), topo));
+        },
+        nb::arg("resources"),
+        nb::arg("src"),
+        nb::arg("dst"),
+        "MOE_FILL=piggyback: the direction (0 X+, 1 X-, 2 Y+, 3 Y-) of chip src's port that carries a copy to chip dst "
+        "(the first hop, link 0): jobs with the same (src, port) share one connection.");
+    mod.attr("COMBINE_FILL_MAX_JOBS") = kFillMaxJobs;
 }
 
 }  // namespace ttnn::operations::bringup::moe_block_main::routed_experts_combine
