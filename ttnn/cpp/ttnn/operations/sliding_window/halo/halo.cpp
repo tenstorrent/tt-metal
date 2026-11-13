@@ -16,7 +16,11 @@ Tensor halo(
     bool remote_read,
     bool transpose_mcast,
     bool is_out_tiled,
-    bool config_tensors_in_dram) {
+    bool config_tensors_in_dram,
+    const std::optional<Tensor>& prologue_scale,
+    const std::optional<Tensor>& prologue_shift,
+    const std::optional<Tensor>& halo_boundary,
+    const operations::sliding_window::ExternalHaloWindow& external_window) {
     return prim::halo(
         input_tensor,
         config,
@@ -25,7 +29,11 @@ Tensor halo(
         remote_read,
         transpose_mcast,
         is_out_tiled,
-        config_tensors_in_dram);
+        config_tensors_in_dram,
+        prologue_scale,
+        prologue_shift,
+        halo_boundary,
+        external_window);
 }
 
 }  // namespace ttnn
