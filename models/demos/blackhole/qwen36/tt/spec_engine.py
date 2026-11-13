@@ -1789,6 +1789,7 @@ class MTPBlockEngine(MTPSpecEngine):
         self._acc_pt_staged = None  # host table rows the step trace's pt_rows holds, None when unknown
         self._step_pending = None  # the one-enqueue verify whose drafts the next propose returns
         self.one_enqueue_steps = 0  # verifies that ran the device acceptance and the drafter
+        self.verify_steps = 0  # every verify after capture
 
     def prepare_prefill(self, page_table):
         """Allocate the engine buffers and compile the drafter's prompt programs (the drafter KV warm and the last-row
@@ -1874,6 +1875,7 @@ class MTPBlockEngine(MTPSpecEngine):
         return self._acc_trace is not None and not self._timing
 
     def shutdown(self):
+        logger.info(f"[spec_engine] one-enqueue steps: {self.one_enqueue_steps} of {self.verify_steps} verifies")
         if self._acc_trace is not None:
             ttnn.release_trace(self.mesh, self._acc_trace)
             self._acc_trace = None
@@ -1955,6 +1957,7 @@ class MTPBlockEngine(MTPSpecEngine):
         if mamba_state is None:
             raise ValueError("a verify on GDN state blocks needs mamba_state")
         self._step_pending = None
+        self.verify_steps += 1
         B, T = self.B, self.T
         tokens = self._ints(tokens, (B, T))
         start_pos = self._ints(start_pos, (B,))

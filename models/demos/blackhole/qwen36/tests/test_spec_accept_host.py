@@ -213,7 +213,8 @@ def test_a_greedy_step_runs_verify_acceptance_and_drafter_in_one_enqueue(step):
     tokens = torch.tensor([[1, 7, 8, 5], [2, 11, 12, 13], [0, 0, 0, 0], [3, 9, 9, 9]])
     starts, nv = [100, 200, -1, 300], [3, 3, 0, 2]
     res = _verify(eng, tokens, starts, nv)
-    assert log["traced"] == [] and log["traces"] == ["step", "drafter"] and eng.one_enqueue_steps == 1
+    assert log["traced"] == [] and log["traces"] == ["step", "drafter"]
+    assert eng.one_enqueue_steps == eng.verify_steps == 1
     acc = log["enqueue"][-1].accept
     assert acc[STEP_NUM_VALID] == [3, 3, 0, 2] and acc[STEP_P0] == [100, 200, 0, 300]
     assert acc[STEP_DECLINED] == [0, 0, 1, 0] and acc[STEP_KEEP] == [0, 0, 0, 0] and acc[STEP_DRAWN] == [0] * B
@@ -307,7 +308,7 @@ def test_the_next_verify_drops_drafts_no_propose_took(step):
     _verify(eng, tokens, [100, 200, 300, 400], [3] * eng.B)
     assert eng._step_pending is not None
     _verify(eng, tokens, [100, 200, 300, 400], [3] * eng.B, one_enqueue=False)
-    assert eng._step_pending is None
+    assert eng._step_pending is None and (eng.one_enqueue_steps, eng.verify_steps) == (1, 2)
 
 
 def test_a_propose_that_declines_other_rows_drafts_on_the_host(step):
