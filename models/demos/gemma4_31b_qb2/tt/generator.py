@@ -572,6 +572,28 @@ class Gemma4Generator:
                 )
             return self.traces[key]
         self._retire_traces()
+        entry = self._new_entry(state)
+        self._warm_entry(entry, state)
+        self._capture_entry(entry, state)
+        self.traces[key] = entry
+        return entry
+
+    def prepare_entries(self, states):
+        """Capture one decode trace per cache state; the states share the KV pool and differ in rows.
+
+        Every entry's persistent inputs are allocated before any trace is captured, so no persistent tensor can land
+        on memory that a captured trace reuses for intermediates.
+        """
+        self._retire_traces()
+        entries = [self._new_entry(state) for state in states]
+        for entry, state in zip(entries, states):
+            self._warm_entry(entry, state)
+        for entry, state in zip(entries, states):
+            self._capture_entry(entry, state)
+            self.traces[id(state)] = entry
+        return entries
+
+    def _new_entry(self, state):
         entry = {
             "tokens": self._upload(
                 torch.zeros(1, 1, 1, 32, dtype=torch.int32),
@@ -591,6 +613,9 @@ class Gemma4Generator:
             "table_ids": {k: id(v) for k, v in state.device_tables.items()},
             "remaining_steps": 0,
         }
+        return entry
+
+    def _warm_entry(self, entry, state):
         for kind, table in state.device_tables.items():
             scratch_table = (
                 torch.tensor(state.scratch_pages[kind])[:, None]
@@ -615,6 +640,8 @@ class Gemma4Generator:
         self._refresh(torch.zeros(state.batch, dtype=torch.int32), entry["positions"], "position_refreshes")
         self._refresh(torch.zeros(state.batch, dtype=torch.int32), entry["rope_positions"], "rope_refreshes")
         self._refresh(torch.zeros(1, 1, 1, 32, dtype=torch.int32), entry["tokens"], "token_refreshes")
+
+    def _capture_entry(self, entry, state):
         logger.info("Capturing model trace")
         with corruptible_allocation_scope(self.mesh):
             entry["model_trace"] = ttnn.begin_trace_capture(self.mesh, cq_id=0)
@@ -625,8 +652,6 @@ class Gemma4Generator:
             entry["sampling_trace"] = ttnn.begin_trace_capture(self.mesh, cq_id=0)
             self._sample_step(entry)
             ttnn.end_trace_capture(self.mesh, entry["sampling_trace"], cq_id=0)
-        self.traces[key] = entry
-        return entry
 
     def replay(self, entry, *, sample=True):
         """Continue a prepared fixed-slot request without rebuilding device inputs."""
