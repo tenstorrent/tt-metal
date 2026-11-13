@@ -37,6 +37,7 @@
 #include "jit_build/build_env_manager.hpp"
 #include "jit_build/jit_device_config.hpp"
 #include "llrt/llrt.hpp"
+#include "emulated_program_runner.hpp"  // emule::boot_firmware
 #include "common/executor.hpp"
 #include <experimental/fabric/control_plane.hpp>
 #include <experimental/fabric/fabric_types.hpp>
@@ -1543,9 +1544,13 @@ void RiscFirmwareInitializer::initialize_emulated_firmware_state(tt::ChipId devi
 #endif
     };
     const CoreCoord grid = cluster_.get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
+    std::vector<emule::EmuleBootCore> boot_cores;
     for (uint32_t y = 0; y < grid.y; y++) {
         for (uint32_t x = 0; x < grid.x; x++) {
             write_core_state(HalProgrammableCoreType::TENSIX, CoreType::WORKER, CoreCoord(x, y));
+            const CoreCoord virtual_core =
+                cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, CoreCoord(x, y), CoreType::WORKER);
+            boot_cores.push_back({static_cast<uint32_t>(virtual_core.x), static_cast<uint32_t>(virtual_core.y), x, y});
         }
     }
     if (hal_.has_programmable_core_type(HalProgrammableCoreType::DISPATCH) &&
@@ -1556,6 +1561,26 @@ void RiscFirmwareInitializer::initialize_emulated_firmware_state(tt::ChipId devi
             write_core_state(HalProgrammableCoreType::DISPATCH, CoreType::DISPATCH, logical_core);
         }
     }
+
+    // The emulator runs the part of Tensix firmware boot a kernel can observe, as the firmware binaries.
+    const ContextId ctx_id = descriptor_->metal_context().get_context_id();
+    const uint32_t tensix_index = hal_.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+    std::map<uint32_t, std::string> firmware_binary_paths;
+    for (const auto processor_class : {HalProcessorClassType::DM, HalProcessorClassType::COMPUTE}) {
+        const auto class_index = static_cast<uint32_t>(processor_class);
+        for (uint32_t processor = 0;
+             processor < hal_.get_processor_types_count(HalProgrammableCoreType::TENSIX, class_index);
+             processor++) {
+            firmware_binary_paths[hal_.get_processor_index(HalProgrammableCoreType::TENSIX, processor_class, processor)] =
+                MetalContext::instance(ctx_id).build_env_manager().get_firmware_binary_path(
+                    device_id, tensix_index, class_index, processor);
+        }
+    }
+    emule::boot_firmware(
+        device_id,
+        MetalContext::instance(ctx_id).build_env_manager().get_device_build_env(device_id).build_env.get_defines(),
+        boot_cores,
+        firmware_binary_paths);
 }
 
 void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_id) {
