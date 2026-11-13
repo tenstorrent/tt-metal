@@ -44,7 +44,8 @@
 #                     runs the consumer with --dist loadgroup -n <consumer-jobs>.
 #                     Prints the report directory in a RUN_LLK_TESTS_PERF_REPORT line.
 #   --run-tag  TAG    Perf report directory name, perf_data/runs/<TAG>
-#                     (sets PERF_RUN_TAG; default local-<utc timestamp>)
+#                     (sets PERF_RUN_TAG; default local-<utc timestamp>-<pid>;
+#                     an existing report directory is refused)
 #   --keep-runs N     Perf run directories to retain (sets PERF_KEEP_RUNS;
 #                     default 10). Raise it for A/B or repeat series.
 #   --consumer-jobs N Silicon consumer parallelism in --perf mode (default: 15,
@@ -250,7 +251,14 @@ _validate() {
 
   if [[ "$PERF" == "true" ]]; then
     if [[ -z "$RUN_TAG" ]]; then
-      RUN_TAG="local-$(date -u +%Y%m%dT%H%M%SZ)"
+      RUN_TAG="local-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+    fi
+    # The report writer only replaces what this sweep produces, so a reused tag
+    # mixes old and new rows.
+    if [[ "$CMD" == "run" || "$CMD" == "simulate" ]] && [[ -e "${WORKTREE}/perf_data/runs/${RUN_TAG}" ]]; then
+      echo "ERROR: perf report directory already exists: ${WORKTREE}/perf_data/runs/${RUN_TAG}" >&2
+      echo "       Pick a new --run-tag." >&2
+      exit 4
     fi
     if [[ -n "$KEEP_RUNS" && ! "$KEEP_RUNS" =~ ^[0-9]+$ ]]; then
       echo "ERROR: --keep-runs must be a non-negative integer, got '${KEEP_RUNS}'" >&2
@@ -282,7 +290,12 @@ _perf_pytest_args() {
 _perf_env_prefix() {
   PERF_ENV=()
   [[ "$PERF" == "true" ]] || return 0
-  [[ "$KEEP_ASSERTS" == "true" ]] || PERF_ENV+=(TT_LLK_DISABLE_ASSERTS=1)
+  # Set both ways, so an exported TT_LLK_DISABLE_ASSERTS cannot override the flag.
+  if [[ "$KEEP_ASSERTS" == "true" ]]; then
+    PERF_ENV+=(TT_LLK_DISABLE_ASSERTS=0)
+  else
+    PERF_ENV+=(TT_LLK_DISABLE_ASSERTS=1)
+  fi
   return 0
 }
 
@@ -389,10 +402,12 @@ _do_simulate() {
   # Write the pytest invocation to a temp file so that:
   #   1. flock can use "flock LOCK bash SCRIPT" without inline quoting nightmares
   #   2. TEST_ID values (single-quotes, brackets, commas) are literal, not shell-expanded
-  local sim_script
+  local sim_script tag_taken
+  local report_dir="${WORKTREE}/perf_data/runs/${RUN_TAG}"
   sim_script=$(mktemp /tmp/llk_run_sim_XXXXXX.sh)
-  # Trap ensures the temp file is removed even on SIGTERM / SIGINT
-  trap 'rm -f "${sim_script}"' EXIT INT TERM
+  tag_taken="${sim_script}.tag-taken"
+  # Trap ensures the temp files are removed even on SIGTERM / SIGINT
+  trap 'rm -f "${sim_script}" "${tag_taken}"' EXIT INT TERM
 
   # Build the pytest flags string.
   # Simulator mode adds --run-simulator; hardware mode targets silicon directly.
@@ -437,6 +452,15 @@ _do_simulate() {
     printf 'set -u\n\n'
     printf 'source %q\n' "${VENV}/bin/activate"
     printf 'cd %q\n\n' "${TEST_DIR}"
+    if [[ "$PERF" == "true" ]]; then
+      # Checked again under the lock: a run queued behind another with the same
+      # tag must not append to its report.
+      printf 'if [[ -e %q ]]; then\n' "${report_dir}"
+      printf '  echo %q >&2\n' "ERROR: perf report directory already exists: ${report_dir}"
+      printf '  : >%q\n' "${tag_taken}"
+      printf '  exit 4\n'
+      printf 'fi\n\n'
+    fi
     if [[ "$MODE" == "simulator" ]]; then
       printf 'TT_UMD_SIMULATOR_PATH=%q \\\n' "${SIM_PATH}"
     fi
@@ -485,12 +509,16 @@ _do_simulate() {
     sim_exit=$?
   fi
 
-  rm -f "${sim_script}"
+  local tag_was_taken=false
+  [[ -e "$tag_taken" ]] && tag_was_taken=true
+  rm -f "${sim_script}" "${tag_taken}"
   trap - EXIT INT TERM
 
   if [[ "$PERF" == "true" ]]; then
-    local report_dir="${WORKTREE}/perf_data/runs/${RUN_TAG}"
-    if [[ -d "$report_dir" ]]; then
+    if [[ "$tag_was_taken" == "true" ]]; then
+      echo "=== RUN_LLK_TESTS_PERF_REPORT === none (${report_dir} was written by another run; pick a new --run-tag)" >&2
+      sim_exit=4
+    elif [[ -d "$report_dir" ]]; then
       echo "=== RUN_LLK_TESTS_PERF_REPORT === ${report_dir}" >&2
     else
       echo "=== RUN_LLK_TESTS_PERF_REPORT === none (expected ${report_dir}; every case deselected or the consumer never finished)" >&2

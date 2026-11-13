@@ -40,9 +40,9 @@ Examples:
 - `--compile-only` — compile-producer only, no simulate
 - `--no-split` — combined compile+run in one pytest invocation (issue-solver tests)
 - `--timeout <secs>` — pytest timeout ceiling (default 600)
-- `--speed-of-light` — compile runtime parameters as constants (the build CI perf gates on)
-- `--perf` — perf sweep built and run as CI does: `-m perf` (plus `--mode perf` for SFPU sweep modules), `TT_LLK_DISABLE_ASSERTS=1`, no default `--maxfail`, and `--dist loadgroup -n 15` for the silicon consumer. Ends with a `RUN_LLK_TESTS_PERF_REPORT` line naming `perf_data/runs/<tag>`. See `perf-report` for validating the result
-- `--run-tag <tag>` / `--keep-runs <N>` — perf report directory name and retention (`PERF_RUN_TAG`, `PERF_KEEP_RUNS`); need `--perf`
+- `--speed-of-light` — compile runtime parameters as constants (the build the nightly `LLK perf` run measures; the PR and merge perf gates build without it)
+- `--perf` — perf sweep built and run as CI does: `-m perf` (plus `--mode perf` for SFPU sweep modules), `TT_LLK_DISABLE_ASSERTS=1`, a compile phase without `-x`, no default `--maxfail`, and `--dist loadgroup -n 15` for the silicon consumer. Ends with a `RUN_LLK_TESTS_PERF_REPORT` line naming `perf_data/runs/<tag>`. See `perf-report` for validating the result
+- `--run-tag <tag>` / `--keep-runs <N>` — perf report directory name and retention (`PERF_RUN_TAG`, `PERF_KEEP_RUNS`); need `--perf`. A tag whose directory already exists is refused
 - `--consumer-jobs <N>` — silicon consumer parallelism with `--perf` (default 15; 0 is serial)
 - `--perf-counters` / `--dump-perf-counters` — counter report (a separate report kind); need `--perf`
 - `--keep-asserts` — keep `LLK_ASSERT` in a `--perf` build (numbers then differ from CI)
