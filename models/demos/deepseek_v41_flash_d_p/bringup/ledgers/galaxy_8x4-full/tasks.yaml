@@ -3572,6 +3572,42 @@ tasks:
       contract_checks_failed: == 0
       acks_early: == 0
       served_bytes_differ: == 0
+- id: FIX.29
+  title: 'Load the model ONCE per gate: every model-level device test of a gate (contract, acks, the model''s own tests, determinism, ladder) runs in one process on one loaded model'
+  step: overseer_fix
+  role: overseer
+  precheck: false
+  deps:
+  - FIX.28
+  device: true
+  paths:
+  - models/demos/common/bringup
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/tt/runners
+  - models/demos/deepseek_v41_flash_d_p/bringup
+  - scripts/run_safe_pytest.sh
+  brief:
+    details: |-
+      OWNER 2026-11-13, angry, asked for days: "IT DOESN'T MAKE SENSE TO LOAD THE MODEL AGAIN AND AGAIN to conduct tests in serial. LOAD THE MODEL ONLY ONCE." F259 (core/batch.py, testing/batch.py, tests.one_process on) shares one process only among SHARED_TESTS (ladder, profile, positions, smoke, framework determinism). Every other test of a gate loads the model again (~4-5 min each on the 8x4): FIX.26's gate loaded it 4 times (logs/FIX.26.log: 4 x 271-313 s), FIX.28's gate 5 times (ladder, tests/test_determinism.py, test_contract, test_adapter_acks, test_decoder_skip_decode).
+      Target: one gate = one model load per distinct model configuration (switch values read at load). (1) Extend F259 to every device test a gate runs: test_contract, test_contract_acks, the model's tests (models/demos/deepseek_v41_flash_d_p/tests/: test_determinism, test_decoder_skip_decode, test_prefill_end, bringup/contract/test_adapter_acks, test_window_snapshot, ...) take the batch's model. The contract tests build the model through the engine's adapter because the adapter is part of what they check: then the batch loads the model THROUGH the adapter once and every test uses that (the adapter path stays tested; no second load path). Tests that need different switch values per run (e.g. DECODER_SKIP off vs decode, PREFILL_END end vs cap) must take them as per-call arguments of the one loaded model where the model allows it; where a switch is truly frozen at load, say which and why, and group them so each configuration loads once. KV/state freed between runs as F259 does. (2) A single command for agents to run several tests in one process while working (no reload per test), and the bringup-engineer agent definition tells agents to use it. (3) Proof on the device: FIX.28's gate command as is, in one process: number of model loads (emit gate_model_loads), every metric identical to the separate-process runs (FIX.28's results), determinism 0, wall before / after (FIX.28's gate wall from its log vs now). Never loosen a check; tests must still fail when what they check breaks (show one injected failure per moved test is still caught).
+      Report: loads before/after, wall before/after, what is shared and what is not, and why. SAFETY: a hang or a board reset need: STOP and report, never reset. Agent rules 18 and 19 hold. Report in plain language, short, every term defined.
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_determinism.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      determinism_max_abs_diff: == 0
+      determinism_max_abs_diff_decoder_skip: == 0
+      contract_checks_failed: == 0
+      acks_early: == 0
+      served_bytes_differ: == 0
+      gate_model_loads: == 1
 - id: O.1
   hold: 'owner 2026-11-06: not now (P.34-P.36 first)'
   title: 'Derived-op tests: a random-input case for every ttnn.bringup call this model makes'
