@@ -289,8 +289,8 @@ void test_hd_socket_loopback(
 }
 
 // HOST_PUSH loopback of num_pages pages, each checked as it comes back. Page p carries pattern p % kNumPatterns,
-// and kNumPatterns is prime and larger than any FIFO depth used here, so a bytes_sent update that lands before its
-// page does (the kernel then sends the slot's previous contents) reads back as a different pattern.
+// and kNumPatterns is larger than the FIFO depth in pages, so a bytes_sent update that lands before its page does
+// (the kernel then sends the slot's previous contents) reads back as a different pattern.
 void test_h2d_host_push_ordering_stress(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
     std::size_t socket_fifo_size,
@@ -300,11 +300,20 @@ void test_h2d_host_push_ordering_stress(
     constexpr uint32_t kNumPatterns = 61;
     constexpr uint32_t kPagesPerIteration = 1000;
     TT_FATAL(num_pages % kPagesPerIteration == 0, "num_pages must be a multiple of {}", kPagesPerIteration);
+    TT_FATAL(
+        socket_fifo_size / page_size < kNumPatterns,
+        "FIFO depth {} pages must be below {} patterns, or a stale slot can match its new page",
+        socket_fifo_size / page_size,
+        kNumPatterns);
 
     auto input_socket = H2DSocket(mesh_device, socket_core, BufferType::L1, socket_fifo_size, H2DMode::HOST_PUSH);
     auto output_socket = D2HSocket(mesh_device, socket_core, socket_fifo_size);
     input_socket.set_page_size(page_size);
     output_socket.set_page_size(page_size);
+    // Without its own window (no TLB free), the socket writes through cluster.write_core and this test would
+    // pass without exercising the posted path.
+    ASSERT_TRUE(experimental::detail::writes_through_window(input_socket))
+        << "H2D socket fell back to cluster.write_core; the posted window is not under test";
 
     auto program = CreateProgram(*mesh_device);
     const std::shared_ptr<MeshBuffer> scratch_buffer = add_loopback_kernel(

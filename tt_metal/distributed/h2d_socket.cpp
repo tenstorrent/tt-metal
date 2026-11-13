@@ -1210,6 +1210,10 @@ void H2DSocketTryWriteAccess::publish_staged(ttsl::Span<distributed::H2DSocket* 
     tt_driver_atomics::sfence();
 }
 
+bool H2DSocketTryWriteAccess::writes_through_window(const distributed::H2DSocket& socket) {
+    return socket.pimpl_->writes_through_window();
+}
+
 std::unique_ptr<distributed::H2DSocket> H2DSocketDramRecvAccess::create(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const distributed::MeshCoreCoord& recv_core,
