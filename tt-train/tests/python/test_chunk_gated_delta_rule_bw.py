@@ -458,6 +458,21 @@ def test_qwen_shape_saved_forward_head_major_d_out(device):
     _check_grads(got, _chunked_oracle(x, shape, chunk_size), shape, dtype)
 
 
+# Qwen3.8 per chip on 4-way tensor parallelism: 4 key heads, 12 value heads, K = V = 128, sequence 8192
+# (128 chunks of 64, 256 of 32), the shape the backward is meant to be fast at.
+TP4_SHAPE = (1, 8192, 4, 12, 128, 128)
+
+
+@pytest.mark.parametrize("chunk_size", [32, 64], ids=["c32", "c64"])
+def test_qwen_tp4_per_chip_shape_vs_oracle(chunk_size, device):
+    """Backward precision at the TP=4 per-chip shape and sequence 8192: bf16 flat inputs, head-major d_out and an
+    initial state, against the float64 chunked reference."""
+    x = _build_inputs(TP4_SHAPE, "with_h0", ttnn.bfloat16)
+    saved = _run_ttml_fw(x, TP4_SHAPE, chunk_size, device)
+    got = _run_ttml(x, TP4_SHAPE, chunk_size, ttnn.bfloat16, device, do_head_major=True, saved=saved)
+    _check_grads(got, _chunked_oracle(x, TP4_SHAPE, chunk_size), TP4_SHAPE, ttnn.bfloat16)
+
+
 def test_fp32_gates_with_bf16_inputs(device):
     """The forward takes BF16 or FP32 gates beside BF16 q/k/v; the backward must take the same."""
     shape, chunk_size = SHAPES[2]
