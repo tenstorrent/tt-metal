@@ -204,9 +204,10 @@ class ACfg:
     CHT: int = 24
     SCB: int = 8
     RD: int = 4
+    NQ: int = 1024  # credit queue entries a branch sender (no wrap in these runs: <= NC * experts a group)
     relay: tuple = (10, 9)
     local: tuple = (9, 9)  # local lander
-    branch: tuple = ((10, 8), (9, 8), (10, 7))  # E, W, N/S-with-teeth sender cores
+    branch: tuple = (((10, 8), (10, 7)), ((9, 8), (9, 7)), ((10, 6), (9, 6)))  # E, W, N/S-with-teeth: link 0, 1 cores
 
 
 def branches(mesh_shape, rc):
@@ -230,48 +231,72 @@ def build_all(mesh, cfg: GCfg, ac: ACfg, x_t, idx_t, counts_t, ws_t, out_t):
     NCHIP = R * Cn
     NC = cfg.G * cfg.GC
     chip = lambda rc: rc[0] * Cn + rc[1]
-    bcore = dict(zip(("E", "W", "NS"), ac.branch))
-    send_cores = [ac.local] + list(ac.branch)
+    bcore = dict(zip(("E", "W", "NS"), ac.branch))  # name -> (link 0 core, link 1 core)
+    all_b = [x for pair in ac.branch for x in pair]
+    send_cores = [ac.local] + all_b
     icred = sharded_l1(mesh, [ac.relay] + send_cores, [NCHIP * NC, 4], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, torch.int32)
     sst = sharded_l1(mesh, send_cores, [1, 16], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, torch.int32)
+    cq = sharded_l1(mesh, [b[0] for b in ac.branch], [ac.NQ, 4], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, torch.int32)
     from models.demos.ws_expert.ws_group import group_cores
 
     gcores = [c for g in range(cfg.G) for c in group_cores(cfg, g)]
     assert not set([ac.relay] + send_cores) & set(gcores)
     gprog, io, st, ex = build(mesh, cfg, x_t, idx_t, counts_t, ws_t, ws_t, out_t, fab=dict(relay=ac.relay, icred=icred))
-    tl = [c | noc(mesh, *gcores[c])[0] << 8 | noc(mesh, *gcores[c])[1] << 16 for c in range(NC)]
+    tword = lambda c: c | noc(mesh, *gcores[c])[0] << 8 | noc(mesh, *gcores[c])[1] << 16
+    tl_all = [tword(c) for c in range(NC)]
+    tl_link = [[tword(c) for c in range(NC) if c % 2 == l] for l in range(2)]
     KT, KTD, DC = cfg.KT, cfg.PAIRS, cfg.DCOLS
     mesh_id = int(node(mesh, (0, 0)).mesh_id)
+    xy = lambda core: noc(mesh, *core)[0] | noc(mesh, *core)[1] << 8
     dm = lambda risc: ttnn.DataMovementConfigDescriptor(
         processor=ttnn.DataMovementProcessor.RISCV_0 if risc == 0 else ttnn.DataMovementProcessor.RISCV_1,
         noc=ttnn.NOC.RISCV_0_default if risc == 0 else ttnn.NOC.RISCV_1_default,
     )
+    DIR = {"E": 0, "W": 1, "N": 2, "S": 3}  # eth_chan_directions
     mpd = ttnn.MeshProgramDescriptor()
     for r in range(R):
         for c in range(Cn):
             rc, me = (r, c), chip((r, c))
             brs = branches((R, Cn), rc)
-            nbrs = neighbours((R, Cn), rc)
-            # relay
+            # relay: link-0 branch core a direction, local lander, then per owner chip and link the covering core
+            qxy = [0, 0, 0, 0]
+            for name, nb, rng, _ in brs:
+                d = name if name != "NS" else ("N" if rng[2] else "S")
+                qxy[DIR[d]] = xy(bcore[name][0])
+            owner_map = []
+            for o in range(NCHIP):
+                orc = (o // Cn, o % Cn)
+                if o == me:
+                    pair = (ac.local, ac.local)
+                elif orc[0] == r:
+                    pair = bcore["E"] if orc[1] < c else bcore["W"]
+                else:
+                    pair = bcore["NS"]
+                owner_map += [xy(pair[0]), xy(pair[1])]
             rrt = ttnn.RuntimeArgs()
-            rrt[ac.relay[0]][ac.relay[1]] = [me, len(nbrs)]
+            rrt[ac.relay[0]][ac.relay[1]] = [me] + qxy + [xy(ac.local)] + owner_map
             relay = ttnn.KernelDescriptor(
                 kernel_source=kpath("wf_relay_all.cpp"),
                 core_ranges=crs([ac.relay]),
-                compile_time_args=[NC, cfg.GC, cfg.G, cfg.nexp, icred.buffer_address(), NCHIP, mesh_id],
+                compile_time_args=[NC, cfg.GC, cfg.G, cfg.nexp, icred.buffer_address(), NCHIP, mesh_id]
+                + [cq.buffer_address(), ac.NQ],
                 runtime_args=rrt,
                 defines=FAB_DEFS,
                 config=dm(0),
             )
-            # owner-side readers (all sender cores) + local lander + branch senders
-            rd_rt, ln_rt, br_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
-            for x, y in [ac.local] + [bcore[b[0]] for b in brs]:
-                rd_rt[x][y] = [ws_t.buffer_address(), me, NC] + tl
-            ln_rt[ac.local[0]][ac.local[1]] = [mesh_id, me, 0, 0, 0, 0, 1 << me, NC] + tl
+            rd_rt, ln_rt, b0_rt, b1_rt = (ttnn.RuntimeArgs() for _ in range(4))
+            lx, ly = ac.local
+            rd_rt[lx][ly] = [ws_t.buffer_address(), me, NC] + tl_all
+            ln_rt[lx][ly] = [mesh_id, me, 0, 0, 0, 0, 1 << me, NC] + tl_all
+            bc = [[], []]
             for name, nb, (e, w, n, s), cov in brs:
-                x, y = bcore[name]
-                br_rt[x][y] = [mesh_id, me, e, w, n, s, sum(1 << chip(k) for k in cov), NC] + tl
-            scores = [ac.local] + [bcore[b[0]] for b in brs]
+                for l in range(2):
+                    x, y = bcore[name][l]
+                    bc[l].append((x, y))
+                    rd_rt[x][y] = [ws_t.buffer_address(), me, len(tl_link[l])] + tl_link[l]
+                    (b0_rt, b1_rt)[l][x][y] = [mesh_id, me, e, w, n, s, sum(1 << chip(k) for k in cov)]
+                    (b0_rt, b1_rt)[l][x][y].extend([len(tl_link[l])] + tl_link[l])
+            scores = [ac.local] + bc[0] + bc[1]
             sdefs = [("SST_ADDR", str(sst.buffer_address()))]
             ct_send = [cfg.nexp, KT, KTD, DC, ac.CHT, cfg.G, cfg.GC]
             ct_send += [ex["wgu_ring"].buffer_address(), ex["wd_ring"].buffer_address(), ex["warr"].buffer_address()]
@@ -297,51 +322,37 @@ def build_all(mesh, cfg: GCfg, ac: ACfg, x_t, idx_t, counts_t, ws_t, out_t):
                 ),
                 ttnn.KernelDescriptor(
                     kernel_source=kpath("wf_bsend.cpp"),
-                    core_ranges=crs([bcore[b[0]] for b in brs]),
+                    core_ranges=crs(bc[0]),
                     compile_time_args=ct_send,
-                    runtime_args=br_rt,
+                    runtime_args=b0_rt,
+                    defines=FAB_DEFS + sdefs + [("WF_CREDQ", str(cq.buffer_address())), ("WF_NQ", str(ac.NQ))],
+                    config=dm(1),
+                ),
+                ttnn.KernelDescriptor(
+                    kernel_source=kpath("wf_bsend.cpp"),
+                    core_ranges=crs(bc[1]),
+                    compile_time_args=ct_send,
+                    runtime_args=b1_rt,
                     defines=FAB_DEFS + sdefs,
                     config=dm(1),
                 ),
             ]
-            ki_relay, ki_br = len(gprog.kernels), len(gprog.kernels) + 3
+            kb = len(gprog.kernels) + 3
             cbs = list(gprog.cbs) + [cb(0, cfg.w_dt, ac.SCB * ac.CHT, crs(scores))]
             p = ttnn.ProgramDescriptor(kernels=kernels, semaphores=list(gprog.semaphores), cbs=cbs)
-            # fabric connection args: relay on link 1 of every neighbour, branch senders on link 0 of theirs
-            rt = p.kernels[ki_relay].runtime_args[ac.relay[0]][ac.relay[1]]
-            for nb in nbrs:
-                rt.extend(
-                    ttnn.setup_fabric_connection(
-                        mesh_device=mesh,
-                        src_fabric_node_id=node(mesh, rc),
-                        dst_fabric_node_id=node(mesh, nb),
-                        link_idx=1,
-                        program_descriptor=p,
-                        worker_core=ttnn.CoreCoord(*ac.relay),
-                    )
-                )
-            for o in range(NCHIP):
-                orc = (o // Cn, o % Cn)
-                if o == me:
-                    sc = ac.local
-                elif orc[0] == r:
-                    sc = bcore["E"] if orc[1] < c else bcore["W"]
-                else:
-                    sc = bcore["NS"]
-                sx, sy = noc(mesh, *sc)
-                rt.extend([o | sx << 8 | sy << 16])
             for name, nb, _, _ in brs:
-                x, y = bcore[name]
-                p.kernels[ki_br].runtime_args[x][y].extend(
-                    ttnn.setup_fabric_connection(
-                        mesh_device=mesh,
-                        src_fabric_node_id=node(mesh, rc),
-                        dst_fabric_node_id=node(mesh, nb),
-                        link_idx=0,
-                        program_descriptor=p,
-                        worker_core=ttnn.CoreCoord(x, y),
+                for l in range(2):
+                    x, y = bcore[name][l]
+                    p.kernels[kb + l].runtime_args[x][y].extend(
+                        ttnn.setup_fabric_connection(
+                            mesh_device=mesh,
+                            src_fabric_node_id=node(mesh, rc),
+                            dst_fabric_node_id=node(mesh, nb),
+                            link_idx=l,
+                            program_descriptor=p,
+                            worker_core=ttnn.CoreCoord(x, y),
+                        )
                     )
-                )
             mc = ttnn.MeshCoordinate(r, c)
             mpd[ttnn.MeshCoordinateRange(mc, mc)] = p
-    return mpd, io + [icred, sst], st, sst
+    return mpd, io + [icred, sst, cq], st, sst

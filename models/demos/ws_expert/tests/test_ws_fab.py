@@ -185,7 +185,7 @@ def run_all(mesh, cfg: GCfg, ac, Ms, seed=0):
             first = max(first, int((rg[:, 1] - t0).max()))
             last = max(last, int((rg[:, n_g] - t0).max()))
         span = last - first
-        snd = (ttnn.to_torch(ssts[ci]).to(torch.int64)[:, :8] // 1000).tolist()
+        snd = (ttnn.to_torch(ssts[ci]).to(torch.int64)[:, :4] // 1000).tolist()
         per_chip.append(
             dict(
                 pcc=min(pcs),
@@ -210,6 +210,6 @@ def test_ws_fab_all(mesh_device, M):
         logger.info(
             f"WSA M {M} chip {ci}: {r['per_expert']:.0f} cyc/expert ({r['per_expert'] / clk:.2f} us), util tile "
             f"{100 * r['util']:.1f}%, pcc {r['pcc']:.5f}; waits (K) tilize/x/weight/h {r['wait']}; "
-            f"senders (local, branches) cb/send/cred/total|rd res/issue/bar/total {r['snd']}"
+            f"senders (local, E0 E1 W0 W1 NS0 NS1) cb/send/cred/total {r['snd']}"
         )
     assert min(r["pcc"] for r in pcs) > 0.999

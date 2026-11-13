@@ -8,7 +8,8 @@
 // lands them on this chip by NoC writes. For each owned expert e (group g = e % G, ring slot n & 1, n = e / G) and each
 // core c of group g: waits until every covered chip k freed the slot (credit word k NC + c >= n - 1, written by chip
 // k's relay), then sends the slice from CB 0 (filled by wf_sreader) in CHT-tile packets into the core's ring; the last
-// packet is fused with an atomic inc of the core's warr word for the slot.
+// packet is fused with an atomic inc of the core's warr word for the slot. Two cores a branch (links 0 and 1, targets
+// c % 2 == link); the link-0 core also forwards the relay's credit entries (WF_CREDQ) between its packets.
 // RT: 0 my mesh id, 1 my chip id, 2 e hops, 3 w hops, 4 n hops, 5 s hops, 6 covered chips (bit mask), 7 ntargets,
 //     8.. targets (c | x << 8 | y << 16), then (not WF_LOCAL) the fabric connection args
 // CT: 0 NEXP, 1 KT, 2 KTD, 3 DCOLS, 4 CHT, 5 G, 6 GC, 7 wgu_ring, 8 wd_ring, 9 warr, 10 icred, 11 NC, 12 NCHIP, 13 own
@@ -52,6 +53,36 @@ void kernel_main() {
         PacketHeaderPool::allocate_header(), PacketHeaderPool::allocate_header()};
     uint32_t hi = 0;
 #endif
+#ifdef WF_CREDQ
+    // credit queue (this direction's link-0 sender): entries {seq, o | c << 8, dst core xy, v} from the relay, sent on
+    // as fabric inline writes of v into chip o's sender word my_chip * NC + c; a {.., 0xFFFFFFFF} entry ends it
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* hcr = PacketHeaderPool::allocate_header();
+    volatile tt_l1_ptr uint32_t* q = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(WF_CREDQ);
+    uint32_t rp = 0;
+    bool qdone = false;
+    auto drain = [&]() {
+        invalidate_l1_cache();
+        while (q[(rp % WF_NQ) * 4] == rp + 1) {
+            const uint32_t w1 = q[(rp % WF_NQ) * 4 + 1], xy = q[(rp % WF_NQ) * 4 + 2], v = q[(rp % WF_NQ) * 4 + 3];
+            ++rp;
+            if (w1 == 0xFFFFFFFF) {
+                qdone = true;
+                continue;
+            }
+            fabric_unicast_noc_unicast_inline_write(
+                &conn,
+                hcr,
+                (uint8_t)(w1 & 0xFF),
+                my_mesh,
+                tt::tt_fabric::NocUnicastInlineWriteCommandHeader{
+                    get_noc_addr(xy & 0xFF, xy >> 8, icred + (my_chip * NC + (w1 >> 8)) * 16), v});
+            noc_async_writes_flushed();
+            invalidate_l1_cache();
+        }
+    };
+#else
+    auto drain = []() {};
+#endif
     auto wall = []() { return *reinterpret_cast<volatile uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L); };
     uint32_t t_cb = 0, t_send = 0, t_cred = 0;
     const uint32_t tstart = wall();
@@ -73,6 +104,7 @@ void kernel_main() {
                     volatile tt_l1_ptr uint32_t* cr =
                         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(icred + (k * NC + c) * 16);
                     do {
+                        drain();
                         invalidate_l1_cache();
                     } while (*cr < n - 1);
                 }
@@ -82,6 +114,9 @@ void kernel_main() {
                 const uint32_t dst =
                     u0 < WGU ? wgu_ring + ((n & 1) * WGU + u0) * tb : wd_ring + ((n & 1) * WDN + u0 - WGU) * tb;
                 const uint32_t a1 = wall();
+                while (!cb_pages_available_at_front(0, CHT)) {
+                    drain();
+                }
                 cb_wait_front(0, CHT);
                 const uint32_t a2 = wall();
                 t_cb += a2 - a1;
@@ -123,9 +158,15 @@ void kernel_main() {
 #endif
                 t_send += wall() - a2;
                 cb_pop_front(0, CHT);
+                drain();
             }
         }
     }
+#ifdef WF_CREDQ
+    while (!qdone) {  // (other chips' credits still pass through this connection)
+        drain();
+    }
+#endif
 #ifndef WF_LOCAL
     conn.close();
 #endif
