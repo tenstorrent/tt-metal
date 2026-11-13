@@ -630,7 +630,7 @@ jobs:
     name: LLK perf merge gate (changes)
     if: ${{
         github.event.action != 'destroyed' &&
-        (github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch')
+        github.event_name == 'workflow_dispatch'
       }}
     runs-on: ubuntu-slim
     outputs:
