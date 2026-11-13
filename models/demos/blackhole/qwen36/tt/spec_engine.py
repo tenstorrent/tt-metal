@@ -1792,7 +1792,7 @@ class MTPBlockEngine(MTPSpecEngine):
         self._step_pending = None  # the one-enqueue verify whose drafts the next propose returns
         self.one_enqueue_steps = 0  # verifies that ran the device acceptance and the drafter
         self.verify_steps = 0  # every verify after capture
-        self.one_enqueue_host_proposes = 0  # one-enqueue verifies whose propose decided differently and drafted again
+        self.one_enqueue_host_proposes = 0  # one-enqueue verifies whose propose drafted again on the host
 
     def prepare_prefill(self, page_table):
         """Allocate the engine buffers and compile the drafter's prompt programs (the drafter KV warm and the last-row
@@ -2080,7 +2080,7 @@ class MTPBlockEngine(MTPSpecEngine):
         pack = reads[1 + len(draws)].to(torch.int64)
         drafts = self._drafts_to_host([[int(v) for v in r.reshape(-1)[:B]] for r in reads[2 + len(draws) :]])
         self._vfeed = model._vfy_rows_out
-        self._step_pending = SimpleNamespace(plan=plan, pack=pack, drafts=drafts)
+        self._step_pending = SimpleNamespace(plan=plan, pack=pack, drafts=drafts, ids=ids)
         self.one_enqueue_steps += 1
         return ids.to(torch.int32)
 
@@ -2088,12 +2088,14 @@ class MTPBlockEngine(MTPSpecEngine):
         self, num_drafts, committed_tokens, committed_positions, accepted_counts, page_table=None, hidden=None
     ):
         """After a one-enqueue verify: the drafts the device made, once the runner's commit is the one the device
-        accepted (every live row's count and committed tokens give the drafter pack the device built). A different
-        commit raises ValueError: the runner proposes with the counts of its own greedy walk over this verify's ids,
-        drafts and valid-draft counts (it trims only what it publishes and writes), so a difference is a wrong device
-        acceptance, and its drafts continue a wrong commit. A propose that decides differently from
-        the verify's plan (another table, other declined rows, positions that do not follow the verify) runs the base
-        propose, whose drafter rewrites the same drafter KV slots from the runner's commit."""
+        accepted (every live row's count and committed tokens give the drafter pack the device built).
+
+        A runner that commits less than its walk on some row (a prefix of the device's commit: a length or stop cut,
+        which vllm-tt-plugin leaves to the scheduler) gets the base propose instead, as does a propose that decides
+        differently from the verify's plan (another table, other declined rows, positions that do not follow the
+        verify). The base propose's drafter rewrites every drafter KV slot the device's wrote up to the runner's
+        commit plus K - 1; the slots past it are written again before any read. Any other commit raises ValueError: it
+        is not a prefix of the device's greedy walk over the same ids, so the device acceptance is wrong."""
         step, self._step_pending = self._step_pending, None
         args = (num_drafts, committed_tokens, committed_positions, accepted_counts, page_table, hidden)
         if step is None:
@@ -2110,14 +2112,21 @@ class MTPBlockEngine(MTPSpecEngine):
             self.one_enqueue_host_proposes += 1
             return super().propose_draft_tokens(*args)
         m = (q.acc - 1).tolist()
+        m_dev = (step.pack[draft_anchor(K), :B] - torch.arange(B) * self.T).tolist()
+        live = [u for u in range(B) if not q.pad[u]]
+        cut = [u for u in live if m[u] < m_dev[u]]
+        prefix = all(m[u] <= m_dev[u] and torch.equal(q.ctok[u, : m[u] + 1], step.ids[u, : m[u] + 1]) for u in live)
+        if cut and prefix:
+            self.one_enqueue_host_proposes += 1
+            return super().propose_draft_tokens(*args)
         want = drafter_pack(
             q.ctok, m, plan.p0, plan.declined, plan.keep, self._rope_base(plan.p0), K, self.model.rope_table_rows()
         ).to(torch.int64)
         if not torch.equal(want, step.pack[: want.shape[0], : want.shape[1]]):
-            anchor = step.pack[draft_anchor(K), :B] - torch.arange(B) * self.T
             raise ValueError(
                 f"the runner committed {[mu + 1 for mu in m]} tokens per row, the device acceptance "
-                f"{(anchor + 1).tolist()}: the one-enqueue drafts continue the device's commit"
+                f"{[mu + 1 for mu in m_dev]}, and the runner's commit is not a prefix of the device's: the one-enqueue "
+                "drafts continue a wrong commit"
             )
         if any(m):
             self.mtp_extra_steps += 1

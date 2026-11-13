@@ -231,18 +231,47 @@ def test_a_greedy_step_runs_verify_acceptance_and_drafter_in_one_enqueue(step):
 
 
 def test_a_commit_the_device_did_not_accept_raises(step, expect_error):
+    """A commit that is not a prefix of the device's walk (another token, or more tokens than the device accepted)
+    means a wrong device acceptance: the propose raises instead of returning drafts of another commit."""
+    eng, log, state = step
+    state["ids"] = torch.tensor([[7, 8, 9, 10]] * eng.B)
+    tokens = torch.tensor([[1, 7, 8, 5]] * eng.B)
+    starts, nv = [100, 200, 300, 400], [3] * eng.B
+    res = _verify(eng, tokens, starts, nv)
+    committed, counts = accept_greedy_drafts(res.argmax_ids, tokens[:, 1:].to(torch.int32), torch.tensor(nv))
+    assert counts.tolist() == [3] * eng.B
+    committed, counts = committed.clone(), counts.clone()
+    counts[1], committed[1, 3] = 4, 10  # one token more than the device accepted
+    positions = torch.tensor([[s + 1 + j for j in range(eng.T)] for s in starts])
+    with expect_error(ValueError, "not a prefix of the device's"):
+        eng.propose_draft_tokens(eng.K, committed, positions, counts)
+    _verify(eng, tokens, starts, nv)
+    committed, counts = accept_greedy_drafts(res.argmax_ids, tokens[:, 1:].to(torch.int32), torch.tensor(nv))
+    committed = committed.clone()
+    committed[2, 0] = 11  # another token
+    with expect_error(ValueError, "not a prefix of the device's"):
+        eng.propose_draft_tokens(eng.K, committed, positions, counts)
+
+
+def test_a_commit_cut_short_by_the_runner_drafts_on_the_host(step):
+    """A runner that cuts a row's commit short (a length or stop cut: a prefix of the device's walk) gets the base
+    propose, which drafts from the runner's commit; the step counts as drafted again on the host."""
     eng, log, state = step
     state["ids"] = torch.tensor([[7, 8, 9, 10]] * eng.B)
     tokens = torch.tensor([[1, 7, 8, 9]] * eng.B)
     starts, nv = [100, 200, 300, 400], [3] * eng.B
     res = _verify(eng, tokens, starts, nv)
     committed, counts = accept_greedy_drafts(res.argmax_ids, tokens[:, 1:].to(torch.int32), torch.tensor(nv))
-    counts = counts.clone()
-    counts[1] = 2
-    committed[1, 2:] = -1
+    assert counts.tolist() == [4] * eng.B
+    committed, counts = committed.clone(), counts.clone()
+    counts[1] = 1
+    committed[1, 1:] = -1
     positions = torch.tensor([[s + 1 + j for j in range(eng.T)] for s in starts])
-    with expect_error(ValueError, "the device acceptance"):
-        eng.propose_draft_tokens(eng.K, committed, positions, counts)
+    out = eng.propose_draft_tokens(eng.K, committed, positions, counts)
+    assert log["traces"] == ["step", "drafter", "drafter"], "the drafter runs again on the host's pack"
+    assert eng.one_enqueue_host_proposes == 1 and out.num_valid.tolist() == [eng.K] * eng.B
+    pack = [h for buf, h in log["staged"] if buf == "pack"][-1]
+    assert int(pack[0, 1]) == 7 and int(pack[0, 0]) == 10, "row 1 drafts from its committed token 7, row 0 from 10"
 
 
 def test_a_sampled_step_merges_the_draws_of_the_drawn_rows(step):
