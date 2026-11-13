@@ -10,8 +10,6 @@
 #include <tt-metalium/workload_descriptor.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/experimental/program_descriptor_patching.hpp>
-#include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
-#include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 
@@ -399,10 +397,6 @@ public:
             // WorkloadDescriptor variant only, when resolve_bindings bailed: the tensor buffer addresses
             // baked into the cached program, which a cache hit can only reuse if they are unchanged.
             std::vector<uint32_t> unpatchable_buffer_addresses;
-            // WorkloadDescriptor variant: the buffer addresses resolved_bindings last wrote into the program. A hit
-            // whose buffers kept them would rewrite each binding with the value it holds, so it leaves the program
-            // alone (empty until the first hit applies them).
-            std::vector<uint32_t> applied_buffer_addresses;
         };
         using cached_mesh_workload_t = AdaptedCachedMeshWorkload<shared_variables_t>;
 
@@ -703,12 +697,6 @@ public:
             const operation_attributes_t& attrs,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value) {
-            // WorkloadDescriptor variant: every program's shared variables hold a copy of the one workload
-            // descriptor, so the buffers (and their addresses) are the same for all of them. Collected once, on first
-            // use.
-            std::optional<CollectedTensorBuffers> workload_buffers;
-            // Empty when a buffer is per-core allocated: its address is only one core's, so it is always refreshed.
-            std::vector<uint32_t> workload_buffer_addresses;
             for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
                 auto& sv = cached_workload.shared_variables.at(coordinate_range);
 
@@ -720,26 +708,9 @@ public:
                     // fast path covers cache hits even when the factory only sets
                     // `desc.cbs[i].buffer` and declares no rt-arg buffer bindings.
                     if (!sv.resolved_bindings.empty()) {
-                        if (!workload_buffers.has_value()) {
-                            workload_buffers =
-                                collect_tensor_buffers(tensor_args, tensor_return_value, sv.workload_descriptor);
-                            const auto& buffers = workload_buffers->buffers;
-                            if (std::none_of(buffers.begin(), buffers.end(), [](const tt::tt_metal::Buffer* buffer) {
-                                    return buffer != nullptr &&
-                                           tt::tt_metal::experimental::per_core_allocation::is_per_core_allocation(
-                                               *buffer);
-                                })) {
-                                workload_buffer_addresses = buffer_addresses(buffers);
-                            }
-                        }
-                        // A skipped refresh also keeps each dynamic circular buffer's old shadow Buffer pointer. It is
-                        // only dereferenced when a circular buffer is created, which a cache hit doesn't do.
-                        if (workload_buffer_addresses.empty() ||
-                            sv.applied_buffer_addresses != workload_buffer_addresses) {
-                            tt::tt_metal::apply_resolved_bindings(
-                                program, sv.resolved_bindings, workload_buffers->buffers);
-                            sv.applied_buffer_addresses = workload_buffer_addresses;
-                        }
+                        auto collected =
+                            collect_tensor_buffers(tensor_args, tensor_return_value, sv.workload_descriptor);
+                        tt::tt_metal::apply_resolved_bindings(program, sv.resolved_bindings, collected.buffers);
                     } else if (!has_override_runtime_arguments() && !sv.unpatchable_buffer_addresses.empty()) {
                         // Overrides are exempt: some rewrite every buffer address themselves (e.g.
                         // minimal_matmul_strided_reduce_scatter_async), and the adapter cannot tell which.
