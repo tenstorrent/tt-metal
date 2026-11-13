@@ -235,11 +235,16 @@ class Qwen36DecoderLayer:
         gdn_capture_state=True,
         gdn_carry_state=True,
         sp=None,
+        kv_only=False,
     ):
         # Validate up front: attention/norm treat non-"prefill" as decode while the MoE experts
         # treat non-"decode" as prefill, so an unsupported mode would split the two down opposite
         # paths. Fail fast instead.
         assert mode in ("decode", "prefill"), f"mode must be 'decode' or 'prefill', got {mode!r}"
+        # kv_only (the MTP drafter's KV maintenance): run the attention only as far as its paged KV write and return
+        # None; the residual, the ffn norm and the MLP would only feed an output that no caller reads.
+        if kv_only and not (self.is_full_attention and self.num_devices > 1 and mode == "decode"):
+            raise ValueError("kv_only needs a TP full-attention decode")
         # gdn_seed: the spec loop's seed step (one row per user, T = 1). Outside GDN it is the verify
         # body at T = 1; GDN takes forward_seed_recurrent because the ring and E_prev do not exist
         # until capture_verify_trace allocates them.
@@ -320,6 +325,7 @@ class Qwen36DecoderLayer:
                         spec_page_table=spec_page_table,
                         spec_n_users=n_users,
                         spec_user_page_table=spec_user_page_table,
+                        kv_only=kv_only,
                     )
             else:
                 # GDN carries its recurrent/conv state internally (capture_state on
@@ -376,6 +382,8 @@ class Qwen36DecoderLayer:
                 attn_input, mode=deltanet_mode, chunk_size=chunk_size, valid_len=valid_len
             )
         ttnn.deallocate(attn_input)
+        if kv_only:
+            return None
 
         h = ttnn.add(x, attn_output)
         ttnn.deallocate(attn_output)

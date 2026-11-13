@@ -789,6 +789,7 @@ class TPAttention:
         spec_page_table=None,
         spec_n_users=1,
         spec_user_page_table=None,
+        kv_only=False,
     ):
         """One decode step for B "users".
 
@@ -814,6 +815,9 @@ class TPAttention:
         ``page_table`` equals row u of this table for every (u, j): true for the verify, not for the
         reseed (whose padding rows point at a scratch block). None derives each group's table from
         ``page_table`` with a strided slice.
+
+        kv_only (the MTP drafter's KV maintenance, paged only): write K and V exactly as the full step does, then return
+        None; the attention output would only feed a block output that no caller reads.
         """
         tw, NH, NKV, HD = self.tw, self.NH, self.NKV, self.HD
         # Active decode width, taken from the input (x is [1,1,B,dim_frac]). Normally == self.B.
@@ -823,6 +827,8 @@ class TPAttention:
         B = x.shape[-2]
         _L1 = ttnn.L1_MEMORY_CONFIG  # keep decode head-prep + attn output L1-resident
         use_paged = self.use_paged and page_table is not None
+        if kv_only and not use_paged:
+            raise ValueError("kv_only writes the paged KV cache: it needs a page_table")
         if not use_paged and self.k_caches is None:
             self.reset_state()
 
@@ -923,6 +929,10 @@ class TPAttention:
                 ttnn.experimental.paged_update_cache(values, v_sh, update_idxs_tensor=cur_pos_tt, page_table=page_table)
                 ttnn.deallocate(k_sh)
                 ttnn.deallocate(v_sh)
+            if kv_only:
+                ttnn.deallocate(q)
+                ttnn.deallocate(gate)
+                return None
             # The paged SDPA-decode derives its batch from the PAGE TABLE's row count and does not
             # check it against Q or cur_pos: a mismatch reads out of bounds silently.
             assert B == page_table.shape[0] == cur_pos_tt.shape[-1], (
