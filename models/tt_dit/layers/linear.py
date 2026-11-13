@@ -254,6 +254,15 @@ class ColParallelLinear(Module):
 
         self._mesh_axis_size = self.mesh_device.shape[self.mesh_axis] if self.mesh_axis is not None else 1
 
+    def _pad_k_per_fsdp_shard(self, x: ttnn.Tensor, k_pad: int) -> ttnn.Tensor:
+        """Insert k_pad zero columns after each FSDP shard's slice of x's last dim (K), matching the zero rows
+        forward pads onto each weight shard, so x @ W is unchanged."""
+        fsdp = self.mesh_device.shape[self.fsdp_mesh_axis]
+        *lead, k = x.shape
+        y = ttnn.reshape(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), (1, math.prod(lead), fsdp, k // fsdp))
+        y = ttnn.pad(y, [(0, 0), (0, 0), (0, 0), (0, k_pad)], 0.0)
+        return ttnn.to_layout(ttnn.reshape(y, [*lead, k + fsdp * k_pad]), x.layout)
+
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         weight = state.pop("weight", None)
         bias = state.pop("bias", None)
@@ -401,7 +410,15 @@ class ColParallelLinear(Module):
             dtype = resolve_output_dtype(dtype, x)
 
         if self.fsdp_mesh_axis is not None and self.mesh_device.shape[self.fsdp_mesh_axis] > 1:
-            unsqueezed_weight = ttnn.unsqueeze_to_4D(self.weight.data)
+            shard = self.weight.data
+            k_pad = -shard.shape[-2] % ttnn.TILE_SIZE
+            if k_pad:
+                # all_gather_async takes a slow composite path for a shard (a slice of K) that is not whole
+                # tiles. The added rows are the shard's own zero tile padding, so the padded shard is a view
+                # of the weight's buffer and must not be deallocated.
+                shard = ttnn.pad(shard, [(0, k_pad), (0, 0)], 0.0)
+                x = self._pad_k_per_fsdp_shard(x, k_pad)
+            unsqueezed_weight = ttnn.unsqueeze_to_4D(shard)
             weight = self.ccl_manager.all_gather_persistent_buffer(
                 unsqueezed_weight, dim=2, mesh_axis=self.fsdp_mesh_axis
             )
@@ -413,8 +430,6 @@ class ColParallelLinear(Module):
         parallel_config_tp = parallel_config.tensor_parallel.factor if parallel_config is not None else 1
         needs_gather = x.padded_shape[-1] != weight.padded_shape[-2]  # If gathered, switch to non fused AGMM
         if parallel_config_tp > 1 and self.ccl_manager.topology == ttnn.Topology.Ring and needs_gather:
-            if not use_persistent_buffer:
-                ttnn.synchronize_device(self.mesh_device)
             M, K, N = x.padded_shape[-2], weight.padded_shape[-2], weight.padded_shape[-1]
             full_grid = self.mesh_device.compute_with_storage_grid_size()
 
@@ -428,6 +443,11 @@ class ColParallelLinear(Module):
             )
             has_unit_batch = len(x.padded_shape) <= 4 and all(d == 1 for d in list(x.padded_shape)[:-2])
             if fabric_cfg is not None and self.chunks in (None, 1) and has_unit_batch and addcmul_a is None:
+                if not use_persistent_buffer:
+                    # The strided op takes no barrier semaphore, so its op-allocated gather buffer could
+                    # take remote writes while a peer is still running an earlier op at that address.
+                    # all_gather_minimal_matmul_async below gets one when the buffer is transient.
+                    ttnn.synchronize_device(self.mesh_device)
                 return self._forward_fabric_agmm(
                     x, weight, fabric_cfg, parallel_config, compute_kernel_config, dtype, use_persistent_buffer
                 )

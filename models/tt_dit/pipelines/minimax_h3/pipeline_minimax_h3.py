@@ -682,8 +682,8 @@ class MiniMaxH3Pipeline:
         # Dynamic length: keep the capacity-sized K/V gather pair across requests (False: allocate it per request).
         self.resident_kv_gather_pair = preset.get("resident_kv_gather_pair", True)
         assert self.use_persistent_ccl_buffers or not self.trace_denoise, (
-            "use_persistent_ccl_buffers=False relies on a host sync before each all-gather-matmul, which a traced "
-            "denoise does not replay"
+            "use_persistent_ccl_buffers=False relies on a host sync before the strided all-gather-matmul, which a "
+            "traced denoise does not replay"
         )
         self._log_generation = True
         self._buckets: dict[int, _BucketState] = {}
