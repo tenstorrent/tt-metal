@@ -795,6 +795,16 @@ class TPAttention:
             return False
         return self._spec_sdpa_plan(T) is not None
 
+    def _spec_pack_heads(self, tiles):
+        """``spec_pack_heads`` for the fused spec SDPA of _forward_verify: NH, so that the op puts a group's ``tiles``
+        candidates x NH q rows into one 32-row q tile, or 0 (one q row-tile per candidate) when they do not fit. The op
+        gives each candidate NH rounded up to an even row count, and needs NH <= 16. The valid output rows are the same
+        bytes either way; packing only removes the q rows that are padding from the per-chunk work."""
+        NH = self.NH
+        if NH > ttnn.TILE_SIZE // 2 or tiles * (NH + NH % 2) > ttnn.TILE_SIZE:
+            return 0
+        return NH
+
     def spec_sdpa_groups(self, T, n_users=1):
         """Batch rows (= page-table rows) the fused spec-verify SDPA wants at ``n_users`` users x T
         candidates; 1 when the fused path is off (the legacy call ignores the spec page table
@@ -836,7 +846,9 @@ class TPAttention:
             moves bytes (no reshape of the gate to [1, B, NH, HD]; sigmoid and multiply are element-wise);
           * k and v reach the KV write without the zero pad to 32 rows (see _write_kv_groups);
           * the KV write is the grouped one also at one user (T one-row calls, as the per-row loop makes, with the
-            per-user page table instead of a page-table slice per row), with ``spec_pos_groups`` as its positions.
+            per-user page table instead of a page-table slice per row), with ``spec_pos_groups`` as its positions;
+          * the fused spec SDPA packs each group's candidates x NH q rows into one q tile (_spec_pack_heads). Its valid
+            output rows are the unpacked call's bytes, and the head concat reads only those rows.
         cos / sin come as [1, 1, B, rope_dim] (Qwen36Model stages them so), so apply_partial_rope_decode does not
         reshape them."""
         tw, NH, NKV, HD = self.tw, self.NH, self.NKV, self.HD
@@ -884,6 +896,7 @@ class TPAttention:
             program_config=spec_cfg,
             memory_config=_L1,
             spec_multi_pos_tiles=tiles,
+            spec_pack_heads=self._spec_pack_heads(tiles),
         )
         ttnn.deallocate(q)
         attn_out = ttnn.reshape(attn_out, ttnn.Shape([1, B, NH, HD]), ttnn.Shape([1, B, ttnn.TILE_SIZE, HD]))
