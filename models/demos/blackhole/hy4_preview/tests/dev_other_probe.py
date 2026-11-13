@@ -18,7 +18,7 @@ os.environ.setdefault("LEAN", "1")
 from models.demos.blackhole.hy4_preview.tests import dev_other as DO  # noqa: E402
 from models.demos.blackhole.hy4_preview.tests.dev_other import HID, S, build, cfg_1d, free, rep_up  # noqa: E402
 
-PROBES = os.environ.get("PROBES", "mixes,ep,rms,rms2,fuseproj,absorb,rope,ccl").split(",")
+PROBES = os.environ.get("PROBES", "mixes,ep,rms,rms2,fuseproj,absorb,rope,ccl,dsm,ihc2").split(",")
 OUT = os.environ.get("OUT", "/tmp/probe.json")
 R = {}
 
@@ -354,6 +354,233 @@ def main():
                 "idx q rope [32,S,128] as is (slice,rope,slice,concat)",
                 lambda: a.indexer._rot_first(q2, B["icos"], B["isin"]),
             ) if B["full"] else None
+        if "dsm" in PROBES:
+            import math
+
+            from models.demos.blackhole.hy4_preview.tt.hy4_common import upload
+
+            dcores = md.dram_grid_size().x
+            P("dram grid", md.dram_grid_size())
+            dram_set = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dcores - 1, 0))})
+
+            def dsm_case(name, K, N, ncores, host_w, shard_dim, dt):
+                Nt = math.ceil(N / (32 * dcores)) * dcores  # padded tiles
+                Np = Nt * 32
+                hw_ = host_w
+                if Np != N:
+                    pad = torch.zeros(*hw_.shape[:-1], Np - N)
+                    # per column shard handled by the caller: weights are padded per device block
+                wmc = ttnn.MemoryConfig(
+                    ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                    ttnn.BufferType.DRAM,
+                    ttnn.ShardSpec(dram_set, (K, Np // dcores), ttnn.ShardOrientation.ROW_MAJOR),
+                )
+                return Np, wmc
+
+            def run_dsm(name, K, N, ncores, mk_host, shard_dim, fused_act=None):
+                Np, wmc = dsm_case(name, K, N, ncores, None, shard_dim, None)
+                hostw = mk_host(Np)
+                w = ttnn.from_torch(
+                    hostw,
+                    device=md,
+                    dtype=ttnn.bfloat8_b,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=wmc,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(md, dims=(None, shard_dim), mesh_shape=tuple(md.shape))
+                    if shard_dim is not None
+                    else ttnn.ReplicateTensorToMesh(md),
+                )
+                gy = -(-ncores // 8)
+                gx = min(ncores, 8)
+                cg = ttnn.CoreGrid(y=gy, x=gx)
+                in_mc = ttnn.create_sharded_memory_config(
+                    shape=(32, K // ncores),
+                    core_grid=cg,
+                    strategy=ttnn.ShardStrategy.WIDTH,
+                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                    use_height_and_width_as_shard_shape=True,
+                )
+                out_mc = ttnn.create_sharded_memory_config(
+                    shape=(32, Np // ncores),
+                    core_grid=cg,
+                    strategy=ttnn.ShardStrategy.WIDTH,
+                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                    use_height_and_width_as_shard_shape=True,
+                )
+                pc = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+                    in0_block_w=(K // 32) // ncores,
+                    per_core_M=1,
+                    per_core_N=(Np // 32) // ncores,
+                    fused_activation=fused_act,
+                )
+                x_ = rep_up(md, torch.randn(1, 1, S, K))
+                xs_ = ttnn.to_memory_config(x_, in_mc)
+                f_core = lambda: ttnn.linear(xs_, w, program_config=pc, memory_config=out_mc, compute_kernel_config=ckc)
+                rec(md, f"DRAM-sharded {name} K{K} N{N}->{Np} {ncores} cores (matmul only, sharded in/out)", f_core)
+                rec(
+                    md,
+                    f"DRAM-sharded {name} + reshard in (DRAM->L1 sharded) + out to interleaved L1",
+                    lambda: ttnn.to_memory_config(
+                        ttnn.linear(
+                            ttnn.to_memory_config(x_, in_mc),
+                            w,
+                            program_config=pc,
+                            memory_config=out_mc,
+                            compute_kernel_config=ckc,
+                        ),
+                        ttnn.L1_MEMORY_CONFIG,
+                    ),
+                )
+
+            tw = lambda a, b: (lambda Np: torch.randn(1, 1, a, 8 * Np if False else Np))
+            # per-device weights: shard over 8 columns on dim 3 -> pass [1,1,K, 8*Np]
+            for name, K, N, nc in (
+                ("fused h-proj", 6144, 3040, 24),
+                ("o_proj", 2048, 6144, 16),
+                ("q_b", 2048, 2048, 16),
+                ("gate", 6144, 2048, 24),
+                ("q_a+kv_a", 6144, 832, 24),
+            ):
+                try:
+                    if name == "o_proj":
+                        mk = lambda Np, K=K: torch.randn(
+                            1, 1, 8 * K, Np
+                        )  # row-sharded weight: each column holds [K, N]; emulate with a replicated [K,Np]
+                        # row-shard on dim 2 of a [1,1,8K,N] tensor
+                        run_dsm(name, K, N, nc, lambda Np, K=K: torch.randn(1, 1, 8 * K, Np), 2)
+                    else:
+                        run_dsm(name, K, N, nc, lambda Np, K=K: torch.randn(1, 1, K, 8 * Np), 3)
+                except Exception as e:
+                    P(f"dsm {name} FAILED", str(e)[:300])
+        if "ihc2" in PROBES:
+            from models.demos.blackhole.hy4_preview.tt.hy4_ihc import Hy4IHC
+
+            xa = ia.expand(y, x, post, comb)
+            pre_x, post_x, comb_x = ia.mixes(x)
+            xm = im.expand(y, xa, post_x, comb_x)
+            ttnn.synchronize_device(md)
+            rec(md, "mixes(attn ihc) on persistent x", lambda: ia.mixes(x))
+            rec(md, "mixes(attn ihc) on mlp-expand output", lambda: ia.mixes(xm))
+            rec(md, "mixes(mlp ihc) on attn-expand output", lambda: im.mixes(xa))
+            rec(md, "mixes(mlp ihc) on persistent x", lambda: im.mixes(x))
+            g_ = torch.Generator().manual_seed(0)
+            for it in (1, 3, 20):
+                ih = Hy4IHC(
+                    md,
+                    torch.randn(8, 4 * HID, generator=g_) * 0.01,
+                    torch.randn(8, generator=g_) * 0.02,
+                    torch.tensor([0.1, 0.1]),
+                    dim=HID,
+                    hc_eps=1e-6,
+                    norm_eps=1e-5,
+                    iters=it,
+                )
+                r_ = ih.mixes(x)
+                ttnn.synchronize_device(md)
+                f = lambda t: ttnn.to_torch(ttnn.get_device_tensors(t)[0]).float()
+                P(
+                    f"sinkhorn iters {it}: comb - I maxabs",
+                    float((f(r_[2]).reshape(-1, 4, 4) - torch.eye(4)).abs().max()),
+                    "pre",
+                    f(r_[0]).flatten()[:4].tolist(),
+                )
+                rec(md, f"mixes sinkhorn iters={it}", lambda: ih.mixes(x))
+            # EP fused with the stream padded to T=4 rows
+            os.environ["DSV41_MHC_EP"] = "1"
+            try:
+                x4 = rep_up(md, torch.randn(4, 1, 4, HID), ttnn.float32)
+                y4 = rep_up(md, torch.randn(1, 1, 4, HID))
+                p4, po4, c4 = ia.mixes(x4)
+                P("T=4 mixes ok")
+                rec(md, "T=4 separate: expand + next mixes", lambda: im.mixes(ia.expand(y4, x4, po4, c4)))
+                rec(md, "T=4 EP fused expand+next mixes", lambda: ia.expand_mixes(y4, x4, po4, c4, None, im))
+                rec(md, "T=4 expand only", lambda: ia.expand(y4, x4, po4, c4))
+                rec(md, "T=4 mixes only", lambda: im.mixes(x4))
+                a1 = im.mixes(ia.expand(y4, x4, po4, c4))
+                a2 = ia.expand_mixes(y4, x4, po4, c4, None, im)[1]
+                f = lambda t: ttnn.to_torch(ttnn.get_device_tensors(t)[0]).float()
+                P("EP T=4 pre/post/comb maxabs vs separate", [float((f(u) - f(v)).abs().max()) for u, v in zip(a1, a2)])
+            except Exception as e:
+                import traceback
+
+                P("EP T=4 FAILED", repr(e)[:200], traceback.format_exc()[-900:])
+            os.environ["DSV41_MHC_EP"] = "0"
+        if "sweep" in PROBES:
+            from models.demos.blackhole.hy4_preview.tt.hy4_common import upload
+
+            def cfg_x(K, N, cap, ibw_max=8, sw_max=4):
+                Kt, Nt = K // 32, N // 32
+                pcn = -(-Nt // cap)
+                n = -(-Nt // pcn)
+                gx, gy = min(n, 8), -(-n // 8)
+                sw = max(d for d in range(1, min(pcn, sw_max) + 1) if pcn % d == 0)
+                ibw = max(d for d in range(1, ibw_max + 1) if Kt % d == 0)
+                return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
+                    in0_block_w=ibw,
+                    out_subblock_h=1,
+                    out_subblock_w=sw,
+                    per_core_M=1,
+                    per_core_N=pcn,
+                    fuse_batch=True,
+                    fused_activation=None,
+                    mcast_in0=True,
+                ), (gx, gy, pcn, ibw, sw)
+
+            for name, K, N, shard in (
+                ("fused h-proj", 6144, 3040, 3),
+                ("o_proj", 2048, 6144, 2),
+                ("q_b", 2048, 2048, 3),
+            ):
+                for dtn, dt in (("bfp8", ttnn.bfloat8_b), ("bfp4", ttnn.bfloat4_b)):
+                    if shard == 2:
+                        wh = torch.randn(1, 1, 8 * K, N)
+                    else:
+                        wh = torch.randn(1, 1, K, 8 * N)
+                    w = upload(md, wh, dt, ttnn.TILE_LAYOUT, shard_dim=shard)
+                    x_ = rep_up(md, torch.randn(1, 1, S, K)) if shard != 2 else rep_up(md, torch.randn(1, 1, S, K))
+                    best = None
+                    for cap in (16, 24, 32, 40, 48, 56, 64):
+                        for ibw in (4, 8, 16):
+                            for swm in (4, 8):
+                                try:
+                                    pc, info = cfg_x(K, N, cap, ibw, swm)
+                                    us = t_us(
+                                        md,
+                                        lambda: ttnn.linear(x_, w, compute_kernel_config=ckc, program_config=pc),
+                                        rep_=10,
+                                        n=5,
+                                    )
+                                except Exception as e:
+                                    continue
+                                if best is None or us < best[0]:
+                                    best = (us, cap, ibw, swm, info)
+                    P(
+                        f"SWEEP {name} {dtn} K{K} N{N}: best {best[0]:.1f} us cap {best[1]} ibw_max {best[2]} sw_max {best[3]} (gx,gy,pcn,ibw,sw)={best[4]}"
+                    )
+                    ttnn.deallocate(w)
+        if "arrm" in PROBES:
+            part = rep_up(md, torch.randn(1, 1, S, HID))
+            mc_, ccl = a.mesh_config, a.ccl
+            rec(md, "o_proj allreduce tile [S,6144] (current)", lambda: mc_.allreduce(ttnn.clone(part), ccl, axis=1))
+            rm_in = ttnn.to_layout(part, ttnn.ROW_MAJOR_LAYOUT)
+            rec(md, "allreduce ROW_MAJOR [S,6144] incl. clone", lambda: mc_.allreduce(ttnn.clone(rm_in), ccl, axis=1))
+            rec(
+                md,
+                "to_layout RM + allreduce RM + to_layout TILE",
+                lambda: ttnn.to_layout(
+                    mc_.allreduce(ttnn.to_layout(ttnn.clone(part), ttnn.ROW_MAJOR_LAYOUT), ccl, axis=1),
+                    ttnn.TILE_LAYOUT,
+                ),
+            )
+            part8 = ttnn.typecast(part, ttnn.bfloat8_b)
+            rec(
+                md,
+                "allreduce bfp8 payload (typecast in/out)",
+                lambda: ttnn.typecast(
+                    mc_.allreduce(ttnn.typecast(ttnn.clone(part), ttnn.bfloat8_b), ccl, axis=1), ttnn.bfloat16
+                ),
+            )
         if "ccl" in PROBES:
             part = rep_up(md, torch.randn(1, 1, S, HID))
             qc = rep_up(md, torch.randn(1, 1, S, 256))

@@ -339,11 +339,18 @@ class Hy4AttentionOpt(Hy4Attention):
                 self._idx_append_opt(o, d["ik"], tabs)
             if pos + 1 <= cfg.index_topk:
                 ids = dense_ids if dense_ids is not None else self.dense_ids(pos)
+            elif (
+                getattr(self, "ids_override", None) is not None
+            ):  # gate experiments: the oracle's top-k ids replace the device selection (indexer projections still run)
+                ids = self.ids_override
             else:
                 ids = self._idx_select_opt(o, d, pos, tabs)
         else:
             assert ids_in is not None
             ids = ids_in
+        if o.l1:  # the stock sparse_sdpa wants q / indices in DRAM
+            ids = ttnn.to_memory_config(ids, ttnn.DRAM_MEMORY_CONFIG)
+            d["qfull"] = ttnn.to_memory_config(d["qfull"], ttnn.DRAM_MEMORY_CONFIG)
         o_lat = self._sparse_decode(d["qfull"], kvc, ids, False)
         self._tap("o_lat", o_lat)
         out = self.back(o, o_lat, d["g"])

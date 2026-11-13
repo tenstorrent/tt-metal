@@ -12,8 +12,10 @@ import time
 import torch
 
 import ttnn
+
+_WNAME = os.environ.pop("WDT", "bf16")  # run_attn_device reads WDT at import (bf16|bfp8 only)
 from models.demos.blackhole.hy4_preview.config import Hy4Config
-from models.demos.blackhole.hy4_preview.tests.run_attn_device import load_sd, pcc
+from models.demos.blackhole.hy4_preview.tests.run_attn_device import idx_setmatch, load_sd, pcc
 from models.demos.blackhole.hy4_preview.tt.hy4_attn_opt import Hy4AttentionOpt, Opt
 from models.demos.blackhole.hy4_preview.tt.hy4_common import to_host, upload
 from models.demos.gpt_oss.config import mesh_1x8
@@ -22,7 +24,7 @@ from models.demos.gpt_oss.tt.ccl import CCLManager
 GOLD = os.environ.get("GOLD", "/mnt/tt-data/ssinghal/hy4-logs/layer-attn/golden")
 CKPT = os.environ.get("HY4_CKPT", "/mnt/tt-data/Hy4-Preview")
 L = int(os.environ.get("LAYER", "1"))
-WDT = {"bf16": ttnn.bfloat16, "bfp8": ttnn.bfloat8_b, "bfp4": ttnn.bfloat4_b}[os.environ.get("WDT", "bf16")]
+WDT = {"bf16": ttnn.bfloat16, "bfp8": ttnn.bfloat8_b, "bfp4": ttnn.bfloat4_b}[_WNAME]
 POS = [int(x) for x in os.environ.get("POSITIONS", "512,2560").split(",")]
 RING = os.environ.get("RING", "1") == "1"
 LEAN = os.environ.get("LEAN", "1") == "1"
@@ -120,12 +122,22 @@ def main():
             )
             s0 = snap(attn)
             ref_gold = g["out"][P]
+            if os.environ.get("IDS_GOLD", "0") == "1" and not shared and P + 1 > cfg.index_topk:
+                gid = upload(md, g["idx"][P].to(torch.int32).reshape(1, 1, 1, -1), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
+                attn.ids_override = gid
+                attn.indexer.select_decode = lambda *a_, **k_: gid  # unfused reference path uses the oracle ids too
+                G(note="IDS_GOLD: oracle top-k ids replace the device indexer selection at this position")
             attn.taps = None
-            out0, _ = attn.decode_step(h, P, ids_in)
+            out0, ids0 = attn.decode_step(h, P, ids_in)
             ttnn.synchronize_device(md)
             base = to_host(out0, md).reshape(-1).float()
-            restore(attn, s0)
-            G(layer=L, pos=P, cfg="unfused decode_step", pcc_gold=round(pcc(base, ref_gold), 6))
+            rec0 = dict(layer=L, pos=P, cfg="unfused decode_step", pcc_gold=round(pcc(base, ref_gold), 6))
+            if not shared and P + 1 > cfg.index_topk:
+                di = to_host(ids0, md).reshape(1, -1).to(torch.int64)
+                di = torch.where(di >= 2**31, torch.full_like(di, -1), di)
+                rec0["idx_overlap"] = round(idx_setmatch(di, g["idx"][P : P + 1])[0], 5)
+            G(**rec0)
+            # state now holds this position's appended row: static-shape timing (append=False) happens BEFORE the restore, like run_attn_decode
             tabs_base = attn.rope_tabs(P, 1)
             dids = attn.dense_ids(P) if (attn.has_indexer and P + 1 <= cfg.index_topk) else None
             t_base = (
@@ -134,23 +146,26 @@ def main():
                 else None
             )
             G(layer=L, pos=P, cfg="unfused decode_step", us_layer_incl_stock_sparse=t_base)
+            restore(attn, s0)
             for o in CFGS:
                 tabs = attn.rope_tabs_opt(P, 1)
                 try:
                     out1, ids = attn.decode_step_opt(h, P, ids_in, o, tabs=tabs)
                     ttnn.synchronize_device(md)
                     got = to_host(out1, md).reshape(-1).float()
-                    restore(attn, s0)
                     rec = dict(
                         layer=L,
                         pos=P,
                         cfg=o.tag(),
-                        wdt=os.environ.get("WDT", "bf16"),
+                        wdt=_WNAME,
                         pcc_vs_unfused=round(pcc(got, base), 6),
                         pcc_vs_gold=round(pcc(got, ref_gold), 6),
                     )
+                    if not shared and P + 1 > cfg.index_topk:
+                        di = to_host(ids, md).reshape(1, -1).to(torch.int64)
+                        di = torch.where(di >= 2**31, torch.full_like(di, -1), di)
+                        rec["idx_overlap"] = round(idx_setmatch(di, g["idx"][P : P + 1])[0], 5)
                     if os.environ.get("TIMING", "1") == "1":
-                        dids = attn.dense_ids(P) if (attn.has_indexer and P + 1 <= cfg.index_topk) else None
                         rec["us_layer_incl_stock_sparse"] = round(
                             traced(
                                 md,
@@ -159,6 +174,7 @@ def main():
                             1,
                         )
                         rec["unfused_us"] = round(t_base, 1)
+                    restore(attn, s0)
                     allpcc.append((rec["pcc_vs_unfused"], rec["pcc_vs_gold"]))
                     G(**rec)
                 except Exception as e:
