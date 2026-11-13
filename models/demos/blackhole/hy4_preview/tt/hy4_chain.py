@@ -176,7 +176,9 @@ class Hy4ChainLayer:
                 md, L, ring=(self.blk.decode.expert_state.tt_w0_w1, self.blk.decode.expert_state.tt_w2)
             )
             sw = [W[k][256] for k in ("shared_w0", "shared_w1", "shared_w2")]
-            self.shared = D.make_shared(md, *sw, decode=False)
+            self.shared = D.make_shared(
+                md, *sw, limit=D.NO_CLAMP, decode=False
+            )  # coordinator 11-13: the shared expert is NOT clamped (CE 1.77 vs 0.79)
             del W
         self.t_mlp = time.time() - t0
 
