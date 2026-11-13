@@ -718,7 +718,7 @@ std::vector<Tensor> hardsigmoid_bw(
             std::nullopt,
             output_mem_config),
         0.f,
-        ttnn::multiply(grad, 1.0f / 6.0f),
+        ttnn::multiply(grad, 1.0f / 6.0f, std::nullopt, output_mem_config),
         output_mem_config);
     grad_tensor.emplace_back(grad_a);
     return grad_tensor;
