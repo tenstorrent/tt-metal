@@ -5,6 +5,10 @@ on:
     # Run every 6 hours to keep ccache/ctcache warm for code-analysis PR runs (Ubuntu 24.04)
     - cron: "0 */2 * * *"
   workflow_call:
+    # Declared so callers can pass these by name instead of "secrets: inherit".
+    secrets:
+      GARAGE_S3_SECRET_KEY:
+        required: false
     inputs:
       platform:
         required: false

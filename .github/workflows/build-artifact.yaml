@@ -4,6 +4,10 @@ permissions:
   packages: write
 on:
   workflow_call:
+    # Declared so callers can pass these by name instead of "secrets: inherit".
+    secrets:
+      GARAGE_S3_SECRET_KEY:
+        required: false
     inputs:
       build-type:
         required: false

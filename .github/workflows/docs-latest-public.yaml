@@ -2,6 +2,10 @@ name: "[internal] Docs build and deploy to GitHub pages on main impl"
 
 on:
   workflow_call:
+    # Declared so callers can pass these by name instead of "secrets: inherit".
+    secrets:
+      DOCS_SEARCH_INGEST_API_KEY_DOCS_TENSTORRENT:
+        required: false
     inputs:
       version:
         required: false

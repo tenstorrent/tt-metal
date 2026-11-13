@@ -2,6 +2,14 @@ name: "LLK perf gate impl"
 
 on:
   workflow_call:
+    # Declared so callers can pass these by name instead of "secrets: inherit".
+    secrets:
+      LLK_PERF_GATE_SLACK_CHANNEL_ID:
+        required: false
+      LLK_SLACK_REPORTING_BOT_TOKEN:
+        required: false
+      SWEEPS_SNOWFLAKE_KEY:
+        required: false
     inputs:
       arch:
         description: "Architecture to gate on (wormhole or blackhole)"

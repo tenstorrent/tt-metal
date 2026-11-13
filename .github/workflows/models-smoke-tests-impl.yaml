@@ -2,6 +2,10 @@ name: "[internal] Models merge-gate smoke tests impl"
 
 on:
   workflow_call:
+    # Declared so callers can pass these by name instead of "secrets: inherit".
+    secrets:
+      HUGGINGFACE_TOKEN:
+        required: false
     inputs:
       docker-image:
         required: true
