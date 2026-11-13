@@ -9,6 +9,7 @@
 #include "api/core_local_mem.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
+#include "tt_metal/fabric/hw/inc/linear/api.h"
 #include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"  // tt_fabric::addrgen_detail::get_noc_address
 #include "tt_metal/fabric/hw/inc/edm_fabric/routing_plane_connection_manager.hpp"
 
@@ -16,7 +17,7 @@
 #include <algorithm>
 #include <type_traits>
 
-#include "cpp/ttnn/operations/ccl/all_gather/device/kernels/unicast_common.hpp"
+namespace fabric_api = tt::tt_fabric::linear::experimental;
 
 using address_t = uint32_t;
 
