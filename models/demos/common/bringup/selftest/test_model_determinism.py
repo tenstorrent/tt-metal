@@ -76,13 +76,15 @@ def _t(cmd, step="perf", **kw):
     return task("A.1", cmd, step=step, device=True, **kw)
 
 
-def test_every_model_level_gate_runs_it_first_in_its_first_shared_process_unit():
+def test_every_model_level_gate_runs_it_first_as_its_own_unit():
+    """FIX.31 (P.51): the check is its own first unit, never inside another unit's command (that changed the other
+    unit's stamp); the gate still runs it first in the shared process of the units after it (core/batch.gate_groups)."""
     t = _t(f"{LADDER} && {CONTRACT}")
     units = gate_units(t)
-    assert [u for u, _ in units] == ["A.1#test_ladder", "A.1#test_contract"]  # unit names unchanged
-    assert units[0][1].startswith(B.DETERMINISM_CMD + " && ")  # first in the ladder's process
-    assert B.unit_command(units[0][1]) is not None  # one process with the ladder: no model load of its own
-    assert B.DETERMINISM_TEST not in units[1][1]
+    assert [u for u, _ in units] == ["A.1#test_determinism", "A.1#test_ladder", "A.1#test_contract"]
+    assert units[0][1] == B.DETERMINISM_CMD
+    assert all(B.DETERMINISM_TEST not in c for _, c in units[1:])  # the others' commands as written
+    assert [u for u, _ in B.gate_groups(units, {})[0]] == [u for u, _ in units]  # one process: no load of its own
     assert gate_limits(t)["determinism_max_abs_diff"] == "== 0"
     assert B.DETERMINISM_TEST in gate_command(t)
 
@@ -90,10 +92,9 @@ def test_every_model_level_gate_runs_it_first_in_its_first_shared_process_unit()
 def test_a_gate_without_a_shared_unit_gets_its_own_first_unit():
     fix = _t("scripts/run_safe_pytest.sh --run-all --no-precompile models/x/tests/test_prefill_end.py", "overseer_fix")
     assert [u for u, _ in gate_units(fix)] == ["A.1#test_determinism", "A.1"]  # a fix step's device gate
-    t = _t(CONTRACT, step="contract")  # FIX.29: the contract test shares the model: the check joins its unit, first
-    assert [u for u, _ in gate_units(t)] == ["A.1"]
-    assert gate_units(t)[0][1] == f"{B.DETERMINISM_CMD} && {CONTRACT}"
-    # a unit with a model switch (another configuration) is not where the shipped model's check runs
+    t = _t(CONTRACT, step="contract")  # FIX.29: the contract test shares the model: one process with the check
+    assert [u for u, _ in gate_units(t)] == ["A.1#test_determinism", "A.1"]
+    assert gate_units(t)[1][1] == CONTRACT
     sw = _t(f"DS41_X=on {LADDER}")
     assert [u for u, _ in gate_units(sw)] == ["A.1#test_determinism", "A.1"]
 

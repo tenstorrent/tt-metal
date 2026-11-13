@@ -140,11 +140,6 @@ def phase(run: dict) -> int:
     return 2
 
 
-def model_key(env: dict, names: set) -> str:
-    """The model configuration of a run: its effective value of every non-per-run variable any run sets."""
-    return json.dumps({k: env.get(k) for k in sorted(names - ITEM_VARS)}, sort_keys=True)
-
-
 def hints(runs: list[dict], spec) -> dict:
     """What the shared model is loaded for, so no run needs another load: the LM head when a ladder or the smoke runs,
     target.seq up to the furthest position a profile (BRINGUP_POS) or test_positions times. FIX.29: at least the
@@ -192,14 +187,118 @@ def unit_command(cmd: str, spec=None) -> str | None:
     ).strip()
 
 
+LAUNCH_FLAGS = ("--precompile", "--no-precompile")  # FIX.31: where kernels compile, not what a run measures
+
+
+def launch_form(cmd: str) -> tuple[str, list[str]]:
+    """FIX.31: a command whose runs ask for the safe runner's precompile pass (no --no-precompile flag) in the form a
+    shared process runs it, and a note per such run. A batch process runs its tests with kernels compiled on demand:
+    a precompile pass inside it would run every test body under NO_DISPATCH first, and the batch's model cache
+    (testing/batch.shared_model) would keep the model that pass built from shape-only tensors. Model-level runs find
+    their kernels in the cache (F151: full-model steps already skip the pass); the first chunk compiles what is not."""
+    out, notes = [], []
+    for seg in cmd.split("&&"):
+        m = SAFE_RUN.match(seg.strip())
+        if not m:
+            out.append(seg.strip())
+            continue
+        words = m.group(2).split()
+        if "--no-precompile" not in words:
+            words = ["--no-precompile"] + [w for w in words if w != "--precompile"]
+            notes.append(
+                f"{' '.join(w for w in words if not w.startswith('-'))}: asked for the precompile pass; in the shared "
+                "process its kernels compile on demand (FIX.31, core/batch.launch_form)"
+            )
+        out.append(f"{m.group(1)}scripts/run_safe_pytest.sh {' '.join(words)}".strip())
+    return " && ".join(out), notes
+
+
+def why_not(cmd: str) -> str | None:
+    """FIX.31: why a unit's command cannot run in a shared process (the gate log says it), or None when it can."""
+    cmd = launch_form(cmd)[0]
+    for seg in (x.strip() for x in cmd.split("&&") if x.strip()):
+        m = SAFE_RUN.match(seg)
+        if not m:
+            return f"`{seg[:80]}` is not one scripts/run_safe_pytest.sh call"
+        words = shlex.split(m.group(2))
+        flags = [w for w in words if w.startswith("-")]
+        tests = [w for w in words if not w.startswith("-")]
+        env = dict(ASSIGN.match(w).groups() for w in m.group(1).split())
+        if not tests:
+            return f"`{seg[:80]}` names no test"
+        bad = sorted(set(flags) - FLAGS)
+        if bad:
+            return f"flags {bad} (a shared process takes only {sorted(FLAGS)})"
+        no = [t for t in tests if not shareable(t)]
+        if no:
+            return f"{no} cannot share the model (not a framework shared test, no BATCH_SHARED = True)"
+        if any(k.startswith("TT_METAL_") for k in env) or env.get("BRINGUP_PROFILER") == "device":
+            return "a device-profiler variable (read at process start)"
+    return None
+
+
+_TEST_VALUES: dict = {}
+
+
+def test_value(name: str):
+    """FIX.31: (found, value) of a model switch variable ``name`` (e.g. DS41_ENGRAM_TABLE) as a test process reads it
+    unset: its Setting's ``test`` value when it has one (F222), else its default (core/model_settings.Setting)."""
+    import importlib
+
+    if name in _TEST_VALUES:
+        return _TEST_VALUES[name]
+    _TEST_VALUES[name] = (False, None)
+    for f in sorted(_REPO.glob("models/demos/*/tt/settings.py")):
+        mod = f"models.demos.{f.parent.parent.name}.tt.settings"
+        try:
+            m = importlib.import_module(mod)
+        except Exception:  # noqa: BLE001 -- a model whose settings do not import: its switches stay as written
+            continue
+        for v in vars(m).values():
+            prefix = getattr(v, "prefix", None)
+            table = getattr(v, "table", None)
+            if isinstance(prefix, str) and isinstance(table, dict) and name.startswith(prefix):
+                st = table.get(name[len(prefix) :])
+                if st is not None:
+                    _TEST_VALUES[name] = (True, st.test if st.test is not None else st.default)
+    return _TEST_VALUES[name]
+
+
+def normalized(env: dict) -> dict:
+    """FIX.31 (owner 2026-11-13): a model switch set to the value a test process reads when it is unset is the same
+    model as unset (P.51's units ran as 5 processes over one such variable). Compared as text with the value's type
+    (bools as 1/true/yes). DS41_ENGRAM_TABLE=resident is NOT such a switch: its test value is mmap (F222), and a
+    timed gate sets resident on purpose (X.3, owner 2026-11-06)."""
+    out = {}
+    for k, v in env.items():
+        found, val = test_value(k) if k.isupper() and "_" in k and not k.startswith(("BRINGUP_", "TT_")) else (0, 0)
+        if found:
+            same = (str(v).lower() in ("1", "true", "yes")) == val if isinstance(val, bool) else str(v) == str(val)
+            if same:
+                continue
+        out[k] = v
+    return out
+
+
+def model_key(env: dict, names: set) -> str:
+    """The model configuration of a run: its effective value of every non-per-run variable any run sets (FIX.31: a
+    switch at the value a test reads unset counts as unset). Only which runs share a process: the device side loads
+    again whenever a load-time switch value differs (testing/batch.shared_model)."""
+    env = normalized({k: v for k, v in env.items() if k in names - ITEM_VARS})
+    return json.dumps({k: env.get(k) for k in sorted(names - ITEM_VARS)}, sort_keys=True)
+
+
 def gate_groups(units: list[tuple[str, str]], env: dict) -> list[list[tuple[str, str]]]:
     """FIX.29: the gate units to run (unit, command), in gate order, as process groups: consecutive units whose every
     run may share a process at one model configuration (``model_key`` over the gate's environment and the runs'
     prefixes) form one group (one batch process, one model load); any other unit is a group of its own (its command
-    as written, or core/batch.unit_command). A single unit stays its own group."""
+    as written, or core/batch.unit_command). A single unit stays its own group.
+    FIX.31: a unit whose runs ask for the precompile pass joins too, in its launch form (``launch_form``: the command a
+    group of two or more carries)."""
     out: list[list[tuple[str, str]]] = []
     keys: list[str | None] = []
-    parsed = {u: parse_all(c) for u, c in units}
+    forms = {u: launch_form(c)[0] for u, c in units}
+    parsed = {u: parse_all(forms[u]) for u, _ in units}
     names = {k for runs in parsed.values() if runs for r in runs for k in r["env"]}
     for u, c in units:
         runs = parsed[u]
@@ -208,11 +307,11 @@ def gate_groups(units: list[tuple[str, str]], env: dict) -> list[list[tuple[str,
             ks = {model_key({**env, **r["env"]}, names) for r in runs}
             key = ks.pop() if len(ks) == 1 else None
         if key is not None and out and keys[-1] == key:
-            out[-1].append((u, c))
+            out[-1].append((u, forms[u]))
         else:
-            out.append([(u, c)])
+            out.append([(u, forms[u] if key is not None else c)])
             keys.append(key)
-    return out
+    return [g if len(g) > 1 else [(g[0][0], dict(units)[g[0][0]])] for g in out]
 
 
 def gate_entries(group: list[tuple[str, str]], env: dict, unit_env: dict, logs: dict) -> list[dict]:

@@ -38,6 +38,8 @@ You start with no memory of earlier steps. Everything you need is in the brief a
    devjob). A model test you write takes the model through the model's loader (hooks.device_model, the adapter) and
    declares `BATCH_SHARED = True` at module level, so it can share; a switch it needs other than the load's is a
    per-call argument of the loaded model (e.g. `use_decoder_skip`), never a reload. The gate does the same by itself.
+   Every safe-runner run is filed by what it measured (FIX.31, core/runrec.py: tests, measuring env, code): a gate
+   then reuses a passed run of the same tests however you launched it, so never run the same thing twice.
 4. Always use 2D fabric. Open meshes with `ttnn.FabricConfig.FABRIC_2D` (the spec's `box.device_params` does this for
    the gates), and configure CCLs, dispatch and combine for 2D fabric. Never open a device, or write a test or a
    module, with `FABRIC_1D` or `FABRIC_1D_RING`.

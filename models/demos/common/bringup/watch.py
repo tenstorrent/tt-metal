@@ -13,6 +13,16 @@ returns at once with the log's last event (e.g. its WAITING FOR A PERSON line), 
 
 Exit codes: 0 an event (lines printed), 2 the timeout passed with nothing to act on (re-arm), 3 the orchestrator is not
 running (the last event printed: act on it before relaunching).
+
+FIX.31: a gate, a safe-runner run or a chain script holding the device is live too, whoever started it: a gate
+(core/gate.run_gate: `gate --continue`, `gate --check`) and every scripts/run_safe_pytest.sh run of a bring-up spec
+(core/runrec.py) name themselves in runs/<run>/live/ while they run, and a chain script registers its own pid once:
+
+    python -m models.demos.common.bringup.watch live --spec S [--pid PID] [--what "chain: X.3 units"]
+
+While any of them is alive the watch waits (no NOT RUNNING), and it wakes on their results in runs/<run>/gates.log
+(a gate's PASS / FAIL, a failed unit; an agent's `gate --check` lines never wake it). After the last one ends it
+waits ``--grace`` seconds for the next (a chain's gap between two gates) before it reports NOT RUNNING.
 """
 
 from __future__ import annotations
@@ -36,6 +46,47 @@ PATTERN = re.compile(
 )
 GATES = re.compile(r"gate PASS|gate FAIL")
 PID_FILE = "ORCHESTRATOR.pid"
+LIVE_DIR = "live"  # FIX.31: <pid>.json / gate-<pid>-<task>.json / chain-<pid>.json while a run holds the device
+GATES_LOG = "gates.log"  # FIX.31: results of gates and safe-runner runs started outside the orchestrator too
+_PID_FIELD = re.compile(r"\bpid=(\d+)\b")
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except (OSError, ValueError, TypeError):
+        return False
+
+
+def orchestrator_pid(run_dir: Path) -> int | None:
+    try:
+        return int((run_dir / PID_FILE).read_text().split()[0])
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def live_runs(run_dir: Path) -> list[dict]:
+    """FIX.31: the gates, safe-runner runs and chain scripts registered in runs/<run>/live/ whose process is alive."""
+    out = []
+    d = Path(run_dir) / LIVE_DIR
+    for f in sorted(d.glob("*.json")) if d.is_dir() else []:
+        try:
+            info = json.loads(f.read_text())
+        except (OSError, ValueError):
+            continue
+        if _pid_alive(info.get("pid")):
+            out.append(info)
+    return out
+
+
+def register(run_dir: Path, pid: int, what: str) -> Path:
+    """FIX.31: a chain script (or any long device job) names itself live until its pid ends."""
+    d = Path(run_dir) / LIVE_DIR
+    d.mkdir(parents=True, exist_ok=True)
+    p = d / f"chain-{pid}.json"
+    p.write_text(json.dumps({"pid": pid, "what": what, "t": time.time()}))
+    return p
 
 
 def alive(run_dir: Path) -> bool:
@@ -87,6 +138,12 @@ def first_report(run_dir: Path, line: str) -> bool:
     return True
 
 
+def _live_text(runs: list[dict]) -> str:
+    return "; ".join(
+        f"{r.get('what', '?')} (pid {r.get('pid')}{', ' + r['unit'] if r.get('unit') else ''})" for r in runs
+    )
+
+
 def watch(
     run_dir: Path,
     timeout: float,
@@ -95,46 +152,95 @@ def watch(
     out=print,
     quiet_passes=False,
     stale=lambda: None,
+    grace: float = 60.0,
 ) -> int:
-    """stale: returns a line when the published dashboard lags the local one (dashboard/links.py, F71)."""
+    """stale: returns a line when the published dashboard lags the local one (dashboard/links.py, F71).
+    FIX.31: a live gate / run / chain (``live_runs``) keeps the watch waiting while the orchestrator is not running;
+    their result lines in gates.log are events like the orchestrator's (``grace``: the wait for the next live run after
+    the last one ended)."""
     log = run_dir / "orchestrator.log"
-    if not alive(run_dir):
+    glog = run_dir / GATES_LOG
+    if not alive(run_dir) and not live_runs(run_dir):
         out(f"ORCHESTRATOR NOT RUNNING; last event: {last_event(log)}")
         return NOT_RUNNING
-    pos = log.stat().st_size if log.exists() else 0
+    pos = {p: (p.stat().st_size if p.exists() else 0) for p in (log, glog)}
+    bufs = {log: "", glog: ""}
     end = time.monotonic() + timeout
-    buf = ""
+    idle_since = None
     while True:
-        if log.exists():
-            with open(log, errors="replace") as f:
-                f.seek(pos)
-                buf += f.read()
-                pos = f.tell()
-            *done, buf = buf.split("\n")
-            hits = events(done, quiet_gates, quiet_passes)
-            if hits:
-                for h in hits:
-                    out(h[:300])
-                return EVENT
+        orch = orchestrator_pid(run_dir) if alive(run_dir) else None
+        hits = []
+        for p in (log, glog):
+            if not p.exists():
+                continue
+            with open(p, errors="replace") as fh:
+                fh.seek(pos[p])
+                bufs[p] += fh.read()
+                pos[p] = fh.tell()
+            *done, bufs[p] = bufs[p].split("\n")
+            if p == glog:  # the orchestrator's own gates are in its log already
+                done = [ln for ln in done if not (orch and (m := _PID_FIELD.search(ln)) and int(m.group(1)) == orch)]
+            hits += events(done, quiet_gates, quiet_passes)
+        if hits:
+            for h in hits:
+                out(h[:300])
+            return EVENT
         if not alive(run_dir):
-            out(f"ORCHESTRATOR NOT RUNNING; last event: {last_event(log)}")
-            return NOT_RUNNING
+            runs = live_runs(run_dir)
+            if runs:
+                idle_since = None
+            else:
+                idle_since = idle_since or time.monotonic()
+                if time.monotonic() - idle_since >= grace:
+                    last = last_event(glog) if glog.exists() and glog.stat().st_mtime > _mtime(log) else last_event(log)
+                    out(f"ORCHESTRATOR NOT RUNNING; no live gate or run either; last event: {last}")
+                    return NOT_RUNNING
         s = stale()
         if s and first_report(run_dir, s):
             out(s)
             return EVENT
         if time.monotonic() >= end:
-            out(f"no event in {timeout:.0f} s; the orchestrator is running (re-arm the watch)")
+            runs = [] if alive(run_dir) else live_runs(run_dir)
+            who = f"live without the orchestrator: {_live_text(runs)}" if runs else "the orchestrator is running"
+            out(f"no event in {timeout:.0f} s; {who} (re-arm the watch)")
             return TIMEOUT
         time.sleep(poll)
 
 
+def _mtime(p: Path) -> float:
+    try:
+        return p.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+def _run_dir_of(a):
+    from models.demos.common.bringup.core.gate import run_name
+    from models.demos.common.bringup.core.ledger import Ledger
+    from models.demos.common.bringup.core.spec import Spec
+
+    spec = Spec.load(a.spec)
+    return spec, spec.run_dir(run_name(Ledger(spec.ledger_dir)))
+
+
 def main(argv=None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv[:1] == ["live"]:  # FIX.31: a chain script registers itself
+        lp = argparse.ArgumentParser(prog="watch live")
+        lp.add_argument("--spec", default=os.environ.get("BRINGUP_SPEC"))
+        lp.add_argument("--run-dir")
+        lp.add_argument("--pid", type=int, default=os.getppid(), help="the process to follow (default: the caller)")
+        lp.add_argument("--what", default="chain script")
+        la = lp.parse_args(argv[1:])
+        run_dir = Path(la.run_dir) if la.run_dir else _run_dir_of(la)[1]
+        print(f"live: {register(run_dir, la.pid, la.what)} (until pid {la.pid} ends)")
+        return 0
     ap = argparse.ArgumentParser()
     ap.add_argument("--spec", default=os.environ.get("BRINGUP_SPEC"))
     ap.add_argument("--run-dir", help="instead of --spec: runs/<run>")
     ap.add_argument("--timeout", type=float, default=1800.0, help="seconds: the heartbeat, at most 30 min (owner)")
     ap.add_argument("--poll", type=float, default=15.0)
+    ap.add_argument("--grace", type=float, default=60.0, help="FIX.31: wait this long for a chain's next gate")
     ap.add_argument("--quiet-gates", action="store_true", help="skip a plain gate FAIL (the check before an agent)")
     ap.add_argument(
         "--quiet-passes", action="store_true", help="skip gate PASS lines (problems only; the timeout reports progress)"
@@ -144,16 +250,11 @@ def main(argv=None) -> int:
     if a.run_dir:
         run_dir = Path(a.run_dir)
     else:
-        from models.demos.common.bringup.core.gate import run_name
-        from models.demos.common.bringup.core.ledger import Ledger
-        from models.demos.common.bringup.core.spec import Spec
-
-        spec = Spec.load(a.spec)
-        run_dir = spec.run_dir(run_name(Ledger(spec.ledger_dir)))
+        spec, run_dir = _run_dir_of(a)
         from models.demos.common.bringup.dashboard import links as LK
 
         stale = lambda: LK.stale(spec.ledger_dir, run_dir=run_dir)  # noqa: E731
-    rc = watch(run_dir, a.timeout, a.poll, a.quiet_gates, quiet_passes=a.quiet_passes, stale=stale)
+    rc = watch(run_dir, a.timeout, a.poll, a.quiet_gates, quiet_passes=a.quiet_passes, stale=stale, grace=a.grace)
     if rc == TIMEOUT:
         log = (
             (run_dir / "orchestrator.log").read_text(errors="replace")

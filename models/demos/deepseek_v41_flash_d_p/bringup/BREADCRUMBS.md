@@ -834,3 +834,76 @@ Shared / not shared, and why
 Re-run
 - `PYTHONPATH=$PWD python -m models.demos.common.bringup gate FIX.29 --spec models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --check`
 - Several tests by hand: `scripts/run_safe_pytest.sh --one-process --run-all <test files>`
+
+## FIX.31 (overseer fix, OWNER 2026-11-13: "bookkeeping eats the Galaxy") - count every device run once
+
+What changed (framework only; no model, test or fork code)
+- (1) Every `scripts/run_safe_pytest.sh` run of a bring-up spec files its result (core/runrec.py, called by
+  tt_safe_run.sh `ttrun_runrec_begin` / its EXIT hook `ttrun_runrec_end`): key = tests + measuring pytest args (no
+  precompile flags, no --run-all, no --one-process) + `stamps.measuring_env` + code key + goldens key + waivers;
+  records in runs/<run>/stamps/_runs/<key>.json (newest first, result files kept). A `BRINGUP_BATCH_CMD` batch
+  (--one-process, F259 unit_command) becomes the same plan as a file first, so each of its runs is filed. The gate
+  (`core/gate._lookup`) reuses a unit from: its stamp; its stamp made before FIX.31 (legacy code / env key aliased,
+  `stamps.ensure_aliases`, runs/<run>/stamps/code_aliases.json); every run's newest runner record, all PASS; another
+  task's gate record of the same runs (old records: command recovered by its hash from that task's gate). Never a
+  FAIL / HANG / NOT RUN, never an older PASS behind a newer failure.
+- `stamps.env_key` = `measuring_env`: without TT_METAL_CACHE, TT_METAL_HOME when it is this checkout, the launch
+  variables (BRINGUP_BATCH*, BRINGUP_HOST_MEM_*, BRINGUP_DEVJOB_DIR, BRINGUP_RUNREC). DS41-244: a shell's gate
+  (e8e6...) and the orchestrator's (4413...) were different keys, so `gate --status` called passes stale.
+- (2) `overseer fix ... --unit TASK#label --selftest <file>`: the fix's gate is its selftests + the named units only
+  (raw segments of the task, BRINGUP_TASK=<task>), with the limits those units recorded (newest PASS in the store).
+  Without them the old chaining stays. A model-level unit still brings FIX.25's determinism unit (owner: no exemption).
+- (3) `stamps.BOOKKEEPING`: gate.py, batch.py, run_safe_pytest.sh, tt_safe_run.sh count in the code key by their
+  measuring part only (python: top-level defs by name; shell: functions / `# --- <title> ---` sections). Listed =
+  bookkeeping; anything unlisted (a new function too) counts. Measuring parts kept: gate.py `gate_env`, `_run_group`
+  and imports; batch.py `parse`, `hints`, `gate_entries`, `plan_from_cmd`, ITEM_VARS, ...; the safe runner's card,
+  env, pytest command, hang / reset. core/hostmem.py, runrec.py, multigate.py: wholly bookkeeping.
+- (4) An agent ended by an API / auth / overload error (orchestrator.API_ERROR: 403 / 529 / overloaded / Cloudflare)
+  is INFRA: no attempt charged, no gate (changed tree or not), back-off 60 s doubling to 30 min, 8 in a row stops the
+  task for a person; a cut-off attempt's changes are named in the next brief.
+- (5) core/multigate.prerun: `pending_full_gates(include=[X.3])` collects every pending unit of the picks and the
+  milestone, drops what each gate would keep / reuse, runs each run once (dedup by run keys) in one batch process per
+  model configuration (grouped by key, not adjacency; past failures), then each task's gate takes its results
+  (`run_gate(pre=...)`): own verdict, metrics, commit. `with_determinism` makes the check its own unit (never inside
+  another unit's command: P.51's ladder re-ran). `batch.launch_form`: a unit without --no-precompile joins a shared
+  process with kernels compiled on demand, the log says so; `batch.why_not` logs why a unit runs alone.
+  `batch.model_key` folds a switch at its test-process value into unset (DS41-245: ENGRAM_TABLE=resident is NOT
+  folded; its test value is mmap).
+- (6) watch: a live gate (runs/<run>/live/gate-<pid>-<task>.json, written by run_gate), a safe-runner run
+  (live/<pid>.json) or a chain (`python -m ...watch live --pid $$`) keeps the watch waiting; results land in
+  runs/<run>/gates.log (`pid=` lines; the orchestrator's own skipped, `gate check` lines never wake it); `--grace`
+  (60 s) bridges a chain's gap.
+
+Decisions
+- Precompile inside a batch: not done (disagree with "precompile once, then batch"): the up_front_collect pass would
+  run test_batch.py's whole plan under NO_DISPATCH, and testing/batch.shared_model would keep the model that pass
+  built from shape-only tensors for the real pass. F151 already drops the pass for model-level steps (kernels cached).
+- model_key and gate_groups are launch: the device side reloads whenever a load-time switch differs
+  (testing/batch.shared_model compares hooks.batch_settings), so a key fold cannot share a wrong model.
+- Code key: legacy (1117c19bb2f25445) of HEAD 82a197f0edf == FIX.30's records; new key of HEAD == today's tree
+  (b4e915a478bc066f) after every FIX.31 edit: the edits are all bookkeeping.
+
+Selftests (CPU, through the safe runner): selftest/test_count_runs_once.py (20), test_back_to_back_gates.py (6),
+test_fix_claim_and_infra.py (7), test_watch.py (+4); updated test_model_determinism.py / test_one_process.py (the
+determinism unit is its own). Full selftest suite: 183 failures, 180 of them identical at HEAD (clean worktree;
+missing tale-of-two-cities.txt.bz2 and others), the other 3 were these updated tests.
+
+Re-run
+- `PYTHONPATH=$PWD python -m models.demos.common.bringup gate FIX.31 --spec models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --check`
+- selftests: `scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/selftest/test_count_runs_once.py` (etc.)
+
+Measured (8x4, `gate FIX.31 --check`, after the last edit)
+- Units: 5; reused 3, run 2. FIX.31#test_determinism: X.3's pass on the same tree (19:35, a shell's env key aliased);
+  FIX.30#test_ladder: X.3's pass of the same runs (X.3's command has --no-precompile, FIX.30's not); the CPU selftest
+  FIX.30#test_one_process: a hand run filed by the safe runner. Run: test_profile (2 runs) + test_positions in ONE
+  process, one model load (131 s): 316 s device, gate 322 s. FIX.30 ran the same two units in 2613 + 819 = 3432 s
+  (gate_model_loads 4 -> 1).
+- Not 0 device minutes: FIX.30's own records carry env key 6d56329acc1a26b2, which no current launcher reproduces
+  and whose contents were never stored (DS41-244); profile and positions had no other pass on this tree.
+- Metrics vs results/FIX.30.json: accuracy identical (err_final_hidden 0.13964838470398958 both, top5 1.0, op_rows 1538,
+  pos_chunk 5120); timing within noise (prefill_ms_full 1916.5 -> 1918.2, chunk_wall_ms 182.6 -> 183.5,
+  device_ms_total 172.52 -> 172.12).
+- First check attempt failed in FIX.30's selftest test_a_runs_record_gives_its_configuration_a_need...: not hermetic
+  (asserted BRINGUP_HOST_MEM_NEED_GB unset; the gate now has a measured need for that unit). Fixed in the test.
+- Note: selftest/* is NO_MEASURE (F120), so a selftest edit does not change the code key; a selftest gate unit is
+  only re-run when its newest run record failed.

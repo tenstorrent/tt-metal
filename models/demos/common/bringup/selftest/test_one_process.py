@@ -458,18 +458,18 @@ def test_a_shared_process_killed_mid_run_reports_every_unit_as_it_really_ended(s
     led = sandbox.tasks(TG._gate(f"{TG.LADDER} && {TG.CONTRACT} && {TG.OWN}"))
     assert run_gate_ok(sandbox, led)  # every unit passed once, on older code
     units = [u for u, _ in G.gate_units(led.tasks()["A.1"], led.tasks())]
-    assert len(units) == 3  # the ladder (with FIX.25's determinism run), the contract, the model's own test
+    assert len(units) == 4  # FIX.25's determinism (its own unit, FIX.31), the ladder, the contract, the model's own
     (sandbox.repo / "src/impl.py").write_text("x = 2\n")  # the code under test changes: those passes are stale
     monkeypatch.setenv("FAKE_KILL", "test_contract.py")
     calls.write_text("")
     res = G.run_gate(sandbox.spec, led, "A.1")
     assert res.verdict == "FAIL" and calls.read_text().startswith("batch ")
-    ladder, contract, own = units
+    det, ladder, contract, own = units
     log = res.log.read_text()
     assert f"while running {contract}.0" in log and f"# {own}: {G.NOT_RUN}" in log
     passed = next(ln for ln in res.lines if ln.startswith("  units passed:"))
-    assert passed == f"  units passed: {ladder}", res.lines  # ran and passed in the process before the kill
-    want = {ladder: "PASS", contract: "FAIL", own: G.NOT_RUN}
+    assert passed == f"  units passed: {det}, {ladder}", res.lines  # ran and passed in the process before the kill
+    want = {det: "PASS", ladder: "PASS", contract: "FAIL", own: G.NOT_RUN}
     assert G.unit_states(sandbox.spec, led, "A.1") == want
     assert led.state()["A.1"]["units"] == want
     delta = stamps.Delta(sandbox.spec.run_dir(G.run_name(led)), "A.1").all()
@@ -527,6 +527,8 @@ def test_a_runs_record_gives_its_configuration_a_need_and_a_group_takes_its_unit
     from models.demos.common.bringup.core import gate as G
     from models.demos.common.bringup.core import hostmem as H
 
+    for k in (H.NEED_ENV, H.FILE_ENV, H.KEY_ENV):  # FIX.31: run by a gate, this process has its own (hermetic)
+        monkeypatch.delenv(k, raising=False)
     log = tmp_path / "logs" / "X.log"
     log.parent.mkdir()
     a, b = "A=1 scripts/run_safe_pytest.sh x.py", "B=1 scripts/run_safe_pytest.sh y.py"

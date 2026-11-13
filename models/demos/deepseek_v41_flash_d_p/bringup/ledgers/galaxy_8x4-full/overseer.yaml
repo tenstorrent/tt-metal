@@ -906,7 +906,7 @@ fixes:
     crashes are infra, back-to-back gates in one process, watch follows a gate'
   gate:
   - FIX.30
-  status: held
+  status: placed
   t: '2026-11-13T17:34:49'
   text: 'OWNER 2026-11-13: bookkeeping eats the Galaxy. Evidence (Nov 6-13): device busy 24.6 h of ~168 h; FIX.30 ran X.3
     one-process units via a raw devjob (7m40s PASS) that its own gate could not count, so the gate had to run them again
@@ -929,19 +929,27 @@ fixes:
     GB, minutes each): P.49/P.50/P.51 shared the ladder and profile by stamp but still loaded the model three times. Also
     (seen 2026-11-13 on FIX.30 --continue): core/batch.parse refuses any run without --no-precompile, so X.3s units (ladder
     s56320, profile = wall run && clean-wall full prefill, positions) all ran as separate pytest processes, ~4 model loads
-    where tests.one_process promises one; the batcher must precompile once and then batch, never silently fall back,
-    and the gate log must say why a unit did not batch. Selftest:
-    three tasks with overlapping units -> one process, one load, each shared unit run once, per-task verdicts correct. (6)
-    watch follows a live gate too: python -m ...watch exits 3 ORCHESTRATOR NOT RUNNING while a gate --continue or a chain
-    script holds the device; it must treat a running gate (its pid, unit progress) as live and wake on its result. Selftest
-    for both. Proof: the selftests; then this tasks gate with every device unit reused from FIX.30s run (0 device minutes
-    when the code key is unchanged) - report how many units were reused vs run. Never loosen a check; never reset the board.'
+    where tests.one_process promises one; the batcher must precompile once and then batch, never silently fall back, and
+    the gate log must say why a unit did not batch. Also (P.51 full gate, 2026-11-13): its 5 units ran as 5 processes because
+    the profile unit sets DS41_ENGRAM_TABLE=resident, the shipped default, and batch.model_key treats any switch variable
+    as a different model; model_key must normalize a switch at its settings.py default to unset. Also (P.51, 2026-11-13):
+    adding a test_determinism unit to a gate changed the ladder unit command hash (gate_units rewrites another unit when
+    a determinism unit is present), so a passed ladder re-ran; a unit stamp must depend only on its own command and environment.
+    And `gate --status` from a shell differs from the orchestrator env_key (it reported every passed unit "stale"); status
+    must compute the key the gate will use. Selftest: three tasks with overlapping units -> one process, one load, each
+    shared unit run once, per-task verdicts correct. (6) watch follows a live gate too: python -m ...watch exits 3 ORCHESTRATOR
+    NOT RUNNING while a gate --continue or a chain script holds the device; it must treat a running gate (its pid, unit
+    progress) as live and wake on its result. Selftest for both. Proof: the selftests; then this tasks gate with every device
+    unit reused from FIX.30s run (0 device minutes when the code key is unchanged) - report how many units were reused vs
+    run. Never loosen a check; never reset the board.'
   hold: after the full gate (P.49/P.50/P.51/X.3) and the push of model_bringup (owner 2026-11-13)
   paths:
   - models/demos/common/bringup
   - models/demos/deepseek_v41_flash_d_p/bringup
   - scripts/run_safe_pytest.sh
   - scripts/lib/tt_safe_run.sh
+  released: '2026-11-13T19:42:20'
+  placed: '2026-11-13T19:42:45'
 classified:
   L.smoke:
     kind: framework

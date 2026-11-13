@@ -40,6 +40,9 @@ NO_MEASURE = tuple(
         "orchestrator.py",
         "watch.py",
         "devjob.py",  # F238: starts a device command detached; measures nothing itself
+        "core/hostmem.py",  # FIX.31: the host-memory pre-flight and its records decide whether a run starts, not what
+        "core/runrec.py",  # FIX.31: files a safe-runner run's result in the stamp store
+        "core/multigate.py",  # FIX.31: runs several tasks' pending units in one process (launch, not measurement)
         "testing/settings_lint.py",  # F234: checks an agent's diff; no test or measurement reads it
         "testing/ops_lint.py",
         "overseer.py",
@@ -93,8 +96,23 @@ ENV_IGNORED = {  # where a gate files its results, not what it measures
     "BRINGUP_AGENT_CMD",
     "TT_DEVICE_TIMING_LOG",
     "BRINGUP_CPU_THREADS",  # F170 (audit item 12): how many CPU threads a job takes, not what it measures
+    # FIX.31: where a run's kernels are cached and how it was launched, not what it measures (a gate run from a shell
+    # carried TT_METAL_CACHE / TT_METAL_HOME, the orchestrator none: `gate --status` called every passed unit stale)
+    "TT_METAL_CACHE",
+    "TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE",  # the safe runner's triage-on-hang command (names its pid)
+    "BRINGUP_DEVJOB_DIR",
+    "BRINGUP_BATCH",
+    "BRINGUP_BATCH_CMD",
+    "BRINGUP_BATCH_KEY",
+    "BRINGUP_BATCH_LM_HEAD",
+    "BRINGUP_BATCH_MAX_SEQ",
+    "BRINGUP_BATCH_KEEP_GOING",
 }
-ENV_IGNORED_PREFIXES = ("TT_METAL_JIT_SERVER",)  # F170: where kernels compile (a JIT server or locally), not the result
+ENV_IGNORED_PREFIXES = (
+    "TT_METAL_JIT_SERVER",  # F170: where kernels compile (a JIT server or locally), not the result
+    "BRINGUP_HOST_MEM_",  # FIX.31: the host-memory pre-flight's records and need (core/hostmem.py)
+    "BRINGUP_RUNREC",  # FIX.31: the safe runner's run record (core/runrec.py)
+)
 KEEP = 8  # stamps kept per unit
 
 
@@ -186,23 +204,261 @@ def _file_map(repo: Path, keep) -> dict:
     return files
 
 
+# FIX.31 (owner 2026-11-13: "bookkeeping eats the Galaxy"): the framework files that hold both what a run's process
+# gets and the gate's bookkeeping are counted in the code key by their measuring part only. A unit's command and its
+# environment are in its stamp already, so the code that composes them, chooses which runs share a process (the device
+# side re-checks every load-time switch: testing/batch.shared_model), decides whether a run starts (host memory),
+# reuses, reports, logs or files results is bookkeeping. Listed here, by name, is the BOOKKEEPING: everything else in
+# these files (a new function too) counts, so an unlisted change always re-measures.
+#   python: top-level definitions (functions, classes, assignments) by name; docstrings and comments never count
+#   shell: functions by name, top-level sections by their `# --- <title> ---` header (a prefix of the title);
+#          comment-only and blank lines never count
+GATE_PY = "models/demos/common/bringup/core/gate.py"
+BATCH_PY = "models/demos/common/bringup/core/batch.py"
+SAFE_PYTEST_SH = "scripts/run_safe_pytest.sh"
+SAFE_RUN_SH = "scripts/lib/tt_safe_run.sh"
+BOOKKEEPING = {
+    GATE_PY: (
+        # verdicts, limits, reporting, the command's composition (stamped as the command), commits, the delta
+        "OPS", "TRIAGE", "DEFAULT_TRAILER", "GateResult", "state_metrics", "measured_only", "check_metrics",
+        "_segments", "_program", "COLLECT_ONLY", "_is_direct_pytest", "device_policy_errors",
+        "_python_touches_device", "_uses_safe_runner", "run_name", "log_dir", "FULL_MODEL_STEPS", "step_command",
+        "UNIT_TASK", "FOR_LOOP", "SAFE_RUN", "NO_VALUE_FLAGS", "unit_base", "split_segment", "segment_label",
+        "TEST_RUN", "gate_units", "MODEL_LEVEL_TEST", "DETERMINISM_TEST", "DETERMINISM_METRIC", "MODEL_LEVEL_STEPS",
+        "needs_determinism", "with_determinism", "gate_limits", "gate_command", "PROFILER_VARS",
+        "DEVICE_PROFILER_VARS", "with_clean_wall", "gate_outputs", "outputs_in", "stage_paths", "BRINGUP_OPS",
+        "_dirty_under", "_tracked", "_files_under", "format_paths", "_git_retry", "GENERATED", "_commit_files",
+        "_stage", "git_commit", "commit_subject", "task_commit", "_merge_metrics", "unit_stamps", "unit_ok",
+        "reusable", "INFRA_STOP", "NOT_RUN", "hostmem_file", "hostmem_key", "hostmem_env", "under_test_paths",
+        "_kept", "_E_LINE", "waived_failures", "run_units", "_delta_rec", "unit_states", "progress_lines",
+        "_verdicts", "delta_status", "run_gate", "run_units_only", "TOO_LARGE", "task_files_map", "task_files_key",
+        "_hook_fixed", "_refused", "commit_only",
+        # FIX.31
+        "_lookup", "_restore_found", "_live_gate", "PRE_RUN", "_pre_rec", "_gates_log_dir", "_gates_log",
+    ),
+    BATCH_PY: (
+        # which units share a process (launch, F259 / FIX.29; the device side re-checks the switches) and its results
+        "LOADS_METRIC", "GATE_LOADS_METRIC", "model_key", "gate_groups", "results_path", "load_results",
+        # FIX.31
+        "LAUNCH_FLAGS", "launch_form", "why_not", "_TEST_VALUES", "test_value", "normalized",
+    ),
+    SAFE_PYTEST_SH: (
+        "section:Profiler CSV reporting", "section:Total-run timer", "section:Host memory pre-flight",
+        "section:Run record", "emit_profiler_csv",
+    ),
+    SAFE_RUN_SH: (
+        "_ttrun_say", "_ttrun_emit_device_timing", "ttrun_print_mode_banner", "_ttrun_warn_missing_ttexalens",
+        "ttrun_dump_hang_logs", "ttrun_print_total_runtime", "ttrun_precompile_record",
+        "ttrun_precompile_parse_result", "ttrun_runrec_begin", "ttrun_runrec_end",
+    ),
+}  # fmt: skip
+
+
+def _py_measuring_hash(text: str, bookkeeping) -> str:
+    """FIX.31: a Python file's measuring part: its top-level definitions not in ``bookkeeping``, by behaviour
+    (semantic_py_hash: no docstrings, comments or formatting). A file that does not parse is hashed whole."""
+    import ast
+
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return "text:" + sha16(text)
+    skip = set(bookkeeping)
+
+    def names(node) -> set:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            return {node.name}
+        if isinstance(node, ast.Assign):
+            return {t.id for t in node.targets if isinstance(t, ast.Name)}
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            return {node.target.id}
+        return set()
+
+    tree.body = [n for n in tree.body if not (names(n) and names(n) <= skip)]
+    return semantic_py_hash(ast.unparse(tree))
+
+
+_SH_FUNC = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\s*\(\)\s*\{")
+_SH_SECTION = re.compile(r"^# --- (.+?) ---\s*$")
+
+
+def _sh_measuring_hash(text: str, bookkeeping) -> str:
+    """FIX.31: a shell script's measuring part: without the functions and top-level sections named in
+    ``bookkeeping`` (a section runs from its `# --- <title> ---` header to the next one), comment-only and blank
+    lines."""
+    funcs = {b for b in bookkeeping if not b.startswith("section:")}
+    sections = tuple(b[len("section:") :] for b in bookkeeping if b.startswith("section:"))
+    keep, section, in_func = [], "", None
+    for line in text.splitlines():
+        if in_func is not None:
+            if in_func not in funcs:
+                keep.append(line)
+            if line.startswith("}"):
+                in_func = None
+            continue
+        m = _SH_SECTION.match(line)
+        if m:
+            section = m.group(1)
+            continue
+        m = _SH_FUNC.match(line)
+        if m:
+            name = m.group(1)
+            one_line = line.rstrip().endswith("}") and line.count("{") <= line.count("}")
+            if name not in funcs:
+                keep.append(line)
+            if not one_line:
+                in_func = name
+            continue
+        if section.startswith(sections) and sections:
+            continue
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        keep.append(line)
+    keep = [ln for ln in keep if ln.strip() and not ln.lstrip().startswith("#")]
+    return "sh:" + sha16("\n".join(keep))
+
+
+def measuring_hash(path: str, text: str) -> str | None:
+    """FIX.31: the hash of a split file's measuring part, or None for a file counted whole."""
+    if path not in BOOKKEEPING:
+        return None
+    if path.endswith(".py"):
+        return _py_measuring_hash(text, BOOKKEEPING[path])
+    return _sh_measuring_hash(text, BOOKKEEPING[path])
+
+
+def _split(repo: Path, files: dict, read) -> dict:
+    """The file map with every split file's hash replaced by its measuring part's (``read(path)``: its text)."""
+    out = dict(files)
+    for p in BOOKKEEPING:
+        if p in out and out[p] != "-":
+            try:
+                out[p] = measuring_hash(p, read(p))
+            except OSError:
+                pass
+    return out
+
+
+def _with_spec(repo: Path, files: dict, spec) -> dict:
+    """F162: without another model's bring-up files; the spec counted without its waivers."""
+    if spec is None:
+        return files
+    own = Path(spec.model_dir).name
+    files = {p: h for p, h in files.items() if not _other_model(p, own)}
+    try:
+        sp = str(Path(spec.path).resolve().relative_to(Path(repo).resolve()))
+    except (TypeError, ValueError):  # a spec outside the repo: hashed whole
+        sp = None
+    if sp in files:
+        files[sp] = sha16(spec_text(spec))
+    elif spec.path is not None:
+        files["<spec>"] = sha16(spec_text(spec))
+    return files
+
+
+def _key(files: dict) -> str:
+    return sha16("\n".join(f"{p}\0{h}" for p, h in sorted(files.items())))
+
+
 def code_key(repo: Path, spec=None) -> str:
     """The content of the tree a gate runs on: committed, changed and untracked files alike (a commit of the same
     content keeps the key), without SKIP; with the spec (F162) also without another model's bring-up files and with
-    the spec file counted without its waivers."""
+    the spec file counted without its waivers. FIX.31: the split files (BOOKKEEPING) by their measuring part."""
     files = _file_map(repo, lambda p: not _SKIP.match(p))
-    if spec is not None:
-        own = Path(spec.model_dir).name
-        files = {p: h for p, h in files.items() if not _other_model(p, own)}
-        try:
-            sp = str(Path(spec.path).resolve().relative_to(Path(repo).resolve()))
-        except (TypeError, ValueError):  # a spec outside the repo: hashed whole
-            sp = None
-        if sp in files:
-            files[sp] = sha16(spec_text(spec))
-        elif spec.path is not None:
-            files["<spec>"] = sha16(spec_text(spec))
-    return sha16("\n".join(f"{p}\0{h}" for p, h in sorted(files.items())))
+    files = _split(repo, files, lambda p: (Path(repo) / p).read_text(errors="replace"))
+    return _key(_with_spec(repo, files, spec))
+
+
+# FIX.31: the code key as it was before the split (records made before FIX.31 carry it); code_aliases maps it
+_LEGACY_NO_MEASURE = ("core/hostmem.py", "core/runrec.py", "core/multigate.py")
+_LEGACY_SKIP = re.compile(
+    "|".join(
+        fnmatch.translate(g)
+        for g in SKIP
+        if g not in tuple(f"models/demos/common/bringup/{p}" for p in _LEGACY_NO_MEASURE)
+    )
+)
+
+
+def _file_map_at(repo: Path, rev: str, keep) -> dict:
+    """{path: blob sha} of commit ``rev`` (the committed tree only) for the paths ``keep(path)`` accepts."""
+    files = {}
+    for entry in _git(repo, "ls-tree", "-r", "-z", rev).split("\0"):
+        if "\t" in entry:
+            meta, path = entry.split("\t", 1)
+            if keep(path):
+                files[path] = meta.split()[2]
+    return files
+
+
+def keys_at(repo: Path, rev: str, spec=None) -> tuple[str, str]:
+    """FIX.31: (legacy code key, code key) of commit ``rev``'s tree: the same tree under the key before FIX.31 and
+    under today's. Exact for a commit whose spec file is the one ``spec`` was loaded from (aliases checks that)."""
+    legacy = _key(_with_spec(repo, _file_map_at(repo, rev, lambda p: not _LEGACY_SKIP.match(p)), spec))
+    files = _file_map_at(repo, rev, lambda p: not _SKIP.match(p))
+    files = _split(repo, files, lambda p: _git(repo, "show", f"{rev}:{p}"))
+    return legacy, _key(_with_spec(repo, files, spec))
+
+
+ALIASES = "code_aliases.json"
+
+
+def ensure_aliases(run_dir: Path, repo: Path, spec=None, env: dict | None = None) -> dict:
+    """FIX.31: the key aliases of a run's stamp store (runs/<run>/stamps/code_aliases.json): {"code": {legacy code key:
+    code key}, "env": {legacy env key: env key}}. A record stamped before FIX.31 carries the legacy keys of the tree
+    and environment it ran on; the same tree and environment have today's keys, so it is found under them. Computed
+    from HEAD's tree (once per HEAD; only when the spec file is HEAD's) and from ``env`` (a real environment)."""
+    p = Path(run_dir) / "stamps" / ALIASES
+    try:
+        data = json.loads(p.read_text()) if p.exists() else {}
+    except ValueError:
+        data = {}
+    data.setdefault("code", {})
+    data.setdefault("env", {})
+    data.setdefault("heads", [])
+    changed = False
+    try:
+        head = _git(repo, "rev-parse", "HEAD").strip()
+    except GitError:
+        head = None
+    if head and head not in data["heads"]:
+        spec_ok = True
+        if spec is not None and spec.path is not None:
+            try:
+                sp = str(Path(spec.path).resolve().relative_to(Path(repo).resolve()))
+                spec_ok = not _git(repo, "diff", "HEAD", "--name-only", "--", sp).strip()
+            except (TypeError, ValueError):
+                spec_ok = True
+        if spec_ok:
+            legacy, new = keys_at(repo, head, spec)
+            if legacy != new:
+                data["code"][legacy] = new
+            data["heads"] = (data["heads"] + [head])[-50:]
+            changed = True
+    if env is not None:
+        legacy, new = legacy_env_key(env), env_key(env)
+        if legacy != new and data["env"].get(legacy) != new:
+            data["env"][legacy] = new
+            changed = True
+    if changed:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data, indent=1, sort_keys=True) + "\n")
+        tmp.replace(p)
+    return data
+
+
+def alias_sids(st: dict, aliases: dict) -> list[str]:
+    """FIX.31: the stamp ids a record of this unit made before FIX.31 would carry: the same command, frozen block,
+    goldens and waivers, with a legacy code / env key that aliases to the stamp's (never another tree or env)."""
+    codes = [k for k, v in (aliases.get("code") or {}).items() if v == st.get("code")]
+    envs = [k for k, v in (aliases.get("env") or {}).items() if v == st.get("env")]
+    out = []
+    for c in [st.get("code")] + codes:
+        for e in [st.get("env")] + envs:
+            if (c, e) != (st.get("code"), st.get("env")):
+                out.append(stamp_id(dict(st, code=c, env=e)))
+    return out
 
 
 # F169: the code under test: what an agent's change can alter in a unit's verdict. The overseer's edits (the spec,
@@ -312,12 +568,48 @@ def settings_prefixes() -> tuple:
     return tuple(sorted(found))
 
 
-def env_key(env: dict) -> str:
+_REPO_ROOT = Path(__file__).resolve().parents[5]
+
+
+def measuring_env(env: dict) -> dict:
+    """FIX.31: the variables of ``env`` that can change what a run measures: BRINGUP_*, TT_* and the models' switch
+    prefixes, without where results are filed, how the run was launched (a devjob, a gate, a batch, by hand) and where
+    kernels are cached; TT_METAL_HOME only when it names another checkout (this one is what every run uses)."""
     prefixes = ENV_PREFIXES + settings_prefixes()
     keep = {
         k: v
         for k, v in env.items()
         if k.startswith(prefixes) and k not in ENV_IGNORED and not k.startswith(ENV_IGNORED_PREFIXES)
+    }
+    home = keep.get("TT_METAL_HOME")
+    if home is not None and Path(home).resolve() == _REPO_ROOT.resolve():
+        keep.pop("TT_METAL_HOME")
+    return keep
+
+
+def env_key(env: dict) -> str:
+    return sha16(json.dumps(measuring_env(env), sort_keys=True))
+
+
+# FIX.31: the env key before measuring_env (records made before it carry it; env_aliases maps them)
+_LEGACY_ENV_IGNORED = {
+    "BRINGUP_TASK",
+    "BRINGUP_RECORD_TASK",
+    "BRINGUP_RESULTS_DIR",
+    "BRINGUP_SPEC",
+    "BRINGUP_DASHBOARD",
+    "BRINGUP_AGENT_CMD",
+    "TT_DEVICE_TIMING_LOG",
+    "BRINGUP_CPU_THREADS",
+}
+
+
+def legacy_env_key(env: dict) -> str:
+    prefixes = ENV_PREFIXES + settings_prefixes()
+    keep = {
+        k: v
+        for k, v in env.items()
+        if k.startswith(prefixes) and k not in _LEGACY_ENV_IGNORED and not k.startswith("TT_METAL_JIT_SERVER")
     }
     return sha16(json.dumps(keep, sort_keys=True))
 
@@ -350,6 +642,14 @@ class Store:
 
     def _index(self, unit: str) -> Path:
         return self.dir / f"{unit}.json"
+
+    def aliases(self) -> dict:
+        """FIX.31: the legacy key aliases of this store (ensure_aliases)."""
+        p = self.dir / ALIASES
+        try:
+            return json.loads(p.read_text()) if p.exists() else {}
+        except ValueError:
+            return {}
 
     def records(self, unit: str) -> dict:
         p = self._index(unit)

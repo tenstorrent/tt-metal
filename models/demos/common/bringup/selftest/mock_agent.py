@@ -40,7 +40,8 @@ def main():
             )
         )
     rc = act.get("exit", 0)
-    print(json.dumps({"type": "result", "result": "done", "is_error": rc != 0, "session_id": f"sess-{brief.stem}"}))
+    result = act.get("result", "done")  # FIX.31: e.g. "API Error: 403 ..." (an outage ends the agent)
+    print(json.dumps({"type": "result", "result": result, "is_error": rc != 0, "session_id": f"sess-{brief.stem}"}))
     sys.exit(rc)
 
 
