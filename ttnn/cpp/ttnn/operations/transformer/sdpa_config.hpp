@@ -29,6 +29,18 @@ struct SDPAProgramConfig {
     // so no bf16 running sum spans the whole prefix. Refused with a K split, a sliding window, or several Q chunks
     // per core (raise q_chunk_size).
     bool segmented_accumulation = false;
+    // Ring joint only: with fp32_dest_acc_en, run the streaming compute path (fp32 dest accumulation and fp32 running
+    // sums, bf16 QK^T score block) instead of the compute_common.hpp path. Not bit-identical to that path (the scores
+    // round to bf16 before max / exp); faster, and closer to an fp64 reference. No effect without fp32_dest_acc_en
+    // (that already streams); ignored by the other SDPA ops.
+    bool streaming_fp32_dest = false;
+    // Ring joint only: also run SDPA on the cores (x .. grid.x - 1, grid.y) of the CCL row below the SDPA grid that the
+    // fused all-gather does not use (it takes num_links * 2 cores from ccl_core_grid_offset); e.g. 12 x 9 + 8 = 116
+    // cores. Only the core a (head, Q chunk) unit runs on changes: outputs are byte-identical. Unset: unchanged.
+    std::optional<uint32_t> ccl_row_sdpa_start_x = std::nullopt;
+    // Ring joint only: on a program-cache hit, rewrite only the runtime args of buffers whose address changed since
+    // the last hit of the same program, instead of every binding. Same argument values. Off: the full rewrite.
+    bool changed_bindings_only = false;
 };
 
 // Paired geometry for an HMA-shared paged K/V cache (chunked prefill SDPA and

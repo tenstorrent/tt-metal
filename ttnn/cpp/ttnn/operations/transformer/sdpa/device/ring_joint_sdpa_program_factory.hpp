@@ -9,6 +9,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/runtime_args_data.hpp>
 #include <tt-metalium/workload_descriptor.hpp>
 
 #include "ttnn/device_operation.hpp"
@@ -48,6 +49,11 @@ struct RingJointSDPAMeshWorkloadFactory {
     struct shared_variables_t {
         typename descriptor_adapter_t::shared_variables_t descriptor;
         ttnn::experimental::prim::ring_attention_all_gather_async_dynamic::SemaphoreArgPatch semaphore_patch;
+        // Cache-hit fast path for the buffer-address runtime args (filled on the first cache hit): per collected
+        // buffer, the runtime-arg slots its address is bound to, and the address last written there. A hit rewrites
+        // only the slots of buffers whose address changed, instead of every binding of every core.
+        std::vector<std::vector<std::pair<tt::tt_metal::RuntimeArgsData*, uint32_t>>> binding_slots;
+        std::vector<uint64_t> bound_addresses;
     };
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 

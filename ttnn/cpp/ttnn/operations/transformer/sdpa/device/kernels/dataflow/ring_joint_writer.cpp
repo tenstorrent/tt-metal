@@ -459,7 +459,12 @@ inline QChunkInfo get_q_chunk_info(
         info.is_joint_q = false;
     }
     const uint32_t out_row_start_tile = q_chunk * Sq_chunk_t;
+#ifdef OUTPUT_CONCAT_HEADS
+    // heads side by side: head nq's columns are tiles [nq * DHt, (nq + 1) * DHt) of the one [B, 1, N, NH * DH] output
+    info.out_slice = Slice(nb, 0, out_row_start_tile, out_row_start_tile + Sq_chunk_t, nq * DHt, (nq + 1) * DHt);
+#else
     info.out_slice = Slice(nb, nq, out_row_start_tile, out_row_start_tile + Sq_chunk_t, 0, DHt);
+#endif
     info.stats_seq_start_tile = q_chunk * Sq_chunk_t;
     info.stats_seq_end_tile = info.stats_seq_start_tile + Sq_chunk_t;
     info.stats_seq_start_tile = std::min(info.stats_seq_start_tile, q_local_padded_Nt);
@@ -762,10 +767,17 @@ void kernel_main() {
     const auto stats_writer = TensorAccessor(stats_args, stats_addr);
 
     constexpr bool output_has_no_padding = !has_joint_q && (q_local_padded_Nt % Sq_chunk_t == 0);
+#ifdef OUTPUT_CONCAT_HEADS
+    using StaticOutputTileShape = StaticTensorTileShape<B, 1, q_local_padded_Nt, NH * vDHt>;
+    using OutputTileShape = std::conditional_t<output_has_no_padding, StaticOutputTileShape, TensorTileShape>;
+
+    const auto output_tile_logical = OutputTileShape(B, 1, q_local_padded_Nt, NH * vDHt);
+#else
     using StaticOutputTileShape = StaticTensorTileShape<B, NH, q_local_padded_Nt, vDHt>;
     using OutputTileShape = std::conditional_t<output_has_no_padding, StaticOutputTileShape, TensorTileShape>;
 
     const auto output_tile_logical = OutputTileShape(B, NH, q_local_padded_Nt, vDHt);
+#endif
     const auto joint_tile_logical = TensorTileShape(B, NH, Lt, vDHt);
     // stats tensor is 2× the sequence length: first half stores max (used by both eager and
     // deferred-norm paths), second half stores sum (deferred-norm only).
