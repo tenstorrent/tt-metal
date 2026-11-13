@@ -4,8 +4,16 @@
 
 import math
 
+import numpy as np
 import torch
 from torch import nn
+
+CAN_BUS_DIMS = 18
+# Each camera's yaw in the order the model takes the cameras: front, front right, front left, back,
+# back left, back right.
+CAMERA_YAWS_DEG = (0.0, -55.0, 55.0, 180.0, 110.0, -110.0)
+# Focal length of the synthetic cameras at a 640-pixel-wide image.
+FOCAL_PX_AT_640 = 500.0
 
 # The last BatchNorm of each bottleneck draws its gamma from this range, so that each residual branch
 # stays about as large as its identity path and the backbone output does not grow block after block.
@@ -69,3 +77,61 @@ def init_dummy_weights(torch_model, seed=0):
 
     torch_model.eval()
     return torch_model
+
+
+def synthetic_rig(width=640, height=360):
+    """Six pinhole cameras around the ego, as lidar2img matrices for images of (width, height)
+    content pixels. The lidar frame has x to the right, y forward and z up; each camera sits at the
+    origin and looks along its yaw."""
+    focal = FOCAL_PX_AT_640 * width / 640
+    intrinsic = np.array([[focal, 0, width / 2, 0], [0, focal, height / 2, 0], [0, 0, 1, 0], [0, 0, 0, 1]])
+    matrices = []
+    for yaw_deg in CAMERA_YAWS_DEG:
+        yaw = math.radians(yaw_deg)
+        forward = np.array([-math.sin(yaw), math.cos(yaw), 0.0])
+        right = np.array([math.cos(yaw), math.sin(yaw), 0.0])
+        down = np.array([0.0, 0.0, -1.0])
+        extrinsic = np.eye(4)
+        extrinsic[:3, :3] = np.stack([right, down, forward])
+        matrices.append(intrinsic @ extrinsic)
+    return matrices
+
+
+def synthetic_can_bus(x, y, yaw, generator=None):
+    """An absolute CAN bus for an ego at (x, y) metres heading yaw radians. With a generator, the
+    motion fields between the orientation and the heading are N(0, 1) draws, else zero."""
+    can_bus = np.zeros(CAN_BUS_DIMS)
+    can_bus[:3] = (x, y, 0.0)
+    can_bus[3:7] = (math.cos(yaw / 2), 0.0, 0.0, math.sin(yaw / 2))
+    if generator is not None:
+        can_bus[7:-2] = torch.randn(CAN_BUS_DIMS - 9, generator=generator, dtype=torch.float64).numpy()
+    angle = math.degrees(yaw) % 360
+    can_bus[-2], can_bus[-1] = math.radians(angle), angle
+    return can_bus
+
+
+def synthetic_agents(num_agents, fut_ts, step_s, seed=0):
+    """Random agents within 20 m of the ego for the planning metric, which is all the ground truth
+    the forward reads: LiDAR boxes (x, y, z, w, l, h, yaw, vx, vy), class labels, and attribute rows
+    laid out as the metric reads them, with constant-velocity future offsets, all valid, and the
+    class at column 3 * fut_ts + 9."""
+    generator = torch.Generator().manual_seed(seed)
+
+    def uniform(low, high, *shape):
+        return torch.rand(shape, generator=generator) * (high - low) + low
+
+    xy = uniform(-20.0, 20.0, num_agents, 2)
+    z = torch.full((num_agents, 1), -1.7)
+    size = torch.cat(
+        [uniform(1.6, 2.0, num_agents, 1), uniform(3.8, 5.2, num_agents, 1), uniform(1.5, 1.7, num_agents, 1)], 1
+    )
+    yaw = uniform(-math.pi, math.pi, num_agents, 1)
+    velocity = torch.randn(num_agents, 2, generator=generator) * 2.0
+    boxes = torch.cat([xy, z, size, yaw, velocity], 1)
+    labels = torch.randint(0, 10, (num_agents,), generator=generator)
+
+    attrs = torch.zeros(num_agents, 4 * fut_ts + 10)
+    attrs[:, : 2 * fut_ts] = (velocity * step_s).repeat(1, fut_ts)
+    attrs[:, 2 * fut_ts : 3 * fut_ts] = 1.0
+    attrs[:, 3 * fut_ts + 9] = labels.float()
+    return boxes, labels, attrs
