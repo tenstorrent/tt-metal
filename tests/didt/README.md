@@ -141,54 +141,6 @@ class CustomTest(OpTestBase):
 
 Available method overrides: `run_device_operation()`, `generate_torch_activations()`, `generate_torch_input()`, `set_seed()`, `deallocate_activations()`
 
-## MaxUtil Power Virus (`unit_tests_didt_max_util`, Blackhole)
-
-A C++ gtest (`tests/didt/max_util_workload/`) that holds constant, controllable power in each
-power domain at the same time. Every knob is an environment variable.
-
-| Domain | Generator | Knobs |
-|---|---|---|
-| FPU | TRISC MVMUL loop | `MAX_UTIL_FPU_UTILIZATION_PCT` (0 = off, 1–92, default 92) |
-| DRAM (all boards) | NCRISC on every worker, reads round-robin across all banks over NOC0 and NOC1 | `MAX_UTIL_TDRAM_*` (see below) |
-| DRAM via ETH cores | Active ERISC, one bank per ETH core | `MAX_UTIL_DRAM_UTILIZATION_PCT` (0 = off), `MAX_UTIL_DRAM_PAGE_SIZE_BYTES` |
-| Ethernet SerDes | Active ERISC0, bidirectional traffic on every link that is up between dispatched chips | `MAX_UTIL_ETH_LINK_*` (see below) |
-| Duty cycle / run length | Interleaved slow cos() program | `MAX_UTIL_DUTY_CYCLE_PCT`, `MAX_UTIL_NUM_WL_LOOPS`, `MAX_UTIL_NUM_ITERATIONS`, `MAX_UTIL_SUPER_SYNC` |
-
-The Tensix-DRAM (`MAX_UTIL_TDRAM_`) and ETH-link (`MAX_UTIL_ETH_LINK_`) generators share one knob scheme.
-Its raw knobs mirror the syseng ttx NOC power virus:
-
-| Knob | Meaning | Default |
-|---|---|---|
-| `<prefix>_XFER_BYTES` | Bytes per transfer, a power of two. TDRAM: 64–16384. ETH link: 64–8192. 0 turns the generator off | 8192 |
-| `<prefix>_BURST` | Transfers per burst. 0 means continuous | 0 |
-| `<prefix>_IDLE_512` | Idle time after each burst, in units of 512 wall-clock ticks | 0 |
-| `<prefix>_UTILIZATION_PCT` | Phase-locked duty cycle: traffic only while `(wall_clock/512) % PERIOD < PERIOD*pct/100`, so all generators toggle together. 0 turns the generator off. Ignored if `BURST` or `IDLE_512` is set | 100 |
-| `<prefix>_PERIOD_512` | Phase period in units of 512 ticks, a power of two | 256 (~97 µs) |
-
-ETH-link-only knobs:
-- `MAX_UTIL_ETH_LINK_STARTUP_DELAY_TICKS` adds a delay before the per-dispatch handshake.
-
-All generators run for the estimated compute window (in AICLK ticks), so they start and stop together. The ETH link and ETH-DRAM generators are duration-bounded too, because link speed does not scale with AICLK.
-Reported bandwidths for runs of 2 s or more convert ticks with the host-timed average AICLK, and lines are tagged `THROTTLED` when it fell below 95% of nominal.
-
-Ethernet link traffic runs only in `MaxUtilWorkload_AllDevices`, because both ends of a link must be dispatched together.
-Smoke and Stress log a skip.
-Links that leave the cluster, such as Galaxy exit links, are skipped. A single-chip board (p100/p150) has no links up, so it gets FPU and DRAM load only.
-Active-ETH kernels require slow dispatch.
-
-```bash
-export TT_METAL_SLOW_DISPATCH_MODE=1
-# Single chip: full FPU + DRAM
-MAX_UTIL_NUM_WL_LOOPS=1000000 MAX_UTIL_NUM_ITERATIONS=100 \
-  ./build/test/didt/unit_tests_didt_max_util --gtest_filter=*Stress*
-# Galaxy / multi-chip: FPU + DRAM + all internal ETH links
-MAX_UTIL_NUM_WL_LOOPS=1000000 MAX_UTIL_NUM_ITERATIONS=100 \
-  ./build/test/didt/unit_tests_didt_max_util --gtest_filter=*AllDevices*
-# Isolate one domain, e.g. Ethernet only at 50%
-MAX_UTIL_FPU_UTILIZATION_PCT=0 MAX_UTIL_TDRAM_UTILIZATION_PCT=0 MAX_UTIL_DRAM_UTILIZATION_PCT=0 \
-  MAX_UTIL_ETH_LINK_UTILIZATION_PCT=50 ./build/test/didt/unit_tests_didt_max_util --gtest_filter=*AllDevices*
-```
-
 ## Legacy Commands
 
 ```bash

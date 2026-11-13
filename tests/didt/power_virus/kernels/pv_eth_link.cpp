@@ -2,9 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Power-virus Ethernet link kernel (active ERISC0), from the MaxUtil link
-// generator (tests/didt/max_util_workload/kernels/eth_link_traffic.cpp). The
-// same kernel runs on both ends of every link that is up; each side sends
+// Power-virus Ethernet link kernel (active ERISC0). The same kernel runs on
+// both ends of every link that is up; each side sends
 // payloads to its peer until the host sets the STOP word in this core's L1, and
 // acks every payload it receives, so SerDes TX and RX toggle in both
 // directions. Flow control and handshake follow the ethernet ubench kernels
