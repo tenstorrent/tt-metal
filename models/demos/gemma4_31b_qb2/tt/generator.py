@@ -336,6 +336,7 @@ class Gemma4Generator:
         Decode and cached continuation consume the same stored BF8 values.
         """
         histories = []
+        bounds = {}
         for i, layer in enumerate(self.model.layers):
             if not layer.sliding:
                 histories.append(None)
@@ -346,7 +347,18 @@ class Gemma4Generator:
                 raise ValueError(f"Missing sliding prefix pages for layer {i} at position {start}: {pages}")
             pair = []
             for cache in state.kv[i]:
-                parts = [cache[p : p + 1, :, :, :] for p in pages]
+                # The page id is a runtime value of the slice (device tensors): a Python slice cache[p : p + 1] puts p
+                # in the program hash, so every request with new block ids compiled new programs and retired the traces.
+                shape = tuple(cache.shape)
+                parts = []
+                for p in pages:
+                    if (p, 0) not in bounds:
+                        bounds[(p, 0)] = self._upload(torch.tensor([p, 0, 0, 0]), ttnn.uint32)
+                    if (p, shape) not in bounds:
+                        bounds[(p, shape)] = self._upload(torch.tensor([p + 1, *shape[1:]]), ttnn.uint32)
+                    parts.append(
+                        ttnn.slice(cache, bounds[(p, 0)], bounds[(p, shape)], slice_dim=0, num_devices=shape[0])
+                    )
                 tail = parts[0] if len(parts) == 1 else ttnn.concat(parts, dim=2)
                 pair.append(ttnn.typecast(tail, ttnn.bfloat16))
             histories.append(tuple(pair))
