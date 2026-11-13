@@ -110,8 +110,36 @@ impl PyEngram {
         self.inner.export_history(slot, pos).map_err(err)
     }
 
+    fn export_history_into(&self, py: Python<'_>, slot: usize, pos: usize, out: usize) -> PyResult<()> {
+        let inner = &self.inner;
+        let n = inner.batch() * pos;
+        py.allow_threads(|| {
+            let buf = if n == 0 {
+                &mut []
+            } else {
+                unsafe { std::slice::from_raw_parts_mut(out as *mut i64, n) }
+            };
+            inner.export_history_into(slot, pos, buf)
+        })
+        .map_err(err)
+    }
+
     fn import_history(&self, slot: usize, values: Vec<i64>, length: usize) -> PyResult<()> {
         self.inner.import_history(slot, &values, length).map_err(err)
+    }
+
+    fn import_history_from(&self, py: Python<'_>, slot: usize, src: usize, length: usize) -> PyResult<()> {
+        let inner = &self.inner;
+        let n = inner.batch() * length;
+        py.allow_threads(|| {
+            let values = if n == 0 {
+                &[]
+            } else {
+                unsafe { std::slice::from_raw_parts(src as *const i64, n) }
+            };
+            inner.import_history(slot, values, length)
+        })
+        .map_err(err)
     }
 
     /// Hashes `[batch, len, n_layout_layers, n_cols]` (flat) of `ids` (`[batch, len]`, flat) at `start` against

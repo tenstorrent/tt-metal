@@ -213,6 +213,8 @@ from models.experimental.deepseek_v4_flash.demo.server import (
     _continues,
     _conversation_key,
     _Handler,
+    _HostConversation,
+    _Lease,
     _normalized_messages,
     _Prefiller,
     _PromptStopped,
@@ -230,7 +232,7 @@ from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache
 from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader
 from tests.ttnn.unit_tests.operations.prefetcher_common import tensor_prefetcher_session
 
-_NUM_USERS = 64  # default --num-users
+_NUM_USERS = 256  # default --num-users
 # Default --num-users with --prefill-all-stages. Its expert copies take ~5.7 GB more on each chip of stages 2-4
 # and ~3.8 GB on stages 1 and 5-7; stage 4 also holds the layer-20 pool, so 40 x 204800 tokens (~10.5 GB of
 # its ~17 GB free) leave them room.
@@ -927,6 +929,23 @@ def _shared_messages(keys: list[str], stored: list[dict]) -> int:
     return n
 
 
+@dataclass
+class _DeviceParkedConversation:
+    """A conversation evicted from its slot/page-table while its KV cache blocks remain in device RAM."""
+
+    owner: str | None
+    messages: list[dict]
+    tokens: list[int]
+    marks: list[tuple]
+    pending_id: str | None
+    next_render: int
+    thinking_mode: str | None
+    reasoning_effort: str | None
+    system_prompt: str | None
+    snapshot: object  # DeviceParkedSnapshot
+    used_at: float
+
+
 class _V41SlotPool(_SlotPool):
     """:class:`_SlotPool` that, when no slot continues a request's conversation, hands it the parked slot whose cache
     the request shares the longest start with and differs from only in the cache's last :data:`_SLOT_REUSE_TOKENS`
@@ -939,19 +958,120 @@ class _V41SlotPool(_SlotPool):
         self.near_misses: set[int] = set()  # slots handed out for an in-place rewind, until their turn's admission
         # slot -> (index of the assistant message its last turn stored, the position that reply started at)
         self.reply_at: dict[int, tuple[int, int]] = {}
+        self.device_parked: list[_DeviceParkedConversation] = []
+
+    def acquire(self, user_key: str, messages: list[dict]) -> _Lease:
+        """Claim a slot for one turn, restoring from device-parked RAM or host RAM when matched."""
+        with self._cv:
+            if self._closing:
+                raise RequestError(503, "server is shutting down", "server_error")
+            picked = self._pick(messages)
+            if picked is None:
+                free = [i for i, busy in enumerate(self._busy) if not busy]
+                when = ""
+                if free and self.idle_timeout > 0:
+                    wait = self.idle_timeout - (time.time() - min(self._used_at[i] for i in free))
+                    when = f"; the longest-idle parked slot can be taken in {max(wait, 0):.0f}s"
+                raise RequestError(
+                    429,
+                    f"all {len(self._busy)} KV slots are in use ({len(self._running)} running, "
+                    f"{len(self._queue)} queued, {len(free)} parked{when}); retry later, or free a "
+                    f"slot with DELETE /v1/sessions/<user>",
+                    "rate_limit_error",
+                )
+            slot, restore = picked
+            if isinstance(restore, _DeviceParkedConversation):
+                self.device_parked.remove(restore)
+            elif restore is not None:
+                self.host.remove(restore)
+            user = self.engine.users[slot]
+            if user.pos and not _continues(messages, user.messages):
+                logger.info(
+                    f"user {user_key!r}: no empty slot, taking slot {slot} from {self.owner[slot]!r} "
+                    f"(idle {time.time() - self._used_at[slot]:.0f}s, {user.pos} tokens)"
+                )
+            self._busy[slot] = True
+            previous, self.owner[slot] = self.owner[slot], user_key
+            self._used_at[slot] = time.time()
+        return _Lease(slot, previous, restore)
 
     def _pick(self, messages: list[dict]):
         picked = super()._pick(messages)
+        free = [i for i, busy in enumerate(self._busy) if not busy]
+        # Prefer device-parked continuation over host RAM (or on tie with an empty/older parked slot).
+        best_dev, best_dev_len = None, 0
+        if free and self.device_parked:
+            for conv in self.device_parked:
+                if len(conv.messages) > best_dev_len and _continues(messages, conv.messages):
+                    best_dev, best_dev_len = conv, len(conv.messages)
         if picked is not None:
             slot, restore = picked
             self.near_misses.discard(slot)
-            if restore is not None or _continues(messages, self.engine.users[slot].messages):
+            if _continues(messages, self.engine.users[slot].messages):
+                parked_len = len(self.engine.users[slot].messages)
+                if best_dev is not None and best_dev_len > parked_len:
+                    return slot, best_dev
                 return picked
+            if best_dev is not None:
+                host_len = len(restore.messages) if restore is not None else 0
+                if best_dev_len >= host_len:
+                    empty = next((i for i in free if not self.engine.users[i].pos), None)
+                    target = empty if empty is not None else slot
+                    return target, best_dev
+            if restore is not None:
+                return picked
+        elif free and best_dev is not None:
+            empty = next((i for i in free if not self.engine.users[i].pos), None)
+            if empty is not None or self.engine.tokens_left() > 0:
+                target = empty if empty is not None else min(free, key=lambda i: self._used_at[i])
+                return target, best_dev
         slot = self._near_miss(messages)
-        if slot is None:
+        if slot is not None:
+            self.near_misses.add(slot)
+            return slot, None
+        if picked is not None:
             return picked
-        self.near_misses.add(slot)
-        return slot, None
+        # When all slots are full but the page table/pool still has space, assign the oldest parked slot
+        # and keep the old user's KV cache resident in device RAM (device_parked).
+        if free and self.engine.tokens_left() > 0:
+            oldest = min(free, key=lambda i: self._used_at[i])
+            return oldest, None
+        return None
+
+    def drop_host(self, user_key: str) -> int:
+        dropped = super().drop_host(user_key)
+        with self._cv:
+            kept = []
+            evicted = []
+            for conv in self.device_parked:
+                if conv.owner == user_key:
+                    evicted.append(conv)
+                else:
+                    kept.append(conv)
+            self.device_parked = kept
+        for conv in evicted:
+            self.engine.model.free_device_park(conv.snapshot)
+        return dropped + len(evicted)
+
+    def rows(self) -> list[dict]:
+        rows = super().rows()
+        with self._cv:
+            parked = list(self.device_parked)
+        for conv in sorted(parked, key=lambda c: c.used_at, reverse=True):
+            rows.append(
+                {
+                    "id": conv.owner or "",
+                    "index": None,
+                    "tier": "parked",
+                    "tokens": conv.snapshot.pos,
+                    "max_context": self.engine.max_seq,
+                    "messages": len(conv.messages),
+                    "thinking": conv.thinking_mode == "thinking",
+                    "busy": False,
+                    "device_parked": True,
+                }
+            )
+        return rows
 
     def _near_miss(self, messages: list[dict]) -> int | None:
         keys = [_conversation_key(m) for m in messages]
@@ -1056,8 +1176,120 @@ class _SlotReuse:
         return None
 
     def _offload(self, slot: int, owner: str | None) -> None:
-        if slot not in self._reuse:
+        if slot in self._reuse:
+            return
+        pool, user = self.server.pool, self.engine.users[slot]
+        if not user.pos or len(user.tokens) != user.pos or slot in self._cut_short:
             super()._offload(slot, owner)
+            return
+        try:
+            snapshot = self.engine.model.evict_session_to_device_park(user.sid)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"user {owner!r} (slot {slot}): could not park on device, offloading to host: {e}")
+            super()._offload(slot, owner)
+            return
+        with pool._cv:
+            pool.device_parked.append(
+                _DeviceParkedConversation(
+                    owner=owner,
+                    messages=list(user.messages),
+                    tokens=list(user.tokens),
+                    marks=list(user.marks),
+                    pending_id=user.pending_id,
+                    next_render=user._next_render,
+                    thinking_mode=user.thinking_mode,
+                    reasoning_effort=user.reasoning_effort,
+                    system_prompt=user.system_prompt,
+                    snapshot=snapshot,
+                    used_at=pool._used_at[slot],
+                )
+            )
+        logger.info(
+            f"user {owner!r} (slot {slot}): {user.pos}-token conversation evicted from page table "
+            f"(KV cache kept in device RAM; {len(pool.device_parked)} device-parked)"
+        )
+
+    def _restore(self, user: UserSession, turn: _Turn) -> bool:
+        if isinstance(turn.restore, _DeviceParkedConversation):
+            conv, turn.restore = turn.restore, None
+            if self.engine.model._session_pos.get(user.sid):
+                self.engine.model.reset_session(user.sid)
+            self.engine.model.reload_session_from_device_park(user.sid, conv.snapshot)
+            user.messages = list(conv.messages)
+            user.tokens = list(conv.tokens)
+            user.marks = list(conv.marks)
+            user.pending_id = conv.pending_id
+            user._next_render = conv.next_render
+            user.thinking_mode = conv.thinking_mode
+            user.reasoning_effort = conv.reasoning_effort
+            user.system_prompt = conv.system_prompt
+            user.pos = conv.snapshot.pos
+            logger.info(
+                f"user {turn.user_key!r} (slot {turn.slot}): reloaded {user.pos}-token conversation from device RAM"
+            )
+            return True
+        return super()._restore(user, turn)
+
+    def _make_room(self, n_tokens: int, keep: int) -> None:
+        """Evict the user with the oldest last request across device-parked conversations and parked slots
+        to host RAM (freeing its device KV blocks) until ``n_tokens`` fit the page table/pool."""
+        pool = self.server.pool
+        while n_tokens > self.engine.tokens_left():
+            with pool._cv:
+                oldest_dev = min(pool.device_parked, key=lambda c: c.used_at, default=None)
+                parked_slots = [
+                    i
+                    for i, u in enumerate(self.engine.users)
+                    if not pool._busy[i] and i != keep and u.pos and not pool._closing
+                ]
+                oldest_slot = min(parked_slots, key=lambda i: pool._used_at[i], default=None)
+                if oldest_dev is None and oldest_slot is None:
+                    return
+                evict_dev = oldest_dev is not None and (
+                    oldest_slot is None or oldest_dev.used_at <= pool._used_at[oldest_slot]
+                )
+                if evict_dev:
+                    pool.device_parked.remove(oldest_dev)
+                else:
+                    pool._busy[oldest_slot] = True
+                    slot_owner = pool.owner[oldest_slot]
+            if evict_dev:
+                if pool.host_users:
+                    try:
+                        snapshot = self.engine.model.export_device_park(oldest_dev.snapshot)
+                        pool.store(
+                            _HostConversation(
+                                owner=oldest_dev.owner,
+                                messages=list(oldest_dev.messages),
+                                tokens=list(oldest_dev.tokens),
+                                marks=list(oldest_dev.marks),
+                                pending_id=oldest_dev.pending_id,
+                                next_render=oldest_dev.next_render,
+                                thinking_mode=oldest_dev.thinking_mode,
+                                reasoning_effort=oldest_dev.reasoning_effort,
+                                system_prompt=oldest_dev.system_prompt,
+                                snapshot=snapshot,
+                                stored_at=oldest_dev.used_at,
+                            )
+                        )
+                    except Exception as e:  # noqa: BLE001
+                        logger.warning(f"user {oldest_dev.owner!r}: could not export device-parked to host: {e}")
+                        self.engine.model.free_device_park(oldest_dev.snapshot)
+                else:
+                    self.engine.model.free_device_park(oldest_dev.snapshot)
+                logger.debug(
+                    f"freed device-parked user {oldest_dev.owner!r} for {n_tokens} tokens: {self._pool_summary()}"
+                )
+            else:
+                try:
+                    super()._offload(oldest_slot, slot_owner)
+                    self.engine.users[oldest_slot].reset()
+                    self._cut_short.discard(oldest_slot)
+                finally:
+                    pool.release(oldest_slot, vacated=True)
+                logger.debug(
+                    f"freed parked slot {oldest_slot} (user {slot_owner!r}) for {n_tokens} tokens: {self._pool_summary()}"
+                )
 
     def _resume(self, user: UserSession, turn: _Turn) -> bool:
         plan = self._reuse.get(turn.slot)
@@ -2432,8 +2664,6 @@ def parse_args(argv: list[str] | None = None):
     if args.dspark:
         # Speculative decode accepts against the steps' logits on the host and has no image rows. Its turns take
         # verify rounds in turn, each session with its own rows of the drafter's rings.
-        if args.num_users is None:
-            args.num_users = _NUM_USERS_DSPARK
         args.vision = False
         args.device_sampling = False
         # Each verify round's log line, read when tt/spec.py is imported; DEEPSEEK_V4_SPEC_VERBOSE=1 brings them back.
@@ -2457,9 +2687,10 @@ def parse_args(argv: list[str] | None = None):
     if args.prefill_all_stages and not (args.prefill and args.prefill_kv_only):
         p.error("--prefill-all-stages places the KV-only prefill: it needs --prefill and --prefill-kv-only")
     if args.num_users is None:
-        args.num_users = _NUM_USERS_ALL_STAGES if args.prefill_all_stages else _NUM_USERS
+        args.num_users = _NUM_USERS
     if args.total_context is None:
-        args.total_context = max(args.num_users * _KV_TOKENS_PER_USER, args.max_context)
+        kv_users = _NUM_USERS_ALL_STAGES if args.prefill_all_stages else (_NUM_USERS_DSPARK if args.dspark else 64)
+        args.total_context = max(kv_users * _KV_TOKENS_PER_USER, args.max_context)
     return check_args(p, args, sys_cfg)
 
 

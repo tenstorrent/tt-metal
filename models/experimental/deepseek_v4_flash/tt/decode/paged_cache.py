@@ -378,6 +378,28 @@ class PagedKVManager:
             self.pools[name].free([b for b in tail if b != ZERO_BLOCK])
             row[g.ring_blocks :] = [ZERO_BLOCK] * g.compressed_blocks
 
+    def detach_session_rows(self, sid: int) -> dict[str, list[int]]:
+        """Detach ``sid``'s compressed page-table entries without freeing its blocks,
+        leaving ``sid`` at position 0 with empty compressed entries."""
+        session = self._sessions[sid]
+        detached: dict[str, list[int]] = {}
+        for name, g in self.groups.items():
+            row = session.rows[name]
+            detached[name] = list(row[g.ring_blocks :])
+            row[g.ring_blocks :] = [ZERO_BLOCK] * g.compressed_blocks
+        return detached
+
+    def attach_session_rows(self, sid: int, detached: dict[str, list[int]]) -> None:
+        """Re-attach previously detached compressed page-table entries to ``sid``."""
+        session = self._sessions[sid]
+        for name, g in self.groups.items():
+            session.rows[name][g.ring_blocks :] = list(detached[name])
+
+    def free_detached_rows(self, detached: dict[str, list[int]]) -> None:
+        """Return all compressed blocks held by ``detached`` page-table entries to the pools."""
+        for name, tail in detached.items():
+            self.pools[name].free([b for b in tail if b != ZERO_BLOCK])
+
     def truncate_session(self, sid: int, pos: int) -> None:
         """Rewind a session to position ``pos``: keep the compressed blocks holding the entries of
         positions ``< pos`` and release the rest (back to ``ZERO_BLOCK``). ``pos == 0`` is

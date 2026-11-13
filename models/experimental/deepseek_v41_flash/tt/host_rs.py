@@ -115,10 +115,13 @@ class RustEngramLookup(EngramHostLookup):
         self.rust.use_session(slot)
 
     def export_history(self, slot: int, pos: int) -> torch.Tensor:
-        return torch.tensor(self.rust.export_history(slot, pos), dtype=torch.int64).reshape(self.batch, pos)
+        out = torch.empty((self.batch, pos), dtype=torch.int64)
+        self.rust.export_history_into(slot, pos, out.data_ptr())
+        return out
 
     def import_history(self, slot: int, history: torch.Tensor) -> None:
-        self.rust.import_history(slot, history.reshape(-1).tolist(), history.shape[1])
+        history = history.contiguous()
+        self.rust.import_history_from(slot, history.data_ptr(), history.shape[1])
 
     def _hashes(self, slot: int, input_ids: torch.Tensor, start_pos: int) -> torch.Tensor:
         b, length = input_ids.shape

@@ -155,7 +155,7 @@ impl Engram {
             tables,
             batch: args.batch,
             max_seq: args.max_seq,
-            histories: (0..sessions).map(|_| Mutex::new(vec![0i64; args.batch * args.max_seq])).collect(),
+            histories: (0..sessions).map(|_| Mutex::new(Vec::new())).collect(),
             current: AtomicUsize::new(0),
         })
     }
@@ -208,7 +208,29 @@ impl Engram {
             return Err(format!("history position {pos} is past max_seq {}", self.max_seq));
         }
         let history = self.histories[slot].lock();
+        if history.is_empty() {
+            return Ok(vec![0i64; self.batch * pos]);
+        }
         Ok((0..self.batch).flat_map(|b| history[b * self.max_seq..b * self.max_seq + pos].iter().copied()).collect())
+    }
+
+    pub fn export_history_into(&self, slot: usize, pos: usize, out: &mut [i64]) -> Result<(), String> {
+        self.check_slot(slot)?;
+        if pos > self.max_seq {
+            return Err(format!("history position {pos} is past max_seq {}", self.max_seq));
+        }
+        if out.len() != self.batch * pos {
+            return Err(format!("export buffer has {} elements, expected [{}, {pos}]", out.len(), self.batch));
+        }
+        let history = self.histories[slot].lock();
+        if history.is_empty() {
+            out.fill(0);
+            return Ok(());
+        }
+        for b in 0..self.batch {
+            out[b * pos..(b + 1) * pos].copy_from_slice(&history[b * self.max_seq..b * self.max_seq + pos]);
+        }
+        Ok(())
     }
 
     /// Make `values` (`[batch, len]`, an export of any slot) the start of slot `slot`'s history.
@@ -218,6 +240,12 @@ impl Engram {
             return Err(format!("history of {} values is not [{}, {len}] within max_seq", values.len(), self.batch));
         }
         let mut history = self.histories[slot].lock();
+        if history.is_empty() {
+            if len == 0 {
+                return Ok(());
+            }
+            history.resize(self.batch * self.max_seq, 0);
+        }
         for b in 0..self.batch {
             history[b * self.max_seq..b * self.max_seq + len].copy_from_slice(&values[b * len..(b + 1) * len]);
         }
@@ -229,6 +257,9 @@ impl Engram {
     pub fn hash(&self, slot: usize, ids: &[i64], start: usize) -> Result<Vec<i64>, String> {
         self.check_slot(slot)?;
         let mut history = self.histories[slot].lock();
+        if history.is_empty() {
+            history.resize(self.batch * self.max_seq, 0);
+        }
         self.hash_history(&mut history, ids, start)
     }
 
