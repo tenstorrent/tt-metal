@@ -201,7 +201,7 @@ class TtAttnResWalk(object):
         computation, bit for bit. (Sealing first and scoring the owed site as a closed site of
         the next block's batch is the same mixture, but a different reduction: measured on 8x4
         it moved half the read's elements by 1-3 bf16 ulps and doubled its error against an
-        fp32 oracle — tt_metal_tracker-ao3i.9.) Ownership of the tensor transfers in.
+        fp32 oracle.) Ownership of the tensor transfers in.
         """
         self.op = op
         self.block_size = block_size

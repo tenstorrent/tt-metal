@@ -202,7 +202,7 @@ def test_split_loop_matches_reference(mesh_device, device_params, sp_axis):
     inherited set and takes the read before it seals, exactly as the undivided walk does at that layer, so
     the split must not move a single bit — not merely stay close to the oracle. A read scored any other
     way (e.g. as a closed site after the seal) is the same mixture with a different reduction, and moved
-    half of this read's elements by 1-3 bf16 ulps (tt_metal_tracker-ao3i.9). No layer is tapped, so the
+    half of this read's elements by 1-3 bf16 ulps on 8x4. No layer is tapped, so the
     write layer `boundary - 1` defers is settled by the handoff's add on one side and inside the boundary
     read on the other: the production path.
     """

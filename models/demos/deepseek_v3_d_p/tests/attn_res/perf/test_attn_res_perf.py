@@ -16,7 +16,7 @@ upstream ranks hand over. Two layer kinds cover what AttnRes costs across the mo
 
   * **Boundary layer** (the rank's first): the most expensive AttnRes layer of the stack, and every AttnRes
     program it has — the one-site `inter_block` over the inherited set and the read that straddles the rank
-    boundary, taken from it exactly as the undivided walk takes it (tt_metal_tracker-ao3i.9); the seal of the
+    boundary, taken from it exactly as the undivided walk takes it; the seal of the
     inherited live stream; the 24-site `inter_block` at the largest sealed count of any full block; and the
     post-attention read. The last block has one more snapshot but only 9 layers, so it batches 19 sites, not 24.
   * **Ordinary layer** (the ones after it): two reads, each settling the module write the walk deferred into

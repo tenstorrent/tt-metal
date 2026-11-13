@@ -71,7 +71,7 @@ STEPS = tuple(f"{batch}/{op}" for batch in BATCHES for op in OPS)
 
 # Device kernel duration (us) per step, as CI hardware (bh_sc1_high_power) measures it. None reports without gating.
 #
-# Until tt_metal_tracker-ao3i.10 the boundary was one 25-site batch over C = 7 with the owed read closed; the CI pool
+# Before the exact boundary read the boundary was one 25-site batch over C = 7 with the owed read closed; the CI pool
 # measured it (runs 41962421284 and 42058182913, medians over 20 synced blocks: block_stats 139.0 / 119.0, block_mix
 # 275.5 / 275.6, gather_softmax 67.5 / 68.2; run 42340900388: 137.8 / 275.0 / 69.0).
 #
@@ -86,8 +86,7 @@ STEPS = tuple(f"{batch}/{op}" for batch in BATCHES for op in OPS)
 # block_stats only reports, in both batches: it settles per process into one of three levels, ~105 / ~117 / ~136 us
 # across 27 pool readings (2026-11-05..08, medians 101.5-139.6, one Galaxy showing all three; b07u08 adds ~76). The
 # level correlates with host launch skew (a cheaper host dispatch made the low level likely), which is the suspected
-# cause but is not established. No band around one reference fits that spread and still catches a regression; see
-# tt_metal_tracker-ao3i.2.5.2.
+# cause but is not established. No band around one reference fits that spread and still catches a regression.
 # owed/attn_res_gather_softmax only reports: its two pool medians agree (73.1 / 73.3 us), but its samples spread far
 # wider than the block read's (pool 71.4-91.7 us in one process, b08u02 51-114 us, medians 83-85 us), so two
 # readings do not yet show that a 5% band around one median holds.
