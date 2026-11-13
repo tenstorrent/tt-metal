@@ -79,7 +79,7 @@ def test_warmup_prefills_every_32_token_length_once_and_retires_the_traces():
     generator.prefill_forward = lambda tokens, **kw: events.append(
         (int(tokens.shape[1]), kw["prompt_lens"], kw["slots"])
     )
-    generator._retire_traces = lambda: events.append("retire")
+    generator._retire_traces = lambda **kwargs: events.append("retire")
     from types import SimpleNamespace
 
     generator.model = SimpleNamespace(tensor=lambda *a, **k: object(), config=SimpleNamespace(vocab_size=8))
