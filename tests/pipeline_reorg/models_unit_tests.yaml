@@ -811,10 +811,9 @@
 - name: MiniMax-M3 unit tests (1-card)
   cmd: |
     # Host-only tests have no mesh id; run them here: chunk layout, model variants / config checks, checkpoint
-    # dequant, router precision, compute configs and the shared-expert 2D blocking.
-    pytest --timeout 300 models/demos/minimax_m3/tests/unit/ -k "(1x1 and not msa_layer) or rotated_chunk_layout or packed_forward_layout or test_model_variants or test_checkpoint_dequant or test_router_precision or test_precision_configs or test_shared_overlap_config or adapter_packed_forward"
-    # The media module the encoder service loads, against Hugging Face's image processor.
-    pytest --timeout 120 models/demos/minimax_m3/tests/unit/test_vision_media.py
+    # dequant, router precision, compute configs and the shared-expert 2D blocking. The vision tests run in the next
+    # entry, so that each step has its own 5 minutes.
+    pytest --timeout 300 models/demos/minimax_m3/tests/unit/ -k "(1x1 and not msa_layer and not test_vision_) or rotated_chunk_layout or packed_forward_layout or test_model_variants or test_checkpoint_dequant or test_router_precision or test_precision_configs or test_shared_overlap_config or adapter_packed_forward"
     # The prefill runner's media embedding store, against a fake client and a local Mooncake master.
     uv pip install -r models/common/multimedia_store/requirements.txt
     pytest --timeout 120 models/common/multimedia_store/tests
@@ -824,6 +823,19 @@
       timeout: 5
       tier: 1
   owner_id: U08ECJQ848G # Viacheslav Melnykov
+  team: models
+  budget_type: unit
+
+- name: MiniMax-M3 vision unit tests (1-card)
+  cmd: |
+    # Every vision test: the host-only ones, and the device ones at the CI grids of tests/unit/vision_helpers.py.
+    pytest --timeout 300 models/demos/minimax_m3/tests/unit/ -k "test_vision_"
+  model: minimax-m3
+  skus:
+    bh_p150:
+      timeout: 5
+      tier: 1
+  owner_id: U08HM8SL5U4 # Maciek Dragula
   team: models
   budget_type: unit
 
