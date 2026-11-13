@@ -1,0 +1,31 @@
+--- a/kernels/all_gather_rms_norm_port_reader.cpp	2026-11-13 16:24:28.291642747 +0000
++++ b/kernels/all_gather_rms_norm_port_reader.cpp	2026-11-13 17:24:07.482685754 +0000
+@@ -223,12 +223,8 @@
+             }
+             if (has_in && t >= relay_lag) {
+                 const int32_t s = static_cast<int32_t>(t - relay_lag);
+-                {
+-                    AGRMS_ZONE("AG_ARRIVAL_WAIT");  // wait only (the notify fan-out has its own zone)
+-                    noc_semaphore_wait_min(arrived, upstream_through(s));
+-                }
+-                AGRMS_ZONE("AG_STEP_NOTIFY");
+-                notify_until(s);
++                AGRMS_ZONE("AG_ARRIVAL_WAIT");  // wait only (the notify fan-out has its own zone)
++                noc_semaphore_wait_min(arrived, upstream_through(s));
+             }
+             for (uint32_t e = 1; e < E_out; ++e) {
+                 if (t < e * relay_lag) {
+@@ -242,6 +238,13 @@
+                     }
+                 }
+             }
++            // The step's relay items go to the sender BEFORE the members' landing notifications: the fan-out (k
++            // semaphore increments per row) would otherwise hold back the reads the sender is waiting for
++            // (perf round 2, port_stream_rate: focus 22.84 -> 22.14 us, TRANSPORT-only 18.90 -> 18.04).
++            if (has_in && t >= relay_lag) {
++                AGRMS_ZONE("AG_STEP_NOTIFY");
++                notify_until(static_cast<int32_t>(t - relay_lag));
++            }
+         }
+     }
+     if (has_in) {

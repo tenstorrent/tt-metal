@@ -120,19 +120,26 @@ void kernel_main() {
         return n;
     };
 
+    // Perf 2 (landing_notify_fanout): the notification cost was loop overhead, not the NoC atomic (~24 ns per issue
+    // measured): a scan of all k member flags per row through get_arg_val, and the incremental placement. The members
+    // this stream touches (flag 1) are listed once, and each row's placement is computed directly.
+    uint32_t notified[k];
+    uint32_t n_notified = 0;
+    for (uint32_t m = 0; m < k; ++m) {
+        if (get_arg_val<uint32_t>(cnt_idx + m) != 0) {
+            notified[n_notified++] = m;
+        }
+    }
     uint32_t next_notify = 0;
     auto notify_rows = [&](uint32_t xb) {
         const uint32_t r0 = xb * xfer_rows;
         const uint32_t rows = g.item_rows(xb);
-        uint32_t grp, li;
-        g.place(r0, grp, li);
-        for (uint32_t r = r0; r < r0 + rows; ++r, g.advance(grp, li)) {
-            for (uint32_t m = 0; m < k; ++m) {
-                const uint32_t c = get_arg_val<uint32_t>(cnt_idx + m);
-                if (c != 0) {
-                    const uint32_t xy = get_common_arg_val<uint32_t>(grp * k + m);
-                    noc_semaphore_inc(get_noc_addr(xy & 0xFFFF, xy >> 16, landed_addr), c);
-                }
+        for (uint32_t r = r0; r < r0 + rows; ++r) {
+            uint32_t grp, li;
+            g.place(r, grp, li);
+            for (uint32_t j = 0; j < n_notified; ++j) {
+                const uint32_t xy = get_common_arg_val<uint32_t>(grp * k + notified[j]);
+                noc_semaphore_inc(get_noc_addr(xy & 0xFFFF, xy >> 16, landed_addr), 1);  // flags are 0 / 1
             }
         }
     };
@@ -223,8 +230,11 @@ void kernel_main() {
             }
             if (has_in && t >= relay_lag) {
                 const int32_t s = static_cast<int32_t>(t - relay_lag);
-                AGRMS_ZONE("AG_ARRIVAL_WAIT");
-                noc_semaphore_wait_min(arrived, upstream_through(s));
+                {
+                    AGRMS_ZONE("AG_ARRIVAL_WAIT");  // wait only (the notify fan-out has its own zone)
+                    noc_semaphore_wait_min(arrived, upstream_through(s));
+                }
+                AGRMS_ZONE("AG_STEP_NOTIFY");
                 notify_until(s);
             }
             for (uint32_t e = 1; e < E_out; ++e) {
@@ -242,12 +252,18 @@ void kernel_main() {
         }
     }
     if (has_in) {
-        {
-            AGRMS_ZONE("AG_FINAL_ARRIVAL");  // the last relayed items from upstream (wait only)
-            noc_semaphore_wait_min(arrived, total_in);
+        // Perf 2 (landing_notify_fanout): each remaining row-block is notified as soon as its own last item has
+        // landed, not after the whole stream: the next-to-last block's fan-out runs while the last block is in flight.
+        while (next_notify < n_xb) {
+            const int32_t s = static_cast<int32_t>(next_notify + static_cast<uint32_t>(last_in) * relay_lag);
+            {
+                AGRMS_ZONE("AG_FINAL_ARRIVAL");  // wait only
+                noc_semaphore_wait_min(arrived, upstream_through(s));
+            }
+            AGRMS_ZONE("AG_FINAL_NOTIFY");
+            notify_until(s);
         }
-        AGRMS_ZONE("AG_FINAL_NOTIFY");
-        notify_until(0x7FFFFFFF);
+        noc_semaphore_wait_min(arrived, total_in);  // every incoming item (already covered: a no-op guard)
     }
     noc_async_atomic_barrier();
 }

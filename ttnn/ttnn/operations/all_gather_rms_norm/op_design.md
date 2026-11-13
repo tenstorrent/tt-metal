@@ -600,3 +600,11 @@ one logical core set on every chip, so a logical rectangle is not a valid multic
   by the port: ~2 × 6 × 4 tiles per port). That costs less than waiting for the member launch skew.
 - Fabric multicast of the far slice (instead of relay) does not work on the QB2 ring mock: the snake turns a corner
   every hop. See changelog Perf 1.
+
+### Perf 2 deviation — landing notifications
+The port reader's landing notifications cost ~100 ns each, mostly loop overhead: a per-row scan of k member flags
+through runtime args and the incremental placement. The NoC atomic itself costs ~24 ns per issue. The reader now walks
+a once-built list of the stream's members and places each row directly. It notifies each remaining row-block as soon as
+that block's own last item lands, rather than after the whole stream. RELAY_FIRST (relay reads before the step's
+notifications) won on the old, expensive fan-out but regresses on the cheap one, so notifications stay before the
+relay reads. See changelog "Perf 2".

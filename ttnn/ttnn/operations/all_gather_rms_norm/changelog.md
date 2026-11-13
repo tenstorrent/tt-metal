@@ -310,3 +310,114 @@ binds now is the peer's ready arriving at ~2.0 µs.
 | ccl::FabricStream (kernel_lib/ccl) | capability | it arms one fixed payload size and routes its header(s) before it can send anything. There is no way to send a fence ready on the open connection after routing one header and build the rest of the header ring (copies of a routed header) in the shadow of the peer's ready, and `signal()` closes the connection. This extends the port sender's existing documented raw-fabric bypass. | not measured (cannot express the pre-send order; the old raw path with every header routed up front was 23808) | 22830 | all_gather_rms_norm_port_sender.cpp:105-155 |
 
 No raw LLK in the compute kernels changed.
+
+## Perf 2 — landing-notification fan-out (perf tournament, round 2)
+- Date: 2026-11-13. Focus case: LOOSE_CASES[0], per-device (1,1,640,384) bf16 TILE INTERLEAVED, fp32_dest_acc_en=True,
+  gamma bf16 ROW_MAJOR, Ring, 2 links, cluster_axis 1, QB2 1×4 ring under FABRIC_2D_TORUS_XY (the exact flagged config,
+  all of it in SUPPORTED). Headline numbers come from the eval CCL harness (5 experiments = 2500 calls, fastest chip,
+  `eval.ccl_perf compare`).
+
+### Measured breakdown (before, on the Perf 1 tree)
+- Whole op (harness): focus 22.81 / 24.03 µs (fastest / slowest chip); 640×512 32.91 / 34.99; 640×1792 75.39 / 78.39.
+  Ablations (focus, 3 experiments): TRANSPORT-only 18.88, LOCAL-only 11.56, EMPTY 0.78. Exposed OVERLAP 3.9 µs.
+- Instrumentation: the port reader's `AG_ARRIVAL_WAIT` zone enclosed both the arrival wait and the member landing
+  notifications (`notify_until`), so it read as waiting. It is split: `AG_ARRIVAL_WAIT` is now the wait only and the
+  new `AG_STEP_NOTIFY` is the fan-out (same gated `AGRMS_ZONE` macro; `MaybeDeviceZoneScope` still does not exist in
+  this tree).
+- Per-chip zone timeline (1 untraced call, the same shape on all 4 chips, µs from the chip's first marker):
+  - TRANSPORT stream: `AG_SEND` 5.0 → 20.4 per port (30 packets, ~0.48 µs per 12 KiB packet vs 0.25 µs at the link
+    rate). On the port reader: arrival waits 0.45–1.7 µs per port, **landing-notify fan-out 2.51 µs per port**
+    (up to 0.85 µs per step), in front of the relay reads the sender waits on.
+  - Tail: last relayed item lands at ~21.9–22.4, **`AG_FINAL_NOTIFY` 1.58 µs on every port of every chip** (16
+    serial notifications), last member `AG_LAND_WAIT` ends ~24.1, then exchange / combine / normalize / store to
+    28.2.
+- Ranked: (1) TRANSPORT stream (15 µs vs the 7.6 µs link roofline; notify fan-out and sender per-packet cost inside
+  it); (2) the OVERLAP tail after the last landing (~6 µs, of which 1.58 µs is serial notification issue); (3) the
+  pre-send path (~2 µs, Perf 1's subject).
+
+### Portfolio (hard cap: 2 experiments)
+1. **OVERLAP (TRANSPORT side effect): landing-notification fan-out** (`perf_experiments/landing_notify_fanout/`).
+   Cut the port reader's per-(row, member) semaphore-increment fan-out, on the tail and in the stream.
+2. **TRANSPORT: port stream rate** (`perf_experiments/port_stream_rate/`). Raise the per-port packet rate: the
+   sender's per-packet issue cost and the reader → sender CB handoff.
+
+### Verdicts
+| idea | verdict | focus fastest / slowest (µs), same-session base → candidate | domain |
+|---|---|---|---|
+| landing-notify fan-out (SF+H+P) | **WIN** | 23.04 / 24.24 → **20.85 / 22.19** | applies everywhere, no exceptions found |
+| port stream rate (RELAY_FIRST) | WIN alone, **superseded** | 22.84 / 24.07 → 22.14 / 23.14 alone; on top of SF+H+P 20.86 → **21.75** (regression) | conflicts with idea 1 |
+
+Landing-notify menu (focus; µs fastest / slowest):
+| option | result |
+|---|---|
+| SF: split the final notify per row-block (notify block n_xb−2 while the last block is still in flight) | 21.76 / 22.84 |
+| H: hoist the stream's notified-member list (no per-row scan of k flags through `get_arg_val`) | 22.10 / 23.80 |
+| SF+H | 21.05 / 22.29 |
+| **SF+H+P: placement computed per row (`g.place`) instead of `g.advance` (graduated)** | **20.85 / 22.19** |
+| SF+H + reversed row order | 20.91 / 22.16 (ordering is null; P's gain is the code shape) |
+| SF+H + raw stateful NoC atomic / absolute 4-byte write | 20.98 / 22.27; 21.08 / 22.33 (null: one issue costs ~24 ns, the cost was loop overhead) |
+| SF+H + stateful + cached coordinate table | 21.30 / 22.42 (worse) |
+| SF+H + notify after the step's relays ("LATE") | 21.74 / 23.13 (worse) |
+| SF+H + early polling between items | 22.18 / 23.36 (worse) |
+| SF + NoC multicast increment per member rectangle | 34.95 / 50.74 (correct, but the multicast stalls behind member traffic) |
+| one summed increment per member | not built: no group repeats inside one notification burst on any tested cell |
+
+Port-stream-rate menu (focus; full op fastest / slowest µs, TRANSPORT-only µs):
+| option | full op | TRANSPORT-only |
+|---|---|---|
+| baseline | 22.84 / 24.07 | 18.90 (78.0 GB/s received per chip) |
+| stateful fabric send + cached free-slot count | 22.78 / 23.97 | 18.83 |
+| kernels at O3 (descriptor kernels already build at O2; op_design's "-Os" note was wrong) | 22.82 / 24.01 | — |
+| **RELAY_FIRST: the step's relay reads before the notify fan-out** | **22.14 / 23.14** | **18.04 (81.7 GB/s)** |
+| reader passes destinations to the sender (no sender walk) | 22.83 / 23.85 | 18.31 (sender 0.22 µs per packet; it then waits 6–8 µs on the reader) |
+| per-chunk push with transaction ids / port CB 168 or 224 KiB / own read before notify | 22.15–22.26 | — |
+
+Per-packet finding: inside a batch the sender issues a packet every ~0.32 µs (zones on; ~0.03 CB wait, 0.11 send incl.
+slot wait, ~0.12 header + walk). Each item boundary adds ~0.3 µs. The real losses were sender CB stalls of 3–4 µs per
+port behind the reader. After RELAY_FIRST the port reader, not the sender, sets the stream rate.
+
+Aggregation: both winners move the reader's notify relative to its relay reads, so they are not independent.
+RELAY_FIRST won only because the fan-out was expensive. Once SF+H+P made it cheap, notifying first is right again
+(the notify optimizer's "LATE" option says the same thing). Measured in the real op on top of SF+H+P, focus 20.86 →
+21.75, 640×512 30.64 → 31.20, 640×1792 74.04 → 74.39. RELAY_FIRST is not graduated.
+
+### What graduated (one unqualified path; the code it replaced is deleted)
+- `all_gather_rms_norm_port_reader.cpp`:
+  - `notify_rows` walks a `notified[]` list of the stream's members, built once, and calls `g.place(r)` per row.
+    The per-row scan of all k flags and the incremental `g.advance` are deleted.
+  - The final notify is a per-row-block loop: wait for `upstream_through(block's last step)`, then notify it.
+    The single "wait for every item, then notify everything" is deleted; the total-items wait stays as a no-op guard.
+- Domain: every cell (Ring / Linear, 1 / 2 links, both cluster axes, interleaved and native sharded). No carve-out:
+  every measured cell won and nothing is incorrect or inexpressible.
+- Whole op (real op, harness, 5 experiments, `compare` win on each):
+
+| cell | before (fastest / slowest µs) | after | Δ fastest |
+|---|---|---|---|
+| focus 640×384 Ring L2 | 22.81 / 24.03 | **20.86 / 22.19** | −1.95 (noise 0.05) |
+| 640×512 Ring L2 | 32.91 / 34.99 | **30.64 / 32.61** | −2.27 |
+| 640×1792 Ring L2 | 75.39 / 78.39 | **74.04 / 77.10** | −1.35 |
+| focus, num_links 1 | 35.01 / 35.90 (subagent's base) | 32.70 / 33.76 | −2.31 |
+| focus, HEIGHT_SHARDED native | 33.39 / 35.05 (subagent's base) | 33.11 / 34.80 | −0.28 |
+| focus, Linear (subagent's copy) | 35.30 / 36.07 | 28.17 / 28.82 | −7.13 |
+
+- Zone evidence (focus, chip 0): `AG_FINAL_NOTIFY` 1.58 µs after the last arrival → one 0.42 µs block (the other block
+  runs inside the wait); `AG_STEP_NOTIFY` 2.48 → 1.36 µs per port; last member's `AG_LAND_WAIT` end after the last
+  arrival ~1.7 → ~0.4 µs.
+- Still binding (finding): the transport stream itself (~15 µs vs 7.6 µs link roofline; the port reader now sets the
+  rate), then the tail after the last landing (exchange, combine, normalize, store ≈ 4 µs).
+
+### No-regression / golden
+- Unit dir on the graduated op: 60 passed, 1 skipped (acceptance, native shard, debug, precision baseline).
+- Golden guard slice: 2 cells per (dtype × memory_layout × topology × num_links × alignment × cluster_axis ×
+  fp32_dest_acc_en × layout × gamma_mode) group, a random 600 cells of `test_op` (seed 2), and the 3 loose cases. That
+  is 1,456 cells: 311 passed, 1068 skipped (INVALID / not buildable on this mesh), 77 xfailed (EXCLUSIONS), 0 failed.
+  The three perf cases pass their golden check in `perf_measure.py`.
+- Precision: unchanged. The same bytes move; only when and how the landing semaphores are bumped changes. A block is
+  still notified only after its last item has landed.
+- Artifacts: the raw profiler CSV dumps of `port_stream_rate` (391 MB) are not committed. `zone_run.sh` regenerates
+  them. The harness JSONs are committed.
+
+### Helper bypasses — none
+The graduated path uses `noc_semaphore_inc` and no raw LLK or raw NoC. The rejected stateful-atomic options bypassed
+`noc_semaphore_inc` (it has no set-state / with-state form for atomics) and measured null, so they were not graduated.
+No compute kernel changed.

@@ -1,0 +1,423 @@
+--- a/all_gather_rms_norm_program_descriptor.py
++++ b/perf_experiments/landing_notify_fanout/agrms_copy/all_gather_rms_norm_program_descriptor.py
+@@ -115,6 +115,29 @@
+ FORCE_K = int(os.environ.get("AGRMS_FORCE_K", "0"))
+ # Perf A/B only: AGRMS_NATIVE_SHARD=0 sends sharded tensors down the TensorAccessor fallback (the Phase 0 path).
+ NATIVE_SHARD = os.environ.get("AGRMS_NATIVE_SHARD", "1") == "1"
++# landing_notify_fanout experiment knobs (port reader landing-notification fan-out variants):
++#   AGRMS_NOTIFY_SPLIT_FINAL=1  after the stream loop, notify each remaining row-block as soon as ITS last item has
++#                               arrived (one wait per upstream step) instead of after every incoming item
++#   AGRMS_NOTIFY_STATEFUL=1     raw stateful NoC atomic increment: program the AT cmd buf once per burst, then per
++#                               increment write only the target coordinate and issue
++#   AGRMS_NOTIFY_REVERSE=1      notify the rows of a burst last-row first
++#   AGRMS_NOTIFY_HOIST=1        the stream's notified member list built once (no per-row scan of the k flags)
++#   AGRMS_NOTIFY_TABLE=1        (with STATEFUL + HOIST) target coordinates memoized per group in local memory on the
++#                               group's first notification; later increments = one coordinate write + issue
++#   AGRMS_NOTIFY_LATE=1         in the stream loop, notify after the step's relay items are pushed to the sender
++#   AGRMS_NOTIFY_EARLY=1        also poll the arrival counter (non-blocking) before each step's own item and after each
++#                               relay item, notifying every row-block that has already landed
++#   AGRMS_NOTIFY_MCAST=1        one multicast increment per (row-block, virtual rectangle of the active members): the
++#                               landed semaphore counts row-blocks of the stream (members wait >= block(last row) + 1)
++#   AGRMS_NOTIFY_PLACE=1        (probe) forward row order with the placement recomputed per row (REVERSE's code shape)
++#   AGRMS_NOTIFY_WRITE=1        absolute-value 4-byte NoC write (li + 1) instead of the atomic increment
++NOTIFY_KNOBS = [
++    (f"AGRMS_NOTIFY_{n}", "1")
++    for n in ("SPLIT_FINAL", "STATEFUL", "REVERSE", "WRITE", "HOIST", "TABLE", "LATE", "EARLY", "MCAST", "PLACE")
++    if os.environ.get(f"AGRMS_NOTIFY_{n}", "0") == "1"
++]
++if os.environ.get("AGRMS_NOTIFY_REPEAT"):  # probe only: repeat each notification write N times (cost per write)
++    NOTIFY_KNOBS.append(("AGRMS_NOTIFY_REPEAT", os.environ["AGRMS_NOTIFY_REPEAT"]))
+
+
+ def _div_up(a, b):
+@@ -880,7 +903,43 @@
+     defines = [("AGRMS_HAS_GAMMA", "1")] if has_gamma else []
+     ablate = [(f"AGRMS_ABLATE_{PERF_ABLATE}", "1")] if PERF_ABLATE else []
+     ablate += [("AGRMS_PROFILE_ZONES", "1")] if PROFILE_ZONES else []
++    ablate += NOTIFY_KNOBS
+     defines += ablate
++    notify_mc_args = []
++    if ("AGRMS_NOTIFY_MCAST", "1") in NOTIFY_KNOBS:
++        # members: the block count threshold of their rows (row r is in row-block r // xfer_rows)
++        defines += [("AGRMS_NOTIFY_MCAST_XFER", str(xfer_rows)), ("AGRMS_NOTIFY_MCAST_RPG", str(rows_per_group))]
++        # rectangles of the active members contiguous in VIRTUAL coordinates (one virtual mapping serves every chip,
++        # as for the unicast addresses): every core of a rectangle is an active member, so a multicast reaches
++        # program cores only. Members a stream does not touch ignore its semaphore (n_s = 0).
++        vset = {(lambda v: (v.x, v.y))(virt(c)) for c in active}
++        runs = {}
++        for vy in sorted({y for _, y in vset}):
++            xs = sorted(x for x, yy in vset if yy == vy)
++            st = pv = xs[0]
++            for vx in xs[1:] + [None]:
++                if vx is not None and vx == pv + 1:
++                    pv = vx
++                    continue
++                runs.setdefault((st, pv), []).append(vy)
++                if vx is not None:
++                    st = pv = vx
++        mc_rects = []
++        for (x0, x1), ys in runs.items():
++            y0 = py = ys[0]
++            for vy in ys[1:] + [None]:
++                if vy is not None and vy == py + 1:
++                    py = vy
++                    continue
++                mc_rects.append((x0, y0, x1, py))
++                if vy is not None:
++                    y0 = py = vy
++        assert sum((x1 - x0 + 1) * (y1 - y0 + 1) for x0, y0, x1, y1 in mc_rects) == len(vset)
++        notify_mc_args = [len(mc_rects)]
++        for x0, y0, x1, y1 in mc_rects:
++            notify_mc_args += [x0 | (y0 << 16), x1 | (y1 << 16), (x1 - x0 + 1) * (y1 - y0 + 1)]
++        if os.environ.get("AGRMS_DUMP_GEOM"):
++            print(f"GEOM mcast rects {mc_rects}")
+
+     ready_sem = ready_semaphore(mesh_device, port_union)
+     ready_addr = int(ttnn.get_global_semaphore_address(ready_sem))
+@@ -977,6 +1036,7 @@
+         "all_gather_rms_norm",
+         PERF_ABLATE,
+         PROFILE_ZONES,
++        tuple(NOTIFY_KNOBS),
+         FORCE_K,
+         NATIVE_SHARD,
+         PRESCALE_GAMMA,
+@@ -1060,6 +1120,11 @@
+                     c == 1 for c in cover
+                 ), f"all_gather_rms_norm: landing coverage {cover} (chip {coord}, m {m}, row parity {par})"
+
++        if os.environ.get("AGRMS_DUMP_GEOM"):
++            print(f"GEOM chip {coord} p={p} k={k} n_groups={n_groups} xfer_rows={xfer_rows} R_t={geo.R_t} "
++                  f"Wt_lp={geo.Wt_lp} run_pages={run_pages} ws={ws} active={active[:n_groups*k]}")
++            for key, (ents, cnt) in stream_cnt.items():
++                print(f"GEOM   stream {key} in_ents={ents} cnt={cnt} out={entries_of(ch.sends[key[0]], key[1])}")
+         # ---- member kernels ----
+         port_xy = [(lambda v: v.x | (v.y << 16))(virt(c)) for c in port_cores]
+         reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+@@ -1127,6 +1192,7 @@
+                     + [_pack_entry(*e) for e in in_all]
+                     + cnt
+                     + [x_addr]
++                    + notify_mc_args
+                 )
+                 sending = has_sends(coord, d, l)
+                 # the peer's opposite-direction port (same link) sends into me: it waits for my ready
+--- a/kernels/all_gather_rms_norm_port_reader.cpp
++++ b/perf_experiments/landing_notify_fanout/agrms_copy/kernels/all_gather_rms_norm_port_reader.cpp
+@@ -24,6 +24,59 @@
+
+ using namespace agrms_port;
+
++#ifdef AGRMS_NOTIFY_STATEFUL
++// landing_notify_fanout (perf experiment), raw stateful NoC atomic increment. Bypasses noc_semaphore_inc
++// (dataflow_api.h): every call re-programs the whole AT command buffer (ret addr, target lo / mid / coordinate,
++// NOC_CTRL, AT_LEN_BE, AT_DATA, CMD_CTRL: ~8 uncached NoC register writes, ~100 ns per increment measured as
++// AG_FINAL_NOTIFY / 16 increments) although only the target core changes between the landing notifications of one
++// burst. Here the burst-invariant registers (local semaphore address, ctrl, opcode, increment) are written once per
++// burst; each increment writes the target coordinate and issues. Same transaction (non-posted INCR_GET, wrap 31,
++// unicast write VC, counted in noc_nonposted_atomics_acked so noc_async_atomic_barrier still covers it). The kernel's
++// AT command buffer is used by nothing else in between (the reader's NoC reads use the read command buffer).
++FORCE_INLINE void notify_inc_set_state(uint32_t l1_addr, uint32_t incr) {
++    const uint64_t addr = get_noc_addr(l1_addr);
++    while (!noc_cmd_buf_ready(noc_index, write_at_cmd_buf));
++    NOC_CMD_BUF_WRITE_REG(noc_index, write_at_cmd_buf, NOC_TARG_ADDR_LO, (uint32_t)(addr & 0xFFFFFFFF));
++    NOC_CMD_BUF_WRITE_REG(noc_index, write_at_cmd_buf, NOC_TARG_ADDR_MID, (uint32_t)(addr >> 32) & NOC_PCIE_MASK);
++    NOC_CMD_BUF_WRITE_REG(
++        noc_index,
++        write_at_cmd_buf,
++        NOC_CTRL,
++        NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(NOC_UNICAST_WRITE_VC) | NOC_CMD_RESP_MARKED | NOC_CMD_AT);
++    NOC_CMD_BUF_WRITE_REG(
++        noc_index,
++        write_at_cmd_buf,
++        NOC_AT_LEN_BE,
++        NOC_AT_INS(NOC_AT_INS_INCR_GET) | NOC_AT_WRAP(31) | NOC_AT_IND_32((addr >> 2) & 0x3) | NOC_AT_IND_32_SRC(0));
++    NOC_CMD_BUF_WRITE_REG(noc_index, write_at_cmd_buf, NOC_AT_DATA, incr);
++}
++// xy: packed virtual (x | y << 16), as in the common args
++FORCE_INLINE void notify_inc_with_state(uint32_t xy) {
++    const uint64_t addr = get_noc_addr(xy & 0xFFFF, xy >> 16, 0);
++    while (!noc_cmd_buf_ready(noc_index, write_at_cmd_buf));
++    NOC_CMD_BUF_WRITE_REG(
++        noc_index,
++        write_at_cmd_buf,
++        NOC_TARG_ADDR_COORDINATE,
++        (uint32_t)(addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
++    NOC_CMD_BUF_WRITE_REG(noc_index, write_at_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
++    noc_nonposted_atomics_acked[noc_index] += 1;
++}
++// coord: the AT command buffer's target-coordinate register value, precomputed
++FORCE_INLINE void notify_inc_coord(uint32_t coord) {
++    while (!noc_cmd_buf_ready(noc_index, write_at_cmd_buf));
++    NOC_CMD_BUF_WRITE_REG(noc_index, write_at_cmd_buf, NOC_TARG_ADDR_COORDINATE, coord);
++    NOC_CMD_BUF_WRITE_REG(noc_index, write_at_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
++    noc_nonposted_atomics_acked[noc_index] += 1;
++}
++FORCE_INLINE uint32_t notify_coord_of(uint32_t xy) {
++    return (uint32_t)(get_noc_addr(xy & 0xFFFF, xy >> 16, 0) >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK;
++}
++#endif
++#if defined(AGRMS_NOTIFY_TABLE) && !(defined(AGRMS_NOTIFY_STATEFUL) && defined(AGRMS_NOTIFY_HOIST))
++#error "AGRMS_NOTIFY_TABLE needs AGRMS_NOTIFY_STATEFUL and AGRMS_NOTIFY_HOIST"
++#endif
++
+ void kernel_main() {
+ #if defined(AGRMS_ABLATE_EMPTY) || defined(AGRMS_ABLATE_LOCAL)
+     return;
+@@ -68,6 +121,10 @@
+     const uint32_t cnt_idx = a;
+     a += k;
+     const uint32_t x_addr = get_arg_val<uint32_t>(a++);
++#ifdef AGRMS_NOTIFY_MCAST
++    const uint32_t n_mc_rects = get_arg_val<uint32_t>(a++);
++    const uint32_t mc_idx = a;  // per rectangle: (x0 | y0 << 16), (x1 | y1 << 16), core count (virtual coordinates)
++#endif
+
+     const Geom g{
+         page_bytes,
+@@ -121,28 +178,153 @@
+     };
+
+     uint32_t next_notify = 0;
++#ifdef AGRMS_NOTIFY_HOIST
++    // the members this stream touches (flag 1), once: the per-row loop then visits only them
++    uint32_t notified[k];
++    uint32_t n_notified = 0;
++    for (uint32_t m = 0; m < k; ++m) {
++        if (get_arg_val<uint32_t>(cnt_idx + m) != 0) {
++            notified[n_notified++] = m;
++        }
++    }
++#endif
++#ifdef AGRMS_NOTIFY_TABLE
++    // target coordinates of every (group, notified member), in local memory (n_groups * k words at most), memoized
++    // per group on its first notification (a group's later rows -- the critical last row-blocks once n_groups < R_t --
++    // then cost one coordinate write + issue per member). Cleared just before the first notification.
++    constexpr uint32_t NO_COORD = 0xFFFFFFFFu;
++    uint32_t coords[n_groups * k];
++    bool coords_cleared = false;
++    auto clear_coords = [&]() {
++        if (!coords_cleared) {
++            for (uint32_t i = 0; i < n_groups * n_notified; i += n_notified) {
++                coords[i] = NO_COORD;
++            }
++            coords_cleared = true;
++        }
++    };
++#endif
++#ifdef AGRMS_NOTIFY_WRITE
++    // landing_notify_fanout: absolute-value notification. Each (member, stream) landed semaphore has exactly one
++    // writer (this port), and its value after local row li landed is li + 1 (the flags are 0/1), so a plain 4-byte NoC
++    // write of li + 1 replaces the atomic increment: writes pipeline (the command buffer frees at injection, acks are
++    // collected by the final write barrier), while each non-posted atomic holds the AT command buffer ~100 ns.
++    // Same source, destination and static VC -> the writes to one semaphore arrive in issue order (monotonic).
++    // Source words: 16 B-aligned slots (L1 alignment of the destination semaphore) in this port core's otherwise
++    // unused cb_x_landing (allocated on the port cores only so its base address matches the members').
++    const uint32_t val_tbl = get_write_ptr(agrms_cb::cb_x_landing);
++#endif
++    auto notify_row = [&](uint32_t grp, uint32_t li) {
++#ifdef AGRMS_NOTIFY_TABLE
++        uint32_t* cr = coords + grp * n_notified;
++        if (n_notified != 0 && cr[0] == NO_COORD) {
++            for (uint32_t j = 0; j < n_notified; ++j) {
++                cr[j] = notify_coord_of(get_common_arg_val<uint32_t>(grp * k + notified[j]));
++            }
++        }
++        for (uint32_t j = 0; j < n_notified; ++j) {
++            notify_inc_coord(cr[j]);
++        }
++        return;
++#endif
++#ifdef AGRMS_NOTIFY_WRITE
++        const uint32_t src = val_tbl + li * 16;
++        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src) = li + 1;  // same value every time: no in-flight hazard
++#endif
++#ifdef AGRMS_NOTIFY_HOIST
++        for (uint32_t j = 0; j < n_notified; ++j) {
++            const uint32_t m = notified[j];
++            {
++                constexpr uint32_t c = 1;
++#else
++        for (uint32_t m = 0; m < k; ++m) {
++            const uint32_t c = get_arg_val<uint32_t>(cnt_idx + m);
++            if (c != 0) {
++#endif
++                const uint32_t xy = get_common_arg_val<uint32_t>(grp * k + m);
++#ifdef AGRMS_NOTIFY_WRITE
++#ifndef AGRMS_NOTIFY_REPEAT
++#define AGRMS_NOTIFY_REPEAT 1
++#endif
++                for (uint32_t rep = 0; rep < AGRMS_NOTIFY_REPEAT; ++rep) {  // probe only: cost per write
++                    noc_async_write_one_packet(src, get_noc_addr(xy & 0xFFFF, xy >> 16, landed_addr), 4);
++                }
++#elif defined(AGRMS_NOTIFY_STATEFUL)
++                notify_inc_with_state(xy);  // c is a 0/1 flag: the burst state increments by 1
++#else
++                noc_semaphore_inc(get_noc_addr(xy & 0xFFFF, xy >> 16, landed_addr), c);
++#endif
++            }
++        }
++    };
+     auto notify_rows = [&](uint32_t xb) {
++#ifdef AGRMS_NOTIFY_MCAST
++        // one multicast +1 per rectangle of the active members: sem_landed[stream] counts this stream's row-blocks
++        for (uint32_t i = 0; i < n_mc_rects; ++i) {
++            const uint32_t lo = get_arg_val<uint32_t>(mc_idx + 3 * i);
++            const uint32_t hi = get_arg_val<uint32_t>(mc_idx + 3 * i + 1);
++            const uint32_t n = get_arg_val<uint32_t>(mc_idx + 3 * i + 2);
++            const uint64_t mc =
++                noc_index == 0
++                    ? get_noc_multicast_addr(lo & 0xFFFF, lo >> 16, hi & 0xFFFF, hi >> 16, landed_addr)
++                    : get_noc_multicast_addr(hi & 0xFFFF, hi >> 16, lo & 0xFFFF, lo >> 16, landed_addr);
++            noc_semaphore_inc_multicast(mc, 1, n);
++        }
++        return;
++#endif
+         const uint32_t r0 = xb * xfer_rows;
+         const uint32_t rows = g.item_rows(xb);
+         uint32_t grp, li;
++#ifdef AGRMS_NOTIFY_REVERSE
++        for (uint32_t r = r0 + rows; r-- > r0;) {
++            g.place(r, grp, li);
++            notify_row(grp, li);
++        }
++#elif defined(AGRMS_NOTIFY_PLACE)
++        for (uint32_t r = r0; r < r0 + rows; ++r) {  // probe: forward order, placement recomputed per row
++            g.place(r, grp, li);
++            notify_row(grp, li);
++        }
++#else
+         g.place(r0, grp, li);
+         for (uint32_t r = r0; r < r0 + rows; ++r, g.advance(grp, li)) {
+-            for (uint32_t m = 0; m < k; ++m) {
+-                const uint32_t c = get_arg_val<uint32_t>(cnt_idx + m);
+-                if (c != 0) {
+-                    const uint32_t xy = get_common_arg_val<uint32_t>(grp * k + m);
+-                    noc_semaphore_inc(get_noc_addr(xy & 0xFFFF, xy >> 16, landed_addr), c);
+-                }
+-            }
++            notify_row(grp, li);
+         }
++#endif
+     };
+     // upstream complete through step s_done: notify every row-block whose last incoming item is in it
+     auto notify_until = [&](int32_t s_done) {
++#ifdef AGRMS_NOTIFY_STATEFUL
++        bool armed = false;
++#endif
+         while (next_notify < n_xb &&
+                static_cast<int32_t>(next_notify + static_cast<uint32_t>(last_in) * relay_lag) <= s_done) {
++#ifdef AGRMS_NOTIFY_STATEFUL
++            if (!armed) {
++#ifdef AGRMS_NOTIFY_TABLE
++                clear_coords();
++#endif
++                notify_inc_set_state(landed_addr, 1);
++                armed = true;
++            }
++#endif
+             notify_rows(next_notify++);
+         }
+     };
++#ifdef AGRMS_NOTIFY_EARLY
++    // non-blocking: notify every row-block whose last incoming item has already landed (polled between items)
++    auto try_notify = [&]() {
++        while (has_in && next_notify < n_xb) {
++            const int32_t s = static_cast<int32_t>(next_notify + static_cast<uint32_t>(last_in) * relay_lag);
++            invalidate_l1_cache();
++            if (*arrived < upstream_through(s)) {
++                break;
++            }
++            AGRMS_ZONE("AG_EARLY_NOTIFY");
++            notify_until(s);
++        }
++    };
++#endif
+
+     // Batches end at the next multiple of `group` chunks in the CB (2 x group chunks: a reservation never wraps) or
+     // at the end of an item (a relay waits on its upstream; an unpushed tail would hold every downstream back).
+@@ -212,6 +394,9 @@
+         const uint32_t steps = n_xb + (E_out - 1) * relay_lag;
+         const Entry own = out_entry(0);
+         for (uint32_t t = 0; t < steps; ++t) {
++#ifdef AGRMS_NOTIFY_EARLY
++            try_notify();
++#endif
+             if (t < n_xb && !own.empty()) {
+                 if (t < dram_items) {
+                     AGRMS_ZONE("AG_INPUT_ITEM");
+@@ -227,8 +412,10 @@
+                     AGRMS_ZONE("AG_ARRIVAL_WAIT");  // wait only (the notify fan-out has its own zone)
+                     noc_semaphore_wait_min(arrived, upstream_through(s));
+                 }
++#ifndef AGRMS_NOTIFY_LATE
+                 AGRMS_ZONE("AG_STEP_NOTIFY");
+                 notify_until(s);
++#endif
+             }
+             for (uint32_t e = 1; e < E_out; ++e) {
+                 if (t < e * relay_lag) {
+@@ -239,12 +426,35 @@
+                     const Entry en = out_entry(e);
+                     if (!en.empty()) {
+                         stream_item(en, xb, false);
++#ifdef AGRMS_NOTIFY_EARLY
++                        try_notify();
++#endif
+                     }
+                 }
+             }
++#ifdef AGRMS_NOTIFY_LATE
++            // the step's relays are pushed to the sender first (downstream chips' critical transport), then the
++            // landing notifications of the blocks the same arrival wait completed
++            if (has_in && t >= relay_lag) {
++                AGRMS_ZONE("AG_STEP_NOTIFY");
++                notify_until(static_cast<int32_t>(t - relay_lag));
++            }
++#endif
+         }
+     }
+     if (has_in) {
++#ifdef AGRMS_NOTIFY_SPLIT_FINAL
++        // each remaining row-block as soon as its own last item has landed (not after the whole stream)
++        while (next_notify < n_xb) {
++            const int32_t s = static_cast<int32_t>(next_notify + static_cast<uint32_t>(last_in) * relay_lag);
++            {
++                AGRMS_ZONE("AG_FINAL_ARRIVAL");
++                noc_semaphore_wait_min(arrived, upstream_through(s));
++            }
++            AGRMS_ZONE("AG_FINAL_NOTIFY");
++            notify_until(s);
++        }
++#endif
+         {
+             AGRMS_ZONE("AG_FINAL_ARRIVAL");  // the last relayed items from upstream (wait only)
+             noc_semaphore_wait_min(arrived, total_in);
+@@ -253,4 +463,7 @@
+         notify_until(0x7FFFFFFF);
+     }
+     noc_async_atomic_barrier();
++#ifdef AGRMS_NOTIFY_WRITE
++    noc_async_write_barrier();
++#endif
+ }
+--- a/kernels/all_gather_rms_norm_reader.cpp
++++ b/perf_experiments/landing_notify_fanout/agrms_copy/kernels/all_gather_rms_norm_reader.cpp
+@@ -191,9 +191,17 @@
+                 continue;  // perf probe: no transport
+ #endif
+                 if (n_s != 0) {
++#ifdef AGRMS_NOTIFY_MCAST
++                    // landing_notify_fanout: sem s counts the stream's landed row-blocks (multicast to every member)
++                    const uint32_t il = i0 + rows - 1;
++                    const uint32_t r = AGRMS_NOTIFY_MCAST_RPG == 0 ? grp + il * n_groups : grp * AGRMS_NOTIFY_MCAST_RPG + il;
++                    noc_semaphore_wait_min(
++                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(s)), r / AGRMS_NOTIFY_MCAST_XFER + 1);
++#else
+                     // stream s notifies on semaphore id s
+                     noc_semaphore_wait_min(
+                         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(s)), (i0 + rows) * n_s);
++#endif
+                 }
+             }
+         }
