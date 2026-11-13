@@ -334,7 +334,6 @@
         export KIMI_K3_CKPT=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-dequantized
         python3 -m pytest -vvv --tb=short \
           models/demos/deepseek_v3_d_p/tests/kimi_k3/test_golden_contract.py \
-          models/demos/deepseek_v3_d_p/tests/kimi_k3/test_k31_golden.py \
           models/demos/deepseek_v3_d_p/tests/kimi_k3/test_layer_schedule.py \
           models/demos/deepseek_v3_d_p/tests/kimi_k3/test_cache_contract.py \
           models/demos/deepseek_v3_d_p/tests/kimi_k3/test_runtime_contract.py \
@@ -348,11 +347,6 @@
           models/demos/deepseek_v3_d_p/tests/kimi_k3/test_kda_golden.py \
           models/demos/deepseek_v3_d_p/tests/test_kv_ack.py \
           models/demos/deepseek_v3_d_p/tests/attn_res/model/test_attn_res_pipeline_split.py
-        # K3.1 real checkpoint: the indexer lands under the names TtIndexer loads. The test skips when the
-        # checkpoint is not mounted, so the section fails unless both tests passed.
-        set -o pipefail
-        python3 -m pytest -vvv --tb=short models/demos/deepseek_v3_d_p/tests/kimi_k3/test_k31_weights.py | tee /tmp/k31_weights.out
-        grep -qE "\b2 passed" /tmp/k31_weights.out || { echo "::error::test_k31_weights.py did not pass (skipped?): is the K3.1 checkpoint mounted?"; exit 1; }
         python3 -m pytest -vvv --tb=short -k "torusxy-mesh-8x4" \
           models/demos/deepseek_v3_d_p/tests/attn_res/model/test_forward_loop.py::test_split_loop_matches_reference
         # AttnRes determinism on the full torus: each op, then a whole block of reads, many runs without a sync.
@@ -396,10 +390,18 @@
 
     # K3.1's counterpart of [3/5]: its 24 full-attention layers are Gated DSA, so K3's MLA chunked tests become
     # test_sparse_mla.py's kimi_k3_1 8x4 matrix vs MLACPU (8 tests, random weights + on-the-fly CPU truth).
-    # Measured 4.4 min pytest time on bh-glx-110-c10u14 (2026-11-07). Last, so a K3.1 failure masks no K3 section.
+    # Measured 4.4 min pytest time on bh-glx-110-c10u14 (2026-11-07). First the K3.1 assets the runner and the
+    # depth ladder read (golden trace, real checkpoint), a few seconds. Last, so a K3.1 failure (a missing K3.1
+    # golden or checkpoint included) masks no K3 section.
     k31_dsa_mla() (
       timeout -k 2m 12m mpirun --bind-to none --pernode --tag-output bash -lc '
+        set -eo pipefail
         export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest -vvv --tb=short models/demos/deepseek_v3_d_p/tests/kimi_k3/test_k31_golden.py
+        # K3.1 real checkpoint: the indexer lands under the names TtIndexer loads. The test skips when the
+        # checkpoint is not mounted, so the section fails unless both tests passed.
+        python3 -m pytest -vvv --tb=short models/demos/deepseek_v3_d_p/tests/kimi_k3/test_k31_weights.py | tee /tmp/k31_weights.out
+        grep -qE "\b2 passed" /tmp/k31_weights.out || { echo "::error::test_k31_weights.py did not pass (skipped?): is the K3.1 checkpoint mounted?"; exit 1; }
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla.py -k "kimi_k3_1 and shape-8x4" -vvv --tb=short
       '
     )
@@ -412,7 +414,7 @@
     k3_mla || exit $?
     echo "===== [4/5] (Kimi-K3-2.8T) MLA chunked accuracy 55k@5k vs golden trace ====="
     k3_mla_trace || exit $?
-    echo "===== [5/5] (Kimi-K3.1) sparse MLA accuracy, chunked 5k@1k, pad overflow, determinism ====="
+    echo "===== [5/5] (Kimi-K3.1) golden and checkpoint, sparse MLA accuracy, chunked 5k@1k, pad overflow, determinism ====="
     k31_dsa_mla || exit $?
     echo "===== all 5 sections passed ====="
   test_type: k3_accuracy_suite
