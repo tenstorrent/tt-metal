@@ -3,6 +3,7 @@
 """CPU encoder lifetime controls, including real Tracer transitions with fake native transfers."""
 import ast
 import os
+import sys
 import time
 import unittest
 from pathlib import Path
@@ -11,7 +12,10 @@ from typing import overload
 from unittest.mock import Mock, patch
 
 import torch
-from test_ltx_audio_trace_control import definitions
+
+# pytest.ini runs --import-mode=importlib, which does not put this directory on sys.path.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from test_ltx_audio_trace_control import definitions  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 VAE = ROOT / "models/vae/vae_ltx.py"

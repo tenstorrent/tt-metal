@@ -142,6 +142,19 @@ def test_agmm_k2048_lookup(monkeypatch):
     assert attn_mod._to_out_fabric_agmm_config(4480, 2048, 512, grid) is None
 
 
+# An installed ttnn built from an older tree may lack ttnn.comparison (main #59638), which the model's imports
+# need; serve it from this tree's pure-Python copy, as the in-process tests' fixtures do.
+_IMPORT_COMPARISON = """
+import importlib.util, sys
+try:
+    import ttnn.comparison
+except ModuleNotFoundError:
+    spec = importlib.util.spec_from_file_location("ttnn.comparison", "ttnn/ttnn/comparison.py")
+    sys.modules["ttnn.comparison"] = mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+"""
+
+
 @pytest.mark.parametrize("env, expected", [(None, "True"), ("0", "False")])
 def test_v2a_skip_default_on(env, expected):
     import os
@@ -156,7 +169,7 @@ def test_v2a_skip_default_on(env, expected):
     root = str(pathlib.Path(tl.__file__).resolve().parents[5])
     e["PYTHONPATH"] = os.pathsep.join(p for p in (root, e.get("PYTHONPATH")) if p)
     out = subprocess.run(
-        [sys.executable, "-c", f"import {tl.__name__} as m; print(m.LTX_V2A_SKIP_PAD_MUL)"],
+        [sys.executable, "-c", _IMPORT_COMPARISON + f"import {tl.__name__} as m; print(m.LTX_V2A_SKIP_PAD_MUL)"],
         env=e,
         cwd=root,
         capture_output=True,
