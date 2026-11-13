@@ -101,7 +101,7 @@ inline void llk_pack_init_of_output(const std::uint32_t output_id, const std::ui
             constexpr std::uint32_t live =
                 1 | (ckernel::packer::llk_pack_mop_live<pack_mode, DST_SYNC_MODE>(pack_src_format, pack_dst_format, pack_tile_face_r_dim, pack_tile_num_faces) ? 2 : 0) |
                 (ckernel::packer::llk_pack_width_single(pack_src_format, pack_dst_format) ? 0 : 4);
-            llk_pack_init_impl<pack_mode, zero_output, true, true, live>(
+            llk_pack_init_impl<pack_mode, zero_output, true, skip_packer_strides, live>(
                 pack_src_format[output_id], pack_tile_face_r_dim[output_id], pack_tile_c_dim[output_id], pack_tile_num_faces[output_id], num_tiles, is_input_8bit_format);
             return;
         }

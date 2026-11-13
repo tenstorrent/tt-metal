@@ -3,7 +3,7 @@
 """Per-tile packs on output A alternating with output B, the two of different format and packer input width, with the compute API's
 default pack inits (pack_api_shim.h) after every reconfigure: hw_configure keeps the default program live, inits skip what is live
 (pack_strides_width for the strides, pack_mop_dirty for the MOP). Init modes: n none, l one-tile, c counted one-tile, z zero-output then
-one-tile, m two-tile then one-tile. Checked against the golden (A: output of the even blocks, B: output of the odd blocks).
+one-tile, m two-tile then one-tile, s counted with the address modes and strides skipped (SDPA streaming's refresh). Checked against the golden (A: output of the even blocks, B: output of the odd blocks).
 """
 
 import pytest
@@ -55,7 +55,7 @@ PAGE = {F32: 4096, B8: 1088, F16B: 2048}
 # (output A, output B): bf16, f32 and bfp8 outputs of different widths, both orders
 PAIRS = [(F16B, F32), (F32, F16B), (B8, F32), (B8, F16B), (F16B, B8)]
 TILES = [1, 2]
-MODES = ["n", "l", "c", "z", "m"]
+MODES = ["n", "l", "c", "z", "m", "s"]
 
 
 def _golden(src, fmt, first_tile, tiles):

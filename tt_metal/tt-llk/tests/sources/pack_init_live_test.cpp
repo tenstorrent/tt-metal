@@ -203,7 +203,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 // The compute API's default pack inits between packs of two outputs of different widths, after hw_configure kept the
 // default program live: init_mode 'n' none, 'l' the one-tile init, 'c' a counted init of one tile, 'z' a zero-output
-// init then the one-tile init, 'm' a two-tile init then the one-tile init (the last two leave pack_mop_dirty set).
+// init then the one-tile init, 'm' a two-tile init then the one-tile init (the last two leave pack_mop_dirty set), 's' a
+// counted init that skips the address modes and strides.
 #if defined(ARCH_BLACKHOLE) && PACK_API_SHIM_PR
 static inline std::uint32_t alt_page_bytes(const std::uint32_t fmt)
 {
@@ -229,6 +230,11 @@ inline void live_init(const std::uint32_t cb)
     {
         pack_api_shim::pack_init(cb, 2);
         pack_api_shim::pack_init(cb);
+    }
+    else if constexpr (init_mode == 's')
+    {
+        // SDPA streaming's MOP-only refresh: the strides the reconfigure wrote stay.
+        pack_api_shim::pack_init<PackMode::Default, false, true, true>(cb, 1);
     }
 }
 #endif

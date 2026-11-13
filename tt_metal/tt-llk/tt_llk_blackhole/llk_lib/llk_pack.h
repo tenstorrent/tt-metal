@@ -400,10 +400,10 @@ inline void pack_init_apply(
 
     // live bit 0 (llk_pack_init_live): the address modes, strides and X counter are hw_configure's; the state store stays.
     // Bit 1 (llk_pack_mop_live): its one-tile MOP too, unless an init wrote another (pack_mop_dirty, set by llk_pack_init).
-    // Bit 2: the CBs differ in width, so the strides are written where pack_strides_width differs.
+    // Bit 2: the CBs differ in width, so the strides are written where pack_strides_width differs, unless the caller skips them.
     if constexpr (live != 0)
     {
-        if ((live & 4) != 0 && datum_size_in_bytes(pack_src_format) != pack_strides_width)
+        if ((live & 4) != 0 && !skip_packer_strides && datum_size_in_bytes(pack_src_format) != pack_strides_width)
         {
             set_packer_strides<pack_mode>(pack_src_format, tile_c_dim);
         }
