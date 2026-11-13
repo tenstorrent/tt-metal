@@ -188,7 +188,16 @@ class Hy4ChainLayer:
 
             W = load_moe_layer(L, W=ch.W, prefix="mtp.0." if self.mtp else None)
             self.t_read = time.time() - t0
-            self.blk = Hy4MoEBlock(md, W, batch_per_device=1)
+            self.blk = Hy4MoEBlock(
+                md,
+                W,
+                batch_per_device=1,
+                buffers=ch.moe_buffers if os.environ.get("HY4_SHARE_MOE_BUF", "1") == "1" else None,
+            )
+            if ch.moe_buffers is None:
+                ch.moe_buffers = (
+                    self.blk.decode.buffers
+                )  # dispatch/combine scratch shared by all layers (as the DSV4 model does)
             self.blk.warmup()
             self.um = Hy4UnifiedMoE(
                 md, L, ring=(self.blk.decode.expert_state.tt_w0_w1, self.blk.decode.expert_state.tt_w2)
@@ -293,6 +302,7 @@ class Hy4Chain:
             idx_rope_first if idx_rope_first is not None else os.environ.get("HY4_IDX_ROPE_FIRST", "0") == "1"
         )
         self.layers = []
+        self.moe_buffers = None
         self.load_log = []
         self._head = None
 
