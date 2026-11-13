@@ -486,3 +486,37 @@ def test_a_chained_row_must_be_a_predecessor_row(chained, expect_error):
     res0 = _host_verify(eng, torch.zeros(B, T, dtype=torch.int64), [100, 200, -1, 300], [0, 0, 0, 0])
     with expect_error(ValueError, "are not rows of the predecessor"):
         _chained_verify(eng, res0, [104, 204, 300, 304], [K] * B)
+
+
+def test_a_request_released_before_its_propose_keeps_the_rope_delta_it_ran_with(chained):
+    """Under asynchronous scheduling a request can finish, and its slot be released (M-RoPE delta reset to 0), between
+    its last verify and that verify's propose; with a chained verify that is the normal order (the plugin releases
+    finished requests before it builds the chained step). The propose checks the device's drafter pack with the deltas
+    the verify ran with, so a finished multimodal row is not a mismatch."""
+    eng, log, state = chained
+    B, T, K = eng.B, eng.T, eng.K
+    eng._rope_deltas = [0, -7, 0, 5]
+    ids0 = torch.tensor([[7, 8, 9, 10]] * B)
+    tokens0 = torch.tensor([[1, 7, 8, 9]] * B)
+    starts0, nv0 = [100, 200, -1, 300], [3, 3, 0, 3]
+    ids0[2] = 0
+    tokens0[2] = 0
+    state["ids"] = [ids0, torch.zeros(B, T, dtype=torch.int64), ids0, torch.zeros(B, T, dtype=torch.int64)]
+    # O04: the next build drains the verify after the release.
+    res0 = _host_verify(eng, tokens0, starts0, nv0)
+    eng.release(3)
+    committed, counts = _walk(res0, tokens0, nv0)
+    out = _propose(eng, starts0, committed, counts)
+    assert out.num_valid.tolist() == [K, K, 0, K] and eng.one_enqueue_host_proposes == 0
+    # O05: row 1 finishes; the chained verify runs it as a padding row.
+    eng._rope_deltas = [0, -7, 0, 5]
+    eng._active.add(3)
+    res0 = _host_verify(eng, tokens0, starts0, nv0)
+    eng.release(1)
+    res1 = _chained_verify(eng, res0, [s + T for s in starts0], [K] * B, rows=[True, False, False, True])
+    assert eng.chained_steps == 1 and log["overlay"][-1][2, :B].tolist() == [0, 0, 0, 5]
+    committed, counts = _walk(res0, tokens0, nv0)
+    _propose(eng, starts0, committed, counts)
+    succ = res1.argmax_ids
+    committed1, counts1 = _walk(res1, succ.tokens, succ.num_valid.tolist())
+    _propose(eng, succ.p0.where(succ.active, torch.tensor(-1)).tolist(), committed1, counts1)

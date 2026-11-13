@@ -99,8 +99,23 @@ class PendingVerify:
     first asks, and touches no engine state; result() returns the ids with columns past each row's valid drafts set to
     PLACEHOLDER_TOKEN_ID, as a synchronous verify returns them."""
 
-    def __init__(self, B, K, num_valid, active, pt, cap_blocks, no_draft, plan=None, sample_plan=None, reads=None):
+    def __init__(
+        self,
+        B,
+        K,
+        num_valid,
+        active,
+        pt,
+        cap_blocks,
+        no_draft,
+        plan=None,
+        sample_plan=None,
+        reads=None,
+        rope_deltas=None,
+    ):
         self.B, self.K, self.T = int(B), int(K), int(K) + 1
+        # The slots' M-RoPE deltas the step ran with: a request released before its propose resets its slot's.
+        self.rope_deltas = None if rope_deltas is None else list(rope_deltas)
         self.num_valid = torch.as_tensor(num_valid).reshape(-1).to(torch.int64).clone()
         self.active = torch.as_tensor(active, dtype=torch.bool).reshape(-1).clone()
         self.pt, self.cap_blocks, self.no_draft = pt, cap_blocks, set(no_draft)
@@ -1657,9 +1672,10 @@ class MTPSpecEngine:
         dpt[torch.tensor([bool(d) for d in decline])] = self._scratch_block
         return dpt
 
-    def _rope_base(self, p0):
-        """Each user's RoPE table row of position ``p0[u]`` with its M-RoPE delta (spec_step.drafter_pack)."""
-        return rope_rows(p0, self._rope_deltas, self.model.rope_table_rows())
+    def _rope_base(self, p0, deltas=None):
+        """Each user's RoPE table row of position ``p0[u]`` with its M-RoPE delta (spec_step.drafter_pack): the slots'
+        current deltas, or ``deltas``."""
+        return rope_rows(p0, self._rope_deltas if deltas is None else deltas, self.model.rope_table_rows())
 
     def _propose_recorded(self, ctok, m, p0, decline, keep, pt):
         """One copy of the drafter pack (spec_step.drafter_pack of the committed block ``ctok``, the accepted drafts
@@ -2152,7 +2168,16 @@ class MTPBlockEngine(MTPSpecEngine):
             plan = self._one_enqueue_plan(start_pos, active, num_valid_drafts, sample_plan)
         nv = torch.zeros(B, dtype=torch.int64) if num_valid_drafts is None else num_valid_drafts
         step = PendingVerify(
-            B, self.K, nv, active, pt, self._last_cap_blocks, self._no_draft, plan=plan, sample_plan=sample_plan
+            B,
+            self.K,
+            nv,
+            active,
+            pt,
+            self._last_cap_blocks,
+            self._no_draft,
+            plan=plan,
+            sample_plan=sample_plan,
+            rope_deltas=self._rope_deltas,
         )
         step.tokens, step.p0 = tokens.clone(), torch.where(active, start_pos, 0)
         self._pending.append(step)
@@ -2285,9 +2310,10 @@ class MTPBlockEngine(MTPSpecEngine):
         if cut and prefix and not chained:
             self.one_enqueue_host_proposes += 1
             return super().propose_draft_tokens(*args)
-        want = drafter_pack(
-            q.ctok, m, plan.p0, plan.declined, plan.keep, self._rope_base(plan.p0), K, self.model.rope_table_rows()
-        ).to(torch.int64)
+        base = self._rope_base(plan.p0, step.rope_deltas)
+        want = drafter_pack(q.ctok, m, plan.p0, plan.declined, plan.keep, base, K, self.model.rope_table_rows()).to(
+            torch.int64
+        )
         if (cut and chained) or not torch.equal(want, step.pack[: want.shape[0], : want.shape[1]]):
             raise ValueError(
                 f"the runner committed {[mu + 1 for mu in m]} tokens per row, the device acceptance "
@@ -2483,7 +2509,9 @@ class MTPBlockEngine(MTPSpecEngine):
             rope_deltas=list(self._rope_deltas),
             step_staged=True,
         )
-        step = PendingVerify(B, self.K, nv, active, pt, self._last_cap_blocks, self._no_draft, plan=plan)
+        step = PendingVerify(
+            B, self.K, nv, active, pt, self._last_cap_blocks, self._no_draft, plan=plan, rope_deltas=self._rope_deltas
+        )
         predecessor.successor = step
         self._pending.append(step)
         self._enqueue_step_and_drafter(step)
@@ -2512,7 +2540,7 @@ class MTPBlockEngine(MTPSpecEngine):
         if pred.plan is not None:
             plan = pred.plan
             want = drafter_pack(
-                ctok, m.tolist(), plan.p0, plan.declined, plan.keep, self._rope_base(plan.p0), K,
+                ctok, m.tolist(), plan.p0, plan.declined, plan.keep, self._rope_base(plan.p0, pred.rope_deltas), K,
                 self.model.rope_table_rows(),
             ).to(torch.int64)  # fmt: skip
             if not torch.equal(want, pred.pack[: want.shape[0], : want.shape[1]]):
