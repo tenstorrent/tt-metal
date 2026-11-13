@@ -37,6 +37,9 @@ void kernel_main() {
     volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr[2] = {
         PacketHeaderPool::allocate_header(), PacketHeaderPool::allocate_header()};
     uint32_t hi = 0;
+    auto wall = []() { return *reinterpret_cast<volatile uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L); };
+    uint32_t t_cb = 0, t_send = 0, t_cred = 0;
+    const uint32_t tstart = wall();
 
     for (uint32_t e = 0; e < NEXP; ++e) {
         const uint32_t g = e % G, n = e / G;
@@ -47,15 +50,20 @@ void kernel_main() {
                 continue;
             }
             if (n >= 2) {  // the core freed expert n - 2's slot
+                const uint32_t a0 = wall();
                 volatile tt_l1_ptr uint32_t* cr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(icred + c * 16);
                 do {
                     invalidate_l1_cache();
                 } while (*cr < n - 1);
+                t_cred += wall() - a0;
             }
             for (uint32_t u0 = 0; u0 < WTOT; u0 += CHT) {
                 const uint32_t dst =
                     u0 < WGU ? wgu_ring + ((n & 1) * WGU + u0) * tb : wd_ring + ((n & 1) * WDN + u0 - WGU) * tb;
+                const uint32_t a1 = wall();
                 cb_wait_front(0, CHT);
+                const uint32_t a2 = wall();
+                t_cb += a2 - a1;
                 volatile tt_l1_ptr PACKET_HEADER_TYPE* h = hdr[hi];
                 hi ^= 1;
                 if (u0 + CHT < WTOT) {
@@ -79,10 +87,16 @@ void kernel_main() {
                             get_noc_addr(tx, ty, dst), get_noc_addr(tx, ty, warr), 1, true});
                 }
                 noc_async_writes_flushed();  // (payload read out of CB 0 and the header out of L1)
+                t_send += wall() - a2;
                 cb_pop_front(0, CHT);
             }
         }
     }
     conn.close();
     noc_async_full_barrier();
+    volatile tt_l1_ptr uint32_t* sst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(SST_ADDR);
+    sst[0] = t_cb;
+    sst[1] = t_send;
+    sst[2] = t_cred;
+    sst[3] = wall() - tstart;
 }

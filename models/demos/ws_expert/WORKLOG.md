@@ -216,3 +216,23 @@ Result (bfp8 x, BK 24, NX 15, 20 injectors, "l1" weights, 32 experts, steady sta
 M 64 (2 rows an expert) is bound by the weight landing (207 KB a core every ~7K cycles).
 Other modes at M 586: DRAM weights G 1/2/3/4 81.6 / 81.2 / 79.2 / 63.9%; bf16 x G 4 (BK 12 NX 15 / BK 24 NX 8)
 63.8 / 67.5% (PCC 0.99998; multicast-bound; BK 24 NX 15 bf16 does not fit L1).
+
+## Stage 5: weights over the fabric (ws_fab.py, kernels wf_*.cpp; LoudBox 2 x 4, FABRIC_2D, 15232 B payload)
+Step 1: one receiving chip R = (0, 1) (3 neighbours, 2 links each = 6 connections) runs the 80-core group program
+without injectors; the neighbours only send. A sender core a link: BRISC reads the target cores' slices from its
+chip's DRAM, NCRISC sends 24-tile (13.8 KB) packets straight into R's 2-slot rings, the last packet of a slice fused
+with an atomic inc of the core's warr word (the arrival counter became an L1 tensor word so other chips know its
+address). R's cores write freed-slot counts to a relay core on R, which forwards each change to the sender core's
+credit word by fabric inline write. Targets dealt round-robin over the 6 connections.
+- First version: G 1 82%, G 4 M 2048 81%, but G 4 M 586 30% at 61 GB/s of weights: senders waited on their DRAM
+  reader 55% of the time; the reader was issue-bound (~58 cycles a 576 B page read, ~10 GB/s a sender). 4 chunks in
+  flight (transaction ids): 76 GB/s.
+- Senders' DRAM layout made chunk-contiguous (slice_layout: chunk q's 24 tiles are pages (q // 8) 24 * 8 + q % 8 + 8 k,
+  i.e. consecutive in one bank): one 13.8 KB read a chunk. 159 GB/s into R; senders now ~85% busy sending.
+| G (cores) | M | cycles / expert | util tile | util useful | weights in | pcc |
+|---|---|---|---|---|---|---|
+| 1 (20) | 586 | 136,146 | 80.4% | 77.5% | 41 GB/s | 0.99994 |
+| 4 (80) | 586 | 35,574 | 76.9% | 74.1% | 157 GB/s | 0.99994 |
+| 4 (80) | 2048 | 117,068 | 78.7% | 78.7% | 48 GB/s | 0.99994 |
+Same as the on-chip L1-landing numbers: the fabric is not the limit for one receiver with 6 incoming links
+(~26 GB/s a connection used).
