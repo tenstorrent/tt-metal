@@ -453,7 +453,11 @@ constexpr std::uint32_t matmul_prod_key_ct = 0, matmul_prod_key_rt = 0;
 constexpr bool matmul_prod_keyed    = matmul_prod_key_ct != 0 && matmul_prod_key_rt != 0;
 constexpr bool matmul_prod_end_fold = (dest_sync == ckernel::DstSync::SyncFull && matmul_prod_keyed) || matmul_half_end_fold_k;
 #define MATMUL_PROD_TINY_16_ROWS !(dest_sync == ckernel::DstSync::SyncHalf && is_fp32_dest_acc_en)
-#define MATMUL_PROD_KEYS         matmul_prod_key_ct, matmul_prod_key_rt, !matmul_prod_keyed
+// llk_math_matmul_bias_class
+constexpr bool matmul_prod_bias_write =
+    !matmul_prod_keyed || (matmul_prod_fidelity == ckernel::MathFidelity::HiFi2 && dest_sync == ckernel::DstSync::SyncHalf && is_fp32_dest_acc_en &&
+                           (matmul_prod_key_ct == 1 || matmul_prod_key_rt == 1));
+#define MATMUL_PROD_KEYS         matmul_prod_key_ct, matmul_prod_key_rt, matmul_prod_bias_write
 #define MATMUL_MATH_DEFAULT_ARGS matmul_prod_fidelity, THROTTLE_LEVEL, false, matmul_tile_mop, matmul_reuse_dir_k, false
 #define MATMUL_MATH_DEFAULT_INIT_ARGS \
     matmul_prod_fidelity, THROTTLE_LEVEL, false, matmul_tile_mop, 0, MATMUL_PROD_TINY_16_ROWS, matmul_prod_end_fold, matmul_reuse_dir_k, false, MATMUL_PROD_KEYS

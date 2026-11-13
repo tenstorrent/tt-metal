@@ -8,6 +8,7 @@
 #include <type_traits>
 #include "api/compute/common.h"
 #include "api/compute/sentinel/compute_kernel_sentinel.h"
+#include "api/compute/matmul_fe_mark.h"
 #include "llk_assert.h"
 #include "sanitizer/api.h"
 #ifdef TRISC_MATH
@@ -900,17 +901,17 @@ constexpr std::uint32_t matmul_fe_key(const std::uint32_t dim) {
     return (ct != 0xFFu && rt != 0xFFu) ? dim : 0;
 }
 
-// the unpack_auto_ttsync of a plain call: one value per kernel, so its init and calls agree
+// the unpack_auto_ttsync of a plain call: one value per kernel (MATMUL_FE_MARK), so its init and calls agree
+template <std::size_t mark>
 constexpr std::uint32_t matmul_fe_unpack_ttsync() {
 #if defined(UCK_CHLKC_UNPACK)
-    return llk_unpack_AB_matmul_kernel_ttsync() ? 1 : 0;
+    return (mark == 1 && llk_unpack_AB_matmul_kernel_ttsync()) ? 1 : 0;
 #else
     return 0;
 #endif
 }
 
-// mark: unused; the unpack and pack init macro passes sizeof(matmul_fe_mark::set<0>) so the TRISC wrapper sees the
-// kernel names it
+// mark: MATMUL_FE_MARK() from the unpack and pack macros
 template <std::uint32_t in0_cb, std::uint32_t in1_cb, std::uint32_t ct, std::uint32_t rt, std::size_t mark = 0>
 ALWI void matmul_block_init_fe(
     const std::uint32_t call_line,
@@ -924,7 +925,7 @@ ALWI void matmul_block_init_fe(
     constexpr std::uint32_t AUTO = MATMUL_REUSE_DIR_AUTO;
     matmul_block_init<
         false,
-        matmul_fe_unpack_ttsync(),
+        matmul_fe_unpack_ttsync<mark>(),
         0,
         DataFormat::Invalid,
         0,
@@ -937,7 +938,7 @@ ALWI void matmul_block_init_fe(
         matmul_fe_key<ct, rt>(ct)>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim, call_line);
 }
 
-template <std::uint32_t in0_cb, std::uint32_t in1_cb, std::uint32_t ct, std::uint32_t rt>
+template <std::uint32_t in0_cb, std::uint32_t in1_cb, std::uint32_t ct, std::uint32_t rt, std::size_t mark = 0>
 ALWI void matmul_block_fe(
     const std::uint32_t call_line,
     std::uint32_t in0_cb_id,
@@ -953,7 +954,7 @@ ALWI void matmul_block_fe(
     constexpr std::uint32_t AUTO = MATMUL_REUSE_DIR_AUTO;
     matmul_block<
         false,
-        matmul_fe_unpack_ttsync(),
+        matmul_fe_unpack_ttsync<mark>(),
         0,
         DataFormat::Invalid,
         0,
@@ -971,34 +972,6 @@ ALWI void matmul_block_fe(
 }  // namespace ckernel
 
 #ifdef ARCH_BLACKHOLE
-// Whether the kernel source names a plain matmul_block_init: the macro completes set<0>, whose friend definition makes
-// used(tag<0>) callable; the TRISC wrapper reads is_used(0) after the kernel's include to turn Auto TTSync on once.
-namespace ckernel::matmul_fe_mark {
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wnon-template-friend"
-template <int>
-struct tag {
-    friend auto used(tag);
-};
-#pragma GCC diagnostic pop
-template <int N>
-struct set {
-    friend auto used(tag<N>) { return true; }
-};
-template <int N = 0, typename = decltype(used(tag<N>{}))>
-constexpr bool is_used(int) {
-    return true;
-}
-template <int N = 0>
-constexpr bool is_used(...) {
-    return false;
-}
-// every kernel build checks the pattern on spare tags, so a compiler that stops honouring it fails here, not silently
-inline constexpr auto self_test_set = sizeof(set<1>);
-static_assert(is_used<1>(0), "matmul_fe_mark: a completed set<N> must make used(tag<N>) callable");
-static_assert(!is_used<2>(0), "matmul_fe_mark: an untouched tag<N> must read unused");
-}  // namespace ckernel::matmul_fe_mark
-#define MATMUL_FE_MARK() sizeof(::ckernel::matmul_fe_mark::set<0>)
 
 // the cb ids, ct and rt of a plain call where they are constant expressions (pk-state's front-end dispatch); a call
 // with template arguments is not a macro call
@@ -1037,8 +1010,8 @@ static_assert(!is_used<2>(0), "matmul_fe_mark: an untouched tag<N> must read unu
 #define matmul_block_init(in0_cb_id, in1_cb_id, ...)                                                      \
     matmul_block_init_fe<MATMUL_FE_C(in0_cb_id), MATMUL_FE_C(in1_cb_id), 0xFFu, 0xFFu, MATMUL_FE_MARK()>( \
         __builtin_LINE(), in0_cb_id, in1_cb_id, ##__VA_ARGS__)
-#define matmul_block(in0_cb_id, in1_cb_id, ...)                                    \
-    matmul_block_fe<MATMUL_FE_C(in0_cb_id), MATMUL_FE_C(in1_cb_id), 0xFFu, 0xFFu>( \
+#define matmul_block(in0_cb_id, in1_cb_id, ...)                                                       \
+    matmul_block_fe<MATMUL_FE_C(in0_cb_id), MATMUL_FE_C(in1_cb_id), 0xFFu, 0xFFu, MATMUL_FE_MARK()>( \
         __builtin_LINE(), in0_cb_id, in1_cb_id, __VA_ARGS__)
 #endif
 #endif

@@ -12,6 +12,14 @@
  * LLK MATMUL
  *************************************************************************/
 
+// A keyed HiFi2 half-sync fp32 init of one tile row or column keeps the bias word: without it the re-init's writes reach the replay as
+// it starts (+0.25 cy per block)
+template <MathFidelity math_fidelity, std::uint32_t key_ct, std::uint32_t key_rt>
+constexpr bool llk_math_matmul_bias_class() {
+    return key_ct != 0 && key_rt != 0 && (key_ct == 1 || key_rt == 1) && math_fidelity == MathFidelity::HiFi2 &&
+           DST_SYNC_MODE == DstSync::SyncHalf && DST_ACCUM_MODE;
+}
+
 // Unified core, shared by the CB-id API below and the LLKOperand API (experimental/2_0/). Matmul math is
 // FORMAT-FREE: it consumes only tile geometry (tile r/c dims + partial_face). The per-source prologue
 // (resolving these from a CB id, or from an LLKMemDescriptor) lives in the callers. The matmul math EXECUTE
@@ -40,7 +48,8 @@ inline void llk_math_matmul_init_impl(
     const std::uint32_t ct_dim,
     const std::uint32_t rt_dim) {
     // an unkeyed caller (no block keys) gets main's init exactly: tile MOP, no end fold, the bias word written; the keyed forms keep their opt-ins
-    _llk_math_matmul_init_<math_fidelity, THROTTLE_LEVEL, row_mop, tile_mop, in1_order, !(DST_SYNC_MODE == DstSync::SyncHalf && DST_ACCUM_MODE), (DST_SYNC_MODE == DstSync::SyncFull && key_ct != 0 && key_rt != 0) || half_end_fold, reuse_dir, row_end_fold, key_ct, key_rt, (key_ct == 0 || key_rt == 0)>(
+    constexpr bool bias_write = key_ct == 0 || key_rt == 0 || llk_math_matmul_bias_class<math_fidelity, key_ct, key_rt>();
+    _llk_math_matmul_init_<math_fidelity, THROTTLE_LEVEL, row_mop, tile_mop, in1_order, !(DST_SYNC_MODE == DstSync::SyncHalf && DST_ACCUM_MODE), (DST_SYNC_MODE == DstSync::SyncFull && key_ct != 0 && key_rt != 0) || half_end_fold, reuse_dir, row_end_fold, key_ct, key_rt, bias_write>(
         in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face, transpose, ct_dim, rt_dim);
 }
 
