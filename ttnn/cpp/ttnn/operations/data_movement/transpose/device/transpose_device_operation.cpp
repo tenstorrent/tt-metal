@@ -5,6 +5,7 @@
 #include "transpose_utils.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/overpadded_tile.hpp"
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
@@ -380,6 +381,7 @@ void TransposeDeviceOperation::validate_on_program_cache_miss(
     const auto& dim = operation_attributes.dim;
     const float pad_value = operation_attributes.pad_value;
 
+    ttnn::device_operation::detail::validate_no_overpadded_tile_input(input_tensor, "transpose");
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to transpose need to be on device!");
     TT_FATAL(input_tensor.is_allocated(), "Operands to transpose need to be allocated in buffers on device!");
     TT_FATAL(
