@@ -17,6 +17,8 @@
 
 namespace ttnn::operations::unary {
 
+void validate_integer_input_dtype(const std::vector<EltwiseUnaryWithParam>& op_chain, DataType input_dtype);
+
 struct UnaryDeviceOperation {
     using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
