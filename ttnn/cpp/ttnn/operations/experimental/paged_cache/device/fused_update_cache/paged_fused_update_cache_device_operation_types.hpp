@@ -21,6 +21,9 @@ struct PagedFusedUpdateCacheParams {
     const ttnn::DeviceComputeKernelConfig compute_kernel_config;
     const bool share_cache;
     const std::optional<std::set<ttnn::MeshCoordinate>> mesh_coords;
+    // > 1: each input shard carries one user's rows_per_user consecutive 32-row tiles (row j in tile j)
+    // and update_idxs_tensor carries one position per row (user-major: user u, row j at u * rows_per_user + j).
+    const uint32_t rows_per_user = 1;
 };
 
 struct PagedFusedUpdateCacheInputs {
