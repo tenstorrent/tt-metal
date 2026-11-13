@@ -105,6 +105,7 @@ inline void _calculate_where_(
 
         if constexpr (is_fp32) {
             TTI_SFPCONFIG((1 << 3) | 4, 4 + 1, 1);
+            TTI_SFPNOP;
         }
 
         load_replay_buf(0, replay_len, [offset0, offset1, offset2, offset3] {

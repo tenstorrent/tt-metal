@@ -99,6 +99,7 @@ inline void _calculate_where_(
 
         if constexpr (is_fp32) {
             TTI_SFPCONFIG((1 << 3) | 4, 4 + 1, 1);
+            TTI_SFPNOP;
         }
 
         lltt::record(0, replay_len);
