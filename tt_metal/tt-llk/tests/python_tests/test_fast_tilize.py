@@ -53,14 +53,17 @@ def generate_input_dimensions(max_size: int) -> list[tuple[int, int]]:
     return dimensions
 
 
-@skip_for_blackhole
-@parametrize(
+FAST_TILIZE_SWEEP = dict(
     formats=input_output_formats(
         [DataFormat.Float32, DataFormat.Float16_b, DataFormat.Bfp8_b]
     ),
     dest_acc=[DestAccumulation.Yes, DestAccumulation.No],
     dimensions=generate_input_dimensions(25),
 )
+
+
+@skip_for_blackhole
+@parametrize(**FAST_TILIZE_SWEEP)
 def test_fast_tilize(
     formats,
     dest_acc,

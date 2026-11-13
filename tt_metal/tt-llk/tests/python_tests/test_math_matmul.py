@@ -214,7 +214,21 @@ ALL_TEST_PARAMS = list(
 )
 
 
+def _num_blocks_for_config(matmul_config):
+    half_dest_tiles = DEST_SYNC_TILE_LIMITS[DestSync.Half]
+    dst_index = matmul_config.dst_index
+    num_tiles_in_block = matmul_config.tile_dimensions.tile_cnt
+    dest_straddles_half = (
+        matmul_config.dest_sync == DestSync.Full
+        and matmul_config.dest_acc == DestAccumulation.No
+        and matmul_config.tile_dimensions.in0_tile_r_dim < TILE_DIM
+        and dst_index < half_dest_tiles < dst_index + num_tiles_in_block
+    )
+    return 1 if dest_straddles_half else 4
+
+
 @pytest.mark.nightly
+@pytest.mark.parametrize("num_blocks", [1, 4])
 @pytest.mark.parametrize(
     "math_fidelity,matmul_config,throttle,row_mop", ALL_TEST_PARAMS
 )
@@ -223,6 +237,7 @@ def test_math_matmul(
     matmul_config,
     throttle,
     row_mop,
+    num_blocks,
 ):
     formats = matmul_config.formats
     in0_dimensions = matmul_config.tile_dimensions.in0_dimensions
@@ -236,6 +251,9 @@ def test_math_matmul(
     num_faces_in0 = matmul_config.face_layout_config.num_faces_in0
     num_faces_in1 = matmul_config.face_layout_config.num_faces_in1
     num_faces = matmul_config.face_layout_config.num_faces
+
+    if num_blocks != _num_blocks_for_config(matmul_config):
+        pytest.skip("num_blocks is derived from the destination handoff configuration")
 
     torch_format = format_dict[formats.output_format]
 
@@ -315,21 +333,13 @@ def test_math_matmul(
     # SyncHalf, dest_acc=Yes, and full 32x32 tiles still cover the handoff.
     num_tiles_in_block = matmul_config.tile_dimensions.tile_cnt
     dst_index = matmul_config.dst_index
-    half_dest_tiles = DEST_SYNC_TILE_LIMITS[DestSync.Half]
-    dest_straddles_half = (
-        matmul_config.dest_sync == DestSync.Full
-        and matmul_config.dest_acc == DestAccumulation.No
-        and matmul_config.tile_dimensions.in0_tile_r_dim < TILE_DIM
-        and dst_index < half_dest_tiles < dst_index + num_tiles_in_block
-    )
-    if dest_straddles_half:
+    if num_blocks == 1:
         logger.warning(
             "Skipping 4-block dest section handoff for tiny-tile matmul "
             "(dst_index={}, num_tiles_in_block={}); restore num_blocks=4 after #53500",
             dst_index,
             num_tiles_in_block,
         )
-    num_blocks = 1 if dest_straddles_half else 4
 
     def make_config(mop_per_row):
         return TestConfig(

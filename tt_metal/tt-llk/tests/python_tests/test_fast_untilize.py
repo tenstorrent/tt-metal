@@ -18,11 +18,13 @@ import pytest
 import torch
 from conftest import blackhole_only
 from fast_untilize_common import (
+    FAST_UNTILIZE_CT_DIMS,
     FAST_UNTILIZE_DEST_SYNC_MODES,
     FAST_UNTILIZE_DIMS,
     FAST_UNTILIZE_FACE_C,
     FAST_UNTILIZE_FACE_R,
     FAST_UNTILIZE_NUM_FACES,
+    FAST_UNTILIZE_RT_DIMS,
     FAST_UNTILIZE_TILE_C,
     FAST_UNTILIZE_TILE_FACE_ROWS,
     FAST_UNTILIZE_TILE_R,
@@ -48,6 +50,8 @@ from helpers.utils import passed_test, result_tensor
 from ttexalens.tt_exalens_lib import read_from_device
 
 pytestmark = blackhole_only
+
+FAST_UNTILIZE_STIMULUS_KINDS = ["row_id", "random"]
 
 
 def generate_tile_face_row_ids(tile_count, dtype=torch.bfloat16):
@@ -200,13 +204,14 @@ def _run_fast_untilize_correctness(
 @parametrize(
     formats=fast_untilize_formats(),
     dest_acc=fast_untilize_dest_acc_modes,
-    dimensions=FAST_UNTILIZE_DIMS,
+    rt_dim=FAST_UNTILIZE_RT_DIMS,
+    ct_dim=FAST_UNTILIZE_CT_DIMS,
     dest_sync=FAST_UNTILIZE_DEST_SYNC_MODES,
-    stimulus_kind=["row_id", "random"],
+    stimulus_kind=FAST_UNTILIZE_STIMULUS_KINDS,
 )
-def test_fast_untilize(formats, dest_acc, dimensions, dest_sync, stimulus_kind):
+def test_fast_untilize(formats, dest_acc, rt_dim, ct_dim, dest_sync, stimulus_kind):
     _run_fast_untilize_correctness(
-        formats, dest_acc, dimensions, dest_sync, stimulus_kind
+        formats, dest_acc, (rt_dim, ct_dim), dest_sync, stimulus_kind
     )
 
 

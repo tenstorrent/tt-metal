@@ -21,6 +21,7 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     generate_input_dim,
 )
+from test_fast_untilize import FAST_UNTILIZE_STIMULUS_KINDS
 
 
 @pytest.mark.perf
@@ -32,11 +33,20 @@ from helpers.test_variant_parameters import (
     rt_dim=FAST_UNTILIZE_RT_DIMS,
     ct_dim=FAST_UNTILIZE_CT_DIMS,
     dest_sync=FAST_UNTILIZE_DEST_SYNC_MODES,
+    stimulus_kind=FAST_UNTILIZE_STIMULUS_KINDS,
     loop_factor=[8, 32, 128],
 )
 def test_perf_fast_untilize(
-    perf_report, formats, dest_acc, rt_dim, ct_dim, dest_sync, loop_factor
+    perf_report,
+    formats,
+    dest_acc,
+    rt_dim,
+    ct_dim,
+    dest_sync,
+    stimulus_kind,
+    loop_factor,
 ):
+    assert stimulus_kind in FAST_UNTILIZE_STIMULUS_KINDS
     tile_count = rt_dim * ct_dim
     dimensions = (rt_dim * FAST_UNTILIZE_TILE_R, ct_dim * FAST_UNTILIZE_TILE_C)
 

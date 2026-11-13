@@ -1,29 +1,16 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Callable, List, Union
-
 import pytest
-from helpers.format_config import DataFormat, FormatConfig, is_dest_acc_needed
-from helpers.golden_generators import TILE_DIM
 from helpers.llk_params import (
     ALL_MATH_FIDELITIES,
-    DestAccumulation,
-    DestSync,
     Transpose,
 )
 from helpers.matmul_sweep import (
-    DEST_RT_CT_BLOCKS,
     PERF_RING_TILES,
     generate_tile_dims,
-    mid_fill_rt_ct_pairs,
-    unpack_matmul_fits_perf_ring,
 )
-from helpers.param_config import (
-    input_output_formats,
-    max_dest_tiles,
-    parametrize,
-)
+from helpers.param_config import parametrize
 from helpers.perf.core import ALL_PERF_RUN_TYPES, PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
@@ -36,92 +23,24 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     UNPACK_TRANS_FACES,
 )
-
-# Cold start, functional-max inner dim, and reuse/bandwidth.
-KT_DIMS = [1, 4, 32]
-DEST_SYNC_MODES = [DestSync.Half, DestSync.Full]
-
-
-def dest_corner_mn(max_tiles: int) -> List[tuple]:
-    """1×1, dest-fill vectors/square, dest occupancy blocks, and half-dest mid-fill when they fit."""
-    square = int(max_tiles**0.5)
-    corners = [(1, 1), (1, max_tiles), (max_tiles, 1), (square, square)]
-    corners.extend((rt, ct) for rt, ct in DEST_RT_CT_BLOCKS if rt * ct <= max_tiles)
-    corners.extend(mid_fill_rt_ct_pairs(max_tiles))
-    return list(dict.fromkeys(corners))
-
-
-def generate_dest_corner_combinations(max_tiles: int, kt_dims=KT_DIMS) -> List[tuple]:
-    return [
-        (
-            [mt_dim * TILE_DIM, kt_dim * TILE_DIM],
-            [kt_dim * TILE_DIM, nt_dim * TILE_DIM],
-        )
-        for mt_dim, nt_dim in dest_corner_mn(max_tiles)
-        for kt_dim in kt_dims
-        if unpack_matmul_fits_perf_ring(mt_dim, nt_dim, kt_dim)
-    ]
-
-
-def matmul_combos(
-    formats: List[FormatConfig],
-    dest_acc: Union[
-        List[DestAccumulation], Callable[[FormatConfig], List[DestAccumulation]]
-    ],
-):
-    def _acc_modes(fmt: FormatConfig) -> List[DestAccumulation]:
-        return dest_acc(fmt) if callable(dest_acc) else dest_acc
-
-    def _max_tiles(fmt: FormatConfig, acc: DestAccumulation, sync: DestSync) -> int:
-        return max_dest_tiles(
-            is_dest_acc_needed(fmt) or acc == DestAccumulation.Yes, sync
-        )
-
-    unique_max_tiles = set(
-        _max_tiles(fmt, acc, sync)
-        for fmt in formats
-        for acc in _acc_modes(fmt)
-        for sync in DEST_SYNC_MODES
-    )
-    dimensions = {
-        max_tiles: generate_dest_corner_combinations(max_tiles, kt_dims=KT_DIMS)
-        for max_tiles in unique_max_tiles
-    }
-
-    return [
-        (format, accumulation, dest_sync, dims)
-        for format in formats
-        for accumulation in _acc_modes(format)
-        for dest_sync in DEST_SYNC_MODES
-        for dims in dimensions[_max_tiles(format, accumulation, dest_sync)]
-    ]
+from test_matmul import matmul_cases
 
 
 @pytest.mark.perf
 @parametrize(
-    combos=matmul_combos(
-        formats=input_output_formats(
-            [
-                DataFormat.Float16_b,
-                DataFormat.Float32,
-                DataFormat.Bfp8_b,
-            ]
-        ),
-        dest_acc=lambda formats: (
-            [DestAccumulation.Yes]
-            if is_dest_acc_needed(formats)
-            else [DestAccumulation.No, DestAccumulation.Yes]
-        ),
-    ),
+    case=matmul_cases,
     math_fidelity=ALL_MATH_FIDELITIES,
 )
 def test_perf_matmul(
     perf_report,
-    combos,
+    case,
     math_fidelity,
 ):
-
-    formats, dest_acc, dest_sync, (matrix_a, matrix_b) = combos
+    formats = case.formats
+    dest_acc = case.dest_acc
+    dest_sync = case.dest_sync
+    matrix_a = case.matrix_a
+    matrix_b = case.matrix_b
 
     # Calculate all matmul dimensions using helper function
     dims = generate_tile_dims((matrix_a, matrix_b))
