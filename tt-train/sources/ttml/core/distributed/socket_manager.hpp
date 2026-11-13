@@ -28,7 +28,6 @@ struct InterHostParameters {
     Rank rank;
 };
 
-// How an intra-mesh socket moves a tensor.
 enum class IntraMeshTransport {
     // Stream the tensor through the socket's DRAM FIFO (send_async / recv_async). A send that fits the FIFO completes
     // without its receiver.
