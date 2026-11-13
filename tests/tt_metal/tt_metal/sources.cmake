@@ -31,6 +31,7 @@ set(UNIT_TESTS_LEGACY_SRC
     test_quasar_compute_kernels.cpp
     test_quasar_fds.cpp
     test_quasar_events.cpp
+    test_quasar_reduce_helper.cpp
     test_quasar_mesh_buffers.cpp
     test_quasar_mesh_workloads.cpp
     test_quasar_semaphores.cpp
