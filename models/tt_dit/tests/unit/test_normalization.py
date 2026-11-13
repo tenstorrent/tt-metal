@@ -554,14 +554,18 @@ def test_dram_group_norm_core_grid_none() -> None:
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(
-    ("group_count", "input_shape"),
+    ("group_count", "input_shape", "offset"),
     [
         # NCHW; H must be divisible by cluster width. C % 32 == 0 for fused v1.
-        (32, (1, 128, 64, 64)),
-        (32, (1, 256, 128, 128)),
-        (8, (1, 64, 64, 64)),
+        (32, (1, 128, 64, 64), 0.0),
+        (32, (1, 256, 128, 128), 0.0),
+        (8, (1, 64, 64, 64), 0.0),
+        # Each device's H*W is not whole tiles, so the last tile row holds padding rows: 23 of 64
+        # rows on 8 devices (1 x 41), 24 of 352 on one. The offset makes padding counted as data
+        # shift the statistics well beyond the bfloat16 error.
+        (32, (1, 128, 8, 41), 1.0),
     ],
-    ids=["c128_h64", "c256_h128", "c64_g8"],
+    ids=["c128_h64", "c256_h128", "c64_g8", "c128_h8w41_padded"],
 )
 @pytest.mark.parametrize("activation_fn", [None, "silu"], ids=["no_act", "silu"])
 def test_distributed_group_norm(
@@ -570,6 +574,7 @@ def test_distributed_group_norm(
     cluster_axis: int,
     input_shape: tuple[int, int, int, int],
     group_count: int,
+    offset: float,
     activation_fn: str | None,
 ) -> None:
     """Spatially shard H on cluster_axis; match torch GroupNorm on the full tensor."""
@@ -585,7 +590,7 @@ def test_distributed_group_norm(
     torch.nn.init.normal_(torch_model.bias)
     torch_model.eval()
 
-    torch_input = torch.randn(input_shape, dtype=torch_dtype)
+    torch_input = torch.randn(input_shape, dtype=torch_dtype) + offset
     with torch.no_grad():
         torch_output = torch_model(torch_input)
         if activation_fn == "silu":
@@ -637,12 +642,15 @@ def test_distributed_group_norm(
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(
-    ("group_count", "input_shape"),
+    ("group_count", "input_shape", "offset"),
     [
-        (32, (1, 128, 64, 64)),
-        (32, (1, 512, 128, 96)),
+        (32, (1, 128, 64, 64), 0.0),
+        (32, (1, 512, 128, 96), 0.0),
+        # Each device's H*W is not whole tiles: 2 x 42 or 4 x 21 (12 of 96 rows padding) on 2x4,
+        # 1 x 21 (11 of 32) on 4x8.
+        (32, (1, 128, 8, 84), 1.0),
     ],
-    ids=["c128_h64w64", "c512_h128w96"],
+    ids=["c128_h64w64", "c512_h128w96", "c128_h8w84_padded"],
 )
 @pytest.mark.parametrize("activation_fn", [None, "silu"], ids=["no_act", "silu"])
 def test_distributed_group_norm_2d(
@@ -651,6 +659,7 @@ def test_distributed_group_norm_2d(
     h_axis: int,
     input_shape: tuple[int, int, int, int],
     group_count: int,
+    offset: float,
     activation_fn: str | None,
 ) -> None:
     """Shard H on h_axis and W on the other mesh axis; match torch GroupNorm on the full tensor."""
@@ -662,7 +671,7 @@ def test_distributed_group_norm_2d(
     torch.nn.init.normal_(torch_model.bias)
     torch_model.eval()
 
-    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16) + offset
     with torch.no_grad():
         torch_output = torch_model(torch_input)
         if activation_fn == "silu":

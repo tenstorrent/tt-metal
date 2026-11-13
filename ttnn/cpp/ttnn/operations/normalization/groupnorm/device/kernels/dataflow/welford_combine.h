@@ -34,6 +34,52 @@ constexpr WelfordStats<T> make_welford_stats(T mean, T variance, std::uint32_t c
 }
 
 /**
+ * @brief Statistics over a population that excludes padding zeros, from statistics that include them.
+ * @param padded Mean and population variance (bfloat16) and count over the padded population.
+ * @param scale Padded count / logical count, at least 1.
+ *
+ * With P = scale * N values of which P - N are zeros, sum(x) = P * mean and
+ * sum(x^2) = P * (variance + mean^2), so the logical mean is scale * mean and the logical variance is
+ * scale * variance - scale * (scale - 1) * mean^2. The second form avoids the cancellation of
+ * sum(x^2) / N - mean^2 when scale is close to 1. The bfloat16 inputs still leave a variance error
+ * that grows with (scale - 1) * mean^2.
+ */
+inline WelfordStats<std::uint16_t> unpad_welford_stats(const WelfordStats<std::uint16_t>& padded, float scale) {
+    const float m = bf16_to_fp32(padded.mean);
+    const float v = bf16_to_fp32(padded.variance);
+    float logical_variance = scale * v - scale * (scale - 1.0f) * m * m;
+    logical_variance = logical_variance < 0.0f ? 0.0f : logical_variance;
+    return {
+        .mean = fp32_to_bf16_truncate(scale * m),
+        .variance = fp32_to_bf16_truncate(logical_variance),
+        .count = static_cast<std::uint32_t>(static_cast<float>(padded.count) / scale + 0.5f)};
+}
+
+/**
+ * @brief Zeroes the rows at and below valid_rows of a 32x32 tile in L1, in the 16x16 face layout.
+ * @tparam elem_bytes 2 for bfloat16, 4 for float32.
+ */
+template <std::uint32_t elem_bytes>
+inline void zero_tile_rows_from(std::uint32_t tile_addr, std::uint32_t valid_rows) {
+    static_assert(elem_bytes == 2 || elem_bytes == 4, "zero_tile_rows_from supports bfloat16 and float32 tiles");
+    constexpr std::uint32_t face_dim = 16;
+    constexpr std::uint32_t face_row_words = face_dim * elem_bytes / 4;
+    constexpr std::uint32_t face_words = face_dim * face_row_words;
+    auto* words = reinterpret_cast<volatile std::uint32_t*>(tile_addr);
+    for (std::uint32_t row = valid_rows; row < 2 * face_dim; ++row) {
+        // Rows 0-15 are in faces 0 and 1, rows 16-31 in faces 2 and 3.
+        const std::uint32_t first_face = row < face_dim ? 0 : 2;
+        const std::uint32_t face_row = row % face_dim;
+        for (std::uint32_t face = first_face; face < first_face + 2; ++face) {
+            auto* p = words + face * face_words + face_row * face_row_words;
+            for (std::uint32_t w = 0; w < face_row_words; ++w) {
+                p[w] = 0;
+            }
+        }
+    }
+}
+
+/**
  * @brief Combine two sets of Welford stats into one.
  *        This is the core building block—use iteratively for multiple groups.
  * @param a First WelfordStats.

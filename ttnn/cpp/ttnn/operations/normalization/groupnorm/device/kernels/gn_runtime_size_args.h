@@ -18,5 +18,10 @@ constexpr std::uint32_t NUM_MCAST_CORES = 4;      // cores per mcast (reduction)
 constexpr std::uint32_t TWO_PASS_RECIPROCAL = 5;  // fp32 bits of the two-pass mean reciprocal
 constexpr std::uint32_t PER_CORE_MN = 6;          // per-core tile count, used with TILIZE_IN
 constexpr std::uint32_t NUM_ROWS_PER_GROUP = 7;   // per-core rows (not tiles) of each group
-constexpr std::uint32_t NUM_ARGS = 8;
+// When the spatial extent is not whole tiles, its last tile row holds padding rows. The readers zero
+// them, so the statistics see zeros, and the sender corrects the statistics for those zeros.
+constexpr std::uint32_t PAD_ROW_FIRST_PAGE = 8;  // first page of the tile row with padding rows
+constexpr std::uint32_t PAD_ROW_VALID_ROWS = 9;  // valid rows in that tile row, 32 when there is none
+constexpr std::uint32_t PAD_STATS_SCALE = 10;    // fp32 bits of padded / logical spatial extent
+constexpr std::uint32_t NUM_ARGS = 11;
 }  // namespace gn_size_args
