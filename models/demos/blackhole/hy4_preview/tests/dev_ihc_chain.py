@@ -44,6 +44,16 @@ try:
         h2, _, pp2, x1 = fm.pre(x0, wm, y=ya, pp_prev=pp1)
         h3, _, pp3, x2 = fa.pre(x1, wa, y=ym, pp_prev=pp2)
         ttnn.synchronize_device(md)
+        if os.environ.get("HY4_IHC_DBG", "0") == "1":
+            for nm, ff in (("pre_m (expand fused)", fm),):
+                pgs = d0(ff.dbg).reshape(32, 32, 32).contiguous().view(torch.int32).to(torch.int64) & 0xFFFFFFFF
+                rd, wr = pgs[:, 0, :8], pgs[:, 1, :5]
+                comp = torch.cat([pgs[:, 2, :16], pgs[:, 3, :2]], dim=1)
+                p(
+                    f"{nm} T={T} reader stamps (median cyc from reader start):",
+                    [int((rd[:, i] - rd[:, 0]).float().median()) for i in range(8)],
+                )
+                p(f"{nm} T={T} writer stamps:", [int((wr[:, i] - rd[:, 0]).float().median()) for i in range(5)])
         ref_x1 = x_in[idx] + post_a[idx].unsqueeze(-1) * y_a.float().unsqueeze(1)
         ref_x2 = x_mid[idx] + post_m[idx].unsqueeze(-1) * y_m.float().unsqueeze(1)
         g_x1 = d0(x1).reshape(T, 4, HID).float()

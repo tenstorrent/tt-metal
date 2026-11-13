@@ -54,7 +54,7 @@ try:
                     d0(fu.dbg).reshape(32, 32, 32)[:, :2, :16].contiguous().view(torch.int32).to(torch.int64)
                     & 0xFFFFFFFF
                 )
-                rd, wr = dbg[:, 0, :8], dbg[:, 1, :5]
+                rd, wr = dbg[:, 0, :11], dbg[:, 1, :5]
                 pgs = d0(fu.dbg).reshape(32, 32, 32).contiguous().view(torch.int32).to(torch.int64) & 0xFFFFFFFF
                 comp = torch.cat([pgs[:, 2, :16], pgs[:, 3, :2]], dim=1)
                 t0 = rd[:, 0].min()

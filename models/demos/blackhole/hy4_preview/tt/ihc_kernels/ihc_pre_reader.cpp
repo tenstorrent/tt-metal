@@ -61,12 +61,21 @@ void kernel_main() {
     constexpr uint32_t cb_m = get_compile_time_arg_val(d_args.next_compile_time_args_offset() + 5);
     constexpr auto y_args = TensorAccessorArgs<d_args.next_compile_time_args_offset() + 6>();
     constexpr auto q_args = TensorAccessorArgs<y_args.next_compile_time_args_offset()>();
+    constexpr uint32_t DUAL = get_compile_time_arg_val(
+        q_args.next_compile_time_args_offset());  // 1: the writer kernel sends the other half of the exchange writes
     constexpr uint32_t NCST = 10 + G;  // 8 constant tiles, G selection tiles, the all-ones tile, the identity
     constexpr uint32_t TILE = 4096;
     constexpr uint32_t SW = 36;              // exchange-2 slot words: T data words (<= 32), pad, flag
+    constexpr uint32_t RR = T <= 2 ? 2 : (T <= 4 ? 4 : (T <= 8 ? 8 : 16));  // rows per exchange-1 slot
+    constexpr uint32_t NR = RR / 2;                                         // recv tiles (32 slots of RR rows x 64 B)
+    constexpr uint32_t SB = RR * 64;                                        // slot bytes
+    constexpr uint32_t SWD = RR * 16;                                       // slot words
     constexpr uint32_t FLAG2 = 0xC0DE1234u;  // exchange 2 (slot memory only)
     constexpr uint32_t FLAG1 = 0x4B1C0DE1u;  // exchange 1: a FINITE fp32 (it is summed by matmuls), word 255 of a face
 
+    if constexpr (ABL & 128) {
+        return;  // launch-overhead probe
+    }
     const uint32_t k = get_arg_val<uint32_t>(0);
     const uint32_t j0 = k * GPC;
     const uint32_t x_addr = get_common_arg_val<uint32_t>(0);
@@ -93,7 +102,7 @@ void kernel_main() {
 
     // memory other cores write into: reserved, NEVER touched before the flags arrive (flags are reset at the END of
     // every run)
-    cbr.reserve_back(8);
+    cbr.reserve_back(NR);
     const uint32_t recv_base = cbr.get_write_ptr();
     volatile tt_l1_ptr uint32_t* recv = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(recv_base);
     cbslot.reserve_back(2);
@@ -126,34 +135,59 @@ void kernel_main() {
             noc.async_read(w_acc, cbw, 2048, {.page_id = k * GPC + n, .offset_bytes = 0}, {.offset_bytes = n * 2048});
         }
     }
-    noc.async_read(b_acc, cbb, 1024, {.page_id = 2 * k, .offset_bytes = 0}, {.offset_bytes = 0});
-    noc.async_read(b_acc, cbsd, 1024, {.page_id = 2 * k + 1, .offset_bytes = 0}, {.offset_bytes = 0});
-    for (uint32_t g = 0; g < GPC; ++g) {
-        noc.async_read(n_acc, cbw4, T * 64, {.page_id = j0 + g, .offset_bytes = 0}, {.offset_bytes = g * TILE});
-        noc.async_read(
-            n_acc, cbw4, T * 64, {.page_id = j0 + g, .offset_bytes = 1024}, {.offset_bytes = g * TILE + 1024});
-    }
     // stream tensor [1,1,4T,D] fp32 TILE: tile row g holds the rows (4*tl + i) of the tokens 8g .. 8g+7 -> one 4 KB
     // page per (g, j)
+    // only the rows 4*tl + i of the T tokens exist (padding rows are never read: they are zeroed in L1); a full tile
+    // when the group has 32 rows
     for (uint32_t g = 0; g < G; ++g) {
+        const uint32_t rows_g = (4 * T - 32 * g) < 32 ? (4 * T - 32 * g) : 32;
         for (uint32_t j = 0; j < GPC; ++j) {
             if constexpr (ABL & 8) {
                 break;
             }
-            if constexpr (EXPAND) {
-                noc.async_read(
-                    x_acc,
-                    cbxr,
-                    TILE,
-                    {.page_id = g * NT + j0 + j, .offset_bytes = 0},
-                    {.offset_bytes = (g * GPC + j) * TILE});
+            const uint32_t pg = g * NT + j0 + j;
+            const uint32_t to = (g * GPC + j) * TILE;
+            if (rows_g == 32) {
+                if constexpr (EXPAND) {
+                    noc.async_read(x_acc, cbxr, TILE, {.page_id = pg, .offset_bytes = 0}, {.offset_bytes = to});
+                } else {
+                    noc.async_read(x_acc, cbx, TILE, {.page_id = pg, .offset_bytes = 0}, {.offset_bytes = to});
+                }
             } else {
-                noc.async_read(
-                    x_acc,
-                    cbx,
-                    TILE,
-                    {.page_id = g * NT + j0 + j, .offset_bytes = 0},
-                    {.offset_bytes = (g * GPC + j) * TILE});
+                const uint32_t r0 = rows_g < 16 ? rows_g : 16;
+                const uint32_t r1 = rows_g - r0;
+                for (uint32_t f = 0; f < 4; ++f) {
+                    const uint32_t rr = f < 2 ? r0 : r1;
+                    if (rr == 0) {
+                        continue;
+                    }
+                    if constexpr (EXPAND) {
+                        noc.async_read(
+                            x_acc,
+                            cbxr,
+                            rr * 64,
+                            {.page_id = pg, .offset_bytes = f * 1024},
+                            {.offset_bytes = to + f * 1024});
+                    } else {
+                        noc.async_read(
+                            x_acc,
+                            cbx,
+                            rr * 64,
+                            {.page_id = pg, .offset_bytes = f * 1024},
+                            {.offset_bytes = to + f * 1024});
+                    }
+                }
+                // zero the rest of the tile (complementary regions)
+                for (uint32_t f = 0; f < 4; ++f) {
+                    const uint32_t rr = f < 2 ? r0 : r1;
+                    if (rr < 16) {
+                        if constexpr (EXPAND) {
+                            noc.async_write_zeros(cbxr, 1024 - rr * 64, {.offset_bytes = to + f * 1024 + rr * 64});
+                        } else {
+                            noc.async_write_zeros(cbx, 1024 - rr * 64, {.offset_bytes = to + f * 1024 + rr * 64});
+                        }
+                    }
+                }
             }
         }
     }
@@ -176,17 +210,6 @@ void kernel_main() {
     // 2. zero what the reads do not write (complementary regions: no overlap with the reads in flight): rest of base /
     // scale-diagonal,
     //    norm-weight rows >= T, A, R, the unused rows of the last x group (absent tokens must read as 0, never garbage)
-    noc.async_write_zeros(cbb, 3072, {.offset_bytes = 1024});
-    noc.async_write_zeros(cbsd, 3072, {.offset_bytes = 1024});
-    for (uint32_t g = 0; g < GPC; ++g) {
-        if constexpr (T < 16) {
-            noc.async_write_zeros(cbw4, 1024 - T * 64, {.offset_bytes = g * TILE + T * 64});
-            noc.async_write_zeros(cbw4, 1024 - T * 64, {.offset_bytes = g * TILE + 1024 + T * 64});
-        }
-        noc.async_write_zeros(cbw4, 2048, {.offset_bytes = g * TILE + 2048});
-    }
-    noc.async_write_zeros(cba, G * TILE, {.offset_bytes = 0});
-    noc.async_write_zeros(cbtot, TILE, {.offset_bytes = 0});
     noc.write_zeros_l1_barrier();
     // 3. constant tiles: a persistent L1 tensor backs the CB (built once by the host): just publish them
     cst.push_back(NCST);
@@ -210,9 +233,26 @@ void kernel_main() {
         cbx.push_back(G * GPC);
     }
     cbw.push_back(GPC);
-    cbb.push_back(1);
-    cbsd.push_back(1);
-    cbw4.push_back(GPC);
+    // wave 2 (needed later: base / scale at the pre|post chain, norm weights at the end): issued now, completed before
+    // exchange 1 ends
+    noc.async_read(b_acc, cbb, 1024, {.page_id = 2 * k, .offset_bytes = 0}, {.offset_bytes = 0});
+    noc.async_read(b_acc, cbsd, 1024, {.page_id = 2 * k + 1, .offset_bytes = 0}, {.offset_bytes = 0});
+    for (uint32_t g = 0; g < GPC; ++g) {
+        noc.async_read(n_acc, cbw4, T * 64, {.page_id = j0 + g, .offset_bytes = 0}, {.offset_bytes = g * TILE});
+        noc.async_read(
+            n_acc, cbw4, T * 64, {.page_id = j0 + g, .offset_bytes = 1024}, {.offset_bytes = g * TILE + 1024});
+    }
+    noc.async_write_zeros(cbb, 3072, {.offset_bytes = 1024});
+    noc.async_write_zeros(cbsd, 3072, {.offset_bytes = 1024});
+    for (uint32_t g = 0; g < GPC; ++g) {
+        if constexpr (T < 16) {
+            noc.async_write_zeros(cbw4, 1024 - T * 64, {.offset_bytes = g * TILE + T * 64});
+            noc.async_write_zeros(cbw4, 1024 - T * 64, {.offset_bytes = g * TILE + 1024 + T * 64});
+        }
+        noc.async_write_zeros(cbw4, 2048, {.offset_bytes = g * TILE + 2048});
+    }
+    noc.async_write_zeros(cba, G * TILE, {.offset_bytes = 0});
+    noc.async_write_zeros(cbtot, TILE, {.offset_bytes = 0});
 
     // ---- exchange 1: partial mixes + sum of squares ----
     cbpart.wait_front(1);
@@ -223,15 +263,16 @@ void kernel_main() {
         noc_async_write(part_ptr, d_acc.get_noc_addr(k, 1024), 1024);
         noc_async_write_barrier();
     }
-    pf[255] = FLAG1;  // last word of face 0 (row 15, column 15): arrives last
-    for (uint32_t d = 0; d < NC; ++d) {
+    pf[SWD - 1] = FLAG1;  // last word of the slot (row RR-1, column 15, unused): arrives last
+    for (uint32_t d = 0; d < NC; d += (DUAL ? 2 : 1)) {
         if constexpr (ABL & 2) {
             break;
         }
         const uint32_t kk = (k + d) % NC;
-        const uint64_t dst = get_noc_addr(MX0 + (kk % MW), MY0 + kk / MW, recv_base + k * 1024);
-        noc_async_write(part_ptr, dst, 1024);
+        const uint64_t dst = get_noc_addr(MX0 + (kk % MW), MY0 + kk / MW, recv_base + k * SB);
+        noc_async_write(part_ptr, dst, SB);
     }
+    STAMP(9)
     for (uint32_t kk = 0; kk < NC; ++kk) {
         if constexpr (ABL & 2) {
             break;
@@ -239,13 +280,18 @@ void kernel_main() {
         // bounded spin: a lost/late flag must not wedge the device (the result is then wrong and the test catches it)
         for (uint32_t spin = 0; spin < 20000000u; ++spin) {
             invalidate_l1_cache();
-            if (recv[kk * 256 + 255] == FLAG1) {
+            if (recv[kk * SWD + SWD - 1] == FLAG1) {
                 break;
             }
         }
     }
     STAMP(3)
-    cbr.push_back(8);
+    noc.write_zeros_l1_barrier();
+    noc.async_read_barrier();
+    cbb.push_back(1);
+    cbsd.push_back(1);
+    cbw4.push_back(GPC);
+    cbr.push_back(NR);
     noc_async_write_barrier();
     cbpart.pop_front(1);
 
@@ -276,11 +322,11 @@ void kernel_main() {
     STAMP(6)
     volatile tt_l1_ptr uint32_t* pp2 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cbp2.get_read_ptr());
     for (uint32_t t = 0; t < T; ++t) {
-        slots[k * SW + t] = pp2[RW(t)];
+        slots[k * SW + t] = pp2[(((t >> 4) * 3) << 8) + ((t & 15) << 4) + (t & 15)];  // diag(HS HS^T): element (t, t)
     }
     slots[k * SW + SW - 1] = FLAG2;
     cbp2.pop_front(1);
-    for (uint32_t d = 1; d < NC; ++d) {
+    for (uint32_t d = 1; d < NC; d += (DUAL ? 2 : 1)) {
         if constexpr (ABL & 4) {
             break;
         }
@@ -288,6 +334,7 @@ void kernel_main() {
         const uint64_t dst = get_noc_addr(MX0 + (kk % MW), MY0 + kk / MW, slot_base + k * SW * 4);
         noc_async_write(slot_base + k * SW * 4, dst, SW * 4);
     }
+    STAMP(10)
     for (uint32_t kk = 0; kk < NC; ++kk) {
         if constexpr (ABL & 4) {
             break;
@@ -299,6 +346,7 @@ void kernel_main() {
             }
         }
     }
+    STAMP(8)
     volatile tt_l1_ptr uint32_t* R = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cbtot.get_write_ptr());
     for (uint32_t t = 0; t < T; ++t) {
         volatile tt_l1_ptr uint32_t* Rt = R + RW(t);
@@ -316,7 +364,7 @@ void kernel_main() {
     STAMP(7)
     for (uint32_t kk = 0; kk < NC; ++kk) {
         slots[kk * SW + SW - 1] = 0;
-        recv[kk * 256 + 255] = 0;
+        recv[kk * SWD + SWD - 1] = 0;
     }
     noc_async_write_barrier();
     if constexpr (DBG) {

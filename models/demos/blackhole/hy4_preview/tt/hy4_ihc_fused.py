@@ -38,6 +38,10 @@ def _kernel(name, core_set, ct, rt, cfg, common=None):
     )
 
 
+_CST = {}  # (mesh id, T, dim, eps): persistent L1 constants tensor shared by ALL Hy4IHCFused instances
+_DBG = {}  # mesh id -> debug/timestamp tensor (HY4_IHC_DBG=1 only)
+
+
 class Hy4IHCFused:
     def __init__(self, device, fn8, base8, scale2, dim=6144, hc_eps=1e-6, norm_eps=1e-5):
         assert fn8.shape == (8, 4 * dim) and dim % (32 * NC) == 0
@@ -62,14 +66,13 @@ class Hy4IHCFused:
         fnb = fn8.float().reshape(8, 4, self.NT, 32)  # [m, i, tile, c]
         wp = fnb.permute(2, 3, 1, 0).reshape(self.NT, 32, 32)  # [tile, c, (i, m)]
         self.wt = up(wp.reshape(1, 1, self.NT * 32, 32), ttnn.bfloat16)
-        # per core k: page 2k = base (rows replicated, columns 0..7), page 2k + 1 = diag(hc_scale pre x4, post x4)
+        # per core k: page 2k = base (rows replicated, columns 0..7), page 2k + 1 = hc_scale per column (pre x4, post x4), rows replicated
         b = torch.zeros(NC, 2, 32, 32)
         b[:, 0, :, :8] = base8.float()
         sc = torch.cat([scale2[0].float().repeat(4), scale2[1].float().repeat(4)])
-        b[:, 1, :8, :8] = torch.diag(sc)
+        b[:, 1, :, :8] = sc  # rows replicated: hc_scale per column
         self.base = up(b.reshape(NC * 2, 1, 32, 32))
         self._w4 = {}
-        self._cst = {}
 
     def norm_weight(self, w, T):
         """fp32 norm weight [D] (or [1,1,1,D]) * sqrt(D), rows replicated: [1,1,T,D] fp32 TILE (cached per (id, T))."""
@@ -83,15 +86,19 @@ class Hy4IHCFused:
 
     def _consts(self, mesh, T):
         """persistent L1 tensor (one shard of NCST fp32 tiles per core of the 4x8 rectangle, identical content): the constant tiles of the compute kernel."""
-        c = self._cst.get(T)
+        key = (id(mesh), T, self.dim, self.hc_eps)
+        c = _CST.get(key)
         if c is None:
             G = (T + 7) // 8
             n = 10 + G
             t = torch.zeros(n, 32, 32)
             t[0, :, 8] = 1.0 / (4 * self.dim)  # ONES8
             t[1, 8, :] = 1.0  # SELSS
+            RR = 2 if T <= 2 else (4 if T <= 4 else (8 if T <= 8 else 16))
+            for r in range(RR):
+                for m in range(32 // RR):
+                    t[2, r, r + RR * m] = 1.0  # FL: sums the row blocks of the recv tiles (slots of RR rows)
             for r in range(16):
-                t[2, r, r] = t[2, r, r + 16] = 1.0  # FL
                 t[3, r, r] = t[3, r + 16, r] = 1.0  # FR
             t[4, :16, 0:4] = 1.0  # SCALE: pre x1, post x2
             t[4, :16, 4:8] = 2.0
@@ -123,7 +130,7 @@ class Hy4IHCFused:
                 memory_config=mc,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
             )
-            self._cst[T] = c
+            _CST[key] = c
         return c
 
     def pre(self, x, w4, emit_rm=False, y=None, pp_prev=None, x_out=None):
@@ -160,6 +167,7 @@ class Hy4IHCFused:
         for k, (cx, cy) in enumerate(cores):
             rt[cx][cy] = [k]
         NCST = 10 + G
+        RR = 2 if T <= 2 else (4 if T <= 4 else (8 if T <= 8 else 16))
         if not EXPAND:
             x_new = x
         elif x_out is not None:
@@ -211,7 +219,7 @@ class Hy4IHCFused:
                 _cb(core_set, X, G * GPC, 4096, f32),
                 _cb(core_set, W, GPC, 2048, bf16),
                 _cb(core_set, BASE, 1, 4096, f32),
-                _cb(core_set, RECV, 8, 4096, f32),
+                _cb(core_set, RECV, RR // 2, 4096, f32),
                 _cb(core_set, PART, 1, 4096, f32),
                 _cb(core_set, PP, 1, 4096, f32),
                 _cb(core_set, A, G, 4096, f32),
@@ -249,9 +257,12 @@ class Hy4IHCFused:
             + []
         )
         DBG = int(os.environ.get("HY4_IHC_DBG", "0"))
-        dbg = ttnn.allocate_tensor_on_device(
-            ttnn.Shape([NC, 1, 32, 32]), f32, ttnn.TILE_LAYOUT, mesh, ttnn.DRAM_MEMORY_CONFIG
-        )
+        DUAL = int(os.environ.get("HY4_IHC_DUAL", "1"))
+        dbg = _DBG.get(id(mesh))
+        if dbg is None:
+            dbg = _DBG[id(mesh)] = ttnn.allocate_tensor_on_device(
+                ttnn.Shape([NC, 1, 32, 32]), f32, ttnn.TILE_LAYOUT, mesh, ttnn.DRAM_MEMORY_CONFIG
+            )
         self.dbg = dbg
         cbs.append(ttnn.cb_descriptor_from_sharded_tensor(CST, cst_t))
         eps_n, eps_2, inv_n = _bits(self.norm_eps), _bits(D * self.norm_eps), _bits(1.0 / (4 * D))
@@ -267,7 +278,8 @@ class Hy4IHCFused:
             + _acc(dbg)
             + [int(os.environ.get("HY4_IHC_ABL", "0")), DBG, EXPAND, XR, YC, MC]
             + _acc(y_t)
-            + _acc(q_t),
+            + _acc(q_t)
+            + [DUAL],
             rt,
             ttnn.ReaderConfigDescriptor(),
             common=[
@@ -289,13 +301,16 @@ class Hy4IHCFused:
             + _acc(rm_t)
             + _acc(dbg)
             + [DBG, DBGW, EXPAND, X, NT]
-            + _acc(x_new),
+            + _acc(x_new)
+            + [PART, RECV, SLOT, NC, p0.x, p0.y, GX, DUAL],
             rt,
             ttnn.WriterConfigDescriptor(),
             common=[out.buffer_address(), rm_t.buffer_address(), dbg.buffer_address(), x_new.buffer_address()],
         )
         cfg = ttnn.ComputeConfigDescriptor(
-            math_fidelity=getattr(ttnn.MathFidelity, os.environ.get("HY4_IHC_FID", "HiFi4")), fp32_dest_acc_en=True
+            math_fidelity=getattr(ttnn.MathFidelity, os.environ.get("HY4_IHC_FID", "HiFi4")),
+            fp32_dest_acc_en=True,
+            dst_full_sync_en=True,
         )
         if EXPAND:
             modes = [ttnn.UnpackToDestMode.Default] * 64
@@ -344,10 +359,13 @@ class Hy4IHCFused:
                 YC,
                 MC,
                 INC,
+                T,
             ],
             ttnn.RuntimeArgs(),
             cfg,
         )
+        if os.environ.get("HY4_IHC_NOPCB") == "1":
+            cbs = cbs[:2]  # launch-overhead probe (kernels return immediately)
         prog = ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=[], cbs=cbs)
         prog.custom_program_hash = _hash(
             0x5D1,
@@ -359,6 +377,7 @@ class Hy4IHCFused:
             emit_rm,
             int(os.environ.get("HY4_IHC_ABL", "0")),
             EXPAND,
+            DUAL,
             tuple(_acc(y_t)),
             tuple(_acc(q_t)),
             tuple(_acc(x_new)),
