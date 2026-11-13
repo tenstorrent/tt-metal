@@ -68,6 +68,8 @@ class Flux1PipelineConfig:
 
     # Capture traces and replay them.
     trace: bool
+    # Whether `trace` came from the default rather than from the caller.
+    trace_by_default: bool = False
 
     checkpoint_name: str
 
@@ -115,6 +117,7 @@ class Flux1PipelineConfig:
             width=width,
             cfg_enabled=cfg_enabled,
             trace=True if trace is None else trace,
+            trace_by_default=trace is None,
             checkpoint_name=checkpoint_name,
         )
 
@@ -143,6 +146,7 @@ class Flux1Pipeline(Pipeline):
 
     def __init__(self, *, device: ttnn.MeshDevice, config: Flux1PipelineConfig) -> None:
         super().__init__(offload_weights=False, trace=config.trace)
+        self.warn_if_no_trace_region(device, by_default=config.trace_by_default)
         self._mesh_device = device
         self._parallel_config = config.dit_parallel_config
         self._encoder_parallel_config = config.encoder_parallel_config
