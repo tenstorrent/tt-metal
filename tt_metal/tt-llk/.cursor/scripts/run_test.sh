@@ -11,7 +11,8 @@
 # Commands:
 #   count     Count test variants (collection-only; outputs integer to stdout)
 #   compile   Run compile-producer step (parallel, no flock needed)
-#   simulate  Run the consumer step (flock-serialised, no xdist).
+#   simulate  Run the consumer step (flock-serialised; serial, except --perf
+#             on silicon, which uses --dist loadgroup -n <consumer-jobs>).
 #             Quasar uses the UMD simulator; Blackhole/Wormhole run on silicon.
 #   run       compile + simulate in sequence (most common agent use case)
 #
@@ -42,10 +43,13 @@
 #                     --mode perf for SFPU sweep modules), sets
 #                     TT_LLK_DISABLE_ASSERTS=1 for both phases, and on silicon
 #                     runs the consumer with --dist loadgroup -n <consumer-jobs>.
-#                     Unlike CI it does not stop at the first failure.
-#                     simulate needs a prior compile --perf of the same tests.
-#                     Prints the report directory in a RUN_LLK_TESTS_PERF_REPORT
-#                     line. Selecting no perf variant is exit 4.
+#                     Unlike CI it does not stop at the first failure. Asserts
+#                     off is the Wormhole/Blackhole CI build; Quasar perf CI
+#                     keeps them (--keep-asserts). simulate needs a prior
+#                     compile --perf of the same tests. Prints the report
+#                     directory in a RUN_LLK_TESTS_PERF_REPORT line, marked
+#                     partial when the consumer did not pass. Selecting no perf
+#                     variant is exit 4. A run tag is single-use.
 #   --run-tag  TAG    Perf report directory name, perf_data/runs/<TAG>
 #                     (sets PERF_RUN_TAG; default local-<utc timestamp>-<pid>;
 #                     an existing report directory is refused, again under the
@@ -74,7 +78,9 @@
 #   1  One or more tests failed
 #   2  Compile step failed  (only from the 'run' command)
 #   3  Environment error (flock timeout, venv missing)
-#   4  Usage / validation error (missing required options)
+#   4  Usage / validation error (missing required options). With --perf also:
+#      an invalid or already used --run-tag, no perf variants selected, or
+#      no matching compile --perf before simulate
 #
 # Agents invoke this via the Bash tool with timeout: 1800000 (synchronous,
 # never run_in_background). The script blocks until completion and returns one
@@ -129,6 +135,7 @@ RUN_TAG=""
 KEEP_RUNS=""
 CONSUMER_JOBS="15"
 CONSUMER_JOBS_SET="false"
+PERF_REPORT_DIR=""
 PERF_COUNTERS="false"
 DUMP_PERF_COUNTERS="false"
 KEEP_ASSERTS="false"
@@ -263,13 +270,24 @@ _validate() {
   esac
 
   if [[ "$PERF" == "true" ]]; then
+    if [[ -n "$MAXFAIL" && ( "$CMD" == "run" || "$CMD" == "simulate" ) ]]; then
+      echo "WARNING: --maxfail ${MAXFAIL} with --perf: the report is partial if the sweep stops early." >&2
+    fi
     if [[ -z "$RUN_TAG" ]]; then
       RUN_TAG="local-$(date -u +%Y%m%dT%H%M%SZ)-$$"
     fi
+    # The tag becomes a path under perf_data/runs/, and the report writer prunes
+    # that directory's siblings, so an absolute or ../ tag would delete
+    # unrelated directories.
+    if [[ ! "$RUN_TAG" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+      echo "ERROR: --run-tag must match [A-Za-z0-9][A-Za-z0-9._-]*, got '${RUN_TAG}'" >&2
+      exit 4
+    fi
+    PERF_REPORT_DIR="${WORKTREE}/perf_data/runs/${RUN_TAG}"
     # The report writer only replaces what this sweep produces, so a reused tag
     # mixes old and new rows.
-    if [[ "$CMD" == "run" || "$CMD" == "simulate" ]] && [[ -e "${WORKTREE}/perf_data/runs/${RUN_TAG}" ]]; then
-      echo "ERROR: perf report directory already exists: ${WORKTREE}/perf_data/runs/${RUN_TAG}" >&2
+    if [[ "$CMD" == "run" || "$CMD" == "simulate" ]] && [[ -e "$PERF_REPORT_DIR" ]]; then
+      echo "ERROR: perf report directory already exists: ${PERF_REPORT_DIR}" >&2
       echo "       Pick a new --run-tag." >&2
       exit 4
     fi
@@ -281,6 +299,8 @@ _validate() {
       echo "ERROR: --consumer-jobs must be a non-negative integer, got '${CONSUMER_JOBS}'" >&2
       exit 4
     fi
+    # A leading zero would otherwise read as octal ("08" is an error).
+    CONSUMER_JOBS=$((10#$CONSUMER_JOBS))
   elif [[ -n "$RUN_TAG$KEEP_RUNS" || "$CONSUMER_JOBS_SET$PERF_COUNTERS$DUMP_PERF_COUNTERS$KEEP_ASSERTS" == *true* ]]; then
     echo "ERROR: --run-tag, --keep-runs, --consumer-jobs, --perf-counters, --dump-perf-counters and --keep-asserts need --perf" >&2
     exit 4
@@ -311,9 +331,9 @@ _check_perf_compile_markers() {
 }
 
 # pytest exit 5 means nothing was collected. Under --perf that is a module or
-# -k with no perf variants, not a failure.
+# --k with no perf variants, not a failure.
 _no_perf_variants() {
-  echo "ERROR: no perf variants selected in $(_test_label)${K_FILTER:+ with -k '${K_FILTER}'}${TEST_ID:+ (--test-id)}" >&2
+  echo "ERROR: no perf variants selected in $(_test_label)${K_FILTER:+ with --k '${K_FILTER}'}${TEST_ID:+ (--test-id)}" >&2
 }
 
 # pytest selection and report flags shared by every phase of a --perf run, so
@@ -327,8 +347,9 @@ _perf_pytest_args() {
   return 0
 }
 
-# Environment for a --perf build. CI compiles perf without LLK_ASSERT, so a
-# local build with asserts measures different code.
+# Environment for a --perf build. Wormhole and Blackhole perf CI compile without
+# LLK_ASSERT, so a local build with asserts measures different code. Quasar perf
+# CI keeps asserts; --keep-asserts matches it.
 _perf_env_prefix() {
   PERF_ENV=()
   [[ "$PERF" == "true" ]] || return 0
@@ -351,13 +372,15 @@ _do_count() {
   _vlog "count: $(_test_label) (arch=${ARCH})"
 
   _perf_pytest_args
+  local -a solflag=()
+  [[ "$SPEED_OF_LIGHT" == "true" ]] && solflag=(--speed-of-light)
   local output exit_code
   exit_code=0
   output=$(
     # shellcheck disable=SC1091
     source "${VENV}/bin/activate"
     cd "${TEST_DIR}"
-    CHIP_ARCH="${ARCH}" pytest --compile-producer --co -q \
+    CHIP_ARCH="${ARCH}" pytest --compile-producer --co -q ${solflag+"${solflag[@]}"} \
       ${PERF_PYTEST_ARGS+"${PERF_PYTEST_ARGS[@]}"} "${TEST_FILES[@]}" 2>&1
   ) || exit_code=$?
 
@@ -461,13 +484,13 @@ _do_simulate() {
   fi
 
   # Remove temp scripts left by runs that died before their trap fired
-  find /tmp -maxdepth 1 -name 'llk_run_sim_*.sh' -mmin +60 -delete 2>/dev/null || true
+  find /tmp -maxdepth 1 \( -name 'llk_run_sim_*.sh' -o -name 'llk_run_sim_*.sh.tag-taken' \) -mmin +60 -delete 2>/dev/null || true
 
   # Write the pytest invocation to a temp file so that:
   #   1. flock can use "flock LOCK bash SCRIPT" without inline quoting nightmares
   #   2. TEST_ID values (single-quotes, brackets, commas) are literal, not shell-expanded
   local sim_script tag_taken
-  local report_dir="${WORKTREE}/perf_data/runs/${RUN_TAG}"
+  local report_dir="${PERF_REPORT_DIR}"
   sim_script=$(mktemp /tmp/llk_run_sim_XXXXXX.sh)
   tag_taken="${sim_script}.tag-taken"
   # Trap ensures the temp files are removed even on SIGTERM / SIGINT
@@ -588,6 +611,8 @@ _do_simulate() {
     if [[ "$tag_was_taken" == "true" ]]; then
       echo "=== RUN_LLK_TESTS_PERF_REPORT === none (${report_dir} was written by another run; pick a new --run-tag)" >&2
       sim_exit=4
+    elif [[ -d "$report_dir" && $sim_exit -ne 0 ]]; then
+      echo "=== RUN_LLK_TESTS_PERF_REPORT === ${report_dir} (partial: consumer exit ${sim_exit})" >&2
     elif [[ -d "$report_dir" ]]; then
       echo "=== RUN_LLK_TESTS_PERF_REPORT === ${report_dir}" >&2
     else

@@ -39,7 +39,11 @@ In Claude Code, `/perf-regression-check perf_math_matmul` (or "compare perf of
 
 Env knobs: `PERF_COMPARE_HOME` (cache + reports, default `~/.cache/tt-llk-perf-compare`),
 `WORK_ROOT` (worktrees and build trees, default `/tmp/tt-llk-perf-compare`), `PRODUCER_JOBS`,
-`CONSUMER_JOBS`, `RESET_BETWEEN_RUNS=1`, `SPARSE_PATHS`, `ALLOW_CROSS_HOST=1`.
+`CONSUMER_JOBS`, `RESET_BETWEEN_RUNS=1`, `SPARSE_PATHS`, `ALLOW_CROSS_HOST=1`, and
+`TT_LLK_DISABLE_ASSERTS` (default `1`: asserts off, cache suffix `-noassert`; `0`:
+asserts on, suffix `-assert`). With asserts off, a commit whose `test_config.py`
+predates the asserts toggle is refused; use a newer baseline or compare both
+sides with `TT_LLK_DISABLE_ASSERTS=0`.
 
 ## Output
 - `regression_report.md` — verdict, top regressions, top improvements, new points.

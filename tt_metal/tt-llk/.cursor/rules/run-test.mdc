@@ -1,11 +1,14 @@
 ---
 alwaysApply: false
-description: Use when running LLK tests. Delegates to the llk-test-runner agent. Never run pytest directly.
+description: Use when running LLK tests. Delegates device, simulator and kernel-building tests to the llk-test-runner agent; the two named host-only exceptions use their own entry points.
 ---
 
 # Running LLK Tests
 
-All test runs MUST be delegated to the `llk-test-runner` agent at `@.cursor/agents/llk-test-runner.md`. Do NOT run `pytest` directly.
+Tests that build kernels or use a device or simulator MUST be delegated to the
+`llk-test-runner` agent at `@.cursor/agents/llk-test-runner.md`; do not run
+`pytest` directly for them. The host-only exceptions are
+`tests/run_hardware_free.sh` and `compare_test_and_perf.py`.
 
 The agent wraps `.cursor/scripts/run_test.sh`, which:
 - Serialises simulator/silicon access via `flock` (per-arch lock file)
@@ -19,7 +22,7 @@ The user provides a test file (and optionally arch + flags). You parse, fill in 
 Example user inputs:
 ```
 run test_eltwise_binary_quasar.py
-run test_sfpu_square_quasar.py with -k Float16
+run test_sfpu_square_quasar.py with --k Float16
 rerun test_eltwise_binary_quasar.py
 compile-only test_eltwise_binary_quasar.py
 run test_sfpu_square_quasar.py with --no-split
@@ -37,11 +40,11 @@ run test_sfpu_square_quasar.py with --no-split
 - `--no-split` — combined compile+run in one pytest invocation (issue-solver tests)
 - `--timeout <secs>` — pytest timeout ceiling (default 600)
 - `--speed-of-light` — compile runtime parameters as constants (the build the nightly `LLK perf` run measures; the PR and merge perf gates build without it)
-- `--perf` — perf sweep with CI's build: `-m perf` (plus `--mode perf` for SFPU sweep modules), `TT_LLK_DISABLE_ASSERTS=1`, and `--dist loadgroup -n 15` for the silicon consumer. Unlike CI it does not stop at the first failure. `simulate` / `--rerun` need a prior `compile --perf` of the same tests, or they exit 4; a module or `-k` with no perf variants also exits 4. Prints a `RUN_LLK_TESTS_PERF_REPORT` line naming `perf_data/runs/<tag>`; validate the result with `.claude/skills/perf-report/SKILL.md`
-- `--run-tag <tag>` / `--keep-runs <N>` — perf report directory name and retention (`PERF_RUN_TAG`, `PERF_KEEP_RUNS`; `--keep-runs 0` keeps all); need `--perf`. A tag whose directory already exists is refused
+- `--perf` — perf sweep with the Wormhole/Blackhole CI build: `-m perf` (plus `--mode perf` for SFPU sweep modules), `TT_LLK_DISABLE_ASSERTS=1`, and `--dist loadgroup -n 15` for the silicon consumer. Quasar perf CI keeps asserts; pass `--keep-asserts` to match it. Unlike CI the local runner does not stop at the first failure. `simulate` / `--rerun` need a prior `compile --perf` of the same tests, or they exit 4; a module or `--k` with no perf variants also exits 4. Prints a `RUN_LLK_TESTS_PERF_REPORT` line naming `perf_data/runs/<tag>`; a non-PASS consumer marks it partial. Validate a PASS result with `.claude/skills/perf-report/SKILL.md`
+- `--run-tag <tag>` / `--keep-runs <N>` — perf report directory name and retention (`PERF_RUN_TAG`, `PERF_KEEP_RUNS`; `--keep-runs 0` keeps all); need `--perf`. Tags match `[A-Za-z0-9][A-Za-z0-9._-]*` and are single-use
 - `--consumer-jobs <N>` — silicon consumer parallelism (default 15; 0 is serial); needs `--perf`
 - `--perf-counters` / `--dump-perf-counters` — counter report (a separate report kind); need `--perf`
-- `--keep-asserts` — keep `LLK_ASSERT` in a `--perf` build (numbers then differ from CI)
+- `--keep-asserts` — keep `LLK_ASSERT` in a `--perf` build (matches Quasar perf CI; differs from Wormhole/Blackhole CI)
 
 The never-call-pytest rule covers tests that build kernels or use a device or simulator. Host-only work is outside it: `tests/run_hardware_free.sh` and `compare_test_and_perf.py`.
 
@@ -106,7 +109,13 @@ If `--arch` is not provided, infer in this order:
    Use a blocking shell call (~30 min timeout); never poll.
    Do not modify code.
    ```
-4. **Report** the agent's result. If exit 1 (test failure) or 2 (compile failure), suggest the `debug-kernel` rule as the next step. If exit 3 (env error), surface the root cause and stop — don't retry blindly.
+4. **Report** the agent's result. For `--perf`, include the report directory;
+   a non-PASS report is partial, and PASS says nothing about whether its numbers
+   are plausible, so hand a PASS result to
+   `.claude/skills/perf-report/SKILL.md` for validation. If exit 1 (test
+   failure) or 2 (compile failure), suggest the `debug-kernel` rule as the next
+   step. If exit 3 (env error), surface the root cause and stop — don't retry
+   blindly.
 
 ## Multi-File Runs
 
@@ -120,6 +129,8 @@ Reuse the same `llk-test-runner` agent for repeated test runs after a failure (u
 
 ## Constraints
 
-- **Never** call `pytest` directly. Always go through the script.
+- **Never** call `pytest` directly for a kernel-building, device or simulator
+  test. Use `tests/run_hardware_free.sh` and `compare_test_and_perf.py` for the
+  two host-only exceptions.
 - **Never** skip the venv check — the script exits 3 with a clear message, but the rule should detect-and-bootstrap rather than fail.
 - **Never** run multiple simulator invocations in parallel from the same agent. The script's `flock` protects against concurrent agents, but a single agent should still serialise its own runs.

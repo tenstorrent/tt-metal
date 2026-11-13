@@ -43,30 +43,32 @@ Record the perf schema version with the report. The number is
 CSV column. It changes when columns change. A `tile_cnt` accounting change
 can make rows incomparable without a version bump.
 
-Decide scope before running. A narrowed sweep (`-k`, `--op`) is right for
+Decide scope before running. A narrowed sweep (`--k`, `--op`) is right for
 debugging; a report meant for analysis must cover the full intended sweep.
 Never narrow the sweep in the test file to make a run finish.
 
 ## 2. Run the sweep
 
-Use the two-phase producer/consumer flow, never a single serial invocation:
+Use the `.cursor` runner with `--perf`, which performs the two-phase
+producer/consumer flow, pins `LLK_HOME`, serializes device access and
+diagnoses hangs:
 
 ```bash
-cd tests
-CHIP_ARCH=<arch> pytest --compile-producer -n 10 -m perf ./python_tests/perf_[op].py
-CHIP_ARCH=<arch> pytest --compile-consumer -n 15 -m perf ./python_tests/perf_[op].py
+bash .cursor/scripts/run_test.sh run --worktree "$PWD" --arch <arch> \
+  --test perf_[op].py --perf [--speed-of-light] [--run-tag <unique-tag>]
 ```
 
-Prefer the `run-test` workflow where it applies; it serializes simulator
-access and diagnoses hangs. `tests/run_llk_perf_wormhole.sh` and
-`tests/run_llk_perf_blackhole.sh` show the exact CI invocation.
+The run tag is single-use. A non-PASS consumer can still write a report; the
+runner marks that directory `partial`, and it is not valid for analysis.
+`tests/run_llk_perf_wormhole.sh` and `tests/run_llk_perf_blackhole.sh` show
+the Wormhole/Blackhole CI invocation.
 
 Rules:
 
 - `--speed-of-light` turns runtime parameters into compile-time constants and
-  changes measured cycles. CI passes it. Match CI when the report will be
-  compared with CI numbers, and never mix speed-of-light and normal rows in
-  one report.
+  changes measured cycles. The scheduled **LLK perf** run passes it; the PR,
+  merge and normal-build nightly perf gates do not. Match the CI report being
+  compared, and never mix speed-of-light and normal rows in one report.
 - `--enable-perf-counters` produces a different, mutually exclusive kind of
   report. It compiles with `-DPERF_COUNTERS_COMPILED` (the WC build; NC
   compiles no counter code): the run emits the wall-clock
