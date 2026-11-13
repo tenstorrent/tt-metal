@@ -66,10 +66,8 @@ namespace abi = cce_idma_copy_abi;
 inline constexpr std::chrono::seconds kHostDeadline{300};
 // Offsets of a CCE's GDDR target in its local DRAM view, above DRAM UNRESERVED, clear of MM-8's 0x10000.
 inline constexpr uint64_t kGddrTargetOffset = 0x100000;
-// Observer handshake lines, in the hart's data area after its source block.
-inline constexpr uint64_t kPeerFlagOffsetFromData = 0x8000;
 
-// Hart data area (tl1_data) layout of the MM43 cases, clear of the observer flag lines.
+// Hart data area (tl1_data) layout of the MM43 cases.
 inline constexpr uint64_t kOwnDestinationOffsetFromData = 0x10000;
 inline constexpr uint64_t kTableOffsetFromData = 0x22000;
 inline constexpr uint64_t kTraceOffsetFromData = 0x23000;
@@ -96,13 +94,12 @@ std::string code_note(uint32_t code) { return idma_code_leaves_command_in_flight
 
 uint64_t gddr_view_offset() { return dram_unreserved_base() + kGddrTargetOffset; }
 
-std::vector<uint32_t> observer_args(uint32_t hart, uint32_t trid, uint64_t peer_flag_offset) {
+std::vector<uint32_t> observer_args(uint32_t hart, uint32_t trid) {
     return idma_copy_args(
         {.mode = abi::kModeTridScopeObserver,
          .status_offset = tl1_done_block(hart),
          .poll_budget_cycles = kPollBudgetCycles,
-         .trid = trid,
-         .peer_flag_offset = peer_flag_offset});
+         .trid = trid});
 }
 
 // Runs every launch in one Program and returns their status lines in launch order; none on the host deadline.
@@ -1392,8 +1389,8 @@ protected:
     }
 };
 
-// The first session ends with every trid acked. After the reopen, the observer mode with its issuer flag already
-// set reads one trid's pending count on command buffer 0 without issuing; one launch per trid on the same hart.
+// The first session ends with every trid acked. After the reopen, the observer mode reads one trid's pending count on
+// command buffer 0 without issuing; one launch per trid on the same hart.
 TEST_P(MimirTridReset, NoStaleIdAfterReinit) {
     const uint32_t cce_index = GetParam();
     {
@@ -1419,16 +1416,11 @@ TEST_P(MimirTridReset, NoStaleIdAfterReinit) {
     }
 
     IDevice* device = open_device();
-    const uint64_t peer_flag_offset = tl1_data(kTridHart) + kPeerFlagOffsetFromData;
     for (uint32_t trid = 0; trid < abi::kNumTrids; ++trid) {
-        std::vector<uint32_t> flags(2 * abi::kLineBytes / sizeof(uint32_t), 0);
-        flags[0] = 1;
-        write_cce_tl1(device, cce_index, peer_flag_offset, flags);
         const std::string label =
             fmt::format("NoStaleIdAfterReinit on CCE{}: pending count of trid {}", cce_index, trid);
         log_info(tt::LogTest, "MM43 {}", label);
-        const CceStatuses statuses =
-            run_on_cce(device, cce_index, {{kTridHart, observer_args(kTridHart, trid, peer_flag_offset)}});
+        const CceStatuses statuses = run_on_cce(device, cce_index, {{kTridHart, observer_args(kTridHart, trid)}});
         ASSERT_TRUE(statuses.has_value()) << label << ": " << statuses.no_status();
         const std::vector<uint32_t>& status = statuses->front();
         EXPECT_EQ(status[abi::kStatusCode], abi::kCodeAcked) << label << ": " << idma_status_detail(status);
