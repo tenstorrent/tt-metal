@@ -560,7 +560,7 @@ def test_reader_and_writer_configs():
     assert writer.config_2xx.disable_dfb_implicit_sync_for_all
 
 
-def test_program_spec_from_the_design_example():
+def test_program_spec_of_an_exp_program():
     kernels = ["reader", "writer", "compute"]
     spec = E.ProgramSpec(
         name="exp",
