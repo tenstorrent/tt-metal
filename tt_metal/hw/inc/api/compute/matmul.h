@@ -909,7 +909,9 @@ constexpr std::uint32_t matmul_fe_unpack_ttsync() {
 #endif
 }
 
-template <std::uint32_t in0_cb, std::uint32_t in1_cb, std::uint32_t ct, std::uint32_t rt>
+// mark: unused; the unpack and pack init macro passes sizeof(matmul_fe_mark::set<0>) so the TRISC wrapper sees the
+// kernel names it
+template <std::uint32_t in0_cb, std::uint32_t in1_cb, std::uint32_t ct, std::uint32_t rt, std::size_t mark = 0>
 ALWI void matmul_block_init_fe(
     const std::uint32_t call_line,
     std::uint32_t in0_cb_id,
@@ -933,19 +935,6 @@ ALWI void matmul_block_init_fe(
         0,
         matmul_fe_key<ct, rt>(rt),
         matmul_fe_key<ct, rt>(ct)>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim, call_line);
-}
-
-// mark: the size of matmul_fe_mark::set<0>, which naming it here makes the TRISC wrapper see (the unpack and pack init
-// macro)
-template <
-    std::uint32_t in0_cb,
-    std::uint32_t in1_cb,
-    std::uint32_t ct,
-    std::uint32_t rt,
-    std::size_t mark,
-    typename... Args>
-ALWI void matmul_block_init_fe_marked(const std::uint32_t call_line, Args... args) {
-    matmul_block_init_fe<in0_cb, in1_cb, ct, rt>(call_line, args...);
 }
 
 template <std::uint32_t in0_cb, std::uint32_t in1_cb, std::uint32_t ct, std::uint32_t rt>
@@ -1045,8 +1034,8 @@ static_assert(!is_used<2>(0), "matmul_fe_mark: an untouched tag<N> must read unu
     matmul_block_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), MATMUL_FE_C(ct), MATMUL_FE_C(rt)>( \
         line, a, b, i0, i1, d, tr, ct, rt, kt)
 #else
-#define matmul_block_init(in0_cb_id, in1_cb_id, ...)                                                             \
-    matmul_block_init_fe_marked<MATMUL_FE_C(in0_cb_id), MATMUL_FE_C(in1_cb_id), 0xFFu, 0xFFu, MATMUL_FE_MARK()>( \
+#define matmul_block_init(in0_cb_id, in1_cb_id, ...)                                                      \
+    matmul_block_init_fe<MATMUL_FE_C(in0_cb_id), MATMUL_FE_C(in1_cb_id), 0xFFu, 0xFFu, MATMUL_FE_MARK()>( \
         __builtin_LINE(), in0_cb_id, in1_cb_id, ##__VA_ARGS__)
 #define matmul_block(in0_cb_id, in1_cb_id, ...)                                    \
     matmul_block_fe<MATMUL_FE_C(in0_cb_id), MATMUL_FE_C(in1_cb_id), 0xFFu, 0xFFu>( \

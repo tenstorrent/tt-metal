@@ -147,12 +147,8 @@ ALWI void(matmul_block)(
 }
 
 // api/compute/matmul.h's matmul_block_init / matmul_block macros (Blackhole) send a call with operand descriptors here
-template <std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t, typename... Args>
+template <std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t, std::size_t = 0, typename... Args>
 ALWI void matmul_block_init_fe(std::uint32_t, Args... args) {
-    (matmul_block_init)(args...);
-}
-template <std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t, std::size_t, typename... Args>
-ALWI void matmul_block_init_fe_marked(std::uint32_t, Args... args) {
     (matmul_block_init)(args...);
 }
 template <std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t, typename... Args>
