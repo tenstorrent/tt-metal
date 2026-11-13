@@ -563,6 +563,7 @@ ProgramDescriptor MatmulReduceScatterPrefillProgramFactory::create_descriptor(
     compute_ct[args::compute_ct::NUM_CHUNKS] = num_chunks;
     compute_ct[args::compute_ct::N_INNER] = n_inner;
     compute_ct[args::compute_ct::RESIDENT] = resident ? 1 : 0;
+    compute_ct[args::compute_ct::ROW_MOP] = mesh->arch() == tt::ARCH::BLACKHOLE ? 1 : 0;
 
     std::vector<uint32_t> writer_ct(args::writer_ct::COUNT);
     writer_ct[args::writer_ct::CB_FINISHED] = args::cb::FINISHED;

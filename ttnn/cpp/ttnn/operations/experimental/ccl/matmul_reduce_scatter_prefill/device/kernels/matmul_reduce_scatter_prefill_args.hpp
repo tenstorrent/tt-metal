@@ -131,6 +131,7 @@ enum : uint32_t {
     NUM_CHUNKS,
     N_INNER,
     RESIDENT,
+    ROW_MOP,  // 1 on Blackhole: matmul row MOP (api/compute/matmul.h); the factory sets it from the arch
     COUNT
 };
 }  // namespace compute_ct
