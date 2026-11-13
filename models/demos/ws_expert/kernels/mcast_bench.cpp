@@ -7,6 +7,9 @@
 // barrier after each multicast (BARRIER 1) or only at the end (BARRIER 0). Stamps: [0] start, [1] end.
 // CT: 0 N, 1 B, 2 x0, 3 y0, 4 x1, 5 y1, 6 ndest, 7 src addr, 8 dst addr, 9 flag addr, 10 FLAG, 11 BARRIER, 12 stamps
 #include "api/dataflow/dataflow_api.h"
+#ifndef LINKED
+#define LINKED false
+#endif
 
 void kernel_main() {
     constexpr uint32_t N = get_compile_time_arg_val(0);
@@ -25,7 +28,12 @@ void kernel_main() {
     st[0] = wall();
     for (uint32_t i = 0; i < N; ++i) {
 #ifdef LOOPBACK
-        noc_async_write_multicast_loopback_src(src, get_noc_multicast_addr(x0, y0, x1, y1, dst + slot), B, nd);
+        noc_async_write_multicast_loopback_src(src, get_noc_multicast_addr(x0, y0, x1, y1, dst + slot), B, nd, LINKED);
+#ifdef LFLAG
+        noc_semaphore_set_multicast_loopback_src(
+            src, get_noc_multicast_addr(x0, y0, x1, y1, flag + (slot / 16 % 64) * 16), nd);
+        noc_async_writes_flushed();
+#endif
 #else
         noc_async_write_multicast(src, get_noc_multicast_addr(x0, y0, x1, y1, dst + slot), B, nd);
 #endif

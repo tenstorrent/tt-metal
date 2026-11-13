@@ -23,7 +23,7 @@ constexpr uint32_t w_cb = tt::CBIndex::c_1;
 constexpr uint32_t hr_cb = tt::CBIndex::c_2;
 constexpr uint32_t wd_cb = tt::CBIndex::c_3;
 constexpr uint32_t xst_cb = tt::CBIndex::c_8;
-constexpr uint32_t SEM_WARR = 0, SEM_SCR2 = 3;
+constexpr uint32_t SEM_WARR = 0, SEM_HARR = 1, SEM_SCR2 = 3, SEM_SCRH = 5;
 
 void kernel_main() {
     constexpr uint32_t KT = get_compile_time_arg_val(0);
@@ -43,6 +43,7 @@ void kernel_main() {
     constexpr uint32_t xtile = get_compile_time_arg_val(16);
     constexpr uint32_t counts_l1 = get_compile_time_arg_val(17);
     constexpr uint32_t icred = get_compile_time_arg_val(18);
+    constexpr uint32_t hring = get_compile_time_arg_val(19), htile = get_compile_time_arg_val(20);
     constexpr uint32_t BPR = KT / BK, HALF = GC / 2;
     constexpr uint32_t WGU = KT * 2, WDN = KTD * DCOLS;
 
@@ -101,19 +102,20 @@ void kernel_main() {
     auto wall = []() { return *reinterpret_cast<volatile uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L); };
     uint32_t t_cred = 0, t_empty = 0, n_cred = 0, last_t = wall();
     // ---- QA: own x multicasts
-    uint32_t a_n = 0, a_l = J, a_base = 0;
+    const uint32_t L0 = 2 * (J % HALF) + J / HALF;
+    uint32_t a_n = 0, a_l = L0, a_base = 0;
     const uint32_t scr_addr = get_semaphore(SEM_SCR2);
     volatile tt_l1_ptr uint32_t* scr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scr_addr);
     auto qa = [&]() -> bool {
         while (a_n < nexp_g && a_l >= rows_of(a_n) * BPR) {
             a_base += rows_of(a_n) * BPR;
             ++a_n;
-            a_l = J;
+            a_l = L0;
         }
         const uint32_t now = wall();
         const uint32_t dt = now - last_t;
         last_t = now;
-        if (a_n >= nexp_g) {
+        if (a_n >= nexp_g || J / HALF != 1) {  // (column 0 multicasts x from its BRISC, on NOC0)
             return false;
         }
         if (!cb_pages_available_at_front(xst_cb, BK)) {
@@ -131,6 +133,15 @@ void kernel_main() {
                 }
             }
         }
+#if WG_XORDER
+        if (s >= WG_XORDER) {  // in stream order: block s - WG_XORDER has landed here (one multicast at a time a NoC)
+            invalidate_l1_cache();
+            if (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(xflags + ((s - WG_XORDER) % NX) * 16) <
+                s - WG_XORDER + 1) {
+                return false;
+            }
+        }
+#endif
         const uint32_t xs = s % NX;
         *scr = s + 1;
         noc_async_write_multicast_loopback_src(
@@ -181,7 +192,7 @@ void kernel_main() {
                     w_base += rows_of(w_e) * BPR;
                     ++w_e;
                 }
-                const uint32_t owner = (nxt - w_base) % GC;
+                const uint32_t ol = nxt - w_base, owner = (ol % 2) * HALF + (ol / 2) % HALF;
                 noc_inline_dw_write(
                     get_noc_addr(cxs[owner / HALF], ny0 + owner % HALF, xprog + J * 16), x_credited + 1);
             }
@@ -207,13 +218,49 @@ void kernel_main() {
         ++h_q;
         return true;
     };
+    uint32_t mx[4] = {0, 0, 0, 0}, tot[4] = {0, 0, 0, 0};
+    // ---- QL: column 1's h leader multicasts (rows q with q % 10 == Y; see the BRISC's Q3)
+    const uint32_t C = J / HALF, Y = J % HALF;
+    uint32_t led = 0, lq = Y;
+    const uint32_t harr = get_semaphore(SEM_HARR), hscr_addr = get_semaphore(SEM_SCRH);
+    volatile tt_l1_ptr uint32_t* hscr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(hscr_addr);
+    auto ql = [&]() -> bool {
+        if (C != 1 || lq >= total_rows) {
+            return false;
+        }
+        invalidate_l1_cache();
+        if (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(harr) < HALF * (led + 1)) {
+            return false;
+        }
+        const uint32_t part = hring + ((lq % NS) * KTD + C * HALF) * htile;
+        *hscr = lq + 1;
+        noc_async_write_multicast_loopback_src(
+            part, get_noc_multicast_addr(mx0, my0, mx1, my1, part), HALF * htile, GC, true /*linked*/);
+        noc_semaphore_set_multicast_loopback_src(
+            hscr_addr, get_noc_multicast_addr(mx0, my0, mx1, my1, hflags + ((lq % NS) * 2 + C) * 16), GC);
+        noc_async_writes_flushed();
+        ++led;
+        lq += HALF;
+        return true;
+    };
     while (true) {
+        const uint32_t t0 = wall();
+        const bool l = ql();
         const bool a = qw();
+        const uint32_t t1 = wall();
         const bool b = qa();
+        const uint32_t t2 = wall();
         const bool c = qb();
+        const uint32_t t3 = wall();
         const bool d = qh();
-        if (!a && !b && !c && !d && w_n >= nexp_g && w_freed_sent >= nexp_g && a_n >= nexp_g && b_s >= total_x &&
-            x_credited >= total_x && h_q >= total_rows) {
+        const uint32_t t4 = wall();
+        const uint32_t dd[4] = {t1 - t0, t2 - t1, t3 - t2, t4 - t3};
+        for (uint32_t i = 0; i < 4; ++i) {
+            tot[i] += dd[i];
+            mx[i] = dd[i] > mx[i] ? dd[i] : mx[i];
+        }
+        if (!l && !a && !b && !c && !d && (C != 1 || lq >= total_rows) && w_n >= nexp_g && w_freed_sent >= nexp_g &&
+            (a_n >= nexp_g || J / HALF != 1) && b_s >= total_x && x_credited >= total_x && h_q >= total_rows) {
             break;
         }
     }
@@ -222,4 +269,8 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* st = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(9));
     st[48] = t_cred;
     st[49] = t_empty;
+    for (uint32_t i = 0; i < 4; ++i) {
+        st[470 + i] = tot[i];
+        st[474 + i] = mx[i];
+    }
 }

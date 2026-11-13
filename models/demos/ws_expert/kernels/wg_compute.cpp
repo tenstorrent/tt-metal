@@ -9,9 +9,10 @@
 // Per row (all rows of the group's experts in order): tilize window (own x blocks within LOOK of the consumption
 // point), gate/up over all KT (x ring CB 0, BK tiles a block), silu(g) * u -> one h tile (CB 16), then a DN op: the
 // down of the oldest h row once it is DN_LAG rows old (h ring CB 2, all KTD tiles of the row) -> CB 17.
-// x blocks of an expert: row r, K block b -> stream block 10 r + b of the expert; block l is core l % GC's.
-// RT: 0 stamps, 1 j, 2 g, 3 nexp_g (this group's experts)
-// CT: 0 KT, 1 BK, 2 KTD, 3 DCOLS, 4 DB, 5 NX, 6 LOOK, 7 counts L1 (64-aligned; word 0 ready, word 16 + e: M of expert e), 8 G,
+// x blocks of an expert: row r, K block b -> stream block 10 r + b of the expert; block l is core (l % 2) 10 +
+// (l / 2) % 10's (consecutive blocks alternate columns: column 0 multicasts on NOC0, column 1 on NOC1 - each toward the
+// other column without wrapping the row). RT: 0 stamps, 1 j, 2 g, 3 nexp_g (this group's experts) CT: 0 KT, 1 BK, 2
+// KTD, 3 DCOLS, 4 DB, 5 NX, 6 LOOK, 7 counts L1 (64-aligned; word 0 ready, word 16 + e: M of expert e), 8 G,
 //     9 GC
 #ifndef DN_LAG
 #define DN_LAG 1
@@ -80,7 +81,17 @@ FORCE_INLINE void pop_finished_down(uint32_t upto_n) {  // pop experts < upto_n 
     }
 }
 
+// gate/up's in0 is x (CB 0), down's is h (CB 2): when their formats differ (bfp8 x), SrcB switches with them
+#ifdef WX_X_FMT_DIFFERS
+#define SRCB_TO_H() reconfig_data_format_srcb(xr_cb, hr_cb)
+#define SRCB_TO_X() reconfig_data_format_srcb(hr_cb, xr_cb)
+#else
+#define SRCB_TO_H()
+#define SRCB_TO_X()
+#endif
+
 FORCE_INLINE void down_row() {
+    SRCB_TO_H();
     {
         const uint32_t a = wall();
         cb_wait_front(hr_cb, ktd);
@@ -106,6 +117,7 @@ FORCE_INLINE void down_row() {
     }
     cb_pop_front(hr_cb, ktd);
     cb_push_back(y_cb, dcols);
+    SRCB_TO_X();
     ++consumed;
 }
 
@@ -124,7 +136,8 @@ void kernel_main() {
     }
     UNPACK(stamps[0] = wall());
     DataflowBuffer xrm_dfb(xrm_cb), xst_dfb(xst_cb);
-    uint32_t til_n = 0, til_l = J, til_base = 0, cons = 0;  // next own x block: expert, block, stream base
+    const uint32_t L0 = 2 * (J % (GC / 2)) + J / (GC / 2);   // this core's first block of an expert (then every GC)
+    uint32_t til_n = 0, til_l = L0, til_base = 0, cons = 0;  // next own x block: expert, block, stream base
     auto maybe_tilize = [&]() {
         uint32_t n = til_n, l = til_l, base = til_base, cnt = 0, first = 0;  // (til_l: always one of this core's)
         while (n < nexp_g) {
@@ -132,7 +145,7 @@ void kernel_main() {
             if (l >= nb) {
                 base += nb;
                 ++n;
-                l = J;
+                l = L0;
                 continue;
             }
             const uint32_t s = base + l;

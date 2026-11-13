@@ -3,17 +3,22 @@
 # SPDX-License-Identifier: Apache-2.0
 """ws_expert with streamed weights: G groups of GC = 20 cores (two adjacent NoC-contiguous columns); expert e runs on
 group e % G (each expert's weights land once per chip). Core j of a group owns gate/up pair j and down columns
-[6 j, 6 j + 6); its weight slice (207 KB bfp4) lands in a 2-slot ring. On one chip the landing is done by NINJ
-injector cores reading DRAM (stand-in for the fabric all-gather: same ring addresses, arrival semaphore, credits).
-x: gathered from DRAM by row index, tilized and multicast inside the group (as ws_x); h: each core sends its tile to
-its column's leader for the row, the two leaders multicast 10 tiles each.
+[6 j, 6 j + 6); its weight slice (207 KB bfp4) lands in a 2-slot ring. On one chip the landing is done by NINJ = 20
+injector cores (stand-in for the fabric all-gather: same ring addresses, arrival semaphore, credits), either from
+weight sets preloaded in their L1 (wsrc "l1", fabric-like) or read from DRAM per expert (wsrc "dram": at 4 groups the
+~130 GB/s of 576 B weight reads beside the x gather saturate DRAM).
+x: gathered from DRAM by row index, tilized (bfp8 by default) and multicast inside the group; column 0 multicasts on
+NOC0 (+x) and column 1 on NOC1 (-x), so no multicast wraps the row, one at a time a NoC in stream order (block s
+waits for block s - 2 to land: concurrent linked multicasts starved single senders for up to 58K cycles).
+h: each core sends its tile to its column's leader for the row; the leaders multicast 10 tiles each (column 0 from the
+BRISC on NOC0, column 1 from the NCRISC on NOC1).
 """
 
 from dataclasses import dataclass
 
 import torch
-import ttnn
 
+import ttnn
 from models.demos.ws_expert.bench_util import TILE_BYTES, cb, crs, kpath, stamps_tensor
 from models.demos.ws_expert.ws_expert import noc, noc_rects, sharded_l1
 
@@ -27,23 +32,29 @@ class GCfg:
     nexp: int = 32
     G: int = 4
     GC: int = 20
-    BK: int = 12
+    BK: int = 24
     NX: int = 15
     LOOK: int = 30
     MMAX: int = 2048
     T: int = 8192
-    NINJ: int = 10
-    inj_col: int = 9  # logical column of the injectors (outside the groups)
-    CH: int = 24
+    NINJ: int = 20
+    inj_cols: tuple = (9, 10)  # logical columns of the injectors (outside the groups), 10 cores each
+    CH: int = 120
+    ICB: int = 2  # injector staging (chunks)
     XRM: int = 3  # gathered row-major staging (blocks)
     glu: int = 3
     dn_lag: int = 1
     NS: int = 4
-    x_dt: object = ttnn.bfloat16
+    x_dt: object = ttnn.bfloat8_b  # (bf16 x: twice the multicast bytes - see WORKLOG)
     w_dt: object = ttnn.bfloat4_b
     h_dt: object = ttnn.bfloat16
     out_dt: object = ttnn.bfloat16
     wdefs: tuple = ()  # debug defines for the group BRISC (WG_NO_GATHER)
+    wsrc: str = "l1"  # injectors: "l1" = P weight sets preloaded in L1, landed like the fabric would; "dram" = every
+    # expert's slice read from DRAM in the steady state (DRAM-bound at G 4: ~130 GB/s of 576 B reads beside x)
+    P: int = 2  # weight sets in "l1" mode (expert e uses set (e // G) % P: a group's consecutive experts differ)
+    idefs: tuple = ()  # debug defines for the injector writer (WG_INJ_NOWRITE: only the arrival semaphores)
+    xorder: int = 2  # x multicasts in stream order: block s waits for block s - xorder to land (0: off)
     trace0: int = -1  # debug: x block timeline from this stream index (40 blocks)
 
     KT = property(lambda s: s.H // 32)
@@ -62,7 +73,7 @@ def build(device, cfg: GCfg, x_t, idx_t, counts_t, wgu_t, wd_t, out_t):
     assert cfg.GC == 20 and cfg.PAIRS == cfg.GC and cfg.DCOLS * cfg.GC == cfg.HT
     groups = [group_cores(cfg, g) for g in range(cfg.G)]
     C = [c for gr in groups for c in gr]
-    INJ = [(cfg.inj_col, y) for y in range(cfg.NINJ)]
+    INJ = [(cfg.inj_cols[i // 10], i % 10) for i in range(cfg.NINJ)]
     assert not set(INJ) & set(C)
     cset, iset = crs(C), crs(INJ)
     KT, KTD, DC, BK, NX, NS = cfg.KT, cfg.PAIRS, cfg.DCOLS, cfg.BK, cfg.NX, cfg.NS
@@ -70,6 +81,8 @@ def build(device, cfg: GCfg, x_t, idx_t, counts_t, wgu_t, wd_t, out_t):
     WGU, WDN = KT * 2, KTD * DC
     wtile, htile, xtile = TILE_BYTES[cfg.w_dt], TILE_BYTES[cfg.h_dt], TILE_BYTES[cfg.x_dt]
     NT = cfg.GC // cfg.NINJ
+    # (first: the injectors' only L1 tensor, at the top of L1, so their CB 0 can be large in "l1" mode)
+    icred = sharded_l1(device, INJ, [cfg.G * NT, 4], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, torch.int32)
     # L1 tensors (same address on every core)
     wgu_ring = sharded_l1(device, C, [2 * WGU * 32, 32], cfg.w_dt, ttnn.TILE_LAYOUT)
     wd_ring = sharded_l1(device, C, [2 * WDN * 32, 32], cfg.w_dt, ttnn.TILE_LAYOUT)
@@ -84,7 +97,10 @@ def build(device, cfg: GCfg, x_t, idx_t, counts_t, wgu_t, wd_t, out_t):
     a64 = lambda a: (a + 63) // 64 * 64
     cnt_base = a64(counts_l1.buffer_address())  # word 0 ready flag, words 16.. counts (64 B in)
     idx_addr = a64(idx_l1.buffer_address())
-    icred = sharded_l1(device, INJ, [cfg.G * NT, 4], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, torch.int32)
+    nsets = cfg.P if cfg.wsrc == "l1" else cfg.nexp
+    WTOT = WGU + WDN
+    pre = cfg.wsrc == "l1"
+    idefs_all = [(d, "1") for d in cfg.idefs] + ([("WG_INJ_P", str(cfg.P))] if pre else [])
     st = stamps_tensor(device, C)
     kernels = []
     cp_rt, rd_rt, wr_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
@@ -105,6 +121,7 @@ def build(device, cfg: GCfg, x_t, idx_t, counts_t, wgu_t, wd_t, out_t):
             wr_rt[x][y] = [j, g, nexp_g, cx0, cx1, ny0, out_t.buffer_address(), x_t.buffer_address()] + [
                 idx_t.buffer_address(),
                 counts_t.buffer_address(),
+                st.buffer_address(),
             ]
             rd_rt[x][y] = [j, g, nexp_g, cx0, cx1, ny0, ix, iy, (g * NT + j // cfg.NINJ) * 16, st.buffer_address()]
         gwr = ttnn.RuntimeArgs()
@@ -120,12 +137,15 @@ def build(device, cfg: GCfg, x_t, idx_t, counts_t, wgu_t, wd_t, out_t):
                 + [hflags.buffer_address()]
                 + r0
                 + [htile, cfg.HT, cfg.RMAX, cfg.H * 2, cnt_base, idx_addr, cfg.nexp]
+                + [NX, xring.buffer_address(), xflags.buffer_address(), xprog.buffer_address(), xtile]
                 + list(ttnn.TensorAccessorArgs(out_t).get_compile_time_args())
                 + list(ttnn.TensorAccessorArgs(x_t).get_compile_time_args())
                 + list(ttnn.TensorAccessorArgs(idx_t).get_compile_time_args())
                 + list(ttnn.TensorAccessorArgs(counts_t).get_compile_time_args()),
                 runtime_args=gwr,
-                defines=[(d, "1") for d in cfg.wdefs],
+                defines=[(d, "1") for d in cfg.wdefs]
+                + [("WG_XORDER", str(cfg.xorder))]
+                + ([("WG_TRACE0", str(cfg.trace0))] if cfg.trace0 >= 0 else []),
                 config=ttnn.DataMovementConfigDescriptor(
                     processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.RISCV_0_default
                 ),
@@ -138,9 +158,10 @@ def build(device, cfg: GCfg, x_t, idx_t, counts_t, wgu_t, wd_t, out_t):
                 compile_time_args=[KT, BK, KTD, DC, cfg.GC, cfg.G, NS, NX, hflags.buffer_address()]
                 + [xring.buffer_address(), xflags.buffer_address(), xprog.buffer_address()]
                 + r_noc1
-                + [xtile, cnt_base, icred.buffer_address()],
+                + [xtile, cnt_base, icred.buffer_address(), hring.buffer_address(), htile],
                 runtime_args=grd,
-                defines=[("WG_TRACE0", str(cfg.trace0))] if cfg.trace0 >= 0 else [],
+                defines=[("WG_XORDER", str(cfg.xorder))]
+                + ([("WG_TRACE0", str(cfg.trace0))] if cfg.trace0 >= 0 else []),
                 config=ttnn.DataMovementConfigDescriptor(
                     processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.RISCV_1_default
                 ),
@@ -162,6 +183,7 @@ def build(device, cfg: GCfg, x_t, idx_t, counts_t, wgu_t, wd_t, out_t):
             compile_time_args=[cfg.nexp, KT, KTD, DC, cfg.PAIRS, cfg.HT, cfg.CH, NT, cfg.NINJ]
             + list(ttnn.TensorAccessorArgs(wgu_t).get_compile_time_args())
             + list(ttnn.TensorAccessorArgs(wd_t).get_compile_time_args()),
+            defines=idefs_all,
             runtime_args=irr,
             config=ttnn.DataMovementConfigDescriptor(
                 processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.RISCV_0_default
@@ -174,6 +196,7 @@ def build(device, cfg: GCfg, x_t, idx_t, counts_t, wgu_t, wd_t, out_t):
             core_ranges=iset,
             compile_time_args=[cfg.nexp, KT, KTD, DC, cfg.CH, NT, cfg.NINJ, cfg.G]
             + [wgu_ring.buffer_address(), wd_ring.buffer_address(), icred.buffer_address()],
+            defines=idefs_all,
             runtime_args=iwr,
             config=ttnn.DataMovementConfigDescriptor(
                 processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.RISCV_1_default
@@ -195,7 +218,11 @@ def build(device, cfg: GCfg, x_t, idx_t, counts_t, wgu_t, wd_t, out_t):
             core_ranges=cset,
             compile_time_args=[KT, BK, KTD, DC, DB, NX, cfg.LOOK, cnt_base, cfg.G, cfg.GC],
             named_compile_time_args=[("expert_activation", 0)],
-            defines=act_defs + lag + [("WC_GLU", str(cfg.glu))] + ([("WG_TRACE0", str(cfg.trace0))] if cfg.trace0 >= 0 else []),
+            defines=act_defs
+            + lag
+            + [("WC_GLU", str(cfg.glu))]
+            + ([("WX_X_FMT_DIFFERS", "1")] if cfg.x_dt != cfg.h_dt else [])
+            + ([("WG_TRACE0", str(cfg.trace0))] if cfg.trace0 >= 0 else []),
             runtime_args=cp_rt,
             config=ccfg,
         )
@@ -210,9 +237,9 @@ def build(device, cfg: GCfg, x_t, idx_t, counts_t, wgu_t, wd_t, out_t):
         cb(8, cfg.x_dt, XST * BK, cset),
         cb(16, cfg.h_dt, 2, cset),
         cb(17, cfg.out_dt, 2 * DC, cset),
-        cb(0, cfg.w_dt, 2 * cfg.CH, iset),
+        cb(0, cfg.w_dt, cfg.P * NT * WTOT if pre else cfg.ICB * cfg.CH, iset),
     ]
-    sems = [ttnn.SemaphoreDescriptor(id=s, core_ranges=crs(C + INJ), initial_value=0) for s in range(4)]
+    sems = [ttnn.SemaphoreDescriptor(id=s, core_ranges=crs(C + INJ), initial_value=0) for s in range(6)]
     prog = ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=cbs)
     io = [x_t, idx_t, counts_t, wgu_t, wd_t, wgu_ring, wd_ring, hring, hflags, xring, xflags, xprog, counts_l1]
     io += [idx_l1, icred, st, out_t]

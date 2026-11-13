@@ -21,6 +21,10 @@ void kernel_main() {
     constexpr uint32_t cred = get_compile_time_arg_val(10);
     constexpr uint32_t WGU = KT * 2, WDN = KTD * DCOLS, WTOT = WGU + WDN;
     const uint32_t tb = get_tile_size(0);
+#ifdef WG_INJ_P
+    cb_wait_front(0, WG_INJ_P * NT * WTOT);  // the slices are in L1 (CB 0)
+    const uint32_t pre = get_read_ptr(0);
+#endif
     for (uint32_t e = 0; e < NEXP; ++e) {
         const uint32_t g = e % G, n = e / G;
         for (uint32_t t = 0; t < NT; ++t) {
@@ -33,12 +37,20 @@ void kernel_main() {
                 } while (*c < n - 1);
             }
             for (uint32_t u0 = 0; u0 < WTOT; u0 += CH) {
-                cb_wait_front(0, CH);
                 const uint32_t dst = u0 < WGU ? wgu_ring + ((n & 1) * WGU + u0) * tb
                                               : wd_ring + ((n & 1) * WDN + u0 - WGU) * tb;
+#ifdef WG_INJ_P
+                noc_async_write(
+                    pre + ((((e / G) % WG_INJ_P) * NT + t) * WTOT + u0) * tb, get_noc_addr(tx, ty, dst), CH * tb);
+                noc_async_writes_flushed();
+#else
+                cb_wait_front(0, CH);
+#ifndef WG_INJ_NOWRITE
                 noc_async_write(get_read_ptr(0), get_noc_addr(tx, ty, dst), CH * tb);
+#endif
                 noc_async_writes_flushed();
                 cb_pop_front(0, CH);
+#endif
             }
             noc_async_write_barrier();
             noc_semaphore_inc(get_noc_addr(tx, ty, get_semaphore(SEM_WARR)), 1);

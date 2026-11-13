@@ -184,3 +184,35 @@ Diagnosis (x block timeline, one group): blocks are tilized early and their slot
 multicast goes out 3-15K cycles later: 20 producers' linked 24 KB multicasts into the 2-column group serialize
 (~2.4K cycles a block, ~13 GB/s a group). A group needs all of its experts' x: per core 2.25x the x of a 10-core
 cluster (the price of halving the weight slice), ~49 GB/s into every core at the M 586 target.
+
+### Stage 4: back above 70% (2026-11-13)
+What held it (each found with per-queue max-call timers on both RISCs + the x block timeline, G 1):
+1. Multicast direction: column 0 multicast x on NOC1 (-x) and column 1 on NOC0 (+x) - both reached the other column
+   only by wrapping the whole row torus (the bench's 85-89 GB/s layout is the reverse). Swapped: G 1 33 -> 41%.
+2. Starvation: 10 linked x multicasts a NoC in flight at once gave aggregate rate but single calls blocked up to
+   58K cycles, and every core of the group waits on the starved block. In stream order (block s is sent once block
+   s - 2 has landed locally, i.e. one multicast at a time a NoC): G 1 39 -> 55% (s - 1: 44%).
+3. Column 1's h leader multicast was on NOC0 too: it wrapped the row through every other group (300K-cycle calls at
+   G 4). Moved to the NCRISC on NOC1: G 1 55 -> 68%, G 4 25 -> 44% (no weights).
+4. bfp8 x (tilize packs bfp8; SrcB reconfig around the down): half the multicast bytes. G 1 BK 24: 80%.
+5. Weights: the 10 DRAM injectors (one 576 B page read a tile, 14 KB chunks) gave ~112 GB/s; CH 120 + 20 injectors
+   (columns 9, 10; one per group core) help, but at G 4 weights (~130 GB/s) + x gather (~140 GB/s) of small reads
+   saturate DRAM: 64%. Injectors that land from L1 (no DRAM): 77%, weight writes themselves free (noread+nowrite
+   the same). On a real chip the weights come from the fabric, so the L1 mode ("l1", P = 2 weight sets preloaded,
+   expert e uses set (e // G) % 2 so a group's consecutive experts alternate slots and sets) is the default.
+Lag (DN_LAG 2, 3) only moved the wait between h and x: G 4 with DRAM weights is throughput-bound, not latency.
+
+Result (bfp8 x, BK 24, NX 15, 20 injectors, "l1" weights, 32 experts, steady state):
+| G (cores) | M | cycles / expert | util tile | util useful | pcc |
+|---|---|---|---|---|---|
+| 1 (20) | 586 | 135,448 | 80.8% | 77.9% | 0.99994 |
+| 2 (40) | 586 | 69,885 | 78.3% | 75.5% | 0.99994 |
+| 3 (60) | 586 | 45,870 | 79.5% | 76.7% | 0.99994 |
+| 4 (80) | 64 | 7,258 | 39.7% | 39.7% | 0.99994 |
+| 4 (80) | 256 | 14,062 | 81.9% | 81.9% | 0.99994 |
+| 4 (80) | 586 | 35,148 | 77.8% | 75.0% | 0.99994 |
+| 4 (80) | 1024 | 57,974 | 79.5% | 79.5% | 0.99994 |
+| 4 (80) | 2048 | 117,922 | 78.2% | 78.2% | 0.99994 |
+M 64 (2 rows an expert) is bound by the weight landing (207 KB a core every ~7K cycles).
+Other modes at M 586: DRAM weights G 1/2/3/4 81.6 / 81.2 / 79.2 / 63.9%; bf16 x G 4 (BK 12 NX 15 / BK 24 NX 8)
+63.8 / 67.5% (PCC 0.99998; multicast-bound; BK 24 NX 15 bf16 does not fit L1).

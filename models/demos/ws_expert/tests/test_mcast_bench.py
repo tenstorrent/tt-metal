@@ -5,15 +5,14 @@
 rectangle of the right block (logical x 8..11 or one column); reports us and GB/s delivered per destination."""
 
 import pytest
-import torch
-import ttnn
 from loguru import logger
 
+import ttnn
 from models.demos.ws_expert.bench_util import aiclk_mhz, crs, kpath, read_stamps, stamps_tensor
-from models.demos.ws_expert.ws_expert import noc, rect_noc, sharded_l1
+from models.demos.ws_expert.ws_expert import rect_noc, sharded_l1
 
 
-def run_mcast(device, senders, dests, N, B, flag, barrier, nocs=None, loopback=False):
+def run_mcast(device, senders, dests, N, B, flag, barrier, nocs=None, loopback=False, extra_defs=()):
     """nocs: per sender 0 / 1 (NOC1 senders run on NCRISC; their rectangle is passed end-first)."""
     nocs = nocs or [0] * len(senders)
     allc = list(dict.fromkeys(senders + dests))
@@ -33,9 +32,11 @@ def run_mcast(device, senders, dests, N, B, flag, barrier, nocs=None, loopback=F
             ttnn.KernelDescriptor(
                 kernel_source=kpath("mcast_bench.cpp"),
                 core_ranges=crs(ss),
-                compile_time_args=[N, B] + rr + [len(dests), buf.buffer_address(), buf.buffer_address(), buf.buffer_address()]
+                compile_time_args=[N, B]
+                + rr
+                + [len(dests), buf.buffer_address(), buf.buffer_address(), buf.buffer_address()]
                 + [int(flag), int(barrier), st.buffer_address()],
-                defines=[("LOOPBACK", "1")] if loopback else [],
+                defines=([("LOOPBACK", "1")] if loopback else []) + list(extra_defs),
                 runtime_args=rt,
                 config=ttnn.DataMovementConfigDescriptor(
                     processor=ttnn.DataMovementProcessor.RISCV_0 if nn == 0 else ttnn.DataMovementProcessor.RISCV_1,
@@ -91,3 +92,36 @@ def test_mcast_column(device, B, mode):
     N = max(4, (4 * 1024 * 1024) // (B * len(senders)))
     us, gbs, cyc = run_mcast(device, senders, col, N, B, False, False, nocs, loopback=True)
     logger.info(f"MCASTCOL {mode} B {B}: {us:.1f} us, {gbs:.1f} GB/s into every core of the column")
+
+
+@pytest.mark.parametrize("B", [24576, 49152])
+@pytest.mark.parametrize(
+    "mode",
+    [
+        "20_noc1_linked_flag",
+        "20_noc1_plain",
+        "10+10_linked_flag",
+        "1_noc1_plain",
+        "2_both_plain",
+        "2_both_linked_flag",
+        "4_both_linked_flag",
+    ],
+)
+def test_mcast_group(device, B, mode):
+    """Into a 2-column group (logical columns 0, 1: 20 cores), senders inside it, loopback."""
+    grp = [(x, y) for x in (0, 1) for y in range(10)]
+    linked = "linked" in mode
+    defs = [("LINKED", "true"), ("LFLAG", "1")] if linked else []
+    if mode.startswith("20_"):
+        senders, nocs = grp, [1] * 20
+    elif mode.startswith("10+10"):
+        senders, nocs = grp, [0] * 10 + [1] * 10
+    elif mode.startswith("1_"):
+        senders, nocs = [(0, 0)], [1]
+    elif mode.startswith("2_"):
+        senders, nocs = [(0, 0), (1, 9)], [0, 1]
+    else:
+        senders, nocs = [(0, 0), (1, 0), (0, 9), (1, 9)], [0, 0, 1, 1]
+    N = max(4, (8 * 1024 * 1024) // (B * len(senders)))
+    us, gbs, cyc = run_mcast(device, senders, grp, N, B, False, False, nocs, loopback=True, extra_defs=defs)
+    logger.info(f"MCASTGRP {mode} B {B}: {gbs:.1f} GB/s into every core of the group ({cyc:.0f} cyc a multicast)")

@@ -5,7 +5,8 @@
 // ws_expert groups, weight injector reader (BRISC, NOC0) - single-chip stand-in for the fabric's weight all-gather:
 // for every expert in the global order, for each of this injector's target cores j (j = i + 10 t), reads the core's
 // weight slice from DRAM (gate/up pair j, all KT: [KT][2] tiles; down columns [DCOLS j, DCOLS (j + 1)): [KTD][DCOLS])
-// into CB 0 in chunks of CH tiles for the writer.
+// into CB 0 in chunks of CH tiles for the writer. With WG_INJ_P (fabric-like landing): preloads P weight sets into L1
+// once (CB 0) and the writer sends expert e from set (e / G) % P.
 // RT: 0 injector index i, 1 wgu addr, 2 wd addr. CT: 0 NEXP, 1 KT, 2 KTD, 3 DCOLS, 4 PAIRS, 5 HT, 6 CH, 7 NT
 // (targets an injector), 8 NINJ, then TensorAccessorArgs(wgu), (wd)
 #include "api/dataflow/dataflow_api.h"
@@ -24,11 +25,38 @@ void kernel_main() {
     const uint32_t tb = get_tile_size(0);
     const auto gs = TensorAccessor(gargs, get_arg_val<uint32_t>(1), tb);
     const auto ds = TensorAccessor(dargs, get_arg_val<uint32_t>(2), tb);
+#ifdef WG_INJ_P
+    // fabric-like mode: the P weight sets' slices of this injector's targets are loaded into L1 once
+    // ([p][t][WTOT] tiles: all of CB 0); the writer lands expert e from set (e / G) % P (no DRAM in the steady state)
+    cb_reserve_back(0, WG_INJ_P * NT * WTOT);
+    const uint32_t pre = get_write_ptr(0);
+    for (uint32_t p = 0; p < WG_INJ_P; ++p) {
+        for (uint32_t t = 0; t < NT; ++t) {
+            const uint32_t j = i + NINJ * t;
+            uint32_t l1 = pre + (p * NT + t) * WTOT * tb;
+            for (uint32_t u = 0; u < WTOT; ++u, l1 += tb) {
+                if (u < WGU) {
+                    noc_async_read_page((p * KT + u / 2) * 2 * PAIRS + 2 * j + u % 2, gs, l1);
+                } else {
+                    const uint32_t v = u - WGU;
+                    noc_async_read_page((p * KTD + v / DCOLS) * HT + DCOLS * j + v % DCOLS, ds, l1);
+                }
+            }
+            noc_async_read_barrier();
+        }
+    }
+    cb_push_back(0, WG_INJ_P * NT * WTOT);
+    return;
+#endif
     for (uint32_t e = 0; e < NEXP; ++e) {
         for (uint32_t t = 0; t < NT; ++t) {
             const uint32_t j = i + NINJ * t;
             for (uint32_t u0 = 0; u0 < WTOT; u0 += CH) {
                 cb_reserve_back(0, CH);
+#ifdef WG_INJ_NOREAD
+                cb_push_back(0, CH);
+                continue;
+#endif
                 uint32_t l1 = get_write_ptr(0);
                 for (uint32_t u = u0; u < u0 + CH; ++u, l1 += tb) {
                     if (u < WGU) {

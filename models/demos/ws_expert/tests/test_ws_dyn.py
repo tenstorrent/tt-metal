@@ -6,9 +6,9 @@ Checks the last expert against torch; utilization over experts 1 .. n-1 (tile op
 
 import pytest
 import torch
-import ttnn
 from loguru import logger
 
+import ttnn
 from models.demos.ws_expert.bench_util import aiclk_mhz, pcc, quantize, read_stamps, to_dev
 from models.demos.ws_expert.ws_dyn import DCfg, build, check_plans, xst_blocks
 from models.demos.ws_expert.ws_expert import interleave_gu
@@ -104,13 +104,39 @@ def test_ws_dyn(device, case):
         Ms = [586, 40, 1000, 300, 777, 5, 586, 128, 900, 64, 512, 33, 700, 256, 999, 431]
     r = run_dyn(device, cfg, Ms)
     report(case, cfg, Ms, r)
-    logger.info(f"UNPACK per expert per core: tilize / x wait / down mean {[round(v) for v in r['unpack']]} max {[round(v) for v in r['unpack_max']]}")
+    logger.info(
+        f"UNPACK per expert per core: tilize / x wait / down mean {[round(v) for v in r['unpack']]} max {[round(v) for v in r['unpack_max']]}"
+    )
     logger.info(f"expert ends {r['ends']}")
     assert r["pcc"] > 0.999
 
 
-SWEEP_M = [32, 64, 96, 128, 192, 256, 320, 384, 448, 512, 586, 640, 768, 896, 1024, 1280, 1536, 2048, 2560, 3072, 3584,
-           4096, 4608, 5000]
+SWEEP_M = [
+    32,
+    64,
+    96,
+    128,
+    192,
+    256,
+    320,
+    384,
+    448,
+    512,
+    586,
+    640,
+    768,
+    896,
+    1024,
+    1280,
+    1536,
+    2048,
+    2560,
+    3072,
+    3584,
+    4096,
+    4608,
+    5000,
+]
 
 
 @pytest.mark.parametrize("M", SWEEP_M)
@@ -118,5 +144,16 @@ def test_ws_dyn_sweep(device, M):
     cfg = DCfg(nexp=8)
     r = run_dyn(device, cfg, [M] * cfg.nexp)
     report(f"sweep M {M}", cfg, [M] * cfg.nexp, r)
-    logger.info(f"UNPACK per expert per core: tilize / x wait / down mean {[round(v) for v in r['unpack']]} max {[round(v) for v in r['unpack_max']]}")
+    logger.info(
+        f"UNPACK per expert per core: tilize / x wait / down mean {[round(v) for v in r['unpack']]} max {[round(v) for v in r['unpack_max']]}"
+    )
+    assert r["pcc"] > 0.999
+
+
+@pytest.mark.parametrize("NCL", [9, 10, 11, 12])
+@pytest.mark.parametrize("M", [586, 1024, 2048, 4096])
+def test_ws_dyn_grid(device, NCL, M):
+    cfg = DCfg(nexp=8, NCL=NCL)
+    r = run_dyn(device, cfg, [M] * cfg.nexp)
+    report(f"grid {NCL}x10 M {M}", cfg, [M] * cfg.nexp, r)
     assert r["pcc"] > 0.999
