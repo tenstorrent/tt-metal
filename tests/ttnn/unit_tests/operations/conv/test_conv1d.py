@@ -807,6 +807,87 @@ def test_conv1d_auto_dram_width_slicing(device):
     )
 
 
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 1 << 17}], indirect=True)
+@pytest.mark.parametrize(
+    "input_channels, output_channels, input_length, kernel_size",
+    (
+        (128, 128, 8448, 11),
+        (256, 256, 8264, 11),
+        (80, 512, 32768, 3),
+    ),
+)
+@pytest.mark.parametrize("l1_busy", [False, True], ids=["l1_free", "l1_busy"])
+def test_conv1d_prepared_weights_dram_slicing(
+    device, input_channels, output_channels, input_length, kernel_size, l1_busy
+):
+    # Long DRAM inputs are sliced by width; prepare_conv_weights has to lay out the weights for the same slices.
+    torch.manual_seed(0)
+    padding = (kernel_size - 1) // 2
+    torch_input = torch.randn(1, input_channels, input_length, dtype=torch.bfloat16).float()
+    torch_weight = (torch.randn(output_channels, input_channels, kernel_size, dtype=torch.bfloat16) * 0.05).float()
+    golden = torch.nn.functional.conv1d(torch_input, torch_weight, padding=padding)
+
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=True
+    )
+    conv_config = ttnn.Conv1dConfig(weights_dtype=ttnn.bfloat16, deallocate_activation=False)
+    tt_input = ttnn.from_torch(
+        torch.permute(torch_input, (0, 2, 1)), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    tt_weight = ttnn.prepare_conv_weights(
+        weight_tensor=ttnn.from_torch(
+            torch_weight.reshape(output_channels, input_channels, 1, kernel_size), ttnn.bfloat16
+        ),
+        weights_format="OIHW",
+        input_memory_config=tt_input.memory_config(),
+        input_layout=tt_input.layout,
+        in_channels=input_channels,
+        out_channels=output_channels,
+        batch_size=1,
+        input_height=1,
+        input_width=input_length,
+        kernel_size=(1, kernel_size),
+        stride=(1, 1),
+        padding=(0, padding),
+        dilation=(1, 1),
+        has_bias=False,
+        groups=1,
+        device=device,
+        input_dtype=ttnn.bfloat16,
+        conv_config=conv_config,
+        compute_config=compute_config,
+    )
+    busy = (
+        ttnn.from_torch(
+            torch.zeros(1, 1, 2048, 1024),
+            ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        if l1_busy
+        else None
+    )
+    tt_output, out_length = ttnn.conv1d(
+        input_tensor=tt_input,
+        weight_tensor=tt_weight,
+        in_channels=input_channels,
+        out_channels=output_channels,
+        device=device,
+        kernel_size=kernel_size,
+        padding=padding,
+        batch_size=1,
+        input_length=input_length,
+        conv_config=conv_config,
+        compute_config=compute_config,
+        return_output_dim=True,
+    )
+    output = torch.permute(ttnn.to_torch(tt_output).float().reshape(1, out_length, output_channels), (0, 2, 1))
+    if busy is not None:
+        ttnn.deallocate(busy)
+    assert_with_pcc(golden, output, 0.999)
+
+
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 1 << 15}], indirect=True)
 def test_conv1d_channel_bound_slicing_insufficient(device, expect_error):
     """Width slicing cannot relieve a channel-bound OOM (the weight block is width-independent).
