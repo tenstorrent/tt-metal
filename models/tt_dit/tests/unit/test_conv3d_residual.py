@@ -83,3 +83,88 @@ def test_conv3d_residual(mesh_device, device_params, C_in, C_out, C_in_block, C_
     diff = (fused - ref).abs()
     print(f"residual C_in={C_in} H={H} W={W}: max_abs={diff.max().item():.3e} exact={diff.eq(0).float().mean():.6f}")
     assert torch.equal(fused, ref)
+
+
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
+@pytest.mark.parametrize(
+    "C_in, C_in_block, T_out_block, H_out_block, W_out_block",
+    [
+        # The LTX VAE res conv that crashed on a Blackhole 2x4 mesh (cs04, ltx-rt 151ed6936f7): the fused
+        # plan was ~10 KB short of the 92160 B prefetch shard there.
+        (128, 64, 10, 4, 8),
+        # A blocking the residual CBs (160 KB) cost the shard by a wide margin, whatever the allocator base.
+        (64, 64, 10, 4, 16),
+    ],
+    ids=["cs04_res", "wide_margin"],
+)
+def test_conv3d_residual_halo_falls_back(
+    mesh_device, device_params, C_in, C_in_block, T_out_block, H_out_block, W_out_block
+):
+    """Where the residual CBs would take the prefetch shard, conv3d adds the residual separately.
+
+    Without the fallback, a halo reader that needs the shard refuses the blocking ("Conv3d halo mode needs the L1
+    prefetch shard", ltx-rt), and one that does not drops to its direct path. The call must return exactly the
+    plain halo conv plus ttnn.add.
+    """
+    mesh = mesh_device.create_submesh(ttnn.MeshShape(2, 4))
+    torch.manual_seed(0)
+    C_out, C_out_block = 128, 128
+    N, T, H, W = 1, T_out_block + 2, 8, 16
+    x = torch.randn(N, T, H, W, C_in)
+    conv = torch.nn.Conv3d(C_in, C_out, kernel_size=3, padding=(0, 1, 1))
+    tt_x = _to_dev(x, mesh, ttnn.ROW_MAJOR_LAYOUT)
+    tt_w = ttnn.experimental.prepare_conv3d_weights(
+        weight_tensor=ttnn.from_torch(conv.weight.data, dtype=ttnn.bfloat16),
+        groups=1,
+        C_in_block=C_in_block,
+        alignment=32,
+        device=mesh,
+    )
+    tt_b = _to_dev(conv.bias.data.reshape(1, -1), mesh, ttnn.TILE_LAYOUT)
+    # [Htop|Hbot|Wleft|Wright] sections for pad (1, 1): zeros, i.e. a mesh edge on every side.
+    halo_pages = 2 * N * T * (1 * W + 1 * (H + 2))
+    tt_halo = _to_dev(torch.zeros(halo_pages, C_in), mesh, ttnn.ROW_MAJOR_LAYOUT)
+    cfg = ttnn.Conv3dConfig(
+        weights_dtype=ttnn.bfloat16,
+        output_layout=ttnn.ROW_MAJOR_LAYOUT,
+        T_out_block=T_out_block,
+        W_out_block=W_out_block,
+        H_out_block=H_out_block,
+        C_out_block=C_out_block,
+        C_in_block=C_in_block,
+        compute_with_storage_grid_size=mesh.compute_with_storage_grid_size(),
+    )
+    kcfg = ttnn.init_device_compute_kernel_config(
+        mesh.arch(), math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=True, packer_l1_acc=False
+    )
+
+    def run(residual=None):
+        return ttnn.experimental.conv3d(
+            input_tensor=tt_x,
+            weight_tensor=tt_w,
+            bias_tensor=tt_b,
+            device=mesh,
+            dtype=ttnn.bfloat16,
+            output_channels=C_out,
+            kernel_size=(3, 3, 3),
+            stride=(1, 1, 1),
+            padding=(0, 1, 1),
+            padding_mode="zeros",
+            groups=1,
+            config=cfg,
+            compute_kernel_config=kcfg,
+            halo_buffer=tt_halo,
+            residual_tensor=residual,
+        )
+
+    plain = run()
+    res = torch.randn(tuple(plain.shape))
+    tt_res = _to_dev(res, mesh, ttnn.ROW_MAJOR_LAYOUT)
+    ref = _host(ttnn.add(tt_res, plain))
+    fused = _host(run(tt_res))
+    diff = (fused - ref).abs()
+    print(
+        f"residual halo C_in={C_in} block=({T_out_block},{H_out_block},{W_out_block}): max_abs={diff.max().item():.3e}"
+    )
+    assert torch.equal(fused, ref)

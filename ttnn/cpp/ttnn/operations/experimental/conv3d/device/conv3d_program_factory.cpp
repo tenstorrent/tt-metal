@@ -135,7 +135,8 @@ Conv3dCbGeometry derive_cb_geometry(const Conv3dParams& operation_attributes, co
     return g;
 }
 
-Conv3dL1Plan plan_l1(const Conv3dCbGeometry& g, const Conv3dL1Budget& budget) {
+// plan_l1 without its span check: never throws, so residual_epilogue_fits can compare two plans.
+static Conv3dL1Plan plan_l1_unchecked(const Conv3dCbGeometry& g, const Conv3dL1Budget& budget) {
     // The static circular buffers at a given out_subblock_h: every CB but the prefetch shard.
     auto static_cb_bytes_for = [&](uint32_t sub_h) -> uint32_t {
         uint32_t bytes = g.vol2col_rm_pages * g.padded_patch_size_bytes +     // vol2col_rm
@@ -181,24 +182,7 @@ Conv3dL1Plan plan_l1(const Conv3dCbGeometry& g, const Conv3dL1Budget& budget) {
         plan.out_subblock_h = shrunk;
     }
 
-    // The loop stops at out_subblock_h=1 whether or not the CBs fit. A blocking whose static CBs cannot be
-    // placed below the top of L1 at all fails here, where the message can say what was asked for, rather than at
-    // enqueue where only the region clash is reported. One that fits the span but not the planning budget runs
-    // with less than the headroom left for L1 buffers; nothing warns, and a clash with a live L1 buffer is
-    // reported by the enqueue-time region check.
     plan.static_cb_bytes = static_cb_bytes_for(plan.out_subblock_h);
-    TT_FATAL(
-        plan.static_cb_bytes <= budget.span,
-        "conv3d: the static circular buffers need {} B at out_subblock_h={} (M_t={}, K_t={}, N_t={}, C_in blocks={}) "
-        "but only {} B of L1 lie above the allocator base; shrink the blocking (C_in_block, C_out_block, "
-        "T/H/W_out_block)",
-        plan.static_cb_bytes,
-        plan.out_subblock_h,
-        g.matmul_M_t,
-        g.matmul_K_t,
-        g.matmul_N_t,
-        g.C_in_num_blocks,
-        budget.span);
 
     // L1 pre-fetch buffer for kernels > 1x1x1 with no dilation: gathers the spatial receptive field from DRAM
     // once per spatial block, then vol2col reads from L1. Budget: what the static CBs leave of the planning
@@ -233,6 +217,29 @@ Conv3dL1Plan plan_l1(const Conv3dCbGeometry& g, const Conv3dL1Budget& budget) {
     return plan;
 }
 
+Conv3dL1Plan plan_l1(const Conv3dCbGeometry& g, const Conv3dL1Budget& budget) {
+    Conv3dL1Plan plan = plan_l1_unchecked(g, budget);
+    // The loop stops at out_subblock_h=1 whether or not the CBs fit. A blocking whose static CBs cannot be
+    // placed below the top of L1 at all fails here, where the message can say what was asked for, rather than at
+    // enqueue where only the region clash is reported. One that fits the span but not the planning budget runs
+    // with less than the headroom left for L1 buffers; nothing warns, and a clash with a live L1 buffer is
+    // reported by the enqueue-time region check.
+    TT_FATAL(
+        plan.static_cb_bytes <= budget.span,
+        "conv3d: the static circular buffers need {} B at out_subblock_h={} (M_t={}, K_t={}, N_t={}, C_in blocks={}) "
+        "but only {} B of L1 lie above the allocator base; shrink the blocking (C_in_block, C_out_block, "
+        "T/H/W_out_block)",
+        plan.static_cb_bytes,
+        plan.out_subblock_h,
+        g.matmul_M_t,
+        g.matmul_K_t,
+        g.matmul_N_t,
+        g.C_in_num_blocks,
+        budget.span);
+
+    return plan;
+}
+
 Conv3dL1Budget conv3d_l1_cb_budget(const tt::tt_metal::IDevice* device) {
     // Circular buffers are placed upward from the allocator's L1 base and L1 buffers are allocated downward
     // from the top of L1. The plan keeps a fixed headroom below the top for the L1 buffers that are live when
@@ -255,6 +262,28 @@ Conv3dL1Budget conv3d_l1_cb_budget(const tt::tt_metal::IDevice* device) {
 Conv3dL1Plan select_l1_plan(const Conv3dParams& operation_attributes, const Conv3dInputs& tensor_args) {
     return plan_l1(
         derive_cb_geometry(operation_attributes, tensor_args), conv3d_l1_cb_budget(tensor_args.input_tensor.device()));
+}
+
+bool residual_epilogue_fits(const Conv3dParams& operation_attributes, const Conv3dInputs& tensor_args) {
+    if (!tensor_args.residual_tensor.has_value()) {
+        return true;
+    }
+    // The residual_rm and untilized_rm CBs take L1 from the prefetch shard and the L1 tensor headroom. Fuse only
+    // when they cost neither: the static CBs still fit (the planning budget, where the plain plan fits it), and
+    // a plain plan that prefetches still prefetches. Otherwise halo mode would refuse the blocking and the
+    // non-halo reader would silently drop to the direct path.
+    Conv3dCbGeometry geometry = derive_cb_geometry(operation_attributes, tensor_args);
+    const Conv3dL1Budget budget = conv3d_l1_cb_budget(tensor_args.input_tensor.device());
+    const Conv3dL1Plan fused = plan_l1_unchecked(geometry, budget);
+    geometry.use_residual = false;
+    const Conv3dL1Plan plain = plan_l1_unchecked(geometry, budget);
+    if (fused.static_cb_bytes > budget.span) {
+        return false;
+    }
+    if (plain.static_cb_bytes <= budget.planning && fused.static_cb_bytes > budget.planning) {
+        return false;
+    }
+    return fused.prefetch_shard || !plain.prefetch_shard;
 }
 
 tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
