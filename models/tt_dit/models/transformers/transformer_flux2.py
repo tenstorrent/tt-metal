@@ -191,7 +191,8 @@ class Flux2SingleTransformerBlock(Module):
 
         if self._ccl_manager.topology == ttnn.Topology.Ring:
             return self.proj_out.forward_fused_addcmul([x_c_attn, x_c_mlp], spatial_prompt_concat, gate_msa, scalar=1.0)
-        return ttnn.addcmul(spatial_prompt_concat, self.proj_out([x_c_attn, x_c_mlp]), gate_msa)
+        # Not addcmul, which compiles a program per row count.
+        return ttnn.add(spatial_prompt_concat, ttnn.multiply(self.proj_out([x_c_attn, x_c_mlp]), gate_msa))
 
 
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/transformers/transformer_flux.py

@@ -379,7 +379,8 @@ class TransformerBlock(Module):
             spatial_ff = ttnn.squeeze(
                 self.ff(ttnn.unsqueeze(spatial_normed, 0), compute_kernel_config=self.ff_compute_kernel_config), 0
             )
-            spatial = ttnn.addcmul(spatial, spatial_ff, spatial_gate_ff)
+            # Not addcmul, which compiles a program per row count.
+            spatial = ttnn.add(spatial, ttnn.multiply(spatial_ff, spatial_gate_ff))
 
         if self.context_pre_only:
             return spatial, None
@@ -414,7 +415,7 @@ class TransformerBlock(Module):
                 self.ff_context(ttnn.unsqueeze(prompt_normed, 0), compute_kernel_config=self.ff_compute_kernel_config),
                 0,
             )
-            prompt = ttnn.addcmul(prompt, prompt_ff, prompt_gate_ff)
+            prompt = ttnn.add(prompt, ttnn.multiply(prompt_ff, prompt_gate_ff))
 
         return spatial, prompt
 
