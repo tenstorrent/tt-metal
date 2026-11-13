@@ -64,11 +64,6 @@ inline void _top8_merge_configure_addrmod_() {
         .dest = {.incr = 14, .clr = 0, .cr = 0, .c_to_cr = 0},
     }
         .set(ADDRMOD_OFFSET + ADDR_MOD_2);
-
-    addr_mod_t{
-        .dest = {.incr = -18, .clr = 0, .cr = 0, .c_to_cr = 0},
-    }
-        .set(ADDRMOD_OFFSET + ADDR_MOD_3);
 }
 
 template <uint32_t tile_index, uint32_t face_offset, uint32_t row_offset>
@@ -271,6 +266,13 @@ inline void _top8_merge_two_sorted_8_() {
 // Main entry point for cross-core merge
 template <uint32_t column_idx>
 inline void _top8_merge_() {
+    // ADDR_MOD_3 is slot 7 under the SFPU addr-mod base. This op steps dest by -18 through it; restore zero
+    // advance before returning.
+    addr_mod_t{
+        .dest = {.incr = -18, .clr = 0, .cr = 0, .c_to_cr = 0},
+    }
+        .set(ADDR_MOD_7);
+
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 
     // Sequentially merge core 0 data with that in cores 1-7
@@ -428,6 +430,9 @@ inline void _top8_merge_() {
     TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::LO16, ADDR_MOD_2, 32);
     TTI_SFPSTORE(p_sfpu::LREG6, InstrModLoadStore::LO16, ADDR_MOD_1, 32);
     TTI_SFPSTORE(p_sfpu::LREG7, InstrModLoadStore::LO16, ADDR_MOD_3, 32);
+
+    // Restore the ADDR_MOD_7 invariant (zero advance) for the next op.
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
 }
 
 }  // namespace sfpu

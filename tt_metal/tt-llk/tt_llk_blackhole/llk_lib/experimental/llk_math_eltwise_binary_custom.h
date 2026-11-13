@@ -15,18 +15,6 @@
 
 using namespace ckernel;
 
-template <BroadcastType bcast_type>
-inline void eltwise_binary_configure_addrmod_custom()
-{
-    constexpr std::uint32_t srcb_incr = (bcast_type == BroadcastType::NONE || bcast_type == BroadcastType::COL) ? 8 : 0;
-    addr_mod_t {
-        .srca = {.incr = 8},
-        .srcb = {.incr = srcb_incr},
-        .dest = {.incr = 8},
-    }
-        .set(ADDR_MOD_7);
-}
-
 /**
  * @brief Initialize FPU to perform an elementwise binary operation where Output = SrcA [+, -, *] SrcB
  * SrcA/SrcB contain 1 tile each, and output is 1 tile in destination register
@@ -48,8 +36,6 @@ inline void _llk_math_eltwise_binary_init_custom_(const std::uint32_t num_faces)
         (eltwise_binary_type == EltwiseBinaryType::ELWADD) || (eltwise_binary_type == EltwiseBinaryType::ELWSUB) ||
             (eltwise_binary_type == EltwiseBinaryType::ELWMUL),
         "eltwise_binary_type must be ELWADD, ELWSUB, or ELWMUL");
-
-    eltwise_binary_configure_addrmod_custom<src_b_bcast_type>();
 
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
 
@@ -222,6 +208,9 @@ inline void _llk_math_bcast_cols_reuse_custom_(
 
     // Restore the dest base offset so the next op starts from tile slot 0.
     math::clear_dst_reg_addr();
+
+    // Restore the ADDR_MOD_7 invariant (zero advance) for the next op.
+    addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
 }
 
 /**

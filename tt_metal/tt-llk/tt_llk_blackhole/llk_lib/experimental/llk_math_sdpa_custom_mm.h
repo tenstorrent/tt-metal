@@ -60,13 +60,6 @@ inline void sdpa_custom_mm_configure_addrmod()
         .dest = {.incr = 8, .clr = 0, .cr = 0},
     }
         .set(ADDR_MOD_4);
-
-    addr_mod_t {
-        .srca = {.incr = 0, .clr = 0, .cr = 0},
-        .srcb = {.incr = 0, .clr = 0, .cr = 0},
-        .dest = {.incr = 0, .clr = 0, .cr = 0},
-    }
-        .set(ADDR_MOD_7);
 }
 
 inline void sdpa_custom_mm_configure_mop(const std::uint32_t operandB_face_r_dim, const std::uint32_t ct_dim)

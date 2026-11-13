@@ -38,7 +38,7 @@ namespace ckernel
 namespace block_max8_gmpool
 {
 
-// All-zero address modifier for the FPU instructions below: the SFPU init programs ADDR_MOD_7 to zero.
+// All-zero address modifier for the FPU instructions below: ADDR_MOD_7 at its zero-advance invariant (hw_configure).
 constexpr std::uint32_t ADDR_MOD = ADDR_MOD_7;
 // Scores per block: each GMPOOL reduces this many transposed SrcB rows.
 constexpr std::uint32_t BLOCK_WIDTH = 8;
@@ -132,7 +132,7 @@ inline void gather_all(std::integer_sequence<std::uint32_t, P...>)
 } // namespace block_max8_gmpool
 
 /**
- * @brief Initialize SFPU state for masking and the final merge, including the all-zero ADDR_MOD_7 the FPU moves also use.
+ * @brief Initialize SFPU state for masking and the final merge, including the ADDR_MOD_7 zero-advance invariant the FPU moves also use.
  *
  * @note Call before @ref _llk_math_block_max8_fpu_.
  */

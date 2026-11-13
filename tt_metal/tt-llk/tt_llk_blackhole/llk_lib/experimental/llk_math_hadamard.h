@@ -69,13 +69,6 @@ using namespace ckernel;
 template <MathFidelity math_fidelity = MathFidelity::HiFi4>
 inline void _llk_math_hadamard_h128_configure_addrmod_()
 {
-    addr_mod_t {
-        .srca = {.incr = 0, .clr = 0, .cr = 0},
-        .srcb = {.incr = 0, .clr = 0, .cr = 0},
-        .dest = {.incr = 0, .clr = 0, .cr = 0},
-    }
-        .set(ADDR_MOD_7);
-
     if constexpr (is_high_fidelity(math_fidelity))
     {
         addr_mod_t {

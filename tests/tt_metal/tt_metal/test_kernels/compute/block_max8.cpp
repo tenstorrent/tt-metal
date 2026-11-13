@@ -13,7 +13,6 @@
  * acquisitions visit masking boundaries and repeatedly reuse both DST halves.
  * The host supplies geometry as compile arguments and (DST index, valid count)
  * pairs as runtime arguments, shared with the golden calculation.
- * Dirty ADDR_MOD_7 before each init to verify that fused-op state is reset.
  * Compile argument 3 selects the FPU (GMPOOL) variant.
  */
 void kernel_main() {
@@ -37,7 +36,6 @@ void kernel_main() {
         for (uint32_t slot = 0; slot < slots; ++slot) {
             copy_tile(input, slot, slot);
         }
-        MATH((addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 32}}.set(ADDR_MOD_7)));
         if constexpr (fpu) {
             block_max8_fpu_init();
             block_max8_fpu(dst, valid_scores);

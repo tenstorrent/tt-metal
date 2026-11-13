@@ -60,8 +60,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
             _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, dest_sync, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
                 tile, formats.math, formats.math);
         }
-        // Model a prior fused operation that changed the shared address modifier.
-        addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 32}}.set(ADDR_MOD_7);
         llk_math_eltwise_unary_sfpu_init<SfpuType::unused, is_fp32_dest_acc_en>();
         _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_csa_index_remap_<32, CSA_ROW_OFFSET>, params.DST_INDEX, VectorMode::RC_custom);
         _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
