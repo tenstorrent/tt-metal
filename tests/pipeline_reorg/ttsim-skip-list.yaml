@@ -31,8 +31,11 @@ wormhole_b0:
   # takes over 40 minutes on the simulator).
   - tests/ttnn/unit_tests/operations/conv/test_conv3d.py
 
-  # Model-width norm rows (up to 16640 x 8192) are too big for the simulator's time budget.
-  - tests/ttnn/unit_tests/operations/fused/test_norm_model_widths.py
+  # ttsim Wormhole: UndefinedBehavior in UNPACR (unpack_to_dst=0, in_data_format=0) on the large-tensor
+  # norm path, which accumulates in an fp32 CB. Blackhole passes. The height does not matter.
+  # Issue: https://github.com/tenstorrent/tt-metal/issues/38203
+  # exit: #38203's fix lands; then drop this entry.
+  - tests/ttnn/unit_tests/operations/fused/test_norm_model_widths.py::test_norm_model_width_hifi2_fp32_acc
 
 blackhole:
   # Job-level timeouts
@@ -54,9 +57,6 @@ blackhole:
   # exit: #64557's fix lands; then the file moves back to the timeouts above (it also
   # takes over 40 minutes on the simulator).
   - tests/ttnn/unit_tests/operations/conv/test_conv3d.py
-
-  # Model-width norm rows (up to 16640 x 8192) are too big for the simulator's time budget.
-  - tests/ttnn/unit_tests/operations/fused/test_norm_model_widths.py
 
   # fp8 operands in tensix_elw_op (e.g. src_a_fmt=4 src_b_fmt=10) are not modeled by ttsim
   - tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py
