@@ -372,7 +372,16 @@ def _random_attention_weights(config, layer: int) -> dict:
     return weights
 
 
-def _decode_both(attns: dict, caches: dict, layers: tuple, hidden, angles, hidden_config, device):
+def _decode_both(
+    attns: dict,
+    caches: dict,
+    layers: tuple,
+    hidden,
+    angles,
+    hidden_config,
+    device,
+    use_prefetcher: bool = False,
+):
     """Each position through ``layers`` in order, on both builds, comparing their block outputs."""
     for pos in range(hidden.shape[1]):
         for j, i in enumerate(layers):
@@ -386,14 +395,28 @@ def _decode_both(attns: dict, caches: dict, layers: tuple, hidden, angles, hidde
             outs = {}
             for fused in attns:
                 attn = attns[fused][i]
-                out = attn.decode(x, scache=caches[fused][i], **attn.decode_inputs(pos, angles.cos(), angles.sin()))
+                inputs = attn.decode_inputs(pos, angles.cos(), angles.sin())
+                use_fused = not attn.is_index_source or not inputs.get("select") or bool(inputs.get("dense"))
+                if fused and attn.is_index_source:
+                    if pos == 0 and attn.compress_ratio > 1:
+                        assert not inputs.get("select")
+                        assert use_fused
+                    elif (pos + 1) // attn.compress_ratio <= attn.index_topk:
+                        assert inputs.get("select")
+                        assert bool(inputs.get("dense")) == attention_module.DENSE_SELECT
+                        assert use_fused == attention_module.DENSE_SELECT
+                if use_prefetcher:
+                    attn.prefetch_weights(fused_qkv=use_fused)
+                out = attn.decode(x, scache=caches[fused][i], **inputs)
                 outs[fused] = ttnn.to_torch(ttnn.get_device_tensors(out)[0]).float()
             passing, pcc = comp_pcc(outs[False], outs[True], 0.99)
             logger.info(f"layer {i} pos {pos}: fused vs separate output PCC {pcc}")
             assert passing, f"layer {i} pos {pos}: fused vs separate output PCC {pcc}"
 
 
-def _check_layer_fused_qkv(device, tp_size: int, layers: tuple, monkeypatch, use_prefetcher: bool = False):
+def _check_layer_fused_qkv(
+    device, tp_size: int, layers: tuple, monkeypatch, use_prefetcher: bool = False, dense_select: bool = True
+):
     """``layers`` on random weights, in order from position 0 past the ring wrap, with and without
     attention_qkv_decode: every layer's block output and ring must agree. ``use_prefetcher`` streams both
     builds' ring weights through one set of rings, as a stage device does."""
@@ -402,6 +425,7 @@ def _check_layer_fused_qkv(device, tp_size: int, layers: tuple, monkeypatch, use
     torch.manual_seed(0)
     weights = {i: _random_attention_weights(config, i) for i in layers}
     prefetch_buffers = make_prefetch_buffers(device, ttnn.bfloat4_b, tp_size=tp_size) if use_prefetcher else None
+    monkeypatch.setattr(attention_module, "DENSE_SELECT", dense_select)
     attns, caches = {}, {}
     for fused in (True, False):
         monkeypatch.setattr(attention_module, "_FUSED_QKV", fused)
@@ -420,7 +444,7 @@ def _check_layer_fused_qkv(device, tp_size: int, layers: tuple, monkeypatch, use
         }
         caches[fused] = build_decode_caches(device, config, layers, seq_len)
     for i in layers:
-        assert attns[True][i].fused_qkv == (i not in config.index_source_layer_ids)
+        assert attns[True][i].fused_qkv
         assert not attns[False][i].fused_qkv
         # At TP4 a q_b slab fits the shared ring, so the fused op streams all three weights.
         assert (attns[True][i].fused_pipes is not None) == (use_prefetcher and attns[True][i].fused_qkv)
@@ -432,16 +456,23 @@ def _check_layer_fused_qkv(device, tp_size: int, layers: tuple, monkeypatch, use
     with session:
         if use_prefetcher:
             ttnn.experimental.wait_for_cq_on_tensor_prefetcher(device, cq_id=0)
-        _decode_both(attns, caches, layers, hidden, angles, hidden_config, device)
+        _decode_both(attns, caches, layers, hidden, angles, hidden_config, device, use_prefetcher=use_prefetcher)
     for i in layers:
-        rings = {fused: ttnn.to_torch(ttnn.get_device_tensors(caches[fused][i].kv)[0]).float() for fused in caches}
-        passing, pcc = comp_pcc(rings[False], rings[True], 0.999)
-        logger.info(f"layer {i}: ring PCC {pcc}")
-        assert passing, f"layer {i}: ring PCC {pcc}"
+        for attr in ("kv", "comp_kv", "sel_tile"):
+            if getattr(caches[True][i], attr) is None:
+                continue
+            bufs = {
+                fused: ttnn.to_torch(ttnn.get_device_tensors(getattr(caches[fused][i], attr))[0]).float()
+                for fused in caches
+            }
+            passing, pcc = comp_pcc(bufs[False], bufs[True], 0.999)
+            logger.info(f"layer {i}: {attr} PCC {pcc}")
+            assert passing, f"layer {i}: {attr} PCC {pcc}"
 
 
-# Window only (0); ratio 2, its kv + index source (2, never fused) and a consumer (3).
+# Window only (0); ratio 2, its kv + index source (2, fused when not select or dense) and a consumer (3).
 FUSED_QKV_LAYERS = pytest.mark.parametrize("layers", ((0,), (2, 3)), ids=("window", "ratio2"))
+INDEX_SOURCE_FUSED_LAYERS = pytest.mark.parametrize("layers", ((2,), (2, 3)), ids=("index_source", "ratio2"))
 
 
 @pytest.mark.skipif(_text_config() is None, reason=f"no V4.1-Flash config.json under {DEFAULT_MODEL_DIR}")
@@ -478,6 +509,32 @@ def test_attention_layer_fused_qkv_tp4_prefetcher(mesh_device, layers, monkeypat
     if not ttnn.experimental.is_tensor_prefetcher_supported(submesh):
         pytest.skip("needs the tensor prefetcher (programmable DRAM cores)")
     _check_layer_fused_qkv(submesh, 4, layers, monkeypatch, use_prefetcher=True)
+
+
+@pytest.mark.skipif(_text_config() is None, reason=f"no V4.1-Flash config.json under {DEFAULT_MODEL_DIR}")
+@INDEX_SOURCE_FUSED_LAYERS
+@pytest.mark.parametrize("dense_select", (True, False), ids=("dense", "sparse"))
+@torch.no_grad()
+def test_attention_layer_fused_qkv_index_source(device, layers, dense_select, monkeypatch):
+    """Index source layer 2 (and consumer 3) under dense (fused for pos >= 0) vs sparse select (fused at pos=0,
+    separate _qkv + select_kv for pos >= 1)."""
+    _check_layer_fused_qkv(device, 1, layers, monkeypatch, dense_select=dense_select)
+
+
+@pytest.mark.skipif(_text_config() is None, reason=f"no V4.1-Flash config.json under {DEFAULT_MODEL_DIR}")
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True, ids=["8x4"])
+@INDEX_SOURCE_FUSED_LAYERS
+@pytest.mark.parametrize("dense_select", (True, False), ids=("dense", "sparse"))
+@torch.no_grad()
+def test_attention_layer_fused_qkv_index_source_tp4_prefetcher(mesh_device, layers, dense_select, monkeypatch):
+    """The same on a 1x4 stage with the DRISC prefetcher, verifying ring sync across fused/unfused steps."""
+    if tuple(mesh_device.shape) != (8, 4):
+        pytest.skip(f"needs an 8x4 mesh, got {tuple(mesh_device.shape)}")
+    submesh = mesh_device.create_submesh(ttnn.MeshShape(1, 4), ttnn.MeshCoordinate(0, 0))
+    if not ttnn.experimental.is_tensor_prefetcher_supported(submesh):
+        pytest.skip("needs the tensor prefetcher (programmable DRAM cores)")
+    _check_layer_fused_qkv(submesh, 4, layers, monkeypatch, use_prefetcher=True, dense_select=dense_select)
 
 
 @pytest.mark.parametrize("path", ("fused", "today"))

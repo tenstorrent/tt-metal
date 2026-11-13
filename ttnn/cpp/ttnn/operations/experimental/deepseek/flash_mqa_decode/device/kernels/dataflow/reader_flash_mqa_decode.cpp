@@ -19,22 +19,30 @@ void kernel_main() {
     constexpr uint32_t max_ring_first_tile_row = get_named_compile_time_arg_val("max_ring_first_tile_row");
     constexpr uint32_t selected_capacity = get_named_compile_time_arg_val("selected_capacity");
     constexpr uint32_t selected_first_tile_row = get_named_compile_time_arg_val("selected_first_tile_row");
+    constexpr bool has_rope = get_named_compile_time_arg_val("has_rope") == 1;
+    constexpr uint32_t rope_tiles = get_named_compile_time_arg_val("rope_tiles");
     constexpr uint32_t cb_q_rm = get_named_compile_time_arg_val("cb_q_rm");
     constexpr uint32_t cb_k_in = get_named_compile_time_arg_val("cb_k_in");
     constexpr uint32_t cb_mask = get_named_compile_time_arg_val("cb_mask");
     constexpr uint32_t cb_lengths = get_named_compile_time_arg_val("cb_lengths");
     constexpr uint32_t cb_lengths_scratch = get_named_compile_time_arg_val("cb_lengths_scratch");
+    constexpr uint32_t cb_cs = get_named_compile_time_arg_val("cb_cs");
+    constexpr uint32_t cb_cs_raw = get_named_compile_time_arg_val("cb_cs_raw");
 
     constexpr auto q_args = TensorAccessorArgs<0>();
     constexpr auto kv_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto selected_args = TensorAccessorArgs<kv_args.next_compile_time_args_offset()>();
     constexpr auto lengths_args = TensorAccessorArgs<selected_args.next_compile_time_args_offset()>();
+    constexpr auto cos_args = TensorAccessorArgs<lengths_args.next_compile_time_args_offset()>();
+    constexpr auto sin_args = TensorAccessorArgs<cos_args.next_compile_time_args_offset()>();
 
     uint32_t arg_idx = 0;
     const uint32_t q_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t kv_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t selected_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t lengths_addr = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t cos_addr = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t sin_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t s_block = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t head_group = get_arg_val<uint32_t>(arg_idx++);
 
@@ -114,5 +122,54 @@ void kernel_main() {
         }
         noc_async_read_barrier();
         cb_push_back(cb_k_in, k_chunk_tiles);
+    }
+
+    if constexpr (has_rope) {
+        if (s_block == 0) {
+            constexpr uint32_t face_bytes = 16 * 16 * 2;
+            constexpr uint32_t cs_raw_chunk_bytes = 64;
+            constexpr uint32_t words_per_chunk = cs_raw_chunk_bytes / sizeof(uint32_t);
+            const auto cos_reader = TensorAccessor(cos_args, cos_addr);
+            const auto sin_reader = TensorAccessor(sin_args, sin_addr);
+            const uint32_t raw_addr = get_write_ptr(cb_cs_raw);
+            uint32_t chunk = 0;
+            for (uint32_t t = 0; t < rope_tiles; ++t) {
+                for (uint32_t f = 0; f < 2; ++f) {
+                    noc_async_read(
+                        cos_reader.get_noc_addr(t, f * face_bytes),
+                        raw_addr + chunk * cs_raw_chunk_bytes,
+                        cs_raw_chunk_bytes);
+                    ++chunk;
+                }
+            }
+            for (uint32_t t = 0; t < rope_tiles; ++t) {
+                for (uint32_t f = 0; f < 2; ++f) {
+                    noc_async_read(
+                        sin_reader.get_noc_addr(t, f * face_bytes),
+                        raw_addr + chunk * cs_raw_chunk_bytes,
+                        cs_raw_chunk_bytes);
+                    ++chunk;
+                }
+            }
+            noc_async_read_barrier();
+
+            cb_reserve_back(cb_cs, rope_tiles);
+            const volatile tt_l1_ptr uint32_t* raw_ptr = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(raw_addr);
+            volatile tt_l1_ptr uint32_t* cs_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_cs));
+            for (uint32_t t = 0; t < rope_tiles; ++t) {
+                for (uint32_t f = 0; f < 2; ++f) {
+                    const uint32_t cos_off = (t * 2 + f) * words_per_chunk;
+                    const uint32_t sin_off = (2 * rope_tiles + t * 2 + f) * words_per_chunk;
+                    const uint32_t dst_face_off = (t * 2 + f) * (heads_per_core * 8);
+                    for (uint32_t k = 0; k < 8; ++k) {
+                        const uint32_t w = (raw_ptr[cos_off + k] & 0xFFFFu) | ((raw_ptr[sin_off + k] & 0xFFFFu) << 16);
+                        for (uint32_t r = 0; r < heads_per_core; ++r) {
+                            cs_ptr[dst_face_off + r * 8 + k] = w;
+                        }
+                    }
+                }
+            }
+            cb_push_back(cb_cs, rope_tiles);
+        }
     }
 }

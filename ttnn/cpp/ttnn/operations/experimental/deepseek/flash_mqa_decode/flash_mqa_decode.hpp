@@ -36,6 +36,11 @@ namespace ttnn::experimental::deepseek {
 //   k_chunk_size:        rows per chunk, a multiple of 64.
 //   num_s_blocks:        cores per head group.
 //   memory_config:       output memory config, default q's.
+//   cos:                 optional TILE bfloat16 ``[1, 1, >=1, rope_dim]`` RoPE cosines; when set with
+//                        ``sin``, applies interleaved RoPE in place to the trailing ``rope_dim``
+//                        columns (row 0 of ``cos``/``sin``) before writing the output.
+//   sin:                 optional TILE bfloat16 ``[1, 1, >=1, rope_dim]`` RoPE sines (pass ``-sin``
+//                        for inverse RoPE).
 //
 // Returns: ``[1, 1, heads, head_dim]`` bfloat16 row-major.
 Tensor flash_mqa_decode(
@@ -50,6 +55,8 @@ Tensor flash_mqa_decode(
     uint32_t k_chunk_size = 64,
     uint32_t num_s_blocks = 8,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
+    const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
+    const std::optional<Tensor>& cos = std::nullopt,
+    const std::optional<Tensor>& sin = std::nullopt);
 
 }  // namespace ttnn::experimental::deepseek

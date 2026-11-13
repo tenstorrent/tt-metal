@@ -104,6 +104,9 @@ public:
     void barrier(std::optional<uint32_t> timeout_ms);
     // True when pages go through the socket's own receiver window rather than the cluster.write_core fallback.
     bool writes_through_window() const { return receiver_core_window_ != nullptr; }
+    // The receiver kernel is gone (or wedged) and will never ack what is in flight; the
+    // destructor then skips its drain barrier instead of timing out on it.
+    void abandon_receiver() { receiver_abandoned_ = true; }
 
 private:
     H2DSocketImpl() = default;
@@ -188,6 +191,7 @@ private:
     HDSocketConnectorState* connector_state_ = nullptr;
     uint32_t connector_state_offset_ = 0;
     bool prior_clean_shutdown_ = true;
+    bool receiver_abandoned_ = false;
     // Non-zero when the recv_core is a DRAM programmable core: every NOC write
     // from host to its L1 must add this offset on top of the local L1 address.
     // Zero for worker recv cores (worker L1 has local==NOC space). init_receiver_tlb

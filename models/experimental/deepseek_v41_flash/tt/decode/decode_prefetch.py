@@ -57,9 +57,10 @@ from models.experimental.deepseek_v4_flash.tt.layers import (
     make_multi_page_decode_pipes,
 )
 
-# Depth of the shared ring in 32-tile pages: 144 KB per core at bf4, half V4's profile default, with no
-# decode slowdown. The co-allocated range is then sized by q_a's 180 KB ring.
-SHARED_RING_PAGES = 8
+# Depth of the shared ring in 32-tile pages: 320 tiles (180 KiB per core at bf4 = 2 x 160-tile q_b slabs),
+# eliminating the pad-credit stall between consecutive fused_qkv layers at zero extra L1 because
+# Q_A_RING_PAGES = 4 already sizes the co-allocated range to 180 KiB.
+SHARED_RING_PAGES = 10
 # 4 pages of 80 tiles (16 rows of q_a's 5-tile-wide slab): ~180 KB per core at bf4.
 _Q_A_PAGE_PIN = {"K": 512, "N": 1280, "n_blocks": 8}
 Q_A_RING_PAGES = 4

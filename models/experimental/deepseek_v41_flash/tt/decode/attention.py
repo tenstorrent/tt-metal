@@ -97,7 +97,7 @@ DECODE_LAYOUTS = {
     "indexer.wq_b": {"K": 1280, "N": 4096, "n_blocks": 64},
     "indexer.weights_proj": {"K": 5120, "N": 32, "n_blocks": 1},
 }
-# A layer that does not select runs one-row steps' q, kv and ring write as one ``attention_qkv_decode``
+# A one-row step without a scoring select runs q, kv and ring write as one ``attention_qkv_decode``
 # (``DEEPSEEK_V41_FUSED_QKV=0``: q_a, q_b, kv, their RoPE and the ring write as separate ops).
 _FUSED_QKV = os.environ.get("DEEPSEEK_V41_FUSED_QKV", "1") not in ("0", "", "false", "False")
 # Up to ``index_topk`` entries the select keeps every entry, so a one-row step's select copies the session's
@@ -552,13 +552,13 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         self.qkv_tp_strategy = "replicated"
         tp_tag = f".tp{tp_size}.{self.qkv_tp_strategy}" if tp_size > 1 else ""
 
-        # Only the select reads q_a. A layer without one runs a one-row step's q / kv as attention_qkv_decode,
-        # which takes q_a's, kv's and q_b's slabs off its own rings (or DRAM); their matmul_decodes below serve
-        # the other steps from DRAM, off the rings, so the rings still pop in prefetch order.
+        # Only a scoring select (select and not dense) reads q_a. A one-row step without one runs q / kv as
+        # attention_qkv_decode, taking q_a's, kv's and q_b's slabs off its own rings (or DRAM); their
+        # matmul_decodes below serve the other steps from DRAM, off the rings, so the rings still pop in
+        # prefetch order.
         grid = device.compute_with_storage_grid_size()
         self.fused_qkv = (
             _FUSED_QKV
-            and layer_idx not in config.index_source_layer_ids
             and grid.x >= _FUSED_QKV_GRID.bounding_box().end.x + 1
             and grid.y >= _FUSED_QKV_GRID.bounding_box().end.y + 1
         )
@@ -762,10 +762,12 @@ class DeepSeekV41Attention(DeepSeekV4Module):
                 tokens_grid=self._decode_activation_grid(),
             )
 
-    def prefetch_weights(self, *, one_row: bool = True):
+    def prefetch_weights(self, *, one_row: bool = True, fused_qkv: bool | None = None):
         """Queue the prefetched projections in the order :meth:`decode` pops them. ``one_row``: the step this is for
-        decodes one row, which a ``fused_qkv`` layer runs as attention_qkv_decode, whose slabs are then queued too."""
-        if one_row and self.fused_pipes is not None:
+        decodes one row; ``fused_qkv`` (default ``not self.is_index_source``) queues attention_qkv_decode's slabs
+        when ``self.fused_pipes`` is built instead of running q_a, kv and q_b from DRAM."""
+        use_fused = not self.is_index_source if fused_qkv is None else fused_qkv
+        if one_row and use_fused and self.fused_pipes is not None:
             self._queue_fused_prefetch()
         for proj in (self.q_a_proj, self.q_b_proj, self.kv_proj, self.o_a_proj, self.o_b_proj):
             if proj.use_prefetcher:
@@ -835,7 +837,7 @@ class DeepSeekV41Attention(DeepSeekV4Module):
             prefetcher_pipes=pipes,
         )
 
-    def _sdpa(self, q, kv, mask, sdpa_cur_pos, memory_config, sdpa_lengths=None, selected_kv=None):
+    def _sdpa(self, q, kv, mask, sdpa_cur_pos, memory_config, sdpa_lengths=None, selected_kv=None, cos=None, sin=None):
         """SDPA-decode of ``q`` ``[1, B, H_local, Dh]`` over K == V ``kv`` ``[B or 1, 1, Skv, Dh]``.
 
         Exactly one of ``sdpa_cur_pos`` (causal, ``[B]``) / ``mask`` (additive ``[B or 1, 1, 1, Skv]``) /
@@ -858,6 +860,8 @@ class DeepSeekV41Attention(DeepSeekV4Module):
                 num_s_blocks=_FLASH_MQA_S_BLOCKS,
                 memory_config=memory_config,
                 compute_kernel_config=_FLASH_MQA_COMPUTE,
+                cos=cos,
+                sin=sin,
             )
         sdpa_kwargs = dict(
             attention_sink=self.sdpa_sinks_tt,
@@ -913,19 +917,24 @@ class DeepSeekV41Attention(DeepSeekV4Module):
             ttnn.deallocate(q)
         q = ttnn.experimental.view(gathered, [1, batch, h, dh])
         if sdpa_lengths is not None:
-            # flash_mqa_decode writes head rows wherever the output lives, so one head per core spreads the
-            # output RoPE over H cores, and o_a's gather stacks those rows back into the packed row.
-            head_per_core = ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                ttnn.BufferType.L1,
-                ttnn.ShardSpec(
-                    ttnn.num_cores_to_corerangeset(h, self._sdpa_pcfg.compute_with_storage_grid_size, row_wise=True),
-                    [1, dh],
-                    ttnn.ShardOrientation.ROW_MAJOR,
-                ),
-            )
-            attn = self._sdpa(q, kv, mask, sdpa_cur_pos, head_per_core, sdpa_lengths, selected_kv)
-            attn = _apply_rope(attn, cos, neg_sin, self.rot, self.rope_dim)
+            # Fuse inverse RoPE into flash_mqa_decode on Blackhole and write directly to out_mem (core (0,0)),
+            # so o_a's all_gather_for_matmul multicasts straight from (0,0) with no separate RoPE or gather.
+            if self.device.arch() == ttnn.Arch.BLACKHOLE:
+                attn = self._sdpa(q, kv, mask, sdpa_cur_pos, out_mem, sdpa_lengths, selected_kv, cos=cos, sin=neg_sin)
+            else:
+                head_per_core = ttnn.MemoryConfig(
+                    ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                    ttnn.BufferType.L1,
+                    ttnn.ShardSpec(
+                        ttnn.num_cores_to_corerangeset(
+                            h, self._sdpa_pcfg.compute_with_storage_grid_size, row_wise=True
+                        ),
+                        [1, dh],
+                        ttnn.ShardOrientation.ROW_MAJOR,
+                    ),
+                )
+                attn = self._sdpa(q, kv, mask, sdpa_cur_pos, head_per_core, sdpa_lengths, selected_kv)
+                attn = _apply_rope(attn, cos, neg_sin, self.rot, self.rope_dim)
             return self._project_out(attn)
         attn = self._sdpa(q, kv, mask, sdpa_cur_pos, out_mem, sdpa_lengths=sdpa_lengths, selected_kv=selected_kv)
         # One row per core with its heads side by side, so a per-row RoPE table row covers all of them.
@@ -1211,7 +1220,7 @@ class DeepSeekV41Attention(DeepSeekV4Module):
             assert s <= self.window, f"{s} rows would overwrite each other's ring slots"
             assert ring_offset is None and win_offset is None, "several sessions' rings decode one row at a time"
             assert ring_rows is not None, "decode_inputs(..., rows=S) builds the rows' ring copies"
-        fused = self.fused_qkv and b == 1 and s == 1
+        fused = self.fused_qkv and b == 1 and s == 1 and (not select or dense)
         assert fused or not self.fused_prefetch_queued, "attention_qkv_decode's slabs were queued for a one-row step"
         tokens = ttnn.experimental.deepseek.all_gather_for_matmul(
             _pack_tokens(hidden), _FUSED_QKV_GRID if fused else self._decode_activation_grid()

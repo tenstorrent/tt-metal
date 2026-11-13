@@ -263,6 +263,9 @@ private:
     // Publishes bytes_sent to the receiver without a store fence after it. Accessible only via
     // tt::tt_metal::experimental::detail::publish_staged.
     void notify_receiver_unfenced();
+    // Skips the destructor's drain barrier: the receiver will never ack. Accessible only via
+    // tt::tt_metal::experimental::detail::abandon_receiver.
+    void abandon_receiver();
 
     friend struct tt::tt_metal::experimental::detail::H2DSocketTryWriteAccess;
     friend struct tt::tt_metal::experimental::detail::H2DSocketDramRecvAccess;

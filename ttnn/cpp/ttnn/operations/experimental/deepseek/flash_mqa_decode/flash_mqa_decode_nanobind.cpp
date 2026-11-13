@@ -46,6 +46,11 @@ void bind_flash_mqa_decode(::nanobind::module_& mod) {
             memory_config (Optional[ttnn.MemoryConfig]): output memory config, default q's.
             compute_kernel_config (Optional[ttnn.DeviceComputeKernelConfig]): fp32 dest accumulation
                 and full-sync dst are not supported.
+            cos (Optional[ttnn.Tensor]): bfloat16 32x32 TILE ``[1, 1, >=1, rope_dim]`` RoPE cosines
+                (``rope_dim`` 32 or 64). When set with ``sin``, applies interleaved RoPE in place to
+                the trailing ``rope_dim`` columns (row 0 of ``cos``/``sin``) before writing output.
+            sin (Optional[ttnn.Tensor]): bfloat16 32x32 TILE ``[1, 1, >=1, rope_dim]`` RoPE sines
+                (pass ``-sin`` for inverse RoPE).
 
         Returns:
             ttnn.Tensor: ``[1, 1, heads, head_dim]`` bfloat16 row-major.
@@ -63,7 +68,9 @@ void bind_flash_mqa_decode(::nanobind::module_& mod) {
         nb::arg("k_chunk_size") = 64,
         nb::arg("num_s_blocks") = 8,
         nb::arg("memory_config") = std::nullopt,
-        nb::arg("compute_kernel_config") = std::nullopt);
+        nb::arg("compute_kernel_config") = std::nullopt,
+        nb::arg("cos") = std::nullopt,
+        nb::arg("sin") = std::nullopt);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek::detail
