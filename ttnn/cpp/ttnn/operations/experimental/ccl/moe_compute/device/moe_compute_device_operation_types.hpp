@@ -31,7 +31,8 @@ namespace ttnn::experimental::prim {
 //   multi-device mesh the token set and its routing metadata must be replicated and every
 //   coordinate writes only the rows of its own experts, like the combine; a caller that sums the
 //   partials across the other axis passes a zeroed output tensor. Returns 6 tensors like
-//   FullCcl, but slot 4 (the staged matmul output) is not written: nothing is staged.
+//   FullCcl, but slot 4 (the staged matmul output) is not written: nothing is staged; slots 1 and 2
+//   are a placeholder and the packed (token, k) lists (moe_ring::token_list).
 //   `combine_params` only describes the output (k, tokens, hidden, memory config, axis).
 // - `ComputeOnly` bypasses the combine path: no combine cores allocated, no fabric setup,
 //   no global semaphores; op emits 5 tensors instead of 6 (matmul_output is the final output).

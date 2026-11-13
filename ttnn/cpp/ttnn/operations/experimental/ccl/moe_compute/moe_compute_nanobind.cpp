@@ -177,8 +177,10 @@ void bind_moe_compute(nb::module_& mod) {
           expert-parallel mesh, or either axis of a 1x1 mesh). There is nothing to combine, so no
           combine kernels run: the op's own writer puts each expert's token rows straight into the
           final output. No fabric, mux cores, links or cross-device semaphore are used (the mesh
-          may be opened without a fabric config); ``topology``, ``num_links``,
-          ``mux_core_range_set`` and ``optional_cross_device_semaphore`` are accepted and unused.
+          may be opened without a fabric config), but the CCL options keep their checks: an
+          explicit ``topology`` must be ``Linear`` or ``Ring`` and ``num_links`` must be positive.
+          The worker placement still avoids ``mux_core_range_set``, so a range that leaves too
+          little room fails placement; ``optional_cross_device_semaphore`` is ignored.
           On a multi-device mesh every coordinate must receive the same replicated token set and
           routing metadata (expert indices, scores and mapping) and returns the partial of its own
           experts: only the rows its experts own are written, as with the combine, and the other
@@ -189,7 +191,11 @@ void bind_moe_compute(nb::module_& mod) {
           INTERLEAVED or HEIGHT_SHARDED with whole rows per shard, DRAM or L1; WIDTH_SHARDED,
           BLOCK_SHARDED and ND sharding are rejected (a row would span several pages). Nothing is
           staged in the combine cores' L1, so the matmul-output tensor (slot 4) is not written on
-          this path. That form does not support shared experts.
+          this path. That form does not support shared experts. Outputs 1 and 2 are a one-page
+          placeholder and the packed ``(token, k)`` lists
+          (layout: ``moe_ring::token_list`` in ``moe_ring_common.h``) instead of the activation rows and the
+          per-expert token pages, and a call is not capped at 32 tokens per combine core: the token
+          id must fit 24 bits and k 8 bits.
 
         With ``compute_only=True``, ``cluster_axis``, ``topology``, ``num_links``,
         ``mux_core_range_set``, ``optional_output_tensor``, and
