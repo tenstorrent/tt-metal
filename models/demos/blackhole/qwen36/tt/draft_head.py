@@ -4,9 +4,10 @@
 DRAM banks and read by the multi-core DRAM-sharded matmul pipeline (MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig
 with use_multicore_pipeline).
 
-The verify keeps the shared bfloat8_b head (Qwen36Model.lm_head_weight), so the served tokens do not change; the
-drafts come from this copy, so draft acceptance can move. The copy adds its size to DRAM (DraftHeadPlan.weight_bytes)
-and replaces nothing: the verify still reads the shared head.
+The verify keeps the shared bfloat8_b head (Qwen36Model.lm_head_weight); the drafts come from this copy, so draft
+acceptance can move. Acceptance decides which verify step scores each token, and the verify's logits differ in the
+last bits between groupings, so a greedy token whose top two logits nearly tie can change. The copy adds its size to
+DRAM (DraftHeadPlan.weight_bytes) and replaces nothing: the verify still reads the shared head.
 
 DraftHeadPlan is the host arithmetic of the pipeline's layout and L1 for the drafter's call (bfloat16 activation,
 bfloat4_b weight, float32 logits, fp32 Dest), after create_program_dram_sharded_multicore_spec in
