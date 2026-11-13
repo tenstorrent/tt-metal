@@ -16,7 +16,6 @@ using namespace sfpi;
 
 namespace ckernel {
 namespace sfpu {
-
 // Computes the reciprocal of a floating point value x.
 // normalized=true requires a finite input with magnitude in [1, 2).
 template <int max_iter = 2, bool normalized = false>
@@ -400,12 +399,11 @@ void recip_init() {
     // SFPU replay slots 0-5. Reinitialize another SFPU macro/replay owner before using it again.
     // Scalar/first-column sfpu_reciprocal_iter callers only need generic unary SFPU init plus
     // sfpu_reciprocal_init; they must not pay for or clobber state with this full-tile setup.
-    // Common SFPU init inlined (SFPU config register + reciprocal's ADDR_MOD_6 + counter reset), then the
+    // Common SFPU init inlined (SFPU config register + counter reset), then the
     // op-specific reciprocal setup below -- one self-contained init, matching exp_init.
     // SDPA runs reciprocal in its softmax after matmul/exp, so the general SFPU state is re-established
-    // here, not just reset. Reciprocal uses ADDR_MOD_6 (dest incr 2) on Blackhole.
+    // here, not just reset. Reciprocal uses ADDR_MOD_6 (dest incr 2) on Blackhole, at its invariant.
     sfpu::_init_sfpu_config_reg();
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
     math::reset_counters(p_setrwc::SET_ABD_F);
     sfpu_reciprocal_init<false>();  // set vConstFloatPrgm0 for sfpu_reciprocal_iter
     if constexpr (APPROXIMATION_MODE) {

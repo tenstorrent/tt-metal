@@ -18,36 +18,17 @@ using namespace sfpi;
 
 namespace ckernel {
 namespace sfpu {
+inline void equal_zero_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
-inline void equal_zero_init() {
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
-    math::reset_counters(p_setrwc::SET_ABD_F);
-}
+inline void greater_than_equal_zero_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
-inline void greater_than_equal_zero_init() {
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
-    math::reset_counters(p_setrwc::SET_ABD_F);
-}
+inline void greater_than_zero_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
-inline void greater_than_zero_init() {
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
-    math::reset_counters(p_setrwc::SET_ABD_F);
-}
+inline void less_than_equal_zero_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
-inline void less_than_equal_zero_init() {
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
-    math::reset_counters(p_setrwc::SET_ABD_F);
-}
+inline void less_than_zero_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
-inline void less_than_zero_init() {
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
-    math::reset_counters(p_setrwc::SET_ABD_F);
-}
-
-inline void not_equal_zero_init() {
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
-    math::reset_counters(p_setrwc::SET_ABD_F);
-}
+inline void not_equal_zero_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
 inline void calculate_comp() {

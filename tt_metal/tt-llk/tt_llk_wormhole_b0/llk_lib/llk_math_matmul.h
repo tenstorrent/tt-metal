@@ -23,11 +23,12 @@ using namespace ckernel;
 /**
  * @brief Program the matmul address-mod slots for the given tile shapes, transpose, and fidelity.
  *
- * Sets up the SrcA/SrcB/dest increments and the fidelity-phase reset mods (ADDR_MOD_5, plus ADDR_MOD_6 when
- * throttling). The increment pattern branches on the in0/in1 face geometry (16x32, 32x16, full 32x32) and transpose.
+ * Sets up the SrcA/SrcB/dest increments and the fidelity-phase reset mod (ADDR_MOD_5). The throttled MOP's
+ * ADDR_MOD_6 reset is programmed by @ref _llk_math_matmul_. The increment pattern branches on the in0/in1 face
+ * geometry (16x32, 32x16, full 32x32) and transpose.
  *
  * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
- * @tparam THROTTLE_LEVEL: Non-zero adds the extra fidelity-clear address mod used by the throttled MOP.
+ * @tparam THROTTLE_LEVEL: Compute-throughput throttle level; does not change the slots programmed here.
  * @param transpose: True to transpose in1 faces during the multiply.
  * @param in0_tile_r_dim: Row dimension of an in0 tile.
  * @param in0_tile_c_dim: Column dimension of an in0 tile.
@@ -86,19 +87,6 @@ inline void matmul_configure_addrmod(
         .bias     = {.incr = 1},
     }
         .set(ADDR_MOD_5);
-
-    if constexpr (THROTTLE_LEVEL)
-    {
-        // reset all, including fidelity
-        addr_mod_t {
-            .srca     = {.incr = 0, .clr = 1, .cr = 1},
-            .srcb     = {.incr = 0, .clr = 1, .cr = 1},
-            .dest     = {.incr = 0, .clr = 1, .cr = 1},
-            .fidelity = {.incr = 0, .clr = 1},
-            .bias     = {.incr = 1},
-        }
-            .set(ADDR_MOD_6);
-    }
 
     if ((is_in0_16x32 && (!is_in1_32x16)) || is_in0_32x16)
     {
@@ -926,6 +914,19 @@ inline void _llk_math_matmul_(std::uint32_t dst_index, const std::uint32_t ct_di
         "matmul: Src zero-substitution flag does not hold the operand-driven value — a prior op (copy_init/datacopy) left "
         "a keep flag before MVMUL without a format-changing reconfig; denormal Src results will differ");
 
+    if constexpr (THROTTLE_LEVEL)
+    {
+        // The throttled MOP resets all counters, including fidelity, through ADDR_MOD_6 (ADDR_MOD_2 with the bias bit set).
+        addr_mod_t {
+            .srca     = {.incr = 0, .clr = 1, .cr = 1},
+            .srcb     = {.incr = 0, .clr = 1, .cr = 1},
+            .dest     = {.incr = 0, .clr = 1, .cr = 1},
+            .fidelity = {.incr = 0, .clr = 1},
+            .bias     = {.incr = 1},
+        }
+            .set(ADDR_MOD_6);
+    }
+
     const bool reuse_a          = ct_dim >= rt_dim;
     const std::uint32_t t_dim   = reuse_a ? rt_dim : ct_dim;
     const std::uint32_t rut_dim = reuse_a ? ct_dim : rt_dim; // reuse-dim
@@ -1077,5 +1078,11 @@ inline void _llk_math_matmul_(std::uint32_t dst_index, const std::uint32_t ct_di
             }
         }
         t++;
+    }
+
+    if constexpr (THROTTLE_LEVEL)
+    {
+        // Restore the ADDR_MOD_6 invariant (dest += 2) for the next op.
+        addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
     }
 }

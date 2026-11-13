@@ -17,7 +17,6 @@ using namespace sfpi;
 
 namespace ckernel {
 namespace sfpu {
-
 // Mask that keeps the low 16 bits (the UInt16 value) of a 32-bit dest word and clears the garbage high bits.
 constexpr std::uint16_t UINT16_LOW_MASK = 0xFFFF;
 
@@ -627,7 +626,6 @@ inline void calculate_typecast_int32_to_uint16() {
 
 template <bool APPROXIMATION_MODE>
 inline void init_typecast_fp32_to_fp16b() {
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
     math::reset_counters(p_setrwc::SET_ABD_F);
     sfpi::vConstIntPrgm0 = 1;
     sfpi::vConstIntPrgm1 = 0x7fff;
@@ -636,7 +634,6 @@ inline void init_typecast_fp32_to_fp16b() {
 
 template <bool APPROXIMATION_MODE>
 inline void init_typecast_uint16_to_uint32() {
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
     math::reset_counters(p_setrwc::SET_ABD_F);
 #ifdef DISABLE_SFPLOADMACRO
     TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_USHORT, UINT16_LOW_MASK);
@@ -678,7 +675,6 @@ inline void preload_sign_magnitude_cast_fixup() { sfpi::vConstIntPrgm0 = -31; }
 
 template <bool APPROXIMATION_MODE>
 inline void init_typecast_uint32_to_fp32() {
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
     math::reset_counters(p_setrwc::SET_ABD_F);
     sfpi::vConstIntPrgm0 = -23;
     sfpi::vConstFloatPrgm1 = 8388608.0f;  // 2^23
@@ -720,7 +716,6 @@ inline void init_typecast_uint32_to_fp32() {
 
 template <bool APPROXIMATION_MODE>
 inline void init_typecast_int32_to_fp32() {
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
     math::reset_counters(p_setrwc::SET_ABD_F);
 #ifndef DISABLE_SFPLOADMACRO
     constexpr int t = p_sfpu::LREG4;
@@ -756,7 +751,6 @@ inline void init_typecast_int32_to_fp32() {
 
 template <bool APPROXIMATION_MODE>
 inline void init_typecast_int32_to_fp16b() {
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
     math::reset_counters(p_setrwc::SET_ABD_F);
 #ifndef DISABLE_SFPLOADMACRO
     constexpr int t = p_sfpu::LREG4;
@@ -795,7 +789,6 @@ inline void init_typecast_int32_to_fp16b() {
 
 template <bool APPROXIMATION_MODE>
 inline void init_typecast_uint16_to_fp32() {
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
     math::reset_counters(p_setrwc::SET_ABD_F);
 #ifdef DISABLE_SFPLOADMACRO
     TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_USHORT, UINT16_LOW_MASK);
@@ -834,7 +827,6 @@ inline void init_typecast_uint16_to_fp32() {
 
 template <bool APPROXIMATION_MODE>
 inline void init_typecast_uint16_to_fp16b() {
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
     math::reset_counters(p_setrwc::SET_ABD_F);
 #ifndef DISABLE_SFPLOADMACRO
     // InstructionTemplate[0]
@@ -866,7 +858,6 @@ inline void init_typecast_uint16_to_fp16b() {
 
 template <bool APPROXIMATION_MODE>
 inline void init_typecast_uint32_to_fp16b() {
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
     math::reset_counters(p_setrwc::SET_ABD_F);
 #ifndef DISABLE_SFPLOADMACRO
     preload_sign_magnitude_cast_fixup();
@@ -903,7 +894,6 @@ inline void init_typecast_uint32_to_fp16b() {
 
 template <bool APPROXIMATION_MODE>
 inline void init_typecast_fp32_to_uint16() {
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
     math::reset_counters(p_setrwc::SET_ABD_F);
 #ifndef DISABLE_SFPLOADMACRO
     // Programs the macro used by the 16-bit Dest (LO16 store) path of
@@ -939,13 +929,11 @@ inline void init_typecast_fp32_to_uint16() {
 
 template <bool APPROXIMATION_MODE>
 inline void init_typecast_uint32_to_uint16() {
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
 
 template <bool APPROXIMATION_MODE>
 inline void init_typecast_int32_to_uint16() {
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
     math::reset_counters(p_setrwc::SET_ABD_F);
 #ifndef DISABLE_SFPLOADMACRO
     // InstructionTemplate[0]
@@ -1114,28 +1102,24 @@ inline void calculate_typecast_int8_to_fp32() {
 
 template <bool APPROXIMATION_MODE>
 inline void init_typecast_fp32_to_uint8() {
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
     math::reset_counters(p_setrwc::SET_ABD_F);
     sfpi::vConstIntPrgm0 = 0xFF;
 }
 
 template <bool APPROXIMATION_MODE>
 inline void init_typecast_uint_to_uint8() {
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
     math::reset_counters(p_setrwc::SET_ABD_F);
     sfpi::vConstIntPrgm0 = 0xFF;
 }
 
 template <bool APPROXIMATION_MODE>
 inline void init_typecast_int8_input() {
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
     math::reset_counters(p_setrwc::SET_ABD_F);
     sfpi::vConstIntPrgm0 = INT8_SIGN_MASK;
 }
 
 template <bool APPROXIMATION_MODE>
 inline void init_typecast_int8_to_fp32() {
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
     math::reset_counters(p_setrwc::SET_ABD_F);
     sfpi::vConstIntPrgm0 = INT8_SIGN_MASK;
 #ifndef DISABLE_SFPLOADMACRO

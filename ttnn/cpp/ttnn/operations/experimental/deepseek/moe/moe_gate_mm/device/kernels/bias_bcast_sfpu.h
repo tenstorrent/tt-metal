@@ -48,14 +48,9 @@ inline void _add_bias_configure_addrmod_() {
         .set(ADDRMOD_OFFSET + ADDR_MOD_0);
 
     addr_mod_t{
-        .dest = {.incr = 2, .clr = 0, .cr = 0, .c_to_cr = 0},
-    }
-        .set(ADDRMOD_OFFSET + ADDR_MOD_1);
-
-    addr_mod_t{
         .dest = {.incr = 14, .clr = 0, .cr = 0, .c_to_cr = 0},
     }
-        .set(ADDRMOD_OFFSET + ADDR_MOD_2);
+        .set(ADDRMOD_OFFSET + ADDR_MOD_1);
 }
 
 inline void _add_bias_() {
@@ -69,16 +64,16 @@ inline void _add_bias_() {
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 
     // Let us load in the bias values
-    TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::FP16B, ADDR_MOD_1, 128);
-    TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::FP16B, ADDR_MOD_2, 128);
-    TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::FP16B, ADDR_MOD_1, 128);
+    TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::FP16B, ADDR_MOD_2, 128);
+    TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::FP16B, ADDR_MOD_1, 128);
+    TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::FP16B, ADDR_MOD_2, 128);
     TTI_SFPLOAD(p_sfpu::LREG7, InstrModLoadStore::FP16B, ADDR_MOD_0, 128);
 
     lltt::record<lltt::Exec>(0, 4 + 1 + 5 + 1 + 4);
     // Now load in the input, 4 rows at a time
-    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::FP16B, ADDR_MOD_1, 0);
-    TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP16B, ADDR_MOD_2, 0);
-    TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::FP16B, ADDR_MOD_1, 0);
+    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::FP16B, ADDR_MOD_2, 0);
+    TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP16B, ADDR_MOD_1, 0);
+    TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::FP16B, ADDR_MOD_2, 0);
     TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::FP16B, ADDR_MOD_0, 0);
 
     TTI_SFPTRANSP(0, 0, 0, 0);
@@ -93,9 +88,9 @@ inline void _add_bias_() {
     TTI_SFPTRANSP(0, 0, 0, 0);
 
     // Now store the output
-    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::FP16B, ADDR_MOD_1, 0);
-    TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::FP16B, ADDR_MOD_2, 0);
-    TTI_SFPSTORE(p_sfpu::LREG2, InstrModLoadStore::FP16B, ADDR_MOD_1, 0);
+    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::FP16B, ADDR_MOD_2, 0);
+    TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::FP16B, ADDR_MOD_1, 0);
+    TTI_SFPSTORE(p_sfpu::LREG2, InstrModLoadStore::FP16B, ADDR_MOD_2, 0);
     TTI_SFPSTORE(p_sfpu::LREG3, InstrModLoadStore::FP16B, ADDR_MOD_3, 0);
 
     // Now do this 3 more times, to complete first two faces (16 rows)
@@ -107,9 +102,9 @@ inline void _add_bias_() {
 
     lltt::record<lltt::Exec>(15, 4 + 1 + 5 + 1 + 4);
     // Now load in the input, 4 rows at a time
-    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::FP16B, ADDR_MOD_1, 32 + 0);
-    TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP16B, ADDR_MOD_2, 32 + 0);
-    TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::FP16B, ADDR_MOD_1, 32 + 0);
+    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::FP16B, ADDR_MOD_2, 32 + 0);
+    TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP16B, ADDR_MOD_1, 32 + 0);
+    TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::FP16B, ADDR_MOD_2, 32 + 0);
     TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::FP16B, ADDR_MOD_0, 32 + 0);
 
     TTI_SFPTRANSP(0, 0, 0, 0);
@@ -124,9 +119,9 @@ inline void _add_bias_() {
     TTI_SFPTRANSP(0, 0, 0, 0);
 
     // Now store the output
-    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::FP16B, ADDR_MOD_1, 32 + 0);
-    TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::FP16B, ADDR_MOD_2, 32 + 0);
-    TTI_SFPSTORE(p_sfpu::LREG2, InstrModLoadStore::FP16B, ADDR_MOD_1, 32 + 0);
+    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::FP16B, ADDR_MOD_2, 32 + 0);
+    TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::FP16B, ADDR_MOD_1, 32 + 0);
+    TTI_SFPSTORE(p_sfpu::LREG2, InstrModLoadStore::FP16B, ADDR_MOD_2, 32 + 0);
     TTI_SFPSTORE(p_sfpu::LREG3, InstrModLoadStore::FP16B, ADDR_MOD_3, 32 + 0);
 
     // Now do this 3 more times, to complete lower two faces (16 rows)

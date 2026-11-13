@@ -15,7 +15,6 @@
 #include "sfpi.h"
 
 namespace ckernel::sfpu {
-
 // Replay-buffer slots for the per-iteration register-only compute bodies of
 // the quant / requant / dequant kernels. The body is recorded once by each
 // op's {quant,requant,dequant}_init and then replayed by every
@@ -70,21 +69,6 @@ constexpr std::uint32_t DEQUANT_REPLAY_LEN_SIGN_MAGN = 3;
 // sibling value INT32_2S_COMP_TO_INT_SIGN_MAGN has a known HW bug
 // (sign-mag -0 -> mostneg int32) and is not used in any tt-llk kernel.
 constexpr auto INT_REPR_SWAP_CAST = InstrModCast::INT_SIGN_MAGN_TO_INT32_2S_COMP;
-
-// Configure ADDR_MOD_6 with dest auto-increment of one SFPU dst row
-// (sfpi::SFP_DESTREG_STRIDE == 2 dst-address units) so the per-iteration
-// SFPSTORE walks dst_reg through the face's 4-row x 8-col blocks. Replaces
-// sfpi::dst_reg++ in the kernel bodies and lets each loop be purely TTI-issued.
-// Called once by each {quant,requant,dequant}_init since quant_int32
-// isn't in the LLK init's "configure ADDR_MOD_6 with dest+=2" allow-list.
-inline void _quant_kernels_configure_dest_incr_addrmod_() {
-    addr_mod_t{
-        .srca = {.incr = 0},
-        .srcb = {.incr = 0},
-        .dest = {.incr = sfpi::SFP_DESTREG_STRIDE},
-    }
-        .set(ADDR_MOD_6);
-}
 
 // Int8 L1 pack path:
 // Int8 output is packed through the UInt8 packer, which saturates the dest word to [0, 255].
@@ -175,7 +159,7 @@ template <
     bool APPROXIMATION_MODE /*unused*/,
     bool SIGN_MAGNITUDE_FORMAT = false,
     DataFormat OUTPUT_FORMAT = DataFormat::Int32>
-void quant_init(const uint zero_point) {
+void quant_init(const std::uint32_t zero_point) {
     static_assert(
         OUTPUT_FORMAT == DataFormat::Int32 || OUTPUT_FORMAT == DataFormat::UInt8 || OUTPUT_FORMAT == DataFormat::Int8,
         "quant_init OUTPUT_FORMAT must be Int32, UInt8 or Int8");
@@ -184,15 +168,13 @@ void quant_init(const uint zero_point) {
         "quant_init SIGN_MAGNITUDE_FORMAT is not supported with Int32 or UInt8 output");
     // One-time setup for calculate_quant_int32:
     //   1. load the fp32 zero-point constant into LREG2 and the RNE constants;
-    //   2. program ADDR_MOD_6 with dest+=2 for the per-iteration SFPSTORE;
-    //   3. record the register-only compute body into the SFPU replay buffer
+    //   2. record the register-only compute body into the SFPU replay buffer
     //      under QUANT_REPLAY_SLOT (NoExec - we don't want to issue the body
     //      against undefined LREG0/LREG1 contents at record time).
     // Subsequent calculate_quant_int32 calls replay the recorded body, shrinking the
     // unrolled binary from ~ITERATIONS*REPLAY_LEN body instructions down to
     // one replay invocation per iteration.
     _sfpu_load_imm32_(p_sfpu::LREG2, zero_point);
-    _quant_kernels_configure_dest_incr_addrmod_();
     _rne_clamp_init_<OUTPUT_FORMAT, p_sfpu::LREG2>();
     if constexpr (OUTPUT_FORMAT == DataFormat::Int8) {
         _sfpu_load_imm32_(p_sfpu::LREG3, INT8_SIGN_MASK);
@@ -230,8 +212,7 @@ void requant_init(const uint zero_point, const uint out_zero_point = 0) {
         "requant_init SIGN_MAGNITUDE_FORMAT is supported only with Int32 input and Int8 output");
     // One-time setup for requant_int32; see quant_init for the
     // record/replay rationale. Loads the zero point into LREG2 and the RNE
-    // constants, programs ADDR_MOD_6 with dest+=2, then records
-    // the register-only compute into REQUANT_REPLAY_SLOT (NoExec).
+    // constants, then records the register-only compute into REQUANT_REPLAY_SLOT (NoExec).
     //
     // The body rounds v = q * (s_in / s_out) + zp to nearest even and then adds out_zp.
     // zp is the host-folded -z_in * (s_in / s_out).
@@ -242,7 +223,6 @@ void requant_init(const uint zero_point, const uint out_zero_point = 0) {
     if constexpr (INT8_INPUT || OUTPUT_FORMAT == DataFormat::Int8) {
         _sfpu_load_imm32_(p_sfpu::LREG3, INT8_SIGN_MASK);
     }
-    _quant_kernels_configure_dest_incr_addrmod_();
     _sfpu_load_imm32_(p_sfpu::LREG6, out_zero_point);
     _rne_clamp_init_<OUTPUT_FORMAT, p_sfpu::LREG6>();
     // Int8 input is unbiased (byte ^ 0x80) inline by the kernel before the replay. Int32
@@ -276,7 +256,7 @@ void requant_init(const uint zero_point, const uint out_zero_point = 0) {
 }
 
 template <bool APPROXIMATION_MODE /*unused*/, bool SIGN_MAGNITUDE_FORMAT = false, bool INT8_INPUT = false>
-void dequant_init(const uint zero_point) {
+void dequant_init(const std::uint32_t zero_point) {
     // One-time setup for calculate_dequant_int32; see quant_init for the
     // record/replay rationale. The caller passes -zero_point (so the
     // recorded body computes (A + LREG2) * B = (A - zero_point) * B).
@@ -284,7 +264,6 @@ void dequant_init(const uint zero_point) {
     if constexpr (INT8_INPUT) {
         _sfpu_load_imm32_(p_sfpu::LREG3, INT8_SIGN_MASK);
     }
-    _quant_kernels_configure_dest_incr_addrmod_();
 
     constexpr std::uint32_t REPLAY_LEN =
         (SIGN_MAGNITUDE_FORMAT || INT8_INPUT) ? DEQUANT_REPLAY_LEN_SIGN_MAGN : DEQUANT_REPLAY_LEN_2S_COMP;
@@ -313,7 +292,8 @@ void dequant_init(const uint zero_point) {
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool SIGN_MAGNITUDE_FORMAT = false>
-inline void calculate_quant_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+inline void calculate_quant_int32(
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     // Operand A is input (fp32).
     // Operand B is scaling factor (fp32).
     // LREG2 holds -bits(t) loaded by quant_init.
@@ -324,9 +304,9 @@ inline void calculate_quant_int32(const uint dst_index_in0, const uint dst_index
     // so advancing dst_reg by +2 between iterations walks one face's eight
     // 4-row x 8-col blocks (= one full call site, ITERATIONS == 8).
     //
-    // The replay-buffer body at QUANT_REPLAY_SLOT and ADDR_MOD_6's dest+=2
-    // slot are programmed by quant_init<APPROXIMATION_MODE,
-    // SIGN_MAGNITUDE_FORMAT, OUTPUT_FORMAT>, which must run before the first call here.
+    // The replay-buffer body at QUANT_REPLAY_SLOT is programmed by
+    // quant_init<APPROXIMATION_MODE,
+    // SIGN_MAGNITUDE_FORMAT>, which must run before the first call here. ADDR_MOD_6 carries its dest+=2 invariant.
     constexpr std::uint32_t dst_tile_size = 64;
 
     constexpr std::uint32_t REPLAY_LEN = QUANT_REPLAY_LEN_2S_COMP;
@@ -349,13 +329,14 @@ inline void calculate_quant_int32(const uint dst_index_in0, const uint dst_index
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool SIGN_MAGNITUDE_FORMAT = false, bool INT8_INPUT = false>
-inline void calculate_requant_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
-    // Operand A is input to requant (int32 2's complement bits or UInt8-unpacked int8 byte in [0, 255]).
-    // Operand B is scaling factor (fp32). LREG2 holds the zero-point constant (fp32) loaded by
-    // requant_init. Output is int32 scaled to int8 range or uint8 (2's complement).
+inline void calculate_requant_int32(
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+    // Operand A is input to requant (int32, sign-magnitude or 2's complement bits or UInt8-unpacked int8 byte in [0,
+    // 255]). Operand B is scaling factor (fp32). LREG2 holds the zero-point constant (fp32) loaded by
+    // requant_init. Output is int32 scaled to int8 range (sign-magnitude or 2's-complement).
     //
-    // The replay-buffer body at REQUANT_REPLAY_SLOT and ADDR_MOD_6's dest+=2
-    // slot are programmed by requant_init<APPROXIMATION_MODE,
+    // The replay-buffer body at REQUANT_REPLAY_SLOT is programmed by
+    // requant_init<APPROXIMATION_MODE,
     // SIGN_MAGNITUDE_FORMAT, OUTPUT_FORMAT, INT8_INPUT>, which must run before
     // the first call here.
     constexpr std::uint32_t dst_tile_size = 64;
@@ -384,8 +365,8 @@ inline void calculate_requant_int32(const uint dst_index_in0, const uint dst_ind
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_quant_int32_int8_pack(
-    const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
-    // Int8 output: RNE MAD + clamp + convert + XOR body is recorded once into QUANT_REPLAY_SLOT and replayed.
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+    // Int8 output: MAD + offset-128 pack body is recorded once into QUANT_REPLAY_SLOT and replayed.
     constexpr std::uint32_t dst_tile_size = 64;
     const std::uint32_t in0_off = dst_index_in0 * dst_tile_size;
     const std::uint32_t in1_off = dst_index_in1 * dst_tile_size;
@@ -401,9 +382,8 @@ inline void calculate_quant_int32_int8_pack(
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool INT8_INPUT = false>
 inline void calculate_requant_int32_int8_pack(
-    const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
-    // Int8 output: CAST + RNE MAD + clamp + convert + XOR body is recorded once into REQUANT_REPLAY_SLOT and
-    // replayed.
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+    // Int8 output: CAST + MAD + offset-128 pack body is recorded once into REQUANT_REPLAY_SLOT and replayed.
     constexpr std::uint32_t dst_tile_size = 64;
     const std::uint32_t in0_off = dst_index_in0 * dst_tile_size;
     const std::uint32_t in1_off = dst_index_in1 * dst_tile_size;
@@ -426,7 +406,8 @@ inline void calculate_requant_int32_int8_pack(
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool SIGN_MAGNITUDE_FORMAT = false, bool INT8_INPUT = false>
-inline void calculate_dequant_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+inline void calculate_dequant_int32(
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     // Operand A[LREG0] is input to dequant (int32, sign-magnitude or 2's complement bits;
     // or, when INT8_INPUT, a UInt8-unpacked int8 byte in [0, 255]).
     // Operand B[LREG1] is scaling factor (fp32).
@@ -434,8 +415,8 @@ inline void calculate_dequant_int32(const uint dst_index_in0, const uint dst_ind
     // i.e. the formula computed is (A + LREG2) * B, which is (A - zero_point) * B
     // when the caller passes -zero_point through the init.
     //
-    // The replay-buffer body at DEQUANT_REPLAY_SLOT and ADDR_MOD_6's dest+=2
-    // slot are programmed by dequant_init<APPROXIMATION_MODE,
+    // The replay-buffer body at DEQUANT_REPLAY_SLOT is programmed by
+    // dequant_init<APPROXIMATION_MODE,
     // SIGN_MAGNITUDE_FORMAT, INT8_INPUT>, which must run before the first call here.
     constexpr std::uint32_t dst_tile_size = 64;
 

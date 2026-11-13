@@ -183,7 +183,7 @@ ALWI void reduce_block_max_row_reinit_short(std::uint32_t ocb) {
 
 #ifdef ARCH_BLACKHOLE
 /**
- * Minimal reinit: only ADDR_MOD_1 + ADDR_MOD_2 + ADDR_MOD_6. Requires copy_tile_custom
+ * Minimal reinit: only ADDR_MOD_1 + ADDR_MOD_2. Requires copy_tile_custom
  * (which uses ADDR_MOD_4) so ADDR_MOD_3 is preserved from the previous reduce.
  */
 template <std::uint32_t block_ct_dim, bool respect_trigger = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
@@ -201,7 +201,7 @@ ALWI void reduce_block_max_row_reinit_minimal(std::uint32_t ocb) {
 }
 
 /**
- * Minimal reinit (runtime variant): only ADDR_MOD_1 + ADDR_MOD_2 + ADDR_MOD_6.
+ * Minimal reinit (runtime variant): only ADDR_MOD_1 + ADDR_MOD_2.
  * Requires copy_tile_custom (which uses ADDR_MOD_4) so ADDR_MOD_3 is preserved
  * from the previous reduce.
  */

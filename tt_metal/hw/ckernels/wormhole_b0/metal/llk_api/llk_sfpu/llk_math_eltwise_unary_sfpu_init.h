@@ -11,7 +11,6 @@
 #include "sanitizer/api.h"
 
 namespace ckernel {
-
 // Kernel-invariant SFPU init (SFPU config register; ADDR_MOD_7 is set by hw_configure). Retained for the
 // standalone tt-llk SFPU test harness, which bypasses the metal "full init" entry points and runs this itself.
 // The metal compute path no longer hoists this: each per-op init below is self-contained (#50381), running the
@@ -73,7 +72,7 @@ void unary_ne_init();
 
 // Residual per-op inits for ops used via bare SFPU_UNARY_INIT(OP) (no callback). The bare
 // delegate below (_llk_math_eltwise_unary_sfpu_init_once_()) programs config_reg per op, so these program only the
-// op's residual state (op-specific ADDR_MOD_6 where needed + reset the RWC counters).
+// op's residual state (reset the RWC counters).
 // Rounding-family ops (ceil/floor/trunc/frac/round): pure-arithmetic SFPI kernels with no LUT/ADDR_MOD_6
 // state (production shares rounding_op_tile_init -> SFPU_UNARY_INIT(unused)); only reset the RWC counters.
 inline void ceil_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
@@ -104,10 +103,7 @@ inline void silu_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 inline void threshold_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
-inline void typecast_init() {
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
-    math::reset_counters(p_setrwc::SET_ABD_F);
-}
+inline void typecast_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 inline void unused_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
@@ -122,7 +118,7 @@ inline void llk_math_eltwise_unary_sfpu_init() {
     // Per-op common SFPU init (config reg), formerly hoisted once-per-kernel via
     // llk_math_sfpu_init_once(). Consolidated back per-op (#50381) so each init is fully self-contained and
     // never depends on a separate once-init having run first. The co-located sfpu::<op>_init() below then
-    // programs only the op's residual state (op-specific ADDR_MOD_6 where needed + counter reset).
+    // programs only the op's residual state (counter reset).
     _llk_math_eltwise_unary_sfpu_init_once_();
     if constexpr (sfpu_op == SfpuType::abs) {
         sfpu::abs_init();
@@ -247,9 +243,8 @@ inline void llk_math_eltwise_unary_sfpu_init() {
         _llk_math_eltwise_unary_sfpu_init_<SfpuType::exponential>();
     } else {
         // Generic fallback (pre-restructuring behavior): ops without a self-contained sfpu::<op>_init()
-        // get the full generic unary SFPU init (config reg + op-specific ADDR_MOD_6 via
-        // eltwise_unary_sfpu_configure_addrmod<OP>, which has a default valid for any SfpuType + counter
-        // reset). Keeps the bare no-arg delegate instantiable across the whole SfpuType set.
+        // get the full generic unary SFPU init (config reg + counter reset). Keeps the bare no-arg delegate
+        // instantiable across the whole SfpuType set.
         _llk_math_eltwise_unary_sfpu_init_<sfpu_op>();
     }
 }
