@@ -1750,8 +1750,8 @@ TEST_F(MimirPrefetcher, MM7T1D2d3To1) {
 }
 
 // T2: one sender to several receivers, and two senders to one receiver CCE, on routes over CCEs 0-3. Each slab is two
-// one-tile blocks against a one-tile FIFO, so the sender's second round waits for every receiver of the GCB to ack the
-// first.
+// one-tile blocks against a one-tile FIFO, so the second block reuses the space of the first. The test checks the
+// delivered data and the final counters, not that the sender waited for every receiver to ack the first block.
 
 inline constexpr uint32_t kT2BlocksPerSlab = 2;
 inline constexpr uint32_t kT2FanOutTensorId = 40;

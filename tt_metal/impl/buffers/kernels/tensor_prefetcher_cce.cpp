@@ -164,9 +164,9 @@ void deliver_chunk(
 // target_per_visit_pages, and never across the FIFO's page-aligned limit), copies that many from each slab in
 // stage-third chunks, then credits the round. Each chunk is a load loop and a store loop, not an iDMA copy. The CCE
 // has no NoC, so the Blackhole round's NoC reads and writes have no counterpart. Its iDMA moves the same data (MM-8
-// probes in tests/tt_metal/tt_metal/dram/README.md), but its done fires when the request is accepted (MIM-628), so
-// the sender could not order a credit behind the data without loading the receiver's TL1 back, and a CCE kernel load
-// of remote TL1 hung the emulator in those probes.
+// probes in tests/tt_metal/tt_metal/dram/README.md), but its trid ack can come before the data is visible (README row
+// 118, MIM-584, MIM-631), so the sender could not order a credit behind the data without loading the receiver's TL1
+// back, and a CCE kernel load of remote TL1 hung the emulator in those probes.
 RequestOutcome deliver_tensor(
     remote_cb::Sender& sender,
     const TensorPrefetcherEntry& entry,
