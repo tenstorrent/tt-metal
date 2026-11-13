@@ -132,6 +132,8 @@ class WanPipelineConfig:
     expand_timesteps: bool
     offload_weights: bool
     trace: bool
+    # Whether `trace` came from the default rather than from the caller.
+    trace_by_default: bool = False
     is_fsdp: bool
     model_type: str
     vae_dtype: ttnn.DataType
@@ -255,6 +257,7 @@ class WanPipelineConfig:
             expand_timesteps=expand_timesteps,
             offload_weights=offload_weights,
             trace=trace if trace is not None else not offload_weights,
+            trace_by_default=trace is None,
             is_fsdp=is_fsdp if is_fsdp is not None else preset["is_fsdp"],
             model_type=model_type,
             vae_dtype=vae_dtype,
@@ -424,6 +427,7 @@ class WanPipeline(Pipeline):
         lora_enabled: bool = False,
     ) -> None:
         super().__init__(offload_weights=config.offload_weights, trace=config.trace)
+        self.warn_if_no_trace_region(device, by_default=config.trace_by_default)
 
         self.checkpoint_name = config.checkpoint_name
         self.model_type = config.model_type

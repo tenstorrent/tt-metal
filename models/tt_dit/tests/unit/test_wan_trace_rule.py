@@ -52,14 +52,15 @@ def test_trace_defaults_to_the_meshes_that_keep_weights_resident(
     for mesh_shape, preset in presets.items():
         config = WanPipelineConfig.default(mesh_shape=mesh_shape, checkpoint_name="checkpoint")
         assert config.trace is (not preset["offload_weights"]), mesh_shape
+        assert config.trace_by_default is True
 
 
 def test_an_explicit_trace_is_kept(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ttnn.device, "is_blackhole", lambda: True)
     resident = WanPipelineConfig.default(mesh_shape=(4, 8), checkpoint_name="checkpoint", trace=False)
-    assert resident.trace is False
+    assert (resident.trace, resident.trace_by_default) == (False, False)
     offloading = WanPipelineConfig.default(mesh_shape=(2, 4), checkpoint_name="checkpoint", trace=True)
-    assert (offloading.offload_weights, offloading.trace) == (True, True)
+    assert (offloading.offload_weights, offloading.trace, offloading.trace_by_default) == (True, True, False)
 
 
 def test_offload_override_moves_the_default(monkeypatch: pytest.MonkeyPatch) -> None:

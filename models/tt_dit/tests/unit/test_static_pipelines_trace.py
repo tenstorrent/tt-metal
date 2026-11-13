@@ -52,9 +52,11 @@ def test_trace_defaults_on_where_the_pipeline_is_served_traced(
     mesh_shape = next(iter(getattr(module, "_PRESETS_BH", None) or module._PRESETS))  # noqa: SLF001
     config = config_class.default(mesh_shape=mesh_shape, checkpoint_name="checkpoint")
     assert config.trace is True
+    assert config.trace_by_default is True
     for trace in (True, False):
         config = config_class.default(mesh_shape=mesh_shape, checkpoint_name="checkpoint", trace=trace)
         assert config.trace is trace
+        assert config.trace_by_default is False
     assert (
         inspect.signature(module.__dict__[config_class.__name__.removesuffix("Config")].create_pipeline)
         .parameters["trace"]
