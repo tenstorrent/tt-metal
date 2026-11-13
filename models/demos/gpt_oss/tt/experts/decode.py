@@ -380,6 +380,7 @@ def _dense_gate_up_stream(hidden_states, w, weights, plan, relaid):
         ttnn.KernelDescriptor(
             kernel_source=str(KERNEL_DIR / "dense_gu_compute.cpp"), core_ranges=cores,
             compile_time_args=[cb_x, cb_w, cb_b, cb_r, cb_e, cb_out, kt, na, nc, gx], runtime_args=[],
+            defines=[("GMOE_W_TRANSPOSED", "1")] if weights.tile_transposed else [],
             config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True,
                                                 math_approx_mode=False),
         ),

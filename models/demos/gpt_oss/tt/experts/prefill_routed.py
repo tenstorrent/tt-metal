@@ -480,11 +480,13 @@ class RoutedPrefillExperts:
         self.min_seq = routed_prefill_min_seq()
         self.num_links = 1
         self.weights_dtype = dense_weights.gate.dtype if self.tp_dense else routed_weights_dtype(layer_idx)
-        # GPT_OSS_PREFILL_KGPTQ: the bfloat4_b layers read the decode experts' K-GPTQ weights, tile-transposed (the
-        # dense TP mode reads the batched decode's own weights, normal tiles).
-        self.weights_tile_transposed = (
-            prefill_kgptq_enabled() and self.weights_dtype == ttnn.bfloat4_b and not self.tp_dense
-        )
+        # GPT_OSS_PREFILL_KGPTQ: the bfloat4_b layers read the decode experts' K-GPTQ weights, tile-transposed. The
+        # dense TP mode reads the batched decode's own weights, in transposed tiles when they hold K-GPTQ
+        # (DenseDecodeExpertWeights.tile_transposed).
+        if self.tp_dense:
+            self.weights_tile_transposed = dense_weights.tile_transposed
+        else:
+            self.weights_tile_transposed = prefill_kgptq_enabled() and self.weights_dtype == ttnn.bfloat4_b
         kgptq_dir = ""
         if self.weights_tile_transposed and not self.tp_mode:
             from ..weight_source import env_path
@@ -799,7 +801,7 @@ class RoutedPrefillExperts:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
-        self.weights_tile_transposed = False
+        self.weights_tile_transposed = dense.tile_transposed  # (K-GPTQ: every tile stored transposed)
         self.routed_expert = types.SimpleNamespace(gate_projs=[], up_projs=[], down_projs=[])
         # (up is read through the table only; keep the source tensors referenced here)
         self._dense_sources = (dense.gate, dense.up, dense.down)

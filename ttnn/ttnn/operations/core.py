@@ -828,6 +828,7 @@ def as_tensor(
     preprocess: Optional[Callable[[ttnn.Tensor], ttnn.Tensor]] = None,
     mesh_mapper: Optional[ttnn.CppTensorToMesh | ttnn.ReplicateTensorToMeshWrapper] = None,
     cache_dump_mode: ttnn.DumpTensorMode = ttnn.DumpTensorMode.DISTRIBUTED_GATHER,
+    tile: Optional[ttnn.Tile] = None,
 ) -> ttnn.Tensor:
     """
     Converts the `torch.Tensor` tensor into a `ttnn.Tensor`.
@@ -851,6 +852,9 @@ def as_tensor(
             Use ``ttnn.DumpTensorMode.LOCAL`` when ranks own different tensors (e.g. one pipeline stage per rank):
             with ``DISTRIBUTED_GATHER`` their cache misses never pair up and a cold fill deadlocks. ``LOCAL`` writes
             each rank's host-local tensor, so cache files must not be shared between ranks.
+        tile (ttnn.Tile, optional): The tile of a TILE layout tensor (e.g. ``ttnn.Tile((32, 32), transpose_tile=True)``),
+            passed to ``ttnn.from_torch``. A cached tensor keeps the tile it was saved with, so a caller that varies
+            the tile must vary ``cache_file_name`` too. Defaults to `None` (the default tile).
 
     Returns:
         ttnn.Tensor: The resulting `ttnn` tensor.
@@ -880,6 +884,7 @@ def as_tensor(
             mesh_mapper=mesh_mapper,
             memory_config=memory_config,
             device=device,
+            tile=tile,
         )
 
     if cache_file_name is None:

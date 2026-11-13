@@ -176,6 +176,10 @@ class DenseDecodeExpertWeights:
     down_bias: [E, H] (real on the first TP device only: row-parallel), applied as routing_weights @ down_bias;
     expand: [E, E * I_pad] with expand[e, e * I_pad + i] = 1 (routing weight of expert e on its columns).
     intermediate_local: the real columns per expert (I / tp); intermediate_padded: I_pad.
+    tile_transposed: gate / up / down hold the K-GPTQ experts (dense_kgptq_dir) with every tile stored transposed
+    within itself (ttnn.Tile transpose_tile: the tensors' own tile spec, so ttnn.matmul transposes them back), so each
+    bfloat4_b exponent group runs along K and holds those values exactly; the custom kernels reading them
+    (dense_gu_*, the grouped MoE gmoe_*) and the routed prefill (weights_tile_transposed) transpose them back too.
     The routed prefill experts read gate / up / down through a page table (prefill_routed.py, TP mode)."""
 
     gate: ttnn.Tensor
@@ -187,6 +191,16 @@ class DenseDecodeExpertWeights:
     expand: ttnn.Tensor
     intermediate_local: int
     intermediate_padded: int
+    tile_transposed: bool = False
+
+
+def dense_kgptq_dir(layer, weight_dtype):
+    """The K-GPTQ expert directory (GPT_OSS_DECODE_SPLIT_ROUND_DIR, layer_<L>.pt) the batched dense decode experts
+    load, or "": a bfloat4_b layer with a known index, when the decode experts read K-GPTQ (gpt-oss-20b release
+    settings). Batch-32 decode and prefill then hold the same K-GPTQ values as batch-1 decode and prefill."""
+    if weight_dtype != ttnn.bfloat4_b or layer is None:
+        return ""
+    return env_path("GPT_OSS_DECODE_SPLIT_ROUND_DIR")
 
 
 def _dram_width_sharded(mesh_device, k, n, shard_tiles=None):
@@ -222,18 +236,37 @@ def load_dense_decode_expert_weights(
     banks = mesh_device.dram_grid_size().x
     columns = mesh_config.column_parallel(mesh_device)
     rows = mesh_config.row_parallel(mesh_device)
+    # the layer index, as the fused decode streams take it (load_decode_expert_weights): from the cache path
+    import re
+
+    layer_match = re.search(r"layers\.(\d+)", str(tensor_cache_path))
+    layer = layer_match.group(1) if layer_match else None
+    kgptq_dir = dense_kgptq_dir(layer, weight_dtype)
     gate = up = down = gate_bias = up_bias = down_bias = None
     if state_dict:
         gate_up = state_dict["gate_up_proj"]  # [E, H, 2 * I], gate / up interleaved
+        down_w = state_dict["down_proj"]  # [E, I, H]
+        if kgptq_dir:
+            # the K-GPTQ experts (checkpoint channel order, the biases are the checkpoint's)
+            rw = torch.load(f"{kgptq_dir}/layer_{int(layer)}.pt")
+            gate_up, down_w = rw["gate_up_proj"], rw["down_proj"]
         gate_up_bias = state_dict["gate_up_proj_bias"]  # [E, 2 * I]
         gate = dl.gate_up_columns(gate_up[..., ::2], tp, il_pad)
         up = dl.gate_up_columns(gate_up[..., 1::2], tp, il_pad)
         gate_bias = dl.bias_rows(gate_up_bias[..., ::2], tp, il_pad, tokens)
         up_bias = dl.bias_rows(gate_up_bias[..., 1::2], tp, il_pad, tokens)
-        down = dl.down_rows(state_dict["down_proj"], tp, il_pad)  # [E, I, H]
+        down = dl.down_rows(down_w, tp, il_pad)
         down_bias = dl.down_bias_rows(state_dict["down_proj_bias"].reshape(E, H), tp)
-    # Cache names carry the padded width (the unpadded 720-column layout had the same names without it).
+    # Cache names carry the padded width (the unpadded 720-column layout had the same names without it). The K-GPTQ
+    # weights (transposed tiles) are named per source: a hash of the resolved directory, which names the pinned Hub
+    # revision (as the routed prefill's K-GPTQ caches, prefill_routed.py).
     tag = f"dense_decode_p{il_pad}"
+    wtag = tag
+    if kgptq_dir:
+        import hashlib
+
+        wtag += "_kgptq_tt_" + hashlib.sha1(kgptq_dir.rstrip("/").encode()).hexdigest()[:10]
+    tile = ttnn.Tile((ttnn.TILE_SIZE, ttnn.TILE_SIZE), transpose_tile=True) if kgptq_dir else None
 
     def weight(t, name, mapper, k, n):
         shard = dl.dram_shard_tiles(n // ttnn.TILE_SIZE, banks, DENSE_MOE_WORKERS_PER_BANK)
@@ -245,6 +278,7 @@ def load_dense_decode_expert_weights(
             mesh_mapper=mapper,
             cache_file_name=get_cache_file_name(tensor_cache_path, name),
             memory_config=_dram_width_sharded(mesh_device, k, n, shard),
+            tile=tile,
         )
 
     def bias(t, name, mapper):
@@ -259,9 +293,9 @@ def load_dense_decode_expert_weights(
         )
 
     return DenseDecodeExpertWeights(
-        gate=weight(gate, f"{tag}_gate", columns, H, E * il_pad),
-        up=weight(up, f"{tag}_up", columns, H, E * il_pad),
-        down=weight(down, f"{tag}_down", rows, E * il_pad, H),
+        gate=weight(gate, f"{wtag}_gate", columns, H, E * il_pad),
+        up=weight(up, f"{wtag}_up", columns, H, E * il_pad),
+        down=weight(down, f"{wtag}_down", rows, E * il_pad, H),
         gate_bias=bias(gate_bias, f"{tag}_gate_bias_t{tokens}", columns),
         up_bias=bias(up_bias, f"{tag}_up_bias_t{tokens}", columns),
         down_bias=bias(down_bias, f"{tag}_down_bias", columns),
@@ -275,6 +309,7 @@ def load_dense_decode_expert_weights(
         ),
         intermediate_local=il,
         intermediate_padded=il_pad,
+        tile_transposed=bool(kgptq_dir),
     )
 
 
