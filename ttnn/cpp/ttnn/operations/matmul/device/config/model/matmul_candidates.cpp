@@ -14,6 +14,7 @@
 #include <tuple>
 #include <utility>
 
+#include <tt-metalium/math.hpp>
 #include <tt_stl/assert.hpp>
 
 // Ported from the default-config selector proposed in #58143: its candidate enumeration (K depths, output blocks,
@@ -41,13 +42,10 @@ constexpr double kReuseSwitchMargin = 1.25;
 constexpr double kOneDCoreAdvantage = 1.5;
 constexpr std::uint32_t kBlocksPerK = 3;  // EnumeratingSource::blocks_per_k
 
-std::uint32_t div_up(std::uint32_t a, std::uint32_t b) { return (a + b - 1) / b; }
-std::uint32_t align_up(std::uint32_t x, std::uint32_t a) { return div_up(x, a) * a; }
-
 bool is_block_float(DataType t) { return t == DataType::kBfloat8B || t == DataType::kBfloat4B; }
 
 // Each of `parts` cores' share of N
-std::uint32_t split_n(const MatmulDesc& p, std::uint32_t parts) { return div_up(p.Nt, parts); }
+std::uint32_t split_n(const MatmulDesc& p, std::uint32_t parts) { return tt::div_up(p.Nt, parts); }
 
 // A batch of one against a batched B: only 1D in1-mcast runs it (A resident, looping over B's batches)
 bool broadcasts_a(const MatmulDesc& p) { return p.batch_a == 1 && p.batch_b > 1; }
@@ -60,7 +58,7 @@ std::uint32_t cores_used(const MatmulDesc& p, const HardwareDesc& hw, Family fam
     if (family == Family::kReuse) {
         return std::min(p.batch_a * p.Mt / b.per_core_M, num_cores(hw));
     }
-    return div_up(output_rows(p, fuse), b.per_core_M) * div_up(p.Nt, b.per_core_N);
+    return tt::div_up(output_rows(p, fuse), b.per_core_M) * tt::div_up(p.Nt, b.per_core_N);
 }
 
 // Divisors of n, largest first
@@ -93,7 +91,7 @@ std::uint32_t max_subblock_area(const MatmulDesc& p, Family family) {
 
 // ---- circular buffers (factory/matmul_buffers.cpp, interleaved tensors) ----
 
-std::uint32_t entry_size(std::uint32_t bytes, const HardwareDesc& hw) { return align_up(bytes, hw.dram_alignment); }
+std::uint32_t entry_size(std::uint32_t bytes, const HardwareDesc& hw) { return tt::round_up(bytes, hw.dram_alignment); }
 
 // Buffer sizes are summed in 64 bits: block sizes from huge K or N can exceed 4 GB, which must not wrap into a size
 // that fits L1.
@@ -195,7 +193,7 @@ double roofline_cycles(const MatmulDesc& p, const HardwareDesc& hw, Family famil
         products = blocks * b.per_core_M * p.Nt * Kt;
         received = blocks * (b.per_core_M * Kt * a_bytes + batches_per_block * Kt * p.Nt * b_bytes);
         a_total = double(p.batch_a) * p.Mt * Kt;
-        b_total = double(p.batch_b) * Kt * p.Nt * div_up(p.Mt, b.per_core_M);
+        b_total = double(p.batch_b) * Kt * p.Nt * tt::div_up(p.Mt, b.per_core_M);
     } else {
         const double loops = fuse ? 1.0 : std::max(p.batch_a, p.batch_b);
         const double a_passes = double(b.per_core_N) / b.out_block_w;
@@ -235,7 +233,7 @@ std::uint32_t max_in0_block_w(const MatmulDesc& p, Family family, std::uint32_t 
     }
     std::uint32_t depth = kMaxIn0BlockW;
     if (family == Family::k2D && costly_k_blocks(p, h, w)) {
-        depth = std::max(depth, std::min(div_up(p.Kt, kMaxCostlyKBlocks), kMaxCostlyIn0BlockW));
+        depth = std::max(depth, std::min(tt::div_up(p.Kt, kMaxCostlyKBlocks), kMaxCostlyIn0BlockW));
     }
     const std::uint32_t self_read_limit =
         self_read == 0 ? depth : std::max(kMinIn0BlockW, kMaxSelfReadTilesPerKStep / self_read);
@@ -305,7 +303,7 @@ std::optional<Blocking> block_1d(const MatmulDesc& p, const HardwareDesc& hw, Fa
     const bool split = !is_tall && per_core_N > max_area && split_w > 1;
 
     auto fit = [&](std::uint32_t out_block_h, std::uint32_t out_block_w) -> std::optional<Blocking> {
-        if (is_tall && div_up(M_rows, per_core_M) == 1 && M_rows % out_block_h != 0 && per_core_M != out_block_h) {
+        if (is_tall && tt::div_up(M_rows, per_core_M) == 1 && M_rows % out_block_h != 0 && per_core_M != out_block_h) {
             return std::nullopt;
         }
         if (split && out_block_w > split_w) {
@@ -461,7 +459,7 @@ std::uint64_t total_input_tiles(const MatmulDesc& p, Family family, const Blocki
     const std::uint64_t a_tiles = static_cast<std::uint64_t>(p.batch_a) * p.Mt * p.Kt;
     const std::uint64_t b_tiles = static_cast<std::uint64_t>(p.batch_b) * p.Kt * p.Nt;
     if (family == Family::kReuse) {
-        return a_tiles + b_tiles * div_up(p.Mt, b.per_core_M);
+        return a_tiles + b_tiles * tt::div_up(p.Mt, b.per_core_M);
     }
     return a_tiles * (b.per_core_N / b.out_block_w) + b_tiles * (b.per_core_M / b.out_block_h);
 }
@@ -530,9 +528,9 @@ std::optional<Candidate> heuristic_family(const MatmulDesc& p, const HardwareDes
         all.begin(), all.end(), [&](const Candidate& x, const Candidate& y) { return key(x) < key(y); });
     if (p.batch_b > 1 && best->family != Family::kReuse) {
         auto steps = [&](const Candidate& c) -> std::uint64_t {
-            const std::uint64_t k_blocks = div_up(p.Kt, c.blocking.in0_block_w);
+            const std::uint64_t k_blocks = tt::div_up(p.Kt, c.blocking.in0_block_w);
             if (c.family == Family::kReuse) {
-                return div_up(p.batch_a * p.Mt / c.blocking.per_core_M, num_cores(hw)) * k_blocks;
+                return tt::div_up(p.batch_a * p.Mt / c.blocking.per_core_M, num_cores(hw)) * k_blocks;
             }
             const std::uint64_t loops = c.fuse_batch ? 1 : std::max(p.batch_a, p.batch_b);
             return std::uint64_t{c.blocking.per_core_M / c.blocking.out_block_h} *
@@ -601,7 +599,9 @@ std::vector<Candidate> family_candidates(const MatmulDesc& p, const HardwareDesc
         result.push_back({family, *b, cores_used(p, hw, family, *b, fuse), hw.grid_x, hw.grid_y, fuse});
     };
     if (broadcasts_a(p)) {
-        add(Family::k1DMcastIn1, blocker.block(p, hw, Family::k1DMcastIn1, {div_up(p.Mt, cores), p.Nt, false}), false);
+        add(Family::k1DMcastIn1,
+            blocker.block(p, hw, Family::k1DMcastIn1, {tt::div_up(p.Mt, cores), p.Nt, false}),
+            false);
         return result;
     }
     // Batched B can't be fused into M; neither can a transposed A of multi-row batch matrices
@@ -614,9 +614,9 @@ std::vector<Candidate> family_candidates(const MatmulDesc& p, const HardwareDesc
         return result;
     }
     const std::uint32_t M = output_rows(p, fuse);
-    add(Family::k2D, blocker.block(p, hw, Family::k2D, {div_up(M, hw.grid_y), split_n(p, hw.grid_x), fuse}), fuse);
+    add(Family::k2D, blocker.block(p, hw, Family::k2D, {tt::div_up(M, hw.grid_y), split_n(p, hw.grid_x), fuse}), fuse);
     add(Family::k1DMcastIn0, blocker.block(p, hw, Family::k1DMcastIn0, {M, split_n(p, cores), fuse}), fuse);
-    add(Family::k1DMcastIn1, blocker.block(p, hw, Family::k1DMcastIn1, {div_up(M, cores), p.Nt, fuse}), fuse);
+    add(Family::k1DMcastIn1, blocker.block(p, hw, Family::k1DMcastIn1, {tt::div_up(M, cores), p.Nt, fuse}), fuse);
     return result;
 }
 
@@ -632,8 +632,9 @@ std::optional<Candidate> heuristic_choice(const MatmulDesc& p, const HardwareDes
         c.family == Family::k1DMcastIn1 || (c.family == Family::k2D && c.blocking.per_core_N == 1);
     if (splits_only_m && c.fuse_batch && p.batch_a > 1) {
         const std::uint32_t rows = c.family == Family::k2D ? hw.grid_y : num_cores(hw);
-        if (auto looped = blocker.block(p, hw, c.family, {div_up(p.Mt, rows), c.blocking.per_core_N, false})) {
-            const std::uint32_t looped_cores = div_up(p.Mt, looped->per_core_M) * div_up(p.Nt, looped->per_core_N);
+        if (auto looped = blocker.block(p, hw, c.family, {tt::div_up(p.Mt, rows), c.blocking.per_core_N, false})) {
+            const std::uint32_t looped_cores =
+                tt::div_up(p.Mt, looped->per_core_M) * tt::div_up(p.Nt, looped->per_core_N);
             if (looped_cores >= c.cores) {
                 c.blocking = heuristic_subblock(p, c.family, *looped);
                 c.fuse_batch = false;
@@ -668,7 +669,7 @@ std::vector<Blocking> output_blocks(
     const std::uint32_t rows = output_rows(p, s.fuse_batch);
     std::vector<Blocking> frontier;
     for (std::uint32_t h : reuse ? std::vector<std::uint32_t>{s.per_core_M} : divisors_desc(s.per_core_M)) {
-        if (layout.family == Family::k1DMcastIn1 && div_up(rows, s.per_core_M) == 1 && rows % h != 0 &&
+        if (layout.family == Family::k1DMcastIn1 && tt::div_up(rows, s.per_core_M) == 1 && rows % h != 0 &&
             h != s.per_core_M) {
             continue;
         }
@@ -763,9 +764,9 @@ std::optional<Layout> looped_over_batch(const MatmulDesc& p, const HardwareDesc&
     Layout looped = layout;
     looped.split.fuse_batch = false;
     switch (layout.family) {
-        case Family::k2D: looped.split.per_core_M = div_up(p.Mt, hw.grid_y); break;
+        case Family::k2D: looped.split.per_core_M = tt::div_up(p.Mt, hw.grid_y); break;
         case Family::k1DMcastIn0: looped.split.per_core_M = p.Mt; break;
-        case Family::k1DMcastIn1: looped.split.per_core_M = div_up(p.Mt, num_cores(hw)); break;
+        case Family::k1DMcastIn1: looped.split.per_core_M = tt::div_up(p.Mt, num_cores(hw)); break;
         case Family::kReuse: break;
     }
     return looped;
