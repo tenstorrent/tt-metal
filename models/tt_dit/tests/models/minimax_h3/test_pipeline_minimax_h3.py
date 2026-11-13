@@ -238,13 +238,14 @@ def test_resolve_max_sequence_length(expect_error):
 def test_resolve_denoise_path_quad_and_wormhole(monkeypatch, expect_error):
     monkeypatch.delenv(_DYNAMIC_LENGTH_ENV, raising=False)
     quad, wormhole = _PRESETS_BH[(4, 32)], _PRESETS_WH[(4, 8)]
-    # both stay bucketed; the quad buckets through its trace, which evicting stages drops
+    # the quad stays bucketed, through its trace, which evicting stages drops; the Wormhole 4x8 is dynamic
     assert _denoise_path(quad) == (True, True, False)
     assert _denoise_path(quad, coresident=False) == (False, False, False)
-    assert _denoise_path(wormhole) == (False, True, False)
+    assert _denoise_path(wormhole) == (False, False, True)
     assert _denoise_path(quad, dynamic_length=False) == (True, True, False)
     monkeypatch.setenv(_DYNAMIC_LENGTH_ENV, "0")
     assert _denoise_path(quad) == (True, True, False)
+    assert _denoise_path(wormhole) == (False, True, False)
     # the switch cannot make the quad dynamic
     monkeypatch.setenv(_DYNAMIC_LENGTH_ENV, "1")
     with expect_error(ValueError, "eager-only"):
@@ -295,8 +296,8 @@ def test_presets_never_trace_a_dynamic_length():
     for presets in (_PRESETS_BH, _PRESETS_WH):
         for shape, preset in presets.items():
             assert not (preset.get("dynamic_length") and preset.get("trace_denoise")), shape
-    # dynamic length is measured on the Blackhole 4x8 only
-    assert not _PRESETS_BH[(4, 32)].get("dynamic_length") and not _PRESETS_WH[(4, 8)].get("dynamic_length")
+    # both 4x8 presets are dynamic by default; the quad traces its denoise, so it stays bucketed
+    assert not _PRESETS_BH[(4, 32)].get("dynamic_length") and _PRESETS_WH[(4, 8)]["dynamic_length"]
 
 
 def test_denoise_path_name():
