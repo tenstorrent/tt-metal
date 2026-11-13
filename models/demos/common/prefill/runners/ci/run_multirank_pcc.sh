@@ -157,6 +157,17 @@ case "${MODEL}" in
     # table config is graded. Each layer loads from the native checkpoint on host, which is what sets the
     # depth CI can afford.
     SC1_NUM_LAYERS=10
+    # tt-run does not forward the job's environment, so the ranks get the weight cache root here. It is the
+    # root the dsv4_transformer_depth legs export, so a layer they cached is loaded from it, not rebuilt; the
+    # adapter appends <name>_bh_32dev/<checkpoint>/8x4. A layer still missing is built from the checkpoint and
+    # written (each rank its own layers), so the first run after a depth-only cache fills in the rest.
+    case "${MODEL}" in
+      dsv4_flash) DSV4_CACHE_VAR=TT_DSV4_FLASH_PREFILL_TTNN_CACHE
+                  DSV4_CACHE_DEFAULT=/mnt/weka/model-cache/scratch/deepseek-ai/DeepSeek-V4-Flash-Cache/DeepSeek-V4-Flash-Cache-prefill ;;
+      dsv4_pro)   DSV4_CACHE_VAR=TT_DSV4_PRO_PREFILL_TTNN_CACHE
+                  DSV4_CACHE_DEFAULT=/mnt/weka/model-cache/scratch/deepseek-ai/DeepSeek-V4-Pro-Cache/DeepSeek-V4-Pro-Cache-prefill ;;
+    esac
+    RUNNER_ENV="export ${DSV4_CACHE_VAR}='${!DSV4_CACHE_VAR:-${DSV4_CACHE_DEFAULT}}';"
     ;;
   mistral4)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/mistral4_pp4_kv}"
