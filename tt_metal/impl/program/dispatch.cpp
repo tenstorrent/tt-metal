@@ -656,10 +656,23 @@ uint32_t finalize_kernel_bins(
             const bool stored_in_config_buffer = hal.get_core_kernel_stored_in_config_buffer(programmable_core_type);
             if (is_emule) {
                 for (uint32_t i = 0; i < num_binaries; i++) {
-                    // Emule has no fixed text address to fall back on, so text outside the config buffer is empty.
-                    const uint32_t kernel_text_offset = stored_in_config_buffer ? offset : 0;
-                    const uint32_t text_size = stored_in_config_buffer ? emule_kernel_text_size : 0;
-                    offset = tt::align(offset + text_size, l1_alignment);
+                    // Text outside the config buffer goes where silicon loads the binary. HAL names that address
+                    // (the per-DM kernel link slot) only for Quasar's dispatch engines; elsewhere the text is empty.
+                    uint32_t kernel_text_offset = 0;
+                    uint32_t text_size = 0;
+                    if (stored_in_config_buffer) {
+                        kernel_text_offset = offset;
+                        text_size = emule_kernel_text_size;
+                        offset = tt::align(offset + text_size, l1_alignment);
+                    } else if (programmable_core_type == HalProgrammableCoreType::DISPATCH) {
+                        kernel_text_offset = static_cast<uint32_t>(
+                            hal.get_jit_build_config(
+                                   programmable_core_type_index,
+                                   enchantum::to_underlying(kernel->get_kernel_processor_class()),
+                                   kernel->get_kernel_processor_type(static_cast<int>(i)))
+                                .fw_base_addr);
+                        text_size = emule_kernel_text_size;
+                    }
                     for (uint32_t processor_index : kernel->get_processor_indices_for_binary(static_cast<int>(i))) {
                         kg->kernel_text_offsets[processor_index] = kernel_text_offset;
                         kernel_config.kernel_text_offset()[processor_index] = kernel_text_offset;
