@@ -350,7 +350,7 @@ public:
     // Fence for Metal 2.0 kernel machinery. When false, the JIT build path must not emit or
     // reference any Metal 2.0 generated headers (kernel_bindings_generated.h, kernel_args_generated.h).
     // Legacy kernels created via the old host API default to false; kernels created via
-    // MakeProgramFromSpec set this to true. This flag exists to prevent cross-contamination
+    // the Program constructor set this to true. This flag exists to prevent cross-contamination
     // between the two API paths during the deprecation window of the legacy API.
     virtual bool is_metal2_kernel() const { return false; }
 

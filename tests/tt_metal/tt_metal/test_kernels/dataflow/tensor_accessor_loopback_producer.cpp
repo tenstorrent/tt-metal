@@ -5,7 +5,7 @@
 // Test kernel: TensorAccessor loopback producer using a Metal 2.0 TensorBinding.
 // Reads pages from an input tensor via TensorAccessor(tensor::input_tensor) and pushes them
 // entry by entry into a DFB bound via dfb::input_dfb. The base address comes from the binding's
-// slot in the kernel's TensorBinding address section, filled by SetProgramRunArgs from
+// slot in the kernel's TensorBinding address section, filled by Program::set_run_args from
 // TensorArgument.
 //
 // Runtime args:

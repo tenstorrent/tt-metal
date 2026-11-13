@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// SetProgramRunArgs with KernelRunArgs: kernel/node coverage, vararg counts, repeated calls,
+// Program::set_run_args with KernelRunArgs: kernel/node coverage, vararg counts, repeated calls,
 // and kernels that may be omitted.
 
 #include <gtest/gtest.h>
@@ -337,7 +337,7 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_SetRunArgsMultipleTimes_Succeeds) {
     ProgramSpec spec = MakeSpecWithRTAs(node, /*num_per_node_rtas=*/2, /*num_common_rtas=*/2);
     Program program(*mesh_device_, spec);
 
-    // Call SetProgramRunArgs multiple times with varying values
+    // Call Program::set_run_args multiple times with varying values
     for (uint32_t i = 0; i < 5; i++) {
         auto params = MakeRunArgsForMinimalSpec(node, {i * 10, i * 20}, {i * 100, i * 200});
         EXPECT_NO_THROW(program.set_run_args(params));
@@ -450,7 +450,7 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_MultiNode_MissingOneNodeFails) {
 }
 
 // A kernel can legitimately declare no RTAs / CRTAs / CTAs of any kind (named or vararg).
-// Verify the whole MakeProgramFromSpec + SetProgramRunArgs pipeline handles this case
+// Verify the whole Program constructor + Program::set_run_args pipeline handles this case
 // cleanly — no missing-schema TT_FATALs, no empty-buffer write attempts, no validation errors.
 TEST_F(ProgramRunArgsTestQuasar, CPU_AllEmptySchemaSucceeds) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
@@ -467,7 +467,7 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_AllEmptySchemaSucceeds) {
 }
 
 // Regression: a kernel that binds a tensor but declares no scalar args (no named/vararg RTAs or
-// CRTAs) may be omitted from kernel_run_args. SetProgramRunArgs must still validate, and must write
+// CRTAs) may be omitted from kernel_run_args. Program::set_run_args must still validate, and must write
 // the binding's base address into that kernel's CRTA buffer via its second pass — the binding
 // address is per-enqueue state that has to reach the device whether or not the user supplies an
 // (otherwise-empty) kernel_run_args entry.
@@ -493,13 +493,13 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_BindingOnlyKernelOmittedFromRunArgsSucceeds
     // MakeMinimalTensorParameter is non-sharded, so the binding is a single address word at offset 0.
     auto kernel = program.impl().get_kernel_by_spec_name("dm_kernel");
     ASSERT_FALSE(kernel->common_runtime_args().empty())
-        << "binding-only kernel's CRTA buffer should have been allocated by SetProgramRunArgs";
+        << "binding-only kernel's CRTA buffer should have been allocated by Program::set_run_args";
     EXPECT_EQ(kernel->common_runtime_args()[0], static_cast<uint32_t>(tensor.address()))
         << "binding base address should be written even though the kernel was omitted from kernel_run_args";
 }
 
 TEST_F(ProgramRunArgsTestQuasar, CPU_BindingOnlyKernelOmittedFromRunArgsReSetSucceeds) {
-    // Regression: SetProgramRunArgs must be re-callable on a program whose binding-only kernel is
+    // Regression: Program::set_run_args must be re-callable on a program whose binding-only kernel is
     // omitted from kernel_run_args. The first call allocates the kernel's CRTA buffer in the second
     // pass; a second call must patch it in place — set_common_runtime_args fatals if called twice, so
     // the second pass has to use the same first-time/patch logic as the main loop.
@@ -526,7 +526,7 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_BindingOnlyKernelOmittedFromRunArgsReSetSuc
 
     auto kernel = program.impl().get_kernel_by_spec_name("dm_kernel");
     EXPECT_EQ(kernel->common_runtime_args()[0], static_cast<uint32_t>(tensor2.address()))
-        << "second SetProgramRunArgs should patch the binding address in place to the new tensor";
+        << "second Program::set_run_args should patch the binding address in place to the new tensor";
 }
 
 TEST_F(ProgramRunArgsTestGen1, CPU_SetRunArgsSucceeds_ZeroRTAs) {

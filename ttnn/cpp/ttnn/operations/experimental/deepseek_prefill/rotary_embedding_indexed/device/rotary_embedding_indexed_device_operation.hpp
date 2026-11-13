@@ -83,7 +83,7 @@ struct RotaryEmbeddingIndexedDeviceOperation {
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
         // Build this device's named-arg ProgramSpec (my_sp_coord baked from `coord`), compile it via
-        // MakeProgramFromSpec, and set its initial run args.
+        // the Program constructor, and set its initial run args.
         static cached_program_t create_at(
             const operation_attributes_t& args,
             const ttnn::MeshCoordinate& coord,

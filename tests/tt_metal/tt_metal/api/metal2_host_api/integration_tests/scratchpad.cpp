@@ -132,7 +132,7 @@ TEST_F(ProgramSpecHWTest, ScratchpadWriteReadback) {
 
 // A scratchpad's framework-allocated L1 base address rides a common-runtime-arg (CRTA) word, patched
 // in by ProgramImpl::allocate_scratchpads. Scratchpads stack on top of the DFB allocators, so when a
-// DFB size override (SetProgramRunArgs's dfb_run_overrides) re-lays-out the L1 region between
+// DFB size override (Program::set_run_args's dfb_run_overrides) re-lays-out the L1 region between
 // enqueues, the scratchpad's base address MOVES — and the moved address must be re-patched into the
 // CRTA before the next dispatch, or the kernel reads a stale base that now points into the grown DFB.
 //
@@ -147,9 +147,9 @@ TEST_F(ProgramSpecHWTest, ScratchpadWriteReadback) {
 // that entry to DRAM. Both on node {0,0}, so the DFB lives on the producer's core and the scratchpad
 // stacks above it. The producer has no named args — its only per-enqueue state is the
 // framework-supplied scratchpad CRTA — so it is omitted from kernel_run_args (the binding-only second
-// pass in SetProgramRunArgs installs its CRTA).
+// pass in Program::set_run_args installs its CRTA).
 //
-// Sequence (slow dispatch): launch with the small DFB → base_A; SetProgramRunArgs again with a
+// Sequence (slow dispatch): launch with the small DFB → base_A; Program::set_run_args again with a
 // dfb_run_overrides that GROWS the DFB → launch → base_B. The grown DFB pushes the stacked scratchpad
 // up, so a correctly re-delivered base satisfies base_B != base_A, and the pattern must still land at
 // base_B (the scratchpad is real, writable L1 at its new home). With the latch reset removed,

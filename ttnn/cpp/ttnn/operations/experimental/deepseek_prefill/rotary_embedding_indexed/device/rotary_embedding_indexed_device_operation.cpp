@@ -350,7 +350,7 @@ RotaryEmbeddingIndexedDeviceOperation::create_output_tensors(
 ttsl::hash::hash_t RotaryEmbeddingIndexedDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     // The cache key must cover every structural spec the program is built from -- in particular every
-    // TensorParameter's declared TensorSpec -- because on a cache hit UpdateProgramRunArgs REJECTS (does
+    // TensorParameter's declared TensorSpec -- because on a cache hit Program::update_run_args REJECTS (does
     // not recompile) a tensor whose spec doesn't match the one baked at creation. Those parameters are
     // declared with default relaxations, so that comparison is Strict over the whole spec: logical shape,
     // padded shape, dtype, page config and alignment.

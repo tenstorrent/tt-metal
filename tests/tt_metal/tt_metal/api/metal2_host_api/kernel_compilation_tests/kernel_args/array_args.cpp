@@ -109,7 +109,7 @@ void kernel_main() {
 )"};
     dm_kernel.compile_time_array_args = {{"page_sizes", {64, 128, 256}}};
 
-    // MakeProgramFromSpec compiles; the out-of-range index must fail that build.
+    // The Program constructor compiles; the out-of-range index must fail that build.
     EXPECT_ANY_THROW(Program(*mesh_device_, MakeSingleKernelSpec(dm_kernel)));
 }
 

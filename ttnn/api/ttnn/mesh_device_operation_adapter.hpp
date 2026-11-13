@@ -837,23 +837,23 @@ public:
     // ONLY create_program_artifacts, returning a single ProgramArtifacts (one
     // ProgramSpec + ProgramRunArgs + any op-owned tensors). The adapter maps
     // that same ProgramSpec onto every range in tensor_coords via
-    // tt::tt_metal::experimental::MakeMeshWorkloadFromSpecs (occupancy = mesh devices that
+    // the MeshWorkload constructor (occupancy = mesh devices that
     // hold a tensor shard). A factory whose programs vary across the mesh is a
     // MeshWorkloadSpecFactoryConcept instead.
     //
     // On cache miss: the adapter calls create_program_artifacts once, builds a
-    // MeshWorkload via MakeMeshWorkloadFromSpecs, resolves each TensorArgument
+    // MeshWorkload via the MeshWorkload constructor, resolves each TensorArgument
     // against the combined enumeration of io tensors (from tensor_args /
     // tensor_return_value) followed by the factory's op-owned tensors
     // (pointer-identity match within the call), parks op-owned tensors in
     // shared_variables so their device allocation outlives the miss, then
-    // applies the initial ProgramRunArgs via SetProgramRunArgs.
+    // applies the initial ProgramRunArgs via Program::set_run_args.
     //
     // On cache hit: the adapter enumerates fresh io tensors, appends the parked
     // op-owned tensors, rebuilds a TensorArgument for every binding using the
-    // stored indices, and applies via tt::tt_metal::experimental::UpdateTensorArgs — no Program
+    // stored indices, and applies via Program::update_tensor_args — no Program
     // rebuild. Op-owned tensors are re-patched even though their address is
-    // unchanged, because UpdateTensorArgs is currently all-or-nothing.
+    // unchanged, because Program::update_tensor_args is currently all-or-nothing.
     //
     // Contract: every TensorArgument returned by the factory must reference a
     // MeshTensor reachable from tensor_args / tensor_return_value, or one of the
@@ -957,7 +957,7 @@ public:
             }
         }
 
-        // Metal 2.0's MakeMeshWorkloadFromSpecs needs a MeshDevice; pull it from the first device
+        // The Metal 2.0 MeshWorkload constructor needs a MeshDevice; pull it from the first device
         // tensor reachable from tensor_args, falling back to tensor_return_value for output-only
         // ops (e.g. rand) whose tensor_args carry no input tensor.
         static tt::tt_metal::distributed::MeshDevice* source_mesh_device(
@@ -1163,7 +1163,7 @@ public:
 
     // Like ProgramSpecMeshWorkloadFactoryAdapter (cache-miss build inherited unchanged), but the
     // cache-hit path calls the factory's override_runtime_arguments and applies the returned
-    // ProgramRunArgs via UpdateProgramRunArgs instead of the base's tensor-only UpdateTensorArgs.
+    // ProgramRunArgs via Program::update_run_args instead of the base's tensor-only Program::update_tensor_args.
     // PrefetcherPipes are rebound from operation_attributes_t::prefetcher_pipes either way.
     // The miss path applies create_program_artifacts' run args, not the override, so per-coordinate
     // run args must come from a MeshWorkloadSpecFactoryConcept factory's create_mesh_workload_artifacts.
@@ -1195,7 +1195,7 @@ public:
     //
     // Adapts a MeshWorkloadSpecFactoryConcept factory: one create_mesh_workload_artifacts call
     // returns the workload-scoped resources plus a ProgramSpec and ProgramRunArgs per coordinate
-    // range, which the adapter realises into a MeshWorkload via MakeMeshWorkloadFromSpecs.
+    // range, which the adapter realises into a MeshWorkload via the MeshWorkload constructor.
     //
     // Resources are parked once and shared by every range's shared_variables.
     //

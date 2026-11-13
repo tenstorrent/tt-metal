@@ -108,7 +108,7 @@ ttnn::device_operation::ProgramArtifacts AddIntegersHangOperation::SingleCore::c
     // The reader and writer get their buffer addresses from the tensor arguments and the compute kernel
     // needs none; the writer's one runtime arg is the GlobalSemaphore it bumps, same as in
     // add_2_integers_hang. Kernels without runtime args may be left out. The framework applies these
-    // run args for us; the factory must not call SetProgramRunArgs itself.
+    // run args for us; the factory must not call Program::set_run_args itself.
     ProgramRunArgs run_args;
     run_args.kernel_run_args = {
         ProgramRunArgs::KernelRunArgs{

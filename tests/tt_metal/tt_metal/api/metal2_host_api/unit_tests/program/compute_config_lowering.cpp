@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// ComputeHardwareConfig -> internal compute config translation done by MakeProgramFromSpec.
+// ComputeHardwareConfig -> internal compute config translation done by the Program constructor.
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
@@ -79,7 +79,7 @@ TEST_F(ProgramSpecTestGen1, CPU_ComputeHardwareConfigDefaultsMapToInternalDefaul
     EXPECT_FALSE(built.enable_trisc2_rvv);  // config_12x unset
 }
 
-// The generation-specific RVV opt-ins must reach the internal configs. MakeProgramFromSpec also
+// The generation-specific RVV opt-ins must reach the internal configs. The Program constructor also
 // compiles, so each test runs on a mock architecture that supports its opt-in.
 TEST_F(ProgramSpecTestQuasar, CPU_Config2xxTrisc0RvvMapsToInternal) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();

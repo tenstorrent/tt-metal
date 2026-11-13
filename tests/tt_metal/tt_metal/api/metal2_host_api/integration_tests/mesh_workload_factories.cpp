@@ -4,7 +4,7 @@
 
 // Real-hardware tests for Metal 2.0 MeshWorkload factory APIs (WH/BH).
 //
-// These tests prove the ProgramSpec -> MakeMeshWorkloadFromSpec(s) -> MeshWorkload enqueue -> verify
+// These tests prove the ProgramSpec -> MeshWorkload constructors -> MeshWorkload enqueue -> verify
 // pipeline end-to-end on real Wormhole B0 and Blackhole hardware.
 
 #include <gtest/gtest.h>

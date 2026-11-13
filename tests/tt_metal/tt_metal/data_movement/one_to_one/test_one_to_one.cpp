@@ -439,7 +439,7 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneToOnePacketSizes2_0) {
     if (this->device().arch() == ARCH::QUASAR) {
         // Quasar emulator (1x3 or 2x3): pick a subordinate that exists on the grid
         // and run a single small config. The full sweep is too large for the
-        // emulator; this config still exercises MakeProgramFromSpec + varargs.
+        // emulator; this config still exercises the Program constructor + varargs.
         auto grid = this->device().compute_with_storage_grid_size();
         CoreCoord subordinate;
         if (grid.x >= 2) {

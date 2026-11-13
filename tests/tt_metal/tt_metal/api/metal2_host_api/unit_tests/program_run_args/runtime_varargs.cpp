@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// SetProgramRunArgs with vararg-only RTAs, including per-node vararg count overrides.
+// Program::set_run_args with vararg-only RTAs, including per-node vararg count overrides.
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
@@ -180,7 +180,7 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_VarargOnlyAcrossMultipleKernelsSucceeds) {
 }
 
 TEST_F(ProgramRunArgsTestQuasar, CPU_VarargOnlyRTAsMissingNodeCoverageFails) {
-    // If the schema declares varargs for a node, SetProgramRunArgs must insist on
+    // If the schema declares varargs for a node, Program::set_run_args must insist on
     // values for that node. Regression canary for per-node coverage in the vararg path.
     NodeCoord node_a{0, 0};
     NodeCoord node_b{1, 0};

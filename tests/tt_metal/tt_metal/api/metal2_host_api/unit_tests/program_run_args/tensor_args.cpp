@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// ProgramRunArgs::tensor_args in SetProgramRunArgs: completeness, TensorSpec matching (strict and
+// ProgramRunArgs::tensor_args in Program::set_run_args: completeness, TensorSpec matching (strict and
 // relaxed), and the runtime tensor shape written into CRTAs.
 
 #include <gtest/gtest.h>
@@ -127,7 +127,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_PerNodeTensorParameterWithLockstepTensorFails
 
 TEST_F(ProgramRunArgsTestGen1, CPU_TensorBindingOnlyKernelOmittedFromRunArgsSucceeds) {
     // A kernel with tensor bindings but an empty RTA/CRTA schema may be omitted from
-    // kernel_run_args: SetProgramRunArgs fills its binding-section CRTAs (base addresses, dynamic
+    // kernel_run_args: Program::set_run_args fills its binding-section CRTAs (base addresses, dynamic
     // accessor fields) in a second pass over all binding-bearing kernels, so the binding address
     // still reaches the device. (Gen1 counterpart of the Quasar BindingOnlyKernelOmitted... test.)
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
@@ -158,8 +158,8 @@ TEST_F(ProgramRunArgsTestGen1, CPU_TensorBindingOnlyKernelOmittedFromRunArgsSucc
 //   - validation: tensor_layout must still match exactly; logical_shape may vary per-dim
 //     but rank must be preserved.
 //   - CRTA contents: for sharded TPs, the runtime tensor's shape-in-pages is written into
-//     CRTAs immediately after the binding's address slot, on both SetProgramRunArgs
-//     and UpdateTensorArgs.
+//     CRTAs immediately after the binding's address slot, on both Program::set_run_args
+//     and Program::update_tensor_args.
 
 TEST_F(ProgramRunArgsTestGen1, CPU_DynamicTensorShape_InterleavedAcceptsDifferentShape) {
     // Declared shape {1, 32}; runtime tensor with shape {1, 64} is accepted because
@@ -306,7 +306,7 @@ inline std::vector<uint32_t> ExpectedShapeInPagesFromSpec(const tt::tt_metal::Te
 }
 
 TEST_F(ProgramRunArgsTestGen1, CPU_DynamicTensorShape_ShardedSetWritesShapeIntoCRTAs) {
-    // Sharded + dynamic_tensor_shape: SetProgramRunArgs must write the actual runtime
+    // Sharded + dynamic_tensor_shape: Program::set_run_args must write the actual runtime
     // tensor's tensor_shape_in_pages into the CRTA section that follows the binding's address.
     // Layout: HEIGHT_SHARDED with shard_shape {32, 32} on 2 cores → 2 shards along height.
     NodeCoord node{0, 0};
@@ -333,7 +333,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_DynamicTensorShape_ShardedSetWritesShapeIntoC
 }
 
 TEST_F(ProgramRunArgsTestGen1, CPU_DynamicTensorShape_ShardedUpdateRefreshesShape) {
-    // Sharded + dynamic_tensor_shape: UpdateTensorArgs must refresh BOTH the address slot and
+    // Sharded + dynamic_tensor_shape: Program::update_tensor_args must refresh BOTH the address slot and
     // the runtime shape slots when bound to a tensor of different shape (but same layout).
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();

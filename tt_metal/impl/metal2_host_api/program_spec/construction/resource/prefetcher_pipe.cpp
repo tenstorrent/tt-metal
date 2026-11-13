@@ -33,7 +33,7 @@ namespace tt::tt_metal {
 //
 // Every parameter named by the group is recorded with the slot and the cores it owns inside the
 // kernel's nodes (its sender node or its receivers -- the group tiles the nodes other than the
-// extra nodes, so this is one pipe per node). SetProgramRunArgs later binds the supplied pipe object
+// extra nodes, so this is one pipe per node). Program::set_run_args later binds the supplied pipe object
 // onto exactly those cores, so a multi-pipe accessor resolves per node on the host and the kernel
 // binary sees one slot. The group's first pipe also owns the extra cores, which take its record.
 

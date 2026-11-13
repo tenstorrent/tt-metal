@@ -1719,7 +1719,7 @@ ProgramRunArgs TernaryDeviceOperation::TernaryProgramFactory::override_runtime_a
     auto per_core =
         build_per_core_runtime_args(operation_attributes, tensor_args, output, operation_attributes.broadcast_type);
 
-    // UpdateProgramRunArgs keeps the old value of any arg it is not given.  The cached kernels run on
+    // Program::update_run_args keeps the old value of any arg it is not given.  The cached kernels run on
     // every core of the worker grid, and a core can switch between work and noop across hits.  The
     // builder must therefore give every one of those cores a full set of args.
     TT_FATAL(

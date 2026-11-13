@@ -245,7 +245,7 @@ void run_borrowed_memory_dfb_program(
     params.tensor_args.emplace(TensorParamName{"dfb_ring_tensor"}, TensorArgument{ring_tensor});
 
     // Issue #45925: optional mutable-size override on the borrowed DFB (applied inside
-    // SetProgramRunArgs before the borrowed buffer is attached).
+    // Program::set_run_args before the borrowed buffer is attached).
     if (cfg.num_entries_override.has_value()) {
         params.dfb_run_overrides.push_back(
             {.dfb = DFBSpecName{"borrowed_dfb"}, .num_entries = cfg.num_entries_override});
@@ -286,7 +286,7 @@ void run_borrowed_memory_dfb_program(
     }
 }
 
-// Verifies that UpdateTensorArgs can redirect a borrowed DFB ring to a different
+// Verifies that Program::update_tensor_args can redirect a borrowed DFB ring to a different
 // L1 tensor between runs on the same compiled program.
 void run_update_address_test(
     distributed::MeshDevice& mesh_device,
@@ -428,8 +428,8 @@ void run_update_address_test(
 
     // --- Run 2: ring redirected to ring_tensor_b ---
     // When reentry_num_entries_override is set, Run 2 re-binds the ring to a different tensor AND
-    // applies a num_entries override in the same SetProgramRunArgs. When unset, Run 2 uses the
-    // UpdateTensorArgs fast-path (address only).
+    // applies a num_entries override in the same Program::set_run_args. When unset, Run 2 uses the
+    // Program::update_tensor_args fast-path (address only).
     std::vector<uint32_t> input_b(total_words);
     std::iota(input_b.begin(), input_b.end(), total_words);  // distinct from run 1
     slow_dispatch::WriteToBuffer(src_tensor.mesh_buffer(), input_b);
@@ -439,7 +439,7 @@ void run_update_address_test(
     slow_dispatch::WriteToL1(mesh_device, node, ring_b_address, ring_zeros);
 
     if (reentry_num_entries_override.has_value()) {
-        // Combined re-bind + resize in ONE SetProgramRunArgs: point the borrowed ring at a different
+        // Combined re-bind + resize in ONE Program::set_run_args: point the borrowed ring at a different
         // L1 tensor AND override num_entries together (the sharded program-cache-hit analog). The
         // per-bank fit check in AttachBorrowedDFBBuffers validates the new size against ring_tensor_b.
         const KernelRunArgs::RuntimeArgValues dm_rtas2 =

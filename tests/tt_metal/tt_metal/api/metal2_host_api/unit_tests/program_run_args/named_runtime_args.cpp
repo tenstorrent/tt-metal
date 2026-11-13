@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// SetProgramRunArgs with named RTAs / CRTAs, and where their values land in the kernel's arg buffers.
+// Program::set_run_args with named RTAs / CRTAs, and where their values land in the kernel's arg buffers.
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
@@ -143,11 +143,11 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_NamedAndVarargRTAsCoexistSucceeds) {
     EXPECT_NO_THROW(program.set_run_args(params));
 }
 
-// SetProgramRunArgs serializes named per-node RTAs by *scattering* each supplied value to its
+// Program::set_run_args serializes named per-node RTAs by *scattering* each supplied value to its
 // declaration slot (schema name->slot index), not by walking the schema and looking each name up.
 // This test pins that behavior at the value level — which the NO_THROW tests above do not:
 //   - supplied OUT OF declaration order, values must still land at their declared slot;
-//   - a second SetProgramRunArgs (the in-place fast path that writes into the already-allocated
+//   - a second Program::set_run_args (the in-place fast path that writes into the already-allocated
 //     buffer) must overwrite every slot correctly.
 // Together these cover both the scatter (slot placement) and the first-vs-subsequent buffer paths.
 TEST_F(ProgramRunArgsTestGen1, CPU_SetRunArgs_NamedPerNodeRTAs_ScatterToDeclarationSlots) {
@@ -242,7 +242,7 @@ enum ArgSourceEnum { kFirstEnumerator = 7, kSecondEnumerator = 8 };
 
 // An ArgValue reaches the dispatch buffer as the implicit conversion of its source to uint32_t
 // (negative values wrap, floating point truncates, bools and unscoped enums convert), for per-node
-// and common args, on both the first SetProgramRunArgs call and the in-place fast path.
+// and common args, on both the first Program::set_run_args call and the in-place fast path.
 TEST_F(ProgramRunArgsTestGen1, CPU_SetRunArgs_ArgValuesSerializeAsUint32Conversion) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();

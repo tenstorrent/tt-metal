@@ -221,7 +221,7 @@ bool run_dm(distributed::MeshDevice& mesh_device, const OneToAllConfig& test_con
         sender_named_args["num_vc"] = (uint32_t)test_config.num_virtual_channels;
     }
 
-    // Metal 2.0 host path (non-semaphore variants only): MakeProgramFromSpec + WorkUnitSpec
+    // Metal 2.0 host path (non-semaphore variants only): Program constructor + WorkUnitSpec
     // + ProgramRunArgs. Sweep-varying params use named runtime args; unicast subordinate
     // coords remain varargs (truly variadic count).
     // Semaphore-based _2_0 tests are not currently enabled by any test entry point, so the
@@ -323,7 +323,7 @@ bool run_dm(distributed::MeshDevice& mesh_device, const OneToAllConfig& test_con
         SetRuntimeArgs(program, receiver_kernel, sub_logical_core_set, {});
     }
 
-    // Runtime Arguments (legacy paths only; Metal 2.0 already set varargs via SetProgramRunArgs)
+    // Runtime Arguments (legacy paths only; Metal 2.0 already set varargs via Program::set_run_args)
     if (!metal_2_0_active) {
         vector<uint32_t> sender_runtime_args = {};
 

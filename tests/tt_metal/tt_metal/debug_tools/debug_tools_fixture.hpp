@@ -463,7 +463,7 @@ public:
         // Get the first available mesh device
         auto mesh_device = this->devices_.at(0);
 
-        // MakeProgramFromSpec compiles eagerly, so the ELF exists on disk once it returns and a
+        // The Program constructor compiles eagerly, so the ELF exists on disk once it returns and a
         // build failure surfaces here as a throw (which the compilation-failure tests rely on).
         auto spec = MakeSingleDmPrintSpec(mesh_device->arch(), kernel_path, runtime_args.size());
         Program program(*mesh_device, spec);
@@ -539,7 +539,7 @@ private:
         };
     }
 
-    // SetProgramRunArgs requires an entry for every kernel that declares runtime args and rejects
+    // Program::set_run_args requires an entry for every kernel that declares runtime args and rejects
     // entries for kernels that declare none, so this is a no-op when the kernel takes no arguments.
     static void SetSingleDmPrintArgs(Program& program, ttsl::Span<const uint32_t> runtime_args) {
         if (runtime_args.empty()) {

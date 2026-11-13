@@ -23,7 +23,7 @@ struct UpdateCacheMultiCoreProgramFactory {
         const KvCacheParams& operation_attributes, const KvCacheInputs& tensor_args, Tensor& tensor_return_value);
 
     // CustomProgramSpecFactoryConcept cache-hit hook: returns the per-dispatch ProgramRunArgs the
-    // framework applies via UpdateProgramRunArgs. Re-applies only the hash-excluded, attribute-derived
+    // framework applies via Program::update_run_args. Re-applies only the hash-excluded, attribute-derived
     // scalars (cache_start_id, Wbytes, tile_update_offset, batch_read_offset) plus the tensor bindings
     // (whose addresses refresh through the typed channel); shape-derived args stay at their cache-miss
     // values.
