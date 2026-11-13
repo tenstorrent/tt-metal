@@ -28,6 +28,18 @@
 // disjoint traffic (this kernel only reads); the counter re-sync at exit relies on it.
 static_assert(noc_mode == DM_DEDICATED_NOC, "reader_dram_metal2 shares a dedicated NOC with the writer");
 
+// The staging pointers are the uncached L1 alias on Quasar DM, which the NOC cannot take. The Noc class maps
+// them back in Noc::l1_cached_view, but performance mode issues reads through the free function, so this
+// kernel does the same mapping itself.
+FORCE_INLINE uint32_t noc_local_l1_addr(uint32_t addr) {
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    return (addr >= MEM_L1_UNCACHED_BASE && addr < MEM_L1_UNCACHED_BASE + MEM_L1_SIZE) ? addr - MEM_L1_UNCACHED_BASE
+                                                                                       : addr;
+#else
+    return addr;
+#endif
+}
+
 void kernel_main() {
     constexpr uint32_t num_layers = get_arg(args::num_layers);
     constexpr uint32_t num_tensors = get_arg(args::num_tensors);
@@ -47,7 +59,7 @@ void kernel_main() {
     // The staging ring is addressed directly: reads for the next block are issued before the current one is
     // pushed, so the DFB's write pointer lags the address being filled.
     const uint32_t max_block_size = max_block_num_tiles * staging.get_entry_size();
-    const uint32_t l1_buffer_start_addr = staging.get_write_ptr();
+    const uint32_t l1_buffer_start_addr = noc_local_l1_addr(staging.get_write_ptr());
     const uint32_t l1_buffer_end_addr = l1_buffer_start_addr + staging.get_total_size_bytes();
 
     // The host fills the address table before launch and nothing writes it again, so one lock spans the
@@ -77,7 +89,7 @@ void kernel_main() {
 
             staging.reserve_back(max_block_num_tiles);
 
-            uint32_t l1_write_addr_start = staging.get_write_ptr();
+            uint32_t l1_write_addr_start = noc_local_l1_addr(staging.get_write_ptr());
             // Wrap around l1_write_addr if it reaches l1_buffer_end_addr
             if (l1_write_addr_start >= l1_buffer_end_addr) {
                 l1_write_addr_start = l1_buffer_start_addr;
