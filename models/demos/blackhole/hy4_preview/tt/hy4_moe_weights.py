@@ -34,7 +34,9 @@ def _cache_warm(layer_id: int, bfp8: bool = False):
     )
 
 
-def load_moe_layer(layer_id: int, dtype=torch.bfloat16, experts=None, load_experts=True, ckpt_dir=None, W=None):
+def load_moe_layer(
+    layer_id: int, dtype=torch.bfloat16, experts=None, load_experts=True, ckpt_dir=None, W=None, prefix=None
+):
     """Dict of host tensors for MoE layer ``layer_id``. experts: iterable of expert ids to load (others stay zero), for single-expert tests."""
     W = W or Hy4Weights(ckpt_dir)
     warm = (experts is None and _cache_warm(layer_id)) or not load_experts
@@ -55,7 +57,7 @@ def load_moe_layer(layer_id: int, dtype=torch.bfloat16, experts=None, load_exper
 
     with ThreadPoolExecutor(max_workers=int(os.environ.get("HY4_LOAD_THREADS", "16"))) as ex:
         list(ex.map(one, ids))
-    p = f"layers.{layer_id}."
+    p = prefix or f"layers.{layer_id}."  # MTP layer (index 78): prefix "mtp.0."
     sh = {k: W.load(p + f"moe.shared.{k}_proj") for k in ("gate", "up", "down")}
     t = lambda m: m.T.contiguous().to(dtype)[None, None]  # [in, out]
     return {

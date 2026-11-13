@@ -27,6 +27,21 @@ NSTREAM = 4
 CHUNK = 512
 
 
+def dram_view(md):
+    """allocator report of the mesh DRAM (identical on every chip): bytes per bank."""
+    try:
+        v = ttnn.get_memory_view(md, ttnn.BufferType.DRAM)
+        return dict(
+            banks=v.num_banks,
+            total_per_bank=v.total_bytes_per_bank,
+            alloc_per_bank=v.total_bytes_allocated_per_bank,
+            free_per_bank=v.total_bytes_free_per_bank,
+            largest_free_per_bank=v.largest_contiguous_bytes_free_per_bank,
+        )
+    except Exception as e:  # noqa: BLE001
+        return dict(error=repr(e), alloc_per_bank=-1)
+
+
 # ------------------------------------------------------------------ host loading
 class CkptReader:
     """safetensors index + threaded per-layer reads (>= 8 parallel readers, the NFS gives ~300 MB/s per stream)."""
@@ -140,7 +155,9 @@ class Hy4ChainLayer:
             cfg.hc_eps,
             cfg.hc_magnitude,
         )
-        self.ihc_a, self.ihc_m = hc("attn"), hc("mlp")
+        self.mtp = L >= cfg.num_hidden_layers
+        if not self.mtp:
+            self.ihc_a, self.ihc_m = hc("attn"), hc("mlp")
         self.attn = Hy4Attention(
             md,
             ch.mc,
@@ -169,7 +186,7 @@ class Hy4ChainLayer:
             from models.demos.blackhole.hy4_preview.tt.hy4_moe_weights import load_moe_layer
             from models.demos.blackhole.hy4_preview.tt.hy4_prefill_moe import Hy4UnifiedMoE
 
-            W = load_moe_layer(L, W=ch.W)
+            W = load_moe_layer(L, W=ch.W, prefix="mtp.0." if self.mtp else None)
             self.t_read = time.time() - t0
             self.blk = Hy4MoEBlock(md, W, batch_per_device=1)
             self.blk.warmup()
@@ -181,6 +198,19 @@ class Hy4ChainLayer:
                 md, *sw, limit=D.NO_CLAMP, decode=False
             )  # coordinator 11-13: the shared expert is NOT clamped (CE 1.77 vs 0.79)
             del W
+        if (
+            self.mtp
+        ):  # MTP layer: loaded, unused until the spec-mtp device stage (no iHC; eh_proj [6144, 12288], enorm, hnorm, final_layernorm)
+            self.eh_proj = upload(
+                md,
+                sd["eh_proj.weight"].T.contiguous().reshape(1, 1, 2 * HID, HID).to(torch.bfloat16),
+                ttnn.bfloat8_b,
+                shard_dim=3,
+            )
+            self.mtp_norms = {
+                k: upload(md, sd[k + ".weight"].float().reshape(1, 1, -1, 32), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT)
+                for k in ("enorm", "hnorm", "final_layernorm")
+            }
         self.t_mlp = time.time() - t0
 
     # --- helpers
@@ -270,7 +300,7 @@ class Hy4Chain:
     def add_layers(self, lo, hi, log=print):
         for L in range(lo, hi):
             t0, b0 = time.time(), self.rd.bytes_read
-            sd = self.rd.layer_sd(L)
+            sd = self.rd.layer_sd(L if L < self.cfg.num_hidden_layers else -1)
             t_sd = time.time() - t0
             self.layers.append(Hy4ChainLayer(self, L, sd))
             ly = self.layers[-1]
@@ -282,6 +312,7 @@ class Hy4Chain:
                 attn_s=round(ly.t_attn, 1),
                 mlp_s=round(ly.t_mlp, 1),
                 expert_read_s=round(getattr(ly, "t_read", 0.0), 1),
+                dram_alloc_per_bank=dram_view(self.md)["alloc_per_bank"],
             )
             self.load_log.append(rec)
             log("LAYER_LOAD " + json.dumps(rec))
