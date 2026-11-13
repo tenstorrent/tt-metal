@@ -14,6 +14,14 @@ ttnn::Tensor narrow(
     const auto& input_tensor_shape = input_tensor.padded_shape();
     const auto& input_logical_shape = input_tensor.logical_shape();
     uint32_t dim = input_logical_shape.get_normalized_index(narrow_dim);
+    // Check the raw start before wrapping: wrap_index returns uint32_t, so a start below -size would underflow
+    // and the error would report a garbage index.
+    TT_FATAL(
+        narrow_start >= -static_cast<int64_t>(input_logical_shape[dim]),
+        "Narrow start index {} out of bounds for dimension {} with size {}",
+        narrow_start,
+        dim,
+        input_logical_shape[dim]);
     uint32_t start = operations::data_movement::wrap_index(narrow_start, input_logical_shape[dim]);
 
     // Early return if no narrowing needed
