@@ -164,7 +164,8 @@ def test_mul_bw_preallocated(preallocate, device):
 
 
 @pytest.mark.parametrize("mask", [[True, False], [False, True]])
-def test_mul_bw_partial_mask_routes_to_composite(mask, device):
+def test_mul_bw_partial_mask_served_by_fused_path(mask, device):
+    # Fused device op serves partial masks directly; unused slot is returned as None.
     shape = (1, 1, 32, 32)
     mc = ttnn.DRAM_MEMORY_CONFIG
     a_pt, a_tt = _pt_and_tt(shape, -1.0, 1.0, device, ttnn.bfloat16, mc, required_grad=True, seed=1)
@@ -470,7 +471,8 @@ def test_bw_broadcast_returns_operand_shape_grads(
 
 @pytest.mark.parametrize("op_name,op_fn,other_low,other_high", _OP_TABLE)
 @pytest.mark.parametrize("mask", [[True, False], [False, True]])
-def test_bw_partial_mask_routes_to_composite(op_name, op_fn, other_low, other_high, mask, device):
+def test_bw_partial_mask_served_by_fused_path(op_name, op_fn, other_low, other_high, mask, device):
+    # Fused device op accepts any mask; the wrapper returns None for the unrequested slot.
     shape = (1, 1, 32, 32)
     mc = ttnn.DRAM_MEMORY_CONFIG
     a_pt, a_tt = _pt_and_tt(shape, -1.0, 1.0, device, ttnn.bfloat16, mc, required_grad=True, seed=1)
@@ -529,3 +531,179 @@ def test_bw_fp32_dest_acc_still_enabled_on_grad_only_kernel(op_name, op_fn, devi
     golden = ttnn.get_golden_function(op_fn)(g_pt, a_pt, b_pt)
     out = op_fn(g_tt, a_tt, b_tt, memory_config=mc)
     _assert_mul_bw_grads(out, golden, ulp=4, out_dtype=torch.bfloat16)
+
+
+@pytest.mark.parametrize("op_name,op_fn,other_low,other_high", _OP_TABLE + [("mul", ttnn.mul_bw, -5.0, 5.0)])
+def test_bw_divergent_input_other_mc_resolves_per_slot(op_name, op_fn, other_low, other_high, device):
+    # Without explicit output mc, input_grad lands on input.mc and other_grad on other.mc;
+    # divergent per-operand memory_config is now served directly by the fused device op.
+    shape = (1, 1, 32, 32)
+    a_pt, a_tt = _pt_and_tt(
+        shape, -1.0, 1.0, device, ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG, required_grad=True, seed=1
+    )
+    b_pt, b_tt = _pt_and_tt(
+        shape, other_low, other_high, device, ttnn.bfloat16, ttnn.L1_MEMORY_CONFIG, required_grad=True, seed=2
+    )
+    g_pt, g_tt = _pt_and_tt(shape, -3.0, 3.0, device, ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG, seed=3)
+    golden = ttnn.get_golden_function(op_fn)(g_pt, a_pt, b_pt)
+    out = op_fn(g_tt, a_tt, b_tt)  # no memory_config kwarg — defaults per slot
+    assert (
+        out[0].memory_config() == a_tt.memory_config()
+    ), f"{op_name}: input_grad mc {out[0].memory_config()} != {a_tt.memory_config()}"
+    assert (
+        out[1].memory_config() == b_tt.memory_config()
+    ), f"{op_name}: other_grad mc {out[1].memory_config()} != {b_tt.memory_config()}"
+    _assert_mul_bw_grads(out, golden, ulp=4, out_dtype=torch.bfloat16)
+
+
+@pytest.mark.parametrize("op_name,op_fn,other_low,other_high", _OP_TABLE + [("mul", ttnn.mul_bw, -5.0, 5.0)])
+def test_bw_divergent_mc_swapped_resolves_per_slot(op_name, op_fn, other_low, other_high, device):
+    # Swap of test_bw_divergent_input_other_mc_resolves_per_slot: input L1 / other DRAM.
+    shape = (1, 1, 32, 32)
+    a_pt, a_tt = _pt_and_tt(shape, -1.0, 1.0, device, ttnn.bfloat16, ttnn.L1_MEMORY_CONFIG, required_grad=True, seed=1)
+    b_pt, b_tt = _pt_and_tt(
+        shape, other_low, other_high, device, ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG, required_grad=True, seed=2
+    )
+    g_pt, g_tt = _pt_and_tt(shape, -3.0, 3.0, device, ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG, seed=3)
+    golden = ttnn.get_golden_function(op_fn)(g_pt, a_pt, b_pt)
+    out = op_fn(g_tt, a_tt, b_tt)
+    assert out[0].memory_config() == a_tt.memory_config()
+    assert out[1].memory_config() == b_tt.memory_config()
+    _assert_mul_bw_grads(out, golden, ulp=4, out_dtype=torch.bfloat16)
+
+
+@pytest.mark.parametrize("mask", [[True, False], [False, True]])
+@pytest.mark.parametrize("op_name,op_fn,other_low,other_high", _OP_TABLE + [("mul", ttnn.mul_bw, -5.0, 5.0)])
+def test_bw_partial_mask_with_divergent_mc_per_slot(op_name, op_fn, other_low, other_high, mask, device):
+    # Partial mask + divergent-mc: the requested slot must land on its own operand's mc,
+    # proving WRITE_{INPUT,OTHER}_GRAD gates key off the per-slot mc, not a single global one.
+    shape = (1, 1, 32, 32)
+    a_pt, a_tt = _pt_and_tt(
+        shape, -1.0, 1.0, device, ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG, required_grad=True, seed=1
+    )
+    b_pt, b_tt = _pt_and_tt(
+        shape, other_low, other_high, device, ttnn.bfloat16, ttnn.L1_MEMORY_CONFIG, required_grad=True, seed=2
+    )
+    g_pt, g_tt = _pt_and_tt(shape, -3.0, 3.0, device, ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG, seed=3)
+    golden = ttnn.get_golden_function(op_fn)(g_pt, a_pt, b_pt, are_required_outputs=mask)
+    out = op_fn(g_tt, a_tt, b_tt, are_required_outputs=mask)
+    for i, (req, operand_tt) in enumerate(zip(mask, (a_tt, b_tt))):
+        if req:
+            assert out[i] is not None
+            assert out[i].memory_config() == operand_tt.memory_config()
+        else:
+            assert out[i] is None
+    slots = [i for i, req in enumerate(mask) if req]
+    _assert_mul_bw_grads(out, golden, ulp=4, out_dtype=torch.bfloat16, slots=slots)
+
+
+def test_add_bw_partial_mask_fused_skips_unrequested_slot(device):
+    # Caller drops preallocated for the masked-off slot and the NoC writer gate is off, so the
+    # preallocated buffer must stay at its sentinel value. Compute still runs both chains (#63473).
+    shape = (1, 1, 32, 32)
+    mc = ttnn.DRAM_MEMORY_CONFIG
+    _, a_tt = _pt_and_tt(shape, -1.0, 1.0, device, ttnn.bfloat16, mc, seed=1)
+    _, b_tt = _pt_and_tt(shape, -5.0, 5.0, device, ttnn.bfloat16, mc, seed=2)
+    _, g_tt = _pt_and_tt(shape, -3.0, 3.0, device, ttnn.bfloat16, mc, seed=3)
+    sentinel = 7.0
+    preallocated_other = ttnn.full(
+        shape, sentinel, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=mc
+    )
+    out = ttnn.add_bw(
+        g_tt, a_tt, b_tt, memory_config=mc, other_grad=preallocated_other, are_required_outputs=[True, False]
+    )
+    assert out[0] is not None and out[1] is None
+    assert torch.all(ttnn.to_torch(preallocated_other) == sentinel)
+
+
+@pytest.mark.parametrize(
+    "bad_preallocated_kind",
+    ["sharded", "row_major", "mixed_dtype"],
+)
+def test_add_bw_bad_preallocated_in_masked_slot_still_fused(device, bad_preallocated_kind):
+    # A sharded / ROW_MAJOR / mixed-dtype preallocated in the masked-off slot would otherwise
+    # soft-route the call to composite or smuggle a bad spec into the fused program. Caller
+    # drops it first, so the fused path serves the requested slot and leaves the buffer alone.
+    shape = (1, 1, 32, 32)
+    mc = ttnn.DRAM_MEMORY_CONFIG
+    _, a_tt = _pt_and_tt(shape, -1.0, 1.0, device, ttnn.bfloat16, mc, seed=1)
+    _, b_tt = _pt_and_tt(shape, -5.0, 5.0, device, ttnn.bfloat16, mc, seed=2)
+    _, g_tt = _pt_and_tt(shape, -3.0, 3.0, device, ttnn.bfloat16, mc, seed=3)
+    sentinel = 7.0
+    if bad_preallocated_kind == "sharded":
+        bad_mc = ttnn.create_sharded_memory_config(
+            shape=shape,
+            core_grid=ttnn.CoreGrid(y=1, x=1),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        preallocated_other = ttnn.full(
+            shape, sentinel, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=bad_mc
+        )
+    elif bad_preallocated_kind == "row_major":
+        preallocated_other = ttnn.full(
+            shape, sentinel, dtype=ttnn.bfloat16, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=mc
+        )
+    else:
+        preallocated_other = ttnn.full(
+            shape, sentinel, dtype=ttnn.float32, device=device, layout=ttnn.TILE_LAYOUT, memory_config=mc
+        )
+    out = ttnn.add_bw(
+        g_tt, a_tt, b_tt, memory_config=mc, other_grad=preallocated_other, are_required_outputs=[True, False]
+    )
+    assert out[0] is not None and out[1] is None
+    assert torch.all(ttnn.to_torch(preallocated_other) == sentinel)
+
+
+@pytest.mark.parametrize("op_name,op_fn,other_low,other_high", _OP_TABLE)
+def test_bw_both_required_false_raises(op_name, op_fn, other_low, other_high, device, expect_error):
+    # Composite raised "at least one gradient is expected"; fused must not silently succeed.
+    shape = (1, 1, 32, 32)
+    mc = ttnn.DRAM_MEMORY_CONFIG
+    _, a_tt = _pt_and_tt(shape, -1.0, 1.0, device, ttnn.bfloat16, mc, seed=1)
+    _, b_tt = _pt_and_tt(shape, other_low, other_high, device, ttnn.bfloat16, mc, seed=2)
+    _, g_tt = _pt_and_tt(shape, -3.0, 3.0, device, ttnn.bfloat16, mc, seed=3)
+    with expect_error(RuntimeError, "at least one"):
+        op_fn(g_tt, a_tt, b_tt, are_required_outputs=[False, False], memory_config=mc)
+
+
+@pytest.mark.parametrize("op_name,op_fn,other_low,other_high", _OP_TABLE)
+def test_bw_mixed_dtype_preallocated_grad_routes_to_composite(op_name, op_fn, other_low, other_high, device):
+    # fp32 preallocated grad with bf16 operands (mixed-precision training); composite's assign coerces.
+    shape = (1, 1, 32, 32)
+    mc = ttnn.DRAM_MEMORY_CONFIG
+    a_pt, a_tt = _pt_and_tt(shape, -1.0, 1.0, device, ttnn.bfloat16, mc, required_grad=True, seed=1)
+    b_pt, b_tt = _pt_and_tt(shape, other_low, other_high, device, ttnn.bfloat16, mc, required_grad=True, seed=2)
+    g_pt, g_tt = _pt_and_tt(shape, -3.0, 3.0, device, ttnn.bfloat16, mc, seed=3)
+    fp32_input_grad = ttnn.zeros(shape, dtype=ttnn.float32, device=device, layout=ttnn.TILE_LAYOUT, memory_config=mc)
+    golden = ttnn.get_golden_function(op_fn)(g_pt, a_pt, b_pt)
+    out = op_fn(g_tt, a_tt, b_tt, memory_config=mc, input_grad=fp32_input_grad)
+    assert out[0].dtype == ttnn.float32, f"{op_name}: preallocated fp32 input_grad lost its dtype on composite"
+    # ULP on the fp32 slot catches silent coercion PCC would mask; div composite uses bf16
+    # intermediates (multiply + reciprocal at input.dtype) so ULP is unreachable — PCC there.
+    if op_name == "div":
+        _assert_mul_bw_grads(out, golden, pcc=0.99, slots=[0])
+    else:
+        assert_with_ulp(
+            expected_result=golden[0].to(torch.float32), actual_result=ttnn.to_torch(out[0]), ulp_threshold=4
+        )
+    _assert_mul_bw_grads(out, golden, ulp=4, out_dtype=torch.bfloat16, slots=[1])
+
+
+def test_add_bw_non_32x32_tile_routes_to_composite(device, expect_error):
+    # Pins the soft route: fused device op defers to composite, which then fails downstream
+    # in copy_device_operation (empty_like drops the custom tile). End-to-end unsupported.
+    shape = (1, 1, 32, 32)
+    mc = ttnn.DRAM_MEMORY_CONFIG
+    tile = ttnn.Tile((16, 32))
+    mk = lambda seed: ttnn.from_torch(
+        torch.randn(shape, generator=torch.Generator().manual_seed(seed), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        tile=tile,
+        device=device,
+        memory_config=mc,
+    )
+    a_tt, b_tt, g_tt = mk(1), mk(2), mk(3)
+    with expect_error(RuntimeError, "same tile shape"):
+        ttnn.add_bw(g_tt, a_tt, b_tt, memory_config=mc)
