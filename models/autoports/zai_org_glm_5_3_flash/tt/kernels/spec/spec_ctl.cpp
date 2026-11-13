@@ -40,6 +40,17 @@
 //   R ring tensors' base addresses (slot 0 = page 0); user u's ring = slot ro = u (K + 1), its group base (the
 //   generator slot = the DSA state slot): pages ro RING_TILES + i of each tensor. SPEC_REV 3 took R x G slot bases
 //   (<= 64): G 8 x the 11 sparse_dsa layers = 88 did not fit (K 1 at 8 users).
+// SPEC_MODE 4 = RING (SPEC_REV 6, GLM53_SPEC_MTP_SPARSE, plan M5: the MTP layer as a sparse_dsa layer with a DSA ring
+// of
+//   its own): after the MTP catch-up -- a one-slot verify-mode launch at the step's base c (q0 = c / 4: pool q0 + g's
+//   ring rows in ring tile rows 4 g .. 4 g + 3) -- SPEC_RING_PHASE 1 moves rows 4 grp .. + 3 to the canonical rows 0..3
+//   (grp = (c + n + 1) / 4 - c / 4, ACCEPT's rule: the pool of the next position) and, with SPEC_RING_SAVE 1, copies
+//   rows 0..3 to rows 8..11 (unused by the one-slot launches of K + 1 <= 4 rows: <= 2 pools = rows 0..7). The chained
+//   MTP rows (plain-mode launches at c + n + 1 + i) then see the canonical rows; one that enters the next pool rewrites
+//   row 0..3 of it, so SPEC_RING_PHASE 2 (after the chain) puts rows 8..11 back to rows 0..3: the next catch-up (base
+//   c + n + 1) finds its pool's committed rows. n, c per user from its record page (written by ACCEPT / BOOT); a record
+//   with c < 0 (an inactive group, prepare()'s far-negative positions) moves nothing. Runtime args: rec, then (arg 10)
+//   the ring count R <= 16 and R slot-0 ring base addresses (with SPEC_GROUPS user u's ring = slot u (K + 1)).
 // SPEC_PARTIAL (GLM53_SPEC_PARTIAL, SPEC_REV 5; with SPEC_GROUPS): a group whose base position is < 0 (BOOT: the plain
 //   cur_pos row ro; ACCEPT: pos_v row ro) is inactive -- its rows keep positions -1, no token / ring write, record n 0
 //   and c -1; GATHER skips a record with c < 0. Without the define every group is live (batch 2's fixed G).
@@ -62,6 +73,54 @@ FORCE_INLINE volatile tt_l1_ptr uint32_t* u32(uint32_t l1) {
     return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1);
 }
 FORCE_INLINE volatile tt_l1_ptr int32_t* i32(uint32_t l1) { return reinterpret_cast<volatile tt_l1_ptr int32_t*>(l1); }
+constexpr uint32_t RING_SAVE_ROW = 8;  // SPEC_MODE 4: the canonical rows' copy across the MTP chain (rows 8..11)
+// rows src .. src + 3 -> rows dst .. dst + 3 of each of a ring slot's 8 tiles (faces 0 / 1: 128 B each; 4-row groups
+// never straddle a face row boundary), slot = pages page0 .. page0 + 7
+FORCE_INLINE void ring_rows(uint32_t base, uint32_t page0, uint32_t src, uint32_t dst, uint32_t buf) {
+    const uint32_t so = (src >> 4) * 1024 + (src & 15) * 32;  // kernels/mla/mla_common.hpp row_off
+    const uint32_t dof = (dst >> 4) * 1024 + (dst & 15) * 32;
+    for (uint32_t i = 0; i < RING_TILES; ++i) {
+        const uint64_t a = dram(base, RING_PAGE, page0 + i);
+        noc_async_read(a + so, buf, 128);
+        noc_async_read(a + so + 512, buf + 128, 128);
+        noc_async_read_barrier();
+        noc_async_write(buf, a + dof, 128);
+        noc_async_write(buf + 128, a + dof + 512, 128);
+        noc_async_write_barrier();
+    }
+}
+#if SPEC_MODE == 4
+#if !defined(SPEC_RING_PHASE) || !defined(SPEC_RING_SAVE)
+#error "SPEC_MODE 4: SPEC_RING_PHASE (1 move, 2 restore) and SPEC_RING_SAVE"
+#endif
+// one user's MTP rings (record page `page`, ring slot ro): see the header's SPEC_MODE 4
+FORCE_INLINE void mtp_ring(uint32_t rec, uint32_t page, uint32_t ro, uint32_t s_rec, uint32_t buf) {
+    noc_async_read(dram(rec, 256, page), s_rec, 256);
+    noc_async_read_barrier();
+    const int32_t c = static_cast<int32_t>(u32(s_rec)[1]);
+    if (c < 0) {
+        return;
+    }
+    const uint32_t n = u32(s_rec)[0];
+    const uint32_t grp = static_cast<uint32_t>(c + static_cast<int32_t>(n) + 1) / 4 - static_cast<uint32_t>(c) / 4;
+    const uint32_t n_ring = get_arg_val<uint32_t>(10);
+    for (uint32_t l = 0; l < n_ring && l < 16; ++l) {
+        const uint32_t base = get_arg_val<uint32_t>(11 + l);
+#if SPEC_RING_PHASE == 1
+        if (grp > 0) {
+            ring_rows(base, ro * RING_TILES, 4 * grp, 0, buf);
+        }
+#if SPEC_RING_SAVE
+        ring_rows(base, ro * RING_TILES, 0, RING_SAVE_ROW, buf);
+#endif
+#elif SPEC_RING_PHASE == 2
+        ring_rows(base, ro * RING_TILES, RING_SAVE_ROW, 0, buf);
+#else
+#error "SPEC_RING_PHASE: 1 move, 2 restore"
+#endif
+    }
+}
+#endif
 }  // namespace
 
 void kernel_main() {
@@ -233,8 +292,13 @@ void kernel_main() {
         noc_async_write(s_rec, dram(rec, REC_PAGE, u), REC_PAGE);
         noc_async_write_barrier();
     }
+#elif SPEC_MODE == 4
+    const uint32_t rec = get_arg_val<uint32_t>(0);
+    for (uint32_t u = 0; u < G; ++u) {
+        mtp_ring(rec, u, u * W, s_rec, s_tok);
+    }
 #else
-#error "SPEC_MODE: 1 ACCEPT, 2 BOOT, 3 GATHER"
+#error "SPEC_MODE: 1 ACCEPT, 2 BOOT, 3 GATHER, 4 RING"
 #endif
 #else  // the single user (knob off: unchanged)
 #if SPEC_MODE == 1 || SPEC_MODE == 2
@@ -376,8 +440,10 @@ void kernel_main() {
     }
     noc_async_write(s_rec, dram(rec, REC_PAGE, 0), REC_PAGE);
     noc_async_write_barrier();
+#elif SPEC_MODE == 4
+    mtp_ring(get_arg_val<uint32_t>(0), 0, 0, s_rec, s_tok);
 #else
-#error "SPEC_MODE: 1 ACCEPT, 2 BOOT, 3 GATHER"
+#error "SPEC_MODE: 1 ACCEPT, 2 BOOT, 3 GATHER, 4 RING"
 #endif
 #endif  // SPEC_GROUPS
 }

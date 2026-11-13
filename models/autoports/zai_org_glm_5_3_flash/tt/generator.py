@@ -663,6 +663,51 @@ def spec_multi_groups(env=os.environ) -> int:
     return G
 
 
+def spec_mtp_sparse(env=os.environ) -> bool:
+    """GLM53_SPEC_MTP_SPARSE=1 (default off; plan M5, doc/perf/mtp_sparse_design.md): the MTP layer (45) attends
+    SPARSELY, as the reference does -- layer 45 ships its own DSA indexer (wq_b / wk / weights_proj / k_norm / kpool
+    compress) and the config's index_share_for_mtp_iteration -- as a sequence-sharded sparse_dsa layer of the 8x4 shard
+    (tt/spec_mtp.py MtpLayer(sparse=True): TPMlaShard(dsa=DsaIndexer(45))): its latent pool and pooled-key store /
+    ring per chip and per slot like a main sparse_dsa layer's, filled by the TP prefill's in-trace MTP fill. The
+    speculative step then costs the same at 32 K and 1 M (the dense MTP attention added ~1.6 ms per step per 32 K
+    positions: 79 ms at 1 M, 0.73x), so no GLM53_SPEC_MAX_CTX cap is needed. Off: the dense private MTP cache."""
+    return env.get("GLM53_SPEC_MTP_SPARSE", "0") == "1"
+
+
+def spec_mtp_sparse_refusals(K: int, groups: int, drafter: str, *, shard: bool, paged: bool, window: bool,
+                             prefill: str) -> list:  # fmt: skip
+    """the reasons GLM53_SPEC_MTP_SPARSE=1 cannot build this speculative step (empty: it can). v1 scope:
+    * the MTP drafter on the sequence-sharded pool (GLM53_DSA_SHARD + GLM53_SPEC_ON_SHARD: the MTP layer's store is
+      per chip like the main layers');
+    * the per-slot pooled-key store (not GLM53_DSA_PAGED_POOLS) and no dense window (GLM53_DSA_DENSE_WINDOW: a window
+      store of its own is not built);
+    * the in-trace MTP fill (GLM53_SPEC_MTP_PREFILL "trace", the default; "launch" fills the dense cache only);
+    * multi-user (GLM53_SPEC_MULTI) only at K 1: the chained MTP rows address launch row u = user u, while a group's
+      DSA state lives in slot u (K + 1) (ix_dm1.cpp's plain rows take slot = row): no chained launch at K 1."""
+    why = []
+    if drafter != "mtp":
+        why.append(f"drafter {drafter!r} (the MTP drafter only)")
+    if not shard:
+        why.append("the sequence-sharded pool (GLM53_DSA_SHARD=1 with GLM53_SPEC_ON_SHARD=1)")
+    if paged:
+        why.append("GLM53_DSA_PAGED_POOLS=1 (the per-slot pooled-key store only)")
+    if window:
+        why.append("GLM53_DSA_DENSE_WINDOW=1 (no MTP window store)")
+    if prefill != "trace":
+        why.append(f"GLM53_SPEC_MTP_PREFILL={prefill!r} (the in-trace MTP fill writes the sharded store)")
+    if int(groups) and int(K) != 1:
+        why.append(f"GLM53_SPEC_MULTI with K {K} (multi-user: K 1 only -- the chained rows' DSA slot)")
+    return why
+
+
+def mtp_ring_grp(c: int, n: int) -> int:
+    """the MTP ring move after the catch-up (kernels/spec/spec_ctl.cpp SPEC_MODE 4, the same rule as ACCEPT's main-layer
+    move): the catch-up wrote pool c // 4 + g's ring rows to ring tile rows 4 g .. 4 g + 3 (ix_dm1.cpp MLA_DSA_ONE_SLOT,
+    q0 = c // 4); the next position c + n + 1's pool is c // 4 + grp -> grp (0: already the canonical rows 0..3).
+    c < 0 (an inactive record): 0."""
+    return 0 if int(c) < 0 else (int(c) + int(n) + 1) // 4 - int(c) // 4
+
+
 def spec_sampled_verify(env=os.environ) -> bool:
     """GLM53_SPEC_SAMPLED=1 (default off): the speculative step's verify head DRAWS every candidate column from the device
     sampler (kernels/head/topk_select.cpp TOPK_SAMPLE, the plain served head's) under its user's own top-k / top-p /

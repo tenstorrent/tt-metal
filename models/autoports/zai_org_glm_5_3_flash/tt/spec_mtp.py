@@ -34,6 +34,8 @@ from models.autoports.zai_org_glm_5_3_flash.tt.config import DENSE_KDA, SPARSE_K
 from models.autoports.zai_org_glm_5_3_flash.tt.generator import (  # noqa: F401 (ttnn-free)
     mtp_prefill_span,
     spec_mtp_pt_width,
+    spec_mtp_sparse,
+    spec_mtp_sparse_refusals,
     spec_multi_groups,
     spec_sampler_pages,
     spec_step_caps,
@@ -48,7 +50,7 @@ BF16, FP32 = ttnn.bfloat16, ttnn.float32
 TILE = 32
 HIDDEN = 4096
 KDIR = os.path.join("models", "autoports", "zai_org_glm_5_3_flash", "tt", "kernels")
-SPEC_REV = 5  # 5: SPEC_PARTIAL (an inactive group: rows -1, record c -1); 4: SPEC_GROUPS ACCEPT addresses user u's ring at slot u (K + 1) of each layer's tensor (R bases, not R x G); 3: ACCEPT moves the DSA rings (mk_mla rev 56); a define on every Stage 17 kernel (a long-lived process caches FILE_PATH binaries by path + args + defines)
+SPEC_REV = 6  # 6: SPEC_MODE 4 RING (GLM53_SPEC_MTP_SPARSE: the MTP layer's own DSA ring around the catch-up / chain); 5: SPEC_PARTIAL (an inactive group: rows -1, record c -1); 4: SPEC_GROUPS ACCEPT addresses user u's ring at slot u (K + 1) of each layer's tensor (R bases, not R x G); 3: ACCEPT moves the DSA rings (mk_mla rev 56); a define on every Stage 17 kernel (a long-lived process caches FILE_PATH binaries by path + args + defines)
 SEM_HEAD, SEM_HN = 0, 4  # kernels/head/head_common.hpp roles (owners: partial-sum all-gather; readers: hcat landed)
 
 
@@ -209,9 +211,12 @@ def l1_debug(tag: str, mesh=None) -> None:
 
 class MtpLayer:
     """Layer 45 (the MTP block's attention + MoE) as Stage 7b's TPMla + Stage 14b's TPMoE on every chip, the identity
-    mHC wrappers (mtp_mhc_args), its own paged latent cache; the fabric phases of a main sparse_dsa layer (`share`)."""
+    mHC wrappers (mtp_mhc_args), its own paged latent cache; the fabric phases of a main sparse_dsa layer (`share`).
+    sparse (GLM53_SPEC_MTP_SPARSE, plan M5): the attention is built as a main sparse_dsa layer's -- TPMlaShard(dsa=
+    DsaIndexer(45): layer 45's own indexer), the sequence-sharded split-K decode with TPDsaLayer._build_mla's knobs --
+    over a per-chip latent pool + pooled-key store / ring that SpecMTP allocates like StackBackend.allocate_kv_cache."""
 
-    def __init__(self, mesh, cfg, source, ocfg, *, ts, share=None):
+    def __init__(self, mesh, cfg, source, ocfg, *, ts, share=None, sparse: bool = False):
         from models.autoports.zai_org_glm_5_3_flash.tt import ep_experts as EPX
         from models.autoports.zai_org_glm_5_3_flash.tt import tp_dsa as TPD
         from models.autoports.zai_org_glm_5_3_flash.tt import tp_mla as TPM
@@ -223,8 +228,12 @@ class MtpLayer:
         # 8-tile one: +136 KB of reader CBs -- the 8x4 MTP rows' clash (mk137: the MTP MLA program's CB end 1291456 on
         # its reader cores, 999,488 B of CBs vs the main layers' 886,656 there)
         kb = TPD.MLA_KB_SHARD if int(mesh.get_num_devices()) <= 8 else TPD.MLA_KB_SHARD_WIDE
-        self.mla = TPM.TPMla(mesh, mtp_mhc_args(source, cfg, "attn"), self.attn, kb=kb,
-                             rings=TPD.MLA_RINGS_SHARD, fabrics=share.mla.fabrics if share else None, ts=ts)  # fmt: skip
+        self.sparse = bool(sparse)
+        if self.sparse:
+            self.mla = self._sparse_mla(mesh, cfg, source, ts, share, kb)
+        else:
+            self.mla = TPM.TPMla(mesh, mtp_mhc_args(source, cfg, "attn"), self.attn, kb=kb,
+                                 rings=TPD.MLA_RINGS_SHARD, fabrics=share.mla.fabrics if share else None, ts=ts)  # fmt: skip
         for name in ("ds_qb", "ds_o"):  # (TPDsaLayer: the per-chip slices live in the head shard)
             ttnn.deallocate(getattr(self.attn, name).weight)
         for name in ("w_uk", "w_uv"):
@@ -234,6 +243,24 @@ class MtpLayer:
         shm = share.moe.mk.persist if share is not None and os.environ.get("GLM53_MOE_SHARE_M", "1") == "1" else None
         self.moe = TPD.TPMoE(mesh, mtp_mhc_args(source, cfg, "ffn"), moe, ts=ts,
                              fabrics=share.moe.fabrics if share else None, persist=shm)  # fmt: skip
+
+    def _sparse_mla(self, mesh, cfg, source, ts, share, kb):
+        """TPDsaLayer._build_mla(dsa=True) for layer 45 with the identity mHC: the main sparse_dsa layers' indexer K blocks
+        / rings (GLM53_STACK_DSA_KB / _RINGS), their fabric phases and stream sync tensors (share.mla)"""
+        from models.autoports.zai_org_glm_5_3_flash.tt import mk_mla as MK
+        from models.autoports.zai_org_glm_5_3_flash.tt import tp_dsa as TPD
+        from models.autoports.zai_org_glm_5_3_flash.tt import tp_dsa_shard as TPDS
+
+        assert share is not None and isinstance(
+            share.mla, TPDS.TPMlaShard
+        ), "GLM53_SPEC_MTP_SPARSE: a main sparse_dsa layer on the sequence-sharded pool (TPMlaShard) to share"
+        ix_kb = tuple(int(v) for v in os.environ.get("GLM53_STACK_DSA_KB", "16,4").split(","))
+        rings = tuple(int(v) for v in os.environ.get("GLM53_STACK_DSA_RINGS", "140,105,64,280").split(","))
+        mla = TPDS.TPMlaShard(mesh, mtp_mhc_args(source, cfg, "attn"), self.attn, kb=kb, rings=rings,
+                              fabrics=share.mla.fabrics, ts=ts, dsa=MK.DsaIndexer(mesh, source, MTP_L), dsa_kb=ix_kb,
+                              stream_share=share.mla)  # fmt: skip
+        TPD._real_head_weights(mla.shard, source, MTP_L)
+        return mla
 
 
 class MkEh:
@@ -386,7 +413,7 @@ class MkEh:
 class SpecCtl:
     """kernels/spec/spec_ctl.cpp on one core per chip: ACCEPT / BOOT / GATHER (fixed-length runtime args)."""
 
-    MODES = dict(accept=1, boot=2, gather=3)
+    MODES = dict(accept=1, boot=2, gather=3, ring=4)  # ring: GLM53_SPEC_MTP_SPARSE (spec_ctl.cpp SPEC_MODE 4)
 
     def __init__(self, mesh, K: int, groups: int = 0, partial: bool = False):
         self.mesh, self.K = mesh, K
@@ -399,7 +426,7 @@ class SpecCtl:
 
     NARGS = 27  # 10 + the DSA ring count + 16 ring bases (ACCEPT; kernels/spec/spec_ctl.cpp; SPEC_GROUPS alike)
 
-    def __call__(self, mode: str, args: list, io: list, rings: list = ()):
+    def __call__(self, mode: str, args: list, io: list, rings: list = (), ring_phase: int = 0, ring_save: bool = False):
         """rings: the slot-0 base of every main sparse_dsa layer's ring tensor (<= 16); with groups (SPEC_REV 4) the
         kernel addresses user u's ring at slot u (K + 1) of each tensor -- R args for any G (was R x G <= 64: G 8 x 11
         layers did not fit)"""
@@ -410,6 +437,11 @@ class SpecCtl:
         rt[0][0] = ([int(a) for a in args] + [0] * (10 - len(args)) + [per] + [int(a) for a in rings]
                     + [0] * (nmax - len(rings)))  # fmt: skip
         defs = [("SPEC_MODE", str(self.MODES[mode])), ("SPEC_REV", str(SPEC_REV))]
+        if (
+            mode == "ring"
+        ):  # (compile-time: one program per phase -- the program cache keys on defines, not runtime args)
+            assert ring_phase in (1, 2), ring_phase
+            defs += [("SPEC_RING_PHASE", str(int(ring_phase))), ("SPEC_RING_SAVE", "1" if ring_save else "0")]
         if self.groups:
             defs.append(("SPEC_GROUPS", str(self.groups)))
         if self.partial:
@@ -561,6 +593,23 @@ class SpecMTP:
         # cache length) -- pt_m a constant identity row; "pool" = M0's cache over the request pool's PHYSICAL block ids
         # (C x nb_local blocks: 4 GiB per chip at 1 M x 4; pt_m = the slot's physical row)
         self.mtp_private = os.environ.get("GLM53_SPEC_MTP_CACHE", "private") != "pool"
+        # GLM53_SPEC_MTP_SPARSE (generator.spec_mtp_sparse, plan M5): the MTP layer as a sequence-sharded sparse_dsa layer
+        # (MtpLayer(sparse=True)): its latent pool and DSA state (pooled-key store + ring) per chip / slot like a main
+        # sparse_dsa layer's -- kv.extra's geometry, the main layers' page tables (pt_v: the catch-up's rows = the
+        # verify's; the chained rows on row 0 / plain rows) -- no private dense cache, no GLM53_SPEC_MAX_CTX need
+        self.mtp_sparse = drafter == "mtp" and spec_mtp_sparse()
+        self.mtp_st = None
+        if self.mtp_sparse:
+            dsa0 = [i for i, e in enumerate(be.seq) if e["sparse"] == "dsa"]
+            st0 = kv.extra.get("dsa", {}).get(dsa0[0]) if dsa0 else None
+            pf = os.environ.get("GLM53_SPEC_MTP_PREFILL", "1")
+            why = spec_mtp_sparse_refusals(
+                K, G, drafter, shard=self.shard is not None and st0 is not None,
+                paged=bool(st0 is not None and st0.get("paged")), window=bool(st0 is not None and st0.get("window") is not None),
+                prefill="trace" if pf not in ("0", "launch") else pf)  # fmt: skip
+            if why:
+                raise ValueError(f"GLM53_SPEC_MTP_SPARSE=1: {'; '.join(why)}")
+            self.mtp_private = False  # (mtp_row: the slot's PHYSICAL row; no private tables)
         if self.shard is not None:
             # the one-slot verify on the shard keeps the plain width's token lanes (mk_mla rev 62, the lane baton; only
             # one-slot builds read it: the plain programs are unchanged) -- MkMla refuses the t <= 4 verify on the
@@ -632,12 +681,14 @@ class SpecMTP:
             # (GLM53_SPEC_MULTI: a width t > 4 other than the full width has no sparse_dsa fabric phase of its own -- it
             # runs on the full width's, TPMla.fabric -- so only the shared phases are named)
             mts = tuple(sorted({cu, ch})) if not G else tuple(sorted(t for t in {cu, ch} if t <= 4 or t == be.chunk))
-            self.mtp = MtpLayer(mesh, cfg, self.source, self.ocfg, ts=mts, share=share)
+            self.mtp = MtpLayer(mesh, cfg, self.source, self.ocfg, ts=mts, share=share, sparse=self.mtp_sparse)
             l1_debug("after MtpLayer", self.mesh)
             # (+ scratch pages past the request blocks: the TP prefill's in-trace MTP fill writes an unarmed chunk's
             # rows there -- TPPrefill._mtp_write; one bucket's worth of the largest GLM53_PREFILL_BUCKETS bucket)
             blk = int(self.mtp.attn.block_size)
-            if self.mtp_private:
+            if self.mtp_sparse:
+                self._sparse_state(blk)
+            elif self.mtp_private:
                 cap = min(
                     int(kv.max_seq_len), int(os.environ.get("GLM53_SPEC_MAX_CTX", "0") or 0) or int(kv.max_seq_len)
                 )
@@ -647,10 +698,15 @@ class SpecMTP:
                     nb = G * nb
             else:
                 nb = kv.num_blocks if self.shard is None else self.shard[0] * self.shard[1]
-            bmax = max(int(v) for v in os.environ.get("GLM53_PREFILL_BUCKETS", "256,512,2048").split(",") if v.strip())
-            self.pf_scratch = (int(nb), max(1, -(-bmax // blk)))
-            self.mtp_cache = self.mtp.attn.allocate_cache(nb + self.pf_scratch[1])
-            if (
+            if not self.mtp_sparse:
+                bmax = max(
+                    int(v) for v in os.environ.get("GLM53_PREFILL_BUCKETS", "256,512,2048").split(",") if v.strip()
+                )
+                self.pf_scratch = (int(nb), max(1, -(-bmax // blk)))
+                self.mtp_cache = self.mtp.attn.allocate_cache(nb + self.pf_scratch[1])
+            if self.mtp_sparse:
+                pass  # (the sparse MTP layer reads the main layers' page tables: no MTP tables of its own)
+            elif (
                 self.mtp_private and not G
             ):  # (the constant row: positions past the cache's blocks -> scratch, never read)
                 write_rows(mesh, self.pt_m, self.mtp_row(None).reshape(1, -1).repeat(32, 1), ttnn.int32)
@@ -861,6 +917,39 @@ class SpecMTP:
             for k, v in list(src.items()):
                 dst.setdefault(k, v)
 
+    def _sparse_state(self, blk: int) -> None:
+        """GLM53_SPEC_MTP_SPARSE: the MTP layer's per-chip latent pool (the main layers' local block count: the generator's
+        PHYSICAL blocks, owner chip g % C at local g // C -- every page table of the step is a main layer's) and its DSA
+        state (DsaIndexer.stack_state with the first main sparse_dsa layer's slots / seats / local page tokens: the TP
+        prefill's in-trace MTP fill writes it through the chunk's ChunkInputs, as a main layer's). pf_scratch keeps the
+        fill's (unused) scratch-page inputs valid."""
+        be, kv, mesh = self.be, self.kv, self.mesh
+        st0 = kv.extra["dsa"][min(kv.extra["dsa"])]
+        nb_local = int(self.shard[1])
+        page_tokens = int(kv.extra["bps_local"]) * int(blk)
+        self.mtp_cache = self.mtp.attn.allocate_cache(nb_local)
+        self.mtp_st = self.mtp.mla.mk.dsa.stack_state(mesh, int(st0["slots"]), page_tokens,
+                                                      pool_slots=int(st0.get("pool_slots", st0["slots"])))  # fmt: skip
+        assert int(self.mtp_st["tp"]) == int(st0["tp"]), (self.mtp_st["tp"], st0["tp"])
+        bmax = max(int(v) for v in os.environ.get("GLM53_PREFILL_BUCKETS", "256,512,2048").split(",") if v.strip())
+        self.pf_scratch = (0, max(1, -(-bmax // blk)))
+        print(f"SPEC_MTP_SPARSE: MTP latent pool {nb_local} local blocks, DSA store {int(st0['slots'])} slots x "
+              f"{page_tokens} local tokens (tp {int(self.mtp_st['tp'])})", flush=True)  # fmt: skip
+
+    def mtp_dsa_state(self) -> dict | None:
+        """GLM53_SPEC_MTP_SPARSE: the MTP layer's DSA state (pools / ring / tp / slots: the TP prefill's MTP indexer
+        writes it); None otherwise"""
+        return self.mtp_st
+
+    def _mtp_ring(self, phase: int, save: bool = False) -> None:
+        """GLM53_SPEC_MTP_SPARSE: spec_ctl.cpp SPEC_MODE 4 on the MTP layer's ring -- phase 1 after the catch-up (pool
+        (c + n + 1) / 4's rows -> the canonical rows 0..3, ACCEPT's rule; save: + a copy in rows 8..11), phase 2 after
+        the chained rows (rows 8..11 -> 0..3: a chained row past the pool rewrote them); n / c from the record"""
+        from models.autoports.zai_org_glm_5_3_flash.tt.mk_mla import dsa_slot_addrs
+
+        base = dsa_slot_addrs(dict(self.mtp_st, s0=0), 1)[1]
+        self.ctl("ring", [self.rec.buffer_address()], [self.rec], rings=[base], ring_phase=phase, ring_save=save)
+
     def _verify_runs(self) -> list:
         """the verify's layer runs: the backend's (same-kind runs; sparse_dsa alone), split after every DFlash2 tap
         layer when the drafter is "dflash2" (the tap = the completed residual after that layer, read from the run's
@@ -991,10 +1080,15 @@ class SpecMTP:
         return [dsa_slot_addrs(self.be._dsa_st(self.kv, i, 0), 1)[1] for i in sorted(self.kv.extra.get("dsa", {}))]
 
     def _draft(self):
-        """the MTP catch-up (K+1 rows) + K-1 chained rows + GATHER (design.md §1 rows 6-21)"""
+        """the MTP catch-up (K+1 rows) + K-1 chained rows + GATHER (design.md §1 rows 6-21); GLM53_SPEC_MTP_SPARSE: the
+        MTP ring's move (+ save) after the catch-up and its restore after the chain (spec_ctl.cpp SPEC_MODE 4)"""
         self._catchup()
+        if self.mtp_sparse:
+            self._mtp_ring(1, save=self.K >= 2)
         for i in range(self.K - 1):
             self._chain(i)
+        if self.mtp_sparse and self.K >= 2:
+            self._mtp_ring(2)
         self._gather()
 
     def _catchup(self):
@@ -1007,8 +1101,13 @@ class SpecMTP:
         # (MoE live rows: pos_v -- rows 0..K live, as the catch-up's; the verify-width mode reads mpos_cu itself;
         # GLM53_SPEC_MULTI: every group's K + 1 rows at mpos_cu; the MTP attention per group: MLA_ATT_GROUP_ROWS)
         live = self.mpos_cu if self.mtp_mode in ("verify", "multi") else "verify"
-        self._dsa(dict(mla=self.mtp.mla, moe=self.mtp.moe), self.R_m, self.mtp_cache, self.pt_m, self.mpos_cu, w, True,
-                  dbg=0, live=live)  # fmt: skip
+        if self.mtp_sparse:  # (the verify's rows / positions / page tables: a one-slot verify-mode launch on slot 0 or
+            # the group bases -- ix_dm1.cpp MLA_DSA_ONE_SLOT (+ GROUP_ROWS) -- on the MTP layer's own DSA state)
+            self._dsa(dict(mla=self.mtp.mla, moe=self.mtp.moe), self.R_m, self.mtp_cache, self.pt_v, self.mpos_cu, w,
+                      True, dbg=0, live=live, dsa_state=dict(self.mtp_st, s0=0))  # fmt: skip
+        else:
+            self._dsa(dict(mla=self.mtp.mla, moe=self.mtp.moe), self.R_m, self.mtp_cache, self.pt_m, self.mpos_cu, w,
+                      True, dbg=0, live=live)  # fmt: skip
         l1_debug("catch-up: after the MTP layer", self.mesh)
         hd["mtp_cu"]([self.R_m], None)
 
@@ -1027,8 +1126,14 @@ class SpecMTP:
         x0 = eh.norm_h_proj(src, mode=3, t=t, sel=sel, sel_rows=rows)
         eh.expand(x0, self.R_c[i], t=t)
         live = self.mpos_ch[i] if self.mtp_mode in ("verify", "multi") else "verify"
-        self._dsa(dict(mla=self.mtp.mla, moe=self.mtp.moe), self.R_c[i], self.mtp_cache, self.pt_mc, self.mpos_ch[i],
-                  t, False, dbg=i + 1, live=live)  # fmt: skip
+        if (
+            self.mtp_sparse
+        ):  # (single user: row 0 = slot 0 in plain mode, pt_v row 0 = its local row; rows 1.. inactive)
+            self._dsa(dict(mla=self.mtp.mla, moe=self.mtp.moe), self.R_c[i], self.mtp_cache, self.pt_v, self.mpos_ch[i],
+                      t, False, dbg=i + 1, live=live, dsa_state=dict(self.mtp_st, s0=0))  # fmt: skip
+        else:
+            self._dsa(dict(mla=self.mtp.mla, moe=self.mtp.moe), self.R_c[i], self.mtp_cache, self.pt_mc,
+                      self.mpos_ch[i], t, False, dbg=i + 1, live=live)  # fmt: skip
         l1_debug(f"chain {i}: after the MTP layer", self.mesh)
         hd["mtp_ch"][i]([self.R_c[i]], None)
 
@@ -1139,6 +1244,9 @@ class SpecMTP:
         must cover the positions (the generator's rows)."""
         assert self.drafter == "mtp" and self.mtp is not None, "MTP-cache prefill: the MTP drafter"
         assert not self.groups, "GLM53_SPEC_MULTI: the in-trace MTP fill (TPPrefill._mtp_write), not these launches"
+        assert (
+            not self.mtp_sparse
+        ), "GLM53_SPEC_MTP_SPARSE: the in-trace MTP fill (TPPrefill._mtp_fill), not these launches"
         assert TILE % self.mw_cu == 0, ("MTP-cache prefill: a launch width dividing the tap's 32-row tiles", self.mw_cu)
         toks = [int(v) for v in torch.as_tensor(tokens_next).reshape(-1)[: int(n)].tolist()]
         assert len(toks) == int(n), (len(toks), n)
@@ -1269,7 +1377,7 @@ class SpecMTP:
                 torch.cat([lt.reshape(1, -1).repeat(32, 1) for lt in local]).to(torch.int32).contiguous(),
                 dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=ttnn.ShardTensorToMesh(self.mesh, dim=0)),
                 self.pt_v)  # fmt: skip
-            if not self.mtp_private:  # (the private MTP cache's row is constant)
+            if not self.mtp_private and not self.mtp_sparse:  # (the private MTP cache's row is constant)
                 write_rows(self.mesh, self.pt_m, host, ttnn.int32)
         self._pt_rows = row.clone()
 
@@ -1293,7 +1401,7 @@ class SpecMTP:
                 torch.cat([torch.as_tensor(lt).reshape(G, -1)[by_row] for lt in local]).to(torch.int32).contiguous(),
                 dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=ttnn.ShardTensorToMesh(self.mesh, dim=0)),
                 self.pt_v)  # fmt: skip
-        if not self.mtp_private and self.drafter == "mtp":
+        if not self.mtp_private and not self.mtp_sparse and self.drafter == "mtp":
             if self.pt_m is not self.pt_v:
                 write_rows(self.mesh, self.pt_m, host, ttnn.int32)
             write_rows(self.mesh, self.pt_mc, key[[min(r, G - 1) for r in range(32)]], ttnn.int32)

@@ -1446,7 +1446,9 @@ class DsaIndexer:
     slot's pools (indexer_score_dsa, key_compression_ratio 4), keeps the top-512 visible pools per row (threshold = the
     rank-512 score: ties keep every pool at the threshold) + the open pool (tail), and gathers the selection [C, P]."""
 
-    def __init__(self, tpp: "TPPrefill", L: int):
+    def __init__(self, tpp: "TPPrefill", L: int, st: dict | None = None):
+        """st: the decode's DSA state to write (GLM53_SPEC_MTP_SPARSE: the MTP layer's, SpecMTP.mtp_dsa_state -- layer 45
+        is no backend seq layer); None = the backend's sparse_dsa layer L's (kv.extra["dsa"])"""
         mesh, src = tpp.mesh, tpp.source
         dev = lambda n: src.device(L, f"self_attn.indexer.{n}", mesh)  # noqa: E731
         row = lambda t: ttnn.reshape(t, (1, 1, 1, t.shape[-1]))  # noqa: E731
@@ -1481,7 +1483,8 @@ class DsaIndexer:
         self.taps = {} if os.environ.get("GLM53_PF_IX_TAP", "0") == "1" else None
         # GLM53_DSA_SHARD: the store is per chip (the slot's LOCAL pooled-key pages; the decode's stack_state)
         self.pages_per_slot = (tpp.max_seq_local if tpp.shard is not None else tpp.max_seq) // (KPOOL * POOL_PAGE)
-        st = next((s for i, s in tpp.kv.extra.get("dsa", {}).items() if tpp.b.seq[i]["L"] == L), None)
+        if st is None:
+            st = next((s for i, s in tpp.kv.extra.get("dsa", {}).items() if tpp.b.seq[i]["L"] == L), None)
         if st is None and tpp.shard is not None:
             raise ValueError(
                 "GLM53_DSA_SHARD: the TP prefill writes the decode's LOCAL pooled-key store (GLM53_STACK_DSA=1)"
@@ -1807,6 +1810,7 @@ class TPPrefill:
         self.mtp_tap_on = self.mtp_mode == "launch"
         self.mtp_req = None  # "trace": dict(slot, ids, rows) of the request whose chunks fill the MTP cache
         self._mtp_taps, self._mtp_norm, self._mtp_in = {}, None, {}
+        self._mtp_ix = None  # GLM53_SPEC_MTP_SPARSE: the MTP layer's prefill indexer (DsaIndexer(45, its DSA state))
         # GLM53_DSA_SHARD (StackBackend.dsa_shard_owners: (C chips, local blocks per chip, blocks per 128-token unit);
         # tt/dsa_shard.py ShardMap): the latent cache and the pooled-key store are PER CHIP (unit u of a slot on chip
         # u % C at local block / page u // C); the prefill writes each unit to its owner only (ChunkInputs.lat_idx /
@@ -2738,7 +2742,7 @@ class TPPrefill:
         self._fresh_now = False
         self._pad_now = None
         if self.mtp_mode == "trace":  # Stage 17: every row's MTP latent -> the MTP cache (head or not)
-            self._mtp_fill(x, c, sp)
+            self._mtp_fill(x, c, sp, ci)
         elif self.mtp_mode == "launch":  # Stage 17 M0: every row's final-norm hidden -> the bucket's tap (head or not)
             self._mtp_tap_write(x, c, sp)
         row = self.last_row(x, ci, sp) if head else None  # head=False: a non-final chunk (no last row, no head)
@@ -3339,14 +3343,27 @@ class TPPrefill:
         put(pages.reshape(1, -1).to(torch.int32), ttnn.int32, ins["pt"], self.repl)
         ins["armed"] = armed
 
-    def _mtp_fill(self, x, c: int, sp: bool) -> None:
+    def _mtp_fill(self, x, c: int, sp: bool, ci: "ChunkInputs" = None) -> None:
         """Stage 17: the chunk's MTP latents into the MTP cache, in the trace (this chip's rows; the gathered latents
         paged on every chip -- the MTP cache is replicated): h = _mtp_h(x); x0 = eh_proj(enorm(E[tok]) | hnorm(h)) (MkEh's
         programs A / B); hn = RMSNorm(x0) * input_layernorm (the MTP block's identity mHC pre: h = x0); latent =
         RMSNorm(kv_a(hn)) * kv_a_layernorm (MlaPrefill's: q_a | kv_a's columns [q_lora, q_lora + kv_lora)) -> bf16 ->
         paged_fill_cache(MTP cache, the chunk's MTP pages). The cache rows depend on the block's input only (no
-        attention, no MoE): one pass per chunk instead of c / 4 MTP-layer launches."""
+        attention, no MoE): one pass per chunk instead of c / 4 MTP-layer launches.
+        GLM53_SPEC_MTP_SPARSE (SpecMTP.mtp_dsa_state, plan M5): the MTP layer is a sequence-sharded sparse_dsa layer --
+        the latent rows go to their OWNER chips' MTP pool (ci.lat_idx, as MlaPrefill's on the sharded cache) and the MTP
+        indexer's pooled keys + ring into the MTP DSA state (DsaIndexer(45, st).keys over every row of hn: ci.pool_idx /
+        ring rows, as a main layer's). The rows are the chunk's own positions in the chunk's slot (armed or not: an
+        unarmed chunk's MTP rows carry zero tokens, never read by a speculating slot of another request)."""
         w = self.b.spec.pf_weights()
+        mst = getattr(self.b.spec, "mtp_dsa_state", lambda: None)()
+        if mst is not None and self._mtp_ix is None:  # (the first, eager forward: before any capture)
+            assert (
+                self.dsa and self.shard is not None and ci is not None
+            ), "GLM53_SPEC_MTP_SPARSE: the TP prefill's DSA writer on the sharded pool (GLM53_PF_DSA=1, GLM53_DSA_SHARD=1)"
+            from models.autoports.zai_org_glm_5_3_flash.tt.spec_mtp import MTP_L
+
+            self._mtp_ix = DsaIndexer(self, MTP_L, st=mst)
         ins = self.mtp_inputs(c)
         ckc, eps = _ckc_fp32(self.mesh), self.cfg.rms_norm_eps
         h = self._mtp_h(x)
@@ -3364,6 +3381,11 @@ class TPPrefill:
         ttnn.deallocate(hcat)
         xin = ttnn.rms_norm(x0, weight=w["in_norm"], epsilon=eps, compute_kernel_config=ckc)
         ttnn.deallocate(x0)
+        if mst is not None:  # the MTP indexer's pooled keys + ring (every row of hn on every chip: DsaIndexer.keys)
+            xg = self.gather(xin, sp)
+            self._mtp_ix.keys(xg, ci)
+            if xg is not xin:
+                ttnn.deallocate(xg)
         qk = pf_mm(w["qa_kva"], xin)
         ttnn.deallocate(xin)
         cl = ttnn.slice(qk, (0, 0, 0, w["q_lora"]), (1, 1, r, w["q_lora"] + w["kv_lora"]))
@@ -3376,7 +3398,10 @@ class TPPrefill:
             ttnn.deallocate(lat)
             lat = lat_
         g = self.gather(lat, sp)  # [1, 1, c, 512] on every chip
-        ttnn.experimental.paged_fill_cache(cache, g, ins["pt"], batch_idx=0)
+        if mst is not None:  # each tile row to its page's OWNER chip's MTP pool only (MlaPrefill's sharded write)
+            tiles_to(g, ci.lat_idx, cache)
+        else:
+            ttnn.experimental.paged_fill_cache(cache, g, ins["pt"], batch_idx=0)
         if g is not lat:
             ttnn.deallocate(lat)
         ttnn.deallocate(g)
