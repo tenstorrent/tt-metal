@@ -716,7 +716,7 @@ class Flux2Pipeline:
             decoded_output = fast_device_to_host(
                 tt_decoded_output,
                 self._mesh_device,
-                [None, None],
+                self._vae_decoder.output_concat_dims(),
                 ccl_manager=self._vae_ccl_manager,
                 pre_transfer_fn=float_to_uint8,
             )

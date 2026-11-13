@@ -81,23 +81,16 @@ def _all_gather_hw(ctx: VaeContext, x: ttnn.Tensor) -> ttnn.Tensor:
     return x
 
 
-def _partition_hw(ctx: VaeContext, x: ttnn.Tensor) -> ttnn.Tensor:
-    """Partition full spatial back to sharded: [N, H, W, C] → [N, H/h, W/w, C].
-
-    Restores the input layout (mesh_partition requires ROW_MAJOR internally).
-    No-op when both factors are 1.
-    """
+def _all_gather_tokens(ctx: VaeContext, x: ttnn.Tensor) -> ttnn.Tensor:
+    """All-gather a token sequence [N, 1, T, C] over the H and W axes: [N, 1, T * h * w, C], in mesh
+    order rather than image order. No-op when both factors are 1."""
     if ctx.h_factor <= 1 and ctx.w_factor <= 1:
         return x
-    original_layout = x.layout
-    if x.layout != ttnn.ROW_MAJOR_LAYOUT:
-        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+    assert ctx.ccl_manager is not None
     if ctx.h_factor > 1:
-        x = ttnn.mesh_partition(x, dim=1, cluster_axis=ctx.h_mesh_axis, memory_config=x.memory_config())
+        x = ctx.ccl_manager.all_gather(x, dim=2, mesh_axis=ctx.h_mesh_axis, use_hyperparams=True)
     if ctx.w_factor > 1:
-        x = ttnn.mesh_partition(x, dim=2, cluster_axis=ctx.w_mesh_axis, memory_config=x.memory_config())
-    if original_layout != ttnn.ROW_MAJOR_LAYOUT:
-        x = ttnn.to_layout(x, original_layout)
+        x = ctx.ccl_manager.all_gather(x, dim=2, mesh_axis=ctx.w_mesh_axis, use_hyperparams=True)
     return x
 
 
@@ -568,14 +561,11 @@ class VaeAttention(Module):
         return qkv.squeeze(-1) if is_1d else qkv
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        identity = x  # [N, H/h, W/w, C/tp] when SP+TP active; identity captured pre-AG
+        identity = x  # [N, H/h, W/w, C/tp] when SP+TP active
 
         x = self.norm.forward(x)
 
-        # SDPA over the full spatial extent → AG H+W once (no-op when SP inactive).
-        x = _all_gather_hw(self._ctx, x)
-
-        n, h, w, _ = x.shape  # h, w are full-spatial after AG
+        n, h, w, _ = x.shape  # the local spatial extent when SP is active
 
         # convert to 1d sequence and insert head dimension; there is only one head
         x = x.reshape([n, 1, h * w, -1])
@@ -598,6 +588,12 @@ class VaeAttention(Module):
 
         del x
 
+        # Each device attends from its own tokens to all of them, so only K and V are gathered, as
+        # token rows. The attention does not depend on the order of the keys, and gathering rows keeps
+        # the gather's program independent of the image size.
+        k = _all_gather_tokens(self._ctx, k)
+        v = _all_gather_tokens(self._ctx, v)
+
         x = ttnn.transformer.scaled_dot_product_attention(
             q,
             k,
@@ -611,9 +607,6 @@ class VaeAttention(Module):
 
         # convert back to 2d
         x = x.reshape([n, h, w, -1])
-
-        # Re-partition H+W back to local so the residual add aligns with identity (no-op when SP inactive).
-        x = _partition_hw(self._ctx, x)
 
         return x + identity
 
