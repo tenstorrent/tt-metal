@@ -912,7 +912,62 @@ jobs:
     needs: [find-pr, analyze-codeowners, get-reviews, parse-comment]
     if: always() && needs.find-pr.outputs.pr-exists == 'true' && needs.parse-comment.outputs.is-bypass-command != 'true'
     runs-on: ubuntu-latest
+    # id-token: write lets this job log in to OSPO Vault (GitHub OIDC) for a short-lived
+    # org-read token. Job-level permissions replace the workflow's, so the rest are restated.
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      id-token: write
+    env:
+      VAULT_URL: https://vault-ospo.eng-svc.aws.tenstorrent.com
     steps:
+      # Expanding CODEOWNERS teams into people needs org Members: read, which github.token
+      # can't have. OSPO Vault mints a ~1h GitHub App token for it (no stored PAT); see
+      # "Using OSPO Vault from GitHub Actions" on Confluence. Vault refuses every
+      # pull_request_target login, so checkbox runs skip these steps. Any failure here
+      # leaves CODEOWNERS_TEAMS_TOKEN unset and team lookups fall back to github.token,
+      # which gives the teams no members, as before.
+      - name: Join tailnet for OSPO Vault
+        id: tailnet
+        if: github.event_name != 'pull_request_target'
+        continue-on-error: true
+        timeout-minutes: 5
+        uses: tailscale/github-action@064b10558093f38325e838ddea35486bdc6b1d5c # v4.4.0
+        with:
+          oauth-client-id: ${{ vars.TS_VAULT_OSPO_CLIENT_ID }}
+          audience: ${{ vars.TS_VAULT_OSPO_AUDIENCE }}
+          tags: tag:tt-gha-vault-ospo
+          args: --accept-routes
+
+      - name: Wait for OSPO Vault listener
+        id: vault-ready
+        if: steps.tailnet.outcome == 'success'
+        continue-on-error: true
+        run: |
+          HEALTH_URL="${VAULT_URL}/v1/sys/health?standbyok=true&uninitcode=204&sealedcode=204"
+          for attempt in 1 2 3 4 5 6; do
+            if curl -fsS --max-time 5 "$HEALTH_URL" >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::warning::OSPO Vault ${VAULT_URL} did not become reachable over Tailscale"
+          exit 1
+
+      - name: Fetch org-read token from OSPO Vault
+        if: steps.vault-ready.outcome == 'success'
+        continue-on-error: true
+        uses: hashicorp/vault-action@892a26828f195e65540a40b4768ae4571f51ebfc # v4.0.0
+        with:
+          url: ${{ env.VAULT_URL }}
+          method: jwt
+          path: jwt-github
+          role: tt-metal-codeowners
+          jwtGithubAudience: ${{ env.VAULT_URL }}
+          secrets: |
+            github/token/tt-metal-codeowners-members-read token | CODEOWNERS_TEAMS_TOKEN
+
       - name: Checkout scripts
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
@@ -959,15 +1014,17 @@ jobs:
           fi
 
           TEAM_MEMBERS=""
+          # Org-read token from OSPO Vault when the login above worked; github.token otherwise.
+          TEAMS_TOKEN="${CODEOWNERS_TEAMS_TOKEN:-${{ github.token }}}"
           if [ -n "$TEAMS" ]; then
             IFS='§' read -ra TEAM_ARRAY <<< "$TEAMS"
             for team_entry in "${TEAM_ARRAY[@]}"; do
               team=$(echo "$team_entry" | cut -d':' -f1)
               clean_team=$(echo "$team" | sed 's/^@[^\/]*\///')
               MEMBERS_API="https://api.github.com/orgs/tenstorrent/teams/$clean_team/members"
-              MEMBERS_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${{ github.token }}" -H "Accept: application/vnd.github.v3+json" "$MEMBERS_API")
+              MEMBERS_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $TEAMS_TOKEN" -H "Accept: application/vnd.github.v3+json" "$MEMBERS_API")
               if [ "$MEMBERS_HTTP_CODE" = "200" ]; then
-                MEMBERS_DATA=$(curl -s -H "Authorization: Bearer ${{ github.token }}" -H "Accept: application/vnd.github.v3+json" "$MEMBERS_API" 2>/dev/null)
+                MEMBERS_DATA=$(curl -s -H "Authorization: Bearer $TEAMS_TOKEN" -H "Accept: application/vnd.github.v3+json" "$MEMBERS_API" 2>/dev/null)
                 TEAM_MEMBER_LOGINS=$(echo "$MEMBERS_DATA" | jq -r '.[].login' 2>/dev/null | tr '\n' ',' | sed 's/,$//')
                 [ -n "$TEAM_MEMBER_LOGINS" ] && TEAM_MEMBERS="$TEAM_MEMBERS$team:$TEAM_MEMBER_LOGINS|" || TEAM_MEMBERS="$TEAM_MEMBERS$team:no-members|"
               elif [ "$MEMBERS_HTTP_CODE" = "404" ]; then
@@ -1894,11 +1951,12 @@ jobs:
           # Get members of thirdparty-moreh team to exclude from selection (they're not in Slack)
           MOREH_TEAM_MEMBERS=""
           MOREH_MEMBERS_API="https://api.github.com/orgs/tenstorrent/teams/thirdparty-moreh/members"
-          MOREH_MEMBERS_DATA=$(curl -s -H "Authorization: Bearer ${{ github.token }}" \
+          TEAMS_TOKEN="${CODEOWNERS_TEAMS_TOKEN:-${{ github.token }}}"
+          MOREH_MEMBERS_DATA=$(curl -s -H "Authorization: Bearer $TEAMS_TOKEN" \
                                    -H "Accept: application/vnd.github.v3+json" \
                                    "$MOREH_MEMBERS_API" 2>/dev/null)
 
-          MOREH_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${{ github.token }}" \
+          MOREH_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $TEAMS_TOKEN" \
                                    -H "Accept: application/vnd.github.v3+json" \
                                    "$MOREH_MEMBERS_API")
 
