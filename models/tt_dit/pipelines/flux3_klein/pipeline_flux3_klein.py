@@ -32,7 +32,8 @@ from ...parallel.config import DiTGParallelConfigNoCFG, EncoderParallelConfig, P
 from ...parallel.manager import CCLManager
 from ...utils import cache, tensor
 from ...utils.dbcache import DBCacheConfig
-from .dbcache_flux3_klein import Flux3KleinDBCache
+from ...utils.dbcache_runner import DBCache
+from .dbcache_flux3_klein import Flux3KleinCachedSample, content_mask
 from .packing import DOWNSAMPLING_RATIO, MAX_TEXT_LENGTH, image_ids, latent_shape, pad_rows, reference_ids
 from .prompt_encoder import Flux3KleinPromptEncoder
 from .scheduler import GUIDANCE, STEPS, Flux3KleinScheduler
@@ -349,13 +350,20 @@ class Flux3KleinPipeline:
         mask[:, :rows] = 1.0
         mask = tensor.from_torch(mask, device=self._device, dtype=ttnn.float32, mesh_axes=image_axes)
         guidance_tt = self._scalar(torch.tensor([[guidance]])) if guidance is not None else None
-        dbcache = Flux3KleinDBCache(cache_config, self._device, num_branches=len(samples)) if cache_config else None
+        dbcache, diff_masks = None, []
+        if cache_config:
+            models = [
+                Flux3KleinCachedSample(
+                    transformer, plan=plan, text_embedded=embedded, image_cond_embedded=cond_embedded
+                )
+                for plan, embedded in samples
+            ]
+            dbcache = DBCache(models, cache_config, devices=[self._device] * len(models), name="flux3_klein")
+            diff_masks = [content_mask(plan.layout, self._device, self._sp_axis) for plan, _ in samples]
 
         scheduler = Flux3KleinScheduler(steps)
         for index in range(len(scheduler)):
             step = scheduler.step(index)
-            if dbcache is not None:
-                dbcache.context.mark_step_begin()
             t_embed, t_ref_embed = timestep_inputs(
                 step.embedding_t, step.embedding_t_next if transformer.flow_map else None
             )
@@ -363,20 +371,21 @@ class Flux3KleinPipeline:
             t_ref_embed = self._scalar(t_ref_embed) if t_ref_embed is not None else None
             dt = self._scalar(torch.full((1, 1), step.dt))
 
-            image_tokens = ttnn.typecast(x, ttnn.bfloat16)
-            velocities = [
-                transformer(
-                    image_tokens=image_tokens,
-                    text_embedded=embedded,
-                    image_cond_embedded=cond_embedded,
-                    t_embed=t_embed,
-                    t_ref_embed=t_ref_embed,
-                    plan=plan,
-                    cache=dbcache.runner(branch) if dbcache is not None else None,
-                )
-                for branch, (plan, embedded) in enumerate(samples)
-            ]
-            ttnn.deallocate(image_tokens)
+            step_inputs = {
+                "image_tokens": ttnn.typecast(x, ttnn.bfloat16),
+                "t_embed": t_embed,
+                "t_ref_embed": t_ref_embed,
+            }
+            if dbcache is not None:
+                for branch, diff_mask in enumerate(diff_masks):
+                    dbcache.start(branch, traced=False, diff_mask=diff_mask, **step_inputs)
+                velocities = dbcache.finish()
+            else:
+                velocities = [
+                    transformer(plan=plan, text_embedded=embedded, image_cond_embedded=cond_embedded, **step_inputs)
+                    for plan, embedded in samples
+                ]
+            ttnn.deallocate(step_inputs["image_tokens"])
             if guidance is not None:
                 velocity = combine_cfg(*velocities, guidance_tt)
                 for v in velocities:
@@ -390,14 +399,11 @@ class Flux3KleinPipeline:
             x = x_new
         ttnn.synchronize_device(self._device)
 
-        cached_steps = 0
-        if dbcache is not None:
-            cached_steps = dbcache.context.num_cached_steps(0)
-            dbcache.close()
+        cached_steps = len(dbcache.cached_steps) if dbcache is not None else 0
         for plan, embedded in samples:
             plan.deallocate()
             ttnn.deallocate(embedded)
-        for t in (cond_embedded, mask, guidance_tt):
+        for t in (cond_embedded, mask, guidance_tt, *diff_masks):
             if t is not None:
                 ttnn.deallocate(t)
         return x, cached_steps

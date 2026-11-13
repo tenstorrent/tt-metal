@@ -464,7 +464,16 @@ class Flux3KleinTransformer(Module):
     def embed_image_cond(self, tokens: ttnn.Tensor) -> ttnn.Tensor:
         return self.emb_in_image_cond(tokens, parallel_config=self._parallel_config)
 
-    def forward(
+    @property
+    def num_blocks(self) -> int:
+        return len(self.single_blocks)
+
+    def forward(self, **inputs) -> ttnn.Tensor:
+        h, carry = self.prologue(**inputs)
+        h, _ = self.run_blocks(h, carry, start=0, end=self.num_blocks)
+        return self.epilogue(h, carry)
+
+    def prologue(
         self,
         *,
         image_tokens: ttnn.Tensor,
@@ -473,8 +482,7 @@ class Flux3KleinTransformer(Module):
         t_embed: ttnn.Tensor,
         t_ref_embed: ttnn.Tensor | None,
         plan: Flux3KleinPlan,
-        cache=None,
-    ) -> ttnn.Tensor:
+    ) -> tuple[ttnn.Tensor, tuple]:
         layout = plan.layout
         table, (final_shift, final_scale_plus_one) = self.modulation(t_embed, t_ref_embed)
 
@@ -493,19 +501,20 @@ class Flux3KleinTransformer(Module):
             ttnn.deallocate(part)
 
         mod = tuple(gather_rows(table, idx) for idx in plan.single_mod)
+        return h, (plan.single_rope, mod, plan.single_logical_n, final_shift, final_scale_plus_one, plan.image_out)
 
-        def run_block(block: Flux3KleinTransformerBlock, h: ttnn.Tensor) -> ttnn.Tensor:
-            return block(h, rope=plan.single_rope, mod=mod, logical_length=plan.single_logical_n)
+    def run_blocks(self, h: ttnn.Tensor, carry: tuple, /, *, start: int, end: int) -> tuple[ttnn.Tensor, tuple]:
+        rope, mod, logical_n = carry[:3]
+        for block in self.single_blocks[start:end]:
+            h = block(h, rope=rope, mod=mod, logical_length=logical_n)
+        # a block's output is a ping-pong reduce-scatter buffer that later blocks overwrite
+        return (h if end == self.num_blocks else ttnn.clone(h)), carry
 
-        if cache is not None:
-            h = cache(self.single_blocks, h, run_block, layout=layout, sp_axis=self._sp_axis)
-        else:
-            for block in self.single_blocks:
-                h = run_block(block, h)
-
+    def epilogue(self, h: ttnn.Tensor, carry: tuple, /) -> ttnn.Tensor:
+        final_shift, final_scale_plus_one, image_out = carry[3:]
         y = ttnn.squeeze(
             self.norm_out(ttnn.unsqueeze(h, 0), dynamic_weight=final_scale_plus_one, dynamic_bias=final_shift), 0
         )
         y = self._ccl_manager.all_gather(y, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=False)
         y = self.proj_out(y)
-        return gather_rows_over_sp(y, plan.image_out, ccl_manager=self._ccl_manager, sp_axis=self._sp_axis)
+        return gather_rows_over_sp(y, image_out, ccl_manager=self._ccl_manager, sp_axis=self._sp_axis)
