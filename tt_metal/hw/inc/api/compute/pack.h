@@ -161,6 +161,11 @@ struct pack_block_count {
     constexpr operator std::uint32_t() const { return value; }
 };
 
+// The macro tests the count through this call: GCC folds __builtin_constant_p of a const local whose run-time
+// initializer has equal arms (also as a by-value argument), and that local is no template argument; read through a
+// reference, the count is evaluated under the language's constant rules.
+constexpr std::uint32_t pack_fe_n(const std::uint32_t& v) { return v; }
+
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, std::uint32_t N>
 ALWI void pack_block(std::uint32_t ifrom_dst, std::uint32_t icb, pack_block_count<N> ntiles) {
     if constexpr (N != 0) {
@@ -242,7 +247,10 @@ ALWI void pack_relu_config(const ReluConfig& config) { PACK((llk_pack_relu_confi
 #define PACK_BLOCK_CALL_1(...) pack_block(__VA_ARGS__)
 #define PACK_BLOCK_CALL_2(...) pack_block(__VA_ARGS__)
 #define PACK_BLOCK_CALL_3(d, cb, n) \
-    pack_block(d, cb, ::ckernel::pack_block_count<(__builtin_constant_p(n) ? (n) : 0)>(n))
+    pack_block(                     \
+        d,                          \
+        cb,                         \
+        ::ckernel::pack_block_count<(__builtin_constant_p(::ckernel::pack_fe_n(n)) ? ::ckernel::pack_fe_n(n) : 0)>(n))
 #define PACK_BLOCK_CALL_4(...) pack_block(__VA_ARGS__)
 #define PACK_BLOCK_CALL_5(...) pack_block(__VA_ARGS__)
 #define PACK_BLOCK_CALL_6(...) pack_block(__VA_ARGS__)
