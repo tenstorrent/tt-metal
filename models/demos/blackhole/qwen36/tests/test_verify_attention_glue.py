@@ -94,7 +94,9 @@ def test_verify_attention_matches_the_previous_op_sequence(
     # User u's T rows sit at p_u .. p_u + T - 1: across a block boundary for odd u, across a 32-row tile for even u.
     starts = [BLOCK * (31 + 2 * u) + (BLOCK - 2 if u % 2 else 29) for u in range(n_users)]
     row_pos = torch.tensor([p + j for p in starts for j in range(T)], dtype=torch.int32)
-    nb = (max(starts) + T) // BLOCK + 1
+    # Spare columns: the spec SDPA reads whole K chunks, which can run past a row's last written block; the serving
+    # tables span max_seq_len.
+    nb = (max(starts) + T) // BLOCK + 1 + 4
     blocks = torch.randperm(n_users * nb + 1)[: n_users * nb].reshape(n_users, nb).to(torch.int32)
 
     probe = TPAttention(mesh_device, args, tw, None)
