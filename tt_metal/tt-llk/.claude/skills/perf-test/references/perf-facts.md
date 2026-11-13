@@ -31,10 +31,12 @@ comparison.
   normal kind. A gate refuses to compare the two kinds ("CI" below). Normal
   builds also load the runtime-parameter struct, so they move more under
   layout changes.
-- **Asserts.** CI builds perf with `TT_LLK_DISABLE_ASSERTS=1`, which drops
-  `-DENABLE_LLK_ASSERT`. A local perf build without it measures code with
-  asserts. `run_test.sh --perf` and `perf_compare_commits.sh` set it by
-  default.
+- **Asserts.** Wormhole and Blackhole CI build perf with
+  `TT_LLK_DISABLE_ASSERTS=1`, which drops `-DENABLE_LLK_ASSERT`; Quasar perf
+  CI keeps asserts. `run_test.sh --perf` matches that default per
+  architecture. The setting is part of the ELF variant hash, so producer and
+  consumer cannot silently mix asserts-on and asserts-off binaries.
+  `perf_compare_commits.sh` defaults to asserts off on both sides.
 - **Perf counters.** `--enable-perf-counters` compiles counter code and is a
   separate report kind: compare its `mean(...)` columns only with other
   counter reports.
@@ -108,6 +110,8 @@ comparison.
   speed of light for the scheduled run, `TT_LLK_DISABLE_ASSERTS=1`. The
   consumer stops at the first failure (`-x`, `LLK_PERF_EXITFIRST`); local
   `run_test.sh --perf` does not.
+- Quasar perf CI (`build-quasar-perf.yml`) keeps `LLK_ASSERT`; local
+  `run_test.sh --perf --arch quasar` does too.
 - CI cuts the perf sweep into groups of equal estimated time. It prefers
   measured per-test durations from earlier runs (`LLK_SPLIT_DURATIONS`,
   summed by `perf/sum_split_durations.py`) and otherwise falls back to the

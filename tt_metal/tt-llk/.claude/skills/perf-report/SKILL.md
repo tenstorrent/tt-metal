@@ -49,11 +49,12 @@ sweep in the test file to make a run finish.
 
 ## 2. Run the sweep
 
-Use `run-test` with `--perf`. It matches the Wormhole/Blackhole CI build and
-selection (`-m perf`, `--mode perf` for SFPU sweep modules,
-`TT_LLK_DISABLE_ASSERTS=1`, `--dist loadgroup -n 15` on silicon), but unlike
-CI it does not stop at the first failure. It serializes device or simulator
-access, diagnoses hangs, and prints the report directory:
+Use `run-test` with `--perf`. It matches each architecture's CI assert mode
+(`TT_LLK_DISABLE_ASSERTS=1` for Wormhole/Blackhole, `=0` for Quasar) and
+selects `-m perf` (`--mode perf` for SFPU sweep modules), with
+`--dist loadgroup -n 15` on silicon. Unlike CI it does not stop at the first
+failure. It serializes device or simulator access, diagnoses hangs, and
+prints the report directory:
 
 ```bash
 bash .claude/scripts/run_test.sh run --worktree "$PWD" --arch <arch> \
@@ -74,8 +75,8 @@ Choose the build kind deliberately:
   counters work on Quasar too: four banks in every NEO and one l1_client
   event CSR in place of the L1 bank
   (`docs/performance_counters/hardware_reference.md`).
-- `--keep-asserts` measures code with `LLK_ASSERT`; this matches Quasar perf
-  CI and differs from Wormhole/Blackhole perf CI.
+- `--keep-asserts` measures code with `LLK_ASSERT`; this is already the
+  Quasar default and differs from Wormhole/Blackhole perf CI.
 - Do not use coverage builds. Never hand-edit a CSV; fix the test or rerun.
 
 `tests/run_llk_perf_wormhole.sh` and `tests/run_llk_perf_blackhole.sh` are
