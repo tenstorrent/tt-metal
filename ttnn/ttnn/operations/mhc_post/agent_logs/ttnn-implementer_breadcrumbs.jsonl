@@ -1,0 +1,2 @@
+{"event":"test_run","result":"pass","detail":"acceptance 11/11, golden 81 pass 0 fail, regression 11 pass","ts":"2026-11-13T23:48:24+00:00"}
+{"event":"perf","shape":"T160 C5120 fp32 plain","us":[149,128,116],"target_us":72,"bound":"compute+write contention; NoC1 write hotspot phys x12-15 y3-10","ts":"2026-11-13T23:48:24+00:00"}
