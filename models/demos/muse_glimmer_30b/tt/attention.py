@@ -11,8 +11,8 @@ import functools
 import math
 
 import torch
-
 import ttnn
+
 from models.demos.gemma4.tt.attention.operations import PREFILL_SDPA_MAX_SEQ, _paged_fill_cache, apply_rope
 from models.demos.gemma4.tt.dram_sharded import TILE_SIZE, DramShardedLinear, can_dram_shard
 from models.demos.muse_glimmer_30b.tt.common import (
@@ -21,10 +21,12 @@ from models.demos.muse_glimmer_30b.tt.common import (
     is_decode,
     matmul_compute_config,
     norm_compute_config,
+    replicate_mapper,
     sdpa_compute_config,
     shard_mapper,
 )
 from models.demos.muse_glimmer_30b.tt.dflash.kv_rows import write_kv_rows
+from models.demos.muse_glimmer_30b.tt.prefix_cache import history_segments
 from models.demos.muse_glimmer_30b.tt.rms_norm import per_head_rms_norm
 from models.demos.muse_glimmer_30b.tt.weight_packing import pack_o, pack_qkvg
 
@@ -32,9 +34,13 @@ SLIDING_PREFILL_STRIDE = 4096
 GLOBAL_PREFILL_CHUNK = 16384  # query rows per chunked SDPA call past PREFILL_SDPA_MAX_SEQ
 
 
-def chunked_global_prefill_sdpa(q, k_cache, v_cache, page_table, user_id, scale, program_config, compute_kernel_config):
+def chunked_global_prefill_sdpa(
+    q, k_cache, v_cache, page_table, user_id, scale, program_config, compute_kernel_config, start=0, runtime_start=False
+):
     """Causal prefill SDPA against the paged KV cache in GLOBAL_PREFILL_CHUNK-row query blocks, for prompts longer than
-    PREFILL_SDPA_MAX_SEQ. K/V rows [0, S) must already be in the cache. q [1, Hq, S, D]."""
+    PREFILL_SDPA_MAX_SEQ. K/V rows [0, start + S) must already be in the cache. q [1, Hq, S, D] holds the rows from
+    position `start`. runtime_start passes each chunk's start as a device tensor (read at run time) so a new resume
+    position compiles no new program; `start` must then be a multiple of the program config's q and k chunk sizes."""
     S, nh, hd = q.shape[2], q.shape[1], q.shape[3]
     user_pt = page_table
     if page_table.shape[0] > 1:
@@ -43,18 +49,32 @@ def chunked_global_prefill_sdpa(q, k_cache, v_cache, page_table, user_id, scale,
     for s in range(0, S, GLOBAL_PREFILL_CHUNK):
         e = min(S, s + GLOBAL_PREFILL_CHUNK)
         qc = ttnn.slice(q, [0, 0, s, 0], [1, nh, e, hd])
+        if runtime_start:
+            start_tt = ttnn.from_torch(
+                torch.tensor([start + s], dtype=torch.int32),
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=q.device(),
+                mesh_mapper=replicate_mapper(q.device()),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            start_kw = {"chunk_start_idx_tensor": start_tt}
+        else:
+            start_kw = {"chunk_start_idx": start + s}
         outs.append(
             ttnn.transformer.chunked_scaled_dot_product_attention(
                 qc,
                 k_cache,
                 v_cache,
                 user_pt,
-                chunk_start_idx=s,
                 scale=scale,
                 program_config=program_config,
                 compute_kernel_config=compute_kernel_config,
+                **start_kw,
             )
         )
+        if runtime_start:
+            start_tt.deallocate(True)
         qc.deallocate(True)
     if user_pt is not page_table:
         user_pt.deallocate(True)
@@ -371,7 +391,120 @@ class MuseGlimmerAttention:
             out.deallocate(True)
         return reduced
 
-    def forward_prefill(self, x, rope, kv_cache, page_table, user_id: int, fill_len=None):
+    def _fill(self, k, v, k_cache, v_cache, page_table, user_id: int, fill_len):
+        """Write the prompt rows of K/V into the layer's cache (a sliding layer's ring wraps through fill_kwargs)."""
+        if page_table is not None and self.fill_kwargs and fill_len is not None and fill_len < k.shape[2]:
+            # A ring holds the window plus 256 pad rows: rows padded past fill_len would wrap over the last real rows.
+            kf = ttnn.slice(k, [0, 0, 0, 0], [k.shape[0], k.shape[1], fill_len, k.shape[3]])
+            vf = ttnn.slice(v, [0, 0, 0, 0], [v.shape[0], v.shape[1], fill_len, v.shape[3]])
+            _paged_fill_cache(k_cache, kf, page_table, batch_idx=user_id, **self.fill_kwargs)
+            _paged_fill_cache(v_cache, vf, page_table, batch_idx=user_id, **self.fill_kwargs)
+            ttnn.deallocate(kf)
+            ttnn.deallocate(vf)
+        elif page_table is not None:
+            _paged_fill_cache(k_cache, k, page_table, batch_idx=user_id, **self.fill_kwargs)
+            _paged_fill_cache(v_cache, v, page_table, batch_idx=user_id, **self.fill_kwargs)
+        else:
+            kf = k if k.dtype == k_cache.dtype else ttnn.typecast(k, k_cache.dtype)
+            vf = v if v.dtype == v_cache.dtype else ttnn.typecast(v, v_cache.dtype)
+            ttnn.fill_cache(k_cache, kf, batch_idx=user_id)
+            ttnn.fill_cache(v_cache, vf, batch_idx=user_id)
+
+    def _resume_sdpa_config(self):
+        """Chunked prefill SDPA of a resumed prefill: chunk_start_idx must be a multiple of q and k chunk (128 / 256),
+        and resume positions are multiples of 256."""
+        grid = self.mesh_device.compute_with_storage_grid_size()
+        return ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(grid.x, grid.y),
+            q_chunk_size=128,
+            k_chunk_size=256,
+            exp_approx_mode=False,
+        )
+
+    def _ring_history(self, k_cache, v_cache, k, resume):
+        """Rows [start - window, start) of this sliding layer's K and V, read from the slot's ring (bf16, in position
+        order) as [1, 1, rows, head_dim]. Must run before the resumed rows are filled: a chunk longer than 256 rows
+        overwrites ring rows that its early queries still attend to."""
+        a = self.args
+        assert a.kv_heads_local == 1, "ring history gather reshapes [blocks, 1, 64, D] to [1, 1, rows, D]"
+        segs = history_segments(resume.start, a.sliding_window, a.block_size, a.sliding_kv_blocks, resume.ring)
+        out = []
+        for cache in (k_cache, v_cache):
+            parts = [
+                ttnn.slice(cache, [b, 0, 0, 0], [b + n, cache.shape[1], cache.shape[2], cache.shape[3]])
+                for b, n in segs
+            ]
+            blocks = parts[0] if len(parts) == 1 else ttnn.concat(parts, dim=0)
+            if len(parts) > 1:
+                for p_ in parts:
+                    p_.deallocate(True)
+            rows = sum(n for _, n in segs) * a.block_size
+            flat = ttnn.reshape(blocks, (1, 1, rows, a.head_dim))
+            hist = flat if flat.dtype == k.dtype else ttnn.typecast(flat, k.dtype)
+            out.append(hist)
+        return out[0], out[1]
+
+    def _resume_attention(self, q, k, v, k_cache, v_cache, page_table, user_id: int, fill_len, resume):
+        """Attention of a prefill that resumes at position resume.start > 0. q/k/v hold the rows from `start` only.
+
+        Full layer: fill the rows through resume.full_fill_pt (a table shifted to `start`, cached blocks redirected to
+        the null block), then chunked SDPA over the whole paged cache from chunk_start `start`; page_table is the
+        request's real table. Sliding layer: page_table is this slot's ring table shifted to `start`; the window before
+        `start` comes from the ring (restored from a snapshot), the new rows attend over concat(history, new) with q
+        padded by `history` zero rows in front so q and k keep the same length, and those rows are dropped."""
+        a = self.args
+        if not self.is_sliding:
+            self._fill(k, v, k_cache, v_cache, resume.full_fill_pt, 0, None)
+            return chunked_global_prefill_sdpa(
+                q,
+                k_cache,
+                v_cache,
+                page_table,
+                user_id,
+                a.sdpa_scale,
+                self._resume_sdpa_config(),
+                self.sdpa_cfg,
+                start=resume.start,
+                runtime_start=True,
+            )
+        hist_k, hist_v = self._ring_history(k_cache, v_cache, k, resume)
+        self._fill(k, v, k_cache, v_cache, page_table, user_id, fill_len)
+        hist = hist_k.shape[2]
+        zeros = ttnn.zeros(
+            [1, q.shape[1], hist, q.shape[3]],
+            dtype=q.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        qe = ttnn.concat([zeros, q], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ke = ttnn.concat([hist_k, k], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ve = ttnn.concat([hist_v, v], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        for t in (zeros, hist_k, hist_v):
+            t.deallocate(True)
+        seq = qe.shape[2]
+        if seq > 2 * SLIDING_PREFILL_STRIDE or seq > PREFILL_SDPA_MAX_SEQ:
+            out = sliding_prefill_sdpa(
+                qe, ke, ve, self.sliding_window, a.sdpa_scale, self._prefill_sdpa_config, self.sdpa_cfg
+            )
+        else:
+            out = ttnn.transformer.scaled_dot_product_attention(
+                qe,
+                ke,
+                ve,
+                is_causal=True,
+                scale=a.sdpa_scale,
+                sliding_window_size=self.sliding_window,
+                program_config=self._prefill_sdpa_config(seq),
+                compute_kernel_config=self.sdpa_cfg,
+            )
+        for t in (qe, ke, ve):
+            t.deallocate(True)
+        sdpa = ttnn.slice(out, [0, 0, hist, 0], [1, out.shape[1], seq, out.shape[3]])
+        out.deallocate(True)
+        return sdpa
+
+    def forward_prefill(self, x, rope, kv_cache, page_table, user_id: int, fill_len=None, resume=None):
         a = self.args
         k_cache, v_cache = kv_cache
 
@@ -395,22 +528,15 @@ class MuseGlimmerAttention:
             q = apply_rope(q, cos, sin)
             k = apply_rope(k, cos, sin)
 
-        if page_table is not None and self.fill_kwargs and fill_len is not None and fill_len < k.shape[2]:
-            # A ring holds the window plus 256 pad rows: rows padded past fill_len would wrap over the last real rows.
-            kf = ttnn.slice(k, [0, 0, 0, 0], [k.shape[0], k.shape[1], fill_len, k.shape[3]])
-            vf = ttnn.slice(v, [0, 0, 0, 0], [v.shape[0], v.shape[1], fill_len, v.shape[3]])
-            _paged_fill_cache(k_cache, kf, page_table, batch_idx=user_id, **self.fill_kwargs)
-            _paged_fill_cache(v_cache, vf, page_table, batch_idx=user_id, **self.fill_kwargs)
-            ttnn.deallocate(kf)
-            ttnn.deallocate(vf)
-        elif page_table is not None:
-            _paged_fill_cache(k_cache, k, page_table, batch_idx=user_id, **self.fill_kwargs)
-            _paged_fill_cache(v_cache, v, page_table, batch_idx=user_id, **self.fill_kwargs)
-        else:
-            kf = k if k.dtype == k_cache.dtype else ttnn.typecast(k, k_cache.dtype)
-            vf = v if v.dtype == v_cache.dtype else ttnn.typecast(v, v_cache.dtype)
-            ttnn.fill_cache(k_cache, kf, batch_idx=user_id)
-            ttnn.fill_cache(v_cache, vf, batch_idx=user_id)
+        if resume is not None:
+            sdpa = self._resume_attention(q, k, v, k_cache, v_cache, page_table, user_id, fill_len, resume)
+            for t in (q, k, v):
+                t.deallocate(True)
+            attn = ttnn.experimental.nlp_concat_heads(sdpa, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            sdpa.deallocate(True)
+            return self._gate_oproj(attn, gate)
+
+        self._fill(k, v, k_cache, v_cache, page_table, user_id, fill_len)
 
         seq_len = x.shape[-2]
         if self.is_sliding and (seq_len > 2 * SLIDING_PREFILL_STRIDE or seq_len > PREFILL_SDPA_MAX_SEQ):

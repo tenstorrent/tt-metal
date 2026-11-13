@@ -5,6 +5,7 @@
 """Muse-Glimmer sandwich-norm decoder layer (TP, replicated residual stream)."""
 
 import ttnn
+
 from models.demos.muse_glimmer_30b.tt.attention import MuseGlimmerAttention
 from models.demos.muse_glimmer_30b.tt.common import decode_memcfg, is_decode
 from models.demos.muse_glimmer_30b.tt.mlp import MuseGlimmerMLP
@@ -71,8 +72,10 @@ class MuseGlimmerDecoderLayer:
             ttnn.deallocate(xr)
         return out
 
-    def forward_prefill(self, x, rope, kv_cache, page_table, user_id, fill_len=None):
-        return self._block(x, lambda h: self.attn.forward_prefill(h, rope, kv_cache, page_table, user_id, fill_len))
+    def forward_prefill(self, x, rope, kv_cache, page_table, user_id, fill_len=None, resume=None):
+        return self._block(
+            x, lambda h: self.attn.forward_prefill(h, rope, kv_cache, page_table, user_id, fill_len, resume)
+        )
 
     def forward_decode(
         self,

@@ -12,12 +12,14 @@ import os
 from contextlib import contextmanager
 
 import torch
+import ttnn
 from loguru import logger
 
-import ttnn
 from models.common.sampling.generator import SamplingParams, format_sampling_params
+from models.demos.muse_glimmer_30b.tt import prefix_cache
 from models.demos.muse_glimmer_30b.tt.model import DECODE_B_PAD, MuseGlimmerModel
 from models.demos.muse_glimmer_30b.tt.model_config import MuseGlimmerModelArgs
+from models.demos.muse_glimmer_30b.tt.prefix_cache import PrefillPlan, PrefillResume
 
 # Per-device KV budget when MUSE_VLLM_KV_TOKENS is unset. vLLM's pool backs only the 13 full-attention layers (the 39
 # sliding layers keep fixed per-slot rings, see allocate_kv_cache): 13 x 1 KV head x 128 x 2 (K,V) per token per device,
@@ -53,6 +55,12 @@ def prefill_buckets(max_len: int, step_div: int | None = None) -> list[int]:
     return [b for b in buckets if b <= max_len] or [max_len]
 
 
+def _ring_fill_len(n: int) -> int:
+    """Rows a sliding ring may take from a prompt of n rows: 128 or n rounded up to the 256-row SDPA chunk. A ring holds
+    the window plus 256 pad rows, so a coarser bucket would wrap padded rows over the last real ones."""
+    return 128 if n <= 128 else -(-n // 256) * 256
+
+
 def _checkpoint_dir(hf_config) -> str:
     if os.environ.get("HF_MODEL"):
         return os.environ["HF_MODEL"]
@@ -74,7 +82,9 @@ class MuseGlimmerForConditionalGeneration:
     # slot remap; it is reinitialized on a commanded sampling-state reset.
     decode_input_update_contract = 1 if CONTRACT_V1 else 0
     model_capabilities = {
-        "supports_prefix_caching": False,
+        # MUSE_PREFIX_CACHE=1 (read at import) turns on the ring-snapshot prefix cache (prefix_cache.py); off by
+        # default, so released behaviour is unchanged.
+        "supports_prefix_caching": prefix_cache.enabled(),
         "supports_chunked_prefill": False,
         "supports_sample_on_device": True,
         "supports_async_decode": CONTRACT_V1,
@@ -103,6 +113,8 @@ class MuseGlimmerForConditionalGeneration:
         # (slot_remap), so this is a permutation of the DECODE_B_PAD rings, not the identity.
         self._row_ring = list(range(DECODE_B_PAD))
         self._ring_rows = None
+        # Prefix cache: retained rings DECODE_B_PAD + 1 ... hold ring snapshots keyed by prompt-prefix hash.
+        self._prefix = None
 
     # vLLM's registry inspects these; execution only goes through prefill_forward / decode_forward.
     def embed_input_ids(self, input_ids):
@@ -154,7 +166,10 @@ class MuseGlimmerForConditionalGeneration:
         self.n_blocks = self.args.max_num_blocks_per_user
         # Sliding layers keep a ring of sliding_kv_blocks per slot instead of vLLM's blocks: DECODE_B_PAD slots plus a
         # spare for empty decode rows and warmup. The KV-update ops need at least one page-table row of blocks.
-        ring_blocks = max((DECODE_B_PAD + 1) * self.args.sliding_kv_blocks, self.n_blocks)
+        retained = prefix_cache.retained_rings()
+        ring_blocks = max((DECODE_B_PAD + 1 + retained) * self.args.sliding_kv_blocks, self.n_blocks)
+        if prefix_cache.enabled():
+            self._prefix = prefix_cache.RingSnapshotRegistry(first=DECODE_B_PAD + 1, capacity=retained)
         cache = [
             tuple(
                 ttnn.zeros(
@@ -259,21 +274,107 @@ class MuseGlimmerForConditionalGeneration:
                 return b
         raise ValueError(f"Prompt of {length} tokens exceeds max_prefill_len {self.args.max_prefill_len}")
 
-    def _prefill_one(self, tokens: torch.Tensor, page_row: torch.Tensor, ring: int = RING_SPARE):
+    def _prefill_one(self, tokens: torch.Tensor, page_row: torch.Tensor, ring: int = RING_SPARE, plan=None):
+        if plan is not None and plan.start > 0:
+            return self._prefill_resume(tokens, page_row, ring, plan)
         pad_len = self._bucket(tokens.shape[0])
         # The last real row lies past the previous bucket, so within the last (pad_len - previous bucket) rows.
         i = self.buckets.index(pad_len)
         tail = pad_len - self.buckets[i - 1] if i else pad_len
-        # Padded rows past the request's blocks map to block 0, vLLM's never-allocated null block.
+        # Padded rows past the request's blocks map to block 0, vLLM's never-allocated null block. A plan with
+        # start == 0 but cached tokens (no snapshot to resume from) recomputes the prompt and rewrites the blocks
+        # vLLM cached with the same values (numerically equal up to bucket-dependent rounding).
         pt = self._page_table_tt(page_row, -(-pad_len // self.args.block_size))
         ring_row = self._ring_table([ring])
         ring_tt = self._page_table_tt(ring_row[0], ring_row.shape[1])
         logits = self.model.prefill_forward_logits_tt(
-            tokens, 0, pt, pad_len=pad_len, tail=tail, sliding_pt=(ring_tt, 0)
+            tokens, 0, pt, pad_len=pad_len, tail=tail, sliding_pt=(ring_tt, 0), fill_len=_ring_fill_len(tokens.shape[0])
         )
         ttnn.deallocate(pt)
         ttnn.deallocate(ring_tt)
         return logits
+
+    def _prefill_resume(self, tokens: torch.Tensor, page_row: torch.Tensor, ring: int, plan: PrefillPlan, restore=True):
+        """Prefill tokens[plan.start:] on top of the cached prefix. UNTESTED ON DEVICE (host bookkeeping is tested).
+
+        restore: copy the retained snapshot ring into the slot's live ring first (False in warmup, which has none).
+        """
+        a = self.args
+        start = plan.start
+        suffix = tokens[start:]
+        pad_len = prefix_cache.resume_bucket(suffix.shape[0], self.buckets, start, a.max_seq_len)
+        tail = pad_len
+        if pad_len in self.buckets:
+            i = self.buckets.index(pad_len)
+            tail = pad_len - self.buckets[i - 1] if i else pad_len
+        if restore:
+            self._copy_ring(plan.snapshot_ring, ring)
+        blocks = -(-pad_len // a.block_size)
+        # Read table: the request's real blocks, full width so the resumed shapes do not depend on the position.
+        read_pt = self._page_table_tt(page_row, self.n_blocks)
+        fill_row = prefix_cache.fill_row_without_cached(page_row, start, plan.cached_tokens, a.block_size, blocks)
+        fill_pt = self._page_table_tt(fill_row, blocks)
+        ring_row = prefix_cache.shifted_ring_row(ring, start, a.sliding_kv_blocks, a.block_size, self.n_blocks)
+        ring_tt = self._page_table_tt(ring_row, ring_row.shape[0])
+        logits = self.model.prefill_forward_logits_tt(
+            suffix,
+            0,
+            read_pt,
+            pad_len=pad_len,
+            tail=tail,
+            sliding_pt=(ring_tt, 0),
+            resume=PrefillResume(start, ring, fill_pt),
+            fill_len=_ring_fill_len(suffix.shape[0]),
+        )
+        for t in (read_pt, fill_pt, ring_tt):
+            ttnn.deallocate(t)
+        return logits
+
+    def _copy_ring(self, src: int, dst: int):
+        """Copy every sliding layer's ring `src` (36 blocks, K and V) onto ring `dst`. UNTESTED ON DEVICE."""
+        a = self.args
+        n = a.sliding_kv_blocks
+        table = self._page_table_tt(self._ring_table([dst])[0], self.n_blocks)
+        for i in range(a.n_layers):
+            if not a.is_sliding(i):
+                continue
+            for cache in self.model.kv_caches[i]:
+                blocks = ttnn.slice(
+                    cache, [src * n, 0, 0, 0], [(src + 1) * n, cache.shape[1], a.block_size, a.head_dim]
+                )
+                flat = ttnn.reshape(blocks, (1, 1, n * a.block_size, a.head_dim))
+                ttnn.experimental.paged_fill_cache(cache, flat, table, batch_idx=0)
+                ttnn.deallocate(flat)
+        ttnn.deallocate(table)
+
+    def _plan_prefill(self, tokens: torch.Tensor, cached: int):
+        """(plan, digests) for one prompt: where to resume, and the prefix hashes for the snapshot taken afterwards."""
+        digests = prefix_cache.chain_hashes(tokens, self._prefix_salt())
+        if not cached:
+            return PrefillPlan(0, None, 0), digests
+        plan = self._prefix.plan(tokens, cached, digests)
+        r = self._prefix
+        logger.info(
+            f"prefix cache: prompt={len(tokens)} vllm_cached={cached} resume_at={plan.start} "
+            f"snapshot_hits={r.hits} misses={r.misses} stale_cached_tokens={r.stale_cached_tokens}"
+        )
+        return plan, digests
+
+    def _prefix_salt(self) -> bytes:
+        a = self.args
+        return f"muse|{a.sliding_window}|{a.block_size}|{a.n_layers}".encode()
+
+    def _snapshot(self, ring: int, tokens: torch.Tensor, digests):
+        """Keep the ring of a just-prefilled prompt for a later resume. UNTESTED ON DEVICE."""
+        reserved = self._prefix.register(tokens, digests)
+        if reserved is None:
+            return
+        dst, key = reserved
+        try:
+            self._copy_ring(ring, dst)
+        except Exception:
+            self._prefix.drop(key)
+            raise
 
     def prefill_forward(
         self,
@@ -287,7 +388,8 @@ class MuseGlimmerForConditionalGeneration:
         enable_trace=False,
         **kwargs,
     ):
-        if start_pos is not None and any(int(s) != 0 for s in torch.as_tensor(start_pos).flatten().tolist()):
+        starts = [0] * len(prompt_lens) if start_pos is None else [int(x) for x in torch.as_tensor(start_pos).flatten()]
+        if any(starts) and self._prefix is None:
             raise ValueError("Muse-Glimmer prefill starts at position 0 (no chunked prefill or prefix caching)")
         n = len(prompt_lens)
         lens = [int(x) for x in torch.as_tensor(prompt_lens).flatten().tolist()]
@@ -300,7 +402,14 @@ class MuseGlimmerForConditionalGeneration:
         )
         out = []
         for i in range(n):
-            logits = self._prefill_one(tokens[i, : lens[i]], page_table[i], self._row_ring[rows[i]])
+            toks = tokens[i, : lens[i]]
+            ring = self._row_ring[rows[i]]
+            plan = digests = None
+            if self._prefix is not None:
+                plan, digests = self._plan_prefill(toks, starts[i])
+            logits = self._prefill_one(toks, page_table[i], ring, plan)
+            if self._prefix is not None:
+                self._snapshot(ring, toks, digests)
             if sampling_params is not None:
                 self._load_sampling(sampling_params, [i])
                 tok = self.model.sample_on_device(logits, None)
@@ -511,8 +620,31 @@ class MuseGlimmerForConditionalGeneration:
                 ttnn.deallocate(self.model.sample_on_device(logits, None))
             ttnn.deallocate(logits)
             logger.info(f"Prefill bucket {b} warmed up")
+        if self._prefix is not None:
+            self._warm_resume(cap, can_sample_on_device)
         self._sampling_key = None
         self._prefill_warm = True
+
+    def _warm_resume(self, cap, can_sample_on_device):
+        """Compile the resumed-prefill programs (chunked SDPA from a runtime start, history concat, ring copy) for every
+        bucket at start 2048, the usual history length. Shorter starts (history < 2048 rows) are not warmed.
+        UNTESTED ON DEVICE."""
+        start = 2048
+        null_row = torch.zeros(1, dtype=torch.int32)
+        greedy = SamplingParams(temperature=[0.0], top_k=[1], top_p=[1.0])
+        if self._prefix.capacity:
+            self._copy_ring(RING_SPARE, self._prefix.first)
+        for b in self.buckets:
+            if b > cap or start + b > self.args.max_seq_len:
+                logger.warning(f"Resume prefill bucket {b} not warmed up")
+                continue
+            plan = PrefillPlan(start, None, 0)
+            logits = self._prefill_resume(torch.zeros(start + b, dtype=torch.int64), null_row, RING_SPARE, plan, False)
+            if can_sample_on_device:
+                self._load_sampling(greedy, [0])
+                ttnn.deallocate(self.model.sample_on_device(logits, None))
+            ttnn.deallocate(logits)
+            logger.info(f"Resume prefill bucket {b} warmed up")
 
     def warmup_model_decode(self, kv_cache, enable_trace, max_batch_size, num_blocks, can_sample_on_device, **kwargs):
         """Compile (eager) or capture (trace) every slot bucket for host and device sampling."""

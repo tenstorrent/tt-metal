@@ -190,3 +190,131 @@ def test_history_plus_zero_q_padding_equals_full_sliding_attention():
         ke, ve = k[s - hist :], v[s - hist :]
         out = _sliding_attention(qe, ke, ve, window)[hist:]
         assert torch.allclose(out, full[s:], atol=1e-12), s
+
+
+# ---- adapter level: fakes stand in for ttnn, the model and the device tensors --------------------------------------
+
+import importlib  # noqa: E402
+from types import SimpleNamespace  # noqa: E402
+
+from models.demos.muse_glimmer_30b.tt import generator_vllm_base as gv  # noqa: E402
+
+
+class _FakeModel:
+    def __init__(self):
+        self.calls = []
+        self.kv_caches = []
+
+    def prefill_forward_logits_tt(
+        self, tokens, user_id, pt, pad_len=None, tail=256, sliding_pt=None, resume=None, fill_len=None
+    ):
+        self.calls.append(
+            dict(tokens=tokens, pt=pt, pad_len=pad_len, tail=tail, sliding_pt=sliding_pt, resume=resume, fill_len=fill_len)
+        )
+        return "logits"
+
+    def logits_to_torch(self, logits, n):
+        return torch.zeros(n, 4)
+
+
+def _adapter(monkeypatch, snapshots=3):
+    monkeypatch.setenv("MUSE_PREFIX_CACHE", "1")
+    monkeypatch.setenv("MUSE_PREFIX_SNAPSHOTS", str(snapshots))
+    monkeypatch.setattr(gv.ttnn, "deallocate", lambda t: None)
+    a = gv.MuseGlimmerForConditionalGeneration()
+    a.args = SimpleNamespace(
+        sliding_kv_blocks=RING_BLOCKS,
+        max_prefill_len=131072,
+        max_seq_len=131072,
+        block_size=BLOCK,
+        sliding_window=WINDOW,
+        n_layers=52,
+    )
+    a.n_blocks = 131072 // BLOCK
+    a.buckets = gv.prefill_buckets(131072)
+    a.model = _FakeModel()
+    a._prefix = pc.RingSnapshotRegistry(first=gv.DECODE_B_PAD + 1, capacity=snapshots)
+    a._page_table_tt = lambda row, width: ("tt", row.clone(), width)
+    a.copies = []
+    a._copy_ring = lambda src, dst: a.copies.append((src, dst))
+    return a
+
+
+def _run(a, prompt, cached, row0=100, slot=0):
+    pt = (torch.arange(len(prompt) // BLOCK + 64) + row0).to(torch.int32)[None]
+    a.prefill_forward(prompt[None], pt, None, [len(prompt)], start_pos=[cached], empty_slots=[slot])
+    return a.model.calls[-1]
+
+
+def test_capability_follows_env(monkeypatch):
+    try:
+        monkeypatch.setenv("MUSE_PREFIX_CACHE", "1")
+        importlib.reload(gv)
+        assert gv.MuseGlimmerForConditionalGeneration.model_capabilities["supports_prefix_caching"] is True
+        assert gv.MuseGlimmerForConditionalGeneration.model_capabilities["supports_chunked_prefill"] is False
+        monkeypatch.delenv("MUSE_PREFIX_CACHE")
+        importlib.reload(gv)
+        assert gv.MuseGlimmerForConditionalGeneration.model_capabilities["supports_prefix_caching"] is False
+    finally:
+        monkeypatch.undo()
+        importlib.reload(gv)
+
+
+def test_first_prompt_prefills_whole_and_snapshots_its_ring(monkeypatch):
+    a = _adapter(monkeypatch)
+    prompt = torch.arange(5000)
+    call = _run(a, prompt, cached=0, slot=3)
+    assert call["resume"] is None and call["tokens"].shape[0] == 5000
+    assert call["fill_len"] == 5120  # the ring takes the prompt rounded to 256, not the coarse bucket
+    live = a._row_ring[3]
+    assert a.copies == [(live, gv.DECODE_B_PAD + 1)]  # snapshot of the slot's ring into the first retained ring
+
+
+def test_second_turn_resumes_from_snapshot_with_shifted_tables(monkeypatch):
+    a = _adapter(monkeypatch)
+    prompt = torch.arange(5000)
+    _run(a, prompt, cached=0, slot=3)
+    a.copies.clear()
+    nxt = torch.cat([prompt, torch.arange(70_000, 73_000)])  # 8000 tokens, shares the first 5000
+    call = _run(a, nxt, cached=4992, slot=5)  # vLLM caches 78 whole blocks of the shared prefix
+    r = call["resume"]
+    assert r is not None and r.start == 4864  # floor(5000 / 256) * 256
+    live = a._row_ring[5]
+    assert a.copies[0] == (gv.DECODE_B_PAD + 1, live)  # restore the retained ring into the slot's live ring first
+    assert call["tokens"].tolist() == nxt[4864:].tolist()  # 3136 rows
+    assert call["fill_len"] == 3328
+    assert call["pad_len"] >= 3136 and call["pad_len"] in a.buckets
+    # full layers: the fill table starts at block 4864 / 64 = 76; blocks 76..77 are vLLM-cached -> null block 0
+    kind, fill_row, width = r.full_fill_pt
+    assert width == -(-call["pad_len"] // BLOCK)
+    assert fill_row[:2].tolist() == [0, 0] and fill_row[2].item() == 100 + 78
+    # read table is the request's real, unshifted table at full width
+    assert call["pt"][1][0].item() == 100 and call["pt"][2] == a.n_blocks
+    # sliding layers: the ring table is shifted by 76 blocks: chunk block 0 -> ring block 76 % 36 = 4
+    ring_tt = call["sliding_pt"][0]
+    assert ring_tt[1][:3].tolist() == [live * RING_BLOCKS + 4, live * RING_BLOCKS + 5, live * RING_BLOCKS + 6]
+    # the 8000-token prompt has its own boundary (7936): a new retained ring; the old entry stays until LRU evicts it
+    assert a.copies[1] == (live, gv.DECODE_B_PAD + 2)
+
+
+def test_hit_without_snapshot_recomputes_from_zero_and_counts_a_miss(monkeypatch):
+    a = _adapter(monkeypatch)
+    call = _run(a, torch.arange(3000), cached=1024)
+    assert call["resume"] is None and call["tokens"].shape[0] == 3000
+    assert a._prefix.misses == 1
+
+
+def test_prefix_cache_off_keeps_the_start_zero_contract(monkeypatch, expect_error):
+    monkeypatch.delenv("MUSE_PREFIX_CACHE", raising=False)
+    a = gv.MuseGlimmerForConditionalGeneration()
+    with expect_error(ValueError, "position 0"):
+        a.prefill_forward(torch.zeros(1, 8, dtype=torch.int64), torch.zeros(1, 1), None, [8], start_pos=[256])
+
+
+def test_resumed_bucket_stays_inside_rope_tables(monkeypatch):
+    a = _adapter(monkeypatch)
+    prompt = torch.arange(130_000)
+    _run(a, prompt, cached=0)
+    nxt = torch.cat([prompt, torch.arange(1000)])
+    call = _run(a, nxt, cached=129_984)
+    assert call["resume"].start + call["pad_len"] <= 131072
