@@ -20,6 +20,7 @@ from helpers.param_config import (
     dest_acc=[DestAccumulation.No],
     mathop=[MathOperation.ReduceColumn],
     reduce_pool=[ReducePool.Max],  # Only MAX is supported for SDPA reduce
+    stimuli=list(_func.STIMULI),
     loop_factor=list(
         range(10, 201, 10)
     ),  # Multiple loop factors to minimize profiler overhead
@@ -30,6 +31,7 @@ def test_perf_sfpu_reduce_sdpa(
     dest_acc,
     mathop,
     reduce_pool,
+    stimuli,
     loop_factor,
 ):
     """
@@ -53,6 +55,7 @@ def test_perf_sfpu_reduce_sdpa(
         mathop,
         reduce_pool,
         input_dimensions,
+        stimuli=stimuli,
         loop_factor=loop_factor,
         is_perf=True,
         perf_report=perf_report,

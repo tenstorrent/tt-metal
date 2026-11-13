@@ -292,13 +292,18 @@ def _run_reduce_block_max(
     formats=FORMATS,
     block_ct_dim=[1, 2, 3, 4, 8],
     num_faces=block_max_num_faces,
+    use_runtime=[False, True],
 )
-def test_reduce_block_max(formats, block_ct_dim, num_faces):
-    """Compile-time block_ct_dim sweep, bf16 and fp32-dest.
+def test_reduce_block_max(formats, block_ct_dim, num_faces, use_runtime):
+    """Compile-time and runtime block_ct_dim sweep, bf16 and fp32-dest.
 
     32x32 on both arches. 16x32 bf16 is Blackhole-only.
     """
-    _run_reduce_block_max(formats, block_ct_dim, num_faces=num_faces)
+    if use_runtime and block_ct_dim == 3:
+        pytest.skip("runtime block_ct_dim sweep supports the even production widths")
+    _run_reduce_block_max(
+        formats, block_ct_dim, use_runtime=use_runtime, num_faces=num_faces
+    )
 
 
 @parametrize(

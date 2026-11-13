@@ -8,11 +8,16 @@ from helpers.llk_params import (
     DestAccumulation,
     MathFidelity,
     MathOperation,
+    PerfRunType,
 )
 from helpers.param_config import input_output_formats, parametrize
-from helpers.perf.core import ALL_PERF_RUN_TYPES
 from helpers.stimuli_config import StimuliConfig
-from test_eltwise_bcast_col_custom import create_eltwise_bcast_col_custom_config
+from helpers.tile_constants import get_tile_params
+from test_eltwise_bcast_col_custom import (
+    BCAST_COL_CT_DIMS,
+    BCAST_COL_TILE_ROWS,
+    create_eltwise_bcast_col_custom_config,
+)
 
 
 @pytest.mark.perf
@@ -22,7 +27,8 @@ from test_eltwise_bcast_col_custom import create_eltwise_bcast_col_custom_config
     dest_acc=[DestAccumulation.No],
     math_fidelity=[MathFidelity.LoFi],
     broadcast_type=[BroadcastType.Column],
-    ct_dim=[1, 8],
+    tile_rows=BCAST_COL_TILE_ROWS,
+    ct_dim=BCAST_COL_CT_DIMS,
     loop_factor=[64],
 )
 def test_perf_eltwise_bcast_col_custom(
@@ -32,9 +38,13 @@ def test_perf_eltwise_bcast_col_custom(
     dest_acc,
     math_fidelity,
     broadcast_type,
+    tile_rows,
     ct_dim,
     loop_factor,
 ):
+    tile_dims = [tile_rows, 32]
+    face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(tile_dims)
+    num_faces = num_faces_r_dim * num_faces_c_dim
     configuration = create_eltwise_bcast_col_custom_config(
         formats,
         mathop,
@@ -52,10 +62,21 @@ def test_perf_eltwise_bcast_col_custom(
             tile_count_A=ct_dim,
             tile_count_B=1,
             tile_count_res=ct_dim,
+            num_faces=num_faces,
+            face_r_dim=face_r_dim,
+            tile_dimensions=tile_dims,
+            use_dense_tile_dimensions=True,
         ),
         loop_factor=loop_factor,
         is_perf=True,
-        run_types=ALL_PERF_RUN_TYPES,
+        num_faces=num_faces,
+        face_r_dim=face_r_dim,
+        run_types=[
+            PerfRunType.L1_TO_L1,
+            PerfRunType.UNPACK_ISOLATE,
+            PerfRunType.MATH_ISOLATE,
+            PerfRunType.PACK_ISOLATE,
+        ],
     )
 
     configuration.run(perf_report)

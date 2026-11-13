@@ -37,8 +37,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef LLK_PROFILER
     constexpr std::uint32_t num_blocks         = 1;
     constexpr std::uint32_t num_tiles_in_block = CT_DIM;
-    constexpr std::uint32_t test_face_r_dim    = FACE_R_DIM;
-    constexpr std::uint32_t test_num_faces     = TILE_NUM_FACES;
+    const std::uint32_t test_face_r_dim        = params.TEST_FACE_R_DIM;
+    const std::uint32_t test_num_faces         = params.num_faces;
 #else
     const std::uint32_t num_blocks         = params.NUM_BLOCKS;
     const std::uint32_t num_tiles_in_block = params.NUM_TILES_IN_BLOCK;
@@ -124,8 +124,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef LLK_PROFILER
     constexpr std::uint32_t num_blocks         = 1;
     constexpr std::uint32_t num_tiles_in_block = CT_DIM;
-    constexpr std::uint32_t test_face_r_dim    = FACE_R_DIM;
-    constexpr std::uint32_t test_num_faces     = TILE_NUM_FACES;
+    const std::uint32_t test_face_r_dim        = params.TEST_FACE_R_DIM;
+    const std::uint32_t test_num_faces         = params.num_faces;
 #else
     const std::uint32_t num_blocks         = params.NUM_BLOCKS;
     const std::uint32_t num_tiles_in_block = params.NUM_TILES_IN_BLOCK;
@@ -227,14 +227,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
 #ifdef LLK_PROFILER
+    constexpr std::uint32_t num_blocks         = 1;
+    constexpr std::uint32_t num_tiles_in_block = CT_DIM;
+    const std::uint32_t test_face_r_dim        = params.TEST_FACE_R_DIM;
+    const std::uint32_t test_num_faces         = params.num_faces;
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t loop_factor = params.LOOP_FACTOR;
 #else
     constexpr std::uint32_t loop_factor = LOOP_FACTOR;
 #endif
-    constexpr std::uint32_t num_tiles_in_block = CT_DIM;
-    constexpr std::uint32_t test_face_r_dim    = FACE_R_DIM;
-    constexpr std::uint32_t test_num_faces     = TILE_NUM_FACES;
 #else
     const std::uint32_t num_blocks         = params.NUM_BLOCKS;
     const std::uint32_t num_tiles_in_block = params.NUM_TILES_IN_BLOCK;

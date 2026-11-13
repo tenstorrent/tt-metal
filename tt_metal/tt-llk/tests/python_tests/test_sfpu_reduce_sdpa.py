@@ -45,13 +45,19 @@ STIMULI = {
 # Has a compilation error on coverage, https://github.com/tenstorrent/tt-llk/issues/884
 @skip_for_coverage
 # mathop stays a parameter so `--op ReduceColumn` still selects these cases.
-@parametrize(stimuli=list(STIMULI), mathop=[MATHOP])
-def test_sfpu_reduce_sdpa(stimuli, mathop):
+@parametrize(
+    stimuli=list(STIMULI),
+    formats=[FORMATS],
+    dest_acc=[DEST_ACC],
+    mathop=[MATHOP],
+    reduce_pool=[REDUCE_POOL],
+)
+def test_sfpu_reduce_sdpa(stimuli, formats, dest_acc, mathop, reduce_pool):
     _run_sfpu_reduce_sdpa(
-        FORMATS,
-        DEST_ACC,
+        formats,
+        dest_acc,
         mathop,
-        REDUCE_POOL,
+        reduce_pool,
         INPUT_DIMENSIONS,
         stimuli=stimuli,
     )
