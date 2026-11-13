@@ -473,6 +473,60 @@ def to_float32_tt_tensor(input_tensor, device, layout=ttnn.TILE_LAYOUT, memory_c
     return to_tt_tensor(input_tensor, device, dtype=ttnn.float32, layout=layout, memory_config=memory_config)
 
 
+INT32_MIN = -(2**31)
+INT32_MAX = 2**31 - 1
+INT32_DENSE_HALF_RANGE = 2**14
+
+
+def int32_edge_values():
+    """INT32_MIN, INT32_MAX and every ±2^k, ±(2^k - 1), ±(2^k + 1) that fits in int32, sorted."""
+    edges = {INT32_MIN, INT32_MAX}
+    for k in range(32):
+        for v in (2**k - 1, 2**k, 2**k + 1):
+            edges.update(e for e in (v, -v) if INT32_MIN <= e <= INT32_MAX)
+    return torch.tensor(sorted(edges), dtype=torch.int64)
+
+
+def generate_int32_values(include_int_min=True):
+    """
+    65,536 int32 values for an integer accuracy sweep, shaped (256, 256).
+
+    An int32 sweep cannot enumerate all 2^32 values. The input is:
+      - every integer in [-2^14, 2^14), so small values and sign changes are exhaustive,
+      - int32_edge_values(): the powers of two either side of each bit boundary,
+        including 2^24 + 1 (the first integer float32 cannot hold), INT32_MIN and INT32_MAX,
+      - uniformly random int32 values (fixed seed) filling the rest.
+
+    Args:
+        include_int_min (bool, optional): If False, every INT32_MIN is replaced by
+            INT32_MIN + 1 so ops with a known INT32_MIN defect can be swept on the
+            rest of the range. Defaults to True.
+
+    Returns:
+        torch.Tensor: Shape (256, 256), dtype int32.
+    """
+    dense = torch.arange(-INT32_DENSE_HALF_RANGE, INT32_DENSE_HALF_RANGE, dtype=torch.int64)
+    edges = int32_edge_values()
+    edges = edges[(edges < -INT32_DENSE_HALF_RANGE) | (edges >= INT32_DENSE_HALF_RANGE)]
+    generator = torch.Generator().manual_seed(0)
+    num_random = 256 * 256 - dense.numel() - edges.numel()
+    random = torch.randint(INT32_MIN, INT32_MAX + 1, (num_random,), generator=generator, dtype=torch.int64)
+    values = torch.cat([dense, edges, random]).to(torch.int32)
+    if not include_int_min:
+        values = torch.where(values == INT32_MIN, torch.full_like(values, INT32_MIN + 1), values)
+    return values.reshape(256, 256)
+
+
+def wrap_int32(tensor):
+    """Reduce an integer tensor to int32 with two's-complement wraparound, as int32 arithmetic does."""
+    return ((tensor.to(torch.int64) - INT32_MIN) % 2**32 + INT32_MIN).to(torch.int32)
+
+
+def to_int32_tt_tensor(input_tensor, device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG):
+    """Convert a torch tensor to a ttnn.int32 tensor on device with TILE_LAYOUT and DRAM."""
+    return to_tt_tensor(input_tensor, device, dtype=ttnn.int32, layout=layout, memory_config=memory_config)
+
+
 def run_binary(device, ttnn_op, input_a, input_b, *, golden_kwargs=None, input_dtype=ttnn.bfloat16, **op_kwargs):
     """Run a tensor-tensor ttnn binary op and return ``(golden, result)``.
 

@@ -64,14 +64,18 @@ ttnn::device_operation::ProgramArtifacts ReshardSameWidthFactory<local_is_output
     auto remote_core_type = remote_tensor.buffer()->core_type();
     auto local_cores = get_optimal_worker_cores_for_sharded_tensor(local_tensor);
     auto all_cores = CoreRangeSet(ttsl::Span<const CoreCoord>(local_cores));
-    auto remote_cores = remote_tensor.buffer()->buffer_distribution_spec().value().cores_with_data();
+    auto remote_cores = remote_tensor.mesh_buffer()
+                            .device_local_config()
+                            .sharding_args.buffer_distribution_spec()
+                            .value()
+                            .cores_with_data();
 
     uint32_t unit_size = 0;
     uint32_t local_units_per_shard = 0;
     uint32_t remote_units_per_shard = 0;
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(local_tensor.dtype());
 
-    uint32_t num_units = local_tensor.buffer()->num_pages();
+    uint32_t num_units = local_tensor.mesh_buffer().num_pages();
     if (local_tensor.layout() == Layout::TILE) {
         unit_size = tt::tile_size(data_format);
         local_units_per_shard = local_shard_spec.numel() / TILE_HW;
@@ -81,8 +85,8 @@ ttnn::device_operation::ProgramArtifacts ReshardSameWidthFactory<local_is_output
         local_units_per_shard = local_shard_spec.shape[0];
         remote_units_per_shard = remote_shard_spec.shape[0];
     }
-    uint32_t local_unit_size_padded = tt::align(unit_size, local_tensor.buffer()->alignment());
-    uint32_t remote_unit_size_padded = tt::align(unit_size, remote_tensor.buffer()->alignment());
+    uint32_t local_unit_size_padded = tt::align(unit_size, local_tensor.mesh_buffer().alignment());
+    uint32_t remote_unit_size_padded = tt::align(unit_size, remote_tensor.mesh_buffer().alignment());
     bool unaligned = false;
     if (remote_unit_size_padded != unit_size || local_unit_size_padded != unit_size) {
         unaligned = true;
@@ -92,8 +96,8 @@ ttnn::device_operation::ProgramArtifacts ReshardSameWidthFactory<local_is_output
     const bool use_scratch = local_is_output && unaligned;
 
     const bool interface_with_dram = (remote_core_type == tt::CoreType::DRAM);
-    auto* remote_buffer = remote_tensor.buffer();
-    auto remote_buffer_type = remote_buffer->buffer_type();
+    const auto* remote_buffer = &remote_tensor.mesh_buffer();
+    auto remote_buffer_type = remote_buffer->device_local_config().buffer_type;
 
     // ------------------------------------------------------------------
     // Per-core runtime argument generation (stateful walk over remote cores).

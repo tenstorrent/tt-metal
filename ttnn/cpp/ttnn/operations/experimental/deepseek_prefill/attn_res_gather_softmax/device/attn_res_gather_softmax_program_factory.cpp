@@ -403,18 +403,18 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
         program,
         reader_kernel_id,
         {site_offsets.partial,
-         running_sum.buffer()->address(),
-         partial.buffer()->address(),
-         q.buffer()->address(),
-         pending.buffer()->address()});
+         running_sum.mesh_buffer().address(),
+         partial.mesh_buffer().address(),
+         q.mesh_buffer().address(),
+         pending.mesh_buffer().address()});
     std::vector<uint32_t> writer_common = {
         site_offsets.shift,
         site_offsets.mass,
-        stats.buffer()->address(),
-        shift.buffer()->address(),
-        mass.buffer()->address(),
-        output.buffer()->address(),
-        total.buffer()->address(),
+        stats.mesh_buffer().address(),
+        shift.mesh_buffer().address(),
+        mass.mesh_buffer().address(),
+        output.mesh_buffer().address(),
+        total.mesh_buffer().address(),
         my_rank,
         gather_physical.x,
         gather_physical.y};
@@ -454,7 +454,7 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
     }
 
     std::vector<uint32_t> gather_rt_args = {
-        stats.buffer()->address(),
+        stats.mesh_buffer().address(),
         my_rank,
         static_cast<uint32_t>(operation_attributes.semaphore.address()),
         static_cast<uint32_t>(fold_ranges.size())};
@@ -565,9 +565,9 @@ void AttnResGatherSoftmaxMeshWorkloadFactory::override_runtime_arguments(
     const auto site_offsets = attn_res_gather_softmax_site_offsets(operation_attributes, tensor_args);
     const bool fuse_add = tensor_args.pending.has_value();
     const auto pending_addr =
-        fuse_add ? tensor_args.pending->buffer()->address() : tensor_args.running_sum.buffer()->address();
-    const auto total_addr =
-        fuse_add ? tensor_return_value.at(1).buffer()->address() : tensor_return_value.at(0).buffer()->address();
+        fuse_add ? tensor_args.pending->mesh_buffer().address() : tensor_args.running_sum.mesh_buffer().address();
+    const auto total_addr = fuse_add ? tensor_return_value.at(1).mesh_buffer().address()
+                                     : tensor_return_value.at(0).mesh_buffer().address();
 
     for (auto& [range, shared_vars] : cached_workload.shared_variables) {
         auto& program = cached_workload.workload.get_programs().at(range);
@@ -576,23 +576,23 @@ void AttnResGatherSoftmaxMeshWorkloadFactory::override_runtime_arguments(
         // new program. That is what keeps one cached program serving every read site.
         auto& reader_common = tt::tt_metal::GetCommonRuntimeArgs(program, shared_vars.reader_kernel_id);
         reader_common[kReaderSite] = site_offsets.partial;
-        reader_common[kReaderPrefixAddr] = tensor_args.running_sum.buffer()->address();
-        reader_common[kReaderPartialAddr] = tensor_args.partial.buffer()->address();
-        reader_common[kReaderQAddr] = tensor_args.q.buffer()->address();
+        reader_common[kReaderPrefixAddr] = tensor_args.running_sum.mesh_buffer().address();
+        reader_common[kReaderPartialAddr] = tensor_args.partial.mesh_buffer().address();
+        reader_common[kReaderQAddr] = tensor_args.q.mesh_buffer().address();
         reader_common[kReaderPendingAddr] = pending_addr;
 
         auto& writer_common = tt::tt_metal::GetCommonRuntimeArgs(program, shared_vars.writer_kernel_id);
         writer_common[kWriterShiftSite] = site_offsets.shift;
         writer_common[kWriterMassSite] = site_offsets.mass;
-        writer_common[kWriterStatsAddr] = tensor_args.stats.buffer()->address();
-        writer_common[kWriterShiftAddr] = tensor_args.shift.buffer()->address();
-        writer_common[kWriterMassAddr] = tensor_args.mass.buffer()->address();
-        writer_common[kWriterOutAddr] = tensor_return_value.at(0).buffer()->address();
+        writer_common[kWriterStatsAddr] = tensor_args.stats.mesh_buffer().address();
+        writer_common[kWriterShiftAddr] = tensor_args.shift.mesh_buffer().address();
+        writer_common[kWriterMassAddr] = tensor_args.mass.mesh_buffer().address();
+        writer_common[kWriterOutAddr] = tensor_return_value.at(0).mesh_buffer().address();
         writer_common[kWriterTotalAddr] = total_addr;
 
         auto& gather_args_by_core = GetRuntimeArgs(program, shared_vars.gather_kernel_id);
         auto& gather_args = gather_args_by_core[shared_vars.gather_core.x][shared_vars.gather_core.y];
-        gather_args[kGatherStatsAddrIdx] = tensor_args.stats.buffer()->address();
+        gather_args[kGatherStatsAddrIdx] = tensor_args.stats.mesh_buffer().address();
         gather_args[kGatherSemAddrIdx] = operation_attributes.semaphore.address();
     }
 }

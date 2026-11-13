@@ -208,6 +208,26 @@ GALAXY_RING = pytest.mark.parametrize(
     indirect=["mesh_device", "device_params"],
 )
 
+# The ring rows plus the opt-in line-fabric row.
+GALAXY_RING_AND_LINE = pytest.mark.parametrize(
+    GALAXY_RING.args[0],
+    [
+        *GALAXY_RING.args[1],
+        pytest.param(
+            (4, 8),
+            1,
+            0,
+            2,
+            _line_8k,
+            ttnn.Topology.Linear,
+            False,
+            id="4x8sp1tp0nl2_line_is_fsdp0",
+            marks=[_BH_ONLY, _LINE_OPT_IN],
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+
 REAL_BLOCK_CONFIG = dict(
     hidden_size=5376,
     num_attention_heads=56,

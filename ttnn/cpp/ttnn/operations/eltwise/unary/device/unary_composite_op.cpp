@@ -5,13 +5,11 @@
 #include "unary_composite_op.hpp"
 
 #include <array>
-#include <functional>
 #include <optional>
 #include <variant>
 
 #include <utility>
 #include <tt-metalium/bfloat16.hpp>
-#include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/functions.hpp"
@@ -30,8 +28,10 @@
 #include "ttnn/operations/data_movement/clone/clone.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
+#include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
 namespace ttnn::detail {
 
 // Function variance of whole tensor.
@@ -77,7 +77,7 @@ bool _hw_statistic_fits_one_program(const Tensor& y) {
 // mean(y) over H and W, packed as FP32 whatever y's dtype. A bfloat16 mean is off by up to half a bfloat16 ULP, and
 // subtracting it adds that error squared to every squared deviation: 4% of the variance for a mean of 100.3 and a
 // std of 1. These are ttnn::mean's steps for the last two dimensions, which has no output dtype, with an FP32 output.
-Tensor _mean_hw_fp32(const Tensor& y) {
+Tensor _mean_hw_fp32(const Tensor& y, const std::optional<MemoryConfig>& memory_config = std::nullopt) {
     const auto& shape = y.logical_shape();
     const auto rank = shape.rank();
     Tensor input = y;
@@ -94,12 +94,35 @@ Tensor _mean_hw_fp32(const Tensor& y) {
         tt::tt_metal::ReduceOpMath::AVG,
         tt::tt_metal::ReduceOpDim::HW,
         1.0f / (static_cast<float>(shape[-2]) * static_cast<float>(shape[-1])),
-        input.memory_config(),
+        memory_config.value_or(input.memory_config()),
         DataType::FLOAT32);
     ttsl::SmallVector<uint32_t> mean_shape(shape.cbegin(), shape.cend());
     mean_shape[rank - 2] = 1;
     mean_shape[rank - 1] = 1;
     return ttnn::reshape(mean, ttnn::Shape(mean_shape));
+}
+
+// mean(x) over every element of x = [1, P, H, W], packed as FP32: ttnn::mean would round it to a bfloat16 or bfloat8_b
+// input's dtype. The P plane means from _mean_hw_fp32 are averaged by an FP32 H reduce, which runs on the SFPU, after
+// a transpose that writes zeros into the tile padding, as ttnn::mean does between its stages; ttnn::mean itself would
+// first clone [1, P, 1, 1] to fill that padding. The FPU reduce of a lone bfloat16 tile still rounds its result to
+// bfloat16 precision with an FP32 output, so a one-tile input is reduced from an FP32 copy.
+Tensor _mean_fp32(const Tensor& x, const std::optional<MemoryConfig>& memory_config) {
+    const uint32_t planes = x.logical_shape()[1];
+    const bool one_tile = planes == 1 && x.padded_shape()[2] == tt::constants::TILE_HEIGHT &&
+                          x.padded_shape()[3] == tt::constants::TILE_WIDTH;
+    Tensor plane_means = _mean_hw_fp32(one_tile ? ttnn::typecast(x, DataType::FLOAT32) : x, memory_config);
+    if (planes == 1) {
+        return plane_means;
+    }
+    const Tensor column = ttnn::transpose(plane_means, 1, -2, memory_config, 0.0f);
+    return operations::reduction::generic::detail::reduce(
+        column,
+        tt::tt_metal::ReduceOpMath::SUM,
+        tt::tt_metal::ReduceOpDim::H,
+        1.0f / static_cast<float>(planes),
+        memory_config.value_or(column.memory_config()),
+        DataType::FLOAT32);
 }
 
 // mean((y - mean(y))^2) over H and W. Both means divide by the logical H * W and leave out the tile padding.
@@ -138,28 +161,6 @@ std::vector<Tensor> split_tensor_for_glu(
     t_split.emplace_back(t_b);
 
     return t_split;
-}
-
-using HWFunctionT = std::function<Tensor(const Tensor& y, const std::optional<MemoryConfig>&)>;
-Tensor _make_global_from_hw_impl(
-    const HWFunctionT& fn, const Tensor& y, const std::optional<MemoryConfig>& output_mem_config) {
-    TT_FATAL(y.padded_shape().rank() == 4, "Cannot support non-rank 4 Tensor");
-
-    // format to HW
-    Tensor y_hw = ttnn::reshape_on_device(
-        y, ttnn::Shape{1, 1, y.padded_shape()[2], y.padded_shape()[3] * y.padded_shape()[1] * y.padded_shape()[0]});
-
-    // compute @fn
-    Tensor z_0 = fn(y_hw, output_mem_config);
-    TT_FATAL(y_hw.padded_shape() == z_0.padded_shape(), "shape match");
-    y_hw.deallocate();
-
-    // reformat
-    Tensor z_1 = ttnn::reshape_on_device(
-        z_0, ttnn::Shape{y.padded_shape()[0], y.padded_shape()[1], y.padded_shape()[2], y.padded_shape()[3]});
-    z_0.deallocate();
-
-    return z_1;
 }
 
 }  // namespace ttnn::detail
@@ -443,8 +444,75 @@ Tensor logical_not_(const Tensor& x, const std::optional<MemoryConfig>& output_m
 }
 
 // Global Norm
+// (y - mean(y)) / std(y) over every element of a rank 4 tensor, with the population std. [N, C, H, W] is viewed as
+// [1, N * C, H, W], which only merges the outer dims and so moves no data for any H and W. Reducing dims 1, 2 and 3
+// then spreads H and W over the grid plane by plane before combining the N * C plane results. Both means divide by
+// the logical element count, so tile padding is not counted. A single [1, 1, N * C * H, W] plane would reduce H on
+// one core, 2.4x slower for 8x8x128x128, and would move data whenever H is not a multiple of 32.
 Tensor normalize_global(const Tensor& y, const std::optional<MemoryConfig>& output_mem_config) {
-    return detail::_make_global_from_hw_impl(normalize_hw, y, output_mem_config);
+    const auto& shape = y.logical_shape();
+    TT_FATAL(shape.rank() == 4, "normalize_global requires a rank 4 tensor, got rank {}", shape.rank());
+    const uint32_t planes = shape[0] * shape[1];
+    // An empty input skips the FP32 mean and the bfloat8_b steps below: the reduce they use divides by its tile count.
+    const bool empty = y.logical_volume() == 0;
+    // ttnn::mean over several dims of a ROW_MAJOR FLOAT32 tensor is off by about 4e-4, so ROW_MAJOR input is tilized
+    // first; the output is TILE, as it was before. to_layout cannot tilize a ROW_MAJOR shard that is not whole tiles,
+    // so such an input first goes to interleaved memory of the same buffer type.
+    Tensor x = y;
+    if (y.layout() != Layout::TILE) {
+        if (y.is_sharded() && !tt::tt_metal::can_shard_align(y.memory_config(), Layout::TILE)) {
+            x = ttnn::to_memory_config(
+                y, MemoryConfig{TensorMemoryLayout::INTERLEAVED, y.memory_config().buffer_type()});
+        }
+        x = ttnn::to_layout(x, Layout::TILE);
+    }
+    // The output defaults to the tilized input's memory config: the reshapes re-derive an ND shard spec, so inheriting
+    // one would not give the input's back.
+    const MemoryConfig output_memory_config = output_mem_config.value_or(x.memory_config());
+    // bfloat8_b input runs as bfloat16, which holds its values exactly: the FPU reduce of bfloat8_b truncates its FP32
+    // partial means to TF32, 0.05 off for a mean of 100.
+    if (x.dtype() == DataType::BFLOAT8_B && !empty) {
+        x = ttnn::typecast(x, DataType::BFLOAT16);
+    }
+    x = ttnn::reshape(x, ttnn::Shape{1, planes, shape[2], shape[3]});
+    const ttsl::SmallVector<int> dims = planes == 1 ? ttsl::SmallVector<int>{2, 3} : ttsl::SmallVector<int>{1, 2, 3};
+    // The [1, N * C, 1, 1] statistics cannot keep a sharded input's shard spec.
+    const std::optional<MemoryConfig> stats_mem_config =
+        x.is_sharded() ? std::optional<MemoryConfig>(ttnn::DRAM_MEMORY_CONFIG) : std::nullopt;
+    Tensor y_minus_mean_y;
+    if (x.dtype() == DataType::FLOAT32 || empty) {
+        y_minus_mean_y = ttnn::subtract(x, ttnn::mean(x, dims, true, stats_mem_config));
+    } else {
+        // A bfloat16 mean of 100.3 next to a std of 0.5 put outputs about 1.0 off, so the mean stays FP32, as in
+        // var_hw, and the SFPU subtracts it whole: the FPU would truncate it to TF32.
+        y_minus_mean_y = ttnn::subtract(
+            x,
+            detail::_mean_fp32(x, stats_mem_config),
+            std::nullopt,
+            std::nullopt,
+            std::nullopt,
+            {},
+            {},
+            {},
+            /*fast_and_approximate_mode=*/false);
+    }
+    // Frees a tilized or ND-staged copy of the input; a view of y keeps y's buffer, which y still owns.
+    x.deallocate();
+    const Tensor var_y = ttnn::mean(ttnn::square(y_minus_mean_y), dims, true, stats_mem_config);
+    // Reshaped back before the multiply, so the multiply lays out the output memory config, ND shard spec included, on
+    // the output shape itself. When that reshape copies, for an ND shard spec, the [1, N * C, H, W] deviation is freed.
+    Tensor centered = ttnn::reshape(y_minus_mean_y, shape);
+    y_minus_mean_y.deallocate();
+    // A bfloat8_b tile shares an exponent across each 16 values of a row, so the large (0 - mean) / std of the tile
+    // padding would round the real outputs beside it to a few levels. Zero padding stays 0 through the multiply.
+    if (y.dtype() == DataType::BFLOAT8_B && !empty &&
+        (shape[2] % tt::constants::TILE_HEIGHT != 0 || shape[3] % tt::constants::TILE_WIDTH != 0)) {
+        centered = ttnn::fill_implicit_tile_padding(centered, 0.0f);
+    }
+    const std::array rsqrt_of_var = {operations::unary::EltwiseUnaryWithParam{operations::unary::UnaryOpType::RSQRT}};
+    const std::optional<const DataType> output_dtype =
+        centered.dtype() == y.dtype() ? std::nullopt : std::optional<const DataType>(y.dtype());
+    return ttnn::multiply(centered, var_y, output_dtype, output_memory_config, std::nullopt, {}, {}, rsqrt_of_var);
 }
 
 }  // namespace ttnn

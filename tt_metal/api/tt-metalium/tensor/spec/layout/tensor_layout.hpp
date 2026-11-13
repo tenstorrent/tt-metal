@@ -33,26 +33,25 @@ using Strides = std::vector<size_t>;
 // shape) And provides information required to physically lay out the tensor in memory
 class TensorLayout {
 public:
+    // Constructs a layout with alignment derived from the page config, data type, and memory config.
+    TensorLayout(DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config);
+
+    // Constructs a layout with caller-supplied alignment.
+    [[deprecated(
+        "Use experimental::tensor_layout_with_custom_alignment instead. "
+        "This API will be removed after 2026-12-01.")]]
     TensorLayout(
-        DataType dtype,
-        const PageConfig& page_config,
-        const MemoryConfig& memory_config,
-        const Alignment& alignment = {});
+        DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const Alignment& alignment);
+
+    // Wraps an already-built TensorLayoutImpl. Used by experimental custom-alignment factories
+    // that construct TensorLayoutImpl with a caller-supplied Alignment.
+    explicit TensorLayout(std::unique_ptr<TensorLayoutImpl> impl);
 
     ~TensorLayout();
     TensorLayout(const TensorLayout& other);
     TensorLayout& operator=(const TensorLayout& other);
     TensorLayout(TensorLayout&& other) noexcept;
     TensorLayout& operator=(TensorLayout&& other) noexcept;
-
-    // static method makes it easy to find and remove all of its usages in the codebase - that's why it is not a
-    // constructor
-    [[deprecated("Use of Padded Shape is deprecated")]] static TensorLayout fromPaddedShape(
-        DataType dtype,
-        const PageConfig& page_config,
-        const MemoryConfig& memory_config,
-        const tt::tt_metal::Shape& logical_shape,
-        const tt::tt_metal::Shape& padded_shape);
 
     Layout get_layout() const;
     Tile get_tile() const;

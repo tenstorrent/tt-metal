@@ -25,11 +25,13 @@ namespace ttnn::operations::experimental::deepseek_prefill::dispatch {
 
 namespace detail {
 
-uint32_t get_num_pages(const ttnn::Tensor& tensor) { return (uint32_t)tensor.buffer()->num_pages(); }
+uint32_t get_num_pages(const ttnn::Tensor& tensor) { return (uint32_t)tensor.mesh_buffer().num_pages(); }
 
-uint32_t get_page_size(const ttnn::Tensor& tensor) { return (uint32_t)tensor.buffer()->page_size(); }
+uint32_t get_page_size(const ttnn::Tensor& tensor) { return (uint32_t)tensor.mesh_buffer().page_size(); }
 
-uint32_t get_aligned_page_size(const ttnn::Tensor& tensor) { return (uint32_t)tensor.buffer()->aligned_page_size(); }
+uint32_t get_aligned_page_size(const ttnn::Tensor& tensor) {
+    return (uint32_t)tensor.mesh_buffer().aligned_page_size();
+}
 
 uint32_t get_num_rows(const ttnn::Tensor& tensor) {
     auto logical_volume = tensor.logical_shape().volume();
@@ -166,7 +168,8 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
     const bool local_only = num_links == 0;
     TT_FATAL(
         !local_only || ((mesh_device->shape().mesh_size() == 1 ||
-                         (operation_attributes.axis == 0 && mesh_device->shape()[0] == 1)) &&
+                         (operation_attributes.axis.has_value() && *operation_attributes.axis <= 1 &&
+                          mesh_device->shape()[*operation_attributes.axis] == 1)) &&
                         operation_attributes.dispatch_group_size == 1 && topology == tt::tt_fabric::Topology::Linear),
         "Zero-link prefill dispatch requires a singleton communication domain, dispatch_group_size=1, and Linear "
         "topology");
@@ -985,12 +988,12 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
     // KernelDescriptor::RTArgList builder so the framework records
     // BufferBindings for the cache-hit fast path.
     std::vector<uint32_t> base_runtime_args = {
-        input_tensor.buffer()->address(),
-        indices_tensor.buffer()->address(),
-        offsets_tensor.buffer()->address(),
-        output_tensor.buffer()->address(),
-        metadata_tensor.buffer()->address(),
-        dispatch_table_tensor.buffer()->address(),
+        input_tensor.mesh_buffer().address(),
+        indices_tensor.mesh_buffer().address(),
+        offsets_tensor.mesh_buffer().address(),
+        output_tensor.mesh_buffer().address(),
+        metadata_tensor.mesh_buffer().address(),
+        dispatch_table_tensor.mesh_buffer().address(),
         (uint32_t)cross_device_semaphore.address(),
         (uint32_t)init_semaphore.address(),
         0,                            // token_start_idx

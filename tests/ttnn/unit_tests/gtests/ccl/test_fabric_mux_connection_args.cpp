@@ -27,6 +27,7 @@ protected:
 
     tt::tt_fabric::FabricMuxConfig make_mux_config() const {
         return {
+            *mesh_device_,
             /*num_full_size_channels=*/1,
             /*num_header_only_channels=*/0,
             /*num_buffers_full_size_channel=*/2,

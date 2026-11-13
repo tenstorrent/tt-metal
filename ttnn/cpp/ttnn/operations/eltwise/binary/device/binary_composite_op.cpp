@@ -1302,7 +1302,7 @@ static bool situ_glu_intermediates_fit_l1(const Tensor& gate) {
     const auto& allocator = gate.device()->allocator();
     const uint64_t l1_total = static_cast<uint64_t>(allocator->get_bank_size(tt::tt_metal::BufferType::L1)) *
                               allocator->get_num_banks(tt::tt_metal::BufferType::L1);
-    const uint64_t peak = SITU_GLU_L1_PEAK_INTERMEDIATES * gate.buffer()->size();
+    const uint64_t peak = SITU_GLU_L1_PEAK_INTERMEDIATES * gate.mesh_buffer().device_local_size();
     return peak * SITU_GLU_L1_BUDGET_DEN <= l1_total * SITU_GLU_L1_BUDGET_NUM;
 }
 
