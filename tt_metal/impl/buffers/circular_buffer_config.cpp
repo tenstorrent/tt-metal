@@ -63,7 +63,7 @@ void validate_cb_descriptor_backing(const CBDescriptor& descriptor) {
                              (descriptor.global_circular_buffer != nullptr);
     if (descriptor.globally_allocated) {
         TT_FATAL(
-            num_backings == 1,
+            num_backings <= 1,
             "A globally allocated CBDescriptor names its backing with exactly one of buffer, tensor or "
             "global_circular_buffer, but {} are set",
             num_backings);
@@ -97,7 +97,12 @@ CircularBufferConfig::CircularBufferConfig(const CBDescriptor& descriptor) : tot
     if (backing_buffer) {
         this->set_globally_allocated_address_and_total_size(
             *backing_buffer, descriptor.total_size, descriptor.address_offset);
+    } else if (descriptor.globally_allocated && descriptor.global_circular_buffer == nullptr) {
+        // Backed, with no buffer yet: binding the buffer checks its size and sets the address.
+        this->dynamic_cb_ = true;
+        this->address_offset_ = descriptor.address_offset;
     }
+    // A GlobalCircularBuffer is attached by the CircularBuffer built from this descriptor.
 
     auto process_format_descriptor = [this](const CBFormatDescriptor& format_descriptor) {
         validate_buffer_index_capacity(format_descriptor.buffer_index, this->data_formats_.size());
@@ -189,7 +194,8 @@ CircularBufferConfig& CircularBufferConfig::set_page_size(uint8_t buffer_index, 
 }
 
 CircularBufferConfig& CircularBufferConfig::set_total_size(uint32_t total_size) {
-    if (dynamic_cb_) {
+    // An unbound buffer has no size yet; binding it checks the total size.
+    if (dynamic_cb_ && !buffer_unbound()) {
         TT_FATAL(
             total_size <= this->max_size_,
             "Cannot set circular buffer size to {}. This is larger than the associated dynamically allocated "
@@ -302,6 +308,10 @@ const std::array<std::optional<tt::DataFormat>, NUM_CIRCULAR_BUFFERS>& CircularB
 
 const std::array<std::optional<uint32_t>, NUM_CIRCULAR_BUFFERS>& CircularBufferConfig::page_sizes() const {
     return this->page_sizes_;
+}
+
+bool CircularBufferConfig::buffer_unbound() const {
+    return this->dynamic_cb_ && !this->globally_allocated_address_.has_value();
 }
 
 bool CircularBufferConfig::dynamic_cb() const { return this->dynamic_cb_; }

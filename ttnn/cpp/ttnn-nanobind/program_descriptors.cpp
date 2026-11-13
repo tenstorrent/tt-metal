@@ -439,7 +439,8 @@ void py_module_types(nb::module_& mod) {
             &tt::tt_metal::CBDescriptor::globally_allocated,
             "Backed by a buffer from the L1 allocator (a dynamic CB) rather than the program's own CB region "
             "(default False). Must be set for a CB with a buffer or a GlobalCircularBuffer, and must not be set for "
-            "one without.")
+            "one without. A buffer may be left unnamed when the program is built and named by a later descriptor; the "
+            "program can be compiled before then, but not launched.")
         .def(
             "has_buffer",
             [](const tt::tt_metal::CBDescriptor& self) { return self.buffer != nullptr; },

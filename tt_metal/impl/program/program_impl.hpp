@@ -249,6 +249,9 @@ public:
     ProgramId get_id() const;
     std::size_t num_kernels() const;
     std::span<const std::shared_ptr<CircularBufferImpl>> circular_buffers() const;
+    // Throws if a CB is backed by a buffer that is not bound yet. Launch reads every CB's address; fast dispatch
+    // checks this first, before sending anything to the device.
+    void check_circular_buffers_bound() const;
     const std::vector<Semaphore>& semaphores() const;
     const std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>& dataflow_buffers()
         const;

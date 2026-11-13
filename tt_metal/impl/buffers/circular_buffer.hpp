@@ -37,7 +37,10 @@ public:
 
     uint32_t page_size(uint32_t buffer_index) const;
 
-    bool globally_allocated() const { return this->config_.globally_allocated_address().has_value(); }
+    // Backed by a buffer rather than placed by the program, whether or not the buffer is bound yet.
+    bool globally_allocated() const {
+        return this->config_.dynamic_cb() || this->config_.globally_allocated_address().has_value();
+    }
     bool is_global_circular_buffer() const { return this->shadow_global_circular_buffer_ != nullptr; }
 
     uint32_t size() const { return this->config_.total_size(); }
@@ -51,6 +54,9 @@ public:
     const std::optional<FaceGeometry>& unpack_face_geometry(uint32_t buffer_index) const;
 
     uint32_t address() const;
+    // Throws if the CB is backed by a buffer that is not bound yet (a CBDescriptor that is globally_allocated but names
+    // no buffer).
+    void check_bound() const;
 
     bool is_on_logical_corerange(const CoreRange& logical_cr) const;
 
@@ -91,8 +97,8 @@ private:
     // add a callback to invalidate circular buffer allocation
 };
 
-// Checks that `descriptor` names its backing consistently with CBDescriptor::globally_allocated: exactly one of buffer,
-// tensor or global_circular_buffer if it is set, and none of them if it is not.
+// Checks that `descriptor` names its backing consistently with CBDescriptor::globally_allocated: none of buffer, tensor
+// or global_circular_buffer unless it is set, and at most one of them if it is (none: a buffer bound later).
 void validate_cb_descriptor_backing(const CBDescriptor& descriptor);
 
 }  // namespace tt::tt_metal

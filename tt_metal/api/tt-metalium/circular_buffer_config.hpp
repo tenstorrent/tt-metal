@@ -99,6 +99,10 @@ public:
 
     const std::array<std::optional<uint32_t>, NUM_CIRCULAR_BUFFERS>& page_sizes() const;
 
+    // Whether the CB is backed by a buffer that is not bound yet (a CBDescriptor that is globally_allocated but names
+    // no buffer). Such a CB has no address until one is bound.
+    bool buffer_unbound() const;
+
     // These 3 getters are not typically used, but needed for flatbuffer serialization
     bool dynamic_cb() const;
     uint32_t max_size() const;

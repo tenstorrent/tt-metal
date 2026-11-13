@@ -176,7 +176,8 @@ static inline ttsl::hash::hash_t hash_cb_descriptor(const CBDescriptor& cb) {
     for (const auto& format_descriptor : cb.remote_format_descriptors) {
         ttsl::hash::hash_combine(hash, hash_cb_format_descriptor(format_descriptor));
     }
-    // Whether a buffer backs the CB, not which: the buffer is bound at launch.
+    // Whether a buffer backs the CB, not which: the buffer is bound at launch, and a buffer bound later gives the
+    // same program.
     ttsl::hash::hash_combine(hash, cb.globally_allocated);
     ttsl::hash::hash_combine(hash, cb.global_circular_buffer != nullptr);
     return hash;

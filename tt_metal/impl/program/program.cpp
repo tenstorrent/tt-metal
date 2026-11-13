@@ -1411,7 +1411,10 @@ CBHandle detail::ProgramImpl::add_circular_buffer_(const std::shared_ptr<Circula
     if (not circular_buffer->globally_allocated()) {
         this->invalidate_circular_buffer_allocation();
     } else {
-        circular_buffer->assign_global_address();
+        // A buffer bound later has no address to resolve yet; binding it sets one.
+        if (!circular_buffer->config().buffer_unbound()) {
+            circular_buffer->assign_global_address();
+        }
         // invalidate_circular_buffer_allocation() would have done this; adding a buffer still means
         // the program has to be laid out again.
         this->compile_and_allocate_needed_ = true;
@@ -2474,6 +2477,11 @@ void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
 
     for (const auto& circular_buffer : this->circular_buffers_) {
         if (circular_buffer->globally_allocated()) {
+            // A buffer bound later has no address to track yet. Nothing here needs it: only launch does, and that
+            // fails until the buffer is bound.
+            if (circular_buffer->config().buffer_unbound()) {
+                continue;
+            }
             // Track globally allocated CBs too (they use L1 memory allocated via the allocator)
             for (const IDevice* dev : devices_to_track) {
                 tt::tt_metal::GraphTracker::instance().track_allocate_cb(
@@ -3669,6 +3677,12 @@ size_t detail::ProgramImpl::num_kernels() const {
 
 std::span<const std::shared_ptr<CircularBufferImpl>> detail::ProgramImpl::circular_buffers() const {
     return circular_buffers_;
+}
+
+void detail::ProgramImpl::check_circular_buffers_bound() const {
+    for (const auto& circular_buffer : circular_buffers_) {
+        circular_buffer->check_bound();
+    }
 }
 
 std::vector<std::shared_ptr<CircularBuffer>> Program::circular_buffers() const {

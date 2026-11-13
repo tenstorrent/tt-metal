@@ -387,7 +387,7 @@ CBDescriptor MakeSingleTileCb(const MeshTensor* tensor) {
     };
 }
 
-// globally_allocated says whether the CB is backed; a backing pointer must agree with it.
+// globally_allocated says whether the CB is backed; a backing pointer needs it.
 TEST_F(DescriptorPatchingDeviceTest, Tensix_ProgramConstruction_CbBackingMustMatchGloballyAllocated_Throws) {
     auto tensor = MakeSingleTileL1MeshTensor(get_mesh_device());
 
@@ -397,11 +397,12 @@ TEST_F(DescriptorPatchingDeviceTest, Tensix_ProgramConstruction_CbBackingMustMat
     backed_but_not_flagged.cbs[0].globally_allocated = false;
     EXPECT_ANY_THROW((void)Program{backed_but_not_flagged});
 
+    // Flagged with no buffer yet is a buffer bound later: the program builds, and a later descriptor names it.
     ProgramDescriptor flagged_but_not_backed;
     flagged_but_not_backed.kernels = {MakeBlankReaderKernel({0, 0})};
     flagged_but_not_backed.cbs.push_back(MakeSingleTileCb(nullptr));
     flagged_but_not_backed.cbs[0].globally_allocated = true;
-    EXPECT_ANY_THROW((void)Program{flagged_but_not_backed});
+    EXPECT_NO_THROW((void)Program{flagged_but_not_backed});
 }
 
 // A static and a backed CB give different programs, so they must not share a program hash.

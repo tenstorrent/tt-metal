@@ -265,6 +265,7 @@ std::shared_ptr<MeshBuffer> MeshWorkloadImpl::prepare_for_command_list(MeshComma
     }
 
     compile(mesh_device);
+    check_circular_buffers_bound();
 
     const ProgramBinaryStatus binary_status = get_program_binary_status(mesh_device->id());
     TT_FATAL(
@@ -502,6 +503,12 @@ void MeshWorkloadImpl::finalize_offsets(MeshDevice* mesh_device) {
         programs);
 
     set_finalized(max_program_kernels_sizeB, mesh_device->id());
+}
+
+void MeshWorkloadImpl::check_circular_buffers_bound() const {
+    for (const auto& [_, program] : programs_) {
+        program.impl().check_circular_buffers_bound();
+    }
 }
 
 // MeshWorkload PIMPL Implementation

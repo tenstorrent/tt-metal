@@ -32,7 +32,8 @@ CircularBufferImpl::CircularBufferImpl(const CoreRangeSet& core_range_set, const
     TT_FATAL(
         this->config_.remote_buffer_indices().empty(),
         "Remote buffer indices are not supported without a GlobalCircularBuffer");
-    if (globally_allocated()) {
+    // A buffer bound later has no address yet (a CBDescriptor that is globally_allocated but names no buffer).
+    if (globally_allocated() && !config_.buffer_unbound()) {
         // The config holds Buffer::address(), which is wrong for a per-core buffer; resolve on this CB's cores.
         // Without a backing buffer (e.g. a config rebuilt from a trace), keep the stored address.
         if (config_.shadow_global_buffer != nullptr) {
@@ -78,7 +79,7 @@ CircularBufferImpl::CircularBufferImpl(const CBDescriptor& descriptor) :
             "Remote buffer indices should be specified when using a GlobalCircularBuffer");
         this->set_global_circular_buffer(*descriptor.global_circular_buffer);
     } else {
-        if (globally_allocated()) {
+        if (globally_allocated() && !config_.buffer_unbound()) {
             // See the constructor above.
             if (config_.shadow_global_buffer != nullptr) {
                 this->assign_global_address();
@@ -183,8 +184,19 @@ uint32_t CircularBufferImpl::address() const {
     if (not locally_allocated_address_.has_value() and not this->globally_allocated()) {
         TT_THROW("Circular buffer has not been allocated, cannot request address at this time!");
     }
+    check_bound();
 
     return this->globally_allocated() ? globally_allocated_address_ : locally_allocated_address_.value();
+}
+
+void CircularBufferImpl::check_bound() const {
+    TT_FATAL(
+        !config_.buffer_unbound(),
+        "Circular buffer {} on {} is backed by a buffer that is not bound: bind it "
+        "(UpdateDynamicCircularBufferAddress, or apply a program descriptor that names it) before launching the "
+        "program",
+        this->id_,
+        this->core_ranges_.str());
 }
 
 void CircularBufferImpl::set_total_size(uint32_t total_size) {
