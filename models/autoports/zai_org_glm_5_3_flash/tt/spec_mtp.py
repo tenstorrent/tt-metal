@@ -1618,6 +1618,15 @@ class SpecSwitch:
         for x in self.steps:
             x.prepare()
 
+    def capture(self):
+        """EVERY step's traces at the backend's startup spec capture (StackBackend: spec.capture()). Through __getattr__
+        only the current step captured: the alternate's step / boot traces then captured at its first entry, inside the
+        decode (mu5_alt_live6 2026-11-13: 64 steps in 11.2 s, captures 2) -- a multi-second stall the first time 5..8
+        users are live. Returns the current step's traces (the single-step contract)."""
+        for x in self.steps:
+            x.capture()
+        return self.steps[self.__dict__["cur"]].traces
+
     def release(self) -> None:
         for x in self.steps:
             x.release()
