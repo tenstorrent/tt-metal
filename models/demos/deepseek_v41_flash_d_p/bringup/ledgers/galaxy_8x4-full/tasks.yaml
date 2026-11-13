@@ -3614,6 +3614,44 @@ tasks:
       acks_early: == 0
       served_bytes_differ: == 0
       gate_model_loads: == 1
+- id: FIX.30
+  title: 'FIX.29 regression: X.3''s one-process gate was killed (exit 137) at its first run, and units it never ran were listed as passed'
+  step: overseer_fix
+  role: overseer
+  precheck: false
+  deps:
+  - FIX.29
+  device: true
+  paths:
+  - models/demos/common/bringup
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/tt/runners
+  - models/demos/deepseek_v41_flash_d_p/bringup
+  - scripts/run_safe_pytest.sh
+  - scripts/lib/tt_safe_run.sh
+  brief:
+    details: |-
+      OWNER 2026-11-13 (model loaded once per gate, FIX.29). X.3's fresh gate at ce9eb07a8fd FAILED: its units test_ladder (BRINGUP_RUNG=s56320, DS41_ENGRAM_TABLE=resident), test_profile (BRINGUP_FULL_PREFILL=1 BRINGUP_PROFILE_OPS=1) and test_positions were put in ONE process (FIX.29), and that process was killed (pytest exit 137, SIGKILL, scripts/lib/tt_safe_run.sh:351 "Killed") 151 s in, right at "BATCH (F259) run 1/4 X.3#test_ladder.0", before any metric (logs/X.3.log, logs/X.3.shared/process.log). Before FIX.29 the same units passed in separate processes (492 / 838 / 418 s). Two defects:
+      (1) The kill: find who sent SIGKILL and why (host memory of a model loaded for the longest sequence 56,320 plus LM head plus full prefill and the ops profiler? the safe runner's watchdog? a cgroup/Slurm limit? read tt_safe_run.sh and the kernel/Slurm evidence; the node has 566 GB). Measure, do not guess. Fix at the cause so X.3's gate runs in as few processes as truly possible; if the full-prefill profile with BRINGUP_PROFILE_OPS (device profiler variables are read at process start; core/batch.py already excludes TT_METAL_* runs) cannot share, the batch planner must know that rule and plan a separate process for it, not crash.
+      LIKELY CAUSE (owner 2026-11-13: a kernel leak): at 09:45 the node had 566 GB RAM, ~3 GB free, swap full; ~310 GB used by no process (not anon, not page cache, not hugetlb 36 GB, slab ~2 GB): kernel/driver memory leaked (tt-kmd 2.11.0, IOMMU on), likely pinned host buffers of killed processes. A driver fix is the infra team's (#exabox-infra); do not try to fix the kernel, never reset or reload the driver. What the framework must do: measure the process's peak host memory (RSS) for each gate unit and for the shared process; before starting a device process, check MemAvailable against the measured need (recorded per configuration) and stop with a clear INFRA message (free GB, needed GB, leaked GB = used minus all processes' RSS minus hugetlb) instead of being killed; record the free / leaked memory in the gate log. If X.3's shared process really needs more than the separate ones together, say so with numbers.
+      (2) False PASS: the gate printed "units passed: X.3#test_determinism, X.3#test_profile, X.3#test_positions" although test_profile and test_positions never ran (the process died during test_ladder). A unit the process never reached must be reported as not run / failed, everywhere (the summary, stamps, the delta, reuse), never as passed. Add a selftest that kills a shared process mid-run and checks every unit's reported status.
+      Proof on the device: X.3's gate (gate X.3 --fresh) PASSES with every metric present; report process count, loads, wall vs before (492 + 838 + 418 s + determinism), and the X.3 metrics vs its last recorded results (identical accuracy). Determinism 0. Never loosen a check.
+      SAFETY: a hang or a board reset need: STOP and report, never reset. Agent rules 18 and 19 hold. Report in plain language, short, every term defined.
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/selftest/test_one_process.py
+      && DS41_ENGRAM_TABLE=resident BRINGUP_RUNG=s56320 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py
+      && DS41_ENGRAM_TABLE=resident BRINGUP_FULL_PREFILL=1 BRINGUP_PROFILE_OPS=1 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_profile.py
+      && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_positions.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      prefill_ms_full: '> 0'
+      pos_chunk: '>= 1'
+      op_rows: '>= 1'
+      timeline_ok: == 1
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      determinism_max_abs_diff: == 0
 - id: O.1
   hold: 'owner 2026-11-06: not now (P.34-P.36 first)'
   title: 'Derived-op tests: a random-input case for every ttnn.bringup call this model makes'
