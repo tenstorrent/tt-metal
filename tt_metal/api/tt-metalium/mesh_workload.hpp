@@ -14,6 +14,10 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/program.hpp>
 
+namespace tt::tt_metal {
+struct ProgramSpec;
+}  // namespace tt::tt_metal
+
 namespace tt::tt_metal::distributed {
 
 class MeshWorkload;
@@ -33,6 +37,29 @@ class MeshWorkload {
 public:
     // Main User-Facing API building blocks
     MeshWorkload();
+
+    // Create a MeshWorkload object from a set of region-mapped ProgramSpecs
+    //
+    // INVARIANT: A successfully constructed MeshWorkload is always valid.
+    //
+    // PRE-CONDITION: If skip_validation is true, the caller guarantees that
+    // the ProgramSpecs satisfy all semantic validation requirements.
+    //
+    explicit MeshWorkload(
+        MeshDevice& mesh_device,
+        const std::unordered_map<MeshCoordinateRange, ProgramSpec>& program_specs,
+        bool skip_validation = false);
+
+    // Create a MeshWorkload object from single ProgramSpec,
+    // to be applied mesh-wide (SPMD)
+    //
+    // INVARIANT: A successfully constructed MeshWorkload is always valid.
+    //
+    // PRE-CONDITION: If skip_validation is true, the caller guarantees that
+    // the ProgramSpec satisfies all semantic validation requirements.
+    //
+    explicit MeshWorkload(MeshDevice& mesh_device, const ProgramSpec& program_spec, bool skip_validation = false);
+
     ~MeshWorkload();
     MeshWorkload(MeshWorkload&& other) noexcept;
     MeshWorkload& operator=(MeshWorkload&& other) noexcept;

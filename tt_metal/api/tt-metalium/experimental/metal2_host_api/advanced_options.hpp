@@ -204,8 +204,8 @@ struct KernelAdvancedOptions {
     //
     // Each binding reserves one pipe slot: a per-Program id (carried by the token) backed by one
     // kernel-config entry [config_page_addr, entry_size, relay_dfb_id] on every node the kernel
-    // runs on. The slot is reserved from the parameter's geometry at MakeProgramFromSpec, so the
-    // Program compiles without a live pipe, and bound to a PrefetcherPipe at SetProgramRunArgs,
+    // runs on. The slot is reserved from the parameter's geometry at Program construction, so the
+    // Program compiles without a live pipe, and bound to a PrefetcherPipe at Program::set_run_args,
     // which fills config_page_addr per node. Every node's slot must be bound before enqueue.
     //
     // Several pipes may share one slot when they tile the kernel's nodes (exactly one present per
@@ -229,8 +229,8 @@ struct KernelAdvancedOptions {
         // its other nodes.
         //
         // Each extra node must be one of the kernel's nodes and must not be a receiver of any
-        // pipe in the group (MakeProgramFromSpec checks this) or a pipe's sender
-        // (SetProgramRunArgs checks this, when the pipe objects are supplied).
+        // pipe in the group (Program construction checks this) or a pipe's sender
+        // (Program::set_run_args checks this, when the pipe objects are supplied).
         //
         // An extra node owns no part of any pipe. Its slot entry is copied from
         // pipe_parameter_names[0], so its config-page address can hold another pipe's page.
@@ -348,7 +348,7 @@ struct DFBAdvancedOptions {
     // copying: the DM kernel is the DFB's PRODUCER (it pushes each entry it receives from the
     // pipe), the compute kernel is its CONSUMER. Empty = ordinary local DFB.
     //
-    // Requirements (validated at MakeProgramFromSpec):
+    // Requirements (validated at Program construction):
     //  - mutually exclusive with DataflowBufferSpec::borrowed_from and allocation_override
     //  - entry_size == pipe entry_size and entry_size * num_entries == pipe ring_size, for every
     //    named pipe (all named pipes share ring_size and entry_size)
@@ -364,7 +364,7 @@ struct DFBAdvancedOptions {
     // tile the DFB's nodes (one relay for a whole grid fed by several senders), mirroring the
     // producer kernel's multi-pipe accessor. The pipes then supplied via ProgramRunArgs must
     // share ring and config addresses (come from one space); that is checked at
-    // SetProgramRunArgs, when the objects exist.
+    // Program::set_run_args, when the objects exist.
     //
     // CAUTION: The relay's storage is the pipe's ring, owned outside the Program. The DFB cannot
     //          be resized by DFBRunOverrides, and its address is only known once the pipe is bound.
@@ -442,8 +442,8 @@ struct AdvancedProgramRunArgs {
     using SRAMArenaArgument = std::reference_wrapper<const tt::tt_metal::experimental::SRAMArena>;
 
     // An SRAMArenaArgument must be specified:
-    //  For EVERY SRAMArenaParameter in the ProgramSpec, when calling SetProgramRunArgs.
-    //  For any SUBSET of SRAMArenaParameters, when calling UpdateProgramRunArgs.
+    //  For EVERY SRAMArenaParameter in the ProgramSpec, when calling Program::set_run_args.
+    //  For any SUBSET of SRAMArenaParameters, when calling Program::update_run_args.
     //
     // The supplied SRAMArena MUST live on the MeshDevice the Program was built for, and its
     // properties MUST match the SRAMArenaParameter's (see sram_arena_parameter.hpp).
@@ -454,7 +454,7 @@ struct AdvancedProgramRunArgs {
     //
     // CAUTION: SRAMArena is an RAII object. The user is responsible for keeping it alive until
     //          the last Program execution that uses it has completed on the device. A stale binding
-    //          to a destroyed SRAMArena (e.g. one retained by an UpdateProgramRunArgs call that
+    //          to a destroyed SRAMArena (e.g. one retained by a Program::update_run_args call that
     //          omits it) will produce undefined behavior.
     Table<SRAMArenaParamName, SRAMArenaArgument> sram_arena_args;
 
@@ -468,9 +468,9 @@ struct AdvancedProgramRunArgs {
 
     // A PrefetcherPipeArgument must be specified:
     //  For EVERY PrefetcherPipeParameter in the ProgramSpec that is not yet bound, when calling
-    //  SetProgramRunArgs. The binding is sticky (see below), so a later SetProgramRunArgs on the same
+    //  Program::set_run_args. The binding is sticky (see below), so a later Program::set_run_args on the same
     //  Program MAY omit a parameter it already bound; the first call must supply them all.
-    //  It MAY be omitted when calling UpdateProgramRunArgs.
+    //  It MAY be omitted when calling Program::update_run_args.
     //
     // The supplied pipe MUST live on the MeshDevice the Program was built for, and its geometry
     // (receivers, ring size) MUST match the parameter's; its ring must accommodate the parameter's

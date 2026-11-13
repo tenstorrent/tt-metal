@@ -15,7 +15,7 @@
 #include <tt-metalium/runtime_args_data.hpp>
 #include <tt-metalium/experimental/sram_arena/sram_arena.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/program.hpp>
 #include <tt-metalium/workload/specification/tensor_spec_relaxations.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
@@ -924,23 +924,23 @@ void AttachBorrowedDFBBuffers(
 // PUBLIC ENTRY POINTS: SetProgramRunArgs + UpdateTensorArgs
 // ============================================================================
 
-void experimental::SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip_validation) {
+void Program::set_run_args(const ProgramRunArgs& params, bool skip_validation) {
     log_debug(tt::LogMetal, "Setting ProgramRunArgs");
 
     // Metal 2.0 run-args API: only valid on a Program created from a ProgramSpec (the run-args
     // schema lives on the spec). Legacy Programs configure runtime args via SetRuntimeArgs.
     TT_FATAL(
-        program.impl().created_from_spec(),
+        impl().created_from_spec(),
         "SetProgramRunArgs requires a Metal 2.0 Program. "
         "For a legacy Program, use SetRuntimeArgs / SetCommonRuntimeArgs.");
 
     // Validate parameters against the schema (can be skipped for trusted inputs, e.g. cached-program
     // re-enqueue inner loops where the args have already been validated once).
     if (!skip_validation) {
-        ValidateProgramRunArgs(program, params);
+        ValidateProgramRunArgs(*this, params);
     }
 
-    tt_metal::detail::ProgramImpl& program_impl = program.impl();
+    tt_metal::detail::ProgramImpl& program_impl = impl();
 
     // Build a tensor_parameter_name -> MeshTensor lookup from the user's TensorArgument entries.
     // Used below to fill each kernel's TensorBinding CRTA section: at minimum, the binding's
@@ -1282,11 +1282,11 @@ void experimental::SetProgramRunArgs(Program& program, const ProgramRunArgs& par
     program_impl.mark_program_run_args_initialized();
 }
 
-void experimental::UpdateTensorArgs(
-    Program& program, const Table<TensorParamName, ProgramRunArgs::TensorArgument>& tensor_args, bool skip_validation) {
+void Program::update_tensor_args(
+    const Table<TensorParamName, ProgramRunArgs::TensorArgument>& tensor_args, bool skip_validation) {
     log_debug(tt::LogMetal, "Updating tensor args (partial fast-path)");
 
-    tt_metal::detail::ProgramImpl& program_impl = program.impl();
+    tt_metal::detail::ProgramImpl& program_impl = impl();
     // Metal 2.0 run-args API: only valid on a Program created from a ProgramSpec. (A legacy Program
     // would also fail the initialized-check below, but this gives the accurate reason.)
     TT_FATAL(
@@ -1299,7 +1299,7 @@ void experimental::UpdateTensorArgs(
 
     // Validate the TensorArgument list (shared with the full-path validator).
     if (!skip_validation) {
-        ValidateTensorArgs(program, tensor_args);
+        ValidateTensorArgs(*this, tensor_args);
     }
 
     // Build a tensor_parameter_name -> MeshTensor lookup.
@@ -1577,10 +1577,10 @@ void ValidateUpdateProgramRunArgs(const Program& program, const ProgramRunArgs& 
     ValidatePrefetcherPipeArgs(program, params.advanced_options.prefetcher_pipe_args, /*require_all=*/false);
 }
 
-void experimental::UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip_validation) {
+void Program::update_run_args(const ProgramRunArgs& params, bool skip_validation) {
     log_debug(tt::LogMetal, "Updating ProgramRunArgs (partial fast-path)");
 
-    tt_metal::detail::ProgramImpl& program_impl = program.impl();
+    tt_metal::detail::ProgramImpl& program_impl = impl();
     // Metal 2.0 run-args API: only valid on a Program created from a ProgramSpec. (A legacy Program
     // would also fail the initialized-check below, but this gives the accurate reason.)
     TT_FATAL(
@@ -1593,7 +1593,7 @@ void experimental::UpdateProgramRunArgs(Program& program, const ProgramRunArgs& 
         "SetProgramRunArgs at least once before a partial update.");
 
     if (!skip_validation) {
-        ValidateUpdateProgramRunArgs(program, params);
+        ValidateUpdateProgramRunArgs(*this, params);
     }
 
     // Patch the supplied args in place. Omitted named args and tensor params are left untouched,

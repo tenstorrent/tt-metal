@@ -57,7 +57,7 @@ namespace tt::tt_metal::experimental {
 //   receiver sets of the pipes in the accessor group. Those nodes must EITHER equal the
 //   disjoint union of the group's receiver sets (the kernel receives on every pipe in the
 //   group) OR lie outside all of them, one node per pipe (the kernel sends on every pipe in
-//   the group; which node hosts which pipe is settled at SetProgramRunArgs, from each
+//   the group; which node hosts which pipe is settled at Program::set_run_args, from each
 //   pipe's sender). Partial coverage of the receiver side, or a mix of the two, is
 //   rejected. Extra nodes take no part in the group's pipes (see
 //   KernelAdvancedOptions::PrefetcherPipeBinding::extra_nodes). Per pipe, at most one

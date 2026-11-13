@@ -84,7 +84,6 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/workload/specification/kernel_spec.hpp
     api/tt-metalium/vocabulary/node_coord.hpp
     api/tt-metalium/experimental/metal2_host_api/prefetcher_pipe_parameter.hpp
-    api/tt-metalium/experimental/metal2_host_api/program.hpp
     api/tt-metalium/workload/run_args/program_run_args.hpp
     api/tt-metalium/workload/specification/program_spec.hpp
     api/tt-metalium/experimental/metal2_host_api/sram_arena_parameter.hpp
