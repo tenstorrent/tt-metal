@@ -467,31 +467,12 @@ if(TT_METAL_USE_EMULE)
 endif()
 
 ############################################################################################################################
-# ELFIO : https://github.com/serge1/ELFIO
-# Declared ahead of tt-exalens so its native_elf.cmake reuses this patched copy (it only fetches when no elfio target exists).
-# Patch adds the missing <cstdint> include that newer libstdc++ (GCC 16+) no longer provides transitively.
-############################################################################################################################
-if(NOT TARGET elfio)
-    CPMAddPackage(
-        NAME ELFIO
-        GITHUB_REPOSITORY serge1/ELFIO
-        GIT_TAG Release_3.12
-        EXCLUDE_FROM_ALL YES
-        DOWNLOAD_ONLY YES
-        PATCHES
-            elfio_include_cstdint.patch
-    )
-    add_library(elfio INTERFACE)
-    target_include_directories(elfio SYSTEM INTERFACE "${ELFIO_SOURCE_DIR}")
-endif()
-
-############################################################################################################################
 # tt-exalens (only native ELF/DWARF parser)
 ############################################################################################################################
 CPMAddPackage(
     NAME ttexalens
     GITHUB_REPOSITORY tenstorrent/tt-exalens
-    GIT_TAG 6f5720240b7254b25cb3d78aef81769fc12a30f9
+    GIT_TAG 0e956c264eca3464a8f1974c7307d312a37d4b0c
     SOURCE_SUBDIR ttexalens/cpp/elf
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
