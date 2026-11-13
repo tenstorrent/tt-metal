@@ -124,7 +124,7 @@ def shift_scale_points_ttnn(pred_xyz, src_range, device=None):
     prop_xyz = ttnn.div(
         prop_xyz,
         src_diff,
-        accurate_mode=True,
+        fast_and_approximate_mode=False,
         rounding_mode=None,
     )
     prop_xyz = prop_xyz + dst_range[0]
