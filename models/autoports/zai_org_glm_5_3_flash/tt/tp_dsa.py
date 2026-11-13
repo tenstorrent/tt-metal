@@ -192,8 +192,9 @@ class TPMoE:
     def _hooked(self, io, desc, t: int):
         """The captured MkMoE program + the fabric phase -> MeshProgramDescriptor (one program per chip: the lanes'
         arguments and the weight streamer's e_lo differ)."""
-        # a native-t width bucket (t > 4 without its own phase): the 32-row phase (whole tiles: the t > 4 consumer)
-        fab = self.fabrics[t] if t in self.fabrics or t <= 4 or 32 not in self.fabrics else self.fabrics[32]
+        # a native-t width bucket (t > 4 without its own phase): the 32-row phase (whole tiles: the t > 4 consumer),
+        # or GLM53_STACK_NATIVE_FAB=pad's packed chunk phase on a B <= 16 build (fabric_ar.pick)
+        fab = FAR.pick(self.fabrics, t)
         nr = self.n_readers
         base, wkern, wdesc, seen = [], None, None, set()
         for i, kd in enumerate(desc.kernels):  # (ProgramDescriptor.kernels returns copies)

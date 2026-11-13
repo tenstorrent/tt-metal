@@ -70,6 +70,57 @@ def packed_bytes_per_tile(b: int) -> int:
     return 64 * b if b <= 16 else TB
 
 
+# GLM53_STACK_NATIVE_FAB: the phases of StackBackend's native widths (4 < w < max_batch) on a full width of <= 16 rows,
+# which has no 32-row phase (the B 16 x 1 M slot build): "own" (default) = width w runs on w-row phases of its own (the
+# B 16 build's t = 16 path at w rows); "pad" = on the full width's packed phase (rows w.. are padding). The 32-row full
+# width keeps serving every native width from its whole-tile phase in both modes.
+NATIVE_FAB_MODES = ("own", "pad")
+
+
+def native_fab_mode(env=None) -> str:
+    v = (os.environ if env is None else env).get("GLM53_STACK_NATIVE_FAB", "own") or "own"
+    if v not in NATIVE_FAB_MODES:
+        raise ValueError(f"GLM53_STACK_NATIVE_FAB={v!r}: one of {NATIVE_FAB_MODES}")
+    return v
+
+
+def serves(fab_b: int, b: int, mode: str | None = None) -> bool:
+    """whether a b-row program may run on a phase built for fab_b rows: its own row count; at b > 4 the 32-row phase
+    (whole tiles: the B 32 build's native widths) or, mode "pad", a packed phase of more rows (<= 16; rows b..fab_b - 1
+    padding). Every t > 4 consumer reads the phase's own V / CH (mhc_post reader.cpp MK_POST_Y_FABRIC, xa.cpp
+    MKX_FAB_BROWS) and every producer packs MK_FAB_BROWS = the phase's rows: the row count of a phase and of its
+    program only have to agree on the phase's side (2026-10-20: b = 8 / 16 phases under the then whole-tile t > 4
+    consumer hung the mesh)."""
+    if fab_b == b:
+        return True
+    if b <= 4:
+        return False
+    return fab_b == 32 or ((mode or native_fab_mode()) == "pad" and b < fab_b <= 16)
+
+
+def pick(fabrics: dict, t: int, mode: str | None = None):
+    """the phase a t-row sparse_dsa program runs on (TPMla.fabric, TPMoE._hooked): its own; at t > 4 without one the
+    32-row phase, else (mode "pad") the smallest packed phase above t. KeyError when none serves t."""
+    if t in fabrics or t <= 4:
+        return fabrics[t]
+    if 32 in fabrics:
+        return fabrics[32]
+    mode = mode or native_fab_mode()
+    big = sorted(k for k in fabrics if serves(k, t, mode)) if mode == "pad" else []
+    if big:
+        return fabrics[big[0]]
+    raise KeyError(f"no fabric phase serves t = {t} (phases {sorted(fabrics)}, GLM53_STACK_NATIVE_FAB={mode})")
+
+
+def native_ts(native_widths, chunk: int, mode: str | None = None) -> tuple:
+    """the native widths that join the sparse_dsa layers' ts (TPDsaLayer: an MLA + a MoE phase and the DSA streams per
+    row count): all of them with mode "own" on a full width of <= 16 rows; none on the 32-row full width (its phase
+    serves them) or with "pad" (the chunk's phase serves them; TPMlaShard adds their streams)"""
+    if chunk > 16 or not native_widths:
+        return ()
+    return tuple(sorted(int(w) for w in native_widths)) if (mode or native_fab_mode()) == "own" else ()
+
+
 def _crs(cores):
     return ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in cores])
 

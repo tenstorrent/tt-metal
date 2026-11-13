@@ -431,6 +431,19 @@ class StackBackend(ModelBackend):
                               if self.chunk == max_batch and max_batch > CHUNK else ())  # fmt: skip
         if self.native_widths:
             self.width_bucketed_decode = self.native_widths
+        # GLM53_STACK_NATIVE_FAB (fabric_ar.native_fab_mode; a full width of <= 16 rows has no 32-row phase -- the B 16
+        # x 1 M slot build, 2026-11-13): "own" (default) = width w gets w-row phases of its own: one per KDA kind (built
+        # like a narrow width's) + the sparse_dsa MLA / MoE phases and DSA streams at t = w (w joins their ts), i.e. the
+        # B 16 build's t = 16 path at w rows; "pad" = the width-w programs on the full width's packed phases (rows
+        # w..chunk-1 padding: idle slots, rewritten by the next step's embed) + the DSA streams at t = w. L1 reserved on
+        # every core (sync words): "own" 4 x 896 B + 4 x 1,536 B per width, "pad" 4 x 1,536 B. The 32-row full width
+        # serves its native widths from its whole-tile phase (unchanged).
+        if self.native_widths and self.chunk <= 16:
+            from models.autoports.zai_org_glm_5_3_flash.tt import fabric_ar as FAR
+
+            self.native_fab = FAR.native_fab_mode()
+        else:
+            self.native_fab = None
         # narrow widths (w <= 4): the STACKED t = w layer programs (the B <= 4 backends' programs) on the SHARED 32-row
         # state with their own stacked residual and t = w views of the embed / head; built after the image-recorded
         # construction (allocate_kv_cache: the DRAM image map stays the 32-row one's). GLM53_STACK_NARROW_WIDTHS ("none")
@@ -580,12 +593,22 @@ class StackBackend(ModelBackend):
 
     def _build_width(self, source, ids, wc, seq, w, TPL, TPSP, OptimizedDecoderConfig):
         """the TP layers of native width w: programs only (every weight from the cache wc, sliced experts included),
-        each KDA kind on the full width's 32-row fabric phase (whole-tile packets: the t > 4 consumer); the sparse_dsa
-        entries are the full width's (their TPDsaLayer objects carry a fabric phase per width)"""
+        each KDA kind on the full width's 32-row fabric phase (whole-tile packets: the t > 4 consumer) -- on a full
+        width of <= 16 rows (GLM53_STACK_NATIVE_FAB) a w-row phase of its own ("own") or the full width's packed one
+        ("pad"); the sparse_dsa entries are the full width's (their TPDsaLayer objects carry a fabric phase per width)
+        """
         fabs = {}
         for e in seq:
             if e["sparse"] != "dsa":
                 fabs.setdefault(SPARSE_KDA if e["sparse"] else DENSE_KDA, e["tp"].fabric)
+        if self.native_fab == "own":  # w-row phases on the full width's lane cores (a narrow width's construction)
+            from models.autoports.zai_org_glm_5_3_flash.tt import fabric_ar as FAR
+
+            for kind, f in list(fabs.items()):
+                if f is not None:
+                    nf = FAR.FabricPhase(self.mesh, w, lanes=f.lanes, mode="cb")
+                    nf.probe()
+                    fabs[kind] = nf
         sliced = os.environ.get("GLM53_TP_XSL") == "1" and os.environ.get("GLM53_TP_XSL_SLICED") == "1"
         out = []
         for L, e in zip(ids, seq):
@@ -662,7 +685,9 @@ class StackBackend(ModelBackend):
                                      f"GLM53_DSA_SHARD={int(self.dsa_shard)}")  # fmt: skip
                 if d is None:  # a cached layer serves every t <= 4 + this chunk (its fabric phases per row count)
                     moe = build(self.mesh, self.cfg, source, L, OptimizedDecoderConfig())
-                    # (native widths > 4 run on the 32-row phases: tp_mla.fabric / tp_dsa._hooked fall back to them)
+                    # (native widths > 4 run on the 32-row phases: tp_mla.fabric / tp_dsa._hooked fall back to them;
+                    # on a <= 16-row full width GLM53_STACK_NATIVE_FAB=own adds them to ts, "pad" falls back to the
+                    # chunk's packed phase: fabric_ar.pick / native_ts)
                     # (the weight cache: the row counts this construction runs -- the chunk, the narrow widths and the
                     # spec step's (1, K + 1): the MTP layer shares the sparse_dsa layers' phases at those two -- not
                     # every t <= 4: each row count holds a fabric phase (2 x 896 B of L1 sync words) and, on the shard,
@@ -689,7 +714,10 @@ class StackBackend(ModelBackend):
                         if spec_multi_lone():  # (GLM53_SPEC_MULTI_LONE: the lone-user step's G 1 row counts)
                             spec_ts |= set(spec_widths(k_spec, self.chunk, tuple(self.narrow_widths)
                                                        + tuple(self.native_widths), groups=1)["ts"])  # fmt: skip
-                    ts = tuple(sorted({self.chunk} | set(self.narrow_widths) | spec_ts))
+                    from models.autoports.zai_org_glm_5_3_flash.tt import fabric_ar as FAR
+
+                    nat_ts = set(FAR.native_ts(self.native_widths, self.chunk, self.native_fab or "own"))
+                    ts = tuple(sorted({self.chunk} | set(self.narrow_widths) | spec_ts | nat_ts))
                     d = TPD.TPDsaLayer(self.mesh, self.cfg, L, source, OptimizedDecoderConfig(), moe=moe, ts=ts,
                                        share=dsa_share, dsa=self.dsa_decode, defer=self.dsa_defer,
                                        shard=self.dsa_shard)  # fmt: skip
@@ -697,8 +725,8 @@ class StackBackend(ModelBackend):
                 assert d.mla.nofab or (
                     self.chunk in d.mla.fabrics
                     and self.chunk in d.moe.fabrics
-                    and (not self.native_widths or (32 in d.mla.fabrics and 32 in d.moe.fabrics))
-                ), (L, self.chunk)
+                    and all(_serves_t(fs, w) for fs in (d.mla.fabrics, d.moe.fabrics) for w in self.native_widths)
+                ), (L, self.chunk, self.native_widths, self.native_fab, sorted(d.mla.fabrics), sorted(d.moe.fabrics))
                 dsa_share = dsa_share or d
                 seq.append(dict(L=L, mla=d.mla, moe=d.moe, attn=d.attn, sparse="dsa", kda=None, tp=d))
                 continue
@@ -3355,6 +3383,17 @@ def _rows_view(t_, rows: int):
     if shp[-2] == rows:
         return t_
     return ttnn.reshape(t_, ttnn.Shape(shp[:-2] + [rows, shp[-1]]), ttnn.Shape([int(v) for v in t_.padded_shape]))
+
+
+def _serves_t(fabrics: dict, t: int) -> bool:
+    """a sparse_dsa layer's phases serve a t-row program (fabric_ar.pick: its own, the 32-row one, or "pad"'s)"""
+    from models.autoports.zai_org_glm_5_3_flash.tt import fabric_ar as FAR
+
+    try:
+        FAR.pick(fabrics, t)
+    except KeyError:
+        return False
+    return True
 
 
 def _seed_width(o, w: int, full: int) -> None:

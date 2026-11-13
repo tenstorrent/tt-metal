@@ -37,6 +37,7 @@ import os
 
 import ttnn
 from models.autoports.zai_org_glm_5_3_flash.tt import dsa_shard as DS
+from models.autoports.zai_org_glm_5_3_flash.tt import fabric_ar as FAR
 from models.autoports.zai_org_glm_5_3_flash.tt import fabric_stream as FS
 from models.autoports.zai_org_glm_5_3_flash.tt import mk_mla as MK
 from models.autoports.zai_org_glm_5_3_flash.tt import shard_plan as SP
@@ -65,10 +66,13 @@ class TPMlaShard(TPM.TPMla):
         self.geo = SP.Geometry(self.R, self.C)  # raises unless 1x2 / 2x1 / 2x4 / 8x4
         self.n, self.L, self.P = self.geo.n, self.geo.L, self.geo.P
         wts = set(ts) | set(int(v) for v in (stream_ts or ()))
-        if 32 in ts:  # StackBackend's native widths (t = w calls on this object, the 32-row FabricPhase)
+        # StackBackend's native widths (t = w calls on this object): on the 32-row FabricPhase, or (B <= 16 full width,
+        # GLM53_STACK_NATIVE_FAB=pad) on the chunk's packed phase -- their streams here; "own" puts them in ts
+        top = 32 if 32 in ts else (max(ts) if max(ts) > 4 and FAR.native_fab_mode() == "pad" else 0)
+        if top:
             nspec = os.environ.get("GLM53_STACK_NATIVE_WIDTHS", "none")
             wts |= (
-                {int(v) for v in nspec.split(",") if v.strip() and 4 < int(v) < 32}
+                {int(v) for v in nspec.split(",") if v.strip() and 4 < int(v) < top}
                 if nspec not in ("", "none")
                 else set()
             )

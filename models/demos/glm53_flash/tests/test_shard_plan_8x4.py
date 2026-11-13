@@ -1403,6 +1403,70 @@ def test_sel2_knobs(monkeypatch):
     assert '("MLA_DSA_SHARD_SEL2", "1")' in src
 
 
+_NATIVE_FAB_CHILD = r"""
+import os, sys
+from unittest import mock
+
+sys.modules["ttnn"] = mock.MagicMock()  # fabric_ar's module-level ttnn import only: nothing below calls it
+from models.autoports.zai_org_glm_5_3_flash.tt import fabric_ar as FAR
+
+
+def raises(exc, fn, *a):
+    try:
+        fn(*a)
+    except exc:
+        return True
+    return False
+
+
+# the B 32 build: every native width on the 32-row whole-tile phase, nothing joins ts, in both modes
+b32 = {1: "p1", 4: "p4", 32: "p32"}
+for m in FAR.NATIVE_FAB_MODES:
+    assert FAR.pick(b32, 8, m) == "p32" and FAR.pick(b32, 16, m) == "p32" and FAR.pick(b32, 4, m) == "p4", m
+    assert FAR.serves(32, 8, m) and FAR.serves(32, 16, m) and not FAR.serves(32, 4, m), m
+    assert FAR.native_ts((8, 16), 32, m) == (), m
+    assert raises(KeyError, FAR.pick, b32, 2, m), m  # t <= 4: only its own phase
+# the B 16 build, "own": width 8 joins the sparse_dsa ts and runs on its own 8-row phase only
+assert FAR.native_ts((8,), 16, "own") == (8,) and FAR.native_ts((), 16, "own") == ()
+assert FAR.pick({4: "p4", 8: "p8", 16: "p16"}, 8, "own") == "p8"
+assert raises(KeyError, FAR.pick, {4: "p4", 16: "p16"}, 8, "own")  # (the 11-12 stack_model.py:677 failure)
+assert FAR.serves(8, 8, "own") and not FAR.serves(16, 8, "own")
+# "pad": the chunk's packed 16-row phase (rows 8..15 padding), nothing joins ts
+assert FAR.native_ts((8,), 16, "pad") == ()
+assert FAR.pick({4: "p4", 16: "p16"}, 8, "pad") == "p16" and FAR.serves(16, 8, "pad")
+assert FAR.pick({4: "p4", 8: "p8", 16: "p16"}, 8, "pad") == "p8"  # its own phase first
+assert not FAR.serves(16, 4, "pad") and not FAR.serves(8, 16, "pad") and FAR.serves(32, 8, "pad")
+# an 8-row phase sits between the served 4- and 16-row ones: packed bytes per tile / lane pseudo-tiles
+assert [(FAR.packed_bytes_per_tile(b), FAR.LANE_TILES * FAR.packed_bytes_per_tile(b) // 2048) for b in (4, 8, 16)] == [
+    (256, 8), (512, 16), (1024, 32)]
+# the env knob
+os.environ.pop("GLM53_STACK_NATIVE_FAB", None)
+assert FAR.native_fab_mode() == "own"
+os.environ["GLM53_STACK_NATIVE_FAB"] = "pad"
+assert FAR.native_fab_mode() == "pad" and FAR.pick({16: "p16"}, 8) == "p16"
+os.environ["GLM53_STACK_NATIVE_FAB"] = "wide"
+assert raises(ValueError, FAR.native_fab_mode)
+print("NATIVE_FAB_OK")
+"""
+
+
+def test_native_width_fabric_policy():
+    """GLM53_STACK_NATIVE_FAB (tt/fabric_ar.py serves / pick / native_ts: decode width 8 on the B 16 build, whose full
+    width has no 32-row phase): the B 32 build unchanged; "own" = width 8's own phases (in the sparse_dsa ts), "pad" =
+    the chunk's packed phase. fabric_ar imports ttnn at module level, so it runs in a child with a stub ttnn (this
+    process stays ttnn-free: test_zz below)."""
+    import os
+    import subprocess
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[4]
+    env = dict(os.environ, PYTHONPATH=str(root))
+    env.pop("GLM53_STACK_NATIVE_FAB", None)
+    r = subprocess.run([sys.executable, "-c", _NATIVE_FAB_CHILD], cwd=str(root), env=env, capture_output=True,
+                       text=True, timeout=300)  # fmt: skip
+    assert r.returncode == 0 and "NATIVE_FAB_OK" in r.stdout, (r.returncode, r.stdout[-2000:], r.stderr[-4000:])
+
+
 def test_zz_no_ttnn_was_imported_by_the_suite():
     """The unit CI runs this file without the root conftest: a host suite must never pull ttnn in (it would open
     every chip of the box beside a running mesh job)."""

@@ -226,13 +226,9 @@ class TPDenseKDALayer:
         # buffer whose address range is reserved on EVERY core: one per layer of the 45 pushed the lowest L1 address
         # under native B=32's static CBs (14b 17:15Z clash)
         fabric = self._fabric_share
-        # (a width-bucket layer, b > 4, runs on its kind's 32-row phase: whole-tile packets, the t > 4 consumer)
-        if (
-            not self.nofab
-            and fabric is not None
-            and (fabric.b == b or (b > 4 and fabric.b == 32))
-            and _same_lanes(fabric.lanes, self.lanes)
-        ):
+        # (a width-bucket layer, b > 4, runs on its kind's 32-row phase: whole-tile packets, the t > 4 consumer; or
+        # GLM53_STACK_NATIVE_FAB=pad's packed phase of the B <= 16 full width: fabric_ar.serves)
+        if not self.nofab and fabric is not None and FAR.serves(fabric.b, b) and _same_lanes(fabric.lanes, self.lanes):
             self.fabric = fabric
         else:
             self.fabric = None if self.nofab else FAR.FabricPhase(mesh, b, lanes=self.lanes, mode="cb")

@@ -143,11 +143,9 @@ class TPMla:
         return f
 
     def fabric(self, t: int):
-        # a native-t width bucket (t > 4 without its own phase): the 32-row phase, whole-tile packets — the t > 4
-        # consumer path (a b = 8 / 16 phase packs rows: StackBackend's widths hung the mesh with them, 2026-10-20)
-        if t not in self.fabrics and t > 4 and 32 in self.fabrics:
-            return self.fabrics[32]
-        return self.fabrics[t]
+        # a native-t width bucket (t > 4 without its own phase): the 32-row phase, whole-tile packets; on a B <= 16
+        # build GLM53_STACK_NATIVE_FAB=pad's packed chunk phase (fabric_ar.pick; "own" puts t in ts)
+        return FAR.pick(self.fabrics, t)
 
     def _hooked(self, io, desc, t: int):
         """The captured MkMla program + the fabric phase -> MeshProgramDescriptor (one program per chip)."""
