@@ -1065,24 +1065,24 @@ class GRPOTrainer:
 
         # World size for the loss normalization. ``synchronize_gradients`` /
         # ``sync_gradients`` all-reduce (sum) each replicated gradient and then
-        # divide by the product of the sizes of the axes they reduce over,
-        # leaving the mean. ``_compute_grpo_loss`` must divide the loss by that
+        # divide by the product of the sizes of the data-parallel axes they
+        # reduce over, leaving the mean.
+        # ``_compute_grpo_loss`` must divide the loss by that
         # SAME factor (see its docstring) so the two cancel to the intended
         # global-mean gradient. Derive it from the exact axes each branch syncs,
         # rather than blanket ``get_num_devices()``, so the normalization stays
         # correct even on a mesh whose reduced axes don't span every device
         # (e.g. a "dp" axis narrower than the full mesh).
         if fsdp_enabled:
-            # sync_gradients over fsdp_sync_axes -> divide by their size product.
+            # sync_gradients averages over fsdp_sync_axes -> divide by their size product.
             grad_sync_world_size = 1
             for _name in fsdp_sync_axes:
                 grad_sync_world_size *= mesh.axis_size(_name)
         elif ddp_context_enabled:
             # C++ synchronize_gradients reduces each replicated grad over ONLY
-            # the context's DDP axis (and CP, if enabled) — never TP: TP-sharded
-            # params hold per-shard-correct grads and TP-replicated params
-            # already match across TP ranks. So the divisor is the DDP-axis
-            # device count, NOT get_num_devices(). Using the whole-mesh count
+            # the context's DDP axis (and CP, if enabled), never TP. So the
+            # divisor is the DDP-axis device count, NOT get_num_devices().
+            # Using the whole-mesh count
             # would over-divide by the TP factor on a DP+TP mesh and normalize
             # the loss incorrectly. Read the exact DDP size from the context.
             #
@@ -1100,7 +1100,7 @@ class GRPOTrainer:
             # normalize by the CP factor — the same bug this branch fixes for TP.
             grad_sync_world_size = autograd_ctx.get_parallelism_context().get_ddp_size()
         elif ddp_enabled:
-            # sync_gradients over ("dp",) -> divide by the "dp" axis size.
+            # sync_gradients averages over "dp" -> divide by the "dp" axis size.
             grad_sync_world_size = mesh.axis_size("dp")
         else:
             grad_sync_world_size = 1
@@ -1375,21 +1375,18 @@ class GRPOTrainer:
           4. ``optimizer.step()`` + ``zero_grad``.
           5. ``self._lr_scheduler.step()`` sets the next step's LR.
         """
-        if self._fsdp_enabled:
-            ttml.sync_gradients(self.model.parameters())
-        elif self._ddp_context_enabled:
+        if self._ddp_context_enabled and not self._fsdp_enabled:
             # Parallelism-context DDP (Llama completer): a parallelism context
             # is initialized, so use its gradient sync. ``sync_gradients`` would
             # be a silent no-op here — it reduces over named mesh axes, and this
             # path opens no named mesh (``maybe_mesh()`` is None), so it would
             # leave gradients un-averaged.
             ttml.core.distributed.synchronize_gradients(self.model.parameters())
-        elif self._ddp_enabled:
-            # Named-mesh DDP (Qwen3 completer): no parallelism context exists,
-            # so all-reduce + average grads over the "dp" mesh axis — the same
-            # primitive FSDP uses. The loss normalization divides by
-            # ``grad_sync_world_size`` (= the "dp" axis size here), matched to
-            # this reduction.
+        elif self._fsdp_enabled or self._ddp_enabled:
+            # Named mesh (FSDP, or DDP for the Qwen3 completer): all-reduce +
+            # average grads over the "dp" and "fsdp" mesh axes, then sum the
+            # gradients marked partial. The loss normalization divides by
+            # ``grad_sync_world_size``, matched to this reduction.
             ttml.sync_gradients(self.model.parameters())
 
         for cb in self.callbacks:

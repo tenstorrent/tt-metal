@@ -12,8 +12,8 @@ import numpy as np
 
 import ttnn
 import ttml
-from ttml.parallel import SEQUENCE_DIM
 
+from .linear import exit_tp_region
 from .module_base import AbstractModuleBase
 from .parameter import Parameter
 
@@ -120,7 +120,8 @@ class VocabParallelEmbedding(AbstractModuleBase):
         # per-device (rather than sharding a global tensor) may round the shard up
         # to a tile boundary, which silently shifts every rank after the first by
         # the difference -- so check the tensor we actually got.
-        # A lazy weight is sharded from its global shape at materialization, so only an eager one can differ.
+        # A lazy weight has no tensor yet, so only an eager one is checked; a lazy one is materialized later, by the
+        # same weight_init, unchecked.
         local_rows = None if self.weight.is_lazy else self.weight.tensor.shape()[2]
         if local_rows is not None and local_rows != self.num_embeddings_per_partition:
             raise ValueError(
@@ -145,14 +146,11 @@ class VocabParallelEmbedding(AbstractModuleBase):
         The per-rank offset masking is only correct when every TP device sees the
         full ids, so a shard on the TP axis silently produces wrong embeddings.
         """
-        placements = ttml.Sharding.from_tensor(x).placements
-        if self.cluster_axis >= len(placements):
-            return
-        p = placements[self.cluster_axis]
-        if isinstance(p, ttnn.PlacementShard):
+        dim = ttml.Sharding.from_tensor(x).shard_dim(self.cluster_axis)
+        if dim is not None:
             raise ValueError(
                 f"VocabParallelEmbedding expects ids replicated across TP axis '{self.axis_name}', "
-                f"got PlacementShard(dim={p.dim}). Each TP device must see the full ids for the "
+                f"got PlacementShard(dim={dim}). Each TP device must see the full ids for the "
                 f"offset masking to be correct."
             )
 
@@ -196,11 +194,7 @@ class VocabParallelEmbedding(AbstractModuleBase):
         mask = ttnn.transpose(ttnn.to_layout(ttnn.typecast(in_range, ttnn.DataType.FLOAT32), ttnn.Layout.TILE), 2, 3)
         emb = ttml.ops.binary.mul(emb, ttml.autograd.create_tensor(mask, requires_grad=False))
 
-        # Each token is nonzero on exactly one device, so summing across TP reconstructs it.
-        if self.sequence_parallel:
-            # Same sum, landing sequence-sharded for the first block.
-            return ttml.ops.distributed.reduce_scatter(emb, SEQUENCE_DIM, self.cluster_axis)
-        return ttml.ops.distributed.all_reduce(emb, noop_backward=True, cluster_axis=self.cluster_axis)
+        return exit_tp_region(emb, self.cluster_axis, self.sequence_parallel)
 
 
 class FeatureParallelEmbedding(AbstractModuleBase):
@@ -274,14 +268,11 @@ class FeatureParallelEmbedding(AbstractModuleBase):
         Every device holds a different embedding-dim slice of the *full* vocab,
         so each needs the complete ids; a TP shard would silently drop tokens.
         """
-        placements = ttml.Sharding.from_tensor(x).placements
-        if self.cluster_axis >= len(placements):
-            return
-        p = placements[self.cluster_axis]
-        if isinstance(p, ttnn.PlacementShard):
+        dim = ttml.Sharding.from_tensor(x).shard_dim(self.cluster_axis)
+        if dim is not None:
             raise ValueError(
                 f"FeatureParallelEmbedding expects ids replicated across TP axis "
-                f"'{self.axis_name}', got PlacementShard(dim={p.dim}). Each TP device must see "
+                f"'{self.axis_name}', got PlacementShard(dim={dim}). Each TP device must see "
                 f"the full ids to look up its embedding-dim slice for every token."
             )
 

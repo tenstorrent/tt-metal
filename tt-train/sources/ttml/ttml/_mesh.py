@@ -278,10 +278,7 @@ def average_gradients(parameters, axis_names: tuple[str, ...]):
         if not axes_for_param:
             continue
 
-        scaler = prod(m.shape[axis] for axis in axes_for_param)
-        if scaler == 1:
-            continue
-        inv_scaler = 1.0 / float(scaler)
+        inv_scaler = 1.0 / float(prod(m.shape[axis] for axis in axes_for_param))
 
         grad = param.get_grad()
         for axis in axes_for_param:
@@ -312,7 +309,9 @@ def sum_partial_gradients(parameters):
     for _, param in parameters.items():
         if not param.is_grad_initialized():
             continue
-        axes = [m.axis_index(name) for name in partial_axes(param) if m.has_axis(name) and m.axis_size(name) > 1]
+        # Mesh-axis order: every process must issue these collectives in the same order, and a set of names
+        # iterates in an order that differs between processes.
+        axes = sorted(m.axis_index(name) for name in partial_axes(param) if m.has_axis(name) and m.axis_size(name) > 1)
         if not axes:
             continue
         grad = param.get_grad()

@@ -2,11 +2,11 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tensor-parallel vocab padding, in both places that implement it.
+"""Tensor-parallel vocab padding, in every place that implements it.
 
-The rule is one invariant with two implementations -- ``tp_padded_vocab_size`` in the
-qwen3 example and ``Llama.padded_vocab_size`` in ``ttml.models.llama`` -- so both are
-covered here.
+The rule is one invariant with three implementations -- ``tp_padded_vocab_size`` in the
+qwen3 example, ``Llama.padded_vocab_size`` in ``ttml.models.llama`` and
+``DeepSeek.padded_vocab_size`` in ``ttml.models.deepseek`` -- so all are covered here.
 
 The padded vocab must be divisible by ``tp_size`` (ColumnParallelLinear and
 VocabParallelEmbedding both shard dim 2 across TP) *and* each resulting shard must be
@@ -62,6 +62,7 @@ sys.path.insert(0, _QWEN3_EXAMPLE)
 _saved_utils = {k: sys.modules.pop(k) for k in list(sys.modules) if k == "utils" or k.startswith("utils.")}
 try:
     from ttml.models.qwen3 import Qwen3Config  # noqa: E402
+    from ttml.models.deepseek import DeepSeek, DeepSeekConfig  # noqa: E402
     from ttml.models.llama import EmbeddingPlacement, Llama, LlamaConfig  # noqa: E402
     from ttml.parallel import TPStrategy  # noqa: E402
     from utils.context_managers import empty_init  # noqa: E402
@@ -94,7 +95,7 @@ def _tied_model(vocab):
 
 
 # ---------------------------------------------------------------------------
-# 1. The padding formula, in both implementations
+# 1. The padding formula, in every implementation
 # ---------------------------------------------------------------------------
 
 
@@ -115,6 +116,42 @@ def test_qwen3_padded_vocab_gives_tile_aligned_shards(tp_mesh, vocab):
     _assert_shards_tile_aligned(tp_padded_vocab_size(vocab), vocab, tp_mesh.axis_size("tp"))
 
 
+def _llama_tp(vocab):
+    return Llama(
+        LlamaConfig(
+            hidden_size=HIDDEN,
+            num_hidden_layers=1,
+            num_attention_heads=TP_AXIS_SIZE,
+            num_key_value_heads=TP_AXIS_SIZE,
+            intermediate_size=128,
+            vocab_size=vocab,
+            max_position_embeddings=32,
+            tp_strategy=TPStrategy.TENSOR,
+            embedding_placement=EmbeddingPlacement.VocabParallel,
+        )
+    )
+
+
+def _deepseek_tp(vocab):
+    return DeepSeek(
+        DeepSeekConfig(
+            vocab_size=vocab,
+            dim=HIDDEN,
+            inter_dim=128,
+            n_layers=1,
+            n_dense_layers=1,
+            n_heads=TP_AXIS_SIZE,
+            q_lora_rank=0,
+            kv_lora_rank=32,
+            qk_nope_head_dim=32,
+            qk_rope_head_dim=32,
+            v_head_dim=32,
+            max_seq_len=32,
+            use_tp=True,
+        )
+    )
+
+
 @pytest.mark.parametrize("vocab", [64, 96, 151936])
 def test_llama_padded_vocab_gives_tile_aligned_shards(tp_mesh, vocab):
     """``ttml.models.llama`` carries the same rule and had the same ``lcm`` bug.
@@ -123,18 +160,14 @@ def test_llama_padded_vocab_gives_tile_aligned_shards(tp_mesh, vocab):
     logical shape stays ``V / tp`` and self-consistent -- but the padding still has to
     honour the tile constraint it claims to.
     """
-    cfg = LlamaConfig(
-        hidden_size=HIDDEN,
-        num_hidden_layers=1,
-        num_attention_heads=TP_AXIS_SIZE,
-        num_key_value_heads=TP_AXIS_SIZE,
-        intermediate_size=128,
-        vocab_size=vocab,
-        max_position_embeddings=32,
-        tp_strategy=TPStrategy.TENSOR,
-        embedding_placement=EmbeddingPlacement.VocabParallel,
-    )
-    _assert_shards_tile_aligned(Llama(cfg).padded_vocab_size, vocab, tp_mesh.axis_size("tp"))
+    _assert_shards_tile_aligned(_llama_tp(vocab).padded_vocab_size, vocab, tp_mesh.axis_size("tp"))
+
+
+@pytest.mark.parametrize("vocab", [64, 96, 102400])
+def test_deepseek_padded_vocab_gives_tile_aligned_shards(tp_mesh, vocab):
+    """``ttml.models.deepseek`` padded to ``lcm(32, tp_size)`` while its LM head gathered the logits; they now stay
+    sharded along the vocab, so the padding takes the same rule."""
+    _assert_shards_tile_aligned(_deepseek_tp(vocab).padded_vocab_size, vocab, tp_mesh.axis_size("tp"))
 
 
 # ---------------------------------------------------------------------------
@@ -214,3 +247,36 @@ def test_every_rank_reads_its_own_vocab_rows(tp_mesh):
     rows_read = [int(round(got[i, 1])) * 128 + int(round(got[i, 0])) - 1 for i in range(len(probes))]
     shifted = [(p, r) for p, r in zip(probes, rows_read) if p != r]
     assert not shifted, f"(id, row_read) pairs disagree, -1 means the zero padding: {shifted}"
+
+
+# ---------------------------------------------------------------------------
+# 4. The padded columns take no probability
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("build", [_llama_tp, _deepseek_tp], ids=["llama", "deepseek"])
+def test_the_padded_columns_take_no_probability(tp_mesh, build):
+    vocab, seq_len = 100, 32  # padded to 128 at TP=2
+    model = build(vocab)
+    rng = np.random.default_rng(5)
+    ids = rng.integers(0, vocab, (2, 1, 1, seq_len)).astype(np.uint32)
+    targets = rng.integers(0, vocab, (2, seq_len)).astype(np.uint32)
+    mask = np.tril(np.ones((1, 1, seq_len, seq_len), dtype=np.float32))
+    logits = model(
+        ttml.autograd.Tensor.from_numpy(ids, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32),
+        ttml.autograd.Tensor.from_numpy(mask, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16),
+    )
+    loss = ttml.ops.distributed.vocab_parallel_cross_entropy_loss(
+        logits,
+        ttml.autograd.Tensor.from_numpy(targets, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32),
+        cluster_axis=tp_mesh.axis_index("tp"),
+    )
+
+    real = ttml.Sharding.from_tensor(logits).gather(logits)[:, 0, :, :vocab].astype(np.float64)
+    peak = real.max(axis=-1, keepdims=True)
+    log_partition = peak[..., 0] + np.log(np.exp(real - peak).sum(axis=-1))
+    target_logits = np.take_along_axis(real, targets[..., None].astype(np.int64), axis=-1)[..., 0]
+    expected = (log_partition - target_logits).mean()
+    actual = float(ttml.Sharding.from_tensor(loss).gather(loss).mean())
+    ttml.autograd.AutoContext.get_instance().reset_graph()
+    assert abs(actual - expected) < 0.05, f"loss {actual:.4f}; cross-entropy over the real vocab {expected:.4f}"

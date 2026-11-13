@@ -4,7 +4,6 @@
 
 #include "comm_ops.hpp"
 
-#include "autograd/auto_context.hpp"
 #include "autograd/graph.hpp"
 #include "autograd/graph_utils.hpp"
 #include "ttnn_fixed/distributed/ttnn_ops.hpp"

@@ -8,10 +8,13 @@
 
 #include <enchantum/enchantum.hpp>
 #include <stdexcept>
+#include <string>
+#include <variant>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/graph_utils.hpp"
 #include "core/compute_kernel_config.hpp"
+#include "core/distributed/distributed.hpp"
 #include "metal/ops/select_target_logit/device/select_target_logit_device_operation.hpp"
 #include "metal/ops/subtract_at_target/device/subtract_at_target_device_operation.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
@@ -36,6 +39,27 @@ ttnn::Tensor fused_subtract_exp_fp32(const ttnn::Tensor& a, const ttnn::Tensor& 
         /*memory_config=*/std::nullopt,
         /*output=*/std::nullopt,
         post_activations);
+}
+
+void check_sharded_along_the_vocab(const ttnn::Tensor& logits, std::optional<uint32_t> cluster_axis) {
+    using Shard = tt::tt_metal::distributed::MeshMapperConfig::Shard;
+    const auto placements = core::distributed::placements_per_axis(logits);
+    const auto mesh_shape = logits.device()->shape();
+    const int rank = static_cast<int>(logits.logical_shape().rank());
+    for (uint32_t axis = 0; axis < mesh_shape.dims(); ++axis) {
+        if (mesh_shape[axis] == 1 || (cluster_axis.has_value() && axis != *cluster_axis)) {
+            continue;
+        }
+        const auto* shard = std::get_if<Shard>(&placements[axis]);
+        const int dim = shard == nullptr ? -1 : (shard->dim < 0 ? shard->dim + rank : shard->dim);
+        TT_FATAL(
+            dim == rank - 1,
+            "vocab_parallel_cross_entropy_loss takes logits sharded along the vocab (dim {}) across mesh axis {}, but "
+            "there they are {}. Logits that hold the whole vocab go to cross_entropy_loss.",
+            rank - 1,
+            axis,
+            shard == nullptr ? std::string("replicated") : fmt::format("sharded along dim {}", dim));
+    }
 }
 
 }  // namespace
@@ -63,6 +87,7 @@ autograd::TensorPtr vocab_parallel_cross_entropy_loss(
         throw std::logic_error(
             fmt::format("vocab_parallel_cross_entropy_loss: logits must be rank 4, got shape {}", logits_shape));
     }
+    check_sharded_along_the_vocab(logits->get_value(), cluster_axis);
     if (targets_shape.rank() != 2U && targets_shape.rank() != 4U) {
         throw std::logic_error(
             fmt::format("vocab_parallel_cross_entropy_loss: targets must be rank 2 or 4, got shape {}", targets_shape));
@@ -158,39 +183,33 @@ autograd::TensorPtr vocab_parallel_cross_entropy_loss(
     // and broadcasts the per-position grad over the local vocab dim for NONE
     // — the same broadcast pattern used by the forward-pass max/exp path.
     // ---------------------------------------------------------------
-    autograd::GradFunction grad_fn = [logits,
-                                      out,
-                                      global_max,
-                                      global_sum,
-                                      targets_raw,
-                                      local_V,
-                                      cluster_axis,
-                                      inv_N]() {
-        if (!out->is_grad_initialized()) {
-            return;
-        }
-        auto scaled_inv_sum = ttnn::multiply(ttnn::reciprocal(global_sum), inv_N);  // [B,1,S,1] FP32
+    autograd::GradFunction grad_fn =
+        [logits, out, global_max, global_sum, targets_raw, local_V, cluster_axis, inv_N]() {
+            if (!out->is_grad_initialized()) {
+                return;
+            }
+            auto scaled_inv_sum = ttnn::multiply(ttnn::reciprocal(global_sum), inv_N);  // [B,1,S,1] FP32
 
-        auto local_exp = fused_subtract_exp_fp32(logits->get_value(), global_max);
-        auto scaled_softmax = ttnn::multiply(local_exp, scaled_inv_sum, ttnn::DataType::BFLOAT16);
-        local_exp.deallocate();
-        scaled_inv_sum.deallocate();
+            auto local_exp = fused_subtract_exp_fp32(logits->get_value(), global_max);
+            auto scaled_softmax = ttnn::multiply(local_exp, scaled_inv_sum, ttnn::DataType::BFLOAT16);
+            local_exp.deallocate();
+            scaled_inv_sum.deallocate();
 
-        // Single mesh workload — the program factory derives each device's shard window
-        // from its mesh coordinate, mirroring the forward-pass select_target_logit call.
-        ttnn::prim::ttml_subtract_at_target(
-            scaled_softmax,
-            targets_raw,
-            /*local_V=*/local_V,
-            /*cluster_axis=*/cluster_axis,
-            /*first_v=*/0U,
-            scaled_softmax,
-            /*subtract_value=*/inv_N);
+            // Single mesh workload — the program factory derives each device's shard window
+            // from its mesh coordinate, mirroring the forward-pass select_target_logit call.
+            ttnn::prim::ttml_subtract_at_target(
+                scaled_softmax,
+                targets_raw,
+                /*local_V=*/local_V,
+                /*cluster_axis=*/cluster_axis,
+                /*first_v=*/0U,
+                scaled_softmax,
+                /*subtract_value=*/inv_N);
 
-        // grad = (softmax_k - onehot_k) * scale * upstream, written back into scaled_softmax.
-        ttnn::multiply_(scaled_softmax, out->get_grad());
-        logits->add_grad(scaled_softmax);
-    };
+            // grad = (softmax_k - onehot_k) * scale * upstream, written back into scaled_softmax.
+            ttnn::multiply_(scaled_softmax, out->get_grad());
+            logits->add_grad(scaled_softmax);
+        };
 
     out->set_node(autograd::add_backward_node(std::move(grad_fn), out, logits));
     return out;

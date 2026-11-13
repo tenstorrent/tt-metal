@@ -35,6 +35,9 @@ bool is_sharded_on_axis(const ttnn::Tensor& value, uint32_t axis);
 void set_placements_per_axis(
     ttnn::Tensor& value, const ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement>& placements);
 
+// Relabels `grad`, a gradient of `parameter`, on the mesh axes `parameter` is sharded on.
+void label_grad_like_parameter_shards(const ttnn::Tensor& parameter, ttnn::Tensor& grad);
+
 // Averages every parameter's gradient along the mesh axes the parallelism context reduces (context parallel, then
 // data parallel), skipping for each parameter any axis it is sharded on (see is_sharded_on_axis). A no-op when no
 // parallelism context is initialized.

@@ -197,9 +197,8 @@ class TestFSDP:
             ttnn.TensorTopology(ttnn.MeshShape([len(coords)]), [ttnn.PlacementShard(2)], coords)
         )
         assert len(_placements(weight)) == 1, "precondition: collapsed 1-D label"
-        for axis in range(len(mesh_shape)):
-            fsdp_reading = isinstance(fsdp_module._param_placements(linear.weight)[axis], ttnn.PlacementShard)
-            assert fsdp_reading == is_sharded_on_axis(weight, axis), f"mesh axis {axis}"
+        reading = fsdp_module._param_placements(linear.weight)
+        assert [isinstance(p, ttnn.PlacementShard) for p in reading] == [size > 1 for size in mesh_shape], reading
         with expect_error(RuntimeError, "already sharded on mesh axis 'fsdp'"):
             ttml.fsdp.fully_shard(linear)
 

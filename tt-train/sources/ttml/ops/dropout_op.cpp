@@ -18,7 +18,9 @@
 namespace ttml::ops {
 
 bool dropout_seed_per_device(const ttnn::Tensor& value) {
-    const auto mesh_shape = value.device()->shape();
+    const auto* device = value.device();
+    TT_FATAL(device != nullptr, "dropout needs a tensor allocated on a device");
+    const auto mesh_shape = device->shape();
     std::vector<uint32_t> replicated;
     std::vector<uint32_t> sharded;
     for (uint32_t axis = 0; axis < mesh_shape.dims(); ++axis) {

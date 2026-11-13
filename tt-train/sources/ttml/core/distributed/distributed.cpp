@@ -77,6 +77,25 @@ void set_placements_per_axis(
         tt::tt_metal::TensorTopology(mesh_shape, placements, value.tensor_topology().mesh_coords()));
 }
 
+void label_grad_like_parameter_shards(const ttnn::Tensor& parameter, ttnn::Tensor& grad) {
+    if (parameter.device() == nullptr || parameter.device()->shape().mesh_size() == 1U) {
+        return;
+    }
+    const auto parameter_placements = placements_per_axis(parameter);
+    std::optional<Placements> placements;
+    for (size_t axis = 0; axis < parameter_placements.size(); ++axis) {
+        if (std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(parameter_placements[axis])) {
+            if (!placements) {
+                placements = placements_per_axis(grad);
+            }
+            (*placements)[axis] = parameter_placements[axis];
+        }
+    }
+    if (placements) {
+        set_placements_per_axis(grad, *placements);
+    }
+}
+
 ttnn::Tensor synchronize_tensor(const ttnn::Tensor& tensor, const ttsl::SmallVector<uint32_t>& cluster_axes) {
     auto* device = &autograd::ctx().get_device();
     if (cluster_axes.size() == 0) {

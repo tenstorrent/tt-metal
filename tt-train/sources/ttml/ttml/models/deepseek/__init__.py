@@ -14,7 +14,6 @@ Implements the DeepSeek-V3 architecture:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import lcm
 from typing import Literal, Optional
 
 import ttml
@@ -22,6 +21,7 @@ from ttml.modules import AbstractModuleBase, ColumnParallelLinear, Embedding, Li
 
 from .. import RunnerType, memory_efficient_runner
 from ..llama.autograd_ops import SliceLastDim
+from ..vocab_padding import VocabPaddingMask
 from .transformer import RMSNormLayer, DeepSeekBlock
 
 
@@ -90,15 +90,16 @@ class DeepSeek(AbstractModuleBase):
         if config.use_tp:
             tp_size = ttml.mesh().axis_size("tp")
             self._validate_tp(config, tp_size)
-            align = lcm(32, tp_size)
+            align = 32 * tp_size
             self.padded_vocab_size = ((config.vocab_size + align - 1) // align) * align
             self.head = ColumnParallelLinear(
                 config.dim,
                 self.padded_vocab_size,
                 has_bias=False,
-                gather_output=True,
+                gather_output=False,
                 axis_name="tp",
             )
+            self._vocab_padding_mask = VocabPaddingMask(config.vocab_size, self.padded_vocab_size, "tp")
         else:
             self.padded_vocab_size = ((config.vocab_size + 31) // 32) * 32
             self.head = LinearLayer(config.dim, self.padded_vocab_size, has_bias=False)
@@ -164,7 +165,9 @@ class DeepSeek(AbstractModuleBase):
 
         x = self.norm(x)
         logits = self.head(x)
-        if self.padded_vocab_size != self.config.vocab_size:
+        if self.config.use_tp:
+            logits = self._vocab_padding_mask(logits)
+        elif self.padded_vocab_size != self.config.vocab_size:
             logits = SliceLastDim.apply(logits, self.config.vocab_size)
         return logits
 

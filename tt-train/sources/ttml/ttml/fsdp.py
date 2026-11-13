@@ -52,6 +52,7 @@ import ttnn
 import ttml
 from ttml.modules import AbstractModuleBase
 from ttml.modules.parameter import Parameter, TensorMetadata, replace_lazy_mapper
+from ttml.parallel import partial_axes
 
 # ---------------------------------------------------------------------------
 # Utility functions
@@ -63,6 +64,19 @@ class _ShardedState(Enum):
 
     SHARDED = 0
     UNSHARDED = 1
+
+
+def _label_partial_axes_replicated(param_tensor: Any, grad: Any) -> None:
+    """Label ``grad`` Replicate on the mesh axes its parameter is marked partial on (``ttml.parallel.mark_partial``)."""
+    mesh = ttml.mesh()
+    axes = [mesh.axis_index(name) for name in partial_axes(param_tensor) if mesh.has_axis(name)]
+    if not axes:
+        return
+    placements = ttml.core.distributed.placements_per_axis(grad)
+    for axis in axes:
+        placements[axis] = ttnn.PlacementReplicate()
+    coords = list(grad.tensor_topology().mesh_coords())
+    grad.update_tensor_topology(ttnn.TensorTopology(ttnn.MeshShape(list(mesh.shape)), placements, coords))
 
 
 def _is_fsdp_wrapped_module(module: Any) -> bool:
@@ -188,6 +202,7 @@ class FSDPState:
             # it; we'll explicitly deallocate it after set_grad to release the
             # full-size buffer on device immediately.
             gathered_grad = param_tensor.get_grad()
+            _label_partial_axes_replicated(param_tensor, gathered_grad)
             reduced = ttml.core.distributed.reduce_scatter(
                 gathered_grad,
                 shard_dim,
@@ -323,7 +338,7 @@ def _param_shape(parameter: Parameter) -> List[int]:
     return list(inner.shape())
 
 
-def _param_placements(parameter: Parameter) -> List[Any]:
+def _param_placements(parameter: Parameter) -> Sequence[Any]:
     """The parameter's placement on each mesh axis. A lazy one has no tensor yet, so its mapper is read instead."""
     inner = parameter.peek_tensor()
     if not isinstance(inner, TensorMetadata):
@@ -440,6 +455,7 @@ def _shard_param(parameter: Parameter, shard_dim: int, axis_index: int, mesh_axi
             f"a second shard on the same axis."
         )
     if isinstance(parameter.peek_tensor(), TensorMetadata):
+        placements = list(placements)
         placements[axis_index] = ttnn.PlacementShard(shard_dim)
         device = ttml.autograd.AutoContext.get_instance().get_device()
         replace_lazy_mapper(parameter, ttnn.create_mesh_mapper(device, ttnn.MeshMapperConfig(placements)))

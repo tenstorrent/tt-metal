@@ -26,6 +26,7 @@ from ttml.modules import (
 
 from .. import EmbeddingPlacement, RunnerType, WeightTyingType, memory_efficient_runner
 from .autograd_ops import SliceLastDim
+from ..vocab_padding import VocabPaddingMask
 from ttml.parallel import SEQUENCE_DIM, TPStrategy, mark_partial
 from .transformer import LlamaBlock, RMSNormLayer, compute_swiglu_intermediate_size
 
@@ -217,9 +218,8 @@ class Llama(AbstractModuleBase):
             # tile-aligned: ColumnParallelLinear shards dim 2 across TP, so
             # each shard needs to be divisible by 32 -- i.e. the padded global
             # size must be a multiple of 32 * tp_size. The trailing padded
-            # columns are kept on-device and handled by the downstream
-            # vocab_parallel_cross_entropy_loss, so ``config.vocab_size`` is
-            # free to be arbitrary.
+            # columns stay in the sharded logits, masked out of the softmax
+            # (see forward), so ``config.vocab_size`` is free to be arbitrary.
             mesh = ttml.mesh()
             self.tp_size = mesh.axis_size("tp")
             self._tp_axis = mesh.axis_index("tp")
@@ -237,6 +237,7 @@ class Llama(AbstractModuleBase):
                 sequence_parallel=sequence_parallel,
                 axis_name="tp",
             )
+            self._vocab_padding_mask = VocabPaddingMask(config.vocab_size, self.padded_vocab_size, "tp")
             if config.embedding_placement == EmbeddingPlacement.VocabParallel:
                 self.tok_emb = VocabParallelEmbedding(
                     self.padded_vocab_size,
@@ -394,9 +395,9 @@ class Llama(AbstractModuleBase):
 
         out = self.ln_fc(out)
         logits = self.fc(out)
-        # Under TP the padding is handled inside
-        # vocab_parallel_cross_entropy_loss.
-        if not self.config.tp_strategy.tensor_parallel and self.padded_vocab_size != self.config.vocab_size:
+        if self.config.tp_strategy.tensor_parallel:
+            logits = self._vocab_padding_mask(logits)
+        elif self.padded_vocab_size != self.config.vocab_size:
             logits = SliceLastDim.apply(logits, self.config.vocab_size)
         return logits
 

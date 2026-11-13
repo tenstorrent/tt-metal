@@ -11,6 +11,7 @@
 #include "autograd/graph_utils.hpp"
 #include "autograd/tensor.hpp"
 #include "core/compute_kernel_config.hpp"
+#include "core/distributed/distributed.hpp"
 #include "metal/operations.hpp"
 #include "ops/binary_ops.hpp"
 #include "ops/dropout_op.hpp"
@@ -149,8 +150,10 @@ autograd::TensorPtr swiglu(
 
         // W2 grad: use saved gated directly — no recompute
         {
-            auto dL_dW2 = ttnn_fixed::matmul(flatten_leading(dL_dout), flatten_leading(gated), true, false);
-            w2->add_grad(dL_dW2.reshape(w2->get_value().logical_shape()));
+            auto dL_dW2 = ttnn_fixed::matmul(flatten_leading(dL_dout), flatten_leading(gated), true, false)
+                              .reshape(w2->get_value().logical_shape());
+            core::distributed::label_grad_like_parameter_shards(w2->get_value(), dL_dW2);
+            w2->add_grad(dL_dW2);
         }
         gated.deallocate();
         // dL/d(prod) = dL_dout @ w2 (no transpose — w2 is [D, H])
@@ -173,14 +176,18 @@ autograd::TensorPtr swiglu(
         // W1 & W3 grads
         auto flat_x = flatten_leading(tensor->get_value());
         {
-            auto dL_dW1 = ttnn_fixed::matmul(flatten_leading(dL_dlinear1), flat_x, true, false);
-            w1->add_grad(dL_dW1.reshape(w1->get_value().logical_shape()));
+            auto dL_dW1 = ttnn_fixed::matmul(flatten_leading(dL_dlinear1), flat_x, true, false)
+                              .reshape(w1->get_value().logical_shape());
+            core::distributed::label_grad_like_parameter_shards(w1->get_value(), dL_dW1);
+            w1->add_grad(dL_dW1);
         }
         dL_dlinear1.deallocate();
 
         {
-            auto dL_dW3 = ttnn_fixed::matmul(flatten_leading(dL_dgate), flat_x, true, false);
-            w3->add_grad(dL_dW3.reshape(w3->get_value().logical_shape()));
+            auto dL_dW3 = ttnn_fixed::matmul(flatten_leading(dL_dgate), flat_x, true, false)
+                              .reshape(w3->get_value().logical_shape());
+            core::distributed::label_grad_like_parameter_shards(w3->get_value(), dL_dW3);
+            w3->add_grad(dL_dW3);
         }
         dL_dgate.deallocate();
     };

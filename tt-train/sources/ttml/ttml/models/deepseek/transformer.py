@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ttml
 from ttml.modules import AbstractModuleBase, ColumnParallelLinear, LinearLayer, Parameter, RowParallelLinear
+from ttml.modules.linear import enter_tp_region, exit_tp_region
 
 
 class RMSNormLayer(AbstractModuleBase):
@@ -27,7 +28,11 @@ class DeepSeekMLP(AbstractModuleBase):
 
     def __init__(self, dim: int, inter_dim: int, *, tp_axis_name: str | None = None) -> None:
         super().__init__()
+        self._tp_axis = None
         if tp_axis_name is not None:
+            mesh = ttml.mesh()
+            if mesh.axis_size(tp_axis_name) > 1:  # a collective over a size-1 axis is an error, not a no-op
+                self._tp_axis = mesh.axis_index(tp_axis_name)
             self.w1 = ColumnParallelLinear(
                 dim,
                 inter_dim,
@@ -54,12 +59,17 @@ class DeepSeekMLP(AbstractModuleBase):
             self.w2 = LinearLayer(inter_dim, dim, has_bias=False)
 
     def forward(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
-        return ttml.ops.swiglu.swiglu(
+        if self._tp_axis is not None:
+            x = enter_tp_region(x, self._tp_axis, sequence_parallel=False)
+        out = ttml.ops.swiglu.swiglu(
             x,
             self.w1.weight.tensor,
             self.w2.weight.tensor,
             self.w3.weight.tensor,
         )
+        if self._tp_axis is not None:
+            out = exit_tp_region(out, self._tp_axis, sequence_parallel=False)
+        return out
 
 
 def resolve_moe_ep_axis(config) -> str | None:

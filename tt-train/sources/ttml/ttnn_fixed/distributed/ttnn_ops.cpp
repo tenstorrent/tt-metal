@@ -17,6 +17,7 @@
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/operations/ccl/mesh_partition/mesh_partition.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_async/all_gather_async.hpp"
@@ -195,6 +196,9 @@ ttnn::Tensor mesh_partition(const ttnn::Tensor& tensor, const int dim, const std
     const auto& shape = tensor.logical_shape();
     const int rank = static_cast<int>(shape.rank());
     const int normalized_dim = dim < 0 ? dim + rank : dim;
+    TT_FATAL(
+        tensor.device() != nullptr,
+        "mesh_partition needs a tensor allocated on a device mesh (got a host or deallocated tensor)");
     const auto mesh_shape = tensor.device()->shape();
     const uint32_t parts = cluster_axis.has_value() ? mesh_shape[*cluster_axis] : mesh_shape.mesh_size();
     const bool in_tile_dims = normalized_dim >= rank - 2 && normalized_dim < rank;
@@ -203,9 +207,15 @@ ttnn::Tensor mesh_partition(const ttnn::Tensor& tensor, const int dim, const std
         (shape[normalized_dim] / parts) % tile_extent == 0) {
         return ttnn::mesh_partition(tensor, dim, cluster_axis, /* memory_config */ std::nullopt);
     }
-    auto partitioned = ttnn::mesh_partition(
-        ttnn::to_layout(tensor, ttnn::Layout::ROW_MAJOR), dim, cluster_axis, /* memory_config */ std::nullopt);
-    return ttnn::to_layout(partitioned, ttnn::Layout::TILE);
+    // ROW_MAJOR cannot hold block floats, so they make the trip as BFLOAT16 and are cast back, as in ttnn's own
+    // ROW_MAJOR detours.
+    const auto dtype = tensor.dtype();
+    const bool block_float = dtype == ttnn::DataType::BFLOAT8_B || dtype == ttnn::DataType::BFLOAT4_B;
+    auto row_major = ttnn::to_layout(
+        block_float ? ttnn::typecast(tensor, ttnn::DataType::BFLOAT16) : tensor, ttnn::Layout::ROW_MAJOR);
+    auto tiled = ttnn::to_layout(
+        ttnn::mesh_partition(row_major, dim, cluster_axis, /* memory_config */ std::nullopt), ttnn::Layout::TILE);
+    return block_float ? ttnn::typecast(tiled, dtype) : tiled;
 }
 
 ttnn::Tensor ring_shift(

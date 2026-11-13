@@ -37,15 +37,20 @@ def _fatal_message(error: BaseException) -> str:
 
 
 class Sharding:
-    """A tensor's mesh layout, read from its live topology."""
+    """A tensor's mesh layout, read off its label when made."""
 
     def __init__(self, value: ttnn.Tensor) -> None:
         topology = value.tensor_topology()
         self._label_placements = list(topology.placements())
         self._label_shape = list(topology.distribution_shape())
-        self._placements = ttml.core.distributed.placements_per_axis(value)
         self._mesh_shape = list(_mesh_device().shape)
         self._local_shape = list(value.shape)
+        self._per_axis_error = None
+        try:
+            self._placements = tuple(ttml.core.distributed.placements_per_axis(value))
+        except RuntimeError as e:
+            self._placements = ()
+            self._per_axis_error = _fatal_message(e)
 
     @classmethod
     def from_tensor(cls, tensor: ttml.autograd.Tensor) -> Sharding:
@@ -53,25 +58,27 @@ class Sharding:
         return cls(tensor.get_value(ttml.autograd.PreferredPrecision.NATIVE))
 
     @property
-    def placements(self) -> list:
+    def placements(self) -> tuple:
         """The ttnn placement (``PlacementShard`` / ``PlacementReplicate``) on each mesh axis."""
+        if self._per_axis_error is not None:
+            raise RuntimeError(self._per_axis_error)
         return self._placements
 
     def shard_dim(self, axis: int) -> int | None:
         """The tensor dim sharded across mesh axis ``axis``, or None where the tensor is replicated."""
-        placement = self._placements[axis]
+        placement = self.placements[axis]
         return placement.dim % len(self._local_shape) if isinstance(placement, ttnn.PlacementShard) else None
 
     @property
     def is_fully_replicated(self) -> bool:
         """True if no mesh axis shards this tensor (single device, or replicated on every axis)."""
-        return all(self.shard_dim(axis) is None for axis in range(len(self._placements)))
+        return all(self.shard_dim(axis) is None for axis in range(len(self.placements)))
 
     @property
     def global_shape(self) -> list[int]:
         """The tensor's shape across the mesh."""
         shape = list(self._local_shape)
-        for axis in range(len(self._placements)):
+        for axis in range(len(self.placements)):
             dim = self.shard_dim(axis)
             if dim is not None:
                 shape[dim] *= self._mesh_shape[axis]

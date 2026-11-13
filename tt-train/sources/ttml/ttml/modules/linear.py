@@ -53,7 +53,7 @@ def shard_features(x, cluster_axis: int):
 
 
 def exit_tp_region(x, cluster_axis: int, sequence_parallel: bool):
-    """Sum the row-parallel matmul's partial products across TP ranks."""
+    """Sum a tensor-parallel region's partial products across TP ranks."""
     if sequence_parallel:
         return ttml.ops.distributed.reduce_scatter(x, SEQUENCE_DIM, cluster_axis)
     return ttml.ops.distributed.all_reduce(x, noop_backward=True, cluster_axis=cluster_axis)

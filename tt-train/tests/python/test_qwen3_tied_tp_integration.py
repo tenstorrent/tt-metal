@@ -369,12 +369,13 @@ def test_tied_backward_matches_untied_reference(legs):
 # ---------------------------------------------------------------------------
 
 
-def test_partial_gradients_are_marked_across_tp(tp_mesh):
+@pytest.mark.parametrize("shard_dim", [1, None], ids=["tp_axis", "whole_mesh"])
+def test_partial_gradients_are_marked_across_tp(tp_mesh, shard_dim):
     """Each device normalizes only its own heads, and only its own rows of lora_B consume lora_A's output.
     The per-head norms and lora_A therefore get partial gradients, so they are marked for ttml.sync_gradients to sum, and
     nothing else is."""
     with empty_init():
-        model = DistributedQwen3ForCausalLM(_qwen3_config(), tie_word_embeddings=False, shard_dim=1)
+        model = DistributedQwen3ForCausalLM(_qwen3_config(), tie_word_embeddings=False, shard_dim=shard_dim)
     inject_adapter_in_model(model, {"targets": ["q_proj", "o_proj"], "rank": 8})
 
     params = model.parameters()

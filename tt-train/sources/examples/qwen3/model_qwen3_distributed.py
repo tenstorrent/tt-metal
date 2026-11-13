@@ -84,6 +84,7 @@ from utils.param_utils import build_weight_mapping_distributed
 from utils.tensor_utils import (
     get_device,
     get_tp_size,
+    tp_axis_name,
     make_sharded_weight,
     make_sharded_zeros,
     make_replicated_zeros,
@@ -241,11 +242,10 @@ class DistributedQwen3Attention(AbstractModuleBase):
 
         self.q_norm = Qwen3RMSNorm(self.head_dim, eps=config.rms_norm_eps)
         self.k_norm = Qwen3RMSNorm(self.head_dim, eps=config.rms_norm_eps)
-        if shard_dim is not None and tp > 1:
+        if tp > 1:
             # Applied per head, they see only this device's heads.
-            tp_axis_name = ttml.mesh().axis_names[shard_dim]
-            ttml.parallel.mark_partial(self.q_norm, tp_axis_name)
-            ttml.parallel.mark_partial(self.k_norm, tp_axis_name)
+            ttml.parallel.mark_partial(self.q_norm, tp_axis_name(shard_dim))
+            ttml.parallel.mark_partial(self.k_norm, tp_axis_name(shard_dim))
 
         rope_scaling = ttml.ops.rope.RopeScalingParams()
         rs = config.rope_scaling

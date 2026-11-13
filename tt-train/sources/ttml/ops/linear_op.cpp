@@ -40,9 +40,11 @@ void ttnn_linear_backward(
     if (bias) {
         auto reshaped_bias_grad = ttnn_fixed::sum_over_dim(reshaped_grad, /* axis */ 0);
         auto bias_grad = ttnn::reshape(reshaped_bias_grad, bias->get_value().logical_shape());
+        core::distributed::label_grad_like_parameter_shards(bias->get_value(), bias_grad);
         bias->add_grad(bias_grad);
     }
     auto weight_grad = ttnn::reshape(reshaped_weight_grad, weight->get_value().logical_shape());
+    core::distributed::label_grad_like_parameter_shards(weight->get_value(), weight_grad);
 
     auto tensor_grad = ttnn::reshape(reshaped_tensor_grad, tensor_value.logical_shape());
 
@@ -100,18 +102,20 @@ void fix_ttnn_linear_output_topology(const ttnn::Tensor& weight, ttnn::Tensor& o
         return;
     }
     const auto weight_placements = core::distributed::placements_per_axis(weight);
-    const int out_features_dim = static_cast<int>(weight.logical_shape().rank()) - 2;
-    auto placements = core::distributed::placements_per_axis(output);
-    bool fixed = false;
+    const int weight_rank = static_cast<int>(weight.logical_shape().rank());
+    // The output's label is read only if it needs fixing, which most linears' outputs do not.
+    std::optional<ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement>> placements;
     for (size_t axis = 0; axis < weight_placements.size(); ++axis) {
         const auto* shard = std::get_if<Shard>(&weight_placements[axis]);
-        if (shard != nullptr && shard->dim == out_features_dim) {
-            placements[axis] = Shard{static_cast<int>(output.logical_shape().rank()) - 1};
-            fixed = true;
+        if (shard != nullptr && (shard->dim < 0 ? shard->dim + weight_rank : shard->dim) == weight_rank - 2) {
+            if (!placements) {
+                placements = core::distributed::placements_per_axis(output);
+            }
+            (*placements)[axis] = Shard{static_cast<int>(output.logical_shape().rank()) - 1};
         }
     }
-    if (fixed) {
-        core::distributed::set_placements_per_axis(output, placements);
+    if (placements) {
+        core::distributed::set_placements_per_axis(output, *placements);
     }
 }
 

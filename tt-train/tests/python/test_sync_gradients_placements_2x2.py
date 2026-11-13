@@ -2,9 +2,10 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""test_sync_gradients_placements.py on a ``[2, 2]`` mesh: DP x TP and HSDP, where a parameter is replicated on one
-data axis and sharded on the other. Each class opens its ``[2, 2]`` through the conftest's ``fresh_device_mesh`` with
-the bundled descriptor, like ``test_ccl_topology.py``, and skips on a host with fewer than four chips."""
+"""test_sync_gradients_placements.py on a ``[2, 2]`` mesh: DP x TP, FSDP x TP and HSDP, where a parameter is
+replicated on one data axis and sharded on the other. Each class opens its ``[2, 2]`` through the conftest's
+``fresh_device_mesh`` with the bundled descriptor, like ``test_ccl_topology.py``, and skips on a host with fewer than
+four chips."""
 
 from __future__ import annotations
 
@@ -27,7 +28,9 @@ from sync_gradients_placements_common import (
     _shards,
     is_sharded_on_axis,
 )
-from tp_block import TPBlock
+from tp_block import TPBlock, gather_like
+from ttml.models.deepseek.transformer import DeepSeekMLP
+from ttml.modules import LoraConfig, LoraModel
 
 pytestmark = [
     pytest.mark.requires_device,
@@ -40,6 +43,13 @@ pytestmark = [
 def dp_tp_mesh(fresh_device_mesh):
     """``[2, 2]`` with axes ``("dp", "tp")``."""
     with fresh_device_mesh((2, 2), ("dp", "tp"), what="DP x TP placements tests", require_mgd=True) as mesh:
+        yield mesh
+
+
+@pytest.fixture(scope="module")
+def fsdp_tp_mesh(fresh_device_mesh):
+    """``[2, 2]`` with axes ``("fsdp", "tp")``."""
+    with fresh_device_mesh((2, 2), ("fsdp", "tp"), what="FSDP x TP placements tests", require_mgd=True) as mesh:
         yield mesh
 
 
@@ -77,6 +87,90 @@ class TestDPxTP:
             if name.endswith(TP_SHARDED_SUFFIXES):
                 assert is_sharded_on_axis(grad, tp), f"{name}: the TP shard did not survive the dp all_reduce"
             _assert_mean_over_axis(before[name], _shards(grad), dp_tp_mesh.shape, dp, name)
+
+
+# --- FSDP x TP on [2, 2] ("fsdp", "tp") --------------------------------------------------------------------------
+
+
+def _lora_block():
+    """LoRA on a TPBlock's column- and row-parallel linears. The column-parallel lora_A is replicated on "tp" and its
+    gradient partial there, rank 32 leaves FSDP shards that end inside a tile, and the frozen base weights get no
+    gradient but must be resharded all the same. lora_B starts random: its zero init would leave lora_A no gradient."""
+    model = LoraModel(TPBlock(DIM), LoraConfig(rank=32, target_modules=["up", "down"]))
+    for name, t in model.parameters().items():
+        if name.endswith("lora_B"):
+            sharding = ttml.Sharding.from_tensor(t)
+            values = np.random.default_rng(1).standard_normal(sharding.global_shape, dtype=np.float32)
+            ttml.autograd.assign_numpy(t, values, mapper=sharding.derive_mapper())
+    return model
+
+
+# Each block, and the trainable parameters FSDP leaves whole: "tp" took their only dim larger than one.
+BLOCKS = {
+    "linears": (lambda: TPBlock(DIM), ("up/bias",)),
+    "lora": (_lora_block, ()),
+    "fused_swiglu": (lambda: DeepSeekMLP(DIM, 2 * DIM, tp_axis_name="tp"), ()),
+}
+STAGES = ("weights", "step 1 gradient", "step 2 gradient", "update")
+# Measured with and without FSDP: the linears and the fused SwiGLU agree bit for bit, LoRA within 4e-4 (relative
+# Frobenius error). At this rate a stale gather would score 0.14 (SwiGLU) to 0.91 (LoRA) at step 2.
+FSDP_TP_LR = 10.0
+FSDP_TP_TOL = 0.005
+
+
+def _train(model, x, weighting) -> list[dict]:
+    """Two SGD steps on ``x``."""
+    params = model.parameters()
+    trainable = {name: t for name, t in params.items() if t.get_requires_grad()}
+    opt = ttml.optimizers.SGD(params, ttml.optimizers.SGDConfig.make(FSDP_TP_LR, 0.0, 0.0, 0.0, False))
+    weights = {name: gather_like(t.get_value(NATIVE), t) for name, t in trainable.items()}
+    stages = [weights]
+    for _ in range(2):
+        opt.zero_grad()
+        ttml.ops.unary.mean(model(x) * weighting).backward(False)
+        ttml.autograd.AutoContext.get_instance().reset_graph()
+        ttml.sync_gradients(params)
+        stages.append({name: gather_like(t.get_grad(), t) for name, t in trainable.items()})
+        opt.step()
+    stages.append({name: gather_like(t.get_value(NATIVE), t) - weights[name] for name, t in trainable.items()})
+    return stages
+
+
+def _relative_error(actual: dict, expected: dict) -> float:
+    """Over all parameters at once. Above some r, it puts at least one parameter's own relative error above r."""
+    error = sum(np.sum((actual[n] - expected[n]) ** 2) for n in expected)
+    return float(np.sqrt(error / sum(np.sum(e**2) for e in expected.values())))
+
+
+class TestFSDPxTP:
+    @pytest.mark.parametrize("block", BLOCKS)
+    def test_training_matches_the_block_without_fsdp(self, fsdp_tp_mesh, block):
+        make, left_whole = BLOCKS[block]
+        fsdp = fsdp_tp_mesh.axis_index("fsdp")
+        shape, mapper = (fsdp_tp_mesh.axis_size("fsdp"), 1, DIM, DIM), fsdp_tp_mesh.axis_mapper("fsdp", tdim=0)
+        x, weighting = _input(shape, mapper, scale=1.0), _input(shape, mapper, seed=1, scale=1.0)
+        runs = []
+        for use_fsdp in (False, True):
+            ttml.common.utils.set_seed(0)
+            model = make()
+            if use_fsdp:
+                ttml.fsdp.fully_shard(model)
+                trainable = {name: t for name, t in model.parameters().items() if t.get_requires_grad()}
+                whole = [name for name, t in trainable.items() if ttml.Sharding.from_tensor(t).shard_dim(fsdp) is None]
+                assert whole == [name for name in trainable if name.endswith(left_whole)], "FSDP left these whole"
+            runs.append(_train(model, x, weighting))
+
+        reference, sharded = runs
+        # A second forward on stale shards repeats step 1's gradients; this is the error they would score at step 2.
+        stale = _relative_error(reference[1], reference[2])
+        assert stale > 10 * FSDP_TP_TOL, f"step 1's gradients are within {stale:.3g} of step 2's: a stale gather passes"
+        for stage, expected, actual in zip(STAGES, reference, sharded):
+            assert actual.keys() == expected.keys(), stage
+            for name, e in expected.items():
+                scale = np.linalg.norm(e)
+                assert scale > 0 or stage == "weights", f"{stage} of {name}: all zero, agreement would prove nothing"
+                error = np.linalg.norm(actual[name] - e)
+                assert error <= FSDP_TP_TOL * scale, f"{stage} of {name}: relative error {error / scale:.3g}"
 
 
 # --- HSDP on [2, 2] ("dp", "fsdp") ------------------------------------------------------------------------------

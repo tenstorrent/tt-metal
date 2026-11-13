@@ -517,7 +517,7 @@ class SFTTrainer:
         """Pick the cross-entropy variant matching the LM head's logit sharding.
 
         When the active mesh has a TP axis with size > 1 the conventional
-        SFTTrainer model shape (a tensor-parallel Llama, or
+        SFTTrainer model shape (a tensor-parallel Llama or DeepSeek, or
         ``models.distributed.{llama,gpt2}``) emits vocab-sharded logits via
         ``ColumnParallelLinear(gather_output=False)``.  Plain
         ``cross_entropy_loss`` would compute its softmax denominator over each
@@ -534,8 +534,9 @@ class SFTTrainer:
 
         Pipeline-parallel models whose last stage gathers logits to the full
         vocab fall outside this auto-detect rule (mesh has TP axis but the
-        loss should stay full-vocab CE); for those, pass ``compute_loss_func``
-        when constructing the trainer.
+        loss should stay full-vocab CE), and the vocab-parallel loss refuses
+        their logits; for those, pass ``compute_loss_func`` when constructing
+        the trainer.
         """
         mesh = ttml.mesh()
         if mesh.has_axis("tp") and mesh.axis_size("tp") > 1:
