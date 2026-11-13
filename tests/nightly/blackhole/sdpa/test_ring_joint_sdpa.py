@@ -40,6 +40,7 @@ from ttnn.operations.ccl import Topology
 from ttnn.operations.transformer_golden import torch_sdpa_reference
 
 import ttnn
+from models.common.ci_failure import assert_perf_gate
 from models.common.utility_functions import skip_with_llk_assert, skip_with_watcher
 from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import is_high_power
 from models.demos.gemma4_d_p.tt.attention.global_kv_cache import GLOBAL_PACKED_DIM
@@ -5986,9 +5987,12 @@ def test_ring_joint_attention_perf_check(
         f"profiler_records={len(perf_records)}"
     )
 
-    assert lower <= utilization <= upper, (
-        f"Math utilization {utilization:.2f}% outside band [{lower:.2f}, {upper:.2f}] "
-        f"(expected {expected_util:.2f}%, margin +/- {margin*100:.1f}%)"
+    assert_perf_gate(
+        lower <= utilization <= upper,
+        (
+            f"Math utilization {utilization:.2f}% outside band [{lower:.2f}, {upper:.2f}] "
+            f"(expected {expected_util:.2f}%, margin +/- {margin*100:.1f}%)"
+        ),
     )
 
 
@@ -8402,9 +8406,12 @@ def test_ring_mla_chunked_perf_check(model_name, q_chunk_size, k_chunk_size, rin
         f"profiler_records={len(perf_records)}"
     )
 
-    assert lower <= utilization <= upper, (
-        f"Math utilization {utilization:.2f}% outside band [{lower:.2f}, {upper:.2f}] "
-        f"(expected {expected_util:.2f}%, margin +/- {margin*100:.1f}%)"
+    assert_perf_gate(
+        lower <= utilization <= upper,
+        (
+            f"Math utilization {utilization:.2f}% outside band [{lower:.2f}, {upper:.2f}] "
+            f"(expected {expected_util:.2f}%, margin +/- {margin*100:.1f}%)"
+        ),
     )
 
 
@@ -8686,9 +8693,12 @@ def test_ring_joint_attention_gemma4_chunked_perf_check(perf_config):
         f"profiler_records={len(perf_records)}, effective_cores={effective_cores}, "
         f"matmul_math_fidelity={model.matmul_math_fidelity}"
     )
-    assert lower <= utilization <= upper, (
-        f"Math utilization {utilization:.2f}% outside band [{lower:.2f}, {upper:.2f}] "
-        f"(expected {expected_util:.2f}%, margin +/- {margin*100:.1f}%)"
+    assert_perf_gate(
+        lower <= utilization <= upper,
+        (
+            f"Math utilization {utilization:.2f}% outside band [{lower:.2f}, {upper:.2f}] "
+            f"(expected {expected_util:.2f}%, margin +/- {margin*100:.1f}%)"
+        ),
     )
 
 

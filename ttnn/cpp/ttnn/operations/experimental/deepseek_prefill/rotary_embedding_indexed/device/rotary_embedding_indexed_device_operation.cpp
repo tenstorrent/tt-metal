@@ -12,8 +12,8 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 #include "ttnn/device.hpp"
 #include "ttnn/operation.hpp"
@@ -26,7 +26,7 @@ namespace ttnn::operations::experimental::deepseek_prefill::rotary_embedding_ind
 
 using namespace tt::tt_metal;
 using namespace tt::constants;
-using namespace tt::tt_metal::experimental;
+using namespace tt::tt_metal;
 // Reused-kernel binding vocabulary (CB / tensor names, writer+compute sources) — single-sourced here.
 using namespace ttnn::experimental::prim::rope_metal2;
 
@@ -821,8 +821,8 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
     }
     run_args.tensor_args.emplace(CONCAT_PREFIX_PARAM, TensorArgument{prefix});
 
-    auto program = MakeProgramFromSpec(*mesh_device, spec);
-    SetProgramRunArgs(program, run_args);
+    auto program = tt::tt_metal::experimental::MakeProgramFromSpec(*mesh_device, spec);
+    tt::tt_metal::experimental::SetProgramRunArgs(program, run_args);
     return {std::move(program), SharedVariables{}};
 }
 
@@ -878,7 +878,7 @@ void RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::override_runtim
     // the same spec/name checks. Validation still runs on every invocation, including fresh metadata.
     bool validated = false;
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
-        UpdateProgramRunArgs(program, run_args, /*skip_validation=*/validated);
+        tt::tt_metal::experimental::UpdateProgramRunArgs(program, run_args, /*skip_validation=*/validated);
         validated = true;
     }
 }

@@ -40,12 +40,12 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/data_movement_hardware_config.hpp>
-#include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/kernel_spec.hpp>
+#include <tt-metalium/workload/specification/dataflow_buffer_spec.hpp>
+#include <tt-metalium/workload/specification/data_movement_hardware_config.hpp>
+#include <tt-metalium/vocabulary/node_coord.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "metal2_host_api/test_helpers.hpp"
@@ -57,15 +57,15 @@ using namespace tt::tt_metal;
 
 namespace {
 
-using tt::tt_metal::experimental::test_helpers::MakeShardedTensorParameter;
+using test_helpers::MakeShardedTensorParameter;
 
-const experimental::DFBSpecName SCRATCH_DFB{"scratch"};
-const experimental::TensorParamName OUT_TENSOR{"out"};
+const DFBSpecName SCRATCH_DFB{"scratch"};
+const TensorParamName OUT_TENSOR{"out"};
 
-const experimental::KernelSpecName L1_PRODUCER{"l1_producer"};
-const experimental::KernelSpecName DRAM_CONSUMER{"dram_consumer"};
-const experimental::KernelSpecName L1_BATCHED_PRODUCER{"l1_batched_producer"};
-const experimental::KernelSpecName RAW_L1_KERNEL{"raw_l1"};
+const KernelSpecName L1_PRODUCER{"l1_producer"};
+const KernelSpecName DRAM_CONSUMER{"dram_consumer"};
+const KernelSpecName L1_BATCHED_PRODUCER{"l1_batched_producer"};
+const KernelSpecName RAW_L1_KERNEL{"raw_l1"};
 
 constexpr uint32_t kStatusOk = 0xCAFEBABEu;
 
@@ -112,18 +112,18 @@ TensorSpec make_zero_memory_dram_tensor_spec(uint32_t page_size_bytes, uint32_t 
     return TensorSpec(Shape{num_pages, page_size_words}, tensor_layout);
 }
 
-experimental::DataMovementHardwareConfig make_dm_config(tt::ARCH arch, DataMovementProcessor processor, NOC noc) {
+DataMovementHardwareConfig make_dm_config(tt::ARCH arch, DataMovementProcessor processor, NOC noc) {
     if (arch == tt::ARCH::QUASAR) {
-        return experimental::DataMovementHardwareConfig{
+        return DataMovementHardwareConfig{
             .config_2xx =
-                experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                DataMovementHardwareConfig::DataMovement2XXConfig{
                     .disable_dfb_implicit_sync_for_all = true,
                 },
         };
     }
-    return experimental::DataMovementHardwareConfig{
+    return DataMovementHardwareConfig{
         .config_1xx =
-            experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+            DataMovementHardwareConfig::DataMovement1XXConfig{
                 .processor = processor,
                 .noc = noc,
             },
@@ -157,7 +157,7 @@ const char* TargetDefine(RawL1Target t) {
 // Drives zero_memory_api_raw_l1.cpp for one handle type and window geometry, then verifies the
 // region's L1 from the host independently of the kernel's own in-kernel check.
 void RunRawL1ZeroTest(distributed::MeshDevice& mesh_device, const RawL1Cfg& cfg) {
-    const experimental::NodeCoord node{0, 0};
+    const NodeCoord node{0, 0};
 
     ASSERT_EQ(cfg.offset_bytes % 16u, 0u) << "window must respect the 16B WH/BH NoC read alignment";
     ASSERT_EQ(cfg.window_bytes % 16u, 0u) << "window must respect the 16B WH/BH NoC read alignment";
@@ -185,7 +185,7 @@ void RunRawL1ZeroTest(distributed::MeshDevice& mesh_device, const RawL1Cfg& cfg)
     slow_dispatch::WriteToL1(mesh_device, node, flag_addr, sentinel);
     slow_dispatch::WriteToL1(mesh_device, node, report_addr, sentinel);
 
-    experimental::KernelSpec kernel{
+    KernelSpec kernel{
         .unique_id = RAW_L1_KERNEL,
         .source = std::filesystem::path{"tests/tt_metal/tt_metal/test_kernels/dataflow/zero_memory_api_raw_l1.cpp"},
         .num_threads = 1,
@@ -202,7 +202,7 @@ void RunRawL1ZeroTest(distributed::MeshDevice& mesh_device, const RawL1Cfg& cfg)
         kernel.compiler_options.defines.emplace("ZERO_NUM_CHUNKS", std::to_string(cfg.num_chunks));
     }
 
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "zero_memory_api_raw_l1",
         .kernels = {kernel},
         .work_units = {{.name = "main", .kernels = {RAW_L1_KERNEL}, .target_nodes = node}},
@@ -211,10 +211,9 @@ void RunRawL1ZeroTest(distributed::MeshDevice& mesh_device, const RawL1Cfg& cfg)
     // Per-target binding: the handle has to come from somewhere the framework allocated.
     std::optional<MeshTensor> local_tensor;
     if (cfg.target == RawL1Target::Scratchpad) {
-        spec.scratchpads = {experimental::ScratchpadSpec{
-            .unique_id = experimental::ScratchpadSpecName{"pad"}, .size_per_node = cfg.region_bytes}};
-        spec.kernels[0].scratchpad_bindings.push_back(experimental::KernelSpec::ScratchpadBinding{
-            .scratchpad_spec_name = experimental::ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
+        spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"pad"}, .size_per_node = cfg.region_bytes}};
+        spec.kernels[0].scratchpad_bindings.push_back(
+            KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
     } else if (cfg.target == RawL1Target::LocalTensorAccessor) {
         // Single-shard L1 tensor sized to region_bytes: BFLOAT16 tiles, so 2 bytes/element.
         const uint32_t elems = cfg.region_bytes / 2;
@@ -222,16 +221,16 @@ void RunRawL1ZeroTest(distributed::MeshDevice& mesh_device, const RawL1Cfg& cfg)
         auto tensor_param = MakeShardedTensorParameter("region", Shape{elems / 32, 32}, {elems / 32, 32}, 1);
         spec.tensor_parameters = {tensor_param};
         spec.kernels[0].tensor_bindings = {
-            {.tensor_parameter_name = experimental::TensorParamName{"region"}, .accessor_name = "region"}};
+            {.tensor_parameter_name = TensorParamName{"region"}, .accessor_name = "region"}};
         local_tensor.emplace(MeshTensor::allocate_on_device(mesh_device, tensor_param.spec));
     }
 
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    Program program = tt_metal::experimental::MakeProgramFromSpec(mesh_device, spec);
 
-    experimental::ProgramRunArgs params;
-    params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
+    ProgramRunArgs params;
+    params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
         .kernel = RAW_L1_KERNEL,
-        .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+        .runtime_arg_values = MakeRuntimeArgsForSingleNode(
             node,
             {{"region_bytes", cfg.region_bytes},
              {"offset_bytes", cfg.offset_bytes},
@@ -241,10 +240,9 @@ void RunRawL1ZeroTest(distributed::MeshDevice& mesh_device, const RawL1Cfg& cfg)
              {"region_addr", core_local_addr}}),
     }};
     if (local_tensor.has_value()) {
-        params.tensor_args = {
-            {experimental::TensorParamName{"region"}, experimental::ProgramRunArgs::TensorArgument{*local_tensor}}};
+        params.tensor_args = {{TensorParamName{"region"}, ProgramRunArgs::TensorArgument{*local_tensor}}};
     }
-    experimental::SetProgramRunArgs(program, params);
+    tt_metal::experimental::SetProgramRunArgs(program, params);
 
     // For the CoreLocalMem target the host owns the region, so seed it to something non-zero that is
     // NOT the kernel's pattern — the kernel's own stamp check then proves it really wrote there.
@@ -304,7 +302,7 @@ TEST_F(UnitMeshAnyDispatchFixture, ZeroMemoryApi) {
     constexpr uint32_t page_size_bytes = 4 * 1024;
     constexpr uint32_t total_words = num_pages * (page_size_bytes / sizeof(uint32_t));
     constexpr uint32_t flag_addr = 100 * 1024;  // fixed L1 scratch addr for the status word
-    const experimental::NodeCoord node{0, 0};
+    const NodeCoord node{0, 0};
 
     // ----- Host stamps -----
     // L1 status flag: sentinel that the kernel demotes to kStatusOk on success.
@@ -326,7 +324,7 @@ TEST_F(UnitMeshAnyDispatchFixture, ZeroMemoryApi) {
     }
 
     // ----- Program spec -----
-    experimental::DataflowBufferSpec scratch_spec{
+    DataflowBufferSpec scratch_spec{
         .unique_id = SCRATCH_DFB,
         .entry_size = scratch_bytes,
         .num_entries = 1,
@@ -334,7 +332,7 @@ TEST_F(UnitMeshAnyDispatchFixture, ZeroMemoryApi) {
     };
 
     // Producer: tests overload (1) on the DFB, then push_backs the now-zero entry.
-    experimental::KernelSpec producer_spec{
+    KernelSpec producer_spec{
         .unique_id = L1_PRODUCER,
         .source =
             std::filesystem::path{"tests/tt_metal/tt_metal/test_kernels/dataflow/zero_memory_api_l1_producer.cpp"},
@@ -342,14 +340,14 @@ TEST_F(UnitMeshAnyDispatchFixture, ZeroMemoryApi) {
         .dfb_bindings =
             {{.dfb_spec_name = SCRATCH_DFB,
               .accessor_name = "scratch",
-              .endpoint_type = experimental::DFBEndpointType::PRODUCER,
-              .access_pattern = experimental::DFBAccessPattern::STRIDED}},
+              .endpoint_type = DFBEndpointType::PRODUCER,
+              .access_pattern = DFBAccessPattern::STRIDED}},
         .runtime_arg_schema = {.runtime_arg_names = {"total_bytes", "flag_addr"}},
         .hw_config = make_dm_config(this->device().arch(), DataMovementProcessor::RISCV_0, NOC::RISCV_0_default),
     };
 
     // Consumer: wait_fronts on the L1-zeroed DFB entry, uses it as DRAM scratch for overload (2).
-    experimental::KernelSpec consumer_spec{
+    KernelSpec consumer_spec{
         .unique_id = DRAM_CONSUMER,
         .source = std::filesystem::path{"tests/tt_metal/tt_metal/test_kernels/dataflow/zero_memory_api_consumer.cpp"},
         .num_threads = 1,
@@ -357,14 +355,14 @@ TEST_F(UnitMeshAnyDispatchFixture, ZeroMemoryApi) {
         .dfb_bindings =
             {{.dfb_spec_name = SCRATCH_DFB,
               .accessor_name = "scratch",
-              .endpoint_type = experimental::DFBEndpointType::CONSUMER,
-              .access_pattern = experimental::DFBAccessPattern::STRIDED}},
+              .endpoint_type = DFBEndpointType::CONSUMER,
+              .access_pattern = DFBAccessPattern::STRIDED}},
         .tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "out"}},
         .runtime_arg_schema = {.runtime_arg_names = {"page_start", "page_end", "page_size"}},
         .hw_config = make_dm_config(this->device().arch(), DataMovementProcessor::RISCV_1, NOC::RISCV_1_default),
     };
 
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "zero_memory_api_end_to_end",
         .kernels = {producer_spec, consumer_spec},
         .dataflow_buffers = {scratch_spec},
@@ -373,20 +371,20 @@ TEST_F(UnitMeshAnyDispatchFixture, ZeroMemoryApi) {
     };
     Program program = experimental::MakeProgramFromSpec(this->device(), spec);
 
-    experimental::ProgramRunArgs params;
+    ProgramRunArgs params;
     params.kernel_run_args = {
-        experimental::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs::KernelRunArgs{
             .kernel = L1_PRODUCER,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
-                node, {{"total_bytes", scratch_bytes}, {"flag_addr", flag_addr}}),
+            .runtime_arg_values =
+                MakeRuntimeArgsForSingleNode(node, {{"total_bytes", scratch_bytes}, {"flag_addr", flag_addr}}),
         },
-        experimental::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs::KernelRunArgs{
             .kernel = DRAM_CONSUMER,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                 node, {{"page_start", 0u}, {"page_end", num_pages}, {"page_size", page_size_bytes}}),
         },
     };
-    params.tensor_args = {{OUT_TENSOR, experimental::ProgramRunArgs::TensorArgument{tensor}}};
+    params.tensor_args = {{OUT_TENSOR, ProgramRunArgs::TensorArgument{tensor}}};
     experimental::SetProgramRunArgs(program, params);
 
     distributed::MeshWorkload workload;
@@ -423,7 +421,7 @@ TEST_F(UnitMeshAnyDispatchFixture, ZeroMemoryApiBatchedL1) {
     constexpr uint32_t page_size_bytes = 4 * 1024;
     constexpr uint32_t total_words = num_pages * (page_size_bytes / sizeof(uint32_t));
     constexpr uint32_t flag_addr = 100 * 1024;
-    const experimental::NodeCoord node{0, 0};
+    const NodeCoord node{0, 0};
 
     // L1 status flag: sentinel that the batched producer demotes to kStatusOk on success.
     std::vector<uint32_t> flag_init{0xBAADF00Du};
@@ -434,14 +432,14 @@ TEST_F(UnitMeshAnyDispatchFixture, ZeroMemoryApiBatchedL1) {
     std::vector<uint32_t> stamped(total_words, 0xFFFFFFFFu);
     slow_dispatch::WriteToBuffer(tensor.mesh_buffer(), stamped);
 
-    experimental::DataflowBufferSpec scratch_spec{
+    DataflowBufferSpec scratch_spec{
         .unique_id = SCRATCH_DFB,
         .entry_size = scratch_bytes,
         .num_entries = 1,
         .data_format_metadata = tt::DataFormat::Float16_b,
     };
 
-    experimental::KernelSpec producer_spec{
+    KernelSpec producer_spec{
         .unique_id = L1_BATCHED_PRODUCER,
         .source =
             std::filesystem::path{"tests/tt_metal/tt_metal/test_kernels/dataflow/zero_memory_api_l1_producer.cpp"},
@@ -450,13 +448,13 @@ TEST_F(UnitMeshAnyDispatchFixture, ZeroMemoryApiBatchedL1) {
         .dfb_bindings =
             {{.dfb_spec_name = SCRATCH_DFB,
               .accessor_name = "scratch",
-              .endpoint_type = experimental::DFBEndpointType::PRODUCER,
-              .access_pattern = experimental::DFBAccessPattern::STRIDED}},
+              .endpoint_type = DFBEndpointType::PRODUCER,
+              .access_pattern = DFBAccessPattern::STRIDED}},
         .runtime_arg_schema = {.runtime_arg_names = {"total_bytes", "flag_addr"}},
         .hw_config = make_dm_config(this->device().arch(), DataMovementProcessor::RISCV_0, NOC::RISCV_0_default),
     };
 
-    experimental::KernelSpec consumer_spec{
+    KernelSpec consumer_spec{
         .unique_id = DRAM_CONSUMER,
         .source = std::filesystem::path{"tests/tt_metal/tt_metal/test_kernels/dataflow/zero_memory_api_consumer.cpp"},
         .num_threads = 1,
@@ -464,14 +462,14 @@ TEST_F(UnitMeshAnyDispatchFixture, ZeroMemoryApiBatchedL1) {
         .dfb_bindings =
             {{.dfb_spec_name = SCRATCH_DFB,
               .accessor_name = "scratch",
-              .endpoint_type = experimental::DFBEndpointType::CONSUMER,
-              .access_pattern = experimental::DFBAccessPattern::STRIDED}},
+              .endpoint_type = DFBEndpointType::CONSUMER,
+              .access_pattern = DFBAccessPattern::STRIDED}},
         .tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "out"}},
         .runtime_arg_schema = {.runtime_arg_names = {"page_start", "page_end", "page_size"}},
         .hw_config = make_dm_config(this->device().arch(), DataMovementProcessor::RISCV_1, NOC::RISCV_1_default),
     };
 
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "zero_memory_api_batched_l1",
         .kernels = {producer_spec, consumer_spec},
         .dataflow_buffers = {scratch_spec},
@@ -480,20 +478,20 @@ TEST_F(UnitMeshAnyDispatchFixture, ZeroMemoryApiBatchedL1) {
     };
     Program program = experimental::MakeProgramFromSpec(this->device(), spec);
 
-    experimental::ProgramRunArgs params;
+    ProgramRunArgs params;
     params.kernel_run_args = {
-        experimental::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs::KernelRunArgs{
             .kernel = L1_BATCHED_PRODUCER,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
-                node, {{"total_bytes", scratch_bytes}, {"flag_addr", flag_addr}}),
+            .runtime_arg_values =
+                MakeRuntimeArgsForSingleNode(node, {{"total_bytes", scratch_bytes}, {"flag_addr", flag_addr}}),
         },
-        experimental::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs::KernelRunArgs{
             .kernel = DRAM_CONSUMER,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                 node, {{"page_start", 0u}, {"page_end", num_pages}, {"page_size", page_size_bytes}}),
         },
     };
-    params.tensor_args = {{OUT_TENSOR, experimental::ProgramRunArgs::TensorArgument{tensor}}};
+    params.tensor_args = {{OUT_TENSOR, ProgramRunArgs::TensorArgument{tensor}}};
     experimental::SetProgramRunArgs(program, params);
 
     distributed::MeshWorkload workload;
@@ -565,7 +563,7 @@ static void RunDramFromRawL1Test(distributed::MeshDevice& mesh_device, RawL1Targ
     constexpr uint32_t num_pages = 4;
     constexpr uint32_t page_size_bytes = 4 * 1024;
     constexpr uint32_t total_words = num_pages * (page_size_bytes / sizeof(uint32_t));
-    const experimental::NodeCoord node{0, 0};
+    const NodeCoord node{0, 0};
 
     auto scratch_words = AllocateL1Scratch(mesh_device, kScratchWordsBytes);
     const uint32_t flag_addr = static_cast<uint32_t>(scratch_words->address());
@@ -596,7 +594,7 @@ static void RunDramFromRawL1Test(distributed::MeshDevice& mesh_device, RawL1Targ
         ASSERT_EQ(stamp_check[i], 0xFFFFFFFFu) << "Pre-write 0xFF stamp did not land at DRAM word " << i;
     }
 
-    experimental::KernelSpec kernel{
+    KernelSpec kernel{
         .unique_id = RAW_L1_KERNEL,
         .source =
             std::filesystem::path{"tests/tt_metal/tt_metal/test_kernels/dataflow/zero_memory_api_dram_from_raw_l1.cpp"},
@@ -611,7 +609,7 @@ static void RunDramFromRawL1Test(distributed::MeshDevice& mesh_device, RawL1Targ
     };
     kernel.compiler_options.defines.emplace(TargetDefine(target), "1");
 
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "zero_memory_api_dram_from_raw_l1",
         .kernels = {kernel},
         .tensor_parameters = {{.unique_id = OUT_TENSOR, .spec = tensor.tensor_spec()}},
@@ -621,26 +619,25 @@ static void RunDramFromRawL1Test(distributed::MeshDevice& mesh_device, RawL1Targ
     // Per-target binding for the scratch region.
     std::optional<MeshTensor> local_tensor;
     if (target == RawL1Target::Scratchpad) {
-        spec.scratchpads = {experimental::ScratchpadSpec{
-            .unique_id = experimental::ScratchpadSpecName{"pad"}, .size_per_node = region_bytes}};
-        spec.kernels[0].scratchpad_bindings.push_back(experimental::KernelSpec::ScratchpadBinding{
-            .scratchpad_spec_name = experimental::ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
+        spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"pad"}, .size_per_node = region_bytes}};
+        spec.kernels[0].scratchpad_bindings.push_back(
+            KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
     } else if (target == RawL1Target::LocalTensorAccessor) {
         // region_bytes of BFLOAT16 (2 B/elem) as whole 32-wide tile rows.
         const uint32_t elems = region_bytes / 2;
         auto region_param = MakeShardedTensorParameter("region", Shape{elems / 32, 32}, {elems / 32, 32}, 1);
         spec.tensor_parameters.push_back(region_param);
         spec.kernels[0].tensor_bindings.push_back(
-            {.tensor_parameter_name = experimental::TensorParamName{"region"}, .accessor_name = "region"});
+            {.tensor_parameter_name = TensorParamName{"region"}, .accessor_name = "region"});
         local_tensor.emplace(MeshTensor::allocate_on_device(mesh_device, region_param.spec));
     }
 
     Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
 
-    experimental::ProgramRunArgs params;
-    params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
+    ProgramRunArgs params;
+    params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
         .kernel = RAW_L1_KERNEL,
-        .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+        .runtime_arg_values = MakeRuntimeArgsForSingleNode(
             node,
             {{"page_start", 0u},
              {"page_end", num_pages},
@@ -649,10 +646,9 @@ static void RunDramFromRawL1Test(distributed::MeshDevice& mesh_device, RawL1Targ
              {"region_bytes", region_bytes},
              {"region_addr", core_local_addr}}),
     }};
-    params.tensor_args = {{OUT_TENSOR, experimental::ProgramRunArgs::TensorArgument{tensor}}};
+    params.tensor_args = {{OUT_TENSOR, ProgramRunArgs::TensorArgument{tensor}}};
     if (local_tensor.has_value()) {
-        params.tensor_args.emplace(
-            experimental::TensorParamName{"region"}, experimental::ProgramRunArgs::TensorArgument{*local_tensor});
+        params.tensor_args.emplace(TensorParamName{"region"}, ProgramRunArgs::TensorArgument{*local_tensor});
     }
     experimental::SetProgramRunArgs(program, params);
 

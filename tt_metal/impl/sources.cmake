@@ -13,6 +13,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/sub_device/sub_device_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/context/metal_context.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/context/metal_env.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/context/simulator_termination.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/threading/thread_pool.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/device/firmware/firmware_initializer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/device/firmware/fabric_firmware_initializer.cpp
@@ -100,6 +101,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/tensor_spec_relaxations.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/kernels/kernel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/kernels/kernel_types.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/allocator/algorithms/address_ranges.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/algorithms/free_list_opt.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/allocator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/allocator_state.cpp
@@ -191,6 +193,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/spec/layout/layout.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/spec/layout/page_config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/spec/layout/tensor_layout.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/spec/layout/tensor_layout_apis_with_custom_alignment.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/spec/memory_config/memory_config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/topology/distributed_tensor_configs.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/topology/tensor_topology.cpp
