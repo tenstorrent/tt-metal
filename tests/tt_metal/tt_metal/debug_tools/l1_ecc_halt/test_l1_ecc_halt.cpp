@@ -15,7 +15,9 @@
 
 #include <chrono>
 #include <cstdint>
+#include <exception>
 #include <functional>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -25,6 +27,9 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-logger/tt-logger.hpp>
+#include <tt-umd/pcie/device_event_reader.hpp>
+#include <tt-umd/pcie/pci_device.hpp>
+#include <tt-umd/tt_device/tt_device.hpp>
 
 #include "hal_types.hpp"
 #include "hostdev/l1_ecc_halt_constants.h"
@@ -235,6 +240,20 @@ TEST_F(L1EccHaltTest, WatchdogHaltIsReleasedOnReopen) {
     const uint32_t pmm_clear = arc_pmm_message(x, y, 0, 0);
     ctx.get_cluster().write_reg(&pmm_clear, arc, arc_pmm_message_addr);
 
+    // Created before the halt, since a reader sees only the events that arrive after it. Null when KMD or ARC firmware
+    // does not publish device events.
+    std::unique_ptr<tt::umd::DeviceEventReader> events;
+    try {
+        events = std::make_unique<tt::umd::DeviceEventReader>(
+            ctx.get_cluster().get_driver()->get_tt_device(test_target_.chip)->get_pci_device()->get_device_num());
+        if (!events->is_firmware_attached()) {
+            events.reset();
+        }
+    } catch (const std::exception& e) {
+        events.reset();
+        log_info(tt::LogTest, "No device events from KMD: {}", e.what());
+    }
+
     auto workload = single_core_workload(hang_kernel, {1});  // raises IRQ 3
     auto& cq = devices_[0]->mesh_command_queue();
     distributed::EnqueueMeshWorkload(cq, workload, false);
@@ -272,6 +291,35 @@ TEST_F(L1EccHaltTest, WatchdogHaltIsReleasedOnReopen) {
         pmm_word,
         magic,
         arc_forwarded ? "ARC forwarded the record" : "no ARC handler, the message is still in the mailbox");
+
+    // The event carries the record's header and its first 3 data words; the host reads the rest from L1.
+    if (arc_forwarded && events) {
+        const auto source = static_cast<uint16_t>(test_target_.x | test_target_.y << 6);
+        bool found = false;
+        for (const tt::umd::DeviceEvent& e : events->read_for(16, std::chrono::milliseconds(1000)).events) {
+            if (e.source != source) {
+                continue;
+            }
+            found = true;
+            EXPECT_EQ(e.type, l1_ecc_halt_event_type);
+            EXPECT_EQ(e.cause, L1_ECC_HALT_REASON_UNEXPECTED);
+            EXPECT_EQ(e.data[0], record_.view().ecc_ctrl());
+            EXPECT_EQ(e.data[1], record_.view().l1_counts());
+            EXPECT_EQ(e.data[2], record_.view().last_l1_error_banks_0_15());
+            log_info(
+                tt::LogTest,
+                "Event seq {} source 0x{:x} type 0x{:x} cause 0x{:x} data 0x{:x} 0x{:x} 0x{:x}",
+                e.seq,
+                e.source,
+                e.type,
+                e.cause,
+                e.data[0],
+                e.data[1],
+                e.data[2]);
+            break;
+        }
+        EXPECT_TRUE(found) << "no device event from translated (" << test_target_.x << ", " << test_target_.y << ")";
+    }
 
     // Reopening must release the BRISC from its handler without a chip reset.
     destroy_shared_devices();
