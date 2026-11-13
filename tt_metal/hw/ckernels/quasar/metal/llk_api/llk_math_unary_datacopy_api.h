@@ -17,13 +17,13 @@
 /**
  * @brief Initialize eltwise unary datacopy operations
  *
- * For an unpack-to-dest operand the unpacker writes DEST directly and math has no MOP to
- * program; that case is gated on the `unpack_to_dest` template parameter and the math init is skipped.
+ * For an unpack-to-dest operand the unpacker writes DEST directly: without a broadcast math has no MOP to program and
+ * the math init is skipped; with a broadcast math programs the in-DEST broadcast (32-bit DEST only).
  *
  * @tparam type sets which src register to copy from, values = <A2D, B2D>
  * @tparam EN_32BIT_DEST set if math destination register is set to Float32/Int32 mode
  * @tparam src_b_bcast_type Broadcast mode; non-NONE uses unary-broadcast math init when type is B2D
- * @tparam unpack_to_dest Set true to enable the UNP_DEST routing decision (unary, non-broadcast path)
+ * @tparam unpack_to_dest Set true when the unpacker routes the operand through UNP_DEST
  * @param operand Logical dataflow buffer id for the input operand
  */
 template <
@@ -41,7 +41,12 @@ inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand) {
 
     const DataFormat srcA_format = static_cast<DataFormat>(get_operand_dst_format(operand_id));
     const DataFormat srcB_format = static_cast<DataFormat>(get_operand_dst_format(operand_id));
-    _configure_default_alu_data_format_state_<EN_32BIT_DEST>(srcA_format, srcB_format);
+    if constexpr (src_b_bcast_type != BroadcastType::NONE && unpack_to_dest) {
+        // The in-DEST broadcast is MOVD2B/MOVB2D only, which needs the explicit MOV-ops ALU format state.
+        _configure_mov_ops_explicit_alu_data_format_state_<EN_32BIT_DEST>(srcA_format, srcB_format);
+    } else {
+        _configure_default_alu_data_format_state_<EN_32BIT_DEST>(srcA_format, srcB_format);
+    }
 
     if constexpr (src_b_bcast_type == BroadcastType::NONE) {
         // 32-bit unpack-to-dest: math is a sync-only forwarder (unpacker wrrites DEST), no MOP to run.
@@ -51,7 +56,7 @@ inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand) {
         }
     } else {
         static_assert(type == DataCopyType::B2D);
-        static_assert(!unpack_to_dest, "unpack_to_dest is not supported for unary broadcast");
+        static_assert(!unpack_to_dest || EN_32BIT_DEST, "unpack_to_dest unary broadcast requires a 32-bit DEST");
 
         const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand);
         LLK_ASSERT(
@@ -59,8 +64,7 @@ inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand) {
                 tensor_shape.num_faces_c_dim == MAX_NUM_FACES_C_DIM,
             "Unary broadcast currently only supports 32x32 tiles (face_r_dim=16, 2x2 faces)");
 
-        _llk_math_eltwise_unary_broadcast_init_<src_b_bcast_type, EN_32BIT_DEST, false /*unpack_to_dest*/>(
-            tensor_shape);
+        _llk_math_eltwise_unary_broadcast_init_<src_b_bcast_type, EN_32BIT_DEST, unpack_to_dest>(tensor_shape);
     }
 }
 
@@ -68,11 +72,12 @@ inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand) {
  * @brief Performs an eltwise unary datacopy for a single tile.
  *
  * For the non-broadcast path, when `unpack_to_dest` is true the unpacker writes DEST directly and
- * math is a sync-only forwarder; no MOP is run.
+ * math is a sync-only forwarder; no MOP is run. With a broadcast, math broadcasts the tile the unpacker placed at
+ * dst_index in place.
  *
  * @tparam type sets which src register to copy from, values = <A2D, B2D>
  * @tparam EN_32BIT_DEST set if math destination register is set to Float32/Int32 mode
- * @tparam src_b_bcast_type Broadcast mode; non-NONE with unpack_to_dest false uses unary-broadcast math
+ * @tparam src_b_bcast_type Broadcast mode; non-NONE uses unary-broadcast math
  * @tparam unpack_to_dest when true, unpack-to-dest path; plain datacopy otherwise
  * @param dst_index Tile index into the destination register.
  * @param operand Logical dataflow buffer id for the input operand.
@@ -89,12 +94,10 @@ inline void llk_math_eltwise_unary_datacopy(const std::uint32_t dst_index, const
 
     if constexpr (src_b_bcast_type != BroadcastType::NONE) {
         static_assert(type == DataCopyType::B2D, "Unary broadcast math path requires DataCopyType::B2D");
-        static_assert(!unpack_to_dest, "unpack_to_dest is not supported for unary broadcast");
-        const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand);
         LLK_ASSERT(
             (dst_index < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()),
             "llk_math_eltwise_unary_datacopy: dst_index exceeds dest capacity");
-        _llk_math_eltwise_unary_broadcast_<false /*unpack_to_dest*/>(dst_index);
+        _llk_math_eltwise_unary_broadcast_<unpack_to_dest>(dst_index);
     } else {
         // 32-bit unpack-to-dest: math is a sync-only forwarder (unpacker wrrites DEST), no MOP to run.
         if constexpr (!unpack_to_dest) {
