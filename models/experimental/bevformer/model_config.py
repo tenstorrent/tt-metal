@@ -72,7 +72,7 @@ MODEL_CONFIG = _VARIANT
 
 CAMERA_ORDER = _VARIANT.camera_order
 NUM_CAMS = _VARIANT.num_cameras
-# nuScenes' camera images, (width, height), the size their intrinsics are calibrated at.
+# The camera images, (width, height), the size their intrinsics are calibrated at.
 CAMERA_IMAGE_SIZE = _VARIANT.camera_image_size
 # The camera images as the variant scales them, (width, height): CAMERA_IMAGE_SIZE for base.
 RAW_IMAGE_SIZE = tuple(round(size * _VARIANT.image_scale) for size in CAMERA_IMAGE_SIZE)
@@ -156,7 +156,7 @@ EMBED_DIMS = _VARIANT.embed_dims
 NUM_HEADS = _VARIANT.num_heads
 FEEDFORWARD_CHANNELS = _VARIANT.feedforward_channels
 NUM_LEVELS = _VARIANT.num_levels
-# (x_min, y_min, z_min, x_max, y_max, z_max) in metres: nuScenes' range, which the BEV grid, the
+# (x_min, y_min, z_min, x_max, y_max, z_max) in metres: the detection range, which the BEV grid, the
 # encoder's pillars and the head's box centers share.
 PC_RANGE = _VARIANT.point_cloud_range
 CAN_BUS_DIMS = _VARIANT.can_bus_dims

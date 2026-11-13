@@ -4,7 +4,7 @@
 """Tracy harness for the detector end to end: images to class logits, boxes, the frame's BEV and the
 3D detections, on device; dropping the invalid boxes on the host after it is timed apart.
 
-Dummy weights and nuScenes' six-camera rig, at the selected variant's image size and BEV grid
+Dummy weights and the six-camera surround rig, at the selected variant's image size and BEV grid
 (base's 1600x928 and 200x200 by default). ``BEVFORMER_PERF_FRAMES`` selects 1 or 2 consecutive
 profiled frames and defaults to 1. One preceding frame, which has no previous BEV, establishes the
 temporal state outside the measured region. The first profiled frame also runs once as a warmup and

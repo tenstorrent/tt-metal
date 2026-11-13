@@ -79,8 +79,7 @@ def _parse_args():
     parser.add_argument(
         "--dataset-root",
         type=Path,
-        default=dataset_workspace / "data/data/nuscenes",
-        help="Root prepended to relative manifest image paths",
+        help="Root prepended to relative manifest image paths, the manifest's folder by default",
     )
     parser.add_argument(
         "--camera-width",
@@ -392,10 +391,11 @@ def main():
     if args.bev_range <= 0:
         raise ValueError("--bev-range must be positive")
     detections_path = _resolve_detections_path(args.input_path)
+    manifest_path = args.manifest.expanduser().resolve()
     visualize(
         detections_path=detections_path,
-        manifest_path=args.manifest.expanduser().resolve(),
-        dataset_root=args.dataset_root.expanduser().resolve(),
+        manifest_path=manifest_path,
+        dataset_root=args.dataset_root.expanduser().resolve() if args.dataset_root else manifest_path.parent,
         camera_width=args.camera_width,
         score_threshold=args.score_threshold,
         bev_size=args.bev_size,
