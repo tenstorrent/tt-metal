@@ -333,6 +333,35 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t old_output, const 
 }
 
 /**
+ * llk_pack_reconfig_data_format(old_output, new_output) for a new output known at compile time: the same output-format
+ * check, then llk_pack_reconfig_data_format_ct. The first form takes old_output at run time, the second at compile time.
+ */
+template <bool is_fp32_dest_acc_en, std::uint32_t new_output>
+__attribute__((always_inline)) inline void llk_pack_reconfig_data_format_ct2(const std::uint32_t old_output) {
+    if constexpr (new_output >= sizeof(pack_dst_format)) {
+        llk_pack_reconfig_data_format<is_fp32_dest_acc_en>(old_output, new_output);
+    } else if constexpr (pack_dst_format[new_output] != static_cast<unsigned char>(DataFormat::Invalid)) {
+        const std::uint32_t old_output_id = get_output_id(old_output);
+        if ((pack_dst_format[old_output_id] != pack_dst_format[new_output]) &&
+            (pack_dst_format[old_output_id] != (uint)DataFormat::Invalid)) {
+            llk_pack_reconfig_data_format_ct<is_fp32_dest_acc_en, new_output>();
+        }
+    }
+}
+
+template <bool is_fp32_dest_acc_en, std::uint32_t old_output, std::uint32_t new_output>
+__attribute__((always_inline)) inline void llk_pack_reconfig_data_format_ct2() {
+    if constexpr (old_output >= sizeof(pack_dst_format) || new_output >= sizeof(pack_dst_format)) {
+        llk_pack_reconfig_data_format<is_fp32_dest_acc_en>(old_output, new_output);
+    } else if constexpr (
+        (pack_dst_format[old_output] != pack_dst_format[new_output]) &&
+        (pack_dst_format[old_output] != static_cast<unsigned char>(DataFormat::Invalid)) &&
+        (pack_dst_format[new_output] != static_cast<unsigned char>(DataFormat::Invalid))) {
+        llk_pack_reconfig_data_format_ct<is_fp32_dest_acc_en, new_output>();
+    }
+}
+
+/**
  * Program the packer relu configuration register.
  *
  * @param relu_config Relu mode/threshold configuration.
