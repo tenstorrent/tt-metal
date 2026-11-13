@@ -922,12 +922,8 @@ jobs:
     env:
       VAULT_URL: https://vault-ospo.eng-svc.aws.tenstorrent.com
     steps:
-      # Expanding CODEOWNERS teams into people needs org Members: read, which github.token
-      # can't have. OSPO Vault mints a ~1h GitHub App token for it (no stored PAT); see
-      # "Using OSPO Vault from GitHub Actions" on Confluence. Vault refuses every
-      # pull_request_target login, so checkbox runs skip these steps. Any failure here
-      # leaves CODEOWNERS_TEAMS_TOKEN unset and team lookups fall back to github.token,
-      # which gives the teams no members, as before.
+      # Team lookups need org Members: read, so get a short-lived token from OSPO Vault.
+      # Vault refuses pull_request_target; on that or any failure, lookups use github.token.
       - name: Join tailnet for OSPO Vault
         id: tailnet
         if: github.event_name != 'pull_request_target'
