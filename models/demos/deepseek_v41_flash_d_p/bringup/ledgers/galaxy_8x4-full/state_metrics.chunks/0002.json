@@ -5026,7 +5026,13 @@
   "err_state_window_kv_L39_limit": 0.214677
  },
  "P.49": {
-  "chunk_wall_ms": 184.1,
+  "acks_early": 0,
+  "chunk_wall_ms": 182.9,
+  "contract_checks_failed": 0,
+  "determinism_max_abs_diff": 0.0,
+  "device_ms_total": 171.28,
+  "err_final_hidden": 0.132105,
+  "err_final_hidden_limit": 0.242186,
   "err_layer_L00": 0.0194535,
   "err_layer_L00_limit": 0.0551437,
   "err_layer_L01": 0.0290766,
@@ -5230,7 +5236,10 @@
   "err_state_window_kv_L38": 0.126358,
   "err_state_window_kv_L38_limit": 0.319442,
   "err_state_window_kv_L39": 0.0893733,
-  "err_state_window_kv_L39_limit": 0.214677
+  "err_state_window_kv_L39_limit": 0.214677,
+  "served_bytes_differ": 0,
+  "top5_overlap": 1.0,
+  "top5_overlap_limit": 0.994286
  },
  "P.5": {
   "chunk_wall_ms": 237.9,
