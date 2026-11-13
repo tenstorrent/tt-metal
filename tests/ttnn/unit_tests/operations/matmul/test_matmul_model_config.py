@@ -64,73 +64,31 @@ def run_matmul(device, a_shape, b_shape, dtype_b, a_mem, out_mem, bias=False, tr
     return expected, ttnn.to_torch(out)
 
 
+# Small shapes: these tests check the path (the model is consulted, its config runs and is as accurate as the default's,
+# fallbacks hold), not the model's speed, and they also run on the simulator
+D, L1 = ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG
 CASES = [
     # a_shape, b_shape, dtype_b, a_mem, out_mem, bias, transpose_b
-    (
-        (1, 1, 1024, 4096),
-        (1, 1, 4096, 4096),
-        ttnn.bfloat8_b,
-        ttnn.DRAM_MEMORY_CONFIG,
-        ttnn.DRAM_MEMORY_CONFIG,
-        False,
-        False,
-    ),
-    (
-        (1, 1, 32, 2048),
-        (1, 1, 2048, 8192),
-        ttnn.bfloat8_b,
-        ttnn.DRAM_MEMORY_CONFIG,
-        ttnn.DRAM_MEMORY_CONFIG,
-        False,
-        False,
-    ),
-    ((1, 1, 4096, 256), (1, 1, 256, 1024), ttnn.bfloat16, ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, False, False),
-    ((1, 1, 256, 1024), (1, 1, 1024, 512), ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG, False, False),
-    ((8, 128, 64), (8, 64, 128), ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, False, False),
-    (
-        (1, 1, 512, 1024),
-        (1, 1, 1024, 2048),
-        ttnn.bfloat16,
-        ttnn.DRAM_MEMORY_CONFIG,
-        ttnn.DRAM_MEMORY_CONFIG,
-        True,
-        False,
-    ),
-    (
-        (1, 1, 512, 1024),
-        (1, 1, 2048, 1024),
-        ttnn.bfloat16,
-        ttnn.DRAM_MEMORY_CONFIG,
-        ttnn.DRAM_MEMORY_CONFIG,
-        False,
-        True,
-    ),
-    # Squares with packer L1 accumulation, where the model's K blocking costs the most PCC (README, "Precision")
-    (
-        (1, 1, 1024, 1024),
-        (1, 1, 1024, 1024),
-        ttnn.bfloat16,
-        ttnn.DRAM_MEMORY_CONFIG,
-        ttnn.DRAM_MEMORY_CONFIG,
-        False,
-        False,
-    ),
-    (
-        (1, 1, 2048, 2048),
-        (1, 1, 2048, 2048),
-        ttnn.bfloat8_b,
-        ttnn.DRAM_MEMORY_CONFIG,
-        ttnn.DRAM_MEMORY_CONFIG,
-        False,
-        False,
-    ),
+    ((1, 1, 256, 1024), (1, 1, 1024, 512), ttnn.bfloat8_b, D, D, False, False),
+    ((1, 1, 32, 1024), (1, 1, 1024, 2048), ttnn.bfloat8_b, D, D, False, False),
+    ((1, 1, 1024, 128), (1, 1, 128, 256), ttnn.bfloat16, L1, D, False, False),
+    ((1, 1, 256, 512), (1, 1, 512, 256), ttnn.bfloat16, D, L1, False, False),
+    ((8, 128, 64), (8, 64, 128), ttnn.bfloat16, D, D, False, False),
+    ((1, 1, 256, 512), (1, 1, 512, 512), ttnn.bfloat16, D, D, True, False),
+    ((1, 1, 256, 512), (1, 1, 512, 512), ttnn.bfloat16, D, D, False, True),
+    # Squares with packer L1 accumulation, where the model's K blocking changes PCC the most (README, "Precision")
+    ((1, 1, 512, 512), (1, 1, 512, 512), ttnn.bfloat16, D, D, False, False),
+    ((1, 1, 512, 512), (1, 1, 512, 512), ttnn.bfloat8_b, D, D, False, False),
 ]
 
+# A plain matmul the model chooses a config for
+PLAIN = ((1, 1, 256, 1024), (1, 1, 1024, 512), ttnn.bfloat8_b, D, D)
 
-# How far below the flag-off PCC the flag-on PCC may be on these cases. The model may use other K blocking than the
-# default, which changes how partial sums are rounded (README, "Precision"): the largest drop measured on these cases on
-# a Blackhole Galaxy is 1.2e-4 (1024^3 bf16, HiFi2, packer L1 accumulation). A fixed PCC bar loose enough for every
-# case would miss a regression of that size.
+
+# How far below the flag-off PCC the flag-on PCC may be. The model may use other K blocking than the default, which
+# changes how partial sums are rounded (README, "Precision"): on a Blackhole Galaxy the largest drop on these cases is
+# 1.0e-4 (32x1024x2048, bfp8 B), and 1.2e-4 on 1024^3 bf16 (HiFi2, packer L1 accumulation). A fixed PCC bar loose
+# enough for every case would miss a regression of that size.
 PCC_MARGIN = 2e-4
 
 
@@ -147,15 +105,11 @@ def test_model_config_pcc(device, model_on, a_shape, b_shape, dtype_b, a_mem, ou
 
 
 def test_model_picks_for_a_plain_matmul(device, model_on):
-    run_matmul(
-        device, (1, 1, 1024, 4096), (1, 1, 4096, 4096), ttnn.bfloat8_b, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG
-    )
+    run_matmul(device, *PLAIN)
     assert model_decided(last_pick()), last_pick()
     # The second call is a cache hit with the same pick
     first = last_pick()
-    run_matmul(
-        device, (1, 1, 1024, 4096), (1, 1, 4096, 4096), ttnn.bfloat8_b, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG
-    )
+    run_matmul(device, *PLAIN)
     assert last_pick() == first, f"cache hit changed the pick: {last_pick()}"
 
 
@@ -163,14 +117,7 @@ def test_model_reloads_when_the_path_changes(device, model_on, tmp_path):
     """A C++ program that turns the flag on before setting matmul_model_path gets the default configs until it sets
     the path, and the model from then on: the path is read on every eligible matmul, not only on the first. A blob
     that appears at a path whose load failed is loaded too."""
-    args = (
-        device,
-        (1, 1, 1024, 4096),
-        (1, 1, 4096, 4096),
-        ttnn.bfloat8_b,
-        ttnn.DRAM_MEMORY_CONFIG,
-        ttnn.DRAM_MEMORY_CONFIG,
-    )
+    args = (device, *PLAIN)
     late = tmp_path / "matmul_model.blob"
     with ttnn.manage_config("matmul_model_path", str(late)):
         run_matmul(*args)
@@ -218,9 +165,7 @@ def test_model_keeps_default_for_broadcast_a(device, model_on):
 
 def test_explicit_program_config_is_untouched(device, model_on):
     """A user program config bypasses the model (it isn't consulted, so its last pick doesn't change)."""
-    run_matmul(
-        device, (1, 1, 1024, 4096), (1, 1, 4096, 4096), ttnn.bfloat8_b, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG
-    )
+    run_matmul(device, *PLAIN)
     before = last_pick()
     a = torch.randn(1, 1, 64, 128).bfloat16()
     b = torch.randn(1, 1, 128, 64).bfloat16()
@@ -250,7 +195,7 @@ def test_block_float_output_keeps_precision(device, model_on):
     pick must not split K finely (gpt-oss decode LM head, K = 2880 is 90 tiles)."""
     torch.manual_seed(0)
     a = torch.randn(1, 1, 32, 2880).bfloat16()
-    b = (torch.randn(1, 1, 2880, 4096) / 2880**0.5).bfloat16()
+    b = (torch.randn(1, 1, 2880, 512) / 2880**0.5).bfloat16()
     ta = ttnn.from_torch(
         a, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
     )
@@ -290,14 +235,18 @@ def test_broadcast_bias_with_preallocated_output(device, model_on):
     assert_with_pcc(a.float() @ b.float() + bias.float(), got, 0.999)
 
 
+@pytest.mark.skipif(
+    bool(os.getenv("TT_METAL_SIMULATOR")), reason="an output filling half of every L1 bank is too slow to simulate"
+)
 def test_preallocated_l1_output_is_not_counted_twice(device, model_on):
     """A preallocated L1 output is already outside the free L1 the pick's budget starts from. Here it fills about 55%
-    of every L1 bank, so counting it a second time would leave no L1 for any candidate and keep the default."""
+    of every L1 bank, so counting it a second time would leave no L1 for any candidate and keep the default. K is one
+    tile: the output's size is what matters."""
     grid = device.compute_with_storage_grid_size()
     free_bank = 1461120  # a free Blackhole L1 bank, as in the gtests
     tiles_per_bank = 14 * 28  # 392 bf16 tiles, 0.55 of the bank
     assert tiles_per_bank * 2048 > 0.5 * free_bank
-    M, K, N = 32 * 14 * grid.y, 256, 32 * 28 * grid.x
+    M, K, N = 32 * 14 * grid.y, 32, 32 * 28 * grid.x
     torch.manual_seed(0)
     a = torch.randn(1, 1, M, K).bfloat16()
     b = torch.randn(1, 1, K, N).bfloat16()
