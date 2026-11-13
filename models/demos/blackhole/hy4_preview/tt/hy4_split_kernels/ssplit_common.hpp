@@ -15,7 +15,15 @@ namespace reader_common_arg {
 enum : uint32_t { Q_ADDRESS, KV_ADDRESS, INDICES_ADDRESS, KV_BATCH_PAGE_OFFSET, END };
 }
 namespace writer_common_arg {
-enum : uint32_t { OUTPUT_ADDRESS, KV_ADDRESS, KV_BATCH_PAGE_OFFSET, ATTENTION_SINK_ADDRESS, Q_ADDRESS, END };
+enum : uint32_t {
+    OUTPUT_ADDRESS,
+    KV_ADDRESS,
+    KV_BATCH_PAGE_OFFSET,
+    ATTENTION_SINK_ADDRESS,
+    Q_ADDRESS,
+    STATS_ADDRESS,
+    END
+};
 }
 
 constexpr uint32_t SCALE_BLOCK_WIDTH = 128;
@@ -143,6 +151,10 @@ enum : uint32_t {
     CB_Q_RM,
     Q_ROWS,
     QMODE_W,
+    EMIT_STATS,
+    CB_M_OUT,
+    CB_L_OUT,
+    CB_STAT_SCR,
     END,
 };
 }  // namespace writer_ct_arg
@@ -193,6 +205,9 @@ enum : uint32_t {
     CB_MB,
     CB_CORR_R,
     QTILED,
+    EMIT_STATS,
+    CB_M_OUT,
+    CB_L_OUT,
     END,
 };
 }  // namespace compute_ct_arg

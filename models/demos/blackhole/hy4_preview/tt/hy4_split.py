@@ -12,6 +12,8 @@ protocol). Same inputs / outputs as ``ttnn.transformer.sparse_sdpa`` (plain bf16
 import os
 import struct
 
+import torch
+
 import ttnn
 
 KDIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hy4_split_kernels")
@@ -39,7 +41,7 @@ def max_split(rows, grid_x, grid_y):
     return max(1, (grid_x * grid_y) // max(1, rows))
 
 
-def sparse_sdpa_split(q, kv, idx, v_dim, scale, k_chunk, split, ckc, sink):
+def sparse_sdpa_split(q, kv, idx, v_dim, scale, k_chunk, split, ckc, sink, emit_stats=False):
     """q: bf16 ROW_MAJOR [1,H=32,S,D]; kv: fp8_e4m3 / bf16 ROW_MAJOR [1,1,R,D]; idx: uint32 ROW_MAJOR [1,1,S,TOPK]; sink: bf16 ROW_MAJOR [1,1,1,H].
     ``ckc``: the device compute kernel config (fidelity / approx / fp32 acc are read from it). -> bf16 ROW_MAJOR [1,H,S,v_dim].
     """
@@ -55,8 +57,14 @@ def sparse_sdpa_split(q, kv, idx, v_dim, scale, k_chunk, split, ckc, sink):
     else:
         H, S, D = int(q.shape[1]), int(q.shape[2]), int(q.shape[3])
     topk = int(idx.shape[3])
-    assert H == 32 and v_dim == 512 and D in (512, 576) and sink is not None
+    assert H == 32 and v_dim == 512 and D in (512, 576)
     assert q.dtype == ttnn.bfloat16 and idx.dtype == ttnn.uint32 and kv.dtype in (ttnn.bfloat16, ttnn.fp8_e4m3)
+    # SCALED_FP8 KV (the stock sparse_sdpa packed format): fp8 bytes, row = 512 fp8 latent + 4 fp32 scales + 64 bf16 rope = 656 B, stored at the 64 B aligned stride 704
+    scaled = kv.dtype == ttnn.fp8_e4m3 and int(kv.shape[3]) == v_dim + 16 + (D - v_dim) * 2
+    if emit_stats:
+        assert sink is None, "emit_stats: the sink is applied by the cross-column merge, not in the kernel"
+    else:
+        assert sink is not None
     grid = md.compute_with_storage_grid_size()
     G = max(1, min(int(split), max_split(S, grid.x, grid.y)))
     n_cores = S * G
@@ -75,12 +83,29 @@ def sparse_sdpa_split(q, kv, idx, v_dim, scale, k_chunk, split, ckc, sink):
     Skt = k_chunk // 32
     Sqt = H // 32
     assert topk % k_chunk == 0 or True
-    fp8 = kv.dtype == ttnn.fp8_e4m3
-    kv_b = 1 if fp8 else 2
+    fp8 = kv.dtype == ttnn.fp8_e4m3 and not scaled  # plain fp8_e4m3 rows (no block scales)
+    kv_b = 1 if kv.dtype == ttnn.fp8_e4m3 else 2
+    PACKED = ((v_dim + 16 + (D - v_dim) * 2 + 63) // 64) * 64 if scaled else 0  # 704
     TILE = 2048
-    k_in_tile = 1088 if fp8 else 2048
-    k_in_df = ttnn.bfloat8_b if fp8 else ttnn.bfloat16
     bf = ttnn.bfloat16
+    k_in_tile = 1088 if (fp8 or scaled) else 2048
+    k_in_df = ttnn.bfloat8_b if (fp8 or scaled) else ttnn.bfloat16
+    if sink is None:  # dummy (the kernel ignores it when emit_stats)
+        sink = ttnn.from_torch(
+            torch.zeros(1, 1, 1, H, dtype=torch.bfloat16),
+            device=md,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+    use_sink = 0 if emit_stats else 1
+    stats = (
+        ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, S, 64]), bf, ttnn.ROW_MAJOR_LAYOUT, md, ttnn.DRAM_MEMORY_CONFIG
+        )
+        if emit_stats
+        else None
+    )
     out = ttnn.allocate_tensor_on_device(
         ttnn.Shape([1, H, S, v_dim]),
         bf,
@@ -130,7 +155,10 @@ def sparse_sdpa_split(q, kv, idx, v_dim, scale, k_chunk, split, ckc, sink):
         MA,
         MB,
         CORR_R,
-    ) = range(35)
+        M_OUT,
+        L_OUT,
+        STAT_SCR,
+    ) = range(38)
 
     def cb(i, page, n, df):
         return ttnn.CBDescriptor(
@@ -143,8 +171,18 @@ def sparse_sdpa_split(q, kv, idx, v_dim, scale, k_chunk, split, ckc, sink):
     cbs = [
         cb(Q_RM, D * 2, 1 if qt else H, bf),  # unused with tile-page q (QTILE): keep the L1 footprint low
         cb(Q_IN, TILE, Sqt * DHt, bf),
-        cb(K_RM, D * kv_b, k_chunk, kv.dtype),
-        cb(K_IN, k_in_tile, Skt * DHt, k_in_df),
+        # scaled: one double-buffered 32-row slab FIFO (owner K_RM fp8 + format-only bf16 alias K_ROPE_RM over the same bytes), as in the stock sparse_sdpa factory
+        ttnn.CBDescriptor(
+            total_size=PACKED * 32 * 2,
+            core_ranges=core_set,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(buffer_index=K_RM, data_format=ttnn.fp8_e4m3, page_size=PACKED),
+                ttnn.CBFormatDescriptor(buffer_index=K_ROPE_RM, data_format=bf, page_size=PACKED),
+            ],
+        )
+        if scaled
+        else cb(K_RM, D * kv_b, k_chunk, kv.dtype),
+        cb(K_IN, k_in_tile, Skt * (vDHt if scaled else DHt), k_in_df),
         cb(NEGINF, TILE, 1, bf),
         cb(MASK_PART, TILE, 1, bf),
         cb(SCALE, TILE, 1, bf),
@@ -173,14 +211,22 @@ def sparse_sdpa_split(q, kv, idx, v_dim, scale, k_chunk, split, ckc, sink):
         cb(MB, TILE, 1, bf),
         cb(CORR_R, TILE, nrecv, bf),
     ]
+    if scaled:
+        cbs += [
+            cb(K_SCALE_BC, 4096, (v_dim // 128) * 2, ttnn.float32),
+            cb(K_LAT_T, 1088, vDHt, ttnn.bfloat8_b),
+            cb(K_ROPE_T, TILE, Skt * (DHt - vDHt), bf),
+        ]
+    if emit_stats:
+        cbs += [cb(M_OUT, TILE, 1, bf), cb(L_OUT, TILE, 1, bf), cb(STAT_SCR, 128, 1, bf)]
     bc = [0, 1, 1, 0, 0]
     reader_ct = [H, S, topk, k_chunk, D, Q_RM, K_RM, MASK_PART, IDX, CTRL, 2, kv_b, 4] + bc
     reader_ct += (
         [
-            0,
+            int(scaled),
             v_dim,
             K_SCALE_BC,
-            0,
+            PACKED,
             KREQ,
             KACK,
             G,
@@ -196,14 +242,14 @@ def sparse_sdpa_split(q, kv, idx, v_dim, scale, k_chunk, split, ckc, sink):
     )
     writer_ct = [H, S, vDHt, OUT_RM, SCALE, COL_ID, NEGINF, 2] + bc
     writer_ct += [
-        0,
+        int(scaled),
         D,
         kv_b,
         IDX,
         KREQ,
         KACK,
-        0,
-        1,
+        PACKED,
+        use_sink,
         SINK,
         SINK_SCR,
         G,
@@ -221,8 +267,12 @@ def sparse_sdpa_split(q, kv, idx, v_dim, scale, k_chunk, split, ckc, sink):
         Q_RM,
         QROWS,
         QMODE,
+        int(emit_stats),
+        M_OUT,
+        L_OUT,
+        STAT_SCR,
     ]
-    writer_ct += _acc(out) + _acc(kv) + _acc(sink) + _acc(q)
+    writer_ct += _acc(out) + _acc(kv) + _acc(sink) + _acc(q) + (_acc(stats) if emit_stats else _acc(out))
     fid = getattr(ckc, "math_fidelity", ttnn.MathFidelity.HiFi4)
     approx = bool(getattr(ckc, "math_approx_mode", False))
     fp32 = bool(getattr(ckc, "fp32_dest_acc_en", True)) and os.environ.get("SS_FP32", "1") == "1"
@@ -258,15 +308,15 @@ def sparse_sdpa_split(q, kv, idx, v_dim, scale, k_chunk, split, ckc, sink):
         CTRL,
         COL_ID,
         RECIP,
-        0,
+        int(scaled),
         K_ROPE_RM,
         K_SCALE_BC,
         K_LAT_T,
         K_ROPE_T,
         int(approx),
         qsb,
-        0,
-        1,
+        PACKED,
+        use_sink,
         SINK,
         G,
         RECV_O,
@@ -277,6 +327,9 @@ def sparse_sdpa_split(q, kv, idx, v_dim, scale, k_chunk, split, ckc, sink):
         MB,
         CORR_R,
         int(qt),
+        int(emit_stats),
+        M_OUT,
+        L_OUT,
     ]
     rt_r, rt_w, rt_c = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
     for i, (cx, cy) in enumerate(cores):
@@ -301,12 +354,19 @@ def sparse_sdpa_split(q, kv, idx, v_dim, scale, k_chunk, split, ckc, sink):
         core_ranges=core_set,
         compile_time_args=writer_ct,
         runtime_args=rt_w,
-        common_runtime_args=[out.buffer_address(), kv.buffer_address(), 0, sink.buffer_address(), q.buffer_address()],
+        common_runtime_args=[
+            out.buffer_address(),
+            kv.buffer_address(),
+            0,
+            sink.buffer_address(),
+            q.buffer_address(),
+            (stats if emit_stats else out).buffer_address(),
+        ],
         config=ttnn.WriterConfigDescriptor(),
     )
     cc = ttnn.ComputeConfigDescriptor(math_fidelity=fid, math_approx_mode=approx, fp32_dest_acc_en=fp32)
     modes = [ttnn.UnpackToDestMode.Default] * 64
-    if fp8:
+    if fp8 or scaled:
         modes[K_RM] = ttnn.UnpackToDestMode.UnpackToDestFp32
     cc.unpack_to_dest_mode = modes
     compute = ttnn.KernelDescriptor(
@@ -333,6 +393,15 @@ def sparse_sdpa_split(q, kv, idx, v_dim, scale, k_chunk, split, ckc, sink):
                 k_chunk,
                 topk,
                 int(fp8),
+                int(scaled),
+                int(emit_stats),
+                D,
+                v_dim,
+                RING,
+                QMODE,
+                QROWS,
+                QLAY,
+                int(os.environ.get("SS_KSPLIT", "0")),
                 str(fid),
                 int(approx),
                 int(fp32),
@@ -346,4 +415,7 @@ def sparse_sdpa_split(q, kv, idx, v_dim, scale, k_chunk, split, ckc, sink):
         )
         & ((1 << 40) - 1)
     )
+    if emit_stats:
+        ttnn.generic_op([q, kv, idx, sink, stats, out], prog)
+        return out, stats
     return ttnn.generic_op([q, kv, idx, sink, out], prog)

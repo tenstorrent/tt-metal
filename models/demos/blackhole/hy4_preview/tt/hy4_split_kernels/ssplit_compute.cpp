@@ -132,6 +132,41 @@ ALWI void tilize_packed_field() {
     tilize_uninit(input_cb, output_cb);
 }
 
+// Hy4 column sequence-sharding: publish the leader's row statistics (max tile copy, finalized row-sum tile) to the
+// writer before normalize_row_streaming consumes them. m = running row max (raw bf16 score), l = sum exp((s - m) *
+// scale) with the in-tile column reduction finalized by the same col-identity matmul the normalize uses.
+ALWI void emit_row_stats(uint32_t sum_cb, uint32_t max_cb, uint32_t colid_cb, uint32_t m_out_cb, uint32_t l_out_cb) {
+    CircularBuffer(max_cb).wait_front(1);
+    CircularBuffer(sum_cb).wait_front(1);
+    CircularBuffer(colid_cb).wait_front(1);
+    // m: tile copy
+    reconfig_data_format_srca(max_cb);
+    pack_reconfig_data_format(m_out_cb);
+    copy_init(max_cb);
+    CircularBuffer(m_out_cb).reserve_back(1);
+    tile_regs_acquire();
+    copy_tile(max_cb, 0, 0);
+    tile_regs_commit();
+    tile_regs_wait();
+    configure_single_tile_pack(m_out_cb);
+    pack_tile(0, m_out_cb);
+    tile_regs_release();
+    CircularBuffer(m_out_cb).push_back(1);
+    // l: row sum x col-identity (column 0 = the finalized per-head sum)
+    configure_single_tile_pack(l_out_cb);
+    reconfig_data_format(sum_cb, colid_cb);
+    pack_reconfig_data_format(l_out_cb);
+    matmul_block_init(sum_cb, colid_cb, 0, 1, 1, 1);
+    CircularBuffer(l_out_cb).reserve_back(1);
+    tile_regs_acquire();
+    matmul_block(sum_cb, colid_cb, 0, 0, 0, 0, 1, 1, 1);
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_tile(0, l_out_cb);
+    tile_regs_release();
+    CircularBuffer(l_out_cb).push_back(1);
+}
+
 void kernel_main() {
     constexpr bool sink_per_row = true;  // sparse query rows represent different heads
     constexpr bool use_attention_sink = get_compile_time_arg_val(ssplit::compute_ct_arg::USE_ATTENTION_SINK) != 0;
@@ -144,6 +179,9 @@ void kernel_main() {
     constexpr uint32_t cb_mb = get_compile_time_arg_val(ssplit::compute_ct_arg::CB_MB);
     constexpr uint32_t cb_corr_r = get_compile_time_arg_val(ssplit::compute_ct_arg::CB_CORR_R);
     constexpr bool q_tiled = get_compile_time_arg_val(ssplit::compute_ct_arg::QTILED) != 0;
+    constexpr bool emit_stats = get_compile_time_arg_val(ssplit::compute_ct_arg::EMIT_STATS) != 0;
+    constexpr uint32_t cb_m_out = get_compile_time_arg_val(ssplit::compute_ct_arg::CB_M_OUT);
+    constexpr uint32_t cb_l_out = get_compile_time_arg_val(ssplit::compute_ct_arg::CB_L_OUT);
     constexpr uint32_t H = get_compile_time_arg_val(ssplit::compute_ct_arg::H);
     constexpr uint32_t DHt = get_compile_time_arg_val(ssplit::compute_ct_arg::DHT);
     constexpr uint32_t vDHt = get_compile_time_arg_val(ssplit::compute_ct_arg::V_DHT);
@@ -569,6 +607,9 @@ void kernel_main() {
             out_cur.push_back(Sqt * vDHt);
 
             if (is_last && finalize_here) {
+                if constexpr (emit_stats) {
+                    emit_row_stats(sum_cur.get_cb_id(), max_cur.get_cb_id(), cb_col_identity, cb_m_out, cb_l_out);
+                }
                 DeviceZoneScopedN("NORM");
                 // Finalize: row-sum (matmul vs col-identity) -> recip -> out *= 1/sum -> cb_out_im.
                 // normalize_row_streaming is DST-safe for any sbh, so it does all Sqt rows in one call.
@@ -715,6 +756,9 @@ void kernel_main() {
                 sdpa_cb_pop_front_out_of_line(a_max, 1);
             }
             {
+                if constexpr (emit_stats) {
+                    emit_row_stats(sum_cur.get_cb_id(), m_fin, cb_col_identity, cb_m_out, cb_l_out);
+                }
                 DeviceZoneScopedN("M_NORM");
                 normalize_row_streaming<
                     /*profiling_enabled=*/false,

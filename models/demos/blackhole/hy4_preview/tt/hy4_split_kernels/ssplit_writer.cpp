@@ -94,6 +94,12 @@ void kernel_main() {
     constexpr auto q_args = TensorAccessorArgs<
         sink_args_q.next_compile_time_args_offset(),
         sink_args_q.next_common_runtime_args_offset()>();
+    constexpr bool emit_stats = get_compile_time_arg_val(ssplit::writer_ct_arg::EMIT_STATS) != 0;
+    constexpr uint32_t cb_m_out = get_compile_time_arg_val(ssplit::writer_ct_arg::CB_M_OUT);
+    constexpr uint32_t cb_l_out = get_compile_time_arg_val(ssplit::writer_ct_arg::CB_L_OUT);
+    constexpr uint32_t cb_stat_scr = get_compile_time_arg_val(ssplit::writer_ct_arg::CB_STAT_SCR);
+    constexpr auto stats_args =
+        TensorAccessorArgs<q_args.next_compile_time_args_offset(), q_args.next_common_runtime_args_offset()>();
     experimental::CB idx_cb(cb_idx), kreq_cb(cb_kreq), kack_cb(cb_kack);
     volatile tt_l1_ptr uint32_t* idx_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(idx_cb.get_write_ptr());
 
@@ -163,12 +169,13 @@ void kernel_main() {
         // Gather rows [0,split) on the writer's NoC into the reader-reserved destination, then ack.
         // header page from the reader: my chunk count, partial states to merge (leader), my split index
         kreq_cb.wait_front(1);
-        uint32_t my_cnt, n_remote, split_g;
+        uint32_t my_cnt, n_remote, split_g, row_empty;
         {
             volatile tt_l1_ptr uint32_t* hdr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kreq_cb.get_read_ptr());
             my_cnt = hdr[ssplit::gather_request::BASE];
             n_remote = hdr[ssplit::gather_request::SPLIT];
             split_g = hdr[ssplit::gather_request::IS_LAST];
+            row_empty = hdr[ssplit::gather_request::DST_L1];
         }
         kreq_cb.pop_front(1);
         DeviceZoneScopedN("W_TOKEN");
@@ -296,6 +303,29 @@ void kernel_main() {
         {
             DeviceZoneScopedN("W_OUTWAIT");
             out_cb.wait_front(block_tiles);
+        }
+        if constexpr (emit_stats) {
+            // Per-head partial-softmax statistics for the cross-column merge, one 128 B page per query row:
+            // bf16 [0,32) = running row max (RAW score units: multiply by the softmax scale on the host/merge, exact),
+            // bf16 [32,64) = row sum of exp((s - max) * scale). Empty column (no selected key): max = -inf, sum = 0.
+            experimental::CB m_cb(cb_m_out), l_cb(cb_l_out), scr(cb_stat_scr);
+            m_cb.wait_front(1);
+            l_cb.wait_front(1);
+            scr.reserve_back(1);
+            volatile tt_l1_ptr uint16_t* sp = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(scr.get_write_ptr());
+            volatile tt_l1_ptr uint16_t* mt = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(m_cb.get_read_ptr());
+            volatile tt_l1_ptr uint16_t* lt = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l_cb.get_read_ptr());
+            for (uint32_t h = 0; h < H; ++h) {
+                const uint32_t off = ssplit::tile_col0_offset(h);
+                sp[h] = row_empty ? neg_inf_bf16 : mt[off];
+                sp[H + h] = row_empty ? (uint16_t)0 : lt[off];
+            }
+            const auto stats =
+                TensorAccessor(stats_args, get_common_arg_val<uint32_t>(ssplit::writer_common_arg::STATS_ADDRESS));
+            noc.async_write(scr, stats, 2 * H * sizeof(uint16_t), {.offset_bytes = 0}, {.page_id = tok});
+            noc.async_write_barrier();
+            m_cb.pop_front(1);
+            l_cb.pop_front(1);
         }
         for (uint32_t h = 0; h < H; ++h) {
             // row h (head h) at CB read-ptr byte offset h*row_bytes; DRAM page = h*S + tok.

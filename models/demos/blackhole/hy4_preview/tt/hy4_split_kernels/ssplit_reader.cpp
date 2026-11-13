@@ -144,6 +144,7 @@ void kernel_main() {
 
         // binary-search the first sentinel -> nv (valid-key count); only ceil(nv/k_chunk) chunks are active.
         uint32_t nv = topk;
+        bool row_empty = false;
         {
             uint32_t lo = 0, hi = topk;
             while (lo < hi) {
@@ -154,7 +155,14 @@ void kernel_main() {
                     lo = mid + 1;
                 }
             }
-            nv = lo == 0 ? 1 : lo;  // contract guarantees >=1 valid; guard anyway
+            // Hy4 column sequence-sharding: a column may own NO selected key (contract of kv-design seqshard.py). The
+            // row is then processed on a dummy key (local row 0, always allocated) so every kernel stage stays finite,
+            // and the writer reports m = -inf, l = 0 (the merge ignores the column).
+            row_empty = lo == 0;
+            nv = row_empty ? 1 : lo;
+            if (row_empty) {
+                idx_ptr[0] = 0;
+            }
         }
         const uint32_t n_active = (nv + k_chunk - 1) / k_chunk;
 
@@ -185,6 +193,8 @@ void kernel_main() {
             request[ssplit::gather_request::BASE] = my_cnt;
             request[ssplit::gather_request::SPLIT] = n_remote;
             request[ssplit::gather_request::IS_LAST] = split_g;
+            request[ssplit::gather_request::DST_L1] =
+                row_empty ? 1u : 0u;  // header word 3: empty-row flag for the writer
         }
         kreq_cb.push_back(1);
 
@@ -207,7 +217,8 @@ void kernel_main() {
                     const uint32_t k_write_ptr = k_cb.get_write_ptr();
                     const uint32_t scale_write_ptr = scale_bcast_cb.get_write_ptr();
                     const uint32_t slab_base = base + row_base;
-                    const bool is_last_slab = (chunk == n_active - 1) && (row_tile == row_tiles - 1);
+                    const bool is_last_slab =
+                        (chunk == c0 + my_cnt - 1) && (row_tile == row_tiles - 1);  // this core's last slab (key split)
 
                     kreq_cb.reserve_back(1);
                     {
