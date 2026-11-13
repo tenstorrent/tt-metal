@@ -9,6 +9,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/math.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 
 #include "nlp_create_qkv_heads_device_operation.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
@@ -131,10 +132,10 @@ ttnn::device_operation::ProgramArtifacts NlpCreateHeadsDeviceOperation::Interlea
     const bool read_from_input_tensor_kv = input_tensor_kv.has_value();
 
     uint32_t single_tile_size = tt::tile_size(data_format);
-    TT_ASSERT(input_tensor.buffer()->size() % single_tile_size == 0);
+    TT_ASSERT(input_tensor.mesh_buffer().device_local_size() % single_tile_size == 0);
 
     if (read_from_input_tensor_kv) {
-        TT_ASSERT(input_tensor_kv->buffer()->size() % single_tile_size == 0);
+        TT_ASSERT(input_tensor_kv->mesh_buffer().device_local_size() % single_tile_size == 0);
     }
 
     ////////////////////////////////////////////////////////////////////////////

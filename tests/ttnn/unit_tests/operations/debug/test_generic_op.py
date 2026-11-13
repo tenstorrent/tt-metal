@@ -311,7 +311,7 @@ def test_point_to_point(mesh_device):
     # dst_is_forward = False
     writer_rt_args_ref.append(int(not dst_is_forward))
     fabric_args = ttnn.setup_fabric_connection(
-        sender_fabric_id, next_fabric_id_sender, link_idx, sender_program, sender_core
+        mesh_device, sender_fabric_id, next_fabric_id_sender, link_idx, sender_program, sender_core
     )
     writer_rt_args_ref.extend(fabric_args)
 
@@ -416,7 +416,7 @@ def test_point_to_point(mesh_device):
 
     # sender_is_forward = True
     fabric_args = ttnn.setup_fabric_connection(
-        receiver_fabric_id, next_fabric_id_receiver, link_idx, receiver_program, receiver_core
+        mesh_device, receiver_fabric_id, next_fabric_id_receiver, link_idx, receiver_program, receiver_core
     )
     reader_rt_args_ref.extend(fabric_args)
     reader_rt_args_ref.append(int(not sender_is_forward))

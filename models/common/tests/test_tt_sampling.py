@@ -2029,6 +2029,77 @@ class TestSingleDeviceGreedyLogprobs:
             safe_sync(mesh_device)
 
 
+# --- Test: logprobs with penalties report the logits before the penalties ---
+
+
+@pytest.mark.parametrize("mesh_device", [1], indirect=True)
+class TestPenaltyLogprobs:
+    """Penalties only steer selection; the reported logprob is log_softmax of the model's logits (#61328)."""
+
+    PENALIZED_TOKEN = 600
+    SELECTED_TOKEN = 601
+
+    @pytest.mark.parametrize("force_argmax", [True, False], ids=["force_argmax", "sampling"])
+    @pytest.mark.parametrize(
+        "penalty",
+        [{"presence_penalty": 2.0}, {"frequency_penalty": 2.0}, {"repetition_penalty": 2.5}],
+        ids=["presence", "frequency", "repetition"],
+    )
+    def test_selected_token_logprob_ignores_penalties(self, mesh_device, penalty, force_argmax):
+        args = make_sampling_args(mesh_device)
+        if force_argmax:
+            TestSingleDeviceGreedyLogprobs._enable_force_argmax(args)
+
+        torch.manual_seed(2024)
+        logits_host = (torch.randn(1, 1, BATCH_SIZE, args.padded_vocab_size) * 0.5 - 10.0).to(torch.bfloat16)
+        logits_host[..., self.PENALIZED_TOKEN] = 5.0
+        logits_host[..., self.SELECTED_TOKEN] = 4.0
+        valid_logits = logits_host[..., : args.vocab_size].float().squeeze()
+        seen = torch.full((BATCH_SIZE, 1), self.PENALIZED_TOKEN, dtype=torch.int64)
+
+        sg = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=None)
+        tt_input = make_sharded_logits(logits_host, mesh_device, args)
+        try:
+            sg.reset_sampling_params(
+                format_sampling_params(
+                    SamplingParams(
+                        temperature=[0.0] * BATCH_SIZE,
+                        top_k=[1] * BATCH_SIZE,
+                        top_p=[0.0] * BATCH_SIZE,
+                        enable_log_probs=True,
+                        **penalty,
+                    ),
+                    BATCH_SIZE,
+                )
+            )
+            sg.reset_prompt_tokens(seen)
+            sg.reset_output_state(tokens=seen)
+            sg.seed_manager.reset_seed(None, list(range(BATCH_SIZE)))
+            sg.seed_manager.get_new_values()
+            tt_tokens, tt_log_probs = sg.sample(tt_input, enable_trace=False)
+            ttnn.synchronize_device(mesh_device)
+            assert sg.tt_sampling.force_argmax_sampling is force_argmax
+
+            tokens = extract_tokens(tt_tokens, BATCH_SIZE)
+            assert tokens == [self.SELECTED_TOKEN] * BATCH_SIZE, f"penalty did not move selection: {tokens[:4]}"
+
+            lp_host = ttnn.to_torch(ttnn.get_device_tensors(tt_log_probs)[0])[:, :, 0, :BATCH_SIZE].reshape(-1).float()
+            ref_lp = torch.log_softmax(valid_logits, dim=-1)[:, self.SELECTED_TOKEN]
+            max_abs = (ref_lp - lp_host).abs().max().item()
+            assert max_abs <= 5e-2, (
+                f"logprob of the selected token {lp_host[:4].tolist()} != log_softmax of the logits before "
+                f"penalties {ref_lp[:4].tolist()} (max abs error {max_abs:.4f})"
+            )
+        finally:
+            ttnn.deallocate(tt_input)
+            try:
+                sg.reset_trace()
+            except Exception:
+                pass
+            del sg
+            safe_sync(mesh_device)
+
+
 # --- Test: padded-vocab logprobs across both TTSampling callsites ---
 
 

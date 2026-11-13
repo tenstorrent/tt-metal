@@ -19,6 +19,7 @@
 #include <string>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 #include <fmt/format.h>
 
@@ -141,6 +142,49 @@ TEST(ArgValueTest, CPU_FormatsAsTheStoredValue) {
     std::ostringstream os;
     os << ArgValue(42);
     EXPECT_EQ(os.str(), "42");
+}
+
+// ---- ArrayArgValue -----------------------------------------------------------
+
+using m2::ArrayArgValue;
+
+static_assert(std::equality_comparable<ArrayArgValue>);
+static_assert(!std::totally_ordered<ArrayArgValue>);
+
+TEST(ArrayArgValueTest, CPU_DefaultConstructedIsEmpty) { EXPECT_EQ(ArrayArgValue().size(), 0u); }
+
+TEST(ArrayArgValueTest, CPU_HoldsEachElementAsAnArgValue) {
+    const ArrayArgValue value = {-1, std::size_t{12}, true, 7u};
+    ASSERT_EQ(value.size(), 4u);
+    EXPECT_EQ(value[0].to_uint32(), 0xFFFFFFFFu);
+    EXPECT_EQ(value[1].to_uint32(), 12u);
+    EXPECT_EQ(value[2].to_uint32(), 1u);
+    EXPECT_EQ(value[3].to_uint32(), 7u);
+}
+
+TEST(ArrayArgValueTest, CPU_ComparesElementwise) {
+    EXPECT_EQ(ArrayArgValue({1, 2}), ArrayArgValue(std::vector<std::uint32_t>{1, 2}));
+    EXPECT_NE(ArrayArgValue({1, 2}), ArrayArgValue({2, 1}));
+    EXPECT_NE(ArrayArgValue({1, 2}), ArrayArgValue({1, 2, 3}));
+}
+
+TEST(ArrayArgValueTest, CPU_EqualValuesHashEqual) {
+    EXPECT_EQ(std::hash<ArrayArgValue>{}(ArrayArgValue({1, 2})), std::hash<ArrayArgValue>{}(ArrayArgValue({1u, 2u})));
+    EXPECT_EQ(
+        ttsl::hash::hash_objects_with_default_seed(ArrayArgValue({1, 2})),
+        ttsl::hash::hash_objects_with_default_seed(ArrayArgValue({1u, 2u})));
+    EXPECT_NE(
+        ttsl::hash::hash_objects_with_default_seed(ArrayArgValue({1, 2})),
+        ttsl::hash::hash_objects_with_default_seed(ArrayArgValue({2, 1})));
+}
+
+TEST(ArrayArgValueTest, CPU_FormatsAsABracedList) {
+    EXPECT_EQ(fmt::format("{}", ArrayArgValue({1, -1})), "{1, 4294967295}");
+    EXPECT_EQ(fmt::format("{}", ArrayArgValue()), "{}");
+
+    std::ostringstream os;
+    os << ArrayArgValue({3, 4});
+    EXPECT_EQ(os.str(), "{3, 4}");
 }
 
 }  // namespace

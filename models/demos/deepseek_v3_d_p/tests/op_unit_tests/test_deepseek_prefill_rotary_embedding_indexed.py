@@ -635,6 +635,7 @@ def test_indexer_deepseek_rope_fallback(mesh_device, subshard):
     perm = interleaved_perm_matrix(64).to(torch.bfloat16)
     indexer = SimpleNamespace(
         sp_axis=0,
+        _index_rope_dim=64,
         index_args=SimpleNamespace(index_head_dim=width),
         _rope_perm=upload(perm, ttnn.ReplicateTensorToMesh(mesh_device)),
         hifi4_fp32_compute_kernel_config=ttnn.init_device_compute_kernel_config(

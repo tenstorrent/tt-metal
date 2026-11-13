@@ -1577,3 +1577,81 @@ def test_reduce_scatter_linear_rank2_intermediate_size(mesh_device, input_shape)
     assert torch.equal(sentinel_after, torch_sentinel), "reduce_scatter wrote past its intermediate buffer"
     eq, mess = comp_pcc(torch_reference, torch_output)
     assert eq, mess
+
+
+# The cache entry is built with the input passed as the persistent intermediate, so the bindings resolved on the miss
+# point the intermediate slot at the input. A hit with distinct buffers must still read the right intermediate.
+@skip_for_blackhole("Requires wormhole_b0 to run")
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize("per_device_shape, dim", [([1, 1, 256, 1024], 3)])
+def test_reduce_scatter_async_ring_aliased_miss_cache_hit(mesh_device, per_device_shape, dim):
+    torch.manual_seed(0)
+    num_devices = mesh_device.get_num_devices()
+    global_shape = per_device_shape[:]
+    global_shape[dim] *= num_devices
+    output_global_shape = per_device_shape[:]
+
+    def to_mesh(t):
+        return ttnn.from_torch(
+            t,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=dim),
+            device=mesh_device,
+        )
+
+    compute_grid_size = mesh_device.compute_with_storage_grid_size()
+    ccl_sub_device_crs = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
+    )
+
+    # One fresh set per call, all kept alive for the whole test.
+    semaphores = [create_global_semaphores(mesh_device, ccl_sub_device_crs, 0) for _ in range(2)]
+    barrier_semaphores = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(2)]
+
+    def run_op(call_index, tt_input, persistent_buffers):
+        output = ttnn.experimental.reduce_scatter_minimal_async(
+            tt_input,
+            persistent_output_buffers=persistent_buffers,
+            dim=dim,
+            multi_device_global_semaphore=semaphores[call_index],
+            barrier_semaphore=barrier_semaphores[call_index],
+            num_links=1,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=ttnn.Topology.Ring,
+        )
+        ttnn.synchronize_device(mesh_device)
+        return output
+
+    mesh_device.enable_program_cache()
+    mesh_device.clear_program_cache()
+
+    # Miss: the input doubles as the persistent intermediate, so its output is not meaningful and is not checked.
+    miss_input = to_mesh(torch.rand(global_shape, dtype=torch.bfloat16))
+    miss_output_buffer = to_mesh(torch.zeros(output_global_shape, dtype=torch.bfloat16))
+    entries_before_miss = mesh_device.num_program_cache_entries()
+    miss_output = run_op(0, miss_input, [miss_input, miss_output_buffer])
+    entries_after_miss = mesh_device.num_program_cache_entries()
+    assert (
+        entries_after_miss > entries_before_miss
+    ), f"aliased reduce_scatter_minimal_async added no cache entry ({entries_before_miss} -> {entries_after_miss})"
+
+    # Hit: distinct buffers of the same specs, allocated while the miss tensors are alive so no address is reused.
+    torch_input = torch.rand(global_shape, dtype=torch.bfloat16)
+    hit_input = to_mesh(torch_input)
+    hit_intermediate = to_mesh(torch.zeros(global_shape, dtype=torch.bfloat16))
+    hit_output_buffer = to_mesh(torch.zeros(output_global_shape, dtype=torch.bfloat16))
+    entries_before_hit = mesh_device.num_program_cache_entries()
+    hit_output = run_op(1, hit_input, [hit_intermediate, hit_output_buffer])
+    entries_after_hit = mesh_device.num_program_cache_entries()
+    assert (
+        entries_after_hit == entries_before_hit
+    ), f"distinct-buffer reduce_scatter_minimal_async missed the cache ({entries_before_hit} -> {entries_after_hit})"
+    logger.info(f"retained miss-path tensors: input {miss_input.shape}, output {miss_output.shape}")
+
+    torch_reference = torch.sum(torch.stack(torch.chunk(torch_input, num_devices, dim)), dim=0)
+    torch_output = ttnn.to_torch(hit_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=dim))
+    eq, mess = comp_pcc(torch_reference, torch_output)
+    assert eq, f"reduce_scatter_minimal_async cache hit after an aliased miss failed PCC: {mess}"

@@ -24,8 +24,7 @@ from models.demos.gemma4.tt.experts.dispatch_prefill import (
     FABRIC_MAX_PAYLOAD_BYTES_BLACKHOLE,
     RING_FWD_EXTRA_BYTES,
     Gemma4DispatchExperts,
-    combine2d_extra_kwargs,
-    combine_fwd_reduction,
+    combine_fwd_vc_pages,
     ring_fabric_payload_bytes,
     ring_fabric_router_config,
     ring_payload_required_bytes,
@@ -368,30 +367,19 @@ def test_fused_decode_falls_back_below_the_tile_multiple(monkeypatch):
     assert not MoEBlock.fused_decode_ok(m) and not MoEBlock.fused_packed_routing_ok(m)
 
 
-def test_ring_combine_passes_fwd_reduction_only_when_the_signature_has_it(monkeypatch):
-    class WithoutIt:
-        def __init__(self, mesh_device, experts_per_chip, num_experts_per_tok, seq_len_per_chip, cluster_axis=0):
-            pass
-
-    class WithIt:
-        def __init__(
-            self,
-            mesh_device,
-            experts_per_chip,
-            num_experts_per_tok,
-            seq_len_per_chip,
-            fwd_reduction: int,
-            cluster_axis=0,
-        ):
-            pass
-
+def test_ring_combine_fwd_reduction_converts_to_pages_per_vc(monkeypatch):
+    # Ring of 8, 512 rows a chip, top-8, 4 experts a chip, one link. Before channels and credits a stream held
+    # 2 * 4096 (the two nearer destinations) + 4096 / 2 (the farthest, split over both streams) + 6 relay chunks
+    # * 4 experts = 10264 pages; a ring of 8 splits a stream into 6 channels.
+    args = (8, 512, 8, 4, 1)
     monkeypatch.delenv("GEMMA4_MOE_COMBINE_FWD_REDUCTION", raising=False)
-    assert combine2d_extra_kwargs(WithoutIt) == {}
-    assert combine2d_extra_kwargs(WithIt) == {"fwd_reduction": 1}
+    assert combine_fwd_vc_pages(*args) == 1711  # 10264 / 6, rounded up
     monkeypatch.setenv("GEMMA4_MOE_COMBINE_FWD_REDUCTION", "4")
-    assert combine_fwd_reduction() == 4 and combine2d_extra_kwargs(WithIt) == {"fwd_reduction": 4}
+    assert combine_fwd_vc_pages(*args) == 428  # 10264 / 24, rounded up
+    monkeypatch.setenv("GEMMA4_MOE_COMBINE_FWD_REDUCTION", "3")
+    assert combine_fwd_vc_pages(*args) == 571  # 10264 / 18, rounded up
     monkeypatch.setenv("GEMMA4_MOE_COMBINE_FWD_REDUCTION", "0")
-    assert combine_fwd_reduction() == 1  # the op requires >= 1
+    assert combine_fwd_vc_pages(*args) == 1711  # read as 1, as before
 
 
 # ===== merged from tests/unit/test_moe_decode_registry_host.py: The decode MoE module's registry rule (``Gemma4MoEDecode``): one shared module per mesh, built once every layer of

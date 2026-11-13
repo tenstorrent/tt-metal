@@ -53,7 +53,11 @@ ttnn::device_operation::ProgramArtifacts ReshardSameHeightFactory<local_is_outpu
     const bool interface_with_dram = (remote_core_type == tt::CoreType::DRAM);
     auto local_cores = get_optimal_worker_cores_for_sharded_tensor(local_tensor);
     auto all_cores = CoreRangeSet(ttsl::Span<const CoreCoord>(local_cores));
-    auto remote_cores = remote_tensor.buffer()->buffer_distribution_spec().value().cores_with_data();
+    auto remote_cores = remote_tensor.mesh_buffer()
+                            .device_local_config()
+                            .sharding_args.buffer_distribution_spec()
+                            .value()
+                            .cores_with_data();
 
     const auto data_format = tt::tt_metal::datatype_to_dataformat_converter(local_tensor.dtype());
     const uint32_t element_size = tt::datum_size(data_format);
@@ -63,8 +67,8 @@ ttnn::device_operation::ProgramArtifacts ReshardSameHeightFactory<local_is_outpu
         static_cast<uint32_t>(local_shard_spec.shape[1] * local_tensor.element_size());  // width * element size
     const uint32_t remote_units_per_shard = remote_shard_spec.shape[0];                  // height
 
-    auto* remote_buffer = remote_tensor.buffer();
-    auto remote_buffer_type = remote_buffer->buffer_type();
+    const auto* remote_buffer = &remote_tensor.mesh_buffer();
+    auto remote_buffer_type = remote_buffer->device_local_config().buffer_type;
 
     // Generate all read/write offsets for each core
     auto [runtime_args_for_each_core, total_num_sticks, local_stride_bytes, remote_stride_bytes] =

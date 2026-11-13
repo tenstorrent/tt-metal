@@ -6,7 +6,7 @@
 import pytest
 import torch
 from helpers.constraints import get_perf_math_operations, get_valid_math_fidelities
-from helpers.format_config import DataFormat
+from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     EltwiseBinaryGolden,
     _flush_product_underflow,
@@ -391,3 +391,49 @@ def test_eltwise_binary_reuse_dest_quasar(
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format
     ), "Assert against golden failed"
+
+
+# Float32 L1 input on this kernel's 16-bit Dest unpacks to Float16_b. Float32 -> Float32 needs a
+# 32-bit Dest, which the reuse_dest block sizing here does not run (dest_acc is fixed to No).
+REUSE_DEST_FLOAT32_FORMATS = [
+    InputOutputFormat(DataFormat.Float32, DataFormat.Float16_b),
+]
+
+
+@pytest.mark.quasar
+@parametrize(
+    formats=REUSE_DEST_FLOAT32_FORMATS,
+    mathop=lambda formats: reuse_dest_mathops(formats, is_perf=False),
+    math_fidelity=lambda formats, mathop: [
+        fidelity
+        for fidelity in get_valid_math_fidelities(formats, mathop)
+        if fidelity in (MathFidelity.LoFi, MathFidelity.HiFi4)
+    ],
+    reuse_dest_type=[
+        EltwiseBinaryReuseDestType.DEST_TO_SRCA,
+        EltwiseBinaryReuseDestType.DEST_TO_SRCB,
+    ],
+    dest_sync_mode=lambda: quasar_dest_sync_modes(is_perf=False),
+    input_dimensions=runtime(INPUT_DIMENSIONS),
+    output_dimensions=runtime(valid_output_dimensions),
+)
+def test_eltwise_binary_reuse_dest_float32_quasar(
+    formats,
+    mathop,
+    reuse_dest_type,
+    math_fidelity,
+    dest_sync_mode,
+    input_dimensions,
+    output_dimensions,
+):
+    test_eltwise_binary_reuse_dest_quasar(
+        formats,
+        mathop,
+        reuse_dest_type,
+        math_fidelity,
+        dest_sync_mode,
+        input_dimensions,
+        output_dimensions,
+        [PerfRunType.L1_TO_L1],
+        1,
+    )

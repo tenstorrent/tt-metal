@@ -28,7 +28,11 @@ ttnn::Tensor fast_reduce_nc(
     TT_FATAL(!dims.empty(), "fast_reduce_nc dims should not be empty");
 
     auto kernel_config_val = init_device_compute_kernel_config(
-        input.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4);
+        input.device()->arch(),
+        compute_kernel_config,
+        tt::tt_metal::MathFidelity::HiFi4,
+        /*default_approx_mode=*/true,
+        /*default_fp32_acc=*/input.dtype() == tt::tt_metal::DataType::FLOAT32);
 
     ttsl::SmallVector<int32_t> sorted_dims(dims.begin(), dims.end());
     std::sort(sorted_dims.begin(), sorted_dims.end());
@@ -60,7 +64,11 @@ std::tuple<Tensor, Tensor> fast_reduce_nc_split(
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Split reduction requires device input");
     auto config = init_device_compute_kernel_config(
-        input.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4);
+        input.device()->arch(),
+        compute_kernel_config,
+        tt::tt_metal::MathFidelity::HiFi4,
+        /*default_approx_mode=*/true,
+        /*default_fp32_acc=*/input.dtype() == tt::tt_metal::DataType::FLOAT32);
     auto outputs = ttnn::prim::fast_reduce_nc_split(input, dim, split_output_width, memory_config, config);
     return {outputs.at(0), outputs.at(1)};
 }

@@ -10,6 +10,36 @@ import torch.nn.functional as F
 import ttnn
 
 
+def encode_tail(rows: torch.Tensor, page_channels: int | None) -> torch.Tensor:
+    """``[..., K-1, W]`` history rows as a qkv_causal_conv1d_silu convolution tail.
+
+    ``page_channels=None`` is token-paged, the rows themselves. Otherwise channel-paged ``[..., W / P, (K-1) * P]`` with
+    ``P = page_channels``: page ``c`` holds the K-1 rows of channels ``[P c, P c + P)``, row after row.
+    """
+    if page_channels is None:
+        return rows
+    *lead, history_rows, width = rows.shape
+    pages = width // page_channels
+    return (
+        rows.reshape(*lead, history_rows, pages, page_channels)
+        .transpose(-3, -2)
+        .reshape(*lead, pages, history_rows * page_channels)
+    )
+
+
+def decode_tail(tail: torch.Tensor, page_channels: int | None) -> torch.Tensor:
+    """Inverse of :func:`encode_tail`: a convolution tail in the stated layout as ``[..., K-1, W]`` rows."""
+    if page_channels is None:
+        return tail
+    *lead, pages, page = tail.shape
+    history_rows = page // page_channels
+    return (
+        tail.reshape(*lead, pages, history_rows, page_channels)
+        .transpose(-3, -2)
+        .reshape(*lead, history_rows, pages * page_channels)
+    )
+
+
 def _finiteness(name: str, tensor: torch.Tensor) -> tuple[list[str], str]:
     element_count = tensor.numel()
     nan_count = int(torch.isnan(tensor).sum().item()) if tensor.dtype.is_floating_point else 0
@@ -249,6 +279,11 @@ def assert_bit_identical(expected: torch.Tensor, actual: torch.Tensor, *, name: 
         raise AssertionError(f"{name} bit patterns differ")
 
 
+def all_zero_bits(tensor: torch.Tensor) -> bool:
+    """Whether every byte is zero; unlike a value check, ``-0.0`` fails it."""
+    return not torch.any(tensor.detach().contiguous().view(torch.uint8))
+
+
 def collect_accuracy_and_determinism_results(
     device: ttnn.Device,
     run: Callable[[], Sequence[ttnn.Tensor]],
@@ -357,6 +392,7 @@ def qkv_device_inputs(
     batch: int = 1,
     history_rows: int = 3,
     seed: int = 223,
+    page_channels: int | None = None,
 ) -> tuple[
     tuple[torch.Tensor, torch.Tensor, tuple[torch.Tensor, ...]],
     tuple[ttnn.Tensor, ttnn.Tensor, tuple[ttnn.Tensor, ...]],
@@ -371,7 +407,7 @@ def qkv_device_inputs(
     inputs, history, taps = host
     return host, (
         qkv_to_device(inputs, device, layout=ttnn.ROW_MAJOR_LAYOUT),
-        qkv_to_device(history, device, layout=ttnn.ROW_MAJOR_LAYOUT),
+        qkv_to_device(encode_tail(history, page_channels), device, layout=ttnn.ROW_MAJOR_LAYOUT),
         tuple(qkv_to_device(tap, device, layout=ttnn.TILE_LAYOUT) for tap in taps),
     )
 

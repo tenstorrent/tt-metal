@@ -22,6 +22,7 @@
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
 #include "distributed/mesh_device_impl.hpp"
+#include "impl/context/metal_context.hpp"
 #include "jit_build/build.hpp"
 #include "jit_build/build_env_manager.hpp"
 #include "device_fixture.hpp"
@@ -222,8 +223,8 @@ void kernel_main() {
         const uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
         const int riscv_id = static_cast<std::underlying_type_t<DataMovementProcessor>>(DataMovementProcessor::RISCV_0);
         const JitBuildState& build_state =
-            BuildEnvManager::get_instance(this->device().impl().get_context_id())
-                .get_kernel_build_state(this->device().build_id(), tensix_core_type, dm_class_idx, riscv_id);
+            this->device().impl().metal_context().build_env_manager().get_kernel_build_state(
+                this->device().build_id(), tensix_core_type, dm_class_idx, riscv_id);
         const auto& kernels = program.impl().get_kernels(static_cast<uint32_t>(HalProgrammableCoreType::TENSIX));
         const std::string full_kernel_name = kernels.at(kernel_handle)->get_full_kernel_name();
         return build_state.get_target_out_path(full_kernel_name);

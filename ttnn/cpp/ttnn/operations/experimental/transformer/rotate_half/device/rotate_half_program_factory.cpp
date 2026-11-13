@@ -67,7 +67,7 @@ ttnn::device_operation::ProgramArtifacts RotateHalfDeviceOperation::RotateHalfPr
         .unique_id = SRC_SCALAR,
         .entry_size = scalar_single_tile_size,
         .num_entries = num_scalar_tiles,
-        .data_format_metadata = dfb_data_format,
+        .data_format_metadata = scalar_dfb_data_format,
     };
 
     DataflowBufferSpec no_mul_dfb{

@@ -4,6 +4,7 @@
 #include "transpose_wh_sharded_program_factory.hpp"
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/constants.hpp>
@@ -45,7 +46,8 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedProgramFactory::creat
 
     MeshDevice* device = input_tensor.device();
 
-    bool fp32_dest_acc_en = src0_dfb_data_format == tt::DataFormat::Float32;
+    // UInt8 needs 32-bit Dest on WH/BH; UnpackToDest stays Float32-only below.
+    bool fp32_dest_acc_en = ttnn::operations::data_movement::requires_32bit_dest(src0_dfb_data_format);
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;

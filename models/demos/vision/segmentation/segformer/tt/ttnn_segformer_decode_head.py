@@ -98,7 +98,9 @@ class TtSegformerDecodeHead:
         ttnn.deallocate(all_hidden_states[2])
         ttnn.deallocate(all_hidden_states[3])
 
-        concated_tensor_tile = ttnn.to_layout(concated_tensor, ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
+        concated_tensor_tile = ttnn.to_layout(
+            concated_tensor, ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
         ttnn.deallocate(concated_tensor)
 
         hidden_states, __, __ = self.linear_fuse(device, concated_tensor_tile)

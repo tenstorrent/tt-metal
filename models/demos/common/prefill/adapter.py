@@ -188,7 +188,7 @@ class PrefillModelAdapter(ABC):
     def layer_position_range(self, layer_idx: int, real_len: int) -> tuple[int, int]:
         """Table positions one /migrate of layer ``layer_idx`` covers after a ``real_len``-token prefill.
         A token cache migrates ``[0, real_len)``. A model whose layer holds a cache on another axis
-        (Kimi-K3's KDA state: one of decode's eight version windows) overrides this; the migration driver
+        (Kimi-K3's KDA state: one synthetic window per layer) overrides this; the migration driver
         issues one call per run of consecutive layers with equal ranges and byte-verifies that range."""
         return 0, real_len
 
@@ -228,9 +228,10 @@ class PrefillModelAdapter(ABC):
         return self.default_sparse_kv_cache_format if requested is None else requested
 
     @abstractmethod
-    def weight_cache_path(self, mesh_shape: tuple) -> Optional[Path]:
+    def weight_cache_path(self, mesh_shape: tuple, sp_axis: int = 0) -> Optional[Path]:
         """The TTNN weight-cache dir for this model + mesh, mirroring the layout
-        the cache-populate run wrote. None only if the cache is explicitly empty."""
+        the cache-populate run wrote. None only if the cache is explicitly empty.
+        ``sp_axis`` is the mesh axis SP runs on; a model that only supports axis 0 raises on any other."""
 
     @abstractmethod
     def allocate_kv_cache(self, *, mesh_device: "ttnn.MeshDevice", hf_config, params: PrefillRunParams) -> KvCaches:
@@ -367,6 +368,8 @@ ADAPTER_PATHS = {
     # Kimi-K2.7-Code: DeepSeek-V3 architecture (MLA + MoE), single expert group (adapters/kimi_k2_7.py).
     "kimi_k2_7": "models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k2_7:KimiK27Adapter",
     "kimi_k3": "models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k3:KimiK3Adapter",
+    # Kimi-K3.1: K3 + DSA indexer on its 24 MLA layers; test-only (sparse-MLA module tests, serving not wired).
+    "kimi_k3_1": "models.demos.deepseek_v3_d_p.tt.runners.adapters.sparse_mla:KimiK31Adapter",
     "minimax_m3": "models.demos.minimax_m3.tt.runners.adapters.minimax_m3:MiniMaxM3PrefillAdapter",
     # Mistral-Small-4-119B: dense MLA + MoE; config hand-built (transformers 5.x rope_parameters).
     "mistral_small_4": "models.demos.deepseek_v3_d_p.tt.runners.adapters.mistral_small_4:MistralSmall4Adapter",

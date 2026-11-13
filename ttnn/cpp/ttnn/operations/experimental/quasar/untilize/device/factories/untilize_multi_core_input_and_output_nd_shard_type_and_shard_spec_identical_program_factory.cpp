@@ -57,7 +57,8 @@ UntilizeMultiCoreInputAndOutputNDShardTypeAndShardSpecIdenticalProgramFactory::c
     uint32_t num_blocks_per_shard = (shard_height / tile_height) * (shard_vol / (shard_height * shard_width));
     uint32_t num_tiles_per_shard = num_tiles_per_block * num_blocks_per_shard;
 
-    const auto& distribution_spec = a.buffer()->buffer_distribution_spec().value();
+    const auto& distribution_spec =
+        a.mesh_buffer().device_local_config().sharding_args.buffer_distribution_spec().value();
     const auto& groups = distribution_spec.core_groups();
     uint32_t num_shards_per_core = groups.num_shards_per_core_in_group_1;
 

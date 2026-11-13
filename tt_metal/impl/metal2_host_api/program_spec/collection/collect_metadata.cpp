@@ -45,6 +45,11 @@ void CollectNameLookups(const ProgramSpec& spec, CollectedSpecData& collected) {
         TT_FATAL(inserted, "Duplicate TensorParameter name '{}'", tensor_parameter.unique_id);
     }
 
+    for (const auto& parameter : spec.advanced_options.sram_arena_parameters) {
+        auto [it, inserted] = collected.sram_arena_parameter_by_name.try_emplace(parameter.unique_id, &parameter);
+        TT_FATAL(inserted, "Duplicate SRAMArenaParameter name '{}'", parameter.unique_id);
+    }
+
     for (const auto& pipe_parameter : spec.advanced_options.prefetcher_pipe_parameters) {
         auto [it, inserted] = collected.prefetcher_pipe_by_name.try_emplace(pipe_parameter.unique_id, &pipe_parameter);
         TT_FATAL(inserted, "Duplicate PrefetcherPipeParameter name '{}'", pipe_parameter.unique_id);

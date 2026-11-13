@@ -95,7 +95,7 @@ PERF_TEST_SCHEMAS = {
         },
     },
     "perf_eltwise_binary": {
-        "version": 8,
+        "version": 9,
         "columns": [
             "acc_to_dest",
             "block_ct_dim",
@@ -114,6 +114,10 @@ PERF_TEST_SCHEMAS = {
             "formats.sfpu_dst",
             "full_ct_dim",
             "full_rt_dim",
+            "in0_face_c_dim",
+            "in0_face_r_dim",
+            "in1_face_c_dim",
+            "in1_face_r_dim",
             "input_num_blocks",
             "input_num_tiles_in_block",
             "loop_factor",
@@ -141,7 +145,7 @@ PERF_TEST_SCHEMAS = {
         },
     },
     "perf_eltwise_binary_broadcast": {
-        "version": 1,
+        "version": 2,
         "columns": [
             "acc_to_dest",
             "block_ct_dim",
@@ -160,6 +164,10 @@ PERF_TEST_SCHEMAS = {
             "formats.sfpu_dst",
             "full_ct_dim",
             "full_rt_dim",
+            "in0_face_c_dim",
+            "in0_face_r_dim",
+            "in1_face_c_dim",
+            "in1_face_r_dim",
             "input_num_blocks",
             "input_num_tiles_in_block",
             "loop_factor",
@@ -707,11 +715,12 @@ PERF_TEST_SCHEMAS = {
         "test_name_aliases": {"perf_sfpu_binop_scalar": "perf_sfpu_binop_scalar"},
     },
     "perf_sfpu_ema": {
-        "version": 1,
+        "version": 2,
         "columns": [
             "alpha_bits",
             "approx_mode",
             "beta_bits",
+            "binary_init_before_ema",
             "dest_acc",
             "formats.input_A",
             "formats.input_B",
@@ -785,10 +794,11 @@ PERF_TEST_SCHEMAS = {
         "test_name_aliases": {"perf_sfpu_reduce_sdpa": "perf_sfpu_reduce_sdpa"},
     },
     "perf_sfpu_ternary": {
-        "version": 3,
+        "version": 4,
         "columns": [
             "approx_mode",
             "dest_acc",
+            "dest_sync",
             "formats.input_A",
             "formats.input_B",
             "formats.output",

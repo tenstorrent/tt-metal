@@ -6,7 +6,6 @@
 
 #include <cstdint>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>  // FabricType
 #include <tt-metalium/experimental/fabric/physical_grouping_descriptor.hpp>
@@ -18,7 +17,6 @@
 #include <set>
 #include <vector>
 #include <unordered_map>
-#include <optional>
 #include <filesystem>
 #include <string>
 #include <climits>

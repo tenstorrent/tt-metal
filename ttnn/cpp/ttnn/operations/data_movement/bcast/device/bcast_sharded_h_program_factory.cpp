@@ -35,7 +35,8 @@ ttnn::device_operation::ProgramArtifacts BcastShardedHProgramFactory::create_pro
     const auto& out_mt = output.mesh_tensor();
 
     const auto& bshape = b.padded_shape();
-    const std::uint32_t bN = bshape.rank() >= 4 ? bshape[-4] : 1;
+    // b's tiles are ordered by N, then C, so each (n, c) is one batch of b.
+    const std::uint32_t bN = get_batch_size(bshape);
 
     MeshDevice* device = a.device();
 
@@ -182,6 +183,16 @@ ttnn::device_operation::ProgramArtifacts BcastShardedHProgramFactory::create_pro
     KernelRunArgs compute_args{.kernel = COMPUTE};
 
     const std::uint32_t ncores_y = ncores / ncores_x;
+    if (a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
+        // The block-sharded offsets below split the cores along the shard height evenly between b's batches.
+        const std::uint32_t height_cores = shard_spec.orientation == ShardOrientation::ROW_MAJOR ? ncores_x : ncores_y;
+        TT_FATAL(
+            height_cores % bN == 0,
+            "Block-sharded bcast H needs the {} cores along the shard height to split evenly between the {} batches "
+            "of input b",
+            height_cores,
+            bN);
+    }
     for (std::uint32_t i = 0; i < ncores; i++) {
         CoreCoord core;
         std::uint32_t offset = 0;

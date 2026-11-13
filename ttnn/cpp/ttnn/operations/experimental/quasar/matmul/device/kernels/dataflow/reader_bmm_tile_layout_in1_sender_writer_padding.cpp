@@ -165,13 +165,12 @@ void kernel_main() {
     constexpr uint32_t cb_id_in1 = get_named_compile_time_arg_val("cb_in1");
     constexpr uint32_t in1_single_tile_size_bytes = get_tile_size(cb_id_in1);
     constexpr const uint32_t in1_tile_hw = get_tile_hw(cb_id_in1);
-    // Tiles whose size is not a multiple of the DRAM alignment are padded to it in DRAM, and the
-    // interleaved in1 CB pages are sized to match (see the program factory). On the plain interleaved
-    // path the NOC reads the unpadded tile of data into each padded slot and tiles are laid out /
-    // multicast at the padded stride. No-op when already aligned. The sharded / DRAM-sharded paths
-    // keep their natural (unpadded) stride.
-    constexpr uint32_t in1_aligned_tile_size_bytes =
-        (in1_single_tile_size_bytes + (DRAM_ALIGNMENT - 1)) & ~(DRAM_ALIGNMENT - 1);
+    // Interleaved tiles are laid out in L1 at their DRAM page stride rounded up to the NOC DRAM read alignment,
+    // the entry size the program factory set (get_interleaved_tile_stride): 576 B for a 544 B bfp8 32x16 tile on
+    // Blackhole, the tile size itself on Wormhole and on Quasar (whose NOC reads at any offset and whose unpacker
+    // walks the ring at the format's own stride, e.g. 1056 B for an 8-bit MX tile).
+    constexpr uint32_t in1_aligned_tile_size_bytes = (in1_single_tile_size_bytes + NOC_DRAM_READ_ALIGNMENT_BYTES - 1) /
+                                                     NOC_DRAM_READ_ALIGNMENT_BYTES * NOC_DRAM_READ_ALIGNMENT_BYTES;
 #if !defined(IN1_SHARDED) && !defined(IN1_DRAM_WIDTH_SHARDED) && !defined(IN1_DRAM_HEIGHT_SHARDED)
     constexpr uint32_t in1_block_size_bytes = in1_block_num_tiles * in1_aligned_tile_size_bytes;
 #else
@@ -681,10 +680,10 @@ void kernel_main() {
 
 #ifdef IN1_DRAM_WIDTH_SHARDED
     // Restore only NCRISC read_cmd_buf NOC_CTRL_LO VC to firmware default; a full set_async_read_state
-    // would also clobber NOC_TARG_ADDR_* / NOC_AT_LEN_BE sticky regs that the next kernel's async_read_*_with_state fast paths read.
-    const uint32_t noc_rd_cmd_field = NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED |
-                                      NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1) |
-                                      NOC_RESP_STATIC_VC(READ_RESPONSE_STATIC_VC);
+    // would also clobber NOC_TARG_ADDR_* / NOC_AT_LEN_BE sticky regs that the next kernel's async_read_*_with_state
+    // fast paths read.
+    const uint32_t noc_rd_cmd_field = NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC |
+                                      NOC_CMD_STATIC_VC(1) | NOC_RESP_STATIC_VC(READ_RESPONSE_STATIC_VC);
     NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_CTRL_LO, noc_rd_cmd_field);
 #endif
 }

@@ -37,6 +37,8 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import extract_mesh_config
 CHUNK = 5 * 1024
 DISPATCH_GROUP_SIZE = 8
 SEQ_LEN_PER_CHIP = CHUNK // DISPATCH_GROUP_SIZE
+# Pages one forwarding channel holds. These cases are synthetic, not any one model's.
+FWD_VC_PAGES = 64
 
 # The production Galaxy row and the 8x1 TorusY LoudBox proxy. This op forwards single hops around a
 # ring, so it needs an axis whose closing link is cabled and an extent of at least 4, which rules
@@ -246,6 +248,7 @@ def test_dispatch_fabric2d(mesh_device, device_params, num_links, capacity_div, 
         seq_len_per_chip=seq_len_per_chip,
         cluster_axis=sp_axis,
         num_links=num_links,
+        fwd_vc_pages=FWD_VC_PAGES,
         topology=ttnn.Topology.Ring,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
@@ -430,6 +433,7 @@ class _Fixture:
             seq_len_per_chip=self.seq_len_per_chip,
             cluster_axis=cluster_axis,
             num_links=num_links,
+            fwd_vc_pages=FWD_VC_PAGES,
             topology=ttnn.Topology.Ring,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             subdevice_id=subdevice_id,

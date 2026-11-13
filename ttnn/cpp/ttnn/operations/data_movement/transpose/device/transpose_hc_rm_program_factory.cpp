@@ -132,13 +132,13 @@ ttnn::device_operation::ProgramArtifacts TransposeHCRMProgramFactory::create_pro
     auto [num_cores, all_cores, core_group_1, core_group_2, num_sticks_per_core_group_1, num_sticks_per_core_group_2] =
         split_work_to_cores(compute_with_storage_grid_size, NCH);
 
-    Buffer* dst_buffer = output_tensor.buffer();
+    const auto* dst_buffer = &output_tensor.mesh_buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     auto num_sticks = num_sticks_per_core_group_1 > num_sticks_per_core_group_2 ? num_sticks_per_core_group_1
                                                                                 : num_sticks_per_core_group_2;
 
-    Buffer* src0_buffer = input_tensor.buffer();
+    const auto* src0_buffer = &input_tensor.mesh_buffer();
     uint32_t aligned_page = std::max(src0_buffer->aligned_page_size(), dst_buffer->aligned_page_size());
     auto stick_size = std::max(W * input_tensor.element_size(), aligned_page);
 

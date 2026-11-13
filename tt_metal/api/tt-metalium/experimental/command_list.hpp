@@ -16,9 +16,12 @@
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 #include <tt-metalium/experimental/metal2_host_api/utility/table.hpp>
+#include <tt-metalium/experimental/prefetcher_pipe.hpp>
+#include <tt-metalium/experimental/tensor_prefetcher.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/program.hpp>
+#include <tt_stl/optional_reference.hpp>
 #include <tt_stl/strong_type.hpp>
 
 // Experimental and subject to change: this header carries no API-stability guarantee.
@@ -112,12 +115,37 @@ public:
 
     /**
      * @brief Records one workload without launching it.
-     * Compiles the workload and uploads any required kernel binaries through the current thread's command queue.
+     * Compiles the workload and uploads any required kernel binaries.
      *
-     * @param workload      Workload to record.
-     * @param parameters    Fields of @p workload that built command lists can patch with CommandList::update_args().
+     * @param binary_upload_cq  Command queue of device() that writes the kernel binaries to the device. Waits for the
+     *                          upload to finish.
+     * @param workload          Workload to record.
+     * @param parameters        Fields of @p workload that built command lists can patch with
+     *                          CommandList::update_args().
      */
-    void add(MeshWorkload& workload, const CmdListParameters& parameters = {});
+    void add(MeshCommandQueue& binary_upload_cq, MeshWorkload& workload, const CmdListParameters& parameters = {});
+
+    /**
+     * @brief Records one Tensor prefetcher request without sending it.
+     * Takes the same arguments and has the same preconditions as QueueTensorPrefetcherRequest(), and serializes the
+     * request now. Every EnqueueCommandList() of a built list re-queues the recorded requests, in the order they were
+     * recorded, before it enqueues the list's workloads.
+     *
+     * A list replays only these requests. WaitForCqOnTensorPrefetcher() cannot be recorded: it takes effect when
+     * called, so data the requests read, including a group selector's mask, must be written and fenced before the
+     * replay.
+     *
+     * Built lists can be replayed only while the Tensor prefetcher that was active here is still running. Keep the
+     * tensors and pipes alive until it stops.
+     *
+     * @param prefetcher_pipes  See QueueTensorPrefetcherRequest().
+     * @param device_subset     See QueueTensorPrefetcherRequest().
+     * @param input_tensors     See QueueTensorPrefetcherRequest().
+     */
+    void add_tensor_prefetcher_request(
+        const std::vector<std::reference_wrapper<const PrefetcherPipe>>& prefetcher_pipes,
+        ttsl::optional_reference<const distributed::MeshCoordinateRangeSet> device_subset,
+        const std::vector<TensorPrefetcherInput>& input_tensors);
 
     /**
      * @brief Builds an independent command list bound to @p cq.
@@ -135,7 +163,7 @@ public:
     MeshDevice& device() const;
 
     /**
-     * @brief Clears all recorded workloads.
+     * @brief Clears all recorded workloads and Tensor prefetcher requests.
      */
     void clear();
 

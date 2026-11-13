@@ -82,8 +82,9 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
 //
 // CAUTION: It is the caller's responsibility to ensure that the stateful arguments being retained
 // are still valid in the new execution context. This is especially important for retained tensor
-// arguments: if the previously-bound MeshTensor has gone out of scope (and its device memory has
-// been deallocated), re-enqueuing with the now-stale binding is undefined behavior.
+// arguments (and other user-managed resource arguments): if the previously-bound object has gone
+// out of scope (and its device memory has been deallocated), re-enqueuing with the now-stale
+// binding is undefined behavior.
 //
 // USE CASE: Program re-enqueue loops where only a subset of ProgramRunArgs change per iteration.
 // This saves the host overhead of re-computing, re-specifying and re-validating the full

@@ -28,6 +28,8 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/distributed.hpp
     api/tt-metalium/distributed_context.hpp
     api/tt-metalium/distributed_host_buffer.hpp
+    api/tt-metalium/experimental/sram_arena/sram_arena.hpp
+    api/tt-metalium/experimental/sram_arena/sram_arena_properties.hpp
     api/tt-metalium/experimental/allocation_context.hpp
     api/tt-metalium/experimental/allocator.hpp
     api/tt-metalium/experimental/dispatch_telemetry.hpp
@@ -85,6 +87,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/metal2_host_api/program.hpp
     api/tt-metalium/experimental/metal2_host_api/program_run_args.hpp
     api/tt-metalium/experimental/metal2_host_api/program_spec.hpp
+    api/tt-metalium/experimental/metal2_host_api/sram_arena_parameter.hpp
     api/tt-metalium/experimental/metal2_host_api/scratchpad_spec.hpp
     api/tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp
     api/tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp
@@ -130,6 +133,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/tensor_host_pad_apis.hpp
     api/tt-metalium/experimental/tensor_prefetcher.hpp
     api/tt-metalium/experimental/tensor_serialization_support.hpp
+    api/tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp
     api/tt-metalium/tensor/host_tensor.hpp
     api/tt-metalium/tensor/mesh_tensor.hpp
     api/tt-metalium/tensor/spec/layout/alignment.hpp
@@ -230,7 +234,6 @@ set(TT_METAL_SOURCES
 )
 
 set(JITAPI_FILES
-    api/tt-metalium/buffer_types.hpp
     api/tt-metalium/experimental/fabric/fabric_edm_types.hpp
     api/tt-metalium/experimental/fabric/edm_fabric_counters.hpp
     core_descriptors/blackhole_140_arch.yaml
@@ -287,6 +290,8 @@ set(JITAPI_FILES
     impl/dispatch/kernels/cq_realtime_profiler.cpp
     impl/dispatch/kernels/cq_realtime_profiler_push.cpp
     impl/dispatch/kernels/device_print_dispatch.h
+    impl/buffers/kernels/tensor_prefetcher.cpp
+    impl/buffers/tensor_prefetcher_request.hpp
     fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp
     fabric/impl/kernels/edm_fabric/fabric_router_mux_extension.cpp
     fabric/impl/kernels/edm_fabric/fabric_router_relay_extension.cpp

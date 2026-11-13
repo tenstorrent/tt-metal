@@ -12,7 +12,6 @@ path separate while reusing the same TT execution helper and the production mesh
 / fabric axes from the dense MLA tests.
 """
 
-
 import pytest
 import torch
 from loguru import logger
@@ -35,12 +34,18 @@ from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_reference import (
     run_cpu_reference_ragged,
 )
 from models.demos.deepseek_v3_d_p.tests.test_mla import run_mla_inference
+from models.demos.deepseek_v3_d_p.tt.mla import mla as mla_module
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import normalized_hadamard_matrix, num_full_indexer_layers
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup, interleaved_to_halfsplit_perm
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions, rotated_chip_positions
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
+    MlaKvCacheFormat,
+    init_kvpe_cache,
+    init_mla_kv_cache,
+    striped_cache_to_host,
+)
 from models.demos.deepseek_v3_d_p.utils.test_utils import WH_WORKER_L1_SIZE
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -50,17 +55,29 @@ SPARSE_KVPE_PCC = 0.99
 # quantization noise. Measured ~0.99991 on 2x4 BH (chunked + rotated), tracking the
 # bf16 KVPE cache; 0.999 keeps ample bf8 headroom while still catching a real write regression.
 SPARSE_INDEX_PCC = 0.999
-SPARSE_VARIANTS = ["glm_5_2"]
+# glm_5_2: the production-closest GLM (populated reference cache; architecturally == GLM-5.3).
+# kimi_k3_1: K3's gated NoPE MLA (96 heads) + a NoPE lightning indexer; its main KVPE cache is scaled FP8.
+# deepseek_v32: 128 heads; covers the heads -> sequence reshard at TP=2 / TP=4 for DeepSeek-V3.2.
+SPARSE_VARIANTS = ["glm_5_2", "kimi_k3_1", "deepseek_v32"]
+# Main KVPE cache format per variant; the other format runs at the real-pruning sequence only.
+SPARSE_MAIN_KV_FORMAT = {
+    "glm_5_2": MlaKvCacheFormat.BF16_RM,
+    "kimi_k3_1": MlaKvCacheFormat.SCALED_FP8,
+    "deepseek_v32": MlaKvCacheFormat.BF16_RM,
+}
+# Single-slot index caches (no multi-layer slab like GLM's) need >= KVPE_MIN_TOKENS_PER_CHIP rows per chip, so
+# where seq 256 is too short they take the shortest of these inert-top-k (sparse == dense) lengths that fits.
+SPARSE_INERT_FALLBACK_SEQS = (1024, 2048)
+SINGLE_SLOT_INDEX_VARIANTS = ("kimi_k3_1", "deepseek_v32")
 
 
-def _collect_kvpe_cache(cache, mesh_device):
-    sp, tp = mesh_device.shape[0], mesh_device.shape[1]
-    composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape)
-    logical = cache.unpack_host(ttnn.to_torch(cache.storage, mesh_composer=composer))
-    local = logical.shape[2] // sp  # per-chip rows = seq_len_cache / (sp*tp)
-    flat = torch.cat(
-        [logical[:, t, s * local : (s + 1) * local] for s in range(sp) for t in range(tp)], dim=1
-    )  # [num_slots, sp*tp*local == seq_len_cache, kvpe]
+def _single_slot_seq_ok(seq_len, mesh):
+    return _seq_ok_for_mesh(seq_len, mesh) and seq_len // (mesh[0] * mesh[1]) >= KVPE_MIN_TOKENS_PER_CHIP
+
+
+def _collect_kvpe_cache(cache, mesh_device, sp_axis=0):
+    # The sparse path always dedups: stripe order sp_coord*tp + tp_coord on either SP axis.
+    flat = cache.unpack_host(striped_cache_to_host(cache.storage, mesh_device, sp_axis))  # [slots, seq_len_cache, kvpe]
     return flat.unsqueeze(1)
 
 
@@ -69,20 +86,17 @@ def _collect_kvpe_cache(cache, mesh_device):
 # ---------------------------------------------------------------------------
 # Box-adaptive candidate meshes (sp, tp), keyed by physical device count. Each box lists ONLY shapes
 # that fit it, so off-box shapes are never generated (no "needs N devices" skips). Shapes must be
-# TP>=2 (the dense 128-head epilogue overflows L1 at TP=1). Every variant runs every listed mesh: GLM's
-# thin per-chip head shard at tp=4 (64/4=16 < 32) is handled by the head→sequence reshard in
-# ttMLA._sparse_mla (#48727) + the head-replicated seq-sharded indexer, so GLM is no longer TP-capped.
+# TP>=2 (the dense 128-head epilogue overflows L1 at TP=1). Every variant runs every listed mesh.
 # Coverage rationale:
 #   QuietBox (4):  (1,4) TorusX and (2,2) Fabric2D.
 #   LoudBox  (8):  (2,4) TP=4 and (4,2) TP=2 — every variant at both TP.
-#   Galaxy   (32): (8,4) production TP=4 + the existing (8,2) TP=2 diagnostic plane.
+#   Galaxy   (32): (8,4) production TP=4 only.
 # Mesh shape is NOT correctness-invariant, so accuracy sweeps the whole box set; determinism and
 # chunked pin to each variant's anchor (highest supported TP) — see _sparse_cases(anchor_only=True).
 SPARSE_MESH_BY_DEVICES = {
     4: [(2, 2), (1, 4)],
     8: [(2, 4), (4, 2)],
-    # Only the complete 8x4 view uses TorusXY. The existing 8x2 plane remains plain Fabric2D.
-    32: [(8, 4), (8, 2)],
+    32: [(8, 4)],
 }
 
 # seq_len is a sparsity-regime axis (not a code path): accuracy keeps one inert-top-k point (256,
@@ -120,9 +134,10 @@ def _anchor_mesh(meshes):
     return max(meshes, key=lambda m: m[1])
 
 
-def _sparse_cases(seqs, anchor_only):
+def _sparse_cases(seqs, anchor_only, variants=None):
     """Generate (variant, mesh, seq_len, device_params) for the current box — only valid combos, so the
     collected matrix equals the run matrix (validity is enforced here, not via runtime skips)."""
+    variants = SPARSE_VARIANTS if variants is None else variants
     meshes = _sparse_meshes()
     if meshes is None:
         num_devices = detect_num_devices()
@@ -142,13 +157,9 @@ def _sparse_cases(seqs, anchor_only):
         for seq_len in seqs:
             if not _seq_ok_for_mesh(seq_len, mesh):
                 continue
-            for variant_name in SPARSE_VARIANTS:
-                topology_mark = (
-                    []
-                    if mesh == (8, 2)
-                    else pytest.mark.requires_mesh_topology(
-                        mesh_shape=mesh, topology="ring" if mesh == (1, 4) else f"mesh-{mesh[0]}x{mesh[1]}"
-                    )
+            for variant_name in variants:
+                topology_mark = pytest.mark.requires_mesh_topology(
+                    mesh_shape=mesh, topology="ring" if mesh == (1, 4) else f"mesh-{mesh[0]}x{mesh[1]}"
                 )
                 cases.append(
                     pytest.param(
@@ -163,14 +174,34 @@ def _sparse_cases(seqs, anchor_only):
     return cases
 
 
-def _sparse_accuracy_cases():
-    """BF16 covers both sparsity regimes; scaled FP8 covers only the real-pruning regime."""
+def _single_slot_seq_for_mesh(candidates, mesh):
+    """The first candidate sequence that is valid for a single-slot index cache on this mesh, or None."""
+    return next((seq for seq in candidates if _single_slot_seq_ok(seq, mesh)), None)
+
+
+def _inert_fallback_cases():
+    """Single-slot index-cache variants get the shortest valid inert-top-k point on meshes where seq 256 is invalid."""
     cases = []
-    for case in _sparse_cases(SPARSE_SEQS_ACCURACY, anchor_only=False):
+    for mesh in _sparse_meshes() or []:
+        if _single_slot_seq_ok(SPARSE_SEQS_ACCURACY[0], mesh):
+            continue
+        seq = _single_slot_seq_for_mesh(SPARSE_INERT_FALLBACK_SEQS, mesh)
+        assert seq is not None, f"no single-slot inert-top-k sequence fits mesh {mesh}"
+        variants = list(SINGLE_SLOT_INDEX_VARIANTS)
+        cases += [c for c in _sparse_cases([seq], anchor_only=False, variants=variants) if c.values[1] == mesh]
+    return cases
+
+
+def _sparse_accuracy_cases():
+    """Main KV format at both sparsity regimes, the other format at the pruning one only."""
+    cases = []
+    for case in _sparse_cases(SPARSE_SEQS_ACCURACY, anchor_only=False) + _inert_fallback_cases():
         variant, mesh, seq_len, device_params = case.values
-        formats = [MlaKvCacheFormat.BF16_RM]
-        if seq_len == SPARSE_SEQS_ANCHOR[0]:
-            formats.append(MlaKvCacheFormat.SCALED_FP8)
+        if variant in SINGLE_SLOT_INDEX_VARIANTS and not _single_slot_seq_ok(seq_len, mesh):
+            continue  # replaced by the SPARSE_INERT_FALLBACK_SEQS case
+        main = SPARSE_MAIN_KV_FORMAT[variant]
+        other = MlaKvCacheFormat.SCALED_FP8 if main == MlaKvCacheFormat.BF16_RM else MlaKvCacheFormat.BF16_RM
+        formats = [main, other] if seq_len == SPARSE_SEQS_ANCHOR[0] else [main]
         for cache_format in formats:
             cases.append(
                 pytest.param(
@@ -188,6 +219,14 @@ def _sparse_accuracy_cases():
 
 SPARSE_ACCURACY_CASES = _sparse_accuracy_cases()
 SPARSE_ANCHOR_CASES = _sparse_cases(SPARSE_SEQS_ANCHOR, anchor_only=True)
+
+
+def _only(cases, *variants):
+    return [c for c in cases if c.values[0] in variants]
+
+
+# Multi-chunk coverage on every mesh: the TP=2 early-Q path differs from TP=4.
+SPARSE_CHUNKED_CASES = _sparse_cases(SPARSE_SEQS_ANCHOR, anchor_only=False)
 
 
 def _init_index_kv_cache(config, mesh_device, seq_len, mesh_shape, sp_axis, slot_num=1, tp_axis=1):
@@ -212,31 +251,23 @@ def _init_index_kv_cache(config, mesh_device, seq_len, mesh_shape, sp_axis, slot
     )
 
 
-def _cache_natural(tt_cache, mesh_device, chunk_size_global, batch_slot=0):
+def _cache_natural(tt_cache, mesh_device, chunk_size_global, batch_slot=0, sp_axis=0):
     """Read a block-cyclic KV/index cache back to a natural-order [S, D] tensor.
 
-    ConcatMesh2dToTensor(dims=(2, 1)) puts the SP concat on the seq dim and the TP concat on dim 1, so
-    dim 1 is indexed by tp-coord. The sparse path always dedups, so every tp-coord holds a DIFFERENT
-    1/tp slice rather than a replica: flatten them into LINEAR CHIP ORDER (L = sp_coord*tp + tp_coord --
-    the order update_padded_kv_cache(tp_axis=) writes and the full-mesh gather reconstructs), giving a
-    shard-major buffer over sp*tp stripes. blockcyclic_positions is generic in the stripe count, so the
-    un-rotation is the same call with sp*tp.
+    The sparse path always dedups, so every tp-coord holds a DIFFERENT 1/tp slice rather than a replica.
+    striped_cache_to_host returns them in stripe order (sp_coord*tp + tp_coord, the order
+    update_padded_kv_cache(tp_axis=) writes and the full-mesh gather reconstructs) on either SP axis.
+    blockcyclic_positions is generic in the stripe count, so the un-rotation is the same call with sp*tp.
     """
-    sp, tp = mesh_device.shape[0], mesh_device.shape[1]
-    cache_sr = ttnn.to_torch(
-        tt_cache, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape)
-    ).to(torch.bfloat16)
-    local = cache_sr.shape[2] // sp  # per-chip rows = seq_len_cache / (sp*tp)
-    flat = torch.cat(
-        [cache_sr[batch_slot, t, s * local : (s + 1) * local] for s in range(sp) for t in range(tp)], dim=0
-    )
-    p = blockcyclic_positions(sp * tp, chunk_size_global, flat.shape[0])
+    n0, n1 = mesh_device.shape[0], mesh_device.shape[1]
+    flat = striped_cache_to_host(tt_cache, mesh_device, sp_axis)[batch_slot].to(torch.bfloat16)
+    p = blockcyclic_positions(n0 * n1, chunk_size_global, flat.shape[0])
     nat = torch.empty(flat.shape[0], flat.shape[-1], dtype=torch.bfloat16)
     nat[p] = flat
     return nat
 
 
-def _collect_index_cache_natural(tt_index_kv_cache, mesh_device, config, chunk, cache_batch_idx=0):
+def _collect_index_cache_natural(tt_index_kv_cache, mesh_device, config, chunk, cache_batch_idx=0, sp_axis=0):
     """Read the block-cyclic indexer key cache back to a natural-order [S, index_head_dim] tensor in the
     CPU reference's RoPE frame, so it can be PCC'd against SparseMLAReference.index_cache.
 
@@ -246,7 +277,7 @@ def _collect_index_cache_natural(tt_index_kv_cache, mesh_device, config, chunk, 
     path permutes half-split->interleaved before it). The CPU reference stores it interleaved for GLM
     (index_rope_interleave=True) but HALF-SPLIT for DS, so for DS we reindex the device's RoPE dims back
     to half-split (interleaved_to_halfsplit_perm) before comparing; the non-RoPE dims match directly."""
-    nat = _cache_natural(tt_index_kv_cache, mesh_device, chunk, batch_slot=cache_batch_idx)
+    nat = _cache_natural(tt_index_kv_cache, mesh_device, chunk, batch_slot=cache_batch_idx, sp_axis=sp_axis)
     # The Sylvester Hadamard matrix is symmetric and self-inverse, so applying it again restores the
     # pre-transform key. Do this before the DS RoPE-frame permutation because the transform was applied
     # while the key was still in the device's interleaved frame.
@@ -270,6 +301,7 @@ def run_sparse_mla_accuracy_case(
     ds_layer=None,
     ds_checkpoint=None,
     ds_repo=None,
+    sp_axis=0,
 ):
     """Sparse-MLA accuracy: device output + KVPE cache vs MLACPU sparse reference."""
     # Validity (tp<=cap, seq/sp>=min tokens, off-box shapes) is enforced by _sparse_cases at
@@ -284,7 +316,7 @@ def run_sparse_mla_accuracy_case(
     logger.debug(f"[{variant.name}] sparse MLA accuracy: reference source tag={src_tag}")
 
     mesh_shape = list(mesh_device.shape)
-    sp_axis, tp_axis = 0, 1
+    tp_axis = 1 - sp_axis
     logger.debug(f"[{variant.name}] sparse MLA accuracy: initializing KVPE cache mesh_shape={mesh_shape}")
     tt_kvpe_cache = init_mla_kv_cache(
         cache_format=cache_format,
@@ -336,7 +368,7 @@ def run_sparse_mla_accuracy_case(
     logger.info(f"[{variant.name}] Output PCC: {pcc_message}")
 
     logger.debug(f"[{variant.name}] sparse MLA accuracy: collecting KVPE cache")
-    tt_kvpe = _collect_kvpe_cache(tt_kvpe_cache, mesh_device)[:1, :1]
+    tt_kvpe = _collect_kvpe_cache(tt_kvpe_cache, mesh_device, sp_axis)[:1, :1]
     kv = config.kv_lora_rank
     _, kv_pcc = assert_with_pcc(ref_kvpe[..., :kv], tt_kvpe[..., :kv], SPARSE_KVPE_PCC)
     _, pe_pcc = assert_with_pcc(ref_kvpe[..., kv:], tt_kvpe[..., kv:], SPARSE_KVPE_PCC)
@@ -346,7 +378,7 @@ def run_sparse_mla_accuracy_case(
 
 
 def run_sparse_mla_determinism_case(
-    variant, config, mesh_device, seq_len, n_runs, topology, ds_layer, ds_checkpoint, ds_repo
+    variant, config, mesh_device, seq_len, n_runs, topology, ds_layer, ds_checkpoint, ds_repo, sp_axis=0
 ):
     """Run the same sparse MLA case repeatedly and compare outputs."""
     # Mesh is the per-variant anchor and seq fits SP — guaranteed by _sparse_cases (no runtime skips).
@@ -358,7 +390,7 @@ def run_sparse_mla_determinism_case(
     weights, _ = build_weights(variant, config, layer=ds_layer, checkpoint_path=ds_checkpoint, repo=ds_repo)
     config.max_seq_len = seq_len
     mesh_shape = list(mesh_device.shape)
-    sp_axis, tp_axis = 0, 1
+    tp_axis = 1 - sp_axis
 
     baseline = None
     for run_idx in range(n_runs):
@@ -410,7 +442,17 @@ def run_sparse_mla_determinism_case(
 
 
 def run_sparse_mla_chunked_case(
-    variant, config, mesh_device, seq_len, chunk, cache_format, ds_layer, ds_checkpoint, ds_repo, ds_input
+    variant,
+    config,
+    mesh_device,
+    seq_len,
+    chunk,
+    cache_format,
+    ds_layer,
+    ds_checkpoint,
+    ds_repo,
+    ds_input,
+    sp_axis=0,
 ):
     """Sparse chunked prefill on nonzero user slot: compare ttMLA against MLACPU sparse chunked truth."""
     # Anchor mesh (TP>=2) and seq/SP validity are guaranteed by _sparse_cases (no runtime skips).
@@ -423,7 +465,7 @@ def run_sparse_mla_chunked_case(
     seed = 42
     logger.info(
         f"[{variant.name}] sparse MLA chunked start: seq_len={seq_len} chunk={chunk} "
-        f"mesh={tuple(mesh_device.shape)} ds_input={bool(ds_input)}"
+        f"mesh={tuple(mesh_device.shape)} sp_axis={sp_axis} ds_input={bool(ds_input)}"
     )
     logger.debug(f"[{variant.name}] sparse MLA chunked: building TT/CPU weights")
     weights, src_tag = build_weights(
@@ -432,7 +474,7 @@ def run_sparse_mla_chunked_case(
     config.max_seq_len = seq_len
 
     mesh_shape = list(mesh_device.shape)
-    sp_axis, tp_axis = 0, 1
+    tp_axis = 1 - sp_axis
     num_users, cache_user_id = 2, 1
     logger.debug(f"[{variant.name}] sparse MLA chunked: initializing KVPE cache mesh_shape={mesh_shape}")
     tt_kvpe_cache = init_mla_kv_cache(
@@ -511,12 +553,11 @@ def run_sparse_mla_chunked_case(
         _, m = comp_pcc(ref_output[:, s : s + chunk], tt_output[0, :, s : s + chunk], 0)
         logger.info(f"[{variant.name}] chunk@{s}: {m}")
 
-    sp = mesh_device.shape[0]
     logger.debug(f"[{variant.name}] sparse MLA chunked: collecting KVPE cache")
-    cache_all = _collect_kvpe_cache(tt_kvpe_cache, mesh_device)
+    cache_all = _collect_kvpe_cache(tt_kvpe_cache, mesh_device, sp_axis)
     assert torch.count_nonzero(cache_all[0:1]) == 0, "sparse MLA wrote KVPE into unselected user slot 0"
     cache_sr = cache_all[cache_user_id : cache_user_id + 1, :1]
-    p = blockcyclic_positions(sp * mesh_device.shape[1], chunk, cache_sr.shape[2])
+    p = blockcyclic_positions(mesh_device.get_num_devices(), chunk, cache_sr.shape[2])
     nat = torch.empty(cache_sr.shape[2], cache_sr.shape[-1], dtype=torch.bfloat16)
     nat[p] = cache_sr[0, 0]
     _, m = comp_pcc(ref_kvpe, nat[:seq_len].unsqueeze(0), 0)
@@ -533,7 +574,7 @@ def run_sparse_mla_chunked_case(
         torch.count_nonzero(index_cache_host[:index_cache_layers]) == 0
     ), "sparse MLA wrote index keys into unselected user slot 0"
     idx_nat = _collect_index_cache_natural(
-        tt_index_kv_cache, mesh_device, config, chunk, cache_batch_idx=index_cache_batch_idx
+        tt_index_kv_cache, mesh_device, config, chunk, cache_batch_idx=index_cache_batch_idx, sp_axis=sp_axis
     )
     _, idx_pcc = assert_with_pcc(ref_index[0, :seq_len], idx_nat[:seq_len], SPARSE_INDEX_PCC)
     logger.info(f"[{variant.name}] Chunked indexer cache PCC: {idx_pcc}")
@@ -561,7 +602,7 @@ def pad_overflow_schedule(chunk, cache_len):
 
 
 def run_sparse_mla_pad_overflow_case(
-    variant, config, mesh_device, seq_len, chunk, cache_format, ds_layer, ds_checkpoint, ds_repo, ds_input
+    variant, config, mesh_device, seq_len, chunk, cache_format, ds_layer, ds_checkpoint, ds_repo, ds_input, sp_axis=0
 ):
     """Chunked sparse prefill whose LAST chunk pads past the end of the cache.
 
@@ -590,7 +631,7 @@ def run_sparse_mla_pad_overflow_case(
     config.max_seq_len = seq_len
 
     mesh_shape = list(mesh_device.shape)
-    sp_axis, tp_axis = 0, 1
+    tp_axis = 1 - sp_axis
     num_users, cache_user_id = 2, 1
     tt_kvpe_cache = init_mla_kv_cache(
         cache_format=cache_format,
@@ -635,7 +676,7 @@ def run_sparse_mla_pad_overflow_case(
     # is slab-aligned (what test_sparse_mla_chunked does). Every start here is drifted, so gather the
     # chunk in rotated chip-major order and scatter the output back by the same map, exactly as
     # test_sparse_mla_rotated_chunked does.
-    sp = mesh_device.shape[0]
+    sp = mesh_device.shape[sp_axis]
     chunk_local = chunk // sp
     hid = hidden[0]  # [seq, hidden]
     out_accum = None
@@ -684,10 +725,10 @@ def run_sparse_mla_pad_overflow_case(
         config, weights, hidden, seq_len, bounds, cache_dir, cache_tag=f"{src_tag}_funcidx"
     )
 
-    cache_all = _collect_kvpe_cache(tt_kvpe_cache, mesh_device)
+    cache_all = _collect_kvpe_cache(tt_kvpe_cache, mesh_device, sp_axis)
     assert torch.count_nonzero(cache_all[0:1]) == 0, "sparse MLA wrote KVPE into unselected user slot 0"
     cache_sr = cache_all[cache_user_id : cache_user_id + 1, :1]
-    p = blockcyclic_positions(sp * mesh_device.shape[1], chunk, cache_sr.shape[2])
+    p = blockcyclic_positions(mesh_device.get_num_devices(), chunk, cache_sr.shape[2])
     nat = torch.empty(cache_sr.shape[2], cache_sr.shape[-1], dtype=torch.bfloat16)
     nat[p] = cache_sr[0, 0]
     _, m = comp_pcc(ref_kvpe, nat[:total_real].unsqueeze(0), 0)
@@ -701,7 +742,7 @@ def run_sparse_mla_pad_overflow_case(
     index_cache_layers = num_full_indexer_layers(config) or 1
     index_cache_batch_idx = cache_user_id * index_cache_layers
     idx_nat = _collect_index_cache_natural(
-        tt_index_kv_cache, mesh_device, config, chunk, cache_batch_idx=index_cache_batch_idx
+        tt_index_kv_cache, mesh_device, config, chunk, cache_batch_idx=index_cache_batch_idx, sp_axis=sp_axis
     )
     _, idx_pcc = assert_with_pcc(ref_index[0, :total_real], idx_nat[:total_real], SPARSE_INDEX_PCC)
     logger.info(f"[{variant.name}] pad-overflow indexer cache PCC: {idx_pcc}")
@@ -716,7 +757,7 @@ def run_sparse_mla_pad_overflow_case(
 
 
 def run_sparse_mla_kv_only_case(
-    variant, config, mesh_device, seq_len, chunk, cache_format, ds_layer, ds_checkpoint, ds_repo
+    variant, config, mesh_device, seq_len, chunk, cache_format, ds_layer, ds_checkpoint, ds_repo, sp_axis=0
 ):
     """Last-layer chunked fast path must populate KVPE and tiled index caches without an output."""
     seed = 42
@@ -725,7 +766,7 @@ def run_sparse_mla_kv_only_case(
     )
     config.max_seq_len = seq_len
     mesh_shape = list(mesh_device.shape)
-    sp_axis, tp_axis = 0, 1
+    tp_axis = 1 - sp_axis
     tt_kvpe_cache = init_mla_kv_cache(
         cache_format=cache_format,
         hf_config=config,
@@ -783,21 +824,21 @@ def run_sparse_mla_kv_only_case(
         cpu_ref_cache_dir(variant),
         cache_tag=f"{src_tag}_funcidx_kvonly",
     )
-    cache_sr = _collect_kvpe_cache(tt_kvpe_cache, mesh_device)[:, :1]
+    cache_sr = _collect_kvpe_cache(tt_kvpe_cache, mesh_device, sp_axis)[:, :1]
     # sp*tp stripes -- see _collect_kvpe_cache.
     positions = blockcyclic_positions(mesh_shape[sp_axis] * mesh_shape[tp_axis], chunk, cache_sr.shape[2])
     cache_natural = torch.empty(cache_sr.shape[2], cache_sr.shape[-1], dtype=torch.bfloat16)
     cache_natural[positions] = cache_sr[0, 0]
     _, kv_msg = assert_with_pcc(ref_kvpe, cache_natural[:chunk].unsqueeze(0).unsqueeze(0), SPARSE_KVPE_PCC)
 
-    index_natural = _collect_index_cache_natural(tt_index_kv_cache, mesh_device, config, chunk)
+    index_natural = _collect_index_cache_natural(tt_index_kv_cache, mesh_device, config, chunk, sp_axis=sp_axis)
     _, index_msg = assert_with_pcc(ref_index[0, :chunk], index_natural[:chunk], SPARSE_INDEX_PCC)
     logger.info(f"[{variant.name}] kv_only cache PCC: kvpe={kv_msg} index={index_msg}")
     ttnn.synchronize_device(mesh_device)
 
 
 def run_sparse_mla_rotated_case(
-    variant, config, mesh_device, iters_isl, chunk_size_global, ds_layer, ds_checkpoint, ds_repo
+    variant, config, mesh_device, iters_isl, chunk_size_global, ds_layer, ds_checkpoint, ds_repo, sp_axis=0
 ):
     """Rotation/padding scenario (sparse analogue of test_mla._run_chunked_prefill): one DENSE sequence
     chunked VARIABLY by iters_isl (per-iter valid token counts). Each iter's real tokens are rotated to
@@ -807,7 +848,7 @@ def run_sparse_mla_rotated_case(
     (the next iter's write overwrites it before scoring; causal masks the tail). Ground truth is the
     single-shot sparse reference over the whole dense sequence; we compare each iter's valid region."""
     seed = 42
-    sp_axis, tp_axis = 0, 1
+    tp_axis = 1 - sp_axis
     mesh_shape = list(mesh_device.shape)
     sp = mesh_shape[sp_axis]
     tile = ttnn.TILE_SIZE
@@ -912,7 +953,7 @@ def run_sparse_mla_rotated_case(
     # ISOLATION: is the block-cyclic WRITE correct under rotation? Un-rotate the final KVPE cache and
     # compare per-iter region + full to the reference. If cache matches but output above diverged, the
     # bug is in SCORING (indexer top-k / sparse_sdpa), not the write.
-    nat = _cache_natural(tt_kvpe_cache.storage, mesh_device, chunk_size_global)
+    nat = _cache_natural(tt_kvpe_cache.storage, mesh_device, chunk_size_global, sp_axis=sp_axis)
     for i, isl in enumerate(iters_isl):
         s = sum(iters_isl[:i])
         _, m = comp_pcc(ref_kvpe[s : s + isl], nat[s : s + isl], 0)
@@ -923,7 +964,7 @@ def run_sparse_mla_rotated_case(
     # Same isolation for the block-cyclic INDEXER key cache — the untested-on-main tensor. Per-iter region
     # PCCs are logged for diagnosis (they localize a rotated-write bug to the offending iter); the full-cache
     # PCC is the gate, so a silent indexer-cache write regression fails here, not just via the output.
-    idx_nat = _collect_index_cache_natural(tt_index_kv_cache, mesh_device, config, chunk_size_global)
+    idx_nat = _collect_index_cache_natural(tt_index_kv_cache, mesh_device, config, chunk_size_global, sp_axis=sp_axis)
     for i, isl in enumerate(iters_isl):
         s = sum(iters_isl[:i])
         _, m = comp_pcc(ref_index[s : s + isl], idx_nat[s : s + isl], 0)
@@ -938,9 +979,10 @@ def run_sparse_mla_rotated_case(
     ttnn.synchronize_device(mesh_device)
 
 
+# glm_5_2 only: the rotation geometry is model-agnostic.
 @pytest.mark.parametrize(
     "variant, mesh_device, seq_len, device_params",
-    SPARSE_ANCHOR_CASES,
+    _only(SPARSE_ANCHOR_CASES, "glm_5_2"),
     indirect=["variant", "mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("iters_isl", [[2560, 1600, 5120]], ids=["maxedge"])
@@ -1009,28 +1051,20 @@ def test_sparse_mla_accuracy_chunked(
     )
 
 
-# GLM-5.2 indexer reuse: anchor cases for the reuse-capable variant.
-SPARSE_REUSE_CASES = [c for c in SPARSE_ANCHOR_CASES if "glm_5_2" in c.id]
-
-
-@pytest.mark.parametrize(
-    "variant, mesh_device, seq_len, device_params",
-    SPARSE_REUSE_CASES,
-    indirect=["variant", "mesh_device", "device_params"],
-)
-@pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
-@pytest.mark.timeout(0)
-def test_sparse_mla_indexer_reuse_chunked(
-    mesh_device, seq_len, device_params, variant, config_only, ds_layer, ds_checkpoint, ds_repo
+def run_sparse_mla_indexer_reuse_case(
+    variant, config_only, mesh_device, seq_len, device_params, ds_layer, ds_checkpoint, ds_repo, sp_axis=0
 ):
     """GLM-5.2 indexer reuse: a layer fed a prior layer's top-k indices (indexer_indices=...) must
     produce the SAME output as computing them itself — validates the MLA return + accept path. Same
-    weights + input + selection -> identical sparse attention, so the two outputs match bit-for-bit."""
+    weights + input + selection -> identical sparse attention, so the two outputs match bit-for-bit.
+    On the 8x4 TorusXY mesh run B receives its KV rows through the sparse KV push (sparse_kv_push.py) where run A
+    gathers the whole prefix, so this also checks the push against the gather, for one layer and one chunk.
+    test_sparse_mla_push_layers_chunked covers the push across layers and chunks."""
     config = config_only
     config.max_seq_len = seq_len
     weights, _ = build_weights(variant, config, layer=ds_layer, checkpoint_path=ds_checkpoint, repo=ds_repo)
     mesh_shape = list(mesh_device.shape)
-    sp_axis, tp_axis = 0, 1
+    tp_axis = 1 - sp_axis
     topology = per_axis_topology(device_params["fabric_config"])
 
     def _kvpe():
@@ -1062,8 +1096,9 @@ def test_sparse_mla_indexer_reuse_chunked(
     )
     # A: compute the indexer, capture its top-k selection + output.
     out_a, _, _, shard_dims, idx = run_mla_inference(tt_kvpe_cache=_kvpe(), return_indices=True, **common)
-    # B: a fresh MLA (same weights + input) fed A's indices -> skips its own indexer.
-    out_b, _, _, _ = run_mla_inference(tt_kvpe_cache=_kvpe(), inject_indices=idx, **common)
+    # B: a shared layer (same weights + input) fed A's indices -> it has no indexer of its own.
+    shared_idx = next(i for i, t in enumerate(config.indexer_types) if t == "shared")
+    out_b, _, _, _ = run_mla_inference(tt_kvpe_cache=_kvpe(), inject_indices=idx, layer_idx=shared_idx, **common)
 
     def _to_torch(t):
         return ttnn.to_torch(
@@ -1073,6 +1108,154 @@ def test_sparse_mla_indexer_reuse_chunked(
     _, pcc_message = assert_with_pcc(_to_torch(out_a), _to_torch(out_b), 0.9999)
     logger.info(f"[{variant.name}] indexer-reuse compute-vs-inject PCC: {pcc_message}")
     ttnn.synchronize_device(mesh_device)
+
+
+# GLM-5.2 indexer reuse, on every mesh.
+SPARSE_REUSE_CASES = _only(SPARSE_CHUNKED_CASES, "glm_5_2")
+
+
+@pytest.mark.parametrize(
+    "variant, mesh_device, seq_len, device_params",
+    SPARSE_REUSE_CASES,
+    indirect=["variant", "mesh_device", "device_params"],
+)
+@pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
+@pytest.mark.timeout(0)
+def test_sparse_mla_indexer_reuse_chunked(
+    mesh_device, seq_len, device_params, variant, config_only, ds_layer, ds_checkpoint, ds_repo
+):
+    run_sparse_mla_indexer_reuse_case(
+        variant, config_only, mesh_device, seq_len, device_params, ds_layer, ds_checkpoint, ds_repo
+    )
+
+
+# Two production-size chunks (5120) on the 8x4 TorusXY mesh, where the sparse KV push runs.
+SPARSE_PUSH_LAYERS_CASES = [
+    c for c in _sparse_cases([10240], anchor_only=True) if "glm_5_2" in c.id and "shape-8x4" in c.id
+]
+PUSH_LAYERS_INDEXER_TYPES = ["full", "shared", "shared"]
+PUSH_LAYERS_CHUNK = 5120
+
+
+@pytest.mark.parametrize(
+    "variant, mesh_device, seq_len, device_params",
+    SPARSE_PUSH_LAYERS_CASES,
+    indirect=["variant", "mesh_device", "device_params"],
+)
+@pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
+@pytest.mark.timeout(0)
+def test_sparse_mla_push_layers_chunked(
+    mesh_device, seq_len, device_params, variant, config_only, ds_layer, ds_checkpoint, ds_repo, monkeypatch
+):
+    """The sparse KV push wired across layers and chunks, bit-for-bit against gathering the prefix.
+
+    A full -> shared -> shared stack over two chunks, as TtPrefillTransformer runs it: the full layer computes the
+    top-k and the shared layers reuse it, so the push plan is cached across layers and dropped by the full layer of
+    the next chunk; each layer pushes its successor's prefix beside its own attention (empty in chunk 0, the first
+    chunk's rows in chunk 1) and the successor pushes the rest into the same buffer; and the shared layers alternate
+    between the dense gather buffer and the push buffer. Every layer has its own weights and input, so its KV slot
+    differs from the others' and a push from the wrong slot or buffer changes the output. The reference runs the same
+    stack with the push off, gathering the whole prefix in every layer."""
+    config = config_only
+    config.max_seq_len = seq_len
+    monkeypatch.setattr(config, "indexer_types", PUSH_LAYERS_INDEXER_TYPES, raising=False)
+    num_layers, chunk = len(PUSH_LAYERS_INDEXER_TYPES), PUSH_LAYERS_CHUNK
+    mesh_shape = list(mesh_device.shape)
+    sp_axis, tp_axis = 0, 1
+    topology = per_axis_topology(device_params["fabric_config"])
+    weights = [
+        build_weights(variant, config, seed=42 + i, layer=ds_layer, checkpoint_path=ds_checkpoint, repo=ds_repo)[0]
+        for i in range(num_layers)
+    ]
+    hidden = [make_hidden(seq_len, config.hidden_size, seed=100 + i) for i in range(num_layers)]
+    rope_tensors = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False).get_rope_tensors_indexed(
+        seq_len, chunk
+    )
+    shard_dims = [None, None]
+    shard_dims[tp_axis], shard_dims[sp_axis] = -1, -2
+
+    def to_device(t):
+        return ttnn.from_torch(
+            t.unsqueeze(0),
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
+        )
+
+    def to_torch(t):
+        return ttnn.to_torch(
+            t, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=shard_dims, mesh_shape=mesh_device.shape)
+        ).to(torch.bfloat16)
+
+    def run(push):
+        with monkeypatch.context() as m:
+            if not push:
+                m.setattr(mla_module, "sparse_kv_push_supported", lambda *_: False)
+            layers = [
+                ttMLA(
+                    config,
+                    weights[i],
+                    mesh_device,
+                    layer_idx=i,
+                    seq_len=seq_len,
+                    sp_axis=sp_axis,
+                    tp_axis=tp_axis,
+                    topology=topology,
+                    is_chunked=True,
+                    active_seq_len=chunk,
+                    layer_num=num_layers,
+                    first_layer_idx=0,
+                    sparse_kv_cache_format=MlaKvCacheFormat.BF16_RM,
+                )
+                for i in range(num_layers)
+            ]
+        # The push is on for every layer and each layer prefetches its successor's prefix, or it is off everywhere.
+        assert all((layer._push is not None) == push for layer in layers)
+        assert [layer._push_prefetch_grids is not None for layer in layers] == [push, push, False]
+        kvpe_cache = init_mla_kv_cache(
+            cache_format=MlaKvCacheFormat.BF16_RM,
+            hf_config=config,
+            mesh_device=mesh_device,
+            seq_len=seq_len,
+            mesh_shape=mesh_shape,
+            sp_axis=sp_axis,
+            num_kvpe_cache_layers=num_layers,
+            tp_axis=tp_axis,
+        )
+        index_kv_cache = _init_index_kv_cache(config, mesh_device, seq_len, mesh_shape, sp_axis, tp_axis=tp_axis)
+        outs = {}
+        for start in range(0, seq_len, chunk):
+            indices = None
+            for i, layer in enumerate(layers):
+                out = layer.forward(
+                    to_device(hidden[i][:, start : start + chunk]),
+                    rope_tensors,
+                    kvpe_cache,
+                    cache_layer_idx=i,
+                    actual_start=start,
+                    index_kv_cache=index_kv_cache,
+                    indexer_indices=indices,
+                    return_indexer_indices=indices is None,
+                )
+                if indices is None:
+                    out, indices = out
+                outs[(start, i)] = to_torch(out)
+            if push:
+                # Every prefix pushed beside an attention was read by the layer after it.
+                assert not layers[0].tt_ccl.sparse_kv_push_planner.prefetched
+        ttnn.synchronize_device(mesh_device)
+        return outs
+
+    pushed, gathered = run(push=True), run(push=False)
+    for key in gathered:
+        start, i = key
+        assert torch.equal(pushed[key], gathered[key]), (
+            f"layer {i} ({PUSH_LAYERS_INDEXER_TYPES[i]}), chunk at {start}: pushed output differs from gathered; "
+            f"{comp_pcc(gathered[key].float(), pushed[key].float())[1]}"
+        )
+    logger.info(f"[{variant.name}] push across {num_layers} layers x {seq_len // chunk} chunks: bit-exact vs gather")
 
 
 # Anchor cases (per-variant prod-closest mesh, seq=4096); collected == run.
@@ -1093,13 +1276,24 @@ def test_sparse_mla_determinism_chunked(
     )
 
 
-# Anchor cases (seq=5120) crossed with the single prefill chunk size; collected == run.
+def _chunked_cases():
+    """(case, chunk): every case at 1024, plus 1280 where it tiles the SP x TP stripe."""
+    out = []
+    for c in SPARSE_CHUNKED_CASES:
+        sp, tp = c.values[1]
+        for chunk in (1024, 1280):
+            if chunk == 1024 or chunk % (ttnn.TILE_SIZE * sp * tp) == 0:
+                # Ids read cache_format-chunk-case.
+                chunk_id = "c1k" if chunk == 1024 else f"c{chunk}"
+                out.append(pytest.param(*c.values, chunk, marks=c.marks, id=f"{chunk_id}-{c.id}"))
+    return out
+
+
 @pytest.mark.parametrize(
-    "variant, mesh_device, seq_len, device_params",
-    SPARSE_ANCHOR_CASES,
+    "variant, mesh_device, seq_len, device_params, chunk",
+    _chunked_cases(),
     indirect=["variant", "mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("chunk", [1024], ids=["c1k"])
 @pytest.mark.parametrize(
     "cache_format",
     [MlaKvCacheFormat.BF16_RM, MlaKvCacheFormat.SCALED_FP8],
@@ -1125,10 +1319,106 @@ def test_sparse_mla_chunked(
     )
 
 
-# glm_5_2 only: the clamp is model-agnostic, so the variant axis buys nothing here and glm_5_2 is the
-# production-closest variant (it also exercises DSA cross-layer indexer reuse). Cache format IS kept --
-# it changes the page layout the clamp addresses.
-SPARSE_PAD_OVERFLOW_CASES = [c for c in SPARSE_ANCHOR_CASES if "glm_5_2" in c.id]
+SPARSE_SP1_MESH_CASES = [
+    *[
+        pytest.param(
+            "glm_5_2",
+            mesh,
+            fabric2d_device_params(worker_l1_size=_worker_l1_size()),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=mesh, topology=f"mesh-{mesh[0]}x{mesh[1]}"),
+            id=f"glm_5_2-shape-{mesh[0]}x{mesh[1]}-sp1",
+        )
+        for mesh in [(2, 4), (4, 2)]
+    ],
+    # The 4x4 stage: one Galaxy tray half (run_4x4_stage_tests.sh), SP on the axis-1 ring. Square, but
+    # still a check: the KV write orders chips by SP axis, so a row-major reader would read the
+    # transpose, a different permutation on 4x4.
+    pytest.param(
+        "glm_5_2",
+        (4, 4),
+        torus_x_device_params(worker_l1_size=_worker_l1_size()),
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+        id="glm_5_2-shape-4x4-sp1",
+    ),
+]
+
+
+# SP on mesh axis 1: every full-mesh step (KVPE gather, fused indexer) must order chips SP-major, which
+# is column-major here. Non-square meshes, because a square one (the 4x4 tray half) cannot tell a
+# transposed order from the right one. TP stays <= 4: the indexer's TP gather needs index_head_dim / tp
+# (128 / tp) to be whole tiles, so 8x4 at SP on axis 1 (TP=8) is not a valid GLM layout.
+@pytest.mark.parametrize(
+    "variant, mesh_device, device_params",
+    SPARSE_SP1_MESH_CASES,
+    indirect=["variant", "mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("seq_len", [5120], ids=["seq5120"])
+@pytest.mark.parametrize("chunk", [1024], ids=["c1k"])
+@pytest.mark.parametrize("cache_format", [MlaKvCacheFormat.BF16_RM], ids=["kv_bf16"])
+@pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
+@pytest.mark.timeout(0)
+def test_sparse_mla_chunked_sp_axis_1(
+    mesh_device,
+    seq_len,
+    chunk,
+    cache_format,
+    device_params,
+    variant,
+    config_only,
+    ds_layer,
+    ds_checkpoint,
+    ds_repo,
+    ds_input,
+):
+    run_sparse_mla_chunked_case(
+        variant,
+        config_only,
+        mesh_device,
+        seq_len,
+        chunk,
+        cache_format,
+        ds_layer,
+        ds_checkpoint,
+        ds_repo,
+        ds_input,
+        sp_axis=1,
+    )
+
+
+# The remaining sparse cases at SP on mesh axis 1, on the same meshes as test_sparse_mla_chunked_sp_axis_1,
+# with the arguments their sp_axis=0 tests use.
+@pytest.mark.parametrize(
+    "variant, mesh_device, device_params",
+    SPARSE_SP1_MESH_CASES,
+    indirect=["variant", "mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("case", ["accuracy", "determinism", "indexer_reuse", "kv_only", "pad_overflow", "rotated"])
+@pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
+@pytest.mark.timeout(0)
+def test_sparse_mla_sp_axis_1(
+    mesh_device, device_params, case, variant, config_only, ds_layer, ds_checkpoint, ds_repo, ds_input
+):
+    seq_len, chunk, fmt = 5120, 1024, MlaKvCacheFormat.BF16_RM
+    topology = per_axis_topology(device_params["fabric_config"])
+    ds = (ds_layer, ds_checkpoint, ds_repo)
+    if case == "accuracy":
+        run_sparse_mla_accuracy_case(variant, config_only, mesh_device, seq_len, topology, fmt, *ds, sp_axis=1)
+    elif case == "determinism":
+        run_sparse_mla_determinism_case(variant, config_only, mesh_device, seq_len, 3, topology, *ds, sp_axis=1)
+    elif case == "indexer_reuse":
+        run_sparse_mla_indexer_reuse_case(variant, config_only, mesh_device, seq_len, device_params, *ds, sp_axis=1)
+    elif case == "kv_only":
+        run_sparse_mla_kv_only_case(variant, config_only, mesh_device, seq_len, chunk, fmt, *ds, sp_axis=1)
+    elif case == "pad_overflow":
+        run_sparse_mla_pad_overflow_case(
+            variant, config_only, mesh_device, seq_len, chunk, fmt, *ds, ds_input, sp_axis=1
+        )
+    else:
+        run_sparse_mla_rotated_case(variant, config_only, mesh_device, [2560, 1600, 5120], seq_len, *ds, sp_axis=1)
+
+
+# Cache format is kept: it changes the page layout the clamp addresses.
+SPARSE_PAD_OVERFLOW_CASES = _only(SPARSE_ANCHOR_CASES, "glm_5_2", "kimi_k3_1")
 
 
 @pytest.mark.parametrize(
@@ -1163,7 +1453,7 @@ def test_sparse_mla_pad_overflow_chunked(
     )
 
 
-SPARSE_KV_ONLY_CASES = [c for c in SPARSE_ANCHOR_CASES if "glm_5_2" in c.id]
+SPARSE_KV_ONLY_CASES = _only(SPARSE_ANCHOR_CASES, "glm_5_2")
 
 
 @pytest.mark.parametrize(

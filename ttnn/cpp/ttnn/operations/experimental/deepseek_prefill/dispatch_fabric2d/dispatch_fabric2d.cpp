@@ -80,9 +80,9 @@ std::array<ttnn::Tensor, 2> dispatch_fabric2d_buffers(
     ttnn::MeshDevice* mesh_device,
     uint32_t emb_dim,
     uint32_t seq_len_per_chip,
+    uint32_t fwd_vc_pages,
     uint32_t cluster_axis,
-    uint32_t num_links,
-    uint32_t fwd_vc_pages) {
+    uint32_t num_links) {
     // The op's own checks on these, which the buffer specs rely on and would otherwise not run until the first call.
     TT_FATAL(
         num_links >= 1 && num_links <= 4,

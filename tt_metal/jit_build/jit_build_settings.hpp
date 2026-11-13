@@ -15,6 +15,7 @@
 #include <utility>
 #include <vector>
 
+#include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 #include <tt_stl/assert.hpp>
 #include "impl/metal2_host_api/llk_metadata.hpp"
 
@@ -40,7 +41,44 @@ struct SemBindingEntry {
     uint16_t id = 0;
     SemScope scope = SemScope::LOCAL_NONATOMIC;
     uint32_t total_binder_harts = 0;
+    std::vector<experimental::NodeRange> watcher_node_ranges;
 };
+
+// Watcher: each binding's node ranges as a constexpr array named after its accessor in `watcher_node_ranges::<kind>`.
+// Emitted outside the binding namespaces, since an accessor may take any name that would be declared next to it.
+template <typename Entries>
+inline void emit_watcher_node_ranges(std::ostream& os, std::string_view kind, const Entries& entries) {
+    bool any = false;
+    for (const auto& entry : entries) {
+        if (entry.watcher_node_ranges.empty()) {
+            continue;
+        }
+        if (!any) {
+            os << "namespace watcher_node_ranges::" << kind << " {\n";
+            any = true;
+        }
+        os << "constexpr DebugNodeRange " << entry.name << "[] = {";
+        for (size_t i = 0; i < entry.watcher_node_ranges.size(); ++i) {
+            const experimental::NodeRange& range = entry.watcher_node_ranges[i];
+            os << (i == 0 ? "" : ", ") << "{{" << range.start_coord.x << ", " << range.start_coord.y << "}, {"
+               << range.end_coord.x << ", " << range.end_coord.y << "}}";
+        }
+        os << "};\n";
+    }
+    if (any) {
+        os << "}  // namespace watcher_node_ranges::" << kind << "\n";
+    }
+}
+
+// A binding token's trailing constructor arguments for its node ranges, or "" without any.
+inline std::string watcher_node_ranges_args(
+    std::string_view kind, const std::string& name, const std::vector<experimental::NodeRange>& watcher_node_ranges) {
+    if (watcher_node_ranges.empty()) {
+        return "";
+    }
+    return ", ::watcher_node_ranges::" + std::string(kind) + "::" + name + ", " +
+           std::to_string(watcher_node_ranges.size()) + "u";
+}
 
 // The enumerator name, as the kernel spells it.
 inline std::string_view sem_scope_enumerator(SemScope scope) {
@@ -56,10 +94,12 @@ inline std::string_view sem_scope_enumerator(SemScope scope) {
 // The generated semaphore section: one constexpr binding token per bound semaphore, in
 // `namespace sem`. The token carries the id and the mechanism the host picked.
 inline void emit_semaphore_binding_tokens(std::ostream& os, const std::vector<SemBindingEntry>& entries) {
+    emit_watcher_node_ranges(os, "sem", entries);
     os << "namespace sem {\n";
     for (const auto& entry : entries) {
         os << "constexpr ::SemaphoreBindingToken " << entry.name << "{" << entry.id
-           << "u, ::SemScope::" << sem_scope_enumerator(entry.scope) << "};\n";
+           << "u, ::SemScope::" << sem_scope_enumerator(entry.scope)
+           << watcher_node_ranges_args("sem", entry.name, entry.watcher_node_ranges) << "};\n";
     }
     os << "}  // namespace sem\n";
 }
@@ -83,7 +123,8 @@ inline void emit_semaphore_binding_tokens(std::ostream& os, const std::vector<Se
 // buffer then. It sits BEFORE varargs so each binding's absolute CRTA offset is fixed at codegen
 // time (varargs are open-ended / runtime-counted, so a section after them would not be).
 struct KernelCrtaLayout {
-    // Section 1 size, in words. Equals the number of user-named CRTAs.
+    // Section 1 size, in words. The user-named CRTAs: one word per scalar, then the CRTA arrays
+    // (see KernelArrayArgs), in declaration order.
     uint32_t num_named_words = 0;
     // Section 2 size, in words. Equals the sum-over-bindings of (1 + num_runtime_field_crta_words).
     uint32_t binding_section_words = 0;
@@ -99,12 +140,36 @@ struct KernelCrtaLayout {
 //   [ user-named RTAs | per-node TensorBinding section | vararg RTAs ]
 // Section 2 holds one base-address word per per-node tensor binding.
 struct KernelRtaLayout {
-    // Section 1 size, in words. Equals the number of user-named RTAs.
+    // Section 1 size, in words. The user-named RTAs: one word per scalar, then the RTA arrays
+    // (see KernelArrayArgs), in declaration order.
     uint32_t num_named_words = 0;
     // Section 2 size, in words. Equals the number of per-node tensor bindings.
     uint32_t binding_section_words = 0;
     // Start offset of section 3 (varargs), in words.
     uint32_t vararg_section_offset = 0;
+};
+
+// Metal 2.0: one RTA or CRTA array, placed in section 1 of its dispatch buffer.
+struct ArrayArgLayout {
+    std::string name;
+    uint32_t word_offset = 0;  // offset of element 0 in the buffer, in words
+    uint32_t size = 0;         // number of elements (one word each)
+};
+
+// Metal 2.0: a kernel's array arguments, as emitted into kernel_args_generated.h.
+//
+// Terminology: section 1 of each layout (the "named section", num_named_words) holds the user's named
+// args, the scalars and then the arrays. On its own, "named RTA" / "named CRTA" means a scalar.
+struct KernelArrayArgs {
+    // RTA / CRTA arrays, in declaration order. They follow the scalars in section 1 of the
+    // KernelRtaLayout / KernelCrtaLayout.
+    std::vector<ArrayArgLayout> runtime;
+    std::vector<ArrayArgLayout> common_runtime;
+    // CTA arrays: name -> values. (std::map: emitted and hashed in name order, so the generated
+    // header is deterministic for the JIT build cache.)
+    std::map<std::string, std::vector<uint32_t>> compile_time;
+
+    bool empty() const { return runtime.empty() && common_runtime.empty() && compile_time.empty(); }
 };
 
 ////////////////////////////////////////////////////////////
@@ -143,7 +208,7 @@ public:
 
     // Zone tu-id registry key: identical across runs and across compile-time-arg variants of one source;
     // get_full_kernel_name() embeds a per-variant hash.
-    virtual std::string get_profiler_zone_src_id() const { return this->get_full_kernel_name(); }
+    virtual std::string get_observability_event_src_id() const { return this->get_full_kernel_name(); }
     // Returns the compiler optimization level
     virtual std::string_view get_compiler_opt_level() const = 0;
     // Returns the linker optimization level
@@ -183,6 +248,13 @@ public:
             // NOLINTNEXTLINE(performance-unnecessary-value-param)
             void(const std::string& accessor_name, uint16_t semaphore_id, SemScope scope, uint32_t total_binder_harts)>)
         const {}
+    // Watcher: the nodes each DFB and semaphore binding exists on, as rectangles in NoC coordinates. Empty without
+    // Watcher NoC sanitizing.
+    virtual void process_watcher_node_ranges(
+        const std::function<
+            void(const std::string& accessor_name, const std::vector<experimental::NodeRange>& node_ranges)>&,
+        const std::function<
+            void(const std::string& accessor_name, const std::vector<experimental::NodeRange>& node_ranges)>&) const {}
 
     // TensorBinding callback emits the codegen-relevant fields only:
     //  - accessor_name: kernel-side identifier, used as the symbol name in the `tensor::` namespace
@@ -241,6 +313,12 @@ public:
     }
     virtual const std::vector<std::string>& get_common_runtime_arg_names() const {
         static const std::vector<std::string> k_empty;
+        return k_empty;
+    }
+
+    // Metal 2.0: array arguments (RTA, CRTA and CTA). Default: none.
+    virtual const KernelArrayArgs& get_array_args() const {
+        static const KernelArrayArgs k_empty;
         return k_empty;
     }
 

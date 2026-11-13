@@ -798,6 +798,7 @@ static std::string get_locinfo(
         get_connector(sdev, score));
 }
 
+[[maybe_unused]]
 static bool ensure_links(std::span<std::shared_ptr<distributed::MeshDevice>> devices) {
     bool pass = true;
 

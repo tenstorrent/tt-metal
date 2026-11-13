@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_group_norm_backward_input_grad_device_operation.hpp"
+#include <algorithm>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
@@ -32,6 +33,8 @@ MorehGroupNormBackwardInputGradOperation::MorehGroupNormBackwardInputGradFactory
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
     auto* device = output_grad.device();
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
@@ -142,10 +145,11 @@ MorehGroupNormBackwardInputGradOperation::MorehGroupNormBackwardInputGradFactory
 
     const auto data_format = tt_metal::datatype_to_dataformat_converter(output_grad.dtype());
     const auto single_tile_size = tt::tile_size(data_format);
+    const auto intermed_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
+    const auto intermed_single_tile_size = tt::tile_size(intermed_format);
 
-    const auto dfb_usage = (in0_t + in1_t + in2_t + in3_t + in4_t + in5_t + in6_t + in7_t + out0_t + im0_t + im1_t +
-                            im2_t + im3_t + im4_t + im5_t + im6_t + im7_t) *
-                           single_tile_size;
+    const auto dfb_usage = (in0_t + in1_t + in2_t + in3_t + in4_t + in5_t + in6_t + in7_t + out0_t) * single_tile_size +
+                           (im0_t + im1_t + im2_t + im3_t + im4_t + im5_t + im6_t + im7_t) * intermed_single_tile_size;
     const auto available_L1 = device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(HalMemType::L1);
     const bool use_large_algorithm = dfb_usage >= available_L1;
 
@@ -160,43 +164,43 @@ MorehGroupNormBackwardInputGradOperation::MorehGroupNormBackwardInputGradFactory
 
     Group<DataflowBufferSpec> dfbs;
 
-    auto add_dfb = [&](const DFBSpecName& name, uint32_t num_tiles) {
+    auto add_dfb = [&](const DFBSpecName& name, uint32_t num_tiles, tt::DataFormat format) {
         if (num_tiles == 0) {
             return;
         }
         dfbs.push_back(DataflowBufferSpec{
             .unique_id = name,
-            .entry_size = single_tile_size,
+            .entry_size = tt::tile_size(format),
             .num_entries = num_tiles,
-            .data_format_metadata = data_format,
+            .data_format_metadata = format,
         });
     };
 
-    add_dfb(DY, in0_t);         // output_grad
-    add_dfb(X, in1_t);          // input
-    add_dfb(MEAN, in2_t);       // mean
-    add_dfb(RSTD, in3_t);       // rstd
-    add_dfb(SCALER, in4_t);     // one
-    add_dfb(N_RECIP_N, in5_t);  // inner_size(==n)
-    add_dfb(GAMMA, in6_t);
-    add_dfb(MASK_H_W, in7_t);
-    add_dfb(DX, out0_t);  // input_grad
-    add_dfb(DYCOPY, im0_t);
-    add_dfb(Y, im1_t);
-    add_dfb(DYSUM, im2_t);
-    add_dfb(YDYSUM, im3_t);
+    add_dfb(DY, in0_t, data_format);         // output_grad
+    add_dfb(X, in1_t, data_format);          // input
+    add_dfb(MEAN, in2_t, data_format);       // mean
+    add_dfb(RSTD, in3_t, data_format);       // rstd
+    add_dfb(SCALER, in4_t, data_format);     // one
+    add_dfb(N_RECIP_N, in5_t, data_format);  // inner_size(==n)
+    add_dfb(GAMMA, in6_t, data_format);
+    add_dfb(MASK_H_W, in7_t, data_format);
+    add_dfb(DX, out0_t, data_format);  // input_grad
+    add_dfb(DYCOPY, im0_t, intermed_format);
+    add_dfb(Y, im1_t, intermed_format);
+    add_dfb(DYSUM, im2_t, intermed_format);
+    add_dfb(YDYSUM, im3_t, intermed_format);
     // The last four buffers mean different things to the two borrowed compute kernels, so they are
     // named for the source that will actually be selected. The large kernel folds rstd/n into tmp3 and
     // needs no fourth scratch buffer, which is why im7_t is zeroed above.
     if (use_large_algorithm) {
-        add_dfb(TMP1, im4_t);
-        add_dfb(TMP2, im5_t);
-        add_dfb(TMP3, im6_t);
+        add_dfb(TMP1, im4_t, intermed_format);
+        add_dfb(TMP2, im5_t, intermed_format);
+        add_dfb(TMP3, im6_t, intermed_format);
     } else {
-        add_dfb(RECIP_NRSTD, im4_t);
-        add_dfb(TMP1, im5_t);
-        add_dfb(TMP2, im6_t);
-        add_dfb(TMP3, im7_t);
+        add_dfb(RECIP_NRSTD, im4_t, intermed_format);
+        add_dfb(TMP1, im5_t, intermed_format);
+        add_dfb(TMP2, im6_t, intermed_format);
+        add_dfb(TMP3, im7_t, intermed_format);
     }
 
     ////////////////////////////////////////////////////////////////////////////
@@ -222,6 +226,9 @@ MorehGroupNormBackwardInputGradOperation::MorehGroupNormBackwardInputGradFactory
         {"REDUCE_OP", "PoolType::SUM"},
         {"REDUCE_DIM", "ReduceDim::REDUCE_SCALAR"},
     };
+    if (fp32_dest_acc_en) {
+        compute_defines["FP32_DEST_ACC_EN"] = "1";
+    }
     if (gamma_has_value) {
         reader_defines["GAMMA_HAS_VALUE"] = "1";
         compute_defines["GAMMA_HAS_VALUE"] = "1";
@@ -350,7 +357,18 @@ MorehGroupNormBackwardInputGradOperation::MorehGroupNormBackwardInputGradFactory
     // would silently flip every field, because that helper's defaults favor performance while the
     // Metal struct's favor precision. With enable_32_bit_dest at its default false, the Float32
     // unpack_modes requirement does not apply, so the table stays empty.
-    const ComputeHardwareConfig compute_hw = ComputeHardwareConfig{};
+    auto compute_hw = ttnn::to_compute_hardware_config(operation_attributes.compute_kernel_config);
+    if (compute_hw.enable_32_bit_dest) {
+        for (const auto& dfb : dfbs) {
+            const bool consumed_by_compute =
+                std::any_of(compute_dfb_bindings.begin(), compute_dfb_bindings.end(), [&](const DFBBinding& binding) {
+                    return binding.dfb_spec_name == dfb.unique_id && binding.endpoint_type == DFBEndpointType::CONSUMER;
+                });
+            if (consumed_by_compute && dfb.data_format_metadata == tt::DataFormat::Float32) {
+                compute_hw.unpack_modes.emplace(dfb.unique_id, tt::tt_metal::UnpackMode::UnpackToSrc);
+            }
+        }
+    }
 
     auto make_compute = [&](const KernelSpecName& unique_id, uint32_t num_rows_per_core) {
         return KernelSpec{

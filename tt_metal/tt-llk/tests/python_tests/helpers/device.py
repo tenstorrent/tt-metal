@@ -25,8 +25,7 @@ from ttexalens.tt_exalens_lib import (
     write_words_to_device,
 )
 
-from .llk_params import BriscCmd
-from .logger import logger
+from .target_config import TestTargetConfig
 
 
 class _UninitializedMailboxes:
@@ -47,9 +46,6 @@ class LLKAssertException(Exception):
 
 
 KERNEL_COMPLETE = 0xFF
-
-# Must match BRISC_BOOT_READY_SENTINEL in tests/helpers/src/brisc.cpp.
-BRISC_BOOT_READY_SENTINEL = 0xB001CAFE
 
 
 class BootMode(Enum):
@@ -159,11 +155,13 @@ def get_functional_tensix_locations(device_id: int = 0) -> tuple:
 
 
 def tensix_location_for_worker(worker_index: int, device_id: int = 0) -> str:
-    """The Tensix an xdist worker owns.
+    """The Tensix a worker owns on one shared device.
 
     Two workers sharing a core would silently corrupt each other's results, so
-    running wider than the card is fatal rather than wrapped. Call after Exalens
-    has a context; an enumeration failure is not a reason to invent cores.
+    running wider than the card is fatal rather than wrapped. ttsim is outside
+    that map: each xdist process hosts its own chip, and
+    ``resolve_worker_tensix_location`` asks for core 0. Call after Exalens has a
+    context; an enumeration failure is not a reason to invent cores.
     """
     locations = get_functional_tensix_locations(device_id)
     if worker_index >= len(locations):
@@ -255,62 +253,45 @@ def commit_tensix_soft_reset(
     )
 
 
-common_counter = 0
+def soft_reset_bits(location: str = "0,0") -> int:
+    """RISCV_DEBUG_REG_SOFT_RESET_0, a register: the host reads it while a kernel runs without touching L1."""
+    return get_register_store(location, 0).read_register("RISCV_DEBUG_REG_SOFT_RESET_0")
 
 
-def commit_brisc_command(
-    location="0,0", command: BriscCmd = BriscCmd.IDLE_STATE, timeout=1
-):
-    global common_counter
-
-    if common_counter & 1:
-        write_words_to_device(location, Mailboxes.BriscCommand1.value, [command.value])
-    else:
-        write_words_to_device(location, Mailboxes.BriscCommand0.value, [command.value])
-
-    common_counter += 1
-    end_time = time.time() + timeout
-    while time.time() < end_time:
-        temp_value = read_word_from_device(location, Mailboxes.BriscCounter.value, 0)
-        if temp_value == common_counter:
-            return
-
-    logger.error(f"{command.name} -> {hex(Mailboxes.BriscCommand0.value)}")
-
-    raise TimeoutError(
-        (
-            f"Polling brisc command timed out | Python counter: {common_counter} | Brisc Counter: {temp_value} | "
-            f"Start counter: 0x{read_from_device(location, Mailboxes.BriscBread0.value, 0)} | "
-            f"Reset counter: 0x{read_from_device(location, Mailboxes.BriscBread1.value, 0)} | "
-            f"Reset register: 0x{get_register_store(location, 0).read_register('RISCV_DEBUG_REG_SOFT_RESET_0')}"
-        )
-    )
+# Quasar kernels mirror their completion flags into cluster control scratch registers (host_signal in boot.h), so
+# waiting on a kernel never reads its L1. ttsim keeps the L1 path.
+_QUASAR_HOST_SIGNAL_BASE = 0x030000B0  # TT_CLUSTER_CTRL_SCRATCH_28
 
 
-def wait_brisc_boot_ready(location: str = "0,0", timeout: float = 1.0):
-    """Block until BRISC firmware has signalled it is in the polling loop.
+# boot.h host_signal on Wormhole and Blackhole: STREAM_SCRATCH_0 of overlay stream 0, where BRISC marks a launch done.
+_NOC_OVERLAY_START_ADDR = 0xFFB40000
+_HOST_SIGNAL_SCRATCH_INDEX = {
+    ChipArchitecture.WORMHOLE: 248,
+    ChipArchitecture.BLACKHOLE: 36,
+}
+HOST_SIGNAL_MASK = 0xFFFFFF
 
-    On silicon this returns in microseconds. On TTSim, each read advances the
-    simulator clock, so this loop is what actually drives BRISC through its
-    init sequence to the point where it is safe for the host to write the
-    first command.
+
+def launch_done_address() -> int | None:
+    """Wormhole and Blackhole: the overlay register BRISC marks a launch done in (None on ttsim, which waits on L1)."""
+    index = _HOST_SIGNAL_SCRATCH_INDEX.get(get_chip_architecture())
+    target = TestTargetConfig._instance
+    if index is None or (target is not None and target.runs_on_ttsim()):
+        return None
+    return _NOC_OVERLAY_START_ADDR + index * 4
+
+
+def host_signal_address(slot: int) -> int | None:
+    """Quasar emulator and RTL simulator: the cluster control register the TRISC at mailbox word `slot` signals done
+    in. None elsewhere: ttsim keeps the L1 mailboxes, and Wormhole and Blackhole use launch_done_address().
     """
-    end_time = time.time() + timeout
-    while time.time() < end_time:
-        if (
-            read_word_from_device(location, Mailboxes.BriscCounter.value, 0)
-            == BRISC_BOOT_READY_SENTINEL
-        ):
-            return
-
-    last_value = read_word_from_device(location, Mailboxes.BriscCounter.value, 0)
-    soft_reset = get_register_store(location, 0).read_register(
-        "RISCV_DEBUG_REG_SOFT_RESET_0"
-    )
-    raise TimeoutError(
-        f"BRISC firmware did not signal boot-ready within {timeout}s | "
-        f"BriscCounter=0x{last_value:08x} | Reset register=0x{soft_reset:08x}"
-    )
+    if get_chip_architecture() != ChipArchitecture.QUASAR:
+        return None
+    # The emulator models the cluster control registers; ttsim (a shared library) does not
+    target = TestTargetConfig._instance
+    if target is not None and target.runs_on_ttsim():
+        return None
+    return _QUASAR_HOST_SIGNAL_BASE + slot * 4
 
 
 def assert_if_all_in_reset(location: str = "0,0", place: str = ""):
@@ -417,19 +398,20 @@ def reset_mailboxes(location: str = "0,0"):
     """Reset all core mailboxes (Unpacker, Math, Packer, Sfpu for Quasar, Unpacker, Math, Packer for Wormhole/Blackhole) before each test."""
 
     # Use 0xA3, because it's a non-zero value that we don't use anywhere else - it's good for triaging hangs.
+    MAILBOX_RESET = 0xA3
     MAILBOX_START_BLOCK = Mailboxes.Unpacker.value
-    if get_chip_architecture() == ChipArchitecture.QUASAR:
-        write_words_to_device(
-            location=location,
-            addr=MAILBOX_START_BLOCK,
-            data=[0xA3] * len(Mailboxes),  # All 4 TRISC mailboxes on Quasar
-        )
-    else:
-        write_words_to_device(
-            location=location,
-            addr=MAILBOX_START_BLOCK,
-            data=[0xA3, 0xA3, 0xA3],  # All 3 TRISC mailboxes on Wormhole/Blackhole
-        )
+    # All 4 TRISC mailboxes on Quasar, all 3 on Wormhole/Blackhole
+    write_words_to_device(
+        location=location,
+        addr=MAILBOX_START_BLOCK,
+        data=[MAILBOX_RESET] * len(Mailboxes),
+    )
+    for slot in range(len(Mailboxes)):
+        addr = host_signal_address(slot)
+        if addr is not None:
+            write_words_to_device(
+                location=location, addr=addr, data=[MAILBOX_RESET], safe_mode=False
+            )
 
 
 def pull_coverage_stream_from_tensix(

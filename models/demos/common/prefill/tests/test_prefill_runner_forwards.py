@@ -138,7 +138,7 @@ def test_a_refused_forward_shuts_down_the_next_rank(loop, monkeypatch, expect_er
     assert runtime.calls == []
 
 
-def test_index_endpoints_use_the_chunk_metadata(monkeypatch):
+def test_index_endpoints_use_the_d2d_metadata(monkeypatch):
     made = []
     services = SimpleNamespace(
         create_receiver=lambda **kw: made.append(kw["metadata_size_bytes"]),
@@ -149,7 +149,25 @@ def test_index_endpoints_use_the_chunk_metadata(monkeypatch):
     monkeypatch.setattr(runner, "indexer_indices_global_spec", lambda *a: None)
     monkeypatch.setattr(runner, "D2D_METADATA_SIZE_BYTES", 16)
     runner.build_d2d_index_endpoints(None, 1, (1, 1, 32, 8), inbound=True, outbound=True)
-    assert made == [12, 12]
+    assert made == [16, 16]
+
+
+# Only a middle stage builds a sender after its receiver, so only its receivers keep a relay link free for it.
+@pytest.mark.parametrize("rank, reserve", [(1, True), (2, False)])
+def test_receivers_reserve_links_only_when_a_sender_follows(monkeypatch, rank, reserve):
+    reserved = []
+    services = SimpleNamespace(
+        create_receiver=lambda **kw: reserved.append(kw["reserve_links_for_later_service"]),
+        create_sender=lambda **kw: None,
+    )
+    monkeypatch.setattr(runner.ttnn, "D2DStreamService", services)
+    monkeypatch.setattr(runner.ttnn, "create_mesh_mapper", lambda *a: None)
+    monkeypatch.setattr(runner, "d2d_worker_cores", lambda *a: None)
+    monkeypatch.setattr(runner, "activation_global_spec", lambda *a: None)
+    monkeypatch.setattr(runner, "indexer_indices_global_spec", lambda *a: None)
+    runner.build_d2d_pipeline_endpoints(None, rank, 3, 32, 64)
+    runner.build_d2d_index_endpoints(None, rank, (1, 1, 32, 8), inbound=True, outbound=reserve)
+    assert reserved == [reserve, reserve]
 
 
 def _request_ids(forwards):

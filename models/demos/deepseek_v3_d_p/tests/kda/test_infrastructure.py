@@ -178,6 +178,16 @@ def test_kimi_k3_fixed_geometry_configuration(local_rows, expected_group_chunks)
     assert config.recurrence.local_scan_strategy == "grouped"
 
 
+def test_kimi_k3_math_fidelity():
+    from models.demos.deepseek_v3_d_p.tt.kda.config import kimi_k3_program_config
+
+    config = kimi_k3_program_config(active_seq_len_local=640, tp_ccl_topology=ttnn.Topology.Linear)
+    assert config.recurrence.scan_math_fidelity == ttnn.MathFidelity.HiFi3
+    assert config.recurrence.affine_prefix_math_fidelity == ttnn.MathFidelity.HiFi3
+    assert config.output_projection_math_fidelity == ttnn.MathFidelity.HiFi3
+    assert config.input_projection_math_fidelity == ttnn.MathFidelity.HiFi2
+
+
 def test_kimi_k3_rejects_untuned_geometry(expect_error):
     from models.demos.deepseek_v3_d_p.tt.kda.config import kimi_k3_program_config
 

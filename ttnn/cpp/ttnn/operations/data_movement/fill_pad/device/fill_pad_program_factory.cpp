@@ -102,6 +102,7 @@ ttnn::device_operation::ProgramArtifacts FillPadProgramFactory::create_program_a
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     const std::uint32_t num_cores_x = compute_with_storage_grid_size.x;
     const std::uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    const std::optional<CoreRangeSet>& sub_core_grids = operation_attributes.sub_core_grids;
 
     // Unified border-tile split across all slices.
     //   right_slice_stride  = rows per slice in the right block (H_tiles-1 if both pads, else H_tiles).
@@ -119,7 +120,8 @@ ttnn::device_operation::ProgramArtifacts FillPadProgramFactory::create_program_a
 
     const auto
         [num_cores, all_cores, core_group_1, core_group_2, num_work_per_core_group_1, num_work_per_core_group_2] =
-            tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_work);
+            sub_core_grids.has_value() ? tt::tt_metal::split_work_to_cores(*sub_core_grids, total_work)
+                                       : tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_work);
     const std::uint32_t g1_numcores = core_group_1.num_cores();
 
     // ---- Named resources ----
@@ -271,7 +273,15 @@ ttnn::device_operation::ProgramArtifacts FillPadProgramFactory::create_program_a
     // Each core's global range [work_start, work_start + num_work) is intersected with the three
     // global blocks to produce per-phase (start, num) pairs. Phases with num==0 are skipped in the
     // kernels.
-    const std::vector<CoreCoord> cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, false);
+    std::vector<CoreCoord> cores;
+    if (sub_core_grids.has_value()) {
+        // The loop gives the first g1_numcores cores the group-1 share.
+        cores = corerange_to_cores(core_group_1);
+        const std::vector<CoreCoord> group_2_cores = corerange_to_cores(core_group_2);
+        cores.insert(cores.end(), group_2_cores.begin(), group_2_cores.end());
+    } else {
+        cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, false);
+    }
     KernelRunArgs reader_run{.kernel = READER};
     KernelRunArgs writer_run{.kernel = WRITER};
     KernelRunArgs compute_run{.kernel = COMPUTE};

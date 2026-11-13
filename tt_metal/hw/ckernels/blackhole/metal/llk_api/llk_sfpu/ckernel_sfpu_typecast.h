@@ -885,7 +885,7 @@ inline void init_typecast_fp32_to_uint16() {
     // calculate_typecast_fp32_to_uint16. The 32-bit Dest path uses the plain loop.
 
     // InstructionTemplate[0]
-    TTI_SFPSWAP(0, p_sfpu::LCONST_0, 12, 0xf);  // L[VD] = max(0, L[VD])
+    TTI_SFPSWAP(0, p_sfpu::LCONST_0, 12, sfpi::SFPSWAP_MOD1_VEC_MAX_MIN);  // L[VD] = max(0, L[VD])
 
     // InstructionTemplate[1]
     TTI_SFP_STOCH_RND(0, 0, 0, 0, 13, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
@@ -923,7 +923,7 @@ inline void init_typecast_int32_to_uint16() {
     math::reset_counters(p_setrwc::SET_ABD_F);
 #ifndef DISABLE_SFPLOADMACRO
     // InstructionTemplate[0]
-    TTI_SFPSWAP(0, p_sfpu::LCONST_0, 12, 0xf);  // L[VD] = max(0, L[VD])
+    TTI_SFPSWAP(0, p_sfpu::LCONST_0, 12, sfpi::SFPSWAP_MOD1_VEC_MAX_MIN);  // L[VD] = max(0, L[VD])
 
     // InstructionTemplate[1]
     TTI_SFP_STOCH_RND(0, 0, 0, 0, 13, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);

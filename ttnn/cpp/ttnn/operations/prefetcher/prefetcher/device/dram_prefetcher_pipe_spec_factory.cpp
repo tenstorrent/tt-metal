@@ -14,6 +14,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 
 #include "dram_prefetcher_program_factory.hpp"
 
@@ -83,7 +84,7 @@ ttnn::device_operation::ProgramArtifacts DramPrefetcherPipeSpecFactory::create_p
         // The weight addresses, read in place from the address tensor's shard on each reader.
         DataflowBufferSpec{
             .unique_id = ADDRS_DFB,
-            .entry_size = tensor_addrs.buffer()->aligned_page_size(),
+            .entry_size = tensor_addrs.mesh_buffer().aligned_page_size(),
             .num_entries = 1,
             .borrowed_from = TENSOR_ADDRS,
         },

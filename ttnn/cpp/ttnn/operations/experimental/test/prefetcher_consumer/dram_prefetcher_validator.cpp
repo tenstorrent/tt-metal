@@ -122,7 +122,7 @@ ValidatorGeometry compute_validator_geometry(const ttnn::Tensor& source_tensor, 
     // WIDTH_SHARDED (one shard per bank) and ND_SHARDED (num_shards = ring_size,
     // receiver-contiguous) layouts. The per-(ring_pos, block) tile mapping is
     // layout-mode-invariant; only the ring_pos -> (bank, recv_idx) formula differs.
-    Buffer* tensor_buffer = source_tensor.buffer();
+    const auto* tensor_buffer = &source_tensor.mesh_buffer();
     const auto& padded_shape = source_tensor.padded_shape();
     TT_FATAL(
         padded_shape.rank() >= 2,
@@ -164,12 +164,14 @@ ValidatorGeometry compute_validator_geometry(const ttnn::Tensor& source_tensor, 
     // pairing is strided (bank b feeds ring positions b, b + num_senders, ...). Under
     // CONTIGUOUS_1D, bank b owns a contiguous run of shards, so it feeds the contiguous ring arc
     // b*R .. b*R+R-1 (same pairing as legacy WIDTH_SHARDED).
-    const bool is_recv_contig = source_tensor.memory_config().memory_layout() == TensorMemoryLayout::ND_SHARDED &&
-                                tensor_buffer->buffer_distribution_spec().has_value() &&
-                                tensor_buffer->buffer_distribution_spec()->num_shards() == ring_size;
+    const bool is_recv_contig =
+        source_tensor.memory_config().memory_layout() == TensorMemoryLayout::ND_SHARDED &&
+        tensor_buffer->device_local_config().sharding_args.buffer_distribution_spec().has_value() &&
+        tensor_buffer->device_local_config().sharding_args.buffer_distribution_spec()->num_shards() == ring_size;
     const bool is_shard_contiguous_recv_contig =
-        is_recv_contig && tensor_buffer->buffer_distribution_spec()->shard_distribution_strategy() ==
-                              ShardDistributionStrategy::CONTIGUOUS_1D;
+        is_recv_contig &&
+        tensor_buffer->device_local_config().sharding_args.buffer_distribution_spec()->shard_distribution_strategy() ==
+            ShardDistributionStrategy::CONTIGUOUS_1D;
     const bool strided_pairing = is_recv_contig && !is_shard_contiguous_recv_contig;
 
     // Per-receiver plan.
@@ -245,7 +247,7 @@ ttsl::hash::hash_t DramPrefetcherValidatorDeviceOperation::compute_program_hash(
     // On the tensor side, create_at derives k_tiles, total_n_tiles, n_per_recv_tiles, is_recv_contig,
     // tile_bytes and the CB page sizes from the real shape, tile and memory config, and emits
     // TensorAccessorArgs as compile-time args, so the address alone is not a sufficient identity.
-    const auto* tensor_buffer = tensor_args.source_tensor.buffer();
+    const auto* tensor_buffer = &tensor_args.source_tensor.mesh_buffer();
     const tt::DataFormat dataformat = tt::tt_metal::datatype_to_dataformat_converter(tensor_args.source_tensor.dtype());
     return ttsl::hash::hash_objects_with_default_seed(
         ttsl::hash::type_hash<DramPrefetcherValidatorDeviceOperation>,
@@ -281,7 +283,7 @@ DramPrefetcherValidatorDeviceOperation::ProgramFactory::create_at(
 
     const ValidatorGeometry geom = compute_validator_geometry(
         source_tensor, bank_plan_from_factory_order_mapping(global_cb.sender_receiver_core_mapping()));
-    Buffer* tensor_buffer = source_tensor.buffer();
+    const auto* tensor_buffer = &source_tensor.mesh_buffer();
     const CoreRangeSet receiver_cores = global_cb.receiver_cores();
 
     Program program = CreateProgram();
@@ -363,7 +365,7 @@ void test_dram_prefetcher_validator(
     ttnn::device_operation::launch<OperationType>(attrs, tensor_args);
 }
 
-void test_tensor_prefetcher_pipe_validator(
+tt::tt_metal::distributed::MeshWorkload make_tensor_prefetcher_pipe_validator_workload(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     const ttnn::Tensor& source_tensor,
     uint32_t num_layers,
@@ -470,6 +472,20 @@ void test_tensor_prefetcher_pipe_validator(
 
     tt::tt_metal::distributed::MeshWorkload workload;
     workload.add_program(tt::tt_metal::distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
+    return workload;
+}
+
+void test_tensor_prefetcher_pipe_validator(
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    const ttnn::Tensor& source_tensor,
+    uint32_t num_layers,
+    uint32_t print_stride,
+    const std::vector<std::shared_ptr<tt::tt_metal::experimental::PrefetcherPipe>>& prefetcher_pipes,
+    const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
+    bool streaming,
+    const std::vector<uint32_t>& rotation) {
+    tt::tt_metal::distributed::MeshWorkload workload = make_tensor_prefetcher_pipe_validator_workload(
+        mesh_device, source_tensor, num_layers, print_stride, prefetcher_pipes, bank_to_receivers, streaming, rotation);
     tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, /*blocking=*/false);
     tt::tt_metal::distributed::Finish(mesh_device->mesh_command_queue());
 }

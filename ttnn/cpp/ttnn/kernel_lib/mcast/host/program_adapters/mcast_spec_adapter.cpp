@@ -129,12 +129,15 @@ std::vector<size_t> validate_targets(
     return indices;
 }
 
-NOC spec_noc(const m2::KernelSpec& kernel) {
+NOC spec_noc(const m2::KernelSpec& kernel, tt::ARCH arch) {
     const auto& hw = std::get<m2::DataMovementHardwareConfig>(kernel.hw_config);
+    if (arch == tt::ARCH::QUASAR) {
+        return NOC::NOC_0;
+    }
     if (hw.config_1xx.has_value()) {
         return hw.config_1xx->noc;
     }
-    return NOC::NOC_0;  // Gen2 has one unified NoC.
+    return NOC::NOC_0;
 }
 
 uint32_t uniform_varargs(const m2::KernelSpec& kernel, const CoreRangeSet& nodes) {
@@ -233,7 +236,7 @@ void McastImpl::attach(
                 const bool sender =
                     std::find(group->senders_.begin(), group->senders_.end(), node) != group->senders_.end();
                 TT_FATAL(
-                    !(sender || chain) || spec_noc(kernel) == cfg_.noc,
+                    !(sender || chain) || spec_noc(kernel, prepared_arch_) == cfg_.noc,
                     "Multicast sender/forwarder NoC differs from the configured multicast NoC");
             }
             auto entry = values.find(node);

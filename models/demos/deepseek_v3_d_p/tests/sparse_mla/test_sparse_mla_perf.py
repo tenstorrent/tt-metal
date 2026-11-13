@@ -16,7 +16,7 @@ workload mirrors Galaxy rather than a heavier one:
 
 That keeps local query rows/chip (640), per-chip KVPE depth (cache/SP = 6.25k), and the number of
 chunks-to-fill in `cold` (11) equal to Galaxy. QuietBox deliberately uses SP=2 so it exercises the
-all-gather/top-k overlap path; its TP=2 head shard is twice the Galaxy per-chip head shard. CAVEAT: the
+all-gather/top-k overlap path; at its TP=2, as at TP=4, sparse attention reshards heads → sequence. CAVEAT: the
 indexer K-cache is replicated full-depth (= the box-local cache), so on smaller boxes it holds a
 proportionally SHORTER prefix than Galaxy — only Galaxy exercises the true 50k (or 0.5M) indexer/top-k
 depth; smaller boxes under-represent any op that scales with the replicated key-cache length.
@@ -72,8 +72,8 @@ Three scenarios (the test sweeps all three):
     Galaxy-equal on every box (LoudBox=128k, QuietBox=128k box-local cache).
 
 variant axis — deepseek_v32 (128 q-heads / 64 index heads) vs glm_5_3 (64 / 32). Galaxy and
-  LoudBox use TP=4; QuietBox uses TP=2 to retain SP=2. GLM's thin TP=4 head shard is handled by the
-  head→sequence reshard in ttMLA._sparse_mla (#48727) plus the head-replicated seq-sharded indexer.
+  LoudBox use TP=4; QuietBox uses TP=2 to retain SP=2. Sparse attention reshards heads → sequence at every
+  TP > 1 (ttMLA.reshards_heads_to_seq), so the indexer's TP-sequence-split top-k feeds it directly.
   GLM-5.3's sparse case intentionally builds the final ``full`` indexer layer (layer 74), with
   its compact 21-slot index cache. This makes the fused ring op select nonzero slot 20—the multi-slot path
   used by the complete 78-layer model—rather than exercising only the trivial single-slot layer-0 proxy.
@@ -135,6 +135,7 @@ import ttnn
 from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32 import random_mla_weights
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_2_config import deepseek_v32_hf_config
 from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import glm_5_3_hf_config
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import kimi_k3_1_hf_config
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_mesh import detect_num_devices
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_plugin import is_marker_explicitly_selected
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_reference import make_hidden
@@ -160,14 +161,15 @@ LONG_CACHE_TOKENS = int(os.environ.get("DS_PERF_LONG_CACHE", 512000))
 ATTN_MODE = os.environ.get("DS_PERF_ATTN_MODE", "sparse")  # module-level default (mesh-shape detection)
 # Model-variant axis: deepseek_v32 (128 q-heads / 64 index heads) vs glm_5_3 (64 / 32).
 # Galaxy/LoudBox use TP=4; QuietBox uses TP=2 so its four chips retain SP=2 and exercise the overlap path.
-# GLM's thin TP=4 head shard is handled by the head→sequence reshard in ttMLA._sparse_mla (#48727).
 # Every model dimension comes from the single-source reference config, never hardcoded here. GLM-5.3
 # additionally exercises a nonzero slot of its compact full-indexer cache below.
-VARIANTS = ("deepseek_v32", "glm_5_3")
+# kimi_k3_1 (96 / 32): scaled-FP8 sparse in every scenario; BF16 sparse and dense in `long` only.
+VARIANTS = ("deepseek_v32", "glm_5_3", "kimi_k3_1")
 VARIANT = os.environ.get("DS_PERF_VARIANT", "deepseek_v32")
 _CONFIG_BUILDERS = {
     "deepseek_v32": deepseek_v32_hf_config,
     "glm_5_3": glm_5_3_hf_config,
+    "kimi_k3_1": kimi_k3_1_hf_config,
 }
 
 # Fabric transport is selected after workload detection below: production Galaxy uses Fabric2D with
@@ -510,6 +512,8 @@ _OP_CODE_RULES = (
     ("/ring_attention_all_gather", "RingJointSDPA"),
     ("/transformer/sdpa/", "SDPA"),
     ("/topk_large_indices/", "TopkLargeIndices"),
+    ("/ccl/all_to_all_async_generic/", "AllToAllAsyncGeneric"),
+    ("/high_bw_all_gather/", "HighBwAllGather"),
     ("/ccl/all_gather_async/", "AllGatherAsync"),
     ("/ccl/reduce_scatter_minimal_async/", "ReduceScatterMinimalAsync"),
     ("/ccl/broadcast/", "AllBroadcast"),
@@ -697,6 +701,23 @@ PERF_CASES = [
 ]
 
 
+def _perf_case_runs(variant: str, scenario: str, case_id: str) -> bool:
+    """Kimi-K3.1 profiles its production cache (scaled FP8) everywhere; its comparison points only in long."""
+    if variant == "kimi_k3_1":
+        return case_id == "sparse-kv_scaled_fp8" or scenario == "long"
+    return True
+
+
+# variant x scenario x case, flattened so only the runs that matter are collected; ids read variant-scenario-case.
+PERF_VARIANT_CASES = [
+    pytest.param(variant, scenario, *case.values, id=f"{variant}-{scenario}-{case.id}")
+    for variant in VARIANTS
+    for scenario in SCENARIOS
+    for case in PERF_CASES
+    if _perf_case_runs(variant, scenario, case.id)
+]
+
+
 @pytest.mark.parametrize("mesh_device", [PERF_WORKLOAD.mesh_shape], ids=[PERF_WORKLOAD.id], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
@@ -712,9 +733,9 @@ PERF_CASES = [
     ids=["torus-xy" if PERF_FABRIC == ttnn.FabricConfig.FABRIC_2D_TORUS_XY else "fabric2d"],
     indirect=True,
 )
-@pytest.mark.parametrize("attn_mode,kv_cache_format,tp_shard_kv", PERF_CASES)
-@pytest.mark.parametrize("scenario", list(SCENARIOS), ids=list(SCENARIOS))
-@pytest.mark.parametrize("variant", list(VARIANTS), indirect=True, ids=list(VARIANTS))
+@pytest.mark.parametrize(
+    "variant,scenario,attn_mode,kv_cache_format,tp_shard_kv", PERF_VARIANT_CASES, indirect=["variant"]
+)
 @pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance test — skip on CI")
 @pytest.mark.timeout(0)
 def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_format, tp_shard_kv, config_only):
@@ -780,6 +801,13 @@ def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_fo
         mla_layer_idx = full_layer_indices[-1]
     else:
         mla_layer_idx = 0
+    # Kimi-K3.1: profile the last DSA layer's slot of a 24-slot cache, as GLM profiles its last compact slot.
+    mla_layer_num, cache_layer_idx = 1, 0
+    if variant.name == "kimi_k3_1" and has_indexer:
+        mla_layer_ids = variant.model_config.mla_layer_ids()
+        mla_layer_num, mla_layer_idx = len(mla_layer_ids), mla_layer_ids[-1]
+        cache_layer_idx = variant.model_config.mla_kv_slot(mla_layer_idx)
+        index_cache_layers = mla_layer_num
 
     # Indexer rope now scales from config.max_seq_len (set above) — no manual bump needed.
     mla = ttMLA(
@@ -794,7 +822,7 @@ def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_fo
         tp_axis=tp_axis,
         is_chunked=True,
         active_seq_len=chunk,
-        layer_num=1,
+        layer_num=mla_layer_num,
         has_indexer=has_indexer,  # sparse: DSA indexer + sparse_sdpa; dense: NullIndexer + ring MLA
         sparse_kv_cache_format=kv_cache_format if has_indexer else MlaKvCacheFormat.BF16_RM,
     )
@@ -810,7 +838,7 @@ def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_fo
             seq_len=total,
             mesh_shape=list(mesh_device.shape),
             sp_axis=sp_axis,
-            num_kvpe_cache_layers=1,
+            num_kvpe_cache_layers=mla_layer_num,
             tp_axis=kv_tp_axis,
         )
     else:
@@ -871,14 +899,16 @@ def test_mla_chunked_perf(mesh_device, variant, scenario, attn_mode, kv_cache_fo
         f"local MLA heads={config.num_attention_heads // tp}"
         + (
             f", local indexer heads={config.index_n_heads // tp}, index-cache slots={index_cache_layers}, "
-            f"selected slot={getattr(mla._indexer, '_index_layer_idx', 0)}"
+            f"selected slot={mla._indexer._cache_slot(cache_layer_idx)}"
             if has_indexer
             else " (dense: no indexer)"
         )
     )
 
     def _one_forward(start):
-        return mla.forward(tt_x, rope, kvpe_cache, actual_start=start, index_kv_cache=index_kv_cache)
+        return mla.forward(
+            tt_x, rope, kvpe_cache, actual_start=start, cache_layer_idx=cache_layer_idx, index_kv_cache=index_kv_cache
+        )
 
     forwards = []  # per-forward host e2e duration plus max-per-chip device duration for each program
     for start in starts:

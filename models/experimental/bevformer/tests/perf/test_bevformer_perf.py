@@ -30,8 +30,8 @@ from models.experimental.bevformer.tests.common import (
     check_detector_outputs,
     frame_metas,
     random_image_batch,
+    to_image_layout,
     signposted_forward,
-    to_conv_layout,
 )
 from models.experimental.bevformer.tt.model_preprocessing import create_bevformer_parameters
 from models.experimental.bevformer.tt.tt_bevformer import TTBEVFormer
@@ -80,7 +80,7 @@ def test_bevformer_perf(device, execution, reset_seeds):
 
     tt_model = TTBEVFormer(create_bevformer_parameters(torch_model, img, device), device)
     # Uploaded once so the profiled run measures the detector, not the transfer.
-    tt_img = to_conv_layout(img.flatten(0, 1), device, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    tt_img = to_image_layout(img.flatten(0, 1), device)
     # Each measured frame is prepared up front so the signposted region contains only detector
     # execution. Separate buffers let the measured loop advance frames without host-side refills.
     tt_frames = [tt_model.prepare_frame(metas) for metas in frames]
@@ -113,7 +113,7 @@ def test_bevformer_perf(device, execution, reset_seeds):
         scores, labels, _, boxes, valid = signposted_forward(device, run_sequence)[3]
         assert tt_model.planner.generation == generation, "the plan grew inside the measured sequence"
     else:
-        host_img = to_conv_layout(img.flatten(0, 1), None, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+        host_img = to_image_layout(img.flatten(0, 1), None)
         host_frames = [tt_model.host_frame(metas) for metas in frames[1:]]
         # The traces refill their previous BEV, a copy: the measured sequence starts from the live one's state.
         runner = TTBEVFormerTrace(tt_model, device, host_img, tt_frames[1], ttnn.clone(initial_prev_bev))

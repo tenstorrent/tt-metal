@@ -74,7 +74,6 @@ jobs:
               ".github/workflows/models-t1-device-perf-tests.yaml",
               ".github/workflows/galaxy-stress-tests.yaml",
               ".github/workflows/t3000-tests.yaml",
-              ".github/workflows/t3000-dispatch-tests.yaml",
               ".github/workflows/t3000-profiler-tests.yaml",
               ".github/workflows/single-card-profiler-tests.yaml",
               ".github/workflows/pipeline-select-profiler.yaml",

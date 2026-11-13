@@ -821,3 +821,37 @@ def test_permute_cache_miss_different_factory_row_major(device, isolate_program_
     assert_with_pcc(ref2, out2, 0.9999)
 
     assert device.cache_entries_counter.total == 2
+
+
+def _height_sharded_l1(shard_shape):
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    return ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+
+# A zero-height height-sharded input took `% 0` while choosing the transpose factory and `Hts / Ht` in it.
+def test_transpose_empty_height_sharded(device, expect_error):
+    x = ttnn.from_torch(
+        torch.zeros(1, 1, 0, 32).bfloat16(),
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=_height_sharded_l1((32, 32)),
+    )
+    with expect_error(RuntimeError, "Sharded WH transpose requires non-zero H and W"):
+        ttnn.transpose(x, -2, -1)
+
+
+# A sharded output config on an interleaved input reaches the same sharded-transpose shape math.
+def test_transpose_empty_to_sharded_output(device, expect_error):
+    x = ttnn.from_torch(torch.zeros(1, 1, 0, 32).bfloat16(), layout=ttnn.TILE_LAYOUT, device=device)
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, (32, 32), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    with expect_error(RuntimeError, "Sharded WH transpose requires non-zero H and W"):
+        ttnn.transpose(x, -2, -1, memory_config=mem)
