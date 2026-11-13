@@ -55,13 +55,10 @@ def weight_cache_path() -> Path:
     return path.resolve()
 
 
-def first_stage_params(num_layers: int, max_seq_len: int):
-    """(hf_config, PrefillRunParams) for the first `num_layers` layers of PP4 rank 0, one user, eager, with the
-    K3 manifest's knobs as the runner sets them. The whole stage is rank 0 (not last); fewer layers is a
-    single-rank stack (first and last rank), which builds its last layer whole, not kv-only, so it has a
-    residual to score."""
-    first_layer_idx, stage_layers = STAGES[0]
-    assert 0 < num_layers <= stage_layers, f"{num_layers} layers; PP4 rank 0 holds {stage_layers}"
+def first_stage_params(max_seq_len: int):
+    """(hf_config, PrefillRunParams) for PP4 rank 0 (first, not last rank), one user, eager, with the K3
+    manifest's knobs as the runner sets them."""
+    first_layer_idx, num_layers = STAGES[0]
     hf_config = ADAPTER.load_hf_config()
     hf_config.max_seq_len = max_seq_len
     params = PrefillRunParams(
@@ -69,7 +66,7 @@ def first_stage_params(num_layers: int, max_seq_len: int):
         num_layers=num_layers,
         first_layer_idx=first_layer_idx,
         is_first_rank=True,
-        is_last_rank=num_layers < stage_layers,
+        is_last_rank=False,
         max_seq_len=max_seq_len,
         chunk_size=CHUNK,
         num_users=1,
@@ -84,7 +81,7 @@ def first_stage_params(num_layers: int, max_seq_len: int):
     )
     logger.info(
         f"K3.1 PP4 rank 0 layers [{first_layer_idx}, {first_layer_idx + num_layers}) "
-        f"is_last={params.is_last_rank} max_seq_len={max_seq_len} kvpe={params.sparse_kv_cache_format} "
+        f"max_seq_len={max_seq_len} kvpe={params.sparse_kv_cache_format} "
         f"cache={params.weight_cache_path}"
     )
     return hf_config, params

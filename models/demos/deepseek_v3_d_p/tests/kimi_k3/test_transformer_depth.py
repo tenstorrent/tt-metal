@@ -390,8 +390,7 @@ def test_depth_ladder_matches_golden(mesh_device, device_params, num_layers):
 #
 # * The stack is the runner's PP4 rank 0 (`k31_stage.first_stage_params`: K3.1 TTNN weight cache, scaled-FP8
 #   kvpe, bf8 indexer key cache, the K3 manifest's knobs), run eager so the tap can read every layer. The model
-#   is too large for one galaxy, so the ladder covers PP4 stage 0: L1/L5/L12 are prefixes of it (a single-rank
-#   stack, which builds its last layer whole so it has a residual to score), L24 is the stage.
+#   is too large for one galaxy, so the ladder covers PP4 stage 0, layers 0-23.
 # * The prompt is the trace's 8192 prompt ids then its 2048 decoded ids, teacher-forced:
 #   two chunks, so chunk 1's DSA layers read chunk 0's KV and its KDA layers continue chunk 0's carry. The bar
 #   is held per chunk on prompt rows (chunk 0 [0, 5120), chunk 1 [5120, 8192)), as the chunked K3 test holds it
@@ -414,7 +413,7 @@ def test_depth_ladder_matches_golden(mesh_device, device_params, num_layers):
 #   (recall 1 by construction, checked) and decode rows are logged. Bar K31_TOPK_RECALL, per golden (below).
 #
 #     scripts/run_safe_pytest.sh \
-#         "models/demos/deepseek_v3_d_p/tests/kimi_k3/test_transformer_depth.py::test_k31_depth_ladder_matches_golden[blackhole-L5-torus-xy-8x4]"
+#         "models/demos/deepseek_v3_d_p/tests/kimi_k3/test_transformer_depth.py::test_k31_depth_ladder_matches_golden[blackhole-L24-torus-xy-8x4]"
 def k31_layer_pcc(layer: int) -> float:
     """K3's per-layer bar for a layer of PP4 stage 0 (see above)."""
     assert layer < 2 * KimiK3Config.ATTN_RES_BLOCK_SIZE, f"layer {layer}: K3 sets no bar past depth 24"
@@ -481,15 +480,9 @@ def test_topk_recall_counts_each_trace_key_once():
     assert topk_recall(got, want).tolist() == pytest.approx([2 / 3, 1.0, 0.0, 1.0])
 
 
-# rung -> (golden, layers of PP4 stage 0). "L24-128k" is K3's long-context check (test_chunked_prefill.py's L24:
+# rung -> golden; both run all of PP4 stage 0. "L24-128k" is K3's long-context check (test_chunked_prefill.py's L24:
 # layers 0-23 over every chunk) on the 128K trace.
-K31_RUNGS = {
-    "L1": (TRACE_K31, 1),
-    "L5": (TRACE_K31, 5),
-    "L12": (TRACE_K31, 12),
-    "L24": (TRACE_K31, 24),
-    "L24-128k": (TRACE_K31_128K, 24),
-}
+K31_RUNGS = {"L24": TRACE_K31, "L24-128k": TRACE_K31_128K}
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi-K3.1 runs on Blackhole only")
@@ -497,7 +490,7 @@ K31_RUNGS = {
 @pytest.mark.parametrize("mesh_device, device_params", k31_stage.PLACEMENT, indirect=True)
 @pytest.mark.parametrize("rung", list(K31_RUNGS))
 def test_k31_depth_ladder_matches_golden(rung, mesh_device, device_params):
-    golden_path, num_layers = K31_RUNGS[rung]
+    golden_path = K31_RUNGS[rung]
     trace = resolve_trace(golden_path)
     assert trace is not None, f"no K3.1 golden at {golden_path}"
     chunk = k31_stage.CHUNK
@@ -506,8 +499,8 @@ def test_k31_depth_ladder_matches_golden(rung, mesh_device, device_params):
     prompt_len, real_len = len(trace.metadata["token_ids"]), len(ids)
     num_chunks = -(-real_len // chunk)
     prompt = ids + [MTP_PAD_TOKEN_ID] * (num_chunks * chunk - real_len)
-    hf_config, params = k31_stage.first_stage_params(num_layers, max_seq_len=-(-real_len // CACHE_LEN) * CACHE_LEN)
-    first = params.first_layer_idx
+    hf_config, params = k31_stage.first_stage_params(max_seq_len=-(-real_len // CACHE_LEN) * CACHE_LEN)
+    first, num_layers = params.first_layer_idx, params.num_layers
     runtime = k31_stage.ADAPTER.build_runtime(mesh_device=mesh_device, hf_config=hf_config, params=params)
     kv_caches = k31_stage.ADAPTER.allocate_kv_cache(mesh_device=mesh_device, hf_config=hf_config, params=params)
     runtime.compile(kv_caches)
