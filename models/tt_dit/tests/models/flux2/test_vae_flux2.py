@@ -108,8 +108,8 @@ def prep_data(
 )
 @pytest.mark.parametrize(
     ("batch_size", "height", "width"),
-    [(1, 1024, 1024), (1, 1024, 1184)],
-    ids=["1024", "1024x1184"],
+    [(1, 1024, 1024), (1, 1024, 1184), (1, 1056, 1024)],
+    ids=["1024", "1024x1184", "1056x1024"],
 )
 # Rows on mesh axis 1, and channels (tp_h) or columns (h_w) on axis 0.
 @pytest.mark.parametrize("split", ["tp_h", "h_w"])
@@ -134,6 +134,19 @@ def test_vae_flux2_decoder(
 
     ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear)
     vae_parallel_config = Flux2VaeParallelConfig.from_axes(mesh_device, tp_axis=tp_axis, h_axis=h_axis, w_axis=w_axis)
+
+    # Host-split tokens need whole token rows (2 latent rows) per device, the decoder's split only
+    # whole latent rows. 1056x1024 has 132 latent rows: 66 token rows split over 2 devices but not
+    # over 4, and 132 latent rows split over 4 but not over 8.
+    h_factor = vae_parallel_config.h_parallel.factor if vae_parallel_config.h_parallel is not None else 1
+    w_factor = vae_parallel_config.w_parallel.factor if vae_parallel_config.w_parallel is not None else 1
+    rows_per_device_unit = 1 if split_height else 2
+    if (height // 8) % (rows_per_device_unit * h_factor) != 0:
+        pytest.skip(f"{height // 8} latent rows do not split into whole {'latent' if split_height else 'token'} rows")
+    # The fused group norm needs each device's latent pixel count to be whole tiles, e.g. not
+    # 16 x 37 for 1024x1184 on 4x8.
+    if (height // 8 // h_factor) * (width // 8 // w_factor) % ttnn.TILE_SIZE != 0:
+        pytest.skip("the per-device latent pixel count is not a multiple of 32")
 
     z_channels = torch_model.config.latent_channels
     patch_size = 2
