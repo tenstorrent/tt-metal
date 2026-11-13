@@ -4,11 +4,12 @@
 
 * A spec_verify_mode forward_decode of n_users x T rows takes _forward_verify: the q|k|v slice lands in L1 with no copy,
   cos / sin staged as [1, 1, R, rope_dim] are not reshaped, the RoPE pass-through slice lands in DRAM with no copy, k and
-  v reach the KV write unpadded, the KV write is T calls of n_users rows (also at one user) on the shared positions and
-  the per-user page table, and the gate multiplies the attention output after the head concat in its flat layout.
+  v reach the KV write unpadded, the KV write is one paged_fused_update_cache(rows_per_user=T) for K and V (also at one
+  user) on the per-row positions and the per-user page table, and the gate multiplies the attention output after the
+  head concat in its flat layout.
 * Which verifies take that path (_forward_verify_ok); the plain decode never does.
-* Qwen36Model: the verify body builds the T position slices once for all attention layers and frees them; the verify
-  stages cos / sin as [1, 1, R, rope_dim] with the per-row decode values.
+* Qwen36Model: the verify body slices no positions for the KV write; the verify stages cos / sin as [1, 1, R, rope_dim]
+  with the per-row decode values.
 The device comparison against the previous op sequence is in test_verify_attention_glue.py.
 """
 
@@ -105,6 +106,11 @@ def ops(monkeypatch):
         lambda c, x, update_idxs_tensor, page_table: rec("update", None, c, x, update_idxs_tensor, page_table),
     )
     monkeypatch.setattr(
+        ttnn.experimental,
+        "paged_fused_update_cache",
+        lambda c1, x1, c2, x2, **kw: rec("fused_update", None, c1, x1, c2, x2, **kw),
+    )
+    monkeypatch.setattr(
         ttnn.transformer,
         "paged_scaled_dot_product_attention_decode",
         lambda q, k, v, **kw: rec("sdpa", FT(q.shape, "attn", L1), q, **kw),
@@ -131,6 +137,7 @@ def _attention(n_users):
     a._fused_qkv = a._use_nlp_decode_heads = True
     a._fuse_agmm = False
     a._spec_sdpa_cfg_cache, a._kv_shard_cfg_cache = {}, {}
+    a._kv_rows_shard_cfg = lambda first, n, rows: ("rows_cfg", first, n, rows)
     a._concat_heads_decode = lambda t, B: FT((1, B, NH * HD), f"concat({t.name})", L1)
     a._wo_proj = lambda t, w: FT((1, t.shape[-2], DIM), "wo_partial", DRAM)
     return a
@@ -145,7 +152,7 @@ class RecordingAllReduce:
         return "replicated"
 
 
-def _verify(a, n_users, T, pos_groups=True, cos_rows_first=True):
+def _verify(a, n_users, T, cos_rows_first=True):
     R = n_users * T
     groups = a._spec_sdpa_plan(T, n_users)[1]
     rope_shape = (1, 1, R, RD) if cos_rows_first else (1, R, 1, RD)
@@ -157,7 +164,6 @@ def _verify(a, n_users, T, pos_groups=True, cos_rows_first=True):
         spec_n_users=n_users,
         spec_user_page_table=FT((n_users, 16), "pt_users"),
         decode_ar=RecordingAllReduce(),
-        spec_pos_groups=[FT((n_users,), f"pos{j}") for j in range(T)] if pos_groups else None,
     )
     out = a.forward_decode(
         FT((1, 1, R, DIM), "x"), FT((R,), "cur_pos"), FT(rope_shape, "cos"), FT(rope_shape, "sin"), **kw
@@ -176,28 +182,34 @@ def test_the_verify_attention_runs_without_the_copies_pads_and_reshapes(ops, n_u
     R = n_users * T
     assert out == "replicated" and [p.shape for p in kw["decode_ar"].partials] == [(1, 1, R, DIM)]
     assert _calls(ops, "pad") == []
-    # q|k|v lands in L1 from the slice; the only copies left are the KV write's shards (2 per candidate)
+    # q|k|v lands in L1 from the slice; the only copies left are the KV write's two shards (K and V)
     (qkv3,) = [c for c in _calls(ops, "slice") if c[1][0].name == "qkv" and c[1][2][-1] == (NH + 2 * NKV) * HD]
     assert qkv3[2]["mem"] == L1 and _calls(ops, "nlp_create_qkv_heads_decode")[0][1][0] is qkv3[3]
     copies = [c for c in _calls(ops, "to_memory_config") if c[1][0].mem != c[1][1]]  # same config: no device op
-    assert len(copies) == 2 * T and all(c[1][1] == "kv_cfg" and c[1][0].name.startswith("slice(view(") for c in copies)
+    assert len(copies) == 2
     # cos / sin are used as staged, and the RoPE pass-through slice writes DRAM itself (q and k)
     assert not any(c[1][0].name in ("cos", "sin") for c in _calls(ops, "reshape"))
     passes = [c for c in _calls(ops, "slice") if c[1][1][-1] == RD]
     assert len(passes) == 2 and all(c[2]["mem"] == DRAM for c in passes)
-    # one KV write call per candidate and cache: tile j of the unpadded view, shared positions, per-user table
-    updates = _calls(ops, "update")
-    assert [c[1][0] for c in updates] == ["k_cache", "v_cache"] * T
-    for j in range(T):
-        for c in updates[2 * j : 2 * j + 2]:
-            shard = c[1][1]
-            (src,) = [s for s in ops if s[0] == "to_memory_config" and s[3] is shard]
-            (grp,) = [s for s in ops if s[0] == "slice" and s[3] is src[1][0]]
-            assert grp[1][1] == (0, 0, j * 32, 0) and grp[1][2] == (1, n_users, (j + 1) * 32, HD)
-            assert grp[1][0].shape == (1, n_users, T * 32, HD)
-            assert c[1][2] is kw["spec_pos_groups"][j] and c[1][3] is kw["spec_user_page_table"]
+    # one KV write for K and V: each the unpadded [1, R, NKV, HD] viewed as [1, n_users, T*32, HD], sharded one user
+    # per core (V on cores [0, n), K on [n, 2n)), all T rows per user at the per-row positions, per-user page table
+    assert _calls(ops, "update") == []
+    (upd,) = _calls(ops, "fused_update")
+    assert upd[1][0] == "k_cache" and upd[1][2] == "v_cache"
+    rows = T * 32
+    for shard, cfg in ((upd[1][1], ("rows_cfg", n_users, n_users, rows)), (upd[1][3], ("rows_cfg", 0, n_users, rows))):
+        (src,) = [c for c in copies if c[3] is shard]
+        assert src[1][1] == cfg and src[1][0].name.startswith("view(") and src[1][0].shape == (1, n_users, rows, HD)
+        (view,) = [c for c in _calls(ops, "reshape") if c[3] is src[1][0]]
+        assert view[1][0].shape == (1, R, NKV, HD) and view[1][1] == (1, n_users, rows, HD)
+    assert upd[2]["update_idxs_tensor"].name == "cur_pos" and upd[2]["update_idxs_tensor"].shape == (R,)
+    assert upd[2]["page_table"] is kw["spec_user_page_table"] and upd[2]["rows_per_user"] == T
     assert not any(c[1][0].name == "cur_pos" for c in _calls(ops, "slice"))
-    assert not any(c[1][0] is p for c in ops if c[0] == "deallocate" for p in kw["spec_pos_groups"])
+    freed = [c[1][0] for c in ops if c[0] == "deallocate"]
+    assert upd[1][1] in freed and upd[1][3] in freed
+    assert ops.index(upd) < min(
+        i for i, c in enumerate(ops) if c[0] == "deallocate" and c[1][0] in (upd[1][1], upd[1][3])
+    )
     # fused spec SDPA on the group table
     (sdpa,) = _calls(ops, "sdpa")
     assert sdpa[2]["page_table_tensor"] is kw["spec_page_table"] and sdpa[2]["spec_multi_pos_tiles"] == T // (
@@ -212,14 +224,34 @@ def test_the_verify_attention_runs_without_the_copies_pads_and_reshapes(ops, n_u
     assert len(gated) == 1 and gated[0][1][0].name == "concat(view(attn))"
 
 
-def test_without_shared_positions_each_candidate_slices_and_frees_its_own(ops):
+@pytest.mark.parametrize("n_users, T", [(8, 4), (1, 4), (4, 8), (2, 12)])
+def test_the_multirow_kv_write_puts_k_and_v_on_disjoint_cores_one_user_each(monkeypatch, n_users, T):
+    monkeypatch.setattr(ttnn, "CoreCoord", lambda x, y: (x, y))
+    monkeypatch.setattr(ttnn, "CoreRange", lambda a, b: (a, b))
+    monkeypatch.setattr(ttnn, "CoreRangeSet", lambda ranges: sorted(ranges, key=lambda r: (r[0][1], r[0][0])))
+    monkeypatch.setattr(ttnn, "ShardSpec", lambda cores, shape, orientation: (cores, tuple(shape)))
+    monkeypatch.setattr(ttnn, "MemoryConfig", lambda layout, buffer_type, spec: spec)
+    a = _attention(n_users)
+    del a._kv_rows_shard_cfg  # the class method, not _attention's stand-in
+    rows = T * 32
+    v_cores, v_shape = a._kv_rows_shard_cfg(0, n_users, rows)
+    k_cores, k_shape = a._kv_rows_shard_cfg(n_users, n_users, rows)
+    assert v_shape == k_shape == (rows, HD)
+    # row-wise over the 11-wide grid: shard u (user u) on core u of its set
+    assert [r[0] for r in v_cores] == [(i % 11, i // 11) for i in range(n_users)]
+    assert [r[0] for r in k_cores] == [(i % 11, i // 11) for i in range(n_users, 2 * n_users)]
+    assert all(r[0] == r[1] for r in v_cores + k_cores) and not {r[0] for r in v_cores} & {r[0] for r in k_cores}
+    assert a._kv_rows_shard_cfg(0, n_users, rows) is a._kv_rows_shard_cfg(0, n_users, rows)
+
+
+def test_the_multirow_kv_write_refuses_mismatched_positions_and_a_full_grid(ops, expect_error):
     a = _attention(8)
-    _verify(a, 8, 4, pos_groups=False)
-    pos = [c for c in _calls(ops, "slice") if c[1][0].name == "cur_pos"]
-    assert [(c[1][1], c[1][2], c[1][3]) for c in pos] == [((j,), (32,), (4,)) for j in range(4)]
-    assert [c[1][2] for c in _calls(ops, "update")] == [p[3] for p in pos for _ in range(2)]
-    freed = [c[1][0] for c in ops if c[0] == "deallocate"]
-    assert all(p[3] in freed for p in pos)
+    k, v = FT((1, 32, NKV, HD), "k"), FT((1, 32, NKV, HD), "v")
+    with expect_error(ValueError, "positions for 8 x 4 rows"):
+        a._write_kv_multirow(k, v, FT((8,), "cur_pos"), 8, 4, FT((8, 16), "pt_users"))
+    del a._kv_rows_shard_cfg
+    with expect_error(ValueError, "exceed the 11x10 grid"):
+        a._kv_rows_shard_cfg(100, 16, 128)
 
 
 def test_rope_reshapes_decode_layout_cos_sin_only(ops):
@@ -245,10 +277,14 @@ def test_rope_reshapes_decode_layout_cos_sin_only(ops):
         "no_user_pt",
         "user_pt_rows",
         "group_pt_rows",
+        "grid_too_small",
     ],
 )
 def test_which_verifies_take_forward_verify(ops, monkeypatch, change):
     a = _attention(8)
+    if change == "grid_too_small":
+        # 8 users need 16 cores for the multi-row KV write's two shard sets
+        a.mesh = SimpleNamespace(compute_with_storage_grid_size=lambda: SimpleNamespace(x=5, y=3))
     n, T = (8, 1) if change == "T1" else (11, 3) if change == "rows33" else (8, 3) if change == "T3" else (8, 4)
     R = n * T
     groups = (a._spec_sdpa_plan(T, n) or (None, 1))[1]
@@ -285,7 +321,7 @@ def test_the_plain_decode_and_the_reseed_keep_the_full_body(ops, expect_error):
             )
 
 
-def test_the_verify_body_builds_the_positions_once_for_every_attention_layer(monkeypatch):
+def test_the_verify_body_slices_no_positions_for_the_kv_write(monkeypatch):
     log = []
     monkeypatch.setattr(tp_mod, "KV_GROUP_WRITE_OK", True)
     monkeypatch.setattr(
@@ -300,7 +336,7 @@ def test_the_verify_body_builds_the_positions_once_for_every_attention_layer(mon
 
     def layer(full):
         def forward(x, **kw):
-            log.append(("layer", full, kw.get("spec_pos_groups")))
+            log.append(("layer", full, sorted(kw)))
             return FT(x.shape, "h")
 
         return SimpleNamespace(is_full_attention=full, forward=forward)
@@ -318,19 +354,13 @@ def test_the_verify_body_builds_the_positions_once_for_every_attention_layer(mon
     model._forward_verify_bucket_tp(n_users=2)
 
     slices = [c for c in log if c[0] == "slice"]
-    assert [(c[1], c[2], c[3]) for c in slices[:3]] == [("step", (r, 0), (r + 1, 8)) for r in range(3)]
-    assert [(c[1], c[2], c[3], c[4]) for c in slices[3:]] == [("kvpos", (j,), (8,), (4,)) for j in range(4)]
-    attn = [c[2] for c in log if c[0] == "layer" and c[1]]
-    assert (
-        len(attn) == 2
-        and all(g is attn[0] for g in attn)
-        and [g.name for g in attn[0]] == [f"pos{j}" for j in range(4)]
-    )
-    assert all(c[2] is None for c in log if c[0] == "layer" and not c[1])
-    tail = log.index(next(c for c in log if c[0] == "tail"))
-    freed = [i for i, c in enumerate(log) if c[0] == "deallocate" and c[1] in attn[0]]
+    assert [(c[1], c[2], c[3]) for c in slices] == [("step", (r, 0), (r + 1, 8)) for r in range(3)]
+    layers = [c for c in log if c[0] == "layer"]
+    assert len(layers) == 4 and not any("spec_pos_groups" in c[2] for c in layers)
+    tail = next(i for i, c in enumerate(log) if c[0] == "tail")
     last_layer = max(i for i, c in enumerate(log) if c[0] == "layer")
-    assert len(freed) == 4 and all(last_layer < i < tail for i in freed)
+    freed = [c[1] for c in log[last_layer:tail] if c[0] == "deallocate"]
+    assert "kvpos" in freed and [f.name for f in freed if isinstance(f, FT)] == ["h", "cos", "sin"]
 
 
 def test_the_verify_stages_the_decode_rotation_rows_on_the_sequence_axis():

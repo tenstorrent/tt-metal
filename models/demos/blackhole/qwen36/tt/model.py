@@ -36,18 +36,22 @@ from models.demos.blackhole.qwen36.tt.spec_step import (
 from models.tt_transformers.tt.common import Mode, get_block_size, num_blocks_in_seq
 
 
-def spec_kv_write_conflicts(page_tables, positions, T, block_size):
+def spec_kv_write_conflicts(page_tables, positions, T, block_size, across_calls=False):
     """Cross-user collisions of the grouped verify KV write. Call j writes candidate j of every
     user (one user per core) to the 32-row cache tile (page_tables[u][pos // block_size],
     (pos % block_size) // 32) at pos = positions[u] + j; two users on the same tile in the same
     call race (read-modify-write, one update lost). Writes to block 0 (vLLM's null block: padding rows,
     padded columns past a row's reservation) are junk by design and skipped. Users with a negative position
     are skipped.
+    ``across_calls``: the multi-row write (TPAttention._write_kv_multirow) writes all T candidates of every user in
+    one call, so two users collide on a tile at any pair of candidates (j, j'), not only at the same j.
     Returns [(j, u_first, u_second, block, tile)], empty when the write is safe."""
     rows = page_tables.tolist() if isinstance(page_tables, torch.Tensor) else [list(r) for r in page_tables]
     conflicts = []
+    owner = {}  # (block, tile) -> first user that writes it in call j, or in any call when across_calls
     for j in range(T):
-        owner = {}  # (block, tile) -> first user that writes it in call j
+        if not across_calls:
+            owner = {}
         for u, p in enumerate(positions):
             if int(p) < 0:
                 continue
@@ -1509,8 +1513,6 @@ class Qwen36Model:
         rows, ids, logits_rm): ``rows`` is the drafter feed [1,1,B*T,dim/tp] bf16 (spec_feed_rows).
         ``logits_rm`` is the ROW_MAJOR bf16 copy the in-trace argmax needs, kept for the sampling path.
         """
-        from models.demos.blackhole.qwen36.tt.attention.tp import KV_GROUP_WRITE_OK
-
         T = self._vfy_T
         rows = n_users * T
         step = self._vfy_step_buf
@@ -1528,11 +1530,6 @@ class Qwen36Model:
         dar = self._residual_ar(rows)
         if dar is not None:
             x = dar.enter(x)  # every layer and _spec_tail then run on the replicated residual
-        # The positions of candidate j's rows {u*T + j}, one KV write call each: the same T slices serve every
-        # attention layer (TPAttention._forward_verify).
-        pos_groups = None
-        if KV_GROUP_WRITE_OK and T > 1:
-            pos_groups = [ttnn.slice(kvpos, (j,), (rows,), (T,)) for j in range(T)]
         for layer in self.layers:
             if layer.is_full_attention:
                 # Hybrid verify: every row is a pseudo-user of its own sequence. cur_pos for row u*T+j is
@@ -1558,7 +1555,6 @@ class Qwen36Model:
                     spec_verify_mode=True,
                     spec_page_table=self._vfy_kvpt1_buf,
                     n_users=n_users,
-                    spec_pos_groups=pos_groups,
                 )
             else:
                 x_new = layer.forward(
@@ -1574,7 +1570,7 @@ class Qwen36Model:
                 )
             ttnn.deallocate(x)
             x = x_new
-        for t in (*(pos_groups or ()), kvpos, cos, sin):
+        for t in (kvpos, cos, sin):
             ttnn.deallocate(t)
         # Greedy acceptance compares token ids, so argmax the verify rows inside the trace and read back
         # B*T uint32 instead of B*T x vocab floats. The fused per-shard argmax (tt/spec_argmax_fused.py) takes the ids
@@ -1629,14 +1625,18 @@ class Qwen36Model:
         return pt.repeat_interleave(T, dim=0).contiguous(), pt.contiguous(), pt1.contiguous()
 
     def _vfy_check_kv_writes(self, pt, positions):
-        """Assert the grouped verify KV write has no same-tile, same-call collision between users
-        for block tables ``pt`` [B, nb] and first verify slots ``positions`` (spec_kv_write_conflicts)."""
-        bad = spec_kv_write_conflicts(pt, positions, self._vfy_T, get_block_size(self._paged_kv_caches))
-        assert not bad, (
-            f"the grouped spec KV write needs distinct (block, 32-row tile) per user within each "
-            f"candidate call, but {len(bad)} collide; first (call j, user, user, block, tile): "
-            f"{bad[:4]}. Set QWEN36_SPEC_KV_GROUP_WRITE=0 to fall back to the per-row write."
+        """Refuse a verify whose KV write would put two users on one 32-row cache tile, for block tables ``pt``
+        [B, nb] and first verify slots ``positions``. The rule is the multi-row write's (spec_kv_write_conflicts with
+        across_calls=True), which also covers the T-call grouped write of a verify that _forward_verify_ok refuses."""
+        bad = spec_kv_write_conflicts(
+            pt, positions, self._vfy_T, get_block_size(self._paged_kv_caches), across_calls=True
         )
+        if bad:
+            raise RuntimeError(
+                f"the spec verify KV write needs distinct (block, 32-row tile) per user, but {len(bad)} collide; "
+                f"first (candidate j, user, user, block, tile): {bad[:4]}. Set QWEN36_SPEC_KV_GROUP_WRITE=0 to fall "
+                f"back to the per-row write."
+            )
 
     def release_verify_trace(self):
         """Drop the captured verify trace. No-op when nothing is captured.
@@ -1876,11 +1876,12 @@ class Qwen36Model:
             if _fused
             else f"legacy {rows} pseudo-users"
         )
-        _kvw = (
-            f"GROUPED ({T} calls x {B} rows per K/V per layer)"
-            if self._vfy_kv_grouped
-            else f"per-row ({rows} calls per K/V per layer)"
-        )
+        if _att0._forward_verify_ok(rows, self._vfy_kvpt_buf, True, self._vfy_kvpt1_buf, B, self._vfy_kvpt_users):
+            _kvw = f"MULTI-ROW (one K and V call per layer, {T} rows per user)"
+        elif self._vfy_kv_grouped:
+            _kvw = f"GROUPED ({T} calls x {B} rows per K/V per layer)"
+        else:
+            _kvw = f"per-row ({rows} calls per K/V per layer)"
         logger.info(
             f"Verify trace (B={B} users x T={T} = {rows} rows) captured "
             f"successfully! verify SDPA: {_how}; verify KV write: {_kvw}"
@@ -1917,8 +1918,8 @@ class Qwen36Model:
         ``page_tables``: int32 [B, num_blocks] block tables (array-like; 1-D only for B == 1), one
         row per user. When given, every persistent page-table buffer is re-staged for this replay if the table differs
         from the staged one, with columns clipped or padded with block 0 (vLLM's null block) to the captured width.
-        None keeps the tables staged last. A grouped KV write that would put two users on the same
-        (block, 32-row tile) in the same call (block 0 excepted) raises AssertionError before anything is staged.
+        None keeps the tables staged last. A KV write that would put two users on the same (block, 32-row tile) at any
+        two candidates (block 0 excepted; _vfy_check_kv_writes) raises RuntimeError before anything is staged.
         The MTP drafter's own table (``SpeculativeDecoder.mtp_pt``) is a separate buffer this argument does
         not touch. ``inactive``: length-B bools; those users are skipped by the KV-write collision check only
         (their rows write the null block). ``rope_deltas``: B ints, user u's M-RoPE delta for all of its T rows;

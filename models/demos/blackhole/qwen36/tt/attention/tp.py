@@ -671,9 +671,7 @@ class TPAttention:
             keys, values, k_p, v_p, cur_pos_tt, n_users, T, page_table=page_table, user_page_table=spec_user_page_table
         )
 
-    def _write_kv_groups(
-        self, keys, values, k, v, cur_pos_tt, n_users, T, page_table=None, user_page_table=None, pos_groups=None
-    ):
+    def _write_kv_groups(self, keys, values, k, v, cur_pos_tt, n_users, T, page_table=None, user_page_table=None):
         """The grouped aliased KV write (see _write_kv_aliased): T paged_update_cache calls per cache, call j
         writing row u*T + j of every user u, so no two cores of one call share a cache tile.
 
@@ -681,9 +679,8 @@ class TPAttention:
         cache's NKV or the 32 of a zero pad: the operation copies only the first NKV rows of each row's tile, so
         the pad rows never reach the cache.
 
-        Call j's positions are ``pos_groups[j]`` when given (built once per verify for every attention layer),
-        else a strided slice of ``cur_pos_tt``. Its page table is ``user_page_table`` ([n_users, nb]) when given,
-        else a strided slice of ``page_table`` ([n_users*T, nb]).
+        Call j's positions are a strided slice of ``cur_pos_tt``. Its page table is ``user_page_table`` ([n_users, nb])
+        when given, else a strided slice of ``page_table`` ([n_users*T, nb]).
         """
         HD = self.HD
         B_total = n_users * T
@@ -703,7 +700,7 @@ class TPAttention:
         for j in range(T):
             r0 = j * _tile
             # Strided (j, j+T, j+2T, ...): never full-span (j < T <= B_total), so safe to deallocate.
-            pos_j = pos_groups[j] if pos_groups is not None else ttnn.slice(cur_pos_tt, (j,), (B_total,), (T,))
+            pos_j = ttnn.slice(cur_pos_tt, (j,), (B_total,), (T,))
             pt_j = user_page_table
             if pt_j is None:
                 pt_j = ttnn.slice(page_table, (j, 0), (B_total, page_table.shape[-1]), (T, 1))
@@ -713,13 +710,75 @@ class TPAttention:
                 ttnn.deallocate(grp)
                 ttnn.experimental.paged_update_cache(_cache, grp_sh, update_idxs_tensor=pos_j, page_table=pt_j)
                 ttnn.deallocate(grp_sh)
-            if pos_groups is None:
-                ttnn.deallocate(pos_j)
+            ttnn.deallocate(pos_j)
             if user_page_table is None:
                 ttnn.deallocate(pt_j)
         for _t in (k, v, k_orig, v_orig):
             if _t is not None:
                 ttnn.deallocate(_t)
+
+    def _kv_rows_shard_cfg(self, first_core, n_users, rows):
+        """Height shard of ``rows`` rows per user, one user per core, on cores [first_core, first_core + n_users) of the
+        row-wise numbering over the full grid width. Shard i is user i."""
+        cache = getattr(self, "_kv_rows_cfg_cache", None)
+        if cache is None:
+            cache = self._kv_rows_cfg_cache = {}
+        key = (first_core, n_users, rows)
+        if key not in cache:
+            grid = self.mesh.compute_with_storage_grid_size()
+            if first_core + n_users > grid.x * grid.y:
+                raise ValueError(f"cores [{first_core}, {first_core + n_users}) exceed the {grid.x}x{grid.y} grid")
+            cores = ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(ttnn.CoreCoord(i % grid.x, i // grid.x), ttnn.CoreCoord(i % grid.x, i // grid.x))
+                    for i in range(first_core, first_core + n_users)
+                }
+            )
+            cache[key] = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(cores, [rows, self.HD], ttnn.ShardOrientation.ROW_MAJOR),
+            )
+        return cache[key]
+
+    def _write_kv_multirow(self, k, v, cur_pos_tt, n_users, T, user_page_table):
+        """The verify's KV write as ONE paged_fused_update_cache(rows_per_user=T) for K and V.
+
+        Consumes ``k`` / ``v`` ([1, n_users*T, heads, HD] TILE interleaved, rows user-major; ``heads`` as in
+        _write_kv_groups). Both are viewed as [1, n_users, T*32, HD] (tile (u, j) is row u*T + j, same bytes) and
+        height sharded one user per core, T tiles each: V on cores [0, n_users), K on [n_users, 2*n_users), so the two
+        sets are disjoint, as the op needs. Core u writes user u's T rows at ``cur_pos_tt[u*T + j]`` through row u of
+        ``user_page_table``, one read-modify-write per distinct cache tile. The rows, positions and the
+        untilize / retilize are those of the T grouped calls, so the cache bytes are the same; rows of different users
+        must not share a cache tile (spec_kv_write_conflicts with across_calls=True).
+        """
+        HD = self.HD
+        rows = T * ttnn.TILE_SIZE
+        if cur_pos_tt.shape[-1] != n_users * T:
+            raise ValueError(f"multi-row KV write: {tuple(cur_pos_tt.shape)} positions for {n_users} x {T} rows")
+        # Same tile view as _write_kv_groups: a metadata alias, or a copy whose source is freed too.
+        _view = ttnn.Shape([1, n_users, rows, HD])
+        _srcs = []
+        for _t in (k, v):
+            _v = ttnn.reshape(_t, _view, _view)
+            _srcs.append((_v, None if tpc.aliases(_v, _t) else _t))
+        (k_v, k_orig), (v_v, v_orig) = _srcs
+        k_sh = ttnn.to_memory_config(k_v, self._kv_rows_shard_cfg(n_users, n_users, rows))
+        v_sh = ttnn.to_memory_config(v_v, self._kv_rows_shard_cfg(0, n_users, rows))
+        for _t in (k_v, v_v, k_orig, v_orig):
+            if _t is not None:
+                ttnn.deallocate(_t)
+        ttnn.experimental.paged_fused_update_cache(
+            self.paged_k,
+            k_sh,
+            self.paged_v,
+            v_sh,
+            update_idxs_tensor=cur_pos_tt,
+            page_table=user_page_table,
+            rows_per_user=T,
+        )
+        ttnn.deallocate(k_sh)
+        ttnn.deallocate(v_sh)
 
     # Fused spec-verify SDPA (spec_multi_pos_tiles=Tg): the T=K+1 candidates ride B batch rows of Tg
     # 32-row Q tiles each (candidate c = b*Tg + j) instead of T batch rows, so each row's KV cache
@@ -804,13 +863,17 @@ class TPAttention:
     def _forward_verify_ok(self, B, page_table, alias_kv_write, spec_page_table, spec_n_users, spec_user_page_table):
         """Whether a spec_verify_mode forward_decode of B rows takes _forward_verify: paged KV, the fused
         [q|k|v|gate] weight, B = spec_n_users users x T >= 2 candidates in one tile of rows with a fused spec SDPA
-        plan and its group page table, the per-user page table, and strided slices (the grouped KV write)."""
+        plan and its group page table, the per-user page table, strided slices (the grouped KV write of the body
+        that a refused verify runs), and 2 x spec_n_users cores for the multi-row KV write."""
         if not (self.use_paged and page_table is not None and alias_kv_write):
             return False
         if not (self._fused_qkv and self._use_nlp_decode_heads and KV_GROUP_WRITE_OK):
             return False
         n = spec_n_users
         if n < 1 or B % n or B > tpc.TILE_SIZE or B // n < 2:
+            return False
+        grid = self.mesh.compute_with_storage_grid_size()
+        if 2 * n > grid.x * grid.y:
             return False
         plan = self._spec_sdpa_plan(B // n, n)
         if plan is None or spec_page_table is None or spec_page_table.shape[0] != plan[1]:
@@ -826,7 +889,6 @@ class TPAttention:
         spec_page_table,
         spec_n_users,
         spec_user_page_table,
-        spec_pos_groups,
         decode_ar,
     ):
         """forward_decode's verify branch with fewer data-movement ops. The arithmetic ops, their inputs and their
@@ -835,8 +897,8 @@ class TPAttention:
           * the gate stays [1, 1, B, NH*HD] and multiplies the attention output after the head concat, which only
             moves bytes (no reshape of the gate to [1, B, NH, HD]; sigmoid and multiply are element-wise);
           * k and v reach the KV write without the zero pad to 32 rows (see _write_kv_groups);
-          * the KV write is the grouped one also at one user (T one-row calls, as the per-row loop makes, with the
-            per-user page table instead of a page-table slice per row), with ``spec_pos_groups`` as its positions.
+          * the KV write is one paged_fused_update_cache(rows_per_user=T) for K and V (_write_kv_multirow) instead of
+            T paged_update_cache calls per cache; the cache bytes are the same.
         cos / sin come as [1, 1, B, rope_dim] (Qwen36Model stages them so), so apply_partial_rope_decode does not
         reshape them."""
         tw, NH, NKV, HD = self.tw, self.NH, self.NKV, self.HD
@@ -858,17 +920,7 @@ class TPAttention:
         q = apply_partial_rope_decode(q, cos_tt, sin_tt, NH, B, self.rope_dim)
         k = apply_partial_rope_decode(k, cos_tt, sin_tt, NKV, B, self.rope_dim)
 
-        self._write_kv_groups(
-            self.paged_k,
-            self.paged_v,
-            k,
-            v,
-            cur_pos_tt,
-            spec_n_users,
-            T,
-            user_page_table=spec_user_page_table,
-            pos_groups=spec_pos_groups,
-        )
+        self._write_kv_multirow(k, v, cur_pos_tt, spec_n_users, T, spec_user_page_table)
 
         spec_cfg, groups, tiles = self._spec_sdpa_plan(T, spec_n_users)
         # The same bytes re-viewed as groups x Tg row-tiles (see forward_decode's fused branch).
@@ -923,7 +975,6 @@ class TPAttention:
         spec_user_page_table=None,
         kv_only=False,
         decode_ar=None,
-        spec_pos_groups=None,
     ):
         """One decode step for B "users".
 
@@ -957,8 +1008,6 @@ class TPAttention:
         None; the attention output would only feed a block output that no caller reads.
 
         A verify that _forward_verify_ok accepts runs _forward_verify instead of the body below.
-        spec_pos_groups (that path only): T int32 [spec_n_users] tensors, entry j = the positions of rows
-        {u*T + j}, shared by every attention layer of one verify; None slices them per layer.
         """
         tw, NH, NKV, HD = self.tw, self.NH, self.NKV, self.HD
         # Active decode width, taken from the input (x is [1,1,B,dim_frac]). Normally == self.B.
@@ -981,7 +1030,6 @@ class TPAttention:
                 spec_page_table,
                 spec_n_users,
                 spec_user_page_table,
-                spec_pos_groups,
                 decode_ar,
             )
         _L1 = ttnn.L1_MEMORY_CONFIG  # keep decode head-prep + attn output L1-resident

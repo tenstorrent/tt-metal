@@ -6,7 +6,8 @@ One full-attention layer of the checkpoint, at the mesh's TP. Both sequences run
 copies of one paged bf8 KV cache with random contents; the attention output (the `wo` partial sum of each device,
 before the all-reduce, which is the same op in both) and both caches must be equal byte for byte. The reference is forward_decode's full verify body (_forward_verify_ok forced False), with
 apply_partial_rope_decode as it was before (the RoPE pass-through slice lands in L1, then a copy to DRAM) and cos / sin
-as [1, R, 1, rope_dim]. Shapes: (users, T) = (8, 4), (1, 4), (4, 8), (2, 12). Each user has its own shuffled blocks
+as [1, R, 1, rope_dim]. That body writes K and V with T grouped paged_update_cache calls per cache, so the test also
+compares _forward_verify's one paged_fused_update_cache(rows_per_user=T) call against them. Shapes: (users, T) = (8, 4), (1, 4), (4, 8), (2, 12). Each user has its own shuffled blocks
 and its own long-context position; some users' T rows cross a 32-row tile or a block boundary.
 
 Run: MESH_DEVICE=P150x8 pytest models/demos/blackhole/qwen36/tests/test_verify_attention_glue.py -v -s
@@ -154,8 +155,7 @@ def test_verify_attention_matches_the_previous_op_sequence(
     a_new = TPAttention(mesh_device, args, tw, None)
     a_new.set_paged_kv_cache(*caches())
     assert a_new._forward_verify_ok(R, pt_rows, True, pt_groups, n_users, pt_users)
-    pos_groups = [ttnn.slice(cur_pos, (j,), (R,), (T,)) for j in range(T)]
-    out_new = run(a_new, rope_new, spec_pos_groups=pos_groups)
+    out_new = run(a_new, rope_new)
 
     checks = {
         "attention output": (out_old, out_new),
