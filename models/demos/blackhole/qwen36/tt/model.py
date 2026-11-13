@@ -1821,8 +1821,15 @@ class Qwen36Model:
 
     def _warm_verify_body(self, B):
         """One eager pass of the verify body, and of the device sampler over its logits, only to compile their
-        programs before any capture; the outputs are dropped."""
+        programs before any capture; the outputs are dropped. Notes whether the ids come out as the fused argmax's
+        [1, 1, 1, 32] uint32 lanes, the input the one-enqueue step's acceptance is compiled for."""
         outs = self._forward_verify_bucket_tp(n_users=B)
+        ids = outs[2]
+        self._vfy_ids_lanes = (
+            tuple(int(d) for d in ids.shape) == (1, 1, 1, ttnn.TILE_SIZE)
+            and ids.dtype == ttnn.uint32
+            and ids.layout == ttnn.ROW_MAJOR_LAYOUT
+        )
         if self._vfy_sampler is not None:
             self._vfy_sampler.body(outs[0])  # writes the sampler's own persistent draws buffer
         for t in outs:
@@ -1919,11 +1926,50 @@ class Qwen36Model:
         With the GDN state in vLLM KV cache blocks (gdn_blocks), ``mi_prev`` is not used: the caller writes the verify
         tables (GdnBlockState.set_verify_blocks) before the replay.
         """
+        self.verify_enqueue(
+            tokens,
+            positions,
+            mi_prev,
+            page_tables=page_tables,
+            inactive=inactive,
+            rope_deltas=rope_deltas,
+            sample_plan=sample_plan,
+        )
+        T, B = self._vfy_T, self._vfy_B
+        rows = B * T
+        ttnn.synchronize_device(self.device)
+
+        # Replicated ids (the trace argmaxed the replicated logits): one replica is the whole answer,
+        # and it is B*T uint32 instead of B*T x vocab floats.
+        ids = ttnn.to_torch(ttnn.get_device_tensors(self._vfy_ids_out)[0]).reshape(-1)
+        if sample_plan is not None:
+            ids = with_draws(ids[:rows].reshape(B, T), self._vfy_sampler.read(), sample_plan).reshape(-1)
+        ids = [int(v) for v in ids[:rows]]
+        lt = None
+        if read_logits:
+            lt = ttnn.to_torch(ttnn.get_device_tensors(self._vfy_logits_rm_out)[0])
+            lt = lt.reshape(-1, self.vocab_size)[:rows]
+        return ids, self._vfy_rows_out, lt
+
+    def verify_enqueue(
+        self,
+        tokens,
+        positions,
+        mi_prev,
+        page_tables=None,
+        inactive=None,
+        rope_deltas=None,
+        sample_plan=None,
+        accept_rows=None,
+    ):
+        """verify_traced's staging and replays (the verify trace, and the sampler trace with ``sample_plan``), enqueued
+        without waiting; the caller enqueues what follows and reads the outputs (_vfy_ids_out, the sampler's draws,
+        _vfy_rows_out). ``accept_rows``: {spec_step STEP_* row: B ints}, the rows of the step buffer that only the device
+        acceptance reads (spec_accept.StepAccept), staged in the same copy; None stages zeros."""
         assert getattr(self, "_vfy_trace_id", None) is not None, "call record_verify_trace first"
         T, B = self._vfy_T, self._vfy_B
         if sample_plan is not None and self._vfy_sampler is None:
             raise ValueError("verify_traced(sample_plan=...) needs a verify trace prepared with sample=True")
-        rows = B * T
         assert len(tokens) == B, f"expected {B} users, got {len(tokens)}"
         assert all(len(t) == T for t in tokens), f"expected {T} tokens per user"
         assert len(positions) == B and len(mi_prev) == B, "one position and one mi per user"
@@ -1954,9 +2000,9 @@ class Qwen36Model:
                 ttnn.copy_host_to_device_tensor(_h, buf)
             self._vfy_pt_host = pt.clone()  # the caller may reuse its table tensor
 
-        # The rows' tokens, positions and RoPE table rows: one copy into the persistent step buffer.
+        # The rows' tokens, positions and RoPE table rows, and the acceptance rows: one copy into the step buffer.
         _h = ttnn.from_torch(
-            self._vfy_step_host(tokens, positions, rope_deltas),
+            self._vfy_step_host(tokens, positions, rope_deltas, accept_rows),
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=None,
@@ -1971,21 +2017,8 @@ class Qwen36Model:
         ttnn.execute_trace(dev, self._vfy_trace_id, cq_id=0, blocking=False)
         if sample_plan is not None:
             ttnn.execute_trace(dev, self._vfy_sample_trace_id, cq_id=0, blocking=False)
-        ttnn.synchronize_device(dev)
 
-        # Replicated ids (the trace argmaxed the replicated logits): one replica is the whole answer,
-        # and it is B*T uint32 instead of B*T x vocab floats.
-        ids = ttnn.to_torch(ttnn.get_device_tensors(self._vfy_ids_out)[0]).reshape(-1)
-        if sample_plan is not None:
-            ids = with_draws(ids[:rows].reshape(B, T), self._vfy_sampler.read(), sample_plan).reshape(-1)
-        ids = [int(v) for v in ids[:rows]]
-        lt = None
-        if read_logits:
-            lt = ttnn.to_torch(ttnn.get_device_tensors(self._vfy_logits_rm_out)[0])
-            lt = lt.reshape(-1, self.vocab_size)[:rows]
-        return ids, self._vfy_rows_out, lt
-
-    def _vfy_step_host(self, tokens, positions, rope_deltas):
+    def _vfy_step_host(self, tokens, positions, rope_deltas, accept_rows=None):
         """The verify step buffer's rows (spec_step) of B users x T tokens: ``tokens`` B lists of T ids, ``positions`` user
         u's first verify slot (row u*T + j sits at positions[u] + j, which doubles as the decode SDPA's per-row cur_pos and
         makes the hybrid verify causal), ``rope_deltas`` B ints (None: every row takes rope.rope_delta). Rows are
@@ -1995,8 +2028,10 @@ class Qwen36Model:
         pos = self._vfy_row_positions(positions)
         deltas = None if rope_deltas is None else [int(d) for d in rope_deltas for _ in range(T)]
         ridx = rope_rows(pos, self.rope_row_deltas(B * T, deltas), self.rope_table_rows())
-        rows = [None] * VERIFY_STEP_ROWS
+        rows = [[0] * B for _ in range(VERIFY_STEP_ROWS)]
         rows[VERIFY_TOKENS], rows[VERIFY_POSITIONS], rows[VERIFY_ROPE] = tok, pos, ridx
+        for row, values in (accept_rows or {}).items():
+            rows[row] = values
         return pack_u32_rows(rows, width=pack_width(B * T))
 
     def _stage_verify_selectors(self, mi_prev, B, rep):

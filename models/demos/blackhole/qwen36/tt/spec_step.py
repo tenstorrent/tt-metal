@@ -11,6 +11,13 @@ Verify step buffer (Qwen36Model._vfy_step_buf), rows of B * T words, row r = u *
   VERIFY_TOKENS     the token of verify row r
   VERIFY_POSITIONS  its KV position (doubles as the decode SDPA's cur_pos)
   VERIFY_ROPE       its RoPE table row (rope_rows: position plus the row's M-RoPE delta)
+and the rows only the device acceptance of a one-enqueue step reads (spec_accept.StepAccept), B words, one per user:
+  STEP_NUM_VALID    valid drafts of the user's verify row (0 for a padding row)
+  STEP_DRAWN        1 when the row's ids are the sampler's draws (a device-sampled request)
+  STEP_P0           KV position of the user's verify column 0 (0 for a padding row)
+  STEP_ROPE_BASE    RoPE table row of that position (rope_rows with the user's M-RoPE delta)
+  STEP_DECLINED     1 when the next propose drafts nothing for the user, whatever it accepts
+  STEP_KEEP         1 when such a row still gets its anchor slot's drafter KV
 
 Drafter pack (MTPSpecEngine._dr_pack), 2K + 5 rows (drafter_pack):
   0                 pending token of each user [B] (the token draft step 0 embeds)
@@ -28,7 +35,8 @@ PACK_ALIGN = 32  # words per packed row are a multiple of this (128 B)
 ROPE_TABLE_SLACK = 64
 
 VERIFY_TOKENS, VERIFY_POSITIONS, VERIFY_ROPE = range(3)
-VERIFY_STEP_ROWS = 3
+STEP_NUM_VALID, STEP_DRAWN, STEP_P0, STEP_ROPE_BASE, STEP_DECLINED, STEP_KEEP = range(3, 9)
+VERIFY_STEP_ROWS = 9
 
 DRAFT_PENDING = 0
 

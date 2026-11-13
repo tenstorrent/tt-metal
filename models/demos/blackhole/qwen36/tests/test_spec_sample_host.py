@@ -213,9 +213,10 @@ def test_a_device_sampled_verify_returns_the_draws_of_its_sampled_rows(engine, e
 
 
 def test_the_model_reads_draws_only_from_a_sampling_trace(expect_error):
-    model = SimpleNamespace(_vfy_trace_id=1, _vfy_T=4, _vfy_B=1, _vfy_sampler=None)
+    model = Qwen36Model.__new__(Qwen36Model)
+    model._vfy_trace_id, model._vfy_T, model._vfy_B, model._vfy_sampler = 1, 4, 1, None
     with expect_error(ValueError, "sample=True"):
-        Qwen36Model.verify_traced(model, [[1, 2, 3, 4]], [0], [0], sample_plan=object())
+        model.verify_traced([[1, 2, 3, 4]], [0], [0], sample_plan=object())
 
 
 def test_a_moved_row_keeps_its_requests_delta_and_sampling(engine):
