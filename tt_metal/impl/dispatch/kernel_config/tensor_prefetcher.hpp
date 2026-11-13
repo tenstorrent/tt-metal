@@ -12,21 +12,28 @@
 
 namespace tt::tt_metal {
 
+class DispatchMemMap;
+
+// Whether fast dispatch runs the Tensor prefetcher kernels beside the CQ kernels: only on a dispatch
+// engine (not the Tensix dispatch cores) serving a single CQ, with at least
+// tensor_prefetcher_fifo::kMinRegionBytes of its L1 unused above the CQ zones.
+bool dispatch_engine_hosts_tensor_prefetcher(
+    CoreType dispatch_core_type, uint32_t num_hw_cqs, const DispatchMemMap& dispatch_mem_map);
+
 // One of the two Tensor prefetcher kernels that fast dispatch launches on a dispatch engine beside the CQ
 // kernels, and terminates with them. The reader stages weight blocks from DRAM into the engine's L1; the
 // pusher sends staged blocks on to the receivers. Both serve a request FIFO the host writes into the L1
-// region DispatchMemMap::tensor_prefetcher_region_base() names (layout: impl/buffers/tensor_prefetcher_fifo.hpp).
+// region DispatchMemMap::unused_l1_base() names (layout: impl/buffers/tensor_prefetcher_fifo.hpp).
 class TensorPrefetcherKernel : public FDKernel {
 public:
-    enum class Role : uint8_t { Reader, Pusher };
-
+    // `type` is TENSOR_PREFETCHER_READER or TENSOR_PREFETCHER_PUSHER.
     TensorPrefetcherKernel(
         int node_id,
         ChipId device_id,
         ChipId servicing_device_id,
         uint8_t cq_id,
         noc_selection_t noc_selection,
-        Role role,
+        DispatchWorkerType type,
         const ContextDescriptor& descriptor,
         dispatch_core_manager& dispatch_core_manager,
         const GetControlPlaneFn& get_control_plane = {},
@@ -40,7 +47,7 @@ public:
     std::optional<TerminationInfo> GetTerminationInfo() const override;
 
 private:
-    Role role_;
+    DispatchWorkerType type_;
     uint32_t region_base_ = 0;
 };
 

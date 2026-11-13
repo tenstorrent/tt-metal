@@ -603,7 +603,7 @@ void PrefetcherPipeSpaceImpl::set_dram_sender_cores(std::span<const CoreCoord> d
     validate_dram_senders_across_mesh(device_, sender_mapping);
 
     TT_FATAL(
-        dram_sender_placement(device_->impl().get_context_id(), device_->num_hw_cqs()).has_value(),
+        device_->impl().dram_sender_placement().has_value(),
         "set_dram_sender_cores: this device runs no DRAM-sender endpoints");
     const uint32_t alignment = config_page_alignment_for(device_);
 

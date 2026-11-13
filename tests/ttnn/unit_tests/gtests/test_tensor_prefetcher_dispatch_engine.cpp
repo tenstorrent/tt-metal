@@ -9,6 +9,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -17,7 +18,6 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
@@ -49,7 +49,6 @@ using ::tt::tt_metal::ShardOrientation;
 using ::tt::tt_metal::TensorLayout;
 using ::tt::tt_metal::TensorSpec;
 
-constexpr uint32_t kReceivers = 2;
 constexpr uint32_t kTilesPerReceiver = 2;
 constexpr uint32_t kKBlockTiles = 2;
 constexpr uint32_t kBfloat16TileBytes = TILE_HEIGHT * TILE_WIDTH * sizeof(uint16_t);
@@ -68,44 +67,47 @@ protected:
 };
 
 // A receiver-contiguous weight -- one (K, N / receivers) slab per receiver, round-robin over the DRAM banks --
-// and the PrefetcherPipes that deliver it, `ring_entries` blocks deep per receiver.
+// and the PrefetcherPipes that deliver it to `receivers_per_bank` receivers of every bank, `ring_entries`
+// blocks deep per receiver.
 struct ReceiverContiguousCase {
-    ReceiverContiguousCase(tt::tt_metal::distributed::MeshDevice* device, uint32_t ring_entries) {
+    ReceiverContiguousCase(
+        tt::tt_metal::distributed::MeshDevice* device, uint32_t receivers_per_bank, uint32_t ring_entries) {
         const uint32_t num_banks = device->dram_grid_size().x;
-        TT_FATAL(
-            kReceivers % num_banks == 0, "{} receivers do not split evenly over {} DRAM banks", kReceivers, num_banks);
+        const uint32_t num_receivers = receivers_per_bank * num_banks;
         const CoreCoord grid = device->compute_with_storage_grid_size();
-        TT_FATAL(grid.x * grid.y >= kReceivers, "The test needs {} worker receivers", kReceivers);
+        TT_FATAL(grid.x * grid.y >= num_receivers, "The test needs {} worker receivers", num_receivers);
         std::vector<CoreCoord> receivers;
-        for (uint32_t i = 0; i < kReceivers; ++i) {
+        for (uint32_t i = 0; i < num_receivers; ++i) {
             receivers.emplace_back(i % grid.x, i / grid.x);
         }
         // Round-robin slabs: slab s lives in bank s % num_banks, so bank b serves receivers b, b + num_banks, ...
         CoreRangeSet receiver_domain;
         for (uint32_t bank = 0; bank < num_banks; ++bank) {
             CoreRangeSet bank_receivers;
-            for (uint32_t r = bank; r < kReceivers; r += num_banks) {
+            for (uint32_t r = bank; r < num_receivers; r += num_banks) {
                 bank_receivers = bank_receivers.merge(CoreRangeSet(CoreRange(receivers[r])));
             }
             bank_to_receivers.emplace_back(bank, bank_receivers);
             receiver_domain = receiver_domain.merge(bank_receivers);
         }
 
-        block_count = kReceivers;
+        // The validator delivers each receiver's slab in one K block per receiver (its ring size).
+        block_count = num_receivers;
         const uint32_t k = block_count * kKBlockTiles * TILE_HEIGHT;
-        const uint32_t n = kReceivers * kTilesPerReceiver * TILE_WIDTH;
+        const uint32_t n = num_receivers * kTilesPerReceiver * TILE_WIDTH;
         const uint32_t entry_bytes = kKBlockTiles * kTilesPerReceiver * kBfloat16TileBytes;
+        // Up to both of a bank's sender endpoints, each serving at least one receiver.
         space = std::make_unique<metal_exp::PrefetcherPipeSpace>(metal_exp::CreatePrefetcherPipeSpace(
             *device,
-            {.num_dram_senders = 2 * num_banks,
+            {.num_dram_senders = std::min(2u, receivers_per_bank) * num_banks,
              .receiver_domain = receiver_domain,
              .ring_size = ring_entries * entry_bytes,
-             .max_receivers_per_pipe = kReceivers}));
+             .max_receivers_per_pipe = num_receivers}));
         for (auto& pipe : metal_exp::CreatePrefetcherPipesForTensorPrefetcher(*space, bank_to_receivers)) {
             pipes.push_back(std::make_shared<metal_exp::PrefetcherPipe>(std::move(pipe)));
         }
 
-        std::mt19937 rng(0xC0FFEE);
+        std::mt19937 rng(0xC0FFEE + num_receivers);
         std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
         std::vector<::bfloat16> values(static_cast<size_t>(k) * n);
         for (auto& value : values) {
@@ -114,7 +116,7 @@ struct ReceiverContiguousCase {
         const MemoryConfig weight_memory_config(
             BufferType::DRAM,
             NdShardSpec{
-                ttnn::Shape({k, n / kReceivers}),
+                ttnn::Shape({k, n / num_receivers}),
                 CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(num_banks - 1, 0))),
                 ShardOrientation::ROW_MAJOR,
                 ShardDistributionStrategy::ROUND_ROBIN_1D});
@@ -141,35 +143,53 @@ struct ReceiverContiguousCase {
     Tensor weight;
 };
 
-// Prefetches the weight `num_layers` times in one request and validates every delivered entry.
-void prefetch_and_validate(
+// Queues one request for the weight `num_layers` times over.
+void queue_layers(
     tt::tt_metal::distributed::MeshDevice* device, const ReceiverContiguousCase& prefetch, uint32_t num_layers) {
     const std::vector<metal_exp::TensorPrefetcherInput> inputs(
         num_layers, metal_exp::TensorPrefetcherInput{prefetch.weight.mesh_tensor(), prefetch.block_count});
     metal_exp::QueueTensorPrefetcherRequest(*device, prefetch.pipe_refs(), std::nullopt, inputs);
-    auto validator = ttnn::operations::experimental::test::make_tensor_prefetcher_pipe_validator_workload(
-        device, prefetch.weight, num_layers, /*print_stride=*/0, prefetch.pipes, prefetch.bank_to_receivers);
-    tt::tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(), validator, /*blocking=*/false);
-    tt::tt_metal::distributed::Finish(device->mesh_command_queue());
 }
 
-// Every block of one tensor arrives, with rings deep enough to hold it all.
+// Validates every entry of `num_layers` copies of the weight as the receivers consume them.
+void validate_layers(
+    tt::tt_metal::distributed::MeshDevice* device, const ReceiverContiguousCase& prefetch, uint32_t num_layers) {
+    ttnn::operations::experimental::test::test_tensor_prefetcher_pipe_validator(
+        device, prefetch.weight, num_layers, /*print_stride=*/0, prefetch.pipes, prefetch.bank_to_receivers);
+}
+
+// Every block of one tensor arrives, through two-entry rings.
 TEST_F(DispatchEngineTensorPrefetcherFixture, DeliversReceiverContiguousWeight) {
-    ReceiverContiguousCase prefetch(device_, /*ring_entries=*/kReceivers);
+    ReceiverContiguousCase prefetch(device_, /*receivers_per_bank=*/2, /*ring_entries=*/2);
     metal_exp::StartTensorPrefetcher(*device_, {});
-    prefetch_and_validate(device_, prefetch, /*num_layers=*/1);
+    queue_layers(device_, prefetch, /*num_layers=*/1);
+    validate_layers(device_, prefetch, /*num_layers=*/1);
     metal_exp::StopTensorPrefetcher(*device_);
 }
 
 // One-entry rings, several layers: every block after the first waits on the receiver's ack, which crosses to
 // the dispatch engine, and the pipes' cursors wrap and persist across tensors and requests.
 TEST_F(DispatchEngineTensorPrefetcherFixture, TradesCreditsAcrossLayersAndRuns) {
-    ReceiverContiguousCase prefetch(device_, /*ring_entries=*/1);
+    ReceiverContiguousCase prefetch(device_, /*receivers_per_bank=*/2, /*ring_entries=*/1);
     for (uint32_t run = 0; run < 2; ++run) {
         metal_exp::StartTensorPrefetcher(*device_, {});
-        prefetch_and_validate(device_, prefetch, /*num_layers=*/3);
+        queue_layers(device_, prefetch, /*num_layers=*/3);
+        validate_layers(device_, prefetch, /*num_layers=*/3);
         metal_exp::StopTensorPrefetcher(*device_);
     }
+}
+
+// Back-to-back requests for different receiver counts: the stage ring is laid out per receiver count, so the
+// second request waits for the first one's blocks to leave the stage ring before it stages into it.
+TEST_F(DispatchEngineTensorPrefetcherFixture, RelaysOutStageRingForANewReceiverCount) {
+    ReceiverContiguousCase wide(device_, /*receivers_per_bank=*/2, /*ring_entries=*/1);
+    ReceiverContiguousCase narrow(device_, /*receivers_per_bank=*/1, /*ring_entries=*/1);
+    metal_exp::StartTensorPrefetcher(*device_, {});
+    queue_layers(device_, wide, /*num_layers=*/2);
+    queue_layers(device_, narrow, /*num_layers=*/2);
+    validate_layers(device_, wide, /*num_layers=*/2);
+    validate_layers(device_, narrow, /*num_layers=*/2);
+    metal_exp::StopTensorPrefetcher(*device_);
 }
 
 }  // namespace

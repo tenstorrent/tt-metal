@@ -236,8 +236,7 @@ FDKernel* FDKernel::Generate(
                 servicing_device_id,
                 cq_id,
                 noc_selection,
-                type == TENSOR_PREFETCHER_READER ? TensorPrefetcherKernel::Role::Reader
-                                                 : TensorPrefetcherKernel::Role::Pusher,
+                type,
                 descriptor,
                 dispatch_core_manager,
                 get_control_plane,

@@ -115,7 +115,8 @@ private:
     // Whether every endpoint's ranges live in one shared L1.
     enum class EndpointL1 : uint8_t { PerEndpoint, Shared };
 
-    DriscL1Arena(DeviceAddr zone_base, uint32_t zone_size, EndpointL1 endpoint_l1);
+    // A zone every endpoint shares (for_dispatch_engine).
+    DriscL1Arena(DeviceAddr zone_base, uint32_t zone_size);
 
     friend class DriscL1Allocation;
     void release(DeviceAddr base, uint32_t size, const CoreCoord& core);
@@ -132,7 +133,7 @@ private:
     uint32_t drisc_unreserved_size_;
     uint32_t zone_size_ = kSenderStateZoneSize;
     EndpointL1 endpoint_l1_ = EndpointL1::PerEndpoint;
-    // Live ranges within [unreserved_base_, unreserved_base_ + kSenderStateZoneSize), sorted
+    // Live ranges within [unreserved_base_, unreserved_base_ + zone_size_), sorted
     // ascending by base. First-fit allocate over the ranges on the requested core; release
     // coalesces with neighbors implicitly via removal.
     std::vector<LiveRange> live_;
