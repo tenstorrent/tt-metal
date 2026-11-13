@@ -27,7 +27,7 @@ class KimiK31Config(KimiK3Config):
 
     # K3's 1536 B/bank is spent by KDA's long-lived semaphores, MoE routing and dense MLA; a DSA layer's
     # early-Q all-to-all then needs one more 16 B slot per bank (OOM at 1536 with KDA layers 1-2 and DSA
-    # layer 3 in one forward, test_kimi_k3_1_dsa_block.py hybrid window).
+    # layer 3 in one forward, test_kimi_k3_1_dsa_trace.py hybrid_L0_3 window).
     L1_SMALL_SIZE = 2048
 
     # 1-indexed as in the HF config; identical to the full-attention layers.
