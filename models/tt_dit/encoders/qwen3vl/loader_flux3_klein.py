@@ -32,8 +32,7 @@ def flux3_klein_text_config(snapshot: str | os.PathLike) -> dict:
 
 
 def flux3_klein_rope_theta(config: dict) -> float:
-    rope_scaling = config.get("rope_scaling") or {}
-    return float(rope_scaling.get("rope_theta", config.get("rope_theta")))
+    return float((config.get("rope_scaling") or {}).get("rope_theta") or config["rope_theta"])
 
 
 def load_flux3_klein_text_state_dict(snapshot: str | os.PathLike) -> dict[str, torch.Tensor]:
