@@ -83,12 +83,18 @@ def runtime_with(store, *, sp, chunk_size, mesh_shape, mesh_device=None, emb_tp_
         media_embedding_reader=store,
         mesh_device=mesh_device,
         media_buffers=None,
+        _media_partial_buffers={},
     )
 
 
-def splice_chunks(mesh_device, table, tokens, images, store, first_chunk_start, emb_tp_sharded=True):
+def splice_chunks(
+    mesh_device, table, tokens, images, store, first_chunk_start, emb_tp_sharded=True, shard_vocab_on_sp=False
+):
     """Embeddings of tokens[first_chunk_start:] after splicing, prefilled CHUNK tokens at a time.
-    images: (start, num_tokens, key) per image."""
+    images: (start, num_tokens, key) per image.
+
+    shard_vocab_on_sp picks the splice the runtime would pick: the 2D embedding carries the image rows
+    on its reduce-scatter (MediaPartials), the 1D one splices after the embedding (MediaInjectionBuffers)."""
     mesh_shape = tuple(mesh_device.shape)
     emb = TtParallelEmbedding(
         mesh_device,
@@ -98,7 +104,7 @@ def splice_chunks(mesh_device, table, tokens, images, store, first_chunk_start, 
         CCLManager(mesh_device, num_links=get_default_num_links(mesh_device), topology=ttnn.Topology.Linear),
         torch_weight=table,
         dtype=ttnn.bfloat16,
-        shard_vocab_on_sp=False,
+        shard_vocab_on_sp=shard_vocab_on_sp,
     )
     runtime = runtime_with(
         store,
@@ -113,6 +119,9 @@ def splice_chunks(mesh_device, table, tokens, images, store, first_chunk_start, 
         end = min(start + CHUNK, len(tokens))
         chunk_tokens = torch.zeros(CHUNK, dtype=torch.int32)
         chunk_tokens[: end - start] = tokens[start:end]
+        refs = [MediaRef(0, s, s + n, key) for s, n, key in images if s < end and s + n > start]
+        chunks = [PrefillChunk(0, start, end)]
+        partials = TtPrefillRuntime._media_partials(runtime, chunks, refs) if refs and shard_vocab_on_sp else None
         x = emb.forward(
             ttnn.from_torch(
                 chunk_tokens.reshape(1, 1, CHUNK),
@@ -121,13 +130,13 @@ def splice_chunks(mesh_device, table, tokens, images, store, first_chunk_start, 
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=(2, None)),
-            )
+            ),
+            media_fn=(lambda: partials) if partials is not None else None,
         )
         if len(x.shape) == 3:
             x = ttnn.unsqueeze_to_4D(x)
-        refs = [MediaRef(0, s, s + n, key) for s, n, key in images if s < end and s + n > start]
-        if refs:
-            x = TtPrefillRuntime._splice_media(runtime, x, [PrefillChunk(0, start, end)], refs)
+        if refs and not shard_vocab_on_sp:
+            x = TtPrefillRuntime._splice_media(runtime, x, chunks, refs)
         # Inverts activation_mapper. A replicated residual repeats hidden once per TP rank, so keep the first.
         rows = ttnn.to_torch(
             x, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_shape, dims=(2, 3))
@@ -153,6 +162,7 @@ def check(got, want, images, first_chunk_start, seq_len):
 
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (2, 4), (8, 4)])
 @pytest.mark.parametrize("sharded_residual", ["1", "0"], ids=["tp_sharded", "replicated"])
+@pytest.mark.parametrize("shard_vocab_on_sp", [True, False], ids=["partials_2d", "after_embed_1d"])
 @pytest.mark.parametrize(
     "seq_len,layout,first_chunk_start",
     [
@@ -164,7 +174,7 @@ def check(got, want, images, first_chunk_start, seq_len):
     ],
 )
 def test_post_splice_embeddings(
-    mesh_device, device_params, monkeypatch, sharded_residual, seq_len, layout, first_chunk_start
+    mesh_device, device_params, monkeypatch, sharded_residual, shard_vocab_on_sp, seq_len, layout, first_chunk_start
 ):
     monkeypatch.setenv("M3_SHARDED_RESIDUAL", sharded_residual)
     torch.manual_seed(0)
@@ -176,7 +186,9 @@ def test_post_splice_embeddings(
     for s, n, key in images:
         want[s : s + n] = embs[key]
 
-    got = splice_chunks(mesh_device, table, tokens, images, Store(embs), first_chunk_start, sharded_residual == "1")
+    got = splice_chunks(
+        mesh_device, table, tokens, images, Store(embs), first_chunk_start, sharded_residual == "1", shard_vocab_on_sp
+    )
     check(got, want[first_chunk_start:], images, first_chunk_start, seq_len)
 
 
