@@ -1112,10 +1112,22 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         // Subtract runs in an int32 lane and a negative result is not packed as its low byte. The UInt8
         // packer returns 255 for every lane below -1. Since Torch wraps modulo 256 instead, we mask
         // the lane to its low byte before the pack.
+        // A caller's post activations must see the wrapped result and not the raw difference.
+        //   uint8: (d & 0xFF)
+        //   int8:  ((d + 128) & 0xFF) - 128, which also sign-extends the byte for relu, abs and other such ops.
         if (int8_sub) {
-            post_activations.insert(
-                post_activations.begin(),
-                unary::EltwiseUnaryWithParam(unary::UnaryOpType::BITWISE_AND, std::uint32_t{0xFF}));
+            if (!post_activations.empty()) {
+                ttsl::SmallVector<unary::EltwiseUnaryWithParam> wrap_first;
+                if (a_dtype == DataType::INT8) {
+                    wrap_first.emplace_back(unary::UnaryOpType::ADD_UNARY_SFPU, std::int32_t{128});
+                    wrap_first.emplace_back(unary::UnaryOpType::BITWISE_AND, std::uint32_t{0xFF});
+                    wrap_first.emplace_back(unary::UnaryOpType::ADD_UNARY_SFPU, std::int32_t{-128});
+                } else {
+                    wrap_first.emplace_back(unary::UnaryOpType::BITWISE_AND, std::uint32_t{0xFF});
+                }
+                post_activations.insert(post_activations.begin(), wrap_first.begin(), wrap_first.end());
+            }
+            post_activations.emplace_back(unary::UnaryOpType::BITWISE_AND, std::uint32_t{0xFF});
         }
 
         bool is_integer_division =

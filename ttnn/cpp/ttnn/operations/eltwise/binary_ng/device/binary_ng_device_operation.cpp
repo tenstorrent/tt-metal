@@ -393,6 +393,9 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
             "Output dtype {} must match the input dtype {} for 8-bit subtract",
             output_dtype,
             input_tensor_a.dtype());
+        TT_FATAL(
+            attributes.lhs_activations.empty() && attributes.rhs_activations.empty(),
+            "Input activations are not supported for 8-bit subtract (including subalpha)");
     }
 
     BinaryNgDeviceOperation::validate_on_program_cache_hit(attributes, tensor_args);
