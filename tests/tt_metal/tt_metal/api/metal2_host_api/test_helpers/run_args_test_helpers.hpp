@@ -132,7 +132,7 @@ inline ProgramSpec MakeBorrowedDFBProgramSpecForRunArgs(
 }
 
 // Helper: read the patched tensor binding address out of a kernel's CRTA buffer.
-// Mirrors the offset arithmetic UpdateTensorArgs uses internally, so a regression in either
+// Mirrors the offset arithmetic Program::update_tensor_args uses internally, so a regression in either
 // site shows up as a test failure.
 inline uint32_t ReadBindingAddressFromCRTA(
     const Program& program, const std::string& kernel_name, const std::string& tensor_parameter_name) {

@@ -919,7 +919,7 @@ uint64_t per_device_values_version(MeshWorkload& workload, const MeshCoordinateR
     return per_device != nullptr ? per_device->values_version : 0;
 }
 
-// SetProgramRunArgs sets every arg on every device: all per-device values are dropped.
+// Program::set_program_run_args sets every arg on every device: all per-device values are dropped.
 TEST_F(CommandListMultiDeviceTest, Metal2SetProgramRunArgsDropsPerDeviceValues) {
     auto workload = make_l1_write_workload(*mesh_device_, kAddressA, kValueA, "per_device_set_drops");
     const MeshCoordinateRange all_devices(mesh_device_->shape());
@@ -958,8 +958,8 @@ TEST_F(CommandListMultiDeviceTest, Metal2SetProgramRunArgsDropsPerDeviceValues) 
     }
 }
 
-// A program moved to another workload leaves its drops behind: a SetProgramRunArgs pending from the first workload
-// does not drop the values the second one sets.
+// A program moved to another workload leaves its drops behind: a Program::set_program_run_args pending from the first
+// workload does not drop the values the second one sets.
 TEST_F(CommandListMultiDeviceTest, Metal2MovedProgramLeavesPendingDropsBehind) {
     auto first = make_l1_write_workload(*mesh_device_, kAddressA, kValueA, "per_device_moved");
     const MeshCoordinateRange all_devices(mesh_device_->shape());
@@ -1074,7 +1074,8 @@ TEST_F(CommandListMultiDeviceTest, Metal2FieldRemovedAfterCachedEnqueueAndSetAga
     run_and_check([](uint32_t index) { return index == 0 ? kValueB : per_device_value(index); });
 }
 
-// A trace keeps the per-device values it captured; a later SetProgramRunArgs drops them for eager enqueues only.
+// A trace keeps the per-device values it captured; a later Program::set_program_run_args drops them for eager enqueues
+// only.
 TEST_F(CommandListMultiDeviceTest, Metal2TraceKeepsPerDeviceValuesAfterSetProgramRunArgs) {
     auto workload = make_l1_write_workload(*mesh_device_, kAddressA, kValueA, "per_device_trace_kept");
     const MeshCoordinateRange all_devices(mesh_device_->shape());

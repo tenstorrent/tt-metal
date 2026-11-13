@@ -203,7 +203,7 @@ TEST_F(GlobalSemaphoreMetal2Test, ValuePersistsAcrossPrograms) {
     EXPECT_EQ(ReadWord(mesh_device, kHub, sem.address()), 2 * kPerRun);
 }
 
-// The same compiled program counts into a different semaphore after UpdateProgramRunArgs supplies only the
+// The same compiled program counts into a different semaphore after Program::update_program_run_args supplies only the
 // new semaphore.
 TEST_F(GlobalSemaphoreMetal2Test, UpdateProgramRunArgsSwitchesSemaphore) {
     auto& mesh_device = *devices_.at(0);
@@ -457,7 +457,7 @@ TEST_F(GlobalSemaphoreQuasarTest, ManyToOneUpThenDown) {
     EXPECT_EQ(report[1], 0u) << "hub did not drain the semaphore";
 }
 
-// The value persists across programs, and UpdateProgramRunArgs switches the program to another semaphore.
+// The value persists across programs, and Program::update_program_run_args switches the program to another semaphore.
 TEST_F(GlobalSemaphoreQuasarTest, ValuePersistsAndUpdateSwitchesSemaphore) {
     auto& mesh_device = *devices_.at(0);
     auto& cq = mesh_device.mesh_command_queue();

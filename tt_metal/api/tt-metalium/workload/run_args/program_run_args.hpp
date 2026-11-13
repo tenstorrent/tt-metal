@@ -151,15 +151,15 @@ struct ProgramRunArgs {
     using GlobalSemaphoreArgument = std::reference_wrapper<const GlobalSemaphore>;
 
     // A GlobalSemaphoreArgument must be specified:
-    //  For EVERY GlobalSemaphoreParameter in the ProgramSpec, when calling SetProgramRunArgs.
-    //  For any SUBSET of GlobalSemaphoreParameters, when calling UpdateProgramRunArgs.
+    //  For EVERY GlobalSemaphoreParameter in the ProgramSpec, when calling Program::set_program_run_args.
+    //  For any SUBSET of GlobalSemaphoreParameters, when calling Program::update_program_run_args.
     //
     // The supplied GlobalSemaphore MUST live on the MeshDevice the Program was built for.
     //
     // CAUTION: GlobalSemaphore is an RAII object; copies share the same L1 allocation. The user is
     //          responsible for keeping it (or a copy of it) alive until the last Program execution that
     //          uses it has completed on the device. A stale binding to a destroyed GlobalSemaphore
-    //          (e.g. one retained by an UpdateProgramRunArgs call that omits it) will produce undefined
+    //          (e.g. one retained by a Program::update_program_run_args call that omits it) will produce undefined
     //          behavior.
     Table<GlobalSemaphoreParamName, GlobalSemaphoreArgument> global_semaphore_args;
 

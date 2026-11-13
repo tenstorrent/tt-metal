@@ -985,23 +985,23 @@ public:
     // ONLY create_program_artifacts, returning a single ProgramArtifacts (one
     // ProgramSpec + ProgramRunArgs + any op-owned tensors). The adapter maps
     // that same ProgramSpec onto every range in tensor_coords via
-    // tt::tt_metal::experimental::MakeMeshWorkloadFromSpecs (occupancy = mesh devices that
+    // the MeshWorkload constructor (occupancy = mesh devices that
     // hold a tensor shard). A factory whose programs vary across the mesh is a
     // MeshWorkloadSpecFactoryConcept instead.
     //
     // On cache miss: the adapter calls create_program_artifacts once, builds a
-    // MeshWorkload via MakeMeshWorkloadFromSpecs, resolves each TensorArgument
+    // MeshWorkload via the MeshWorkload constructor, resolves each TensorArgument
     // against the combined enumeration of io tensors (from tensor_args /
     // tensor_return_value) followed by the factory's op-owned tensors
     // (pointer-identity match within the call), parks op-owned tensors in
     // shared_variables so their device allocation outlives the miss, then
-    // applies the initial ProgramRunArgs via SetProgramRunArgs.
+    // applies the initial ProgramRunArgs via Program::set_program_run_args.
     //
     // On cache hit: the adapter enumerates fresh io tensors, appends the parked
     // op-owned tensors, rebuilds a TensorArgument for every binding using the
-    // stored indices, and applies via tt::tt_metal::experimental::UpdateTensorArgs — no Program
+    // stored indices, and applies via Program::update_tensor_args — no Program
     // rebuild. Op-owned tensors are re-patched even though their address is
-    // unchanged, because UpdateTensorArgs is currently all-or-nothing.
+    // unchanged, because Program::update_tensor_args is currently all-or-nothing.
     //
     // Contract: every TensorArgument returned by the factory must reference a
     // MeshTensor reachable from tensor_args / tensor_return_value, or one of the
@@ -1108,7 +1108,7 @@ public:
             }
         }
 
-        // Metal 2.0's MakeMeshWorkloadFromSpecs needs a MeshDevice; pull it from the first device
+        // The Metal 2.0 MeshWorkload constructor needs a MeshDevice; pull it from the first device
         // tensor reachable from tensor_args, falling back to tensor_return_value for output-only
         // ops (e.g. rand) whose tensor_args carry no input tensor, and then, as launch does, to the
         // MeshDevice* in operation_attributes of an op with no tensor at all.
@@ -1321,10 +1321,10 @@ public:
 
     // Like ProgramSpecMeshWorkloadFactoryAdapter (cache-miss build inherited unchanged), but the
     // cache-hit path calls the factory's override_runtime_arguments and applies the returned
-    // ProgramRunArgs via UpdateProgramRunArgs instead of the base's tensor-only UpdateTensorArgs.
-    // PrefetcherPipes are rebound from operation_attributes_t::prefetcher_pipes either way.
-    // The miss path applies create_program_artifacts' run args, not the override, so per-coordinate
-    // run args must come from a MeshWorkloadSpecFactoryConcept factory's create_mesh_workload_artifacts.
+    // ProgramRunArgs via Program::update_program_run_args instead of the base's tensor-only
+    // Program::update_tensor_args. PrefetcherPipes are rebound from operation_attributes_t::prefetcher_pipes either
+    // way. The miss path applies create_program_artifacts' run args, not the override, so per-coordinate run args must
+    // come from a MeshWorkloadSpecFactoryConcept factory's create_mesh_workload_artifacts.
     template <CustomProgramSpecFactoryConcept CustomSpecFactory>
     struct CustomProgramSpecMeshWorkloadFactoryAdapter : ProgramSpecMeshWorkloadFactoryAdapter<CustomSpecFactory> {
         using Base = ProgramSpecMeshWorkloadFactoryAdapter<CustomSpecFactory>;
@@ -1353,7 +1353,7 @@ public:
     //
     // Adapts a MeshWorkloadSpecFactoryConcept factory: one create_mesh_workload_artifacts call
     // returns the workload-scoped resources plus a ProgramSpec and ProgramRunArgs per coordinate
-    // range, which the adapter realises into a MeshWorkload via MakeMeshWorkloadFromSpecs.
+    // range, which the adapter realises into a MeshWorkload via the MeshWorkload constructor.
     //
     // Resources are parked once and shared by every range's shared_variables.
     //
@@ -1365,8 +1365,8 @@ public:
     // Per-device run args. A factory whose devices differ only in a few named kernel run args declares
     // `static constexpr bool uses_per_device_run_args = true`, lists each device's values in
     // PerCoordProgram::per_device_run_params. Each range then runs:
-    // - merged: one program with per-device run args (experimental::UpdateProgramRunArgsForDevice), when the range has
-    //   several devices and ArePerDeviceRuntimeArgsSupported holds;
+    // - merged: one program with per-device run args (MeshWorkload::update_program_run_args_for_device), when the
+    //   range has several devices and ArePerDeviceRuntimeArgsSupported holds;
     // - split: otherwise, one program per coordinate, each with the base run args overlaid with its device's values.
     // The choice is made at the cache miss from the declaration, not from the miss's values. A merged entry cannot be
     // hit during light-metal capture (clear the program cache first); entries built during capture stay split. Every
@@ -1379,9 +1379,9 @@ public:
     //   under per-device args constant across calls: a changed base word under a per-device arg rebuilds the
     //   per-device commands at the next enqueue.
     // - `static constexpr bool fixed_per_device_run_args = true` (opt-in, no override): the per-device values are set
-    //   once, at the cache miss, and a hit only refreshes the tensor bindings (UpdateTensorArgs keeps per-device
-    //   values). Only for values that depend on nothing but the device's coordinate and the op's hashed attributes
-    //   (a rank, a fabric route): every hit keeps the miss's values.
+    //   once, at the cache miss, and a hit only refreshes the tensor bindings (Program::update_tensor_args keeps
+    //   per-device values). Only for values that depend on nothing but the device's coordinate and the op's hashed
+    //   attributes (a rank, a fabric route): every hit keeps the miss's values.
     // A per-device factory with neither does not compile, so a forgotten override cannot silently keep the miss's
     // values.
     // -----------------------------------------------------------------------
@@ -1555,7 +1555,7 @@ public:
         }
 
         // Per-device run args with `fixed_per_device_run_args`, cache hit: the per-device values set at the miss stay;
-        // only the tensor bindings are refreshed (UpdateTensorArgs keeps per-device values).
+        // only the tensor bindings are refreshed (Program::update_tensor_args keeps per-device values).
         static void apply_fixed_per_device_run_args(
             cached_mesh_workload_t& cached_workload,
             const operation_attributes_t& attrs,

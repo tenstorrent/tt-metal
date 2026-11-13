@@ -329,9 +329,9 @@ std::pair<Program*, PerDeviceRuntimeArgs*> MeshWorkloadImpl::per_device_target(
     TT_FATAL(
         is_metal2 == metal2,
         "{}",
-        metal2 ? "experimental::UpdateProgramRunArgsForDevice requires a Metal 2.0 (ProgramSpec) program"
+        metal2 ? "MeshWorkload::update_program_run_args_for_device requires a Metal 2.0 (ProgramSpec) program"
                : "Metal 2.0 (ProgramSpec) programs set per-device values of named run args with "
-                 "experimental::UpdateProgramRunArgsForDevice");
+                 "MeshWorkload::update_program_run_args_for_device");
     TT_FATAL(
         !program_range.wraparound_shape().has_value(),
         "Per-device runtime args are not supported for wraparound program ranges ({})",
@@ -492,7 +492,8 @@ void MeshWorkloadImpl::clear_per_device_runtime_args(
 }
 
 namespace {
-// Applies `program`'s pending drops (Metal 2.0 SetProgramRunArgs / UpdateProgramRunArgs) to its per-device args.
+// Applies `program`'s pending drops (Metal 2.0 Program::set_program_run_args / Program::update_program_run_args) to its
+// per-device args.
 void apply_run_arg_drops(PerDeviceRuntimeArgs& per_device, Program& program) {
     auto& drops = program.impl().per_device_run_arg_drops();
     if (!drops.any_pending()) {
@@ -1139,8 +1140,8 @@ ResolvedNamedArgs resolve_named_args(const Program& program, const ProgramRunArg
     const auto& program_impl = program.impl();
     TT_FATAL(
         program_impl.created_from_spec() || program_impl.has_metal2_registry(),
-        "UpdateProgramRunArgsForDevice requires a Metal 2.0 (ProgramSpec) program; legacy programs use "
-        "distributed::SetRuntimeArgsPerDevice");
+        "MeshWorkload::update_program_run_args_for_device requires a Metal 2.0 (ProgramSpec) program; legacy "
+        "programs use distributed::SetRuntimeArgsPerDevice");
     TT_FATAL(
         args.tensor_args.empty() && args.dfb_run_overrides.empty() && args.advanced_options.sram_arena_args.empty() &&
             args.advanced_options.prefetcher_pipe_args.empty(),

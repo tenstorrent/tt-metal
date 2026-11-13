@@ -10,14 +10,15 @@
 //   enqueue rebuilds the per-device command images (what reset=1 cost before same values were detected).
 // - ProgramPerDevice: the pattern per-device runtime args replace, one program per device.
 // - Metal2/...: a Metal 2.0 program on the mesh with 30 named common run args; every iteration calls
-//   UpdateProgramRunArgs first. mode=0: no per-device values, update "address". mode=1: the 30 args have per-device
-//   values, update "address" (no drop). mode=2: update the 30 args (dropping their per-device values), then set the
-//   same per-device values again on every device. mode=3: only set the same per-device values again (no update).
+//   Program::update_program_run_args first. mode=0: no per-device values, update "address". mode=1: the 30 args have
+//   per-device values, update "address" (no drop). mode=2: update the 30 args (dropping their per-device values), then
+//   set the same per-device values again on every device. mode=3: only set the same per-device values again (no
+//   update).
 // Each iteration enqueues the workload once (non-blocking); the queue is drained outside the timed region.
 // - Setter/...: the per-device setters alone (no enqueue), one device per call, with matched workloads so the legacy
 //   and Metal 2.0 paths set the same words: api=0 legacy experimental::SetRuntimeArgsForDevice / SetCommonRuntimeArgs
-//   (one call per field and device), api=1 experimental::UpdateProgramRunArgsForDevice (one call per device). kind=0:
-//   30 scalar common args; kind=1: one scalar runtime arg on each of `cores` cores (0: the whole worker grid).
+//   (one call per field and device), api=1 MeshWorkload::update_program_run_args_for_device (one call per device).
+//   kind=0: 30 scalar common args; kind=1: one scalar runtime arg on each of `cores` cores (0: the whole worker grid).
 //   changed=1 alternates between two value sets (changed=0 sets the same values every iteration). The
 //   `per_arg_device` counter is the time per (arg x device).
 

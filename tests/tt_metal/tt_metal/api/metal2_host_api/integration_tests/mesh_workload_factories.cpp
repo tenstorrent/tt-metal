@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Real-hardware tests for Metal 2.0 MeshWorkload factory APIs (WH/BH).
+// Real-hardware tests for Metal 2.0 MeshWorkload constructors that take ProgramSpecs (WH/BH).
 //
-// These tests prove the ProgramSpec -> MakeMeshWorkloadFromSpec(s) -> MeshWorkload enqueue -> verify
+// These tests prove the ProgramSpec -> MeshWorkload constructors -> MeshWorkload enqueue -> verify
 // pipeline end-to-end on real Wormhole B0 and Blackhole hardware.
 
 #include <gtest/gtest.h>
@@ -247,12 +247,12 @@ TEST_F(MeshWorkloadFactoryHWTest, MakeMeshWorkloadFromSpecSupportsRepeatedEnqueu
 TEST_F(MeshWorkloadFactorySlowDispatchHWTest, FactoryMethodsSupportSlowDispatch) {
     auto mesh_device = devices_.at(0);
 
-    // Exercise the single-spec factory through slow dispatch.
+    // Exercise the single-spec constructor through slow dispatch.
     distributed::MeshWorkload single_workload(*mesh_device, MakeScratchpadSpec());
     SetScratchpadArgs(single_workload);
     EnqueueAndCheckScratchpad(mesh_device, single_workload);
 
-    // Exercise the mapped-spec factory through slow dispatch.
+    // Exercise the mapped-spec constructor through slow dispatch.
     std::unordered_map<distributed::MeshCoordinateRange, ProgramSpec> specs;
     specs.emplace(distributed::MeshCoordinateRange(mesh_device->shape()), MakeScratchpadSpec());
     distributed::MeshWorkload mapped_workload(*mesh_device, specs);

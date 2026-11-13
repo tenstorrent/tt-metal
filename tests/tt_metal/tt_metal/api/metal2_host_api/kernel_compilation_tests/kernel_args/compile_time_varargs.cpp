@@ -105,7 +105,7 @@ void kernel_main() {
     spec.kernels = {dm_kernel};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
 
-    // MakeProgramFromSpec compiles; OOB template index must fail that build.
+    // The Program constructor compiles; OOB template index must fail that build.
     EXPECT_ANY_THROW(Program(*mesh_device_, spec));
 }
 
@@ -293,7 +293,7 @@ void kernel_main() {
     spec.kernels = {dm_kernel};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
 
-    // MakeProgramFromSpec compiles; the OOB constant evaluation must fail that build.
+    // The Program constructor compiles; the OOB constant evaluation must fail that build.
     EXPECT_ANY_THROW(Program(*mesh_device_, spec));
 }
 

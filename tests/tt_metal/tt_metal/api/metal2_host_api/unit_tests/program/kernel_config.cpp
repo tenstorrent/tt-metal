@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// KernelSpec options that MakeProgramFromSpec forwards into the lowered kernel / DFB config.
+// KernelSpec options that the Program constructor forwards into the lowered kernel / DFB config.
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>

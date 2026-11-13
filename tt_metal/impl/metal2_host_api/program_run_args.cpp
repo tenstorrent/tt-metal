@@ -48,8 +48,9 @@ const experimental::AdvancedKernelRunArgs::Varargs& kernel_common_runtime_vararg
     return kp.advanced_options.common_runtime_varargs;
 }
 
-// UpdateProgramRunArgs drops the per-device values of the named args it lists (see ProgramImpl::PerDeviceRunArgDrops).
-// Tensor args, DFB overrides and varargs cannot have per-device values, so only named args are recorded.
+// Program::update_program_run_args drops the per-device values of the named args it lists (see
+// ProgramImpl::PerDeviceRunArgDrops). Tensor args, DFB overrides and varargs cannot have per-device values, so only
+// named args are recorded.
 static void RecordPerDeviceRunArgDrops(detail::ProgramImpl& program_impl, const ProgramRunArgs& params) {
     if (!program_impl.tracks_per_device_run_args()) {
         return;
@@ -310,8 +311,8 @@ static void report_tensor_arg_mismatch(
 }
 
 // Internal validation function - validates a TensorArgument list against the Program's TensorParameters.
-// Shared by the full path (SetProgramRunArgs, UpdateTensorArgs; require_all=true) and the arbitrary
-// partial-update path (UpdateProgramRunArgs; require_all=false).
+// Shared by the full path (Program::set_program_run_args, Program::update_tensor_args; require_all=true) and the
+// arbitrary partial-update path (Program::update_program_run_args; require_all=false).
 //   - No duplicate tensor_parameter_name entries
 //   - Every entry references a TensorParameter declared in the ProgramSpec
 //   - The supplied MeshTensor's TensorSpec matches the binding's expected TensorSpec, with the
@@ -551,9 +552,10 @@ void ValidateDFBRunOverrides(const detail::ProgramImpl& program_impl, const Prog
             TT_FATAL(
                 require_all || params.tensor_args.contains(*tensor_name),
                 "dfb_run_overrides resizes borrowed-memory DFB '{}', but its backing TensorParameter '{}' was "
-                "not supplied in this UpdateProgramRunArgs. Resizing a borrowed DFB on the partial-update fast "
-                "path requires supplying its backing tensor, so the per-bank fit check can re-validate against "
-                "the new size (the full SetProgramRunArgs path enforces this by requiring all tensors).",
+                "not supplied in this Program::update_program_run_args. Resizing a borrowed DFB on the "
+                "partial-update fast path requires supplying its backing tensor, so the per-bank fit check can "
+                "re-validate against the new size (the full Program::set_program_run_args path enforces this by "
+                "requiring all tensors).",
                 dfb_spec_name,
                 *tensor_name);
         }
@@ -561,8 +563,8 @@ void ValidateDFBRunOverrides(const detail::ProgramImpl& program_impl, const Prog
 }
 
 // Validates a PrefetcherPipeArgument list against the Program's PrefetcherPipeParameters.
-// Shared by the full path (SetProgramRunArgs; require_all=true) and the partial-update path
-// (UpdateProgramRunArgs; require_all=false).
+// Shared by the full path (Program::set_program_run_args; require_all=true) and the partial-update path
+// (Program::update_program_run_args; require_all=false).
 //   - Every entry references a PrefetcherPipeParameter declared in the ProgramSpec.
 //   - The supplied pipe lives on the MeshDevice the Program was built for.
 //   - The supplied pipe's geometry (receiver nodes, ring size) matches the parameter's. The spec
@@ -572,7 +574,7 @@ void ValidateDFBRunOverrides(const detail::ProgramImpl& program_impl, const Prog
 //     unless that pipe has the bound one's binding key (a re-carve at the same addresses), which
 //     replaces it. Re-supplying the same object is a no-op.
 //   - When require_all is true: every declared parameter must be supplied, unless it is already
-//     bound (the binding is program-lifetime state, so a later full SetProgramRunArgs may omit it).
+//     bound (the binding is program-lifetime state, so a later full Program::set_program_run_args may omit it).
 // Pipe-object-dependent checks that need the slot (lane capacity, relay ring agreement) run at
 // bind time in ProgramImpl::bind_prefetcher_pipe_parameters.
 void ValidatePrefetcherPipeArgs(
@@ -635,7 +637,7 @@ void ValidatePrefetcherPipeArgs(
 
 // Bind every supplied PrefetcherPipe to its parameter's slots, as one all-or-nothing batch: the
 // program preflights every binding (slot geometry, credit lanes, relay ring agreement) before it
-// mutates anything, so a rejected SetProgramRunArgs leaves no parameter half-bound. Sticky: an
+// mutates anything, so a rejected Program::set_program_run_args leaves no parameter half-bound. Sticky: an
 // already-bound parameter re-supplied with the same object is a no-op (validation rejected a
 // different object).
 void BindPrefetcherPipeArgs(
@@ -830,7 +832,7 @@ void ValidateProgramRunArgs(const Program& program, const ProgramRunArgs& params
     // Kernels whose schema declares no named RTAs or CRTAs (scalar or array), no vararg RTAs, and no
     // vararg CRTAs have no runtime arguments to supply per enqueue and do not need a kernel_run_args
     // entry. This holds even if the kernel binds tensors: a TensorBinding's base address (and any
-    // dynamic accessor fields) is filled automatically by SetProgramRunArgs for every binding-bearing
+    // dynamic accessor fields) is filled automatically by Program::set_program_run_args for every binding-bearing
     // kernel — including a binding-only kernel omitted from kernel_run_args, via its second pass —
     // so tensor bindings alone no longer force an (otherwise-empty) kernel_run_args entry.
     auto registered_names = program_impl.get_registered_kernel_names();
@@ -1026,7 +1028,7 @@ void AttachBorrowedDFBBuffers(
 }
 
 // ============================================================================
-// PUBLIC ENTRY POINTS: SetProgramRunArgs + UpdateTensorArgs
+// PUBLIC ENTRY POINTS: Program::set_program_run_args + Program::update_tensor_args
 // ============================================================================
 
 void Program::set_program_run_args(const ProgramRunArgs& params, ValidationMode validation) {
@@ -1036,7 +1038,7 @@ void Program::set_program_run_args(const ProgramRunArgs& params, ValidationMode 
     // schema lives on the spec). Legacy Programs configure runtime args via SetRuntimeArgs.
     TT_FATAL(
         impl().created_from_spec(),
-        "SetProgramRunArgs requires a Metal 2.0 Program. "
+        "Program::set_program_run_args requires a Metal 2.0 Program. "
         "For a legacy Program, use SetRuntimeArgs / SetCommonRuntimeArgs.");
 
     // Validate parameters against the schema (can be skipped for trusted inputs, e.g. cached-program
@@ -1075,7 +1077,7 @@ void Program::set_program_run_args(const ProgramRunArgs& params, ValidationMode 
     // Append a kernel's scratchpad CRTA section to `out`, in binding order: one word per scratchpad
     // binding, holding the scratchpad's allocated L1 base address. On the factory path,
     // reserve_runtime_arg_buffers + allocate_scratchpads may already have filled this; on the
-    // legacy order (SetProgramRunArgs before allocate_scratchpads) the address is 0 here and is
+    // legacy order (Program::set_program_run_args before allocate_scratchpads) the address is 0 here and is
     // patched later. On any re-assembly the handle already carries the allocated address, so it
     // is filled directly. The section is always present (sized by the kernel's scratchpad
     // bindings), so the buffer's word count is stable across re-set calls (install_crtas asserts
@@ -1100,7 +1102,7 @@ void Program::set_program_run_args(const ProgramRunArgs& params, ValidationMode 
     };
 
     // Install a kernel's assembled CRTA buffer. set_common_runtime_args allocates storage but fatals
-    // if called twice, so it can only be used the first time; on subsequent SetProgramRunArgs calls
+    // if called twice, so it can only be used the first time; on subsequent Program::set_program_run_args calls
     // (e.g. re-enqueue with new args) the already-allocated buffer is patched in place. Shared by the
     // main kernel_run_args loop and the binding-only second pass so both handle the re-set case.
     auto install_crtas = [](const std::shared_ptr<Kernel>& kernel,
@@ -1155,11 +1157,11 @@ void Program::set_program_run_args(const ProgramRunArgs& params, ValidationMode 
         // addresses, vararg_0 ... vararg_{M-1}].
         // Named RTAs (scalar and array) are scattered to their declaration slots via the schema's
         // name->slot indexes (one hash lookup per supplied arg, O(N)/node — matching how
-        // UpdateProgramRunArgs serializes); varargs are positional and follow the named section.
+        // Program::update_program_run_args serializes); varargs are positional and follow the named section.
         if (!kernel->cores_with_runtime_args().empty()) {
             // ---- Fast path (subsequent call): the per-node RTA buffers already exist, sized and
             // allocated by a prior call. Patch them in place, iterating ONLY the supplied args —
-            // exactly as UpdateProgramRunArgs does (and as ValidateProgramRunArgs iterates). This
+            // exactly as Program::update_program_run_args does (and as ValidateProgramRunArgs iterates). This
             // deliberately avoids the first-call machinery below: no per-call node->args lookup
             // maps and no walk over the kernel's full logical-core set. That bookkeeping exists
             // only to *join* a node's named + vararg sections into one combined buffer for the
@@ -1179,8 +1181,8 @@ void Program::set_program_run_args(const ProgramRunArgs& params, ValidationMode 
                     RuntimeArgsData& rta = kernel->runtime_args_data(node);
                     TT_FATAL(
                         rta.data() != nullptr,
-                        "SetProgramRunArgs fast path: kernel '{}' node {} has no allocated RTA buffer though the "
-                        "kernel reports prior runtime args. Internal invariant violation.",
+                        "Program::set_program_run_args fast path: kernel '{}' node {} has no allocated RTA buffer "
+                        "though the kernel reports prior runtime args. Internal invariant violation.",
                         kernel_name,
                         node.str());
                     rta[s->second] = value.to_uint32();
@@ -1197,8 +1199,8 @@ void Program::set_program_run_args(const ProgramRunArgs& params, ValidationMode 
                     RuntimeArgsData& rta = kernel->runtime_args_data(node);
                     TT_FATAL(
                         rta.data() != nullptr,
-                        "SetProgramRunArgs fast path: kernel '{}' node {} has no allocated RTA buffer though the "
-                        "kernel reports prior runtime args. Internal invariant violation.",
+                        "Program::set_program_run_args fast path: kernel '{}' node {} has no allocated RTA buffer "
+                        "though the kernel reports prior runtime args. Internal invariant violation.",
                         kernel_name,
                         node.str());
                     WriteArrayArgValue(rta.data(), a->second, value, kernel_name.get(), name);
@@ -1211,7 +1213,8 @@ void Program::set_program_run_args(const ProgramRunArgs& params, ValidationMode 
                 RuntimeArgsData& rta = kernel->runtime_args_data(node);
                 TT_FATAL(
                     rta.data() != nullptr,
-                    "SetProgramRunArgs fast path: kernel '{}' node {} has varargs but no allocated RTA buffer.",
+                    "Program::set_program_run_args fast path: kernel '{}' node {} has varargs but no "
+                    "allocated RTA buffer.",
                     kernel_name,
                     node.str());
                 uint32_t* vdst = rta.data() + rta_vararg_offset;
@@ -1355,7 +1358,7 @@ void Program::set_program_run_args(const ProgramRunArgs& params, ValidationMode 
         }
         // Binding-only kernel: its CRTA buffer is exactly the binding sections (it has
         // no named CRTAs or varargs, else validation would have required a kernel_run_args entry).
-        // install_crtas allocates the buffer on the first SetProgramRunArgs call and patches it in place
+        // install_crtas allocates the buffer on the first Program::set_program_run_args call and patches it in place
         // on later ones (e.g. re-enqueue with a new tensor), mirroring the main loop.
         // Likewise, each node's RTA buffer is exactly the per-node TensorBinding section.
         if (const uint32_t per_node_words = kernel->get_rta_layout().binding_section_words; per_node_words > 0) {
@@ -1416,11 +1419,12 @@ void Program::update_tensor_args(
     // would also fail the initialized-check below, but this gives the accurate reason.)
     TT_FATAL(
         program_impl.created_from_spec(),
-        "UpdateTensorArgs requires a Metal 2.0 Program. "
+        "Program::update_tensor_args requires a Metal 2.0 Program. "
         "For a legacy Program, use SetRuntimeArgs / SetCommonRuntimeArgs.");
     TT_FATAL(
         program_impl.program_run_args_initialized(),
-        "UpdateTensorArgs called on Program before SetProgramRunArgs. Call SetProgramRunArgs at least once first.");
+        "Program::update_tensor_args called on Program before Program::set_program_run_args. Call "
+        "Program::set_program_run_args at least once first.");
 
     // Validate the TensorArgument list (shared with the full-path validator).
     if (validation == ValidationMode::FULL) {
@@ -1428,7 +1432,7 @@ void Program::update_tensor_args(
     }
 
     // Build a tensor_parameter_name -> MeshTensor lookup.
-    // As in SetProgramRunArgs, this assumes lockstep mesh allocation:
+    // As in Program::set_program_run_args, this assumes lockstep mesh allocation:
     // a single device-independent value set per binding.
     std::unordered_map<std::string, const MeshTensor*> tensor_by_param;
     tensor_by_param.reserve(tensor_args.size());
@@ -1441,7 +1445,7 @@ void Program::update_tensor_args(
     // handle.addr_crta_offset: the always-present address word, plus any runtime accessor
     // field words (shape, when dynamic_tensor_shape is set). The rest of the buffer (named
     // CRTAs, vararg CRTAs) is left untouched and retains the values installed by the most
-    // recent SetProgramRunArgs call. The kernel's RTA buffers are also left untouched, except
+    // recent Program::set_program_run_args call. The kernel's RTA buffers are also left untouched, except
     // for the per-node TensorBinding section (a per-node binding's address lives there).
     for (const auto& kernel_name : program_impl.get_registered_kernel_names()) {
         std::shared_ptr<Kernel> kernel = program_impl.get_kernel_by_spec_name(kernel_name);
@@ -1455,13 +1459,13 @@ void Program::update_tensor_args(
             continue;  // No CRTA-resident bindings.
         }
 
-        // Pre-condition: SetProgramRunArgs must have been called previously to size and
+        // Pre-condition: Program::set_program_run_args must have been called previously to size and
         // populate this kernel's CRTA buffer. Without it, there is no buffer to patch into.
         TT_FATAL(
             !kernel->common_runtime_args().empty(),
-            "UpdateTensorArgs called on Program before SetProgramRunArgs: kernel '{}' has tensor "
-            "bindings but its CRTA buffer has not been allocated. Call SetProgramRunArgs at least "
-            "once first.",
+            "Program::update_tensor_args called on Program before Program::set_program_run_args: kernel '{}' has "
+            "tensor bindings but its CRTA buffer has not been allocated. Call Program::set_program_run_args at "
+            "least once first.",
             kernel_name);
 
         RuntimeArgsData& crta = kernel->common_runtime_args_data();
@@ -1584,10 +1588,10 @@ void MergeKernelRunArgsInto(
     }
 }
 
-// Validation for the partial-update path UpdateProgramRunArgs.
+// Validation for the partial-update path Program::update_program_run_args.
 //
-// UpdateProgramRunArgs applies an ARBITRARY subset of a Program's ProgramRunArgs; any arg not
-// supplied retains the value installed by the most recent SetProgramRunArgs. So, unlike the full
+// Program::update_program_run_args applies an ARBITRARY subset of a Program's ProgramRunArgs; any arg not
+// supplied retains the value installed by the most recent Program::set_program_run_args. So, unlike the full
 // ValidateProgramRunArgs, this imposes NO completeness requirement — kernels, named RTAs/CRTAs
 // (scalar and array), varargs, and tensor args may all be freely omitted. Whatever IS supplied is
 // still validated: names must be declared (no extras), target nodes must belong to the kernel, and a
@@ -1713,18 +1717,18 @@ void Program::update_program_run_args(const ProgramRunArgs& params, ValidationMo
     // would also fail the initialized-check below, but this gives the accurate reason.)
     TT_FATAL(
         program_impl.created_from_spec(),
-        "UpdateProgramRunArgs requires a Metal 2.0 Program. "
+        "Program::update_program_run_args requires a Metal 2.0 Program. "
         "For a legacy Program, use SetRuntimeArgs / SetCommonRuntimeArgs.");
     TT_FATAL(
         program_impl.program_run_args_initialized(),
-        "UpdateProgramRunArgs: CRTA buffer not allocated because SetProgramRunArgs has not been called. Call "
-        "SetProgramRunArgs at least once before a partial update.");
+        "Program::update_program_run_args: CRTA buffer not allocated because Program::set_program_run_args has "
+        "not been called. Call Program::set_program_run_args at least once before a partial update.");
 
     if (validation == ValidationMode::FULL) {
         ValidateUpdateProgramRunArgs(*this, params);
     }
     // Patch the supplied args in place. Omitted named args and tensor params are left untouched,
-    // retaining the value installed by the most recent SetProgramRunArgs. A supplied positional
+    // retaining the value installed by the most recent Program::set_program_run_args. A supplied positional
     // vararg section refreshes that section wholesale.
     for (const auto& kernel_params : params.kernel_run_args) {
         const auto& kernel_name = kernel_params.kernel;
@@ -1747,8 +1751,8 @@ void Program::update_program_run_args(const ProgramRunArgs& params, ValidationMo
                 for (const auto& [node, value] : per_node) {
                     TT_FATAL(
                         kernel->cores_with_runtime_args().contains(node),
-                        "UpdateProgramRunArgs: kernel '{}' has no runtime-arg buffer for node {}. Call "
-                        "SetProgramRunArgs at least once before a partial update.",
+                        "Program::update_program_run_args: kernel '{}' has no runtime-arg buffer for node {}. Call "
+                        "Program::set_program_run_args at least once before a partial update.",
                         kernel_name,
                         node.str());
                     RuntimeArgsData& rta = kernel->runtime_args_data(node);
@@ -1768,8 +1772,8 @@ void Program::update_program_run_args(const ProgramRunArgs& params, ValidationMo
             for (const auto& [node, value] : per_node) {
                 TT_FATAL(
                     kernel->cores_with_runtime_args().contains(node),
-                    "UpdateProgramRunArgs: kernel '{}' has no runtime-arg buffer for node {}. Call "
-                    "SetProgramRunArgs at least once before a partial update.",
+                    "Program::update_program_run_args: kernel '{}' has no runtime-arg buffer for node {}. Call "
+                    "Program::set_program_run_args at least once before a partial update.",
                     kernel_name,
                     node.str());
                 WriteArrayArgValue(kernel->runtime_args_data(node).data(), a->second, value, kernel_name.get(), name);
@@ -1783,8 +1787,8 @@ void Program::update_program_run_args(const ProgramRunArgs& params, ValidationMo
             }
             TT_FATAL(
                 kernel->cores_with_runtime_args().contains(node),
-                "UpdateProgramRunArgs: kernel '{}' has no runtime-arg buffer for node {}. Call SetProgramRunArgs at "
-                "least once before a partial update.",
+                "Program::update_program_run_args: kernel '{}' has no runtime-arg buffer for node {}. Call "
+                "Program::set_program_run_args at least once before a partial update.",
                 kernel_name,
                 node.str());
             RuntimeArgsData& rta = kernel->runtime_args_data(node);
@@ -1800,8 +1804,8 @@ void Program::update_program_run_args(const ProgramRunArgs& params, ValidationMo
         if (touches_crta) {
             TT_FATAL(
                 !kernel->common_runtime_args().empty(),
-                "UpdateProgramRunArgs: kernel '{}' CRTA buffer not allocated. Call SetProgramRunArgs at least once "
-                "before a partial update.",
+                "Program::update_program_run_args: kernel '{}' CRTA buffer not allocated. Call "
+                "Program::set_program_run_args at least once before a partial update.",
                 kernel_name);
             RuntimeArgsData& crta = kernel->common_runtime_args_data();
 
@@ -1839,7 +1843,7 @@ void Program::update_program_run_args(const ProgramRunArgs& params, ValidationMo
 
     // ---- DFB size overrides (stateful: an unspecified DFB retains its current size) ----
     // Apply BEFORE re-attaching borrowed buffers below, so the borrowed per-bank fit check sees the
-    // new size. Mirrors the SetProgramRunArgs path.
+    // new size. Mirrors the Program::set_program_run_args path.
     std::vector<tt_metal::detail::ProgramImpl::DfbSizeOverride> size_overrides;
     size_overrides.reserve(params.dfb_run_overrides.size());
     for (const auto& dfb_params : params.dfb_run_overrides) {
@@ -1879,8 +1883,8 @@ void Program::update_program_run_args(const ProgramRunArgs& params, ValidationMo
             }
             TT_FATAL(
                 !kernel->common_runtime_args().empty(),
-                "UpdateProgramRunArgs: kernel '{}' CRTA buffer not allocated; cannot patch tensor bindings. Call "
-                "SetProgramRunArgs at least once before a partial update.",
+                "Program::update_program_run_args: kernel '{}' CRTA buffer not allocated; cannot patch tensor "
+                "bindings. Call Program::set_program_run_args at least once before a partial update.",
                 kernel_name);
             RuntimeArgsData& crta = kernel->common_runtime_args_data();
             for (const auto& handle : binding_handles) {
@@ -1915,8 +1919,9 @@ void Program::update_program_run_args(const ProgramRunArgs& params, ValidationMo
                 }
                 TT_FATAL(
                     !kernel->common_runtime_args().empty(),
-                    "UpdateProgramRunArgs: kernel '{}' CRTA buffer not allocated; cannot patch GlobalSemaphore "
-                    "bindings. Call SetProgramRunArgs at least once before a partial update.",
+                    "Program::update_program_run_args: kernel '{}' CRTA buffer not allocated; cannot patch "
+                    "GlobalSemaphore bindings. Call Program::set_program_run_args at least once before a partial "
+                    "update.",
                     kernel_name);
                 kernel->common_runtime_args_data()[handle.addr_crta_word] =
                     GlobalSemaphoreAddressWord(param_name, arg->get());
