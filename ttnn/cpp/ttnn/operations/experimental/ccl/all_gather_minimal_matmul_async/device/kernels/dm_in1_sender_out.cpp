@@ -31,6 +31,11 @@ void kernel_main() {
     constexpr uint32_t M_block_tiles = get_compile_time_arg_val(4);
     constexpr uint32_t K_block_tiles = get_compile_time_arg_val(5);
     constexpr uint32_t N_block_tiles = get_compile_time_arg_val(6);
+#ifdef AGMM_OUT_PUSH_W
+    constexpr uint32_t out_piece_tiles = AGMM_OUT_PUSH_W;  // the compute publishes the output a subblock at a time
+#else
+    constexpr uint32_t out_piece_tiles = N_block_tiles;
+#endif
     constexpr uint32_t N_blocks_per_core = get_compile_time_arg_val(7);
     constexpr uint32_t in1_tile_size = get_compile_time_arg_val(8);
     constexpr uint32_t out_tile_size = get_compile_time_arg_val(9);
@@ -230,6 +235,26 @@ void kernel_main() {
         in1_mcast_args;
     auto in1_tx = in1_mcast_args.optional_sender(noc_obj);
     auto in1_rx = in1_mcast_args.optional_receiver(noc_obj);
+#ifdef AGMM_IN1_CHUNK_W
+    // In column chunks (two or three per block), a block's first chunk goes in an in1_mcast round: the receivers'
+    // handshake covers the whole block, which they reserved first. Each later chunk has its own pipe with no
+    // handshake, used once per block; a receiver clears its flag before acking the next block's first chunk.
+    constexpr dataflow_kernel_lib::McastArgs<
+        get_named_compile_time_arg_val("in1_chunk1_mcast_ct_offset"),
+        get_named_compile_time_arg_val("in1_chunk1_mcast_rt_offset")>
+        in1_chunk1_mcast_args;
+    auto in1_chunk1_tx = in1_chunk1_mcast_args.optional_sender(noc_obj);
+    auto in1_chunk1_rx = in1_chunk1_mcast_args.optional_receiver(noc_obj);
+    static_assert(AGMM_IN1_CHUNKS == 2 || AGMM_IN1_CHUNKS == 3, "two or three in1 chunks per block");
+#if AGMM_IN1_CHUNKS == 3
+    constexpr dataflow_kernel_lib::McastArgs<
+        get_named_compile_time_arg_val("in1_chunk2_mcast_ct_offset"),
+        get_named_compile_time_arg_val("in1_chunk2_mcast_rt_offset")>
+        in1_chunk2_mcast_args;
+    auto in1_chunk2_tx = in1_chunk2_mcast_args.optional_sender(noc_obj);
+    auto in1_chunk2_rx = in1_chunk2_mcast_args.optional_receiver(noc_obj);
+#endif
+#endif
 #else
     in1_valid_sem.set(VALID);
 #endif
@@ -511,6 +536,68 @@ void kernel_main() {
                         }
                         noc_obj.async_read_barrier();
                     }
+#elif defined(AGMM_IN1_CHUNK_W)
+                    {
+                        // The K block in column chunks of AGMM_IN1_CHUNK_W columns (all K rows), chunk-major in L1
+                        // (chunk c is chunk_tiles tiles from c * chunk_tiles, AGMM_IN1_CHUNK_W tiles per K row), so
+                        // each chunk is one multicast. This core's compute and the column's receivers start on a
+                        // chunk as it lands; chunk c + 1 is read (its own transaction id) while chunk c goes out.
+                        constexpr uint32_t chunk_w = AGMM_IN1_CHUNK_W;
+                        constexpr uint32_t n_chunks = N_block_tiles / chunk_w;
+                        constexpr uint32_t chunk_tiles = chunk_w * K_block_tiles;
+                        static_assert(N_block_tiles % chunk_w == 0, "a chunk is a whole number of columns");
+                        const uint32_t chunk_bytes = chunk_tiles * in1_tile_size;
+                        const uint32_t block_l1 = in1_start_address;
+                        // Chunks only run on a Ring with K_block_tiles | K per device: no K row is past the tensor,
+                        // so there is nothing to zero-fill. Columns past it are skipped (their slots kept).
+                        ASSERT(k_block_left_tile + k_left_tiles <= in1_shape.logical_d0);
+                        ASSERT(k_block_right_tile + k_right_tiles <= in1_shape.logical_d0);
+                        auto read_rows = [&](uint32_t dst, uint32_t k_start, uint32_t k_end, uint32_t n0) {
+                            const uint32_t n_end = std::min(n0 + chunk_w, in1_shape.logical_d1);
+                            for (uint32_t k = k_start; k < k_end; k++, dst += chunk_w * in1_tile_size) {
+                                for (uint32_t n = n0; n < n_end; n++) {
+                                    noc_obj.async_read(
+                                        in1_reader,
+                                        CoreLocalMem<uint8_t>(dst + (n - n0) * in1_tile_size),
+                                        in1_tile_size,
+                                        {.page_id = k * in1_shape.logical_d1 + n},
+                                        {});
+                                }
+                            }
+                            return dst;
+                        };
+                        auto read_chunk = [&](uint32_t c) __attribute__((always_inline)) {
+                            noc_async_read_set_trid(1 + (c & 1), noc_obj.get_noc_id());
+                            const uint32_t n0 = n_tile + c * chunk_w;
+                            const uint32_t left_end = read_rows(
+                                block_l1 + c * chunk_bytes, k_block_left_tile, k_block_left_tile + k_left_tiles, n0);
+                            read_rows(left_end, k_block_right_tile, k_block_right_tile + k_right_tiles, n0);
+                        };
+                        read_chunk(0);
+                        for (uint32_t c = 0; c < n_chunks; c++) {
+                            if (c + 1 < n_chunks) {
+                                read_chunk(c + 1);
+                            }
+                            noc_obj.async_read_barrier<NocOptions::TXN_ID>({.trid = 1 + (c & 1)});
+                            cb_in1.push_back(chunk_tiles);
+                            const uint32_t chunk_l1 = block_l1 + c * chunk_bytes;
+                            // The chunks' L1 is next written a whole block later, so one flush per block protects
+                            // it (CallerManaged): the chunks go out back to back.
+                            constexpr auto kGuard = dataflow_kernel_lib::SourceL1Guard::CallerManaged;
+                            if (c == 0) {
+                                in1_tx->template send<kGuard>(chunk_l1, chunk_l1, chunk_bytes);
+                            } else if (c == 1) {
+                                in1_chunk1_tx->template send<kGuard>(chunk_l1, chunk_l1, chunk_bytes);
+                            }
+#if AGMM_IN1_CHUNKS == 3
+                            else {
+                                in1_chunk2_tx->template send<kGuard>(chunk_l1, chunk_l1, chunk_bytes);
+                            }
+#endif
+                        }
+                        noc_obj.async_writes_flushed();
+                        noc_async_read_set_trid(0, noc_obj.get_noc_id());
+                    }
 #else
                     read_in1_block_sync<K_block_tiles, N_block_tiles>(
                         noc_obj,
@@ -526,7 +613,19 @@ void kernel_main() {
                         n_tile_end);
 #endif
                 } else {
-#ifdef AGMM_MCAST
+#if defined(AGMM_IN1_CHUNK_W)  // set only with the in1 multicast
+                    {
+                        constexpr uint32_t chunk_tiles = AGMM_IN1_CHUNK_W * K_block_tiles;
+                        in1_rx->receive();  // the first chunk; the handshake covers the block, reserved above
+                        cb_in1.push_back(chunk_tiles);  // compute starts on each chunk as it lands
+                        in1_chunk1_rx->receive();
+                        cb_in1.push_back(chunk_tiles);
+#if AGMM_IN1_CHUNKS == 3
+                        in1_chunk2_rx->receive();
+                        cb_in1.push_back(chunk_tiles);
+#endif
+                    }
+#elif defined(AGMM_MCAST)
                     in1_rx->receive();
 #else
                     in1_receiver_sem.set(INVALID);
@@ -537,12 +636,16 @@ void kernel_main() {
 
                 // Critical to performance for sender to push data to compute before mcasting
                 // This frees sender to start next read earlier
+#ifndef AGMM_IN1_CHUNK_W  // chunked: pushed and multicast chunk by chunk above
                 cb_in1.push_back(in1_block_num_tiles);
+#endif
 
 #ifdef AGMM_MCAST
+#ifndef AGMM_IN1_CHUNK_W
                 if constexpr (is_injector_core) {
                     in1_tx->send(in1_start_address, in1_start_address, in1_block_num_tiles * in1_tile_size);
                 }
+#endif
                 constexpr bool relay_chain = false;
 #else
                 constexpr bool relay_chain = true;
@@ -705,7 +808,7 @@ void kernel_main() {
                     // write_block_sync_granular_split is more generic (support multiple output tensors)
                     // But for N_chunks == 1 (non-split minimal_matmul), write_block_sync_granular should be faster
                     if constexpr (N_chunks == 1) {
-                        write_block_sync_granular<M_block_tiles, N_block_tiles>(
+                        write_block_sync_granular<M_block_tiles, N_block_tiles, out_piece_tiles>(
                             noc_obj,
                             std::get<0>(outputs_tuple),
                             out_shape,

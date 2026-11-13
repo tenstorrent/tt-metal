@@ -18,6 +18,14 @@
 
 namespace ttnn::experimental::prim {
 
+// Whether every core computes at most one M block. With one N block per core that is the core's only output block,
+// so no write is deferred behind a later block and the output buffer only has to hold the row being written. The
+// program hash keys on this (the row count itself is not in the hash).
+inline bool agmm_single_m_block(uint32_t M_tiles, uint32_t M_block_tiles, uint32_t in0_parallel_axis_cores) {
+    return M_block_tiles > 0 && in0_parallel_axis_cores > 0 &&
+           (M_tiles + in0_parallel_axis_cores - 1) / in0_parallel_axis_cores <= M_block_tiles;
+}
+
 // Block and subblock sizes the factory picks when no config is given: (M, K, N block tiles, subblock_h, subblock_w).
 std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> default_block_sizes(
     uint32_t M, uint32_t K, uint32_t N, bool fp32_dest_acc_en);
