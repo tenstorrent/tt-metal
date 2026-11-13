@@ -7,15 +7,21 @@
 * test_the_drafter_inputs_are_the_staged_values: MTPSpecEngine._drafter_inputs over a drafter pack: tokens, KV
   positions, cos / sin of the real rows and the anchor one-hot equal the per-buffer values the drafter staged before;
   the anchor matmul picks the exact feed rows also when B * T < 32 and the feed's tile padding holds data.
+* test_the_step_trace_writes_the_host_pack_and_reseed_table: spec_accept.StepAccept.body, eager and replayed from a
+  trace on fresh inputs, writes the drafter pack and reseed table of spec_accept.step_accept_reference (the plugin's
+  greedy walk on the merged ids, the host's drafter pack); and the replay time.
 
     MESH_DEVICE=P150x8 pytest models/demos/blackhole/qwen36/tests/test_spec_step.py
 """
 
 import random
+import time
 from types import SimpleNamespace
 
 import pytest
 import torch
+from loguru import logger
+from ttnn.tools import trace_allocation_tracker
 
 import ttnn
 from models.demos.blackhole.qwen36.tests.test_factory import _resolve_mesh_shape
@@ -155,3 +161,75 @@ def test_the_drafter_inputs_are_the_staged_values(mesh_device, B):
         for t in owned:
             ttnn.deallocate(t)
         ttnn.deallocate(e._dr_pack)
+
+
+@torch.no_grad()
+@_parametrize
+@pytest.mark.parametrize("B", [1, 8])
+def test_the_step_trace_writes_the_host_pack_and_reseed_table(mesh_device, B):
+    from models.demos.blackhole.qwen36.tests.test_spec_accept_host import ROWS, _case, _lanes, _step_buffer
+    from models.demos.blackhole.qwen36.tt.spec_accept import StepAccept, step_accept_reference
+    from models.demos.blackhole.qwen36.tt.spec_step import drafter_pack_rows
+
+    K, nb, scratch = 3, 9, 999
+    T, R = K + 1, B * (K + 1)
+    W = pack_width(R)
+    rng = random.Random(B)
+
+    def inputs():
+        ids, tokens, accept = _case(rng, B, K)
+        draws = torch.tensor([rng.randrange(248320) for _ in range(R)])
+        pt = torch.randint(1, 900, (B, nb), dtype=torch.int32)
+        step = _step_buffer(tokens.reshape(-1), list(range(R)), list(range(R)), accept, B, T)
+        want = step_accept_reference(ids.reshape(-1), tokens.reshape(-1), accept, pt, scratch, K, ROWS, draws=draws)
+        return ids, draws, pt, step, want
+
+    def copy_in(host, dev, dtype):
+        h = ttnn.from_torch(host.to(torch.int32), dtype=dtype, mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device))
+        ttnn.copy_host_to_device_tensor(h, dev)
+
+    def stage(ids, draws, pt, step):
+        copy_in(_lanes(ids), ids_dev, ttnn.uint32)
+        copy_in(draws.reshape(1, 1, 1, R), draws_dev, ttnn.uint32)
+        copy_in(step, step_dev, ttnn.uint32)
+        acc.stage_pt_rows(pt.repeat_interleave(T, dim=0))
+
+    def check(want):
+        _, _, pack, rs = want
+        assert torch.equal(_host(pack_dev).to(torch.int64), pack.to(torch.int64)), "drafter pack"
+        assert torch.equal(_host(rs_dev).to(torch.int64), rs.to(torch.int64)), "reseed table"
+
+    ids, draws, pt, step, want = inputs()
+    step_dev = _rep(mesh_device, step, ttnn.uint32)
+    pack_dev = _rep(mesh_device, torch.zeros(drafter_pack_rows(K), W, dtype=torch.int32), ttnn.uint32)
+    rs_dev = _rep(mesh_device, torch.zeros(R, nb, dtype=torch.int32), ttnn.int32)
+    draws_dev = _rep(mesh_device, torch.zeros(1, 1, 1, R, dtype=torch.int32), ttnn.uint32)
+    ids_dev = _rep(mesh_device, torch.zeros(1, 1, 1, 32, dtype=torch.int32), ttnn.uint32)
+    acc = StepAccept(mesh_device, B, K, nb, ROWS, scratch, step_dev, pack_dev, rs_dev, draws=draws_dev)
+    acc.bind_ids(ids_dev)
+    stage(ids, draws, pt, step)
+    acc.body()
+    check(want)
+    mesh_device.set_program_cache_misses_allowed(False)
+    try:
+        with trace_allocation_tracker.corruptible_allocation_scope(mesh_device):
+            trace = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+            acc.body()
+            ttnn.end_trace_capture(mesh_device, trace, cq_id=0)
+    finally:
+        mesh_device.set_program_cache_misses_allowed(True)
+    for _ in range(20):
+        ids, draws, pt, step, want = inputs()
+        stage(ids, draws, pt, step)
+        ttnn.execute_trace(mesh_device, trace, cq_id=0, blocking=True)
+        check(want)
+    ttnn.synchronize_device(mesh_device)
+    t0 = time.perf_counter()
+    for _ in range(50):
+        ttnn.execute_trace(mesh_device, trace, cq_id=0, blocking=False)
+    ttnn.synchronize_device(mesh_device)
+    logger.info(f"[step trace] B={B} K={K}: {(time.perf_counter() - t0) / 50 * 1e6:.1f} us per replay")
+    ttnn.release_trace(mesh_device, trace)
+    acc.release()
+    for t in (step_dev, pack_dev, rs_dev, draws_dev, ids_dev):
+        ttnn.deallocate(t)
