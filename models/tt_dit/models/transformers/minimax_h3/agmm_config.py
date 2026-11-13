@@ -22,6 +22,7 @@ these shapes need an entry rather than falling back.
 from __future__ import annotations
 
 import math
+import os
 from typing import NamedTuple
 
 import ttnn
@@ -42,12 +43,13 @@ def _per_core_m(m: int, n: int) -> int:
     return -(-m_tiles // cores)
 
 
-# (K, N, per_core_M) -> (M_block, K_block, N_block). N is the *per-device* output width. Best block at
-# subblock (2, 2), swept with models/tt_dit/utils/sweep_mm_block_sizes.py on 4x8 Blackhole Galaxy.
+# (K, N, per_core_M) -> (M_block, K_block, N_block[, (subblock_h, subblock_w)]). N is the *per-device* output width.
+# Best block at subblock (2, 2) unless a subblock is given, swept with models/tt_dit/utils/sweep_mm_block_sizes.py on
+# 4x8 Blackhole Galaxy.
 #   (5376, 5376)  attention to_qkv   K_tiles_per_device = 42
 #   (7168, 1344)  attention to_out   K_tiles_per_device = 56
 #   (5376, 7168)  feed-forward ff1   K_tiles_per_device = 42, fused SwiGLU so N_block must be even
-AGMM_BLOCK_SIZES: dict[tuple[int, int, int], tuple[int, int, int]] = {
+AGMM_BLOCK_SIZES: dict[tuple[int, int, int], tuple] = {
     (5376, 5376, 1): (2, 6, 16),
     (5376, 5376, 2): (2, 7, 16),
     (5376, 5376, 3): (4, 6, 16),
@@ -64,7 +66,7 @@ AGMM_BLOCK_SIZES: dict[tuple[int, int, int], tuple[int, int, int]] = {
     (5376, 7168, 2): (2, 6, 12),
     (5376, 7168, 3): (4, 3, 14),
     (5376, 7168, 4): (4, 3, 16),
-    (5376, 7168, 5): (6, 3, 16),
+    (5376, 7168, 5): (5, 3, 22, (1, 2)),  # MINIMAX_H3_FF1_AGMM_LEGACY=1: (6, 3, 16), see below
     (5376, 7168, 6): (6, 3, 16),
     (5376, 7168, 7): (4, 6, 14),
     (5376, 7168, 8): (4, 3, 16),
@@ -85,6 +87,16 @@ AGMM_BLOCK_SIZES: dict[tuple[int, int, int], tuple[int, int, int]] = {
     (7168, 1344, 11): (6, 8, 6),
     (7168, 1344, 12): (6, 8, 8),
 }
+
+
+# ff1 at 15 rows per core (5 s on 4x8): M_block 5 (5 + 5 + 5 rows, subblock 1 x 2) and one N block over the 22 columns per
+# core, same K_block 3 as before, so every output tile accumulates in the same order (bit-identical). The previous entry
+# stays reachable for A/B with MINIMAX_H3_FF1_AGMM_LEGACY=1 (unset or 0: the new entry; other values raise at import).
+_FF1_AGMM_LEGACY_VALUE = os.environ.get("MINIMAX_H3_FF1_AGMM_LEGACY", "0").strip()
+if _FF1_AGMM_LEGACY_VALUE not in ("", "0", "1"):
+    raise ValueError(f"MINIMAX_H3_FF1_AGMM_LEGACY={_FF1_AGMM_LEGACY_VALUE!r}: expected 0 or 1")
+_FF1_AGMM_LEGACY = _FF1_AGMM_LEGACY_VALUE == "1"
+_FF1_AGMM_LEGACY_BLOCKS: dict[tuple[int, int, int], tuple] = {(5376, 7168, 5): (6, 3, 16)}
 
 
 # Blocking of the dynamic-length path per (K, N) layer and length class; to_qkv and to_out take one
@@ -162,4 +174,7 @@ def agmm_block_size(k: int, n: int, m: int) -> tuple[int, int, int] | None:
     divisors = [pcm for pcm in swept if per_core_m % pcm == 0]
     if not divisors:
         return None
-    return AGMM_BLOCK_SIZES[(k, n, max(divisors))]
+    key = (k, n, max(divisors))
+    if _FF1_AGMM_LEGACY and key in _FF1_AGMM_LEGACY_BLOCKS:
+        return _FF1_AGMM_LEGACY_BLOCKS[key]
+    return AGMM_BLOCK_SIZES[key]

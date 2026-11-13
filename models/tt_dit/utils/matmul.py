@@ -723,7 +723,10 @@ def get_matmul_config(M, K, N, core_grid, default_block_size=None, use_heuristic
             assert (
                 not use_heuristic and num_k_shards == -1
             ), "Default block size cannot be used with heuristic or nearest blocking"
-            M_block_size, K_block_size, N_block_size = default_block_size
+            # A 4-tuple carries the subblock too, as in the swept tables: (M_block, K_block, N_block, (sub_h, sub_w)).
+            M_block_size, K_block_size, N_block_size = default_block_size[:3]
+            if len(default_block_size) == 4:
+                subblock_h, subblock_w = default_block_size[3]
         elif use_heuristic:
             M_block_size, K_block_size, N_block_size, (subblock_h, subblock_w) = _compute_heuristic_blocking(
                 M, K, N, grid_x, grid_y
