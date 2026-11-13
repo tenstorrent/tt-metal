@@ -6,13 +6,20 @@
 // It records the first mismatch and keeps acking, so the sender completes. kCommandStop ends a page wait.
 // The first mismatched word is read again after a delay: if the re-read is right, the credit overtook the data.
 
+#include "cce_gcb_common.h"
 #include "cce_gcb_receiver_abi.h"
+#include "cce_test_common.h"
 #include "experimental/cce_hart.h"
 #include "experimental/cce_remote_cb.h"
 
 namespace abi = cce_gcb_receiver_abi;
 namespace hart = experimental::cce_hart;
 namespace remote_cb = experimental::cce_remote_cb;
+using cce_gcb::code_for;
+using cce_gcb::FrontWait;
+using cce_gcb::gcb_page_bytes_valid;
+using cce_gcb::resize_or_stop;
+using cce_gcb::wait_front_or_stop;
 
 constexpr uint64_t kMismatchRecheckDelayCycles = 1u << 16;
 
@@ -43,27 +50,17 @@ uint32_t validate_schedule(
         const uint32_t slab = get_arg_val<uint32_t>(abi::schedule_arg(request, abi::kRequestSlab));
         const uint32_t page_bytes = get_arg_val<uint32_t>(abi::schedule_arg(request, abi::kRequestPageBytes));
         const uint32_t num_pages = get_arg_val<uint32_t>(abi::schedule_arg(request, abi::kRequestNumPages));
-        if (page_bytes == 0 || page_bytes % remote_cb::kCreditUnitBytes != 0 || page_bytes > receiver.fifo_size) {
+        if (!gcb_page_bytes_valid(page_bytes, receiver.fifo_size)) {
             return abi::kCodeBadSchedule;
         }
-        const remote_cb::WaitResult resized = remote_cb::resize_receiver_bounded(
-            receiver, page_bytes, budget_cycles, [command]() { return *command == abi::kCommandStop; });
-        if (resized == remote_cb::WaitResult::Stopped) {
-            return abi::kCodeStopped;
-        }
-        if (resized == remote_cb::WaitResult::Expired) {
-            return abi::kCodeCreditTimeout;
+        if (const uint32_t code = resize_or_stop(receiver, page_bytes, command, budget_cycles); code != abi::kCodeOk) {
+            return code;
         }
         const uint32_t page_words = page_bytes / sizeof(uint32_t);
         for (uint32_t page = 0; page < num_pages; ++page) {
-            const hart::WaitDeadline deadline(budget_cycles);
-            while (!remote_cb::front_ready(receiver, 1)) {
-                if (*command == abi::kCommandStop) {
-                    return abi::kCodeStopped;
-                }
-                if (deadline.expired()) {
-                    return abi::kCodeCreditTimeout;
-                }
+            const FrontWait wait = wait_front_or_stop(receiver, 1, command, budget_cycles);
+            if (wait != FrontWait::Ready) {
+                return code_for(wait);
             }
             const volatile uint32_t* words = remote_cb::front_words(receiver);
             for (uint32_t word = 0; word < page_words; ++word) {
@@ -116,6 +113,5 @@ void kernel_main() {
     status[abi::kStatusObserved] = progress.observed;
     status[abi::kStatusExpected] = progress.expected;
     status[abi::kStatusRechecked] = progress.rechecked;
-    asm volatile("fence w, w" ::: "memory");
-    status[abi::kStatusMagic] = abi::kDoneMagic;
+    cce_test::publish_done_magic(status, abi::kDoneMagic);
 }

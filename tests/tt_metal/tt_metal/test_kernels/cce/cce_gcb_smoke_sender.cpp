@@ -5,13 +5,16 @@
 // Writes generator pages into a GlobalCircularBuffer's receivers from its sender CCE, without the prefetcher manager:
 // one page at a time, per the schedule, then waits until every receiver has acked everything.
 
+#include "cce_gcb_common.h"
 #include "cce_gcb_receiver_abi.h"
+#include "cce_test_common.h"
 #include "experimental/cce_hart.h"
 #include "experimental/cce_remote_cb.h"
 
 namespace abi = cce_gcb_receiver_abi;
 namespace hart = experimental::cce_hart;
 namespace remote_cb = experimental::cce_remote_cb;
+using cce_gcb::gcb_page_bytes_valid;
 
 struct SendProgress {
     uint32_t requests_done = 0;
@@ -28,7 +31,7 @@ uint32_t send_schedule(remote_cb::Sender& sender, uint32_t seed, uint64_t budget
         const uint32_t slab = get_arg_val<uint32_t>(abi::schedule_arg(request, abi::kRequestSlab));
         const uint32_t page_bytes = get_arg_val<uint32_t>(abi::schedule_arg(request, abi::kRequestPageBytes));
         const uint32_t num_pages = get_arg_val<uint32_t>(abi::schedule_arg(request, abi::kRequestNumPages));
-        if (page_bytes == 0 || page_bytes % remote_cb::kCreditUnitBytes != 0 || page_bytes > sender.fifo_size) {
+        if (!gcb_page_bytes_valid(page_bytes, sender.fifo_size)) {
             return abi::kCodeBadSchedule;
         }
         remote_cb::resize_sender(sender, page_bytes);
@@ -70,6 +73,5 @@ void kernel_main() {
     status[abi::kStatusWaitReceiver] = sender.slowest_receiver;
     status[abi::kStatusWaitPagesSent] = remote_cb::receiver_pages_sent(sender, sender.slowest_receiver);
     status[abi::kStatusWaitPagesAcked] = remote_cb::receiver_pages_acked(sender, sender.slowest_receiver);
-    asm volatile("fence w, w" ::: "memory");
-    status[abi::kStatusMagic] = abi::kDoneMagic;
+    cce_test::publish_done_magic(status, abi::kDoneMagic);
 }
