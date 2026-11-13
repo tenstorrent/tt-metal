@@ -5454,7 +5454,11 @@
   "top5_overlap_limit": 0.994286
  },
  "P.50": {
-  "chunk_wall_ms": 184.3,
+  "chunk_wall_ms": 182.9,
+  "determinism_max_abs_diff": 0.0,
+  "device_ms_total": 171.28,
+  "err_final_hidden": 0.132105,
+  "err_final_hidden_limit": 0.242186,
   "err_layer_L00": 0.0194535,
   "err_layer_L00_limit": 0.0551437,
   "err_layer_L01": 0.0290766,
@@ -5658,7 +5662,9 @@
   "err_state_window_kv_L38": 0.126358,
   "err_state_window_kv_L38_limit": 0.319442,
   "err_state_window_kv_L39": 0.0893733,
-  "err_state_window_kv_L39_limit": 0.214677
+  "err_state_window_kv_L39_limit": 0.214677,
+  "top5_overlap": 1.0,
+  "top5_overlap_limit": 0.994286
  },
  "P.6": {
   "chunk_wall_ms": 402.1,
