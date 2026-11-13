@@ -110,7 +110,7 @@ for this example. It takes the same overrides as for BoolQ.
 [`gsm8k/eval_gsm8k.py`](gsm8k/eval_gsm8k.py) prints pass@k tables (correct
 answer, tags present, tags exactly once, format regex) on the GSM8K test split
 for one or more HuggingFace-format checkpoints, generating on tt-transformers
-with `TTTRolloutSampler`:
+with `TTTRolloutSampler` at temperature 1.0 and top-k 32 (`--temperature 0` decodes greedily):
 
 ```bash
 cd tt-train/sources/examples/grpo/gsm8k

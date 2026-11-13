@@ -50,6 +50,7 @@ from gsm8k_utils import (
 )
 
 TAGS = (THINK_OPEN, THINK_CLOSE, ANSWER_OPEN, ANSWER_CLOSE)
+TOP_K = 32
 
 
 def pass_at_k(n: int, c: int, k: int) -> float:
@@ -107,6 +108,7 @@ def generate_on_tt(
                 completions_per_prompt=n_samples,
                 max_completion_length=max_new_tokens,
                 temperature=temperature,
+                top_k=TOP_K,
                 dummy_weights=False,
             )
             completions = sampler.generate([list(p) for p in prompts]).completions
@@ -124,12 +126,12 @@ def parse_models(entries: Sequence[str]) -> List[Tuple[str, str]]:
     return [tuple(s.strip() for s in e.split("=", 1)) if "=" in e else (e, e) for e in entries]
 
 
-def print_tables(rows: List[Tuple[str, List[List[List[bool]]]]], ks: Sequence[int]) -> None:
+def print_tables(rows: List[Tuple[str, List[List[List[bool]]]]], ks: Sequence[int], temperature: float) -> None:
     """``rows[i] = (display, hits)`` with ``hits[criterion][question][sample]``."""
     header = "".join(f"{'pass@' + str(k):>9}" for k in ks)
     width = max((len(r[0]) for r in rows), default=10) + 2
     for crit_i, (crit_name, _) in enumerate(CRITERIA):
-        print(f"\n{crit_name}")
+        print(f"\n{crit_name} (T={temperature}, top-k {TOP_K})")
         print(f"  {'checkpoint':<{width}}" + header)
         for display, hits in rows:
             per_question = hits[crit_i]
@@ -147,7 +149,7 @@ def main() -> None:
     ap.add_argument("--split", default="test", choices=["test", "train"])
     ap.add_argument("--limit", type=int, default=200, help="Evaluate the first N questions; 0 runs the full split.")
     ap.add_argument("--n-samples", "-n", type=int, default=16, help="Samples per question (the pass@k horizon).")
-    ap.add_argument("--temperature", type=float, default=1.0, help="Sampling temperature; must be > 0.")
+    ap.add_argument("--temperature", type=float, default=1.0, help="Sampling temperature; 0 decodes greedily.")
     ap.add_argument("--max-new-tokens", type=int, default=512)
     ap.add_argument("--max-batch-size", type=int, default=32, help="Per-device tt-transformers batch size.")
     ap.add_argument("--max-seq-len", type=int, default=1024, help="Must cover the longest prompt + --max-new-tokens.")
@@ -156,8 +158,8 @@ def main() -> None:
     ap.add_argument("--show", type=int, default=0, help="Print the first sample of this many questions per model.")
     ap.add_argument("--show-chars", type=int, default=1200, help="Truncate printed completions to this many chars.")
     args = ap.parse_args()
-    if args.temperature <= 0.0:
-        ap.error("--temperature must be > 0: tt-transformers emits no log-probs on its greedy path.")
+    if args.temperature < 0.0:
+        ap.error("--temperature must be >= 0.")
 
     models = parse_models(args.models)
 
@@ -207,7 +209,7 @@ def main() -> None:
             print(f" Q: {questions[q_idx]}")
             print(f" A:\n{text[: args.show_chars].strip()}")
 
-    print_tables(rows, ks)
+    print_tables(rows, ks, args.temperature)
 
 
 if __name__ == "__main__":
