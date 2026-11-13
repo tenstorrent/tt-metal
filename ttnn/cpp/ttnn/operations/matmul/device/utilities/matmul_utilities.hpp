@@ -399,11 +399,21 @@ bool use_dram_sharded_multicore(
 
 // Cores for the multi-core pipeline (num_workers_per_dram_bank >= 2): cores_per_bank logical worker cores
 // per bank for the first num_banks banks, each the nearest free core (Manhattan distance in logical
-// coordinates, ties to the same row first) to that bank's NOC-optimal worker, taken round-robin over
-// the banks so every bank gets its nearest core first. Only the per-bank optimal worker is queried
-// from the device, so the result is the same for every chip of a mesh.
+// coordinates, ties to the same row first) to that bank's NOC-optimal worker on the chip at `coord`, taken
+// round-robin over the banks so every bank gets its nearest core first.
 std::vector<std::vector<tt::tt_metal::CoreCoord>> get_dram_bank_adjacent_workers(
-    tt::tt_metal::distributed::MeshDevice& device, tt::tt_metal::NOC noc, uint32_t cores_per_bank, uint32_t num_banks);
+    tt::tt_metal::distributed::MeshDevice& device,
+    tt::tt_metal::NOC noc,
+    uint32_t cores_per_bank,
+    uint32_t num_banks,
+    const tt::tt_metal::distributed::MeshCoordinate& coord);
+
+// The NOC-optimal worker core of every DRAM bank of the chip at `coord`, in bank order. The optimum is a
+// property of that chip's harvesting, so it can differ between the chips of a mesh.
+std::vector<tt::tt_metal::CoreCoord> get_dram_bank_workers(
+    tt::tt_metal::distributed::MeshDevice& device,
+    tt::tt_metal::NOC noc,
+    const tt::tt_metal::distributed::MeshCoordinate& coord);
 
 // This type of access pattern cannot be copied.
 // Treat it as a one off patch to restore functionality that
@@ -433,6 +443,7 @@ std::vector<DramBankReaderAssignment> get_dram_bank_reader_assignments(
     tt::tt_metal::distributed::MeshDevice& device,
     tt::tt_metal::NOC noc,
     uint32_t workers_per_bank,
-    const tt::tt_metal::CoreRangeSet& secondary_reader_excluded_cores);
+    const tt::tt_metal::CoreRangeSet& secondary_reader_excluded_cores,
+    const tt::tt_metal::distributed::MeshCoordinate& coord);
 
 }  // namespace ttnn::prim::dram_sharded_helpers

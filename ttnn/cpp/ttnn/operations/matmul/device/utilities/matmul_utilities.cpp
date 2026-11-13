@@ -399,14 +399,27 @@ void get_optimal_dram_bank_to_reader_assignment(
     all_worker_cores = tt::tt_metal::CoreRangeSet(all_cores_set);
 }
 
+std::vector<tt::tt_metal::CoreCoord> get_dram_bank_workers(
+    tt::tt_metal::distributed::MeshDevice& device,
+    tt::tt_metal::NOC noc,
+    const tt::tt_metal::distributed::MeshCoordinate& coord) {
+    const auto worker_by_bank = device.get_optimal_dram_bank_to_logical_worker_assignment(noc, coord);
+    std::vector<tt::tt_metal::CoreCoord> workers(worker_by_bank.size());
+    for (const auto& [bank, worker] : worker_by_bank) {
+        workers.at(bank) = worker;
+    }
+    return workers;
+}
+
 std::vector<DramBankReaderAssignment> get_dram_bank_reader_assignments(
     tt::tt_metal::distributed::MeshDevice& device,
     tt::tt_metal::NOC noc,
     uint32_t workers_per_bank,
-    const tt::tt_metal::CoreRangeSet& secondary_reader_excluded_cores) {
+    const tt::tt_metal::CoreRangeSet& secondary_reader_excluded_cores,
+    const tt::tt_metal::distributed::MeshCoordinate& coord) {
     validate_num_workers_per_dram_bank(workers_per_bank);
 
-    const auto primary_workers = device.get_optimal_dram_bank_to_logical_worker_assignment(noc);
+    const auto primary_workers = get_dram_bank_workers(device, noc, coord);
     std::vector<DramBankReaderAssignment> assignments;
     assignments.reserve(primary_workers.size() * workers_per_bank);
 
@@ -441,15 +454,8 @@ std::vector<DramBankReaderAssignment> get_dram_bank_reader_assignments(
                     // All readers address the bank by allocator bank id on the same NOC and therefore target the same
                     // firmware-approved endpoint. Place additional readers near the bank's primary
                     // reader to minimize NOC hops without routing one NOC to multiple endpoints.
-                    // This factory shares one logical reader placement across the mesh, as it
-                    // already does for primary readers. Use a representative chip for the hop
-                    // heuristic; bank addressing still uses each executing chip's allocator table.
                     const uint32_t cost = tt::tt_metal::experimental::Device::get_worker_noc_hop_distance(
-                        &device,
-                        tt::tt_metal::distributed::MeshCoordinate::zero_coordinate(device.shape().dims()),
-                        candidate,
-                        primary_workers[bank],
-                        noc);
+                        &device, coord, candidate, primary_workers[bank], noc);
                     // Equal-cost candidates use the same endpoint and hop count. Keep the first candidate in ascending
                     // x/y scan order so that the assignment is deterministic without adding a second routing objective.
                     if (cost < best_cost) {
@@ -492,8 +498,12 @@ bool use_dram_sharded_multicore(
 }
 
 std::vector<std::vector<tt::tt_metal::CoreCoord>> get_dram_bank_adjacent_workers(
-    tt::tt_metal::distributed::MeshDevice& device, tt::tt_metal::NOC noc, uint32_t cores_per_bank, uint32_t num_banks) {
-    const auto anchors = device.get_optimal_dram_bank_to_logical_worker_assignment(noc);
+    tt::tt_metal::distributed::MeshDevice& device,
+    tt::tt_metal::NOC noc,
+    uint32_t cores_per_bank,
+    uint32_t num_banks,
+    const tt::tt_metal::distributed::MeshCoordinate& coord) {
+    const auto anchors = get_dram_bank_workers(device, noc, coord);
     TT_FATAL(num_banks <= anchors.size(), "{} banks requested, the device has {}", num_banks, anchors.size());
     const auto grid = device.compute_with_storage_grid_size();
     TT_FATAL(
