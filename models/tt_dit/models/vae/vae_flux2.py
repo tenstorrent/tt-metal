@@ -137,27 +137,37 @@ class Flux2VaeDecoder(Module):
         self, z: ttnn.Tensor, *, height: int, width: int, split_height: bool = False
     ) -> ttnn.Tensor:
         # N, (H / P) * (W / P), C * P * P -> N, H/h_factor, W/w_factor, C
-        # The input is H-sharded (H/h_factor rows per device), or replicated with split_height set,
-        # in which case H is split here. W is always split here, once the spatial layout is restored
-        # (H and W are interleaved in the patchified tokens). Both splits run on the row-major
-        # tensor: a tiled split needs each device's share to be whole tiles.
+        # The input is H-sharded in bands of whole token rows (H/h_factor latent rows per device), or
+        # replicated with split_height set, in which case H is split here. Splitting after
+        # unpatchifying needs only whole latent rows per device, not whole token rows. W is always
+        # split here, since H and W are interleaved in the patchified tokens, and before tilizing:
+        # W is a tiled dim, and a tiled split needs each device's share to be whole tiles.
         p = self._PATCH_SIZE
-        assert (
-            height % (p * self._ctx.h_factor) == 0
-        ), f"height {height} must be divisible by patch {p} * h_factor {self._ctx.h_factor}"
-        # H is split on token rows, before unpatchifying, and W on pixel columns, after it.
+        h_factor = self._ctx.h_factor
+        assert height % p == 0, f"height {height} must be divisible by patch {p}"
+        if split_height:
+            assert height % h_factor == 0, f"height {height} must be divisible by h_factor {h_factor}"
+            height_in = height
+        else:
+            assert height % (p * h_factor) == 0, f"height {height} must be divisible by patch {p} * h_factor {h_factor}"
+            height_in = height // h_factor
         assert width % p == 0, f"width {width} must be divisible by patch {p}"
         assert width % self._ctx.w_factor == 0, f"width {width} must be divisible by w_factor {self._ctx.w_factor}"
-        height_local = height // self._ctx.h_factor
+        # The fused group norm needs each device's pixel count to be whole tiles. This is its
+        # smallest level; every later one has 4 or 16 times the pixels.
+        local_pixels = (height // h_factor) * (width // self._ctx.w_factor)
+        assert local_pixels % ttnn.TILE_SIZE == 0, (
+            f"{height}x{width} latents give {local_pixels} pixels per device, which the group norm needs to be a "
+            f"multiple of {ttnn.TILE_SIZE}"
+        )
 
         z = self._inv_normalize(z)
         z = ttnn.to_layout(z, ttnn.ROW_MAJOR_LAYOUT)
-        if split_height and self._ctx.h_factor > 1:
-            # Token rows are contiguous, so each device takes a band of whole rows.
-            z = ttnn.mesh_partition(z, dim=1, cluster_axis=self._ctx.h_mesh_axis)
-        z = z.reshape([z.shape[0], height_local // p, width // p, -1, p, p])
+        z = z.reshape([z.shape[0], height_in // p, width // p, -1, p, p])
         z = ttnn.permute(z, [0, 1, 4, 2, 5, 3])
-        z = z.reshape([z.shape[0], height_local, width, -1])
+        z = z.reshape([z.shape[0], height_in, width, -1])
+        if split_height and h_factor > 1:
+            z = ttnn.mesh_partition(z, dim=1, cluster_axis=self._ctx.h_mesh_axis)
         if self._ctx.w_factor > 1:
             z = ttnn.mesh_partition(z, dim=2, cluster_axis=self._ctx.w_mesh_axis)
         z = ttnn.to_layout(z, ttnn.TILE_LAYOUT)
