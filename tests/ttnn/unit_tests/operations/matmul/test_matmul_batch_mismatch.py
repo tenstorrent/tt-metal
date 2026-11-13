@@ -6,6 +6,7 @@ Regression tests for matmul with batch dimension mismatch.
 
 test_matmul_a_batch1_b_batched: A batch=1, B batch>1 (issue #12834)
 test_matmul_batch_mismatch:     A batch>1, B batch=1 (prior regression)
+test_matmul_batch_broadcast*:   torch-style batch broadcasting, per program config
 """
 
 import pytest
@@ -29,7 +30,7 @@ def test_matmul_a_batch1_b_batched(a_shape, b_shape, device):
     """
     Test ttnn.matmul where A has batch=1 and B has batch>1 (issue #12834).
     Previously crashed with "bmm expects input tensors of shapes BCMK*BCKN=BCMN".
-    The auto-selector should now pick 1D mcast config and use in0_reuse.
+    The auto-selector picks a config whose readers broadcast A across B's batches.
     """
     torch.manual_seed(0)
     a_torch = torch.randn(*a_shape)
@@ -97,4 +98,128 @@ def test_matmul_batch_mismatch(batch, M, K, N, device):
 
     # Verify correctness using PCC (allow for numerical differences due to bfloat16)
     pcc_passed, pcc_message = comp_pcc(expected, output_torch, 0.99)
+    assert pcc_passed, f"PCC check failed: {pcc_message}"
+
+
+@pytest.mark.parametrize("preallocated", [False, True], ids=["new_output", "preallocated_output"])
+@pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["dram", "l1"])
+@pytest.mark.parametrize(
+    "a_shape, b_shape, transpose_a, transpose_b",
+    [
+        # Torch-style broadcasting shapes from test_moreh_matmul.py
+        ((3, 1, 2, 1, 4, 1, 319, 95), (4, 2, 95, 470), False, False),
+        ((2, 319, 95), (2, 1, 3, 4, 1, 95, 470), False, False),
+        ((3, 1, 2, 1, 4, 1, 95, 319), (4, 2, 95, 470), True, False),
+        ((2, 319, 95), (2, 1, 3, 4, 1, 470, 95), False, True),
+        ((2, 3, 1, 2, 3, 2, 64, 64), (2, 1, 4, 2, 1, 2, 64, 64), False, False),
+        # Both sides broadcast, B of higher rank, A unbatched
+        ((4, 1, 64, 128), (1, 3, 128, 96), False, False),
+        ((2, 1, 64, 512), (1, 3, 512, 64), False, False),
+        ((4, 1, 256, 512), (1, 8, 512, 256), False, False),
+        ((2, 3, 64, 128), (3, 128, 64), False, False),
+        ((64, 128), (6, 96, 128), False, True),
+        # An odd K tile count selects the MultiCore config on L1
+        ((2, 1, 64, 96), (1, 3, 96, 64), False, False),
+        ((64, 96), (2, 3, 96, 64), False, False),
+    ],
+)
+def test_matmul_batch_broadcast(a_shape, b_shape, transpose_a, transpose_b, memory_config, preallocated, device):
+    """ttnn.matmul broadcasts batch dims like torch.matmul: aligned from the right, size-1 dims expand."""
+    torch.manual_seed(0)
+    a_torch = torch.randn(a_shape, dtype=torch.bfloat16)
+    b_torch = torch.randn(b_shape, dtype=torch.bfloat16)
+    expected = torch.matmul(
+        a_torch.float().transpose(-1, -2) if transpose_a else a_torch.float(),
+        b_torch.float().transpose(-1, -2) if transpose_b else b_torch.float(),
+    )
+
+    a_ttnn = ttnn.from_torch(a_torch, device=device, layout=ttnn.TILE_LAYOUT, memory_config=memory_config)
+    b_ttnn = ttnn.from_torch(b_torch, device=device, layout=ttnn.TILE_LAYOUT, memory_config=memory_config)
+    output_ttnn = None
+    if preallocated:
+        output_ttnn = ttnn.from_torch(
+            torch.zeros(expected.shape, dtype=torch.bfloat16),
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=memory_config,
+        )
+    output = ttnn.matmul(
+        a_ttnn, b_ttnn, transpose_a=transpose_a, transpose_b=transpose_b, optional_output_tensor=output_ttnn
+    )
+
+    assert list(output.shape) == list(expected.shape)
+    pcc_passed, pcc_message = comp_pcc(expected, ttnn.to_torch(output).float(), 0.999)
+    assert pcc_passed, f"PCC check failed: {pcc_message}"
+
+
+def _mcast_1d_config(mcast_in0):
+    # Two cores, splitting N when A is multicast and M when B is.
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(2, 1),
+        in0_block_w=2,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        per_core_M=2 if mcast_in0 else 1,
+        per_core_N=1 if mcast_in0 else 2,
+        fuse_batch=False,
+        fused_activation=None,
+        mcast_in0=mcast_in0,
+    )
+
+
+# 6 batches x 2 M blocks over 5 cores, so some cores start mid-batch.
+_REUSE_CONFIG = ttnn.MatmulMultiCoreReuseProgramConfig(
+    compute_with_storage_grid_size=(5, 1),
+    in0_block_w=2,
+    out_subblock_h=1,
+    out_subblock_w=2,
+    per_core_M=2,
+    per_core_N=2,
+)
+
+# 6 batches x 2 M blocks with 3 batches per core, so per_core_M spans batches of the broadcast output.
+_REUSE_MULTI_BATCH_CONFIG = ttnn.MatmulMultiCoreReuseProgramConfig(
+    compute_with_storage_grid_size=(2, 1),
+    in0_block_w=2,
+    out_subblock_h=1,
+    out_subblock_w=2,
+    per_core_M=6,
+    per_core_N=2,
+)
+
+
+@pytest.mark.parametrize(
+    "a_shape, b_shape, transpose_a, program_config",
+    [
+        ((2, 1, 128, 64), (1, 3, 64, 64), False, _REUSE_CONFIG),
+        ((2, 1, 64, 128), (1, 3, 64, 64), True, _REUSE_CONFIG),
+        ((2, 1, 64, 64), (1, 3, 64, 64), False, _REUSE_MULTI_BATCH_CONFIG),
+        ((2, 1, 64, 128), (1, 3, 128, 64), False, _mcast_1d_config(mcast_in0=True)),
+        ((1, 1, 64, 128), (2, 3, 128, 64), False, _mcast_1d_config(mcast_in0=True)),
+        ((2, 1, 64, 128), (1, 3, 128, 64), False, _mcast_1d_config(mcast_in0=False)),
+        ((1, 1, 64, 128), (2, 3, 128, 64), False, _mcast_1d_config(mcast_in0=False)),
+    ],
+    ids=[
+        "reuse",
+        "reuse_transpose_a",
+        "reuse_multi_batch_per_core",
+        "mcast_in0",
+        "mcast_in0_a_batch1",
+        "mcast_in1",
+        "mcast_in1_a_batch1",
+    ],
+)
+def test_matmul_batch_broadcast_program_config(a_shape, b_shape, transpose_a, program_config, device):
+    """Batch broadcasting with program configs the auto-selector would not pick for these shapes."""
+    torch.manual_seed(0)
+    a_torch = torch.randn(a_shape, dtype=torch.bfloat16)
+    b_torch = torch.randn(b_shape, dtype=torch.bfloat16)
+    expected = torch.matmul(a_torch.float().transpose(-1, -2) if transpose_a else a_torch.float(), b_torch.float())
+
+    a_ttnn = ttnn.from_torch(a_torch, device=device, layout=ttnn.TILE_LAYOUT)
+    b_ttnn = ttnn.from_torch(b_torch, device=device, layout=ttnn.TILE_LAYOUT)
+    output = ttnn.matmul(a_ttnn, b_ttnn, transpose_a=transpose_a, program_config=program_config)
+
+    assert list(output.shape) == list(expected.shape)
+    pcc_passed, pcc_message = comp_pcc(expected, ttnn.to_torch(output).float(), 0.999)
     assert pcc_passed, f"PCC check failed: {pcc_message}"

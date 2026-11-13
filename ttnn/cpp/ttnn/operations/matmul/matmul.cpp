@@ -84,6 +84,28 @@ Tensor handle_zero_volume_matmul(
     return output_tensor;
 }
 
+// Torch-style batch broadcasting with a batched B: gives the lower-rank input leading size-1 dims (a view).
+std::optional<std::pair<Tensor, Tensor>> align_batch_ranks(const Tensor& input_tensor_a, const Tensor& input_tensor_b) {
+    const auto& a_shape = input_tensor_a.logical_shape();
+    const auto& b_shape = input_tensor_b.logical_shape();
+    const bool ranks_differ_with_batched_b =
+        a_shape.rank() >= 2 && b_shape.rank() >= 2 && a_shape.rank() != b_shape.rank() && is_input_batched(b_shape);
+    if (!ranks_differ_with_batched_b) {
+        return std::nullopt;
+    }
+    const auto rank = std::max(a_shape.rank(), b_shape.rank());
+    auto to_rank = [rank](const Tensor& tensor) {
+        auto with_leading_ones = [rank](const ttnn::Shape& shape) {
+            ttsl::SmallVector<uint32_t> dims(rank - shape.rank(), 1);
+            dims.insert(dims.end(), shape.cbegin(), shape.cend());
+            return ttnn::Shape(dims);
+        };
+        return ttnn::reshape(
+            tensor, with_leading_ones(tensor.logical_shape()), with_leading_ones(tensor.padded_shape()));
+    };
+    return std::make_pair(to_rank(input_tensor_a), to_rank(input_tensor_b));
+}
+
 }  // namespace detail
 
 std::optional<UnaryWithParam> get_fused_activation(const std::optional<const Activation>& activation) {
@@ -298,6 +320,10 @@ static ttnn::Tensor bound_matmul(
             parameters.transpose_a,
             parameters.transpose_b,
             bias);
+    }
+
+    if (auto aligned = detail::align_batch_ranks(input_tensor_a, input_tensor_b)) {
+        return bound_matmul(aligned->first, aligned->second, bias, parameters, optional_output_tensor);
     }
 
     //----------------------------------------------------------------------------------------------
