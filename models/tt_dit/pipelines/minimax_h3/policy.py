@@ -414,3 +414,29 @@ def served_envelope(task: str, *, patch_alignment: int | None = None) -> Iterato
     for canvas in served_reference_canvases():
         for size in served_reference_image_sizes(*canvas):
             yield canvas, size
+
+
+def prompt_warm_walk(
+    spans: Sequence[tuple[int, int]], alignment: int, lengths: Sequence[int] | None = None
+) -> list[tuple[int, int]]:
+    """`(unit, padded length)` encodes for the prompt-encoder warm-up: every unit once, every length once.
+
+    `spans[unit]` is the `(first, last)` padded prompt length that warm unit reaches. The text decoder's
+    programs are keyed on the padded length and the vision tower's on the unit, so the cross product of
+    the two is not needed. `lengths` narrows the lengths that need an encode (default: all reachable).
+    """
+    reachable = {length for first, last in spans for length in range(first, last + 1, alignment)}
+    wanted = reachable if lengths is None else reachable & set(lengths)
+    walk: list[tuple[int, int]] = []
+    covered: set[int] = set()
+    for unit, (first, last) in enumerate(spans):
+        candidates = (length for length in range(last, first - 1, -alignment) if length in wanted - covered)
+        length = next(candidates, first)
+        walk.append((unit, length))
+        covered.add(length)
+    for unit, (first, last) in enumerate(spans):
+        for length in range(first, last + 1, alignment):
+            if length in wanted - covered:
+                walk.append((unit, length))
+                covered.add(length)
+    return walk

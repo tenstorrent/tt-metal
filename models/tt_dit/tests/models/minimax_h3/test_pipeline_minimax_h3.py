@@ -320,6 +320,30 @@ def _assert_no_denoise_misses(pipeline, warm_s: int, measured_s: int) -> None:
     ), f"the {measured_s} s request compiled {misses['denoising']} denoise programs after the {warm_s} s warm: {misses}"
 
 
+@pytest.mark.skipif(os.environ.get(DYNAMIC_GATE_ENV) != "1", reason=f"set {DYNAMIC_GATE_ENV}=1 to run")
+@pytest.mark.timeout(5400)
+@pytest.mark.parametrize(
+    ("mesh_device", "device_params"),
+    [MESH_4X8_RING, MESH_4X8_LINE, MESH_4X32_RING],
+    indirect=["mesh_device", "device_params"],
+)
+def test_prompt_encoder_warm_walk_leaves_no_program(mesh_device, reset_seeds):
+    """The reduced prompt-encoder warm-up compiles everything the full layout x length product does."""
+    pipeline = MiniMaxH3Pipeline.create_pipeline(
+        mesh_device=mesh_device,
+        weights_dir=weights_dir("transformer", "text_encoder", "vae", "audio_vae"),
+        vae_output_type="yuv420",
+        dynamic_length=True,
+        warmup=False,
+        trace_audio=False,
+    )
+    pipeline._warm_prompt_encoder_envelope()
+    warmed = mesh_device.num_program_cache_entries()
+    pipeline._warm_prompt_encoder_envelope(full=True)
+    left = mesh_device.num_program_cache_entries() - warmed
+    assert left == 0, f"the reduced warm-up left {left} programs for the full envelope to compile"
+
+
 @pytest.mark.skipif(os.environ.get(DYNAMIC_GATE_ENV) == "0", reason=f"{DYNAMIC_GATE_ENV}=0 opts out of the gate")
 @pytest.mark.timeout(5400)
 @pytest.mark.parametrize(

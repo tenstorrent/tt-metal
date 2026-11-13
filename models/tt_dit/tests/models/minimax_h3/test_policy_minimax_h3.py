@@ -185,6 +185,36 @@ def test_prompt_pad_warm_lengths_are_every_padded_prompt_below_the_cap():
     assert padded - {caps.prompt} == set(range(alignment, caps.prompt, alignment))
 
 
+# Vision rows of the served keyframe layouts (one keyframe, then two), as the 4x8 and 4x32 warm-ups see them.
+_VISION_ROWS = {
+    256: (584, 608, 656, 728, 776, 800, 848, 920, 968, 980, 1034)
+    + (1168, 1216, 1264, 1312, 1408, 1456, 1504, 1600, 1648, 1696, 1792, 1840, 1888, 1960, 2016, 2068),
+    1024: (584, 776, 800, 1034, 1312, 1600, 1840, 2068),
+}
+
+
+@pytest.mark.parametrize(("alignment", "passes"), [(256, 32), (1024, 9)])
+def test_prompt_warm_walk_visits_every_unit_and_every_length_once(alignment, passes):
+    cap = MiniMaxH3ArenaCaps().prompt
+
+    def span(vision_rows: int) -> tuple[int, int]:
+        budget = min(policy.MINIMAX_H3_MAX_TEXT_TOKENS, cap - vision_rows)
+        return -(-(vision_rows + 1) // alignment) * alignment, -(-(vision_rows + budget) // alignment) * alignment
+
+    spans = [span(rows) for rows in (0, *_VISION_ROWS[alignment])]
+    walk = policy.prompt_warm_walk(spans, alignment)
+    reachable = {length for first, last in spans for length in range(first, last + 1, alignment)}
+    assert {unit for unit, _ in walk} == set(range(len(spans)))
+    assert {length for _, length in walk} == reachable == set(range(alignment, cap + 1, alignment))
+    assert all(spans[unit][0] <= length <= spans[unit][1] for unit, length in walk)
+    assert len(walk) == len(set(walk)) == passes
+    assert sum(len(range(first, last + 1, alignment)) for first, last in spans) == {256: 355, 1024: 33}[alignment]
+    # A length-free decoder only needs its two ends: one encode per unit covers them.
+    ends = policy.prompt_warm_walk(spans, alignment, lengths=(alignment, cap))
+    assert len(ends) == len(spans) and {alignment, cap} <= {length for _, length in ends}
+    assert [unit for unit, _ in ends] == list(range(len(spans)))
+
+
 def test_a_32_tile_canvas_fills_the_4x32_decode_wave():
     wave_size = 128
 

@@ -133,6 +133,7 @@ from .policy import (
     align_num_frames,
     decodable_canvases,
     get_num_frames,
+    prompt_warm_walk,
     served_canvases,
     served_envelope,
     served_reference_image_sizes,
@@ -280,6 +281,15 @@ def _resolve_dit_fsdp(preset: Mapping, *, dit_fsdp: bool | None, task: str, dyna
     if dynamic_length and task == "ref2va":
         return True, "dynamic ref2va"
     return False, "default"
+
+
+def _resolve_encoder_dynamic_length(
+    requested: bool | None, *, dynamic_length: bool, blackhole: bool, task: str, topology, mesh_shape: tuple[int, ...]
+) -> bool:
+    """kwarg, else on with `dynamic_length` where the encoder's path is tested: Blackhole 4x8 ring, not ref2va."""
+    if requested is not None:
+        return bool(requested)
+    return dynamic_length and blackhole and task != "ref2va" and topology == ttnn.Topology.Ring and mesh_shape == (4, 8)
 
 
 def _resolve_audio_t_shard(
@@ -601,6 +611,8 @@ def _is_host_rank() -> bool:
 
 
 _TQDM_BAR_FORMAT = "\033[A\r\033[K{l_bar}{bar}{r_bar}\n"
+# Decoder layers per warm-up encode: one compiles the layer programs, the next three take the deepstack adds.
+_PROMPT_WARM_LAYERS = 4
 
 
 def _tqdm_spacer() -> None:
@@ -638,10 +650,14 @@ class MiniMaxH3Pipeline:
         warmup: bool = True,
         dynamic_length: bool | None = None,
         max_sequence_length: int | None = None,
+        encoder_dynamic_length: bool | None = None,
     ) -> None:
         """`dynamic_length` serves every packed length up to `max_sequence_length` with one program set per
         length class (eager only). It is the 4x8 presets' default on both architectures; `_resolve_denoise_path` has
-        the precedence (kwarg > MINIMAX_H3_DYNAMIC_LENGTH > preset) and how the bucketed kwargs keep that path."""
+        the precedence (kwarg > MINIMAX_H3_DYNAMIC_LENGTH > preset) and how the bucketed kwargs keep that path.
+
+        `encoder_dynamic_length` does the same for the prompt encoder; None turns it on with `dynamic_length` on
+        the Blackhole 4x8 ring for t2va/fl2va only."""
         self.mesh_device = mesh_device
         self.weights_dir = Path(weights_dir)
         self.video_shift = VIDEO_SHIFT if video_shift is None else float(video_shift)
@@ -696,6 +712,8 @@ class MiniMaxH3Pipeline:
         self._force_pad_to: int | None = None
         self._force_prompt_pad: int | None = None
         self._force_vision_pad: int | None = None
+        # Decoder layers a warm-up encode runs: every layer has the same programs, so a few compile them all.
+        self._warm_encoder_layers: int | None = None
         self._tt_video = StateTensor()
         self._tt_audio = StateTensor()
         self._tt_cond_video = StateTensor()
@@ -841,6 +859,15 @@ class MiniMaxH3Pipeline:
         # on every device and no length-keyed `mesh_partition` program. On Wormhole and on the dynamic-length path.
         self._shard_assembly_indices = (is_wormhole_b0() or self.dynamic_length) and self.sp_factor > 1
 
+        self.encoder_dynamic_length = _resolve_encoder_dynamic_length(
+            encoder_dynamic_length,
+            dynamic_length=self.dynamic_length,
+            blackhole=is_blackhole(),
+            task=task,
+            topology=topology,
+            mesh_shape=shape,
+        )
+
         self._host_log("building the Qwen3-VL text encoder")
         self.encoder_ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
         self._text_encoder, self._text_config = build_minimax_h3_text_encoder(
@@ -852,6 +879,7 @@ class MiniMaxH3Pipeline:
             load_weights=False,
             kv_gather_capacity=padded_sequence_length(self.arena_caps.prompt, self.sp_factor),
             use_persistent_ccl_buffers=self.use_persistent_ccl_buffers,
+            dynamic_length=self.encoder_dynamic_length,
         )
         self._transformer = self._build_transformer()
         yuv = self.vae_output_type == "yuv420"
@@ -922,6 +950,7 @@ class MiniMaxH3Pipeline:
         coresident: bool | None = None,
         dynamic_length: bool | None = None,
         max_sequence_length: int | None = None,
+        encoder_dynamic_length: bool | None = None,
         **subclass_kwargs,
     ) -> "MiniMaxH3Pipeline":
         """`task="t2va"` serves both t2va and fl2va; `task="ref2va"` loads `transformer_ref/`.
@@ -968,6 +997,7 @@ class MiniMaxH3Pipeline:
             coresident=coresident,
             dynamic_length=dynamic_length,
             max_sequence_length=max_sequence_length,
+            encoder_dynamic_length=encoder_dynamic_length,
             **subclass_kwargs,
         )
 
@@ -1432,18 +1462,34 @@ class MiniMaxH3Pipeline:
             position_ids=position_ids,
             interleaved=has_vision,
         )
-        tt_ids = ttnn.from_torch(
-            input_ids,
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.mesh_device,
-        )
+        if self.encoder_dynamic_length:
+            # Split per chip on the host; the rope tables are tilized there too, so no upload program is keyed
+            # on the length.
+            tt_ids = from_torch(
+                input_ids.to(torch.int32),
+                device=self.mesh_device,
+                dtype=ttnn.uint32,
+                layout=ttnn.Layout.ROW_MAJOR,
+                mesh_axes=[None, self.sp_axis],
+            )
+            pos_embeds = tuple(
+                ttnn.to_device(
+                    from_torch(t, device=self.mesh_device, mesh_axes=[None, None, self.sp_axis, None], on_host=True),
+                    self.mesh_device,
+                )
+                for t in (cos, sin)
+            )
+        else:
+            tt_ids = ttnn.from_torch(
+                input_ids,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.mesh_device,
+            )
+            pos_embeds = (bf16_tensor(cos, device=self.mesh_device), bf16_tensor(sin, device=self.mesh_device))
         # Causal, and a single un-padded presentation, so no mask is needed.
         taps = encoder.forward(
-            tt_ids,
-            attention_mask=None,
-            pos_embeds=(bf16_tensor(cos, device=self.mesh_device), bf16_tensor(sin, device=self.mesh_device)),
-            **vision_kwargs,
+            tt_ids, attention_mask=None, pos_embeds=pos_embeds, num_layers=self._warm_encoder_layers, **vision_kwargs
         )
         return taps[0], tags
 
@@ -2633,9 +2679,10 @@ class MiniMaxH3Pipeline:
         else:
             self._warm_prompt_encoder_envelope()
 
-    def _warm_prompt_encoder_envelope(self) -> None:
+    def _warm_prompt_encoder_envelope(self, *, full: bool = False) -> None:
         """Compile every prompt-encoding program a served t2va/fl2va request can reach, strictly
-        before trace capture (a program first compiled under live traces can corrupt a replay).
+        before trace capture (a replay can overwrite a program compiled after capture). `full` runs the
+        whole layout x length product at full depth, which the reduced walk must leave nothing for.
         """
         if self.sp_factor <= 1:
             return
@@ -2650,46 +2697,73 @@ class MiniMaxH3Pipeline:
         before = self.mesh_device.num_program_cache_entries()
         tower_sizes = set()
 
-        host = _is_host_rank()
-        if host:
-            _tqdm_spacer()
-        for n_keyframes, canvas in tqdm.tqdm(
-            list(served_envelope(self.task, patch_alignment=alignment)),
-            desc="Warming prompt encoder keyframe layouts",
-            disable=not host,
-            file=sys.stderr,
-            bar_format=_TQDM_BAR_FORMAT,
-        ):
+        def keyframes_of(n_keyframes: int, canvas: tuple[int, int] | None) -> list[Image.Image]:
             if canvas is None:
-                keyframes: list[Image.Image] = []
-                vision_len = 0
-            else:
-                height, width = canvas
-                keyframes = [
-                    prepare_keyframe_image(warm_image, height, width, stretch=(i == 0)) for i in range(n_keyframes)
-                ]
+                return []
+            height, width = canvas
+            return [prepare_keyframe_image(warm_image, height, width, stretch=(i == 0)) for i in range(n_keyframes)]
+
+        # One unit per vision layout, text-only first: the layout, its rows in the prompt and its text budget.
+        units = []
+        for n_keyframes, canvas in served_envelope(self.task, patch_alignment=alignment):
+            vision_len = 0
+            if canvas is not None:
                 probe = self._filler_prompt(1)
-                probe_ids, _tags, _type_ids, pixel_values, _grid = self._build_presentation(probe, keyframes)
+                probe_ids, _tags, _type_ids, pixel_values, _grid = self._build_presentation(
+                    probe, keyframes_of(n_keyframes, canvas)
+                )
                 tower_sizes.add(align_up(pixel_values.shape[0]))
                 probe_tokens = len(self.tokenizer(probe, add_special_tokens=False)["input_ids"])
                 vision_len = probe_ids.shape[1] - probe_tokens
+            units.append((n_keyframes, canvas, vision_len, min(MINIMAX_H3_MAX_TEXT_TOKENS, caps.prompt - vision_len)))
+        spans = [(align_up(vision_len + 1), align_up(vision_len + budget)) for *_, vision_len, budget in units]
 
-            budget = min(MINIMAX_H3_MAX_TEXT_TOKENS, caps.prompt - vision_len)
-            buckets = range(align_up(vision_len + 1), align_up(vision_len + budget) + 1, alignment)
-            for bucket in buckets:
+        # A traced pipeline keeps the full layout x length product: a program it missed would compile under live traces.
+        reduced = self.dynamic_length and not full
+        if reduced:
+            # A length-free encoder has two program sets at most, met at its shortest and longest length.
+            ends = (alignment, align_up(caps.prompt)) if self.encoder_dynamic_length else None
+            walk = prompt_warm_walk(spans, alignment, lengths=ends)
+        else:
+            walk = [
+                (unit, bucket)
+                for unit, (first, last) in enumerate(spans)
+                for bucket in range(first, last + 1, alignment)
+            ]
+
+        host = _is_host_rank()
+        if host:
+            _tqdm_spacer()
+        self._warm_encoder_layers = _PROMPT_WARM_LAYERS if reduced else None
+        try:
+            for unit, bucket in tqdm.tqdm(
+                walk,
+                desc="Warming prompt encoder lengths and layouts",
+                disable=not host,
+                file=sys.stderr,
+                bar_format=_TQDM_BAR_FORMAT,
+            ):
+                n_keyframes, canvas, vision_len, budget = units[unit]
                 prompt = self._filler_prompt(min(bucket - vision_len, budget))
                 landed = align_up(vision_len + len(self.tokenizer(prompt, add_special_tokens=False)["input_ids"]))
                 assert (
                     landed == bucket
                 ), f"filler landed on {landed}, expected bucket {bucket} (vision_len {vision_len})"
-                embeds, _ = self.encode_prompt(prompt, keyframes=keyframes)
+                embeds, _ = self.encode_prompt(prompt, keyframes=keyframes_of(n_keyframes, canvas))
                 spec = embeds.spec
                 ttnn.deallocate(embeds)
+        finally:
+            self._warm_encoder_layers = None
 
         self._warm_prompt_pad(spec, range(alignment, caps.prompt, alignment))
-        self._warm_vision_merge(range(alignment, align_up(caps.prompt) + 1, alignment), sorted(tower_sizes))
+        # The length-free encoder's merge is keyed on the tower size alone.
+        merge_lengths = range(alignment, align_up(caps.prompt) + 1, alignment)
+        if reduced and self.encoder_dynamic_length:
+            merge_lengths = merge_lengths[-1:]
+        self._warm_vision_merge(merge_lengths, sorted(tower_sizes))
         self._host_log(
-            f"prompt encoder envelope warmed: +{self.mesh_device.num_program_cache_entries() - before} programs"
+            f"prompt encoder envelope warmed in {len(walk)} encodes: "
+            f"+{self.mesh_device.num_program_cache_entries() - before} programs"
         )
 
     def _warm_vae_decode(self) -> None:
