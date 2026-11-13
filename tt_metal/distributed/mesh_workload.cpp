@@ -1236,14 +1236,20 @@ const Program& program_at(
 
 }  // namespace
 
-void UpdateProgramRunArgsForDevice(
-    distributed::MeshWorkload& workload,
-    const distributed::MeshCoordinateRange& program_range,
-    const distributed::MeshCoordinate& device,
-    const ProgramRunArgs& values) {
-    const auto resolved = resolve_named_args(program_at(workload, program_range, device), values);
-    workload.impl().set_per_device_named_runtime_args(program_range, device, resolved.args, resolved.words);
+}  // namespace tt::tt_metal::experimental
+
+namespace tt::tt_metal::distributed {
+
+void MeshWorkload::update_program_run_args_for_device(
+    const MeshCoordinateRange& program_range, const MeshCoordinate& device, const ProgramRunArgs& values) {
+    const auto resolved =
+        experimental::resolve_named_args(experimental::program_at(*this, program_range, device), values);
+    impl().set_per_device_named_runtime_args(program_range, device, resolved.args, resolved.words);
 }
+
+}  // namespace tt::tt_metal::distributed
+
+namespace tt::tt_metal::experimental {
 
 void SetRuntimeArgsForDevice(
     distributed::MeshWorkload& mesh_workload,
