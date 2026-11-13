@@ -767,7 +767,7 @@ PERF_TEST_SCHEMAS = {
         "test_name_aliases": {"perf_pack_dest_bank": "perf_pack_dest_bank"},
     },
     "perf_pack": {
-        "version": 2,
+        "version": 3,
         "columns": [
             "block_ct_dim",
             "block_rt_dim",
@@ -795,6 +795,7 @@ PERF_TEST_SCHEMAS = {
             "output_num_blocks",
             "output_num_tiles_in_block",
             "relu_config",
+            "relu_type",
             "tile_cnt",
             "tilize",
             "unpack_to_dest",
@@ -1850,7 +1851,7 @@ PERF_TEST_SCHEMAS_QSR = {
         "test_name_aliases": {"perf_pack_l1_acc_quasar": "perf_pack_l1_acc_quasar"},
     },
     "perf_pack_quasar": {
-        "version": 6,
+        "version": 7,
         "columns": [
             "block_ct_dim",
             "block_rt_dim",
@@ -1883,6 +1884,7 @@ PERF_TEST_SCHEMAS_QSR = {
             "output_num_blocks",
             "output_num_tiles_in_block",
             "relu_config",
+            "relu_type",
             "tile_cnt",
             "unpack_to_dest",
         ],

@@ -29,6 +29,7 @@ from .llk_params import (
     MathFidelity,
     MathOperation,
     NarrowTile,
+    PackerReluType,
     PackUntilizeBenchmark,
     PerfRunType,
     ReduceOrder,
@@ -2226,6 +2227,20 @@ class RELU_CONFIG(RuntimeParameter):
 
     def convert_to_struct_fields(self) -> tuple[str, str]:
         return "int RELU_CONFIG;", "i"
+
+
+@dataclass
+class RELU_TYPE(TemplateParameter):
+    """The packer ReLU mode by name, recorded as a perf CSV column; it emits no code.
+
+    ``RELU_CONFIG`` packs the mode together with a threshold, so this states the mode on its own.
+    It is a template, not a runtime parameter, because every runtime field is serialised to L1.
+    """
+
+    relu_type: PackerReluType = PackerReluType.NoRelu
+
+    def convert_to_cpp(self) -> str:
+        return ""
 
 
 @dataclass
