@@ -867,6 +867,15 @@ class MiniMaxH3Pipeline:
             topology=topology,
             mesh_shape=shape,
         )
+        # The prompt-encoder warm-up without the layout x length product, where it is proven to miss nothing.
+        self._reduced_prompt_warm = _resolve_encoder_dynamic_length(
+            None,
+            dynamic_length=self.dynamic_length,
+            blackhole=is_blackhole(),
+            task=task,
+            topology=topology,
+            mesh_shape=shape,
+        )
 
         self._host_log("building the Qwen3-VL text encoder")
         self.encoder_ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
@@ -2718,8 +2727,7 @@ class MiniMaxH3Pipeline:
             units.append((n_keyframes, canvas, vision_len, min(MINIMAX_H3_MAX_TEXT_TOKENS, caps.prompt - vision_len)))
         spans = [(align_up(vision_len + 1), align_up(vision_len + budget)) for *_, vision_len, budget in units]
 
-        # A traced pipeline keeps the full layout x length product: a program it missed would compile under live traces.
-        reduced = self.dynamic_length and not full
+        reduced = self._reduced_prompt_warm and not full
         if reduced:
             # A length-free encoder has two program sets at most, met at its shortest and longest length.
             ends = (alignment, align_up(caps.prompt)) if self.encoder_dynamic_length else None

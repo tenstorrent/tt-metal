@@ -213,6 +213,8 @@ def test_prompt_warm_walk_visits_every_unit_and_every_length_once(alignment, pas
     ends = policy.prompt_warm_walk(spans, alignment, lengths=(alignment, cap))
     assert len(ends) == len(spans) and {alignment, cap} <= {length for _, length in ends}
     assert [unit for unit, _ in ends] == list(range(len(spans)))
+    # A unit with no room for text is not encoded.
+    assert policy.prompt_warm_walk([(alignment, cap), (cap + alignment, cap)], alignment, lengths=(cap,)) == [(0, cap)]
 
 
 def test_a_32_tile_canvas_fills_the_4x32_decode_wave():

@@ -33,7 +33,7 @@ from ....parallel.manager import CCLManager
 from ....utils import tensor
 from ....utils.check import assert_quality
 from ....utils.hf_local_mirror import ensure_cached
-from ....utils.tensor import bf16_tensor, local_device_to_torch
+from ....utils.tensor import bf16_tensor, from_torch, local_device_to_torch
 from .common_av import is_host
 
 _LOCAL_MIRROR = "/data/cglagovich/MiniMax-H3-diffusers"
@@ -736,21 +736,26 @@ def test_fused_conditioner_two_refs_real_weights(
 @pytest.mark.parametrize("check_pcc", [pytest.param(True, id="check"), pytest.param(False, id="perf")])
 # 512 is a whole number of SEQ_BUCKET_SIZE=128 buckets, so the encoder pads nothing.
 @pytest.mark.parametrize("seq_len", [512], ids=["prompt_512"])
+@pytest.mark.parametrize("dynamic_length", [False, True], ids=["per_length", "dynamic"])
 def test_fused_conditioner_t2va_real_weights(
-    conditioner, mesh_device, submesh_shape, tp_axis, sp_on, is_fsdp, num_links, check_pcc, seq_len
+    conditioner, mesh_device, submesh_shape, tp_axis, sp_on, is_fsdp, num_links, check_pcc, seq_len, dynamic_length
 ):
-    """The `t2va` conditioner: text-only presentation on released weights; no vision tower, decoder only."""
+    """The `t2va` conditioner: text-only presentation on released weights; no vision tower, decoder only.
+    `dynamic` runs the encoder's one-program-set path, which needs SP and two K heads per chip (TP=4)."""
     path, reference = conditioner
     submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
     shape = tuple(submesh.shape)
     tp_factor = shape[tp_axis]
     sp_axis = (1 - tp_axis) if sp_on else None
     sp_factor = shape[sp_axis] if sp_on else 1
+    if dynamic_length and not (sp_on and tp_factor == 4):
+        pytest.skip("the dynamic path needs sequence parallelism and more than one K head per chip")
     cfg = reference.language_model.config
 
     torch.manual_seed(0)
     ids = torch.randint(0, cfg.vocab_size, (1, seq_len))
     tag = f"tp{tp_factor}" + (f"_sp{sp_factor}" if sp_on else "") + (f"_fsdp{shape[1 - tp_axis]}" if is_fsdp else "")
+    tag += "_dynamic" if dynamic_length else ""
     logger.info(f"[t2va] presentation built: seq={seq_len}, text only, config {tag}.")
 
     golden = None
@@ -776,6 +781,8 @@ def test_fused_conditioner_t2va_real_weights(
         is_fsdp=is_fsdp,
         num_layers=TAP,
         load_weights=False,
+        kv_gather_capacity=seq_len if dynamic_length else None,
+        dynamic_length=dynamic_length,
     )
     layer_re = re.compile(r"^layers\.(\d+)\.")
     truncated = {
@@ -793,8 +800,24 @@ def test_fused_conditioner_t2va_real_weights(
         dcos, dsin = create_rope_tensors(
             1, seq_len, None, head_dim, rope_params["rope_theta"], rope_params["mrope_section"]
         )
-        tt_ids = ttnn.from_torch(ids, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=submesh)
-        tt_dcos, tt_dsin = bf16_tensor(dcos, device=submesh), bf16_tensor(dsin, device=submesh)
+        if dynamic_length:
+            # The dynamic path takes its inputs split per chip, the rope tables tilized on the host.
+            tt_ids = from_torch(
+                ids.to(torch.int32),
+                device=submesh,
+                dtype=ttnn.uint32,
+                layout=ttnn.Layout.ROW_MAJOR,
+                mesh_axes=[None, sp_axis],
+            )
+            tt_dcos, tt_dsin = (
+                ttnn.to_device(
+                    from_torch(t, device=submesh, mesh_axes=[None, None, sp_axis, None], on_host=True), submesh
+                )
+                for t in (dcos, dsin)
+            )
+        else:
+            tt_ids = ttnn.from_torch(ids, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=submesh)
+            tt_dcos, tt_dsin = bf16_tensor(dcos, device=submesh), bf16_tensor(dsin, device=submesh)
         ttnn.synchronize_device(submesh)
         t1 = time.time()
         out = encoder.forward(tt_ids, attention_mask=None, pos_embeds=(tt_dcos, tt_dsin))[0]

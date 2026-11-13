@@ -9374,9 +9374,8 @@ def test_ring_joint_attention_dynamic_local_n_chain_lengths(order):
 @pytest.mark.timeout(1800)
 @pytest.mark.parametrize("q_heads_per_chip", [1, 8], ids=["mha", "gqa"])
 def test_ring_joint_attention_dynamic_local_n_rejects_single_head(expect_error, q_heads_per_chip):
-    """One K head per chip selects the shared-K batch chain (the row-wide K/V multicast for GQA), which is
-    host-built per length and never rewritten on a cache hit: validation must reject it before any program is
-    built."""
+    """One K head per chip is refused before any program is built: for MHA it selects the shared-K batch chain,
+    host-built per length and never rewritten on a cache hit; one-head GQA builds no chain but is untested."""
     mesh_config = _h3_dynamic_mesh_config()
     runtime = open_ring_joint_sdpa_runtime(mesh_config)
     try:

@@ -421,15 +421,18 @@ def prompt_warm_walk(
 ) -> list[tuple[int, int]]:
     """`(unit, padded length)` encodes for the prompt-encoder warm-up: every unit once, every length once.
 
-    `spans[unit]` is the `(first, last)` padded prompt length that warm unit reaches. The text decoder's
-    programs are keyed on the padded length and the vision tower's on the unit, so the cross product of
-    the two is not needed. `lengths` narrows the lengths that need an encode (default: all reachable).
+    `spans[unit]` is the `(first, last)` padded prompt length that warm unit reaches; a unit with no room for
+    text (`last < first`) is skipped. The text decoder's programs are keyed on the padded length and the vision
+    tower's on the unit, so the cross product of the two is not needed. `lengths` narrows the lengths that need
+    an encode (default: all reachable).
     """
     reachable = {length for first, last in spans for length in range(first, last + 1, alignment)}
     wanted = reachable if lengths is None else reachable & set(lengths)
     walk: list[tuple[int, int]] = []
     covered: set[int] = set()
     for unit, (first, last) in enumerate(spans):
+        if last < first:
+            continue
         candidates = (length for length in range(last, first - 1, -alignment) if length in wanted - covered)
         length = next(candidates, first)
         walk.append((unit, length))

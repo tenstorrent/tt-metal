@@ -447,8 +447,8 @@ void validate_dynamic_local_n(const RingJointSDPAParams& args, const RingJointSD
         tensor_args.input_k.padded_shape()[2],
         v_shape[2],
         tensor_args.input_v->padded_shape()[2]);
-    // One K head per chip selects the shared-K batch chain, or the row-wide multicast for GQA: both are host-built
-    // per length and the hit path cannot rebuild them.
+    // One K head per chip: MHA selects the shared-K batch chain, host-built per length and not rebuilt on a hit.
+    // One-head GQA builds no chain under dynamic_local_n but is untested, so it is refused too.
     TT_FATAL(
         tensor_args.gathered_k.logical_shape()[1] > 1,
         "dynamic_local_n requires more than one K head per chip (the one-head K/V chain is built per length). "

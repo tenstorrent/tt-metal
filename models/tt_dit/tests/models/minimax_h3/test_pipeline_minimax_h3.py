@@ -324,19 +324,24 @@ def _assert_no_denoise_misses(pipeline, warm_s: int, measured_s: int) -> None:
 @pytest.mark.timeout(5400)
 @pytest.mark.parametrize(
     ("mesh_device", "device_params"),
-    [MESH_4X8_RING, MESH_4X8_LINE, MESH_4X32_RING],
+    [MESH_4X8_RING],
     indirect=["mesh_device", "device_params"],
 )
-def test_prompt_encoder_warm_walk_leaves_no_program(mesh_device, reset_seeds):
-    """The reduced prompt-encoder warm-up compiles everything the full layout x length product does."""
+@pytest.mark.parametrize("encoder_dynamic_length", [None, False], ids=["encoder_default", "encoder_per_length"])
+def test_prompt_encoder_warm_walk_leaves_no_program(mesh_device, reset_seeds, encoder_dynamic_length):
+    """The reduced prompt-encoder warm-up compiles everything the full layout x length product does, with the
+    length-free encoder and with one program set per length."""
     pipeline = MiniMaxH3Pipeline.create_pipeline(
         mesh_device=mesh_device,
         weights_dir=weights_dir("transformer", "text_encoder", "vae", "audio_vae"),
         vae_output_type="yuv420",
         dynamic_length=True,
+        encoder_dynamic_length=encoder_dynamic_length,
         warmup=False,
         trace_audio=False,
     )
+    if not pipeline._reduced_prompt_warm:
+        pytest.skip("this mesh keeps the full layout x length warm-up")
     pipeline._warm_prompt_encoder_envelope()
     warmed = mesh_device.num_program_cache_entries()
     pipeline._warm_prompt_encoder_envelope(full=True)

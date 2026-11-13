@@ -406,18 +406,16 @@ def test_decoder_block_dynamic_length(mesh_device):
         )
 
         def run(block, **kwargs):
-            out = block.forward(
-                _shard_seq(x, mesh_device, sp_axis, 1, seq_len),
-                attention_bias=None,
-                pos_embeds=_rope(mesh_device, seq_len, sp_axis=sp_axis, seq_pad=seq_len),
-                **kwargs,
-            )
-            return _gather_seq(out, sp_axis, seq_len)
+            inputs = _shard_seq(x, mesh_device, sp_axis, 1, seq_len)
+            pos_embeds = _rope(mesh_device, seq_len, sp_axis=sp_axis, seq_pad=seq_len)
+            entries = mesh_device.num_program_cache_entries()
+            out = block.forward(inputs, attention_bias=None, pos_embeds=pos_embeds, **kwargs)
+            return _gather_seq(out, sp_axis, seq_len), mesh_device.num_program_cache_entries() - entries
 
-        expected = run(default)
-        entries = mesh_device.num_program_cache_entries()
-        got = run(dynamic, logical_n=logical_n)
-        added.append(mesh_device.num_program_cache_entries() - entries)
+        # The dynamic layer goes first: the default layer's programs at this length must not hide its own.
+        got, programs = run(dynamic, logical_n=logical_n)
+        added.append(programs)
+        expected, _ = run(default)
         assert_quality(expected, got, pcc=0.9999)
     logger.info(f"programs added by the dynamic layer per length: {added}")
     assert added[1:] == [1, 0, 0, 0], f"programs added per length: {added}"
