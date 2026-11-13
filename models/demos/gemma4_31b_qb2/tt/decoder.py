@@ -302,13 +302,11 @@ class Decoder:
             if weight.memory_config().is_sharded():
                 assert weight.memory_config() == mem
                 assert weight.buffer_unique_id() == self.decode_weights[name].buffer_unique_id()
-        # Separate prefill gate/up weights are already resident. Decode
-        # owns its DRAM-sharded packed copy; retain no unused duplicate.
-        del self.gate_up
-        if not self.sliding:
-            # Tied full-attention prefill consumes qk. Decode already owns
-            # its separate DRAM-sharded qkv; this setup copy has no reader.
-            del self.qkv
+        # Prefill uses the decode copies too: each matrix is rebuilt as an interleaved temporary when a prefill
+        # chunk needs it (see _prefill_weight), so a layer keeps one copy of its weights, not two.
+        for name in ("gate_up", "gate", "up", "o", "down", "qkv", "qk"):
+            if hasattr(self, name):
+                delattr(self, name)
         self.layer_scalar = sd["layer_scalar"].item()
         table_key = ("rope", self.kind)
         if table_key not in shared_setup:
@@ -513,10 +511,34 @@ class Decoder:
         )
         return ttnn.typecast(y, ttnn.bfloat16) if y.dtype != ttnn.bfloat16 else y
 
-    def _pref_linear(self, x, name, activation=None):
+    def _prefill_weight(self, name):
+        """Interleaved prefill weight(s) rebuilt from the decode copy; same values, so prefill results are unchanged.
+
+        Returns a tensor, or for "gate_up" the (gate, up) pair. The caller deallocates them after use.
+        """
+        if name in ("qkv", "o", "down"):
+            return ttnn.to_memory_config(self.decode_weights[name], ttnn.DRAM_MEMORY_CONFIG)
+        full = ttnn.to_memory_config(self.decode_weights["qkv" if name == "qk" else "gate_up"], ttnn.DRAM_MEMORY_CONFIG)
+        n = full.shape[-1]
+        if name == "qk":
+            # Tied K=V: the decode copy packs [q | k | v] per rank, prefill takes [q | k].
+            width = n - self.kv_heads * self.head_dim
+            out = ttnn.slice(full, [0] * len(full.shape), list(full.shape)[:-1] + [width])
+            ttnn.deallocate(full)
+            return out
+        half = n // 2
+        shape = list(full.shape)
+        zeros = [0] * len(shape)
+        gate = ttnn.slice(full, zeros, shape[:-1] + [half])
+        up = ttnn.slice(full, zeros[:-1] + [half], shape[:-1] + [n])
+        ttnn.deallocate(full)
+        return gate, up
+
+    def _pref_linear(self, x, name, activation=None, weight=None):
         import math
 
-        weight = getattr(self, name)
+        owned = weight is None
+        weight = self._prefill_weight(name) if owned else weight
         grid = (8, 8) if self.sliding and name in ("qkv", "qk") else (11, 8) if self.sliding else (11, 10)
         wide_qkv = (
             self.sliding
@@ -559,7 +581,7 @@ class Decoder:
             fuse_batch=False,
             fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU_TANH) if activation else None,
         )
-        return ttnn.linear(
+        out = ttnn.linear(
             x,
             weight,
             program_config=config,
@@ -567,6 +589,9 @@ class Decoder:
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        if owned:
+            ttnn.deallocate(weight)
+        return out
 
     def _dlinear(self, x, name):
         weight = self.decode_weights[name]
@@ -665,8 +690,11 @@ class Decoder:
 
     def _prefill_mlp(self, x):
         n = self._input_norm(x, "pre_feedforward_layernorm", False)
-        gate = self._pref_linear(n, "gate", "gelu_tanh")
-        up = self._pref_linear(n, "up")
+        gate_w, up_w = self._prefill_weight("gate_up")
+        gate = self._pref_linear(n, "gate", "gelu_tanh", weight=gate_w)
+        up = self._pref_linear(n, "up", weight=up_w)
+        ttnn.deallocate(gate_w)
+        ttnn.deallocate(up_w)
         del n
         product = ttnn.multiply(gate, up)
         del gate, up
