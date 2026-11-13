@@ -311,7 +311,7 @@ def test_the_verify_body_builds_the_positions_once_for_every_attention_layer(mon
     model._vfy_state_idx = model._vfy_conv_sel = None
     model.embd = lambda tok: FT((1, 1, 8, DIM), "x")
     model._residual_ar = lambda rows: None
-    model._spec_tail = lambda x: log.append(("tail", x)) or ("logits", "feed")
+    model._spec_tail_ids = lambda x, shard_ids: log.append(("tail", x)) or ("logits", "feed", None)
     model.layers = [layer(False), layer(True), layer(False), layer(True)]
     model._forward_verify_bucket_tp(n_users=2)
 
