@@ -375,15 +375,25 @@ inline void init_max_pool_with_indices() {
     }
 }
 
+/**
+ * @brief Entry point used by the compute API. The Dest tile indices are template parameters, matching the Wormhole
+ *        kernel (which encodes every Dest access from them as a single instruction word); here they are forwarded
+ *        unchanged. The three leading runtime arguments only exist for the SFPU_BINARY_CALL calling convention.
+ */
 template <
     bool APPROXIMATION_MODE,
     bool is_fp32_dest_acc_en,
     int num_rows,
-    int ITERATIONS = 8,
-    DataLayout layout = DataLayout::TILE,
-    bool accumulate = false>
+    int ITERATIONS,
+    DataLayout layout,
+    bool accumulate,
+    std::uint32_t values_tile_idx,
+    std::uint32_t indices_tile_idx>
 inline void calculate_max_pool_with_indices(
-    uint values_tile_idx, uint indices_tile_idx, uint unused_tile_idx, uint chunk) {
+    [[maybe_unused]] uint values_tile_idx_rt,
+    [[maybe_unused]] uint indices_tile_idx_rt,
+    [[maybe_unused]] uint unused_tile_idx,
+    uint chunk) {
     if constexpr (num_rows <= 9) {
         _calculate_max_pool_with_indices_<APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS, layout, accumulate>(
             values_tile_idx, indices_tile_idx, chunk);
