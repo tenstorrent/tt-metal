@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from types import SimpleNamespace
 
 import pytest
@@ -38,18 +39,25 @@ def _resolved(monkeypatch: pytest.MonkeyPatch, preset: dict, **kwargs: object) -
         raise _Resolved(offload_weights, trace)
 
     monkeypatch.setattr(Pipeline, "__init__", init)
-    with pytest.raises(_Resolved) as resolved:
+    try:
         _construct(monkeypatch, preset, **kwargs)
-    return resolved.value.args
+    except _Resolved as resolved:
+        return resolved.args
+    msg = "construction did not reach the base"
+    raise AssertionError(msg)
 
 
-def test_explicit_audio_trace_on_the_evicting_preset_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    with pytest.raises(ValueError, match=_RULE):
+def test_explicit_audio_trace_on_the_evicting_preset_raises(
+    monkeypatch: pytest.MonkeyPatch, expect_error: Callable
+) -> None:
+    with expect_error(ValueError, _RULE):
         _construct(monkeypatch, _PRESETS_WH[(4, 8)], trace_audio=True, dynamic_length=False)
 
 
-def test_explicit_audio_trace_with_explicit_eviction_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    with pytest.raises(ValueError, match=_RULE):
+def test_explicit_audio_trace_with_explicit_eviction_raises(
+    monkeypatch: pytest.MonkeyPatch, expect_error: Callable
+) -> None:
+    with expect_error(ValueError, _RULE):
         _construct(monkeypatch, _PRESETS_BH[(4, 32)], coresident=False, trace_audio=True)
 
 
@@ -108,6 +116,6 @@ def test_calls_go_through_the_base(pipeline_class: type[MiniMaxH3Pipeline]) -> N
 
 
 @pytest.mark.parametrize("pipeline_class", [MiniMaxH3Pipeline, MiniMaxH3TurboPipeline])
-def test_has_no_per_call_eager_run(pipeline_class: type[MiniMaxH3Pipeline]) -> None:
-    with pytest.raises(NotImplementedError, match="no per-call eager run"):
+def test_has_no_per_call_eager_run(pipeline_class: type[MiniMaxH3Pipeline], expect_error: Callable) -> None:
+    with expect_error(NotImplementedError, "no per-call eager run"):
         object.__new__(pipeline_class).run_untraced("a prompt")

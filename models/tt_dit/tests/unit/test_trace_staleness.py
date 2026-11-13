@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import gc
 import weakref
+from collections.abc import Callable
 
 import pytest
 
@@ -54,35 +55,35 @@ def _tracer(*parameters: Parameter, prep_run: bool = False) -> Tracer:
     return Tracer(forward, device=_Device(), prep_run=prep_run)
 
 
-def test_replay_after_deallocation_raises(executed: list[object]) -> None:
+def test_replay_after_deallocation_raises(executed: list[object], expect_error: Callable) -> None:
     weight = _parameter()
     tracer = _tracer(weight)
     tracer()
     tracer()
     assert len(executed) == 2
     weight.deallocate()
-    with pytest.raises(RuntimeError, match=_STALE + "deallocated"):
+    with expect_error(RuntimeError, _STALE + "deallocated"):
         tracer()
     assert len(executed) == 2
 
 
-def test_replay_after_a_reload_over_loaded_data_raises(executed: list[object]) -> None:
+def test_replay_after_a_reload_over_loaded_data_raises(executed: list[object], expect_error: Callable) -> None:
     weight = _parameter()
     tracer = _tracer(weight)
     tracer()
     weight.data = object()
-    with pytest.raises(RuntimeError, match=_STALE + "replaced"):
+    with expect_error(RuntimeError, _STALE + "replaced"):
         tracer()
     assert len(executed) == 1
 
 
-def test_reload_after_eviction_stays_stale_until_recaptured(executed: list[object]) -> None:
+def test_reload_after_eviction_stays_stale_until_recaptured(executed: list[object], expect_error: Callable) -> None:
     weight = _parameter()
     tracer = _tracer(weight)
     tracer()
     weight.deallocate()
     weight.data = object()  # reloaded, at whatever address
-    with pytest.raises(RuntimeError, match=_STALE + "deallocated"):
+    with expect_error(RuntimeError, _STALE + "deallocated"):
         tracer()
     tracer.release_trace()
     tracer()
@@ -100,7 +101,7 @@ def test_weights_the_trace_did_not_read_do_not_matter(executed: list[object]) ->
     assert len(executed) == 2
 
 
-def test_reads_in_the_preparation_run_count(executed: list[object]) -> None:
+def test_reads_in_the_preparation_run_count(executed: list[object], expect_error: Callable) -> None:
     weight = _parameter()
     calls = []
 
@@ -112,18 +113,20 @@ def test_reads_in_the_preparation_run_count(executed: list[object]) -> None:
     tracer = Tracer(forward, device=_Device(), prep_run=True)
     tracer()
     weight.deallocate()
-    with pytest.raises(RuntimeError, match=_STALE):
+    with expect_error(RuntimeError, _STALE):
         tracer()
 
 
-def test_deallocation_during_capture_raises_before_the_first_execution(executed: list[object]) -> None:
+def test_deallocation_during_capture_raises_before_the_first_execution(
+    executed: list[object], expect_error: Callable
+) -> None:
     weight = _parameter()
 
     def forward() -> None:
         _ = weight.data
         weight.deallocate()
 
-    with pytest.raises(RuntimeError, match=_STALE + "deallocated"):
+    with expect_error(RuntimeError, _STALE + "deallocated"):
         Tracer(forward, device=_Device(), prep_run=False)()
     assert executed == []
 
@@ -157,19 +160,21 @@ def test_a_released_or_dropped_tracer_is_forgotten(executed: list[object]) -> No
     weight.deallocate()
 
 
-def test_two_tracers_over_one_weight_both_go_stale(executed: list[object]) -> None:
+def test_two_tracers_over_one_weight_both_go_stale(executed: list[object], expect_error: Callable) -> None:
     weight = _parameter()
     first, second = _tracer(weight), _tracer(weight)
     first()
     second()
     weight.deallocate()
     for tracer in (first, second):
-        with pytest.raises(RuntimeError, match=_STALE):
+        with expect_error(RuntimeError, _STALE):
             tracer()
 
 
 def test_a_quant_typecast_after_capture_makes_the_trace_stale(
-    executed: list[object], monkeypatch: pytest.MonkeyPatch
+    executed: list[object],
+    monkeypatch: pytest.MonkeyPatch,
+    expect_error: Callable,
 ) -> None:
     monkeypatch.setattr(ttnn, "typecast", lambda tensor, dtype: object())
     weight = _parameter()
@@ -179,6 +184,6 @@ def test_a_quant_typecast_after_capture_makes_the_trace_stale(
     _quantize_weight(weight, "bfloat16")  # same dtype: nothing moves
     tracer()
     _quantize_weight(weight, "bfloat8_b")
-    with pytest.raises(RuntimeError, match=_STALE + "replaced"):
+    with expect_error(RuntimeError, _STALE + "replaced"):
         tracer()
     assert len(executed) == 2

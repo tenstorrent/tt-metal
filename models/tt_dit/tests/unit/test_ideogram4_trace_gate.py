@@ -28,9 +28,17 @@ def _raise(*args: object, **kwargs: object) -> None:
 def test_construction_checks_the_trace_region_only_when_tracing(monkeypatch: pytest.MonkeyPatch, trace: bool) -> None:
     monkeypatch.setattr(module, "_check_trace_region", _raise)
     config = SimpleNamespace(trace=trace, resolutions=((512, 512),))
-    with pytest.raises(Exception) as raised:  # noqa: PT011
+    try:
         Ideogram4Pipeline(device=SimpleNamespace(shape=(4, 8)), config=config)
-    assert isinstance(raised.value, _Reached) is trace
+    except _Reached:
+        checked = True
+    except Exception:  # noqa: BLE001
+        # Without the check, construction goes on and fails on the stand-in device.
+        checked = False
+    else:
+        msg = "construction on a stand-in device did not fail"
+        raise AssertionError(msg)
+    assert checked is trace
 
 
 @pytest.mark.parametrize("trace", [True, False])
@@ -50,8 +58,13 @@ def test_warmup_captures_only_when_tracing(monkeypatch: pytest.MonkeyPatch, trac
     pipeline._seq_buffers = {1: None}
 
     if trace:
-        with pytest.raises(_Reached):
+        try:
             pipeline.warmup(sizes=[])
+        except _Reached:
+            pass
+        else:
+            msg = "warmup did not reach the capture"
+            raise AssertionError(msg)
         assert len(checked) == 1
     else:
         pipeline.warmup(sizes=[])

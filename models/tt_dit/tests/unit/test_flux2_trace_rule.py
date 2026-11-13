@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-import pytest
+from collections.abc import Callable
 
 from ...pipelines.flux2.pipeline_flux2 import Flux2Pipeline
 from ...pipelines.pipeline_api import Pipeline
@@ -14,8 +14,8 @@ from ...pipelines.pipeline_api import Pipeline
 _RULE = "^TDM-130: trace=True is unsupported with offload_weights=True"
 
 
-def test_construction_raises_before_any_device_use() -> None:
-    with pytest.raises(ValueError, match=_RULE):
+def test_construction_raises_before_any_device_use(expect_error: Callable) -> None:
+    with expect_error(ValueError, _RULE):
         Flux2Pipeline(
             mesh_device=None,
             parallel_config=None,
@@ -28,11 +28,11 @@ def test_construction_raises_before_any_device_use() -> None:
         )
 
 
-def test_call_raises_on_an_offloading_traced_pipeline() -> None:
+def test_call_raises_on_an_offloading_traced_pipeline(expect_error: Callable) -> None:
     pipeline = object.__new__(Flux2Pipeline)
     pipeline.offload_weights = True
     pipeline.trace = True
-    with pytest.raises(ValueError, match=_RULE):
+    with expect_error(ValueError, _RULE):
         pipeline(prompts=["a"], num_inference_steps=1)
 
 

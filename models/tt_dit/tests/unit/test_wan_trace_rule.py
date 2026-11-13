@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from types import SimpleNamespace
 
 import pytest
@@ -22,18 +23,20 @@ _RULE = "^TDM-130: trace=True is unsupported with offload_weights=True"
 
 
 @pytest.mark.parametrize("pipeline_class", [WanPipeline, WanPipelineI2V])
-def test_construction_raises_before_any_device_use(pipeline_class: type[WanPipeline]) -> None:
+def test_construction_raises_before_any_device_use(pipeline_class: type[WanPipeline], expect_error: Callable) -> None:
     config = SimpleNamespace(offload_weights=True, trace=True)
-    with pytest.raises(ValueError, match=_RULE):
+    with expect_error(ValueError, _RULE):
         pipeline_class(device=None, config=config)
 
 
 @pytest.mark.parametrize("pipeline_class", [WanPipeline, WanPipelineI2V, WanPipelineSVI])
-def test_call_raises_on_an_offloading_traced_pipeline(pipeline_class: type[WanPipeline]) -> None:
+def test_call_raises_on_an_offloading_traced_pipeline(
+    pipeline_class: type[WanPipeline], expect_error: Callable
+) -> None:
     pipeline = object.__new__(pipeline_class)
     pipeline.offload_weights = True
     pipeline.trace = True
-    with pytest.raises(ValueError, match=_RULE):
+    with expect_error(ValueError, _RULE):
         pipeline(prompts=["a"], num_inference_steps=1)
 
 
