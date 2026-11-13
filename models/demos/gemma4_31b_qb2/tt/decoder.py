@@ -37,7 +37,7 @@ class MeshCCL(CCLManager):
 DECODE_GEOMETRY = {
     "qkv": (56, 2, 21),
     "gate_up": (56, 2, 3),
-    "o": (8, 2, 8),
+    "o": (8, 1, 8),
     "down": (56, 2, 21),
 }
 # Output storage cores per decode matmul (sets per_core_N), independent of the input cores above, so the input
