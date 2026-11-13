@@ -287,8 +287,7 @@ class ParallelJob;
 class NumaAwareExecutor {
 public:
     NumaAwareExecutor(
-        ContextId context_id,
-        uint32_t physical_device_id,
+        uint32_t cpu_core,
         Completion& completion,
         uint32_t index_in_pool,
         const std::atomic<uint64_t>& pool_published_job,
@@ -304,9 +303,7 @@ public:
         // Set the priority for this process to 0 (niceness value in linux)
         thread_binding::set_process_priority(0);
         worker = std::thread([this]() { worker_loop(); });
-
-        auto cpu_core_for_worker = thread_binding::get_cpu_core_for_physical_device(context_id, physical_device_id);
-        thread_binding::set_worker_affinity(worker, cpu_core_for_worker);
+        thread_binding::set_worker_affinity(worker, cpu_core);
     }
 
     // Delete copy and move operations as this class manages a thread and should not be copied or moved
@@ -638,6 +635,26 @@ void run_on_caller(size_t num_calls, ttsl::move_only_function<void(size_t)>& fn)
     }
 }
 
+// The spin window if every worker has a CPU of its own, else none. Workers spinning on a shared CPU take turns on it, so
+// a fan-out would wait for the scheduler to cycle through them; it happens when the process may run on fewer CPUs than
+// the pool has workers.
+std::chrono::nanoseconds spin_window_for(std::vector<uint32_t> cpu_cores, std::chrono::nanoseconds spin_window) {
+    if (spin_window.count() == 0) {
+        return spin_window;
+    }
+    std::sort(cpu_cores.begin(), cpu_cores.end());
+    const auto distinct = std::unique(cpu_cores.begin(), cpu_cores.end()) - cpu_cores.begin();
+    if (distinct == static_cast<std::ptrdiff_t>(cpu_cores.size())) {
+        return spin_window;
+    }
+    log_debug(
+        tt::LogMetal,
+        "Thread pool: {} workers share {} CPUs, so they park after a fan-out instead of spinning",
+        cpu_cores.size(),
+        distinct);
+    return std::chrono::nanoseconds(0);
+}
+
 // Custom Thread-Pool using the threading::Executor class.
 // Allows enqueuing tasks tied to specific devices.
 class DeviceBoundThreadPool : public ThreadPool {
@@ -651,17 +668,15 @@ public:
         std::chrono::nanoseconds spin_window = std::chrono::nanoseconds(0)) :
         num_workers_(physical_devices.size()) {
         allocate_jobs();
+        std::vector<uint32_t> cpu_cores(num_workers_);
+        for (uint32_t i = 0; i < num_workers_; i++) {
+            cpu_cores[i] = thread_binding::get_cpu_core_for_physical_device(context_id, physical_devices[i]->id());
+        }
+        spin_window = spin_window_for(cpu_cores, spin_window);
         workers_.reserve(num_workers_);
         for (uint32_t i = 0; i < num_workers_; i++) {
             workers_.emplace_back(std::make_unique<NumaAwareExecutor>(
-                context_id,
-                physical_devices[i]->id(),
-                completion_,
-                i,
-                published_,
-                spin_window_closed_at_,
-                jobs_.data(),
-                spin_window));
+                cpu_cores[i], completion_, i, published_, spin_window_closed_at_, jobs_.data(), spin_window));
             phys_device_to_thread_id_[physical_devices[i]->id()] = i;
             map_worker_to_device(i, physical_devices[i]->id());
         }
@@ -674,8 +689,7 @@ public:
 
         for (uint32_t i = 0; i < thread_count; i++) {
             workers_.emplace_back(std::make_unique<NumaAwareExecutor>(
-                context_id,
-                i,
+                thread_binding::get_cpu_core_for_physical_device(context_id, i),
                 completion_,
                 i,
                 published_,
