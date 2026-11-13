@@ -555,6 +555,9 @@ def run_chain(device, kv, B, T, gen, inp, consts, taps, steps, mode, starts, des
         ttnn.deallocate(v.run(consts, taps, **kw))  # compile outside the trace, then put the blocks back
         kv.write()
         assert torch.equal(bits(kv.read()[0]), bits(snapshot[0]))
+        # The sequential reference compiles here too: a program compiled while the trace exists gets its kernel
+        # binaries in memory that a replay may overwrite.
+        decode_per_user(device, consts, h0, hist0, v.token_rows(), mode)
         tid = ttnn.begin_trace_capture(device, cq_id=0)
         out_dev = v.run(consts, taps, **kw)
         ttnn.end_trace_capture(device, tid, cq_id=0)
@@ -901,6 +904,9 @@ def test_spec_step_history_pages_chain_through_blocks(device, K_draft, B, opts):
     ttnn.deallocate(v.run(consts, taps, **kw))  # compile outside the trace, then put the blocks back
     kv.write()
     assert torch.equal(bits(kv.read()[0]), bits(snapshot[0]))
+    # The sequential reference compiles here too: a program compiled while the trace exists gets its kernel binaries
+    # in memory that a replay may overwrite.
+    decode_per_user(device, consts, h0, hist0, v.token_rows(), MODEL_MODE)
     tid = ttnn.begin_trace_capture(device, cq_id=0)
     out_dev = v.run(consts, taps, **kw)
     ttnn.end_trace_capture(device, tid, cq_id=0)
