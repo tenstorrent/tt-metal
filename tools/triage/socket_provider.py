@@ -5,28 +5,12 @@
 
 """
 Usage:
-    dump_mesh_sockets
+    socket_provider
 
 Description:
-    MeshSocket flow-control state from the L1 config buffers, one row per core owned by this rank.
-    Cores come from the Inspector getSockets RPC. Coordinates are logical, and a core whose config
-    buffer could not be read gets no row.
-
-    Columns living in the other side's buffer read N/A. A sender core feeding several downstreams
-    gets one row each, numbered in Downstream #, with Peer naming the core that row describes.
-    Match a sender's Downstream Addr to a receiver's Config Addr to pair the two halves of a socket
-    (sockets, not cores). Node is a fabric node id, the one chip name shared across ranks; a peer on
-    this host shows its device id instead. A D2H or H2D socket has only its device side: its Peer
-    reads host, and a D2H sender's Downstream Addr reads N/A.
-
-    Counter columns, by source:
-
-      sent@snd    sender bytes_sent                                    kernel frame, or L1 for D2H
-      acked@snd   sender_socket_md.bytes_acked_array[i]                L1, written by the receiver (the host for D2H)
-      wr_off      sender write_ptr, offset from downstream_fifo_addr   kernel frame
-      sent@rcv    receiver_socket_md.bytes_sent                        L1, written by the sender (the host for H2D)
-      acked@rcv   receiver bytes_acked                                 kernel frame, or L1 for H2D
-      rd_addr     receiver read_ptr, absolute L1 address               kernel frame
+    Socket cores owned by this rank, from the Inspector getSockets RPC: MeshSocket cores, and the
+    device side of D2H and H2D sockets. get_cached_senders(location) and
+    get_cached_receivers(location) read a core's config buffers once and return the same rows after.
 
     A D2D kernel flushes its own counters to L1 only at exit, so live values are read from its
     Socket{Sender,Receiver}Interface local, matched on config_addr. This halts the core. A kernel
@@ -38,20 +22,29 @@ Owner:
 
 import struct
 from dataclasses import dataclass, field
+from functools import cache
 
 from callstack_provider import CallstackProvider, run as get_callstack_provider
 from inspector_data import run as get_inspector_data
 from metal_device_id_mapping import run as get_metal_device_id_mapping
 from run_checks import run as get_run_checks
-from triage import ScriptConfig, hex_serializer, log_warning_location, log_warning_risc, run_script, triage_field
+from triage import (
+    ScriptConfig,
+    hex_serializer,
+    log_warning_location,
+    log_warning_risc,
+    run_script,
+    triage_field,
+    triage_singleton,
+)
 from ttexalens.context import Context
 from ttexalens.coordinate import OnChipCoordinate
-from ttexalens.device import Device
 from ttexalens.exceptions import DebugSymbolError
 from ttexalens.tt_exalens_lib import read_from_device
 from ttexalens.umd_device import TimeoutDeviceRegisterError
 
 script_config = ScriptConfig(
+    data_provider=True,
     depends=["inspector_data", "run_checks", "metal_device_id_mapping", "callstack_provider"],
 )
 
@@ -117,21 +110,27 @@ class SocketCore:
 
 
 @dataclass
-class SocketRow:
-    role: str = triage_field("Role")
-    location: OnChipCoordinate = triage_field("Loc")
+class SenderSocketData:
     node: str = triage_field("Node")
     config_addr: int = triage_field("Config Addr", hex_serializer)
     downstream_config_addr: int | None = triage_field("Downstream Addr", hex_serializer)
-    num_downstreams: int | None = triage_field("Downstreams")
-    downstream: int | None = triage_field("Downstream #")
-    sent_at_sender: int | None = triage_field("sent@snd")
-    acked_at_sender: int | None = triage_field("acked@snd")
+    num_downstreams: int = triage_field("Downstreams")
+    downstream: int = triage_field("Downstream #")
+    sent: int | None = triage_field("sent")
+    acked: int = triage_field("acked")
     write_ptr: int | None = triage_field("wr_off")
-    sent_at_receiver: int | None = triage_field("sent@rcv")
-    acked_at_receiver: int | None = triage_field("acked@rcv")
+    fifo_size: int = triage_field("fifo")
+    peer: str = triage_field("Peer")
+
+
+@dataclass
+class ReceiverSocketData:
+    node: str = triage_field("Node")
+    config_addr: int = triage_field("Config Addr", hex_serializer)
+    sent: int = triage_field("sent")
+    acked: int | None = triage_field("acked")
     read_ptr: int | None = triage_field("rd_addr", hex_serializer)
-    fifo_size: int | None = triage_field("fifo")
+    fifo_size: int = triage_field("fifo")
     peer: str = triage_field("Peer")
 
 
@@ -244,68 +243,63 @@ def discover(inspector_data, id_mapping, run_checks) -> list[SocketCore]:
     return cores
 
 
-def sender_row(core: SocketCore, md: SenderMd, index: int) -> SocketRow:
-    return SocketRow(
-        role="sender",
-        location=core.location,
+def sender_row(core: SocketCore, md: SenderMd, index: int) -> SenderSocketData:
+    return SenderSocketData(
         node=core.node,
         config_addr=core.config_addr,
         downstream_config_addr=None if core.peers[index].is_host else md.downstream_config_addr,
         downstream=index,
-        sent_at_sender=core.interface.get("bytes_sent", md.bytes_sent if md.is_d2h else None),
-        acked_at_sender=md.bytes_acked[index],
+        sent=core.interface.get("bytes_sent", md.bytes_sent if md.is_d2h else None),
+        acked=md.bytes_acked[index],
         write_ptr=core.interface.get("write_ptr"),
-        sent_at_receiver=None,  # receiver's buffer
-        acked_at_receiver=None,  # receiver's buffer
-        read_ptr=None,  # receiver's buffer
         fifo_size=md.fifo_total_size,
         num_downstreams=md.num_downstreams,
         peer=core.peers[index].label(),
     )
 
 
-def receiver_row(core: SocketCore, md: ReceiverMd) -> SocketRow:
-    return SocketRow(
-        role="receiver",
-        location=core.location,
+def receiver_row(core: SocketCore, md: ReceiverMd) -> ReceiverSocketData:
+    return ReceiverSocketData(
         node=core.node,
         config_addr=core.config_addr,
-        downstream_config_addr=None,  # sender's buffer
-        downstream=None,  # sender-side index
-        sent_at_sender=None,  # sender's buffer
-        acked_at_sender=None,  # sender's buffer
-        write_ptr=None,  # sender's buffer
-        sent_at_receiver=md.bytes_sent,
-        acked_at_receiver=core.interface.get("bytes_acked", md.bytes_acked if md.is_h2d else None),
+        sent=md.bytes_sent,
+        acked=core.interface.get("bytes_acked", md.bytes_acked if md.is_h2d else None),
         read_ptr=core.interface.get("read_ptr"),
         fifo_size=md.fifo_total_size,
-        num_downstreams=None,  # sender's buffer
         peer=", ".join(p.label() for p in core.peers),
     )
 
 
-def core_rows(core: SocketCore) -> list[SocketRow]:
-    if isinstance(core.md, SenderMd):
-        return [sender_row(core, core.md, i) for i in range(len(core.peers))]
-    elif isinstance(core.md, ReceiverMd):
-        return [receiver_row(core, core.md)]
-    return []
+class SocketProvider:
+    def __init__(self, cores: list[SocketCore], callstack_provider: CallstackProvider):
+        self.callstack_provider = callstack_provider
+        self.cores_by_location: dict[OnChipCoordinate, list[SocketCore]] = {}
+        for core in cores:
+            self.cores_by_location.setdefault(core.location, []).append(core)
 
+    @cache
+    def get_cached_senders(self, location: OnChipCoordinate) -> list[SenderSocketData]:
+        return [
+            sender_row(core, core.md, i)
+            for core in self.read_cores(location, "sender")
+            if isinstance(core.md, SenderMd)
+            for i in range(len(core.peers))
+        ]
 
-def run(args, context: Context):
-    run_checks = get_run_checks(args, context)
-    callstack_provider = get_callstack_provider(args, context)
-    cores = discover(get_inspector_data(args, context), get_metal_device_id_mapping(args, context), run_checks)
-    if not cores:
-        return None
+    @cache
+    def get_cached_receivers(self, location: OnChipCoordinate) -> list[ReceiverSocketData]:
+        return [
+            receiver_row(core, core.md)
+            for core in self.read_cores(location, "receiver")
+            if isinstance(core.md, ReceiverMd)
+        ]
 
-    by_device: dict[int, list[SocketCore]] = {}
-    for core in cores:
-        by_device.setdefault(core.location.device.unique_id, []).append(core)
-
-    def collect_socket_rows(device: Device) -> list[SocketRow]:
-        rows: list[SocketRow] = []
-        for core in by_device.get(device.unique_id, []):
+    def read_cores(self, location: OnChipCoordinate, role: str) -> list[SocketCore]:
+        """This location's cores in the given role whose config buffer could be read."""
+        cores: list[SocketCore] = []
+        for core in self.cores_by_location.get(location, []):
+            if core.role != role:
+                continue
             try:
                 core.md = read_md(core)
             except TimeoutDeviceRegisterError:
@@ -313,11 +307,17 @@ def run(args, context: Context):
             except Exception as e:
                 log_warning_location(core.location, f"{core.role} socket config buffer 0x{core.config_addr:x}: {e}")
                 continue
-            core.interface = read_interface(core, callstack_provider)
-            rows += core_rows(core)
-        return rows
+            core.interface = read_interface(core, self.callstack_provider)
+            cores.append(core)
+        return cores
 
-    return run_checks.run_per_device_check(collect_socket_rows)
+
+@triage_singleton
+def run(args, context: Context) -> SocketProvider:
+    cores = discover(
+        get_inspector_data(args, context), get_metal_device_id_mapping(args, context), get_run_checks(args, context)
+    )
+    return SocketProvider(cores, get_callstack_provider(args, context))
 
 
 if __name__ == "__main__":

@@ -929,73 +929,74 @@ class TestTriage:
 class TestMeshSocketTriage:
     exalens_context: Context
 
-    def test_dump_mesh_sockets(self):
+    def test_dump_sockets(self):
         global triage_home
 
-        triage.CHECKS.clear()
-        result = run_script(
-            script_path=os.path.join(triage_home, "dump_mesh_sockets.py"),
-            context=self.exalens_context,
-            argv=[],
-            return_result=True,
-        )
-        failures = logged_errors()
-        assert not failures, f"dump_mesh_sockets.py failed with: {failures}"
-        assert result is not None, "Expected socket rows while MeshSockets are wedged"
+        def dump(script):
+            triage.CHECKS.clear()
+            result = run_script(
+                script_path=os.path.join(triage_home, script),
+                context=self.exalens_context,
+                argv=[],
+                return_result=True,
+            )
+            failures = logged_errors()
+            assert not failures, f"{script} failed with: {failures}"
+            assert result is not None, f"Expected {script} rows while the sockets are wedged"
+            return result
 
-        rows = [check.result for check in result]
-        device_of = {id(check.result): check.device_description.device.id for check in result}
+        sender_checks = dump("dump_sender_sockets.py")
+        receiver_checks = dump("dump_receiver_sockets.py")
+        sender_rows = [check.result for check in sender_checks]
+        receiver_rows = [check.result for check in receiver_checks]
+        checks = sender_checks + receiver_checks
+        device_of = {id(check.result): check.device_description.device.id for check in checks}
+        location_of = {id(check.result): check.location for check in checks}
 
         def core_label(row):
-            return f"dev{device_of[id(row)]} ({row.location})"
+            return f"dev{device_of[id(row)]} ({location_of[id(row)]})"
 
-        for row in rows:
-            # A row only carries the columns that live in its own config buffer.
-            if row.role == "sender":
-                assert (row.sent_at_receiver, row.acked_at_receiver, row.read_ptr) == (None, None, None)
-            else:
-                assert (row.sent_at_sender, row.acked_at_sender, row.write_ptr) == (None, None, None)
-                assert (row.downstream_config_addr, row.downstream, row.num_downstreams) == (None, None, None)
+        for row in sender_rows + receiver_rows:
             assert row.fifo_size == MESH_SOCKET_FIFO_SIZE
             # Node is the core's own fabric node, so it agrees with the device the row came from.
             assert row.node == f"chip{device_of[id(row)]}/mesh0"
 
         # The host sockets: the host wrote half the H2D fifo, and the D2H kernel wedged on its full fifo
         # because the host never reads it.
-        h2d = [row for row in rows if row.peer == "host" and row.role == "receiver"]
-        d2h = [row for row in rows if row.peer == "host" and row.role == "sender"]
+        h2d = [row for row in receiver_rows if row.peer == "host"]
+        d2h = [row for row in sender_rows if row.peer == "host"]
         assert len(h2d) == 1, f"Expected 1 H2D receiver row, got {len(h2d)}"
         assert len(d2h) == 1, f"Expected 1 D2H sender row, got {len(d2h)}"
-        assert h2d[0].sent_at_receiver == MESH_SOCKET_FIFO_SIZE // 2, "Expected the host to write half the H2D fifo"
-        assert h2d[0].acked_at_receiver == 0, "Expected no acks, since nothing on the chip reads the H2D fifo"
+        assert h2d[0].sent == MESH_SOCKET_FIFO_SIZE // 2, "Expected the host to write half the H2D fifo"
+        assert h2d[0].acked == 0, "Expected no acks, since nothing on the chip reads the H2D fifo"
         # A D2H downstream is a host address, so Downstream Addr reads N/A. wr_off comes from the kernel's
         # locals, which triage cannot read for this kernel, so it is not checked.
         assert (d2h[0].downstream_config_addr, d2h[0].num_downstreams, d2h[0].downstream) == (None, 1, 0)
-        assert d2h[0].sent_at_sender == MESH_SOCKET_FIFO_SIZE, "Expected the D2H kernel to have filled the fifo"
-        assert d2h[0].acked_at_sender == 0, "Expected no acks, since the host never reads"
+        assert d2h[0].sent == MESH_SOCKET_FIFO_SIZE, "Expected the D2H kernel to have filled the fifo"
+        assert d2h[0].acked == 0, "Expected no acks, since the host never reads"
 
         # The D2D sockets, all on one chip: a 1:1 pair, plus a fan-out sender feeding two receiver cores.
         # The fan-out sender is a single core, so it contributes one row per downstream. No op runs on
         # these sockets, so nothing reaches their receivers.
-        senders = [row for row in rows if row.peer != "host" and row.role == "sender"]
-        receivers = [row for row in rows if row.peer != "host" and row.role == "receiver"]
+        senders = [row for row in sender_rows if row.peer != "host"]
+        receivers = [row for row in receiver_rows if row.peer != "host"]
         pair_senders = [row for row in senders if row.num_downstreams == 1]
         fanout_senders = [row for row in senders if row.num_downstreams == 2]
         assert len(pair_senders) == 1, f"Expected 1 paired sender row, got {len(pair_senders)}"
         assert len(fanout_senders) == 2, f"Expected 2 fan-out sender rows, got {len(fanout_senders)}"
         assert len(receivers) == 3, f"Expected 3 receiver rows, got {len(receivers)}"
-        assert all(row.sent_at_receiver == 0 for row in receivers), "Expected nothing sent to the D2D receivers"
+        assert all(row.sent == 0 for row in receivers), "Expected nothing sent to the D2D receivers"
 
         # The fan-out rows come from one core, so they share its config buffer and differ
         # only in which downstream they describe.
         assert len({r.config_addr for r in fanout_senders}) == 1, "Fan-out rows should share one config buffer"
-        assert len({str(r.location) for r in fanout_senders}) == 1, "Fan-out rows should share one core"
+        assert len({str(location_of[id(r)]) for r in fanout_senders}) == 1, "Fan-out rows should share one core"
         assert sorted(r.downstream for r in fanout_senders) == [0, 1]
         assert len({r.peer for r in fanout_senders}) == 2, "Each downstream should name its own receiver core"
 
-        # Downstream Addr is the documented join key: it names the peer receiver's config buffer. The
-        # fan-out receivers are pages of one buffer, so they share an address and both match. Peer
-        # names the core at the other end, so each side names the other's Dev and Loc.
+        # Downstream Addr is the documented join key between the two dumps: it names the peer receiver's
+        # config buffer. The fan-out receivers are pages of one buffer, so they share an address and both
+        # match. Peer names the core at the other end, so each side names the other's Dev and Loc.
         receivers_by_config_addr: dict[int, list] = {}
         for row in receivers:
             receivers_by_config_addr.setdefault(row.config_addr, []).append(row)

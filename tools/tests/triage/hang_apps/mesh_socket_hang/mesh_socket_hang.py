@@ -3,7 +3,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Triage hang app: puts MeshSockets on one chip in known states so dump_mesh_sockets has live state to read.
+"""Triage hang app: puts sockets on one chip in known states so dump_sender_sockets and dump_receiver_sockets
+have live state to read.
 
 The D2D ops (send_async, recv_async) route through the fabric, which has no route from a chip to itself, so
 the D2D sockets here carry no traffic: a 1:1 pair, and a socket whose single sender core feeds two receiver
