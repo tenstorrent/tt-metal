@@ -29,19 +29,16 @@ inputs:
     required: false
   device:
     description: "Description of Device as it is used in docker run command."
-    type: string
     required: false
     default: |
       -v /dev/hugepages-1G:/dev/hugepages-1G
       --device /dev/tenstorrent
   install_wheel:
     description: "Install the wheel that contains all of the Python environment. The artifact needs to be present."
-    type: boolean
     required: false
     default: false
   forward_civ2_proxy_env_vars:
     description: "Forward the CIV2 proxy environment variables to the container."
-    type: boolean
     required: false
     default: false
 runs:

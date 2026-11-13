@@ -139,7 +139,6 @@ jobs:
   build-images:
     needs:
       - build-artifact
-      - build-artifact
       - get-image-tags
     permissions:
       packages: write
