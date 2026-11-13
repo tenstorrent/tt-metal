@@ -94,10 +94,15 @@ class Attention(Module):
         per_head_norm: bool = False,
         is_fsdp: bool = False,
         shard_prompt: bool = False,
+        row_capacity: int | None = None,
     ) -> None:
+        """`row_capacity` is the largest per-device row count of `sequence_1` (a multiple of 32). With
+        it, the Q/K norms and the head split and merge take the row count at run time, so one program
+        serves every row count up to it; None keeps one program per row count."""
         super().__init__()
 
         self.head_dim = head_dim
+        self.row_capacity = row_capacity
         self.pre_only = pre_only
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
@@ -525,10 +530,16 @@ class Attention(Module):
 
         shard_prompt = self.shard_prompt and self.parallel_config.sequence_parallel.factor > 1
 
+        runtime_rows = self.row_capacity is not None
+
         def _split_heads(x: ttnn.Tensor) -> ttnn.Tensor:
             # V only — Q/K head-split is fused inside DistributedRMSNorm.
             out, _, _ = ttnn.experimental.nlp_create_qkv_heads(
-                ttnn.unsqueeze(x, 0), num_heads=self.n_local_heads, num_kv_heads=0, transpose_k_heads=False
+                ttnn.unsqueeze(x, 0),
+                num_heads=self.n_local_heads,
+                num_kv_heads=0,
+                transpose_k_heads=False,
+                runtime_rows=runtime_rows,
             )
             return out
 
@@ -553,6 +564,7 @@ class Attention(Module):
             rope_sin=sequence_1_sin,
             trans_mat=trans_mat,
             per_head_norm=self.per_head_norm,
+            row_capacity=self.row_capacity,
         )
 
         k = self.norm_k(
@@ -562,6 +574,7 @@ class Attention(Module):
             rope_sin=sequence_1_sin,
             trans_mat=trans_mat,
             per_head_norm=self.per_head_norm,
+            row_capacity=self.row_capacity,
         )
 
         v = _split_heads(v_flat_c)  # [1, H, M_s+M_p, D]
@@ -657,7 +670,7 @@ class Attention(Module):
                 compute_kernel_config=self.sdpa_compute_kernel_config,
             )
 
-        spatial = ttnn.transformer.concatenate_heads(spatial)
+        spatial = ttnn.transformer.concatenate_heads(spatial, runtime_rows=runtime_rows)
         if self.to_out is not None:
             spatial = self.to_out(
                 x=spatial,
@@ -668,7 +681,7 @@ class Attention(Module):
             )
 
         if sequence_2 is not None and sequence_2.shape[2] > 0:
-            sequence_2 = ttnn.transformer.concatenate_heads(sequence_2)
+            sequence_2 = ttnn.transformer.concatenate_heads(sequence_2, runtime_rows=runtime_rows)
             if self.to_add_out is not None:
                 sequence_2 = self.to_add_out(
                     x=sequence_2,

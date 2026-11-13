@@ -49,7 +49,11 @@ class TransformerBlock(Module):
         attention_q_chunk_size: int = 128,
         is_fsdp: bool = False,
         shard_prompt: bool = False,
+        row_capacity: int | None = None,
     ) -> None:
+        """`row_capacity` is the largest per-device row count of the spatial stream (a multiple of
+        32); with it, its norms and attention serve every row count up to it with one program. The
+        prompt stream has a fixed length and does not need one."""
         super().__init__()
 
         if modulation_dim is None:
@@ -90,6 +94,7 @@ class TransformerBlock(Module):
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
+            row_capacity=row_capacity,
         )
 
         context_norm_dim = 6 * dim if not context_pre_only else 2 * dim
@@ -135,6 +140,7 @@ class TransformerBlock(Module):
             is_fsdp=is_fsdp,
             shard_prompt=shard_prompt,
             per_head_norm=True,
+            row_capacity=row_capacity,
         )
 
         self.norm2 = DistributedLayerNorm(
@@ -145,6 +151,7 @@ class TransformerBlock(Module):
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
+            row_capacity=row_capacity,
         )
 
         self.ff = ParallelFeedForward(
