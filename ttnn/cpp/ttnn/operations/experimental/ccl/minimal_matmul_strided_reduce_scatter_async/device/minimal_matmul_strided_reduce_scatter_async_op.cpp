@@ -283,8 +283,7 @@ void MinimalMatmulStridedReduceScatterAsync::validate_on_program_cache_miss(
                 map.buffer()->num_pages());
             TT_FATAL(
                 tb.padded_shape()[-2] % tt::constants::TILE_HEIGHT == 0 &&
-                    tb.padded_shape()[-1] >=
-                        attributes.addcmul_b_col_offset_tiles * tt::constants::TILE_WIDTH + N_rs &&
+                    tb.padded_shape()[-1] >= attributes.addcmul_b_col_offset_tiles * tt::constants::TILE_WIDTH + N_rs &&
                     tb.physical_volume() == tb.padded_shape()[-2] * tb.padded_shape()[-1],
                 "with addcmul_tile_row_map, addcmul_input_tensor2 must be a single-batch table [R (multiple of {}), "
                 "N/ring_size] (or wider, read from column tile {}), got {}",

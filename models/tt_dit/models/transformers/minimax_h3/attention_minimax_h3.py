@@ -1070,14 +1070,11 @@ class MiniMaxH3Attention(Module):
         if _S1_TOKEN_MAJOR_O == "0" or self.sol_prefix_mode == "separate":
             return None  # the separate prefix pass rewrites rows of the head-major output
         bf8_consumer = (
-            _S1_TOKEN_MAJOR_O in ("1", "bf8")
-            and getattr(self.to_out, "activation_dtype", None) == ttnn.bfloat8_b
+            _S1_TOKEN_MAJOR_O in ("1", "bf8") and getattr(self.to_out, "activation_dtype", None) == ttnn.bfloat8_b
         )
         return ttnn.bfloat8_b if bf8_consumer else ttnn.bfloat16
 
-    def _sparse_ring_attention(
-        self, q_BHNE, k_BHNE, v_BHNE, sol_kwargs: dict, token_major_dtype=None
-    ) -> ttnn.Tensor:
+    def _sparse_ring_attention(self, q_BHNE, k_BHNE, v_BHNE, sol_kwargs: dict, token_major_dtype=None) -> ttnn.Tensor:
         """Resident-mode Sol-Attn through the sparse ring op; returns [1, H, N_local, D] like `_ring_attention`, or
         [1, 1, N_local, H * D] in `token_major_dtype` when that is given."""
         assert self.sol_logical_n is not None, "the sparse ring op needs sol_logical_n (host int)"
@@ -1125,11 +1122,7 @@ class MiniMaxH3Attention(Module):
             block_size=SOL_BLOCK,
             **({"head_weights": sol_kwargs["sol_head_weights"]} if "sol_head_weights" in sol_kwargs else {}),
             **({"dense_q_blocks": dense} if (dense := self._sol_dense_q_blocks(q.shape[2])) else {}),
-            **(
-                {}
-                if token_major_dtype is None
-                else {"output_token_major": True, "output_dtype": token_major_dtype}
-            ),
+            **({} if token_major_dtype is None else {"output_token_major": True, "output_dtype": token_major_dtype}),
         )
         for t in cast:
             ttnn.deallocate(t)

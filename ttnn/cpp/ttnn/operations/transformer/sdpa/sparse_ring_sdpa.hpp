@@ -47,5 +47,4 @@ ttnn::Tensor sparse_ring_sdpa(
     // [1, H, N/ring_size, D] bf16.
     bool output_token_major = false,
     std::optional<DataType> output_dtype = std::nullopt);
-
 }

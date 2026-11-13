@@ -836,9 +836,8 @@ void write_block_sync_split(
             }
 
             // Row stride is this chunk's own width (a shared width would scatter later chunks).
-            uint32_t tile_id_in_chunk =
-                chunk_out_tile_id(
-                    chunk_idx, i, tile_idx_in_chunk, chunk_tile_widths[chunk_idx], chunk_shape.logical_d0);
+            uint32_t tile_id_in_chunk = chunk_out_tile_id(
+                chunk_idx, i, tile_idx_in_chunk, chunk_tile_widths[chunk_idx], chunk_shape.logical_d0);
 
             // Compile-time dispatch preserving concrete types
             write_tile_to_chunk(

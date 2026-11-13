@@ -408,8 +408,8 @@ void kernel_main() {
 #if defined(ADDCMUL_B_TILE_ROW_MAP)
                                         const uint32_t b_gate_idx =
                                             b * (addcmul_b_table_Ht * addcmul_b_table_Wt) +
-                                            addcmul_b_tile_row_map[slice_row] * addcmul_b_table_Wt +
-                                            addcmul_b_col_off + col_in_slice;
+                                            addcmul_b_tile_row_map[slice_row] * addcmul_b_table_Wt + addcmul_b_col_off +
+                                            col_in_slice;
 #elif defined(ADDCMUL_B_BROADCAST)
                                         const uint32_t b_gate_idx = b * slice_Wt + col_in_slice;
 #else

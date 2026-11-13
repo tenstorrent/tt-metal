@@ -479,9 +479,7 @@ class MiniMaxH3TransformerBlock(Module):
             rope_sin=rope_sin,
             addcmul_residual=residual,
             addcmul_gate=(
-                modulation(_GATE_MSA)
-                if attn_gate_map is None
-                else (wide_rows() if s2l else norm_modulation(_GATE_MSA))
+                modulation(_GATE_MSA) if attn_gate_map is None else (wide_rows() if s2l else norm_modulation(_GATE_MSA))
             ),
             **({} if attn_gate_map is None else {"addcmul_gate_tile_row_map": attn_gate_map}),
             **({"addcmul_gate_col_offset": _GATE_MSA * h_tiles} if attn_gate_map is not None and s2l else {}),

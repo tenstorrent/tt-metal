@@ -1136,7 +1136,8 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         }
     }
     const uint32_t num_q_passes = passes_for(fit_slots);
-    // TT_SPARSE_RING_MULTIPASS_PAIRS: pair steps with several passes too (compute define); the reader goes to -Os below.
+    // TT_SPARSE_RING_MULTIPASS_PAIRS: pair steps with several passes too (compute define); the reader goes to -Os
+    // below.
     const bool multipass_pairs = pair_steps && num_q_passes > 1 && sparse_ring_multipass_pairs() > 0;
     if (multipass_pairs) {
         defines["SPARSE_MULTIPASS_PAIRS"] = "1";
