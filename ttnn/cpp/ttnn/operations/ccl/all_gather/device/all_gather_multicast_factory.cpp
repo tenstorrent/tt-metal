@@ -66,6 +66,7 @@ tt::tt_metal::ProgramDescriptor build_multicast_descriptor_at(
 
         const auto axis_topology = operation_attributes.axis_topology[axis];
         const uint32_t axis_index = sender_device_coord[axis];
+        // An even ring's antipode is reached on the forward route.
         auto [fwd_hops, bwd_hops] = ::ttnn::ccl::get_forward_backward_line_mcast_distance(
             axis_size, axis_index, axis_topology, /*static_alternate=*/false);
         auto fwd_coord = ::ttnn::ccl::get_physical_neighbor_from_physical_coord(
@@ -112,11 +113,6 @@ tt::tt_metal::ProgramDescriptor build_multicast_descriptor_at(
     if (s_coord.has_value()) {
         s_dir = physical_slot(*s_coord);
     }
-
-    // One route set: every packet, and the init and done credits, take the same routes (an even ring's antipode on
-    // the forward one). The done credit then lands after the data it vouches for.
-    // The init barrier waits for remote output tensors to be allocated, and for every other device to have finished
-    // the previous launch: a persistent output may still be read there.
 
     const uint32_t packet_size = operation_attributes.packet_size;
 
