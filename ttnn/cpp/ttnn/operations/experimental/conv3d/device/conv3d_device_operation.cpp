@@ -12,6 +12,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/constants.hpp>
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
 #include <tt-metalium/hal.hpp>
 #include "ttnn/tensor/tensor_utils.hpp"
 #include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
@@ -619,6 +620,26 @@ ttnn::experimental::prim::Conv3dDeviceOperation::tensor_return_value_t conv3d(
         .pad_offset_tensor = pad_offset_tensor,
         .weight_lo_tensor = weight_lo_tensor,
         .residual_tensor = residual_tensor};
+
+    if (residual_tensor.has_value() &&
+        !ttnn::experimental::prim::residual_epilogue_fits(operation_attributes, tensor_args)) {
+        // The epilogue's CBs would cost this blocking its prefetch shard or its L1 headroom (halo mode refuses
+        // it outright): run the plain conv and add the residual separately, as the unfused caller does. The
+        // residual is still held to the fused path's checks, so both paths accept the same arguments.
+        OperationType::validate_on_program_cache_hit(operation_attributes, tensor_args);
+        log_debug(
+            tt::LogOp,
+            "conv3d: residual epilogue does not fit L1 at T_out_block={}, H_out_block={}, W_out_block={}, "
+            "C_in_block={}, C_out_block={}; adding the residual separately",
+            config.T_out_block,
+            config.H_out_block,
+            config.W_out_block,
+            config.C_in_block,
+            config.C_out_block);
+        tensor_args.residual_tensor = std::nullopt;
+        const Tensor output = ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
+        return ttnn::add(residual_tensor.value(), output);
+    }
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
