@@ -1,0 +1,45 @@
+# Non-8-bit and 8-bit tilize inputs use different Blackhole Dest layouts.
+# Each pack stage must select its own producers' layout.
+supported_archs: ["blackhole"]
+
+operands:
+  - name: "input_bf16"
+    tile_dims: [32, 32]
+    dims: [64, 256]
+    format: "Float16_b"
+  - name: "input_fp8"
+    tile_dims: [32, 32]
+    dims: [64, 256]
+    format: "Fp8_e4m3"
+  - name: "output_bf16"
+    tile_dims: [32, 32]
+    dims: [64, 256]
+    format: "Float16_b"
+  - name: "output_fp8"
+    tile_dims: [32, 32]
+    dims: [64, 256]
+    format: "Float16_b"
+
+operations:
+  - math:
+      - type: "Fpu"
+        block_tiles: [1, 4]
+        in0: "input_bf16"
+        operation: "Datacopy"
+        unpacker: "UnpackerTilizeA"
+        math_fidelity: "LoFi"
+    pack:
+      - output: "output_bf16"
+        block_tiles: [1, 4]
+        packer: "PackUntilize"
+  - math:
+      - type: "Fpu"
+        block_tiles: [1, 4]
+        in0: "input_fp8"
+        operation: "Datacopy"
+        unpacker: "UnpackerTilizeA"
+        math_fidelity: "LoFi"
+    pack:
+      - output: "output_fp8"
+        block_tiles: [1, 4]
+        packer: "PackUntilize"
