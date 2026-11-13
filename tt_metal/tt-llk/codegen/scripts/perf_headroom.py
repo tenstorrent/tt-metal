@@ -9,7 +9,8 @@ Combines three inputs for ONE perf-test variant and ONE run type:
 
 1. the wave breakdown JSON from the private ``llk_wave_debug.py perf`` command
    (per thread: issue / stall-by-reason / idle cycles over the TILE_LOOP window,
-   plus issued instructions by opcode);
+   plus issued instructions by opcode). Every thread's buckets must cover the
+   window with no ``unknown`` cycles, or the report is refused;
 2. the perf test's ``.post.csv`` (per-tile cycles per run type);
 3. one or more issue-rate tables (every entry cites its ``source``).
 
@@ -17,7 +18,8 @@ and reports:
 
 * ``reconcile`` - wave cycles per tile vs the CSV, |delta| <= 2 % or the
   verdict is not trusted (exit 2);
-* ``bottleneck`` - the thread with the most issue+stall cycles per tile;
+* ``bottleneck`` - the isolated thread for an ``*_ISOLATE`` run type, else the
+  thread with the most issue cycles per tile;
 * ``stall_headroom_pct`` - how far the measured time is above the bottleneck's
   no-stall floor (sum of issued instructions x issue cost). High = scheduling /
   synchronisation problem;
@@ -105,7 +107,8 @@ def load_opcode_names(assembly_yaml: Path) -> dict[str, str]:
     table: dict[str, str] = {}
     current: str | None = None
     for line in Path(assembly_yaml).read_text().splitlines():
-        top = re.match(r"^([A-Z][A-Z0-9_]*):\s*$", line)
+        # Two Quasar headers carry a trailing comment (UNPACR_NOP, RESOURCEDECL).
+        top = re.match(r"^([A-Z][A-Z0-9_]*):\s*(#.*)?$", line)
         if top:
             current = top.group(1)
             continue
@@ -180,6 +183,11 @@ def headroom_verdict(
         raise ValueError(
             f"wave report status is {status!r}; refusing to judge an incomplete capture"
         )
+    if status == "missing_signals" and "missing_core_signals" not in report:
+        raise ValueError(
+            "wave report has status 'missing_signals' but no 'missing_core_signals'; "
+            "cannot tell whether stall time would read as idle"
+        )
     core = report.get("missing_core_signals") or []
     if core:
         raise ValueError(
@@ -193,11 +201,24 @@ def headroom_verdict(
     if column not in csv_row:
         raise ValueError(f"CSV row has no {column!r} column")
     csv_per_tile = float(csv_row[column])
-    wave_per_tile = per_tile(report["window"]["cycles"], loop_factor, tile_cnt)
+    window_cycles = report["window"]["cycles"]
+    wave_per_tile = per_tile(window_cycles, loop_factor, tile_cnt)
     delta_pct = 100.0 * (wave_per_tile - csv_per_tile) / csv_per_tile
+
+    def pt(cycles: float) -> float:
+        return _round(per_tile(cycles, loop_factor, tile_cnt))
 
     units: dict[str, Any] = {}
     for name, thread in report["threads"].items():
+        # Reconcile only checks the window length; this checks the classification:
+        # every cycle of every thread must be issue, stall or idle.
+        unknown = thread.get("unknown", 0)
+        covered = thread["issue"] + sum(thread["stall"].values()) + thread["idle"]
+        if unknown or covered != window_cycles:
+            raise ValueError(
+                f"thread {name!r} classifies {covered} of {window_cycles} window cycles "
+                f"({unknown} unknown); the breakdown does not cover the window"
+            )
         if opcode_names:
             thread = dict(
                 thread,
@@ -206,39 +227,48 @@ def headroom_verdict(
                 ),
             )
         floor, defaulted = unit_floor_cycles(thread, rates)
+        bubbles: dict[str, float] = {}
+        for b in thread.get("bubbles") or []:
+            key = (
+                f"{_name(b['after'], opcode_names)}->{_name(b['before'], opcode_names)}"
+            )
+            bubbles[key] = bubbles.get(key, 0) + b["cycles"]
         units[name] = {
-            "floor_per_tile": _round(per_tile(floor, loop_factor, tile_cnt)),
-            "issue_per_tile": _round(per_tile(thread["issue"], loop_factor, tile_cnt)),
-            "stall_per_tile": {
-                r: _round(per_tile(c, loop_factor, tile_cnt))
-                for r, c in thread["stall"].items()
-            },
-            "idle_per_tile": _round(per_tile(thread["idle"], loop_factor, tile_cnt)),
-            "bubbles_per_tile": {
-                f"{_name(b['after'], opcode_names)}->{_name(b['before'], opcode_names)}": _round(
-                    per_tile(b["cycles"], loop_factor, tile_cnt)
-                )
-                for b in thread.get("bubbles") or []
-            },
-            "instructions_per_tile": _round(
-                per_tile(thread["instructions_issued"], loop_factor, tile_cnt)
-            ),
+            "floor_per_tile": pt(floor),
+            "issue_per_tile": pt(thread["issue"]),
+            "stall_per_tile": {r: pt(c) for r, c in thread["stall"].items()},
+            "idle_per_tile": pt(thread["idle"]),
+            "bubbles_per_tile": {k: pt(c) for k, c in bubbles.items()},
+            "instructions_per_tile": pt(thread["instructions_issued"]),
             "instructions_by_opcode": thread.get("instructions_by_opcode") or {},
             "defaulted_opcodes": defaulted,
         }
     if not units:
         raise ValueError("wave report has no threads")
 
-    # The bottleneck is the busiest *issuer*: a thread that is mostly stalled is
-    # usually waiting on another thread (e.g. unpack stalled on instissue while
-    # math owns Dest), so stall time alone must not elect it.
-    bottleneck = max(units, key=lambda name: (units[name]["issue_per_tile"], name))
-    waiting = {
-        name: {r: v for r, v in unit["stall_per_tile"].items() if v > 0}
-        for name, unit in units.items()
-        if name != bottleneck
-        and sum(unit["stall_per_tile"].values()) > unit["issue_per_tile"]
-    }
+    # An *_ISOLATE run measures one thread (the others are mocked), so that thread is
+    # the bottleneck even when a mocked thread issues more (e.g. math's per-tile
+    # STALLWAIT + CLEARDVALID under UNPACK_ISOLATE).
+    isolated = ISOLATED_THREAD.get(run_type)
+    if isolated is not None and isolated not in units:
+        raise ValueError(
+            f"run type {run_type} isolates {isolated!r}, but the wave report has no such thread"
+        )
+    # Otherwise the bottleneck is the busiest *issuer*: a thread that is mostly
+    # stalled is usually waiting on another thread (e.g. unpack stalled on instissue
+    # while math owns Dest), so stall time alone must not elect it.
+    bottleneck = isolated or max(
+        units, key=lambda name: (units[name]["issue_per_tile"], name)
+    )
+    # A thread stalled on its own unit (pack on a busy packer) is working, not waiting
+    # on another thread; only the other stall reasons make it a waiting thread.
+    waiting = {}
+    for name, unit in units.items():
+        if name == bottleneck:
+            continue
+        cross = {r: v for r, v in unit["stall_per_tile"].items() if r != name and v > 0}
+        if sum(cross.values()) > unit["issue_per_tile"]:
+            waiting[name] = cross
     b = units[bottleneck]
     causes = [[f"{bottleneck}.{r}", v] for r, v in b["stall_per_tile"].items()]
     causes += [
@@ -278,7 +308,6 @@ def headroom_verdict(
         name: (u["issue_per_tile"] + sum(u["stall_per_tile"].values())) / csv_per_tile
         for name, u in units.items()
     }
-    isolated = ISOLATED_THREAD.get(run_type)
     issue_fraction = b["issue_per_tile"] / csv_per_tile if csv_per_tile else 0.0
     if isolated == bottleneck or (
         bottleneck in ("math", "sfpu") and issue_fraction >= ISSUE_BOUND_FRACTION
@@ -390,7 +419,7 @@ def _summary(v: dict) -> str:
         )
     for name, reasons in v.get("waiting_threads", {}).items():
         lines.append(
-            f"waiting thread  : {name} stalled on {reasons} (waits on the bottleneck, not a cause)"
+            f"waiting thread  : {name} stalled on {reasons} (waits on another thread, not a cause)"
         )
     lines.append("causes (cyc/tile):")
     lines += [f"  {name:<28} {value}" for name, value in v["causes"]]
@@ -402,6 +431,23 @@ def _summary(v: dict) -> str:
                 f"{name}: default issue cost used for {', '.join(unit['defaulted_opcodes'])}"
             )
     return "\n".join(lines)
+
+
+def _opcode_names(explicit: Path | None) -> dict[str, str] | None:
+    """An explicit --assembly-yaml must exist; a missing default only warns (opcodes stay hex)."""
+
+    if explicit is not None:
+        if not explicit.is_file():
+            raise ValueError(f"--assembly-yaml {explicit} does not exist")
+        return load_opcode_names(explicit)
+    if _DEFAULT_ASSEMBLY.is_file():
+        return load_opcode_names(_DEFAULT_ASSEMBLY)
+    print(
+        f"perf_headroom: warning: {_DEFAULT_ASSEMBLY} not found; opcodes stay hex and "
+        "no mnemonic-keyed issue rate applies",
+        file=sys.stderr,
+    )
+    return None
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -436,8 +482,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument(
         "--assembly-yaml",
         type=Path,
-        default=_DEFAULT_ASSEMBLY,
-        help="opcode -> mnemonic table",
+        default=None,
+        help=f"opcode -> mnemonic table (default: tt_llk_quasar/instructions/{_DEFAULT_ASSEMBLY.name})",
     )
     p.add_argument(
         "--loop-factor",
@@ -464,11 +510,7 @@ def main(argv: list[str] | None = None) -> int:
         rates = load_rates(args.rates or [_DEFAULT_RATES])
         report = json.loads(args.wave_report.read_text())
         row = _select_row(args.perf_csv, args.select)
-        names = (
-            load_opcode_names(args.assembly_yaml)
-            if args.assembly_yaml.exists()
-            else None
-        )
+        names = _opcode_names(args.assembly_yaml)
         verdict = headroom_verdict(
             report,
             row,

@@ -65,7 +65,10 @@ def test_wrapped_get_data_dumps_with_caller_run_type(tmp_path):
 def test_install_is_idempotent_and_numbers_calls(tmp_path):
     module = _fake_profiler_module()
     plugin.install(module, tmp_path)
+    first = module.Profiler.__dict__["get_data"]
     plugin.install(module, tmp_path)
+    # a second install must not wrap the wrapper (both layers would write 000_...)
+    assert module.Profiler.__dict__["get_data"] is first
     module.Profiler.get_data("t", "v")
     module.Profiler.get_data("t", "v")
     assert sorted(p.name for p in tmp_path.iterdir()) == [

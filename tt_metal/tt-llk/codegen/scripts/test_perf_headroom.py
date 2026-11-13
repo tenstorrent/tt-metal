@@ -6,6 +6,7 @@
 
 import importlib.util
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -16,6 +17,20 @@ _PATH = Path(__file__).parent / "perf_headroom.py"
 _SPEC = importlib.util.spec_from_file_location("perf_headroom", _PATH)
 perf_headroom = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(perf_headroom)
+
+_ASSEMBLY_YAML = (
+    Path(__file__).resolve().parents[2]
+    / "tt_llk_quasar"
+    / "instructions"
+    / "assembly.yaml"
+)
+
+# The default fixture: 32 loops x 4 tiles = 128 tile iterations in a 6400-cycle window.
+LOOP_FACTOR = 32
+TILE_CNT = 4
+TILES = LOOP_FACTOR * TILE_CNT
+WINDOW_CYCLES = 6400
+PER_TILE = WINDOW_CYCLES / TILES  # 50.0
 
 
 def _rates(tmp_path: Path, name: str, data: dict) -> Path:
@@ -28,6 +43,10 @@ BASE_RATES = {
     "default": {"cycles": 1, "source": "single-issue per thread"},
     "opcodes": {"SFPMAD": {"cycles": 1, "source": "assembly.yaml SFPMAD"}},
 }
+
+
+def _base_rates(tmp_path: Path) -> dict:
+    return perf_headroom.load_rates([_rates(tmp_path, "r.json", BASE_RATES)])
 
 
 def _thread(issue, stall=None, idle=0, by_opcode=None):
@@ -61,8 +80,8 @@ def _csv_row(per_tile, **extra):
     row = {
         "mathop": "Sigmoid",
         "marker": "TILE_LOOP",
-        "loop_factor": "32",
-        "tile_cnt": "4",
+        "loop_factor": str(LOOP_FACTOR),
+        "tile_cnt": str(TILE_CNT),
         "mean(MATH_ISOLATE)": str(per_tile),
         "mean(L1_TO_L1)": str(per_tile + 50),
     }
@@ -108,14 +127,34 @@ def test_later_rates_override_earlier(tmp_path):
 
 
 def test_unit_floor_uses_default_and_reports_it(tmp_path):
-    rates = perf_headroom.load_rates([_rates(tmp_path, "r.json", BASE_RATES)])
     thread = _thread(6, by_opcode={"SFPMAD": 4, "FOO": 2})
-    assert perf_headroom.unit_floor_cycles(thread, rates) == (6, ["FOO"])
+    assert perf_headroom.unit_floor_cycles(thread, _base_rates(tmp_path)) == (
+        6,
+        ["FOO"],
+    )
+
+
+def test_unit_floor_prices_opcodes_from_the_rate_table(tmp_path):
+    # SFPSWAP at 3 cycles: 2 x 3 + 4 x 1 (SFPMAD) + 2 x 1 (default) = 12
+    rates = perf_headroom.load_rates(
+        [
+            _rates(tmp_path, "a.json", BASE_RATES),
+            _rates(
+                tmp_path,
+                "b.json",
+                {"opcodes": {"SFPSWAP": {"cycles": 3, "source": "s"}}},
+            ),
+        ]
+    )
+    thread = _thread(8, by_opcode={"SFPSWAP": 2, "SFPMAD": 4, "FOO": 2})
+    assert perf_headroom.unit_floor_cycles(thread, rates) == (12, ["FOO"])
 
 
 def test_unit_floor_without_opcodes_defaults_everything(tmp_path):
-    rates = perf_headroom.load_rates([_rates(tmp_path, "r.json", BASE_RATES)])
-    assert perf_headroom.unit_floor_cycles(_thread(7), rates) == (7, ["<all>"])
+    assert perf_headroom.unit_floor_cycles(_thread(7), _base_rates(tmp_path)) == (
+        7,
+        ["<all>"],
+    )
 
 
 def test_opcode_hex_keys_map_to_mnemonics(tmp_path):
@@ -130,17 +169,41 @@ def test_opcode_hex_keys_map_to_mnemonics(tmp_path):
     }
 
 
+def test_opcode_headers_may_carry_a_trailing_comment(tmp_path):
+    yaml_text = (
+        "UNPACR_NOP: # Misc unpack instruction\n    op_binary: 0x43\n"
+        "RESOURCEDECL: # fixme: fcov\n    op_binary: 0x05\n"
+    )
+    path = tmp_path / "assembly.yaml"
+    path.write_text(yaml_text)
+    assert perf_headroom.load_opcode_names(path) == {
+        "0x43": "UNPACR_NOP",
+        "0x05": "RESOURCEDECL",
+    }
+
+
+@pytest.mark.skipif(not _ASSEMBLY_YAML.is_file(), reason="no Quasar assembly.yaml")
+def test_every_quasar_op_binary_gets_its_mnemonic():
+    text = _ASSEMBLY_YAML.read_text()
+    headers = re.findall(r"^([A-Z][A-Z0-9_]*):", text, flags=re.M)
+    op_binaries = re.findall(r"^\s+op_binary:", text, flags=re.M)
+    assert len(headers) == len(op_binaries)
+    table = perf_headroom.load_opcode_names(_ASSEMBLY_YAML)
+    named = {n for value in table.values() for n in value.split("|")}
+    assert named == set(headers)
+    assert table["0x43"] == "UNPACR_NOP"
+
+
 def test_per_tile_matches_post_csv_formula():
-    assert perf_headroom.per_tile(6400, 32, 4) == 50.0
+    assert perf_headroom.per_tile(WINDOW_CYCLES, LOOP_FACTOR, TILE_CNT) == PER_TILE
 
 
 # --- verdict -----------------------------------------------------------------
 
 
-def _verdict(tmp_path, report, row, **kw):
-    rates = perf_headroom.load_rates([_rates(tmp_path, "r.json", BASE_RATES)])
+def _verdict(tmp_path, report, row, run_type="MATH_ISOLATE", **kw):
     return perf_headroom.headroom_verdict(
-        report, row, rates, run_type="MATH_ISOLATE", **kw
+        report, row, _base_rates(tmp_path), run_type=run_type, **kw
     )
 
 
@@ -170,7 +233,7 @@ def test_verdict_reconciles_and_finds_bottleneck(tmp_path):
 
 
 def test_instruction_headroom(tmp_path):
-    report = _report(6400, {"sfpu": _thread(2560, idle=3840)})
+    report = _report(6400, {"math": _thread(2560, idle=3840)})
     verdict = _verdict(
         tmp_path, report, _csv_row(50.0), best_count=15, best_count_source="hand count"
     )
@@ -182,10 +245,19 @@ def test_instruction_headroom(tmp_path):
     }
 
 
-def test_reconcile_fails_over_two_percent(tmp_path):
-    report = _report(6400 * 103 // 100, {"math": _thread(100)})
-    verdict = _verdict(tmp_path, report, _csv_row(50.0))
-    assert verdict["reconcile"]["ok"] is False
+@pytest.mark.parametrize(
+    "cycles, ok",
+    [
+        (WINDOW_CYCLES, True),
+        (6528, True),  # +2.0 %: on the tolerance
+        (6592, False),  # +3 %
+        (5760, False),  # -10 %: the tolerance is on |delta|
+    ],
+)
+def test_reconcile_tolerance_is_two_percent_either_way(tmp_path, cycles, ok):
+    report = _report(cycles, {"math": _thread(100, idle=cycles - 100)})
+    verdict = _verdict(tmp_path, report, _csv_row(PER_TILE))
+    assert verdict["reconcile"]["ok"] is ok
 
 
 def test_incomplete_report_is_refused(tmp_path):
@@ -204,9 +276,11 @@ def _write_csv(path: Path, rows: list[dict]) -> Path:
     return path
 
 
-def _cli(tmp_path, csv_rows, select, cycles=6400):
+def _cli(tmp_path, csv_rows, select, cycles=WINDOW_CYCLES, as_json=True, extra=()):
     report = tmp_path / "report.json"
-    report.write_text(json.dumps(_report(cycles, {"math": _thread(2560, idle=3840)})))
+    report.write_text(
+        json.dumps(_report(cycles, {"math": _thread(2560, idle=cycles - 2560)}))
+    )
     csv_path = _write_csv(tmp_path / "x.post.csv", csv_rows)
     rates = _rates(tmp_path, "r.json", BASE_RATES)
     argv = [
@@ -220,7 +294,8 @@ def _cli(tmp_path, csv_rows, select, cycles=6400):
         "MATH_ISOLATE",
         "--rates",
         str(rates),
-        "--json",
+        *(["--json"] if as_json else []),
+        *extra,
     ]
     for s in select:
         argv += ["--select", s]
@@ -247,20 +322,54 @@ def test_cli_exit_2_when_not_reconciled(tmp_path):
     assert json.loads(result.stdout)["reconcile"]["ok"] is False
 
 
+def test_cli_text_summary(tmp_path):
+    extra = ["--best-count", "15", "--best-count-source", "hand count"]
+    ok = _cli(
+        tmp_path, [_csv_row(PER_TILE)], ["mathop=Sigmoid"], as_json=False, extra=extra
+    )
+    assert ok.returncode == 0, ok.stderr
+    assert "-> OK" in ok.stdout
+    assert "instr headroom  : 25.0 % (20.0 -> 15 instr/tile; hand count)" in ok.stdout
+    bad = _cli(
+        tmp_path, [_csv_row(PER_TILE)], ["mathop=Sigmoid"], cycles=7000, as_json=False
+    )
+    assert bad.returncode == 2
+    assert "NOT RECONCILED" in bad.stdout
+
+
+def test_cli_explicit_missing_assembly_yaml_is_an_error(tmp_path):
+    extra = ["--assembly-yaml", str(tmp_path / "nope.yaml")]
+    result = _cli(tmp_path, [_csv_row(PER_TILE)], ["mathop=Sigmoid"], extra=extra)
+    assert result.returncode == 2
+    assert "nope.yaml" in result.stderr
+
+
 def test_bubbles_become_named_causes_and_idle_is_residual(tmp_path):
     thread = _thread(2560, idle=640)
     thread["bubbles"] = [
         {"after": "0x99", "before": "0x72", "count": 128, "cycles": 512}
     ]
     report = _report(6400, {"math": dict(thread, stall={"sfpu": 3200})})
-    rates = perf_headroom.load_rates([_rates(tmp_path, "r.json", BASE_RATES)])
     names = {"0x99": "SFPNONLINEAR", "0x72": "SFPSTORE"}
-    verdict = perf_headroom.headroom_verdict(
-        report, _csv_row(50.0), rates, run_type="MATH_ISOLATE", opcode_names=names
-    )
+    verdict = _verdict(tmp_path, report, _csv_row(50.0), opcode_names=names)
     causes = dict((name, value) for name, value in verdict["causes"])
     assert causes["math.bubble.SFPNONLINEAR->SFPSTORE"] == 4.0
     assert causes["math.idle"] == 1.0
+
+
+def test_repeated_bubble_pairs_accumulate(tmp_path):
+    thread = _thread(2560, idle=3840)
+    thread["bubbles"] = [
+        {"after": "0x99", "before": "0x72", "count": 64, "cycles": 256},
+        {"after": "0x99", "before": "0x72", "count": 64, "cycles": 256},
+    ]
+    names = {"0x99": "SFPNONLINEAR", "0x72": "SFPSTORE"}
+    verdict = _verdict(
+        tmp_path, _report(6400, {"math": thread}), _csv_row(50.0), opcode_names=names
+    )
+    causes = dict((name, value) for name, value in verdict["causes"])
+    assert causes["math.bubble.SFPNONLINEAR->SFPSTORE"] == 4.0
+    assert causes["math.idle"] == 26.0
 
 
 def test_bottleneck_is_busiest_issuer_not_the_waiting_thread(tmp_path):
@@ -272,17 +381,72 @@ def test_bottleneck_is_busiest_issuer_not_the_waiting_thread(tmp_path):
             "unpack": _thread(64, stall={"instissue": 6200}, idle=136),
         },
     )
-    verdict = _verdict(tmp_path, report, _csv_row(50.0))
+    verdict = _verdict(tmp_path, report, _csv_row(50.0), run_type="L1_TO_L1")
     assert verdict["bottleneck"] == "math"
     assert verdict["waiting_threads"] == {"unpack": {"instissue": 48.438}}
 
 
+def test_isolate_run_type_pins_the_bottleneck_to_the_isolated_thread(tmp_path):
+    # UNPACK_ISOLATE: mocked math issues STALLWAIT + CLEARDVALID per tile and out-issues unpack.
+    report = _report(
+        6400,
+        {
+            "math": _thread(256, idle=6144),
+            "unpack": _thread(192, stall={"unpack": 5760}, idle=448),
+        },
+    )
+    row = _csv_row(50.0, **{"mean(UNPACK_ISOLATE)": "50.0"})
+    verdict = _verdict(tmp_path, report, row, run_type="UNPACK_ISOLATE")
+    assert verdict["bottleneck"] == "unpack"
+    assert verdict["bound"]["kind"] == "issue"
+    assert verdict["causes"][0] == ["unpack.unpack", 45.0]
+
+
+def test_isolate_run_type_without_its_thread_is_refused(tmp_path):
+    report = _report(6400, {"math": _thread(2560, idle=3840)})
+    row = _csv_row(50.0, **{"mean(PACK_ISOLATE)": "50.0"})
+    with pytest.raises(ValueError, match="isolates 'pack'"):
+        _verdict(tmp_path, report, row, run_type="PACK_ISOLATE")
+
+
+def test_thread_stalled_on_its_own_unit_is_not_waiting(tmp_path):
+    # pack held by its busy packer is working; only its cross-thread stalls would make it wait.
+    report = _report(
+        6400,
+        {
+            "math": _thread(3200, idle=3200),
+            "pack": _thread(640, stall={"pack": 5120, "instissue": 128}, idle=512),
+        },
+    )
+    verdict = _verdict(tmp_path, report, _csv_row(50.0), run_type="L1_TO_L1")
+    assert verdict["waiting_threads"] == {}
+
+
+def test_breakdown_that_does_not_cover_the_window_is_refused(tmp_path):
+    report = _report(6400, {"math": _thread(2560, idle=3000)})
+    with pytest.raises(ValueError, match="does not cover the window"):
+        _verdict(tmp_path, report, _csv_row(50.0))
+
+
+def test_unknown_cycles_are_refused(tmp_path):
+    thread = dict(_thread(2560, idle=3740), unknown=100)
+    with pytest.raises(ValueError, match="100 unknown"):
+        _verdict(tmp_path, _report(6400, {"math": thread}), _csv_row(50.0))
+
+
 def test_missing_core_signal_is_refused(tmp_path):
-    # I3: the wave tool lists signals without which stall time would read as idle
+    # the wave tool lists the signals without which stall time would read as idle
     report = _report(6400, {"math": _thread(2560, idle=3840)}, status="missing_signals")
     report["missing_signals"] = ["math.some_reason"]
     report["missing_core_signals"] = ["math.valid"]
     with pytest.raises(ValueError, match="missing core signals"):
+        _verdict(tmp_path, report, _csv_row(50.0))
+
+
+def test_missing_signals_without_the_core_key_is_refused(tmp_path):
+    report = _report(6400, {"math": _thread(2560, idle=3840)}, status="missing_signals")
+    report["missing_signals"] = ["math.some_reason"]
+    with pytest.raises(ValueError, match="missing_core_signals"):
         _verdict(tmp_path, report, _csv_row(50.0))
 
 
@@ -325,7 +489,11 @@ def _bound_verdict(threads, per_tile, run_type="L1_TO_L1"):
     report = _report(int(per_tile * tiles), threads)
     return perf_headroom.headroom_verdict(
         report,
-        {"loop_factor": "32", "tile_cnt": "4", f"mean({run_type})": str(per_tile)},
+        {
+            "loop_factor": str(LOOP_FACTOR),
+            "tile_cnt": str(TILE_CNT),
+            f"mean({run_type})": str(per_tile),
+        },
         {"default": {"cycles": 1, "source": "s"}, "opcodes": {}},
         run_type=run_type,
     )
