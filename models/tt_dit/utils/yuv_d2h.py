@@ -537,7 +537,10 @@ def fast_device_to_host_yuv(
     # and clips [0, 255] after, so the VAE's out-of-range extremes would otherwise land outside the limited
     # range (Y 0-255 instead of 16-235; measured ~3 Y levels RMS on 10 % of the pixels).
     tt_CHWT = ttnn.clip(tt_CHWT, -1.0, 1.0)
-    tt_Y, tt_Cb, tt_Cr = ttnn.experimental.rgb_to_yuv(tt_CHWT, coefficients=coefficients, wide_rows=True)
+    # wide_rows takes one T tile per unit (T <= 32): H3 decodes in chunks that fit, but LTX reads back a whole
+    # clip (T=145 for 6 s), which TT_FATALs at pipeline build. Above 32 frames use the plain kernel, as ltx-rt
+    # did before the H3 merge; both give the same planes (test_rgb_to_yuv_wide_minimax_h3).
+    tt_Y, tt_Cb, tt_Cr = ttnn.experimental.rgb_to_yuv(tt_CHWT, coefficients=coefficients, wide_rows=T <= 32)
     if debug:
         print(f"  [yuv-d2h] yuv outputs per-shard:")
         print(f"  [yuv-d2h]   Y : {list(tt_Y.shape)}")
