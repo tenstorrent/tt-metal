@@ -64,6 +64,7 @@ set(UNIT_TESTS_TTNN_KERNEL_LIB_SOURCES
     test_mcast_program_spec.cpp
     test_mcast_validation_lifecycle.cpp
     test_mcast_wire_topology.cpp
+    ../kernel_lib/reduce/test_reduce_helper_quasar.cpp
 )
 
 set(UNIT_TESTS_TTNN_CCL_SOURCES

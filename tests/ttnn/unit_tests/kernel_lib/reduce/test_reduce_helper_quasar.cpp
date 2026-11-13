@@ -6,7 +6,7 @@
 // partial masks and scalers, scale_bits, auxiliary offset, cross-call accumulation with both Quasar reload modes and a
 // post-reduce op, with Native cases as the harness baseline.
 
-#include "common/device_fixture.hpp"
+#include "tests/tt_metal/tt_metal/common/device_fixture.hpp"
 
 #include <algorithm>
 #include <array>
@@ -259,7 +259,7 @@ void run_reduce_case(distributed::MeshDevice& mesh_device, const ReduceCase& rc)
 
     experimental::KernelSpec reader_spec{
         .unique_id = READER,
-        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/reduce_helper_reader_2_0.cpp",
+        .source = "tests/ttnn/unit_tests/kernel_lib/reduce/kernels/reduce_explicit_quasar_reader.cpp",
         .num_threads = 1,
         .dfb_bindings = {experimental::ProducerOf(INPUT_DFB, "in"), experimental::ProducerOf(AUX_DFB, "aux")},
         .compile_time_args =
@@ -326,7 +326,7 @@ void run_reduce_case(distributed::MeshDevice& mesh_device, const ReduceCase& rc)
 
     experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,
-        .source = "tests/tt_metal/tt_metal/test_kernels/compute/reduce_helper_2_0.cpp",
+        .source = "tests/ttnn/unit_tests/kernel_lib/reduce/kernels/reduce_explicit_quasar.cpp",
         .num_threads = 1,
         .compiler_options = {.defines = experimental::KernelSpec::CompilerOptions::Defines(defines)},
         .dfb_bindings = compute_bindings,
