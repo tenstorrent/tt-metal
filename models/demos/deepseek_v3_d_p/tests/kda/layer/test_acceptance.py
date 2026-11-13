@@ -15,6 +15,7 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.reference_cache import load_or_compute_cpu_reference
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     KIMI_K3_CONVOLUTION_NRMSE,
@@ -99,6 +100,16 @@ _INTERVAL_OUTPUT_NRMSE = {("SP8xTP1", "one-token"): 0.035, ("SP4xTP1", "one-toke
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="SP8xTP4-torus-xy",
         ),
+        # An unwrapped 2D mesh: the input projection gathers the TP axis as a Linear line.
+        pytest.param(
+            (8, 4),
+            1,
+            fabric2d_device_params(fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE),
+            PREFILL_CHUNK_TOKENS,
+            None,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="SP8xTP4-fabric-2d",
+        ),
         # Two chunks: 1280 rows per chip, still one group per head (relay and entry correction).
         pytest.param(
             (8, 4),
@@ -153,7 +164,8 @@ def test_synthetic_kimi_k3_accuracy_and_determinism(
     padded = case.hidden.clone()
     padded[:, length:] = float("nan")
     ttnn.deallocate(hidden_tt)
-    hidden_tt = to_sp_input(padded[:, permutation, :], mesh_device, sequence_parallel_axis)
+    # TP-sharded, as the model's residual hands it over: the layer gathers it (inside the input projection on Galaxy).
+    hidden_tt = to_sp_input(padded[:, permutation, :], mesh_device, sequence_parallel_axis, tensor_parallel_axis)
     valid_rows = to_sp_input(
         (permutation < length).to(torch.bfloat16).reshape(1, -1, 1), mesh_device, sequence_parallel_axis
     )
