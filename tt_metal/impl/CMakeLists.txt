@@ -96,8 +96,6 @@ add_library(Metalium::Metal::Impl ALIAS impl)
 set_source_files_properties(
     ${CMAKE_CURRENT_SOURCE_DIR}/internal/reload_table.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/context/simulator_termination.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/kernel_config/tensor_prefetcher.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/buffers/tensor_prefetcher_manager_dispatch_engine.cpp
     PROPERTIES
         SKIP_UNITY_BUILD_INCLUSION
             TRUE

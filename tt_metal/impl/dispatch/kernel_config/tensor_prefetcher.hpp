@@ -16,9 +16,10 @@ class DispatchMemMap;
 
 // Whether fast dispatch runs the Tensor prefetcher kernels beside the CQ kernels: only on a dispatch
 // engine (not the Tensix dispatch cores) serving a single CQ, with at least
-// tensor_prefetcher_fifo::kMinRegionBytes of its L1 unused above the CQ zones.
+// tensor_prefetcher_fifo::kMinRegionBytes of its L1 unused above the CQ zones, on devices with no more
+// DRAM banks than a request can name (tensor_prefetcher_fifo::kMaxDramBanks).
 bool dispatch_engine_hosts_tensor_prefetcher(
-    CoreType dispatch_core_type, uint32_t num_hw_cqs, const DispatchMemMap& dispatch_mem_map);
+    const Cluster& cluster, CoreType dispatch_core_type, uint32_t num_hw_cqs, const DispatchMemMap& dispatch_mem_map);
 
 // One of the two Tensor prefetcher kernels that fast dispatch launches on a dispatch engine beside the CQ
 // kernels, and terminates with them. The reader stages weight blocks from DRAM into the engine's L1; the

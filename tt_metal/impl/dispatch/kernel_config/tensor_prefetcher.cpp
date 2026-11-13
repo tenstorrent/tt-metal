@@ -13,15 +13,27 @@
 
 #include "impl/buffers/tensor_prefetcher_fifo.hpp"
 #include "impl/dispatch/dispatch_mem_map.hpp"
+#include "llrt/metal_soc_descriptor.hpp"
+#include "llrt/tt_cluster.hpp"
 
 namespace tt::tt_metal {
 
+namespace {
 namespace fifo = tensor_prefetcher_fifo;
+}  // namespace
 
 bool dispatch_engine_hosts_tensor_prefetcher(
-    CoreType dispatch_core_type, uint32_t num_hw_cqs, const DispatchMemMap& dispatch_mem_map) {
-    return dispatch_core_type == CoreType::DISPATCH && num_hw_cqs == 1 &&
-           dispatch_mem_map.unused_l1_size() >= fifo::kMinRegionBytes;
+    const Cluster& cluster, CoreType dispatch_core_type, uint32_t num_hw_cqs, const DispatchMemMap& dispatch_mem_map) {
+    if (dispatch_core_type != CoreType::DISPATCH || num_hw_cqs != 1 ||
+        dispatch_mem_map.unused_l1_size() < fifo::kMinRegionBytes) {
+        return false;
+    }
+    for (const ChipId chip : cluster.all_chip_ids()) {
+        if (cluster.get_soc_desc(chip).get_num_dram_views() > fifo::kMaxDramBanks) {
+            return false;
+        }
+    }
+    return true;
 }
 
 TensorPrefetcherKernel::TensorPrefetcherKernel(

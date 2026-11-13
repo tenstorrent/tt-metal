@@ -49,6 +49,9 @@ enum class DramSenderPlacement : uint8_t {
 // DRAM-sender endpoints.
 std::optional<DramSenderPlacement> dram_sender_placement(ContextId context_id, uint8_t num_hw_cqs);
 
+// Whether `mesh_device` runs its DRAM-sender endpoints on its dispatch engine.
+bool dram_senders_on_dispatch_engine(const distributed::MeshDevice& mesh_device);
+
 // Under DramSenderPlacement::DispatchEngine: the logical dispatch-engine core of device `device_id` that
 // holds every DRAM-sender endpoint's state.
 CoreCoord dram_sender_dispatch_engine(ContextId context_id, ChipId device_id);

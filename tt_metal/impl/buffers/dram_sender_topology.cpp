@@ -159,10 +159,17 @@ std::optional<DramSenderPlacement> dram_sender_placement(ContextId context_id, u
     if (hal.has_programmable_core_type(HalProgrammableCoreType::DISPATCH) &&
         metal_ctx.rtoptions().get_fast_dispatch() &&
         dispatch_engine_hosts_tensor_prefetcher(
-            metal_ctx.get_dispatch_core_manager().get_dispatch_core_type(), num_hw_cqs, metal_ctx.dispatch_mem_map())) {
+            metal_ctx.get_cluster(),
+            metal_ctx.get_dispatch_core_manager().get_dispatch_core_type(),
+            num_hw_cqs,
+            metal_ctx.dispatch_mem_map())) {
         return DramSenderPlacement::DispatchEngine;
     }
     return std::nullopt;
+}
+
+bool dram_senders_on_dispatch_engine(const distributed::MeshDevice& mesh_device) {
+    return mesh_device.impl().dram_sender_placement() == DramSenderPlacement::DispatchEngine;
 }
 
 CoreCoord dram_sender_dispatch_engine(ContextId context_id, ChipId device_id) {
@@ -179,8 +186,8 @@ namespace {
 // core, or the dispatch engine that holds every endpoint's.
 struct DramSenderStateCore {
     CoreCoord logical;
-    CoreType core_type;
-    HalProgrammableCoreType programmable_core_type;
+    CoreType core_type = CoreType::DRAM;
+    HalProgrammableCoreType programmable_core_type = HalProgrammableCoreType::DRAM;
 };
 
 DramSenderStateCore dram_sender_state_core(

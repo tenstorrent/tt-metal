@@ -1979,20 +1979,17 @@ std::shared_ptr<experimental::HostRegion> MeshDeviceImpl::host_region() {
     return host_region_;
 }
 
-bool MeshDeviceImpl::dram_senders_on_dispatch_engine(const IDevice* device, uint32_t bank_id) const {
-    if (dram_sender_placement_ != DramSenderPlacement::DispatchEngine) {
-        return false;
-    }
+void MeshDeviceImpl::check_dram_bank(const IDevice* device, uint32_t bank_id) const {
     const uint32_t num_banks = metal_env().get_cluster().get_soc_desc(device->id()).get_num_dram_views();
     TT_FATAL(
         bank_id < num_banks, "bank_id={} out of range for device {} (num_banks={})", bank_id, device->id(), num_banks);
-    return true;
 }
 
 CoreCoord MeshDeviceImpl::pick_unused_dram_logical_core(const IDevice* device, uint32_t bank_id) const {
     TT_FATAL(device != nullptr, "Cannot select a DRAM sender core for a null device");
     // On a dispatch engine an endpoint is only a role of its bank; no DRAM core is occupied.
-    if (dram_senders_on_dispatch_engine(device, bank_id)) {
+    if (dram_sender_placement_ == DramSenderPlacement::DispatchEngine) {
+        check_dram_bank(device, bank_id);
         return CoreCoord(bank_id, 0);
     }
     return tt::tt_metal::pick_unused_dram_logical_core(
@@ -2001,7 +1998,8 @@ CoreCoord MeshDeviceImpl::pick_unused_dram_logical_core(const IDevice* device, u
 
 std::vector<CoreCoord> MeshDeviceImpl::dram_sender_logical_cores(const IDevice* device, uint32_t bank_id) const {
     TT_FATAL(device != nullptr, "Cannot enumerate DRAM sender cores for a null device");
-    if (dram_senders_on_dispatch_engine(device, bank_id)) {
+    if (dram_sender_placement_ == DramSenderPlacement::DispatchEngine) {
+        check_dram_bank(device, bank_id);
         return {CoreCoord(bank_id, 0), CoreCoord(bank_id, 1)};
     }
     const auto& soc_desc = metal_env().get_cluster().get_soc_desc(device->id());

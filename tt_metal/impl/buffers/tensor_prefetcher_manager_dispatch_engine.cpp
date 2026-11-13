@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstring>
 #include <deque>
 #include <memory>
@@ -29,6 +30,7 @@
 #include "impl/context/metal_env_impl.hpp"
 #include "impl/dispatch/dispatch_mem_map.hpp"
 #include "llrt/hal.hpp"
+#include "llrt/rtoptions.hpp"
 #include "llrt/tt_cluster.hpp"
 #include "distributed/mesh_device_impl.hpp"
 
@@ -81,14 +83,8 @@ void TensorPrefetcherManager::start_on_dispatch_engine() {
     active_ = true;
 }
 
-void TensorPrefetcherManager::validate_dispatch_engine_requests(
-    const std::vector<std::shared_ptr<const Request>>& requests,
-    const RequestTarget& target,
-    const MeshCommandQueue* trace_capture_cq) const {
-    TT_FATAL(
-        trace_capture_cq == nullptr,
-        "QueueTensorPrefetcherRequest: trace capture is not supported when fast dispatch runs the Tensor "
-        "prefetcher (#65545)");
+void TensorPrefetcherManager::validate_dispatch_engine_pages(
+    const std::vector<std::vector<uint8_t>>& sender_pages, const RequestTarget& target) const {
     TT_FATAL(
         target.mapping.size() <= fifo::kMaxLanes,
         "Tensor prefetcher request names {} DRAM-sender endpoints; fast dispatch's prefetcher serves at most {}",
@@ -103,41 +99,38 @@ void TensorPrefetcherManager::validate_dispatch_engine_requests(
     const uint32_t stage_slot_bytes = fifo::stage_slot_bytes(
         fifo::stage_ring_bytes(mesh_device_->impl().metal_context().dispatch_mem_map().unused_l1_size()),
         target.total_receivers);
-    for (const auto& request : requests) {
-        for (const auto& page : request->sender_pages) {
-            const TensorPrefetcherRequestHeader& header = header_of(page);
-            if (header.base.cmd_id != DRAM_PREFETCHER_CMD_PREFETCH) {
-                continue;
-            }
-            const auto* entries =
-                reinterpret_cast<const TensorPrefetcherEntry*>(page.data() + sizeof(TensorPrefetcherRequestHeader));
-            for (uint32_t e = 0; e < header.prefetch.num_entries; ++e) {
-                const TensorPrefetcherEntry& entry = entries[e];
-                TensorPrefetcherTensorLayout layout;
-                std::memcpy(&layout, page.data() + entry.layout_offset, sizeof(layout));
-                TT_FATAL(
-                    layout.layout_mode == static_cast<uint32_t>(TensorPrefetcherLayoutMode::ReceiverContiguous),
-                    "Fast dispatch's Tensor prefetcher serves receiver-contiguous weights only; tensor {} is "
-                    "K-row-major (#65545)",
-                    e);
-                TT_FATAL(
-                    layout.streaming == 0,
-                    "Fast dispatch's Tensor prefetcher does not stream (tensor {} is streaming; #65545)",
-                    e);
-                TT_FATAL(
-                    entry.num_groups == 1 && entry.selector_mode == TENSOR_PREFETCHER_SELECTOR_NONE,
-                    "Fast dispatch's Tensor prefetcher does not serve grouped or selected weights (tensor {}; #65545)",
-                    e);
-                TT_FATAL(
-                    layout.page_bytes_per_recv <= stage_slot_bytes,
-                    "Tensor {} has {} B blocks; the dispatch engine stages {} receivers' blocks in {} slots of {} B "
-                    "each",
-                    e,
-                    layout.page_bytes_per_recv,
-                    target.total_receivers,
-                    fifo::kStageSlotsPerReceiver,
-                    stage_slot_bytes);
-            }
+    for (const auto& page : sender_pages) {
+        const TensorPrefetcherRequestHeader& header = header_of(page);
+        if (header.base.cmd_id != DRAM_PREFETCHER_CMD_PREFETCH) {
+            continue;
+        }
+        const auto* entries =
+            reinterpret_cast<const TensorPrefetcherEntry*>(page.data() + sizeof(TensorPrefetcherRequestHeader));
+        for (uint32_t e = 0; e < header.prefetch.num_entries; ++e) {
+            const TensorPrefetcherEntry& entry = entries[e];
+            TensorPrefetcherTensorLayout layout;
+            std::memcpy(&layout, page.data() + entry.layout_offset, sizeof(layout));
+            TT_FATAL(
+                layout.layout_mode == static_cast<uint32_t>(TensorPrefetcherLayoutMode::ReceiverContiguous),
+                "Fast dispatch's Tensor prefetcher serves receiver-contiguous weights only; tensor {} is K-row-major "
+                "(#65545)",
+                e);
+            TT_FATAL(
+                layout.streaming == 0,
+                "Fast dispatch's Tensor prefetcher does not stream (tensor {} is streaming; #65545)",
+                e);
+            TT_FATAL(
+                entry.num_groups == 1 && entry.selector_mode == TENSOR_PREFETCHER_SELECTOR_NONE,
+                "Fast dispatch's Tensor prefetcher does not serve grouped or selected weights (tensor {}; #65545)",
+                e);
+            TT_FATAL(
+                layout.page_bytes_per_recv <= stage_slot_bytes,
+                "Tensor {} has {} B blocks; the dispatch engine stages {} receivers' blocks in {} slots of {} B each",
+                e,
+                layout.page_bytes_per_recv,
+                target.total_receivers,
+                fifo::kStageSlotsPerReceiver,
+                stage_slot_bytes);
         }
     }
 }
@@ -155,15 +148,38 @@ uint32_t TensorPrefetcherManager::fifo_slots_retired(uint32_t d) const {
     return std::min(rd.front(), rd.back());
 }
 
+void TensorPrefetcherManager::wait_for_fifo_retired(uint32_t d, uint32_t target) const {
+    const auto timeout = mesh_device_->impl().metal_env().get_rtoptions().get_timeout_duration_for_operations();
+    uint32_t retired = fifo_slots_retired(d);
+    auto last_progress = std::chrono::steady_clock::now();
+    // The counts only grow and may wrap, so compare their difference.
+    while (static_cast<int32_t>(target - retired) > 0) {
+        std::this_thread::yield();
+        const uint32_t now_retired = fifo_slots_retired(d);
+        const auto now = std::chrono::steady_clock::now();
+        if (now_retired != retired) {
+            retired = now_retired;
+            last_progress = now;
+        } else if (timeout.count() > 0 && now - last_progress > timeout) {
+            mesh_device_->impl().metal_context().on_dispatch_timeout_detected();
+            TT_THROW(
+                "TIMEOUT: the Tensor prefetcher kernels on device {} retired no request for {} s (waiting for {}, at "
+                "{}); potential hang detected",
+                devices_[d]->id(),
+                timeout.count(),
+                target,
+                retired);
+        }
+    }
+}
+
 void TensorPrefetcherManager::write_fifo_slot(uint32_t d, std::span<const uint8_t> slot) {
     IDevice* device = devices_[d];
     DeviceFifo& device_fifo = fifos_[d];
     auto& cluster = mesh_device_->impl().metal_env().get_cluster();
     // A slot is free once both kernels have retired it; they may still be pushing to receivers that
     // only drain after the caller's next workload launches, so wait without holding any API lock.
-    while (device_fifo.written - fifo_slots_retired(d) >= fifo::kFifoSlots) {
-        std::this_thread::yield();
-    }
+    wait_for_fifo_retired(d, device_fifo.written - fifo::kFifoSlots + 1);
     ::tt::tt_metal::detail::WriteToDeviceL1(
         device,
         device_fifo.dispatch_engine,
@@ -184,9 +200,7 @@ void TensorPrefetcherManager::write_fifo_slot(uint32_t d, std::span<const uint8_
 
 void TensorPrefetcherManager::wait_for_fifo_idle() const {
     for (uint32_t d = 0; d < devices_.size(); ++d) {
-        while (fifo_slots_retired(d) != fifos_[d].written) {
-            std::this_thread::yield();
-        }
+        wait_for_fifo_retired(d, fifos_[d].written);
     }
 }
 
@@ -204,7 +218,7 @@ void TensorPrefetcherManager::worker_loop_dispatch_engine() {
             header.num_lanes = static_cast<uint32_t>(num_lanes);
             for (size_t l = 0; l < num_lanes; ++l) {
                 const uint32_t sender = request.target_sender_indices[first + l];
-                header.lane_bank_id[l] = static_cast<uint32_t>(sender_logical_cores_[sender].x);
+                header.lane_bank_id[l] = static_cast<uint8_t>(sender_logical_cores_[sender].x);
                 const auto& page = request.sender_pages[request.sender_pages.size() == 1 ? 0 : first + l];
                 // validate_request_pages holds every page to exactly one lane.
                 std::memcpy(

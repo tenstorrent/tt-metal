@@ -1098,6 +1098,15 @@ KernelGroup::KernelGroup(
                 kernel_config.num_sw_threads()[processor_index] = config.num_threads_per_cluster;
                 kernel_config.kernel_thread_id()[processor_index] = thread_idx;
             }
+        } else if (auto* dk = dynamic_cast<experimental::quasar::DispatchEngineKernel*>(kernel.get())) {
+            // A dispatch-engine kernel is one thread on one DM. Left at 0, get_num_threads() would make
+            // thread-partitioned device code (PrefetcherPipe::owns_receiver) divide by zero.
+            const uint32_t processor_index = hal.get_processor_index(
+                hal.get_programmable_core_type(programmable_core_type_index),
+                HalProcessorClassType::DM,
+                dk->get_kernel_processor_type(0));
+            kernel_config.num_sw_threads()[processor_index] = 1;
+            kernel_config.kernel_thread_id()[processor_index] = 0;
         }
         // Quasar: set per-processor num_sw_threads and kernel_thread_id for trisc/runtime access
         if (auto* qk = dynamic_cast<experimental::quasar::QuasarComputeKernel*>(kernel.get())) {

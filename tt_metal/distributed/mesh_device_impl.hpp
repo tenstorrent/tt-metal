@@ -215,9 +215,9 @@ private:
     std::shared_ptr<::tt::tt_metal::DriscL1Arena> drisc_l1_arena_;
     // Where this mesh runs DRAM-sender endpoints, or nullopt when it runs none. Set by initialize_impl().
     std::optional<::tt::tt_metal::DramSenderPlacement> dram_sender_placement_;
-    // True when DRAM-sender endpoints run on the dispatch engine, where an endpoint names a role of
-    // `bank_id` rather than a DRAM core. TT_FATALs on a bank `device` does not have.
-    bool dram_senders_on_dispatch_engine(const IDevice* device, uint32_t bank_id) const;
+    // Under DramSenderPlacement::DispatchEngine an endpoint names a role of its bank rather than a DRAM
+    // core. TT_FATALs unless `bank_id` is one of `device`'s DRAM banks.
+    void check_dram_bank(const IDevice* device, uint32_t bank_id) const;
 
     // Owns the Tensor prefetcher (DRISC) subsystem. Lazily constructed on first call
     // to experimental::StartTensorPrefetcher; torn down in close_impl() before the
