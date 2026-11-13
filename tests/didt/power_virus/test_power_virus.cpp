@@ -21,6 +21,8 @@
 // Knobs are environment variables, documented in tests/didt/README.md.
 
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <atomic>
 #include <charconv>
 #include <chrono>
@@ -74,7 +76,12 @@ constexpr uint32_t kNocMaxXferBytes = 65536;
 constexpr uint32_t kEthMaxXferBytes = 8192;
 constexpr uint32_t kEthDefaultSlots = 8;
 constexpr uint32_t kEthTimingPageBytes = 64;
-constexpr uint32_t kDefaultPeriodUnits = 256;  // ~97 µs at 1.35 GHz
+constexpr uint32_t kDefaultPeriodUnits = 256;       // ~97 µs at 1.35 GHz
+constexpr uint32_t kDefaultDutyPeriodUnits = 4096;  // ~1.6 ms at 1.35 GHz
+constexpr double kNominalAiclkHz = 1.35e9;
+constexpr double kDramBankGBps = 64.0;             // Blackhole GDDR6 per bank
+constexpr double kEthLinkGBps = 48.0;              // per direction, measured on p150b
+constexpr uint32_t kOutputSentinel = 0xFFFFFFFFu;  // PACK must overwrite every output word
 constexpr uint32_t kMaxIdleUnits = 1u << 20;
 
 // ---------------------------------------------------------------------------
@@ -107,34 +114,101 @@ std::optional<uint32_t> env_u32(const std::string& name, uint32_t lo, uint32_t h
 
 bool is_pow2(uint32_t v) { return v != 0 && (v & (v - 1)) == 0; }
 
-/// One generator's resolved knobs. Kernels take them as compile-time args.
+/// Chip-wide hot/quiet duty cycle on top of every generator's own throttle.
+struct Duty {
+    uint32_t pct = 100;
+    uint32_t period_units = 0;  // 0 = off
+    uint32_t active_units = 0;
+    double fraction() const { return period_units ? static_cast<double>(active_units) / period_units : 1.0; }
+    std::string describe() const {
+        if (period_units == 0) {
+            return "off";
+        }
+        return fmt::format("{}% ({}/{} × 512 ticks hot)", pct, active_units, period_units);
+    }
+};
+
+/// One generator's resolved knobs. Kernels take [mode, a, b] (pv_common.hpp).
 struct Throttle {
     bool on = false;
     uint32_t pct = 0;
-    uint32_t xfer_bytes = 0;    // 0 for TRISC
-    uint32_t burst = 0;         // raw mode: units per burst (TRISC: loops of 8 tiles)
-    uint32_t idle_units = 0;    // raw mode: idle after each burst, units of 512 ticks
-    uint32_t period_units = 0;  // phase-locked mode; 0 = off
-    uint32_t active_units = 0;
+    uint32_t xfer_bytes = 0;  // 0 for TRISC
+    uint32_t mode = pv::kModeFull;
+    uint32_t a = 0;
+    uint32_t b = 0;
+
+    /// Expected fraction of the generator's full rate, before the duty cycle;
+    /// 0 when it is not predictable (burst mode).
+    double expected_fraction() const {
+        switch (mode) {
+            case pv::kModeFull: return 1.0;
+            case pv::kModeSmooth: return pct / 100.0;
+            case pv::kModePhase: return static_cast<double>(b) / a;
+            default: return 0.0;
+        }
+    }
 
     std::string describe() const {
         if (!on) {
             return "off";
         }
         std::string s = xfer_bytes != 0 ? fmt::format("{} B transfers, ", xfer_bytes) : "";
-        if (period_units != 0) {
-            return s + fmt::format("{}% phase-locked ({}/{} × 512 ticks)", pct, active_units, period_units);
+        switch (mode) {
+            case pv::kModeSmooth:
+                return s + (xfer_bytes == 0 ? fmt::format("{}% smooth ({} NOPs per tile)", pct, a)
+                                            : fmt::format("{}% smooth", pct));
+            case pv::kModePhase: return s + fmt::format("{}% phase-locked ({}/{} × 512 ticks)", pct, b, a);
+            case pv::kModeBurst: return s + fmt::format("burst {} then idle {} × 512 ticks", a, b);
+            default: return s + "100%";
         }
-        if (burst != 0) {
-            return s + fmt::format("burst {} then idle {} × 512 ticks", burst, idle_units);
-        }
-        return s + "continuous";
     }
 };
 
-/// <prefix> = utilization % (0 = off); <prefix>_BURST / _IDLE_512 select raw
-/// burst/idle mode; otherwise <prefix>_PERIOD_512 sets the
-/// phase-locked period. max_xfer == 0 means the generator has no transfer size.
+/// FPU NOPs per tile for a fraction of full utilization, interpolated from the
+/// MaxUtil calibration on Blackhole (wait cycles per tile → measured FPU
+/// utilization, where 92% is the unthrottled loop). nullopt below ~11%, where
+/// the NOP count no longer fits in the unrolled MATH loop.
+std::optional<uint32_t> trisc_nops_for_pct(uint32_t pct) {
+    static constexpr std::array<std::pair<double, double>, 10> kTable = {{
+        {10, 1100},
+        {20, 500},
+        {30, 280},
+        {40, 180},
+        {50, 120},
+        {60, 75},
+        {70, 47},
+        {80, 23},
+        {90, 6},
+        {92, 0},
+    }};
+    const double util = 92.0 * pct / 100.0;
+    if (util < kTable.front().first) {
+        return std::nullopt;
+    }
+    for (size_t i = 0; i + 1 < kTable.size(); ++i) {
+        const auto [u0, c0] = kTable[i];
+        const auto [u1, c1] = kTable[i + 1];
+        if (util <= u1) {
+            return static_cast<uint32_t>(std::lround(c0 + (c1 - c0) * (util - u0) / (u1 - u0)));
+        }
+    }
+    return 0;
+}
+
+uint32_t read_period(const std::string& name, uint32_t default_units) {
+    if (auto p = env_u32(name, 2, 1u << 20)) {
+        if (is_pow2(*p)) {
+            return *p;
+        }
+        log_warning(LogTest, "{}={} is not a power of two – using {}", name, *p, default_units);
+    }
+    return default_units;
+}
+
+/// <prefix> = utilization % (0 = off). Below 100 the load is smooth by default;
+/// <prefix>_MODE=phase switches to the phase-locked mode (<prefix>_PERIOD_512).
+/// <prefix>_BURST / _IDLE_512 select burst/idle mode. max_xfer == 0 means the
+/// generator has no transfer size (TRISC).
 Throttle read_throttle(
     const std::string& prefix, uint32_t default_pct, uint32_t default_xfer, uint32_t min_xfer, uint32_t max_xfer) {
     Throttle t;
@@ -163,29 +237,57 @@ Throttle read_throttle(
         return t;
     }
 
-    const auto burst = env_u32(prefix + "_BURST", 0, 1u << 24);
-    const auto idle = env_u32(prefix + "_IDLE_512", 0, kMaxIdleUnits);
-    if (burst.has_value() || idle.has_value()) {
-        t.burst = burst.value_or(0);
-        t.idle_units = t.burst == 0 ? 0 : idle.value_or(0);
+    const auto burst = env_u32(prefix + "_BURST", 1, 1u << 24);
+    if (burst.has_value()) {
+        t.mode = pv::kModeBurst;
+        t.a = *burst;
+        t.b = env_u32(prefix + "_IDLE_512", 0, kMaxIdleUnits).value_or(0);
         if (t.pct != 100) {
-            log_warning(LogTest, "{}={} is ignored because {}_BURST/_IDLE_512 are set", prefix, t.pct, prefix);
+            log_warning(LogTest, "{}={} is ignored because {}_BURST is set", prefix, t.pct, prefix);
         }
         return t;
     }
-    if (t.pct < 100) {
-        t.period_units = kDefaultPeriodUnits;
-        if (auto p = env_u32(prefix + "_PERIOD_512", 2, 1u << 20)) {
-            if (is_pow2(*p)) {
-                t.period_units = *p;
-            } else {
-                log_warning(LogTest, "{}_PERIOD_512={} is not a power of two – using {}", prefix, *p, t.period_units);
-            }
+    if (t.pct == 100) {
+        return t;
+    }
+
+    std::string mode = "smooth";
+    if (const char* m = std::getenv((prefix + "_MODE").c_str())) {
+        mode = m;
+        if (mode != "smooth" && mode != "phase") {
+            log_warning(LogTest, "{}_MODE='{}' is not smooth or phase – using smooth", prefix, mode);
+            mode = "smooth";
         }
-        t.active_units = std::max<uint32_t>(1, (t.period_units * t.pct + 50) / 100);
+    }
+    if (mode == "smooth" && max_xfer == 0 && !trisc_nops_for_pct(t.pct).has_value()) {
+        log_warning(LogTest, "{}={} is below the smooth TRISC range (~11%) – using phase-locked mode", prefix, t.pct);
+        mode = "phase";
+    }
+    if (mode == "phase") {
+        t.mode = pv::kModePhase;
+        t.a = read_period(prefix + "_PERIOD_512", kDefaultPeriodUnits);
+        t.b = std::max<uint32_t>(1, (t.a * t.pct + 50) / 100);
+    } else if (max_xfer == 0) {
+        t.mode = pv::kModeSmooth;
+        t.a = *trisc_nops_for_pct(t.pct);
+        t.b = 1;
+    } else {
+        t.mode = pv::kModeSmooth;
+        t.a = 100 - t.pct;
+        t.b = t.pct;
     }
     return t;
 }
+
+/// Defaults a test entry point applies when the matching env var is unset.
+struct PvDefaults {
+    uint32_t duration_s = 10;
+    uint32_t trisc = 100;
+    uint32_t dram = 0;
+    uint32_t noc = 0;
+    uint32_t eth = 0;
+    bool super_sync = false;
+};
 
 struct PvConfig {
     uint32_t duration_s = 10;  // 0 = until Ctrl-C
@@ -194,21 +296,28 @@ struct PvConfig {
     Throttle dram;
     Throttle noc;
     Throttle eth;
+    Duty duty;
     uint32_t eth_startup_delay_ticks = 0;
 };
 
-PvConfig read_config() {
+PvConfig read_config(const PvDefaults& defaults) {
     PvConfig cfg;
-    cfg.duration_s = env_u32("PV_DURATION_S", 0, 1u << 30).value_or(10);
+    cfg.duration_s = env_u32("PV_DURATION_S", 0, 1u << 30).value_or(defaults.duration_s);
+    cfg.super_sync = defaults.super_sync;
     if (const char* s = std::getenv("PV_SUPER_SYNC")) {
         const std::string v(s);
         cfg.super_sync = !v.empty() && v != "0" && v != "false";
     }
-    cfg.trisc = read_throttle("PV_TRISC", 100, 0, 0, 0);
-    cfg.dram = read_throttle("PV_DRAM", 0, 8192, 64, kDramMaxXferBytes);
-    cfg.noc = read_throttle("PV_NOC", 0, kNocMaxXferBytes, 64, kNocMaxXferBytes);
-    cfg.eth = read_throttle("PV_ETH", 0, kEthMaxXferBytes, 64, kEthMaxXferBytes);
+    cfg.trisc = read_throttle("PV_TRISC", defaults.trisc, 0, 0, 0);
+    cfg.dram = read_throttle("PV_DRAM", defaults.dram, 8192, 64, kDramMaxXferBytes);
+    cfg.noc = read_throttle("PV_NOC", defaults.noc, kNocMaxXferBytes, 64, kNocMaxXferBytes);
+    cfg.eth = read_throttle("PV_ETH", defaults.eth, kEthMaxXferBytes, 64, kEthMaxXferBytes);
     cfg.eth_startup_delay_ticks = env_u32("PV_ETH_STARTUP_DELAY_TICKS", 0, UINT32_MAX).value_or(0);
+    cfg.duty.pct = env_u32("PV_DUTY_CYCLE_PCT", 1, 100).value_or(100);
+    if (cfg.duty.pct < 100) {
+        cfg.duty.period_units = read_period("PV_DUTY_PERIOD_512", kDefaultDutyPeriodUnits);
+        cfg.duty.active_units = std::max<uint32_t>(1, (cfg.duty.period_units * cfg.duty.pct + 50) / 100);
+    }
     if (cfg.super_sync && !cfg.trisc.on && !cfg.dram.on && !cfg.noc.on) {
         cfg.super_sync = false;
     }
@@ -303,6 +412,8 @@ void init_tensix_l1(DeviceRun& run, const PvConfig& cfg) {
     std::vector<uint32_t> inputs = random_bf16_tiles(kNumTiles, 42);
     const auto in1 = random_bf16_tiles(kNumTiles, 43);
     inputs.insert(inputs.end(), in1.begin(), in1.end());
+    // in0, in1 and out are contiguous; out starts as a sentinel PACK must overwrite.
+    inputs.insert(inputs.end(), kNumTiles * kTileBytes / sizeof(uint32_t), kOutputSentinel);
     const auto noc_words = cfg.noc.on ? xorshift_words(cfg.noc.xfer_bytes / 4, 0xaaaaaaaau) : std::vector<uint32_t>{};
 
     for (const auto& core : run.grid) {
@@ -445,8 +556,20 @@ void setup_eth_links(DeviceRun& run, const PvConfig& cfg, const std::set<ChipId>
 // Program
 // ---------------------------------------------------------------------------
 
-std::vector<uint32_t> throttle_args(const Throttle& t) {
-    return {t.burst, t.idle_units, t.period_units, t.active_units};
+std::vector<uint32_t> throttle_args(const Throttle& t, const Duty& duty) {
+    return {t.mode, t.a, t.b, duty.period_units, duty.active_units};
+}
+
+/// Smooth mode for a generator that shares a resource or cannot time its own
+/// work: rate mode, one transfer every N ticks. full_gbps is the generator's
+/// full rate per core or link; ticks are counted at the nominal AICLK.
+std::vector<uint32_t> rate_throttle_args(const Throttle& t, const Duty& duty, double full_gbps) {
+    if (t.mode != pv::kModeSmooth) {
+        return throttle_args(t, duty);
+    }
+    const double bytes_per_tick = full_gbps * 1e9 / kNominalAiclkHz * t.pct / 100.0;
+    const auto ticks = static_cast<uint32_t>(std::max(1.0, std::round(t.xfer_bytes / bytes_per_tick)));
+    return {pv::kModeRate, ticks, 0, duty.period_units, duty.active_units};
 }
 
 void build_program(DeviceRun& run, const PvConfig& cfg) {
@@ -456,6 +579,9 @@ void build_program(DeviceRun& run, const PvConfig& cfg) {
     const CoreRangeSet all_cores(run.grid);
 
     if (cfg.trisc.on) {
+        std::vector<uint32_t> args = {run.in0, run.in1, run.out, kNumTiles, run.ctrl, cfg.super_sync ? 1u : 0u};
+        const auto t = throttle_args(cfg.trisc, cfg.duty);
+        args.insert(args.end(), t.begin(), t.end());
         CreateKernel(
             program,
             std::string(kKernelDir) + "pv_compute.cpp",
@@ -463,17 +589,7 @@ void build_program(DeviceRun& run, const PvConfig& cfg) {
             ComputeConfig{
                 .math_fidelity = MathFidelity::HiFi4,
                 .fp32_dest_acc_en = false,
-                .compile_args =
-                    {run.in0,
-                     run.in1,
-                     run.out,
-                     kNumTiles,
-                     run.ctrl,
-                     cfg.super_sync ? 1u : 0u,
-                     cfg.trisc.period_units,
-                     cfg.trisc.active_units,
-                     cfg.trisc.burst,
-                     cfg.trisc.idle_units},
+                .compile_args = std::move(args),
             });
     }
 
@@ -512,7 +628,9 @@ void build_program(DeviceRun& run, const PvConfig& cfg) {
             kDramPagesPerBank,
             std::max<uint32_t>(cfg.dram.xfer_bytes, 64),
         };
-        const auto t = throttle_args(cfg.dram);
+        // DRAM bandwidth is shared, so smooth mode paces each core at its share.
+        const double per_core_gbps = kDramBankGBps * std::max<uint32_t>(run.num_banks, 1) / run.grid.size();
+        const auto t = rate_throttle_args(cfg.dram, cfg.duty, per_core_gbps);
         args.insert(args.end(), t.begin(), t.end());
 
         const CoreCoord sender = run.grid.start_coord;
@@ -566,7 +684,7 @@ void build_program(DeviceRun& run, const PvConfig& cfg) {
     // NCRISC: NOC virus on cores with a route.
     if (cfg.noc.on) {
         std::vector<uint32_t> args = {run.ctrl, cfg.super_sync ? 1u : 0u, cfg.noc.xfer_bytes};
-        const auto t = throttle_args(cfg.noc);
+        const auto t = throttle_args(cfg.noc, cfg.duty);
         args.insert(args.end(), t.begin(), t.end());
         for (uint32_t noc = 0; noc < 2; ++noc) {
             if (ncrisc_cores[noc].empty()) {
@@ -598,18 +716,14 @@ void build_program(DeviceRun& run, const PvConfig& cfg) {
         for (const auto& link : run.links) {
             link_cores.insert(CoreRange(link.core, link.core));
         }
+        std::vector<uint32_t> args = {run.eth_num_slots, cfg.eth.xfer_bytes, cfg.eth_startup_delay_ticks};
+        const auto t = rate_throttle_args(cfg.eth, cfg.duty, kEthLinkGBps);
+        args.insert(args.end(), t.begin(), t.end());
         EthernetConfig eth_cfg{
             .eth_mode = Eth::SENDER,
             .noc = NOC::NOC_0,
             .processor = DataMovementProcessor::RISCV_0,
-            .compile_args =
-                {run.eth_num_slots,
-                 cfg.eth.xfer_bytes,
-                 cfg.eth.burst,
-                 cfg.eth.idle_units,
-                 cfg.eth_startup_delay_ticks,
-                 cfg.eth.period_units,
-                 cfg.eth.active_units},
+            .compile_args = std::move(args),
         };
         eth_test_common::set_arch_specific_eth_config(eth_cfg);
         auto kernel =
@@ -651,8 +765,21 @@ Record read_record(IDevice* device, const CoreCoord& core, uint32_t addr) {
     return {(static_cast<uint64_t>(rec[1]) << 32) | rec[0], (static_cast<uint64_t>(rec[3]) << 32) | rec[2]};
 }
 
-/// Logs one generator's aggregate and returns false if any core reported nothing.
-bool report_movers(
+// Validation floors, as a fraction of the expected rate. Loose on purpose:
+// they catch a generator that is broken or far off, not small calibration drift.
+constexpr double kFloorFraction = 0.6;
+constexpr double kNocRouteGBps = 35.0;    // per route, conservative for AICLK down to 800 MHz
+constexpr double kFpuFullPct = 93.0;      // unthrottled MVMUL loop
+constexpr double kFpuTolerancePct = 4.0;  // avg FPU utilization vs expected, percentage points
+
+struct MoverResult {
+    bool all_cores_moved = true;
+    double total_gbps = 0;
+    double per_core_gbps = 0;
+};
+
+/// Logs one data-movement generator's aggregate.
+MoverResult report_movers(
     const DeviceRun& run,
     const char* name,
     uint32_t record_offset,
@@ -660,7 +787,6 @@ bool report_movers(
     const std::vector<CoreCoord>& cores,
     double seconds) {
     uint64_t bytes = 0;
-    uint64_t max_elapsed = 0;
     uint32_t idle_cores = 0;
     for (const auto& core : cores) {
         const Record r = read_record(run.device, core, run.ctrl + record_offset);
@@ -668,30 +794,77 @@ bool report_movers(
             ++idle_cores;
         }
         bytes += r.count * xfer_bytes;
-        max_elapsed = std::max(max_elapsed, r.elapsed);
     }
+    MoverResult result;
+    result.all_cores_moved = idle_cores == 0;
+    result.total_gbps = bytes / seconds / 1e9;
+    result.per_core_gbps = cores.empty() ? 0.0 : result.total_gbps / cores.size();
     log_info(
         LogTest,
         "Device {}: {} – {:.1f} GB/s over {} cores ({:.2f} GB/s per core), {:.2f} GB in {:.1f} s",
         run.device->id(),
         name,
-        bytes / seconds / 1e9,
+        result.total_gbps,
         cores.size(),
-        cores.empty() ? 0.0 : bytes / seconds / 1e9 / cores.size(),
+        result.per_core_gbps,
         bytes / 1e9,
         seconds);
     if (idle_cores != 0) {
         log_warning(LogTest, "Device {}: {} – {} core(s) reported no transfers", run.device->id(), name, idle_cores);
     }
-    return idle_cores == 0;
+    return result;
 }
 
+/// Checks a measured rate against a floor; logs and returns false when below it.
+bool check_floor(const DeviceRun& run, const char* what, double measured, double floor) {
+    if (measured >= floor) {
+        return true;
+    }
+    log_error(
+        LogTest, "Device {}: {} {:.1f} is below the expected floor {:.1f}", run.device->id(), what, measured, floor);
+    return false;
+}
+
+/// Checks PACK output on every core, as MaxUtil does: some words written (the
+/// MOP does not cover every word), none non-finite, and not all zero.
+bool validate_compute_output(const DeviceRun& run) {
+    uint32_t bad_cores = 0;
+    for (const auto& core : run.grid) {
+        std::vector<uint32_t> out;
+        detail::ReadFromDeviceL1(run.device, core, run.out, kNumTiles * kTileBytes, out, CoreType::WORKER);
+        size_t written = 0;
+        size_t non_finite = 0;
+        bool any_nonzero = false;
+        for (uint32_t word : out) {
+            if (word == kOutputSentinel) {
+                continue;
+            }
+            ++written;
+            for (uint32_t half : {word & 0xFFFFu, word >> 16}) {
+                any_nonzero |= (half & 0x7FFFu) != 0;
+                non_finite += (half & 0x7F80u) == 0x7F80u;
+            }
+        }
+        if (written == 0 || non_finite != 0 || !any_nonzero) {
+            ++bad_cores;
+        }
+    }
+    if (bad_cores != 0) {
+        log_error(LogTest, "Device {}: TRISC – {} core(s) have missing or invalid output", run.device->id(), bad_cores);
+    }
+    return bad_cores == 0;
+}
+
+/// Reports every generator and checks it. Utilization and bandwidth are only
+/// checked against expectations when the generator runs without the other
+/// Tensix generators, since they share L1, the NOC and the power budget.
 bool report(const DeviceRun& run, const PvConfig& cfg, double seconds) {
     bool ok = true;
     std::vector<CoreCoord> all_cores;
     for (const auto& core : run.grid) {
         all_cores.push_back(core);
     }
+    const double duty = cfg.duty.fraction();
 
     if (cfg.trisc.on) {
         double min_pct = 1e9, max_pct = 0, sum_pct = 0;
@@ -710,35 +883,61 @@ bool report(const DeviceRun& run, const PvConfig& cfg, double seconds) {
             max_elapsed = std::max(max_elapsed, r.elapsed);
         }
         const uint32_t n = all_cores.size() - idle_cores;
+        const double avg_pct = n ? sum_pct / n : 0.0;
         log_info(
             LogTest,
             "Device {}: TRISC – FPU utilization avg {:.1f}% (min {:.1f}%, max {:.1f}%) over {} cores; "
             "average AICLK ≈ {:.0f} MHz",
             run.device->id(),
-            n ? sum_pct / n : 0.0,
+            avg_pct,
             n ? min_pct : 0.0,
             max_pct,
             n,
             max_elapsed / seconds / 1e6);
         if (idle_cores != 0) {
-            log_warning(LogTest, "Device {}: TRISC – {} core(s) reported no loops", run.device->id(), idle_cores);
+            log_error(LogTest, "Device {}: TRISC – {} core(s) reported no loops", run.device->id(), idle_cores);
             ok = false;
+        }
+        ok &= validate_compute_output(run);
+        const double expected = kFpuFullPct * cfg.trisc.expected_fraction() * duty;
+        if (expected > 0 && !cfg.dram.on && !cfg.noc.on) {
+            if (std::abs(avg_pct - expected) > kFpuTolerancePct) {
+                log_error(
+                    LogTest,
+                    "Device {}: TRISC – FPU utilization {:.1f}% is more than {:.0f} points from the expected {:.1f}%",
+                    run.device->id(),
+                    avg_pct,
+                    kFpuTolerancePct,
+                    expected);
+                ok = false;
+            }
         }
     }
     if (cfg.dram.on) {
-        ok &= report_movers(run, "DRAM reads", pv::kDramRecord, cfg.dram.xfer_bytes, all_cores, seconds);
+        const auto r = report_movers(run, "DRAM reads", pv::kDramRecord, cfg.dram.xfer_bytes, all_cores, seconds);
+        ok &= r.all_cores_moved;
+        const double expected = kDramBankGBps * run.num_banks * cfg.dram.expected_fraction() * duty;
+        if (expected > 0 && !cfg.trisc.on && !cfg.noc.on) {
+            ok &= check_floor(run, "DRAM GB/s", r.total_gbps, kFloorFraction * expected);
+        }
     }
     if (cfg.noc.on) {
         std::vector<CoreCoord> sources;
         for (const auto& [core, route] : run.routes) {
             sources.push_back(core);
         }
-        ok &= report_movers(run, "NOC writes", pv::kNocRecord, cfg.noc.xfer_bytes, sources, seconds);
+        const auto r = report_movers(run, "NOC writes", pv::kNocRecord, cfg.noc.xfer_bytes, sources, seconds);
+        ok &= r.all_cores_moved && !sources.empty();
+        const double expected = kNocRouteGBps * cfg.noc.expected_fraction() * duty;
+        if (expected > 0 && !cfg.trisc.on && !cfg.dram.on) {
+            ok &= check_floor(run, "NOC GB/s per route", r.per_core_gbps, kFloorFraction * expected);
+        }
     }
     if (!run.links.empty()) {
         std::vector<uint32_t> readback;
         detail::ReadFromBuffer(run.eth_timing_buffer, readback);
         constexpr size_t words_per_page = kEthTimingPageBytes / sizeof(uint32_t);
+        const double link_floor = kFloorFraction * kEthLinkGBps * cfg.eth.expected_fraction() * duty;
         double total = 0;
         for (size_t i = 0; i < run.links.size(); ++i) {
             const auto& link = run.links[i];
@@ -762,6 +961,9 @@ bool report(const DeviceRun& run, const PvConfig& cfg, double seconds) {
                 sent,
                 received,
                 complete ? "" : "  INCOMPLETE");
+            if (link_floor > 0) {
+                ok &= check_floor(run, "ETH link TX GB/s", gbps, link_floor);
+            }
         }
         log_info(
             LogTest,
@@ -773,13 +975,15 @@ bool report(const DeviceRun& run, const PvConfig& cfg, double seconds) {
     return ok;
 }
 
-bool run_power_virus(const std::vector<shared_ptr<distributed::MeshDevice>>& mesh_devices) {
-    const PvConfig cfg = read_config();
+bool run_power_virus(
+    const std::vector<shared_ptr<distributed::MeshDevice>>& mesh_devices, const PvDefaults& defaults = {}) {
+    const PvConfig cfg = read_config(defaults);
     log_info(
         LogTest,
-        "Power virus: duration={}, super_sync={}\n  TRISC: {}\n  DRAM:  {}\n  NOC:   {}\n  ETH:   {}",
+        "Power virus: duration={}, super_sync={}, duty cycle={}\n  TRISC: {}\n  DRAM:  {}\n  NOC:   {}\n  ETH:   {}",
         cfg.duration_s == 0 ? std::string("until Ctrl-C") : fmt::format("{} s", cfg.duration_s),
         cfg.super_sync,
+        cfg.duty.describe(),
         cfg.trisc.describe(),
         cfg.dram.describe(),
         cfg.noc.describe(),
@@ -874,6 +1078,21 @@ bool skip_reason(const MeshDispatchFixture& fixture, std::string& reason) {
     return false;
 }
 }  // namespace
+
+// Short CI check on device 0: TRISC, DRAM and NOC at 100% with super-sync for
+// 2 s. Env vars still override every default.
+TEST_F(MeshDispatchFixture, PowerVirus_Smoke) {
+    std::string reason;
+    if (skip_reason(*this, reason)) {
+        GTEST_SKIP() << reason;
+    }
+    unit_tests::didt::power_virus::PvDefaults defaults;
+    defaults.duration_s = 2;
+    defaults.dram = 100;
+    defaults.noc = 100;
+    defaults.super_sync = true;
+    EXPECT_TRUE(unit_tests::didt::power_virus::run_power_virus({devices_.at(0)}, defaults));
+}
 
 TEST_F(MeshDispatchFixture, PowerVirus_SingleDevice) {
     std::string reason;

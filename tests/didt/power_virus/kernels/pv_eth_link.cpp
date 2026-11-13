@@ -16,10 +16,8 @@
 // payloads are acked. ETH packets are delivered in order, so FIN arrives after
 // the last payload.
 //
-// Throttle knobs:
-//   burst      – payloads per burst; 0 = continuous
-//   idle_units – idle after each burst, units of 512 wall-clock ticks.
-//                Incoming payloads are still acked while idle.
+// Throttle: see pv_common.hpp. Partial load uses rate mode (one payload every
+// a ticks); burst counts payloads. Incoming payloads are still acked while idle.
 //
 // L1 layout from runtime arg l1_base (unreserved ETH L1), see pv_common.hpp:
 //   [0, 16)   handshake word (written by peer)
@@ -35,13 +33,12 @@
 // Compile-time args:
 //   0: num_slots     – ring depth per direction (power of two)
 //   1: xfer_bytes    – payload bytes per message (multiple of 16)
-//   2: burst
-//   3: idle_units
-//   4: startup_delay_ticks – optional wall-clock delay before the handshake
-//   5: period_units  – phase-locked mode period (units of 512 ticks, power of
-//                      two); 0 = off. When on, payloads are only sent while
-//                      (wall_clock / 512) % period < active_units.
-//   6: active_units
+//   2: startup_delay_ticks – optional wall-clock delay before the handshake
+//   3: mode          – pv::kMode*
+//   4: a
+//   5: b
+//   6: duty_period   – 0 = no duty cycle
+//   7: duty_active
 //
 // Runtime args:
 //   0: l1_base
@@ -68,7 +65,6 @@ struct slot_sync_t {
 };
 static_assert(sizeof(slot_sync_t) == 16);
 
-constexpr uint32_t kIdleUnitTicks = 512;
 constexpr uint32_t kHeaderBytes = pv::kEthHeaderBytes;
 constexpr uint32_t kStopCheckInterval = 256;
 constexpr uint32_t kRoutingInterval = 4096;
@@ -76,12 +72,16 @@ constexpr uint32_t kFinMagic = 0xF1F1F1F1u;
 
 constexpr uint32_t num_slots = get_compile_time_arg_val(0);
 constexpr uint32_t xfer_bytes = get_compile_time_arg_val(1);
-constexpr uint32_t burst = get_compile_time_arg_val(2);
-constexpr uint32_t idle_units = get_compile_time_arg_val(3);
-constexpr uint32_t startup_delay_ticks = get_compile_time_arg_val(4);
-constexpr uint32_t period_units = get_compile_time_arg_val(5);
-constexpr uint32_t active_units = get_compile_time_arg_val(6);
-static_assert(period_units == 0 || (period_units & (period_units - 1)) == 0, "period_units must be a power of two");
+constexpr uint32_t startup_delay_ticks = get_compile_time_arg_val(2);
+constexpr uint32_t mode = get_compile_time_arg_val(3);
+constexpr uint32_t throttle_a = get_compile_time_arg_val(4);
+constexpr uint32_t throttle_b = get_compile_time_arg_val(5);
+using T = pv::Throttle<
+    mode,
+    throttle_a,
+    throttle_b,
+    get_compile_time_arg_val(6),   // duty_period
+    get_compile_time_arg_val(7)>;  // duty_active
 constexpr uint32_t slot_stride = xfer_bytes + sizeof(slot_sync_t);
 static_assert((num_slots & (num_slots - 1)) == 0 && num_slots >= 2, "num_slots must be a power of two >= 2");
 static_assert(xfer_bytes % 16 == 0, "xfer_bytes must be a multiple of 16");
@@ -158,9 +158,10 @@ void kernel_main() {
 
     bool sending = true;  // own send window still open
     bool fin_sent = false;
-    uint32_t burst_left = burst;
+    uint32_t burst_left = throttle_a;
     bool idling = false;
     uint64_t idle_end = 0;
+    uint64_t next_send = 0;  // rate mode: elapsed tick of the next payload
     uint32_t iter = 0;
     uint32_t stop_check = 0;
 
@@ -188,26 +189,32 @@ void kernel_main() {
         // --- TX: send next payload if a slot is free and we are not idling ---
         if (idling && elapsed >= idle_end) {
             idling = false;
-            burst_left = burst;
+            burst_left = throttle_a;
         }
-        bool in_phase = true;
-        if constexpr (period_units != 0) {
-            // 2^32 / 512 is a multiple of period_units, so the low clock word
-            // gives a consistent phase across wrap-around.
-            in_phase = ((now / kIdleUnitTicks) & (period_units - 1)) < active_units;
+        bool open = true;
+        if constexpr (T::kGated) {
+            open = T::open(now);
         }
-        if (sending && in_phase && !idling && tx_inflight < num_slots && !eth_txq_is_busy()) {
+        if constexpr (mode == pv::kModeRate) {
+            open = open && elapsed >= next_send;
+        }
+        if (sending && open && !idling && tx_inflight < num_slots && !eth_txq_is_busy()) {
             const uint32_t slot = tx_base + tx_wr * slot_stride;
             sync_of(slot)->bytes_sent = xfer_bytes;
             eth_send_bytes_over_channel_payload_only_unsafe_one_packet(slot, slot, slot_stride);
             tx_wr = next(tx_wr);
             tx_inflight++;
             sent++;
-            if constexpr (burst != 0 && idle_units != 0) {
+            if constexpr (mode == pv::kModeBurst) {
                 if (--burst_left == 0) {
                     idling = true;
-                    idle_end = elapsed + static_cast<uint64_t>(idle_units) * kIdleUnitTicks;
+                    idle_end = elapsed + T::pause_after(0);
                 }
+            } else if constexpr (mode == pv::kModeRate) {
+                // Catch up after a stall, but by at most kRateMaxCatchUp payloads.
+                constexpr uint64_t catch_up = static_cast<uint64_t>(pv::kRateMaxCatchUp) * throttle_a;
+                const uint64_t floor = elapsed > catch_up ? elapsed - catch_up : 0;
+                next_send = (next_send > floor ? next_send : floor) + throttle_a;
             }
         }
 

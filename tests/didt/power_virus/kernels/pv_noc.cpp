@@ -8,18 +8,18 @@
 // and per column on each NOC, each going to the adjacent live column/row
 // upstream so it travels almost the whole ring.
 //
-// Throttle knobs:
-//   period_units/active_units – phase-locked duty cycle (units of 512 ticks)
-//   burst/idle_units          – transfers per burst, then idle (units of 512 ticks)
+// Throttle: see pv_common.hpp. Smooth mode times each transfer until it has
+// left the NIU and then idles in proportion; burst counts transfers.
 //
 // Compile-time args:
 //   0: ctrl_base
 //   1: super_sync     – wait for GO from the BRISC barrier
 //   2: xfer_bytes
-//   3: burst
-//   4: idle_units
-//   5: period_units   – 0 = no phase lock
-//   6: active_units
+//   3: mode           – pv::kMode*
+//   4: a
+//   5: b
+//   6: duty_period    – 0 = no duty cycle
+//   7: duty_active
 //
 // Runtime args:
 //   0: buffer_addr    – L1 source; also the destination address on the peer
@@ -48,13 +48,14 @@ void kernel_main() {
     constexpr uint32_t ctrl_base = get_compile_time_arg_val(0);
     constexpr bool super_sync = get_compile_time_arg_val(1) != 0;
     constexpr uint32_t xfer_bytes = get_compile_time_arg_val(2);
-    constexpr uint32_t burst = get_compile_time_arg_val(3);
-    constexpr uint32_t idle_units = get_compile_time_arg_val(4);
-    constexpr uint32_t period_units = get_compile_time_arg_val(5);
-    constexpr uint32_t active_units = get_compile_time_arg_val(6);
-    constexpr bool phased = period_units != 0;
-    static_assert(!phased || (period_units & (period_units - 1)) == 0, "period_units must be a power of two");
-    constexpr uint32_t batch = phased ? 1 : (burst == 0 ? kFlushInterval : burst);
+    constexpr uint32_t mode = get_compile_time_arg_val(3);
+    constexpr uint32_t a = get_compile_time_arg_val(4);
+    constexpr uint32_t b = get_compile_time_arg_val(5);
+    constexpr uint32_t duty_period = get_compile_time_arg_val(6);
+    constexpr uint32_t duty_active = get_compile_time_arg_val(7);
+    using T = pv::Throttle<mode, a, b, duty_period, duty_active>;
+    constexpr uint32_t batch = mode == pv::kModeFull ? kFlushInterval : mode == pv::kModeBurst ? a : 1;
+    constexpr bool pace = mode == pv::kModeSmooth || mode == pv::kModeBurst;
 
     const uint32_t buffer_addr = get_arg_val<uint32_t>(0);
     const uint32_t dst_x = get_arg_val<uint32_t>(1);
@@ -81,8 +82,8 @@ void kernel_main() {
         const uint32_t now = wall_clock_l();
         elapsed += now - prev_clk;
         prev_clk = now;
-        if constexpr (phased) {
-            if (((now / pv::kIdleUnitTicks) & (period_units - 1)) >= active_units) {
+        if constexpr (T::kGated) {
+            if (!T::open(now)) {
                 continue;
             }
         }
@@ -93,9 +94,10 @@ void kernel_main() {
         noc_async_posted_writes_flushed();
         xfers += batch;
 
-        if constexpr (!phased && burst != 0 && idle_units != 0) {
+        if constexpr (pace) {
             const uint32_t idle_start = wall_clock_l();
-            while (wall_clock_l() - idle_start < idle_units * pv::kIdleUnitTicks) {
+            const uint32_t pause = T::pause_after(idle_start - now);
+            while (wall_clock_l() - idle_start < pause) {
             }
         }
     }

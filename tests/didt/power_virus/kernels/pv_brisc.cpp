@@ -14,9 +14,8 @@
 // DRAM: reads round-robin across all DRAM banks into a private L1 staging slot.
 // It runs on this core's BRISC NOC, which the host sets opposite to NCRISC's.
 //
-// Throttle knobs:
-//   period_units/active_units – phase-locked duty cycle (units of 512 ticks)
-//   burst/idle_units          – transfers per burst, then idle (units of 512 ticks)
+// Throttle: see pv_common.hpp. Smooth mode times each batch of reads (to
+// completion) and then idles in proportion; burst counts reads.
 //
 // Compile-time args:
 //   0: ctrl_base
@@ -28,10 +27,11 @@
 //   6: num_banks
 //   7: pages_per_bank
 //   8: xfer_bytes
-//   9: burst
-//  10: idle_units
-//  11: period_units     – 0 = no phase lock
-//  12: active_units
+//   9: mode             – pv::kMode*
+//  10: a
+//  11: b
+//  12: duty_period      – 0 = no duty cycle
+//  13: duty_active
 //
 // Runtime args:
 //   0: is_sender
@@ -126,25 +126,32 @@ template <
     uint32_t num_banks,
     uint32_t pages_per_bank,
     uint32_t xfer_bytes,
-    uint32_t burst,
-    uint32_t idle_units,
-    uint32_t period_units,
-    uint32_t active_units>
+    uint32_t mode,
+    uint32_t a,
+    uint32_t b,
+    uint32_t duty_period,
+    uint32_t duty_active>
 void dram_reads(uint32_t ctrl_base) {
-    constexpr bool phased = period_units != 0;
-    static_assert(!phased || (period_units & (period_units - 1)) == 0, "period_units must be a power of two");
+    using T = pv::Throttle<mode, a, b, duty_period, duty_active>;
     static_assert(num_banks > 0 && num_banks <= kMaxBanks, "unsupported DRAM bank count");
-    // Phase-locked mode keeps few reads outstanding so traffic stops promptly.
-    constexpr uint32_t batch = phased ? 1 : (burst == 0 ? kBarrierInterval : burst);
-    constexpr uint32_t barrier_interval = phased ? 4 : kBarrierInterval;
+    // Phase-locked and rate modes issue one read at a time, so traffic follows
+    // the gate closely; smooth mode uses short batches so the load stays even.
+    constexpr uint32_t batch = mode == pv::kModeFull     ? kBarrierInterval
+                               : mode == pv::kModeSmooth ? 8
+                               : mode == pv::kModeBurst  ? a
+                                                         : 1;
+    constexpr uint32_t barrier_interval = mode == pv::kModePhase ? 4 : kBarrierInterval;
+    constexpr bool pace = mode == pv::kModeSmooth || mode == pv::kModeBurst;
+    constexpr bool rate = mode == pv::kModeRate;
+    uint64_t next_issue = 0;  // rate mode: elapsed tick of the next read
 
     const uint32_t dram_src_addr = get_arg_val<uint32_t>(10);
     const uint32_t l1_staging_addr = get_arg_val<uint32_t>(11);
     const uint32_t start_bank = get_arg_val<uint32_t>(12);
 
     uint64_t bank_base[num_banks];
-    for (uint32_t b = 0; b < num_banks; b++) {
-        bank_base[b] = get_noc_addr_from_bank_id<true>(b, dram_src_addr);
+    for (uint32_t bank_id = 0; bank_id < num_banks; bank_id++) {
+        bank_base[bank_id] = get_noc_addr_from_bank_id<true>(bank_id, dram_src_addr);
     }
 
     volatile tt_l1_ptr uint32_t* stop = ctrl_word(ctrl_base, pv::kStop);
@@ -163,12 +170,20 @@ void dram_reads(uint32_t ctrl_base) {
         const uint32_t now = wall_clock_l();
         elapsed += now - prev_clk;
         prev_clk = now;
-        if constexpr (phased) {
-            if (((now / pv::kIdleUnitTicks) & (period_units - 1)) >= active_units) {
+        if constexpr (T::kGated) {
+            if (!T::open(now)) {
                 noc_async_read_barrier();
                 since_barrier = 0;
                 continue;
             }
+        }
+        if constexpr (rate) {
+            if (elapsed < next_issue) {
+                continue;
+            }
+            // Catch up after a stall, but by at most kRateMaxCatchUp reads.
+            const uint64_t floor = elapsed > pv::kRateMaxCatchUp * a ? elapsed - pv::kRateMaxCatchUp * a : 0;
+            next_issue = (next_issue > floor ? next_issue : floor) + a;
         }
         for (uint32_t i = 0; i < batch; i++) {
             noc_async_read_one_packet(bank_base[bank] + page * xfer_bytes, l1_staging_addr, xfer_bytes);
@@ -185,11 +200,12 @@ void dram_reads(uint32_t ctrl_base) {
         }
         xfers += batch;
 
-        if constexpr (!phased && burst != 0 && idle_units != 0) {
+        if constexpr (pace) {
             noc_async_read_barrier();
             since_barrier = 0;
             const uint32_t idle_start = wall_clock_l();
-            while (wall_clock_l() - idle_start < idle_units * pv::kIdleUnitTicks) {
+            const uint32_t pause = T::pause_after(idle_start - now);
+            while (wall_clock_l() - idle_start < pause) {
             }
         }
     }
@@ -224,6 +240,7 @@ void kernel_main() {
             get_compile_time_arg_val(9),
             get_compile_time_arg_val(10),
             get_compile_time_arg_val(11),
-            get_compile_time_arg_val(12)>(ctrl_base);
+            get_compile_time_arg_val(12),
+            get_compile_time_arg_val(13)>(ctrl_base);
     }
 }

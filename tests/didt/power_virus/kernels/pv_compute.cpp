@@ -17,9 +17,9 @@
 // the time they reach loop FINAL, UNPACK wrote it before producing the data
 // they consumed, so all three stop at the same loop without deadlock.
 //
-// Throttle (UNPACK only; MATH and PACK stall behind it):
-//   period_units/active_units – phase-locked duty cycle, units of 512 ticks
-//   burst/idle_units          – loops per burst, then idle (units of 512 ticks)
+// Throttle (see pv_common.hpp). Smooth mode pads every tile in MATH with a
+// fixed number of NOPs. Phase, burst and the duty cycle gate UNPACK; MATH and
+// PACK stall behind it. Burst counts loops of num_tiles tiles.
 //
 // Compile-time args:
 //   0: l1_buffer0_addr  – pre-filled input A (8 float16_b tiles)
@@ -28,10 +28,11 @@
 //   3: num_tiles        – tiles per loop (8)
 //   4: ctrl_base        – L1 control block (pv_common.hpp)
 //   5: super_sync       – wait for GO from the BRISC barrier
-//   6: period_units     – 0 = no phase lock
-//   7: active_units
-//   8: burst            – 0 = no burst/idle
-//   9: idle_units
+//   6: mode             – pv::kMode*
+//   7: a                – smooth: NOPs per tile; phase: period; burst: loops
+//   8: b                – phase: active units; burst: idle units
+//   9: duty_period      – 0 = no duty cycle
+//  10: duty_active
 
 constexpr uint32_t kCheckLoops = 16;
 
@@ -56,10 +57,11 @@ ALWI uint32_t wall_clock_l() { return reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L); }
 template <
     uint32_t num_tiles,
     bool super_sync,
-    uint32_t period_units,
-    uint32_t active_units,
-    uint32_t burst,
-    uint32_t idle_units>
+    uint32_t mode,
+    uint32_t a,
+    uint32_t b,
+    uint32_t duty_period,
+    uint32_t duty_active>
 ALWI void pv_unpack(uint32_t l1_buffer0_addr, uint32_t l1_buffer1_addr, uint32_t ctrl_base) {
     // init
     constexpr bool is_fp32_dest_acc_en = false;
@@ -158,7 +160,9 @@ ALWI void pv_unpack(uint32_t l1_buffer0_addr, uint32_t l1_buffer1_addr, uint32_t
     uint32_t prev_clk = wall_clock_l();
     uint64_t elapsed = 0;
     uint64_t loops = 0;
-    uint32_t burst_left = burst;
+    // Smooth mode is handled in MATH, so UNPACK only sees the clock gates.
+    using T = pv::Throttle<mode == pv::kModeSmooth ? pv::kModeFull : mode, a, b, duty_period, duty_active>;
+    uint32_t burst_left = a;
     bool final_set = false;
 
     for (uint32_t i = 0;; i++) {
@@ -176,14 +180,15 @@ ALWI void pv_unpack(uint32_t l1_buffer0_addr, uint32_t l1_buffer1_addr, uint32_t
             elapsed += now - prev_clk;
             prev_clk = now;
         }
-        if constexpr (period_units != 0) {
-            while (((wall_clock_l() / pv::kIdleUnitTicks) & (period_units - 1)) >= active_units) {
+        if constexpr (T::kGated) {
+            while (!T::open(wall_clock_l())) {
             }
-        } else if constexpr (burst != 0 && idle_units != 0) {
+        }
+        if constexpr (mode == pv::kModeBurst) {
             if (burst_left-- == 0) {
-                burst_left = burst - 1;
+                burst_left = a - 1;
                 const uint32_t start = wall_clock_l();
-                while (wall_clock_l() - start < idle_units * pv::kIdleUnitTicks) {
+                while (wall_clock_l() - start < T::pause_after(0)) {
                 }
             }
         }
@@ -237,7 +242,7 @@ ALWI void pv_unpack(uint32_t l1_buffer0_addr, uint32_t l1_buffer1_addr, uint32_t
 #endif
 
 #ifdef TRISC_MATH
-template <uint32_t num_tiles>
+template <uint32_t num_tiles, uint32_t nops_per_tile>
 ALWI void pv_math(uint32_t ctrl_base) {
     volatile tt_l1_ptr uint32_t* final_ptr = ctrl_word(ctrl_base, pv::kFinal);
     // init
@@ -363,6 +368,12 @@ ALWI void pv_math(uint32_t ctrl_base) {
         _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
         for (uint32_t j = 0; j < num_tiles; j++) {
             ckernel_template::run();
+            if constexpr (nops_per_tile != 0) {
+#pragma GCC unroll nops_per_tile
+                for (uint32_t k = 0; k < nops_per_tile; k++) {
+                    TTI_NOP;
+                }
+            }
         }
         _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     }
@@ -458,18 +469,18 @@ void kernel_main() {
     constexpr uint32_t num_tiles = get_compile_time_arg_val(3);
     constexpr uint32_t ctrl_base = get_compile_time_arg_val(4);
     constexpr bool super_sync = get_compile_time_arg_val(5) != 0;
-    constexpr uint32_t period_units = get_compile_time_arg_val(6);
-    constexpr uint32_t active_units = get_compile_time_arg_val(7);
-    constexpr uint32_t burst = get_compile_time_arg_val(8);
-    constexpr uint32_t idle_units = get_compile_time_arg_val(9);
-    static_assert(period_units == 0 || (period_units & (period_units - 1)) == 0, "period must be a power of two");
+    constexpr uint32_t mode = get_compile_time_arg_val(6);
+    constexpr uint32_t a = get_compile_time_arg_val(7);
+    constexpr uint32_t b = get_compile_time_arg_val(8);
+    constexpr uint32_t duty_period = get_compile_time_arg_val(9);
+    constexpr uint32_t duty_active = get_compile_time_arg_val(10);
 
     // TRISC0: unpack A and B (float16_b) to SRC_A and SRC_B
-    UNPACK((pv_unpack<num_tiles, super_sync, period_units, active_units, burst, idle_units>(
+    UNPACK((pv_unpack<num_tiles, super_sync, mode, a, b, duty_period, duty_active>(
         l1_buffer0_addr, l1_buffer1_addr, ctrl_base)));
 
     // TRISC1: MVMUL to DST
-    MATH((pv_math<num_tiles>(ctrl_base)));
+    MATH((pv_math < num_tiles, mode == pv::kModeSmooth ? a : 0 > (ctrl_base)));
 
     // TRISC2: pack results to the output L1 address
     PACK((pv_pack<num_tiles>(l1_buffer2_addr, ctrl_base)));
