@@ -6,8 +6,10 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt_stl/assert.hpp>
 #include <enchantum/enchantum.hpp>
+#include "tt_metal/impl/allocator/algorithms/address_ranges.hpp"
 
 #include <algorithm>
+#include <utility>
 #include <vector>
 
 namespace tt::tt_metal {
@@ -46,61 +48,7 @@ void AllocatorState::BufferTypeState::normalize() {
         return;
     }
 
-    // Sort by start address
-    // If tracking sources, we need to sort both vectors in parallel
-    if (!region_source_allocator_ids.empty() && region_source_allocator_ids.size() == allocated_regions.size()) {
-        // Create index vector for indirect sorting
-        std::vector<size_t> indices(allocated_regions.size());
-        for (size_t i = 0; i < indices.size(); ++i) {
-            indices[i] = i;
-        }
-
-        // Sort indices by allocated_regions start addresses
-        std::sort(indices.begin(), indices.end(), [this](size_t a, size_t b) {
-            return allocated_regions[a].first < allocated_regions[b].first;
-        });
-
-        // Apply sorted order to both vectors
-        std::vector<std::pair<DeviceAddr, DeviceAddr>> sorted_regions;
-        std::vector<uint32_t> sorted_sources;
-        sorted_regions.reserve(allocated_regions.size());
-        sorted_sources.reserve(region_source_allocator_ids.size());
-
-        for (size_t idx : indices) {
-            sorted_regions.push_back(allocated_regions[idx]);
-            sorted_sources.push_back(region_source_allocator_ids[idx]);
-        }
-
-        allocated_regions = std::move(sorted_regions);
-        region_source_allocator_ids = std::move(sorted_sources);
-    } else {
-        // No source tracking or size mismatch, simple sort
-        region_source_allocator_ids.clear();
-        std::sort(allocated_regions.begin(), allocated_regions.end(), [](const auto& a, const auto& b) {
-            return a.first < b.first;
-        });
-    }
-
-    // Coalesce overlapping and adjacent regions
-    std::vector<std::pair<DeviceAddr, DeviceAddr>> coalesced;
-    coalesced.reserve(allocated_regions.size());
-    coalesced.push_back(allocated_regions[0]);
-
-    for (size_t i = 1; i < allocated_regions.size(); ++i) {
-        const auto& curr = allocated_regions[i];
-        auto& last = coalesced.back();
-
-        // If current region overlaps or is adjacent to last, merge them
-        // Overlapping means curr.first < last.second, adjacent means curr.first == last.second (no gap between regions)
-        // The condition below handles both cases.
-        if (curr.first <= last.second) {
-            last.second = std::max(last.second, curr.second);
-        } else {
-            coalesced.push_back(curr);
-        }
-    }
-
-    allocated_regions = std::move(coalesced);
+    allocated_regions = allocator::coalesce(std::move(allocated_regions));
 
     // After coalescing, source tracking is no longer accurate, so clear it
     region_source_allocator_ids.clear();
