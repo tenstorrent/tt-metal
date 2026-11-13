@@ -1,0 +1,29 @@
+{
+ "BLACKHOLE_GALAXY": {
+  "chunk 1280 100% real, no span: dispatch": 113.7,
+  "chunk 1280 100% real, no span: experts+combine": 1315.0,
+  "chunk 1280 100% real, no span: forward": 2266.1,
+  "chunk 1280 100% real, no span: head": 223.2,
+  "chunk 1280 100% real, no span: tail": 41.9,
+  "chunk 1280 100% real, span (0, 1280): dispatch": 112.6,
+  "chunk 1280 100% real, span (0, 1280): experts+combine": 1313.6,
+  "chunk 1280 100% real, span (0, 1280): forward": 2262.8,
+  "chunk 1280 100% real, span (0, 1280): head": 224.2,
+  "chunk 1280 100% real, span (0, 1280): tail": 42.5,
+  "chunk 1280 512 real + identical padding, no span: dispatch": 151.6,
+  "chunk 1280 512 real + identical padding, no span: experts+combine": 1462.7,
+  "chunk 1280 512 real + identical padding, no span: forward": 2526.2,
+  "chunk 1280 512 real + identical padding, no span: head": 255.7,
+  "chunk 1280 512 real + identical padding, no span: tail": 128.6,
+  "chunk 1280 512 real + identical padding, rotated span (100, 612): dispatch": 76.7,
+  "chunk 1280 512 real + identical padding, rotated span (100, 612): experts+combine": 1291.1,
+  "chunk 1280 512 real + identical padding, rotated span (100, 612): forward": 2186.5,
+  "chunk 1280 512 real + identical padding, rotated span (100, 612): head": 224.3,
+  "chunk 1280 512 real + identical padding, rotated span (100, 612): tail": 49.7,
+  "chunk 1280 512 real + identical padding, span (0, 512): dispatch": 77.0,
+  "chunk 1280 512 real + identical padding, span (0, 512): experts+combine": 1291.4,
+  "chunk 1280 512 real + identical padding, span (0, 512): forward": 2184.0,
+  "chunk 1280 512 real + identical padding, span (0, 512): head": 224.7,
+  "chunk 1280 512 real + identical padding, span (0, 512): tail": 48.9
+ }
+}
