@@ -35,7 +35,7 @@
 namespace tt::tt_metal::mimir_test::fw_load {
 
 constexpr ChipId kFwLoadChip = 0;
-constexpr const char* kNullKernelPath = "tests/tt_metal/tt_metal/test_kernels/cce/cce_null.cpp";
+constexpr const char* kNullKernelPath = "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp";
 constexpr uint32_t kDramDmProcessorClass = static_cast<uint32_t>(HalProcessorClassType::DM);
 constexpr uint64_t kFirmwareTextMaxBytes = MEM_CCE_FIRMWARE_SIZE;
 constexpr uint32_t kReinitCycles = 3;
