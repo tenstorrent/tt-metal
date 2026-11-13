@@ -72,6 +72,9 @@ distributed::MeshWorkload MakeMeshWorkloadFromSpec(
 //
 // For high-performance inner loops, prefer the power user APIs below.
 // If stateful behavior of parameters is required, use the power user APIs.
+//
+// PER-DEVICE VALUES: the args are set for every device the Program runs on. Every per-device value
+// (SetProgramRunArgsPerDevice) of the Program is dropped.
 void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip_validation = false);
 
 // Fast-path partial update: refresh an ARBITRARY subset of arguments for an existing Program.
@@ -92,17 +95,26 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
 //
 // NOTE: DFB size overrides follow the same stateful rule — a DFB whose size is not overridden here
 //       retains its current size (as last set), rather than reverting to the ProgramSpec default.
+//
+// PER-DEVICE VALUES: the args supplied are set for every device the Program runs on, and their per-device values
+// (SetProgramRunArgsPerDevice) are dropped. Args not supplied keep their per-device values.
 void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip_validation = false);
 
 // Per-device values of named run args. A Program added to a MeshWorkload on a range runs on every device of the range
-// with the same args; this sets chosen named args (runtime or common, scalar or array) of one device to its own
-// values, so one program can serve a range where each chip needs a few different values (a ring rank, a peer chip).
-// The Metal 2.0 form of distributed::SetRuntimeArgs on a MeshWorkload, with the same semantics:
+// with the same args; this sets the named args it lists (runtime or common, scalar or array) on one device to that
+// device's own values, so one program can serve a range where each chip needs a few different values (a ring rank, a
+// peer chip).
 // - `values` holds only kernel_run_args named values (runtime_arg_values for the nodes given,
 //   common_runtime_arg_values, and the array forms); tensor args, DFB overrides, varargs and advanced program args
 //   are rejected. Set the program's own run args (SetProgramRunArgs) first.
-// - Args without a per-device value, and devices without a value for an arg, keep the program's own values,
-//   including later SetProgramRunArgs / UpdateProgramRunArgs updates. Calling again replaces the value.
+// - A per-device value lasts until the program's own value of that arg is set again: SetProgramRunArgs drops every
+//   per-device value, UpdateProgramRunArgs those of the args it supplies (UpdateTensorArgs drops none). Set them
+//   again after such a call. Setting the same values again does not by itself rebuild the per-device commands at the
+//   next enqueue (a change of the program's own value under them still does).
+// - Args without a per-device value, and devices without a value for an arg, use the program's own values.
+//   Calling again replaces the value.
+// - Traces and command lists keep the values they captured.
+// - Like the run-arg setters above, calls must be serialized with enqueue / capture of the workload.
 // - Supported in fast dispatch (eager, trace, command lists) and slow dispatch.
 void SetProgramRunArgsPerDevice(
     distributed::MeshWorkload& workload,
@@ -132,6 +144,9 @@ void ClearProgramRunArgsPerDevice(
 //
 // USE CASE: Program re-enqueue loops where the only per-enqueue ProgramRunArgs variation
 // is in the tensor args (i.e. which specific MeshTensors are operated on by the Program).
+//
+// PER-DEVICE VALUES: tensor args cannot have per-device values, so every per-device value
+// (SetProgramRunArgsPerDevice) is kept.
 void UpdateTensorArgs(
     Program& program,
     const Table<TensorParamName, ProgramRunArgs::TensorArgument>& tensor_args,

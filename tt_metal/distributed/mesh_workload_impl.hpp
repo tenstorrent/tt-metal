@@ -37,6 +37,23 @@ struct PerDeviceRuntimeArgsField {
     uint32_t num_words = 0;
     std::vector<uint32_t> values;  // [coordinate index in the program's range][num_words]
     std::vector<uint8_t> present;  // [coordinate index in the program's range]
+    // values / present as of the last values_version bump: setting the same values again (for example after a
+    // program-level update dropped them) leaves values_version, and so the per-device command images, as they are.
+    std::vector<uint32_t> committed_values;
+    std::vector<uint8_t> committed_present;
+    bool dirty = false;  // set or dropped since the last commit: only these are compared
+
+    // A copy without the commit state (trace nodes and command lists keep the values of their capture).
+    PerDeviceRuntimeArgsField values_only() const {
+        PerDeviceRuntimeArgsField copy;
+        copy.kernel = kernel;
+        copy.core = core;
+        copy.first_word = first_word;
+        copy.num_words = num_words;
+        copy.values = values;
+        copy.present = present;
+        return copy;
+    }
 };
 // A field's words in one command sequence: where they sit, and the field (values per device).
 struct ResolvedPerDeviceRuntimeArgsField {
@@ -46,8 +63,11 @@ struct ResolvedPerDeviceRuntimeArgsField {
 
 struct PerDeviceRuntimeArgs {
     uint64_t program_id = 0;                                         // the Program the fields were set for
+    // Unique per entry; the program records the entry that last started holding per-device args of it. A mismatch
+    // means the program was held by another workload's per-device args since, so its drops went there.
+    uint64_t owner = 0;
     std::vector<std::unique_ptr<PerDeviceRuntimeArgsField>> fields;  // stable while others are added
-    uint64_t generation = 0;                                         // bumps when a field is added
+    uint64_t generation = 0;                                         // bumps when a field is added or removed
     // The fields resolved against the last command sequence enqueued (see resolve_per_device_runtime_args).
     struct ResolvedCache {
         uint64_t assembly_id = 0;
@@ -55,7 +75,9 @@ struct PerDeviceRuntimeArgs {
         std::vector<ResolvedPerDeviceRuntimeArgsField> resolved;
     };
     mutable ResolvedCache resolved_cache;
-    uint64_t values_version = 0;  // bumps when a value is set or cleared (or a field is added)
+    // Bumps when the values differ from the last commit (see MeshWorkloadImpl::per_device_runtime_args).
+    uint64_t values_version = 0;
+    bool dirty = false;  // a value was set or dropped, or a field added, since the last commit
     // Each local device's copy of the region of the packed command that holds the fields (fast-dispatch eager
     // enqueue): words outside the fields track the packed command by delta, so a hit writes each device's command as
     // packed prefix + its region + packed suffix with no per-field work.
@@ -213,20 +235,23 @@ public:
         const std::optional<CoreCoord>& core,
         uint32_t first_word,
         ttsl::Span<const uint32_t> values);
+    // The field at (kernel, core, first_word), checking that it may be set: null when it does not exist yet (and may be
+    // added). Changes nothing, so a multi-arg set can check every arg before setting any.
+    PerDeviceRuntimeArgsField* find_per_device_runtime_args_field(
+        const MeshCoordinateRange& program_range,
+        KernelHandle kernel,
+        const std::optional<CoreCoord>& core,
+        uint32_t first_word,
+        uint32_t num_words,
+        bool metal2 = false);
     bool has_per_device_runtime_args() const { return !per_device_runtime_args_.empty(); }
-    // The per-device runtime args of a range as they are, so a multi-field update can undo itself when a later field
-    // fails (restoring invalidates any cached resolution of them).
-    struct PerDeviceRuntimeArgsBackup {
-        std::shared_ptr<const PerDeviceRuntimeArgs> snapshot;  // null: the range had none
-        uint64_t generation = 0;
-        uint64_t values_version = 0;
-    };
-    PerDeviceRuntimeArgsBackup backup_per_device_runtime_args(const MeshCoordinateRange& program_range) const;
-    void restore_per_device_runtime_args(
-        const MeshCoordinateRange& program_range, const PerDeviceRuntimeArgsBackup& backup);
     // The per-device runtime args of the program at `program_range`, or null; fails if the program there is not the
-    // one they were set for.
-    const PerDeviceRuntimeArgs* per_device_runtime_args(const MeshCoordinateRange& program_range) const;
+    // one they were set for. Every enqueue / capture path reads them through this, which first brings them up to
+    // date: applies the program's pending drops (Metal 2.0 SetProgramRunArgs / UpdateProgramRunArgs), removes fields
+    // no device has a value of, and bumps values_version only if the values differ from the last commit.
+    const PerDeviceRuntimeArgs* per_device_runtime_args(const MeshCoordinateRange& program_range);
+    // Applies the pending drops of the program at `program_range` to its per-device args (Metal 2.0 programs).
+    void apply_per_device_run_arg_drops(const MeshCoordinateRange& program_range);
 
     void add_program(const MeshCoordinateRange& device_range, Program&& program);
     std::unordered_map<MeshCoordinateRange, Program>& get_programs() { return programs_; }
