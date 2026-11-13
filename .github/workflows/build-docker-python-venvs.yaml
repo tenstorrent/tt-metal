@@ -123,7 +123,7 @@ jobs:
 
       - name: Build and push missing venv images
         if: steps.bake.outputs.targets != ''
-        uses: tenstorrent/.github/actions/docker-bake-publish@4b801641c67df4dfa99f85510ee45edfb72c360f # nsexton/docker-sbom
+        uses: tenstorrent/.github/actions/docker-bake-publish@ec8af5bf14b2d49c101aaf81951b7e6bae10d327 # nsexton/docker-sbom
         env:
           # Bake variables are read from the environment.
           UBUNTU_VERSION: ${{ steps.bake.outputs.ubuntu-version }}
