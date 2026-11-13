@@ -129,8 +129,8 @@ def squeezebert_conv_layernorm(
 ):
     torch_hidden_states = ttnn.to_torch(hidden_states).to(torch.float32)
     self_output_conv1d_ = nn.Conv1d(in_channels=cin, out_channels=cout, kernel_size=1, groups=groups)
-    self_output_conv1d_.weight = nn.Parameter(state_dict[f"{base_addr}conv1d.weight"])
-    self_output_conv1d_.bias = nn.Parameter(state_dict[f"{base_addr}conv1d.bias"])
+    self_output_conv1d_.weight = nn.Parameter(state_dict[f"{base_addr}conv1d.weight"].to(torch_hidden_states.dtype))
+    self_output_conv1d_.bias = nn.Parameter(state_dict[f"{base_addr}conv1d.bias"].to(torch_hidden_states.dtype))
 
     torch_self_output = self_output_conv1d_(torch_hidden_states)
     self_output = ttnn.from_torch(torch_self_output, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
@@ -252,8 +252,8 @@ def squeezebert_intermediate(
         kernel_size=1,
         groups=config.intermediate_groups,
     )
-    torch_conv_.weight = nn.Parameter(state_dict[f"{base_addr}conv1d.weight"])
-    torch_conv_.bias = nn.Parameter(state_dict[f"{base_addr}conv1d.bias"])
+    torch_conv_.weight = nn.Parameter(state_dict[f"{base_addr}conv1d.weight"].to(torch_hidden_states.dtype))
+    torch_conv_.bias = nn.Parameter(state_dict[f"{base_addr}conv1d.bias"].to(torch_hidden_states.dtype))
 
     torch_conv_output = torch_conv_(torch_hidden_states)
     ttnn_conv_output = ttnn.from_torch(torch_conv_output, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
