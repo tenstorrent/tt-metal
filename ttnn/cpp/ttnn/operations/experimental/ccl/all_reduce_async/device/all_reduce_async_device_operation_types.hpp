@@ -65,7 +65,7 @@ struct AllReduceAsyncParams {
     // Add attributes method for reflection
     auto attributes() const {
         using ttsl::reflection::Attribute;
-        constexpr std::size_t kNumAttributes = 9;
+        constexpr std::size_t kNumAttributes = 10;
         std::vector<std::tuple<std::string, Attribute>> attrs;
         attrs.reserve(kNumAttributes);
 
@@ -115,6 +115,10 @@ struct AllReduceAsyncParams {
 struct AllReduceAsyncInputs {
     Tensor input_tensor;
     Tensor buffer_tensor;
+    // Optional fused residual: when set, the reduction kernel adds this tensor to the cross-device sum before
+    // packing (output = residual + sum(partials)), replacing a separate eltwise add after the all-reduce.
+    // Same shard spec as the output and same dtype as the input (the reduction CB format); read in place from L1.
+    std::optional<Tensor> residual_tensor;
 };
 
 }  // namespace ttnn::experimental::prim
