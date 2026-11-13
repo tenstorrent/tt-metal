@@ -194,7 +194,7 @@ def test_untilize(device):
 
     # Untilize the tensor
     untilized_tensor = ttnn.untilize(tilized_tensor)
-    logger.info("Untilized Tensor Shape:", untilized_tensor.shape)
+    logger.info(f"Untilized Tensor Layout: {untilized_tensor.layout}")  # Layout.ROW_MAJOR
 
 
 def test_untilize_with_unpadding(device):
