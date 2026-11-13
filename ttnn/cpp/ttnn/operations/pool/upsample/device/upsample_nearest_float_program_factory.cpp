@@ -3,10 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "upsample_device_operation.hpp"
+#include "upsample_common.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
@@ -42,21 +44,21 @@ ttnn::device_operation::ProgramArtifacts UpsampleNearestFloatProgramFactory::cre
     const std::uint32_t input_width = input_shape[2];
 
     // Output dimensions (from logical shape)
-    const std::uint32_t output_height =
-        static_cast<std::uint32_t>(std::floor(input_height * operation_attributes.scale_factor_h));
-    const std::uint32_t output_width =
-        static_cast<std::uint32_t>(std::floor(input_width * operation_attributes.scale_factor_w));
+    const std::uint32_t output_height = output_tensor.logical_shape()[1];
+    const std::uint32_t output_width = output_tensor.logical_shape()[2];
 
-    // Calculate reciprocal scale factors for kernel (fixed-point Q16.16)
-    // src = floor(dst / scale) = floor(dst * reciprocal_scale)
-    // We need to round UP the reciprocal to ensure boundary values are handled correctly.
-    // For example, with scale=3, dst=3: we need floor(3/3)=1, which requires 3*(1/3) >= 1.0
-    // Rounding up the reciprocal ensures this property is maintained.
-    constexpr std::int32_t FIXED_ONE = 1 << 16;
-    const float reciprocal_scale_h = 1.0f / operation_attributes.scale_factor_h;
-    const float reciprocal_scale_w = 1.0f / operation_attributes.scale_factor_w;
-    const std::int32_t reciprocal_scale_h_fixed = static_cast<std::int32_t>(std::ceil(reciprocal_scale_h * FIXED_ONE));
-    const std::int32_t reciprocal_scale_w_fixed = static_cast<std::int32_t>(std::ceil(reciprocal_scale_w * FIXED_ONE));
+    // float32 reciprocals exactly as torch computes them; the kernel does src = floor(dst * reciprocal) in float32.
+    const auto float_bits = [](float f) {
+        std::uint32_t u;
+        std::memcpy(&u, &f, sizeof(u));
+        return u;
+    };
+    const std::uint32_t reciprocal_scale_h_bits =
+        float_bits(operations::pool::upsample::compute_upsample_nearest_reciprocal(
+            input_height, operation_attributes.scale_factor_h));
+    const std::uint32_t reciprocal_scale_w_bits =
+        float_bits(operations::pool::upsample::compute_upsample_nearest_reciprocal(
+            input_width, operation_attributes.scale_factor_w));
 
     // Work distribution - Total work units = N * H_out * W_out (one output stick per work unit)
     const std::uint32_t total_pages_in_output = output_tensor.buffer()->num_pages();
@@ -113,8 +115,8 @@ ttnn::device_operation::ProgramArtifacts UpsampleNearestFloatProgramFactory::cre
                 {"output_height", output_height},
                 {"output_width", output_width},
                 {"num_pages_across_width", num_pages_across_width},
-                {"reciprocal_scale_h_fixed", static_cast<std::uint32_t>(reciprocal_scale_h_fixed)},
-                {"reciprocal_scale_w_fixed", static_cast<std::uint32_t>(reciprocal_scale_w_fixed)},
+                {"reciprocal_scale_h_bits", reciprocal_scale_h_bits},
+                {"reciprocal_scale_w_bits", reciprocal_scale_w_bits},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"num_sticks", "start_stick_id"}},
         .hw_config = ttnn::create_reader_datamovement_config(),
