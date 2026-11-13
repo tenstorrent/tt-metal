@@ -9,6 +9,7 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
+#include "ttnn/operations/core/program_cache_l1.hpp"
 #include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/ring_attention_all_gather_async_multi_core_with_workers_program_factory.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_chain_layout.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_kv_chains.hpp"
@@ -953,11 +954,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     // q_blocks_per_pass) whose CBs end below the lowest live L1 buffer. P passes split every core's blocks evenly, so
     // each working core needs at least P blocks (no empty pass; group members stay in lockstep).
     // The live L1 top is not in the program hash: a cached program keeps the S of the call that built it.
-    const auto lowest_l1_buffer = mesh_device->lowest_occupied_compute_l1_address();
-    const uint32_t cb_space_top = lowest_l1_buffer.has_value() ? static_cast<uint32_t>(lowest_l1_buffer.value())
-                                                               : mesh_device->l1_size_per_core();
-    const uint32_t usable_l1 =
-        cb_space_top - mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    const uint64_t usable_l1 = ttnn::operations::core::available_program_l1_capacity(mesh_device);
     uint32_t max_slots = std::min(kResidentMaxSlots, max_q_per_core);
     if (args.q_blocks_per_pass.has_value()) {
         max_slots = std::min(max_slots, *args.q_blocks_per_pass);
