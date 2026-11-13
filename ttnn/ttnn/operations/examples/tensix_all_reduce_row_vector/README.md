@@ -2,6 +2,7 @@
 
 **Problem type:** cross-core communication  ·  **Concept(s):** for a per-row-vector payload, bytes per member on the wire (both directions) and the return path
 **First profiled on:** `bh-50-special-adamjanovic-for-reservation-143315` · BH p150b 13×10 grid · AICLK 1350 MHz · 2026-10-31 · `fc9611c72e8`
+**Wormhole B0 numbers:** `bgd-lab-22-special-adamjanovic-for-reservation-165935` · WH B0 n150 8×8 grid · AICLK 1000 MHz · 2026-11-13 · `b31c663a467` ([`report_wh_n150.md`](report_wh_n150.md))
 
 > Reading order: [`../master.md`](../master.md) → [`../tensix_all_reduce/README.md`](../tensix_all_reduce/README.md) (the whole-tile all-reduce this specializes) → **this file** → run the CLI, and read the code only if you need to.
 
@@ -75,6 +76,32 @@ trials, ns per launch; full tables and the 17 regimes in [`report.md`](report.md
 b ≥ 4, multicast return. K ≥ 32: row + multicast. Return the un-expanded column-0 tile; trim it to
 faces 0/2 only on a unicast return with b ≥ 4, never under multicast.
 
+**Measured on WH B0 n150** (8×8 grid, 1000 MHz, w = 1, kernel-iters 1, median of 5 interleaved trials, ns per
+launch; full tables in [`report_wh_n150.md`](report_wh_n150.md); K = 128 needs 128 Tensix cores):
+
+| K (members) | b | `tile_partial_unicast` (baseline) | `faces_partial_unicast` | `faces_partial_mcast` | `row_partial_mcast` | `faces_partial_faces_return_unicast` | fastest vs baseline |
+|---:|---:|---:|---:|---:|---:|---:|---|
+| 2 | 1 | 2 943 | 2 805 | 3 058 | 3 552 | **2 682** | faces + faces return, unicast 1.10× |
+| 4 | 1 | 3 753 | 3 469 | 3 397 | 3 588 | **3 172** | faces + faces return, unicast 1.18× |
+| 8 | 1 | 5 310 | 4 760 | 3 980 | **3 625** | 4 194 | row + mcast 1.46× |
+| 12 | 1 | 7 179 | 6 391 | 5 125 | **4 252** | 5 522 | row + mcast 1.69× |
+| 16 | 1 | 8 823 | 7 674 | 5 658 | **4 282** | 6 527 | row + mcast 2.06× |
+| 32 | 1 | 15 198 | 12 777 | 8 075 | **4 496** | 10 561 | row + mcast 3.38× |
+| 64 | 1 | 27 992 | 23 252 | 12 775 | **5 037** | 18 649 | row + mcast 5.56× |
+| 4 | 4 | 5 937 | 5 207 | 5 353 | 5 627 | **4 473** | faces + faces return, unicast 1.33× |
+| 8 | 4 | 10 465 | 8 426 | 6 809 | **5 657** | 6 884 | row + mcast 1.85× |
+| 12 | 4 | 11 696 | 9 542 | 7 877 | **6 527** | 7 838 | row + mcast 1.79× |
+| 16 | 4 | 14 784 | 11 962 | 8 611 | **6 582** | 9 264 | row + mcast 2.25× |
+| 32 | 4 | 22 895 | 18 977 | 11 379 | **6 818** | 14 674 | row + mcast 3.36× |
+| 64 | 4 | 37 362 | 30 989 | 16 291 | **7 348** | 23 467 | row + mcast 5.08× |
+
+**Where WH B0 differs from BH:** the crossovers sit at smaller K. Row + multicast is already the fastest at
+K = 8 (b = 1: 1.46×; BH 0.94× row over faces), and row over faces gains 1.10× at K = 8 and 1.20× at K = 12, b = 1
+(BH 0.94× / 0.99×). Multicast return is null at K = 4 (tile partial 1.02×, BH 0.93×) instead of losing. Faces 0/2
+on a unicast return also pays at b = 1 (K = 64: 1.24×; BH 0.95×), and still loses under multicast (K = 16,
+b = 4: 0.86×). **WH rule:** never ship the whole tile; K ≤ 4: faces 0/2 + faces 0/2 unicast return; K ≥ 8: row +
+multicast.
+
 **Code:** `_RV_GATHER_KERNEL` (`FACES_PARTIAL`: two 1024 B face writes; `ROW_PARTIAL`: two 64 B face-row
 writes into row m % 32), `_RV_COMPUTE_KERNEL` (`transpose_tiles()`, `REDUCE_COL` over ⌈K/32⌉ gather
 tiles vs paired `add_tiles` over K), `_RV_RETURN_KERNEL` (`MCAST_RETURN` owners → root →
@@ -108,9 +135,13 @@ python -m ttnn.operations.examples.tensix_all_reduce_row_vector \
 
 ## Reproduce
 
-The 17 regimes were measured on BH p150b only. Each asserts against a bound derived from that measured
-speedup (`perf_test_utils.regime_bound`, with one confirmation re-measure), is logged without an assert
-on Wormhole, and is skipped on a grid with fewer than K Tensix cores.
+The 17 regimes were measured on BH p150b, and the 15 that fit 64 Tensix cores also on WH B0 n150 (min–max of
+the regime test's median over 10 runs). Each asserts against a bound derived from the speedup measured on the
+board it runs on (`perf_test_utils.regime_bound`, with one confirmation re-measure) and is skipped on a grid
+with fewer than K Tensix cores. Three flip between the boards (a loss or null on BH, a gain on WH) and are
+`measure` regimes that only log: `row_over_faces_measure_K8_b1_mcast` (WH 1.08–1.11×, BH 0.94×),
+`row_over_faces_measure_K12_b1_mcast` (WH 1.19–1.21×, BH 0.99×), `faces_return_measure_K64_b1_unicast`
+(WH 1.24–1.25×, BH 0.95×).
 
 ```bash
 # correctness (all 12 partial x return x path combinations, exact vs torch) and the 17 regimes

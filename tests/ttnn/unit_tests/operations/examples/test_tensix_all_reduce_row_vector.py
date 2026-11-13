@@ -236,11 +236,13 @@ def test_tensix_all_reduce_row_vector_sweep(device):
 
 # Regimes: the per-row-vector boundary claims, asserted. Interleaved A/B, median of 11 trials per
 # variant, kernel-iters 1. `measured` is the speedup (baseline ns / lever ns) per architecture ("bh" =
-# Blackhole p150b; none was measured on Wormhole B0, so these only log there). `check_regime` asserts it
-# against a bound derived from the number measured on the running architecture
-# (`perf_test_utils.regime_bound`) and re-measures once (pooling both passes) before failing. A regime
-# needs K Tensix cores and is skipped on a smaller grid.
+# Blackhole p150b, "wh" = Wormhole B0 n150). `check_regime` asserts it against a bound derived from the
+# number measured on the running architecture (`perf_test_utils.regime_bound`) and re-measures once
+# (pooling both passes) before failing. A regime needs K Tensix cores and is skipped on a smaller grid.
+# "measure" regimes flip between boards (a loss or null on BH, a 1.10-1.24x gain on WH): both numbers are
+# logged, nothing is asserted.
 # Measured BH p150b, 13x10 grid, 1350 MHz, w = 1, kernel-iters 1, N = 5 sweep (report.md, 2026-10-31).
+# Measured WH B0 n150, 8x8 grid, 1000 MHz: min-max of the regime test's median over 10 runs (2026-11-13).
 # Partial size on the wire: whole tile (4096 B) -> faces 0/2 (2048 B) -> one row (128 B).
 # (id, K, b, w, kind, measured, baseline, lever)
 _TU, _FU, _RU = "tile_partial_unicast", "faces_partial_unicast", "row_partial_unicast"
@@ -248,25 +250,106 @@ _TM, _FM, _RM = "tile_partial_mcast", "faces_partial_mcast", "row_partial_mcast"
 _FRU, _FRM = "faces_partial_faces_return_unicast", "faces_partial_faces_return_mcast"
 _RV_REGIMES = [
     ("faces_over_tile_helps_K128_b4_mcast", 128, 4, 1, "helps", {"bh": 1.42}, _TM, _FM),  # 13 261 -> 9 355 ns
-    ("faces_over_tile_helps_K8_b4_unicast", 8, 4, 1, "helps", {"bh": 1.16}, _TU, _FU),  # 4 483 -> 3 859 ns
-    ("faces_over_tile_does_not_help_K2_b1_unicast", 2, 1, 1, "does_not_help", {"bh": 1.02}, _TU, _FU),
-    ("row_over_faces_helps_K64_b1_mcast", 64, 1, 1, "helps", {"bh": 1.44}, _FM, _RM),  # 5 156 -> 3 570 ns
-    ("row_over_faces_helps_K12_b4_mcast", 12, 4, 1, "helps", {"bh": 1.14}, _FM, _RM),  # 3 919 -> 3 428 ns
-    ("row_over_faces_does_not_help_K4_b1_unicast", 4, 1, 1, "does_not_help", {"bh": 0.89}, _FU, _RU),
-    ("row_over_faces_does_not_help_K8_b1_mcast", 8, 1, 1, "does_not_help", {"bh": 0.94}, _FM, _RM),
-    ("row_over_faces_does_not_help_K12_b1_mcast", 12, 1, 1, "does_not_help", {"bh": 0.99}, _FM, _RM),
+    (
+        "faces_over_tile_helps_K8_b4_unicast",
+        8,
+        4,
+        1,
+        "helps",
+        {"wh": (1.22, 1.24), "bh": 1.16},
+        _TU,
+        _FU,
+    ),  # 4 483 -> 3 859 ns
+    (
+        "faces_over_tile_does_not_help_K2_b1_unicast",
+        2,
+        1,
+        1,
+        "does_not_help",
+        {"wh": (1.04, 1.06), "bh": 1.02},
+        _TU,
+        _FU,
+    ),
+    (
+        "row_over_faces_helps_K64_b1_mcast",
+        64,
+        1,
+        1,
+        "helps",
+        {"wh": (2.54, 2.55), "bh": 1.44},
+        _FM,
+        _RM,
+    ),  # 5 156 -> 3 570 ns
+    (
+        "row_over_faces_helps_K12_b4_mcast",
+        12,
+        4,
+        1,
+        "helps",
+        {"wh": (1.19, 1.21), "bh": 1.14},
+        _FM,
+        _RM,
+    ),  # 3 919 -> 3 428 ns
+    (
+        "row_over_faces_does_not_help_K4_b1_unicast",
+        4,
+        1,
+        1,
+        "does_not_help",
+        {"wh": (0.94, 0.96), "bh": 0.89},
+        _FU,
+        _RU,
+    ),
+    (
+        "row_over_faces_measure_K8_b1_mcast",
+        8,
+        1,
+        1,
+        "measure",
+        {"wh": (1.08, 1.11), "bh": 0.94},
+        _FM,
+        _RM,
+    ),  # verdict differs by arch
+    (
+        "row_over_faces_measure_K12_b1_mcast",
+        12,
+        1,
+        1,
+        "measure",
+        {"wh": (1.19, 1.21), "bh": 0.99},
+        _FM,
+        _RM,
+    ),  # verdict differs by arch
     # Return path: per-owner unicast to all K members -> one root multicast.
-    ("mcast_helps_K64_b1_tile", 64, 1, 1, "helps", {"bh": 1.63}, _TU, _TM),  # 10 948 -> 6 736 ns
-    ("mcast_helps_K16_b4_faces", 16, 4, 1, "helps", {"bh": 1.25}, _FU, _FM),  # 5 276 -> 4 225 ns
-    ("mcast_does_not_help_K4_b1_tile", 4, 1, 1, "does_not_help", {"bh": 0.93}, _TU, _TM),
-    ("mcast_does_not_help_K4_b4_faces", 4, 4, 1, "does_not_help", {"bh": 0.92}, _FU, _FM),
+    ("mcast_helps_K64_b1_tile", 64, 1, 1, "helps", {"wh": (1.59, 1.61), "bh": 1.63}, _TU, _TM),  # 10 948 -> 6 736 ns
+    ("mcast_helps_K16_b4_faces", 16, 4, 1, "helps", {"wh": (1.36, 1.40), "bh": 1.25}, _FU, _FM),  # 5 276 -> 4 225 ns
+    ("mcast_does_not_help_K4_b1_tile", 4, 1, 1, "does_not_help", {"wh": (1.01, 1.03), "bh": 0.93}, _TU, _TM),
+    ("mcast_does_not_help_K4_b4_faces", 4, 4, 1, "does_not_help", {"wh": (0.95, 0.99), "bh": 0.92}, _FU, _FM),
     # Return payload: the whole column-0 tile -> only its faces 0/2.
-    ("faces_return_helps_K16_b4_unicast", 16, 4, 1, "helps", {"bh": 1.15}, _FU, _FRU),  # 5 276 -> 4 595 ns
-    ("faces_return_does_not_help_K16_b4_mcast", 16, 4, 1, "does_not_help", {"bh": 0.67}, _FM, _FRM),
-    ("faces_return_does_not_help_K64_b1_unicast", 64, 1, 1, "does_not_help", {"bh": 0.95}, _FU, _FRU),
+    (
+        "faces_return_helps_K16_b4_unicast",
+        16,
+        4,
+        1,
+        "helps",
+        {"wh": (1.27, 1.29), "bh": 1.15},
+        _FU,
+        _FRU,
+    ),  # 5 276 -> 4 595 ns
+    ("faces_return_does_not_help_K16_b4_mcast", 16, 4, 1, "does_not_help", {"wh": (0.85, 0.87), "bh": 0.67}, _FM, _FRM),
+    (
+        "faces_return_measure_K64_b1_unicast",
+        64,
+        1,
+        1,
+        "measure",
+        {"wh": (1.24, 1.25), "bh": 0.95},
+        _FU,
+        _FRU,
+    ),  # verdict differs by arch
     # Both levers.
     ("both_help_K128_b4", 128, 4, 1, "helps", {"bh": 4.71}, _TU, _RM),  # 25 546 -> 5 424 ns
-    ("both_do_not_help_K4_b1", 4, 1, 1, "does_not_help", {"bh": 0.86}, _TU, _RM),
+    ("both_do_not_help_K4_b1", 4, 1, 1, "does_not_help", {"wh": (1.04, 1.06), "bh": 0.86}, _TU, _RM),
 ]
 _RV_REGIME_TRIALS = 11
 
