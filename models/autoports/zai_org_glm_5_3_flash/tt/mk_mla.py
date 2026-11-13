@@ -1420,6 +1420,10 @@ class MkMla(_MlaBase):
         if self.dsa_shard != (shard is not None):
             raise ValueError("MkMla(dsa_shard=True) takes shard= (tt/tp_dsa_shard.py) and only then")
         if shard is not None:
+            # this call's shard BEFORE the lane check: _baton(t) (-> ix_lanes) reads _shard_now, which otherwise still
+            # holds the previous call's value -- None on a fresh MkMla whose first call is a one-slot verify (the sparse
+            # MTP layer's catch-up), so the check refused the lane baton the build is about to use
+            self._shard_now = shard
             self.shard_lanes_check(t, int(shard.get("line", 1)), int(shard["C"]), int(shard.get("kph", 1)))
         if shard is not None and dsa_state is not None and dsa_state.get("window") is not None:
             # the dense window (the caller's replicated store): the split-K phase's all-dense pass + the latent write
