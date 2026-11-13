@@ -114,20 +114,30 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
           echo "suffix=${suffix}" >> "$GITHUB_OUTPUT"
+      # Gates the image (OCI labels, Trivy) before anything is pushed, then
+      # attaches the SBOM. No harbor-prefix: GitHub-hosted runners cannot reach Harbor.
       - name: Build and push
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        uses: tenstorrent/.github/actions/docker-publish@4b801641c67df4dfa99f85510ee45edfb72c360f # nsexton/docker-sbom
         with:
           file: dockerfile/exabox_tools/Dockerfile
           platforms: linux/amd64
-          pull: true
+          pull: "true"
           tags: ${{ steps.tags.outputs.tags }}
           context: ${{ github.workspace }}
           build-args: |
             TT_METAL_DEV_IMAGE=${{ needs.build-artifact.outputs.dev-docker-image }}
             TT_METAL_COMMIT_SHA=${{ github.sha }}
             IMAGE_VERSION=${{ steps.tags.outputs.suffix }}
-          outputs: |
-            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
+          image-output-options: compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
+          # Signing needs id-token/attestations permissions on this job. Off until granted.
+          attest-sbom: "false"
+          # CPython's test suite (lib/python3.X/test/) and Python packages
+          # (future, tornado, ...) ship TLS test fixtures that the crypto scan
+          # reports as private keys. The first glob covers both, since * also
+          # matches /. Keys anywhere else still fail the gate.
+          trivy-allowed-private-keys: |
+            */lib/python3*/test/*
+            */site-packages/*/tests/*
       - name: Summary
         run: |
           {
