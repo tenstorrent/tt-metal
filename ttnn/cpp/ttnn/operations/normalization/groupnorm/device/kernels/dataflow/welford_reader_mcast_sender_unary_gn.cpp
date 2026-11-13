@@ -41,6 +41,10 @@ void kernel_main() {
     const std::uint32_t num_tiles_per_batch = get_common_arg_val<std::uint32_t>(gn_size_args::NUM_TILES_PER_BATCH);
     const std::uint32_t num_out_blocks = get_common_arg_val<std::uint32_t>(gn_size_args::NUM_OUT_BLOCKS);
     const std::uint32_t num_rows_per_group = get_common_arg_val<std::uint32_t>(gn_size_args::NUM_ROWS_PER_GROUP);
+    const std::uint32_t pad_row_first_page = get_common_arg_val<std::uint32_t>(gn_size_args::PAD_ROW_FIRST_PAGE);
+    const std::uint32_t pad_row_valid_rows = get_common_arg_val<std::uint32_t>(gn_size_args::PAD_ROW_VALID_ROWS);
+    const float pad_stats_scale =
+        __builtin_bit_cast(float, get_common_arg_val<std::uint32_t>(gn_size_args::PAD_STATS_SCALE));
 #else
     constexpr std::uint32_t num_mcast_cores = get_named_compile_time_arg_val("num_cores_per_mcast_group");
     constexpr std::uint32_t per_core_M = get_named_compile_time_arg_val("per_core_M");
@@ -298,12 +302,22 @@ void kernel_main() {
                         input_ring_end,
                         start_id + index_b_offset + mt_offset,
                         num_channels_tiles,
-                        out_block_h_actual);
+                        out_block_h_actual
+#ifdef GN_RUNTIME_SIZE_ARGS
+                        ,
+                        pad_row_first_page,
+                        pad_row_valid_rows
+#endif
+                    );
                     mt_offset += out_block_h_actual * num_channels_tiles;
                 } else
 #endif
                 {
                     for (std::uint32_t mt = 0; mt < out_block_h_actual; ++mt) {
+#ifdef GN_RUNTIME_SIZE_ARGS
+                        const bool pad_row = start_id + index_b_offset + mt_offset >= pad_row_first_page &&
+                                             pad_row_valid_rows < tile_height;
+#endif
                         for (std::uint32_t nt = 0; nt < per_core_N; ++nt) {
                             dfb_in0.reserve_back(1);
                             const std::uint32_t l1_write_addr = dfb_in0.get_write_ptr();
@@ -314,6 +328,14 @@ void kernel_main() {
                                 {.page_id = start_id + index_b_offset + mt_offset + nt},
                                 {});
                             noc.async_read_barrier();
+#ifdef GN_RUNTIME_SIZE_ARGS
+                            // Only bfloat16 and float32 tiles; the fused op takes bfloat16.
+                            if constexpr (src0_tile_bytes == 32 * 32 * 2 || src0_tile_bytes == 32 * 32 * 4) {
+                                if (pad_row) {
+                                    zero_tile_rows_from<src0_tile_bytes / (32 * 32)>(l1_write_addr, pad_row_valid_rows);
+                                }
+                            }
+#endif
                             dfb_in0.push_back(1);
                             if constexpr (welford_fp32_alias) {
                                 dfb_in0_welford.reserve_back(1);
@@ -411,6 +433,12 @@ void kernel_main() {
 #ifdef GN_RUNTIME_SIZE_ARGS
             auto global_result = combine_welford_stats<global_stride>(
                 p_global_means_read, p_global_vars_read, num_mcast_cores, num_channels_per_group * num_rows_per_group);
+            // The device's statistics so far include the zeroed padding rows. Every device holds the
+            // same padded and logical extents, so the cross-device merge below can use these
+            // corrected statistics with equal weights.
+            if (pad_row_valid_rows < tile_height) {
+                global_result = unpad_welford_stats(global_result, pad_stats_scale);
+            }
 #else
             auto global_result =
                 combine_welford_stats<num_mcast_cores, num_channels_per_group * num_rows_per_group, global_stride>(

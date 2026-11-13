@@ -53,16 +53,16 @@ void DitFusedDistributedGroupnormDeviceOperation::validate_on_program_cache_miss
     TT_FATAL(args.num_groups >= 1, "num_groups must be >= 1");
     TT_FATAL(C % args.num_groups == 0, "C ({}) must be divisible by num_groups ({})", C, args.num_groups);
     TT_FATAL(C % TILE_WIDTH == 0, "C ({}) must be divisible by TILE_WIDTH ({})", C, TILE_WIDTH);
-    // The welford compute accumulates every one of the 32 rows in each tile; the per-group count is
-    // derived from the (padded) HW. Require tile-aligned H*W so the padded HW equals the logical HW
-    // (padded_HW == true count) — there is no row mask.
+    // H*W need not be whole tiles: the readers zero the padding rows of the last tile row, and the
+    // statistics, which cover the padded H*W, are corrected for those zeros. Every device of the
+    // mesh must hold the same H*W, which the even spatial split guarantees. Only the last tile row
+    // may hold padding: the kernels zero padding rows in that row only.
     TT_FATAL(
-        shape[2] % TILE_HEIGHT == 0,
-        "H*W ({}) must be divisible by TILE_HEIGHT ({}) so there are no padded rows inflating "
-        "the per-group count; got H*W={}.",
-        shape[2],
+        input.padded_shape()[2] == tt::round_up(shape[2], TILE_HEIGHT),
+        "H*W is padded to {} rows, but only padding up to the next multiple of {} ({}) is supported",
+        input.padded_shape()[2],
         TILE_HEIGHT,
-        shape[2]);
+        tt::round_up(shape[2], TILE_HEIGHT));
     // The reused welford GroupNorm kernels require an input_mask to zero sub-tile group padding.
     TT_FATAL(
         tensor_args.input_mask.has_value(),
