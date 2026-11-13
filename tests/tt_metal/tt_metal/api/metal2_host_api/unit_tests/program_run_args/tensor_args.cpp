@@ -508,14 +508,15 @@ TEST_F(ProgramRunArgsTestGen1, CPU_MatchPaddedShapeOnly_DynamicWinsWhenBothSet) 
 // of the same logical shape: alignment {64, 64}, as TensorLayout::fromPaddedShape gives a legacy
 // tensor padded past the next tile boundary.
 
-TensorParameter MakeTileTensorParameter(const TensorSpecRelaxations& relaxations) {
+TensorParameter MakeTileTensorParameter(
+    const TensorSpecRelaxations& relaxations, tt::tt_metal::Shape shape = tt::tt_metal::Shape{1, 1, 30, 30}) {
     auto memory_config =
         tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
     auto layout = tt::tt_metal::TensorLayout(
         tt::tt_metal::DataType::BFLOAT16, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), memory_config);
     return TensorParameter{
         .unique_id = TensorParamName{"input_tensor"},
-        .spec = tt::tt_metal::TensorSpec(tt::tt_metal::Shape{1, 1, 30, 30}, layout),
+        .spec = tt::tt_metal::TensorSpec(std::move(shape), layout),
         .relaxations = relaxations,
     };
 }
@@ -622,6 +623,83 @@ TEST_F(ProgramRunArgsTestGen1, CPU_RelaxTensorLayoutAlignment_RankMismatchReport
         [&] { SetProgramRunArgs(program, params); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("logical_shape rank (3) differs from the declared rank (4)")));
+}
+
+// relax_tensor_layout_alignment with match_padded_shape_only. The declared tensor's logical width 50
+// pads to 64 at the default alignment. The runtime tensor reaches the same padded shape from width
+// 30, at alignment {32, 64}.
+TEST_F(ProgramRunArgsTestGen1, CPU_MatchPaddedShapeOnly_AlignmentMismatchFails) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    auto binding = MakeTileTensorParameter(
+        TensorSpecRelaxations{.match_padded_shape_only = true}, tt::tt_metal::Shape{1, 1, 32, 50});
+    spec.tensor_parameters = {binding};
+    BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    const auto runtime_spec =
+        MakeOverpaddedTileSpec(tt::tt_metal::Shape{1, 1, 32, 30}, tt::tt_metal::Alignment{32, 64});
+    ASSERT_EQ(runtime_spec.padded_shape(), binding.spec.padded_shape());
+    MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, runtime_spec);
+
+    auto params = MakeRunArgsForMinimalSpec(node, {}, {});
+    params.tensor_args = {
+        {TensorParamName{"input_tensor"}, TensorArgument{tensor}},
+    };
+    EXPECT_THAT(
+        [&] { SetProgramRunArgs(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(
+            "TensorLayout has Alignment([32, 64]) where the binding declares Alignment([32, 32])")));
+}
+
+// The same bind that CPU_MatchPaddedShapeOnly_AlignmentMismatchFails rejects is ACCEPTED once
+// relax_tensor_layout_alignment is added.
+TEST_F(ProgramRunArgsTestGen1, CPU_RelaxTensorLayoutAlignment_PaddedShapeOnlyAccepted) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    auto binding = MakeTileTensorParameter(
+        TensorSpecRelaxations{.match_padded_shape_only = true, .relax_tensor_layout_alignment = true},
+        tt::tt_metal::Shape{1, 1, 32, 50});
+    spec.tensor_parameters = {binding};
+    BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    MeshTensor tensor = MeshTensor::allocate_on_device(
+        *mesh_device_, MakeOverpaddedTileSpec(tt::tt_metal::Shape{1, 1, 32, 30}, tt::tt_metal::Alignment{32, 64}));
+
+    auto params = MakeRunArgsForMinimalSpec(node, {}, {});
+    params.tensor_args = {
+        {TensorParamName{"input_tensor"}, TensorArgument{tensor}},
+    };
+    EXPECT_NO_THROW(SetProgramRunArgs(program, params));
+}
+
+// With the alignment relaxed, the padded shape is still pinned, and a rejection on it must be reported
+// as that. This tensor differs in both alignment and padded shape (width 70 pads to 128).
+TEST_F(ProgramRunArgsTestGen1, CPU_RelaxTensorLayoutAlignment_PaddedShapeOnlyReportsPaddedShape) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    auto binding = MakeTileTensorParameter(
+        TensorSpecRelaxations{.match_padded_shape_only = true, .relax_tensor_layout_alignment = true},
+        tt::tt_metal::Shape{1, 1, 32, 50});
+    spec.tensor_parameters = {binding};
+    BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    MeshTensor tensor = MeshTensor::allocate_on_device(
+        *mesh_device_, MakeOverpaddedTileSpec(tt::tt_metal::Shape{1, 1, 32, 70}, tt::tt_metal::Alignment{32, 64}));
+
+    auto params = MakeRunArgsForMinimalSpec(node, {}, {});
+    params.tensor_args = {
+        {TensorParamName{"input_tensor"}, TensorArgument{tensor}},
+    };
+    EXPECT_THAT(
+        [&] { SetProgramRunArgs(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("padded_shape does not match the binding's declared padded_shape")));
 }
 
 }  // namespace
