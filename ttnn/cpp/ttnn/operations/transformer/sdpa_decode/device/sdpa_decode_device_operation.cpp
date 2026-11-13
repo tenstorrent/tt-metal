@@ -135,6 +135,32 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
             q_shape_unpadded[2]);
     }
 
+    const uint32_t spec_pack_heads = operation_attributes.spec_pack_heads;
+    if (spec_pack_heads > 0) {
+        // Packed spec mode: each group's spec_T candidates x spec_pack_heads q rows go into one
+        // 32-row tile, candidate j on rows [j*S, j*S + spec_pack_heads), S even (see
+        // SdpaDecodeParams::spec_pack_heads). The reader gathers those row blocks out of the
+        // unpacked Q and the writer scatters the output rows back, both as face-row blocks.
+        TT_FATAL(spec_multi_pos, "spec_pack_heads={} requires spec_multi_pos_tiles > 0", spec_pack_heads);
+        const uint32_t pack_stride = spec_pack_heads + (spec_pack_heads % 2);
+        TT_FATAL(
+            spec_pack_heads <= tt::constants::FACE_HEIGHT,
+            "spec_pack_heads={} must be <= {} (the valid rows of a candidate row-tile must sit in its top faces)",
+            spec_pack_heads,
+            tt::constants::FACE_HEIGHT);
+        TT_FATAL(
+            spec_T * pack_stride <= tt::constants::TILE_HEIGHT,
+            "spec_pack_heads={}: {} candidates x {} packed rows do not fit one {}-row tile",
+            spec_pack_heads,
+            spec_T,
+            pack_stride,
+            tt::constants::TILE_HEIGHT);
+        TT_FATAL(
+            !operation_attributes.output_mem_config.is_sharded(),
+            "spec_pack_heads requires an interleaved output memory config, got {}",
+            operation_attributes.output_mem_config.memory_layout());
+    }
+
     // Input 0 must be sharded by height or DRAM interleaved. All other inputs must be in DRAM.
     const auto Q_memcfg = input_tensors.at(0).memory_config();
     if (input_tensors.at(0).is_sharded()) {
@@ -661,7 +687,8 @@ Tensor sdpa_decode(
     std::optional<uint32_t> head_dim_v,
     std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry,
     std::optional<uint32_t> cache_position_modulo,
-    uint32_t spec_multi_pos_tiles) {
+    uint32_t spec_multi_pos_tiles,
+    uint32_t spec_pack_heads) {
     using OperationType = SdpaDecodeDeviceOperation;
     auto operation_attributes = OperationType::operation_attributes_t{
         .is_causal = is_causal,
@@ -680,6 +707,7 @@ Tensor sdpa_decode(
             paged_cache_geometry.value_or(ttnn::operations::transformer::PagedCacheGeometryOverride{}),
         .cache_position_modulo = cache_position_modulo,
         .spec_multi_pos_tiles = spec_multi_pos_tiles,
+        .spec_pack_heads = spec_pack_heads,
     };
 
     auto tensor_args = OperationType::tensor_args_t{

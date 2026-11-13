@@ -6,6 +6,8 @@
   cos / sin staged as [1, 1, R, rope_dim] are not reshaped, the RoPE pass-through slice lands in DRAM with no copy, k and
   v reach the KV write unpadded, the KV write is T calls of n_users rows (also at one user) on the shared positions and
   the per-user page table, and the gate multiplies the attention output after the head concat in its flat layout.
+* The fused spec SDPA of _forward_verify packs each group's candidates x NH q rows into one q tile (spec_pack_heads);
+  forward_decode's full verify body keeps the unpacked call.
 * Which verifies take that path (_forward_verify_ok); the plain decode never does.
 * Qwen36Model: the verify body builds the T position slices once for all attention layers and frees them; the verify
   stages cos / sin as [1, 1, R, rope_dim] with the per-row decode values.
@@ -349,3 +351,32 @@ def test_the_verify_stages_the_decode_rotation_rows_on_the_sequence_axis():
     cos, sin = model._verify_cos_sin_torch(pos, deltas)
     assert torch.equal(cos.reshape(-1), dec_cos.reshape(-1)) and torch.equal(sin.reshape(-1), dec_sin.reshape(-1))
     assert not torch.equal(cos, model._verify_cos_sin_torch(pos)[0])
+
+
+@pytest.mark.parametrize("n_users, T", [(8, 4), (1, 4), (2, 8), (2, 12)])
+def test_the_verify_sdpa_packs_each_groups_q_heads_into_one_tile(ops, n_users, T):
+    a = _attention(n_users)
+    _verify(a, n_users, T)
+    (sdpa,) = _calls(ops, "sdpa")
+    assert sdpa[2]["spec_multi_pos_tiles"] == 4 and sdpa[2]["spec_pack_heads"] == NH
+
+
+@pytest.mark.parametrize(
+    "nh, tiles, packed",
+    [(3, 4, 3), (1, 4, 1), (5, 4, 5), (6, 4, 6), (7, 4, 7), (8, 4, 8), (9, 4, 0), (13, 2, 13), (16, 2, 16), (17, 1, 0)],
+)
+def test_the_spec_sdpa_packs_only_when_the_candidates_rows_fit_one_tile(nh, tiles, packed):
+    """Each candidate takes NH rounded up to an even row count; a group packs when its candidates fit 32 rows."""
+    a = _attention(1)
+    a.NH = nh
+    assert a._spec_pack_heads(tiles) == packed
+
+
+def test_the_full_verify_body_keeps_the_unpacked_sdpa(ops, monkeypatch):
+    """forward_decode's full verify body (a verify _forward_verify_ok refuses) calls the fused spec SDPA unpacked."""
+    a = _attention(8)
+    a.decode_sdpa_max_cores = None
+    monkeypatch.setattr(tp_mod.TPAttention, "_forward_verify_ok", lambda self, *args: False)
+    _verify(a, 8, 4, pos_groups=False, cos_rows_first=False)
+    (sdpa,) = _calls(ops, "sdpa")
+    assert sdpa[2]["spec_multi_pos_tiles"] == 4 and sdpa[2].get("spec_pack_heads", 0) == 0
