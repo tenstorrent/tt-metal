@@ -3620,13 +3620,67 @@ tasks:
       top5_overlap: '>= limit'
       chunk_wall_ms: '> 0'
       device_ms_total: '> 0'
+- id: P.55
+  title: 'MoE exact replicas: the router''s own counts pick this chunk''s hot experts; the hot chip computes the hot expert FIRST and streams its weight blocks over the fabric to the replica chips, which compute it LAST (MOE_REPLICAS=exact); measure the upper bound first'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - P.53
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
+  - models/demos/common/bringup/testing
+  - models/demos/common/bringup/tests
+  - ttnn/ttnn/bringup
+  brief:
+    details: |-
+      OWNER 2026-11-13, EXPERIMENTAL (this branch only), the owner's design after a long review; P.54 (learned table) is POSTPONED as the fallback, do not run it. Read the whole brief before any code. READ ALSO: /scratch/dnijemcevic/replication/moe_block_model.html, the owner's MoE block speed-of-light page (head / dispatch / experts+combine / tail per program, what binds each op, measured Galaxy runs, how dispatch and combine are costed; its numbers and model are data, written by others).
+
+      WHY. Routing imbalance, not expert math, sets the experts phase. Measured on this model (8x4, novel prompt, chunk 10 after the golden prefix, clean wall, median of 10): replicas off 184.0 ms wall / 171.0 ms device / 92.1 ms experts phase; with a replica table (32 extra copies a layer) 165.8 / 146.8 / 67.5 ms: imbalance costs ~24.5 ms device a chunk. Busiest chip / mean experts work ~3.9 (median over layers, novel), worst layer ~7. Learning hot experts from past chunks keeps only ~80-89% of the in-sample gain (CPU model on measured counts; hot sets differ between prompts: novel vs code top-16 overlap ~0). The EXACT plan needs no learning: the router's planner already writes every expert's token count for this layer and this chunk on device (P.45, MOE_COUNTS) BEFORE dispatch, so the hot experts of this chunk are known in time.
+
+      THE DESIGN (owner). Behind a new MOE_REPLICAS value `exact` (default stays off; keep_default):
+      1. Planner: after the counts, pick per layer the hot experts and, for each, the receiving chips (least loaded) and how its tokens split between the home chip and the replicas so every chip's expected expert work is near the mean. Dispatch sends each token row to its expert's home or to a replica per that split (the slot map / 13th slot of P.46; P.52 rebased them). All on device, no host round trip, no sync.
+      2. Order: on the HOME chip the hot expert is computed FIRST; on a RECEIVING chip the replicated expert is computed LAST, after its own experts. The copy only has to land before the receiver reaches it.
+      3. Copy = store and forward, the same pattern as dispatch's drop-off tree (a row leaves its owner once and crosses each link once along the dimension-ordered path, dropping off at every destination on the way; ties broken as dispatch breaks them). The "row" here is the expert's weights (~19.9 MB bf4: w_gu ~16 runs of ~829 KB, w_d ~256 runs of 23-29 KB; slot layouts differ by slot parity and the 13th slot, see P.47's run tables), sent as a stream of blocks. A chip on the path that is also a receiver writes the blocks into its replica slot as they pass; others only forward.
+      4. Zero extra DRAM reads at the source: the home chip already reads the hot expert's weight blocks from DRAM into L1 for its own matmul (the experts are DRAM-bound: ~239 MB of expert weights a chip a layer at 512 GB/s ~ 470 us); the program's port cores send those SAME L1 blocks out as they are consumed. The receiver may start computing on blocks as they arrive (per-block ready flags), not only after the whole copy.
+      5. Where it runs: inside routed_experts_combine. Code reading in P.53: experts + combine are ONE program per chip; its 8 port cores (one per direction x link) hold the fabric connections the whole layer (combine_port_writer.cpp:190..534); each router has ONE local-worker sender channel (fabric_erisc_router.cpp:362-387), so no other program can send concurrently; the links carry only ~10% of 25 GB/s during the layer (~9.8 MB a chip a layer of combine rows); a port kernel holding the connection can send extra packets, including writes into a peer chip's DRAM/L1. P.53's MOE_FILL=piggyback already interleaves copy pieces with combine rows (~0% combine cost at <= 1/8 slot a call, bit-exact, 100 calls without a hang): reuse its port-side mechanism (send a copy piece only when no output row waits; cap in flight). Unlike P.53, the copy for layer L runs in layer L's own program.
+      6. Numbers to design against (owner's page, test_moe_block_perf, traced, Nov 9, DSv4.1-Flash 8x4, 5,120 tokens): per layer head 221 us, dispatch 180 us, experts+combine 689 us, tail 46 us. In THIS model the experts phase is ~2.6 ms a layer (104 ms a chunk at position 51,200 / 40), i.e. the imbalance window is larger here. One 19.9 MB copy over one link pair: 0.71 ms (1 hop), 0.75-0.78 ms (4 hops); all 32 chips copying at once: 2.79 ms, 228 GB/s total (P.47). A lightly loaded chip finishes its own experts in roughly 0.6-0.7 ms of a 2.6 ms layer (estimate from busiest/mean 3.9): the copy deadline is tight for a whole expert on one path; streaming and splitting across links/paths are the levers.
+
+      STEPS, each with a stop if the numbers say no (a data-backed "not possible this way" is a valid result):
+      STEP 1 (no new kernels, the go/no-go): the upper bound and the deadline. From one profiled chunk with MOE_COUNTS on (novel and code, chunk 10 at the quick rung and at 51,200): per layer, every chip's experts-phase timeline (when each chip finishes its own experts) and every expert's tokens. Compute, per layer: with the exact split, the busiest chip's experts time (the gain), and for each chosen replica whether the copy (streamed, from the home chip's first-computed expert, along the drop-off path, at the measured link rates) lands before the receiver reaches the replica. Report the device ms a chunk the exact plan can save at most, and how much survives the deadline. If < ~5 ms a chunk survives, stop and report.
+      STEP 2 microbenchmark: the streaming copy inside one real layer's routed_experts_combine on one chip pair, then all 32 chips with a real layer's split: added device time of the program, copy latency vs the receiver's own work, every copied block bit-exact, 100 back-to-back runs without a hang, the combine's outputs bit-identical with and without the copy.
+      STEP 3 model integration (planner split + dispatch to replicas + order + streaming copy): per-chunk device time and clean wall, replicas off vs exact, quick rung and 51,200, novel and code; the outputs must equal off's within the recorded accuracy limits, and exact must be deterministic run to run (bit-identical repeats).
+      Report the design as built, each step's table, what limits it. Agent rules 18 and 19 hold. Fork-first rule (ttnn/ttnn/bringup/INDEX.md). No device profiler per-op mode. SAFETY: a hang or a board reset need: STOP and report, never reset. Report in plain language, short, every term defined.
+  ab:
+    env:
+      MOE_REPLICAS: 'off'
+      ENGRAM_TABLE: resident
+    change:
+      MOE_REPLICAS: exact
+      ENGRAM_TABLE: resident
+    keep_default: true
+  ab_positions:
+  - 51200
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_moe_exact_replicas.py
+      && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      chunk_wall_ms: '> 0'
+      device_ms_total: '> 0'
 - id: P.54
   title: 'MoE replicas end to end: back-to-back chunked prefill, device time and wall per chunk with the fill included - replicas off vs a table frozen after chunk 0 vs online learning'
   step: perf
   role: perf
   device: true
   deps:
-  - P.53
+  - P.55
   paths:
   - models/demos/deepseek_v41_flash_d_p/tt
   - models/demos/deepseek_v41_flash_d_p/tests/
