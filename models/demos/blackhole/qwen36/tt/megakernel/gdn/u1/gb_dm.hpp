@@ -30,6 +30,12 @@
 #ifndef GB_MCAST
 #define GB_MCAST 0
 #endif
+#ifndef GB_NO_HOLD_BOUNCE
+#define GB_NO_HOLD_BOUNCE 0  // hang DIAGNOSTIC arm (E1_GB_HOLD_BOUNCE=0), NOT shippable: HOLD users' window tile is not
+                             // copied win[par] -> win[1-par] (no per-HOLD-user DRAM read + write on the reader's NOC1).
+                             // A row that leaves HOLD without a state resume then convolves a window that is one step
+                             // stale: wrong numerics for that row, same traffic shape otherwise
+#endif
 #ifndef GB_PUSHDIR
 #define GB_PUSHDIR 0  // hang arm (E1_GB_PUSHDIR): the in-proj tile pushes whose consumer sits in a HIGHER row than this core
                       // (row 8 -> row 9: the long way round the column Y ring on the reader's NOC1, one hop on NOC0) are
@@ -137,7 +143,7 @@ inline void reader_layer(volatile tt_l1_ptr uint32_t* pb, uint32_t L, const WAcc
         }
         noc_async_read_barrier();
         // HOLD users: the op copies their window tile through unchanged (win[par] -> win[1-par]); off the in-proj's path
-        for (uint32_t j = 0; j < nconv; ++j) {
+        for (uint32_t j = 0; !GB_NO_HOLD_BOUNCE && j < nconv; ++j) {
             const uint32_t col = pb[kConv + j * kConvW];
             for (uint32_t u = 0; u < B; ++u) {
                 if (!c.hold[u]) continue;

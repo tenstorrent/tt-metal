@@ -952,6 +952,8 @@ def build_engine(dev, cores, g, B, T, Kt, Vt, VB, layers, scale, l2_eps, norm_ep
         d_r = d_r + [("GDN_GB_DIRECT", "1")] + ([("GB_KQPUSH", os.environ.get("E1_GB_KQPUSH", "0"))]) + (
             [("GB_PULL_NOC", os.environ["E1_GB_PULL_NOC"])] if "E1_GB_PULL_NOC" in os.environ else [])
         d_w = d_w + [("GB_KQPUSH", os.environ.get("E1_GB_KQPUSH", "0"))]
+        if os.environ.get("E1_GB_HOLD_BOUNCE", "1") == "0":   # hang DIAGNOSTIC arm only (wrong numerics for rows leaving HOLD)
+            d_r = d_r + [("GB_NO_HOLD_BOUNCE", "1")]
         if os.environ.get("E1_GB_PUSHDIR", "0") == "1":   # hang arm: upward in-proj pushes on the writer / NOC0
             d_r, d_w = d_r + [("GB_PUSHDIR", "1")], d_w + [("GB_PUSHDIR", "1")]
         if os.environ.get("E1_GB_GDIRECT", "1") == "1":   # gate rows straight into the head's coef slots / gate page (no DRAM)
