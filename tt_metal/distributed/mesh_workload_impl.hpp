@@ -27,7 +27,7 @@ uint32_t program_base_addr_on_core(distributed::MeshWorkloadImpl&, distributed::
 
 namespace tt::tt_metal::distributed {
 
-// Per-device runtime args of one program of a MeshWorkload (see distributed::SetRuntimeArgs on a MeshWorkload):
+// Per-device runtime args of one program of a MeshWorkload (see distributed::SetRuntimeArgsPerDevice):
 // words [first_word, first_word + num_words) of one runtime-arg slot (a kernel's unique args on a core, or its
 // common args) whose value is set per device. Other words, and devices without a value, keep the program's own args.
 struct PerDeviceRuntimeArgsField {
@@ -205,7 +205,7 @@ public:
 
     uint64_t get_id() const { return id; }
 
-    // Per-device runtime args (see distributed::SetRuntimeArgs on a MeshWorkload).
+    // Per-device runtime args (see distributed::SetRuntimeArgsPerDevice).
     void set_per_device_runtime_args(
         const MeshCoordinateRange& program_range,
         const MeshCoordinate& device,

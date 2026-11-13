@@ -32,7 +32,7 @@ class MeshWorkload {
     // The current iteration supports the following compute paradigms:
     //  - Single Program Multi Device (Completely Homogeneous MeshWorkload)
     //  - Multi Program Multi Device (Completely Heterogeneous MeshWorkload)
-    // Runtime args can be set per device for a program: see SetRuntimeArgs(MeshWorkload&, ...) below.
+    // Runtime args can be set per device for a program: see SetRuntimeArgsPerDevice below.
 public:
     // Main User-Facing API building blocks
     MeshWorkload();
@@ -62,37 +62,23 @@ private:
 };
 
 // Per-device runtime args. A Program added to a MeshWorkload on a range runs on every device of the range with the
-// same runtime args; these set chosen words of a kernel's runtime args per device instead (for example a ring rank or
+// same runtime args; this sets chosen words of a kernel's runtime args per device instead (for example a ring rank or
 // a peer chip's id), so one program can serve a range where each chip needs a few different values.
 //
-// - A field is words [first_word, first_word + values.size()) of the kernel's unique runtime args on `core` (or of
-//   its common runtime args). It must lie within the args the program set there (set them first). Its length is fixed
-//   by its first call; a call with the same first_word and another length, or one that overlaps another field of the
-//   same args, fails.
-// - Words outside every field, and devices without a value for a field, keep the program's own args, including later
-//   changes to them (SetRuntimeArgs / GetRuntimeArgs on the Program).
-// - Calling again replaces the value. Setting values must be serialized with enqueue / trace capture of the workload.
-// - `program_range` names the program by the range it was added with; `device` must lie in it. Values are kept for
-//   every coordinate of the range; each host uses its local ones.
-// - Supported in fast dispatch (eager and trace) and slow dispatch; not for Metal 2.0 (ProgramSpec) programs, service
-//   workloads, emulated devices or light-metal capture.
-void SetRuntimeArgs(
-    MeshWorkload& mesh_workload,
-    const MeshCoordinateRange& program_range,
-    const MeshCoordinate& device,
-    KernelHandle kernel,
-    const CoreCoord& core,
-    uint32_t first_word,
-    ttsl::Span<const uint32_t> values);
-void SetCommonRuntimeArgs(
-    MeshWorkload& mesh_workload,
-    const MeshCoordinateRange& program_range,
-    const MeshCoordinate& device,
-    KernelHandle kernel,
-    uint32_t first_word,
-    ttsl::Span<const uint32_t> values);
-// Batched: `num_words` words for every coordinate of `program_range`, in the range's iteration order
-// (values_in_range_order.size() == range size * num_words). `core` nullopt: common runtime args.
+// - A field is words [first_word, first_word + num_words) of the kernel's unique runtime args on `core` (or of its
+//   common runtime args when `core` is nullopt). It must lie within the args the program set there (set them first).
+//   Its length is fixed by its first call; a call with the same first_word and another length, or one that overlaps
+//   another field of the same args, fails.
+// - `values_in_range_order` holds `num_words` words for every coordinate of `program_range`, in the range's iteration
+//   order (size == range size * num_words). Calling again replaces the values; setting the same values again does not
+//   by itself rebuild the per-device commands at the next enqueue.
+// - Words outside every field keep the program's own args, including later changes to them (SetRuntimeArgs /
+//   GetRuntimeArgs on the Program).
+// - Setting values must be serialized with enqueue / trace capture of the workload.
+// - `program_range` names the program by the range it was added with. Values are kept for every coordinate of the
+//   range; each host uses its local ones.
+// - Supported in fast dispatch (eager and trace) and slow dispatch; not for Metal 2.0 (ProgramSpec) programs (see
+//   experimental::SetProgramRunArgsPerDevice), service workloads, emulated devices or light-metal capture.
 void SetRuntimeArgsPerDevice(
     MeshWorkload& mesh_workload,
     const MeshCoordinateRange& program_range,
@@ -103,14 +89,6 @@ void SetRuntimeArgsPerDevice(
     ttsl::Span<const uint32_t> values_in_range_order);
 // Whether per-device runtime args can be used for a program on `program_range` of `mesh_device`: false for a
 // wraparound range, during light-metal capture and on emulated devices. Callers that can fall back (one program per
-// device) check it first; the setters and enqueue fail otherwise.
+// device) check it first; SetRuntimeArgsPerDevice and enqueue fail otherwise.
 bool PerDeviceRuntimeArgsSupported(MeshDevice& mesh_device, const MeshCoordinateRange& program_range);
-// Drops one device's value of a field: it follows the program's own args again.
-void ClearRuntimeArgs(
-    MeshWorkload& mesh_workload,
-    const MeshCoordinateRange& program_range,
-    const MeshCoordinate& device,
-    KernelHandle kernel,
-    const std::optional<CoreCoord>& core,
-    uint32_t first_word);
 }  // namespace tt::tt_metal::distributed
