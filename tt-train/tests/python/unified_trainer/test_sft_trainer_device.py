@@ -7,6 +7,7 @@
 - the HF export of a loaded model reproduces its checkpoint bit for bit;
 - an exported LoRA adapter makes the same logits in HF PEFT as in ttml;
 - LoRA and full fine-tuning runs learn, save checkpoints HF loads, rotate them, and load them back;
+- a gradient-checkpointed run trains as one that keeps its activations;
 - a run resumed from a checkpoint trains as the run it continues would have;
 - one trainer runs a LoRA job and then a full one.
 """
@@ -19,6 +20,7 @@ import pytest
 
 import ttnn
 import ttml
+from ttml.models import RunnerType
 from ttml.unified_trainer import (
     CheckpointCallback,
     MetricsCallback,
@@ -121,7 +123,16 @@ def write_jsonl(path, rows):
     return str(path)
 
 
-def sft_config(model_dir, tmp_path, checkpoint=None, rows=None, lora=None, init_strategy=None, **overrides):
+def sft_config(
+    model_dir,
+    tmp_path,
+    checkpoint=None,
+    rows=None,
+    lora=None,
+    init_strategy=None,
+    gradient_checkpointing=False,
+    **overrides,
+):
     rows = rows or [{"instruction": "Say the word.", "output": "tenstorrent"}] * 16
     fields = {
         "dataset": {
@@ -132,7 +143,12 @@ def sft_config(model_dir, tmp_path, checkpoint=None, rows=None, lora=None, init_
                 "val_dataset_path": write_jsonl(tmp_path / "val.jsonl", rows[:4]),
             },
         },
-        "model": {"name": str(model_dir), "lora": lora, "init_strategy": init_strategy},
+        "model": {
+            "name": str(model_dir),
+            "lora": lora,
+            "gradient_checkpointing": gradient_checkpointing,
+            "init_strategy": init_strategy,
+        },
         "max_length": MAX_LENGTH,
         "optimizer": {"lr": 1e-2},
         "batch_size": 2,
@@ -310,6 +326,37 @@ def test_a_lora_run_learns_and_saves_rotated_peft_adapters(tiny_llama, tmp_path,
     assert [entry["step"] for entry in history["checkpoints"]] == [8, 8]
     kept = sorted(p.name for p in final.parent.iterdir() if p.is_dir())
     assert len(kept) == 2 and kept[0].startswith("checkpoint_step8_") and kept[1] == "final"
+
+
+def test_a_gradient_checkpointed_run_trains_as_one_that_keeps_its_activations(
+    tiny_llama, tmp_path, no_open_device, char_tokenizer
+):
+    def train(gradient_checkpointing):
+        losses = Losses()
+        trainer = SFTTrainer(callbacks=[losses])
+        try:
+            trainer.setup(
+                sft_config(
+                    tiny_llama,
+                    tmp_path,
+                    checkpoint={"save_strategy": {"type": "none"}},
+                    lora=lora(),
+                    gradient_checkpointing=gradient_checkpointing,
+                )
+            )
+            runner_type = trainer.model.model.config.runner_type
+            trainer.train()
+        finally:
+            trainer.cleanup()
+        return runner_type, losses.train
+
+    checkpointed_runner, checkpointed = train(True)
+    default_runner, default = train(False)
+
+    assert checkpointed_runner == RunnerType.MemoryEfficient and default_runner == RunnerType.Default
+    assert len(checkpointed) == 8 and checkpointed[-1] < checkpointed[0]
+    # The recomputed activations are the ones the forward pass made, so the gradients are the same.
+    np.testing.assert_allclose(checkpointed, default, rtol=1e-3)
 
 
 def test_init_restores_the_adapters(tiny_llama, tmp_path, no_open_device, char_tokenizer):

@@ -121,8 +121,7 @@ class LlamaProvider:
         from ttml.models import RunnerType
         from ttml.models.llama import LlamaConfig
 
-        runner_type = RunnerType.MemoryEfficient if getattr(config, "gradient_checkpointing", False) else None
-        overrides = {} if runner_type is None else {"runner_type": runner_type}
+        overrides = {"runner_type": RunnerType.MemoryEfficient} if config.model.gradient_checkpointing else {}
         try:
             # Sizes the RoPE tables: every training sequence is padded to exactly max_length.
             return LlamaConfig.from_hf(hf_config, max_position_embeddings=config.max_length, **overrides)

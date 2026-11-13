@@ -56,8 +56,6 @@ class SFTTrainerConfig(TrainerConfig):
     max_length: int = Field(gt=0)
     # Clip the global gradient norm to this; 0 disables clipping.
     max_grad_norm: float = Field(default=0.0, ge=0.0)
-    # Recompute activations in the backward pass instead of keeping them.
-    gradient_checkpointing: bool = False
     # What the trainable weights are stored in. float32 keeps master weights for AdamW, and the model computes on
     # their bf16 view: full fine-tuning needs it, as updates at fine-tuning learning rates round away in bf16.
     master_dtype: Literal["bfloat16", "float32"] = "bfloat16"

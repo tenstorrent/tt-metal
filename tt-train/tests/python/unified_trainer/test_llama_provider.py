@@ -88,8 +88,14 @@ def test_a_trainable_config_passes(targets):
     LlamaProvider().check(config(targets), HF_CONFIG)
 
 
-def test_gradient_checkpointing_passes():
-    LlamaProvider().check(config(gradient_checkpointing=True), HF_CONFIG)
+@pytest.mark.parametrize("gradient_checkpointing, runner", [(True, "MemoryEfficient"), (False, "Default")])
+def test_gradient_checkpointing_picks_the_runner_the_model_is_built_with(gradient_checkpointing, runner):
+    from ttml.models import RunnerType
+
+    run_config = config(model={"name": "meta-llama/Llama-3.2-1B", "gradient_checkpointing": gradient_checkpointing})
+    provider = LlamaProvider()
+    provider.check(run_config, HF_CONFIG)
+    assert provider._llama_config(run_config, HF_CONFIG).runner_type == getattr(RunnerType, runner)
 
 
 @pytest.mark.parametrize(

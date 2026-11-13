@@ -13,6 +13,7 @@ model:
     r: 8
     alpha: 16
     target_modules: [q_proj, k_proj, v_proj, o_proj]
+  gradient_checkpointing: true
 
 dataset:
   id: custom
@@ -26,7 +27,6 @@ max_length: 256
 batch_size: 4
 num_epochs: 1
 val_steps_freq: 100
-gradient_checkpointing: true
 seed: 0
 
 optimizer:

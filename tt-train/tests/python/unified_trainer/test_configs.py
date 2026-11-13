@@ -56,6 +56,7 @@ def test_defaults_train_every_weight_without_checkpoints():
     "overrides",
     [
         {"epochs": 2},
+        {"gradient_checkpointing": True},
         {"dataset": {"id": "sst2", "split": "train"}},
         {"dataset": {"id": "custom", "custom_options": {"train_dataset_path": "train.jsonl", "delimiter": ","}}},
         {"model": {"name": "m", "revision": "main"}},
@@ -70,6 +71,7 @@ def test_defaults_train_every_weight_without_checkpoints():
     ],
     ids=[
         "top level",
+        "a model field at the top level",
         "dataset",
         "custom options",
         "model",
@@ -98,6 +100,7 @@ def test_unknown_fields_are_rejected(overrides, expect_error):
         ({"model": "m"}, "model"),
         ({"model": {}}, "model.name"),
         ({"model": {"name": ""}}, "model.name"),
+        ({"model": {"name": "m", "gradient_checkpointing": "sometimes"}}, "model.gradient_checkpointing"),
         ({"model": {"name": "m", "init_strategy": {"type": "last", "path": "runs"}}}, "model.init_strategy.type"),
         ({"model": {"name": "m", "init_strategy": {"type": "resume"}}}, "model.init_strategy.path"),
         ({"optimizer": {"lr": -1.0}}, "optimizer.0.lr"),
@@ -223,17 +226,20 @@ def test_the_dataset_section_names_the_dataset_and_the_options_of_a_custom_one()
     }
 
 
-def test_the_model_section_names_the_model_its_lora_and_the_checkpoint_it_starts_from():
+def test_the_model_section_names_the_model_how_it_is_built_and_the_checkpoint_it_starts_from():
     assert sft().model_dump(mode="json")["model"] == {
         "name": "meta-llama/Llama-3.2-1B",
         "lora": None,
+        "gradient_checkpointing": False,
         "init_strategy": None,
     }
     lora = {"r": 4, "alpha": 8, "target_modules": ["o_proj"]}
     init = {"type": "resume", "path": "runs/checkpoints/final"}
-    assert sft(model={"name": "m", "lora": lora, "init_strategy": init}).model_dump(mode="json")["model"] == {
+    model = {"name": "m", "lora": lora, "gradient_checkpointing": True, "init_strategy": init}
+    assert sft(model=model).model_dump(mode="json")["model"] == {
         "name": "m",
         "lora": {**lora, "dropout": 0.0, "task_type": "CAUSAL_LM"},
+        "gradient_checkpointing": True,
         "init_strategy": init,
     }
 

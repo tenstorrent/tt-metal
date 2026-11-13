@@ -10,6 +10,7 @@ model:
     alpha: 8
     # ttml fuses q, k and v into one layer, and gate and up into another: target all of a group or none.
     target_modules: [q_proj, k_proj, v_proj, o_proj]
+  gradient_checkpointing: true
 
 dataset:
   id: sst2
@@ -19,7 +20,6 @@ batch_size: 8
 num_epochs: 1
 max_steps: 500
 val_steps_freq: 50
-gradient_checkpointing: true
 seed: 0
 
 optimizer:

@@ -23,7 +23,8 @@ class InitStrategy(BaseModel):
 
 
 class ModelConfig(BaseModel):
-    """The model a run trains: the pretrained model it builds, what of it trains, and the checkpoint it starts from."""
+    """The model a run trains: the pretrained model it builds and how, what of it trains, and the checkpoint it
+    starts from."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -31,5 +32,7 @@ class ModelConfig(BaseModel):
     name: str = Field(min_length=1)
     # Train LoRA adapters; unset trains every weight (full fine-tuning).
     lora: Optional[LoraConfig] = None
+    # Build the model to recompute activations in the backward pass instead of keeping them.
+    gradient_checkpointing: bool = False
     # Unset starts from the pretrained weights.
     init_strategy: Optional[InitStrategy] = None

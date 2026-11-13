@@ -88,7 +88,7 @@ Unknown fields are errors, so a typo fails instead of being ignored. Required fi
 | Field | Default | Description |
 |---|---|---|
 | `dataset` | | `id`, one of `sst2`, `alpaca` or `custom`, is required. `custom_options` is required when `id` is `custom`: `train_dataset_path`, `val_dataset_path` (no validation if unset), `file_type` (`json`; `jsonl` works too), `template` (`alpaca`), `column_mapping`. |
-| `model` | | `name`, an HF hub id or a local HF model directory, is required. `lora` (unset) trains LoRA adapters: `r`, `alpha` (the scaling is `alpha / r`), `target_modules`, `dropout` (0.0), `task_type` (`CAUSAL_LM`); unset trains every weight. `init_strategy` (unset) is a checkpoint to start from; see [Starting from a checkpoint](#starting-from-a-checkpoint). |
+| `model` | | `name`, an HF hub id or a local HF model directory, is required. `lora` (unset) trains LoRA adapters: `r`, `alpha` (the scaling is `alpha / r`), `target_modules`, `dropout` (0.0), `task_type` (`CAUSAL_LM`); unset trains every weight. `gradient_checkpointing` (`false`) builds the model to recompute activations in the backward pass, which saves memory. `init_strategy` (unset) is a checkpoint to start from; see [Starting from a checkpoint](#starting-from-a-checkpoint). |
 | `dtype` | `bfloat16` | Must be `bfloat16`. |
 | `max_length` | | Tokens per example: a multiple of 32, at most the model's `max_position_embeddings`. |
 | `batch_size` | | Examples per micro-batch. |
@@ -97,7 +97,6 @@ Unknown fields are errors, so a typo fails instead of being ignored. Required fi
 | `max_steps` | `0` | Stop after this many optimizer steps; 0 runs every epoch. |
 | `max_grad_norm` | `0.0` | Clip the global gradient norm to this; 0 disables clipping. |
 | `val_steps_freq` | `0` | Validate before training and every this many optimizer steps; 0 disables validation. |
-| `gradient_checkpointing` | `false` | Recompute activations in the backward pass to save memory. |
 | `master_dtype` | `bfloat16` | `float32` keeps fp32 master weights for AdamW; full fine-tuning needs it (see below). |
 | `seed` | `0` | Seeds initialization, LoRA dropout and data shuffling. |
 | `optimizer` | | One optimizer, or a list (see [Several optimizers](#several-optimizers)). Each takes `lr` (constant), `modules`, and `type`, which picks the optimizer and the other fields it takes. `adamw` (the default, and the only one so far) takes `weight_decay` (0.0, decoupled), `beta1`, `beta2`, `epsilon`, `amsgrad` and `stochastic_rounding`; unset, those keep ttml's defaults. |
