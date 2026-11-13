@@ -22,7 +22,6 @@ from ...layers.normalization import GroupNorm
 from ...parallel.config import Flux2VaeParallelConfig
 from ...parallel.manager import CCLManager
 from ...pipelines.flux3_klein.packing import latent_shape
-from ...pipelines.flux3_klein.weights_flux3_klein import checkpoint_id
 from ...utils import cache, tensor
 from .vae import VaeAttention
 from .vae_flux2 import Flux2VaeDecoder, Flux2VaeEncoder
@@ -136,7 +135,7 @@ class Flux3KleinVae:
         self._dit_ccl = dit_ccl_manager
         self._dit_sp_axis = dit_sp_axis
         self._h_axis = h_axis
-        model_name = f"flux3_klein_vae_{checkpoint_id(self._snapshot / SUBFOLDER / VAE_WEIGHTS)}"
+        model_name = f"flux3_klein_vae_{cache.checkpoint_id(self._snapshot / SUBFOLDER / VAE_WEIGHTS)}"
         mesh_shape = tuple(device.shape)
         common = {
             "block_out_channels": BLOCK_OUT_CHANNELS,

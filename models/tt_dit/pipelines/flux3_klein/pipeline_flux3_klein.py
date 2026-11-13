@@ -37,7 +37,7 @@ from .packing import DOWNSAMPLING_RATIO, MAX_TEXT_LENGTH, image_ids, latent_shap
 from .prompt_encoder import Flux3KleinPromptEncoder
 from .scheduler import GUIDANCE, STEPS, Flux3KleinScheduler
 from .upsampler_flux3_klein import Flux3KleinSharedUpsampler, reserve_upsampler_ranges
-from .weights_flux3_klein import checkpoint_id, resolve_weights_dir
+from .weights_flux3_klein import resolve_weights_dir
 
 SIZES = (1024, 2048, 4096)
 DEFAULT_SIZE = 2048
@@ -196,7 +196,7 @@ class Flux3KleinPipeline:
             )
             cache.load_model(
                 transformer,
-                model_name=f"flux3_klein_{model}_{checkpoint_id(Path(snapshot) / 'model.safetensors')}",
+                model_name=f"flux3_klein_{model}_{cache.checkpoint_id(Path(snapshot) / 'model.safetensors')}",
                 subfolder=f"transformer_D{EARLY_DEPTH}_S{SINGLE_DEPTH}{'_flowmap' if transformer.flow_map else ''}",
                 parallel_config=parallel,
                 mesh_shape=mesh_shape,

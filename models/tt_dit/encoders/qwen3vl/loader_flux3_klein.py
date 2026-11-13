@@ -18,7 +18,6 @@ from safetensors import safe_open
 
 from ...parallel.config import EncoderParallelConfig
 from ...parallel.manager import CCLManager
-from ...pipelines.flux3_klein.weights_flux3_klein import checkpoint_id
 from ...utils import cache
 from .model_qwen3vl import Qwen3VlTextEncoder
 
@@ -91,7 +90,7 @@ def build_flux3_klein_text_encoder(
     shards = sorted((Path(snapshot) / SUBFOLDER).glob("model-*.safetensors"))
     cache.load_model(
         encoder,
-        model_name=f"flux3_klein_text_encoder_{checkpoint_id(*shards)}",
+        model_name=f"flux3_klein_text_encoder_{cache.checkpoint_id(*shards)}",
         subfolder=f"text_encoder_L{NUM_LAYERS}",
         parallel_config=parallel_config,
         mesh_shape=tuple(mesh_device.shape),
