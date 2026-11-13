@@ -4,8 +4,7 @@
 // Grouped MoE down, reader (BRISC) (dflash/grouped_moe.py GroupedMoE.down). Units (gmoe_common.hpp): (expert e, output
 // column tile c of NU = hidden / 32); per expert its slots' rows of A_g (KD = 23 K tiles each: the expert's local
 // intermediate columns, gmoe_gu_*), per unit the down weight tiles of column c at the expert's K tiles g0(e) + k (one
-// page of the relaid weights, gmoe_relayout.cpp; the K tile the expert shares with a neighbour has the neighbour's
-// 16 rows zeroed, so A_g's neighbour half of that tile adds nothing).
+// page of the relaid weights, gmoe_relayout.cpp; the expert's padded K rows are zero, as are A_g's padded columns).
 //
 // common runtime args: [plan table, ag, down (relaid)]
 // compile-time args: [cb_scr, cb_meta_c, cb_meta_w, cb_a, cb_w, NC, GX, KD, NU, WC, CC, MAXS,

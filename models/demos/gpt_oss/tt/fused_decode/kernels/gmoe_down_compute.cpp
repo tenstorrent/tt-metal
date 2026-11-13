@@ -15,6 +15,14 @@
 #include "api/compute/matmul.h"
 #include "api/compute/pack.h"
 
+// GMOE_W_TRANSPOSED: the weight tiles are stored transposed within themselves (the batched dense decode experts in
+// K-GPTQ, experts/weights.py DenseDecodeExpertWeights.tile_transposed); the matmuls transpose them back on unpack.
+#ifdef GMOE_W_TRANSPOSED
+constexpr bool W_T = true;
+#else
+constexpr bool W_T = false;
+#endif
+
 void kernel_main() {
     constexpr uint32_t cb_meta = get_compile_time_arg_val(0);
     constexpr uint32_t cb_a = get_compile_time_arg_val(1);
@@ -51,10 +59,10 @@ void kernel_main() {
                     cb_wait_front(cb_w, KD);
                     for (uint32_t g = 0; g < n; g += RT) {
                         const uint32_t rt = n - g < RT ? n - g : RT;
-                        matmul_block_init(cb_a, cb_w, 0, 1, rt, KD);
+                        matmul_block_init(cb_a, cb_w, W_T, 1, rt, KD);
                         tile_regs_acquire();
                         for (uint32_t k = 0; k < KD; ++k) {
-                            matmul_block(cb_a, cb_w, g * KD + k, k, 0, false, 1, rt, KD);
+                            matmul_block(cb_a, cb_w, g * KD + k, k, 0, W_T, 1, rt, KD);
                         }
                         tile_regs_commit();
                         tile_regs_wait();
@@ -82,10 +90,10 @@ void kernel_main() {
         cb_wait_front(cb_w, KD);
         for (uint32_t g = 0; g < m; g += RT) {
             const uint32_t rt = m - g < RT ? m - g : RT;
-            matmul_block_init(cb_a, cb_w, 0, 1, rt, KD);
+            matmul_block_init(cb_a, cb_w, W_T, 1, rt, KD);
             tile_regs_acquire();
             for (uint32_t k = 0; k < KD; ++k) {
-                matmul_block(cb_a, cb_w, g * KD + k, k, 0, false, 1, rt, KD);
+                matmul_block(cb_a, cb_w, g * KD + k, k, 0, W_T, 1, rt, KD);
             }
             tile_regs_commit();
             tile_regs_wait();

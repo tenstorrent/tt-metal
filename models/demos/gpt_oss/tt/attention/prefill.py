@@ -6,7 +6,6 @@ from loguru import logger
 import ttnn
 
 from ..batched_prefill import fill_batch_idx
-from ..fused_decode.config import FULL_FIDELITY
 from .config import AttentionConfig, ProgramConfig
 from .operations import (
     apply_allgather_and_slice,
@@ -19,7 +18,7 @@ from .operations import (
     is_shape_fused_mm_rs_supported,
     split_qkv_heads_prefill,
 )
-from .weights import AttentionWeights
+from .weights import AttentionWeights, has_unpadded_o_proj
 
 # (seq_len, sliding window, prefill_l1_end, tuned q / k chunks) -> index of the prefill SDPA candidate that builds
 _SDPA_FIT = {}
@@ -32,7 +31,7 @@ def prefill_sequence_parallel_supported(mesh_config, weights: AttentionWeights, 
     tp = mesh_config.tp
     return (
         tp > 1
-        and weights.o_proj_prefill is not None
+        and has_unpadded_o_proj(weights)
         and not is_shape_fused_mm_rs_supported(x)
         and x.padded_shape[-2] % (ttnn.TILE_SIZE * tp) == 0
     )
@@ -91,7 +90,7 @@ def prefill_forward(
     # (DecoderLayer.__call__); a bf8 post-attention residual fails the v4 per-prompt guard. Other paths keep bf16 up to
     # 32K. Both 32K gates use the per-user length seq_len (DecoderLayer.__call__ also divides by batch_size), not the
     # total token count.
-    if not FULL_FIDELITY and (seq_len > 32 * 1024 or weights.o_proj_prefill is not None):
+    if seq_len > 32 * 1024 or has_unpadded_o_proj(weights):
         activation_dtype = ttnn.bfloat8_b
     else:
         activation_dtype = ttnn.bfloat16
@@ -100,11 +99,13 @@ def prefill_forward(
     if seq_len <= 1:
         raise ValueError(f"Prefill mode requires seq_len>1, got {seq_len}. Use decode mode for single tokens.")
 
-    # QKV projection
+    # QKV projection (batch-1 fused model: on the decode stream itself, apply_qkv_projection)
     xqkv_fused = apply_qkv_projection(
         hidden_states,
         weights,
-        program_config.get_prefill_proj_config(mesh_device, "qkv", hidden_states, weights.wqkv, mesh_config.tp),
+        None
+        if weights.qkv_prefill_op is not None
+        else program_config.get_prefill_proj_config(mesh_device, "qkv", hidden_states, weights.wqkv, mesh_config.tp),
     )
     hidden_states.deallocate(True)  # Free input activations after projection
 
@@ -218,10 +219,9 @@ def prefill_forward(
     tt_v.deallocate(True)
 
     # Every o_proj path casts its input to bf8 first; casting here instead is the same per-tile cast.
-    if not FULL_FIDELITY:
-        tt_sdpa_out_bf8 = ttnn.typecast(tt_sdpa_out, ttnn.bfloat8_b)
-        tt_sdpa_out.deallocate(True)
-        tt_sdpa_out = tt_sdpa_out_bf8
+    tt_sdpa_out_bf8 = ttnn.typecast(tt_sdpa_out, ttnn.bfloat8_b)
+    tt_sdpa_out.deallocate(True)
+    tt_sdpa_out = tt_sdpa_out_bf8
 
     # Flatten back for output projection: [B, 1, S, H] -> [1, 1, B*S, H]
     if batch_size > 1:
@@ -239,15 +239,18 @@ def prefill_forward(
         rs_out = apply_output_projection_fused_rs(tt_sdpa_out, weights, mesh_config, ccl_manager)
         tt_sdpa_out.deallocate(True)
         tt_out_result = apply_allgather_and_slice(rs_out, mesh_config, ccl_manager, hidden_size)
-    elif mesh_config.tp > 1 and weights.o_proj_prefill is not None:
+    elif mesh_config.tp > 1 and has_unpadded_o_proj(weights):
         tt_out_result = apply_output_projection_allreduce_prefill(
             tt_sdpa_out,
             weights,
             activation_dtype,
             mesh_config,
             ccl_manager,
-            # apply_output_projection casts its input to bf8 before the matmul.
-            program_config.get_prefill_proj_config(
+            # apply_output_projection casts its input to bf8 before the matmul (batch-1 fused model: the matmul reads
+            # the decode stream itself, no program config).
+            None
+            if weights.o_proj_prefill_op is not None
+            else program_config.get_prefill_proj_config(
                 mesh_device, "o", tt_sdpa_out, weights.o_proj_prefill, mesh_config.tp, in0_dtype=ttnn.bfloat8_b
             ),
             scatter=sequence_parallel,

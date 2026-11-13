@@ -61,13 +61,12 @@ def book_prompts(tokenizer, n, isl):
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize("users", [32, 128], ids=["users_32", "users_128"])
 @parametrize_dflash_mesh()
-def test_dflash_batched(mesh_device, device_params, users, monkeypatch):
+def test_dflash_batched(mesh_device, device_params, users):
     import models.demos.gpt_oss.demo.text_demo as text_demo
     from models.demos.gpt_oss.config import MeshConfig, ModeConfig
     from models.demos.gpt_oss.tt.dflash.batched import BatchedDFlashRunner
     from models.tt_transformers.tt.generator import Generator
 
-    monkeypatch.setenv("GPT_OSS_KV_FILE_CACHE", "0")  # (a fresh K / V pool: no file-cached cache)
     fetch_books(ISL)
     U = users
     sb = ISL // 64  # a prompt's 64-position blocks

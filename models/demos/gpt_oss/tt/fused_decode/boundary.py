@@ -43,9 +43,10 @@ import ttnn
 
 from .config import DECODE_BOUNDARY_CCL, DECODE_BOUNDARY_EARLY_SUM, DECODE_BOUNDARY_LINKS, residual_memory_config
 
-# TEMP experiment: GPT_OSS_BOUNDARY_FIDELITY=HiFi3 / HiFi4 for the boundary RMSNorm's multiplies. At HiFi2 the SrcB
-# operand of each multiply keeps hidden + 6 mantissa bits (tech_reports/matrix_engine): the rsqrt factor broadcast over
-# the normed vector, gamma and one side of the squares are truncated toward zero.
+# GPT_OSS_BOUNDARY_FIDELITY: math fidelity of the boundary RMSNorm's multiplies (default HiFi2; HiFi3 in the
+# gpt-oss-20b release settings). At HiFi2 the SrcB operand of each multiply keeps hidden + 6 mantissa bits
+# (tech_reports/matrix_engine): the rsqrt factor broadcast over the normed vector, gamma and one side of the squares are
+# truncated toward zero.
 BOUNDARY_MATH_FIDELITY = getattr(ttnn.MathFidelity, os.environ.get("GPT_OSS_BOUNDARY_FIDELITY", "HiFi2"))
 
 KERNEL_DIR = Path(__file__).parent / "kernels"
@@ -549,7 +550,7 @@ class DecodeBoundary:
         compute_ct += [_f32_bits(1.0 / self.hidden), _f32_bits(self.eps), 1 if norm else 0, cb_y]
         reader_rt = ttnn.RuntimeArgs()
         reader_rt[self.core.x][self.core.y] = [gamma_t.buffer_address(), sem_addr, residual.buffer_address()]
-        # TEMP experiment (fused_decode.config.DECODE_BOUNDARY_EARLY_SUM): residual + slots published before gamma
+        # fused_decode.config.DECODE_BOUNDARY_EARLY_SUM: residual + slots published before gamma
         reader_defines = [("BND_EARLY_SUM", "1")] if DECODE_BOUNDARY_EARLY_SUM else []
 
         def kernels(coord):

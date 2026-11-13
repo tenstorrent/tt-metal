@@ -27,7 +27,6 @@ Usage:
 """
 
 import ttnn
-
 from models.demos.gpt_oss.config import MeshConfig, ModeConfig
 
 from .config import ExpertConfig, ProgramConfig
@@ -60,8 +59,7 @@ class Experts:
         indexed_decode=False,
         dense_decode_tokens=None,
         decode_weight_dtype=None,
-        decode_gain=None,
-        decode_state_dict=None,
+        prefill_weights=True,
     ):
         """
         Initialize expert layers.
@@ -81,12 +79,14 @@ class Experts:
                 dense_moe_decode_supported): every expert is computed for every token by two DRAM-sharded matmuls
                 over all experts side by side (decode_forward_dense).
             decode_weight_dtype: Weight dtype of the fused decode streams (indexed_decode; default weight_dtype).
+            prefill_weights: Load the per-expert prefill weights. False when every prefill runs on the routed
+                experts (experts/prefill_routed.py, MLP.__call__ pads any prefill into it): they would be an unused
+                copy of the experts.
         """
         self.config = config
         self.mesh_config = mesh_config
         self.weight_dtype, self.tensor_cache_path = weight_dtype, tensor_cache_path
         self.decode_weight_dtype = decode_weight_dtype or weight_dtype
-        self.decode_gain = decode_gain  # fused decode MoE gain (fused_decode/config.py moe_decode_gain)
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
         self.program_config = program_config
@@ -96,7 +96,7 @@ class Experts:
         # 128k-token context needs at batch 32).
         self.weights = None
         self.prefill_sparsity = None
-        if not dense_decode_tokens:
+        if not dense_decode_tokens and prefill_weights:
             self.weights = load_expert_weights(
                 mesh_device=mesh_device,
                 config=config,
@@ -117,8 +117,7 @@ class Experts:
             self.decode_weights = load_decode_expert_weights(
                 mesh_device=mesh_device,
                 config=config,
-                # decode_state_dict: the checkpoint experts when the prefill ones are substituted (mlp.py)
-                state_dict=state_dict if decode_state_dict is None else decode_state_dict,
+                state_dict=state_dict,
                 mesh_config=mesh_config,
                 weight_dtype=self.decode_weight_dtype,
                 tensor_cache_path=tensor_cache_path,
@@ -147,7 +146,7 @@ class Experts:
             self.dense_decode_plan = DenseDecodePlan(
                 mesh_device,
                 config.hidden_size,
-                self.dense_decode_weights.intermediate_local,
+                self.dense_decode_weights.intermediate_padded,
                 config.num_experts,
                 dense_decode_tokens,
             )
@@ -160,6 +159,7 @@ class Experts:
     def _create_prefill_sparsity(self):
         """Create prefill sparsity mask once and reuse."""
         import torch
+
         from models.demos.gpt_oss.config import Mode
 
         prefill_config = self.mesh_config.get_config(Mode.PREFILL)
@@ -209,7 +209,6 @@ class Experts:
                 weights=self.decode_weights,
                 stream=self.decode_stream,
                 send=self.ccl_manager.decode_boundary_send(self.config.hidden_size, "moe"),
-                gain=self.decode_gain,
             )
         if is_decode and self.dense_decode_weights is not None:
             partial = decode_forward_dense(
@@ -228,6 +227,7 @@ class Experts:
             )
         if self.dense_decode_weights is not None:
             return self._prefill_forward_dense(hidden_states, topk_expert_weights)
+        assert self.weights is not None, "these experts hold no prefill weights: prefill runs on the routed experts"
         # Determine mode based on sequence length. Decode with several tokens per device (batch > 1 without expert
         # parallelism) takes the prefill path: each token's experts are the same computation either way, and the
         # one-token decode ops below only accept a single token.

@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""TEMP experiment (GPT_OSS_DECODE_EXPERTS_SPLIT=1): the routed experts' MXFP4 weights held EXACTLY by the decode
-streams, as a BFP4 part plus a BFP2 part (the compressed custom_mm reads both formats in one stream).
+"""GPT_OSS_DECODE_EXPERTS_SPLIT=1 (gpt-oss-20b release settings): the routed experts' MXFP4 weights held EXACTLY by the
+decode streams, as a BFP4 part plus a BFP2 part (the compressed custom_mm reads both formats in one stream).
 
 MXFP4 stores each weight as sign x {0, 0.5, 1, 1.5, 2, 3, 4, 6} x 2^s, one s per 32 input (K) values of an output
 column. In units u = 2^(s - 1): magnitudes {0, 1, 2, 3, 4, 6, 8, 12}. BFP4 (16 values share an exponent, 3-bit
@@ -133,7 +133,7 @@ def round_k(w):
     return torch.where(m > 0, torch.clamp(torch.round(g / step), -7, 7) * step, g).reshape(w.shape)
 
 
-def pack_columns(w, bias, with_round=False, w_round=None, b_round=None):
+def pack_columns(w, bias, with_round=False, w_round=None):
     """w [E, K, N] exact MXFP4 values, bias [E, N] -> (p4 [E, N/32, (K/32 + 1) * 576], p2 [E, N/32, K/32 * 320]) uint8:
     per column the BFP4 small tiles + the BFP4 bias tile, and the BFP2 big tiles. with_round: also r4 (as p4) = the
     weights rounded to BFP4 along K (round_k) + the same bias tile, read for the routed ranks held inexactly
@@ -149,39 +149,7 @@ def pack_columns(w, bias, with_round=False, w_round=None, b_round=None):
         return torch.cat([ps, pb], -1), pg
     wr = round_k(w) if w_round is None else w_round
     pr = pack_bfp(stored_tiles(wr).reshape(-1, TILE, TILE), 3).reshape(E, nt, kt * BFP4_BYTES)
-    pbr = pb  # b_round: the rounded part's own bias (its columns in another neuron order)
-    if b_round is not None:
-        pbr = pack_bfp(bias_tiles_t(b_round.reshape(E, nt, TILE)).reshape(-1, TILE, TILE), 3).reshape(E, nt, BFP4_BYTES)
-    return torch.cat([ps, pb], -1), pg, torch.cat([pr, pbr], -1)
-
-
-def _q4_rows_n(x):
-    """bfloat4_b RNE of the rows of x [..., N] with 16-value groups along N (the device conversion)."""
-    g = x.float().reshape(*x.shape[:-1], -1, FACE)
-    m = g.abs().amax(-1, keepdim=True)
-    step = torch.pow(2.0, torch.floor(torch.log2(m.clamp_min(1e-38))) - 2)
-    return torch.where(m > 0, torch.clamp(torch.round(g / step), -7, 7) * step, g).reshape(x.shape)
-
-
-def pack_columns_pkg(w, bias, nbias=4):
-    """The package's bfloat4_b tiles in their normal (not transposed) orientation, for the inexact routed ranks
-    (GPT_OSS_DECODE_SPLIT_REST_PKG): w [E, K, N] already on the bfloat4_b grid with 16-value groups along N (the GPTQ
-    build), bias [E, N] -> [E, N/32, (K/32 + 1) * 576] uint8: per column the K tiles, then a bias tile whose rows
-    0..nbias-1 hold the bias as nbias BFP4 residual terms (the activation's bias tile carries the multipliers there)."""
-    E, K, N = w.shape
-    tiles = w.float().reshape(E, K // TILE, TILE, N // TILE, TILE).permute(0, 3, 1, 2, 4)  # [E, nt, kt, k, n]
-    nt, kt = tiles.shape[1:3]
-    pw = pack_bfp(tiles.reshape(-1, TILE, TILE), 3).reshape(E, nt, kt * BFP4_BYTES)
-    rows, r = [], bias.float()
-    for _ in range(nbias):
-        t = _q4_rows_n(r)
-        rows.append(t)
-        r = r - t
-    bt = torch.zeros(E, N, TILE)
-    bt[..., :nbias] = torch.stack(rows, -1)
-    bt = bt.reshape(E, nt, TILE, TILE).transpose(-1, -2)  # tile [k = bias row, n]
-    pb = pack_bfp(bt.reshape(-1, TILE, TILE), 3).reshape(E, nt, BFP4_BYTES)
-    return torch.cat([pw, pb], -1)
+    return torch.cat([ps, pb], -1), pg, torch.cat([pr, pb], -1)
 
 
 def split_spec(weight_dtype):
@@ -220,7 +188,7 @@ def gate_up_sequences(k_tiles):
     return s4, s2
 
 
-def down_sequences(seg_k_tiles, num_sel, ranks=None, compact=False):
+def down_sequences(seg_k_tiles, num_sel, ranks=None):
     """Down column block (num_sel expert segments of seg_k_tiles + 1 activation tiles): call 1 = per expert BFP4 small
     (or rounded) tiles + bias tile; call 2 = for the first `ranks` experts (default all) BFP2 big tiles + one zero tile
     that steps past the bias multiplier tile (+ a zero tile to make the count even)."""
@@ -230,21 +198,10 @@ def down_sequences(seg_k_tiles, num_sel, ranks=None, compact=False):
         exact == 0
     ):  # no exact rank: the BFP2 call is skipped (SPLIT_NO_BFP2); two placeholder tiles keep the arrays valid
         return s4, [(1, FMT_ZERO), (1, FMT_ZERO)]
-    if compact:  # the BFP2 call reads a compact activation buffer without the bias tiles: BFP2 tiles only, no stalls
-        s2 = [(1, FMT_BFP2)] * (seg_k_tiles * exact)
-    else:
-        s2 = ([(1, FMT_BFP2)] * seg_k_tiles + [(1, FMT_ZERO)]) * exact
+    s2 = ([(1, FMT_BFP2)] * seg_k_tiles + [(1, FMT_ZERO)]) * exact
     if len(s2) % 2:
         s2.append((1, FMT_ZERO))
     return s4, s2
-
-
-def even_bfp4(n_tiles):
-    """n_tiles BFP4 tiles reading the activation from its first tile (+ a zero tile to make the count even)."""
-    s = [(1, FMT_BFP4)] * n_tiles
-    if len(s) % 2:
-        s.append((1, FMT_ZERO))
-    return s
 
 
 def page_bytes(total, max_packet=16384, align=64):
