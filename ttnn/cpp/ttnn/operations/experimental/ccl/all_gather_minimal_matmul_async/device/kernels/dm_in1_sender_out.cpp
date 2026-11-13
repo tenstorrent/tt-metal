@@ -548,8 +548,8 @@ void kernel_main() {
                         static_assert(N_block_tiles % chunk_w == 0, "a chunk is a whole number of columns");
                         const uint32_t chunk_bytes = chunk_tiles * in1_tile_size;
                         const uint32_t block_l1 = in1_start_address;
-                        // Chunks only run on a Ring with K_block_tiles | K per device: no K row is past the tensor,
-                        // so there is nothing to zero-fill. Columns past it are skipped (their slots kept).
+                        // The factory picks chunks only with K_block_tiles | K per device: no K row is past the
+                        // tensor, so there is nothing to zero-fill. Columns past it are skipped (their slots kept).
                         ASSERT(k_block_left_tile + k_left_tiles <= in1_shape.logical_d0);
                         ASSERT(k_block_right_tile + k_right_tiles <= in1_shape.logical_d0);
                         auto read_rows = [&](uint32_t dst, uint32_t k_start, uint32_t k_end, uint32_t n0) {

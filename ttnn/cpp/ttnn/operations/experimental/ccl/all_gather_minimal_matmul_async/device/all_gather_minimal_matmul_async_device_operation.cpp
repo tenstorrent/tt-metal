@@ -197,14 +197,10 @@ void AllGatherMinimalMatmulAsyncOp::validate_on_program_cache_miss(
     // Device/storage checks, repeated on every cache hit.
     validate_operands_on_device(tensor_args);
 
-    if (tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig())) {
-        TT_FATAL(
-            attributes.topology == ttnn::ccl::Topology::Ring,
-            "all_gather_minimal_matmul_async on Fabric2D supports Ring only (Linear's N-1 hop wrap is a 1D route)");
-        TT_FATAL(
+    TT_FATAL(
+        !tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig()) ||
             !tensor_args.persistent_weight_buffer.has_value(),
-            "all_gather_minimal_matmul_async: FSDP is not ported to Fabric2D");
-    }
+        "all_gather_minimal_matmul_async: FSDP is not ported to Fabric2D");
 
     // Layout requirements: all inputs must be TILE layout
     TT_FATAL(

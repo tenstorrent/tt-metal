@@ -7,6 +7,7 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/experimental/fabric/pipeline_builder.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
@@ -304,7 +305,8 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
     uint32_t fsdp_ring_index,
     const std::vector<ttnn::GlobalSemaphore>& fsdp_semaphore,
     ttnn::ccl::Topology fsdp_topology,
-    bool fuse_swiglu = false) {
+    bool fuse_swiglu = false,
+    const std::optional<ttnn::MeshCoordinate>& linear_far_end_coord = std::nullopt) {
     tt::tt_metal::ProgramDescriptor desc;
     auto* device = input_tensor.device();
 
@@ -492,6 +494,9 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
     // Fabric2D / TorusXY: the kernels route by fabric node (chip, mesh) with HybridMeshPacketHeader instead of
     // by hop count. get_forward_backward_line_unicast_configuration already returns (mesh, chip) on 2D.
     const bool fabric_2d = tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig());
+    // Fabric2D Linear: the 1D path's one-way ring (each rank sends to rank - 1, rank 0 to the last rank), routed by
+    // fabric node. The two ends of the line reach each other through it (linear_far_end_coord).
+    const bool linear_2d = fabric_2d && topology == ttnn::ccl::Topology::Linear;
     // Fabric2D (the KDA Galaxy path): input blocks reach a whole row or column of the matmul grid in one multicast
     // write instead of hopping core to core. Every other configuration keeps the core-to-core relay.
     const bool mcast = fabric_2d && !transpose_core_grid;
@@ -725,12 +730,15 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
     // direction now applies to every device. Ring is genuinely bidirectional, so keep the
     // neighbor-existence gate there.
     const uint32_t in0_uni_dir = backward_coord.has_value() ? 1u : 0u;
-    const auto mux_connection_valid = [&backward_coord, &forward_coord, &topology, in0_uni_dir](const uint32_t dir) {
-        if (topology == ttnn::ccl::Topology::Linear) {
-            return dir == in0_uni_dir;
-        }
-        return (dir && backward_coord.has_value()) || (!dir && forward_coord.has_value());
-    };
+    // Fabric2D Linear keeps both directions, as Ring does: a rank sends its blocks one way and announces its entry
+    // (the barrier in dm_in0_sender.cpp) to the rank that writes into it, the other way.
+    const auto mux_connection_valid =
+        [&backward_coord, &forward_coord, &topology, linear_2d, in0_uni_dir](const uint32_t dir) {
+            if (topology == ttnn::ccl::Topology::Linear && !linear_2d) {
+                return dir == in0_uni_dir;
+            }
+            return (dir && backward_coord.has_value()) || (!dir && forward_coord.has_value());
+        };
 
     std::vector<tt::tt_metal::CoreRange> mux_core_ranges;
     mux_core_ranges.reserve(num_mux_cores);
@@ -854,11 +862,13 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
     }
     // in1 in column chunks: the injector multicasts each K block chunk by chunk (the first chunk in the in1_mcast
     // round, each later one on its own pipe) and the compute starts on the first chunk while the rest is in flight.
-    // For one full N block per core (the chunk-major layout assumes it). A chunk is the widest whole number of
-    // subblocks that divides the block in two or three chunks and whose reads fit one transaction id: each chunk costs
-    // a multicast and a flag, so a few wide chunks beat many narrow ones.
+    // For one full N block per core (the chunk-major layout assumes it) and whole K blocks per device (a Linear tail
+    // block's padding rows take the zero-filling block read). A chunk is the widest whole number of subblocks that
+    // divides the block in two or three chunks and whose reads fit one transaction id: each chunk costs a multicast and
+    // a flag, so a few wide chunks beat many narrow ones.
     uint32_t in1_chunk_w = 0;
-    if (mcast && N_blocks_per_core == 1 && N_tiles_per_core == N_block_tiles) {
+    if (mcast && N_blocks_per_core == 1 && N_tiles_per_core == N_block_tiles &&
+        K_tiles_per_device % K_block_tiles == 0) {
         for (uint32_t w = subblock_w; 2 * w <= N_block_tiles; w += subblock_w) {
             if (N_block_tiles % w == 0 && N_block_tiles / w <= kMaxIn1Chunks &&
                 w * K_block_tiles <= kMaxReadsPerTransactionId) {
@@ -890,12 +900,36 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         in1_defines["USE_MUX"] = "1";
     }
 
+    // Fabric2D Linear: the two ends of the line address each other by fabric node (rank 0 sends its blocks to the last
+    // rank, the last rank announces its entry to rank 0). Both go along the line, so the first hop must be the link to
+    // the line neighbour; on an axis the fabric wraps it is not.
+    std::optional<tt::tt_fabric::FabricNodeId> linear_far_end_node;
+    if (linear_2d && (ring_index == 0 || ring_index == ring_size - 1)) {
+        TT_FATAL(
+            linear_far_end_coord.has_value(), "Fabric2D Linear: rank {} needs the far end of the line", ring_index);
+        linear_far_end_node = device->get_fabric_node_id(*linear_far_end_coord);
+        const auto& line_neighbour = ring_index == 0 ? forward_coord : backward_coord;
+        TT_FATAL(line_neighbour.has_value(), "Fabric2D Linear needs a ring of at least 2 devices");
+        const auto self_node = device->get_fabric_node_id(sender_device_coord);
+        TT_FATAL(
+            tt::tt_fabric::pipeline_get_forwarding_direction(*device, self_node, *linear_far_end_node) ==
+                tt::tt_fabric::pipeline_get_forwarding_direction(
+                    *device, self_node, device->get_fabric_node_id(*line_neighbour)),
+            "all_gather_minimal_matmul_async: Fabric2D Linear needs the line's far end routed along the line; this "
+            "axis wraps, so use Ring");
+    }
+
     // Linear uni-ring routing: Dev 0's forward unicast routes N-1 hops to Dev N-1
     // (rather than 1 hop to Dev 1). fabric_set_unicast_route<false>(hdr, distance)
     // sends the packet to the device `distance` hops away, with no intermediate
     // deliveries.
+    // On Fabric2D the same send is addressed to the last rank's fabric node.
     if (topology == ttnn::ccl::Topology::Linear && ring_index == 0) {
-        unicast_forward_args[1] = ring_size - 1;  // distance_in_hops = N-1
+        if (linear_2d) {
+            unicast_forward_args = {*linear_far_end_node->mesh_id, linear_far_end_node->chip_id};
+        } else {
+            unicast_forward_args[1] = ring_size - 1;  // distance_in_hops = N-1
+        }
     }
 
     const bool fsdp_fused = persistent_weight_buffer.has_value();
@@ -1469,6 +1503,38 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         desc.kernels[kComputeKernelIdx].emplace_common_runtime_args(compute_common_args);
     }
 
+    // Fabric2D: what an in0 fabric core does with the fabric, after its mux args: [sends, announces, announce mesh,
+    // announce chip, waits] (dm_in0_sender.cpp). The backward sender (in0_bwd_idx) uses the link to forward_coord, the
+    // forward sender the link to backward_coord. A core announces its device's entry to the rank that writes into
+    // this device, and a sending core waits for the entry of the rank it writes into.
+    //   Ring: both send, each announces to and waits for the neighbour it sends to.
+    //   Linear: the forward sender sends to rank - 1 and the backward sender of rank 0 to the last rank. Rank r is
+    //   written by rank r + 1 (rank 0 for the last rank), so the backward sender announces to rank r + 1 and the
+    //   last rank's forward sender to rank 0.
+    const auto append_fabric_2d_roles = [&](std::vector<uint32_t>& args, bool backward_sender) {
+        const bool connected = mux_connection_valid(backward_sender ? 0 : 1);
+        const auto& neighbour = backward_sender ? forward_coord : backward_coord;
+        bool sends = connected;
+        std::optional<tt::tt_fabric::FabricNodeId> announce_node;
+        if (connected) {
+            announce_node = device->get_fabric_node_id(*neighbour);
+        }
+        if (linear_2d) {
+            if (backward_sender) {
+                sends = connected && ring_index == 0;
+            } else {
+                announce_node = (ring_index == ring_size - 1) ? linear_far_end_node : std::nullopt;
+            }
+        }
+        args.insert(
+            args.end(),
+            {static_cast<uint32_t>(sends),
+             static_cast<uint32_t>(announce_node.has_value()),
+             announce_node.has_value() ? static_cast<uint32_t>(*announce_node->mesh_id) : 0u,
+             announce_node.has_value() ? static_cast<uint32_t>(announce_node->chip_id) : 0u,
+             static_cast<uint32_t>(sends)});
+    };
+
     for (uint32_t core_id = 0; core_id < num_cores; ++core_id) {
         tt::tt_metal::CoreCoord core = cores.at(core_id);
         tt::tt_metal::CoreCoord virtual_core = device->worker_core_from_logical_core(core);
@@ -1618,6 +1684,9 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
                     in0_term_sync_id,
                     in0_args,
                     in0_mux_client_semaphore_ids);
+            }
+            if (fabric_2d) {
+                append_fabric_2d_roles(in0_args, is_in0_backward_sender);
             }
         }
         if (in0_core_order_index == 0) {
@@ -1891,7 +1960,8 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory(
     uint32_t fsdp_ring_index,
     const std::vector<ttnn::GlobalSemaphore>& fsdp_semaphore,
     ttnn::ccl::Topology fsdp_topology,
-    bool fuse_swiglu) {
+    bool fuse_swiglu,
+    const std::optional<MeshCoordinate>& linear_far_end_coord) {
     return ::detail::all_gather_minimal_matmul_async_factory_helper(
         input_tensor,
         weight_tensor,
@@ -1926,7 +1996,8 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory(
         fsdp_ring_index,
         fsdp_semaphore,
         fsdp_topology,
-        fuse_swiglu);
+        fuse_swiglu,
+        linear_far_end_coord);
 }
 
 tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
@@ -1942,6 +2013,20 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
 
     std::optional<MeshCoordinate> backward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
         tensor_args.input_tensor, mesh_coordinate, -1, attributes.topology, attributes.cluster_axis);
+
+    // Fabric2D Linear: the two ends of the line send to each other (factory helper, linear_far_end_coord).
+    std::optional<MeshCoordinate> linear_far_end_coord;
+    if (attributes.topology == ttnn::ccl::Topology::Linear &&
+        tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig()) && attributes.ring_size > 1 &&
+        (device_index == 0 || device_index == attributes.ring_size - 1)) {
+        const int far_end_offset = static_cast<int>(attributes.ring_size) - 1;
+        linear_far_end_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
+            tensor_args.input_tensor,
+            mesh_coordinate,
+            device_index == 0 ? far_end_offset : -far_end_offset,
+            attributes.topology,
+            attributes.cluster_axis);
+    }
 
     // FSDP neighbor lookup along fsdp_cluster_axis (only when FSDP fusion is active).
     std::optional<MeshCoordinate> fsdp_forward_coord;
@@ -2005,7 +2090,8 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
         fsdp_ring_index,
         attributes.fsdp_semaphore,
         attributes.fsdp_topology,
-        attributes.fuse_swiglu);
+        attributes.fuse_swiglu,
+        linear_far_end_coord);
 }
 
 tt::tt_metal::WorkloadDescriptor AllGatherMinimalMatmulAsyncProgramFactory::create_workload_descriptor(
