@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Per-device runtime args of a MeshWorkload program (distributed::SetRuntimeArgs on a MeshWorkload): one program on
-// the whole mesh, chosen runtime-arg words set per device. The kernel writes its unique and common runtime args to L1,
-// read back per device.
+// Per-device runtime args of a MeshWorkload program (distributed::SetRuntimeArgsPerDevice,
+// experimental::SetRuntimeArgs): one program on the whole mesh, chosen runtime-arg words set per device. The kernel
+// writes its unique and common runtime args to L1, read back per device.
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -21,6 +21,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/experimental/mesh_workload_runtime_args.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <distributed/mesh_device_impl.hpp>
 #include "impl/context/metal_context.hpp"
@@ -130,7 +131,7 @@ void PerDeviceRuntimeArgsChecks::unique_and_common_fields_eager() {
         uint32_t idx = 0;
         for (const auto& coord : range) {
             if (idx != 0) {
-                SetRuntimeArgs(
+                tt::tt_metal::experimental::SetRuntimeArgs(
                     workload,
                     range,
                     coord,
@@ -138,7 +139,7 @@ void PerDeviceRuntimeArgsChecks::unique_and_common_fields_eager() {
                     field_core,
                     2,
                     std::vector<uint32_t>{unique_value(idx, 2, round), unique_value(idx, 3, round)});
-                SetCommonRuntimeArgs(
+                tt::tt_metal::experimental::SetCommonRuntimeArgs(
                     workload, range, coord, kernel, 1, std::vector<uint32_t>{common_value(idx, round)});
             }
             idx++;
@@ -199,7 +200,7 @@ void PerDeviceRuntimeArgsChecks::batched_setter_and_clear() {
     }
     SetRuntimeArgsPerDevice(workload, range, kernel, core, 5, 1, values);
     const auto cleared = *range.begin();
-    ClearRuntimeArgs(workload, range, cleared, kernel, core, 5);
+    tt::tt_metal::experimental::ClearRuntimeArgs(workload, range, cleared, kernel, core, 5);
 
     auto& cq = mesh_device_->mesh_command_queue();
     EnqueueMeshWorkload(cq, workload, false);
@@ -275,8 +276,9 @@ void PerDeviceRuntimeArgsChecks::same_values_keep_version() {
     for (const auto& coord : range) {
         last = coord;
     }
-    SetRuntimeArgs(workload, range, last, kernel, core, 3, std::vector<uint32_t>{1});
-    SetRuntimeArgs(workload, range, last, kernel, core, 3, std::vector<uint32_t>{values[num_devices - 1]});
+    tt::tt_metal::experimental::SetRuntimeArgs(workload, range, last, kernel, core, 3, std::vector<uint32_t>{1});
+    tt::tt_metal::experimental::SetRuntimeArgs(
+        workload, range, last, kernel, core, 3, std::vector<uint32_t>{values[num_devices - 1]});
     run_and_check();
     EXPECT_EQ(version(), first);
 
@@ -290,11 +292,12 @@ void PerDeviceRuntimeArgsChecks::same_values_keep_version() {
     if (num_devices < 2) {
         return;
     }
-    SetRuntimeArgs(workload, range, *range.begin(), kernel, core, 5, std::vector<uint32_t>{4242});
+    tt::tt_metal::experimental::SetRuntimeArgs(
+        workload, range, *range.begin(), kernel, core, 5, std::vector<uint32_t>{4242});
     run_and_check_word5(4242);
     const uint64_t second = version();
-    SetRuntimeArgs(workload, range, last, kernel, core, 5, std::vector<uint32_t>{4343});
-    ClearRuntimeArgs(workload, range, last, kernel, core, 5);
+    tt::tt_metal::experimental::SetRuntimeArgs(workload, range, last, kernel, core, 5, std::vector<uint32_t>{4343});
+    tt::tt_metal::experimental::ClearRuntimeArgs(workload, range, last, kernel, core, 5);
     run_and_check_word5(4242);
     EXPECT_EQ(version(), second);
 }
@@ -357,7 +360,7 @@ void PerDeviceRuntimeArgsChecks::own_args_change_between_enqueues() {
     }
     SetRuntimeArgsPerDevice(workload, range, kernel, core, 4, 1, values);
     const auto cleared = *range.begin();
-    ClearRuntimeArgs(workload, range, cleared, kernel, core, 4);
+    tt::tt_metal::experimental::ClearRuntimeArgs(workload, range, cleared, kernel, core, 4);
 
     auto& cq = mesh_device_->mesh_command_queue();
     auto run_and_check = [&](uint32_t word0, uint32_t word4) {
@@ -399,8 +402,10 @@ void PerDeviceRuntimeArgsChecks::trace_replays_capture_time_values() {
     auto set_fields = [&](uint32_t base) {
         uint32_t idx = 0;
         for (const auto& coord : range) {
-            SetRuntimeArgs(workload, range, coord, kernel, core, 1, std::vector<uint32_t>{base + idx});
-            SetCommonRuntimeArgs(workload, range, coord, kernel, 3, std::vector<uint32_t>{base + 500 + idx});
+            tt::tt_metal::experimental::SetRuntimeArgs(
+                workload, range, coord, kernel, core, 1, std::vector<uint32_t>{base + idx});
+            tt::tt_metal::experimental::SetCommonRuntimeArgs(
+                workload, range, coord, kernel, 3, std::vector<uint32_t>{base + 500 + idx});
             idx++;
         }
     };
@@ -472,7 +477,8 @@ void PerDeviceRuntimeArgsChecks::field_after_kernel_without_args_on_core() {
 
     uint32_t idx = 0;
     for (const auto& coord : range) {
-        SetRuntimeArgs(workload, range, coord, kernel_b, core1, 0, std::vector<uint32_t>{9000 + idx, 9500 + idx});
+        tt::tt_metal::experimental::SetRuntimeArgs(
+            workload, range, coord, kernel_b, core1, 0, std::vector<uint32_t>{9000 + idx, 9500 + idx});
         idx++;
     }
     auto& cq = mesh_device_->mesh_command_queue();
@@ -508,27 +514,42 @@ void PerDeviceRuntimeArgsChecks::rejects_invalid_fields() {
     workload.add_program(range, std::move(program));
     const auto coord = *range.begin();
 
-    SetRuntimeArgs(workload, range, coord, kernel, core, 2, std::vector<uint32_t>{1, 2});
+    tt::tt_metal::experimental::SetRuntimeArgs(workload, range, coord, kernel, core, 2, std::vector<uint32_t>{1, 2});
     // Same first word, another length.
     EXPECT_THAT(
-        [&] { SetRuntimeArgs(workload, range, coord, kernel, core, 2, std::vector<uint32_t>{1}); },
+        [&] {
+            tt::tt_metal::experimental::SetRuntimeArgs(
+                workload, range, coord, kernel, core, 2, std::vector<uint32_t>{1});
+        },
         ThrowsMessage<std::runtime_error>(HasSubstr("has 2 words, not 1")));
     // Overlap with words [2, 4).
     EXPECT_THAT(
-        [&] { SetRuntimeArgs(workload, range, coord, kernel, core, 3, std::vector<uint32_t>{1, 2}); },
+        [&] {
+            tt::tt_metal::experimental::SetRuntimeArgs(
+                workload, range, coord, kernel, core, 3, std::vector<uint32_t>{1, 2});
+        },
         ThrowsMessage<std::runtime_error>(HasSubstr("overlap")));
     // Beyond the program's args.
     EXPECT_THAT(
-        [&] { SetRuntimeArgs(workload, range, coord, kernel, core, kNumArgs - 1, std::vector<uint32_t>{1, 2}); },
+        [&] {
+            tt::tt_metal::experimental::SetRuntimeArgs(
+                workload, range, coord, kernel, core, kNumArgs - 1, std::vector<uint32_t>{1, 2});
+        },
         ThrowsMessage<std::runtime_error>(HasSubstr("lie outside")));
     EXPECT_THAT(
-        [&] { SetCommonRuntimeArgs(workload, range, coord, kernel, kNumCommonArgs, std::vector<uint32_t>{1}); },
+        [&] {
+            tt::tt_metal::experimental::SetCommonRuntimeArgs(
+                workload, range, coord, kernel, kNumCommonArgs, std::vector<uint32_t>{1});
+        },
         ThrowsMessage<std::runtime_error>(HasSubstr("lie outside")));
     // A range the workload has no program on.
     const MeshCoordinateRange other(coord, coord);
     if (other != range) {
         EXPECT_THAT(
-            [&] { SetRuntimeArgs(workload, other, coord, kernel, core, 0, std::vector<uint32_t>{1}); },
+            [&] {
+                tt::tt_metal::experimental::SetRuntimeArgs(
+                    workload, other, coord, kernel, core, 0, std::vector<uint32_t>{1});
+            },
             ThrowsMessage<std::runtime_error>(HasSubstr("has no program on range")));
     }
     // Batched values of the wrong size.
@@ -559,7 +580,7 @@ void PerDeviceRuntimeArgsChecks::program_on_sub_range() {
     MeshWorkload workload;
     workload.add_program(range, std::move(program));
     for (const auto& coord : range) {
-        SetRuntimeArgs(
+        tt::tt_metal::experimental::SetRuntimeArgs(
             workload, range, coord, kernel, core, 4, std::vector<uint32_t>{6000 + coord[0] * 100 + coord[1]});
     }
     auto& cq = mesh_device_->mesh_command_queue();
@@ -592,8 +613,10 @@ void PerDeviceRuntimeArgsChecks::trace_node_in_several_partitions() {
     workload.add_program(full, std::move(program));
     uint32_t idx = 0;
     for (const auto& coord : full) {
-        SetRuntimeArgs(workload, full, coord, kernel, core, 0, std::vector<uint32_t>{8000 + idx});
-        SetCommonRuntimeArgs(workload, full, coord, kernel, 0, std::vector<uint32_t>{8500 + idx});
+        tt::tt_metal::experimental::SetRuntimeArgs(
+            workload, full, coord, kernel, core, 0, std::vector<uint32_t>{8000 + idx});
+        tt::tt_metal::experimental::SetCommonRuntimeArgs(
+            workload, full, coord, kernel, 0, std::vector<uint32_t>{8500 + idx});
         idx++;
     }
     // A plain program on the first device only, on another core.

@@ -121,8 +121,8 @@ struct ProgramCommandSequence {
     // sequence. They won't be listed in rta_updates.
     std::vector<RtaUpdate> rta_updates;
     // Where each runtime-arg slot's first argument word (after any watcher count word) sits in this sequence's command
-    // buffers, recorded at assembly for every program. Per-device runtime args (distributed::SetRuntimeArgs on a
-    // MeshWorkload) are patched at these words in each device's copy of the sequence. The buffers are reserved up
+    // buffers, recorded at assembly for every program. Per-device runtime args (distributed::SetRuntimeArgsPerDevice)
+    // are patched at these words in each device's copy of the sequence. The buffers are reserved up
     // front, so the pointers stay valid for the sequence's lifetime.
     std::unordered_map<uint64_t, uint32_t*> unique_rta_locations;  // unique_rta_slot_key(...) -> first arg word
     // Device-local kernel handle -> first arg word of every multicast copy of its common runtime args.

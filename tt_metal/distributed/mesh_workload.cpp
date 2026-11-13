@@ -4,6 +4,7 @@
 
 #include <mesh_buffer.hpp>
 #include <tt-metalium/experimental/allocation_context.hpp>
+#include <tt-metalium/experimental/mesh_workload_runtime_args.hpp>
 #include <tt-metalium/experimental/program_preparation.hpp>
 #include <tt_stl/fmt.hpp>
 #include <mesh_command_queue.hpp>
@@ -934,27 +935,6 @@ void MeshWorkload::add_program(const MeshCoordinateRange& device_range, Program&
 
 std::unordered_map<MeshCoordinateRange, Program>& MeshWorkload::get_programs() { return pimpl_->get_programs(); }
 
-void SetRuntimeArgs(
-    MeshWorkload& mesh_workload,
-    const MeshCoordinateRange& program_range,
-    const MeshCoordinate& device,
-    KernelHandle kernel,
-    const CoreCoord& core,
-    uint32_t first_word,
-    ttsl::Span<const uint32_t> values) {
-    mesh_workload.impl().set_per_device_runtime_args(program_range, device, kernel, core, first_word, values);
-}
-
-void SetCommonRuntimeArgs(
-    MeshWorkload& mesh_workload,
-    const MeshCoordinateRange& program_range,
-    const MeshCoordinate& device,
-    KernelHandle kernel,
-    uint32_t first_word,
-    ttsl::Span<const uint32_t> values) {
-    mesh_workload.impl().set_per_device_runtime_args(program_range, device, kernel, std::nullopt, first_word, values);
-}
-
 void SetRuntimeArgsPerDevice(
     MeshWorkload& mesh_workload,
     const MeshCoordinateRange& program_range,
@@ -970,16 +950,6 @@ void SetRuntimeArgsPerDevice(
 bool PerDeviceRuntimeArgsSupported(MeshDevice& mesh_device, const MeshCoordinateRange& program_range) {
     return !program_range.wraparound_shape().has_value() && !LightMetalCaptureContext::get().is_tracing() &&
            mesh_device.impl().metal_env().get_cluster().get_target_device_type() != tt::TargetDevice::Emule;
-}
-
-void ClearRuntimeArgs(
-    MeshWorkload& mesh_workload,
-    const MeshCoordinateRange& program_range,
-    const MeshCoordinate& device,
-    KernelHandle kernel,
-    const std::optional<CoreCoord>& core,
-    uint32_t first_word) {
-    mesh_workload.impl().clear_per_device_runtime_args(program_range, device, kernel, core, first_word);
 }
 
 const std::unordered_map<MeshCoordinateRange, Program>& MeshWorkload::get_programs() const {
@@ -1046,7 +1016,7 @@ std::vector<NamedArgWords> resolve_named_args(const Program& program, const Prog
     TT_FATAL(
         program_impl.created_from_spec() || program_impl.has_metal2_registry(),
         "SetProgramRunArgsPerDevice requires a Metal 2.0 (ProgramSpec) program; legacy programs use "
-        "distributed::SetRuntimeArgs on the MeshWorkload");
+        "distributed::SetRuntimeArgsPerDevice");
     TT_FATAL(
         args.tensor_args.empty() && args.dfb_run_overrides.empty() && args.advanced_options.sram_arena_args.empty() &&
             args.advanced_options.prefetcher_pipe_args.empty(),
@@ -1144,6 +1114,37 @@ void SetProgramRunArgsPerDevice(
         impl.set_per_device_named_runtime_args(
             program_range, device, words.kernel, words.core, words.first_word, words.values);
     }
+}
+
+void SetRuntimeArgs(
+    distributed::MeshWorkload& mesh_workload,
+    const distributed::MeshCoordinateRange& program_range,
+    const distributed::MeshCoordinate& device,
+    KernelHandle kernel,
+    const CoreCoord& core,
+    uint32_t first_word,
+    ttsl::Span<const uint32_t> values) {
+    mesh_workload.impl().set_per_device_runtime_args(program_range, device, kernel, core, first_word, values);
+}
+
+void SetCommonRuntimeArgs(
+    distributed::MeshWorkload& mesh_workload,
+    const distributed::MeshCoordinateRange& program_range,
+    const distributed::MeshCoordinate& device,
+    KernelHandle kernel,
+    uint32_t first_word,
+    ttsl::Span<const uint32_t> values) {
+    mesh_workload.impl().set_per_device_runtime_args(program_range, device, kernel, std::nullopt, first_word, values);
+}
+
+void ClearRuntimeArgs(
+    distributed::MeshWorkload& mesh_workload,
+    const distributed::MeshCoordinateRange& program_range,
+    const distributed::MeshCoordinate& device,
+    KernelHandle kernel,
+    const std::optional<CoreCoord>& core,
+    uint32_t first_word) {
+    mesh_workload.impl().clear_per_device_runtime_args(program_range, device, kernel, core, first_word);
 }
 
 }  // namespace tt::tt_metal::experimental
