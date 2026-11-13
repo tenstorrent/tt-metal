@@ -22,7 +22,9 @@ constexpr uint32_t bf16_bytes = 2;
 
 __attribute__((always_inline)) constexpr uint32_t div_up(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
 
-__attribute__((always_inline)) constexpr uint32_t align_up(uint32_t bytes, uint32_t alignment) {
+__attribute__((always_inline)) constexpr uint32_t align_up(  // allow-redefined-helper: shared with host code
+    uint32_t bytes,
+    uint32_t alignment) {
     return div_up(bytes, alignment) * alignment;
 }
 
