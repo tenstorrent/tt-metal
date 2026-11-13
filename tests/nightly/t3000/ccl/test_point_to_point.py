@@ -327,3 +327,78 @@ def test_point_to_point_cache_hit_with_output_tensor(mesh_device):
 
     assert_equal(in1_torch[idx_start0:idx_end0, :, :, :], out1_torch[idx_start1:idx_end1, :, :, :])
     assert_equal(in2_torch[idx_start0:idx_end0, :, :, :], out2_torch[idx_start1:idx_end1, :, :, :])
+
+
+# Regression for issue #63643: a cross-device in-place call (output_tensor is the input) followed by an
+# out-of-place call with the same specs must not reuse a cached receiver writer bound to the input.
+# Each case uses its own row count, so it starts with no cached program of its own specs.
+# expected_hit=None: the hit/miss outcome is not asserted for that case.
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
+@pytest.mark.parametrize(
+    "rows, first, in_place, expected_hit",
+    [
+        (64, None, False, False),
+        (96, None, True, False),
+        (128, "out of place", False, True),
+        (160, "out of place", True, None),
+        (32, "in place", False, None),
+    ],
+    ids=[
+        "out_of_place_no_earlier_call",
+        "in_place_no_earlier_call",
+        "out_of_place_after_out_of_place",
+        "in_place_after_out_of_place",
+        "out_of_place_after_in_place",
+    ],
+)
+def test_point_to_point_inplace_cache_ordering(mesh_device, rows, first, in_place, expected_hit):
+    sender, receiver = ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(0, 1)
+    num_devices = prod(list(mesh_device.shape))
+    g = torch.Generator().manual_seed(0)
+    fill = 30720.0  # exact in bfloat16; no input holds it
+
+    def on_mesh(hosts):  # one [1, 1, rows, 64] bfloat16 TILE shard per device, DRAM interleaved
+        host_shards = ttnn.from_host_shards(
+            [ttnn.from_torch(h, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT) for h in hosts], mesh_device.shape
+        )
+        return ttnn.to_device(host_shards, mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    def data():  # entries k / 8 with |k| <= 16, exact in bfloat16
+        return on_mesh(
+            [(torch.randint(-16, 17, (1, 1, rows, 64), generator=g) / 8).to(torch.bfloat16) for _ in range(num_devices)]
+        )
+
+    def filled():
+        return on_mesh([torch.full((1, 1, rows, 64), fill, dtype=torch.bfloat16)] * num_devices)
+
+    def shards(t):  # per-device contents in mesh order: index 0 is the sender, 1 the receiver
+        return [ttnn.to_torch(d) for d in ttnn.get_device_tensors(t)]
+
+    def p2p(inp, out):
+        ttnn.point_to_point(
+            inp, sender_coord=sender, receiver_coord=receiver, output_tensor=out, topology=ttnn.Topology.Linear
+        )
+        ttnn.synchronize_device(mesh_device)
+
+    if first == "in place":  # an earlier call with the same specs, other data, output_tensor = its input
+        x = data()
+        p2p(x, x)
+    elif first == "out of place":
+        p2p(data(), filled())
+
+    entries = mesh_device.num_program_cache_entries()
+    y = data()
+    z = y if in_place else filled()
+    y_before = shards(y)
+    p2p(y, z)
+    hit = mesh_device.num_program_cache_entries() == entries
+    z_after, y_after = shards(z), shards(y)
+
+    wrong = int((z_after[1] != y_before[0]).sum())
+    assert wrong == 0, f"{wrong} of {z_after[1].numel()} output values wrong on the receiver (cache hit {hit})"
+    if not in_place:
+        changed = sum(int((a != b).sum()) for a, b in zip(y_after, y_before))
+        assert changed == 0, f"{changed} input values changed (cache hit {hit})"
+    if expected_hit is not None:
+        assert hit == expected_hit, f"program cache hit {hit}, expected {expected_hit}"
