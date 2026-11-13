@@ -26,7 +26,7 @@
   "perf_unpack_a_bcast_eltwise": 1.2,
   "perf_unpack_tilize": 5.0,
   "perf_unpack_transpose": 0.7,
-  "perf_vif_targets": 2.9
+  "perf_vif_equiv_sweep": 2.9
  },
  "blackhole": {
   "perf_eltwise_bcast_col_custom": 1.3,
@@ -55,6 +55,6 @@
   "perf_unpack_a_bcast_eltwise": 0.0,
   "perf_unpack_tilize": 15.4,
   "perf_unpack_transpose": 0.9,
-  "perf_vif_targets": 0.0
+  "perf_vif_equiv_sweep": 0.0
  }
 }

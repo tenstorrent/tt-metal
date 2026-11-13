@@ -831,7 +831,7 @@ PERF_TEST_SCHEMAS = {
         },
         "test_name_aliases": {"perf_sfpu_ternary": "perf_sfpu_ternary"},
     },
-    "perf_vif_targets": {
+    "perf_vif_equiv_sweep": {
         "version": 3,
         "columns": [
             "approx_mode",
@@ -861,7 +861,10 @@ PERF_TEST_SCHEMAS = {
             "unpack_transpose_within_face",
         ],
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
-        "test_name_aliases": {"perf_vif_targets": "perf_vif_targets"},
+        "test_name_aliases": {
+            "perf_vif_equiv_sweep": "perf_vif_equiv_sweep",
+            "perf_vif_targets": "perf_vif_equiv_sweep",
+        },
     },
     "perf_unpack_a_bcast_eltwise": {
         "version": 4,
