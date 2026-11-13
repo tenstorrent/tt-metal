@@ -252,7 +252,19 @@ DispatchMemMap::DispatchMemMap(
         dispatch_s_buffer_end_ + dispatch_s_device_print_l1_cache_size_ + (num_cqs_per_core_ - 1) * cq_zone_stride_;
     TT_FATAL(
         last_cq_zone_end <= l1_size, "Last CQ zone end ({}) extends past L1 end (size {})", last_cq_zone_end, l1_size);
+
+    // Only a dispatch engine serving one CQ has L1 to spare: two CQ zones on one engine leave too little
+    // for a useful stage ring.
+    if (core_type == CoreType::DISPATCH && num_cqs_per_core_ == 1) {
+        tensor_prefetcher_region_base_ = align(last_cq_zone_end, 1u << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE);
+        tensor_prefetcher_region_size_ =
+            tensor_prefetcher_region_base_ < l1_size ? l1_size - tensor_prefetcher_region_base_ : 0;
+    }
 }
+
+uint32_t DispatchMemMap::tensor_prefetcher_region_base() const { return tensor_prefetcher_region_base_; }
+
+uint32_t DispatchMemMap::tensor_prefetcher_region_size() const { return tensor_prefetcher_region_size_; }
 
 uint32_t DispatchMemMap::prefetch_q_entries() const { return settings.prefetch_q_entries_; }
 

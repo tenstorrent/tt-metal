@@ -151,6 +151,16 @@ static const std::vector<DispatchKernelNode> quasar_single_chip_1cq = {
     {2, 0, 0, 0, DISPATCH_S, {0, x, x, x}, {1, x, x, x}, k_quasar_noc},
 };
 
+// The CQ kernels above plus the Tensor prefetcher's reader and pusher, which share the dispatch engine and
+// its L1. They come last so the CQ kernels keep the same data-movement cores.
+static const std::vector<DispatchKernelNode> quasar_single_chip_1cq_tensor_prefetcher = {
+    {0, 0, 0, 0, PREFETCH_HD, {x, x, x, x}, {1, 2, x, x}, k_quasar_noc},
+    {1, 0, 0, 0, DISPATCH_HD, {0, x, x, x}, {2, x, x, x}, k_quasar_noc},
+    {2, 0, 0, 0, DISPATCH_S, {0, x, x, x}, {1, x, x, x}, k_quasar_noc},
+    {3, 0, 0, 0, TENSOR_PREFETCHER_READER, {x, x, x, x}, {4, x, x, x}, k_quasar_noc},
+    {4, 0, 0, 0, TENSOR_PREFETCHER_PUSHER, {3, x, x, x}, {x, x, x, x}, k_quasar_noc},
+};
+
 static const std::vector<DispatchKernelNode> quasar_single_chip_2cq = {
     {0, 0, 0, 0, PREFETCH_HD, {x, x, x, x}, {1, 2, x, x}, k_quasar_noc},
     {1, 0, 0, 0, DISPATCH_HD, {0, x, x, x}, {2, x, x, x}, k_quasar_noc},
@@ -461,7 +471,14 @@ std::vector<DispatchKernelNode> DispatchTopology::generate_nodes(
     auto populate_single_device = [&]() {
         const bool is_quasar = this->descriptor_.cluster().arch() == tt::ARCH::QUASAR;
         if (num_hw_cqs == 1) {
-            return is_quasar ? quasar_single_chip_1cq : single_chip_arch_1cq;
+            if (!is_quasar) {
+                return single_chip_arch_1cq;
+            }
+            // A dispatch engine has data-movement cores and L1 to spare for the Tensor prefetcher; the interim
+            // Tensix dispatch cores do not.
+            return dispatch_core_manager_.get_dispatch_core_type() == CoreType::DISPATCH
+                       ? quasar_single_chip_1cq_tensor_prefetcher
+                       : quasar_single_chip_1cq;
         }
         if (is_quasar) {
             return quasar_single_chip_2cq;

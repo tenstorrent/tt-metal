@@ -27,6 +27,7 @@ set(UNIT_TESTS_DISPATCH_BASIC_SOURCES
     dispatch_program/test_global_circular_buffers.cpp
     dispatch_program/test_op_to_op_hazards.cpp
     dispatch_program/test_realtime_profiler_sanity.cpp
+    dispatch_program/test_tensor_prefetcher_dispatch_engine.cpp
     dispatch_trace/test_sub_device.cpp
 )
 
