@@ -30,7 +30,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      actions: read
+      actions: write # read the failed run and re-run its failed jobs
       checks: read # ci-no-retry annotations of the failed jobs
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
@@ -124,15 +124,10 @@ jobs:
       - name: Re-run failed jobs
         if: ${{ steps.determine-should-continue.outputs.should-continue == 'true' && steps.check-retryable.outputs.all-non-retryable != 'true' }}
         env:
-          GH_TOKEN: ${{ secrets.RETRY_WORKFLOW_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          # skip-non-retryable short-circuits marked jobs only on re-runs triggered as this token's owner.
-          # Warn (never fail) when its expected login has drifted, which would quietly disable the short-circuit.
-          expected=$(python3 -c "import runpy; print(runpy.run_path('.github/actions/skip-non-retryable/ci_no_retry.py')['AUTO_RETRY_ACTOR'])" 2>/dev/null) || expected=""
-          owner=$(gh api user --jq .login 2>/dev/null) || owner=""
-          if [ -z "$expected" ] || [ -z "$owner" ] || [ "$(echo "$owner" | tr A-Z a-z)" != "$(echo "$expected" | tr A-Z a-z)" ]; then
-            echo "::warning title=ci-no-retry-actor-mismatch::RETRY_WORKFLOW_TOKEN owner '${owner:-unknown}' != AUTO_RETRY_ACTOR '${expected:-unknown}' in .github/actions/skip-non-retryable/ci_no_retry.py; marked jobs will re-run in full until it is updated"
-          fi
+          # Re-runs started with github.token show github-actions[bot] as the triggering actor, which is what
+          # skip-non-retryable (AUTO_RETRY_ACTOR in .github/actions/skip-non-retryable/ci_no_retry.py) keys on.
           echo "Re-running jobs here"
           # gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/timing
           gh api --method POST \
