@@ -241,7 +241,7 @@ class TtPrefillRuntime:
         if self.config.weight_cache_path:
             num_devices = self.config.mesh_shape[0] * self.config.mesh_shape[1]
             experts_per_chip = model_cfg.NUM_ROUTED_EXPERTS // num_devices
-            if self.config.build_missing_cache and not state_dict:
+            if self._can_build_missing_cache() and not state_dict:
                 state_dict = self._partial_state_dict_for_missing_cache(experts_per_chip)
                 rebuilding_cache = bool(state_dict)
             elif self.MODEL_CLS.check_cache_complete(
@@ -274,7 +274,12 @@ class TtPrefillRuntime:
                     f"routed_expert_weights_dtype={self.config.routed_expert_weights_dtype}, and no "
                     f"source weights were supplied to rebuild it. Continuing would load uninitialized "
                     f"placeholders as the expert weights. Populate the cache at this dtype first "
-                    f"(run the pretrained smoke test once)."
+                    f"(run the pretrained smoke test once)"
+                    + (
+                        "."
+                        if not self.config.build_missing_cache
+                        else f", or point PREFILL_HF_MODEL at a checkpoint to build it from (got {self.config.hf_model_path!r})."
+                    )
                 )
             else:
                 logger.warning(
@@ -328,6 +333,11 @@ class TtPrefillRuntime:
 
         if self.config.dflash_enabled:
             self._build_dflash_drafter()
+
+    def _can_build_missing_cache(self) -> bool:
+        """The adapter allows building and ``hf_model_path`` holds a checkpoint to build from. Without a checkpoint
+        (e.g. a config-only directory) an incomplete cache stays the plain "cache incomplete" error."""
+        return self.config.build_missing_cache and weight_categories.checkpoint_available(self.config.hf_model_path)
 
     def _partial_state_dict_for_missing_cache(self, experts_per_chip: int) -> dict:
         """Check this rank's trunk cache category by category and read the missing, selected ones from the
@@ -401,7 +411,7 @@ class TtPrefillRuntime:
             init_checker(eff)
         mtp_state_dict = {"mtp": {}, "layer": {}}
         if not mtp_cached:
-            if not self.config.build_missing_cache:
+            if not self._can_build_missing_cache():
                 raise RuntimeError(
                     f"MTP weight cache incomplete at {mtp_cache_path}. Building it here would dequantise "
                     f"layer {mtp_cfg.mtp_layer_idx}'s 256 fp8 experts inside the serving process; populate it "

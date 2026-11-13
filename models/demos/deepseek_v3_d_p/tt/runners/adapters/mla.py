@@ -57,6 +57,10 @@ def unwrap_multimodal_config(cfg):
 class MLAPrefillAdapter(PrefillModelAdapter):
     """DeepSeek-V3-family prefill adapter (MLA + MoE over TtPrefillRuntime)."""
 
+    # Missing TTNN cache pieces are converted from the HF checkpoint (PREFILL_HF_MODEL) at start-up, which needs the
+    # DeepSeek-V3 HF key layout (see tt/runners/weight_categories.py). A model whose checkpoint differs sets False.
+    builds_missing_weight_cache = True
+
     def fabric_payload_size(self) -> int:
         from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import moe_fabric_payload_size
 

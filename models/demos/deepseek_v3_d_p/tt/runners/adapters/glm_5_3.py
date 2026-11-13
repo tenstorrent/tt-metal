@@ -51,7 +51,6 @@ class GLM53Adapter(MLAPrefillAdapter):
     routing_use_l1_small_for_semaphores = True
 
     supports_mtp = True
-    builds_missing_weight_cache = True
     # The deployed mode: on SC4 it cuts TTFT by about 3% against VC1 with one fabric route per chip.
     d2d_relay_default = True
 
