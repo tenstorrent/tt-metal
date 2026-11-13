@@ -30,6 +30,61 @@
 
 namespace ttnn::operations::core {
 
+namespace {
+
+// (device index, byte offset, byte size, host address) of copy_device_to_host_regions / copy_host_to_device_regions.
+using HostRegion = std::tuple<uint32_t, uint64_t, uint64_t, uintptr_t>;
+
+std::vector<tt::tt_metal::ShardRegionTransfer> to_region_transfers(const std::vector<HostRegion>& regions) {
+    std::vector<tt::tt_metal::ShardRegionTransfer> out;
+    out.reserve(regions.size());
+    for (const auto& [shard, offset, size, host] : regions) {
+        out.push_back(tt::tt_metal::ShardRegionTransfer{
+            .shard = shard, .offset = offset, .size = size, .host = reinterpret_cast<std::byte*>(host)});
+    }
+    return out;
+}
+
+// The contiguous memory a Python object exports through the buffer protocol. The export keeps the object (and, for
+// an mmap or a bytearray, its memory: neither can be closed or resized while exported) alive until it is released;
+// that may happen on a command queue's reader thread, so the release takes the GIL.
+struct HostBufferExport {
+    Py_buffer view{};
+    HostBufferExport() = default;
+    HostBufferExport(const HostBufferExport&) = delete;
+    HostBufferExport& operator=(const HostBufferExport&) = delete;
+    ~HostBufferExport() {
+        if (view.obj != nullptr) {
+            nb::gil_scoped_acquire gil;
+            PyBuffer_Release(&view);
+        }
+    }
+};
+
+std::shared_ptr<HostBufferExport> export_host_buffer(nb::handle object, bool writable) {
+    auto exported = std::make_shared<HostBufferExport>();
+    if (PyObject_GetBuffer(object.ptr(), &exported->view, writable ? PyBUF_WRITABLE : PyBUF_SIMPLE) != 0) {
+        throw nb::python_error();
+    }
+    return exported;
+}
+
+void check_regions_in_host_buffer(const std::vector<HostRegion>& regions, const Py_buffer& view) {
+    const auto base = reinterpret_cast<uintptr_t>(view.buf);
+    const auto length = static_cast<uint64_t>(view.len);
+    for (const auto& [shard, offset, size, host] : regions) {
+        TT_FATAL(
+            host >= base && host - base <= length && size <= length - (host - base),
+            "region (device {}, offset {}, {} bytes) points outside host_buffer ({} bytes)",
+            shard,
+            offset,
+            size,
+            length);
+    }
+}
+
+}  // namespace
+
 struct DeviceComputeKernelConfigPlaceholder {};
 
 void py_module_types(nb::module_& mod) {
@@ -327,69 +382,91 @@ void py_module(nb::module_& mod) {
             nb::arg("mesh_device"),
             nb::arg("memory_config") = nb::none());
 
-    // (shard, byte offset, byte size, host address) tuples -> ShardRegionTransfer
-    auto to_region_transfers = [](const std::vector<std::tuple<uint32_t, uint64_t, uint64_t, uintptr_t>>& regions) {
-        std::vector<tt::tt_metal::ShardRegionTransfer> out;
-        out.reserve(regions.size());
-        for (const auto& [shard, offset, size, host] : regions) {
-            out.push_back(tt::tt_metal::ShardRegionTransfer{
-                .shard = shard, .offset = offset, .size = size, .host = reinterpret_cast<std::byte*>(host)});
-        }
-        return out;
-    };
-
     mod.def(
         "copy_device_to_host_regions",
-        [to_region_transfers](
-            const ttnn::Tensor& device_tensor,
-            const std::vector<std::tuple<uint32_t, uint64_t, uint64_t, uintptr_t>>& regions,
-            bool blocking,
-            std::optional<ttnn::QueueId> cq_id) {
-            TT_FATAL(device_tensor.storage_type() == StorageType::DEVICE, "copy_device_to_host_regions needs a device tensor");
+        [](const ttnn::Tensor& device_tensor,
+           const std::vector<HostRegion>& regions,
+           bool blocking,
+           std::optional<ttnn::QueueId> cq_id,
+           nb::object host_buffer) {
+            TT_FATAL(
+                device_tensor.storage_type() == StorageType::DEVICE,
+                "copy_device_to_host_regions needs a device tensor");
+            // A non-blocking read is copied into the host memory later, on the queue's reader thread: the queue must
+            // hold the memory's owner until then, or an owner collected in between is written after it is freed.
+            TT_FATAL(
+                blocking || !host_buffer.is_none(),
+                "copy_device_to_host_regions with blocking=False needs host_buffer (the object that owns the memory "
+                "the regions point into), which is kept alive until the reads have landed");
+            tt::tt_metal::MemoryPin pin;
+            if (!host_buffer.is_none()) {
+                auto exported = export_host_buffer(host_buffer, /*writable=*/true);
+                check_regions_in_host_buffer(regions, exported->view);
+                pin = tt::tt_metal::MemoryPin(std::shared_ptr<void>(std::move(exported)));
+            }
+            auto transfers = to_region_transfers(regions);
             auto& cq = device_tensor.device()->mesh_command_queue(raw_optional(cq_id));
+            nb::gil_scoped_release release;
             tt::tt_metal::enqueue_read_shard_regions(
-                cq, device_tensor.mesh_tensor(), to_region_transfers(regions), blocking);
+                cq, device_tensor.mesh_tensor(), transfers, blocking, std::move(pin));
         },
         nb::arg("device_tensor"),
         nb::arg("regions"),
         nb::arg("blocking") = true,
         nb::arg("cq_id") = nb::none(),
-        nb::call_guard<nb::gil_scoped_release>(),
+        nb::arg("host_buffer") = nb::none(),
         R"doc(
         Copies byte ranges of a device tensor's per-device buffers to host memory owned by the caller.
 
         Args:
-            device_tensor (ttnn.Tensor): the tensor to read (any mesh; DRAM interleaved buffers read whole pages as
-                one contiguous range: page i is bytes [i * buffer_page_size(), (i + 1) * buffer_page_size())).
+            device_tensor (ttnn.Tensor): the tensor to read, on any mesh. Its buffer must be interleaved (DRAM or L1);
+                a sharded tensor is refused.
             regions (List[Tuple[int, int, int, int]]): (device index in the mesh, row-major; byte offset in that
-                device's buffer; byte count; destination host address). The memory must stay valid until the read
-                completes.
-            blocking (bool): wait for the reads to land. Defaults to True.
+                device's buffer; byte count; destination host address). Offset and count must be multiples of
+                ``device_tensor.buffer_page_size()``: a region is whole pages, page i being bytes
+                [i * buffer_page_size(), (i + 1) * buffer_page_size()). Every region is checked before any is read
+                (device index, page alignment, range inside the buffer), so a bad region raises with nothing read.
+            blocking (bool): wait for the reads to land. Defaults to True. With False the bytes arrive later (by the
+                next blocking call or ``ttnn.synchronize_device``), and ``host_buffer`` is required.
             cq_id (ttnn.QueueId, optional): command queue; the reads run after everything already enqueued on it.
+            host_buffer (object, optional): the writable, contiguous buffer-protocol object (numpy array, mmap,
+                memoryview, ...) that owns the destination memory. When given, every region must lie inside it, and
+                it is kept alive until the reads have landed. Without it the addresses are trusted as they are.
         )doc");
 
     mod.def(
         "copy_host_to_device_regions",
-        [to_region_transfers](
-            ttnn::Tensor& device_tensor,
-            const std::vector<std::tuple<uint32_t, uint64_t, uint64_t, uintptr_t>>& regions,
-            bool blocking,
-            std::optional<ttnn::QueueId> cq_id) {
-            TT_FATAL(device_tensor.storage_type() == StorageType::DEVICE, "copy_host_to_device_regions needs a device tensor");
+        [](ttnn::Tensor& device_tensor,
+           const std::vector<HostRegion>& regions,
+           bool blocking,
+           std::optional<ttnn::QueueId> cq_id,
+           nb::object host_buffer) {
+            TT_FATAL(
+                device_tensor.storage_type() == StorageType::DEVICE,
+                "copy_host_to_device_regions needs a device tensor");
+            std::shared_ptr<HostBufferExport> exported;
+            if (!host_buffer.is_none()) {
+                exported = export_host_buffer(host_buffer, /*writable=*/false);
+                check_regions_in_host_buffer(regions, exported->view);
+            }
+            auto transfers = to_region_transfers(regions);
             auto& cq = device_tensor.device()->mesh_command_queue(raw_optional(cq_id));
+            nb::gil_scoped_release release;
             tt::tt_metal::enqueue_write_shard_regions(
-                cq, device_tensor.device_storage().get_mesh_tensor(), to_region_transfers(regions), blocking);
+                cq, device_tensor.device_storage().get_mesh_tensor(), transfers, blocking);
         },
         nb::arg("device_tensor"),
         nb::arg("regions"),
         nb::arg("blocking") = true,
         nb::arg("cq_id") = nb::none(),
-        nb::call_guard<nb::gil_scoped_release>(),
+        nb::arg("host_buffer") = nb::none(),
         R"doc(
         Copies host memory owned by the caller into byte ranges of a device tensor's per-device buffers (the reverse of
-        copy_device_to_host_regions, same region tuples, the address being the source). The writes are ordered after
-        everything already enqueued on the queue; with blocking=False the host memory must stay unchanged until they
-        complete (a later blocking call, ttnn.synchronize_device, or an event).
+        copy_device_to_host_regions: same region tuples, same alignment rules and up-front checks, the address being
+        the source). The writes are ordered after everything already enqueued on the queue. The source bytes are copied
+        into the command queue before the call returns, so the host memory may change or go away afterwards also with
+        blocking=False (which only skips waiting for the device to finish them). ``host_buffer`` (optional, any
+        contiguous buffer-protocol object): when given, every region must lie inside it.
         )doc");
 
     mod.def(
