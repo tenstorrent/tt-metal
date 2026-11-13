@@ -18,7 +18,7 @@ import weakref
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from types import SimpleNamespace
-from typing import overload
+from typing import NamedTuple, overload
 from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -648,6 +648,134 @@ class AudioTraceControlTest(unittest.TestCase):
         method(p)
         self.assertIsNone(a._warm_trace_identity)
         self.assertEqual(native.traces, {})
+
+
+class AudioGatherLifetimeTest(unittest.TestCase):
+    """Exercise the audio helpers and real CCL buffer policy without native kernels."""
+
+    def setUp(self):
+        configs = definitions(
+            ROOT / "parallel/config.py",
+            {"ParallelFactor", "AudioTParallelConfig", "AudioTCParallelConfig"},
+            {"NamedTuple": NamedTuple},
+        )
+        self.pf = configs["ParallelFactor"]
+        self.time = configs["AudioTParallelConfig"](self.pf(4, 0), self.pf(8, 1))
+        self.tc = configs["AudioTCParallelConfig"](self.pf(4, 0), self.pf(8, 1))
+        self.ops = definitions(
+            ROOT / "layers/audio_ops.py", {"channel_axis", "all_gather_channel", "_all_gather_t"}, configs
+        )
+        self.native = SimpleNamespace(
+            bfloat16="bf16",
+            TILE_LAYOUT="tile",
+            DRAM_MEMORY_CONFIG="dram",
+            Shape=tuple,
+            synchronize_device=Mock(),
+            allocate_tensor_on_device=Mock(side_effect=lambda shape, dtype, *args: self.tensor(shape, dtype)),
+            reshape=lambda x, shape: self.tensor(shape, x.get_dtype()),
+            experimental=SimpleNamespace(all_gather_async=Mock(side_effect=self.gather)),
+        )
+        methods = definitions(
+            ROOT / "parallel/manager.py",
+            {"get_dim", "get_ag_ping_pong_buffer", "all_gather", "_check_audio_buffer", "_record_audio_buffer"},
+            {"ttnn": self.native},
+            class_name="CCLManager",
+        )
+        manager_type = type("Manager", (), {k: v for k, v in methods.items() if not k.startswith("__")})
+        self.manager = manager_type()
+        self.manager.mesh_device = SimpleNamespace(shape=(4, 8))
+        self.manager.num_links = 1
+        self.manager.topology = "ring"
+        self.manager._ping_pong_buffer_cache = {}
+        self.manager._ping_pong_buffer_indices = {}
+        self.manager.get_ag_ping_pong_semaphore = Mock(return_value=["ready", "done"])
+        self.manager.get_barrier_semaphore = Mock(side_effect=AssertionError("replay-unsafe barrier requested"))
+        self.manager.get_ag_hyperparams = Mock(side_effect=AssertionError("unexpected hyperparameters"))
+
+    @staticmethod
+    def tensor(shape=(1, 32, 32), dtype="bf16"):
+        return SimpleNamespace(shape=tuple(shape), get_dtype=lambda: dtype)
+
+    def gather(self, x, *, persistent_output_buffer, barrier_semaphore, **kwargs):
+        self.assertIsNotNone(persistent_output_buffer)
+        self.assertIsNone(barrier_semaphore)
+        return persistent_output_buffer
+
+    def test_channel_gather_uses_warmed_buffer_pool(self):
+        x = self.tensor()
+        buffers = []
+        for _ in range(4):
+            out = self.ops["all_gather_channel"](self.manager, x, self.tc, dim=2)
+            self.assertEqual(out.shape, (1, 32, 256))
+            buffers.append(self.native.experimental.all_gather_async.call_args.kwargs["persistent_output_buffer"])
+        self.assertIs(buffers[0], buffers[2])
+        self.assertIs(buffers[1], buffers[3])
+        self.assertIsNot(buffers[0], buffers[1])
+        self.assertEqual(self.native.allocate_tensor_on_device.call_count, 2)
+        self.assertEqual(self.native.synchronize_device.call_count, 2)
+        self.assertEqual(len(self.manager._ping_pong_buffer_cache), 1)
+
+    def test_channel_noop_without_channel_parallelism(self):
+        x = self.tensor()
+        configs = (None, self.pf(4, 0), self.time, type(self.tc)(self.pf(4, 0), self.pf(1, 1)))
+        for config in configs:
+            with self.subTest(config=config):
+                self.assertIs(self.ops["all_gather_channel"](self.manager, x, config, dim=2), x)
+        self.native.experimental.all_gather_async.assert_not_called()
+        self.native.allocate_tensor_on_device.assert_not_called()
+
+    def test_time_gather_preserves_axis_order_and_intermediate_shape(self):
+        out = self.ops["_all_gather_t"](self.manager, self.tensor(), self.time)
+        self.assertEqual(out.shape, (1, 1024, 32))
+        calls = self.native.experimental.all_gather_async.call_args_list
+        self.assertEqual([c.kwargs["cluster_axis"] for c in calls], [1, 0])
+        self.assertEqual([c.args[0].shape for c in calls], [(1, 1, 32, 32), (1, 1, 256, 32)])
+        self.assertEqual([c.kwargs["dim"] for c in calls], [2, 2])
+        self.assertEqual(self.native.allocate_tensor_on_device.call_count, 4)
+
+    def test_single_axis_time_gather_uses_persistent_buffer(self):
+        for config in (self.pf(4, 0), self.tc):
+            with self.subTest(config=config):
+                out = self.ops["_all_gather_t"](self.manager, self.tensor(), config)
+                self.assertEqual(out.shape, (1, 128, 32))
+        self.assertEqual(self.native.allocate_tensor_on_device.call_count, 2)
+
+    def test_unit_mesh_axis_remains_identity(self):
+        self.manager.mesh_device.shape = (1, 1)
+        x = self.tensor()
+        self.assertIs(self.ops["_all_gather_t"](self.manager, x, self.time), x)
+        self.assertIs(self.ops["all_gather_channel"](self.manager, x, self.tc, dim=2), x)
+        self.native.experimental.all_gather_async.assert_not_called()
+        self.native.allocate_tensor_on_device.assert_not_called()
+
+    def test_pool_separates_shape_dtype_and_axis(self):
+        for x in (self.tensor(), self.tensor(dtype="fp32"), self.tensor(shape=(1, 64, 32))):
+            self.ops["all_gather_channel"](self.manager, x, self.tc, dim=2)
+        self.ops["_all_gather_t"](self.manager, self.tensor(), self.time)
+        self.assertEqual(len(self.manager._ping_pong_buffer_cache), 5)
+        self.assertEqual(self.native.allocate_tensor_on_device.call_count, 10)
+
+    def test_collective_errors_propagate_at_every_audio_call_site(self):
+        cases = [("channel", 0), ("single", 0), ("two_axes", 0), ("two_axes", 1)]
+        for mode, fail_at in cases:
+            with self.subTest(mode=mode, fail_at=fail_at):
+                failure = RuntimeError("native collective failed")
+                calls = []
+
+                def fail(x, **kwargs):
+                    calls.append((x, kwargs))
+                    if len(calls) == fail_at + 1:
+                        raise failure
+                    return x
+
+                manager = SimpleNamespace(all_gather=fail)
+                with self.assertRaises(RuntimeError) as caught:
+                    if mode == "channel":
+                        self.ops["all_gather_channel"](manager, self.tensor(), self.tc, dim=2)
+                    else:
+                        self.ops["_all_gather_t"](manager, self.tensor(), self.time if mode == "two_axes" else self.tc)
+                self.assertIs(caught.exception, failure)
+                self.assertEqual(len(calls), fail_at + 1)
 
 
 if __name__ == "__main__":

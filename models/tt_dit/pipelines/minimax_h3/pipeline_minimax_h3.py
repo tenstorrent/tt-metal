@@ -2621,6 +2621,7 @@ class MiniMaxH3Pipeline:
         # Warmup generations decode audio untraced so every program is compiled before any trace
         # is captured; `_capture_audio` is the only place audio traces are taken.
         trace_audio = self.trace_audio
+        self._warming_audio_trace = trace_audio
         self.trace_audio = False
         self._log_generation = False
         self._warming = True
@@ -2645,6 +2646,7 @@ class MiniMaxH3Pipeline:
             self._capture_traces(prompt, fitted, overrides, trace_audio)
         finally:
             self.trace_audio = trace_audio
+            self._warming_audio_trace = False
             self._log_generation = True
             self._warming = False
 
@@ -2897,7 +2899,12 @@ class MiniMaxH3Pipeline:
         evicts, so the pairs outlive the decoder's own eviction and starve the DiT's top rung. The reference
         audio encoder shares the manager. Traced presets keep the pairs their captures replay.
         """
-        if self.audio_ccl_manager is None or self.use_persistent_ccl_buffers or self.trace_audio:
+        if (
+            self.audio_ccl_manager is None
+            or self.use_persistent_ccl_buffers
+            or self.trace_audio
+            or getattr(self, "_warming_audio_trace", False)
+        ):
             return nullcontext()
         return self.audio_ccl_manager.transient_ping_pong_buffers()
 

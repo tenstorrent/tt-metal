@@ -14,6 +14,8 @@ from __future__ import annotations
 
 from typing import List, Sequence
 
+from contextlib import nullcontext
+
 import torch
 
 import ttnn
@@ -271,6 +273,7 @@ class Vocoder(Module):
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
         self._tpad_mask_cache: dict = {}
+        self._prepared_audio_ccl: dict = {}
         self._t_pad = 0  # set per-input by _host_to_device
         # Traced decode: _forward_device is @traced_function, keyed per input shape via
         # tracer_trace_key. prep_run=False (capture never allocs), so lazy device state (snake α/β,
@@ -382,6 +385,7 @@ class Vocoder(Module):
         super().deallocate_weights()
         # Eviction must take the lazily cached device constants with the weights (see `release_device_cache`).
         release_device_cache(self._tpad_mask_cache)
+        self._prepared_audio_ccl.clear()
 
     def forward(self, mel_spec: torch.Tensor) -> torch.Tensor:
         """``mel_spec``: ``(B, 2, T_frames, mel_bins)`` stereo or
@@ -430,6 +434,7 @@ class Vocoder(Module):
         # leaves them as garbage the next decode would reuse. Drop them so re-warming recomputes
         # them (ltx-rt re-warm correctness delta, re-homed onto the @traced_function structure).
         self._tpad_mask_cache.clear()
+        self._prepared_audio_ccl.clear()
 
     def _host_to_device(self, mel_spec: torch.Tensor) -> ttnn.Tensor:
         """Host preprocessing + upload to a ROW_MAJOR full-T device tensor. Split out from
@@ -453,9 +458,27 @@ class Vocoder(Module):
         self, x_dev: ttnn.Tensor, *, t_pad: int, traced: bool = False, trace_key=None
     ) -> torch.Tensor:
         """``(B, T+t_pad, C_in)`` on device -> ``(B, C_out, T_out)`` torch."""
+        key = (trace_key, tuple(x_dev.shape), x_dev.get_dtype(), t_pad)
+        manager = self.ccl_manager
+        if traced:
+            prepared = self._prepared_audio_ccl.get(key)
+            if prepared is None or prepared[0] is not manager:
+                raise RuntimeError("audio CCL is not prepared for this decoder/shape; warm before capture")
+            buffers = prepared[1]
+        else:
+            tracers = type(self)._forward_device._tracers_keyed.get(self, {})
+            if any(t.trace_captured for t in tracers.values()):
+                raise RuntimeError("release audio traces before eager warmup")
+            self._prepared_audio_ccl.pop(key, None)
+            buffers = None
         self._t_pad = t_pad
-        y_dev = self._forward_device(x_dev, traced=traced, tracer_trace_key=trace_key)
-        return self._device_to_host(y_dev)
+        scope = manager.audio_buffer_scope(buffers) if manager is not None else nullcontext({})
+        with scope as used:
+            y_dev = self._forward_device(x_dev, traced=traced, tracer_trace_key=trace_key)
+            result = self._device_to_host(y_dev)
+        if not traced:
+            self._prepared_audio_ccl[key] = (manager, used)
+        return result
 
     def _upload_BCT(self, x_BCT: torch.Tensor) -> ttnn.Tensor:
         """Upload a plain ``(B, C, T)`` tensor, T-padded for tile-aligned per-chip shards.

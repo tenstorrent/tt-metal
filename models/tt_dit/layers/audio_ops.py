@@ -194,7 +194,7 @@ def all_gather_channel(ccl_manager, x: ttnn.Tensor, parallel_config, *, dim: int
     axis = channel_axis(parallel_config)
     if axis is None:
         return x
-    return ccl_manager.all_gather(x, dim=dim, mesh_axis=axis, use_hyperparams=False)
+    return ccl_manager.all_gather(x, dim=dim, mesh_axis=axis, use_hyperparams=False, use_persistent_buffer=True)
 
 
 def gather_channel_to_full(ccl_manager, x_BTC: ttnn.Tensor, parallel_config) -> ttnn.Tensor:
@@ -599,10 +599,10 @@ def _depthwise_tap_conv1d(
 def _all_gather_t(ccl_manager, x: "ttnn.Tensor", parallel_config) -> "ttnn.Tensor":
     """All-gather the T-sharded tensor to full T on every chip."""
     if isinstance(parallel_config, AudioTParallelConfig):
-        x = ccl_manager.all_gather(x, dim=1, mesh_axis=parallel_config.axis1.mesh_axis, use_hyperparams=False)
-        x = ccl_manager.all_gather(x, dim=1, mesh_axis=parallel_config.axis0.mesh_axis, use_hyperparams=False)
+        x = ccl_manager.all_gather(x, dim=1, mesh_axis=parallel_config.axis1.mesh_axis, use_hyperparams=False, use_persistent_buffer=True)
+        x = ccl_manager.all_gather(x, dim=1, mesh_axis=parallel_config.axis0.mesh_axis, use_hyperparams=False, use_persistent_buffer=True)
     else:
-        x = ccl_manager.all_gather(x, dim=1, mesh_axis=parallel_config.mesh_axis, use_hyperparams=False)
+        x = ccl_manager.all_gather(x, dim=1, mesh_axis=parallel_config.mesh_axis, use_hyperparams=False, use_persistent_buffer=True)
     return x
 
 

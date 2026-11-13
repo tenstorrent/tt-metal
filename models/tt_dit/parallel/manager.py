@@ -266,6 +266,7 @@ class CCLManager:
         output_buffer_shape = list(shape)
         output_buffer_shape[dim] = capacity or shape[dim] * self.mesh_device.shape[mesh_axis]
         cache_key = ("ag", tuple(output_buffer_shape), dim, mesh_axis, dtype)
+        self._check_audio_buffer(cache_key)
 
         # Create buffers if not cached
         if cache_key not in self._ping_pong_buffer_cache:
@@ -300,10 +301,45 @@ class CCLManager:
                 ttnn.synchronize_device(self.mesh_device)
 
         # Get current buffer and alternate index
+        self._record_audio_buffer(cache_key)
         current_idx = self._ping_pong_buffer_indices[cache_key]
         self._ping_pong_buffer_indices[cache_key] = 1 - current_idx
 
         return self._ping_pong_buffer_cache[cache_key][current_idx]
+
+    @contextmanager
+    def audio_buffer_scope(self, prepared=None):
+        """Record an eager audio graph's buffers, or require those exact buffers for capture.
+
+        Preparation is the existing eager warm pass, never an extra collective dispatch.
+        A missing/replaced pool is rejected before a getter can synchronize or allocate.
+        Semaphore and ping-pong indices stay owned by this manager and are never reset.
+        """
+        if getattr(self, "_audio_buffer_record", None) is not None:
+            raise RuntimeError("audio buffer preparation scopes cannot nest")
+        self._audio_buffer_record = {} if prepared is None else prepared
+        self._audio_buffer_capture = prepared is not None
+        try:
+            if prepared is not None:
+                for key in prepared:
+                    self._check_audio_buffer(key)
+            yield self._audio_buffer_record
+        finally:
+            self._audio_buffer_record = None
+            self._audio_buffer_capture = False
+
+    def _check_audio_buffer(self, key):
+        if not getattr(self, "_audio_buffer_capture", False):
+            return
+        expected = self._audio_buffer_record.get(key)
+        current = self._ping_pong_buffer_cache.get(key, ())
+        if expected is None or len(current) != len(expected) or any(a is not b for a, b in zip(current, expected)):
+            raise RuntimeError(f"audio CCL buffer {key} is not prepared; release traces and warm the decoder")
+
+    def _record_audio_buffer(self, key):
+        record = getattr(self, "_audio_buffer_record", None)
+        if record is not None and not self._audio_buffer_capture:
+            record[key] = tuple(self._ping_pong_buffer_cache[key])
 
     @contextmanager
     def transient_ping_pong_buffers(self):
@@ -768,6 +804,7 @@ class CCLManager:
             output_shape[dims[0] - 1] += t_front_pad
 
         cache_key = ("np", tuple(output_shape), dtype)
+        self._check_audio_buffer(cache_key)
 
         if cache_key not in self._ping_pong_buffer_cache:
             if device_synchronize:
@@ -791,6 +828,7 @@ class CCLManager:
             if device_synchronize:
                 ttnn.synchronize_device(self.mesh_device)
 
+        self._record_audio_buffer(cache_key)
         current_idx = self._ping_pong_buffer_indices[cache_key]
         self._ping_pong_buffer_indices[cache_key] = 1 - current_idx
 

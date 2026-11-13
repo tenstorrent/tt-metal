@@ -198,6 +198,30 @@ class PreparationTest(unittest.TestCase):
             v.forward_device_BTC(x, t_pad=0, trace_key="a")
             v.forward_device_BTC(x, t_pad=0, traced=True, trace_key="a")
 
+    def test_eager_after_capture_requires_release(self):
+        native = Native()
+        v = vocoder(manager(native), native)
+        type(v)._forward_device._tracers_keyed[v] = {"a": SimpleNamespace(trace_captured=True)}
+        with self.assertRaisesRegex(RuntimeError, "release"):
+            v.forward_device_BTC(tensor(), t_pad=0, trace_key="a")
+        self.assertEqual(v.calls, [])
+
+    def test_buffer_scope_rejects_nesting_and_preserves_indices(self):
+        native = Native()
+        m = manager(native)
+        with m.audio_buffer_scope() as used:
+            np_buffer(m)
+            m.get_ag_ping_pong_buffer((1, 32, 32), 1, 0)
+            with self.assertRaisesRegex(RuntimeError, "nest"):
+                with m.audio_buffer_scope():
+                    pass
+        indices = dict(m._ping_pong_buffer_indices)
+        syncs = native.syncs
+        with m.audio_buffer_scope(used):
+            pass
+        self.assertEqual(m._ping_pong_buffer_indices, indices)
+        self.assertEqual(native.syncs, syncs)
+
     def test_release_invalidates_preparation(self):
         native = Native()
         v = vocoder(manager(native), native)
