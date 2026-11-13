@@ -19,7 +19,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 
@@ -136,8 +136,8 @@ DramPrefetcherConsumerDeviceOperation::ProgramFactory::create_at(
             .work_units =
                 {{.name = "receiver_wu", .kernels = {KernelSpecName{"receiver"}}, .target_nodes = receiver_cores}},
             .advanced_options = {.prefetcher_pipe_parameters = std::move(parameters)}};
-        program = metal_exp::MakeProgramFromSpec(*operation_attributes.mesh_device, spec);
-        metal_exp::SetProgramRunArgs(program, run_args);
+        program = tt::tt_metal::Program(*operation_attributes.mesh_device, spec);
+        program.set_run_args(run_args);
         return {std::move(program), shared_variables_t{}};
     }
 
@@ -180,7 +180,7 @@ void DramPrefetcherConsumerDeviceOperation::ProgramFactory::override_runtime_arg
             pipe_param_name(i), metal_exp::PrefetcherPipeArgument{*operation_attributes.prefetcher_pipes[i]});
     }
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
-        metal_exp::UpdateProgramRunArgs(program, run_args);
+        program.update_run_args(run_args);
     }
 }
 

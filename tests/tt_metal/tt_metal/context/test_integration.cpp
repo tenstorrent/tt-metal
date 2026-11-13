@@ -15,7 +15,6 @@
 #include <tt-metalium/experimental/context/metal_env.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/mesh_config.hpp>
 #include <tt-metalium/mesh_coord.hpp>
@@ -635,7 +634,7 @@ TEST(MetalContextIntegrationTest, MockMetal2ProgramEnqueueOnOwningMesh) {
     EXPECT_FALSE(MetalContext::instance_exists(DEFAULT_CONTEXT_ID));
 
     ProgramSpec spec = MakeMinimalNoOpProgramSpec();
-    distributed::MeshWorkload workload = experimental::MakeMeshWorkloadFromSpec(*mesh_device, spec);
+    distributed::MeshWorkload workload(*mesh_device, spec);
     EXPECT_NO_THROW(distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, /*blocking=*/true));
 }
 
@@ -650,7 +649,7 @@ TEST(MetalContextIntegrationTest, MockMetal2ProgramCompileOnForeignMeshFails) {
     auto mesh_b =
         distributed::MeshDevice::open_mesh_device(env_b, distributed::MeshDeviceConfig(distributed::MeshShape(1)));
 
-    Program program = experimental::MakeProgramFromSpec(*mesh_a, MakeMinimalNoOpProgramSpec());
+    Program program(*mesh_a, MakeMinimalNoOpProgramSpec());
     EXPECT_THROW(program.impl().compile(mesh_b.get()), std::runtime_error);
 }
 

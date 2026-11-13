@@ -11,7 +11,7 @@
 #include <utility>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
@@ -51,8 +51,8 @@ TEST_F(ProgramSpecTestGen1, CPU_DynamicTensorShape_InterleavedKernelHashStableAc
         BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
         return spec;
     };
-    Program prog_a = MakeProgramFromSpec(*mesh_device_, make_spec(tt::tt_metal::Shape{1, 1, 32, 32}));
-    Program prog_b = MakeProgramFromSpec(*mesh_device_, make_spec(tt::tt_metal::Shape{1, 1, 64, 64}));
+    Program prog_a(*mesh_device_, make_spec(tt::tt_metal::Shape{1, 1, 32, 32}));
+    Program prog_b(*mesh_device_, make_spec(tt::tt_metal::Shape{1, 1, 64, 64}));
     EXPECT_EQ(
         prog_a.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash(),
         prog_b.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash())
@@ -84,16 +84,16 @@ TEST_F(ProgramSpecTestGen1, CPU_DynamicTensorShape_InterleavedRowMajorKernelHash
     };
 
     // Baseline (flag off): different widths -> different page-size CTA -> different hash.
-    Program s_a = MakeProgramFromSpec(*mesh_device_, make_spec(/*width=*/64, /*dynamic=*/false));
-    Program s_b = MakeProgramFromSpec(*mesh_device_, make_spec(/*width=*/128, /*dynamic=*/false));
+    Program s_a(*mesh_device_, make_spec(/*width=*/64, /*dynamic=*/false));
+    Program s_b(*mesh_device_, make_spec(/*width=*/128, /*dynamic=*/false));
     EXPECT_NE(
         s_a.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash(),
         s_b.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash())
         << "Baseline: row-major page size rides a CTA, so different widths must hash differently.";
 
     // With the flag: page size -> CRTA, CTAs width-independent -> identical hash (cache reuse).
-    Program d_a = MakeProgramFromSpec(*mesh_device_, make_spec(/*width=*/64, /*dynamic=*/true));
-    Program d_b = MakeProgramFromSpec(*mesh_device_, make_spec(/*width=*/128, /*dynamic=*/true));
+    Program d_a(*mesh_device_, make_spec(/*width=*/64, /*dynamic=*/true));
+    Program d_b(*mesh_device_, make_spec(/*width=*/128, /*dynamic=*/true));
     EXPECT_EQ(
         d_a.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash(),
         d_b.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash())
@@ -119,16 +119,16 @@ TEST_F(ProgramSpecTestGen1, CPU_DynamicTensorShape_ShardedKernelHashStableAcross
     };
 
     // Without the flag: differently-shaped sharded TPs hash differently (regression canary).
-    Program prog_static_a = MakeProgramFromSpec(*mesh_device_, make_spec(tt::tt_metal::Shape{1, 1, 64, 32}, false));
-    Program prog_static_b = MakeProgramFromSpec(*mesh_device_, make_spec(tt::tt_metal::Shape{1, 1, 32, 32}, false));
+    Program prog_static_a(*mesh_device_, make_spec(tt::tt_metal::Shape{1, 1, 64, 32}, false));
+    Program prog_static_b(*mesh_device_, make_spec(tt::tt_metal::Shape{1, 1, 32, 32}, false));
     EXPECT_NE(
         prog_static_a.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash(),
         prog_static_b.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash())
         << "Baseline: without dynamic_tensor_shape, different shapes should hash differently.";
 
     // With the flag: same two shapes hash identically — CTAs are now stable.
-    Program prog_dyn_a = MakeProgramFromSpec(*mesh_device_, make_spec(tt::tt_metal::Shape{1, 1, 64, 32}, true));
-    Program prog_dyn_b = MakeProgramFromSpec(*mesh_device_, make_spec(tt::tt_metal::Shape{1, 1, 32, 32}, true));
+    Program prog_dyn_a(*mesh_device_, make_spec(tt::tt_metal::Shape{1, 1, 64, 32}, true));
+    Program prog_dyn_b(*mesh_device_, make_spec(tt::tt_metal::Shape{1, 1, 32, 32}, true));
     EXPECT_EQ(
         prog_dyn_a.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash(),
         prog_dyn_b.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash())
@@ -159,10 +159,10 @@ TEST_F(ProgramSpecTestGen1, CPU_RelaxTensorLayoutAlignment_InterleavedKernelHash
         BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
         return spec;
     };
-    Program prog_default = MakeProgramFromSpec(*mesh_device_, make_spec(tt::tt_metal::Alignment{}));
-    Program prog_overpadded = MakeProgramFromSpec(*mesh_device_, make_spec(tt::tt_metal::Alignment{64, 64}));
+    Program prog_default(*mesh_device_, make_spec(tt::tt_metal::Alignment{}));
+    Program prog_overpadded(*mesh_device_, make_spec(tt::tt_metal::Alignment{64, 64}));
     // An upper-dimension alignment pads an outer dim instead ({1, 1, 30, 30} -> {1, 2, 32, 32}).
-    Program prog_upper_padded = MakeProgramFromSpec(*mesh_device_, make_spec(tt::tt_metal::Alignment{64, 64, 32, 32}));
+    Program prog_upper_padded(*mesh_device_, make_spec(tt::tt_metal::Alignment{64, 64, 32, 32}));
     const auto default_hash = prog_default.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash();
     EXPECT_EQ(default_hash, prog_overpadded.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash())
         << "Interleaved tile: the alignment must not reach the CTAs, so one binary serves both paddings.";

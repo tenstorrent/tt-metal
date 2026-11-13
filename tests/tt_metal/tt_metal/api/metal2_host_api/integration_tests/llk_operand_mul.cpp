@@ -13,7 +13,7 @@
 #include <vector>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/tensor/host_tensor.hpp>
@@ -208,7 +208,7 @@ void kernel_main() {
     spec.work_units =
         std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", node, {"reader", "writer", "compute"})};
 
-    auto workload = experimental::MakeMeshWorkloadFromSpec(*mesh_device, spec);
+    distributed::MeshWorkload workload(*mesh_device, spec);
     Program& program = workload.get_programs().begin()->second;
 
     ProgramRunArgs params;
@@ -221,7 +221,7 @@ void kernel_main() {
         {TensorParamName{"b"}, TensorArgument{b_tensor}},
         {TensorParamName{"c"}, TensorArgument{c_tensor}},
     };
-    experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     constexpr float kA = 2.0f;
     constexpr float kB = 3.0f;
@@ -302,7 +302,7 @@ void kernel_main() {
     spec.tensor_parameters = {a_param, b_param, c_param};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", node, {"compute"})};
 
-    auto workload = experimental::MakeMeshWorkloadFromSpec(*mesh_device, spec);
+    distributed::MeshWorkload workload(*mesh_device, spec);
     Program& program = workload.get_programs().begin()->second;
 
     ProgramRunArgs params;
@@ -311,7 +311,7 @@ void kernel_main() {
         {TensorParamName{"b"}, TensorArgument{b_tensor}},
         {TensorParamName{"c"}, TensorArgument{c_tensor}},
     };
-    experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     constexpr float kA = 2.0f;
     constexpr float kB = 4.0f;
@@ -440,14 +440,14 @@ void kernel_main() {
     spec.tensor_parameters = {c_param};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", node, {"writer", "compute"})};
 
-    auto workload = experimental::MakeMeshWorkloadFromSpec(*mesh_device, spec);
+    distributed::MeshWorkload workload(*mesh_device, spec);
     Program& program = workload.get_programs().begin()->second;
 
     ProgramRunArgs params;
     params.tensor_args = {
         {TensorParamName{"c"}, TensorArgument{c_tensor}},
     };
-    experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     // Must match kAWord / kBWord in the compute kernel.
     constexpr float kA = 2.0f;

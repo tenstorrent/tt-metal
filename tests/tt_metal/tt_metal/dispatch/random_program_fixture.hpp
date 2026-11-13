@@ -18,7 +18,7 @@
 #include "dispatch_test_utils.hpp"
 #include "tt_metal/tt_metal/eth/eth_test_common.hpp"
 #include <tt-metalium/workload/specification/kernel_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include "distributed/mesh_device_impl.hpp"
 
@@ -389,7 +389,7 @@ private:
                 .target_nodes = cores,
             }},
         };
-        Program program = MakeProgramFromSpec(*device_, spec);
+        Program program(*device_, spec);
 
         if (!unique_rt_args.empty() || !common_rt_args.empty()) {
             ProgramRunArgs run_args;
@@ -401,7 +401,7 @@ private:
             }
             kernel_run_args.advanced_options.common_runtime_varargs = common_rt_args;
             run_args.kernel_run_args.push_back(std::move(kernel_run_args));
-            SetProgramRunArgs(program, run_args);
+            program.set_run_args(run_args);
         }
         return program;
     }

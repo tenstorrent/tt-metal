@@ -7,7 +7,8 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "impl/context/metal_context.hpp"
 #include "llrt/tt_cluster.hpp"
@@ -93,7 +94,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmWorkerMulticast) {
             .target_nodes = sender_node,
         }},
     };
-    Program program = tt_metal::experimental::MakeProgramFromSpec(this->device(), spec);
+    Program program(this->device(), spec);
 
     ProgramRunArgs params;
     params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
@@ -108,7 +109,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmWorkerMulticast) {
              {"self_y", static_cast<uint32_t>(sender_noc.y)},
              {"peer_x", static_cast<uint32_t>(peer_noc.x)},
              {"peer_y", static_cast<uint32_t>(peer_noc.y)}})});
-    tt_metal::experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);

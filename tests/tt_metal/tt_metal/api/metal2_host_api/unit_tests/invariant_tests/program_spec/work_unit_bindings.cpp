@@ -14,7 +14,7 @@
 #include <vector>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 
 #include "metal2_host_api/test_helpers/test_helpers.hpp"
 #include "metal2_host_api/test_helpers/mock_device_fixtures.hpp"
@@ -58,7 +58,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_DFBWithMultipleProducersInSameWorkUnitFails) {
         std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer1", "producer2", "consumer"})};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("2 producer instance(s)")));
 }
 
@@ -87,7 +87,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_DFBWithMultipleConsumersInSameWorkUnitFails) {
         std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer1", "consumer2"})};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("2 consumer instance(s)")));
 }
 
@@ -117,7 +117,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_DFBWithMultipleConsumersInDifferentWorkUnitsSu
         MakeMinimalWorkUnit("wu_g2", node1, {"producer", "consumer2"}),
     };
 
-    EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
+    EXPECT_NO_THROW({ Program(*mesh_device_, spec); });
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_DFBWithMultipleProducersInDifferentWorkUnitsSucceeds) {
@@ -145,7 +145,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_DFBWithMultipleProducersInDifferentWorkUnitsSu
         MakeMinimalWorkUnit("wu_g2", node1, {"producer2", "consumer"}),
     };
 
-    EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
+    EXPECT_NO_THROW({ Program(*mesh_device_, spec); });
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_DFBProducerConsumerCoverageMismatchFails) {
@@ -174,7 +174,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_DFBProducerConsumerCoverageMismatchFails) {
     };
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("is malformed at node")));
 }
 
@@ -203,7 +203,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_LocalDFBConsumerOnNodeWithoutProducerFails) {
     };
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("This node has a consumer but no producer")));
 }
 
@@ -236,7 +236,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_LocalDFBAllGridConsumerWithPerGroupProducersSu
     spec.dataflow_buffers = {dfb};
     spec.work_units = std::move(work_units);
 
-    EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
+    EXPECT_NO_THROW({ Program(*mesh_device_, spec); });
 }
 
 TEST_F(ProgramSpecTestGen1, CPU_DFBMultipleProducersOnSameNodeFailsWithoutFlag) {
@@ -264,7 +264,7 @@ TEST_F(ProgramSpecTestGen1, CPU_DFBMultipleProducersOnSameNodeFailsWithoutFlag) 
         std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer1", "producer2", "consumer"})};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("2 producer instance(s)")));
 }
 
@@ -295,7 +295,7 @@ TEST_F(ProgramSpecTestGen1, CPU_DFBMultipleProducersOnSameNodeSucceedsWithFlag) 
     spec.work_units =
         std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer1", "producer2", "consumer"})};
 
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestGen1, CPU_DFBMultipleConsumersOnSameNodeSucceedsWithFlag) {
@@ -324,7 +324,7 @@ TEST_F(ProgramSpecTestGen1, CPU_DFBMultipleConsumersOnSameNodeSucceedsWithFlag) 
     spec.work_units =
         std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer1", "consumer2"})};
 
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadBoundByTwoKernelsSameNodeFails) {
@@ -342,7 +342,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadBoundByTwoKernelsSameNodeFails) {
         .scratchpad_spec_name = ScratchpadSpecName{"scratch_0"}, .accessor_name = "s_compute"}};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("kernel instances on node")));
 }
 
@@ -362,10 +362,10 @@ TEST_F(ProgramSpecTestGen1, CPU_ScratchpadMultiBindingOptInIsPerResource) {
         };
     }
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("ScratchpadSpec 'private' is bound by")));
     spec.scratchpads[1].advanced_options.allow_instance_multi_binding = true;
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadBoundByTwoKernelsDisjointNodesSucceeds) {
@@ -394,7 +394,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadBoundByTwoKernelsDisjointNodesSuccee
         MakeMinimalWorkUnit("wu_b", node1, {"kernel_b"}),
     };
 
-    EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
+    EXPECT_NO_THROW({ Program(*mesh_device_, spec); });
 }
 
 }  // namespace

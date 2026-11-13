@@ -34,7 +34,8 @@
 #include <tt-metalium/workload/specification/compute_hardware_config.hpp>
 #include "tt_metal/test_utils/df/float32.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "impl/program/program_impl.hpp"
 
@@ -294,7 +295,7 @@ bool reader_writer(const std::shared_ptr<distributed::MeshDevice>& mesh_device, 
         .work_units = {wu},
     };
 
-    Program program = tt_metal::experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program(*mesh_device, spec);
 
     ProgramRunArgs params;
     params.kernel_run_args = {
@@ -317,7 +318,7 @@ bool reader_writer(const std::shared_ptr<distributed::MeshDevice>& mesh_device, 
                  {"dram_page_stride", per_tile_stride}}),
         },
     };
-    tt_metal::experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     LaunchProgram(*mesh_device, std::move(program));
 
@@ -519,7 +520,7 @@ bool reader_datacopy_writer(
         .work_units = {wu},
     };
 
-    distributed::MeshWorkload workload = tt_metal::experimental::MakeMeshWorkloadFromSpec(*mesh_device, spec);
+    distributed::MeshWorkload workload(*mesh_device, spec);
     Program& program = workload.get_programs().begin()->second;
 
     log_info(tt::LogTest, "Num tiles per thread: {}", num_tiles_per_thread);
@@ -546,7 +547,7 @@ bool reader_datacopy_writer(
         },
         ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
-    tt_metal::experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, /*blocking=*/true);
 

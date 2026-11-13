@@ -11,7 +11,7 @@
 #include <stdexcept>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 
 #include "impl/allocator/allocator.hpp"
 #include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
@@ -41,7 +41,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_ValidScratchpadSucceeds) {
     spec.kernels[0].scratchpad_bindings = {
         KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"scratch_0"}, .accessor_name = "s"}};
 
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_ZeroSizeScratchpadFails) {
@@ -55,7 +55,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_ZeroSizeScratchpadFails) {
         KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"scratch_0"}, .accessor_name = "s"}};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("size_per_node == 0")));
 }
 
@@ -70,7 +70,7 @@ TEST_F(ProgramSpecTestQuasar, ScratchpadFormatUnsupportedOnArchFails) {
         KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"scratch_0"}, .accessor_name = "pad"}};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("ScratchpadSpec 'scratch_0' has data format")));
 }
@@ -86,7 +86,7 @@ TEST_F(ProgramSpecTestQuasar, ScratchpadTileWithoutFormatFails) {
         KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"scratch_0"}, .accessor_name = "pad"}};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("no data_format_metadata")));
 }
 
@@ -103,7 +103,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SharedScratchpadDMAndComputeFails) {
         {.scratchpad_spec_name = ScratchpadSpecName{"shared"}, .accessor_name = "b"}};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("only between DM kernels on Gen2")));
 }
 
@@ -118,7 +118,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadMultiBindingFlagWithSingleBinderSucc
         // A single DM or compute binder does not share memory with another kernel.
         spec.kernels[binder_index].scratchpad_bindings = {
             {.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"}};
-        EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+        EXPECT_NO_THROW(Program(*mesh_device_, spec));
     }
 }
 
@@ -136,7 +136,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SharedScratchpadBetweenDMKernelsSucceeds) {
     }
     spec.work_units = {MakeMinimalWorkUnit("work_unit", NodeCoord{0, 0}, {"dm_a", "dm_b"})};
 
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
     auto dm_a = program.impl().get_kernel_by_spec_name("dm_a");
     auto dm_b = program.impl().get_kernel_by_spec_name("dm_b");
     const auto& a = dm_a->scratchpad_binding_handles().at(0);
@@ -168,12 +168,12 @@ TEST_F(ProgramSpecTestQuasar, CPU_SharedScratchpadGen2RestrictionIsPerNode) {
         MakeMinimalWorkUnit("compute_work", NodeCoord{1, 0}, {"compute"}),
     };
     // Sharing on node 0 is DM-only; the compute kernel has a private instance on node 1.
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 
     // Extending one DM kernel onto node 1 introduces unsafe DM/compute sharing there.
     spec.work_units[1].kernels.push_back(KernelSpecName{"dm_a"});
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("only between DM kernels on Gen2")));
 }
 
@@ -189,7 +189,7 @@ TEST_F(ProgramSpecTestGen1, CPU_SharedScratchpadAllocationAndReallocation) {
     spec.kernels[1].scratchpad_bindings = {
         {.scratchpad_spec_name = ScratchpadSpecName{"shared"}, .accessor_name = "b"}};
 
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
     auto dm = program.impl().get_kernel_by_spec_name("dm_kernel");
     auto compute = program.impl().get_kernel_by_spec_name("compute_kernel");
     const auto& a = dm->scratchpad_binding_handles().at(0);
@@ -204,19 +204,19 @@ TEST_F(ProgramSpecTestGen1, CPU_SharedScratchpadAllocationAndReallocation) {
     const uint32_t original_address = a.allocated_address;
 
     // Rebuilding CRTAs for binding-only kernels must preserve both shared addresses.
-    SetProgramRunArgs(program, ProgramRunArgs{});
+    program.set_run_args(ProgramRunArgs{});
     check_addresses();
 
     // Growing the DFB moves the shared allocation and must refresh every binder's CRTA.
     ProgramRunArgs args;
     args.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb_0"}, .num_entries = 8});
-    SetProgramRunArgs(program, args);
+    program.set_run_args(args);
     program.impl().prepare_ephemeral_allocation(mesh_device_.get());
     program.impl().allocate_dataflow_buffers(mesh_device_.get());
     program.impl().allocate_scratchpads(mesh_device_.get());
     EXPECT_GT(a.allocated_address, original_address);
     check_addresses();
-    SetProgramRunArgs(program, ProgramRunArgs{});
+    program.set_run_args(ProgramRunArgs{});
     check_addresses();
 }
 
@@ -232,7 +232,7 @@ TEST_F(ProgramSpecTestBlackhole, CPU_SharedScratchpadAllocationAndReallocation) 
     spec.kernels[1].scratchpad_bindings = {
         {.scratchpad_spec_name = ScratchpadSpecName{"shared"}, .accessor_name = "b"}};
 
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
     auto dm = program.impl().get_kernel_by_spec_name("dm_kernel");
     auto compute = program.impl().get_kernel_by_spec_name("compute_kernel");
     const auto& a = dm->scratchpad_binding_handles().at(0);
@@ -247,19 +247,19 @@ TEST_F(ProgramSpecTestBlackhole, CPU_SharedScratchpadAllocationAndReallocation) 
     const uint32_t original_address = a.allocated_address;
 
     // Rebuilding CRTAs for binding-only kernels must preserve both shared addresses.
-    SetProgramRunArgs(program, ProgramRunArgs{});
+    program.set_run_args(ProgramRunArgs{});
     check_addresses();
 
     // Growing the DFB moves the shared allocation and must refresh every binder's CRTA.
     ProgramRunArgs args;
     args.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb_0"}, .num_entries = 8});
-    SetProgramRunArgs(program, args);
+    program.set_run_args(args);
     program.impl().prepare_ephemeral_allocation(mesh_device_.get());
     program.impl().allocate_dataflow_buffers(mesh_device_.get());
     program.impl().allocate_scratchpads(mesh_device_.get());
     EXPECT_GT(a.allocated_address, original_address);
     check_addresses();
-    SetProgramRunArgs(program, ProgramRunArgs{});
+    program.set_run_args(ProgramRunArgs{});
     check_addresses();
 }
 
@@ -296,7 +296,7 @@ TEST_F(ProgramSpecTestGen1, CPU_SharedScratchpadReallocationWithUnequalPersisten
             MakeMinimalWorkUnit("dfb_work", NodeCoord{2, 0}, {"dm_kernel", "compute_kernel"}),
         };
 
-        Program program = MakeProgramFromSpec(*mesh_device_, spec);
+        Program program(*mesh_device_, spec);
         auto left_kernel = program.impl().get_kernel_by_spec_name("left");
         auto right_kernel = program.impl().get_kernel_by_spec_name("right");
         const auto& private_pad = left_kernel->scratchpad_binding_handles().at(0);
@@ -324,7 +324,7 @@ TEST_F(ProgramSpecTestGen1, CPU_SharedScratchpadReallocationWithUnequalPersisten
         // on node 0 must account for node 1's higher base when marking this empty allocator.
         ProgramRunArgs args;
         args.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb_0"}, .num_entries = 8});
-        SetProgramRunArgs(program, args);
+        program.set_run_args(args);
         ASSERT_NO_THROW(program.impl().prepare_ephemeral_allocation(mesh_device_.get()));
         ASSERT_NO_THROW(program.impl().allocate_dataflow_buffers(mesh_device_.get()));
         ASSERT_NO_THROW(program.impl().allocate_scratchpads(mesh_device_.get()));
@@ -363,7 +363,7 @@ TEST_F(ProgramSpecTestGen1, CPU_SharedScratchpadWithoutDfbsOnDisjointNodes) {
 
     // No DFBs or private scratchpads seed the allocators: shared allocation must
     // create them on both disjoint nodes and reserve space for both scratchpads.
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
     ASSERT_TRUE(program.impl().dataflow_buffers().empty());
     auto left = program.impl().get_kernel_by_spec_name("left");
     auto right = program.impl().get_kernel_by_spec_name("right");
@@ -387,7 +387,7 @@ TEST_F(ProgramSpecTestGen1, CPU_SharedScratchpadWithoutDfbsOnDisjointNodes) {
             b.allocated_address + b.size_bytes <= a.allocated_address);
     };
     check_addresses();
-    SetProgramRunArgs(program, ProgramRunArgs{});
+    program.set_run_args(ProgramRunArgs{});
     check_addresses();
 }
 
@@ -424,7 +424,7 @@ TEST_F(ProgramSpecTestGen1, CPU_SharedScratchpadUsesEntireBinderNodeUnion) {
         if (reverse_order) {
             std::reverse(spec.kernels.begin(), spec.kernels.end());
         }
-        Program program = MakeProgramFromSpec(*mesh_device_, spec);
+        Program program(*mesh_device_, spec);
         auto dm = program.impl().get_kernel_by_spec_name("dm_kernel");
         auto compute = program.impl().get_kernel_by_spec_name("compute_kernel");
         auto left = program.impl().get_kernel_by_spec_name("extra");

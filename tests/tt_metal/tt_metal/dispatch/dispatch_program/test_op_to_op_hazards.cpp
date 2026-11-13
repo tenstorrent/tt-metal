@@ -34,7 +34,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/experimental/byte_based_tensor_transfers.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/tensor/spec/tensor_spec.hpp>
@@ -136,13 +136,13 @@ Program build_writer(
     };
     spec.tensor_parameters = {TensorParameter{.unique_id = TensorParamName{"dst"}, .spec = dst.tensor_spec()}};
 
-    Program program = experimental::MakeProgramFromSpec(md, spec);
+    Program program(md, spec);
     ProgramRunArgs params;
     params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
         .kernel = KernelSpecName{"writer"},
         .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"pattern", pattern}, {"stall", stall}})}};
     params.tensor_args = {{TensorParamName{"dst"}, TensorArgument{dst}}};
-    experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
     return program;
 }
 
@@ -173,7 +173,7 @@ Program build_reader(
         TensorParameter{.unique_id = TensorParamName{"dst"}, .spec = dst.tensor_spec()},
     };
 
-    Program program = experimental::MakeProgramFromSpec(md, spec);
+    Program program(md, spec);
     ProgramRunArgs params;
     params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
         .kernel = KernelSpecName{"reader"},
@@ -182,7 +182,7 @@ Program build_reader(
         {TensorParamName{"src"}, TensorArgument{src}},
         {TensorParamName{"dst"}, TensorArgument{dst}},
     };
-    experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
     return program;
 }
 
@@ -208,14 +208,14 @@ Program build_raw_writer(
             .name = "wu", .kernels = {KernelSpecName{"raw_writer"}}, .target_nodes = node}},
     };
 
-    Program program = experimental::MakeProgramFromSpec(md, spec);
+    Program program(md, spec);
     const uint32_t dst_addr = static_cast<uint32_t>(dst.mesh_buffer().get_reference_buffer()->address());
     ProgramRunArgs params;
     params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
         .kernel = KernelSpecName{"raw_writer"},
         .runtime_arg_values =
             MakeRuntimeArgsForSingleNode(node, {{"dst_addr", dst_addr}, {"pattern", pattern}, {"stall", stall}})}};
-    experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
     return program;
 }
 
@@ -255,7 +255,7 @@ Program build_multi(
         TensorParameter{.unique_id = TensorParamName{"out"}, .spec = out.tensor_spec()},
     };
 
-    Program program = experimental::MakeProgramFromSpec(md, spec);
+    Program program(md, spec);
     ProgramRunArgs params;
     params.tensor_args = {
         {TensorParamName{"in0"}, TensorArgument{in0}},
@@ -263,7 +263,7 @@ Program build_multi(
         {TensorParamName{"in2"}, TensorArgument{in2}},
         {TensorParamName{"out"}, TensorArgument{out}},
     };
-    experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
     return program;
 }
 
@@ -661,8 +661,8 @@ TEST_F(AnyDispatchMeshDeviceSingleCardFixture, BufRwCoversEveryTransferPathAndEn
         params.tensor_args.emplace(TensorParamName{name}, TensorArgument{*tensor});
     }
     spec.kernels = {k};
-    Program program = experimental::MakeProgramFromSpec(*md, spec);
-    experimental::SetProgramRunArgs(program, params);
+    Program program(*md, spec);
+    program.set_run_args(params);
     distributed::MeshWorkload wl = LaunchProgram(*md, std::move(program));
 
     const auto& program_impl = wl.get_programs()[distributed::MeshCoordinateRange(md->shape())].impl();
@@ -760,8 +760,8 @@ TEST_F(AnyDispatchMeshDeviceSingleCardFixture, BufRwEveryRawFamilyIndependentlyO
             .work_units = std::vector<WorkUnitSpec>{WorkUnitSpec{
                 .name = "wu", .kernels = {KernelSpecName{"raw"}}, .target_nodes = node}},
         };
-        Program program = experimental::MakeProgramFromSpec(*md, spec);
-        experimental::SetProgramRunArgs(program, ProgramRunArgs{});
+        Program program(*md, spec);
+        program.set_run_args(ProgramRunArgs{});
         distributed::MeshWorkload wl = LaunchProgram(*md, std::move(program));
 
         const auto& program_impl = wl.get_programs()[distributed::MeshCoordinateRange(md->shape())].impl();
@@ -810,10 +810,10 @@ TEST_F(AnyDispatchMeshDeviceSingleCardFixture, BufRwShardedPagesIteratorIsExact)
     spec.tensor_parameters = {
         TensorParameter{.unique_id = TensorParamName{"src"}, .spec = src.tensor_spec()},
         TensorParameter{.unique_id = TensorParamName{"dst"}, .spec = dst.tensor_spec()}};
-    Program program = experimental::MakeProgramFromSpec(*md, spec);
+    Program program(*md, spec);
     ProgramRunArgs params;
     params.tensor_args = {{TensorParamName{"src"}, TensorArgument{src}}, {TensorParamName{"dst"}, TensorArgument{dst}}};
-    experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
     distributed::MeshWorkload wl = LaunchProgram(*md, std::move(program));
 
     const auto& program_impl = wl.get_programs()[distributed::MeshCoordinateRange(md->shape())].impl();
@@ -857,10 +857,10 @@ TEST_F(AnyDispatchMeshDeviceSingleCardFixture, BufRwUnresolvedSlotIsOpaque) {
             .name = "wu", .kernels = {KernelSpecName{"unresolved"}}, .target_nodes = NodeCoord{0, 0}}},
     };
     spec.tensor_parameters = {TensorParameter{.unique_id = TensorParamName{"in"}, .spec = in.tensor_spec()}};
-    Program program = experimental::MakeProgramFromSpec(*md, spec);
+    Program program(*md, spec);
     ProgramRunArgs params;
     params.tensor_args = {{TensorParamName{"in"}, TensorArgument{in}}};
-    experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
     distributed::MeshWorkload wl = LaunchProgram(*md, std::move(program));
 
     const auto& program_impl = wl.get_programs()[distributed::MeshCoordinateRange(md->shape())].impl();

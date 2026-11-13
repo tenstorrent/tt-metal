@@ -39,7 +39,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/kernel_spec.hpp>
@@ -225,7 +225,7 @@ void RunRawL1ZeroTest(distributed::MeshDevice& mesh_device, const RawL1Cfg& cfg)
         local_tensor.emplace(MeshTensor::allocate_on_device(mesh_device, tensor_param.spec));
     }
 
-    Program program = tt_metal::experimental::MakeProgramFromSpec(mesh_device, spec);
+    Program program(mesh_device, spec);
 
     ProgramRunArgs params;
     params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
@@ -242,7 +242,7 @@ void RunRawL1ZeroTest(distributed::MeshDevice& mesh_device, const RawL1Cfg& cfg)
     if (local_tensor.has_value()) {
         params.tensor_args = {{TensorParamName{"region"}, ProgramRunArgs::TensorArgument{*local_tensor}}};
     }
-    tt_metal::experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     // For the CoreLocalMem target the host owns the region, so seed it to something non-zero that is
     // NOT the kernel's pattern — the kernel's own stamp check then proves it really wrote there.
@@ -369,7 +369,7 @@ TEST_F(UnitMeshAnyDispatchFixture, ZeroMemoryApi) {
         .tensor_parameters = {{.unique_id = OUT_TENSOR, .spec = tensor.tensor_spec()}},
         .work_units = {{.name = "main", .kernels = {L1_PRODUCER, DRAM_CONSUMER}, .target_nodes = node}},
     };
-    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
+    Program program(this->device(), spec);
 
     ProgramRunArgs params;
     params.kernel_run_args = {
@@ -385,7 +385,7 @@ TEST_F(UnitMeshAnyDispatchFixture, ZeroMemoryApi) {
         },
     };
     params.tensor_args = {{OUT_TENSOR, ProgramRunArgs::TensorArgument{tensor}}};
-    experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     distributed::MeshWorkload workload;
     const distributed::MeshCoordinate zero_coord{0, 0};
@@ -476,7 +476,7 @@ TEST_F(UnitMeshAnyDispatchFixture, ZeroMemoryApiBatchedL1) {
         .tensor_parameters = {{.unique_id = OUT_TENSOR, .spec = tensor.tensor_spec()}},
         .work_units = {{.name = "main", .kernels = {L1_BATCHED_PRODUCER, DRAM_CONSUMER}, .target_nodes = node}},
     };
-    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
+    Program program(this->device(), spec);
 
     ProgramRunArgs params;
     params.kernel_run_args = {
@@ -492,7 +492,7 @@ TEST_F(UnitMeshAnyDispatchFixture, ZeroMemoryApiBatchedL1) {
         },
     };
     params.tensor_args = {{OUT_TENSOR, ProgramRunArgs::TensorArgument{tensor}}};
-    experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     distributed::MeshWorkload workload;
     const distributed::MeshCoordinate zero_coord{0, 0};
@@ -632,7 +632,7 @@ static void RunDramFromRawL1Test(distributed::MeshDevice& mesh_device, RawL1Targ
         local_tensor.emplace(MeshTensor::allocate_on_device(mesh_device, region_param.spec));
     }
 
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    Program program(mesh_device, spec);
 
     ProgramRunArgs params;
     params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
@@ -650,7 +650,7 @@ static void RunDramFromRawL1Test(distributed::MeshDevice& mesh_device, RawL1Targ
     if (local_tensor.has_value()) {
         params.tensor_args.emplace(TensorParamName{"region"}, ProgramRunArgs::TensorArgument{*local_tensor});
     }
-    experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     distributed::MeshWorkload workload;
     const distributed::MeshCoordinate zero_coord{0, 0};

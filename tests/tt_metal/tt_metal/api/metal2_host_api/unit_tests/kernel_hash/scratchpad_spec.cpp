@@ -11,7 +11,7 @@
 #include <vector>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
@@ -44,8 +44,8 @@ TEST_F(ProgramSpecTestQuasar, CPU_DifferentScratchpadSizeProducesDifferentKernel
         return spec;
     };
 
-    Program prog_small = MakeProgramFromSpec(*mesh_device_, make_spec(/*size_per_node=*/1024));
-    Program prog_large = MakeProgramFromSpec(*mesh_device_, make_spec(/*size_per_node=*/2048));
+    Program prog_small(*mesh_device_, make_spec(/*size_per_node=*/1024));
+    Program prog_large(*mesh_device_, make_spec(/*size_per_node=*/2048));
 
     auto hash_small = prog_small.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash();
     auto hash_large = prog_large.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash();
@@ -56,9 +56,9 @@ TEST_F(ProgramSpecTestGen1, CPU_ScratchpadMultiBindingDoesNotChangeKernelHash) {
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
     spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"pad"}, .size_per_node = 1024}};
     spec.kernels[0].scratchpad_bindings = {{.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"}};
-    Program private_program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program private_program(*mesh_device_, spec);
     spec.scratchpads[0].advanced_options.allow_instance_multi_binding = true;
-    Program shared_program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program shared_program(*mesh_device_, spec);
     EXPECT_EQ(
         private_program.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash(),
         shared_program.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash());
@@ -77,9 +77,9 @@ TEST_F(ProgramSpecTestQuasar, ScratchpadLlkFormatAffectsKernelHash) {
         return spec;
     };
 
-    Program prog_none = MakeProgramFromSpec(*mesh_device_, make_spec(std::nullopt));
-    Program prog_f16 = MakeProgramFromSpec(*mesh_device_, make_spec(tt::DataFormat::Float16_b));
-    Program prog_f32 = MakeProgramFromSpec(*mesh_device_, make_spec(tt::DataFormat::Float32));
+    Program prog_none(*mesh_device_, make_spec(std::nullopt));
+    Program prog_f16(*mesh_device_, make_spec(tt::DataFormat::Float16_b));
+    Program prog_f32(*mesh_device_, make_spec(tt::DataFormat::Float32));
 
     auto hash_none = prog_none.impl().get_kernel_by_spec_name("compute_kernel")->compute_hash();
     auto hash_f16 = prog_f16.impl().get_kernel_by_spec_name("compute_kernel")->compute_hash();

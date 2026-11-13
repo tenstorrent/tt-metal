@@ -17,7 +17,8 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_trace_id.hpp>
 #include <tt-metalium/tilize_utils.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/tensor/tensor_apis.hpp>
 #include "test_gold_impls.hpp"
@@ -258,7 +259,7 @@ void set_bmm_run_args(Program& program, const BmmParams& p, const BmmTensors& te
         {SRC1_T, TensorArgument{tensors.src1}},
         {DST_T, TensorArgument{tensors.dst}},
     };
-    tt_metal::experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 }
 
 struct BmmInputs {
@@ -318,7 +319,7 @@ BmmSingleNode setup_bmm_single_node(distributed::MeshDevice& mesh_device, const 
     const bool use_implicit_sync = (mesh_device.arch() == ARCH::QUASAR);
     auto spec = build_bmm_program_spec(p, tensors, node, use_implicit_sync);
     BmmSingleNode bmm{
-        .workload = tt_metal::experimental::MakeMeshWorkloadFromSpec(mesh_device, spec),
+        .workload = tt_metal::distributed::MeshWorkload(mesh_device, spec),
         .inputs = make_bmm_inputs(p),
     };
     set_bmm_run_args(bmm.workload.get_programs().begin()->second, p, tensors, node);
@@ -374,7 +375,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, BmmMultinode) {
 
     // QuasarMeshDeviceSingleCardFixture only opens Quasar devices, so implicit sync is always on.
     auto spec = build_bmm_program_spec(p, tensors, node_range, /*use_implicit_sync=*/true);
-    auto program = tt_metal::experimental::MakeProgramFromSpec(mesh_device, spec);
+    tt_metal::Program program(mesh_device, spec);
 
     constexpr std::uint32_t do_bcast = 0;
     // node0 handles batch 0, node1 handles batch 1 (batch_start = node index)
@@ -404,7 +405,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, BmmMultinode) {
         {SRC1_T, TensorArgument{tensors.src1}},
         {DST_T, TensorArgument{tensors.dst}},
     };
-    tt_metal::experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     const BmmInputs inputs = make_bmm_inputs(p);
     // MeshTensor doesn't yet expose slow-dispatch read/write APIs; use unit-mesh MeshBuffer helpers.

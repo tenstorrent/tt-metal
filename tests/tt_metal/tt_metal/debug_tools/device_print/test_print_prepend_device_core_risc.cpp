@@ -101,7 +101,7 @@ Program MakeTensixPrependProgram(distributed::MeshDevice& mesh_device, const Cor
         .work_units = {WorkUnitSpec{
             .name = "main", .kernels = {kBrisc, kNcrisc, kCompute}, .target_nodes = NodeRange{cores}}},
     };
-    return tt_metal::experimental::MakeProgramFromSpec(mesh_device, spec);
+    return tt_metal::Program(mesh_device, spec);
 }
 
 void RunTest(

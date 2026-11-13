@@ -12,7 +12,7 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
@@ -247,8 +247,8 @@ ttnn::device_operation::ProgramArtifacts SliceTileProgramFactory::create_program
 SliceTileProgramFactory::cached_program_t SliceTileProgramFactory::create(
     const SliceParams& args, const SliceInputs& tensor_args, Tensor& output) {
     auto artifacts = create_program_artifacts(args, tensor_args, output);
-    auto program = tt::tt_metal::experimental::MakeProgramFromSpec(*tensor_args.input.device(), artifacts.spec);
-    tt::tt_metal::experimental::SetProgramRunArgs(program, artifacts.run_params);
+    tt::tt_metal::Program program(*tensor_args.input.device(), artifacts.spec);
+    program.set_run_args(artifacts.run_params);
     // The cache key includes the full input/output geometry, slice bounds and core grid. Reuse the
     // resulting work assignments, but re-apply them on hits to preserve scalar restoration (#52651).
     // Do not retain non-owning references to the miss's tensors after this call.
@@ -261,8 +261,7 @@ void SliceTileProgramFactory::override_runtime_arguments(
     using namespace ttnn::prim::slice_metal2;
     auto& run_args = cached_program.shared_variables.run_args;
     run_args.tensor_args = {{INPUT, tensor_args.input.mesh_tensor()}, {OUTPUT, output.mesh_tensor()}};
-    tt::tt_metal::experimental::UpdateProgramRunArgs(
-        cached_program.program, run_args, !ttnn::CONFIG.get<"validate_program_args">());
+    cached_program.program.update_run_args(run_args, !ttnn::CONFIG.get<"validate_program_args">());
     run_args.tensor_args.clear();
 }
 

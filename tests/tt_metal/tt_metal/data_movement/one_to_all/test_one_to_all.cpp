@@ -8,7 +8,7 @@
 #include "device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/specification/kernel_spec.hpp>
 #include <tt-metalium/vocabulary/node_coord.hpp>
@@ -271,7 +271,7 @@ bool run_dm(distributed::MeshDevice& mesh_device, const OneToAllConfig& test_con
             }},
         };
 
-        program = MakeProgramFromSpec(mesh_device, spec);
+        program = Program(mesh_device, spec);
 
         ProgramRunArgs run_params;
         ProgramRunArgs::KernelRunArgs sender_run_params{.kernel = sender_spec.unique_id};
@@ -288,7 +288,7 @@ bool run_dm(distributed::MeshDevice& mesh_device, const OneToAllConfig& test_con
             }
         }
         run_params.kernel_run_args.push_back(sender_run_params);
-        SetProgramRunArgs(program, run_params);
+        program.set_run_args(run_params);
     } else {
         DataMovementProcessor data_movement_processor = DataMovementProcessor::RISCV_0;
         sender_kernel = CreateKernel(

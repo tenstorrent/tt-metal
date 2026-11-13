@@ -11,7 +11,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_trace_id.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/math.hpp>
@@ -56,7 +56,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarTraceSingleReplay) {
     ProgramSpec spec{.name = "trace_test", .kernels = {dm_kernel_spec}, .work_units = {main_wu}};
 
     distributed::MeshWorkload workload;
-    workload.add_program(device_range, tt_metal::experimental::MakeProgramFromSpec(*mesh_device, spec));
+    workload.add_program(device_range, tt_metal::Program(*mesh_device, spec));
     Program& prog = workload.get_programs().at(device_range);
 
     ProgramRunArgs params;
@@ -65,7 +65,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarTraceSingleReplay) {
         .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"address", address}}),
         .common_runtime_arg_values = {{"value", value}},
     }};
-    tt_metal::experimental::SetProgramRunArgs(prog, params);
+    prog.set_run_args(params);
 
     // Warm up
     std::vector<uint32_t> zeros(1, 0);
@@ -118,7 +118,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarTraceMultipleReplays) {
     ProgramSpec spec{.name = "trace_multi_replay_test", .kernels = {dm_kernel_spec}, .work_units = {main_wu}};
 
     distributed::MeshWorkload workload;
-    workload.add_program(device_range, tt_metal::experimental::MakeProgramFromSpec(*mesh_device, spec));
+    workload.add_program(device_range, tt_metal::Program(*mesh_device, spec));
     Program& prog = workload.get_programs().at(device_range);
 
     ProgramRunArgs params;
@@ -127,7 +127,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarTraceMultipleReplays) {
         .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"address", address}}),
         .common_runtime_arg_values = {{"value", value}},
     }};
-    tt_metal::experimental::SetProgramRunArgs(prog, params);
+    prog.set_run_args(params);
 
     // Warm up
     std::vector<uint32_t> zeros(1, 0);
@@ -237,7 +237,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarTraceDFBSizeOverride) {
     };
 
     distributed::MeshWorkload workload;
-    workload.add_program(device_range, tt_metal::experimental::MakeProgramFromSpec(*mesh_device, spec));
+    workload.add_program(device_range, tt_metal::Program(*mesh_device, spec));
     Program& prog = workload.get_programs().at(device_range);
 
     ProgramRunArgs params;
@@ -251,7 +251,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarTraceDFBSizeOverride) {
             .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"result_l1_addr", consumer_record_address}}),
         },
     };
-    tt_metal::experimental::SetProgramRunArgs(prog, params);
+    prog.set_run_args(params);
 
     std::vector<uint32_t> zeros(2 * extent_record_bytes / sizeof(uint32_t), 0);
     auto run_and_expect_entry_size = [&](auto run, uint32_t expected_entry_size) {
@@ -276,7 +276,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarTraceDFBSizeOverride) {
 
     // No untraced run after the override, so trace B's capture is the first to serialize the new size.
     params.dfb_run_overrides.push_back({.dfb = DFB, .entry_size = capture_b_entry_size});
-    tt_metal::experimental::SetProgramRunArgs(prog, params);
+    prog.set_run_args(params);
     const distributed::MeshTraceId trace_id_b = capture_trace();
 
     run_and_expect_entry_size([&] { mesh_device->replay_mesh_trace(cq, trace_id_a, true); }, capture_a_entry_size);
@@ -317,14 +317,14 @@ TEST_F(QuasarMultiCQMeshDeviceSingleCardFixture, QuasarTraceMultipleReplaysAcros
         WorkUnitSpec main_wu{.name = "main", .kernels = {DM_KERNEL}, .target_nodes = node};
         ProgramSpec spec{
             .name = std::string("trace_across_cqs_") + kernel_id, .kernels = {dm_kernel_spec}, .work_units = {main_wu}};
-        Program program = tt_metal::experimental::MakeProgramFromSpec(*mesh_device, spec);
+        Program program(*mesh_device, spec);
         ProgramRunArgs params;
         params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
             .kernel = DM_KERNEL,
             .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"address", address}}),
             .common_runtime_arg_values = {{"value", value}},
         }};
-        tt_metal::experimental::SetProgramRunArgs(program, params);
+        program.set_run_args(params);
         wl.add_program(device_range, std::move(program));
         return wl;
     };

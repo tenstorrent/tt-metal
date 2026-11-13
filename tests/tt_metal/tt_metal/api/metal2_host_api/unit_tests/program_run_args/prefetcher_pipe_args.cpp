@@ -15,7 +15,7 @@
 #include <vector>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include <tt-metalium/distributed.hpp>
@@ -71,9 +71,9 @@ ProgramRunArgs PipeArgs(std::vector<std::pair<PrefetcherPipeParamName, Prefetche
 
 TEST_F(PrefetcherPipeSpecTestQuasar, CPU_SetRunArgsBindsPipeToEverySlotAndRelay) {
     PrefetcherPipe pipe = MakeWeightsPipe(*mesh_device_, /*num_credit_lanes=*/2);
-    Program program = MakeProgramFromSpec(*mesh_device_, MakeFullPipeSpec(/*receiver_threads=*/2));
+    Program program(*mesh_device_, MakeFullPipeSpec(/*receiver_threads=*/2));
 
-    SetProgramRunArgs(program, PipeArgs({{pipe_param_name, &pipe}}));
+    program.set_run_args(PipeArgs({{pipe_param_name, &pipe}}));
 
     const auto& impl = program.impl();
     const auto* binding = impl.get_prefetcher_pipe_parameter(pipe_param_name.get());
@@ -96,9 +96,9 @@ TEST_F(PrefetcherPipeSpecTestQuasar, CPU_SetRunArgsBindsPipeToEverySlotAndRelay)
 TEST_F(PrefetcherPipeSpecTestQuasar, CPU_SetRunArgsSenderOnlyTakesPipeLanes) {
     // A sender-only slot declares one lane; the sender stripes over the lanes the pipe was carved
     // with, whether or not a receiver Program has bound the pipe yet.
-    Program program = MakeProgramFromSpec(*mesh_device_, MakeSenderOnlySpec());
+    Program program(*mesh_device_, MakeSenderOnlySpec());
     PrefetcherPipe pipe = MakeWeightsPipe(*mesh_device_, /*num_credit_lanes=*/2);
-    SetProgramRunArgs(program, PipeArgs({{pipe_param_name, &pipe}}));
+    program.set_run_args(PipeArgs({{pipe_param_name, &pipe}}));
     const auto* binding = program.impl().get_prefetcher_pipe_parameter(pipe_param_name.get());
     ASSERT_EQ(binding->slots.size(), 1u);
     EXPECT_EQ(program.impl().get_prefetcher_pipe_slot(binding->slots[0].prefetcher_pipe_id).num_credit_lanes, 1u);
@@ -110,36 +110,36 @@ TEST_F(PrefetcherPipeSpecTestQuasar, CPU_SetRunArgsSenderOnlyTakesPipeLanes) {
 
 TEST_F(PrefetcherPipeSpecTestQuasar, CPU_SetRunArgsReceiverLanesMismatchFails) {
     PrefetcherPipe pipe = MakeWeightsPipe(*mesh_device_);
-    Program program = MakeProgramFromSpec(*mesh_device_, MakeFullPipeSpec(/*receiver_threads=*/2));
+    Program program(*mesh_device_, MakeFullPipeSpec(/*receiver_threads=*/2));
     EXPECT_THROWS_WITH(
-        SetProgramRunArgs(program, PipeArgs({{pipe_param_name, &pipe}})),
+        program.set_run_args(PipeArgs({{pipe_param_name, &pipe}})),
         "consumes its pipe with 2 credit lane(s) (receiver kernel num_threads / relay num_producers), but the "
         "supplied pipe was carved with 1");
     EXPECT_FALSE(program.impl().get_prefetcher_pipe_parameter(pipe_param_name.get())->is_bound());
 }
 
 TEST_F(PrefetcherPipeSpecTestQuasar, CPU_SetRunArgsMissingPipeFails) {
-    Program program = MakeProgramFromSpec(*mesh_device_, MakeSenderOnlySpec());
+    Program program(*mesh_device_, MakeSenderOnlySpec());
     EXPECT_THROWS_WITH(
-        SetProgramRunArgs(program, ProgramRunArgs{}),
+        program.set_run_args(ProgramRunArgs{}),
         "PrefetcherPipeParameter 'weights' is declared in the Program but has no PrefetcherPipeArgument entry");
 }
 
 TEST_F(PrefetcherPipeSpecTestQuasar, CPU_SetRunArgsUnknownParameterFails) {
-    Program program = MakeProgramFromSpec(*mesh_device_, MakeSenderOnlySpec());
+    Program program(*mesh_device_, MakeSenderOnlySpec());
     PrefetcherPipe pipe = MakeWeightsPipe(*mesh_device_);
     EXPECT_THROWS_WITH(
-        SetProgramRunArgs(program, PipeArgs({{pipe_param_name, &pipe}, {PrefetcherPipeParamName{"nope"}, &pipe}})),
+        program.set_run_args(PipeArgs({{pipe_param_name, &pipe}, {PrefetcherPipeParamName{"nope"}, &pipe}})),
         "PrefetcherPipe argument for 'nope', but the Program declares no PrefetcherPipeParameter of that name");
 }
 
 TEST_F(PrefetcherPipeSpecTestQuasar, CPU_SetRunArgsSenderNotOnSenderKernelFails) {
     // The spec does not name a sender; a Program that runs the sender kernel learns the sender
     // from the pipe and requires the kernel to be placed there.
-    Program program = MakeProgramFromSpec(*mesh_device_, MakeSenderOnlySpec());
+    Program program(*mesh_device_, MakeSenderOnlySpec());
     PrefetcherPipe pipe = MakePipeFor(*mesh_device_, MakePipeParameter(), CoreCoord{2, 0});
     EXPECT_THROWS_WITH(
-        SetProgramRunArgs(program, PipeArgs({{pipe_param_name, &pipe}})),
+        program.set_run_args(PipeArgs({{pipe_param_name, &pipe}})),
         "is bound by a sender kernel on nodes {[0-0 - 0-0]}, but the supplied pipe's sender is (2,0)");
     EXPECT_FALSE(program.impl().get_prefetcher_pipe_parameter(pipe_param_name.get())->is_bound());
 }
@@ -150,42 +150,42 @@ TEST_F(PrefetcherPipeSpecTestQuasar, CPU_ReceiverOnlyProgramAcceptsAnySender) {
     ProgramSpec spec = MakeFullPipeSpec();
     spec.kernels.erase(spec.kernels.begin());  // drop "sender"
     spec.work_units.erase(spec.work_units.begin());
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
-    EXPECT_NO_THROW(SetProgramRunArgs(program, PipeArgs({{pipe_param_name, &pipe}})));
+    Program program(*mesh_device_, spec);
+    EXPECT_NO_THROW(program.set_run_args(PipeArgs({{pipe_param_name, &pipe}})));
     EXPECT_EQ(
         program.impl().get_prefetcher_pipe_parameter(pipe_param_name.get())->bound_pipe_identity, pipe.identity());
 }
 
 TEST_F(PrefetcherPipeSpecTestQuasar, CPU_SetRunArgsWrongReceiversFails) {
-    Program program = MakeProgramFromSpec(*mesh_device_, MakeSenderOnlySpec());
+    Program program(*mesh_device_, MakeSenderOnlySpec());
     PrefetcherPipeParameter param = MakePipeParameter();
     param.receivers = NodeRangeSet(NodeRange{NodeCoord{0, 1}, NodeCoord{0, 2}});  // 2 of the 3
     PrefetcherPipe pipe = MakePipeFor(*mesh_device_, param, pipe_sender_node);
     EXPECT_THROWS_WITH(
-        SetProgramRunArgs(program, PipeArgs({{pipe_param_name, &pipe}})), "supplies a pipe whose receiver nodes");
+        program.set_run_args(PipeArgs({{pipe_param_name, &pipe}})), "supplies a pipe whose receiver nodes");
 }
 
 TEST_F(PrefetcherPipeSpecTestQuasar, CPU_SetRunArgsWrongRingSizeFails) {
-    Program program = MakeProgramFromSpec(*mesh_device_, MakeSenderOnlySpec());
+    Program program(*mesh_device_, MakeSenderOnlySpec());
     PrefetcherPipeParameter param = MakePipeParameter();
     param.ring_size = pipe_ring_size * 2;
     PrefetcherPipe pipe = MakePipeFor(*mesh_device_, param, pipe_sender_node);
     EXPECT_THROWS_WITH(
-        SetProgramRunArgs(program, PipeArgs({{pipe_param_name, &pipe}})),
+        program.set_run_args(PipeArgs({{pipe_param_name, &pipe}})),
         "supplies a pipe with ring_size 16384 but the parameter declares ring_size 8192");
 }
 
 TEST_F(PrefetcherPipeSpecTestQuasar, CPU_RebindingDifferentPipeFails) {
     // Sticky identity: a Program binds a parameter to one pipe object for its lifetime.
-    Program program = MakeProgramFromSpec(*mesh_device_, MakeSenderOnlySpec());
+    Program program(*mesh_device_, MakeSenderOnlySpec());
     PrefetcherPipe first = MakeWeightsPipe(*mesh_device_);
     PrefetcherPipe second = MakeWeightsPipe(*mesh_device_);
-    SetProgramRunArgs(program, PipeArgs({{pipe_param_name, &first}}));
+    program.set_run_args(PipeArgs({{pipe_param_name, &first}}));
     EXPECT_THROWS_WITH(
-        UpdateProgramRunArgs(program, PipeArgs({{pipe_param_name, &second}})),
+        program.update_run_args(PipeArgs({{pipe_param_name, &second}})),
         "supplies a different PrefetcherPipe object than the one this Program is bound to");
     EXPECT_THROWS_WITH(
-        SetProgramRunArgs(program, PipeArgs({{pipe_param_name, &second}})),
+        program.set_run_args(PipeArgs({{pipe_param_name, &second}})),
         "supplies a different PrefetcherPipe object than the one this Program is bound to");
     EXPECT_EQ(
         program.impl().get_prefetcher_pipe_parameter(pipe_param_name.get())->bound_pipe_identity, first.identity());
@@ -194,16 +194,16 @@ TEST_F(PrefetcherPipeSpecTestQuasar, CPU_RebindingDifferentPipeFails) {
 TEST_F(PrefetcherPipeSpecTestQuasar, CPU_RebindingRecarvedPipeReplacesIt) {
     // A pipe re-carved at the bound one's addresses with its geometry replaces it, as on a program
     // cache hit after the bound pipe was destroyed and re-carved.
-    Program program = MakeProgramFromSpec(*mesh_device_, MakeFullPipeSpec());
+    Program program(*mesh_device_, MakeFullPipeSpec());
     std::optional<PrefetcherPipe> first = MakeWeightsPipe(*mesh_device_);
     const CoreRangeSet receivers = first->receiver_cores();
     const PrefetcherPipeIdentity first_identity = first->identity();
-    SetProgramRunArgs(program, PipeArgs({{pipe_param_name, &*first}}));
+    program.set_run_args(PipeArgs({{pipe_param_name, &*first}}));
     first.reset();
 
     std::optional<PrefetcherPipe> replacement = RecarveLastPipe(pipe_sender_node, receivers);
     ASSERT_NE(replacement->identity(), first_identity);
-    EXPECT_NO_THROW(UpdateProgramRunArgs(program, PipeArgs({{pipe_param_name, &*replacement}})));
+    EXPECT_NO_THROW(program.update_run_args(PipeArgs({{pipe_param_name, &*replacement}})));
     const auto* binding = program.impl().get_prefetcher_pipe_parameter(pipe_param_name.get());
     EXPECT_EQ(binding->bound_pipe_identity, replacement->identity());
     for (const auto& [core, participants] : program.impl().get_per_core_prefetcher_pipes()) {
@@ -215,22 +215,22 @@ TEST_F(PrefetcherPipeSpecTestQuasar, CPU_RebindingRecarvedPipeReplacesIt) {
     replacement.reset();
     PrefetcherPipe more_lanes = RecarveLastPipe(pipe_sender_node, receivers, /*num_credit_lanes=*/2);
     EXPECT_THROWS_WITH(
-        UpdateProgramRunArgs(program, PipeArgs({{pipe_param_name, &more_lanes}})),
+        program.update_run_args(PipeArgs({{pipe_param_name, &more_lanes}})),
         "supplies a different PrefetcherPipe object than the one this Program is bound to");
     // Other pipes are still rejected.
     PrefetcherPipe other = MakeWeightsPipe(*mesh_device_);
     EXPECT_THROWS_WITH(
-        UpdateProgramRunArgs(program, PipeArgs({{pipe_param_name, &other}})),
+        program.update_run_args(PipeArgs({{pipe_param_name, &other}})),
         "supplies a different PrefetcherPipe object than the one this Program is bound to");
 }
 
 TEST_F(PrefetcherPipeSpecTestQuasar, CPU_RebindingSamePipeIsNoOpAndUpdateMayOmitIt) {
     PrefetcherPipe pipe = MakeWeightsPipe(*mesh_device_);
-    Program program = MakeProgramFromSpec(*mesh_device_, MakeFullPipeSpec());
-    SetProgramRunArgs(program, PipeArgs({{pipe_param_name, &pipe}}));
-    EXPECT_NO_THROW(SetProgramRunArgs(program, PipeArgs({{pipe_param_name, &pipe}})));
-    EXPECT_NO_THROW(UpdateProgramRunArgs(program, PipeArgs({{pipe_param_name, &pipe}})));
-    EXPECT_NO_THROW(UpdateProgramRunArgs(program, ProgramRunArgs{}));
+    Program program(*mesh_device_, MakeFullPipeSpec());
+    program.set_run_args(PipeArgs({{pipe_param_name, &pipe}}));
+    EXPECT_NO_THROW(program.set_run_args(PipeArgs({{pipe_param_name, &pipe}})));
+    EXPECT_NO_THROW(program.update_run_args(PipeArgs({{pipe_param_name, &pipe}})));
+    EXPECT_NO_THROW(program.update_run_args(ProgramRunArgs{}));
     EXPECT_EQ(
         program.impl().get_prefetcher_pipe_parameter(pipe_param_name.get())->bound_pipe_identity, pipe.identity());
 }
@@ -238,16 +238,14 @@ TEST_F(PrefetcherPipeSpecTestQuasar, CPU_RebindingSamePipeIsNoOpAndUpdateMayOmit
 TEST_F(PrefetcherPipeSpecTestQuasar, CPU_ResizingRelayDFBFails) {
     // The relay's geometry is the pipe's; per-run DFB size overrides do not apply to it.
     PrefetcherPipe pipe = MakeWeightsPipe(*mesh_device_);
-    Program program = MakeProgramFromSpec(*mesh_device_, MakeFullPipeSpec());
+    Program program(*mesh_device_, MakeFullPipeSpec());
     ProgramRunArgs params = PipeArgs({{pipe_param_name, &pipe}});
     params.dfb_run_overrides.push_back({.dfb = relay_dfb_name, .num_entries = 2});
-    EXPECT_THROWS_WITH(
-        SetProgramRunArgs(program, params), "resizes DFB 'weights_relay', which relays a PrefetcherPipe");
-    SetProgramRunArgs(program, PipeArgs({{pipe_param_name, &pipe}}));
+    EXPECT_THROWS_WITH(program.set_run_args(params), "resizes DFB 'weights_relay', which relays a PrefetcherPipe");
+    program.set_run_args(PipeArgs({{pipe_param_name, &pipe}}));
     ProgramRunArgs update;
     update.dfb_run_overrides.push_back({.dfb = relay_dfb_name, .entry_size = 1024});
-    EXPECT_THROWS_WITH(
-        UpdateProgramRunArgs(program, update), "resizes DFB 'weights_relay', which relays a PrefetcherPipe");
+    EXPECT_THROWS_WITH(program.update_run_args(update), "resizes DFB 'weights_relay', which relays a PrefetcherPipe");
 }
 
 TEST_F(PrefetcherPipeSpecTestQuasar, CPU_MultiPipeAccessorResolvesOnePipePerNode) {
@@ -260,12 +258,12 @@ TEST_F(PrefetcherPipeSpecTestQuasar, CPU_MultiPipeAccessorResolvesOnePipePerNode
     spec.kernels = {sender};
     spec.advanced_options.prefetcher_pipe_parameters = {MakePipeParameter(), MakeOtherPipeParameter()};
     spec.work_units = {MakeMinimalWorkUnit("sender_wu", both_sender_nodes, {"sender"})};
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
     ASSERT_EQ(program.impl().num_prefetcher_pipe_slots(), 1u);
 
     PrefetcherPipe weights = MakeWeightsPipe(*mesh_device_);
     PrefetcherPipe other = MakeOtherPipe(*mesh_device_);
-    SetProgramRunArgs(program, PipeArgs({{pipe_param_name, &weights}, {other_param_name, &other}}));
+    program.set_run_args(PipeArgs({{pipe_param_name, &weights}, {other_param_name, &other}}));
 
     const auto* on_weights_sender = ParticipantOn(program, pipe_sender_node, 0);
     const auto* on_other_sender = ParticipantOn(program, other_sender_node, 0);
@@ -298,7 +296,7 @@ TEST_F(PrefetcherPipeSpecTestQuasar, CPU_ReceiverKernelExtraNodesGetTheReceivers
     const CoreRangeSet extra_nodes(CoreRange({1, 1}, {1, 3}));
     spec.work_units[1].target_nodes = NodeRange{NodeCoord{0, 1}, NodeCoord{1, 3}};
     KernelNamed(spec, "receiver").advanced_options.prefetcher_pipe_bindings[0].extra_nodes = extra_nodes;
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
     const uint8_t slot_id = SlotFor(program, pipe_param_name, /*sender_role=*/false);
     const auto& slot = program.impl().get_prefetcher_pipe_slot(slot_id);
     EXPECT_EQ(slot.cores.num_cores(), 6u);
@@ -306,7 +304,7 @@ TEST_F(PrefetcherPipeSpecTestQuasar, CPU_ReceiverKernelExtraNodesGetTheReceivers
     EXPECT_EQ(slot.extra_cores, extra_nodes);
     EXPECT_FALSE(ParticipantOn(program, CoreCoord(1, 1), slot_id)->is_bound());
 
-    SetProgramRunArgs(program, PipeArgs({{pipe_param_name, &pipe}}));
+    program.set_run_args(PipeArgs({{pipe_param_name, &pipe}}));
 
     const auto* receiver = ParticipantOn(program, CoreCoord(0, 1), slot_id);
     ASSERT_NE(receiver, nullptr);
@@ -329,9 +327,9 @@ TEST_F(PrefetcherPipeSpecTestQuasar, CPU_SenderKernelExtraNodeGetsTheSendersEntr
     spec.work_units[0].target_nodes = NodeRange{NodeCoord{0, 0}, NodeCoord{1, 0}};
     KernelNamed(spec, "sender").advanced_options.prefetcher_pipe_bindings[0].extra_nodes =
         NodeRangeSet(NodeRange{NodeCoord{1, 0}, NodeCoord{1, 0}});
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
     PrefetcherPipe pipe = MakeWeightsPipe(*mesh_device_);
-    SetProgramRunArgs(program, PipeArgs({{pipe_param_name, &pipe}}));
+    program.set_run_args(PipeArgs({{pipe_param_name, &pipe}}));
 
     const uint8_t slot_id = SlotFor(program, pipe_param_name, /*sender_role=*/true);
     const auto* sender = ParticipantOn(program, pipe_sender_node, slot_id);
@@ -355,16 +353,16 @@ TEST_F(PrefetcherPipeSpecTestQuasar, CPU_ReceiverKernelExtraNodeOnPipeSenderFail
     spec.work_units[0].target_nodes = NodeRange{pipe_sender_node, NodeCoord{0, 3}};
     KernelNamed(spec, "receiver").advanced_options.prefetcher_pipe_bindings[0].extra_nodes =
         NodeRangeSet(NodeRange{pipe_sender_node, pipe_sender_node});
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
     const uint8_t slot_id = SlotFor(program, pipe_param_name, /*sender_role=*/false);
 
     EXPECT_THROWS_WITH(
-        SetProgramRunArgs(program, PipeArgs({{pipe_param_name, &sender_on_extra_node}})),
+        program.set_run_args(PipeArgs({{pipe_param_name, &sender_on_extra_node}})),
         "PrefetcherPipeParameter 'weights': the supplied pipe's sender {[0-0 - 0-0]} is one of the extra_nodes");
     EXPECT_FALSE(program.impl().get_prefetcher_pipe_parameter(pipe_param_name.get())->is_bound());
     EXPECT_FALSE(ParticipantOn(program, pipe_sender_node, slot_id)->is_bound());
 
-    SetProgramRunArgs(program, PipeArgs({{pipe_param_name, &sender_elsewhere}}));
+    program.set_run_args(PipeArgs({{pipe_param_name, &sender_elsewhere}}));
     EXPECT_EQ(ParticipantOn(program, pipe_sender_node, slot_id)->pipe_identity, sender_elsewhere.identity());
 }
 
@@ -374,10 +372,10 @@ TEST_F(PrefetcherPipeSpecTestQuasar, CPU_SenderKernelExtraNodeIsPipeSenderFails)
     spec.work_units[0].target_nodes = NodeRange{NodeCoord{0, 0}, NodeCoord{1, 0}};
     KernelNamed(spec, "sender").advanced_options.prefetcher_pipe_bindings[0].extra_nodes =
         NodeRangeSet(NodeRange{pipe_sender_node, pipe_sender_node});
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
     PrefetcherPipe pipe = MakeWeightsPipe(*mesh_device_);
     EXPECT_THROWS_WITH(
-        SetProgramRunArgs(program, PipeArgs({{pipe_param_name, &pipe}})),
+        program.set_run_args(PipeArgs({{pipe_param_name, &pipe}})),
         "PrefetcherPipeParameter 'weights': the supplied pipe's sender {[0-0 - 0-0]} is one of the extra_nodes");
     EXPECT_FALSE(program.impl().get_prefetcher_pipe_parameter(pipe_param_name.get())->is_bound());
 }
@@ -392,12 +390,12 @@ TEST_F(PrefetcherPipeSpecTestQuasar, CPU_MultiPipeAccessorTwoPipesOneSenderNodeF
     spec.kernels = {sender};
     spec.advanced_options.prefetcher_pipe_parameters = {MakePipeParameter(), MakeOtherPipeParameter()};
     spec.work_units = {MakeMinimalWorkUnit("sender_wu", both_sender_nodes, {"sender"})};
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     PrefetcherPipe weights = MakeWeightsPipe(*mesh_device_);
     PrefetcherPipe other = MakePipeFor(*mesh_device_, MakeOtherPipeParameter(), pipe_sender_node);
     EXPECT_THROWS_WITH(
-        SetProgramRunArgs(program, PipeArgs({{pipe_param_name, &weights}, {other_param_name, &other}})),
+        program.set_run_args(PipeArgs({{pipe_param_name, &weights}, {other_param_name, &other}})),
         "is claimed by two different PrefetcherPipe objects in one SetProgramRunArgs");
     EXPECT_FALSE(program.impl().get_prefetcher_pipe_parameter(pipe_param_name.get())->is_bound());
     EXPECT_FALSE(ParticipantOn(program, pipe_sender_node, 0)->is_bound());
@@ -405,9 +403,9 @@ TEST_F(PrefetcherPipeSpecTestQuasar, CPU_MultiPipeAccessorTwoPipesOneSenderNodeF
 
 TEST_F(PrefetcherPipeSpecTestQuasar, CPU_MultiPipeAccessorMissingOnePipeFails) {
     PrefetcherPipe weights = MakeWeightsPipe(*mesh_device_);
-    Program program = MakeProgramFromSpec(*mesh_device_, MakeTwoPipeReceiverSpec());
+    Program program(*mesh_device_, MakeTwoPipeReceiverSpec());
     EXPECT_THROWS_WITH(
-        SetProgramRunArgs(program, PipeArgs({{pipe_param_name, &weights}})),
+        program.set_run_args(PipeArgs({{pipe_param_name, &weights}})),
         "PrefetcherPipeParameter 'other' is declared in the Program but has no PrefetcherPipeArgument entry");
 }
 
@@ -418,8 +416,8 @@ TEST_F(PrefetcherPipeSpecTestQuasar, CPU_MultiPipeRelayWithSharedRingBinds) {
     PrefetcherPipe weights = MakeWeightsPipe(*mesh_device_, /*num_credit_lanes=*/2);
     PrefetcherPipe other = MakeOtherPipe(*mesh_device_, /*num_credit_lanes=*/2);
     ASSERT_EQ(weights.buffer_address(), other.buffer_address());
-    Program program = MakeProgramFromSpec(*mesh_device_, MakeTwoPipeReceiverSpec(/*receiver_threads=*/2));
-    SetProgramRunArgs(program, PipeArgs({{pipe_param_name, &weights}, {other_param_name, &other}}));
+    Program program(*mesh_device_, MakeTwoPipeReceiverSpec(/*receiver_threads=*/2));
+    program.set_run_args(PipeArgs({{pipe_param_name, &weights}, {other_param_name, &other}}));
 
     const auto& impl = program.impl();
     auto relay = impl.get_dataflow_buffer(impl.get_dfb_handle(relay_dfb_name.get()));
@@ -440,9 +438,9 @@ TEST_F(PrefetcherPipeSpecTestQuasar, CPU_MultiPipeRelayWithDifferentRingsFails) 
     PrefetcherPipe other = MakeOtherPipe(*mesh_device_, /*num_credit_lanes=*/2);
     ASSERT_NE(weights.buffer_address(), other.buffer_address());
     ASSERT_EQ(weights.buffer_address(), filler.buffer_address());
-    Program program = MakeProgramFromSpec(*mesh_device_, MakeTwoPipeReceiverSpec(/*receiver_threads=*/2));
+    Program program(*mesh_device_, MakeTwoPipeReceiverSpec(/*receiver_threads=*/2));
     EXPECT_THROWS_WITH(
-        SetProgramRunArgs(program, PipeArgs({{pipe_param_name, &weights}, {other_param_name, &other}})),
+        program.set_run_args(PipeArgs({{pipe_param_name, &weights}, {other_param_name, &other}})),
         "relays several pipes through DFB");
 
     // All-or-nothing: the ring mismatch is only detectable once both pipes are in hand, and it
@@ -457,7 +455,7 @@ TEST_F(PrefetcherPipeSpecTestQuasar, CPU_MultiPipeRelayWithDifferentRingsFails) 
     EXPECT_EQ(impl.get_dataflow_buffer(impl.get_dfb_handle(relay_dfb_name.get()))->borrowed_addr_, 0u);
 
     // So the caller can retry with a pipe that does share the ring.
-    EXPECT_NO_THROW(SetProgramRunArgs(program, PipeArgs({{pipe_param_name, &weights}, {other_param_name, &filler}})));
+    EXPECT_NO_THROW(program.set_run_args(PipeArgs({{pipe_param_name, &weights}, {other_param_name, &filler}})));
     EXPECT_EQ(impl.get_prefetcher_pipe_parameter(pipe_param_name.get())->bound_pipe_identity, weights.identity());
     EXPECT_EQ(impl.get_prefetcher_pipe_parameter(other_param_name.get())->bound_pipe_identity, filler.identity());
     EXPECT_EQ(
@@ -471,11 +469,11 @@ TEST_F(PrefetcherPipeSpecTestQuasar, CPU_MultiPipeReceiverWithoutRelayBindsBothP
     spec.dataflow_buffers.clear();
     KernelNamed(spec, "receiver").dfb_bindings.clear();
     spec.work_units[0].kernels = {KernelSpecName{"receiver"}};
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     PrefetcherPipe weights = MakeWeightsPipe(*mesh_device_, /*num_credit_lanes=*/2);
     PrefetcherPipe other = MakeOtherPipe(*mesh_device_, /*num_credit_lanes=*/2);
-    SetProgramRunArgs(program, PipeArgs({{pipe_param_name, &weights}, {other_param_name, &other}}));
+    program.set_run_args(PipeArgs({{pipe_param_name, &weights}, {other_param_name, &other}}));
 
     for (const CoreCoord& core : corerange_to_cores(pipe_receiver_nodes)) {
         const auto* participant = ParticipantOn(program, core, 0);
@@ -550,12 +548,12 @@ TEST_F(PrefetcherPipeSpecTestGen1TwoChips, CPU_PipeFromAnotherMeshFails) {
 
     PrefetcherPipe on_a = MakeWeightsPipe(*mesh_a_);
     PrefetcherPipe on_b = MakeWeightsPipe(*mesh_b_);
-    Program program = MakeProgramFromSpec(*mesh_a_, spec);
+    Program program(*mesh_a_, spec);
     EXPECT_THROWS_WITH(
-        SetProgramRunArgs(program, PipeArgs({{pipe_param_name, &on_b}})),
+        program.set_run_args(PipeArgs({{pipe_param_name, &on_b}})),
         "supplies a pipe allocated on a different MeshDevice than the one this Program was built for");
     EXPECT_FALSE(program.impl().get_prefetcher_pipe_parameter(pipe_param_name.get())->is_bound());
-    EXPECT_NO_THROW(SetProgramRunArgs(program, PipeArgs({{pipe_param_name, &on_a}})));
+    EXPECT_NO_THROW(program.set_run_args(PipeArgs({{pipe_param_name, &on_a}})));
 }
 
 }  // namespace

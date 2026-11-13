@@ -33,7 +33,8 @@
 #include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <tt-umd/types/arch.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include "single_core_compute_runners.hpp"
 
 namespace tt::tt_metal {
@@ -226,7 +227,7 @@ void run_single_core_copy_block_matmul_partials(
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program(*mesh_device, spec);
 
     distributed::MeshWorkload workload;
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -260,7 +261,7 @@ void run_single_core_copy_block_matmul_partials(
         },
         ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
-    experimental::SetProgramRunArgs(program_run, params);
+    program_run.set_run_args(params);
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
     distributed::Finish(cq);

@@ -19,7 +19,7 @@
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "impl/program/program_impl.hpp"
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-logger/tt-logger.hpp>

@@ -27,7 +27,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "hal_types.hpp"
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/kernel_spec.hpp>
@@ -100,7 +100,7 @@ Program make_program(const std::shared_ptr<distributed::MeshDevice>& mesh_device
         .dataflow_buffers = {scratch_spec},
         .work_units = {{.name = "main", .kernels = {PRODUCER, CONSUMER}, .target_nodes = node}},
     };
-    return tt_metal::experimental::MakeProgramFromSpec(*mesh_device, spec);
+    return tt_metal::Program(*mesh_device, spec);
 }
 
 void set_args(Program& program, uint32_t should_trip) {
@@ -113,7 +113,7 @@ void set_args(Program& program, uint32_t should_trip) {
                 MakeRuntimeArgsForSingleNode(node, {{"should_trip", should_trip}, {"zero_bytes", kZeroBytes}}),
         },
     };
-    tt_metal::experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 }
 
 void RunZeroModeTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {

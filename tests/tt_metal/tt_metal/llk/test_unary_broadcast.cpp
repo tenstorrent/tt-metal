@@ -46,7 +46,8 @@
 #include <tt-umd/types/arch.hpp>
 #include "single_core_compute_runners.hpp"
 #include "tt_metal/test_utils/bfloat_utils.hpp"
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/buffer.hpp>
@@ -419,7 +420,7 @@ void run_single_core_unary_broadcast_quasar(
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    Program program(mesh_device, spec);
 
     ProgramRunArgs params;
     params.kernel_run_args = {
@@ -435,7 +436,7 @@ void run_single_core_unary_broadcast_quasar(
     params.tensor_args = {
         {IN_TENSOR, ProgramRunArgs::TensorArgument{in_tensor}},
         {OUT_TENSOR, ProgramRunArgs::TensorArgument{out_tensor}}};
-    experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     std::vector<std::uint32_t> packed_tilized_input;
     std::vector<std::uint32_t> golden_packed_tilized_output;

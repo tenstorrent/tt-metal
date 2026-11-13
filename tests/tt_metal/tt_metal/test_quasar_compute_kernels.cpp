@@ -7,7 +7,8 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "llrt/rtoptions.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
@@ -75,14 +76,14 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelMultipleThreads) {
         .kernels = {compute_kernel_spec},
         .work_units = {main_wu},
     };
-    Program program = tt_metal::experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program(*mesh_device, spec);
 
     ProgramRunArgs params;
     params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
         .kernel = COMPUTE_KERNEL,
         .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"l1_address", l1_address}}),
     }};
-    tt_metal::experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);
@@ -151,14 +152,14 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelSingleThread) {
         .kernels = {compute_kernel_spec},
         .work_units = {main_wu},
     };
-    Program program = tt_metal::experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program(*mesh_device, spec);
 
     ProgramRunArgs params;
     params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
         .kernel = COMPUTE_KERNEL,
         .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"l1_address", l1_address}}),
     }};
-    tt_metal::experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);
@@ -212,5 +213,5 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarCreateMultipleComputeKernelsSing
         .work_units = {main_wu},
     };
 
-    ASSERT_THROW(tt_metal::experimental::MakeProgramFromSpec(this->device(), spec), std::runtime_error);
+    ASSERT_THROW(tt_metal::Program(this->device(), spec), std::runtime_error);
 }

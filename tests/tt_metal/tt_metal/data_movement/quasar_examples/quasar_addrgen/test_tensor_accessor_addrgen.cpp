@@ -49,7 +49,7 @@
 #include "tt_metal/tt_metal/api/metal2_host_api/test_helpers.hpp"
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
@@ -539,7 +539,7 @@ void run_case(
         spec.tensor_parameters.push_back({.unique_id = m2::TensorParamName{"src"}, .spec = tensor_spec});
     }
 
-    Program program = experimental::MakeProgramFromSpec(device, spec);
+    Program program(device, spec);
 
     // Transfer-stats reports: producer's words at +0, consumer's at +kStatsStride.
     auto stats_region = make_l1_region(device, 2 * kStatsStride);
@@ -563,7 +563,7 @@ void run_case(
     if (in_tensor) {
         params.tensor_args.emplace(m2::TensorParamName{"src"}, std::cref(*in_tensor));
     }
-    experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     // Zero the destination so a skipped page cannot pass by leftover data.
     std::vector<uint32_t> zeros(pages * words_per_page, 0);
@@ -1390,7 +1390,7 @@ TEST_P(TensorAccessorAddrgenContention, ThreeTensorsTwoAddrgens) {
         spec.tensor_parameters.push_back(
             {.unique_id = m2::TensorParamName{"dst" + std::to_string(t)}, .spec = tensor_spec});
     }
-    Program program = experimental::MakeProgramFromSpec(device, spec);
+    Program program(device, spec);
 
     auto stats_region = make_l1_region(device, 2 * kStatsStride);
     const uint32_t producer_report = static_cast<uint32_t>(stats_region->address());
@@ -1411,7 +1411,7 @@ TEST_P(TensorAccessorAddrgenContention, ThreeTensorsTwoAddrgens) {
         params.tensor_args.emplace(m2::TensorParamName{"src" + std::to_string(t)}, std::cref(ins[t]));
         params.tensor_args.emplace(m2::TensorParamName{"dst" + std::to_string(t)}, std::cref(outs[t]));
     }
-    experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     std::vector<std::vector<uint32_t>> expected(contention::kNumTensors);
     std::vector<uint32_t> zeros(pages * words_per_page, 0);
@@ -1560,7 +1560,7 @@ TEST_P(TensorAccessorAddrgenMixed, ReadsAndWritesDoNotCompete) {
         add_tensor("dst" + std::to_string(t), dst_tensor_spec);
     }
     spec.kernels[0].compiler_options.defines.emplace(kAddrgenStatsDefine, "1");
-    Program program = experimental::MakeProgramFromSpec(device, spec);
+    Program program(device, spec);
 
     auto scratch = make_l1_region(device, kNumSrc * page_size);
     auto stats_region = make_l1_region(device, kStatsStride);
@@ -1581,7 +1581,7 @@ TEST_P(TensorAccessorAddrgenMixed, ReadsAndWritesDoNotCompete) {
     for (uint32_t t = 0; t < kNumDst; ++t) {
         params.tensor_args.emplace(m2::TensorParamName{"dst" + std::to_string(t)}, std::cref(outs[t]));
     }
-    experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     std::vector<std::vector<uint32_t>> expected(kNumSrc);
     std::vector<uint32_t> zeros(pages * words_per_page, 0);
@@ -1752,7 +1752,7 @@ TEST_P(TensorAccessorAddrgenApi, CopiesThroughWalker) {
     };
     spec.tensor_parameters.push_back({.unique_id = m2::TensorParamName{"src"}, .spec = tensor_spec});
     spec.tensor_parameters.push_back({.unique_id = m2::TensorParamName{"dst"}, .spec = tensor_spec});
-    Program program = experimental::MakeProgramFromSpec(device, spec);
+    Program program(device, spec);
 
     auto report = make_l1_region(device, api_cov::kReportStride);
     const uint32_t report_addr = static_cast<uint32_t>(report->address());
@@ -1765,7 +1765,7 @@ TEST_P(TensorAccessorAddrgenApi, CopiesThroughWalker) {
          .runtime_arg_values = m2::MakeRuntimeArgsForSingleNode(node, {{"report_addr", report_addr}})}};
     run_args.tensor_args.emplace(m2::TensorParamName{"src"}, std::cref(src_tensor));
     run_args.tensor_args.emplace(m2::TensorParamName{"dst"}, std::cref(dst_tensor));
-    experimental::SetProgramRunArgs(program, run_args);
+    program.set_run_args(run_args);
 
     std::vector<uint32_t> src_data(pages * words_per_page);
     for (uint32_t i = 0; i < src_data.size(); ++i) {
@@ -2023,7 +2023,7 @@ TEST_P(TensorAccessorAddrgenThreads, CopiesThroughDfb) {
     };
     spec.tensor_parameters.push_back({.unique_id = m2::TensorParamName{"src"}, .spec = tensor_spec});
     spec.tensor_parameters.push_back({.unique_id = m2::TensorParamName{"dst"}, .spec = tensor_spec});
-    Program program = experimental::MakeProgramFromSpec(device, spec);
+    Program program(device, spec);
 
     // Producer threads' reports first, then the consumers'.
     const uint32_t producer_bytes = p.producers * threads::kReportStride;
@@ -2042,7 +2042,7 @@ TEST_P(TensorAccessorAddrgenThreads, CopiesThroughDfb) {
          .runtime_arg_values = m2::MakeRuntimeArgsForSingleNode(node, {{"report_addr", consumer_report}})}};
     run_args.tensor_args.emplace(m2::TensorParamName{"src"}, std::cref(src_tensor));
     run_args.tensor_args.emplace(m2::TensorParamName{"dst"}, std::cref(dst_tensor));
-    experimental::SetProgramRunArgs(program, run_args);
+    program.set_run_args(run_args);
 
     std::vector<uint32_t> src_data(pages * words_per_page);
     for (uint32_t i = 0; i < src_data.size(); ++i) {
@@ -2315,13 +2315,13 @@ TEST_P(AddrgenLoopProbe, MatchesLoopModel) {
         .kernels = {probe},
         .work_units = {m2::test_helpers::MakeMinimalWorkUnit("wu", node, {"probe"})},
     };
-    Program program = experimental::MakeProgramFromSpec(device, spec);
+    Program program(device, spec);
     m2::ProgramRunArgs params;
     params.kernel_run_args = {
         {.kernel = m2::KernelSpecName{"probe"},
          .runtime_arg_values =
              m2::MakeRuntimeArgsForSingleNode(node, {{"report_addr", static_cast<uint32_t>(report->address())}})}};
-    experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
     LaunchProgram(device, std::move(program));
 
     std::vector<uint32_t> raw;
@@ -2528,7 +2528,7 @@ TEST_P(TensorAccessorAddrgenPerf, CyclesPerTransfer) {
         spec.tensor_parameters.push_back(
             {.unique_id = m2::TensorParamName{"src" + std::to_string(t)}, .spec = tensor_spec});
     }
-    Program program = experimental::MakeProgramFromSpec(device, spec);
+    Program program(device, spec);
 
     constexpr uint32_t kReportBytes = perf::kReportWords * sizeof(uint32_t);
     auto report = make_l1_region(device, kReportBytes);
@@ -2543,7 +2543,7 @@ TEST_P(TensorAccessorAddrgenPerf, CyclesPerTransfer) {
     for (uint32_t t = 0; t < perf::kMaxTensors; ++t) {
         params.tensor_args.emplace(m2::TensorParamName{"src" + std::to_string(t)}, std::cref(tensors[t]));
     }
-    experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
     auto workload = LaunchProgram(device, std::move(program));
 
     std::vector<uint32_t> r;
@@ -2775,7 +2775,7 @@ TEST_P(TensorAccessorAddrgenShardedPerf, CyclesPerTransfer) {
         .work_units = {test_helpers::MakeMinimalWorkUnit("wu", node, {"perf"})},
     };
     spec.tensor_parameters.push_back({.unique_id = m2::TensorParamName{"src"}, .spec = tensor_spec});
-    Program program = experimental::MakeProgramFromSpec(device, spec);
+    Program program(device, spec);
 
     constexpr uint32_t kReportBytes = sharded_perf::kReportWords * sizeof(uint32_t);
     auto report = make_l1_region(device, kReportBytes);
@@ -2787,7 +2787,7 @@ TEST_P(TensorAccessorAddrgenShardedPerf, CyclesPerTransfer) {
         {.kernel = m2::KernelSpecName{"perf"},
          .runtime_arg_values = m2::MakeRuntimeArgsForSingleNode(node, {{"report_addr", report_addr}})}};
     params.tensor_args.emplace(m2::TensorParamName{"src"}, std::cref(tensor));
-    experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
     auto workload = LaunchProgram(device, std::move(program));
 
     std::vector<uint32_t> r;
@@ -2926,7 +2926,7 @@ TEST_P(AddrgenRawPerf, Breakdown) {
         .work_units = {test_helpers::MakeMinimalWorkUnit("wu", node, {"raw"})},
     };
     spec.tensor_parameters.push_back({.unique_id = m2::TensorParamName{"src0"}, .spec = tensor_spec});
-    Program program = experimental::MakeProgramFromSpec(device, spec);
+    Program program(device, spec);
 
     constexpr uint32_t kReportBytes = raw_perf::kReportWords * sizeof(uint32_t);
     auto report = make_l1_region(device, kReportBytes);
@@ -2939,7 +2939,7 @@ TEST_P(AddrgenRawPerf, Breakdown) {
         {.kernel = m2::KernelSpecName{"raw"},
          .runtime_arg_values = m2::MakeRuntimeArgsForSingleNode(node, {{"report_addr", report_addr}})}};
     params.tensor_args.emplace(m2::TensorParamName{"src0"}, std::cref(tensor));
-    experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
     auto workload = LaunchProgram(device, std::move(program));
 
     std::vector<uint32_t> r;

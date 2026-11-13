@@ -11,7 +11,7 @@
 #include <vector>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <hostdevcommon/tensor_accessor/arg_config.hpp>
 
@@ -62,7 +62,7 @@ void kernel_main() {
     spec.kernels = {dm_kernel};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
 
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
     EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
 }
 
@@ -82,7 +82,7 @@ void kernel_main() {
     spec.kernels = {dm_kernel};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
 
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
     EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
 }
 
@@ -106,7 +106,7 @@ void kernel_main() {
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
 
     // MakeProgramFromSpec compiles; OOB template index must fail that build.
-    EXPECT_ANY_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_ANY_THROW(Program(*mesh_device_, spec));
 }
 
 // Stress: bake 1024 iota words and constexpr-walk them on the kernel side.
@@ -141,7 +141,7 @@ void kernel_main() {}
     spec.kernels = {dm_kernel};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
 
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
     EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
 }
 
@@ -177,7 +177,7 @@ void kernel_main() {}
     spec.kernels = {compute_kernel};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"compute_kernel"})};
 
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
     EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
 }
 
@@ -211,7 +211,7 @@ void kernel_main() {
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
 
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     const auto kernel = program.impl().get_kernel_by_spec_name("dm_kernel");
     const auto& handles = kernel->tensor_binding_handles();
@@ -267,7 +267,7 @@ void kernel_main() {
     spec.kernels = {dm_kernel};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
 
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
     auto* device = mesh_device_->impl().get_devices()[0];
     EXPECT_NO_THROW(program.impl().compile(device));
 }
@@ -294,7 +294,7 @@ void kernel_main() {
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
 
     // MakeProgramFromSpec compiles; the OOB constant evaluation must fail that build.
-    EXPECT_ANY_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_ANY_THROW(Program(*mesh_device_, spec));
 }
 
 }  // namespace

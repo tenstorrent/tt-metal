@@ -41,7 +41,8 @@
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include <tt-umd/types/arch.hpp>
 #include "tt_metal/test_utils/bfloat_utils.hpp"
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include "single_core_compute_runners.hpp"
 
 namespace tt::tt_metal {
@@ -522,7 +523,7 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program(*mesh_device, spec);
 
     // Random stimulus: U(0, 1) per element (keep magnitudes small so matmul output
     // stays in a sensible bfloat16 range; each output element is sum of 32 products).
@@ -632,7 +633,7 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
         },
         ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
-    experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     LaunchProgram(*mesh_device, std::move(program));
 
@@ -877,7 +878,7 @@ bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDev
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program(*mesh_device, spec);
 
     constexpr int kRandMax = 1;
     constexpr std::uint32_t elems_per_tile = tt::constants::TILE_HW;
@@ -1003,7 +1004,7 @@ bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDev
         },
         ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
-    experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     LaunchProgram(*mesh_device, std::move(program));
 

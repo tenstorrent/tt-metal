@@ -134,7 +134,7 @@ static void run_dfb_size_override_test(
 
     auto device_range = distributed::MeshCoordinateRange(mesh_device.shape());
     distributed::MeshWorkload mesh_workload;
-    mesh_workload.add_program(device_range, experimental::MakeProgramFromSpec(mesh_device, spec));
+    mesh_workload.add_program(device_range, Program(mesh_device, spec));
     Program& program = mesh_workload.get_programs().at(device_range);
 
     const auto input =
@@ -169,7 +169,7 @@ static void run_dfb_size_override_test(
             run_params.dfb_run_overrides.push_back(
                 {.dfb = DFB_NAME, .entry_size = step.entry_size, .num_entries = step.num_entries});
         }
-        experimental::SetProgramRunArgs(program, run_params);
+        program.set_run_args(run_params);
 
         // Overrides are reflected in host-side state immediately.
         auto dfb = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle(*DFB_NAME));
@@ -346,7 +346,7 @@ TEST_F(UnitMeshAnyDispatchFixture, DataflowBufferSizeOverrideReenqueue) {
 
     const distributed::MeshCoordinateRange device_range(mesh_device.shape());
     distributed::MeshWorkload mesh_workload;
-    mesh_workload.add_program(device_range, experimental::MakeProgramFromSpec(mesh_device, spec));
+    mesh_workload.add_program(device_range, Program(mesh_device, spec));
     Program& program = mesh_workload.get_programs().at(device_range);
 
     const uint32_t producer_result_l1 = top_of_l1_scratch_addr(mesh_device, 2 * extent_record_bytes);
@@ -382,12 +382,12 @@ TEST_F(UnitMeshAnyDispatchFixture, DataflowBufferSizeOverrideReenqueue) {
         }
     };
 
-    experimental::SetProgramRunArgs(program, run_params);
+    program.set_run_args(run_params);
     enqueue_and_expect_extent(initial_entry_size, initial_num_entries);
 
     run_params.dfb_run_overrides.push_back(
         {.dfb = DFB_NAME, .entry_size = override_entry_size, .num_entries = override_num_entries});
-    experimental::SetProgramRunArgs(program, run_params);
+    program.set_run_args(run_params);
     enqueue_and_expect_extent(override_entry_size, override_num_entries);
 }
 

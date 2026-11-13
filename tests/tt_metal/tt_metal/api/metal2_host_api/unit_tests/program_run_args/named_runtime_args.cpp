@@ -12,7 +12,7 @@
 #include <vector>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 #include "impl/kernels/kernel.hpp"
@@ -34,7 +34,7 @@ using test_helpers::ProgramRunArgsTestQuasar;
 TEST_F(ProgramRunArgsTestQuasar, CPU_NamedRTAsAndCRTAsSucceed) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeSpecWithNamedArgs(node, {"input_ptr", "output_ptr"}, {"tile_count"});
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     ProgramRunArgs params;
     params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
@@ -44,13 +44,13 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_NamedRTAsAndCRTAsSucceed) {
     });
     params.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, {}, {}));
 
-    EXPECT_NO_THROW(SetProgramRunArgs(program, params));
+    EXPECT_NO_THROW(program.set_run_args(params));
 }
 
 TEST_F(ProgramRunArgsTestQuasar, CPU_MissingNamedRTAForNodeFails) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeSpecWithNamedArgs(node, {"input_ptr"}, {});
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     ProgramRunArgs params;
     params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
@@ -60,7 +60,7 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_MissingNamedRTAForNodeFails) {
     params.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, {}, {}));
 
     EXPECT_THAT(
-        [&] { SetProgramRunArgs(program, params); },
+        [&] { program.set_run_args(params); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("has named RTAs declared but no runtime_arg_values provided for node")));
 }
@@ -68,7 +68,7 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_MissingNamedRTAForNodeFails) {
 TEST_F(ProgramRunArgsTestQuasar, CPU_MissingDeclaredNamedRTANameFails) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeSpecWithNamedArgs(node, {"input_ptr", "output_ptr"}, {});
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     ProgramRunArgs params;
     params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
@@ -79,7 +79,7 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_MissingDeclaredNamedRTANameFails) {
     params.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, {}, {}));
 
     EXPECT_THAT(
-        [&] { SetProgramRunArgs(program, params); },
+        [&] { program.set_run_args(params); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("expects 2 named RTAs, but 1 were provided")));
 }
@@ -87,7 +87,7 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_MissingDeclaredNamedRTANameFails) {
 TEST_F(ProgramRunArgsTestQuasar, CPU_UndeclaredNamedRTAFails) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeSpecWithNamedArgs(node, {"input_ptr"}, {});
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     ProgramRunArgs params;
     params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
@@ -97,7 +97,7 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_UndeclaredNamedRTAFails) {
     params.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, {}, {}));
 
     EXPECT_THAT(
-        [&] { SetProgramRunArgs(program, params); },
+        [&] { program.set_run_args(params); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("expects 1 named RTAs, but 2 were provided")));
 }
@@ -105,7 +105,7 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_UndeclaredNamedRTAFails) {
 TEST_F(ProgramRunArgsTestQuasar, CPU_NamedCRTACountMismatchFails) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeSpecWithNamedArgs(node, {}, {"tile_count", "scale"});
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     ProgramRunArgs params;
     params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
@@ -117,7 +117,7 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_NamedCRTACountMismatchFails) {
 
     // Validation now reports the specific missing name first (more useful than a count mismatch).
     EXPECT_THAT(
-        [&] { SetProgramRunArgs(program, params); },
+        [&] { program.set_run_args(params); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("is missing named CRTA 'scale'")));
 }
 
@@ -127,7 +127,7 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_NamedAndVarargRTAsCoexistSucceeds) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
     spec.kernels[0].runtime_arg_schema.runtime_arg_names = {"input_ptr"};
     spec.kernels[0].advanced_options.num_runtime_varargs = 3;
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     ProgramRunArgs params;
     params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
@@ -140,7 +140,7 @@ TEST_F(ProgramRunArgsTestQuasar, CPU_NamedAndVarargRTAsCoexistSucceeds) {
     });
     params.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, {}, {}));
 
-    EXPECT_NO_THROW(SetProgramRunArgs(program, params));
+    EXPECT_NO_THROW(program.set_run_args(params));
 }
 
 // SetProgramRunArgs serializes named per-node RTAs by *scattering* each supplied value to its
@@ -154,7 +154,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_SetRunArgs_NamedPerNodeRTAs_ScatterToDeclarat
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
     spec.kernels[0].runtime_arg_schema.runtime_arg_names = {"a", "b", "c"};  // declaration slots 0,1,2
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     // First call (allocates the buffer). Supply c,a,b out of order on purpose.
     ProgramRunArgs params;
@@ -163,7 +163,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_SetRunArgs_NamedPerNodeRTAs_ScatterToDeclarat
         .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"c", 30}, {"a", 10}, {"b", 20}}),
     });
     params.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, {}, {}));
-    SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     const auto dm_kernel = program.impl().get_kernel_by_spec_name("dm_kernel");
     {
@@ -181,7 +181,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_SetRunArgs_NamedPerNodeRTAs_ScatterToDeclarat
         .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"b", 201}, {"c", 301}, {"a", 101}}),
     });
     params2.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, {}, {}));
-    SetProgramRunArgs(program, params2);
+    program.set_run_args(params2);
     {
         const auto* rta = dm_kernel->runtime_args_data(node).data();
         EXPECT_EQ(rta[0], 101u) << "re-Set must overwrite slot 0 in place";
@@ -201,7 +201,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_SetRunArgs_NamedPlusVarargs_FastPathLayout) {
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
     spec.kernels[0].runtime_arg_schema.runtime_arg_names = {"a", "b"};  // declaration slots 0,1
     spec.kernels[0].advanced_options = KernelAdvancedOptions{.num_runtime_varargs = 3};
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     auto make = [&](uint32_t a, uint32_t b, std::vector<uint32_t> varargs) {
         ProgramRunArgs p;
@@ -215,7 +215,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_SetRunArgs_NamedPlusVarargs_FastPathLayout) {
         return p;
     };
 
-    SetProgramRunArgs(program, make(10, 20, {100, 200, 300}));  // first call: allocates the buffer
+    program.set_run_args(make(10, 20, {100, 200, 300}));  // first call: allocates the buffer
     const auto dm = program.impl().get_kernel_by_spec_name("dm_kernel");
     {
         const auto& rta = dm->runtime_args_data(node);
@@ -227,7 +227,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_SetRunArgs_NamedPlusVarargs_FastPathLayout) {
         EXPECT_EQ(rta.data()[4], 300u);
     }
 
-    SetProgramRunArgs(program, make(11, 21, {101, 201, 301}));  // fast path: in-place patch
+    program.set_run_args(make(11, 21, {101, 201, 301}));  // fast path: in-place patch
     {
         const auto* rta = dm->runtime_args_data(node).data();
         EXPECT_EQ(rta[0], 11u) << "fast path overwrites named slot 0";
@@ -248,7 +248,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_SetRunArgs_ArgValuesSerializeAsUint32Conversi
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
     spec.kernels[0].runtime_arg_schema.runtime_arg_names = {"neg", "wide", "flag", "real", "enumerator"};
     spec.kernels[0].runtime_arg_schema.common_runtime_arg_names = {"common_neg", "common_real"};
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
     const auto dm = program.impl().get_kernel_by_spec_name("dm_kernel");
 
     for (int call = 0; call < 2; ++call) {  // call 0 allocates the buffers; call 1 patches them in place
@@ -266,7 +266,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_SetRunArgs_ArgValuesSerializeAsUint32Conversi
             .common_runtime_arg_values = {{"common_neg", neg}, {"common_real", real}},
         });
         params.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, {}, {}));
-        SetProgramRunArgs(program, params);
+        program.set_run_args(params);
 
         const std::vector<uint32_t> expected_rtas = {
             static_cast<uint32_t>(neg),

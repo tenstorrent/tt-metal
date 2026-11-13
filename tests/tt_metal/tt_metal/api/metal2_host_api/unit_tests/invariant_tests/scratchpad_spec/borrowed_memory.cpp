@@ -13,7 +13,7 @@
 
 #include <tt_stl/fmt.hpp>
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 
 #include "metal2_host_api/test_helpers/mock_device_fixtures.hpp"
@@ -61,7 +61,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaScratchpadExactFitAtZeroOffset) {
     spec.kernels[0].scratchpad_bindings = {KernelSpec::ScratchpadBinding{
         .scratchpad_spec_name = ScratchpadSpecName{"scratch"}, .accessor_name = "scratch"}};
 
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaScratchpadExactFitAtNonzeroOffset) {
@@ -82,7 +82,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaScratchpadExactFitAtNonzeroOffset) {
     spec.kernels[0].scratchpad_bindings = {KernelSpec::ScratchpadBinding{
         .scratchpad_spec_name = ScratchpadSpecName{"scratch"}, .accessor_name = "scratch"}};
 
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaScratchpadExtraAllocationNodes) {
@@ -103,7 +103,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaScratchpadExtraAllocationNodes) {
     spec.kernels[0].scratchpad_bindings = {KernelSpec::ScratchpadBinding{
         .scratchpad_spec_name = ScratchpadSpecName{"scratch"}, .accessor_name = "scratch"}};
 
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaScratchpadMissingOccupiedNode) {
@@ -126,7 +126,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaScratchpadMissingOccupiedNode) {
     spec.work_units[0].target_nodes = NodeRange{NodeCoord{0, 0}, NodeCoord{1, 0}};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("ScratchpadSpec 'scratch' allocates from SRAMArenaParameter 'arena', which does not "
                                  "cover every occupied node.")));
@@ -151,7 +151,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaScratchpadExceedsCapacity) {
         .scratchpad_spec_name = ScratchpadSpecName{"scratch"}, .accessor_name = "scratch"}};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(fmt::format(
             "ScratchpadSpec 'scratch' allocation offset {} + size_per_node {} exceeds SRAMArenaParameter 'arena' "
             "per_bank_size {}.",
@@ -179,7 +179,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaScratchpadOffsetCausesOverrun) {
         .scratchpad_spec_name = ScratchpadSpecName{"scratch"}, .accessor_name = "scratch"}};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(fmt::format(
             "ScratchpadSpec 'scratch' allocation offset {} + size_per_node {} exceeds SRAMArenaParameter 'arena' "
             "per_bank_size {}.",
@@ -208,7 +208,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaScratchpadMisalignedOffset) {
         .scratchpad_spec_name = ScratchpadSpecName{"scratch"}, .accessor_name = "scratch"}};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(fmt::format(
             "ScratchpadSpec 'scratch' allocation offset 1 must be a multiple of L1 alignment {}.", alignment))));
 }
@@ -227,7 +227,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaScratchpadAllBankLockstep) {
     spec.kernels[0].scratchpad_bindings = {KernelSpec::ScratchpadBinding{
         .scratchpad_spec_name = ScratchpadSpecName{"scratch"}, .accessor_name = "scratch"}};
 
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaScratchpadMissingMiddleBinderNode) {
@@ -243,7 +243,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaScratchpadMissingMiddleBinderNode) {
         SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("which does not cover every occupied node.")));
 }
@@ -260,7 +260,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaScratchpadOffsetNearUint32MaxCausesOv
         SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}, .offset = offset_near_uint32_max};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("exceeds SRAMArenaParameter 'arena'")));
 }
 

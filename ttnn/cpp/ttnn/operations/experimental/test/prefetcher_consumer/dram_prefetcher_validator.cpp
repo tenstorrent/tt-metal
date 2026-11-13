@@ -23,7 +23,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 
@@ -450,7 +450,7 @@ tt::tt_metal::distributed::MeshWorkload make_tensor_prefetcher_pipe_validator_wo
         .work_units =
             {{.name = "receiver_wu", .kernels = {KernelSpecName{"receiver"}}, .target_nodes = receiver_cores}},
         .advanced_options = {.prefetcher_pipe_parameters = std::move(parameters)}};
-    Program program = metal_exp::MakeProgramFromSpec(*mesh_device, spec);
+    Program program(*mesh_device, spec);
 
     ProgramRunArgs::KernelRunArgs kernel_args{.kernel = KernelSpecName{"receiver"}};
     for (const auto& plan : geom.receivers) {
@@ -467,7 +467,7 @@ tt::tt_metal::distributed::MeshWorkload make_tensor_prefetcher_pipe_validator_wo
     }
     run_args.kernel_run_args.push_back(std::move(kernel_args));
     run_args.tensor_args.emplace(source_name, TensorArgument{source_tensor.mesh_tensor()});
-    metal_exp::SetProgramRunArgs(program, run_args);
+    program.set_run_args(run_args);
 
     tt::tt_metal::distributed::MeshWorkload workload;
     workload.add_program(tt::tt_metal::distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));

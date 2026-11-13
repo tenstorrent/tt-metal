@@ -22,7 +22,8 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <filesystem>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
@@ -630,7 +631,7 @@ static Program build_quasar_program(
         .work_units = {WorkUnitSpec{.name = "main", .kernels = {READER, WRITER, COMPUTE}, .target_nodes = node}},
     };
 
-    Program program = tt_metal::experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program(*mesh_device, spec);
 
     const uint32_t per_tile_stride =
         num_tiles == 0 ? 0 : static_cast<uint32_t>(input_dram_buffer->device_local_size() / num_tiles);
@@ -653,7 +654,7 @@ static Program build_quasar_program(
                  {"num_tiles", num_tiles},
                  {"dram_page_stride", per_tile_stride}})},
     };
-    tt_metal::experimental::SetProgramRunArgs(program, run_args);
+    program.set_run_args(run_args);
     return program;
 }
 

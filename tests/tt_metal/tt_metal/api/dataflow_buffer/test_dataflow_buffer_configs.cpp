@@ -32,7 +32,7 @@
 #include "impl/program/program_impl.hpp"
 #include "impl/kernels/kernel.hpp"
 #include <gmock/gmock.h>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include "../metal2_host_api/test_helpers/test_helpers.hpp"
@@ -1282,7 +1282,7 @@ TEST_F(UnitMeshFixture, DFBReentryOverridePreservesTcAndRecomputesTxn) {
     }
     const NodeCoord node{0, 0};
     ProgramSpec spec = test_helpers::MakeMinimalValidProgramSpec();
-    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
+    Program program(this->device(), spec);
 
     program.impl().finalize_dataflow_buffer_configs();
 
@@ -1312,7 +1312,7 @@ TEST_F(UnitMeshFixture, DFBReentryOverridePreservesTcAndRecomputesTxn) {
     // Override num_entries 2 -> 4 (still divisible by the preserved txn-id divisor).
     auto params = MakeMinimalRunArgs(node);
     params.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb_0"}, .num_entries = 4});
-    EXPECT_NO_THROW(experimental::SetProgramRunArgs(program, params));
+    EXPECT_NO_THROW(program.set_run_args(params));
 
     // Size-derived state updated.
     EXPECT_EQ(dfb->config.num_entries, 4u);
@@ -1339,14 +1339,14 @@ TEST_F(UnitMeshFixture, DFBReentryNumEntriesViolatesTxnDivisorFails) {
     }
     const NodeCoord node{0, 0};
     ProgramSpec spec = test_helpers::MakeMinimalValidProgramSpec();
-    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
+    Program program(this->device(), spec);
     program.impl().finalize_dataflow_buffer_configs();
 
     auto params = MakeMinimalRunArgs(node);
     params.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb_0"}, .num_entries = 3});
 
     EXPECT_THAT(
-        [&] { experimental::SetProgramRunArgs(program, params); },
+        [&] { program.set_run_args(params); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("num_entries override 3 is not divisible by")));
 }
@@ -1359,7 +1359,7 @@ TEST_F(UnitMeshFixture, DFBReentryEntrySizeRingExtentFails) {
     }
     const NodeCoord node{0, 0};
     ProgramSpec spec = test_helpers::MakeMinimalValidProgramSpec();
-    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
+    Program program(this->device(), spec);
     program.impl().finalize_dataflow_buffer_configs();
 
     auto params = MakeMinimalRunArgs(node);
@@ -1367,7 +1367,7 @@ TEST_F(UnitMeshFixture, DFBReentryEntrySizeRingExtentFails) {
     params.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb_0"}, .entry_size = 64u * 1024u, .num_entries = 128u});
 
     EXPECT_THAT(
-        [&] { experimental::SetProgramRunArgs(program, params); },
+        [&] { program.set_run_args(params); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("exceeds Tensix unreserved L1 size")));
 }
 
@@ -1378,14 +1378,14 @@ TEST_F(UnitMeshFixture, DFBReentryEntrySizeExceedsUint16Fails) {
     }
     const NodeCoord node{0, 0};
     ProgramSpec spec = test_helpers::MakeMinimalValidProgramSpec();
-    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
+    Program program(this->device(), spec);
     program.impl().finalize_dataflow_buffer_configs();
 
     auto params = MakeMinimalRunArgs(node);
     params.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb_0"}, .entry_size = 1024u * 1024u});
 
     EXPECT_THAT(
-        [&] { experimental::SetProgramRunArgs(program, params); },
+        [&] { program.set_run_args(params); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("TRISC entry_size")));
 }
 
@@ -1397,12 +1397,12 @@ TEST_F(UnitMeshFixture, DFBOverrideCapacityExceedsUint16Fails) {
     }
     const NodeCoord node{0, 0};
     ProgramSpec spec = test_helpers::MakeMinimalValidProgramSpec();
-    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
+    Program program(this->device(), spec);
 
     auto params = MakeMinimalRunArgs(node);
     params.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb_0"}, .num_entries = 70000});  // capacity 70000 > 65535
     EXPECT_THAT(
-        [&] { experimental::SetProgramRunArgs(program, params); },
+        [&] { program.set_run_args(params); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("capacity 70000 exceeds the maximum 65535")));
 }
 
@@ -1565,7 +1565,7 @@ static inline Program build_single_dfb_program_2_0(distributed::MeshDevice& mesh
         .tensor_parameters = tensor_parameters,
         .work_units = {wu},
     };
-    return experimental::MakeProgramFromSpec(mesh_device, spec);
+    return Program(mesh_device, spec);
 }
 
 // Semantic TC-pairing check (M2 doesn't expose explicit risc masks, so we don't
@@ -2095,7 +2095,7 @@ TEST_F(UnitMeshFixture, TensixIntraTest1xDFB1Sx1SConfig_2_0) {
         .tensor_parameters = {},
         .work_units = {WorkUnitSpec{.name = "wu", .kernels = {COMPUTE}, .target_nodes = node}},
     };
-    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
+    Program program(this->device(), spec);
     m2_config_test_helpers::validate_intra_tensix_dfb_2_0(program, CoreCoord(0, 0));
 }
 
@@ -2594,7 +2594,7 @@ TEST_F(UnitMeshAnyDispatchFixture, TensixDFBConfigFollowsSemaphoresWithoutCBRegi
         is_quasar ? test_helpers::MakeMinimalValidProgramSpec() : test_helpers::MakeMinimalGen1ValidProgramSpec();
     spec.semaphores.push_back({.unique_id = SemaphoreSpecName{"sem"}, .target_nodes = NodeCoord{0, 0}});
 
-    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
+    Program program(this->device(), spec);
     program.impl().finalize_dataflow_buffer_configs();
     program.impl().finalize_offsets(this->device().get_devices()[0]);
 

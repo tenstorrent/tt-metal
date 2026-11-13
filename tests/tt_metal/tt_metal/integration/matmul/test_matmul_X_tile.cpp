@@ -9,7 +9,8 @@
 #include <cstddef>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <algorithm>
 #include <bit>
@@ -396,7 +397,7 @@ static void matmul_tile_block(
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program(*mesh_device, spec);
 
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -437,7 +438,7 @@ static void matmul_tile_block(
         },
         ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
-    experimental::SetProgramRunArgs(program_run, params);
+    program_run.set_run_args(params);
 
     fixture->RunProgram(mesh_device, workload);
 

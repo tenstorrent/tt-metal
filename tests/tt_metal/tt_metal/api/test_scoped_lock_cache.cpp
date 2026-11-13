@@ -182,7 +182,7 @@ std::vector<uint32_t> run_dfb_scoped_lock_cache_test(distributed::MeshDevice& me
         .semaphores = semaphores,  // empty unless multi-consumer-ALL
         .work_units = {wu},
     };
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    Program program(mesh_device, spec);
 
     auto make_node_args = [&](bool active) {
         return MakeRuntimeArgsForSingleNode(
@@ -204,7 +204,7 @@ std::vector<uint32_t> run_dfb_scoped_lock_cache_test(distributed::MeshDevice& me
     consumer_params.kernel = CONSUMER;
     consumer_params.runtime_arg_values = make_node_args(!p.active_is_producer);
     run_args.kernel_run_args = {producer_params, consumer_params};
-    experimental::SetProgramRunArgs(program, run_args);
+    program.set_run_args(run_args);
 
     // Pre-fill the ring's TL1 with OLD sentinels (first word of each slot); isolation + multi-all rely on
     // this baseline, the handshake variant doesn't (its producer writes the values itself via real
@@ -497,7 +497,7 @@ std::vector<uint32_t> run_scoped_lock_cache_test(distributed::MeshDevice& mesh_d
         .scratchpads = scratchpads,
         .work_units = {WorkUnitSpec{.name = "main", .kernels = {KERNEL}, .target_nodes = crs}},
     };
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    Program program(mesh_device, spec);
 
     ProgramRunArgs run_args;
     run_args.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
@@ -509,7 +509,7 @@ std::vector<uint32_t> run_scoped_lock_cache_test(distributed::MeshDevice& mesh_d
              {"result_addr", result_addr},
              {"lock_off_lines", p.lock_off_lines},
              {"lock_n_lines", p.lock_n_lines}})}};
-    experimental::SetProgramRunArgs(program, run_args);
+    program.set_run_args(run_args);
 
     // Zeroed so a kernel that never wrote reads back as 0 rather than as whatever the allocator
     // handed over. No probe-region prefill: the kernel seeds its own baseline, which is what lets the

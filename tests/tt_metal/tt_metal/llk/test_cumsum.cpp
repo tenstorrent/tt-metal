@@ -17,7 +17,8 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "impl/program/program_impl.hpp"
@@ -224,7 +225,7 @@ void run_single_core_cumsum(distributed::MeshDevice& mesh_device, const CumsumCo
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    Program program(mesh_device, spec);
 
     ProgramRunArgs params;
     params.kernel_run_args = {reader_run_args, writer_run_args, {.kernel = COMPUTE}};
@@ -232,7 +233,7 @@ void run_single_core_cumsum(distributed::MeshDevice& mesh_device, const CumsumCo
         {IN_TENSOR, ProgramRunArgs::TensorArgument{in_tensor}},
         {OUT_TENSOR, ProgramRunArgs::TensorArgument{out_tensor}},
     };
-    experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     // Fixed seed so a failure reproduces across runs.
     constexpr uint32_t kRandomSeed = 0x1234;

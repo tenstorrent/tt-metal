@@ -18,7 +18,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 
@@ -135,7 +135,7 @@ void SetScratchpadArgs(Program& program) {
         .kernel = KernelSpecName{kScratchKernel},
         .runtime_arg_values = MakeRuntimeArgsForSingleNode(NodeCoord{0, 0}, {{"report_addr", kReportAddr}}),
     }};
-    SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 }
 
 void SetScratchpadArgs(distributed::MeshWorkload& workload) {
@@ -228,14 +228,14 @@ void SetLoopbackArgs(
         },
     };
     params.dfb_run_overrides.push_back({.dfb = DFBSpecName{kLoopbackDfb}, .num_entries = dfb_num_entries});
-    SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 }
 
 TEST_F(MeshWorkloadFactoryHWTest, MakeMeshWorkloadFromSpecSupportsRepeatedEnqueue) {
     auto mesh_device = devices_.at(0);
 
     // Build a mesh-wide workload from one ProgramSpec.
-    distributed::MeshWorkload workload = MakeMeshWorkloadFromSpec(*mesh_device, MakeScratchpadSpec());
+    distributed::MeshWorkload workload(*mesh_device, MakeScratchpadSpec());
 
     // Set runtime args once, then repeatedly enqueue and verify scratchpad access.
     SetScratchpadArgs(workload);
@@ -248,14 +248,14 @@ TEST_F(MeshWorkloadFactorySlowDispatchHWTest, FactoryMethodsSupportSlowDispatch)
     auto mesh_device = devices_.at(0);
 
     // Exercise the single-spec factory through slow dispatch.
-    distributed::MeshWorkload single_workload = MakeMeshWorkloadFromSpec(*mesh_device, MakeScratchpadSpec());
+    distributed::MeshWorkload single_workload(*mesh_device, MakeScratchpadSpec());
     SetScratchpadArgs(single_workload);
     EnqueueAndCheckScratchpad(mesh_device, single_workload);
 
     // Exercise the mapped-spec factory through slow dispatch.
     std::unordered_map<distributed::MeshCoordinateRange, ProgramSpec> specs;
     specs.emplace(distributed::MeshCoordinateRange(mesh_device->shape()), MakeScratchpadSpec());
-    distributed::MeshWorkload mapped_workload = MakeMeshWorkloadFromSpecs(*mesh_device, specs);
+    distributed::MeshWorkload mapped_workload(*mesh_device, specs);
     SetScratchpadArgs(mapped_workload);
     EnqueueAndCheckScratchpad(mesh_device, mapped_workload);
 }
@@ -264,7 +264,7 @@ TEST_F(MeshWorkloadFactoryHWTest, MakeMeshWorkloadFromSpecSupportsDfbResizeBetwe
     auto mesh_device = devices_.at(0);
 
     // Build a workload with a producer-consumer DFB loopback.
-    distributed::MeshWorkload workload = MakeMeshWorkloadFromSpec(*mesh_device, MakeLoopbackSpec());
+    distributed::MeshWorkload workload(*mesh_device, MakeLoopbackSpec());
 
     auto input_buffer = distributed::MeshBuffer::create(
         distributed::ReplicatedBufferConfig{.size = kBufferBytes},
@@ -303,7 +303,7 @@ TEST_F(MeshWorkloadFactoryHWTest, MakeMeshWorkloadFromSpecsMapOverloadSupportsRe
     // Build a region-mapped workload through the ProgramSpec map overload.
     std::unordered_map<distributed::MeshCoordinateRange, ProgramSpec> specs;
     specs.emplace(distributed::MeshCoordinateRange(mesh_device->shape()), MakeScratchpadSpec());
-    distributed::MeshWorkload workload = MakeMeshWorkloadFromSpecs(*mesh_device, specs);
+    distributed::MeshWorkload workload(*mesh_device, specs);
     ASSERT_EQ(workload.get_programs().size(), 1u);
 
     // Set runtime args once, then repeatedly enqueue and verify scratchpad access.
@@ -322,7 +322,7 @@ TEST_F(MeshWorkloadFactory1x2HWTest, MakeMeshWorkloadFromSpecsRunsDistinctSpecsO
     std::unordered_map<distributed::MeshCoordinateRange, ProgramSpec> specs;
     specs.emplace(distributed::MeshCoordinateRange(first), MakeScratchpadSpec(kScratchpadBytes));
     specs.emplace(distributed::MeshCoordinateRange(second), MakeScratchpadSpec(kLargeScratchpadBytes));
-    distributed::MeshWorkload workload = MakeMeshWorkloadFromSpecs(*mesh_device_, specs);
+    distributed::MeshWorkload workload(*mesh_device_, specs);
     ASSERT_EQ(workload.get_programs().size(), 2u);
 
     // Configure both programs, enqueue once, then verify each device ran its mapped spec.

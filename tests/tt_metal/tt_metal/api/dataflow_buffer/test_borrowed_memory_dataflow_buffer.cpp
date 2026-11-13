@@ -18,7 +18,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/dataflow_buffer_spec.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
@@ -209,7 +209,7 @@ void run_borrowed_memory_dfb_program(
     // -----------------------------------------------------------------------
     auto device_range = distributed::MeshCoordinateRange(mesh_device.shape());
     distributed::MeshWorkload workload;
-    workload.add_program(device_range, MakeProgramFromSpec(mesh_device, spec));
+    workload.add_program(device_range, Program(mesh_device, spec));
     Program& program = workload.get_programs().at(device_range);
 
     MeshTensor src_tensor = MeshTensor::allocate_on_device(mesh_device, src_spec);
@@ -254,12 +254,12 @@ void run_borrowed_memory_dfb_program(
         // Oversized borrowed resize: rejected by the per-bank fit check in AttachBorrowedDFBBuffers
         // (no launch). This check is unique to borrowed memory.
         EXPECT_THAT(
-            [&] { SetProgramRunArgs(program, params); },
+            [&] { program.set_run_args(params); },
             ::testing::ThrowsMessage<std::runtime_error>(
                 ::testing::HasSubstr("exceeds the borrowed Buffer's per-bank size")));
         return;
     }
-    SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     // -----------------------------------------------------------------------
     // Write input, launch, verify
@@ -379,7 +379,7 @@ void run_update_address_test(
 
     auto device_range = distributed::MeshCoordinateRange(mesh_device.shape());
     distributed::MeshWorkload workload;
-    workload.add_program(device_range, MakeProgramFromSpec(mesh_device, spec));
+    workload.add_program(device_range, Program(mesh_device, spec));
     Program& program = workload.get_programs().at(device_range);
 
     MeshTensor src_tensor = MeshTensor::allocate_on_device(mesh_device, src_spec);
@@ -415,7 +415,7 @@ void run_update_address_test(
         {TensorParamName{"dst_tensor"}, TensorArgument{dst_tensor}},
         {TensorParamName{"dfb_ring_tensor"}, TensorArgument{ring_tensor_a}},
     };
-    SetProgramRunArgs(program, params1);
+    program.set_run_args(params1);
     distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), workload, /*blocking=*/true);
 
     EXPECT_EQ(
@@ -456,15 +456,13 @@ void run_update_address_test(
         };
         params2.dfb_run_overrides.push_back(
             {.dfb = DFBSpecName{"borrowed_dfb"}, .num_entries = reentry_num_entries_override});
-        SetProgramRunArgs(program, params2);
+        program.set_run_args(params2);
     } else {
-        UpdateTensorArgs(
-            program,
-            Table<TensorParamName, TensorArgument>{
-                {TensorParamName{"src_tensor"}, TensorArgument{src_tensor}},
-                {TensorParamName{"dst_tensor"}, TensorArgument{dst_tensor}},
-                {TensorParamName{"dfb_ring_tensor"}, TensorArgument{ring_tensor_b}},
-            });
+        program.update_tensor_args(Table<TensorParamName, TensorArgument>{
+            {TensorParamName{"src_tensor"}, TensorArgument{src_tensor}},
+            {TensorParamName{"dst_tensor"}, TensorArgument{dst_tensor}},
+            {TensorParamName{"dfb_ring_tensor"}, TensorArgument{ring_tensor_b}},
+        });
     }
     distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), workload, /*blocking=*/true);
 

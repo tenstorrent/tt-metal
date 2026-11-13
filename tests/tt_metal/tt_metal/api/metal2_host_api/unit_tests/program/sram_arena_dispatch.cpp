@@ -8,7 +8,8 @@
 #include <utility>
 
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/experimental/sram_arena/sram_arena.hpp>
 
 #include "metal2_host_api/test_helpers/mock_device_fixtures.hpp"
@@ -42,8 +43,8 @@ TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaEnqueueAcceptsBoundScratchpad) {
     // An arena scratchpad can be dispatched after its arena argument is supplied.
     distributed::MeshDevice& fixture_device = *mesh_device_;
     auto arena = SRAMArena::allocate(fixture_device, LockstepSRAMArenaProperties{4096});
-    auto program = MakeProgramFromSpec(fixture_device, MakeArenaScratchpadSpecForTest());
-    SetProgramRunArgs(program, MakeArenaRunArgsForTest(arena));
+    Program program(fixture_device, MakeArenaScratchpadSpecForTest());
+    program.set_run_args(MakeArenaRunArgsForTest(arena));
     distributed::MeshWorkload workload;
     workload.add_program(distributed::MeshCoordinateRange(fixture_device.shape()), std::move(program));
     EXPECT_NO_THROW(distributed::EnqueueMeshWorkload(fixture_device.mesh_command_queue(), workload, false));
@@ -53,9 +54,9 @@ TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaEnqueueAcceptsScratchpadAfterOmitted
     // A partial update can omit an arena that is already bound before dispatch.
     distributed::MeshDevice& fixture_device = *mesh_device_;
     auto arena = SRAMArena::allocate(fixture_device, LockstepSRAMArenaProperties{4096});
-    auto program = MakeProgramFromSpec(fixture_device, MakeArenaScratchpadSpecForTest());
-    SetProgramRunArgs(program, MakeArenaRunArgsForTest(arena));
-    UpdateProgramRunArgs(program, {});
+    Program program(fixture_device, MakeArenaScratchpadSpecForTest());
+    program.set_run_args(MakeArenaRunArgsForTest(arena));
+    program.update_run_args({});
     distributed::MeshWorkload workload;
     workload.add_program(distributed::MeshCoordinateRange(fixture_device.shape()), std::move(program));
     EXPECT_NO_THROW(distributed::EnqueueMeshWorkload(fixture_device.mesh_command_queue(), workload, false));
@@ -67,7 +68,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaEnqueueAllowsLocalScratchpadWithoutR
     ProgramSpec spec = MakeArenaScratchpadSpecForTest();
     spec.scratchpads[0].advanced_options.allocation_override.reset();
     spec.advanced_options.sram_arena_parameters.clear();
-    auto program = MakeProgramFromSpec(fixture_device, spec);
+    Program program(fixture_device, spec);
     distributed::MeshWorkload workload;
     workload.add_program(distributed::MeshCoordinateRange(fixture_device.shape()), std::move(program));
     EXPECT_NO_THROW(distributed::EnqueueMeshWorkload(fixture_device.mesh_command_queue(), workload, false));

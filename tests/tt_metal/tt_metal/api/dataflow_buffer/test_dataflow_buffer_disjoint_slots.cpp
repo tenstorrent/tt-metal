@@ -15,7 +15,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
@@ -291,7 +291,7 @@ TEST_F(UnitMeshAnyDispatchFixture, HalfGrid3Plus3DFBsOnDevice) {
         {.name = "wu_b", .kernels = {KernelSpecName{"prod_b"}, KernelSpecName{"cons_b"}}, .target_nodes = node_b},
     };
 
-    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
+    Program program(this->device(), spec);
     expect_half_grid_slots_packed(program, per_half, is_quasar);
     expect_no_slot_collision_on_core(program, CoreCoord{0, 0});
     expect_no_slot_collision_on_core(program, CoreCoord{1, 0});
@@ -315,7 +315,7 @@ TEST_F(UnitMeshAnyDispatchFixture, HalfGrid3Plus3DFBsOnDevice) {
         params.tensor_args.insert({TensorParamName{"in_" + std::to_string(i)}, std::cref(inputs[i])});
         params.tensor_args.insert({TensorParamName{"out_" + std::to_string(i)}, std::cref(outputs[i])});
     }
-    experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     LaunchProgram(this->device(), std::move(program));
 
@@ -337,7 +337,7 @@ TEST_F(UnitMeshAnyDispatchFixture, HalfGrid16Plus16DFBsOnDevice) {
     ProgramSpec spec = make_split_touch_spec(this->device(), per_half);
     auto device_range = distributed::MeshCoordinateRange(this->device().shape());
     distributed::MeshWorkload workload;
-    workload.add_program(device_range, experimental::MakeProgramFromSpec(this->device(), spec));
+    workload.add_program(device_range, Program(this->device(), spec));
     Program& program = workload.get_programs().at(device_range);
 
     expect_half_grid_slots_packed(program, per_half, is_quasar);
@@ -355,7 +355,7 @@ TEST_F(UnitMeshAnyDispatchFixture, HalfGrid16Plus16DFBsOnDevice) {
         {.kernel = KernelSpecName{"prod_b"}},
         {.kernel = KernelSpecName{"cons_b"}, .runtime_arg_values = cons_rtas(NodeCoord{1, 0})},
     };
-    experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
     distributed::EnqueueMeshWorkload(this->device().mesh_command_queue(), workload, /*blocking=*/true);
 
     std::vector<uint32_t> left_slots(per_half), right_slots(per_half);
@@ -428,7 +428,7 @@ TEST_F(UnitMeshAnyDispatchFixture, Pack22DFBsUseSharedTCSlotPool) {
         MakeMinimalWorkUnit("wu", NodeCoord{0, 0}, {"pack", "dm_consumer"}),
     };
 
-    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
+    Program program(this->device(), spec);
     LaunchProgram(this->device(), std::move(program));
 }
 
@@ -496,7 +496,7 @@ TEST_F(UnitMeshAnyDispatchFixture, HalfGridOnDeviceDataflow1DFBEach) {
             },
     };
 
-    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
+    Program program(this->device(), spec);
     EXPECT_EQ(program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_a"))->device_slot, 0u);
     EXPECT_EQ(program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_b"))->device_slot, 0u);
 
@@ -516,7 +516,7 @@ TEST_F(UnitMeshAnyDispatchFixture, HalfGridOnDeviceDataflow1DFBEach) {
         {in_b_name, std::cref(in_b)},
         {out_b_name, std::cref(out_b)},
     };
-    experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     const uint32_t words = num_entries * entry_size / sizeof(uint32_t);
     auto input_a = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 1000000, words);
@@ -579,7 +579,7 @@ TEST_F(UnitMeshAnyDispatchFixture, CoordinatorWorkerSlotReuseOnDevice) {
         MakeMinimalWorkUnit("wu_workers", NodeRange{worker_start, worker_end}, {"worker_prod", "worker_cons"}),
     };
 
-    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
+    Program program(this->device(), spec);
     const auto& impl = program.impl();
     EXPECT_EQ(impl.get_dataflow_buffer(impl.get_dfb_handle("dfb_coord"))->id, 4u);
     EXPECT_EQ(impl.get_dataflow_buffer(impl.get_dfb_handle("dfb_wide"))->device_slot, 0u);
@@ -604,7 +604,7 @@ TEST_F(UnitMeshAnyDispatchFixture, CoordinatorWorkerSlotReuseOnDevice) {
         {.kernel = KernelSpecName{"worker_prod"}},
         {.kernel = KernelSpecName{"worker_cons"}, .runtime_arg_values = std::move(worker_cons_rtas)},
     };
-    experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
     distributed::MeshWorkload coord_worker_workload;
     coord_worker_workload.add_program(distributed::MeshCoordinateRange(this->device().shape()), std::move(program));
     distributed::EnqueueMeshWorkload(this->device().mesh_command_queue(), coord_worker_workload, /*blocking=*/true);
@@ -676,7 +676,7 @@ TEST_F(UnitMeshAnyDispatchFixture, CoordinatorWorkerGappedSlotsOnDevice) {
         MakeMinimalWorkUnit("wu_workers", NodeRange{worker_start, worker_end}, {"worker_prod", "worker_cons"}),
     };
 
-    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
+    Program program(this->device(), spec);
     const auto& impl = program.impl();
     EXPECT_EQ(impl.get_dataflow_buffer(impl.get_dfb_handle("dfb_worker_0"))->device_slot, 0u);
     EXPECT_EQ(impl.get_dataflow_buffer(impl.get_dfb_handle("dfb_worker_1"))->device_slot, 1u);
@@ -700,7 +700,7 @@ TEST_F(UnitMeshAnyDispatchFixture, CoordinatorWorkerGappedSlotsOnDevice) {
         {.kernel = KernelSpecName{"worker_prod"}},
         {.kernel = KernelSpecName{"worker_cons"}, .runtime_arg_values = std::move(worker_cons_rtas)},
     };
-    experimental::SetProgramRunArgs(program, params);
+    program.set_run_args(params);
     distributed::MeshWorkload coord_worker_workload;
     coord_worker_workload.add_program(distributed::MeshCoordinateRange(this->device().shape()), std::move(program));
     distributed::EnqueueMeshWorkload(this->device().mesh_command_queue(), coord_worker_workload, /*blocking=*/true);

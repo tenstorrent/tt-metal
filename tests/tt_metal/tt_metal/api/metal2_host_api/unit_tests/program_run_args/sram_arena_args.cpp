@@ -12,7 +12,7 @@
 
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include <tt-metalium/experimental/sram_arena/sram_arena.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 
@@ -103,24 +103,24 @@ PrefetcherPipeSpaceConfig MakePrefetcherPipeSpaceConfigOnFirstScratchpadNodeForT
 
 TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaScratchpadWaitsForRunArgs) {
     // A borrowed scratchpad remains unassigned until its allocation is supplied.
-    auto program = MakeProgramFromSpec(*mesh_device_, BorrowedScratchpadSpec());
+    Program program(*mesh_device_, BorrowedScratchpadSpec());
     EXPECT_THAT(ScratchpadAddresses(program), ::testing::Each(0u));
 }
 
 TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaScratchpadMissingArgument) {
     // Full argument setting requires every declared allocation.
-    auto program = MakeProgramFromSpec(*mesh_device_, BorrowedScratchpadSpec());
+    Program program(*mesh_device_, BorrowedScratchpadSpec());
     EXPECT_THAT(
-        [&] { SetProgramRunArgs(program, {}); },
+        [&] { program.set_run_args({}); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("has no SRAMArenaArgument")));
 }
 
 TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaScratchpadUnknownArgument) {
     // Allocation arguments must name a declared parameter.
     auto arena = SRAMArena::allocate(*mesh_device_, AllocationProperties());
-    auto program = MakeProgramFromSpec(*mesh_device_, BorrowedScratchpadSpec());
+    Program program(*mesh_device_, BorrowedScratchpadSpec());
     EXPECT_THAT(
-        [&] { SetProgramRunArgs(program, AllocationArgs(arena, "unknown")); },
+        [&] { program.set_run_args(AllocationArgs(arena, "unknown")); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("unknown SRAMArenaParameter")));
 }
 
@@ -129,18 +129,18 @@ TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaScratchpadSizeMismatch) {
     auto properties = AllocationProperties();
     properties.per_bank_size *= 2;
     auto arena = SRAMArena::allocate(*mesh_device_, properties);
-    auto program = MakeProgramFromSpec(*mesh_device_, BorrowedScratchpadSpec());
+    Program program(*mesh_device_, BorrowedScratchpadSpec());
     EXPECT_THAT(
-        [&] { SetProgramRunArgs(program, AllocationArgs(arena)); },
+        [&] { program.set_run_args(AllocationArgs(arena)); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("properties do not match")));
 }
 
 TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaScratchpadKindMismatch) {
     // A lockstep allocation cannot satisfy a range-lockstep declaration.
     auto arena = SRAMArena::allocate(*mesh_device_, LockstepSRAMArenaProperties{.per_bank_size = 4096});
-    auto program = MakeProgramFromSpec(*mesh_device_, BorrowedScratchpadSpec());
+    Program program(*mesh_device_, BorrowedScratchpadSpec());
     EXPECT_THAT(
-        [&] { SetProgramRunArgs(program, AllocationArgs(arena)); },
+        [&] { program.set_run_args(AllocationArgs(arena)); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("properties do not match")));
 }
 
@@ -149,9 +149,9 @@ TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaScratchpadNodeMismatch) {
     auto properties = AllocationProperties();
     properties.allocation_node_set = NodeRangeSet{NodeRange({0, 0}, {2, 0})};
     auto arena = SRAMArena::allocate(*mesh_device_, properties);
-    auto program = MakeProgramFromSpec(*mesh_device_, BorrowedScratchpadSpec());
+    Program program(*mesh_device_, BorrowedScratchpadSpec());
     EXPECT_THAT(
-        [&] { SetProgramRunArgs(program, AllocationArgs(arena)); },
+        [&] { program.set_run_args(AllocationArgs(arena)); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("properties do not match")));
 }
 
@@ -161,8 +161,8 @@ TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaSetDifferentRangeSplits) {
     const NodeRangeSet declared_nodes{NodeRange({0, 0}, {1, 0})};
     const NodeRangeSet arena_nodes{std::vector<NodeRange>{NodeRange({0, 0}, {0, 0}), NodeRange({1, 0}, {1, 0})}};
     auto arena = SRAMArena::allocate(fixture_device, RangeLockstepSRAMArenaProperties{arena_nodes, 4096});
-    auto program = MakeProgramFromSpec(fixture_device, MakeScratchpadSpecWithArenaNodesForTest(declared_nodes));
-    EXPECT_NO_THROW(SetProgramRunArgs(program, AllocationArgs(arena)));
+    Program program(fixture_device, MakeScratchpadSpecWithArenaNodesForTest(declared_nodes));
+    EXPECT_NO_THROW(program.set_run_args(AllocationArgs(arena)));
 }
 
 TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaUpdateDifferentRangeSplits) {
@@ -172,9 +172,9 @@ TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaUpdateDifferentRangeSplits) {
     const NodeRangeSet arena_nodes{std::vector<NodeRange>{NodeRange({0, 0}, {0, 0}), NodeRange({1, 0}, {1, 0})}};
     auto initial = SRAMArena::allocate(fixture_device, RangeLockstepSRAMArenaProperties{declared_nodes, 4096});
     auto arena = SRAMArena::allocate(fixture_device, RangeLockstepSRAMArenaProperties{arena_nodes, 4096});
-    auto program = MakeProgramFromSpec(fixture_device, MakeScratchpadSpecWithArenaNodesForTest(declared_nodes));
-    SetProgramRunArgs(program, AllocationArgs(initial));
-    EXPECT_NO_THROW(UpdateProgramRunArgs(program, AllocationArgs(arena)));
+    Program program(fixture_device, MakeScratchpadSpecWithArenaNodesForTest(declared_nodes));
+    program.set_run_args(AllocationArgs(initial));
+    EXPECT_NO_THROW(program.update_run_args(AllocationArgs(arena)));
 }
 
 TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaSetDifferentRangeOrder) {
@@ -183,8 +183,8 @@ TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaSetDifferentRangeOrder) {
     const NodeRangeSet declared_nodes{std::vector<NodeRange>{NodeRange({0, 0}, {0, 0}), NodeRange({1, 0}, {1, 0})}};
     const NodeRangeSet arena_nodes{std::vector<NodeRange>{NodeRange({1, 0}, {1, 0}), NodeRange({0, 0}, {0, 0})}};
     auto arena = SRAMArena::allocate(fixture_device, RangeLockstepSRAMArenaProperties{arena_nodes, 4096});
-    auto program = MakeProgramFromSpec(fixture_device, MakeScratchpadSpecWithArenaNodesForTest(declared_nodes));
-    EXPECT_NO_THROW(SetProgramRunArgs(program, AllocationArgs(arena)));
+    Program program(fixture_device, MakeScratchpadSpecWithArenaNodesForTest(declared_nodes));
+    EXPECT_NO_THROW(program.set_run_args(AllocationArgs(arena)));
 }
 
 TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaUpdateDifferentRangeOrder) {
@@ -194,9 +194,9 @@ TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaUpdateDifferentRangeOrder) {
     const NodeRangeSet arena_nodes{std::vector<NodeRange>{NodeRange({1, 0}, {1, 0}), NodeRange({0, 0}, {0, 0})}};
     auto initial = SRAMArena::allocate(fixture_device, RangeLockstepSRAMArenaProperties{declared_nodes, 4096});
     auto arena = SRAMArena::allocate(fixture_device, RangeLockstepSRAMArenaProperties{arena_nodes, 4096});
-    auto program = MakeProgramFromSpec(fixture_device, MakeScratchpadSpecWithArenaNodesForTest(declared_nodes));
-    SetProgramRunArgs(program, AllocationArgs(initial));
-    EXPECT_NO_THROW(UpdateProgramRunArgs(program, AllocationArgs(arena)));
+    Program program(fixture_device, MakeScratchpadSpecWithArenaNodesForTest(declared_nodes));
+    program.set_run_args(AllocationArgs(initial));
+    EXPECT_NO_THROW(program.update_run_args(AllocationArgs(arena)));
 }
 
 TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaSetDifferentNodesWithSameCount) {
@@ -205,9 +205,9 @@ TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaSetDifferentNodesWithSameCount) {
     const NodeRangeSet declared_nodes{NodeRange({0, 0}, {1, 0})};
     const NodeRangeSet arena_nodes{NodeRange({1, 0}, {2, 0})};
     auto arena = SRAMArena::allocate(fixture_device, RangeLockstepSRAMArenaProperties{arena_nodes, 4096});
-    auto program = MakeProgramFromSpec(fixture_device, MakeScratchpadSpecWithArenaNodesForTest(declared_nodes));
+    Program program(fixture_device, MakeScratchpadSpecWithArenaNodesForTest(declared_nodes));
     EXPECT_THAT(
-        [&] { SetProgramRunArgs(program, AllocationArgs(arena)); },
+        [&] { program.set_run_args(AllocationArgs(arena)); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("properties do not match")));
 }
 
@@ -218,10 +218,10 @@ TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaUpdateDifferentNodesWithSameCount) {
     const NodeRangeSet arena_nodes{NodeRange({1, 0}, {2, 0})};
     auto initial = SRAMArena::allocate(fixture_device, RangeLockstepSRAMArenaProperties{declared_nodes, 4096});
     auto arena = SRAMArena::allocate(fixture_device, RangeLockstepSRAMArenaProperties{arena_nodes, 4096});
-    auto program = MakeProgramFromSpec(fixture_device, MakeScratchpadSpecWithArenaNodesForTest(declared_nodes));
-    SetProgramRunArgs(program, AllocationArgs(initial));
+    Program program(fixture_device, MakeScratchpadSpecWithArenaNodesForTest(declared_nodes));
+    program.set_run_args(AllocationArgs(initial));
     EXPECT_THAT(
-        [&] { UpdateProgramRunArgs(program, AllocationArgs(arena)); },
+        [&] { program.update_run_args(AllocationArgs(arena)); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("properties do not match")));
 }
 
@@ -229,17 +229,17 @@ TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaScratchpadDeviceMismatch) {
     // An allocation from another MeshDevice cannot be bound to the program.
     auto other = mesh_device_->create_submesh(distributed::MeshShape{1, 1});
     auto arena = SRAMArena::allocate(*other, AllocationProperties());
-    auto program = MakeProgramFromSpec(*mesh_device_, BorrowedScratchpadSpec());
+    Program program(*mesh_device_, BorrowedScratchpadSpec());
     EXPECT_THAT(
-        [&] { SetProgramRunArgs(program, AllocationArgs(arena)); },
+        [&] { program.set_run_args(AllocationArgs(arena)); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("different MeshDevice")));
 }
 
 TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaScratchpadSharedBinding) {
     // All kernels sharing a scratchpad receive the same borrowed address.
     auto arena = SRAMArena::allocate(*mesh_device_, AllocationProperties());
-    auto program = MakeProgramFromSpec(*mesh_device_, BorrowedScratchpadSpec(true));
-    SetProgramRunArgs(program, AllocationArgs(arena));
+    Program program(*mesh_device_, BorrowedScratchpadSpec(true));
+    program.set_run_args(AllocationArgs(arena));
     EXPECT_THAT(ScratchpadAddresses(program, "writer"), ::testing::Each(BorrowedAddress(arena)));
     EXPECT_THAT(ScratchpadAddresses(program, "reader"), ::testing::Each(BorrowedAddress(arena)));
 }
@@ -248,9 +248,9 @@ TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaScratchpadSharedRebinding) {
     // A partial allocation update refreshes every shared binding and argument slot.
     auto first = SRAMArena::allocate(*mesh_device_, AllocationProperties());
     auto second = SRAMArena::allocate(*mesh_device_, AllocationProperties());
-    auto program = MakeProgramFromSpec(*mesh_device_, BorrowedScratchpadSpec(true));
-    SetProgramRunArgs(program, AllocationArgs(first));
-    UpdateProgramRunArgs(program, AllocationArgs(second));
+    Program program(*mesh_device_, BorrowedScratchpadSpec(true));
+    program.set_run_args(AllocationArgs(first));
+    program.update_run_args(AllocationArgs(second));
     EXPECT_THAT(ScratchpadAddresses(program, "writer"), ::testing::Each(BorrowedAddress(second)));
     EXPECT_THAT(ScratchpadAddresses(program, "reader"), ::testing::Each(BorrowedAddress(second)));
 }
@@ -258,8 +258,8 @@ TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaScratchpadSharedRebinding) {
 TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaScratchpadPreservedDuringReallocation) {
     // Repeating program-local allocation preserves an externally bound scratchpad address.
     auto arena = SRAMArena::allocate(*mesh_device_, AllocationProperties());
-    auto program = MakeProgramFromSpec(*mesh_device_, BorrowedScratchpadSpec(true));
-    SetProgramRunArgs(program, AllocationArgs(arena));
+    Program program(*mesh_device_, BorrowedScratchpadSpec(true));
+    program.set_run_args(AllocationArgs(arena));
     program.impl().invalidate_dataflow_buffer_allocation();
     program.impl().compile_and_allocate(mesh_device_.get(), false);
     EXPECT_THAT(ScratchpadAddresses(program, "writer"), ::testing::Each(BorrowedAddress(arena)));
@@ -269,10 +269,10 @@ TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaScratchpadPreservedDuringReallocatio
 TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaScratchpadPartialUnknownArgument) {
     // Partial updates reject allocation names absent from the declaration.
     auto arena = SRAMArena::allocate(*mesh_device_, AllocationProperties());
-    auto program = MakeProgramFromSpec(*mesh_device_, BorrowedScratchpadSpec());
-    SetProgramRunArgs(program, AllocationArgs(arena));
+    Program program(*mesh_device_, BorrowedScratchpadSpec());
+    program.set_run_args(AllocationArgs(arena));
     EXPECT_THAT(
-        [&] { UpdateProgramRunArgs(program, AllocationArgs(arena, "unknown")); },
+        [&] { program.update_run_args(AllocationArgs(arena, "unknown")); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("unknown SRAMArenaParameter")));
 }
 
@@ -280,9 +280,9 @@ TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaScratchpadRejectedUpdatePreservesBin
     // A rejected allocation update leaves the existing address intact.
     auto arena = SRAMArena::allocate(*mesh_device_, AllocationProperties());
     auto invalid = SRAMArena::allocate(*mesh_device_, LockstepSRAMArenaProperties{.per_bank_size = 4096});
-    auto program = MakeProgramFromSpec(*mesh_device_, BorrowedScratchpadSpec());
-    SetProgramRunArgs(program, AllocationArgs(arena));
-    EXPECT_THROW(UpdateProgramRunArgs(program, AllocationArgs(invalid)), std::runtime_error);
+    Program program(*mesh_device_, BorrowedScratchpadSpec());
+    program.set_run_args(AllocationArgs(arena));
+    EXPECT_THROW(program.update_run_args(AllocationArgs(invalid)), std::runtime_error);
     EXPECT_THAT(ScratchpadAddresses(program), ::testing::Each(BorrowedAddress(arena)));
 }
 
@@ -320,11 +320,11 @@ TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaMovedFromValidatedSetFails) {
     // Binding a moved-from arena reports an error, including when validation is skipped.
     distributed::MeshDevice& fixture_device = *mesh_device_;
     auto arena = SRAMArena::allocate(fixture_device, AllocationProperties());
-    auto program = MakeProgramFromSpec(fixture_device, BorrowedScratchpadSpec());
+    Program program(fixture_device, BorrowedScratchpadSpec());
     auto owner = std::move(arena);
     EXPECT_THAT(
         // NOLINTNEXTLINE(bugprone-use-after-move)
-        [&] { SetProgramRunArgs(program, AllocationArgs(arena), /*skip_validation=*/false); },
+        [&] { program.set_run_args(AllocationArgs(arena), /*skip_validation=*/false); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("SRAMArena is in a moved-from state")));
 }
 
@@ -332,11 +332,11 @@ TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaMovedFromUncheckedSetFails) {
     // Binding a moved-from arena reports an error, including when validation is skipped.
     distributed::MeshDevice& fixture_device = *mesh_device_;
     auto arena = SRAMArena::allocate(fixture_device, AllocationProperties());
-    auto program = MakeProgramFromSpec(fixture_device, BorrowedScratchpadSpec());
+    Program program(fixture_device, BorrowedScratchpadSpec());
     auto owner = std::move(arena);
     EXPECT_THAT(
         // NOLINTNEXTLINE(bugprone-use-after-move)
-        [&] { SetProgramRunArgs(program, AllocationArgs(arena), /*skip_validation=*/true); },
+        [&] { program.set_run_args(AllocationArgs(arena), /*skip_validation=*/true); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("SRAMArena is in a moved-from state")));
 }
 
@@ -344,12 +344,12 @@ TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaMovedFromValidatedUpdateFails) {
     // Binding a moved-from arena reports an error, including when validation is skipped.
     distributed::MeshDevice& fixture_device = *mesh_device_;
     auto arena = SRAMArena::allocate(fixture_device, AllocationProperties());
-    auto program = MakeProgramFromSpec(fixture_device, BorrowedScratchpadSpec());
-    SetProgramRunArgs(program, AllocationArgs(arena));
+    Program program(fixture_device, BorrowedScratchpadSpec());
+    program.set_run_args(AllocationArgs(arena));
     auto owner = std::move(arena);
     EXPECT_THAT(
         // NOLINTNEXTLINE(bugprone-use-after-move)
-        [&] { UpdateProgramRunArgs(program, AllocationArgs(arena), /*skip_validation=*/false); },
+        [&] { program.update_run_args(AllocationArgs(arena), /*skip_validation=*/false); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("SRAMArena is in a moved-from state")));
 }
 
@@ -357,12 +357,12 @@ TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaMovedFromUncheckedUpdateFails) {
     // Binding a moved-from arena reports an error, including when validation is skipped.
     distributed::MeshDevice& fixture_device = *mesh_device_;
     auto arena = SRAMArena::allocate(fixture_device, AllocationProperties());
-    auto program = MakeProgramFromSpec(fixture_device, BorrowedScratchpadSpec());
-    SetProgramRunArgs(program, AllocationArgs(arena));
+    Program program(fixture_device, BorrowedScratchpadSpec());
+    program.set_run_args(AllocationArgs(arena));
     auto owner = std::move(arena);
     EXPECT_THAT(
         // NOLINTNEXTLINE(bugprone-use-after-move)
-        [&] { UpdateProgramRunArgs(program, AllocationArgs(arena), /*skip_validation=*/true); },
+        [&] { program.update_run_args(AllocationArgs(arena), /*skip_validation=*/true); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("SRAMArena is in a moved-from state")));
 }
 
@@ -371,8 +371,8 @@ TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaMovedOwnerCanBind) {
     distributed::MeshDevice& fixture_device = *mesh_device_;
     auto arena = SRAMArena::allocate(fixture_device, AllocationProperties());
     auto owner = std::move(arena);
-    auto program = MakeProgramFromSpec(fixture_device, BorrowedScratchpadSpec());
-    SetProgramRunArgs(program, AllocationArgs(owner));
+    Program program(fixture_device, BorrowedScratchpadSpec());
+    program.set_run_args(AllocationArgs(owner));
     EXPECT_THAT(ScratchpadAddresses(program), ::testing::Each(BorrowedAddress(owner)));
 }
 
@@ -381,17 +381,17 @@ TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaSetAcceptsEveryDeclaredArena) {
     distributed::MeshDevice& fixture_device = *mesh_device_;
     auto first = SRAMArena::allocate(fixture_device, AllocationProperties());
     auto second = SRAMArena::allocate(fixture_device, AllocationProperties());
-    auto program = MakeProgramFromSpec(fixture_device, MakeScratchpadSpecWithTwoArenasForTest());
+    Program program(fixture_device, MakeScratchpadSpecWithTwoArenasForTest());
     ProgramRunArgs args;
     args.advanced_options.sram_arena_args = {
         {SRAMArenaParamName{"arena"}, std::cref(first)}, {SRAMArenaParamName{"second"}, std::cref(second)}};
-    EXPECT_NO_THROW(SetProgramRunArgs(program, args));
+    EXPECT_NO_THROW(program.set_run_args(args));
 }
 
 TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaScratchpadLeavesNodesOpenForPersistentL1) {
     // A Program whose only scratchpad lives in an SRAMArena does not block a later PrefetcherPipeSpace on its nodes.
     distributed::MeshDevice& fixture_device = *mesh_device_;
-    Program program = MakeProgramFromSpec(fixture_device, BorrowedScratchpadSpec());
+    Program program(fixture_device, BorrowedScratchpadSpec());
     const PrefetcherPipeSpaceConfig space_config = MakePrefetcherPipeSpaceConfigOnFirstScratchpadNodeForTest();
     EXPECT_NO_THROW({ PrefetcherPipeSpace space = CreatePrefetcherPipeSpace(fixture_device, space_config); });
 }
@@ -399,7 +399,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaScratchpadLeavesNodesOpenForPersiste
 TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaSharedScratchpadLeavesNodesOpenForPersistentL1) {
     // A Program whose only scratchpad is a shared SRAMArena scratchpad does not block a later PrefetcherPipeSpace.
     distributed::MeshDevice& fixture_device = *mesh_device_;
-    Program program = MakeProgramFromSpec(fixture_device, BorrowedScratchpadSpec(/*shared=*/true));
+    Program program(fixture_device, BorrowedScratchpadSpec(/*shared=*/true));
     const PrefetcherPipeSpaceConfig space_config = MakePrefetcherPipeSpaceConfigOnFirstScratchpadNodeForTest();
     EXPECT_NO_THROW({ PrefetcherPipeSpace space = CreatePrefetcherPipeSpace(fixture_device, space_config); });
 }
@@ -410,9 +410,9 @@ TEST_F(ProgramRunArgsTestGen1, CPU_SRAMArenaScratchpadRangeArenaForLockstepDecla
     ProgramSpec spec = BorrowedScratchpadSpec();
     spec.advanced_options.sram_arena_parameters[0].properties = LockstepSRAMArenaProperties{.per_bank_size = 4096};
     auto arena = SRAMArena::allocate(fixture_device, AllocationProperties());
-    auto program = MakeProgramFromSpec(fixture_device, spec);
+    Program program(fixture_device, spec);
     EXPECT_THAT(
-        [&] { SetProgramRunArgs(program, AllocationArgs(arena)); },
+        [&] { program.set_run_args(AllocationArgs(arena)); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("properties do not match")));
 }
 

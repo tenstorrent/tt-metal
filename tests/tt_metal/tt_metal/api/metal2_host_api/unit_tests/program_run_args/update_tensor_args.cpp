@@ -10,7 +10,7 @@
 #include <stdexcept>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/distributed.hpp>
@@ -51,7 +51,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_UpdateTensorArgs_BeforeSetProgramRunArgsFails
     spec.tensor_parameters = {binding};
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
 
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     MeshTensor tensor = AllocateTensorForBinding(*mesh_device_, binding);
     Table<TensorParamName, TensorArgument> tensor_args{
@@ -60,7 +60,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_UpdateTensorArgs_BeforeSetProgramRunArgsFails
 
     // No SetProgramRunArgs call before the partial update.
     EXPECT_THAT(
-        [&] { UpdateTensorArgs(program, tensor_args); },
+        [&] { program.update_tensor_args(tensor_args); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("UpdateTensorArgs called on Program before SetProgramRunArgs")));
 }
@@ -72,7 +72,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_UpdateTensorArgs_MissingTensorArgFails) {
     spec.tensor_parameters = {binding};
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
 
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     // Establish baseline state.
     MeshTensor tensor = AllocateTensorForBinding(*mesh_device_, binding);
@@ -80,12 +80,12 @@ TEST_F(ProgramRunArgsTestGen1, CPU_UpdateTensorArgs_MissingTensorArgFails) {
     params.tensor_args = {
         {TensorParamName{"input_tensor"}, TensorArgument{tensor}},
     };
-    SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     // Empty tensor_args fails the completeness check.
     Table<TensorParamName, TensorArgument> empty;
     EXPECT_THAT(
-        [&] { UpdateTensorArgs(program, empty); },
+        [&] { program.update_tensor_args(empty); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(
             "TensorParameter 'input_tensor' is declared in the Program but has no TensorArgument entry")));
 }
@@ -97,20 +97,20 @@ TEST_F(ProgramRunArgsTestGen1, CPU_UpdateTensorArgs_UnknownTensorParameterFails)
     spec.tensor_parameters = {binding};
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
 
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     MeshTensor tensor = AllocateTensorForBinding(*mesh_device_, binding);
     auto params = MakeRunArgsForMinimalSpec(node, {}, {});
     params.tensor_args = {
         {TensorParamName{"input_tensor"}, TensorArgument{tensor}},
     };
-    SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     Table<TensorParamName, TensorArgument> tensor_args{
         {TensorParamName{"ghost_tensor"}, TensorArgument{tensor}},
     };
     EXPECT_THAT(
-        [&] { UpdateTensorArgs(program, tensor_args); },
+        [&] { program.update_tensor_args(tensor_args); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("TensorArgument references unknown TensorParameter 'ghost_tensor'")));
 }
@@ -122,14 +122,14 @@ TEST_F(ProgramRunArgsTestGen1, CPU_UpdateTensorArgs_TensorSpecMismatchFails) {
     spec.tensor_parameters = {binding};
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
 
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     MeshTensor tensor = AllocateTensorForBinding(*mesh_device_, binding);
     auto params = MakeRunArgsForMinimalSpec(node, {}, {});
     params.tensor_args = {
         {TensorParamName{"input_tensor"}, TensorArgument{tensor}},
     };
-    SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     // Different shape: {1, 64} instead of declared {1, 32}.
     auto page_config = tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR);
@@ -143,7 +143,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_UpdateTensorArgs_TensorSpecMismatchFails) {
         {TensorParamName{"input_tensor"}, TensorArgument{wrong_tensor}},
     };
     EXPECT_THAT(
-        [&] { UpdateTensorArgs(program, tensor_args); },
+        [&] { program.update_tensor_args(tensor_args); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(
             "TensorArgument for binding 'input_tensor' supplied a MeshTensor whose TensorSpec does not match")));
 }
@@ -157,14 +157,14 @@ TEST_F(ProgramRunArgsTestGen1, CPU_UpdateTensorArgs_SkipValidationBypassesSpecCh
     spec.tensor_parameters = {binding};
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
 
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     MeshTensor tensor = AllocateTensorForBinding(*mesh_device_, binding);
     auto params = MakeRunArgsForMinimalSpec(node, {}, {});
     params.tensor_args = {
         {TensorParamName{"input_tensor"}, TensorArgument{tensor}},
     };
-    SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     auto page_config = tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR);
     auto memory_config =
@@ -176,7 +176,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_UpdateTensorArgs_SkipValidationBypassesSpecCh
     Table<TensorParamName, TensorArgument> tensor_args{
         {TensorParamName{"input_tensor"}, TensorArgument{wrong_tensor}},
     };
-    EXPECT_NO_THROW(UpdateTensorArgs(program, tensor_args, /*skip_validation=*/true));
+    EXPECT_NO_THROW(program.update_tensor_args(tensor_args, /*skip_validation=*/true));
     EXPECT_EQ(
         ReadBindingAddressFromCRTA(program, "dm_kernel", "input_tensor"), static_cast<uint32_t>(wrong_tensor.address()))
         << "skip_validation should bypass only the checks, not the address patch";
@@ -189,7 +189,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_UpdateTensorArgs_PatchesBindingAddress) {
     spec.tensor_parameters = {binding};
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
 
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     // First enqueue: full SetProgramRunArgs with tensor T1.
     MeshTensor tensor1 = AllocateTensorForBinding(*mesh_device_, binding);
@@ -197,7 +197,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_UpdateTensorArgs_PatchesBindingAddress) {
     params.tensor_args = {
         {TensorParamName{"input_tensor"}, TensorArgument{tensor1}},
     };
-    SetProgramRunArgs(program, params);
+    program.set_run_args(params);
     ASSERT_EQ(
         ReadBindingAddressFromCRTA(program, "dm_kernel", "input_tensor"), static_cast<uint32_t>(tensor1.address()));
 
@@ -209,7 +209,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_UpdateTensorArgs_PatchesBindingAddress) {
     Table<TensorParamName, TensorArgument> tensor_args{
         {TensorParamName{"input_tensor"}, TensorArgument{tensor2}},
     };
-    EXPECT_NO_THROW(UpdateTensorArgs(program, tensor_args));
+    EXPECT_NO_THROW(program.update_tensor_args(tensor_args));
 
     EXPECT_EQ(
         ReadBindingAddressFromCRTA(program, "dm_kernel", "input_tensor"), static_cast<uint32_t>(tensor2.address()));
@@ -224,7 +224,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_UpdateTensorArgs_LeavesNamedCRTAsUnchanged) {
     spec.kernels[0].runtime_arg_schema.common_runtime_arg_names = {"tile_count"};
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
 
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     MeshTensor tensor1 = AllocateTensorForBinding(*mesh_device_, binding);
     constexpr uint32_t kNamedCRTAValue = 0xABCD1234;
@@ -237,7 +237,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_UpdateTensorArgs_LeavesNamedCRTAsUnchanged) {
     params.tensor_args = {
         {TensorParamName{"input_tensor"}, TensorArgument{tensor1}},
     };
-    SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     // Capture the named CRTA's slot value before the partial update.
     auto dm_kernel = program.impl().get_kernel_by_spec_name("dm_kernel");
@@ -249,7 +249,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_UpdateTensorArgs_LeavesNamedCRTAsUnchanged) {
     Table<TensorParamName, TensorArgument> tensor_args{
         {TensorParamName{"input_tensor"}, TensorArgument{tensor2}},
     };
-    UpdateTensorArgs(program, tensor_args);
+    program.update_tensor_args(tensor_args);
 
     // Named CRTA preserved; binding address patched.
     const auto* crta_data_after = dm_kernel->common_runtime_args_data().data();
@@ -270,20 +270,20 @@ TEST_F(ProgramRunArgsTestGen1, CPU_UpdateTensorArgs_PatchesAllKernelsBoundToSame
     BindTensorParameterToKernel(spec.kernels[0], "shared_tensor", "shared_ta_dm");
     BindTensorParameterToKernel(spec.kernels[1], "shared_tensor", "shared_ta_compute");
 
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     MeshTensor tensor1 = AllocateTensorForBinding(*mesh_device_, binding);
     auto params = MakeRunArgsForMinimalSpec(node, {}, {});
     params.tensor_args = {
         {TensorParamName{"shared_tensor"}, TensorArgument{tensor1}},
     };
-    SetProgramRunArgs(program, params);
+    program.set_run_args(params);
 
     MeshTensor tensor2 = AllocateTensorForBinding(*mesh_device_, binding);
     Table<TensorParamName, TensorArgument> tensor_args{
         {TensorParamName{"shared_tensor"}, TensorArgument{tensor2}},
     };
-    UpdateTensorArgs(program, tensor_args);
+    program.update_tensor_args(tensor_args);
 
     EXPECT_EQ(
         ReadBindingAddressFromCRTA(program, "dm_kernel", "shared_tensor"), static_cast<uint32_t>(tensor2.address()));
