@@ -6,9 +6,9 @@
 `convert_golden.py` rewrites Miguel's chunked vLLM trace into the per-stream layout `golden.GoldenTrace`
 reads. Pinned here: the conversion round-trips through both readers that consume a golden — K3's
 `GoldenTrace` (the *_matches_golden tests) and the runner producer's KV loaders (the PCC gate) — and the
-converted K3.1 golden is the source trace row for row where it copies a stream (all 24 DSA layers' KV, which
-the runner gate scores; the FFN output of layers 23 and 92, which no gate scores, pinned as the input of the
-rebuild), and enters at the K3.1 checkpoint's own token embedding.
+converted K3.1 golden is the source trace row for row where it copies a stream (all 24 DSA layers' KV and
+indexer keys, which the runner gate scores; the FFN output of layers 23 and 92, which no gate scores, pinned as
+the input of the rebuild), and enters at the K3.1 checkpoint's own token embedding.
 
 And `decoder_output_layer_i` means what it means in K3's golden (`test_golden_contract.py`): the AttnRes running
 sum after layer i, restarted at each seal, which is what the stack's layer tap returns. The K3.1 tracer records
@@ -33,8 +33,10 @@ from models.demos.deepseek_v3_d_p.tests.kimi_k3.golden import TRACE_K31, GoldenT
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.test_golden_contract import GOLDEN_PCC, ROWS
 from models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k3_1 import KimiK31Adapter
 from models.demos.deepseek_v3_d_p.tt.runners.prefill_kv_validation import (
+    _load_golden_index_k,
     _load_golden_kv_post,
     _load_sharded_rows,
+    index_golden_present,
     kvpe_golden_present,
 )
 
@@ -133,9 +135,11 @@ def test_k31_golden_serves_the_runner_gate(k31_trace):
     """What the runner gate scores is in the golden, as the source trace's prompt rows; so is the FFN output the
     running sum is rebuilt from.
 
-    The producer compares the prompt span (`load_trace_golden_span`) of every DSA layer's kvpe, read through the
-    producer's own loaders. `ffn_output` of layers 23 and 92 (the tracer's `decoder_output`) is pinned to the
-    source; no gate scores it. The `decoder_output` the depth tests score is the rebuilt running sum, pinned by
+    The producer compares the prompt span (`load_trace_golden_span`) of every DSA layer's kvpe and indexer key,
+    read through the producer's own loaders. The producer only warns and skips the index cache when a trace carries
+    no indexer key, so a missing one would leave the gate green: its presence is pinned here. `ffn_output` of
+    layers 23 and 92 (the tracer's `decoder_output`) is pinned to the source; no gate scores it. The
+    `decoder_output` the depth tests score is the rebuilt running sum, pinned by
     `test_k31_block_ends_match_the_sealed_snapshots`.
     """
     trace_dir = k31_trace.path
@@ -148,6 +152,10 @@ def test_k31_golden_serves_the_runner_gate(k31_trace):
         golden = _load_golden_kv_post(trace_dir, layer, prompt)
         key = f"kv_post_transform_layer_{layer}"
         assert torch.equal(golden, _load_sharded_rows(source / "kv_cache" / f"layer_{layer}", key, 0, prompt)), layer
+        assert index_golden_present(trace_dir, layer), layer
+        golden = _load_golden_index_k(trace_dir, layer, prompt)
+        key = f"indexer_k_layer_{layer}"
+        assert torch.equal(golden, _load_sharded_rows(source / "indexer" / key, key, 0, prompt)), layer
 
     for layer in (23, KimiK3Config.NUM_LAYERS - 1):
         golden = k31_trace.rows("ffn_output", f"ffn_output_layer_{layer}", 0, prompt)
