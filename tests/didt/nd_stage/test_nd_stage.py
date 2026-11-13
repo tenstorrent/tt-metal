@@ -84,7 +84,7 @@ def _calibrate(runner, seconds, needed):
     return iters, rates
 
 
-def _fmt_core(v):
+def _fmt_core(v, identity):
     failed = ", ".join(f"{p}({'+'.join(c)})" for p, c in sorted(v["failed"].items()))
     if v["specific_to"]:
         what = "; ".join(f"{p}: {nd.PROBES[p].what}" if p in nd.PROBES else p for p in v["specific_to"])
@@ -98,6 +98,8 @@ def _fmt_core(v):
         line += f" | iteration 0 was the outlier in {', '.join(v['iter0_outlier'])}"
     if v["dest_vs_pack"]:
         line += f" | MM_DESTRD: {v['dest_vs_pack']}"
+    if loc := nd.where(identity, v["device"]):
+        line += f" | {loc}"
     return line
 
 
@@ -115,6 +117,7 @@ def test_nd_stage(mesh_device):
     arms = nd.plan_arms(runner.cores, gx, os.environ.get("ND_ARMS"))
     assert arms, f"ND_ARMS={os.environ.get('ND_ARMS')!r} selects no arm"
     device_ids = list(mesh_device.get_device_ids())
+    identity = nd.device_identity(device_ids)
     logger.info(f"nd_stage: {len(device_ids)} devices, grid {gx}x{gy}, {len(arms)} arms x {seconds:.0f} s, data={mode}")
 
     needed = sorted({p for a in arms for p in a.groups} | {a.extra for a in arms if a.extra})
@@ -152,7 +155,8 @@ def test_nd_stage(mesh_device):
     for line in notes:
         logger.warning(line)
     for v in verdicts:
-        logger.error(_fmt_core(v))
+        v["identity"] = identity.get(v["device"])
+        logger.error(_fmt_core(v, identity))
     for x in findings:
         logger.info(f"  {x.arm:22s} dev {x.device:2d} core {x.core} {x.kind:9s} {x.detail}")
 
@@ -160,6 +164,7 @@ def test_nd_stage(mesh_device):
         "host": socket.gethostname(),
         "time": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "devices": device_ids,
+        "identity": identity,
         "grid": [gx, gy],
         "seconds_per_arm": seconds,
         "data": mode,

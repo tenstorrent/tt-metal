@@ -13,12 +13,14 @@ from __future__ import annotations
 
 import hashlib
 import os
+import subprocess
 import time
 from collections import Counter
 from dataclasses import dataclass, field
 
 import numpy as np
 import torch
+import yaml
 from loguru import logger
 
 import ttnn
@@ -980,3 +982,91 @@ def _dest_vs_pack(failed, ran):
 
 def env_seconds(default=20.0):
     return float(os.environ.get("ND_PROBE_SECONDS", default))
+
+
+# Blackhole Galaxy: the high nibble of a chip's PCIe bus names its UBB tray slot, the low nibble (1-8) its place
+# on the tray. Same numbering as tt-metal's control plane and syseng's sys-triage; slot N's FRU is UBB{N-1}_FRU.
+UBB_SLOT = {0x00: 1, 0x40: 2, 0xC0: 3, 0x80: 4}
+
+
+def parse_fru(text):
+    """{FRU name: {field: value}} from `ipmitool fru print` output."""
+    frus, cur = {}, None
+    for line in text.splitlines():
+        key, sep, val = line.partition(":")
+        if not sep:
+            continue
+        key, val = key.strip(), val.strip()
+        if key == "FRU Device Description":
+            cur = frus.setdefault(val.split(" (")[0], {})
+        elif cur is not None:
+            cur[key] = val
+    return frus
+
+
+def _read_fru():
+    """(fru text, source). The UBB FRUs need root: ND_FRU_FILE is a saved `ipmitool fru print` from the host."""
+    path = os.environ.get("ND_FRU_FILE")
+    if path and os.path.exists(path):
+        with open(path) as f:
+            return f.read(), f"{path} ({(time.time() - os.path.getmtime(path)) / 60:.0f} min old)"
+    try:
+        r = subprocess.run(["sudo", "-n", "ipmitool", "fru", "print"], capture_output=True, text=True, timeout=90)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return "", f"none ({type(e).__name__})"
+    # ipmitool exits non-zero when any one FRU is unreadable, so judge by the output.
+    if "FRU Device Description" in r.stdout:
+        return r.stdout, "sudo ipmitool fru print"
+    return "", f"none ({(r.stderr.strip().splitlines() or ['no output'])[-1]})"
+
+
+def identity_from_descriptor(desc, device_ids, frus):
+    """{device id: location and ASIC ID} from a parsed cluster descriptor (all values strings) and parse_fru()."""
+    pcie = {k: v for d in desc.get("chips_with_mmio") or [] for k, v in d.items()}
+    out = {}
+    for dev in device_ids:
+        k = str(dev)
+        rec = {"pcie_dev": int(pcie[k]) if k in pcie else None, "bdf": (desc.get("chip_pci_bdfs") or {}).get(k)}
+        uid = (desc.get("chip_unique_ids") or {}).get(k)
+        rec["asic_id"] = f"{int(uid):016X}" if uid is not None else None
+        bus = (desc.get("chip_to_bus_id") or {}).get(k)
+        if bus is not None:
+            bus = int(bus, 16)
+            slot = UBB_SLOT.get(bus & 0xF0)
+            rec |= {"bus": f"{bus:#04x}", "ubb": slot, "tray_pos": bus & 0x0F}
+            rec["tray_serial"] = frus.get(f"UBB{slot - 1}_FRU", {}).get("Board Serial") if slot else None
+        out[dev] = rec
+    return out
+
+
+def device_identity(device_ids):
+    """{device id: PCIe address, UBB tray slot and serial, place on the tray, ASIC ID}; {} when unavailable.
+
+    Device ids and PCIe numbers are enumeration order and change between boots and hosts. The ASIC ID is unique per
+    die and the tray serial per tray, so those two name the hardware for syseng. Never raises: identity is
+    reporting only.
+    """
+    try:
+        with open(ttnn.cluster.serialize_cluster_descriptor()) as f:
+            # BaseLoader keeps every value a string; YAML 1.1 would read a BDF like 0000:01:00.0 as a number.
+            desc = yaml.load(f, Loader=yaml.BaseLoader)
+        text, source = _read_fru()
+        identity = identity_from_descriptor(desc, device_ids, parse_fru(text))
+    except Exception as e:
+        logger.warning(f"device identity unavailable: {type(e).__name__}: {e}")
+        return {}
+    logger.info(f"device identity (tray serials from {source}):")
+    for dev, r in identity.items():
+        logger.info(f"  dev {dev:2d} pcie {str(r['pcie_dev']):>2}  {where(identity, dev)}")
+    return identity
+
+
+def where(identity, dev):
+    """One-line location of a device for logs, e.g. UBB3 ASIC6 tray T38S7TBA... 0000:c6:00.0 ASIC ID 09D1..."""
+    r = identity.get(dev)
+    if not r:
+        return ""
+    parts = [f"UBB{r['ubb']} ASIC{r['tray_pos']}" if r.get("ubb") else None]
+    parts += [f"tray {r['tray_serial']}" if r.get("tray_serial") else None, r.get("bdf")]
+    parts += [f"ASIC ID {r['asic_id']}" if r.get("asic_id") else None]
+    return " ".join(p for p in parts if p)
