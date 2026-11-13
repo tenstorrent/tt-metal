@@ -102,3 +102,22 @@ M 586, 90 cores, weights resident (cycles / expert, tile / useful util; UNPACK p
 | 12 | 10 | bf16, tilize a piece ahead | 240 KB | 37,148 | 65.5 / 63.1 | 1,994 / 3,619 |
 vs x resident 28,824. The ring must hold about an expert's x for the cluster (22 blocks of 12): shallower rings make
 every core wait for the slowest consumer's credit. Tilize ~1.3K / expert / core (~0.9K tiles + ~0.4K switch).
+
+## Stage 3: dynamic M (ws_dyn.py, kernels ws_plan.hpp + wd_*.cpp)
+Every expert's schedule is computed on device from its M: each core's BRISC runs ws_plan::make (closed-form weighted
+stream-K split over NA = min(9, R / 2) active clusters, split-row owner left/right by which keeps the boundary inside
+the row; program; x blocks) into a 3-slot L1 plan ring, loads the expert's row index table, and the compute threads
+and the NCRISC read the plans and post done words. Inputs: counts [NEXP] and index tables [NEXP, RMAX * 32] in
+DRAM. Ring sizes no longer depend on M: h ring 4 rows, x ring 15 blocks (20 + staging for MMAX 1024 did not fit L1
+beside the resident weights), x staging 8 blocks (MMAX 1024). plan_py mirrors make (coverage / ownership checked for
+M 1..1024).
+- First version multicast each consumer's popped-block count to the column after every block (no producer
+  bookkeeping): ~230 small multicasts an expert a column on NOC1 beside the x data -> 112K cycles / expert, x waits
+  64K. Back to one exact unicast to the producer of block c + NX, found by walking the plans' block counts.
+Results (90 cores, weights resident, cycles / expert over experts 1..15, util tile / useful):
+| M per expert | cycles | util | x wait / expert / core |
+|---|---|---|---|
+| 586 constant | 32,166 | 75.6 / 72.9 | 758 |
+| Poisson(586) (537..653) | 31,384 | 78.9 / 76.2 | 565 |
+| mixed 5..1000 (mean 457) | 31,543 | 59.0 / 56.9 | 5,941 |
+Host-planned at the same ring (NX 15): 31,267 at constant 586.
