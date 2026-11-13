@@ -3394,7 +3394,7 @@ tasks:
   gate:
     cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
       && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
-      && DS41_PREFILL_END=end scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
       && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py
       && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
       && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_prefill_end.py
@@ -3537,6 +3537,41 @@ tasks:
       served_bytes_differ: == 0
       chunk_wall_ms: '> 0'
       device_ms_total: '> 0'
+- id: FIX.28
+  title: 'Gates cover DECODER_SKIP=decode (Kartik''s cut): determinism, contract and acks run with the skip active, not only the full path'
+  step: overseer_fix
+  role: overseer
+  precheck: false
+  deps:
+  - P.51
+  - FIX.26
+  device: true
+  paths:
+  - models/demos/common/bringup
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/bringup
+  brief:
+    details: |-
+      OWNER 2026-11-13. P.51 added DECODER_SKIP=decode (prefill runs layers 0-19 + layer 20's KV only on chunks marked last=False; positions below global_write_start are replayed with no history-cache writes). Its own test (tests/test_decoder_skip_decode.py) shows 0 of 20,912 served records differ vs the full path, but the framework harness (ladder, determinism, contract, acks) passes last unset, so every gate runs the FULL path under decode: the skipped path is never checked for determinism, contract or acks. Branch dnijemcevic/model_bringup must be functionally correct for end-to-end prefill + decode testing.
+      Target, the skipped path exercised by the gate tests themselves (extend the existing tests; no parallel copies): (1) Determinism: test_determinism also runs DECODER_SKIP=decode with chunks marked last=False and a global_write_start inside the request (tt-d-gen's rule: actual_end = P = floor((N-128)/64)*64, exclusive; replay below global_write_start), both prompts (novel, code), cold and warm, and emits determinism_max_abs_diff_decoder_skip (== 0, bit for bit, every served tensor and the state decode reads). (2) Contract: test_contract and test_adapter_acks run a decode-mode request the way tt-d-gen sends it (actual_start, actual_end = P, global_write_start, last=False) and check what decode is served: history caches [0, P) and layers 0-19's window snapshots against the golden at P (reuse FIX.26's golden-at-cap pipeline; derive P from the request, no hard-coding), every layer acked exactly once and never early, nothing written in [P, N). Check the cap rule on this path: the served end equals decode's cap (cap = actual_end // 64 * 64 = P); a request whose actual_end is not a multiple of 64 under decode must be handled by the documented rule (find it in serving_contract.md; if undefined, stop and report). (3) Limits for new metrics follow the framework's existing rule; never loosen or edit an existing limit. (4) The full-path checks stay as they are. Do not edit tasks.yaml; report the gate lines P.51's gate should use.
+      Report: what each test now runs under decode, results on both paths (full and decode), new metrics and limits. SAFETY: a hang or a board reset need: STOP and report, never reset. Agent rules 18 and 19 hold. Report in plain language, short, every term defined.
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_determinism.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      determinism_max_abs_diff: == 0
+      determinism_max_abs_diff_decoder_skip: == 0
+      contract_checks_failed: == 0
+      acks_early: == 0
+      served_bytes_differ: == 0
 - id: O.1
   hold: 'owner 2026-11-06: not now (P.34-P.36 first)'
   title: 'Derived-op tests: a random-input case for every ttnn.bringup call this model makes'
