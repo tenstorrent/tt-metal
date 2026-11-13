@@ -85,9 +85,10 @@ def timed_trace(fn, iters=ITERS):
 for v in VARIANTS:
     hd, od = v[0], v[1]
     fid = v[2] if len(v) > 2 else "HiFi2"
-    name = f"{hd}:{od}:{fid}"
+    acc32 = not (len(v) > 3 and v[3] == "nofp32")
+    name = f"{hd}:{od}:{fid}" + ("" if acc32 else ":bf16acc")
     t0 = time.time()
-    head = Hy4DeviceHead(md, mc, ccl, W, head_dtype=hd, out_dtype=od, fidelity=fid)
+    head = Hy4DeviceHead(md, mc, ccl, W, head_dtype=hd, out_dtype=od, fidelity=fid, fp32_acc=acc32, packer_l1=acc32)
     res(event="built", variant=name, s=round(time.time() - t0, 1), bytes_per_chip_head=head_bytes_per_chip(hd))
     if "acc" in STAGES:
         T = max(TS)
