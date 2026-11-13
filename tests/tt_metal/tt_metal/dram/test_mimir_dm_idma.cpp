@@ -4,9 +4,9 @@
 
 // MM-8 port of quasar_idma: iDMA copies from a CCE through command buffer 0, one cce_idma_copy launch per leg, each
 // with a host wall-clock deadline. Every leg must ack and land the right data, with the guards before and after the
-// destination intact. Remote operands use the host-verified mode, so the kernel never loads a remote address. The
+// destination intact. Remote operands are host-verified, so the kernel never loads a remote address. The
 // Strided1D cases port IDMA_1D_Strided with 64 B elements; the Strided1DSubLine cases use upstream's 8 B elements.
-// RemoteTl1KernelVerified is RemoteTl1 in the kernel-verified mode; its first run hung with no status (MM-8 probe).
+// RemoteTl1KernelVerified is RemoteTl1 kernel-verified; its first run hung with no status (MM-8 probe).
 
 #include <gtest/gtest.h>
 
@@ -180,7 +180,8 @@ std::string endpoint_label(
 struct IdmaLeg {
     std::string name;
     uint32_t cce_index = 0;
-    uint32_t mode = abi::kModeIdmaCopy;
+    uint32_t mode = abi::kModeTridBatch;
+    bool host_verified = false;
     uint32_t backend_vc = abi::kBackendLocalSram;
     Endpoint source;
     Endpoint destination;
@@ -207,19 +208,19 @@ std::vector<uint32_t> gathered_elements(const IdmaLeg& leg, const std::vector<ui
 // A write leg (own TL1 -> target, MIM-407 backend for the target) and a read leg (target -> own TL1, the remote-source
 // backend). Each leg seeds its own source, so the read leg does not depend on the write leg.
 std::vector<IdmaLeg> write_and_read_legs(
-    uint32_t cce_index, const Endpoint& target, uint32_t write_backend, uint32_t mode) {
+    uint32_t cce_index, const Endpoint& target, uint32_t write_backend, bool host_verified) {
     return {
         IdmaLeg{
             .name = "write",
             .cce_index = cce_index,
-            .mode = mode,
+            .host_verified = host_verified,
             .backend_vc = write_backend,
             .source = own_tl1_endpoint(cce_index, tl1_data(kCopyHart)),
             .destination = target},
         IdmaLeg{
             .name = "read",
             .cce_index = cce_index,
-            .mode = mode,
+            .host_verified = host_verified,
             .backend_vc = abi::kBackendFromRemote,
             .source = target,
             .destination = own_tl1_endpoint(cce_index, tl1_data(kCopyHart) + kReadbackOffset)},
@@ -243,7 +244,7 @@ std::vector<IdmaLeg> legs_for(IdmaCase idma_case, const metal_SocDescriptor& soc
                 0,
                 sram_spa_endpoint(sibling_cce(0), tl1_remote_landing(0, kCopyHart)),
                 abi::kBackendRemoteSram,
-                abi::kModeIdmaCopy);
+                /*host_verified=*/false);
         case IdmaCase::LocalGddr:
         case IdmaCase::LocalGddr1: {
             const uint32_t view = local_dram_view_for_cce(soc, idma_case == IdmaCase::LocalGddr ? 0 : sibling_cce(0));
@@ -254,7 +255,7 @@ std::vector<IdmaLeg> legs_for(IdmaCase idma_case, const metal_SocDescriptor& soc
             if (backend != expected_backend) {
                 TT_THROW("GDDR view {} +0x{:x} uses backend {}, not {}", view, view_offset, backend, expected_backend);
             }
-            return write_and_read_legs(0, gddr_endpoint(view, view_offset), backend, abi::kModeIdmaCopy);
+            return write_and_read_legs(0, gddr_endpoint(view, view_offset), backend, /*host_verified=*/false);
         }
         case IdmaCase::RemoteTl1:
         case IdmaCase::RemoteTl1KernelVerified:
@@ -262,7 +263,7 @@ std::vector<IdmaLeg> legs_for(IdmaCase idma_case, const metal_SocDescriptor& soc
                 remote_source_cce(),
                 sram_spa_endpoint(remote_destination_cce(), tl1_remote_landing(remote_source_cce(), kCopyHart)),
                 abi::kBackendD2d,
-                idma_case == IdmaCase::RemoteTl1 ? abi::kModeIdmaCopyHostVerified : abi::kModeIdmaCopy);
+                /*host_verified=*/idma_case == IdmaCase::RemoteTl1);
         case IdmaCase::RemoteGddr:
             return write_and_read_legs(
                 remote_source_cce(),
@@ -270,7 +271,7 @@ std::vector<IdmaLeg> legs_for(IdmaCase idma_case, const metal_SocDescriptor& soc
                     base_dram_view_for_mimir(soc, mimir_index_for_cce(remote_destination_cce())),
                     dram_unreserved + kGddrDataOffset),
                 abi::kBackendD2d,
-                abi::kModeIdmaCopyHostVerified);
+                /*host_verified=*/true);
         case IdmaCase::Strided1D:
         case IdmaCase::Strided1DLocalGddr:
         case IdmaCase::Strided1DSubLine:
@@ -340,21 +341,21 @@ std::vector<uint32_t> kernel_args(
          .backend_vc = leg.backend_vc,
          .status_offset = status_offset,
          .len_bytes = leg.len_bytes,
-         .poll_budget_cycles = kPollBudgetCycles,
+         .poll_budget_cycles = leg.mode == abi::kModeTridBatch ? 3 * kPollBudgetCycles : kPollBudgetCycles,
          .source = kernel_operand(soc, leg.cce_index, leg.source),
          .destination = kernel_operand(soc, leg.cce_index, leg.destination),
          .expected_xor = expected_xor,
          .num_elements = leg.num_elements,
-         .source_stride_bytes = leg.source_stride_bytes});
+         .source_stride_bytes = leg.source_stride_bytes,
+         .host_verified = leg.host_verified});
 }
 
-std::string mode_name(uint32_t mode) {
-    switch (mode) {
-        case abi::kModeIdmaCopy: return "IdmaCopy";
-        case abi::kModeIdmaCopyHostVerified: return "IdmaCopyHostVerified";
+std::string mode_name(const IdmaLeg& leg) {
+    switch (leg.mode) {
+        case abi::kModeTridBatch: return leg.host_verified ? "TridBatchHostVerified" : "TridBatch";
         case abi::kModeIdmaStrided: return "IdmaStrided";
     }
-    return fmt::format("unknown_mode_{}", mode);
+    return fmt::format("unknown_mode_{}", leg.mode);
 }
 
 // Runs one leg and checks it: the kernel reports success, the host reads the expected data (re-reading the first
@@ -385,7 +386,7 @@ bool run_leg(distributed::MeshDevice& unit_mesh, IDevice* device, const IdmaLeg&
         leg.name,
         leg.cce_index,
         kCopyHart,
-        mode_name(leg.mode),
+        mode_name(leg),
         leg.backend_vc,
         leg.num_elements,
         leg.len_bytes,
@@ -413,8 +414,7 @@ bool run_leg(distributed::MeshDevice& unit_mesh, IDevice* device, const IdmaLeg&
             "source {} destination {}",
             command_address(soc, issuer_routes, leg.source) % abi::kLineBytes,
             command_address(soc, issuer_routes, leg.destination) % abi::kLineBytes));
-    record_leg(
-        leg.name, "mode", fmt::format("{} backend VC {} trid {}", mode_name(leg.mode), leg.backend_vc, abi::kTrid));
+    record_leg(leg.name, "mode", fmt::format("{} backend VC {} trid {}", mode_name(leg), leg.backend_vc, abi::kTrid));
     record_leg(leg.name, "seed", fmt::format("0x{:08x}", seed));
     record_leg(leg.name, "kernel", kIdmaCopyKernel);
 
@@ -437,7 +437,7 @@ bool run_leg(distributed::MeshDevice& unit_mesh, IDevice* device, const IdmaLeg&
     const std::string detail = idma_status_detail(status);
     record_leg(leg.name, "status", detail);
     log_info(tt::LogTest, "MM8 iDMA {}: {}", label, detail);
-    const uint32_t success_code = leg.mode == abi::kModeIdmaCopyHostVerified ? abi::kCodeAcked : abi::kCodeLanded;
+    const uint32_t success_code = leg.host_verified ? abi::kCodeAcked : abi::kCodeLanded;
     EXPECT_EQ(status[abi::kStatusCode], success_code) << label << ": " << detail;
     EXPECT_EQ(status[abi::kStatusElementsIssued], leg.num_elements) << label << ": " << detail;
     EXPECT_TRUE(compare_with_recheck(

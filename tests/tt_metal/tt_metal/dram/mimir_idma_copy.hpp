@@ -33,7 +33,7 @@ struct IdmaOperand {
 
 // One launch's runtime args, a field per kArg* in cce_idma_copy_abi.h order. A field left at its default sends 0.
 struct IdmaCopyArgs {
-    uint32_t mode = 0;
+    uint32_t mode = cce_idma_copy_abi::kModeTridBatch;
     uint32_t backend_vc = 0;
     uint64_t status_offset = 0;
     uint32_t len_bytes = 0;
@@ -51,7 +51,6 @@ struct IdmaCopyArgs {
     uint64_t command_table_offset = 0;
     uint64_t stop_offset = 0;
     uint64_t progress_offset = 0;
-    uint32_t seed = 0;
     uint32_t accumulate_format = 0;
     uint32_t accumulate_op = 0;
     uint32_t accumulate_disable_saturation = 0;
@@ -93,7 +92,6 @@ inline std::vector<uint32_t> idma_copy_args(const IdmaCopyArgs& copy) {
     args[abi::kArgCmdTableOffset] = static_cast<uint32_t>(copy.command_table_offset);
     args[abi::kArgStopOffset] = static_cast<uint32_t>(copy.stop_offset);
     args[abi::kArgProgressOffset] = static_cast<uint32_t>(copy.progress_offset);
-    args[abi::kArgSeed] = copy.seed;
     args[abi::kArgAccumulateFormat] = copy.accumulate_format;
     args[abi::kArgAccumulateOp] = copy.accumulate_op;
     args[abi::kArgAccumulateDisableSaturation] = copy.accumulate_disable_saturation;

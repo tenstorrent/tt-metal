@@ -10,24 +10,24 @@
 
 // cce_idma_copy kernel ABI. The kernels (cce_idma_copy.cpp, cce_idma_gddr_round_trip.cpp) and the host tests that run
 // them (dram/test_mimir_{atomics,dm_cache,dm_idma,local_dram,trid}.cpp) include it.
-// Args, modes, kinds, polls, codes and status words are append-only: a later stage adds entries after the last one and
-// never renumbers.
 namespace cce_idma_copy_abi {
 
 using cce_test_status_abi::kLineBytes;
 
 // Runtime args. kArgStatusOffset is a 64 B aligned offset in the kernel's own TL1. kArgPollBudget* is rdcycle cycles
-// per bounded poll and must be nonzero. kArgExpectedXor is the XOR of the source words (kModeIdmaCopyHostVerified).
-// kArgNumElements is 1 except in kModeIdmaStrided, where kArgLenBytes is the element size and kArgSourceStrideBytes the
-// distance between source elements.
+// per bounded poll and must be nonzero. kArgExpectedXor is the XOR of the source words (kArgHostVerified). In
+// kModeIdmaStrided kArgNumElements is the element count (at most kMaxElements), kArgLenBytes the element size and
+// kArgSourceStrideBytes the distance between source elements.
 // MM4x args (from kArgTrid). The batched modes (kModeTridBatch, kModeTridTable, kModeTridStream) read
 // kArgNumElements as the command count (at most kMaxElements) and kArgSourceStrideBytes as the source stride; command
 // i reads source + i * kArgSourceStrideBytes, writes destination + i * kArgDestinationStrideBytes and uses trid
 // (kArgTrid + i * kArgTridStride) mod kNumTrids. kArgSnoop sets the snoop packet tag on every command. kArgTraceOffset
 // (64 B aligned, own TL1, 0 for none) receives the trace after the last data poll. kArgHostVerified (batched modes):
-// no data poll unless the destination is the kernel's own TL1, as kModeIdmaCopyHostVerified. kArgCmdTableOffset
-// (kModeTridTable), kArgStopOffset and kArgProgressOffset (kModeTridStream), kArgSeed, kArgAccumulate* and
-// kArgExpected* (kModeAccumulate), kArgPeerFlagOffset (kModeTridScopeObserver and kModeTridBatch), kArgPollRegion*
+// the kernel never loads a remote operand, so it cannot stall the hart, and the host checks the data. When the
+// destination is the kernel's own TL1 the data poll compares the XOR of the destination words with kArgExpectedXor;
+// otherwise there is no data poll. kArgCmdTableOffset
+// (kModeTridTable), kArgStopOffset and kArgProgressOffset (kModeTridStream), kArgAccumulate* and
+// kArgExpected* (kModeAccumulate), kArgPeerFlagOffset (kModeTridBatch), kArgPollRegion*
 // (kModeTridBatch and kModeAccumulate; every other mode rejects a nonzero kArgPollRegionBytes) and kArgCheckAtAck
 // (kModeTridBatch only) are described with their modes.
 inline constexpr uint32_t kArgMode = 0, kArgBackendVc = 1, kArgStatusOffset = 2, kArgLenBytes = 3, kArgPollBudgetLo = 4,
@@ -36,18 +36,15 @@ inline constexpr uint32_t kArgMode = 0, kArgBackendVc = 1, kArgStatusOffset = 2,
                           kArgDstOffsetHi = 13, kArgExpectedXor = 14, kArgNumElements = 15, kArgSourceStrideBytes = 16,
                           kArgTrid = 17, kArgSnoop = 18, kArgDestinationStrideBytes = 19, kArgTridStride = 20,
                           kArgTraceOffset = 21, kArgCmdTableOffset = 22, kArgStopOffset = 23, kArgProgressOffset = 24,
-                          kArgSeed = 25, kArgAccumulateFormat = 26, kArgAccumulateOp = 27,
-                          kArgAccumulateDisableSaturation = 28, kArgExpectedLo = 29, kArgExpectedHi = 30,
-                          kArgPeerFlagOffset = 31, kArgHostVerified = 32, kArgCommandBuffer = 34,
-                          kArgPollRegionOffset = 35, kArgPollRegionBytes = 36, kArgCheckAtAck = 37, kNumArgs = 38;
+                          kArgAccumulateFormat = 25, kArgAccumulateOp = 26, kArgAccumulateDisableSaturation = 27,
+                          kArgExpectedLo = 28, kArgExpectedHi = 29, kArgPeerFlagOffset = 30, kArgHostVerified = 31,
+                          kArgCommandBuffer = 32, kArgPollRegionOffset = 33, kArgPollRegionBytes = 34,
+                          kArgCheckAtAck = 35, kNumArgs = 36;
 
-// kModeIdmaCopy: one iDMA copy (MISC.idma_en=1) between package-global SPA operands, then a bounded poll of the
-// destination data against the source. kModeIdmaCopyHostVerified: the same copy, and the kernel never loads a remote
-// operand, so it cannot stall the hart; the host checks the data. When the destination is the kernel's own TL1 the
-// data poll compares the XOR of the destination words with kArgExpectedXor; otherwise there is no data poll.
-// kModeIdmaStrided (upstream IDMA_1D_Strided): address generator 0 feeds command buffer 0, one command per element.
-// Element i is read at source + i * kArgSourceStrideBytes and written at destination + i * kArgLenBytes; the data poll
-// checks every element.
+// kModeIdmaStrided (upstream IDMA_1D_Strided): address generator 0 feeds command buffer 0, one iDMA command
+// (MISC.idma_en=1) per element between package-global SPA operands, then a bounded ack poll and a bounded poll of the
+// destination data against the source. Element i is read at source + i * kArgSourceStrideBytes and written at
+// destination + i * kArgLenBytes; the data poll checks every element.
 // kModeTridBatch: kArgNumElements commands to one target with the strides above, each waiting for VC space, then a
 // wait for every trid used to read 0 pending, then a data poll of every command (unless kArgHostVerified). When
 // kArgPeerFlagOffset is nonzero (own TL1, 64 B aligned) the kernel first polls that word with uncached loads until it
@@ -84,10 +81,9 @@ inline constexpr uint32_t kArgMode = 0, kArgBackendVc = 1, kArgStatusOffset = 2,
 // number of completed rounds.
 // kModeTridBatch and kModeAccumulate use command buffer kArgCommandBuffer (0 or 1); the other modes use command
 // buffer 0.
-// kModeTridScopeObserver: waits for 1 in the flag line at kArgPeerFlagOffset with uncached loads, reads its own pending
-// count of kArgTrid (kStatusProbeFirst), then stores 1 to the next flag line. It issues nothing.
-inline constexpr uint32_t kModeIdmaCopy = 0, kModeIdmaCopyHostVerified = 1, kModeIdmaStrided = 2, kModeTridBatch = 3,
-                          kModeAccumulate = 4, kModeTridTable = 5, kModeTridStream = 6, kModeTridScopeObserver = 8;
+// kModeTridScopeObserver: reads its own pending count of kArgTrid (kStatusProbeFirst). It issues nothing.
+inline constexpr uint32_t kModeIdmaStrided = 0, kModeTridBatch = 1, kModeAccumulate = 2, kModeTridTable = 3,
+                          kModeTridStream = 4, kModeTridScopeObserver = 5;
 inline constexpr uint32_t kMaxElements = 64;
 inline constexpr uint32_t kNumTrids = 16;
 inline constexpr uint32_t kTraceWordsPerTrid = 2, kTraceBytes = kNumTrids * kTraceWordsPerTrid * 4;
@@ -130,10 +126,10 @@ using cce_test_status_abi::kStatusPoison;
 inline constexpr uint32_t kFlagVcSpace = 1u << 0, kFlagAcked = 1u << 1, kFlagLanded = 1u << 2;
 inline constexpr uint32_t kPollNone = 0, kPollVcSpace = 1, kPollAck = 2, kPollData = 3, kPollPeer = 4;
 
-// kCodeLanded (kModeIdmaCopy) and kCodeAcked (kModeIdmaCopyHostVerified): every poll succeeded. Otherwise the code
+// kCodeLanded, or kCodeAcked when the host checks the data (kArgHostVerified): every poll succeeded. Otherwise the code
 // names the first poll that used its budget. Later polls still run, except that no command is issued after
 // kCodeVcSpaceTimeout.
-// kCodePeerTimeout: the kModeTridScopeObserver flag wait or the kModeTridBatch start-flag wait used its budget.
+// kCodePeerTimeout: the kModeTridBatch start-flag wait used its budget.
 // kCodeStreamBudget: kModeTridStream's budget ran out before it saw STOP. kCodeNotLandedAtAck: with kArgCheckAtAck,
 // every trid read 0 pending before every command's data had landed.
 inline constexpr uint32_t kCodeLanded = 1, kCodeAcked = 2, kCodeVcSpaceTimeout = 3, kCodeAckTimeout = 4,
