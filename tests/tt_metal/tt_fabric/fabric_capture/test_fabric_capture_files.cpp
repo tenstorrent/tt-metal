@@ -3,23 +3,27 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // What a capture's files promise: each read's offset finds its bytes in the .bin, and a capture never replaces another
-// or leaves a half-written one behind. No device.
+// or leaves a half-written one behind. And how a tool run beside a run finds its rank's manifest. No device.
 
 #include <gtest/gtest.h>
 
 #include <cstddef>
+#include <cstdlib>
 #include <exception>
 #include <filesystem>
 #include <fstream>
 #include <initializer_list>
 #include <iterator>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
 
+#include <stdlib.h>
 #include <unistd.h>
 
 #include "tt_metal/fabric/debug/visualizer/capture/fabric_capture_files.hpp"
+#include "tt_metal/fabric/debug/visualizer/common/fabric_visualizer_files.hpp"
 
 namespace tt::tt_fabric::capture {
 namespace {
@@ -140,6 +144,92 @@ TEST_F(CaptureFilesTest, NeverReplacesACaptureOrLeavesAHalfOne) {
     EXPECT_THROW(make_capture_file_paths(directory_, "first", 0, 1), std::exception);
     EXPECT_THROW(writer.finish(), std::exception);
     EXPECT_EQ(read_file(paths.bin_path).size(), std::string("an earlier capture").size());
+}
+
+// Sets an environment variable, or unsets it for null, until the end of the scope, then puts back what was there.
+class ScopedEnvironmentVariable {
+public:
+    ScopedEnvironmentVariable(const char* name, const char* value) : name_(name) {
+        if (const char* previous = std::getenv(name); previous != nullptr) {
+            previous_value_ = previous;
+        }
+        set(value);
+    }
+    ~ScopedEnvironmentVariable() { set(previous_value_.has_value() ? previous_value_->c_str() : nullptr); }
+    ScopedEnvironmentVariable(const ScopedEnvironmentVariable&) = delete;
+    ScopedEnvironmentVariable& operator=(const ScopedEnvironmentVariable&) = delete;
+
+private:
+    void set(const char* value) const {
+        if (value == nullptr) {
+            ::unsetenv(name_);
+        } else {
+            ::setenv(name_, value, 1);
+        }
+    }
+
+    const char* name_;
+    std::optional<std::string> previous_value_;
+};
+
+// A rank takes tt-run's rank over MPI's, and a job of one when neither launched it.
+TEST(FindRankFiles, JobRankComesFromTtRunThenMpi) {
+    {
+        const ScopedEnvironmentVariable tt_run_rank("TT_RUN_RANK", nullptr);
+        const ScopedEnvironmentVariable mpi_rank("OMPI_COMM_WORLD_RANK", nullptr);
+        const ScopedEnvironmentVariable world_size("OMPI_COMM_WORLD_SIZE", nullptr);
+        const visualizer::JobRank rank = visualizer::get_job_rank();
+        EXPECT_EQ(rank.mpi_rank, 0u);
+        EXPECT_EQ(rank.world_size, 1u);
+    }
+    {
+        const ScopedEnvironmentVariable tt_run_rank("TT_RUN_RANK", nullptr);
+        const ScopedEnvironmentVariable mpi_rank("OMPI_COMM_WORLD_RANK", "2");
+        const ScopedEnvironmentVariable world_size("OMPI_COMM_WORLD_SIZE", "4");
+        const visualizer::JobRank rank = visualizer::get_job_rank();
+        EXPECT_EQ(rank.mpi_rank, 2u);
+        EXPECT_EQ(rank.world_size, 4u);
+    }
+    {
+        const ScopedEnvironmentVariable tt_run_rank("TT_RUN_RANK", "3");
+        const ScopedEnvironmentVariable mpi_rank("OMPI_COMM_WORLD_RANK", "2");
+        const ScopedEnvironmentVariable world_size("OMPI_COMM_WORLD_SIZE", "4");
+        EXPECT_EQ(visualizer::get_job_rank().mpi_rank, 3u);
+    }
+}
+
+// The logs folder is TT_METAL_LOGS_PATH, else the working folder.
+TEST(FindRankFiles, LogsDirectoryComesFromTtMetalLogsPath) {
+    {
+        const ScopedEnvironmentVariable logs_path("TT_METAL_LOGS_PATH", "/some/logs");
+        EXPECT_EQ(visualizer::get_logs_directory(), std::filesystem::path("/some/logs"));
+    }
+    {
+        const ScopedEnvironmentVariable logs_path("TT_METAL_LOGS_PATH", nullptr);
+        EXPECT_EQ(visualizer::get_logs_directory(), std::filesystem::current_path());
+    }
+}
+
+// A rank's manifest is in the newest run that holds it: a newer run without it, such as another subcontext's, is
+// passed over.
+TEST_F(CaptureFilesTest, FindsTheRanksManifestInTheNewestRunHoldingIt) {
+    const visualizer::JobRank rank{.mpi_rank = 1, .world_size = 2};
+    EXPECT_FALSE(visualizer::find_latest_manifest(directory_, rank).has_value());
+
+    const std::string file_name = visualizer::make_manifest_file_name(rank.mpi_rank, rank.world_size);
+    for (const char* run_id : {"20261101T000000Z-aaaaaaaa", "20261102T000000Z-bbbbbbbb"}) {
+        const std::filesystem::path run_directory = visualizer::make_run_directory(directory_, run_id);
+        std::filesystem::create_directories(run_directory);
+        std::ofstream(run_directory / file_name) << "{}";
+    }
+    const std::filesystem::path other_rank_run =
+        visualizer::make_run_directory(directory_, "20261103T000000Z-cccccccc");
+    std::filesystem::create_directories(other_rank_run);
+    std::ofstream(other_rank_run / visualizer::make_manifest_file_name(0, 2)) << "{}";
+
+    EXPECT_EQ(
+        visualizer::find_latest_manifest(directory_, rank),
+        visualizer::make_run_directory(directory_, "20261102T000000Z-bbbbbbbb") / file_name);
 }
 
 }  // namespace

@@ -18,7 +18,6 @@
 #include <optional>
 #include <string>
 #include <string_view>
-#include <utility>
 
 #include <cxxopts.hpp>
 #include <tt_stl/assert.hpp>
@@ -44,33 +43,17 @@ std::optional<std::string> get_env(const char* name) {
     return value == nullptr ? std::nullopt : std::optional<std::string>(value);
 }
 
-// This process's rank in the run's job and the job's size: tt-run's TT_RUN_RANK, else MPI's, else a job of one.
-std::pair<uint32_t, uint32_t> get_rank_and_world_size() {
-    std::optional<std::string> rank = get_env("TT_RUN_RANK");
-    if (!rank.has_value()) {
-        rank = get_env("OMPI_COMM_WORLD_RANK");
-    }
-    const std::optional<std::string> world_size = get_env("OMPI_COMM_WORLD_SIZE");
-    return {
-        static_cast<uint32_t>(std::stoul(rank.value_or("0"))),
-        static_cast<uint32_t>(std::stoul(world_size.value_or("1"))),
-    };
-}
-
-// This rank's manifest in the newest run that has one, under the logs folder the run wrote to: TT_METAL_LOGS_PATH,
-// else the working folder, as tt-metal chooses it.
-std::filesystem::path find_latest_manifest() {
-    const std::filesystem::path logs_dir = get_env("TT_METAL_LOGS_PATH").value_or(std::filesystem::current_path());
-    const auto [mpi_rank, world_size] = get_rank_and_world_size();
-    const std::string file_name = visualizer::make_manifest_file_name(mpi_rank, world_size);
-    const std::optional<std::filesystem::path> run_directory =
-        visualizer::find_latest_run_directory(logs_dir, file_name);
+// This process's manifest in the newest run that has one, under the logs folder the run wrote to.
+std::filesystem::path find_this_ranks_latest_manifest() {
+    const std::filesystem::path logs_dir = visualizer::get_logs_directory();
+    const visualizer::JobRank rank = visualizer::get_job_rank();
+    const std::optional<std::filesystem::path> manifest_path = visualizer::find_latest_manifest(logs_dir, rank);
     TT_FATAL(
-        run_directory.has_value(),
+        manifest_path.has_value(),
         "Fabric capture: no run under {} has {}; give the manifest with --manifest",
         visualizer::make_runs_directory(logs_dir).string(),
-        file_name);
-    return *run_directory / file_name;
+        visualizer::make_manifest_file_name(rank.mpi_rank, rank.world_size));
+    return *manifest_path;
 }
 
 // Whether an error's message is already in the log.
@@ -82,7 +65,7 @@ bool was_logged(const std::exception& error) {
 int run_capture(const cxxopts::ParseResult& options) {
     const std::filesystem::path manifest_path = options.contains("manifest")
                                                     ? std::filesystem::path(options["manifest"].as<std::string>())
-                                                    : find_latest_manifest();
+                                                    : find_this_ranks_latest_manifest();
     const capture::CaptureRequest request{
         .manifest_path = manifest_path,
         .capture_id =
