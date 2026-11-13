@@ -5,10 +5,12 @@
 #include "chunk_gated_delta_rule_composite.hpp"
 
 #include <cmath>
+#include <utility>
 #include <vector>
 
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "metal/common/tensor_validation.hpp"
 #include "ttnn/operations/data_movement/repeat_interleave/repeat_interleave.hpp"
 #include "ttnn/operations/reduction/accumulation/cumsum/cumsum.hpp"
 #include "ttnn_fixed/matmuls.hpp"
@@ -106,16 +108,28 @@ void validate(
     const std::optional<Tensor>& h0,
     uint32_t C,
     tt::tt_metal::DataType output_dtype) {
+    // Placement first, so a host, unallocated or foreign-device tensor fails here and not inside a ttnn op.
+    constexpr const char* kOp = "chunk_gated_delta_rule";
+    const metal::DeviceTensorRequirements bf16_tile{};  // defaults: BFLOAT16, TILE, interleaved
+    metal::check_device_tensor(q, kOp, "q", bf16_tile);
+    metal::check_device_tensor(k, kOp, "k", bf16_tile);
+    metal::check_device_tensor(v, kOp, "v", bf16_tile);
+    // The gates may be BF16 or FP32; beta must match g.
+    metal::check_device_tensor(g, kOp, "g", {.dtypes = {kBF16, kF32}});
+    metal::check_device_tensor(beta, kOp, "beta", {.dtypes = {g.dtype()}});
+    for (const auto& [tensor, name] :
+         {std::pair{&k, "k"}, std::pair{&v, "v"}, std::pair{&g, "g"}, std::pair{&beta, "beta"}}) {
+        metal::check_same_device(*tensor, q, kOp, name, "q");
+    }
+    if (h0.has_value()) {
+        metal::check_device_tensor(*h0, kOp, "initial_state", {.dtypes = {kF32}});
+        metal::check_same_device(*h0, q, kOp, "initial_state", "q");
+    }
+
     for (const auto* t : {&q, &k, &v, &g, &beta}) {
         TT_FATAL(t->logical_shape().rank() == 4U, "chunk_gated_delta_rule: inputs must be rank 4");
     }
     TT_FATAL(C == 32U || C == 64U, "chunk_gated_delta_rule: chunk_size must be 32 or 64, got {}", C);
-    TT_FATAL(
-        q.dtype() == kBF16 && k.dtype() == kBF16 && v.dtype() == kBF16,
-        "chunk_gated_delta_rule: q, k, v must be BFLOAT16");
-    TT_FATAL(
-        (g.dtype() == kBF16 || g.dtype() == kF32) && beta.dtype() == g.dtype(),
-        "chunk_gated_delta_rule: g and beta must both be BFLOAT16 or both FLOAT32");
     TT_FATAL(
         output_dtype == kF32 || output_dtype == kBF16,
         "chunk_gated_delta_rule: the output dtype must be FLOAT32 or BFLOAT16, got {}",
@@ -146,7 +160,6 @@ void validate(
         gs,
         beta.logical_shape());
     if (h0.has_value()) {
-        TT_FATAL(h0->dtype() == kF32, "chunk_gated_delta_rule: initial_state must be FLOAT32");
         TT_FATAL(
             h0->logical_shape() == ttnn::Shape({B, HV, K, V}),
             "chunk_gated_delta_rule: initial_state must be [B,HV,K,V]=[{},{},{},{}], got {}",
