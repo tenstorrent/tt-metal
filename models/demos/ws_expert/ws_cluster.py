@@ -29,9 +29,11 @@ class ClCfg:
     nexp: int = 16
     NCL: int = 9  # clusters (logical columns)
     GC: int = 10  # cores a cluster (pair groups)
-    order: str = "act_hidden"  # program order (order_program)
+    # program order (order_program). "eager" + dn_lag 1 = down of row q - 1 after row q: h ring NS 4 for every M
+    # (M is only known at run time). "act_hidden" hides more SiLU but its ring grows with rows per cluster.
+    order: str = "eager"
     group: int = 3  # full rows between DN groups (order act_hidden)
-    dn_lag: int = 3  # DN ops take rows of earlier experts or >= dn_lag productions old (0: any produced row)
+    dn_lag: int = 1  # DN ops take rows of earlier experts or >= dn_lag productions old (0: any produced row)
     x_dt: object = ttnn.bfloat16
     w_dt: object = ttnn.bfloat4_b
     h_dt: object = ttnn.bfloat16
