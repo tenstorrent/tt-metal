@@ -433,6 +433,20 @@ public:
         WAYPOINT("GSRD");
     }
 
+    // Whether a SINGLE receiver (receiver_idx) has space for num_entries entries right now: what
+    // reserve_back_for_receiver waits for, without waiting. Lets one sender serving several receivers
+    // move on to another receiver instead of stalling behind a slow one. Single credit lane only.
+    FORCE_INLINE bool receiver_has_space(uint32_t receiver_idx, uint32_t num_entries) {
+        ASSERT(num_credit_lanes() == 1);
+        CrossNodeSenderDFBInterface& iface = interface_.sender;
+        const uint32_t wr_offset = sender_wr_offset(iface, receiver_idx);
+        assert_contiguous_write(iface, wr_offset, num_entries);
+        const uint32_t num_units = fifo_size() / L1_ALIGNMENT;
+        const uint32_t used_units =
+            *local_sent_ptr(iface, receiver_idx) - load_remote_l1_credit(local_acked_ptr(iface, receiver_idx));
+        return num_units - used_units >= units_for_write(iface, wr_offset, num_entries);
+    }
+
 #if !defined(COMPILE_FOR_TRISC)
 
     // ------------------------------------------------------------------

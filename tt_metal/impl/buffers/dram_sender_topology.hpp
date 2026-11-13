@@ -13,6 +13,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <utility>
 #include <vector>
@@ -20,6 +21,8 @@
 #include <core_coord.hpp>
 #include <tt-metalium/device_types.hpp>
 #include <tt-metalium/hal_types.hpp>
+
+#include "impl/context/context_types.hpp"
 
 struct metal_SocDescriptor;
 
@@ -30,6 +33,30 @@ class IDevice;
 namespace distributed {
 class MeshDevice;
 }  // namespace distributed
+
+// Where the runtime runs the sender endpoints of DRAM-sender PrefetcherPipes. Either way an endpoint is
+// named by its DRAM-logical coord (x = bank, y = role), so callers never see the difference; only the
+// core holding the endpoint's state and running its kernel changes.
+enum class DramSenderPlacement : uint8_t {
+    // Each endpoint on its own programmable DRAM core (Blackhole DRISCs).
+    DramCore,
+    // Every endpoint on the dispatch engine that runs fast dispatch, beside the CQ kernels (Quasar). The
+    // Tensor prefetcher's reader and pusher, launched with fast dispatch, serve all of them.
+    DispatchEngine,
+};
+
+// Placement for a device of context `context_id` running `num_hw_cqs` CQs, or nullopt when it can run no
+// DRAM-sender endpoints.
+std::optional<DramSenderPlacement> dram_sender_placement(ContextId context_id, uint8_t num_hw_cqs);
+
+// Under DramSenderPlacement::DispatchEngine: the logical dispatch-engine core of device `device_id` that
+// holds every DRAM-sender endpoint's state.
+CoreCoord dram_sender_dispatch_engine(ContextId context_id, ChipId device_id);
+
+// Virtual NoC coord of the core holding endpoint `sender_logical`'s state on `device`; receivers return
+// their credits there.
+CoreCoord dram_sender_virtual_core(
+    const distributed::MeshDevice& mesh_device, const IDevice* device, const CoreCoord& sender_logical);
 
 // The logical DRAM core of DRAM view `bank_id` whose physical NoC coord the SoC descriptor does not
 // already claim as a worker_endpoint or eth_endpoint -- i.e. one safe for a DRISC kernel to occupy.
@@ -72,8 +99,8 @@ void validate_dram_senders_across_mesh(
 // base it keeps. Single source for those and for a consumer's own slab accounting.
 std::vector<uint32_t> recv_index_bases_per_sender(const std::vector<std::pair<CoreCoord, CoreRangeSet>>& mapping);
 
-// Write `bytes` into DRAM-logical sender core `sender_logical`'s own L1 on `device`, at DRISC-L1
-// address `local_addr`.
+// Write `bytes` into the L1 that holds DRAM-logical sender endpoint `sender_logical`'s state on
+// `device`, at local address `local_addr`: the DRAM core's own L1, or the dispatch engine's.
 //
 // Host writes to a DRAM core's L1 go over NOC and need the DRAM-L1 NOC offset added on top of the
 // local address -- worker L1 has local == NOC space, so a worker-side write does not, and forgetting

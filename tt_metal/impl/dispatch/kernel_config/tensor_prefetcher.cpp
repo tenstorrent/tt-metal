@@ -66,6 +66,8 @@ void TensorPrefetcherKernel::GenerateStaticConfigs() {
 void TensorPrefetcherKernel::CreateKernel() {
     const std::map<std::string, std::string> defines = {
         {"TENSOR_PREFETCHER_REGION_BASE", std::to_string(region_base_)},
+        {"TENSOR_PREFETCHER_STAGE_RING_SIZE",
+         std::to_string(fifo::stage_ring_bytes(get_dispatch_mem_map().tensor_prefetcher_region_size()))},
     };
     const DispatchWorkerType type = role_ == Role::Reader ? TENSOR_PREFETCHER_READER : TENSOR_PREFETCHER_PUSHER;
     configure_kernel_variant(dispatch_kernel_file_names[type], {}, defines);

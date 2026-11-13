@@ -54,14 +54,22 @@ inline constexpr uint32_t kPushedOffset = kStagedOffset + kMaxReceivers * kLineB
 inline constexpr uint32_t kSenderStateZoneOffset = kPushedOffset + kMaxReceivers * kLineBytes;
 inline constexpr uint32_t kSenderStateZoneBytes = 4096;
 
-// The rest of the region stages blocks between the reader and the pusher.
+// The rest of the region stages blocks between the reader and the pusher. While a tensor streams,
+// the ring is split evenly between that tensor's receivers, kStageSlotsPerReceiver blocks each, so
+// the reader can keep reading for every receiver whichever one the pusher is waiting on. One slot
+// per receiver is the minimum that cannot deadlock; the second overlaps a read with a push.
 inline constexpr uint32_t kStageRingOffset = kSenderStateZoneOffset + kSenderStateZoneBytes;
 inline constexpr uint32_t kMinStageRingBytes = 64 * 1024;
 inline constexpr uint32_t kMinRegionBytes = kStageRingOffset + kMinStageRingBytes;
+inline constexpr uint32_t kStageSlotsPerReceiver = 2;
 
 enum SlotCommand : uint32_t {
     // Retired by both kernels with no other effect. Lets the host check that the FIFO is serviced.
     kSlotNop = 1,
+    // num_lanes request pages follow the header, one per lane, all PREFETCH or all DRAIN. A PREFETCH
+    // slot's lanes carry the same tensors for different receivers, and its receivers are served
+    // together rather than lane by lane.
+    kSlotRequest = 2,
 };
 
 struct SlotHeader {
@@ -74,5 +82,13 @@ static_assert(sizeof(SlotHeader) == kSlotHeaderBytes, "SlotHeader must fill exac
 static_assert(kSlotBytes % kLineBytes == 0, "FIFO slots must be whole cache lines");
 
 constexpr uint32_t slot_offset(uint32_t slot_count) { return kFifoOffset + (slot_count % kFifoSlots) * kSlotBytes; }
+
+// Stage ring bytes in a region of `region_bytes`, whole cache lines.
+constexpr uint32_t stage_ring_bytes(uint32_t region_bytes) {
+    return region_bytes < kStageRingOffset ? 0 : (region_bytes - kStageRingOffset) / kLineBytes * kLineBytes;
+}
+
+// TensorPrefetcherTensorLayout::layout_mode of a receiver-contiguous weight, the only layout these kernels serve.
+inline constexpr uint32_t kReceiverContiguousLayout = 1;
 
 }  // namespace tt::tt_metal::tensor_prefetcher_fifo

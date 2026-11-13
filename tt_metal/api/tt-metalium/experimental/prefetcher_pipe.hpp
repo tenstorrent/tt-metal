@@ -289,7 +289,7 @@ std::vector<PrefetcherPipeSpace> CreatePrefetcherPipeSpaces(
 // Select DRAM senders from `bank_to_receivers` and carve one pipe per selected sender from an
 // existing space. Each input pair names a DRAM bank and the complete worker receiver set served
 // by that bank; the factory may split that set across sender cores. The space owns the ring
-// geometry and all worker/DRISC L1 reservations.
+// geometry and all worker and sender-state L1 reservations.
 std::vector<PrefetcherPipe> CreatePrefetcherPipesForTensorPrefetcher(
     PrefetcherPipeSpace& space,
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,

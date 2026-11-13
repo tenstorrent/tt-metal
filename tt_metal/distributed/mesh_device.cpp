@@ -57,6 +57,8 @@
 #include "impl/buffers/tensor_prefetcher_manager.hpp"
 #include "impl/buffers/drisc_l1_arena.hpp"
 #include "impl/buffers/dram_sender_topology.hpp"
+#include "impl/buffers/tensor_prefetcher_fifo.hpp"
+#include "impl/dispatch/dispatch_mem_map.hpp"
 #include "distributed/sd_mesh_command_queue.hpp"
 #include "tools/profiler/tt_metal_tracy.hpp"
 #include <env_lib.hpp>
@@ -1904,6 +1906,11 @@ bool MeshDeviceImpl::initialize_impl(
     // cores so users don't observe a lazy side-effect on first DRAM-sender pipe creation.
     if (metal_env().get_hal().has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
         drisc_l1_arena_ = std::make_shared<::tt::tt_metal::DriscL1Arena>(context_id_);
+    } else if (dram_sender_placement(context_id_, num_hw_cqs()) == DramSenderPlacement::DispatchEngine) {
+        const DispatchMemMap& mem_map = metal_context().dispatch_mem_map();
+        drisc_l1_arena_ = ::tt::tt_metal::DriscL1Arena::for_dispatch_engine(
+            mem_map.tensor_prefetcher_region_base() + tensor_prefetcher_fifo::kSenderStateZoneOffset,
+            tensor_prefetcher_fifo::kSenderStateZoneBytes);
     }
 
     is_internal_state_initialized = true;
@@ -1972,14 +1979,31 @@ std::shared_ptr<experimental::HostRegion> MeshDeviceImpl::host_region() {
     return host_region_;
 }
 
+bool MeshDeviceImpl::dram_senders_on_dispatch_engine(const IDevice* device, uint32_t bank_id) const {
+    if (dram_sender_placement(context_id_, num_hw_cqs()) != DramSenderPlacement::DispatchEngine) {
+        return false;
+    }
+    const uint32_t num_banks = metal_env().get_cluster().get_soc_desc(device->id()).get_num_dram_views();
+    TT_FATAL(
+        bank_id < num_banks, "bank_id={} out of range for device {} (num_banks={})", bank_id, device->id(), num_banks);
+    return true;
+}
+
 CoreCoord MeshDeviceImpl::pick_unused_dram_logical_core(const IDevice* device, uint32_t bank_id) const {
     TT_FATAL(device != nullptr, "Cannot select a DRAM sender core for a null device");
+    // On a dispatch engine an endpoint is only a role of its bank; no DRAM core is occupied.
+    if (dram_senders_on_dispatch_engine(device, bank_id)) {
+        return CoreCoord(bank_id, 0);
+    }
     return tt::tt_metal::pick_unused_dram_logical_core(
         metal_env().get_cluster().get_soc_desc(device->id()), bank_id, device->id());
 }
 
 std::vector<CoreCoord> MeshDeviceImpl::dram_sender_logical_cores(const IDevice* device, uint32_t bank_id) const {
     TT_FATAL(device != nullptr, "Cannot enumerate DRAM sender cores for a null device");
+    if (dram_senders_on_dispatch_engine(device, bank_id)) {
+        return {CoreCoord(bank_id, 0), CoreCoord(bank_id, 1)};
+    }
     const auto& soc_desc = metal_env().get_cluster().get_soc_desc(device->id());
 
     // Sender 0: the free non-endpoint subchannel.
