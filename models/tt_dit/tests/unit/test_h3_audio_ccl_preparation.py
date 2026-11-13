@@ -141,7 +141,8 @@ class PreparationTest(unittest.TestCase):
         )
         p._capture_traces = lambda prompt, fitted, overrides, trace_audio: p._capture_audio(trace_audio)
         p.warmup()
-        self.assertEqual(v.calls, [False, False, True, True])
+        # untraced warm per length, capture per length, then one replay per length
+        self.assertEqual(v.calls, [False, False, True, True, True, True])
         self.assertTrue(p.trace_audio)
         self.assertFalse(getattr(p, "_warming_audio_trace", False))
         self.assertEqual(native.freed, [])

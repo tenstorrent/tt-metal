@@ -2943,7 +2943,14 @@ class MiniMaxH3Pipeline:
             bar_format=_TQDM_BAR_FORMAT,
         ):
             decoder(latents, traced=True)
-        self._host_log(f"audio decode traces captured: {len(inputs)}")
+        # A traced call after capture refreshes the trace's input slot with `ttnn.copy` (Tracer._update_input:
+        # the decoder hands in a fresh row-major interleaved tensor), a program the untraced warm never builds.
+        # Replay each length once so the first served request at any length compiles nothing.
+        before = self.mesh_device.num_program_cache_entries()
+        for latents in inputs:
+            decoder(latents, traced=True)
+        replay_added = self.mesh_device.num_program_cache_entries() - before
+        self._host_log(f"audio decode traces captured: {len(inputs)}, replay-warmed: +{replay_added} programs")
 
     def _warm_ref2va_prompt_encoder_envelope(self) -> None:
         """Compile every prompt-encoding program a served ref2va request can reach, strictly before
