@@ -47,15 +47,25 @@ enum class FDKernelType : uint32_t {
     ROUTING,   // Routing/Tunneling kernels
 };
 
+// When fast-dispatch teardown writes a kernel's termination signal.
+enum class TerminationTiming : uint8_t {
+    // After the dispatch cores report done: the kernel keeps serving the CQ kernels until they exit.
+    AfterDispatchDone,
+    // Before waiting for the dispatch cores: the kernel shares a dispatch core with the CQ kernels, and that core
+    // reports done only after every kernel on it has returned.
+    BeforeDispatchWait,
+};
+
 struct TerminationInfo {
     CoreCoord logical_core;  // Logical core coordination
     CoreType core_type;      // Core Type
     uint32_t address;        // Termination signal address in L1
     uint32_t val;            // Termination signal value
+    TerminationTiming timing = TerminationTiming::AfterDispatchDone;
 
     bool operator==(const TerminationInfo& other) const {
         return logical_core == other.logical_core && core_type == other.core_type && address == other.address &&
-               val == other.val;
+               val == other.val && timing == other.timing;
     }
 };
 
@@ -79,6 +89,8 @@ static std::vector<std::string> dispatch_kernel_file_names = {
     "tt_metal/impl/dispatch/kernels/vc_packet_router.cpp",         // PACKET_ROUTER_DEMUX
     "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",              // FABRIC_MUX
     "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",              // FABRIC_RETURN_MUX
+    "tt_metal/impl/buffers/kernels/tensor_prefetcher_reader.cpp",  // TENSOR_PREFETCHER_READER
+    "tt_metal/impl/buffers/kernels/tensor_prefetcher_pusher.cpp",  // TENSOR_PREFETCHER_PUSHER
     ""                                                             // COUNT
 };
 
@@ -247,6 +259,7 @@ struct hash<tt::tt_metal::TerminationInfo> {
         ttsl::hash::hash_combine(hash, info.core_type);
         ttsl::hash::hash_combine(hash, info.address);
         ttsl::hash::hash_combine(hash, info.val);
+        ttsl::hash::hash_combine(hash, info.timing);
         return hash;
     }
 };

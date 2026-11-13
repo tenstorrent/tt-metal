@@ -16,6 +16,7 @@
 #include "dispatch_s.hpp"
 #include "kernel_types.hpp"
 #include "prefetch.hpp"
+#include "tensor_prefetcher.hpp"
 #include "impl/context/context_descriptor.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/dispatch/dispatch_engine_cores.hpp"
@@ -222,6 +223,21 @@ FDKernel* FDKernel::Generate(
                 noc_selection,
                 true,
                 tunnel_index,
+                descriptor,
+                dispatch_core_manager,
+                get_control_plane,
+                get_dispatch_query_manager,
+                get_reads_dispatch_cores);
+        case TENSOR_PREFETCHER_READER:
+        case TENSOR_PREFETCHER_PUSHER:
+            return new TensorPrefetcherKernel(
+                node_id,
+                device_id,
+                servicing_device_id,
+                cq_id,
+                noc_selection,
+                type == TENSOR_PREFETCHER_READER ? TensorPrefetcherKernel::Role::Reader
+                                                 : TensorPrefetcherKernel::Role::Pusher,
                 descriptor,
                 dispatch_core_manager,
                 get_control_plane,

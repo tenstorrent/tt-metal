@@ -42,7 +42,8 @@ private:
 
     void wait_for_dispatch_cores() const;
 
-    void process_termination_signals() const;
+    // Writes the registered termination signals with the given timing.
+    void process_termination_signals(TerminationTiming timing) const;
 
     bool using_fast_dispatch() const;
 
