@@ -329,7 +329,7 @@ void H2DSocketImpl::init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_de
     // Receiver core type is recorded explicitly at construction (the DRAM-recv
     // ctor sets Dram, every other path is Tensix). Used to resolve the virtual
     // coordinate — logical coords overlap across core types, so this can't be
-    // inferred from coordinates here — and to pick the window's ordering below.
+    // inferred from coordinates here.
     const CoreType recv_umd_core_type = (recv_core_type_ == RecvCoreType::Dram) ? CoreType::DRAM : CoreType::TENSIX;
 
     uint32_t recv_device_id;

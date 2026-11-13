@@ -289,8 +289,8 @@ void test_hd_socket_loopback(
 }
 
 // HOST_PUSH loopback of num_pages pages, each checked as it comes back. Page p carries pattern p % kNumPatterns,
-// and kNumPatterns is prime, so a page that reaches the device before the FIFO slot's earlier contents are
-// replaced, or a bytes_sent update that overtakes its page, reads back as a different pattern.
+// and kNumPatterns is prime and larger than any FIFO depth used here, so a bytes_sent update that lands before its
+// page does (the kernel then sends the slot's previous contents) reads back as a different pattern.
 void test_h2d_host_push_ordering_stress(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
     std::size_t socket_fifo_size,
@@ -388,7 +388,8 @@ void test_h2d_host_push_ordering_stress(
         // The loopback kernel is still waiting for pages that will never come, and fixture teardown waits for it
         // to finish. Bound that wait: with an operation timeout set, closing the device gives up once dispatch
         // stops progressing, instead of hanging the job. Teardown's wait starts after this, so it sees the new
-        // value; a shorter timeout already configured (e.g. TT_METAL_OPERATION_TIMEOUT_SECONDS) is kept.
+        // value; a shorter timeout already configured (e.g. TT_METAL_OPERATION_TIMEOUT_SECONDS) is kept. The timeout
+        // belongs to the MetalEnv, which outlives this device, so it stays set for the rest of the process.
         const auto current_timeout = experimental::GetOperationTimeout(*mesh_device);
         if (current_timeout.count() == 0 || current_timeout > kStallTimeout) {
             experimental::SetOperationTimeout(*mesh_device, kStallTimeout);
@@ -401,7 +402,7 @@ void test_h2d_host_push_ordering_stress(
     const double us_per_page = std::chrono::duration<double, std::micro>(write_time).count() / num_pages;
     log_info(
         tt::LogTest,
-        "H2D HOST_PUSH loopback: {} pages of {} B, {:.2f} us per write(), {:.2f} GB/s",
+        "H2D HOST_PUSH loopback: {} pages of {} B, {:.2f} us per page, {:.2f} GB/s",
         num_pages,
         page_size,
         us_per_page,
