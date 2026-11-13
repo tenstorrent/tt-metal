@@ -869,6 +869,94 @@ def test_determinism(runtime):
     assert torch.equal(a, b), f"max |diff| {(a - b).abs().max().item():.3e}"
 
 
+BALANCE_MASKS = ["heavy_rows", "prefix", "causal"]
+
+
+def balance_mask(geo, S, H, *, kind, density=0.1, seed=0, heavy_rows=16, heavy=0.9, heads=None, prefix_blocks=4):
+    """A mask whose rows cost very differently, for the op's load balancing: within a device a head's units over its
+    cores, across devices row blocks swap.
+
+      heavy_rows  make_mask at `density`, then `heavy_rows` random (shard, head, Q block) rows keep `heavy` of the
+                  blocks (heads drawn from `heads`, default all)
+      prefix      make_mask at `density`, then the first `prefix_blocks` Q blocks of shard 0 keep every block and every
+                  row keeps those blocks: a dense text prefix on one device
+      causal      Q block i keeps the K blocks j <= i in sequence order: the last shard's rows cost ~2x the mean, the
+                  first's almost nothing
+
+    Only full blocks are kept, and padding Q rows keep nothing.
+    """
+    g = torch.Generator().manual_seed(seed)
+    nb, nb_pad = geo.nb(), geo.nb_pad()
+    full = (_block_lengths(geo, S) == BLOCK).reshape(-1).to(torch.int64)  # [S * nb_pad]
+    if kind == "causal":
+        k_global = torch.arange(S * nb_pad)
+        k_index = (k_global // nb_pad) * nb + k_global % nb_pad  # global block number in sequence order
+        q_index = torch.arange(S)[:, None] * nb + torch.arange(nb_pad)[None, :]  # [S, nb_pad]
+        keep = k_index[None, None, :] <= q_index[:, :, None]  # [S, nb_pad, S * nb_pad]
+        mask = keep[:, None].expand(S, H, nb_pad, S * nb_pad).to(torch.int64).clone()
+    else:
+        mask = make_mask(geo, S, H, density=density, seed=seed)
+    if kind == "heavy_rows":
+        heads = list(range(H)) if heads is None else heads
+        for _ in range(heavy_rows):
+            s = int(torch.randint(S, (1,), generator=g))
+            h = heads[int(torch.randint(len(heads), (1,), generator=g))]
+            qb = int(torch.randint(nb, (1,), generator=g))
+            mask[s, h, qb] = (torch.rand(S * nb_pad, generator=g) < heavy).to(torch.int64)
+    elif kind == "prefix":
+        mask[0, :, :prefix_blocks] = 1
+        mask[:, :, :nb, :prefix_blocks] = 1
+    elif kind != "causal":
+        raise ValueError(f"unknown balance mask {kind}")
+    mask = mask * full
+    mask[:, :, nb:] = 0  # padding Q rows
+    return mask
+
+
+@pytest.mark.parametrize("pooled", [False, True], ids=["kept_only", "pooled"])
+@pytest.mark.parametrize("kind", BALANCE_MASKS)
+@pytest.mark.parametrize("geom", ["r1024k256", "r1184k256"])
+def test_balance(runtime, geom, kind, pooled):
+    """Load balancing: rows ~90 % dense scattered over the heads the reference checks, a dense prefix on shard 0 and a
+    causal mask, against the reference (r1184: a partial last block, which never moves between devices). Every case
+    deals units to cores out of order and with per-core counts that differ from the static split (host-checked)."""
+    case = Case(runtime, GEOMETRIES[geom])
+    checked = sorted({0, 1, case.H // 2, case.H - 1})
+    mask = balance_mask(case.geo, case.S, case.H, kind=kind, seed=40, heads=checked)
+    r = case.run(*case.inputs(40), mask, want_dense=False, pooled=pooled)
+    tag = f"balance {kind} {_mode(pooled)} {geom}"
+    _check(tag, r, _density(mask, case.geo, case.S), dense_min=None, ref_min=0.999)
+
+
+@pytest.mark.parametrize("pooled", [False, True], ids=["kept_only", "pooled"])
+@pytest.mark.parametrize("kind", ["prefix", "causal"])
+def test_balance_passes(runtime, kind, pooled):
+    """Load balancing with two Q passes: a core keeps at least one unit per pass, swapped-in units can sit in either
+    pass, and each pass's outputs go home as it ends."""
+    geo = ALIGNED["r1024k256"]
+    case = Case(runtime, geo)
+    q_blocks_per_pass = case.q_blocks_per_pass_for(2)
+    mask = balance_mask(geo, case.S, case.H, kind=kind, seed=41)
+    r = case.run(*case.inputs(41), mask, want_dense=False, pooled=pooled, q_blocks_per_pass=q_blocks_per_pass)
+    _check(f"balance passes 2 {kind} {_mode(pooled)}", r, _density(mask, geo, case.S), dense_min=None, ref_min=0.999)
+
+
+def test_balance_masks_per_call(runtime):
+    """The cached program with another mask every call (costs, unit tables and swaps are decided per call, and the
+    fabric counters must come back to zero): prefix, random, causal, heavy rows, prefix again, each against its
+    reference."""
+    case = Case(runtime, ALIGNED["r1024k256"])
+    checked = sorted({0, 1, case.H // 2, case.H - 1})
+    for call, kind in enumerate(["prefix", "random", "causal", "heavy_rows", "prefix"]):
+        seed = 50 + call
+        if kind == "random":
+            mask = make_mask(case.geo, case.S, case.H, density=0.2, seed=seed)
+        else:
+            mask = balance_mask(case.geo, case.S, case.H, kind=kind, seed=seed, heads=checked)
+        r = case.run(*case.inputs(seed), mask, want_dense=False, pooled=False)
+        _check(f"call {call} {kind}", r, _density(mask, case.geo, case.S), dense_min=None, ref_min=0.999)
+
+
 @pytest.mark.parametrize("geom", ["r1024k256", "r1024k512"])
 def test_fresh_inputs_per_call(runtime, geom):
     """Four calls on the cached program, new inputs and masks each: catches stale K / V from a previous call."""
