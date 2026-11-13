@@ -667,8 +667,7 @@ ALWI void matmul_tiles(
  * unary min and max, the comparisons with zero, topk local sort) need their init redone after this one, and this init after them.
  *
  * Template parameter unpack_auto_ttsync (ignored outside Blackhole): row base addresses under Auto TTSync instead of polling
- * for a free context, the same value in matmul_block; the kernel must define MATMUL_UNPACK_TTSYNC to a constant that
- * is true when any of its calls passes true.
+ * for a free context, the same value in matmul_block; the firmware turns Auto TTSync off after the kernel.
  *
  * Template parameters kt_per_section and out_format (ignored outside Blackhole): the matmul_block calls per DEST section
  * and the packed output format, which pick the unpack and math forms (matmul_default_form); 0 and Invalid keep the
@@ -901,6 +900,15 @@ constexpr std::uint32_t matmul_fe_key(const std::uint32_t dim) {
     return (ct != 0xFFu && rt != 0xFFu) ? dim : 0;
 }
 
+// the unpack_auto_ttsync of a plain call: one value per kernel, so its init and calls agree
+constexpr std::uint32_t matmul_fe_unpack_ttsync() {
+#if defined(UCK_CHLKC_UNPACK)
+    return llk_unpack_AB_matmul_kernel_ttsync() ? 1 : 0;
+#else
+    return 0;
+#endif
+}
+
 template <std::uint32_t in0_cb, std::uint32_t in1_cb, std::uint32_t ct, std::uint32_t rt>
 ALWI void matmul_block_init_fe(
     const std::uint32_t call_line,
@@ -914,7 +922,7 @@ ALWI void matmul_block_init_fe(
     constexpr std::uint32_t AUTO = MATMUL_REUSE_DIR_AUTO;
     matmul_block_init<
         false,
-        0,
+        matmul_fe_unpack_ttsync(),
         0,
         DataFormat::Invalid,
         0,
@@ -943,7 +951,7 @@ ALWI void matmul_block_fe(
     constexpr std::uint32_t AUTO = MATMUL_REUSE_DIR_AUTO;
     matmul_block<
         false,
-        0,
+        matmul_fe_unpack_ttsync(),
         0,
         DataFormat::Invalid,
         0,

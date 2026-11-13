@@ -92,9 +92,9 @@ uint32_t _start() {
     EARLY_RETURN_FOR_DEBUG
     WAYPOINT("K");
     run_kernel();
-#if defined(ARCH_BLACKHOLE) && defined(UCK_CHLKC_UNPACK) && defined(MATMUL_UNPACK_TTSYNC)
+#if defined(ARCH_BLACKHOLE) && defined(UCK_CHLKC_UNPACK) && defined(LLK_UNPACK_AB_MATMUL_TTSYNC_RESTORE)
     // the next kernel on the core starts with Auto TTSync off and the default MOP and REPLAY declarations
-    if constexpr (MATMUL_UNPACK_TTSYNC) {
+    if constexpr (llk_unpack_AB_matmul_kernel_ttsync()) {
         _llk_unpack_AB_matmul_ttsync_restore_();
     }
 #endif

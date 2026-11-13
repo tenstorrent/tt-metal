@@ -25,13 +25,9 @@ inline bool unpack_matmul_init_reuse_a = true;
 // Set by the first ttsync matmul unpack init of a kernel; _llk_unpack_AB_matmul_ttsync_restore_ clears it at kernel end.
 inline std::uint32_t unpack_matmul_ttsync_on = 0;
 
-// A kernel that runs the ttsync form defines MATMUL_UNPACK_TTSYNC before its includes, so that its TRISC wrapper calls
-// _llk_unpack_AB_matmul_ttsync_restore_ after the kernel (tt-metal's wrapper only when the macro's value is true).
-#if defined(MATMUL_UNPACK_TTSYNC)
-inline constexpr bool unpack_matmul_ttsync_restored = true;
-#else
-inline constexpr bool unpack_matmul_ttsync_restored = false;
-#endif
+// The TRISC wrapper of a kernel that includes this file calls _llk_unpack_AB_matmul_ttsync_restore_ after the kernel; in a
+// kernel without a ttsync init the flag is never written and the call folds away.
+#define LLK_UNPACK_AB_MATMUL_TTSYNC_RESTORE 1
 
 // Turn Auto TTSync off and restore the MOP and REPLAY declarations if a ttsync matmul init changed them.
 inline void _llk_unpack_AB_matmul_ttsync_restore_()
@@ -408,7 +404,7 @@ inline void _llk_unpack_AB_matmul_mop_config_(
  * @tparam kernel_broadcast_a: Tile count to wrap operand A around for kernel broadcast (0 = disabled).
  * @tparam kernel_broadcast_b: Tile count to wrap operand B around for kernel broadcast (0 = disabled).
  * @tparam auto_ttsync: Write each row's base addresses through two GPRs and WRCFG under Auto TTSync instead of polling for a
- *                 free context; the kernel must define MATMUL_UNPACK_TTSYNC and pass the same value to the execute.
+ *                 free context; pass the same value to the execute.
  * @tparam stream_narrow: The value of @ref _llk_unpack_AB_matmul_stream_narrow_; true advances the streamed operand's
  *                        address with one CFGSHIFTMASK.
  * @param transpose: Nonzero to enable within-face (16x16) transpose for SrcA.
@@ -500,7 +496,6 @@ __attribute__((always_inline)) inline void _llk_unpack_AB_matmul_init_(
 
     if constexpr (auto_ttsync)
     {
-        static_assert(unpack_matmul_ttsync_restored, "a kernel that runs the ttsync matmul unpack must define MATMUL_UNPACK_TTSYNC");
         if (!unpack_matmul_ttsync_on)
         {
             // the unpack MOP and replay never touch the address GPRs, so the RISC's stores need not wait for them
@@ -719,6 +714,7 @@ inline void _llk_unpack_AB_matmul_(
 
         if constexpr (auto_ttsync)
         {
+            LLK_ASSERT(unpack_matmul_ttsync_on, "a ttsync matmul unpack needs a ttsync matmul init before it");
             LLK_ASSERT(is_valid_L1_address(address_a), "L1 address_a must be in valid L1 memory region");
             LLK_ASSERT(is_valid_L1_address(address_b), "L1 address_b must be in valid L1 memory region");
             // still counted for the context poll of the kernel's other unpack calls; the SEMGET below releases it

@@ -12,6 +12,12 @@
  * LLK UNPACK AB MATMUL
  *************************************************************************/
 
+// Plain matmul_block calls run the ttsync unpack above LoFi, except HiFi4 at full sync with a 32-bit DEST.
+constexpr bool llk_unpack_AB_matmul_kernel_ttsync() {
+    return MATH_FIDELITY != MathFidelity::LoFi &&
+           !(MATH_FIDELITY == MathFidelity::HiFi4 && DST_SYNC_MODE == DstSync::SyncFull && DST_ACCUM_MODE);
+}
+
 // Unified cores, shared by the CB-id API below and the LLKOperand API (experimental/2_0/). Matmul unpack is
 // FORMAT-FREE at the op level (src/dst formats are programmed at compute_kernel_hw_startup<SrcOrder::Reverse>),
 // so the cores take only the already-resolved geometry (face_r_dim / num_faces / partial_face per src) +
@@ -28,6 +34,9 @@ inline void llk_unpack_AB_matmul_init_impl(
     const std::uint32_t unpB_num_faces,
     const bool partial_face_a,
     const bool partial_face_b) {
+    static_assert(
+        auto_ttsync == 0 || llk_unpack_AB_matmul_kernel_ttsync(),
+        "only a kernel the firmware restores may turn Auto TTSync on");
     _llk_unpack_AB_matmul_init_<0, 0, auto_ttsync, stream_narrow, stream_z, reuse_dir>(
         transpose,
         ct_dim,
@@ -57,6 +66,9 @@ inline void llk_unpack_AB_matmul_impl(
     const std::uint32_t rt_dim,
     const std::uint32_t kt_dim,
     const std::uint32_t held_a = matmul_held_a_init) {
+    static_assert(
+        auto_ttsync == 0 || llk_unpack_AB_matmul_kernel_ttsync(),
+        "the ttsync matmul unpack runs only where every matmul init turns it on");
     WAYPOINT("UPMW");
     _llk_unpack_AB_matmul_<
         0,

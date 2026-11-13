@@ -151,6 +151,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
 #ifdef ARCH_BLACKHOLE
+#if defined(MATMUL_PRODUCTION)
+    // a plain call's kernel rule (llk_unpack_AB_matmul_kernel_ttsync), at init and call alike
+    constexpr std::uint32_t unpack_auto_ttsync =
+        MATH_FIDELITY != ckernel::MathFidelity::LoFi &&
+                !(MATH_FIDELITY == ckernel::MathFidelity::HiFi4 && dest_sync == ckernel::DstSync::SyncFull && is_fp32_dest_acc_en)
+            ? 1
+            : 0;
+#else
 #ifdef MATMUL_UNPACK_TTSYNC_EXCL
     constexpr std::uint32_t unpack_ttsync_req = 2;
 #elif defined(MATMUL_UNPACK_TTSYNC)
@@ -187,6 +195,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                                                      : unpack_ttsync_req;
 #else
     constexpr std::uint32_t unpack_auto_ttsync = unpack_ttsync_req;
+#endif
 #endif
 #line 69
     // the test chooses the 8-bit stream at compile time, as a kernel's compile-time formats do
@@ -236,7 +245,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                                            MATH_FIDELITY == ckernel::MathFidelity::HiFi4,
                                            MATH_FIDELITY == ckernel::MathFidelity::LoFi))
         {
-            _llk_unpack_AB_matmul_init_<0, 0, 0, true, 0, 0>(
+            _llk_unpack_AB_matmul_init_<0, 0, unpack_auto_ttsync, true, 0, 0>(
                 UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM, KT_DIM, FACE_R_DIM, FACE_R_DIM, num_faces_A, num_faces_B, false, false);
         }
         else
