@@ -283,7 +283,8 @@ reader, nlohmann_json, TT::STL and BLAKE3. It starts nothing of the runtime, so 
 ## How it stays faithful
 
 - **It only reads.** Its UMD cluster is never started or closed, so it resets nothing and writes nothing to a chip. It
-maps no hugepages, so it doesn't take the host memory a run uses.
+maps no hugepages, so it doesn't take the host memory a run uses. How it uses UMD, and why, is in
+[UMD.md](docs/UMD.md).
 - **A record on disk means a complete capture.** The `.bin` is written to a temporary name and moved into place, then
 the record is written the same way, last. A capture that fails before its `.bin` is finished leaves no files; one
 whose record fails to write leaves a `.bin` with no record, which nothing reads.

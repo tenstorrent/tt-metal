@@ -25,6 +25,8 @@ ClusterFacts collect_umd_cluster_facts(tt::umd::Cluster& cluster);
 
 // Reads chips through a UMD cluster of its own, for reading only:
 //   - it maps no hugepages, so large remote reads go through the Ethernet core's buffer;
+//   - each remote chip is read through the gateway Ethernet channel that answered a few small reads fastest, which is
+//     one whose router is idle, since base firmware serves remote reads only when the router hands it the core;
 //   - it's never started or closed, so it resets nothing and writes nothing to a chip;
 //   - discovery skips an Ethernet core whose heartbeat has stalled instead of failing, since a hung run is what capture
 //     is for.
