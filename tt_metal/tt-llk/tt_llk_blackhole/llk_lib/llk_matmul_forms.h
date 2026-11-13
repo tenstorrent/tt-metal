@@ -84,9 +84,10 @@ constexpr bool matmul_format_is_32bit(const DataFormat f)
     return f == DataFormat::Float32 || f == DataFormat::Tf32;
 }
 
-// The kernels whose plain matmul_block calls run the ttsync unpack (formats: every CB format of the kernel): above LoFi, except HiFi4 at
-// full sync with a 32-bit DEST, and HiFi2 at half sync with a 32-bit DEST in a kernel holding a Bfp8_b and a 32-bit format (a Bfp8_b SrcA
-// block there measured slower under ttsync).
+// The kernels whose plain matmul_block calls run the ttsync unpack (formats: every CB format of the kernel): above LoFi, except the
+// classes where a production block measured slower under ttsync (G2 census, 660 keys): HiFi4 at full sync with a 32-bit DEST, half sync
+// without a 32-bit DEST in a kernel holding Bfp8_b, and with a 32-bit DEST and a 32-bit format HiFi2 at either sync and HiFi3 at full
+// sync holding Bfp8_b.
 template <std::size_t N>
 constexpr bool matmul_kernel_ttsync(const MathFidelity fidelity, const bool full_sync, const bool fp32_dest, const std::uint8_t (&formats)[N])
 {
@@ -94,15 +95,19 @@ constexpr bool matmul_kernel_ttsync(const MathFidelity fidelity, const bool full
     {
         return false;
     }
-    if (fidelity == MathFidelity::HiFi2 && !full_sync && fp32_dest)
+    bool bfp8 = false, wide = false;
+    for (const std::uint8_t f : formats)
     {
-        bool bfp8 = false, wide = false;
-        for (const std::uint8_t f : formats)
-        {
-            bfp8 = bfp8 || f == static_cast<std::uint8_t>(DataFormat::Bfp8_b);
-            wide = wide || matmul_format_is_32bit(static_cast<DataFormat>(f));
-        }
-        return !(bfp8 && wide);
+        bfp8 = bfp8 || f == static_cast<std::uint8_t>(DataFormat::Bfp8_b);
+        wide = wide || matmul_format_is_32bit(static_cast<DataFormat>(f));
+    }
+    if (!full_sync && !fp32_dest && bfp8)
+    {
+        return false;
+    }
+    if (fp32_dest && wide && (fidelity == MathFidelity::HiFi2 || (fidelity == MathFidelity::HiFi3 && full_sync && bfp8)))
+    {
+        return false;
     }
     return true;
 }
