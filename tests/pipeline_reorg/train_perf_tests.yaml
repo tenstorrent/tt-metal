@@ -91,6 +91,16 @@
   team: train
   budget_type: perf
 
+- name: "Tiny Deepseek Sparse EP Shakespeare"
+  cmd: python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/single_cards.yaml --filter-filenames "tiny_deepseek_single_sparse_ep_shakespeare"
+  skus:
+    bh_p150b_civ2:
+      timeout: 90
+  category: pretraining
+  owner_id: U07K00A281X # Kevin Wu
+  team: train
+  budget_type: perf
+
 # C++ models
 - name: "NanoGPT Shakespeare (C++)"
   cmd: python tt-train/scripts/run_models.py --model_config tt-train/scripts/run_models_configs/single_cards.yaml --filter-filenames "nanogpt_shakespeare_cpp"
