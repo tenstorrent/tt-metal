@@ -22,7 +22,6 @@ from ...layers.normalization import GroupNorm
 from ...parallel.config import Flux2VaeParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils import cache, tensor
-from .vae import VaeAttention
 from .vae_flux2 import Flux2VaeDecoder, Flux2VaeEncoder
 
 SUBFOLDER = "vae"
@@ -99,13 +98,6 @@ def _bounded_group_norm_blocks(module) -> None:
         _bounded_group_norm_blocks(child)
 
 
-def _local_query_attention(module) -> None:
-    if isinstance(module, VaeAttention):
-        module.local_queries = True
-    for _, child in module.named_children():
-        _local_query_attention(child)
-
-
 class Flux3KleinVae:
     def __init__(
         self,
@@ -157,11 +149,12 @@ class Flux3KleinVae:
             return module
 
         decoder_parallel = Flux2VaeParallelConfig.from_axes(device, tp_axis=tp_axis, h_axis=h_axis, w_axis=None)
-        self._decoder = Flux2VaeDecoder(parallel_config=decoder_parallel, use_conv3d=False, **common)
+        self._decoder = Flux2VaeDecoder(
+            parallel_config=decoder_parallel, use_conv3d=False, local_query_attention=True, **common
+        )
         configure_conv2d(
             self._decoder, slice_params={mesh_shape: decoder_slice_params(sizes, int(device.shape[h_axis]))}
         )
-        _local_query_attention(self._decoder)
         load(self._decoder, decoder_parallel, SUBFOLDER)
 
         encoder_parallel = Flux2VaeParallelConfig.from_axes(device, tp_axis=tp_axis, h_axis=None, w_axis=None)

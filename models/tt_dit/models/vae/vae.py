@@ -43,6 +43,8 @@ class VaeContext:
     w_mesh_axis: int | None = None
     w_factor: int = 1
     use_conv3d: bool = False
+    # VaeAttention computes only each device's own query rows (its H partition, split over tp_axis where even).
+    local_query_attention: bool = False
 
 
 @dataclass(frozen=True)
@@ -466,7 +468,6 @@ class VaeAttention(Module):
         }
     )
     default_sdpa_chunk_size: tuple[int, int] = (128, 128)
-    local_queries: bool = False
 
     def __init__(
         self,
@@ -604,7 +605,7 @@ class VaeAttention(Module):
         h_local = h // self._ctx.h_factor
         tp_split = self._tp_factor > 1 and h_local % self._tp_factor == 0 and h_local // self._tp_factor * w % 32 == 0
         local = (
-            self.local_queries
+            self._ctx.local_query_attention
             and self._ctx.w_factor == 1
             and (tp_split or (self._ctx.h_factor > 1 and h_local * w % 32 == 0))
         )
