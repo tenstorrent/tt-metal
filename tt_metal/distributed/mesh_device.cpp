@@ -441,6 +441,61 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
     size_t worker_l1_size) {
     auto& ctx = MetalContext::instance(context_id);
     const auto& mesh_graph = ctx.get_control_plane().get_mesh_graph();
+
+    // Teardown plan P17: in a distributed job every rank must open the mesh with the same shape. A disagreement
+    // (e.g. one rank 8x4, another 4x4) was accepted silently and the job exited 0, hiding a real misconfiguration.
+    // All-gather the requested shape and fail symmetrically on every rank when they differ, so one rank's mistake
+    // ends the whole job with a clear error instead of leaving a silent wrong result. (The control plane is already
+    // up by here, so the collective is safe; it is skipped for a single-rank job.)
+    {
+        const auto& dctx = ctx.global_distributed_context();
+        if (*dctx.size() > 1) {
+            constexpr uint32_t kMaxDims = 4;
+            constexpr uint32_t kUnspecified = 0xFFFFFFFFu;  // this rank passed no explicit mesh shape
+            std::array<uint32_t, 1 + kMaxDims> local{};     // [ndims-or-unspecified, d0, d1, d2, d3]
+            const auto& requested_opt = config.mesh_shape();
+            if (requested_opt.has_value()) {
+                const auto& requested = *requested_opt;
+                local[0] = static_cast<uint32_t>(requested.dims());
+                for (uint32_t d = 0; d < requested.dims() && d < kMaxDims; ++d) {
+                    local[1 + d] = requested[static_cast<int32_t>(d)];
+                }
+            } else {
+                local[0] = kUnspecified;
+            }
+            const int num_ranks = static_cast<int>(*dctx.size());
+            std::vector<uint32_t> gathered(static_cast<size_t>(num_ranks) * local.size());
+            dctx.all_gather(
+                ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(local.data()), local.size() * sizeof(uint32_t)),
+                ttsl::Span<std::byte>(
+                    reinterpret_cast<std::byte*>(gathered.data()), gathered.size() * sizeof(uint32_t)));
+            auto fmt_rank_shape = [&](int rank) -> std::string {
+                const size_t base = static_cast<size_t>(rank) * local.size();
+                const uint32_t ndims = gathered[base];
+                if (ndims == kUnspecified) {
+                    return "(unspecified)";
+                }
+                std::string s;
+                for (uint32_t d = 0; d < ndims && d < kMaxDims; ++d) {
+                    s += (d == 0 ? "" : "x") + std::to_string(gathered[base + 1 + d]);
+                }
+                return s;
+            };
+            for (int rank = 1; rank < num_ranks; ++rank) {
+                const size_t base = static_cast<size_t>(rank) * local.size();
+                for (size_t i = 0; i < local.size(); ++i) {
+                    TT_FATAL(
+                        gathered[base + i] == gathered[i],
+                        "Distributed mesh open: ranks disagree on the requested mesh shape (rank 0: {}, rank {}: {}). "
+                        "Every rank must open the mesh with the same shape.",
+                        fmt_rank_shape(0),
+                        rank,
+                        fmt_rank_shape(rank));
+                }
+            }
+        }
+    }
+
     auto [scoped_devices, fabric_node_ids, mesh_shape] =
         [&]() -> std::tuple<std::shared_ptr<ScopedDevices>, std::vector<tt::tt_fabric::FabricNodeId>, MeshShape> {
         if (config.physical_device_ids().empty()) {
@@ -1147,8 +1202,22 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
         }
 
         if (distributed_context_) {
-            // Wait for all ranks to be ready to close the mesh device before proceeding.
-            distributed_context_->barrier();
+            // Wait for all ranks to be ready to close the mesh device before proceeding. Teardown plan P3: a peer
+            // that has already died makes this barrier fail (under ULFM its death is delivered as an error; the
+            // errhandler returns it and the barrier throws). On the teardown path there is nothing left to
+            // synchronize with and this rank must still close its own device, so we log and carry on instead of
+            // letting the throw abandon the open device (which, when close runs from ~MeshDevice, would also
+            // std::terminate out of a destructor).
+            try {
+                distributed_context_->barrier();
+            } catch (const std::exception& e) {
+                log_warning(
+                    tt::LogMetal,
+                    "Mesh device {}: the pre-close barrier failed ({}); a peer is gone, closing this rank's device "
+                    "without it.",
+                    this->id(),
+                    e.what());
+            }
         }
 
         // TODO #20966: Remove these calls

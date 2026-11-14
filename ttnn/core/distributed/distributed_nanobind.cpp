@@ -1115,15 +1115,51 @@ void py_module(nb::module_& mod) {
     // Distributed context bindings (moved from distributed_context.cpp)
     using namespace tt::tt_metal::distributed::multihost;
 
+    // Teardown plan P1 (Python half): the C++ DistributedContext installs a std::set_terminate that turns an
+    // uncaught C++ exception into an MPI_Abort of the whole job, so a rank that dies never leaves its peers waiting
+    // in a barrier forever. An uncaught *Python* exception never reaches std::terminate (the interpreter prints a
+    // traceback and exits normally), so without a Python-side hook the peers still hang. Install a sys.excepthook
+    // (and threading.excepthook for worker threads) that, after the normal traceback, aborts the job for any
+    // uncaught exception other than KeyboardInterrupt. Idempotent; installed when the context is created.
+    auto install_python_abort_hooks = [] {
+        static bool installed = false;
+        if (installed) {
+            return;
+        }
+        installed = true;
+        auto should_abort = [](nb::handle exc_type) {
+            return DistributedContext::is_initialized() &&
+                   PyErr_GivenExceptionMatches(exc_type.ptr(), PyExc_KeyboardInterrupt) == 0;
+        };
+        nb::module_ sys = nb::module_::import_("sys");
+        nb::object prev_excepthook = sys.attr("excepthook");
+        sys.attr("excepthook") =
+            nb::cpp_function([prev_excepthook, should_abort](nb::object etype, nb::object value, nb::object tb) {
+                prev_excepthook(etype, value, tb);  // keep the normal traceback on stderr
+                if (should_abort(etype)) {
+                    DistributedContext::get_current_world()->abort(1);
+                }
+            });
+        nb::module_ threading = nb::module_::import_("threading");
+        nb::object prev_threadhook = threading.attr("excepthook");
+        threading.attr("excepthook") = nb::cpp_function([prev_threadhook, should_abort](nb::object args) {
+            prev_threadhook(args);
+            if (should_abort(args.attr("exc_type"))) {
+                DistributedContext::get_current_world()->abort(1);
+            }
+        });
+    };
+
     // Initialize the distributed context
     mod.def(
         "init_distributed_context",
-        []() {
+        [install_python_abort_hooks]() {
             // In Python context, we typically don't have argc/argv in the same way
             // This is a simplified initialization that works with default MPI settings
             static char prog_name[] = "python";
             static char* argv[] = {prog_name, nullptr};
             DistributedContext::create(1, argv);
+            install_python_abort_hooks();
         },
         R"doc(
             Initialize the distributed context with default settings.
@@ -1230,6 +1266,27 @@ void py_module(nb::module_& mod) {
                 >>> # Do some work...
                 >>> ttnn.distributed_context_barrier()
                 >>> # All processes continue from here
+        )doc");
+
+    // Abort the whole distributed job (MPI_Abort). Used by the uncaught-exception hooks above and available to a
+    // rank that detects an unrecoverable error and must tear the job down rather than let its peers hang.
+    mod.def(
+        "abort",
+        [](int error_code) {
+            if (!DistributedContext::is_initialized()) {
+                return;  // nothing to abort: no job was ever started (a singleton / uninitialized process)
+            }
+            DistributedContext::get_current_world()->abort(error_code);
+        },
+        nb::arg("error_code") = 1,
+        R"doc(
+            Abort the entire distributed job with the given exit code (MPI_Abort).
+
+            Ends every rank on every host. A no-op if the distributed context was never initialized.
+
+            Example:
+                >>> import ttnn
+                >>> ttnn.distributed_context_abort(1)
         )doc");
 
     // Allgather a single int from every rank; returns list[int] of length num_ranks.
@@ -1386,8 +1443,8 @@ void py_module(nb::module_& mod) {
             const auto subcontext_count = world->subcontext_count();
             if (subcontext_id < 0 || subcontext_id >= subcontext_count) {
                 throw std::out_of_range(
-                    "subcontext_id out of range: expected 0 <= subcontext_id < " +
-                    std::to_string(subcontext_count) + ", got " + std::to_string(subcontext_id));
+                    "subcontext_id out of range: expected 0 <= subcontext_id < " + std::to_string(subcontext_count) +
+                    ", got " + std::to_string(subcontext_id));
             }
 
             return world->subcontext_size(SubcontextId{subcontext_id});
@@ -1413,8 +1470,8 @@ void py_module(nb::module_& mod) {
             const auto subcontext_count = world->subcontext_count();
             if (subcontext_id < 0 || subcontext_id >= subcontext_count) {
                 throw std::out_of_range(
-                    "subcontext_id out of range: expected 0 <= subcontext_id < " +
-                    std::to_string(subcontext_count) + ", got " + std::to_string(subcontext_id));
+                    "subcontext_id out of range: expected 0 <= subcontext_id < " + std::to_string(subcontext_count) +
+                    ", got " + std::to_string(subcontext_id));
             }
 
             const auto subcontext_sz = world->subcontext_size(SubcontextId{subcontext_id});

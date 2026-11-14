@@ -121,7 +121,11 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
       - name: Check ttnn is not used in tt_metal tests
-        run: if (( $(grep -Rnw 'tests/tt_metal' -e 'ttnn' | wc -l ) > 32 )); then exit 1; fi
+        # teardown_sanity is excluded: it is a distributed-teardown suite that drives ttnn's DistributedContext
+        # bindings on purpose (import ttnn, open/close a mesh device, run collectives) because those bindings are
+        # only exposed through the ttnn Python module. Its ttnn references are the thing under test, not the
+        # metal/ttnn coupling this budget guards against; the 32 budget stays enforced for every other test.
+        run: if (( $(grep -Rnw 'tests/tt_metal' -e 'ttnn' --exclude-dir=teardown_sanity | wc -l ) > 32 )); then exit 1; fi
       - name: Check tt_eager constructs is not used in tt_metal tests
         run: |
           if (( $(grep -Rnw 'tests/tt_metal' -e 'tt_lib' | wc -l ) > 0 )); then exit 1; fi

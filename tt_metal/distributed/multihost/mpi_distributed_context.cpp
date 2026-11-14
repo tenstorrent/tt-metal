@@ -7,8 +7,14 @@
 #include <mpi.h>
 #include <mpi-ext.h>
 
+#include <atomic>
+#include <chrono>
+#include <cstdio>
 #include <cstdlib>
+#include <exception>
+#include <filesystem>
 #include <limits>
+#include <thread>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -162,6 +168,71 @@ bool was_mpi_finalized() noexcept {
 
 #define MPI_CHECK(call) mpi_check((call), #call)
 
+// Teardown plan P16: a per-call deadline for the collectives that wait on a peer. 0 (the default) keeps the
+// unbounded wait, so a legitimately long or slow-but-arriving collective is left alone; a positive value bounds a
+// collective that hangs because a specific rank never arrived.
+static double operation_timeout_seconds() {
+    const char* v = std::getenv("TT_METAL_OPERATION_TIMEOUT_SECONDS");
+    if (v == nullptr || *v == '\0') {
+        return 0.0;
+    }
+    char* end = nullptr;
+    const double s = std::strtod(v, &end);
+    return (end != v && s > 0.0) ? s : 0.0;
+}
+
+// Teardown plan P10: a deadline for MPI_Init itself. MPI_Init is a cross-rank wire-up — a rank blocks in it until
+// every peer also calls MPI_Init — and it is not a DistributedContext collective, so the operation timeout cannot
+// reach it: a peer that never starts (a dead rank, or a start-up skew past any sane bound) would hang the job at
+// start-up. 0 (the default) keeps the unbounded wait, so a legitimately slow start is left alone; a positive value
+// bounds the wait for a peer to join MPI_Init.
+static double distributed_init_timeout_seconds() {
+    const char* v = std::getenv("TT_METAL_DISTRIBUTED_INIT_TIMEOUT_SECONDS");
+    if (v == nullptr || *v == '\0') {
+        return 0.0;
+    }
+    char* end = nullptr;
+    const double s = std::strtod(v, &end);
+    return (end != v && s > 0.0) ? s : 0.0;
+}
+
+// Drive a non-blocking request to completion, giving up after the operation timeout. On expiry the collective
+// cannot finish because a peer is wedged or gone, and every other rank is still waiting on it, so we tear the whole
+// job down (MPI_Abort, the P1 rule) rather than return locally and leave the peers hung; we also throw so the
+// caller's log names the stuck call. With the timeout unset this is a plain MPI_Wait.
+static void wait_or_abort(MPI_Comm comm, MPI_Request& req, const char* what) {
+    const double timeout = operation_timeout_seconds();
+    if (timeout <= 0.0) {
+        MPI_CHECK(MPI_Wait(&req, MPI_STATUS_IGNORE));
+        return;
+    }
+    const auto start = std::chrono::steady_clock::now();
+    for (;;) {
+        int flag = 0;
+        MPI_CHECK(MPI_Test(&req, &flag, MPI_STATUS_IGNORE));
+        if (flag != 0) {
+            return;
+        }
+        const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+        if (elapsed >= timeout) {
+            int rank = 0;
+            MPI_Comm_rank(comm, &rank);
+            MPI_Cancel(&req);
+            MPI_Request_free(&req);
+            std::fprintf(
+                stderr,
+                "[MPIContext] rank %d: %s did not complete within TT_METAL_OPERATION_TIMEOUT_SECONDS=%.0f s; a peer "
+                "is wedged or gone. Aborting the job so every rank ends.\n",
+                rank,
+                what,
+                timeout);
+            MPI_Abort(comm, 1);
+            TT_THROW("MPIContext: {} timed out after {} s (a peer did not arrive)", what, timeout);
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+}
+
 MPIDistributedException::MPIDistributedException(Rank rank, int error_code, std::string msg) :
     rank_(rank), error_code_(error_code), message_(std::move(msg)) {
     // retrieve human-readable MPI error string
@@ -223,16 +294,114 @@ bool MPIRequest::active() const { return !done_; }
 inline void init_env(int& argc, char**& argv) {
     static std::once_flag mpi_once;
     static int provided_thread_level = MPI_THREAD_SINGLE;
+    // A singleton's private OpenMPI session directory, removed at exit (see the singleton branch below).
+    static std::string singleton_session_dir;
 
     std::call_once(mpi_once, [&] {
+        // A process nobody launched (no PMIx rank from mpirun / tt-run) is a singleton: it has no peers, so it has
+        // no use for the shared-memory transport, and Open MPI never unlinks a singleton's 16 MB segment
+        // (tt-metal #63870). Ask for the self transport only; an explicit OMPI_MCA_btl in the environment wins.
+        bool singleton_tmpdir_redirected = false;
+        bool had_caller_tmpdir = false;
+        std::string caller_tmpdir;
+        if (std::getenv("PMIX_RANK") == nullptr && std::getenv("OMPI_COMM_WORLD_SIZE") == nullptr) {
+            setenv("OMPI_MCA_btl", "self", /*overwrite=*/0);
+            // Open MPI also leaves a singleton's session directory (/tmp/ompi.<host>.<uid>/...) behind — the
+            // launcher that would reap it never ran (tt-metal #63870, comprehensively fixed by #63954). Steer that
+            // session dir into a private directory we own by pointing TMPDIR at it just for MPI_Init, then remove
+            // the directory at exit. The caller's TMPDIR is restored immediately after init so nothing else moves.
+            const char* base_env = std::getenv("TMPDIR");
+            const std::string base = (base_env != nullptr && base_env[0] != '\0') ? base_env : "/tmp";
+            std::string tmpl = base + "/tt_mpi_singleton.XXXXXX";
+            std::vector<char> buf(tmpl.c_str(), tmpl.c_str() + tmpl.size() + 1);
+            if (mkdtemp(buf.data()) != nullptr) {
+                singleton_session_dir = buf.data();
+                had_caller_tmpdir = (base_env != nullptr);
+                if (had_caller_tmpdir) {
+                    caller_tmpdir = base_env;
+                }
+                setenv("TMPDIR", singleton_session_dir.c_str(), /*overwrite=*/1);
+                singleton_tmpdir_redirected = true;
+                // Runs after the MPI_Finalize atexit below (atexit is LIFO), so the session dir is empty by then.
+                std::atexit([] {
+                    if (!singleton_session_dir.empty()) {
+                        std::error_code ec;
+                        std::filesystem::remove_all(singleton_session_dir, ec);
+                    }
+                });
+            }
+        }
+        // Teardown plan P10: bound MPI_Init so a peer that never joins the wire-up cannot hang the job at start-up.
+        // MPI is not yet initialized, so we cannot MPI_Abort from here; instead a watchdog thread _Exit()s this rank
+        // when the deadline passes (the launcher then ends every other rank). Disabled by default (timeout 0), so a
+        // legitimately slow start is untouched; the watchdog is cancelled the moment MPI_Init returns.
+        const double init_timeout = distributed_init_timeout_seconds();
+        std::atomic<bool> init_complete{false};
+        std::thread init_watchdog;
+        if (init_timeout > 0.0) {
+            init_watchdog = std::thread([init_timeout, &init_complete] {
+                const auto deadline = std::chrono::steady_clock::now() + std::chrono::duration<double>(init_timeout);
+                while (std::chrono::steady_clock::now() < deadline) {
+                    if (init_complete.load(std::memory_order_acquire)) {
+                        return;
+                    }
+                    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                }
+                if (!init_complete.load(std::memory_order_acquire)) {
+                    std::fprintf(
+                        stderr,
+                        "[MPIContext] MPI_Init did not complete within TT_METAL_DISTRIBUTED_INIT_TIMEOUT_SECONDS=%.0f "
+                        "s; a peer never joined the wire-up. Exiting so the launcher ends the job.\n",
+                        init_timeout);
+                    std::_Exit(EXIT_FAILURE);
+                }
+            });
+        }
         int provided = 0;
-        if (MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &provided) != MPI_SUCCESS) {
+        const int init_rc = MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &provided);
+        init_complete.store(true, std::memory_order_release);
+        if (init_watchdog.joinable()) {
+            init_watchdog.join();
+        }
+        if (init_rc != MPI_SUCCESS) {
             TT_THROW("MPI_Init_thread failed");
         }
         provided_thread_level = provided;
 
+        // The TMPDIR redirect was only needed to place OpenMPI's session dir at init; give the caller theirs back.
+        if (singleton_tmpdir_redirected) {
+            if (had_caller_tmpdir) {
+                setenv("TMPDIR", caller_tmpdir.c_str(), /*overwrite=*/1);
+            } else {
+                unsetenv("TMPDIR");
+            }
+        }
+
         // Ensure MPI_Finalize is called when the program exits
         std::atexit([] { MPI_Finalize(); });
+
+        // Teardown plan P1: a C++ rank that leaves through an uncaught exception (a TT_FATAL becomes one) must not
+        // let its peers hang in a barrier. Abort the job so prterun ends every rank with a code instead.
+        // Teardown plan P8: end with _Exit, not std::abort(). std::abort() raises SIGABRT, which writes a core dump;
+        // with the core limit raised that can take tens of seconds, and the whole job waits for this rank to finish
+        // dumping before it ends. _Exit terminates immediately with no core dump (MPI_Abort has already signalled the
+        // other ranks), so the error path never stalls the job on a core write.
+        std::set_terminate([] {
+            std::fprintf(stderr, "[MPIContext] std::terminate: uncaught exception; aborting the distributed job\n");
+            int inited = 0;
+            int finalized = 0;
+            MPI_Initialized(&inited);
+            MPI_Finalized(&finalized);
+            if (inited != 0 && finalized == 0) {
+                MPI_Abort(MPI_COMM_WORLD, 1);
+            }
+            std::_Exit(EXIT_FAILURE);
+        });
+
+        // Teardown plan P20: an error with no communicator (a peer's socket closing across hosts) is consulted on
+        // MPI_COMM_SELF, which is MPI_ERRORS_ARE_FATAL by default. Make it return so the survivor sees the failure
+        // and can close its device, instead of the process aborting under the fatal handler.
+        MPI_Comm_set_errhandler(MPI_COMM_SELF, MPI_ERRORS_RETURN);
     });
 
     // Validate AFTER the once-block completes: MPI is initialized exactly once and the finalizer is
@@ -377,13 +546,19 @@ MPIContext::MPIContext(MPI_Comm comm, MPI_Group group) : comm_(comm), group_(gro
 Rank MPIContext::rank() const { return Rank(rank_); }
 Size MPIContext::size() const { return Size(size_); }
 bool MPIContext::supports_fault_tolerance() const { return OMPI_HAS_ULFM; }
-void MPIContext::barrier() const { MPI_CHECK(MPI_Barrier(comm_)); }
+void MPIContext::barrier() const {
+    MPI_Request req{};
+    MPI_CHECK(MPI_Ibarrier(comm_, &req));
+    wait_or_abort(comm_, req, "barrier");
+}
 
 /* ---- point‑to‑point ---------------------------------------------------- */
 
 void MPIContext::send(ttsl::Span<std::byte> buf, Rank dest, Tag tag) const {
     check_size_fits_int(buf.size());
-    MPI_CHECK(MPI_Send(buf.data(), static_cast<int>(buf.size()), MPI_CHAR, *dest, *tag, comm_));
+    MPI_Request req{};
+    MPI_CHECK(MPI_Isend(buf.data(), static_cast<int>(buf.size()), MPI_CHAR, *dest, *tag, comm_, &req));
+    wait_or_abort(comm_, req, "send");
 }
 
 void MPIContext::ssend(ttsl::Span<std::byte> buf, Rank dest, Tag tag) const {
@@ -393,7 +568,9 @@ void MPIContext::ssend(ttsl::Span<std::byte> buf, Rank dest, Tag tag) const {
 
 void MPIContext::recv(ttsl::Span<std::byte> buf, Rank src, Tag tag) const {
     check_size_fits_int(buf.size());
-    MPI_CHECK(MPI_Recv(buf.data(), static_cast<int>(buf.size()), MPI_CHAR, *src, *tag, comm_, MPI_STATUS_IGNORE));
+    MPI_Request req{};
+    MPI_CHECK(MPI_Irecv(buf.data(), static_cast<int>(buf.size()), MPI_CHAR, *src, *tag, comm_, &req));
+    wait_or_abort(comm_, req, "recv");
 }
 
 RequestPtr MPIContext::isend(ttsl::Span<std::byte> buf, Rank dest, Tag tag) const {
@@ -511,7 +688,9 @@ void MPIContext::all_gather(ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte
     // allow MPI_IN_PLACE if caller wants to receive in the same buffer
     void* send_ptr = (send_buf.data() == recv_buf.data()) ? MPI_IN_PLACE : send_buf.data();
 
-    MPI_CHECK(MPI_Allgather(send_ptr, send_count, MPI_CHAR, recv_buf.data(), send_count, MPI_CHAR, comm_));
+    MPI_Request req{};
+    MPI_CHECK(MPI_Iallgather(send_ptr, send_count, MPI_CHAR, recv_buf.data(), send_count, MPI_CHAR, comm_, &req));
+    wait_or_abort(comm_, req, "all_gather");
 }
 
 void MPIContext::all_to_all(ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf) const {
@@ -576,8 +755,7 @@ void MPIContext::reduce_scatter(
         comm_));              // communicator
 }
 
-void MPIContext::scan(
-    ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf, ReduceOp op, DType dtype) const {
+void MPIContext::scan(ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf, ReduceOp op, DType dtype) const {
     TT_FATAL(
         send_buf.size() == recv_buf.size(), "scan: send size {} != recv size {}", send_buf.size(), recv_buf.size());
 

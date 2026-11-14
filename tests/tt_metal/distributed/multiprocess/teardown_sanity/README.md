@@ -91,7 +91,10 @@ stage of a real distributed job, grouped by the piece that fails:
 - **the control plane's init** — ranks that disagree on the mesh shape, or on the fabric config, when the device is opened;
 - **the solver and descriptor loading** — a rank killed during the solve, an unsatisfiable mesh, a descriptor that
   describes a different machine;
-- **the user's signals** — Ctrl-C / SIGTERM at tt-run while the job is in a collective or in init.
+- **the user's signals** — Ctrl-C / SIGTERM at tt-run while the job is in a collective or in init;
+- **a singleton** — a process nobody launched (`test_singleton_shm`): init asks for the `self` transport only and
+  steers Open MPI's session directory into a private `TMPDIR` it removes at exit, so it leaves neither a `/dev/shm`
+  segment nor a `/tmp/ompi.*` directory behind (#63870; the less-invasive counterpart of tt-metal #63954).
 
 ### Group G — raw-MPI expectation gates
 Two gates that confirm the OpenMPI build we ship provides what the DistributedContext teardown relies on — not
@@ -99,8 +102,18 @@ tests of things MPI cannot do: `test_mpi_delivers_proc_failed_ulfm` (under ULFM 
 survivors as a process failure) and `test_mpi_abort_reports_failure` (a survivor's `MPI_Abort` makes the launcher
 return a non-zero code).
 
-The stacked PR adds one more group here, **Group H — multi-host DistributedContext (SC4)**, the cross-host
-counterpart of Group D (described in that PR).
+### Group H — multi-host DistributedContext (runs on SC4, needs ≥ 2 hosts)
+The cross-host counterpart of Group D: Group D proves the *launcher* reaps a fault on a remote host; this proves
+the DistributedContext's **own** teardown does the same when the fault lands *inside* a collective on a remote host.
+`run_teardown_multihost_context_tests.sh` runs the DistributedContext probe (`sanity_probe.py`) across two hosts
+through tt-run, one rank per host on the mock Blackhole dual galaxy, and checks:
+- `context_multihost_clean` — a clean cross-host job finishes 0 with nothing left;
+- `context_multihost_remote_peer_death` — a peer dies inside a collective on the remote host → the `MPI_ERRORS_RETURN`
+  errhandler turns the survivor's collective into a returned error and the context calls `MPI_Abort`; the job ends
+  non-zero with nothing left on either host;
+- `context_multihost_remote_hang_timeout` — a peer hangs inside a collective → the per-collective
+  `TT_METAL_OPERATION_TIMEOUT_SECONDS` gives up and tears the job down, well before the launcher wall clock.
+It needs the DistributedContext fix (the errhandler and the timeout), so it lives in this PR with that fix.
 
 ---
 
@@ -111,7 +124,6 @@ Locally (a built tree and the python environment):
 pytest tests/tt_metal/distributed/multiprocess/teardown_sanity -v -p no:benchmark
 ```
 
-In CI the single-host groups run as `teardown-sanity-mpi` (Part 1) and `teardown-sanity-ttmetal` (Part 2); each is
 its own matrix entry, so they are reported as teardown, not folded into the fabric suite. The multi-host launcher
 group (Part 1, D) runs on the SC4 lane, added in the base PR; the stacked PR adds the DistributedContext multi-host
 group (Part 2, H) on the same lane. Deadlines: `TT_SANITY_DEADLINE` (a row that must end) and

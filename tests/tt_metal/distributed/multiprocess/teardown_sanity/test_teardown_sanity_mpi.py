@@ -34,6 +34,7 @@ from sanity_common import (
     clean,
     ended,
     fault_delivered,
+    mpi_cmd,
     mpirun_path,
     nonzero,
     run_case,
@@ -289,3 +290,29 @@ def test_ulfm_launcher_available():
         pytest.skip("mpirun-ulfm not installed in this prefix")
     r = _run([ulfm, "--with-ft", "ulfm", "--allow-run-as-root", "-np", "1", "true"])
     assert r.returncode == 0, f"--with-ft ulfm failed on this install: {r.stderr[:200]}"
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# raw MPI: does the OpenMPI/PRRTE build we ship meet our expectations? (gates only — not things MPI cannot do)
+# ---------------------------------------------------------------------------------------------------------------
+def test_mpi_delivers_proc_failed_ulfm():
+    """With --with-ft ulfm, a dead rank must be delivered to the survivors (MPI_ERR_PROC_FAILED) and the job must
+    end. This is the ULFM capability tt-metal's DistributedContext recovery relies on; the row confirms this build
+    provides it."""
+    r = run_case("mpi_delivers_proc_failed", {**NP, "PROBE_SCENARIO": "victim_sigkill"}, DEADLINE_END, cmd=mpi_cmd())
+    ended(r)
+    clean(r)
+
+
+def test_mpi_abort_reports_failure():
+    """MPI_Abort from a survivor after a peer death must make the launcher report a non-zero code even under ULFM.
+    This is the teardown shape the DistributedContext uses; the row confirms the MPI build honours it."""
+    r = run_case(
+        "mpi_abort_reports",
+        {**NP, "PROBE_SCENARIO": "victim_sigkill", "PROBE_SURVIVOR_ACTION": "abort"},
+        DEADLINE_END,
+        cmd=mpi_cmd(),
+    )
+    ended(r)
+    nonzero(r)
+    clean(r)
