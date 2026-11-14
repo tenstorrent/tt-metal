@@ -1396,9 +1396,63 @@ TEST_F(DriscService, RejectsInvalidCommands) {
     EXPECT_ANY_THROW((void)seat.issue_batch(too_long)) << abi::BATCH_MAX_COMMANDS + 1 << " commands";
     EXPECT_EQ(seat.in_flight(), 0u) << "a rejected command was issued";
 
+    // On this NoC0 seat a NoC1 endpoint reaches a stream-mode NIU, except as an own-bank source read by DMA.
+    const abi::NocEndpoint noc0_own = device().dram_endpoint(0, dram_test_offset + 2 * slot_size, 0);
+    const abi::NocEndpoint noc1_own = device().dram_endpoint(0, dram_test_offset, 1);
+    const abi::NocEndpoint noc1_other = device().dram_endpoint(1, dram_test_offset, 1);
+    const abi::NocEndpoint noc0_other = device().dram_endpoint(1, dram_test_offset + 2 * slot_size, 0);
+    const std::vector<std::pair<std::string, abi::KernelCommand>> wrong_noc = {
+        {"src at another bank's NoC1 endpoint", abi::make_single_command(noc1_other, noc0_own, slot_size)},
+        {"dst at another bank's NoC1 endpoint", abi::make_single_command(noc0_own, noc1_other, slot_size)},
+        {"dst at its own bank's NoC1 endpoint", abi::make_single_command(noc0_other, noc1_own, slot_size)},
+        {"own-bank src off the 16 B grid at its NoC1 endpoint", abi::make_single_command(noc1_own, noc0_own, 72)},
+    };
+    for (const auto& [what, command] : wrong_noc) {
+        expect_rejected([&] { return seat.issue(command); }, "stream mode", what);
+        expect_rejected(
+            [&] { return seat.issue_batch(std::array{valid, command}); }, "stream mode", "batch with " + what);
+    }
+    EXPECT_EQ(seat.in_flight(), 0u) << "a command naming a stream-mode NIU was issued";
+    ASSERT_TRUE(seat.issue(abi::make_single_command(noc1_own, noc0_other, slot_size)))
+        << "an own-bank source at its NoC1 endpoint, read by DMA, found the queue full";
+    seat.drain(drain_timeout);
+
     Exerciser exerciser(device(), *client, 0, 8);
     const std::string mismatch = exerciser.round(0, 0, Op::h2d, 4, true);
     EXPECT_TRUE(mismatch.empty()) << "after the rejections: " << mismatch;
+    client.reset();
+    expect_all_stopped({0});
+}
+
+// A single command within the seat's bank runs as a local copy, so it lands whichever endpoints it names; one off
+// the 16 B grid stays a single command.
+TEST_F(DriscService, SameBankSingleRunsAsLocal) {
+    std::optional<Client> client;
+    attach(client, {0});
+    SeatClient& seat = client->seat(0, 0);
+    constexpr uint32_t size = 64 * 1024;
+    const uint64_t src = dram_test_offset;
+    const uint64_t dst = dram_test_offset + slot_size;
+    std::vector<uint32_t> payload(size / sizeof(uint32_t));
+    for (uint32_t i = 0; i < payload.size(); i++) {
+        payload[i] = 0x5A5A0000u ^ i;
+    }
+    device().write_dram(0, src, payload.data(), size);
+    for (const bool batched : {false, true}) {
+        const std::vector<uint32_t> zeros(payload.size(), 0);
+        device().write_dram(0, dst, zeros.data(), size);
+        // NoC1 endpoints on a NoC0 seat: refused as a single command, fine as a local copy.
+        const abi::KernelCommand command =
+            abi::make_single_command(device().dram_endpoint(0, src, 1), device().dram_endpoint(0, dst, 1), size);
+        ASSERT_TRUE(batched ? seat.issue_batch(std::array{command}) : seat.issue(command));
+        seat.drain(drain_timeout);
+        std::vector<uint32_t> landed(payload.size());
+        device().read_dram(0, dst, landed.data(), size);
+        EXPECT_EQ(landed, payload) << (batched ? "batched" : "single") << " same-bank copy";
+    }
+    EXPECT_ANY_THROW((void)seat.issue(
+        abi::make_single_command(device().dram_endpoint(0, src, 1), device().dram_endpoint(0, dst, 1), size + 8)))
+        << "a same-bank copy off the 16 B grid stayed a single command at stream-mode endpoints";
     client.reset();
     expect_all_stopped({0});
 }

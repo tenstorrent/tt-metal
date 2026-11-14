@@ -62,7 +62,8 @@ Transaction transactions[MAX_INFLIGHT_TRANSACTIONS];
 uint64_t bank_size;
 uint16_t bank_noc_xy_addr[abi::BANK_ENDPOINTS];
 
-// The GDDR DMA engine can read `bytes` at `src`: inside the seat's bank, in 16 B units.
+// The GDDR DMA engine can read `bytes` at `src`: inside the seat's bank, in 16 B units. SeatClient::validate() mirrors
+// this.
 bool dma_readable(const abi::NocEndpoint& src, uint32_t bytes) {
     if (bytes % abi::LOCAL_SIZE_ALIGN != 0 || src.local_addr > bank_size - bytes) {
         return false;
