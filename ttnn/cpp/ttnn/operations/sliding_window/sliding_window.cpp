@@ -454,7 +454,35 @@ std::pair<uint32_t, uint32_t> find_minmax_trace_indices(
 }
 
 std::vector<ShardBoundary> generate_shard_boundaries(const SlidingWindowConfig& config) {
-    auto op_trace_metadata = generate_op_trace_metadata(config);
+    // Only the bilinear trace is materialised: its indices are not monotonic, so each shard needs a min/max over its
+    // range. Every other trace index has the closed form generate_op_trace_metadata() writes, and only two entries per
+    // core are read, so this stays O(cores) instead of O(output pixels). The DRAM slicing L1 estimators of conv2d,
+    // conv_transpose2d and pool2d call this for every candidate slice count on every call, cache hits included.
+    std::vector<uint32_t> op_trace_metadata;
+    if (config.is_bilinear) {
+        op_trace_metadata = generate_op_trace_metadata(config);
+    }
+    const ttnn::Shape output_shape = config.get_output_shape();
+    uint32_t trace_padded_h = 0;
+    uint32_t trace_padded_w = 0;
+    uint32_t trace_stride_h = 1;
+    uint32_t trace_stride_w = 1;
+    if (config.is_transpose) {
+        auto full_input_shape = config.get_transposed_full_input_shape();
+        trace_padded_h = full_input_shape[1];
+        trace_padded_w = full_input_shape[2];
+    } else {
+        trace_padded_h = config.input_hw.first + config.get_pad_h() + config.get_ceil_pad_h();
+        trace_padded_w = config.input_hw.second + config.get_pad_w() + config.get_ceil_pad_w();
+        trace_stride_h = config.stride_hw.first;
+        trace_stride_w = config.stride_hw.second;
+    }
+    auto trace_at = [&](uint32_t output_index) -> uint32_t {
+        const uint32_t w = output_index % output_shape[2];
+        const uint32_t h = (output_index / output_shape[2]) % output_shape[1];
+        const uint32_t b = output_index / (output_shape[2] * output_shape[1]);
+        return (b * trace_padded_h * trace_padded_w) + (h * trace_stride_h * trace_padded_w) + (w * trace_stride_w);
+    };
     std::vector<ShardBoundary> shard_boundaries;
 
     const uint32_t num_cores = config.num_cores_nhw;
@@ -464,7 +492,8 @@ std::vector<ShardBoundary> generate_shard_boundaries(const SlidingWindowConfig& 
     const uint32_t ceil_padding_w = config.get_ceil_pad_w();
     uint32_t padded_input_w = config.input_hw.second + config.get_pad_w() + ceil_padding_w;
 
-    uint32_t max_index = op_trace_metadata.size();
+    uint32_t max_index =
+        config.is_bilinear ? op_trace_metadata.size() : output_shape[0] * output_shape[1] * output_shape[2];
     if (config.is_transpose) {
         padded_input_w = config.get_transposed_full_input_shape()[2];
     }
@@ -494,11 +523,11 @@ std::vector<ShardBoundary> generate_shard_boundaries(const SlidingWindowConfig& 
                 input_index_end = op_trace_metadata[max_trace_idx] + halo_with_pad_len;
             }
         } else {
-            input_index_start = op_trace_metadata[std::min(output_index_start, max_index - 1)];
-            input_index_end = op_trace_metadata[output_index_end] + halo_with_pad_len;
+            input_index_start = trace_at(std::min(output_index_start, max_index - 1));
+            input_index_end = trace_at(output_index_end) + halo_with_pad_len;
         }
         if (input_index_start == 0 and output_index_start != 0 && !config.is_bilinear) {
-            input_index_start = op_trace_metadata[output_index_end] + 1;
+            input_index_start = trace_at(output_index_end) + 1;
             input_index_end = input_index_start - 1;
             log_debug(
                 tt::LogOp,
