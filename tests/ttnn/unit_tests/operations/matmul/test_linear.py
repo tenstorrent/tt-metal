@@ -1768,3 +1768,27 @@ def test_linear_in0_column_offset_rejects_invalid_window(
     config = _in0_column_window_config(1, 1, 4) if program_config == "mcast2d" else None
     with expect_error(RuntimeError, message):
         ttnn.linear(wide, weight, program_config=config, transpose_a=transpose_a, in0_column_offset=offset)
+
+
+def test_linear_rejects_output_aliasing_bias(device, expect_error):
+    torch.manual_seed(0)
+    m = k = n = 256
+    torch_a = torch.randn(1, 1, m, k, dtype=torch.bfloat16)
+    torch_b = torch.randn(1, 1, k, n, dtype=torch.bfloat16)
+    torch_bias = torch.randn(1, 1, m, n, dtype=torch.bfloat16)
+    a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device)
+    b = ttnn.from_torch(torch_b, layout=ttnn.TILE_LAYOUT, device=device)
+    bias = ttnn.from_torch(torch_bias, layout=ttnn.TILE_LAYOUT, device=device)
+
+    with expect_error(RuntimeError, "must not alias the bias buffer"):
+        ttnn.linear(a, b, bias=bias, optional_output_tensor=bias)
+
+    # A separate preallocated output still gives a@b + bias, with the product counted once.
+    out = ttnn.from_torch(torch.zeros(1, 1, m, n, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn.linear(a, b, bias=bias, optional_output_tensor=out)
+    expected = torch_a.float() @ torch_b.float() + torch_bias.float()
+    result = ttnn.to_torch(out).float()
+    assert_with_pcc(expected, result, 0.999)
+    product = (torch_a.float() @ torch_b.float()).flatten()
+    coeff = torch.dot(product, (result - torch_bias.float()).flatten()) / torch.dot(product, product)
+    assert abs(coeff.item() - 1.0) < 0.02, coeff.item()
