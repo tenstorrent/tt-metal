@@ -189,6 +189,33 @@ inline void log_operation(
 
 #endif
 
+template <typename CachedMeshWorkload>
+std::shared_ptr<std::vector<tt::tt_metal::MeshTensor>> extract_op_owned_tensors(
+    const CachedMeshWorkload& cached_workload) {
+    if constexpr (requires { cached_workload.shared_variables; }) {
+        for (const auto& [_, sv] : cached_workload.shared_variables) {
+            if constexpr (requires { sv.op_owned_tensors; }) {
+                if (sv.op_owned_tensors && !sv.op_owned_tensors->empty()) {
+                    return sv.op_owned_tensors;
+                }
+            }
+        }
+    }
+    return nullptr;
+}
+
+template <typename UseWorkload, typename CachedMeshWorkload>
+void invoke_use_workload(const UseWorkload& use_workload, CachedMeshWorkload& cached_workload) {
+    if constexpr (std::invocable<
+                      const UseWorkload&,
+                      tt::tt_metal::distributed::MeshWorkload&,
+                      std::shared_ptr<std::vector<tt::tt_metal::MeshTensor>>>) {
+        use_workload(cached_workload.workload, extract_op_owned_tensors(cached_workload));
+    } else {
+        invoke_use_workload(use_workload, cached_workload);
+    }
+}
+
 template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t>
 void enqueue_mesh_workload(
     const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
@@ -196,7 +223,8 @@ void enqueue_mesh_workload(
     [[maybe_unused]] typename mesh_device_operation_t::tensor_return_value_t& tensor_return_value,
     distributed::MeshDevice* mesh_device,
     tt::tt_metal::distributed::MeshWorkload& workload,
-    [[maybe_unused]] bool program_cache_hit = false) {
+    [[maybe_unused]] bool program_cache_hit = false,
+    std::shared_ptr<std::vector<tt::tt_metal::MeshTensor>> op_owned_tensors = nullptr) {
     // Generate and set runtime_id for all programs (always, for dispatcher)
     auto runtime_id = ttnn::CoreIDs::instance().fetch_and_increment_device_operation_id();
     for (auto& [_, program] : workload.get_programs()) {
@@ -229,7 +257,10 @@ void enqueue_mesh_workload(
 
     if (is_recording_command_list()) [[unlikely]] {
         record_to_command_list(
-            get_operation_name<mesh_device_operation_t>(operation_attributes), mesh_device, workload);
+            get_operation_name<mesh_device_operation_t>(operation_attributes),
+            mesh_device,
+            workload,
+            std::move(op_owned_tensors));
     } else {
         tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
     }
@@ -317,7 +348,7 @@ void handle_mesh_adapter_cache_hit(
             }
         }
 
-        use_workload(cached_mesh_workload.workload);
+        invoke_use_workload(use_workload, cached_mesh_workload);
     });
 }
 
@@ -486,9 +517,16 @@ void launch_operation_with_adapter(
         tensor_return_value,
         mesh_device,
         lookup,
-        [&](tt::tt_metal::distributed::MeshWorkload& workload) {
+        [&](tt::tt_metal::distributed::MeshWorkload& workload,
+            std::shared_ptr<std::vector<tt::tt_metal::MeshTensor>> op_owned_tensors) {
             enqueue_mesh_workload<mesh_device_operation_t>(
-                operation_attributes, tensor_args, tensor_return_value, mesh_device, workload, lookup.hit);
+                operation_attributes,
+                tensor_args,
+                tensor_return_value,
+                mesh_device,
+                workload,
+                lookup.hit,
+                std::move(op_owned_tensors));
         });
 
     // Stash factory identity after adapter work so nested function_end events cannot consume it.

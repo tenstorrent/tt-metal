@@ -268,3 +268,52 @@ def test_one_builder_per_device(device, builder, expect_error):
 def test_trace_capture_fails_while_builder_exists(device, builder, expect_error):
     with expect_error(RuntimeError, "Cannot begin trace capture while a CommandListBuilder or CommandList exists"):
         ttnn.begin_trace_capture(device, cq_id=0)
+
+
+@skip_for_slow_dispatch()
+def test_op_owned_tensors_survive_program_cache_clear(device, builder, command_lists):
+    x_torch = torch.ones((1, 1, 4, 4), dtype=torch.bfloat16)
+    x = ttnn.from_torch(x_torch, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    with builder:
+        y = ttnn.pad(x, ((0, 0), (0, 0), (0, 2), (0, 2)), value=7.0)
+    command_list = builder.build()
+    command_lists.append(command_list)
+
+    device.clear_program_cache()
+    _poison = ttnn.from_torch(
+        torch.full((1, 1, 64, 64), -99.0, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+
+    command_list.enqueue(check_dram_overlap=True)
+    expected = torch.nn.functional.pad(x_torch, (0, 2, 0, 2), value=7.0)
+    assert torch.equal(ttnn.to_torch(y), expected)
+
+
+@skip_for_slow_dispatch()
+def test_op_owned_tensors_survive_with_program_cache_disabled(device, builder, command_lists):
+    device.disable_and_clear_program_cache()
+    try:
+        x_torch = torch.ones((1, 1, 4, 4), dtype=torch.bfloat16)
+        x = ttnn.from_torch(x_torch, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+        with builder:
+            y = ttnn.pad(x, ((0, 0), (0, 0), (0, 2), (0, 2)), value=5.0)
+        command_list = builder.build()
+        command_lists.append(command_list)
+
+        _poison = ttnn.from_torch(
+            torch.full((1, 1, 64, 64), -99.0, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+        )
+
+        command_list.enqueue(check_dram_overlap=True)
+        expected = torch.nn.functional.pad(x_torch, (0, 2, 0, 2), value=5.0)
+        assert torch.equal(ttnn.to_torch(y), expected)
+    finally:
+        device.enable_program_cache()

@@ -18,7 +18,10 @@ namespace ttnn {
 class Tensor;
 }  // namespace ttnn
 
+#include <memory>
+
 namespace tt::tt_metal {
+class MeshTensor;
 class TensorTopology;
 }  // namespace tt::tt_metal
 
@@ -96,6 +99,7 @@ void throw_if_recording_command_list(std::string_view call_name);
 void record_to_command_list(
     std::string_view operation_name,
     tt::tt_metal::distributed::MeshDevice* mesh_device,
-    tt::tt_metal::distributed::MeshWorkload& workload);
+    tt::tt_metal::distributed::MeshWorkload& workload,
+    std::shared_ptr<std::vector<tt::tt_metal::MeshTensor>> op_owned_tensors = nullptr);
 
 }  // namespace ttnn::device_operation::detail
