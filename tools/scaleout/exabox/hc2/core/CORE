@@ -1,0 +1,117 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
+# The health-check core: run.sh's stage engine and every file it needs, one path per line, relative to
+# traytest/hc/. These files are copied as-is to other repos; everything run.sh
+# uses that is not listed here must be listed in ../HC_STAYS (local-only features, wired in as hooks).
+# tests/test_hc_clean.sh checks that each path exists and that run.sh's file closure is covered.
+
+# stage engine
+run.sh
+
+# test programs run.sh starts
+broker_collision.py
+cpld_5f.py
+dram_dbi.py
+l1_march.py
+load_test.sh
+noc_snapshot.sh
+numeric_capture.py
+numeric_check.py
+numeric_dram.py
+numeric_pinpoint.py
+numeric_report.py
+pinpoint_load.py
+pinpoint_verdict.py
+quiet_clock.py
+ub0_repro.py
+
+# shell and python helpers
+lib/bar_read.py
+lib/bmc_heat.sh
+lib/code_readback.py
+lib/ethctr.py
+lib/exalens_probe.py
+lib/fault_capture.sh
+lib/fleet.sh
+lib/fw_check.sh
+lib/gddr.sh
+lib/gddr_telem.py
+lib/glxcan.sh
+lib/hc.sh
+lib/heavy_logs.sh
+lib/hsc_check.sh
+lib/hsc_dump.sh
+lib/kcache.sh
+lib/kmd_policy.sh
+lib/link_check.sh
+lib/long.sh
+lib/mce_guard.sh
+lib/pgroups.sh
+lib/pinpoint.sh
+lib/power_policy.sh
+lib/psu_check.sh
+lib/psu_fast.sh
+lib/pv_crash.sh
+lib/sha_line.sh
+lib/stubhost.sh
+lib/stubhost/disc.json
+lib/stubhost/py
+lib/sudo_l.sh
+lib/sudo_route.sh
+lib/tdp.sh
+lib/tdp_cfg.py
+lib/thermal.py
+lib/thermal.sh
+lib/tools_probe.sh
+lib/umd_index.sh
+lib/vcore.sh
+
+# load shapes, stage table, verdict and repair logic
+fleet/chunk_load.py
+fleet/chunk_sched.py
+fleet/drop_shapes.py
+fleet/eth_map.txt
+fleet/ethmask.py
+fleet/fabric_repro.py
+fleet/final_verdict.py
+fleet/fleet_py.py
+fleet/gate.sh
+fleet/link_pattern.py
+fleet/load_line.py
+fleet/load_variant.py
+fleet/long_summary.py
+fleet/maxutil.pin
+fleet/maxutil.py
+fleet/maxutil_pack.sh
+fleet/on_hang.sh
+fleet/psu_check.py
+fleet/psu_fast.py
+fleet/pv/
+fleet/pv.py
+fleet/pv_holders.py
+fleet/repair_rec.py
+fleet/run_times.py
+fleet/stage_load.py
+fleet/stages.tsv
+fleet/stop_signal.py
+fleet/tray_12v.py
+fleet/tray_lanes.py
+fleet/tray_why.py
+fleet/vcore_chips.py
+
+# the h3 model load (runtime files only)
+h3/h3.sh
+h3/power-profile.sh
+h3/power_profile.py
+h3/synth_gen.py
+h3/synth_weights.py
+h3/tables.py
+h3/pcie_traffic.py
+h3/random-table.tsv
+h3/full-cooldowns.tsv
+h3/pcie-traffic.tsv
+h3/config/
+h3/tt-metal.sha
+h3/requirements-wheel.txt

@@ -1,0 +1,10 @@
+# the one stage table: number<TAB>code<TAB>name<TAB>what. run.sh (fl_pn, the dry run, Phase times,
+# --help), fleet/tray_why.py and tests/test_stage_numbering.sh read it; the README Stages table carries the same numbers and names.
+1	P0	gate	read-only idle check, peer gate, venv setup
+2	P1	pre-run checks	C0 preflight (32 chips, PCIe speed/width, firmware), C1 evidence (lspci, dmesg, AER, SEL/SDR, 7-day history), C3 ETH/QSFP ports
+3	C2	start reset	tt-smi -glx_reset of every chip, root-port rescan, recount, C3 again
+4	busbar	bus-bar stage	2 x (60 s quiet + 30 s burst), the max load (matmul + parallel SFPU + H3 CCL mix; its all-gathers carry host-built bit patterns, link-data checked bit for bit at launch 0) in 1, 2, 3, 4 min chunks, 10 s quiet + 90 s step; full: one long chunk (25 min)
+5	numeric	numeric verify	numeric readback after each stage 4 chunk and the step, G3 readback after chunk 1, 90 s DIDT numeric heavy chunk (750 s in full, about 2 s in smoke) (bf16 HiFi2 then bf8 LoFi 16k matmuls, each bit-exact per launch and across chips)
+6	C5	pair link test	pairwise all-gather over every in-box ETH link in edge-coloured parallel rounds (every run); link-data check: each chip sends its own host-built bit pattern, every copy compared bit for bit
+7	C9	end reset	tt-smi -glx_reset and recount, C1/C3 again, SUSPECT pair reruns; PASS/FAIL per tray
+8	sweep	per-link sweep	on a fault only (a hang or CCL failure): pairwise all-gather over every in-box ETH link, names the link

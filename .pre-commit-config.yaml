@@ -1,5 +1,9 @@
 # See https://pre-commit.com for more information
 # See https://pre-commit.com/hooks.html for more hooks
+# tools/scaleout/exabox/hc2/core is a byte-identical export of tray-test
+# traytest/hc (hc2/SYNC holds the hashes); formatters would break the copy.
+# Edit it in tray-test and export again.
+exclude: ^tools/scaleout/exabox/hc2/core/
 repos:
 - repo: https://github.com/pre-commit/pre-commit-hooks
   rev: v6.0.0
