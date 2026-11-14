@@ -2245,9 +2245,9 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                     uint32_t num_blocks_x = ((N - 1) / per_core_N) + 1;
                     uint32_t num_cores = num_blocks_x * num_blocks_y;
                     ShardOrientation shard_orientation = ShardOrientation::COL_MAJOR;
-                    if (input_tensor_a.is_sharded()) {
+                    if (input_tensor_a.is_sharded() && input_tensor_a.shard_spec().has_value()) {
                         shard_orientation = input_tensor_a.shard_spec().value().orientation;
-                    } else if (input_tensor_b.is_sharded()) {
+                    } else if (input_tensor_b.is_sharded() && input_tensor_b.shard_spec().has_value()) {
                         shard_orientation = input_tensor_b.shard_spec().value().orientation;
                     }
 
