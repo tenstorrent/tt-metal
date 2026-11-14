@@ -733,6 +733,20 @@ class Decoder:
             activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.MUL_UNARY_SFPU, self.layer_scalar)],
         )
 
+    @staticmethod
+    def _short_suffix_q_chunk(rows):
+        """Q chunk for a short chunk of query rows against a long cached prefix, or None for the default choice.
+
+        The chunked full-attention SDPA runs one unit of work per (head, Q chunk) pair on 110 cores, and pairs of Q chunks
+        are scheduled together when their count is even: 512 rows in two chunks of 256 (or four of 128) keep about a
+        sixth of the cores busy while each unit streams the whole cached K/V. A Q chunk of 64 gives more units. Measured on a
+        full layer at 8K-48K cached tokens: 256/512/768/1024 rows take 20-40% less SDPA time (11.2 -> 6.9 ms at 512 rows
+        after 24K), a count of odd 128-row chunks (384/640/896 rows) is already best at 128, and above 1024 rows the extra K/V
+        streaming of a smaller chunk costs more than it gains. The result is bit-identical: K is still consumed in chunks of
+        128 per query row.
+        """
+        return 64 if rows <= 1024 and rows % 256 == 0 else None
+
     def _prefill_sdpa_config(self, q, cache, page_table, *, start=0):
         k_chunk = 128
         if not self.sliding and start % k_chunk:
@@ -742,6 +756,9 @@ class Decoder:
             raise ValueError(f"No SDPA Q chunk aligns with rows {q.shape[2]} and start {start}")
         if self.sliding or not self.pref_compute.fp32_dest_acc_en:
             return self.pref_sdpa_by_q[eligible[0]]
+        preferred = self._short_suffix_q_chunk(q.shape[2])
+        if preferred in eligible:
+            eligible = [preferred] + [c for c in eligible if c != preferred]
         tile_bytes = {ttnn.bfloat4_b: 576, ttnn.bfloat8_b: 1088, ttnn.bfloat16: 2048, ttnn.float32: 4096}
         grid = [11, 10]
         page_bytes = page_table.buffer_aligned_page_size()
