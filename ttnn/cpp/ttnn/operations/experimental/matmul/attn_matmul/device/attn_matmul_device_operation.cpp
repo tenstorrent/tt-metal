@@ -95,6 +95,11 @@ AttnMatmulDeviceOperation::spec_return_value_t AttnMatmulDeviceOperation::comput
     if (args.transpose_hw.value_or(false)) {
         N = args.num_tokens.value();
     }
+    // Report the logical kv length (e.g. 100), not the tile-padded one (128): the padded shape follows from the
+    // TILE layout.
+    if (!args.transpose_hw.value_or(false)) {
+        N = input_tensor_b.logical_shape()[3];
+    }
     Shape shape({1, ashape[1], ashape[2], N});
     return tt::tt_metal::TensorSpec(
         shape, TensorLayout(args.output_dtype, PageConfig(Layout::TILE), args.output_mem_config));
