@@ -148,3 +148,61 @@ def test_plus_one_multi_core_sub_core_grids(device, memory_config):
         input_tensor, sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))])
     )
     assert torch.equal(ttnn.to_torch(input_tensor), torch_input_tensor + 1)
+
+
+def _sharded_memory_config(shard_grid, rows, w):
+    return ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(shard_grid, (rows, w), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+
+@pytest.mark.parametrize("grid_coords", [(0, 0, 3, 0), (2, 2, 5, 2)], ids=["origin", "offset"])
+def test_plus_one_sharded_multi_shard_default_grid(device, grid_coords):
+    """Every shard of a multi-shard input is incremented, not just the shard on the default core (0,0)."""
+    w = 32
+    x0, y0, x1, y1 = grid_coords
+    shard_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(x0, y0), ttnn.CoreCoord(x1, y1))])
+    torch_input_tensor = torch.randint(32000, (4, w))
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=_sharded_memory_config(shard_grid, 1, w),
+    )
+    ttnn.plus_one(input_tensor)
+    assert torch.equal(ttnn.to_torch(input_tensor), torch_input_tensor + 1)
+
+
+def test_plus_one_sharded_matching_sub_core_grid(device):
+    """A sub_core_grids equal to the shard grid still increments every shard."""
+    w = 32
+    shard_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))])
+    torch_input_tensor = torch.randint(32000, (4, w))
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=_sharded_memory_config(shard_grid, 1, w),
+    )
+    ttnn.plus_one(input_tensor, sub_core_grids=shard_grid)
+    assert torch.equal(ttnn.to_torch(input_tensor), torch_input_tensor + 1)
+
+
+def test_plus_one_sharded_sub_core_grid_mismatch_raises(device, expect_error):
+    """A sub_core_grids that is not the shard grid cannot reach every shard, so it is rejected."""
+    w = 32
+    shard_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))])
+    sub_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(2, 0))])
+    input_tensor = ttnn.from_torch(
+        torch.randint(32000, (4, w)),
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=_sharded_memory_config(shard_grid, 1, w),
+    )
+    with expect_error(RuntimeError, "shard grid"):
+        ttnn.plus_one(input_tensor, sub_core_grids=sub_grid)
