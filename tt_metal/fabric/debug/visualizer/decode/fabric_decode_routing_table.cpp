@@ -195,8 +195,9 @@ json make_1d_path_entry_actions_json(const uint8_t* entry, uint32_t num_words) {
     return actions;
 }
 
-// The 1D path table: each nonzero entry's hop count and actions, and how many entries are zero. Null when the manifest
-// has no 1D stride.
+// The 1D path table: each nonzero entry's index (its position in the table, which is the distance to its destination),
+// hop count (how many actions it holds, at most what the entry's words fit) and actions, and how many entries are zero.
+// Null when the manifest has no 1D stride.
 json make_1d_path_table_json(const routing_l1_info_t& table, const InterpretContext& context) {
     if (!context.fabric.routing_1d_extension_words.has_value()) {
         return json(nullptr);
@@ -214,7 +215,7 @@ json make_1d_path_table_json(const routing_l1_info_t& table, const InterpretCont
             continue;
         }
         json actions = make_1d_path_entry_actions_json(entry, num_words);
-        entries.push_back({{"hops", actions.size()}, {"actions", std::move(actions)}});
+        entries.push_back({{"index", index}, {"hops", actions.size()}, {"actions", std::move(actions)}});
     }
     json out;
     out["entries"] = std::move(entries);
