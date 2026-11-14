@@ -342,7 +342,7 @@ jobs:
       # GitHub-hosted default runner cannot reach Harbor.
       - name: Build, gate and push the test image
         if: ${{ inputs.gate }}
-        uses: tenstorrent/.github/actions/docker-publish@ec8af5bf14b2d49c101aaf81951b7e6bae10d327 # nsexton/docker-sbom
+        uses: tenstorrent/.github/actions/docker-publish@51a19619cec70224addf9b389f2b160144d192fa # nsexton/docker-sbom
         with:
           context: ${{ github.workspace }}
           file: ${{ inputs.dockerfile }}
