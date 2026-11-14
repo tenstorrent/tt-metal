@@ -40,6 +40,10 @@ jobs:
     permissions:
       contents: read
       packages: write
+      # docker-bake-publish signs each image's SBOM (actions/attest).
+      id-token: write
+      attestations: write
+      artifact-metadata: write
     runs-on: tt-ubuntu-2204-large-stable
     outputs:
       image_digest: ${{ steps.get-digest.outputs.IMAGE_DIGEST }}
@@ -74,7 +78,7 @@ jobs:
             env.HTTP_PROXY=${{ env.PROXY_HTTP }}
             env.HTTPS_PROXY=${{ env.PROXY_HTTPS }}
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: https://ghcr.io
           username: ${{ github.actor }}
@@ -154,27 +158,31 @@ jobs:
             SET+="${TARGET}.args.HTTP_PROXY=${PROXY_HTTP}"$'\n'
             SET+="${TARGET}.args.HTTPS_PROXY=${PROXY_HTTPS}"$'\n'
           fi
+          # docker-bake-publish requires a revision label on every published image.
+          SET+="${TARGET}.labels.org.opencontainers.image.revision=${GIT_SHA}"$'\n'
           {
             echo "set<<EOF"
             echo "$SET"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
-          # Consumed directly by manual-docker-bake.sh (SBOM generator, oras
-          # binary for enrichment), not as a build-stage context.
-          echo "syft-scanner-image=$(echo "$TOOL_TAGS" | jq -r '."syft-scanner-tag"')" >> "$GITHUB_OUTPUT"
-          echo "oras-image=$(echo "$TOOL_TAGS" | jq -r '."oras-tag"')" >> "$GITHUB_OUTPUT"
       - name: Build and push (skipped for dry run)
         if: ${{ !inputs.dry-run }}
-        uses: ./.github/actions/manual-docker-bake
+        uses: tenstorrent/.github/actions/docker-bake-publish@51a19619cec70224addf9b389f2b160144d192fa # nsexton/docker-sbom
         with:
+          bake-file: dockerfile/docker-bake.hcl
           targets: ${{ inputs.image }}
           set-lines: ${{ steps.bake.outputs.set }}
-          syft-scanner-image: ${{ steps.bake.outputs.syft-scanner-image }}
-          oras-image: ${{ steps.bake.outputs.oras-image }}
           # Cheap insurance against transient blips - the actual fix for the
           # timeouts we hit is the proxy env forwarded above.
           retries: "2"
           retry-delay-seconds: "15"
+          # CPython's test suite (lib/python3.X/test/) and Python packages
+          # (future, tornado, ...) ship TLS test fixtures that the crypto scan
+          # reports as private keys. The first glob covers both, since * also
+          # matches /. Keys anywhere else still fail the gate.
+          trivy-allowed-private-keys: |
+            */lib/python3*/test/*
+            */site-packages/*/tests/*
           harbor-prefix: ${{ inputs.harbor-prefix }}
       - name: Get image digest
         if: ${{ !inputs.dry-run }}
@@ -246,7 +254,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Docker login
-        uses: docker/login-action@v3
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: https://ghcr.io
           username: ${{ github.actor }}

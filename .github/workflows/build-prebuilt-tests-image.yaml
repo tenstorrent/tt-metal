@@ -75,6 +75,15 @@ on:
           Runner for the image build. GitHub-hosted is ~80s/run faster and keeps
           this off the self-hosted fleet, but cannot reach Harbor, so base-image
           must be a canonical ghcr ref. Self-hosted works with a ghcr base too.
+      gate:
+        required: false
+        type: boolean
+        default: false
+        description: >-
+          Build through tenstorrent/.github's docker-publish: the OCI label check
+          and the Trivy scan (private keys fail it) run before the push, and
+          nothing is pushed if they fail. No SBOM is generated, since these
+          images are throwaways. Off by default.
     outputs:
       image:
         description: "Pullable ref of the built image; empty when the build was skipped or failed"
@@ -129,6 +138,11 @@ on:
         type: string
         default: "ubuntu-latest"
         description: "Runner for the image build; self-hosted cannot use a Harbor-prefixed base"
+      gate:
+        required: false
+        type: boolean
+        default: false
+        description: "Run the docker-publish label and Trivy gate before pushing (no SBOM)"
 
 jobs:
   build-test-image:
@@ -261,7 +275,7 @@ jobs:
           path: artifact
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -302,6 +316,7 @@ jobs:
             type=raw,value=${{ steps.ref.outputs.tag }}
 
       - name: Build and push the test image
+        if: ${{ !inputs.gate }}
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: ${{ github.workspace }}
@@ -318,7 +333,33 @@ jobs:
           # would leave behind holding the layers alive.
           provenance: false
           outputs: |
-            type=registry,push=true,compression=zstd,compression-level=7,oci-mediatypes=true
+            type=registry,push=true,compression=zstd,compression-level=9,oci-mediatypes=true
+
+      # Gated alternative to the step above. Throwaway images, so no SBOM; the
+      # labels and Trivy are still checked before anything is pushed. A failed
+      # gate leaves the ref empty below, so consumers fall back to the artifact.
+      # No harbor-prefix: Trivy's databases come from upstream, since the
+      # GitHub-hosted default runner cannot reach Harbor.
+      - name: Build, gate and push the test image
+        if: ${{ inputs.gate }}
+        uses: tenstorrent/.github/actions/docker-publish@51a19619cec70224addf9b389f2b160144d192fa # nsexton/docker-sbom
+        with:
+          context: ${{ github.workspace }}
+          file: ${{ inputs.dockerfile }}
+          tags: ${{ steps.ref.outputs.image }}
+          labels: ${{ steps.docker-metadata.outputs.labels }}
+          build-args: |
+            BASE=${{ inputs.base-image }}
+            ${{ inputs.build-args }}
+          image-output-options: compression=zstd,compression-level=9,oci-mediatypes=true
+          sbom: "false"
+          # CPython's test suite (lib/python3.X/test/) and Python packages
+          # (future, tornado, ...) ship TLS test fixtures that the crypto scan
+          # reports as private keys. The first glob covers both, since * also
+          # matches /. Keys anywhere else still fail the gate.
+          trivy-allowed-private-keys: |
+            */lib/python3*/test/*
+            */site-packages/*/tests/*
 
       # Runs only if the push succeeded, so a failed build yields an empty ref
       # and the consumer falls back to the artifact path instead of pulling a

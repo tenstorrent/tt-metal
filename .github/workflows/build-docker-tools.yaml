@@ -94,16 +94,21 @@ jobs:
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: https://ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push ${{ matrix.tool }}
-        uses: ./.github/actions/manual-docker-bake
+        uses: tenstorrent/.github/actions/docker-bake-publish@51a19619cec70224addf9b389f2b160144d192fa # nsexton/docker-sbom
         with:
+          bake-file: dockerfile/docker-bake.hcl
           targets: ${{ matrix.tool }}
           set-lines: |
             ${{ matrix.tool }}.tags=${{ matrix.tag }}
             ${{ matrix.tool }}.output=${{ env.BAKE_OUTPUT }}
+            ${{ matrix.tool }}.labels.org.opencontainers.image.revision=${{ github.sha }}
+          # Signing needs id-token/attestations permissions on every workflow that
+          # reaches this job (pr-gate, merge-gate, ...). Off until those are granted.
+          attest-sbom: "false"

@@ -5,15 +5,12 @@ inputs:
   docker-image-tag:
     description: 'Docker image tag in format REPO_NAME:VERSION'
     required: true
-    type: string
   github-token:
     description: 'GH Token for registry login'
     required: true
-    type: string
   new-tag:
     description: 'New tag to use, for example latest or v0.65.0'
     required: false
-    type: string
     default: 'latest'
 
 outputs:
@@ -35,7 +32,7 @@ runs:
         echo "✅ Docker image tag format is valid"
 
     - name: Login to GitHub Container Registry
-      uses: docker/login-action@v3
+      uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
       with:
         registry: ghcr.io
         username: ${{ github.actor }}

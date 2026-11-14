@@ -43,6 +43,9 @@ permissions:
   packages: write
   id-token: write
   checks: read
+  # publish-release-image signs each image's SBOM (actions/attest).
+  attestations: write
+  artifact-metadata: write
 
 jobs:
   # Parse platform to extract distro/version for downstream workflows.

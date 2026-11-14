@@ -180,24 +180,8 @@ target "openmpi" {
   tags       = ["tool-openmpi:local"]
 }
 
-target "oras" {
-  context    = "."
-  dockerfile = "dockerfile/Dockerfile.tools"
-  target     = "oras"
-  tags       = ["tool-oras:local"]
-}
-
-# Single-stage passthrough re-hosting docker/buildkit-syft-scanner (see
-# Dockerfile.tools' comment on this target).
-target "syft-scanner" {
-  context    = "."
-  dockerfile = "dockerfile/Dockerfile.tools"
-  target     = "syft-scanner"
-  tags       = ["tool-syft-scanner:local"]
-}
-
 # Single-stage passthrough re-hosting docker/dockerfile (the `# syntax=`
-# frontend image), same reasoning as syft-scanner above.
+# frontend image); see Dockerfile.tools' comment on this target.
 target "dockerfile-frontend" {
   context    = "."
   dockerfile = "dockerfile/Dockerfile.tools"
@@ -206,7 +190,7 @@ target "dockerfile-frontend" {
 }
 
 group "tools" {
-  targets = ["ccache", "clangbuildanalyzer", "cmake", "curl", "dockerfile-frontend", "doxygen", "gdb", "iwyu", "mold", "openmpi", "oras", "sfpi", "syft-scanner", "yq", "zstd"]
+  targets = ["ccache", "clangbuildanalyzer", "cmake", "curl", "dockerfile-frontend", "doxygen", "gdb", "iwyu", "mold", "openmpi", "sfpi", "yq", "zstd"]
 }
 
 # =============================================================================
