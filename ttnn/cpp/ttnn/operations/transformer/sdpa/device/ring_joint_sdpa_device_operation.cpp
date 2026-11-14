@@ -671,6 +671,31 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             args.ccl_core_grid_offset.y >= args.program_config.value().compute_with_storage_grid_size.y,
             "SDPA coregrid overlaps with AllGather coregrid (row-major)");
     }
+    if (const auto x0 = args.program_config->ccl_row_sdpa_start_x) {
+        const CoreCoord grid = args.program_config->compute_with_storage_grid_size;
+        const CoreCoord device_grid = input_tensor_q.device()->compute_with_storage_grid_size();
+        const uint32_t all_gather_cores = args.all_gather_operation_attributes.num_links *
+                                          ttnn::ring_attention_all_gather_async_detail::kRingDirectionCount;
+        TT_FATAL(
+            strategy == ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR && args.ccl_core_grid_offset.y == grid.y,
+            "ccl_row_sdpa_start_x needs the all-gather on the row right below the SDPA grid (row-major, "
+            "ccl_core_grid_offset.y == {}), got offset {}",
+            grid.y,
+            args.ccl_core_grid_offset);
+        TT_FATAL(
+            grid.y < device_grid.y && *x0 < grid.x,
+            "ccl_row_sdpa_start_x={} needs grid.y {} < device grid rows {} and a start column < grid.x {}",
+            *x0,
+            grid.y,
+            device_grid.y,
+            grid.x);
+        TT_FATAL(
+            *x0 >= args.ccl_core_grid_offset.x + all_gather_cores,
+            "ccl_row_sdpa_start_x={} overlaps the {} all-gather cores starting at column {}",
+            *x0,
+            all_gather_cores,
+            args.ccl_core_grid_offset.x);
+    }
 
     // Validate joint strategy is 'rear'
     TT_FATAL(args.joint_strategy == "rear", "Joint strategy must be 'rear'. Got: {}", args.joint_strategy);
@@ -685,6 +710,15 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const bool has_indexed_kv_cache = indexed_kv_cache_active(args, tensor_args);
     const uint32_t NVH = tensor_args.v_num_heads();
     const uint32_t VDH = tensor_args.v_head_dim(args.latent_v_head_dim);
+    if (args.program_config->ccl_row_sdpa_start_x.has_value()) {
+        const bool gqa_grouped_kv =
+            ring_joint::is_gqa_grouped_kv_head_mode(tensor_args.v_shares_k_buffer(), q_shape[1], k_shape[1], NVH);
+        TT_FATAL(
+            args.program_config->k_splits == 1 && !gqa_grouped_kv &&
+                !ring_joint::uses_shared_k_batch_chain(gqa_grouped_kv, k_shape[1]) && !args.has_sliding_window(),
+            "ccl_row_sdpa_start_x supports neither K split, the row-wide (GQA / shared-K) multicast paths nor a "
+            "sliding window (its halo exchange takes more CCL row cores)");
+    }
 
     // Chunked-prefill (`tensor_args.is_chunked(args.kv_stripe_split)`): Q is shorter than the per-device K shard
     // (latest slab against a growing K cache). Chunk 0 has equal shapes and uses the regular
