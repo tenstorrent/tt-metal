@@ -291,8 +291,22 @@ constexpr float GELU_ERF_DEN[17] = {  // even powers only (c1=0, c3=0, ..., c15=
     0.0f,
     -6.7350725691e-12f};
 
+}  // namespace ckernel::sfpu
+
+#include "ckernel_sfpu_gelu_bf16.h"
+
+namespace ckernel::sfpu {
+
+// Whether BF16 DEST runs the generated gelu kernel as one call over the whole tile.
+inline constexpr bool gelu_bf16_whole_tile = true;
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_gelu() {
+    if constexpr (!is_fp32_dest_acc_en && !APPROXIMATION_MODE && ITERATIONS == 32) {
+        if (bf16_dest_gelu()) {
+            calculate_gelu_bf16<ITERATIONS>();
+            return;
+        }
+    }
     if constexpr (APPROXIMATION_MODE) {
         calculate_gelu_appx<ITERATIONS>();
     } else if constexpr (is_fp32_dest_acc_en) {
