@@ -176,6 +176,9 @@ static_assert(reflect::size<m2::ProgramSpec>() == 8, "advanced_options is C++ on
 static_assert(reflect::size<m2::KernelRunArgs>() == 6, "advanced_options is C++ only");
 static_assert(reflect::size<m2::DFBRunOverrides>() == 3);
 static_assert(reflect::size<m2::ProgramRunArgs>() == 4, "advanced_options is C++ only");
+// The same tripwires for generic_op's mesh form, which TT-NN defines rather than Metal.
+static_assert(reflect::size<ttnn::experimental::MeshProgramSpec>() == 1);
+static_assert(reflect::size<ttnn::experimental::MeshProgramRunArgs>() == 1);
 
 // Data formats are ttnn data types in Python, so a format without one, such as Float16, cannot be set. A buffer
 // takes the format that ttnn's own ops declare for a tensor of that data type: int8 becomes UInt8, because the

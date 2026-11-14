@@ -1218,6 +1218,8 @@ def test_a_mesh_run_args_keeps_its_tensor_owners(device, expect_error):
         del mesh_run_args.__dict__
     with expect_error(AttributeError, "'MeshProgramRunArgs' object has no attribute 'program'"):
         mesh_run_args.program = []
+    with expect_error(AttributeError, "'MeshProgramRunArgs' object has no attribute 'program'"):
+        mesh_run_args.program = None
     assert mesh_run_args.programs[0][1].tensor_args["a"] is a
 
 
