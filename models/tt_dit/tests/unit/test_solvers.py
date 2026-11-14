@@ -166,6 +166,31 @@ def test_solver_for_scheduler_dispatch(expect_error) -> None:
         solver_for_scheduler(object())
 
 
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"prediction_type": "epsilon"},
+        {"lower_order_final": False},
+        {"disable_corrector": [3]},
+        {"thresholding": True},
+    ],
+)
+def test_solver_for_scheduler_rejects_unsupported_unipc_config(expect_error, override) -> None:
+    """UniPC options the solver does not implement are rejected rather than ignored."""
+    scheduler = _unipc_scheduler()
+    scheduler.register_to_config(**override)
+    (name,) = override
+
+    with expect_error(ValueError, name):
+        solver_for_scheduler(scheduler)
+
+
+def test_solver_for_scheduler_rejects_stochastic_euler(expect_error) -> None:
+    """EulerSolver implements only the deterministic step."""
+    with expect_error(ValueError, "stochastic_sampling"):
+        solver_for_scheduler(FlowMatchEulerDiscreteScheduler(stochastic_sampling=True))
+
+
 def test_custom_sigma_scheduler_dispatches_to_a_scheduler_less_euler() -> None:
     """The marker asks for Euler over sigmas the caller supplies, taken as given."""
     solver = solver_for_scheduler(CustomSigmaScheduler())
