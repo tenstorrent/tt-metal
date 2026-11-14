@@ -22,6 +22,10 @@
 //   rstd in lane vector ng+1; the root copies it to token order (128 B) and unicasts it into slot (t - t_start) of
 //   every group member's cb_rstd_land, then incs their SEM_RSTD_COUNT. y is written after the root work (the
 //   compute normalizes every row once its rstd landed).
+// feed (R4): y tile (t, c) of column block p = c / Cb goes to the feed output D at rows [me*T, ..) of block me
+//   when p == me (written locally), else to y_output (staging, at its natural page) for the ports; after each of my
+//   rows (behind a write barrier) my own SEM_FEED_ROWS counts it (the ports poll every worker's count: a shared
+//   counter could not tell "every worker published row i" from "fast workers published rows i and i+1").
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
@@ -103,14 +107,19 @@ void kernel_main() {
     constexpr uint32_t cb_rstd_land = get_compile_time_arg_val(25);
     constexpr uint32_t cb_rstd_send = get_compile_time_arg_val(26);
     constexpr uint32_t sem_rstd_count_id = get_compile_time_arg_val(27);
+    constexpr bool feed = get_compile_time_arg_val(28) != 0;
+    constexpr uint32_t sem_feed_rows_id = get_compile_time_arg_val(29);
     constexpr uint32_t sumsq_pages = norm ? 2 : 1;  // per row: sum X'^2 [, sum y_b^2]
     constexpr uint32_t rstd_bytes = 32 * sizeof(uint32_t);
-    constexpr auto out_args = TensorAccessorArgs<28>();
+    constexpr auto out_args = TensorAccessorArgs<30>();
     [[maybe_unused]] constexpr auto stats_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto hc_args = TensorAccessorArgs<stats_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto y_args = TensorAccessorArgs<hc_args.next_compile_time_args_offset()>();
+    [[maybe_unused]] constexpr auto d_args = TensorAccessorArgs<y_args.next_compile_time_args_offset()>();
     constexpr uint32_t num_chunks = (group_q + fanin - 1) / fanin;
-    constexpr uint32_t COORD_BASE = 4;  // common args: out, stats, hc, y addresses, then the core table
+    // common args: out, stats, hc, y addresses; feed: D address, me, G, Cb, Ht; then the core table
+    constexpr uint32_t FEED_BASE = 4;
+    constexpr uint32_t COORD_BASE = feed ? FEED_BASE + 5 : FEED_BASE;
 
     const uint32_t t_start = get_arg_val<uint32_t>(0);
     const uint32_t t_count = get_arg_val<uint32_t>(1);
@@ -130,13 +139,41 @@ void kernel_main() {
     [[maybe_unused]] auto write_y_pass = [&](uint32_t t, uint32_t cb0, uint32_t cols) {
         const uint32_t y_page = get_tile_size(cb_y_out);
         const auto y_acc = TensorAccessor(y_args, get_common_arg_val<uint32_t>(3), y_page);
+        [[maybe_unused]] uint32_t me = 0, grp = 0, cb_tiles = 1, ht = 1, d_row = 0;
+        if constexpr (feed) {
+            me = get_common_arg_val<uint32_t>(FEED_BASE + 1);
+            grp = get_common_arg_val<uint32_t>(FEED_BASE + 2);
+            cb_tiles = get_common_arg_val<uint32_t>(FEED_BASE + 3);
+            ht = get_common_arg_val<uint32_t>(FEED_BASE + 4);
+            const uint32_t img = t / ht;
+            d_row = (img * grp + me) * ht + (t - img * ht);  // my rows of the feed output, image img
+        }
         for (uint32_t u = 0; u < block_cols; ++u) {
             cb_wait_front(cb_y_out, 1);
             if (u < cols) {
-                noc_async_write(get_read_ptr(cb_y_out), y_acc.get_noc_addr(t * c_tiles + c_start + cb0 + u), y_page);
+                const uint32_t c = c_start + cb0 + u;
+                uint64_t dst;
+                if constexpr (feed) {
+                    if (c / cb_tiles == me) {  // my own block: straight into my feed output
+                        const auto d_acc = TensorAccessor(d_args, get_common_arg_val<uint32_t>(FEED_BASE), y_page);
+                        dst = d_acc.get_noc_addr(d_row * cb_tiles + (c - me * cb_tiles));
+                    } else {  // staged for the ports
+                        dst = y_acc.get_noc_addr(t * c_tiles + c);
+                    }
+                } else {
+                    dst = y_acc.get_noc_addr(t * c_tiles + c);
+                }
+                noc_async_write(get_read_ptr(cb_y_out), dst, y_page);
                 noc_async_writes_flushed();
             }
             cb_pop_front(cb_y_out, 1);
+        }
+    };
+    // feed: my row's staged y has landed in DRAM -> my published-row count (the ports poll it)
+    [[maybe_unused]] auto publish_row = [&]() {
+        if constexpr (feed) {
+            noc_async_write_barrier();
+            noc_semaphore_inc(get_noc_addr(get_semaphore(sem_feed_rows_id)), 1);
         }
     };
 
@@ -229,6 +266,9 @@ void kernel_main() {
                 if constexpr (collapse && !norm) {  // the pass's y tiles
                     write_y_pass(t, cb0, cols_in_pass);
                 }
+            }
+            if constexpr (collapse && !norm) {
+                publish_row();
             }
 
             if constexpr (has_w) {
@@ -336,6 +376,7 @@ void kernel_main() {
             for (uint32_t cb0 = 0; cb0 < c_count; cb0 += block_cols) {
                 write_y_pass(t_start + r, cb0, (c_count - cb0) < block_cols ? (c_count - cb0) : block_cols);
             }
+            publish_row();
         }
     }
     noc_async_atomic_barrier();

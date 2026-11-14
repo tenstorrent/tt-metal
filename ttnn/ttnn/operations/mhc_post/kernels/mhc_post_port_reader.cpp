@@ -1,0 +1,95 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+// SPDX-License-Identifier: Apache-2.0
+
+// mhc_post feed port reader (RISCV_1, NoC0), regime R4 feed-DRAM-staged.
+//
+// One port core per (direction slot, link). The workers stage the y tiles bound for other chips in y_output and
+// count each local row they finished (behind their write barrier) in their own SEM_FEED_ROWS (a program semaphore:
+// 0 at every launch). Wave by wave (wave_rows local rows of every row group) this reader polls those counts until
+// every worker has published the wave (a per-worker minimum: a shared counter would let fast workers' later rows
+// stand in for a slow worker's row), then reads the chunks of its destinations (the shared chunk walk, this
+// link's share) from y_output into the chunk ring for the sender. Transport structure: fabric_all_gather's port
+// reader.
+
+#include <cstdint>
+#include "api/dataflow/dataflow_api.h"
+#include "ttnn/ttnn/operations/mhc_post/kernels/mhc_post_feed_walk.hpp"
+
+void kernel_main() {
+    constexpr uint32_t cb_chunks = get_compile_time_arg_val(0);
+    constexpr uint32_t page_bytes = get_compile_time_arg_val(1);
+    constexpr uint32_t run_pages = get_compile_time_arg_val(2);
+    constexpr uint32_t num_banks = get_compile_time_arg_val(3);
+    constexpr uint32_t links = get_compile_time_arg_val(4);
+    constexpr uint32_t wave_rows = get_compile_time_arg_val(5);
+    constexpr uint32_t max_rows = get_compile_time_arg_val(6);
+    constexpr uint32_t group_q = get_compile_time_arg_val(7);
+    constexpr uint32_t sem_rows_id = get_compile_time_arg_val(8);
+    constexpr uint32_t cb_poll = get_compile_time_arg_val(9);  // private scratch: one 16 B slot per worker
+    constexpr auto y_args = TensorAccessorArgs<10>();
+
+    size_t a = 0;
+    mhc_feed::Geom g;
+    g.c_tiles = get_arg_val<uint32_t>(a++);
+    g.blk_tiles = get_arg_val<uint32_t>(a++);
+    g.ht = get_arg_val<uint32_t>(a++);
+    g.g = get_arg_val<uint32_t>(a++);
+    g.me = get_arg_val<uint32_t>(a++);
+    g.r = get_arg_val<uint32_t>(a++);
+    g.rows_base = get_arg_val<uint32_t>(a++);
+    g.rows_extra = get_arg_val<uint32_t>(a++);
+    const uint32_t link = get_arg_val<uint32_t>(a++);
+    const uint32_t y_addr = get_arg_val<uint32_t>(a++);
+    const uint32_t n_dest = get_arg_val<uint32_t>(a++);
+    const uint32_t dest_idx = a;  // destination positions d
+    a += n_dest;
+    const uint32_t workers_idx = a;  // used workers in L order (x | y << 16): worker k is in row group k / group_q
+
+    const auto y_acc = TensorAccessor(y_args, y_addr, page_bytes);
+    const uint32_t num_workers = g.r * group_q;
+    const uint32_t poll = get_write_ptr(cb_poll);
+    const uint32_t rows_sem = get_semaphore(sem_rows_id);
+    uint32_t done_upto = 0;  // workers [0, done_upto) are known to have published the current wave
+    // wait until every worker k published min(i1, rows of its group) rows
+    auto wait_wave = [&](uint32_t i1) {
+        done_upto = 0;
+        while (done_upto < num_workers) {
+            for (uint32_t k = done_upto; k < num_workers; ++k) {
+                const uint32_t xy = get_arg_val<uint32_t>(workers_idx + k);
+                noc_async_read(get_noc_addr(xy & 0xFFFF, xy >> 16, rows_sem), poll + k * 16, 4);
+            }
+            noc_async_read_barrier();
+            invalidate_l1_cache();
+            while (done_upto < num_workers) {
+                const uint32_t rows = mhc_feed::group_rows(g, done_upto / group_q);
+                const uint32_t need = i1 < rows ? i1 : rows;
+                if (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(poll + done_upto * 16) < need) {
+                    break;
+                }
+                ++done_upto;
+            }
+        }
+    };
+
+    for (uint32_t i0 = 0; i0 < max_rows; i0 += wave_rows) {
+        const uint32_t i1 = (i0 + wave_rows) < max_rows ? (i0 + wave_rows) : max_rows;
+        wait_wave(i1);  // the wave is in y_output
+        for (uint32_t k = 0; k < n_dest; ++k) {
+            const uint32_t d = get_arg_val<uint32_t>(dest_idx + k);
+            uint32_t ci = 0;  // chunk index within (wave, destination): the sender counts the same way
+            mhc_feed::for_each_chunk<num_banks, run_pages>(g, i0, i1, ci, [&](uint32_t c, uint32_t j, uint32_t n) {
+                if (c % links != link) {
+                    return;
+                }
+                cb_reserve_back(cb_chunks, run_pages);
+                uint32_t l1 = get_write_ptr(cb_chunks);
+                for (uint32_t p = 0; p < n; ++p) {
+                    noc_async_read(y_acc.get_noc_addr(mhc_feed::src_page(g, d, j + p * num_banks)), l1, page_bytes);
+                    l1 += page_bytes;
+                }
+                noc_async_read_barrier();
+                cb_push_back(cb_chunks, run_pages);
+            });
+        }
+    }
+}

@@ -18,7 +18,12 @@ import ttnn
 
 from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 
-from .mhc_post_program_descriptor import create_program_descriptor
+from .mhc_post_program_descriptor import (
+    MAX_FEED_LINKS,
+    create_program_descriptor,
+    feed_plan,
+    worker_list,
+)
 
 N_STREAMS = 4  # DeepSeek-V4 / V4.1 hc_mult (contract)
 NG = N_STREAMS * (N_STREAMS + 2)
@@ -61,7 +66,7 @@ SUPPORTED = {
     "coef_source": ["separate", "packed"],
     "alignment": ["tile_aligned", "h_non_aligned"],
     "norm": ["off", "on"],
-    "feed": ["off"],
+    "feed": ["off", "on"],
     "feed_split": ["block_aligned", "not_block_aligned"],
 }
 
@@ -70,7 +75,11 @@ SUPPORTED = {
 # 3. EXCLUSIONS
 # ---------------------------------------------------------------------------
 
-EXCLUSIONS = []
+EXCLUSIONS = [
+    # The feed writes chip q's y at rows [q*T, (q+1)*T) of the peers' feed output: with T % 32 != 0 those rows
+    # start inside a tile shared with chip q-1, which needs sub-tile row placement (Refinement 2b).
+    {"feed": "on", "alignment": "h_non_aligned"},
+]
 
 
 # ---------------------------------------------------------------------------
@@ -111,6 +120,8 @@ def _check_call(
     stats_output=None,
     hc_output=None,
     y_output=None,
+    feed_num_links=1,
+    feed_cluster_axis=1,
 ):
     """Malformed calls (not support refusals): clear ValueErrors."""
     if collapse_pre is not None and stats_weight is None:
@@ -127,6 +138,28 @@ def _check_call(
             raise ValueError("mhc_post: feed_output requires collapse mode (collapse_pre)")
         if feed_semaphores is None or len(feed_semaphores) != 2:
             raise ValueError("mhc_post: feed_output requires feed_semaphores = [ready, arrival]")
+        if feed_num_links not in range(1, MAX_FEED_LINKS + 1):
+            raise ValueError(f"mhc_post: feed_num_links must be 1..{MAX_FEED_LINKS}")
+        if feed_cluster_axis not in (0, 1):
+            raise ValueError("mhc_post: feed_cluster_axis must be 0 or 1")
+        mesh_shape = tuple(residual.device().shape)
+        G = mesh_shape[feed_cluster_axis] if len(mesh_shape) == 2 else 1
+        if G < 2:
+            raise ValueError(f"mhc_post: the feed needs >= 2 chips along cluster axis {feed_cluster_axis}")
+        if ttnn.get_fabric_config() == ttnn.FabricConfig.DISABLED:
+            raise ValueError("mhc_post: the feed needs an active fabric")
+        fs, ls = tuple(input_tensor.shape), tuple(feed_output.shape)
+        C = fs[-1]
+        if C % (32 * G) != 0:
+            raise ValueError(f"mhc_post: C={C} does not split into {G} column blocks of whole tiles")
+        want = fs[:-2] + (G * fs[-2], C // G)
+        if (
+            ls != want
+            or feed_output.dtype != ttnn.bfloat16
+            or feed_output.layout != ttnn.TILE_LAYOUT
+            or feed_output.memory_config() != ttnn.DRAM_MEMORY_CONFIG
+        ):
+            raise ValueError(f"mhc_post: feed_output must be {want} bfloat16 TILE DRAM interleaved, got {ls}")
     f_shape, x_shape = tuple(input_tensor.shape), tuple(residual.shape)
     if len(f_shape) < 2 or len(f_shape) > 4 or len(x_shape) != len(f_shape):
         raise ValueError(f"mhc_post: F {f_shape} and X {x_shape} must have the same rank, 2..4")
@@ -204,6 +237,8 @@ def validate(
     stats_output=None,
     hc_output=None,
     y_output=None,
+    feed_num_links=1,
+    feed_cluster_axis=1,
 ):
     _check_call(
         input_tensor,
@@ -223,6 +258,8 @@ def validate(
         stats_output=stats_output,
         hc_output=hc_output,
         y_output=y_output,
+        feed_num_links=feed_num_links,
+        feed_cluster_axis=feed_cluster_axis,
     )
     cfg = compute_kernel_config if compute_kernel_config is not None else default_compute_kernel_config()
     if collapse_pre is not None:
@@ -257,6 +294,49 @@ def validate(
         if all(axes.get(k) == v for k, v in exc.items()):
             raise ExcludedCell(f"mhc_post: unsupported combination (refinement candidate): {exc}")
     return axes
+
+
+def _feed_mesh_program(build, mesh, max_grid, feed_output, feed_semaphores, links, axis):
+    """The feed call: one program per chip (regime R4 — the workers' program is every chip's, plus this chip's
+    port kernels and fabric connections), one generic_op over the mesh. Each chip's program carries a
+    custom_program_hash over everything that shapes its argument layout: generic_op's cache keys a kernel on its
+    source, cores and compile-time args but not on the per-core argument counts (fabric_ring_exchange README)."""
+    import hashlib
+
+    G, chips = feed_plan(mesh, axis)
+    _, ports = worker_list(mesh, max_grid)
+    if ports is None:
+        raise ValueError("mhc_post: the feed needs an active fabric on a multi-chip mesh")
+    port_map = {(k, l): ports[2 * l + k] for l in range(MAX_FEED_LINKS) for k in (0, 1)}
+    port_list = [port_map[(k, l)] for l in range(links) for k in (0, 1)]
+    mesh_desc = ttnn.MeshProgramDescriptor()
+    for rc in chips:
+        feed = dict(
+            chips=chips,
+            coord=rc,
+            me=chips[rc]["p"],
+            G=G,
+            links=links,
+            ports=port_map,
+            port_list=port_list,
+            d_tensor=feed_output,
+            semaphores=[int(a) for a in feed_semaphores],
+        )
+        program = build(feed)
+        key = repr(
+            (
+                "mhc_post|feed",
+                rc,
+                links,
+                feed["layout"],
+                [(str(k.kernel_source), list(k.compile_time_args), str(k.core_ranges)) for k in program.kernels],
+                [(c.total_size, str(c.core_ranges)) for c in program.cbs],
+            )
+        )
+        program.custom_program_hash = int.from_bytes(hashlib.sha1(key.encode()).digest()[:8], "little") >> 1
+        r, c = rc
+        mesh_desc[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(r, c), ttnn.MeshCoordinate(r, c))] = program
+    return mesh_desc
 
 
 # ---------------------------------------------------------------------------
@@ -312,6 +392,8 @@ def mhc_post(
         stats_output=stats_output,
         hc_output=hc_output,
         y_output=y_output,
+        feed_num_links=feed_num_links,
+        feed_cluster_axis=feed_cluster_axis,
     )
     cfg = compute_kernel_config if compute_kernel_config is not None else default_compute_kernel_config()
     device = residual.device()
@@ -343,30 +425,40 @@ def mhc_post(
             sinkhorn_iters=int(hc_sinkhorn_iters),
         )
 
-    program_descriptor = create_program_descriptor(
-        input_tensor,
-        residual,
-        post,
-        comb,
-        output_tensor,
-        n=N_STREAMS,
-        post_col=post_col,
-        comb_col=comb_col,
-        math_fidelity=cfg.math_fidelity,
-        math_approx_mode=bool(cfg.math_approx_mode),
-        max_grid=max_grid,
-        mode=mode,
-        w_tensor=stats_weight,
-        pre_tensor=collapse_pre,
-        stats_tensor=stats_output,
-        hc_tensor=hc_output,
-        y_tensor=y_output,
-        hc=hc,
-        norm_tensor=norm_weight,
-        norm_eps=norm_eps,
-    )
+    def build(feed=None):
+        return create_program_descriptor(
+            input_tensor,
+            residual,
+            post,
+            comb,
+            output_tensor,
+            n=N_STREAMS,
+            post_col=post_col,
+            comb_col=comb_col,
+            math_fidelity=cfg.math_fidelity,
+            math_approx_mode=bool(cfg.math_approx_mode),
+            max_grid=max_grid,
+            mode=mode,
+            w_tensor=stats_weight,
+            pre_tensor=collapse_pre,
+            stats_tensor=stats_output,
+            hc_tensor=hc_output,
+            y_tensor=y_output,
+            hc=hc,
+            norm_tensor=norm_weight,
+            norm_eps=norm_eps,
+            feed=feed,
+        )
+
     io = [input_tensor, residual, post, comb]
     io += [t for t in (stats_weight, collapse_pre, norm_weight, stats_output, hc_output, y_output) if t is not None]
+    if feed_output is None:
+        program_descriptor = build()
+    else:
+        program_descriptor = _feed_mesh_program(
+            build, device, max_grid, feed_output, feed_semaphores, feed_num_links, feed_cluster_axis
+        )
+        io.append(feed_output)
     # Output tensor must be last.
     ttnn.generic_op(io + [output_tensor], program_descriptor)
     if mode == "plain":

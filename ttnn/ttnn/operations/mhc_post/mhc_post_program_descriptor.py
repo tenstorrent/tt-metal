@@ -46,6 +46,9 @@ COEF_RAW_BUFS = 2  # reader landing buffers of raw coefficient tiles (row t+1 pr
 BLOCK_L1_BUDGET = 384 * 1024  # bytes available to block-scaled CBs (ledger symbol)
 W_RESIDENT_BUDGET = 256 * 1024  # bytes of resident W slice (R2 vs R2-W-streamed predicate)
 W_STREAM_BLOCKS = 2  # W-streamed: column passes of W in flight
+MAX_FEED_LINKS = 2  # feed: port cores reserved per direction (2 directions), whatever feed_num_links is
+FEED_CHUNKS_IN_FLIGHT = 4  # feed: packets in flight per port (fabric_all_gather's 4-chunk batch, 112 KiB ring)
+FEED_WAVE_ROWS = 1  # feed: local rows per port wave (the ports stream row i while the workers finish row i+1)
 COMBINE_FANIN = 11  # leader fan-in of the 2-level combine tree (<= 16, ledger symbol)
 PARTIAL_DEPTH = 2  # per-row partial / sum-of-squares pages in flight to the writer
 Y_BLOCKS = 2  # collapse: y blocks in flight to the writer
@@ -89,12 +92,15 @@ CB_RSTD_COL = 21  # norm: rstd of the row in column 0 (reader -> compute, Unpack
 CB_NORM_W = 22  # norm: norm weight tiles of my columns, resident (reader -> compute, Row broadcast)
 CB_RSTD_LAND = 23  # norm: reader-private landing of the root's rstd unicasts, one 128 B slot per row
 CB_RSTD_SEND = 24  # norm: root writer's 128 B rstd source (lane vector -> token order)
+CB_FEED_CHUNKS = 25  # feed (port cores): chunk ring between the port reader and the port sender
+CB_FEED_POLL = 26  # feed (port cores): port reader's private landing of the workers' SEM_FEED_ROWS (16 B each)
 
 # Semaphore ids (R2)
 SEM_LEADER_COUNT = 0  # partials landed in my leader slots
 SEM_ROOT_COUNT = 1  # chunk sums landed in my root slots
 SEM_READY_BITS = 2  # bit (t mod 32): leader(t) has freed its slots for row t
 SEM_RSTD_COUNT = 3  # norm: rstd rows landed in my cb_rstd_land slots
+SEM_FEED_ROWS = 4  # feed (workers): my rows whose staged y has landed (polled by the ports)
 
 NUM_CBS = 64
 
@@ -110,13 +116,36 @@ def _split(total, parts):
     return out
 
 
+def fabric_ports_reserved(device):
+    """Whether the feed's port cores are carved out of the worker list: whenever the fabric is active on a
+    multi-chip mesh — never by the feed kwargs, so X' / stats / hc of a feed call are the bits of the same call
+    without the feed on the same mesh (op_design.md "Worker set L")."""
+    num = device.get_num_devices() if hasattr(device, "get_num_devices") else 1
+    return num > 1 and ttnn.get_fabric_config() != ttnn.FabricConfig.DISABLED
+
+
+def port_cores(gx, gy):
+    """The 2 * MAX_FEED_LINKS reserved port cores: logical row 0 (next to the Ethernet row), centred (the
+    fabric_ring_exchange / distributed_rms_norm placement); port (slot k, link l) = cores[2 * l + k]."""
+    num = 2 * MAX_FEED_LINKS
+    if gx * gy <= num:
+        raise ValueError(f"mhc_post: a {gx}x{gy} max_grid leaves no worker beside the {num} fabric port cores")
+    if gx >= num:
+        x0 = gx // 2 - MAX_FEED_LINKS
+        return [ttnn.CoreCoord(x0 + i, 0) for i in range(num)]
+    return [ttnn.CoreCoord(i % gx, i // gx) for i in range(num)]
+
+
 def worker_list(device, max_grid):
-    """L: the max_grid rectangle, row-major. (Port reservation for an active fabric is the feed refinement's.)"""
+    """L: the max_grid rectangle in row-major order, minus the reserved port cores when the fabric is active.
+    Returns (L, ports or None)."""
     grid = device.compute_with_storage_grid_size()
     gx, gy = grid.x, grid.y
     if max_grid is not None:
         gx, gy = min(gx, max_grid.x), min(gy, max_grid.y)
-    return [ttnn.CoreCoord(x, y) for y in range(gy) for x in range(gx)], gx
+    ports = port_cores(gx, gy) if fabric_ports_reserved(device) else None
+    taken = {(c.x, c.y) for c in ports} if ports else set()
+    return [ttnn.CoreCoord(x, y) for y in range(gy) for x in range(gx) if (x, y) not in taken], ports
 
 
 def choose_split(t_tiles, c_tiles, num_workers, unit_bytes, has_w, n, C):
@@ -162,16 +191,34 @@ def choose_block_cols(core_c_tiles, bytes_per_block_col, mix_fixed_slots=MIX_FIX
     return max(1, min(core_c_tiles, l1_cap, dest_cap, cap if cap is not None else dest_cap))
 
 
-def _merged_ranges(cores, gx):
-    """Row-major prefix of the rectangle -> at most two rectangles (full rows + partial last row)."""
-    num = len(cores)
-    full_rows, rem = divmod(num, gx)
-    ranges = []
-    if full_rows:
-        ranges.append(ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, full_rows - 1)))
-    if rem:
-        ranges.append(ttnn.CoreRange(ttnn.CoreCoord(0, full_rows), ttnn.CoreCoord(rem - 1, full_rows)))
-    return ttnn.CoreRangeSet(ranges)
+def _merged_ranges(cores):
+    """A core list -> few rectangles (dispatch: never one range per core): contiguous x-runs per row, runs with
+    the same x-span on consecutive rows merged. A row-major prefix of the rectangle gives <= 2 rectangles; with
+    the port cores carved out of row 0, <= 4."""
+    rows = {}
+    for c in cores:
+        rows.setdefault(c.y, []).append(c.x)
+    runs = []  # (x0, x1, y)
+    for y in sorted(rows):
+        xs = sorted(rows[y])
+        start = prev = xs[0]
+        for x in xs[1:]:
+            if x != prev + 1:
+                runs.append((start, prev, y))
+                start = x
+            prev = x
+        runs.append((start, prev, y))
+    rects = []  # [x0, x1, y0, y1]
+    for x0, x1, y in runs:
+        for r in rects:
+            if r[0] == x0 and r[1] == x1 and r[3] == y - 1:
+                r[3] = y
+                break
+        else:
+            rects.append([x0, x1, y, y])
+    return ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(x0, y0), ttnn.CoreCoord(x1, y1)) for x0, x1, y0, y1 in rects]
+    )
 
 
 def _cb(index, dtype, page_size, num_pages, core_ranges):
@@ -208,6 +255,7 @@ def create_program_descriptor(
     hc=None,
     norm_tensor=None,
     norm_eps=1e-6,
+    feed=None,
 ):
     assert mode in ("plain", "stats", "collapse"), mode
     device = x_tensor.device()
@@ -237,14 +285,14 @@ def create_program_descriptor(
     n_coef = n + n * n + (n if collapse else 0)
 
     # ---------------- work split ----------------
-    workers, gx = worker_list(device, max_grid)
+    workers, ports = worker_list(device, max_grid)
     # the score sees (T, C, dtypes, has_W, |L|) only; with W the unit always counts the y tile (op_design.md)
     unit_bytes = f_page + 2 * n * x_page + (bf16_page if has_w else 0)
     R, Q = choose_split(t_tiles, c_tiles, len(workers), unit_bytes, int(has_w), n, C)
     row_ranges = _split(t_tiles, R)
     col_ranges = _split(c_tiles, Q)
     used = workers[: R * Q]
-    core_ranges = _merged_ranges(used, gx)
+    core_ranges = _merged_ranges(used)
     max_core_c_tiles = col_ranges[0][1]
 
     # R2-W-streamed predicate (regime selection, exact): depends on the split only, never on the mode
@@ -422,11 +470,21 @@ def create_program_descriptor(
         CB_RSTD_LAND,
         CB_RSTD_SEND,
         SEM_RSTD_COUNT,
+        int(feed is not None),
+        SEM_FEED_ROWS,
     ]
     writer_ct.extend(ttnn.TensorAccessorArgs(out_tensor).get_compile_time_args())
     writer_ct.extend(ttnn.TensorAccessorArgs(stats_for_args).get_compile_time_args())
     writer_ct.extend(ttnn.TensorAccessorArgs(hc_for_args).get_compile_time_args())
     writer_ct.extend(ttnn.TensorAccessorArgs(y_for_args).get_compile_time_args())
+    d_for_args = feed["d_tensor"] if feed is not None else y_for_args
+    writer_ct.extend(ttnn.TensorAccessorArgs(d_for_args).get_compile_time_args())
+    feed_common = []
+    if feed is not None:
+        if not collapse:
+            raise ValueError("mhc_post: the feed needs collapse mode")
+        ht_img = f_pad[-2] // TILE
+        feed_common = [d_for_args.buffer_address(), feed["me"], feed["G"], c_tiles // feed["G"], ht_img]
     writer = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "mhc_post_writer.cpp"),
         core_ranges=core_ranges,
@@ -438,6 +496,7 @@ def create_program_descriptor(
             hc_for_args.buffer_address(),
             y_for_args.buffer_address(),
         ]
+        + feed_common
         + coord_table,
         config=ttnn.WriterConfigDescriptor(),
     )
@@ -527,4 +586,143 @@ def create_program_descriptor(
             ttnn.SemaphoreDescriptor(id=s, core_ranges=core_ranges, initial_value=0)
             for s in (SEM_LEADER_COUNT, SEM_ROOT_COUNT, SEM_READY_BITS, SEM_RSTD_COUNT)
         ]
-    return ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=semaphores, cbs=cbs)
+    if feed is not None:
+        semaphores.append(ttnn.SemaphoreDescriptor(id=SEM_FEED_ROWS, core_ranges=core_ranges, initial_value=0))
+    program = ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=semaphores, cbs=cbs)
+    if feed is not None:
+        _add_feed_ports(program, device, feed, y_for_args, R, row_ranges, Q, c_tiles, f_pad[-2] // TILE, used)
+    return program
+
+
+# ---------------------------------------------------------------------------
+# Feed (regime R4 feed-DRAM-staged): plan per chip + the port kernels
+# ---------------------------------------------------------------------------
+
+
+def _num_dram_banks(device):
+    g = device.dram_grid_size()
+    return g.x * g.y
+
+
+def feed_plan(mesh_device, cluster_axis):
+    """Per chip coordinate: its group position p, the group's coordinates and, per destination position d != p,
+    the port slot of the fabric's first hop (slot_of[d]; every destination reached through one direction shares a
+    port). Readies travel the reverse way (slot_of of the destination chip)."""
+    rows, cols = tuple(mesh_device.shape)
+    G = (rows, cols)[cluster_axis]
+    node = lambda rc: mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(*rc))  # noqa: E731
+    chips = {}
+    for r in range(rows):
+        for c in range(cols):
+            rc = (r, c)
+            p = rc[cluster_axis]
+            group = [(r, k) for k in range(G)] if cluster_axis == 1 else [(k, c) for k in range(G)]
+            dirs = {}
+            for d in range(G):
+                if d == p:
+                    continue
+                dirv = ttnn.get_eth_forwarding_direction(node(rc), node(group[d]))
+                if dirv is None:
+                    raise ValueError(f"mhc_post: no fabric route from {rc} to {group[d]}")
+                dirs[d] = dirv
+            # one port slot per distinct first-hop direction of THIS chip: a logical 1 x G group may sit on a 2-D
+            # physical layout (a QuietBox 2's 2 x 2), so the directions are not E / W everywhere
+            distinct = sorted(set(dirs.values()))
+            if len(distinct) > 2:
+                raise ValueError(f"mhc_post: the feed group leaves {rc} in {len(distinct)} directions (max 2 ports)")
+            slot_of = {d: distinct.index(v) for d, v in dirs.items()}
+            chips[rc] = dict(p=p, group=group, slot_of=slot_of, node=node(rc))
+    return G, chips
+
+
+def _add_feed_ports(program, device, feed, y_tensor, R, row_ranges, Q, c_tiles, ht_img, workers):
+    """The 2 * links port cores of this chip: reader (RISCV_1) stages chunks from y_output, sender (RISCV_0) sends
+    them over the fabric. Port (slot k, link l) sends to the destinations whose first hop leaves through slot k."""
+    plan, me_rc, links = feed["chips"], feed["coord"], feed["links"]
+    me = plan[me_rc]
+    G, p = feed["G"], me["p"]
+    ports = feed["ports"]  # {(slot, link): logical core}
+    port_cores_used = feed["port_list"]
+    port_crs = _merged_ranges(port_cores_used)
+    d_tensor = feed["d_tensor"]
+    page = d_tensor.buffer_page_size()
+    run_pages = max(1, int(ttnn.get_tt_fabric_max_payload_size_bytes()) // page)
+    ring_chunks = 2 * FEED_CHUNKS_IN_FLIGHT
+    num_banks = _num_dram_banks(device)
+    max_rows = row_ranges[0][1]
+    rows_base, rows_extra = divmod(sum(cnt for _, cnt in row_ranges), R)
+    geom = [c_tiles, c_tiles // G, ht_img, G, p, R, rows_base, rows_extra]
+
+    worker_xy = [device.worker_core_from_logical_core(c) for c in workers]
+    worker_xy = [v.x | (v.y << 16) for v in worker_xy]
+    program.cbs = list(program.cbs) + [
+        _cb(CB_FEED_CHUNKS, d_tensor.dtype, page, ring_chunks * run_pages, port_crs),
+        _cb(CB_FEED_POLL, ttnn.float32, 16 * len(workers), 1, port_crs),
+    ]
+    ready_addr, arrival_addr = feed["semaphores"]
+    reader_rt, sender_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+    layout = []
+    for l in range(links):
+        for k in (0, 1):
+            core = ports[(k, l)]
+            v = device.worker_core_from_logical_core(core)
+            dests = [d for d, sl in me["slot_of"].items() if sl == k]
+            # one stream per (source chip, link) whose first hop toward me leaves through slot k
+            expect_in = sum(
+                1 for rc, ch in plan.items() if ch["group"] == me["group"] and rc != me_rc and ch["slot_of"][p] == k
+            )
+            reader_rt[core.x][core.y] = geom + [l, y_tensor.buffer_address(), len(dests)] + dests + worker_xy
+            args = geom + [
+                l,
+                d_tensor.buffer_address(),
+                ready_addr,
+                arrival_addr,
+                v.x,
+                v.y,
+                expect_in,
+                len(dests),
+                len(dests),
+                int(len(dests) > 0),
+            ]
+            for d in dests:
+                dn = plan[me["group"][d]]["node"]
+                args += [d, int(dn.chip_id), int(dn.mesh_id), abs(d - p)]
+            for d in dests:  # ready to the port of chip d that sends to me (its slot toward me, same link)
+                dn = plan[me["group"][d]]["node"]
+                tc = device.worker_core_from_logical_core(ports[(plan[me["group"][d]]["slot_of"][p], l)])
+                args += [int(dn.chip_id), int(dn.mesh_id), abs(d - p), tc.x, tc.y]
+            if dests:
+                first = plan[me["group"][dests[0]]]["node"]
+                link_ids = ttnn.get_forwarding_link_indices(me["node"], first)
+                if len(link_ids) <= l:
+                    raise ValueError(
+                        f"mhc_post: feed_num_links={links} but {me_rc} -> {me['group'][dests[0]]} has "
+                        f"{len(link_ids)} usable link(s)"
+                    )
+                args += list(ttnn.setup_fabric_connection(me["node"], first, link_ids[l], program, core))
+            sender_rt[core.x][core.y] = args
+            layout.append((k, l, len(dests), expect_in))
+    feed["layout"] = layout
+    port_ct = [CB_FEED_CHUNKS, page, run_pages, num_banks, links, FEED_WAVE_ROWS, max_rows]
+    reader_ct = (
+        port_ct + [Q, SEM_FEED_ROWS, CB_FEED_POLL] + list(ttnn.TensorAccessorArgs(y_tensor).get_compile_time_args())
+    )
+    sender_ct = (
+        port_ct + [FEED_CHUNKS_IN_FLIGHT, ring_chunks] + list(ttnn.TensorAccessorArgs(d_tensor).get_compile_time_args())
+    )
+    program.kernels = list(program.kernels) + [
+        ttnn.KernelDescriptor(
+            kernel_source=str(KERNEL_DIR / "mhc_post_port_reader.cpp"),
+            core_ranges=port_crs,
+            compile_time_args=reader_ct,
+            runtime_args=reader_rt,
+            config=ttnn.ReaderConfigDescriptor(),
+        ),
+        ttnn.KernelDescriptor(
+            kernel_source=str(KERNEL_DIR / "mhc_post_port_sender.cpp"),
+            core_ranges=port_crs,
+            compile_time_args=sender_ct,
+            runtime_args=sender_rt,
+            config=ttnn.WriterConfigDescriptor(),
+        ),
+    ]
