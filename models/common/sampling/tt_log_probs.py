@@ -429,7 +429,7 @@ class LogProbsCalculator:
         num_devices = self.mesh_device.get_num_devices()
         if num_devices == 1:
             return self.num_devices_for_sharding == 1
-        return num_devices in (8, 32) and self.num_devices_for_sharding >= 2
+        return num_devices in (4, 8, 32) and self.num_devices_for_sharding >= 2
 
     # -----------------------------------------------------------------------
     # Old path (backward compat for non-gpt-oss models)
