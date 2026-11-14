@@ -126,6 +126,8 @@ def __getitem__(input_tensor: ttnn.Tensor, slices) -> ttnn.Tensor:
                 start = 0
             if stop is None:
                 stop = shape[dim_idx]
+            elif stop > shape[dim_idx]:
+                stop = shape[dim_idx]
             if step is None:
                 step = 1
 
