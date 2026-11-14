@@ -598,6 +598,31 @@
   budget_type: demo
   sp_config: sc1
 
+- name: "(Kimi-K3-2.8T) MoonViT-V2 vision attention and block accuracy 64k, synthetic weights"
+  # Sampled rows from each of the 4 ring chips vs an fp32 CPU golden; no full-image reference.
+  fabric_profile: torus_xy
+  cmd: |
+    timeout -k 2m 8m mpirun --bind-to none --pernode --tag-output bash -lc '
+      set -e
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest \
+        models/experimental/kimi_k3_moonvit_v2/tests/test_vision_attention.py \
+        models/experimental/kimi_k3_moonvit_v2/tests/test_vision_block.py \
+        -m synthetic -k real_rows_from_each_chip -vvv --tb=short
+    '
+  test_type: kimi_k3_moonvit
+  test_tags: [kimi_k3, accuracy]
+  test_group: module
+  skus:
+    bh_sc1:
+      timeout: 10
+      tier: 2
+      release_ready: false
+  owner_id: U08NCAT9V9N
+  team: models
+  budget_type: demo
+  sp_config: sc1
+
 # ===== GLM-5.3-744B ====================================================================================
 
 - name: "(GLM-5.3-744B) sparse MLA, prefill block, MTP and MoE accuracy 5k"

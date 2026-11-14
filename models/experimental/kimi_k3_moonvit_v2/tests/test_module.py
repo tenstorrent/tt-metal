@@ -1,0 +1,169 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
+"""CPU: the TT module tree loads the reference state dict by name, with the device upload stubbed.
+
+Catches renamed or missing parameters and wrong pre-load transforms without a device. Also checks
+that per-image inputs are written into the same device tensors on every call (`DeviceInput`).
+"""
+
+from __future__ import annotations
+
+import dataclasses
+from types import SimpleNamespace
+
+import pytest
+import torch
+
+import ttnn
+from models.experimental.kimi_k3_moonvit_v2.tt import host_prep
+from models.experimental.kimi_k3_moonvit_v2.tests.common import SYNTHETIC, device_config, random_patches
+from models.experimental.kimi_k3_moonvit_v2.tt import module, vision_model
+from models.experimental.kimi_k3_moonvit_v2.tt.device_input import DeviceInput
+from models.experimental.kimi_k3_moonvit_v2.tt.module import LoadingError, Module, Parameter, rename_substate
+
+
+@pytest.fixture
+def host_parameters(monkeypatch):
+    """Parameters keep the torch tensor instead of uploading it."""
+
+    def load_torch_tensor(self, value):
+        if tuple(value.shape) != self.shape:
+            raise LoadingError(f"expected shape {self.shape}, got {tuple(value.shape)}")
+        self._data = value
+
+    monkeypatch.setattr(Parameter, "load_torch_tensor", load_torch_tensor)
+    monkeypatch.setattr(vision_model, "compute_kernel_config", lambda mesh_device: None)
+    return SimpleNamespace(shape=(1, 1))
+
+
+@pytest.fixture
+def host_inputs(monkeypatch):
+    """`ttnn.from_torch` keeps the torch tensor and `copy_host_to_device_tensor` copies in place.
+    Returns the calls, "allocate" for a device upload and "copy" for an in-place write."""
+    calls = []
+
+    def from_torch(value, *, device=None, **kwargs):
+        if device is not None:
+            calls.append("allocate")
+        return value.clone()
+
+    def copy_host_to_device_tensor(host, device_tensor):
+        calls.append("copy")
+        device_tensor.copy_(host)
+
+    monkeypatch.setattr(ttnn, "from_torch", from_torch)
+    monkeypatch.setattr(ttnn, "copy_host_to_device_tensor", copy_host_to_device_tensor)
+    monkeypatch.setattr(ttnn, "ReplicateTensorToMesh", lambda mesh_device: None)
+    return calls
+
+
+@SYNTHETIC
+def test_vision_model_loads_reference(host_parameters, config, reference):
+    tt = vision_model.TT_MoonViT_Vision_Model(device_config(config, None), mesh_device=host_parameters)
+    state = reference.state_dict()
+    tt.load_torch_state_dict(state)
+    assert tt.is_loaded()
+
+    tower = tt.vision_tower
+    block = tower.encoder.blocks[0]
+    torch.testing.assert_close(block.attention.wqkv.weight.data, state["vision_tower.encoder.blocks.0.wqkv.weight"].T)
+    torch.testing.assert_close(block.norm0.weight.data, state["vision_tower.encoder.blocks.0.norm0.weight"][None])
+    proj = tower.patch_embed.proj.weight.data
+    assert proj.shape == (config.padded_patch_dim, config.hidden_size)
+    torch.testing.assert_close(
+        proj[: config.patch_dim],
+        state["vision_tower.patch_embed.proj.weight"].reshape(config.hidden_size, -1).T,
+    )
+    assert not proj[config.patch_dim :].any()
+    assert torch.equal(tower.patch_embed.pos_emb_weight, state["vision_tower.patch_embed.pos_emb.weight"])
+    torch.testing.assert_close(tt.mm_projector.fc0.weight.data, state["mm_projector.proj.0.weight"].T)
+    torch.testing.assert_close(tt.mm_projector.fc1.weight.data, state["mm_projector.proj.2.weight"].T)
+    torch.testing.assert_close(tt.mm_projector.post_norm.weight.data, state["mm_projector.post_norm.weight"][None])
+
+
+@SYNTHETIC
+def test_rejects_missing_and_unexpected_keys(host_parameters, config, reference, expect_error):
+    state = reference.state_dict()
+    state.pop("vision_tower.encoder.final_layernorm.weight")
+    state["vision_tower.encoder.extra.weight"] = torch.zeros(1)
+    tt = vision_model.TT_MoonViT_Vision_Model(device_config(config, None), mesh_device=host_parameters)
+    with expect_error(LoadingError, "final_layernorm"):
+        tt.load_torch_state_dict(state)
+
+
+@SYNTHETIC
+def test_rejects_missing_pos_emb(host_parameters, config, reference, expect_error):
+    """The position table is kept on the host, not as a `Parameter`, so it has its own missing-key check."""
+    state = reference.state_dict()
+    state.pop("vision_tower.patch_embed.pos_emb.weight")
+    tt = vision_model.TT_MoonViT_Vision_Model(device_config(config, None), mesh_device=host_parameters)
+    with expect_error(LoadingError, "pos_emb.weight"):
+        tt.load_torch_state_dict(state)
+
+
+def test_prepare_inputs_needs_loaded_weights(host_parameters, config, expect_error):
+    tt = vision_model.TT_MoonViT_Vision_Model(device_config(config, None), mesh_device=host_parameters)
+    with expect_error(RuntimeError, "weights not loaded"):
+        tt.prepare_inputs(*random_patches(config, [(1, 8, 8)]))
+
+
+def test_rename_substate():
+    state = {"wqkv.weight": 1, "wo.weight": 2, "norm0.weight": 3}
+    rename_substate(state, "wqkv", "attention.wqkv")
+    assert state == {"attention.wqkv.weight": 1, "wo.weight": 2, "norm0.weight": 3}
+
+
+def test_load_cached(tmp_path, monkeypatch):
+    class Leaf(Module):
+        def __init__(self):
+            super().__init__()
+            self.weight = Parameter(shape=(2,), device=None)
+
+    monkeypatch.setattr(Parameter, "load_torch_tensor", lambda self, v: setattr(self, "_data", v))
+    monkeypatch.setattr(Parameter, "save", lambda self, path: torch.save(self.data, path))
+    monkeypatch.setattr(Parameter, "load", lambda self, path: setattr(self, "_data", torch.load(path)))
+
+    calls = []
+    source = lambda: calls.append(1) or {"weight": torch.tensor([1.0, 2.0])}  # noqa: E731
+    module.load_cached(Leaf(), tmp_path, source)
+    cached = Leaf()
+    module.load_cached(cached, tmp_path, source)
+    assert len(calls) == 1
+    assert cached.is_loaded() and torch.equal(cached.weight.data, torch.tensor([1.0, 2.0]))
+
+
+def test_device_input_writes_in_place(host_inputs):
+    x = DeviceInput((1, 1, 4, 2), mesh_device=object(), sp_axis=None)
+    first = x.write(torch.zeros(4, 2))
+    second = x.write(torch.ones(4, 2))
+    assert second is first
+    assert torch.equal(second, torch.ones(1, 1, 4, 2))
+    assert host_inputs == ["allocate", "copy"]
+
+
+@SYNTHETIC
+def test_prepare_inputs_reuses_device_tensors(host_parameters, host_inputs, config, reference):
+    """A second image of another size lands in the first image's device tensors."""
+    config = dataclasses.replace(config, max_patches=1024)
+    tt = vision_model.TT_MoonViT_Vision_Model(config, mesh_device=host_parameters)
+    tt.load_torch_state_dict(reference.state_dict())
+
+    first = tt.prepare_inputs(*random_patches(config, [(1, 8, 8)]))
+    pixels, grid_thws = random_patches(config, [(1, 6, 20)], seed=1)
+    second = tt.prepare_inputs(pixels, grid_thws)
+    assert all(second[key] is first[key] for key in ("patches", "pos_emb", "logical_n"))
+    assert all(b is a for a, b in zip(first["rope"], second["rope"]))
+
+    pos_emb_weight = reference.vision_tower.patch_embed.pos_emb.weight
+    expected = host_prep.prepare_host_inputs(config, pos_emb_weight, pixels, grid_thws)
+    for key, actual in (
+        ("patches", second["patches"]),
+        ("pos_emb", second["pos_emb"]),
+        ("cos", second["rope"].cos),
+        ("sin", second["rope"].sin),
+    ):
+        # `DeviceInput.write` casts to the device dtype on the host.
+        torch.testing.assert_close(actual[0, 0], expected[key].to(actual.dtype), msg=key)
+    assert second["logical_n"].item() == 6 * 20
