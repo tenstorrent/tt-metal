@@ -19,7 +19,7 @@ Schema: `.claude/references/l1-footprint-discipline.md`.
 |----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
 | `cb_sublayer_tiles` | `ind·bc` (implemented: IN_BLOCKS = 2 blocks) | bc (one block's F; mix_block holds one coefficient broadcast in DEST across the block's units) | {t: streams, c: spans → bc per block, s: n/a (F has no stream axis)} | F.dtype | reader | compute | block | Double-buffered in blocks (overlap). A ragged pass still occupies bc slots (filler) so every consumer window starts on a block boundary and never wraps. Concurrent with every other streaming CB, so no alias. |
 | `cb_stream_tiles` | `n·ind·bc` (IN_BLOCKS = 2) | n·bc (all streams of the block's units, unit-major) | {t: streams, c: spans → bc, s: spans → n} | X.dtype | reader | compute | block | Kept separate from `cb_sublayer_tiles` because their page formats differ when the sublayer and stream dtypes differ. Double-buffered in blocks; filler slots on a ragged pass as above. |
-| `cb_coef_raw` | 3, or 1 when post/comb/P are one buffer | 1–3 raw tiles of the current row | {t: spans → 1 row, c: none (constant across c), s: none} | Float32 | reader | reader (private landing) | per row | Cannot alias `cb_coef_cols`: the expansion reads raw and writes the column pages at the same time. It is only 4–12 KB. |
+| `cb_coef_raw` | Phase 0 (plain): 2 (post, comb; only 1 used when they are one buffer). Collapse: 3 (post, comb, P), 1 used when one packed buffer serves all | 1–3 raw tiles of the current row | {t: spans → 1 row, c: none (constant across c), s: none} | Float32 | reader | reader (private landing) | per row | Cannot alias `cb_coef_cols`: the expansion reads raw and writes the column pages at the same time. It is only 4–12 KB. |
 | `cb_coef_cols` | `ncoef·cd` | `ncoef` (the row's coefficients, all referenced by every unit of the row) | {t: spans → 1 row ×cd window, c: none (broadcast over c), s: spans → n (post_j, comb_ij, P_i)} | Float32 (UnpackToDestFp32) | reader | compute | per row | `cd = 2` overlaps the next row's expansion with this row's mix. Each page uses only column 0 (128 B of 4 KB), because unpack-to-dest COL bcast reads column 0 of faces 0/2 only (mechanism cap). A denser packing is impossible without an unaligned unpack offset. |
 | `cb_mixed_out_tiles` | `n·outd·bc` (OUT_BLOCKS = 2) | n·bc (one block's X', j-major) | {t: streams, c: spans → bc, s: spans → n} | X.dtype | compute | writer | block | Not shared with `cb_mixed_bf16`: that would give two consumers (the writer and compute), which is a CB-ownership violation. In fp32 mode the formats also differ. |
 | `cb_mixed_bf16` (R2) | `n·bc` | n·bc (the projection K-block and y need the whole block) | {t: spans → 1, c: spans → bc, s: spans → n} | Float16_b | compute | compute | block | This is the contract's "bf16 X' as written". It replaces the forbidden DRAM re-read (rejected regime X2). It cannot be the writer's CB (ownership rule). |
@@ -55,7 +55,7 @@ Schema: `.claude/references/l1-footprint-discipline.md`.
 
 ```
 plain (Phase 0, as implemented):
-  bc·(ind·pgF + n·ind·pgX + n·outd·pgX) + ncoef·cd·4096 + 2·4096
+  bc·(ind·pgF + n·ind·pgX + n·outd·pgX) + ncoef·cd·4096 + 2·4096   (2·4096 = cb_coef_raw, 2 pages)
   fp32 worst case (bc = 5, the L1 cap at BLOCK_L1_BUDGET = 384 KiB): 5·72K + 160K + 8K = 528 KiB
 
 collapse + norm (R2), additional:

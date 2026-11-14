@@ -74,7 +74,7 @@ void kernel_main() {
 
     const uint32_t raw_post = get_write_ptr(cb_coef_raw);  // reader-private landing (never pushed)
     const uint32_t raw_comb = coef_shared ? raw_post : raw_post + coef_page;
-    constexpr uint32_t coef_words = 1024;  // fp32 words per coefficient page
+    const uint32_t coef_words = coef_page / sizeof(uint32_t);  // fp32 words per coefficient page
 
     for (uint32_t rb = 0; rb < t_count; rb += block_rows) {
         const uint32_t rows_in_block = (t_count - rb) < block_rows ? (t_count - rb) : block_rows;

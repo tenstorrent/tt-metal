@@ -40,16 +40,19 @@ constexpr uint32_t cb_mixed_out_tiles = get_compile_time_arg_val(3);
 constexpr uint32_t n = get_compile_time_arg_val(4);
 constexpr uint32_t block_rows = get_compile_time_arg_val(5);
 constexpr uint32_t block_cols = get_compile_time_arg_val(6);
+constexpr uint32_t mix_fixed_slots = get_compile_time_arg_val(7);  // host MIX_FIXED_SLOTS: Dc + Do
 constexpr uint32_t n_coef = n + n * n;
 constexpr uint32_t ONE_F32 = 0x3f800000u;  // Addcmul value: A + 1.0 * (Dc * Do) == fma(Dc, Do, A)
 
-static_assert(block_cols + 2 <= ckl::DEST_AUTO_LIMIT, "mix_block: block_cols + 2 DEST slots must fit DEST");
+static_assert(mix_fixed_slots == 2, "mix_block DEST layout: D0 = coefficient, D1 = operand, accumulators after");
+static_assert(
+    block_cols + mix_fixed_slots <= ckl::DEST_AUTO_LIMIT, "mix_block: block_cols + fixed DEST slots must fit");
 
 constexpr ckl::Dst Dc = ckl::Dst::D0;  // coefficient (column-broadcast)
 constexpr ckl::Dst Do = ckl::Dst::D1;  // operand (F or X_i of one unit)
 template <size_t U>
 constexpr ckl::Dst acc_slot() {
-    return static_cast<ckl::Dst>(2 + U);
+    return static_cast<ckl::Dst>(mix_fixed_slots + U);
 }
 
 // Caller-managed, offset-addressed inputs: the page index (from the CB front) is the element's runtime base.

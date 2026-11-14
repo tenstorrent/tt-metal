@@ -246,7 +246,16 @@ def create_program_descriptor(
         dst_full_sync_en=DST_FULL_SYNC,
     )
     compute_cfg.unpack_to_dest_mode = unpack_modes
-    compute_ct = [CB_SUBLAYER_TILES, CB_STREAM_TILES, CB_COEF_COLS, CB_MIXED_OUT_TILES, n, BLOCK_ROWS, block_cols]
+    compute_ct = [
+        CB_SUBLAYER_TILES,
+        CB_STREAM_TILES,
+        CB_COEF_COLS,
+        CB_MIXED_OUT_TILES,
+        n,
+        BLOCK_ROWS,
+        block_cols,
+        MIX_FIXED_SLOTS,
+    ]
     compute = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "mhc_post_compute.cpp"),
         core_ranges=core_ranges,
