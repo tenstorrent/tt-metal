@@ -109,11 +109,6 @@ constexpr bool matmul_kernel_ttsync(const MathFidelity fidelity, const bool full
     {
         return false;
     }
-    // HiFi3 half sync over 16-bit operands into a 32-bit CB: minimal_matmul 224 2x1 bf16 +263 ns on device with it
-    if (fp32_dest && wide && fidelity == MathFidelity::HiFi3 && !full_sync && !bfp8)
-    {
-        return false;
-    }
     return true;
 }
 constexpr bool matmul_format_is_16bit(const DataFormat f)
@@ -211,13 +206,12 @@ constexpr char matmul_default_form()
 }
 
 // The math form of a call that keys no k steps per DEST section (a plain matmul_block), from constants of the whole kernel so its init
-// and calls agree: the row form above LoFi, whose plain calls may take another reuse direction, but at HiFi2 and HiFi3 half sync with a
-// 32-bit DEST where a section may pack to Float32 (minimal_matmul 224 2x1 bf16 HiFi3: +40 ns with it, ttsync off).
+// and calls agree: the row form above LoFi, whose plain calls may take another reuse direction, but at HiFi2 half sync with a 32-bit DEST
+// where a section may pack to Float32.
 template <MathFidelity math_fidelity, DstSync dst_sync, bool fp32_dest>
 constexpr bool matmul_plain_row_form(const bool may_pack_32bit)
 {
-    return math_fidelity != MathFidelity::LoFi && !((math_fidelity == MathFidelity::HiFi2 || math_fidelity == MathFidelity::HiFi3) && dst_sync == DstSync::SyncHalf &&
-                                                    fp32_dest && may_pack_32bit);
+    return math_fidelity != MathFidelity::LoFi && !(math_fidelity == MathFidelity::HiFi2 && dst_sync == DstSync::SyncHalf && fp32_dest && may_pack_32bit);
 }
 
 // Half sync tile MOP cells where the HiFi phase end op can ride on the last MVMUL (end_fold): HiFi4, and HiFi3 with a 16-bit DEST except Bfp8_b in0 against

@@ -10,7 +10,8 @@
 
 // Compile-time marks a kernel's source sets as it is parsed: completing set<N> makes used(tag<N>) callable, so
 // is_used<N>(0) reads true from that point on. tag 0: a plain matmul call runs the ttsync unpack, read by the TRISC
-// wrapper after the kernel's include; tag 3: the kernel names a fast tilize init; tag 4: a plain matmul call polls.
+// wrapper after the kernel's include; tag 3: the kernel names a fast tilize init; tag 4: a plain matmul call polls; tags 7 and 8:
+// a plain matmul call whose ct and rt are (8) or are not (7) constant expressions.
 namespace ckernel::matmul_fe_mark {
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wnon-template-friend"
@@ -31,6 +32,15 @@ template <int N = 0>
 constexpr bool is_used(...) {
     return false;
 }
+// is_used for a template body: the probe depends on D, so it reads the marks of the whole kernel (at the end of the unit)
+template <int N, typename D, typename = decltype(used(tag<N + 0 * sizeof(D)>{}))>
+constexpr bool is_used_d(int) {
+    return true;
+}
+template <int N, typename D>
+constexpr bool is_used_d(...) {
+    return false;
+}
 // every kernel build checks the pattern on spare tags, so a compiler that stops honouring it fails here, not silently
 inline constexpr auto self_test_set = sizeof(set<1>);
 static_assert(is_used<1>(0), "matmul_fe_mark: a completed set<N> must make used(tag<N>) callable");
@@ -45,4 +55,7 @@ static_assert(!is_used<2>(0), "matmul_fe_mark: an untouched tag<N> must read unu
 #define MATMUL_FE_MARK() \
     (sizeof(::ckernel::matmul_fe_mark::set<MATMUL_FE_TTSYNC_OK() ? 0 : 4>) + (MATMUL_FE_TTSYNC_OK() ? 0 : 1))
 #define FAST_TILIZE_MARK() sizeof(::ckernel::matmul_fe_mark::set<3>)
+// 0, completing tag 8 for a plain call whose ct and rt are constant expressions and tag 7 otherwise
+#define MATMUL_FE_SHAPE(ct, rt) \
+    (0 * sizeof(::ckernel::matmul_fe_mark::set<(MATMUL_FE_C(ct) == 0xFFu || MATMUL_FE_C(rt) == 0xFFu) ? 7 : 8>))
 #endif
