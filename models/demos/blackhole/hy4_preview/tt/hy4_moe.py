@@ -33,6 +33,8 @@ class Hy4MoEBlock(DSV41MoEBlock):
         self.mesh_device = mesh_device
         self.decode_config = decode_cfg
         self.gate = Hy4Gate(mesh_device, weights["gate_weight"], weights["gate_bias"], mode=router_mode)
+        if getattr(self.gate, "_sk", None) is not None:  # HY4_SKINNY=router: the fused select writes the dispatch input formats directly (no to_memory_config)
+            self.gate._sk.out_mcs = (decode_cfg.dispatch_input_expert_scores_memory_config, decode_cfg.dispatch_input_memory_config)
         if expert_state is not None:
             self.decode = self._weightless_decode(mesh_device, decode_cfg, buffers, expert_state=expert_state)
         else:

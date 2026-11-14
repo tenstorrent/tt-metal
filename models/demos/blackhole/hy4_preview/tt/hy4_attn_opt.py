@@ -124,6 +124,31 @@ class Hy4AttentionOpt(Hy4Attention):
         self._rms_cfg = None
 
     # ---------------------------------------------------------------- helpers
+    def _skinny_o(self, og):
+        """HY4_SKINNY=oproj (default OFF): o_proj on the bank-local streaming kernel (tt/hy4_skinny.SkinnyLinear, T <= 16). Builds a second (bank-layout) copy of the o_proj weights
+        (13.4 MB bfp8 per chip per layer) on first use: call once outside a trace (warmup). Returns None when the flag is off or T > 16."""
+        from models.demos.blackhole.hy4_preview.tt.hy4_skinny import SkinnyLinear, enabled
+
+        T = int(og.shape[2])
+        if not enabled("oproj") or T > 16:
+            return None
+        if getattr(self, "_sk_o", None) is None:
+            self._sk_o = SkinnyLinear(self.md, self.host_w["o_proj"].tensor.reshape(-1, self.cfg.hidden_size))
+        return self._sk_o(og, T)
+
+    def _skinny_proj(self, h):
+        """HY4_SKINNY=hproj (default OFF): the fused h-proj on the bank-local streaming kernel (tt/hy4_skinny.SkinnyProj, T <= 16); returns the part tensors [q_a, kv_a, gate(, idx_wk, idx_wp)] or None.
+        Builds a second (bank-layout) copy of the fused weight (19.8 MB bfp8 per chip per layer) on first use: call once outside a trace (warmup)."""
+        from models.demos.blackhole.hy4_preview.tt.hy4_skinny import SkinnyProj, enabled
+
+        S = int(h.shape[2])
+        if not enabled("hproj") or S > 16:
+            return None
+        if getattr(self, "_sk_p", None) is None:
+            of = self._offs
+            self._sk_p = SkinnyProj(self.md, self._wf_host, [of[i + 1] - of[i] for i in range(len(of) - 1)])
+        return self._sk_p(h, S)
+
     def _lazy_fused(self):
         if self._wf is None:
             self._wf = upload(self.md, self._wf_host, self._fuse_dtype, ttnn.TILE_LAYOUT, shard_dim=3)
@@ -204,17 +229,19 @@ class Hy4AttentionOpt(Hy4Attention):
         if o.rope1:
             self._lazy_rope1()
         if o.fuseproj:
-            wf = self._lazy_fused()
-            fp = ttnn.linear(
-                h,
-                wf,
-                compute_kernel_config=self.ckc,
-                program_config=self._wf_pc if S <= 4 else None,
-                memory_config=mc,
-            )
-            of = self._offs
-            sl = [ttnn.slice(fp, [0, 0, 0, of[i]], [1, 1, S, of[i + 1]]) for i in range(len(of) - 1)]
-            ttnn.deallocate(fp)
+            sl = self._skinny_proj(h)  # HY4_SKINNY=hproj (default OFF): bank-local kernel, output already split (no slice ops)
+            if sl is None:
+                wf = self._lazy_fused()
+                fp = ttnn.linear(
+                    h,
+                    wf,
+                    compute_kernel_config=self.ckc,
+                    program_config=self._wf_pc if S <= 4 else None,
+                    memory_config=mc,
+                )
+                of = self._offs
+                sl = [ttnn.slice(fp, [0, 0, 0, of[i]], [1, 1, S, of[i + 1]]) for i in range(len(of) - 1)]
+                ttnn.deallocate(fp)
             qa_c, kv, g_raw = sl[0], sl[1], sl[2]
             d["g"] = ttnn.sigmoid(g_raw)
             ttnn.deallocate(g_raw)
@@ -271,7 +298,8 @@ class Hy4AttentionOpt(Hy4Attention):
         x = ttnn.matmul(o_lat, self.w_uv_t, compute_kernel_config=self.ckc, memory_config=mc)
         x = ttnn.experimental.nlp_concat_heads(x, memory_config=mc or ttnn.DRAM_MEMORY_CONFIG)
         og = ttnn.multiply(x, g)
-        part = self._lin(o, og, self.w_o, "o_proj")
+        sk = self._skinny_o(og)
+        part = sk if sk is not None else self._lin(o, og, self.w_o, "o_proj")
         ttnn.deallocate(og)
         return self.mesh_config.allreduce(part, self.ccl, axis=1, **({"memory_config": mc} if mc else {}))
 

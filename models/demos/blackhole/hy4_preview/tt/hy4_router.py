@@ -56,6 +56,13 @@ class Hy4Gate:
         self.ttnn = ttnn
         self.md, self.k, self.scale = mesh_device, k, float(scale)
         self.mode = mode or os.environ.get("HY4_ROUTER", "fused")
+        self._sk = None
+        from models.demos.blackhole.hy4_preview.tt.hy4_skinny import enabled
+
+        if enabled("router") and self.mode == "fused":  # HY4_SKINNY=router (default OFF): bank-local logits + sigmoid + bias kernel, T <= 8
+            from models.demos.blackhole.hy4_preview.tt.hy4_skinny import SkinnyRouter
+
+            self._sk = SkinnyRouter(mesh_device, torch_gate_weight, torch_gate_bias, k=k, scale=scale)
         E, D = torch_gate_weight.shape  # checkpoint layout [E, hidden]
         assert E == N_EXPERTS and torch_gate_bias.numel() == E
         self.E, self.D = E, D
@@ -102,6 +109,8 @@ class Hy4Gate:
         return score
 
     def forward(self, tt_x, grid=(1, 8)):
+        if self._sk is not None and int(tt_x.shape[2]) <= 8:
+            return self._sk.forward(tt_x, int(tt_x.shape[2]))
         if self.mode == "fused":
             return self._forward_fused(tt_x, grid)
         return self._forward_exact(tt_x, grid)
