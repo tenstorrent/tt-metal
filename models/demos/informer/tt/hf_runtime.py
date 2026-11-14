@@ -519,7 +519,8 @@ class InformerHfRuntimeMixin:
         self._ensure_hf_runtime()
         assert self.hf_decoder_embedding is not None
         dec_input = ttnn.from_torch(decoder_inputs, device=self.device, dtype=self.dtype, layout=ttnn.TILE_LAYOUT)
-        dec_embed = self.hf_decoder_embedding(dec_input, position_offset=0)
+        context_length = int(self.config.context_length or self.config.seq_len)
+        dec_embed = self.hf_decoder_embedding(dec_input, position_offset=context_length)
         dec_len = dec_embed.shape[1]
         pad_len = int(math.ceil(dec_len / TILE_SIZE)) * TILE_SIZE
         self_mask = make_causal_mask(

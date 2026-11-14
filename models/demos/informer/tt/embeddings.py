@@ -188,7 +188,7 @@ class ConvDistillLayer:
         meta = (batch, length, channels, input_memory_config, input_layout, input_dtype)
         if self.prepared_weight is not None and self.prepared_meta == meta:
             return
-        weight_4d = self.weight_torch.unsqueeze(-1)
+        weight_4d = self.weight_torch.unsqueeze(2)
         weight = ttnn.from_torch(weight_4d, dtype=self.dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
         bias_4d = self.bias_torch.reshape(1, 1, 1, -1)
         bias = ttnn.from_torch(bias_4d, dtype=self.dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
@@ -200,9 +200,9 @@ class ConvDistillLayer:
             in_channels=channels,
             out_channels=channels,
             batch_size=batch,
-            input_height=length,
-            input_width=1,
-            kernel_size=[self.kernel_size, 1],
+            input_height=1,
+            input_width=length,
+            kernel_size=[1, self.kernel_size],
             stride=[1, 1],
             padding=[0, 0],
             dilation=[1, 1],
@@ -220,9 +220,9 @@ class ConvDistillLayer:
             in_channels=channels,
             out_channels=channels,
             batch_size=batch,
-            input_height=length,
-            input_width=1,
-            kernel_size=[self.kernel_size, 1],
+            input_height=1,
+            input_width=length,
+            kernel_size=[1, self.kernel_size],
             stride=[1, 1],
             padding=[0, 0],
             dilation=[1, 1],

@@ -417,8 +417,6 @@ class MultiHeadAttention:
             log_q = int(math.ceil(math.log1p(max(1, q_valid_len))))
             top_u = min(q_valid_len, max(1, int(self.factor * log_q)))
             sample_k = min(k_valid_len, max(1, int(self.factor * q_valid_len * log_k)))
-        if self.is_decoder:
-            top_u = q_valid_len
         return top_u, sample_k
 
     def sparse_selected_query_attention(
