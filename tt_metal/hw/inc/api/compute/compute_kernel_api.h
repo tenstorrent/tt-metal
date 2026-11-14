@@ -391,6 +391,19 @@ ALWI void log_with_base_tile_init() {
 // clang-format on
 template <bool fast_and_approx = false, bool base_is_two = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void log_with_base_tile(uint32_t idst, uint32_t base_scale) {
+    MATH(if constexpr (ckernel::sfpu::log10_bf16_whole_tile && !is_fp32_dest_acc_en && !base_is_two) {
+        if (base_scale == ckernel::sfpu::log10_bf16_log_base_scale_factor_bits) {
+            SFPU_UNARY_CALL(
+                DST_SYNC_MODE,
+                is_fp32_dest_acc_en,
+                calculate_log,
+                (APPROX, fast_and_approx, true /* HAS_BASE_SCALING */, is_fp32_dest_acc_en, 32, base_is_two),
+                idst,
+                VectorMode::None,
+                base_scale);
+            return;
+        }
+    });
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
