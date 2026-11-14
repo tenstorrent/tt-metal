@@ -183,7 +183,7 @@ python3 compare_test_and_perf.py --dir quasar --arch quasar
 python3 compare_test_and_perf.py --arch blackhole
 ```
 
-Hardware: `run-test` / `perf-report`, not ad-hoc pytest. CI: workflow **LLK perf** (`llk-perf.yaml`) with `architecture=all|blackhole|quasar` and `speed-of-light=false` when comparing against a non-SoL baseline. `--speed-of-light` changes measured cycles; never mix SoL and non-SoL rows.
+Hardware: `run-test` / `perf-report`, not ad-hoc pytest. To check a change for perf regressions, use `perf-regression-check` on the attached card, not CI. CI: workflow **LLK perf** (`llk-perf.yaml`) with `architecture=all|blackhole|quasar` and `speed-of-light=false` when comparing against a non-SoL baseline. `--speed-of-light` changes measured cycles; never mix SoL and non-SoL rows.
 
 ```bash
 gh workflow run "LLK perf" --ref <branch> -f architecture=all -f speed-of-light=false

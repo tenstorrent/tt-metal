@@ -11,9 +11,18 @@
 #   --baseline <ref>     what to compare against  (default: merge-base origin/main HEAD)
 #   --current  <ref>     what to judge            (default: HEAD)
 #   --iterations <N>     runs per side            (default: 3, median-vs-median)
-#   --threshold <T>      relative slowdown that counts  (default: 0.02 = 2%)
+#   --threshold <T>      relative slowdown that counts, a fraction
+#                        (default: the merge gate's, blackhole 0.02, wormhole 0.13)
+#   --module-threshold <m=T,...>  per-module thresholds
+#                        (default: the merge gate's, wormhole perf_matmul and
+#                        perf_math_matmul 0.25)
+#   --run-types <list>   run types to measure and compare, or 'all'
+#                        (default: L1_TO_L1, as the gates)
 #   --min-cycles <N>     absolute slowdown it must ALSO exceed, in cycles
 #                        (default: 30; 0 disables the clause)
+#   --code-shift <B>     move the TRISC code by B bytes on BOTH sides (stage 2 of the
+#                        gate uses 0, 4, 24, 44 and 60). Needs LLK_CODE_SHIFT (#62981)
+#                        at both commits
 #   --speed-of-light     compile-time-parameter build; applied to BOTH sides
 #   --refresh            ignore cached runs and re-measure both sides
 #   --keep-worktrees     leave the per-commit worktrees behind (for debugging)
@@ -33,7 +42,7 @@
 # HEAD. What is measured is the COMMITTED state of each ref -- your uncommitted
 # edits are not part of the comparison.
 #
-# Runs are cached per (arch, test, variant, commit) under $PERF_COMPARE_HOME, so
+# Runs are cached per (arch, test, build variant, commit) under $PERF_COMPARE_HOME, so
 # comparing A-vs-B and then B-vs-C only measures C. Iterations of the two sides
 # are interleaved (baseline, current, baseline, current, ...) so machine drift --
 # thermals, other tenants -- hits both sides equally instead of biasing one.
@@ -43,9 +52,11 @@
 #   WORK_ROOT=<dir>           worktrees + build trees, large and disposable
 #                             (default: /tmp/tt-llk-perf-compare)
 #   PRODUCER_JOBS / CONSUMER_JOBS   pytest -n for each phase (default 10 / 15).
-#                             Keep these constant across the commits you compare:
-#                             they are not part of the cache key, so changing them
-#                             mid-comparison silently compares unlike runs.
+#                             CONSUMER_JOBS is part of the cache key. CONSUMER_JOBS=1
+#                             runs the configs in one fixed order on one worker.
+#   TT_LLK_DISABLE_ASSERTS    default 1, as CI; part of the cache key
+#   LOCK_FILE / LOCK_TIMEOUT  the card lock, shared with run_test.sh
+#                             (default /tmp/tt-llk-test-<arch>.lock, 3600 s)
 #   RESET_BETWEEN_RUNS=1      tt-smi -r between iterations
 #   ALLOW_CROSS_HOST=1        reuse cached runs measured on another host (invalid
 #                             comparison; only for inspecting old data)
@@ -93,8 +104,13 @@ Usage: perf_compare_commits.sh <arch> <test> [options]
   --baseline <ref>     what to compare against  (default: merge-base origin/main HEAD)
   --current  <ref>     what to judge            (default: HEAD)
   --iterations <N>     runs per side            (default: 3, median-vs-median)
-  --threshold <T>      relative slowdown that counts  (default: 0.02 = 2%)
+  --threshold <T>      relative slowdown that counts, a fraction
+                       (default: blackhole 0.02, wormhole 0.13, as the merge gate)
+  --module-threshold <m=T,...>  per-module thresholds
+                       (default: wormhole perf_matmul=0.25,perf_math_matmul=0.25)
+  --run-types <list>   run types to measure and compare, or 'all' (default: L1_TO_L1)
   --min-cycles <N>     absolute slowdown it must ALSO exceed, in cycles (default: 30)
+  --code-shift <B>     move the TRISC code by B bytes on both sides (needs LLK_CODE_SHIFT)
   --speed-of-light     compile-time-parameter build; applied to BOTH sides
   --refresh            ignore cached runs and re-measure both sides
   --keep-worktrees     leave the per-commit worktrees behind (for debugging)
@@ -117,11 +133,12 @@ shift 2
 BASELINE_REF=""
 CURRENT_REF="HEAD"
 ITERATIONS=3
-# Measured on a 5-run baseline of unchanged code, not guessed. See
-# docs/perf_evaluation/results/blackhole-nonsol/README.md and the constants in
-# perf/regression_compare.py.
-THRESHOLD=0.02
+# Empty means the merge gate's value for the arch (.github/workflows/merge-gate.yaml).
+THRESHOLD=""
+MODULE_THRESHOLDS="unset"
+RUN_TYPES=L1_TO_L1
 MIN_CYCLES=30
+CODE_SHIFT=0
 SPEED_OF_LIGHT=0
 REFRESH=0
 KEEP_WORKTREES=0
@@ -148,6 +165,18 @@ while [ $# -gt 0 ]; do
         ;;
     --min-cycles)
         MIN_CYCLES="${2:?--min-cycles needs a number}"
+        shift 2
+        ;;
+    --module-threshold)
+        MODULE_THRESHOLDS="${2?--module-threshold needs module=threshold pairs}"
+        shift 2
+        ;;
+    --run-types)
+        RUN_TYPES="${2:?--run-types needs a list or 'all'}"
+        shift 2
+        ;;
+    --code-shift)
+        CODE_SHIFT="${2:?--code-shift needs a byte count}"
         shift 2
         ;;
     --out-dir)
@@ -181,6 +210,22 @@ wormhole | blackhole) ;;
 esac
 
 [[ "$ITERATIONS" =~ ^[1-9][0-9]*$ ]] || die "--iterations must be a positive integer"
+[[ "$CODE_SHIFT" =~ ^[0-9]+$ ]] || die "--code-shift must be a byte count"
+[[ "$RUN_TYPES" =~ ^[A-Z0-9_,]+$|^all$ ]] || die "--run-types must be run type names or 'all'"
+
+if [ -z "$THRESHOLD" ]; then
+    THRESHOLD=$([ "$ARCH" = wormhole ] && echo 0.13 || echo 0.02)
+fi
+if [ "$MODULE_THRESHOLDS" = unset ]; then
+    MODULE_THRESHOLDS=$([ "$ARCH" = wormhole ] && echo perf_matmul=0.25,perf_math_matmul=0.25 || true)
+fi
+awk -v t="$THRESHOLD" 'BEGIN{exit !(t > 0 && t < 1)}' ||
+    die "--threshold is a fraction above 0 and below 1 (0.02 = 2%), got '$THRESHOLD'"
+COMPARE_RUN_TYPES=()
+if [ "$RUN_TYPES" != all ]; then
+    COMPARE_RUN_TYPES=(--run-types "$RUN_TYPES")
+fi
+export TT_LLK_DISABLE_ASSERTS="${TT_LLK_DISABLE_ASSERTS:-1}"
 
 TEST="${TEST%.py}"
 TEST="$(basename "$TEST")"
@@ -191,6 +236,10 @@ if [ "$SPEED_OF_LIGHT" = 1 ]; then
     VARIANT=sol
     PYTEST_VARIANT_ARGS+=(--speed-of-light)
 fi
+# Everything else that changes a measured cycle is in the cache key too.
+VARIANT="$VARIANT-$RUN_TYPES-n$CONSUMER_JOBS"
+[ "$TT_LLK_DISABLE_ASSERTS" = 1 ] || VARIANT="$VARIANT-asserts"
+[ "$CODE_SHIFT" = 0 ] || VARIANT="$VARIANT-p$CODE_SHIFT"
 
 # --- resolve both sides to full commit hashes
 cd "$LLK_PRIMARY"
@@ -213,6 +262,14 @@ CURRENT_SHORT="${CURRENT_SHA:0:12}"
 
 [ "$BASELINE_SHA" != "$CURRENT_SHA" ] ||
     die "both sides resolve to $BASELINE_SHORT -- nothing to compare"
+
+if [ "$CODE_SHIFT" != 0 ]; then
+    for sha in "$BASELINE_SHA" "$CURRENT_SHA"; do
+        git show "$sha:$LLK_RELPATH/tests/python_tests/helpers/test_config.py" 2>/dev/null |
+            grep -q LLK_CODE_SHIFT ||
+            die "${sha:0:12} has no LLK_CODE_SHIFT knob (it comes with #62981); --code-shift cannot move its code"
+    done
+fi
 
 # A ref only ever names a commit, so uncommitted work is invisible here. Say so
 # rather than let someone read the verdict as covering their working tree. .claude/
@@ -237,16 +294,19 @@ cat <<BANNER
   arch          $ARCH
   build         $VARIANT $([ "$SPEED_OF_LIGHT" = 1 ] && echo "(--speed-of-light, applied to BOTH sides)" || echo "(runtime parameters; pass --speed-of-light for the compile-time build)")
   iterations    $ITERATIONS per side, interleaved; median vs median
+  run types     $RUN_TYPES
+  code shift    $CODE_SHIFT B
+  asserts       $([ "$TT_LLK_DISABLE_ASSERTS" = 1 ] && echo "off (TT_LLK_DISABLE_ASSERTS=1, as CI)" || echo on)
 
   baseline      $BASELINE_SHORT  $BASELINE_LABEL
   current       $CURRENT_SHORT  $CURRENT_LABEL
 
   verdict rule  slower by more than $(awk -v t="$THRESHOLD" 'BEGIN{printf "%g", t*100}')% AND more than $MIN_CYCLES cycles
-                Both must hold. The percentage alone fires on small markers such
+                ${MODULE_THRESHOLDS:+per module: $MODULE_THRESHOLDS
+                }Both must hold. The percentage alone fires on small markers such
                 as INIT, where a few cycles of jitter is a large percentage; the
                 cycle count alone fires on large markers, where a real 2% is
-                thousands of cycles. Defaults are measured, not guessed --
-                docs/perf_evaluation/results/blackhole-nonsol/README.md.
+                thousands of cycles. The defaults are the merge gate's.
 
   compared per  (marker, run type, sweep config) -- every row, matched
   measured on   $(hostname)
@@ -343,7 +403,7 @@ ensure_sfpi() {
 
 # --- cache: runs are identified by what can change a measured cycle
 cache_dir_for() {
-    echo "$BASE_HOME/runs/$ARCH/$TEST/$VARIANT/$1"
+    echo "$BASE_HOME/runs-v2/$ARCH/$TEST/$VARIANT/$1"
 }
 
 check_cache_provenance() {
@@ -386,7 +446,7 @@ measure_iteration() {
     local sha="$1" wt="$2" side="$3" out_csv="$4"
     local llk="$wt/$LLK_RELPATH"
     local perf_data="$llk/perf_data"
-    local build_root="$WORK_ROOT/build-${sha:0:12}"
+    local build_root="$WORK_ROOT/build-${sha:0:12}-p$CODE_SHIFT"
     local test_file="$llk/tests/python_tests/$TEST.py"
 
     if [ ! -f "$test_file" ]; then
@@ -403,12 +463,16 @@ measure_iteration() {
         export LLK_HOME="$llk"
         export RUNNER_TEMP="$build_root" # -> ARTEFACTS_DIR, private per commit
         export CHIP_ARCH="$ARCH"
+        export LLK_PERF_RUN_TYPES="${RUN_TYPES/#all/}"
+        if [ "$CODE_SHIFT" != 0 ]; then
+            export LLK_CODE_SHIFT="$CODE_SHIFT"
+        fi
         # No -x: it aborts mid-sweep and the combined CSV is silently partial.
         pytest -q --override-ini=log_cli=false --compile-producer \
             -n "$PRODUCER_JOBS" -m perf \
             ${PYTEST_VARIANT_ARGS+"${PYTEST_VARIANT_ARGS[@]}"} "./$TEST.py"
         pytest -q --override-ini=log_cli=false --compile-consumer \
-            -n "$CONSUMER_JOBS" -m perf \
+            --dist loadgroup -n "$CONSUMER_JOBS" -m perf \
             ${PYTEST_VARIANT_ARGS+"${PYTEST_VARIANT_ARGS[@]}"} "./$TEST.py"
     )
 
@@ -426,6 +490,7 @@ measure_iteration() {
         die "no perf CSV from ${sha:0:12} (${side}). Was every case deselected -- does
        $TEST carry the 'perf' marker?"
     fi
+    mkdir -p "$(dirname "$out_csv")"
     cp "$csv" "$out_csv"
 }
 
@@ -442,19 +507,31 @@ check_cache_provenance "$CURRENT_CACHE"
 missing_for() {
     local dir="$1" i
     for i in $(seq 1 "$ITERATIONS"); do
-        [ -f "$dir/run_$i.csv" ] || echo "$i"
+        [ -f "$dir/run_$i/$TEST.csv" ] || echo "$i"
     done
 }
 BASELINE_MISSING=($(missing_for "$BASELINE_CACHE"))
 CURRENT_MISSING=($(missing_for "$CURRENT_CACHE"))
 
-cached_count() { find "$1" -name 'run_*.csv' | wc -l | tr -d ' '; }
+cached_count() { find "$1" -path '*/run_*/*.csv' | wc -l | tr -d ' '; }
 echo "   cached: baseline $(cached_count "$BASELINE_CACHE") run(s), current $(cached_count "$CURRENT_CACHE") run(s)"
 echo "   to run: baseline ${#BASELINE_MISSING[@]} sweep(s), current ${#CURRENT_MISSING[@]} sweep(s)"
 
 if [ "$DRY_RUN" = 1 ]; then
     echo "== dry run, stopping here"
     exit 0
+fi
+
+# One sweep on the card at a time: two at once measure each other and share the
+# worktrees and the cache. The lock file is the one run_test.sh takes.
+if [ $((${#BASELINE_MISSING[@]} + ${#CURRENT_MISSING[@]})) -gt 0 ]; then
+    if command -v flock >/dev/null; then
+        exec 9>"${LOCK_FILE:-/tmp/tt-llk-test-$ARCH.lock}"
+        echo "   waiting for the $ARCH card lock"
+        flock -w "${LOCK_TIMEOUT:-3600}" 9 || die "the $ARCH card is busy (lock ${LOCK_FILE:-/tmp/tt-llk-test-$ARCH.lock})"
+    else
+        echo "warning: no flock; nothing stops a second sweep on the same card" >&2
+    fi
 fi
 
 if [ ${#BASELINE_MISSING[@]} -gt 0 ]; then
@@ -478,19 +555,19 @@ DONE=0
 for i in $(seq 1 "$ITERATIONS"); do
     for side in baseline current; do
         if [ "$side" = baseline ]; then
-            if [ -f "$BASELINE_CACHE/run_$i.csv" ]; then
+            if [ -f "$BASELINE_CACHE/run_$i/$TEST.csv" ]; then
                 continue
             fi
             sha="$BASELINE_SHA" wt="$BASELINE_WT" cache="$BASELINE_CACHE"
         else
-            if [ -f "$CURRENT_CACHE/run_$i.csv" ]; then
+            if [ -f "$CURRENT_CACHE/run_$i/$TEST.csv" ]; then
                 continue
             fi
             sha="$CURRENT_SHA" wt="$CURRENT_WT" cache="$CURRENT_CACHE"
         fi
         DONE=$((DONE + 1))
         echo "== [$DONE/$TOTAL] $side ${sha:0:12}, iteration $i ($(date -u +%H:%M:%SZ))"
-        measure_iteration "$sha" "$wt" "$side" "$cache/run_$i.csv"
+        measure_iteration "$sha" "$wt" "$side" "$cache/run_$i/$TEST.csv"
         if [ -n "${RESET_BETWEEN_RUNS:-}" ] && [ "$DONE" -lt "$TOTAL" ]; then
             tt-smi -r
         fi
@@ -502,12 +579,15 @@ done
 echo "== comparing"
 set +e
 python3 "$COMPARE_PY" \
-    --baseline "$BASELINE_CACHE/run_*.csv" \
-    --current "$CURRENT_CACHE/run_*.csv" \
+    --baseline "$BASELINE_CACHE/run_*/$TEST.csv" \
+    --current "$CURRENT_CACHE/run_*/$TEST.csv" \
     --threshold "$THRESHOLD" \
     --min-cycles "$MIN_CYCLES" \
+    --module-threshold "$MODULE_THRESHOLDS" \
+    ${COMPARE_RUN_TYPES+"${COMPARE_RUN_TYPES[@]}"} \
     --report "$REPORT_DIR/regression_report.md" \
     --test "$TEST" \
+    --arch "$ARCH" \
     --baseline-sha "$BASELINE_SHA" --current-sha "$CURRENT_SHA" \
     --baseline-label "$BASELINE_LABEL" --current-label "$CURRENT_LABEL"
 STATUS=$?

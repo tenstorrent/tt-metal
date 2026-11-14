@@ -1,6 +1,9 @@
 # perf-regression-check
 
-Compare **one LLK perf test between two commits** on your machine, before you push.
+Compare **one LLK perf test between two commits** on your machine, before you push. This is
+the default perf check; the CI perf gate is for when no card is attached, or for the final
+confirmation. AI assistants can run it through the `llk-tools` MCP server
+(`tools/mcp/README.md`).
 
 By default it compares your **HEAD** against **`git merge-base origin/main HEAD`** — the commit
 you branched off, *not* latest main. Name any two refs and it compares those instead.
@@ -30,8 +33,11 @@ In Claude Code, `/perf-regression-check perf_math_matmul` (or "compare perf of
 | `--baseline <ref>` | `merge-base origin/main HEAD` | what to compare against |
 | `--current <ref>` | `HEAD` | what to judge |
 | `--iterations <N>` | `3` | sweeps per side; median-vs-median |
-| `--threshold <T>` | `0.02` | 2% — flagged in both directions |
+| `--threshold <T>` | BH `0.02`, WH `0.13` | the merge gate's; flagged in both directions |
+| `--module-threshold <m=T,...>` | WH `perf_matmul=0.25,perf_math_matmul=0.25` | per-module thresholds |
+| `--run-types <list>` | `L1_TO_L1` | run types to measure and compare; `all` for every one |
 | `--min-cycles <N>` | `30` | a point must ALSO move this many cycles; `0` disables |
+| `--code-shift <B>` | `0` | move the TRISC code by B bytes on both sides (stage 2; needs #62981) |
 | `--speed-of-light` | off | compile-time-parameter build, applied to both sides |
 | `--refresh` | off | ignore cached runs and re-measure |
 | `--dry-run` | off | resolve refs, report the plan, measure nothing |
@@ -39,7 +45,9 @@ In Claude Code, `/perf-regression-check perf_math_matmul` (or "compare perf of
 
 Env knobs: `PERF_COMPARE_HOME` (cache + reports, default `~/.cache/tt-llk-perf-compare`),
 `WORK_ROOT` (worktrees and build trees, default `/tmp/tt-llk-perf-compare`), `PRODUCER_JOBS`,
-`CONSUMER_JOBS`, `RESET_BETWEEN_RUNS=1`, `SPARSE_PATHS`, `ALLOW_CROSS_HOST=1`.
+`CONSUMER_JOBS` (part of the cache key; `1` runs one fixed order), `RESET_BETWEEN_RUNS=1`,
+`SPARSE_PATHS`, `ALLOW_CROSS_HOST=1`, `TT_LLK_DISABLE_ASSERTS` (default `1`, as CI),
+`LOCK_FILE` / `LOCK_TIMEOUT` (the card lock shared with `run_test.sh`).
 
 ## Output
 - `regression_report.md` — verdict, top regressions, top improvements, new points.
@@ -54,7 +62,11 @@ Env knobs: `PERF_COMPARE_HOME` (cache + reports, default `~/.cache/tt-llk-perf-c
   a baseline. If the test's sweep changed, expect "new points" (no baseline; never counted as
   regressions).
 - **Noise:** deltas right at the threshold can be measurement noise. Raise `--iterations` — a
-  re-run reuses the sweeps you already paid for and only measures the new ones.
+  re-run reuses the sweeps you already paid for and only measures the new ones. Wormhole on
+  main moves with test order until #60892, #58068 and #60894 are merged; repeat, or use
+  `CONSUMER_JOBS=1`, before you call a Wormhole move a regression.
+- **Placement:** run the same compare with `--code-shift 4`, `24`, `44` and `60`. A move at
+  every position is a regression; a move at some positions only is placement.
 
 ## Cost
 A full sweep per side per iteration, plus a build per commit — for a test like
