@@ -84,6 +84,10 @@ the same file the ttnn simulator jobs use.
 and passes the matching entries to pytest as `--deselect`. A plain
 `pytest` command does not consult the file.
 
+Before adding an entry, read the rules at the top of the skip list. A
+ttsim refusal is normally fixed in the kernel or the test, or by a
+ttsim release that models the feature, not by a skip.
+
 LLK entries are pytest node ids from the repo root, and they have to
 start with `tt_metal/tt-llk/tests/python_tests/`. The script drops that
 prefix, because this suite collects with `python_tests/` as its root.
@@ -131,8 +135,8 @@ the build CI runs.
   `UnimplementedFunctionality` errors from the simulator. See the
   [ttsim README](https://github.com/tenstorrent/ttsim) for the error
   taxonomy, and file a bug against the ttsim repo with a minimal repro
-  if you hit one. A gap that should not fail the Quasar PR gate belongs
-  on the skip list above; the weekly run still executes it.
+  if you hit one. Rule 3 at the top of the skip list says what a test
+  that needs the feature does meanwhile.
 - **Performance.** ttsim is substantially slower than silicon for
   individual tests. Use it for correctness and CI coverage, not
   performance measurements.
