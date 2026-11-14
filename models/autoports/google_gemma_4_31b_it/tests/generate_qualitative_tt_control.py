@@ -24,7 +24,12 @@ def main():
     )
     parser.add_argument("--max-new-tokens", type=int, default=256)
     parser.add_argument("--context", type=int, default=4096)
+    parser.add_argument("--build-kwargs-file", type=Path, help="Explicit candidate construction overrides")
     args = parser.parse_args()
+    build_kwargs = json.loads(args.build_kwargs_file.read_text()) if args.build_kwargs_file else {}
+    build_kwargs = {"batch_size": 1, "max_seq_len": args.context, **build_kwargs}
+    if build_kwargs["batch_size"] != 1:
+        parser.error("Standalone qualitative control requires batch1")
     assert args.max_new_tokens > 0
     args.output_dir.mkdir(parents=True, exist_ok=True)
     prompt_source = Path(readiness_check.__file__).parent / "vllm_prompts.txt"
@@ -39,7 +44,7 @@ def main():
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 4), trace_region_size=128 * 1024 * 1024)
     gen = None
     try:
-        gen = Gemma4Generator(mesh, batch_size=1, max_seq_len=args.context)
+        gen = Gemma4Generator(mesh, **build_kwargs)
         assert len(gen.model.layers) == 60 and list(gen.model.layer_indices) == list(range(60))
         assert gen.tokenizer.chat_template
         cases = []
@@ -78,7 +83,8 @@ def main():
             "mesh": [1, 4],
             "batch_size": 1,
             "concurrency": 1,
-            "context": args.context,
+            "context": gen.context,
+            "build_kwargs": build_kwargs,
             "max_new_tokens": args.max_new_tokens,
             "eos_token_ids": sorted(gen.eos_token_ids),
             "profiles": profiles,
