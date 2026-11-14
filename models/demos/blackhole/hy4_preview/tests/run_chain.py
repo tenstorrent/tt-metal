@@ -176,6 +176,32 @@ def main():
             for t in (taps or {}).values():
                 ttnn.deallocate(t)
             ch.reset()
+        if os.environ.get("REPEAT", "0") != "0" and NL == 78:
+            # repeated-call gate (coordinator 11-14): >= 5 consecutive prefills with VARYING inputs (each call: a different set of 4 of the 7 short dump prompts on the 4 rows),
+            # each compared with the oracle final hidden / top-1: a first-call-only pass is not enough (moe-prefill allocator hazard)
+            fin = json.load(open(f"{DUMPS}/final.json"))
+            for k in range(int(os.environ["REPEAT"])):
+                sel = [(k * 3 + r) % 7 for r in range(4)]
+                ids = torch.full((4, CHUNK), PAD, dtype=torch.long)
+                lns = []
+                for r in range(4):
+                    ids[r, : len(ids_all[sel[r]])] = torch.tensor(ids_all[sel[r]])
+                    lns.append(len(ids_all[sel[r]]))
+                x4, _ = ch.prefill(ids)
+                hn, logits = ch.head(x4)
+                hn_rows = to_rows(hn, md)
+                lg = ttnn.to_torch(
+                    logits, mesh_composer=ttnn.ConcatMesh2dToTensor(md, dims=(0, 3), mesh_shape=tuple(md.shape))
+                )
+                lg = lg.reshape(4, CHUNK, -1).float()
+                pcs, t1 = [], []
+                for r in range(4):
+                    fh = torch.load(f"{DUMPS}/final_hidden_p{sel[r]}.pt")["final_normed"][0]
+                    pcs.append(round(pcc(hn_rows[r].reshape(CHUNK, -1)[: lns[r]].float(), fh), 5))
+                    t1.append(int(lg[r, lns[r] - 1].argmax()) == fin[sel[r]]["last_top5"][0])
+                res(test="repeat", call=k, prompts=sel, hidden_pcc=pcs, top1=t1)
+                ttnn.deallocate(x4)
+                ch.reset()
         if TEST in ("long", "both"):
             ids_l = ids_all[7]
             S = len(ids_l)
