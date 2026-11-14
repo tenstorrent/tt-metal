@@ -1271,8 +1271,7 @@ class TestLauncherSelection:
         """Opting into ULFM stays possible through --mpi-args."""
         import subprocess
 
-        with patch.object(subprocess, "run") as mock_subprocess:
-            mock_subprocess.return_value.returncode = 0
+        with patch("ttnn.distributed.ttrun.run_launcher", return_value=0) as mock_launch:
             result = runner.invoke(
                 main,
                 [
@@ -1286,7 +1285,7 @@ class TestLauncherSelection:
                 ],
             )
             assert result.exit_code == 0, result.output
-            launched = mock_subprocess.call_args[0][0]
+            launched = mock_launch.call_args[0][0]
             assert Path(launched[0]).name != "mpirun-ulfm"
             assert launched[launched.index("--with-ft") + 1] == "ulfm"
 
@@ -1333,3 +1332,146 @@ class TestRankFailurePropagation:
     def test_all_ranks_succeed_passes(self, runner, sample_rank_binding_yaml):
         result = self._run(runner, sample_rank_binding_yaml, "pass")
         assert result.exit_code == 0, result.output
+
+
+class TestJobOwnership:
+    """tt-run owns the job (teardown plan P5, P6, P7, P19): the wall clock on the mpirun line when asked for, signals
+    forwarded to the launcher, leftovers ended and reported."""
+
+    def test_ttrun_adds_no_timeout_of_its_own(self, sample_rank_binding_yaml):
+        from ttnn.distributed.ttrun import build_mpi_command, parse_binding_config
+
+        # The overall wall clock is PRRTE's own --timeout, reached only through --mpi-args; tt-run never adds one.
+        config = parse_binding_config(sample_rank_binding_yaml)
+        cmd = build_mpi_command(config, ["echo"], mpi_args=["--oversubscribe"])
+        assert "--timeout" not in cmd
+
+    def test_user_timeout_in_mpi_args_is_passed_through(self, sample_rank_binding_yaml):
+        from ttnn.distributed.ttrun import build_mpi_command, parse_binding_config
+
+        # --mpi-args "--timeout N" reaches the mpirun line verbatim, exactly once, with nothing tt-run invents.
+        config = parse_binding_config(sample_rank_binding_yaml)
+        cmd = build_mpi_command(config, ["echo"], mpi_args=["--oversubscribe", "--timeout", "90"])
+        assert cmd.count("--timeout") == 1
+        assert cmd[cmd.index("--timeout") + 1] == "90"
+
+    def test_run_launcher_preserves_the_timeout_exit_code(self):
+        from ttnn.distributed.ttrun import PRTE_TIMEOUT_EXIT_CODE, run_launcher
+
+        # A launcher that exits with PRRTE's timeout code and leaves nothing: tt-run returns it unchanged, never
+        # reclassified as 0 or as a tt-run failure.
+        rc = run_launcher(["bash", "-c", f"exit {PRTE_TIMEOUT_EXIT_CODE}"], cwd=Path.cwd())
+        assert rc == PRTE_TIMEOUT_EXIT_CODE
+
+    def test_run_launcher_passes_a_rank_failure_code_through(self):
+        from ttnn.distributed.ttrun import run_launcher
+
+        # A launcher that reports a rank's non-zero code with nothing left: the code is the truth, returned as is.
+        rc = run_launcher(["bash", "-c", "exit 7"], cwd=Path.cwd())
+        assert rc == 7
+
+    def test_run_launcher_forwards_sigterm_and_reports_it(self):
+        import signal
+        import threading
+        import time
+
+        from ttnn.distributed.ttrun import run_launcher
+
+        # a launcher that would run for a long time; SIGTERM at tt-run must reach it and end the wait quickly
+        def later():
+            time.sleep(0.5)
+            os.kill(os.getpid(), signal.SIGTERM)
+
+        threading.Thread(target=later, daemon=True).start()
+        t0 = time.time()
+        rc = run_launcher(["sleep", "30"], cwd=Path.cwd())
+        assert time.time() - t0 < 5
+        assert rc == 128 + signal.SIGTERM
+
+    def test_run_launcher_ends_leftovers_and_fails_the_job(self):
+        import time
+
+        from ttnn.distributed.ttrun import run_launcher
+
+        # like PRRTE's ranks: a child that stays in the launcher's session (only the process group differs)
+        t0 = time.time()
+        rc = run_launcher(["bash", "-c", "sleep 30 & disown; sleep 0.2; exit 0"], cwd=Path.cwd())
+        assert rc != 0
+        assert time.time() - t0 < 10
+
+    @staticmethod
+    def _logged(fn):
+        """Run fn and return what tt-run logged (loguru, so caplog does not see it)."""
+        from loguru import logger
+
+        lines = []
+        sink = logger.add(lambda m: lines.append(str(m)), level="INFO")
+        try:
+            fn()
+        finally:
+            logger.remove(sink)
+        return "".join(lines)
+
+    def test_explain_phase2_exit_names_a_signal_death_and_skips_the_generic_hint(self):
+        import signal
+
+        from ttnn.distributed.ttrun import PRTE_TIMEOUT_EXIT_CODE, explain_phase2_exit
+
+        # A rank died by a signal: one line names the signal and the code; the cache / descriptor hint is not logged,
+        # because a dead rank is not a stale cache.
+        text = self._logged(lambda: explain_phase2_exit(128 + signal.SIGKILL, [], "legacy"))
+        assert "died by signal 9 (SIGKILL)" in text
+        assert "returns 137" in text
+        assert "golden" not in text.lower()
+        # The wall clock: run_launcher already said so; nothing more is logged.
+        assert self._logged(lambda: explain_phase2_exit(PRTE_TIMEOUT_EXIT_CODE, [], "legacy")) == ""
+
+    def test_explain_phase2_exit_names_a_missing_tcp_interface(self):
+        from ttnn.distributed.ttrun import explain_phase2_exit
+
+        ttrun_module = sys.modules["ttnn.distributed.ttrun"]
+        # The ranks were pinned to an interface this host does not have (a typo in --tcp-interface, or a hand-written
+        # --mca btl_tcp_if_include): MPI_Init fails on every rank and the launcher returns 14. tt-run says which
+        # interface, which ones exist, and what to change, instead of the generic hint.
+        with patch.object(ttrun_module, "get_local_network_interfaces", return_value={"eth0", "lo"}):
+            text = self._logged(lambda: explain_phase2_exit(14, ["--mca", "btl_tcp_if_include", "nosuchif"], "legacy"))
+            assert "TCP interface 'nosuchif'" in text
+            assert "eth0, lo" in text
+            assert "golden" not in text.lower()
+            # The same code with an interface that exists is not an interface problem: the generic hint stays.
+            text = self._logged(lambda: explain_phase2_exit(14, ["--mca", "btl_tcp_if_include", "eth0"], "legacy"))
+            assert "TCP interface" not in text
+            assert "golden" in text.lower()
+
+    def test_sweep_removes_a_stale_shm_segment_but_keeps_a_mapped_one(self):
+        import mmap
+        import socket
+
+        from ttnn.distributed.ttrun import remove_stale_mpi_shm_segments
+
+        # The third piece of P11: before launching, tt-run removes this user's Open MPI shared-memory segments
+        # that no live process maps (what a killed job leaves behind), and keeps the ones a running job still maps.
+        host, uid = socket.gethostname(), os.getuid()
+        stale = Path(f"/dev/shm/sm_segment.{host}.{uid}.ttrun_pytest_stale_{os.getpid()}")
+        live = Path(f"/dev/shm/sm_segment.{host}.{uid}.ttrun_pytest_live_{os.getpid()}")
+        mm = fd = None
+        try:
+            stale.write_bytes(b"\0" * 4096)  # a leftover nobody maps
+            fd = os.open(str(live), os.O_RDWR | os.O_CREAT, 0o600)  # a segment this process maps, like a live job
+            os.ftruncate(fd, 4096)
+            mm = mmap.mmap(fd, 4096)
+
+            remove_stale_mpi_shm_segments()
+
+            assert not stale.exists(), "the stale segment was not removed"
+            assert live.exists(), "a segment a live process maps must be kept"
+        finally:
+            if mm is not None:
+                mm.close()
+            if fd is not None:
+                os.close(fd)
+            for p in (stale, live):
+                try:
+                    p.unlink()
+                except OSError:
+                    pass

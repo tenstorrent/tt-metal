@@ -15,7 +15,9 @@ run_dual_t3k_unit_tests() {
   echo "LOG_METAL: Running run_dual_t3k_unit_tests"
 
   local tcp_interface="cnx1"
-  local mpirun_args="--hostfile /etc/mpirun/hostfile --mca btl_tcp_if_exclude docker0,lo"
+  # --mca btl self,tcp: the transport line tt-run uses; the shared-memory layer leaks its segments on every killed
+  # job and changes what the survivors of a dead rank see (teardown plan P11, P15)
+  local mpirun_args="--hostfile /etc/mpirun/hostfile --mca btl self,tcp --mca btl_tcp_if_exclude docker0,lo"
   local hosts
   # Extract hostnames: skip comment lines (#), empty lines; take first column (hostname) from "host slots=N" format
   # Strip trailing 'e' from hostnames (e.g. f10cs04e -> f10cs04) for canonical hostname

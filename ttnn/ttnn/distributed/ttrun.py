@@ -6,15 +6,20 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import importlib.util
 import json
 import os
 import re
+import glob
 import shlex
 import shutil
+import signal
+import socket
 import subprocess
 import sys
+import time
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,6 +34,175 @@ from pydantic import BaseModel, Field, ValidationError, ValidationInfo, field_va
 TT_RUN_PREFIX = "[tt-run]"
 DEFAULT_LD_LIBRARY_PATH = "{home}/build/lib"
 INTERRUPTED_EXIT_CODE = 130  # 128 + SIGINT
+
+# The overall job wall clock (teardown plan P5) is PRRTE's own --timeout, reached only through --mpi-args
+# ("--timeout N [--report-state-on-timeout]"); tt-run adds no clock of its own, so a long-running job is never cut
+# off. PRRTE's --timeout is a single timer on the whole job, not on any one MPI call: when it expires it ends every
+# rank on every host and the launcher returns this code. tt-run passes it through verbatim and, below, reports that
+# exit as the launcher's own timeout rather than a tt-run failure. A specific collective that hangs is bounded in
+# the DistributedContext instead (the per-call operation timeout, plan P16).
+PRTE_TIMEOUT_EXIT_CODE = 241
+
+
+def remove_stale_mpi_shm_segments() -> int:
+    """Remove this user's Open MPI shared-memory segments that no live process maps (teardown plan P11): what a
+    killed job leaves in /dev/shm, 16 MB each, until reboot. Segments of running jobs are mapped and kept. A
+    ``LaunchedJob`` runs this before it launches (clear a prior job's leak) and again in its teardown (its own)."""
+    host = socket.gethostname()
+    mine = glob.glob(f"/dev/shm/sm_segment.{host}.{os.getuid()}.*")
+    if not mine:
+        return 0
+    mapped = set()
+    for d in os.listdir("/proc"):
+        if not d.isdigit():
+            continue
+        try:
+            with open(f"/proc/{d}/maps") as fh:
+                for line in fh:
+                    if "sm_segment." in line:
+                        mapped.add(line.rsplit(" ", 1)[1].strip())
+        except OSError:
+            continue
+    removed = 0
+    for seg in mine:
+        if seg in mapped:
+            continue
+        try:
+            os.unlink(seg)
+            removed += 1
+        except OSError:
+            pass
+    if removed:
+        logger.info(f"{TT_RUN_PREFIX} removed {removed} stale shared-memory segment(s) of this user from /dev/shm")
+    return removed
+
+
+class LaunchedJob:
+    """Owns one MPI launcher for the life of a job and cleans up after it (teardown plan P6, P7, P19, P11).
+
+    A context manager. ``__enter__`` clears a prior killed job's /dev/shm leak, starts the launcher in its own
+    session, forwards SIGINT/SIGTERM to it (PRRTE then ends every rank on every host), and REGISTERS the teardown
+    as it goes. ``__exit__`` runs that teardown, always — on the normal path and when the body raises — in reverse
+    of registration: restore the signal handlers, end any rank the launcher left on this host (SIGTERM then
+    SIGKILL), then clear this job's /dev/shm leak. The launcher itself is never SIGKILLed; PRRTE tears the ranks
+    down, and the process-end step is only the last resort for ranks it failed to reap.
+    """
+
+    def __init__(self, cmd: List[str], cwd: Path):
+        self.cmd = cmd
+        self.cwd = cwd
+        self.proc = None
+        self.sid = -1
+        self.pgid = -1
+        self.forwarded: List[int] = []
+        self.ended: List[int] = []  # ranks the teardown had to end itself (the launcher should have)
+        self._previous_handlers: dict = {}
+        self._teardown = contextlib.ExitStack()
+
+    def __enter__(self) -> "LaunchedJob":
+        remove_stale_mpi_shm_segments()  # before launch: clear a prior killed job's /dev/shm leak
+        self.proc = subprocess.Popen(self.cmd, cwd=self.cwd, start_new_session=True)
+        # Capture the session and process group WHILE the launcher is alive, so the sweep can find its ranks even if
+        # it re-sessioned or was reaped before we look.
+        try:
+            self.sid, self.pgid = os.getsid(self.proc.pid), os.getpgid(self.proc.pid)
+        except (ProcessLookupError, OSError):
+            self.sid = self.pgid = self.proc.pid
+        self._previous_handlers = {s: signal.signal(s, self._relay) for s in (signal.SIGINT, signal.SIGTERM)}
+        # Register the teardown. ExitStack runs these LIFO in __exit__, so the order below reads as the teardown:
+        # restore handlers, then end survivors, then sweep this job's shm.
+        self._teardown.callback(remove_stale_mpi_shm_segments)
+        self._teardown.callback(self._end_survivors)
+        self._teardown.callback(self._restore_handlers)
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self._teardown.close()
+
+    def _relay(self, signum, frame) -> None:
+        self.forwarded.append(signum)
+        logger.warning(
+            f"{TT_RUN_PREFIX} {signal.Signals(signum).name} received, forwarding to the launcher (pid {self.proc.pid})"
+        )
+        try:
+            self.proc.send_signal(signum)
+        except ProcessLookupError:
+            pass
+
+    def _restore_handlers(self) -> None:
+        for s, h in self._previous_handlers.items():
+            signal.signal(s, h)
+
+    def wait(self) -> int:
+        """Wait for the launcher; return its exit code, a death by signal normalized to the shell's 128 + signum."""
+        rc = self.proc.wait()
+        return 128 - rc if rc < 0 else rc
+
+    def _survivors(self) -> List[int]:
+        """Live pids of this job on this host — session id catches the ranks, process group catches a re-sessioned
+        launcher — excluding this harness and the launcher itself. Best effort: /proc is racy."""
+        out = []
+        for d in os.listdir("/proc"):
+            if not d.isdigit():
+                continue
+            try:
+                with open(f"/proc/{d}/stat") as fh:
+                    fields = fh.read().rsplit(")", 1)[1].split()
+                pgrp, session = int(fields[2]), int(fields[3])  # after comm: state ppid pgrp session ...
+                pid = int(d)
+                if (session == self.sid or pgrp == self.pgid) and pid != os.getpid() and pid != self.proc.pid:
+                    out.append(pid)
+            except (OSError, IndexError, ValueError):
+                continue
+        return out
+
+    def _end_survivors(self, grace_s: float = 2.0) -> None:
+        """Teardown step: end any rank the launcher left alive on this host (SIGTERM, then SIGKILL what remains).
+        Records what it had to end on ``self.ended`` so the caller can classify the exit code."""
+        survivors = self._survivors()
+        if not survivors:
+            return
+        logger.error(
+            f"{TT_RUN_PREFIX} the launcher left {len(survivors)} process(es) of its job alive on this host: "
+            f"{survivors}; ending them (last resort; the launcher should have torn the job down itself)"
+        )
+        self.ended = list(survivors)
+        for sig in (signal.SIGTERM, signal.SIGKILL):
+            for pid in survivors:
+                try:
+                    os.kill(pid, sig)
+                except ProcessLookupError:
+                    pass
+            end = time.time() + grace_s
+            while time.time() < end and any(os.path.exists(f"/proc/{pid}") for pid in survivors):
+                time.sleep(0.1)
+            survivors = [pid for pid in survivors if os.path.exists(f"/proc/{pid}")]
+            if not survivors:
+                return
+
+
+def run_launcher(cmd: List[str], cwd: Path) -> int:
+    """Start the MPI launcher and own it until the job is gone (teardown plan P6, P7, P19). The LaunchedJob context
+    manager starts it in its own session, forwards SIGINT/SIGTERM, and on exit tears the job down (ends leftover
+    ranks, clears shm). This applies the exit-code contract: one rank fails, the whole job fails, with a truthful
+    code. The launcher's own code is kept — a rank's code, a signal, or PRRTE's --timeout code (241, a clean
+    timeout: PRRTE already ended every rank) — but tt-run never returns 0 while a rank it started was left alive
+    (P19), and a signal tt-run forwarded that the launcher swallowed is reported.
+    """
+    with LaunchedJob(cmd, cwd) as job:
+        rc = job.wait()
+    # __exit__ has torn the job down (handlers restored, leftover ranks ended, shm swept). Classify the result.
+    if rc == PRTE_TIMEOUT_EXIT_CODE:
+        logger.warning(
+            f"{TT_RUN_PREFIX} the job hit its PRRTE --timeout wall clock (exit {rc}); the launcher ended every rank"
+        )
+    if job.ended and rc == 0:  # the launcher reported success but left ranks alive -> a failure
+        rc = 1
+    if job.forwarded and rc == 0:  # signalled and forwarded, but the launcher still reported success
+        rc = 128 + job.forwarded[0]
+    return rc
+
+
 PRETTY_PRINT_THRESHOLD = 10  # Minimum args to trigger multi-line formatting
 RANKFILE_LINE_PATTERN = re.compile(r"^\s*rank\s+\d+\s*=\s*([^\s]+)\s+slot\s*=.*$", re.IGNORECASE)
 MPI_HOST_FLAGS = ("--host", "-host", "--hostfile", "-hostfile", "--default-hostfile")
@@ -68,6 +242,49 @@ def _emit_phase2_troubleshooting_hint(hint: Phase2FailureHint) -> None:
     text = _phase2_troubleshooting_hint_text(hint)
     if text:
         logger.warning(f"{TT_RUN_PREFIX} {text}")
+
+
+def _tcp_interface_in_mpi_args(mpi_args: Optional[List[str]]) -> Optional[str]:
+    """The interface the ranks' TCP transport is pinned to by ``--mca btl_tcp_if_include <iface>`` in the MPI
+    arguments (what ``--tcp-interface`` becomes, or what a user passed by hand), or None."""
+    args = list(mpi_args or [])
+    for i, a in enumerate(args):
+        if a in ("--mca", "-mca") and i + 2 < len(args) and args[i + 1] == "btl_tcp_if_include":
+            return args[i + 2]
+    return None
+
+
+def explain_phase2_exit(rc: int, mpi_args: Optional[List[str]], hint: Phase2FailureHint) -> None:
+    """One line that says why the job ended, before any generic hint. The launcher's code tells most of it: a
+    rank died by a signal (128 + signal), the wall clock fired (241, already reported by run_launcher), or the
+    ranks never started because the TCP interface they were pinned to does not exist on this host (MPI_Init
+    fails on every rank, exit 14). Only when none of those apply does the generic cache / descriptor hint make
+    sense, so it is logged last and only then."""
+    if rc == PRTE_TIMEOUT_EXIT_CODE:
+        return  # run_launcher has already said the job hit its wall clock
+    if rc > 128:
+        signum = rc - 128
+        try:
+            name = signal.Signals(signum).name
+        except ValueError:
+            name = "unknown signal"
+        logger.error(
+            f"{TT_RUN_PREFIX} the job ended because a rank died by signal {signum} ({name}); the launcher ended the "
+            f"other ranks and tt-run returns {rc}. The rank's own output above says which rank and why."
+        )
+        return
+    iface = _tcp_interface_in_mpi_args(mpi_args)
+    if iface:
+        local = get_local_network_interfaces()
+        if local and iface not in local:
+            logger.error(
+                f"{TT_RUN_PREFIX} the ranks could not start: the TCP interface '{iface}' they are pinned to "
+                f"(--tcp-interface, or --mca btl_tcp_if_include) does not exist on this host; MPI_Init fails on every "
+                f"rank and the launcher returns {rc}. Interfaces on this host: {', '.join(sorted(local))}. Fix the "
+                f"interface name, or drop --tcp-interface to let MPI use any interface except docker0 and lo."
+            )
+            return
+    _emit_phase2_troubleshooting_hint(hint)
 
 
 # Store the original working directory at module load time to preserve it
@@ -1093,6 +1310,8 @@ def run_generate_rank_bindings(cmd: List[str], cwd: Path, subprocess_run=subproc
     Returns:
         Exit code from the subprocess
     """
+    if subprocess_run is subprocess.run:
+        return run_launcher(cmd, cwd=cwd)
     result = subprocess_run(cmd, cwd=cwd)
     return result.returncode if hasattr(result, "returncode") else result
 
@@ -1215,6 +1434,7 @@ def validate_network_interface(interface: str, verbose: bool = False) -> None:
         logger.warning(
             f"{TT_RUN_PREFIX} Network interface '{interface}' not found on local host. "
             f"Available interfaces: {', '.join(sorted(local_interfaces))}. "
+            f"Every rank on this host will fail MPI_Init on it (the job ends with exit 14, not a hang). "
             f"Note: This check only validates the local host; the interface may exist on remote MPI hosts."
         )
     elif verbose:
@@ -2684,15 +2904,10 @@ def legacy_flow(
         logger.info(f"{TT_RUN_PREFIX} (gdb) continue")
 
     try:
-        result = subprocess.run(mpi_cmd, cwd=ORIGINAL_CWD)
-        if result.returncode != 0:
-            _emit_phase2_troubleshooting_hint(phase2_failure_hint)
-        sys.exit(result.returncode)
-    except KeyboardInterrupt:
-        # Handle Ctrl+C gracefully with proper exit code (128 + SIGINT)
-        logger.error(f"{TT_RUN_PREFIX} Interrupted")
-        _emit_phase2_troubleshooting_hint(phase2_failure_hint)
-        sys.exit(INTERRUPTED_EXIT_CODE)
+        rc = run_launcher(mpi_cmd, cwd=ORIGINAL_CWD)  # run_launcher clears stale /dev/shm as its first step
+        if rc != 0:
+            explain_phase2_exit(rc, effective_mpi_args, phase2_failure_hint)
+        sys.exit(rc)
     except OSError as e:
         t = _phase2_troubleshooting_hint_text(phase2_failure_hint)
         raise click.ClickException(f"Error launching mpirun: {e}" + (f"\n{TT_RUN_PREFIX} {t}" if t else ""))
