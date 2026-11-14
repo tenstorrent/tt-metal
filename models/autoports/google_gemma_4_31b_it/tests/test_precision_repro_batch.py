@@ -14,6 +14,12 @@ class HostGenerator:
 
     def __init__(self):
         self.calls = []
+        self.counters = {"model_replays": 0, "sample_replays": 0, "readbacks": 0}
+
+    def _replay(self):
+        for key in self.counters:
+            self.counters[key] += 1
+        return 2
 
     def _host_logits(self, unused):
         return torch.tensor([[0.0, 1.0, 2.0]])
@@ -23,6 +29,8 @@ class HostGenerator:
         for i in range(length):
             if kwargs.get("next_input"):
                 kwargs["next_input"](i, 2)
+            elif i > 0:
+                self._replay()
         return [2] * length
 
 
@@ -91,3 +99,47 @@ def test_cleanup_closes_mesh_even_if_trace_release_raises(expect_error):
             SimpleNamespace(release_persistent_capture=fail), "mesh", lambda *args: closed.append(args)
         )
     assert closed == [("mesh", "FABRIC_1D_RING")]
+
+
+def test_decode_timing_excludes_prefill_and_includes_host_gaps():
+    from models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch import timed_free_generate
+
+    class Clocked(HostGenerator):
+        now = 0.0
+
+        def _replay(self):
+            self.now += 2.0  # existing synchronous completion
+            return super()._replay()
+
+        def generate(self, prompt, length, **kwargs):
+            self.now += 100.0  # prefill and its first output token
+            tokens = [2]
+            for _ in range(length - 1):
+                tokens.append(self._replay())
+                self.now += 3.0  # Python loop work, including after last completion
+            return tokens
+
+    generator = Clocked()
+    ids, timing = timed_free_generate(generator, [1], 4, {}, clock=lambda: generator.now)
+    assert len(ids) == 4
+    assert timing["decode_tokens"] == 3
+    assert timing["decode_wall_s"] == 12.0  # 2+3+2+3+2, excludes 100 prefill and last gap
+    assert timing["decode_tok_s_user"] == 0.25
+    assert timing["trace_counters_delta"] == {"model_replays": 3, "sample_replays": 3, "readbacks": 3}
+    assert "_replay" not in generator.__dict__
+
+
+def test_decode_timing_restores_override_on_generation_failure(expect_error):
+    from models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch import timed_free_generate
+
+    generator = HostGenerator()
+    original = generator._replay
+    generator._replay = original
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("generate failed")
+
+    generator.generate = fail
+    with expect_error(RuntimeError, "generate failed"):
+        timed_free_generate(generator, [1], 4, {})
+    assert generator._replay is original

@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """Run diagnostic cases serially with one model load; never a serving benchmark."""
+
 import argparse
 import json
 import time
@@ -12,6 +13,46 @@ from models.autoports.google_gemma_4_31b_it.tools.precision_repro_probe import (
     validate_case,
     write_private,
 )
+
+
+def timed_free_generate(generator, prompt, length, sampling, clock=None):
+    """Time existing synchronous token readbacks; introduce no device synchronization."""
+    clock = clock or time.monotonic
+    original = generator._replay
+    had_override = "_replay" in generator.__dict__
+    state = {"calls": 0, "start": None, "end": None, "before": {}, "after": {}}
+
+    def replay(*args, **kwargs):
+        if kwargs.get("host_sampling", False) or not kwargs.get("read_from_device", True):
+            raise ValueError("Decode timing requires canonical sampler and existing token readback")
+        if state["start"] is None:
+            state["before"] = dict(generator.counters)
+            state["start"] = clock()
+        value = original(*args, **kwargs)
+        state["end"] = clock()
+        state["after"] = dict(generator.counters)
+        state["calls"] += 1
+        return value
+
+    generator._replay = replay
+    try:
+        ids = generator.generate(prompt, length, enable_trace=True, buffered=False, sampling_params=sampling)
+    finally:
+        if had_override:
+            generator._replay = original
+        else:
+            del generator._replay
+    seconds = state["end"] - state["start"] if state["calls"] else None
+    metrics = {
+        "decode_tokens": state["calls"],
+        "decode_wall_s": seconds,
+        "decode_tok_s_user": state["calls"] / seconds if seconds and seconds > 0 else None,
+        "trace_counters_before_decode": state["before"],
+        "trace_counters_after_decode": state["after"],
+        "trace_counters_delta": {key: value - state["before"].get(key, 0) for key, value in state["after"].items()},
+        "basis": "Batch1 wall from immediately before first _replay to return after last existing synchronous token-out readback; counts completed replay calls, includes host loop gaps, excludes prefill/first token and text decoding. No added device sync or profiler. Traced diagnostic rate, not serving benchmark.",
+    }
+    return ids, metrics
 
 
 def run_case(generator, job, output_path, compare_path=None):
@@ -84,12 +125,8 @@ def run_case(generator, job, output_path, compare_path=None):
         for trial in range(job.get("free_run_trials", 3)):
             params = dict(metadata["sampling"], seed=metadata.get("seed", 42) + trial)
             trial_start = time.monotonic()
-            ids = generator.generate(
-                case["prompt_token_ids"],
-                job["free_run_tokens"],
-                enable_trace=True,
-                buffered=False,
-                sampling_params=params,
+            ids, decode_timing = timed_free_generate(
+                generator, case["prompt_token_ids"], job["free_run_tokens"], params
             )
             elapsed = time.monotonic() - trial_start
             text = generator.tokenizer.decode(ids, skip_special_tokens=False)
@@ -105,6 +142,7 @@ def run_case(generator, job, output_path, compare_path=None):
                     "digest_min_chars_met": len(tail) >= 1000,
                     "flag": len(tail) >= 1000 and (ratio < 0.05 or len(set(tail)) <= 10),
                     "diagnostic_wall_s_including_prefill": elapsed,
+                    "decode_timing": decode_timing,
                 }
             )
             write_private(output_path, result)
