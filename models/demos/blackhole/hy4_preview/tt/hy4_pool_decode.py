@@ -93,7 +93,9 @@ class PoolCtx:
             packer_l1_acc=False,
         )
         R = NC * S
-        self.G, self.kc = (8, 128) if R * 8 <= 120 else (4, 256)
+        self.G, self.kc = hy4_split.pick_split(S)
+        if "HY4_VR_G" in os.environ:  # probe override: split G / k_chunk
+            self.G, self.kc = int(os.environ["HY4_VR_G"]), int(os.environ.get("HY4_VR_KC", self.kc))
         self.xm = xm  # an existing XMerge (tests that rebuild the ctx per bucket must share the ONE per-process object)
         if self.xchg and xm is None:
             from models.demos.blackhole.hy4_preview.tt import hy4_xmerge

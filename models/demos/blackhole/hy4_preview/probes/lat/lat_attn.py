@@ -107,7 +107,7 @@ def main():
                 try:
                     ctx = PoolCtx(md, mc, ccl, pages, rows=1, S=S, mode="topk", bucket_tokens=N, xm=None)
                     if (
-                        os.environ.get("SPLIT_AUTO", "1") == "1" and S > 3
+                        os.environ.get("SPLIT_AUTO", "0") == "1" and S > 3
                     ):  # probe-only: the stock (G, kc) choice breaks for S>=4 (8S rows -> G=3 -> 3 chunks per sender); widen kc so each sender holds <= 2 chunks
                         G = max(1, 120 // (8 * S))
                         kc = 128

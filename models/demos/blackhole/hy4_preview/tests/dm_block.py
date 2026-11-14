@@ -79,7 +79,9 @@ class Block:
     ):
         # HY4_FUSE=sparse: fused JIT merge kernel (tt/hy4_merge.py) instead of the 8-op merge3 (tile layout only)
         self.fuse = ("sparse" in os.environ.get("HY4_FUSE", "")) if fuse is None else fuse
-        self.xchg = ("xchg" in os.environ.get("HY4_FUSE", "")) if xchg is None else xchg  # A2: fabric exchange fused with the merge (replaces to_owner + a2a + merge)
+        self.xchg = (
+            ("xchg" in os.environ.get("HY4_FUSE", "")) if xchg is None else xchg
+        )  # A2: fabric exchange fused with the merge (replaces to_owner + a2a + merge)
         self.xm = None
         self.xchg2 = "xchg2" in os.environ.get("HY4_FUSE", "") if xchg is None else False
         self.xm2 = None
@@ -102,7 +104,9 @@ class Block:
         self.mod = load_split()
         R = NC * S
         if G is None:
-            G, kc = (8, 128) if R * 8 <= 120 else (4, 256)
+            from hy4_split import pick_split
+
+            G, kc = pick_split(S)
         self.G, self.kc = G, kc
         self.ckc = ckc_of(md, fid)
         self.R = R
