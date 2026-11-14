@@ -1485,6 +1485,7 @@ jobs:
                           "deepseek-v3-tg",
                           "deepseek-v3-b1",
                           "z-image-turbo",
+                          "ideogram-4",
                           "resnet50"
                         ],
                         "type": "string"
@@ -2278,7 +2279,7 @@ jobs:
                         "type": "string"
                       },
                       "platform": {
-                        "default": "Ubuntu 22.04",
+                        "default": "Ubuntu 24.04",
                         "description": "Platform to build and test",
                         "enum": [
                           "Ubuntu 22.04",
