@@ -96,30 +96,46 @@ def run_pcc(md):
 
 
 def run_lat(md):
-    """block latency (traced) per S: split-kernel stage only (upto=2), full block, for the balanced and skew cases"""
+    """block latency (traced) per S: split-kernel stage only (upto=2), full block; GK="G:kc,G:kc" sweeps the split config (default: pick_split)"""
     var = os.environ.get("VAR", "a1")
     SS = [int(x) for x in os.environ.get("SS", "1,2,3,4,5,6,7,8").split(",")]
+    gks = [tuple(int(v) for v in x.split(":")) for x in os.environ["GK"].split(",")] if os.environ.get("GK") else [None]
     for tag in os.environ.get("CASES", "random_65536,random_65536_skew").split(","):
         kind, ctx, skew = parse(tag)
         for S in SS:
             try:
                 c = DM.Case(md, kind, ctx, S, "scaled", seed=5, skew=skew)
-                blk = DM.mk_block(md, S, fuse=var != "stock", xchg=var == "xm")
-                idx8 = blk.idx_rows(c.idx_dev)
-                full = timed_traced(md, lambda: blk.run(c.q_dev, c.kv_dev, idx8, c.sinkrow3_dev))
-                upto2 = timed_traced(md, lambda: blk.run(c.q_dev, c.kv_dev, idx8, c.sinkrow3_dev, upto=2))
-                emit(
-                    {
-                        "test": "vrows_lat",
-                        "case": f"{tag}_S{S}_{var}",
-                        "G": blk.G,
-                        "kc": blk.kc,
-                        "block_us": full,
-                        "qg_plus_kernel_us": upto2,
-                    }
-                )
-                if var == "xm":
-                    free_xm(blk)
+                for gk in gks:
+                    try:
+                        kw = dict(G=gk[0], kc=gk[1]) if gk else {}
+                        if gk and S * 8 * gk[0] > 120:
+                            continue
+                        blk = DM.mk_block(md, S, fuse=var != "stock", xchg=var == "xm", **kw)
+                        idx8 = blk.idx_rows(c.idx_dev)
+                        full = timed_traced(md, lambda: blk.run(c.q_dev, c.kv_dev, idx8, c.sinkrow3_dev))
+                        upto2 = timed_traced(md, lambda: blk.run(c.q_dev, c.kv_dev, idx8, c.sinkrow3_dev, upto=2))
+                        upto1 = timed_traced(md, lambda: blk.run(c.q_dev, c.kv_dev, idx8, c.sinkrow3_dev, upto=1))
+                        emit(
+                            {
+                                "test": "vrows_lat",
+                                "case": f"{tag}_S{S}_{var}",
+                                "G": blk.G,
+                                "kc": blk.kc,
+                                "block_us": full,
+                                "qg_plus_kernel_us": upto2,
+                                "qg_us": upto1,
+                            }
+                        )
+                        if var == "xm":
+                            free_xm(blk)
+                    except Exception as e:
+                        emit(
+                            {
+                                "test": "vrows_lat",
+                                "case": f"{tag}_S{S}_{var}_{gk}",
+                                "error": str(e).strip().splitlines()[0][:300],
+                            }
+                        )
                 c.free()
             except Exception as e:
                 import traceback

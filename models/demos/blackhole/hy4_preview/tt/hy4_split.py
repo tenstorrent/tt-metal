@@ -41,13 +41,16 @@ def _core_set(n, gx):
 
 
 def pick_split(S, grid_cores=120):
-    """(G, k_chunk) of the owner-layout decode split kernel for S verify rows per user (R = 8 S query rows of the gathered q, S*8*G <= grid_cores). S=1: (8,128); S=2,3: (4,256); S=4,5: (3,256); S=6,7: (2,256); S=8: (1,256).
-    Chunks per sender are unlimited since vrows (the old 'senders hold <= 2 chunks' assert); the column of a user holds ~2048/8 selected keys, so 1-2 chunks of 256 are active.
+    """(G, k_chunk) of the owner-layout decode split kernel for S verify rows per user (R = 8 S query rows of the gathered q, R*G <= grid_cores).
+    Measured (verify-rows gk1, 64k/1M, SCALED_FP8, balanced and one-column-skew keys): kc=128 beats kc=256 by 12-15 us whenever G >= 3 (a column holds ~2048/8 selected keys = 2 chunks of 128, run on 2 cores in parallel);
+    G=2 (S=6,7): kc=256; G=1 (S=8): kc=128. S=1: (8,128); S=2..5: (4,128) / (4,128) / (3,128) / (3,128); S=6,7: (2,256); S=8: (1,128).
+    Chunks per sender are unlimited since vrows (the old 'senders hold <= 2 chunks' assert lifted); the skew worst case (all 2048 keys on one column) runs 16 chunks over G senders.
     """
     R = 8 * S
-    if R * 8 <= grid_cores:
-        return 8, 128
-    return min(4, max(1, grid_cores // R)), 256
+    G = max(1, min(8 if S == 1 else 4, grid_cores // R))
+    if G == 2:
+        return 2, 256
+    return G, 128
 
 
 def max_split(rows, grid_x, grid_y):
