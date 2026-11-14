@@ -127,6 +127,7 @@ enum class SfpuType {
     fmod,
     ceil,
     isclose,
+    logsigmoid,
     unused,
     reshuffle_rows,
     cumsum,

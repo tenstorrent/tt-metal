@@ -330,7 +330,7 @@ enum class BinaryOp : std::uint8_t
     ATAN2           = 30,
     MUL_INT32       = 31,
     ISCLOSE         = 32,
-    LOGSIGMOID      = 33,
+    LOGSIGMOID      = 33, // no longer dispatched: logsigmoid is a unary SfpuType; left so the enumeration is untouched
     // Integer / format-typed binary SFPU kernels (functional coverage). Names match the
     // corresponding SfpuType enumerators so the coverage guard maps them 1:1.
     EQ_INT           = 34,

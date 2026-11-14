@@ -78,7 +78,7 @@ enum class BinaryOp : std::uint8_t
     DEQUANT,
     ATAN2,
     COPY_DEST,
-    LOGSIGMOID,
+    LOGSIGMOID, // no longer dispatched: logsigmoid is a unary SfpuType; left so later values do not shift
     ISCLOSE,
     MASK,
     MASK_POSINF,
