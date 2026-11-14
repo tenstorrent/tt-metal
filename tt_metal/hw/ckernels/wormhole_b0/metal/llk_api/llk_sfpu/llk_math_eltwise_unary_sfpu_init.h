@@ -47,6 +47,11 @@ void hardshrink_init();
 void hardtanh_init();
 void heaviside_init();
 void i0_init();
+void isfinite_init();
+void isinf_init();
+void isnan_init();
+void isneginf_init();
+void isposinf_init();
 void left_shift_init();
 void less_than_equal_zero_init();
 void less_than_zero_init();
@@ -87,16 +92,6 @@ inline void frac_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 inline void round_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 inline void trunc_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
-
-inline void isfinite_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
-
-inline void isinf_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
-
-inline void isnan_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
-
-inline void isneginf_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
-
-inline void isposinf_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
 inline void negative_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
