@@ -223,6 +223,31 @@ def test_unary_polygamma_boundary_ttnn(input_shapes, k, device):
 
 
 @pytest.mark.parametrize(
+    "min_val, max_val",
+    [(0, None), (None, 0), (20000000, None), (None, -20000000), (-2147483647, None), (None, 2147483646)],
+)
+def test_unary_composite_clamp_int32_one_bound_full_range(min_val, max_val, device):
+    values = [-2147483648, -2147483647, -100000000, -16775717, -1, 0, 1, 16775717, 100000000, 2147483646, 2147483647]
+    in_data = torch.tensor(values * (1024 // len(values)) + values[: 1024 % len(values)], dtype=torch.int32).reshape(
+        1, 1, 32, 32
+    )
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.to_torch(ttnn.clamp(input_tensor, min_val, max_val))
+    assert torch.equal(output_tensor, torch.clamp(in_data, min=min_val, max=max_val))
+
+
+@pytest.mark.parametrize("min_val, max_val", [(0, None), (None, 0), (-5, None), (None, 5)])
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
+def test_unary_composite_clamp_float_int_one_bound(min_val, max_val, dtype, device):
+    values = [-3e9, -3e7, -16775717.0, -5.0, 0.0, 5.0, 16775717.0, 3e7, 3e9]
+    in_data = torch.tensor(values * (1024 // len(values)) + values[: 1024 % len(values)]).reshape(1, 1, 32, 32)
+    input_tensor = ttnn.from_torch(in_data, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    expected = torch.clamp(ttnn.to_torch(input_tensor).float(), min=min_val, max=max_val)
+    output_tensor = ttnn.to_torch(ttnn.clamp(input_tensor, min_val, max_val)).float()
+    assert torch.equal(output_tensor, expected)
+
+
+@pytest.mark.parametrize(
     "input_shapes",
     (
         (torch.Size([1, 1, 32, 32])),
