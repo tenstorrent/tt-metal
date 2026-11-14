@@ -184,3 +184,285 @@ class SkinnyShared:
         )
         ttnn.generic_op([h, self.w01, self.w2, out], prog)
         return out
+
+
+# --------------------------------------------------------------------------------------------------------------------------------------------------
+# router: logits (bf16 x bf16, HiFi4, fp32 dest) + sigmoid + bias on the 8 bank cores; the rank / score fp32 tiles feed the stock-semantics router_select
+# --------------------------------------------------------------------------------------------------------------------------------------------------
+TB16 = 2048  # bf16 32x32 tile bytes
+
+
+def reader_ct_tb(cb_w, bank, vc, phases, tb):
+    """like SK.reader_ct for tiles of tb bytes (the DSV4 helper assumes bfp8 1088 B tiles)."""
+    ct = [cb_w, bank, vc]
+    for p in range(3):
+        if p < len(phases) and phases[p]["pn"] > 0:
+            ph = phases[p]
+            total = ph["sbk"] * tb
+            page = (16384 // tb) * tb
+            while total % page != 0 and page >= tb:
+                page -= tb
+            ct += [ph["addr"], page, total // page, ph["sbk"], ph["pn"], total, ph["nsub"], ph["nbuf"], 0]
+        else:
+            ct += [0, 0, 0, 0, 0, 0, 0, 0, 0]
+    return ct
+
+
+def bank_seq_weight_rep(md, tiles, dtype):
+    """tiles [8, T, 32, 32] float: tile sequence of every DRAM bank (identical on every chip: replicated)."""
+    nb, T = tiles.shape[0], tiles.shape[1]
+    g = tiles.permute(1, 2, 0, 3).reshape(T * 32, nb * 32)
+    dram_crs = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(md.dram_grid_size().x - 1, md.dram_grid_size().y - 1))}
+    )
+    mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.DRAM,
+        ttnn.ShardSpec(dram_crs, [T * 32, 32], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    return ttnn.from_torch(
+        g.reshape(1, 1, T * 32, nb * 32).contiguous(),
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=md,
+        memory_config=mem,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(md),
+    )
+
+
+class SkinnyRouter:
+    KT = 192  # hidden tiles
+    NE = 256  # experts = 8 tile columns = one per DRAM bank
+
+    def __init__(self, md, gate_weight, gate_bias, k=8, scale=2.827, sbk=None, ring=None, remap=None, tiny=None, ksplit=None):
+        """gate_weight [256, 6144] (checkpoint layout), gate_bias [256] fp32."""
+        self.md, self.k, self.scale = md, k, float(scale)
+        assert tuple(gate_weight.shape) == (self.NE, 6144)
+        w = gate_weight.to(torch.bfloat16).float().T.contiguous()  # [6144, 256]
+        tl = lambda kk, n: w[32 * kk : 32 * kk + 32, 32 * n : 32 * n + 32]
+        self.ksplit = int(os.environ.get("HY4_SKINNY_RT_KSPLIT", "1") if ksplit is None else ksplit)
+        if self.ksplit:  # bank b: K tiles [24 b, 24 b + 24) of all 8 expert tile columns, column-major (n, kk)
+            KL = self.KT // NB
+            tiles = torch.stack([torch.stack([tl(KL * b + kk, n) for n in range(NB) for kk in range(KL)]) for b in range(NB)])
+        else:  # bank b: expert tile column b, K = 192
+            tiles = torch.stack([torch.stack([tl(kk, b) for kk in range(self.KT)]) for b in range(NB)])  # [8, 192, 32, 32]
+        self.w = bank_seq_weight_rep(md, tiles, ttnn.bfloat16)
+        bias = gate_bias.float().reshape(1, 1, 1, self.NE).expand(1, 1, 32, self.NE).contiguous()
+        self.bias = ttnn.from_torch(
+            bias, device=md, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(md),
+        )
+        self.tiny = int(os.environ.get("HY4_SKINNY_TINY", "1") if tiny is None else tiny)
+        self.cores = bank_cores(md, 0)
+        for ent in filter(None, (remap if remap is not None else os.environ.get("HY4_SKINNY_REMAP", DEFAULT_REMAP)).split("/")):
+            b, xy = ent.split("@")
+            x, y = xy.split(".")
+            self.cores[int(b)] = ttnn.CoreCoord(int(x), int(y))
+        self.vcs = SK._vcs(self.cores)
+        self.phys = [md.worker_core_from_logical_core(ttnn.CoreCoord(c.x, c.y)) for c in self.cores]
+        self.sbk = int(sbk or os.environ.get("HY4_SKINNY_RT_SBK", "48"))
+        self.ring = int(ring or os.environ.get("HY4_SKINNY_RT_RING", "192"))
+        assert self.KT % self.sbk == 0 and self.ring % self.sbk == 0 and self.ring // self.sbk <= 15
+        from models.demos.blackhole.hy4_preview.tt.hy4_router_select import router_select  # noqa: F401  (import check)
+
+    def _scores_ks(self, x, T):
+        assert T <= 8
+        md, KL = self.md, self.KT // NB
+        core_set = _core_set(self.cores)
+        mk = lambda: ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, T, self.NE]), ttnn.float32, ttnn.TILE_LAYOUT, md, ttnn.DRAM_MEMORY_CONFIG
+        )
+        score, rank = mk(), mk()
+        CB_X, CB_W, CB_P, CB_RED, CB_B, CB_S, CB_R = range(7)
+        f32tile = lambda idx, n: ttnn.CBDescriptor(
+            total_size=1024 * n,
+            core_ranges=core_set,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(
+                    buffer_index=idx, data_format=ttnn.float32, page_size=1024, tile=ttnn.TileDescriptor(ttnn.Tile([8, 32]))
+                )
+            ],
+        )
+        ring = self.ring
+        XR = 8 if self.tiny == 8 else 16
+        cbs = [
+            SK._tiny_cb(core_set, CB_X, KL, rows=XR),
+            ttnn.CBDescriptor(
+                total_size=ring * TB16,
+                core_ranges=core_set,
+                format_descriptors=[
+                    ttnn.CBFormatDescriptor(
+                        buffer_index=CB_W, data_format=ttnn.bfloat16, page_size=TB16, tile=ttnn.TileDescriptor(ttnn.Tile([32, 32]))
+                    )
+                ],
+            ),
+            f32tile(CB_P, 8),
+            f32tile(CB_RED, NB),
+            f32tile(CB_B, 1),
+            f32tile(CB_S, 1),
+            f32tile(CB_R, 1),
+        ]
+        readers = []
+        for i, cc in enumerate(self.cores):
+            ph = [dict(addr=self.w.buffer_address(), sbk=KL, pn=NB, nsub=1, nbuf=ring // KL)]
+            readers.append(
+                ttnn.KernelDescriptor(
+                    kernel_source=f"{KDIR}/hsk_reader.cpp",
+                    source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+                    core_ranges=_core_set([cc]),
+                    compile_time_args=reader_ct_tb(CB_W, i, self.vcs[i], ph, TB16),
+                    runtime_args=ttnn.RuntimeArgs(),
+                    common_runtime_args=[],
+                    config=ttnn.ReaderConfigDescriptor(),
+                )
+            )
+        rt_w = ttnn.RuntimeArgs()
+        for i, cc in enumerate(self.cores):
+            rt_w[cc.x][cc.y] = [i]
+        common_w = [x.buffer_address(), self.bias.buffer_address(), score.buffer_address(), rank.buffer_address()]
+        for q in self.phys:
+            common_w += [q.x, q.y]
+        PW = 4
+        writer = ttnn.KernelDescriptor(
+            kernel_source=f"{KDIR}/hsk_rk_writer.cpp",
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=core_set,
+            compile_time_args=[CB_X, CB_B, CB_S, CB_R, NB, KL, CB_P, CB_RED, PW, XR]
+            + _acc(x) + _acc(self.bias) + _acc(score) + _acc(rank),
+            runtime_args=rt_w,
+            common_runtime_args=common_w,
+            config=ttnn.WriterConfigDescriptor(),
+        )
+        cc = ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, math_approx_mode=False)
+        modes = [ttnn.UnpackToDestMode.Default] * 64
+        for c in (CB_RED, CB_B):
+            modes[c] = ttnn.UnpackToDestMode.UnpackToDestFp32
+        cc.unpack_to_dest_mode = modes
+        compute = ttnn.KernelDescriptor(
+            kernel_source=f"{KDIR}/hsk_rk_compute.cpp",
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=core_set,
+            compile_time_args=[CB_X, CB_W, CB_P, CB_RED, CB_B, CB_S, CB_R, KL, NB, PW],
+            runtime_args=ttnn.RuntimeArgs(),
+            common_runtime_args=[],
+            config=cc,
+        )
+        compute.defines = [("INP_FLOAT32", "1")]
+        prog = ttnn.ProgramDescriptor(
+            kernels=readers + [writer, compute],
+            semaphores=[ttnn.SemaphoreDescriptor(id=i, core_ranges=core_set, initial_value=0) for i in range(2)],
+            cbs=cbs,
+        )
+        prog.custom_program_hash = _hash(
+            0x7B3, T, XR, ring, self.w.buffer_address(), self.bias.buffer_address(), tuple(_acc(x)), tuple(_acc(score)), tuple(_acc(rank)),
+        )
+        ttnn.generic_op([x, self.w, self.bias, score, rank], prog)
+        return rank, score
+
+    def scores(self, x, T):
+        """x std tile bf16 [1,1,T,6144] -> (rank, score) fp32 TILE [1,1,T,256] DRAM (T <= 8)."""
+        assert T <= 8
+        if self.ksplit:
+            return self._scores_ks(x, T)
+        md = self.md
+        R = 32 if self.tiny == 2 else 16 if self.tiny == 3 else 8 if not self.tiny else (2 if T <= 2 else 4 if T <= 4 else 8)
+        core_set = _core_set(self.cores)
+        mk = lambda: ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, T, self.NE]), ttnn.float32, ttnn.TILE_LAYOUT, md, ttnn.DRAM_MEMORY_CONFIG
+        )
+        score, rank = mk(), mk()
+        CB_X, CB_W, CB_B, CB_S, CB_R = range(5)
+        f32tile = lambda idx: ttnn.CBDescriptor(
+            total_size=1024,
+            core_ranges=core_set,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(
+                    buffer_index=idx, data_format=ttnn.float32, page_size=1024, tile=ttnn.TileDescriptor(ttnn.Tile([8, 32]))
+                )
+            ],
+        )
+        cbs = [
+            SK._tiny_cb(core_set, CB_X, self.KT, rows=R),
+            ttnn.CBDescriptor(
+                total_size=self.ring * TB16,
+                core_ranges=core_set,
+                format_descriptors=[
+                    ttnn.CBFormatDescriptor(
+                        buffer_index=CB_W, data_format=ttnn.bfloat16, page_size=TB16, tile=ttnn.TileDescriptor(ttnn.Tile([32, 32]))
+                    )
+                ],
+            ),
+            ttnn.CBDescriptor(
+                total_size=4096,
+                core_ranges=core_set,
+                format_descriptors=[
+                    ttnn.CBFormatDescriptor(
+                        buffer_index=CB_B, data_format=ttnn.float32, page_size=4096, tile=ttnn.TileDescriptor(ttnn.Tile([32, 32]))
+                    )
+                ],
+            ),
+            f32tile(CB_S),
+            f32tile(CB_R),
+        ]
+        readers = []
+        for i, cc in enumerate(self.cores):
+            ph = [dict(addr=self.w.buffer_address(), sbk=self.sbk, pn=1, nsub=self.KT // self.sbk, nbuf=self.ring // self.sbk)]
+            readers.append(
+                ttnn.KernelDescriptor(
+                    kernel_source=f"{KDIR}/hsk_reader.cpp",
+                    source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+                    core_ranges=_core_set([cc]),
+                    compile_time_args=reader_ct_tb(CB_W, i, self.vcs[i], ph, TB16),
+                    runtime_args=ttnn.RuntimeArgs(),
+                    common_runtime_args=[],
+                    config=ttnn.ReaderConfigDescriptor(),
+                )
+            )
+        rt_w = ttnn.RuntimeArgs()
+        for i, cc in enumerate(self.cores):
+            rt_w[cc.x][cc.y] = [i]
+        common_w = [x.buffer_address(), self.bias.buffer_address(), score.buffer_address(), rank.buffer_address()]
+        for p in self.phys:
+            common_w += [p.x, p.y]
+        writer = ttnn.KernelDescriptor(
+            kernel_source=f"{KDIR}/hsk_rt_writer.cpp",
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=core_set,
+            compile_time_args=[CB_X, CB_B, CB_S, CB_R, NB, self.KT, R] + _acc(x) + _acc(self.bias) + _acc(score) + _acc(rank),
+            runtime_args=rt_w,
+            common_runtime_args=common_w,
+            config=ttnn.WriterConfigDescriptor(),
+        )
+        compute = ttnn.KernelDescriptor(
+            kernel_source=f"{KDIR}/hsk_rt_compute.cpp",
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=core_set,
+            compile_time_args=[CB_X, CB_W, CB_B, CB_S, CB_R, self.KT, self.sbk],
+            runtime_args=ttnn.RuntimeArgs(),
+            common_runtime_args=[],
+            config=ttnn.ComputeConfigDescriptor(
+                math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, math_approx_mode=False
+            ),
+        )
+        prog = ttnn.ProgramDescriptor(
+            kernels=readers + [writer, compute],
+            semaphores=[ttnn.SemaphoreDescriptor(id=i, core_ranges=core_set, initial_value=0) for i in range(3)],
+            cbs=cbs,
+        )
+        prog.custom_program_hash = _hash(
+            0x7B2, T, R, self.sbk, self.ring, self.w.buffer_address(), self.bias.buffer_address(), tuple(_acc(x)),
+            tuple(_acc(score)), tuple(_acc(rank)),
+        )
+        ttnn.generic_op([x, self.w, self.bias, score, rank], prog)
+        return rank, score
+
+    def forward(self, x, T):
+        """-> (weights bf16 RM [T,1,1,k], indices uint16 RM [T,1,1,k]) like Hy4Gate.forward."""
+        from models.demos.blackhole.hy4_preview.tt.hy4_router import EPS
+        from models.demos.blackhole.hy4_preview.tt.hy4_router_select import router_select
+
+        rank, score = self.scores(x, T)
+        w, idx = router_select(rank, score, self.k, EPS, self.scale)
+        ttnn.deallocate(rank)
+        ttnn.deallocate(score)
+        return w, idx
