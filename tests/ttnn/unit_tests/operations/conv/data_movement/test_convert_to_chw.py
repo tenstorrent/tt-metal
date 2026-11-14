@@ -133,3 +133,19 @@ def test_convert_to_chw_shard_taller_than_balanced_split(device, C, HW, num_core
     actual = ttnn.experimental.convert_to_chw(input_tensor, dtype=ttnn.bfloat16)
 
     assert_equal(expected, ttnn.to_torch(actual))
+
+
+def test_convert_to_chw_rejects_float32_output(device, expect_error):
+    # The transpose runs through a bfloat16 tile and the writer copies 2-byte sticks, so a float32
+    # output used to be returned with half of every row left as uninitialized buffer.
+    torch.manual_seed(0)
+    C, HW = 32, 64
+    torch_input = torch.randn([1, 1, HW, C], dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    input_memory_config = ttnn.create_sharded_memory_config(
+        [1, 1, HW, 32], ttnn.CoreGrid(x=1, y=1), ttnn.ShardStrategy.HEIGHT, ttnn.ShardOrientation.ROW_MAJOR
+    )
+    input_tensor = ttnn.to_device(input_tensor, device, input_memory_config)
+
+    with expect_error(RuntimeError, "BFLOAT16"):
+        ttnn.experimental.convert_to_chw(input_tensor, dtype=ttnn.float32)
