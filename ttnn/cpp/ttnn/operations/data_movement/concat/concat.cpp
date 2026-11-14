@@ -265,6 +265,57 @@ namespace ttnn::operations::data_movement::detail {
 
 namespace {
 
+// Concat whose input list is longer than one ConcatTiledUnalignedProgramFactory program carries.
+//
+// The circular buffers of that factory hold a whole 32-row band of every input at once, so the input
+// count is what decides whether one program fits. Split the list into groups of at most
+// kMaxTiledUnalignedConcatInputs inputs, concat every group through the same routing (so a group the
+// factory fits runs as one on-device program, and a group whose width is tile-aligned runs on
+// ConcatProgramFactory), then concat the group results. Each step stays on the on-device paths, so a
+// long list is served by several small programs instead of materializing a full-size row-major
+// intermediate per input through the untilize/transpose/retilize pipeline below.
+//
+// The result is the same bytes as concatenating every input at once: group concatenation is
+// associative along the concat dim, and no group crosses a tile-row boundary the factory works in.
+ttnn::Tensor concat_tiled_unaligned_in_groups(
+    const std::vector<ttnn::Tensor>& input_tensors,
+    int dim,
+    unsigned int groups,
+    const MemoryConfig& mem_config,
+    const std::optional<ttnn::CoreRangeSet>& sub_core_grids) {
+    const size_t num_inputs = input_tensors.size();
+    const size_t limit = ttnn::prim::kMaxTiledUnalignedConcatInputs;
+    // At least two groups, else this is not a list the factory declined on count and the caller
+    // would loop; the call site only reaches here above the limit.
+    const size_t num_groups = (num_inputs + limit - 1) / limit;
+    // Split as evenly as possible: every group holds `base` inputs and the first `extra` hold one
+    // more, so no group exceeds the limit and the last is never a single input.
+    const size_t base = num_inputs / num_groups;
+    const size_t extra = num_inputs % num_groups;
+
+    std::vector<ttnn::Tensor> group_outputs;
+    group_outputs.reserve(num_groups);
+    size_t offset = 0;
+    for (size_t group = 0; group < num_groups; ++group) {
+        const size_t group_size = base + (group < extra ? 1 : 0);
+        const auto first = input_tensors.begin() + static_cast<std::ptrdiff_t>(offset);
+        group_outputs.push_back(ttnn::concat(
+            std::vector<ttnn::Tensor>(first, first + static_cast<std::ptrdiff_t>(group_size)),
+            dim,
+            mem_config,
+            std::nullopt,
+            groups,
+            sub_core_grids));
+        offset += group_size;
+    }
+    TT_FATAL(offset == num_inputs, "ttnn.concat: grouped {} of {} inputs", offset, num_inputs);
+
+    if (group_outputs.size() == 1) {
+        return group_outputs[0];
+    }
+    return ttnn::concat(group_outputs, dim, mem_config, std::nullopt, groups, sub_core_grids);
+}
+
 // Everything after validation, with `dim` already normalized and at least two inputs.
 ttnn::Tensor concat_native(
     const std::vector<ttnn::Tensor>& input_tensors,
@@ -302,6 +353,21 @@ ttnn::Tensor concat_native(
     if (ttnn::prim::can_use_tiled_unaligned_concat(
             input_tensors, static_cast<uint32_t>(dim), groups, mem_config, /*output_already_allocated=*/false)) {
         return ttnn::operations::data_movement::concat_impl(input_tensors, dim, groups, mem_config, sub_core_grids);
+    }
+
+    // More inputs than one program of that factory carries: split them into groups, concat every
+    // group through the same routing (the factory for a group that fits it, the aligned factory when
+    // the group's width is tile-aligned), then concat the group results. Every step stays on the
+    // on-device paths, so no input count reaches the composite pipeline below, which materializes a
+    // full-size row-major intermediate per input and does orders of magnitude more work.
+    //
+    // The count guard is what makes this terminate: a list at or below the limit reaches this point
+    // only when its circular buffers do not fit, which is the dynamic L1 budget failing and not
+    // something grouping can fix, so that case keeps falling through to the composite path below.
+    if (input_tensors.size() > ttnn::prim::kMaxTiledUnalignedConcatInputs &&
+        ttnn::prim::is_tiled_unaligned_concat_candidate(
+            input_tensors, static_cast<uint32_t>(dim), groups, mem_config)) {
+        return concat_tiled_unaligned_in_groups(input_tensors, dim, groups, mem_config, sub_core_grids);
     }
 
     // Issue #43371: When concat is on the last dim and the last dim is not buffer-aligned,
