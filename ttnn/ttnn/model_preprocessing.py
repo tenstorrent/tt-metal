@@ -54,8 +54,9 @@ def fold_batch_norm2d_into_conv2d(conv, bn):
     running_mean = bn.running_mean
     running_var = bn.running_var
     eps = bn.eps
-    scale = bn.weight
-    shift = bn.bias
+    # BatchNorm2d(affine=False) has no weight or bias: scale by 1 and shift by 0
+    scale = bn.weight if bn.weight is not None else torch.ones_like(running_var)
+    shift = bn.bias if bn.bias is not None else torch.zeros_like(running_mean)
     weight = weight * (scale / torch.sqrt(running_var + eps))[:, None, None, None]
     if bias is not None:
         bias = (bias - running_mean) * (scale / torch.sqrt(running_var + eps)) + shift
@@ -630,8 +631,10 @@ def from_torch(
 
             _dump_parameters(model_cache_path, model)
 
-            with open(version_file_path, "w") as f:
-                f.write(version)
+            # Without a version (git unavailable) no version file is written, so the cache is reused as is
+            if version is not None:
+                with open(version_file_path, "w") as f:
+                    f.write(version)
 
             logger.debug(f'Saved model weights to cache: {model_cache_path} (version "{version}")')
 

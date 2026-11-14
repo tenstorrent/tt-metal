@@ -949,3 +949,21 @@ def test_group_norm_interleaved_all_config(
         atol=atol,
         frobenius_threshold=frobenius_threshold,
     )
+
+
+def test_dram_group_norm_params_from_torch_on_host():
+    # device=None is documented as host setup when a core_grid is given
+    channels, groups = 64, 2
+    weight = torch.randn(channels)
+    bias = torch.randn(channels)
+    core_grid = ttnn.CoreGrid(x=2, y=1)
+
+    (tt_weight, tt_bias), tt_mask = ttnn.dram_group_norm_params_from_torch(
+        [weight, bias], channels, groups, None, core_grid=core_grid
+    )
+
+    num_virtual_cols = ttnn.operations.normalization.dram_group_norm_virtual_columns(core_grid, channels, groups)
+    expected_weight = ttnn.create_group_norm_weight_bias_rm(weight, channels, num_virtual_cols)
+    assert tt_weight.storage_type() == ttnn.StorageType.HOST
+    assert tt_mask.storage_type() == ttnn.StorageType.HOST
+    assert torch.equal(ttnn.to_torch(tt_weight).float(), expected_weight.to(torch.bfloat16).float())
