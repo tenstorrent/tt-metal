@@ -630,6 +630,53 @@ def run_conv1d_replicate_pad(
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
+    "batch_size, channels, input_length, kernel_size, stride, padding, dilation",
+    (
+        (2, 64, 40, 3, 1, 2, 2),
+        (1, 1024, 12, 4, 1, 6, 2),
+        (1, 128, 100, 5, 1, 6, 3),
+        (2, 64, 51, 3, 2, 2, 2),
+        (2, 64, 40, 3, 1, 1, 1),
+    ),
+)
+@pytest.mark.parametrize("memory_config", [ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG], ids=["L1", "DRAM"])
+def test_conv1d_depthwise_dilation(
+    device, batch_size, channels, input_length, kernel_size, stride, padding, dilation, memory_config
+):
+    # Each channel picks one tap, so the output is the input shifted by (c % kernel_size) * dilation - padding
+    torch_weight = torch.zeros(channels, 1, kernel_size, dtype=torch.bfloat16)
+    for c in range(channels):
+        torch_weight[c, 0, c % kernel_size] = 1.0
+    torch_input = (torch.arange(batch_size * channels * input_length) % 256).reshape(batch_size, channels, input_length)
+    torch_input = torch_input.to(torch.bfloat16)
+    torch_output = torch.nn.functional.conv1d(
+        torch_input.float(), torch_weight.float(), stride=stride, padding=padding, dilation=dilation, groups=channels
+    )
+
+    tt_input = ttnn.from_torch(torch_input.permute(0, 2, 1), ttnn.bfloat16, device=device, memory_config=memory_config)
+    tt_output, output_length = ttnn.conv1d(
+        input_tensor=tt_input,
+        weight_tensor=ttnn.from_torch(torch_weight, ttnn.bfloat16),
+        in_channels=channels,
+        out_channels=channels,
+        device=device,
+        kernel_size=kernel_size,
+        stride=stride,
+        padding=padding,
+        dilation=dilation,
+        batch_size=batch_size,
+        input_length=input_length,
+        conv_config=ttnn.Conv1dConfig(weights_dtype=ttnn.bfloat16),
+        groups=channels,
+        dtype=ttnn.bfloat16,
+        return_output_dim=True,
+    )
+    tt_output = ttnn.to_torch(tt_output).float().reshape(batch_size, output_length, -1)[..., :channels].permute(0, 2, 1)
+    assert torch.equal(tt_output, torch_output)
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_length, kernel_size, stride, padding, dilation, groups",
     (
         (1, 64, 32, 1024, 3, 1, 1, 1, 1),
