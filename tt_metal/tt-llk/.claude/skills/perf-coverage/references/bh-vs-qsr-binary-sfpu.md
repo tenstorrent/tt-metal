@@ -1,4 +1,4 @@
-# Eltwise binary SFPU — BH vs QSR alignment
+# Eltwise binary SFPU: Blackhole versus Quasar worked example
 
 Canonical walkthrough. Other ops follow the same levers; do not copy these mathop lists blindly.
 
@@ -36,5 +36,6 @@ Further float mathop greening would be splitting QSR `div`/`atan2` into wrappers
 - QSR `BinaryOp` has ADD/SUB/MUL/DIV/GT/LT/LE/GE/MAX/MIN/QUANT*/ATAN2 and `RSHFT`/`LSHFT`/`LOGICAL_RSHFT`. The Quasar int sweep does not include shifts.
 - QSR int SUB is not ported (`sub_int_sfpu.h` is WH-only); SUB is float-only in `sfpu_operations_quasar.h`.
 - Int ADD/compares/MUL pass `false` for approximation. Perf pins No. Functional QSR DIV Yes is a real kernel path (`_init_reciprocal_`), not packaging.
-- `tile_cnt` on the two-operand kernel counts both operand tiles. Per-tile MATH_ISOLATE is about half a result tile versus the old one-operand perf kernel. Do not halve `TILE_COUNT` to hide that. The schema version is `PERF_TEST_SCHEMAS[...]["version"]` in `helpers/perf/test_schemas.py`, not a CSV column. It changes when columns change, so v3 and v5 CSVs are not comparable. A `tile_cnt` accounting change can make rows incomparable without a version bump.
-- Wormhole and Blackhole NONE dvalid mocks post SrcA plus a SrcB zerosrc every face, including `dest_acc=No` (`#1230`). Quasar posts per tile, and SrcB only when dest is 32-bit (`<true, is_fp32_dest_acc_en>(LOOP_FACTOR * TILE_CNT)`).
+- The new two-operand kernel's `tile_cnt` counts both operand tiles, so per-tile MATH_ISOLATE is about half a result tile versus the old one-operand perf kernel, and the schema went from v3 to v5. Neither is a speedup; see `perf-test/references/perf-facts.md`, "Accounting".
+- Datacopy and SFPU init are hoisted out of the per-block loop on purpose. Production still reconfigures per tile.
+- The NONE stand-ins differ by architecture: per face with a zeroed SrcB on Wormhole and Blackhole, per tile on Quasar. See `perf-test/references/wormhole-blackhole.md` and `quasar.md`.

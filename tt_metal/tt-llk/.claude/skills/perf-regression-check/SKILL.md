@@ -35,19 +35,21 @@ already cached) without running a sweep — cheap, use it to confirm the refs fi
 - **arch** (required): `wormhole` or `blackhole`. Infer from the machine (`tt-smi`) if possible.
 - **baseline / current**: any refs. Default: baseline = `git merge-base origin/main HEAD`,
   current = `HEAD`. If the user names commits ("compare abc123 and def456"), pass both.
-- **threshold**: `--threshold`, default `0.02` (2%).
+- **threshold**: `--threshold`, default `0.02` (2%). CI gate thresholds differ by
+  architecture and gate; [perf-facts](../perf-test/references/perf-facts.md), "CI",
+  says where they are defined.
 - **min cycles**: `--min-cycles`, default `30`. A point is a regression only when it is
   **both** more than `--threshold` slower **and** more than `--min-cycles` slower. The
   percentage clause alone fires on small markers such as `INIT`; the cycle clause alone
   fires on large `TILE_LOOP` values. `0` disables the cycle clause.
 - **iterations**: `--iterations`, default `3` per side.
 - **speed of light**: `--speed-of-light`. The script applies it to both sides.
-- **asserts**: `TT_LLK_DISABLE_ASSERTS=1` by default, matching Wormhole and
-  Blackhole perf CI. This uses a `-noassert` cache variant. Set it to `0` to
-  keep asserts on both sides (`-assert` cache variant). With asserts off, the
-  script refuses a commit whose `test_config.py` predates the asserts toggle,
-  because that side would still compile with asserts; choose a newer baseline
-  or compare both sides with `TT_LLK_DISABLE_ASSERTS=0`.
+- **asserts**: builds drop `LLK_ASSERT` by default, as Wormhole/Blackhole CI
+  perf does (`TT_LLK_DISABLE_ASSERTS=1`, cache suffix `-noassert`).
+  `TT_LLK_DISABLE_ASSERTS=0` keeps them on both sides (suffix `-assert`).
+  With asserts off, the script refuses a commit whose `test_config.py`
+  predates the asserts toggle, because that side would still compile with
+  asserts; choose a newer baseline or compare both sides with asserts.
 
 ## What the script guarantees (so you do not have to)
 - **Your checkout is never touched.** Each commit is a separate sparse git worktree with
@@ -71,21 +73,82 @@ Show the verdict, the top regressions, and the improvements if any. Point at
   iterations. A point exists on both sides or it is a "new point" (no baseline).
 - Cleanest when only **kernel/LLK code** differs between the commits. If the test's sweep
   changed, expect "new points" — those are reported, never counted as regressions.
-- **Noise:** 3 iterations + median reduces it, but deltas near the threshold can still be
-  noise. Suggest more iterations (cheap — cached runs are reused, so `--iterations 5` after
-  a 3-iteration run only measures 2 more per side) or a higher threshold.
+- **Noise:** 3 iterations + median reduces run-to-run noise, but deltas near the threshold
+  can still be noise. Suggest more iterations (cheap — cached runs are reused, so
+  `--iterations 5` after a 3-iteration run only measures 2 more per side) or a higher
+  threshold. If every iteration of one side gives identical cycles, the delta is not noise
+  and more iterations will not change it. Read **Layout sensitivity** below.
 - The further apart the two commits are, the more unrelated change is in the delta. For
   "did *this* work regress perf", the merge-base default is the honest baseline.
 - `TILE_LOOP` is the steady-state per-tile cost; `INIT`/`KERNEL` include one-time overheads.
-- The schema version is `PERF_TEST_SCHEMAS[...]["version"]` in
-  `helpers/perf/test_schemas.py`, not a CSV column. It changes when columns
-  change. A schema version change, or a `tile_cnt` change that starts counting
-  both operand tiles, is an accounting change, not a kernel regression. A
-  `tile_cnt` accounting change can make rows incomparable without a version
-  bump. Compare cycle numbers only inside one schema version. A ~2× drop on
-  MATH_ISOLATE after that accounting change is about half a result tile, not
-  a speedup.
-  At 16-bit, `dest_acc=Yes` can also double dest handshakes.
+- A schema version change or a `tile_cnt` accounting change is not a kernel
+  regression or speedup; compare cycle numbers only inside one schema version
+  and one accounting
+  ([perf-facts](../perf-test/references/perf-facts.md), "Accounting").
+
+## Layout sensitivity: a deterministic delta that is not a code cost
+
+On Wormhole a build's cycles are usually identical across runs (0% spread), yet two builds
+whose measured code is the same can differ by ±10%. A config then sits at one of two or
+three fixed levels (for example about 39 or about 42 cycles/tile for pack). An unrelated
+change, typically to the idle threads' code, moves it between levels. Signs:
+
+- the sign of the delta flips between neighbouring configs;
+- `loop_factor` 128 and 512 agree with each other, while 8 differs (startup dominates);
+- the sum over configs barely moves (about ±1%) while single configs move ±8%;
+- normal mode moves more than `--speed-of-light`, because its runtime-parameter struct and
+  loads change layout too. The PR and merge perf gates measure the normal build; only the
+  nightly **LLK perf** run uses speed of light.
+
+Before calling such a delta a regression, prove whether the measured code changed. Work
+from `tests/python_tests` with `tests/.venv`; the commands below are building blocks, not
+a script.
+
+1. **Snapshot both builds** right after each `--compile-producer`: later runs may replace
+   them. ELFs are in `/tmp/tt-llk-build/sources/<kernel>.cpp/<variant-hash>/elf/{unpack,math,pack}.elf`,
+   next to the generated `build.h`. Pair variants by the constants in `build.h`
+   (`LOOP_FACTOR`, `NUM_BLOCKS`, `L1_ACC`, …), not by hash.
+2. **Diff `build.h`.** Identical means same configuration.
+3. **Diff the measured thread's code**, with profiler zone IDs masked. Zone IDs are
+   `hashString16("LLK_PROFILER:" __FILE__ ":" __LINE__ ":" marker)`, so they show up as
+   differing `lui` immediates whenever the file or line changes:
+
+   ```bash
+   OD=../sfpi/compiler/bin/riscv-tt-elf-objdump
+   MASK='/file format/d; s/^\s*[0-9a-f]+:\s*//; s/(lui\s+\w+),0x[0-9a-f]+/\1,ZONE/'
+   $OD -d --no-show-raw-insn base/pack.elf | sed -E "$MASK" > a.dis
+   $OD -d --no-show-raw-insn head/pack.elf | sed -E "$MASK" > b.dis
+   diff a.dis b.dis && echo "same code apart from zone IDs"
+   ```
+
+   Masking every `lui` can hide a real constant change; spot-check the unmasked diff too.
+4. **Null-change control.** Insert blank lines near the top of the *baseline* kernel. Only
+   zone-ID immediates change. If the numbers do not move, zone IDs are not the cause.
+5. **Sibling-thread perturbation.** Change only an idle thread (for example make the
+   unpack/math branches of `PACK_ISOLATE` return early), confirm that the measured
+   thread's code is unchanged (step 3), and rerun. If configs move between the same
+   levels, the measurement is sensitive to the other threads' layout.
+
+If the measured code is identical and steps 4–5 reproduce the pattern, report it as layout
+sensitivity, with the level values and the aggregate delta, not as a regression. If the
+measured code differs, the delta may be real: look at the differing instructions.
+
+These experiments measure uncommitted working-tree variants, which this script cannot do
+(it measures commits only). Run each variant through `run-test` with a distinct run tag,
+and raise the retention above its default of 10 so earlier runs are not pruned:
+
+```bash
+LLK="$(git rev-parse --show-toplevel)/tt_metal/tt-llk"
+bash "$LLK/.claude/scripts/run_test.sh" run --worktree "$LLK" --arch wormhole \
+  --test perf_<op>.py --perf --speed-of-light --run-tag ctrl-pad1-sol --keep-runs 100
+```
+
+Snapshot the ELFs after the compile phase of each variant (step 1). Reports land in
+`tt_metal/tt-llk/perf_data/runs/<tag>/<module>/`. Swap only the test's own
+files to the baseline with `git restore --source=<ref> --worktree -- <files>`, and restore
+them afterwards. That restore silently overwrites uncommitted edits to those files: stash or
+commit them first. A file that exists on only one side, such as a deleted `[op]_perf.cpp`,
+must be removed by hand.
 
 ## Failure handling
 - `TENSIX TIMED OUT` / device hang: `tt-smi -r`, then re-run the same command — completed
