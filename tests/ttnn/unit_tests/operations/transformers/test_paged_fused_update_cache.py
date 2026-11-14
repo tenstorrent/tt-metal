@@ -223,6 +223,55 @@ def test_paged_fused_update_cache_preserves_fp32_neighbors(input_dtype, use_inde
     assert device.num_program_cache_entries() - entries_before == 1
 
 
+@pytest.mark.parametrize("num_heads", [1, 8, 17, 32])
+@pytest.mark.parametrize("head_dim", [64, 128])
+@pytest.mark.parametrize("use_index_tensor", [False, True])
+def test_paged_fused_update_cache_bfp8_rows(num_heads, head_dim, use_index_tensor, device):
+    """bfloat8_b caches: each update writes exactly the token's row of every head and leaves every other row as it was."""
+    num_users, seq_len = 2, 64
+    torch.manual_seed(0)
+    caches = [torch.randn((num_users, num_heads, seq_len, head_dim)).bfloat16().float() for _ in range(2)]
+    caches_tt = [ttnn.from_torch(c, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device) for c in caches]
+    # Expected cache contents start from the device copy, so untouched rows can be compared bit for bit.
+    expected = [ttnn.to_torch(c) for c in caches_tt]
+
+    # Rows 0, 15, 16 and 31 of a tile cover both exponent halves and both face rows of the bfp8 layout;
+    # user 1 moves into the second tile row of its sequence, and a -1 entry skips a user.
+    steps = [[0, 47], [15, 32], [16, 63], [31, -1]]
+    if not use_index_tensor:
+        steps = [[idx if idx >= 0 else 1 for idx in step] for step in steps]
+    padded_heads = 32
+    for step, idxs in enumerate(steps):
+        inputs, updates = [], []
+        for cache_id in range(2):
+            update = torch.randn((1, num_users, num_heads, head_dim)).bfloat16().float()
+            update_pad = torch.nn.functional.pad(update, (0, 0, 0, padded_heads - num_heads), "constant", 0)
+            update_tt = ttnn.Tensor(update_pad, ttnn.bfloat16).to(ttnn.TILE_LAYOUT)
+            grid = ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, cache_id), ttnn.CoreCoord(num_users - 1, cache_id))}
+            )
+            shard_spec = ttnn.ShardSpec(grid, [padded_heads, head_dim], ttnn.ShardOrientation.ROW_MAJOR)
+            memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+            inputs.append(update_tt.to(device, memory_config))
+            updates.append(update)
+        kwargs = (
+            {"update_idxs_tensor": ttnn.Tensor(torch.tensor(idxs), ttnn.int32).to(device)}
+            if use_index_tensor
+            else {"update_idxs": idxs}
+        )
+        ttnn.experimental.paged_fused_update_cache(caches_tt[0], inputs[0], caches_tt[1], inputs[1], **kwargs)
+
+        for cache_id in range(2):
+            got = ttnn.to_torch(caches_tt[cache_id])
+            for user, idx in enumerate(idxs):
+                if idx < 0:
+                    continue
+                passing, output = comp_pcc(updates[cache_id][0, user], got[user, :, idx, :], 0.999)
+                assert passing, f"step {step} cache {cache_id} user {user} row {idx}: {output}"
+                expected[cache_id][user, :, idx, :] = got[user, :, idx, :]
+            assert torch.equal(got, expected[cache_id]), f"step {step} cache {cache_id}: untouched rows changed"
+
+
 @pytest.mark.parametrize(
     "cache_dtypes,input_dtypes,error",
     [

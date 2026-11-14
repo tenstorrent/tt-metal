@@ -329,6 +329,23 @@ ttnn::device_operation::ProgramArtifacts PagedTiledFusedUpdateCacheProgramFactor
             optional_resource_defines.emplace("PAGE_TABLE_IS_DRAM", "1");
         }
     }
+    // Row patch (row_patch_bfp8.hpp, run by the writer): for bfp8 caches with bf16 32x32 input tiles and all
+    // heads within one tile, write only the token's row of each cache tile instead of reading, untilizing,
+    // retilizing and writing back whole tiles. A shared cache lets several users update the same tile, which
+    // only the semaphore-chained tile path serialises. Quasar keeps the tile path.
+    const auto is_32x32 = [](const Tensor& t) {
+        return t.tensor_spec().tile().get_height() == TILE_HEIGHT && t.tensor_spec().tile().get_width() == TILE_WIDTH;
+    };
+    const bool row_patch = device->arch() != tt::ARCH::QUASAR && cache_tensor1.dtype() == DataType::BFLOAT8_B &&
+                           cache_tensor2.dtype() == DataType::BFLOAT8_B &&
+                           input_tensor1.dtype() == DataType::BFLOAT16 && input_tensor2.dtype() == DataType::BFLOAT16 &&
+                           is_32x32(cache_tensor1) && is_32x32(cache_tensor2) && is_32x32(input_tensor1) &&
+                           is_32x32(input_tensor2) && !operation_attributes.share_cache && num_heads <= TILE_HEIGHT;
+    KernelSpec::CompilerOptions::Defines compute_defines;
+    if (row_patch) {
+        optional_resource_defines.emplace("ROW_PATCH_BFP8", "1");
+        compute_defines.emplace("ROW_PATCH_BFP8", "1");
+    }
 
     // ---------------- Kernels, one triple per input shard grid ----------------
 
@@ -530,7 +547,7 @@ ttnn::device_operation::ProgramArtifacts PagedTiledFusedUpdateCacheProgramFactor
                       "paged_fused_update_cache.cpp",
             // Legacy compute kernels default to O3; Metal 2.0's type-agnostic default is O2, so it is
             // set explicitly here to keep the compile and link at the level the op has always used.
-            .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
+            .compiler_options = {.defines = compute_defines, .opt_level = KernelBuildOptLevel::O3},
             .dfb_bindings =
                 {
                     DFBBinding{

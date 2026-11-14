@@ -163,6 +163,8 @@ void kernel_main() {
         receiver_sem.set(0);
     }
 
+#ifndef ROW_PATCH_BFP8
+    // In row-patch mode (row_patch_bfp8.hpp, run by the writer) no whole cache tile is read.
     for (uint32_t cur_head = 0; cur_head < num_heads; ++cur_head) {
         dfb_cache.reserve_back(Wt);
         if (!skip_update) {
@@ -179,4 +181,5 @@ void kernel_main() {
 
         cache_id += head_offset_t;
     }
+#endif
 }
