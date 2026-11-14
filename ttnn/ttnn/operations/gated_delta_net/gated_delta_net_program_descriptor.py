@@ -230,7 +230,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
         Vt,
         value_heads,
         _largest_divisor_at_most(Vt, 4),  # read-matmul subblock width (fp32 half-sync DEST: 4 tiles)
-        _float_bits(1.0 / value_dim),
+        _float_bits(value_dim**0.5),
         _float_bits(key_dim**-0.5),
     ]
 
@@ -238,7 +238,7 @@ def create_program_descriptor(inputs, outputs, *, epsilon, compute_kernel_config
     for core, first_pair, count in assignment:
         reader_rt[core.x][core.y] = reader_addrs + [first_pair, count, tokens, batch]
         writer_rt[core.x][core.y] = writer_addrs + [first_pair, count, tokens]
-        compute_rt[core.x][core.y] = [first_pair, count, tokens, _float_bits(epsilon)]
+        compute_rt[core.x][core.y] = [first_pair, count, tokens, _float_bits(value_dim * epsilon)]
 
     modes = list(getattr(compute_kernel_config, "unpack_to_dest_mode", []) or [])
     if len(modes) < NUM_CB_SLOTS:

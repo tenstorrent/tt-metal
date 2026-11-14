@@ -98,3 +98,20 @@ cross-core 0 B in both.
 > call's DRAM traffic (the state dominates) and a prefill call is bound by 4096 ordered token steps
 > per pair, not by DRAM; the multicast layers onto the built structure (the injector is the pair
 > core with `h % r == 0`, receivers skip the q/k conv and L2 norm), so R-STEP keeps it reachable.
+
+## Implementation deltas (Phase 0 build)
+
+| CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
+|----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
+| cb_sq | `Kt` (was `max(Kt, Vt)`) | Kt | {t: spans 1 tile row, K: spans Kt; others streams} | Float32 (U2D) | compute | compute | inside l2norm | not with the RMS squares: pushed in Kt blocks and read by index; sharing with Vt-block pushes left a block wrapped past the CB end (measured: wrong RMS factor) |
+| cb_rinv | 2 | rsqrt q, k | {t: spans 1 tile row; others streams} | Float32 (U2D) | compute | compute | inside l2norm | not with cb_rinv_o, same wrap reason |
+| cb_sq_o | `Vt` | Vt | {t: spans 1 tile row, V: spans Vt} | Float32 (U2D) | compute | compute | inside rmsnorm | split from cb_sq (wrap) |
+| cb_rinv_o | 1 | 1 | {t: spans 1 tile row} | Float32 (U2D) | compute | compute | inside rmsnorm | split from cb_rinv (wrap) |
+| cb_conv_acc | `CONV_ACC_DEPTH` = 2 | 1 | {c: one column tile; t: 1 tile row} | Float32 (U2D) | compute | compute | per column tile | partial tap sum (taps 0,1 packed, taps 2,3 added by packer L1 accumulation): a DEST window holds 4 tiles and every unpack-to-DEST load of a window is issued before its first SFPU op, so the 8 tap/weight tiles of a column need two windows |
+| cb_u_f32 | alias of cb_u (`Vt`) | Vt | as cb_u | Float32 (U2D view) | compute | compute | token | second format descriptor over cb_u's allocation: u feeds the increment matmul (srcB view) and the fp32 o term (U2D view); lockstep push/pop |
+| cb_scratch | 1 | 3 rows | reader-private | Float32 | reader | reader | conv_state_out copy | 64 B row staging for the bit-exact conv_state_out copy |
+
+cb_tok_coef pages are (alpha in every row, beta at row p, alpha at row p): `o = alpha_sel * ro + d * u`
+needs no separate select multiply. cb_window hands off one column tile (4 tap pages) at a time with
+capacity `4 * max(Kt, Vt) * WINDOW_DEPTH`, so mixed q/k/v group sizes never wrap a block.
+Footprint at Kt = Vt = 4 with these deltas: 223 fp32 pages + 2048 B = 915456 B (0.63 of L1_BUDGET).

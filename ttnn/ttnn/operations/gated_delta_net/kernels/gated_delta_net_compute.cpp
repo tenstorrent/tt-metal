@@ -90,7 +90,7 @@ constexpr uint32_t Kt = get_compile_time_arg_val(0);
 constexpr uint32_t Vt = get_compile_time_arg_val(1);
 constexpr uint32_t Hv = get_compile_time_arg_val(2);
 constexpr uint32_t MM_SUBBLOCK_W = get_compile_time_arg_val(3);
-constexpr uint32_t INV_V_BITS = get_compile_time_arg_val(4);
+constexpr uint32_t SQRT_V_BITS = get_compile_time_arg_val(4);
 constexpr uint32_t Q_SCALE_BITS = get_compile_time_arg_val(5);
 constexpr uint32_t n_state = Kt * Vt;
 constexpr uint32_t pair_cols = 2 * Kt + Vt;
@@ -151,14 +151,18 @@ ALWI void gates_block() {
     sfpu_add_bcast_row(0, 1);
     softplus_tile_init();
     softplus_tile(0, ONE_BITS, ONE_BITS, SOFTPLUS_THRESHOLD_BITS);
-    exp_tile_init<false>();
-    exp_tile<false>(2);
-    sfpu_bcast_row_init();
-    sfpu_mul_bcast_row(0, 2);
-    negative_tile_init();
-    negative_tile(0);
-    exp_tile_init<false>();
-    exp_tile<false>(0);
+    // Pass 0: exp(A_log), then g = -exp(A_log) * softplus; pass 1: alpha = exp(g). One exp call site.
+#pragma GCC unroll 1
+    for (uint32_t pass = 0; pass < 2; ++pass) {
+        exp_tile_init<false>();
+        exp_tile<false>(pass == 0 ? 2 : 0);
+        if (pass == 0) {
+            sfpu_bcast_row_init();
+            sfpu_mul_bcast_row(0, 2);
+            negative_tile_init();
+            negative_tile(0);
+        }
+    }
     sigmoid_tile_init<false>();
     sigmoid_tile(3);
     tile_regs_commit();
@@ -254,16 +258,12 @@ ALWI void square_block(DataflowBuffer& in_buf, DataflowBuffer& sq_buf, uint32_t 
     }
 }
 
-// Post-reduce op on the column-0 row sum: rsqrt(sum * PreMul + add) * post_mul.
-template <uint32_t PreMulBits>
+// Post-reduce op on the column-0 row sum: rsqrt(sum + add) * post_mul.
 struct RsqrtPost {
     uint32_t add_bits;
     uint32_t post_mul_bits;
     ALWI void operator()(uint32_t dst) const {
         binop_with_scalar_tile_init();
-        if constexpr (PreMulBits != ONE_BITS) {
-            mul_unary_tile(dst, PreMulBits);
-        }
         add_unary_tile(dst, add_bits);
         rsqrt_tile_init();
         rsqrt_tile(dst);
@@ -295,7 +295,7 @@ ALWI void row_sum(Buffers& bufs, DataflowBuffer& sq_buf, DataflowBuffer& out_buf
 // rsqrt(sum of squares of the Kt tiles of cb_y_qk at `base` + 1e-6) * post_mul -> cb_rinv.
 ALWI void l2_inverse_norm(Buffers& bufs, uint32_t base, uint32_t post_mul_bits) {
     square_block<cb_y_qk, cb_sq>(bufs.y_qk, bufs.sq, base, Kt);
-    row_sum<cb_sq, cb_rinv>(bufs, bufs.sq, bufs.rinv, Kt, RsqrtPost<ONE_BITS>{L2_EPS_BITS, post_mul_bits});
+    row_sum<cb_sq, cb_rinv>(bufs, bufs.sq, bufs.rinv, Kt, RsqrtPost{L2_EPS_BITS, post_mul_bits});
 }
 
 // ---------------------------------------------------------------- l2norm_block
@@ -488,10 +488,11 @@ ALWI void token_step(Buffers& bufs, bool first_in_pair, bool last_in_pair, bool 
 }
 
 // ---------------------------------------------------------------- rmsnorm_gate_block
-// out = ((o (*)col rsqrt(mean o^2 + eps)) (*)row w) * silu(z)
-ALWI void rmsnorm_gate_block(Buffers& bufs, uint32_t eps_bits) {
+// out = ((o (*)col rsqrt(mean o^2 + eps)) (*)row w) * silu(z), with
+// rsqrt(mean o^2 + eps) = sqrt(V) * rsqrt(sum o^2 + V eps).
+ALWI void rmsnorm_gate_block(Buffers& bufs, uint32_t v_eps_bits) {
     square_block<cb_o_acc, cb_sq_o>(bufs.o_acc, bufs.sq_o, 0, Vt);
-    row_sum<cb_sq_o, cb_rinv_o>(bufs, bufs.sq_o, bufs.rinv_o, Vt, RsqrtPost<INV_V_BITS>{eps_bits, ONE_BITS});
+    row_sum<cb_sq_o, cb_rinv_o>(bufs, bufs.sq_o, bufs.rinv_o, Vt, RsqrtPost{v_eps_bits, SQRT_V_BITS});
     cb_wait_front(cb_rinv_o, 1);
     cb_wait_front(cb_z, Vt);
     cb_reserve_back(cb_out_rows, Vt);
@@ -530,7 +531,7 @@ void kernel_main() {
     const uint32_t first_pair = get_arg_val<uint32_t>(0);
     const uint32_t num_pairs = get_arg_val<uint32_t>(1);
     const uint32_t T = get_arg_val<uint32_t>(2);
-    const uint32_t eps_bits = get_arg_val<uint32_t>(3);
+    const uint32_t v_eps_bits = get_arg_val<uint32_t>(3);  // V * epsilon
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_kq_rows, cb_state_mm, cb_reads);
     Buffers bufs;
@@ -564,7 +565,7 @@ void kernel_main() {
             cb_pop_front(cb_d, 1);
             cb_pop_front(cb_v, Vt);
 
-            rmsnorm_gate_block(bufs, eps_bits);
+            rmsnorm_gate_block(bufs, v_eps_bits);
         }
         cb_pop_front(cb_conv_w, CONV_TAPS * pair_cols);
         cb_pop_front(cb_gate_w, 2);
