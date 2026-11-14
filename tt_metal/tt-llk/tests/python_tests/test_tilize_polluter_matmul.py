@@ -125,14 +125,12 @@ def test_tilize_polluter_matmul(
         num_faces=MATMUL_NUM_FACES,
         stimuli_format=formats.input_format,
         input_dimensions=mm_dimensions,
-        is_matrix_A=True,
         face_r_dim=REGULAR_FACE_R_DIM,
     )
     in1 = generate_face_matmul_data(
         num_faces=MATMUL_NUM_FACES,
         stimuli_format=formats.input_format,
         input_dimensions=mm_dimensions,
-        is_matrix_A=False,
     )
 
     generate_golden = get_golden_generator(MatmulGolden)

@@ -13,21 +13,50 @@
  *************************************************************************/
 
 // Unified core, shared by the CB-id API below and the LLKOperand API (experimental/2_0/). Matmul math is
-// FORMAT-FREE: it consumes only tile geometry (tile r/c dims + partial_face). The per-source prologue
-// (resolving these from a CB id, or from an LLKMemDescriptor) lives in the callers. The matmul math EXECUTE
-// (llk_math_matmul below) already takes no operand, so it is reused directly by the id-free API.
+// FORMAT-FREE: it consumes only the in0/in1 tile shapes. The per-source prologue (resolving these from a CB
+// id, or from an LLKMemDescriptor) lives in the callers. The matmul math EXECUTE (llk_math_matmul below)
+// already takes no operand, so it is reused directly by the id-free API.
+template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0>
+inline void llk_math_matmul_init_impl(
+    const ckernel::TensorShape in0_tensor_shape,
+    const ckernel::TensorShape in1_tensor_shape,
+    const std::uint32_t transpose,
+    const std::uint32_t ct_dim,
+    const std::uint32_t rt_dim) {
+    _llk_math_matmul_init_<math_fidelity, THROTTLE_LEVEL>(
+        in0_tensor_shape, in1_tensor_shape, transpose, ct_dim, rt_dim);
+}
+
+// Kept for the experimental/2_0 callers; remove when they move to TensorShape.
+// Builds exact shapes from the tile dims (1/2/4/8/16/32 rows, 16/32 cols); the LLK derives the same tile dims
+// and partial_face (in0 face_r_dim < FACE_R_DIM) back from them.
 template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0>
 inline void llk_math_matmul_init_impl(
     const std::uint32_t in0_tile_r_dim,
     const std::uint32_t in0_tile_c_dim,
     const std::uint32_t in1_tile_r_dim,
     const std::uint32_t in1_tile_c_dim,
-    const bool partial_face,
+    [[maybe_unused]] const bool partial_face,
     const std::uint32_t transpose,
     const std::uint32_t ct_dim,
     const std::uint32_t rt_dim) {
-    _llk_math_matmul_init_<math_fidelity, THROTTLE_LEVEL>(
-        in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face, transpose, ct_dim, rt_dim);
+    const auto shape_from_tile_dims = [](const std::uint32_t tile_r_dim, const std::uint32_t tile_c_dim) {
+        return ckernel::make_tensor_shape(
+            static_cast<std::uint8_t>(tile_r_dim < FACE_R_DIM ? tile_r_dim : FACE_R_DIM),
+            static_cast<std::uint8_t>(FACE_C_DIM),
+            static_cast<std::uint8_t>(tile_r_dim > FACE_R_DIM ? 2 : 1),
+            static_cast<std::uint8_t>(tile_c_dim > FACE_C_DIM ? 2 : 1));
+    };
+    const ckernel::TensorShape in0_tensor_shape = shape_from_tile_dims(in0_tile_r_dim, in0_tile_c_dim);
+    const ckernel::TensorShape in1_tensor_shape = shape_from_tile_dims(in1_tile_r_dim, in1_tile_c_dim);
+    LLK_ASSERT(
+        in0_tensor_shape.total_row_dim() == in0_tile_r_dim && in0_tensor_shape.total_col_dim() == in0_tile_c_dim &&
+            in1_tensor_shape.total_row_dim() == in1_tile_r_dim && in1_tensor_shape.total_col_dim() == in1_tile_c_dim,
+        "matmul tile dims have no exact TensorShape");
+    LLK_ASSERT(
+        partial_face == (in0_tensor_shape.face_r_dim < FACE_R_DIM), "matmul partial_face does not match in0 tile dims");
+    llk_math_matmul_init_impl<math_fidelity, THROTTLE_LEVEL>(
+        in0_tensor_shape, in1_tensor_shape, transpose, ct_dim, rt_dim);
 }
 
 template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0>
@@ -40,12 +69,12 @@ inline void llk_math_matmul_init(
     const std::uint32_t in0_id = get_operand_id(operandA);
     const std::uint32_t in1_id = get_operand_id(operandB);
 
-    const std::uint32_t in0_tile_r_dim = get_operand_tile_r_dim(in0_id);
-    const std::uint32_t in0_tile_c_dim = get_operand_tile_c_dim(in0_id);
-    const std::uint32_t in1_tile_r_dim = get_operand_tile_r_dim(in1_id);
-    const std::uint32_t in1_tile_c_dim = get_operand_tile_c_dim(in1_id);
+    [[maybe_unused]] const std::uint32_t in0_tile_r_dim = get_operand_tile_r_dim(in0_id);
+    [[maybe_unused]] const std::uint32_t in0_tile_c_dim = get_operand_tile_c_dim(in0_id);
+    [[maybe_unused]] const std::uint32_t in1_tile_r_dim = get_operand_tile_r_dim(in1_id);
+    [[maybe_unused]] const std::uint32_t in1_tile_c_dim = get_operand_tile_c_dim(in1_id);
 
-    const bool partial_face = (in0_tile_r_dim < FACE_R_DIM);
+    [[maybe_unused]] const bool partial_face = (in0_tile_r_dim < FACE_R_DIM);
 
     // In0/operandA -> srcB, In1/operandB -> srcA
     SAN_HOOK(init<OperationFpuMatmul>(
@@ -62,7 +91,7 @@ inline void llk_math_matmul_init(
         StateDiscard<bool>(partial_face)));
 
     llk_math_matmul_init_impl<math_fidelity, THROTTLE_LEVEL>(
-        in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face, transpose, ct_dim, rt_dim);
+        get_operand_tensor_shape(in0_id), get_operand_tensor_shape(in1_id), transpose, ct_dim, rt_dim);
 }
 
 template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0, std::uint32_t num_faces = 4 /*not used*/>
@@ -90,7 +119,7 @@ inline void llk_math_matmul(
         StateVal<OperationFpuMatmul::ThrottleLevel>(THROTTLE_LEVEL),
         StateVal<OperationFpuMatmul::CtDim>(ct_dim),
         StateVal<OperationFpuMatmul::RtDim>(rt_dim),
-        StateDiscard<uint>(dst_index)));
+        StateDiscard<std::uint32_t>(dst_index)));
 
     _llk_math_matmul_<math_fidelity, THROTTLE_LEVEL>(dst_index, ct_dim, rt_dim);
 }
