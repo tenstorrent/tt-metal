@@ -21,10 +21,10 @@ std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
 
 // Split K across back-to-back calls that accumulate into one DEST.
-constexpr std::uint32_t num_calls           = CUSTOM_MM_NUM_CALLS;
-constexpr std::uint32_t kt_per_call         = KT_DIM / num_calls;
-constexpr std::uint32_t bfp8_tile_words     = 68;
-constexpr std::uint32_t b_words_per_call    = kt_per_call * CT_DIM * bfp8_tile_words;
+constexpr std::uint32_t num_calls        = CUSTOM_MM_NUM_CALLS;
+constexpr std::uint32_t kt_per_call      = KT_DIM / num_calls;
+constexpr std::uint32_t bfp8_tile_words  = 68;
+constexpr std::uint32_t b_words_per_call = kt_per_call * CT_DIM * bfp8_tile_words;
 constexpr std::uint32_t meta_bytes_per_call =
     ((kt_per_call * CT_DIM + COMPRESSED_META_SLOTS_PER_WORD - 1) / COMPRESSED_META_SLOTS_PER_WORD) * sizeof(std::uint32_t);
 static_assert(kt_per_call * num_calls == KT_DIM && kt_per_call % 2 == 0, "each call needs an even share of the K tiles");
@@ -172,7 +172,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
             compressed_mm_isolate_dvalids<false>(LOOP_FACTOR, num_calls, kt_per_call, CT_DIM, buffer_C[0], meta_bytes_per_call);
         }
