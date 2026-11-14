@@ -109,6 +109,11 @@ constexpr bool matmul_kernel_ttsync(const MathFidelity fidelity, const bool full
     {
         return false;
     }
+    // HiFi3 half sync over 16-bit operands into a 32-bit CB: minimal_matmul 224 2x1 bf16 +263 ns on device with it
+    if (fp32_dest && wide && fidelity == MathFidelity::HiFi3 && !full_sync && !bfp8)
+    {
+        return false;
+    }
     return true;
 }
 constexpr bool matmul_format_is_16bit(const DataFormat f)
