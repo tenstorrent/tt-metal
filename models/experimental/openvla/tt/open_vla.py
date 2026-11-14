@@ -312,7 +312,7 @@ def get_LLama2OpenVLAArgs(state_dict, use_bf16_lm_head=True):
 
 
 class OpenVLALanguageModel(GenerationMixin):
-    def __init__(self, device, local_state_dict=None):
+    def __init__(self, device, local_state_dict=None, num_layers=32):
         # ============================================================================
         # OPTION 1: BFP8 with BF16 KV cache only (works on single device)
         # This has precision issues with action tokens but fits in L1 on single device
@@ -409,7 +409,7 @@ class OpenVLALanguageModel(GenerationMixin):
             "max_seq_len": 1024,  # Vision (~512) + text gets padded to 1024
             "page_params": {"page_block_size": 32, "page_max_num_blocks_per_dp": 512},  # Reduced blocks
             "paged_attention": True,
-            "num_layers": 32,  # Default number of layers for LLaMA model
+            "num_layers": num_layers,
         }
 
         # Inline model creation (adapted from prepare_generator_args) with custom ModelArgsClass
