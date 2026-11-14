@@ -55,7 +55,6 @@ def _assert_close(name, got, ref, dtype):
     )
 
 
-# Covers the asymptotic |x| > 10 branch and the ±88.5 input clamp.
 # Range [-50, 50] keeps reference values within FP32 (i1(50) ≈ 2.93e20).
 @pytest.mark.parametrize(
     "shapes",
@@ -90,18 +89,18 @@ def test_i1_ood(device, shapes, dtype):
     _assert_close("test_i1_ood", output_tensor, torch_output_tensor, dtype)
 
 
-# Boundary inputs straddling the |x| > 10 branch and the ±88.5 clamp.
 @pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
 def test_i1_clamp_boundary(device, dtype):
     boundaries = torch.tensor(
-        [-100.0, -88.5, -88.0, -10.5, -10.0, -9.5, 9.5, 10.0, 10.5, 88.0, 88.5, 100.0],
+        [-1000.0, -91.5, -90.0, -88.5, -88.0, -10.5, -10.0, -9.875, -9.5, 9.5, 9.875, 9.9375, 10.0, 10.5, 88.0, 88.5]
+        + [89.0, 90.0, 91.5, 92.0]
+        + [100.0, float("inf"), float("-inf")],
         dtype=torch.float32,
     )
-    # i1 is unbounded; out-of-clamp inputs (|x| > 88.5) return i1(±88.5).
-    expected_input = torch.clamp(boundaries, min=-88.5, max=88.5)
     torch_dtype = torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
-    expected_input = expected_input.to(torch_dtype).to(torch.float32)
-    torch_output_tensor = torch.special.i1(expected_input)
+    expected_input = boundaries.to(torch_dtype).to(torch.float32)
+    torch_output_tensor = torch.special.i1(expected_input.double()).float()
+    torch_output_tensor = torch.where(expected_input.isinf(), expected_input, torch_output_tensor)
 
     # Pad to a tile-aligned shape so we can run on device.
     padded = torch.zeros((1, 1, 32, 32), dtype=torch.float32)
