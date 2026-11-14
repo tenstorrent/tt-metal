@@ -1359,6 +1359,28 @@ def test_scatter_sampling_params_to_slots_moves_params_to_their_slot_row():
     assert params.temperature == [0.1, 0.2, 0.3]
 
 
+def test_scatter_sampling_params_to_slots_keeps_logprob_fields_in_request_order():
+    """set_log_probs_mode maps request i to empty_slots[i] itself, so it must still be handed request order."""
+    params = format_sampling_params(
+        SamplingParams(
+            temperature=[1.0, 1.0], top_k=[8, 8], top_p=[0.9, 0.9], enable_log_probs=[True, False], num_logprobs=[5, 0]
+        ),
+        32,
+    )
+
+    scattered = scatter_sampling_params_to_slots(params, [4, 7], slot_len=32)
+
+    calculator = object.__new__(LogProbsCalculator)
+    calculator.batch_size = 32
+    calculator.logprobs_enabled = [False] * 32
+    calculator.num_logprobs = [0] * 32
+    calculator.set_log_probs_mode(scattered.enable_log_probs, num_logprobs=scattered.num_logprobs, empty_slots=[4, 7])
+
+    assert calculator.logprobs_enabled[4] is True and calculator.logprobs_enabled[7] is False
+    assert calculator.num_logprobs[4] == 5 and calculator.num_logprobs[7] == 0
+    assert calculator.enable_log_probs is True
+
+
 def test_scatter_sampling_params_to_slots_is_identity_for_dense_slots():
     params = format_sampling_params(SamplingParams(temperature=[0.5, 0.5], top_k=[4, 4], top_p=[0.9, 0.9]), 32)
 
