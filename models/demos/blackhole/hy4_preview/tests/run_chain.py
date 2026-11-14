@@ -22,6 +22,7 @@ NL = int(os.environ.get("NL", "4"))
 TEST = os.environ.get("TEST", "both")
 KVFMT = os.environ.get("KVFMT", "bf16")
 PAD = 120002
+ORACLE_LAYERS = os.environ.get("ORACLE_LAYERS", "")
 
 
 def res(**kw):
@@ -99,7 +100,7 @@ def main():
             for r in range(4):
                 ids[r, : len(ids_all[r])] = torch.tensor(ids_all[r])
                 lens.append(len(ids_all[r]))
-            taps = {} if NL <= 4 else None
+            taps = {} if (NL <= 4 or ORACLE_LAYERS) else None
             t0 = time.time()
             x4, _ = ch.prefill(ids, taps=taps)
             ttnn.synchronize_device(md)
@@ -109,11 +110,13 @@ def main():
             def ref_of(L, r):
                 k = (L, r)
                 if k not in ref:
-                    ref[k] = torch.load(f"{DUMPS}/layer{L:02d}_p{r}.pt")["out"][0]
+                    ref[k] = torch.load(f"{ORACLE_LAYERS or DUMPS}/layer{L:02d}_p{r}.pt")["out"][0]
                 return ref[k], 0
 
-            if NL <= 4:
+            if ORACLE_LAYERS:
                 compare_layers(taps, md, ref_of, lens, "short", NL)
+            if NL <= 4:
+                compare_layers(taps, md, ref_of, lens, "short", NL) if not ORACLE_LAYERS else None
                 hn_ref_rows = [cpu_head(ch, ref_of(NL - 1, r)[0]) for r in range(4)]
                 hn, logits = ch.head(x4)
                 hn_rows = to_rows(hn, md)

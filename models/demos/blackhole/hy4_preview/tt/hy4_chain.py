@@ -391,7 +391,10 @@ class Hy4Chain:
         for ly in layers or self.layers:
             x4 = ly.prefill_chunk(x4, start, ids_by_layer)
             if taps is not None:
-                taps[ly.L] = ttnn.clone(x4)
+                tr = int(
+                    os.environ.get("HY4_TAP_ROWS", "0")
+                )  # >0: keep only the first rows (the short dump prompts) of every layer's stream
+                taps[ly.L] = ttnn.slice(x4, [0, 0, 0, 0], [1, NSTREAM, tr, HID]) if tr else ttnn.clone(x4)
         return x4, ids_by_layer
 
     def reset(self):
