@@ -12,7 +12,6 @@ TT transcription + detected language against the CPU baseline in summary.json.
 import glob
 import json
 import os
-import re
 import sys
 import time
 
@@ -29,6 +28,7 @@ sys.path.insert(0, os.path.join(ROOT, "reference"))
 sys.path.insert(0, os.path.join(ROOT, "tt"))
 import audio_encoder as tt_enc  # noqa: E402
 import audio_encoder_ref as ref  # noqa: E402
+from asr_output import parse_asr  # noqa: E402
 from qwen3_asr_decoder import Qwen3ASRDecoder  # noqa: E402
 
 WAV_DIR = os.environ.get("WAV_DIR", "/ttwork/qwen3_asr_wav")
@@ -40,14 +40,6 @@ def load_embed_tokens():
     f = os.path.join(CKPT, "model.safetensors")
     with safe_open(f, "pt") as h:
         return h.get_tensor("model.embed_tokens.weight").float()  # (vocab, 2048)
-
-
-def parse_asr(text):
-    """Raw decode -> (language, transcription). Format: 'language <Lang><asr_text><text>'."""
-    m = re.search(r"language\s*(.*?)<asr_text>(.*)", text, flags=re.DOTALL)
-    if m:
-        return m.group(1).strip(), m.group(2).strip()
-    return "", text.strip()
 
 
 def main():
