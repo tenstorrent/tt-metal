@@ -211,13 +211,6 @@ class TestTanhBwDeepTail:
         ), f"ULP {ulp_error} and abs error {abs(actual - expected):.3e} both exceed thresholds"
 
 
-@pytest.mark.skipif(
-    ttnn.get_arch_name() != "blackhole",
-    reason=(
-        "Wormhole's tanh derivative still builds |x| with sfpi::abs, which leaves a sign-set NaN "
-        "sign-set; tracked by https://github.com/tenstorrent/tt-metal/issues/57509"
-    ),
-)
 class TestTanhBwNonFinite:
     """Non-finite inputs return 0, whatever the sign bit. The sign-set NaNs are the
     ones that matter: torch rounds every NaN to bf16 as 0xFFFF, and with |x| taken by
