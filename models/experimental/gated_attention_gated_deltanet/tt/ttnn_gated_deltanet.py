@@ -397,6 +397,7 @@ def gated_deltanet_forward_ttnn(
     use_inplace_state=False,  # ttnn.copy for trace-stable state
     chunk_seq_masks=None,  # cached masks for gated_delta_attn_seq prefill
     valid_len=None,  # fixed-bucket padding; zeros padded positions in scan
+    chunk_delta_rule_fn=None,  # chunk-prefill override (same kwargs as the seq adapter); None = seq adapter
 ):
     """Gated DeltaNet forward. mode: recurrent (decode T=1) or chunk (prefill T>1).
 
@@ -699,7 +700,7 @@ def gated_deltanet_forward_ttnn(
 
     # Gated delta rule: chunk prefill (fp32 seq kernel) vs decode (optimized T=1) vs recurrent fallback
     if mode == "chunk" and T > 1:
-        o, new_state = chunk_gated_delta_rule_seq_adapter(
+        o, new_state = (chunk_delta_rule_fn or chunk_gated_delta_rule_seq_adapter)(
             q=q,
             k=k,
             v=v,

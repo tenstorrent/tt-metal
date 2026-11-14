@@ -391,6 +391,7 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
              {"group", group},
              {"input_wt", input_wt},
              {"input_ct_offset", input_ct_offset},
+             {"segment_tiles", attrs.segment_length / tt::constants::TILE_HEIGHT},
              {"exchange", uint32_t(exchange)},
              {"token_paged", uint32_t(tail.token_paged)},
              {"page_channels", tail.page_channels}},

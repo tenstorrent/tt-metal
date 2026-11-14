@@ -194,6 +194,7 @@ def _run(
     compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None,
     output_dtype: ttnn.DataType = ttnn.float32,
     gate_column_offset: int = 0,
+    silu_gate: bool = False,
 ) -> ttnn.Tensor:
     return ttnn.experimental.kda.sigmoid_gated_rms_norm(
         input_tt,
@@ -205,6 +206,7 @@ def _run(
         compute_kernel_config=compute_kernel_config,
         output_dtype=output_dtype,
         gate_column_offset=gate_column_offset,
+        silu_gate=silu_gate,
     )
 
 
@@ -225,18 +227,20 @@ def _reference(
     num_heads: int,
     value_dim: int,
     output_dtype: ttnn.DataType,
+    silu_gate: bool = False,
 ) -> torch.Tensor:
     inputs, gate, weight = host
-    return (
-        sigmoid_gated_rms_norm_reference(
-            inputs.reshape(batch, num_heads, sequence, value_dim).permute(0, 2, 1, 3),
-            gate.reshape(batch, sequence, num_heads, value_dim),
-            weight,
-            eps=_EPSILON,
-        )
-        .reshape(batch, sequence, num_heads * value_dim)
-        .to(_torch_dtype(output_dtype))
-    )
+    inputs = inputs.reshape(batch, num_heads, sequence, value_dim).permute(0, 2, 1, 3)
+    gate = gate.reshape(batch, sequence, num_heads, value_dim)
+    if silu_gate:
+        # rms_norm(x) * w * silu(gate) in fp32: the sigmoid reference with its gate factor swapped for silu.
+        inputs = inputs.float()
+        normalized = inputs * torch.rsqrt(inputs.square().mean(dim=-1, keepdim=True) + _EPSILON)
+        gate = gate.float()
+        reference = normalized * weight.float() * torch.nn.functional.silu(gate)
+    else:
+        reference = sigmoid_gated_rms_norm_reference(inputs, gate, weight, eps=_EPSILON)
+    return reference.reshape(batch, sequence, num_heads * value_dim).to(_torch_dtype(output_dtype))
 
 
 def _assert_output_contract(
@@ -670,3 +674,75 @@ def test_sigmoid_gated_rms_norm_rejects_sharded_output(device: ttnn.Device, expe
     sharded_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
     with expect_error(RuntimeError, "output memory configuration must be interleaved"):
         _run(input_tt, gate_tt, weight_tt, memory_config=sharded_config)
+
+
+_SILU_CASE = dict(batch=2, sequence=256, num_heads=16, value_dim=128)
+
+
+def _silu_reference(host, output_dtype, silu_gate=True):
+    return _reference(host, output_dtype=output_dtype, silu_gate=silu_gate, **_SILU_CASE)
+
+
+def _silu_inputs(device, gate: torch.Tensor | None = None):
+    host, (input_tt, gate_tt, weight_tt) = _device_inputs(device, input_dtype=ttnn.float32, seed=7301, **_SILU_CASE)
+    if gate is not None:
+        host = (host[0], gate, host[2])
+        gate_tt = _to_device(gate, device, dtype=ttnn.bfloat16)
+    return host, (input_tt, gate_tt, weight_tt)
+
+
+def test_sigmoid_gated_rms_norm_silu_gate_is_accurate(device: ttnn.Device) -> None:
+    host, (input_tt, gate_tt, weight_tt) = _silu_inputs(device)
+    expected = _silu_reference(host, ttnn.bfloat16)
+    actual = ttnn.to_torch(_run(input_tt, gate_tt, weight_tt, num_heads=16, output_dtype=ttnn.bfloat16, silu_gate=True))
+    assert_accurate(expected, actual, name="silu_gate", pcc_threshold=0.999, nrmse_threshold=0.004)
+
+
+def test_sigmoid_gated_rms_norm_silu_gate_large_gate_is_finite(device: ttnn.Device) -> None:
+    generator = torch.Generator().manual_seed(7302)
+    gate = (torch.randn(2, 256, 2048, generator=generator) * 20.0).to(torch.bfloat16)
+    flat = gate.view(-1)
+    positions = torch.randperm(flat.numel(), generator=generator)[:8]
+    flat[positions[:4]] = 100.0
+    flat[positions[4:]] = -100.0
+    host, (input_tt, gate_tt, weight_tt) = _silu_inputs(device, gate)
+    expected = _silu_reference(host, ttnn.bfloat16)
+    actual = ttnn.to_torch(_run(input_tt, gate_tt, weight_tt, num_heads=16, output_dtype=ttnn.bfloat16, silu_gate=True))
+    assert torch.isfinite(actual.float()).all(), "silu_gate output has NaN/inf for large gate values"
+    assert_accurate(expected, actual, name="silu_gate large", pcc_threshold=0.999, nrmse_threshold=0.004)
+
+
+def test_sigmoid_gated_rms_norm_silu_gate_column_offset_matches_sliced_gate(device: ttnn.Device) -> None:
+    offset, width = 6208, 2048
+    host, (input_tt, gate_tt, weight_tt) = _silu_inputs(device)
+    generator = torch.Generator().manual_seed(7303)
+    wide = torch.cat((torch.randn(2, 256, offset, generator=generator, dtype=torch.bfloat16), host[1]), dim=-1)
+    assert wide.shape[-1] == offset + width == 8256
+    wide_tt = _to_device(wide, device, dtype=ttnn.bfloat16)
+    expected = _run(input_tt, gate_tt, weight_tt, num_heads=16, output_dtype=ttnn.bfloat16, silu_gate=True)
+    actual = _run(
+        input_tt,
+        wide_tt,
+        weight_tt,
+        num_heads=16,
+        output_dtype=ttnn.bfloat16,
+        gate_column_offset=offset,
+        silu_gate=True,
+    )
+    assert_bit_identical(ttnn.to_torch(expected), ttnn.to_torch(actual), name="silu gate_column_offset")
+
+
+def test_sigmoid_gated_rms_norm_silu_gate_program_cache_does_not_alias(
+    device: ttnn.Device, isolated_program_cache: None
+) -> None:
+    host, (input_tt, gate_tt, weight_tt) = _silu_inputs(device)
+    results = []
+    for silu in (False, True, False):
+        expected = _silu_reference(host, ttnn.bfloat16, silu_gate=silu)
+        actual = ttnn.to_torch(
+            _run(input_tt, gate_tt, weight_tt, num_heads=16, output_dtype=ttnn.bfloat16, silu_gate=silu)
+        )
+        assert_accurate(expected, actual, name=f"cache silu={silu}", pcc_threshold=0.999, nrmse_threshold=0.004)
+        results.append(actual)
+    assert not torch.equal(results[0], results[1]), "silu and sigmoid outputs must differ"
+    assert torch.equal(results[0], results[2]), "sigmoid output changed after the silu run"

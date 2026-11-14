@@ -16,6 +16,7 @@ class GDNConfig:
     k_dim: int
     v_dim: int
     long_prefill_chunk_size: int = 128
+    fused_prefill: bool = False
 
     @classmethod
     def from_args(cls, args) -> "GDNConfig":
@@ -29,4 +30,5 @@ class GDNConfig:
             q_dim=args.linear_q_dim,
             k_dim=args.linear_k_dim,
             v_dim=args.linear_v_dim,
+            fused_prefill=getattr(args, "gdn_fused_prefill", False),
         )
