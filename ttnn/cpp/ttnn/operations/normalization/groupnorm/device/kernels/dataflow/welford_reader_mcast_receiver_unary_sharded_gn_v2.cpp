@@ -11,6 +11,7 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#include "ckernel.h"
 
 void kernel_main() {
     constexpr std::uint32_t reduce_receiver_semaphore_id = get_compile_time_arg_val(0);
@@ -111,6 +112,11 @@ void kernel_main() {
             auto* p_global_vars = reinterpret_cast<volatile stats_write_t*>(global_vars_ptr);
             p_global_means[0] = local_result.mean;
             p_global_vars[0] = local_result.variance;
+
+            // A RISC-V store can retire before it lands in L1. load_blocking reads the mean and variance
+            // back, which makes those stores land before the sender NoC-reads these addresses.
+            (void)ckernel::load_blocking(p_global_means);
+            (void)ckernel::load_blocking(p_global_vars);
 
             // Signal to sender that our partial data is ready
             reduce_receiver_sem.up(noc, mcast_sender_noc_x, mcast_sender_noc_y, 1);
