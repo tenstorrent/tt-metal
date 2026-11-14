@@ -135,7 +135,7 @@ the fused kernels require. Unset keeps the bf16 sum.
   Models with many small gradients pay per call rather than per byte, so fewer, larger collectives would cut most of
   the cost.
 - **Scope.** `reduce_dtype` covers the sum across devices. Two sums next to it still run in the gradient's dtype, until
-  a later PR of #56513 keeps the gradient in fp32 from its first add to the optimizer step:
+  a later PR of #56513 keeps the gradient in fp32 from its second add to the optimizer step:
   - With gradient accumulation, the sum across micro-batches: `Tensor::add_grad` adds each micro-batch's gradient with
     `ttnn::add`. Under FSDP, `backward_post` writes the mean back in bf16 after every micro-batch, and the next one
     adds into it.
