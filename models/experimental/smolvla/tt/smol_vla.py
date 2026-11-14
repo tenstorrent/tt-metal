@@ -299,6 +299,20 @@ def extract_vision_state_dict(state_dict: Dict[str, torch.Tensor]) -> Dict[str, 
     return vision_state_dict
 
 
+def load_vision_weights_strict(vision_model: nn.Module, state_dict: Dict[str, torch.Tensor]) -> None:
+    """Load the vision tower from a SmolVLA state dict, raising if any weight is not loaded.
+
+    Raises KeyError when no vision keys are found (e.g. a different key prefix) and RuntimeError
+    when the tower's parameters are missing from the checkpoint, instead of leaving them randomly initialised.
+    """
+    vision_weights = extract_vision_state_dict(state_dict)
+    if not vision_weights:
+        raise KeyError("SmolVLA state dict has no 'model.vlm_with_expert.vlm.model.vision_model.' keys")
+    result = vision_model.load_state_dict(vision_weights, strict=False)
+    if result.missing_keys:
+        raise RuntimeError(f"SmolVLA vision weights missing from state dict: {result.missing_keys[:5]}")
+
+
 def extract_connector_state_dict(state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
     """Extract connector/projector weights from SmolVLA state dict."""
     connector_state_dict = {}
@@ -1054,10 +1068,8 @@ class SmolVLAVisionEncoder(nn.Module):
 
         # Load weights if provided
         if state_dict is not None:
-            vision_weights = extract_vision_state_dict(state_dict)
-            if vision_weights:
-                self.vision_model.load_state_dict(vision_weights, strict=False)
-                logger.info("Loaded vision encoder weights from state dict")
+            load_vision_weights_strict(self.vision_model, state_dict)
+            logger.info("Loaded vision encoder weights from state dict")
 
         # Initialize TT parameters if device is available
         self.tt_params_initialized = False
