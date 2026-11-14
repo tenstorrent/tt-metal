@@ -143,7 +143,7 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: Checkout actions
-        uses: tenstorrent/.github/actions/cachew-checkout@a140c8c392c97a81ebe9919b8397a6d0e90febf3 # cachew checkout
+        uses: tenstorrent/.github/actions/cachew-checkout@a1e96bdf5ba27204ec4a54c329c1e47415034496 # cachew checkout
         timeout-minutes: 20
         with:
           sparse-checkout: |
@@ -299,7 +299,7 @@ jobs:
           fi
 
       - name: Checkout repository for Codecov mapping
-        uses: tenstorrent/.github/actions/cachew-checkout@a140c8c392c97a81ebe9919b8397a6d0e90febf3 # cachew checkout
+        uses: tenstorrent/.github/actions/cachew-checkout@a1e96bdf5ba27204ec4a54c329c1e47415034496 # cachew checkout
         timeout-minutes: 20
         if: ${{ inputs.upload-coverage }}
         with:

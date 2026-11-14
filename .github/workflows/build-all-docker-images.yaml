@@ -289,7 +289,7 @@ jobs:
     runs-on: ${{ inputs.runs-on-large || 'tt-ubuntu-2204-large-stable' }}
     steps:
       - name: ⬇️ Checkout
-        uses: tenstorrent/.github/actions/cachew-checkout@a140c8c392c97a81ebe9919b8397a6d0e90febf3 # cachew checkout
+        uses: tenstorrent/.github/actions/cachew-checkout@a1e96bdf5ba27204ec4a54c329c1e47415034496 # cachew checkout
         timeout-minutes: 20
         with:
           fetch-depth: 1
@@ -350,7 +350,7 @@ jobs:
     if: always() && !failure() && !cancelled() && inputs.prewarm-harbor && needs.preflight.outputs.harbor-prefix != ''
     runs-on: ${{ inputs.runs-on-medium || 'tt-ubuntu-2204-medium-stable' }}
     steps:
-      - uses: tenstorrent/.github/actions/cachew-checkout@a140c8c392c97a81ebe9919b8397a6d0e90febf3 # cachew checkout
+      - uses: tenstorrent/.github/actions/cachew-checkout@a1e96bdf5ba27204ec4a54c329c1e47415034496 # cachew checkout
         timeout-minutes: 20
         with:
           sparse-checkout: .github/actions/prewarm-images
