@@ -4,13 +4,11 @@
 
 #include "ttnn/graph/graph_nanobind.hpp"
 
-#include <optional>
 #include <string>
 #include <sstream>
 #include <filesystem>
 
 #include <nanobind/nanobind.h>
-#include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
 #include <nanobind/stl/tuple.h>
@@ -265,14 +263,7 @@ void py_graph_module(nb::module_& m) {
 
     m.def(
         "extract_resource_usage_per_core",
-        [](const nb::object& py_trace, std::optional<size_t> interleaved_storage_cores) {
-            if (interleaved_storage_cores.has_value()) {
-                PyErr_WarnEx(
-                    PyExc_DeprecationWarning,
-                    "interleaved_storage_cores is no longer used; call "
-                    "extract_resource_usage_per_core(trace) instead. Removal by 2026-06-07.",
-                    1);
-            }
+        [](const nb::object& py_trace) {
             auto json_module = nb::module_::import_("json");
             auto trace_str = std::string{nb::str(json_module.attr("dumps")(py_trace)).c_str()};
             nlohmann::json trace = nlohmann::json::parse(trace_str);
@@ -286,10 +277,9 @@ void py_graph_module(nb::module_& m) {
 
         Args:
             trace: Captured graph trace from end_graph_capture()
-            interleaved_storage_cores: Deprecated, no longer used. Removal by 2026-06-07.
 
         Returns:
-            PeakMemoryUsagePerCore: Object with three fields:
+            PeakMemoryUsagePerCore: Object with five fields:
                 - peak_cb: Peak circular buffer usage per core (bytes)
                 - peak_l1: Peak L1 buffer usage per core (bytes)
                 - peak_dataflow_buffer: Peak Metal 2.0 dataflow buffer usage per core (bytes)
@@ -302,8 +292,7 @@ void py_graph_module(nb::module_& m) {
             >>> if usage.peak_total > 256 * 1024:
             ...     print("Warning: Exceeds 256KB L1 per core!")
         )doc",
-        nb::arg("trace"),
-        nb::arg("interleaved_storage_cores") = nb::none());
+        nb::arg("trace"));
 
     m.def(
         "is_graph_capture_active",
