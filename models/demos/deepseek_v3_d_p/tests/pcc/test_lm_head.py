@@ -22,7 +22,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import extract_mesh_config
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_lm_head import TtLMHead
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS_PER_CHIP
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 # Mapping from torch dtypes to corresponding ttnn dtypes
 TORCH_TO_TTNN_DTYPE = {

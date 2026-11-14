@@ -18,7 +18,7 @@ from models.experimental.vibevoice.tt.ttnn_vibevoice_lm import (
     TTVibeVoiceLM,
     preprocess_lm_weights,
 )
-from tests.ttnn.utils_for_testing import assert_numeric_metrics
+from tt_py_test_utils_common.utils_for_testing import assert_numeric_metrics
 
 
 PCC_THRESHOLD = 0.99

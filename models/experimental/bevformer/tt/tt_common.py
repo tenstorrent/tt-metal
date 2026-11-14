@@ -261,10 +261,10 @@ class TTConv2D:
     ``subsample`` returns it. Its
     ``conv_pth`` is then a Linear's ``(in, out)`` weight and ``(1, out)`` bias, which
     ``model_preprocessing`` emits for such convs. A spatial conv keeps conv2d and runs in
-    ``dram_conv_slices`` width slices, or height slices with ``dram_height_slices``.
+    ``dram_conv_slices`` width slices.
 
-    ``dealloc_act`` lets conv2d free the L1-sharded copy it makes of a DRAM input once the
-    halo has read it; the DRAM input itself is never freed.
+    ``dealloc_act`` lets conv2d free its L1 input, or the L1-sharded copy it makes of a DRAM
+    input, once the halo has read it; a DRAM input itself is never freed.
 
     ``output_layout`` is the layout conv2d emits, None for its TILE default; a 1x1 conv run as
     ``ttnn.linear`` emits TILE and takes no other. conv2d's DRAM path runs every slice through its
@@ -272,6 +272,8 @@ class TTConv2D:
     layout was asked for; so a ROW_MAJOR conv whose slice count comes to one, and one without
     ``dram_activation``, runs unsliced on the L1 path instead, and its activation and output must
     fit in L1. Its output is then sharded in L1.
+    ``reshard_input`` lets conv2d reshard an L1-sharded input to the cores it would pick itself;
+    without it, the conv runs on the input's own shards.
     ``l1_output`` lets a 1x1 conv run as ``ttnn.linear`` write its output height-sharded in L1
     when each core's shard fits ``L1_OUTPUT_MAX_SHARD_BYTES``; ``output_in_l1`` says whether it does.
     ``output_dtype`` is the dtype the conv emits, None for its input's. A spatial conv, on
@@ -294,13 +296,13 @@ class TTConv2D:
         fp32_dest_acc_en=False,
         dram_activation=False,
         dram_conv_slices=None,
-        dram_height_slices=False,
         input_dtype=ttnn.bfloat16,
         input_layout=ttnn.TILE_LAYOUT,
         input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
         output_dtype=None,
         output_layout=None,
         l1_output=False,
+        reshard_input=True,
     ):
         self.dram_activation = dram_activation
         self.output_in_l1 = False
@@ -333,7 +335,7 @@ class TTConv2D:
             shard_layout=shard_layout,
             deallocate_activation=dealloc_act,
             enable_act_double_buffer=False,
-            reshard_if_not_optimal=True,
+            reshard_if_not_optimal=reshard_input,
             activation=activation,
         )
         if act_block_h is not None:
@@ -364,12 +366,8 @@ class TTConv2D:
             # count is fixed here. Width slices of a TILE output are whole tiles wide, so a
             # conv whose output is W wide takes at most ceil(W / TILE_SIZE) of them.
             assert dram_conv_slices is not None, "a spatial conv with dram_activation needs dram_conv_slices"
-            if dram_height_slices:
-                slice_type, num_slices = ttnn.Conv2dDRAMSliceHeight, dram_conv_slices
-            else:
-                slice_type = ttnn.Conv2dDRAMSliceWidth
-                num_slices = min(dram_conv_slices, math.ceil(self.output_width / ttnn.TILE_SIZE))
-            self.slice_config = ttnn.Conv2dSliceConfig(slice_type=slice_type, num_slices=num_slices)
+            num_slices = min(dram_conv_slices, math.ceil(self.output_width / ttnn.TILE_SIZE))
+            self.slice_config = ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceWidth, num_slices=num_slices)
         if output_layout == ttnn.ROW_MAJOR_LAYOUT and num_slices in (None, 1):
             self.slice_config = ttnn.Conv2dL1FullSliceConfig
 

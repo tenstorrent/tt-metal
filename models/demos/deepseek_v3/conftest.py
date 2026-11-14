@@ -12,7 +12,7 @@ from transformers import AutoConfig
 import ttnn
 from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.utils.test_utils import get_valid_system_names, load_state_dict, system_name_to_mesh_shape
-from tests.scripts.common import get_updated_device_params
+from tt_py_test_utils_common.device_params import get_updated_device_params
 
 RESET_WEIGHT_CACHE_OPTION = "--recalculate-weights"
 

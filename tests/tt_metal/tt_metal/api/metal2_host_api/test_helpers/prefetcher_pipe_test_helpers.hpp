@@ -21,8 +21,8 @@
 #include <gmock/gmock.h>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include "impl/dataflow_buffer/prefetcher_pipe.hpp"
 #include "impl/program/program_impl.hpp"
@@ -30,7 +30,7 @@
 #include "metal2_host_api/test_helpers/mock_device_fixtures.hpp"
 #include "metal2_host_api/test_helpers/test_helpers.hpp"
 
-namespace tt::tt_metal::experimental::test_helpers {
+namespace tt::tt_metal::test_helpers {
 
 // Owns the PrefetcherPipeSpaces the tests carve pipes from. A space must outlive its pipes (a
 // pipe points at its space without owning it), so the carve helpers park each space here and
@@ -40,24 +40,24 @@ class PipeSpaceOwner {
 protected:
     // One pipe carved from a space sized exactly for it, with `sender` as its sender node (the
     // spec does not carry one). `num_credit_lanes` is the receiver kernel's num_threads.
-    PrefetcherPipe MakePipeFor(
+    experimental::PrefetcherPipe MakePipeFor(
         distributed::MeshDevice& device,
-        const PrefetcherPipeParameter& param,
+        const experimental::PrefetcherPipeParameter& param,
         const CoreCoord& sender,
         uint32_t num_credit_lanes = 1);
     // The test geometry's pipes carved where their sender kernels run.
-    PrefetcherPipe MakeWeightsPipe(distributed::MeshDevice& device, uint32_t num_credit_lanes = 1);
-    PrefetcherPipe MakeOtherPipe(distributed::MeshDevice& device, uint32_t num_credit_lanes = 1);
+    experimental::PrefetcherPipe MakeWeightsPipe(distributed::MeshDevice& device, uint32_t num_credit_lanes = 1);
+    experimental::PrefetcherPipe MakeOtherPipe(distributed::MeshDevice& device, uint32_t num_credit_lanes = 1);
     // Once the last carved pipe is gone, carve it again from its space: same addresses and geometry,
     // new identity.
-    PrefetcherPipe RecarveLastPipe(
+    experimental::PrefetcherPipe RecarveLastPipe(
         const CoreCoord& sender, const CoreRangeSet& receivers, uint32_t num_credit_lanes = 1) {
         return spaces_.back().create_pipe(sender, receivers, num_credit_lanes);
     }
     void ReleasePipeSpaces() { spaces_.clear(); }
 
 private:
-    std::vector<PrefetcherPipeSpace> spaces_;
+    std::vector<experimental::PrefetcherPipeSpace> spaces_;
 };
 
 class PrefetcherPipeSpecTestQuasar : public MockMeshDeviceFixture<tt::ARCH::QUASAR>, protected PipeSpaceOwner {
@@ -85,11 +85,11 @@ inline constexpr uint32_t pipe_entry_size = 2048;
 inline constexpr uint32_t pipe_num_entries = 4;
 inline constexpr uint32_t pipe_ring_size = pipe_entry_size * pipe_num_entries;
 
-inline const PrefetcherPipeParamName pipe_param_name{"weights"};
+inline const experimental::PrefetcherPipeParamName pipe_param_name{"weights"};
 inline const DFBSpecName relay_dfb_name{"weights_relay"};
 
-inline PrefetcherPipeParameter MakePipeParameter() {
-    return PrefetcherPipeParameter{
+inline experimental::PrefetcherPipeParameter MakePipeParameter() {
+    return experimental::PrefetcherPipeParameter{
         .unique_id = pipe_param_name,
         .receivers = pipe_receiver_nodes,
         .ring_size = pipe_ring_size,
@@ -97,22 +97,24 @@ inline PrefetcherPipeParameter MakePipeParameter() {
     };
 }
 
-inline PrefetcherPipeBinding BindPipes(std::vector<PrefetcherPipeParamName> pipes, std::string accessor = "weights") {
-    return PrefetcherPipeBinding{.pipe_parameter_names = std::move(pipes), .accessor_name = std::move(accessor)};
+inline experimental::PrefetcherPipeBinding BindPipes(
+    std::vector<experimental::PrefetcherPipeParamName> pipes, std::string accessor = "weights") {
+    return experimental::PrefetcherPipeBinding{
+        .pipe_parameter_names = std::move(pipes), .accessor_name = std::move(accessor)};
 }
 
-inline PrefetcherPipeBinding BindPipe(std::string accessor = "weights") {
+inline experimental::PrefetcherPipeBinding BindPipe(std::string accessor = "weights") {
     return BindPipes({pipe_param_name}, std::move(accessor));
 }
 
 // A second pipe on the next column: sender (1,0), receivers (1,1)..(1,3). Disjoint from "weights",
 // so the two can share an accessor (and a relay) whose nodes they tile.
-inline const PrefetcherPipeParamName other_param_name{"other"};
+inline const experimental::PrefetcherPipeParamName other_param_name{"other"};
 inline const NodeCoord other_sender_node{1, 0};
 inline const NodeRange other_receiver_nodes{NodeCoord{1, 1}, NodeCoord{1, 3}};
 
-inline PrefetcherPipeParameter MakeOtherPipeParameter() {
-    return PrefetcherPipeParameter{
+inline experimental::PrefetcherPipeParameter MakeOtherPipeParameter() {
+    return experimental::PrefetcherPipeParameter{
         .unique_id = other_param_name,
         .receivers = other_receiver_nodes,
         .ring_size = pipe_ring_size,
@@ -200,17 +202,18 @@ inline KernelSpec& KernelNamed(ProgramSpec& spec, const std::string& name) {
     throw std::runtime_error("no kernel " + name);
 }
 
-#define EXPECT_SPEC_REJECTED(spec, substr)                   \
-    EXPECT_THAT(                                             \
-        [&] { MakeProgramFromSpec(*mesh_device_, (spec)); }, \
+#define EXPECT_SPEC_REJECTED(spec, substr)                                                 \
+    EXPECT_THAT(                                                                           \
+        [&] { ::tt::tt_metal::experimental::MakeProgramFromSpec(*mesh_device_, (spec)); }, \
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(substr)))
 
 // A spec that passes validation builds a Program with its pipe slots reserved (no pipe bound yet).
-#define EXPECT_SPEC_VALID(spec) EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, (spec)); })
+#define EXPECT_SPEC_VALID(spec) \
+    EXPECT_NO_THROW({ ::tt::tt_metal::experimental::MakeProgramFromSpec(*mesh_device_, (spec)); })
 
-inline PrefetcherPipe PipeSpaceOwner::MakePipeFor(
+inline experimental::PrefetcherPipe PipeSpaceOwner::MakePipeFor(
     distributed::MeshDevice& device,
-    const PrefetcherPipeParameter& param,
+    const experimental::PrefetcherPipeParameter& param,
     const CoreCoord& sender,
     uint32_t num_credit_lanes) {
     const CoreRangeSet receivers = std::visit(
@@ -222,9 +225,9 @@ inline PrefetcherPipe PipeSpaceOwner::MakePipeFor(
             }
         },
         param.receivers);
-    spaces_.push_back(CreatePrefetcherPipeSpace(
+    spaces_.push_back(experimental::CreatePrefetcherPipeSpace(
         device,
-        PrefetcherPipeSpaceConfig{
+        experimental::PrefetcherPipeSpaceConfig{
             .sender_cores = CoreRangeSet(CoreRange(sender)),
             .receiver_domain = receivers,
             .ring_size = param.ring_size,
@@ -233,15 +236,17 @@ inline PrefetcherPipe PipeSpaceOwner::MakePipeFor(
     return spaces_.back().create_pipe(sender, receivers, num_credit_lanes);
 }
 
-inline PrefetcherPipe PipeSpaceOwner::MakeWeightsPipe(distributed::MeshDevice& device, uint32_t num_credit_lanes) {
+inline experimental::PrefetcherPipe PipeSpaceOwner::MakeWeightsPipe(
+    distributed::MeshDevice& device, uint32_t num_credit_lanes) {
     return MakePipeFor(device, MakePipeParameter(), pipe_sender_node, num_credit_lanes);
 }
-inline PrefetcherPipe PipeSpaceOwner::MakeOtherPipe(distributed::MeshDevice& device, uint32_t num_credit_lanes) {
+inline experimental::PrefetcherPipe PipeSpaceOwner::MakeOtherPipe(
+    distributed::MeshDevice& device, uint32_t num_credit_lanes) {
     return MakePipeFor(device, MakeOtherPipeParameter(), other_sender_node, num_credit_lanes);
 }
 
 // The participant record for `prefetcher_pipe_id` on `core`, or nullptr when the core has no slot.
-inline const tt::tt_metal::detail::ProgramImpl::PrefetcherPipeParticipant* ParticipantOn(
+inline const detail::ProgramImpl::PrefetcherPipeParticipant* ParticipantOn(
     const Program& program, const CoreCoord& core, uint8_t prefetcher_pipe_id) {
     const auto& per_core = program.impl().get_per_core_prefetcher_pipes();
     auto it = per_core.find(core);
@@ -256,4 +261,4 @@ inline const tt::tt_metal::detail::ProgramImpl::PrefetcherPipeParticipant* Parti
     return nullptr;
 }
 
-}  // namespace tt::tt_metal::experimental::test_helpers
+}  // namespace tt::tt_metal::test_helpers

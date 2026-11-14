@@ -17,7 +17,7 @@ import torch
 import ttnn
 from loguru import logger
 
-from tests.ttnn.utils_for_testing import assert_allclose
+from tt_py_test_utils_common.utils_for_testing import assert_allclose
 
 M = 32
 K_TILES_PER_BANK = 4  # in0 shard width in tiles -> 4 K blocks per shard with in0_block_w=1

@@ -40,7 +40,7 @@ ALWI void logical_not_tile(uint32_t idst) {
         (DATA_FORMAT == DataFormat::Float32 || DATA_FORMAT == DataFormat::Float16_b || is_bfp8_b_format(DATA_FORMAT) ||
          is_bfp4_b_format(DATA_FORMAT))
             ? InstrModLoadStore::DEFAULT
-        : (DATA_FORMAT == DataFormat::UInt16)                                 ? InstrModLoadStore::LO16
+        : (DATA_FORMAT == DataFormat::UInt16)                                 ? InstrModLoadStore::UINT16
         : (DATA_FORMAT == DataFormat::Int32 || is_uint32_format(DATA_FORMAT)) ? InstrModLoadStore::INT32
                                                                               : InstrModLoadStore::DEFAULT;
     MATH(SFPU_UNARY_CALL(

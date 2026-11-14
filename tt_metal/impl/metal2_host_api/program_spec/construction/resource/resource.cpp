@@ -10,7 +10,7 @@
 
 #include "impl/metal2_host_api/helpers.hpp"
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal {
 
 namespace {
 
@@ -135,4 +135,4 @@ KernelResourceBindings ResolveKernelResourceBindings(
     return bindings;
 }
 
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal

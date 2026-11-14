@@ -101,6 +101,23 @@ def clear_search_dirs(in_tree: bool = False) -> None:
 # --------------------------------------------------------------------------- #
 
 
+def test_llk_assert_setting_changes_the_variant_id(isolated_search_dirs, monkeypatch):
+    """Asserts-on and asserts-off ELFs must never share a CONSUME directory."""
+    clear_search_dirs()
+
+    monkeypatch.delenv("TT_LLK_DISABLE_ASSERTS", raising=False)
+    asserts_on_default = variant_id()
+
+    monkeypatch.setenv("TT_LLK_DISABLE_ASSERTS", "1")
+    asserts_off = variant_id()
+
+    monkeypatch.setenv("TT_LLK_DISABLE_ASSERTS", "0")
+    asserts_on_explicit = variant_id()
+
+    assert asserts_off != asserts_on_default
+    assert asserts_on_explicit == asserts_on_default
+
+
 @_IN_TREE_REGIMES
 def test_registered_search_dirs_change_the_variant_id(isolated_search_dirs, in_tree):
     """Search dirs live in class state, so ``self.__dict__`` cannot see them.

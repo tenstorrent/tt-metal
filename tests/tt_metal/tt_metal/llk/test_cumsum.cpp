@@ -76,19 +76,19 @@ static TensorSpec make_flat_dram_tensor_spec(uint32_t tile_size, uint32_t num_ti
 }
 
 // Quasar runs the data movement kernels on its 2xx DM cores; everything else uses the 1xx NCRISC/BRISC pair.
-static experimental::DataMovementHardwareConfig make_dm_hw_config(
+static DataMovementHardwareConfig make_dm_hw_config(
     const distributed::MeshDevice& mesh_device, DataMovementProcessor processor, NOC noc) {
     if (mesh_device.arch() == ARCH::QUASAR) {
-        return experimental::DataMovementHardwareConfig{
+        return DataMovementHardwareConfig{
             .config_2xx =
-                experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                DataMovementHardwareConfig::DataMovement2XXConfig{
                     .disable_dfb_implicit_sync_for_all = true,
                 },
         };
     }
-    return experimental::DataMovementHardwareConfig{
+    return DataMovementHardwareConfig{
         .config_1xx =
-            experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+            DataMovementHardwareConfig::DataMovement1XXConfig{
                 .processor = processor,
                 .noc = noc,
             },
@@ -96,7 +96,7 @@ static experimental::DataMovementHardwareConfig make_dm_hw_config(
 }
 
 void run_single_core_cumsum(distributed::MeshDevice& mesh_device, const CumsumConfig& test_config) {
-    const experimental::NodeCoord node{0, 0};
+    const NodeCoord node{0, 0};
 
     constexpr uint32_t single_tile_size = constants::TILE_HW * sizeof(bfloat16);
     constexpr uint32_t num_buffer_tiles = 2;
@@ -112,21 +112,21 @@ void run_single_core_cumsum(distributed::MeshDevice& mesh_device, const CumsumCo
     auto out_tensor =
         MeshTensor::allocate_on_device(mesh_device, make_flat_dram_tensor_spec(single_tile_size, num_tiles));
 
-    const experimental::DFBSpecName INPUT_DFB{"input_dfb"};
-    const experimental::DFBSpecName OUTPUT_DFB{"output_dfb"};
-    const experimental::KernelSpecName READER{"reader"};
-    const experimental::KernelSpecName WRITER{"writer"};
-    const experimental::KernelSpecName COMPUTE{"compute"};
-    const experimental::TensorParamName IN_TENSOR{"in_tensor"};
-    const experimental::TensorParamName OUT_TENSOR{"out_tensor"};
+    const DFBSpecName INPUT_DFB{"input_dfb"};
+    const DFBSpecName OUTPUT_DFB{"output_dfb"};
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const KernelSpecName COMPUTE{"compute"};
+    const TensorParamName IN_TENSOR{"in_tensor"};
+    const TensorParamName OUT_TENSOR{"out_tensor"};
 
-    experimental::DataflowBufferSpec input_dfb_spec{
+    DataflowBufferSpec input_dfb_spec{
         .unique_id = INPUT_DFB,
         .entry_size = single_tile_size,
         .num_entries = num_buffer_tiles,
         .data_format_metadata = DataFormat::Float16_b,
     };
-    experimental::DataflowBufferSpec output_dfb_spec{
+    DataflowBufferSpec output_dfb_spec{
         .unique_id = OUTPUT_DFB,
         .entry_size = single_tile_size,
         .num_entries = num_buffer_tiles,
@@ -135,24 +135,24 @@ void run_single_core_cumsum(distributed::MeshDevice& mesh_device, const CumsumCo
 
     // Columnwise chains cumsum down H, so tiles stream in (and back out) in NWH order. Rowwise transposes each
     // tile in and out of Dest, so the plain NHW tile order already chains across W.
-    experimental::KernelSpec reader_spec{
+    KernelSpec reader_spec{
         .unique_id = READER,
         .num_threads = 1,
-        .dfb_bindings = {experimental::ProducerOf(INPUT_DFB, "out")},
+        .dfb_bindings = {ProducerOf(INPUT_DFB, "out")},
         .tensor_bindings = {{.tensor_parameter_name = IN_TENSOR, .accessor_name = "src_tensor"}},
         .hw_config = make_dm_hw_config(mesh_device, DataMovementProcessor::RISCV_1, NOC::RISCV_1_default),
     };
-    experimental::KernelSpec writer_spec{
+    KernelSpec writer_spec{
         .unique_id = WRITER,
         .num_threads = 1,
-        .dfb_bindings = {experimental::ConsumerOf(OUTPUT_DFB, "in")},
+        .dfb_bindings = {ConsumerOf(OUTPUT_DFB, "in")},
         .tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}},
         .hw_config = make_dm_hw_config(mesh_device, DataMovementProcessor::RISCV_0, NOC::RISCV_0_default),
     };
-    experimental::ProgramRunArgs::KernelRunArgs reader_run_args{.kernel = READER};
-    experimental::ProgramRunArgs::KernelRunArgs writer_run_args{.kernel = WRITER};
+    ProgramRunArgs::KernelRunArgs reader_run_args{.kernel = READER};
+    ProgramRunArgs::KernelRunArgs writer_run_args{.kernel = WRITER};
 
-    experimental::KernelSpec::CompilerOptions::Defines compute_defines;
+    KernelSpec::CompilerOptions::Defines compute_defines;
     uint32_t compute_ht = test_config.Ht;
     uint32_t compute_wt = test_config.Wt;
 
@@ -161,18 +161,17 @@ void run_single_core_cumsum(distributed::MeshDevice& mesh_device, const CumsumCo
         reader_spec.compile_time_args = {{"num_entries_per_producer", num_tiles}, {"implicit_sync", 0}};
         reader_spec.runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}};
         reader_run_args.runtime_arg_values =
-            experimental::MakeRuntimeArgsForSingleNode(node, {{"chunk_offset", 0}, {"entries_per_core", num_tiles}});
+            MakeRuntimeArgsForSingleNode(node, {{"chunk_offset", 0}, {"entries_per_core", num_tiles}});
 
         writer_spec.source = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank_2_0.cpp";
         writer_spec.runtime_arg_schema = {.runtime_arg_names = {"num_tiles"}};
-        writer_run_args.runtime_arg_values =
-            experimental::MakeRuntimeArgsForSingleNode(node, {{"num_tiles", num_tiles}});
+        writer_run_args.runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"num_tiles", num_tiles}});
 
         compute_defines.emplace("ROWWISE", "1");
         std::swap(compute_ht, compute_wt);
     } else {
         auto make_nwh_args = [&]() {
-            return experimental::MakeRuntimeArgsForSingleNode(
+            return MakeRuntimeArgsForSingleNode(
                 node, {{"N", test_config.N}, {"Ht", test_config.Ht}, {"Wt", test_config.Wt}, {"HtWt", HtWt}});
         };
 
@@ -185,7 +184,7 @@ void run_single_core_cumsum(distributed::MeshDevice& mesh_device, const CumsumCo
         writer_run_args.runtime_arg_values = make_nwh_args();
     }
 
-    experimental::KernelSpec compute_spec{
+    KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = "tests/tt_metal/tt_metal/test_kernels/compute/cumsum.cpp",
         .num_threads = 1,
@@ -194,26 +193,26 @@ void run_single_core_cumsum(distributed::MeshDevice& mesh_device, const CumsumCo
             {{
                  .dfb_spec_name = INPUT_DFB,
                  .accessor_name = "in",
-                 .endpoint_type = experimental::DFBEndpointType::CONSUMER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                 .endpoint_type = DFBEndpointType::CONSUMER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
              },
              {
                  .dfb_spec_name = OUTPUT_DFB,
                  .accessor_name = "out",
-                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                 .endpoint_type = DFBEndpointType::PRODUCER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
              }},
         .compile_time_args = {{"Ht", compute_ht}, {"Wt", compute_wt}, {"NC", test_config.N}},
-        .hw_config = experimental::ComputeHardwareConfig{},
+        .hw_config = ComputeHardwareConfig{},
     };
 
-    experimental::WorkUnitSpec wu{
+    WorkUnitSpec wu{
         .name = "main",
         .kernels = {READER, WRITER, COMPUTE},
         .target_nodes = node,
     };
 
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "cumsum",
         .kernels = {reader_spec, writer_spec, compute_spec},
         .dataflow_buffers = {input_dfb_spec, output_dfb_spec},
@@ -227,11 +226,11 @@ void run_single_core_cumsum(distributed::MeshDevice& mesh_device, const CumsumCo
 
     Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
 
-    experimental::ProgramRunArgs params;
+    ProgramRunArgs params;
     params.kernel_run_args = {reader_run_args, writer_run_args, {.kernel = COMPUTE}};
     params.tensor_args = {
-        {IN_TENSOR, experimental::ProgramRunArgs::TensorArgument{in_tensor}},
-        {OUT_TENSOR, experimental::ProgramRunArgs::TensorArgument{out_tensor}},
+        {IN_TENSOR, ProgramRunArgs::TensorArgument{in_tensor}},
+        {OUT_TENSOR, ProgramRunArgs::TensorArgument{out_tensor}},
     };
     experimental::SetProgramRunArgs(program, params);
 

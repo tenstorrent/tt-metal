@@ -42,7 +42,7 @@ import torch
 
 import ttnn
 from models.common.utility_functions import nearest_32
-from tests.ttnn.utils_for_testing import assert_allclose, assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_allclose, assert_with_pcc
 
 
 def _fit_fc_grid(device, n_tiles, k_tiles):

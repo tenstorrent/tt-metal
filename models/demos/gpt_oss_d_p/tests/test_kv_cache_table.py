@@ -36,7 +36,7 @@ from models.demos.gpt_oss_d_p.tt.runners.kv_chunk_table import (
     build_and_serialize_kv_chunk_table,
     build_kv_chunk_address_table,
 )
-from tests.ttnn.utils_for_testing import assert_equal
+from tt_py_test_utils_common.utils_for_testing import assert_equal
 
 HEAD_DIM = 64
 SP_AXIS = 0

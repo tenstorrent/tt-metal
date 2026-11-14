@@ -16,7 +16,7 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/mesh_config.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
@@ -257,14 +257,7 @@ void RunNoOpProgram(distributed::MeshDevice& target, const std::string& label) {
 }
 
 // Minimal Gen1 Metal 2.0 ProgramSpec: one no-op DM kernel on node (0, 0).
-experimental::ProgramSpec MakeMinimalNoOpProgramSpec() {
-    using experimental::DataMovementHardwareConfig;
-    using experimental::KernelSpec;
-    using experimental::KernelSpecName;
-    using experimental::NodeCoord;
-    using experimental::ProgramSpec;
-    using experimental::WorkUnitSpec;
-
+ProgramSpec MakeMinimalNoOpProgramSpec() {
     const KernelSpecName kernel_id{"dm_kernel"};
     KernelSpec dm_kernel{
         .unique_id = kernel_id,
@@ -641,7 +634,7 @@ TEST(MetalContextIntegrationTest, MockMetal2ProgramEnqueueOnOwningMesh) {
         MetalContext::instance(context_id).get_dispatch_core_config().get_dispatch_core_axis(), DispatchCoreAxis::COL);
     EXPECT_FALSE(MetalContext::instance_exists(DEFAULT_CONTEXT_ID));
 
-    experimental::ProgramSpec spec = MakeMinimalNoOpProgramSpec();
+    ProgramSpec spec = MakeMinimalNoOpProgramSpec();
     distributed::MeshWorkload workload = experimental::MakeMeshWorkloadFromSpec(*mesh_device, spec);
     EXPECT_NO_THROW(distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, /*blocking=*/true));
 }
