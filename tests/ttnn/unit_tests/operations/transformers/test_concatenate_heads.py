@@ -199,3 +199,16 @@ def test_concatenate_heads_sharded_input_interleaved_output(device):
     output = ttnn.to_torch(output)
 
     assert_with_pcc(torch_output_tensor, output, 0.9999)
+
+
+def test_concatenate_heads_empty_input(device):
+    torch_input_tensor = torch.rand((1, 8, 32, 0), dtype=torch.bfloat16)
+
+    golden_function = ttnn.get_golden_function(ttnn.transformer.concatenate_heads)
+    torch_output_tensor = golden_function(torch_input_tensor)
+    assert list(torch_output_tensor.shape) == [1, 32, 0]
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    output = ttnn.transformer.concatenate_heads(input_tensor)
+    output = ttnn.to_torch(output)
+    assert list(output.shape) == [1, 32, 0]

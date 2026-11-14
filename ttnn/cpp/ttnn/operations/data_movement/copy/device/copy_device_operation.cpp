@@ -205,6 +205,17 @@ CopyDeviceOperation::tensor_return_value_t copy(
     const tt::tt_metal::DataType& output_dtype,
     const std::optional<Tensor>& preallocated_output,
     bool backwards) {
+    if (input.logical_volume() == 0) [[unlikely]] {
+        CopyDeviceOperation::validate_on_program_cache_miss(
+            CopyParams{output_mem_config, output_dtype, backwards}, CopyInputs{input, preallocated_output});
+        if (preallocated_output.has_value()) {
+            return preallocated_output.value();
+        }
+        return create_device_tensor(
+            CopyDeviceOperation::compute_output_specs(
+                CopyParams{output_mem_config, output_dtype, backwards}, CopyInputs{input, preallocated_output}),
+            input.device());
+    }
     return ttnn::device_operation::launch<CopyDeviceOperation>(
         CopyParams{output_mem_config, output_dtype, backwards}, CopyInputs{input, preallocated_output});
 }

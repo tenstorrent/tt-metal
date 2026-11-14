@@ -7,6 +7,7 @@
 #include "ttnn/operations/experimental/transformer/nlp_concat_heads/device/nlp_concat_heads_device_operation.hpp"
 #include "ttnn/operations/data_movement/squeeze/squeeze.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 using namespace tt::tt_metal;
 
@@ -42,6 +43,16 @@ ttnn::Tensor concatenate_heads(
             ? ttnn::to_memory_config(
                   input_tensor, MemoryConfig{TensorMemoryLayout::INTERLEAVED, resolved_mem_config.buffer_type()})
             : input_tensor;
+
+    if (actual_input.logical_volume() == 0) [[unlikely]] {
+        const auto& input_shape = actual_input.logical_shape();
+        ttnn::Shape output_logical_shape({input_shape[0], input_shape[2], input_shape[1] * input_shape[3]});
+        return create_device_tensor(
+            TensorSpec(
+                output_logical_shape,
+                TensorLayout(actual_input.dtype(), PageConfig(Layout::TILE), resolved_mem_config)),
+            actual_input.device());
+    }
 
     auto output = ttnn::prim::nlp_concat_heads(actual_input, memory_config, runtime_rows);
 
