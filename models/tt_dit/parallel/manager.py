@@ -382,6 +382,53 @@ class CCLManager:
                 deallocate_entry(self._ping_pong_buffer_cache.pop(key))
                 self._ping_pong_buffer_indices.pop(key, None)
 
+    def _cached_buffer_entries(self):
+        """Every device tensor the shape-keyed caches hold: the ping-pong, halo and neighbor-pad
+        pairs and the fused-norm stats pools. Semaphores and the shape-independent counter
+        buffers are not included."""
+        out = []
+
+        def flatten(entry):
+            if isinstance(entry, (list, tuple)):
+                for item in entry:
+                    flatten(item)
+            elif isinstance(entry, dict):
+                flatten(entry.get("bufs"))
+            elif entry is not None:
+                out.append(entry)
+
+        flatten(list(self._ping_pong_buffer_cache.values()))
+        flatten(list(self._fused_norm_stats_buffer_cache.values()))
+        return out
+
+    def cached_buffer_bytes(self) -> int:
+        """Bytes on one chip held by the shape-keyed buffer caches (see release_shape_buffers)."""
+        return sum(t.volume() * t.element_size() for t in self._cached_buffer_entries())
+
+    def release_shape_buffers(self) -> tuple[int, int]:
+        """Free every shape-keyed persistent buffer and empty the caches; return (tensors, bytes).
+
+        These caches never evict, so each new shape adds its set and keeps the old one. Call
+        only once every trace that baked their addresses is released (reset_for_shape does it
+        in that order). The device is synchronized first so no op in flight still uses them,
+        and the global semaphores are reset to 0 for the next capture; they, the sub-device and
+        the counter buffers stay allocated. A prepared audio record goes stale and is rebuilt
+        by the decoder's next warm pass.
+        """
+        entries = self._cached_buffer_entries()
+        if not entries:
+            return 0, 0
+        nbytes = self.cached_buffer_bytes()
+        ttnn.synchronize_device(self.mesh_device)
+        for t in entries:
+            ttnn.deallocate(t)
+        self._ping_pong_buffer_cache.clear()
+        self._ping_pong_buffer_indices.clear()
+        self._fused_norm_stats_buffer_cache.clear()
+        self.reset_global_semaphores()
+        ttnn.synchronize_device(self.mesh_device)
+        return len(entries), nbytes
+
     def get_rs_ping_pong_semaphore(self, mesh_axis):
         """
         Get semaphores for reduce scatter ping pong operations.

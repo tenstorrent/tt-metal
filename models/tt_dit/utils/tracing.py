@@ -67,6 +67,12 @@ class StateTensor:
         else:
             ttnn.copy(value, self._data)
 
+    def release(self) -> None:
+        """Free the device buffer (a host tensor is only dropped); the next ``update`` allocates."""
+        data, self._data = self._data, None
+        if isinstance(data, ttnn.Tensor) and data.storage_type() == ttnn.StorageType.DEVICE:
+            ttnn.deallocate(data)
+
 
 # Set by the kernel-prewarm in-process cold-start around its capture pass. When active, a traced call
 # constructs + records the trace-VARIANT kernels (the persistent-buffer program configs the real traced
@@ -101,6 +107,8 @@ class Tracer:
     """
 
     _traces_live: ClassVar[dict[int, int]] = {}
+    # Every live tracer, for live_tracers() (shape resets and DRAM accounting); weak, so it keeps none alive.
+    _instances: ClassVar[weakref.WeakSet[Tracer]] = weakref.WeakSet()
 
     @overload
     def __init__(
@@ -164,6 +172,7 @@ class Tracer:
             if d.id() not in Tracer._traces_live:
                 Tracer._traces_live[d.id()] = 0
 
+        Tracer._instances.add(self)
         self._function = function
         self._devices: tuple[ttnn.MeshDevice, ...] = tuple(devices)
         self._prep_run = prep_run
@@ -564,6 +573,49 @@ def _tree_map(f: Callable[..., Any], x: Any, /, *xs: Any, path_label: str) -> An
     raise AssertionError  # unreachable
 
 
+def live_tracers() -> list[Tracer]:
+    """Every Tracer still referenced anywhere (captured or not)."""
+    return list(Tracer._instances)
+
+
+def tracer_io_tensors(tracer: Tracer) -> list[ttnn.Tensor]:
+    """The device tensors a tracer holds: its stored inputs (the trace's input buffers once
+    captured) and its outputs."""
+    out: list[ttnn.Tensor] = []
+
+    def take(value: Any, *, path_label: str) -> Any:
+        if isinstance(value, ttnn.Tensor) and value.storage_type() == ttnn.StorageType.DEVICE:
+            out.append(value)
+        return value
+
+    for tree in (tracer._args, tracer._kwargs, tracer._outputs):
+        _tree_map(take, tree, path_label="io")
+    return out
+
+
+def release_traced_functions(context: Any) -> int:
+    """Release every trace the @traced_function methods hold for ``context`` (keyed or not) and
+    drop the entries, so the next traced call captures afresh. Returns how many were captured."""
+    released = 0
+    try:
+        weakref.ref(context)
+    except TypeError:
+        return 0  # never a key of the per-instance stores
+    for wrapper in list(_TRACED_WRAPPERS):
+        stores = [wrapper._tracers.get(context)] + list(wrapper._tracers_keyed.get(context, {}).values())
+        for tracer in stores:
+            if tracer is not None:
+                released += tracer.trace_captured
+                tracer.release_trace()
+        wrapper._tracers.pop(context, None)
+        wrapper._tracers_keyed.pop(context, None)
+    return released
+
+
+# Every @traced_function wrapper, for release_traced_functions().
+_TRACED_WRAPPERS: weakref.WeakSet[Callable[..., Any]] = weakref.WeakSet()
+
+
 _TRACER_CALL_KWARGS = frozenset(
     name
     for name, param in inspect.signature(Tracer.__call__).parameters.items()
@@ -826,6 +878,7 @@ def traced_function(
         wrapper._tracers = _tracers  # type: ignore[attr-defined]
         wrapper._tracers_keyed = _tracers_keyed  # type: ignore[attr-defined]
         wrapper._tracers_auto = _tracers_auto  # type: ignore[attr-defined]
+        _TRACED_WRAPPERS.add(wrapper)
         return wrapper
 
     if _fn is not None:
