@@ -252,8 +252,9 @@ def test_conv2d_input_size_change(
         (256, 256, 128, 128, Conv2dBlocking(64, double_buffer=True, full_inner_dim=True, shard_layout=_HEIGHT)),
         (128, 256, 256, 128, Conv2dBlocking(64, full_inner_dim=True, shard_layout=_HEIGHT)),
         (64, 128, 512, 512, Conv2dBlocking(64, double_buffer=True, shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED)),
+        (128, 128, 512, 512, Conv2dBlocking(64, True, True, _HEIGHT, out_channel_splits=8)),
     ],
-    ids=["height_sharded", "height_sharded_c128", "single_buffer", "block_sharded"],
+    ids=["height_sharded", "height_sharded_c128", "single_buffer", "block_sharded", "out_channel_splits"],
 )
 def test_conv2d_blocking(
     *,
