@@ -260,3 +260,95 @@ def test_padded_slice_rm_uint8_pads_with_zeros(device):
     actual = ttnn.experimental.padded_slice(tt_input, begins, ends, [1, 1, 1, 1], memory_config=output_mem_config)
     passed, message = assert_equal(expected, ttnn.to_torch(actual))
     assert passed, message
+
+
+def _pad_value_expected(sliced, shard_width, pad_value):
+    fill = 0.0 if pad_value is None else pad_value
+    expected = torch.full(sliced.shape[:-1] + (shard_width,), fill, dtype=sliced.dtype)
+    expected[..., : sliced.shape[-1]] = sliced
+    return expected
+
+
+# pad_value fills the columns of the output shard past the sliced width; None keeps them zero.
+@pytest.mark.requires_grid_size((8, 1))
+@pytest.mark.parametrize("pad_value", (None, 5.0, -3.25))
+def test_padded_slice_rm_pad_value(device, pad_value):
+    core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))})
+    begins, ends, shard_shape = [0, 0, 0, 0], [1, 1, 64, 40], (8, 48)
+    torch.manual_seed(0)
+    torch_input = torch.randn([1, 1, 64, 64], dtype=torch.bfloat16)
+    expected = _pad_value_expected(torch_input[..., :40], shard_shape[1], pad_value)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(core_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    actual = ttnn.experimental.padded_slice(
+        tt_input, begins, ends, [1, 1, 1, 1], memory_config=output_mem_config, pad_value=pad_value
+    )
+    passed, message = assert_equal(expected, ttnn.to_torch(actual))
+    assert passed, message
+
+
+@pytest.mark.requires_grid_size((8, 1))
+@pytest.mark.parametrize("pad_value", (None, 5.0))
+def test_padded_slice_rm_float32_pad_value(device, pad_value):
+    core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))})
+    begins, ends, shard_shape = [0, 0, 0, 0], [1, 1, 64, 40], (8, 48)
+    torch.manual_seed(0)
+    torch_input = torch.randn([1, 1, 64, 64], dtype=torch.float32)
+    expected = _pad_value_expected(torch_input[..., :40], shard_shape[1], pad_value)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.float32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(core_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    actual = ttnn.experimental.padded_slice(
+        tt_input, begins, ends, [1, 1, 1, 1], memory_config=output_mem_config, pad_value=pad_value
+    )
+    passed, message = assert_equal(expected, ttnn.to_torch(actual))
+    assert passed, message
+
+
+# Width-sharded output from a tiled input: the last core's shard extends past the 96 input columns, and its
+# last 32 columns are padding.
+@pytest.mark.requires_grid_size((2, 1))
+@pytest.mark.parametrize("pad_value", (None, 5.0, -3.25))
+def test_padded_slice_tile_pad_value(device, pad_value):
+    core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})
+    begins, ends, shard_shape = [0, 0, 0, 0], [1, 1, 32, 96], (32, 64)
+    torch.manual_seed(0)
+    torch_input = torch.randn([1, 1, 32, 96], dtype=torch.bfloat16)
+    expected = _pad_value_expected(torch_input, 2 * shard_shape[1], pad_value)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(core_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    actual = ttnn.experimental.padded_slice(
+        tt_input, begins, ends, [1, 1, 1, 1], memory_config=output_mem_config, pad_value=pad_value
+    )
+    actual_torch = actual.cpu().to_torch_with_padded_shape()
+    passed, message = assert_equal(expected, actual_torch)
+    assert passed, message
