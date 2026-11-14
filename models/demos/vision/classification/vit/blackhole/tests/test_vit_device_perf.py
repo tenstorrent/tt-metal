@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from pathlib import Path
+
 import pytest
 import torch
 
@@ -17,7 +19,24 @@ except ModuleNotFoundError:
     use_signpost = False
 
 
-@pytest.mark.skip(reason="Sharding issue: 120 shards exceeds 110 L1 banks on BH compute cores github issue #38877")
+# Device kernel throughput at batch 10 by card type prefix. The model's grid width is the largest divisor of
+# 12 that fits the card, so P100's 11-wide grid runs on 6 core columns and P150's on 12.
+EXPECTED_KERNEL_SAMPLES_PER_SEC = {
+    "p100": 3135,
+    "p150": 4500,
+}
+
+
+def card_type():
+    """The card type the kernel driver reports, e.g. "p100a", or None without one.
+
+    Read from sysfs because asking ttnn would open the cluster in this process and keep it, and the
+    profiled run of test_vit_device_ops started below then waits on the device forever.
+    """
+    paths = sorted(Path("/sys/class/tenstorrent").glob("*/tt_card_type"))
+    return paths[0].read_text().strip() if paths else None
+
+
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize("batch_size", [10])
 def test_vit_device_ops(
@@ -43,16 +62,19 @@ def test_vit_device_ops(
     ttnn.synchronize_device(device)
 
 
-@pytest.mark.skip(reason="Sharding issue: 120 shards exceeds 110 L1 banks on BH compute cores github issue #38877")
 @pytest.mark.parametrize("batch_size", [10])
-@pytest.mark.parametrize(
-    "expected_kernel_samples_per_sec",
-    [
-        4500,
-    ],
-)
 @pytest.mark.models_device_performance_bare_metal
-def test_vit_perf_device(batch_size, expected_kernel_samples_per_sec):
+# Three profiled runs of the model take close to the default 300 s.
+@pytest.mark.timeout(600)
+def test_vit_perf_device(batch_size):
+    card = card_type()
+    expected = [
+        target for prefix, target in EXPECTED_KERNEL_SAMPLES_PER_SEC.items() if card and card.startswith(prefix)
+    ]
+    if not expected:
+        pytest.skip(f"No device kernel throughput target for card type {card}")
+    expected_kernel_samples_per_sec = expected[0]
+
     command = f"pytest models/demos/vision/classification/vit/blackhole/tests/test_vit_device_perf.py::test_vit_device_ops[{batch_size}-device_params0]"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
