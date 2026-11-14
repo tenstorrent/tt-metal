@@ -216,7 +216,8 @@ class FSDPState:
         gathered shape. We restore the sharded m_value and free the gathered
         weight first, then reduce-scatter each grad into a shard-shaped grad,
         free the gathered grad, and install the shard (``set_grad``'s shape
-        check then sees the shard-shaped m_value).
+        check then sees the shard-shaped m_value). A sum in fp32 installs an
+        fp32 shard.
 
         Without a ``reduce_dtype`` from ``fully_shard``, the sum takes the one
         ``create_optimizer`` stored from the training config, read here as the
@@ -252,11 +253,9 @@ class FSDPState:
                 ttnn.deallocate(gathered_grad)
             summed = ttml.core.distributed.reduce_scatter(to_reduce, shard_dim, self.axis_index)
             ttnn.deallocate(to_reduce)
-            # Mean-reduction: reduce_scatter sums one shard's contribution
-            # per DP rank; divide by axis_size to get the per-shard average,
-            # matching the implicit averaging a DDP all-reduce would do. The
-            # multiply writes the grad's own dtype.
-            reduced = ttnn.multiply(summed, 1.0 / float(self.axis_size), dtype=grad_dtype)
+            # Mean-reduction: divide by axis_size for the per-shard average, as a
+            # DDP all-reduce would. The mean keeps the sum's dtype.
+            reduced = ttnn.multiply(summed, 1.0 / float(self.axis_size), dtype=summed.dtype)
             ttnn.deallocate(summed)
             param_tensor.set_grad(reduced)
 
@@ -743,7 +742,7 @@ def fully_shard(
             ``mesh_axis`` with ``ttml.sync_gradients``; ``SFTTrainer`` and
             ``GRPOTrainer`` already do.
         reduce_dtype: The dtype the gradients are reduce-scattered in, as ``ttml.sync_gradients`` takes it:
-            ``ttnn.DataType.FLOAT32`` sums and averages in fp32 and casts the shard back to the gradient's dtype.
+            ``ttnn.DataType.FLOAT32`` sums and averages in fp32 and keeps the mean shard in fp32.
             During backward it holds an fp32 copy of each gathered gradient plus the reduce-scatter's working buffer,
             allocated in that fp32 dtype at the input's size (twice that on a line): about 12 bytes per gathered
             element on a line, against 6 for the bf16 sum. ``None``
