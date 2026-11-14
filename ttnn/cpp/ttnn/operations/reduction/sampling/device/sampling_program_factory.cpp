@@ -114,7 +114,7 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
     const auto& device = input_values_tensor.device();
 
     // The bitonic top-k LLK carries sort indices through the dest register, and the index
-    // load/store width is tied to fp32_dest_acc_en (INT32 when enabled, LO16 otherwise). WH/BH
+    // load/store width is tied to fp32_dest_acc_en (INT32 when enabled, UINT16 otherwise). WH/BH
     // support the cheaper 16-bit (UInt16) path with fp32 dest accumulation disabled (unchanged
     // behaviour) so that WH/BH does not suffer any restrictions on the dest register. Every other
     // architecture (e.g. Quasar, which additionally lacks UInt16/UInt32 tile (DFB) metadata
@@ -286,7 +286,7 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
     };
 
     // 32-bit (Int32) sort indices require fp32 dest accumulation so the top-k LLK loads/stores
-    // indices in INT32 mode; the 16-bit (UInt16) path uses LO16 mode with fp32 dest acc off. Every
+    // indices in INT32 mode; the 16-bit (UInt16) path uses UINT16 mode with fp32 dest acc off. Every
     // other field keeps its default, matching what the compute config defaulted to before.
     const ComputeHardwareConfig compute_config{
         .enable_32_bit_dest = use_32bit_index,
