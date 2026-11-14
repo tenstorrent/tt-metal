@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/compute/compute_kernel_hw_startup.h"
+#include "experimental/kernel_args.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/activations.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/basic.hpp"
@@ -16,35 +17,32 @@ namespace ckl = compute_kernel_lib;
 // GELU'(x) = 0.5*(1+tanh(z)) + 0.5*beta*x*(1+3*kappa*x^2)*(1-tanh(z)^2),
 // where z = beta*(x+kappa*x^3); output = grad_out*GELU'(x).
 void kernel_main() {
-    uint32_t num_tiles = get_arg_val<uint32_t>(0);
+    uint32_t num_tiles = get_arg(args::per_core_tile_cnt);
 
-    constexpr auto dfb_grad_out_id = tt::CBIndex::c_0;
-    constexpr auto dfb_input_id = tt::CBIndex::c_1;
-    constexpr auto dfb_grad_in_id = tt::CBIndex::c_2;
-    DataflowBuffer dfb_grad_out(dfb_grad_out_id);
-    DataflowBuffer dfb_input(dfb_input_id);
-    DataflowBuffer dfb_grad_in(dfb_grad_in_id);
+    DataflowBuffer dfb_grad_out(dfb::grad_out);
+    DataflowBuffer dfb_input(dfb::input);
+    DataflowBuffer dfb_grad_in(dfb::grad_in);
 
     constexpr float kSqrt2 = 1.41421356237309504880f;          // sqrt(2)
     constexpr float kTwoOverSqrtPi = 1.12837916709551257390f;  // 2/sqrt(pi)
     constexpr float kBeta = kSqrt2 * kTwoOverSqrtPi * 0.5f;
     constexpr float kKappa = 0.044715f;
 
-    compute_kernel_hw_startup(dfb_grad_out_id, dfb_grad_in_id);
+    compute_kernel_hw_startup(dfb::grad_out, dfb::grad_in);
 
     ckl::eltwise_chain(
         ckl::IterationShape::tiles(num_tiles),
         ckl::CopyTile<
-            ckl::input(dfb_grad_out_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, operand_reconfig),
+            ckl::input(dfb::grad_out, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, operand_reconfig),
             ckl::Dst::D0>{dfb_grad_out},
         ckl::CopyTile<
-            ckl::input(dfb_input_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::None, operand_reconfig),
+            ckl::input(dfb::input, ckl::WaitPolicy::PerTile, ckl::PopPolicy::None, operand_reconfig),
             ckl::Dst::D1>{dfb_input},
         ckl::CopyTile<
-            ckl::input(dfb_input_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, operand_reconfig),
+            ckl::input(dfb::input, ckl::WaitPolicy::None, ckl::PopPolicy::None, operand_reconfig),
             ckl::Dst::D2>{dfb_input},
         ckl::CopyTile<
-            ckl::input(dfb_input_id, ckl::WaitPolicy::None, ckl::PopPolicy::PerTile, operand_reconfig),
+            ckl::input(dfb::input, ckl::WaitPolicy::None, ckl::PopPolicy::PerTile, operand_reconfig),
             ckl::Dst::D5>{dfb_input},
         ckl::Square<ckl::Dst::D1>{},
         ckl::MulBinary<ckl::Dst::D1, ckl::Dst::D2, ckl::Dst::D1>{},
@@ -85,6 +83,6 @@ void kernel_main() {
         ckl::AddBinary<ckl::Dst::D1, ckl::Dst::D2, ckl::Dst::D1, BF16_ROUNDING_MODE>{},
         ckl::MulBinary<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>{},  // tile[0] = grad * (CDF + PDF)
         ckl::PackTile<ckl::output(
-            dfb_grad_in_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{
+            dfb::grad_in, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{
             dfb_grad_in});
 }

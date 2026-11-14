@@ -17,8 +17,8 @@
 // elements spans pages_per_row pages of page_elements each (the last possibly partial, for an
 // uneven width shard). The logical page of element c in row r is r * pages_per_row +
 // c / page_elements. Operands may be paged differently -- one interleaved, another width-sharded
-// -- so every operand carries its own page geometry, and a CB page is assembled from however many
-// page pieces that operand needs. The CB side is laid out by element, independent of paging, so
+// -- so every operand carries its own page geometry, and a DFB entry is assembled from however many
+// page pieces that operand needs. The DFB side is laid out by element, independent of paging, so
 // all operands and the output line up element for element.
 //
 // NoC ALIGNMENT. A shard width need not be a multiple of the NoC alignment (a 100-wide bf16 row
@@ -37,11 +37,11 @@ struct RowMajorPaging {
     uint32_t page_bytes() const { return page_elements * element_bytes; }
 };
 
-// Calls fn(page_id, page_offset_bytes, cb_offset_bytes, bytes) for each page piece covering
-// elements [first, last) of `row`, placed in the CB page at element cb_base.
+// Calls fn(page_id, page_offset_bytes, dfb_offset_bytes, bytes) for each page piece covering
+// elements [first, last) of `row`, placed in the DFB entry at element dfb_base.
 template <typename Fn>
 inline void for_each_row_piece(
-    const RowMajorPaging& paging, uint32_t row, uint32_t first, uint32_t last, uint32_t cb_base, Fn&& fn) {
+    const RowMajorPaging& paging, uint32_t row, uint32_t first, uint32_t last, uint32_t dfb_base, Fn&& fn) {
     uint32_t page = first / paging.page_elements;
     uint32_t offset = first - (page * paging.page_elements);
     for (uint32_t c = first; c < last;) {
@@ -49,7 +49,7 @@ inline void for_each_row_piece(
         const uint32_t n = (last - c < room) ? (last - c) : room;
         fn(row * paging.pages_per_row + page,
            offset * paging.element_bytes,
-           (cb_base + (c - first)) * paging.element_bytes,
+           (dfb_base + (c - first)) * paging.element_bytes,
            n * paging.element_bytes);
         c += n;
         ++page;
@@ -69,8 +69,8 @@ inline void copy_bytes(uint32_t dst, uint32_t src, uint32_t bytes) {
     }
 }
 
-// Reads `bytes` from `page` at page_offset into L1 at cb_addr. `region_end` is the L1 address up
-// to which the destination may be overwritten (the end of this row's slot in the CB page).
+// Reads `bytes` from `page` at page_offset into L1 at dfb_addr. `region_end` is the L1 address up
+// to which the destination may be overwritten (the end of this row's slot in the DFB entry).
 // `scratch` is an L1 buffer of at least round_up(bytes + 2 * alignment) bytes, itself aligned.
 template <typename Accessor>
 inline void read_piece(
@@ -79,15 +79,15 @@ inline void read_piece(
     const RowMajorPaging& paging,
     uint32_t page,
     uint32_t page_offset,
-    uint32_t cb_addr,
+    uint32_t dfb_addr,
     uint32_t bytes,
     uint32_t region_end,
     uint32_t scratch) {
     const uint32_t a = paging.alignment;
-    const bool aligned_ends = (page_offset % a) == 0 && (cb_addr % a) == 0;
-    const bool tail_safe = (bytes % a) == 0 || cb_addr + round_up_to(bytes, a) <= region_end;
+    const bool aligned_ends = (page_offset % a) == 0 && (dfb_addr % a) == 0;
+    const bool tail_safe = (bytes % a) == 0 || dfb_addr + round_up_to(bytes, a) <= region_end;
     if (aligned_ends && tail_safe) {
-        noc.async_read(src, CoreLocalMem<uint8_t>(cb_addr), bytes, {.page_id = page, .offset_bytes = page_offset}, {});
+        noc.async_read(src, CoreLocalMem<uint8_t>(dfb_addr), bytes, {.page_id = page, .offset_bytes = page_offset}, {});
         return;
     }
     const uint32_t window_start = (page_offset / a) * a;
@@ -99,10 +99,10 @@ inline void read_piece(
         {.page_id = page, .offset_bytes = window_start},
         {});
     noc.async_read_barrier();
-    copy_bytes(cb_addr, scratch + delta, bytes);
+    copy_bytes(dfb_addr, scratch + delta, bytes);
 }
 
-// Writes `bytes` from L1 at cb_addr into `page` at page_offset. Unaligned pieces read-modify-write
+// Writes `bytes` from L1 at dfb_addr into `page` at page_offset. Unaligned pieces read-modify-write
 // an aligned window of the page; every page of a row is written by the core that owns the row, so
 // the window's neighbouring bytes are not being written by anyone else concurrently.
 template <typename Accessor>
@@ -112,14 +112,15 @@ inline void write_piece(
     const RowMajorPaging& paging,
     uint32_t page,
     uint32_t page_offset,
-    uint32_t cb_addr,
+    uint32_t dfb_addr,
     uint32_t bytes,
     uint32_t scratch) {
     const uint32_t a = paging.alignment;
-    const bool aligned_ends = (page_offset % a) == 0 && (cb_addr % a) == 0;
+    const bool aligned_ends = (page_offset % a) == 0 && (dfb_addr % a) == 0;
     const bool tail_safe = (bytes % a) == 0 || page_offset + bytes == paging.page_bytes();
     if (aligned_ends && tail_safe) {
-        noc.async_write(CoreLocalMem<uint8_t>(cb_addr), dst, bytes, {}, {.page_id = page, .offset_bytes = page_offset});
+        noc.async_write(
+            CoreLocalMem<uint8_t>(dfb_addr), dst, bytes, {}, {.page_id = page, .offset_bytes = page_offset});
         return;
     }
     // Earlier pieces of this page may still be in flight, and the window may cover their bytes.
@@ -130,12 +131,12 @@ inline void write_piece(
     const CoreLocalMem<uint8_t> scratch_mem(scratch);
     noc.async_read(dst, scratch_mem, window_bytes, {.page_id = page, .offset_bytes = window_start}, {});
     noc.async_read_barrier();
-    copy_bytes(scratch + delta, cb_addr, bytes);
+    copy_bytes(scratch + delta, dfb_addr, bytes);
     noc.async_write(scratch_mem, dst, window_bytes, {}, {.page_id = page, .offset_bytes = window_start});
     noc.async_write_barrier();
 }
 
-// The scratch CB is sized with slack (by the host, from the buffers' alignments) so its start can
+// The scratch DFB is sized with slack (by the host, from the buffers' alignments) so its start can
 // be rounded up to the widest alignment any of its transfers use.
 template <typename Dfb>
 inline uint32_t aligned_scratch(const Dfb& scratch, uint32_t alignment) {
