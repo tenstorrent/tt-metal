@@ -607,6 +607,13 @@ class LTXPipeline:
         contexts = [self, *(s.model for s in self.transformer_states), self.gemma_encoder_pair]
         contexts += [m for m in (self.vae_decoder, self.vae_encoder, self.upsampler) if m is not None]
         traces = sum(release_traced_functions(c) for c in contexts)
+        # Gemma's encode trace goes back to its load-time state: captured last, by capture_trace(). Left
+        # marked captured with its gate open, the warmup's first encode re-captured it before any trace
+        # I/O or CCL buffer existed; those later took its freed activations, the first gen's encode replay
+        # wrote over them and the stage-1 replay hung (task #3986 job 836, 2026-11-14 12:54:03 UTC).
+        self.gemma_encoder_pair.forget_trace()
+        if self._traced and not self.dynamic_load and self.DEFERS_ENCODE_TRACE:
+            self.gemma_encoder_pair.defer_trace_capture()
         self._t12_io = None
         self._cached_trans_mat = None
         self._init_num_frames, self._init_height, self._init_width = num_frames, height, width

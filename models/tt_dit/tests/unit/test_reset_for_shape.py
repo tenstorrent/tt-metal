@@ -304,7 +304,11 @@ class PipelineResetForShape(unittest.TestCase):
         p._t12_io = {"noise": FakeState(log, "noise"), "weights": None}
         p._cached_trans_mat = "tm"
         p.transformer_states = [SimpleNamespace(model="dit")]
-        p.gemma_encoder_pair, p.vae_decoder, p.vae_encoder, p.upsampler = "gemma", "vaed", None, "ups"
+        gemma = type("Gemma", (), {"_trace_captured": True, "_trace_gate_open": True})()  # hashable
+        gemma.forget_trace = lambda: setattr(gemma, "_trace_captured", False)
+        gemma.defer_trace_capture = lambda: setattr(gemma, "_trace_gate_open", False)
+        p._traced, p.dynamic_load, p.DEFERS_ENCODE_TRACE = True, False, True
+        p.gemma_encoder_pair, p.vae_decoder, p.vae_encoder, p.upsampler = gemma, "vaed", None, "ups"
         p._vae_decoder_nf = p._upsampler_nf = 145
         p.release_traces = lambda: log.append("release_traces")
         p._ensure_vae_decoder_frames = lambda n: log.append(("vae_nf", p._vae_decoder_nf, n))
@@ -318,7 +322,9 @@ class PipelineResetForShape(unittest.TestCase):
         self.assertEqual(sorted(log[1:5]), ["free noise", "free pa", "free pv", "free x"])
         self.assertEqual(log[5], "release_traces")
         self.assertEqual({c for e in log if isinstance(e, tuple) and e[0] == "traced" for c in [e[1]]},
-                         {p, "dit", "gemma", "vaed", "ups"})
+                         {p, "dit", gemma, "vaed", "ups"})
+        # The warmup's early encode runs untraced and capture_trace() captures last, as on a fresh load.
+        self.assertEqual((gemma._trace_captured, gemma._trace_gate_open), (False, False))
         self.assertIn(("vae_nf", None, 241), log)  # rebuilt even though only H/W may change
         self.assertIn(("ups_nf", None, 241), log)
         order = [e if isinstance(e, str) else e[0] for e in log]

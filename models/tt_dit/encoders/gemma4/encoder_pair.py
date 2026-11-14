@@ -216,6 +216,10 @@ class Gemma4TokenizerEncoderPair:
         """Allow the next encode to capture/replay its trace (see ``_trace_gate_open``)."""
         self._trace_gate_open = True
 
+    def forget_trace(self) -> None:
+        """The encode trace was released (reset_for_shape): let the next ``capture_trace`` capture it."""
+        self._trace_captured = False
+
     def capture_trace(self) -> None:
         """Capture the encode trace now, on a placeholder prompt, so the first request after the
         gate opens replays it instead of paying the ~1.7s capture."""
