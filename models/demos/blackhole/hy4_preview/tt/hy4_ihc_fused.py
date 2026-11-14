@@ -90,7 +90,12 @@ class Hy4IHCFused:
 
     def _consts(self, mesh, T):
         """persistent L1 tensor (one shard of NCST fp32 tiles per core of the 4x8 rectangle, identical content): the constant tiles of the compute kernel."""
-        key = (id(self.device), T, self.dim, self.hc_eps)  # NOT id(mesh): x.device() returns a fresh Python object per call, so a per-call key leaked a new persistent L1 constants tensor (45 KB/core) per call
+        key = (
+            id(self.device),
+            T,
+            self.dim,
+            self.hc_eps,
+        )  # NOT id(mesh): x.device() returns a fresh Python object per call, so a per-call key leaked a new persistent L1 constants tensor (45 KB/core) per call
         c = _CST.get(key)
         if c is None:
             G = (T + 7) // 8
@@ -148,15 +153,17 @@ class Hy4IHCFused:
             _CST[key] = c
         return c
 
-    def pre(self, x, w4, emit_rm=False, y=None, pp_prev=None, x_out=None):
+    def pre(self, x, w4, emit_rm=False, y=None, pp_prev=None, x_out=None, land=None):
         """x: packed streams [1,1,4T,D] fp32 TILE (row 4t + i = stream i of token t), w4 from norm_weight -> (h bf16 [1,1,T,D] TILE, h_tok bf16 [T,1,1,D] ROW_MAJOR | None, pp fp32 [1,1,32,32]).
         With y ([1,1,T,D] bf16 TILE, the previous sub-block output) and pp_prev (the pp of the previous pre call of the SAME streams): the identity-comb
         expand x_new = x + post_prev * y is done first, inside this kernel, and x_new is written to x_out (default: a new tensor; pass x for in place);
         the call then returns (h, h_tok, pp, x_new)."""
         _, _, R4, D = (int(v) for v in x.shape)
         T = R4 // 4
-        EXPAND = int(y is not None)
-        assert (y is None) == (pp_prev is None)
+        # land = (L1 address of the landing buffer, compact tile bytes): y is the landed result of the one-shot all-reduce (hy4_fuse_ar), not a DRAM tensor (B10 persist)
+        EXPAND = int(y is not None or land is not None)
+        assert (y is None and land is None) == (pp_prev is None)
+        LANDB = int(land[1]) if land is not None else 0
         assert R4 == 4 * T and 1 <= T <= 16 and D == self.dim and x.dtype == f32
         G = (T + 7) // 8
         GPC, NT = self.GPC, self.NT
@@ -191,7 +198,7 @@ class Hy4IHCFused:
             x_new = ttnn.allocate_tensor_on_device(
                 ttnn.Shape([1, 1, R4, D]), f32, ttnn.TILE_LAYOUT, mesh, ttnn.DRAM_MEMORY_CONFIG
             )
-        y_t = y if EXPAND else pp  # dummies keep the accessor structure
+        y_t = y if y is not None else pp  # dummies keep the accessor structure
         q_t = pp_prev if EXPAND else pp
         cst_t = self._consts(mesh, T)
         (
@@ -298,7 +305,8 @@ class Hy4IHCFused:
             + _acc(y_t)
             + _acc(q_t)
             + [DUAL, 1088 if self.wdt == ttnn.bfloat8_b else 2048, CSTD]
-            + _acc(cst_t),
+            + _acc(cst_t)
+            + [LANDB],
             rt,
             ttnn.ReaderConfigDescriptor(),
             common=[
@@ -311,6 +319,7 @@ class Hy4IHCFused:
                 y_t.buffer_address(),
                 q_t.buffer_address(),
                 cst_t.buffer_address(),
+                int(land[0]) if land is not None else 0,
             ],
         )
         writer = _kernel(
@@ -398,6 +407,7 @@ class Hy4IHCFused:
             EXPAND,
             DUAL,
             CSTD,
+            LANDB,
             tuple(_acc(y_t)),
             tuple(_acc(q_t)),
             tuple(_acc(x_new)),

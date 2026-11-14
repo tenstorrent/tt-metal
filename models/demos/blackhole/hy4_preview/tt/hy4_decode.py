@@ -146,8 +146,13 @@ class Hy4Decoder:
         part = self.mlp[i].forward(h)
         tok = ttnn.to_layout(h, ttnn.ROW_MAJOR_LAYOUT)
         tok = ttnn.reshape(tok, [1, 1, 1, HID])
-        out = ly.blk.forward(h, tok, fold=part)  # [1,1,1,HID/8]
+        defer = getattr(self, "far", None) is not None
+        out = ly.blk.forward(
+            h, tok, fold=part, ft_defer=defer
+        )  # [1,1,1,HID/8]  (HY4_FUSE_AR: the un-reduced partial as a FusedPartial: its all-reduce runs inside the next iHC pre)
         ttnn.deallocate(part)
+        if defer and getattr(out, "part", None) is not None:
+            return out
         out = ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)
         y = ch.mc.allgather(out, ch.ccl, axis=1, dim=3)
         ttnn.deallocate(out)
