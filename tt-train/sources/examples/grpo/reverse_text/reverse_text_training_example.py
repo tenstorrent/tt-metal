@@ -233,6 +233,7 @@ if __name__ == "__main__":
         reward_func=similarity_reward,
         optimizer_dict=optimizer_dict,
         callbacks=[EvalCallback(eval_dataset, args.eval_examples)],
+        precision=training_config.precision,
     )
     grpo_trainer.train()
     logging.info("REVERSE TEXT GRPO TRAINING COMPLETE")
