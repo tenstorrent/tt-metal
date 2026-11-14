@@ -102,8 +102,9 @@ def test_served_shape_is_a_legal_frame_count():
 
 
 @pytest.mark.parametrize("module", [pipeline_ltx, pipeline_ltx_distilled])
-def test_pipelines_pass_fps_to_video_rope(module):
-    """Every ``prepare_video_rope`` call site must bind ``fps``.
+@pytest.mark.parametrize("builder", ["prepare_video_rope", "prepare_av_cross_pe"])
+def test_pipelines_pass_fps_to_rope(module, builder):
+    """Every video RoPE and A/V cross-PE call site must bind the pipeline's ``fps``.
 
     The keyword defaults to 24.0, so omitting it type-checks, runs, and produces video
     self-attention temporal positions at a different rate from the audio length and A/V
@@ -115,18 +116,18 @@ def test_pipelines_pass_fps_to_video_rope(module):
         node
         for node in ast.walk(tree)
         if isinstance(node, ast.Call)
-        and (
-            getattr(node.func, "id", None) == "prepare_video_rope"
-            or getattr(node.func, "attr", None) == "prepare_video_rope"
-        )
+        and (getattr(node.func, "id", None) == builder or getattr(node.func, "attr", None) == builder)
     ]
-    assert calls, f"{module.__name__} no longer calls prepare_video_rope; update or remove this test"
+    assert calls, f"{module.__name__} no longer calls {builder}; update or remove this test"
     for call in calls:
         fps_kw = [kw for kw in call.keywords if kw.arg == "fps"]
         assert fps_kw, (
-            f"{module.__name__}:{call.lineno}: prepare_video_rope called without fps, "
-            "so video RoPE silently falls back to 24"
+            f"{module.__name__}:{call.lineno}: {builder} called without fps, "
+            "so positional conditioning silently falls back to 24"
         )
+        assert ast.dump(fps_kw[0].value) == ast.dump(
+            ast.parse("self.fps", mode="eval").body
+        ), f"{module.__name__}:{call.lineno}: {builder} must use the pipeline's self.fps"
 
 
 def test_video_rope_output_tracks_fps(monkeypatch):
