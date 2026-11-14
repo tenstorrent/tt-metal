@@ -253,6 +253,253 @@ def compute_config(fidelity=ttnn.MathFidelity.HiFi2, fp32_acc=True, packer_l1_ac
     )
 
 
+# Linears without a hand-written program config (the prefill projections, the LM head, the MTP projection) take the
+# config ttnn's matmul auto-config picks for DRAM-interleaved operands (create_simple_matmul_program_config), computed
+# here (``auto_dram_matmul_config``) against a fixed L1 budget instead of the L1 free when each one runs: auto-config
+# sizes its blocks to that free L1, so anything that moved L1 between a pass's warm-up and its capture (an encoder's
+# warm-up) made the capture compile a new program ("Cannot load new binaries during trace capture"), and a pass's
+# program, so its rounding, depended on what else held L1. MIMO_MM_L1_BUDGET (bytes): the budget. Its default gives
+# exactly the programs auto-config compiled in a text replica's warm-up (Blackhole 1x8 row, MTP; checked call by call
+# with MIMO_MM_CONFIG_CHECK=1): every budget in 1187392-1468992 does (the 3584-4096-row SWA o_proj takes
+# in0_block_w 4, every other serving shape is the same anywhere in that range).
+MM_L1_BUDGET = int(os.environ.get("MIMO_MM_L1_BUDGET", "1228800"))
+# The budget of a replica whose encoders keep L1 on the device (ViT, audio patch encoder): their warm-ups leave an L1
+# buffer as low as 1299328 bytes, where the 4096-row SWA o_proj's in0_block_w-4 blocks (static CBs to 1299904) clash;
+# this budget gives it in0_block_w 2 and every other serving shape the text replica's config (MIMO_MM_ENCODER_L1_BUDGET;
+# set_mm_l1_budget, generator_vllm.MiMoV2OmniForCausalLM.setup_multimodal).
+MM_ENCODER_L1_BUDGET = int(os.environ.get("MIMO_MM_ENCODER_L1_BUDGET", "1150000"))
+
+
+def set_mm_l1_budget(budget):
+    """Set the L1 budget dram_linear's configs are computed against (before any of them is compiled: a later change
+    compiles other programs). An explicit MIMO_MM_L1_BUDGET wins."""
+    global MM_L1_BUDGET
+    if "MIMO_MM_L1_BUDGET" not in os.environ:
+        MM_L1_BUDGET = int(budget)
+
+
+# MIMO_MM_CONFIG_CHECK=1 (debug): the first call of each such linear shape also runs with ttnn's own auto-config first
+# and logs whether the fixed config hits that program (and if not, which budget's config does).
+MM_CONFIG_CHECK = os.environ.get("MIMO_MM_CONFIG_CHECK") == "1"
+_SUBBLOCK_HW = ((4, 2), (2, 4), (8, 1), (1, 8), (7, 1), (1, 7), (3, 2), (2, 3), (6, 1), (1, 6), (5, 1), (1, 5))
+_SUBBLOCK_HW += ((2, 2), (4, 1), (1, 4), (3, 1), (1, 3), (2, 1), (1, 2), (1, 1))
+_TILE_BYTES = {
+    ttnn.bfloat16: 2048,
+    ttnn.float32: 4096,
+    ttnn.bfloat8_b: 1088,
+    ttnn.bfloat4_b: 576,
+}
+_checked = {}
+
+
+def _subblock(m, n, fp32_acc):
+    """bmm_op_utils::get_matmul_subblock_params (no constraint)."""
+    for h, w in _SUBBLOCK_HW:
+        if fp32_acc and h * w > 4:
+            continue
+        if m % h == 0 and n % w == 0:
+            return h, w
+    return 1, 1
+
+
+def _block_factors(m, n, k, fits, adjust_k):
+    """get_multi_dim_per_core_factor: the largest output block (m, n) (squarest for a product) and K block that fit."""
+    if fits(m, n, k):
+        return m, n, k
+    m_factors = [m, 1] + [f for f in range(m // 2, 1, -1) if m % f == 0]
+    n_factors = [n, 1] + [f for f in range(n // 2, 1, -1) if n % f == 0]
+    factors = {}
+    for fm in m_factors:
+        for fn in n_factors:
+            ratio = max(fm, fn) / min(fm, fn)
+            old = factors.get(fm * fn)
+            if old is not None and max(old) / min(old) < ratio:
+                continue
+            factors[fm * fn] = (fm, fn)
+    ordered = [factors[p] for p in sorted(factors, reverse=True)]
+    ks = [kk for kk in range(k, 0 if adjust_k else k - 1, -1) if k % kk == 0]
+    if adjust_k:
+        for fm, fn in ordered:
+            for kk in ks:
+                if fits(fm, fn, kk):
+                    return fm, fn, kk
+    else:
+        for kk in ks:
+            for fm, fn in ordered:
+                if fits(fm, fn, kk):
+                    return fm, fn, kk
+    return 1, 1, 1
+
+
+def auto_dram_matmul_config(x, w, compute_kernel_config, dtype, l1_budget=None):
+    """The program config ttnn's auto-config (create_simple_matmul_program_config) picks for ``x @ w``: x [1, .., M, K]
+    tile, w [K, N] tile, both and the output DRAM-interleaved, no bias, no transpose, with ``l1_budget`` bytes of L1
+    for the circular buffers (MM_L1_BUDGET). None where that is not this case (batched x)."""
+    budget = MM_L1_BUDGET if l1_budget is None else l1_budget
+    a, b = tuple(x.padded_shape), tuple(w.padded_shape)
+    if math.prod(a[:-2]) != 1 or math.prod(b[:-2]) != 1 or x.dtype not in _TILE_BYTES or w.dtype not in _TILE_BYTES:
+        return None
+    for t in (x, w):
+        mem = t.memory_config()
+        if mem.buffer_type != ttnn.BufferType.DRAM or mem.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
+            return None
+        if t.layout != ttnn.TILE_LAYOUT:
+            return None
+    height, k_size, width = a[-2], a[-1], b[-1]
+    mt, kt, nt = max(height // TILE, 1), k_size // TILE, max(width // TILE, 1)
+    grid = x.device().compute_with_storage_grid_size()
+    nx, ny = grid.x, grid.y
+    fp32_acc = bool(compute_kernel_config.fp32_dest_acc_en)
+    in0_tile, in1_tile = _TILE_BYTES[x.dtype], _TILE_BYTES[w.dtype]
+    interm = 4096 if fp32_acc else max(2048, _TILE_BYTES.get(dtype, 2048))
+
+    def fits(m, n, k):  # utilities::get_estimated_size_of_cbs (in0 / in1 double-buffered, out, interm)
+        return m * k * 2 * in0_tile + n * k * 2 * in1_tile + m * n * in0_tile + m * n * interm < budget
+
+    ratio = height // width if height > width else width // height
+    narrow = ratio > 8 or height <= TILE or width <= TILE
+    if narrow:  # get_mcast_1d_config: in0 mcast for a wide output, in1 mcast for a tall one
+        mcast_in0 = width > height
+        if mcast_in0:
+            per_m, per_n = height // TILE, -(-(-(-width // (nx * ny))) // TILE)
+        else:
+            per_m, per_n = -(-(-(-height // (nx * ny))) // TILE), width // TILE
+        in0_block_w = 2 if kt % 2 == 0 else 1
+        bh, bw, _ = _block_factors(per_m, per_n, in0_block_w, fits, adjust_k=False)
+        sh, sw = _subblock(bh, bw, fp32_acc)
+        return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=grid,
+            in0_block_w=in0_block_w,
+            out_subblock_h=sh,
+            out_subblock_w=sw,
+            out_block_h=bh,
+            out_block_w=bw,
+            per_core_M=per_m,
+            per_core_N=per_n,
+            fuse_batch=False,
+            fused_activation=None,
+            mcast_in0=mcast_in0,
+            num_global_cb_receivers=0,  # get_mcast_1d_config's value (the Python default is 1: another program)
+        )
+    in0_block_w = kt // nx if kt % nx == 0 else 1
+    per_m, per_n = -(-mt // ny), -(-nt // nx)
+    bh, bw, in0_block_w = _block_factors(per_m, per_n, in0_block_w, fits, adjust_k=True)
+    sh, sw = _subblock(bh, bw, fp32_acc)
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=grid,
+        in0_block_w=in0_block_w,
+        out_subblock_h=sh,
+        out_subblock_w=sw,
+        out_block_h=bh,
+        out_block_w=bw,
+        per_core_M=per_m,
+        per_core_N=per_n,
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=False,
+    )
+
+
+def l1_program_budget(device):
+    """The L1 ttnn's auto-config sizes circular buffers to right now (core/program_cache_l1.hpp): from the CB base to
+    the lowest allocated L1 (or the bank's size)."""
+    view = ttnn.get_memory_view(device, ttnn.BufferType.L1)
+    base = ttnn.get_allocator_base_address(device, ttnn.BufferType.L1)
+    allocated = [int(b["address"]) for b in view.block_table if b.get("allocated") == "yes"]
+    top = min(allocated) if allocated else base + view.total_bytes_per_bank
+    return min(max(top - base, 0), view.total_bytes_per_bank)
+
+
+# MIMO_MM_L1_GUARD (default 1): the budget of a linear shape is never more than the L1 free at that shape's first call
+# (``shape_l1_budget``). The fixed budgets were checked on a Blackhole 1x8 row with MTP (text replica) and with the
+# multimodal encoders; a configuration that keeps more L1 (DFlash, another decode-user count, a future op) could have
+# less free than the budget assumes, and blocks sized past the free L1 fail when the program is built (circular
+# buffers clash with L1 buffers), where ttnn's auto-config, sizing to the free L1, ran. In the checked configurations
+# the free L1 is above the budget and nothing changes.
+MM_L1_GUARD = os.environ.get("MIMO_MM_L1_GUARD", "1") == "1"
+_shape_budgets = {}
+
+
+def shape_l1_budget(x, w):
+    """The L1 budget the config of ``x @ w`` is computed against: MM_L1_BUDGET, or the L1 free now when that is less
+    (what ttnn's auto-config would size to). Decided at the shape's first call and kept, so the shape's program stays
+    one program whatever holds L1 later (the reason for a fixed budget), and logged when it is not the fixed budget."""
+    key = (tuple(x.padded_shape), tuple(w.padded_shape), MM_L1_BUDGET)
+    budget = _shape_budgets.get(key)
+    if budget is None:
+        budget = MM_L1_BUDGET
+        if MM_L1_GUARD:
+            try:
+                free = l1_program_budget(x.device())
+            except Exception:  # noqa: BLE001 - no memory view (a host test's stand-in device): the fixed budget
+                free = None
+            if free is not None and free < budget:
+                from loguru import logger
+
+                logger.warning(
+                    f"MiMo matmul config: {key[0]} @ {key[1]}: {free} bytes of L1 are free, less than the fixed "
+                    f"budget {budget} (MIMO_MM_L1_BUDGET); this shape's config is sized to {free} instead"
+                )
+                budget = free
+        _shape_budgets[key] = budget
+    return budget
+
+
+def dram_linear(x, w, *, dtype, memory_config, compute_kernel_config):
+    """ttnn.linear(x, w) of DRAM-interleaved operands with the program config auto-config picks with MM_L1_BUDGET of
+    L1 (``auto_dram_matmul_config``), so its program does not depend on what holds L1 when it runs; never with more
+    than the L1 free at the shape's first call (``shape_l1_budget``)."""
+    kwargs = dict(dtype=dtype, memory_config=memory_config, compute_kernel_config=compute_kernel_config)
+    config = auto_dram_matmul_config(x, w, compute_kernel_config, dtype)
+    if config is None:
+        return ttnn.linear(x, w, **kwargs)
+    budget = shape_l1_budget(x, w)
+    if budget != MM_L1_BUDGET:
+        config = auto_dram_matmul_config(x, w, compute_kernel_config, dtype, budget)
+    if MM_CONFIG_CHECK:
+        return _checked_linear(x, w, config, kwargs)
+    return ttnn.linear(x, w, program_config=config, **kwargs)
+
+
+def _checked_linear(x, w, config, kwargs):
+    """dram_linear with MIMO_MM_CONFIG_CHECK. The first call of each shape runs ttnn's own auto-config first, then the
+    fixed config, which must hit the program auto-config compiled (no new program-cache entry); on a miss, the configs
+    other L1 budgets give are tried until one hits, which shows the budget auto-config used. Later calls of a shape run
+    the fixed config only (a program compiled by the first call says nothing about auto-config's)."""
+    key = (tuple(x.padded_shape), tuple(w.padded_shape))
+    if key in _checked:
+        return ttnn.linear(x, w, program_config=config, **kwargs)
+    _checked[key] = True
+    device = x.device()
+    ttnn.linear(x, w, **kwargs).deallocate(True)
+    programs = device.num_program_cache_entries()
+    out = ttnn.linear(x, w, program_config=config, **kwargs)
+    hit = device.num_program_cache_entries() == programs
+    budget = l1_program_budget(device)
+    found = ""
+    if not hit:
+        tried = {repr(config)}
+        for b in range(512 << 10, 2 << 20, 4096):
+            c = auto_dram_matmul_config(x, w, kwargs["compute_kernel_config"], kwargs["dtype"], b)
+            if repr(c) in tried:
+                continue
+            tried.add(repr(c))
+            before = device.num_program_cache_entries()
+            ttnn.linear(x, w, program_config=c, **kwargs).deallocate(True)
+            if device.num_program_cache_entries() == before:
+                found = f"; auto-config's is the one of a {b}-byte budget: {c}"
+                break
+        else:
+            found = "; no budget's config is auto-config's"
+    from loguru import logger
+
+    (logger.info if hit else logger.warning)(
+        f"MiMo matmul config check: {key[0]} @ {key[1]}, L1 budget now {budget} (fixed {MM_L1_BUDGET}): the fixed "
+        f"config {'hits' if hit else 'MISSES'} auto-config's program: {config}{found}"
+    )
+    return out
+
+
 def mcast_1d_config(grid, m, n, k, in0_block_w=4, out_subblock_w=4):
     """1D in0-mcast matmul config over ``grid`` (x, y) cores; N split across cores. Used by sparse_matmul."""
     core_x, core_y = grid

@@ -264,3 +264,118 @@ def test_a_failed_chunk_trace_body_leaves_no_rope_chunk_open(monkeypatch, expect
     with expect_error(RuntimeError, "out of memory"):
         model._chunk_trace_body(trace)
     assert all(s.prefill_cache is None for s in model.rope_setups.values())
+
+
+def optional_traced_model(monkeypatch, fake, optional):
+    """traced_model with tuple keys (padded, k) and an ``optional`` flag per trace."""
+    model = traced_model(monkeypatch, fake, count=0)
+    model.chunk_traces = {}
+    for k, opt in enumerate(optional):
+        key = (256 if opt else CHUNK, k)
+        model.chunk_traces[key] = {"id": None, "key": key, "optional": opt}
+    model.chunk_inputs = {CHUNK: {}, 256: {}}
+    return model
+
+
+def test_optional_chunk_traces_that_do_not_fit_drop_only_themselves(monkeypatch):
+    """The optional traces (the multimodal prompts' first and short later chunks) are captured after the others; when
+    the region runs out only the optional ones left are dropped: the others stay captured and their chunks replay."""
+    fake = FakeTraces(total=1000, size=300, used=100)
+    model = optional_traced_model(monkeypatch, fake, [True, False, False, True])
+    assert model.capture_prefill_chunk_traces()
+    assert fake.captures == 2 and fake.released == [] and fake.used == 700
+    assert sorted(t["optional"] for t in model.chunk_traces.values()) == [False, False]
+    assert all(t["id"] is not None for t in model.chunk_traces.values())
+    assert list(model.chunk_inputs) == [CHUNK], "the dropped traces' inputs are freed"
+
+
+def test_a_failed_optional_capture_keeps_the_others(monkeypatch):
+    fake = FakeTraces(total=10000, size=100, fail_at=3)
+    model = optional_traced_model(monkeypatch, fake, [False, False, True, True])
+    assert model.capture_prefill_chunk_traces()
+    assert [t["id"] for t in model.chunk_traces.values()] == [1, 2] and fake.live == {1, 2}
+
+
+def key_model(rep=2):
+    model = TtMiMoModel.__new__(TtMiMoModel)
+    model.block_size, model.pair, model.dflash = 64, None, None
+    model.layers = [
+        SimpleNamespace(is_swa=True, attn=SimpleNamespace(sliding_window=128, pair=None)),
+        SimpleNamespace(is_swa=False, attn=SimpleNamespace(pair=None, split_users=True, kv_both_chips=False, rep=rep)),
+    ]
+    return model
+
+
+def test_first_chunk_traces_key_on_the_length_only():
+    """A first chunk (start 0) reads no window, no context and no owner mask: one traced first chunk per padded length
+    serves every slot, and _chunk_trace finds it for a start-0 chunk (later chunks keep their slot parity)."""
+    model = key_model()
+    key = model._chunk_trace_key(1, 0, 1024)
+    assert key == (1024, 128, False, 0, 0) == model._chunk_trace_key(0, 0, 1024)
+    assert model._chunk_trace_key(1, 1024, 1024)[3:] == (128, 1)
+    model.chunk_traces = {key: {"id": 7}}
+    assert model._chunk_trace(3, 0, torch.empty(900))["id"] == 7
+    assert model._chunk_trace(3, 0, torch.empty(1100)) is None, "1100 tokens pad to 1152"
+    assert model._chunk_trace(3, 1024, torch.empty(900)) is None, "a later chunk has its own traces"
+
+
+class Segment:
+    """A row buffer segment (TtMiMoModel.trace_rows): only its shape is read on the host."""
+
+    def __init__(self, name, rows):
+        self.name, self.shape = name, (rows, 4)
+
+    def __repr__(self):
+        return self.name
+
+
+def test_write_merge_points_the_gather_at_the_host_rows(monkeypatch):
+    """A replay's merge inputs (_write_merge): row r of the pass gathers token row r, or row n + k of [token rows; row
+    buffer] when it is the pass's k-th host row (the host rows are packed in pass order into the row buffer's
+    segments, and only the segments they reach are uploaded). A replay without host rows resets the index to the
+    identity once, and uploads nothing while it stays the identity."""
+    uploads = []
+    monkeypatch.setattr(model_lib.kv_lib, "replicated", lambda plan, t, dtype, device=True: t.clone())
+    fake = SimpleNamespace(copy_host_to_device_tensor=lambda h, d: uploads.append((d, h)), uint32="u32", bfloat16="bf")
+    monkeypatch.setattr(model_lib, "ttnn", fake)
+    model = TtMiMoModel.__new__(TtMiMoModel)
+    model.plan, model.cfg = None, SimpleNamespace(hidden_size=4)
+    seg0, seg1, seg2 = Segment("seg0", 4), Segment("seg1", 4), Segment("seg2", 8)
+    model.trace_rows = [seg0, seg1, seg2]
+    merge = {"index": "index", "segments": 2, "identity": True}
+    n = 8
+    emb_a = torch.arange(3 * 4, dtype=torch.float32).reshape(3, 4) + 1
+    emb_b = -torch.arange(4 * 4, dtype=torch.float32).reshape(4, 4)
+    rows_b = torch.tensor([False, True, True, False])
+    # Users given out of order: rows go to the buffer in pass order.
+    model._write_merge(merge, n, [(4, emb_b, rows_b), (0, emb_a, None), (6, None, None)])
+    got = dict((str(d), h) for d, h in uploads)
+    assert sorted(got) == ["index", "seg0", "seg1"], "the third segment is not reached"
+    assert got["index"].reshape(-1).tolist() == [8, 9, 10, 3, 4, 11, 12, 7]
+    packed = torch.cat([got["seg0"], got["seg1"]]).float()
+    assert got["seg0"].dtype == torch.bfloat16 and got["seg0"].shape == (4, 4)
+    assert torch.equal(packed[:3], emb_a) and torch.equal(packed[3:5], emb_b[1:3])
+    assert not merge["identity"]
+    uploads.clear()
+    model._write_merge(merge, n, [(0, emb_a[:2], None)])
+    assert sorted(str(d) for d, _ in uploads) == ["index", "seg0"], "two rows reach one segment"
+    uploads.clear()
+    model._write_merge(merge, n, [(0, None, None)])
+    assert [d for d, _ in uploads] == ["index"] and uploads[0][1].reshape(-1).tolist() == list(range(n))
+    uploads.clear()
+    model._write_merge(merge, n, [])
+    assert uploads == [] and merge["identity"]
+
+
+def test_row_buffer_segments_cover_the_longest_pass(monkeypatch):
+    """A pass of n rows reads the first segments that together hold n rows; a pass longer than the configured
+    segments adds one of the missing rows (set up before any capture)."""
+    monkeypatch.setattr(model_lib.kv_lib, "replicated", lambda plan, t, dtype, device=True: Segment("s", t.shape[0]))
+    monkeypatch.setattr(model_lib, "ttnn", SimpleNamespace(bfloat16="bf"))
+    model = TtMiMoModel.__new__(TtMiMoModel)
+    model.plan, model.cfg = None, SimpleNamespace(hidden_size=4)
+    model.trace_row_sizes, model.trace_rows = (256, 768), []
+    assert model._trace_row_segments(100) == 1 and [t.shape[0] for t in model.trace_rows] == [256]
+    assert model._trace_row_segments(1024) == 2 and [t.shape[0] for t in model.trace_rows] == [256, 768]
+    assert model._trace_row_segments(1500) == 3 and [t.shape[0] for t in model.trace_rows] == [256, 768, 476]
+    assert model._trace_row_segments(257) == 2

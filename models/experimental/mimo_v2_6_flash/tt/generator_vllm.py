@@ -159,11 +159,43 @@ from ..reference.spec_decode import (
     plan_verify_passes,
     planned_drafts,
 )
-from .common import fabric_config
+from .common import MM_ENCODER_L1_BUDGET, fabric_config, set_mm_l1_budget
 from .attention import PAIR_SPLIT_OPS, page_table_width, verify_grouped, verify_variant, verify_variants
 from .device_sampler import CANDIDATES_PER_CHIP, MAX_USERS, stream_states
 from .generator import MiMoGalaxyGenerator
 from .model import PREFILL_CHUNK_TRACE, prefill_padded_len, prefill_warmup_batches, prefill_warmup_chunks
+from . import multimodal as mm
+from .audio.host_backend import AudioCodesBackend
+
+try:  # the multimodal class registers vLLM's MiMo-V2-Omni processor; tests drive the adapter without vLLM
+    from vllm.model_executor.models.interfaces import SupportsMultiModal
+    from vllm.model_executor.models.mimo_v2_omni import (
+        MiMoV2OmniDummyInputsBuilder,
+        MiMoV2OmniProcessingInfo,
+    )
+    from vllm.multimodal import MULTIMODAL_REGISTRY
+
+    from .audio.processor import MiMoV2OmniTTMultiModalProcessor  # upstream + audio tokenized in the front end
+    from .video_audio import VideoAudioMixin
+    from .video_input import VideoDummyMixin, VideoInfoMixin, VideoTimestampsMixin
+    from .video_prompt import VideoPromptMixin
+
+    class MiMoV2OmniTTProcessor(
+        VideoAudioMixin, VideoTimestampsMixin, VideoPromptMixin, MiMoV2OmniTTMultiModalProcessor
+    ):
+        """The processor the multimodal class registers: audio tokenized in the front end (tt/audio/processor.py),
+        video frames labelled with the loader's times (tt/video_input.py, MIMO_VIDEO_TIMESTAMPS), a video's audio
+        track interleaved with its frames on request (tt/video_audio.py, MIMO_VIDEO_AUDIO), video prompts upstream's
+        or, with MIMO_VIDEO_PROMPT=hf, the checkpoint processor's (tt/video_prompt.py)."""
+
+    class MiMoV2OmniTTProcessingInfo(VideoInfoMixin, MiMoV2OmniProcessingInfo):
+        """Upstream's processing info with the video metadata parser and pixel caps of tt/video_input.py."""
+
+    class MiMoV2OmniTTDummyInputsBuilder(VideoDummyMixin, MiMoV2OmniDummyInputsBuilder):
+        """Upstream's dummy inputs with video metadata (tt/video_input.py)."""
+
+except ImportError:
+    SupportsMultiModal = MULTIMODAL_REGISTRY = None
 
 TP = 8
 BLOCK_SIZE = 64
@@ -790,6 +822,7 @@ class MiMoV2ForCausalLM:
         self.pair_split = KV_PAIR_SPLIT
         self.group_block_sizes = block_sizes
         self.layer_groups = groups
+        self.swa_groups = {g for layer, g in zip(self.models[0].layers, groups) if layer.is_swa}
         compact_rope = self.max_seq_len > ROPE_TABLE_FULL_WIDTH_MAX_LEN
         # The replicas' RoPE tables are equal: computed once on the host (~2.5 s at 1M), uploaded to each.
         rope_host = self.models[0].decode_rope_tables_host(compact_rope) if DEVICE_ROPE else None
@@ -904,6 +937,7 @@ class MiMoV2ForCausalLM:
                 start > 0
                 and PREFILL_BATCH
                 and prefill_padded_len(int(ends[i])) <= self.models[0].PREFILL_BATCH_MAX_PADDED
+                and not self._mm_rows_in(i, 0, int(ends[i]))  # (it would encode the cached items again)
             ):
                 # A short prompt whose first blocks are cached (a prefix hit) is recomputed from position 0 in a batch
                 # pass (with the lane's other first chunks, traced) instead of an eager later chunk. Its cached blocks
@@ -915,6 +949,20 @@ class MiMoV2ForCausalLM:
             # The MTP history: a chunk starting where the slot's last one ended continues its request.
             continues[i] = start > 0 and self.prefill_ends[lane].get(slot) == start
             self.prefill_ends[lane][slot] = int(ends[i])
+        # Every row's multimodal rows first (the encoders run on the device and the host waits for their rows), so
+        # the passes then go to the device back to back. They also run before anything else of this step reaches
+        # the device (page tables, MTP resets, passes): an encoder can compile programs while serving (an input size
+        # first seen), whose program-cache buffers lie where this replica's traces write their temporaries on
+        # replay. Then the traces are captured again right here, around the new buffers, with the device as the
+        # last step left it, and before the pass order below asks which chunks have a trace. Recapturing only
+        # after the passes (as the end of this method does for programs the passes compile) would let this step's
+        # batch / chunk replays write over the encoder's programs first, and a later recapture does not repair them.
+        programs = [model.mesh_device.num_program_cache_entries() for model in self.models]
+        t_embeds = time.perf_counter()
+        row_embeds = {p[0]: self._row_embeds(p[0], p[1], p[3], p[4]) for p in placed}
+        embeds_s = time.perf_counter() - t_embeds
+        if self._recapture_after_new_programs(programs, "multimodal encoder"):
+            programs = [model.mesh_device.num_program_cache_entries() for model in self.models]
         for lane, rows_of_lane in enumerate(table_rows):
             if rows_of_lane:
                 self.models[lane].set_vllm_page_tables(rows_of_lane)
@@ -937,6 +985,9 @@ class MiMoV2ForCausalLM:
         # pass is enqueued before any is read, the lanes interleaved so all replicas have work.
         # A lane's replayed later chunks, then its batch passes, go before its other rows: a batch reads no cached KV
         # (it starts at 0), and a replay must not run while an eager pass's output of that lane is alive.
+        # A row whose cached prefix holds a block another row of this step writes (a prefix hit on blocks vLLM
+        # scheduled in this very step) runs after that row, eagerly (``_prefill_readers``).
+        readers = self._prefill_readers(tables, placed)
         by_lane, traced_rows = [], set()
         for lane in range(self.dp):
             groups = {}
@@ -945,7 +996,8 @@ class MiMoV2ForCausalLM:
                     key = prefill_padded_len(p[4]) if self._batchable(p) else ("row", p[0])
                     groups.setdefault(key, []).append(p)
             batches = [g for key, g in groups.items() if not isinstance(key, tuple)]
-            rows_ = [g for key, g in groups.items() if isinstance(key, tuple)]
+            rows_ = [g for key, g in groups.items() if isinstance(key, tuple) and g[0][0] not in readers]
+            late = [g for key, g in groups.items() if isinstance(key, tuple) and g[0][0] in readers]
             # A replayed later chunk goes first: a replay must not run while an eager pass's output of that lane is
             # alive (its own output is copied into the slot's persistent logits row, which a batch replay leaves be).
             # A row is traced only when every chunk prefill_enqueue splits it into replays (chunk_traced); one that
@@ -953,28 +1005,35 @@ class MiMoV2ForCausalLM:
             # (allow_trace=False), after the replays, so no replay runs while an eager output of the lane is alive.
             model = self.models[lane]
             traced = [
-                g for g in rows_ if PREFILL_CHUNK_TRACE and model.chunk_traced(g[0][2], g[0][3], g[0][4] - g[0][3])
+                g
+                for g in rows_
+                if PREFILL_CHUNK_TRACE
+                and (self._mm_traced() or not self._mm_rows_in(g[0][0], g[0][3], g[0][4]))
+                and model.chunk_traced(g[0][2], g[0][3], g[0][4] - g[0][3])
             ]
             traced_rows.update(g[0][0] for g in traced)
-            by_lane.append(traced + batches + [g for g in rows_ if not any(g is t for t in traced)])
+            rest = [g for g in rows_ if not any(g is t for t in traced)]
+            by_lane.append(traced + batches + rest + self._after_writers(late, readers))
         order = [passes[k] for k in range(max(map(len, by_lane))) for passes in by_lane if k < len(passes)]
         # Nothing chains onto a verify a prefill followed (the plugin builds the next decode from host state).
         self._tip = None
-        programs = [model.mesh_device.num_program_cache_entries() for model in self.models]
         t0 = time.perf_counter()
         pending = []
         for rows_of_pass in order:
             lane = rows_of_pass[0][1]
             chunks = [
-                (torch.as_tensor(tokens[i, start:end]).to(torch.int32), slot, cached)
+                (torch.as_tensor(tokens[i, start:end]).to(torch.int32), slot, cached, *row_embeds[i])
                 for i, _, slot, start, end, cached in rows_of_pass
             ]
             if self._batchable(rows_of_pass[0]):
+                if not any(c[3] is not None for c in chunks):
+                    chunks = [c[:3] for c in chunks]
                 handle = self.models[lane].prefill_enqueue_batch(chunks)
             else:
-                (chunk, slot, _), start, i = chunks[0], rows_of_pass[0][3], rows_of_pass[0][0]
+                (chunk, slot, _, embeds, embed_rows), start, i = chunks[0], rows_of_pass[0][3], rows_of_pass[0][0]
                 group = draft_group[i]
                 self._dflash_continue(lane, slot, start, start + chunk.numel() - 1, group)
+                mm_rows = {} if embeds is None else {"embeds": embeds, "embed_rows": embed_rows}
                 handle = self.models[lane].prefill_enqueue(
                     chunk,
                     slot,
@@ -982,6 +1041,7 @@ class MiMoV2ForCausalLM:
                     history_continues=continues[i],
                     draft_group=group,
                     allow_trace=i in traced_rows,
+                    **mm_rows,
                 )
             pending.append((rows_of_pass, lane, handle))
         t1 = time.perf_counter()
@@ -991,10 +1051,17 @@ class MiMoV2ForCausalLM:
             for k, p in enumerate(rows_of_pass):
                 logits[p[0]] = out[k]
         if TIMING:
+            mm = sum(1 for e in row_embeds.values() if e[0] is not None)
             logger.info(
                 f"MiMo vLLM timing: prefill {rows} rows in {len(pending)} passes "
-                f"{[[p[4] - p[3] for p in rows_of] for rows_of, _, _ in pending]}: enqueue {1e3 * (t1 - t0):.0f} ms, "
-                f"total {1e3 * (time.perf_counter() - t0):.0f} ms"
+                f"{[[p[4] - p[3] for p in rows_of] for rows_of, _, _ in pending]}"
+                + (f" ({mm} with multimodal rows, embeds {1e3 * embeds_s:.0f} ms)" if mm else "")
+                + f": enqueue {1e3 * (t1 - t0):.0f} ms, total {1e3 * (time.perf_counter() - t0):.0f} ms"
+                + (
+                    f", {sum(1 for *_, h in pending if isinstance(h, dict) and h.get('persistent'))} replayed"
+                    if mm
+                    else ""
+                )
             )
         self._recapture_after_new_programs(programs)
         return torch.stack(logits).unsqueeze(1)
@@ -1004,15 +1071,110 @@ class MiMoV2ForCausalLM:
         return kv_pair_split.PAIR if self.pair_split else BLOCK_SIZE
 
     def _batchable(self, placed_row):
-        """A first chunk (start 0) whose padded length a prefill batch takes."""
+        """A first chunk (start 0) whose padded length a prefill batch takes (and that holds no multimodal row, unless
+        the traced passes take them: ``_mm_traced``)."""
         start, end = placed_row[3], placed_row[4]
-        return PREFILL_BATCH and start == 0 and prefill_padded_len(end) <= self.models[0].PREFILL_BATCH_MAX_PADDED
+        return (
+            PREFILL_BATCH
+            and start == 0
+            and prefill_padded_len(end) <= self.models[0].PREFILL_BATCH_MAX_PADDED
+            and (self._mm_traced() or not self._mm_rows_in(placed_row[0], start, end))
+        )
 
-    def _recapture_after_new_programs(self, programs):
+    def _prefill_readers(self, tables, placed):
+        """{prefill row: the rows of this step it must run after}: a row whose cached prefix (positions before its
+        start) holds a KV block that another row of the step writes.
+
+        vLLM caches a block when it schedules the block's computation, not when the block is computed, so a request
+        admitted in the same step as the chunk that computes a shared prefix (requests sharing a long prompt prefix,
+        say several questions on one video, arriving together) can hit blocks that chunk has not written yet. On a GPU
+        one batched forward writes every row's K / V before any row's attention reads them; here every row is a pass
+        of its own, so the reader must run after the writer, or it attends whatever the blocks held before (another
+        request's K / V: the reader's answer is garbage). Each KV cache group's table is checked (block ids are per
+        lane, and a block belongs to one group at a time); vLLM's null block 0 is shared by design and skipped. A
+        sliding-window group's row is read only in the window in front of the start (TtMiMoModel._window_blocks): the
+        entries below it may name blocks vLLM freed (SlidingWindowManager) and gave to another row of the step, which
+        that row writes but this one never reads."""
+        block_sizes = getattr(self, "group_block_sizes", None)
+        if not block_sizes or tables is None or not any(p[3] > 0 for p in placed):
+            return {}
+        swa_groups = getattr(self, "swa_groups", set())
+        reads, writes = {}, {}
+        for i, lane, _, start, end, cached in placed:
+            group_rows = self._group_rows(tables, i)
+            for g, bs in block_sizes.items():
+                row = group_rows.get(g)
+                if row is None:
+                    continue
+                row = torch.as_tensor(row).reshape(-1)
+                # A row recomputed from position 0 in a batch over its cached blocks (``cached``) writes none of them.
+                first = max(start, cached * BLOCK_SIZE) // bs
+                writes[i, g] = row[first : -(-end // bs)]
+                if start > 0:
+                    lo = max(start - SWA_WINDOW, 0) // bs if g in swa_groups else 0
+                    reads[i, g] = row[lo : start // bs]
+        out = {}
+        for i, lane, *_ in placed:
+            for j, other, *_ in placed:
+                if j == i or other != lane:
+                    continue
+                for g in block_sizes:
+                    r, w = reads.get((i, g)), writes.get((j, g))
+                    if r is None or w is None or not r.numel() or not w.numel():
+                        continue
+                    w = w[w != 0]
+                    if w.numel() and bool(torch.isin(r, w).any()):
+                        out.setdefault(i, set()).add(j)
+                        break
+        if out:
+            logger.info(
+                "MiMo vLLM: prefill rows reading blocks other rows of the step write run after them: "
+                + ", ".join(f"row {i} after {sorted(js)}" for i, js in sorted(out.items()))
+            )
+        return out
+
+    @staticmethod
+    def _after_writers(rows, readers):
+        """The passes ``rows`` (rows that read blocks other rows of the step write) ordered so each runs after every
+        row of ``rows`` it reads from (the other writers run before all of them). A cycle, which vLLM's block
+        caching cannot make, keeps the remaining rows in their order."""
+        left, out, done = list(rows), [], set()
+        while left:
+            ready = [g for g in left if not (readers[g[0][0]] - done) & {h[0][0] for h in left}]
+            if not ready:
+                ready = left[:1]
+            for g in ready:
+                left.remove(g)
+                out.append(g)
+                done.add(g[0][0])
+        return out
+
+    # Multimodal hooks of prefill_forward (MiMoV2OmniForCausalLM): the text model has no multimodal rows.
+    def _mm_rows_in(self, row, start, end):
+        """Whether prefill row ``row`` has a multimodal embedding row in prompt positions [start, end): unless
+        ``_mm_traced``, such a chunk runs eagerly on its own (no batch, no trace) and a cached prefix in front of it is
+        not recomputed in a batch."""
+        return False
+
+    def _mm_traced(self):
+        """Whether chunks with multimodal rows run as text chunks do (batched, traced): every replica's traced passes
+        take host rows (TtMiMoModel.enable_trace_embeds) and prefill batches replay traces."""
+        return False
+
+    def _row_embeds(self, row, lane, start, end):
+        """(embeds, embed_rows) of prefill row ``row``'s chunk [start, end) for TtMiMoModel.prefill_enqueue, or
+        (None, None)."""
+        return None, None
+
+    def _recapture_after_new_programs(self, programs, what="prefill"):
         """``programs``: each replica's program-cache size before the prefill. A prefill that compiled new programs
         (a chunk length or offset first seen while serving) put their program-cache buffers in memory the replica's
         decode trace may write on replay (tech_reports/.../TraceCorrectness.md, unsafe allocations), so that replica's
-        decode trace is captured again, around them. Every slot is idle during the capture, so no KV is written."""
+        traces are captured again, around them. Every slot is idle during the decode capture and the prefill batches
+        capture on zero fill tables, so no request's KV is written. Returns the number of replicas recaptured.
+        ``what`` names in the log what compiled them: the passes (at the end of prefill_forward) or the multimodal
+        encoders (before the step's passes, so none of its replays runs over their programs)."""
+        recaptured = 0
         for lane, model in enumerate(self.models):
             if model.decode_trace is None or model.mesh_device.num_program_cache_entries() == programs[lane]:
                 continue
@@ -1023,14 +1185,20 @@ class MiMoV2ForCausalLM:
             model.release_decode_trace()
             model.release_prefill_chunk_traces()
             model.capture_decode_trace()
+            # The traced prefill batches too (warm-up compiles every prefill program before them, but a multimodal
+            # prefill's encoder can compile programs while serving: TT_METAL_TRACE_ALLOC_TRACKING caught a batch replay
+            # over the device ViT's new program-cache buffers).
+            model.recapture_prefill_batch_traces()
             if model.mtp is not None or model.dflash is not None:
                 model.capture_spec_traces()
             model.capture_prefill_chunk_traces()  # optional, so last: if they no longer fit they are dropped
             self.decode_recaptures += 1
+            recaptured += 1
             logger.info(
-                f"MiMo vLLM: replica {lane} decode trace recaptured after {new} new prefill programs "
+                f"MiMo vLLM: replica {lane} decode trace recaptured after {new} new {what} programs "
                 f"({self.decode_recaptures} recaptures so far)"
             )
+        return recaptured
 
     # ------------------------------------------------------------------ decode
     def decode_forward(
@@ -2523,3 +2691,522 @@ class MiMoV2ForCausalLM:
             model.release_prefill_traces()
             model.release_prefill_chunk_traces()
             model.release_spec_traces()
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Multimodal input (doc/multimodal_plan.md)
+# ---------------------------------------------------------------------------------------------------------------------
+
+# Modalities MiMoV2OmniForCausalLM serves (model_capabilities["mm_modalities"]); MIMO_MM_MODALITIES narrows them.
+MM_MODALITIES = tuple(m for m in os.environ.get("MIMO_MM_MODALITIES", ",".join(mm.MODALITIES)).split(",") if m)
+
+
+# The device ViT's patch rows per pass (tt/vision; a single image always runs in one pass) and weight dtype.
+VIT_MAX_ROWS = int(os.environ.get("MIMO_VIT_MAX_ROWS", "16384"))
+# Free DRAM per chip (MB) one ViT pass of a row bucket needs (tests/test_vit_dram_headroom_tp8.py measures it): what
+# the multimodal LLM must leave after its KV cache and traces (MiMoV2OmniForCausalLM: KV reservation, startup check).
+# Measured on bhg4 (one row, bf16 weights): 96 / 192 / 368 / 736 MB at 4096 / 8192 / 16384 / 32768 rows (the bisection
+# step is 16 MB); these add ~13 % for a fragmented heap. Plus the ViT's warmed programs (~20 MB per chip).
+VIT_PASS_DRAM_MB = {4096: 112, 8192: 224, 16384: 416, 32768: 832}
+# The largest ViT pass served: images run in one pass (the processor's largest is 32768 patch rows), videos in passes
+# of at most MIMO_VIT_MAX_ROWS.
+VIT_LARGEST_PASS = 32768
+# DRAM per chip the multimodal model takes off the KV pool (MIMO_KV_GB_PER_CHIP) for the ViT's passes. The text
+# model's launches leave ~1.37 GB free per chip at 4 x 1M per row and ~0.87 GB with MTP (8 slots, 1.2 GB trace
+# region), so the default reserves 0.25 GB with speculative decoding and none without (startup checks the rest).
+# The device audio encoders (MIMO_AUDIO_TOKENIZER / MIMO_AUDIO_PATCH=device, the defaults) keep 113 + 57 MB of weights
+# and ~25 MB of tables and programs per chip: 0.1 GB more (bhg2 row 1, MTP: 0.25 left 798 MB for the 832 MB ViT pass,
+# 0.35 left 862 MB).
+_AUDIO_ON_DEVICE = "audio" in MM_MODALITIES and "device" in (
+    os.environ.get("MIMO_AUDIO_TOKENIZER", "device"),
+    os.environ.get("MIMO_AUDIO_PATCH", "device"),
+)
+MM_KV_RESERVE_GB = float(
+    os.environ.get("MIMO_MM_VIT_RESERVE_GB", f"{(0.25 if SPEC_DECODE else 0) + (0.1 if _AUDIO_ON_DEVICE else 0):g}")
+)
+# MIMO_MM_STRICT (default on): a prefill row whose multimodal item cannot be served (encoder failure, or a cached
+# prefix holding an item that failed before) is not answered from placeholder embeddings: its first token is forced to
+# the end of the turn, and take_prefill_errors() reports it for the plugin to fail the request.
+MM_STRICT = os.environ.get("MIMO_MM_STRICT", "1") == "1"
+# MIMO_MM_TRACE (default 1; 0: such chunks run eagerly on their own): a chunk with multimodal rows runs as a text chunk
+# does: batched with the lane's other first chunks and replaying their trace, or replaying a traced later / first
+# chunk, with its rows merged in the trace from persistent inputs (TtMiMoModel.enable_trace_embeds). A text pass gives
+# the same values either way (the merge is an exact gather).
+MM_TRACE = os.environ.get("MIMO_MM_TRACE", "1") == "1"
+# The traced chunks set up for multimodal prompts besides the text model's (optional: captured last, each only while
+# the trace region has room, in this order): later chunks of these padded lengths at every start below
+# GLOBAL_SDPA_MIN_START (MIMO_MM_TRACE_LATER: a prefix hit in front of an item leaves a short later chunk), and first
+# chunks (start 0, one user) of these padded lengths (MIMO_MM_TRACE_FIRST; a first chunk up to
+# PREFILL_BATCH_MAX_PADDED replays a prefill batch trace). Lengths a chunk cannot have are skipped.
+MM_TRACE_LATER = tuple(int(n) for n in os.environ.get("MIMO_MM_TRACE_LATER", "128,256").split(",") if n)
+MM_TRACE_FIRST = tuple(
+    int(n) for n in os.environ.get("MIMO_MM_TRACE_FIRST", "896,1024,768,640,4096,2048,1536,1280").split(",") if n
+)
+_AUDIO_BACKENDS = {}
+_AUDIO_LOCK = threading.Lock()
+
+
+def _host_audio_backend(model_path):
+    """One host audio encoder per process (~1.7 GB of host weights), shared by the replicas: tt/audio/host_backend."""
+    from .audio.host_backend import HostAudioBackend
+
+    with _AUDIO_LOCK:
+        if model_path not in _AUDIO_BACKENDS:
+            threads = int(os.environ.get("MIMO_AUDIO_THREADS", "8"))
+            _AUDIO_BACKENDS[model_path] = HostAudioBackend(model_path, num_threads=threads)
+        return _AUDIO_BACKENDS[model_path]
+
+
+class _LazyHostAudio:
+    """The host audio encoder, loaded on the first mel it gets: with tt/audio/processor.py the front end sends RVQ
+    codes (AudioCodesBackend's patch encoder), so the engine needs the tokenizer only for a mel."""
+
+    def __init__(self, model_path):
+        self.model_path = model_path
+
+    def embed_audio(self, mel):
+        return _host_audio_backend(self.model_path).embed_audio(mel)
+
+
+# Where the audio patch encoder (RVQ codes -> embeddings) runs (tt/audio/processor.py reads it too): ``device`` (the
+# default) on the replica's row (tt/audio/patch.py), ``engine`` on this process's CPU, ``frontend`` in the API server.
+AUDIO_PATCH = os.environ.get("MIMO_AUDIO_PATCH", "device")
+
+
+def audio_device_patch(model_path, mesh_device):
+    """The replica's device audio patch encoder (tt/audio/patch.py, 59 MB of weights per chip, cached under
+    MIMO_AUDIO_CACHE) with MIMO_AUDIO_PATCH=device and audio served, else None (the host patch encoder)."""
+    if "audio" not in MM_MODALITIES or AUDIO_PATCH != "device":
+        return None
+    from .audio.patch import TtAudioPatchEncoder, default_cache_dir
+
+    return TtAudioPatchEncoder.from_checkpoint(mesh_device, model_path, cache_dir=default_cache_dir(model_path))
+
+
+# Where the audio tokenizer encoder (mel -> codes) runs (tt/audio/processor.py reads it too): ``device`` (the default;
+# the replica's row, tt/audio/tokenizer.py: ~10x faster, ~3.5-5 % of the code frames differ from the fp32 reference,
+# LibriSpeech WER / degenerate outputs equal to the host's in the serving A/B, see tt/audio/processor.py) or
+# ``frontend`` (fp32 on the API server's CPU, codes bit-identical to the reference).
+AUDIO_TOKENIZER = os.environ.get("MIMO_AUDIO_TOKENIZER", "device")
+if "audio" in MM_MODALITIES:
+    from .audio.host_backend import check_audio_places
+
+    check_audio_places(AUDIO_PATCH, AUDIO_TOKENIZER)
+
+
+def audio_device_tokenizer(model_path, mesh_device):
+    """The replica's device audio tokenizer encoder (tt/audio/tokenizer.py, cached under MIMO_AUDIO_CACHE) with
+    MIMO_AUDIO_TOKENIZER=device and audio served, else None."""
+    if "audio" not in MM_MODALITIES or AUDIO_TOKENIZER != "device":
+        return None
+    from .audio.tokenizer import TtAudioTokenizerEncoder, default_cache_dir
+
+    return TtAudioTokenizerEncoder.from_checkpoint(mesh_device, model_path, cache_dir=default_cache_dir(model_path))
+
+
+def default_encoder_backend(model_path, mesh_device):
+    """The encoder backend of the replica on ``mesh_device`` (its 1x8 row). MIMO_MM_ENCODER:
+
+    * ``tt`` (default): images and videos on the row's device ViT (tt/vision/encoder.MiMoVisionEncoder, its weights
+      cached under MIMO_VISION_CACHE), audio on the host (tt/audio/host_backend.HostAudioBackend, one per process);
+    * ``hf_host``: debug only, the checkpoint's HF modules on the host (tt/multimodal.HFHostBackend);
+    * ``module.path:factory``: factory(model_path, mesh_device) -> an EncoderBackend."""
+    spec = os.environ.get("MIMO_MM_ENCODER", "tt")
+    if spec == "tt":
+        vision = audio = None
+        if "image" in MM_MODALITIES or "video" in MM_MODALITIES:
+            from .vision.encoder import MiMoVisionEncoder
+
+            vision = MiMoVisionEncoder(mesh_device, model_path, max_rows=VIT_MAX_ROWS)
+        if "audio" in MM_MODALITIES:
+            audio = _LazyHostAudio(model_path)
+        return mm.CompositeBackend(vision, audio)
+    if spec == "hf_host":
+        return mm.HFHostBackend.shared(model_path)
+    module, _, name = spec.partition(":")
+    if not name:
+        raise ValueError(f"MIMO_MM_ENCODER={spec!r}: tt, hf_host or module.path:factory")
+    import importlib
+
+    return getattr(importlib.import_module(module), name)(model_path, mesh_device)
+
+
+def _register_mm_processor(cls):
+    if MULTIMODAL_REGISTRY is None:
+        return cls
+    return MULTIMODAL_REGISTRY.register_processor(
+        MiMoV2OmniTTProcessor,
+        info=MiMoV2OmniTTProcessingInfo,
+        dummy_inputs=MiMoV2OmniTTDummyInputsBuilder,
+    )(cls)
+
+
+@_register_mm_processor
+class MiMoV2OmniForCausalLM(MiMoV2ForCausalLM, *((SupportsMultiModal,) if SupportsMultiModal is not None else ())):
+    """MiMo-V2.6-Flash with image, video and audio input: the text adapter plus vLLM's upstream MiMo-V2-Omni processor
+    (placeholder expansion, pixel / mel preprocessing, video frames and timestamps), with the items' embeddings
+    merged into the prefill (tt/multimodal.py, TtMiMoModel.prefill_enqueue(embeds=)). Serve it with
+    TT_MODEL_CLASS_OVERRIDES=TTMiMoV2OmniForCausalLM=models.experimental.mimo_v2_6_flash.tt.generator_vllm:MiMoV2OmniForCausalLM
+    (vLLM resolves the MiMo-V2.6-Flash checkpoints, which carry a vision_config, to MiMoV2OmniForCausalLM; the plugin's
+    built-in map serves both names with the text class).
+
+    ``prefill_forward`` takes each row's items from ``mm_items`` (the plugin contract: per row None or a list of
+    {modality, identifier, offset, length, is_embed, data}), else from the plugin's image-only ``pixel_values`` /
+    ``image_grid_thw`` lists (items found by their placeholder runs). A chunk with an item's embedding rows runs as a
+    text chunk does (batched, replaying a trace) with the rows merged on device inside the trace (MIMO_MM_TRACE; with
+    it off, eagerly on its own); a text-only request computes exactly what the text class does. Item embeddings are cached by identifier (an LRU, MIMO_MM_CACHE_MB): a later chunk, a chunk
+    start moved back into an earlier item, or an item stripped by APC (``data`` None) reuses them. Nothing in a
+    request's multimodal input raises out of prefill (an exception there kills the engine): an item that cannot be
+    parsed or encoded is logged and its placeholder tokens' own embeddings stand in.
+
+    Speculative decoding (plan decision 4): the MTP history keeps the placeholder token ids of multimodal rows (its
+    drafts see the placeholder embeddings there); DFlash's context ring takes the target's hidden states, which see the
+    items. Either affects acceptance only."""
+
+    model_capabilities = {
+        **MiMoV2ForCausalLM.model_capabilities,
+        "mm_modalities": MM_MODALITIES,
+        # take_prefill_errors(): rows the last prefill_forward could not serve (MIMO_MM_STRICT); the plugin fails them.
+        "reports_prefill_errors": True,
+    }
+
+    @classmethod
+    def get_max_tokens_all_users(cls, model_name="", num_devices=TP, tt_data_parallel=1, **kwargs):
+        """The text model's KV pool less MIMO_MM_VIT_RESERVE_GB per chip, left free for the device ViT's passes."""
+        tokens = super().get_max_tokens_all_users(model_name, num_devices, tt_data_parallel, **kwargs)
+        if MM_KV_RESERVE_GB <= 0:
+            return tokens
+        default = PAIR_SPLIT_KV_GB_PER_CHIP if KV_PAIR_SPLIT else DEFAULT_KV_GB_PER_CHIP
+        gb = float(os.environ.get("MIMO_KV_GB_PER_CHIP", default))
+        cap = int(max(gb - MM_KV_RESERVE_GB, 0.5) * 1e9 // KV_BYTES_PER_TOKEN)
+        reserved = min(tokens, cap)
+        logger.info(
+            f"MiMo vLLM KV: {MM_KV_RESERVE_GB:g} GB per chip reserved for the ViT (MIMO_MM_VIT_RESERVE_GB): "
+            f"{tokens} -> {reserved} pool tokens per lane ({100 * (tokens - reserved) / max(tokens, 1):.1f}% fewer)"
+        )
+        return reserved
+
+    def take_prefill_errors(self):
+        """{prefill row: reason} of the last prefill_forward's rows that could not be served (MIMO_MM_STRICT): their
+        first token was forced to the end of the turn. The plugin finishes those requests with an error. Clears."""
+        errors, self.prefill_errors = getattr(self, "prefill_errors", {}), {}
+        return errors
+
+    @classmethod
+    def get_placeholder_str(cls, modality, i):
+        if modality.startswith("image"):
+            return "<|vision_start|><|image_pad|><|vision_end|>"
+        if modality.startswith("video"):
+            return "<|vision_start|><|video_pad|><|vision_end|>"
+        if modality.startswith("audio"):
+            return "<|mimo_audio_start|><|audio_pad|><|mimo_audio_end|>"
+        raise ValueError(f"Unsupported modality: {modality}")
+
+    def embed_multimodal(self, **kwargs):
+        raise NotImplementedError("MiMo on TT merges multimodal embeddings inside prefill_forward")
+
+    @classmethod
+    def initialize_vllm_model(cls, hf_config, mesh_device, *args, **kwargs):
+        model = super().initialize_vllm_model(hf_config, mesh_device, *args, **kwargs)
+        model.setup_multimodal(_model_path(hf_config), hf_config)
+        return model
+
+    def setup_multimodal(self, model_path, hf_config=None, backends=None):
+        """The encoder backend of each lane (``backends``, else default_encoder_backend on the lane's row), the item
+        embedding cache, and the image placeholder id (for the image-only kwargs)."""
+        self.mm_hidden = self.models[0].cfg.hidden_size
+        self.image_token_id = int(getattr(hf_config, "image_token_id", None) or 151655)
+        vision = getattr(hf_config, "vision_config", None)
+        merge = None
+        if vision is not None:
+            merge = vision.get("spatial_merge_size") if isinstance(vision, dict) else vision.spatial_merge_size
+        self.mm_merge_size = int(merge or 2)
+        if backends is None:
+            backends = [default_encoder_backend(model_path, m.mesh_device) for m in self.models]
+            # + embed_audio_codes: the row's device patch encoder (MIMO_AUDIO_PATCH=device), else the host one
+            backends = [
+                AudioCodesBackend(
+                    b,
+                    model_path,
+                    device_patch=audio_device_patch(model_path, m.mesh_device),
+                    device_tokenizer=audio_device_tokenizer(model_path, m.mesh_device),
+                )
+                for b, m in zip(backends, self.models)
+            ]
+        self.mm_cache = mm.EmbeddingCache()
+        self.mm_encoders = [mm.ItemEncoder(b, self.mm_cache) for b in backends]
+        # The identifiers of the items of each slot's request (by plugin slot): when a slot takes another request, the
+        # items no other slot's request holds leave the cache (the plugin does not say when a request is done; the
+        # cache's LRU budget bounds the rest).
+        self.mm_slot_items = {}
+        self.mm_failures = 0  # rows that could not be served (encoder failure, or a cached failed item)
+        # Items that failed to encode: a cached prefix (APC) holding one holds placeholder KV. An item leaves it when
+        # a request encodes it and computes its positions itself (``_row_embeds``): that request found no cached
+        # block over the item, so the placeholder blocks are gone and the ones it writes are good. The most recent
+        # identifiers only (mm.RecentSet): one failed pass must not fail an item's requests until the engine restarts.
+        self.mm_failed_ids = mm.RecentSet()
+        self.prefill_errors = {}
+        self.mm_eos = int(getattr(hf_config, "eos_token_id", None) or 151645)
+        self.vision_encoders = [getattr(b, "vision", None) for b in backends]
+        self.audio_patches = [getattr(b, "device_patch", None) for b in backends]
+        self.audio_tokenizers = [getattr(b, "device_tokenizer", None) for b in backends]
+        self._row_mm = self._row_slots = self._row_starts = None
+        if any(e is not None for e in self.vision_encoders + self.audio_patches + self.audio_tokenizers):
+            # Encoders that keep L1 on the device: the prefill linears' blocks must fit next to it (common.dram_linear).
+            set_mm_l1_budget(MM_ENCODER_L1_BUDGET)
+        # Traced passes that take multimodal rows: set before warmup_model_prefill sets up any trace.
+        if MM_TRACE and not DFLASH and all(hasattr(m, "enable_trace_embeds") for m in self.models):
+            for m in self.models:
+                m.enable_trace_embeds()
+        logger.info(f"MiMo vLLM: multimodal input {MM_MODALITIES}, encoders {backends}, traced {self._mm_traced()}")
+
+    def _mm_traced(self):
+        return PREFILL_TRACE and all(getattr(m, "trace_rows", None) is not None for m in self.models)
+
+    def _rows_items(self, tokens, prompt_lens, mm_items, pixel_values, grids):
+        """Each prefill row's items (tt/multimodal.MMItem, prompt order). A row whose input is malformed is logged
+        and served as text."""
+        ends = np.asarray(prompt_lens).reshape(-1).astype(np.int64)
+        out = [[] for _ in range(tokens.shape[0])]
+        for i in range(tokens.shape[0]):
+            try:
+                if mm_items is not None:
+                    out[i] = mm.parse_items(mm_items[i] if i < len(mm_items) else None, MM_MODALITIES)
+                elif grids is not None and i < len(grids) and grids[i] is not None:
+                    if "image" not in MM_MODALITIES:
+                        raise mm.MMInputError("images are not served (MIMO_MM_MODALITIES)")
+                    pv = pixel_values[i] if pixel_values is not None and i < len(pixel_values) else None
+                    out[i] = mm.items_from_image_lists(
+                        tokens[i], int(ends[i]), pv, grids[i], self.image_token_id, self.mm_merge_size
+                    )
+            except Exception as e:  # noqa: BLE001 - a malformed request must not kill the engine
+                self._fail_row(i, f"malformed multimodal input: {e}")
+                out[i] = []
+        return out
+
+    def log_dram(self, reason, every_s=None):
+        """Log each replica's free DRAM (per chip) and its largest free block, at most every ``every_s`` seconds
+        (MIMO_MM_DRAM_LOG_S, default 300; 0 turns the periodic log off): a slow leak or fragmentation shows up as a
+        trend while serving."""
+        every_s = float(os.environ.get("MIMO_MM_DRAM_LOG_S", "300")) if every_s is None else every_s
+        now = time.monotonic()
+        if every_s <= 0 or now - getattr(self, "_dram_logged", -1e9) < every_s:
+            return
+        self._dram_logged = now
+        parts = []
+        try:  # a log line must never raise out of prefill
+            for lane, model in enumerate(self.models):
+                view = ttnn.get_memory_view(model.mesh_device, ttnn.BufferType.DRAM)
+                free = view.total_bytes_free_per_bank * view.num_banks / 1e6
+                largest = view.largest_contiguous_bytes_free_per_bank * view.num_banks / 1e6
+                parts.append(f"replica {lane} {free:.0f} MB free, largest block {largest:.0f} MB")
+        except Exception:  # noqa: BLE001
+            return
+        logger.info(f"MiMo vLLM DRAM per chip ({reason}): " + "; ".join(parts))
+
+    def prefill_forward(self, tokens, start_pos, prompt_lens, page_table, kv_cache, *args, **kwargs):
+        self.log_dram("periodic")
+        self.prefill_errors = {}
+        mm_kwargs = [kwargs.pop(k, None) for k in ("mm_items", "pixel_values", "image_grid_thw")]
+        items = self._rows_items(tokens, prompt_lens, *mm_kwargs)
+        empty_slots = kwargs.get("empty_slots")
+        slots = list(range(tokens.shape[0])) if empty_slots is None else [int(s) for s in empty_slots]
+        self._track_slot_items(slots, items)
+        if not any(items) and not self.prefill_errors:
+            return super().prefill_forward(tokens, start_pos, prompt_lens, page_table, kv_cache, *args, **kwargs)
+        starts = np.asarray(start_pos).reshape(-1).astype(np.int64)
+        for row, row_items in enumerate(items):
+            # A cached prefix (APC) over an item that failed to encode holds that item's placeholder KV.
+            bad = [it.identifier for it in row_items if it.identifier in self.mm_failed_ids and it.offset < starts[row]]
+            if bad:
+                self._fail_row(row, f"its cached prefix holds item {bad[0]}, which failed to encode")
+        self._row_mm, self._row_slots, self._row_starts = items, slots, starts
+        try:
+            logits = super().prefill_forward(tokens, start_pos, prompt_lens, page_table, kv_cache, *args, **kwargs)
+        finally:
+            self._row_mm = self._row_slots = self._row_starts = None
+        if MM_STRICT and self.prefill_errors:
+            # Never a plausible answer from placeholder embeddings: the row's first token ends the turn.
+            for row in self.prefill_errors:
+                logits[row].fill_(float("-inf"))
+                logits[row, ..., self.mm_eos] = 0.0
+        return logits
+
+    def _fail_row(self, row, reason):
+        self.mm_failures += 1
+        self.prefill_errors.setdefault(row, reason)
+        logger.error(
+            f"MiMo vLLM: prefill row {row} cannot be served ({reason}); "
+            + ("its request ends at once and is reported as failed" if MM_STRICT else "served from placeholders")
+            + f" ({self.mm_failures} so far)"
+        )
+
+    def _track_slot_items(self, slots, items):
+        """Record each prefill row's item identifiers under its slot; a slot whose request changed drops the cached
+        embeddings of its old request's items that no other slot's request holds."""
+        dropped = set()
+        for slot, row_items in zip(slots, items):
+            ids = {item.identifier for item in row_items if item.identifier is not None}
+            old = self.mm_slot_items.get(slot, set())
+            if ids != old:
+                dropped |= old - ids
+                self.mm_slot_items[slot] = ids
+        if dropped:
+            live = set().union(*self.mm_slot_items.values())
+            self.mm_cache.discard(dropped - live)
+
+    def _mm_rows_in(self, row, start, end):
+        return self._row_mm is not None and bool(mm.items_overlapping(self._row_mm[row], start, end))
+
+    def _row_embeds(self, row, lane, start, end):
+        if not self._mm_rows_in(row, start, end):
+            return None, None
+        t0 = time.perf_counter()
+        where = f" (prefill row {row}, slot {self._row_slots[row]}, chunk [{start}, {end}))"
+        encoder = self.mm_encoders[lane]
+        failures = encoder.failures
+        try:
+            embeds, rows = mm.chunk_embeds(
+                self._row_mm[row], start, end, lambda item: encoder(item, where), self.mm_hidden
+            )
+        except Exception as e:  # noqa: BLE001 - see _rows_items
+            embeds = rows = None
+            logger.error(f"MiMo vLLM: multimodal rows{where} not merged: {type(e).__name__}: {e}")
+        in_chunk = [it for it in mm.items_overlapping(self._row_mm[row], start, end) if it.identifier is not None]
+        if embeds is None or encoder.failures > failures:
+            self.mm_failed_ids.update(it.identifier for it in self._row_mm[row] if it.identifier in encoder.failed)
+            if embeds is None:  # the chunk's rows were not merged: every item of it stands as placeholders
+                self.mm_failed_ids.update(it.identifier for it in in_chunk)
+            self._fail_row(row, f"a multimodal item of chunk [{start}, {end}) failed to encode")
+        elif len(self.mm_failed_ids):
+            # Encoded and merged. An item that failed before and whose positions this request computes itself (its
+            # prefill starts at or before the item: no cached block covers it) is good again from here on.
+            row_start = int(self._row_starts[row]) if self._row_starts is not None else start
+            for it in in_chunk:
+                if it.identifier in self.mm_failed_ids and it.offset >= row_start and row not in self.prefill_errors:
+                    self.mm_failed_ids.discard(it.identifier)
+                    logger.info(f"MiMo vLLM: item {it.identifier} encodes again{where}; no longer marked as failed")
+        if embeds is None:
+            return None, None
+        logger.info(
+            f"MiMo vLLM: prefill row {row} [{start}, {end}): {0 if rows is None else int(rows.sum())} multimodal rows "
+            f"in {1e3 * (time.perf_counter() - t0):.0f} ms (cache: {len(self.mm_cache)} items, "
+            f"{self.mm_cache.used / 2**20:.0f} MB, {self.mm_cache.hits} hits)"
+        )
+        return embeds, rows
+
+    def warmup_model_prefill(self, *args, **kwargs):
+        """The text model's warm-up, then the multimodal row merge for every padded length a chunk can have."""
+        first = not (self.already_warmed_up_prefill or self.prefill_programs_compiled)
+        super().warmup_model_prefill(*args, **kwargs)
+        if not first:
+            return
+        model0 = self.models[0]
+        window = next((layer.attn.sliding_window for layer in model0.layers if layer.is_swa), BLOCK_SIZE)
+        chunks = prefill_warmup_chunks(
+            self._max_prefill_tokens(), self.max_seq_len, BLOCK_SIZE, window, self.pair_split
+        )
+        lengths = sorted({prefill_padded_len(n, start, self.pair_split) for n, start in chunks})
+        for model in self.models:
+            model.warm_embeds(lengths)
+        logger.info(f"MiMo vLLM: multimodal row merge warmed up for padded lengths {lengths}")
+        # Every ViT program (one set per row bucket) before any trace capture: compiling later puts program binaries
+        # where a trace's replays write (_recapture_after_new_programs stays as the safety net).
+        for lane, vit in enumerate(self.vision_encoders):
+            if vit is not None and hasattr(vit, "warm"):
+                t0 = time.time()
+                vit.warm()
+                logger.info(
+                    f"MiMo vLLM: replica {lane} ViT warmed up ({len(vit.buckets)} buckets) in {time.time() - t0:.1f}s"
+                )
+        for lane, tok in enumerate(getattr(self, "audio_tokenizers", [])):
+            if tok is not None:
+                t0 = time.time()
+                tok.warm()
+                logger.info(
+                    f"MiMo vLLM: replica {lane} audio tokenizer encoder warmed up ({len(tok.buckets)} buckets) in "
+                    f"{time.time() - t0:.1f}s"
+                )
+        for lane, patch in enumerate(getattr(self, "audio_patches", [])):
+            if patch is not None:
+                t0 = time.time()
+                patch.warm()
+                logger.info(
+                    f"MiMo vLLM: replica {lane} audio patch encoder warmed up ({len(patch.buckets)} buckets) in "
+                    f"{time.time() - t0:.1f}s"
+                )
+        self._setup_mm_chunk_traces(max(lengths))
+        self.log_dram("after the prefill warm-up", every_s=0.001)
+
+    def _setup_mm_chunk_traces(self, longest):
+        """The optional traced chunks for multimodal prompts (MIMO_MM_TRACE_LATER / MIMO_MM_TRACE_FIRST, chunks of at
+        most ``longest`` padded tokens): set up and warmed now, captured by warmup_model_decode after the text model's
+        traces while the trace region has room (TtMiMoModel.capture_prefill_chunk_traces)."""
+        if not (self._mm_traced() and PREFILL_CHUNK_TRACE and not DFLASH):
+            return
+        if not all(m.chunk_traces_supported() for m in self.models):
+            return
+        align, pair = self._chunk_align(), self.pair_split
+        model0 = self.models[0]
+        later = [n for n in MM_TRACE_LATER if n <= longest and prefill_padded_len(n, align, pair) == n]
+        first = [
+            n
+            for n in MM_TRACE_FIRST
+            if n <= min(longest, self.max_seq_len)
+            and prefill_padded_len(n) == n
+            and not (PREFILL_BATCH and n <= model0.PREFILL_BATCH_MAX_PADDED)
+        ]
+        t0 = time.time()
+        for lane, model in enumerate(self.models):
+            try:
+                keys = model.setup_prefill_chunk_traces(later, late=False, optional=True)
+                keys += model.setup_prefill_chunk_traces(first, first=True, optional=True)
+                model.warm_prefill_chunk_traces(keys)
+            except Exception as e:  # noqa: BLE001 - optional: serve them eagerly
+                logger.warning(f"MiMo vLLM: replica {lane}: multimodal chunk traces not set up ({e})")
+                model._drop_optional_chunk_traces(f"setting them up failed: {e}")
+                continue
+            logger.info(
+                f"MiMo vLLM: replica {lane} multimodal chunk traces set up and warmed in {time.time() - t0:.1f}s: "
+                f"later chunks of {later}, first chunks of {first} ({len(keys)} traces)"
+            )
+
+    def warmup_model_decode(self, *args, **kwargs):
+        """The text model's captures, then a check that every replica keeps the free DRAM its largest ViT pass needs
+        (VIT_PASS_DRAM_MB): a launch that does not is refused here, instead of failing image requests later."""
+        super().warmup_model_decode(*args, **kwargs)
+        if not any(v is not None for v in getattr(self, "vision_encoders", [])):
+            return
+        # The plugin calls this once untraced and then with enable_trace (the base signature is
+        # (kv_cache, enable_trace, max_batch_size)): the ViT traces must wait for the traced call, or every buffer the
+        # text model's captures allocate afterwards sits where a ViT replay writes its temporaries.
+        enable_trace = kwargs.get("enable_trace", args[1] if len(args) > 1 else False)
+        # The ViT's traced buckets (their persistent buffers were allocated in the prefill warm-up, before the text
+        # model's captures), captured after every text-model trace: a replay writes its temporaries where they were
+        # at capture, which must not hold anything allocated later. A bucket that does not fit stays eager.
+        for lane, vit in enumerate(self.vision_encoders if enable_trace else []):
+            if vit is not None and hasattr(vit, "capture_traces"):
+                t0 = time.time()
+                sizes = vit.capture_traces()
+                if sizes:
+                    logger.info(
+                        f"MiMo vLLM: replica {lane} ViT traces captured for buckets {list(sizes)} in "
+                        f"{time.time() - t0:.1f}s, {sum(sizes.values()) / 2**20:.1f} MiB of trace region per chip"
+                    )
+        need = VIT_PASS_DRAM_MB[VIT_LARGEST_PASS]
+        for lane, model in enumerate(self.models):
+            view = ttnn.get_memory_view(model.mesh_device, ttnn.BufferType.DRAM)
+            free = view.total_bytes_free_per_bank * view.num_banks / 2**20
+            largest = view.largest_contiguous_bytes_free_per_bank * view.num_banks / 2**20
+            logger.info(
+                f"MiMo vLLM: replica {lane} keeps {free:.0f} MB of DRAM free per chip (largest block {largest:.0f} MB) "
+                f"for ViT passes of up to {VIT_LARGEST_PASS} rows, which need {need} MB"
+            )
+            if min(free, largest) < need:
+                short = (need - min(free, largest)) / 1024
+                raise RuntimeError(
+                    f"MiMo multimodal: replica {lane} leaves {min(free, largest):.0f} MB of DRAM per chip after its KV "
+                    f"cache and traces, but a {VIT_LARGEST_PASS}-row ViT pass needs {need} MB: raise "
+                    f"MIMO_MM_VIT_RESERVE_GB by at least {short:.2f} (now {MM_KV_RESERVE_GB:g}) or lower "
+                    "MIMO_KV_GB_PER_CHIP by as much"
+                )

@@ -59,7 +59,16 @@ import ttnn
 from ..reference.kv_pair_split import NO_KEY_LSE
 from ..reference.spec_decode import ADAPTIVE, GROUP_SLOTS, SPEC_SLOTS, WIDTHS
 from .proj_stream import BankStreamMatmul
-from .common import TILE, DramShardedMatmul, as_weight, cache_name, compute_config, decode_linear_config, pad_to
+from .common import (
+    TILE,
+    DramShardedMatmul,
+    as_weight,
+    cache_name,
+    compute_config,
+    decode_linear_config,
+    dram_linear,
+    pad_to,
+)
 from .kv import BatchFillTables, kv_replication, per_chip, slot_owner_masks
 from .moe_stream import KERNEL_DIR, user_rows, zero_output
 from .profiling import steps
@@ -812,7 +821,7 @@ class TtMiMoAttention:
     # ---------------------------------------------------------------- prefill
     def _prefill_qkv(self, x):
         assert self.wqkv.shape[-1] == self.qkv_width, (self.wqkv.shape, self.qkv_width)
-        return ttnn.linear(
+        return dram_linear(
             x,
             self.wqkv,
             dtype=ttnn.bfloat16,
@@ -1080,7 +1089,7 @@ class TtMiMoAttention:
         attn.deallocate(True)
         if users > 1:  # [R, 1, S, heads * dim] -> the users' rows back to back (after the head concat: see above)
             attn_cat = ttnn.reshape(attn_cat, (1, 1, users * seq_len, attn_cat.shape[-1]))
-        out = ttnn.linear(
+        out = dram_linear(
             attn_cat,
             self.wo,
             dtype=ttnn.bfloat16,
@@ -1133,7 +1142,7 @@ class TtMiMoAttention:
         step("o_proj")
         attn_cat = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         attn.deallocate(True)
-        out = ttnn.linear(
+        out = dram_linear(
             attn_cat,
             self.wo_v,
             dtype=ttnn.bfloat16,
@@ -1151,7 +1160,7 @@ class TtMiMoAttention:
         assert self.sinks is None and self.sliding_window is None
         seq_len = x.shape[-2]
         step("qkv")
-        xqkv = ttnn.linear(
+        xqkv = dram_linear(
             x,
             self.wqkv_decode,
             dtype=ttnn.bfloat16,
@@ -1195,7 +1204,7 @@ class TtMiMoAttention:
         attn.deallocate(True)
         owned = ttnn.mul(attn_cat, self.prefill_owner_masks[user_id % self.rep], memory_config=ttnn.DRAM_MEMORY_CONFIG)
         attn_cat.deallocate(True)
-        out = ttnn.linear(
+        out = dram_linear(
             owned,
             self.wo_decode,
             dtype=ttnn.bfloat16,
@@ -1215,7 +1224,7 @@ class TtMiMoAttention:
         seq_len = x.shape[-2]
         assert start_pos % 128 == 0 and seq_len % 128 == 0, "pair-split chunks start and end on 128-token blocks"
         step("qkv")
-        xqkv = ttnn.linear(
+        xqkv = dram_linear(
             x,
             self.wqkv_decode,
             dtype=ttnn.bfloat16,
@@ -1249,7 +1258,7 @@ class TtMiMoAttention:
         attn_cat = ttnn.experimental.nlp_concat_heads(merged, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         merged.deallocate(True)
         step("o_proj")
-        out = ttnn.linear(
+        out = dram_linear(
             attn_cat,
             self.wo_decode,
             dtype=ttnn.bfloat16,

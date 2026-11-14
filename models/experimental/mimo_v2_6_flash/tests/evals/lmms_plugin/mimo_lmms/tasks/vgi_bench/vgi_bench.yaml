@@ -1,0 +1,29 @@
+# VGI-Bench (Video General Intelligence Bench, Seldon), public split as Seldon's harness runs it
+# (github.com/Seldon-Foundation/VGIBench @ c7b4dc3, HARNESS_VERSION 1.0.0; dataset Seldon-Technologies/VGIBench at the
+# immutable tag v1.0.1): 439 multiple-choice questions on long-form videos, one user turn with the video BY URL as a
+# video_url part followed by the pinned prompt, temperature 0, no max_tokens and no reasoning switch (the endpoint's
+# defaults), exact-match on the parsed letter; unparseable answers count as wrong. OpenRouter's official run of this
+# benchmark (openrouter.ai/benchmarks/vgi-bench): MiMo-V2.6-Flash 35.5% (+-3.4 pp).
+dataset_path: Seldon-Technologies/VGIBench
+dataset_kwargs:
+  revision: v1.0.1
+  data_files:
+    test: public.jsonl
+task: vgi_bench
+test_split: test
+output_type: generate_until
+doc_to_visual: !function utils.vgi_doc_to_visual
+doc_to_text: !function utils.vgi_doc_to_text
+doc_to_target: correct_answer
+process_results: !function utils.vgi_process_results
+generation_kwargs:
+  temperature: 0
+metric_list:
+  - metric: vgi_accuracy
+    aggregation: mean
+    higher_is_better: true
+  - metric: vgi_accuracy_last_answer_line
+    aggregation: mean
+    higher_is_better: true
+metadata:
+  - version: 1.0.0

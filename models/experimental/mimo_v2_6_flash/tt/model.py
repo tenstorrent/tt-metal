@@ -39,7 +39,7 @@ from .attention import (
     page_table_width,
     verify_variants,
 )
-from .common import TILE, MeshPlan, as_weight, cache_fill, cache_name, compute_config, pad_to
+from .common import TILE, MeshPlan, as_weight, cache_fill, cache_name, compute_config, dram_linear, pad_to
 from .decoder import TtMiMoDecoderLayer, TtRMSNorm
 from .device_sampler import MAX_USERS, DeviceSampler
 from .greedy_head import GreedyHead
@@ -70,6 +70,26 @@ CHUNK_TRACE_HEADROOM = 1.1
 # cleanly in tt-metal's own check (MeshTrace::populate_mesh_buffer, which counts a trace against the region only once
 # it fits) and drops the traces.
 CHUNK_TRACE_FIRST_ESTIMATE = 21 << 20
+# Traced prefill passes with multimodal rows (``enable_trace_embeds``) read the host rows they merge from one row buffer
+# per replica, in persistent segments of these row counts (MIMO_MM_TRACE_SEGMENTS; one more is added for a longer
+# pass). A replay uploads only the segments its rows reach (replicated, ~0.6 ms per MB per chip on a BH row: 1.3 ms for
+# 256 rows, 19 ms for 4096), and the buffer takes 8 KB per row per chip (32 MB for the default 4096 rows).
+MM_TRACE_SEGMENTS = tuple(int(b) for b in os.environ.get("MIMO_MM_TRACE_SEGMENTS", "256,768,1024,2048").split(","))
+
+
+def _trace_owned(output):
+    """Tell TT_METAL_TRACE_ALLOC_TRACKING that a captured trace's outputs (allocated during its capture, kept for the
+    host to read after each replay) are written by that trace's replays by design, so they are not reported as
+    buffers a replay corrupts. A no-op without the tracking."""
+    try:
+        from ttnn.tools.trace_allocation_tracker import TRACE_ALLOC_TRACKING, TraceAllocationTracker
+    except ImportError:
+        return
+    if not TRACE_ALLOC_TRACKING:
+        return
+    for t in output.values() if isinstance(output, dict) else [output]:
+        if isinstance(t, ttnn.Tensor) and t.is_allocated():
+            TraceAllocationTracker.acknowledge_corruptible(t)
 
 
 def prefill_padded_len(seq_len, start_pos=0, pair_split=False):
@@ -287,6 +307,7 @@ class TtMiMoModel:
         self.verify_traces = {}
         self._verify_groups = None
         self._verify_active = None
+        self.verify_inputs = None  # the verify traces' persistent inputs (_verify_inputs)
         self.mtp = None  # the MTP drafter (setup_mtp)
         self.dflash = None  # the DFlash drafter (setup_dflash, tt/dflash.py)
         self.spec_inputs = None  # the packed verify / draft uploads (setup_mtp / setup_dflash, tt/spec_inputs.py)
@@ -300,6 +321,10 @@ class TtMiMoModel:
         self.chunk_traces = {}
         self.chunk_inputs = {}
         self.chunk_logits = None
+        # Multimodal rows in traced passes (enable_trace_embeds): the row buffer's segment sizes and its persistent
+        # [rows, hidden] segments, which every traced pass shares. None: traced passes take no host rows.
+        self.trace_row_sizes = ()
+        self.trace_rows = None
         self.rope_tables = None  # decode cos / sin of every position (setup_decode_rope_tables)
         self.rope_table_tails = None  # with compact tables: the 1 / 0 the rows' rotated dims are followed by
         self.decode_users = None
@@ -704,11 +729,159 @@ class TtMiMoModel:
             mesh_mapper=self.plan.replicate(),
         )
 
-    def _embed(self, tokens):
+    def _embed(self, tokens, embeds=None, embed_rows=None):
+        """The rows [1, 1, n, hidden] (bf16, tile) a pass starts from: the embedding of ``tokens`` (1D, n), with the
+        rows ``embed_rows`` (bool [<= n], None: the first ``embeds.shape[0]`` rows) replaced by the host rows ``embeds``
+        [<= n, hidden] (multimodal items' embeddings; a row past ``embeds`` keeps its token's). The replacement is an
+        exact copy (``_merge_embeds``), so a row whose ``embeds`` row is its token's embedding gives what the token
+        would."""
+        n = tokens.numel()
         tt_tokens = self._to_device_tokens(tokens)
-        x = ttnn.embedding(tt_tokens, self.embedding, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        if embeds is None:
+            x = ttnn.embedding(tt_tokens, self.embedding, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+            tt_tokens.deallocate(True)
+            return ttnn.reshape(x, (1, 1, n, self.cfg.hidden_size))
+        x = ttnn.embedding(tt_tokens, self.embedding, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
         tt_tokens.deallocate(True)
-        return ttnn.reshape(x, (1, 1, tokens.numel(), self.cfg.hidden_size))
+        return self._merge_embeds(x, embeds, embed_rows, n)
+
+    def _merge_embeds(self, x, embeds, embed_rows, n):
+        """x: the token embeddings [1, n, hidden] row-major (freed). Returns them with the rows ``embed_rows`` taken
+        from ``embeds`` (``_embed``), [1, 1, n, hidden] tile: the host rows are uploaded in the chunk's row order (one
+        [n, hidden] bf16 tensor, zeros where no row is replaced) and one gather (``ttnn.embedding``, an exact copy)
+        picks each row from the token rows or the uploaded ones. Every op keys only on n, the chunk's padded length,
+        so a multimodal chunk compiles nothing a warm-up of its length (``warm_embeds``) did not."""
+        hidden = self.cfg.hidden_size
+        m = embeds.shape[0]
+        assert m <= n and tuple(embeds.shape) == (m, hidden), (tuple(embeds.shape), n, hidden)
+        rows = torch.zeros(n, dtype=torch.bool)
+        if embed_rows is None:
+            rows[:m] = True
+        else:
+            assert len(embed_rows) == m, (len(embed_rows), m)
+            rows[:m] = torch.as_tensor(embed_rows, dtype=torch.bool)
+        host = torch.zeros(n, hidden, dtype=torch.bfloat16)
+        host[:m] = torch.where(rows[:m, None], embeds.to(torch.bfloat16), 0)
+        index = torch.arange(n, dtype=torch.int32) + rows.to(torch.int32) * n  # row r: token row r or uploaded n + r
+        x = ttnn.reshape(x, (n, hidden))
+        upload = kv_lib.replicated(self.plan, host, ttnn.bfloat16)
+        table = ttnn.concat([x, upload], dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        x.deallocate(True)
+        upload.deallocate(True)
+        index_tt = kv_lib.replicated(self.plan, index.reshape(1, n), ttnn.uint32)
+        out = ttnn.embedding(index_tt, table, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        table.deallocate(True)
+        index_tt.deallocate(True)
+        return ttnn.reshape(out, (1, 1, n, hidden))
+
+    def warm_embeds(self, padded_lengths):
+        """Compile the multimodal row merge (``_merge_embeds``) for each padded chunk length, before any trace capture
+        (a program compiled after a capture can sit where the trace's replays write)."""
+        hidden = self.cfg.hidden_size
+        for n in sorted(set(padded_lengths)):
+            x = self._embed(torch.zeros(n, dtype=torch.int32), torch.zeros(1, hidden, dtype=torch.bfloat16))
+            x.deallocate(True)
+        ttnn.synchronize_device(self.mesh_device)
+
+    # ------------------------------------------------------------------ multimodal rows in traced passes
+    def enable_trace_embeds(self, segments=MM_TRACE_SEGMENTS):
+        """Let every traced prefill pass set up from now on (``setup_prefill_batch_trace``,
+        ``setup_prefill_chunk_traces``) take multimodal rows: the pass embeds its tokens and merges host rows into them
+        with the same exact gather as an eager chunk (``_merge_embeds``), from persistent inputs a replay rewrites: the
+        gather index [1, n] (row r: token row r, or n + k when it is the pass's k-th host row) and the host rows packed
+        in order into the replica's row buffer, ``segments`` persistent [rows, hidden] bf16 tensors (``trace_rows``)
+        that every traced pass shares. A replay uploads only the segments its host rows reach, and one without host
+        rows uploads nothing (its index stays the identity), so a text pass replays as before and computes the same
+        values (a gather is an exact copy). Call before any of those traces is set up."""
+        assert not self.prefill_traces and not self.chunk_traces, "enable before any prefill trace is set up"
+        self.trace_row_sizes = tuple(segments)
+        self.trace_rows = []
+
+    def _trace_row_segments(self, n):
+        """How many row buffer segments a pass of ``n`` rows reads (as many as it can have host rows), allocating
+        those not allocated yet (before any capture, as setup runs). Past the configured segments, one more of the
+        rows missing."""
+        sizes = [int(t.shape[0]) for t in self.trace_rows]
+        while sum(sizes) < n:
+            k = len(sizes)
+            size = self.trace_row_sizes[k] if k < len(self.trace_row_sizes) else n - sum(sizes)
+            host = torch.zeros(size, self.cfg.hidden_size, dtype=torch.bfloat16)
+            self.trace_rows.append(kv_lib.replicated(self.plan, host, ttnn.bfloat16))
+            sizes.append(size)
+        count, total = 0, 0
+        while total < n:
+            total += sizes[count]
+            count += 1
+        return count
+
+    def _trace_merge_inputs(self, n):
+        """The persistent merge inputs of a traced pass of ``n`` rows (``enable_trace_embeds``), or None when traced
+        passes take no host rows: its own gather index (the identity until a replay with host rows) and the number of
+        row buffer segments it reads."""
+        if self.trace_rows is None:
+            return None
+        segments = self._trace_row_segments(n)
+        index = kv_lib.replicated(self.plan, torch.arange(n, dtype=torch.int32).reshape(1, n), ttnn.uint32)
+        return {"index": index, "segments": segments, "identity": True}
+
+    def _embed_device(self, tokens_tt, n, merge=None):
+        """The rows [1, 1, n, hidden] tile a traced pass starts from: the embedding of ``tokens_tt`` (uint32 [1, n]),
+        with ``merge`` (``_trace_merge_inputs``) the host rows of the row buffer gathered in where its index points
+        past n (``_merge_embeds``'s ops, with the row buffer in place of a per-chunk upload)."""
+        if merge is None:
+            x = ttnn.embedding(tokens_tt, self.embedding, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+            return ttnn.reshape(x, (1, 1, n, self.cfg.hidden_size))
+        hidden = self.cfg.hidden_size
+        x = ttnn.embedding(tokens_tt, self.embedding, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
+        x = ttnn.reshape(x, (n, hidden))
+        parts = [x, *self.trace_rows[: merge["segments"]]]
+        table = ttnn.concat(parts, dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        x.deallocate(True)
+        out = ttnn.embedding(merge["index"], table, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        table.deallocate(True)
+        return ttnn.reshape(out, (1, 1, n, hidden))
+
+    def _write_merge(self, merge, n, segments):
+        """Before a replay: copy a pass's host rows into its merge inputs (``_trace_merge_inputs``). ``segments``:
+        [(first row of the pass, embeds [m, hidden] or None, rows bool [m] or None: every row)] (``_embed``'s
+        ``embeds`` / ``embed_rows`` of the users of the pass). The host rows go to the row buffer in pass order, so
+        only the segments they reach are uploaded. A pass without host rows only resets an index a replay with rows
+        changed."""
+        segments = [s for s in segments if s[1] is not None]
+        if not segments:
+            if not merge["identity"]:
+                index = torch.arange(n, dtype=torch.int32).reshape(1, n)
+                ttnn.copy_host_to_device_tensor(kv_lib.replicated(self.plan, index, ttnn.uint32, False), merge["index"])
+                merge["identity"] = True
+            return
+        index = torch.arange(n, dtype=torch.int32)
+        picks = []  # (first row of the pass, embeds, the rows taken or None: all)
+        for first, embeds, embed_rows in sorted(segments, key=lambda seg: seg[0]):
+            m = embeds.shape[0]
+            assert first + m <= n and (embed_rows is None or len(embed_rows) == m), (first, m, n)
+            taken = None if embed_rows is None else torch.as_tensor(embed_rows, dtype=torch.bool).nonzero().flatten()
+            picks.append((first, embeds, taken))
+        count = sum(e.shape[0] if t is None else t.numel() for _, e, t in picks)
+        sizes = [int(t.shape[0]) for t in self.trace_rows[: merge["segments"]]]
+        reach = next(k + 1 for k in range(len(sizes)) if sum(sizes[: k + 1]) >= count)
+        # The rows packed in pass order (one copy; rows past the last are never gathered, so left as they are).
+        packed = torch.empty(sum(sizes[:reach]), self.cfg.hidden_size, dtype=torch.bfloat16)
+        k = 0
+        for first, embeds, taken in picks:
+            rows = embeds if taken is None else embeds.index_select(0, taken)
+            pos = first + (torch.arange(rows.shape[0]) if taken is None else taken)
+            packed[k : k + rows.shape[0]] = rows
+            index[pos] = n + k + torch.arange(rows.shape[0], dtype=torch.int32)
+            k += rows.shape[0]
+        offset = 0
+        for t, size in zip(self.trace_rows[:reach], sizes):
+            host = kv_lib.replicated(self.plan, packed[offset : offset + size], ttnn.bfloat16, False)
+            ttnn.copy_host_to_device_tensor(host, t)
+            offset += size
+        ttnn.copy_host_to_device_tensor(
+            kv_lib.replicated(self.plan, index.reshape(1, n), ttnn.uint32, False), merge["index"]
+        )
+        merge["identity"] = False
 
     def _logits(self, x, h=None, prefill=False):
         """``h``: final_norm(x) when the last layer's reduction already computed it (a persistent buffer).
@@ -716,7 +889,7 @@ class TtMiMoModel:
         own_h = h is None
         if own_h:
             h = self.final_norm(x, prefill=prefill)
-        logits = ttnn.linear(
+        logits = dram_linear(
             h,
             self.lm_head,
             dtype=self.logits_dtype,
@@ -743,13 +916,25 @@ class TtMiMoModel:
             for setup in begun:
                 setup.end_prefill_chunk()
 
-    def _prefill_chunk(self, tokens, slot, start_pos, hidden, layers=None, draft_group=0, after_layer=None):
+    def _prefill_chunk(
+        self,
+        tokens,
+        slot,
+        start_pos,
+        hidden,
+        layers=None,
+        draft_group=0,
+        after_layer=None,
+        embeds=None,
+        embed_rows=None,
+    ):
         """One chunk (``tokens`` 1D torch) at ``start_pos`` through the layers ``layers`` (indices, default all);
         returns the last one's output [1, 1, padded, hidden] and appends (copy, real rows) of every layer's output to
         ``hidden`` when given. With the DFlash drafter the chunk's last rows also go into draft group ``draft_group``'s
         context ring (TtDFlash.prefill_context; a warm-up through a subset of the layers runs the same programs).
         ``after_layer(i)`` runs after layer ``i`` is enqueued (profiling: tests/perf/profile_prefill.py reads the
-        device profiler there)."""
+        device profiler there). ``embeds`` / ``embed_rows``: host rows replacing the chunk's token embeddings
+        (``_embed``; multimodal items)."""
         n = tokens.numel()
         padded = prefill_padded_len(n, start_pos, self.pair is not None)
         assert start_pos + n <= self.max_seq_len, f"chunk ends at {start_pos + n} > {self.max_seq_len}"
@@ -761,7 +946,7 @@ class TtMiMoModel:
         # The shared cos/sin are freed as the chunk ends (enqueued: ordered with the work that reads them).
         with self._prefill_rope():
             with zone("embed"):
-                x = self._embed(torch.nn.functional.pad(tokens.to(torch.int32), (0, padded - n)))
+                x = self._embed(torch.nn.functional.pad(tokens.to(torch.int32), (0, padded - n)), embeds, embed_rows)
             dflash_acc = None
             with self._prefill_reduce(padded):
                 for k, i in enumerate(layers):
@@ -805,6 +990,8 @@ class TtMiMoModel:
         history_continues=False,
         draft_group=0,
         allow_trace=True,
+        embeds=None,
+        embed_rows=None,
     ):
         """Enqueue prefill of one user (``tokens`` 1D torch, positions start_pos ..) into batch ``slot``, in chunks
         of ``chunk_size`` tokens (default ``max_prefill_chunk``; a multiple of the block size, as is ``start_pos``).
@@ -815,26 +1002,51 @@ class TtMiMoModel:
         entries stay), else it is the request's first and the slot's other entries are invalidated.
         ``draft_group``: the request's draft group (its DFlash context ring). ``allow_trace=False``: every chunk runs
         eagerly, even one a captured later-chunk trace covers (vLLM's prefill_forward runs a row that would mix
-        replays and eager chunks all eager: ``chunk_traced``)."""
+        replays and eager chunks all eager: ``chunk_traced``).
+
+        ``embeds``: host rows [n, hidden] that replace the token embeddings of the rows ``embed_rows`` (bool [n]; None:
+        every row), e.g. multimodal items' embeddings at their placeholder tokens (``_embed``). A chunk with such a row
+        replays its trace when the traces take host rows (``enable_trace_embeds``), else runs eagerly; a chunk without
+        one runs as it would without ``embeds``. The MTP history keeps the tokens of those rows (their placeholder
+        ids)."""
         n = tokens.numel()
         chunk = chunk_size or self.max_prefill_chunk
         align = self.block_size * (2 if self.pair is not None else 1)  # pair split: 128-token global blocks
         assert n > 0 and chunk % align == 0 and start_pos % align == 0, (n, chunk, start_pos, align)
+        if embeds is not None:
+            assert tuple(embeds.shape) == (n, self.cfg.hidden_size), (tuple(embeds.shape), n)
+            assert embed_rows is None or len(embed_rows) == n, (len(embed_rows), n)
         hidden = [[] for _ in (range(len(self.layers)) if layers is None else layers)] if return_hidden else None
         hist = self._history()
         x = replayed = None
         for s in range(0, n, chunk):
             piece = tokens[s : s + chunk]
+            piece_embeds = piece_rows = None
+            if embeds is not None and (embed_rows is None or bool(embed_rows[s : s + chunk].any())):
+                piece_embeds = embeds[s : s + chunk]
+                piece_rows = None if embed_rows is None else embed_rows[s : s + chunk]
             writes = None
             if hist is not None and slot < SPEC_SLOTS:
                 writes = hist.chunk_writes(slot, start_pos + s, piece, 0, history_continues or s > 0)
             eager = not allow_trace or hidden is not None or layers is not None
+            eager = eager or (piece_embeds is not None and self.trace_rows is None)
             trace = None if eager else self._chunk_trace(slot, start_pos + s, piece)
             if trace is not None:
-                replayed = self._replay_prefill_chunk(trace, piece, slot, start_pos + s, writes or [])
+                replayed = self._replay_prefill_chunk(
+                    trace, piece, slot, start_pos + s, writes or [], piece_embeds, piece_rows
+                )
                 continue
             replayed = None
-            x, padded = self._prefill_chunk(piece, slot, start_pos + s, hidden, layers, draft_group)
+            x, padded = self._prefill_chunk(
+                piece,
+                slot,
+                start_pos + s,
+                hidden,
+                layers,
+                draft_group,
+                embeds=piece_embeds,
+                embed_rows=piece_rows,
+            )
             if writes is not None:
                 write_list = hist.prefill_list(writes)
                 hist.prefill(x, self.final_norm, write_list, len(writes))
@@ -893,13 +1105,24 @@ class TtMiMoModel:
         run user after user ([1, 1, R * S, hidden]) through the norms, projections and MoE, and through attention as
         a batch of R sequences. Replays the pass's trace when one was captured (``capture_prefill_batch_trace``).
         Only with vLLM's page tables (``setup_vllm_kv_cache``). Returns a pending handle for ``prefill_read``, whose
-        logits have one row per user."""
+        logits have one row per user.
+
+        A chunk's optional fourth and fifth entries are its ``embeds`` / ``embed_rows`` (``prefill_enqueue``): host
+        rows merged into the user's rows, only when traced passes take them (``enable_trace_embeds``); an eager batch
+        with host rows merges them through the bucket's row buffer as its trace would (the programs its warm-up
+        compiled)."""
         assert self.layer_groups is not None, "a prefill batch writes through vLLM's page tables"
         num, padded = len(chunks), max(prefill_padded_len(c[0].numel()) for c in chunks)
         assert padded <= self.PREFILL_BATCH_MAX_PADDED and padded <= self.max_seq_len, padded
+        segments = self._batch_segments(chunks, padded)
+        assert not segments or self.trace_rows is not None, "a batch takes host rows only with enable_trace_embeds"
         trace = self.prefill_traces.get((num, padded)) if layers is None else None
         if trace is not None and trace["id"] is not None:
             return self._replay_prefill_batch(trace, chunks)
+        merge = None
+        if segments:
+            merge = self._trace_merge_inputs(num * padded)
+            self._write_merge(merge, num * padded, segments)
         layers = range(len(self.layers)) if layers is None else layers
         keys = list(dict.fromkeys(self._table_key(i) for i in layers))
         tokens, fills, starts, picks = self._prefill_batch_host(chunks, padded, keys)
@@ -915,13 +1138,27 @@ class TtMiMoModel:
         picks_tt = kv_lib.replicated(self.plan, torch.tensor(picks, dtype=torch.int32).reshape(1, -1), ttnn.uint32)
         tokens_tt = self._to_device_tokens(tokens)
         with self._prefill_rope():
-            logits = self._prefill_batch_device(tokens_tt, tables, ats, picks_tt, num, padded, layers, history_list)
+            logits = self._prefill_batch_device(
+                tokens_tt, tables, ats, picks_tt, num, padded, layers, history_list, merge
+            )
         # Enqueued: freeing them now is ordered with the work that reads them.
         for t in [*tables.values()]:
             t.release()
         for t in [rows, tokens_tt, picks_tt, *ats, *([history_list] if history_list is not None else [])]:
             t.deallocate(True)
+        if merge is not None:
+            merge["index"].deallocate(True)  # the row buffer is the bucket's
         return {"logits": logits, "row": list(range(num)), "hidden": None}
+
+    @staticmethod
+    def _batch_segments(chunks, padded):
+        """The host rows of a batch's chunks (``prefill_enqueue_batch``) as ``_write_merge`` segments: user r's rows
+        from row r * padded of the pass."""
+        return [
+            (r * padded, c[3], c[4] if len(c) > 4 else None)
+            for r, c in enumerate(chunks)
+            if len(c) > 3 and c[3] is not None
+        ]
 
     def _prefill_batch_writes(self, chunks, padded):
         """The MTP history's write list of a prefill batch: each user's first chunk (a request's first: the slot's
@@ -950,14 +1187,16 @@ class TtMiMoModel:
         picks = [r * TILE + (c[0].numel() - 1) % TILE for r, c in enumerate(chunks)]
         return tokens, fills, starts, picks
 
-    def _prefill_batch_device(self, tokens_tt, tables, ats, picks_tt, num, padded, layers, history_list=None):
+    def _prefill_batch_device(
+        self, tokens_tt, tables, ats, picks_tt, num, padded, layers, history_list=None, merge=None
+    ):
         """A prefill batch from device inputs only (trace-capturable when the RoPE mats are pinned): tokens [1, R * S]
         uint32, {page table key: kv.BatchFillTables}, each user's last-token tile start (uint32 [4] slice starts), and
         each user's last-token row among those tiles (uint32 [1, R]). Returns the users' last-token logits, row-major
         [1, 1, R, vocab / tp]: the LM head and the readback see only those rows. ``history_list``: the MTP history's
-        write list over the pass's rows (int32 [4 * R * HISTORY_ROWS], ``_prefill_batch_writes``)."""
-        x = ttnn.embedding(tokens_tt, self.embedding, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-        x = ttnn.reshape(x, (1, 1, num * padded, self.cfg.hidden_size))
+        write list over the pass's rows (int32 [4 * R * HISTORY_ROWS], ``_prefill_batch_writes``). ``merge``: the
+        host rows merged into the pass's rows (``_embed_device``)."""
+        x = self._embed_device(tokens_tt, num * padded, merge)
         with self._prefill_reduce(padded, num):
             for i in layers:
                 y = self.layers[i].forward_prefill(
@@ -1028,6 +1267,8 @@ class TtMiMoModel:
             # The MTP history's write list (tt/mtp_backfill.py): every user's HISTORY_ROWS entries, rewritten per
             # replay.
             "history": (self._history().prefill_list([], num * HISTORY_ROWS) if self._history() is not None else None),
+            # Host rows of the pass's users (enable_trace_embeds; None: it takes none).
+            "merge": self._trace_merge_inputs(num * padded),
             "logits": ttnn.allocate_tensor_on_device(
                 ttnn.Shape([1, 1, num, self.vocab_local]),
                 self.logits_dtype,
@@ -1049,6 +1290,7 @@ class TtMiMoModel:
                 padded,
                 range(len(self.layers)),
                 trace["history"],
+                trace.get("merge"),
             )
         ttnn.copy(logits, trace["logits"])
         logits.deallocate(True)
@@ -1069,6 +1311,25 @@ class TtMiMoModel:
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
         ttnn.synchronize_device(self.mesh_device)
         trace["id"] = trace_id
+
+    def recapture_prefill_batch_traces(self):
+        """Capture every traced prefill batch again, after programs were compiled past the captures (their
+        program-cache buffers can sit where an older capture's intermediates are, which its replays overwrite). Each
+        capture runs on zero fill tables and an empty MTP history list, as at warm-up, so it writes only vLLM's null
+        block 0, never the blocks of the last batch it replayed (they may belong to another request by now)."""
+        for (num, padded), trace in self.prefill_traces.items():
+            if trace["id"] is None:
+                continue
+            ttnn.release_trace(self.mesh_device, trace["id"])
+            trace["id"] = None
+            zero = torch.zeros(self.plan.tp, num, -(-padded // self.block_size), dtype=torch.int32)
+            for table in trace["tables"].values():
+                host = kv_lib.per_chip(self.plan, zero, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, device=False)
+                ttnn.copy_host_to_device_tensor(host, table.fill)
+            if trace["history"] is not None:
+                host = self._history().prefill_list([], num * HISTORY_ROWS, device=False)
+                ttnn.copy_host_to_device_tensor(host, trace["history"])
+            self.capture_prefill_batch_trace(num, padded)
 
     def _replay_prefill_batch(self, trace, chunks):
         """Copy a batch's inputs into its trace's buffers and replay it (non-blocking)."""
@@ -1093,6 +1354,8 @@ class TtMiMoModel:
             writes = self._prefill_batch_writes(chunks, padded)
             host = self._history().prefill_list(writes, num * HISTORY_ROWS, device=False)
             ttnn.copy_host_to_device_tensor(host, trace["history"])
+        if trace.get("merge") is not None:
+            self._write_merge(trace.get("merge"), num * padded, self._batch_segments(chunks, padded))
         ttnn.execute_trace(self.mesh_device, trace["id"], cq_id=0, blocking=False)
         return {"logits": trace["logits"], "row": list(range(num)), "hidden": None, "persistent": True}
 
@@ -1117,19 +1380,22 @@ class TtMiMoModel:
         split = later_chunk_split(chunk, start_pos) is not None
         window = self._swa_window()
         lead = 0 if window is None else start_pos - max(0, start_pos - window) // self.block_size * self.block_size
-        rep = self._owner_rep()
+        rep = self._owner_rep() if start_pos > 0 else 0  # a first chunk reads no owner mask
         return (padded, chunk, split, lead, slot % rep if rep else 0)
 
-    def _chunk_trace_keys(self, padded):
+    def _chunk_trace_keys(self, padded, late=True):
         """The keys a later chunk of ``padded`` tokens can have once its start is past the SWA window: every SDPA chunk
         size and program the start can bring (the sizes repeat every 256 positions; the grouped program from
-        GLOBAL_SDPA_MIN_START), every slot parity. Each with the first start that has it (the start the trace is
-        warmed and captured at, which the Python of a chunk sees; a replay reads its start from the device)."""
+        GLOBAL_SDPA_MIN_START, unless ``late`` is False), every slot parity. Each with the first start that has it (the
+        start the trace is warmed and captured at, which the Python of a chunk sees; a replay reads its start from the
+        device)."""
         align = self.block_size * (2 if self.pair is not None else 1)
         window = self._swa_window() or 0
         first = pad_to(max(window, align), align)
-        late = pad_to(GLOBAL_SDPA_MIN_START, max(align, 256))
-        starts = list(range(first, first + 512, align)) + list(range(late, late + 512, align))
+        starts = list(range(first, first + 512, align))
+        if late:
+            late_start = pad_to(GLOBAL_SDPA_MIN_START, max(align, 256))
+            starts += list(range(late_start, late_start + 512, align))
         rep = self._owner_rep() or 1
         keys = {}
         for start in starts:
@@ -1139,13 +1405,18 @@ class TtMiMoModel:
                 keys.setdefault(self._chunk_trace_key(parity, start, padded), start)
         return keys
 
-    def setup_prefill_chunk_traces(self, padded_lengths, sdpa_chunks=None):
+    def setup_prefill_chunk_traces(self, padded_lengths, sdpa_chunks=None, first=False, late=True, optional=False):
         """The persistent buffers of the traced later chunks of each padded length in ``padded_lengths``
-        (``_chunk_trace_keys``; ``sdpa_chunks``: only the keys whose global SDPA chunk size is in it). Allocate before
-        any trace capture (a buffer allocated after a capture can sit where that trace's replays write); then
-        ``warm_prefill_chunk_traces`` and, after the decode capture, ``capture_prefill_chunk_traces``. Returns the
-        keys set up. Refuses (before allocating anything) on a build whose chunked MLA prefill takes no runtime start
-        (``chunk_traces_supported``)."""
+        (``_chunk_trace_keys``; ``sdpa_chunks``: only the keys whose global SDPA chunk size is in it; ``late``: also
+        the starts from GLOBAL_SDPA_MIN_START). Allocate before any trace capture (a buffer allocated after a capture
+        can sit where that trace's replays write); then ``warm_prefill_chunk_traces`` and, after the decode capture,
+        ``capture_prefill_chunk_traces``. Returns the keys set up. Refuses (before allocating anything) on a build
+        whose chunked MLA prefill takes no runtime start (``chunk_traces_supported``).
+
+        ``first``: traced first chunks (start 0, one user) of those padded lengths instead, for a prompt's first
+        chunk no prefill batch takes (longer than PREFILL_BATCH_MAX_PADDED, say). ``optional``: these traces are
+        captured after the others and only while they fit (``capture_prefill_chunk_traces``): one that does not
+        drops the optional ones left, not the others."""
         assert self.kv_caches is not None and self.dflash is None, "traced later chunks need the KV cache, no DFlash"
         if not self.chunk_traces_supported():
             raise RuntimeError(
@@ -1157,8 +1428,15 @@ class TtMiMoModel:
             self.chunk_logits = [self._logits_row() for _ in range(self.max_batch)]
         made = []
         for padded in padded_lengths:
-            assert padded == prefill_padded_len(padded, 1, self.pair is not None), f"{padded} is not a padded length"
-            for key, start in self._chunk_trace_keys(padded).items():
+            if first:
+                assert padded == prefill_padded_len(padded), f"{padded} is not a padded length"
+                keys = {self._chunk_trace_key(0, 0, padded): 0}
+            else:
+                assert padded == prefill_padded_len(
+                    padded, 1, self.pair is not None
+                ), f"{padded} is not a padded length"
+                keys = self._chunk_trace_keys(padded, late)
+            for key, start in keys.items():
                 if key in self.chunk_traces or (sdpa_chunks is not None and key[1] not in sdpa_chunks):
                     continue
                 inputs = self._chunk_inputs(padded, start)
@@ -1166,8 +1444,9 @@ class TtMiMoModel:
                     "id": None,
                     "key": key,
                     "start": start,
-                    "tables": self._chunk_tables(padded, key[3], inputs["start"]),
+                    "tables": self._chunk_tables(padded, key[3], inputs["start"], first=start == 0),
                     "logits": self._logits_row(),
+                    "optional": optional,
                 }
                 made.append(key)
         return made
@@ -1203,11 +1482,13 @@ class TtMiMoModel:
                 "at": kv_lib.replicated(self.plan, torch.zeros(4, dtype=torch.int32), ttnn.uint32),
                 "pick": kv_lib.replicated(self.plan, torch.zeros(1, 1, dtype=torch.int32), ttnn.uint32),
                 "history": hist.prefill_list([], HISTORY_ROWS) if hist is not None else None,
+                "merge": self._trace_merge_inputs(padded),  # host rows (enable_trace_embeds), or None
             }
         return self.chunk_inputs[padded]
 
-    def _chunk_tables(self, padded, lead, start):
-        """{page table key: kv.ChunkTables} of a traced later chunk whose SWA layers read ``lead`` cached rows."""
+    def _chunk_tables(self, padded, lead, start, first=False):
+        """{page table key: kv.ChunkTables} of a traced later chunk whose SWA layers read ``lead`` cached rows
+        (``first``: of a traced first chunk, which reads nothing from the cache: fill tables only)."""
         tables = {}
         for i, layer in enumerate(self.layers):
             key = self._table_key(i)
@@ -1217,16 +1498,17 @@ class TtMiMoModel:
             scratch = self._host_table(key)[1] or 0
             context = None if layer.is_swa else (self.pair_context_blocks if pair else self.prefill_context_blocks)
             window = lead // self.block_size if layer.is_swa else 0
+            if first:
+                context, window, start = None, 0, None
             tables[key] = kv_lib.ChunkTables(self.plan, padded, self.block_size, scratch, context, window, start)
         return tables
 
     def _chunk_trace_body(self, trace):
-        """The traced later chunk: reads only its persistent inputs, writes its persistent logits row."""
+        """The traced later (or first) chunk: reads only its persistent inputs, writes its persistent logits row."""
         padded, parity = trace["key"][0], trace["key"][4]
         start, inputs = trace["start"], self.chunk_inputs[padded]
         with self._prefill_rope({name: {(start, padded): rope} for name, rope in inputs["rope"].items()}):
-            x = ttnn.embedding(inputs["tokens"], self.embedding, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-            x = ttnn.reshape(x, (1, 1, padded, self.cfg.hidden_size))
+            x = self._embed_device(inputs["tokens"], padded, inputs.get("merge"))
             with self._prefill_reduce(padded):
                 for i, layer in enumerate(self.layers):
                     y = layer.forward_prefill(
@@ -1245,11 +1527,11 @@ class TtMiMoModel:
         ttnn.copy(logits, trace["logits"])
         logits.deallocate(True)
 
-    def warm_prefill_chunk_traces(self):
-        """Run every traced later chunk not yet captured eagerly once (on its scratch tables: it writes only scratch
-        blocks), compiling every program it runs, and the copy of its logits row."""
-        for trace in self.chunk_traces.values():
-            if trace["id"] is None:
+    def warm_prefill_chunk_traces(self, keys=None):
+        """Run every traced later chunk not yet captured (``keys``: of those keys) eagerly once (on its scratch
+        tables: it writes only scratch blocks), compiling every program it runs, and the copy of its logits row."""
+        for key, trace in self.chunk_traces.items():
+            if trace["id"] is None and (keys is None or key in keys):
                 self._chunk_trace_body(trace)
                 ttnn.copy(trace["logits"], self.chunk_logits[0])
         ttnn.synchronize_device(self.mesh_device)
@@ -1259,18 +1541,29 @@ class TtMiMoModel:
         capture makes is freed by its end. The traces are optional: when the trace region has no room for the next one
         (the largest captured so far plus CHUNK_TRACE_HEADROOM) or a capture fails, every later-chunk trace is dropped
         (``drop_prefill_chunk_traces``, with a warning) and later chunks run eagerly. Capture them after every trace the
-        replica needs. Returns whether they are all captured."""
+        replica needs. Returns whether they are all captured.
+
+        The traces set up ``optional`` (setup_prefill_chunk_traces) go last, and one that does not fit or fails drops
+        only the optional ones not yet captured (``_drop_optional_chunk_traces``): the others stay, and the return
+        value says whether those are captured."""
         largest = 0
-        for trace in self.chunk_traces.values():
+        optional_bytes = 0
+        order = sorted(self.chunk_traces.values(), key=lambda t: bool(t.get("optional")))
+        for trace in order:
             if trace["id"] is not None:
                 continue
+            optional = bool(trace.get("optional"))
             used, total = self.trace_region_bytes()
             need = largest or CHUNK_TRACE_FIRST_ESTIMATE
             if total and total - used < need * CHUNK_TRACE_HEADROOM:
-                self.drop_prefill_chunk_traces(
+                reason = (
                     f"the trace region has {(total - used) / 2**20:.0f} MB of {total / 2**20:.0f} MB free per device "
                     f"and a later-chunk trace takes {'' if largest else 'about '}{need / 2**20:.0f} MB"
                 )
+                if optional:
+                    self._drop_optional_chunk_traces(reason)
+                    break
+                self.drop_prefill_chunk_traces(reason)
                 return False
             trace_id = None
             try:
@@ -1288,15 +1581,22 @@ class TtMiMoModel:
                         ttnn.release_trace(self.mesh_device, trace_id)
                     except Exception:
                         pass
+                if optional:
+                    self._drop_optional_chunk_traces(f"capturing a later-chunk trace failed: {e}")
+                    break
                 self.drop_prefill_chunk_traces(f"capturing a later-chunk trace failed: {e}")
                 return False
             trace["id"] = trace_id
-            largest = max(largest, self.trace_region_bytes()[0] - used)
+            size = self.trace_region_bytes()[0] - used
+            largest = max(largest, size)
+            optional_bytes += size if optional else 0
         used, total = self.trace_region_bytes()
         if total and self.chunk_traces:
+            optional = sum(1 for t in self.chunk_traces.values() if t.get("optional"))
             logger.info(
                 f"MiMo: {len(self.chunk_traces)} later-chunk prefill traces captured (up to {largest / 2**20:.1f} MB "
-                f"each); trace region {used / 2**20:.0f} MB of {total / 2**20:.0f} MB used per device"
+                f"each; {optional} optional ones took {optional_bytes / 2**20:.1f} MB); trace region "
+                f"{used / 2**20:.0f} MB of {total / 2**20:.0f} MB used per device"
             )
         return True
 
@@ -1325,6 +1625,17 @@ class TtMiMoModel:
                     pass
         self.chunk_traces, self.chunk_inputs, self.chunk_logits = {}, {}, None
 
+    def _drop_optional_chunk_traces(self, reason):
+        """Give up the optional chunk traces not captured yet (``capture_prefill_chunk_traces``), with a warning: their
+        chunks run eagerly. The captured traces stay, as do the inputs of the padded lengths they use."""
+        dropped = [k for k, t in self.chunk_traces.items() if t.get("optional") and t["id"] is None]
+        logger.warning(f"MiMo: {len(dropped)} optional prefill chunk traces not captured, run eagerly ({reason})")
+        for key in dropped:
+            del self.chunk_traces[key]
+        live = {t["key"][0] for t in self.chunk_traces.values()}
+        for padded in [p for p in self.chunk_inputs if p not in live]:
+            del self.chunk_inputs[padded]
+
     def release_prefill_chunk_traces(self):
         """Release the captured later-chunk traces (their buffers stay, for a later capture)."""
         for trace in self.chunk_traces.values():
@@ -1333,8 +1644,9 @@ class TtMiMoModel:
                 trace["id"] = None
 
     def _chunk_trace(self, slot, start_pos, tokens):
-        """The captured trace a later chunk of ``tokens`` at ``start_pos`` of ``slot`` replays, or None (eager)."""
-        if not self.chunk_traces or start_pos == 0 or self.dflash is not None:
+        """The captured trace a later chunk of ``tokens`` at ``start_pos`` of ``slot`` replays, or None (eager). A
+        first chunk (start 0) replays only a traced first chunk (setup_prefill_chunk_traces with ``first``)."""
+        if not self.chunk_traces or self.dflash is not None:
             return None
         padded = prefill_padded_len(tokens.numel(), start_pos, self.pair is not None)
         trace = self.chunk_traces.get(self._chunk_trace_key(slot, start_pos, padded))
@@ -1351,9 +1663,10 @@ class TtMiMoModel:
             for s in range(0, num_tokens, chunk)
         )
 
-    def _replay_prefill_chunk(self, trace, tokens, slot, start_pos, writes):
+    def _replay_prefill_chunk(self, trace, tokens, slot, start_pos, writes, embeds=None, embed_rows=None):
         """Copy a later chunk's inputs into its trace's buffers, replay it (non-blocking) and copy its logits row into
-        the slot's own (a later replay of the trace rewrites the trace's). ``writes``: its MTP history writes."""
+        the slot's own (a later replay of the trace rewrites the trace's). ``writes``: its MTP history writes.
+        ``embeds`` / ``embed_rows``: its host rows (``prefill_enqueue``; the traces must take them)."""
         n = tokens.numel()
         padded = trace["key"][0]
         inputs = self.chunk_inputs[padded]
@@ -1370,12 +1683,13 @@ class TtMiMoModel:
                 ttnn.copy_host_to_device_tensor(setup._host(value, False), t)
         for key, tables in trace["tables"].items():
             table, scratch = self._host_table(key)
+            # A later chunk's global tables read the context, its SWA tables the window; a first chunk's neither.
             pair, swa = self._pair_key(key), tables.context is None
             context = None if swa else (self.pair_context_blocks if pair else self.prefill_context_blocks)
             fill, ctx = kv_lib.PrefillTables.host_rows(
                 table, slot, start_pos, padded, self.block_size, scratch, context, pair
             )
-            window = self._window_blocks(key, slot, start_pos) if swa else None
+            window = self._window_blocks(key, slot, start_pos) if swa and start_pos > 0 else None
             tables.write(fill, ctx, window)
         tile_start = (n - 1) // TILE * TILE
         at = torch.tensor([0, 0, tile_start, 0], dtype=torch.int32)
@@ -1385,6 +1699,9 @@ class TtMiMoModel:
         if inputs["history"] is not None:
             host = self._history().prefill_list(writes, HISTORY_ROWS, device=False)
             ttnn.copy_host_to_device_tensor(host, inputs["history"])
+        assert embeds is None or inputs.get("merge") is not None, "this chunk's trace takes no host rows"
+        if inputs.get("merge") is not None:
+            self._write_merge(inputs.get("merge"), padded, [(0, embeds, embed_rows)])
         ttnn.execute_trace(self.mesh_device, trace["id"], cq_id=0, blocking=False)
         out = self.chunk_logits[slot]
         ttnn.copy(trace["logits"], out)
@@ -1406,8 +1723,12 @@ class TtMiMoModel:
             hidden.append(torch.cat(parts))
         return out, hidden
 
-    def prefill(self, tokens, slot, return_hidden=False, start_pos=0, chunk_size=None):
-        return self.prefill_read(self.prefill_enqueue(tokens, slot, return_hidden, start_pos, chunk_size))
+    def prefill(self, tokens, slot, return_hidden=False, start_pos=0, chunk_size=None, embeds=None, embed_rows=None):
+        return self.prefill_read(
+            self.prefill_enqueue(
+                tokens, slot, return_hidden, start_pos, chunk_size, embeds=embeds, embed_rows=embed_rows
+            )
+        )
 
     # ------------------------------------------------------------------ decode
     def prepare_decode_inputs_host(self, tokens, positions, serial=False):
@@ -1726,6 +2047,10 @@ class TtMiMoModel:
             # The drafter's programs too (its setup made the chain): they compile before any capture (TtMiMoMTP.warm,
             # TtDFlash.warm).
             (self.mtp if self.mtp is not None else self.dflash).warm()
+        if (self.mtp is not None or self.dflash is not None) and self.layer_groups is not None:
+            # Every verify variant's programs, and the verify traces' inputs, before any capture too
+            # (capture_verify_trace runs after the decode and prefill captures).
+            self.warm_verify()
         ttnn.synchronize_device(self.mesh_device)
         captured = []
         for sample in variants:
@@ -1735,6 +2060,7 @@ class TtMiMoModel:
             output = self._decode_step(inputs, greedy_only, sample)
             self._feed_back(inputs, output, tokens_written=written)
             ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+            _trace_owned(output)
             # Every replay reuses the gather phases baked in at capture: back to back, replays only alternate the
             # gather buffers if the step made an even number of fabric reductions (FabricRowGather.advance).
             fabric = getattr(self.plan, "fabric_gather", None)
@@ -1751,6 +2077,7 @@ class TtMiMoModel:
             trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
             output = self.sampler(captured[0]["output"]["logits"], token_input=inputs[0])
             ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+            _trace_owned(output)
             sampler = {"id": trace_id, "output": output}
         ttnn.synchronize_device(self.mesh_device)
         self.decode_trace = {
@@ -1846,9 +2173,7 @@ class TtMiMoModel:
         captured before, followed by the MTP history's verify write (``_verify_step``), which reads the tokens and
         positions the relay left."""
         assert self.verify_trace is None and self.layer_groups is not None, "a verify serves vLLM's KV blocks"
-        empty = torch.full((self.max_batch,), -1, dtype=torch.int32)
-        host = self.prepare_decode_inputs_host(torch.zeros(self.max_batch, dtype=torch.int32), empty, serial=True)
-        inputs = [ttnn.to_device(t, self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG) for t in host]
+        inputs = self._verify_inputs()
         # One capture per attended-group count (attention.verify_variants), every one on the same inputs; the widest
         # last, which is self.verify_trace.
         for variant in verify_variants():
@@ -1860,14 +2185,40 @@ class TtMiMoModel:
         self.verify_trace = self.verify_traces[verify_variants()[-1]]
         self._verify_active = verify_variants()[-1]
 
-    def _capture_verify_variant(self, inputs):
-        """capture_verify_trace for one verify variant (``_verify_groups``) on the trace inputs ``inputs``."""
-        rope = self.rope_tables is not None
+    def _verify_inputs(self):
+        """The verify traces' persistent inputs (every variant's), made on first use: by ``warm_verify``, before any
+        capture (a buffer allocated after a capture can sit where that trace's replays write)."""
+        if self.verify_inputs is None:
+            empty = torch.full((self.max_batch,), -1, dtype=torch.int32)
+            host = self.prepare_decode_inputs_host(torch.zeros(self.max_batch, dtype=torch.int32), empty, serial=True)
+            self.verify_inputs = [
+                ttnn.to_device(t, self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG) for t in host
+            ]
+        return self.verify_inputs
+
+    def warm_verify(self):
+        """Compile every verify variant (attention.verify_variants) with an idle eager run on the verify traces'
+        inputs, before the first capture (capture_decode_trace): capture_verify_trace runs after the decode and prefill
+        captures, and a program compiled then keeps buffers (and its first run allocates the inputs) where those
+        traces' replays write. Every slot idle: no K / V written."""
+        inputs = self._verify_inputs()
+        for variant in verify_variants():
+            self._verify_groups = variant
+            self._warm_verify_variant(inputs)
+        self._verify_groups = None
+
+    def _warm_verify_variant(self, inputs):
+        """An idle eager verify step of the variant ``_verify_groups`` (warm_verify; a cache hit in a capture)."""
         # The packed uploads still hold the last served step (a recapture): idle them, so the runs below write no K / V.
         self.spec_inputs.reset()
         self._relay()
-        self.spec_inputs.derive_verify(inputs, rope)
+        self.spec_inputs.derive_verify(inputs, self.rope_tables is not None)
         self._release(self._verify_step(inputs))
+
+    def _capture_verify_variant(self, inputs):
+        """capture_verify_trace for one verify variant (``_verify_groups``) on the trace inputs ``inputs``."""
+        rope = self.rope_tables is not None
+        self._warm_verify_variant(inputs)
         ttnn.synchronize_device(self.mesh_device)
         fabric = getattr(self.plan, "fabric_gather", None)
         phase = fabric.phase if fabric is not None else None
@@ -1876,6 +2227,7 @@ class TtMiMoModel:
         self.spec_inputs.derive_verify(inputs, rope)
         output = self._verify_step(inputs)
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+        _trace_owned(output)  # its outputs, read after each replay, as the decode trace's
         # As the decode traces (capture_decode_trace): an even number of fabric reductions, so verify and decode
         # replays interleave on the gather phases they were captured with.
         fabric = getattr(self.plan, "fabric_gather", None)
