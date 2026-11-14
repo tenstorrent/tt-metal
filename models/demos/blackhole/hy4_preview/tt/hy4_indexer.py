@@ -80,6 +80,9 @@ class Hy4Indexer:
 
         key = (n, T, start)
         if key not in self._mask_full:
+            for old in self._mask_full.values():  # one mask only: a per-(start, T) cache leaked n*T*2 bytes per chunk and layer (OOM in the 60k real-prefill needle run)
+                ttnn.deallocate(old)
+            self._mask_full.clear()
             m = torch.zeros(n, T)
             m[:, start : start + n] = torch.zeros(n, n).masked_fill(torch.ones(n, n, dtype=torch.bool).triu(1), float("-inf"))
             self._mask_full[key] = upload(self.md, m.reshape(1, 1, n, T), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT)
