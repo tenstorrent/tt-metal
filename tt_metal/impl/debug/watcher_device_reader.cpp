@@ -756,8 +756,9 @@ void WatcherDeviceReader::Core::Dump() const {
     if (is_eth_core) {
         DumpEthFwStage();
     }
-    // Ethernet and DRAM cores don't use the sync reg
-    if (!is_eth_core && !is_dram_core && rtoptions.get_watcher_dump_all()) {
+    // Ethernet, DRAM and dispatch cores don't use the sync reg. Dispatch engines have no NEOs, so their NEO tile
+    // counter and remapper registers don't exist, and on Trinity a host read of them never returns.
+    if (!is_eth_core && !is_dram_core && !is_dispatch_core && rtoptions.get_watcher_dump_all()) {
         // Reading registers while running can cause hangs, only read if
         // requested explicitly
         DumpSyncRegs();
