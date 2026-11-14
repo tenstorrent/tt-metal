@@ -171,9 +171,15 @@ inline void llk_unpack_A(
     WAYPOINT("UPAW");
     const std::uint32_t operand_id = get_operand_id(operand);
     const LocalDFBInterface& local_dfb_interface = get_local_dfb_interface(operand_id);
-    // Consecutive tiles of a batch are stride_size_tiles entries apart, as on the pack side (#56194).
-    const std::uint32_t l1_tile_idx = local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].cursor_entry_idx +
-                                      tile_index * local_dfb_interface.stride_size_tiles;
+    // rd_entry_idx counts entries, so scale it by the entry's tile count: tiles inside an entry are contiguous,
+    // entries are stride_size_tiles apart.
+    const std::uint32_t tile_16B = unpack_tile_size[operand_id] >> cb_addr_shift;
+    LLK_ASSERT(local_dfb_interface.entry_size % tile_16B == 0, "DFB entry_size must be a whole number of tiles");
+    const std::uint32_t tiles_per_entry = local_dfb_interface.entry_size / tile_16B;
+    const std::uint32_t rd_entry_idx = local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].cursor_entry_idx;
+    const std::uint32_t l1_tile_idx =
+        (rd_entry_idx + (tile_index / tiles_per_entry) * local_dfb_interface.stride_size_tiles) * tiles_per_entry +
+        (tile_index % tiles_per_entry);
 
     if constexpr (BType == BroadcastType::NONE) {
         if constexpr (unpack_to_dest) {
@@ -241,6 +247,11 @@ inline void llk_unpack_A_block(
     const LocalDFBInterface& local_dfb_interface = get_local_dfb_interface(operand_id);
     const std::uint32_t rd_entry_idx = local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].cursor_entry_idx;
     const std::uint32_t stride_size_tiles = local_dfb_interface.stride_size_tiles;
+    // Multi-tile entries unsupported here: both paths below use one uniform stride per tile, but the step
+    // differs inside an entry and across an entry boundary. Use llk_unpack_A, which handles them.
+    LLK_ASSERT(
+        local_dfb_interface.entry_size == (unpack_tile_size[operand_id] >> cb_addr_shift),
+        "unpack_A_block does not support DFB entries holding more than one tile; use llk_unpack_A per tile");
     if constexpr (BType == BroadcastType::NONE && unpack_to_dest) {
         WAYPOINT("UPAW");
         // The block stays inside the current DEST section, so its last tile is checked against the section capacity,
