@@ -163,9 +163,10 @@ tt::tt_metal::ProgramDescriptor AdamWProgramFactory::create_descriptor(
 
     tt::tt_metal::ProgramDescriptor desc;
 
-    // Determine data formats based on param dtype
+    // The parameter and its moments share the parameter's dtype; the gradient has its own (bf16, or fp32 when it was
+    // accumulated in fp32). Each CB unpacks to an fp32 Dst, so neither is truncated.
     tt::DataFormat param_data_format = datatype_to_dataformat_converter(param.dtype());
-    tt::DataFormat grad_data_format = tt::DataFormat::Float16_b;  // Gradient is always bf16
+    tt::DataFormat grad_data_format = datatype_to_dataformat_converter(grad.dtype());
     tt::DataFormat intermediate_data_format = tt::DataFormat::Float32;
 
     uint32_t param_single_tile_size_bytes = tt::tile_size(param_data_format);
@@ -219,7 +220,7 @@ tt::tt_metal::ProgramDescriptor AdamWProgramFactory::create_descriptor(
     desc.cbs.push_back(
         make_cb_descriptor(all_cores, kParamCbIndex, param_data_format, param_single_tile_size_bytes, num_input_tiles));
 
-    // grad CB - always bf16
+    // grad CB - uses grad_data_format (bf16 or fp32)
     desc.cbs.push_back(
         make_cb_descriptor(all_cores, kGradCbIndex, grad_data_format, grad_single_tile_size_bytes, num_input_tiles));
 

@@ -150,6 +150,14 @@ void py_module(nb::module_& m) {
         "and precision.reduce_dtype (None when unset) as the dtype the gradient syncs sum in by default. Returns the "
         "master dtype applied, or None.");
 
+    m.def(
+        "cast_fp32_gradients_to_bf16",
+        &ttml::core::cast_fp32_gradients_to_bf16,
+        nb::arg("parameters"),
+        "Replace every fp32 gradient of parameters with its bf16 cast; bf16 and missing gradients stay as they are. "
+        "With reduce_dtype float32 a gradient can be fp32 when the step starts: an optimizer whose math takes bf16 "
+        "gradients, such as one registered from Python, calls this first.");
+
     {
         auto py_distributed = static_cast<nb::module_>(m.attr("distributed"));
         py_distributed.def("enable_fabric", &ttnn_fixed::distributed::enable_fabric);

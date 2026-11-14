@@ -37,4 +37,9 @@ void store_trainable_parameters_as(const serialization::NamedParameters& paramet
 std::optional<ttnn::DataType> apply_precision_config(
     const YAML::Node& training_config, const serialization::NamedParameters& parameters);
 
+// Replaces every fp32 gradient of `parameters` with its bf16 cast, freeing the fp32 buffer; bf16 and missing
+// gradients are left as they are, so a second call does nothing. Fused AdamW reads fp32 gradients as they are; every
+// other consumer that takes bf16 gradients calls this first, so the gradient is rounded to bf16 once.
+void cast_fp32_gradients_to_bf16(const serialization::NamedParameters& parameters);
+
 }  // namespace ttml::core

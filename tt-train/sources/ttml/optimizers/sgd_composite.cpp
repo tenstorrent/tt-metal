@@ -9,6 +9,7 @@
 #include "autograd/auto_context.hpp"
 #include "autograd/autocast_tensor.hpp"
 #include "core/debug.hpp"
+#include "core/parameter_dtype.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "serialization/serializable.hpp"
 
@@ -41,6 +42,7 @@ void SGDComposite::zero_grad() {
 }
 
 void SGDComposite::step() {
+    core::cast_fp32_gradients_to_bf16(m_parameters);
     if (core::debug::Debug::enable_print_tensor_stats()) {
         print_stats();
     }
