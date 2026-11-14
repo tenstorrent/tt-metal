@@ -408,6 +408,18 @@ std::vector<std::optional<Tensor>> tanh_bw(
     const Tensor& input,
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<Tensor>& input_grad) {
+    // One program whose gradient is the generated SFPU kernel, for the calls it serves; every
+    // other call keeps main's single program below.
+    if (generated_bf16_kernel_applies(grad, input, output_mem_config.value_or(input.memory_config()), input_grad)) {
+        return {ttnn::operations::unary_backward::launch_unary_backward(
+            ttnn::operations::unary_backward::UnaryBackwardOpType::TANH_BW_BF16,
+            grad,
+            input,
+            input.dtype(),
+            output_mem_config.value_or(input.memory_config()),
+            input_grad)};
+    }
+
     std::vector<std::optional<Tensor>> grad_tensor;
 
     DataType output_dtype = input.dtype();
