@@ -24,7 +24,19 @@ void bind_complex_tensor_type(nb::module_& mod) {
         .def_prop_ro("real", &ComplexTensor::real)
         .def_prop_ro("imag", &ComplexTensor::imag)
         .def("deallocate", &ComplexTensor::deallocate)
-        .def("__getitem__", &ComplexTensor::operator[]);
+        .def("__len__", [](const ComplexTensor&) { return 2; })
+        .def(
+            "__getitem__",
+            [](const ComplexTensor& self, int64_t index) -> const Tensor& {
+                if (index < 0) {
+                    index += 2;
+                }
+                if (index < 0 || index >= 2) {
+                    throw nb::index_error("ComplexTensor index out of range");
+                }
+                return self[static_cast<uint32_t>(index)];
+            },
+            nb::rv_policy::reference_internal);
 }
 
 void bind_complex_tensor(nb::module_& mod) {
