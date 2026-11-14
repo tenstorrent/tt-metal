@@ -4010,13 +4010,68 @@ tasks:
       ep_experts_ms_*: '> 0'
       tp4_dispatch_added_ms: '>= 0'
       tp4_combine_added_ms: '>= 0'
+- id: P.59
+  title: Flat expert x pieces of at least 8 KB (Marko Staletovic 1e2ab798da1, x-pieces part only) behind EXPERT_X_PIECES; then re-measure the replica/TP baseline
+    with it (EP off, P.56 prev, the timing model refit)
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - P.58
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
+  - models/demos/common/bringup/testing
+  - models/demos/common/bringup/tests
+  - ttnn/ttnn/bringup
+  brief:
+    details: "OWNER 2026-11-14 (this branch only, do not mix with model_bringup): port ONE upstream perf change into this branch's flat_routed_expert fork (ttnn/ttnn/bringup/moe_block_main_ttnn/flat_routed_expert),\
+      \ behind a new model setting EXPERT_X_PIECES in tt/settings.py: `legacy` (today: x_pieces = 4 when aligned, program_factory.cpp:125) and `min8k` (Marko's: each\
+      \ x piece at least 8 KB; for DSv4.1 2 pieces instead of 4). The source is Marko Staletovic's WIP commit 1e2ab798da1 on origin/mstaletovic/flat-expert-perf-dw-split\
+      \ (git fetch it; read-only); its parent 0c0bbe59d98 is exactly our fork's source (CHANGELOG.md:3), so take only the x-pieces hunk of flat_routed_expert_program_factory.cpp\
+      \ (his :127-131) by a 3-way merge; it merges cleanly here too (this branch's program_factory.cpp has other local changes: keep them). Do NOT take the DW split\
+      \ (FRE_DW_SPLIT, semaphore ids unchecked) or the gate/up hot/cold loop: they wait for upstream.\n\nWHY: his benchmark (12 experts x M tokens each, one chip):\
+      \ M 256 946 -> 744 us (-21%), 512 1676 -> 1359, 1024 3128 -> 2581, 2048 6034 -> 5026 (-17%); M 64 unchanged (weight-streaming bound). The x feed to the gate/up\
+      \ cores was too slow with small pieces. Our busiest chip carries ~4,000 token-slots a layer (~M 330 uniform equivalent): expected -0.15 to -0.25 ms a layer\
+      \ on the busiest chip (10-15% of the experts phase, ~6-10 ms a chunk), to be measured. Our setup differs (MAX_WORKER_CORES = 110 cap, weights_nk transposed\
+      \ tiles, 304943a95fc): check the piece size the plan actually gets.\n\nMEASURE: the fork's own flat expert test at our shapes (M 64/256/512/1024 per expert,\
+      \ our core cap) legacy vs min8k, bit-identical outputs (same math, only the piece size changes); then the model-level gate. CHANGELOG entry crediting the source\
+      \ commit; INDEX row if needed. No fork unit or regression suites on the 8x4 (owner rule): only the tests you add and the model-level checks. Every Python-built\
+      \ op stays prepared (run_prepared). Report plainly, short, every term defined. SAFETY: a hang or a board reset need: STOP and report, never reset.\n\n     \
+      \ THEN RE-MEASURE THE BASELINE the replication / TP investigation compares against (this is why it runs on this branch): with EXPERT_X_PIECES=min8k vs legacy,\
+      \ (a) P.56's real-prompt test (tests/test_moe_prev_replicas.py: novel AND code, chunks 1..10 back to back, device ms and experts-phase ms per chunk, MOE_REPLICAS\
+      \ off vs prev), (b) refit P.55a's per-chip timing model (tests/moe_exact_model.py: A per active expert, B per 32-row block, C0) on min8k profiles and report\
+      \ the new A/B/C0, (c) redo the EP / EP+P.56 / TP4 / TP8 compute-side estimate with the new fit (P.58's model, if it left one). Record x_pieces_* and baseline_*\
+      \ metrics; report the table old vs new."
+  ab:
+    env:
+      EXPERT_X_PIECES: legacy
+      ENGRAM_TABLE: resident
+    change:
+      EXPERT_X_PIECES: min8k
+      ENGRAM_TABLE: resident
+  ab_positions:
+  - 51200
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py && scripts/run_safe_pytest.sh --run-all
+      --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_determinism.py && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile
+      models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      chunk_wall_ms: '> 0'
+      determinism_max_abs_diff: == 0
+      device_ms_total: '> 0'
+      err_final_hidden: <= limit
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      top5_overlap: '>= limit'
 - id: P.54
   title: 'MoE replicas end to end: back-to-back chunked prefill, device time and wall per chunk with the fill included - replicas off vs a table frozen after chunk 0 vs online learning'
   step: perf
   role: perf
   device: true
   deps:
-  - P.58
+  - P.59
   paths:
   - models/demos/deepseek_v41_flash_d_p/tt
   - models/demos/deepseek_v41_flash_d_p/tests/
