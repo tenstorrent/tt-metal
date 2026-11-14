@@ -692,9 +692,23 @@ sfpi_inline sfpi::vFloat _sfpu_quarter_exp_abs_(sfpi::vFloat x) {
     return y;
 }
 
+}  // namespace ckernel::sfpu
+
+#include "ckernel_sfpu_cosh_bf16.h"
+
+namespace ckernel::sfpu {
+
+// Whether BF16 DEST runs the generated cosh kernel as one call over the whole tile.
+inline constexpr bool cosh_bf16_whole_tile = true;
 // t = exp(|x|); cosh(x) = 0.5 * (t + 1/t)
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_cosh() {
+    if constexpr (!is_fp32_dest_acc_en && ITERATIONS == 32) {
+        if (bf16_dest_cosh()) {
+            calculate_cosh_bf16<ITERATIONS>();
+            return;
+        }
+    }
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
         // _sfpu_quarter_exp_abs_ takes |x| itself; no setsgn needed here.
