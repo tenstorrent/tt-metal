@@ -52,7 +52,7 @@ from models.demos.gemma4.demo.sampling_utils import (
 )
 from models.demos.gemma4.tests.test_factory import PREFILL_BUCKETS, parametrize_mesh_with_fabric
 from models.demos.gemma4.tt.common import create_tt_model
-from models.demos.gemma4.tt.generator import GEMMA4_MAX_BATCHED_PREFILL_SEQ_LEN, Gemma4Generator
+from models.demos.gemma4.tt.generator import GEMMA4_MAX_BATCHED_PREFILL_SEQ_LEN, Gemma4Generator, default_stop_tokens
 from models.demos.gemma4.tt.generator_trace import (
     resolve_gemma4_bounded_sliding,
     resolve_gemma4_demo_long_context,
@@ -833,6 +833,7 @@ def run_generation(
     # Load tokenizer
     profiler.start("loading_inputs")
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+    tokenizer.stop_tokens = default_stop_tokens(tokenizer, model_path)
     logger.info(f"Tokenizer loaded from {model_path}")
     profiler.end("loading_inputs")
 
@@ -1219,7 +1220,7 @@ def run_generation(
                 iteration += 1
 
                 # Check for EOS
-                if next_token == tokenizer.eos_token_id:
+                if next_token in tokenizer.stop_tokens:
                     break
 
         finally:
