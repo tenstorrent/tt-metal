@@ -206,6 +206,33 @@ inline void _relu_min_(T threshold) {
     _relu_min_impl_<APPROXIMATION_MODE, ITERATIONS, SFPLOAD_INSTR_MOD>(ITERATIONS);
 }
 
+// One Dest row clamped against the threshold parked in LREG12 (vConstIntPrgm0), shared by the
+// full-range integer clamps below: load, SFPSWAP against the constant register, store. SFPSWAP
+// writes both operands, but a write to a constant register is dropped, so parking the threshold
+// there removes the per-row SFPMOV copy the compiler otherwise emits; the store advances the
+// dest counter through ADDR_MOD_2 (physical slot 6, programmed to +2 by relu_min_init /
+// relu_max_init), so the row needs no separate increment. With INVERT the row is complemented
+// before and after the swap (unsigned order mapped onto SFPSWAP's sign-magnitude order).
+//
+// Raw rather than sfpi: sfpi 7.90.0 lowers every max() to SFPSWAP's "VD gets min" mode with the
+// larger operand returned in VC, which needs the constant as VD -- illegal for LREG12 (an
+// lra-constraints internal error for `max(x, vSMag(vConstIntPrgm0))`, an SFPMOV copy per row for
+// `max(vSMag(vConstIntPrgm0), x)`). The min direction compiles to exactly this stream; one raw
+// helper keeps both directions the same shape.
+template <InstrModLoadStore LOAD_STORE_MOD, bool WANT_MAX, bool INVERT>
+sfpi_inline void _clamp_row_against_lreg12_() {
+    TTI_SFPLOAD(p_sfpu::LREG0, LOAD_STORE_MOD, ADDR_MOD_3, 0);
+    if constexpr (INVERT) {
+        TTI_SFPNOT(0, p_sfpu::LREG0, p_sfpu::LREG0, 0);
+    }
+    // mod1 = 9: VD = max, VC = min; mod1 = 1: VD = min, VC = max. VC = LREG12 is never written.
+    TTI_SFPSWAP(0, p_sfpu::LREG12, p_sfpu::LREG0, WANT_MAX ? 9 : sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
+    if constexpr (INVERT) {
+        TTI_SFPNOT(0, p_sfpu::LREG0, p_sfpu::LREG0, 0);
+    }
+    TTI_SFPSTORE(p_sfpu::LREG0, LOAD_STORE_MOD, ADDR_MOD_2, 0);
+}
+
 // Full-range unsigned clamp against a threshold, shared by relu_min and relu_max/relu6.
 // IS_LOWER_BOUND selects the path:
 //   IS_LOWER_BOUND == true -> relu_min: result = max(x, threshold)
@@ -216,6 +243,8 @@ inline void _relu_min_(T threshold) {
 // When threshold MSB = 0, invert operands (~x, ~t) so that unsigned order maps to sign magnitude
 // order, run min/max, then invert the result back.
 // When threshold MSB = 1, raw bits already sort correctly under sign-magnitude with min/max roles swapped.
+// The threshold (inverted or not) sits in LREG12 for the call; see _clamp_row_against_lreg12_.
+// Rows are 5 (MSB = 0) / 3 (MSB = 1) instructions instead of 7 / 5.
 template <bool APPROXIMATION_MODE, bool IS_LOWER_BOUND, DataFormat FORMAT, int ITERATIONS = 8>
 inline void relu_clamp_uint(uint threshold) {
     static_assert(
@@ -225,27 +254,20 @@ inline void relu_clamp_uint(uint threshold) {
     if constexpr (LAYOUT == sfpi::DataLayout::U32) {
         // relu_min needs max(x, t) and relu_max/relu6 needs min(x, t)
         constexpr bool WANT_MAX = IS_LOWER_BOUND;
-        const vUInt t = static_cast<unsigned>(threshold);
+        sfpi::l_reg[sfpi::LRegs::LReg0].in_use();
         if (static_cast<int>(threshold) >= 0) {
             // threshold MSB = 0: invert operands
-            const vSMag nt = sfpi::as<vSMag>(~t);
+            sfpi::vConstIntPrgm0 = ~threshold;
 #pragma GCC unroll 8
             for (int d = 0; d < ITERATIONS; d++) {
-                vUInt raw = dst_reg[0].mode<LAYOUT>();
-                vSMag x = sfpi::as<vSMag>(~raw);
-                vUInt r = sfpi::as<vUInt>(WANT_MAX ? sfpi::max(x, nt) : sfpi::min(x, nt));
-                dst_reg[0].mode<LAYOUT>() = ~r;  // invert the result back
-                dst_reg++;
+                _clamp_row_against_lreg12_<InstrModLoadStore::INT32, WANT_MAX, true /* INVERT */>();
             }
         } else {
-            // threshold MSB = 1: SM min/max applies directly
-            const vSMag ts = sfpi::as<vSMag>(t);
+            // threshold MSB = 1: SM min/max applies directly, with the roles swapped
+            sfpi::vConstIntPrgm0 = threshold;
 #pragma GCC unroll 8
             for (int d = 0; d < ITERATIONS; d++) {
-                vUInt raw = dst_reg[0].mode<LAYOUT>();
-                vSMag x = sfpi::as<vSMag>(raw);
-                dst_reg[0].mode<LAYOUT>() = sfpi::as<vUInt>(WANT_MAX ? sfpi::min(x, ts) : sfpi::max(x, ts));
-                dst_reg++;
+                _clamp_row_against_lreg12_<InstrModLoadStore::INT32, !WANT_MAX, false /* INVERT */>();
             }
         }
     } else {
@@ -272,8 +294,20 @@ inline void relu_clamp_uint(uint threshold) {
 //   IS_LOWER_BOUND == true  -> relu_min:       result = max(x, threshold)
 //   IS_LOWER_BOUND == false -> relu_max/relu6: result = max(0, min(x, threshold))  (relu built in)
 //
-// Load/store as signed 2's complement (DataLayout::I32). Since the sign-magnitude SFPSWAP path cannot
-// represent -2^31 (0x80000000 is -0), we use the plain int32 compare.
+// The Dest word is a two's-complement int32. For threshold >= 0 (every production relu_max/relu6
+// call, and relu_min with a non-negative bound) the row goes through SFPSWAP: the INT32_2S_COMP
+// load (mod 12) maps the two's-complement word onto its sign-magnitude image, which SFPSWAP
+// orders numerically, and the mod-12 store maps the result back. The one non-bijective point is
+// INT_MIN, which the load turns into 0 (31-bit magnitude, sign dropped): harmless here, since
+// max(0, t) = t = max(INT_MIN, t) and max(0, min(0, t)) = 0 = max(0, min(INT_MIN, t)) for every
+// t >= 0, and a threshold >= 0 is its own sign-magnitude image. Verified bit-identical with the
+// predicated compare it replaces on Wormhole silicon over INT_MIN, INT_MIN + 1, -1, 0, 1, INT_MAX,
+// the powers of two of both signs with their neighbours and random words, at thresholds 0, 1, 5,
+// 6, 1000, 2^30, INT_MAX - 1 and INT_MAX. Rows are 3 (relu_min) / 4 (relu_max) instructions
+// instead of 10.
+//
+// A negative relu_min threshold keeps the plain int32 compare: there max(x, t) must return t for
+// x = INT_MIN, which the sign-magnitude image (0) would rank above t.
 template <bool APPROXIMATION_MODE, bool IS_LOWER_BOUND, int ITERATIONS = 8>
 inline void relu_clamp_int(uint threshold) {
     const vInt t = static_cast<int>(threshold);
@@ -281,18 +315,11 @@ inline void relu_clamp_int(uint threshold) {
     if constexpr (IS_LOWER_BOUND) {
         // relu_min: max(x, threshold)
         if (is_pos_threshold) {
+            sfpi::l_reg[sfpi::LRegs::LReg0].in_use();
+            sfpi::vConstIntPrgm0 = static_cast<int>(threshold);
 #pragma GCC unroll 8
             for (int d = 0; d < ITERATIONS; d++) {
-                vInt x = dst_reg[0].mode<sfpi::DataLayout::I32>();
-                // v_if(x < 0) is NOT redundant: the SFPU signed compare subtracts and tests the sign,
-                // which overflows when x and t are >= 2^31 apart and wrongly gives x>=t. Lifting negatives
-                // up to t first leaves only non-negative lanes for the x < t compare, which then cannot overflow.
-                v_if(x < 0) { x = t; }
-                v_endif;
-                v_if(x < t) { x = t; }
-                v_endif;
-                dst_reg[0].mode<sfpi::DataLayout::I32>() = x;
-                dst_reg++;
+                _clamp_row_against_lreg12_<InstrModLoadStore::INT32_2S_COMP, true /* WANT_MAX */, false>();
             }
         } else {
 #pragma GCC unroll 8
@@ -310,15 +337,16 @@ inline void relu_clamp_int(uint threshold) {
     } else {
         // relu_max/relu6: max(0, min(x, threshold))
         if (is_pos_threshold) {
+            sfpi::l_reg[sfpi::LRegs::LReg0].in_use();
+            sfpi::vConstIntPrgm0 = static_cast<int>(threshold);
 #pragma GCC unroll 8
             for (int d = 0; d < ITERATIONS; d++) {
-                vInt x = dst_reg[0].mode<sfpi::DataLayout::I32>();
-                v_if(x < 0) { x = 0; }
-                v_endif;
-                v_if(x > t) { x = t; }
-                v_endif;
-                dst_reg[0].mode<sfpi::DataLayout::I32>() = x;
-                dst_reg++;
+                TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_3, 0);
+                // LREG0 = min(x, threshold), then LREG0 = max(LREG0, 0) against the constant zero
+                // in LREG9 (mod1 = 9: VD = max; the constant VC is never written).
+                TTI_SFPSWAP(0, p_sfpu::LREG12, p_sfpu::LREG0, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
+                TTI_SFPSWAP(0, sfpi::CREG_IDX_0, p_sfpu::LREG0, 9);
+                TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_2, 0);
             }
         } else {
             // threshold < 0: max(0, min(x, threshold)) == 0 for every lane
@@ -331,7 +359,18 @@ inline void relu_clamp_int(uint threshold) {
         }
     }
 }
-inline void relu_min_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
+
+// The integer clamps above store through ADDR_MOD_2, which the unary SFPU addr-mod base maps to
+// physical slot 6: program it to advance the dest counter by one sfpi row (two counter steps).
+// The float paths load and store with ADDR_MOD_3 and dst_reg++, so this is inert for them.
+inline void _relu_clamp_addr_mod_init_() {
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+}
+
+inline void relu_min_init() {
+    _relu_clamp_addr_mod_init_();
+    math::reset_counters(p_setrwc::SET_ABD_F);
+}
 
 template <bool APPROXIMATION_MODE>
 inline void relu_min(uint uint_threshold) {
@@ -345,7 +384,10 @@ inline void relu_min(uint uint_threshold) {
     }
 }
 
-inline void relu_max_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
+inline void relu_max_init() {
+    _relu_clamp_addr_mod_init_();
+    math::reset_counters(p_setrwc::SET_ABD_F);
+}
 
 template <bool APPROXIMATION_MODE>
 inline void relu_max(uint uint_threshold) {
