@@ -711,6 +711,15 @@ tests/ttnn/unit_tests/gtests/tensor/test_stream_pipeline.cpp @razorback3 @dongji
 tests/ttnn/unit_tests/base_functionality/*stream_service* @razorback3 @dongjin-na @bbradelTT
 tests/ttnn/unit_tests/base_functionality/test_d2d_pipeline_descriptor.py @razorback3 @dongjin-na @bbradelTT
 tests/ttnn/unit_tests/base_functionality/test_layer_* @razorback3 @dongjin-na @bbradelTT
+# The device-to-device stream and host service code itself: owned by the teams that build it.
+ttnn/core/tensor/*d2d_* @SeanNijjar @nmilicevicTT @sjameelTT
+ttnn/core/tensor/flatbuffer/*d2d_* @SeanNijjar @nmilicevicTT @sjameelTT
+ttnn/core/tensor/kernels/ @SeanNijjar @nmilicevicTT @sjameelTT
+ttnn/core/tensor/stream_service_common.hpp @SeanNijjar @nmilicevicTT @sjameelTT
+ttnn/api/ttnn/tensor/*d2d_* @SeanNijjar @nmilicevicTT @sjameelTT
+ttnn/core/services/ @bzhangTT @yeongyunTT
+ttnn/api/ttnn/services/ @bzhangTT @yeongyunTT
+ttnn/ttnn/_experimental/layer_completion.py @bzhangTT @yeongyunTT
 # Bindings and tests for the prefetcher and global circular buffers.
 ttnn/cpp/ttnn-nanobind/global_circular_buffer.* @nsextonTT
 ttnn/cpp/ttnn-nanobind/prefetcher_pipe.* @nsextonTT
@@ -728,6 +737,10 @@ ttnn/cpp/ttnn-nanobind/mesh_socket.* @nsextonTT
 tests/ttnn/unit_tests/base_functionality/*fabric* @razorback3 @dongjin-na @bbradelTT
 ttnn/cpp/ttnn-nanobind/disaggregation.* @nsextonTT
 tests/ttnn/unit_tests/base_functionality/test_kv_chunk_table_strided_bindings.py @razorback3 @dongjin-na @bbradelTT
+# The socket code itself and its perf test: owned by the metal-distributed team.
+ttnn/core/distributed/*socket* @tenstorrent/metalium-developers-metal-distributed
+ttnn/api/ttnn/distributed/*socket* @tenstorrent/metalium-developers-metal-distributed
+tests/ttnn/distributed/test_socket_perf.py @tenstorrent/metalium-developers-metal-distributed
 # Bindings and tests for code other teams own.
 tests/ttnn/unit_tests/base_functionality/test_reload_host_support.py @razorback3 @dongjin-na @bbradelTT
 tests/ttnn/unit_tests/base_functionality/test_graph_report_device_tensors_unit.py @razorback3 @dongjin-na @bbradelTT
