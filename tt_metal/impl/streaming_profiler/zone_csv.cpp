@@ -4,6 +4,7 @@
 
 #include "impl/streaming_profiler/zone_csv.hpp"
 
+#include <chrono>
 #include <cstdio>
 #include <string>
 #include <string_view>
@@ -53,6 +54,10 @@ uint32_t name_hash(std::string_view name) {
     return (h & 0x7FFFFFFu) | 0x8000000u;
 }
 
+int64_t since_epoch_ns(std::chrono::steady_clock::time_point t) {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(t.time_since_epoch()).count();
+}
+
 }  // namespace
 
 ZoneCsvConsumer::ZoneCsvConsumer(const std::string& path) : path_(path), file_(std::fopen(path.c_str(), "w")) {
@@ -82,6 +87,7 @@ void ZoneCsvConsumer::operator()(const Batch& batch) {
             Row& r = rows_.emplace_back(row_for(z.core()));
             r.timer_id = id;
             r.timestamp = end ? z.end_device_cycles() : z.start_device_cycles();
+            r.time_ns = since_epoch_ns(end ? z.end_time() : z.start_time());
             r.runtime_id = z.runtime_id();
             r.zone_name = z.descriptor().name;
             r.type = end ? "ZONE_END" : "ZONE_START";
@@ -92,6 +98,7 @@ void ZoneCsvConsumer::operator()(const Batch& batch) {
         Row& r = rows_.emplace_back(row_for(d.core()));
         r.timer_id = legacy != 0 ? legacy : name_hash(d.descriptor().name);
         r.timestamp = d.device_cycles();
+        r.time_ns = since_epoch_ns(d.time());
         // The CSV has one data column, so a record with several values writes its first.
         r.data = d.payload().front();
         r.runtime_id = d.runtime_id();
@@ -104,6 +111,7 @@ void ZoneCsvConsumer::operator()(const Batch& batch) {
         Row& r = rows_.emplace_back(row_for(e.core()));
         r.timer_id = name_hash(e.descriptor().name);
         r.timestamp = e.device_cycles();
+        r.time_ns = since_epoch_ns(e.time());
         r.runtime_id = e.runtime_id();
         r.zone_name = e.descriptor().name;
         r.type = "TS_EVENT";
@@ -123,13 +131,13 @@ void ZoneCsvConsumer::write_csv() {
             f,
             "PCIe slot, core_x, core_y, RISC processor type, timer_id, "
             "time[cycles since reset], data, run host ID, trace id, trace id counter, "
-            "zone name, type, source line, source file, meta data, logical_x, logical_y\n");
+            "zone name, type, source line, source file, meta data, logical_x, logical_y, time[ns]\n");
         header_written_ = true;
     }
     for (const Row& r : rows_) {
         std::fprintf(
             f,
-            "%u, %u, %u, %s, %u, %llu, %llu, %u, , , %.*s, %s, 0, streaming, , %u, %u\n",
+            "%u, %u, %u, %s, %u, %llu, %llu, %u, , , %.*s, %s, 0, streaming, , %u, %u, %lld\n",
             r.chip,
             r.core_x,
             r.core_y,
@@ -142,7 +150,8 @@ void ZoneCsvConsumer::write_csv() {
             r.zone_name.empty() ? "" : r.zone_name.data(),
             r.type,
             r.logical_x,
-            r.logical_y);
+            r.logical_y,
+            static_cast<long long>(r.time_ns));
     }
     std::fflush(f);
     log_info(

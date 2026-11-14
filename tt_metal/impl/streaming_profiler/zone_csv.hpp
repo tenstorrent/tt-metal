@@ -35,6 +35,7 @@ private:
         uint8_t processor = 0;
         uint32_t timer_id = 0;
         uint64_t timestamp = 0;
+        int64_t time_ns = 0;  // on the timeline every chip is synchronized to (steady_clock), ns
         uint64_t data = 0;
         uint32_t runtime_id = 0;     // the program's runtime id, written as `run host ID` like the device profiler log
         std::string_view zone_name;  // in the zone-name registry, alive for the process

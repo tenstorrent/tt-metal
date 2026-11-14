@@ -5,6 +5,7 @@
 #include "impl/streaming_profiler/ops_csv.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <limits>
 #include <string>
@@ -15,6 +16,14 @@ namespace tt::tt_metal::streaming_profiler {
 
 using experimental::streaming_profiler::Processor;
 using experimental::streaming_profiler::Zone;
+
+namespace {
+
+long long since_epoch_ns(std::chrono::steady_clock::time_point t) {
+    return static_cast<long long>(std::chrono::duration_cast<std::chrono::nanoseconds>(t.time_since_epoch()).count());
+}
+
+}  // namespace
 
 OpsCsvConsumer::OpsCsvConsumer(const std::string& path) : file_(std::fopen(path.c_str(), "w")) {
     TT_FATAL(file_ != nullptr, "streaming profiler: cannot open {} for the ops CSV", path);
@@ -57,7 +66,7 @@ void OpsCsvConsumer::write_csv() {
             "DEVICE BRISC KERNEL DURATION [ns],DEVICE NCRISC KERNEL DURATION [ns],"
             "DEVICE TRISC0 KERNEL DURATION [ns],DEVICE TRISC1 KERNEL DURATION [ns],"
             "DEVICE TRISC2 KERNEL DURATION [ns],DEVICE ERISC0 KERNEL DURATION [ns],DEVICE ERISC1 KERNEL DURATION "
-            "[ns]\n",
+            "[ns],SYNCED START [ns],SYNCED END [ns]\n",
             out);
     }
     const auto elapsed_ns = [](Time start, Time end) {
@@ -83,7 +92,7 @@ void OpsCsvConsumer::write_csv() {
         }
         std::fprintf(
             out,
-            "%u,%u,%u,%zu,%llu,%llu,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f\n",
+            "%u,%u,%u,%zu,%llu,%llu,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%.0f,%lld,%lld\n",
             chip,
             runtime_id,
             execution,
@@ -102,7 +111,9 @@ void OpsCsvConsumer::write_csv() {
             processor_ns(Processor::TRISC1),
             processor_ns(Processor::TRISC2),
             processor_ns(Processor::ERISC0),
-            processor_ns(Processor::ERISC1));
+            processor_ns(Processor::ERISC1),
+            since_epoch_ns(start),
+            since_epoch_ns(end));
     }
     std::fflush(out);
     ops_.clear();
