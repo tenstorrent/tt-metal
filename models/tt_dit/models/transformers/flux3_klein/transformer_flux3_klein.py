@@ -335,7 +335,9 @@ class Flux3KleinEarlyStacks(Module):
 
 @dataclass
 class Flux3KleinPlan:
-    """Device-side per-request constants: RoPE tables, modulation row indices and row gathers."""
+    """Device-side per-request constants: RoPE tables, modulation row indices, row gathers and the attended lengths of
+    the text stack and the single stage (device tensors on a ring: ring SDPA compiles once per bucket, not per prompt).
+    """
 
     layout: Flux3KleinSequenceLayout
     early_rope: dict[str, tuple[ttnn.Tensor, ttnn.Tensor]]
@@ -344,8 +346,11 @@ class Flux3KleinPlan:
     single_mod: tuple[ttnn.Tensor, ...]
     assembly: ttnn.Tensor
     image_out: ttnn.Tensor
+    text_logical_n: int | ttnn.Tensor
+    single_logical_n: int | ttnn.Tensor
 
     def deallocate(self) -> None:
+        lengths = (n for n in (self.text_logical_n, self.single_logical_n) if isinstance(n, ttnn.Tensor))
         for t in (
             *(t for pair in self.early_rope.values() for t in pair),
             *(t for idx in self.early_mod.values() for t in idx),
@@ -353,6 +358,7 @@ class Flux3KleinPlan:
             *self.single_mod,
             self.assembly,
             self.image_out,
+            *lengths,
         ):
             ttnn.deallocate(t)
 
@@ -430,6 +436,17 @@ class Flux3KleinTransformer(Module):
                 mesh_axes=[None, self._sp_axis],
             )
 
+        def logical_n(n: int) -> int | ttnn.Tensor:
+            if self.sp_factor == 1:
+                return n
+            return tensor.from_torch(
+                torch.tensor([n], dtype=torch.int64).reshape(1, 1, 1, 1),
+                device=self._device,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_axes=[None, None, None, None],
+            )
+
         modes = layout.modes
         return Flux3KleinPlan(
             layout=layout,
@@ -439,6 +456,8 @@ class Flux3KleinTransformer(Module):
             single_mod=tuple(indices(i) for i in modulation_indices(layout.mode_ids(), "single")),
             assembly=indices(layout.assembly_indices()),
             image_out=indices(layout.image_out_indices()),
+            text_logical_n=logical_n(layout.attended("text")),
+            single_logical_n=logical_n(layout.attended()),
         )
 
     def embed_text(self, tokens: ttnn.Tensor) -> ttnn.Tensor:
@@ -466,9 +485,8 @@ class Flux3KleinTransformer(Module):
             x["image_cond"] = image_cond_embedded
         for mode in layout.modes:
             mod = tuple(gather_rows(table, idx) for idx in plan.early_mod[mode])
-            x[mode] = self.early(
-                mode, x[mode], rope=plan.early_rope[mode], mod=mod, logical_length=layout.attended(mode)
-            )
+            length = plan.text_logical_n if mode == "text" else layout.attended(mode)
+            x[mode] = self.early(mode, x[mode], rope=plan.early_rope[mode], mod=mod, logical_length=length)
 
         parts = [x[m] for m in layout.modes]
         local = parts[0] if len(parts) == 1 else ttnn.concat(parts, dim=1)
@@ -479,7 +497,7 @@ class Flux3KleinTransformer(Module):
         mod = tuple(gather_rows(table, idx) for idx in plan.single_mod)
 
         def run_block(block: Flux3KleinTransformerBlock, h: ttnn.Tensor) -> ttnn.Tensor:
-            return block(h, rope=plan.single_rope, mod=mod, logical_length=layout.attended())
+            return block(h, rope=plan.single_rope, mod=mod, logical_length=plan.single_logical_n)
 
         if cache is not None:
             h = cache(self.single_blocks, h, run_block, layout=layout, sp_axis=self._sp_axis)

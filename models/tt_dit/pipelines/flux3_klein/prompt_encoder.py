@@ -17,6 +17,9 @@ from ...utils import tensor
 from ...utils.tensor import bf16_tensor
 from .packing import MAX_TEXT_LENGTH, padded_text_length, text_ids
 
+# the row counts the encoder runs (the attended rows rounded up to the next one): each compiles once, in warmup()
+ENCODER_ROWS = (128, 256, 512, 1024, 2048, MAX_TEXT_LENGTH)
+
 
 class Flux3KleinPromptEncoder:
     def __init__(
@@ -49,11 +52,24 @@ class Flux3KleinPromptEncoder:
     def encode(self, prompt: str, length: int | None = None) -> tuple[torch.Tensor, torch.Tensor, int]:
         """`[1, L, 20480]` bf16 text tokens on device (replicated), their RoPE ids and the attended length (see
         `tokenize`)."""
-        input_ids, attention_mask, valid = self.tokenize(prompt, length)
-        # run the layers on the attended rows only (rounded to 128) and zero-fill the bucket below: every kept row sees
-        # the same keys (causal + pad mask) and the dropped rows are masked keys in the DiT
+        return self._encode(*self.tokenize(prompt, length))
+
+    def warmup(self, bucket_rows: int) -> None:
+        """Compile every encoder row count a prompt in this bucket can run."""
+        pad = self._processor.tokenizer.pad_token_id
+        for rows in (r for r in ENCODER_ROWS if r <= bucket_rows):
+            attention_mask = torch.zeros(1, bucket_rows, dtype=torch.int64)
+            attention_mask[:, :rows] = 1
+            tokens, _, _ = self._encode(torch.full((1, bucket_rows), pad), attention_mask, rows)
+            ttnn.deallocate(tokens)
+
+    def _encode(
+        self, input_ids: torch.Tensor, attention_mask: torch.Tensor, valid: int
+    ) -> tuple[torch.Tensor, torch.Tensor, int]:
+        # run the layers on the attended rows only (rounded up to an ENCODER_ROWS entry) and zero-fill the bucket below:
+        # every kept row sees the same keys (causal + pad mask) and the dropped rows are masked keys in the DiT
         bucket_rows = int(attention_mask.shape[-1])
-        rows = min(bucket_rows, -(-valid // 128) * 128)
+        rows = min(bucket_rows, next(r for r in ENCODER_ROWS if r >= valid))
         if rows < bucket_rows:
             input_ids, attention_mask = input_ids[:, :rows], attention_mask[:, :rows]
         real = int(attention_mask.sum())

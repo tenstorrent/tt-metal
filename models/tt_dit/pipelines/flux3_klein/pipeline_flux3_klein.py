@@ -224,6 +224,11 @@ class Flux3KleinPipeline:
     def warmup(self, sizes: tuple[int | tuple[int, int], ...] = SHAPES) -> None:
         """Compile every program of ``sizes`` (square sides or (width, height); every served shape by default): each
         size with and without a reference, at every text bucket (a long prompt reaches the larger buckets)."""
+        buckets = set(self._text_buckets or (self._text_length,))
+        if self._text_buckets is TEXT_BUCKETS:
+            buckets.update(b for layout in TEXT_BUCKETS_BY_LAYOUT.values() for b in layout)
+        for bucket in sorted(buckets):
+            self._prompt_encoder.warmup(bucket)
         saved = self._text_buckets
         try:
             for bucket in self._text_buckets or (None,):

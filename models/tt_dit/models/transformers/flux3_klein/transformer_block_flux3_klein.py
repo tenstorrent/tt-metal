@@ -78,7 +78,16 @@ class Flux3KleinAttention(Attention):
 
     def forward(self, *, sequence_1: ttnn.Tensor, **kwargs):
         self._local_rows = int(sequence_1.shape[-2])
+        self._length_on_device = isinstance(kwargs.get("sequence_1_length"), ttnn.Tensor)
         return super().forward(sequence_1=sequence_1, **kwargs)
+
+    def get_ring_sdpa_core_grid(self, resolved_seq_len: int) -> tuple[int, int]:
+        # a device-tensor length resolves to the padded length: keep the grid of every attended length, not the base
+        # table's 4096-row entry (the 4096-row text bucket)
+        if getattr(self, "_length_on_device", False):
+            full = self.mesh_device.compute_with_storage_grid_size()
+            return (full.x, full.y - 1)
+        return super().get_ring_sdpa_core_grid(resolved_seq_len)
 
     def get_ring_sdpa_program_config(self, per_device_seq_len: int) -> ttnn.SDPAProgramConfig:
         rows = getattr(self, "_local_rows", None)
@@ -347,7 +356,7 @@ class Flux3KleinTransformerBlock(Module):
         *,
         rope: tuple[ttnn.Tensor, ttnn.Tensor],
         mod: tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor],
-        logical_length: int,
+        logical_length: int | ttnn.Tensor,
     ) -> ttnn.Tensor:
         shift, scale_plus_one, gate = mod
         x_norm = ttnn.squeeze(self.norm(ttnn.unsqueeze(x, 0), dynamic_weight=scale_plus_one, dynamic_bias=shift), 0)
