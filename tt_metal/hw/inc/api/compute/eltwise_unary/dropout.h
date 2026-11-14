@@ -16,7 +16,7 @@ namespace ckernel {
 /**
  * Performs element-wise dropout on each element of a of a tile in DST register at index tile_index.
  * That is each element may be zeroed out based on a given probability or it may be scaled by a given
- * scale factor. The DST register buffer must be in acquired state via *acquire_dst* call. This
+ * scale factor. The DST register buffer must be in acquired state via *tile_regs_acquire* call. This
  * call is blocking and is only available on the compute engine.
  *
  * Return value: None

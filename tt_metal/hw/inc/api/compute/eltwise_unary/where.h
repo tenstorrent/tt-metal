@@ -21,7 +21,7 @@ namespace ckernel {
  * Performs an elementwise where operation with the three inputs: y = where(x0,x1,x2)
  * Output overwrites odst in DST.
  *
- * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available
+ * The DST register buffer must be in acquired state via *tile_regs_acquire* call. This call is blocking and is only available
  * on the compute engine.
  *
  * @tparam data_format Template argument specifying the data type.

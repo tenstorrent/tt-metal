@@ -110,7 +110,7 @@ ALWI void dummy_unpack(std::uint32_t cb_id) { UNPACK((llk_unpack_dummy(cb_id)));
  * previously called to ensure that at least some number n>0 of tiles are available
  * in the input CB. The CB index 0 then references the first tile in the received section of the CB,
  * up to index n-1 (in a FIFO order). The DST register buffer must be in acquired state via
- * acquire_dst call. This call is blocking and is only available on the compute
+ * tile_regs_acquire call. This call is blocking and is only available on the compute
  * engine.
  *
  * Return value: None
@@ -139,7 +139,7 @@ ALWI void copy_tile(std::uint32_t in_cb_id, std::uint32_t in_tile_index, std::ui
  * register slots. This is the uniform block entry point for the copy/datacopy op group. It uses the
  * block unpack/datacopy llk paths and requires the same initialization as `copy_tile`
  * (`copy_init`). The DST register buffer must be in acquired
- * state via *acquire_dst* call, and `cb_wait_front(n)` must have made at least
+ * state via *tile_regs_acquire* call, and `cb_wait_front(n)` must have made at least
  * `start_in_tile_index + ntiles` tiles available in the input CB. This call is blocking and is only
  * available on the compute engine.
  *

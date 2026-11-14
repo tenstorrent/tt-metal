@@ -48,7 +48,7 @@ ALWI void exp_tile_init() {
 /**
  * Performs element-wise computation of exponential on each element of a tile
  * in the DST register. The DST register buffer must be in an
- * acquired state via an *acquire_dst* call. This call is blocking and is only
+ * acquired state via an *tile_regs_acquire* call. This call is blocking and is only
  * available on the compute engine.
  *
  * The body reads SFPU state that exp_tile_init programs and that other SFPU ops' inits

@@ -61,7 +61,7 @@ void recip_tile_first_column(uint32_t idst) {
 // tile so that masked positions become large negative values that vanish under softmax.
 //
 // Preconditions:
-//   - The DST register buffer must be in acquired state via *acquire_dst*.
+//   - The DST register buffer must be in acquired state via *tile_regs_acquire*.
 //   - `cb_attn_mask` must have at least `mask_tile_idx + 1` tiles fronted.
 //
 // `mask_tile_idx` selects which mask tile in `cb_attn_mask` to apply:

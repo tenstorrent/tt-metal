@@ -16,7 +16,7 @@ namespace ckernel {
 /**
  * Performs element-wise computation of softplus (`1/beta * log(1 + exp(beta * x))`) on each element
  * of a tile in DST register at index tile_index. Any input value greater than the provided threshold
- * with return itself. The DST register buffer must be in acquired state via *acquire_dst* call. This
+ * with return itself. The DST register buffer must be in acquired state via *tile_regs_acquire* call. This
  * call is blocking and is only available on the compute engine.
  *
  * Return value: None

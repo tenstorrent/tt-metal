@@ -50,10 +50,12 @@ void kernel_main() {
             if (packed % share_out == 0) {
                 dfb_out.reserve_back(share_out);
             }
-            acquire_dst();
+            tile_regs_acquire();
+            tile_regs_wait();
             copy_tile(dfb_in.get_id(), j, 0);
             pack_tile(0, dfb_out.get_id());
-            release_dst();
+            tile_regs_commit();
+            tile_regs_release();
             if (++packed % share_out == 0) {
                 dfb_out.push_back(share_out);
             }

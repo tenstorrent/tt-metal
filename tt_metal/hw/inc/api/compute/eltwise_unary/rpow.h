@@ -21,7 +21,7 @@ ALWI void rpow_tile_init() { MATH(SFPU_UNARY_INIT_FN(rpow, sfpu::sfpu_binary_pow
  * Performs element-wise computation of the rpow on each element of a tile
  * where rpow(exponent, scalar_base) = pow(scalar_base, exponent)
  * in DST register at index tile_index. The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
+ * acquired state via *tile_regs_acquire* call. This call is blocking and is only
  * available on the compute engine.
  *
  * Return value: None

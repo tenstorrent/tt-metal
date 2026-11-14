@@ -12,6 +12,14 @@
       "introduced_by_pr": 51559,
       "grace": "4w",
       "owners": ["riverwuTT"]
+    },
+    {
+      "id": "acquire-release-dst-legacy-api",
+      "description": "acquire_dst() / release_dst() in tt_metal/hw/inc/api/compute/reg_api.h are replaced by tile_regs_acquire() + tile_regs_wait() and tile_regs_commit() + tile_regs_release() respectively (acquire_dst also blocks PACK until MATH is done; release_dst also commits the MATH section). All in-repo callers are migrated; the deprecated shims remain only for external callers during the grace period. The cleanup PR deletes them and the acquire_dst/release_dst doc pages.",
+      "files": ["tt_metal/hw/inc/api/compute/reg_api.h", "docs/source/tt-metalium/tt_metal/apis/kernel_apis/compute/acquire_dst.rst", "docs/source/tt-metalium/tt_metal/apis/kernel_apis/compute/release_dst.rst"],
+      "introduced_by_pr": 63589,
+      "grace": "30d",
+      "owners": ["ncvetkovicTT"]
     }
   ]
 }

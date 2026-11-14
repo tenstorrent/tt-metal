@@ -76,7 +76,7 @@ ALWI void sdpa_custom_mm_reuse_dest_srcb_block_init_short(
 /**
  * Performs block-sized matrix multiplication *C=A\*B* between the blocks in two
  * different input CBs and writes the result to DST. The DST register buffer
- * must be in acquired state via *acquire_dst* call. This call is blocking and
+ * must be in acquired state via *tile_regs_acquire* call. This call is blocking and
  * is only available on the compute engine.
  *
  * NOTE: This API only supports ct_dim=1 and rt_dim=1 (single output tile).

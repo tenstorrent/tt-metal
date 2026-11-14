@@ -149,7 +149,7 @@ ALWI void mm_uninit(std::uint32_t in0_cb_id, std::uint32_t in1_cb_id) {
 /**
  * Performs tile-sized matrix multiplication *C=A\*B* between the tiles in two
  * specified input CBs and accumulates the result to DST (DST += C). The DST register buffer
- * must be in acquired state via *acquire_dst* call. This call is blocking and
+ * must be in acquired state via *tile_regs_acquire* call. This call is blocking and
  * is only available on the compute engine.
  *
  * Return value: None
@@ -232,7 +232,7 @@ ALWI void matmul_block_init(
 /**
  * Performs block-sized matrix multiplication *C=A\*B* between the blocks in two
  * different input CBs and accumulates the result to DST (DST += C). The DST register buffer
- * must be in acquired state via *acquire_dst* call. This call is blocking and
+ * must be in acquired state via *tile_regs_acquire* call. This call is blocking and
  * is only available on the compute engine.
  *
  * A block is a rectangle of tiles: A is rt_dim x kt_dim tiles, B is kt_dim x ct_dim tiles, and the

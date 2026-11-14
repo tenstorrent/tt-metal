@@ -21,7 +21,7 @@ ALWI void rounding_op_tile_init() { MATH(SFPU_UNARY_INIT(unused)); }
 /**
  * Performs element-wise ceil computation on input x , where x is each element of a tile
  * in DST register at index tile_index. The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
+ * acquired state via *tile_regs_acquire* call. This call is blocking and is only
  * available on the compute engine.
  *
  * Return value: None
@@ -40,7 +40,7 @@ ALWI void ceil_tile(uint32_t idst) {
 /**
  * Performs element-wise floor computation on input x , where x is each element of a tile
  * in DST register at index tile_index. The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
+ * acquired state via *tile_regs_acquire* call. This call is blocking and is only
  * available on the compute engine.
  *
  * Return value: None
@@ -59,7 +59,7 @@ ALWI void floor_tile(uint32_t idst) {
 /**
  * Performs element-wise trunc computation on input x , where x is each element of a tile
  * in DST register at index tile_index. The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
+ * acquired state via *tile_regs_acquire* call. This call is blocking and is only
  * available on the compute engine.
  *
  * Return value: None
@@ -78,7 +78,7 @@ ALWI void trunc_tile(uint32_t idst) {
 /**
  * Performs element-wise computation of the round operation on each element of a tile
  * in DST register at index tile_index. The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
+ * acquired state via *tile_regs_acquire* call. This call is blocking and is only
  * available on the compute engine.
  *
  * Return value: None
@@ -98,7 +98,7 @@ ALWI void round_tile(uint32_t idst, int32_t decimals) {
 /**
  * Performs element-wise stochastic rounding operation of FP32 values to BF16
  * on each element of a tile in DST register at index tile_index.
- * The DST register buffer must be in acquired state via *acquire_dst* call.
+ * The DST register buffer must be in acquired state via *tile_regs_acquire* call.
  * This call is blocking and is only available on the compute engine.
  *
  * Note: this operation uses the SFPSTOCHRND instruction; see the known issues on Wormhole and Blackhole:
@@ -121,7 +121,7 @@ ALWI void stochastic_round_tile(uint32_t idst) {
 /**
  * Performs element-wise frac computation on input x , where x is each element of a tile
  * in DST register at index tile_index. The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
+ * acquired state via *tile_regs_acquire* call. This call is blocking and is only
  * available on the compute engine.
  *
  * Return value: None
