@@ -35,6 +35,25 @@ void require_bf16_parameters(const serialization::NamedParameters& parameters, s
 OptimizerBase::OptimizerBase(serialization::NamedParameters&& parameters) : m_parameters(std::move(parameters)) {
 }
 
+void OptimizerBase::clear_gradients() {
+    m_cleared_gradients.clear();
+    for (auto& [name, tensor_ptr] : m_parameters) {
+        if (tensor_ptr->get_requires_grad() && tensor_ptr->is_grad_initialized()) {
+            tensor_ptr->set_grad(ttnn::Tensor());
+            m_cleared_gradients.insert(name);
+        }
+    }
+}
+
+void OptimizerBase::restore_cleared_gradients_as_zeros() {
+    for (const auto& name : m_cleared_gradients) {
+        const auto& tensor_ptr = m_parameters.at(name);
+        if (!tensor_ptr->is_grad_initialized()) {
+            tensor_ptr->set_grad(core::zeros_like(tensor_ptr->get_value()));
+        }
+    }
+}
+
 namespace {
 // A group's param names as one string: sorted (so the order the group was built in does not matter).
 std::string joined_param_names(std::vector<std::string> names) {

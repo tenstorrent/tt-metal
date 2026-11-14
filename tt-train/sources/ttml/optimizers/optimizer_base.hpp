@@ -11,6 +11,7 @@
 #include <string_view>
 #include <type_traits>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "serialization/serializable.hpp"
@@ -118,8 +119,14 @@ protected:
 
     serialization::NamedParameters m_parameters;
 
+    // For optimizers that update a parameter that got no gradient (momentum, weight decay): zero_grad() drops the
+    // gradients and remembers which parameters had one, and step() gives each of those that got none since a zero one.
+    void clear_gradients();
+    void restore_cleared_gradients_as_zeros();
+
 private:
     std::optional<std::vector<float>> m_initial_lrs;
+    std::unordered_set<std::string> m_cleared_gradients;
 };
 
 // Puts `topology` back on the value of every tensor in `written`.
