@@ -100,6 +100,30 @@ class Hy4Decoder:
             ttnn.copy(t, kc)
             ttnn.deallocate(t)
 
+    def load_prefill_cache_rows(self, rows):
+        """serving hand-off: like ``load_prefill_cache`` but ONLY the mesh rows ``rows`` take the prefill caches; the decode caches of the other rows (running requests) stay as they are.
+        Per-row blend kc <- kc * (1 - m) + new * m with m = 1 on the chosen rows (exact for m in {0, 1} while both operands are finite).
+        """
+        m = torch.zeros(ROWS, 1, 1, 1)
+        for r in rows:
+            m[r] = 1.0
+        mt = upload(self.md, m, ttnn.bfloat16, ttnn.TILE_LAYOUT, row_dim=0)
+        nm = upload(self.md, 1.0 - m, ttnn.bfloat16, ttnn.TILE_LAYOUT, row_dim=0)
+        for ly, kc in zip(self.ch.layers, self.kc):
+            rows_t = ly.attn.cache.rows  # [1,1,N,576] RM bf16
+            N = rows_t.shape[2]
+            assert N <= self.tcap, (N, self.tcap)
+            p = ttnn.pad(rows_t, [(0, 0), (0, 0), (0, self.tcap - N), (0, 0)], 0) if N < self.tcap else rows_t
+            t = ttnn.to_layout(p, ttnn.TILE_LAYOUT)
+            a = ttnn.multiply(kc, nm)
+            b = ttnn.multiply(t, mt)
+            c = ttnn.add(a, b)
+            ttnn.copy(c, kc)
+            for x in (t, a, b, c):
+                ttnn.deallocate(x)
+        ttnn.deallocate(mt)
+        ttnn.deallocate(nm)
+
     # ------------------------------------------------------------------ device step
     def _attn(self, ly, kc, h):
         a, ch = ly.attn, self.ch
@@ -196,6 +220,12 @@ class Hy4Decoder:
         self.out = self.step()
         ttnn.end_trace_capture(self.md, self.trace, cq_id=0)
         ttnn.synchronize_device(self.md)
+
+    def release(self):
+        if self.trace is not None:
+            ttnn.release_trace(self.md, self.trace)
+            self.trace = None
+            self.out = None
 
     def run(self):
         ttnn.execute_trace(self.md, self.trace, cq_id=0, blocking=False)

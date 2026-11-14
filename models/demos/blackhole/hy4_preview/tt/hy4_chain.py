@@ -176,13 +176,28 @@ class Hy4ChainLayer:
         self.mtp = L >= cfg.num_hidden_layers
         if not self.mtp:
             self.ihc_a, self.ihc_m = hc("attn"), hc("mlp")
-            if os.environ.get("HY4_IHC_FUSED", "0") == "1":  # fused iHC kernels (ihc-fuse e037d61bccb): packed [1,1,4T,D] streams, decode only
+            if (
+                os.environ.get("HY4_IHC_FUSED", "0") == "1"
+            ):  # fused iHC kernels (ihc-fuse e037d61bccb): packed [1,1,4T,D] streams, decode only
                 from models.demos.blackhole.hy4_preview.tt.hy4_ihc_fused import Hy4IHCFused
 
-                mk = lambda s_: Hy4IHCFused(md, sd[f"hc_{s_}_layer.hc_pre.hc_fn"].float(), sd[f"hc_{s_}_layer.hc_pre.hc_base"].float(), sd[f"hc_{s_}_layer.hc_pre.hc_scale"].float(), dim=HID, hc_eps=cfg.hc_eps, norm_eps=cfg.rms_norm_eps)
+                mk = lambda s_: Hy4IHCFused(
+                    md,
+                    sd[f"hc_{s_}_layer.hc_pre.hc_fn"].float(),
+                    sd[f"hc_{s_}_layer.hc_pre.hc_base"].float(),
+                    sd[f"hc_{s_}_layer.hc_pre.hc_scale"].float(),
+                    dim=HID,
+                    hc_eps=cfg.hc_eps,
+                    norm_eps=cfg.rms_norm_eps,
+                )
                 self.ihcf_a, self.ihcf_m = mk("attn"), mk("mlp")
-                self.hw_in, self.hw_post = sd["input_layernorm.weight"].float(), sd["post_attention_layernorm.weight"].float()
-        if os.environ.get("HY4_POOL", "0") == "1":  # integrated long-context decode: Hy4AttentionPool (superset of Hy4AttentionOpt / Hy4Attention; prefill unchanged)
+                self.hw_in, self.hw_post = (
+                    sd["input_layernorm.weight"].float(),
+                    sd["post_attention_layernorm.weight"].float(),
+                )
+        if (
+            os.environ.get("HY4_POOL", "0") == "1"
+        ):  # integrated long-context decode: Hy4AttentionPool (superset of Hy4AttentionOpt / Hy4Attention; prefill unchanged)
             from models.demos.blackhole.hy4_preview.tt.hy4_pool_decode import Hy4AttentionPool as _Attn
         else:
             _Attn = Hy4Attention
@@ -235,7 +250,9 @@ class Hy4ChainLayer:
                 md, *sw, limit=D.NO_CLAMP, decode=False
             )  # coordinator 11-13: the shared expert is NOT clamped (CE 1.77 vs 0.79)
             self.shared_dec = None
-            if "shared" in os.environ.get("HY4_SKINNY", "").replace("all", "shared,router,oproj,hproj").split(","):  # HY4_SKINNY=shared: bank-local decode kernel (second weight copy, 5 MB/layer/chip)
+            if "shared" in os.environ.get("HY4_SKINNY", "").replace("all", "shared,router,oproj,hproj").split(
+                ","
+            ):  # HY4_SKINNY=shared: bank-local decode kernel (second weight copy, 5 MB/layer/chip)
                 self.shared_dec = D.make_shared(md, *sw, limit=D.NO_CLAMP, decode=True)
             del W
         if (
@@ -344,7 +361,9 @@ class Hy4Chain:
     def __init__(
         self, md, mc, ccl, ckpt="/ckpt", kv_fmt=None, wdt=None, wdtypes=None, idx_rope_first=None, weights=None
     ):
-        kv_fmt = kv_fmt or os.environ.get("HY4_KV_FMT", "bf16")  # "scaled_fp8" for the pool decode path (prefill then writes SCALED_FP8 rows)
+        kv_fmt = kv_fmt or os.environ.get(
+            "HY4_KV_FMT", "bf16"
+        )  # "scaled_fp8" for the pool decode path (prefill then writes SCALED_FP8 rows)
         from models.demos.blackhole.hy4_preview.weights import Hy4Weights
 
         self.md, self.mc, self.ccl, self.kv_fmt = md, mc, ccl, kv_fmt
@@ -439,7 +458,13 @@ class Hy4Chain:
             hn = ttnn.rms_norm(
                 hb, weight=self.final_norm, epsilon=self.cfg.rms_norm_eps, compute_kernel_config=self.ckc_norm
             )
-        logits = ttnn.linear(hn, self.lm_head, compute_kernel_config=self.ckc_head)
+        # HY4_HEAD_FP32=1 (device loop, D12-1): fp32 logits out of the lm_head (bf16 weights, fp32 accumulation), as the checkpoint's enable_lm_head_fp32
+        logits = ttnn.linear(
+            hn,
+            self.lm_head,
+            compute_kernel_config=self.ckc_head,
+            dtype=ttnn.float32 if os.environ.get("HY4_HEAD_FP32", "0") == "1" else None,
+        )
         return hn, logits
 
     # --- prefill
