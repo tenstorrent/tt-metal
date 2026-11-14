@@ -88,3 +88,49 @@ def test_moe_rejects_non_bfloat16(bad_tensor, device, expect_error):
     }
     with expect_error(RuntimeError, "must be BFLOAT16"):
         ttnn.moe(tensors["input"], tensors["expert_mask"], tensors["topk_mask"], k)
+
+
+def test_moe_preallocated_output(device, expect_error):
+    N, C, H, W, k, E, e = 1, 1, 32, 64, 32, 8, 2
+    torch.manual_seed(2005)
+    torch_dtype = torch.bfloat16
+
+    input = torch.randn([N, C, H, W], dtype=torch_dtype)
+    input[:, :, :, E:] = 0
+    expert_mask = torch.zeros([N, C, 1, W], dtype=torch_dtype)
+    expert_mask[:, :, :, E:] = float("-inf")
+    topE_mask = torch.zeros([N, C, 1, k], dtype=torch_dtype)
+    topE_mask[:, :, :, e:] = float("-inf")
+
+    pyt_topk_values, pyt_topk_indices = torch.topk(input + expert_mask, k, dim=-1)
+    torch_weights = torch.sum(
+        (torch.softmax(pyt_topk_values + topE_mask, dim=-1) * (pyt_topk_indices == 0))[:, :, :, :e],
+        dim=-1,
+        keepdim=True,
+    )
+
+    ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    ttnn_expert_mask = ttnn.from_torch(expert_mask, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    ttnn_topE_mask = ttnn.from_torch(topE_mask, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+
+    output_shape = [N, C, H, 1]
+    bf16_out = ttnn.from_torch(
+        torch.zeros(output_shape, dtype=torch_dtype), ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device
+    )
+    weights = ttnn.moe(ttnn_input, ttnn_expert_mask, ttnn_topE_mask, k, output_tensor=bf16_out)
+    assert_numeric_metrics(
+        torch_weights,
+        ttnn.to_torch(weights),
+        pcc_threshold=0.999,
+        rtol=0.046,
+        atol=0.012,
+        frobenius_threshold=0.017,
+        check_ulp=True,
+        ulp_threshold=8,
+    )
+
+    fp32_out = ttnn.from_torch(
+        torch.zeros(output_shape, dtype=torch.float32), ttnn.float32, layout=ttnn.Layout.TILE, device=device
+    )
+    with expect_error(RuntimeError, "preallocated output tensor must be BFLOAT16"):
+        ttnn.moe(ttnn_input, ttnn_expert_mask, ttnn_topE_mask, k, output_tensor=fp32_out)
