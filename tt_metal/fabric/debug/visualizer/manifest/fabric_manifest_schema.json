@@ -1,0 +1,680 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Fabric manifest",
+  "description": "The shape of a fabric manifest (docs/FORMAT.md in this directory). Fields are described by kind, not by key: docs/FIELDS.md names each key. Values the manifest defines (channel status, credit backing, field kind and category) are enumerated here; enums from the rest of fabric are lower-case names, and vocabulary lists every name each label key can hold.",
+  "type": "object",
+  "properties": {
+    "manifest_version": { "const": 1 },
+    "file_kind": { "const": "fabric_manifest" },
+    "run": { "$ref": "#/$defs/run" },
+    "fabric": { "$ref": "#/$defs/fabric" },
+    "arch": { "$ref": "#/$defs/arch" },
+    "vocabulary": { "$ref": "#/$defs/vocabulary" },
+    "meshes": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": { "pattern": "^M[0-9]+$" },
+      "additionalProperties": { "$ref": "#/$defs/mesh" }
+    }
+  },
+  "required": ["manifest_version", "file_kind", "run", "fabric", "arch", "vocabulary", "meshes"],
+  "additionalProperties": false,
+
+  "$defs": {
+    "count": { "type": "integer", "minimum": 0 },
+    "name": { "type": "string", "pattern": "^[a-z0-9_]+$" },
+    "core": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/count" },
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "router_path": { "type": "string", "pattern": "^M[0-9]+/C[0-9]+/[EWNSZ][0-9]+$" },
+    "vc_key": { "pattern": "^vc[0-9]+$" },
+    "erisc_key": { "pattern": "^erisc[0-9]+$" },
+    "field_category": { "enum": ["lifecycle", "kernel_params", "flow_control", "control_info", "diagnostics"] },
+    "field_kind": { "enum": ["l1", "stream_reg", "number", "flag", "enum"] },
+    "channel_status": { "enum": ["active", "vc_not_serviced", "mux", "trimmed"] },
+    "z_port_role": { "enum": ["none", "intermesh_boundary", "express_chord"] },
+    "type_name": {
+      "description": "A registered C++ type's name without its namespaces, as the build that wrote the manifest spells it (fabric_manifest_type_registry.hpp), such as HybridMeshPacketHeaderT<36> or unsigned int. Decode, built from the same commit, maps it back to the type.",
+      "type": "string",
+      "minLength": 1
+    },
+
+    "run": {
+      "description": "This process and the build it runs. Nothing about the fabric.",
+      "type": "object",
+      "properties": {
+        "run_id": {
+          "description": "The fabric run: the UTC time and 8 hex digits. Every rank of the fabric has the same one, and it names the folder the manifest is in.",
+          "type": "string",
+          "pattern": "^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$"
+        },
+        "mpi_rank": { "$ref": "#/$defs/count" },
+        "world_size": { "type": "integer", "minimum": 1 },
+        "subcontext": {
+          "description": "Present only when tt-run splits the job into sub-contexts, each its own fabric. mpi_rank and world_size are the whole job's; rank and size are within the sub-context.",
+          "type": "object",
+          "properties": {
+            "id": { "$ref": "#/$defs/count" },
+            "rank": { "$ref": "#/$defs/count" },
+            "size": { "type": "integer", "minimum": 1 }
+          },
+          "required": ["id", "rank", "size"],
+          "additionalProperties": false
+        },
+        "host_name": {
+          "description": "The host this process runs on, as the physical system descriptor names it: the cluster id UMD stamps on the cluster descriptor (TT_METAL_CLUSTER_ID, else the OS hostname).",
+          "type": "string",
+          "minLength": 1
+        },
+        "written_at": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$" },
+        "build": {
+          "type": "object",
+          "properties": {
+            "git_sha": {
+              "description": "The commit tt-metal was built from. Empty when the source tree is neither a git checkout nor a git archive export.",
+              "type": "string",
+              "pattern": "^([0-9a-f]{40})?$"
+            },
+            "git_sha_short": { "description": "The short form of git_sha.", "type": "string" },
+            "version": { "description": "The tt-metal version string the build was configured with.", "type": "string" },
+            "build_type": { "description": "The CMake build type, such as Release.", "type": "string" },
+            "git_dirty": {
+              "description": "Whether the build had uncommitted changes to tracked files.",
+              "type": "boolean"
+            }
+          },
+          "required": ["git_sha", "git_sha_short", "version", "build_type", "git_dirty"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["run_id", "mpi_rank", "world_size", "host_name", "written_at", "build"],
+      "additionalProperties": false
+    },
+
+    "fabric": {
+      "description": "This run's fabric: the settings a user asked for (config), and what FabricContext derived from them.",
+      "type": "object",
+      "properties": {
+        "config": {
+          "description": "The settings fabric was set up with: SetFabricConfig's arguments.",
+          "type": "object",
+          "properties": {
+            "fabric_config": { "$ref": "#/$defs/name" },
+            "reliability_mode": { "$ref": "#/$defs/name" },
+            "num_routing_planes": {
+              "description": "The most routing planes fabric opens per link, or null when it opens all of them.",
+              "anyOf": [{ "type": "null" }, { "type": "integer", "minimum": 1 }]
+            },
+            "tensix_config": { "$ref": "#/$defs/name" },
+            "udm_mode": { "$ref": "#/$defs/name" },
+            "fabric_manager": { "$ref": "#/$defs/name" },
+            "router_config": {
+              "type": "object",
+              "properties": {
+                "max_packet_payload_size_bytes": {
+                  "description": "The payload size override, or null when fabric uses its default for the arch and routing mode.",
+                  "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/count" }]
+                }
+              },
+              "required": ["max_packet_payload_size_bytes"],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "fabric_config", "reliability_mode", "num_routing_planes", "tensix_config", "udm_mode", "fabric_manager",
+            "router_config"
+          ],
+          "additionalProperties": false
+        },
+        "topology": { "$ref": "#/$defs/name" },
+        "is_2d_routing": { "type": "boolean" },
+        "packet_header": {
+          "description": "The packet header type the run's routers use.",
+          "$ref": "#/$defs/type_name"
+        },
+        "packet_header_size_bytes": {
+          "description": "The bytes a packet's header takes: the type's size, plus UDMControlFields in UDM mode.",
+          "$ref": "#/$defs/count"
+        },
+        "max_payload_size_bytes": { "$ref": "#/$defs/count" },
+        "channel_buffer_size_bytes": { "$ref": "#/$defs/count" },
+        "routing_2d_route_buffer_size": { "$ref": "#/$defs/count" },
+        "routing_1d_extension_words": { "$ref": "#/$defs/count" },
+        "multi_txq": { "type": "boolean" },
+        "host_clears": {
+          "description": "What fabric init zeroes in every router's L1 before launch.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "address": { "$ref": "#/$defs/count" },
+              "size_bytes": { "$ref": "#/$defs/count" }
+            },
+            "required": ["address", "size_bytes"],
+            "additionalProperties": false
+          }
+        },
+        "intermesh_vc": {
+          "description": "The fabric's inter-mesh VC setup, which decides whether routers have VC1 and VC2.",
+          "type": "object",
+          "properties": {
+            "mode": { "$ref": "#/$defs/name" },
+            "requires_vc1": { "type": "boolean" },
+            "requires_vc2": { "type": "boolean" },
+            "intermesh_vc_disabled": { "type": "boolean" }
+          },
+          "required": ["mode", "requires_vc1", "requires_vc2", "intermesh_vc_disabled"],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "config", "topology", "is_2d_routing", "packet_header", "packet_header_size_bytes", "max_payload_size_bytes",
+        "channel_buffer_size_bytes", "multi_txq", "host_clears", "intermesh_vc"
+      ],
+      "if": { "properties": { "is_2d_routing": { "const": true } } },
+      "then": { "required": ["routing_2d_route_buffer_size"], "not": { "required": ["routing_1d_extension_words"] } },
+      "else": { "required": ["routing_1d_extension_words"], "not": { "required": ["routing_2d_route_buffer_size"] } },
+      "additionalProperties": false
+    },
+
+    "name_list": { "type": "array", "items": { "$ref": "#/$defs/name" }, "uniqueItems": true },
+    "vocabulary": {
+      "description": "Every name each label can hold. Each list is named for what the label is, and the label's key refers to it below (a channel's status is channel_status). These are names the manifest writes as strings.",
+      "type": "object",
+      "properties": {
+        "arch": { "$ref": "#/$defs/name_list" },
+        "fabric_config": { "$ref": "#/$defs/name_list" },
+        "reliability_mode": { "$ref": "#/$defs/name_list" },
+        "tensix_config": { "$ref": "#/$defs/name_list" },
+        "udm_mode": { "$ref": "#/$defs/name_list" },
+        "fabric_manager_mode": { "$ref": "#/$defs/name_list" },
+        "fabric_topology": { "$ref": "#/$defs/name_list" },
+        "credit_backing": { "$ref": "#/$defs/name_list" },
+        "z_port_role": { "type": "array", "items": { "$ref": "#/$defs/z_port_role" }, "uniqueItems": true },
+        "edge_capability": { "$ref": "#/$defs/name_list" },
+        "credit_counter_indexed_by": { "$ref": "#/$defs/name_list" },
+        "field_category": { "type": "array", "items": { "$ref": "#/$defs/field_category" }, "uniqueItems": true },
+        "field_kind": { "type": "array", "items": { "$ref": "#/$defs/field_kind" }, "uniqueItems": true },
+        "channel_status": { "type": "array", "items": { "$ref": "#/$defs/channel_status" }, "uniqueItems": true },
+        "erisc_processor": { "$ref": "#/$defs/name_list" },
+        "intermesh_vc_mode": { "$ref": "#/$defs/name_list" }
+      },
+      "required": [
+        "arch", "fabric_config", "reliability_mode", "tensix_config", "udm_mode", "fabric_manager_mode",
+        "fabric_topology", "credit_backing", "z_port_role", "edge_capability", "credit_counter_indexed_by",
+        "field_category", "field_kind", "channel_status", "erisc_processor",
+        "intermesh_vc_mode"
+      ],
+      "additionalProperties": false
+    },
+
+    "region_keys": {
+      "description": "num_elements elements of type in L1, element_size bytes apart from address. Each element holds a type in its first bytes; the rest of the element, up to element_size, isn't typed (a ring buffer slot's payload).",
+      "type": "object",
+      "properties": {
+        "address": { "$ref": "#/$defs/count" },
+        "num_elements": { "type": "integer", "minimum": 1 },
+        "element_size": { "type": "integer", "minimum": 1 },
+        "type": { "$ref": "#/$defs/type_name" }
+      },
+      "required": ["address", "num_elements", "element_size", "type"]
+    },
+    "region": { "$ref": "#/$defs/region_keys", "unevaluatedProperties": false },
+    "optional_region": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/region" }] },
+    "stream_reg_keys": {
+      "description": "A stream register's word at address. Its value is the word's low value_bits bits, read as type; the bits above can hold other state.",
+      "type": "object",
+      "properties": {
+        "stream_id": { "$ref": "#/$defs/count" },
+        "address": { "$ref": "#/$defs/count" },
+        "value_bits": { "type": "integer", "minimum": 1, "maximum": 32 },
+        "type": { "$ref": "#/$defs/type_name" }
+      },
+      "required": ["stream_id", "address", "value_bits", "type"]
+    },
+    "stream_reg": { "$ref": "#/$defs/stream_reg_keys", "unevaluatedProperties": false },
+    "core_register_keys": {
+      "type": "object",
+      "properties": {
+        "name": { "$ref": "#/$defs/name" },
+        "address": { "$ref": "#/$defs/count" },
+        "type": { "$ref": "#/$defs/type_name" }
+      },
+      "required": ["name", "address", "type"]
+    },
+
+    "arch": {
+      "description": "What the architecture fixes on every router core: its L1, L1 areas at the HAL's addresses, and the register blocks.",
+      "type": "object",
+      "properties": {
+        "name": { "$ref": "#/$defs/name" },
+        "l1": {
+          "description": "The whole L1 of the Ethernet core a router runs on, size_bytes bytes from address: the HAL's BASE area on an active Ethernet core. Every L1 region the manifest names lies inside it.",
+          "type": "object",
+          "properties": {
+            "address": { "$ref": "#/$defs/count" },
+            "size_bytes": { "type": "integer", "minimum": 1 }
+          },
+          "required": ["address", "size_bytes"],
+          "additionalProperties": false
+        },
+        "l1_areas": {
+          "type": "object",
+          "properties": {
+            "heartbeat": {
+              "$ref": "#/$defs/region_keys",
+              "properties": {
+                "magic": { "$ref": "#/$defs/count" },
+                "magic_mask": { "$ref": "#/$defs/count" },
+                "period_iters": { "$ref": "#/$defs/count" }
+              },
+              "required": ["magic", "magic_mask", "period_iters"],
+              "unevaluatedProperties": false
+            },
+            "fabric_telemetry": { "$ref": "#/$defs/region" },
+            "routing_table": { "$ref": "#/$defs/region" },
+            "eth_fw_mailbox": { "$ref": "#/$defs/optional_region" },
+            "base_fw_port_status": { "$ref": "#/$defs/optional_region" },
+            "base_fw_train_status": { "$ref": "#/$defs/optional_region" },
+            "base_fw_retrain_count": { "$ref": "#/$defs/optional_region" },
+            "base_fw_rx_link_up": { "$ref": "#/$defs/optional_region" },
+            "base_fw_postcode": { "$ref": "#/$defs/optional_region" }
+          },
+          "required": [
+            "heartbeat", "fabric_telemetry", "routing_table",
+            "eth_fw_mailbox", "base_fw_port_status", "base_fw_train_status", "base_fw_retrain_count",
+            "base_fw_rx_link_up", "base_fw_postcode"
+          ],
+          "additionalProperties": false
+        },
+        "core_registers": {
+          "description": "A router core's soft reset and wall clock registers, in the order they are read: reading wall_clock_low latches wall_clock_high. reset_masks is indexed by physical ERISC, which a router ERISC's physical_erisc names.",
+          "type": "array",
+          "prefixItems": [
+            {
+              "$ref": "#/$defs/core_register_keys",
+              "properties": {
+                "name": { "const": "soft_reset" },
+                "reset_masks": { "type": "array", "items": { "type": "integer", "minimum": 1 }, "minItems": 1 }
+              },
+              "required": ["reset_masks"],
+              "unevaluatedProperties": false
+            },
+            {
+              "$ref": "#/$defs/core_register_keys",
+              "properties": { "name": { "const": "wall_clock_low" } },
+              "unevaluatedProperties": false
+            },
+            {
+              "$ref": "#/$defs/core_register_keys",
+              "properties": { "name": { "const": "wall_clock_high" } },
+              "unevaluatedProperties": false
+            }
+          ],
+          "minItems": 3,
+          "items": false
+        },
+        "fabric_telemetry_version": { "description": "FABRIC_TELEMETRY_VERSION: which layout of FabricTelemetry the fabric_telemetry area holds.", "$ref": "#/$defs/count" }
+      },
+      "required": ["name", "l1", "l1_areas", "core_registers", "fabric_telemetry_version"],
+      "additionalProperties": false
+    },
+
+    "mesh": {
+      "type": "object",
+      "properties": {
+        "shape": { "type": "array", "items": { "type": "integer", "minimum": 1 }, "minItems": 1 },
+        "torus": {
+          "type": "object",
+          "properties": { "y": { "type": "boolean" }, "x": { "type": "boolean" } },
+          "required": ["y", "x"],
+          "additionalProperties": false
+        },
+        "express_routing": { "type": "boolean" },
+        "credit_transport": {
+          "description": "Only for meshes on this host.",
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/vc_key" },
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "backing": { "enum": ["stream_register", "l1_counter"] }
+            },
+            "required": ["backing"],
+            "additionalProperties": false
+          }
+        },
+        "chips": {
+          "type": "object",
+          "propertyNames": { "pattern": "^C[0-9]+$" },
+          "additionalProperties": { "$ref": "#/$defs/chip" }
+        }
+      },
+      "required": ["shape", "express_routing", "chips"],
+      "additionalProperties": false
+    },
+
+    "chip": {
+      "type": "object",
+      "properties": {
+        "mesh_coord": { "type": "array", "items": { "$ref": "#/$defs/count" }, "minItems": 1 },
+        "host_rank": {
+          "description": "Which host rank of the chip's mesh owns it, local or remote. Null when the mesh graph doesn't say.",
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "physical_chip_id": { "type": ["integer", "null"] },
+        "asic_id": { "anyOf": [{ "type": "null" }, { "type": "string", "pattern": "^0x[0-9a-f]{16}$" }] },
+        "is_local": { "type": "boolean" },
+        "z_port_role": { "$ref": "#/$defs/z_port_role" },
+        "local_sync": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/local_sync" }] },
+        "routers": {
+          "type": "object",
+          "propertyNames": { "pattern": "^[EWNSZ][0-9]+$" },
+          "additionalProperties": { "$ref": "#/$defs/router" }
+        }
+      },
+      "required": ["mesh_coord", "host_rank", "physical_chip_id", "asic_id", "is_local"],
+      "if": { "properties": { "is_local": { "const": true } } },
+      "then": {
+        "properties": { "physical_chip_id": { "type": "integer" }, "asic_id": { "type": "string" } },
+        "required": ["z_port_role", "local_sync", "routers"]
+      },
+      "else": {
+        "description": "A chip this rank cannot map to a device.",
+        "properties": { "physical_chip_id": { "type": "null" }, "asic_id": { "type": "null" } },
+        "maxProperties": 5
+      },
+      "additionalProperties": false
+    },
+
+    "local_sync": {
+      "type": "object",
+      "properties": {
+        "master": { "$ref": "#/$defs/router_path" },
+        "num_routers": { "$ref": "#/$defs/count" },
+        "router_channels_mask": { "$ref": "#/$defs/count" }
+      },
+      "required": ["master", "num_routers", "router_channels_mask"],
+      "additionalProperties": false
+    },
+
+    "router": {
+      "type": "object",
+      "properties": {
+        "identity": {
+          "type": "object",
+          "properties": {
+            "eth_chan": { "$ref": "#/$defs/count" },
+            "logical_core": { "$ref": "#/$defs/core" },
+            "virtual_core": { "$ref": "#/$defs/core" }
+          },
+          "required": ["eth_chan", "logical_core", "virtual_core"],
+          "additionalProperties": false
+        },
+        "link": {
+          "type": "object",
+          "properties": {
+            "edge_capability": { "$ref": "#/$defs/name" },
+            "peer": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/router_path" }] },
+            "cross_host": { "type": "boolean" },
+            "wrap": { "type": "boolean" },
+            "dispatch_link": { "type": "boolean" }
+          },
+          "required": ["edge_capability", "peer", "cross_host", "wrap", "dispatch_link"],
+          "additionalProperties": false
+        },
+        "shape": {
+          "type": "object",
+          "properties": {
+            "num_vcs": { "$ref": "#/$defs/count" },
+            "senders_per_vc": { "type": "array", "items": { "$ref": "#/$defs/count" } },
+            "receivers_per_vc": { "type": "array", "items": { "$ref": "#/$defs/count" } },
+            "num_active_eriscs": { "type": "integer", "minimum": 1 },
+            "channel_trimming_overrides_applied": { "type": "boolean" },
+            "has_tensix_extension": {
+              "description": "The router's VC0 senders other than the worker channel are carried by its tensix mux, so a sibling's VC0 edge into it ends at the mux. False on a dispatch link, even in mux mode.",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "num_vcs", "senders_per_vc", "receivers_per_vc", "num_active_eriscs",
+            "channel_trimming_overrides_applied", "has_tensix_extension"
+          ],
+          "additionalProperties": false
+        },
+        "credit_counters": {
+          "type": "object",
+          "properties": {
+            "to_sender_ack": { "$ref": "#/$defs/counter_array" },
+            "to_sender_completion": { "$ref": "#/$defs/counter_array" },
+            "receiver_ack": { "$ref": "#/$defs/counter_array" },
+            "receiver_completion": { "$ref": "#/$defs/counter_array" }
+          },
+          "required": ["to_sender_ack", "to_sender_completion", "receiver_ack", "receiver_completion"],
+          "additionalProperties": false
+        },
+        "channels": {
+          "type": "object",
+          "properties": {
+            "senders": {
+              "type": "object",
+              "propertyNames": { "$ref": "#/$defs/vc_key" },
+              "additionalProperties": {
+                "type": "object",
+                "propertyNames": { "pattern": "^ch[0-9]+$" },
+                "additionalProperties": { "$ref": "#/$defs/sender_channel" }
+              }
+            },
+            "receivers": {
+              "type": "object",
+              "propertyNames": { "$ref": "#/$defs/vc_key" },
+              "additionalProperties": {
+                "type": "object",
+                "propertyNames": { "pattern": "^ch[0-9]+$" },
+                "additionalProperties": { "$ref": "#/$defs/receiver_channel" }
+              }
+            }
+          },
+          "required": ["senders", "receivers"],
+          "additionalProperties": false
+        },
+        "intra_chip_downstream_edges": {
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/vc_key" },
+          "additionalProperties": {
+            "type": "object",
+            "propertyNames": { "pattern": "^edge[0-9]+$" },
+            "additionalProperties": { "$ref": "#/$defs/downstream_edge" }
+          }
+        },
+        "fields": { "$ref": "#/$defs/fields" },
+        "eriscs": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": { "pattern": "^erisc[0-9]+$" },
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "processor": { "$ref": "#/$defs/name" },
+              "physical_erisc": { "$ref": "#/$defs/count" }
+            },
+            "required": ["processor", "physical_erisc"],
+            "additionalProperties": false
+          }
+        },
+        "leftover_l1": { "$ref": "#/$defs/optional_region" }
+      },
+      "required": [
+        "identity", "link", "shape", "credit_counters", "channels", "intra_chip_downstream_edges", "fields",
+        "eriscs", "leftover_l1"
+      ],
+      "additionalProperties": false
+    },
+
+    "counter_array": {
+      "$ref": "#/$defs/region_keys",
+      "properties": { "indexed_by": { "enum": ["own_sender_channel", "peer_sender_channel"] } },
+      "required": ["indexed_by"],
+      "unevaluatedProperties": false
+    },
+
+    "serviced_by": { "type": "array", "items": { "type": "string", "pattern": "^erisc[0-9]+$" }, "uniqueItems": true },
+
+    "credit_ref": {
+      "description": "A stream register, null when the builder did not allocate one, or an element of a credit counter array.",
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/stream_reg" },
+        {
+          "type": "object",
+          "properties": {
+            "array": {
+              "type": "string",
+              "pattern": "^credit_counters/(to_sender_ack|to_sender_completion|receiver_ack|receiver_completion)$"
+            },
+            "index": { "$ref": "#/$defs/count" }
+          },
+          "required": ["array", "index"],
+          "additionalProperties": false
+        }
+      ]
+    },
+
+    "sender_channel": {
+      "type": "object",
+      "properties": {
+        "status": { "$ref": "#/$defs/channel_status" },
+        "serviced_by": { "$ref": "#/$defs/serviced_by" },
+        "producer": {
+          "anyOf": [
+            { "type": "null" },
+            { "enum": ["worker", "tensix_mux"] },
+            { "$ref": "#/$defs/router_path" }
+          ]
+        },
+        "ring_buffer": { "$ref": "#/$defs/optional_region" },
+        "credits": {
+          "description": "Keyed by ERISC: the credits as that ERISC is told to read them. acked only on VC0, on an ERISC with bubble flow control.",
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": { "$ref": "#/$defs/erisc_key" },
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "acked": { "$ref": "#/$defs/credit_ref" },
+              "completed": { "$ref": "#/$defs/credit_ref" }
+            },
+            "required": ["completed"],
+            "additionalProperties": false
+          }
+        },
+        "fields": { "$ref": "#/$defs/fields" }
+      },
+      "required": ["status", "serviced_by", "producer", "ring_buffer", "credits", "fields"],
+      "additionalProperties": false
+    },
+
+    "receiver_channel": {
+      "type": "object",
+      "properties": {
+        "status": { "$ref": "#/$defs/channel_status" },
+        "serviced_by": { "$ref": "#/$defs/serviced_by" },
+        "forwards_on": {
+          "description": "Keyed by ERISC: the VC whose downstream edges that ERISC gives the receiver's step, or null when it doesn't run the step or forwards to no sibling.",
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": { "$ref": "#/$defs/erisc_key" },
+          "additionalProperties": { "anyOf": [{ "type": "null" }, { "type": "string", "pattern": "^vc[0-9]+$" }] }
+        },
+        "ring_buffer": { "$ref": "#/$defs/optional_region" },
+        "fields": { "$ref": "#/$defs/fields" }
+      },
+      "required": ["status", "serviced_by", "forwards_on", "ring_buffer", "fields"],
+      "additionalProperties": false
+    },
+
+    "downstream_edge": {
+      "type": "object",
+      "properties": {
+        "downstream_channel": {
+          "type": "string",
+          "pattern": "^M[0-9]+/C[0-9]+/[EWNSZ][0-9]+/channels/senders/vc[0-9]+/ch[0-9]+$"
+        },
+        "through_tensix_mux": { "type": "boolean" },
+        "fields": { "$ref": "#/$defs/fields" }
+      },
+      "required": ["downstream_channel", "through_tensix_mux", "fields"],
+      "additionalProperties": false
+    },
+
+    "fields": {
+      "description": "Keyed by ERISC: each ERISC's fields, as its compile-time arguments give them.",
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": { "$ref": "#/$defs/erisc_key" },
+      "additionalProperties": { "$ref": "#/$defs/erisc_fields" }
+    },
+
+    "erisc_fields": {
+      "description": "One ERISC's fields, keyed by the field's key (docs/FIELDS.md lists them). Null for a buffer or stream register the builder did not allocate.",
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/name" },
+      "additionalProperties": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/field" }] }
+    },
+
+    "field": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/region_keys",
+          "properties": { "category": { "$ref": "#/$defs/field_category" }, "kind": { "const": "l1" } },
+          "required": ["category", "kind"],
+          "unevaluatedProperties": false
+        },
+        {
+          "$ref": "#/$defs/stream_reg_keys",
+          "properties": { "category": { "$ref": "#/$defs/field_category" }, "kind": { "const": "stream_reg" } },
+          "required": ["category", "kind"],
+          "unevaluatedProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "category": { "$ref": "#/$defs/field_category" },
+            "kind": { "const": "number" },
+            "value": { "$ref": "#/$defs/count" }
+          },
+          "required": ["category", "kind", "value"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "category": { "$ref": "#/$defs/field_category" },
+            "kind": { "const": "flag" },
+            "value": { "type": "boolean" }
+          },
+          "required": ["category", "kind", "value"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "category": { "$ref": "#/$defs/field_category" },
+            "kind": { "const": "enum" },
+            "value": { "$ref": "#/$defs/count" },
+            "value_name": {
+              "description": "The enumerator value names, in lower case. The enum is a configuration value the kernel is given, such as a direction.",
+              "$ref": "#/$defs/name"
+            }
+          },
+          "required": ["category", "kind", "value", "value_name"],
+          "additionalProperties": false
+        }
+      ]
+    }
+  }
+}

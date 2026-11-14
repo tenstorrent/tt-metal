@@ -301,6 +301,9 @@ class RunTimeOptions {
 
     bool enable_host_transfer_stats = false;
 
+    // Generate the fabric manifest
+    bool generate_fabric_manifest = false;
+
     // HW can clear Blackhole's L1 data cache psuedo-randomly once every 128 transactions
     // This option will enable this feature to help flush out whether there is a missing cache invalidation
     bool enable_hw_cache_invalidation = false;
@@ -827,6 +830,9 @@ public:
 
     bool get_host_transfer_stats_enabled() const { return enable_host_transfer_stats; }
     void set_host_transfer_stats_enabled(bool enable) { enable_host_transfer_stats = enable; }
+
+    bool get_generate_fabric_manifest() const { return generate_fabric_manifest; }
+    void set_generate_fabric_manifest(bool enable) { generate_fabric_manifest = enable; }
 
     bool get_hw_cache_invalidation_enabled() const { return this->enable_hw_cache_invalidation; }
 

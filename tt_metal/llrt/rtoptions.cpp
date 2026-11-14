@@ -91,6 +91,7 @@ enum class EnvVarID {
     TT_METAL_KERNEL_MAP,                // Enable kernel build mapping
     TT_METAL_DISPATCH_DATA_COLLECTION,  // Enable dispatch debug data collection
     TT_METAL_HOST_TRANSFER_STATS,       // Report host <-> device transfer time and volume at teardown
+    TT_METAL_FABRIC_GENERATE_MANIFEST,  // Generate the fabric manifest
     TT_METAL_GTEST_ETH_DISPATCH,        // Use Ethernet cores for dispatch in tests
     TT_METAL_TENSIX_DISPATCH_CORES,     // Quasar: force interim Tensix dispatch cores from core descriptor YAML
     TT_METAL_NOC_ATT,                   // Quasar: NoC address-translation-table map for device traffic
@@ -724,6 +725,12 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false (not recorded). Set to '0' to disable, any other value enables it.
         // Usage: export TT_METAL_HOST_TRANSFER_STATS=1
         case EnvVarID::TT_METAL_HOST_TRANSFER_STATS: this->enable_host_transfer_stats = strcmp(value, "0") != 0; break;
+
+        // TT_METAL_FABRIC_GENERATE_MANIFEST
+        // Collects fabric router facts during the fabric build process and writes the fabric manifest.
+        // Default: false
+        // Usage: export TT_METAL_FABRIC_GENERATE_MANIFEST=1
+        case EnvVarID::TT_METAL_FABRIC_GENERATE_MANIFEST: this->generate_fabric_manifest = is_env_enabled(value); break;
 
         // TT_METAL_GTEST_ETH_DISPATCH
         // Use Ethernet cores for dispatch in tests.
