@@ -6,7 +6,6 @@ import pytest
 import torch
 import ttnn
 from loguru import logger
-from tt_py_test_utils_common.utility_functions import skip_for_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -290,7 +289,6 @@ def test_memory_configs(device, memory_config):
     assert comparison_passed, f"Memory config test failed for {memory_config}"
 
 
-@skip_for_blackhole("Incorrect result on BH github issue #36263")
 @pytest.mark.parametrize("interpolation_mode", ["nearest", "bilinear"])
 def test_height_sharded_memory(device, interpolation_mode):
     """Test rotation with height and block sharded memory configurations using full grid."""
@@ -327,7 +325,6 @@ def test_height_sharded_memory(device, interpolation_mode):
     assert comparison_passed, f"{interpolation_mode} height sharded memory test failed"
 
 
-@skip_for_blackhole("Incorrect result on BH: https://github.com/tenstorrent/tt-metal/issues/36263")
 @pytest.mark.parametrize(
     "interpolation_mode, input_shape, num_cores, shard_height",
     [
