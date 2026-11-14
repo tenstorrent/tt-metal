@@ -8,7 +8,8 @@ from models.demos.blackhole.hy4_preview.reference.oracle import router, swiglu
 
 
 class HostRoutedMoE:
-    def __init__(self, ckpt, layer=-1, clamp_mode="routed", exact=False):
+    def __init__(self, ckpt, layer=-1, clamp_mode="routed", exact=False, quant=None):
+        self.quant = quant  # None | "bfp8" | "bfp4": experts round-tripped through the device block formats (acceptance A/B of the MTP expert precision)
         self.exact = exact  # fp32 matmuls (oracle numerics) instead of bf16
         self.ck = Hy4Checkpoint(ckpt)
         self.cfg, self.layer, self.clamp = self.ck.cfg, layer, clamp_mode
@@ -20,13 +21,25 @@ class HostRoutedMoE:
         self.cache = {}
         self.last_sel = None
 
+    def _q(self, m):
+        """[out, in] bf16 weight -> block-format round trip (the device stores [in, out] tiles)."""
+        import ttnn
+
+        dt = {"bfp8": ttnn.bfloat8_b, "bfp4": ttnn.bfloat4_b}[self.quant]
+        t = m.t().contiguous().reshape(1, 1, m.shape[1], m.shape[0])
+        r = ttnn.to_torch(ttnn.from_torch(t, dtype=dt, layout=ttnn.TILE_LAYOUT))
+        return r.reshape(m.shape[1], m.shape[0]).t().contiguous().to(torch.bfloat16)
+
     def expert(self, e):
         if e not in self.cache:
             p = self.ck.layer_prefix(self.layer) + "mlp.experts."
             gu = self.ck.get(p + "gate_up_proj", rows=e)
             dn = self.ck.get(p + "down_proj", rows=e)
             g, u = split_gate_up(gu)
-            self.cache[e] = (g.contiguous(), u.contiguous(), dn.contiguous())
+            g, u, dn = g.contiguous(), u.contiguous(), dn.contiguous()
+            if self.quant:
+                g, u, dn = (self._q(m) for m in (g, u, dn))
+            self.cache[e] = (g, u, dn)
         return self.cache[e]
 
     def __call__(self, x):

@@ -15,6 +15,8 @@ import torch
 from models.demos.blackhole.hy4_preview.reference.dump_ref import SHORT, long_prompt  # noqa: F401
 from models.demos.blackhole.hy4_preview.reference.oracle import Conv, Hy4Oracle, mtp_forward
 
+CHUNK = 24
+
 
 def chain_alpha(o, ids, H, k=3, zero0=False, conv=None):
     conv = conv or Conv()
@@ -39,17 +41,22 @@ def chain_alpha(o, ids, H, k=3, zero0=False, conv=None):
         if T <= 0:
             break
         L = N  # padded length
-        toks = torch.zeros(T, L, dtype=torch.long)
-        hid = torch.zeros(T, L, D)
-        for t in range(T):
-            toks[t, : t + 1] = ids[1 : t + 2]
-            hid[t, : t + 1] = H[: t + 1]
-            for i in range(1, j + 1):  # recursive rows t+i
-                toks[t, t + i] = d[i - 1][t]
-                hid[t, t + i] = outs[i - 1][t]
-        # recursive rows need the previous recursive outputs: they were produced by earlier j loops (outs[i-1][t])
-        oj = mtp_forward(o.ck, hid, toks, conv, embed=embed, zero_pos0=zero0)  # [T,L,D]
-        oj_last = torch.stack([oj[t, t + j] for t in range(T)])
+        oj_last = []
+        for c0 in range(
+            0, T, CHUNK
+        ):  # sequences of different t share nothing but the prefix: chunked (attention scores are [chunk, 64, L, L] fp32)
+            tt_ = range(c0, min(T, c0 + CHUNK))
+            toks = torch.zeros(len(tt_), L, dtype=torch.long)
+            hid = torch.zeros(len(tt_), L, D)
+            for b, t in enumerate(tt_):
+                toks[b, : t + 1] = ids[1 : t + 2]
+                hid[b, : t + 1] = H[: t + 1]
+                for i in range(1, j + 1):  # recursive rows t+i (previous recursive outputs from the earlier j loops)
+                    toks[b, t + i] = d[i - 1][t]
+                    hid[b, t + i] = outs[i - 1][t]
+            oj = mtp_forward(o.ck, hid, toks, conv, embed=embed, zero_pos0=zero0)  # [B,L,D]
+            oj_last += [oj[b, t + j] for b, t in enumerate(tt_)]
+        oj_last = torch.stack(oj_last)
         dj = o.logits(oj_last).argmax(-1)
         d.append(dj)
         outs.append(oj_last)
@@ -81,12 +88,17 @@ def main():
     zero0 = "--zero0" in sys.argv
     o = Hy4Oracle()
     allr = []
-    for p, t in enumerate(texts):
-        ids = torch.tensor([120000] + tok.encode(t).ids)
+    meta = os.path.join(dump, "meta.json")
+    if os.path.exists(meta) and "ids" in json.load(open(meta)):  # text_dump.py dumps carry their token ids and kinds
+        mj = json.load(open(meta))
+        items = [(torch.tensor(i), kd) for i, kd in zip(mj["ids"], mj["kinds"])]
+    else:
+        items = [(torch.tensor([120000] + tok.encode(t).ids), "dump") for t in texts]
+    for p, (ids, kind) in enumerate(items):
         H = torch.load(os.path.join(dump, f"final_hidden_p{p}.pt"))["final_normed"][0]
         assert H.shape[0] == ids.shape[0], (H.shape, ids.shape)
         r = chain_alpha(o, ids, H, k=k, zero0=zero0)
-        r["prompt"] = p
+        r["prompt"], r["kind"] = p, kind
         print(r, flush=True)
         allr.append(r)
         json.dump(allr, open(out, "w"), indent=1)

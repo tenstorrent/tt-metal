@@ -22,8 +22,10 @@ from models.demos.blackhole.hy4_preview.tt.hy4_rope import rope_tables
 
 
 class Hy4PoolDecoder(Hy4Decoder):
-    def __init__(self, ch, pages, mode="topk", bucket_tokens=None, opt=None, key_dtype=ttnn.bfloat8_b):
+    def __init__(self, ch, pages, mode="topk", bucket_tokens=None, opt=None, key_dtype=ttnn.bfloat8_b, S=1, tok=None):
+        """S > 1 (task mtp-device, verify rows): S query rows per user per step; ``tok`` = an existing persistent uint32 [ROWS, S] token tensor (the MTPRoundTail's) or None. S == 1: unchanged."""
         self.ch, self.md = ch, ch.md
+        self.S = S
         md = self.md
         r, c = int(md.shape[0]), int(md.shape[1])
         assert r == ROWS
@@ -31,23 +33,44 @@ class Hy4PoolDecoder(Hy4Decoder):
         self.opt = opt if opt is not None else Opt.from_env()
         self.mapper = ttnn.ShardTensor2dMesh(md, dims=(0, None), mesh_shape=(r, c))
         z = lambda *shape, dt=torch.float32: torch.zeros(*shape, dtype=dt)
-        self.tok = upload(md, z(ROWS, 1, 1, dt=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, row_dim=0)
-        self.cos = upload(md, z(ROWS, 1, 1, 64), ttnn.bfloat16, ttnn.TILE_LAYOUT, row_dim=0)
-        self.sin = upload(md, z(ROWS, 1, 1, 64), ttnn.bfloat16, ttnn.TILE_LAYOUT, row_dim=0)
-        self.c128 = upload(md, z(ROWS, 1, 1, 128), ttnn.bfloat16, ttnn.TILE_LAYOUT, row_dim=0)
-        self.s128 = upload(md, z(ROWS, 1, 1, 128), ttnn.bfloat16, ttnn.TILE_LAYOUT, row_dim=0)
-        self.ctx = PoolCtx(md, ch.mc, ch.ccl, pages, rows=ROWS, S=1, mode=mode, bucket_tokens=bucket_tokens)
+        if S == 1:
+            self.tok = upload(md, z(ROWS, 1, 1, dt=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, row_dim=0)
+        else:
+            self.tok = (
+                tok
+                if tok is not None
+                else upload(md, z(ROWS, S, dt=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, row_dim=0)
+            )
+        self.cos = upload(md, z(ROWS, 1, S, 64), ttnn.bfloat16, ttnn.TILE_LAYOUT, row_dim=0)
+        self.sin = upload(md, z(ROWS, 1, S, 64), ttnn.bfloat16, ttnn.TILE_LAYOUT, row_dim=0)
+        self.c128 = upload(md, z(ROWS, 1, S, 128), ttnn.bfloat16, ttnn.TILE_LAYOUT, row_dim=0)
+        self.s128 = upload(md, z(ROWS, 1, S, 128), ttnn.bfloat16, ttnn.TILE_LAYOUT, row_dim=0)
+        self.ctx = PoolCtx(md, ch.mc, ch.ccl, pages, rows=ROWS, S=S, mode=mode, bucket_tokens=bucket_tokens)
         self.kc = [None] * len(ch.layers)
         self.mlp = []
         for ly in ch.layers:
             self.mlp.append(
-                with_decode_cfg(ly.dense, pn1=2, pn2=4, bw1=32, bw2=8) if ly.spec.mlp == DENSE else (ly.shared_dec if getattr(ly, "shared_dec", None) is not None else with_decode_cfg(ly.shared))
+                with_decode_cfg(ly.dense, pn1=2, pn2=4, bw1=32, bw2=8)
+                if ly.spec.mlp == DENSE
+                else (ly.shared_dec if getattr(ly, "shared_dec", None) is not None else with_decode_cfg(ly.shared))
             )
         self.kv_pools, self.key_pools = [], []
         for ly in ch.layers:
-            kv = ttnn.empty([1, 1, pages * 64, 656], dtype=ttnn.fp8_e4m3, layout=ttnn.ROW_MAJOR_LAYOUT, device=md, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            kv = ttnn.empty(
+                [1, 1, pages * 64, 656],
+                dtype=ttnn.fp8_e4m3,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=md,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
             kp = (
-                ttnn.empty([pages, 1, 64, 128], dtype=key_dtype, layout=ttnn.TILE_LAYOUT, device=md, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                ttnn.empty(
+                    [pages, 1, 64, 128],
+                    dtype=key_dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=md,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
                 if ly.attn.has_indexer
                 else None
             )
@@ -64,7 +87,9 @@ class Hy4PoolDecoder(Hy4Decoder):
         cs = [rope_tables(torch.tensor([p]), rope.dim, rope.theta, rope.interleave) for p in pos]
         cos = torch.stack([x[0].reshape(1, 1, 64) for x in cs]).reshape(ROWS, 1, 1, 64)
         sin = torch.stack([x[1].reshape(1, 1, 64) for x in cs]).reshape(ROWS, 1, 1, 64)
-        cp = lambda t, dt, lay, tgt: ttnn.copy_host_to_device_tensor(ttnn.from_torch(t, dtype=dt, layout=lay, mesh_mapper=self.mapper), tgt)
+        cp = lambda t, dt, lay, tgt: ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(t, dtype=dt, layout=lay, mesh_mapper=self.mapper), tgt
+        )
         cp(torch.tensor(tokens, dtype=torch.int32).reshape(ROWS, 1, 1), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, self.tok)
         cp(cos, ttnn.bfloat16, ttnn.TILE_LAYOUT, self.cos)
         cp(sin, ttnn.bfloat16, ttnn.TILE_LAYOUT, self.sin)
@@ -139,10 +164,18 @@ class Hy4PoolDecoder(Hy4Decoder):
 
     def fill_synthetic(self, tokens, gen, chunk=65536, same_all_layers=True):
         """FAST SYNTHETIC FILL (long-context perf / capacity tests; NOT a real context): random SCALED_FP8 rows and indexer keys for the first ``tokens`` tokens of every user, written by slice_copy.
-        One random chunk is generated on the host per call and reused for every layer (same_all_layers), so a 1M fill takes seconds."""
+        One random chunk is generated on the host per call and reused for every layer (same_all_layers), so a 1M fill takes seconds.
+        """
         dp = ttnn.experimental.deepseek_prefill
         md = self.md
-        rep = lambda t, dt, lay: ttnn.from_torch(t, device=md, dtype=dt, layout=lay, mesh_mapper=ttnn.ReplicateTensorToMesh(md), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        rep = lambda t, dt, lay: ttnn.from_torch(
+            t,
+            device=md,
+            dtype=dt,
+            layout=lay,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(md),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
         for c0 in range(0, tokens, chunk):
             n = min(chunk, tokens - c0)
             assert n % HP.CHUNK == 0
@@ -155,7 +188,15 @@ class Hy4PoolDecoder(Hy4Decoder):
             for kv, kp in zip(self.kv_pools, self.key_pools):
                 HP.slice_copy(nat, kv, self.ctx.colid, 64, HP.ROWB, n // 512, dst_page0=c0 // 512)
                 if kp is not None:
-                    HP.slice_copy(kb, ttnn.reshape(kp, [1, 1, self.pages * 64, 128]), self.ctx.colid, 8, HP.KEYTILE, n // 512, dst_page0=c0 // 512)
+                    HP.slice_copy(
+                        kb,
+                        ttnn.reshape(kp, [1, 1, self.pages * 64, 128]),
+                        self.ctx.colid,
+                        8,
+                        HP.KEYTILE,
+                        n // 512,
+                        dst_page0=c0 // 512,
+                    )
             ttnn.synchronize_device(md)
             for t in (lat, rope, f8, sc, nat, kd, kb):
                 ttnn.deallocate(t)
@@ -188,8 +229,78 @@ class Hy4PoolDecoder(Hy4Decoder):
         last = ch.layers[-1]
         _, _, _, x = last.ihcf_m.pre(x, last.ihcf_m.norm_weight(last.hw_post, 1), y=y, pp_prev=pp_m, x_out=x)
         ttnn.deallocate(y)
-        x4 = ttnn.to_layout(ttnn.reshape(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), [1, NSTREAM, 1, HID]), ttnn.TILE_LAYOUT)
+        x4 = ttnn.to_layout(
+            ttnn.reshape(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), [1, NSTREAM, 1, HID]), ttnn.TILE_LAYOUT
+        )
         hn, logits = ch.head(x4)
         ttnn.deallocate(hn)
         ttnn.deallocate(x4)
         return logits
+
+    # ------------------------------------------------------------------ verify rows (task mtp-device): S = k + 1 query rows per user, fused iHC path only
+    def attach_derive(self, sd):
+        """use the rope tables / write rows of a SpecDerive (device-derived from the resident position) instead of host set_inputs."""
+        self.cos, self.sin, self.c128, self.s128 = sd.cos, sd.sin, sd.c128, sd.s128
+
+    def step_verify(self):
+        """one verify step on S rows per user (tokens self.tok [1,S] per device; positions P..P+S-1 via ctx / tabs filled by SpecDerive.derive) -> (hn bf16 [1,1,S,D] post model.norm rows, logits [1,1,S,V/8])."""
+        assert (
+            os.environ.get("HY4_IHC_FUSED", "0") == "1"
+        ), "verify rows need the fused-iHC path (packed streams, T <= 16)"
+        ch, S = self.ch, self.S
+        self._dense8 = self.ctx.dense_ids8() if self.mode == "dense" else None
+        e = ttnn.embedding(self.tok, ch.embed, layout=ttnn.TILE_LAYOUT)  # [1,S,D/8]
+        e = ttnn.reshape(e, [1, 1, S, HID // 8])
+        e = ch.mc.allgather(e, ch.ccl, axis=1, dim=3)
+        e32 = ttnn.typecast(e, ttnn.float32)
+        ttnn.deallocate(e)
+        e_rm = ttnn.reshape(ttnn.to_layout(e32, ttnn.ROW_MAJOR_LAYOUT), [1, S, 1, HID])
+        ttnn.deallocate(e32)
+        x = ttnn.to_layout(
+            ttnn.reshape(ttnn.concat([e_rm] * NSTREAM, dim=2), [1, 1, NSTREAM * S, HID]), ttnn.TILE_LAYOUT
+        )  # packed: row 4t + i = stream i of token t
+        ttnn.deallocate(e_rm)
+        y = pp_m = None
+        for i, ly in enumerate(ch.layers):
+            wa, wm = ly.ihcf_a.norm_weight(ly.hw_in, S), ly.ihcf_m.norm_weight(ly.hw_post, S)
+            if y is None:
+                h, _, pp_a = ly.ihcf_a.pre(x, wa)
+            else:
+                h, _, pp_a, x = ly.ihcf_a.pre(x, wa, y=y, pp_prev=pp_m, x_out=x)
+                ttnn.deallocate(y)
+            a = self._attn(ly, None, h)
+            ttnn.deallocate(h)
+            h2, _, pp_m, x = ly.ihcf_m.pre(x, wm, y=a, pp_prev=pp_a, x_out=x)
+            ttnn.deallocate(a)
+            y = self._mlp_rows(i, ly, h2)
+            ttnn.deallocate(h2)
+        last = ch.layers[-1]
+        _, _, _, x = last.ihcf_m.pre(x, last.ihcf_m.norm_weight(last.hw_post, S), y=y, pp_prev=pp_m, x_out=x)
+        ttnn.deallocate(y)
+        x4 = ttnn.to_layout(
+            ttnn.permute(ttnn.reshape(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), [1, S, NSTREAM, HID]), (0, 2, 1, 3)),
+            ttnn.TILE_LAYOUT,
+        )  # [1,4,S,D]
+        ttnn.deallocate(x)
+        hn, logits = ch.head(x4)
+        ttnn.deallocate(x4)
+        return hn, logits
+
+    def _mlp_rows(self, i, ly, h):
+        """MLP of S rows per user: dense layer 0 as in the decoder, MoE blocks built (``for_batch``) at batch_per_device = S."""
+        ch, S = self.ch, self.S
+        if ly.spec.mlp == DENSE:
+            return D.allreduce_cols(self.mlp[i].forward(h))
+        part = self.mlp[i].forward(h)
+        tok = ttnn.reshape(ttnn.to_layout(h, ttnn.ROW_MAJOR_LAYOUT), [S, 1, 1, HID])
+        blk = self._blks[i]
+        out = blk.forward(h, tok, fold=part)
+        ttnn.deallocate(part)
+        out = ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)
+        y = ch.mc.allgather(out, ch.ccl, axis=1, dim=3)
+        ttnn.deallocate(out)
+        return y
+
+    def prepare_blocks(self):
+        """per-layer MoE blocks at batch_per_device = S (weights shared with the S = 1 blocks: ``for_batch``); call BEFORE any trace capture."""
+        self._blks = [None if ly.spec.mlp == DENSE else ly.blk.for_batch(self.S) for ly in self.ch.layers]

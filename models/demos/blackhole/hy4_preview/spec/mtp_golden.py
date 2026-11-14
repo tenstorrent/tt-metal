@@ -40,6 +40,7 @@ def mtp_taps(o, ids, H, conv=None):
     x2 = x1 + y[0]
     out = rms_norm(x2, sd["final_layernorm.weight"], cfg.norm_eps)
     d1 = o.logits(out)[0].argmax(-1)
+    main = o.logits(H).argmax(-1)  # main[r] predicts token r+1
     return dict(
         ids=ids,
         H=H,

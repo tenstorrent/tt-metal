@@ -51,7 +51,7 @@ def main():
         ly = ch.mtp_layers[0]
         from models.demos.blackhole.hy4_preview.spec.host_moe import HostRoutedMoE
 
-        hm = HostRoutedMoE(os.environ["HY4_CKPT"])
+        hm = HostRoutedMoE(os.environ["HY4_CKPT"], quant=os.environ.get("QUANT") or None)
         sd = ch.rd.layer_sd(-1)
         opt = Opt.from_env()
         res(event="built", sec=round(time.time() - t0, 1), dram=dram_view(md), opt=opt.tag())
@@ -112,6 +112,14 @@ def main():
                         rec["pcc_" + k] = round(pcc(torch.cat(tapsall[k]), g[k][:m]), 5)
                 d1 = torch.cat(d1)
                 rec["d1_eq_oracle"] = round(float((d1 == g["d1"][:m]).float().mean()), 4)
+                if (
+                    "main" in g
+                ):  # first-draft acceptance proxy: MTP argmax at row t == the main model's argmax at row t+1 (oracle fp32 logits of the dumped hidden states)
+                    mm = min(m, g["main"].shape[0] - 1)
+                    rec["alpha1_dev"] = round(float((d1[:mm] == g["main"][1 : mm + 1]).float().mean()), 4)
+                    rec["alpha1_oracle"] = round(float((g["d1"][:mm] == g["main"][1 : mm + 1]).float().mean()), 4)
+                    rec["n_alpha"] = mm
+                rec["quant"] = os.environ.get("QUANT") or "bf16"
                 if os.environ.get("DIAG_Y") == "1" and "h2" in tapsall:
                     h2 = torch.cat(tapsall["h2"])
                     ex = HostRoutedMoE(os.environ["HY4_CKPT"], exact=True)

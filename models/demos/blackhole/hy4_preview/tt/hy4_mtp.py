@@ -8,6 +8,8 @@ Contract: ``forward`` takes S rows of ONE user per mesh row in the pool decode l
 """
 
 
+import torch
+
 import ttnn
 from models.demos.blackhole.hy4_preview.tt import hy4_dense as D
 from models.demos.blackhole.hy4_preview.tt.hy4_chain import HID, rms_exact
@@ -70,6 +72,8 @@ class Hy4MTP:
             return y
         sh = D.allreduce_cols(part)
         ttnn.deallocate(part)
+        if self.moe_fn == "skip":  # timing probes: no routed experts (cost added from the MoE measurements)
+            return sh
         x = ttnn.to_torch(ttnn.get_device_tensors(h2)[0]).reshape(-1, HID).float()
         routed = self.moe_fn(x)
         if taps is not None:
@@ -110,3 +114,26 @@ class Hy4MTP:
         out = rms_exact(x, self.w_fin, self.eps)
         ttnn.deallocate(x)
         return out
+
+
+def greedy_tokens(ch, logits):
+    """greedy global argmax of the column-sharded logits [1,1,S,V/8] (fp32 or bf16) -> token ids uint32 [S, 1] identical on every device (per column max + idx, all-gather, best column; the Hy4DeviceHead.sample_global scheme)."""
+    cols = int(ch.md.shape[1])
+    shard = int(logits.shape[3])
+    lg = logits if logits.dtype == ttnn.float32 else ttnn.typecast(logits, ttnn.float32)
+    rm = ttnn.to_layout(lg, ttnn.ROW_MAJOR_LAYOUT)
+    idx = ttnn.argmax(rm, dim=-1, keepdim=True)
+    mx = ttnn.to_layout(ttnn.gather(rm, -1, index=idx), ttnn.TILE_LAYOUT)
+    idxf = ttnn.typecast(ttnn.to_layout(idx, ttnn.TILE_LAYOUT), ttnn.float32)
+    g = ch.mc.allgather(ttnn.concat([mx, idxf], dim=-1), ch.ccl, axis=1, dim=3)
+    T = int(g.shape[2])
+    g = ttnn.reshape(g, [1, T, cols, 2])
+    mx_all = ttnn.reshape(ttnn.slice(g, [0, 0, 0, 0], [1, T, cols, 1]), [1, 1, T, cols])
+    ix_all = ttnn.reshape(ttnn.slice(g, [0, 0, 0, 1], [1, T, cols, 2]), [1, 1, T, cols])
+    best = ttnn.argmax(ttnn.to_layout(mx_all, ttnn.ROW_MAJOR_LAYOUT), dim=-1, keepdim=True)
+    bestf = ttnn.typecast(ttnn.to_layout(best, ttnn.TILE_LAYOUT), ttnn.float32)
+    if not hasattr(ch, "_col_ids"):
+        ch._col_ids = upload(ch.md, torch.arange(cols, dtype=torch.float32).reshape(1, 1, 1, cols), ttnn.float32)
+    sel = ttnn.sum(ttnn.multiply(ttnn.eq(bestf, ch._col_ids), ix_all), dim=-1, keepdim=True)
+    tok = ttnn.add(ttnn.multiply(bestf, float(shard)), sel)
+    return ttnn.reshape(ttnn.to_layout(ttnn.typecast(tok, ttnn.uint32), ttnn.ROW_MAJOR_LAYOUT), [T, 1])
