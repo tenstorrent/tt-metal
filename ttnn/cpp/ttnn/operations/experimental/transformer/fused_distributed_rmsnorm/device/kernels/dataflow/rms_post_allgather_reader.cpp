@@ -81,12 +81,13 @@ void kernel_main() {
     constexpr uint32_t face_row_bytes = tt::constants::FACE_WIDTH * bf16_datum_size_bytes;
     constexpr uint32_t face_bytes = tt::constants::FACE_HW * bf16_datum_size_bytes;
 
-    // Generate constant tiles for layernorm compute
+    // Generate constant tiles for layernorm compute.
+    // Stats tile contains the partial sum in column 0 only; columns 1..31 are reduce scratch.
     dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
         reduce_scalar_cb,
         ckernel::PoolType::AVG,
         ckernel::ReduceDim::REDUCE_ROW,
-        reduce_factor>();
+        reduce_factor>(1);
     generate_bcast_col_scalar(CircularBuffer(epsilon_cb), epsilon_value);
 
     if constexpr (fuse_rope) {
