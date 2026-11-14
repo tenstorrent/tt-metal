@@ -81,8 +81,10 @@ struct CombineFillCall {
     uint32_t exact_limit = 0;
 };
 inline constexpr uint32_t kFxPages = 9, kFxChipPage = 8, kFxPageWords = 256, kFxMaxJobs = 30, kFxWaits = 4;
-inline constexpr uint32_t kFxWords = 448;  // the exact words a chip: 2 x 32 flags, 8 x 16 stamps, 4 x 64 arrivals
-inline constexpr uint32_t kFxL1 = 3328;    // a port's L1 for the exact path past the staging slots
+inline constexpr uint32_t kFxWords = 452;  // the exact words a chip: 2 x 32 flags, 8 x 16 stamps, 4 x 64 arrivals,
+                                           // the landed word (P.55c: this call's token once the copy has landed)
+inline constexpr uint32_t kFxLanded = 448;
+inline constexpr uint32_t kFxL1 = 3328;  // a port's L1 for the exact path past the staging slots
 
 // What the combine is planned from (k3 TtK3TokenSplitMoE.__init__: combine_auto on the flat plan's free cells).
 struct CombinePlanInputs {
@@ -235,7 +237,8 @@ void set_combine_fill_args(
     tt::tt_metal::distributed::MeshDevice& mesh_device,
     const CombineFillCall* call,
     uint32_t done_addr,
-    bool exact = false);
+    bool exact = false,
+    uint32_t token = 0);
 
 // MOE_FILL=piggyback: the arena offset of a port's fill table and staging slots (they end at the arena's end).
 uint32_t combine_fill_offset(const CombinePlan& plan, bool exact = false);

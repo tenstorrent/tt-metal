@@ -882,7 +882,8 @@ void set_combine_fill_args(
     tt::tt_metal::distributed::MeshDevice& mesh_device,
     const CombineFillCall* call,
     uint32_t done_addr,
-    bool exact) {
+    bool exact,
+    uint32_t token) {
     const auto& topo = plan.topo;
     const uint32_t me = topo.index(ch);
     if (exact) {  // (MOE_REPLICAS=exact: every port reads its jobs page; the chip's first port zeroes and waits)
@@ -912,6 +913,7 @@ void set_combine_fill_args(
             w[6] = static_cast<uint32_t>(rx.x) | static_cast<uint32_t>(rx.y) << 16;
             w[7] = call->exact_limit;
             w[8] = kFxChipPage;
+            w[9] = token;  // (P.55c: the waiter writes it into the landed word, kFxLanded)
         }
         return;
     }

@@ -98,7 +98,13 @@ each default off (= the source's program):
   COMBINE_FX_CHIP_PAGE = the chip's waits [_, _, n, _, ..., (word, target) x n from word 8]); a flushed flag increment
   every K pieces on dst; a gated job (relay) reads only blocks its own flags count; `combine_fill_exact_words(resources)`
   (flags by call parity, per-port stamps, block arrivals), `combine_fill_links(resources)`. Enabled is a program of its
-  own (REC_FX); with an all-zero jobs table it is bit-identical to the stock combine.
+  own (REC_FX); with an all-zero jobs table it is bit-identical to the stock combine. P.55c: in that program the flat
+  expert schedules the spare slot (the replica) last, never pins it, and its weight readers read it only once the
+  chip's waiter port has written the call's token into the landed word (exact word 448; `fx_wait.hpp`, bounded by the
+  same limit). Interleaving exact and stock calls on one resources leaves a parity's flag words unzeroed: a caller
+  that streams copies runs every combine call of those resources with the exact fill (empty jobs where none).
+- Slot map uneven split (P.55c, `router_rows.hpp slot_of`): a copy word `slot | lb << 9` gives each holder the tokens
+  whose 15-bit hash is in its range (own slot [0, lb_0)); copy words below 512 keep the even split.
 
 ## Measured
 

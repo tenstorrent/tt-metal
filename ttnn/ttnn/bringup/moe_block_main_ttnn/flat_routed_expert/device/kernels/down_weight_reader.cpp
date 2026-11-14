@@ -13,6 +13,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "expert_schedule.hpp"
+#include "fx_wait.hpp"
 #ifdef SE_Y_NC
 // Row-major y written from here (NOC0) instead of the down core's BRISC (NOC1, the h chain's network): the weight
 // reads' waits poll the y writer (CT 6 Y_MT: row tiles per virtual expert, 7 PCD, 8 HT; RT after the
@@ -88,6 +89,11 @@ void kernel_main() {
 #else
     auto y_poll = []() {};
 #endif
+#ifdef SE_FX_RT
+    // (P.55c: the replica's blocks only once its copy has landed; the poll's 16 B at the end of CB 7's upper half)
+    SeFxWait fx;
+    fx.init(get_write_ptr(tt::CBIndex::c_7) + 4 * SE_DYN_HALF - 64);
+#endif
     for (uint32_t b = 0; b < total;) {
         uint32_t n = total - b < batch ? total - b : batch;
 #ifdef SE_DN_REG
@@ -108,6 +114,16 @@ void kernel_main() {
             cb_reserve_back(cb, (i + 1) * slot);
             l1[i] = dst(b + i, i);
         }
+#ifdef SE_FX_RT
+        for (uint32_t i = 0; i < n; ++i) {
+            if (blk(b + i) / per_e == SE_FX_SPARE) {
+                while (!fx.ready()) {
+                    y_poll();
+                }
+                break;
+            }
+        }
+#endif
         for (uint32_t i = 0; i < n; ++i) {
             noc_async_read(wsrc(blk(b + i)), l1[i], slot * tile_bytes);
         }

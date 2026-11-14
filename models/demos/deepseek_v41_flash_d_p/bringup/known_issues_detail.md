@@ -1314,3 +1314,28 @@ both links 0.89 ms: novel 5.87 ms a chunk (0 of 174 copies on time), code 1.25 (
 The final gate run (its recorded metrics, same code): pair both links 0.876 ms / +0.137, 4 links 0.772 / -0.004,
 neighbour 32 0.961 / +0.195, novel split 1.229 / +0.419, code split 1.229 / +0.297; the model: both links novel 6.16
 (0 of 183), code 1.36 (0 of 46); 4 links novel 8.55 (0 of 259), code 2.30 (0 of 63).
+
+## The exact split pays only with copies already in place; streamed in the layer's own combine it loses
+
+Chunk 10 at 51,200 (the device's own prefill of chunks 0-9, re-runs on the steady path), 8x4, 40 MoE layers, plans from
+the same chunk's counts (tests/moe_exact_model.Plan; A 38.9 us, B 7.55 us a row tile from P.55a's fit), median of 3
+profiled runs (real-time profiler; device = each program's slowest chip, summed):
+
+| prompt | side | device ms | experts+combine | dispatch | head | replicas |
+|---|---|---|---|---|---|---|
+| novel | off | 185.9 | 56.5 | 20.0 | 20.0 | 0 |
+| novel | fill (copies before the chunk, max-mode plan) | 161.5 | 39.2 | 11.2 | 17.8 | 512 |
+| novel | exact (streamed, deadline plan at 0.89 ms a copy) | 195.0 | 68.7 | 17.8 | 19.0 | 290 |
+| code | off | 170.5 | 46.5 | 14.4 | 17.1 | 0 |
+| code | fill | 158.3 | 38.9 | 11.2 | 16.6 | 295 |
+| code | exact | 175.6 | 51.7 | 13.9 | 17.4 | 67 |
+
+Every side bit-identical to off on every MoE layer's output (the exact side with every receiver's spare slot spoiled
+first: the receivers' wait works), the repeats bit-identical. The split also halves dispatch (its destinations even
+out). Streamed: the 23 (novel) / 8 (code) layers with copies take 2.10 / 1.98 ms each vs off 1.62 / 1.51 and fill
+0.93 / 0.96 (+1.0-1.2 ms a layer over the same split with the copies in place); the layers without copies +0.07 /
++0.02 ms (the exact program with empty jobs, after a copy layer's skew). P.55a's model with the whole-copy wait
+predicts 1.21 ms for those layers at 0.89 ms a copy edge; recalibrated it plans: 1.25 ms a copy -> novel 0.77 ms a
+chunk (44 copies), code 0.06; 1.6 ms -> 0.04 / 0. A copy tree lands in 1.25 ms (P.55b, one tree) to ~1.9 ms (19
+receivers of one expert, depth ~5), when the off layer's busiest chip is done at 1.0-1.9 ms: a copy within the call
+cannot arrive before the receiver would have to start the replica.

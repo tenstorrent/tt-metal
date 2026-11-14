@@ -220,3 +220,35 @@ API port to this tree (main's API of 2026-11-06 that this base, origin/main `b78
   routed_experts_combine/device/{combine_program.{hpp,cpp},routed_experts_combine_device_operation{.cpp,_types.hpp},
   routed_experts_combine_program_factory.cpp}, routed_experts_combine/device/kernels/dataflow/combine_port_writer.cpp;
   tests: models/demos/deepseek_v41_flash_d_p/tests/test_moe_exact_copy.py
+
+### The router's uneven replica split: the planner's share of each holder (2026-11-14, deepseek_v41_flash_d_p P.55c)
+- What: `router_rows.hpp slot_of`: a copy word of the slot map may carry a lower bound, `slot | lb << 9` (slot < 512,
+  lb 15 bits); when the candidate's first copy word has lb > 0, copy i takes the tokens whose 15-bit hash is in
+  [lb_i, lb_{i+1}) and the own slot [0, lb_0). A first copy word below 512 (every map written before) keeps the even
+  split bit for bit. Kernel only (JIT); prepare_fused_head_weights' check of the map at load is unchanged (it sees the
+  empty map; later maps are host writes into the router bias).
+- Why: P.55c (MOE_REPLICAS=exact): the planner sends a hot expert's tokens to its home and replicas in uneven shares
+  (the receivers are light chips, each takes what brings it to the mean).
+- Needed by: deepseek_v41_flash_d_p P.55c (tt/moe_block_main_adapter.exact_map_words)
+- Files: fused_head/device/kernels/router_rows.hpp
+
+### The exact copy's receivers: the replica last, read once its copy landed (2026-11-14, deepseek_v41_flash_d_p P.55c)
+- What: with the exact fill (`set_combine_fill_exact`, REC_FX) routed_experts_combine builds the flat expert with
+  `FlatRoutedExpertConfig.fx_spare` = experts per chip (1 + the spare slot's local index; default 0 = the source's
+  program): every role's schedule (`expert_schedule.hpp`, `SE_FX_SPARE`) puts the spare slot last (after the
+  biggest-first order) and never pins it; the gate/up weight reads (`gate_up_weight_read.hpp`, the x forwarder) and the
+  down weight reader take `SE_FX_RT` (`fx_wait.hpp`, 6 args the combine writes every call: on, the collector's xy, the
+  landed word, the call's token, the limit) and read the spare slot's weights only once the chip's landed word holds
+  the call's token (a 4 B NoC read every ~1 us, bounded: past the limit they read anyway). The chip's waiter port
+  writes the token (`noc_inline_dw_write`, exact word 448: `COMBINE_FX_WORDS` 448 -> 452) once every waited flag word
+  reached its target (polled in the main loop, the drain and the fence too), immediately when nothing comes to the
+  chip, and at the wait's limit. The token is a host counter, one a call (`set_fill`), the port's arg 9.
+- Why: P.55c: the copy runs in the same program as the receiver's experts; without the wait a receiver computes the
+  replica from its spare slot's old bytes.
+- Cores: none added. Host: 6 runtime args a weight reader core, written every exact call.
+- Needed by: deepseek_v41_flash_d_p P.55c (MOE_REPLICAS=exact, tt/moe_block_main_adapter.set_exact_jobs)
+- Files: flat_routed_expert/device/{flat_program.hpp,flat_routed_expert_device_operation_types.hpp,
+  flat_routed_expert_program_factory.cpp}, flat_routed_expert/device/kernels/{expert_schedule.hpp,fx_wait.hpp,
+  gate_up_weight_read.hpp,gate_up_x_forwarder.cpp,down_weight_reader.cpp}, routed_experts_combine/device/
+  {combine_program.{hpp,cpp},routed_experts_combine_program_factory.cpp}, routed_experts_combine/device/kernels/
+  dataflow/combine_port_writer.cpp; tests: models/demos/deepseek_v41_flash_d_p/tests/test_moe_exact_replicas.py

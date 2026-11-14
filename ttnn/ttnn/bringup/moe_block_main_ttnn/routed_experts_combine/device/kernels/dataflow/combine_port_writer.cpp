@@ -289,6 +289,10 @@ void kernel_main() {
     const uint32_t f_done = get_arg_val<uint32_t>(a + 4), f_jobs = get_arg_val<uint32_t>(a + 5);
     const uint32_t f_rxy = get_arg_val<uint32_t>(a + 6), f_limit = get_arg_val<uint32_t>(a + 7);
     const uint32_t f_wpage = get_arg_val<uint32_t>(a + 8);
+    // (P.55c: this call's token - the waiter writes it into the chip's landed word, exact word FX_LANDED, once every
+    // waited word reached its target; the receiver's flat expert readers wait for it before the replica's weights)
+    const uint32_t f_tok = get_arg_val<uint32_t>(a + 9);
+    constexpr uint32_t FX_LANDED = 448;
     const uint32_t f_tab = area + REC_F_OFF, f_stg = f_tab + F_TABB, f_pg = f_stg + F_NSTG * F_CHUNK;
     const uint32_t f_cp = f_pg + FX_PG, f_scr = f_cp + FX_PG, f_sst = f_scr + 128, f_arr = f_sst + 64;
     const volatile tt_l1_ptr uint32_t* ftab = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(f_tab);
@@ -322,6 +326,16 @@ void kernel_main() {
     const uint32_t f_nj = fpg[0], f_cap = fpg[1] ? fpg[1] : 1;
     const uint32_t f_nw = f_waiter ? (fcp[2] < 4 ? fcp[2] : 4) : 0;
     uint32_t f_seen[4] = {0, 0, 0, 0};
+    bool f_landed = false;
+    auto f_land = [&]() {
+        if (!f_landed && f_tok) {
+            noc_inline_dw_write(get_noc_addr(f_rx, f_ry, f_done + 4 * FX_LANDED), f_tok);
+            f_landed = true;
+        }
+    };
+    if (f_waiter && f_nw == 0) {  // (nothing comes to this chip: its replica, if any, is not this call's)
+        f_land();
+    }
     for (uint32_t i = 0; i < f_nw * 64 + 16 && f_waiter; ++i) {
         farr[i] = 0;
     }
@@ -581,6 +595,13 @@ void kernel_main() {
             if (v > f_seen[w]) {
                 f_seen[w] = v;
             }
+        }
+        bool met = true;
+        for (uint32_t w = 0; w < f_nw; ++w) {
+            met &= f_seen[w] >= fcp[9 + 2 * w];
+        }
+        if (met) {
+            f_land();
         }
     };
 #else
@@ -888,6 +909,7 @@ void kernel_main() {
     // (shared: every grant snapshot addressed to this port landed - each row used a grant, so the counts reach used)
     for (bool open_ = true; open_;) {
         invalidate_l1_cache();
+        f_tick(false);  // (REC_FX: the waiter keeps watching the copy's flags)
         open_ = false;
         for (uint32_t ci = 0; ci < N * AP; ++ci) {
             open_ |= (SHARED ? grec[(ci / AP) * SNAPW + ci % AP] : cred[ci]) != used[ci];
@@ -904,6 +926,7 @@ void kernel_main() {
             const uint32_t o = (lnk + L - (me + h) % L) % L;
             while ((lay_r[h * AP + o] >> 24) != tag) {
                 invalidate_l1_cache();
+                f_tick(false);
             }
         }
     }
@@ -926,6 +949,7 @@ void kernel_main() {
                 break;
             }
         }
+        f_land();  // (also at the limit: the readers stop waiting; the status says the copy was late)
         fsst[8] = get_timestamp_32b();
         fsst[9] = met ? 1u : 2u;
         for (uint32_t w = 0; w < f_nw; ++w) {

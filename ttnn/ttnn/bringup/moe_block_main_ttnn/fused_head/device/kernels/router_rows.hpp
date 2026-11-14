@@ -64,6 +64,9 @@ FORCE_INLINE uint32_t score_of(uint32_t sv, uint32_t eid, uint32_t c) {
 // below 2^24): words [0, E) candidate e's own slot, [E, 2 E) its copies n | first << 6, [2 E, ..) the copies' slots
 // (e's are first .. first + n - 1). A (token, candidate) goes to holder h = hash(token) x (n + 1) / 2^16 of
 // [own slot, copies...]: an even split, deterministic (the token's key: this chip and its owned row).
+// Uneven split (MOE_REPLICAS=exact, P.55c): a copy word slot | lb << 9 (slot < 512, lb 15 bits, > 0 for every copy
+// of the candidate): copy i takes the tokens whose 15-bit hash is in [lb_i, lb_{i+1}) (lb increasing), the own slot
+// [0, lb_0) - the planner's share of each holder. A first copy word below 512 (lb 0): the even split above.
 FORCE_INLINE uint32_t smap_word(uint32_t i) {
     const uint32_t v = reinterpret_cast<const uint32_t*>(RT_SMAP)[fo(i >> 5, i & 31)];
     const uint32_t e = (v >> 23) & 0xFF;
@@ -75,8 +78,22 @@ FORCE_INLINE uint32_t slot_of(uint32_t cand, uint32_t key) {
     if (n == 0) {
         return smap_word(cand);
     }
-    const uint32_t h = ((((key * 2654435761u) >> 16) & 0xFFFF) * (n + 1)) >> 16;
-    return h == 0 ? smap_word(cand) : smap_word(2 * E + (cw >> 6) + h - 1);
+    const uint32_t h16 = ((key * 2654435761u) >> 16) & 0xFFFF;
+    const uint32_t c0 = 2 * E + (cw >> 6);
+    if (smap_word(c0) >> 9) {  // (the planner's shares)
+        const uint32_t h15 = h16 >> 1;
+        uint32_t s = smap_word(cand);
+        for (uint32_t i = 0; i < n; ++i) {
+            const uint32_t w = smap_word(c0 + i);
+            if (h15 < (w >> 9)) {
+                break;
+            }
+            s = w & 0x1FF;
+        }
+        return s;
+    }
+    const uint32_t h = (h16 * (n + 1)) >> 16;
+    return h == 0 ? smap_word(cand) : smap_word(c0 + h - 1);
 }
 #endif
 // tok0: the first of the 32 token columns' owned rows on this chip (replica slots: the tokens' keys)

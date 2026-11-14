@@ -1,0 +1,130 @@
+{
+ "used": [
+  {
+   "id": "DS41-228",
+   "how": "the decision numbers come from the real prompts' chunk 10 in tests/test_moe_exact_replicas.py, not from the A/B's random-token position profile",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-245",
+   "how": "the streamed side's plan used P.55b's measured pair copy (0.89 ms, both links) as the copy edge, and the result is compared against it",
+   "traced": null,
+   "cited": true
+  },
+  {
+   "id": "DS41-244",
+   "how": "the receivers compute the replica last and wait for the whole copy (moe_exact_model.SUB_TILES 0 in the plan), since a light chip finishes its own experts long before a copy lands",
+   "traced": null,
+   "cited": true
+  },
+  {
+   "id": "DS41-242",
+   "how": "the fill side's serial expert_slot_copy runs once per plan outside the profiled chunk with a sync after it, never in the chunk loop",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-233",
+   "how": "accuracy compared on re-runs of chunk 10 after a warm re-run, with an off-vs-off repeat that must be bit-identical",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-229",
+   "how": "the counts are read through flush_counts' [1, 1, 1, slots] buffers (MOE_COUNTS=on) for the plans",
+   "traced": true,
+   "cited": true
+  }
+ ],
+ "contradicted": [
+  {
+   "id": "DS41-244",
+   "evidence": "its fix line 'split each copy over 2 paths (20.9 / 10.1 ms survive)': P.55c measured the streamed exact split on chunk 10 at +9.2 ms (novel) / +5.1 ms (code) device a chunk vs off; copy layers take 2.10 ms vs the model's 1.21 (results/P.55c_exact_replicas.json, DS41-246)",
+   "cited": true
+  },
+  {
+   "id": "DS41-245",
+   "evidence": "'P.55a's model at 0.77 ms: novel 8.6, code 2.3 ms a chunk' does not survive in the model: the streamed split measured +9.2 / +5.1 ms; recalibrated at 1.25 ms a copy the model plans 0.77 / 0.06 ms (DS41-246)",
+   "cited": true
+  }
+ ],
+ "missing": [
+  "the steady path's first re-run of a chunk differs from later re-runs (window carry), so it cannot be an accuracy baseline (DS41-247)",
+  "the flat expert orders its experts biggest first (expert_schedule.hpp se_dyn_build), so a receiver's replica would run first unless forced last; the home's hot expert already runs first",
+  "the fused head assigns a token's slot in its router rows before any cross-chip count exists, so an on-device exact planner needs a count exchange inside the head or a second head pass (DS41-248)",
+  "the exact copy's flag words alternate by the combine's call parity: interleaving exact and stock combine calls on one resources leaves a parity unzeroed (every call must run the exact program while a stream plan is set)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "no padding or duplicated work: the replica is the spare slot P.46 already allocates; the kernels were extended (router_rows.hpp uneven split, fx_wait.hpp) instead"
+  },
+  {
+   "id": "OV-23",
+   "answer": "n/a",
+   "evidence": "no Python-built op added or touched; the changes are in the C++ fork's kernels and host program (routed_experts_combine, flat_routed_expert, fused head kernel)"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork regression or unit suite run on the 8x4; only the model-level test (test_moe_exact_replicas) and the gate's units"
+  },
+  {
+   "id": "OV-39",
+   "answer": "done",
+   "evidence": "(2) two paths a copy: P.55b's both-links jobs used as built; (3) the home re-reads the slot from DRAM (P.55b's port reads; the home already computes its hot expert first: the flat expert's biggest-first order); (1) partly: the receivers wait for the whole copy (one token a call), not block by block - per block would save at most the replica's own compute (~0.05-0.1 ms) of a 0.9 ms gap. Copies on time at the measured copy time (P.55a's model, whole-copy wait): 0.89 ms novel 2 of 289 / 5.49 ms, code 0 of 66 / 1.13 ms; 1.25 ms novel 0 of 44 / 0.77 ms, code 0 of 4 / 0.06 ms"
+  },
+  {
+   "id": "OV-40",
+   "answer": "done",
+   "evidence": "(1) test_moe_exact_replicas records exact_device_ms_{off,fill,exact}_{novel,code} and exact_experts_ms_* at chunk 10 after the device's own prefill: novel 185.9 / 161.5 / 195.0, code 170.5 / 158.3 / 175.6 (experts 56.5 / 39.2 / 68.7 and 46.5 / 38.9 / 51.7); (2) receivers compute the replica last (expert_schedule.hpp SE_FX_SPARE) and read it once the copy landed (fx_wait.hpp; whole copy, see OV-39); (3) a copy layer takes +1.0-1.2 ms over the same split with the copies in place (novel 23 layers 2.10 vs 0.93 ms, code 8 layers 1.98 vs 0.96); (4) every side bit-identical to off on every MoE layer, the repeats bit-identical, spare slots spoiled first"
+  }
+ ],
+ "cited_only": [
+  "DS41-246",
+  "DS41-247",
+  "DS41-248"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "moe_replication",
+  "task": "P.55c",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-14T00:44:47",
+  "head": "ac18c0bf487",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.55c.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.55c_exact_replicas.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.55c_ops.json.gz",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.55c_profile.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.55c.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_moe_exact_replicas.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/moe_block_main_adapter.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/README.md",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/flat_routed_expert/device/flat_program.hpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/flat_routed_expert/device/flat_routed_expert_device_operation_types.hpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/flat_routed_expert/device/flat_routed_expert_program_factory.cpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/flat_routed_expert/device/kernels/down_weight_reader.cpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/flat_routed_expert/device/kernels/expert_schedule.hpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/flat_routed_expert/device/kernels/fx_wait.hpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/flat_routed_expert/device/kernels/gate_up_weight_read.hpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/flat_routed_expert/device/kernels/gate_up_x_forwarder.cpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/fused_head/device/kernels/router_rows.hpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/routed_experts_combine/device/combine_program.cpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/routed_experts_combine/device/combine_program.hpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/routed_experts_combine/device/kernels/dataflow/combine_port_writer.cpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/routed_experts_combine/device/routed_experts_combine_program_factory.cpp"
+  ]
+ }
+}

@@ -917,3 +917,73 @@ The one this change broke (test_seeded: `git add state.json`) is fixed.
 - Gotchas: metrics.results_dir() outside the gate is generated/bringup_adhoc (the test falls back to the ledger for
   P.55a's record); a port's waiter stamps live in the persistent exact words, so they describe the last call only.
 - Re-run: `gate P.55b --spec <spec> --check --unit P.55b` (~6.5 min, devjob); `measure --task P.55b`.
+
+## P.55c (perf, attempt 1): MoE exact replicas, step 3: the exact split in the whole model
+- Expected per chunk (written before the first device result; perf_guide 1-2, 4 "moved time"; chunk 10 at 51,200):
+  - fill (fallback c': spare slots filled before the timed chunk, copies free): device -10 to -20 ms novel, -5 to -10
+    code (P.55a's max-mode bound 21.9 / 10.6 ms, less what dispatch imbalance and the plan's hash split leave), host 0.
+  - stream (the design: the copy in the layer's own combine, receivers wait for it): device -3 to -6 ms novel, -1 to
+    -1.5 code (P.55b's deadline model at 0.89-1.25 ms a copy: 6.2 / 1.4 ms) minus the copies' added program time
+    (+0.3-0.4 ms a layer with copies, partly hidden behind the busiest chip): likely ~0 to -4 novel, ~0 or worse code.
+    Host: +~1 ms (a runtime-arg update of the combine a layer).
+  - not in either: a device planner. The split is decided in the fused head's router rows (router_rows.hpp
+    slot_of) BEFORE any chip knows the other chips' counts (the counts exist only after the routing exchange), so an
+    on-device exact plan needs a second head pass a layer (or a cross-chip count exchange inside the head): ~0.2 ms
+    a layer, ~4 ms a chunk, i.e. about the whole stream gain.
+- Design as built (MOE_REPLICAS=exact; default off, keep_default):
+  - Split (planner -> dispatch): a layer's plan [(home chip, home slot, kept tokens, [(receiver, tokens)])] becomes the
+    slot map with each holder's share as a range of the token's 15-bit hash (router_rows.hpp slot_of, the uneven
+    split: copy word slot | lb << 9; old maps keep the even split bit for bit; tt/moe_block_main_adapter.
+    exact_map_words). The fused head then routes every (token, expert) to the home or a replica; dispatch, counts,
+    combine follow the slots unchanged.
+  - Order: the flat expert already runs its experts biggest first (expert_schedule.hpp se_dyn_build), so the home
+    computes its hot expert first. Receivers: with the exact copy (REC_FX) the combine builds the flat expert with
+    fx_spare: every role puts the spare slot (the replica) last and never pins it.
+  - Copy: P.55b's REC_FX as built (home re-reads the slot, both links of the first hop, relay trees, a ready flag a
+    32-piece block). New: the chip's waiter port writes the call's token into the landed word (exact word 448) once
+    every waited flag word hit its target; the receivers' gate/up and down weight readers read the replica's weights
+    only after it (fx_wait.hpp, a 4 B poll every ~1 us, bounded). Whole copy, not block by block (OV-39 (1): at most
+    the replica's own compute, ~0.05-0.1 ms of a ~0.9 ms gap). While any layer has a stream plan, every MoE call of
+    the block runs the exact program (empty jobs where none): the flag words alternate by call parity (a stock call in
+    between would leave a parity unzeroed).
+  - Planner: NOT on device (DS41-248). The plans are computed on the host (tests/moe_exact_model.Plan, P.55a's A / B)
+    from a counting run of the same chunk; a device planner fed the same counts plans the same, so the numbers below
+    leave out only its own cost and a count exchange. Fallback c' (fill): set_exact(fill=True), spare slots filled by
+    expert_slot_copy before the chunk (outside the profiled window).
+- Results (the final `gate P.55c --check`, unit test_moe_exact_replicas; chunk 10 at 51,200 = the quick rung's chunk,
+  after the device's own prefill of chunks 0-9; re-runs on the steady path; device ms a chunk = median of 3 profiled
+  runs; wall = median of 5 unprofiled runs, first host call to the sync, MOE_COUNTS on - not the framework's clean wall):
+
+  | prompt | side | device ms | wall ms | experts+combine | dispatch | replicas | max diff vs off |
+  |---|---|---|---|---|---|---|---|
+  | novel | off | 187.6 | 272.6 | 57.1 | 20.4 | 0 | (off repeat 0) |
+  | novel | fill (copies free) | 156.6 (-31.0) | 249.8 (-22.8) | 38.1 | 11.2 | 512 | 0 |
+  | novel | exact (streamed) | 194.5 (+6.9) | 280.3 (+7.7) | 68.9 | 18.0 | 290 | 0 |
+  | code | off | 170.7 | 259.7 | 46.6 | 14.4 | 0 | (off repeat 0) |
+  | code | fill (copies free) | 157.9 (-12.8) | 249.1 (-10.6) | 39.1 | 11.1 | 295 | 0 |
+  | code | exact (streamed) | 180.2 (+9.5) | 274.1 (+14.4) | 53.4 | 13.9 | 67 | 0 |
+
+  The run before (same code but the wall runs): novel 185.9 / 161.5 / 195.0, code 170.5 / 158.3 / 175.6 device ms.
+  Every side bit-identical to off on every MoE layer's output, repeats bit-identical (the exact side with every
+  receiver's spare slot spoiled first: the wait works). Copy cost in these real chunks (OV-40 (3)): a layer with copies
+  2.10 ms (novel, 23 layers) / 1.98 (code, 8) vs 0.93 / 0.96 with the same split's copies in place and 1.62 / 1.51 off;
+  layers without copies +0.07 / +0.02 ms (the exact program with empty jobs, after a copy layer's skew).
+- What limits it (DS41-246): a copy tree lands 1.25 ms (one tree, P.55b) to ~1.9 ms (19 receivers of one expert) into
+  the layer, while the off layer's busiest chip is done at 1.0-1.9 ms; the plan assumed 0.89 ms and its model
+  predicted 1.21 ms for the copy layers (measured 2.10). Recalibrated (P.55a's model, whole-copy wait): 1.25 ms a copy
+  -> novel 0.77 ms a chunk (0 of 44 copies on time), code 0.06; 1.6 ms -> 0. The split itself is worth 12-24 ms
+  (fill); the copy has to be in place before the layer (another layer's call, P.53's piggyback, or a learned table,
+  P.54) to keep it.
+- The model's chunk path (the orchestrator's A/B, ladder, profile): exact without a plan == runtime, the stock combine:
+  ~0 by construction (P.52: runtime vs off within noise); the A/B's random tokens could not show the split anyway
+  (DS41-228).
+- Cores: none added (rule 18 holds: the port cores and the flat expert's cores, inside the 11 x 10 cap). Host: 6
+  runtime args a flat weight-reader core and the port's token, written every exact call.
+- Gotchas: DS41-247 (the steady path's first re-run is no baseline: attempt 1 read 4256 max diff, all of it the
+  baseline); the flat expert's biggest-first order (a receiver's replica would go first); flag parity (above).
+- Re-run: `gate P.55c --spec <spec> --check --unit 'P.55c#test_moe_exact_replicas'` (~5 min on the 8x4, devjob);
+  `python -m models.demos.common.bringup.orchestrator measure --spec <spec> --task P.55c`.
+- `measure --task P.55c` (change on: MOE_REPLICAS=exact ENGRAM_TABLE=resident, no plan in the chunk path, after the
+  last code edit): determinism 0 (novel, code, state); quick min layer PCC 0.60548579 at L39 (= P.52 / P.53 / P.55b:
+  the off path's bytes), host transfers per layer 0, wall 182.6 ms (spread 3.9); p51200 wall 206.9 (spread 11.4).
+  Final gate --check: PASS (ladder rung last within every limit, determinism 0; profile chunk_wall 182.7, device 171.4).

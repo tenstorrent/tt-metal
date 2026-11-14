@@ -4,6 +4,7 @@
 
 #include "routed_experts_combine_program_factory.hpp"
 
+#include <atomic>
 #include <unordered_map>
 
 #include <tt-metalium/host_api.hpp>
@@ -60,15 +61,30 @@ void set_fill(
         return;
     }
     TT_FATAL(t.fill_done.has_value(), "routed_experts_combine: MOE_FILL without its done words");
+    // P.55c: a token a call (never 0): the chip's waiter port writes it into the landed word once the copy has landed,
+    // the flat expert's weight readers wait for it before the replica's weights (fx_wait.hpp)
+    static std::atomic<uint32_t> next_token{1};
+    uint32_t token = 0;
+    while (p.fill_exact && token == 0) {
+        token = next_token.fetch_add(1);
+    }
+    const uint32_t done = static_cast<uint32_t>(t.fill_done->buffer()->address());
     set_combine_fill_args(
-        program,
-        sv.combine,
-        *p.plan,
-        sv.chip,
-        *t.out.device(),
-        p.fill_call.get(),
-        static_cast<uint32_t>(t.fill_done->buffer()->address()),
-        p.fill_exact);
+        program, sv.combine, *p.plan, sv.chip, *t.out.device(), p.fill_call.get(), done, p.fill_exact, token);
+    if (p.fill_exact) {
+        TT_FATAL(!sv.flat.fx_readers.empty(), "routed_experts_combine: the exact fill without the readers' waits");
+        const auto rx = t.out.device()->worker_core_from_logical_core(p.plan->collector);
+        const bool any = p.fill_call && p.fill_call->exact.has_value();
+        for (const auto& [k, core, idx] : sv.flat.fx_readers) {
+            auto& rt = tt::tt_metal::GetRuntimeArgs(program, k, core);
+            rt[idx] = any ? 1u : 0u;
+            rt[idx + 1] = static_cast<uint32_t>(rx.x) | static_cast<uint32_t>(rx.y) << 16;
+            rt[idx + 2] = done + 4 * kFxLanded;
+            rt[idx + 3] = token;
+            rt[idx + 4] = any ? p.fill_call->exact_limit : 0u;
+            rt[idx + 5] = 0;
+        }
+    }
 }
 
 }  // namespace routed_experts_combine_factory_detail
@@ -89,12 +105,13 @@ RoutedExpertsCombineFactory::cached_mesh_workload_t RoutedExpertsCombineFactory:
             tt::tt_metal::Program program;
             shared_variables_t sv;
             // the flat routed expert on its cells (the same fragment on every chip), then the combine on the rest
+            // (P.55c: with the exact copy the flat expert schedules the spare slot last and waits for its copy)
+            auto fcfg = p.flat_config;
+            if (p.fill_exact) {
+                fcfg.fx_spare = fcfg.experts_per_chip;
+            }
             sv.flat = flat_routed_expert::add_flat_routed_expert_program(
-                program,
-                mesh_device,
-                p.flat_config,
-                *flat_routed_expert::flat_routed_expert_plan(mesh_device, p.flat_config),
-                t.flat);
+                program, mesh_device, fcfg, *flat_routed_expert::flat_routed_expert_plan(mesh_device, fcfg), t.flat);
             TT_FATAL(
                 sv.flat.y_writers.size() == p.flat.writers.size(),
                 "routed_experts_combine: {} y writers in the program, {} planned",

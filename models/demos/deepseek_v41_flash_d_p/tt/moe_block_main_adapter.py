@@ -296,6 +296,38 @@ def slot_map_words(perm, epc: int, spc: int, copies) -> torch.Tensor:
     return w
 
 
+SHARE_ONE = 1 << 15  # (router_rows.hpp slot_of: the uneven split's 15-bit hash range)
+
+
+def exact_map_words(E: int, epc: int, spc: int, entries) -> torch.Tensor:
+    """MOE_REPLICAS=exact (P.55c): the slot map of an exact plan with the planner's shares (router_rows.hpp slot_of,
+    the uneven split). entries: [(candidate b = home chip x epc + home slot, kept tokens, [(receiver chip, tokens)])];
+    holder i's share of b's tokens is its tokens / the total, as a range of the 15-bit token hash: the own slot
+    [0, lb_0), copy i [lb_i, lb_{i+1}) - copy words slot | lb << 9 with lb >= 1."""
+    w = torch.zeros(1024, dtype=torch.float32)
+    b_ = torch.arange(E)
+    w[:E] = ((b_ // epc) * spc + b_ % epc).float()
+    first = 0
+    chips = set()
+    for b, kept, rcv in sorted(entries, key=lambda e: e[0]):
+        assert rcv and len(rcv) < 64, f"exact map: candidate {b} with {len(rcv)} receivers"
+        tot = int(kept) + sum(int(x) for _, x in rcv)
+        assert tot > 0
+        w[E + b] = float(len(rcv) | (first << 6))
+        acc = int(kept)
+        for i, (k, x) in enumerate(rcv):
+            assert k != b // epc and k not in chips and 0 <= k < E // epc, f"exact map: receiver {k} of {b}"
+            chips.add(k)
+            lb = min(max(1, (acc * SHARE_ONE + tot // 2) // tot), SHARE_ONE - 1)
+            slot = k * spc + epc
+            assert slot < 512
+            w[2 * E + first + i] = float(slot | (lb << 9))
+            acc += int(x)
+        first += len(rcv)
+    assert 2 * E + first <= 1024, f"slot map: {first} copies past the tile"
+    return w
+
+
 def holder_of(key: int, n: int) -> int:
     """router_rows.hpp slot_of's holder of a token (key: chip << 16 | its owned row) among n + 1 slots."""
     return ((((key * 2654435761) & 0xFFFFFFFF) >> 16) & 0xFFFF) * (n + 1) >> 16
@@ -647,11 +679,149 @@ class TtMoEBlockMainLayer:
         )
         return len(jobs)
 
+    # ------------------------------------------------------------------ MOE_REPLICAS=exact (P.55c)
+    def set_exact(self, entries, fill: bool = True) -> int:
+        """MOE_REPLICAS=exact: this layer's exact plan from now on. entries: [(home chip, home slot, kept tokens,
+        [(receiver chip, tokens)])] (one replica a receiver: its spare slot; tests/moe_exact_model.Plan's rep / nh).
+        fill (the brief's fallback c'): every receiver's spare slot is filled now by P.47's serial expert_slot_copy
+        (one program, in program order before the map), then the map with the planner's shares is written into the
+        router bias (a host write on CQ0: after the copy). [] = no plan (the empty map: the off path's routing).
+        Returns the copies made. The streamed copy (the layer's own combine fills the slots in the call) is
+        set_exact_jobs."""
+        assert self.replicas and settings.get("MOE_REPLICAS") == "exact", "set_exact needs MOE_REPLICAS=exact"
+        assert self.head_w is not None, "set_exact: the layer's head runs once first (its router bias)"
+        n = self.mesh.get_num_devices()
+        spare = {}
+        for k, j, _, rcv in entries:
+            assert 0 <= k < n and 0 <= j < self.epc
+            for r, _x in rcv:
+                assert 0 <= r < n and r != k and r not in spare, f"exact plan: receiver {r} of ({k}, {j})"
+                spare[r] = (int(k), int(j))
+        jobs = []
+        if fill:
+            tabs = self.slot_tables()
+            have = getattr(self, "_spare_holds", {})
+            for r in sorted(spare):
+                if have.get(r) != spare[r]:
+                    k, j = spare[r]
+                    jobs.append((k, r, tabs.fill_table(j)))
+            if jobs:
+                _mb().expert_slot_copy(
+                    self.w_gu, self.w_d, self.w_gu, self.w_d, tabs.runs, self.block().resources, jobs
+                )
+            self._spare_holds = {**have, **spare}
+        E = len(self.perm)
+        self._exact_words = (
+            exact_map_words(E, self.epc, self.spc, [(k * self.epc + j, kept, rcv) for k, j, kept, rcv in entries])
+            if entries
+            else None
+        )
+        self.copies = sorted((int(self.perm[k * self.epc + j]), r) for r, (k, j) in spare.items())
+        self._write_slot_map()
+        return len(jobs)
+
+    def set_exact_jobs(self, entries) -> int:
+        """MOE_REPLICAS=exact, the design (P.55c stream): this layer's exact plan with its copies streamed inside the
+        layer's own routed_experts_combine (P.55b's REC_FX: the home's ports re-read the hot slot and send it over both
+        links of the first hop, receivers relay as a tree; tt/expert_exact.build_jobs). The receivers' flat expert
+        computes the replica last and reads its weights once the chip's waiter has seen every block land (fx_wait.hpp).
+        While any layer of the block has a stream plan, EVERY MoE call on the block runs the exact program (empty jobs
+        for a layer without a plan): the copy's flag words alternate by the combine's call parity, so a stock call in
+        between would leave a parity's words unzeroed. [] = no plan. Returns the copies (edges) of the plan."""
+        from . import expert_exact as EX
+
+        assert self.replicas and settings.get("MOE_REPLICAS") == "exact", "set_exact_jobs needs MOE_REPLICAS=exact"
+        assert self.head_w is not None, "set_exact_jobs: the layer's head runs once first (its router bias)"
+        res = self.block().resources
+        fx = _exact_fx(self, res)
+        hot, spare = [], {}
+        for k, j, _, rcv in entries:
+            rs = [int(r) for r, _ in rcv]
+            for r in rs:
+                assert r != k and r not in spare, f"exact plan: receiver {r} of ({k}, {j})"
+                spare[r] = (int(k), int(j))
+            hot.append((int(k), int(j), rs))
+        n = self.mesh.get_num_devices()
+        if hot:
+            host, info = EX.build_jobs(
+                hot,
+                n,
+                tuple(self.mesh.shape),
+                fx["links"],
+                fx["dir_of"],
+                fx["tables"].pieces,
+                int(settings.get("MOE_EXACT_BLOCK")),
+                int(settings.get("MOE_EXACT_CAP")),
+                fx["tables"].relay_table,
+                paths=2,
+                fanout=int(settings.get("MOE_EXACT_FANOUT")),
+            )
+            relays = {e[3] for e in info["edges"]} - {r for r in spare}
+            assert not relays, f"exact plan: relay chips {relays} that receive no replica"
+            old = getattr(self, "_fx_jobs", None)
+            if old is not None:
+                ttnn.deallocate(old)
+            self._fx_jobs = EX.jobs_tensor(host, self.mesh)
+            self._fx_edges = len(info["edges"])
+        else:
+            self._fx_jobs, self._fx_edges = None, 0
+        self._spare_holds = {}  # (the copy rewrites the spare slots every call)
+        E = len(self.perm)
+        self._exact_words = (
+            exact_map_words(E, self.epc, self.spc, [(k * self.epc + j, kept, rcv) for k, j, kept, rcv in entries])
+            if entries
+            else None
+        )
+        self.copies = sorted((int(self.perm[k * self.epc + j]), r) for r, (k, j) in spare.items())
+        self._write_slot_map()
+        fx["layers"] = {L for L in fx["layers"] if L is not self} | ({self} if hot else set())
+        if not fx["layers"]:
+            _mb().set_combine_fill_exact(res, False)
+        return self._fx_edges
+
+    def spoil_spares(self, entries) -> None:
+        """Test aid (P.55c): every receiver's spare slot overwritten with its own chip's slot 0 (a local
+        expert_slot_copy), so a replica computed before its streamed copy landed shows as a wrong output."""
+        tabs = self.slot_tables()
+        jobs = [(int(r), int(r), tabs.fill_table(0)) for _, _, _, rcv in entries for r, _ in rcv]
+        if jobs:
+            _mb().expert_slot_copy(self.w_gu, self.w_d, self.w_gu, self.w_d, tabs.runs, self.block().resources, jobs)
+        self._spare_holds = {}
+
+    def _exact_call(self, blk) -> None:
+        """Before the layer's combine (P.55c stream): the exact program with this layer's jobs (empty without a plan)
+        whenever any layer of the block has a stream plan."""
+        hit = _FX.get(id(blk.resources))
+        if hit is None or hit["res"] is not blk.resources or not hit["layers"]:
+            return
+        jobs = getattr(self, "_fx_jobs", None)
+        _mb().set_combine_fill_exact(
+            blk.resources,
+            True,
+            self.w_gu,
+            self.w_d,
+            hit["tables"].runs,
+            jobs if jobs is not None else hit["empty"],
+            hit["limit"],
+        )
+
+    def set_exact_mode(self, mode: str, entries) -> int:
+        """tests/test_moe_exact_replicas.py: mode fill (set_exact(fill=True)) or exact (the streamed copy:
+        set_exact_jobs, the receivers' spare slots spoiled first so a replica read before its copy shows)."""
+        if mode == "fill":
+            return self.set_exact(entries, fill=True)
+        if mode == "exact":
+            n = self.set_exact_jobs(entries)
+            self.spoil_spares(entries)
+            return n
+        raise ValueError(f"exact mode {mode}")
+
     def _host_map(self, copies) -> ttnn.Tensor:
         E = len(self.perm)
         host = torch.zeros(E + 32, 32, dtype=torch.float32)
         host[:E] = self._bias.reshape(E, 1)
-        host[E:] = slot_map_words(self.perm, self.epc, self.spc, copies).reshape(32, 32)
+        ew = getattr(self, "_exact_words", None)
+        host[E:] = (ew if ew is not None else slot_map_words(self.perm, self.epc, self.spc, copies)).reshape(32, 32)
         return ttnn.from_torch(
             host, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh)
         )
@@ -816,6 +986,8 @@ class TtMoEBlockMainLayer:
                 xb_.buffer_address()
             ), "xq_ready needs x = input_buffers()[0] (the norm wrote xq from it)"
         xb = cast(x, ttnn.bfloat16)
+        if self.replicas:
+            self._exact_call(blk)
         if not self.own_rows:
             assert not fed, "FFN_FEED: the feed is the OWN_ROWS path's"
             y = blk(xb, weights, xq=xq)
@@ -922,6 +1094,35 @@ class TtMoEBlockMainLayer:
         out = ttnn.add(yt, se, memory_config=DRAM)
         dealloc(yt)
         return out
+
+
+_FX: dict = {}  # id(resources) -> P.55c stream state: res, tables, empty jobs, links, dir_of, limit, layers with jobs
+
+
+def _exact_fx(layer, res) -> dict:
+    """The block's exact-copy state (P.55c): run tables, empty jobs, the port directions, the waits' limit."""
+    from . import expert_exact as EX
+
+    hit = _FX.get(id(res))
+    if hit is None or hit["res"] is not res:
+        mb = _mb()
+        sl = layer.slot_tables().lay_spc
+        tables = EX.ExactTables(sl, layer.epc, mb.expert_slot_copy_chunk_bytes(res), layer.mesh)
+        links = mb.combine_fill_links(res)
+        dir_of = lambda a, b: mb.combine_fill_port(res, a, b)  # noqa: E731
+        n = layer.mesh.get_num_devices()
+        empty, _ = EX.build_jobs([], n, tuple(layer.mesh.shape), links, dir_of, tables.pieces, 1, 1, tables.relay_table)
+        EX.AICLK_MHZ = EX.aiclk_mhz()
+        hit = _FX[id(res)] = {
+            "res": res,
+            "tables": tables,
+            "empty": EX.jobs_tensor(empty, layer.mesh),
+            "links": links,
+            "dir_of": dir_of,
+            "limit": EX.ms_cycles(float(settings.get("MOE_EXACT_LIMIT_MS"))),
+            "layers": set(),
+        }
+    return hit
 
 
 _FW = None

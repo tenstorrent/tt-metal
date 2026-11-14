@@ -524,9 +524,14 @@ TABLE = {
         "2026-11-13, EXPERIMENTAL): the runtime layout (the same spare slot), filled by the hot experts of THIS layer "
         "streamed inside the layer's own routed_experts_combine (set_combine_fill_exact, REC_FX: the port cores read "
         "the home slot's blocks and send them over both links of the first hop, a ready flag every MOE_EXACT_BLOCK "
-        "pieces, receivers relaying to MOE_EXACT_FANOUT more; tt/expert_exact.py). Step 2 (P.55b) is the "
-        "microbenchmark only (tests/test_moe_exact_copy.py): the model's chunk path copies nothing yet (the device "
-        "planner and the dispatch split are P.55c), so in a chunk exact == runtime",
+        "pieces, receivers relaying to MOE_EXACT_FANOUT more; tt/expert_exact.py). P.55c: a layer's plan "
+        "(set_exact_jobs: hot experts, receivers, each holder's token share as a hash range in the slot map, "
+        "router_rows.hpp slot_of's uneven split) makes the receivers' flat expert compute the replica last and read it "
+        "once its copy landed (fx_wait.hpp); set_exact(fill=True) is the brief's fallback (spare slots filled ahead by "
+        "expert_slot_copy). No device planner: the head assigns slots before any chip knows the others' counts, so the "
+        "plans come from a counting run (tests/test_moe_exact_replicas.py); without a plan exact == runtime in a chunk. "
+        "Measured (P.55c, chunk 10 at 51,200, device ms a chunk off -> fill -> exact): novel 185.9 -> 161.5 -> 195.0, "
+        "code 170.5 -> 158.3 -> 175.6 (DS41-246)",
     ),
     "MOE_EXACT_BLOCK": Setting(
         "32",
