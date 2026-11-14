@@ -43,6 +43,7 @@ def test_vit(device, model_location_generator):
     image_processor = AutoImageProcessor.from_pretrained(model_name)
 
     parameters = preprocess_model_parameters(
+        model_name=model_name,
         initialize_model=lambda: model,
         device=device,
         custom_preprocessor=ttnn_optimized_sharded_vit_bh.custom_preprocessor,
