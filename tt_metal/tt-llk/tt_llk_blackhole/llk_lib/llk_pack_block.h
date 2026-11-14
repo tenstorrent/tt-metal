@@ -896,6 +896,10 @@ template <std::uint32_t ntiles, bool is_fp32_dest_acc_en, bool guard_dest_stradd
 __attribute__((always_inline)) inline void llk_pack_block(std::uint32_t start_tile_index, std::uint32_t output)
 {
     static_assert(ntiles > 0, "pack_block packs at least one tile");
+    if constexpr (ntiles == 1)
+    {
+        pack_short_block = true;
+    }
     std::uint8_t output_id = get_output_id(output);
 
     LLK_ASSERT_BLOCK(are_packers_configured_correctly(pack_src_format[output_id], pack_dst_format[output_id]));

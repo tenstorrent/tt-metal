@@ -459,7 +459,7 @@ inline void pack_init_apply(
  * @param partial_face: True if packing a partial (sub-face-row) face.
  */
 // skip: LLK_PACK_RECONFIG_SKIP_* writes the caller knows are redundant (kernel-wide uniform formats).
-template <bool is_fp32_dest_acc_en, std::uint32_t skip = 0>
+template <bool is_fp32_dest_acc_en, std::uint32_t skip = 0, bool inl = false>
 inline void _llk_pack_reconfig_data_format_(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
@@ -474,7 +474,7 @@ inline void _llk_pack_reconfig_data_format_(
         return;
     }
 
-    reconfig_packer_data_format_and_state<is_fp32_dest_acc_en, skip>(pack_src_format, pack_dst_format, tile_size, tile_c_dim, num_faces, partial_face);
+    reconfig_packer_data_format_and_state<is_fp32_dest_acc_en, skip, inl>(pack_src_format, pack_dst_format, tile_size, tile_c_dim, num_faces, partial_face);
 }
 
 /**

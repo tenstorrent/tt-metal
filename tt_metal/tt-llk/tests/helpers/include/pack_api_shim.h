@@ -346,7 +346,7 @@ inline void pack_hw_configure(const std::uint32_t pack_output, const std::uint32
 #endif
 
 // The compute API's llk_pack_reconfig_data_format(new_output) (llk_pack_common_api.h): on the PR's LLK with its skip mask.
-template <bool is_fp32_dest_acc_en, bool gate = true>
+template <bool is_fp32_dest_acc_en, bool gate = true, bool inl = false>
 inline void pack_reconfig_data_format_body(const std::uint32_t new_output)
 {
     const std::uint32_t output_id  = get_output_id(new_output);
@@ -360,7 +360,7 @@ inline void pack_reconfig_data_format_body(const std::uint32_t new_output)
     }
     constexpr std::uint32_t skip = ckernel::packer::llk_pack_reconfig_skip_all<is_fp32_dest_acc_en, DST_SYNC_MODE, sizeof(pack_dst_format), gate>(
         pack_src_format, pack_dst_format, pack_tile_num_faces, pack_partial_face);
-    _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en, skip>(
+    _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en, skip, inl>(
 #else
     _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en>(
 #endif
@@ -392,6 +392,11 @@ inline void pack_reconfig_data_format(const std::uint32_t new_output)
                 return;
             }
         }
+        if (ckernel::packer::pack_short_block)
+        {
+            pack_reconfig_data_format_body<is_fp32_dest_acc_en, false, true>(new_output);
+            return;
+        }
     }
 #endif
     pack_reconfig_data_format_body<is_fp32_dest_acc_en, true>(new_output);
@@ -399,7 +404,7 @@ inline void pack_reconfig_data_format(const std::uint32_t new_output)
 
 #if PACK_API_SHIM_PR
 // The compute API's pack_reconfig_data_format(cb) with a constant cb (llk_pack_reconfig_data_format_ct): the immediate reconfigure.
-template <bool is_fp32_dest_acc_en, std::uint32_t new_output, bool gate>
+template <bool is_fp32_dest_acc_en, std::uint32_t new_output, bool gate, bool inl = false>
 __attribute__((always_inline)) inline void pack_reconfig_data_format_gate()
 {
     constexpr ckernel::packer::llk_pack_reconfig_imm_t imm =
@@ -412,7 +417,7 @@ __attribute__((always_inline)) inline void pack_reconfig_data_format_gate()
         !imm.ok || skip_all || new_output >= sizeof(pack_dst_format) || pack_src_format[new_output] == static_cast<unsigned char>(DataFormat::Invalid) ||
         pack_dst_format[new_output] == static_cast<unsigned char>(DataFormat::Invalid))
     {
-        pack_reconfig_data_format_body<is_fp32_dest_acc_en, gate>(new_output);
+        pack_reconfig_data_format_body<is_fp32_dest_acc_en, gate, inl>(new_output);
     }
     else
     {
@@ -442,7 +447,21 @@ __attribute__((always_inline)) inline void pack_reconfig_data_format()
 {
     if constexpr (ckernel::packer::llk_pack_reconfig_u2d_half<is_fp32_dest_acc_en, DST_SYNC_MODE>() && new_output < sizeof(pack_dst_format))
     {
-        pack_reconfig_data_format_gate<is_fp32_dest_acc_en, new_output, ckernel::packer::llk_pack_out32(pack_dst_format[new_output])>();
+        if constexpr (ckernel::packer::llk_pack_out32(pack_dst_format[new_output]))
+        {
+            if (ckernel::packer::pack_short_block)
+            {
+                pack_reconfig_data_format_gate<is_fp32_dest_acc_en, new_output, false, true>();
+            }
+            else
+            {
+                pack_reconfig_data_format_gate<is_fp32_dest_acc_en, new_output, true>();
+            }
+        }
+        else
+        {
+            pack_reconfig_data_format_gate<is_fp32_dest_acc_en, new_output, false>();
+        }
     }
     else
     {

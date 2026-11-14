@@ -958,8 +958,9 @@ inline void set_packer_config(
 // the template's first-phase name lookup (ADL cannot find it from a std::uint32_t argument).
 __attribute__((noinline)) bool is_pack_reads_per_xy_plane(const std::uint32_t expected, const std::uint32_t nop_count = 10);
 
+// impl: the body, inlined both into the out-of-line form below and into a caller that needs no out-of-line copy.
 template <bool is_fp32_dest_acc_en, std::uint32_t skip = 0>
-__attribute__((noinline)) inline void reconfig_packer_data_format(
+__attribute__((always_inline)) inline void reconfig_packer_data_format_impl(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
     const std::uint32_t tile_size,
@@ -1067,8 +1068,20 @@ __attribute__((noinline)) inline void reconfig_packer_data_format(
     TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
 }
 
-// The packer reconfigure with its pack state store, which set_packer_strides makes in every other call.
 template <bool is_fp32_dest_acc_en, std::uint32_t skip = 0>
+__attribute__((noinline)) inline void reconfig_packer_data_format(
+    const std::uint32_t pack_src_format,
+    const std::uint32_t pack_dst_format,
+    const std::uint32_t tile_size,
+    const std::uint32_t tile_c_dim,
+    const std::uint32_t num_faces,
+    const bool partial_face)
+{
+    reconfig_packer_data_format_impl<is_fp32_dest_acc_en, skip>(pack_src_format, pack_dst_format, tile_size, tile_c_dim, num_faces, partial_face);
+}
+
+// The packer reconfigure with its pack state store, which set_packer_strides makes in every other call.
+template <bool is_fp32_dest_acc_en, std::uint32_t skip = 0, bool inl = false>
 inline void reconfig_packer_data_format_and_state(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
@@ -1077,7 +1090,14 @@ inline void reconfig_packer_data_format_and_state(
     const std::uint32_t num_faces,
     const bool partial_face)
 {
-    reconfig_packer_data_format<is_fp32_dest_acc_en, skip>(pack_src_format, pack_dst_format, tile_size, tile_c_dim, num_faces, partial_face);
+    if constexpr (inl)
+    {
+        reconfig_packer_data_format_impl<is_fp32_dest_acc_en, skip>(pack_src_format, pack_dst_format, tile_size, tile_c_dim, num_faces, partial_face);
+    }
+    else
+    {
+        reconfig_packer_data_format<is_fp32_dest_acc_en, skip>(pack_src_format, pack_dst_format, tile_size, tile_c_dim, num_faces, partial_face);
+    }
     if constexpr (!(skip & LLK_PACK_RECONFIG_SKIP_STRIDES))
     {
         pack_strides_width = datum_size_in_bytes(pack_src_format);
@@ -1690,5 +1710,9 @@ __attribute__((noinline)) bool is_pack_reads_per_xy_plane(const std::uint32_t ex
     }
     return true;
 }
+
+// A one-tile pack_block ran. Stored only there, so a kernel without one folds the reads to false and keeps the gated
+// 32-bit-output reconfigure.
+[[maybe_unused]] static bool pack_short_block = false;
 
 } // namespace ckernel::packer

@@ -232,6 +232,24 @@ __attribute__((noinline)) void llk_pack_reconfig_data_format_table(const std::ui
     }
 }
 
+// The table above, inline for the one-tile wait form: a kernel without a one-tile block drops it with its branch.
+template <bool is_fp32_dest_acc_en>
+__attribute__((always_inline)) inline void llk_pack_reconfig_data_format_table_inl(const std::uint32_t output_id) {
+    if (!llk_pack_reconfig_table_case<is_fp32_dest_acc_en, 0, false>(
+            pack_src_format[output_id], pack_dst_format[output_id], pack_tile_num_faces[output_id])) {
+        constexpr std::uint32_t skip = ckernel::packer::
+            llk_pack_reconfig_skip_all<is_fp32_dest_acc_en, DST_SYNC_MODE, sizeof(pack_dst_format), false>(
+                pack_src_format, pack_dst_format, pack_tile_num_faces, pack_partial_face);
+        _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en, skip, true>(
+            pack_src_format[output_id],
+            pack_dst_format[output_id],
+            get_local_cb_interface(output_id).fifo_page_size,
+            get_output_tile_c_dim(output_id),
+            get_output_num_faces(output_id),
+            false /* partial_face */);
+    }
+}
+
 /**
  * Reconfigure the packer for a new output operand's data format.
  *
@@ -242,7 +260,8 @@ __attribute__((noinline)) void llk_pack_reconfig_data_format_table(const std::ui
  * @param  new_output          New output circular buffer / operand index to configure for.
  */
 // gate: the u2d reconfigure gate (llk_pack_reconfig_u2d_half); without it the pack waits for the unpacker instead.
-template <bool is_fp32_dest_acc_en, bool gate>
+// inl: no out-of-line copy (the one-tile wait form, which a kernel without a one-tile block drops with its branch).
+template <bool is_fp32_dest_acc_en, bool gate, bool inl = false>
 inline void llk_pack_reconfig_data_format_body(const std::uint32_t new_output) {
     const std::uint32_t output_id = get_output_id(new_output);
     const std::uint32_t tile_c_dim = get_output_tile_c_dim(output_id);
@@ -260,13 +279,15 @@ inline void llk_pack_reconfig_data_format_body(const std::uint32_t new_output) {
     if constexpr (!gate) {
         TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::UNPACK0);
     }
-    if constexpr (llk_pack_reconfig_table_ok<is_fp32_dest_acc_en, gate>()) {
+    if constexpr (llk_pack_reconfig_table_ok<is_fp32_dest_acc_en, gate>() && inl) {
+        llk_pack_reconfig_data_format_table_inl<is_fp32_dest_acc_en>(output_id);
+    } else if constexpr (llk_pack_reconfig_table_ok<is_fp32_dest_acc_en, gate>()) {
         llk_pack_reconfig_data_format_table<is_fp32_dest_acc_en, gate>(output_id);
     } else {
         constexpr std::uint32_t skip = ckernel::packer::
             llk_pack_reconfig_skip_all<is_fp32_dest_acc_en, DST_SYNC_MODE, sizeof(pack_dst_format), gate>(
                 pack_src_format, pack_dst_format, pack_tile_num_faces, pack_partial_face);
-        _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en, skip>(
+        _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en, skip, inl>(
             pack_src_format[output_id],
             pack_dst_format[output_id],
             get_local_cb_interface(output_id).fifo_page_size,
@@ -279,7 +300,8 @@ inline void llk_pack_reconfig_data_format_body(const std::uint32_t new_output) {
 template <bool is_fp32_dest_acc_en>
 inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
     if constexpr (ckernel::packer::llk_pack_reconfig_u2d_half<is_fp32_dest_acc_en, DST_SYNC_MODE>()) {
-        // A 32-bit output keeps the gated full reconfigure: its pack is long enough that a wait for the unpacker costs.
+        // A 32-bit output keeps the gated full reconfigure, where a wait for the unpacker costs its longer packs; after
+        // a one-tile block it waits instead.
         constexpr int kind = ckernel::packer::llk_pack_out32_kind(pack_dst_format);
         if constexpr (kind == 0) {
             llk_pack_reconfig_data_format_body<is_fp32_dest_acc_en, false>(new_output);
@@ -289,6 +311,10 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
                 llk_pack_reconfig_data_format_body<is_fp32_dest_acc_en, false>(new_output);
                 return;
             }
+        }
+        if (ckernel::packer::pack_short_block) {
+            llk_pack_reconfig_data_format_body<is_fp32_dest_acc_en, false, true>(new_output);
+            return;
         }
     }
     llk_pack_reconfig_data_format_body<is_fp32_dest_acc_en, true>(new_output);
@@ -301,7 +327,7 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
  * @tparam is_fp32_dest_acc_en Enable FP32 accumulation in the destination register.
  * @tparam new_output          New output circular buffer / operand index to configure for.
  */
-template <bool is_fp32_dest_acc_en, std::uint32_t new_output, bool gate>
+template <bool is_fp32_dest_acc_en, std::uint32_t new_output, bool gate, bool inl = false>
 __attribute__((always_inline)) inline void llk_pack_reconfig_data_format_ct_gate() {
     constexpr ckernel::packer::llk_pack_reconfig_imm_t imm =
         ckernel::packer::llk_pack_reconfig_imm<is_fp32_dest_acc_en, DST_SYNC_MODE, sizeof(pack_dst_format), gate>(
@@ -317,7 +343,7 @@ __attribute__((always_inline)) inline void llk_pack_reconfig_data_format_ct_gate
         !imm.ok || skip_all || output_id >= sizeof(pack_dst_format) ||
         pack_src_format[output_id] == static_cast<unsigned char>(DataFormat::Invalid) ||
         pack_dst_format[output_id] == static_cast<unsigned char>(DataFormat::Invalid)) {
-        llk_pack_reconfig_data_format_body<is_fp32_dest_acc_en, gate>(new_output);
+        llk_pack_reconfig_data_format_body<is_fp32_dest_acc_en, gate, inl>(new_output);
     } else {
         SAN_HOOK(reconfigure(
             StateVal<Operand<Exu::Pack>::DestWidth32>(is_fp32_dest_acc_en),
@@ -352,10 +378,15 @@ __attribute__((always_inline)) inline void llk_pack_reconfig_data_format_ct() {
     if constexpr (
         ckernel::packer::llk_pack_reconfig_u2d_half<is_fp32_dest_acc_en, DST_SYNC_MODE>() &&
         new_output < sizeof(pack_dst_format)) {
-        llk_pack_reconfig_data_format_ct_gate<
-            is_fp32_dest_acc_en,
-            new_output,
-            ckernel::packer::llk_pack_out32(pack_dst_format[new_output])>();
+        if constexpr (ckernel::packer::llk_pack_out32(pack_dst_format[new_output])) {
+            if (ckernel::packer::pack_short_block) {
+                llk_pack_reconfig_data_format_ct_gate<is_fp32_dest_acc_en, new_output, false, true>();
+            } else {
+                llk_pack_reconfig_data_format_ct_gate<is_fp32_dest_acc_en, new_output, true>();
+            }
+        } else {
+            llk_pack_reconfig_data_format_ct_gate<is_fp32_dest_acc_en, new_output, false>();
+        }
     } else {
         llk_pack_reconfig_data_format_ct_gate<is_fp32_dest_acc_en, new_output, true>();
     }
