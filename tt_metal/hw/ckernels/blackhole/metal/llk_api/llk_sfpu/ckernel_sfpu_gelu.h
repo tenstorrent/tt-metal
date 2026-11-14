@@ -18,6 +18,7 @@
 #include "ckernel_sfpu_piecewise_rational.h"
 #include "ckernel_sfpu_tanh.h"  // _sfpu_tanh_fp32_accurate_ for gelu_tanh
 #include "sfpi.h"
+#include "ckernel_sfpu_gelu_tanh_bf16.h"
 
 namespace ckernel::sfpu {
 
@@ -358,6 +359,12 @@ inline void calculate_gelu() {
 
 template <bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_gelu_tanh() {
+    if constexpr (!is_fp32_dest_acc_en) {
+        // 16-bit DEST holds BF16 here, as this body's own BF16 store assumes: the fitted kernel
+        // (ckernel_sfpu_gelu_tanh_bf16.h) runs on every thread. FP32 DEST keeps this body.
+        calculate_gelu_tanh_bf16<ITERATIONS>();
+        return;
+    }
     constexpr float SQRT_2_OVER_PI = 0.7978845608028654f;
     constexpr float GELU_TANH_K = 0.044715f;
 
@@ -384,10 +391,14 @@ inline void calculate_gelu_tanh() {
     }
 }
 
+// The BF16 DEST kernel (ckernel_sfpu_gelu_tanh_bf16.h) reads none of the state tanh_init<false, true> writes.
+template <bool is_fp32_dest_acc_en = true>
 inline void gelu_tanh_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
-    // initialise constants for _sfpu_tanh_fp32_accurate_
-    tanh_init<false, true>();
+    if constexpr (is_fp32_dest_acc_en) {
+        // initialise constants for _sfpu_tanh_fp32_accurate_
+        tanh_init<false, true>();
+    }
 }
 
 // =============================================================================

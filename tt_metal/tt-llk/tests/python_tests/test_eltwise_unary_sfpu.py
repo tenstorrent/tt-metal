@@ -8,7 +8,7 @@ from itertools import product
 
 import pytest
 import torch
-from conftest import wormhole_only
+from conftest import skip_for_quasar, wormhole_only
 from helpers.chip_architecture import ChipArchitecture
 from helpers.constraints import distinct_dest_accumulation_modes
 from helpers.data_format_inference import (
@@ -717,6 +717,26 @@ def _int_unary_stimuli_spec(mathop):
     # sign-magnitude Dst).
     spread = [float(v) for v in range(0, 2001, 125)]
     return StimuliSpec.custom(values=straddle + spread, seed=0)
+
+
+@skip_for_quasar
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b]),
+    mathop=[MathOperation.GeluTanh],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+def test_eltwise_unary_sfpu_gelu_tanh_bf16_dest(formats, dest_acc, mathop):
+    # Both signs, past the logistic underflow; Blackhole BF16 DEST runs the generated kernel.
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        dest_acc,
+        ApproximationMode.No,
+        mathop,
+        FastMode.No,
+        [64, 64],
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-16.0, high=16.0),
+    )
 
 
 @parametrize(
