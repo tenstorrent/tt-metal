@@ -7,6 +7,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
+#include "api/dataflow/noc_semaphore.h"
 #include "api/tensor/noc_traits.h"
 #include "collapsed_row_scatter.h"
 
@@ -25,7 +26,8 @@ FORCE_INLINE uint32_t tile_face_index(uint32_t r, uint32_t c) {
 //   2: comb core 9
 //
 // fused_w is a one-core width shard on core (0, 0); every core that needs it reads its first row
-// straight out of that core's L1.
+// straight out of that core's L1. Pushed (the program computes fused_w itself), the fn dot's root
+// writes the row into cb_fused_w on every core that needs it and then raises fused_w_sem.
 void kernel_main() {
     constexpr uint32_t role = get_compile_time_arg_val(0);
     constexpr uint32_t cb_fused_w = get_compile_time_arg_val(1);
@@ -48,8 +50,12 @@ void kernel_main() {
     constexpr uint32_t row_chunks = get_compile_time_arg_val(15);
     constexpr uint32_t cb_collapsed_out = get_compile_time_arg_val(16);
     constexpr uint32_t out_tiles = get_compile_time_arg_val(17);
+    // A ROW_MAJOR collapsed output: the compute packs the row into the output shard, nothing to scatter.
+    constexpr bool collapsed_row_major = get_compile_time_arg_val(18) != 0;
+    constexpr bool fused_w_pushed = get_compile_time_arg_val(19) != 0;
+    constexpr uint32_t fused_w_sem = get_compile_time_arg_val(20);
 
-    constexpr auto pre_bias_args = TensorAccessorArgs<18>();
+    constexpr auto pre_bias_args = TensorAccessorArgs<21>();
     constexpr auto post_bias_args = TensorAccessorArgs<pre_bias_args.next_compile_time_args_offset()>();
     constexpr auto comb_bias_args = TensorAccessorArgs<post_bias_args.next_compile_time_args_offset()>();
     constexpr auto pre_mix_args = TensorAccessorArgs<comb_bias_args.next_compile_time_args_offset()>();
@@ -71,15 +77,25 @@ void kernel_main() {
     Noc noc;
     CircularBuffer cb_fw(cb_fused_w);
 
-    // fused_w's first row: a ROW_MAJOR row, or row 0 of faces 0 and 1 of a tile.
+    // fused_w's first row: a ROW_MAJOR row, or row 0 of faces 0 and 1 of a tile. A pushed row is
+    // only waited for (wait_fused_w), once everything that does not need it is under way.
     auto read_fused_w = [&]() {
         cb_fw.reserve_back(one_tile);
+        if constexpr (fused_w_pushed) {
+            return;
+        }
         const uint32_t l1 = cb_fw.get_write_ptr();
         if constexpr (fused_w_row_major) {
             noc_async_read(get_noc_addr(fused_w_noc_x, fused_w_noc_y, fused_w_addr), l1, 64);
         } else {
             noc_async_read(get_noc_addr(fused_w_noc_x, fused_w_noc_y, fused_w_addr), l1, 32);
             noc_async_read(get_noc_addr(fused_w_noc_x, fused_w_noc_y, fused_w_addr + 512), l1 + 512, 32);
+        }
+    };
+    auto wait_fused_w = [&]() {
+        if constexpr (fused_w_pushed) {
+            Semaphore<> landed(fused_w_sem);
+            landed.wait(1);
         }
     };
     const volatile tt_l1_ptr uint16_t* fw = reinterpret_cast<const volatile tt_l1_ptr uint16_t*>(cb_fw.get_write_ptr());
@@ -144,6 +160,7 @@ void kernel_main() {
         if constexpr (role != 2) {
             noc.write_zeros_l1_barrier();
         }
+        wait_fused_w();
 
         auto* prm = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_prm.get_write_ptr());
         const auto* stg = reinterpret_cast<const volatile tt_l1_ptr uint16_t*>(cb_stg.get_write_ptr());
@@ -199,7 +216,7 @@ void kernel_main() {
         cb_prm.push_back(one_tile);
     }
 
-    if constexpr (role == 0 && hidden_row_major) {
+    if constexpr (role == 0 && hidden_row_major && !collapsed_row_major) {
         scatter_collapsed_row(
             cb_collapsed_row, row_chunks, cb_collapsed_out, collapsed_addr, out_tiles / 2, out_tiles - out_tiles / 2);
     }

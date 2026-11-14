@@ -868,6 +868,15 @@ class DeepSeekV41Model(DeepSeekV4Model):
             if not any((ids[w], self._kv_source_of[w]) == (ids[li], src) for w in self._row_writers):
                 self._row_writers.add(li)
         self._row_groups = {self._kv_source_of[li] for li in self._row_writers}
+        # A dense select copies every entry into the group's sel_tile on its stage, the same rows for each of the
+        # group's index sources in a step, so only the first of them there copies.
+        self._dense_fillers = set()
+        for li in cfg.index_source_layer_ids:
+            if li >= self.num_layers:
+                continue
+            src = self._kv_source_of[li]
+            if not any((ids[w], self._kv_source_of[w]) == (ids[li], src) for w in self._dense_fillers):
+                self._dense_fillers.add(li)
         # Past the candidate pool, the candidate source's blocks reach every stage of its group and the
         # first consumer on each stage builds that stage's pool.
         source = cfg.candidate_source_layer_id
@@ -2033,6 +2042,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 inputs["dense"] = True
                 inputs["dense_offset"] = ctx["dense_offset"]
                 inputs["dense_entry"] = ctx["dense_entry"].get(ratio)
+                inputs["dense_fill"] = attn.layer_idx in self._dense_fillers
             else:
                 inputs["index_pos"] = ctx["index_pos"][ratio]
                 inputs["split_keys"] = attn.layer_idx in split

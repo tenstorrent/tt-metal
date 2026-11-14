@@ -19,8 +19,10 @@ over the ranks, each sublayer all-reduces its output, and everything else -- the
 ``pre_mix``, hyper-connections, norms, Engram and caches -- is replicated.
 """
 
+import os
 from typing import Optional
 
+import torch
 import ttnn
 
 from models.experimental.deepseek_v41_flash.tt.decode.attention import DeepSeekV41Attention
@@ -32,6 +34,17 @@ from models.experimental.deepseek_v4_flash.tt.decode.decoder_layer import DeepSe
 from models.experimental.deepseek_v4_flash.tt.decode.hyperconnection import DeepSeekV4HyperConnection
 from models.experimental.deepseek_v4_flash.tt.layers import DeepSeekV4RMSNorm
 from models.experimental.deepseek_v4_flash.tt.weight_cache import _as_cache
+
+# The input RMSNorm's gain is folded into attention's projections (see :class:`~.attention.DeepSeekV41Attention`'s
+# ``input_gain``): a one-row step on Blackhole then hands attention the collapsed row without a norm, except where
+# a ratio-2 compressor needs the ``1 / rms`` (a unit-gain norm). ``DEEPSEEK_V41_FOLD_INPUT_NORM=0``: always normalize.
+FOLD_INPUT_NORM = os.environ.get("DEEPSEEK_V41_FOLD_INPUT_NORM", "1") not in ("0", "", "false", "False")
+# Each one-row hyper-connection folds its ``fn`` dot into its single-user program (``DeepSeekV4HyperConnection``'s
+# ``fused_fn``), spread over 80 cores; ``DEEPSEEK_V41_FUSED_HC_FN=0`` runs ``fn`` as its own 8-core op instead.
+# ``DEEPSEEK_V41_HC_FN_IN_L1=1`` also keeps the weight resident in L1 (~16 KB of each dot core's L1 per module)
+# instead of reading it from DRAM per call.
+FUSED_HC_FN = os.environ.get("DEEPSEEK_V41_FUSED_HC_FN", "1") not in ("0", "", "false", "False")
+HC_FN_IN_L1 = os.environ.get("DEEPSEEK_V41_HC_FN_IN_L1", "0") not in ("0", "", "false", "False")
 
 
 def _verify_rows(normed: ttnn.Tensor, device) -> ttnn.Tensor:
@@ -129,6 +142,7 @@ class DeepSeekV41DecoderLayer(DeepSeekV4DecoderLayer):
         verify_rows: int,
         build_mlp=None,
         hc_bias_in_l1: bool = True,
+        hc_fn_in_l1: bool = HC_FN_IN_L1,
     ):
         """The Engram, attention, both hyper-connections and both norms; ``self.mlp`` is ``build_mlp()`` (built
         after attention, where the layer always built it, so the allocations keep their order), or ``None``."""
@@ -138,6 +152,7 @@ class DeepSeekV41DecoderLayer(DeepSeekV4DecoderLayer):
         self.tp_size = tp_size
         self.verify_rows = verify_rows
         eps = config.rms_norm_eps
+        self.fold_input_norm = FOLD_INPUT_NORM
         self.engram = (
             DeepSeekV41Engram(
                 config,
@@ -163,10 +178,16 @@ class DeepSeekV41DecoderLayer(DeepSeekV4DecoderLayer):
             tp_size=tp_size,
             use_prefetcher=use_prefetcher,
             prefetch_buffers=prefetch_buffers,
+            input_gain=weights["input_layernorm.weight"] if self.fold_input_norm else None,
         )
         self.mlp = build_mlp() if build_mlp is not None else None
-        self.input_layernorm = DeepSeekV4RMSNorm(
-            weights["input_layernorm.weight"], eps, device, cache.file("attn_norm"), sharded=True
+        # With the gain folded into attention, the steps that still normalize divide by rms(x) only.
+        self.input_layernorm = (
+            DeepSeekV4RMSNorm(torch.ones(config.hidden_size), eps, device, cache.file("attn_norm.unit"), sharded=True)
+            if self.fold_input_norm
+            else DeepSeekV4RMSNorm(
+                weights["input_layernorm.weight"], eps, device, cache.file("attn_norm"), sharded=True
+            )
         )
         self.post_attention_layernorm = DeepSeekV4RMSNorm(
             weights["post_attention_layernorm.weight"], eps, device, cache.file("ffn_norm"), sharded=True
@@ -178,6 +199,8 @@ class DeepSeekV41DecoderLayer(DeepSeekV4DecoderLayer):
             cache=cache.sub("hc_attn"),
             row_major_streams=True,
             bias_in_l1=hc_bias_in_l1,
+            fused_fn=FUSED_HC_FN,
+            fn_in_l1=FUSED_HC_FN and hc_fn_in_l1,
         )
         self.ffn_hc = DeepSeekV4HyperConnection(
             config,
@@ -186,6 +209,8 @@ class DeepSeekV41DecoderLayer(DeepSeekV4DecoderLayer):
             cache=cache.sub("hc_ffn"),
             row_major_streams=True,
             bias_in_l1=hc_bias_in_l1,
+            fused_fn=FUSED_HC_FN,
+            fn_in_l1=FUSED_HC_FN and hc_fn_in_l1,
         )
 
     def prefetch_weights(self, *, index_sparse: bool = False, one_row: bool = True, fused_qkv: Optional[bool] = None):
@@ -257,11 +282,23 @@ class DeepSeekV41DecoderLayer(DeepSeekV4DecoderLayer):
                 hidden_streams = self.engram(streams_in)
                 ttnn.deallocate(streams_in)
         _l1("engram")
+        skip_input_norm = (
+            self.fold_input_norm
+            and b == 1
+            and s == 1
+            and self.device.arch() == ttnn.Arch.BLACKHOLE
+            and not self.self_attn.needs_normed_input
+        )
         with _region("ATTN_HC"):
-            post, comb, collapsed, attn_pre = self.attn_hc(hidden_streams, pre_mix=pre_mix)
+            # ROW_MAJOR [1, D/8] rows on the collapse cores: the layout sharded_rmsnorm would have written.
+            post, comb, collapsed, attn_pre = self.attn_hc(
+                hidden_streams, pre_mix=pre_mix, collapsed_layout=ttnn.ROW_MAJOR_LAYOUT if skip_input_norm else None
+            )
             _l1("attn_hc")
         with _region("INPUT_NORM"):
-            if b == 1 and s == 1 and self.device.arch() == ttnn.Arch.BLACKHOLE:
+            if skip_input_norm:
+                normed = collapsed
+            elif b == 1 and s == 1 and self.device.arch() == ttnn.Arch.BLACKHOLE:
                 normed = ttnn.experimental.deepseek.sharded_rmsnorm(
                     collapsed,
                     self.input_layernorm.weight,
@@ -385,6 +422,8 @@ class DeepSeekV41PersistentMoeDecoderLayer(DeepSeekV41DecoderLayer):
             # ~480 KB over 40 layers, past where the step's circular buffers have to end. The single-row program
             # reads them from DRAM instead, ~0.2 us per call.
             hc_bias_in_l1=False,
+            # Resident fn weights would take ~16 KB of each dot core's L1 per module, 1.3 MB over 80 modules.
+            hc_fn_in_l1=False,
         )
         self.moe_server = moe_server
         self.requester = requester
@@ -462,10 +501,17 @@ class DeepSeekV41PersistentMoeDecoderLayer(DeepSeekV41DecoderLayer):
                 streams_in = hidden_streams
                 hidden_streams = self.engram(streams_in)
                 ttnn.deallocate(streams_in)
+        skip_input_norm = (
+            self.fold_input_norm and self.device.arch() == ttnn.Arch.BLACKHOLE and not self.self_attn.needs_normed_input
+        )
         with _region("ATTN_HC"):
-            post, comb, collapsed, attn_pre = self.attn_hc(hidden_streams, pre_mix=pre_mix)
+            post, comb, collapsed, attn_pre = self.attn_hc(
+                hidden_streams, pre_mix=pre_mix, collapsed_layout=ttnn.ROW_MAJOR_LAYOUT if skip_input_norm else None
+            )
         with _region("INPUT_NORM"):
-            if self.device.arch() == ttnn.Arch.BLACKHOLE:
+            if skip_input_norm:
+                normed = collapsed
+            elif self.device.arch() == ttnn.Arch.BLACKHOLE:
                 normed = ttnn.experimental.deepseek.sharded_rmsnorm(
                     collapsed,
                     self.input_layernorm.weight,

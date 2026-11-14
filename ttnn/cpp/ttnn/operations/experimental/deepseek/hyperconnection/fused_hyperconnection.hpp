@@ -55,12 +55,21 @@ namespace ttnn::experimental::deepseek::hyperconnection {
 //   memory_config: optional output memory config (defaults to the input's).
 //   pre_mix: optional collapse weights [B,S,1,H], BFLOAT16 TILE (one tile per token). When
 //     absent the op collapses with the `pre` it computes from `fused_w`.
+//   collapsed_layout: optional layout of `collapsed` (default TILE). ROW_MAJOR needs a single token
+//     with ROW_MAJOR `hidden_streams`, and returns `collapsed` width-sharded as one [1, D/8] row per
+//     collapse core.
+//   fn_weight: in place of fused_w, for a single token with ROW_MAJOR `hidden_streams`: the
+//     [1, 1, H*D, 32] TILE fn weight, K in the collapse cores' (core, stream, column) order. The op then
+//     computes fused_w = rmsnorm(streams) @ fn_weight itself, the cores of `fn_core_grid` each dotting
+//     their K-slice -- read straight out of the collapse cores' shards -- with their slab of fn_weight
+//     (DRAM interleaved, or HEIGHT_SHARDED in L1 on those cores), the partials summed up a
+//     fan-in-`fn_reduce_fan_in` tree. `fn_rms_norm_epsilon` fuses the unweighted RMSNorm over H*D.
 //
 // Returns [post [B,S,H,1], comb [B,S,H,H], collapsed [B,S,1,D]], plus pre [B,S,1,H] (BFLOAT16
 // TILE, zero-padded, the layout `pre_mix` takes) when `pre_mix` is given.
 std::vector<Tensor> fused_hyperconnection(
     const Tensor& hidden_streams,
-    const Tensor& fused_w,
+    const std::optional<Tensor>& fused_w,
     const Tensor& pre_bias,
     const Tensor& post_bias,
     const Tensor& comb_bias,
@@ -71,7 +80,12 @@ std::vector<Tensor> fused_hyperconnection(
     float comb_scale,
     float eps,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<Tensor>& pre_mix = std::nullopt);
+    const std::optional<Tensor>& pre_mix = std::nullopt,
+    std::optional<Layout> collapsed_layout = std::nullopt,
+    const std::optional<Tensor>& fn_weight = std::nullopt,
+    const std::optional<CoreRangeSet>& fn_core_grid = std::nullopt,
+    uint32_t fn_reduce_fan_in = 2,
+    std::optional<float> fn_rms_norm_epsilon = std::nullopt);
 
 // `fused_hyperconnection` without the collapse, for stream-major residual stacks [1, H, T, D]
 // (DeepSeek V4.1 prefill), which the caller collapses itself with `stream_mix(streams, pre)`.

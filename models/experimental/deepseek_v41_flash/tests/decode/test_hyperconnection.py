@@ -7,7 +7,8 @@ DSpark's parallel verify steps ``S`` consecutive positions of one session at onc
 streams arrive as ``[1, S, hc, D]`` ROW_MAJOR, width-sharded ``[S * hc, D / 8]`` over the 8 collapse cores.
 ``test_hyperconnection_decode_s5`` checks ``post``, ``comb``, the own ``pre`` and the ``pre_mix`` collapse
 against the checkpoint's ``Block.hc_mixes`` / ``hc_pre`` (``tests/reference.py``), and against the same rows
-stepped one at a time through the single-row path.
+stepped one at a time through the single-row path. ``test_hyperconnection_decode_fused_fn`` runs single rows
+through ``fused_fn``, the program that computes ``fn`` itself, against the reference and the separate ``fn`` op.
 
     pytest models/experimental/deepseek_v41_flash/tests/decode/test_hyperconnection.py
 """
@@ -122,3 +123,67 @@ def test_hyperconnection_decode_s5(device, layer, which, cache_name):
     for k, name in enumerate(names):
         single = torch.cat([ttnn.to_torch(step[k]).float().reshape(1, 1, -1) for step in steps], dim=1)
         _pcc(single, got[name], f"{name} vs {S} single-row steps")
+
+
+@pytest.mark.skipif(_snapshot() is None, reason=f"V4.1-Flash checkpoint not found under {DEFAULT_MODEL_DIR}")
+@pytest.mark.timeout(1800)
+@pytest.mark.parametrize("with_pre_mix", (True, False), ids=("pre_mix", "own_pre"))
+@pytest.mark.parametrize("fn_in_l1", (False, True), ids=("fn_dram", "fn_l1"))
+@pytest.mark.parametrize(
+    "layer, which, cache_name",
+    ((1, "attn_hc", "hc_attn"), (39, "ffn_hc", "hc_ffn")),
+    ids=("layer1_attn", "layer39_ffn"),
+)
+@torch.no_grad()
+def test_hyperconnection_decode_fused_fn(device, layer, which, cache_name, fn_in_l1, with_pre_mix):
+    """One row through ``fused_fn``'s single program (the fn dot spread over the cores below the HC row),
+    against the reference and the separate ``fn`` op path. Each row runs twice, the second on the cached program."""
+    snapshot = _snapshot()
+    config = load_config(snapshot)
+    loader = DeepseekV4WeightLoader(snapshot)
+    weights = _strip_prefix(decoder_layer_weights(loader, layer, config), which)
+    cache = WeightCache(CACHE_DIR).sub(f"layers.{layer}.{cache_name}")
+    fused = DeepSeekV4HyperConnection(
+        config, weights, device, cache=cache, row_major_streams=True, fused_fn=True, fn_in_l1=fn_in_l1
+    )
+    separate = DeepSeekV4HyperConnection(config, weights, device, cache=cache, row_major_streams=True)
+
+    model = load_reference(snapshot)
+    args = model_args(model, snapshot, max_seq=1)
+    block = types.SimpleNamespace(
+        norm_eps=args.norm_eps, hc_mult=args.hc_mult, hc_sinkhorn_iters=args.hc_sinkhorn_iters, hc_eps=args.hc_eps
+    )
+    fn, scale, base = (weights[k]().float() for k in ("fn", "scale", "base"))
+
+    hc, d = config.hc_mult, config.hidden_size
+    names = ("post", "comb", "collapsed", "pre") if with_pre_mix else ("post", "comb", "collapsed")
+    for step in range(2):
+        torch.manual_seed(layer * 10 + step)
+        streams = torch.randn(1, 1, hc, d).bfloat16().float()
+        pre_mix = torch.rand(1, 1, 1, hc).bfloat16().float()
+        expected_pre, expected_post, expected_comb = model.Block.hc_mixes(block, streams, fn, scale, base)
+        expected = {"post": expected_post, "comb": expected_comb, "pre": expected_pre}
+        expected["collapsed"] = model.Block.hc_pre(
+            block, streams, (pre_mix if with_pre_mix else expected_pre).reshape(1, 1, hc)
+        )
+
+        results = {}
+        for label, module in (("fused", fused), ("separate", separate)):
+            tt_streams = ttnn.from_torch(
+                streams,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+                memory_config=width_sharded_l1_config(hc, d, device, num_cores=_HC_COLLAPSE_CORES, tile_height=1),
+            )
+            tt_pre_mix = (
+                ttnn.from_torch(pre_mix, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+                if with_pre_mix
+                else None
+            )
+            outputs = module(tt_streams, pre_mix=tt_pre_mix)
+            assert len(outputs) == len(names), f"{label}: {len(outputs)} outputs, expected {len(names)}"
+            results[label] = {name: ttnn.to_torch(x).float() for name, x in zip(names, outputs)}
+        for name in names:
+            _pcc(expected[name], results["fused"][name], f"step {step} fused {name}")
+            _pcc(results["separate"][name], results["fused"][name], f"step {step} fused vs separate {name}")

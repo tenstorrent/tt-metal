@@ -71,14 +71,15 @@ uint32_t row_tile_height(uint32_t row_tiles) {
 
 using namespace fused_single_user_detail;
 
-FusedSingleUserProgramFactory::cached_program_t FusedSingleUserProgramFactory::create(
+FusedSingleUserSharedVariables build_single_user_hc(
+    tt::tt_metal::Program& program,
     const FusedSingleUserParams& operation_attributes,
     const FusedSingleUserInputs& tensor_args,
-    FusedSingleUserTensorReturn& tensor_return_value) {
+    FusedSingleUserTensorReturn& tensor_return_value,
+    const FusedWSource& fused_w_source) {
     using namespace tt;
     using namespace tt::tt_metal;
 
-    const auto& fused_w = tensor_args.fused_w;
     const auto& pre_bias = tensor_args.pre_bias;
     const auto& post_bias = tensor_args.post_bias;
     const auto& comb_bias = tensor_args.comb_bias;
@@ -102,9 +103,12 @@ FusedSingleUserProgramFactory::cached_program_t FusedSingleUserProgramFactory::c
     // into kFsCbPre instead -- on the post core, which returns it.
     const CoreRangeSet params_cores = use_pre_mix ? post_cores.merge(comb_cores) : all_cores;
 
-    const auto param_format = datatype_to_dataformat_converter(fused_w.dtype());
+    // fused_w, the biases and every output are BFLOAT16, like the streams.
+    const auto param_format = datatype_to_dataformat_converter(hidden_streams.dtype());
     const uint32_t tile_size_bytes = tile_size(param_format);
-    const bool fused_w_row_major = fused_w.layout() == Layout::ROW_MAJOR;
+    // The fn dot's root pushes its ROW_MAJOR [1, N] result.
+    const bool fused_w_row_major = fused_w_source.pushed || tensor_args.fused_w->layout() == Layout::ROW_MAJOR;
+    const uint32_t fused_w_cb = fused_w_source.pushed ? fused_w_source.cb_index : kFsCbFusedW;
     const bool hidden_row_major = hidden_streams.layout() == Layout::ROW_MAJOR;
     const uint32_t d_tiles = static_cast<uint32_t>(hidden_streams.padded_shape()[-1]) / constants::TILE_WIDTH;
     const uint32_t d_tiles_per_core = d_tiles / kCollapseCoreCount;
@@ -114,8 +118,7 @@ FusedSingleUserProgramFactory::cached_program_t FusedSingleUserProgramFactory::c
     const uint32_t hidden_pages = hidden_row_major ? num_streams * row_chunks : d_tiles_per_core;
     const uint32_t collapse_tiles = hidden_row_major ? row_chunks : d_tiles_per_core;
 
-    Program program = CreateProgram();
-    auto* device = fused_w.device();
+    auto* device = hidden_streams.device();
     const auto fused_w_noc = device->worker_core_from_logical_core(CoreCoord{0, 0});
 
     auto make_cb = [&](uint32_t index, const CoreRangeSet& cores) {
@@ -124,7 +127,10 @@ FusedSingleUserProgramFactory::cached_program_t FusedSingleUserProgramFactory::c
             cores,
             CircularBufferConfig(tile_size_bytes, {{index, param_format}}).set_page_size(index, tile_size_bytes));
     };
-    make_cb(kFsCbFusedW, all_cores);
+    // A pushed fused_w lands in a CB the caller creates over these cores and the root alike.
+    if (!fused_w_source.pushed) {
+        make_cb(kFsCbFusedW, all_cores);
+    }
     make_cb(kFsCbParams, post_cores.merge(comb_cores));
     make_cb(kFsCbStage, params_cores);
     make_cb(kFsCbPostOut, post_cores);
@@ -164,8 +170,11 @@ FusedSingleUserProgramFactory::cached_program_t FusedSingleUserProgramFactory::c
                           .set_globally_allocated_address(*hidden_streams.buffer());
         hidden_cb = CreateCircularBuffer(program, collapse_cores, config);
     }
+    // A ROW_MAJOR collapsed output is the collapsed row itself: its h x 32 chunks are packed straight
+    // into the output shard, with no 32x32 tiles to scatter it into.
+    const bool collapsed_row_major = collapsed_out.layout() == Layout::ROW_MAJOR;
     CBHandle collapsed_output_cb = 0;
-    {
+    if (!collapsed_row_major) {
         auto config = CircularBufferConfig(
                           d_tiles_per_core * tile_size(collapsed_format), {{kFsCbCollapsedOut, collapsed_format}})
                           .set_page_size(kFsCbCollapsedOut, tile_size(collapsed_format))
@@ -175,12 +184,15 @@ FusedSingleUserProgramFactory::cached_program_t FusedSingleUserProgramFactory::c
     }
     if (hidden_row_major) {
         const uint32_t page_bytes = row_tile.get_tile_size(collapsed_format);
-        CreateCircularBuffer(
-            program,
-            collapse_cores,
-            CircularBufferConfig(row_chunks * page_bytes, {{kFsCbCollapsedRow, collapsed_format}})
-                .set_page_size(kFsCbCollapsedRow, page_bytes)
-                .set_tile_dims(kFsCbCollapsedRow, row_tile));
+        auto config = CircularBufferConfig(row_chunks * page_bytes, {{kFsCbCollapsedRow, collapsed_format}})
+                          .set_page_size(kFsCbCollapsedRow, page_bytes)
+                          .set_tile_dims(kFsCbCollapsedRow, row_tile);
+        if (collapsed_row_major) {
+            config.set_globally_allocated_address(*collapsed_out.buffer());
+            collapsed_output_cb = CreateCircularBuffer(program, collapse_cores, config);
+        } else {
+            CreateCircularBuffer(program, collapse_cores, config);
+        }
     }
 
     const uint32_t pre_scale_bits = std::bit_cast<uint32_t>(operation_attributes.pre_scale);
@@ -191,7 +203,7 @@ FusedSingleUserProgramFactory::cached_program_t FusedSingleUserProgramFactory::c
     auto reader_compile_args = [&](uint32_t role) {
         std::vector<uint32_t> args = {
             role,
-            kFsCbFusedW,
+            fused_w_cb,
             kFsCbHidden,
             kFsCbParams,
             kFsCbStage,
@@ -208,6 +220,9 @@ FusedSingleUserProgramFactory::cached_program_t FusedSingleUserProgramFactory::c
             row_chunks,
             kFsCbCollapsedOut,
             d_tiles_per_core,
+            collapsed_row_major ? 1u : 0u,
+            fused_w_source.pushed ? 1u : 0u,
+            fused_w_source.semaphore_id,
         };
         TensorAccessorArgs(pre_bias.buffer()).append_to(args);
         TensorAccessorArgs(post_bias.buffer()).append_to(args);
@@ -254,7 +269,7 @@ FusedSingleUserProgramFactory::cached_program_t FusedSingleUserProgramFactory::c
     shared.collapse_cores = corerange_to_cores(collapse_cores, collapse_cores.num_cores(), true);
     shared.post_core = post_core;
     shared.comb_core = comb_core;
-    shared.hidden_row_major = hidden_row_major;
+    shared.has_collapse_writer = hidden_row_major && !collapsed_row_major;
     shared.hidden_cb = hidden_cb;
     shared.collapsed_output_cb = collapsed_output_cb;
 
@@ -284,7 +299,7 @@ FusedSingleUserProgramFactory::cached_program_t FusedSingleUserProgramFactory::c
         program, kFsReaderKernelPath, collapse_cores, ReaderDataMovementConfig(reader_compile_args(kRoleCollapse)));
     shared.collapse_compute_kernel_id =
         CreateKernel(program, kFsComputeKernelPath, collapse_cores, compute_config(kRoleCollapse));
-    if (hidden_row_major) {
+    if (shared.has_collapse_writer) {
         shared.collapse_writer_kernel_id = CreateKernel(
             program,
             kFsWriterKernelPath,
@@ -299,7 +314,7 @@ FusedSingleUserProgramFactory::cached_program_t FusedSingleUserProgramFactory::c
     }
 
     const std::vector<uint32_t> reader_args = {
-        fused_w.buffer()->address(),
+        tensor_args.fused_w.has_value() ? tensor_args.fused_w->buffer()->address() : 0u,
         pre_bias.buffer()->address(),
         post_bias.buffer()->address(),
         comb_bias.buffer()->address(),
@@ -307,7 +322,7 @@ FusedSingleUserProgramFactory::cached_program_t FusedSingleUserProgramFactory::c
         collapsed_out.buffer()->address()};
     for (const auto& core : shared.collapse_cores) {
         SetRuntimeArgs(program, shared.collapse_reader_kernel_id, core, reader_args);
-        if (hidden_row_major) {
+        if (shared.has_collapse_writer) {
             SetRuntimeArgs(program, shared.collapse_writer_kernel_id, core, {collapsed_out.buffer()->address(), 0u});
         }
     }
@@ -316,18 +331,17 @@ FusedSingleUserProgramFactory::cached_program_t FusedSingleUserProgramFactory::c
     SetRuntimeArgs(program, shared.post_writer_kernel_id, post_core, {post_out.buffer()->address(), pre_out_addr});
     SetRuntimeArgs(program, shared.comb_writer_kernel_id, comb_core, {comb_out.buffer()->address(), 0u});
 
-    return cached_program_t{std::move(program), std::move(shared)};
+    return shared;
 }
 
-void FusedSingleUserProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const FusedSingleUserParams& /*operation_attributes*/,
+void override_single_user_hc(
+    tt::tt_metal::Program& program,
+    const FusedSingleUserSharedVariables& shared,
     const FusedSingleUserInputs& tensor_args,
     FusedSingleUserTensorReturn& tensor_return_value) {
-    auto& program = cached_program.program;
-    const auto& shared = cached_program.shared_variables;
+    using namespace tt::tt_metal;
 
-    const uint32_t fused_w_addr = tensor_args.fused_w.buffer()->address();
+    const uint32_t fused_w_addr = tensor_args.fused_w.has_value() ? tensor_args.fused_w->buffer()->address() : 0u;
     const uint32_t pre_bias_addr = tensor_args.pre_bias.buffer()->address();
     const uint32_t post_bias_addr = tensor_args.post_bias.buffer()->address();
     const uint32_t comb_bias_addr = tensor_args.comb_bias.buffer()->address();
@@ -351,7 +365,7 @@ void FusedSingleUserProgramFactory::override_runtime_arguments(
     for (const auto& core : shared.collapse_cores) {
         set_reader_args(collapse_reader_args[core.x][core.y]);
     }
-    if (shared.hidden_row_major) {
+    if (shared.has_collapse_writer) {
         auto& collapse_writer_args = GetRuntimeArgs(program, shared.collapse_writer_kernel_id);
         for (const auto& core : shared.collapse_cores) {
             collapse_writer_args[core.x][core.y][0] = collapsed_addr;
@@ -365,6 +379,23 @@ void FusedSingleUserProgramFactory::override_runtime_arguments(
     post_writer_args[0] = post_addr;
     post_writer_args[1] = pre_out_addr;
     GetRuntimeArgs(program, shared.comb_writer_kernel_id)[shared.comb_core.x][shared.comb_core.y][0] = comb_addr;
+}
+
+FusedSingleUserProgramFactory::cached_program_t FusedSingleUserProgramFactory::create(
+    const FusedSingleUserParams& operation_attributes,
+    const FusedSingleUserInputs& tensor_args,
+    FusedSingleUserTensorReturn& tensor_return_value) {
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+    auto shared = build_single_user_hc(program, operation_attributes, tensor_args, tensor_return_value, FusedWSource{});
+    return cached_program_t{std::move(program), std::move(shared)};
+}
+
+void FusedSingleUserProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const FusedSingleUserParams& /*operation_attributes*/,
+    const FusedSingleUserInputs& tensor_args,
+    FusedSingleUserTensorReturn& tensor_return_value) {
+    override_single_user_hc(cached_program.program, cached_program.shared_variables, tensor_args, tensor_return_value);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek::hyperconnection

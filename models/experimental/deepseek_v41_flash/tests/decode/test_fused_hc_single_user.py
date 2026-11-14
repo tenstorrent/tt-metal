@@ -28,7 +28,10 @@ ITERS = 8
 @pytest.mark.parametrize("comb_bias_shape", ("row", "square"))
 @pytest.mark.parametrize("hidden", (4096, 2048))
 @pytest.mark.parametrize("bias_memory", ("dram", "l1"))
-def test_fused_hc_single_user_row_major(device, reset_seeds, use_pre_mix, comb_bias_shape, hidden, bias_memory):
+@pytest.mark.parametrize("collapsed_layout", (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT), ids=("tile", "rm_out"))
+def test_fused_hc_single_user_row_major(
+    device, reset_seeds, use_pre_mix, comb_bias_shape, hidden, bias_memory, collapsed_layout
+):
     hc, iters, eps = 4, 20, 1.0e-6
     pre_scale, post_scale, comb_scale = 0.7, 1.3, 2.0
 
@@ -83,11 +86,16 @@ def test_fused_hc_single_user_row_major(device, reset_seeds, use_pre_mix, comb_b
         comb_scale=comb_scale,
         eps=eps,
         pre_mix=None if pre_mix is None else to_tt(pre_mix),
+        collapsed_layout=collapsed_layout,
     )
 
     for _ in range(ITERS):
         outputs = ttnn.experimental.deepseek.fused_hyperconnection(streams_tt, **kwargs)
     ttnn.synchronize_device(device)
+    if collapsed_layout == ttnn.ROW_MAJOR_LAYOUT:
+        # The layout sharded_rmsnorm writes, which attention's tokens gather reads.
+        assert outputs[2].layout == ttnn.ROW_MAJOR_LAYOUT
+        assert outputs[2].memory_config() == width_sharded_l1_config(1, hidden, device, num_cores=8, tile_height=1)
 
     names = ("post", "comb", "collapsed", "pre")
     num_outputs = 4 if use_pre_mix else 3

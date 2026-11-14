@@ -8,6 +8,7 @@ set(TTNN_OP_EXPERIMENTAL_DEEPSEEK_HYPERCONNECTION_SRCS
     device/fused_pre_post_device_operation.cpp
     device/fused_pre_post_program_factory.cpp
     device/fused_single_user_device_operation.cpp
+    device/fused_single_user_dot_program_factory.cpp
     device/fused_single_user_program_factory.cpp
     device/sinkhorn_device_operation.cpp
     device/sinkhorn_program_factory.cpp
