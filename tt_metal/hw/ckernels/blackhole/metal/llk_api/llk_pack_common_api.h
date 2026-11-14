@@ -128,7 +128,12 @@ inline void llk_pack_dest_section_done() {
     static_assert(
         !math_clears_dest || !llk_unpack_may_write_dest(),
         "math_clears_dest needs the math thread as DEST's only writer: no 32-bit unpack source in the kernel");
-    _llk_pack_dest_section_done_<DST_SYNC_MODE, is_fp32_dest_acc_en, !math_clears_dest, words>();
+    if constexpr (!math_clears_dest && words == 0) {
+        // main's two-argument form, which a kernel may wrap.
+        _llk_pack_dest_section_done_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
+    } else {
+        _llk_pack_dest_section_done_<DST_SYNC_MODE, is_fp32_dest_acc_en, !math_clears_dest, words>();
+    }
 }
 
 /**

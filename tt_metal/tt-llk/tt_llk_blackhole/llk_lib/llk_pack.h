@@ -672,14 +672,21 @@ inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t addre
 
     if constexpr (rmw_dest)
     {
-        program_packer_destination<false, w_invalidate>(address);
+        program_packer_destination_t<false, w_invalidate>(address);
     }
 
     set_dst_write_addr<mutex_ADC>(tile_index);
 
     if constexpr (!rmw_dest)
     {
-        program_packer_destination<true, w_invalidate>(address);
+        if constexpr (w_invalidate)
+        {
+            program_packer_destination(address); // main's call, which a kernel may wrap
+        }
+        else
+        {
+            program_packer_destination_t<true, false>(address);
+        }
     }
 
     ckernel::ckernel_template::run();
@@ -726,14 +733,21 @@ inline void _llk_pack_block_(const std::uint32_t start_tile_index, const std::ui
 
     if constexpr (rmw_dest)
     {
-        program_packer_destination<false, w_invalidate>(address);
+        program_packer_destination_t<false, w_invalidate>(address);
     }
 
     set_dst_write_addr(start_tile_index);
 
     if constexpr (!rmw_dest)
     {
-        program_packer_destination<true, w_invalidate>(address);
+        if constexpr (w_invalidate)
+        {
+            program_packer_destination(address); // main's call, which a kernel may wrap
+        }
+        else
+        {
+            program_packer_destination_t<true, false>(address);
+        }
     }
 
     // Template 1 MOP: non-zero bits 19:10 override the programmed outer loop count for this run only.
@@ -769,7 +783,14 @@ inline void _llk_pack_block_closed_(
         set_dst_write_addr(start_tile_index);
     }
 
-    program_packer_destination<!rmw_dest, w_invalidate>(address);
+    if constexpr (!rmw_dest && w_invalidate)
+    {
+        program_packer_destination(address); // main's call, which a kernel may wrap
+    }
+    else
+    {
+        program_packer_destination_t<!rmw_dest, w_invalidate>(address);
+    }
 
     // The output address adds the packer W counter of channel 1 times this stride; no other pack program moves it.
     // Rewriting an unchanged stride cost the call up to 8 cycles.
@@ -852,7 +873,7 @@ inline void _llk_pack_block_fast_(const std::uint32_t start_tile_index, const st
         ((start_tile_index + num_tiles) <= get_dest_max_tiles<Dst, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
         "The block exceeds the destination register sync region");
 
-    program_packer_destination<false>(address);
+    program_packer_destination_t<false>(address);
 
     set_dst_write_addr(start_tile_index);
 
@@ -873,7 +894,7 @@ inline void _llk_pack_block_closed_fast_(
         "The block exceeds the destination register sync region");
     LLK_ASSERT((tile_stride & 0xF) == 0 && tile_stride < 0x10000, "tile_stride must be a multiple of 16 below 64 KB");
 
-    program_packer_destination<false>(address);
+    program_packer_destination_t<false>(address);
 
     if (tile_stride != pack_ch1_w_stride())
     {
@@ -896,7 +917,7 @@ inline void _llk_pack_block_closed_fast_(
 inline void _llk_pack_block_w_init_(const std::uint32_t address, const std::uint32_t tile_stride)
 {
     LLK_ASSERT((tile_stride & 0xF) == 0 && tile_stride < 0x10000, "tile_stride must be a multiple of 16 below 64 KB");
-    program_packer_destination<false>(address);
+    program_packer_destination_t<false>(address);
     cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_1_Wstride_RMW>(tile_stride);
     pack_ch1_w_stride_set(tile_stride);
 }

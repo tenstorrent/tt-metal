@@ -150,7 +150,7 @@ inline void _llk_pack_rows_(const std::uint32_t tile_index, const std::uint32_t 
     // Set the tile index in dest to read from
     set_dst_write_addr(tile_index);
 
-    ckernel::packer::program_packer_destination<false>(address);
+    ckernel::packer::program_packer_destination_t<false>(address);
 
     ckernel::ckernel_template::run();
 }

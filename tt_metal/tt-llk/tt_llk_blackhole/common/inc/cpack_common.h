@@ -669,8 +669,8 @@ constexpr int llk_pack_out32_kind(const unsigned char (&pack_dst_format)[n])
 // The reconfigure's global writes that a kernel's pack formats keep constant (LLK_PACK_RECONFIG_SKIP_*), from the descriptor
 // arrays (constant in the JIT): a field with the same value for every pack CB was written by hw_configure, and no reconfigure
 // can change it. The strides stay where another stride writer is linked (fast tilize and untilize, pack_strides_writer tags).
-template <bool is_fp32_dest_acc_en, DstSync sync, std::size_t n, bool gate = true>
-constexpr std::uint32_t llk_pack_reconfig_skip(const unsigned char (&pack_src_format)[n], const unsigned char (&pack_dst_format)[n])
+template <bool is_fp32_dest_acc_en, DstSync sync, std::size_t n, bool gate = true, typename S>
+constexpr std::uint32_t llk_pack_reconfig_skip(const S& pack_src_format, const unsigned char (&pack_dst_format)[n])
 {
     std::uint32_t skip = LLK_PACK_RECONFIG_SKIP_PAC_LF8 | LLK_PACK_RECONFIG_SKIP_EXP_THRESHOLD | LLK_PACK_RECONFIG_SKIP_DSTACC | LLK_PACK_RECONFIG_SKIP_STRIDES;
     bool any           = false;
@@ -735,9 +735,9 @@ constexpr std::uint32_t llk_pack_reconfig_skip(const unsigned char (&pack_src_fo
 // The whole reconfigure, its drain included, where every pack output has one format pair and face count and no partial
 // face: hw_configure wrote the same values and the other writers of those fields are other programs, which the stride
 // writers already exclude. Fast tilize writes a Float16_b input; the tile header register has no reader on Blackhole.
-template <bool is_fp32_dest_acc_en, DstSync sync, std::size_t n, bool gate = true>
+template <bool is_fp32_dest_acc_en, DstSync sync, std::size_t n, bool gate = true, typename S>
 constexpr std::uint32_t llk_pack_reconfig_skip_all(
-    const unsigned char (&pack_src_format)[n],
+    const S& pack_src_format,
     const unsigned char (&pack_dst_format)[n],
     const std::uint8_t (&pack_tile_num_faces)[n],
     const std::uint8_t (&pack_partial_face)[n])
@@ -789,8 +789,8 @@ inline constexpr bool pack_init_writer = false;
 // modes and X counter live, and a default init writes the strides only where they differ (llk_pack_width_single, else
 // pack_strides_width). Programs that mark themselves (LLK_PACK_OTHER_PROGRAM_SET) are checked at run time. dep: a template argument of the caller, so the tags are read at
 // its instantiation.
-template <auto dep, DstSync sync, std::size_t n>
-constexpr bool llk_pack_init_live(const unsigned char (&pack_src_format)[n], const unsigned char (&pack_dst_format)[n])
+template <auto dep, DstSync sync, std::size_t n, typename S>
+constexpr bool llk_pack_init_live(const S& pack_src_format, const unsigned char (&pack_dst_format)[n])
 {
     if (pack_fast_tilize_linked<sync> || pack_fast_untilize_linked<sync> || pack_strides_writer<1> || pack_strides_writer<2> ||
         pack_strides_writer<3> || pack_strides_writer<4> || pack_strides_writer<5> || pack_strides_writer<6> || pack_strides_writer<7> ||
@@ -809,8 +809,8 @@ constexpr bool llk_pack_init_live(const unsigned char (&pack_src_format)[n], con
 }
 
 // Every pack CB of one packer input width: the strides hw_configure wrote stay those of every default init.
-template <std::size_t n>
-constexpr bool llk_pack_width_single(const unsigned char (&pack_src_format)[n], const unsigned char (&pack_dst_format)[n])
+template <std::size_t n, typename S>
+constexpr bool llk_pack_width_single(const S& pack_src_format, const unsigned char (&pack_dst_format)[n])
 {
     bool any            = false;
     std::uint32_t size0 = 0;
@@ -836,9 +836,8 @@ constexpr bool llk_pack_width_single(const unsigned char (&pack_src_format)[n], 
 
 // llk_pack_init_live and every pack CB of one face height and face count, with no other MOP writer linked (pack_init_writer<3>,
 // the contiguous block MOP): hw_configure's default MOP stays live too, so a default init of one tile writes no MOP.
-template <auto dep, DstSync sync, std::size_t n, typename F, typename N>
-constexpr bool llk_pack_mop_live(
-    const unsigned char (&pack_src_format)[n], const unsigned char (&pack_dst_format)[n], const F (&face_r_dim)[n], const N (&num_faces)[n])
+template <auto dep, DstSync sync, std::size_t n, typename F, typename N, typename S>
+constexpr bool llk_pack_mop_live(const S& pack_src_format, const unsigned char (&pack_dst_format)[n], const F (&face_r_dim)[n], const N (&num_faces)[n])
 {
     if (!llk_pack_init_live<dep, sync>(pack_src_format, pack_dst_format) || pack_init_writer<3>)
     {
@@ -1121,12 +1120,9 @@ struct llk_pack_reconfig_imm_t
     std::uint32_t format, section, lf8, threshold, dstacc, ystride, zwstride;
 };
 
-template <bool is_fp32_dest_acc_en, DstSync sync, std::size_t n, bool gate = true>
+template <bool is_fp32_dest_acc_en, DstSync sync, std::size_t n, bool gate = true, typename S>
 constexpr llk_pack_reconfig_imm_t llk_pack_reconfig_imm(
-    const unsigned char (&pack_src_format)[n],
-    const unsigned char (&pack_dst_format)[n],
-    const unsigned char (&pack_num_faces)[n],
-    const unsigned char (&pack_partial_face)[n])
+    const S& pack_src_format, const unsigned char (&pack_dst_format)[n], const unsigned char (&pack_num_faces)[n], const unsigned char (&pack_partial_face)[n])
 {
     llk_pack_reconfig_imm_t m {false, false, 0, 0, 0, 0, 0, 0, 0};
     bool any = false;
@@ -1199,9 +1195,9 @@ struct llk_pack_reconfig_profiles_t
     std::uint8_t src[8], dst[8], faces[8];
 };
 
-template <std::size_t n>
+template <std::size_t n, typename S>
 constexpr llk_pack_reconfig_profiles_t llk_pack_reconfig_profiles(
-    const unsigned char (&pack_src_format)[n], const unsigned char (&pack_dst_format)[n], const unsigned char (&pack_num_faces)[n])
+    const S& pack_src_format, const unsigned char (&pack_dst_format)[n], const unsigned char (&pack_num_faces)[n])
 {
     llk_pack_reconfig_profiles_t p {0, {}, {}, {}};
     for (std::size_t i = 0; i < n; i++)
@@ -1442,7 +1438,7 @@ inline void select_packer_dest_registers()
 // keep_output_addr: leave OUTPUT_ADDR holding the plain address, which fast tilize advances from.
 // w_invalidate: false for llk_pack_block's own packs, which mark the state instead.
 template <bool keep_output_addr = true, bool w_invalidate = true>
-inline void program_packer_destination(std::uint32_t addr)
+inline void program_packer_destination_t(std::uint32_t addr)
 {
     LLK_ASSERT(is_valid_L1_address(addr), "L1 address must be in valid L1 memory region");
     if constexpr (w_invalidate)
@@ -1474,6 +1470,12 @@ inline void program_packer_destination(std::uint32_t addr)
 
     TT_SETDMAREG(0, UPPER_HALFWORD(addr), 0, HI_16(p_gpr_pack::OUTPUT_ADDR));
     TTI_DMANOP; // One NOP should be enough for WRCFG due to SETDMAREG above.
+}
+
+// main's name and signature, so a kernel can still wrap it (the forms above take another name).
+inline void program_packer_destination(std::uint32_t addr)
+{
+    program_packer_destination_t(addr);
 }
 
 // RT: If multiple contexts are used, for issue #https://github.com/tenstorrent/tt-llk-bh/issues/20
