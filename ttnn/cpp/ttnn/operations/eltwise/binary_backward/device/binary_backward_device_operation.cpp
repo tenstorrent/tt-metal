@@ -59,8 +59,8 @@ std::optional<std::string> operand_hard_reject_reason(
     return std::nullopt;
 }
 
-// Soft: constraints the fused device op enforces but the composite path can still cover
-// (ROW_MAJOR, non-32x32 tiles, sharded, unfused broadcast) — route back to composite.
+// Soft rejects route back to composite: ROW_MAJOR, non-32x32 tiles, sharded,
+// unfused broadcast — all served by the composite path's tile-agnostic ttnn::assign/neg.
 std::optional<std::string> operand_soft_reject_reason(
     std::string_view op_name, const Tensor& tensor, std::string_view role) {
     if (tensor.layout() != Layout::TILE) {
@@ -95,14 +95,8 @@ std::optional<std::string> preallocated_hard_reject_reason(
     if (preallocated->device() != input.device()) {
         return fmt::format("{} operation requires {} to be on the same device as the input", op_name, role);
     }
-    if (preallocated->dtype() != reference.dtype()) {
-        return fmt::format(
-            "{} operation requires {} dtype to match its operand, got {} vs {}",
-            op_name,
-            role,
-            preallocated->dtype(),
-            reference.dtype());
-    }
+    // dtype-mismatch preallocated now soft-routes to composite (ttnn::assign coerces); hard-reject only
+    // on structural/device faults the composite path can't paper over.
     if (preallocated->logical_shape() != reference.logical_shape()) {
         return fmt::format(
             "{} requires {} logical shape {} to match operand shape {}. Grads return at operand shape now; "
@@ -167,23 +161,36 @@ std::optional<std::string> BinaryBackwardDeviceOperation::soft_fallback_reason(
     const Tensor& grad_output,
     const Tensor& input,
     const Tensor& other,
-    const std::optional<MemoryConfig>& output_memory_config,
+    const std::array<MemoryConfig, 2>& output_memory_configs,
     std::array<bool, 2> are_required_outputs,
     const std::optional<Tensor>& preallocated_input_grad,
     const std::optional<Tensor>& preallocated_other_grad) {
     const auto op_name = op_name_of(op_type);
 
-    // All 5 ops: both grads must be requested; partial-mask callers fall to composite in binary_backward.cpp.
-    if (!(are_required_outputs[0] && are_required_outputs[1])) {
-        return fmt::format(
-            "{} operation currently requires both grads; got are_required_outputs=[{}, {}]",
-            op_name,
-            are_required_outputs[0],
-            are_required_outputs[1]);
+    // Mixed-dtype preallocated routes to composite (ttnn::assign coerces; fused writer does not).
+    // Caller drops preallocated for masked-off slots, so .has_value() implies slot is requested.
+    const auto preallocated_dtype_mismatch =
+        [&](const std::optional<Tensor>& p, const Tensor& ref, std::string_view role) -> std::optional<std::string> {
+        if (p.has_value() && p->dtype() != ref.dtype()) {
+            return fmt::format(
+                "{} operation routes {} to composite because its dtype {} differs from operand dtype {}",
+                op_name,
+                role,
+                p->dtype(),
+                ref.dtype());
+        }
+        return std::nullopt;
+    };
+    if (auto r = preallocated_dtype_mismatch(preallocated_input_grad, input, "preallocated input_grad");
+        r.has_value()) {
+        return r;
+    }
+    if (auto r = preallocated_dtype_mismatch(preallocated_other_grad, other, "preallocated other_grad");
+        r.has_value()) {
+        return r;
     }
 
-    // Per-operand + per-preallocated soft rejects (non-TILE, non-32x32); the composite
-    // path handles them via ttnn::multiply + reduce_grad_to_operand_shape.
+    // Per-operand soft reject (non-TILE / non-32x32 layouts); composite handles via ttnn::assign.
     for (const auto& [tensor, role] :
          {std::pair{std::cref(grad_output), "the grad_output tensor"},
           std::pair{std::cref(input), "the input tensor"},
@@ -192,13 +199,18 @@ std::optional<std::string> BinaryBackwardDeviceOperation::soft_fallback_reason(
             return r;
         }
     }
-    for (const auto& [preallocated, role] :
-         {std::pair{std::cref(preallocated_input_grad), "the preallocated input_grad tensor"},
-          std::pair{std::cref(preallocated_other_grad), "the preallocated other_grad tensor"}}) {
-        if (preallocated.get().has_value()) {
-            if (auto r = operand_soft_reject_reason(op_name, *preallocated.get(), role); r.has_value()) {
-                return r;
-            }
+    if (preallocated_input_grad.has_value()) {
+        if (auto r =
+                operand_soft_reject_reason(op_name, *preallocated_input_grad, "the preallocated input_grad tensor");
+            r.has_value()) {
+            return r;
+        }
+    }
+    if (preallocated_other_grad.has_value()) {
+        if (auto r =
+                operand_soft_reject_reason(op_name, *preallocated_other_grad, "the preallocated other_grad tensor");
+            r.has_value()) {
+            return r;
         }
     }
 
@@ -217,16 +229,24 @@ std::optional<std::string> BinaryBackwardDeviceOperation::soft_fallback_reason(
                 tensor.get().memory_config().memory_layout());
         }
     }
-    for (const auto& [preallocated, role] :
-         {std::pair{std::cref(preallocated_input_grad), "the preallocated input_grad tensor"},
-          std::pair{std::cref(preallocated_other_grad), "the preallocated other_grad tensor"}}) {
-        if (preallocated.get().has_value() && preallocated.get()->is_sharded()) {
+    const auto preallocated_sharded_reject = [&](const std::optional<Tensor>& p,
+                                                 std::string_view role) -> std::optional<std::string> {
+        if (p.has_value() && p->is_sharded()) {
             return fmt::format(
                 "{} operation does not support sharded {} (memory_layout={})",
                 op_name,
                 role,
-                preallocated.get()->memory_config().memory_layout());
+                p->memory_config().memory_layout());
         }
+        return std::nullopt;
+    };
+    if (auto r = preallocated_sharded_reject(preallocated_input_grad, "the preallocated input_grad tensor");
+        r.has_value()) {
+        return r;
+    }
+    if (auto r = preallocated_sharded_reject(preallocated_other_grad, "the preallocated other_grad tensor");
+        r.has_value()) {
+        return r;
     }
 
     // logical_shape catches TILE-padding equalising padded_shape while broadcast semantics
@@ -248,35 +268,24 @@ std::optional<std::string> BinaryBackwardDeviceOperation::soft_fallback_reason(
             other.padded_shape());
     }
 
-    // A1: with no explicit output_memory_config, keep the call on the composite when input
-    // and other differ so other_grad isn't silently placed at input's mem_config.
-    if (!output_memory_config.has_value() && !(input.memory_config() == other.memory_config())) {
-        return fmt::format(
-            "{} operation with no output_memory_config requires input and other to share a memory_config so both "
-            "grads land where the composite path would place them, got input={} vs other={}",
-            op_name,
-            input.memory_config(),
-            other.memory_config());
-    }
-
-    // Per-output effective memory layout: preallocated wins (compute_output_specs returns
-    // preallocated->tensor_spec() verbatim), else the resolved output_memory_config.
-    const auto& resolved_mem_config = output_memory_config.value_or(input.memory_config());
-    const auto effective_mem_layout = [&](const std::optional<Tensor>& preallocated) {
-        return preallocated.has_value() ? preallocated->memory_config().memory_layout()
-                                        : resolved_mem_config.memory_layout();
+    // Per-slot effective layout: preallocated wins (compute_output_specs returns its spec verbatim),
+    // else the slot's own output_memory_config applies — [0] for input_grad, [1] for other_grad.
+    const auto effective_mem_layout = [&](const std::optional<Tensor>& preallocated, const MemoryConfig& slot_mc) {
+        return preallocated.has_value() ? preallocated->memory_config().memory_layout() : slot_mc.memory_layout();
     };
-    if (effective_mem_layout(preallocated_input_grad) != TensorMemoryLayout::INTERLEAVED) {
+    if (are_required_outputs[0] &&
+        effective_mem_layout(preallocated_input_grad, output_memory_configs[0]) != TensorMemoryLayout::INTERLEAVED) {
         return fmt::format(
             "{} operation requires INTERLEAVED memory layout for input_grad, got {}",
             op_name,
-            effective_mem_layout(preallocated_input_grad));
+            effective_mem_layout(preallocated_input_grad, output_memory_configs[0]));
     }
-    if (effective_mem_layout(preallocated_other_grad) != TensorMemoryLayout::INTERLEAVED) {
+    if (are_required_outputs[1] &&
+        effective_mem_layout(preallocated_other_grad, output_memory_configs[1]) != TensorMemoryLayout::INTERLEAVED) {
         return fmt::format(
             "{} operation requires INTERLEAVED memory layout for other_grad, got {}",
             op_name,
-            effective_mem_layout(preallocated_other_grad));
+            effective_mem_layout(preallocated_other_grad, output_memory_configs[1]));
     }
 
     return std::nullopt;
@@ -284,8 +293,15 @@ std::optional<std::string> BinaryBackwardDeviceOperation::soft_fallback_reason(
 
 void BinaryBackwardDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    // args.output_memory_config is always resolved by the time the launch reaches here, so
-    // pass it as an engaged optional; the A1 default-parity rule is inert in that case.
+    // Both-false would allocate buffers, run a kernel, and return [None, None] — reject here
+    // so the composite's "at least one gradient is expected" contract still surfaces.
+    TT_FATAL(
+        args.are_required_outputs[0] || args.are_required_outputs[1],
+        "{} operation requires at least one of are_required_outputs to be true",
+        op_name_of(args.op_type));
+
+    // Non-32x32 tiles are soft-rejected in operand_soft_reject_reason so add_bw/sub_bw/rsub_bw
+    // composite (assign +/- neg) still serves them; mul/div composite re-fails with its own error.
     auto hard = hard_invariants_reason(
         args.op_type,
         tensor_args.grad_output,
@@ -299,7 +315,7 @@ void BinaryBackwardDeviceOperation::validate_on_program_cache_miss(
         tensor_args.grad_output,
         tensor_args.input,
         tensor_args.other,
-        args.output_memory_config,
+        args.output_memory_configs,
         args.are_required_outputs,
         tensor_args.preallocated_input_grad,
         tensor_args.preallocated_other_grad);
@@ -311,7 +327,7 @@ BinaryBackwardDeviceOperation::spec_return_value_t BinaryBackwardDeviceOperation
     // Carry the operand's padded_shape through so an input padded beyond tile alignment
     // (e.g. tilize_with_val_padding: logical 40x40 in padded 96x96 = 9 tiles) gets an
     // output buffer sized for the pages the writer emits, not the tile-padded logical.
-    const auto spec_for = [&](const Tensor& ref, const std::optional<Tensor>& preallocated) -> TensorSpec {
+    const auto spec_for = [&](const Tensor& ref, const std::optional<Tensor>& preallocated, size_t slot) -> TensorSpec {
         if (preallocated.has_value()) {
             return preallocated->tensor_spec();
         }
@@ -324,13 +340,13 @@ BinaryBackwardDeviceOperation::spec_return_value_t BinaryBackwardDeviceOperation
             tt::tt_metal::experimental::tensor_layout_from_padded_shape(
                 output_dtype,
                 PageConfig(Layout::TILE),
-                args.output_memory_config,
+                args.output_memory_configs[slot],
                 ref.logical_shape(),
                 ref.padded_shape()));
     };
     return {
-        spec_for(tensor_args.input, tensor_args.preallocated_input_grad),
-        spec_for(tensor_args.other, tensor_args.preallocated_other_grad),
+        spec_for(tensor_args.input, tensor_args.preallocated_input_grad, 0),
+        spec_for(tensor_args.other, tensor_args.preallocated_other_grad, 1),
     };
 }
 
@@ -358,7 +374,7 @@ ttsl::hash::hash_t BinaryBackwardDeviceOperation::compute_program_hash(
     operation::Hash hash = operation::hash_operation<BinaryBackwardDeviceOperation>(
         static_cast<uint32_t>(args.op_type),
         args.output_dtype,
-        args.output_memory_config,
+        args.output_memory_configs,
         args.are_required_outputs,
         grad_output.dtype(),
         grad_output.memory_config(),
@@ -389,14 +405,14 @@ std::vector<Tensor> launch_binary_backward(
     const Tensor& input,
     const Tensor& other,
     DataType output_dtype,
-    const MemoryConfig& output_memory_config,
+    const std::array<MemoryConfig, 2>& output_memory_configs,
     std::array<bool, 2> are_required_outputs,
     const std::optional<Tensor>& preallocated_input_grad,
     const std::optional<Tensor>& preallocated_other_grad) {
     auto operation_attributes = BinaryBackwardDeviceOperation::operation_attributes_t{
         .op_type = op_type,
         .output_dtype = output_dtype,
-        .output_memory_config = output_memory_config,
+        .output_memory_configs = output_memory_configs,
         .are_required_outputs = are_required_outputs,
     };
     auto tensor_args = BinaryBackwardDeviceOperation::tensor_args_t{
