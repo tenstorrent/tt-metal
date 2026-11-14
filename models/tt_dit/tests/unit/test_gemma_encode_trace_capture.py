@@ -64,7 +64,8 @@ def _shell(path, *, encoder_trace=True, gate_open=True):
         ),
     )
     pair._encode_device = MethodType(encode_device, pair)
-    names = ["capture_trace", "encode"] + (["_encode_prompt_device"] if path == GEMMA3 else [])
+    # gemma4's encode() runs each prompt through _encode_one(); gemma3's through _encode_prompt_device().
+    names = ["capture_trace", "encode"] + (["_encode_prompt_device"] if path == GEMMA3 else ["_encode_one"])
     for name, fn in _methods(path, names).items():
         setattr(pair, name, MethodType(fn, pair))
     return pair, calls
