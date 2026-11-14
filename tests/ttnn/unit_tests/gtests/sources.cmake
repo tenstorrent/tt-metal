@@ -21,6 +21,7 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_broadcast_to.cpp
     test_command_list.cpp
     test_command_list_tensor_prefetcher.cpp
+    test_scatter_codegen_prim.cpp
     test_convert_to_hwc_gather.cpp
     test_eltwise.cpp
     test_gelu_bw_ulp.cpp
