@@ -46,6 +46,16 @@ void validate_operands_on_device(const AllGatherMinimalMatmulAsyncInputs& tensor
             name);
     };
     check(tensor_args.weight_tensor, "weight");
+    for (const auto& [tensor, name] : {
+             std::pair{&tensor_args.qk_norm_weight_q, "qk_norm_weight_q"},
+             std::pair{&tensor_args.qk_norm_weight_k, "qk_norm_weight_k"},
+             std::pair{&tensor_args.rope_cos, "rope_cos"},
+             std::pair{&tensor_args.rope_sin, "rope_sin"},
+             std::pair{&tensor_args.rope_trans_mat, "rope_trans_mat"}}) {
+        if (tensor->has_value()) {
+            check(tensor->value(), name);
+        }
+    }
     if (tensor_args.bias_tensor.has_value()) {
         check(*tensor_args.bias_tensor, "bias");
     }
@@ -171,7 +181,13 @@ ttsl::hash::hash_t AllGatherMinimalMatmulAsyncOp::compute_program_hash(
         rows_free(tensor_args.fused_ternary_input_a),
         rows_free(tensor_args.fused_ternary_input_b),
         attributes.fused_ternary_scalar.has_value(),
-        tensor_args.persistent_weight_buffer);
+        tensor_args.persistent_weight_buffer,
+        // Fused QK norm + RoPE: the tables' row count follows M (runtime), the rest is fixed.
+        tensor_args.qk_norm_weight_q,
+        tensor_args.qk_norm_weight_k,
+        rows_free(tensor_args.rope_cos),
+        rows_free(tensor_args.rope_sin),
+        tensor_args.rope_trans_mat);
 }
 
 void AllGatherMinimalMatmulAsyncOp::validate_on_program_cache_miss(
@@ -363,6 +379,60 @@ void AllGatherMinimalMatmulAsyncOp::validate_on_program_cache_miss(
                 TT_FATAL(widths[c] % hd == 0, "chunk {} width {} is not a multiple of head_dim {}", c, widths[c], hd);
             }
         }
+    }
+
+    if (!attributes.head_perm.empty()) {
+        // Fused per-head QK norm + RoPE (MINIMAX_H3_MK_E2B_QK_NORM).
+        const uint32_t hd = attributes.head_dim;
+        TT_FATAL(
+            chunks == 3 && attributes.head_split_chunks_mask == 0b111u,
+            "fused QK norm needs chunks == 3 (q, k, v) all head-split, got chunks {} mask {}",
+            chunks,
+            attributes.head_split_chunks_mask);
+        TT_FATAL(!attributes.fused_activation.has_value() && !has_bias, "fused QK norm: no activation or bias");
+        const auto widths = resolve_chunk_sizes(attributes, N);
+        TT_FATAL(
+            attributes.head_perm.size() * hd == N,
+            "head_perm has {} heads of {} but the weight is {} wide",
+            attributes.head_perm.size(),
+            hd,
+            N);
+        std::vector<std::vector<bool>> seen(3);
+        for (uint32_t c = 0; c < 3; ++c) {
+            seen[c].assign(widths[c] / hd, false);
+        }
+        for (const uint32_t e : attributes.head_perm) {
+            const uint32_t c = e >> 16;
+            const uint32_t idx = e & 0xFFFFu;
+            TT_FATAL(c < 3 && idx < seen[c].size() && !seen[c][idx], "head_perm entry {:#x} is out of range or repeated", e);
+            seen[c][idx] = true;
+        }
+        const auto need = [](const std::optional<Tensor>& t, const char* name) -> const Tensor& {
+            TT_FATAL(t.has_value(), "fused QK norm needs {}", name);
+            TT_FATAL(t->layout() == Layout::TILE, "fused QK norm: {} must be TILE", name);
+            return t.value();
+        };
+        const auto& gq = need(tensor_args.qk_norm_weight_q, "qk_norm_weight_q");
+        const auto& gk = need(tensor_args.qk_norm_weight_k, "qk_norm_weight_k");
+        const auto& cos = need(tensor_args.rope_cos, "rope_cos");
+        const auto& sin = need(tensor_args.rope_sin, "rope_sin");
+        const auto& tm = need(tensor_args.rope_trans_mat, "rope_trans_mat");
+        TT_FATAL(
+            gq.dtype() == DataType::BFLOAT16 && gk.dtype() == DataType::BFLOAT16 &&
+                gq.padded_shape()[-1] == widths[0] && gk.padded_shape()[-1] == widths[1],
+            "fused QK norm: the norm weights must be bf16 [1, chunk width]");
+        TT_FATAL(
+            cos.dtype() == DataType::FLOAT32 && sin.dtype() == DataType::FLOAT32 && cos.padded_shape()[-1] == hd &&
+                sin.padded_shape()[-1] == hd && cos.padded_shape() == sin.padded_shape(),
+            "fused QK norm: rope cos / sin must be float32 [.., rows, head_dim] of one shape");
+        TT_FATAL(
+            cos.padded_shape()[-2] >= act_tensor.padded_shape()[-2],
+            "fused QK norm: rope tables have {} rows, fewer than the {} activation rows",
+            cos.padded_shape()[-2],
+            act_tensor.padded_shape()[-2]);
+        TT_FATAL(
+            tm.dtype() == DataType::BFLOAT16 && tm.physical_volume() == tt::constants::TILE_HW,
+            "fused QK norm: rope_trans_mat must be one bf16 tile");
     }
 
     if (has_bias) {
@@ -662,7 +732,14 @@ std::vector<ttnn::Tensor> all_gather_minimal_matmul_async(
     std::optional<bool> transpose_core_grid,
 
     uint32_t head_split_chunks_mask,
-    uint32_t head_dim) {
+    uint32_t head_dim,
+    const std::vector<uint32_t>& head_perm,
+    float qk_norm_eps,
+    const std::optional<ttnn::Tensor>& qk_norm_weight_q,
+    const std::optional<ttnn::Tensor>& qk_norm_weight_k,
+    const std::optional<ttnn::Tensor>& rope_cos,
+    const std::optional<ttnn::Tensor>& rope_sin,
+    const std::optional<ttnn::Tensor>& rope_trans_mat) {
     using OperationType = ttnn::experimental::prim::AllGatherMinimalMatmulAsyncOp;
 
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -714,6 +791,8 @@ std::vector<ttnn::Tensor> all_gather_minimal_matmul_async(
         transpose_core_grid};
     operation_attributes.head_split_chunks_mask = head_split_chunks_mask;
     operation_attributes.head_dim = head_dim;
+    operation_attributes.head_perm = head_perm;
+    operation_attributes.qk_norm_eps = qk_norm_eps;
     auto tensor_args = OperationType::tensor_args_t{
         input_tensor,
         weight_tensor,
@@ -721,7 +800,12 @@ std::vector<ttnn::Tensor> all_gather_minimal_matmul_async(
         persistent_output_buffer,
         addcmul_input_tensor1,
         addcmul_input_tensor2,
-        persistent_weight_buffer};
+        persistent_weight_buffer,
+        qk_norm_weight_q,
+        qk_norm_weight_k,
+        rope_cos,
+        rope_sin,
+        rope_trans_mat};
 
     std::vector<Tensor> returned_tensors =
         ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);

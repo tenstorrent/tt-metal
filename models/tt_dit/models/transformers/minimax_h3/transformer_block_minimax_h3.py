@@ -149,6 +149,7 @@ class MiniMaxH3TransformerBlock(Module):
             use_persistent_ccl_buffers=use_persistent_ccl_buffers,
             dynamic_length=dynamic_length,
             norm_row_capacity=norm_row_capacity,
+            fused_qk_norm_rope=True,  # every DiT-block call: fused [1, 1, N, K] path with RoPE
         )
         self.norm2 = DistributedRMSNorm(
             embedding_dim=hidden_size,

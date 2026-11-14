@@ -762,6 +762,25 @@ FORCE_INLINE uint32_t chunk_out_tile_id(
     return m_tile * width + col;
 }
 
+#ifdef CHUNK_HEAD_PERM
+/**
+ * Head-permuted output (FUSE_QK_NORM_ROPE): the matmul's N columns are heads of CHUNK_HEAD_DT tiles in the
+ * order of CHUNK_HEAD_PERM (entry h = chunk << 16 | head index in that chunk); every chunk is head-split
+ * [1, heads, M_tiles, CHUNK_HEAD_DT]. Returns false for padding columns past the table.
+ */
+FORCE_INLINE bool head_perm_out_tile(uint32_t col, uint32_t m_tile, uint32_t m_tiles, uint32_t& chunk_idx, uint32_t& tile_id) {
+    constexpr uint32_t perm[] = {CHUNK_HEAD_PERM};
+    constexpr uint32_t DT = CHUNK_HEAD_DT;
+    const uint32_t h = col / DT;
+    if (h >= sizeof(perm) / sizeof(perm[0])) {
+        return false;
+    }
+    chunk_idx = perm[h] >> 16;
+    tile_id = (perm[h] & 0xFFFFu) * (m_tiles * DT) + m_tile * DT + col % DT;
+    return true;
+}
+#endif
+
 /**
  * Helper: dispatch to correct tuple element using fold expression.
  * Each branch calls noc.async_write with the concrete TensorAccessor type.
@@ -819,6 +838,19 @@ void write_block_sync_split(
             break;
         }
 
+#ifdef CHUNK_HEAD_PERM
+        for (uint32_t j = d1_start; j < d1_end; j++) {
+            uint32_t perm_chunk = 0;
+            uint32_t perm_tile = 0;
+            if (head_perm_out_tile(j, i, chunk_shape.logical_d0, perm_chunk, perm_tile)) {
+                write_tile_to_chunk(
+                    noc, accessors, perm_chunk, perm_tile, read_ptr, tile_size_bytes, std::index_sequence_for<Accessors...>{});
+            }
+            read_ptr += tile_size_bytes;
+        }
+        read_ptr += (N_block_tiles - (d1_end - d1_start)) * tile_size_bytes;
+        continue;
+#endif
         uint32_t chunk_idx = chunk_idx_start;
         uint32_t tile_idx_in_chunk = tile_idx_in_chunk_start;
 
@@ -886,6 +918,26 @@ void write_block_sync_granular_split(
         if (m_tile < d0_end && m_tile < chunk_shape.logical_d0) {
             uint32_t out_read_ptr = cb_out.get_read_ptr();
 
+#ifdef CHUNK_HEAD_PERM
+            for (uint32_t n_tile_id = d1_start; n_tile_id < d1_end; n_tile_id++) {
+                uint32_t perm_chunk = 0;
+                uint32_t perm_tile = 0;
+                if (head_perm_out_tile(n_tile_id, m_tile, chunk_shape.logical_d0, perm_chunk, perm_tile)) {
+                    write_tile_to_chunk(
+                        noc,
+                        accessors,
+                        perm_chunk,
+                        perm_tile,
+                        out_read_ptr,
+                        tile_size_bytes,
+                        std::index_sequence_for<Accessors...>{});
+                }
+                out_read_ptr += tile_size_bytes;
+            }
+            noc.async_writes_flushed();
+            cb_out.pop_front(N_block_tiles);
+            continue;
+#endif
             uint32_t chunk_idx = chunk_idx_start;
             uint32_t tile_idx_in_chunk = tile_idx_in_chunk_start;
 

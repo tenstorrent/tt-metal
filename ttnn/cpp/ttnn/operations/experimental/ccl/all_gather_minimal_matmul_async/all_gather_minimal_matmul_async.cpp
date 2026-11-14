@@ -43,7 +43,14 @@ std::vector<ttnn::Tensor> all_gather_minimal_matmul_async(
     const std::vector<uint32_t>& chunk_sizes,
     std::optional<bool> transpose_core_grid,
     uint32_t head_split_chunks_mask,
-    uint32_t head_dim) {
+    uint32_t head_dim,
+    const std::vector<uint32_t>& head_perm,
+    float qk_norm_eps,
+    const std::optional<ttnn::Tensor>& qk_norm_weight_q,
+    const std::optional<ttnn::Tensor>& qk_norm_weight_k,
+    const std::optional<ttnn::Tensor>& rope_cos,
+    const std::optional<ttnn::Tensor>& rope_sin,
+    const std::optional<ttnn::Tensor>& rope_trans_mat) {
     return ttnn::prim::all_gather_minimal_matmul_async(
         input_tensor,
         weight_tensor,
@@ -75,7 +82,14 @@ std::vector<ttnn::Tensor> all_gather_minimal_matmul_async(
         chunk_sizes,
         transpose_core_grid,
         head_split_chunks_mask,
-        head_dim);
+        head_dim,
+        head_perm,
+        qk_norm_eps,
+        qk_norm_weight_q,
+        qk_norm_weight_k,
+        rope_cos,
+        rope_sin,
+        rope_trans_mat);
 }
 
 }  // namespace ttnn

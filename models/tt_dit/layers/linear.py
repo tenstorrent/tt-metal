@@ -370,6 +370,7 @@ class ColParallelLinear(Module):
         transpose_core_grid: bool | None = None,
         head_split_chunks_mask: int = 0,
         head_dim: int = 0,
+        qk_norm_rope: dict | None = None,
     ) -> ttnn.Tensor | list[ttnn.Tensor]:
         """
         Expects x to be replicated.
@@ -386,7 +387,13 @@ class ColParallelLinear(Module):
         `head_split_chunks_mask` / `head_dim` (MINIMAX_H3_MK_E2A_HEAD_SPLIT): bit c set = output chunk c comes
         head-split [1, width / head_dim, M, head_dim] (the nlp_create_qkv_heads layout) straight from the
         all-gather-matmul writer. Only on that path (chunked, ring, TP > 1); 0 = off.
+        `qk_norm_rope` (MINIMAX_H3_MK_E2B_QK_NORM): the all-gather-matmul's fused per-head QK norm + RoPE
+        arguments (head_perm, qk_norm_eps, qk_norm_weight_q / _k, rope_cos / _sin, rope_trans_mat), passed
+        through as they are; needs `head_split_chunks_mask`.
         """
+        if qk_norm_rope and not head_split_chunks_mask:
+            msg = "qk_norm_rope needs head_split_chunks_mask"
+            raise ValueError(msg)
         if matmul_config is not None and parallel_config is not None and num_workers_per_link is None:
             msg = "a frozen matmul_config on the all-gather-matmul path needs num_workers_per_link"
             raise ValueError(msg)
@@ -508,6 +515,7 @@ class ColParallelLinear(Module):
                     if head_split_chunks_mask
                     else {}
                 ),
+                **(qk_norm_rope or {}),
             )
 
             if self.chunks is not None and (self.chunks > 1):

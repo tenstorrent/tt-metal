@@ -4,6 +4,7 @@
 
 #include "all_gather_minimal_matmul_async_device_operation.hpp"
 #include "all_gather_minimal_matmul_async_program_factory.hpp"
+#include <algorithm>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
@@ -274,7 +275,8 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
     const std::vector<ttnn::GlobalSemaphore>& fsdp_semaphore,
     ttnn::ccl::Topology fsdp_topology,
     bool fuse_swiglu = false,
-    uint32_t head_split_chunks_mask = 0) {
+    uint32_t head_split_chunks_mask = 0,
+    const ttnn::experimental::prim::QkNormFusionArgs* qk_norm = nullptr) {
     tt::tt_metal::ProgramDescriptor desc;
     auto* device = input_tensor.device();
 
@@ -307,6 +309,19 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
+    // Fused QK norm + RoPE: the compute kernel runs at the norm op's settings (HiFi4, exact SFPU); the matmul
+    // keeps `math_fidelity` through MM_MATH_FIDELITY_VALUE. The qkv path has no SFPU op, so approx mode only
+    // changes the norm's rsqrt.
+    const bool fuse_qk_norm = qk_norm != nullptr;
+    const tt::tt_metal::MathFidelity compute_kernel_fidelity =
+        fuse_qk_norm ? tt::tt_metal::MathFidelity::HiFi4 : math_fidelity;
+    const bool compute_kernel_approx = fuse_qk_norm ? false : math_approx_mode;
+    if (fuse_qk_norm) {
+        TT_FATAL(fp32_dest_acc_en, "fused QK norm needs fp32_dest_acc_en (the norm accumulates in fp32 DEST)");
+        TT_FATAL(!dst_full_sync_en, "fused QK norm runs the norm in half-sync DEST (4 fp32 tiles)");
+        TT_FATAL(!fused_activation.has_value() && !bias_tensor.has_value(), "fused QK norm: no activation or bias");
+        TT_FATAL(!transpose_core_grid, "fused QK norm: the in1 kernel must be the output writer (non-transposed grid)");
+    }
 
     // Intermediate CB dataformat is the same datatype as DST register.
     auto intermediate_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
@@ -564,6 +579,52 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         log_debug(tt::LogOp, "ternary_c_cb_id: {}", ternary_c_cb_id);
     }
 
+    // Fused QK norm + RoPE (qk_norm_rope_compute.hpp): every q / k head must lie inside one N block of one
+    // core, the norm's CBs (formats as dit_fused_distributed_rmsnorm's per-head path), gamma for the core's
+    // q / k heads, and one output block's rows of cos / sin.
+    if (fuse_qk_norm) {
+        const uint32_t dt = qk_norm->head_dim / tt::constants::TILE_WIDTH;
+        const auto& perm = qk_norm->head_perm;
+        auto block_of = [&](uint32_t col) {
+            return std::pair{col / N_tiles_per_core, (col % N_tiles_per_core) / N_block_tiles};
+        };
+        std::vector<uint32_t> qk_heads_per_core(in1_parallel_axis_cores, 0);
+        for (uint32_t h = 0; h < perm.size(); ++h) {
+            if ((perm[h] >> 16) == 2) {
+                continue;
+            }
+            TT_FATAL(
+                block_of(h * dt) == block_of(h * dt + dt - 1),
+                "fused QK norm: q/k head at columns {}..{} straddles a core or N block ({} tiles per core, N block {}); "
+                "reorder the heads so v heads take the straddles",
+                h * dt,
+                h * dt + dt - 1,
+                N_tiles_per_core,
+                N_block_tiles);
+            qk_heads_per_core.at((h * dt) / N_tiles_per_core)++;
+        }
+        const uint32_t max_qk_heads = *std::max_element(qk_heads_per_core.begin(), qk_heads_per_core.end());
+        const auto fp32 = tt::DataFormat::Float32;
+        const auto bf16 = tt::DataFormat::Float16_b;
+        const uint32_t fp32_tile = tt::tile_size(fp32);
+        const uint32_t bf16_tile = tt::tile_size(bf16);
+        const auto rope_format = tt::tt_metal::datatype_to_dataformat_converter(qk_norm->rope_cos->dtype());
+        const auto gamma_format = tt::tt_metal::datatype_to_dataformat_converter(qk_norm->gamma_q->dtype());
+        add_cb(tt::CBIndex::c_8, bf16_tile, std::max(N_block_tiles, dt), bf16);  // staging (the matmul's bf16)
+        add_cb(tt::CBIndex::c_9, fp32_tile, 1, fp32);                             // x^2 accumulator
+        add_cb(tt::CBIndex::c_10, fp32_tile, 2, fp32);                            // per-head SUM
+        add_cb(tt::CBIndex::c_11, fp32_tile, 2, fp32);                            // 1/rms
+        add_cb(tt::CBIndex::c_12, fp32_tile, 1, fp32);                            // SUM scaler
+        add_cb(tt::CBIndex::c_13, fp32_tile, 1, fp32);                            // AVG scaler
+        add_cb(tt::CBIndex::c_14, bf16_tile, 1, bf16);                            // eps tile
+        add_cb(tt::CBIndex::c_15, bf16_tile, 1, bf16);                            // trans_mat
+        add_cb(tt::CBIndex::c_16, tt::tile_size(gamma_format), std::max(1u, max_qk_heads) * dt, gamma_format);
+        add_cb(tt::CBIndex::c_17, tt::tile_size(rope_format), M_block_tiles * dt, rope_format);  // cos
+        add_cb(tt::CBIndex::c_18, tt::tile_size(rope_format), M_block_tiles * dt, rope_format);  // sin
+        add_cb(tt::CBIndex::c_19, fp32_tile, 2 * dt, fp32);  // x/rms, *gamma
+        add_cb(tt::CBIndex::c_20, fp32_tile, dt, fp32);      // rotated
+    }
+
     // Mux
     auto [num_targets_forward, num_targets_backward] =
         ttnn::ccl::get_forward_backward_line_mcast_distance(ring_size, ring_index, topology, false);
@@ -808,9 +869,29 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
                 head_split_mask |= 1u << c;
             }
         }
-        if (head_split_mask != 0) {
+        if (head_split_mask != 0 && !fuse_qk_norm) {
             defines["CHUNK_HEAD_SPLIT_MASK"] = std::to_string(head_split_mask) + "u";
             defines["CHUNK_HEAD_DT"] = std::to_string(head_dt);
+        }
+        if (fuse_qk_norm) {
+            TT_FATAL(head_split_mask == 0b111u, "fused QK norm needs q, k and v head-split");
+            TT_FATAL(
+                head_dt * tt::constants::TILE_WIDTH == qk_norm->head_dim && head_dt <= 4,
+                "fused QK norm: a head ({} tiles) must fit one fp32 half-sync DEST (4 tiles)",
+                head_dt);
+            std::string perm_csv;
+            for (size_t h = 0; h < qk_norm->head_perm.size(); ++h) {
+                perm_csv += (h == 0 ? "" : ",") + std::to_string(qk_norm->head_perm[h]) + "u";
+            }
+            defines["FUSE_QK_NORM_ROPE"] = "1";
+            defines["CHUNK_HEAD_PERM"] = perm_csv;
+            defines["CHUNK_HEAD_DT"] = std::to_string(head_dt);
+            defines["MM_MATH_FIDELITY_VALUE"] = std::to_string(static_cast<uint32_t>(math_fidelity));
+            defines["QK_NORM_EPS_BITS"] = std::to_string(std::bit_cast<uint32_t>(qk_norm->eps)) + "u";
+            defines["QK_NORM_REDUCE_FACTOR"] = std::to_string(qk_norm->head_dim);
+            if (output_data_format == tt::DataFormat::Float16_b) {
+                defines["QK_NORM_OUT_IS_BF16"] = "1";
+            }
         }
     }
 
@@ -1158,6 +1239,13 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
             fused_ternary_input_b,
             /*is_injector_core=*/false,
             in1_fsdp_local_weight);
+        if (fuse_qk_norm) {
+            // Right after the outputs (no bias / ternary / FSDP here): cos, sin, gamma_q, gamma_k, trans_mat.
+            for (const ttnn::Tensor* t :
+                 {qk_norm->rope_cos, qk_norm->rope_sin, qk_norm->gamma_q, qk_norm->gamma_k, qk_norm->trans_mat}) {
+                tt::tt_metal::TensorAccessorArgs(*t->buffer()).append_to(ct);
+            }
+        }
         return ct;
     };
 
@@ -1214,10 +1302,10 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         compute_kernel.compile_time_args = compute_compile_time_args;
         compute_kernel.defines = map_to_defines(compute_defines);
         compute_kernel.config = tt::tt_metal::ComputeConfigDescriptor{
-            .math_fidelity = math_fidelity,
+            .math_fidelity = compute_kernel_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .dst_full_sync_en = dst_full_sync_en,
-            .math_approx_mode = math_approx_mode,
+            .math_approx_mode = compute_kernel_approx,
         };
         desc.kernels.push_back(std::move(compute_kernel));
     }
@@ -1371,6 +1459,14 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         }
         for (const auto& mm_output_tensor : mm_output_tensors) {
             in1_common_args.push_back(allocated_buffer(mm_output_tensor, "matmul output"));
+        }
+        if (fuse_qk_norm) {
+            // Fused QK norm + RoPE, after the outputs: cos, sin, gamma_q, gamma_k, trans_mat.
+            in1_common_args.push_back(allocated_buffer(*qk_norm->rope_cos, "rope cos"));
+            in1_common_args.push_back(allocated_buffer(*qk_norm->rope_sin, "rope sin"));
+            in1_common_args.push_back(allocated_buffer(*qk_norm->gamma_q, "qk norm weight q"));
+            in1_common_args.push_back(allocated_buffer(*qk_norm->gamma_k, "qk norm weight k"));
+            in1_common_args.push_back(allocated_buffer(*qk_norm->trans_mat, "rope trans_mat"));
         }
         desc.kernels[kIn1SenderKernelIdx].emplace_common_runtime_args(in1_common_args);
         desc.kernels[kIn1ReceiverKernelIdx].emplace_common_runtime_args(in1_common_args);
@@ -1767,7 +1863,8 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory(
     const std::vector<ttnn::GlobalSemaphore>& fsdp_semaphore,
     ttnn::ccl::Topology fsdp_topology,
     bool fuse_swiglu,
-    uint32_t head_split_chunks_mask) {
+    uint32_t head_split_chunks_mask,
+    const QkNormFusionArgs* qk_norm) {
     return ::detail::all_gather_minimal_matmul_async_factory_helper(
         input_tensor,
         weight_tensor,
@@ -1803,7 +1900,8 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory(
         fsdp_semaphore,
         fsdp_topology,
         fuse_swiglu,
-        head_split_chunks_mask);
+        head_split_chunks_mask,
+        qk_norm);
 }
 
 tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
@@ -1848,6 +1946,18 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
         pwb_opt = output_tensor.at(1);
     }
 
+    std::optional<QkNormFusionArgs> qk_norm;
+    if (!attributes.head_perm.empty()) {
+        qk_norm = QkNormFusionArgs{
+            .head_perm = attributes.head_perm,
+            .eps = attributes.qk_norm_eps,
+            .head_dim = attributes.head_dim,
+            .gamma_q = &tensor_args.qk_norm_weight_q.value(),
+            .gamma_k = &tensor_args.qk_norm_weight_k.value(),
+            .rope_cos = &tensor_args.rope_cos.value(),
+            .rope_sin = &tensor_args.rope_sin.value(),
+            .trans_mat = &tensor_args.rope_trans_mat.value()};
+    }
     return all_gather_minimal_matmul_async_factory(
         act_tensor,
         weight_tensor,
@@ -1883,7 +1993,8 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
         attributes.fsdp_semaphore,
         attributes.fsdp_topology,
         attributes.fuse_swiglu,
-        attributes.head_split_chunks_mask);
+        attributes.head_split_chunks_mask,
+        qk_norm.has_value() ? &qk_norm.value() : nullptr);
 }
 
 tt::tt_metal::WorkloadDescriptor AllGatherMinimalMatmulAsyncProgramFactory::create_workload_descriptor(
@@ -2009,6 +2120,22 @@ void AllGatherMinimalMatmulAsyncProgramFactory::override_runtime_arguments(
         in0_receiver_no_fabric_common[in0_out_slot + offset] = addr;
         in1_sender_common[in1_out_slot + offset] = addr;
         in1_receiver_common[in1_out_slot + offset] = addr;
+    }
+
+    if (!operation_attributes.head_perm.empty()) {
+        // Fused QK norm + RoPE addresses, right after the outputs: cos, sin, gamma_q, gamma_k, trans_mat.
+        const uint32_t qk_slot = in1_out_slot + static_cast<uint32_t>(tensor_return_value.size() - mm_outputs_start);
+        const uint32_t qk_addrs[] = {
+            required_address(tensor_args.rope_cos.value()),
+            required_address(tensor_args.rope_sin.value()),
+            required_address(tensor_args.qk_norm_weight_q.value()),
+            required_address(tensor_args.qk_norm_weight_k.value()),
+            required_address(tensor_args.rope_trans_mat.value())};
+        TT_FATAL(qk_slot + 4 < in1_sender_common.size(), "fused QK norm runtime-arg slots exceed common args");
+        for (uint32_t i = 0; i < 5; ++i) {
+            in1_sender_common[qk_slot + i] = qk_addrs[i];
+            in1_receiver_common[qk_slot + i] = qk_addrs[i];
+        }
     }
 
     auto& compute_common = tt::tt_metal::GetCommonRuntimeArgs(program, kComputeKernelIdx);

@@ -16,6 +16,19 @@
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/operations/common/shared_with_host/runtime_length.hpp"
 
+#ifdef FUSE_QK_NORM_ROPE
+// Per-head QK norm + RoPE after the matmul; the kernel runs at the norm's fidelity and the matmul
+// keeps its own through these helpers.
+#include "qk_norm_rope_compute.hpp"
+#define AGMM_MATMUL_INIT qk_norm_rope::agmm_matmul_init
+#define AGMM_MATMUL_BLOCK_INIT qk_norm_rope::agmm_matmul_block_init
+#define AGMM_MATMUL_BLOCK qk_norm_rope::agmm_matmul_block
+#else
+#define AGMM_MATMUL_INIT matmul_init
+#define AGMM_MATMUL_BLOCK_INIT matmul_block_init
+#define AGMM_MATMUL_BLOCK matmul_block
+#endif
+
 #ifdef FUSE_SWIGLU
 // Fused SwiGLU output stage. The matmul produced an interleaved gate/up block in `in_cb`:
 // within each M row, column tile 2p is the gate projection and 2p+1 the up projection (the
@@ -362,7 +375,7 @@ void matmul_blocks(
             uint32_t in1_index = in1_index_offset;
 
             for (uint32_t inner_dim = 0; inner_dim < K_block_tiles; inner_dim++) {
-                matmul_block(
+                AGMM_MATMUL_BLOCK(
                     in0_cb.get_cb_id(),
                     in1_cb.get_cb_id(),
                     in0_index,
@@ -445,7 +458,10 @@ void kernel_main() {
 #endif
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(in0_cb_id, in1_cb_id, intermediate_cb_id);
-    matmul_init(in0_cb_id, in1_cb_id);
+    AGMM_MATMUL_INIT(in0_cb_id, in1_cb_id);
+#ifdef FUSE_QK_NORM_ROPE
+    qk_norm_rope::wait_resident_inputs(qk_norm_rope::qk_heads_in(N_start_tile, N_end_tile) * qk_norm_rope::DT);
+#endif
 
     constexpr uint32_t in0_block_num_tiles = M_block_tiles * K_block_tiles;
     constexpr uint32_t in1_block_num_tiles = K_block_tiles * N_block_tiles;
@@ -473,7 +489,7 @@ void kernel_main() {
             current_N_block_tiles = n_tile_end - n_tile;
             current_subblock_w = std::min(current_N_block_tiles, subblock_w);
 
-            matmul_block_init(
+            AGMM_MATMUL_BLOCK_INIT(
                 in0_cb_id,
                 in1_cb_id,
                 false /*transpose*/,
@@ -539,6 +555,13 @@ void kernel_main() {
 #ifdef FUSE_BIAS
             in2_cb.pop_front(N_block_tiles);
 #endif
+            intermediate_cb.pop_front(out_block_num_tiles);
+
+#elif defined(FUSE_QK_NORM_ROPE)
+            out_cb.reserve_back(out_block_num_tiles);
+            intermediate_cb.wait_front(out_block_num_tiles);
+            qk_norm_rope::norm_rope_block<M_block_tiles, N_block_tiles, QK_NORM_EPS_BITS>(
+                intermediate_cb, out_cb, n_tile, qk_norm_rope::qk_heads_in(N_start_tile, n_tile));
             intermediate_cb.pop_front(out_block_num_tiles);
 
 #elif !defined(FUSE_TERNARY)

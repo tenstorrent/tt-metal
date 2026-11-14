@@ -48,6 +48,15 @@ std::vector<ttnn::Tensor> all_gather_minimal_matmul_async(
     // Head-split output chunks (MINIMAX_H3_MK_E2A_HEAD_SPLIT): bit c = output chunk c head-split
     // [1, width / head_dim, M, head_dim]; 0 = off.
     uint32_t head_split_chunks_mask = 0,
-    uint32_t head_dim = 0);
+    uint32_t head_dim = 0,
+    // Fused per-head QK RMSNorm + RoPE (MINIMAX_H3_MK_E2B_QK_NORM): head order of the weight's columns
+    // (chunk << 16 | head index); empty = off. Needs head_split_chunks_mask 0b111 and the five tensors below.
+    const std::vector<uint32_t>& head_perm = {},
+    float qk_norm_eps = 0.0f,
+    const std::optional<ttnn::Tensor>& qk_norm_weight_q = std::nullopt,
+    const std::optional<ttnn::Tensor>& qk_norm_weight_k = std::nullopt,
+    const std::optional<ttnn::Tensor>& rope_cos = std::nullopt,
+    const std::optional<ttnn::Tensor>& rope_sin = std::nullopt,
+    const std::optional<ttnn::Tensor>& rope_trans_mat = std::nullopt);
 
 }  // namespace ttnn

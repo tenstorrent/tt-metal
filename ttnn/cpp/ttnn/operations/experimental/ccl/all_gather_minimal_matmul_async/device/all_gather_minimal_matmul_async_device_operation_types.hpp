@@ -63,6 +63,11 @@ struct AllGatherMinimalMatmulAsyncParams {
     // 0 = off. Set after construction; part of the hash.
     uint32_t head_split_chunks_mask = 0;
     uint32_t head_dim = 0;
+    // Fused per-head QK RMSNorm + RoPE (MINIMAX_H3_MK_E2B_QK_NORM): non-empty = on. The weight's columns are
+    // heads of head_dim in this order, entry = chunk << 16 | head index in the chunk (chunk 0 = q, 1 = k get
+    // the norm, 2 = v is copied). Needs all three chunks head-split. Set after construction; part of the hash.
+    std::vector<uint32_t> head_perm;
+    float qk_norm_eps = 0.0f;
 
     AllGatherMinimalMatmulAsyncParams(
         std::optional<const MinimalMatmulConfig> config,
@@ -139,6 +144,8 @@ struct AllGatherMinimalMatmulAsyncParams {
         "output_dtype",
         "head_split_chunks_mask",
         "head_dim",
+        "head_perm",
+        "qk_norm_eps",
         // Selects DST_SYNC_MODE and the other compile-time compute settings.
         "compute_kernel_config");
 
@@ -163,8 +170,22 @@ struct AllGatherMinimalMatmulAsyncParams {
             this->output_dtype,
             this->head_split_chunks_mask,
             this->head_dim,
+            this->head_perm,
+            this->qk_norm_eps,
             this->compute_kernel_config);
     }
+};
+
+// Fused QK norm + RoPE inputs handed to the program factory (built from the params and tensor args).
+struct QkNormFusionArgs {
+    std::vector<uint32_t> head_perm;
+    float eps = 0.0f;
+    uint32_t head_dim = 0;
+    const Tensor* gamma_q = nullptr;
+    const Tensor* gamma_k = nullptr;
+    const Tensor* rope_cos = nullptr;
+    const Tensor* rope_sin = nullptr;
+    const Tensor* trans_mat = nullptr;
 };
 
 // The orientation the program is built with. M and N are the matmul's padded row count and weight width.
@@ -195,6 +216,15 @@ struct AllGatherMinimalMatmulAsyncInputs {
     // When fsdp_cluster_axis is set on params, this should also be set; the op will
     // populate it with the gathered weight before the matmul reads from it.
     std::optional<Tensor> persistent_weight_buffer;
+
+    // Fused QK norm + RoPE (head_perm non-empty): per-head norm weights of q and k ([1, chunk width], bf16
+    // TILE), RoPE cos / sin ([1, 1, >= M, head_dim], float32 TILE, this device's rows) and the 32x32
+    // rotation matrix (bf16 TILE).
+    std::optional<Tensor> qk_norm_weight_q;
+    std::optional<Tensor> qk_norm_weight_k;
+    std::optional<Tensor> rope_cos;
+    std::optional<Tensor> rope_sin;
+    std::optional<Tensor> rope_trans_mat;
 };
 
 }  // namespace ttnn::experimental::prim

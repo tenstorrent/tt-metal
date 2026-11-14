@@ -21,7 +21,8 @@ from ....utils.mochi import get_rot_transformation_mat
 from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor
 from . import lofi
-from .agmm_config import agmm_kwargs, agmm_pins
+from ....utils.matmul import agmm_worker_grid, get_matmul_config
+from .agmm_config import AGMM_BLOCK_SIZES, AGMM_PINNED_BLOCKING, agmm_kwargs, agmm_pins
 from .length_classes import LENGTH_CLASSES, length_class
 from .mmrs_config import has_row_parallel_mmrs_config, mmrs_blocking_override
 from .sol_prepass import BLOCK as SOL_BLOCK
@@ -57,6 +58,19 @@ _E2A_HEAD_SPLIT = os.environ.get("MINIMAX_H3_MK_E2A_HEAD_SPLIT", "0")
 if _E2A_HEAD_SPLIT not in ("0", "1"):
     raise ValueError(f"MINIMAX_H3_MK_E2A_HEAD_SPLIT must be 0 or 1, got {_E2A_HEAD_SPLIT!r}")
 _E2A_LOGGED: list = []
+# MINIMAX_H3_MK_E2B_QK_NORM (fused QK norm + RoPE, default off; needs MINIMAX_H3_MK_E2A_HEAD_SPLIT=1): the qkv
+# all-gather-matmul runs the per-head QK RMSNorm and RoPE of norm_q / norm_k itself (same LLK calls, formats and
+# HiFi4 fidelity) and writes q, k and v head-split in the attention dtype, so norm_q / norm_k and V's cast go. The
+# qkv weight's heads are reordered so no q / k head straddles a matmul core; the qkv matmul always runs on the
+# non-transposed worker grid then. `grid` = only that grid (the bit-identity baseline for lengths where the op would
+# transpose). Bit-identical. Applies only to attentions built with `fused_qk_norm_rope=True` (the DiT blocks: every
+# call takes the fused [1, 1, N, K] path with RoPE); the token refiner keeps its plain path and weight order.
+_E2B_QK_NORM = os.environ.get("MINIMAX_H3_MK_E2B_QK_NORM", "0")
+if _E2B_QK_NORM not in ("0", "1", "grid"):
+    raise ValueError(f"MINIMAX_H3_MK_E2B_QK_NORM must be 0, 1 or grid, got {_E2B_QK_NORM!r}")
+if _E2B_QK_NORM == "1" and _E2A_HEAD_SPLIT != "1":
+    raise ValueError("MINIMAX_H3_MK_E2B_QK_NORM=1 needs MINIMAX_H3_MK_E2A_HEAD_SPLIT=1")
+_E2B_LOGGED: list = []
 if _TO_OUT_BFP8_WEIGHT and not _TO_OUT_ROW_PARALLEL:
     raise ValueError("MINIMAX_H3_TO_OUT_BFP8_WEIGHT=1 needs MINIMAX_H3_TO_OUT_ROW_PARALLEL=1")
 
@@ -64,9 +78,53 @@ if _TO_OUT_BFP8_WEIGHT and not _TO_OUT_ROW_PARALLEL:
 def to_out_weight_tag() -> str:
     """Suffix for the transformer weight-cache subfolder: the row-parallel to_out shards its weight by rows (and 19b
     stores it in BFP8), so it must never load (or overwrite) today's cache. Empty with the switches off."""
+    # The DiT blocks' qkv weight heads are reordered ("_e2bqk" caches also reordered the refiner's: never load them).
+    e2b = "_e2bdit" if _E2B_QK_NORM == "1" else ""
     if not _TO_OUT_ROW_PARALLEL:
-        return ""
-    return "_toutrow_bf8" if _TO_OUT_BFP8_WEIGHT else "_toutrow"
+        return e2b
+    return ("_toutrow_bf8" if _TO_OUT_BFP8_WEIGHT else "_toutrow") + e2b
+
+
+def qk_norm_head_perm(n_tiles: int, n_cores: int, n_block: int, head_tiles: int, heads_per_kind: int) -> list[int]:
+    """Head order of the fused qkv weight for MINIMAX_H3_MK_E2B_QK_NORM: entry = kind << 16 | head index (kind 0 = q,
+    1 = k, 2 = v), one per head of `head_tiles` columns. The matmul splits its `n_tiles` columns into `n_cores` equal
+    ranges of `n_block`-wide blocks; a q / k head must sit inside one block, so the heads that straddle a block go to
+    v (no norm), and q / k heads are spread so no core carries more than needed."""
+    per_core = -(-n_tiles // n_cores)
+    n_heads = n_tiles // head_tiles
+    if n_heads != 3 * heads_per_kind:
+        raise ValueError(f"{n_tiles} tiles are not 3 x {heads_per_kind} heads of {head_tiles}")
+
+    def block(col: int) -> tuple[int, int]:
+        return col // per_core, (col % per_core) // n_block
+
+    straddle = [block(h * head_tiles) != block(h * head_tiles + head_tiles - 1) for h in range(n_heads)]
+    if sum(straddle) > heads_per_kind:
+        raise ValueError(
+            f"{sum(straddle)} heads straddle a matmul block ({per_core} tiles per core, block {n_block}); "
+            f"only {heads_per_kind} v heads can take them"
+        )
+    kind = [2 if s else None for s in straddle]
+    free: dict[int, list[int]] = {}
+    for h in range(n_heads):
+        if not straddle[h]:
+            free.setdefault(block(h * head_tiles)[0], []).append(h)
+    qk_count = dict.fromkeys(free, 0)
+    for k in [0] * heads_per_kind + [1] * heads_per_kind:
+        core = min((c for c in free if free[c]), key=lambda c: (qk_count[c], -len(free[c])))
+        kind[free[core].pop(0)] = k
+        qk_count[core] += 1
+    for slots in free.values():
+        for h in slots:
+            kind[h] = 2
+    seen = [0, 0, 0]
+    perm = []
+    for k in kind:
+        perm.append(k << 16 | seen[k])
+        seen[k] += 1
+    if seen != [heads_per_kind] * 3:
+        raise ValueError(f"head reorder produced {seen} q / k / v heads")
+    return perm
 
 
 def rope_channel_permutation(head_dim: int, rotary_dim: int) -> torch.Tensor:
@@ -117,6 +175,11 @@ def _binding_has_sol_mode() -> bool:
     except TypeError as e:
         return "sol_mode" in str(e)
     return False
+
+
+def qk_norm_head_order(head_perm: list[int], heads_per_kind: int) -> list[int]:
+    """Index of each fused-qkv head (in `qk_norm_head_perm`'s order) among one device's [q heads, k heads, v heads]."""
+    return [(e >> 16) * heads_per_kind + (e & 0xFFFF) for e in head_perm]
 
 
 class MiniMaxH3Attention(Module):
@@ -176,9 +239,12 @@ class MiniMaxH3Attention(Module):
         sol_mask_reuse: int = 1,
         dynamic_length: bool = False,
         norm_row_capacity: int | None = None,
+        fused_qk_norm_rope: bool = False,
     ) -> None:
         """`dynamic_length` freezes every length-keyed choice at construction (one program per op for every
-        length); `norm_row_capacity` (per-device rows) sizes the fused QK norms' program on that path."""
+        length); `norm_row_capacity` (per-device rows) sizes the fused QK norms' program on that path.
+        `fused_qk_norm_rope`: every call of this attention takes the fused [1, 1, N, K] path with RoPE (the DiT
+        blocks), so MINIMAX_H3_MK_E2B_QK_NORM may apply to it; other users (the token refiner) never take it."""
         super().__init__()
 
         self.sol_attn = sol_attn
@@ -311,6 +377,24 @@ class MiniMaxH3Attention(Module):
             pin_kwargs = dict(full_grid=full_grid, num_links=ccl_manager.num_links)
             self._qkv_pins = agmm_pins(hidden_size, 3 * self.inner_dim // tp_factor, **pin_kwargs)
             self._out_pins = agmm_pins(self.inner_dim, hidden_size // tp_factor, **pin_kwargs)
+        # MINIMAX_H3_MK_E2B_QK_NORM: the qkv weight's head order. Fixed for every length: with the switch the qkv
+        # matmul always runs on the non-transposed worker grid, whose N split and N block don't depend on M.
+        self._e2b_mode = _E2B_QK_NORM if fused_qk_norm_rope else "0"
+        self._e2b_head_perm = None
+        self._e2b_full_grid = full_grid
+        if self._e2b_mode == "1":
+            if not self.use_fused_agmm or tp_factor == 1:
+                raise ValueError("MINIMAX_H3_MK_E2B_QK_NORM=1 needs the fused all-gather matmul (TP > 1)")
+            n_qkv = 3 * self.inner_dim // tp_factor
+            n_blocks = {b[2] for (k, n, _), b in AGMM_BLOCK_SIZES.items() if (k, n) == (hidden_size, n_qkv)}
+            n_blocks |= {b[2] for b in AGMM_PINNED_BLOCKING.get((hidden_size, n_qkv), {}).values()}
+            if len(n_blocks) != 1:
+                raise ValueError(f"MINIMAX_H3_MK_E2B_QK_NORM=1 needs one qkv N block for every length, got {n_blocks}")
+            self._e2b_n_block = n_blocks.pop()
+            grid = agmm_worker_grid(full_grid, False, ccl_manager.num_links)
+            self._e2b_head_perm = qk_norm_head_perm(
+                n_qkv // 32, grid.x, self._e2b_n_block, self.head_dim // 32, self.n_local_heads
+            )
         if dynamic_length and self.use_ring:
             self._ring_sdpa_configs = {
                 cls.name: ttnn.SDPAProgramConfig(
@@ -374,6 +458,9 @@ class MiniMaxH3Attention(Module):
             tensors = [t.T for t in tensors]  # -> [in, out]
             tensors = [t.reshape(t.shape[0], n_dev, self.n_local_heads, self.head_dim) for t in tensors]
             merged = torch.cat(tensors, dim=2)
+            if self._e2b_head_perm is not None and len(tensors) == 3:
+                # MINIMAX_H3_MK_E2B_QK_NORM: each device's heads in the fused op's order (kind << 16 | index).
+                merged = merged[:, :, qk_norm_head_order(self._e2b_head_perm, self.n_local_heads)]
             merged = merged.reshape(merged.shape[0], len(tensors) * self.inner_dim)
             return merged.T
 
@@ -1259,57 +1346,95 @@ class MiniMaxH3Attention(Module):
             and spatial_1BND.shape[0] == 1
             and spatial_1BND.shape[1] == 1
         )
-        e2a_kwargs = {"head_split_chunks_mask": 0b100, "head_dim": self.head_dim} if e2a else {}
-        q_1BNF, k_1BNF, v_1BNF = self.to_qkv(
+        qkv_n = 3 * self.inner_dim // tp_factor
+        agmm_kw = self._agmm_kwargs(self._qkv_pins, self.hidden_size, qkv_n, spatial_1BND)
+        if self._e2b_mode != "0" and self.use_fused_agmm:
+            agmm_kw = self._qkv_non_transposed_kwargs(agmm_kw, spatial_1BND, qkv_n)
+        bf8_native = self._bf8_native_path(spatial_1BND.shape[2])
+        e2b = self._e2b_head_perm is not None
+        if e2b:
+            if not (e2a and rope_cos is not None):
+                msg = (
+                    "MINIMAX_H3_MK_E2B_QK_NORM=1 reorders the qkv weight's heads, so every call needs the fused "
+                    "[1, 1, N, K] path with RoPE"
+                )
+                raise ValueError(msg)
+            e2a_kwargs = {
+                "head_split_chunks_mask": 0b111,
+                "head_dim": self.head_dim,
+                "dtype": ttnn.bfloat8_b if bf8_native else ttnn.bfloat16,
+                "qk_norm_rope": {
+                    "head_perm": self._e2b_head_perm,
+                    "qk_norm_eps": float(self.norm_q.norm_eps),
+                    "qk_norm_weight_q": self.norm_q.weight.data,
+                    "qk_norm_weight_k": self.norm_k.weight.data,
+                    "rope_cos": rope_cos,
+                    "rope_sin": rope_sin,
+                    "rope_trans_mat": self.rope_trans_mat,
+                },
+            }
+        else:
+            e2a_kwargs = {"head_split_chunks_mask": 0b100, "head_dim": self.head_dim} if e2a else {}
+        qkv_out = self.to_qkv(
             spatial_1BND,
             compute_kernel_config=lofi.compute_config("qkv", self.mm_compute_kernel_config),
             parallel_config=matmul_parallel_config,
             force_transpose=False,
             use_persistent_buffer=self.use_persistent_ccl_buffers,
-            **self._agmm_kwargs(self._qkv_pins, self.hidden_size, 3 * self.inner_dim // tp_factor, spatial_1BND),
+            **agmm_kw,
             **e2a_kwargs,
         )
-
-        def create_heads(inp: ttnn.Tensor) -> ttnn.Tensor:
-            out, _, _ = ttnn.experimental.nlp_create_qkv_heads(
-                inp,
-                num_heads=self.n_local_heads,
-                num_kv_heads=0,
-                transpose_k_heads=False,
-                runtime_rows=self.dynamic_length,
-            )
-            return out
-
-        # One fused op per stream: per-head RMSNorm over head_dim, head split, and RoPE. It emits
-        # head-split [B, n_local_heads, N, head_dim] directly, so Q and K need no create_heads.
-        norm_kwargs = dict(
-            num_heads_per_device=self.n_local_heads,
-            per_head_norm=True,
-            rope_cos=rope_cos,
-            rope_sin=rope_sin,
-            trans_mat=self.rope_trans_mat if rope_cos is not None else None,
-        )
-        bf8_native = self._bf8_native_path(q_1BNF.shape[2])
-        qk_dtype = {"dtype": ttnn.bfloat8_b} if bf8_native else {}
-        q_BHNE = self.norm_q(q_1BNF, **norm_kwargs, **qk_dtype)
-        k_BHNE = self.norm_k(k_1BNF, **norm_kwargs, **qk_dtype)
-        if e2a:
-            # Head-split output chunks: V is already [1, H, N, D]; only the BFP8 cast remains (per tile, so
-            # cast-after-split == cast-then-split).
-            v_BHNE = ttnn.typecast(v_1BNF, ttnn.bfloat8_b) if bf8_native else v_1BNF
-            if not _E2A_LOGGED:
-                _E2A_LOGGED.append(True)
-                print("[MINIMAX_H3_MK_E2A] qkv matmul writes V head-split (no V create_heads)", flush=True)
-        elif bf8_native and self._BF8_V_BEFORE_SPLIT:
-            v8 = ttnn.typecast(v_1BNF, ttnn.bfloat8_b)
-            v_BHNE = create_heads(v8)
-            ttnn.deallocate(v8)
+        if e2b:
+            # Fused QK norm + RoPE: q, k (normed, rotated) and v come head-split in the attention dtype.
+            q_BHNE, k_BHNE, v_BHNE = qkv_out
+            if not _E2B_LOGGED:
+                _E2B_LOGGED.append(True)
+                print(
+                    f"[MINIMAX_H3_MK_E2B] qkv matmul runs the QK norm + RoPE (no norm_q / norm_k), out {q_BHNE.dtype}",
+                    flush=True,
+                )
         else:
-            v_BHNE = create_heads(v_1BNF)
-            if bf8_native:
-                v8 = ttnn.typecast(v_BHNE, ttnn.bfloat8_b)
-                ttnn.deallocate(v_BHNE)
-                v_BHNE = v8
+            q_1BNF, k_1BNF, v_1BNF = qkv_out
+
+            def create_heads(inp: ttnn.Tensor) -> ttnn.Tensor:
+                out, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+                    inp,
+                    num_heads=self.n_local_heads,
+                    num_kv_heads=0,
+                    transpose_k_heads=False,
+                    runtime_rows=self.dynamic_length,
+                )
+                return out
+
+            # One fused op per stream: per-head RMSNorm over head_dim, head split, and RoPE. It emits
+            # head-split [B, n_local_heads, N, head_dim] directly, so Q and K need no create_heads.
+            norm_kwargs = dict(
+                num_heads_per_device=self.n_local_heads,
+                per_head_norm=True,
+                rope_cos=rope_cos,
+                rope_sin=rope_sin,
+                trans_mat=self.rope_trans_mat if rope_cos is not None else None,
+            )
+            qk_dtype = {"dtype": ttnn.bfloat8_b} if bf8_native else {}
+            q_BHNE = self.norm_q(q_1BNF, **norm_kwargs, **qk_dtype)
+            k_BHNE = self.norm_k(k_1BNF, **norm_kwargs, **qk_dtype)
+            if e2a:
+                # Head-split output chunks: V is already [1, H, N, D]; only the BFP8 cast remains (per tile, so
+                # cast-after-split == cast-then-split).
+                v_BHNE = ttnn.typecast(v_1BNF, ttnn.bfloat8_b) if bf8_native else v_1BNF
+                if not _E2A_LOGGED:
+                    _E2A_LOGGED.append(True)
+                    print("[MINIMAX_H3_MK_E2A] qkv matmul writes V head-split (no V create_heads)", flush=True)
+            elif bf8_native and self._BF8_V_BEFORE_SPLIT:
+                v8 = ttnn.typecast(v_1BNF, ttnn.bfloat8_b)
+                v_BHNE = create_heads(v8)
+                ttnn.deallocate(v8)
+            else:
+                v_BHNE = create_heads(v_1BNF)
+                if bf8_native:
+                    v8 = ttnn.typecast(v_BHNE, ttnn.bfloat8_b)
+                    ttnn.deallocate(v_BHNE)
+                    v_BHNE = v8
 
         # Sequence is fractured across SP, so attention must gather K/V around the ring.
         # The packed sequence is one attention document and logical_n masks the pad tail, so no mask.
@@ -1436,6 +1561,51 @@ class MiniMaxH3Attention(Module):
         if not self.use_fused_agmm:
             return {}
         return agmm_kwargs(pins, k, n, x.padded_shape[-2])
+
+    # Largest qkv M block (tiles) with the fused QK norm + RoPE. The fused path adds circular buffers on the qkv
+    # cores (norm staging, scalars, gamma, cos / sin for one M block, fp32 scratch); with the matmul's own buffers
+    # at M block 6 (K block 7, N block 16) the total is 6,080 B over L1, at M block 5 it fits. The M block only
+    # sets how many tile rows one pass covers; every output tile's K accumulation order is unchanged.
+    _E2B_MAX_M_BLOCK = 5
+
+    def _e2b_capped_config(self, config):
+        """`config` with its M block capped at `_E2B_MAX_M_BLOCK` (subblock 1 x 4 then, as M blocks of 5 need)."""
+        if config.M_block_size <= self._E2B_MAX_M_BLOCK:
+            return config
+        sub_w = 4 if config.N_block_size % 4 == 0 else config.subblock_w
+        return ttnn.MinimalMatmulConfig(
+            M_block_size=self._E2B_MAX_M_BLOCK,
+            K_block_size=config.K_block_size,
+            N_block_size=config.N_block_size,
+            subblock_h=1,
+            subblock_w=sub_w,
+            compute_with_storage_grid_size=config.compute_with_storage_grid_size,
+        )
+
+    def _qkv_non_transposed_kwargs(self, kwargs: dict, x: ttnn.Tensor, n: int) -> dict:
+        """MINIMAX_H3_MK_E2B_QK_NORM: the qkv all-gather matmul on the non-transposed worker grid at every length
+        (where the op would transpose, M > N, a frozen config with the same blocking on that grid; the K block,
+        and so every output tile's accumulation order, is unchanged), with the M block capped so the fused
+        norm's buffers fit in L1 (`_E2B_MAX_M_BLOCK`)."""
+        if "transpose_core_grid" in kwargs:
+            if kwargs["transpose_core_grid"]:
+                raise ValueError("MINIMAX_H3_MK_E2B_QK_NORM needs the non-transposed qkv pin")
+            return {**kwargs, "matmul_config": self._e2b_capped_config(kwargs["matmul_config"])}
+        m = x.padded_shape[-2]
+        if m <= n and kwargs.get("default_block_size") is None:
+            return kwargs  # the op's own rule engine picks the blocking; nothing to cap
+        k = x.padded_shape[-1] * self.parallel_config.tensor_parallel.factor
+        grid = agmm_worker_grid(self._e2b_full_grid, False, self.ccl_manager.num_links)
+        # For M <= N this is the config the linear would build from `default_block_size` on the same grid.
+        config = get_matmul_config(m, k, n, grid, kwargs.get("default_block_size"))
+        capped = self._e2b_capped_config(config)
+        if m <= n and capped is config:
+            return kwargs
+        return {
+            "matmul_config": capped,
+            "num_workers_per_link": math.ceil(grid.y / self.ccl_manager.num_links),
+            "transpose_core_grid": False,
+        }
 
     def _ring_sdpa_program_config(self, seq_local: int) -> ttnn.SDPAProgramConfig:
         """The per-device length's class pin on the dynamic-length path, else the length-keyed table."""

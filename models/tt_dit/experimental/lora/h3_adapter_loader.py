@@ -21,7 +21,7 @@ import torch
 from loguru import logger
 from safetensors import safe_open
 
-from ...models.transformers.minimax_h3.attention_minimax_h3 import rope_channel_permutation
+from ...models.transformers.minimax_h3.attention_minimax_h3 import qk_norm_head_order, rope_channel_permutation
 from ...utils.tensor import prepare_for_fused_swiglu
 from .promote import promote_to_lora
 
@@ -246,7 +246,11 @@ def _register_fused(attn, qkvs, scale, name, alphas, file_alpha, stack, idx) -> 
         block[:, position * rank : (position + 1) * rank] = b
         padded.append(block)
     b_fused = _interleave_heads_rows(
-        padded, attn.n_local_heads, attn.head_dim, attn.parallel_config.tensor_parallel.factor
+        padded,
+        attn.n_local_heads,
+        attn.head_dim,
+        attn.parallel_config.tensor_parallel.factor,
+        head_perm=getattr(attn, "_e2b_head_perm", None),
     )
 
     return attn.to_qkv.register_lora(a_fused, b_fused, scale=scale, name=name)
@@ -257,11 +261,16 @@ def _permute_rotary_rows(tensor: torch.Tensor, num_heads: int, head_dim: int, pe
     return tensor.reshape(num_heads, head_dim, -1)[:, perm].reshape(tensor.shape)
 
 
-def _interleave_heads_rows(tensors, n_local_heads: int, head_dim: int, n_dev: int) -> torch.Tensor:
-    """Mirror of `MiniMaxH3Attention._prepare_torch_state._interleave_heads` on the row (out) axis."""
+def _interleave_heads_rows(
+    tensors, n_local_heads: int, head_dim: int, n_dev: int, head_perm: list[int] | None = None
+) -> torch.Tensor:
+    """Mirror of `MiniMaxH3Attention._prepare_torch_state._interleave_heads` on the row (out) axis, including the
+    MINIMAX_H3_MK_E2B_QK_NORM head order (`head_perm`, the attention's `_e2b_head_perm`)."""
     transposed = [t.T for t in tensors]
     reshaped = [t.reshape(t.shape[0], n_dev, n_local_heads, head_dim) for t in transposed]
     merged = torch.cat(reshaped, dim=2)
+    if head_perm is not None and len(tensors) == 3:
+        merged = merged[:, :, qk_norm_head_order(head_perm, n_local_heads)]
     merged = merged.reshape(merged.shape[0], -1)
     return merged.T
 

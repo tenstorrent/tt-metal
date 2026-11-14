@@ -256,7 +256,14 @@ void bind_all_gather_minimal_matmul_async(nb::module_& mod) {
             nb::arg("transpose_core_grid") = nb::none(),
 
             nb::arg("head_split_chunks_mask") = 0,
-            nb::arg("head_dim") = 0});
+            nb::arg("head_dim") = 0,
+            nb::arg("head_perm") = std::vector<uint32_t>{},
+            nb::arg("qk_norm_eps") = 0.0f,
+            nb::arg("qk_norm_weight_q") = nb::none(),
+            nb::arg("qk_norm_weight_k") = nb::none(),
+            nb::arg("rope_cos") = nb::none(),
+            nb::arg("rope_sin") = nb::none(),
+            nb::arg("rope_trans_mat") = nb::none()});
 }
 
 }  // namespace ttnn::operations::experimental::ccl

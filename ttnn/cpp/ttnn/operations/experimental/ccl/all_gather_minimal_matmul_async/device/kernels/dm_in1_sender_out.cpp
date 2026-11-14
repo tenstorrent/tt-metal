@@ -14,6 +14,11 @@
 
 using ttnn::ccl::Topology;
 
+#ifdef FUSE_QK_NORM_ROPE
+// The fused QK norm's scaler / eps / trans_mat tiles, made exactly as the norm op's writer makes them.
+#include "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/dit_rmsnorm_scalar_setup.hpp"
+#endif
+
 #ifdef FSDP_FUSED
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
@@ -139,6 +144,31 @@ void kernel_main() {
     constexpr auto outputs_args = make_tensor_accessor_args_tuple<N_chunks, out_tensor_args_cta_offset>();
     auto outputs_tuple =
         make_tensor_accessor_tuple_uniform_page_size_common(outputs_args, out_addr_common_arg_start, out_tile_size);
+#ifdef FUSE_QK_NORM_ROPE
+    // Fused QK norm + RoPE inputs (no bias / ternary / FSDP with it): accessors right after the outputs,
+    // addresses right after the output addresses: cos, sin, gamma_q, gamma_k, trans_mat.
+    constexpr uint32_t qk_args_cta_offset =
+        tensor_accessor::detail::get_tensor_accessor_args_cta_offset<N_chunks, out_tensor_args_cta_offset>();
+    constexpr auto qk_cos_args = TensorAccessorArgs<qk_args_cta_offset>();
+    constexpr auto qk_sin_args = TensorAccessorArgs<qk_cos_args.next_compile_time_args_offset()>();
+    constexpr auto qk_gamma_q_args = TensorAccessorArgs<qk_sin_args.next_compile_time_args_offset()>();
+    constexpr auto qk_gamma_k_args = TensorAccessorArgs<qk_gamma_q_args.next_compile_time_args_offset()>();
+    constexpr auto qk_trans_args = TensorAccessorArgs<qk_gamma_k_args.next_compile_time_args_offset()>();
+    const uint32_t qk_common_start = out_addr_common_arg_start + N_chunks;
+    const auto qk_cos_reader = TensorAccessor(qk_cos_args, get_common_arg_val<uint32_t>(qk_common_start + 0));
+    const auto qk_sin_reader = TensorAccessor(qk_sin_args, get_common_arg_val<uint32_t>(qk_common_start + 1));
+    const auto qk_gamma_q_reader = TensorAccessor(qk_gamma_q_args, get_common_arg_val<uint32_t>(qk_common_start + 2));
+    const auto qk_gamma_k_reader = TensorAccessor(qk_gamma_k_args, get_common_arg_val<uint32_t>(qk_common_start + 3));
+    const auto qk_trans_reader = TensorAccessor(qk_trans_args, get_common_arg_val<uint32_t>(qk_common_start + 4));
+    constexpr uint32_t qk_DT = CHUNK_HEAD_DT;
+    constexpr uint32_t qk_perm[] = {CHUNK_HEAD_PERM};
+    constexpr uint32_t qk_num_heads = sizeof(qk_perm) / sizeof(qk_perm[0]);
+    constexpr uint32_t qk_gamma_cb = tt::CBIndex::c_16;
+    constexpr uint32_t qk_cos_cb = tt::CBIndex::c_17;
+    constexpr uint32_t qk_sin_cb = tt::CBIndex::c_18;
+    constexpr uint32_t qk_gamma_tile_bytes = get_tile_size(qk_gamma_cb);
+    constexpr uint32_t qk_rope_tile_bytes = get_tile_size(qk_cos_cb);
+#endif
 #ifdef FUSE_BIAS
     constexpr uint32_t in2_args_cta_offset =
         tensor_accessor::detail::get_tensor_accessor_args_cta_offset<N_chunks, out_tensor_args_cta_offset>();
@@ -294,6 +324,68 @@ void kernel_main() {
     uint32_t defer_write_n_tile_end = 0;
     bool defer_write = false;
 
+#ifdef FUSE_QK_NORM_ROPE
+    // Once: scalers, eps, trans_mat (the norm writer's helper), then gamma for this core's q / k heads in
+    // column order (compute walks them in the same order).
+    dit_rmsnorm_generate_scalars_and_transmat<
+        tt::CBIndex::c_12,
+        tt::CBIndex::c_13,
+        tt::CBIndex::c_14,
+        tt::CBIndex::c_15,
+        QK_NORM_REDUCE_FACTOR,
+        true>(QK_NORM_EPS_BITS, qk_trans_reader);
+    {
+        CircularBuffer cb_gamma(qk_gamma_cb);
+        for (uint32_t col = N_start_tile; col < N_end_tile; col++) {
+            const uint32_t h = col / qk_DT;
+            if (col % qk_DT != 0 || h >= qk_num_heads || (qk_perm[h] >> 16) == 2) {
+                continue;
+            }
+            const uint32_t head_idx = qk_perm[h] & 0xFFFFu;
+            cb_gamma.reserve_back(qk_DT);
+            uint32_t ptr = cb_gamma.get_write_ptr();
+            for (uint32_t t = 0; t < qk_DT; t++) {
+                if ((qk_perm[h] >> 16) == 0) {
+                    noc_obj.async_read(
+                        qk_gamma_q_reader, CoreLocalMem<uint8_t>(ptr), qk_gamma_tile_bytes, {.page_id = head_idx * qk_DT + t}, {});
+                } else {
+                    noc_obj.async_read(
+                        qk_gamma_k_reader, CoreLocalMem<uint8_t>(ptr), qk_gamma_tile_bytes, {.page_id = head_idx * qk_DT + t}, {});
+                }
+                ptr += qk_gamma_tile_bytes;
+            }
+            noc_obj.async_read_barrier();
+            cb_gamma.push_back(qk_DT);
+        }
+    }
+    // Per output block: the block's M_block rows of cos / sin (qk_DT tiles each; rows past M_tiles are padding
+    // whose output is never written, so they are left unread).
+    auto push_rope_rows = [&](uint32_t m_tile_start) {
+        CircularBuffer cb_cos(qk_cos_cb);
+        CircularBuffer cb_sin(qk_sin_cb);
+        cb_cos.reserve_back(M_block_tiles * qk_DT);
+        cb_sin.reserve_back(M_block_tiles * qk_DT);
+        uint32_t cos_ptr = cb_cos.get_write_ptr();
+        uint32_t sin_ptr = cb_sin.get_write_ptr();
+        for (uint32_t r = 0; r < M_block_tiles; r++) {
+            const uint32_t m = m_tile_start + r;
+            if (m < M_tiles) {
+                for (uint32_t t = 0; t < qk_DT; t++) {
+                    noc_obj.async_read(
+                        qk_cos_reader, CoreLocalMem<uint8_t>(cos_ptr + t * qk_rope_tile_bytes), qk_rope_tile_bytes, {.page_id = m * qk_DT + t}, {});
+                    noc_obj.async_read(
+                        qk_sin_reader, CoreLocalMem<uint8_t>(sin_ptr + t * qk_rope_tile_bytes), qk_rope_tile_bytes, {.page_id = m * qk_DT + t}, {});
+                }
+            }
+            cos_ptr += qk_DT * qk_rope_tile_bytes;
+            sin_ptr += qk_DT * qk_rope_tile_bytes;
+        }
+        noc_obj.async_read_barrier();
+        cb_cos.push_back(M_block_tiles * qk_DT);
+        cb_sin.push_back(M_block_tiles * qk_DT);
+    };
+#endif
+
     for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
         uint32_t m_tile = M_start_tile + m_block_iter * M_block_tiles;
         uint32_t m_tile_end = std::min(m_tile + M_block_tiles, M_end_tile);
@@ -363,6 +455,13 @@ void kernel_main() {
                     }
                 }
 
+#ifdef FUSE_QK_NORM_ROPE
+                // Compute needs this block's rows only after its last K block; by then it has popped the
+                // previous block's rows (its post-pass ran before this block's K loop), so this never waits.
+                if (k_block_iter == K_num_blocks - 1) {
+                    push_rope_rows(m_tile);
+                }
+#endif
                 cb_in1.reserve_back(in1_block_num_tiles);
 
                 uint32_t in1_start_address = cb_in1.get_write_ptr();
