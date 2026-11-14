@@ -24,11 +24,14 @@ Execution: the sampler is its own trace (``DSV41Decoder.forward_sampler`` / ``Sp
 stays greedy (``sample_global``), so greedy serving does not pay the ~3.8 ms (8 users per mesh row) - 9.5 ms (32 rows) of the sampler.
 """
 
+import os
+
 import torch
 
 import ttnn
 
 VOCAB = 120832  # Hy4: 8 x 15104 = 8 x 472 tiles
+_RM_CCL = os.environ.get("HY4_SAMP_RM", "1") == "1"  # ROW_MAJOR dim-2 all-gathers instead of TILE dim-3 + tiny reshapes
 
 
 class Hy4DeviceSampler:
@@ -130,12 +133,29 @@ class Hy4DeviceSampler:
     def _allsum(self, x):
         """sum over the 8 mesh columns of x [1,1,T,n] -> [1,1,T,n] (all-gather + local sum)."""
         n = x.shape[-1]
+        if (
+            _RM_CCL
+        ):  # no tiny TILE reshapes after the gather (they hang under trace in the integrated decode loop, tt-triage: reshape_tiled after concat_tiled_unaligned on every chip)
+            g = self.mc.allgather(
+                ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), self.ccl, axis=1, dim=2
+            )  # [1,1,cols*T,n] RM, device-major blocks of T rows
+            g = ttnn.to_layout(
+                ttnn.reshape(g, [1, self.cols, self.T, n]), ttnn.TILE_LAYOUT
+            )  # RM reshape with an unchanged last dim = a view
+            return ttnn.sum(g, dim=1, keepdim=True)  # [1,1,T,n]
         g = self.mc.allgather(x, self.ccl, axis=1, dim=3)  # [1,1,T,cols*n]
         g = ttnn.reshape(g, [1, self.T, self.cols, n])
         return ttnn.reshape(ttnn.sum(g, dim=2, keepdim=False), [1, 1, self.T, n])
 
     def _v4(self, t):  # [1,1,T,1] -> [T,1,1,1]
+        if self.T == 1 and _RM_CCL:
+            return t  # same shape: no op (a tiny TILE reshape hangs under trace, see _RM_CCL)
         return ttnn.reshape(t, [self.T, 1, 1, 1])
+
+    def _row(self, x):  # [T,n,1,1] -> [1,1,T,n]
+        if _RM_CCL:
+            return ttnn.permute(x, (2, 3, 0, 1)) if self.T > 1 else ttnn.transpose(x, 1, 3)
+        return ttnn.reshape(x, [1, 1, self.T, x.shape[1]])
 
     def _search(self, s4, e4, lo, hi, target, use_mass, levels=None):
         """Largest threshold tau in [lo, hi) (grid refined ``levels`` times) with F(tau) >= target, F = count or mass of {s >= tau} over the whole vocabulary. lo / hi / target [1,1,T,1]."""
@@ -146,7 +166,7 @@ class Hy4DeviceSampler:
             m = ttnn.ge(s4, taus)  # [T,J,PR,32] 1.0 / 0.0
             if use_mass:
                 m = ttnn.multiply(m, e4)
-            part = ttnn.reshape(ttnn.sum(m, dim=[2, 3], keepdim=True), [1, 1, T, J])
+            part = self._row(ttnn.sum(m, dim=[2, 3], keepdim=True))
             tot = self._allsum(part)  # [1,1,T,J]
             ok = ttnn.ge(tot, target)  # target [1,1,T,1] broadcasts over J
             jstar = ttnn.maximum(
@@ -158,9 +178,7 @@ class Hy4DeviceSampler:
         return lo
 
     def _mass_ge(self, s4, e4, tau):
-        part = ttnn.reshape(
-            ttnn.sum(ttnn.multiply(ttnn.ge(s4, self._v4(tau)), e4), dim=[2, 3], keepdim=True), [1, 1, self.T, 1]
-        )
+        part = self._row(ttnn.sum(ttnn.multiply(ttnn.ge(s4, self._v4(tau)), e4), dim=[2, 3], keepdim=True))
         return self._allsum(part)
 
     def _greedy(self, logits, with_min):
@@ -168,6 +186,29 @@ class Hy4DeviceSampler:
         T, cols, shard = self.T, self.cols, self.shard
         rm = ttnn.to_layout(logits, ttnn.ROW_MAJOR_LAYOUT)
         idx = ttnn.argmax(rm, dim=-1, keepdim=True)
+        if _RM_CCL:
+            mxr = ttnn.gather(rm, -1, index=idx)  # RM [1,1,T,1]
+            parts = [mxr, ttnn.typecast(idx, ttnn.float32)]
+            if with_min:
+                parts.append(ttnn.to_layout(ttnn.min(logits, dim=-1, keepdim=True), ttnn.ROW_MAJOR_LAYOUT))
+            n = len(parts)
+            g = self.mc.allgather(ttnn.concat(parts, dim=-1), self.ccl, axis=1, dim=2)  # [1,1,cols*T,n] RM
+            g = ttnn.to_layout(ttnn.reshape(g, [1, cols, T, n]), ttnn.TILE_LAYOUT)  # [1,cols,T,n]
+            sl = lambda j: ttnn.transpose(ttnn.slice(g, [0, 0, 0, j], [1, cols, T, j + 1]), 1, 3)  # [1,1,T,cols]
+            mx_all, ix_all = sl(0), sl(1)
+            M = ttnn.max(mx_all, dim=-1, keepdim=True)
+            mn_g = ttnn.min(sl(2), dim=-1, keepdim=True) if with_min else None
+            best = ttnn.typecast(
+                ttnn.to_layout(
+                    ttnn.argmax(ttnn.to_layout(mx_all, ttnn.ROW_MAJOR_LAYOUT), dim=-1, keepdim=True), ttnn.TILE_LAYOUT
+                ),
+                ttnn.float32,
+            )
+            tok_greedy = ttnn.add(
+                ttnn.multiply(best, float(shard)),
+                ttnn.sum(ttnn.multiply(ttnn.eq(best, self.col_ids), ix_all), dim=-1, keepdim=True),
+            )
+            return M, mn_g, tok_greedy
         mx = ttnn.to_layout(
             ttnn.gather(rm, -1, index=idx), ttnn.TILE_LAYOUT
         )  # the max = the value at the argmax (gather on ROW_MAJOR: 10 us; ttnn.max of the 15104 row: 120 us)
@@ -252,11 +293,15 @@ class Hy4DeviceSampler:
         tok = ttnn.add(ttnn.multiply(greedy, tok_g), ttnn.multiply(ttnn.subtract(1.0, greedy), tok_s))
         return ttnn.reshape(ttnn.to_layout(ttnn.typecast(tok, ttnn.uint32), ttnn.ROW_MAJOR_LAYOUT), [T, 1])
 
-    def forward(self, logits, params, plain=False):
+    def forward(self, logits, params, plain=False, u_dev=None):
         """logits [1,1,T,shard] fp32 (this column's vocab slice) -> token ids [T,1] uint32 (identical on all devices)."""
         T, cols, shard, PR = self.T, self.cols, self.shard, self.PR
         col = lambda i: ttnn.slice(params, [0, 0, 0, i], [1, 1, T, i + 1])
         invT, kk, pp, u, greedy = col(0), col(1), col(2), col(3), col(4)
+        if (
+            u_dev is not None
+        ):  # device RNG draw [1,1,T,1] fp32 in [0,1) (hy4_device_loop): replaces the host-uploaded column
+            u = u_dev
         if self.prof is not None:
             import time
 
