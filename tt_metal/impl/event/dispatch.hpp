@@ -9,7 +9,7 @@
 #include <tt-metalium/device.hpp>
 
 #include <tt_stl/span.hpp>
-#include "dispatch/system_memory_manager.hpp"
+#include "dispatch/host_cq.hpp"
 
 namespace tt::tt_metal {
 class IDevice;
@@ -34,19 +34,16 @@ void issue_record_event_commands(
     IDevice* device,
     ChipId device_id,
     uint32_t event_id,
-    uint8_t cq_id,
+    HostCq& cq,
     uint32_t num_command_queues,
-    SystemMemoryManager& manager,
     ttsl::Span<const SubDeviceId> sub_device_ids,
     ttsl::Span<const uint32_t> expected_num_workers_completed,
     bool notify_host = true,
     bool clear_count = false);
 
-void issue_wait_for_event_commands(
-    uint8_t cq_id, uint8_t event_cq_id, SystemMemoryManager& sysmem_manager, uint32_t event_id);
+void issue_wait_for_event_commands(HostCq& cq, uint8_t event_cq_id, uint32_t event_id);
 
-void read_events_from_completion_queue(
-    ReadEventDescriptor& event_descriptor, ChipId device_id, uint8_t cq_id, SystemMemoryManager& sysmem_manager);
+void read_events_from_completion_queue(ReadEventDescriptor& event_descriptor, HostCq& cq);
 
 }  // namespace event_dispatch
 

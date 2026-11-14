@@ -34,7 +34,7 @@
 #include "dispatch/device_command_calculator.hpp"
 #include "command_queue_fixture.hpp"
 #include "tests/tt_metal/tt_metal/common/mesh_dispatch_fixture.hpp"
-#include "tt_metal/impl/dispatch/system_memory_manager.hpp"
+#include "tt_metal/impl/dispatch/host_cq.hpp"
 #include <impl/dispatch/dispatch_mem_map.hpp>
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "impl/dispatch/dispatch_engine_cores.hpp"
@@ -578,16 +578,6 @@ inline void DeviceData::overflow_check(distributed::MeshDevice::IDevice* device)
     }
 }
 
-// Forward declare the accessor
-// This accessor class provides test access to private members
-// of FDMeshCommandQueue
-class FDMeshCQTestAccessor {
-public:
-    static tt_metal::SystemMemoryManager& sysmem(tt_metal::distributed::FDMeshCommandQueue& cq) {
-        return cq.mesh_device_->impl().get_devices().at(0)->sysmem_manager();
-    }
-};
-
 namespace DeviceDataUpdater {
 
 // Update DeviceData for linear write
@@ -1098,7 +1088,7 @@ protected:
     // and command-buffer helpers so derived fixtures
     // only implement workload-specific planning
     tt_metal::distributed::FDMeshCommandQueue* fdcq_ = nullptr;
-    tt_metal::SystemMemoryManager* mgr_ = nullptr;
+    tt_metal::HostCq* cq_ = nullptr;  // device_'s CQ that fdcq_ drives
     distributed::MeshDevice::IDevice* device_ = nullptr;
 
     // HW properties
@@ -1149,14 +1139,14 @@ protected:
         auto& mcq = mesh_device_->mesh_command_queue();
         fdcq_ = &dynamic_cast<distributed::FDMeshCommandQueue&>(mcq);
         device_ = mesh_device_->impl().get_devices()[0];
-        mgr_ = &device_->sysmem_manager();  // Use Chip 0's SystemMemoryManager
+        cq_ = &host_cq(*device_, fdcq_->id());
 
         if (Common::is_quasar_sim()) {
             TT_FATAL(
-                mgr_->is_dram_backed() == Common::is_quasar_cq_dram_backed(),
-                "Quasar CQ backing configuration mismatch: SystemMemoryManager reports DRAM-backed={}, "
+                cq_backing(*device_).is_dram_backed() == Common::is_quasar_cq_dram_backed(),
+                "Quasar CQ backing configuration mismatch: the CQ backing reports DRAM-backed={}, "
                 "but the test policy expects DRAM-backed={}",
-                mgr_->is_dram_backed(),
+                cq_backing(*device_).is_dram_backed(),
                 Common::is_quasar_cq_dram_backed());
         }
 
@@ -1227,12 +1217,12 @@ protected:
         uint32_t avail = 0;
         while (avail < total_expected_cq_payload) {
             const auto [completion_q_write_ptr_16B, completion_q_write_toggle] =
-                split_ptr_toggle(mgr_->completion_queue_wait_front(fdcq_->id(), exit_condition));
+                split_ptr_toggle(cq_->completion_queue_wait_front(exit_condition));
             const uint32_t completion_q_write_ptr = completion_q_write_ptr_16B << 4;
-            const uint32_t completion_q_read_ptr = mgr_->get_completion_queue_read_ptr(fdcq_->id());
-            const uint32_t completion_q_read_toggle = mgr_->get_completion_queue_read_toggle(fdcq_->id());
-            const uint32_t completion_q_base = mgr_->get_issue_queue_limit(fdcq_->id());
-            const uint32_t limit = mgr_->get_completion_queue_limit(fdcq_->id());  // offset of end, in bytes
+            const uint32_t completion_q_read_ptr = cq_->completion_queue_read_ptr();
+            const uint32_t completion_q_read_toggle = cq_->completion_queue_read_toggle();
+            const uint32_t completion_q_base = cq_->issue_queue_limit();
+            const uint32_t limit = cq_->completion_queue_limit();  // offset of end, in bytes
 
             if (completion_q_write_toggle == completion_q_read_toggle) {
                 avail = (completion_q_write_ptr > completion_q_read_ptr)
@@ -1316,7 +1306,7 @@ protected:
         // PHASE 3: Reserve and write commands
         // Reserve a continuous block in the system memory issue queue for all commands across all iterations
         // This memory is mapped and visible to the device's prefetcher kernel
-        void* cmd_buffer_base = mgr_->issue_queue_reserve(total_cmd_bytes, fdcq_->id());
+        void* cmd_buffer_base = cq_->issue_queue_reserve(total_cmd_bytes);
 
         // Use DeviceCommand helper (HugepageDeviceCommand) to write to the issue queue memory
         // Two stage command construction:
@@ -1359,16 +1349,16 @@ protected:
 
         // PHASE 4: Submit and execute commands
         // Update host-side write pointer
-        // Tells the SystemMemoryManager that valid data exists in the issue queue upto this point
-        mgr_->issue_queue_push_back(dc.write_offset_bytes(), fdcq_->id());
+        // Tells the CQ that valid data exists in the issue queue up to this point
+        cq_->issue_queue_push_back(dc.write_offset_bytes());
 
         // Write the commands to the device-side fetch queue
         // This updates the read/write pointers in the Device's L1 memory, effectively
         // Signals to the prefetcher kernel that new commands are available to fetch
         const auto start = std::chrono::steady_clock::now();
         for (const uint32_t sz : entry_sizes) {
-            mgr_->fetch_queue_reserve_back(fdcq_->id());
-            mgr_->fetch_queue_write(sz, fdcq_->id());
+            cq_->fetch_queue_reserve_back();
+            cq_->fetch_queue_write(sz, /*stall_prefetcher=*/false);
         }
 
         // Wait for completion of the issued commands

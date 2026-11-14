@@ -13,7 +13,7 @@
 
 namespace tt::tt_metal {
 class CommandSink;
-class SystemMemoryManager;
+class HostCq;
 }  // namespace tt::tt_metal
 
 // Utility functions for dispatch MeshWorkloads
@@ -44,7 +44,6 @@ void write_go_signal_sequence(
     const program_dispatch::ProgramDispatchMetadata& dispatch_md,
     std::optional<uint32_t> config_ring_sync_count);
 
-void write_rt_profiler_flush(
-    uint8_t cq_id, SubDeviceId sub_device_id, SystemMemoryManager& sysmem_manager, uint32_t wait_count);
+void write_rt_profiler_flush(HostCq& cq, SubDeviceId sub_device_id, uint32_t wait_count);
 
 }  // namespace tt::tt_metal::distributed

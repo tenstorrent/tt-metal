@@ -164,6 +164,7 @@ public:
     const std::set<CoreCoord>& ethernet_cores() const override;
     uint32_t get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& core) const override;
     uint32_t get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& cores) const override;
+    [[deprecated("SystemMemoryManager was removed; see IDevice::sysmem_manager().")]]
     SystemMemoryManager& sysmem_manager() override;
 
     // MeshTrace Internal APIs - these should be used to deprecate the single device backed trace APIs
