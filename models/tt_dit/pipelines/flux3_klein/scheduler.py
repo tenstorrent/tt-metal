@@ -11,8 +11,10 @@ from dataclasses import dataclass
 
 import torch
 
+from .policy import FLUX3_KLEIN_NUM_INFERENCE_STEPS
+
 ALPHA = 6.93
-STEPS = {"distilled": 16, "base": 50}
+STEPS = {"distilled": FLUX3_KLEIN_NUM_INFERENCE_STEPS, "base": 50}
 GUIDANCE = {"distilled": None, "base": 3.5}
 TIMESTEP_EMBED_SCALE = 1000.0
 

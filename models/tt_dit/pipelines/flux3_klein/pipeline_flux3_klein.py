@@ -35,16 +35,24 @@ from ...utils.dbcache import DBCacheConfig
 from ...utils.dbcache_runner import DBCache
 from .dbcache_flux3_klein import Flux3KleinCachedSample, content_mask
 from .packing import DOWNSAMPLING_RATIO, MAX_TEXT_LENGTH, image_ids, latent_shape, pad_rows, reference_ids
+from .policy import (
+    FLUX3_KLEIN_DEFAULT_SIZE,
+    FLUX3_KLEIN_MAX_REFERENCES,
+    FLUX3_KLEIN_REFERENCE_MAX_PIXELS,
+    FLUX3_KLEIN_REFERENCE_MAX_SIDE,
+    FLUX3_KLEIN_REFERENCE_MIN_SIDE,
+    FLUX3_KLEIN_SERVING_SIZES,
+)
 from .prompt_encoder import Flux3KleinPromptEncoder
 from .scheduler import GUIDANCE, STEPS, Flux3KleinScheduler
 from .upsampler_flux3_klein import Flux3KleinSharedUpsampler, reserve_upsampler_ranges
 from .weights_flux3_klein import resolve_weights_dir
 
-SIZES = (1024, 2048, 4096)
-DEFAULT_SIZE = 2048
-MAX_REFERENCES = 1
-MATCH_MAX_PIXELS = 4 * 1024 * 1024
-MIN_SIDE, MAX_SIDE = 64, 4096
+SIZES = tuple(side for side, _ in FLUX3_KLEIN_SERVING_SIZES)
+DEFAULT_SIZE = FLUX3_KLEIN_DEFAULT_SIZE[0]
+MAX_REFERENCES = FLUX3_KLEIN_MAX_REFERENCES
+MATCH_MAX_PIXELS = FLUX3_KLEIN_REFERENCE_MAX_PIXELS
+MIN_SIDE, MAX_SIDE = FLUX3_KLEIN_REFERENCE_MIN_SIDE, FLUX3_KLEIN_REFERENCE_MAX_SIDE
 REFERENCE_TOKEN_BUCKETS = (4096, MATCH_MAX_PIXELS // DOWNSAMPLING_RATIO**2)
 WARMUP_PROMPT = "warmup"
 
