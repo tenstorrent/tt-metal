@@ -127,3 +127,58 @@ def test_width_sharded_all_reduce_dsv41_ob(mesh_device):
             assert_with_pcc(expected, got[device_id], pcc=0.999)
         ttnn.deallocate(tt_input)
         ttnn.deallocate(tt_output)
+
+
+@pytest.mark.timeout(120)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY, "l1_small_size": 16384}],
+    indirect=True,
+)
+@pytest.mark.parametrize("max_packet_bytes", (640, 1280, 4096))
+def test_width_sharded_all_reduce_dsv41_ob_max_packet_bytes(mesh_device, max_packet_bytes):
+    """V4.1 o_b's all-reduce with larger packets (fewer reducer cores, a larger L1_SMALL ping-pong scratch)
+    against the default 320 B packets. Both sum the slots in chip order, so they must agree bit for bit."""
+    mesh_shape = tuple(mesh_device.shape)
+    if mesh_shape[1] < 2:
+        pytest.skip(f"need a line of at least 2 devices, got mesh {mesh_shape}")
+    cluster_axis = 1
+    ring_size = mesh_shape[1]
+    logical_shape = (1, 1, 1, 5120)
+    mem_config = _width_sharded_l1_config(mesh_device, 1, 5120, 80)
+
+    # Odd and even steps use the two halves of each program's ping-pong scratch.
+    for step in range(4):
+        torch.manual_seed(step)
+        torch_per_device = torch.randn((ring_size, *logical_shape), dtype=torch.bfloat16)
+        expected = torch_per_device.float().sum(dim=0).to(torch.bfloat16)
+
+        tt_input = ttnn.from_torch(
+            torch_per_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+            memory_config=mem_config,
+        )
+        # The large-packet program first, so its scratch finds L1_SMALL free.
+        outputs = [
+            ttnn.experimental.deepseek.width_sharded_all_reduce(
+                tt_input,
+                cluster_axis=cluster_axis,
+                num_links=2,
+                topology=ttnn.Topology.Linear,
+                max_packet_bytes=packet_bytes,
+            )
+            for packet_bytes in (max_packet_bytes, None)
+        ]
+        got, ref = (ttnn.to_torch(t, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)) for t in outputs)
+        assert got.shape[0] == ring_size
+        assert torch.equal(got, ref), f"step {step}: max_packet_bytes={max_packet_bytes} differs from the default"
+        for device_id in range(ring_size):
+            assert_with_pcc(expected, got[device_id], pcc=0.999)
+            assert torch.equal(got[device_id], got[0]), f"step {step}: chip {device_id} differs from chip 0"
+        ttnn.deallocate(tt_input)
+        for t in outputs:
+            ttnn.deallocate(t)

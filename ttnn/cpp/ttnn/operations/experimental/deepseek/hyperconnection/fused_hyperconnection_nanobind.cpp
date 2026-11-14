@@ -62,10 +62,18 @@ void bind_fused_hyperconnection(nb::module_& mod) {
             fn_core_grid: The dot's cores, off cores (0..9, 0); defaults to an L1 ``fn_weight``'s shard grid.
             fn_reduce_fan_in: Fan-in of the dot's reduction tree.
             fn_rms_norm_epsilon: Fuses the unweighted RMSNorm of the streams over H*D ahead of the dot.
+            mix_post: With ``fn_weight``, ``pre_mix``, ``mix_comb`` and ``mix_sublayer_out``: folds the previous
+                sublayer's mix step, ``mix_streams(mix_post, mix_comb, mix_sublayer_out, hidden_streams)``, in
+                ahead of the rest. Each collapse core mixes its own shard of ``hidden_streams`` first; the collapse
+                and the fn dot then work on the mixed streams, which are returned last. ``[1, 1, H, 1]`` BFLOAT16
+                TILE interleaved.
+            mix_comb: The mix step's ``[1, 1, H, H]`` BFLOAT16 TILE interleaved comb.
+            mix_sublayer_out: The mix step's ``[1, 1, 1, D]`` BFLOAT16 ROW_MAJOR sublayer output.
 
         Returns:
             List of [post [B,S,H,1], comb [B,S,H,H], collapsed [B,S,1,D]], plus
-            pre [B,S,1,H] (BFLOAT16 TILE, zero-padded) when ``pre_mix`` is given.
+            pre [B,S,1,H] (BFLOAT16 TILE, zero-padded) when ``pre_mix`` is given, plus the mixed streams
+            [1,1,H,D] (in ``hidden_streams``' spec) with the folded mix step.
         )doc",
         &ttnn::experimental::deepseek::hyperconnection::fused_hyperconnection,
         nb::arg("hidden_streams"),
@@ -86,7 +94,10 @@ void bind_fused_hyperconnection(nb::module_& mod) {
         nb::arg("fn_weight") = std::nullopt,
         nb::arg("fn_core_grid") = std::nullopt,
         nb::arg("fn_reduce_fan_in") = 2,
-        nb::arg("fn_rms_norm_epsilon") = std::nullopt);
+        nb::arg("fn_rms_norm_epsilon") = std::nullopt,
+        nb::arg("mix_post") = std::nullopt,
+        nb::arg("mix_comb") = std::nullopt,
+        nb::arg("mix_sublayer_out") = std::nullopt);
 
     ttnn::bind_function<"fused_hyperconnection_weights", "ttnn.experimental.deepseek.">(
         mod,

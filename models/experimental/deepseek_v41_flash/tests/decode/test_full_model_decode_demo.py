@@ -135,7 +135,7 @@ _BALANCE_DRAM_BANKS = os.environ.get("DEEPSEEK_V4_BALANCE_DRAM_BANKS", "1") not 
 _USE_PREFETCHER = os.environ.get("DEEPSEEK_V4_USE_PREFETCHER", "1") not in ("0", "", "false", "False")
 _SERVER_BUILD = os.environ.get("DEEPSEEK_V4_SERVER_BUILD", "0") not in ("0", "", "false", "False")
 # The server's default is its _L1_SMALL_SIZE (demo/server.py imports this module, so it is not imported here).
-_L1_SMALL_SIZE = int(os.environ.get("DEEPSEEK_V4_L1_SMALL_SIZE", "10240" if _SERVER_BUILD else "8192"))
+_L1_SMALL_SIZE = int(os.environ.get("DEEPSEEK_V4_L1_SMALL_SIZE", "10240"))
 
 
 def _pad_to_tile(n: int) -> int:

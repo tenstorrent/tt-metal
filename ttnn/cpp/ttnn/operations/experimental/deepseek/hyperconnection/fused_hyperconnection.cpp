@@ -31,7 +31,10 @@ std::vector<Tensor> fused_hyperconnection(
     const std::optional<Tensor>& fn_weight,
     const std::optional<CoreRangeSet>& fn_core_grid,
     uint32_t fn_reduce_fan_in,
-    std::optional<float> fn_rms_norm_epsilon) {
+    std::optional<float> fn_rms_norm_epsilon,
+    const std::optional<Tensor>& mix_post,
+    const std::optional<Tensor>& mix_comb,
+    const std::optional<Tensor>& mix_sublayer_out) {
     const auto& shape = hidden_streams.logical_shape();
     const uint32_t b = static_cast<uint32_t>(shape[0]);
     const uint32_t s = static_cast<uint32_t>(shape[1]);
@@ -62,7 +65,10 @@ std::vector<Tensor> fused_hyperconnection(
             fn_weight,
             fn_core_grid,
             fn_reduce_fan_in,
-            fn_rms_norm_epsilon);
+            fn_rms_norm_epsilon,
+            mix_post,
+            mix_comb,
+            mix_sublayer_out);
     }
     TT_FATAL(
         collapsed_layout.value_or(Layout::TILE) == Layout::TILE,
@@ -71,6 +77,10 @@ std::vector<Tensor> fused_hyperconnection(
     TT_FATAL(
         fused_w.has_value() && !fn_weight.has_value(),
         "fused_hyperconnection: {} tokens need fused_w; only a single token can take fn_weight",
+        num_tokens);
+    TT_FATAL(
+        !mix_post.has_value() && !mix_comb.has_value() && !mix_sublayer_out.has_value(),
+        "fused_hyperconnection: only a single token can fold in the mix step, got {}",
         num_tokens);
 
     // Fused stage over all T = B*S tokens:

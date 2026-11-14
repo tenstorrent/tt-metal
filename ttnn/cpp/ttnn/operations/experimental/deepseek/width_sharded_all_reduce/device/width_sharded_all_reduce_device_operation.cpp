@@ -27,6 +27,14 @@ void WidthShardedAllReduceDeviceOperation::validate_on_program_cache_miss(
         input_tensor.memory_config().buffer_type() == BufferType::L1, "width_sharded_all_reduce: input must be L1");
     TT_FATAL(args.num_links > 0, "width_sharded_all_reduce: num_links must be > 0");
     TT_FATAL(args.ring_size > 1, "width_sharded_all_reduce: need more than one device");
+    if (args.max_packet_bytes.has_value()) {
+        const uint32_t face_bytes = tt::constants::TILE_WIDTH * input_tensor.element_size();
+        TT_FATAL(
+            *args.max_packet_bytes >= face_bytes,
+            "width_sharded_all_reduce: max_packet_bytes {} is below one {} B face",
+            *args.max_packet_bytes,
+            face_bytes);
+    }
 
     const auto& shard = input_tensor.shard_spec().value();
     TT_FATAL(
@@ -71,7 +79,8 @@ Tensor width_sharded_all_reduce(
     std::optional<uint32_t> cluster_axis,
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
     uint32_t num_links,
-    tt::tt_fabric::Topology topology) {
+    tt::tt_fabric::Topology topology,
+    std::optional<uint32_t> max_packet_bytes) {
     const uint32_t ring_size = ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
     return ttnn::device_operation::launch<WidthShardedAllReduceDeviceOperation>(
         WidthShardedAllReduceParams{
@@ -80,6 +89,7 @@ Tensor width_sharded_all_reduce(
             .cluster_axis = cluster_axis,
             .sub_device_id = subdevice_id,
             .topology = topology,
+            .max_packet_bytes = max_packet_bytes,
         },
         WidthShardedAllReduceInputs{.input = input_tensor});
 }

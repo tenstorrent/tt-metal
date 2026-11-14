@@ -43,10 +43,18 @@ struct FusedSingleUserInputs {
     // [1,1,H*D,N] TILE fn weight, K in the collapse cores' (core, stream, column) order: the op computes
     // fused_w = rmsnorm(streams) @ fn_weight itself. DRAM interleaved, or HEIGHT_SHARDED in L1 on dot_core_grid.
     std::optional<Tensor> fn_weight;
+    // With fn_weight and pre_mix: the previous sublayer's mix step, run first on the collapse cores. hidden_streams
+    // are then the streams before it, and the op works on (and returns) the mixed streams
+    //   mixed[i] = sum_j mix_comb[j, i] * hidden_streams[j] + mix_post[i] * mix_sublayer_out
+    // (mix_streams' math). mix_post [1,1,H,1] and mix_comb [1,1,H,H] are BFLOAT16 TILE, mix_sublayer_out
+    // [1,1,1,D] BFLOAT16 ROW_MAJOR (interleaved, or sharded with pages a multiple of 32 wide).
+    std::optional<Tensor> mix_post;
+    std::optional<Tensor> mix_comb;
+    std::optional<Tensor> mix_sublayer_out;
 };
 
 // Returns {post [1,1,H,1], comb [1,1,H,H], collapsed [1,1,1,D]}, plus pre [1,1,1,H] when pre_mix is
-// given.
+// given, plus the mixed streams [1,1,H,D] (hidden_streams' spec) when mix_post / mix_comb / mix_sublayer_out are.
 using FusedSingleUserSpecReturn = std::vector<tt::tt_metal::TensorSpec>;
 using FusedSingleUserTensorReturn = std::vector<Tensor>;
 

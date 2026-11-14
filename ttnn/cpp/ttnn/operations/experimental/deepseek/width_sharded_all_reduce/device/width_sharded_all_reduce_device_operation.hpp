@@ -31,6 +31,7 @@ Tensor width_sharded_all_reduce(
     std::optional<uint32_t> cluster_axis,
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
     uint32_t num_links,
-    tt::tt_fabric::Topology topology);
+    tt::tt_fabric::Topology topology,
+    std::optional<uint32_t> max_packet_bytes = std::nullopt);
 
 }  // namespace ttnn::prim

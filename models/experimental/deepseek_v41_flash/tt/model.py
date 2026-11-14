@@ -2187,11 +2187,15 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 tapped[li] = ttnn.to_memory_config(row, ttnn.DRAM_MEMORY_CONFIG)
                 if len(tapped) == len(sm["taps"]):
                     self._send_step_row(tapped, sm["taps"], pkt)
+            # The next layer can take this one's FFN mix as a PendingMix when nothing else reads the streams first:
+            # it decodes on this stage and taps nothing.
+            defer_mix = not is_last and ids[li + 1] == stage and li + 1 not in sm.get("taps", {})
             streams, pre_mix = layer.decode(
                 streams,
                 pre_mix,
                 sm["scaches"][li],
                 image_mask=ctx["image_mask"],
+                defer_mix=defer_mix,
                 **self._attention_inputs(layer.self_attn, ctx, causal, r2_pool, r2_select, two_level, split, dense),
             )
             if is_last:

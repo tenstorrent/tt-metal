@@ -113,6 +113,12 @@ COLUMN_COMPRESSOR = os.environ.get("DEEPSEEK_V41_COLUMN_COMPRESSOR", "1") not in
 # A pooling step's compress_pool_decode also writes the closed group's index key, comp_kv and dense_kv rows
 # (``DEEPSEEK_V41_FUSED_POOL_WRITES=0``: index_wk, k_norm, RoPE and paged_update_cache as separate ops).
 FUSED_POOL_WRITES = os.environ.get("DEEPSEEK_V41_FUSED_POOL_WRITES", "1") not in ("0", "", "false", "False")
+# o_b's all-reduce sends each reducer core's faces as one fabric packet, and the fabric is packet-rate bound at
+# these sizes (a line's middle links also forward their neighbours' packets). Up to ``_OB_ALLREDUCE_PACKET_BYTES``
+# a packet halves the packets and the reducer cores at TP4 wherever L1_SMALL holds the larger scratch, else the op
+# falls back to smaller ones (``DEEPSEEK_V41_OB_ALLREDUCE_PACKETS=0``: the op's default 320 B packets).
+OB_ALLREDUCE_PACKETS = os.environ.get("DEEPSEEK_V41_OB_ALLREDUCE_PACKETS", "1") not in ("0", "", "false", "False")
+_OB_ALLREDUCE_PACKET_BYTES = 640
 # attention_qkv_decode's core roles on the 12x10 grid: the tokens replica covers it, q_a's 40 and kv's 16
 # cores hold one output tile and one [K, 32] weight slab each.
 _FUSED_QKV_GRID = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 9))})
@@ -1141,7 +1147,11 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         out = self.o_b_proj(_decode_activation(self.o_b_proj, y))
         if self.tp_size > 1:
             reduced = ttnn.experimental.deepseek.width_sharded_all_reduce(
-                out, cluster_axis=_tp_cluster_axis(self.device), num_links=2, topology=CCL_TOPOLOGY
+                out,
+                cluster_axis=_tp_cluster_axis(self.device),
+                num_links=2,
+                topology=CCL_TOPOLOGY,
+                max_packet_bytes=_OB_ALLREDUCE_PACKET_BYTES if OB_ALLREDUCE_PACKETS else None,
             )
             ttnn.deallocate(out)
             out = reduced

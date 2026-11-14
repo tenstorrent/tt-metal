@@ -141,20 +141,81 @@ void validate_fn_dot(const FusedSingleUserParams& attributes, const FusedSingleU
     for (uint64_t stride = 1; stride < num_dot_cores; stride *= fan_in) {
         ++levels;
     }
-    // One semaphore per tree level, plus the one the root raises on the cores it pushes fused_w to.
+    // One semaphore per tree level, plus the one the root raises on the cores it pushes fused_w to, and with the
+    // folded mix step the one a collapse core raises once its mixed shard is ready.
+    const uint32_t extra_semaphores = tensor_args.mix_post.has_value() ? 2 : 1;
     TT_FATAL(
-        levels + 1 <= kSemaphoresPerCore,
-        "{} dot cores at fan-in {} make {} tree levels; at most {} fit beside the fused_w semaphore",
+        levels + extra_semaphores <= kSemaphoresPerCore,
+        "{} dot cores at fan-in {} make {} tree levels; at most {} fit beside the other semaphores",
         num_dot_cores,
         fan_in,
         levels,
-        kSemaphoresPerCore - 1);
+        kSemaphoresPerCore - extra_semaphores);
     if (attributes.rms_norm_epsilon.has_value()) {
         TT_FATAL(
             *attributes.rms_norm_epsilon >= 0.0F,
             "rms_norm_epsilon must be non-negative, got {}",
             *attributes.rms_norm_epsilon);
     }
+}
+
+// The previous sublayer's mix step, folded ahead of the collapse and the fn dot (see FusedSingleUserInputs).
+void validate_mix(const FusedSingleUserParams& attributes, const FusedSingleUserInputs& tensor_args) {
+    const bool any = tensor_args.mix_post.has_value() || tensor_args.mix_comb.has_value() ||
+                     tensor_args.mix_sublayer_out.has_value();
+    if (!any) {
+        return;
+    }
+    TT_FATAL(
+        tensor_args.mix_post.has_value() && tensor_args.mix_comb.has_value() &&
+            tensor_args.mix_sublayer_out.has_value(),
+        "the folded mix step takes all of mix_post, mix_comb and mix_sublayer_out");
+    // The fn dot has to see the mixed streams, so it must run in this program; and the collapse runs before fused_w
+    // is known, so it collapses with pre_mix.
+    TT_FATAL(tensor_args.fn_weight.has_value(), "the folded mix step needs fn_weight (the fn dot in this program)");
+    TT_FATAL(tensor_args.pre_mix.has_value(), "the folded mix step needs pre_mix");
+    const uint32_t hc = attributes.num_streams;
+    TT_FATAL(hc <= 4, "the folded mix step holds at most four streams in Dst, got {}", hc);
+    const auto& hidden_streams = tensor_args.hidden_streams;
+    const uint32_t d = static_cast<uint32_t>(hidden_streams.logical_shape()[-1]);
+    const auto& post = *tensor_args.mix_post;
+    const auto& comb = *tensor_args.mix_comb;
+    const auto& sub = *tensor_args.mix_sublayer_out;
+    for (const auto* tensor : {&post, &comb, &sub}) {
+        TT_FATAL(tensor->storage_type() == StorageType::DEVICE, "the mix step's inputs must be on device");
+        TT_FATAL(
+            tensor->dtype() == DataType::BFLOAT16, "the mix step's inputs must be BFLOAT16, got {}", tensor->dtype());
+    }
+    for (const auto* tensor : {&post, &comb}) {
+        TT_FATAL(
+            tensor->layout() == Layout::TILE &&
+                tensor->tensor_spec().tile().get_height() == tt::constants::TILE_HEIGHT &&
+                tensor->tensor_spec().tile().get_width() == tt::constants::TILE_WIDTH &&
+                tensor->memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "mix_post / mix_comb must be 32x32 TILE interleaved, got {} {}",
+            tensor->layout(),
+            tensor->memory_config());
+    }
+    TT_FATAL(
+        post.logical_shape() == ttnn::Shape({1, 1, hc, 1}), "mix_post must be [1,1,H,1], got {}", post.logical_shape());
+    TT_FATAL(
+        comb.logical_shape() == ttnn::Shape({1, 1, hc, hc}),
+        "mix_comb must be [1,1,H,H], got {}",
+        comb.logical_shape());
+    TT_FATAL(
+        sub.logical_shape() == ttnn::Shape({1, 1, 1, d}),
+        "mix_sublayer_out must be [1,1,1,D] = [1,1,1,{}], got {}",
+        d,
+        sub.logical_shape());
+    TT_FATAL(sub.layout() == Layout::ROW_MAJOR, "mix_sublayer_out must be ROW_MAJOR, got {}", sub.layout());
+    // Each collapse core reads its D/8 columns a page piece at a time, 64 B aligned (DRAM's alignment).
+    const uint32_t page_elems = sub.shard_spec().has_value() ? static_cast<uint32_t>(sub.shard_spec()->shape[1]) : d;
+    TT_FATAL(
+        page_elems % tt::constants::TILE_WIDTH == 0 && d % page_elems == 0 &&
+            sub.buffer()->aligned_page_size() == sub.buffer()->page_size(),
+        "mix_sublayer_out's {}-wide pages must be a multiple of 32 wide, divide D = {} and carry no padding",
+        page_elems,
+        d);
 }
 
 void validate_single_user_tensors(const FusedSingleUserParams& attributes, const FusedSingleUserInputs& tensor_args) {
@@ -290,6 +351,7 @@ void validate_single_user_tensors(const FusedSingleUserParams& attributes, const
     if (tensor_args.fn_weight.has_value()) {
         validate_fn_dot(attributes, tensor_args);
     }
+    validate_mix(attributes, tensor_args);
 }
 
 }  // namespace
@@ -336,6 +398,10 @@ FusedSingleUserDeviceOperation::spec_return_value_t FusedSingleUserDeviceOperati
         specs.emplace_back(
             ttnn::Shape({1, 1, 1, attributes.num_streams}), make_layout(attributes.post_comb_output_mem_config));
     }
+    if (tensor_args.mix_post.has_value()) {
+        // The mixed streams sit where the streams did: same shape, layout and shards.
+        specs.push_back(tensor_args.hidden_streams.tensor_spec());
+    }
     return specs;
 }
 
@@ -371,7 +437,10 @@ std::vector<Tensor> fused_hyperconnection_single_user(
     const std::optional<Tensor>& fn_weight,
     const std::optional<CoreRangeSet>& dot_core_grid,
     uint32_t reduce_fan_in,
-    std::optional<float> rms_norm_epsilon) {
+    std::optional<float> rms_norm_epsilon,
+    const std::optional<Tensor>& mix_post,
+    const std::optional<Tensor>& mix_comb,
+    const std::optional<Tensor>& mix_sublayer_out) {
     using OperationType = ttnn::operations::experimental::deepseek::hyperconnection::FusedSingleUserDeviceOperation;
     const MemoryConfig post_comb_output_mem_config = memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
     const Layout resolved_collapsed_layout = collapsed_layout.value_or(Layout::TILE);
@@ -406,6 +475,9 @@ std::vector<Tensor> fused_hyperconnection_single_user(
         .hidden_streams = hidden_streams,
         .pre_mix = pre_mix,
         .fn_weight = fn_weight,
+        .mix_post = mix_post,
+        .mix_comb = mix_comb,
+        .mix_sublayer_out = mix_sublayer_out,
     };
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

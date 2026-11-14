@@ -26,6 +26,9 @@ struct FusedSingleUserSharedVariables {
     bool has_collapse_writer = false;
     tt::tt_metal::CBHandle hidden_cb = 0;
     tt::tt_metal::CBHandle collapsed_output_cb = 0;
+    // The folded mix step: the collapse cores pack the mixed streams into their shard of the last output.
+    bool has_mix = false;
+    tt::tt_metal::CBHandle mixed_streams_cb = 0;
     std::vector<CoreCoord> collapse_cores;
     CoreCoord post_core;
     CoreCoord comb_core;
@@ -39,13 +42,22 @@ struct FusedWSource {
     uint32_t semaphore_id = 0;
 };
 
-// Adds the collapse / post / comb cores' kernels and CBs to program and sets their runtime args.
+// With the folded mix step, who reads the mixed streams: collapse core c raises semaphore semaphore_id on each of
+// readers[c] (logical cores) once its shard of them is packed.
+struct MixedStreamsReaders {
+    uint32_t semaphore_id = 0;
+    std::vector<std::vector<CoreCoord>> readers;
+};
+
+// Adds the collapse / post / comb cores' kernels and CBs to program and sets their runtime args. mixed_readers is
+// required with the folded mix step (tensor_args.mix_post) and ignored without it.
 FusedSingleUserSharedVariables build_single_user_hc(
     tt::tt_metal::Program& program,
     const FusedSingleUserParams& operation_attributes,
     const FusedSingleUserInputs& tensor_args,
     FusedSingleUserTensorReturn& tensor_return_value,
-    const FusedWSource& fused_w_source);
+    const FusedWSource& fused_w_source,
+    const MixedStreamsReaders* mixed_readers = nullptr);
 
 // Points those kernels and CBs at the call's tensors.
 void override_single_user_hc(

@@ -179,6 +179,19 @@ FusedSingleUserDotProgramFactory::cached_program_t FusedSingleUserDotProgramFact
     }
     const uint32_t fused_w_sem = CreateSemaphore(program, hc_cores.merge(root_core), 0);
 
+    // With the folded mix step, A is the mixed streams: dot core i waits for its collapse core to raise a_ready_sem
+    // before it reads its K-slice.
+    const bool use_mix = tensor_args.mix_post.has_value();
+    const uint32_t shard_k = k / kDotCollapseCoreCount;
+    MixedStreamsReaders mixed_readers;
+    if (use_mix) {
+        mixed_readers.semaphore_id = CreateSemaphore(program, dot_grid, 0);
+        mixed_readers.readers.resize(collapse_cores.size());
+        for (uint32_t i = 0; i < num_dot_cores; ++i) {
+            mixed_readers.readers[(i * kc) / shard_k].push_back(dot_cores[i]);
+        }
+    }
+
     // The dot is the longest chain (its DRAM slab reads), so its kernels are created, and start, first.
     std::vector<uint32_t> reader_compile_args = {
         M_tiles * Kc_tiles,
@@ -187,6 +200,8 @@ FusedSingleUserDotProgramFactory::cached_program_t FusedSingleUserDotProgramFact
         num_levels,
         kc * static_cast<uint32_t>(sizeof(uint16_t)),
         b_in_l1 ? 0u : 1u,
+        use_mix ? 1u : 0u,
+        mixed_readers.semaphore_id,
     };
     TensorAccessorArgs(w.buffer()).append_to(reader_compile_args);
     DataMovementConfig reader_config{
@@ -241,9 +256,9 @@ FusedSingleUserDotProgramFactory::cached_program_t FusedSingleUserDotProgramFact
     shared.in1_cb = in1_cb;
 
     // A collapse core's shard is its k / 8 K-elements, so dot core i's slice is at byte offset (i * kc) % (k / 8)
-    // of collapse core (i * kc) / (k / 8).
-    const uint32_t shard_k = k / kDotCollapseCoreCount;
-    const uint32_t a_base = hidden_streams.buffer()->address();
+    // of collapse core (i * kc) / (k / 8) -- in the mixed streams, which share the streams' shards, given the mix.
+    const uint32_t a_base =
+        use_mix ? tensor_return_value.back().buffer()->address() : hidden_streams.buffer()->address();
     std::vector<uint32_t> reader_dests;
     for (const auto& core : fused_w_readers) {
         const CoreCoord phys = device->worker_core_from_logical_core(core);
@@ -290,12 +305,13 @@ FusedSingleUserDotProgramFactory::cached_program_t FusedSingleUserDotProgramFact
         operation_attributes,
         tensor_args,
         tensor_return_value,
-        FusedWSource{.pushed = true, .cb_index = kDotCbFusedW, .semaphore_id = fused_w_sem});
+        FusedWSource{.pushed = true, .cb_index = kDotCbFusedW, .semaphore_id = fused_w_sem},
+        use_mix ? &mixed_readers : nullptr);
 
     log_debug(
         tt::LogOp,
         "fused_hyperconnection fn dot: cores={}, Kc_tiles={}, N_tiles={}, fan_in={}, levels={}, custom_mm={}, "
-        "rms_norm={}, weight in {}",
+        "rms_norm={}, weight in {}, mix={}",
         num_dot_cores,
         Kc_tiles,
         N_tiles,
@@ -303,7 +319,8 @@ FusedSingleUserDotProgramFactory::cached_program_t FusedSingleUserDotProgramFact
         num_levels,
         use_custom_mm,
         rms_norm,
-        b_in_l1 ? "L1" : "DRAM");
+        b_in_l1 ? "L1" : "DRAM",
+        use_mix);
     return cached_program_t{std::move(program), std::move(shared)};
 }
 
@@ -321,7 +338,8 @@ void FusedSingleUserDotProgramFactory::override_runtime_arguments(
     if (shared.b_in_l1) {
         UpdateDynamicCircularBufferAddress(program, shared.in1_cb, *w.buffer());
     }
-    const uint32_t a_base = tensor_args.hidden_streams.buffer()->address();
+    const uint32_t a_base = shared.hc.has_mix ? tensor_return_value.back().buffer()->address()
+                                              : tensor_args.hidden_streams.buffer()->address();
     const uint32_t w_addr = w.buffer()->address();
     auto& reader_args = GetRuntimeArgs(program, shared.dot_reader_kernel_id);
     for (size_t i = 0; i < shared.dot_cores.size(); ++i) {

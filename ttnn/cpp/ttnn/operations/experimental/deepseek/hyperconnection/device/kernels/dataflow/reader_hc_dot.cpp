@@ -16,6 +16,9 @@
 // The K-slice of A is read straight out of the collapse core whose ROW_MAJOR [H, D/8] shard holds it: a shard is
 // that core's K-slices laid end to end. The [Kc, N] slab of B is fn_weight's L1 shard on this core (cb_in1 aliases
 // it) or, from DRAM, its tiles [b_first_tile, b_first_tile + in1_num_tiles).
+//
+// With the folded mix step A is the mixed streams, which the collapse core packs first: the slab's DRAM reads are
+// issued, then the core waits for a_ready_sem before it reads A.
 void kernel_main() {
     constexpr uint32_t in0_cb_index = get_named_compile_time_arg_val("cb_in0");
     constexpr uint32_t in1_cb_index = get_named_compile_time_arg_val("cb_in1");
@@ -27,7 +30,9 @@ void kernel_main() {
     constexpr uint32_t num_levels = get_compile_time_arg_val(3);
     constexpr uint32_t a_slice_bytes = get_compile_time_arg_val(4);
     constexpr bool b_in_dram = get_compile_time_arg_val(5) != 0;
-    constexpr auto b_args = TensorAccessorArgs<6>();
+    constexpr bool wait_a = get_compile_time_arg_val(6) != 0;
+    constexpr uint32_t a_ready_sem = get_compile_time_arg_val(7);
+    constexpr auto b_args = TensorAccessorArgs<8>();
 
     const uint32_t a_noc_x = get_arg_val<uint32_t>(0);
     const uint32_t a_noc_y = get_arg_val<uint32_t>(1);
@@ -41,13 +46,20 @@ void kernel_main() {
     CircularBuffer in1_cb(in1_cb_index);
     in0_cb.reserve_back(in0_num_tiles);
     in1_cb.reserve_back(in1_num_tiles);
-    noc_async_read(get_noc_addr(a_noc_x, a_noc_y, a_addr), in0_cb.get_write_ptr(), a_slice_bytes);
+    if constexpr (!wait_a) {
+        noc_async_read(get_noc_addr(a_noc_x, a_noc_y, a_addr), in0_cb.get_write_ptr(), a_slice_bytes);
+    }
     if constexpr (b_in_dram) {
         const auto b = TensorAccessor(b_args, b_addr);
         const uint32_t tile_bytes = in1_cb.get_tile_size();
         for (uint32_t t = 0; t < in1_num_tiles; ++t) {
             noc.async_read(b, in1_cb, tile_bytes, {.page_id = b_first_tile + t}, {.offset_bytes = t * tile_bytes});
         }
+    }
+    if constexpr (wait_a) {
+        Semaphore<> a_ready(a_ready_sem);
+        a_ready.wait(1);
+        noc_async_read(get_noc_addr(a_noc_x, a_noc_y, a_addr), in0_cb.get_write_ptr(), a_slice_bytes);
     }
     noc.async_read_barrier();
     in0_cb.push_back(in0_num_tiles);

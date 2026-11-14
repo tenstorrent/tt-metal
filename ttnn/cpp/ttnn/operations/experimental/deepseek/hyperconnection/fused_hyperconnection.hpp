@@ -64,9 +64,15 @@ namespace ttnn::experimental::deepseek::hyperconnection {
 //     their K-slice -- read straight out of the collapse cores' shards -- with their slab of fn_weight
 //     (DRAM interleaved, or HEIGHT_SHARDED in L1 on those cores), the partials summed up a
 //     fan-in-`fn_reduce_fan_in` tree. `fn_rms_norm_epsilon` fuses the unweighted RMSNorm over H*D.
+//   mix_post / mix_comb / mix_sublayer_out: with `fn_weight` and `pre_mix`, fold the previous sublayer's
+//     mix step (`mix_streams(mix_post, mix_comb, mix_sublayer_out, hidden_streams)`) in ahead of the rest:
+//     each collapse core mixes its own shard of `hidden_streams` first, and the collapse and the fn dot work
+//     on the mixed streams, which are returned last. mix_post [1,1,H,1] / mix_comb [1,1,H,H] are BFLOAT16
+//     TILE interleaved (the `post` / `comb` this op returns), mix_sublayer_out [1,1,1,D] BFLOAT16 ROW_MAJOR.
 //
 // Returns [post [B,S,H,1], comb [B,S,H,H], collapsed [B,S,1,D]], plus pre [B,S,1,H] (BFLOAT16
-// TILE, zero-padded, the layout `pre_mix` takes) when `pre_mix` is given.
+// TILE, zero-padded, the layout `pre_mix` takes) when `pre_mix` is given, plus the mixed streams
+// [1,1,H,D] (in `hidden_streams`' spec) with the folded mix step.
 std::vector<Tensor> fused_hyperconnection(
     const Tensor& hidden_streams,
     const std::optional<Tensor>& fused_w,
@@ -85,7 +91,10 @@ std::vector<Tensor> fused_hyperconnection(
     const std::optional<Tensor>& fn_weight = std::nullopt,
     const std::optional<CoreRangeSet>& fn_core_grid = std::nullopt,
     uint32_t fn_reduce_fan_in = 2,
-    std::optional<float> fn_rms_norm_epsilon = std::nullopt);
+    std::optional<float> fn_rms_norm_epsilon = std::nullopt,
+    const std::optional<Tensor>& mix_post = std::nullopt,
+    const std::optional<Tensor>& mix_comb = std::nullopt,
+    const std::optional<Tensor>& mix_sublayer_out = std::nullopt);
 
 // `fused_hyperconnection` without the collapse, for stream-major residual stacks [1, H, T, D]
 // (DeepSeek V4.1 prefill), which the caller collapses itself with `stream_mix(streams, pre)`.
