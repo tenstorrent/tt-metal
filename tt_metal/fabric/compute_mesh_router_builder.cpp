@@ -259,7 +259,8 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     FabricNodeId local_node,
     const RouterLocation& location,
     const ChipRoutingFacts& chip_facts,
-    std::shared_ptr<ConnectionRegistry> connection_registry) {
+    std::shared_ptr<ConnectionRegistry> connection_registry,
+    std::optional<RouterArchetype> archetype_override) {
     // Get fabric config
     const auto& builder_context = fabric_context.get_builder_context();
     const auto topology = fabric_context.get_fabric_topology();
@@ -336,8 +337,14 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     // chip whose only Z edge crosses a mesh boundary, an express-style Z target would resolve to
     // the intermesh Z router and leak same-mesh traffic onto the boundary link.
     const auto& intermesh_config = fabric_context.get_builder_context().get_intermesh_vc_config();
-    auto archetype = router_archetype(
-        topology, location.direction, chip_facts.per_direction_capabilities, express_axis, &intermesh_config);
+    // A plugin builder (e.g. one lowered from a fabric graph) can supply the shape and turns itself.
+    auto archetype = archetype_override ? std::move(*archetype_override)
+                                        : router_archetype(
+                                              topology,
+                                              location.direction,
+                                              chip_facts.per_direction_capabilities,
+                                              express_axis,
+                                              &intermesh_config);
     const auto& vc_shape = archetype.shape;
 
     // Compute injection channel flags at router level BEFORE creating builders

@@ -42,6 +42,7 @@ public:
      * @param location Router location (eth_chan, remote_node, direction, is_dispatch)
      * @param chip_facts The chip's routing facts (edge capabilities, ring predicates), bound at chip scope
      * @param connection_registry Optional registry to record connections for testing
+     * @param archetype Optional shape and turns to use instead of deriving them (for plugin builders)
      * @return A unique_ptr to the constructed ComputeMeshRouterBuilder
      */
     static std::unique_ptr<ComputeMeshRouterBuilder> build(
@@ -52,7 +53,8 @@ public:
         FabricNodeId local_node,
         const RouterLocation& location,
         const ChipRoutingFacts& chip_facts,
-        std::shared_ptr<ConnectionRegistry> connection_registry = nullptr);
+        std::shared_ptr<ConnectionRegistry> connection_registry = nullptr,
+        std::optional<RouterArchetype> archetype = std::nullopt);
 
     // ============ FabricRouterBuilder Interface Implementation ============
 
