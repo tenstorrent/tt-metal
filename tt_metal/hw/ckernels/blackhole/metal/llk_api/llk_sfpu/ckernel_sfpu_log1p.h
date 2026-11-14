@@ -128,6 +128,16 @@ sfpi_inline sfpi::vFloat calculate_log1p_fp32(sfpi::vFloat a) {
     return r;
 }
 
+}  // namespace sfpu
+}  // namespace ckernel
+
+#include "ckernel_sfpu_log1p_bf16.h"
+
+namespace ckernel {
+namespace sfpu {
+
+// Whether BF16 DEST runs the generated log1p kernel as one call over the whole tile.
+inline constexpr bool log1p_bf16_whole_tile = true;
 /**
  * @tparam APPROXIMATION_MODE Ignored
  * @tparam FAST_APPROX Ignored
@@ -136,6 +146,12 @@ sfpi_inline sfpi::vFloat calculate_log1p_fp32(sfpi::vFloat a) {
  */
 template <bool APPROXIMATION_MODE, bool FAST_APPROX, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_log1p() {
+    if constexpr (!is_fp32_dest_acc_en && !FAST_APPROX && ITERATIONS == 32) {
+        if (bf16_dest_log1p()) {
+            calculate_log1p_bf16<ITERATIONS>();
+            return;
+        }
+    }
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat result = calculate_log1p_fp32<is_fp32_dest_acc_en>(sfpi::dst_reg[0]);
