@@ -77,14 +77,14 @@ def _shard(grid, shape, orientation=ttnn.ShardOrientation.ROW_MAJOR):
     return ttnn.ShardSpec(grid, shape, orientation)
 
 
-def _hifi4(device, fp32_dest_acc_en=False, packer_l1_acc=False):
+def _hifi4(device, fp32_dest_acc_en=False, packer_l1_acc=False, dst_full_sync_en=False):
     return ttnn.init_device_compute_kernel_config(
         device.arch(),
         math_fidelity=ttnn.MathFidelity.HiFi4,
         math_approx_mode=False,
         fp32_dest_acc_en=fp32_dest_acc_en,
         packer_l1_acc=packer_l1_acc,
-        dst_full_sync_en=False,
+        dst_full_sync_en=dst_full_sync_en,
     )
 
 
@@ -849,7 +849,18 @@ def test_accumulate_in_C_slice_then_another_op(device, K_tiles, C_slices_per_cor
 # ----------------------------------------------------------------------------------------------------
 
 
-def _run_linear(device, a, b, bias, config, *, packer_l1_acc=False, fp32_dest_acc_en=False, bias_dtype=ttnn.bfloat16):
+def _run_linear(
+    device,
+    a,
+    b,
+    bias,
+    config,
+    *,
+    packer_l1_acc=False,
+    fp32_dest_acc_en=False,
+    dst_full_sync_en=False,
+    bias_dtype=ttnn.bfloat16,
+):
     a_t = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
     b_t = ttnn.from_torch(b, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
     bias_t = None
@@ -860,7 +871,7 @@ def _run_linear(device, a, b, bias, config, *, packer_l1_acc=False, fp32_dest_ac
         b_t,
         bias=bias_t,
         program_config=config,
-        compute_kernel_config=_hifi4(device, fp32_dest_acc_en, packer_l1_acc),
+        compute_kernel_config=_hifi4(device, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en),
     )
     return ttnn.to_torch(out)
 
@@ -984,6 +995,36 @@ def test_fused_activation(device, name, op, torch_op, rtol, K_chunk_tiles, with_
     out = _run_linear(device, a, b, bias, config)
     golden = _golden(a, b) + (bias.to(torch.float32) if with_bias else 0)
     _check(out, torch_op(golden), rtol=rtol, pcc=0.999)
+
+
+@pytest.mark.parametrize("dst_full_sync_en", [False, True], ids=["half_sync", "full_sync"])
+@pytest.mark.parametrize("packer_l1_acc", [False, True], ids=["reload_every_K_chunk", "packer_l1_acc"])
+def test_fp32_dest_acc_activation_over_K_chunks(device, packer_l1_acc, dst_full_sync_en):
+    """fp32 partials are unpacked straight to DST, ahead of a K chunk of SrcA / SrcB unpacks in the same DST section;
+    with packer_l1_acc only the last of the 3 K chunks reloads them. The activation runs on the reloaded sum. Two C
+    slices on one core: the second one's first K chunk must start from a zeroed DST, not the first one's sums (one
+    DST bank with full sync, two with half)."""
+    M, K, N = 2 * TILE, 6 * TILE, 4 * TILE
+    torch.manual_seed(15)
+    a, b = _randn(1, 1, M, K), _randn(1, 1, K, N)
+    config = qsr.MatmulUnifiedProgramConfig(
+        cores=_rect(0, 0, 0, 0),
+        C_slice_M_tiles=2,
+        C_slice_N_tiles=2,
+        K_chunk_tiles=2,
+        fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
+    )
+    out = _run_linear(
+        device,
+        a,
+        b,
+        None,
+        config,
+        packer_l1_acc=packer_l1_acc,
+        fp32_dest_acc_en=True,
+        dst_full_sync_en=dst_full_sync_en,
+    )
+    _check(out, torch.relu(_golden(a, b)), pcc=0.999)
 
 
 # ----------------------------------------------------------------------------------------------------
@@ -1634,19 +1675,9 @@ def test_auto_config_batched_a_unbatched_b(device, sharded_out):
         ((1, 320, 32), (1, 32, 64), (320, 64), False),
         ((1, 128, 32), (1, 32, 128), (128, 128), False),
         ((16, 32, 32), (32, 512), (512, 512), False),
-        # fp32 accumulation exercises the fp32 branch of the subblock search (h * w <= 4). It cannot run until the
-        # Quasar 2D factory sets unpack_modes for the fp32 partials DFB (#61018); strict so it flags when fixed.
-        pytest.param(
-            (1, 128, 32),
-            (1, 32, 128),
-            (128, 128),
-            True,
-            marks=pytest.mark.xfail(
-                reason="#61018: fp32_dest_acc_en fails in the 2D factory (partials DFB has no unpack_modes entry)",
-                raises=RuntimeError,
-                strict=True,
-            ),
-        ),
+        # fp32 accumulation exercises the fp32 branch of the subblock search (h * w <= 4). Off Quasar it takes the 2D
+        # factory, which cannot run it until that sets unpack_modes for the fp32 partials DFB.
+        ((1, 128, 32), (1, 32, 128), (128, 128), True),
     ],
     ids=[
         "400x400",
@@ -1661,13 +1692,21 @@ def test_auto_config_batched_a_unbatched_b(device, sharded_out):
     ],
 )
 def test_auto_config_block_sharded_caps_per_core_to_output(
-    device, a_shape, b_shape, expected_shard_shape, fp32_dest_acc_en
+    device, request, a_shape, b_shape, expected_shard_shape, fp32_dest_acc_en
 ):
     """BLOCK_SHARDED output, no program_config: the shard shape must follow the output size, not the L1 ladder.
 
     The auto-config used to start per_core_M/N at 16 tiles and never cap them to the output, so a 13x13 tile output
     came back with a 512x512 shard.
     """
+    if fp32_dest_acc_en and not _on_quasar(device):
+        request.applymarker(
+            pytest.mark.xfail(
+                reason="#61018: fp32_dest_acc_en fails in the 2D factory (partials DFB has no unpack_modes entry)",
+                raises=RuntimeError,
+                strict=True,
+            )
+        )
     torch.manual_seed(0)
     a, b = _randn(*a_shape), _randn(*b_shape)
     a_t = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)

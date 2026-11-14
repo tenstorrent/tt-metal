@@ -151,6 +151,9 @@ inline void llk_pack_dest_section_done() {
         static_assert(
             EN_32BIT_DEST == DST_ACCUM_MODE,
             "unpack-to-dest: EN_32BIT_DEST must equal DST_ACCUM_MODE, the stride the unpack side flips banks with");
+        // Zero the bank before handing it back, as the semaphore path does: a section with no unpack-to-dest write
+        // (a matmul_block run) accumulates onto whatever DEST holds.
+        _llk_pack_dest_section_clear_<DST_SYNC_MODE, EN_32BIT_DEST>();
         // Both gets behind the PACK0 drain. UNPACK_PACK first: it frees the bank for the unpacker, which is the count
         // llk_unpack_wait_for_dest_available stalls on; MATH_PACK then lets math forward the next section.
         _llk_sync_get_<p_stall::PACK0>(semaphore::UNPACK_PACK);
