@@ -44,7 +44,8 @@ void prepare_generic_op(
 
 // generic_op on a Metal 2.0 ProgramSpec, which describes everything fixed about a program, and ProgramRunArgs, which
 // hold the values of one call. Arguments are named and tensors are bound by name. Experimental while its API may still
-// change. See tests/ttnn/unit_tests/operations/debug/test_generic_op_program_spec.py for examples.
+// change. docs/source/ttnn/ttnn/generic_op_program_spec.rst is a guide, and
+// tests/ttnn/unit_tests/operations/debug/test_generic_op_program_spec.py has examples.
 
 using tt::tt_metal::ProgramRunArgs;
 using tt::tt_metal::ProgramSpec;
