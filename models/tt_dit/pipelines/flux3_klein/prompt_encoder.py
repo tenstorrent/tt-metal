@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import os
+from collections import OrderedDict
 from pathlib import Path
 
 import torch
@@ -17,6 +18,8 @@ from ...utils import tensor
 from ...utils.tensor import bf16_tensor
 from .packing import MAX_TEXT_LENGTH, padded_text_length, text_ids
 
+ROPE_CACHE_SIZE = 8
+
 
 class Flux3KleinPromptEncoder:
     def __init__(self, encoder: Qwen3VlTextEncoder, snapshot: str | os.PathLike, device: ttnn.MeshDevice) -> None:
@@ -26,6 +29,8 @@ class Flux3KleinPromptEncoder:
         self._device = device
         self._processor = AutoProcessor.from_pretrained(str(Path(snapshot) / SUBFOLDER))
         self._processor.tokenizer.padding_side = "right"
+        # cos / sin on device by (rows, real tokens): right padding makes them a function of those two
+        self._rope_cache: OrderedDict[tuple[int, int], tuple[ttnn.Tensor, ttnn.Tensor]] = OrderedDict()
 
     def tokenize(self, prompt: str, length: int | None = None) -> tuple[torch.Tensor, torch.Tensor, int]:
         """Token ids and attention mask padded to `length` rows (default: the reference's multiple of 80), and the
@@ -45,17 +50,32 @@ class Flux3KleinPromptEncoder:
         `tokenize`)."""
         input_ids, attention_mask, valid = self.tokenize(prompt, length)
 
-        cos, sin = self._encoder.create_rope_tensors(1, input_ids.shape[1], attention_mask)
-
         tt_ids = ttnn.from_torch(input_ids, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self._device)
         tt_mask = tensor.from_torch(attention_mask.bool(), device=self._device)
-        pos_embeds = (
-            bf16_tensor(cos.to(torch.bfloat16), device=self._device),
-            bf16_tensor(sin.to(torch.bfloat16), device=self._device),
-        )
-        taps = self._encoder.forward(tt_ids, attention_mask=tt_mask, pos_embeds=pos_embeds)
+        taps = self._encoder.forward(tt_ids, attention_mask=tt_mask, pos_embeds=self._rope(attention_mask))
         tokens = ttnn.concat(taps, dim=-1)
-        for t in (*taps, tt_ids, tt_mask, *pos_embeds):
+        for t in (*taps, tt_ids, tt_mask):
             ttnn.deallocate(t)
 
         return tokens, text_ids(tokens.shape[-2]), valid
+
+    def _rope(self, attention_mask: torch.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        key = (int(attention_mask.shape[-1]), int(attention_mask.sum()))
+        if key in self._rope_cache:
+            self._rope_cache.move_to_end(key)
+            return self._rope_cache[key]
+        cos, sin = self._encoder.create_rope_tensors(1, key[0], attention_mask)
+        pair = self._rope_cache[key] = (
+            bf16_tensor(cos.to(torch.bfloat16), device=self._device),
+            bf16_tensor(sin.to(torch.bfloat16), device=self._device),
+        )
+        if len(self._rope_cache) > ROPE_CACHE_SIZE:
+            for t in self._rope_cache.popitem(last=False)[1]:
+                ttnn.deallocate(t)
+        return pair
+
+    def close(self) -> None:
+        for pair in self._rope_cache.values():
+            for t in pair:
+                ttnn.deallocate(t)
+        self._rope_cache.clear()
