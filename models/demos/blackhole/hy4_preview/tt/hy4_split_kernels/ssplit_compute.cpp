@@ -180,6 +180,8 @@ void kernel_main() {
     constexpr uint32_t cb_corr_r = get_compile_time_arg_val(ssplit::compute_ct_arg::CB_CORR_R);
     constexpr bool q_tiled = get_compile_time_arg_val(ssplit::compute_ct_arg::QTILED) != 0;
     constexpr bool emit_stats = get_compile_time_arg_val(ssplit::compute_ct_arg::EMIT_STATS) != 0;
+    constexpr bool tile_out = get_compile_time_arg_val(ssplit::compute_ct_arg::EMIT_STATS) ==
+                              3;  // owner-layout TILE output: the writer drains cb_out_im
     constexpr uint32_t cb_m_out = get_compile_time_arg_val(ssplit::compute_ct_arg::CB_M_OUT);
     constexpr uint32_t cb_l_out = get_compile_time_arg_val(ssplit::compute_ct_arg::CB_L_OUT);
     constexpr uint32_t H = get_compile_time_arg_val(ssplit::compute_ct_arg::H);
@@ -776,7 +778,7 @@ void kernel_main() {
         }
 
         // cb_out_im was written by normalize_row_streaming; untilize -> row-major out for the writer.
-        {
+        if constexpr (!tile_out) {
             DeviceZoneScopedN("UNTIL");
             compute_kernel_lib::untilize<vDHt, cb_out_im, cb_out_rm>(/*num_blocks=*/Sqt);
         }
