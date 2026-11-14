@@ -19,6 +19,15 @@ void NlpKVCacheLoadSliceDeviceOperation::validate_on_program_cache_miss(
         "Input tensor layout must be TILE but got {}",
         input_tensor_a.layout());
 
+    // compute_output_specs takes the last dim from the padded shape, so a logical head dim that is
+    // not tile-aligned comes back inflated to the padded width (80 -> 96) instead of the width the
+    // caller's cache actually holds. The output cannot express sub-tile unpadding, so reject it.
+    TT_FATAL(
+        input_tensor_a.logical_shape()[3] % TILE_WIDTH == 0,
+        "nlp_kv_cache_load_slice: the logical head dim (last dim) must be a multiple of {}, got {}",
+        TILE_WIDTH,
+        input_tensor_a.logical_shape()[3]);
+
     for (uint32_t i = 0; i < input_tensor_a.padded_shape().rank(); i++) {
         TT_FATAL(
             args.output_tensor_start[i] < input_tensor_a.padded_shape()[i],
