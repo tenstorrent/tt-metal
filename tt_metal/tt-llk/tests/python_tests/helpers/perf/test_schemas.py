@@ -72,6 +72,7 @@ PERF_TEST_SCHEMAS = {
     "perf_eltwise_bcast_col_custom": {
         "version": 4,
         "columns": [
+            "bcast_preserve",
             "broadcast_type",
             "ct_dim",
             "dest_acc",

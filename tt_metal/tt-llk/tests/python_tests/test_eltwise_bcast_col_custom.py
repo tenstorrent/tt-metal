@@ -121,8 +121,6 @@ def create_eltwise_bcast_col_custom_config(
         raise ValueError("Functional bcast-column runs only support L1_TO_L1")
     if not is_perf and loop_factor != 1:
         raise ValueError("Functional bcast-column runs require loop_factor=1")
-    if is_perf and preserve_src_zero_flag:
-        raise ValueError("preserve_src_zero_flag is functional-only")
     geometry = (num_faces, face_r_dim, num_blocks, num_tiles_in_block)
     if None in geometry:
         raise ValueError("Bcast-column geometry is incomplete")
@@ -132,6 +130,7 @@ def create_eltwise_bcast_col_custom_config(
         MATH_OP(mathop=mathop),
         BROADCAST_TYPE(broadcast_type),
         CT_DIM(ct_dim),
+        PRESERVE_SRC_ZERO_FLAG(preserve_src_zero_flag),
     ]
     # The tile shape and block split are emitted in every mode: the kernel reads them in perf too.
     runtimes = [
@@ -152,7 +151,6 @@ def create_eltwise_bcast_col_custom_config(
                     block_ct_dim=ct_dim,
                     block_rt_dim=_BCST_COL_RT_DIM,
                 ),
-                PRESERVE_SRC_ZERO_FLAG(preserve_src_zero_flag),
             ]
         )
 
