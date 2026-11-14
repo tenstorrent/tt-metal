@@ -135,8 +135,16 @@ jobs:
         # No hugepages on viommu runners or on GitHub-hosted CPU-only runners.
         - ${{ (!contains(join(matrix.test-group.runs_on, ','), 'viommu') && matrix.test-group.sku != 'github_hosted_cpu' && '/dev/hugepages-1G:/dev/hugepages-1G') || '/no_hugepages' }}
       # Memory reduction in WH LB coming up: https://github.com/tenstorrent/metal-internal-workflows/issues/786
-      # github_hosted_cpu has no /dev/tenstorrent to pass through.
-      options: ${{ matrix.test-group.sku != 'github_hosted_cpu' && '--device /dev/tenstorrent' || '' }} ${{ contains(matrix.test-group.sku, 'llmbox') && '--memory 256g' || '' }}
+      # github_hosted_cpu has no /dev/tenstorrent to pass through, and needs an
+      # unrestricted seccomp profile to run the TSan binaries: the GitHub-hosted
+      # 26.04 image leaves vm.mmap_rnd_bits at 32 (its /etc/sysctl.conf entry is
+      # no longer applied at boot -- actions/runner-images#15146), so TSan
+      # re-execs via personality(ADDR_NO_RANDOMIZE), which Docker's default
+      # seccomp profile denies: tsan_platform_linux.cpp:290, exit 139. The
+      # seccomp opt names its SKU rather than riding on the device condition, so
+      # a future deviceless SKU does not inherit it by accident. Remove once the
+      # image restores mmap_rnd_bits=28; upstream calls that the better fix.
+      options: ${{ matrix.test-group.sku != 'github_hosted_cpu' && '--device /dev/tenstorrent' || '' }} ${{ matrix.test-group.sku == 'github_hosted_cpu' && '--security-opt seccomp=unconfined' || '' }} ${{ contains(matrix.test-group.sku, 'llmbox') && '--memory 256g' || '' }}
     defaults:
       run:
         shell: bash

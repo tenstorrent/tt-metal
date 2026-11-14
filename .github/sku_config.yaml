@@ -213,14 +213,12 @@ skus:
   # No merge_queue_sku: GitHub-hosted capacity is not a contended prio pool
   # (same as the sim_* ubuntu-latest SKUs below).
   #
-  # Pinned to ubuntu-24.04 instead of ubuntu-latest: this SKU runs the sanitizer
-  # test binaries, and on an ubuntu-26.04 host TSan aborts at startup because
-  # personality(ADDR_NO_RANDOMIZE) is denied inside the job container
-  # ("CHECK failed: tsan_platform_linux.cpp:290", exit 139). The sim_* SKUs below
-  # stay on ubuntu-latest; they carry no sanitizer binaries and pass on 26.04.
+  # Back on ubuntu-latest (26.04). This SKU runs the sanitizer test binaries, so
+  # it depends on the container options set for it in smoke.yaml; without those
+  # TSan aborts at startup on a 26.04 host. See the comment there.
   github_hosted_cpu:
     runs_on:
-      - ubuntu-24.04
+      - ubuntu-latest
 
   # ---------------------------------------------------------------------------
   # Merge-queue prio SKUs (merge_group events only).
