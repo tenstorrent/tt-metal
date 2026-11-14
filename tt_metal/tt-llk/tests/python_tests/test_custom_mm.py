@@ -56,18 +56,21 @@ from helpers.llk_params import (
     DestAccumulation,
     DestSync,
     MathFidelity,
+    PerfRunType,
 )
 from helpers.pack import pack_bfp4_b, pack_bfp8_b, pack_bfp16, pack_fp32
 from helpers.param_config import input_output_formats, max_dest_tiles, parametrize
+from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
-from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     CRK_TILE_DIMM,
     CUSTOM_MM_CALLS,
     CUSTOM_MM_LAYOUT,
     DEST_SYNC,
     IN_FACE_DIMS,
+    LOOP_FACTOR,
     NUM_FACES,
+    TILE_COUNT,
     TemplateParameter,
 )
 from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM, FACE_C_DIM
@@ -165,6 +168,10 @@ def _build_custom_mm(
     dest_sync=DestSync.Half,
     tile_c=DEFAULT_TILE_C_DIM,
     transpose=False,
+    *,
+    is_perf=False,
+    run_types=None,
+    loop_factor=1,
 ):
     """Build (but do not run) one custom_mm variant; return it with its (M, N) golden.
 
@@ -243,30 +250,36 @@ def _build_custom_mm(
         ),
     ).reshape(M, N)
 
-    configuration = TestConfig(
-        "sources/custom_mm_test.cpp",
-        formats,
-        templates=[
-            CRK_TILE_DIMM(c_dimm=ct, r_dimm=1, k_dimm=kt),
-            calls if calls is not None else CUSTOM_MM_CALLS(),
-            CUSTOM_MM_PRESERVE_SRC_ZERO_FLAG(preserve_zero_flag),
-            CUSTOM_MM_TRANSPOSE(transpose),
-            CUSTOM_MM_LAYOUT(layout),
-            DEST_SYNC(dest_sync),
-        ],
-        runtimes=[
-            # Faces: in0 2 (M x 16 each); in1 4 and result 2, or 2 and 1 for 16-wide tiles.
-            NUM_FACES(
-                num_faces=tile_c // FACE_C_DIM,
-                num_faces_A=2,
-                num_faces_B=in1_num_faces,
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types or [PerfRunType.L1_TO_L1],
+        test_config_kwargs=dict(
+            test_name="sources/custom_mm_test.cpp",
+            formats=formats,
+            templates=[
+                CRK_TILE_DIMM(c_dimm=ct, r_dimm=1, k_dimm=kt),
+                calls if calls is not None else CUSTOM_MM_CALLS(),
+                CUSTOM_MM_PRESERVE_SRC_ZERO_FLAG(preserve_zero_flag),
+                CUSTOM_MM_TRANSPOSE(transpose),
+                CUSTOM_MM_LAYOUT(layout),
+                DEST_SYNC(dest_sync),
+            ],
+            runtimes=[
+                # in0 has 2 faces; in1/result have 4/2, or 2/1 for 16-wide tiles.
+                NUM_FACES(
+                    num_faces=tile_c // FACE_C_DIM,
+                    num_faces_A=2,
+                    num_faces_B=in1_num_faces,
+                ),
+                IN_FACE_DIMS(in0_face_r_dim=M),
+                LOOP_FACTOR(loop_factor),
+                TILE_COUNT(ct * kt),
+            ],
+            variant_stimuli=CustomMMStimuliConfig(
+                kt, ct, in0_format, in1_format, out_format, packed_a, packed_b
             ),
-            IN_FACE_DIMS(in0_face_r_dim=M),
-        ],
-        variant_stimuli=CustomMMStimuliConfig(
-            kt, ct, in0_format, in1_format, out_format, packed_a, packed_b
+            dest_acc=dest_acc,
         ),
-        dest_acc=dest_acc,
     )
     return configuration, golden
 
@@ -308,11 +321,20 @@ def _run_custom_mm(
     layout=CustomMmDestLayout.Dense,
     tile_c=DEFAULT_TILE_C_DIM,
     transpose=False,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
 ):
-    """Run custom_mm and check it against the golden; return the (M, N) result.
+    """Run custom_mm functionally, or collect performance data when ``is_perf`` is true.
 
-    ``operands`` optionally supplies ``(A, B)`` instead of the seeded random operands.
+    Functional runs check the golden and return the (M, N) result. Performance runs
+    require ``perf_report``, use ``run_types``/``loop_factor``, skip checking, and return
+    ``None``. ``operands`` optionally supplies ``(A, B)`` instead of seeded operands.
     """
+    if is_perf and perf_report is None:
+        raise ValueError("perf_report must be provided when is_perf=True")
     torch_a, torch_b = (
         operands if operands is not None else _seeded_operands(M, kt, ct, tile_c)
     )
@@ -330,7 +352,13 @@ def _run_custom_mm(
         layout,
         tile_c=tile_c,
         transpose=transpose,
+        is_perf=is_perf,
+        run_types=run_types,
+        loop_factor=loop_factor,
     )
+    if is_perf:
+        configuration.run(perf_report)
+        return None
     res_tensor = _device_rows(configuration.run().result, M, ct, out_format, tile_c)
 
     torch_out = torch.float32 if out_format == DataFormat.Float32 else torch.bfloat16
@@ -519,9 +547,24 @@ COMPACT_CT_DIMS_32BIT = [1, 16]
 
 
 def _run_compact_against_default(
-    M, kt, ct, formats, dest_acc, dest_sync=DestSync.Half, tile_c=DEFAULT_TILE_C_DIM
+    M,
+    kt,
+    ct,
+    formats,
+    dest_acc,
+    dest_sync=DestSync.Half,
+    tile_c=DEFAULT_TILE_C_DIM,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
 ):
-    """Run custom_mm in the Compact layout and require it bit-identical to Default-layout runs.
+    """Run Compact custom_mm functionally, or collect performance data.
+
+    Functional runs require bit identity with Default-layout runs and check the golden.
+    Performance runs require ``perf_report``, use ``run_types``/``loop_factor``, run only
+    Compact without comparisons, and return ``None``.
 
     The reference packs the same B in column slices narrow enough for the default 64-row
     layout (8 tiles in a 16-bit SyncHalf DEST, 4 in a 32-bit one); only the compact run
@@ -545,7 +588,15 @@ def _run_compact_against_default(
         layout=CustomMmDestLayout.Compact,
         dest_sync=dest_sync,
         tile_c=tile_c,
+        is_perf=is_perf,
+        run_types=run_types,
+        loop_factor=loop_factor,
     )
+    if is_perf:
+        if perf_report is None:
+            raise ValueError("perf_report must be provided when is_perf=True")
+        compact.run(perf_report)
+        return None
     slices = []
     for c0 in range(0, ct, max_default_ct):
         width = min(max_default_ct, ct - c0)
