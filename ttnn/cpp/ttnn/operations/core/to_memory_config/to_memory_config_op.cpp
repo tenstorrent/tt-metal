@@ -12,6 +12,7 @@
 #include "ttnn/operations/data_movement/sharded/reshard/device/reshard_device_operation.hpp"
 #include "ttnn/operations/data_movement/copy/device/copy_device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/types.hpp"
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/hal.hpp>
@@ -256,6 +257,12 @@ Tensor to_memory_config(
     std::optional<DataType> dtype,
     const std::optional<Tensor>& output_tensor) {
     using namespace tt::tt_metal;
+
+    // Integer <-> float dtype changes cannot be done by the data-movement kernels (they only change the CB data
+    // format and would reinterpret the bits), so convert with typecast first and then move the result.
+    if (dtype.has_value() && is_int_float_conversion(tensor.dtype(), dtype.value())) {
+        return to_memory_config(ttnn::typecast(tensor, dtype.value()), memory_config, std::nullopt, output_tensor);
+    }
 
     // Temporary until we see why buffer data not being populated
     const auto original_memory_config = ttnn::get_memory_config(tensor);
