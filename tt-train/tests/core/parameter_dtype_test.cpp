@@ -165,10 +165,16 @@ TEST_F(ParameterDtypeTest, AppliesReduceDtypeAsTheGradientSyncDefault) {
 
     // A wrong name changes nothing.
     (void)apply("precision: {reduce_dtype: bfloat16}");
-    EXPECT_ANY_THROW(apply("precision: {reduce_dtype: float32, master_dtype: float16}"));
-    EXPECT_ANY_THROW(apply("precision: {reduce_dtype: float16}"));
+    EXPECT_THAT(
+        [&] { (void)apply("precision: {reduce_dtype: float32, master_dtype: float16}"); },
+        ThrowsMessage<std::runtime_error>(HasSubstr(R"(precision.master_dtype must be "bfloat16" or "float32")")));
+    EXPECT_THAT(
+        [&] { (void)apply("precision: {reduce_dtype: float16}"); },
+        ThrowsMessage<std::runtime_error>(HasSubstr(R"(precision.reduce_dtype must be "bfloat16" or "float32")")));
     EXPECT_EQ(autograd::ctx().get_gradient_reduce_dtype(), ttnn::DataType::BFLOAT16);
-    EXPECT_ANY_THROW(autograd::ctx().set_gradient_reduce_dtype(ttnn::DataType::UINT32));
+    EXPECT_THAT(
+        [] { autograd::ctx().set_gradient_reduce_dtype(ttnn::DataType::UINT32); },
+        ThrowsMessage<std::invalid_argument>(HasSubstr("reduce_dtype must be BFLOAT16, FLOAT32 or unset")));
 
     autograd::ctx().close_device();
     EXPECT_EQ(autograd::ctx().get_gradient_reduce_dtype(), std::nullopt);

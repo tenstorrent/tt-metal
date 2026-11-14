@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -28,6 +29,8 @@
 #include "ttnn_fixed/distributed/ttnn_ops.hpp"
 
 using namespace ttml;
+using ::testing::HasSubstr;
+using ::testing::ThrowsMessage;
 
 namespace {
 
@@ -209,7 +212,9 @@ TEST_F(SynchronizeTensorTest, AxisWithOneDeviceLeavesTheTensorUnchanged) {
 
 TEST_F(SynchronizeTensorTest, RejectsReduceDtypesOtherThanBf16AndFp32) {
     const auto gradients = upload(make_gradients(32, 64, 6));
-    EXPECT_ANY_THROW((void)core::distributed::synchronize_tensor(gradients, {kDdpAxis}, ttnn::DataType::UINT32));
+    EXPECT_THAT(
+        [&] { (void)core::distributed::synchronize_tensor(gradients, {kDdpAxis}, ttnn::DataType::UINT32); },
+        ThrowsMessage<std::invalid_argument>(HasSubstr("reduce_dtype must be BFLOAT16, FLOAT32 or unset")));
 }
 
 // The C++ runners call this overload, which takes the DDP axis from the parallelism context.
