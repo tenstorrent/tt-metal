@@ -514,6 +514,10 @@ def test_constructor_reference_allocation_before_capture(contract, constructor_n
     state, events = constructor_native
     state.cold = cold
     contract.fixture["generation"].update(num_frames=17, width=256, fps=30)
+    for name in ("first_frame", "last_frame"):
+        endpoint = contract.fixture["acceptance"][name]
+        Image.new("RGB", (256, 128), "red").save(endpoint["path"])
+        endpoint["sha256"] = hashlib.sha256(Path(endpoint["path"]).read_bytes()).hexdigest()
     pipe = contract.create(traced=traced, dynamic_load=dynamic_load)
     native = pipe._pipeline
     assert native._traced is traced
