@@ -9,6 +9,9 @@
 #include "api/compute/common.h"
 #include "api/compute/sentinel/compute_kernel_sentinel.h"
 #include "api/compute/matmul_fe_mark.h"
+#ifdef ARCH_BLACKHOLE
+#include "llk_size_mode.h"
+#endif
 #include "llk_assert.h"
 #include "sanitizer/api.h"
 #ifdef TRISC_MATH
@@ -895,10 +898,11 @@ constexpr DataFormat matmul_fe_phase_format() {
     return DataFormat::Invalid;
 }
 
-// the block keys of the init (key_ct, key_rt: the end fold at full sync, no bias write) where ct and rt are constant
+// the block keys of the init (key_ct, key_rt: the end fold at full sync, no bias write) where ct and rt are constant; in size
+// mode none, so every call shares main's init instead of one instantiation per keyed block
 template <std::uint32_t ct, std::uint32_t rt>
 constexpr std::uint32_t matmul_fe_key(const std::uint32_t dim) {
-    return (ct != 0xFFu && rt != 0xFFu) ? dim : 0;
+    return (ct != 0xFFu && rt != 0xFFu && !LLK_SIZE_MODE) ? dim : 0;
 }
 
 // the unpack_auto_ttsync of a plain call: one value per kernel (MATMUL_FE_MARK), so its init and calls agree
