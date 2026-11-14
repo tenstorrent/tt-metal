@@ -25,30 +25,47 @@ inline void calculate_fmod() {
     // SFPU microcode
     sfpi::vFloat s = sfpi::abs(sfpi::vConstFloatPrgm0);
     sfpi::vFloat recip_val = sfpi::abs(sfpi::vConstFloatPrgm1);
+    // Keep one fractional bit in the quotient estimate before correcting the residual.
+    constexpr int residual_correction_exp_limit = 23;
 
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat val = sfpi::dst_reg[0];
         sfpi::vFloat v = sfpi::abs(val);
 
-        sfpi::vFloat quotient;
-        sfpi::vInt exp = sfpi::exexp(v * recip_val);
+        sfpi::vFloat quotient = v * recip_val;
+        sfpi::vInt exp = sfpi::exexp(quotient);
         v_if(exp < 0) { quotient = 0.0f; }
         // Since fp32 has 23 mantissa bits, the LSB represents the fractional part when exp < 23.
         // We effectively round off the fractional bits to zero by right shifting using (exp - 23) and then left
         // shifting it back using (0 - (exp - 23)).
         v_elseif(exp < 23) {
-            quotient = sfpi::as<sfpi::vFloat>(
-                shft((shft(sfpi::as<sfpi::vUInt>(v * recip_val), (exp - 23))), (0 - (exp - 23))));
+            quotient =
+                sfpi::as<sfpi::vFloat>(shft((shft(sfpi::as<sfpi::vUInt>(quotient), (exp - 23))), (0 - (exp - 23))));
         }
-        v_else { quotient = v * recip_val; }
-        v_endif
+        v_endif;
 
         v_if(exp < 23 && quotient * s > v) {
             quotient = quotient - 1;
         }
         v_endif;
         v = v - quotient * s;
+        v_if(exp < residual_correction_exp_limit) {
+            // The floored quotient times s can exceed abs(val), leaving a negative residual.
+            v_if(v < 0) { v = v + s; }
+            v_endif;
+
+            quotient = quotient + 1;
+            quotient = sfpi::abs(val) - quotient * s;
+            v_if(quotient >= 0) {
+                // Accept exact zero for either sign; preserve the positive tail's nonzero residual.
+                v_if(quotient == 0) { v = quotient; }
+                v_elseif(val < 0) { v = quotient; }
+                v_endif;
+            }
+            v_endif;
+        }
+        v_endif;
 
         v = sfpi::copysgn(v, val);
 
@@ -60,7 +77,7 @@ inline void calculate_fmod() {
             v_if(v >= s) { v = v - s; }
             v_endif;
         }
-        v_if(sfpi::abs(v) - s == 0.0f) { v = 0.0f; }
+        v_if(sfpi::abs(v) - s == 0.0f) { v = sfpi::copysgn(sfpi::vFloat(0.0f), val); }
         v_endif;
         sfpi::dst_reg[0] = v;
         sfpi::dst_reg++;
