@@ -547,3 +547,30 @@ def test_sdpa_decode_broadcast_mask_batch(device, b, nh, nkv, s, d, dtype, grid_
         grid_size=grid_size,
         mask_dtype=mask_dtype,
     )
+
+
+@pytest.mark.parametrize("cur_pos_tensor", [False, True])
+@pytest.mark.parametrize(
+    "b, nh, nkv, s, d, dtype, grid_size, q_dtype",
+    [
+        (4, 8, 1, 256, 128, ttnn.bfloat16, (8, 8), ttnn.bfloat16),
+        (8, 8, 1, 2048, 128, ttnn.bfloat8_b, (8, 8), ttnn.bfloat16),
+    ],
+)
+def test_sdpa_decode_share_cache(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, cur_pos_tensor):
+    run_test_sdpa_decode_single_iter(
+        device,
+        b,
+        nh,
+        nkv,
+        s,
+        d,
+        dtype,
+        grid_size,
+        q_dtype,
+        cur_pos_tensor=cur_pos_tensor,
+        sharded_in=False,
+        sharded_out=False,
+        share_cache=True,
+    )
+
