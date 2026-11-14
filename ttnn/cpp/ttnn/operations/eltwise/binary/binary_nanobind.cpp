@@ -58,6 +58,9 @@ constexpr auto kRelationalDtypes =
     "BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32, INT32, UINT32 (range: [0, 4294967295]), UINT16 (range: [0, 65535]), "
     "UINT8 "
     "(cast to UINT16)";
+constexpr auto kSubtractDtypes =
+    "BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32, INT32, UINT32 (range: [0, 4294967295]), UINT16 (range: [0, 65535]), "
+    "UINT8 (range: [0, 255]), INT8 (range: [-128, 127])";
 constexpr auto kFloatAndInt32Dtypes = "BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32, INT32";
 constexpr auto kFloatAndInt32UInt32Dtypes =
     "BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32, INT32, UINT32 (range: [0, 4294967295])";
@@ -75,6 +78,10 @@ constexpr auto kDivideInplaceDtypes = "BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32";
 
 constexpr auto kMixedFloatFamilyFootnote =
     R"doc(Operands may mix float-family dtypes (BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32); all other dtype pairs must match.)doc";
+constexpr auto kSubtractDtypeFootnote =
+    R"doc(Operands may mix float-family dtypes (BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32); all other dtype pairs must match.
+
+            UINT8 and INT8 results are returned in the input dtype and wrap modulo 256 on overflow. A scalar operand must be an integer within the dtype's range. Output activations run on the wrapped result. Input activations are not supported for these dtypes.)doc";
 constexpr auto kSameDtypeRequiredFootnote = R"doc(Operands must have the same dtype.)doc";
 constexpr auto kInt32FloatScalarPromotionNote =
     R"doc(An INT32 tensor with a floating-point scalar is promoted to FLOAT32 before computation, including integral-valued floats such as `2.0`. The default output dtype is FLOAT32. Use an integer scalar (for example, `2` instead of `2.0`) to retain integer-scalar semantics.)doc";
@@ -2189,8 +2196,8 @@ void py_module(nb::module_& mod) {
         &detail::subtract_fast_approx_tensor_scalar,
         &detail::subtract_fast_approx_tensor_tensor,
         &detail::subtract_fast_approx_scalar_tensor,
-        detail::kArithmeticFpuDtypes,
-        detail::kMixedFloatFamilyFootnote,
+        detail::kSubtractDtypes,
+        detail::kSubtractDtypeFootnote,
         detail::kAdditiveFastApproxPostNote,
         /*fast_approx_default*/ true);
 
@@ -2200,8 +2207,8 @@ void py_module(nb::module_& mod) {
         R"doc(\mathrm{{input\_tensor\_a}}_i - \mathrm{{input\_tensor\_b}}_i)doc",
         static_cast<detail::InplaceFastApproxScalarFn>(&ttnn::subtract_),
         static_cast<detail::InplaceFastApproxTensorFn>(&ttnn::subtract_),
-        detail::kArithmeticFpuDtypes,
-        detail::kMixedFloatFamilyFootnote,
+        detail::kSubtractDtypes,
+        detail::kSubtractDtypeFootnote,
         detail::kAdditiveFastApproxPostNote,
         /*fast_approx_default*/ true,
         /*lhs_arg_name*/ "input_tensor_a",

@@ -325,6 +325,10 @@ void overwrite_compute_kernel_name_and_defines(
     }
 }
 
+bool is_int8_sub(BinaryOpType op, DataType a_dtype) {
+    return op == BinaryOpType::SUB && (a_dtype == DataType::UINT8 || a_dtype == DataType::INT8);
+}
+
 // Returns true on the (arch, broadcast, dtype) tuple that hangs the LLK
 // `unary_bcast` path on Blackhole: COL bcast + BFLOAT16 input + fp32_dest_acc_en.
 bool hits_bh_col_bcast_bf16_to_fp32_hang(
@@ -671,8 +675,20 @@ void for_each_core_runtime_args(
             operation_attributes.scalar.value(), int_fill ? value_dtype : DataType::FLOAT32, false);
     }
     // Scalar operand (no b): goes to the writer (tile path) or reader (row-major path); 0 when b is a tensor.
+    // An 8-bit sub packs its scalar as INT32 and reads the 8-bit tensor as a zero-extended byte since the
+    // result is masked with & 0xFF. For example, int8 -5 - (-5):
+    //   1. The scalar -5 is packed as 0xFFFFFFFB.
+    //   2. The tensor value -5 is read as the byte 0xFB, which is 251.
+    //   3. The sub computes 251 - (-5) = 256.
+    //   4. The mask & 0xFF turns 256 into 0.
     const uint32_t packed_scalar =
-        b.has_value() ? 0u : pack_scalar_runtime_arg(*operation_attributes.scalar, a.dtype(), rt_is_quant_op);
+        b.has_value()
+            ? 0u
+            : pack_scalar_runtime_arg(
+                  *operation_attributes.scalar,
+                  CMAKE_UNIQUE_NAMESPACE::is_int8_sub(operation_attributes.binary_op_type, a.dtype()) ? DataType::INT32
+                                                                                                      : a.dtype(),
+                  rt_is_quant_op);
 
     // Row broadcast column group: 1 for small shares, kMaxColGroup for large; 0 = page order.
     const uint32_t col_group = [&] {
@@ -953,14 +969,18 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     // Always pass the more accurate fp32 when the quantization scale is passed as a scalar.
     // When b is a scalar, it is packed as bfloat16 for block-float input types (BFLOAT8_B,
     // BFLOAT4_B), so the CB format must be BFLOAT16 to match — not the block-float a_dtype.
+    // An 8-bit int tensor takes its scalar as an INT32 tile, writing 16/32-bit elements and
+    // reading it as a full lane next to the zero-extended byte.
+    const bool int8_sub = CMAKE_UNIQUE_NAMESPACE::is_int8_sub(operation_attributes.binary_op_type, a.dtype());
     const auto b_dtype = b.has_value()                              ? b->dtype()
                          : is_quant_op                              ? DataType::FLOAT32
+                         : int8_sub                                 ? DataType::INT32
                          : (is_sfpu_op && !is_block_float(a_dtype)) ? a_dtype
                                                                     : DataType::BFLOAT16;
     const auto c_dtype = c.dtype();
     // Int8 input (dequant/requant operand A) is read through the UInt8 unpacker.
     const auto a_data_format = cb_dataformat_for(a_dtype);
-    const auto b_data_format = datatype_to_dataformat_converter(b_dtype);
+    const auto b_data_format = cb_dataformat_for(b_dtype);
     const auto c_data_format = datatype_to_dataformat_converter(c_dtype);
     // Int8 output is packed through the UInt8 packer path.
     const auto c_pack_data_format = cb_dataformat_for(c_dtype);
@@ -1090,6 +1110,27 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
             post_activations.insert(post_activations.begin(), *op_config.postprocess);
         }
 
+        // Subtract runs in an int32 lane and a negative result is not packed as its low byte. The UInt8
+        // packer returns 255 for every lane below -1. Since Torch wraps modulo 256 instead, we mask
+        // the lane to its low byte before the pack.
+        // A caller's post activations must see the wrapped result and not the raw difference.
+        //   uint8: (d & 0xFF)
+        //   int8:  ((d + 128) & 0xFF) - 128, which also sign-extends the byte for relu, abs and other such ops.
+        if (int8_sub) {
+            if (!post_activations.empty()) {
+                ttsl::SmallVector<unary::EltwiseUnaryWithParam> wrap_first;
+                if (a_dtype == DataType::INT8) {
+                    wrap_first.emplace_back(unary::UnaryOpType::ADD_UNARY_SFPU, std::int32_t{128});
+                    wrap_first.emplace_back(unary::UnaryOpType::BITWISE_AND, std::uint32_t{0xFF});
+                    wrap_first.emplace_back(unary::UnaryOpType::ADD_UNARY_SFPU, std::int32_t{-128});
+                } else {
+                    wrap_first.emplace_back(unary::UnaryOpType::BITWISE_AND, std::uint32_t{0xFF});
+                }
+                post_activations.insert(post_activations.begin(), wrap_first.begin(), wrap_first.end());
+            }
+            post_activations.emplace_back(unary::UnaryOpType::BITWISE_AND, std::uint32_t{0xFF});
+        }
+
         bool is_integer_division =
             (operation_attributes.binary_op_type == BinaryOpType::DIV && a_dtype == DataType::INT32 &&
              b_dtype == DataType::INT32);
@@ -1100,6 +1141,8 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                 {static_cast<int>(a_dtype), static_cast<int>(c_dtype)},
             });
         }
+
+        const auto post_dtype = int8_sub ? std::optional<DataType>{DataType::INT32} : input_dtype;
 
         add_activation_defines(compute_kernel_defines, lhs_activations, "LHS", a_dtype);
         add_activation_defines(compute_kernel_defines, rhs_activations, "RHS", b_dtype);
@@ -1125,10 +1168,10 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                 compute_kernel_defines["QUANT_OUT_ZERO_POINT_RT_ARGS_IDX"] = "4";
                 unary::utils::update_macro_defines(unary::UnaryOpType::ZERO_POINT, compute_kernel_defines);
             } else {
-                add_activation_defines(compute_kernel_defines, post_activations, "POST", input_dtype);
+                add_activation_defines(compute_kernel_defines, post_activations, "POST", post_dtype);
             }
         } else {
-            add_activation_defines(compute_kernel_defines, post_activations, "POST", input_dtype);
+            add_activation_defines(compute_kernel_defines, post_activations, "POST", post_dtype);
         }
     }
 
@@ -1144,7 +1187,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         (a_data_format == tt::DataFormat::UInt32 && b_data_format == tt::DataFormat::UInt32) ||
         // Quant SFPU kernels compute on the fp32 input in DST; keep fp32 dest
         // accumulation regardless of the (possibly narrow, e.g. uint8) output format.
-        operation_attributes.is_quant_op;
+        operation_attributes.is_quant_op || int8_sub;
 
     // Determine max tiles per cycle based on sharding and output data type
     // Multi-tile processing only enabled when all tensors are sharded

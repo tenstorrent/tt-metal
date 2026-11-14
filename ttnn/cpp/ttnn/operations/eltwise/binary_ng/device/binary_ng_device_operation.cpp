@@ -55,9 +55,11 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_a
     using enum DataType;
     switch (val) {
         case ADD:
-        case SUB:
         case RSUB:
             return !fast_and_approximate_mode || (a == b && (a == FLOAT32 || a == INT32 || a == UINT32 || a == UINT16));
+        case SUB:
+            return !fast_and_approximate_mode ||
+                   (a == b && (a == FLOAT32 || a == INT32 || a == UINT32 || a == UINT16 || a == UINT8 || a == INT8));
         case LOGICAL_AND:
         case LOGICAL_OR:
         case LOGICAL_XOR:
@@ -380,6 +382,20 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
             attributes.binary_op_type,
             input_tensor_a.dtype(),
             dtype_b);
+    }
+
+    if (attributes.binary_op_type == BinaryOpType::SUB &&
+        (input_tensor_a.dtype() == DataType::UINT8 || input_tensor_a.dtype() == DataType::INT8)) {
+        const auto output_dtype =
+            output_tensor.has_value() ? output_tensor->dtype() : attributes.dtype.value_or(input_tensor_a.dtype());
+        TT_FATAL(
+            output_dtype == input_tensor_a.dtype(),
+            "Output dtype {} must match the input dtype {} for 8-bit subtract",
+            output_dtype,
+            input_tensor_a.dtype());
+        TT_FATAL(
+            attributes.lhs_activations.empty() && attributes.rhs_activations.empty(),
+            "Input activations are not supported for 8-bit subtract (including subalpha)");
     }
 
     BinaryNgDeviceOperation::validate_on_program_cache_hit(attributes, tensor_args);

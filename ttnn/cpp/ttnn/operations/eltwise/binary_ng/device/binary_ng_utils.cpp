@@ -450,6 +450,9 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
             if (int_data_format) {
                 return {"sub_int_tile_init();", fmt::format("sub_int_tile<DataFormat::{}>", *int_data_format)};
             }
+            if (dtype == DataType::UINT8 || dtype == DataType::INT8) {
+                return {"sub_int_tile_init();", "sub_int_tile<DataFormat::Int32>"};
+            }
             return {"sub_binary_tile_init();", fmt::format("sub_binary_tile<{}>", kRneDstRoundingMode)};
         case MUL:
             if (int_data_format) {
@@ -670,6 +673,12 @@ std::map<std::string, std::string> make_dataflow_defines(
         defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row";
         defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element<uint32_t>";
         defines["FILL_WITH_VALUE"] = "fill_with_val<1024, uint32_t>";
+    } else if (dtype == DataType::UINT8 || dtype == DataType::INT8) {
+        defines["FILL_TILE_WITH_FIRST_COLUMN_RM"] = "fill_tile_with_first_column_rm_uint8";
+        defines["FILL_TILE_WITH_FIRST_ROW_RM"] = "fill_tile_with_first_row_rm_uint8";
+        defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column_uint8";
+        defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row_uint8";
+        defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element_uint8";
     } else if (dtype == DataType::BFLOAT8_B) {
         defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column_bfp8";
         defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row_bfp8";
@@ -710,6 +719,12 @@ std::map<std::string, std::string> make_dataflow_defines(
         defines["FILL_TILE_WITH_FIRST_ROW_B"] = "fill_tile_with_first_row";
         defines["FILL_TILE_WITH_FIRST_ELEMENT_B"] = "fill_tile_with_first_element<uint32_t>";
         defines["FILL_WITH_VALUE_B"] = "fill_with_val<1024, uint32_t>";
+    } else if (b_dtype == DataType::UINT8 || b_dtype == DataType::INT8) {
+        defines["FILL_TILE_WITH_FIRST_COLUMN_B"] = "fill_tile_with_first_column_uint8";
+        defines["FILL_TILE_WITH_FIRST_COLUMN_RM_B"] = "fill_tile_with_first_column_rm_uint8";
+        defines["FILL_TILE_WITH_FIRST_ROW_RM_B"] = "fill_tile_with_first_row_rm_uint8";
+        defines["FILL_TILE_WITH_FIRST_ROW_B"] = "fill_tile_with_first_row_uint8";
+        defines["FILL_TILE_WITH_FIRST_ELEMENT_B"] = "fill_tile_with_first_element_uint8";
     } else if (b_dtype == DataType::BFLOAT8_B) {
         defines["FILL_TILE_WITH_FIRST_COLUMN_B"] = "fill_tile_with_first_column_bfp8";
         defines["FILL_TILE_WITH_FIRST_ROW_B"] = "fill_tile_with_first_row_bfp8";
@@ -756,6 +771,11 @@ std::uint32_t pack_scalar_runtime_arg(const unary::ScalarVariant scalar, const D
                 auto val = static_cast<std::uint16_t>(static_cast<float>(v));
                 return (static_cast<std::uint32_t>(val) << 16) | val;
             }
+            // There is no 8-bit packing. A caller with an 8-bit tensor must pass INT32.
+            TT_FATAL(
+                dtype != DataType::UINT8 && dtype != DataType::INT8,
+                "Cannot pack a scalar for dtype {}. Pass INT32 for an 8-bit tensor.",
+                dtype);
             auto scalar_bf16 = bfloat16(static_cast<float>(v));
             return pack_two_bfloat16_into_uint32({scalar_bf16, scalar_bf16});
         },
