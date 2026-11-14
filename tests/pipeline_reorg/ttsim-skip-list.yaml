@@ -21,8 +21,6 @@ wormhole_b0:
   - tests/ttnn/unit_tests/operations/reduce/test_argmax.py
   - tests/ttnn/unit_tests/operations/reduce/test_cumsum.py
   - tests/ttnn/unit_tests/operations/reduce/test_topk.py
-  - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill.py
-  - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill_v_embedding_space.py
 
   # ttsim: UnpredictableValue noc_check_self_overlap. conv3d's reader shifts retained W
   # columns with one NOC read whose source and destination overlap in the same L1.
@@ -34,16 +32,12 @@ wormhole_b0:
 blackhole:
   # Job-level timeouts
   - tests/ttnn/unit_tests/operations/conv/test_conv2d.py
-  - tests/ttnn/unit_tests/operations/conv/test_conv_transpose2d.py
-  - tests/ttnn/unit_tests/operations/conv/test_prepare_conv_weights.py
   - tests/ttnn/unit_tests/operations/eltwise/test_unary_dram_reads_large.py
   - tests/ttnn/unit_tests/operations/pool/test_maxpool2d.py
   - tests/ttnn/unit_tests/operations/pool/test_mpwi.py
   - tests/ttnn/unit_tests/operations/reduce/test_argmax.py
   - tests/ttnn/unit_tests/operations/reduce/test_cumsum.py
   - tests/ttnn/unit_tests/operations/reduce/test_topk.py
-  - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill.py
-  - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill_v_embedding_space.py
 
   # ttsim: UnpredictableValue noc_check_self_overlap. conv3d's reader shifts retained W
   # columns with one NOC read whose source and destination overlap in the same L1.
