@@ -917,3 +917,62 @@ def test_sdpa_block_map_rejects_windowed_and_sliding(device, mode, expect_error)
         ttnn.transformer.scaled_dot_product_attention(
             q, k, v, is_causal=False, program_config=program_config, attn_mask_block_map=block_map, **kwargs
         )
+
+
+@pytest.mark.parametrize(
+    "dtype, nh, nkv, s, d, q_chunk_size, k_chunk_size, is_causal",
+    [
+        pytest.param(
+            dtype,
+            nh,
+            nkv,
+            1024,
+            128,
+            q_chunk_size,
+            k_chunk_size,
+            False,
+            id=f"{dtype_id}-{heads_id}-q{q_chunk_size}-k{k_chunk_size}",
+        )
+        for dtype, dtype_id in ((ttnn.bfloat8_b, "bfp8"), (ttnn.bfloat16, "bf16"))
+        for nh, nkv, heads_id in ((32, 8, "gqa"), (8, 8, "mha"))
+        for q_chunk_size in (64, 128, 192, 256, 512)
+        for k_chunk_size in (128, 256)
+    ]
+    + [
+        pytest.param(ttnn.bfloat16, 1, 1, 64, 32, 128, 256, True, id="d32-s64-q128-k256"),
+        pytest.param(ttnn.bfloat16, 1, 1, 64, 32, 64, 256, True, id="d32-s64-q64-k256"),
+        pytest.param(ttnn.bfloat16, 1, 1, 64, 32, 128, 128, True, id="d32-s64-q128-k128"),
+        pytest.param(ttnn.bfloat16, 8, 1, 160, 96, 64, 32, True, id="d96-s160-q64-k32"),
+        pytest.param(ttnn.bfloat16, 8, 1, 160, 96, 128, 32, True, id="d96-s160-q128-k32"),
+        pytest.param(ttnn.bfloat16, 1, 1, 64, 32, 32, 256, True, id="d32-s64-q32-k256-control"),
+        pytest.param(ttnn.bfloat16, 8, 1, 160, 96, 64, 64, True, id="d96-s160-q64-k64-control"),
+    ],
+)
+def test_sdpa_lofi_fp16_dest_q_chunks(device, dtype, nh, nkv, s, d, q_chunk_size, k_chunk_size, is_causal):
+    """LoFi with a 16-bit DEST used to hang at some Q chunks and where the Q.K^T and P.V chunks disagree (#61772)."""
+    torch.manual_seed(0)
+    q, k, v = (torch.randint(-16, 17, (1, n, s, d)).float() / 8 for n in (nh, nkv, nkv))
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(8, 8), q_chunk_size=q_chunk_size, k_chunk_size=k_chunk_size
+    )
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.LoFi, math_approx_mode=False, fp32_dest_acc_en=False, packer_l1_acc=True
+    )
+    tq, tk, tv = (ttnn.from_torch(t, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device) for t in (q, k, v))
+    out = ttnn.transformer.scaled_dot_product_attention(
+        tq,
+        tk,
+        tv,
+        is_causal=is_causal,
+        program_config=program_config,
+        compute_kernel_config=compute_kernel_config,
+    )
+    expected = torch.nn.functional.scaled_dot_product_attention(
+        q,
+        k.repeat_interleave(nh // nkv, 1),
+        v.repeat_interleave(nh // nkv, 1),
+        is_causal=is_causal,
+    )
+    # LoFi with a 16-bit DEST lands near 0.998 at 128-wide K chunks (more fp16 rescales); a hang never returns.
+    passing, pcc = comp_pcc(expected, ttnn.to_torch(out).float(), 0.995)
+    assert passing, pcc

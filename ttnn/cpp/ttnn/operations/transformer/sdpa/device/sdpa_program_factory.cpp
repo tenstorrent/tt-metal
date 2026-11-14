@@ -1726,6 +1726,12 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     defines_map["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines_map["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
     defines_map["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
+    // A LoFi P.V matmul replays a shape-specific image that normalize_row's matmul init overwrites, so each P.V setup
+    // must re-record it (sdpa_pv_mm_setup). MATH_FIDELITY is not defined on the unpack TRISC, so all three learn it
+    // here.
+    if (math_fidelity == MathFidelity::LoFi) {
+        defines_map["SDPA_COMPUTE_LOFI"] = "1";
+    }
     log_debug(tt::LogOp, "use_zigzag_balancing: {}", use_zigzag_balancing);
 
     KernelDescriptor::Defines defines(defines_map.begin(), defines_map.end());
