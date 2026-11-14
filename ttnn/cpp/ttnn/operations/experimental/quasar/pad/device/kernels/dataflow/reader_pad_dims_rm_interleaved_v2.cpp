@@ -19,6 +19,10 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "api/tensor/tensor_accessor.h"
+#if !defined(ARCH_QUASAR)
+// ckernel.h is unusable from a Quasar DM build and Quasar has no load_blocking.
+#include "ckernel.h"
+#endif
 #include "experimental/kernel_args.h"
 
 // Fill a scratch DFB's backing L1 with the broadcast packed pad value.
@@ -111,6 +115,13 @@ void kernel_main() {
 #endif
 
     fill_pad_dfb_with_val(cb_pad, stick_size_padded, packed_pad_value);
+    // The loop-back reads below source the words just stored, so the stores must reach L1 first.
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    flush_l2_cache_range(static_cast<uintptr_t>(pad_val_addr), static_cast<size_t>(stick_size_padded));
+#else
+    constexpr uint32_t pad_last_word = (stick_size_padded + sizeof(uint32_t) - 1) / sizeof(uint32_t) - 1;
+    (void)ckernel::load_blocking(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pad_val_addr) + pad_last_word);
+#endif
 
     uint32_t i_page = start_page_id;
     uint32_t curr_c = start_dim_c, curr_h = start_dim_h, curr_n = start_dim_n;

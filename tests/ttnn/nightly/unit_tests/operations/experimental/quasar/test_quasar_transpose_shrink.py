@@ -115,3 +115,37 @@ def test_quasar_transpose_wh_sharded_rm_l1_budget_counts_tiles(device):
     result = ttnn.experimental.quasar.transpose(ttnn_in, 2, 3)
     got = ttnn.to_torch(result.cpu())
     assert_with_ulp(expected_result=x.transpose(2, 3), actual_result=got, ulp_threshold=0)
+
+
+@pytest.mark.parametrize(
+    "dims, out_layout",
+    [
+        ((2, 3), ttnn.TensorMemoryLayout.WIDTH_SHARDED),
+        ((2, 3), ttnn.TensorMemoryLayout.BLOCK_SHARDED),
+        ((1, 2), ttnn.TensorMemoryLayout.WIDTH_SHARDED),
+    ],
+    ids=["wh_to_width", "wh_to_block", "hc_to_width"],
+)
+def test_quasar_transpose_specless_sharded_output_cross_layout(device, dims, out_layout):
+    """Height-sharded input, spec-less sharded output of a different layout: the input's scaled shard
+    geometry is invalid for the requested layout, so a fresh spec must be synthesized."""
+    shape = (1, 32, 32, 64) if dims == (1, 2) else (1, 1, 128, 64)
+    num_cores = 4
+    height = shape[0] * shape[1] * shape[2]
+    in_mc = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))}),
+            (height // num_cores, shape[3]),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    out_mc = ttnn.MemoryConfig(out_layout, ttnn.BufferType.L1)
+    torch.manual_seed(12345)
+    x = torch.rand(shape, dtype=torch.bfloat16)
+    ttnn_in = ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=in_mc)
+    result = ttnn.experimental.quasar.transpose(ttnn_in, *dims, memory_config=out_mc)
+    assert result.memory_config().memory_layout == out_layout
+    got = ttnn.to_torch(result.cpu().to(ttnn.ROW_MAJOR_LAYOUT))
+    assert_with_ulp(expected_result=x.transpose(*dims), actual_result=got, ulp_threshold=0)

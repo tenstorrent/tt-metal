@@ -28,6 +28,7 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/functions.hpp"
+#include "ttnn/operations/experimental/quasar/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operations/reduction/accumulation/cumprod/cumprod.hpp"
 #include "ttnn/operations/reduction/accumulation/cumsum/cumsum.hpp"
 #include "ttnn/operations/reduction/accumulation/ema/ema.hpp"
@@ -189,6 +190,37 @@ TEST_F(ReductionSmoke, MinMaxReduceBothDims) {
             << "offset=" << c.offset;
         ASSERT_EQ(static_cast<float>(out_min[0]), static_cast<float>(c.offset)) << "offset=" << c.offset;
     }
+}
+
+// Quasar generic reduce: MIN over W, H and HW (lowered to MAX of the negated input on every path).
+TEST_F(ReductionSmoke, QuasarMinReduceAllDims) {
+    namespace qsr = ttnn::operations::experimental::quasar;
+    auto& device = *device_;
+    constexpr int h = 64, w = 64, offset = -100;
+    std::vector<float> data(static_cast<size_t>(h) * w);
+    for (int i = 0; i < h; i++) {
+        for (int j = 0; j < w; j++) {
+            data[static_cast<size_t>(i) * w + j] = static_cast<float>(offset + i + j);
+        }
+    }
+    const auto input =
+        detail::make_device_tensor(device, ttnn::Shape{1, 1, h, w}, data, DataType::BFLOAT16, Layout::TILE);
+
+    const auto out_w = qsr::min(input, -1, true).to_vector<bfloat16>();
+    ASSERT_EQ(out_w.size(), static_cast<size_t>(h));
+    for (int i = 0; i < h; i++) {
+        ASSERT_EQ(static_cast<float>(out_w[i]), static_cast<float>(offset + i)) << "row " << i;
+    }
+
+    const auto out_h = qsr::min(input, -2, true).to_vector<bfloat16>();
+    ASSERT_EQ(out_h.size(), static_cast<size_t>(w));
+    for (int j = 0; j < w; j++) {
+        ASSERT_EQ(static_cast<float>(out_h[j]), static_cast<float>(offset + j)) << "col " << j;
+    }
+
+    const auto out_hw = qsr::min(input, ttsl::SmallVector<int>{-2, -1}, true).to_vector<bfloat16>();
+    ASSERT_EQ(out_hw.size(), 1u);
+    ASSERT_EQ(static_cast<float>(out_hw[0]), static_cast<float>(offset));
 }
 
 // ---------------------------------------------------------------------------

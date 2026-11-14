@@ -89,6 +89,24 @@ Tensor reduce(
         return reduce_min(input_tensor, reduce_dim, scaler, output_mem_config, compute_kernel_config, sub_core_grids);
     }
 
+    // prim::qsr::reduce rejects negate on every path (the fused-negate compute kernel needs the negative_tile
+    // LLK, which is unported on Quasar), so compute -reduce(MAX, -x) with the regular reduce kernel instead.
+    if (negate) {
+        Tensor neg_input = ttnn::neg(input_tensor, std::nullopt, std::nullopt, sub_core_grids);
+        Tensor neg_output = reduce(
+            neg_input,
+            reduce_math,
+            reduce_dim,
+            scaler,
+            output_mem_config,
+            output_dtype,
+            compute_kernel_config,
+            sub_core_grids,
+            /*negate=*/false,
+            use_row_major_support);
+        return ttnn::neg(neg_output, output_mem_config, std::nullopt, sub_core_grids);
+    }
+
     auto parallelization_strategy = ttnn::prim::qsr::get_parallelization_strategy(input_tensor, reduce_dim);
     auto is_multicore_hw = parallelization_strategy == tt::tt_metal::ReduceOpParallelizationStrategy::MULTI_CORE_HW;
     float pad_value = reduce_math == tt::tt_metal::ReduceOpMath::MAX ? -std::numeric_limits<float>::infinity() : 0;
@@ -174,30 +192,6 @@ Tensor reduce(
     const float reduce_scaler = use_post_mul ? 1.0f : scaler;
     const float post_mul = use_post_mul ? scaler : 1.0f;
 
-    // External-negate fallback for the H step: the fused-negate compute kernel is unported on Quasar
-    // (negative_tile stub) and removed, so MIN H-reduce always takes this path. Computes
-    // -reduce(MAX, H, -x) using the regular reduce kernel.
-    auto h_reduce_with_external_negate =
-        [&](const Tensor& h_input, float h_scaler, float h_post_mul, tt::tt_metal::DataType h_out_dtype) {
-            // Keep neg_input in h_input's memory config (pass std::nullopt) so the
-            // pre-reduce negation stays in place; forcing output_mem_config here
-            // could trigger a reshard (DRAM↔L1, interleaved↔sharded) before the
-            // H-reduce.  Only the final neg enforces output_mem_config.
-            Tensor neg_input = ttnn::neg(h_input, std::nullopt, std::nullopt, sub_core_grids);
-            Tensor h_out = ttnn::prim::qsr::reduce(
-                neg_input,
-                reduce_math,
-                tt::tt_metal::ReduceOpDim::H,
-                h_scaler,
-                output_mem_config,
-                h_out_dtype,
-                config,
-                sub_core_grids,
-                /*negate=*/false,
-                /*post_mul_scaler=*/h_post_mul);
-            return ttnn::neg(h_out, output_mem_config, std::nullopt, sub_core_grids);
-        };
-
     // The single-core HW path uses REDUCE_SCALAR mode, which applies the
     // scaler twice internally (once per dimension).  The host compensates with
     // sqrt(scaler) in ReduceSingleCoreHwProgramFactory::create.
@@ -235,14 +229,10 @@ Tensor reduce(
             out_w_dtype,
             config,
             sub_core_grids,
-            negate,
+            /*negate=*/false,
             /*post_mul_scaler=*/1.0f,
             /*row_major_w_dense_path=*/false,
             /*row_major_h_dense_path=*/false);
-
-        if (negate && !ttnn::prim::qsr::h_reduce_negate_fits_in_l1(output_tensor, sub_core_grids)) {
-            return h_reduce_with_external_negate(output_tensor, reduce_scaler, post_mul, out_final_dtype);
-        }
 
         return ttnn::prim::qsr::reduce(
             output_tensor,
@@ -253,16 +243,10 @@ Tensor reduce(
             out_final_dtype,
             config,
             sub_core_grids,
-            negate,
+            /*negate=*/false,
             /*post_mul_scaler=*/post_mul,
             /*row_major_w_dense_path=*/false,
             /*row_major_h_dense_path=*/false);
-    }
-
-    if (negate && reduce_dim == tt::tt_metal::ReduceOpDim::H &&
-        !ttnn::prim::qsr::h_reduce_negate_fits_in_l1(tilized_input, sub_core_grids)) {
-        return h_reduce_with_external_negate(
-            tilized_input, reduce_scaler, post_mul, output_dtype.value_or(input_tensor.dtype()));
     }
 
     return ttnn::prim::qsr::reduce(
@@ -274,7 +258,7 @@ Tensor reduce(
         output_dtype.value_or(input_tensor.dtype()),
         config,
         sub_core_grids,
-        negate,
+        /*negate=*/false,
         /*post_mul_scaler=*/post_mul,
         /*row_major_w_dense_path=*/use_rm_dense_w,
         /*row_major_h_dense_path=*/use_rm_dense_h);
