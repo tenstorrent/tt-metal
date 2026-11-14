@@ -171,6 +171,25 @@ SoftmaxDeviceOperation::program_factory_t SoftmaxDeviceOperation::select_program
     return SoftmaxProgramFactoryGeneralCLarge{};
 }
 
+ttsl::hash::hash_t SoftmaxDeviceOperation::compute_program_hash(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    if (std::holds_alternative<SoftmaxShardedProgramFactoryAttentionOptimized>(
+            select_program_factory(operation_attributes, tensor_args))) {
+        const auto pass_plan =
+            SoftmaxShardedProgramFactoryAttentionOptimized::select_rows_per_pass(operation_attributes, tensor_args);
+        if (pass_plan.rows > 1) {
+            return ttsl::hash::hash_objects_with_default_seed(
+                ttsl::hash::type_hash<SoftmaxDeviceOperation>,
+                operation_attributes,
+                tensor_args,
+                pass_plan.rows,
+                pass_plan.scale_mask_rows);
+        }
+    }
+    return ttsl::hash::hash_objects_with_default_seed(
+        ttsl::hash::type_hash<SoftmaxDeviceOperation>, operation_attributes, tensor_args);
+}
+
 void SoftmaxDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& tensors_args) {
     TT_FATAL(

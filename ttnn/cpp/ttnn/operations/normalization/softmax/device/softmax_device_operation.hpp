@@ -58,6 +58,11 @@ struct SoftmaxDeviceOperation {
     // Sharded memory
     // Ported to Metal 2.0 (MetalV2FactoryConcept). See device/softmax_program_factory_attention_optimized_sharded.cpp.
     struct SoftmaxShardedProgramFactoryAttentionOptimized {
+        struct RowsPerPass {
+            std::uint32_t rows = 1;
+            bool scale_mask_rows = false;
+        };
+        static RowsPerPass select_rows_per_pass(const operation_attributes_t&, const tensor_args_t&);
         static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
             const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
     };
@@ -78,6 +83,8 @@ struct SoftmaxDeviceOperation {
         SoftmaxProgramFactoryAttentionOptimized>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
+
+    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 
