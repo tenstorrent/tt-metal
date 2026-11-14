@@ -51,6 +51,12 @@ def run_tile_compressed(
     pcc_threshold=None,
     dest_layout=CustomMmDestLayout.Dense,
     dest_sync=DestSync.Half,
+    compression_case=None,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
 ):
     run_compressed(
         M,
@@ -67,6 +73,11 @@ def run_tile_compressed(
         pcc_threshold=pcc_threshold,
         dest_layout=dest_layout,
         dest_sync=dest_sync,
+        compression_case=compression_case,
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
     )
 
 
@@ -330,7 +341,19 @@ MULTI_CALL_PCC = 0.9995
     "M,K,N,pattern,rearm",
     [pytest.param(*case[1:], id=case[0]) for case in MULTI_CALL_CASES],
 )
-def test_matmul_custom_compressed_multi_call(M, K, N, pattern, rearm):
+def test_matmul_custom_compressed_multi_call(
+    M,
+    K,
+    N,
+    pattern,
+    rearm,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+    compression_case=None,
+):
     """Back-to-back calls into one DEST, checked against the full-K golden."""
     kt, ct = K // DEFAULT_TILE_R_DIM, N // DEFAULT_TILE_C_DIM
     tiles_per_call = len(pattern)
@@ -375,4 +398,9 @@ def test_matmul_custom_compressed_multi_call(M, K, N, pattern, rearm):
         encode_meta_per_call,
         pcc_threshold=MULTI_CALL_PCC,
         calls=CUSTOM_MM_CALLS(num_calls=num_calls, rearm=rearm),
+        compression_case=compression_case,
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
     )
