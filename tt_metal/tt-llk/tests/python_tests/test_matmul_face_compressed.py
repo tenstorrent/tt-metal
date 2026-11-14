@@ -454,10 +454,6 @@ def test_matmul_face_compressed_deepseek(shape, switch_mult, seed):
 
 @blackhole_only
 def test_matmul_face_compressed_back_to_back_calls():
-    pytest.skip(
-        "Requires extracted Blackhole multi-call kernel fixes; tracked by "
-        "https://github.com/tenstorrent/tt-metal/issues/65612"
-    )
     M, K, N = 1, 128, 64
     assignment = assign_clustered(K, N, ("bfp4", "bfp2"), COMPRESSION_GRANULARITY)
     run_face_compressed(
