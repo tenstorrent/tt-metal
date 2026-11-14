@@ -255,6 +255,57 @@ def test_rope_zero_scale():
     ), f"scale=0 must zero every rotated row:\n{device[rotated]}"
 
 
+def _check_separate_cos_sin(ht, wt, stride, scale, operands_first, dest_acc):
+    """Separate cos/sin tiles, rotated under either Dest representation.
+
+    Mirrors _check_fused_cos_sin: with a 32-bit Dest the SFPSTORE keeps the fp32
+    result, so the golden is not truncated to bf16 and every row must match bitwise.
+    """
+    geometry = _geometry(ht, wt, stride, operands_first=operands_first)
+    tiles = _dest_tiles(geometry)
+    dest = _stimuli(geometry, tiles, seed=505)
+
+    output_dtype = torch.float32 if dest_acc == DestAccumulation.Yes else torch.bfloat16
+    golden = dest.to(output_dtype).clone()
+    factor = 1.0 if scale is None else scale
+    for x_row, cos_row, sin_row in rope_bands(**geometry):
+        for i in range(4):
+            cos = dest[cos_row + i, 0::2].float() * factor
+            sin = dest[sin_row + i, 0::2].float() * factor
+            values = dest[x_row + i].float()
+            even = cos * values[0::2] - sin * values[1::2]
+            odd = sin * values[0::2] + cos * values[1::2]
+            if dest_acc == DestAccumulation.No:
+                even, odd = truncate_to_bfloat16(even), truncate_to_bfloat16(odd)
+            golden[x_row + i, 0::2], golden[x_row + i, 1::2] = even, odd
+
+    device = _run(
+        geometry,
+        tiles,
+        dest,
+        scale_fp32=None if scale is None else _bf16_bits(scale),
+        dest_acc=dest_acc,
+    )
+    assert torch.equal(device, golden)
+
+
+@parametrize(
+    # (heads, width tiles, x stride, scale, phases first); all fit the 4 slots of an fp32 half Dest
+    case=[
+        (1, 1, TILE_SLOT_STRIDE, None, False),
+        (2, 1, TILE_SLOT_STRIDE, -2.0, False),
+        (1, 2, DENSE_STRIDE, None, False),
+        (2, 1, DENSE_STRIDE, 0.0, True),
+        (1, 1, TILE_SLOT_STRIDE, -2.0, True),
+    ],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+def test_rope_dest_precision(case, dest_acc):
+    """BF16 inputs unpacked into either DEST representation, separate cos/sin tiles."""
+    ht, wt, stride, scale, operands_first = case
+    _check_separate_cos_sin(ht, wt, stride, scale, operands_first, dest_acc)
+
+
 # A rotation by 90 degrees: cos=0, sin=1 sends (e, o) to (-o, e).
 def test_rope_quarter_turn():
     geometry = _geometry(ht=1, wt=1, stride=TILE_SLOT_STRIDE)
