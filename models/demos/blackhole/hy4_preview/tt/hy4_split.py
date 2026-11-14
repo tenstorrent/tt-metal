@@ -44,7 +44,7 @@ def max_split(rows, grid_x, grid_y):
     return max(1, (grid_x * grid_y) // max(1, rows))
 
 
-def sparse_sdpa_split(q, kv, idx, v_dim, scale, k_chunk, split, ckc, sink, emit_stats=False, owner_s=0):
+def sparse_sdpa_split(q, kv, idx, v_dim, scale, k_chunk, split, ckc, sink, emit_stats=False, owner_s=0, xchg=None, build_only=False, out=None):
     """q: bf16 ROW_MAJOR [1,H=32,S,D]; kv: fp8_e4m3 / bf16 ROW_MAJOR [1,1,R,D]; idx: uint32 ROW_MAJOR [1,1,S,TOPK]; sink: bf16 ROW_MAJOR [1,1,1,H].
     ``ckc``: the device compute kernel config (fidelity / approx / fp32 acc are read from it). -> bf16 ROW_MAJOR [1,H,S,v_dim].
     """
@@ -127,7 +127,8 @@ def sparse_sdpa_split(q, kv, idx, v_dim, scale, k_chunk, split, ckc, sink, emit_
         if emit_stats and not cols
         else None
     )
-    out = ttnn.allocate_tensor_on_device(
+    if out is None:
+      out = ttnn.allocate_tensor_on_device(
         ttnn.Shape(
             ([S // owner_s, owner_s, 32, v_dim + 64] if tile_out else [S // owner_s, 1, 8 * owner_s, v_dim + 32])
             if owner_s
@@ -139,7 +140,7 @@ def sparse_sdpa_split(q, kv, idx, v_dim, scale, k_chunk, split, ckc, sink, emit_
         ttnn.L1_MEMORY_CONFIG
         if os.environ.get("DSV41_SDPAOUT_L1", os.environ.get("DSV41_SDPA_L1")) == "1"
         else ttnn.DRAM_MEMORY_CONFIG,
-    )
+      )
     cores = [(i % grid.x, i // grid.x) for i in range(n_cores)]
     core_set = _core_set(n_cores, grid.x)
 
@@ -371,7 +372,7 @@ def sparse_sdpa_split(q, kv, idx, v_dim, scale, k_chunk, split, ckc, sink, emit_
         lx, ly = cores[t * G]
         ln = md.worker_core_from_logical_core(ttnn.CoreCoord(lx, ly))
         rt_r[cx][cy] = [t, g]
-        rt_w[cx][cy] = [t, g, ln.x, ln.y]
+        rt_w[cx][cy] = [t, g, ln.x, ln.y] + (xchg(t, g) if xchg is not None else [0] * 10)
         rt_c[cx][cy] = [t, g]
     reader = ttnn.KernelDescriptor(
         kernel_source=f"{KDIR}/ssplit_reader.cpp",
@@ -412,11 +413,12 @@ def sparse_sdpa_split(q, kv, idx, v_dim, scale, k_chunk, split, ckc, sink, emit_
         common_runtime_args=[],
         config=cc,
     )
+    sems = [ttnn.SemaphoreDescriptor(id=i, core_ranges=core_set, initial_value=0) for i in range(max(1, 2 * (G - 1)))]
+    if build_only:
+        return dict(kernels=[reader, writer, compute], semaphores=sems, cbs=cbs, out=out, core_set=core_set, cores=cores, G=G, hash_parts=(S, G, k_chunk, topk, int(fp8), int(scaled), int(emit_stats), D, v_dim, str(fid), int(approx), int(fp32)))
     prog = ttnn.ProgramDescriptor(
         kernels=[reader, writer, compute],
-        semaphores=[
-            ttnn.SemaphoreDescriptor(id=i, core_ranges=core_set, initial_value=0) for i in range(max(1, 2 * (G - 1)))
-        ],
+        semaphores=sems,
         cbs=cbs,
     )
     prog.custom_program_hash = (0x5A1 << 40) | (

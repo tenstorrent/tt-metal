@@ -19,6 +19,11 @@ D, V = 576, 512
 
 def open_row():
     """the DSV4 way (full 4x8 mesh with 1D ring fabric) then a 1x8 submesh = mesh row 0. (Opening MeshShape(1,8) directly fails the fabric router handshake on a partial galaxy.)"""
+    if os.environ.get("MESH_DEVICE") == "1x8":  # device slot (TT_VISIBLE_DEVICES = one row): open the 1x8 directly
+        ring = os.environ.get("HY4_FABRIC", "1d") == "ring"
+        ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING if ring else ttnn.FabricConfig.FABRIC_1D)
+        md = ttnn.open_mesh_device(ttnn.MeshShape(1, 8), l1_small_size=16384, trace_region_size=200_000_000)
+        return None, md
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING)
     full = ttnn.open_mesh_device(ttnn.MeshShape(4, 8), l1_small_size=16384, trace_region_size=200_000_000)
     md = full.create_submesh(ttnn.MeshShape(1, 8), ttnn.MeshCoordinate(0, 0))
@@ -27,7 +32,8 @@ def open_row():
 
 def close_row(full, md):
     ttnn.close_mesh_device(md)
-    ttnn.close_mesh_device(full)
+    if full is not None:
+        ttnn.close_mesh_device(full)
 
 
 def to_mesh(md, t, dtype, layout=ttnn.ROW_MAJOR_LAYOUT):
@@ -62,13 +68,21 @@ class Block:
         G=None,
         kc=None,
         num_links=2,
-        topo=ttnn.Topology.Ring,
+        topo=None,
         fid="hifi4",
         v2=True,
         tile=False,
         softmax=False,
         safe=False,
+        fuse=None,
+        xchg=None,
     ):
+        # HY4_FUSE=sparse: fused JIT merge kernel (tt/hy4_merge.py) instead of the 8-op merge3 (tile layout only)
+        self.fuse = ("sparse" in os.environ.get("HY4_FUSE", "")) if fuse is None else fuse
+        self.xchg = ("xchg" in os.environ.get("HY4_FUSE", "")) if xchg is None else xchg  # A2: fabric exchange fused with the merge (replaces to_owner + a2a + merge)
+        self.xm = None
+        self.xchg2 = "xchg2" in os.environ.get("HY4_FUSE", "") if xchg is None else False
+        self.xm2 = None
         self.safe = safe  # merge reference = true max over the sources and the sink (+18 us: ttnn.max over dim 0) instead of the sink
         self.tile, self.softmax = (
             tile,
@@ -77,6 +91,12 @@ class Block:
         self.v2 = v2  # v2: kernel writes the owner layout directly (no slice/permute), tails = [scaled max, sum, 1.0], sink as a 9th source row
         from models.demos.gpt_oss.tt.ccl import CCLManager
 
+        if topo is None:
+            topo = (
+                ttnn.Topology.Linear
+                if os.environ.get("MESH_DEVICE") == "1x8" and os.environ.get("HY4_FABRIC", "1d") != "ring"
+                else ttnn.Topology.Ring
+            )
         self.md, self.S, self.topo, self.nl = md, S, topo, num_links
         self.ccl = CCLManager(md, num_links=num_links, topology=topo)
         self.mod = load_split()
@@ -143,6 +163,10 @@ class Block:
     def merge(self, x, sink):
         """x [1,8src,8S,544] TILE (cols 0..511 o normalised by the source's local sum, col 512 raw max, col 513 local sum); sink [1,1,8S,1]. -> [1,1,8S,512]"""
         R = HL * self.S
+        if self.tile and self.fuse and not self.softmax:
+            import hy4_merge
+
+            return hy4_merge.merge_fused(x, sink, self.S)
         if self.tile:
             return self.merge4(x, sink) if self.softmax else self.merge3(x, sink)
         if self.v2:
@@ -204,9 +228,21 @@ class Block:
         st["qg"] = self.gather_q(q_pad)
         if upto == 1:
             return st["qg"]
+        if self.xchg2 and self.tile and upto >= 99:
+            if self.xm2 is None:
+                import hy4_xmerge
+
+                self.xm2 = hy4_xmerge.XMergeFused(self.md, self.S)
+            return self.xm2(st["qg"], kv, idx8, sink, self.mod, self.kc, self.G, self.ckc, SCALE)
         st["out"] = self.kernel(st["qg"], kv, idx8)
         if upto == 2:
             return st["out"]
+        if self.xchg and self.tile and upto >= 99:
+            if self.xm is None:
+                import hy4_xmerge
+
+                self.xm = hy4_xmerge.XMerge(self.md, self.S, nsplit=int(os.environ.get("HY4_XM_NSPLIT", "2")))
+            return self.xm(st["out"], sink)
         st["own"] = self.to_owner(st["out"])
         if upto == 3:
             return st["own"]
