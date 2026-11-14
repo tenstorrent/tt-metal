@@ -719,6 +719,45 @@ def test_gather_rank1_nd_sharded_input(device):
     assert_equal(torch.gather(torch_input, 0, torch_index.long()), ttnn.to_torch(output))
 
 
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT], ids=["tile", "row_major"])
+@pytest.mark.parametrize(
+    "input_shape, index_shape, dim",
+    [
+        ([32, 64], [32, 32], 0),
+        ([64, 64], [32, 64], -2),
+        ([64, 32], [64, 32], -1),  # control: dim last
+        ([4, 64, 64], [4, 32, 64], 1),
+        ([4, 64, 64], [4, 32, 64], -2),
+        ([4, 64, 64], [2, 64, 64], 0),
+        ([64, 32, 32], [64, 32, 32], -1),  # control: dim last
+        ([2, 4, 64, 64], [2, 4, 32, 64], -2),
+        ([2, 4, 64, 64], [2, 2, 64, 64], 1),
+        ([4, 2, 64, 64], [2, 2, 64, 64], 0),
+        ([2, 4, 64, 64], [2, 4, 64, 32], -1),  # control: dim last
+    ],
+)
+def test_gather_out_writes_into_caller_tensor(input_shape, index_shape, dim, layout, device):
+    torch.manual_seed(0)
+
+    input = torch.randn(input_shape, dtype=torch.bfloat16)
+    index = torch.randint(0, input_shape[dim], index_shape, dtype=torch.int64)
+    expected = torch.gather(input, dim, index)
+
+    ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=layout, device=device)
+    ttnn_index = ttnn.from_torch(index, ttnn.uint32, layout=layout, device=device)
+    # Sentinel that no gathered value can equal, so an unwritten `out` cannot pass.
+    sentinel = torch.full(index_shape, 12345.0, dtype=torch.bfloat16)
+    ttnn_output = ttnn.from_torch(sentinel, ttnn.bfloat16, layout=layout, device=device)
+    out_address = ttnn_output.buffer_address()
+
+    returned = ttnn.gather(ttnn_input, dim, index=ttnn_index, out=ttnn_output)
+
+    assert returned.shape == index.shape
+    assert returned.buffer_address() == out_address
+    assert_equal(expected, ttnn.to_torch(returned))
+    assert_equal(expected, ttnn.to_torch(ttnn_output))
+
+
 @pytest.mark.parametrize("buffer_type", docstring_interleaved_buffer_type_params(ttnn.gather))
 @pytest.mark.parametrize(
     "dtype, layout", docstring_dtype_layout_params(ttnn.gather, "Supported dtypes and layouts for input tensor values")
