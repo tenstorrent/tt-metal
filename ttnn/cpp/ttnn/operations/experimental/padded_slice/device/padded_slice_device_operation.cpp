@@ -57,6 +57,33 @@ void PaddedSliceDeviceOperation::validate_on_program_cache_miss(
             args.padded_slice_start[i],
             args.padded_slice_end[i]);
     }
+    if (args.prologue_affine) {
+        const uint32_t channels = input_tensor_a.padded_shape()[-1];
+        TT_FATAL(
+            input_tensor_a.layout() == Layout::TILE && input_tensor_a.dtype() == DataType::BFLOAT16,
+            "padded_slice prologue needs a BFLOAT16 TILE input (the affine runs in the untilize pass), got {} {}",
+            input_tensor_a.dtype(),
+            input_tensor_a.layout());
+        TT_FATAL(
+            tensor_args.prologue_scale.has_value() && tensor_args.prologue_shift.has_value(),
+            "padded_slice prologue needs both prologue_scale and prologue_shift");
+        TT_FATAL(
+            args.output_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED &&
+                args.output_mem_config.shard_spec()->shape[1] == channels && args.padded_slice_start[-1] == 0 &&
+                args.padded_slice_end[-1] == channels,
+            "padded_slice prologue needs a height-sharded output whose shard holds all {} input channels: every core "
+            "reads the same scale and shift tiles",
+            channels);
+        for (const Tensor& t : {tensor_args.prologue_scale.value(), tensor_args.prologue_shift.value()}) {
+            TT_FATAL(
+                t.layout() == Layout::TILE && t.dtype() == DataType::BFLOAT16 && t.padded_shape()[-1] == channels &&
+                    t.physical_volume() == channels * tt::constants::TILE_HEIGHT,
+                "padded_slice prologue_scale / prologue_shift must be [1, {}] BFLOAT16 TILE tensors, got {} {}",
+                channels,
+                t.padded_shape(),
+                t.dtype());
+        }
+    }
     if (tensor_args.preallocated_output.has_value()) {
         const auto output_shape_required = compute_output_specs(args, tensor_args).padded_shape();
         const auto& out_tensor = tensor_args.preallocated_output.value();
@@ -116,15 +143,22 @@ ttnn::experimental::prim::PaddedSliceDeviceOperation::tensor_return_value_t padd
     const ttnn::Shape& padded_slice_end,
     const ttnn::Shape& step,
     const MemoryConfig& output_mem_config,
-    const std::optional<Tensor>& preallocated_output) {
+    const std::optional<Tensor>& preallocated_output,
+    const std::optional<Tensor>& prologue_scale,
+    const std::optional<Tensor>& prologue_shift) {
     using OperationType = ttnn::experimental::prim::PaddedSliceDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
         .padded_slice_start = padded_slice_start,
         .padded_slice_end = padded_slice_end,
         .step = step,
-        .output_mem_config = output_mem_config};
-    auto tensor_args = OperationType::tensor_args_t{.input = input, .preallocated_output = preallocated_output};
+        .output_mem_config = output_mem_config,
+        .prologue_affine = prologue_scale.has_value() || prologue_shift.has_value()};
+    auto tensor_args = OperationType::tensor_args_t{
+        .input = input,
+        .preallocated_output = preallocated_output,
+        .prologue_scale = prologue_scale,
+        .prologue_shift = prologue_shift};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
