@@ -90,6 +90,12 @@ ALWI void bitwise_xor_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst)
 /**
  * Please refer to documentation for any_init.
  */
+#ifdef ARCH_QUASAR
+// One init serves and/or/xor: the Quasar kernel's store-side dest increment depends on ADDR_MOD_6
+// (dest += SFP_ROWS), programmed by binary_bitwise_init.
+ALWI void binary_bitwise_tile_init() { MATH((SFPU_BINARY_INIT_FN_NO_ARGS(bitwise_and, sfpu::binary_bitwise_init))); }
+#else
 ALWI void binary_bitwise_tile_init() { MATH((SFPU_BINARY_INIT(unused))); }
+#endif
 
 }  // namespace ckernel
