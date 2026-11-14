@@ -2029,7 +2029,7 @@ TEST_F(MeshSocketTest2DFabric, SocketsOnSubDevice) {
     md1->clear_loaded_sub_device_manager();
 }
 
-TEST_F(MeshSocketTest, AssertOnDuplicateRecvCores) {
+TEST_F(MeshSocketTest1DFabric, AssertOnDuplicateRecvCores) {
     auto [coord0, coord1] = get_random_mesh_coordinates(mesh_device_->shape());
     auto md0 = mesh_device_->create_submesh(MeshShape(1, 1), coord0);
     auto md1 = mesh_device_->create_submesh(MeshShape(1, 1), coord1);

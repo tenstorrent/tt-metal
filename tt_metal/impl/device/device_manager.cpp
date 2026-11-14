@@ -399,33 +399,41 @@ void DeviceManager::add_devices_to_pool(const std::vector<ChipId>& device_ids) {
         }
     }
 
+    // Only can launch Fabric if all devices in the local fabric meshes are active.
+    // Checked before activating any device so that a rejected open leaves no devices open.
+    tt_fabric::FabricConfig fabric_config = ctx_.get_fabric_config();
+    if (tt_fabric::is_tt_fabric_config(fabric_config) and
+        tt_fabric::has_flag(ctx_.get_fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC) and
+        !env_impl_.get_cluster().is_mock_or_emulated()) {
+        const auto& control_plane = env_impl_.get_control_plane();
+        for (const auto& mesh_id : control_plane.get_local_mesh_id_bindings()) {
+            for (const auto& mesh_coord : control_plane.get_coord_range(mesh_id, tt_fabric::MeshScope::LOCAL)) {
+                const auto fabric_chip_id = control_plane.get_mesh_graph().coordinate_to_chip(mesh_id, mesh_coord);
+                const ChipId device_id = control_plane.get_physical_chip_id_from_fabric_node_id(
+                    tt_fabric::FabricNodeId(mesh_id, fabric_chip_id));
+                // Fabric currently requires all devices to be active
+                TT_FATAL(
+                    devices_to_activate.contains(device_id) || this->is_device_active(device_id),
+                    "Fabric is being used but Device {} is not active. "
+                    "This may indicate that the fabric was launched on a subset of the devices available in the "
+                    "system, which is currently not supported. "
+                    "To launch on a subset of devices, first create a MeshDevice of the full system size, then create "
+                    "submeshes accordingly.\n"
+                    "For example, on a 6u system (8x4), if you wanted to run a 2x4 workload you could do:\n"
+                    "ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)\n"
+                    "mesh_device = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(4, 8))\n"
+                    "submeshes = mesh_device.create_submeshes(ttnn.MeshShape(2,8))",
+                    device_id);
+            }
+        }
+    }
+
     std::vector<Device*> activated_devices;
     activated_devices.reserve(devices_to_activate.size());
     for (const auto& device_id : devices_to_activate) {
         if (not this->is_device_active(device_id)) {
             this->activate_device(device_id);
             activated_devices.push_back(this->get_device(device_id));
-        }
-    }
-
-    // Only can launch Fabric if all devices are active
-    tt_fabric::FabricConfig fabric_config = ctx_.get_fabric_config();
-    if (tt_fabric::is_tt_fabric_config(fabric_config) and
-        (env_impl_.get_cluster().mmio_chip_ids().size() != env_impl_.get_cluster().all_chip_ids().size())) {
-        for (int i = 0; i < env_impl_.get_cluster().number_of_devices(); i++) {
-            // Fabric currently requires all devices to be active
-            TT_FATAL(
-                this->is_device_active(i),
-                "Fabric is being used but Device {} is not active. "
-                "This may indicate that the fabric was launched on a subset of the devices available in the system, "
-                "which is currently not supported. "
-                "To launch on a subset of devices, first create a MeshDevice of the full system size, then create "
-                "submeshes accordingly.\n"
-                "For example, on a 6u system (8x4), if you wanted to run a 2x4 workload you could do:\n"
-                "ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)\n"
-                "mesh_device = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(4, 8))\n"
-                "submeshes = mesh_device.create_submeshes(ttnn.MeshShape(2,8))",
-                i);
         }
     }
 
