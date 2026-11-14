@@ -97,10 +97,42 @@ def signature(**facts) -> str:
     return h.hexdigest()[:16]
 
 
-def prefix_hashes(token_ids: Sequence[int], sig: str, boundary: int = BOUNDARY) -> list[str]:
-    """Chained block hashes: hashes[j] = key of the first (j + 1) * boundary tokens (only complete blocks)."""
-    out, prev = [], sig.encode()
+FAST_HASH_ENV = "GLM53_PREFIX_FAST_HASH"
+
+
+def fast_hash_enabled() -> bool:
+    """GLM53_PREFIX_FAST_HASH=1 (default off): the chained block hashes read the ids' int32 bytes instead of their
+    decimal text. F28 (2026-11-14, l2-34 CPU): the key of a 1,039,872-token prefix costs 131 ms of Python text joins
+    (+ 22 ms tolist) -> 8 ms from a tensor (36 ms from a list); a 1 M warm turn computes one in the scheduler's confirm
+    and one in the prefill's attach plan, both on the engine thread every other user waits on. The keys are a key space
+    of their own (salted seed): a process uses one scheme throughout (PrefixStore.fast)."""
+    return os.environ.get(FAST_HASH_ENV, "0") == "1"
+
+
+def _id_bytes(token_ids) -> bytes:
+    """token ids (a list / tuple, numpy array or CPU torch tensor) -> their little-endian int32 bytes"""
+    import numpy as np
+
+    a = np.asarray(token_ids)
+    if a.dtype.kind not in "iu":
+        a = np.asarray(token_ids, dtype=np.int64)
+    if a.size and (int(a.min()) < 0 or int(a.max()) >= 2**31):
+        raise ValueError(f"token ids outside [0, 2^31): [{int(a.min())}, {int(a.max())}]")
+    return np.ascontiguousarray(a.reshape(-1), dtype="<i4").tobytes()
+
+
+def prefix_hashes(token_ids: Sequence[int], sig: str, boundary: int = BOUNDARY, fast: bool = False) -> list[str]:
+    """Chained block hashes: hashes[j] = key of the first (j + 1) * boundary tokens (only complete blocks). ``fast``
+    (GLM53_PREFIX_FAST_HASH): each block's int32 bytes, chained from the salted seed sig + "|i32"."""
     n = len(token_ids) // boundary
+    if fast:
+        buf, step = _id_bytes(token_ids[: n * boundary]), 4 * boundary
+        out, prev = [], (sig + "|i32").encode()
+        for j in range(n):
+            prev = hashlib.sha256(prev + buf[j * step : (j + 1) * step]).digest()
+            out.append(prev.hex())
+        return out
+    out, prev = [], sig.encode()
     for j in range(n):
         blk = token_ids[j * boundary : (j + 1) * boundary]
         h = hashlib.sha256(prev)
@@ -110,10 +142,10 @@ def prefix_hashes(token_ids: Sequence[int], sig: str, boundary: int = BOUNDARY) 
     return out
 
 
-def prefix_key(token_ids: Sequence[int], n_tokens: int, sig: str, boundary: int = BOUNDARY) -> str:
+def prefix_key(token_ids: Sequence[int], n_tokens: int, sig: str, boundary: int = BOUNDARY, fast: bool = False) -> str:
     if n_tokens <= 0 or n_tokens % boundary or n_tokens > len(token_ids):
         raise ValueError(f"prefix key needs a positive multiple of {boundary} tokens within the prompt ({n_tokens})")
-    return prefix_hashes(token_ids[:n_tokens], sig, boundary)[-1]
+    return prefix_hashes(token_ids[:n_tokens], sig, boundary, fast)[-1]
 
 
 # ------------------------------------------------------------------------------------------------------ store
@@ -141,8 +173,9 @@ class PrefixStore:
     exists where and decides evictions. All methods are host-side bookkeeping only."""
 
     def __init__(self, *, max_batch: int, device_entries: int, host_bytes: int = 0, sig: str = "", entry_bytes: int = 0,
-                 boundary: int = BOUNDARY):  # fmt: skip
+                 boundary: int = BOUNDARY, fast: Optional[bool] = None):  # fmt: skip
         self.max_batch, self.boundary, self.sig = int(max_batch), int(boundary), sig
+        self.fast = fast_hash_enabled() if fast is None else bool(fast)  # the key scheme (GLM53_PREFIX_FAST_HASH)
         self.device_entries = int(device_entries)
         self.host_bytes = int(host_bytes)
         self.entry_bytes = int(entry_bytes)
@@ -163,10 +196,10 @@ class PrefixStore:
 
     # ---- keys
     def key(self, token_ids: Sequence[int], n_tokens: int) -> str:
-        return prefix_key(token_ids, n_tokens, self.sig, self.boundary)
+        return prefix_key(token_ids, n_tokens, self.sig, self.boundary, self.fast)
 
     def hashes(self, token_ids: Sequence[int]) -> list[str]:
-        return prefix_hashes(token_ids, self.sig, self.boundary)
+        return prefix_hashes(token_ids, self.sig, self.boundary, self.fast)
 
     def boundaries(self, n_tokens: int) -> list[int]:
         """the snapshot positions of an n-token prompt: every boundary below it (a prompt that is itself a multiple of

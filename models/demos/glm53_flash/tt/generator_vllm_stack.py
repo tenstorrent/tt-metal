@@ -235,23 +235,72 @@ def fused_sample_block(recs: list, r, B: int, W: int, pad: int) -> tuple:
 # ordinary decode) and prefill_forward of the adapter is timed, and the gap between the adapter's consecutive calls
 # (= vLLM's scheduler + the plugin's accept walk / output processing / input build, i.e. everything outside the model)
 # is charged to the call that follows it; the fused step is split into the backend's submit (replay enqueue + record
-# copy) and collect (device wait + record parse). Every 256 decode calls: "GLM53 stack spec timing: ..." per-step means.
-SPEC_TIMING = os.environ.get("GLM53_STACK_SPEC_TIMING", "0") == "1"
+# copy) and collect (device wait + record parse). Every 256 decode calls: "GLM53 stack spec timing: ..." per-step means,
+# then "GLM53 stack prefill phases: ..." -- each prefill call's pieces (F28): the scheduler's hit confirmation (in the
+# outside), the attach plan (prefix keys + entry pick), the host-tier restore, the page-table rows, the MTP-fill arm,
+# the TP chunk = [attach copy (the snapshot's DSA pools into the slot), inputs, MTP-fill inputs, launch, snapshot copy,
+# device wait + reads], the snapshot commit, the MTP seed; every prefill call that attaches a snapshot (a warm turn)
+# also logs its own "GLM53 stack warm prefill: ..." line. GLM53_STACK_SPEC_TIMING=2: the same, and the attach copy is
+# synchronized (its device time, not only its enqueue; one extra device sync per attached row).
+SPEC_TIMING = os.environ.get("GLM53_STACK_SPEC_TIMING", "0") in ("1", "2")
+SPEC_TIMING_SYNC = os.environ.get("GLM53_STACK_SPEC_TIMING", "0") == "2"
 
 
 class _SpecTiming:
     """the per-window accumulators of GLM53_STACK_SPEC_TIMING (one adapter; the engine thread drives every call)"""
 
     KEYS = ("outside", "adapter", "submit", "collect", "prefill", "seed")
+    # the prefill call's pieces (seconds while an outermost prefill_forward runs; "confirm" = the scheduler's, outside)
+    PHASES = (
+        "confirm",
+        "plan",
+        "restore",
+        "page_rows",
+        "mtp_arm",
+        "chunk",
+        "copy_in",
+        "inputs",
+        "mtp_write",
+        "launch",
+        "copy_out",
+        "commit",
+        "seed",
+    )
 
     def __init__(self):
         self.last_exit = None
+        self.depth, self.stage, self.call, self.confirm_since = 0, "pre", None, 0.0
         self.reset()
 
     def reset(self):
         self.sum = {k: 0.0 for k in self.KEYS}
         self.n = {"decode": 0, "fused": 0, "fallback": 0, "prefill": 0, "seed": 0, "outside_pf": 0, "steps": 0}
         self.pf_outside = 0.0
+        self.ph = {k: 0.0 for k in self.PHASES}
+        self.pf_rows = self.pf_attaches = 0
+
+    def add(self, label: str, dt: float) -> None:
+        """a prefill piece's seconds -> the window's sums and the running call's record"""
+        self.ph[label] += dt
+        if self.call is not None:
+            self.call[label] = self.call.get(label, 0.0) + dt
+
+    @staticmethod
+    def split(ph: dict, total: float, n: int) -> str:
+        """one prefill call's (or a window's per-call mean) pieces, ms"""
+        n = max(1, n)
+        ms = lambda k: 1e3 * ph.get(k, 0.0) / n  # noqa: E731
+        inner = ("copy_in", "inputs", "mtp_write", "launch", "copy_out")
+        dev = ph.get("chunk", 0.0) - sum(ph.get(k, 0.0) for k in inner)
+        other = total - sum(ph.get(k, 0.0) for k in ("plan", "page_rows", "mtp_arm", "chunk", "commit", "seed"))
+        return (
+            f"attach plan {1e3 * (ph.get('plan', 0.0) - ph.get('restore', 0.0)) / n:.1f} (host-tier restore "
+            f"{ms('restore'):.1f}) + page rows {ms('page_rows'):.1f} + MTP arm {ms('mtp_arm'):.1f} + chunk "
+            f"{ms('chunk'):.1f} [attach copy {ms('copy_in'):.1f} ({'device, synced' if SPEC_TIMING_SYNC else 'enqueue'}), "
+            f"inputs {ms('inputs'):.1f}, MTP fill inputs {ms('mtp_write'):.1f}, launch {ms('launch'):.1f}, snapshot copy "
+            f"{ms('copy_out'):.1f}, device wait + reads {1e3 * dev / n:.1f}] + commit {ms('commit'):.1f} + seed "
+            f"{ms('seed'):.1f} + other {1e3 * other / n:.1f} ms"
+        )
 
     def gap(self, now, prefill=False):
         if self.last_exit is not None:
@@ -275,6 +324,14 @@ class _SpecTiming:
             f"ms outside before each); seeds {self.n['seed']} mean {ms('seed', max(1, self.n['seed'])):.1f} ms; "
             f"spec {stats}"
         )  # fmt: skip
+        if self.n["prefill"]:
+            n = self.n["prefill"]
+            logger.info(
+                f"GLM53 stack prefill phases ({n} prefill calls, {self.pf_rows} rows, {self.pf_attaches} snapshot "
+                f"attaches; per call): total {1e3 * self.sum['prefill'] / n:.1f} ms = "
+                f"{self.split(self.ph, self.sum['prefill'], n)}; scheduler hit confirmation "
+                f"{1e3 * self.ph['confirm'] / n:.1f} ms (inside the outside)"
+            )
         self.reset()
 
 
@@ -323,7 +380,82 @@ def _install_spec_timing(cls):
             g.spec_step_chain = chained
         g._spec_timing_wrapped = True
 
+    def wrap_prefill(self, t):
+        """the prefill path's pieces, per instance and once (the objects exist at the first prefill call): their host
+        seconds accumulate while an outermost prefill_forward runs (t.depth > 0; the decode paths share some of them)"""
+        if getattr(self, "_pf_timing_wrapped", False):
+            return
+        self._pf_timing_wrapped = True
+        be = getattr(getattr(self, "gen", None), "backend", None)
+        tpp = getattr(be, "tpp", None)
+
+        def wrap(obj, name, label, stage=None):
+            f = getattr(obj, name, None) if obj is not None else None
+            if not callable(f):
+                return
+
+            def w(*a, **k):
+                if t.depth <= 0:
+                    return f(*a, **k)
+                if stage is not None:
+                    t.stage = stage
+                t0 = pc()
+                try:
+                    return f(*a, **k)
+                finally:
+                    if label is not None:
+                        t.add(label, pc() - t0)
+
+            setattr(obj, name, w)
+
+        wrap(getattr(self, "prefix", None), "plan", "plan")
+        wrap(getattr(self, "prefix", None), "_restore", "restore")
+        wrap(getattr(self, "prefix", None), "commit", "commit")
+        wrap(getattr(self, "gen", None), "_write_page_rows", "page_rows")
+        wrap(be, "arm_mtp_prefill", "mtp_arm")
+        wrap(be, "_prefill_chunk_tp", "chunk", stage="pre")
+        wrap(tpp, "prefill", None, stage="pre")
+        wrap(tpp, "write_inputs", "inputs")
+        wrap(tpp, "_mtp_write", "mtp_write")
+        wrap(tpp, "replay", "launch", stage="post")
+        so = getattr(be, "slot_ops", None)
+        run = getattr(so, "run", None)
+        if callable(run):  # the TP chunk's DSA pool copies: before the replay = the attach, after = the snapshot
+
+            def run_t(*a, **k):
+                if t.depth <= 0:
+                    return run(*a, **k)
+                t0 = pc()
+                try:
+                    out = run(*a, **k)
+                    if SPEC_TIMING_SYNC and t.stage == "pre" and tpp is not None:
+                        import ttnn
+
+                        ttnn.synchronize_device(tpp.mesh)
+                    return out
+                finally:
+                    t.add("copy_in" if t.stage == "pre" else "copy_out", pc() - t0)
+
+            so.run = run_t
+
+    def _rows_of(a, k) -> tuple:
+        """(rows, (min, max) start, (min, max) end) of a prefill call's arguments (best effort)"""
+        try:
+            tok = a[0] if a else k.get("tokens")
+            rows = int(tok.shape[0]) if tok.dim() > 1 else 1
+        except Exception:  # noqa: BLE001
+            return 0, None, None
+
+        def span(v):
+            if v is None:
+                return None
+            v = [int(x) for x in torch.as_tensor(v).reshape(-1).tolist()]
+            return (min(v), max(v)) if v else None
+
+        return rows, span(k.get("start_pos")), span(k.get("prompt_lens"))
+
     dec, pf, seed = cls.decode_forward, cls.prefill_forward, cls._spec_seed
+    conf = cls.confirm_prefix_cache_hit
 
     def decode_forward(self, *a, **k):
         t = timer(self)
@@ -341,21 +473,45 @@ def _install_spec_timing(cls):
             t.n["decode"] += 1
             t.n["fused" if fused else "fallback"] += 1
             t.sum["adapter"] += (t1 - t0) - (t.sum["submit"] - s0) - (t.sum["collect"] - c0)
-            t.last_exit = t1
+            t.last_exit, t.confirm_since = t1, 0.0
             if t.n["decode"] >= 256:
                 t.report(dict(self.spec_stats))
 
     def prefill_forward(self, *a, **k):
         t = timer(self)
         t0 = pc()
+        if t.depth > 0:  # the exact split's inner call (GLM53_STACK_PREFIX_EXACT): part of its outer call
+            t.depth += 1
+            try:
+                return pf(self, *a, **k)
+            finally:
+                t.depth -= 1
+        gap = 0.0 if t.last_exit is None else t0 - t.last_exit
+        conf_before = t.confirm_since
         t.gap(t0, prefill=True)
+        wrap_prefill(self, t)
+        pfx = getattr(self, "prefix", None)
+        att0 = int(pfx.stats.get("attaches", 0)) if pfx is not None else 0
+        t.call, t.stage, t.depth = {}, "pre", 1
         try:
             return pf(self, *a, **k)
         finally:
+            t.depth = 0
             t1 = pc()
             t.n["prefill"] += 1
             t.sum["prefill"] += t1 - t0
-            t.last_exit = t1
+            t.last_exit, t.confirm_since = t1, 0.0
+            rows, st, en = _rows_of(a, k)
+            att = int(pfx.stats.get("attaches", 0)) - att0 if pfx is not None else 0
+            t.pf_rows += rows
+            t.pf_attaches += att
+            if att > 0:  # a warm turn (a snapshot attach): its own line
+                logger.info(
+                    f"GLM53 stack warm prefill (rows {rows}, snapshot attaches {att}, starts {st}, ends {en}): total "
+                    f"{1e3 * (t1 - t0):.1f} ms = {t.split(t.call, t1 - t0, 1)}; before it: outside "
+                    f"{1e3 * gap:.1f} ms (scheduler hit confirmation {1e3 * conf_before:.1f} ms)"
+                )
+            t.call = None
 
     def _spec_seed(self, *a, **k):
         t = timer(self)
@@ -363,10 +519,24 @@ def _install_spec_timing(cls):
         try:
             return seed(self, *a, **k)
         finally:
+            dt = pc() - t0
             t.n["seed"] += 1
-            t.sum["seed"] += pc() - t0
+            t.sum["seed"] += dt
+            if t.depth > 0:
+                t.add("seed", dt)
+
+    def confirm_prefix_cache_hit(self, *a, **k):
+        t = timer(self)
+        t0 = pc()
+        try:
+            return conf(self, *a, **k)
+        finally:
+            dt = pc() - t0
+            t.ph["confirm"] += dt
+            t.confirm_since += dt
 
     cls.decode_forward, cls.prefill_forward, cls._spec_seed = decode_forward, prefill_forward, _spec_seed
+    cls.confirm_prefix_cache_hit = confirm_prefix_cache_hit
     return cls
 
 
@@ -732,8 +902,12 @@ class StackPrefixCache:
         """the cached tokens the device serves for vLLM's proposed hit of ``num_computed_tokens`` (0: none)"""
         if int(num_computed_tokens) <= 0 or mm_items:
             return 0
-        ids = [int(t) for t in prompt_token_ids]
-        fp = hash(tuple(ids))
+        if self.store.fast:  # GLM53_PREFIX_FAST_HASH: one int64 tensor, fingerprinted by its bytes (the 1 M prompt's
+            ids = torch.as_tensor(prompt_token_ids, dtype=torch.int64).reshape(-1)  # list -> ints -> tuple: ~50 ms)
+            fp = hash(ids.numpy().tobytes())
+        else:
+            ids = [int(t) for t in prompt_token_ids]
+            fp = hash(tuple(ids))
         obm = self.gen.dsa_shard_map(self.kv)
         with self.lock:
             old = self.pins.pop(fp, None)
@@ -753,6 +927,11 @@ class StackPrefixCache:
                 self.stats["not_resident"] += 1
                 cap = pos - 1  # a shorter registered prefix may still be resident
         return 0
+
+    def _ids(self, row: torch.Tensor):
+        """a token row for a store key: the tensor itself under GLM53_PREFIX_FAST_HASH (its int32 bytes are hashed),
+        else its list (the decimal-text scheme)"""
+        return row if self.store.fast else row.tolist()
 
     # ---- one prefill call (worker thread)
     def plan(self, tokens: torch.Tensor, rows: torch.Tensor, gslots: list, starts: list, ends: list, skip=()):
@@ -778,7 +957,7 @@ class StackPrefixCache:
                         f"GLM53 stack prefix: generator slot {g}'s hit at {s0}: an image request, prefilled from 0"
                     )
                     continue
-                key = self.store.key(tokens[i, :s0].tolist(), s0) if s0 % self.store.boundary == 0 else None
+                key = self.store.key(self._ids(tokens[i, :s0]), s0) if s0 % self.store.boundary == 0 else None
                 e = self.store.entries.get(key) if key is not None else None
                 blocks = rows[i, : -(-s0 // BLOCK_SIZE)].tolist()
                 host = e is not None and e.tier == "host"
@@ -815,7 +994,7 @@ class StackPrefixCache:
                 if i in skip:  # an image request's state depends on pixels its token-id key does not carry
                     self.stats["mm_excluded"] += 1
                     continue
-                key = self.store.key(tokens[i, :end].tolist(), end)
+                key = self.store.key(self._ids(tokens[i, :end]), end)
                 if key in self.store.entries or key in planned:
                     self.stats["snapshots_skipped"] += 1
                     continue
