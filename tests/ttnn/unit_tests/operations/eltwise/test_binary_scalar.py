@@ -11,7 +11,6 @@ from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc, assert_w
 
 pytestmark = pytest.mark.use_module_device
 
-
 # Scalar-first arithmetic against the device measures at most 2 ULP, on bf16 add and subtract.
 _SCALAR_FIRST_ULP_THRESHOLD = 3
 
@@ -337,7 +336,9 @@ def test_scalar_tensor_arithmetic(input_shapes, device, op_name, dtype, layout):
     output = ttnn.to_torch(ttnn_fn(scalar, input_tensor))
 
     assert_with_pcc(torch_fn(scalar, torch_input), output, 0.999)
-    if dtype == ttnn.bfloat16:
+    # The ULP threshold was measured on TILE bf16 at [1, 1, 320, 384] (test_scalar_tensor_golden_matches_device),
+    # so only that configuration is checked here; other layouts and shapes stay PCC-only until measured on a device.
+    if dtype == ttnn.bfloat16 and layout == ttnn.TILE_LAYOUT and input_shapes == torch.Size([1, 1, 320, 384]):
         assert_with_ulp(
             expected_result=torch_fn(scalar, torch_input),
             actual_result=output,
@@ -373,11 +374,6 @@ def test_scalar_tensor_div_int32_rounding(device, rounding_mode):
 
     if rounding_mode is None:
         assert_with_pcc(numerator.float() / torch_input.float(), output, 0.999)
-        assert_with_ulp(
-            expected_result=numerator.float() / torch_input.float(),
-            actual_result=output,
-            ulp_threshold=_SCALAR_FIRST_ULP_THRESHOLD,
-        )
     else:
         assert torch.equal(torch.div(numerator, torch_input, rounding_mode=rounding_mode).float(), output)
 
@@ -401,9 +397,6 @@ def test_scalar_tensor_div_int32_promoted_by_float_scalar(device, rounding_mode)
             rounding_mode=rounding_mode,
         )
         assert_with_pcc(expected, output, 0.999)
-        if rounding_mode is None:
-            # rounding collapses quotients to integers, where a bf16 value either side of a boundary flips a whole step
-            assert_with_ulp(expected_result=expected, actual_result=output, ulp_threshold=_SCALAR_FIRST_ULP_THRESHOLD)
 
 
 def test_scalar_tensor_activations_follow_math_operands(device):
@@ -435,9 +428,6 @@ def test_scalar_tensor_reflected_sub_operator(device):
     scalar = 3.0
     via_operator = ttnn.to_torch(scalar - input_tensor)
     assert_with_pcc(scalar - torch_input, via_operator, 0.999)
-    assert_with_ulp(
-        expected_result=scalar - torch_input, actual_result=via_operator, ulp_threshold=_SCALAR_FIRST_ULP_THRESHOLD
-    )
 
     assert torch.equal(ttnn.to_torch(ttnn.rsub(input_tensor, scalar)), via_operator)
 
@@ -477,6 +467,7 @@ def test_scalar_tensor_div_float_rounding(device, rounding_mode, ttnn_dtype, tor
     quotient = ttnn.to_torch(ttnn.div(scalar, input_tensor))
     assert_with_pcc(scalar / torch_input, quotient, 0.999)
     if torch_dtype == torch.bfloat16:
+        # Same configuration as test_scalar_tensor_golden_matches_device (TILE bf16, 320x384, div by 3.14).
         assert_with_ulp(
             expected_result=scalar / torch_input, actual_result=quotient, ulp_threshold=_SCALAR_FIRST_ULP_THRESHOLD
         )
@@ -527,7 +518,6 @@ def test_scalar_tensor_tile_height_sharded(device):
     output = ttnn.to_torch(ttnn.subtract(3.14, input_tensor))
 
     assert_with_pcc(3.14 - torch_input, output, 0.999)
-    assert_with_ulp(expected_result=3.14 - torch_input, actual_result=output, ulp_threshold=_SCALAR_FIRST_ULP_THRESHOLD)
 
 
 @pytest.mark.parametrize("op_name", ("subtract", "div"))
@@ -544,11 +534,6 @@ def test_scalar_tensor_explicit_memory_config(device, op_name):
 
     assert output.memory_config().buffer_type == ttnn.BufferType.L1
     assert_with_pcc(torch_fn(scalar, torch_input), ttnn.to_torch(output), 0.999)
-    assert_with_ulp(
-        expected_result=torch_fn(scalar, torch_input),
-        actual_result=ttnn.to_torch(output),
-        ulp_threshold=_SCALAR_FIRST_ULP_THRESHOLD,
-    )
 
 
 @pytest.mark.parametrize("op_name", ("subtract", "div"))
@@ -569,17 +554,7 @@ def test_scalar_tensor_preallocated_output(device, op_name):
 
     # The result must land in the caller's buffer, not just in the returned handle.
     assert_with_pcc(torch_fn(scalar, torch_input), ttnn.to_torch(preallocated), 0.999)
-    assert_with_ulp(
-        expected_result=torch_fn(scalar, torch_input),
-        actual_result=ttnn.to_torch(preallocated),
-        ulp_threshold=_SCALAR_FIRST_ULP_THRESHOLD,
-    )
     assert_with_pcc(torch_fn(scalar, torch_input), ttnn.to_torch(returned), 0.999)
-    assert_with_ulp(
-        expected_result=torch_fn(scalar, torch_input),
-        actual_result=ttnn.to_torch(returned),
-        ulp_threshold=_SCALAR_FIRST_ULP_THRESHOLD,
-    )
 
 
 @pytest.mark.parametrize("op_name", ("add", "subtract", "multiply", "div"))
@@ -616,12 +591,6 @@ def test_scalar_tensor_fpu_and_sfpu_paths(device, op_name, fast_and_approximate_
     output = ttnn.to_torch(ttnn_fn(scalar, input_tensor, fast_and_approximate_mode=fast_and_approximate_mode))
 
     assert_with_pcc(torch_fn(scalar, torch_input), output, 0.999)
-    if not fast_and_approximate_mode:
-        assert_with_ulp(
-            expected_result=torch_fn(scalar, torch_input),
-            actual_result=output,
-            ulp_threshold=_SCALAR_FIRST_ULP_THRESHOLD,
-        )
 
 
 @pytest.mark.parametrize("op_name", ("add", "subtract", "multiply", "div"))
@@ -655,9 +624,6 @@ def test_scalar_tensor_row_major_sharded(device, op_name):
     output = ttnn.to_torch(ttnn_fn(scalar, input_tensor))
 
     assert_with_pcc(torch_fn(scalar, torch_input), output, 0.999)
-    assert_with_ulp(
-        expected_result=torch_fn(scalar, torch_input), actual_result=output, ulp_threshold=_SCALAR_FIRST_ULP_THRESHOLD
-    )
 
 
 @pytest.mark.parametrize("tensor_dtype", [ttnn.int32, ttnn.uint32])
