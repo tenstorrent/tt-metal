@@ -57,7 +57,7 @@ def loop(monkeypatch):
         words.append(sentinel_words(SHUTDOWN_WORD, F))
         it = iter(words)
 
-        def socket_next(service, sockets, n_mtp=0):
+        def socket_next(service, sockets, n_mtp=0, stage_metadata=None):
             return _Tensor(), None, runner._meta_from_words(next(it))
 
         monkeypatch.setattr(runner, "_socket_next", socket_next)
@@ -138,18 +138,21 @@ def test_a_refused_forward_shuts_down_the_next_rank(loop, monkeypatch, expect_er
     assert runtime.calls == []
 
 
-def test_index_endpoints_use_the_d2d_metadata(monkeypatch):
+def test_indexer_top_k_rides_the_activation_service_with_the_d2d_metadata(monkeypatch):
     made = []
-    services = SimpleNamespace(
-        create_receiver=lambda **kw: made.append(kw["metadata_size_bytes"]),
-        create_sender=lambda **kw: made.append(kw["metadata_size_bytes"]),
-    )
+
+    def record(**kw):
+        made.append((kw["metadata_size_bytes"], [spec for spec, _ in kw["extra_tensors"]]))
+
+    services = SimpleNamespace(create_receiver=record, create_sender=record)
     monkeypatch.setattr(runner.ttnn, "D2DStreamService", services)
     monkeypatch.setattr(runner.ttnn, "create_mesh_mapper", lambda *a: None)
-    monkeypatch.setattr(runner, "indexer_indices_global_spec", lambda *a: None)
+    monkeypatch.setattr(runner, "d2d_worker_cores", lambda dev: None)
+    monkeypatch.setattr(runner, "activation_global_spec", lambda *a: None)
     monkeypatch.setattr(runner, "D2D_METADATA_SIZE_BYTES", 16)
-    runner.build_d2d_index_endpoints(None, 1, (1, 1, 32, 8), inbound=True, outbound=True)
-    assert made == [16, 16]
+    tail = (("idx", runner.INDEX_MAPPER_CONFIG),)
+    runner.build_d2d_pipeline_endpoints(None, 1, 3, 32, 64, extra_specs=("ids",), inbound_tail=tail, outbound_tail=())
+    assert made == [(16, ["ids", "idx"]), (16, ["ids"])]
 
 
 # Only a middle stage builds a sender after its receiver, so only its receivers keep a relay link free for it.
@@ -164,10 +167,8 @@ def test_receivers_reserve_links_only_when_a_sender_follows(monkeypatch, rank, r
     monkeypatch.setattr(runner.ttnn, "create_mesh_mapper", lambda *a: None)
     monkeypatch.setattr(runner, "d2d_worker_cores", lambda *a: None)
     monkeypatch.setattr(runner, "activation_global_spec", lambda *a: None)
-    monkeypatch.setattr(runner, "indexer_indices_global_spec", lambda *a: None)
     runner.build_d2d_pipeline_endpoints(None, rank, 3, 32, 64)
-    runner.build_d2d_index_endpoints(None, rank, (1, 1, 32, 8), inbound=True, outbound=reserve)
-    assert reserved == [reserve, reserve]
+    assert reserved == [reserve]
 
 
 def _request_ids(forwards):
@@ -229,6 +230,9 @@ class _D2D:
     def get_backing_tensor(self):
         return _Act([])
 
+    def get_backing_tensors(self):
+        return [_Act([])]
+
     def wait_for_fabric_links(self):
         pass
 
@@ -286,7 +290,11 @@ def test_downstream_rank_writes_chunks_into_one_buffer_and_forwards_the_metadata
     monkeypatch.setattr(
         runner,
         "_d2d_recv",
-        lambda d2d_in, sockets: (_Act([1, 1, F * rows, hidden]), runner._meta_from_words(next(it))),
+        lambda d2d_in, sockets, stage_metadata=None: (
+            _Act([1, 1, F * rows, hidden]),
+            [],
+            runner._meta_from_words(next(it)),
+        ),
     )
 
     runtime = _EchoRuntime()
