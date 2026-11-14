@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/services/d2h_socket_service.hpp"
+#include "ttnn/core.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -624,7 +625,7 @@ D2HStreamService::D2HStreamService(const std::shared_ptr<distributed::MeshDevice
         workload_->add_program(distributed::MeshCoordinateRange(core.device_coord), std::move(program));
     }
 
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload_, /*blocking=*/false);
+    EnqueueMeshWorkload(ttnn::core::current_mesh_command_queue(*mesh_device_), *workload_, /*blocking=*/false);
     start_host_read_workers();
 }
 
@@ -684,7 +685,7 @@ D2HStreamService::~D2HStreamService() {
                 signal_abandon();
             }
             signal_termination();
-            distributed::Finish(mesh_device_->mesh_command_queue());
+            distributed::Finish(ttnn::core::current_mesh_command_queue(*mesh_device_));
         }
 
         if (device_live) {

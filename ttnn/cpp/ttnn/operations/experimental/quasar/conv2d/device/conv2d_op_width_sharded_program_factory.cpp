@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include "ttnn/core.hpp"
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -421,7 +422,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
             TensorMemoryLayout::HEIGHT_SHARDED, tt::tt_metal::BufferType::L1_SMALL, shard_spec};
     }();
 
-    auto& cq = a.device()->mesh_command_queue();
+    auto& cq = ttnn::core::current_mesh_command_queue(*a.device());
     tt::tt_metal::MeshTensor reader_indices_mesh_tensor =
         cq.enqueue_write_tensor(host_config_tensor.host_tensor(), reader_indices_mem_config);
     tt::tt_metal::Buffer* conv_reader_indices_buffer = reader_indices_mesh_tensor.mesh_buffer().get_reference_buffer();

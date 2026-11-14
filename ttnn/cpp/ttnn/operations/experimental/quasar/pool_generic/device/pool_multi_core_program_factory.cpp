@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "pool_multi_core_program_factory.hpp"
+#include "ttnn/core.hpp"
 
 #include "tt-metalium/constants.hpp"
 #include "tt-metalium/tt_backend_api_types.hpp"
@@ -441,7 +442,7 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
     }
 
     auto* mesh_device = input.device();
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = ttnn::core::current_mesh_command_queue(*mesh_device);
 
     // Reader-indices table: build on host, then upload to an OWNING MeshTensor (parked in
     // op_owned_tensors). The memory config mirrors sliding_window::move_config_tensor_to_device.
