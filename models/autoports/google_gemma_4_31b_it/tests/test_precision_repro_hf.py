@@ -65,4 +65,18 @@ def test_chunked_hybrid_cache_preserves_tf_and_seeded_generation(tmp_path):
                 logits_to_keep=1,
             )[0, len(tokens) :].tolist()
             assert row["generated_token_ids"] == generated
+            assert row["streamed_generated_tokens"] == len(generated)
     assert report["status"] == "complete"
+
+
+def test_token_streamer_skips_prompt_and_reports_only_counts(capsys):
+    from models.autoports.google_gemma_4_31b_it.tools.precision_repro_hf import TokenCountStreamer
+
+    streamer = TokenCountStreamer(42)
+    streamer.put(torch.ones((1, 257), dtype=torch.long))
+    for _ in range(256):
+        streamer.put(torch.tensor([7]))
+    streamer.end()
+    assert streamer.generated_count == 256
+    assert streamer.ended
+    assert capsys.readouterr().out.splitlines() == ["HF_GENERATION_PROGRESS 42 128", "HF_GENERATION_PROGRESS 42 256"]

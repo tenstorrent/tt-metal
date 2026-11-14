@@ -11,6 +11,29 @@ import zlib
 from pathlib import Path
 
 
+class TokenCountStreamer:
+    """Observe batch-one generated IDs; HF sends the complete prompt first."""
+
+    def __init__(self, seed, interval=128):
+        self.seed = seed
+        self.interval = interval
+        self.prompt_seen = False
+        self.generated_count = 0
+        self.ended = False
+
+    def put(self, value):
+        if not self.prompt_seen:
+            self.prompt_seen = True
+            return
+        previous = self.generated_count
+        self.generated_count += value.numel()
+        for count in range((previous // self.interval + 1) * self.interval, self.generated_count + 1, self.interval):
+            print("HF_GENERATION_PROGRESS", self.seed, count, flush=True)
+
+    def end(self):
+        self.ended = True
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     group = parser.add_mutually_exclusive_group(required=True)
@@ -156,8 +179,10 @@ def run_case(model, tokenizer, case_path, case, output_path, args, started, revi
             trial_cache = copy.deepcopy(cache)
             torch.manual_seed(seed)
             trial_start = time.monotonic()
+            streamer = TokenCountStreamer(seed)
             generated = model.generate(
                 input_ids=ids,
+                streamer=streamer,
                 attention_mask=torch.ones_like(ids),
                 past_key_values=trial_cache,
                 max_new_tokens=args.tokens,
@@ -169,6 +194,8 @@ def run_case(model, tokenizer, case_path, case, output_path, args, started, revi
                 use_cache=True,
                 logits_to_keep=1,
             )[0, len(tokens) :].tolist()
+            if streamer.generated_count != len(generated) or not streamer.ended:
+                raise RuntimeError("HF streamer token count disagrees with generated output")
             del trial_cache
             text = tokenizer.decode(generated, skip_special_tokens=False)
             tail = text[-4096:]
@@ -179,6 +206,7 @@ def run_case(model, tokenizer, case_path, case, output_path, args, started, revi
                     "generated_token_ids": generated,
                     "text": text,
                     "generated_tokens": len(generated),
+                    "streamed_generated_tokens": streamer.generated_count,
                     "wall_s": time.monotonic() - trial_start,
                     "tail_ratio": ratio,
                     "tail_distinct": len(set(tail)),
