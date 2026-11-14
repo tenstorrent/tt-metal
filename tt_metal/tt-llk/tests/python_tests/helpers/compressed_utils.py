@@ -33,6 +33,7 @@ from helpers.test_variant_parameters import (
     DEST_SYNC,
     IN_FACE_DIMS,
     NUM_FACES,
+    TILE_COUNT,
 )
 from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM, FACE_C_DIM
 from helpers.tilize_untilize import tilize_block, untilize_block
@@ -516,6 +517,7 @@ def run_compressed(
             runtimes=[
                 NUM_FACES(num_faces=2, num_faces_A=2, num_faces_B=4),
                 IN_FACE_DIMS(in0_face_r_dim=M),
+                TILE_COUNT(ct),
             ],
             variant_stimuli=CompressedStimuliConfig(kt, ct, packed_a, packed_b, meta),
             dest_acc=DestAccumulation.No,

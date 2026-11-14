@@ -1157,6 +1157,7 @@ PERF_TEST_SCHEMAS = {
             "num_calls",
             "r_dimm",
             "rearm",
+            "tile_cnt",
             "unpack_to_dest",
         ],
         "aliases": {},

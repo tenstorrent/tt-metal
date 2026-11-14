@@ -17,15 +17,11 @@ from test_matmul_custom_compressed import (
     DEEPSEEK_SHAPES,
     LAYOUT_SHAPES,
     LAYOUTS,
-    MULTI_CALL_CASES,
     MULTI_FORMATS,
     SHAPES,
     SINGLE_FORMATS,
     WIDE_CASES,
     run_tile_compressed,
-)
-from test_matmul_custom_compressed import (
-    test_matmul_custom_compressed_multi_call as _run_matmul_custom_compressed_multi_call,
 )
 
 PERF_FORMATS = ("bfp4", "bfp2", "bfp0")
@@ -235,31 +231,5 @@ def test_perf_matmul_custom_compressed_wide(
             loop_factor,
             is_perf,
             f"wide:random:{','.join(PERF_FORMATS)}",
-        ),
-    )
-
-
-@pytest.mark.perf
-@blackhole_only
-@pytest.mark.parametrize(
-    "M,K,N,pattern,rearm",
-    [pytest.param(*case[1:], id=case[0]) for case in MULTI_CALL_CASES],
-)
-@parametrize(**PERF_MEASUREMENT_AXES)
-def test_perf_matmul_custom_compressed_multi_call(
-    perf_report, M, K, N, pattern, rearm, run_types, loop_factor, is_perf
-):
-    _run_matmul_custom_compressed_multi_call(
-        M,
-        K,
-        N,
-        pattern,
-        rearm,
-        **_perf_kwargs(
-            perf_report,
-            run_types,
-            loop_factor,
-            is_perf,
-            f"multi:{','.join(pattern)}:rearm={rearm}",
         ),
     )
