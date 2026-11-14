@@ -9,6 +9,8 @@
 #include <string>
 #include <span>
 
+#include <tt-umd/types/arch.hpp>
+
 #include "unary_op_types.hpp"
 #include "ttnn/tensor/types.hpp"
 namespace ttnn::operations::unary::utils {
@@ -33,6 +35,15 @@ std::map<std::string, std::string> get_defines(
     const std::string& id = "0",
     const std::string& idst = "0",
     std::optional<DataType> input_dtype = std::nullopt);
+
+// The SFPU chain defines of a lone op that a generated kernel computes in one pass over BF16
+// DEST, or none when the op runs its own kernel.
+std::optional<std::map<std::string, std::string>> get_bf16_kernel_defines(
+    const std::vector<EltwiseUnaryWithParam>& op_chain,
+    DataType input_dtype,
+    DataType output_dtype,
+    bool fp32_dest_acc_en,
+    tt::ARCH arch);
 
 std::map<std::string, std::string> get_block_defines(
     const std::vector<EltwiseUnaryWithParam>& op_chain,
