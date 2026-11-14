@@ -24,6 +24,9 @@
 namespace ttnn::experimental::prim {
 void MatmulReduceScatterAsyncDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    TT_FATAL(
+        !args.matmul_struct.transpose_a && !args.matmul_struct.transpose_b,
+        "MatmulReduceScatterAsync does not support transpose_a or transpose_b.");
     // Matmul validate
     ttnn::prim::MatmulDeviceOperation::validate_on_program_cache_miss(
         args.matmul_struct,
@@ -177,6 +180,10 @@ ttnn::experimental::prim::MatmulReduceScatterAsyncDeviceOperation::tensor_return
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const ttnn::CoreGrid> core_grid) {
     using OperationType = ttnn::experimental::prim::MatmulReduceScatterAsyncDeviceOperation;
+
+    TT_FATAL(
+        !transpose_a && !transpose_b,
+        "MatmulReduceScatterAsync does not support transpose_a or transpose_b.");
 
     /* Matmul setup */
     bool user_run_batched = ttnn::operations::matmul::detail::is_input_batched(weight_tensor.logical_shape());
