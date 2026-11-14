@@ -1413,3 +1413,18 @@ Trace blockers for a chunk-to-chunk trace (code reading at b8a57740c25):
 - Op limits met on the way (each is work for a real TP build): flat op even gate/up split (flat_routed_expert_plan.cpp
   "no even gate/up split": 2 I / 32 tiles into a multiple of 16 cores; 576 and 288 have none), fused head top-K even
   and <= 16 (routing rows in 64 B), routing planner N x slots <= 1024 (head_plan.cpp), flat op <= 64 slots a chip.
+
+## P.56's combine host cost was its per-call fill arg rewrites, not the ring slot choice
+(DS41-254, P.60, Galaxy 8x4, 2026-11-14.)
+
+- Probe (tests/test_moe_prev_host_probe.py, 4 layers, novel chunks 0..3, median host us a combine call; plus
+  temporary C++ timers per pass of 16 calls): off ~440-520; prev legacy ~810-930, of it set_fill ~350-470 (fill
+  ports' args ~150-210, the flat expert readers' wait args ~190-260); legacy with ring[0] on every call 978 (no help);
+  legacy with set_combine_fill_exact once a pass 794 (no help: the C++ hit still rewrites every arg, the token is new
+  every call). With ring + wait False (MOE_PREV_HOST=device): set_fill ~5 us (the signature compare), launch ~470-525.
+- Why so slow: set_fill runs for each of the 32 per-chip programs and does a GetRuntimeArgs (a kernel lookup in the
+  program's maps + a shared_ptr copy) per fill port and per reader core; ~5-6 us a chip.
+- Full model (gate unit, chunks 1..10 mean): combine us a call off 340 / legacy 687 / device 362; host ms a chunk
+  novel 164.7 / 188.1 / 172.4, code 162.3 / 182.7 / 170.1.
+- The planner's run_prepared: 55.7 us a call in a tight loop (same io), 58.1 alternating layers' io, ~95 us inside
+  the chunk: the patches are not the cost; the rest is the 32-program dispatch with cold host caches (DS41-131).

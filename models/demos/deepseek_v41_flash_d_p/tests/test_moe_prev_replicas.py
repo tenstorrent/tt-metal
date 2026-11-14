@@ -29,6 +29,16 @@ chunks 1..10), prev_planner_ms (prev, mean), prev_maxdiff (prev vs off), prev_re
 prev_off_repeat_maxdiff, prev_mirror_mismatch, prev_ready_frac (chunks 1..10), prev_spare_tokens; the side record
 results/P.56_prev_replicas.json (per chunk and layer).
 
+P.60 (overseer 2026-11-14): prev runs twice per workload, once per host path (MOE_PREV_HOST, switched in the loaded
+model: tt/expert_prev.PrevReplicas.mode): legacy = P.56's (a ring of W job tensors, the host hands each call its
+slot and a fresh reader token) and device (one job tensor of W page sets, the ports read G[0] mod W; no reader wait;
+the combine's fill args the same every call). The setting's mode runs first (its metrics keep P.56's names), the other
+second (metrics prev_*_<mode>_<wl>). Both must give off's outputs bit for bit and the same plans (every layer's
+receivers / kept / new / dropped / loads, chunk by chunk). Unprofiled passes now also give host ms a chunk (first host
+call to the last layer's enqueue, before any sync) and the clean wall ms a chunk (first host call to the sync after the
+last layer; the diff and the final norm after it, untimed), and the combine's host us a call (the op launch,
+inclusive, median) beside the planner's (`after`) and the guard's (`before`).
+
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all --no-precompile \\
         models/demos/deepseek_v41_flash_d_p/tests/test_moe_prev_replicas.py
 P56_QUICK=1 (iterating only): 4 layers, chunks 0..3, novel, MOE_FILL_PIECES=2000 (a whole copy a call).
@@ -71,13 +81,16 @@ class _Spy:
 
             def wrap(*a, _o=orig, _n=name, **k):
                 lo = ttnn._ttnn.get_device_operation_id()
+                t0 = time.perf_counter()
                 out = _o(*a, **k)
+                if _n == "routed_experts_combine":
+                    self.host["combine"].append(time.perf_counter() - t0)
                 self.calls.append((self.layer, _n, lo, ttnn._ttnn.get_device_operation_id()))
                 return out
 
             monkeypatch.setattr(mb, name, wrap)
         orig_after, orig_before = XP.PrevReplicas.after, XP.PrevReplicas.before
-        self.host = {"after": [], "before": []}  # (host s a call: the planner's dispatch, the guard + fill args)
+        self.reset_host()
 
         def after(pr, layer, counts, _o=orig_after):
             lo = ttnn._ttnn.get_device_operation_id()
@@ -93,6 +106,10 @@ class _Spy:
 
         monkeypatch.setattr(XP.PrevReplicas, "after", after)
         monkeypatch.setattr(XP.PrevReplicas, "before", before)
+
+    def reset_host(self):
+        # (host s a call: the planner's dispatch, the guard + fill args, the combine's launch)
+        self.host = {"after": [], "before": [], "combine": []}
 
 
 def _times(calls, recs: dict, d2c: dict) -> dict:
@@ -139,8 +156,17 @@ def _prevs(mesh):
     return [pr for _, pr in A._PREV.values() if pr.mesh is mesh]
 
 
-def _side(mesh, side: str) -> None:
-    """off: prev switched off in the loaded model (no planner, the stock combine, the empty map); prev: on."""
+def _side(mesh, side: str, mode: str | None = None) -> None:
+    """off: prev switched off in the loaded model (no planner, the stock combine, the empty map); prev: on, with host
+    path `mode` (MOE_PREV_HOST: legacy | device; None: the setting's)."""
+    if side == "prev" and mode is not None:
+        prs = _prevs(mesh)
+        for pr in prs:
+            pr.mode = mode
+        if not prs:  # (made at the first MoE call: from the setting)
+            from models.demos.deepseek_v41_flash_d_p.tt.settings import settings
+
+            assert settings.get("MOE_PREV_HOST") == mode, (settings.get("MOE_PREV_HOST"), mode)
     for m in _main().values():
         m._prev = side == "prev"
         if side == "off":
@@ -299,6 +325,11 @@ def _pass(model, mesh, layers, tokens, spy, side, prof=False, ref=None, keep=Non
                     model.free(h)
                     h = h2
                 spy.layer = None
+                if not prof:  # (P.60: host = to the last enqueue; the clean wall = to the sync, before the diff)
+                    t1 = time.perf_counter()
+                    ttnn.synchronize_device(mesh)
+                    row["host_ms"] = (t1 - t0) * 1e3
+                    row["wall_ms"] = (time.perf_counter() - t0) * 1e3
                 if isinstance(h, DevH):
                     if ref is not None and c in ref:
                         row["diff"] = _maxdiff(h.streams, ref[c])
@@ -323,7 +354,6 @@ def _pass(model, mesh, layers, tokens, spy, side, prof=False, ref=None, keep=Non
                     }
                 else:
                     ttnn.synchronize_device(mesh)
-                    row["wall_ms"] = (time.perf_counter() - t0) * 1e3
             finally:
                 if prof:
                     profiler.disable()
@@ -336,7 +366,7 @@ def _pass(model, mesh, layers, tokens, spy, side, prof=False, ref=None, keep=Non
                 row["spare_tokens"] = int(
                     sum(lc["chips"][k][k * spc + epc] for lc in rec["layers"].values() for k in range(len(lc["chips"])))
                 )
-            if side == "prev":
+            if side != "off":
                 plans = {}
                 for L, m in _main().items():
                     if m._prev_state is not None and _prevs(mesh):
@@ -356,7 +386,7 @@ def _pass(model, mesh, layers, tokens, spy, side, prof=False, ref=None, keep=Non
                     f"device {row['device_ms']:.2f} ms, experts {row['routed_experts_combine_ms']:.2f}, planner "
                     f"{row['planner_ms']:.2f}"
                     if prof
-                    else f"wall {row['wall_ms']:.1f} ms"
+                    else f"host {row['host_ms']:.1f} ms, wall {row['wall_ms']:.1f} ms"
                 )
                 + (f", diff {row['diff']}" if "diff" in row else "")
                 + f", prev {row['prev']}, spare tokens {row.get('spare_tokens')}"
@@ -381,6 +411,8 @@ def test_moe_prev_replicas(mesh_device, monkeypatch):
         monkeypatch.setenv("DS41_MOE_FILL_PIECES", "2000")
     settings.thaw()
     assert settings.get("MOE_REPLICAS") == "prev" and settings.get("MOE_COUNTS") == "on"
+    first = settings.get("MOE_PREV_HOST")
+    modes = [first] + [m for m in ("legacy", "device") if m != first]  # (the setting's host path first)
     layers = S.layers()[:4] if QUICK else S.layers()
     model = batch.device_model(S, mesh_device, layers, lm_head=False)
     spy = _Spy(monkeypatch)
@@ -389,27 +421,35 @@ def test_moe_prev_replicas(mesh_device, monkeypatch):
         t0 = time.time()
         tokens = _ids(wl)
         ref: dict = {}
-        d: dict = {}
+        d: dict = {"modes": {}}
         try:
             _side(mesh_device, "off")
             _pass(model, mesh_device, layers, tokens, spy, "off")  # (warm: every chunk position compiled)
             d["off_prof"] = _pass(model, mesh_device, layers, tokens, spy, "off", prof=True, keep=ref)
+            spy.reset_host()
             d["off_wall"] = _pass(model, mesh_device, layers, tokens, spy, "off", ref=ref)
-            _side(mesh_device, "prev")
-            _pass(model, mesh_device, layers, tokens, spy, "prev")  # (warm: the exact combine, the planner)
-            d["prev_prof"] = _pass(model, mesh_device, layers, tokens, spy, "prev", prof=True, ref=ref)
-            mirror = _Mirror(mesh_device, layers)
-            spy.host = {"after": [], "before": []}
-            d["prev_wall"] = _pass(model, mesh_device, layers, tokens, spy, "prev", ref=ref, mirror=mirror)
-            d["host_us"] = {k: 1e6 * statistics.median(v) for k, v in spy.host.items() if v}
-            logger.info(f"P.56 {wl}: host us a call (median, the unprofiled pass): {d['host_us']}")
-            cyc = np.asarray(mirror.cycles, dtype=np.float64)
-            d["mirror"] = {"mismatch": mirror.mismatch, "checks": mirror.checks}
-            if cyc.size:  # (planner core, chip 0: median cycles of its phases, at ~1.35 GHz)
-                d["planner_cycles"] = {
-                    k: float(np.median(cyc[:, i])) for i, k in enumerate(("reads", "wait_counts", "plan", "map_writes"))
-                }
-                logger.info(f"P.56 {wl}: planner core phases (median cycles, chip 0): {d['planner_cycles']}")
+            d["off_host_us"] = {k: 1e6 * statistics.median(v) for k, v in spy.host.items() if v}
+            for mode in modes:
+                dm: dict = {}
+                _side(mesh_device, "prev", mode)
+                _pass(model, mesh_device, layers, tokens, spy, mode)  # (warm: the exact combine, the planner)
+                dm["prof"] = _pass(model, mesh_device, layers, tokens, spy, mode, prof=True, ref=ref)
+                mirror = _Mirror(mesh_device, layers)
+                spy.reset_host()
+                dm["wall"] = _pass(model, mesh_device, layers, tokens, spy, mode, ref=ref, mirror=mirror)
+                dm["host_us"] = {k: 1e6 * statistics.median(v) for k, v in spy.host.items() if v}
+                logger.info(f"P.56 {wl} {mode}: host us a call (median, the unprofiled pass): {dm['host_us']}")
+                cyc = np.asarray(mirror.cycles, dtype=np.float64)
+                dm["mirror"] = {"mismatch": mirror.mismatch, "checks": mirror.checks}
+                if cyc.size:  # (planner core, chip 0: median cycles of its phases, at ~1.35 GHz)
+                    dm["planner_cycles"] = {
+                        k: float(np.median(cyc[:, i]))
+                        for i, k in enumerate(("reads", "wait_counts", "plan", "map_writes"))
+                    }
+                    logger.info(
+                        f"P.56 {wl} {mode}: planner core phases (median cycles, chip 0): {dm['planner_cycles']}"
+                    )
+                d["modes"][mode] = dm
         finally:
             for v in ref.values():
                 ttnn.deallocate(v)
@@ -418,99 +458,126 @@ def test_moe_prev_replicas(mesh_device, monkeypatch):
 
     summary = {}
     steady = range(1, CHUNKS)
+    mean = lambda rows, k: statistics.mean(rows[c][k] for c in steady)  # noqa: E731
     for wl, d in data.items():
-        mean = lambda rows, k: statistics.mean(rows[c][k] for c in steady)  # noqa: E731
-        s = {
-            "device_ms_off": mean(d["off_prof"], "device_ms"),
-            "device_ms_prev": mean(d["prev_prof"], "device_ms"),
-            "wall_ms_off": mean(d["off_wall"], "wall_ms"),
-            "wall_ms_prev": mean(d["prev_wall"], "wall_ms"),
-            "experts_ms_off": mean(d["off_prof"], "routed_experts_combine_ms"),
-            "experts_ms_prev": mean(d["prev_prof"], "routed_experts_combine_ms"),
-            "planner_ms": mean(d["prev_prof"], "planner_ms"),
-        }
         off_rep = max(r.get("diff", float("nan")) for r in d["off_wall"])
-        md = max(r.get("diff", float("nan")) for r in d["prev_prof"])
-        rep = max(r.get("diff", float("nan")) for r in d["prev_wall"])
-        ready = sum(d["prev_wall"][c]["prev"].get("ready", 0) for c in steady)
-        calls = sum(d["prev_wall"][c]["prev"].get("calls", 0) for c in steady)
-        spare = sum(d["prev_wall"][c].get("spare_tokens", 0) for c in steady)
-        mm = len(d["mirror"]["mismatch"])
-        for k, v in s.items():
-            metrics.record(f"prev_{k}_{wl}", round(v, 2))
         metrics.record(f"prev_off_repeat_maxdiff_{wl}", off_rep)
-        metrics.record(f"prev_maxdiff_{wl}", md)
-        metrics.record(f"prev_repeat_maxdiff_{wl}", rep)
-        metrics.record(f"prev_ready_frac_{wl}", round(ready / max(calls, 1), 4))
-        metrics.record(f"prev_spare_tokens_{wl}", spare)
-        metrics.record(f"prev_mirror_mismatch_{wl}", mm)
-        for k, v in d.get("host_us", {}).items():
-            metrics.record(f"prev_host_us_{k}_{wl}", round(v, 1))
         if off_rep != 0.0:
             fails.append(f"{wl}: two off passes differ ({off_rep}): no baseline")
-        if md != 0.0:
-            fails.append(f"{wl}: prev differs from off ({md})")
-        if rep != 0.0:
-            fails.append(f"{wl}: two prev passes differ ({rep})")
-        if mm:
-            fails.append(f"{wl}: {mm} mirror mismatches, first {d['mirror']['mismatch'][:3]}")
-        if d["mirror"]["checks"] == 0:
-            fails.append(f"{wl}: the mirror checked nothing")
-        if ready == 0 or spare == 0:
-            fails.append(f"{wl}: no replica used (ready {ready} of {calls}, spare tokens {spare})")
-        table = []
-        for c in range(CHUNKS):
-            op, pp, ow, pw = d["off_prof"][c], d["prev_prof"][c], d["off_wall"][c], d["prev_wall"][c]
-            plans = pw.get("plans", {})
-            nxt = d["prev_wall"][c - 1].get("plans", {}) if c else {}
-            used_rcv = sum(v[1] for v in nxt.values()) if c else 0
-            dropped = sum(v[4] for v in nxt.values()) if c else 0
-            row = {
-                "chunk": c,
-                "device_ms_off": round(op["device_ms"], 2),
-                "device_ms_prev": round(pp["device_ms"], 2),
-                "wall_ms_off": round(ow["wall_ms"], 1),
-                "wall_ms_prev": round(pw["wall_ms"], 1),
-                "experts_ms_off": round(op["routed_experts_combine_ms"], 2),
-                "experts_ms_prev": round(pp["routed_experts_combine_ms"], 2),
-                "dispatch_ms_off": round(op["sparse_dispatch_2d_ms"], 2),
-                "dispatch_ms_prev": round(pp["sparse_dispatch_2d_ms"], 2),
-                "planner_ms": round(pp["planner_ms"], 2),
-                "layers_ready": pw["prev"].get("ready", 0),
-                "layers_off": pw["prev"].get("off", 0),
-                "receivers_used": used_rcv,
-                "receivers_kept": sum(v[2] for v in nxt.values()) if c else 0,
-                "copies_made": sum(v[3] for v in nxt.values()) if c else 0,
-                "copies_dropped": dropped,
-                "complete_frac": round(used_rcv / max(used_rcv + dropped, 1), 3) if c else None,
-                "spare_tokens": pw.get("spare_tokens"),
-                "planned_next": sum(v[1] for v in plans.values()),
-                "experts_layers_off": op["experts_layers"],
-                "experts_layers_prev": pp["experts_layers"],
-            }
-            table.append(row)
-            print(
-                f"P.56 {wl} chunk {c}: device {row['device_ms_off']:.2f} -> {row['device_ms_prev']:.2f} ms "
-                f"({row['device_ms_prev'] - row['device_ms_off']:+.2f}), wall {row['wall_ms_off']:.1f} -> "
-                f"{row['wall_ms_prev']:.1f}, experts {row['experts_ms_off']:.2f} -> {row['experts_ms_prev']:.2f}, "
-                f"planner {row['planner_ms']:.2f}, ready {row['layers_ready']}/{row['layers_ready'] + row['layers_off']}"
-                f", receivers {row['receivers_used']} (kept {row['receivers_kept']}, new {row['copies_made']}, "
-                f"dropped {row['copies_dropped']}), spare tokens {row['spare_tokens']}"
-            )
-        summary[wl] = {
-            "mean_1_10": s,
-            "chunks": table,
-            "mirror": d["mirror"],
-            "host_us": d.get("host_us"),
-            "planner_cycles": d.get("planner_cycles"),
+        s_off = {
+            "device_ms_off": mean(d["off_prof"], "device_ms"),
+            "host_ms_off": mean(d["off_wall"], "host_ms"),
+            "wall_ms_off": mean(d["off_wall"], "wall_ms"),
+            "experts_ms_off": mean(d["off_prof"], "routed_experts_combine_ms"),
         }
-        print(
-            f"P.56 {wl} chunks 1..{CHUNKS - 1} mean: device {s['device_ms_off']:.2f} -> {s['device_ms_prev']:.2f} ms, "
-            f"wall {s['wall_ms_off']:.1f} -> {s['wall_ms_prev']:.1f}, experts {s['experts_ms_off']:.2f} -> "
-            f"{s['experts_ms_prev']:.2f}, planner {s['planner_ms']:.2f}; maxdiff {md}, repeat {rep}, mirror "
-            f"{mm} mismatches of {d['mirror']['checks']} checks"
-        )
-    metrics.record_json("prev_replicas", {"mesh": list(mesh_device.shape), "quick": QUICK, "workloads": summary})
+        for k, v in s_off.items():
+            metrics.record(f"prev_{k}_{wl}", round(v, 2))
+        for k, v in d.get("off_host_us", {}).items():
+            metrics.record(f"prev_host_us_{k}_off_{wl}", round(v, 1))
+        summary[wl] = {"off": s_off, "off_host_us": d.get("off_host_us"), "modes": {}}
+        plans_of = {}
+        for mode, dm in d["modes"].items():
+            sfx = "" if mode == first else f"_{mode}"  # (the setting's mode keeps P.56's metric names)
+            s = {
+                "device_ms_prev": mean(dm["prof"], "device_ms"),
+                "host_ms_prev": mean(dm["wall"], "host_ms"),
+                "wall_ms_prev": mean(dm["wall"], "wall_ms"),
+                "experts_ms_prev": mean(dm["prof"], "routed_experts_combine_ms"),
+                "planner_ms": mean(dm["prof"], "planner_ms"),
+            }
+            md = max(r.get("diff", float("nan")) for r in dm["prof"])
+            rep = max(r.get("diff", float("nan")) for r in dm["wall"])
+            ready = sum(dm["wall"][c]["prev"].get("ready", 0) for c in steady)
+            calls = sum(dm["wall"][c]["prev"].get("calls", 0) for c in steady)
+            spare = sum(dm["wall"][c].get("spare_tokens", 0) for c in steady)
+            mm = len(dm["mirror"]["mismatch"])
+            for k, v in s.items():
+                metrics.record(f"prev_{k}{sfx}_{wl}", round(v, 2))
+            metrics.record(f"prev_maxdiff{sfx}_{wl}", md)
+            metrics.record(f"prev_repeat_maxdiff{sfx}_{wl}", rep)
+            metrics.record(f"prev_ready_frac{sfx}_{wl}", round(ready / max(calls, 1), 4))
+            metrics.record(f"prev_spare_tokens{sfx}_{wl}", spare)
+            metrics.record(f"prev_mirror_mismatch{sfx}_{wl}", mm)
+            for k, v in dm.get("host_us", {}).items():
+                metrics.record(f"prev_host_us_{k}{sfx}_{wl}", round(v, 1))
+            if md != 0.0:
+                fails.append(f"{wl} {mode}: prev differs from off ({md})")
+            if rep != 0.0:
+                fails.append(f"{wl} {mode}: two prev passes differ ({rep})")
+            if mm:
+                fails.append(f"{wl} {mode}: {mm} mirror mismatches, first {dm['mirror']['mismatch'][:3]}")
+            if dm["mirror"]["checks"] == 0:
+                fails.append(f"{wl} {mode}: the mirror checked nothing")
+            if ready == 0 or spare == 0:
+                fails.append(f"{wl} {mode}: no replica used (ready {ready} of {calls}, spare tokens {spare})")
+            # (the plans without their ordinal word, which counts on across passes)
+            plans_of[mode] = [{L: v[1:] for L, v in r.get("plans", {}).items()} for r in dm["wall"]]
+            table = []
+            for c in range(CHUNKS):
+                op, pp, ow, pw = d["off_prof"][c], dm["prof"][c], d["off_wall"][c], dm["wall"][c]
+                plans = pw.get("plans", {})
+                nxt = dm["wall"][c - 1].get("plans", {}) if c else {}
+                used_rcv = sum(v[1] for v in nxt.values()) if c else 0
+                dropped = sum(v[4] for v in nxt.values()) if c else 0
+                row = {
+                    "chunk": c,
+                    "device_ms_off": round(op["device_ms"], 2),
+                    "device_ms_prev": round(pp["device_ms"], 2),
+                    "host_ms_off": round(ow["host_ms"], 1),
+                    "host_ms_prev": round(pw["host_ms"], 1),
+                    "wall_ms_off": round(ow["wall_ms"], 1),
+                    "wall_ms_prev": round(pw["wall_ms"], 1),
+                    "experts_ms_off": round(op["routed_experts_combine_ms"], 2),
+                    "experts_ms_prev": round(pp["routed_experts_combine_ms"], 2),
+                    "dispatch_ms_off": round(op["sparse_dispatch_2d_ms"], 2),
+                    "dispatch_ms_prev": round(pp["sparse_dispatch_2d_ms"], 2),
+                    "planner_ms": round(pp["planner_ms"], 2),
+                    "layers_ready": pw["prev"].get("ready", 0),
+                    "layers_off": pw["prev"].get("off", 0),
+                    "receivers_used": used_rcv,
+                    "receivers_kept": sum(v[2] for v in nxt.values()) if c else 0,
+                    "copies_made": sum(v[3] for v in nxt.values()) if c else 0,
+                    "copies_dropped": dropped,
+                    "complete_frac": round(used_rcv / max(used_rcv + dropped, 1), 3) if c else None,
+                    "spare_tokens": pw.get("spare_tokens"),
+                    "planned_next": sum(v[1] for v in plans.values()),
+                    "experts_layers_off": op["experts_layers"],
+                    "experts_layers_prev": pp["experts_layers"],
+                }
+                table.append(row)
+                print(
+                    f"P.56 {wl} {mode} chunk {c}: device {row['device_ms_off']:.2f} -> {row['device_ms_prev']:.2f} ms "
+                    f"({row['device_ms_prev'] - row['device_ms_off']:+.2f}), host {row['host_ms_off']:.1f} -> "
+                    f"{row['host_ms_prev']:.1f}, wall {row['wall_ms_off']:.1f} -> {row['wall_ms_prev']:.1f}, experts "
+                    f"{row['experts_ms_off']:.2f} -> {row['experts_ms_prev']:.2f}, planner {row['planner_ms']:.2f}, "
+                    f"ready {row['layers_ready']}/{row['layers_ready'] + row['layers_off']}, receivers "
+                    f"{row['receivers_used']} (kept {row['receivers_kept']}, new {row['copies_made']}, dropped "
+                    f"{row['copies_dropped']}), spare tokens {row['spare_tokens']}"
+                )
+            summary[wl]["modes"][mode] = {
+                "mean_1_10": s,
+                "chunks": table,
+                "mirror": dm["mirror"],
+                "host_us": dm.get("host_us"),
+                "planner_cycles": dm.get("planner_cycles"),
+            }
+            print(
+                f"P.56 {wl} {mode} chunks 1..{CHUNKS - 1} mean: device {s_off['device_ms_off']:.2f} -> "
+                f"{s['device_ms_prev']:.2f} ms, host {s_off['host_ms_off']:.1f} -> {s['host_ms_prev']:.1f}, wall "
+                f"{s_off['wall_ms_off']:.1f} -> {s['wall_ms_prev']:.1f}, experts {s_off['experts_ms_off']:.2f} -> "
+                f"{s['experts_ms_prev']:.2f}, planner {s['planner_ms']:.2f}; host us a call {dm.get('host_us')}; "
+                f"maxdiff {md}, repeat {rep}, mirror {mm} mismatches of {dm['mirror']['checks']} checks"
+            )
+        if len(plans_of) == 2:  # (P.60: both host paths plan the same, chunk by chunk)
+            a, b = plans_of["legacy"], plans_of["device"]
+            same = int(a == b)
+            metrics.record(f"prev_plans_identical_{wl}", same)
+            if not same:
+                bad = [c for c in range(min(len(a), len(b))) if a[c] != b[c]]
+                fails.append(f"{wl}: legacy and device host paths planned differently at chunks {bad[:5]}")
+    metrics.record_json(
+        "prev_replicas", {"mesh": list(mesh_device.shape), "quick": QUICK, "first": first, "workloads": summary}
+    )
     for f in fails:
         logger.error(f"P.56: {f}")
     assert not fails, f"{len(fails)} P.56 checks failed: {fails[:5]}"

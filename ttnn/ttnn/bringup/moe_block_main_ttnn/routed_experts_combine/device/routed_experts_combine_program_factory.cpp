@@ -61,20 +61,44 @@ void set_fill(
         return;
     }
     TT_FATAL(t.fill_done.has_value(), "routed_experts_combine: MOE_FILL without its done words");
+    const CombineFillCall* call = p.fill_call.get();
+    const bool ring = p.fill_exact && call != nullptr && call->exact.has_value() && call->exact_ring > 0;
+    // P.60: no reader waits - no token (the waiter then writes no landed word)
+    const bool wait = !(p.fill_exact && call != nullptr && call->exact.has_value() && !call->exact_wait);
     // P.55c: a token a call (never 0): the chip's waiter port writes it into the landed word once the copy has landed,
     // the flat expert's weight readers wait for it before the replica's weights (fx_wait.hpp)
     static std::atomic<uint32_t> next_token{1};
     uint32_t token = 0;
-    while (p.fill_exact && token == 0) {
+    while (p.fill_exact && wait && token == 0) {
         token = next_token.fetch_add(1);
     }
     const uint32_t done = static_cast<uint32_t>(t.fill_done->buffer()->address());
+    if (ring) {  // (P.60: every fill arg is a fixed address or constant - written only when one of them changed)
+        const auto addr = [](const Tensor& x) { return static_cast<uint32_t>(x.buffer()->address()); };
+        std::vector<uint32_t> sig = {
+            addr(call->gu),
+            addr(call->d),
+            addr(call->runs),
+            addr(*call->exact),
+            addr(*call->exact_ordinal),
+            call->exact_ring,
+            call->exact_limit,
+            done,
+            token,
+            wait ? 1u : 0u};
+        if (sig == sv.fill_sig) {
+            return;
+        }
+        sv.fill_sig = std::move(sig);
+    } else {
+        sv.fill_sig.clear();
+    }
     set_combine_fill_args(
         program, sv.combine, *p.plan, sv.chip, *t.out.device(), p.fill_call.get(), done, p.fill_exact, token);
     if (p.fill_exact) {
         TT_FATAL(!sv.flat.fx_readers.empty(), "routed_experts_combine: the exact fill without the readers' waits");
         const auto rx = t.out.device()->worker_core_from_logical_core(p.plan->collector);
-        const bool any = p.fill_call && p.fill_call->exact.has_value();
+        const bool any = wait && p.fill_call && p.fill_call->exact.has_value();
         for (const auto& [k, core, idx] : sv.flat.fx_readers) {
             auto& rt = tt::tt_metal::GetRuntimeArgs(program, k, core);
             rt[idx] = any ? 1u : 0u;

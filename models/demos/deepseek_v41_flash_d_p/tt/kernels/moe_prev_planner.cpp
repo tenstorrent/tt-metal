@@ -39,6 +39,9 @@ constexpr uint32_t CPAGE = get_compile_time_arg_val(16);    // head.counts' page
 constexpr uint32_t GW = get_compile_time_arg_val(17);       // global state words
 constexpr uint32_t SW = get_compile_time_arg_val(18);       // a layer state's words
 constexpr uint32_t MAPPAGE = get_compile_time_arg_val(19);  // the router bias's slot map tile (page)
+// P.60 (MOE_PREV_HOST=device): > 0 - ONE job tensor of W page sets (slot s = pages s x RINGPG ..), its address the only
+// ring arg; 0 - W job tensors, one address arg each (P.56)
+constexpr uint32_t RINGPG = get_compile_time_arg_val(20);
 constexpr uint32_t E = NC * EPC;
 constexpr uint32_t NO_EXPERT = 0xFFFFFFFFu;
 constexpr uint32_t PG = 1024;                   // a job page's bytes
@@ -46,6 +49,10 @@ constexpr uint32_t GSTAMP = 16, GBUD = 16 + W;  // global state: stamps [W], bud
 constexpr uint32_t SHOLD = 16, SREADY = 16 + NC, SRECV = 16 + 2 * NC, SRX = 16 + 3 * NC;
 
 inline uint32_t al64(uint32_t x) { return (x + 63) & ~63u; }
+
+// ring slot s's job tensor (its address: runtime arg a0 + s, or a0 alone) and page pg of its page set
+inline uint32_t ring_at(uint32_t a0, uint32_t s) { return get_arg_val<uint32_t>(RINGPG ? a0 : a0 + s); }
+inline uint32_t ring_page(uint32_t s, uint32_t pg) { return RINGPG ? s * RINGPG + pg : pg; }
 
 inline uint32_t f32_bits(uint32_t v) {  // an integer below 2^24 as fp32 bits (exact)
     if (v == 0) {
@@ -148,9 +155,9 @@ void kernel_main() {
             z[i] = 0;
         }
         for (uint32_t s = 0; s < W; ++s) {
-            const uint32_t ring = get_arg_val<uint32_t>(2 + s);
+            const uint32_t ring = ring_at(2, s);
             for (uint32_t d = 0; d < 4; ++d) {
-                write_page(ring, PG, d * LNK, 0, l_z, 64);
+                write_page(ring, PG, ring_page(s, d * LNK), 0, l_z, 64);
             }
         }
         G[1] = G[1] + 1;  // (a new epoch: every layer's state reads as empty)
@@ -227,7 +234,7 @@ void kernel_main() {
         hw[i] = 0;
     }
     for (uint32_t d = 0; d < 4; ++d) {
-        write_page(get_arg_val<uint32_t>(RING0 + g % W), PG, d * LNK, 0, l_hdr, 64);
+        write_page(ring_at(RING0, g % W), PG, ring_page(g % W, d * LNK), 0, l_hdr, 64);
     }
     noc_async_write_barrier();
     // the layer's state (another epoch: empty)
@@ -313,7 +320,7 @@ void kernel_main() {
         }
         if (ns) {  // (my jobs' pages read at once, changed, written at once: whole pages, DRAM stays 64 B aligned)
             for (uint32_t i = 0; i < ns; ++i) {
-                read_page(get_arg_val<uint32_t>(RING0 + stg[4 * i]), PG, p * LNK, l_pgs + i * PG, PG);
+                read_page(ring_at(RING0, stg[4 * i]), PG, ring_page(stg[4 * i], p * LNK), l_pgs + i * PG, PG);
             }
             noc_async_read_barrier();
             invalidate_l1_cache();
@@ -331,7 +338,7 @@ void kernel_main() {
                 e[5] = 0;
                 e[6] = gu;
                 e[7] = dw;
-                write_page(get_arg_val<uint32_t>(RING0 + stg[4 * i]), PG, p * LNK, 0, l_pgs + i * PG, PG);
+                write_page(ring_at(RING0, stg[4 * i]), PG, ring_page(stg[4 * i], p * LNK), 0, l_pgs + i * PG, PG);
             }
             noc_async_write_barrier();
         }

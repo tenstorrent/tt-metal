@@ -285,3 +285,23 @@ API port to this tree (main's API of 2026-11-06 that this base, origin/main `b78
 - Files: flat_routed_expert/device/{flat_routed_expert_device_operation_types.hpp,flat_routed_expert_options.cpp,
   flat_routed_expert_program_factory.cpp}, flat_routed_expert/{flat_routed_expert_nanobind.cpp,
   flat_routed_expert_weights.py}, README.md; tests: models/demos/deepseek_v41_flash_d_p/tests/test_expert_x_pieces.py
+
+### The exact fill's job ring read on the device; a cache hit writes no unchanged fill arg (2026-11-14, deepseek_v41_flash_d_p P.60)
+- What: `CombineFillCall.exact_ring` / `exact_ordinal` / `exact_wait` (nanobind `set_combine_fill_exact(..., ring=0,
+  ordinal=None, wait=True)`; defaults keep the behaviour before). ring > 0: the jobs tensor holds `ring` page sets and
+  each REC_FX port reads word 0 of `ordinal` (one 64 B DRAM read, before its jobs page) and takes set `ordinal mod
+  ring` (fill args words 10 / 11; the stamps keep the port's own page index). With a ring the factory keeps a
+  signature of the fill args per program and a cache hit with the same ones writes nothing. wait False: the flat
+  expert's readers get on = 0 and the call has no token (the waiter then writes no landed word). Not in the program
+  hash (runtime args only): same program, same device work but the one ordinal read.
+- Why: MOE_REPLICAS=prev (P.56) handed every call a different ring tensor and a fresh token from the host, and the
+  per-call rewrite of every fill port's and weight reader's args on 32 chips cost ~350-470 us of host a combine call
+  (P.57 measured the combine at 731 vs 402 us; P.60's timers put the extra in set_fill, not in the slot choice: a
+  fixed ring tensor alone did not help). Also a Metal-trace blocker (a host value per call).
+- Measured: see README Measured (P.60). Cores: none added. Host: -0.3 to -0.45 ms a combine call with the options.
+- Needed by: deepseek_v41_flash_d_p P.60 (MOE_PREV_HOST=device: tt/expert_prev.py, tt/kernels/moe_prev_planner.cpp)
+- Files: routed_experts_combine/device/{combine_program.hpp,combine_program.cpp,
+  routed_experts_combine_program_factory.hpp,routed_experts_combine_program_factory.cpp,
+  kernels/dataflow/combine_port_writer.cpp}, routed_experts_combine/routed_experts_combine_nanobind.cpp, README.md;
+  tests: models/demos/deepseek_v41_flash_d_p/tests/test_moe_prev_replicas.py (legacy vs device, bit-identical, the
+  host mirror), tests/test_moe_prev_host_probe.py (host us a call)

@@ -108,6 +108,13 @@ each default off (= the source's program):
   chip's waiter port has written the call's token into the landed word (exact word 448; `fx_wait.hpp`, bounded by the
   same limit). Interleaving exact and stock calls on one resources leaves a parity's flag words unzeroed: a caller
   that streams copies runs every combine call of those resources with the exact fill (empty jobs where none).
+  `set_combine_fill_exact(..., ring=0, ordinal=None, wait=True)` (P.60; defaults = the behaviour before): `ring` > 0 -
+  `jobs` holds `ring` page sets (per chip `ring` x COMBINE_FX_PAGES rows; set s = rows [s x PAGES, (s + 1) x PAGES))
+  and every port reads the call's set itself, word 0 of `ordinal` (uint32 DRAM, its page 0 in bank 0; a device
+  counter such as a planner's call ordinal) mod `ring`: one extra 64 B read a port a call, no per-call host value. A
+  program-cache hit then writes the fill args (and the readers' wait args) only when one of them changed (a signature
+  per program, routed_experts_combine_program_factory.cpp set_fill). `wait` False: the flat expert's readers do not
+  wait for a landed copy and the call has no token (the copies of a device planner land in earlier calls).
 - Slot map uneven split (P.55c, `router_rows.hpp slot_of`): a copy word `slot | lb << 9` gives each holder the tokens
   whose 15-bit hash is in its range (own slot [0, lb_0)); copy words below 512 keep the even split.
 
@@ -166,6 +173,11 @@ block): chunk wall 196.1 ms vs 180.6; device 177.3 vs 165.4 ms (experts section 
 a chunk (cProfile), 8 launches a layer (fused_head ~350 us, routed_experts_combine ~490 us, sparse_dispatch_2d ~110 us
 each, profiled run); every quick-ladder metric inside the P.34 gate's limits (mean err_layer 0.164 vs 0.166). Serving
 runner smoke (tt-d-gen engine): pass.
+
+- P.60 (Galaxy 8x4, DeepSeek-V4.1 MOE_REPLICAS=prev, 4-layer model, host us a combine call, C++ timers around the
+  launch, median of passes): the exact fill's per-call arg writes (set_fill: every fill port's and every weight
+  reader's args on 32 chips) ~350-470 us of a ~810-930 us launch; with ring + wait False the hit writes nothing
+  (set_fill ~5 us) and the launch is ~470-525 us, the stock combine's ~440-520. Same device program, same bytes.
 
 ## Limits
 

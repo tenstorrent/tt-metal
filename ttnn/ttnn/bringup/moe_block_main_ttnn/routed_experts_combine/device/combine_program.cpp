@@ -890,12 +890,20 @@ void set_combine_fill_args(
         TT_FATAL(call != nullptr && call->exact.has_value(), "routed_experts_combine: the exact fill needs its jobs");
         TT_FATAL(4 * plan.L <= kFxChipPage, "routed_experts_combine: the exact fill has pages for 2 links");
         const auto& jt = *call->exact;
+        const uint32_t ring = call->exact_ring;
         TT_FATAL(
             jt.dtype() == DataType::UINT32 && jt.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM &&
-                jt.buffer()->aligned_page_size() == 4 * kFxPageWords && jt.logical_volume() == kFxPages * kFxPageWords,
-            "routed_experts_combine: the exact jobs must be uint32 DRAM rows of {} words, {} a chip",
+                jt.buffer()->aligned_page_size() == 4 * kFxPageWords &&
+                jt.logical_volume() == std::max<uint32_t>(ring, 1u) * kFxPages * kFxPageWords,
+            "routed_experts_combine: the exact jobs must be uint32 DRAM rows of {} words, {} a chip (x {} ring slots)",
             kFxPageWords,
-            kFxPages);
+            kFxPages,
+            std::max<uint32_t>(ring, 1u));
+        TT_FATAL(
+            ring < (1u << 16) &&
+                (ring == 0 || (call->exact_ordinal.has_value() && call->exact_ordinal->dtype() == DataType::UINT32 &&
+                               call->exact_ordinal->buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM)),
+            "routed_experts_combine: an exact ring needs its ordinal word (uint32 DRAM) and < 65536 slots");
         const uint32_t tabb = static_cast<uint32_t>(call->runs.buffer()->aligned_page_size());
         TT_FATAL(tabb <= kFillTabBytes, "routed_experts_combine: a fill run table of {} B > {}", tabb, kFillTabBytes);
         const auto rx = mesh_device.worker_core_from_logical_core(plan.collector);
@@ -914,6 +922,10 @@ void set_combine_fill_args(
             w[7] = call->exact_limit;
             w[8] = kFxChipPage;
             w[9] = token;  // (P.55c: the waiter writes it into the landed word, kFxLanded)
+            if (ring) {    // (P.60: the port reads its ring slot from the ordinal word)
+                w[10] = static_cast<uint32_t>(call->exact_ordinal->buffer()->address());
+                w[11] = ring | kFxPages << 16;
+            }
         }
         return;
     }

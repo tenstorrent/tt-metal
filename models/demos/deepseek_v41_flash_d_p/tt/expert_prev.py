@@ -27,8 +27,10 @@ Terms
   toward k, link 0 (the route the next call's start barrier takes to k), carries them in that call's
   routed_experts_combine (combine_port_writer.cpp REC_FX: a piece only in a round that sent no row, while the channel
   holds fewer than MOE_FILL_CAP packets; the call's rest after the main loop). The jobs are written by the planner into
-  a ring of W job tensors (one a call ordinal mod W; the call passes ring[o % W]); a job names the copied layer's
-  weight buffers (words 6 / 7), so a call carries copies of any number of layers. A copy that does not fit in its
+  a ring of W page sets (one a call ordinal mod W): MOE_PREV_HOST=legacy (P.56) W job tensors, the host passes each
+  call ring[o % W]; device (P.60) one job tensor of W page sets, every port reads G[0] mod W itself, so the call's
+  fill args never change (no per-call host write). A job names the copied layer's weight buffers (words 6 / 7), so a
+  call carries copies of any number of layers. A copy that does not fit in its
   window is not made (that receiver is dropped for the plan, counted). Call o + NCALL - 1 is the fence: its start
   barrier travels the pieces' routes after them, so every piece has landed before layer L's next call.
 * guard (host, no transfer): a layer's plan is used only when its next call comes at least NCALL ordinals after the
@@ -109,7 +111,8 @@ class Geometry:
         self.sw = _al16(16 + 4 * self.n)
         self.mappage = self.E // 32
 
-    def ct(self, role: int) -> list:
+    def ct(self, role: int, ringpg: int = 0) -> list:
+        """ringpg: 0 - W job tensors (MOE_PREV_HOST=legacy); > 0 - one job tensor of W page sets of ringpg pages."""
         return [
             role,
             self.n,
@@ -131,6 +134,7 @@ class Geometry:
             self.gw,
             self.sw,
             self.mappage,
+            int(ringpg),
         ]
 
     def l1_bytes(self) -> int:
@@ -324,8 +328,10 @@ class PrevReplicas:
         G[16 : 16 + geo.W] = NONE
         self.G = _u32(G.reshape(1, 1, 1, geo.gw), mesh)
         self.landing = _u32(np.zeros((1, 1, 2 * n, geo.spw), dtype=np.uint32), mesh)
-        PAGES, PW = mb.COMBINE_FX_PAGES, mb.COMBINE_FX_PAGE_WORDS
-        self.ring = [_u32(np.zeros((n, 1, PAGES, PW), dtype=np.uint32), mesh, shard=True) for _ in range(geo.W)]
+        self.pages, self.pw = int(mb.COMBINE_FX_PAGES), int(mb.COMBINE_FX_PAGE_WORDS)
+        # (the job page ring: built per host mode at first use - legacy W tensors, device one tensor of W page sets)
+        self._rings: dict = {}
+        self.mode = settings.get("MOE_PREV_HOST")
         cc = ttnn.CoreCoord(0, 0)
         self.sem = ttnn.create_global_semaphore(
             mesh, ttnn.CoreRangeSet([ttnn.CoreRange(cc, cc)]), 0, ttnn.BufferType.L1_SMALL
@@ -337,13 +343,35 @@ class PrevReplicas:
         self.chips, _, self.wraps = mesh_plan(mesh, 1, self.torus)
         self.src = KERNEL.read_text()
         self.ord = 0  # (host ordinal = the device's G[0])
-        self._plan_pp = None
-        self._reset_pp = None
+        self._plan_pp: dict = {}  # (host mode -> the prepared planner / reset)
+        self._reset_pp: dict = {}
+        self._fx_w = None  # (device mode: the fill args' gate_up / down - fixed; the planner's jobs name their own)
         self.stats = {"calls": 0, "ready": 0, "off": 0, "off_copies": 0, "plans": 0}
         logger.info(
             f"MOE_REPLICAS=prev: {n} chips, {ncall} MoE calls a chunk, ring {geo.W}, {geo.pcs} pieces a copy, "
-            f"{geo.bud} a port a call, planner L1 {geo.l1_bytes()} B"
+            f"{geo.bud} a port a call, planner L1 {geo.l1_bytes()} B, host {self.mode}"
         )
+
+    # ------------------------------------------------------------------ the job page ring
+    def _ringpg(self) -> int:
+        return self.pages if self.mode == "device" else 0
+
+    def rings(self) -> list:
+        """The ring's job tensors in the current host mode: legacy W tensors [chips, 1, pages, page words] (sharded by
+        chip), device one tensor [chips, 1, W x pages, page words]."""
+        r = self._rings.get(self.mode)
+        if r is None:
+            assert self.mode in ("legacy", "device"), self.mode
+            n, W = self.geo.n, self.geo.W
+            if self.mode == "device":
+                shapes = [(n, 1, W * self.pages, self.pw)]
+            else:
+                shapes = [(n, 1, self.pages, self.pw)] * W
+            r = self._rings[self.mode] = [_u32(np.zeros(sh, dtype=np.uint32), self.mesh, shard=True) for sh in shapes]
+        return r
+
+    def _ring_args(self) -> list:
+        return [int(t.buffer_address()) for t in self.rings()]
 
     # ------------------------------------------------------------------ programs
     def _node(self, ch):
@@ -355,7 +383,7 @@ class PrevReplicas:
         geo = self.geo
         counts, landing, G, st, rb, gu, d, consts = io
         md = ttnn.MeshProgramDescriptor()
-        rings = [int(t.buffer_address()) for t in self.ring]
+        rings = self._ring_args()
         l1 = geo.l1_bytes()
         cores = want = 0
         for r in range(self.R):
@@ -399,7 +427,7 @@ class PrevReplicas:
                         kernel_source=self.src,
                         source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
                         core_ranges=crs,
-                        compile_time_args=geo.ct(0),
+                        compile_time_args=geo.ct(0, self._ringpg()),
                         runtime_args=rt,
                         config=dm,
                     )
@@ -443,7 +471,7 @@ class PrevReplicas:
                             kernel_source=self.src,
                             source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
                             core_ranges=scr,
-                            compile_time_args=geo.ct(1),
+                            compile_time_args=geo.ct(1, self._ringpg()),
                             runtime_args=srt,
                             config=dm,
                         )
@@ -458,7 +486,7 @@ class PrevReplicas:
     def _reset_desc(self):
         geo = self.geo
         md = ttnn.MeshProgramDescriptor()
-        rings = [int(t.buffer_address()) for t in self.ring]
+        rings = self._ring_args()
         l1 = -(-geo.gw * 4 // 64) * 64 + 256
         for r in range(self.R):
             for c in range(self.C):
@@ -477,7 +505,7 @@ class PrevReplicas:
                         kernel_source=self.src,
                         source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
                         core_ranges=crs,
-                        compile_time_args=geo.ct(2),
+                        compile_time_args=geo.ct(2, self._ringpg()),
                         runtime_args=rt,
                         config=ttnn.DataMovementConfigDescriptor(
                             processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.RISCV_0_default
@@ -491,9 +519,10 @@ class PrevReplicas:
     def reset(self, layers) -> None:
         """A request starts (begin_chunk at start 0 / a replay): every job page and the global state emptied on the
         device (a new epoch), every layer's plan forgotten (its first call runs off)."""
-        if self._reset_pp is None:
-            self._reset_pp = ttnn.bringup.prepare_program(self._reset_desc(), [self.G])
-        ttnn.bringup.run_prepared(self._reset_pp, [self.G])
+        pp = self._reset_pp.get(self.mode)
+        if pp is None:
+            pp = self._reset_pp[self.mode] = ttnn.bringup.prepare_program(self._reset_desc(), [self.G])
+        ttnn.bringup.run_prepared(pp, [self.G])
         for m in layers:
             m._prev_ord = None
 
@@ -512,8 +541,24 @@ class PrevReplicas:
                 layer._prev_dirty = False
                 self.stats["off_copies"] += 1
         layer._prev_used = ok
+        if self.mode == "device":  # (P.60: the same args every call - the ports read their ring slot from G[0])
+            if self._fx_w is None:
+                self._fx_w = (layer.w_gu, layer.w_d)  # (unused by the ports: every job names its layer's buffers)
+            _mb().set_combine_fill_exact(
+                self.res,
+                True,
+                self._fx_w[0],
+                self._fx_w[1],
+                self.tables.runs,
+                self.rings()[0],
+                self.limit,
+                ring=self.geo.W,
+                ordinal=self.G,
+                wait=False,
+            )
+            return
         _mb().set_combine_fill_exact(
-            self.res, True, layer.w_gu, layer.w_d, self.tables.runs, self.ring[o % self.geo.W], self.limit
+            self.res, True, layer.w_gu, layer.w_d, self.tables.runs, self.rings()[o % self.geo.W], self.limit
         )
 
     def after(self, layer, counts: ttnn.Tensor) -> None:
@@ -528,16 +573,19 @@ class PrevReplicas:
             layer.w_d,
             self.consts,
         ]
-        if self._plan_pp is None:
+        pp = self._plan_pp.get(self.mode)
+        if pp is None:
             assert int(counts.shape[-1]) == self.geo.n * self.geo.spc, (counts.shape, self.geo.n, self.geo.spc)
             assert counts.dtype == ttnn.uint32 and counts.layout == ttnn.ROW_MAJOR_LAYOUT, (counts.dtype, counts.layout)
             md, cores, want = self._planner_desc(io, self.geo.cpage)
-            self._plan_pp = ttnn.bringup.prepare_program(md, io)
+            pp = self._plan_pp[self.mode] = ttnn.bringup.prepare_program(md, io)
             self._plan_cores = cores
             # (8 io addresses on each planner core, 3 on each sender core: anything else matched a frozen value)
-            assert self._plan_pp.patch_count == want, f"planner: {self._plan_pp.patch_count} patched slots, want {want}"
-            logger.info(f"MOE_REPLICAS=prev: planner prepared, {cores} cores ({cores / self.geo.n:.1f} a chip)")
-        ttnn.bringup.run_prepared(self._plan_pp, io)
+            assert pp.patch_count == want, f"planner: {pp.patch_count} patched slots, want {want}"
+            logger.info(
+                f"MOE_REPLICAS=prev: planner prepared ({self.mode}), {cores} cores ({cores / self.geo.n:.1f} a chip)"
+            )
+        ttnn.bringup.run_prepared(pp, io)
         layer._prev_ord = self.ord
         layer._prev_dirty = True
         self.ord += 1
@@ -549,7 +597,10 @@ class PrevReplicas:
 
     def read_ring(self, s: int) -> np.ndarray:
         """Ring slot s's job pages of every chip: [chips, pages, page words]."""
-        return read_all(self.ring[s]).reshape(self.geo.n, -1, _mb().COMBINE_FX_PAGE_WORDS)
+        r = self.rings()
+        if self.mode == "device":
+            return read_all(r[0]).reshape(self.geo.n, self.geo.W, self.pages, self.pw)[:, s]
+        return read_all(r[s]).reshape(self.geo.n, -1, self.pw)
 
 
 def _words(t) -> np.ndarray:

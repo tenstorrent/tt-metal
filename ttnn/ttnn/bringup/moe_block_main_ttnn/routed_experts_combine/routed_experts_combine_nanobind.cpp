@@ -323,12 +323,23 @@ void bind_routed_experts_combine(nb::module_& mod) {
            const std::optional<ttnn::Tensor>& down,
            const std::optional<ttnn::Tensor>& runs,
            const std::optional<ttnn::Tensor>& jobs,
-           uint32_t limit_cycles) {
+           uint32_t limit_cycles,
+           uint32_t ring,
+           const std::optional<ttnn::Tensor>& ordinal,
+           bool wait) {
             std::optional<CombineFillCall> call;
             if (enabled) {
                 TT_FATAL(gate_up && down && runs && jobs, "set_combine_fill_exact: needs gate_up, down, runs, jobs");
+                TT_FATAL(ring == 0 || ordinal, "set_combine_fill_exact: a ring needs its ordinal tensor");
                 call = CombineFillCall{
-                    .gu = *gate_up, .d = *down, .runs = *runs, .exact = *jobs, .exact_limit = limit_cycles};
+                    .gu = *gate_up,
+                    .d = *down,
+                    .runs = *runs,
+                    .exact = *jobs,
+                    .exact_limit = limit_cycles,
+                    .exact_ring = ring,
+                    .exact_ordinal = ordinal,
+                    .exact_wait = wait};
             }
             set_combine_fill_exact(resources, enabled, call);
         },
@@ -339,6 +350,9 @@ void bind_routed_experts_combine(nb::module_& mod) {
         nb::arg("runs") = nb::none(),
         nb::arg("jobs") = nb::none(),
         nb::arg("limit_cycles") = 27000000u,
+        nb::arg("ring") = 0u,
+        nb::arg("ordinal") = nb::none(),
+        nb::arg("wait") = true,
         R"doc(
             MOE_REPLICAS=exact (P.55b): the next combine calls build the port senders with the exact fill (REC_FX):
             each port reads its jobs from `jobs` (uint32 DRAM, per chip COMBINE_FX_PAGES rows of COMBINE_FX_PAGE_WORDS:
@@ -347,6 +361,10 @@ void bind_routed_experts_combine(nb::module_& mod) {
             in the same call, with per-block ready flags, relays gated on them, and the waiter's stamps in
             combine_fill_exact_words. limit_cycles: a gate or wait gives up after it (never a hang; the status says).
             enabled False: the stock port writer.
+            ring > 0 (P.60): `jobs` holds `ring` page sets of COMBINE_FX_PAGES rows a chip and each port reads the
+            call's set itself, word 0 of `ordinal` (uint32 DRAM; a device counter) mod ring - no per-call host value;
+            a cache hit then writes the fill args only when one of them changed. wait False (P.60): the flat expert's
+            readers do not wait for a landed copy (no token). Defaults: the behaviour before these options.
         )doc");
     mod.def(
         "combine_fill_exact_words",

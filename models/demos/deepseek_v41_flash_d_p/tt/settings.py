@@ -508,7 +508,7 @@ TABLE = {
         "<expert cache>.moe_main.<plan>.{w_gu,w_d}.tensorbin)",
     ),
     "MOE_REPLICAS": Setting(
-        "off",
+        "prev",
         ("off", "runtime", "exact", "prev"),
         "P.46 / P.47 (owner 2026-11-12, expert replicas; MOE_BLOCK_SRC=main only; default off: owner 2026-11-12, "
         "accepted as a switch). off = 12 "
@@ -539,6 +539,18 @@ TABLE = {
         "(REC_FX job pages the planner writes, MOE_FILL_PIECES a source port a call, a fence call before the use); a "
         "layer whose plan is not complete in time (a request's first chunk, another call sequence) runs off for that "
         "call. Outputs bit-identical to off",
+    ),
+    "MOE_PREV_HOST": Setting(
+        "device",
+        ("legacy", "device"),
+        "P.60 (overseer 2026-11-14, MOE_REPLICAS=prev only): the host side of P.56. legacy = P.56 as built: a ring of "
+        "W job tensors, the host hands each MoE call ring[o % W] and the flat expert's readers a fresh wait token every "
+        "call, so the combine's fill args change every call (~0.37 ms host a call on the 8x4: the combine's set_fill "
+        "rewrites every fill port's and every weight reader's args on 32 chips). device = one job tensor of W page sets "
+        "and every port reads the call's set from the planner's ordinal word (G[0] mod W, on the device); the "
+        "readers do not wait (a prev copy lands in earlier calls, fenced: P.56's page of waits is always empty); the "
+        "fill args are then the same every call and a cache hit writes none (routed_experts_combine's fill signature); "
+        "the planner takes one ring address instead of W. Same plans, slots, pages and math: outputs bit-identical",
     ),
     "MOE_PREV_FIXED": Setting(
         "165",
@@ -590,7 +602,7 @@ TABLE = {
         "gives up and flags the call (never a hang); ms at 1.35 GHz",
     ),
     "MOE_FILL": Setting(
-        "serial",
+        "piggyback",
         ("serial", "piggyback"),
         "P.53 (owner 2026-11-12, EXPERIMENTAL, MOE_REPLICAS=runtime only; default serial: the owner's, tasks.yaml "
         "ab.keep_default). How set_replicas fills a spare slot. serial = "

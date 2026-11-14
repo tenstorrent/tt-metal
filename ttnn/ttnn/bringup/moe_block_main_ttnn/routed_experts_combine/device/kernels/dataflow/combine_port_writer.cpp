@@ -291,6 +291,9 @@ void kernel_main() {
     const uint32_t f_done = get_arg_val<uint32_t>(a + 4), f_jobs = get_arg_val<uint32_t>(a + 5);
     const uint32_t f_rxy = get_arg_val<uint32_t>(a + 6), f_limit = get_arg_val<uint32_t>(a + 7);
     const uint32_t f_wpage = get_arg_val<uint32_t>(a + 8);
+    // (P.60, a ring of job page sets: the call's slot = word 0 of the ordinal tensor (its page 0 sits in bank 0 at the
+    // base) mod the ring; 0: the jobs tensor is the call's one page set)
+    const uint32_t f_ord = get_arg_val<uint32_t>(a + 10), f_ring = get_arg_val<uint32_t>(a + 11);
     // (P.55c: this call's token - the waiter writes it into the chip's landed word, exact word FX_LANDED, once every
     // waited word reached its target; the receiver's flat expert readers wait for it before the replica's weights)
     const uint32_t f_tok = get_arg_val<uint32_t>(a + 9);
@@ -307,10 +310,19 @@ void kernel_main() {
     const uint32_t f_rx = f_rxy & 0xFFFF, f_ry = f_rxy >> 16;
     const uint32_t f_words = f_done + 4 * 32 * f_par;  // (this call's flag words, on every chip's words core)
     {
+        uint32_t f_jp = f_page, f_jw = f_wpage;  // (the pages read: in the call's ring slot)
+        if (f_ring & 0xFFFF) {  // (f_pg as scratch: the ordinal's 64 B line, read before the page lands there)
+            noc_async_read(get_noc_addr_from_bank_id<true>(0, f_ord), f_pg, 64);
+            noc_async_read_barrier();
+            invalidate_l1_cache();
+            const uint32_t slot = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(f_pg)[0] % (f_ring & 0xFFFF);
+            f_jp += slot * (f_ring >> 16);
+            f_jw += slot * (f_ring >> 16);
+        }
         const InterleavedAddrGen<true> jg = {.bank_base_address = f_jobs, .page_size = FX_PG};
-        noc_async_read(jg.get_noc_addr(f_page), f_pg, FX_PG);
+        noc_async_read(jg.get_noc_addr(f_jp), f_pg, FX_PG);
         if (f_waiter) {
-            noc_async_read(jg.get_noc_addr(f_wpage), f_cp, FX_PG);
+            noc_async_read(jg.get_noc_addr(f_jw), f_cp, FX_PG);
         }
         noc_async_read_barrier();
         invalidate_l1_cache();

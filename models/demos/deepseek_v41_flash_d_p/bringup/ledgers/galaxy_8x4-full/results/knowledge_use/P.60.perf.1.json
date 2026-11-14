@@ -1,0 +1,98 @@
+{
+ "used": [
+  {
+   "id": "DS41-251",
+   "how": "took its host breakdown (combine 402 -> 731 us, planner ~99 us a call) as the target, then probed its ring-slot attribution before building (found wrong: DS41-254)",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-249",
+   "how": "kept P.56's plan / fill / guard design and its bit-identity checks (maxdiff 0, mirror) as the A/B's correctness bar",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-228",
+   "how": "judged the change on P.56's real-prompt test (novel + code, chunks 1..10), not on the random-token position profile",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-131",
+   "how": "did not split the planner into per-layer prepared programs: the patches cost ~2 us (probe), and switching among cached 32-chip programs is the slower side",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-183",
+   "how": "every model-level device run (gate unit, measure) started detached through devjob",
+   "traced": null,
+   "cited": false
+  }
+ ],
+ "contradicted": [
+  {
+   "id": "DS41-251",
+   "evidence": "Its cause 'combine 402 -> 731 us a call (host ring slot ring[o % 44])' is wrong about the slot: tests/test_moe_prev_host_probe.py (8x4, 4 layers) handing every call ring[0] (fixed address) still cost 978 vs 856 us a call; C++ timers put ~350-470 us a call in routed_experts_combine_program_factory.cpp set_fill (fill args + flat expert readers' wait args rewritten on 32 chips every call: new token / jobs address). Full model after the fix: combine 362 us (off 340). Detail: DS41-254.",
+   "cited": true
+  }
+ ],
+ "missing": [
+  "how to measure where a C++ op's host time goes on this box (perf is blocked: perf_event_paranoid 4; py-spy absent): temporary std::chrono timers in the fork + an incremental ninja build (~30 s) + `ninja -C build install` worked"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "no padding or duplicated work: the change only moves the ring slot choice to the device and skips unchanged host arg writes"
+  },
+  {
+   "id": "OV-23",
+   "answer": "done",
+   "evidence": "the planner and reset stay prepared (prepare_program / run_prepared, one per host mode); planner host 92-96 us a call measured in the gate unit (prev_host_us_after_*); the combine is a C++ op (362 us a call)"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork regression / unit suite run on the 8x4; only the model-level gate unit, the 4-layer host probe (new diagnostic test) and measure --task P.60"
+  }
+ ],
+ "cited_only": [
+  "DS41-225",
+  "DS41-254"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "moe_replication",
+  "task": "P.60",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-14T10:00:55",
+  "head": "fd96a8d0456",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.60.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.60_prev_replicas.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.60.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_moe_prev_host_probe.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_moe_prev_replicas.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/expert_prev.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/kernels/moe_prev_planner.cpp",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/README.md",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/routed_experts_combine/device/combine_program.cpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/routed_experts_combine/device/combine_program.hpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/routed_experts_combine/device/kernels/dataflow/combine_port_writer.cpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/routed_experts_combine/device/routed_experts_combine_program_factory.cpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/routed_experts_combine/device/routed_experts_combine_program_factory.hpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/routed_experts_combine/routed_experts_combine_nanobind.cpp"
+  ]
+ }
+}

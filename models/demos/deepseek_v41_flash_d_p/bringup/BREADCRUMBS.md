@@ -1292,3 +1292,70 @@ The one this change broke (test_seeded: `git add state.json`) is fixed.
   and BRINGUP_RECORD_TASK=P.59_<side> (~6 + ~4 min each, devjob).
 - Final `gate P.59 --check`: PASS (determinism 0; rung last err_final_hidden 0.132 vs 0.242, top5 1.0; profile
   device_ms_total 164.02, chunk_wall_ms 176.7). x_pieces_* and baseline_* metrics recorded in results/P.59.json.
+
+## P.60 (perf, attempt 1): P.56's host overhead off the critical path (MOE_PREV_HOST legacy | device)
+- Expected per chunk (written before any code change or device run; perf_guide 1, 3; real novel / code chunks 1..10,
+  MOE_REPLICAS=prev on both sides): device ~0 (+-0.3 ms: the combine reads one more 64 B word a port, the planner
+  advances the same counter it already keeps); host -12 to -16 ms (P.57: combine 731 -> ~400-450 us a call x 40 =
+  -11 to -13; planner launch 92.5-99 -> ~60-70 us x 40 = -1 to -1.5; guard -0.3). The wall moves by about the host
+  cut only while the chunk stays host-bound: novel prev host ~185 vs device ~155 (min8k) -> wall ~186 -> ~172-175;
+  code (device ~152) similar. Caveat: P.57 attributes the combine's +330 us to the ring slot changing every call; that
+  is a hypothesis I check first with a host probe (the cost could be the exact path's per-call args or program size,
+  which a device-side slot would not remove).
+- Where the host time really went (tests/test_moe_prev_host_probe.py, a diagnostic: 4-layer model, novel chunks 0..3,
+  plus temporary C++ timers in the combine's launch, removed): handing every call ring[0] (a fixed jobs address) did
+  NOT help (978 vs 856 us a combine call), so P.57's "ring slot chosen on the host" was not the cost (DS41-251's
+  attribution: contradicted, DS41-254). The cost was routed_experts_combine_program_factory.cpp set_fill: with the
+  exact fill every cache hit rewrote every fill port's args and every flat-expert weight reader's wait args on 32
+  chips (a new token and jobs address each call): ~350-470 us of a ~810-930 us launch (off: ~440-520 us, set_fill 1).
+- What changed (MOE_PREV_HOST=device, the new default; legacy = P.56 as built, selectable):
+  1. Fork (moe_block_main routed_experts_combine; option, defaults keep the old behaviour): set_combine_fill_exact(...,
+     ring=W, ordinal=G, wait=False). The jobs tensor holds W page sets; each REC_FX port reads word 0 of G (the
+     planner's call ordinal) with one 64 B DRAM read and takes set G[0] mod W; wait False: the flat expert's readers
+     do not wait for a landed word and there is no token (prev's copies land in earlier calls, fenced; its page of
+     waits is always empty, so the readers' wait never had anything to wait for). With a ring the factory keeps a
+     signature of the fill args per program: a cache hit with the same args writes nothing.
+  2. Model: tt/expert_prev.py one job tensor [chips, 1, W x 9, 256] (built per host mode, PrevReplicas.mode), the same
+     fill args every call (gate_up / down fixed: every prev job names its own layer's buffers in words 6 / 7);
+     kernels/moe_prev_planner.cpp compile arg 20 RINGPG (pages of a set; 0 = legacy): one ring address instead of 44.
+  3. Planner launch: not made cheaper beyond the 43 ring args. Measured (probe, PROBE_PLANNER=1): run_prepared of the
+     planner 55.7 us a call with the same io 40x, 58.1 us alternating 4 layers' io (the patches cost ~2 us), but ~95-104
+     us inside the chunk (host caches cold between calls, cf. DS41-131). A cheaper launch needs one mesh program for
+     the 32 chips (DS41-225's table pattern: per-chip fabric channels and sender groups from a common-arg table) or
+     folding the planner into the combine (races on G[0] and slot g's header zeroing, shared fabric links); both are
+     fabric rewrites with hang risk, not done with the owner away. Expected ~-50 us a call, ~-2 ms a chunk.
+- Bit-identity: same device programs (the combine's hash has no fill-call field; the planner's differs only in
+  RINGPG), same plans: prev_plans_identical 1 (every layer's receivers / kept / new / dropped / loads, chunks 0..10,
+  both prompts), every chunk's last-layer output = off's (maxdiff 0), repeat 0, host mirror 0 mismatches of 477 checks
+  in both modes.
+- Results (gate unit P.60#test_moe_prev_replicas, PASS, 422 s; one process, the model loaded once, sides switched in
+  it: off, device (the setting's), legacy; chunks 1..10 mean of fresh back-to-back requests; host = first host call
+  to the last layer's enqueue; clean wall = to the sync after the last layer (diff and final norm untimed); device =
+  real-time profiler, each program's slowest chip, summed, a separate pass; EXPERT_X_PIECES=min8k default):
+
+  | prompt | side | host ms | clean wall ms | device ms | experts ms | combine us a call | planner us a call |
+  |---|---|---|---|---|---|---|---|
+  | novel | off | 164.7 | 181.0 | 166.97 | 46.43 | 339.6 | - |
+  | novel | prev legacy | 188.1 | 189.1 | 155.08 | 43.14 | 689.9 | 92.1 |
+  | novel | prev device | 172.4 (-15.7) | 179.3 (-9.8) | 152.88 (-2.2) | 40.91 | 360.3 | 95.0 |
+  | code | off | 162.3 | 172.2 | 155.57 | 41.50 | 342.2 | - |
+  | code | prev legacy | 182.7 | 183.5 | 151.88 | 40.96 | 684.7 | 91.1 |
+  | code | prev device | 170.1 (-12.6) | 175.0 (-8.5) | 149.24 (-2.6) | 38.86 | 364.4 | 95.7 |
+
+  The guard + fill args (`before`) 5.9-6.0 us a call on both. Per-chunk host / wall in results/P.60_prev_replicas.json
+  (single chunks vary +-10 ms; novel device c10 212 ms host is one outlier). The device -2.2 / -2.6 ms (experts phase)
+  is one profiled pass a side: plausibly the readers' removed landed-word polls, not proven.
+- Reading: expected host -12 to -16 ms: met (-15.7 / -12.6). The chunk is still host-bound with prev on (host 172 vs
+  device 153 novel), so the wall gains less than the host (-9.8 / -8.5); prev now beats off on the clean wall for novel
+  (179.3 vs 181.0) and is ~3 ms behind on code (175.0 vs 172.2). What is left of P.56's host: planner ~3.8 ms + the
+  combine's ~0.8 ms over off. Trace (P.61): the combine's fill args are now the same every call (no host value), one
+  of DS41-251's blockers gone; the guard stays on the host (it decides per layer, ready on steady chunks).
+- Cores: none added (rule 18 unchanged). Prepared: the planner and reset stay prepared (OV-23); the combine is a C++ op.
+- Re-run: `gate P.60 --spec <spec> --check --unit 'P.60#test_moe_prev_replicas'` (~7 min, devjob); host probe
+  `PROBE_VARIANTS=off,legacy,device [PROBE_PLANNER=1] scripts/run_safe_pytest.sh --run-all --no-precompile
+  models/demos/deepseek_v41_flash_d_p/tests/test_moe_prev_host_probe.py` (~1 min, 4 layers).
+- `measure --task P.60` (change on: MOE_REPLICAS=prev MOE_FILL=piggyback MOE_PREV_HOST=device ENGRAM_TABLE=resident):
+  determinism 0 (novel, code, state); quick min layer PCC 0.60548579 at L39 (= P.52-P.59: the same output bytes), host
+  transfers per layer 0, wall 168.2 ms (spread 6.2; P.56's prev measure 182.3); p51200 (random ids, in-sample plan,
+  DS41-228) device_ms_total 157.56, device_ms_experts 76.62, wall 177.7 (spread 6.5; P.56: 188.4), host overhead 20.1,
+  1656 launches (the planner's run_prepared not counted).

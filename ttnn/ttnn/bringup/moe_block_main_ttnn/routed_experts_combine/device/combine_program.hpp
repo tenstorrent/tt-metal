@@ -79,6 +79,15 @@ struct CombineFillCall {
     // waiter's wait may take before it gives up (never a hang).
     std::optional<Tensor> exact;
     uint32_t exact_limit = 0;
+    // P.60 (MOE_REPLICAS=prev, MOE_PREV_HOST=device): exact_ring > 0 - `exact` holds exact_ring slots of kFxPages pages
+    // a chip (slot s = pages [s kFxPages, (s + 1) kFxPages)) and every port reads the call's slot itself: word 0 of
+    // exact_ordinal (uint32 DRAM, page 0 in bank 0; the device planner's call ordinal) mod exact_ring. The fill args
+    // then hold no per-call value, so a cache hit writes them only when they change (the factory's fill signature).
+    // exact_wait false: the flat expert's weight readers do not wait for a landed copy (no token: the copies of a
+    // device planner land in earlier calls). Defaults (0, nullopt, true): the behaviour before the option.
+    uint32_t exact_ring = 0;
+    std::optional<Tensor> exact_ordinal;
+    bool exact_wait = true;
 };
 inline constexpr uint32_t kFxPages = 9, kFxChipPage = 8, kFxPageWords = 256, kFxMaxJobs = 30, kFxWaits = 4;
 inline constexpr uint32_t kFxWords = 452;  // the exact words a chip: 2 x 32 flags, 8 x 16 stamps, 4 x 64 arrivals,
