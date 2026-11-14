@@ -389,6 +389,7 @@ from ttnn.distributed import *
 
 from ttnn.core import (
     set_printoptions,
+    get_printoptions,
     has_storage_type_of,
     is_tensor_storage_on_device,
     has_tile_padding,
