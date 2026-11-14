@@ -59,6 +59,13 @@ void MorehMatmulOperation::validate_inputs(
 
     // check output dims
     if (output.has_value()) {
+        TT_FATAL(output.value().buffer() != input.buffer(), "moreh_matmul: output must not alias the input buffer");
+        TT_FATAL(output.value().buffer() != other.buffer(), "moreh_matmul: output must not alias the other buffer");
+        if (bias.has_value()) {
+            TT_FATAL(
+                output.value().buffer() != bias.value().buffer(),
+                "moreh_matmul: output must not alias the bias buffer");
+        }
         const auto& output_shape = output.value().logical_shape();
         uint32_t output_m = output_shape[-2];
         uint32_t output_n = output_shape[-1];
