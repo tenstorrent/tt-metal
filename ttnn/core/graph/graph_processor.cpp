@@ -53,14 +53,10 @@ bool is_graph_processor(const std::shared_ptr<IGraphProcessor>& processor) {
     return dynamic_cast<ttnn::graph::GraphProcessor*>(processor.get()) != nullptr;
 }
 
+// Derived from the enum so new enumerators (e.g. ND_SHARDED) cannot fall through to "UNKNOWN".
 std::string tensorMemoryLayoutToString(TensorMemoryLayout layout) {
-    switch (layout) {
-        case TensorMemoryLayout::INTERLEAVED: return "INTERLEAVED";
-        case TensorMemoryLayout::HEIGHT_SHARDED: return "HEIGHT_SHARDED";
-        case TensorMemoryLayout::WIDTH_SHARDED: return "WIDTH_SHARDED";
-        case TensorMemoryLayout::BLOCK_SHARDED: return "BLOCK_SHARDED";
-        default: return "UNKNOWN";  // Handle unexpected values
-    }
+    const auto name = enchantum::to_string(layout);
+    return name.empty() ? std::string("UNKNOWN") : std::string(name);
 }
 
 nlohmann::json to_json(const ttnn::graph::GraphProcessor::Vertex& data) {
