@@ -136,14 +136,14 @@ inline void dbg_thread_unhalt()
 
     if constexpr (thread_id == ThreadId::MathThreadId)
     {
-        // Reset pack 0 (workaround)
+        // Pulse packer 0 soft reset (workaround), leaving every other reset bit as it was
+        const std::uint32_t soft_reset = reg_read(RISCV_DEBUG_REG_SOFT_RESET_0);
         dbg_soft_reset_u dbg_soft_reset;
         dbg_soft_reset.val    = 0;
         dbg_soft_reset.f.pack = 1;
-        reg_write(RISCV_DEBUG_REG_SOFT_RESET_0, dbg_soft_reset.val);
+        reg_write(RISCV_DEBUG_REG_SOFT_RESET_0, soft_reset | dbg_soft_reset.val);
         wait(5);
-        dbg_soft_reset.val = 0;
-        reg_write(RISCV_DEBUG_REG_SOFT_RESET_0, dbg_soft_reset.val);
+        reg_write(RISCV_DEBUG_REG_SOFT_RESET_0, soft_reset);
 
         // Wait for all instructions to complete
         tensix_sync();
