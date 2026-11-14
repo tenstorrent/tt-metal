@@ -1256,6 +1256,34 @@ class TestEdgeCases:
         ttnn_out = ttnn.to_torch(ttnn_out)
         assert_equal(torch_out, ttnn_out)
 
+    @pytest.mark.parametrize("position", ["first", "last", "middle"])
+    @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT], ids=["RM", "TILE"])
+    @pytest.mark.parametrize("dim", [-1, -2, 1], ids=["dim=-1", "dim=-2", "dim=1"])
+    @pytest.mark.parametrize("mem", [ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG], ids=["L1", "DRAM"])
+    def test_empty_along_concat_dim(self, device, position, layout, dim, mem):
+        """Empty-along-dim input must be dropped per torch.cat semantics (factories crash on zero-width pages)."""
+        full_shape = (1, 2, 32, 64)
+        empty_shape = list(full_shape)
+        empty_shape[dim] = 0
+        a = torch.arange(1 * 2 * 32 * 64).reshape(full_shape).to(torch.bfloat16)
+        ta = ttnn.from_torch(a, layout=layout, device=device, memory_config=mem)
+        e = ttnn.from_torch(torch.zeros(empty_shape, dtype=torch.bfloat16), layout=layout, device=device, memory_config=mem)
+        inputs = {"first": [e, ta], "last": [ta, e], "middle": [ta, e, ta]}[position]
+        expected = {"first": a, "last": a, "middle": torch.cat([a, a], dim=dim)}[position]
+        out = ttnn.to_torch(ttnn.concat(inputs, dim=dim))
+        assert_equal(expected, out)
+
+    def test_all_empty_along_concat_dim(self, device):
+        """All inputs empty along dim returns an empty tensor, not a crash."""
+        e1 = ttnn.from_torch(
+            torch.zeros(1, 2, 32, 0, dtype=torch.bfloat16), layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+        )
+        e2 = ttnn.from_torch(
+            torch.zeros(1, 2, 32, 0, dtype=torch.bfloat16), layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+        )
+        out = ttnn.to_torch(ttnn.concat([e1, e2], dim=-1))
+        assert tuple(out.shape) == (1, 2, 32, 0)
+
 
 # ===========================================================================
 # 8. Groups parameter (height-sharded only)
