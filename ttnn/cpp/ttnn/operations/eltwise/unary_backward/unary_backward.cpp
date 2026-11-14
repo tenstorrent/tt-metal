@@ -473,31 +473,77 @@ std::vector<std::optional<Tensor>> sqrt_bw(
     return grad_tensor;
 }
 
+namespace {
+
+Tensor digamma_with_reflection(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
+    Tensor floor_x = ttnn::floor(x, output_mem_config);
+    Tensor frac = ttnn::subtract(x, floor_x, std::nullopt, output_mem_config);
+    Tensor pi_frac = ttnn::multiply(frac, std::numbers::pi_v<float>, std::nullopt, output_mem_config);
+    Tensor cot_pi_x = ttnn::multiply(
+        ttnn::cos(pi_frac, output_mem_config),
+        ttnn::reciprocal(ttnn::sin(pi_frac, output_mem_config), output_mem_config),
+        std::nullopt,
+        output_mem_config);
+    Tensor psi_reflected = ttnn::subtract(
+        ttnn::digamma(ttnn::rsub(x, 1.0f, std::nullopt, output_mem_config), output_mem_config),
+        ttnn::multiply(cot_pi_x, std::numbers::pi_v<float>, std::nullopt, output_mem_config),
+        std::nullopt,
+        output_mem_config);
+    return ttnn::where(
+        ttnn::lt(x, 0.5f, std::nullopt, output_mem_config),
+        psi_reflected,
+        ttnn::digamma(x, output_mem_config),
+        output_mem_config);
+}
+
+Tensor lgamma_grad_single(
+    const Tensor& grad, const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
+    float t_inf = std::numeric_limits<float>::infinity();
+    float t_nan = std::nanf("");
+    Tensor grad_x =
+        ttnn::multiply(grad, digamma_with_reflection(x, output_mem_config), std::nullopt, output_mem_config);
+    Tensor is_zero = ttnn::eqz(x, output_mem_config);
+    grad_x = where(
+        ttnn::logical_and(is_zero, ttnn::eqz(grad, output_mem_config), std::nullopt, output_mem_config),
+        t_nan,
+        grad_x,
+        output_mem_config);
+    grad_x = where(
+        ttnn::logical_and(is_zero, ttnn::gtz(grad, output_mem_config), std::nullopt, output_mem_config),
+        -t_inf,
+        grad_x,
+        output_mem_config);
+    grad_x = where(
+        ttnn::logical_and(is_zero, ttnn::ltz(grad, output_mem_config), std::nullopt, output_mem_config),
+        t_inf,
+        grad_x,
+        output_mem_config);
+    Tensor is_neg_int_pole = ttnn::logical_and(
+        ttnn::ltz(x, output_mem_config),
+        ttnn::eq(x, ttnn::floor(x, output_mem_config), std::nullopt, output_mem_config),
+        std::nullopt,
+        output_mem_config);
+    grad_x = where(is_neg_int_pole, t_nan, grad_x, output_mem_config);
+    return grad_x;
+}
+
+}  // namespace
+
 std::vector<Tensor> multigammaln_bw(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor digamma_result =
-        ttnn::multiply(grad, ttnn::digamma(input, output_mem_config), std::nullopt, output_mem_config);
-    Tensor digamma_result_2 = ttnn::multiply(
-        grad,
-        ttnn::digamma(ttnn::add(input, -0.5f, std::nullopt, output_mem_config), output_mem_config),
-        std::nullopt,
-        output_mem_config);
+    Tensor digamma_result = lgamma_grad_single(grad, input, output_mem_config);
+    Tensor digamma_result_2 = lgamma_grad_single(
+        grad, ttnn::add(input, -0.5f, std::nullopt, output_mem_config), output_mem_config);
 
     Tensor grad_result = ttnn::add(digamma_result, digamma_result_2, std::nullopt, output_mem_config);
 
-    digamma_result = ttnn::multiply(
-        grad,
-        ttnn::digamma(ttnn::add(input, -1.0f, std::nullopt, output_mem_config), output_mem_config),
-        std::nullopt,
-        output_mem_config);
+    digamma_result = lgamma_grad_single(
+        grad, ttnn::add(input, -1.0f, std::nullopt, output_mem_config), output_mem_config);
     grad_result = ttnn::add(grad_result, digamma_result, std::nullopt, output_mem_config);
 
-    digamma_result = ttnn::multiply(
-        grad,
-        ttnn::digamma(ttnn::add(input, -1.5f, std::nullopt, output_mem_config), output_mem_config),
-        std::nullopt,
-        output_mem_config);
+    digamma_result = lgamma_grad_single(
+        grad, ttnn::add(input, -1.5f, std::nullopt, output_mem_config), output_mem_config);
     grad_result = ttnn::add(grad_result, digamma_result, std::nullopt, output_mem_config);
 
     grad_tensor.emplace_back(grad_result);
@@ -506,10 +552,8 @@ std::vector<Tensor> multigammaln_bw(
 
 std::vector<Tensor> lgamma_bw(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
-    auto output_memory_config = output_mem_config.value_or(
-        input.memory_config());  // TODO: Remove after ternary forward ops migration is completed
     std::vector<Tensor> grad_tensor;
-    Tensor grad_result = ttnn::multiply(grad, ttnn::digamma(input, output_mem_config), std::nullopt, output_mem_config);
+    Tensor grad_result = lgamma_grad_single(grad, input, output_mem_config);
     grad_tensor.emplace_back(grad_result);
     return grad_tensor;
 }
