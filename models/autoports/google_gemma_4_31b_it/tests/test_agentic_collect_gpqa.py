@@ -1,9 +1,45 @@
 # SPDX-License-Identifier: Apache-2.0
 import json
+import sys
 
 import pytest
 
 from models.autoports.google_gemma_4_31b_it.tools.agentic_collect_gpqa import collect, explain_with_global_overhead, sha
+
+
+def test_cli_preserves_unicode_line_separators_in_jsonl(tmp_path, monkeypatch):
+    from models.autoports.google_gemma_4_31b_it.tools.agentic_collect_gpqa import main
+
+    lines, samples, tasks = fixture()
+    samples[0]["resps"] = [["reasoning\u2028continued\u2029answer"]]
+    log, sample_path, task_path = (tmp_path / name for name in ("server.log", "samples.jsonl", "tasks.json"))
+    log.write_text("\n".join(lines) + "\n")
+    sample_path.write_text(json.dumps(samples[0], ensure_ascii=False) + "\n")
+    task_path.write_text(json.dumps(tasks))
+    output = tmp_path / "collected"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "collect",
+            "--server-log",
+            str(log),
+            "--samples",
+            str(sample_path),
+            "--task-list",
+            str(task_path),
+            "--agents",
+            "10",
+            "--server-batch",
+            "32",
+            "--out",
+            str(output),
+        ],
+    )
+    main()
+    result = json.loads((output / "collected.json").read_text())
+    assert result["accounting_complete"]
+    assert result["score"]["solved"] == 1
 
 
 def fixture(cached=3):

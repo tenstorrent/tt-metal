@@ -236,7 +236,7 @@ def main():
         if args.run_end is None:
             args.run_end = datetime.fromisoformat(record["end_utc"].replace("Z", "+00:00")).timestamp()
 
-    samples = [json.loads(line) for line in args.samples.read_text().splitlines() if line.strip()]
+    samples = [json.loads(line) for line in args.samples.read_text().split("\n") if line.strip()]
     result, calls = collect(
         args.server_log.read_text().splitlines(),
         samples,
