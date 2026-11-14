@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import math
+
 import pytest
 import torch
 import numpy as np
@@ -1652,3 +1654,35 @@ def test_transpose_sharded_rm_width(device, dim0, dim1, input_sharding, output_s
         layout=ttnn.ROW_MAJOR_LAYOUT,
         input_dtype=dtype,
     )
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=["bfloat16", "float32"])
+@pytest.mark.parametrize("w", [32, 40, 64])
+@pytest.mark.parametrize("h", [4, 8, 12, 16, 17, 20, 24, 28, 31, 32, 40, 50])
+def test_transpose_hw_sharded_rm_output_row_widths(device, h, w, dtype):
+    """Row-major height-sharded WH transpose with whole HxW planes in each shard, for output rows of
+    every width class: H % 32 up to one face, wider than one face (#24095), above one tile, and W % 32
+    both zero and nonzero."""
+    # The sharded row-major factory needs shard elements to be a multiple of a tile.
+    planes_per_shard = 1024 // math.gcd(h * w, 1024)
+    torch.manual_seed(0)
+    torch_input = torch.randn((1, 2 * planes_per_shard, h, w), dtype=torch.float32).to(
+        torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
+    )
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})
+    sharded_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(shard_grid, (planes_per_shard * h, w), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    tt_input = ttnn.from_torch(
+        torch_input, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=sharded_mem_config
+    )
+
+    tt_output = ttnn.transpose(tt_input, 2, 3)
+
+    assert tt_output.memory_config().memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+    expected = torch_input.transpose(2, 3)
+    actual = ttnn.to_torch(tt_output)
+    mismatches = int((actual != expected).sum())
+    assert mismatches == 0, f"{mismatches} of {expected.numel()} values differ"

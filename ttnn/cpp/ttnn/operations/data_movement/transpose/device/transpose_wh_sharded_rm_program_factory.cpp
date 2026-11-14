@@ -8,7 +8,9 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-logger/tt-logger.hpp>
 
 #include <algorithm>
@@ -111,11 +113,18 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedRMProgramFactory::cre
     log_debug(tt::LogOp, "all_cores: {}", all_cores);
     log_debug(tt::LogOp, "num_cores: {}", num_cores);
 
-    // Temporary fix until pack_untilize is fully fixed: for taller blocks the packer untilizes into
-    // a staging buffer and the writer copies each column into the output shard, instead of the
-    // packer writing the shard directly. The compute and writer kernels select that path on the
-    // OUT_STAGING define, which is emitted exactly when the staging buffer is bound.
-    const bool use_out_staging = ht > 8;
+    // The narrow-row pack_untilize packs H % 32 datums per output row straight into the output shard. It
+    // reads one face per row, so it is used only for a single tile column at most one face wide, with rows
+    // that fill the output shard's row pitch and whole 32-row tile columns. Every other shape packs full
+    // tile rows into a staging buffer, and the writer copies the H datums of each row into the shard at
+    // its row pitch. The compute and writer kernels select that path on the OUT_STAGING define, which is
+    // emitted exactly when the staging buffer is bound.
+    const uint32_t output_row_bytes = H * output_tensor.element_size();
+    const uint32_t output_row_pitch = tt::align(output_row_bytes, hal::get_l1_alignment());
+    const uint32_t h_remainder = H % TILE_HEIGHT;
+    const bool use_narrow_row = h_remainder != 0 && ht == 1 && h_remainder <= FACE_WIDTH &&
+                                output_row_bytes == output_row_pitch && W % TILE_WIDTH == 0;
+    const bool use_out_staging = ht > 8 || W % TILE_WIDTH != 0 || (h_remainder != 0 && !use_narrow_row);
 
     ProgramSpec spec{.name = "transpose_wh_sharded_rm"};
 
@@ -133,19 +142,26 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedRMProgramFactory::cre
         .borrowed_from = INPUT,
     });
 
-    // out: paged by output_page_size over the whole output shard. The buffer's page count is derived
-    // from its total size, which must therefore be a whole number of pages (the legacy circular
-    // buffer configuration enforced the same divisibility).
-    const uint32_t output_total_bytes = stick_size_bytes * shard_height;
-    TT_FATAL(
-        output_total_bytes % output_page_size == 0,
-        "transpose_wh sharded RM: output shard size {} B must be divisible by output page size {} B",
-        output_total_bytes,
-        output_page_size);
+    // out: with staging, the writer fills the output shard row by row at its row pitch, so the buffer
+    // is one entry per output row. Otherwise the packer writes it directly, paged by output_page_size
+    // over the whole shard; the page count is derived from its total size, which must therefore be a
+    // whole number of pages (the legacy circular buffer configuration enforced the same divisibility).
+    uint32_t output_entry_size = output_row_pitch;
+    uint32_t output_num_entries = num_hw_blocks_per_core * W;
+    if (!use_out_staging) {
+        const uint32_t output_total_bytes = stick_size_bytes * shard_height;
+        TT_FATAL(
+            output_total_bytes % output_page_size == 0,
+            "transpose_wh sharded RM: output shard size {} B must be divisible by output page size {} B",
+            output_total_bytes,
+            output_page_size);
+        output_entry_size = output_page_size;
+        output_num_entries = output_total_bytes / output_page_size;
+    }
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = OUT,
-        .entry_size = output_page_size,
-        .num_entries = output_total_bytes / output_page_size,
+        .entry_size = output_entry_size,
+        .num_entries = output_num_entries,
         .data_format_metadata = dst_dfb_data_format,
         .borrowed_from = OUTPUT,
     });
@@ -169,8 +185,8 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedRMProgramFactory::cre
         .data_format_metadata = src0_dfb_data_format,
     });
 
-    // Output staging buffer (only when ht > 8): compute packs each transposed column here and the
-    // writer copies it into the output shard. The legacy factory also allocated an "untilize"
+    // Output staging buffer (only on the staging path): compute packs each transposed column here and
+    // the writer copies it into the output shard. The legacy factory also allocated an "untilize"
     // intermediate (c_26) on this path that no kernel referenced; it is not re-created here.
     if (use_out_staging) {
         uint32_t num_out_tiles = ht * 2;  // double buffer
@@ -264,7 +280,8 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedRMProgramFactory::cre
              {"Wt", wt},
              {"W_per_tile", W > TILE_WIDTH ? TILE_WIDTH : W % TILE_WIDTH},
              {"W_per_tile_last", W % TILE_WIDTH == 0 ? TILE_WIDTH : W % TILE_WIDTH},
-             {"H_size_bytes", H * output_tensor.element_size()},
+             {"H_size_bytes", output_row_bytes},
+             {"output_row_pitch_bytes", output_row_pitch},
              {"l1_read_offset_bytes", ht * output_tensor.element_size() * TILE_HEIGHT}},
         .hw_config = create_writer_datamovement_config(),
     });
@@ -334,6 +351,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedRMProgramFactory::cre
              {"HtWt", ht * wt},
              {"num_hw_blocks_per_core", num_hw_blocks_per_core},
              {"last_output_row_num_datums", H % TILE_HEIGHT == 0 ? TILE_HEIGHT : H % TILE_HEIGHT},
+             {"use_narrow_row", static_cast<uint32_t>(use_narrow_row)},
              {"pack_num_pages", pack_num_pages},
              {"pack_num_pages_last_col", pack_num_pages_last_col},
              {"pack_num_pages_last_row", pack_num_pages_last_row},

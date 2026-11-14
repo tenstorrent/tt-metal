@@ -178,6 +178,8 @@ template <
 inline void _llk_pack_untilize_init_(const std::uint32_t pack_dst_format, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4)
 {
     static_assert(full_ct_dim % block_ct_dim == 0, "full_ct_dim must be divisible by block_ct_dim");
+    // Each narrow row is read from one face of the dest register, so it holds at most FACE_C_DIM datums.
+    static_assert(!narrow_row || (row_num_datums >= 1 && row_num_datums <= FACE_C_DIM), "row_num_datums must be 1 to FACE_C_DIM for narrow_row packing");
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
 
     _llk_pack_untilize_configure_addrmod_<diagonal, narrow_row>();

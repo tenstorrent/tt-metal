@@ -17,6 +17,7 @@ void kernel_main() {
     constexpr uint32_t W_per_tile = get_arg(args::W_per_tile);
     constexpr uint32_t W_per_tile_last = get_arg(args::W_per_tile_last);
     constexpr uint32_t H_size_bytes = get_arg(args::H_size_bytes);
+    constexpr uint32_t output_row_pitch_bytes = get_arg(args::output_row_pitch_bytes);
     constexpr uint32_t l1_read_offset_bytes = get_arg(args::l1_read_offset_bytes);
 
     const uint32_t stick_size_bytes = H_size_bytes;
@@ -29,9 +30,9 @@ void kernel_main() {
 
     uint32_t dst_addr = dfb_dst.get_write_ptr();
 
-    // temporary fix until pack_untilze is fully fixed: the host binds the staging buffer (and
-    // defines OUT_STAGING) only when Ht > 8; otherwise the compute kernel packs straight into the
-    // output shard and there is nothing for this kernel to move.
+    // The host binds the staging buffer (and defines OUT_STAGING) whenever the compute kernel cannot
+    // pack straight into the output shard; otherwise there is nothing for this kernel to move. Each
+    // output row is H_size_bytes of data at the shard's row pitch.
 #ifdef OUT_STAGING
     noc.set_async_write_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
         UnicastEndpoint{},
@@ -54,7 +55,7 @@ void kernel_main() {
                      .noc_y = (uint32_t)my_y[noc.get_noc_id()],
                      .addr = dst_addr});
                 l1_read_addr += l1_read_offset_bytes;
-                dst_addr += stick_size_bytes;
+                dst_addr += output_row_pitch_bytes;
             }
             noc.async_writes_flushed();
             dfb_src.pop_front(Ht);
