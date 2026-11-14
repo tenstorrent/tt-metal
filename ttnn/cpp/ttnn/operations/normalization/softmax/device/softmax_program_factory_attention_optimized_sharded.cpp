@@ -130,10 +130,22 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
         }
     }
 
-    // define core ranges (full sharded grid)
+    // define core ranges from the input tensor's actual shard grid (not hardcoded to origin)
+    // An offset grid (e.g., starting at (1, 0) instead of (0, 0)) must launch work on the correct cores,
+    // otherwise some shards are processed while others are left untouched, producing silent incorrect results.
+    const auto shard_grid = input_tensor.shard_spec().value().grid;
+    const auto shard_bbox = shard_grid.bounding_box();
     std::uint32_t num_cores_c = program_config.compute_with_storage_grid_size.x;
     std::uint32_t num_cores_r = program_config.compute_with_storage_grid_size.y;
-    const CoreRangeSet all_device_cores{CoreRange({0, 0}, {num_cores_c - 1, num_cores_r - 1})};
+    TT_FATAL(
+        shard_bbox.end_coord.x - shard_bbox.start_coord.x + 1 == num_cores_c &&
+            shard_bbox.end_coord.y - shard_bbox.start_coord.y + 1 == num_cores_r,
+        "Shard grid dimensions ({}x{}) must match compute_with_storage_grid_size ({}x{})",
+        shard_bbox.end_coord.x - shard_bbox.start_coord.x + 1,
+        shard_bbox.end_coord.y - shard_bbox.start_coord.y + 1,
+        num_cores_c,
+        num_cores_r);
+    const CoreRangeSet all_device_cores = shard_grid;
 
     // ---- Resource names (program-scope; local to avoid unity-build symbol clashes) ----
     const KernelSpecName READER{"reader"};

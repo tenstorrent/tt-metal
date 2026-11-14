@@ -206,6 +206,20 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
             TT_FATAL(
                 mask.padded_shape() == tensors_args.input_tensor.padded_shape(),
                 "Sharded mask shape must match input tensor shape");
+            // Ensure the mask's shard spec is compatible with the input's shard spec. A mismatch would cause
+            // the reader to silently access the wrong shard or read out of bounds.
+            const auto& mask_shard_spec = mask.shard_spec().value();
+            const auto& input_shard_spec = tensors_args.input_tensor.shard_spec().value();
+            TT_FATAL(
+                mask_shard_spec.orientation == input_shard_spec.orientation,
+                "Sharded mask shard orientation ({}) must match input shard orientation ({})",
+                mask_shard_spec.orientation,
+                input_shard_spec.orientation);
+            TT_FATAL(
+                mask_shard_spec.shape == input_shard_spec.shape,
+                "Sharded mask shard shape {} must match input shard shape {}",
+                mask_shard_spec.shape,
+                input_shard_spec.shape);
         } else {
             if (mask.layout() == Layout::ROW_MAJOR) {
                 const auto tile_width = tensors_args.input_tensor.tensor_spec().tile().get_width();
@@ -293,6 +307,32 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
                                 program_config.block_w,
                                 program_config.block_h,
                                 num_cores_r * num_cores_c);
+                            // Row-major mask reader does not implement causal mask handling, so the combination
+                            // would hang the device. Reject it here with a clear error instead.
+                            if (attributes.is_causal_mask && mask.layout() == Layout::ROW_MAJOR) {
+                                TT_FATAL(
+                                    false,
+                                    "Row-major mask with is_causal_mask=True is not supported for sharded softmax. "
+                                    "Use TILE layout for the mask or disable causal masking.");
+                            }
+                            // For TILE layout causal masks, the reader steps by whole batches and rewinds every
+                            // mask_Ht tile rows, so it needs one mask per input batch and a shard of whole mask heights.
+                            if (attributes.is_causal_mask && mask.layout() == Layout::TILE) {
+                                TT_FATAL(
+                                    tensors_args.input_tensor.padded_shape()[0] == mask.padded_shape()[0],
+                                    "Input and mask batch sizes must match, got input: {} vs mask: {}",
+                                    tensors_args.input_tensor.padded_shape(),
+                                    mask.padded_shape());
+                                const uint32_t mask_Ht = mask.padded_shape()[-2] /
+                                                         tensors_args.input_tensor.tensor_spec().tile().get_height();
+                                TT_FATAL(
+                                    mask_Ht > 0 && program_config.block_h % mask_Ht == 0,
+                                    "block_h ({}) must be a positive multiple of the causal mask height in tiles "
+                                    "({}). Mask shape is {}.",
+                                    program_config.block_h,
+                                    mask_Ht,
+                                    mask.padded_shape());
+                            }
                         } else {
                             TT_FATAL(
                                 attributes.is_causal_mask,
