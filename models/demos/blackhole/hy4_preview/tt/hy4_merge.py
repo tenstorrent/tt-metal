@@ -19,7 +19,7 @@ def _acc(t):
     return list(ttnn.TensorAccessorArgs(t).get_compile_time_args())
 
 
-def merge_fused(x, sink, S, nsplit=None, out=None):
+def merge_fused(x, sink, S, nsplit=None, out=None, full=False):
     md = x.device()
     assert x.layout == ttnn.TILE_LAYOUT and x.dtype == ttnn.bfloat16
     nsplit = nsplit or int(
@@ -85,14 +85,24 @@ def merge_fused(x, sink, S, nsplit=None, out=None):
         kernel_source=f"{KDIR}/mrg_compute.cpp",
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=core_set,
-        compile_time_args=[tpc, ST, A, W, R, ONE, OUT, int(os.environ.get("HY4_MRG_DBG", "0"))],
+        compile_time_args=[tpc, ST, A, W, R, ONE, OUT, int(os.environ.get("HY4_MRG_DBG", "0")), int(full)],
         runtime_args=rt_c,
         common_runtime_args=[],
         config=cc,
     )
     prog = ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=[], cbs=cbs)
     prog.custom_program_hash = (0x3E6 << 40) | (
-        hash((S, nsplit, os.environ.get("HY4_MRG_DBG", "0"), tuple(_acc(x)), tuple(_acc(sink)), tuple(_acc(out))))
+        hash(
+            (
+                S,
+                nsplit,
+                int(full),
+                os.environ.get("HY4_MRG_DBG", "0"),
+                tuple(_acc(x)),
+                tuple(_acc(sink)),
+                tuple(_acc(out)),
+            )
+        )
         & ((1 << 40) - 1)
     )
     ttnn.generic_op([x, sink, out], prog)

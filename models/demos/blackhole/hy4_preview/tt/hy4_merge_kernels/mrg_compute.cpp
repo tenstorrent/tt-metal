@@ -25,6 +25,9 @@ constexpr uint32_t CB_R = get_compile_time_arg_val(4);
 constexpr uint32_t CB_ONE = get_compile_time_arg_val(5);
 constexpr uint32_t CB_OUT = get_compile_time_arg_val(6);
 constexpr uint32_t DBG = get_compile_time_arg_val(7);  // 1: no compute (data movement only), 2: w only
+constexpr uint32_t FULL = get_compile_time_arg_val(8);  // 1: the sfpu ops cover all four faces (compact layout with >
+                                                        // 16 used rows); 0: rows 0..15 only (VectorMode::R)
+constexpr VectorMode VM = FULL ? VectorMode::RC : VectorMode::R;
 constexpr uint32_t NC = 8;
 constexpr uint32_t NB = 4;  // sources per DST batch (fp32 DST half = 4 tiles)
 
@@ -52,7 +55,7 @@ void kernel_main() {
         if constexpr (DBG != 3) {
             exp_tile_init();
             for (uint32_t k = 0; k < NB; ++k) {
-                exp_tile<false, false, InputClamping::ClampToNegative, 8>(k, VectorMode::R);
+                exp_tile<false, false, InputClamping::ClampToNegative, 8>(k, VM);
             }
         }
         if constexpr (DBG != 3 && DBG != 4) {
@@ -84,7 +87,7 @@ void kernel_main() {
     binop_with_scalar_tile_init();
     add_unary_tile(0, 0x3f800000u);  // + 1.0 (the sink term e^0)
     recip_tile_init();
-    recip_tile(0, VectorMode::R);
+    recip_tile(0, VM);
     tile_regs_commit();
     pack_reconfig_data_format(CB_R);
     tile_regs_wait();

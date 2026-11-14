@@ -72,6 +72,7 @@ def sparse_sdpa_split(
     xchg=None,
     build_only=False,
     out=None,
+    compact=False,
 ):
     """q: bf16 ROW_MAJOR [1,H=32,S,D]; kv: fp8_e4m3 / bf16 ROW_MAJOR [1,1,R,D]; idx: uint32 ROW_MAJOR [1,1,S,TOPK]; sink: bf16 ROW_MAJOR [1,1,1,H].
     ``ckc``: the device compute kernel config (fidelity / approx / fp32 acc are read from it). -> bf16 ROW_MAJOR [1,H,S,v_dim].
@@ -150,6 +151,9 @@ def sparse_sdpa_split(
     emit_stats = int(emit_stats)
     assert owner_s == 0 or (cols and S % owner_s == 0), "owner layout: emit_stats=2/3 and S = NC*owner_s query rows"
     assert not tile_out or owner_s > 0
+    assert not compact or (
+        tile_out and xchg is None
+    ), "compact: owner-layout tile output (emit_stats=3), no fused exchange"
     use_sink = 0 if emit_stats else 1
     stats = (
         ttnn.allocate_tensor_on_device(
@@ -161,7 +165,15 @@ def sparse_sdpa_split(
     if out is None:
         out = ttnn.allocate_tensor_on_device(
             ttnn.Shape(
-                ([S // owner_s, owner_s, 32, v_dim + 64] if tile_out else [S // owner_s, 1, 8 * owner_s, v_dim + 32])
+                (
+                    (
+                        [S // owner_s, (owner_s + 3) // 4, 32, v_dim + 64]
+                        if compact
+                        else [S // owner_s, owner_s, 32, v_dim + 64]
+                    )
+                    if tile_out
+                    else [S // owner_s, 1, 8 * owner_s, v_dim + 32]
+                )
                 if owner_s
                 else ([1, H, S, v_dim + 32] if cols else [1, H, S, v_dim])
             ),
@@ -337,6 +349,7 @@ def sparse_sdpa_split(
         STAT_SCR,
         owner_s,
         _bits(scale),
+        int(compact),
     ]
     writer_ct += _acc(out) + _acc(kv) + _acc(sink) + _acc(q) + (_acc(stats) if (emit_stats and not cols) else _acc(out))
     fid = getattr(ckc, "math_fidelity", ttnn.MathFidelity.HiFi4)
@@ -495,6 +508,7 @@ def sparse_sdpa_split(
                 int(approx),
                 int(fp32),
                 _bits(scale),
+                int(compact),
                 tuple(_acc(q)),
                 tuple(_acc(kv)),
                 tuple(_acc(idx)),
