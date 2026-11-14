@@ -143,6 +143,19 @@ protected:
     // are not reused.  Written to a ".build_state" file in the output directory.
     uint64_t build_state_hash_{};
 
+    // Dynamic L1 packing (plan B2 / R3): the layout-dependent --defsym flags are emitted at link()
+    // time (not in the ctor), so link() needs the HAL + this build's identity to query the installed
+    // L1 layout. The HAL outlives every JitBuildState (owned by MetalContext).
+    const Hal* hal_{nullptr};
+    HalProgrammableCoreType core_type_{};
+    HalProcessorClassType processor_class_{};
+    uint32_t processor_id_{};
+
+    // build_state_hash_ folded with the currently-installed L1 layout (plan B2 / R4). For kernels this
+    // makes a firmware relayout invalidate the cache (kernels reference the weakened firmware by name,
+    // not content); equals build_state_hash_ on arches without dynamic L1.
+    uint64_t effective_build_state_hash() const;
+
     // Upper bound for compile objects.
     // Current max obj count is 2 -- very sufficient for now.
     static constexpr size_t kMaxBuildBitset = 64;
@@ -163,6 +176,12 @@ public:
     JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& build_config, const Hal& hal);
 
     void build(const JitBuildSettings* settings, std::span<const JitBuildState* const> link_targets = {}) const;
+
+    // Dynamic L1 packing (plan B2 / R5): re-link an already-built firmware image at the packed L1
+    // layout now installed in the HAL (link() reads it via linker_flags), then re-weaken so kernels
+    // link against the packed firmware. Called per firmware image after install_l1_layout(); the
+    // firmware was first linked at the identity layout to be measured. Firmware-only.
+    void relink_firmware(const std::string& out_dir) const;
 
     const std::string& get_out_path() const { return this->out_path_; }
     const std::string& get_target_name() const { return this->target_name_; }

@@ -262,6 +262,9 @@ void BuildEnvManager::add_build_env_locked(
             log_debug(tt::LogBuildKernels, "No pre-compiled firmware found for build key: {}", build_key);
         }
     }
+    // Dynamic L1 packing (plan B2): no per-run delta cache. The packed layout is computed from the
+    // measured firmware this same build and installed into the HAL before kernels link, so both
+    // firmware and kernels link against one absolute layout (see RiscFirmwareInitializer + Hal).
     dev_build_env.firmware_build_states = create_build_state(dev_build_env.build_env, dev_config, true);
     dev_build_env.kernel_build_states = create_build_state(dev_build_env.build_env, dev_config, false);
 }

@@ -100,7 +100,7 @@ inline __attribute__((always_inline)) uint32_t get_noc_counter_address(uint32_t 
     static_assert(proc_t < MaxDMProcessorsPerCoreType);
     static_assert(static_cast<std::underlying_type_t<NocBarrierType>>(barrier_type) < NUM_BARRIER_TYPES);
 
-    constexpr uint32_t base = MEM_NOC_COUNTER_BASE;
+    const uint32_t base = MEM_NOC_COUNTER_BASE;
     constexpr uint32_t size = MEM_NOC_COUNTER_SIZE;
 
     // Calculate most of the offset at compile time. Only the noc is variable at runtime.

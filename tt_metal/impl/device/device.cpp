@@ -460,6 +460,10 @@ bool Device::initialize(
     num_hw_cqs_ = num_hw_cqs;
     const auto& hal = env_impl.get_hal();
     if (worker_l1_size == 0) {
+        // Dynamic L1 packing (plan B2): when packing is in effect, Hal::install_l1_layout (run during
+        // the firmware build phase, before this) has already grown DEFAULT_UNRESERVED and lowered
+        // KERNEL_CONFIG to the packed layout, so this size — and hence the worker-L1 start below — is
+        // automatically the reclaimed value.
         worker_l1_size = hal.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
     }
 

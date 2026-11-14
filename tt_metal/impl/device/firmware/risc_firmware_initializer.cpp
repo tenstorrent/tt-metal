@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <chrono>
 #include <future>
+#include <fstream>
 #include <set>
 #include <thread>
 
@@ -29,6 +30,7 @@
 #include "jit_build/build.hpp"
 #include "jit_build/build_env_manager.hpp"
 #include "llrt/llrt.hpp"
+#include "llrt/tt_elffile.hpp"  // ll_api::get_segment_sizes (dynamic L1 firmware measurement, plan B2)
 #include "common/executor.hpp"
 #include <experimental/fabric/control_plane.hpp>
 #include <experimental/fabric/fabric_types.hpp>
@@ -197,6 +199,87 @@ void RiscFirmwareInitializer::run_async_build_phase(const std::set<tt::ChipId>& 
 
     for (auto& fut : futures) {
         fut.get();
+    }
+
+    // Dynamic L1 packing (plan B2 / R5, defsym variant / D): the firmware ELFs now exist, linked at the
+    // identity layout for sizing. Measure their actual section sizes, compute the packed *absolute*
+    // layout, install it into the HAL, and re-link the firmware at the packed layout. From here one
+    // absolute layout drives the firmware relink + kernel links (post-init JIT; both read the installed
+    // layout via linker_flags, which emits the firmware section-placement defsyms AND the `__l1_*`
+    // movable-base defsyms / D1 — there is no device descriptor) and the worker-L1 allocator
+    // (Device::initialize reads the grown DEFAULT_UNRESERVED). No two-run cache, no delta applied in N
+    // places. No-op on arches without the packing hook (compute returns .valid=false).
+    const ContextId ctx_id = descriptor_->metal_context().get_context_id();
+    const uint32_t tensix_idx = hal_.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+    const uint32_t proc_class_count = hal_.get_processor_classes_count(HalProgrammableCoreType::TENSIX);
+    // Unpacked MEM_MAP_END, stable across MetalContext reinit: install_l1_layout() mutates the live
+    // KERNEL_CONFIG and the per-arch HAL persists across teardown, so reading the live value here would
+    // return the packed base on reinit -> the guard below would wrongly skip re-packing/relink, leaving
+    // a shift-sized layout inconsistency that hangs the warm-reinit FW launch (plan B2 / #2). Reading
+    // the pre-pack value makes the pack decision, l1_pack_shift_, and the firmware relink identical on
+    // init and reinit (install_l1_layout is idempotent, so re-installing the same packed layout is safe).
+    const DeviceAddr static_map_end = hal_.get_pre_pack_map_end(HalProgrammableCoreType::TENSIX);
+    bool hal_packed = false;  // install once per arch (firmware is uniform across its devices)
+    for (tt::ChipId device_id : device_ids) {
+        auto& bem = BuildEnvManager::get_instance(ctx_id);
+        // Dynamic L1 packing × precompiled firmware (plan B2 / D6): packing relinks firmware at the
+        // packed bases, but precompiled firmware skips the compile (no .o objects to relink). These are
+        // disjoint in the current arch matrix (packing is Quasar-only; precompiled fw is WH/BH-only), so
+        // this never fires today — it's a guard for the future (Quasar precompiled fw, or dynamic L1 on
+        // WH/BH). Degrade to the static layout (reclaim 0) rather than attempt an objectless relink. The
+        // future path is to ship a packed layout sidecar and adopt it here instead of skipping.
+        if (bem.get_device_build_env(device_id).firmware_precompiled) {
+            log_warning(
+                tt::LogMetal,
+                "Dynamic L1 (dev {}): firmware is precompiled (no objects to relink) -> packing skipped; "
+                "running the static layout.",
+                device_id);
+            continue;
+        }
+        // Measure firmware .text/.data/.tdata in firmware-image order {DM, TRISC0..3}.
+        std::vector<FirmwareSectionSizes> fw_sizes;
+        try {
+            for (uint32_t pc = 0; pc < proc_class_count; ++pc) {
+                auto [_, num_states] = bem.get_build_index_and_state_count(tensix_idx, pc, true);
+                for (uint32_t rid = 0; rid < num_states; ++rid) {
+                    auto path = bem.get_firmware_binary_path(device_id, tensix_idx, pc, rid);
+                    ll_api::SectionSizes s = ll_api::get_segment_sizes(path);
+                    fw_sizes.push_back(FirmwareSectionSizes{.text = s.text, .data = s.data, .tls = s.tls});
+                }
+            }
+        } catch (...) {
+            continue;  // firmware not built (mock/emulated) -> nothing to measure
+        }
+        PackedL1Layout packed = hal_.compute_packed_l1_layout(fw_sizes);
+        if (!packed.valid || packed.map_end >= static_map_end) {
+            continue;  // no packing hook, or the firmware filled its reservation -> nothing to reclaim
+        }
+        // Install the absolute layout into the shared per-arch HAL once (single-threaded here, after the
+        // build join, before any kernel JIT or the allocator). The underlying Hal is non-const storage
+        // (get_hal() exposes only a const view), so the const_cast is well-defined.
+        if (!hal_packed) {
+            const_cast<Hal&>(hal_).install_l1_layout(HalProgrammableCoreType::TENSIX, packed);
+            l1_pack_shift_ = static_cast<uint32_t>(static_map_end - packed.map_end);
+            hal_packed = true;
+        }
+        // Re-link each firmware image at the packed layout (relink_firmware reads it from the HAL).
+        uint32_t fw_idx = 0;
+        for (uint32_t pc = 0; pc < proc_class_count; ++pc) {
+            auto [bidx, num_states] = bem.get_build_index_and_state_count(tensix_idx, pc, true);
+            (void)bidx;
+            for (uint32_t rid = 0; rid < num_states && fw_idx < packed.fw.size(); ++rid, ++fw_idx) {
+                const JitBuildState& st = bem.get_firmware_build_state(device_id, tensix_idx, pc, rid);
+                st.relink_firmware(st.get_out_path() + st.get_target_name() + "/");
+            }
+        }
+        log_info(
+            tt::LogMetal,
+            "Dynamic L1 (Quasar) dev {}: PACKED, MEM_MAP_END {} -> {} (reclaimed {} B, {:.1f} KB)",
+            device_id,
+            static_map_end,
+            packed.map_end,
+            static_map_end - packed.map_end,
+            (static_map_end - packed.map_end) / 1024.0);
     }
 }
 
@@ -870,7 +953,11 @@ dev_msgs::core_info_msg_t RiscFirmwareInitializer::populate_core_info_msg(
     core_info.noc_pcie_addr_end() = hal_.get_pcie_addr_upper_bound();
     core_info.noc_dram_addr_base() = 0;
     core_info.noc_dram_addr_end() = soc_d.dram_core_size;
-    core_info.l1_unreserved_start() = align(worker_l1_unreserved_start_, hal_.get_alignment(HalMemType::DRAM));
+    // Dynamic L1 packing (plan B2 / R6): the unreserved worker-L1 region starts l1_pack_shift_ bytes
+    // lower (the reclaimed firmware headroom), matching the grown DEFAULT_UNRESERVED the allocator
+    // reads. 0 when no packing was applied; set in run_async_build_phase from the installed layout.
+    core_info.l1_unreserved_start() =
+        align(worker_l1_unreserved_start_ - l1_pack_shift_, hal_.get_alignment(HalMemType::DRAM));
     if (programmable_core_type == HalProgrammableCoreType::TENSIX) {
         core_info.core_magic_number() = dev_msgs::CoreMagicNumber::WORKER;
     } else if (programmable_core_type == HalProgrammableCoreType::ACTIVE_ETH) {
@@ -1281,6 +1368,10 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
     auto go_msg = dev_msgs_factory.create<dev_msgs::go_msg_t>();
     go_msg.view().signal() = dev_msgs::RUN_MSG_INIT;
 
+    // Dynamic L1 (plan B2, defsym variant / D): no device descriptor is written. The packed movable
+    // bases reach the device baked into the firmware/kernel images as `__l1_*` absolute linker symbols
+    // (qa_hal linker_flags / D1); the host side consumes the layout only via the HAL (allocator + the
+    // host-written routing/fabric structures install_l1_layout placed).
     for (uint32_t y = 0; y < logical_grid_size.y; y++) {
         for (uint32_t x = 0; x < logical_grid_size.x; x++) {
             CoreCoord logical_core(x, y);

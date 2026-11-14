@@ -381,6 +381,13 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
         build_config.processor_class,
         static_cast<uint32_t>(build_config.processor_id),
         env_.get_rtoptions()};
+    // Dynamic L1 packing (plan B2 / R3): remember what link() needs to re-emit the layout-dependent
+    // --defsym flags at link time, reading the L1 layout installed after the firmware sizing build,
+    // rather than baking them here against a layout that isn't known yet.
+    this->hal_ = &hal;
+    this->core_type_ = build_config.core_type;
+    this->processor_class_ = build_config.processor_class;
+    this->processor_id_ = static_cast<uint32_t>(build_config.processor_id);
     const auto& jit_build_query = hal.get_jit_build_query();
 
     this->target_name_ = jit_build_query.target_name(params);
@@ -440,8 +447,9 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
         }
     }
 
-    // Linker flags
-    this->lflags_ += jit_build_query.linker_flags(params);
+    // Linker flags. The layout-dependent --defsym flags are emitted at link() time (plan B2 / R3),
+    // reading the dynamic-L1 layout installed after the firmware sizing build -- so the firmware sizing
+    // link uses the identity layout and the final firmware + every kernel use the one packed layout.
     this->lflags_ += fmt::format("-T{} ", this->linker_script_);
     if (!this->is_fw_) {
         this->lflags_ += "-Wl,--emit-relocs ";
@@ -484,6 +492,25 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
 
 static constexpr std::string_view BUILD_STATE_HASH_FILE = ".build_state";
 
+uint64_t JitBuildState::effective_build_state_hash() const {
+    // Fold the currently-installed L1 layout into the cache key (plan B2 / R4). The layout-dependent
+    // --defsym flags are emitted at link() time and are not part of build_state_hash_, so without this
+    // a firmware relayout -- which kernels reference only via the weakened-firmware name, not content
+    // -- would not invalidate cached kernel ELFs. Arches without dynamic L1 (WH/BH) have empty region
+    // bases, so the hash is unchanged there.
+    if (this->hal_ == nullptr) {
+        return build_state_hash_;
+    }
+    const auto& region_bases = this->hal_->get_l1_region_bases(this->core_type_);
+    if (region_bases.empty()) {
+        return build_state_hash_;
+    }
+    tt::StableHasher hasher;
+    hasher.update(build_state_hash_);
+    hasher.update(region_bases.begin(), region_bases.end());
+    return hasher.digest();
+}
+
 bool JitBuildState::build_state_matches(const string& out_dir) const {
     std::ifstream file(out_dir + string(BUILD_STATE_HASH_FILE));
     if (!file.is_open()) {
@@ -491,13 +518,14 @@ bool JitBuildState::build_state_matches(const string& out_dir) const {
     }
     uint64_t stored_hash{};
     file >> stored_hash;
-    if (file.fail() || stored_hash != build_state_hash_) {
+    const uint64_t current_hash = effective_build_state_hash();
+    if (file.fail() || stored_hash != current_hash) {
         log_debug(
             tt::LogBuildKernels,
             "Build state hash mismatch in {}: stored={}, current={}",
             out_dir,
             stored_hash,
-            build_state_hash_);
+            current_hash);
         return false;
     }
     return true;
@@ -506,7 +534,7 @@ bool JitBuildState::build_state_matches(const string& out_dir) const {
 void JitBuildState::write_build_state_hash(const string& out_dir) const {
     jit_build::utils::FileRenamer tmp(out_dir + string(BUILD_STATE_HASH_FILE));
     std::ofstream file(tmp.path());
-    file << build_state_hash_;
+    file << effective_build_state_hash();
 }
 
 void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* settings, size_t src_index) const {
@@ -637,6 +665,20 @@ bool JitBuildState::need_link(const string& out_dir) const {
 void JitBuildState::link(const string& out_dir, const JitBuildSettings* settings, const string& link_objs) const {
     string cmd{"cd " + out_dir + " && " + env_.gpp_};
     string lflags = this->lflags_;
+    // Dynamic L1 packing (plan B2 / R3): emit the layout-dependent --defsym flags now, reading the L1
+    // layout currently installed in the HAL -- identity for the firmware sizing link (before
+    // install_l1_layout), packed for the final firmware relink and every kernel link. linker_flags
+    // falls back to the static dev_mem_map.h chain when no packed layout is installed (empty defsyms).
+    if (this->hal_ != nullptr) {
+        HalJitBuildQueryInterface::Params params{
+            this->is_fw_, this->core_type_, this->processor_class_, this->processor_id_, env_.get_rtoptions()};
+        const auto& fw_defsyms = this->hal_->get_l1_fw_defsyms(this->core_type_);
+        if (!fw_defsyms.empty()) {
+            params.fw_defsyms = &fw_defsyms;
+            params.l1_region_bases = &this->hal_->get_l1_region_bases(this->core_type_);
+        }
+        lflags += this->hal_->get_jit_build_query().linker_flags(params);
+    }
     if (env_.get_rtoptions().get_build_map_enabled()) {
         lflags += "-Wl,-Map=" + out_dir + this->target_name_ + ".map ";
         lflags += "-save-temps=obj -fdump-tree-all -fdump-rtl-all ";
@@ -704,6 +746,21 @@ void JitBuildState::weaken(const string& out_dir) const {
         elf.ObjectifyExecutable();
     }
     elf.WriteImage(out_file.path());
+}
+
+void JitBuildState::relink_firmware(const string& out_dir) const {
+    // Dynamic L1 packing (plan B2 / R5): re-link this firmware image at the packed L1 layout now
+    // installed in the HAL. link() re-emits the --defsym flags from that layout (no regex patching),
+    // so the firmware text/globals land at their packed addresses; then re-weaken so kernels link
+    // against the packed firmware. The firmware was first linked at the identity layout to be measured.
+    // Dependency tracking is content-hashed, so an unchanged layout yields identical bytes and does not
+    // invalidate downstream kernel caches. The already-compiled objects keep their final (objs_) names.
+    std::string link_objs;
+    for (const auto& obj : this->objs_) {
+        link_objs += out_dir + obj + " ";
+    }
+    this->link(out_dir, nullptr, link_objs);
+    this->weaken(out_dir);
 }
 
 void JitBuildState::extract_zone_src_locations(const std::string& out_dir) const {

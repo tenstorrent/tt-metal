@@ -289,6 +289,38 @@ void ElfFile::ReadImage(const std::string& path) {
     pimpl_->LoadImage();
 }
 
+// Defined in namespace ll_api (the header declares it there). This file uses `using namespace ll_api`
+// rather than opening the namespace, so the name must be explicitly qualified -- otherwise the
+// definition lands at global scope and fails to link against the ll_api:: declaration.
+SectionSizes ll_api::get_segment_sizes(const std::string& path) {
+    ElfFile elf;
+    elf.ReadImage(path);
+
+    // Resolve the section base addresses. GetSectionContents leaves virtual_address untouched when
+    // the section is absent, so seed with a sentinel no real (32-bit, non-zero) section can match.
+    constexpr uint64_t kAbsent = ~uint64_t{0};
+    uint64_t text_addr = kAbsent;
+    uint64_t data_addr = kAbsent;
+    uint64_t tdata_addr = kAbsent;
+    elf.GetSectionContents(".text", text_addr);
+    elf.GetSectionContents(".data", data_addr);
+    elf.GetSectionContents(".tdata", tdata_addr);
+
+    // Post-TrimSegments, a surviving segment's address equals the section base; membytes is the
+    // actual used size. (Zero-size segments are erased, so they report 0 by simply not matching.)
+    SectionSizes sizes;
+    for (const auto& seg : elf.GetSegments()) {
+        if (seg.address == text_addr) {
+            sizes.text = seg.membytes;
+        } else if (seg.address == data_addr) {
+            sizes.data = seg.membytes;
+        } else if (seg.address == tdata_addr) {
+            sizes.tls = seg.membytes;
+        }
+    }
+    return sizes;
+}
+
 ElfFile::Impl* ElfFile::Impl::Make(ElfFile& owner, const std::string& path) {
     int fd = open(path.c_str(), O_RDONLY | O_CLOEXEC);
     struct stat st{};

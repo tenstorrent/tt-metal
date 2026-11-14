@@ -27,6 +27,7 @@
 #include <vector>
 
 #include "tt_memory.h"
+#include "hostdev/l1_layout.h"                       // L1Region / NUM_L1_REGIONS
 #include "hal/generated/dev_msgs.hpp"                // IWYU pragma: export
 #include "hal/generated/fabric_telemetry.hpp"        // IWYU pragma: export
 #include "hal/generated/realtime_profiler_msgs.hpp"  // IWYU pragma: export
@@ -159,6 +160,12 @@ enum class DispatchFeature : uint8_t {
 
 class Hal;
 
+// --- Dynamic L1 packing (plan B2 / Step C) -------------------------------------------------------
+// FirmwareSectionSizes / PackedFirmwareDefsyms / PackedL1Layout now live in hostdev/l1_layout.h
+// (included above) so the single constexpr compute_l1_layout() in the Quasar dev_mem_map.h host
+// branch can produce them without depending on this (host-heavy) header. The bases reach the device
+// only as `__l1_*` linker symbols (linker_flags / D1); there is no device descriptor.
+
 // Core information instanced once per core type
 class HalCoreInfoType {
     friend class Hal;
@@ -176,6 +183,22 @@ private:
     std::vector<uint32_t> mem_map_sizes_;
     std::vector<uint32_t> eth_fw_mailbox_msgs_;
     std::vector<uint32_t> eth_debug_regs_;
+    // Dynamic L1 region bases (Quasar), indexed by L1Region (hostdev/l1_layout.h). Empty on arches
+    // without dynamic L1. Set post-construction by the per-arch mem-map builder; under the defsym
+    // variant (plan B2 / D) these are consumed at link() time by linker_flags (D1) to emit the
+    // `__l1_*` absolute symbols the device resolves — there is no device descriptor.
+    std::vector<DeviceAddr> l1_region_bases_;
+    // Dynamic L1 packing (plan B2): per-firmware-image packed defsyms ({DM, TRISC0..3}); link()-time
+    // linker_flags reads these to place firmware text/data/tls. Empty until Hal::install_l1_layout().
+    std::vector<PackedFirmwareDefsyms> l1_fw_defsyms_;
+    // Dynamic L1 packing (plan B2): the KERNEL_CONFIG base (MEM_MAP_END) as it was BEFORE the first
+    // install_l1_layout() packed it. install_l1_layout mutates KERNEL_CONFIG in place, and the per-arch
+    // Hal persists across MetalContext teardown/reinit, so on a reinit the *live* KERNEL_CONFIG already
+    // reflects the packed layout. The packing decision ("anything left to reclaim?" and the resulting
+    // l1_pack_shift) must be computed against the *unpacked* value to stay identical across init and
+    // reinit -- otherwise reinit reads the packed value, wrongly skips re-packing/relink, and leaves a
+    // shift-sized inconsistency (the warm-reinit FW-launch hang, plan B2 / #2). 0 = not yet packed.
+    DeviceAddr pre_pack_map_end_ = 0;
     bool supports_cbs_ = false;
     bool supports_dfbs_ = false;
     bool supports_receiving_multicast_cmds_ = false;
@@ -218,6 +241,15 @@ public:
 
     DeviceAddr get_dev_addr(HalL1MemAddrType addr_type) const;
     uint32_t get_dev_size(HalL1MemAddrType addr_type) const;
+    void set_l1_region_bases(std::vector<DeviceAddr> l1_region_bases) { l1_region_bases_ = std::move(l1_region_bases); }
+    const std::vector<DeviceAddr>& get_l1_region_bases() const { return l1_region_bases_; }
+    const std::vector<PackedFirmwareDefsyms>& get_l1_fw_defsyms() const { return l1_fw_defsyms_; }
+    // Unpacked KERNEL_CONFIG base (MEM_MAP_END), stable across install_l1_layout()/reinit. Before the
+    // first pack this is just the live base; after, it is the value captured on the first install.
+    DeviceAddr get_pre_pack_map_end() const {
+        return pre_pack_map_end_ != 0 ? pre_pack_map_end_
+                                      : mem_map_bases_[static_cast<std::size_t>(HalL1MemAddrType::KERNEL_CONFIG)];
+    }
     uint32_t get_processor_classes_count() const;
     uint32_t get_processor_types_count(uint32_t processor_class_idx) const;
     uint32_t get_processor_index(HalProcessorClassType processor_class, uint32_t processor_type_idx) const;
@@ -280,6 +312,13 @@ public:
         HalProcessorClassType processor_class;
         uint32_t processor_id;
         const llrt::RunTimeOptions& rtoptions;
+        // Dynamic L1 packing (plan B2): the computed absolute layout this link must target, read at
+        // link() time (not ctor) so it always reflects the firmware that actually runs this build.
+        // Both are non-null only after Hal::install_l1_layout() has run (the packed run); when null,
+        // linker_flags() falls back to the static dev_mem_map.h chain (identity / firmware sizing
+        // link). l1_region_bases is indexed by L1Region; fw_defsyms is per image ({DM, TRISC0..3}).
+        const std::vector<DeviceAddr>* l1_region_bases = nullptr;
+        const std::vector<PackedFirmwareDefsyms>* fw_defsyms = nullptr;
     };
     virtual ~HalJitBuildQueryInterface() = default;
     // Returns a list of objects to be linked; these were compiled offline.
@@ -324,6 +363,10 @@ public:
     using SetIRAMTextSizeFunc = std::function<void(
         dev_msgs::launch_msg_t::View, HalProgrammableCoreType, HalProcessorClassType, uint32_t, uint32_t)>;
     using VerifyFwVersionFunc = std::function<bool(tt::umd::semver_t)>;
+    // Per-arch dynamic-L1 packing (plan B2 / Step C). Given measured firmware section sizes (in the
+    // arch's firmware-image order; Quasar = {DM, TRISC0..3}), returns the packed movable-region bases
+    // + lowered MEM_MAP_END. Unset on arches without dynamic L1 (returns {.valid=false}).
+    using ComputePackedL1LayoutFunc = std::function<PackedL1Layout(const std::vector<FirmwareSectionSizes>&)>;
 
 private:
     tt::ARCH arch_;
@@ -402,6 +445,7 @@ private:
     // Functions where implementation varies by architecture
     RelocateFunc relocate_func_;
     IramRelocateFunc erisc_iram_relocate_func_;
+    ComputePackedL1LayoutFunc compute_packed_l1_layout_func_;
     ValidRegAddrFunc valid_reg_addr_func_;
     NOCXYEncodingFunc noc_xy_encoding_func_;
     NOCXYEncodingFunc noc_xy_pcie64_encoding_func_;
@@ -545,6 +589,65 @@ public:
     DeviceAddr get_dev_noc_addr(HalProgrammableCoreType programmable_core_type, HalL1MemAddrType addr_type) const;
     uint32_t get_dev_size(HalProgrammableCoreType programmable_core_type, HalL1MemAddrType addr_type) const;
 
+    // Dynamic L1 region bases (indexed by L1Region, hostdev/l1_layout.h). Empty on arches without
+    // dynamic L1 (WH/BH). Consumed at link() time by linker_flags to emit the `__l1_*` defsyms (D1).
+    const std::vector<DeviceAddr>& get_l1_region_bases(HalProgrammableCoreType programmable_core_type) const;
+    // Per-firmware-image packed defsyms (plan B2); empty until install_l1_layout(). link()-time linker_flags.
+    const std::vector<PackedFirmwareDefsyms>& get_l1_fw_defsyms(HalProgrammableCoreType programmable_core_type) const;
+
+    // Dynamic L1 packing (plan B2): install the computed *absolute* layout into this arch's HAL core
+    // info. Overwrites the movable mem-map bases (KERNEL_CONFIG/DEFAULT_UNRESERVED + the host-written
+    // routing/fabric/scratch regions) with the packed absolute values, grows DEFAULT_UNRESERVED into
+    // the reclaimed L1, and stores the region bases (→ device descriptor) + per-image fw defsyms
+    // (→ link()-time linker_flags). No delta is persisted: every consumer reads this one table, so
+    // there is no cross-place shift to keep in sync. One-shot per arch, from measured firmware sizes;
+    // no-op on arches without dynamic L1 (layout.valid == false). The fixed prefix (mailbox, etc.) and
+    // LOCAL (local RAM, 0x802000) are not movable and are left untouched.
+    void install_l1_layout(HalProgrammableCoreType programmable_core_type, const PackedL1Layout& layout) {
+        if (!layout.valid) {
+            return;
+        }
+        uint32_t index = ttsl::as_underlying_type<HalProgrammableCoreType>(programmable_core_type);
+        TT_ASSERT(index < this->core_info_.size());
+        auto& ci = this->core_info_[index];
+        auto& bases = ci.mem_map_bases_;
+        auto& sizes = ci.mem_map_sizes_;
+        auto region = [&](L1Region r) { return layout.region_base[static_cast<std::size_t>(r)]; };
+        auto idx = [](HalL1MemAddrType t) { return static_cast<std::size_t>(t); };
+        // KERNEL_CONFIG ring buffer + worker-L1 allocator drop to the packed MAP_END; the unreserved
+        // region grows by exactly what KERNEL_CONFIG vacated (its base moved down by old-new).
+        const DeviceAddr old_kc = bases[idx(HalL1MemAddrType::KERNEL_CONFIG)];
+        const DeviceAddr new_kc = layout.map_end;
+        // Remember the unpacked MEM_MAP_END on the first pack (idempotent thereafter): the guard/shift
+        // in run_async_build_phase must compare against this, not the live (already-packed) base, so a
+        // MetalContext reinit re-packs+relinks identically to the first init. See pre_pack_map_end_.
+        if (ci.pre_pack_map_end_ == 0) {
+            ci.pre_pack_map_end_ = old_kc;
+        }
+        const DeviceAddr shift = (old_kc > new_kc) ? (old_kc - new_kc) : 0;
+        bases[idx(HalL1MemAddrType::KERNEL_CONFIG)] = new_kc;
+        bases[idx(HalL1MemAddrType::DEFAULT_UNRESERVED)] -= shift;
+        sizes[idx(HalL1MemAddrType::DEFAULT_UNRESERVED)] += static_cast<uint32_t>(shift);
+        // Host-written movable structures: set straight from the absolute table so host writes land
+        // where the device reads them (the device resolves the same bases as `__l1_*` defsym addresses).
+        bases[idx(HalL1MemAddrType::ROUTING_TABLE)] = region(L1Region::ROUTING_TABLE);
+        bases[idx(HalL1MemAddrType::TENSIX_FABRIC_CONNECTIONS)] = region(L1Region::FABRIC_CONNECTIONS);
+        bases[idx(HalL1MemAddrType::FABRIC_CONNECTION_LOCK)] = region(L1Region::FABRIC_CONNECTION_LOCK);
+        bases[idx(HalL1MemAddrType::BANK_TO_NOC_SCRATCH)] = region(L1Region::BANK_TO_NOC_SCRATCH);
+        bases[idx(HalL1MemAddrType::LOGICAL_TO_VIRTUAL_SCRATCH)] = region(L1Region::LOGICAL_TO_VIRTUAL_SCRATCH);
+        // Region bases (device descriptor) + per-image fw defsyms (link()-time linker_flags).
+        ci.l1_region_bases_.assign(layout.region_base.begin(), layout.region_base.end());
+        ci.l1_fw_defsyms_.assign(layout.fw.begin(), layout.fw.end());
+    }
+
+    // Unpacked MEM_MAP_END (KERNEL_CONFIG base) for the given core type -- stable across
+    // install_l1_layout()/reinit. See HalCoreInfoType::pre_pack_map_end_.
+    DeviceAddr get_pre_pack_map_end(HalProgrammableCoreType programmable_core_type) const {
+        uint32_t index = ttsl::as_underlying_type<HalProgrammableCoreType>(programmable_core_type);
+        TT_ASSERT(index < this->core_info_.size());
+        return this->core_info_[index].get_pre_pack_map_end();
+    }
+
     // Overloads for Dram Params
     DeviceAddr get_dev_addr(HalDramMemAddrType addr_type) const;
     uint32_t get_dev_size(HalDramMemAddrType addr_type) const;
@@ -595,6 +698,15 @@ public:
     }
 
     uint64_t erisc_iram_relocate_dev_addr(uint64_t addr) const { return erisc_iram_relocate_func_(addr); }
+
+    // Dynamic L1 packing (plan B2 / Step C): compute the packed movable-region layout from measured
+    // firmware section sizes (arch firmware-image order). Returns {.valid=false} on arches without it.
+    PackedL1Layout compute_packed_l1_layout(const std::vector<FirmwareSectionSizes>& fw_sizes) const {
+        if (!compute_packed_l1_layout_func_) {
+            return PackedL1Layout{};
+        }
+        return compute_packed_l1_layout_func_(fw_sizes);
+    }
 
     uint32_t valid_reg_addr(uint32_t addr) const { return valid_reg_addr_func_(addr); }
 
@@ -695,6 +807,19 @@ inline DeviceAddr Hal::get_dev_addr(HalProgrammableCoreType programmable_core_ty
 inline DeviceAddr Hal::get_dev_noc_addr(
     HalProgrammableCoreType programmable_core_type, HalL1MemAddrType addr_type) const {
     return get_dev_addr(programmable_core_type, addr_type) + get_l1_noc_offset(programmable_core_type);
+}
+
+inline const std::vector<DeviceAddr>& Hal::get_l1_region_bases(HalProgrammableCoreType programmable_core_type) const {
+    uint32_t index = ttsl::as_underlying_type<HalProgrammableCoreType>(programmable_core_type);
+    TT_ASSERT(index < this->core_info_.size());
+    return this->core_info_[index].get_l1_region_bases();
+}
+
+inline const std::vector<PackedFirmwareDefsyms>& Hal::get_l1_fw_defsyms(
+    HalProgrammableCoreType programmable_core_type) const {
+    uint32_t index = ttsl::as_underlying_type<HalProgrammableCoreType>(programmable_core_type);
+    TT_ASSERT(index < this->core_info_.size());
+    return this->core_info_[index].get_l1_fw_defsyms();
 }
 
 inline uint32_t Hal::get_dev_size(HalProgrammableCoreType programmable_core_type, HalL1MemAddrType addr_type) const {

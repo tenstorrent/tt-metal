@@ -277,7 +277,20 @@ HalCoreInfoType create_tensix_mem_map() {
     std::vector<uint8_t> processor_classes_num_fw_binaries = {/*DM*/ 1, /*COMPUTE*/ 4};
 
     static_assert(sizeof(mailboxes_t) <= MEM_MAILBOX_SIZE);
-    return {
+
+    // Dynamic L1 region bases (defsym variant / plan B2): the movable shared-L1 bases that
+    // linker_flags (D1) emits as `__l1_*` absolute symbols for device code to resolve. This identity
+    // table = today's static dev_mem_map.h chain; install_l1_layout() overwrites it with the measured
+    // packed layout. Order MUST match the L1Region enum (hostdev/l1_layout.h); NUM_L1_REGIONS guards it.
+    static_assert(NUM_L1_REGIONS == 22, "L1Region enum changed; update the l1_region_bases table");
+    // Single source: seed straight from the identity layout that tt_l1_compute_layout() produced
+    // (dev_mem_map.h) -- the same routine that yields the packed layout. Under the single-definition
+    // scheme the MEM_*_BASE macros ARE tt_l1_identity_base(region), so this copy equals the old
+    // per-region set_region(X, MEM_X_BASE) list exactly, with no hand-transcribed order to drift.
+    // install_l1_layout() later overwrites the movable entries with the measured packed layout.
+    std::vector<DeviceAddr> l1_region_bases(kIdentityL1Layout.region_base.begin(), kIdentityL1Layout.region_base.end());
+
+    HalCoreInfoType core_info{
         HalProgrammableCoreType::TENSIX,
         CoreType::WORKER,
         std::move(processor_classes),
@@ -292,6 +305,11 @@ HalCoreInfoType create_tensix_mem_map() {
         tensix_dev_msgs::create_factory(),
         tensix_fabric_telemetry::create_factory(),
         tensix_realtime_profiler_msgs::create_factory()};
+    // Seed the identity layout (= the static dev_mem_map.h chain). install_l1_layout() overwrites the
+    // movable entries post-measure; linker_flags (D1) reads this to emit the `__l1_*` defsyms. There is
+    // no device descriptor under the defsym variant (plan B2 / D), so no mailbox address is published.
+    core_info.set_l1_region_bases(std::move(l1_region_bases));
+    return core_info;
 }
 
 }  // namespace tt::tt_metal::quasar

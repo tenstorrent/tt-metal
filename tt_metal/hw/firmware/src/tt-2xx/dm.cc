@@ -58,6 +58,16 @@ bank_noc_xy_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS] __attribute__((used));
 int32_t bank_to_dram_offset[NUM_DRAM_BANKS] __attribute__((used));
 int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
 
+// Dynamic L1 packing (plan B2, defsym variant / D4): the per-TRISC packed firmware-text reset-PC bases
+// arrive as absolute linker symbols (qa_hal linker_flags / D1); set_deassert_addresses reads their
+// addresses. extern "C" at namespace scope so the names are unmangled and match the --defsym.
+extern "C" {
+extern char __l1_trisc0_fw[];
+extern char __l1_trisc1_fw[];
+extern char __l1_trisc2_fw[];
+extern char __l1_trisc3_fw[];
+}
+
 tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(UNCACHED_MEM_MAILBOX_BASE);
 tt_l1_ptr subordinate_map_t* const subordinate_sync = (subordinate_map_t*)mailboxes->subordinate_sync.map;
 
@@ -70,25 +80,34 @@ inline void invalidate_kernel_binary_l2_cache(uintptr_t kernel_lma, launch_msg_t
 }
 
 void set_deassert_addresses() {
-    WRITE_REG(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_TRISC0_RESET_PC_REG_ADDR, MEM_TRISC0_FIRMWARE_BASE);
-    WRITE_REG(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_TRISC1_RESET_PC_REG_ADDR, MEM_TRISC1_FIRMWARE_BASE);
-    WRITE_REG(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_TRISC2_RESET_PC_REG_ADDR, MEM_TRISC2_FIRMWARE_BASE);
-    WRITE_REG(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_TRISC3_RESET_PC_REG_ADDR, MEM_TRISC3_FIRMWARE_BASE);
+    // TRISC firmware-text reset-PC bases. Under dynamic L1 packing (plan B2 / D) the TRISC text moves up
+    // into the reclaimed headroom; DM firmware is relinked at the packed layout, so the packed bases
+    // arrive as the absolute linker symbols __l1_trisc{0..3}_fw (qa_hal linker_flags / D1). Use each
+    // symbol's ADDRESS (the array name decays to it), never its contents. On a non-packed link these
+    // resolve to the static MEM_TRISC*_FIRMWARE_BASE values (the linker_flags fallback).
+    const uint32_t trisc0_fw = (uint32_t)(uintptr_t)__l1_trisc0_fw;
+    const uint32_t trisc1_fw = (uint32_t)(uintptr_t)__l1_trisc1_fw;
+    const uint32_t trisc2_fw = (uint32_t)(uintptr_t)__l1_trisc2_fw;
+    const uint32_t trisc3_fw = (uint32_t)(uintptr_t)__l1_trisc3_fw;
+    WRITE_REG(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_TRISC0_RESET_PC_REG_ADDR, trisc0_fw);
+    WRITE_REG(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_TRISC1_RESET_PC_REG_ADDR, trisc1_fw);
+    WRITE_REG(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_TRISC2_RESET_PC_REG_ADDR, trisc2_fw);
+    WRITE_REG(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_TRISC3_RESET_PC_REG_ADDR, trisc3_fw);
     WRITE_REG(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_TRISC_RESET_PC_OVERRIDE_REG_ADDR, 0b1111);
-    WRITE_REG(NEO_REGS_1__LOCAL_REGS_DEBUG_REGS_TRISC0_RESET_PC_REG_ADDR, MEM_TRISC0_FIRMWARE_BASE);
-    WRITE_REG(NEO_REGS_1__LOCAL_REGS_DEBUG_REGS_TRISC1_RESET_PC_REG_ADDR, MEM_TRISC1_FIRMWARE_BASE);
-    WRITE_REG(NEO_REGS_1__LOCAL_REGS_DEBUG_REGS_TRISC2_RESET_PC_REG_ADDR, MEM_TRISC2_FIRMWARE_BASE);
-    WRITE_REG(NEO_REGS_1__LOCAL_REGS_DEBUG_REGS_TRISC3_RESET_PC_REG_ADDR, MEM_TRISC3_FIRMWARE_BASE);
+    WRITE_REG(NEO_REGS_1__LOCAL_REGS_DEBUG_REGS_TRISC0_RESET_PC_REG_ADDR, trisc0_fw);
+    WRITE_REG(NEO_REGS_1__LOCAL_REGS_DEBUG_REGS_TRISC1_RESET_PC_REG_ADDR, trisc1_fw);
+    WRITE_REG(NEO_REGS_1__LOCAL_REGS_DEBUG_REGS_TRISC2_RESET_PC_REG_ADDR, trisc2_fw);
+    WRITE_REG(NEO_REGS_1__LOCAL_REGS_DEBUG_REGS_TRISC3_RESET_PC_REG_ADDR, trisc3_fw);
     WRITE_REG(NEO_REGS_1__LOCAL_REGS_DEBUG_REGS_TRISC_RESET_PC_OVERRIDE_REG_ADDR, 0b1111);
-    WRITE_REG(NEO_REGS_2__LOCAL_REGS_DEBUG_REGS_TRISC0_RESET_PC_REG_ADDR, MEM_TRISC0_FIRMWARE_BASE);
-    WRITE_REG(NEO_REGS_2__LOCAL_REGS_DEBUG_REGS_TRISC1_RESET_PC_REG_ADDR, MEM_TRISC1_FIRMWARE_BASE);
-    WRITE_REG(NEO_REGS_2__LOCAL_REGS_DEBUG_REGS_TRISC2_RESET_PC_REG_ADDR, MEM_TRISC2_FIRMWARE_BASE);
-    WRITE_REG(NEO_REGS_2__LOCAL_REGS_DEBUG_REGS_TRISC3_RESET_PC_REG_ADDR, MEM_TRISC3_FIRMWARE_BASE);
+    WRITE_REG(NEO_REGS_2__LOCAL_REGS_DEBUG_REGS_TRISC0_RESET_PC_REG_ADDR, trisc0_fw);
+    WRITE_REG(NEO_REGS_2__LOCAL_REGS_DEBUG_REGS_TRISC1_RESET_PC_REG_ADDR, trisc1_fw);
+    WRITE_REG(NEO_REGS_2__LOCAL_REGS_DEBUG_REGS_TRISC2_RESET_PC_REG_ADDR, trisc2_fw);
+    WRITE_REG(NEO_REGS_2__LOCAL_REGS_DEBUG_REGS_TRISC3_RESET_PC_REG_ADDR, trisc3_fw);
     WRITE_REG(NEO_REGS_2__LOCAL_REGS_DEBUG_REGS_TRISC_RESET_PC_OVERRIDE_REG_ADDR, 0b1111);
-    WRITE_REG(NEO_REGS_3__LOCAL_REGS_DEBUG_REGS_TRISC0_RESET_PC_REG_ADDR, MEM_TRISC0_FIRMWARE_BASE);
-    WRITE_REG(NEO_REGS_3__LOCAL_REGS_DEBUG_REGS_TRISC1_RESET_PC_REG_ADDR, MEM_TRISC1_FIRMWARE_BASE);
-    WRITE_REG(NEO_REGS_3__LOCAL_REGS_DEBUG_REGS_TRISC2_RESET_PC_REG_ADDR, MEM_TRISC2_FIRMWARE_BASE);
-    WRITE_REG(NEO_REGS_3__LOCAL_REGS_DEBUG_REGS_TRISC3_RESET_PC_REG_ADDR, MEM_TRISC3_FIRMWARE_BASE);
+    WRITE_REG(NEO_REGS_3__LOCAL_REGS_DEBUG_REGS_TRISC0_RESET_PC_REG_ADDR, trisc0_fw);
+    WRITE_REG(NEO_REGS_3__LOCAL_REGS_DEBUG_REGS_TRISC1_RESET_PC_REG_ADDR, trisc1_fw);
+    WRITE_REG(NEO_REGS_3__LOCAL_REGS_DEBUG_REGS_TRISC2_RESET_PC_REG_ADDR, trisc2_fw);
+    WRITE_REG(NEO_REGS_3__LOCAL_REGS_DEBUG_REGS_TRISC3_RESET_PC_REG_ADDR, trisc3_fw);
     WRITE_REG(NEO_REGS_3__LOCAL_REGS_DEBUG_REGS_TRISC_RESET_PC_OVERRIDE_REG_ADDR, 0b1111);
 }
 

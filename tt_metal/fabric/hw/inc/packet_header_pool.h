@@ -24,7 +24,6 @@ static_assert(
 class PacketHeaderPool {
 private:
     static uint32_t current_offset_;
-    static constexpr uint32_t POOL_BASE = MEM_PACKET_HEADER_POOL_BASE;
     static constexpr uint32_t POOL_SIZE = MEM_PACKET_HEADER_POOL_SIZE;
     static constexpr uint32_t HEADER_SIZE = PACKET_HEADER_MAX_SIZE;
     static constexpr uint32_t POOL_SIZE_PER_RISC = POOL_SIZE / MaxDMProcessorsPerCoreType;
@@ -61,7 +60,7 @@ public:
             }  // hang intentionally
         }
 
-        uint32_t allocated_addr = POOL_BASE + current_offset_;
+        uint32_t allocated_addr = MEM_PACKET_HEADER_POOL_BASE + current_offset_;
         current_offset_ += HEADER_SIZE * num_headers;
         header_table[route_id_++] = {
             reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(allocated_addr), num_headers};

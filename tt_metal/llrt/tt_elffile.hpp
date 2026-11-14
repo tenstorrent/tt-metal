@@ -102,4 +102,16 @@ private:
     std::vector<Segment> segments_;
 };
 
+// Actual (post-trim) memory sizes in bytes of the standard loadable sections of a linked ELF.
+struct SectionSizes {
+    std::uint32_t text = 0;
+    std::uint32_t data = 0;  // .data (initialized globals)
+    std::uint32_t tls = 0;   // .tdata
+};
+
+// Reads `path` and returns the actual memory sizes of .text / .data / .tdata (0 if a section is
+// absent). The "actual" is each surviving segment's membytes after ReadImage()'s TrimSegments(),
+// matched to the section by its base address. The measurement primitive for the dynamic L1 layout.
+SectionSizes get_segment_sizes(const std::string& path);
+
 }  // namespace ll_api

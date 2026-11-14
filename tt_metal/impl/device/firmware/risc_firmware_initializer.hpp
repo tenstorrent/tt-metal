@@ -106,6 +106,12 @@ private:
     uint8_t num_hw_cqs_;
     size_t worker_l1_unreserved_start_;
 
+    // Dynamic L1 packing (plan B2 / R6): bytes the worker-L1 region was lowered by (the reclaimed
+    // firmware headroom), used to set core_info.l1_unreserved_start in lockstep with the grown
+    // DEFAULT_UNRESERVED. 0 when no packing was applied; set once in run_async_build_phase from the
+    // installed layout (uniform per arch). The packed region bases live in the HAL (get_l1_region_bases).
+    uint32_t l1_pack_shift_ = 0;
+
     std::unordered_map<tt::ChipId, std::vector<int32_t>> dram_bank_offset_map_;
     std::unordered_map<tt::ChipId, std::vector<int32_t>> l1_bank_offset_map_;
     std::unordered_map<tt::ChipId, std::vector<uint16_t>> dram_bank_to_noc_xy_;

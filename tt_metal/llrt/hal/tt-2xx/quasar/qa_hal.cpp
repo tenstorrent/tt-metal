@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <enchantum/enchantum.hpp>
@@ -98,135 +99,115 @@ public:
         // relaxation so HI20/LO12 stay paired/adjacent. The assembler still emits R_RISCV_RELAX relocs
         // (which XIPify's check_relaxed expects); --no-relax only stops the linker from acting on them.
         flags += "-Wl,--no-relax ";
+        // Dynamic L1 (plan B2, defsym variant / D1): emit the movable shared-L1 region bases as absolute
+        // linker symbols, so device code resolves them to immediates (dev_mem_map.h `__l1_*` / D2) with
+        // no runtime descriptor read. Source the packed values from the installed layout
+        // (params.l1_region_bases, indexed by L1Region); fall back to the static dev_mem_map.h chain for
+        // the firmware sizing link / non-packed path so the symbols are always defined and identity is
+        // reproduced. Emitted for every Tensix link (DM + COMPUTE, fw + kernel) since both DM and TRISC
+        // code read these bases; an unreferenced --defsym is harmless. `TRISC*_FW` feed dm.cc's reset-PC.
+        auto l1rb = [&](L1Region r, uint64_t static_val) -> uint64_t {
+            return (params.l1_region_bases != nullptr && !params.l1_region_bases->empty())
+                       ? (*params.l1_region_bases)[static_cast<std::size_t>(r)]
+                       : static_val;
+        };
+        flags += fmt::format("-Wl,--defsym=__l1_noc_counter={} ", l1rb(L1Region::NOC_COUNTER, MEM_NOC_COUNTER_BASE));
+        flags += fmt::format(
+            "-Wl,--defsym=__l1_fabric_counter={} ", l1rb(L1Region::FABRIC_COUNTER, MEM_FABRIC_COUNTER_BASE));
+        flags += fmt::format(
+            "-Wl,--defsym=__l1_fabric_connection_lock={} ",
+            l1rb(L1Region::FABRIC_CONNECTION_LOCK, MEM_FABRIC_CONNECTION_LOCK_BASE));
+        flags += fmt::format(
+            "-Wl,--defsym=__l1_routing_table={} ", l1rb(L1Region::ROUTING_TABLE, MEM_TENSIX_ROUTING_TABLE_BASE));
+        flags += fmt::format(
+            "-Wl,--defsym=__l1_routing_path={} ", l1rb(L1Region::ROUTING_PATH, MEM_TENSIX_ROUTING_PATH_BASE));
+        flags += fmt::format(
+            "-Wl,--defsym=__l1_exit_node_table={} ", l1rb(L1Region::EXIT_NODE_TABLE, MEM_TENSIX_EXIT_NODE_TABLE_BASE));
+        flags += fmt::format(
+            "-Wl,--defsym=__l1_fabric_connections={} ",
+            l1rb(L1Region::FABRIC_CONNECTIONS, MEM_TENSIX_FABRIC_CONNECTIONS_BASE));
+        flags += fmt::format(
+            "-Wl,--defsym=__l1_packet_header_pool={} ",
+            l1rb(L1Region::PACKET_HEADER_POOL, MEM_PACKET_HEADER_POOL_BASE));
+        flags += fmt::format(
+            "-Wl,--defsym=__l1_bank_to_noc_scratch={} ", l1rb(L1Region::BANK_TO_NOC_SCRATCH, MEM_BANK_TO_NOC_SCRATCH));
+        flags += fmt::format(
+            "-Wl,--defsym=__l1_logical_to_virtual_scratch={} ",
+            l1rb(L1Region::LOGICAL_TO_VIRTUAL_SCRATCH, MEM_LOGICAL_TO_VIRTUAL_SCRATCH));
+        flags += fmt::format("-Wl,--defsym=__l1_map_end={} ", l1rb(L1Region::MAP_END, MEM_MAP_END));
+        flags += fmt::format("-Wl,--defsym=__l1_trisc0_fw={} ", l1rb(L1Region::TRISC0_FW, MEM_TRISC0_FIRMWARE_BASE));
+        flags += fmt::format("-Wl,--defsym=__l1_trisc1_fw={} ", l1rb(L1Region::TRISC1_FW, MEM_TRISC1_FIRMWARE_BASE));
+        flags += fmt::format("-Wl,--defsym=__l1_trisc2_fw={} ", l1rb(L1Region::TRISC2_FW, MEM_TRISC2_FIRMWARE_BASE));
+        flags += fmt::format("-Wl,--defsym=__l1_trisc3_fw={} ", l1rb(L1Region::TRISC3_FW, MEM_TRISC3_FIRMWARE_BASE));
+        // Dynamic L1 packing (plan B2): place each L1-resident section at the packed *absolute* address
+        // from the installed layout. `fwd` points at this image's packed defsyms when a layout has been
+        // installed (params.fw_defsyms set, the packed run); when null (the firmware sizing link, before
+        // the layout exists, and any non-packed path) we fall back to the static dev_mem_map.h chain,
+        // which reproduces today's identity layout. No `pack(delta)`: there is a single absolute table.
+        // Single source: point fwd at this image's packed defsyms when a layout is installed, else at the
+        // identity layout's fw[] (kIdentityL1Layout, dev_mem_map.h). Either way fwd is non-null for DM and
+        // COMPUTE, so every per-field fallback below is just fwd->X -- no hand-written static duplicates
+        // (kFwBase[]/kGlobalBase[]/MEM_*_BASE) that could drift from tt_l1_compute_layout().
+        const PackedFirmwareDefsyms* fwd = nullptr;
+        if (params.processor_class == HalProcessorClassType::DM ||
+            params.processor_class == HalProcessorClassType::COMPUTE) {
+            const uint32_t img =
+                (params.processor_class == HalProcessorClassType::DM) ? 0u : (1u + (params.processor_id % 4u));
+            fwd = (params.fw_defsyms != nullptr && img < params.fw_defsyms->size()) ? &(*params.fw_defsyms)[img]
+                                                                                    : &kIdentityL1Layout.fw[img];
+        }
         if (params.processor_class == HalProcessorClassType::DM) {
+            const uint64_t fw_data = fwd->fw_data;
+            const uint64_t fw_tls = fwd->fw_tls;
             if (params.is_fw) {
-                flags += fmt::format("-Wl,--defsym=__fw_text={} ", MEM_DM_FIRMWARE_BASE);
-                flags += fmt::format("-Wl,--defsym=__text_size={} ", MEM_DM_FIRMWARE_SIZE);
-                flags += fmt::format("-Wl,--defsym=__fw_data={} ", MEM_DM_GLOBAL_BASE);
-                flags += fmt::format("-Wl,--defsym=__data_size={} ", MEM_DM_GLOBAL_SIZE);
-                flags += fmt::format("-Wl,--defsym=__fw_tls={} ", MEM_DM_LOCAL_BASE);
+                flags += fmt::format("-Wl,--defsym=__fw_text={} ", fwd->fw_text);
+                flags += fmt::format("-Wl,--defsym=__text_size={} ", fwd->text_size);
+                flags += fmt::format("-Wl,--defsym=__fw_data={} ", fw_data);
+                flags += fmt::format("-Wl,--defsym=__data_size={} ", fwd->data_size);
+                flags += fmt::format("-Wl,--defsym=__fw_tls={} ", fw_tls);
                 flags += fmt::format("-Wl,--defsym=__tls_size={} ", MEM_DM_LOCAL_SIZE);
                 flags += fmt::format("-Wl,--defsym=__min_stack={} ", MEM_DM_STACK_MIN_SIZE);
-                flags += fmt::format("-Wl,--defsym=__local_base={} ", MEM_DM_LOCAL_BASE);
+                flags += fmt::format("-Wl,--defsym=__local_base={} ", fw_tls);
                 flags += fmt::format("-Wl,--defsym=__local_stride={} ", MEM_DM_LOCAL_SIZE);
             } else {
+                const uint64_t kn_data = fwd->kn_data + params.processor_id * MEM_DM_GLOBAL_SIZE;
                 flags += fmt::format("-Wl,--defsym=__kn_text={} ", MEM_KERNEL_BASE);
                 flags += fmt::format("-Wl,--defsym=__text_size={} ", MEM_DM_KERNEL_SIZE);
-                flags += fmt::format("-Wl,--defsym=__fw_data={} ", MEM_DM_GLOBAL_BASE);
-                flags += fmt::format("-Wl,--defsym=__kn_data={} ", MEM_DM_GLOBAL_BASE + MEM_DM_GLOBAL_SIZE + (params.processor_id * MEM_DM_GLOBAL_SIZE));
+                flags += fmt::format("-Wl,--defsym=__fw_data={} ", fw_data);
+                flags += fmt::format("-Wl,--defsym=__kn_data={} ", kn_data);
                 flags += fmt::format("-Wl,--defsym=__data_size={} ", MEM_DM_GLOBAL_SIZE);
-                flags += fmt::format("-Wl,--defsym=__fw_tls={} ", MEM_DM_LOCAL_BASE);
+                flags += fmt::format("-Wl,--defsym=__fw_tls={} ", fw_tls);
                 flags += fmt::format("-Wl,--defsym=__tls_size={} ", MEM_DM_LOCAL_SIZE);
                 flags += fmt::format("-Wl,--defsym=__min_stack={} ", MEM_DM_STACK_MIN_SIZE);
-                flags += fmt::format("-Wl,--defsym=__local_base={} ", MEM_DM_LOCAL_BASE);
+                flags += fmt::format("-Wl,--defsym=__local_base={} ", fw_tls);
                 flags += fmt::format("-Wl,--defsym=__local_stride={} ", MEM_DM_LOCAL_SIZE);
             }
         } else if (params.processor_class == HalProcessorClassType::COMPUTE) {
+            const uint32_t n = params.processor_id % 4u;  // TRISC role 0..3
+            // TRISC roles 1 & 2 get half the local-RAM slot; 0 & 3 the full slot (unchanged by packing).
+            const uint64_t tls_size = (n == 1 || n == 2) ? (MEM_TRISC_LOCAL_SIZE / 2) : MEM_TRISC_LOCAL_SIZE;
+            // TRISC tls lives in per-core local RAM (0x802000), outside L1 -- fwd->fw_tls equals this.
+            const uint64_t fw_tls = fwd->fw_tls;
+            const uint64_t fw_data = fwd->fw_data;
             if (params.is_fw) {
-                switch (params.processor_id) {
-                    case 0:
-                    case 4:
-                    case 8:
-                    case 12:
-                        flags += fmt::format("-Wl,--defsym=__fw_text={} ", MEM_TRISC0_FIRMWARE_BASE);
-                        flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_TRISC_FIRMWARE_SIZE);
-                        flags += fmt::format(" -Wl,--defsym=__fw_data={} ", MEM_TRISC0_GLOBAL_BASE);
-                        flags += fmt::format(" -Wl,--defsym=__local_stride={} ", MEM_TRISC_LOCAL_SIZE);
-                        flags += fmt::format(" -Wl,--defsym=__tls_size={} ", MEM_TRISC_LOCAL_SIZE);
-                        break;
-                    case 1:
-                    case 5:
-                    case 9:
-                    case 13:
-                        flags += fmt::format("-Wl,--defsym=__fw_text={} ", MEM_TRISC1_FIRMWARE_BASE);
-                        flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_TRISC_FIRMWARE_SIZE);
-                        flags += fmt::format(" -Wl,--defsym=__fw_data={} ", MEM_TRISC1_GLOBAL_BASE);
-                        flags += fmt::format(" -Wl,--defsym=__local_stride={} ", MEM_TRISC_LOCAL_SIZE / 2);
-                        flags += fmt::format(" -Wl,--defsym=__tls_size={} ", MEM_TRISC_LOCAL_SIZE / 2);
-                        break;
-                    case 2:
-                    case 6:
-                    case 10:
-                    case 14:
-                        flags += fmt::format("-Wl,--defsym=__fw_text={} ", MEM_TRISC2_FIRMWARE_BASE);
-                        flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_TRISC_FIRMWARE_SIZE);
-                        flags += fmt::format(" -Wl,--defsym=__fw_data={} ", MEM_TRISC2_GLOBAL_BASE);
-                        flags += fmt::format(" -Wl,--defsym=__local_stride={} ", MEM_TRISC_LOCAL_SIZE / 2);
-                        flags += fmt::format(" -Wl,--defsym=__tls_size={} ", MEM_TRISC_LOCAL_SIZE / 2);
-                        break;
-                    case 3:
-                    case 7:
-                    case 11:
-                    case 15:
-                        flags += fmt::format("-Wl,--defsym=__fw_text={} ", MEM_TRISC3_FIRMWARE_BASE);
-                        flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_TRISC_FIRMWARE_SIZE);
-                        flags += fmt::format(" -Wl,--defsym=__fw_data={} ", MEM_TRISC3_GLOBAL_BASE);
-                        flags += fmt::format(" -Wl,--defsym=__local_stride={} ", MEM_TRISC_LOCAL_SIZE);
-                        flags += fmt::format(" -Wl,--defsym=__tls_size={} ", MEM_TRISC_LOCAL_SIZE);
-                        break;
-                    default: TT_THROW("Invalid processor id {}", params.processor_id);
-                }
-
-                flags += fmt::format(" -Wl,--defsym=__data_size={} ", MEM_TRISC_GLOBAL_SIZE);
-                flags += fmt::format(
-                    " -Wl,--defsym=__fw_tls={} ",
-                    MEM_TRISC_LOCAL_BASE + MEM_TRISC_LOCAL_OFFSET * (params.processor_id % 4));
+                flags += fmt::format("-Wl,--defsym=__fw_text={} ", fwd->fw_text);
+                flags += fmt::format(" -Wl,--defsym=__text_size={} ", fwd->text_size);
+                flags += fmt::format(" -Wl,--defsym=__fw_data={} ", fw_data);
+                flags += fmt::format(" -Wl,--defsym=__local_stride={} ", tls_size);
+                flags += fmt::format(" -Wl,--defsym=__tls_size={} ", tls_size);
+                flags += fmt::format(" -Wl,--defsym=__data_size={} ", fwd->data_size);
+                flags += fmt::format(" -Wl,--defsym=__fw_tls={} ", fw_tls);
                 flags += fmt::format(" -Wl,--defsym=__min_stack={} ", MEM_TRISC_STACK_MIN_SIZE);
-                flags += fmt::format(
-                    " -Wl,--defsym=__local_base={} ",
-                    MEM_TRISC_LOCAL_BASE + MEM_TRISC_LOCAL_OFFSET * (params.processor_id % 4));
+                flags += fmt::format(" -Wl,--defsym=__local_base={} ", fw_tls);
             } else {
-                switch (params.processor_id) {
-                    case 0:
-                    case 4:
-                    case 8:
-                    case 12:
-                        flags += fmt::format("-Wl,--defsym=__kn_text={} ", MEM_KERNEL_BASE);
-                        flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_TRISC_KERNEL_SIZE);
-                        flags += fmt::format(" -Wl,--defsym=__fw_data={} ", MEM_TRISC0_GLOBAL_BASE);
-                        flags +=
-                            fmt::format(" -Wl,--defsym=__kn_data={} ", MEM_TRISC0_GLOBAL_BASE + MEM_TRISC_GLOBAL_SIZE);
-                        flags += fmt::format(" -Wl,--defsym=__tls_size={} ", MEM_TRISC_LOCAL_SIZE);
-                        break;
-                    case 1:
-                    case 5:
-                    case 9:
-                    case 13:
-                        flags += fmt::format("-Wl,--defsym=__kn_text={} ", MEM_KERNEL_BASE);
-                        flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_TRISC_KERNEL_SIZE);
-                        flags += fmt::format(" -Wl,--defsym=__fw_data={} ", MEM_TRISC1_GLOBAL_BASE);
-                        flags +=
-                            fmt::format(" -Wl,--defsym=__kn_data={} ", MEM_TRISC1_GLOBAL_BASE + MEM_TRISC_GLOBAL_SIZE);
-                        flags += fmt::format(" -Wl,--defsym=__tls_size={} ", MEM_TRISC_LOCAL_SIZE / 2);
-                        break;
-                    case 2:
-                    case 6:
-                    case 10:
-                    case 14:
-                        flags += fmt::format("-Wl,--defsym=__kn_text={} ", MEM_KERNEL_BASE);
-                        flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_TRISC_KERNEL_SIZE);
-                        flags += fmt::format(" -Wl,--defsym=__fw_data={} ", MEM_TRISC2_GLOBAL_BASE);
-                        flags +=
-                            fmt::format(" -Wl,--defsym=__kn_data={} ", MEM_TRISC2_GLOBAL_BASE + MEM_TRISC_GLOBAL_SIZE);
-                        flags += fmt::format(" -Wl,--defsym=__tls_size={} ", MEM_TRISC_LOCAL_SIZE / 2);
-                        break;
-                    case 3:
-                    case 7:
-                    case 11:
-                    case 15:
-                        flags += fmt::format("-Wl,--defsym=__kn_text={} ", MEM_KERNEL_BASE);
-                        flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_TRISC_KERNEL_SIZE);
-                        flags += fmt::format(" -Wl,--defsym=__fw_data={} ", MEM_TRISC3_GLOBAL_BASE);
-                        flags +=
-                            fmt::format(" -Wl,--defsym=__kn_data={} ", MEM_TRISC3_GLOBAL_BASE + MEM_TRISC_GLOBAL_SIZE);
-                        flags += fmt::format(" -Wl,--defsym=__tls_size={} ", MEM_TRISC_LOCAL_SIZE);
-                        break;
-                    default: TT_THROW("Invalid processor id {}", params.processor_id);
-                }
+                const uint64_t kn_data = fwd->kn_data;
+                flags += fmt::format("-Wl,--defsym=__kn_text={} ", MEM_KERNEL_BASE);
+                flags += fmt::format(" -Wl,--defsym=__text_size={} ", MEM_TRISC_KERNEL_SIZE);
+                flags += fmt::format(" -Wl,--defsym=__fw_data={} ", fw_data);
+                flags += fmt::format(" -Wl,--defsym=__kn_data={} ", kn_data);
+                flags += fmt::format(" -Wl,--defsym=__tls_size={} ", tls_size);
                 flags += fmt::format(" -Wl,--defsym=__data_size={} ", MEM_TRISC_GLOBAL_SIZE);
-                flags += fmt::format(
-                    " -Wl,--defsym=__fw_tls={} ",
-                    MEM_TRISC_LOCAL_BASE + MEM_TRISC_LOCAL_OFFSET * (params.processor_id % 4));
+                flags += fmt::format(" -Wl,--defsym=__fw_tls={} ", fw_tls);
                 flags += fmt::format(" -Wl,--defsym=__min_stack={} ", MEM_TRISC_STACK_MIN_SIZE);
             }
         }
@@ -454,6 +435,21 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes, bo
     };
 
     this->erisc_iram_relocate_func_ = [](uint64_t addr) { return addr; };
+
+    // Dynamic L1 packing (plan B2): the packed layout is produced by the single constexpr routine
+    // tt_l1_compute_layout() (dev_mem_map.h) -- the same routine that yields kIdentityL1Layout. Here we
+    // feed it the *measured* firmware section sizes ({DM, TRISC0..3} order). A short measurement vector
+    // (mock/emulated with missing images) yields .valid=false, so the caller keeps the static layout.
+    this->compute_packed_l1_layout_func_ = [](const std::vector<FirmwareSectionSizes>& fw) -> PackedL1Layout {
+        if (fw.size() < NUM_L1_FW_IMAGES) {
+            return PackedL1Layout{};  // .valid=false -> caller keeps the static layout
+        }
+        std::array<FirmwareSectionSizes, NUM_L1_FW_IMAGES> sizes{};
+        for (std::size_t i = 0; i < NUM_L1_FW_IMAGES; ++i) {
+            sizes[i] = fw[i];
+        }
+        return tt_l1_compute_layout(sizes);
+    };
 
     this->valid_reg_addr_func_ = [](uint32_t /*addr*/) {
         return true;  // used to program start addr for eth FW TODO: add correct value

@@ -80,7 +80,10 @@ namespace ckernel
 // counters, routing tables, fabric metadata)
 // Physical Boundary: MEM_MAP_END
 // Transformed Value: L1_ADDRESS(MEM_MAP_END) = MEM_MAP_END / 16
-constexpr std::uint32_t L1_REGION_START = L1_ADDRESS(MEM_MAP_END);
+inline std::uint32_t l1_region_start()
+{
+    return L1_ADDRESS(MEM_MAP_END);
+}
 
 // End of L1 memory (LLK transformed address) - total available L1 size
 // This is the absolute upper bound for any L1 address
@@ -123,5 +126,5 @@ constexpr std::uint32_t L1_REGION_END = L1_ADDRESS(MEM_L1_BASE + MEM_L1_SIZE);
  */
 inline static bool is_valid_L1_address(const std::uint32_t address)
 {
-    return (address >= ckernel::L1_REGION_START && address < ckernel::L1_REGION_END);
+    return (address >= ckernel::l1_region_start() && address < ckernel::L1_REGION_END);
 }
