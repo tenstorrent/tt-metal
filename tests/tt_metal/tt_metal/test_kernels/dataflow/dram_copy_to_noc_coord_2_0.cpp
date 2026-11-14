@@ -80,6 +80,7 @@ void kernel_main() {
     bool use_inline_dw_write_from_state = static_cast<bool>(get_arg(args::use_inline_dw_write_from_state));
     bool use_inline_dw_write_with_state = static_cast<bool>(get_arg(args::use_inline_dw_write_with_state));
     std::uint32_t invalid_txn_id = get_arg(args::invalid_txn_id);
+    bool use_semaphore_inc = static_cast<bool>(get_arg(args::use_semaphore_inc));
 
     // We will assert later. This kernel will hang.
     // Need to signal completion to dispatcher before hanging so that
@@ -117,6 +118,12 @@ void kernel_main() {
         uint64_t dst_multicast_noc_addr =
             get_noc_multicast_addr(dst_noc_x, dst_noc_y, mcast_dst_end_x, mcast_dst_end_y, buffer_dst_addr);
         noc_semaphore_inc_multicast(dst_multicast_noc_addr, 1, 1);
+        noc_async_atomic_barrier();
+        return;
+    }
+
+    if (use_semaphore_inc) {
+        noc_semaphore_inc(get_noc_addr(dst_noc_x, dst_noc_y, buffer_dst_addr), 1);
         noc_async_atomic_barrier();
         return;
     }

@@ -461,7 +461,8 @@ static KernelHandle prepare_compute(distributed::MeshWorkload& workload, const D
         config.compute_kernel,
         config.core,
         tt_metal::ComputeConfig{
-            .fp32_dest_acc_en = config.data_format == tt::DataFormat::Float32,
+            .fp32_dest_acc_en =
+                config.data_format == tt::DataFormat::Float32 || config.data_format == tt::DataFormat::Int32,
             .compile_args = {
                 static_cast<uint32_t>(config.num_tiles),
                 static_cast<uint32_t>(config.remap),
