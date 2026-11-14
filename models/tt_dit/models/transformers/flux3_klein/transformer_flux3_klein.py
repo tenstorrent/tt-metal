@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import itertools
 from dataclasses import dataclass, field
+from typing import NamedTuple
 
 import torch
 
@@ -344,6 +345,17 @@ class Flux3KleinPlan:
             ttnn.deallocate(t)
 
 
+class Flux3KleinCarry(NamedTuple):
+    """What the single blocks and the output layer need besides the hidden state."""
+
+    rope: tuple[ttnn.Tensor, ttnn.Tensor]
+    mod: tuple[ttnn.Tensor, ...]
+    logical_n: int | ttnn.Tensor
+    final_shift: ttnn.Tensor
+    final_scale_plus_one: ttnn.Tensor
+    image_out: ttnn.Tensor
+
+
 class Flux3KleinTransformer(Module):
     def __init__(
         self,
@@ -488,7 +500,7 @@ class Flux3KleinTransformer(Module):
         t_embed: ttnn.Tensor,
         t_ref_embed: ttnn.Tensor | None,
         plan: Flux3KleinPlan,
-    ) -> tuple[ttnn.Tensor, tuple]:
+    ) -> tuple[ttnn.Tensor, Flux3KleinCarry]:
         layout = plan.layout
         table, (final_shift, final_scale_plus_one) = self.modulation(t_embed, t_ref_embed)
 
@@ -507,20 +519,25 @@ class Flux3KleinTransformer(Module):
             ttnn.deallocate(part)
 
         mod = tuple(gather_rows(table, idx) for idx in plan.single_mod)
-        return h, (plan.single_rope, mod, plan.single_logical_n, final_shift, final_scale_plus_one, plan.image_out)
+        return h, Flux3KleinCarry(
+            plan.single_rope, mod, plan.single_logical_n, final_shift, final_scale_plus_one, plan.image_out
+        )
 
-    def run_blocks(self, h: ttnn.Tensor, carry: tuple, /, *, start: int, end: int) -> tuple[ttnn.Tensor, tuple]:
-        rope, mod, logical_n = carry[:3]
+    def run_blocks(
+        self, h: ttnn.Tensor, carry: Flux3KleinCarry, /, *, start: int, end: int
+    ) -> tuple[ttnn.Tensor, Flux3KleinCarry]:
         for block in self.single_blocks[start:end]:
-            h = block(h, rope=rope, mod=mod, logical_length=logical_n)
+            h = block(h, rope=carry.rope, mod=carry.mod, logical_length=carry.logical_n)
         # a block's output is a ping-pong reduce-scatter buffer that later blocks overwrite
         return (h if end == self.num_blocks else ttnn.clone(h)), carry
 
-    def epilogue(self, h: ttnn.Tensor, carry: tuple, /) -> ttnn.Tensor:
-        final_shift, final_scale_plus_one, image_out = carry[3:]
+    def epilogue(self, h: ttnn.Tensor, carry: Flux3KleinCarry, /) -> ttnn.Tensor:
         y = ttnn.squeeze(
-            self.norm_out(ttnn.unsqueeze(h, 0), dynamic_weight=final_scale_plus_one, dynamic_bias=final_shift), 0
+            self.norm_out(
+                ttnn.unsqueeze(h, 0), dynamic_weight=carry.final_scale_plus_one, dynamic_bias=carry.final_shift
+            ),
+            0,
         )
         y = self._ccl_manager.all_gather(y, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=False)
         y = self.proj_out(y)
-        return gather_rows_over_sp(y, image_out, ccl_manager=self._ccl_manager, sp_axis=self._sp_axis)
+        return gather_rows_over_sp(y, carry.image_out, ccl_manager=self._ccl_manager, sp_axis=self._sp_axis)
