@@ -1131,6 +1131,38 @@ def test_softmax_sharded_non_tile_aligned_width(device, W, mask_kind, numeric_st
 
 
 @pytest.mark.parametrize(
+    "mask_h, mask_w",
+    [
+        (32, 96),  # narrower than the input, and the row overruns the mask's last tile
+        (96, 128),  # shorter than the input, and the second core wraps to the first core's rows
+    ],
+)
+def test_scale_causal_mask_hw_dims_rejects_mask_geometry_mismatch(device, mask_h, mask_w, expect_error):
+    """The hw-dims reader walks the mask with the input's block geometry, so a mask whose height or
+    width differs from the input reads the wrong rows or past the mask."""
+    H, W = 64, 128
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    shard_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, [H, W], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    program_config = ttnn.SoftmaxShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=(1, 1), subblock_w=4, block_h=H // 32, block_w=W // 32
+    )
+    torch_input = torch.randn((1, 1, H, W), dtype=torch.bfloat16) * 4
+    torch_mask = torch.zeros((1, 1, mask_h, mask_w), dtype=torch.bfloat16)
+
+    ttnn_input = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=shard_config
+    )
+    ttnn_mask = ttnn.from_torch(torch_mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    with expect_error(RuntimeError, "Mask height and width must match the input"):
+        ttnn.scale_causal_mask_hw_dims_softmax_in_place(ttnn_input, 0.125, ttnn_mask, program_config=program_config)
+
+
+@pytest.mark.parametrize(
     "W, block_h, subblock_w",
     [
         (100, 2, 2),  # 4 tiles per row in 2 subblocks: the padding sits in the second
