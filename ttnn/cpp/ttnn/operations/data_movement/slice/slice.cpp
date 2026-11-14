@@ -217,6 +217,22 @@ ttnn::Tensor slice(
         }
     }
 
+    // An end past the logical shape is rejected rather than clamped. The tile path below rounds the ends up to a
+    // tile boundary before prim::slice sees them, so prim only ever validates padded bounds and cannot catch this
+    // on a TILE input, whose padded shape is wider than its logical shape: it would return more elements than the
+    // tensor has, reading tile padding lanes. A ROW_MAJOR input, whose two shapes agree, already rejects this in
+    // prim::slice, so this makes the two layouts consistent.
+    for (size_t i = 0; i < input_rank; ++i) {
+        TT_FATAL(
+            modified_ends[i] <= input_shape[i],
+            "Slice end[{}] ({}) must not exceed the input tensor's logical shape[{}] ({}); the tile padding of a "
+            "TILE tensor is not addressable through a slice",
+            i,
+            modified_ends[i],
+            i,
+            input_shape[i]);
+    }
+
     auto output_dim_i = [&modified_begins, &modified_step](size_t i, const ttsl::SmallVector<uint32_t>& modified_ends) {
         return (modified_ends[i] - modified_begins[i] + modified_step[i] - 1) / modified_step[i];
     };
