@@ -14,7 +14,7 @@ import ttnn
 import ttml
 from ttml.modules import AbstractModuleBase, LinearLayer, ModuleList
 
-from two_device_gradients import device, exact_mean, make_gradients, per_device, per_device_tensor
+from gradient_sync_helpers import device, exact_mean, make_gradients, per_device, per_device_tensor
 
 _FSDP_AXIS = 1
 

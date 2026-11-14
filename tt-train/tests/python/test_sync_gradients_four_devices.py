@@ -14,7 +14,7 @@ import pytest
 import ttnn
 import ttml
 
-from two_device_gradients import (
+from gradient_sync_helpers import (
     exact_mean,
     fp32_all_reduce_mean,
     make_gradients,

@@ -14,7 +14,7 @@ import pytest
 import ttnn
 import ttml
 
-from two_device_gradients import make_gradients, one_parameter, per_device, per_device_tensor
+from gradient_sync_helpers import make_gradients, one_parameter, per_device, per_device_tensor
 
 _TWO_DEVICES = (1, 2)
 _DP_AXIS = 1
