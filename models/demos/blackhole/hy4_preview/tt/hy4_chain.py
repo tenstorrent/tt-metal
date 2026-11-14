@@ -234,6 +234,9 @@ class Hy4ChainLayer:
             self.shared = D.make_shared(
                 md, *sw, limit=D.NO_CLAMP, decode=False
             )  # coordinator 11-13: the shared expert is NOT clamped (CE 1.77 vs 0.79)
+            self.shared_dec = None
+            if "shared" in os.environ.get("HY4_SKINNY", "").replace("all", "shared,router,oproj,hproj").split(","):  # HY4_SKINNY=shared: bank-local decode kernel (second weight copy, 5 MB/layer/chip)
+                self.shared_dec = D.make_shared(md, *sw, limit=D.NO_CLAMP, decode=True)
             del W
         if (
             self.mtp

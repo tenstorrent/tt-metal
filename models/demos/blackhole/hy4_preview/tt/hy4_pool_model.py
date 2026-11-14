@@ -41,7 +41,7 @@ class Hy4PoolDecoder(Hy4Decoder):
         self.mlp = []
         for ly in ch.layers:
             self.mlp.append(
-                with_decode_cfg(ly.dense, pn1=2, pn2=4, bw1=32, bw2=8) if ly.spec.mlp == DENSE else with_decode_cfg(ly.shared)
+                with_decode_cfg(ly.dense, pn1=2, pn2=4, bw1=32, bw2=8) if ly.spec.mlp == DENSE else (ly.shared_dec if getattr(ly, "shared_dec", None) is not None else with_decode_cfg(ly.shared))
             )
         self.kv_pools, self.key_pools = [], []
         for ly in ch.layers:
