@@ -18,6 +18,7 @@
 
 namespace tt::tt_metal {
 
+class IDevice;
 class MetalContext;
 class MetalEnvImpl;
 
@@ -74,7 +75,7 @@ public:
     // its channel offset in a shared hugepage; pointers the host writes don't.
     virtual uint32_t read_host_cq_word(uint8_t cq_id, uint32_t host_cq_addr, bool device_written) const = 0;
 
-    // Builds the per-CQ ring state the manager starts from.
+    // Builds the initial ring state of each CQ.
     virtual std::vector<SystemMemoryCQInterface> make_cq_interfaces(uint8_t num_hw_cqs) const = 0;
 
     // dst comes from host_ptr().
@@ -127,5 +128,8 @@ private:
     bool is_dram_backed_ = false;
     AuxRegionAllocator aux_region_allocator_;
 };
+
+// The device's CQ backing. The device must be a single device, not a MeshDevice.
+CqBacking& cq_backing(IDevice& device);
 
 }  // namespace tt::tt_metal
