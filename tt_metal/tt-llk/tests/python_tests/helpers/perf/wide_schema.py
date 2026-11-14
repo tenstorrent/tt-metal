@@ -171,6 +171,7 @@ DB_SCHEMA = [
     Column("producer_kt", "int64", True, "configuration"),
     Column("reuse_kt", "int64", True, "configuration"),
     Column("reuse_nt", "int64", True, "configuration"),
+    Column("compression_case", "string", True, "configuration"),
     # timing (complete {mean, std} x base grid — see _TIMING_COLUMNS above)
     *_TIMING_COLUMNS,
     # ── provenance: stamped by the publish layer, never emitted by a test ──
