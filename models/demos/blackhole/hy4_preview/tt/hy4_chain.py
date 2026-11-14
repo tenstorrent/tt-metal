@@ -224,6 +224,17 @@ class Hy4ChainLayer:
             self.dense = D.make_dense(
                 md, t("mlp.gate_proj.weight"), t("mlp.up_proj.weight"), t("mlp.down_proj.weight"), decode=False
             )
+        elif os.environ.get("HY4_MTP_HOSTMOE", "0") == "1" and self.mtp:
+            # mtp-device 1-slot tests: the MoE decode block needs the 4-row mesh (cluster_axis dim 4); on a 1x8 slot only the shared expert is built, the routed part runs on the host oracle
+            from models.demos.blackhole.hy4_preview.tt.hy4_moe_weights import load_moe_layer
+
+            W = load_moe_layer(L, W=ch.W, prefix="mtp.0.", load_experts=False)
+            sw = [W[k][256] for k in ("shared_w0", "shared_w1", "shared_w2")]
+            self.shared = D.make_shared(md, *sw, limit=D.NO_CLAMP, decode=False)
+            self.shared_dec = None
+            self.router_w = (W["gate_weight"], W["gate_bias"])
+            self.blk = None
+            del W
         else:
             from models.demos.blackhole.hy4_preview.tt.hy4_moe import Hy4MoEBlock
             from models.demos.blackhole.hy4_preview.tt.hy4_moe_weights import load_moe_layer
@@ -293,8 +304,12 @@ class Hy4ChainLayer:
         own = ttnn.reshape(own, [1, 1, G * 32, HID])
         from models.demos.blackhole.hy4_preview.tt.hy4_pf_opt import PfOpt
 
-        pfo = PfOpt.from_env()  # HY4_PF_OPT=shfold: the shared expert joins the routed partial before the column reduce-scatter (no shared all-reduce)
-        routed_own = moe_cols(self.um, self.blk.gate, own, ch.mc, ch.ccl, shared=self.shared if pfo.shfold else None, pf=pfo)  # [1,1,n/8,D]
+        pfo = (
+            PfOpt.from_env()
+        )  # HY4_PF_OPT=shfold: the shared expert joins the routed partial before the column reduce-scatter (no shared all-reduce)
+        routed_own = moe_cols(
+            self.um, self.blk.gate, own, ch.mc, ch.ccl, shared=self.shared if pfo.shfold else None, pf=pfo
+        )  # [1,1,n/8,D]
         ttnn.deallocate(own)
         g = ch.mc.allgather(routed_own, ch.ccl, axis=1, dim=2)  # [1,1,n,D] rows ordered [c][g][32]
         ttnn.deallocate(routed_own)
