@@ -15,6 +15,7 @@ import torch
 import ttnn
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 
+from . import opt_switches
 from .fused_decode.config import ROUTER_DECODE_WEIGHT_DTYPE
 from .fused_decode.stream import NBIAS, as_stream_tensor, linear_stream_rows, stream_linear_layout
 
@@ -160,19 +161,60 @@ class TopKRouter:
         # Use L1 for decode (small tensors), DRAM for prefill (large sequences)
         is_decode = actual_tokens <= 128
         mem_config = ttnn.L1_MEMORY_CONFIG if is_decode else ttnn.DRAM_MEMORY_CONFIG
-        router_logits = ttnn.linear(
-            hidden_states,
-            self.weight,
-            bias=self.bias,
-            memory_config=mem_config,
-            compute_kernel_config=self.compute_config,
-        )
+        # GPT_OSS_OPT_DECODE_ROUTER: one-block decode router logits matmul.
+        if opt_switches.on("DECODE_ROUTER") and actual_tokens <= ttnn.TILE_SIZE:
+            router_logits = self._decode_logits_one_block(hidden_states, mem_config)
+        else:
+            router_logits = ttnn.linear(
+                hidden_states,
+                self.weight,
+                bias=self.bias,
+                memory_config=mem_config,
+                compute_kernel_config=self.compute_config,
+            )
 
         expert_indices, expert_weights = topk_router(
             router_logits, self.top_k, use_throughput_experts, self.softmax_compute_config
         )
         ttnn.deallocate(router_logits)
         return expert_indices, expert_weights
+
+    def _decode_logits_one_block(self, hidden_states, mem_config):
+        """GPT_OSS_OPT_DECODE_ROUTER: the decode router logits ([<=32, hidden] x
+        [hidden, num_experts] + bias) with an explicit 1D config, the whole K in one block (as dense_decode does), one
+        32-expert output tile per core (num_experts / 32 cores), HiFi2 with packer L1 accumulation (the compute config
+        ttnn.linear picks here), instead of the auto-configured ttnn.linear, which steps through K a few tiles at a time.
+        """
+        if not hasattr(self, "_decode_logits_program_config"):
+            n_tiles = -(-self.num_experts // ttnn.TILE_SIZE)
+            self._decode_logits_program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(n_tiles, 1),
+                in0_block_w=self.hidden_dim // ttnn.TILE_SIZE,
+                out_subblock_h=1,
+                out_subblock_w=1,
+                out_block_h=1,
+                out_block_w=1,
+                per_core_M=1,
+                per_core_N=1,
+                fuse_batch=True,
+                fused_activation=None,
+                mcast_in0=True,
+            )
+            self._decode_logits_compute_config = ttnn.init_device_compute_kernel_config(
+                hidden_states.device().arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=False,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=True,
+            )
+        return ttnn.linear(
+            hidden_states,
+            self.weight,
+            bias=self.bias,
+            program_config=self._decode_logits_program_config,
+            compute_kernel_config=self._decode_logits_compute_config,
+            memory_config=mem_config,
+        )
 
     def dense_decode(self, hidden_states):
         """Batched decode routing (one 32-token tile per device, fused_decode.config.dense_moe_decode_supported).

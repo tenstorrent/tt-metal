@@ -31,7 +31,20 @@ import ttnn
 from models.demos.gpt_oss.config import MeshConfig, ModeConfig
 
 from .config import ExpertConfig, ProgramConfig
-from .decode import DenseDecodePlan, decode_forward, decode_forward_dense, decode_forward_stream
+from .decode import (
+    DenseDecodePlan,
+    IndexedDecodeTensors,
+    decode_forward,
+    decode_forward_dense,
+    decode_forward_indexed,
+    decode_forward_stream,
+)
+
+from .. import opt_switches
+
+# opt_switches: DECODE_TOPK = decode MoE over the top-k routed experts only (decode_forward_indexed); PREFILL_FUSEBIAS =
+# EP=1 prefill experts with the per-expert bias fused into the (indexed, all experts) sparse matmuls, on the M-blocked
+# prefill path (prefill._process_prefill_chunk_mblock).
 from .operations import apply_tensor_parallel_allreduce
 from .prefill import prefill_forward
 from .weights import load_decode_expert_weights, load_dense_decode_expert_weights, load_expert_weights
@@ -143,6 +156,17 @@ class Experts:
                 dense_decode_tokens,
             )
 
+        # GPT_OSS_OPT_DECODE_TOPK / PREFILL_FUSEBIAS: per-expert bias tables for the indexed sparse matmuls, see
+        # decode_forward_indexed.
+        self.indexed_decode_tensors = None
+        if (
+            (opt_switches.on("DECODE_TOPK") or opt_switches.on("PREFILL_FUSEBIAS"))
+            and self.weights is not None
+            and not indexed_decode
+            and mesh_config.decode.ep == 1
+        ):
+            self.indexed_decode_tensors = IndexedDecodeTensors(mesh_device, self.weights, config)
+
         # For backward compatibility
         self.intermediate_size = config.intermediate_size
         self.num_experts = config.num_experts
@@ -217,6 +241,25 @@ class Experts:
             )
         if self.dense_decode_weights is not None:
             return self._prefill_forward_dense(hidden_states, topk_expert_weights)
+        if (
+            is_decode
+            and opt_switches.on("DECODE_TOPK")
+            and self.indexed_decode_tensors is not None
+            and topk_expert_indices is not None
+            and hidden_states.shape[2] == 1
+        ):
+            return decode_forward_indexed(
+                hidden_states,
+                topk_expert_indices,
+                topk_expert_weights,
+                weights=self.weights,
+                tensors=self.indexed_decode_tensors,
+                config=self.config,
+                mesh_config=self.mesh_config,
+                mesh_device=self.mesh_device,
+                ccl_manager=self.ccl_manager,
+                program_config=self.program_config,
+            )
         # Determine mode based on sequence length. Decode with several tokens per device (batch > 1 without expert
         # parallelism) takes the prefill path: each token's experts are the same computation either way, and the
         # one-token decode ops below only accept a single token.
@@ -242,6 +285,11 @@ class Experts:
                 ccl_manager=self.ccl_manager,
                 program_config=self.program_config,
                 prefill_sparsity=self.prefill_sparsity,
+                **(
+                    {"indexed_tensors": self.indexed_decode_tensors}
+                    if opt_switches.on("PREFILL_FUSEBIAS") and self.indexed_decode_tensors is not None
+                    else {}
+                ),
             )
 
     def _prefill_forward_dense(self, hidden_states, routing_weights):

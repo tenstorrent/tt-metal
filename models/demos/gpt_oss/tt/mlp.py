@@ -10,6 +10,7 @@ from models.demos.gpt_oss.tt.expert_configs import GPTOSSProgramConfig
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 from models.demos.gpt_oss.utils.substate import substate
 
+from . import opt_switches
 from .experts import ExpertConfig, Experts
 from .experts_throughput import (
     DeepSeekPrefillConfig,
@@ -196,6 +197,19 @@ class MLP:
             # Batched decode (dense MoE): dense [tokens, experts] routing weights straight from the router.
             expert_weights = self.router.dense_decode(hidden_states)
             return self.experts(hidden_states, topk_expert_weights=expert_weights, is_decode=True)
+        if (
+            is_decode
+            and not self.use_throughput_experts
+            and opt_switches.on("DECODE_TOPK")
+            and getattr(self.experts, "indexed_decode_tensors", None) is not None
+            and hidden_states.shape[2] == 1
+        ):
+            # GPT_OSS_OPT_DECODE_TOPK: the router's top-k ids and softmax weights
+            # (no dense scatter), consumed by the indexed decode experts.
+            expert_indices, expert_weights = self.router(hidden_states, True)
+            return self.experts(
+                hidden_states, topk_expert_indices=expert_indices, topk_expert_weights=expert_weights, is_decode=True
+            )
         expert_indices, expert_weights = self.router(hidden_states, self.use_throughput_experts)
         expert_output = self.experts(
             hidden_states, topk_expert_indices=expert_indices, topk_expert_weights=expert_weights, is_decode=is_decode
