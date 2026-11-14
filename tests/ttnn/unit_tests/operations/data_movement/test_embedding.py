@@ -1139,3 +1139,14 @@ def test_embedding_fused_rank2_preallocated_output_cache_hit(device):
         expected = torch.nn.functional.embedding(indices, torch_weights)
         assert_equal(expected, ttnn.to_torch(output).reshape(expected.shape))
     assert device.num_program_cache_entries() == 1
+
+
+@pytest.mark.parametrize("sentence_size", [32, 10], ids=["aligned", "unaligned"])
+@pytest.mark.parametrize("requested_dtype", [ttnn.float32, ttnn.bfloat8_b])
+def test_embedding_row_major_output_rejects_dtype(device, sentence_size, requested_dtype, expect_error):
+    indices = ttnn.from_torch(
+        torch.randint(0, 64, (1, sentence_size)), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    weights = ttnn.from_torch(torch.rand(64, 128), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    with expect_error(RuntimeError, "Can only typecast output embeddings when producing TILE_LAYOUT output"):
+        ttnn.embedding(indices, weights, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=requested_dtype)

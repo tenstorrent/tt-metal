@@ -27,6 +27,10 @@ ttnn::Tensor embedding(
     if (pad_token.has_value()) {
         embeddings_type = ttnn::prim::EmbeddingsType::PADDED;
     }
+    TT_FATAL(
+        layout.value_or(weight_arg.layout()) == ttnn::TILE_LAYOUT || !dtype.has_value() ||
+            dtype.value() == weight_arg.dtype(),
+        "Can only typecast output embeddings when producing TILE_LAYOUT output");
     Tensor mutable_weight = weight_arg;
 
     if (mutable_weight.layout() == ttnn::TILE_LAYOUT) {
@@ -59,9 +63,6 @@ ttnn::Tensor embedding(
             }
         } else if (weight_arg.layout() == ttnn::TILE_LAYOUT) {
             fused_tilized = true;
-        } else {
-            bool typecast_needed = dtype.has_value() && (dtype.value() != weight.dtype());
-            TT_FATAL(!typecast_needed, "Can only typecast output embeddings when producing TILE_LAYOUT output");
         }
     }
 
