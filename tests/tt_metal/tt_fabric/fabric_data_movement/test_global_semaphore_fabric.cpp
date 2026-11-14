@@ -12,13 +12,18 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/experimental/context/metal_env.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/experimental/mock_device/mock_device.hpp>
 #include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -29,6 +34,7 @@
 #include "fabric_fixture.hpp"
 #include "utils.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/program/program_impl.hpp"
 
 namespace tt::tt_fabric::fabric_router_tests {
 namespace {
@@ -97,16 +103,12 @@ tt::tt_metal::Program MakeOriginalReceiver(
     return program;
 }
 
-tt::tt_metal::Program MakeMetal2Receiver(
-    tt::tt_metal::distributed::MeshDevice& mesh_device,
-    const CoreCoord& core,
-    const tt::tt_metal::GlobalSemaphore& sem,
-    uint32_t report_addr,
-    uint32_t expected) {
+// A RISCV_0 data-movement kernel with the semaphore bound as global_sem::remote.
+tt::tt_metal::KernelSpec MakeMetal2Kernel(const std::string& name, const char* source) {
     using namespace tt::tt_metal;
-    KernelSpec receiver{
-        .unique_id = KernelSpecName{"receiver"},
-        .source = KernelSpec::SourceCode{kMetal2ReceiverKernelSource},
+    KernelSpec kernel{
+        .unique_id = KernelSpecName{name},
+        .source = KernelSpec::SourceCode{source},
         .num_threads = 1,
         .hw_config =
             DataMovementHardwareConfig{
@@ -117,16 +119,32 @@ tt::tt_metal::Program MakeMetal2Receiver(
                     },
             },
     };
-    receiver.runtime_arg_schema.runtime_arg_names = {"report_addr", "expected"};
-    receiver.global_semaphore_bindings.push_back(GlobalSemaphoreBinding{
+    kernel.global_semaphore_bindings.push_back(GlobalSemaphoreBinding{
         .global_semaphore_parameter_name = GlobalSemaphoreParamName{"remote"}, .accessor_name = "remote"});
+    return kernel;
+}
 
+tt::tt_metal::ProgramSpec MakeMetal2Spec(
+    const std::string& name, tt::tt_metal::KernelSpec kernel, const CoreCoord& core) {
+    using namespace tt::tt_metal;
     ProgramSpec spec;
-    spec.name = "global_semaphore_fabric_receiver";
+    spec.name = name;
     spec.global_semaphore_parameters = {GlobalSemaphoreParameter{.unique_id = GlobalSemaphoreParamName{"remote"}}};
-    spec.kernels.push_back(receiver);
-    spec.work_units.push_back(
-        WorkUnitSpec{.name = "receiver", .kernels = {KernelSpecName{"receiver"}}, .target_nodes = core});
+    spec.work_units.push_back(WorkUnitSpec{.name = "work_unit", .kernels = {kernel.unique_id}, .target_nodes = core});
+    spec.kernels.push_back(std::move(kernel));
+    return spec;
+}
+
+tt::tt_metal::Program MakeMetal2Receiver(
+    tt::tt_metal::distributed::MeshDevice& mesh_device,
+    const CoreCoord& core,
+    const tt::tt_metal::GlobalSemaphore& sem,
+    uint32_t report_addr,
+    uint32_t expected) {
+    using namespace tt::tt_metal;
+    KernelSpec receiver = MakeMetal2Kernel("receiver", kMetal2ReceiverKernelSource);
+    receiver.runtime_arg_schema.runtime_arg_names = {"report_addr", "expected"};
+    ProgramSpec spec = MakeMetal2Spec("global_semaphore_fabric_receiver", std::move(receiver), core);
 
     ProgramRunArgs args;
     args.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
@@ -251,6 +269,86 @@ TEST_F(Fabric1DFixture, GlobalSemaphoreMetal2ReceiverWriteAndUpOverFabric) {
 TEST_F(Fabric2DFixture, GlobalSemaphoreMetal2ReceiverWriteAndUpOverFabric) {
     RunGlobalSemaphoreOverFabric(this, /*is_2d=*/true, ReceiverApi::METAL2, SendOp::WRITE_AND_UP);
 }
+
+// Compiles every fabric method, including the multicast and set-state ones that the tests above do not send.
+constexpr const char* kFabricJITKernelSource = R"(
+#include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/endpoints.h"
+#include "api/dataflow/global_semaphore.h"
+#include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
+#include "tt_metal/fabric/hw/inc/packet_header_pool.h"
+
+#if !defined(GLOBAL_SEMAPHORE_FABRIC)
+#error "GlobalSemaphore fabric calls are missing with fabric enabled"
+#endif
+
+void kernel_main() {
+    size_t arg_idx = 0;
+    auto sender = tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
+    auto* hdr = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(PacketHeaderPool::allocate_header());
+    GlobalSemaphore sem(global_sem::remote);
+    Noc noc;
+#if defined(FABRIC_2D)
+    const GlobalSemaphore::ToChip one{.dst_dev_id = 1, .dst_mesh_id = 0};
+    const GlobalSemaphore::ToChips many{.dst_dev_id = 1, .dst_mesh_id = 0, .e = 1, .w = 0, .n = 0, .s = 0};
+#else
+    const GlobalSemaphore::ToChip one{.num_hops = 1};
+    const GlobalSemaphore::ToChips many{.start_distance = 1, .range = 1};
+#endif
+    UnicastEndpoint ep;
+    const noc_traits_t<UnicastEndpoint>::src_args_type src_args{.noc_x = 1, .noc_y = 1, .addr = 0x10000};
+    const noc_traits_t<UnicastEndpoint>::dst_args_type dst_args{.noc_x = 1, .noc_y = 1, .addr = 0x20000};
+
+    sem.up(sender, hdr, one, noc, 1, 1);
+    sem.up(sender, hdr, many, noc, 1, 1, 2);
+    sem.write_and_up(sender, hdr, one, noc, ep, src_args, ep, dst_args, 64, 1, 1);
+    sem.write_and_up(sender, hdr, many, noc, ep, src_args, ep, dst_args, 64, 1, 1);
+    sem.up_set_state(hdr, one, noc, 1, 1);
+    sem.up_with_state(sender, hdr);
+    sem.up_with_state(sender, hdr, noc, 2, 2);
+    sem.up_set_state(hdr, many, noc, 1, 1);
+    sem.up_with_state<GlobalSemaphore::ToChips>(sender, hdr);
+    sem.up_with_state<GlobalSemaphore::ToChips>(sender, hdr, noc, 2, 2);
+}
+)";
+
+// Fabric needs every chip open, so both mock chips are opened and the program is built on the first.
+class GlobalSemaphoreFabricJITTest : public ::testing::TestWithParam<FabricConfig> {
+protected:
+    void SetUp() override {
+        env_ = std::make_unique<tt::tt_metal::MetalEnv>(tt::tt_metal::MetalEnvDescriptor{
+            .mock_cluster_desc_path =
+                tt::tt_metal::experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 2)});
+        env_->configure_fabric({.fabric_config = GetParam()});
+        devices_ = tt::tt_metal::distributed::MeshDevice::open_unit_meshes(*env_, std::array{0, 1});
+    }
+    void TearDown() override {
+        devices_.clear();
+        env_.reset();
+    }
+
+    std::unique_ptr<tt::tt_metal::MetalEnv> env_;  // outlives the meshes
+    std::map<ChipId, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devices_;
+};
+
+TEST_P(GlobalSemaphoreFabricJITTest, CPU_GlobalSemaphoreFabricJITSmoke) {
+    tt::tt_metal::KernelSpec kernel = MakeMetal2Kernel("dm_kernel", kFabricJITKernelSource);
+    if (GetParam() == FabricConfig::FABRIC_2D) {
+        kernel.compiler_options.defines.insert({"FABRIC_2D", "1"});
+    }
+    auto& mesh_device = devices_.at(0);
+    tt::tt_metal::Program program = tt::tt_metal::experimental::MakeProgramFromSpec(
+        *mesh_device, MakeMetal2Spec("global_semaphore_fabric_smoke", std::move(kernel), CoreCoord{0, 0}));
+    EXPECT_NO_THROW(program.impl().compile(mesh_device.get()));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    MockWormhole,
+    GlobalSemaphoreFabricJITTest,
+    ::testing::Values(FabricConfig::FABRIC_1D, FabricConfig::FABRIC_2D),
+    [](const ::testing::TestParamInfo<FabricConfig>& info) {
+        return info.param == FabricConfig::FABRIC_1D ? std::string("Fabric1D") : std::string("Fabric2D");
+    });
 
 }  // namespace
 }  // namespace tt::tt_fabric::fabric_router_tests
