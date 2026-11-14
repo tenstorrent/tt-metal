@@ -87,8 +87,6 @@ std::vector<Tensor> clamp_bw(
     std::optional<float> max,
     const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    auto output_memory_config = output_mem_config.value_or(
-        input.memory_config());  // TODO: Remove after ternary forward ops migration is completed
     TT_FATAL((max.has_value() || min.has_value()), "Only one of 'min' or 'max' can be None. Please provide one value");
     if (!max.has_value()) {
         Tensor minT = ttnn::ge(input, min.value(), std::nullopt, output_mem_config);
@@ -102,10 +100,10 @@ std::vector<Tensor> clamp_bw(
         grad_tensor.emplace_back(result);
         return grad_tensor;
     }
-    Tensor minT = ttnn::ge(input, min.value(), std::nullopt, output_memory_config);
-    Tensor maxT = ttnn::le(input, max.value(), std::nullopt, output_memory_config);
-    Tensor result = ttnn::logical_and(minT, maxT, std::nullopt, output_memory_config);
-    result = ttnn::where(result, grad, 0.0f, output_memory_config);
+    Tensor minT = ttnn::ge(input, min.value(), std::nullopt, output_mem_config);
+    Tensor maxT = ttnn::le(input, max.value(), std::nullopt, output_mem_config);
+    Tensor result = ttnn::logical_and(minT, maxT, std::nullopt, output_mem_config);
+    result = ttnn::where(result, grad, 0.0f, output_mem_config);
     grad_tensor.emplace_back(result);
     return grad_tensor;
 }
@@ -117,8 +115,6 @@ std::vector<Tensor> clamp_bw(
     std::optional<Tensor> max,
     const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    auto output_memory_config = output_mem_config.value_or(
-        input.memory_config());  // TODO: Remove after ternary forward ops migration is completed
     TT_FATAL((max.has_value() || min.has_value()), "Only one of 'min' or 'max' can be None. Please provide one value");
     if (!max.has_value()) {
         Tensor minT = ttnn::ge(input, min.value(), std::nullopt, output_mem_config);
@@ -132,10 +128,10 @@ std::vector<Tensor> clamp_bw(
         grad_tensor.emplace_back(in_grad);
         return grad_tensor;
     }
-    Tensor minT = ttnn::ge(input, min.value(), std::nullopt, output_memory_config);
-    Tensor maxT = ttnn::le(input, max.value(), std::nullopt, output_memory_config);
-    Tensor result = ttnn::logical_and(minT, maxT, std::nullopt, output_memory_config);
-    result = ttnn::where(result, grad, 0.0f, output_memory_config);
+    Tensor minT = ttnn::ge(input, min.value(), std::nullopt, output_mem_config);
+    Tensor maxT = ttnn::le(input, max.value(), std::nullopt, output_mem_config);
+    Tensor result = ttnn::logical_and(minT, maxT, std::nullopt, output_mem_config);
+    result = ttnn::where(result, grad, 0.0f, output_mem_config);
     grad_tensor.emplace_back(result);
     return grad_tensor;
 }
@@ -506,8 +502,6 @@ std::vector<Tensor> multigammaln_bw(
 
 std::vector<Tensor> lgamma_bw(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
-    auto output_memory_config = output_mem_config.value_or(
-        input.memory_config());  // TODO: Remove after ternary forward ops migration is completed
     std::vector<Tensor> grad_tensor;
     Tensor grad_result = ttnn::multiply(grad, ttnn::digamma(input, output_mem_config), std::nullopt, output_mem_config);
     grad_tensor.emplace_back(grad_result);
@@ -1874,16 +1868,19 @@ std::vector<Tensor> repeat_bw(
     const ttnn::Shape& shape,
     const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    auto output_memory_config = output_mem_config.value_or(
-        input.memory_config());  // TODO: Remove after ternary forward ops migration is completed
 
     auto shape_wh = input.padded_shape();
     TT_FATAL(shape_wh[0] == 1, "Input shape[0] must be 1 but got {}", shape_wh[0]);
     auto* ttnn_device = input.device();
+    // moreh_sum writes its result into the zeros tensor created below. If no memory config is passed,
+    // zeros allocate the tensor in DRAM, in which case use the input memory config. The result has input
+    // shape and config. Grad config was built for larger grad shape and may not always fit (a width-sharded grad
+    // fails).
+    const auto sum_output_mem_config = output_mem_config.value_or(input.memory_config());
     // input.padded_shape()[0]
     // If repeat shape has 0's, it returns zeros of given input
     if (shape[0] == 0 || shape[1] == 0 || shape[2] == 0 || shape[3] == 0) {
-        Tensor zero_tensor = ttnn::zeros_like(input, input.dtype(), input.layout(), std::nullopt, output_memory_config);
+        Tensor zero_tensor = ttnn::zeros_like(input, input.dtype(), input.layout(), std::nullopt, output_mem_config);
         grad_tensor.emplace_back(zero_tensor);
         return grad_tensor;
     }
@@ -1896,8 +1893,8 @@ std::vector<Tensor> repeat_bw(
             grad,
             dim,
             true,
-            ttnn::zeros(required, input.dtype(), input.layout(), *ttnn_device, output_memory_config),
-            output_memory_config,
+            ttnn::zeros(required, input.dtype(), input.layout(), *ttnn_device, sum_output_mem_config),
+            sum_output_mem_config,
             std::nullopt);
         grad_tensor.emplace_back(result);
         return grad_tensor;
@@ -1911,8 +1908,8 @@ std::vector<Tensor> repeat_bw(
             grad,
             dim,
             true,
-            ttnn::zeros(required, input.dtype(), input.layout(), *ttnn_device, output_memory_config),
-            output_memory_config,
+            ttnn::zeros(required, input.dtype(), input.layout(), *ttnn_device, sum_output_mem_config),
+            sum_output_mem_config,
             std::nullopt);
         grad_tensor.emplace_back(result);
         return grad_tensor;
@@ -1924,7 +1921,7 @@ std::vector<Tensor> repeat_bw(
 
 namespace ttnn::operations::unary_backward {
 // Autoformat support
-Tensor change_layout_to_tile(const Tensor& input_tensor, const MemoryConfig& /*output_mem_config*/) {
+Tensor change_layout_to_tile(const Tensor& input_tensor) {
     auto formatted_input_tensor = input_tensor;
     if (input_tensor.layout() == Layout::ROW_MAJOR) {
         auto a_pad_shape = ttnn::operations::data_movement::pad_to_tile_shape(input_tensor.padded_shape());
@@ -1948,27 +1945,25 @@ std::vector<Tensor> prod_bw(
     const std::optional<std::int64_t> dim,
     const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    auto output_memory_config = output_mem_config.value_or(
-        input.memory_config());  // TODO: Remove after ternary forward ops migration is completed
 
     const bool all_dimensions = !dim.has_value();
     const bool keepdim = !all_dimensions;
-    Tensor is_zero = ttnn::eqz(input, output_memory_config);
-    Tensor safe_input = ttnn::add(input, is_zero, std::nullopt, output_memory_config);
-    Tensor prod_result = ttnn::prod(safe_input, dim, keepdim, output_memory_config);
+    Tensor is_zero = ttnn::eqz(input, output_mem_config);
+    Tensor safe_input = ttnn::add(input, is_zero, std::nullopt, output_mem_config);
+    Tensor prod_result = ttnn::prod(safe_input, dim, keepdim, output_mem_config);
 
     if (prod_result.layout() == Layout::ROW_MAJOR && prod_result.storage_type() == StorageType::DEVICE) {
-        prod_result = ttnn::operations::unary_backward::change_layout_to_tile(prod_result, output_memory_config);
+        prod_result = ttnn::operations::unary_backward::change_layout_to_tile(prod_result);
     }
 
     // Keep the count broadcastable with the input.
     const std::optional<std::variant<int, int64_t, ttsl::SmallVector<int>>> reduce_dim = dim;
-    Tensor zero_count = ttnn::sum(is_zero, reduce_dim, /*keepdim=*/true, output_memory_config);
+    Tensor zero_count = ttnn::sum(is_zero, reduce_dim, /*keepdim=*/true, output_mem_config);
     if (zero_count.layout() == Layout::ROW_MAJOR && zero_count.storage_type() == StorageType::DEVICE) {
-        zero_count = ttnn::operations::unary_backward::change_layout_to_tile(zero_count, output_memory_config);
+        zero_count = ttnn::operations::unary_backward::change_layout_to_tile(zero_count);
     }
     // A non-zero element survives only where the count is 0, a zero only where it is the only one.
-    Tensor survives = ttnn::eq(is_zero, zero_count, std::nullopt, output_memory_config);
+    Tensor survives = ttnn::eq(is_zero, zero_count, std::nullopt, output_mem_config);
     zero_count.deallocate();
     is_zero.deallocate();
     const std::array<ttnn::operations::unary::EltwiseUnaryWithParam, 1> recip{
@@ -1977,7 +1972,7 @@ std::vector<Tensor> prod_bw(
         survives,
         safe_input,
         /*output_dtype=*/std::nullopt,
-        output_memory_config,
+        output_mem_config,
         /*output=*/std::nullopt,
         /*post_activations=*/{},
         /*lhs_activations=*/{},
@@ -1996,9 +1991,12 @@ std::vector<Tensor> prod_bw(
         ttsl::SmallVector<uint32_t> first_end(rank, 1);
         ttsl::SmallVector<uint32_t> first_step(rank, 1);
         Tensor grad_first = ttnn::slice(grad, first_start, first_end, first_step, std::nullopt);
-        Tensor scale = ttnn::multiply(prod_result, grad_first, std::nullopt, output_memory_config);
+        Tensor scale = ttnn::multiply(prod_result, grad_first, std::nullopt, output_mem_config);
         grad_first.deallocate();
-        Tensor all_dimension_result = ttnn::multiply(per_element, scale, std::nullopt, output_memory_config);
+        // The slice keeps the grad's memory config and scale follows it. A sharded grad keeps the result in
+        // shards. If no memory config is requested, result is placed like input.
+        Tensor all_dimension_result =
+            ttnn::multiply(per_element, scale, std::nullopt, output_mem_config.value_or(input.memory_config()));
         grad_tensor.emplace_back(std::move(all_dimension_result));
         return grad_tensor;
     }
@@ -2009,13 +2007,13 @@ std::vector<Tensor> prod_bw(
     if (prod_result.logical_shape() != grad.padded_shape()) {
         if (*dim == 3 || *dim == -1) {
             ttsl::SmallVector<std::int64_t> after_permute_dims = {0, 3, 1, 2};
-            Tensor required = ttnn::permute(grad, after_permute_dims, output_memory_config);
+            Tensor required = ttnn::permute(grad, after_permute_dims, output_mem_config);
             ttsl::SmallVector<std::uint32_t> start_index = {0, 0, 0, 0};
             ttsl::SmallVector<std::uint32_t> end_index = {
                 grad.padded_shape()[0], 1, grad.padded_shape()[1], grad.padded_shape()[2]};
             Tensor new_slice_tensor = ttnn::slice(required, start_index, end_index, step, std::nullopt);
             after_permute_dims = {0, 2, 3, 1};
-            updated_grad = ttnn::permute(new_slice_tensor, after_permute_dims, output_memory_config);
+            updated_grad = ttnn::permute(new_slice_tensor, after_permute_dims, output_mem_config);
             if (updated_grad.storage_type() != StorageType::DEVICE) {
                 Tensor pad_updated_grad = updated_grad.pad_to_tile(1.0f);
                 pad_updated_grad = pad_updated_grad.to_layout(Layout::TILE);
@@ -2023,15 +2021,14 @@ std::vector<Tensor> prod_bw(
             }
         } else if (*dim == 2 || *dim == -2) {
             ttsl::SmallVector<std::int64_t> after_permute_dims = {0, 2, 1, 3};
-            Tensor required = ttnn::permute(grad, after_permute_dims, output_memory_config);
+            Tensor required = ttnn::permute(grad, after_permute_dims, output_mem_config);
             ttsl::SmallVector<std::uint32_t> start_index = {0, 0, 0, 0};
             ttsl::SmallVector<std::uint32_t> end_index = {
                 grad.padded_shape()[0], 1, grad.padded_shape()[1], grad.padded_shape()[3]};
             Tensor new_slice_tensor = ttnn::slice(required, start_index, end_index, step, std::nullopt);
-            updated_grad = ttnn::permute(new_slice_tensor, after_permute_dims, output_memory_config);
+            updated_grad = ttnn::permute(new_slice_tensor, after_permute_dims, output_mem_config);
             if (updated_grad.layout() == Layout::ROW_MAJOR) {
-                updated_grad =
-                    ttnn::operations::unary_backward::change_layout_to_tile(updated_grad, output_memory_config);
+                updated_grad = ttnn::operations::unary_backward::change_layout_to_tile(updated_grad);
             }
         }
     }
@@ -2039,19 +2036,19 @@ std::vector<Tensor> prod_bw(
         prod_result,
         (*dim == 1 || *dim == 0 || *dim == -4 || *dim == -3) ? grad : updated_grad,
         std::nullopt,
-        output_memory_config);
+        output_mem_config);
     if (temp.layout() == Layout::ROW_MAJOR) {
-        temp = ttnn::operations::unary_backward::change_layout_to_tile(temp, output_memory_config);
+        temp = ttnn::operations::unary_backward::change_layout_to_tile(temp);
     }
     if (*dim == 3 || *dim == -1) {
         Tensor grad_result =
-            ttnn::bcast(per_element, temp, ttnn::BcastOpMath::MUL, ttnn::BcastOpDim::W, output_memory_config);
+            ttnn::bcast(per_element, temp, ttnn::BcastOpMath::MUL, ttnn::BcastOpDim::W, output_mem_config);
         grad_tensor.emplace_back(grad_result);
         return grad_tensor;
     }
     if (*dim == 2 || *dim == -2) {
         Tensor grad_result =
-            ttnn::bcast(per_element, temp, ttnn::BcastOpMath::MUL, ttnn::BcastOpDim::H, output_memory_config);
+            ttnn::bcast(per_element, temp, ttnn::BcastOpMath::MUL, ttnn::BcastOpDim::H, output_mem_config);
         grad_tensor.emplace_back(grad_result);
         return grad_tensor;
     }
@@ -2063,8 +2060,8 @@ std::vector<Tensor> prod_bw(
             tensor_1_temp = ttnn::pad(per_element, padding, 0, true, std::nullopt);
         }
         ttsl::SmallVector<std::int64_t> after_permute_dims = {0, 2, 3, 1};
-        Tensor tensor_1 = ttnn::permute(tensor_1_temp, after_permute_dims, output_memory_config);
-        Tensor tensor_2 = ttnn::permute(temp, after_permute_dims, output_memory_config);
+        Tensor tensor_1 = ttnn::permute(tensor_1_temp, after_permute_dims, output_mem_config);
+        Tensor tensor_2 = ttnn::permute(temp, after_permute_dims, output_mem_config);
 
         // put the tensor back on device because permute throws it off device
         // See: Remove auto format within permute_op.cpp #9404
@@ -2091,9 +2088,9 @@ std::vector<Tensor> prod_bw(
 
         after_permute_dims = {0, 3, 1, 2};
         Tensor result = permute(
-            ttnn::bcast(tensor_1, tensor_2, ttnn::BcastOpMath::MUL, ttnn::BcastOpDim::W, output_memory_config),
+            ttnn::bcast(tensor_1, tensor_2, ttnn::BcastOpMath::MUL, ttnn::BcastOpDim::W, output_mem_config),
             after_permute_dims,
-            output_memory_config);
+            output_mem_config);
         Tensor grad_result = result;
         if (per_element.padded_shape()[1] % 32 != 0) {
             ttsl::SmallVector<std::uint32_t> start_index = {0, 0, 0, 0};
@@ -2113,8 +2110,8 @@ std::vector<Tensor> prod_bw(
         tensor_1_temp = ttnn::pad(per_element, padding, 0, false, std::nullopt);
     }
     ttsl::SmallVector<std::int64_t> after_permute_dims = {3, 1, 2, 0};
-    Tensor tensor_1 = ttnn::permute(tensor_1_temp, after_permute_dims, output_memory_config);
-    Tensor tensor_2 = ttnn::permute(temp, after_permute_dims, output_memory_config);
+    Tensor tensor_1 = ttnn::permute(tensor_1_temp, after_permute_dims, output_mem_config);
+    Tensor tensor_2 = ttnn::permute(temp, after_permute_dims, output_mem_config);
 
     // put the tensor back on device because permute throws it off device
     // See: Remove auto format within permute_op.cpp #9404
@@ -2140,9 +2137,9 @@ std::vector<Tensor> prod_bw(
     // If tensor_1 is TILE, tensor_2 is already correct (both TILE, shapes match by assumption)
 
     Tensor result = ttnn::permute(
-        ttnn::bcast(tensor_1, tensor_2, ttnn::BcastOpMath::MUL, ttnn::BcastOpDim::W, output_memory_config),
+        ttnn::bcast(tensor_1, tensor_2, ttnn::BcastOpMath::MUL, ttnn::BcastOpDim::W, output_mem_config),
         after_permute_dims,
-        output_memory_config);
+        output_mem_config);
     Tensor grad_result = result;
     if (per_element.padded_shape()[0] % 32 != 0) {
         ttsl::SmallVector<std::uint32_t> start_index = {0, 0, 0, 0};
