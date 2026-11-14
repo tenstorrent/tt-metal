@@ -5,6 +5,7 @@
 #include "roll_device_operation.hpp"
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/experimental/metal2_host_api/tensor_spec_relaxations.hpp>
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
@@ -24,6 +25,10 @@ void validate_roll(const RollParams& operation_attributes, const RollInputs& ten
     TT_FATAL(input.is_allocated(), "Operands need to be allocated in buffers on device!");
     TT_FATAL(input.is_sharded(), "Native sharded roll requires a sharded input");
     TT_FATAL(operation_attributes.output_mem_config.is_sharded(), "Native sharded roll requires a sharded output");
+    // The program factory picks DRAM or L1 mode from the input alone and maps output shards the same way.
+    TT_FATAL(
+        operation_attributes.output_mem_config.buffer_type() == input.memory_config().buffer_type(),
+        "Native sharded roll requires the output to use the same buffer type as the input");
     // The program factory enumerates a single rectangular grid row-major; a multi-range grid
     // would map cells to the wrong cores.
     TT_FATAL(
@@ -62,15 +67,16 @@ ttsl::hash::hash_t RollDeviceOperation::compute_program_hash(
     // padded_shape drives the N-D decomposition the factory writes into per-core runtime args, and it
     // changes their count, which override_runtime_arguments cannot resize. output_mem_config supplies
     // the output shard grid and orientation, which become the kernels' core ranges and select the
-    // shard-linear mapping; only the shard shape is re-checked on a hit.
+    // shard-linear mapping; only the shard shape is re-checked on a hit. The input is keyed as Metal 2.0
+    // matches it under match_padded_shape_only: its whole TensorLayout (Alignment included, which Metal 2.0
+    // requires to match exactly on every hit) plus its padded shape (#59915). Its logical shape is left
+    // out; validate_roll rejects any input whose logical and padded shapes differ, on hits too.
     return tt::tt_metal::operation::hash_operation<RollDeviceOperation>(
         attrs.shift,
         attrs.dim,
         attrs.output_mem_config,
-        args.input.memory_config(),
-        args.input.dtype(),
-        args.input.layout(),
-        args.input.padded_shape());
+        tt::tt_metal::experimental::hash_tensorspec_with_relaxation(
+            args.input.tensor_spec(), {.match_padded_shape_only = true}));
 }
 
 RollDeviceOperation::spec_return_value_t RollDeviceOperation::compute_output_specs(
