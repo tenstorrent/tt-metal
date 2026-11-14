@@ -55,9 +55,9 @@ These runs used the commands above:
 
 | Variant | BEV size | Encoder layers | Device FPS (Snapshot #1) | Device FPS (Snapshot #2) | Device FPS (Snapshot #3) |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| tiny | 50 | 3 | 44.12 | 53.19 | 54.58 |
-| small | 150 | 3 | 13.03 | 14.72 | 15.70 |
-| base | 200 | 6 | 4.89 | 5.88 | 6.44 |
+| tiny | 50 | 3 | 52.42 | 53.19 | 54.58 |
+| small | 150 | 3 | 14.03 | 14.72 | 15.70 |
+| base | 200 | 6 | 5.11 | 5.88 | 6.44 |
 
 Each snapshot is one card and compute grid, measured on one branch:
 

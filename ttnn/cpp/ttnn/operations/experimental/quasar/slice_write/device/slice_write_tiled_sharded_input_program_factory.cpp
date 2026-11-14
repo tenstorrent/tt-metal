@@ -18,8 +18,8 @@
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 #include "ttnn/operations/experimental/padded_slice/device/padded_slice_utils.hpp"
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -27,7 +27,7 @@ using namespace ttnn::operations::experimental::detail;
 
 namespace ttnn::prim::qsr {
 
-using namespace tt::tt_metal::experimental;
+using namespace tt::tt_metal;
 
 namespace {
 SliceWriteRuntimeArgs get_slice_write_runtime_args_tiled_sharded_input(
@@ -108,7 +108,7 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_tiled_sharded_input(
         accumulated_total_tiles_per_dim,
         accumulated_input_total_tiles_per_dim);
 
-    using namespace tt::tt_metal::experimental;
+    using namespace tt::tt_metal;
     TT_FATAL(
         output_tensor_start[-1] == 0,
         "slice_write expects output start for the last dimension to be 0. Got {}",

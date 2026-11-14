@@ -66,6 +66,7 @@ def run_combine(
     dispatched_buffer_layout,
     use_fp8_output,
     num_links=2,
+    sp_axis=0,
 ):
     """Run the TTNN combine op in isolation against the torch reference. Shared body for the
     per-model test entrypoints below — they differ only on the (emb_dim, num_routed_experts,
@@ -77,12 +78,13 @@ def run_combine(
     # Log fabric config
     logger.debug(f"Fabric max payload size: {ttnn.get_tt_fabric_max_payload_size_bytes()}")
 
-    mesh_config = extract_mesh_config(mesh_device)
-    sp_axis = mesh_config.sp_axis
+    mesh_config = extract_mesh_config(mesh_device, sp_axis)
     dispatch_group_size = mesh_config.dispatch_group_size
     num_dispatch_groups = mesh_config.num_dispatch_groups
 
-    logger.debug(f"Testing with {mesh_device.shape=}, {num_devices=} {dispatch_group_size=} {num_dispatch_groups=}")
+    logger.debug(
+        f"Testing with {sp_axis=}, {mesh_device.shape=}, {num_devices=} {dispatch_group_size=} {num_dispatch_groups=}"
+    )
     ttnn.visualize_mesh_device(mesh_device)
 
     signpost(
@@ -176,7 +178,7 @@ def run_combine(
     dispatched_buffer, dispatched_metadata = torch_dispatch_module(x, weights, indices, expert_offsets)
 
     # Use different sharding: shard both dimensions
-    mesh_mapper = get_ep_mesh_mapper(mesh_device)
+    mesh_mapper = get_ep_mesh_mapper(mesh_device, sp_axis)
 
     tt_dispatched_buffer = ttnn.from_torch(
         dispatched_buffer,
@@ -186,8 +188,14 @@ def run_combine(
         dtype=ttnn.bfloat16,
     )
 
+    # The combine kernel reads each token's source as a row-major mesh index; at sp1 the reference's
+    # encoding would send tokens off the SP ring and hang the op. The torch combine keeps the original.
+    device_metadata = ExpertMapping.metadata_source_for_sp_axis(
+        dispatched_metadata, num_dispatch_groups, dispatch_group_size, sp_axis
+    )
+
     tt_dispatched_metadata = ttnn.from_torch(
-        dispatched_metadata,
+        device_metadata,
         mesh_mapper=mesh_mapper,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=mesh_device,
@@ -196,14 +204,14 @@ def run_combine(
 
     tt_expert_token_counts = ttnn.from_torch(
         expert_token_counts,
-        mesh_mapper=get_expert_token_counts_mesh_mapper(mesh_device),
+        mesh_mapper=get_expert_token_counts_mesh_mapper(mesh_device, sp_axis),
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=mesh_device,
         dtype=ttnn.int32,
     )
     tt_expert_region_offsets = ttnn.from_torch(
         expert_region_offsets,
-        mesh_mapper=get_expert_token_counts_mesh_mapper(mesh_device),
+        mesh_mapper=get_expert_token_counts_mesh_mapper(mesh_device, sp_axis),
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=mesh_device,
         dtype=ttnn.int32,
@@ -253,7 +261,7 @@ def run_combine(
         return
 
     # Step 6: Convert ttnn output to torch for comparison
-    mesh_composer = get_ep_mesh_composer(mesh_device)
+    mesh_composer = get_ep_mesh_composer(mesh_device, sp_axis)
 
     tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=mesh_composer)
     if use_fp8_output:
@@ -325,6 +333,8 @@ SINGLE_GLX_AND_PROXY_MESHES = _Test_Mesh(
         (4, 1): ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
         (4, 2): ttnn.FabricConfig.FABRIC_2D,
         (2, 2): ttnn.FabricConfig.FABRIC_2D,
+        # One 4x4 prefill stage (a Galaxy tray half): only the axis-1 ring survives.
+        (4, 4): ttnn.FabricConfig.FABRIC_2D_TORUS_X,
     },
 )
 
@@ -392,6 +402,7 @@ def _topo_marker(mesh, fabric_cfg):
 def _mesh_id(mesh, fabric_cfg):
     profile = {
         ttnn.FabricConfig.FABRIC_2D: "fabric2d",
+        ttnn.FabricConfig.FABRIC_2D_TORUS_X: "torus-x",
         ttnn.FabricConfig.FABRIC_2D_TORUS_Y: "torus-y",
         ttnn.FabricConfig.FABRIC_2D_TORUS_XY: "torus-xy",
     }[fabric_cfg]
@@ -512,9 +523,12 @@ def _unsupported_param_combos(**params):
     ids=["tile", "row_major"],
 )
 @pytest.mark.parametrize("use_fp8_output", [False, True], ids=["bf16_out", "fp8_out"])
+# The SP (dispatch) axis. sp1 is the 4x4-stage layout, where the SP ring runs along mesh axis 1.
+@pytest.mark.parametrize("sp_axis", [0, 1], ids=["sp0", "sp1"])
 def test_ttnn_combine(
     mesh_device,
     device_params,
+    sp_axis,
     seq_len_per_chip,
     emb_dim,
     num_routed_experts,
@@ -527,7 +541,9 @@ def test_ttnn_combine(
     is_ci_env,
     is_ci_v2_env,
 ):
-    topology = per_axis_topology(device_params["fabric_config"])[0]
+    if mesh_device.shape[sp_axis] == 1:
+        pytest.skip(f"mesh {tuple(mesh_device.shape)} has no extent along sp_axis={sp_axis}")
+    topology = per_axis_topology(device_params["fabric_config"])[sp_axis]
     run_combine(
         mesh_device,
         seq_len_per_chip,
@@ -540,6 +556,7 @@ def test_ttnn_combine(
         run_pcc_check,
         dispatched_buffer_layout,
         use_fp8_output,
+        sp_axis=sp_axis,
     )
 
 

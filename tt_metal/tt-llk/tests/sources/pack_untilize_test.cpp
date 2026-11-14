@@ -320,7 +320,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             _llk_packer_wait_for_math_done_();
                         }
                         untilize_block(pack_address(params, rt, block, num_faces, formats.pack_dst), formats.pack_dst, num_faces);
-                        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                        // Wormhole PACK_ISOLATE also releases every section to drain the packers.
+                        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_PACK_SECTION_RELEASE)
                         {
                             _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
                         }

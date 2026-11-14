@@ -28,13 +28,11 @@ SKIP_EXIT = 3
 SETTLED = {"success", "skipped", "neutral"}
 SHORT_CIRCUIT_PREFIX = " failed deterministically: "
 SHORT_CIRCUIT_SUFFIX = " -- auto-retry cannot change that; re-run it by hand to measure again"
-# Who auto-retry's re-runs are triggered as: the owner of RETRY_WORKFLOW_TOKEN in
-# .github/workflows/_auto-retry-nightly-workflows.yaml. A re-run started by anyone else (by hand, to measure
-# again) is never short-circuited. Known exception: the token owner is a person, so their own manual re-runs
-# look like auto-retry and are short-circuited too (moving the token to a GitHub App would remove this).
-# If the token changes owner, update this; the auto-retry workflow warns when they differ, and until then
-# marked jobs simply re-run as they did before ci-no-retry existed.
-AUTO_RETRY_ACTOR = "tt-rkim"
+# Who auto-retry's re-runs are triggered as. Both auto-retry workflows re-run failed jobs with the
+# built-in github.token, so the triggering actor is the Actions app user. A re-run started by anyone else
+# (by hand, to measure again) is never short-circuited. If auto-retry ever moves to a GitHub App or a PAT,
+# update this to that identity's login; until then marked jobs simply re-run as they did before ci-no-retry.
+AUTO_RETRY_ACTOR = "github-actions[bot]"
 
 
 def api(url):

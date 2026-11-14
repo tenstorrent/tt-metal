@@ -12,7 +12,7 @@ from models.experimental.uniad.tt import ttnn_encoder
 from models.experimental.uniad.tt.model_preprocessing_encoder import (
     create_uniad_model_parameters_encoder,
 )
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 from models.experimental.uniad.tests.common import load_torch_model
 
 

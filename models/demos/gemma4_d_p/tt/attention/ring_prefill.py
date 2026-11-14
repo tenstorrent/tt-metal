@@ -470,7 +470,7 @@ def sliding_ring_prefill_attention(
         scale=scale,
         compute_kernel_config=compute_kernel_config,
         dim=2,
-        multi_device_global_semaphore=ccl_manager.ring_attention_ccl_semaphore_handles,
+        multi_device_global_semaphore=ccl_manager.sliding_ring_attention_ccl_semaphore_handles,
         num_links=ccl_manager.num_links,
         cluster_axis=mesh_config.cp_axis,
         mesh_device=mesh_device,
