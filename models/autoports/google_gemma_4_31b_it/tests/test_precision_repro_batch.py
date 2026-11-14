@@ -143,3 +143,33 @@ def test_decode_timing_restores_override_on_generation_failure(expect_error):
     with expect_error(RuntimeError, "generate failed"):
         timed_free_generate(generator, [1], 4, {})
     assert generator._replay is original
+
+
+def test_chosen_only_case_validates_without_invented_correct_branch(tmp_path, monkeypatch, expect_error):
+    from models.autoports.google_gemma_4_31b_it.tools.precision_repro_batch import main
+
+    case = tmp_path / "case.json"
+    case.write_text(json.dumps({"prompt_token_ids": [1], "continuations": {"chosen": [2]}}))
+    jobs = tmp_path / "jobs.json"
+    job = {"name": "onset", "case": str(case), "branches": ["chosen"]}
+    jobs.write_text(json.dumps([job]))
+    kwargs = tmp_path / "kwargs.json"
+    kwargs.write_text(json.dumps({"batch_size": 1}))
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "probe",
+            "--cases",
+            str(jobs),
+            "--build-kwargs-file",
+            str(kwargs),
+            "--output-dir",
+            str(tmp_path / "out"),
+            "--validate-only",
+        ],
+    )
+    main()
+    job["branches"].append("correct")
+    jobs.write_text(json.dumps([job]))
+    with expect_error(ValueError, "Missing branch"):
+        main()

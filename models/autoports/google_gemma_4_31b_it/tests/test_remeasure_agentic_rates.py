@@ -111,3 +111,65 @@ def test_rate_prediction_preserves_prior_and_source_identities():
     assert miss["explanation_required"] and miss["explanation"] is None
     assert miss["rates"]["decode_tok_s_user"]["ratio_to_prior"] == 0.875
     assert not miss["rates"]["prefill_tok_s"]["range_hit"]
+
+
+def test_provenance_allows_only_explicit_host_accounting_paths():
+    server = importlib.import_module("benchmark_server")
+    server.validate_host_only_commit_changes(list(server.HOST_ACCOUNTING_PATHS))
+    for paths in (
+        [],
+        ["models/autoports/google_gemma_4_31b_it/tt/model.py"],
+        list(server.HOST_ACCOUNTING_PATHS)
+        + ["models/autoports/google_gemma_4_31b_it/tt/selected_precision_config.json"],
+    ):
+        with unittest.TestCase().assertRaises(RuntimeError):
+            server.validate_host_only_commit_changes(paths)
+
+
+def test_actual_request_population_overrides_stale_plan():
+    planned = {
+        "id": "headline",
+        "batch": 32,
+        "concurrency": 32,
+        "input_tokens": 4096,
+        "output_tokens": 128,
+        "sampling": "gpqa",
+        "requests": 32,
+    }
+    prior = dict(planned, requests=96)
+    actual = r.measured_workload(planned, prior)
+    assert actual["requests"] == 96 and planned["requests"] == 32
+    with unittest.TestCase().assertRaises(ValueError):
+        r.measured_workload(planned, dict(prior, input_tokens=8192))
+
+
+def test_headline_correction_refuses_active_measurement(tmp_path, monkeypatch):
+    c = importlib.import_module("correct_agentic_headline")
+    measurement = tmp_path / "measurement"
+    measurement.mkdir()
+    original = tmp_path / "original.json"
+    original.write_text("{}")
+    (measurement / "serving_rates.json").write_text('{"rows": []}')
+    (measurement / "run.json").write_text('{"status":"running"}')
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "correct",
+            "--measurement",
+            str(measurement),
+            "--correction",
+            str(tmp_path / "correction"),
+            "--original-rates",
+            str(original),
+            "--server-identity",
+            "unused",
+            "--expected-precision",
+            "unused",
+            "--stop-file",
+            "unused",
+        ],
+    )
+    with unittest.TestCase().assertRaisesRegex(ValueError, "must finish"):
+        c.main()
+    assert not (tmp_path / "correction").exists()

@@ -5,6 +5,7 @@ Input JSON: prompt_token_ids plus continuations mapping names to token-id lists.
 Preserve exact failed-call token IDs; do not re-render or silently truncate them.
 This adds readbacks for diagnosis and must never supply serving performance rates.
 """
+
 import argparse
 import json
 from pathlib import Path
@@ -36,8 +37,8 @@ def close_generator_mesh(generator, mesh, close_mesh):
 def validate_case(case):
     sequences = [case.get("prompt_token_ids")]
     continuations = case.get("continuations", {})
-    if not isinstance(continuations, dict) or not {"chosen", "correct"} <= set(continuations):
-        raise ValueError("continuations must include chosen and correct token ID lists")
+    if not isinstance(continuations, dict) or "chosen" not in continuations:
+        raise ValueError("continuations must include a chosen token ID list")
     sequences.extend(continuations.values())
     for seq in sequences:
         if not isinstance(seq, list) or not seq or any(type(t) is not int or t < 0 for t in seq):

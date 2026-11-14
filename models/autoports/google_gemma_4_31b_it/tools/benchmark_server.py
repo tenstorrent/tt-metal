@@ -174,6 +174,34 @@ def argument(command, flag):
     raise RuntimeError(f"Actual server command missing {flag}")
 
 
+HOST_ACCOUNTING_PATHS = frozenset(
+    {
+        "models/autoports/google_gemma_4_31b_it/tools/benchmark_work.py",
+        "models/autoports/google_gemma_4_31b_it/tests/test_remeasure_agentic_rates.py",
+    }
+)
+
+
+def validate_host_only_commit_changes(paths):
+    if not paths or not set(paths) <= HOST_ACCOUNTING_PATHS:
+        raise RuntimeError(f"HEAD changed beyond allowed host accounting paths: {paths}")
+
+
+def launch_provenance(launch_commit, observer_commit):
+    if not launch_commit:
+        raise RuntimeError("Missing launch commit")
+    changes = []
+    if launch_commit != observer_commit:
+        subprocess.run(
+            ["git", "-C", str(ROOT), "merge-base", "--is-ancestor", launch_commit, observer_commit], check=True
+        )
+        changes = subprocess.check_output(
+            ["git", "-C", str(ROOT), "diff", "--name-only", launch_commit, observer_commit], text=True
+        ).splitlines()
+        validate_host_only_commit_changes(changes)
+    return {"launch_commit": launch_commit, "observer_commit": observer_commit, "host_only_committed_changes": changes}
+
+
 def observe(state, output, requested, expected_precision=None):
     api = [p for p in descendants(state["pid"]) if "vllm.entrypoints.openai.api_server" in p["command"]]
     if len(api) != 1:
@@ -209,8 +237,8 @@ def observe(state, output, requested, expected_precision=None):
         ).strip()
 
     commits = {"tt-metal": commit(ROOT), "vllm-tt-plugin": commit(plugin)}
-    if state.get("tt_metal_commit_at_launch") != commits["tt-metal"]:
-        raise RuntimeError("tt-metal HEAD changed since launch; preserve launch provenance and relaunch")
+    provenance = launch_provenance(state.get("tt_metal_commit_at_launch"), commits["tt-metal"])
+    commits["tt-metal"] = provenance["launch_commit"]
     vllm_package = json.loads(
         subprocess.check_output(
             [
@@ -233,6 +261,7 @@ def observe(state, output, requested, expected_precision=None):
             "registration": registration,
             "pool": pool,
             "source_commits": commits,
+            "observation_provenance": provenance,
             "source_sha256": current_hashes,
             "startup_log": log,
             "device_owners": device_owners(),
@@ -249,6 +278,7 @@ def observe(state, output, requested, expected_precision=None):
         "layer_count": 60,
         "configured_layer_count": 60,
         "source_commits": commits,
+        "observation_provenance": provenance,
         "hardware": "P300x2; Blackhole mesh 1x4; TP4",
         "server_command": command,
         "prefix_caching": True,

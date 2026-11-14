@@ -41,11 +41,20 @@ def validate_raw(raw, row, count):
         raise ValueError("Incomplete or mismatched request population")
 
 
+def measured_workload(planned, prior):
+    for key in ("id", "batch", "concurrency", "input_tokens", "output_tokens", "sampling"):
+        if planned[key] != prior[key]:
+            raise ValueError(f"Original measured workload differs from plan: {key}")
+    return dict(planned, requests=prior["requests"])
+
+
 def rate_prediction(prior, original_server, candidate_server):
     ranges = {"decode_tok_s_user": (0.90, 1.05), "prefill_tok_s": (0.85, 1.05)}
+    if "duration_s" in prior:
+        ranges["duration_s"] = (0.90, 1.15)
     return {
         "written_unix": time.time(),
-        "basis": "Head-only BFP8 short-control slowdown1.46%; decode predicted0.90–1.05x prior, prefill0.85–1.05x prior. Head fraction and workload length/concurrency can differ from short control.",
+        "basis": "Head-only BFP8 short-control slowdown1.46%; decode predicted0.90–1.05x prior, prefill0.85–1.05x prior. Head fraction and workload length/concurrency can differ from short control. Matching-population measured duration predicted0.90–1.15x prior, excluding warmup.",
         "original_row": prior,
         "original_source_commits": original_server["source_commits"],
         "candidate_source_commits": candidate_server["source_commits"],
@@ -179,6 +188,8 @@ def main():
     p.add_argument("--budget-seconds", type=float, required=True)
     p.add_argument("--row-timeout-seconds", type=float, default=1800)
     p.add_argument("--stop-file", type=Path, required=True)
+    p.add_argument("--row-id", help="Remeasure only this existing used row")
+    p.add_argument("--dataset-seed", type=int, help="Explicit original measured seed; warmup uses seed+1")
     args = p.parse_args()
     if args.budget_seconds <= 600 or args.row_timeout_seconds <= 0:
         p.error("Budget must exceed600s closure reserve; timeout must be positive")
@@ -192,6 +203,10 @@ def main():
     selected = [r for r in original["rows"] if r["batch"] == 32 and r["sampling"] in ("gpqa", "swe")]
     if len(selected) != 15:
         raise ValueError("Expected exactly15 previously used B32 rows")
+    if args.row_id:
+        selected = [r for r in selected if r["id"] == args.row_id]
+        if len(selected) != 1:
+            raise ValueError("Requested row is not one of the15 used rows")
     args.output.mkdir(parents=True, exist_ok=False)
     save(args.output / "original-serving_rates.json", original)
     save(args.output / "expected-precision.json", policy)
@@ -210,7 +225,9 @@ def main():
     try:
         check(argparse.Namespace(run_dir=args.output, concurrency=32), server)
         for prior in selected:
-            row = next(r for r in plan if r["id"] == prior["id"])
+            planned = next(r for r in plan if r["id"] == prior["id"])
+            row = measured_workload(planned, prior)
+            dataset_seed = args.dataset_seed if args.dataset_seed is not None else 7000 + plan.index(planned) * 2
             estimate = 1.5 * prior["duration_s"] * (1 + row["concurrency"] / row["requests"])
             if args.stop_file.exists() or time.monotonic() + estimate + 600 >= deadline:
                 record["status"] = "stopped_between_rows"
@@ -254,7 +271,7 @@ def main():
                     "--random-output-len",
                     str(row["output_tokens"]),
                     "--seed",
-                    str(7000 + plan.index(row) * 2 + int(warm)),
+                    str(dataset_seed + int(warm)),
                 ]
                 record["commands"].append({"argv": argv, "sampling": row["sampling"], "started_unix": time.time()})
                 persist()
