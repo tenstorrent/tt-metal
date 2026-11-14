@@ -66,7 +66,8 @@ QUESTION = [10, 11, 12]
 ANSWER = [20, 21, 22, 23]
 
 
-@pytest.mark.parametrize("max_len", [10, 8, 7, 6, 5])
+# 4 and 3 are shorter than the answer, so the question is dropped and the answer itself is truncated.
+@pytest.mark.parametrize("max_len", [10, 8, 7, 6, 5, 4, 3])
 def test_trained_pairs_match_hf_convention(max_len):
     collate = _load_collate()
     batch = collate([(QUESTION, ANSWER)], EOS, max_len)
