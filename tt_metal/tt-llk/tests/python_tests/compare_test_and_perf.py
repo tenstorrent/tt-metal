@@ -9,9 +9,13 @@ Wormhole and Blackhole share files and are imported twice. Quasar files live in
 ``quasar/`` and drop a trailing ``_quasar``. ``CHIP_ARCH`` selects the architecture
 unless ``--arch`` is passed. Comparison is the union of values on each axis.
 
-``math_op`` joins ``mathop`` only when the sides disagree. A tuple axis whose name
-is the other side's axes (``dest_sync_dest_acc``) splits when slot types match.
+``math_op`` joins ``mathop``, ``dest_sync_mode`` joins ``dest_sync`` and ``format``
+joins ``formats``, each only when the sides disagree. A tuple axis whose name is the
+other side's axes (``dest_sync_dest_acc``) splits when slot types match.
 ``CROSS_ARCH_FUNCTION_EXCEPTIONS`` pairs a function that lives in another module.
+After the per-axis verdicts, ``Strict overlap`` joins rows on the axes both sides share
+and counts the distinct configurations both launch; ``blockers`` ranks each shared axis
+by how many unmatched configurations would pair up if only that axis were ignored.
 Format lists print shared values first, then side-only values, each alphabetical.
 ``iterations``, ``loop_factor``, ``run_types``, and ``is_perf`` are shown and
 ignored. Composite axes are repeated one
@@ -195,7 +199,11 @@ def axis_value_sets(pmarks: list) -> Sweep:
 
 
 # Applied only when the two sides use different names.
-AXIS_ALIASES = {"math_op": "mathop"}
+AXIS_ALIASES = {
+    "math_op": "mathop",
+    "dest_sync_mode": "dest_sync",
+    "format": "formats",
+}
 
 
 def _rename_key(mapping: dict, old: str, new: str) -> dict:
@@ -420,6 +428,9 @@ CROSS_ARCH_FUNCTION_EXCEPTIONS: dict[tuple[str, str], tuple[str, str]] = {
         "eltwise_binary_reuse_dest",
         "eltwise_binary_reuse_dest",
     ),
+    # Quasar measures tiny-tile matmul next to the full-tile sweep; WH/BH measure it in
+    # perf_math_matmul (TINY_TILES_MATMUL_COMBINATIONS).
+    ("matmul", "matmul_tiny"): ("math_matmul", "math_matmul"),
 }
 
 
@@ -708,6 +719,102 @@ def compare(
         print(f"    UNREADABLE: {', '.join(unreadable)} (verdict withheld)")
 
 
+@dataclass
+class StrictOverlap:
+    """Distinct configurations both sides launch, keyed on the axes they share."""
+
+    shared_axes: list[str]
+    left_only_axes: list[str]
+    right_only_axes: list[str]
+    left_keys: set[tuple]
+    right_keys: set[tuple]
+
+    @property
+    def matched(self) -> set[tuple]:
+        return self.left_keys & self.right_keys
+
+    def unlocked_without(self, axis: str) -> int:
+        """Unmatched configurations, on either side, that find a partner once ``axis`` is dropped."""
+        index = self.shared_axes.index(axis)
+
+        def project(key: tuple) -> tuple:
+            return key[:index] + key[index + 1 :]
+
+        left_projected = {project(key) for key in self.left_keys}
+        right_projected = {project(key) for key in self.right_keys}
+        matched = self.matched
+        return sum(
+            1 for key in self.left_keys - matched if project(key) in right_projected
+        ) + sum(
+            1 for key in self.right_keys - matched if project(key) in left_projected
+        )
+
+
+def strict_overlap(
+    left: Sweep, right: Sweep, ignored_axes: frozenset[str]
+) -> StrictOverlap:
+    """Join rows, not value sets: a configuration matches when every shared axis agrees.
+
+    An axis on one side only is not in the key; the report lists it, because a match
+    then means "same on every axis both sides sweep", not "same kernel configuration".
+    """
+    shared = [
+        axis for axis in left.axes if axis in right.axes and axis not in ignored_axes
+    ]
+    left_only = [a for a in left.axes if a not in right.axes and a not in ignored_axes]
+    right_only = [a for a in right.axes if a not in left.axes and a not in ignored_axes]
+
+    def keys(sweep: Sweep) -> set[tuple]:
+        return {tuple(row[axis] for axis in shared) for row in sweep.rows}
+
+    return StrictOverlap(shared, left_only, right_only, keys(left), keys(right))
+
+
+def print_strict_overlap(
+    overlap: StrictOverlap, full: bool, sides: SideNames = FUNCTIONAL_PERF
+) -> None:
+    matched = overlap.matched
+    print(
+        f"\n  Strict overlap: {len(matched)} configuration(s) on "
+        f"{len(overlap.shared_axes)} shared axis/axes "
+        f"({sides.left}={len(overlap.left_keys)}, "
+        f"{sides.right}={len(overlap.right_keys)} distinct)"
+    )
+    if not overlap.shared_axes:
+        print("    no shared axes: nothing to join")
+        return
+    print(f"    key       : {', '.join(overlap.shared_axes)}")
+    if overlap.left_only_axes and overlap.right_only_axes:
+        print(
+            "    ! partial key: both sides sweep axes the other lacks, so a match only "
+            "means agreement on the key"
+        )
+    if overlap.left_only_axes:
+        print(
+            f"    {sides.left}-only    : {', '.join(overlap.left_only_axes)} (not in key)"
+        )
+    if overlap.right_only_axes:
+        print(
+            f"    {sides.right}-only    : {', '.join(overlap.right_only_axes)} (not in key)"
+        )
+    gains = sorted(
+        ((overlap.unlocked_without(axis), axis) for axis in overlap.shared_axes),
+        key=lambda item: (-item[0], item[1]),
+    )
+    blockers = [f"{axis} ({gain})" for gain, axis in gains if gain > 0]
+    if blockers:
+        print(
+            f"    blockers  : {', '.join(blockers)} "
+            "(unmatched configurations that pair up if only that axis is ignored)"
+        )
+    if full:
+        for key in sorted(matched):
+            print(
+                "      "
+                + ", ".join(f"{a}={v}" for a, v in zip(overlap.shared_axes, key))
+            )
+
+
 def compare_parameters(
     functional: Parameters,
     perf: Parameters,
@@ -986,6 +1093,9 @@ def compare_pair(
         )
         if composite_axes:
             compare_parameters(left_params, right_params, full, sides)
+        print_strict_overlap(
+            strict_overlap(left_sweep, right_sweep, ignored_axes), full, sides
+        )
         if csv_dir is not None:
             target = csv_dir / f"{left_path.stem}.{left_name}.csv"
             write_parameter_csv(target, left_params.values, right_params.values, sides)

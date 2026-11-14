@@ -107,6 +107,19 @@ def mid_fill_rt_ct_pairs(max_tiles: int) -> List[tuple]:
     ]
 
 
+def dest_corner_mn(max_tiles: int) -> List[tuple]:
+    """1×1, dest-fill vectors/square, dest occupancy blocks, and half-dest mid-fill when they fit.
+
+    Returns (rt, ct) pairs. Shared by the WH/BH and Quasar matmul perf sweeps so both
+    measure the same output-block shapes.
+    """
+    square = int(max_tiles**0.5)
+    corners = [(1, 1), (1, max_tiles), (max_tiles, 1), (square, square)]
+    corners.extend((rt, ct) for rt, ct in DEST_RT_CT_BLOCKS if rt * ct <= max_tiles)
+    corners.extend(mid_fill_rt_ct_pairs(max_tiles))
+    return list(dict.fromkeys(corners))
+
+
 def unpack_matmul_fits_perf_ring(
     rt_dim: int, ct_dim: int, kt_dim: int, ring_tiles: int = PERF_RING_TILES
 ) -> bool:
@@ -412,6 +425,26 @@ def generate_face_layout_config(num_faces: int) -> List[FaceLayoutConfig]:
     ]
 
 
+def tiny_tile_face_layout(in0_tile_r_dim: int) -> FaceLayoutConfig:
+    """Face layout of a tiny-tile matmul: in0 is a 2-face horizontal tile of
+    ``in0_tile_r_dim`` rows, in1 a full 4-face tile."""
+    return FaceLayoutConfig(
+        num_faces_in0=2,
+        num_faces_in1=4,
+        num_faces=calculate_matmul_output_faces(
+            num_faces_in0=2,
+            num_faces_in1=4,
+            is_in0_horizontal=True,
+        ),  # 2
+        unpack_transpose_faces=Transpose.No,
+        unpack_transpose_within_face=Transpose.No,
+        partial_face_in0=True,  # SrcB
+        partial_face_in1=False,  # SrcA
+        partial_face_math=in0_tile_r_dim < 16,
+        partial_face_pack=True,
+    )
+
+
 def generate_face_layout_config_sweep(math_matmul: bool) -> List[FaceLayoutConfig]:
     num_faces_list = [4] if math_matmul else [1, 2, 4]
     return [
@@ -562,24 +595,7 @@ def sweep_tiny_tiles_matmul(
                 ([32, 32], input1_dims), in0_tile_r_dim=input0_dims[0]
             )
 
-            # generate face layout for tiny tiles
-            # Calculate output faces: in0 is 2-face horizontal, in1 is 4-face
-            output_num_faces = calculate_matmul_output_faces(
-                num_faces_in0=2,
-                num_faces_in1=4,
-                is_in0_horizontal=True,
-            )
-            face = FaceLayoutConfig(
-                num_faces_in0=2,
-                num_faces_in1=4,
-                num_faces=output_num_faces,  # 2
-                unpack_transpose_faces=Transpose.No,
-                unpack_transpose_within_face=Transpose.No,
-                partial_face_in0=True,  # SrcB
-                partial_face_in1=False,  # SrcA
-                partial_face_math=input0_dims[0] < 16,
-                partial_face_pack=True,
-            )
+            face = tiny_tile_face_layout(input0_dims[0])
 
             max_dst_index = get_max_dst_index(
                 config["dest_sync"],

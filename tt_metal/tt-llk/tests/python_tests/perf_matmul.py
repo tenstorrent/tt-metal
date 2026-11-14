@@ -1,11 +1,10 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Callable, List, Union
+from typing import List
 
 import pytest
 from helpers.format_config import DataFormat, FormatConfig, is_dest_acc_needed
-from helpers.golden_generators import TILE_DIM
 from helpers.llk_params import (
     ALL_MATH_FIDELITIES,
     DestAccumulation,
@@ -13,10 +12,8 @@ from helpers.llk_params import (
     Transpose,
 )
 from helpers.matmul_sweep import (
-    DEST_RT_CT_BLOCKS,
     PERF_RING_TILES,
-    generate_tile_dims,
-    mid_fill_rt_ct_pairs,
+    dest_corner_mn,
     unpack_matmul_fits_perf_ring,
 )
 from helpers.param_config import (
@@ -42,94 +39,60 @@ KT_DIMS = [1, 4, 32]
 DEST_SYNC_MODES = [DestSync.Half, DestSync.Full]
 
 
-def dest_corner_mn(max_tiles: int) -> List[tuple]:
-    """1×1, dest-fill vectors/square, dest occupancy blocks, and half-dest mid-fill when they fit."""
-    square = int(max_tiles**0.5)
-    corners = [(1, 1), (1, max_tiles), (max_tiles, 1), (square, square)]
-    corners.extend((rt, ct) for rt, ct in DEST_RT_CT_BLOCKS if rt * ct <= max_tiles)
-    corners.extend(mid_fill_rt_ct_pairs(max_tiles))
-    return list(dict.fromkeys(corners))
+def perf_matmul_dest_acc_modes(formats: FormatConfig) -> List[DestAccumulation]:
+    if is_dest_acc_needed(formats):
+        return [DestAccumulation.Yes]
+    return [DestAccumulation.No, DestAccumulation.Yes]
 
 
-def generate_dest_corner_combinations(max_tiles: int, kt_dims=KT_DIMS) -> List[tuple]:
-    return [
-        (
-            [mt_dim * TILE_DIM, kt_dim * TILE_DIM],
-            [kt_dim * TILE_DIM, nt_dim * TILE_DIM],
-        )
-        for mt_dim, nt_dim in dest_corner_mn(max_tiles)
-        for kt_dim in kt_dims
-        if unpack_matmul_fits_perf_ring(mt_dim, nt_dim, kt_dim)
-    ]
+def perf_matmul_tile_dims(
+    formats: FormatConfig, dest_acc: DestAccumulation, dest_sync: DestSync
+) -> List[tuple]:
+    """(ct, rt, kt) dest corners that keep unpack inside the perf ring.
 
-
-def matmul_combos(
-    formats: List[FormatConfig],
-    dest_acc: Union[
-        List[DestAccumulation], Callable[[FormatConfig], List[DestAccumulation]]
-    ],
-):
-    def _acc_modes(fmt: FormatConfig) -> List[DestAccumulation]:
-        return dest_acc(fmt) if callable(dest_acc) else dest_acc
-
-    def _max_tiles(fmt: FormatConfig, acc: DestAccumulation, sync: DestSync) -> int:
-        return max_dest_tiles(
-            is_dest_acc_needed(fmt) or acc == DestAccumulation.Yes, sync
-        )
-
-    unique_max_tiles = set(
-        _max_tiles(fmt, acc, sync)
-        for fmt in formats
-        for acc in _acc_modes(fmt)
-        for sync in DEST_SYNC_MODES
+    Same order as the Quasar ``CRK_TILE_DIMM`` axis, so the two perf sweeps compare
+    shape for shape. ``is_dest_acc_needed`` formats run on the 32-bit Dest whatever
+    ``dest_acc`` says, so their capacity is halved here too.
+    """
+    max_tiles = max_dest_tiles(
+        is_dest_acc_needed(formats) or dest_acc == DestAccumulation.Yes, dest_sync
     )
-    dimensions = {
-        max_tiles: generate_dest_corner_combinations(max_tiles, kt_dims=KT_DIMS)
-        for max_tiles in unique_max_tiles
-    }
-
     return [
-        (format, accumulation, dest_sync, dims)
-        for format in formats
-        for accumulation in _acc_modes(format)
-        for dest_sync in DEST_SYNC_MODES
-        for dims in dimensions[_max_tiles(format, accumulation, dest_sync)]
+        (ct_dim, rt_dim, kt_dim)
+        for rt_dim, ct_dim in dest_corner_mn(max_tiles)
+        for kt_dim in KT_DIMS
+        if unpack_matmul_fits_perf_ring(rt_dim, ct_dim, kt_dim)
     ]
 
 
 @pytest.mark.perf
 @parametrize(
-    combos=matmul_combos(
-        formats=input_output_formats(
-            [
-                DataFormat.Float16_b,
-                DataFormat.Float32,
-                DataFormat.Bfp8_b,
-            ]
-        ),
-        dest_acc=lambda formats: (
-            [DestAccumulation.Yes]
-            if is_dest_acc_needed(formats)
-            else [DestAccumulation.No, DestAccumulation.Yes]
-        ),
+    formats=input_output_formats(
+        [
+            DataFormat.Float16_b,
+            DataFormat.Float32,
+            DataFormat.Bfp8_b,
+        ]
     ),
+    dest_acc=perf_matmul_dest_acc_modes,
+    dest_sync=DEST_SYNC_MODES,
+    matmul_tile_dims=perf_matmul_tile_dims,
     math_fidelity=ALL_MATH_FIDELITIES,
 )
 def test_perf_matmul(
     perf_report,
-    combos,
+    formats,
+    dest_acc,
+    dest_sync,
+    matmul_tile_dims,
     math_fidelity,
 ):
+    ct_dim, rt_dim, kt_dim = matmul_tile_dims
 
-    formats, dest_acc, dest_sync, (matrix_a, matrix_b) = combos
-
-    # Calculate all matmul dimensions using helper function
-    dims = generate_tile_dims((matrix_a, matrix_b))
-
-    variant_tile_count = dims.rt_dim * dims.ct_dim * dims.kt_dim
+    variant_tile_count = rt_dim * ct_dim * kt_dim
     # PERF_ADDRESS rings are PERF_RING_TILES (tests/helpers/include/perf.h).
     # Cap L1 stimuli so K=32 dest-fill Float32 does not overflow Tensix L1.
-    # Unpack MOP occupancy is filtered in generate_dest_corner_combinations.
+    # Unpack MOP occupancy is filtered in perf_matmul_tile_dims.
     stimuli_tiles = min(variant_tile_count, PERF_RING_TILES)
 
     configuration = PerfConfig(
@@ -146,7 +109,7 @@ def test_perf_matmul(
             NUM_FACES(),
             LOOP_FACTOR(64),
             TILE_COUNT(variant_tile_count),
-            CRK_TILE_DIMM(dims.ct_dim, dims.rt_dim, dims.kt_dim),
+            CRK_TILE_DIMM(ct_dim, rt_dim, kt_dim),
         ],
         variant_stimuli=StimuliConfig(
             None,
@@ -156,7 +119,7 @@ def test_perf_matmul(
             formats.output_format,
             tile_count_A=stimuli_tiles,
             tile_count_B=stimuli_tiles,
-            tile_count_res=min(dims.rt_dim * dims.ct_dim, PERF_RING_TILES),
+            tile_count_res=min(rt_dim * ct_dim, PERF_RING_TILES),
         ),
         dest_acc=dest_acc,
     )

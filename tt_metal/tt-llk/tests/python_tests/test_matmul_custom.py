@@ -160,7 +160,7 @@ def _run_matmul_custom(
     # which dest register the pair lands in (see max_dest_tiles; is_dest_acc_needed
     # formats are forced onto the 32-bit dest). Kept as its
     # own axis -- rather than a packed (format, dest_acc, dims) tuple -- so test and
-    # perf coverage line up axis-for-axis (cf. perf_matmul.matmul_combos).
+    # perf coverage line up axis-for-axis (cf. perf_matmul.test_perf_matmul).
     dimensions=lambda formats, dest_acc: generate_matmul_dimension_combinations(
         max_dest_tiles(is_dest_acc_needed(formats) or dest_acc == DestAccumulation.Yes)
     ),

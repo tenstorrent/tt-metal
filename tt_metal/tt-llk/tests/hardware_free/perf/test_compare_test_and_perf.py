@@ -402,3 +402,98 @@ def test_single_pair_lookup_finds_dest_reuse_either_order(tmp_path: Path):
     assert forward[0][3] is True
     assert backward[0][0] == extra
     assert backward[0][3] is False
+
+
+def _sweep(axes: list[str], rows: list[tuple]) -> "cmp.Sweep":
+    """Canonical and raw rows are the same strings; enough for alias and join checks."""
+    row_dicts = [dict(zip(axes, row)) for row in rows]
+    values = {
+        axis: list(dict.fromkeys(row[i] for row in rows)) for i, axis in enumerate(axes)
+    }
+    return cmp.Sweep(
+        axes=values,
+        rows=row_dicts,
+        raw={axis: list(v) for axis, v in values.items()},
+        raw_rows=[dict(row) for row in row_dicts],
+    )
+
+
+def test_quasar_axis_names_join_the_wh_bh_names():
+    left = _sweep(["formats", "dest_sync"], [("F16b", "Half")])
+    right = _sweep(["format", "dest_sync_mode"], [("F16b", "Half")])
+
+    cmp.align_sweeps(left, right)
+
+    assert list(right.axes) == ["formats", "dest_sync"]
+    assert right.rows[0] == {"formats": "F16b", "dest_sync": "Half"}
+
+
+def test_strict_overlap_joins_rows_not_value_sets():
+    # Both sides sweep {F16b, F32} x {LoFi, HiFi4}, so every axis is "identical" as a set,
+    # but only (F16b, LoFi) is launched by both.
+    left = _sweep(["formats", "math_fidelity"], [("F16b", "LoFi"), ("F32", "HiFi4")])
+    right = _sweep(
+        ["formats", "math_fidelity"],
+        [("F16b", "LoFi"), ("F32", "LoFi"), ("F16b", "HiFi4")],
+    )
+
+    overlap = cmp.strict_overlap(left, right, frozenset())
+
+    assert overlap.shared_axes == ["formats", "math_fidelity"]
+    assert overlap.matched == {("F16b", "LoFi")}
+    # Each of the three unmatched keys has a partner once either axis is dropped: a
+    # partner may itself already be matched.
+    assert overlap.unlocked_without("math_fidelity") == 3
+    assert overlap.unlocked_without("formats") == 3
+
+
+def test_strict_overlap_keys_only_shared_axes_and_skips_ignored_ones():
+    left = _sweep(
+        ["formats", "throttle", "loop_factor"],
+        [("F16b", "0", "64"), ("F16b", "5", "64")],
+    )
+    right = _sweep(["formats", "transpose", "loop_factor"], [("F16b", "No", "32")])
+
+    overlap = cmp.strict_overlap(left, right, frozenset({"loop_factor"}))
+
+    assert overlap.shared_axes == ["formats"]
+    assert overlap.left_only_axes == ["throttle"]
+    assert overlap.right_only_axes == ["transpose"]
+    assert overlap.matched == {("F16b",)}
+
+
+def test_strict_overlap_report_names_blockers_and_partial_keys(capsys):
+    left = _sweep(["formats", "throttle"], [("F16b", "0"), ("Bfp8", "0")])
+    right = _sweep(["formats", "transpose"], [("F16b", "No")])
+
+    cmp.print_strict_overlap(
+        cmp.strict_overlap(left, right, frozenset()),
+        False,
+        cmp.arch_sides("blackhole", "quasar"),
+    )
+    out = capsys.readouterr().out
+
+    assert (
+        "Strict overlap: 1 configuration(s) on 1 shared axis/axes (B=2, Q=1 distinct)"
+        in out
+    )
+    assert "partial key" in out
+    assert "blockers  : formats (1)" in out
+
+
+def test_tiny_matmul_pairs_with_wh_bh_math_matmul():
+    left = {
+        "matmul": Path("perf_matmul.py"),
+        "math_matmul": Path("perf_math_matmul.py"),
+    }
+    right = {"matmul": Path("quasar/perf_matmul_quasar.py")}
+
+    extras, consumed = cmp.apply_cross_arch_exceptions(left, right)
+
+    assert consumed == {"math_matmul"}
+    path, home_function, extra_function, extra_on_right = extras["matmul"][0]
+    assert path == left["math_matmul"]
+    assert home_function == "matmul_tiny"
+    assert cmp.normalize("test_perf_matmul_tiny_quasar") == home_function
+    assert extra_function == cmp.normalize("test_perf_math_matmul")
+    assert extra_on_right is False
