@@ -8,8 +8,10 @@
 #include <iostream>
 
 #include <tt_stl/assert.hpp>
+#include <enchantum/enchantum.hpp>
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
+#include "llrt/hal.hpp"
 #include "math.hpp"
 #include "tt_backend_api_types.hpp"
 #include <tt_stl/reflection.hpp>
@@ -134,15 +136,48 @@ Tile::Tile(std::array<uint32_t, 2> tile_shape, std::array<uint32_t, 2> face_shap
 }
 
 uint32_t Tile::get_tile_size(const DataFormat& format) const {
-    uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
-    uint32_t aligned_exp_size = tt::round_up(face_shape[0] * num_faces, l1_alignment);
+    const auto l1_alignment = [] {
+        if (MetalContext::instance_exists()) {
+            return MetalContext::instance().hal().get_alignment(HalMemType::L1);
+        }
+        // All supported architectures must agree when no default context identifies the target.
+        static const uint32_t common_alignment = [] {
+            uint32_t alignment = 0;
+            for (auto arch : enchantum::values_generator<tt::ARCH>) {
+                if (arch == tt::ARCH::Invalid) {
+                    continue;
+                }
+                TT_FATAL(
+                    arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE || arch == tt::ARCH::QUASAR,
+                    "Update architecture-independent tile alignment for architecture {}",
+                    enchantum::to_string(arch));
+                const uint32_t arch_alignment = Hal(arch,
+                                                    /*is_base_routing_fw_enabled=*/false,
+                                                    /*enable_2_erisc_mode=*/false,
+                                                    /*profiler_dram_bank_size_per_risc_bytes=*/0,
+                                                    /*enable_dram_backed_cq=*/false)
+                                                    .get_alignment(HalMemType::L1);
+                const bool alignments_match = alignment == 0 || alignment == arch_alignment;
+                TT_FATAL(
+                    alignments_match,
+                    "L1 alignment for {} is {} bytes, expected {} bytes",
+                    enchantum::to_string(arch),
+                    arch_alignment,
+                    alignment);
+                alignment = arch_alignment;
+            }
+            return alignment;
+        }();
+        return common_alignment;
+    };
+    const auto aligned_exp_size = [&] { return tt::round_up(face_shape[0] * num_faces, l1_alignment()); };
     switch (format) {
         case DataFormat::Bfp2:
-        case DataFormat::Bfp2_b: return (tile_hw / 4) + aligned_exp_size;
+        case DataFormat::Bfp2_b: return (tile_hw / 4) + aligned_exp_size();
         case DataFormat::Bfp4:
-        case DataFormat::Bfp4_b: return (tile_hw / 2) + aligned_exp_size;
+        case DataFormat::Bfp4_b: return (tile_hw / 2) + aligned_exp_size();
         case DataFormat::Bfp8:
-        case DataFormat::Bfp8_b: return tile_hw + aligned_exp_size;
+        case DataFormat::Bfp8_b: return tile_hw + aligned_exp_size();
         case DataFormat::MxFp4:
         case DataFormat::MxFp6P:
         case DataFormat::MxFp6R:
@@ -156,7 +191,7 @@ uint32_t Tile::get_tile_size(const DataFormat& format) const {
             // followed by the elements packed at the format's storage width.
             constexpr uint32_t kMxBlockSize = 32;
             TT_ASSERT(tile_hw % kMxBlockSize == 0, "MX tile size must be a multiple of 32 elements");
-            const uint32_t exp_bytes = tt::round_up(tile_hw / kMxBlockSize, l1_alignment);
+            const uint32_t exp_bytes = tt::round_up(tile_hw / kMxBlockSize, l1_alignment());
             uint32_t elem_bytes = tile_hw;  // 8-bit storage: MxFp6 / MxFp8 / MxInt8
             if (format == DataFormat::MxFp4 || format == DataFormat::MxInt4) {
                 elem_bytes = tile_hw / 2;  // 4-bit elements, 2 per byte

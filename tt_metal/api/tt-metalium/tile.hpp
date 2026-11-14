@@ -78,6 +78,8 @@ struct Tile {
     bool get_transpose_within_face() const { return transpose_within_face; }
     bool get_transpose_of_faces() const { return transpose_of_faces; }
 
+    // Never creates a default MetalContext. BFP and MX sizes use the default context's L1 alignment if it exists,
+    // otherwise the L1 alignment shared by all supported architectures (throws if they differ).
     uint32_t get_tile_size(const DataFormat& format) const;
 
     // operators
