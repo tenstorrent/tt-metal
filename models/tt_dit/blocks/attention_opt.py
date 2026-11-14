@@ -517,12 +517,14 @@ class Attention(Module):
         addcmul_spatial_gate: ttnn.Tensor | None = None,
         addcmul_prompt_residual: ttnn.Tensor | None = None,
         addcmul_prompt_gate: ttnn.Tensor | None = None,
+        precomputed_qkv_flat: tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor] | None = None,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
         """Forward with optional fused to_out + addcmul.
 
         Ring callers pass spatial/prompt fractured on TP (fused AG+matmul inside);
         Linear callers must all-gather first. addcmul_*_residual+gate fuse the
-        out projection's residual+gate when both are provided.
+        out projection's residual+gate when both are provided. ``precomputed_qkv_flat`` is sequence_1's
+        (q, k, v) from a caller that fused the projection into another op; to_qkv is skipped.
         """
 
         assert len(sequence_1.shape) == 3
@@ -545,13 +547,16 @@ class Attention(Module):
             return out
 
         # Sequence 1 processing Typically spatial or spatial+prompt.
-        q_flat_c, k_flat_c, v_flat_c = self.to_qkv(
-            sequence_1,
-            compute_kernel_config=self.mm_compute_kernel_config,
-            parallel_config=self.parallel_config,
-            core_grid=self.get_core_grid(sequence_1.shape[-2], self.mesh_device.compute_with_storage_grid_size()),
-            use_heuristic_mmcfg=True,
-        )
+        if precomputed_qkv_flat is not None:
+            q_flat_c, k_flat_c, v_flat_c = precomputed_qkv_flat
+        else:
+            q_flat_c, k_flat_c, v_flat_c = self.to_qkv(
+                sequence_1,
+                compute_kernel_config=self.mm_compute_kernel_config,
+                parallel_config=self.parallel_config,
+                core_grid=self.get_core_grid(sequence_1.shape[-2], self.mesh_device.compute_with_storage_grid_size()),
+                use_heuristic_mmcfg=True,
+            )
 
         # Combined RoPE: concat spatial and prompt tensors along the seq dim (dim=2).
         sequence_1_cos, sequence_1_sin = sequence_1_rope
