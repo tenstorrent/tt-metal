@@ -6,6 +6,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "ckernel_sfpu_binary_remainder.h"
 #include "ckernel_sfpu_recip.h"
 #include "cmath_common.h"
 #include "sfpu/ckernel_sfpu_converter.h"
@@ -20,7 +21,9 @@ inline void init_fmod(const uint value, const uint recip) {
     sfpi::vConstFloatPrgm1 = Converter::as_float(recip);
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+// INFINITE_DIVISOR: the divisor is a compile-time scalar, so the host selects this instantiation
+// for a +-inf divisor and a finite divisor pays nothing for its handling.
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool INFINITE_DIVISOR = false>
 inline void calculate_fmod() {
     // SFPU microcode
     sfpi::vFloat s = sfpi::abs(sfpi::vConstFloatPrgm0);
@@ -62,6 +65,11 @@ inline void calculate_fmod() {
         }
         v_if(sfpi::abs(v) - s == 0.0f) { v = 0.0f; }
         v_endif;
+
+        if constexpr (INFINITE_DIVISOR) {
+            // The host reciprocal of +-inf is 0, so v - quotient * s above is 0 * inf = NaN.
+            apply_fmod_inf_divisor(v, val, s);
+        }
         sfpi::dst_reg[0] = v;
         sfpi::dst_reg++;
     }

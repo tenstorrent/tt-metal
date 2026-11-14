@@ -158,7 +158,9 @@ inline void calculate_remainder_uint32_scalar(uint scalar) {
     }
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+// INFINITE_DIVISOR: the divisor is a compile-time scalar, so the host selects this instantiation
+// for a +-inf divisor and a finite divisor pays nothing for its handling.
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool INFINITE_DIVISOR = false>
 inline void calculate_remainder() {
     // SFPU microcode
     sfpi::vFloat value_tmp = vConstFloatPrgm0;
@@ -205,6 +207,11 @@ inline void calculate_remainder() {
         }
         v_if(sfpi::abs(v) - s == 0.0f) { v = 0.0f; }
         v_endif;
+
+        if constexpr (INFINITE_DIVISOR) {
+            // The host reciprocal of +-inf is 0, so v - quotient * s above is 0 * inf = NaN.
+            apply_remainder_inf_divisor(v, val, value_tmp, s);
+        }
         sfpi::dst_reg[0] = v;
         sfpi::dst_reg++;
     }
