@@ -1,0 +1,4 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+UNARY_BW_OP(ACOS_BW, "eltwise_bw_acos.cpp")
