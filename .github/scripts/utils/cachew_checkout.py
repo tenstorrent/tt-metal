@@ -3,15 +3,15 @@
 
 """Migrate checkout consumers to the published cachew action and verify its pins.
 
-Run with --write to migrate, --check to detect unmigrated consumers, or
---verify-pins to check that every pin points at code matching this tree (add
---require-main after merge to also require the pins to be reachable from
-origin/main). With no paths, inspect all tracked action/workflow files.
+The action lives in tenstorrent/.github (actions/cachew-checkout); every
+consumer here pins it at ACTION_SHA. Run with --write to migrate (including
+pins to its old tt-metal location), --check to detect unmigrated consumers, or
+--verify-pins to check that every consumer pins exactly ACTION_SHA in
+tenstorrent/.github. With no paths, inspect all tracked action/workflow files.
 
 Only checkouts of the exact version the wrapper forwards to (actions/checkout
 v6.0.2, or a v6 tag) are migrated, so no consumer changes checkout version.
 Excluded on purpose:
-  * the wrapper's internal checkout (replacing it would recurse);
   * jobs whose runs-on is a literal GitHub-hosted label (ubuntu-*, windows-*,
     macos-*): cachew is a no-op there and the remote action only adds an archive
     download, so --write turns their cachew pins back into actions/checkout;
@@ -28,11 +28,13 @@ import subprocess
 import sys
 
 
-ACTION_DIR = Path(".github/actions/cachew-checkout")
-ACTION_REPO = "tenstorrent/tt-metal/.github/actions/cachew-checkout"
-ACTION_SHA = "8146c9d2746a20109da97143663494805274ce8c"
+ACTION_REPO = "tenstorrent/.github/actions/cachew-checkout"
+# A full commit of tenstorrent/.github; its actions/cachew-checkout is what runs.
+ACTION_SHA = "e0302d6af3504b1f3d8b64ad6fba7d88276a23f4"
 ACTION = f"{ACTION_REPO}@{ACTION_SHA}"
-UPSTREAM_WRAPPER = ACTION_DIR / "action.yml"
+# Where the action lived before it moved to tenstorrent/.github. --write repins
+# these; --verify-pins rejects them.
+LEGACY_REPO = "tenstorrent/tt-metal/.github/actions/cachew-checkout"
 FORWARDED_CHECKOUT = "de0fac2e4500dabe0009e67214ff5f5447ce83dd"
 MIGRATABLE_REFS = (FORWARDED_CHECKOUT, "v6", "v6.0.2")
 EXCLUDED_PREFIXES = ("tt_metal/tt-llk/",)
@@ -40,19 +42,21 @@ CHECKOUT = re.compile(
     r"(?m)^(?P<prefix>[ \t]*(?:-[ \t]+)?uses:[ \t]*)(?P<quote>['\"]?)"
     r"(?:actions/checkout@(?:"
     + "|".join(map(re.escape, MIGRATABLE_REFS))
-    + r")|"
+    + r")|(?:"
     + re.escape(ACTION_REPO)
-    + r"@[0-9a-f]{40})"
+    + "|"
+    + re.escape(LEGACY_REPO)
+    + r")@[0-9a-f]{40})"
     r"(?P=quote)(?:[ \t]*#[^\n]*)?[ \t]*$"
 )
-ANY_PIN = re.compile(re.escape(ACTION_REPO) + r"(?P<subpath>/[\w./-]+)?@(?P<sha>[0-9a-f]{40})")
+ANY_PIN = re.compile(
+    r"(?P<repo>" + re.escape(ACTION_REPO) + "|" + re.escape(LEGACY_REPO) + r")(?P<subpath>/[\w./-]+)?@(?P<sha>[0-9a-f]{40})"
+)
 PLAIN_CHECKOUT = f"actions/checkout@{FORWARDED_CHECKOUT} # v6.0.2"
 HOSTED_LABEL = re.compile(r"(?:ubuntu|windows|macos)-[\w.-]+")
 TOP_LEVEL = re.compile(r"^(?P<key>[\w-]+):")
 JOB = re.compile(r"^  [\w-]+:[ \t]*(?:#.*)?$")
 RUNS_ON = re.compile(r"^    runs-on:[ \t]*(?P<quote>['\"]?)(?P<label>[^'\"#\s]+)(?P=quote)[ \t]*(?:#.*)?$")
-# Only the files cached checkouts execute; docs and tests can change without a re-pin.
-RUNTIME_FILES = ("action.yml", "checkout.py", "git_wrapper.py", "session", "trusted_caches.json")
 
 
 def repository_root():
@@ -102,7 +106,7 @@ def rewrite(text):
         if "cachew: keep" in match[0]:
             return match[0]
         if any(start <= match.start() < end for start, end in hosted):
-            return f"{match['prefix']}{PLAIN_CHECKOUT}" if ACTION_REPO in match[0] else match[0]
+            return f"{match['prefix']}{PLAIN_CHECKOUT}" if "cachew-checkout@" in match[0] else match[0]
         return f"{match['prefix']}{ACTION} # cachew checkout"
 
     return CHECKOUT.sub(replace, text)
@@ -113,7 +117,7 @@ def migrate_file(path, write=False, root=None):
     path = Path(path)
     absolute = path if path.is_absolute() else root / path
     relative = absolute.resolve().relative_to(root.resolve())
-    if relative == UPSTREAM_WRAPPER or excluded(relative):
+    if excluded(relative):
         return False
     before = absolute.read_text()
     after = rewrite(before)
@@ -140,31 +144,23 @@ def tracked_consumers(root):
             yield path
 
 
-def git_ok(root, *arguments):
-    return subprocess.run(["git", *arguments], cwd=root, capture_output=True).returncode == 0
-
-
-def verify_pins(root, require_main):
-    """The consumers' pin to this action is the only pin. Fail if any consumer
-    pins something else, or if the pin is unknown, differs from this tree, or
-    (after merge) is not on main."""
+def verify_pins(root):
+    """The consumers' pin to the action is the only pin. Fail if any consumer
+    pins another commit, the action's old tt-metal location, or a subdirectory.
+    Whether ACTION_SHA exists in tenstorrent/.github (and is on its main) is
+    checked by the test-cachew-checkout workflow, which can reach GitHub."""
     problems = []
     pins = {}
     for path in tracked_consumers(root):
         for match in ANY_PIN.finditer((root / path).read_text()):
+            if match["repo"] == LEGACY_REPO:
+                problems.append(f"{path} references {match[0]}; the action moved to {ACTION_REPO} (run --write)")
+                continue
             if match["subpath"]:
                 problems.append(f"{path} references {match[0]}; reference the action itself, not a subdirectory")
             pins.setdefault(match["sha"], []).append(path.as_posix())
     if set(pins) - {ACTION_SHA}:
         problems.append(f"consumers pin {sorted(pins)}, expected only ACTION_SHA {ACTION_SHA}")
-    for sha, files in sorted(pins.items()):
-        if not git_ok(root, "cat-file", "-e", f"{sha}^{{commit}}"):
-            problems.append(f"pin {sha} is not a known commit (fetch it, or it was never pushed)")
-            continue
-        if not git_ok(root, "diff", "--quiet", sha, "--", *(str(ACTION_DIR / name) for name in RUNTIME_FILES)):
-            problems.append(f"pin {sha} differs from this tree's {ACTION_DIR} runtime files (used by {files[0]})")
-        if require_main and not git_ok(root, "merge-base", "--is-ancestor", sha, "origin/main"):
-            problems.append(f"pin {sha} is not reachable from origin/main and may be garbage-collected")
     for problem in problems:
         print(problem)
     print("Pins verified." if not problems else f"{len(problems)} pin problem(s).")
@@ -177,12 +173,11 @@ def main():
     mode.add_argument("--write", action="store_true")
     mode.add_argument("--check", action="store_true")
     mode.add_argument("--verify-pins", action="store_true")
-    parser.add_argument("--require-main", action="store_true", help="with --verify-pins, require pins on origin/main")
     parser.add_argument("paths", nargs="*", type=Path)
     args = parser.parse_args()
     root = repository_root()
     if args.verify_pins:
-        return verify_pins(root, args.require_main)
+        return verify_pins(root)
     changed = [path for path in (args.paths or tracked_consumers(root)) if migrate_file(path, args.write, root)]
     for path in changed:
         print(f"{'Migrated' if args.write else 'Needs cachew migration:'} {path}")
