@@ -39,9 +39,10 @@ namespace {
 constexpr uint32_t FABRIC_UNICAST_2DEV_WORDS = 16;
 constexpr uint32_t FABRIC_UNICAST_2DEV_BYTES = FABRIC_UNICAST_2DEV_WORDS * sizeof(uint32_t);
 
-std::shared_ptr<distributed::MeshBuffer> fabric_unicast_2dev_l1_buffer(distributed::MeshDevice& device) {
+std::shared_ptr<distributed::MeshBuffer> fabric_unicast_2dev_l1_buffer(
+    distributed::MeshDevice& device, const CoreCoord& core = CoreCoord{0, 0}) {
     const ShardSpecBuffer shard_spec(
-        CoreRangeSet(CoreRange({0, 0}, {0, 0})), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
+        CoreRangeSet(CoreRange(core, core)), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
     const distributed::DeviceLocalBufferConfig local_cfg{
         .page_size = FABRIC_UNICAST_2DEV_BYTES,
         .buffer_type = BufferType::L1,
@@ -80,14 +81,19 @@ protected:
 };
 
 void expect_fabric_unicast_write_with_checker(
-    distributed::MeshDevice& src_device, distributed::MeshDevice& tgt_device, ChipId source, ChipId target) {
+    distributed::MeshDevice& src_device,
+    distributed::MeshDevice& tgt_device,
+    ChipId source,
+    ChipId target,
+    const CoreCoord& src_logical_core = CoreCoord{0, 0},
+    const CoreCoord& tgt_logical_core = CoreCoord{0, 0}) {
     auto& cluster = MetalContext::instance().get_cluster();
     distributed::MeshCommandQueue& src_cq = src_device.mesh_command_queue();
     distributed::MeshCommandQueue& tgt_cq = tgt_device.mesh_command_queue();
 
-    auto src_buf = fabric_unicast_2dev_l1_buffer(src_device);
-    auto recv_buf = fabric_unicast_2dev_l1_buffer(tgt_device);
-    auto result_buf = fabric_unicast_2dev_l1_buffer(tgt_device);
+    auto src_buf = fabric_unicast_2dev_l1_buffer(src_device, src_logical_core);
+    auto recv_buf = fabric_unicast_2dev_l1_buffer(tgt_device, tgt_logical_core);
+    auto result_buf = fabric_unicast_2dev_l1_buffer(tgt_device, tgt_logical_core);
 
     const uint32_t base_value = 0xC0DE0000u | (source << 12) | (target << 8);
     std::vector<uint32_t> pattern(FABRIC_UNICAST_2DEV_WORDS), zeros(FABRIC_UNICAST_2DEV_WORDS, 0);
@@ -97,12 +103,12 @@ void expect_fabric_unicast_write_with_checker(
     distributed::EnqueueWriteMeshBuffer(src_cq, src_buf, pattern, true);
 
     const CoreCoord tgt_core =
-        cluster.get_virtual_coordinate_from_logical_coordinates(target, {0, 0}, CoreType::WORKER);
+        cluster.get_virtual_coordinate_from_logical_coordinates(target, tgt_logical_core, CoreType::WORKER);
     cluster.write_core(zeros.data(), FABRIC_UNICAST_2DEV_BYTES, tt_cxy_pair(target, tgt_core), recv_buf->address());
     cluster.write_core(zeros.data(), FABRIC_UNICAST_2DEV_BYTES, tt_cxy_pair(target, tgt_core), result_buf->address());
 
     // Sender kernel on source chip.
-    const experimental::NodeCoord src_node{0, 0};
+    const experimental::NodeCoord src_node = src_logical_core;
     const experimental::KernelSpecName SENDER{"fabric_unicast_write_sender"};
     experimental::ProgramSpec sender_spec{
         .name = "horizon_fabric_unicast_write_sender",
@@ -136,7 +142,7 @@ void expect_fabric_unicast_write_with_checker(
     distributed::EnqueueMeshWorkload(src_cq, sender_workload, true);
 
     // Checker kernel on target chip.
-    const experimental::NodeCoord tgt_node{0, 0};
+    const experimental::NodeCoord tgt_node = tgt_logical_core;
     const experimental::KernelSpecName CHECKER{"fabric_unicast_write_checker"};
     experimental::ProgramSpec checker_spec{
         .name = "horizon_fabric_unicast_write_checker",
@@ -185,4 +191,34 @@ TEST_F(FabricUnicastWrite2DevBothChipsFixture, HorizonX2FabricUnicastWriteRevers
         GTEST_SKIP() << "needs a horizon_x2 build with both chips visible";
     }
     expect_fabric_unicast_write_with_checker(*devices_[1], *devices_[0], 1, 0);
+}
+
+// Own-device sends (dst_dev_id == this chip). Every Tensix core on a device gets the same routing table, so
+// these exercise every sender/target core pairing on one device, not just the table's reference core (0,0).
+TEST_F(FabricUnicastWrite2DevBothChipsFixture, HorizonX2FabricUnicastWriteOwnDeviceCore00ToCore00) {
+    if (!fabric_unicast_2dev_available()) {
+        GTEST_SKIP() << "needs a horizon_x2 build with both chips visible";
+    }
+    expect_fabric_unicast_write_with_checker(*devices_[0], *devices_[0], 0, 0, {0, 0}, {0, 0});
+}
+
+TEST_F(FabricUnicastWrite2DevBothChipsFixture, HorizonX2FabricUnicastWriteOwnDeviceCore10ToCore00) {
+    if (!fabric_unicast_2dev_available()) {
+        GTEST_SKIP() << "needs a horizon_x2 build with both chips visible";
+    }
+    expect_fabric_unicast_write_with_checker(*devices_[0], *devices_[0], 0, 0, {1, 0}, {0, 0});
+}
+
+TEST_F(FabricUnicastWrite2DevBothChipsFixture, HorizonX2FabricUnicastWriteOwnDeviceCore00ToCore10) {
+    if (!fabric_unicast_2dev_available()) {
+        GTEST_SKIP() << "needs a horizon_x2 build with both chips visible";
+    }
+    expect_fabric_unicast_write_with_checker(*devices_[0], *devices_[0], 0, 0, {0, 0}, {1, 0});
+}
+
+TEST_F(FabricUnicastWrite2DevBothChipsFixture, HorizonX2FabricUnicastWriteOwnDeviceCore10ToCore10) {
+    if (!fabric_unicast_2dev_available()) {
+        GTEST_SKIP() << "needs a horizon_x2 build with both chips visible";
+    }
+    expect_fabric_unicast_write_with_checker(*devices_[0], *devices_[0], 0, 0, {1, 0}, {1, 0});
 }

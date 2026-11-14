@@ -70,20 +70,12 @@ void FabricOverNocRoutingTableGenerator::generate_routing_table() {
             MAX_HORIZON_DEVS_PER_MESH, std::vector<FlatAddrEntry>(MAX_HORIZON_DEVS_PER_MESH)));
 
     for (const auto& [src_node, src_phys] : mapping) {
-        uint32_t my_noc_x = 0;
-        uint32_t my_noc_y = 0;
-        const auto my_cores = this->cluster_.get_soc_desc(src_phys).get_cores(CoreType::TENSIX, CoordSystem::NOC0);
-        if (!my_cores.empty()) {
-            my_noc_x = my_cores[0].x;
-            my_noc_y = my_cores[0].y;
-        }
-
         for (const auto& [dst_node, dst_phys] : mapping) {
             // Index by physical chip ID — the kernel receives dst_dev_id as the physical chip ID.
             const uint32_t dst_chip = dst_phys;
 
             if (dst_phys == src_phys) {
-                this->fill_local_entries_(this->routing_table_[0][src_phys][dst_chip], my_noc_x, my_noc_y);
+                this->fill_local_entries_(this->routing_table_[0][src_phys][dst_chip]);
                 continue;
             }
             TT_FATAL(
@@ -104,22 +96,16 @@ void FabricOverNocRoutingTableGenerator::generate_routing_table() {
     }
 }
 
-void FabricOverNocRoutingTableGenerator::fill_local_entries_(
-    FlatAddrEntry& entry, uint32_t my_noc_x, uint32_t my_noc_y) const {
-    // For Horizon x2: fill LOCAL/REMOTE window entries for this device's own NOC
-    // column only.  Cross-column entries (reaching the other device on the same
-    // physical chip) are left to the cross-device Access Point (AP) selection code so that
-    // the correct access point is used.  Filling them here with REMOTE_WINDOW
-    // would clobber the AP-selected address and break the reverse direction.
-    for (uint32_t local_y = 0; local_y < MAX_HORIZON_NOC_Y; local_y++) {
-        const uint32_t phys_x = my_noc_x;
-        const uint32_t phys_y = local_y;
-        const uint32_t selector = phys_x + phys_y * HORIZON_ATT_WORKER_GRID_X;
-        const bool is_self = (phys_x == my_noc_x && phys_y == my_noc_y);
-        const uint64_t addr =
-            is_self ? HORIZON_LOCAL_WINDOW_COMPARE
-                    : HORIZON_REMOTE_WINDOW_COMPARE | (uint64_t(selector) << HORIZON_REMOTE_ENDPOINT_SHIFT);
-        entry.flat_addr[phys_x][phys_y] = addr;
+void FabricOverNocRoutingTableGenerator::fill_local_entries_(FlatAddrEntry& entry) const {
+    // Every core on this device gets the same table, so no core can be treated as "self": every core, the
+    // writer's own included, is reached through the REMOTE window. A REMOTE write with a core's own selector
+    // reaches that core too.
+    for (uint32_t phys_x = 0; phys_x < MAX_HORIZON_NOC_X; phys_x++) {
+        for (uint32_t phys_y = 0; phys_y < MAX_HORIZON_NOC_Y; phys_y++) {
+            const uint32_t selector = phys_x + phys_y * HORIZON_ATT_WORKER_GRID_X;
+            entry.flat_addr[phys_x][phys_y] =
+                HORIZON_REMOTE_WINDOW_COMPARE | (uint64_t(selector) << HORIZON_REMOTE_ENDPOINT_SHIFT);
+        }
     }
 }
 
@@ -161,9 +147,9 @@ size_t FabricOverNocRoutingTableGenerator::select_cross_chip_access_point_(
 void FabricOverNocRoutingTableGenerator::fill_cross_chip_entries_(
     FlatAddrEntry& entry, ChipId dst_phys, tt::umd::TTDevice& dst_device, size_t ap_idx) const {
     const auto access_points = dst_device.get_access_points();
-    // Assumption: the flat address to reach core (x, y) on a destination chip is the same
-    // regardless of which source chip is computing it (symmetric AXI address space).
-    // This holds for Horizon x2 where both devices share the same NOC2AXI ATT configuration.
+    // The flat address to reach core (x, y) on a destination chip is the same regardless of which source chip is
+    // computing it. The devices' NOC2AXI ATTs differ; it holds because a flat address is the destination NOC2AXI's
+    // crossbar window, independent of the sender.
     for (const auto& core : this->cluster_.get_soc_desc(dst_phys).get_cores(CoreType::TENSIX, CoordSystem::NOC0)) {
         const auto flat = dst_device.get_flat_address(
             access_points[ap_idx],

@@ -63,7 +63,7 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write(
     // Horizon NoC communication can currently only reach the lower 1 MB of each
     // Tensix core's L1; the NOC2AXI crossbar window is 1 MB per tile slot.
     ASSERT(local_offset + size <= (1u << 20));
-    // Zero base means self-entry or unfilled routing table slot.
+    // Zero base means an unfilled routing table slot.
     ASSERT(remote_addr - local_offset != 0);
     noc_async_write(src_addr, remote_addr, size);
 }

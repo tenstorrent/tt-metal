@@ -1645,15 +1645,10 @@ bool ControlPlane::is_fabric_over_noc() const {
 }
 
 tt::tt_fabric::fabric_over_noc_routing_l1_info_t ControlPlane::init_fabric_over_noc_routing_table_(
-    ChipId src_phys, const FabricNodeId& src_node) const {
+    const FabricNodeId& src_node) const {
     tt::tt_fabric::fabric_over_noc_routing_l1_info_t routing_table = {};
     routing_table.my_mesh_id = *src_node.mesh_id;
     routing_table.my_device_id = src_node.chip_id;
-    const auto my_cores = this->cluster_.get().get_soc_desc(src_phys).get_cores(CoreType::TENSIX, CoordSystem::NOC0);
-    if (!my_cores.empty()) {
-        routing_table.my_noc_x = my_cores[0].x;
-        routing_table.my_noc_y = my_cores[0].y;
-    }
     return routing_table;
 }
 
@@ -1664,7 +1659,7 @@ void ControlPlane::configure_routing_tables_for_fabric_over_noc() {
     const auto& flat_addr_table = this->fabric_over_noc_routing_table_generator_->get_routing_table();
 
     for (const auto& [src_node, src_phys] : this->logical_mesh_chip_id_to_physical_chip_id_mapping_) {
-        auto routing_table = this->init_fabric_over_noc_routing_table_(src_phys, src_node);
+        auto routing_table = this->init_fabric_over_noc_routing_table_(src_node);
 
         for (const auto& [dst_node, dst_phys] : this->logical_mesh_chip_id_to_physical_chip_id_mapping_) {
             // Index by physical chip ID — the kernel receives dst_dev_id as the physical chip ID.

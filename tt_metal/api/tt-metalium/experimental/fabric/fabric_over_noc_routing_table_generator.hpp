@@ -46,7 +46,7 @@ private:
 
     FlatAddrRoutingTable routing_table_;
 
-    void fill_local_entries_(FlatAddrEntry& entry, uint32_t my_noc_x, uint32_t my_noc_y) const;
+    void fill_local_entries_(FlatAddrEntry& entry) const;
     size_t select_cross_chip_access_point_(ChipId src_phys, ChipId dst_phys, tt::umd::TTDevice& dst_device) const;
     void fill_cross_chip_entries_(
         FlatAddrEntry& entry, ChipId dst_phys, tt::umd::TTDevice& dst_device, size_t ap_idx) const;

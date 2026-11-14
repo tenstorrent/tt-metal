@@ -608,7 +608,7 @@ private:
     void write_routing_tables_for_fabric_over_noc_() const;
     void write_routing_tables_for_fabric_ethernet_() const;
     tt::tt_fabric::fabric_over_noc_routing_l1_info_t init_fabric_over_noc_routing_table_(
-        ChipId src_phys, const FabricNodeId& src_node) const;
+        const FabricNodeId& src_node) const;
     void write_routing_tables_to_eth_cores(MeshId mesh_id, ChipId chip_id) const;
     void write_routing_info_to_devices(
         MeshId mesh_id,
