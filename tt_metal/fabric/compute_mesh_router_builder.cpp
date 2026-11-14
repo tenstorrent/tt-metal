@@ -880,6 +880,10 @@ void ComputeMeshRouterBuilder::configure_for_dispatch() {
     erisc_builder_->set_firmware_context_switch_type(FabricEriscDatamoverContextSwitchType::INTERVAL);
 }
 
+MasterRouterCandidate ComputeMeshRouterBuilder::describe_master_router_candidate() const {
+    return erisc_builder_->describe_master_router_candidate();
+}
+
 void ComputeMeshRouterBuilder::compile_ancillary_kernels(tt::tt_metal::Program& program) {
     // Compile tensix builder if present
     if (tensix_builder_.has_value()) {

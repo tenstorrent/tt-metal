@@ -25,6 +25,7 @@ set(UNIT_TESTS_FABRIC_SRC
     fabric_router/test_express_connection_wiring.cpp
     fabric_router/test_protected_domain_effects.cpp
     fabric_router/test_fabric_edge_capability.cpp
+    fabric_router/test_master_router_selection.cpp
     fabric_router/test_direction_slot_bijection.cpp
     fabric_router/test_router_wiring_rules.cpp
     fabric_router/test_router_turn_set.cpp

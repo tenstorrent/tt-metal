@@ -34,6 +34,7 @@
 #include "tt_metal/fabric/builder/fabric_remote_channels_allocator.hpp"
 #include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
 #include "tt_metal/fabric/builder/connection_writer_adapter.hpp"
+#include "tt_metal/fabric/builder/fabric_master_router_selection.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/llrt/hal.hpp"
@@ -945,6 +946,51 @@ void FabricEriscDatamoverBuilder::get_telemetry_compile_time_args(
     }
 }
 
+std::array<uint32_t, 2> FabricEriscDatamoverBuilder::get_downstream_edm_array_sizes() const {
+    // Size = position of highest set bit + 1 (e.g., mask 0x5 = size 3, mask 0x3 = size 2)
+    auto calc_array_size_from_mask = [](uint32_t mask) -> uint32_t {
+        if (mask == 0) {
+            return 0;
+        }
+        // Find position of most significant bit + 1
+        return 32 - __builtin_clz(mask);
+    };
+
+    const bool needs_vc1 = config.num_used_receiver_channels_per_vc[1] > 0;
+    uint32_t vc0_downstream_edm_size =
+        calc_array_size_from_mask(this->receiver_channel_to_downstream_adapter->get_downstream_edm_mask_for_vc(0));
+    uint32_t vc1_downstream_edm_size =
+        needs_vc1
+            ? calc_array_size_from_mask(this->receiver_channel_to_downstream_adapter->get_downstream_edm_mask_for_vc(1))
+            : 0;
+
+    // Ensure minimum size of 1 to avoid zero-sized arrays (causes undefined behavior when accessed)
+    // Even if mask is 0 (no downstream connections), we need at least 1 element for the array template
+    if (vc0_downstream_edm_size == 0) {
+        vc0_downstream_edm_size = 1;
+    }
+    if (needs_vc1 && vc1_downstream_edm_size == 0) {
+        vc1_downstream_edm_size = 1;
+    }
+    return {vc0_downstream_edm_size, vc1_downstream_edm_size};
+}
+
+MasterRouterCandidate FabricEriscDatamoverBuilder::describe_master_router_candidate() const {
+    const bool is_intramesh_router_on_edge = compute_edge_facing_flags(
+                                                 fabric_context_.get_control_plane(),
+                                                 this->local_fabric_node_id,
+                                                 this->my_eth_channel)
+                                                 .second;
+    return MasterRouterCandidate{
+        .eth_chan = static_cast<chan_id_t>(this->my_eth_channel),
+        .facing = this->direction_,
+        .is_2d_fabric = fabric_context_.is_2D_routing_enabled(),
+        .is_intermesh_router = this->is_inter_mesh,
+        .is_intramesh_router_on_edge = is_intramesh_router_on_edge,
+        .downstream_count_by_vc = this->get_downstream_edm_array_sizes(),
+    };
+}
+
 /*
  * Channel allocations CT args schema (ChannelAllocations format):
  * 1) Alignment tag (0xabcd1234)
@@ -1047,31 +1093,7 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     uint32_t num_vc1_downstream_edms =
         needs_vc1 ? this->receiver_channel_to_downstream_adapter->get_downstream_edm_count_for_vc(1) : 0;
 
-    // Calculate array sizes for downstream EDMs based on masks
-    // Size = position of highest set bit + 1 (e.g., mask 0x5 = size 3, mask 0x3 = size 2)
-    auto calc_array_size_from_mask = [](uint32_t mask) -> uint32_t {
-        if (mask == 0) {
-            return 0;
-        }
-        // Find position of most significant bit + 1
-        return 32 - __builtin_clz(mask);
-    };
-
-    uint32_t vc0_downstream_edm_size =
-        calc_array_size_from_mask(this->receiver_channel_to_downstream_adapter->get_downstream_edm_mask_for_vc(0));
-    uint32_t vc1_downstream_edm_size =
-        needs_vc1
-            ? calc_array_size_from_mask(this->receiver_channel_to_downstream_adapter->get_downstream_edm_mask_for_vc(1))
-            : 0;
-
-    // Ensure minimum size of 1 to avoid zero-sized arrays (causes undefined behavior when accessed)
-    // Even if mask is 0 (no downstream connections), we need at least 1 element for the array template
-    if (vc0_downstream_edm_size == 0) {
-        vc0_downstream_edm_size = 1;
-    }
-    if (needs_vc1 && vc1_downstream_edm_size == 0) {
-        vc1_downstream_edm_size = 1;
-    }
+    const auto [vc0_downstream_edm_size, vc1_downstream_edm_size] = this->get_downstream_edm_array_sizes();
 
     auto actual_sender_channels_vc0 = actual_sender_channels_per_vc_.has_value()
                                           ? actual_sender_channels_per_vc_.value()[0]

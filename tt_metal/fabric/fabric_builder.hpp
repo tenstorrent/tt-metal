@@ -32,7 +32,7 @@ class FabricBuilderContext;
  *   1. Construct with device, program, and contexts
  *   2. Call build phases in order:
  *      discover_channels() -> create_routers() -> connect_routers() ->
- *      compile_ancillary_kernels() -> create_kernels()
+ *      compile_ancillary_kernels() -> choose_master_router() -> create_kernels()
  *   3. FabricBuilder is destroyed, router builders are destroyed
  */
 class FabricBuilder {
@@ -63,6 +63,14 @@ public:
      * Compile ancillary kernels (e.g., tensix mux) for each router.
      */
     void compile_ancillary_kernels();
+
+    /**
+     * Choose the router that leads the chip's local handshake. A heuristic finds the optimal router, which is a router
+     * that already has a small kernel (master router kernel has extra code to handle the handshake).
+     * Must be called after connect_routers(), as the heuristic needs to know the router's downstream connections,
+     * and before create_kernels(), as the kernel creation process needs to know the master router.
+     */
+    void choose_master_router();
 
     /**
      * Create the main ERISC router kernels.
@@ -132,7 +140,7 @@ private:
     // ControlPlane queries downstream.
     ChipRoutingFacts chip_facts_;
 
-    // Master router channel (first in map)
+    // Master router channel, set by choose_master_router()
     chan_id_t master_router_chan_ = 0;
 };
 
