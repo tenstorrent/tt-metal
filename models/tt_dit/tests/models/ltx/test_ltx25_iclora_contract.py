@@ -513,31 +513,32 @@ def constructor_native(contract, monkeypatch):
 def test_constructor_reference_allocation_before_capture(contract, constructor_native, traced, cold, dynamic_load):
     state, events = constructor_native
     state.cold = cold
+    contract.fixture["generation"].update(num_frames=17, width=256, fps=30)
     pipe = contract.create(traced=traced, dynamic_load=dynamic_load)
     native = pipe._pipeline
     assert native._traced is traced
     assert native._vae_traced is traced
     assert native._audio_traced is traced
-    assert native.fps == 24
-    assert (native._init_num_frames, native._init_height, native._init_width) == (9, 128, 128)
+    assert native.fps == 30
+    assert (native._init_num_frames, native._init_height, native._init_width) == (17, 128, 256)
     assert native._diffusion_decoder is False
     assert native.use_ancestral_sampler is False
     implicit = [e for e in events if e[0] == "warmup"]
     assert len(implicit) == (2 if cold and traced and not dynamic_load else int(traced))
     pipe.warmup_buffers()
     for _, kw, actual_traced, _ in (e for e in events if e[0] == "warmup"):
-        assert (kw["num_frames"], kw["height"], kw["width"]) == (9, 128, 128)
+        assert (kw["num_frames"], kw["height"], kw["width"]) == (17, 128, 256)
         assert kw.get("ref_num_frames") == 9
         assert kw.get("stages") == ("s1_ref", "s2_ref")
         assert actual_traced is traced
     captures = [i for i, e in enumerate(events) if e[0] == "capture"]
     if traced:
         assert captures
-        assert [e for e in events[:captures[0]] if e[0] == "allocate"] == [
+        assert [e for e in events[: captures[0]] if e[0] == "allocate"] == [
             ("allocate", "s1_ref"),
             ("allocate", "s2_ref"),
         ] * (2 if cold and not dynamic_load else 1)
-        assert not any(e[0] == "allocate" for e in events[captures[0]:])
+        assert not any(e[0] == "allocate" for e in events[captures[0] :])
         assert implicit[-1][1]["capture_all"] is cold
     else:
         assert not captures
