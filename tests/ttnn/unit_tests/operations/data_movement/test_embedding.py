@@ -692,6 +692,31 @@ def test_embedding_oom(
     assert_equal(torch_output_tensor, output_tensor)
 
 
+@pytest.mark.parametrize(
+    "embeddings_type", [ttnn.EmbeddingsType.GENERIC, ttnn.EmbeddingsType.PADDED, ttnn.EmbeddingsType.BINARY]
+)
+@pytest.mark.parametrize("index_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("hidden_embedding_dim", [8, 16, 24, 40, 48, 80])
+@pytest.mark.parametrize("sentence_size", [64, 4160])
+def test_embedding_rows_not_dram_aligned(device, embeddings_type, index_layout, hidden_embedding_dim, sentence_size):
+    torch.manual_seed(0)
+    indices, vocabulary_size, pad_token = _embedding_indices((1, sentence_size), 64, embeddings_type)
+    torch_weights = torch_random((vocabulary_size, hidden_embedding_dim), -0.1, 0.1, dtype=torch.bfloat16)
+
+    input_tensor = _indices_to_device(indices, ttnn.uint32, index_layout, device)
+    weights = ttnn.from_torch(torch_weights, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    output_tensor = ttnn.embedding(
+        input_tensor,
+        weights,
+        padding_idx=pad_token,
+        embeddings_type=embeddings_type,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+
+    expected = torch.nn.functional.embedding(indices, torch_weights)
+    assert_equal(expected, ttnn.to_torch(output_tensor).reshape(expected.shape))
+
+
 def test_embedding_chunked_two_blocks_partial_last_chunk(device):
     # 8224 columns leaves a 1-tile last chunk. 4096 tokens is two blocks on one core.
     torch.manual_seed(0)
