@@ -84,9 +84,11 @@ def main():
     assert os.environ.get("HY4_POOL") == "1"
     assert (os.environ.get("HY4_POOL_PF") == "1") == (MODE == "pf")
     d = torch.load(os.environ["SRC"])
-    LEN = int(os.environ.get("LEN", "0"))
-    prompts = [list(p[:LEN]) if LEN else list(p) for p in d["ids"]]
-    L = max(len(p) for p in prompts)
+    LENS = [
+        int(x) for x in os.environ.get("LENS", os.environ.get("LEN", "0")).split(",")
+    ]  # several lengths in one boot (gates)
+    full = [list(p) for p in d["ids"]]
+    L = max(max(len(p[:n]) if n else len(p) for p in full) for n in LENS)
     md = open_mesh(trace=int(float(os.environ.get("TRACE_BYTES", "700e6"))))
     try:
         from models.demos.blackhole.hy4_preview.tt import hy4_pool_decode as _pd
@@ -116,7 +118,8 @@ def main():
                 mem_sample_s=float(os.environ.get("MEMS", "0")),
             )
         maxch = int(os.environ.get("MAXCHUNKS", "0"))
-        for rep in range(1 + int(os.environ.get("REPEAT", "0"))):
+        for rep, LEN in [(r_, n_) for n_ in LENS for r_ in range(1 + int(os.environ.get("REPEAT", "0")))]:
+            prompts = [p[:LEN] if LEN else p for p in full]
             if MODE == "pf":
                 if maxch:
                     prompts = [p[: maxch * PF] for p in prompts]
@@ -133,13 +136,13 @@ def main():
                     )
             else:
                 first, hid, lens, sec = rep_prefill(ch, dec, md, prompts)
-            res(event="prefill_done", rep=rep, sec=round(sec, 1), first=first, lens=lens, **dram_view(md))
+            res(event="prefill_done", rep=rep, LEN=LEN, sec=round(sec, 1), first=first, lens=lens, **dram_view(md))
             if maxch:
                 return
             dec.ctx.set_bucket(decode_bucket(max(lens), pages), "topk")
             toks = decode(dec, first, lens, NSTEPS)
-            res(event="generated", rep=rep, toks=toks, keys=d.get("keys"))
-            out[f"first{rep}"], out[f"hid{rep}"], out[f"toks{rep}"], out[f"sec{rep}"] = (
+            res(event="generated", rep=rep, LEN=LEN, toks=toks, keys=d.get("keys"))
+            out[f"first{LEN}_{rep}"], out[f"hid{LEN}_{rep}"], out[f"toks{LEN}_{rep}"], out[f"sec{LEN}_{rep}"] = (
                 first,
                 torch.stack(hid),
                 toks,
