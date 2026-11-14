@@ -33,6 +33,29 @@
 #include "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_compute_common.hpp"
 #endif
 
+#include "api/compute/eltwise_unary/fill.h"
+
+#if defined(TRISC_MATH) && !defined(ARCH_QUASAR)
+namespace ckernel::sfpu {
+
+// Accumulate reloads the packed partial and adds it again, so faces that hold no reduce result must be zero.
+template <bool ROW>
+inline void zero_reduce_unused_faces() {
+#pragma GCC unroll 0
+    for (int d = 0; d < 8; d++) {
+        if constexpr (ROW) {
+            sfpi::dst_reg[8] = 0.0f;
+        } else {
+            sfpi::dst_reg[16] = 0.0f;
+        }
+        sfpi::dst_reg[24] = 0.0f;
+        sfpi::dst_reg++;
+    }
+}
+
+}  // namespace ckernel::sfpu
+#endif
+
 namespace {
 
 // Mixed input/output formats (bf16 input, FP32 partial) also need the packer reconfigured; the
@@ -47,6 +70,20 @@ constexpr auto rm_reconfig_mode =
 // Accurate fp32: enable_fp32_sfpu routes Float32 through the SFPU (full fp32) instead of the
 // FPU (tf32).
 constexpr auto fp32_mode = get_arg(args::enable_fp32_sfpu) != 0 ? ReduceFp32Mode::Accurate : ReduceFp32Mode::Fast;
+
+#ifndef ARCH_QUASAR
+#ifdef ARCH_BLACKHOLE
+constexpr bool partial_keeps_unused_faces = true;
+#else
+constexpr bool partial_keeps_unused_faces = REDUCE_DIM == ckernel::ReduceDim::REDUCE_ROW;
+#endif
+constexpr bool clear_partial_unused_faces =
+    partial_keeps_unused_faces && DST_ACCUM_MODE && fp32_mode == ReduceFp32Mode::Accurate &&
+    REDUCE_OP == ckernel::PoolType::SUM && static_cast<DataFormat>(unpack_src_format[dfb::acc]) == DataFormat::Float32;
+static_assert(
+    !clear_partial_unused_faces ||
+    is_sfpu_reduce_path<REDUCE_OP, REDUCE_DIM, static_cast<DataFormat>(unpack_src_format[dfb::tile_in]), fp32_mode>());
+#endif
 
 // One reduce() call over the (ht_in_chunk × wt_in_chunk × NC) block currently staged in dfb::tile_in.
 // is_last_chunk == true packs the final result into dfb::out (with optional post-mul); otherwise the
@@ -92,7 +129,20 @@ FORCE_INLINE void reduce_block(
             compute_kernel_lib::ReduceInputBlockShape::of(ht_in_chunk, wt_in_chunk, NC),
             compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
             compute_kernel_lib::Accumulate::at(dfb::acc, chunk_idx),
-            compute_kernel_lib::NoOp{});
+            [](uint32_t dst_idx) {
+#ifndef ARCH_QUASAR
+                if constexpr (clear_partial_unused_faces) {
+                    fill_tile_init();
+                    MATH((SFPU_UNARY_CALL(
+                        DST_SYNC_MODE,
+                        DST_ACCUM_MODE,
+                        zero_reduce_unused_faces,
+                        (REDUCE_DIM == ckernel::ReduceDim::REDUCE_ROW),
+                        dst_idx,
+                        VectorMode::None)));
+                }
+#endif
+            });
     }
 }
 
