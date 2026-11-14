@@ -83,3 +83,10 @@ def test_moe_tokens_parse():
     assert PfOpt.parse("moeall").shfold and not PfOpt.parse("moeall").rtall
     assert not PfOpt.parse("all").shfold  # `all` is the attention/indexer/dense stack only
     assert PfOpt.parse("rtall").any
+
+
+def test_all_plus_moeall():
+    from models.demos.blackhole.hy4_preview.tt.hy4_pf_opt import PfOpt
+
+    p = PfOpt.parse("all,moeall")
+    assert p.mm2d and p.hifi2 and p.shfold and not p.rtall

@@ -37,7 +37,7 @@ class PfOpt:
     def parse(cls, s):
         toks = {t.strip() for t in (s or "").split(",") if t.strip()}
         if "all" in toks:
-            toks = set(ALL)
+            toks = (toks - {"all"}) | set(ALL)
         if "moeall" in toks:
             toks = (toks - {"moeall"}) | set(MOE_CONFIRMED)
         bad = toks - set(ALL) - set(MOE)

@@ -40,6 +40,7 @@ MODE = os.environ.get("PM_MODE", "both")
 HID = 6144
 OUT = os.environ.get("OUT", "/tmp/pfmoe.json")
 ttnn_dealloc = ttnn.deallocate
+shared_pf = [None]
 
 
 def stages_for(um, blk, mc, cc, shared, xod, xd, N):
@@ -393,11 +394,17 @@ try:
                 sh_v = get_shared(md, N)
                 pf_v = PfOpt.from_env()
 
+                shared_v = shared
+                if os.environ.get("HY4_PF_SHPF") == "1":
+                    if shared_pf[0] is None:
+                        shared_pf[0] = D._apply_pf(D.make_shared(md, *shared_w, decode=False, pf_opt=PfOpt.parse("hifi2")), PfOpt.parse("mm2d"), rows=N)
+                    shared_v = shared_pf[0]
+
                 def block():
-                    o = moe_cols(um, blk.gate, xod, mc, cc, shared=shared, pf=pf_v)
+                    o = moe_cols(um, blk.gate, xod, mc, cc, shared=shared_v, pf=pf_v)
                     if pf_v.shfold:
                         return [o]
-                    shp = D.allreduce_cols(shared.forward(xd))
+                    shp = D.allreduce_cols(shared_v.forward(xd))
                     return [o, shp]
 
                 rv = {}
