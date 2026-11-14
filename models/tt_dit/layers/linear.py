@@ -349,6 +349,9 @@ class ColParallelLinear(Module):
         out = _apply_activation_fn(outputs[1], self.activation_fn)
         if orig_rank != 4:
             out = ttnn.reshape(out, tuple(out.shape)[-orig_rank:])
+        # The op has no dtype override, so cast to the requested dtype before returning.
+        if dtype is not None and out.get_dtype() != dtype:
+            out = ttnn.typecast(out, dtype)
         return out
 
     def forward(

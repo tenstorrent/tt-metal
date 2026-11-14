@@ -1933,10 +1933,10 @@ std::vector<Tensor> repeat_bw(
     auto output_memory_config = output_mem_config.value_or(
         input.memory_config());  // TODO: Remove after ternary forward ops migration is completed
 
-    auto shape_wh = input.padded_shape();
+    auto shape_wh = input.logical_shape();
     TT_FATAL(shape_wh[0] == 1, "Input shape[0] must be 1 but got {}", shape_wh[0]);
     auto* ttnn_device = input.device();
-    // input.padded_shape()[0]
+    // input.logical_shape()[0]
     // If repeat shape has 0's, it returns zeros of given input
     if (shape[0] == 0 || shape[1] == 0 || shape[2] == 0 || shape[3] == 0) {
         Tensor zero_tensor = ttnn::zeros_like(input, input.dtype(), input.layout(), std::nullopt, output_memory_config);
@@ -1962,6 +1962,36 @@ std::vector<Tensor> repeat_bw(
         ttsl::SmallVector<std::int64_t> dim = {1};
         TT_FATAL(shape[0] == 1 && shape[2] == 1 && shape[3] == 1, "repeat[0], [2], [3] should be 1");
         std::array<std::uint32_t, 4> intended_shape_array = {shape_wh[0], 1, shape_wh[2], shape_wh[3]};
+        const auto required = ttnn::Shape(intended_shape_array);
+        Tensor result = ttnn::moreh_sum(
+            grad,
+            dim,
+            true,
+            ttnn::zeros(required, input.dtype(), input.layout(), *ttnn_device, output_memory_config),
+            output_memory_config,
+            std::nullopt);
+        grad_tensor.emplace_back(result);
+        return grad_tensor;
+    }
+    if (shape[2] > 1) {
+        ttsl::SmallVector<std::int64_t> dim = {2};
+        TT_FATAL(shape[0] == 1 && shape[1] == 1 && shape[3] == 1, "repeat[0], [1], [3] should be 1");
+        std::array<std::uint32_t, 4> intended_shape_array = {shape_wh[0], shape_wh[1], 1, shape_wh[3]};
+        const auto required = ttnn::Shape(intended_shape_array);
+        Tensor result = ttnn::moreh_sum(
+            grad,
+            dim,
+            true,
+            ttnn::zeros(required, input.dtype(), input.layout(), *ttnn_device, output_memory_config),
+            output_memory_config,
+            std::nullopt);
+        grad_tensor.emplace_back(result);
+        return grad_tensor;
+    }
+    if (shape[3] > 1) {
+        ttsl::SmallVector<std::int64_t> dim = {3};
+        TT_FATAL(shape[0] == 1 && shape[1] == 1 && shape[2] == 1, "repeat[0], [1], [2] should be 1");
+        std::array<std::uint32_t, 4> intended_shape_array = {shape_wh[0], shape_wh[1], shape_wh[2], 1};
         const auto required = ttnn::Shape(intended_shape_array);
         Tensor result = ttnn::moreh_sum(
             grad,
