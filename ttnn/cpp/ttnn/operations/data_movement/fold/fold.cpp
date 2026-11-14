@@ -25,6 +25,8 @@
 
 #include "fold.hpp"
 
+#include <numeric>
+
 namespace ttnn::operations::data_movement {
 
 std::vector<Tensor> fold_with_transpose_(
@@ -48,8 +50,10 @@ std::vector<Tensor> fold_with_transpose_(
     auto padded_c = c + pad_c;  // end padding only
     auto padded_h = h + pad_h;  // end padding
     auto padded_w = w + pad_w;  // end padding
-    auto padded_h32 = tt::round_up(padded_h, TILE_HEIGHT);
-    auto padded_w32 = tt::round_up(padded_w, TILE_HEIGHT);
+    // The reshapes below divide the padded H and W by the stride, so pad them to a multiple of the stride as well as
+    // of the tile height; a remainder there shrinks the reshape and shifts every later output column.
+    auto padded_h32 = tt::round_up(padded_h, std::lcm(TILE_HEIGHT, stride_h));
+    auto padded_w32 = tt::round_up(padded_w, std::lcm(TILE_HEIGHT, stride_w));
 
     log_debug(tt::LogOp, "padded_c: {}", padded_c);
     log_debug(tt::LogOp, "padded_h: {}", padded_h);
