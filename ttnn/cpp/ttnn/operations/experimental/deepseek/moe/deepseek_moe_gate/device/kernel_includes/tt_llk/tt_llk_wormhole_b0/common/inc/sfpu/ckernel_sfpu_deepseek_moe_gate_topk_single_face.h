@@ -12,6 +12,7 @@
 #include "lltt.h"
 #include "sfpi.h"
 #include "ckernel_sfpu_recip.h"
+#include "ckernel_sfpu_sigmoid.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -326,6 +327,33 @@ void reverse_sort_order() {
     TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG3, p_sfpswap::UNCONDITIONALLY);
     TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG2, p_sfpswap::UNCONDITIONALLY);
     TTI_SFPTRANSP(0, 0, 0, 0);
+}
+
+// Gate sigmoid. The ranking tile gets sigmoid - 0.5, subtracted from the unrounded SFPU value before the bf16 store,
+// so keys near 0.5 keep their resolution; the unbiased sigmoid is parked in the interm tile for the routed weights.
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
+inline void _deepseek_moe_gate_sigmoid_centered_() {
+    constexpr int interm_sfpi = interm_offset / 2;  // sfpi dst_reg index of the interm tile (SFP_DESTREG_STRIDE = 2)
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++) {
+        sfpi::vFloat x = sfpi::dst_reg[0];
+        sfpi::vFloat s = _sfpu_sigmoid_<true>(x);
+        sfpi::dst_reg[interm_sfpi] = sfpi::convert<sfpi::vFloat16b>(s, sfpi::RoundMode::Nearest);
+        sfpi::dst_reg[0] = sfpi::convert<sfpi::vFloat16b>(s - 0.5f, sfpi::RoundMode::Nearest);
+        sfpi::dst_reg++;
+    }
+}
+
+// After the FPU has added the bias to the centred keys, move the parked sigmoid back into the scores tile.
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
+inline void _deepseek_moe_gate_restore_scores_() {
+    constexpr int interm_sfpi = interm_offset / 2;
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++) {
+        sfpi::vFloat s = sfpi::dst_reg[interm_sfpi];
+        sfpi::dst_reg[0] = s;
+        sfpi::dst_reg++;
+    }
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>

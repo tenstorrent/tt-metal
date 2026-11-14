@@ -16,7 +16,7 @@ import ttnn
 from models.common.moe.tt_moe_gate import TTMoEGate
 
 
-def _allocate(device, batch_size, seed, enable_sigmoid):
+def _allocate(device, batch_size, seed, enable_sigmoid, torch_input=None, torch_bias=None):
     eps, scaling_factor = 1e-20, 2.5
     input_shape = (batch_size, 8, 32)
     reshaped_input_shape = (batch_size, 16, 16)
@@ -25,10 +25,12 @@ def _allocate(device, batch_size, seed, enable_sigmoid):
     out_shape = (batch_size, 1, 16)
 
     torch.manual_seed(seed)
-    torch_input = (2 * torch.rand(input_shape, dtype=torch.bfloat16)) - 1
-    if not enable_sigmoid:
-        torch_input = torch.sigmoid(torch_input)
-    torch_bias = (2 * torch.rand(input_shape, dtype=torch.bfloat16)) - 1
+    if torch_input is None:
+        torch_input = (2 * torch.rand(input_shape, dtype=torch.bfloat16)) - 1
+        if not enable_sigmoid:
+            torch_input = torch.sigmoid(torch_input)
+    if torch_bias is None:
+        torch_bias = (2 * torch.rand(input_shape, dtype=torch.bfloat16)) - 1
 
     grid = device.compute_with_storage_grid_size()
     core_grid = ttnn.num_cores_to_corerangeset(batch_size, ttnn.CoreCoord(grid.x, grid.y), row_wise=True)
@@ -155,3 +157,28 @@ def test_deepseek_moe_gate_cache_hit_rebinds_tensor_cbs(device, isolate_program_
     res_scores, res_idx = _run(device, second)
     _assert_matches_grouped_golden(second, res_scores, res_idx)
     assert device.cache_entries_counter.total == 1
+
+
+def test_deepseek_moe_gate_ranks_close_scores_like_fp32(device):
+    """Router logits a few tenths apart, as DeepSeek-V3's early layers produce. Near 0.5 one bfloat16 step of the
+    sigmoid is 2^-9, wider than most gaps between neighbouring scores, so a key rounded there selects a different
+    top-8 set than fp32 routing for a large share of tokens."""
+    batch_size = 32
+    same_set = []
+    for seed in (7, 8):
+        torch.manual_seed(seed)
+        torch_input = (0.3 * torch.randn(batch_size, 8, 32)).to(torch.bfloat16)
+        torch_bias = (0.003 * torch.randn(batch_size, 8, 32)).to(torch.bfloat16)
+        case = _allocate(device, batch_size, seed, enable_sigmoid=True, torch_input=torch_input, torch_bias=torch_bias)
+        _, res_idx = _run(device, case)
+        _, ref_idx = TTMoEGate.grouped_golden(
+            torch_input.float(),
+            torch_bias.float(),
+            eps=case["eps"],
+            scaling_factor=case["scaling_factor"],
+            enable_sigmoid=True,
+        )
+        dev_idx = torch.sort(ttnn.to_torch(res_idx)[:, 0, :8].long(), dim=-1).values
+        same_set.append((dev_idx == torch.sort(ref_idx, dim=-1).values).all(dim=-1))
+    same_set = torch.cat(same_set).float().mean().item()
+    assert same_set >= 0.85, f"{same_set:.0%} of tokens select the fp32 expert set"
