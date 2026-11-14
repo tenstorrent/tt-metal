@@ -105,9 +105,9 @@ void CompressorStateSelectProgramFactory::override_runtime_arguments(
         "compressor_state_select has {} runtime args, expected {}",
         runtime_args.size(),
         kNumRuntimeArgs);
-    runtime_args[0] = args.gathered_state.buffer()->address();
-    runtime_args[1] = args.initial_state.buffer()->address();
-    runtime_args[2] = output.buffer()->address();
+    runtime_args[0] = args.gathered_state.mesh_buffer().address();
+    runtime_args[1] = args.initial_state.mesh_buffer().address();
+    runtime_args[2] = output.mesh_buffer().address();
     runtime_args[3] = scalars.output_tiles;
     runtime_args[4] = scalars.use_initial;
     runtime_args[5] = scalars.source_offset;

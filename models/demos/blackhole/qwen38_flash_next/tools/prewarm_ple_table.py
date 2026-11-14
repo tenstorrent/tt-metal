@@ -39,7 +39,7 @@ def table_files(checkpoint: Qwen38Checkpoint) -> list[Path]:
     shards = sorted({checkpoint.metadata(name).shard for name in names})
     if len(shards) != EXPECTED_TABLE_FILES:
         raise RuntimeError(f"expected the table in {EXPECTED_TABLE_FILES} files, found {len(shards)}")
-    return [checkpoint.root / shard for shard in shards]
+    return [checkpoint.file(shard) for shard in shards]
 
 
 def residency(files: list[Path]) -> dict[str, int] | None:

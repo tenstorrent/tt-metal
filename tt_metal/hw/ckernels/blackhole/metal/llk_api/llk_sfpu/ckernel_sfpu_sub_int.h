@@ -22,7 +22,7 @@ inline void _sub_int_(
     // Operand B is input2 (int32/uint16)
     // Output is int32/uint16
     static_assert(
-        is_valid_instruction_mode(INSTRUCTION_MODE), "INSTRUCTION_MODE must be one of: INT32_2S_COMP, INT32, LO16.");
+        is_valid_instruction_mode(INSTRUCTION_MODE), "INSTRUCTION_MODE must be one of: INT32_2S_COMP, INT32, UINT16.");
 
     if constexpr (SIGN_MAGNITUDE_FORMAT) {
         // Blackhole's INT32_2S_COMP load/store mode has no effect, so sign-magnitude operands are
@@ -52,9 +52,9 @@ inline void _sub_int_(
             sfpi::dst_reg++;
         }
     } else {
-        // LO16 loads as U16; INT32 and INT32_2S_COMP (no-op on Blackhole) load as I32.
+        // UINT16 loads as U16; INT32 and INT32_2S_COMP (no-op on Blackhole) load as I32.
         constexpr sfpi::DataLayout layout =
-            (INSTRUCTION_MODE == InstrModLoadStore::LO16) ? sfpi::DataLayout::U16 : sfpi::DataLayout::I32;
+            (INSTRUCTION_MODE == InstrModLoadStore::UINT16) ? sfpi::DataLayout::U16 : sfpi::DataLayout::I32;
         using vType = std::conditional_t<layout == sfpi::DataLayout::U16, sfpi::vUInt, sfpi::vInt>;
 
         // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store

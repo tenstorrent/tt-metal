@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <iterator>
 #include <utility>
+#include <vector>
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -18,6 +19,7 @@
 
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/common/host/mesh_ring_plan.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/chip_position/chip_position_table.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cache {
@@ -90,6 +92,47 @@ constexpr uint32_t kMetaCbIndex = 1;
 // would race the writer's own metadata reads.
 constexpr uint32_t kReaderMetaCbIndex = 2;
 constexpr uint32_t kMetadataBytes = 16;
+// The kernels' chip table entry for `coord`: its position on the linearized sp*tp axis.
+uint32_t linear_coord_of(
+    const UpdatePaddedKvCacheDeviceOperation::operation_attributes_t& args,
+    const UpdatePaddedKvCacheDeviceOperation::tensor_args_t& tensor_args,
+    const ttnn::MeshCoordinate& coord) {
+    const auto& cache = tensor_args.cache;
+    uint32_t sp_coord;
+    if (args.cluster_axis.has_value()) {
+        sp_coord = ::ttnn::ccl::get_linearized_index_from_physical_coord(cache, coord, args.cluster_axis);
+    } else {
+        // Complete-mesh cache ownership follows the tensor's declared canonical row-major topology. An
+        // allocate-on-device tensor's storage coordinate vector may use a different internal order;
+        // using that order would rotate the wrong cache shard after a nonzero kv_actual_global.
+        //
+        // This value is ALREADY the linearized sp*tp position the block-cyclic math wants:
+        // row-major over the full mesh is exactly sp_coord*tp + tp_coord. tp_axis is rejected in this
+        // mode, so tp_factor collapses to 1 and linear_coord reduces to this index unchanged.
+        const auto& topology_coords = cache.tensor_topology().mesh_coords();
+        const auto it = std::find(topology_coords.begin(), topology_coords.end(), coord);
+        TT_FATAL(it != topology_coords.end(), "cache mesh coordinate {} is absent from its tensor topology", coord);
+        sp_coord = static_cast<uint32_t>(std::distance(topology_coords.begin(), it));
+    }
+    // KV dedup: linearize sp and tp into ONE block-cyclic axis of size sp*tp (linear = sp_coord*tp + tp_coord).
+    // tp_axis==nullopt => tp_factor=1 collapses this.
+    const uint32_t tp_factor = tp_dedup_factor(cache.device()->get_view(), args.tp_axis);
+    const uint32_t tp_coord = args.tp_axis.has_value()
+                                  ? ::ttnn::ccl::get_linearized_index_from_physical_coord(cache, coord, args.tp_axis)
+                                  : 0;
+    return sp_coord * tp_factor + tp_coord;
+}
+
+// The whole-mesh chip table, if any; create_descriptor and create_mesh_workload both decide through this.
+std::optional<std::vector<uint32_t>> whole_mesh_chip_table(
+    const UpdatePaddedKvCacheDeviceOperation::operation_attributes_t& args,
+    const UpdatePaddedKvCacheDeviceOperation::tensor_args_t& tensor_args) {
+    const auto& cache = tensor_args.cache;
+    return chip_lookup_table(
+        *cache.device(), cache.device_storage().get_coords(), [&](const ttnn::MeshCoordinate& coord) {
+            return linear_coord_of(args, tensor_args, coord);
+        });
+}
 
 // The window offset is not hashed, so its bounds are checked on every call, before anything divides by the
 // window's rows.
@@ -329,7 +372,7 @@ void validate_runtime_args(
                 name,
                 meta.logical_volume());
             TT_FATAL(!meta.is_sharded(), "metadata tensor {} must not be sharded", name);
-            // The writer resolves meta.buffer()->address() against cache.device(); a tensor on a
+            // The writer resolves meta.mesh_buffer().address() against cache.device(); a tensor on a
             // different mesh device would bake the wrong address and fail obscurely downstream.
             TT_FATAL(meta.device() == cache.device(), "metadata tensor {} must be on the same device as cache", name);
             // create_descriptor emits a single TensorAccessorArgs built from slot_idx and the writer uses
@@ -575,7 +618,8 @@ ttsl::hash::hash_t UpdatePaddedKvCacheDeviceOperation::compute_program_hash(
         tensor_args.slot_idx.has_value() ? tensor_args.slot_idx->memory_config() : MemoryConfig{},
         // A window's row count shapes the work split; its offset is a runtime arg patched on cache hits.
         has_input_window(args, input.padded_shape()[-2]),
-        written_input_rows(args, input.padded_shape()[-2]));
+        written_input_rows(args, input.padded_shape()[-2]),
+        chip_mapping_hash(*cache.device(), cache.device_storage().get_coords()));
 }
 
 tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFactory::create_descriptor(
@@ -593,6 +637,10 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
     auto* device = input.device();
     const bool has_metadata = tensor_args.slot_idx.has_value();
     const bool has_valid = tensor_args.valid_global.has_value() || args.valid_global.has_value();
+    // linear_coord comes from the whole-mesh chip table, else (a per-chip program) common arg 0, which keeps it out
+    // of the compile-time args so every chip shares one kernel binary. Nothing else uses `coord`.
+    const std::vector<uint32_t> chip_table = whole_mesh_chip_table(args, tensor_args).value_or(std::vector<uint32_t>{});
+    const uint32_t linear_coord = chip_table.empty() ? linear_coord_of(args, tensor_args, coord) : 0;
 
     const auto& cache_shape = cache.padded_shape();
     const auto& input_shape = input.padded_shape();
@@ -631,7 +679,7 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
         writer_tile_height = TILE_HEIGHT;
     } else if (is_row_major) {
         // ROW_MAJOR: page = one token row; use the buffer's aligned page size (handles row padding).
-        single_page_size = cache.buffer()->aligned_page_size();
+        single_page_size = cache.mesh_buffer().aligned_page_size();
         Wt = 1;
         input_Ht = input_shape[-2];
         cache_HtWt = cache_shape[-2];
@@ -651,34 +699,10 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
     // sp_factor is the mesh extent along the cluster axis (validated 2D in validate_runtime_args).
     const auto& mesh_view = device->get_view();
     const uint32_t sp_factor = ttnn::ccl::get_topological_dimension(cache, args.cluster_axis);
-    uint32_t sp_coord;
-    if (args.cluster_axis.has_value()) {
-        sp_coord = ::ttnn::ccl::get_linearized_index_from_physical_coord(cache, coord, args.cluster_axis);
-    } else {
-        // Complete-mesh cache ownership follows the tensor's declared canonical row-major topology. An
-        // allocate-on-device tensor's storage coordinate vector may use a different internal order;
-        // using that order would rotate the wrong cache shard after a nonzero kv_actual_global.
-        //
-        // This value is ALREADY the linearized sp*tp position the block-cyclic math below wants:
-        // row-major over the full mesh is exactly sp_coord*tp + tp_coord. tp_axis is rejected in this
-        // mode, so tp_factor collapses to 1 and linear_coord reduces to this index unchanged.
-        const auto& topology_coords = cache.tensor_topology().mesh_coords();
-        const auto it = std::find(topology_coords.begin(), topology_coords.end(), coord);
-        TT_FATAL(it != topology_coords.end(), "cache mesh coordinate {} is absent from its tensor topology", coord);
-        sp_coord = static_cast<uint32_t>(std::distance(topology_coords.begin(), it));
-    }
-    // On the metadata path slot_idx and kv_actual_global are not host values — the writer kernel reads
-    // element [0] of each per-element tensor and divides kv_actual_global by TILE_HEIGHT on-device.
-
-    // KV dedup: linearize sp and tp into ONE block-cyclic axis of size sp*tp (linear = sp_coord*tp + tp_coord).
-    // The writer's offset math then needs no change. tp_axis==nullopt => tp_factor=1 collapses all of this.
+    // KV dedup: sp and tp linearize to ONE block-cyclic axis of size sp*tp (tp_factor=1 without tp_axis).
     const uint32_t tp_factor = tp_dedup_factor(mesh_view, args.tp_axis);
-    const uint32_t tp_coord = args.tp_axis.has_value()
-                                  ? ::ttnn::ccl::get_linearized_index_from_physical_coord(cache, coord, args.tp_axis)
-                                  : 0;
-    const uint32_t linear_factor = sp_factor * tp_factor;           // effective block-cyclic chip count
-    const uint32_t linear_coord = sp_coord * tp_factor + tp_coord;  // this chip's position in that order
-    const uint32_t chunk_local_t = window_Ht / tp_factor;           // tile-rows THIS chip actually writes
+    const uint32_t linear_factor = sp_factor * tp_factor;  // effective block-cyclic chip count
+    const uint32_t chunk_local_t = window_Ht / tp_factor;  // tile-rows THIS chip actually writes
 
     // Work split: one tile per "block", over the rows this chip WRITES (chunk_local_t == window_Ht at tp=1).
     const uint32_t num_blocks_of_work = input_shape[1] * chunk_local_t;
@@ -812,15 +836,15 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
     writer_kernel.config = WriterConfigDescriptor{};
 
     // Common rt-args: per-chip kernel inputs for on-device update_idxt + start_id derivation. Indices
-    // 0-7 are structural (constant for this cached program): linear_coord/linear_factor/chunk_local_t are
-    // this chip's position on the linearized sp*tp axis, layer_idx is hashed. Indices 8 and 9 carry the
-    // per-call values that override_runtime_arguments patches on cache hits (the buffer-binding fast
-    // path leaves them stale otherwise): metadata path -> [8]=slot_idx tensor's raw DRAM address,
+    // 0-7 are structural (constant for this cached program): linear_coord (0 with a chip table, which then holds
+    // it)/linear_factor/chunk_local_t are this chip's position on the linearized sp*tp axis, layer_idx is hashed.
+    // Indices 8 and 9 carry the per-call values that override_runtime_arguments patches on cache hits (the
+    // buffer-binding fast path leaves them stale otherwise): metadata path -> [8]=slot_idx tensor's raw DRAM address,
     // [9]=kv_actual_global tensor's raw DRAM address; scalar path -> [8]=slot_idx, [9]=kv_actual_global.
     // The kernel composes batch_idx = slot_idx*num_layers + layer_idx.
     if (has_metadata) {
-        const uint32_t slot_idx_addr = tensor_args.slot_idx->buffer()->address();
-        const uint32_t kv_actual_global_addr = tensor_args.kv_actual_global->buffer()->address();
+        const uint32_t slot_idx_addr = tensor_args.slot_idx->mesh_buffer().address();
+        const uint32_t kv_actual_global_addr = tensor_args.kv_actual_global->mesh_buffer().address();
         writer_kernel.emplace_common_runtime_args({
             linear_coord,
             linear_factor,
@@ -835,7 +859,7 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
             kv_actual_global_addr,  // smuggled-rta-ok: 1-element metadata tensor DRAM addr; read on-device
             // Arg 10: valid_global's DRAM addr when clamping, else an inert 0 (always present so the
             // indices never shift).
-            has_valid ? tensor_args.valid_global->buffer()->address() : 0u,  // smuggled-rta-ok: as above
+            has_valid ? tensor_args.valid_global->mesh_buffer().address() : 0u,  // smuggled-rta-ok: as above
         });
     } else {
         writer_kernel.emplace_common_runtime_args({
@@ -858,7 +882,7 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
     // the kv_actual_global tensor's raw DRAM address, which the reader reads element [0] of on-device;
     // scalar path -> the value itself. Same dual use as the writer's args 8/9.
     const uint32_t reader_kv_actual =
-        has_metadata ? tensor_args.kv_actual_global->buffer()->address() : args.kv_actual_global;
+        has_metadata ? tensor_args.kv_actual_global->mesh_buffer().address() : args.kv_actual_global;
     reader_kernel.emplace_common_runtime_args({
         linear_coord,
         linear_factor,
@@ -889,6 +913,13 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
         reader_kernel.emplace_common_runtime_args({tensor_args.scales->buffer()});
     }
     writer_kernel.emplace_common_runtime_args({dst_buffer});
+    // The chip table (size 0 without one) follows the other compile-time args (cache_dataflow_helpers.hpp).
+    for (KernelDescriptor* kernel : {&reader_kernel, &writer_kernel}) {
+        kernel->named_compile_time_args.emplace_back(
+            "chip_table_offset", static_cast<uint32_t>(kernel->compile_time_args.size()));
+        kernel->named_compile_time_args.emplace_back("chip_table_size", static_cast<uint32_t>(chip_table.size()));
+        kernel->compile_time_args.insert(kernel->compile_time_args.end(), chip_table.begin(), chip_table.end());
+    }
     const uint32_t g1_numcores = core_group_1.num_cores();
 
     const auto cores = corerange_to_cores(all_cores, num_cores, /*row_wise=*/true);
@@ -937,7 +968,22 @@ UpdatePaddedKvCacheDeviceOperation::MeshWorkloadFactory::create_mesh_workload(
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
-    return descriptor_adapter_t::create_mesh_workload(args, tensor_coords, tensor_args, output);
+    if (!whole_mesh_chip_table(args, tensor_args).has_value()) {
+        return descriptor_adapter_t::create_mesh_workload(args, tensor_coords, tensor_args, output);
+    }
+    // One program per range, built as the adapter builds its per-coordinate ones (same cache-hit path).
+    tt::tt_metal::distributed::MeshWorkload workload;
+    std::unordered_map<ttnn::MeshCoordinateRange, descriptor_adapter_t::shared_variables_t> shared_variables;
+    const tt::tt_metal::WorkloadDescriptor no_workload_descriptor;
+    for (const auto& range : tensor_coords.ranges()) {
+        auto desc = ProgramFactory::create_descriptor(args, tensor_args, output, range.start_coord());
+        tt::tt_metal::Program program{desc};
+        auto collected = descriptor_adapter_t::collect_tensor_buffers(tensor_args, output, no_workload_descriptor);
+        auto bindings = tt::tt_metal::resolve_bindings(program, desc, collected.buffers, collected.num_input_buffers);
+        workload.add_program(range, std::move(program));
+        shared_variables[range] = descriptor_adapter_t::shared_variables_t{.resolved_bindings = std::move(bindings)};
+    }
+    return cached_mesh_workload_t{std::move(workload), std::move(shared_variables)};
 }
 
 void UpdatePaddedKvCacheDeviceOperation::MeshWorkloadFactory::override_runtime_arguments(
@@ -965,10 +1011,10 @@ void UpdatePaddedKvCacheDeviceOperation::MeshWorkloadFactory::override_runtime_a
     const bool window = has_input_window(args, tensor_args.input.padded_shape()[-2]);
     const uint32_t input_row_offset_t = input_row_offset_page_rows(args, tensor_args.cache);
     const bool has_metadata = tensor_args.slot_idx.has_value();
-    const uint32_t arg8 = has_metadata ? tensor_args.slot_idx->buffer()->address() : args.slot_idx;
-    const uint32_t arg9 = has_metadata ? tensor_args.kv_actual_global->buffer()->address() : args.kv_actual_global;
+    const uint32_t arg8 = has_metadata ? tensor_args.slot_idx->mesh_buffer().address() : args.slot_idx;
+    const uint32_t arg9 = has_metadata ? tensor_args.kv_actual_global->mesh_buffer().address() : args.kv_actual_global;
     // Arg 10: valid_global's address (metadata) or token count (scalar); 0 when not clamping.
-    const uint32_t arg10 = tensor_args.valid_global.has_value() ? tensor_args.valid_global->buffer()->address()
+    const uint32_t arg10 = tensor_args.valid_global.has_value() ? tensor_args.valid_global->mesh_buffer().address()
                                                                 : args.valid_global.value_or(0);
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         auto& writer_common = GetCommonRuntimeArgs(program, kWriterKernelHandle);

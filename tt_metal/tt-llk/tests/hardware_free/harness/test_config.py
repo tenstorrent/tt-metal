@@ -101,6 +101,23 @@ def clear_search_dirs(in_tree: bool = False) -> None:
 # --------------------------------------------------------------------------- #
 
 
+def test_llk_assert_setting_changes_the_variant_id(isolated_search_dirs, monkeypatch):
+    """Asserts-on and asserts-off ELFs must never share a CONSUME directory."""
+    clear_search_dirs()
+
+    monkeypatch.delenv("TT_LLK_DISABLE_ASSERTS", raising=False)
+    asserts_on_default = variant_id()
+
+    monkeypatch.setenv("TT_LLK_DISABLE_ASSERTS", "1")
+    asserts_off = variant_id()
+
+    monkeypatch.setenv("TT_LLK_DISABLE_ASSERTS", "0")
+    asserts_on_explicit = variant_id()
+
+    assert asserts_off != asserts_on_default
+    assert asserts_on_explicit == asserts_on_default
+
+
 @_IN_TREE_REGIMES
 def test_registered_search_dirs_change_the_variant_id(isolated_search_dirs, in_tree):
     """Search dirs live in class state, so ``self.__dict__`` cannot see them.
@@ -235,3 +252,74 @@ def test_variants_do_not_share_list_objects():
 
     assert second.templates == ["TEMPLATE_A"]
     assert shared == ["TEMPLATE_A"]
+
+
+# --------------------------------------------------------------------------- #
+# Which Tensix an xdist worker is bound to.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture
+def worker_location(monkeypatch):
+    """Record the core index resolve asks for, and restore the class state it writes."""
+    asked = []
+
+    def fake_location(worker_index, device_id=0):
+        asked.append(worker_index)
+        return f"core-{worker_index}"
+
+    monkeypatch.setattr(
+        "helpers.test_config.device_module.tensix_location_for_worker",
+        fake_location,
+    )
+    saved = (
+        TestConfig._PENDING_WORKER_INDEX,
+        TestConfig.TENSIX_LOCATION,
+        TestConfig.TEST_TARGET.run_simulator,
+    )
+    try:
+        yield asked
+    finally:
+        (
+            TestConfig._PENDING_WORKER_INDEX,
+            TestConfig.TENSIX_LOCATION,
+            TestConfig.TEST_TARGET.run_simulator,
+        ) = saved
+
+
+def test_ttsim_workers_share_the_first_core(monkeypatch, worker_location):
+    """A ttsim worker past the chip's core count still gets the first core.
+
+    Each xdist process dlopens its own simulator, so gw39 and a restarted
+    gw32 both run on core 0. The descriptor size is not a pytest-worker cap.
+    """
+    monkeypatch.setenv("TT_METAL_SIMULATOR", "/sim/libttsim_qsr.so")
+    TestConfig.TEST_TARGET.run_simulator = True
+    TestConfig._PENDING_WORKER_INDEX = 39
+
+    TestConfig.resolve_worker_tensix_location()
+
+    assert worker_location == [0]
+    assert TestConfig.TENSIX_LOCATION == "core-0"
+    assert TestConfig._PENDING_WORKER_INDEX is None
+
+
+def test_a_shared_device_keeps_one_core_per_worker(monkeypatch, worker_location):
+    """Silicon and the RTL server still map the xdist index onto a distinct core."""
+    monkeypatch.setenv("TT_METAL_SIMULATOR", "/sim/rtl_build")
+    TestConfig.TEST_TARGET.run_simulator = True
+    TestConfig._PENDING_WORKER_INDEX = 7
+
+    TestConfig.resolve_worker_tensix_location()
+
+    assert worker_location == [7]
+    assert TestConfig.TENSIX_LOCATION == "core-7"
+
+    monkeypatch.delenv("TT_METAL_SIMULATOR", raising=False)
+    TestConfig._PENDING_WORKER_INDEX = 7
+    TestConfig.TEST_TARGET.run_simulator = False
+
+    TestConfig.resolve_worker_tensix_location()
+
+    assert worker_location == [7, 7]
+    assert TestConfig.TENSIX_LOCATION == "core-7"

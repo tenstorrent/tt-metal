@@ -2,25 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <stdexcept>
-#include <fstream>
-#include <sstream>
-#include <ostream>
-#include <filesystem>
 #include <algorithm>
 #include <chrono>
 #include <unordered_set>
 #include <unordered_map>
 #include <set>
-#include <queue>
 #include <memory>
 #include <cstdint>
 #include <cstdlib>
 #include <functional>
-#include <limits>
 #include <array>
 #include <optional>
-#include <string_view>
 #include <tuple>
 #include <span>
 #include <vector>
@@ -29,7 +21,6 @@
 #include <fmt/format.h>
 #include <fmt/ranges.h>
 
-#include "protobuf/physical_grouping_descriptor.pb.h"
 #include <tt-metalium/experimental/fabric/physical_grouping_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
@@ -38,8 +29,6 @@
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <map>
-
-#include <google/protobuf/text_format.h>
 
 using namespace tt::tt_fabric;
 

@@ -318,6 +318,10 @@ void init_unary_sfpu_operation_quasar()
     {
         cumsum_init<APPROX>();
     }
+    else if constexpr (OPERATION == SfpuType::softplus)
+    {
+        softplus_init<is_fp32_dest_acc_en>();
+    }
     else if constexpr (OPERATION == SfpuType::hardsigmoid)
     {
         hardsigmoid_init<APPROX>();
@@ -1280,7 +1284,7 @@ void call_unary_sfpu_operation_quasar(
                 is_fp32_dest_acc_en,
                 TILE_SHAPE,
                 calculate_logical_not,
-                (APPROX, ckernel::InstrModLoadStore::LO16, ITERATIONS),
+                (APPROX, ckernel::InstrModLoadStore::UINT16, ITERATIONS),
                 dst_index,
                 vector_mode);
         }

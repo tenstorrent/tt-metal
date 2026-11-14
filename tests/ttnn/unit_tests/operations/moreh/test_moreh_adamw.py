@@ -99,3 +99,27 @@ def test_moreh_adamw(amsgrad, fp32_dest_acc_en, device):
 def test_moreh_adamw_corner_cases(shape, step, provide_outputs, device):
     torch.manual_seed(0)
     run_moreh_adamw_test(shape, device, step=step, provide_outputs=provide_outputs)
+
+
+def test_moreh_adamw_rejects_output_dtype_other_than_param(device, expect_error):
+    # Every buffer is sized and formatted from param_in, so a bf16 param_out for bf8 params would be misread.
+    shape = (1, 1, 32, 32)
+    tt = lambda t, d: ttnn.from_torch(t, dtype=d, layout=ttnn.TILE_LAYOUT, device=device)
+    p, g = tt(torch.randn(shape), ttnn.bfloat8_b), tt(torch.randn(shape), ttnn.bfloat8_b)
+    m, v = tt(torch.zeros(shape), ttnn.bfloat8_b), tt(torch.zeros(shape), ttnn.bfloat8_b)
+    param_out = tt(torch.zeros(shape), ttnn.bfloat16)
+    with expect_error(RuntimeError, "must match the param_in dtype"):
+        ttnn.moreh_adamw(
+            p,
+            g,
+            m,
+            v,
+            lr=0.001,
+            beta1=0.9,
+            beta2=0.999,
+            eps=1e-8,
+            weight_decay=0.0,
+            step=1,
+            amsgrad=False,
+            param_out=param_out,
+        )

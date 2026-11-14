@@ -90,6 +90,10 @@ def producer_process(log_path, manifest_path):
                 producer.wait(timeout=30)
 
 
+@pytest.mark.skipif(
+    "GEMMA4_TEST_CHUNK_SIZE" in os.environ,
+    reason="checks the service as shipped, at manifest.json's chunk size; unset GEMMA4_TEST_CHUNK_SIZE",
+)
 @pytest.mark.timeout(7200)
 @pytest.mark.parametrize("dflash_enabled", [False, True], ids=["target", "dflash"])
 def test_prefill_service_six_slots(monkeypatch, tmp_path, dflash_enabled):
@@ -173,7 +177,7 @@ def test_prefill_service_six_slots(monkeypatch, tmp_path, dflash_enabled):
                 drainer.join(60)
             assert layers == expected_layers, (layers, expected_layers)
 
-        run_draining(192 * runtime.num_ack_layers)
+        run_draining(384 * runtime.num_ack_layers)
         assert runtime.slot_ends == [262144] * 6
         assert set(snapshots) == set(range(6))
         for slot, expected in snapshots.items():
@@ -185,7 +189,7 @@ def test_prefill_service_six_slots(monkeypatch, tmp_path, dflash_enabled):
         # for the warm-up acknowledgements and block the second request loop.
         trace_id = runtime.trace_id
         with producer_process(tmp_path / "producer_reuse.log", reuse_manifest):
-            run_draining(12 * runtime.num_ack_layers, before_first_chunk=None)
+            run_draining(18 * runtime.num_ack_layers, before_first_chunk=None)
         assert runtime.trace_id == trace_id
         assert runtime.slot_ends == [8193] * 6
 

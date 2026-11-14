@@ -65,6 +65,7 @@
 #include "ttnn/operations/experimental/nomic_embed_text_v2_moe/routed_combine/routed_combine_nanobind.hpp"
 #include "ttnn/operations/experimental/nomic_embed_text_v2_moe/grouped_matmul/grouped_matmul_nanobind.hpp"
 #include "ttnn/operations/experimental/nomic_embed_text_v2_moe/routing_metadata/routing_metadata_nanobind.hpp"
+#include "ttnn/operations/experimental/modulated_deform_conv2d/modulated_deform_conv2d_nanobind.hpp"
 #include "ttnn/operations/experimental/reshape/view_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/all_reduce_create_qkv_heads/all_reduce_create_qkv_heads_nanobind.hpp"
 #include "ttnn/operations/experimental/padded_slice/padded_slice_nanobind.hpp"
@@ -98,6 +99,7 @@
 #include "ttnn/operations/experimental/deepseek_prefill/post_combine_reduce/post_combine_reduce_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/masked_bincount/masked_bincount_nanobind.hpp"
 #include "ttnn/operations/experimental/high_bw_all_gather/high_bw_all_gather_nanobind.hpp"
+#include "ttnn/operations/experimental/sparse_kv_push/sparse_kv_push_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/offset_cumsum/offset_cumsum_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/moe_padding_config/moe_padding_config_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/outbound_socket_service_sync/outbound_socket_service_sync_nanobind.hpp"
@@ -113,6 +115,8 @@
 #include "ttnn/operations/experimental/deepseek_prefill/update_padded_kv_cache/update_padded_kv_cache_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/zero_padded_kv_cache/zero_padded_kv_cache_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/rotary_embedding_indexed/rotary_embedding_indexed_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/attn_res_block_mix/attn_res_block_mix_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/attn_res_block_stats/attn_res_block_stats_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/attn_res_gather_softmax/attn_res_gather_softmax_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/attn_res_weighted_reduce_nc/attn_res_weighted_reduce_nc_nanobind.hpp"
 
@@ -178,6 +182,7 @@ void py_module(nb::module_& mod) {
     matmul_decode::detail::bind_matmul_decode_operation(mod);
     deepseek_prefill::masked_bincount::detail::bind_experimental_masked_bincount_operation(mod);
     high_bw_all_gather::detail::bind_experimental_high_bw_all_gather_operation(mod);
+    sparse_kv_push::detail::bind_experimental_sparse_kv_push_operations(mod);
     deepseek_prefill::combine_fabric2d::detail::bind_experimental_combine_fabric2d_operation(mod);
     deepseek_prefill::dispatch_fabric2d::detail::bind_experimental_dispatch_fabric2d_operation(mod);
     deepseek_prefill::offset_cumsum::detail::bind_experimental_offset_cumsum_operation(mod);
@@ -187,6 +192,8 @@ void py_module(nb::module_& mod) {
     deepseek_prefill::detail::bind_post_combine_reduce(mod);
     deepseek_prefill::moe_grouped_topk::detail::bind_moe_grouped_topk(mod);
     deepseek_prefill::moe_hash_gate::detail::bind_moe_hash_gate(mod);
+    deepseek_prefill::attn_res_block_mix::detail::bind_attn_res_block_mix(mod);
+    deepseek_prefill::attn_res_block_stats::detail::bind_attn_res_block_stats(mod);
     deepseek_prefill::attn_res_gather_softmax::detail::bind_attn_res_gather_softmax(mod);
     deepseek_prefill::attn_res_weighted_reduce_nc::detail::bind_attn_res_weighted_reduce_nc(mod);
     deepseek_prefill::pack_scaled_fp8_kv_cache::detail::bind_pack_scaled_fp8_kv_cache(mod);
@@ -221,6 +228,7 @@ void py_module(nb::module_& mod) {
     ttnn::experimental::nomic_embed_text_v2_moe::bind_routed_combine(mod);
     ttnn::experimental::nomic_embed_text_v2_moe::bind_grouped_matmul(mod);
     ttnn::experimental::nomic_embed_text_v2_moe::bind_routing_metadata(mod);
+    modulated_deform_conv2d::detail::bind_modulated_deform_conv2d(mod);
 
     minimal_matmul::detail::bind_minimal_matmul(mod);
     minimal_matmul::detail::bind_minimal_matmul_split(mod);

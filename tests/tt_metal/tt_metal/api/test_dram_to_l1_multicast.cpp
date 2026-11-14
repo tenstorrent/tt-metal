@@ -78,7 +78,9 @@ bool dram_to_l1_multicast(
 
 
     CoreCoord core_start = {0, 0};
-    CoreCoord grid_size = mesh_device->logical_grid_size();
+    // Only worker cores: the full logical grid also holds the fast dispatch cores, whose L1 the
+    // multicast would overwrite.
+    CoreCoord grid_size = mesh_device->compute_with_storage_grid_size();
     CoreCoord core_end = {core_start.x + (grid_size.x - 1), core_start.y + (grid_size.y - 1)};
     auto core_start_physical = mesh_device->worker_core_from_logical_core(core_start);
     auto core_end_physical = mesh_device->worker_core_from_logical_core(core_end);

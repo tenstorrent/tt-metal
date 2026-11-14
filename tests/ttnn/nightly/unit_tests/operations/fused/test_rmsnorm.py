@@ -12,7 +12,6 @@ import ttnn
 
 from tt_lib.utils import (
     pad_weight,
-    tilize_to_list,
     untilize,
     is_close,
 )
@@ -49,37 +48,18 @@ def run_rmsnorm_tests(test_id, dtype, in0_mem_config, out_mem_config, device):
             beta = torch.zeros(1, 1, 1, W)
         if test_id >= 1:
             gamma = torch.rand(1, 1, 1, W) * 2 - 1
-            gammah32 = tilize_to_list(pad_weight(gamma))
-            ttgamma = ttnn.Tensor(
-                gammah32,
-                [1, 1, 32, W],
-                dtype,
-                ttnn.TILE_LAYOUT,
-                dev,
-                in0_mem_config,
+            ttgamma = ttnn.from_torch(
+                pad_weight(gamma), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=in0_mem_config
             )
         if test_id >= 2:
             beta = torch.rand(1, 1, 1, W) * 2.0 - 1.1
-            betah32 = tilize_to_list(pad_weight(beta))
-            ttbeta = ttnn.Tensor(
-                betah32,
-                [1, 1, 32, W],
-                dtype,
-                ttnn.TILE_LAYOUT,
-                dev,
-                in0_mem_config,
+            ttbeta = ttnn.from_torch(
+                pad_weight(beta), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=in0_mem_config
             )
 
         x = torch.rand((N, C, H, W)) * 2 - 0.95
 
-        ttx = ttnn.Tensor(
-            tilize_to_list(x),
-            [N, C, H, W],
-            dtype,
-            ttnn.TILE_LAYOUT,
-            dev,
-            in0_mem_config,
-        )
+        ttx = ttnn.from_torch(x, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=in0_mem_config)
 
         if test_id == 0:
             logger.info("Running RMSN_NOGB")

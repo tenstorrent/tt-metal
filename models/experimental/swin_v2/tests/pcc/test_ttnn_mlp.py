@@ -11,7 +11,7 @@ from ttnn.model_preprocessing import (
     preprocess_layernorm_parameter,
     preprocess_linear_bias,
 )
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 from models.experimental.swin_v2.reference.mlp import MLP
 from models.experimental.swin_v2.tt.tt_mlp import TtMLP
 import ttnn

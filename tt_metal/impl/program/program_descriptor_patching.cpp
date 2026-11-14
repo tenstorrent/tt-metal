@@ -10,10 +10,10 @@
 // These helpers (resolve_bindings / apply_resolved_bindings / apply_dynamic_runtime_args)
 // are a stop-gap that lets descriptor-based op factories re-patch Buffer addresses and the
 // handful of hash-excluded scalar runtime args on a program-cache hit — standing in for the
-// legacy override_runtime_arguments() path until Metal 2.0 lands.
+// legacy override_runtime_arguments() path while these factories migrate to Metal 2.0.
 //
-// Metal 2.0 solves this at the framework level with native Tensor/Buffer bindings, at which
-// point THIS ENTIRE FILE AND ITS HEADER ARE DELETED. Do not extend the API, do not depend on
+// Metal 2.0 provides native Tensor/Buffer bindings at the framework level. Remove this file
+// and its header after all callers have migrated. Do not extend the API, do not depend on
 // it outside the mesh-device-operation adapter. New code almost certainly wants the Metal 2.0
 // binding instead.
 //

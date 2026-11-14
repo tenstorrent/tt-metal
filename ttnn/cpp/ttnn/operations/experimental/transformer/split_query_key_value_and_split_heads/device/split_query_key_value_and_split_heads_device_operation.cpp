@@ -31,6 +31,20 @@ void SplitFusedQKVAndSplitHeadsDeviceOperation::validate_on_program_cache_miss(
             input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT8_B,
         "Unsupported data format");
 
+    // The program factories bake in a per-head width of 64, so derive that width the way they do and
+    // reject anything else rather than writing two tiles per head for a wider head, which silently
+    // garbles every value past column 64.
+    constexpr uint32_t num_tensors = 3;  // one fused input carries Q, K and V
+    const uint32_t padded_hidden = input_tensor.padded_shape()[3];
+    const uint32_t head_dim = (padded_hidden / num_tensors) / operation_attributes.num_heads;
+    TT_FATAL(
+        head_dim == 64,
+        "split_query_key_value_and_split_heads requires a per-head width of 64, got {} (padded hidden {} / "
+        "num_heads {}). This op only supports the BERT-large layout.",
+        head_dim,
+        padded_hidden,
+        operation_attributes.num_heads);
+
     if (!input_tensor.is_sharded()) {
         TT_FATAL(batch_size >= 7 && batch_size <= 9, "Input batch size must be between 7 to 9 for bert large TM ops!");
     } else {

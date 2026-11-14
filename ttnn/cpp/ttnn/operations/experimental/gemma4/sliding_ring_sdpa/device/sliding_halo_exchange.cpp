@@ -78,10 +78,17 @@ void sliding_halo_exchange_helper(
     using tt::tt_metal::WriterConfigDescriptor;
 
     TT_FATAL(!input_tensors.empty() && input_tensors.size() == output_tensors.size(), "Invalid halo tensor list");
+    // See kHaloArrivalSemaphoreBase; a one-hop halo needs 3 semaphores in total.
+    uint32_t max_key = halo.arrival_key;
+    for (const uint32_t key : halo.collected_keys) {
+        max_key = std::max(max_key, key);
+    }
+    const uint32_t semaphores_needed = halo_rt::kHaloArrivalSemaphoreBase + max_key + 1;
     TT_FATAL(
-        semaphores.size() >= 3,
-        "Neighbor halo requires three global semaphores: backward all-gather, forward all-gather, and dedicated halo. "
-        "Sliding-window models must allocate 3 semaphores; non-halo models may allocate 2");
+        semaphores.size() >= semaphores_needed,
+        "Neighbor halo needs {} global semaphores (2 all-gather + one halo arrival per predecessor key), got {}",
+        semaphores_needed,
+        semaphores.size());
     TT_FATAL(
         halo.derives_cache_batch_on_device() == halo.derives_start_on_device(),
         "Neighbor halo slot_id and kv_actual_isl metadata must be supplied together");
@@ -165,7 +172,7 @@ void sliding_halo_exchange_helper(
         kPrefetchPackets,
         reader_meta_cb,
         static_cast<uint32_t>(halo.collects_arrivals()),
-        halo.arrivals_expected,
+        static_cast<uint32_t>(halo.collected_keys.size()),
         static_cast<uint32_t>(halo.multicast())};
     for (uint32_t input = 0; input < num_inputs; ++input) {
         reader_kernel.compile_time_args.push_back(page_size);
@@ -238,18 +245,15 @@ void sliding_halo_exchange_helper(
     }
     halo_signaler.initialized_all_gather = true;
 
-    // semaphores[0]/[1] coordinate the backward/forward all-gather directions. Keep halo
-    // arrivals on semaphores[2] so the protocols cannot consume each other's signals.
-    const auto& halo_semaphore = semaphores.at(2);
+    // See kHaloArrivalSemaphoreBase.
+    const auto& arrival_semaphore = semaphores.at(halo_rt::kHaloArrivalSemaphoreBase + halo.arrival_key);
     for (uint32_t link = 0; link < num_links; ++link) {
         KernelDescriptor::RTArgList reader_args;
-        reader_args.push_back(
-            static_cast<uint32_t>(halo_semaphore.address()));  // smuggled-rta-ok: persistent GlobalSemaphore address
         reader_args.push_back(link);
         KernelDescriptor::RTArgList writer_args;
         const CoreCoord worker_physical = mesh_device->worker_core_from_logical_core(worker_cores[link]);
-        // Every exchange increments the SAME per-link core's semaphore on the receiver, so one reader
-        // per link can wait for the whole halo. Sender and receiver lay out workers identically, so the
+        // Every exchange signals the same per-link core on the receiver, so one reader per link can
+        // wait for the whole halo. Sender and receiver lay out workers identically, so the
         // sender's rendezvous cores are also the receiver's.
         TT_FATAL(
             !halo.has_rendezvous() || halo.rendezvous_noc.size() == num_links,
@@ -260,7 +264,7 @@ void sliding_halo_exchange_helper(
         writer_args.push_back(arrival_core.x);
         writer_args.push_back(arrival_core.y);
         writer_args.push_back(
-            static_cast<uint32_t>(halo_semaphore.address()));  // smuggled-rta-ok: persistent GlobalSemaphore address
+            static_cast<uint32_t>(arrival_semaphore.address()));  // smuggled-rta-ok: persistent GlobalSemaphore address
 
         writer_args.push_back(link);
 
@@ -412,6 +416,14 @@ void sliding_halo_exchange_helper(
         std::vector<uint32_t> signaler_args;
         halo_signaler.push_all_gather_fused_op_rt_args(signaler_args, num_links, link, 0);
         reader_args.append(signaler_args);
+        // Collector args end with one arrival semaphore per predecessor.
+        if (halo.collects_arrivals()) {
+            for (const uint32_t key : halo.collected_keys) {
+                reader_args.push_back(
+                    static_cast<uint32_t>(semaphores.at(halo_rt::kHaloArrivalSemaphoreBase + key)
+                                              .address()));  // smuggled-rta-ok: persistent GlobalSemaphore address
+            }
+        }
         reader_kernel.emplace_runtime_args(worker_cores[link], reader_args);
 
         for (const auto& output : output_tensors) {
@@ -426,6 +438,7 @@ void sliding_halo_exchange_helper(
             writer_args.push_back(1u);
         }
         tt::tt_fabric::append_fabric_connection_rt_args(
+            *mesh_device,
             mesh_device->get_fabric_node_id(target_device_coord),
             mesh_device->get_fabric_node_id(transport_device_coord),
             halo.link_base + link,

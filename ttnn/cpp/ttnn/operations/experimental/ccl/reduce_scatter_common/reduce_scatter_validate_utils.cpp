@@ -26,8 +26,9 @@ void reduce_scatter_common_validates(
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor must be on device");
     TT_FATAL(input_tensor.is_allocated(), "Input tensor must be allocated in buffers on device");
 
-    const auto page_size = input_tensor.buffer()->page_size();
-    TT_FATAL(page_size % input_tensor.buffer()->alignment() == 0, "reduce_scatter currently requires aligned pages");
+    const auto page_size = input_tensor.mesh_buffer().page_size();
+    TT_FATAL(
+        page_size % input_tensor.mesh_buffer().alignment() == 0, "reduce_scatter currently requires aligned pages");
     TT_FATAL(num_links > 0, "num_links must be greater than 0");
 
     const auto& rank = input_tensor.logical_shape().rank();

@@ -6,6 +6,7 @@
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/constants.hpp>
@@ -15,7 +16,6 @@
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace ttnn::prim {
 
@@ -53,16 +53,15 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
 
     MeshDevice* device = input_tensor.device();
 
-    bool fp32_dest_acc_en = src0_dfb_data_format == tt::DataFormat::Float32 ||
-                            src0_dfb_data_format == tt::DataFormat::Int32 ||
-                            src0_dfb_data_format == tt::DataFormat::UInt32;
+    // UInt8 needs 32-bit Dest on WH/BH.
+    bool fp32_dest_acc_en = ttnn::operations::data_movement::requires_32bit_dest(src0_dfb_data_format);
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         split_work_to_cores(compute_with_storage_grid_size, row_major ? NC : num_tensor_tiles);
 
-    Buffer* dst_buffer = output_tensor.buffer();
+    const auto* dst_buffer = &output_tensor.mesh_buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     ProgramSpec spec{.name = "transpose_wh"};
@@ -180,7 +179,9 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
     // Int32/UInt32 unpack to Dest as Float32 does: Quasar's tilize and transpose unpack to Dest only
     // when UnpackToDest is requested, and Quasar rejects a 32-bit integer unpack into SrcA (#59515).
     ComputeHardwareConfig compute_hw{.enable_32_bit_dest = fp32_dest_acc_en};
-    if (fp32_dest_acc_en) {
+    // UnpackToDest lowers to UnpackToDestFp32 which bypasses SrcA; only 32-bit formats are safe.
+    // 8-bit integer formats must stay on the SrcA/int-FPU path.
+    if (ttnn::operations::data_movement::requires_unpack_to_dest(src0_dfb_data_format)) {
         compute_hw.unpack_modes.insert({IN0, UnpackMode::UnpackToDest});
         if (row_major) {
             compute_hw.unpack_modes.insert({TILIZE, UnpackMode::UnpackToDest});

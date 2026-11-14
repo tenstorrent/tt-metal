@@ -5,7 +5,6 @@
 #include "mla_q_rope_device_operation.hpp"
 
 #include "metal/common/tensor_validation.hpp"
-#include "mla_q_rope_program_factory.hpp"
 #include "ttnn/device_operation.hpp"
 
 namespace ttml::metal::ops::mla_q_rope::device {
@@ -134,24 +133,11 @@ MlaQRopeDeviceOperation::tensor_return_value_t MlaQRopeDeviceOperation::create_o
     return ttnn::create_device_tensor(spec, tensor_args.q_in.device());
 }
 
+// Hashes what the default key hashes (every attribute, the full spec of every tensor). It is custom only to skip the
+// canonical key string the default key also builds on every dispatch.
 ttsl::hash::hash_t MlaQRopeDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    // Memory configs are hashed because TensorAccessorArgs bake buffer placement into
-    // compile-time args, so a placement change must not reuse a cached program.
-    return tt::tt_metal::operation::hash_operation<MlaQRopeDeviceOperation>(
-        args,
-        tensor_args.q_in.dtype(),
-        tensor_args.q_in.logical_shape(),
-        tensor_args.cos_cache.logical_shape(),
-        tensor_args.q_in.memory_config(),
-        tensor_args.cos_cache.memory_config(),
-        tensor_args.sin_cache.memory_config(),
-        tensor_args.trans_mat.memory_config());
-}
-
-MlaQRopeDeviceOperation::program_factory_t MlaQRopeDeviceOperation::select_program_factory(
-    const operation_attributes_t&, const tensor_args_t&) {
-    return MlaQRopeProgramFactory{};
+    return tt::tt_metal::operation::hash_operation<MlaQRopeDeviceOperation>(args, tensor_args);
 }
 
 }  // namespace ttml::metal::ops::mla_q_rope::device

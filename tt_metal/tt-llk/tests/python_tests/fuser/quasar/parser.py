@@ -135,9 +135,9 @@ _no_transpose_mismatch = reject(
     "requires both transpose_faces and transpose_within_face to have the same value",
 )
 
-_block_full_width = reject(
-    lambda s, a, b: s.block_size[1] != a.dimensions[1],
-    "block width must be same as operand width",
+_block_divides_width = reject(
+    lambda s, a, b: a.dimensions[1] % s.block_size[1] != 0,
+    "operand width must be a multiple of the block width",
 )
 
 _reduce_col_only = reject(
@@ -196,9 +196,8 @@ UNPACKER_MAP = {
             IN0_REQUIRED,
             NO_BROADCAST,
             NO_TRANSPOSE,
-            _block_full_width,
+            _block_divides_width,
             NO_UNPACK_TO_DEST,
-            require_src_a_tiles((32, 32)),
         ],
     ),
     "UnpackerAB": (
@@ -373,17 +372,10 @@ FPU_MAP = {
     ),
 }
 
-# Quasar has no strided pack path for tiny tiles, so the shared full-tile rule carries
-# an arch-specific hint here.
-_untilize_full_tile = reject(
-    lambda s, output: output.tile_shape.total_num_faces() != 4,
-    "PackUntilize supports only 32x32 output tiles, tiny tiles need strided pack",
-)
-
 PACKER_MAP = {
     "Packer": (Packer, [L1_ACC_FORMAT_SUPPORTED]),
     "MatmulPacker": (MatmulPacker, [L1_ACC_FORMAT_SUPPORTED]),
-    "PackUntilize": (PackUntilize, [_untilize_full_tile, PACK_NO_L1_ACC]),
+    "PackUntilize": (PackUntilize, [PACK_NO_L1_ACC]),
 }
 
 OUTPUT_DIMS = {

@@ -9,7 +9,11 @@ from unittest.mock import Mock
 import pytest
 
 from models.demos.common.prefill.adapter import PrefillRunParams, get_adapter
-from models.demos.gemma4_d_p.tt.runners.adapters.gemma4 import Gemma4PrefillAdapter, validate_params
+from models.demos.gemma4_d_p.tt.runners.adapters.gemma4 import (
+    Gemma4PrefillAdapter,
+    Gemma4ServiceConfig,
+    validate_params,
+)
 from models.demos.gemma4_d_p.tt.runners.prepare_prefill_inputs import write_producer_manifest
 from models.demos.gemma4_d_p.tt.runners.runtime import Gemma4PrefillRuntime
 
@@ -22,7 +26,7 @@ def service_params():
         is_first_rank=True,
         is_last_rank=True,
         max_seq_len=262144,
-        chunk_size=8192,
+        chunk_size=Gemma4ServiceConfig.CHUNK_SIZE,
         num_users=6,
         capacity_factor=8,
         num_links=2,
@@ -44,7 +48,8 @@ def test_adapter_uses_canonical_weight_cache(monkeypatch, tmp_path):
 
 
 @pytest.mark.parametrize(
-    "override", [{"num_users": 7}, {"mesh_shape": (4, 8)}, {"num_layers": 30}, {"chunk_size": 4096}]
+    "override",
+    [{"num_users": 7}, {"mesh_shape": (4, 8)}, {"num_layers": 30}, {"chunk_size": 2 * Gemma4ServiceConfig.CHUNK_SIZE}],
 )
 def test_unsupported_service_shapes(override, expect_error):
     with expect_error(ValueError, "Gemma4|KV slot|Chunk|Slot"):
@@ -54,12 +59,13 @@ def test_unsupported_service_shapes(override, expect_error):
 def test_slot_offsets_and_partial_final_chunk(expect_error):
     runtime = Gemma4PrefillRuntime.__new__(Gemma4PrefillRuntime)
     runtime.config = service_params()
-    runtime.slot_ends = [8192, 16384, 0, 0, 0, 253952]
-    runtime.validate_chunk(0, 8192, 16384)
-    runtime.validate_chunk(1, 16384, 16385)
-    runtime.validate_chunk(5, 253952, 262144)
-    runtime.validate_chunk(5, 0, 8192)
-    for chunk in [(6, 0, 8192), (0, 16384, 24576), (0, 1, 8193), (5, 253952, 262145)]:
+    c, last = runtime.config.chunk_size, runtime.config.max_seq_len
+    runtime.slot_ends = [c, 2 * c, 0, 0, 0, last - c]
+    runtime.validate_chunk(0, c, 2 * c)
+    runtime.validate_chunk(1, 2 * c, 2 * c + 1)
+    runtime.validate_chunk(5, last - c, last)
+    runtime.validate_chunk(5, 0, c)
+    for chunk in [(6, 0, c), (0, 2 * c, 3 * c), (0, 1, c + 1), (5, last - c, last + 1)]:
         with expect_error(ValueError, "Gemma4|KV slot|Chunk|Slot"):
             runtime.validate_chunk(*chunk)
 
@@ -91,8 +97,8 @@ def test_simulator_resumes_at_the_runtime_granularity(chunk_size):
     assert runtime.resume_granularity == resume_step(chunk_size, "resume")
 
 
-@pytest.mark.parametrize("start", [16384, 16384 + 3 * 1024, 16384 + 7 * 1024])
-def test_chunk_positions_follow_the_rotated_tokens(start):
+@pytest.mark.parametrize("slabs", [0, 3, 7], ids=["aligned", "slab3", "slab7"])
+def test_chunk_positions_follow_the_rotated_tokens(slabs):
     """A chunk's staged positions are its tokens' positions after the producer's rotation: natural order at an
     aligned start, rotated at a mid-chunk one."""
     from types import SimpleNamespace
@@ -102,47 +108,52 @@ def test_chunk_positions_follow_the_rotated_tokens(start):
     runtime = Gemma4PrefillRuntime.__new__(Gemma4PrefillRuntime)
     runtime.config = service_params()
     runtime.mesh_config = SimpleNamespace(cp_degree=8)
-    natural = list(range(start, start + 8192))
+    c = runtime.config.chunk_size
+    start = 4 * c + slabs * (c // 8)
+    natural = list(range(start, start + c))
     assert runtime._chunk_positions(start) == rotate_chunk_tokens(natural, start, 8)
-    assert (runtime._chunk_positions(start) == natural) == (start % 8192 == 0)
+    assert (runtime._chunk_positions(start) == natural) == (start % c == 0)
 
 
+# Positions as functions of the service chunk c: (slot_id, previous_end, actual_start, actual_end).
 @pytest.mark.parametrize(
-    "slot_id,previous_end,actual_start,actual_end",
+    "case",
     [
-        (0, 8513, 8192, 12473),
-        (1, 32768, 8192, 12000),
-        (5, 16384, 8192, 16384),
+        lambda c: (0, c + 321, c, c + c // 2),
+        lambda c: (1, 8 * c, c, c + c // 4),
+        lambda c: (5, 2 * c, c, 2 * c),
     ],
     ids=["partial-tail-replay", "shorter-shared-prefix", "full-chunk-replay"],
 )
-def test_prefix_reuse_replays_computed_chunks(slot_id, previous_end, actual_start, actual_end):
+def test_prefix_reuse_replays_computed_chunks(case):
     runtime = Gemma4PrefillRuntime.__new__(Gemma4PrefillRuntime)
     runtime.config = service_params()
+    slot_id, previous_end, actual_start, actual_end = case(runtime.config.chunk_size)
     runtime.slot_ends = [0] * runtime.config.num_users
     runtime.slot_ends[slot_id] = previous_end
     runtime.validate_chunk(slot_id, actual_start, actual_end)
 
 
+# (slot_id, previous_end, actual_start, actual_end) as functions of the service chunk c.
 @pytest.mark.parametrize(
-    "slot_id,previous_end,actual_start,actual_end",
-    [(0, 16384, 0, 8192), (1, 32768, 8192, 12000)],
+    "case",
+    [lambda c: (0, 2 * c, 0, c), lambda c: (1, 8 * c, c, c + c // 2)],
     ids=["restart-at-zero", "shorter-shared-prefix"],
 )
-def test_prefill_replay_invalidates_old_suffix_before_continuing(
-    monkeypatch, expect_error, slot_id, previous_end, actual_start, actual_end
-):
+def test_prefill_replay_invalidates_old_suffix_before_continuing(monkeypatch, expect_error, case):
     import ttnn
 
     runtime = Gemma4PrefillRuntime.__new__(Gemma4PrefillRuntime)
     runtime.config = service_params()
+    c = runtime.config.chunk_size
+    slot_id, previous_end, actual_start, actual_end = case(c)
     runtime.mesh_config = SimpleNamespace(cp_degree=8)
     runtime.mesh_device = object()
     runtime.input_tokens = object()
     runtime.trace_id = 1
     runtime.d2h_service = None
     runtime.layer_completion_sink = None
-    runtime.slot_ends = [8192] * runtime.config.num_users
+    runtime.slot_ends = [c] * runtime.config.num_users
     runtime.slot_ends[slot_id] = previous_end
     monkeypatch.setattr(runtime, "_check_cache", Mock())
     monkeypatch.setattr(runtime, "_stage_positions", Mock())
@@ -155,7 +166,7 @@ def test_prefill_replay_invalidates_old_suffix_before_continuing(
         runtime.prefill_chunk(object(), kv_cache, slot_id=slot_id, actual_start=start, actual_end=end)
 
     prefill(actual_start, actual_end)
-    expected_ends = [8192] * runtime.config.num_users
+    expected_ends = [c] * runtime.config.num_users
     expected_ends[slot_id] = actual_end
     assert runtime.slot_ends == expected_ends
 
@@ -170,20 +181,23 @@ def test_prefill_replay_invalidates_old_suffix_before_continuing(
         assert runtime.slot_ends == expected_ends
 
 
+# (previous_end, actual_start, actual_end, error) as functions of the service chunk c. A start c + c // 16 is half a
+# slab (c / 8) past a boundary, so never on one.
 @pytest.mark.parametrize(
-    "previous_end,actual_start,actual_end,error",
+    "case",
     [
-        (8513, 16384, 24576, "Slot 0 holds 8513 tokens, got a chunk at 16384"),
-        (0, 8192, 12473, "Slot 0 holds 0 tokens, got a chunk at 8192"),
-        (8513, 8512, 12473, "Chunk start"),
-        (8513, 8192, 8192, "Chunk must contain"),
-        (8513, 8192, 16385, "Chunk must contain"),
+        lambda c: (c + 321, 2 * c, 3 * c, f"Slot 0 holds {c + 321} tokens, got a chunk at {2 * c}"),
+        lambda c: (0, c, c + c // 2, f"Slot 0 holds 0 tokens, got a chunk at {c}"),
+        lambda c: (c + 321, c + c // 16, c + c // 2, "Chunk start"),
+        lambda c: (c + 321, c, c, "Chunk must contain"),
+        lambda c: (c + 321, c, 2 * c + 1, "Chunk must contain"),
     ],
     ids=["gap", "empty-slot", "unaligned-replay", "empty-chunk", "oversized-chunk"],
 )
-def test_prefix_reuse_rejects_invalid_chunks(previous_end, actual_start, actual_end, error, expect_error):
+def test_prefix_reuse_rejects_invalid_chunks(case, expect_error):
     runtime = Gemma4PrefillRuntime.__new__(Gemma4PrefillRuntime)
     runtime.config = service_params()
+    previous_end, actual_start, actual_end, error = case(runtime.config.chunk_size)
     runtime.slot_ends = [previous_end] + [0] * (runtime.config.num_users - 1)
     with expect_error(ValueError, error):
         runtime.validate_chunk(0, actual_start, actual_end)
@@ -233,3 +247,53 @@ def test_tt_cache_requires_configured_root(monkeypatch, tmp_path, expect_error):
         resolve_cache_dir_from_tt_cache_path(None, dtype=ttnn.bfloat16, mesh_shape=(8, 4))
     with expect_error(ValueError, "tt_cache_path must be provided"):
         Gemma4PrefillAdapter().weight_cache_path((8, 4))
+
+
+def batched_params(**overrides):
+    return replace(service_params(), **{"chunk_size": 2048, "num_users": 4, "forward_chunks": 4, **overrides})
+
+
+def test_batched_service_shapes(expect_error):
+    validate_params(batched_params())
+    validate_params(batched_params(forward_chunks=2))
+    for override in ({"chunk_size": 8192}, {"forward_chunks": 5}, {"forward_chunks": 0}):
+        with expect_error(ValueError, "Gemma4"):
+            validate_params(replace(batched_params(), **override))
+
+
+def test_packed_forwards_continue_each_slot(expect_error):
+    from models.demos.common.prefill.prefill_chunk import EMPTY_CHUNK
+    from models.demos.common.prefill.prefill_chunk import PrefillChunk as E
+    from models.demos.gemma4_d_p.tt.runners.batched_runtime import Gemma4BatchedPrefillRuntime
+
+    runtime = Gemma4BatchedPrefillRuntime.__new__(Gemma4BatchedPrefillRuntime)
+    runtime.config = batched_params()
+    runtime.forward_chunks = 4
+    runtime.slot_ends = [4096, 2304, 2048, 0]
+    assert runtime.validate_forward([E(0, 4096, 6144), E(0, 6144, 8192), E(1, 0, 2048), E(2, 2048, 2100)]) == [
+        E(0, 4096, 6144),
+        E(0, 6144, 8192),
+        E(1, 0, 2048),
+        E(2, 2048, 2100),
+    ]
+    assert runtime.validate_forward([E(0, 0, 2048), E(3, 0, 1), EMPTY_CHUNK, EMPTY_CHUNK]) == [
+        E(0, 0, 2048),
+        E(3, 0, 1),
+    ]
+    # Mid-chunk resumes on a slab boundary (256 tokens at chunk 2048), one rewinding into what slot 2 holds.
+    assert runtime.validate_forward([E(1, 2304, 4352), E(2, 1792, 3840), EMPTY_CHUNK, EMPTY_CHUNK]) == [
+        E(1, 2304, 4352),
+        E(2, 1792, 3840),
+    ]
+    for entries in (
+        [E(0, 6144, 8192)],  # three entries short
+        [E(0, 6144, 8192), EMPTY_CHUNK, EMPTY_CHUNK, EMPTY_CHUNK],  # slot 0 resumes at 4096
+        [E(2, 0, 2048), E(2, 4096, 6144), EMPTY_CHUNK, EMPTY_CHUNK],  # not consecutive
+        [E(2, 0, 1000), E(2, 1000, 2048), EMPTY_CHUNK, EMPTY_CHUNK],  # partial before the run's last entry
+        [E(1, 0, 2048), E(3, 0, 2048), E(1, 2048, 4096), EMPTY_CHUNK],  # slot 1 in two runs
+        [E(4, 0, 2048), EMPTY_CHUNK, EMPTY_CHUNK, EMPTY_CHUNK],  # no such slot
+        [E(1, 2336, 4384), EMPTY_CHUNK, EMPTY_CHUNK, EMPTY_CHUNK],  # tile-aligned but not slab-aligned
+        [EMPTY_CHUNK, E(1, 0, 2048), EMPTY_CHUNK, EMPTY_CHUNK],  # empty before a real entry
+    ):
+        with expect_error(ValueError, "Slot|slot|Entry|entries"):
+            runtime.validate_forward(entries)

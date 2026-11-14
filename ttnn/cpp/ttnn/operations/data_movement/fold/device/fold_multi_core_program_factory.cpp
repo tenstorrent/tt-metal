@@ -16,7 +16,6 @@
 namespace ttnn::operations::data_movement {
 
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 ttnn::device_operation::ProgramArtifacts Fold::MultiCore::create_program_artifacts(
     const operation_attributes_t& operation_attributes,

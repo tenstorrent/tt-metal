@@ -191,6 +191,9 @@ void kernel_main() {
         noc_coord_y = reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(12 + num_mcast_cores));
     }
 
+    const bool has_mid_receivers = num_mcast_cores_mid_group != 0;
+    const bool has_first_receivers = has_mcast_first_group && num_mcast_cores_first_group != 0;
+
     const Noc noc;
     Semaphore<> reduce_receiver_sem(reduce_receiver_semaphore_id);
     Semaphore<> reduce_sender_sem(reduce_sender_semaphore_id);
@@ -417,15 +420,17 @@ void kernel_main() {
                             }
 
                             if constexpr (num_mcast_cores > 1) {
-                                reduce_sender_sem.set_multicast(
-                                    noc,
-                                    mcast_dest_noc_start_x,
-                                    mcast_dest_noc_start_y,
-                                    mcast_dest_noc_end_x,
-                                    mcast_dest_noc_end_y,
-                                    num_mcast_cores_mid_group,
-                                    false);
-                                if (has_mcast_first_group) {
+                                if (has_mid_receivers) {
+                                    reduce_sender_sem.set_multicast(
+                                        noc,
+                                        mcast_dest_noc_start_x,
+                                        mcast_dest_noc_start_y,
+                                        mcast_dest_noc_end_x,
+                                        mcast_dest_noc_end_y,
+                                        num_mcast_cores_mid_group,
+                                        false);
+                                }
+                                if (has_first_receivers) {
                                     reduce_sender_sem.set_multicast(
                                         noc,
                                         mcast_first_group_dest_noc_start_x,
@@ -497,42 +502,37 @@ void kernel_main() {
                         dfb_ex_external.push_back(dfb_ex_external_tiles_required);
 
                         if constexpr (num_mcast_cores > 1) {
-                            uint32_t l1_read_addr_ex;
-                            if (cur_read_iteration== 0) {
-                                dfb_ex.wait_front(1);
-                                l1_read_addr_ex = dfb_ex.get_read_ptr();
-                            } else {
-                                dfb_ex2.wait_front(1);
-                                l1_read_addr_ex = dfb_ex2.get_read_ptr();
-                            }
+                            auto& dfb_ex_current = cur_read_iteration == 0 ? dfb_ex : dfb_ex2;
+                            dfb_ex_current.wait_front(1);
+                            const uint32_t l1_read_addr_ex = dfb_ex_current.get_read_ptr();
 
-                            const MulticastEndpoint mcast_dst;
-                            noc.async_write_multicast(
-                                CoreLocalMem<uint32_t>(l1_read_addr_ex),
-                                mcast_dst,
-                                num_bytes_read,
-                                num_mcast_cores_mid_group,
-                                {},
-                                {.noc_x_start = mcast_dest_noc_start_x, .noc_y_start = mcast_dest_noc_start_y, .noc_x_end = mcast_dest_noc_end_x, .noc_y_end = mcast_dest_noc_end_y, .addr = l1_read_addr_ex},
-                                true);
-                            reduce_sender_sem.set_multicast(
-                                noc,
-                                mcast_dest_noc_start_x,
-                                mcast_dest_noc_start_y,
-                                mcast_dest_noc_end_x,
-                                mcast_dest_noc_end_y,
-                                num_mcast_cores_mid_group,
-                                false);
-
-                            if (has_mcast_first_group) {
-                                const MulticastEndpoint mcast_first_dst;
+                            if (has_mid_receivers) {
                                 noc.async_write_multicast(
                                     CoreLocalMem<uint32_t>(l1_read_addr_ex),
-                                    mcast_first_dst,
+                                    read_ptr_view(dfb_ex_current),
+                                    num_bytes_read,
+                                    num_mcast_cores_mid_group,
+                                    {},
+                                    {.noc_x_start = mcast_dest_noc_start_x, .noc_y_start = mcast_dest_noc_start_y, .noc_x_end = mcast_dest_noc_end_x, .noc_y_end = mcast_dest_noc_end_y},
+                                    true);
+                                reduce_sender_sem.set_multicast(
+                                    noc,
+                                    mcast_dest_noc_start_x,
+                                    mcast_dest_noc_start_y,
+                                    mcast_dest_noc_end_x,
+                                    mcast_dest_noc_end_y,
+                                    num_mcast_cores_mid_group,
+                                    false);
+                            }
+
+                            if (has_first_receivers) {
+                                noc.async_write_multicast(
+                                    CoreLocalMem<uint32_t>(l1_read_addr_ex),
+                                    read_ptr_view(dfb_ex_current),
                                     num_bytes_read,
                                     num_mcast_cores_first_group,
                                     {},
-                                    {.noc_x_start = mcast_first_group_dest_noc_start_x, .noc_y_start = mcast_first_group_dest_noc_start_y, .noc_x_end = mcast_first_group_dest_noc_end_x, .noc_y_end = mcast_first_group_dest_noc_end_y, .addr = l1_read_addr_ex},
+                                    {.noc_x_start = mcast_first_group_dest_noc_start_x, .noc_y_start = mcast_first_group_dest_noc_start_y, .noc_x_end = mcast_first_group_dest_noc_end_x, .noc_y_end = mcast_first_group_dest_noc_end_y},
                                     true);
                                 reduce_sender_sem.set_multicast(
                                     noc,
@@ -545,14 +545,13 @@ void kernel_main() {
                             }
 
                             if (has_mcast_last_group) {
-                                const MulticastEndpoint mcast_last_dst;
                                 noc.async_write_multicast(
                                     CoreLocalMem<uint32_t>(l1_read_addr_ex),
-                                    mcast_last_dst,
+                                    read_ptr_view(dfb_ex_current),
                                     num_bytes_read,
                                     num_mcast_cores_last_group,
                                     {},
-                                    {.noc_x_start = mcast_last_group_dest_noc_start_x, .noc_y_start = mcast_last_group_dest_noc_start_y, .noc_x_end = mcast_last_group_dest_noc_end_x, .noc_y_end = mcast_last_group_dest_noc_end_y, .addr = l1_read_addr_ex},
+                                    {.noc_x_start = mcast_last_group_dest_noc_start_x, .noc_y_start = mcast_last_group_dest_noc_start_y, .noc_x_end = mcast_last_group_dest_noc_end_x, .noc_y_end = mcast_last_group_dest_noc_end_y},
                                     true);
                                 reduce_sender_sem.set_multicast(
                                     noc,
@@ -564,11 +563,7 @@ void kernel_main() {
                                     false);
                             }
                             noc.async_write_barrier();
-                            if (cur_read_iteration == 0) {
-                                dfb_ex.pop_front(1);
-                            } else {
-                                dfb_ex2.pop_front(1);
-                            }
+                            dfb_ex_current.pop_front(1);
                         }
                     }
                 }

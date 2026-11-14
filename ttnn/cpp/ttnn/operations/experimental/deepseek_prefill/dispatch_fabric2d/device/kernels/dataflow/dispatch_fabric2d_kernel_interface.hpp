@@ -120,8 +120,7 @@ constexpr uint32_t MAX_VCS = 16;
 // "Not queued anywhere" -- a page delivered to the next chip's output rather than forwarded again.
 constexpr uint32_t VC_NONE = 0xFFFFFFFFu;
 
-// Floor of four pages a channel: the credit threshold is a quarter of the channel and must stay >= 1, and
-// a channel shallower than a read batch spends all its time announcing.
+// Floor of four pages a channel: the credit threshold is a quarter of the channel and must stay >= 1.
 constexpr uint32_t MIN_VC_PAGES = 4;
 
 // fwd_meta: the routing data a queue entry carries after its token, at entry_base + token_size_bytes.
@@ -154,6 +153,24 @@ struct FwdMetadata {
 // Bytes of fwd_meta a forward hop sends: all of it, so a forwarded packet fills exactly one fwd_section
 // page, the unit the next hop reads back, and its length stays a multiple of the 64 B DRAM alignment.
 constexpr uint32_t FWD_EXTRA_BYTES = FORWARDING_METADATA_SIZE;
+
+// A token crosses a cable as one packet when it and its fwd_meta fit the fabric's max payload, else as two:
+// the first `first_packet_bytes` of it alone, then the rest with the fwd_meta (or the metadata words, on the
+// last hop) behind it. Both packets of a token share the hop's channel, so they land in order and ahead of
+// the flushed bump that announces the page. The split is 64-byte aligned, so both parts start DRAM-aligned on
+// their pages and sit at the same offset modulo 16 in L1 as at their destination.
+//
+// Splitting lets the mesh open with half a token of payload, so the fabric routers never write a whole token
+// into DRAM in one packet (see moe_fabric2d_split_tokens in init_helpers.py).
+constexpr uint32_t first_packet_bytes(uint32_t token_size_bytes, uint32_t max_payload_bytes) {
+    return token_size_bytes + FWD_EXTRA_BYTES <= max_payload_bytes ? token_size_bytes : (token_size_bytes / 2) & ~63u;
+}
+
+// The largest packet a token's split sends: a forward's last part, which carries the whole fwd_meta.
+constexpr uint32_t largest_packet_bytes(uint32_t token_size_bytes, uint32_t first_packet) {
+    const uint32_t last = token_size_bytes - first_packet + FWD_EXTRA_BYTES;
+    return first_packet == token_size_bytes || first_packet < last ? last : first_packet;
+}
 
 // The struct is the forwarding page, so it must not outgrow it. It is exactly full at 64 bytes: adding a
 // field means widening FORWARDING_METADATA_SIZE, which changes the wire format and the page stride.
@@ -245,8 +262,6 @@ struct ScratchGeometry {
     uint32_t topk = 0;
     uint32_t num_forward = 0;  // forward_descriptors_per_stream(extent), the same for every stream
 };
-
-// Chunk starts: one per (forward descriptor, expert), which is also what the outgoing list expands to.
 
 constexpr uint32_t scratch_block_raw_bytes(const ScratchGeometry& g, uint32_t block) {
     switch (block) {

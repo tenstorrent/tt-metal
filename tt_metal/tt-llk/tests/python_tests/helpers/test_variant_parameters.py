@@ -106,6 +106,16 @@ class PACK_UNTILIZE_BENCHMARK(TemplateParameter):
 
 
 @dataclass
+class MATMUL_ROW_MOP(TemplateParameter):
+    """Blackhole matmul: run each reuse row of the block as one MOP instead of one MOP per tile."""
+
+    row_mop: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool MATMUL_ROW_MOP = {str(self.row_mop).lower()};"
+
+
+@dataclass
 class MATH_TRANSPOSE_FACES(TemplateParameter):
     math_transpose_faces: Transpose
 
@@ -492,6 +502,28 @@ class SFPU_POLYGAMMA_ORDER(TemplateParameter):
         return (
             f"#define SFPU_POLYGAMMA_N_BITS {fp32_bits(n):#x}u\n"
             f"#define SFPU_POLYGAMMA_SCALE_BITS {fp32_bits(scale):#x}u"
+        )
+
+
+@dataclass
+class SFPU_SOFTPLUS_PARAMS(TemplateParameter):
+    """beta, 1/beta and the linear threshold for softplus, as fp32 bit patterns.
+
+    Macros, like :class:`SFPU_POLYGAMMA_ORDER`: sfpu_operations.h keeps the
+    beta = 1, threshold = 20 defaults under ``#ifndef``.
+    """
+
+    softplus_beta: float = 1.0
+    softplus_threshold: float = 20.0
+
+    def convert_to_cpp(self) -> str:
+        beta = self.softplus_beta
+        if beta == 0.0:
+            raise ValueError("softplus beta 0 is not a finite 1/beta")
+        return (
+            f"#define SOFTPLUS_TEST_BETA {fp32_bits(beta):#x}u\n"
+            f"#define SOFTPLUS_TEST_BETA_RECIP {fp32_bits(1.0 / beta):#x}u\n"
+            f"#define SOFTPLUS_TEST_THRESHOLD {fp32_bits(self.softplus_threshold):#x}u"
         )
 
 
@@ -1357,10 +1389,15 @@ class TOP32_RM(TemplateParameter):
                       be pre-sorted into descending runs of 32.
     ``via_wrappers``  route every SFPU call through the Metal wrapper layer
                       (``experimental/llk_sfpu/llk_math_deepseek_top32_rm.h``) instead of
-                      calling the ``ckernel::sfpu::`` primitives directly. The wrappers are
-                      thin -- each is the same ``_llk_math_eltwise_unary_sfpu_params_`` call --
-                      so this is the same computation through one more layer, and the only thing
-                      in the tree that calls those 7 entry points at all.
+                      calling the ``ckernel::sfpu::`` primitives directly. The SFPU wrappers
+                      are thin -- each is the same ``_llk_math_eltwise_unary_sfpu_params_``
+                      call -- so on the SFPU side this is the same computation through one more
+                      layer, and the only thing in the tree that calls those 7 entry points at
+                      all. In the plain mode the unpack goes through
+                      ``experimental/llk_unpack_A_top32_rm_api.h`` too, which picks its own
+                      branch (Float32 takes SrcA there, not unpack-to-dest, so those cells differ
+                      from their primitives-path namesakes) and the per-chunk L1 offset, so
+                      ``datum_bytes`` is then only the primitives' fallback for mode 1.
     """
 
     row_elements: int = 64

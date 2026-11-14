@@ -128,7 +128,7 @@ ProgramDescriptor InterleavedToShardedPartialProgramFactory::create_descriptor(
         if (keep_l1_aligned) {
             padded_offset_bytes = tt::align(input_unit_size, hal::get_l1_alignment());
         } else {
-            padded_offset_bytes = tt::align(input_unit_size, input.buffer()->alignment());
+            padded_offset_bytes = tt::align(input_unit_size, input.mesh_buffer().alignment());
         }
     }
 
@@ -445,7 +445,7 @@ void InterleavedToShardedPartialProgramFactory::override_runtime_arguments(
     // per core rather than O(num_cores) descriptor work).
     const uint32_t starting_idx_h = operations::data_movement::detail::calculate_starting_idx_h(
         input_tensor, operation_attributes.num_slices, operation_attributes.slice_index);
-    const uint32_t src_addr = input_tensor.buffer()->address();
+    const uint32_t src_addr = input_tensor.mesh_buffer().address();
     auto* dst_buffer = output.buffer();
     const bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 

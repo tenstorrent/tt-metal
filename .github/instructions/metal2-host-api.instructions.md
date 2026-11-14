@@ -1,6 +1,6 @@
 ---
 description: 'Metal 2.0 Host API Test organization'
-applyTo: 'tests/tt_metal/tt_metal/api/metal2_host_api/**,tt_metal/api/tt-metalium/experimental/metal2_host_api/**,tt_metal/impl/metal2_host_api/**'
+applyTo: 'tests/tt_metal/tt_metal/api/metal2_host_api/**,tt_metal/api/tt-metalium/experimental/metal2_host_api/**,tt_metal/api/tt-metalium/workload/**,tt_metal/api/tt-metalium/vocabulary/**,tt_metal/impl/metal2_host_api/**'
 excludeAgent: "cloud-agent"
 ---
 

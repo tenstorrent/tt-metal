@@ -128,6 +128,9 @@ void kernel_main() {
     // the reader used to do on NoC 0, overlapping the reader's next DRAM read.
     constexpr uint32_t cb_in1_gate = get_compile_time_arg_val(26);
     constexpr bool writer_mcasts_in1 = get_compile_time_arg_val(27) != 0;
+    // The multicast and its mcast_done signal live in the UP_SPLIT branch; without it the
+    // reader would wait for mcast_done forever.
+    static_assert(!writer_mcasts_in1 || writer_split_up != 0, "IN1_WRITER_MCAST requires UP_SPLIT (writer_split_up)");
     // Active-token band, appended after the DOWN_SPLIT block above rather than at 20/21:
     // those slots carry the down-weight args this branch added, so the band moved instead.
     constexpr uint32_t min_active_tokens = get_compile_time_arg_val(28);
@@ -159,7 +162,7 @@ void kernel_main() {
 
     constexpr uint32_t start_accessor_offset = out_args.next_compile_time_args_offset();
     constexpr auto start_args = TensorAccessorArgs<start_accessor_offset>();
-    const auto start_acc = TensorAccessor(start_args, start_addr);
+    [[maybe_unused]] const auto start_acc = TensorAccessor(start_args, start_addr);
 
     constexpr uint32_t up_accessor_offset = start_args.next_compile_time_args_offset();
     constexpr auto up_args = TensorAccessorArgs<up_accessor_offset>();
@@ -189,14 +192,11 @@ void kernel_main() {
     const uint32_t idx_l1 = cb_idx_scratch_buf.get_read_ptr();
     const volatile tt_l1_ptr uint32_t* idx_ptr = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(idx_l1);
 
-    // Read the `start` (= expert_region_offsets) page ONCE into resident L1;
-    // each expert's output slice begins at start[global_id] (token row).
+    // The `start` (= expert_region_offsets) page is resident in cb_start_scratch, which
+    // the host maps to the READER's start CB: the reader's counts broadcast delivered it
+    // with counts/idx, before the counts push the wait above observed. Each expert's output slice begins at
+    // start[global_id] (token row).
     const uint32_t start_l1 = cb_start_scratch_buf.get_write_ptr();
-    {
-        const uint32_t start_page_size = start_acc.get_aligned_page_size();
-        noc.async_read(start_acc, CoreLocalMem<uint32_t>(start_l1), start_page_size, {.page_id = 0}, {});
-        noc.async_read_barrier();
-    }
     const volatile tt_l1_ptr uint32_t* start_ptr = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(start_l1);
 
     // ---- UP_SPLIT up-weight read setup (see header) ----
@@ -277,13 +277,12 @@ void kernel_main() {
                     // K-block, so the live slot is base + (up_seq-1)%2 * slot.
                     constexpr uint32_t kUpNumSlots = 2;
                     CircularBuffer cb_in1_up_buf(cb_in1_up);
-                    const uint32_t up_cb_base = cb_in1_up_buf.get_write_ptr();
                     const uint32_t up_slot_bytes = g_in1_block_num_tiles * up_tile_bytes;
                     for (uint32_t kb = 0; kb < num_blocks_gu; ++kb) {
                         ++up_seq;
                         up_go_sem.wait_min(up_seq);
-                        const uint32_t l1_w_up_block_start = up_cb_base + ((up_seq - 1) % kUpNumSlots) * up_slot_bytes;
-                        uint32_t l1_w_up = l1_w_up_block_start;
+                        const uint32_t up_slot_offset = ((up_seq - 1) % kUpNumSlots) * up_slot_bytes;
+                        uint32_t l1_w_up = cb_in1_up_buf.get_write_ptr() + up_slot_offset;
                         // N-OOB hidden padding columns left UNWRITTEN: their up output lands on
                         // a down K position the down matmul never reduces (the compute bounds
                         // its K-loop by real_k_tiles), so stale L1 is dropped.
@@ -316,14 +315,13 @@ void kernel_main() {
                             CircularBuffer cb_in1_gate_buf(cb_in1_gate);
                             const uint32_t gate_tile_bytes = get_tile_size(cb_in1_gate);
                             const uint32_t gate_slot_bytes = g_in1_block_num_tiles * gate_tile_bytes;
-                            const uint32_t gate_block_start =
-                                cb_in1_gate_buf.get_write_ptr() + ((up_seq - 1) % kUpNumSlots) * gate_slot_bytes;
+                            const uint32_t gate_slot_offset = ((up_seq - 1) % kUpNumSlots) * gate_slot_bytes;
                             // linked=true on both data multicasts and the sem, so the posted
                             // valid-sem write cannot overtake the data (same rationale as the
                             // reader's NoC-0 version this replaces).
                             noc_up.async_write_multicast(
-                                CoreLocalMem<uint32_t>(gate_block_start),
-                                MulticastEndpoint{},
+                                CoreLocalMem<uint32_t>(cb_in1_gate_buf.get_write_ptr() + gate_slot_offset),
+                                cb_in1_gate_buf,
                                 gate_slot_bytes,
                                 in1_num_receivers,
                                 {.offset_bytes = 0},
@@ -331,11 +329,11 @@ void kernel_main() {
                                  .noc_y_start = in1_mc_ny_start,
                                  .noc_x_end = in1_mc_nx_end,
                                  .noc_y_end = in1_mc_ny_end,
-                                 .addr = gate_block_start},
+                                 .offset_bytes = gate_slot_offset},
                                 /*linked=*/true);
                             noc_up.async_write_multicast(
-                                CoreLocalMem<uint32_t>(l1_w_up_block_start),
-                                MulticastEndpoint{},
+                                CoreLocalMem<uint32_t>(cb_in1_up_buf.get_write_ptr() + up_slot_offset),
+                                cb_in1_up_buf,
                                 up_slot_bytes,
                                 in1_num_receivers,
                                 {.offset_bytes = 0},
@@ -343,7 +341,7 @@ void kernel_main() {
                                  .noc_y_start = in1_mc_ny_start,
                                  .noc_x_end = in1_mc_nx_end,
                                  .noc_y_end = in1_mc_ny_end,
-                                 .addr = l1_w_up_block_start},
+                                 .offset_bytes = up_slot_offset},
                                 /*linked=*/true);
                             noc_up.async_writes_flushed();
                             in1_valid_sem.set(1);

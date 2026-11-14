@@ -43,6 +43,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_A         = params.buffer_A;
     const Operand& buffer_B         = params.buffer_B;
 #endif
+    // An output taller than one Dest section runs as blocks of rt_block rows, one section each.
+    const std::uint32_t rt_block   = matmul_rows_per_dest_section<dest_sync, is_fp32_dest_acc_en>(RT_DIM, CT_DIM);
+    const std::uint32_t num_blocks = RT_DIM / rt_block;
 
     set_ttsync_enables<TRACK_ALL>(ckernel::TRISC_ID);
 
@@ -58,11 +61,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_unpack_hw_configure_<ckernel::p_unpacr::UNP_A>(static_cast<DataFormat>(formats.unpack_B_dst));
 
     // transpose in src_A is not supported for quasar
-    _llk_unpack_matmul_init_<UNPACK_TRANSPOSE_FACES>(bfd_a, bfd_b, CT_DIM, RT_DIM, KT_DIM);
+    _llk_unpack_matmul_init_<UNPACK_TRANSPOSE_FACES>(bfd_a, bfd_b, CT_DIM, rt_block, KT_DIM);
 
-    for (std::uint32_t j = 0; j < KT_DIM; j++)
+    // Each block is the next rt_block rows of A; B is shared by every block.
+    for (std::uint32_t block = 0; block < num_blocks; block++)
     {
-        _llk_unpack_matmul_(CT_DIM, RT_DIM, KT_DIM, j, j * CT_DIM);
+        for (std::uint32_t j = 0; j < KT_DIM; j++)
+        {
+            _llk_unpack_matmul_(CT_DIM, rt_block, KT_DIM, block * rt_block * KT_DIM + j, j * CT_DIM);
+        }
     }
 }
 
@@ -84,6 +91,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t RT_DIM = params.RT_DIM;
     const std::uint32_t KT_DIM = params.KT_DIM;
 #endif
+    // An output taller than one Dest section runs as blocks of rt_block rows, one section each.
+    const std::uint32_t rt_block   = matmul_rows_per_dest_section<dest_sync, is_fp32_dest_acc_en>(RT_DIM, CT_DIM);
+    const std::uint32_t num_blocks = RT_DIM / rt_block;
 
     set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
 
@@ -93,13 +103,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // MVMUL via the SrcA 2x sub-datum expansion). Set when SrcA/SrcB are configured as MxFp4_2x_A/B.
     const DataFormat src_a_format = static_cast<DataFormat>(formats.math);
     const DataFormat src_b_format = static_cast<DataFormat>(formats.math);
-    _llk_math_matmul_init_no_mop_<(ckernel::MathFidelity)MATH_FIDELITY, ENABLE_2X_FORMAT>(src_a_format, src_b_format, CT_DIM, RT_DIM);
+    _llk_math_matmul_init_no_mop_<(ckernel::MathFidelity)MATH_FIDELITY, ENABLE_2X_FORMAT>(src_a_format, src_b_format, CT_DIM, rt_block);
 
-    for (std::uint32_t i = 0; i < KT_DIM; i++)
+    // One Dest section per block of rt_block x CT_DIM output tiles.
+    for (std::uint32_t block = 0; block < num_blocks; block++)
     {
-        _llk_math_matmul_block_no_mop_<(ckernel::MathFidelity)MATH_FIDELITY, ENABLE_2X_FORMAT>(src_a_format, src_b_format, CT_DIM, RT_DIM);
+        for (std::uint32_t i = 0; i < KT_DIM; i++)
+        {
+            _llk_math_matmul_block_no_mop_<(ckernel::MathFidelity)MATH_FIDELITY, ENABLE_2X_FORMAT>(src_a_format, src_b_format, CT_DIM, rt_block);
+        }
+        _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
     }
-    _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
 }
 
 #endif
@@ -122,6 +136,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t num_faces = params.num_faces;
     const Operand& buffer_Res     = params.buffer_Res;
 #endif
+    // An output taller than one Dest section runs as blocks of rt_block rows, one section each.
+    const std::uint32_t rt_block   = matmul_rows_per_dest_section<dest_sync, is_fp32_dest_acc_en>(RT_DIM, CT_DIM);
+    const std::uint32_t num_blocks = RT_DIM / rt_block;
 
     set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::PACK>();
 
@@ -129,10 +146,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const auto bfd_pack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(
         ckernel::tensor_shape_from_num_faces(FACE_R_DIM, num_faces), L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
     _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
-    _llk_pack_matmul_init_(bfd_pack, RT_DIM, CT_DIM, 1 /*num_subblocks_c_dim*/);
+    _llk_pack_matmul_init_(bfd_pack, rt_block, CT_DIM, 1 /*num_subblocks_c_dim*/);
 
-    _llk_pack_matmul_(0 /*start_math_dest_tile_idx*/, 0 /*start_l1_tile_idx*/);
-    _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+    for (std::uint32_t block = 0; block < num_blocks; block++)
+    {
+        _llk_pack_matmul_(0 /*start_math_dest_tile_idx*/, block * rt_block * CT_DIM /*start_l1_tile_idx*/);
+        _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+    }
 }
 
 #endif

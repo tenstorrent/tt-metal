@@ -9,14 +9,13 @@
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 namespace ttnn::experimental::prim {
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 using namespace tt;
 
 namespace {
@@ -38,7 +37,7 @@ ConcatenateHeadsDeviceOperation::ConcatenateHeadsProgramFactory::create_program_
     tt::DataFormat dfb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
 
     uint32_t single_tile_size = tt::tile_size(dfb_data_format);
-    TT_ASSERT(tensor_args.input.buffer()->size() % single_tile_size == 0);
+    TT_ASSERT(tensor_args.input.mesh_buffer().device_local_size() % single_tile_size == 0);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      TM Parameters Setup

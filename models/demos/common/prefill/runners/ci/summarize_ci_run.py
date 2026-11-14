@@ -103,7 +103,10 @@ def _publish_json(rec, name):
     if not root:
         print("perf metrics not persisted (PREFILL_SUMMARIES unset)")
         return
-    model, _, config = name.rpartition("_")
+    # The config is the scale-out suffix plus any layout (sc1, sc4, sc4_8x4), so "kimi_k3_sc4_8x4" is kimi_k3 at
+    # sc4_8x4; splitting at the last underscore made it kimi_k3_sc4 at 8x4, which no baseline or summary row names.
+    m = re.fullmatch(r"(.+)_(sc\d+(?:_[0-9a-z]+)?)", name)
+    model, config = m.groups() if m else (name.rpartition("_")[0], name.rpartition("_")[2])
     rec = {"name": name, "model": model or name, "config": config or "unknown", **rec}
     try:
         out = os.path.join(root, "perf_json")
@@ -168,6 +171,7 @@ def _perf_metrics(spans, chunk_size, pipeline_ranks, probe_chunks=None):
         out.append("chunk_time, ttft: n/a (the runner acks each chunk in one message)")
     else:
         out.append("chunk_time = the chunk's first layer ack -> its last layer ack")
+        rec["chunk_time_curve_ms"] = [(span[1] - span[0]) * 1000.0 for span in spans]
         for lbl, d in probes((0, 50000, max_seq // 2, max_seq - chunk_size)):
             rec["chunk_index"][lbl] = d
             rec["chunk_time_ms"][lbl] = (spans[d][1] - spans[d][0]) * 1000.0

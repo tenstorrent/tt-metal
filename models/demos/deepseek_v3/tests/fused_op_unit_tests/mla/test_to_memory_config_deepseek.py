@@ -9,7 +9,7 @@ from tracy import signpost
 
 import ttnn
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from tests.ttnn.utils_for_testing import assert_equal
+from tt_py_test_utils_common.utils_for_testing import assert_equal
 
 
 @pytest.mark.parametrize("batch_size", [32])

@@ -87,8 +87,8 @@ bool use_direct_reduce_scatter(
     }
     // Size gate: physical per-device input bytes, so block-float dtypes are counted as they actually
     // land in DRAM rather than by logical element count.
-    const auto* buffer = input_tensor.buffer();
-    return buffer != nullptr && static_cast<uint64_t>(buffer->size()) <= k_direct_rs_max_input_bytes;
+    const auto* buffer = &input_tensor.mesh_buffer();
+    return buffer != nullptr && static_cast<uint64_t>(buffer->device_local_size()) <= k_direct_rs_max_input_bytes;
 }
 
 }  // namespace
@@ -182,7 +182,7 @@ ttnn::Tensor reduce_scatter(
             // Non-const so decltype(key) is a valid std::set value_type.
             auto key = std::make_tuple(
                 ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis),
-                input_tensor.buffer()->size(),
+                input_tensor.mesh_buffer().device_local_size(),
                 static_cast<int>(input_tensor.dtype()),
                 normalized_dim);
             static std::mutex direct_warned_mutex;
@@ -198,7 +198,7 @@ ttnn::Tensor reduce_scatter(
                     "reduce_scatter: taking the DIRECT (one-shot) path -- num_devices={}, per-device input "
                     "{} B (gate {} B), dtype={}, scatter dim={}, shape={}.",
                     std::get<0>(key),
-                    input_tensor.buffer()->size(),
+                    input_tensor.mesh_buffer().device_local_size(),
                     k_direct_rs_max_input_bytes,
                     input_tensor.dtype(),
                     normalized_dim,

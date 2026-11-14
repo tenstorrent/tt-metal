@@ -10,6 +10,7 @@ from typing import Callable, Optional
 
 import ttnn
 import ttml
+from ttml.common.utils import scaled_dot_product_attention_auto
 from ttml.modules import AbstractModuleBase, LinearLayer, ColumnParallelLinear, RowParallelLinear, RunMode
 
 
@@ -21,8 +22,9 @@ class GroupedQueryAttention(AbstractModuleBase):
     uses ``RowParallelLinear`` with ``input_is_parallel=True``. This avoids redundant
     communication between the two matmuls.
 
-    ``use_composite_sdpa`` selects ``scaled_dot_product_attention_composite``,
-    which also accepts non-broadcast masks such as ``(B, 1, S, S)``.
+    ``use_composite_sdpa`` selects ``scaled_dot_product_attention_composite`` for the
+    forward without a KV cache; it also accepts non-broadcast masks such as ``(B, 1, S, S)``.
+    The KV-cache forward picks the fused SDPA for a ``[1, 1, S, S]`` mask and the composite otherwise.
     """
 
     def __init__(
@@ -109,13 +111,20 @@ class GroupedQueryAttention(AbstractModuleBase):
                 bias_init=ttml.init.zeros(),
             )
 
-    def forward_no_kv(self, input: ttml.autograd.Tensor, mask: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
+    def forward_no_kv(
+        self,
+        input: ttml.autograd.Tensor,
+        mask: ttml.autograd.Tensor,
+        rope_positions: Optional[ttml.ops.rope.RotaryEmbeddingPositions] = None,
+    ) -> ttml.autograd.Tensor:
         qkv = self.qkv_linear(input)
 
         q_heads, k_heads, v_heads = ttml.ops.multi_head_utils.heads_creation(qkv, self.num_heads, self.num_groups)
 
-        q_heads = ttml.ops.rope.rope(q_heads, self.rope_params)
-        k_heads = ttml.ops.rope.rope(k_heads, self.rope_params)
+        token_pos = 0 if rope_positions is None else rope_positions
+
+        q_heads = ttml.ops.rope.rope(q_heads, self.rope_params, token_pos)
+        k_heads = ttml.ops.rope.rope(k_heads, self.rope_params, token_pos)
 
         attention = self.sdpa_op(q_heads, k_heads, v_heads, mask)
         attention = ttml.ops.multi_head_utils.heads_fusion(attention)
@@ -135,12 +144,13 @@ class GroupedQueryAttention(AbstractModuleBase):
         kv_cache: ttml.models.KvCache,
         layer_idx: int,
         new_tokens: int,
+        rope_positions: Optional[ttml.ops.rope.RotaryEmbeddingPositions] = None,
     ) -> ttml.autograd.Tensor:
         qkv = self.qkv_linear(input)
 
         q_heads, k_heads, v_heads = ttml.ops.multi_head_utils.heads_creation(qkv, self.num_heads, self.num_groups)
 
-        token_pos = kv_cache.get_cache_position()
+        token_pos = kv_cache.get_cache_position() if rope_positions is None else rope_positions
 
         q_heads = ttml.ops.rope.rope(q_heads, self.rope_params, token_pos)
         k_heads = ttml.ops.rope.rope(k_heads, self.rope_params, token_pos)
@@ -164,7 +174,7 @@ class GroupedQueryAttention(AbstractModuleBase):
         k_cache_to_process = ttml.autograd.create_tensor(k_cache_slice)
         v_cache_to_process = ttml.autograd.create_tensor(v_cache_slice)
 
-        attention = self.sdpa_op(q_heads, k_cache_to_process, v_cache_to_process, mask)
+        attention = scaled_dot_product_attention_auto(q_heads, k_cache_to_process, v_cache_to_process, mask)
         attention = ttml.ops.multi_head_utils.heads_fusion(attention)
 
         out = self.out_linear(attention)
@@ -182,9 +192,10 @@ class GroupedQueryAttention(AbstractModuleBase):
         kv_cache: Optional[ttml.models.KvCache] = None,
         layer_idx: Optional[int] = None,
         new_tokens: Optional[int] = None,
+        rope_positions: Optional[ttml.ops.rope.RotaryEmbeddingPositions] = None,
     ) -> ttml.autograd.Tensor:
         if kv_cache is None:
-            return self.forward_no_kv(input, mask)
+            return self.forward_no_kv(input, mask, rope_positions)
         if layer_idx is None or new_tokens is None:
             raise ValueError("forward with kv_cache requires layer_idx and new_tokens to be set")
-        return self.forward_kv(input, mask, kv_cache, layer_idx, new_tokens)
+        return self.forward_kv(input, mask, kv_cache, layer_idx, new_tokens, rope_positions)

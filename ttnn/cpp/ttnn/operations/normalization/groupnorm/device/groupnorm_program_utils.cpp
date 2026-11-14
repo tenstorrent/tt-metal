@@ -311,6 +311,7 @@ void split_and_form_rectangle_grids(
         mcast_group_last.push_back(mcast_group_mid.back());
         mcast_group_mid.pop_back();
     }
+    std::reverse(mcast_group_last.begin(), mcast_group_last.end());
 }
 
 std::pair<uint32_t, uint32_t> find_max_tile_span(uint32_t W, uint32_t group_size, uint32_t tile_width) {

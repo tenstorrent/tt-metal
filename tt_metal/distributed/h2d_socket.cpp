@@ -14,9 +14,11 @@
 #include <tt-metalium/experimental/sockets/hd_socket_descriptor.hpp>
 #include "tt_metal/distributed/pcie_core_writer.hpp"
 #include <tt-metalium/experimental/sockets/shm_resource_tracker.hpp>
+#include <tt-umd/driver_atomics.hpp>
 #include "tt_metal/impl/buffers/h2d_socket_internal.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_impl.hpp"
+#include "impl/dispatch/host_transfer_stats.hpp"
 #include "distributed/mesh_device_impl.hpp"
 #include "tt_metal/hw/inc/hostdev/socket.h"
 #include "tt_metal/llrt/tt_cluster.hpp"
@@ -33,7 +35,6 @@
 #include <cstdlib>
 #include <cstring>
 #include <stdexcept>
-#include <sys/mman.h>
 #include <unistd.h>
 
 namespace tt::tt_metal::distributed {
@@ -328,7 +329,7 @@ void H2DSocketImpl::init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_de
     // Receiver core type is recorded explicitly at construction (the DRAM-recv
     // ctor sets Dram, every other path is Tensix). Used to resolve the virtual
     // coordinate — logical coords overlap across core types, so this can't be
-    // inferred from coordinates here — and to pick the window's ordering below.
+    // inferred from coordinates here.
     const CoreType recv_umd_core_type = (recv_core_type_ == RecvCoreType::Dram) ? CoreType::DRAM : CoreType::TENSIX;
 
     uint32_t recv_device_id;
@@ -382,13 +383,11 @@ void H2DSocketImpl::init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_de
     // per-write driver reconfig. The window holds one of the device's TLBs until the socket is destroyed;
     // when none is free, the socket writes through cluster.write_core, which holds none.
     //
-    // A DRAM core acknowledges a NOC write only once its L1 has taken the write over AXI, and a Strict
-    // window holds each write until the one before it is acknowledged, so it moves one write per round
-    // trip (about 0.4 us per 128 B page). A DRAM receiver's window posts its writes instead, on a static
-    // write VC: a NOC packet on a dynamic VC may switch VCs at each router, and a DRAM core gives each VC
-    // its own AXI ID, so a bytes_sent update could overtake the pages it counts; on one VC, writes to the
-    // receiver arrive in the order they were made.
-    const bool dram_receiver = recv_core_type_ == RecvCoreType::Dram;
+    // The window posts its writes on a static write VC. A Strict window would wait for each write's ack, one
+    // write per round trip (about 0.4 us per 128 B page into a DRAM core; the strict MMIO rate into Tensix L1,
+    // #64622). Posted writes are ordered only by the VC: a packet on a dynamic VC may switch VCs at each router
+    // (and a DRAM core gives each VC its own AXI ID), so bytes_sent could overtake the pages it counts; on one
+    // static VC, writes to the receiver arrive in issue order. Nothing reads through this write-only window.
     if (!cluster.is_mock_or_emulated() && env.get_hal().get_arch() == tt::ARCH::BLACKHOLE) {
         std::unique_ptr<tt::umd::IoWindow> window;
         try {
@@ -397,9 +396,9 @@ void H2DSocketImpl::init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_de
                 cluster.get_soc_desc(recv_device_id).get_coord_at(recv_virtual_core, tt::CoordSystem::TRANSLATED),
                 /*addr=*/l1_offset,
                 /*host=*/{},
-                dram_receiver ? tt::umd::IoOrdering::Posted : tt::umd::IoOrdering::Strict,
+                tt::umd::IoOrdering::Posted,
                 /*core_end=*/std::nullopt,
-                dram_receiver ? tt::umd::WindowFlags::UnicastWrite : tt::umd::WindowFlags::None);
+                tt::umd::WindowFlags::UnicastWrite);
         } catch (const std::runtime_error& e) {
             log_warning(
                 LogMetal,
@@ -446,6 +445,7 @@ H2DSocketImpl::H2DSocketImpl(
     pinned_memory_(nullptr),
     h2d_mode_(h2d_mode),
     mesh_device_(mesh_device.get()),
+    transfer_stats_(&mesh_device->impl().metal_context().host_transfer_stats()),
     rank_owns_endpoint_(rank_owns_host_socket_endpoint(mesh_device.get(), recv_core)) {
     MeshCoordinateRangeSet recv_device_range_set;
     recv_device_range_set.merge(MeshCoordinateRange(recv_core_.device_coord));
@@ -507,6 +507,7 @@ H2DSocketImpl::H2DSocketImpl(
     pcie_alignment_(mesh_device->impl().metal_env().get_hal().get_alignment(HalMemType::HOST)),
     pinned_memory_(nullptr),
     mesh_device_(mesh_device.get()),
+    transfer_stats_(&mesh_device->impl().metal_context().host_transfer_stats()),
     rank_owns_endpoint_(rank_owns_host_socket_endpoint(mesh_device.get(), recv_core)),
     dram_l1_noc_offset_(dram_l1_noc_offset),
     recv_core_type_(RecvCoreType::Dram) {
@@ -571,6 +572,7 @@ H2DSocketImpl::H2DSocketImpl(
     pinned_memory_(nullptr),
     h2d_mode_(h2d_mode),
     mesh_device_(&mesh_device),
+    transfer_stats_(&mesh_device.impl().metal_context().host_transfer_stats()),
     rank_owns_endpoint_(rank_owns_host_socket_endpoint(&mesh_device, recv_l2cpu)),
     is_l2cpu_(true) {
     // Helpers below still take a shared_ptr; the socket itself stores only a raw
@@ -807,6 +809,12 @@ bool H2DSocketImpl::acked_past(uint32_t watermark) {
     return bytes_sent_ - bytes_acked_ <= bytes_since_watermark;
 }
 
+void H2DSocketImpl::count_staged_bytes(uint32_t num_bytes) {
+    if (transfer_stats_ != nullptr && transfer_stats_->enabled()) {
+        transfer_stats_->add_bytes(HostTransferCategory::SocketPull, num_bytes);
+    }
+}
+
 void H2DSocketImpl::push_bytes(uint32_t num_bytes) {
     if (write_ptr_ + num_bytes >= fifo_curr_size_) {
         write_ptr_ = write_ptr_ + num_bytes - fifo_curr_size_;
@@ -910,11 +918,13 @@ void H2DSocketImpl::write(void* data, uint32_t num_pages) {
     this->reserve_bytes(num_bytes);
 
     if (h2d_mode_ == H2DMode::HOST_PUSH) {
+        ScopedHostTransfer transfer_stats(transfer_stats_, HostTransferCategory::SocketPush, num_bytes);
         pcie_writer(data, num_bytes, data_addr);
         tt_driver_atomics::sfence();
     } else {
         uint32_t* data_ptr = host_buffer_.get() + (write_ptr_ / sizeof(uint32_t));
         std::memcpy(data_ptr, data, num_bytes);
+        this->count_staged_bytes(num_bytes);
     }
     this->push_bytes(num_bytes);
     this->notify_receiver();
@@ -941,11 +951,13 @@ bool H2DSocketImpl::try_write(void* data, uint32_t num_pages) {
 
     auto data_addr = aligned_data_buf_start_ + write_ptr_;
     if (h2d_mode_ == H2DMode::HOST_PUSH) {
+        ScopedHostTransfer transfer_stats(transfer_stats_, HostTransferCategory::SocketPush, num_bytes);
         pcie_writer(data, num_bytes, data_addr);
         tt_driver_atomics::sfence();
     } else {
         uint32_t* data_ptr = host_buffer_.get() + (write_ptr_ / sizeof(uint32_t));
         std::memcpy(data_ptr, data, num_bytes);
+        this->count_staged_bytes(num_bytes);
     }
     this->push_bytes(num_bytes);
     this->notify_receiver();
@@ -978,9 +990,15 @@ uint32_t H2DSocketImpl::try_stage(const uint8_t* const* pages, uint32_t num_page
         if (h2d_mode_ == H2DMode::HOST_PUSH) {
             stage_buffer_.resize(num_bytes);
             gather(stage_buffer_.data());
+            ScopedHostTransfer transfer_stats(transfer_stats_, HostTransferCategory::SocketPush, num_bytes);
             pcie_writer(stage_buffer_.data(), num_bytes, aligned_data_buf_start_ + write_ptr_);
+            // publish_staged() fences the pages later. With stats on, fence here so the timed push includes it.
+            if (transfer_stats_ != nullptr && transfer_stats_->enabled()) {
+                tt_driver_atomics::sfence();
+            }
         } else {
             gather(reinterpret_cast<uint8_t*>(host_buffer_.get()) + write_ptr_);
+            this->count_staged_bytes(num_bytes);
         }
         this->push_bytes(num_bytes);
         staged += run;
@@ -1188,6 +1206,10 @@ void H2DSocketTryWriteAccess::publish_staged(ttsl::Span<distributed::H2DSocket* 
         socket->notify_receiver_unfenced();
     }
     tt_driver_atomics::sfence();
+}
+
+bool H2DSocketTryWriteAccess::writes_through_window(const distributed::H2DSocket& socket) {
+    return socket.pimpl_->writes_through_window();
 }
 
 std::unique_ptr<distributed::H2DSocket> H2DSocketDramRecvAccess::create(

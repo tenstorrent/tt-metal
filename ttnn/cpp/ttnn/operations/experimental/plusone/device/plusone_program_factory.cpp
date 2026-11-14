@@ -13,14 +13,13 @@
 #include <tt-metalium/math.hpp>
 #include "ttnn/operation.hpp"
 #include "ttnn/metal_v2_artifacts.hpp"
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 namespace ttnn::experimental::prim {
 
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 ttnn::device_operation::ProgramArtifacts PlusOneProgramFactory::create_program_artifacts(
     const PlusoneParams& operation_attributes, const Tensor& input, Tensor& /*tensor_return_value*/) {
@@ -49,8 +48,8 @@ ttnn::device_operation::ProgramArtifacts PlusOneProgramFactory::create_program_a
     }
 
     uint32_t num_input_units = W;
-    auto* src_buffer = input.buffer();
-    bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    const auto* src_buffer = &input.mesh_buffer();
+    bool src_is_dram = src_buffer->device_local_config().buffer_type == tt::tt_metal::BufferType::DRAM;
     const uint32_t page_alignment =
         src_is_dram ? tt::tt_metal::hal::get_dram_alignment() : tt::tt_metal::hal::get_l1_alignment();
     uint32_t aligned_input_page_size = tt::align(num_input_units * input_unit_size, page_alignment);

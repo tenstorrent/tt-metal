@@ -25,6 +25,11 @@ struct IndexedEntryCopyDeviceOperation {
 };
 
 Tensor indexed_entry_copy(
-    const Tensor& source, const Tensor& destination, const Tensor& index, uint32_t index_scale, uint32_t index_offset);
+    const Tensor& source,
+    const Tensor& destination,
+    const Tensor& index,
+    uint32_t index_scale,
+    uint32_t index_offset,
+    const std::optional<Tensor>& zero_fill_at_zero);
 
 }  // namespace ttnn::experimental::prim

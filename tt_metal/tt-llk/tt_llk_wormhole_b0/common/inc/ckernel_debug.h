@@ -159,7 +159,7 @@ inline void dbg_thread_unhalt()
 // Reads the config from the RISC, so queued config writes must have landed first.
 inline InstrModLoadStore dbg_dest_row_save_mode()
 {
-    return (cfg_read(ALU_ACC_CTRL_SFPU_Fp32_enabled_ADDR32) & ALU_ACC_CTRL_SFPU_Fp32_enabled_MASK) ? InstrModLoadStore::INT32 : InstrModLoadStore::LO16;
+    return (cfg_read(ALU_ACC_CTRL_SFPU_Fp32_enabled_ADDR32) & ALU_ACC_CTRL_SFPU_Fp32_enabled_MASK) ? InstrModLoadStore::INT32 : InstrModLoadStore::UINT16;
 }
 
 inline void dbg_get_array_row(const std::uint32_t array_id, const std::uint32_t row_addr, std::uint32_t *rd_data)
@@ -172,7 +172,7 @@ inline void dbg_get_array_row(const std::uint32_t array_id, const std::uint32_t 
     }
 
     // The same mode must save and restore the borrowed row; read it once, after queued config writes land.
-    InstrModLoadStore save_mode = InstrModLoadStore::LO16;
+    InstrModLoadStore save_mode = InstrModLoadStore::UINT16;
     if (array_id == dbg_array_id::SRCA)
     {
         tensix_sync();

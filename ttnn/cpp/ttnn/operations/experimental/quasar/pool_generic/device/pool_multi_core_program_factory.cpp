@@ -16,8 +16,8 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/storage.hpp"
 
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/tensor/tensor_apis.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/mesh_device.hpp>
@@ -40,7 +40,6 @@
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace ttnn::operations::pool::quasar {
 
@@ -255,7 +254,7 @@ std::vector<uint32_t> generate_core_starting_indices(
     for (const auto& item : shard_boundaries) {
         const auto& [output_shard_start, _] = item.output_range;
         if (output_shard_start >= op_trace_metadata.size()) {
-            starting_indices.push_back(0);
+            starting_indices.insert(starting_indices.end(), repeat_factor, 0);
             continue;
         }
         TT_ASSERT(item.input_range.start == op_trace_metadata[output_shard_start]);
