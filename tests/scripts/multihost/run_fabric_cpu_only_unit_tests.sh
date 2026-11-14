@@ -356,6 +356,7 @@ set +e
 ####################################
 if run_group "unit"; then
 
+run_test env TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/umd/tests/cluster_descriptor_examples/wormhole_N150.yaml ./build/test/tt_metal/distributed/distributed_mpi_cleanup_tests --gtest_filter="MpiResourceCleanupTest.*"
 run_test ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FabricTopologyHelpers*"
 run_test env TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/tt-cluster-descriptors/wormhole/t3k_cluster_desc/t3k_cluster_desc.yaml ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MockClusterTopologyFixture*"
 run_test env TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/tt-cluster-descriptors/wormhole/6u_cluster_desc/6u_cluster_desc.yaml ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MockClusterTopologyFixture*"

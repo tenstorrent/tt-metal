@@ -7,15 +7,41 @@
 #include <tt_stl/assert.hpp>
 #include <algorithm>
 #include <cstring>
+#include <string_view>
 
 namespace tt::tt_metal::distributed::multihost {
+
+// Collectives follow MPI on a one-rank communicator, so code written for MPI also runs in a process that was not
+// launched as part of an MPI job.
+namespace {
+
+void check_root(Rank root, std::string_view op) {
+    TT_FATAL(*root == 0, "{}: root {} out of range for a single-host context", op, *root);
+}
+
+void copy_to_recv(ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf, std::string_view op) {
+    TT_FATAL(
+        recv_buf.size() == send_buf.size(),
+        "{}: recv buffer {} bytes, expected {}",
+        op,
+        recv_buf.size(),
+        send_buf.size());
+    if (send_buf.data() != recv_buf.data()) {
+        std::copy(send_buf.begin(), send_buf.end(), recv_buf.begin());
+    }
+}
+
+}  // namespace
+
 // ---------------------------------------------------------------------
 //                           Context implementation
 // ---------------------------------------------------------------------
 SingleHostContext::SingleHostContext() : rank_(0), size_(1) { id_ = DistributedContext::generate_unique_id(); }
 
 void SingleHostContext::create(int argc [[maybe_unused]], char** argv [[maybe_unused]]) {
-    current_world_ = std::make_shared<SingleHostContext>();
+    if (!current_world_) {
+        current_world_ = std::make_shared<SingleHostContext>();
+    }
 }
 
 const ContextPtr& SingleHostContext::get_current_world() {
@@ -42,7 +68,7 @@ bool SingleHostContext::is_revoked() { return false; }
 
 void SingleHostContext::abort(int error_code) const { std::exit(error_code); }
 
-void SingleHostContext::barrier() const { return; }
+void SingleHostContext::barrier() const {}
 
 void SingleHostContext::send(
     ttsl::Span<std::byte> buf [[maybe_unused]], Rank dest [[maybe_unused]], Tag tag [[maybe_unused]]) const {
@@ -69,8 +95,8 @@ RequestPtr SingleHostContext::irecv(
     TT_THROW("method irecv is unsupported for single-host distributed contexts.");
 }
 
-void SingleHostContext::broadcast(ttsl::Span<std::byte> buf [[maybe_unused]], Rank root [[maybe_unused]]) const {
-    TT_THROW("method broadcast is unsupported for single-host distributed contexts.");
+void SingleHostContext::broadcast(ttsl::Span<std::byte> buf [[maybe_unused]], Rank root) const {
+    check_root(root, "broadcast");
 }
 
 void SingleHostContext::all_reduce(
@@ -95,77 +121,69 @@ void SingleHostContext::all_reduce(
 }
 
 void SingleHostContext::reduce(
-    ttsl::Span<std::byte> send_buf [[maybe_unused]],
-    ttsl::Span<std::byte> recv_buf [[maybe_unused]],
-    ReduceOp op [[maybe_unused]],
-    DType dtype [[maybe_unused]],
-    Rank root [[maybe_unused]]) const {
-    TT_THROW("method reduce is unsupported for single-host distributed contexts.");
+    ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf, ReduceOp op, DType dtype, Rank root) const {
+    check_root(root, "reduce");
+    all_reduce(send_buf, recv_buf, op, dtype);
 }
 
-void SingleHostContext::gather(
-    ttsl::Span<std::byte> send_buf [[maybe_unused]],
-    ttsl::Span<std::byte> recv_buf [[maybe_unused]],
-    Rank root [[maybe_unused]]) const {
-    TT_THROW("method gather is unsupported for single-host distributed contexts.");
+void SingleHostContext::gather(ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf, Rank root) const {
+    check_root(root, "gather");
+    copy_to_recv(send_buf, recv_buf, "gather");
 }
 
-void SingleHostContext::scatter(
-    ttsl::Span<std::byte> send_buf [[maybe_unused]],
-    ttsl::Span<std::byte> recv_buf [[maybe_unused]],
-    Rank root [[maybe_unused]]) const {
-    TT_THROW("method scatter is unsupported for single-host distributed contexts.");
+void SingleHostContext::scatter(ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf, Rank root) const {
+    check_root(root, "scatter");
+    copy_to_recv(send_buf, recv_buf, "scatter");
 }
 
 void SingleHostContext::all_gather(ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf) const {
-    TT_FATAL(
-        recv_buf.size() == send_buf.size(),
-        "all_gather: recv buffer {} bytes, expected {} (world × send)",
-        recv_buf.size(),
-        send_buf.size());
-
-    std::copy(send_buf.begin(), send_buf.end(), recv_buf.begin());
+    copy_to_recv(send_buf, recv_buf, "all_gather");
 }
 
-void SingleHostContext::all_to_all(
-    ttsl::Span<std::byte> send_buf [[maybe_unused]], ttsl::Span<std::byte> recv_buf [[maybe_unused]]) const {
-    TT_THROW("method all_to_all is unsupported for single-host distributed contexts.");
+void SingleHostContext::all_to_all(ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf) const {
+    copy_to_recv(send_buf, recv_buf, "all_to_all");
 }
 
 void SingleHostContext::reduce_scatter(
-    ttsl::Span<std::byte> send_buf [[maybe_unused]],
-    ttsl::Span<std::byte> recv_buf [[maybe_unused]],
-    ReduceOp op [[maybe_unused]],
-    DType dtype [[maybe_unused]]) const {
-    TT_THROW("method reduce_scatter is unsupported for single-host distributed contexts.");
+    ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf, ReduceOp op, DType dtype) const {
+    all_reduce(send_buf, recv_buf, op, dtype);
 }
 
 void SingleHostContext::scan(
-    ttsl::Span<std::byte> send_buf [[maybe_unused]],
-    ttsl::Span<std::byte> recv_buf [[maybe_unused]],
-    ReduceOp op [[maybe_unused]],
-    DType dtype [[maybe_unused]]) const {
-    TT_THROW("method scan is unsupported for single-host distributed contexts.");
+    ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf, ReduceOp op, DType dtype) const {
+    all_reduce(send_buf, recv_buf, op, dtype);
 }
 
 void SingleHostContext::translate_ranks_to_other_ctx(
-    ttsl::Span<int> ranks [[maybe_unused]],
-    const ContextPtr& other_ctx [[maybe_unused]],
-    ttsl::Span<int> translated_ranks [[maybe_unused]]) const {
-    TT_THROW("method translate_ranks_to_other_ctx is unsupported for single-host distributed contexts.");
+    ttsl::Span<int> ranks, const ContextPtr& other_ctx, ttsl::Span<int> translated_ranks) const {
+    TT_FATAL(
+        ranks.size() == translated_ranks.size(),
+        "translate_ranks_to_other_ctx: ranks size {} != translated_ranks size {}",
+        ranks.size(),
+        translated_ranks.size());
+    TT_FATAL(
+        std::dynamic_pointer_cast<SingleHostContext>(other_ctx) != nullptr,
+        "translate_ranks_to_other_ctx: other_ctx is not a SingleHostContext");
+    for (std::size_t i = 0; i < ranks.size(); ++i) {
+        TT_FATAL(
+            ranks[i] == 0, "translate_ranks_to_other_ctx: rank {} out of range for a single-host context", ranks[i]);
+        translated_ranks[i] = 0;
+    }
 }
 
-ContextPtr SingleHostContext::duplicate() const {
-    TT_THROW("method duplicate is unsupported for single-host distributed contexts.");
-}
+ContextPtr SingleHostContext::duplicate() const { return std::make_shared<SingleHostContext>(); }
 
 ContextPtr SingleHostContext::split(Color color [[maybe_unused]], Key key [[maybe_unused]]) const {
     // nop on single-host context
     return get_current_world();
 }
 
-ContextPtr SingleHostContext::create_sub_context(ttsl::Span<int> ranks [[maybe_unused]]) const {
-    TT_THROW("method create_sub_context is unsupported for single-host distributed contexts.");
+ContextPtr SingleHostContext::create_sub_context(ttsl::Span<int> ranks) const {
+    TT_FATAL(
+        ranks.size() == 1 && ranks[0] == 0,
+        "create_sub_context: a single-host context only has rank 0, got {} ranks",
+        ranks.size());
+    return std::make_shared<SingleHostContext>();
 }
 
 void SingleHostContext::revoke_and_shrink() {
