@@ -4,8 +4,8 @@
 Measured inputs (every number has a source):
  plain trace-only step B=4 (integ m1, flags HY4_POOL=1 SCALED_FP8 OPT=all IHC_FUSED SKINNY XMerge): 62.2 / 67.6 / 69.5 ms at 2k / 64k / 1M          [program/integ/STEPS.md "FINAL measured plain decode step"]
  MoE routed+shared per layer, global rows T = 4 / 8 / 16: 363 / 430 / 584 us                                                                    [layer-moe, speedup.py MOE_US]
- attention chain per FULL-indexer layer (score+select+filter+attend) S = 1 / 2 / 4 rows, ctx 2k / 64k / 1M, us (verify-rows L1.out):
-     2k 259/288/332   64k 368/443/540   1M 452/521/635 ; shared (IndexCache) layers: attend only 149/171/206 (2k), 148/175/206 (64k), 156/180/218 (1M)
+ attention chain per FULL-indexer layer (score+select+filter+attend) S = 1 / 2 / 4 rows, ctx 2k / 64k / 1M, us (verify-rows RESULT.md, merged code):
+     2k 256/260/284   64k 347/369/397   1M 431/452/513 ; shared (IndexCache) layers: attend only 149/147/166 (2k), 146/148/165 (64k), 153/160/187 (1M)
  MTP layer pass WITHOUT routed experts (this task, bench2/bench3 logs): S=1 and S=4 rows, see MTP_US below; lm_head + greedy sampler 0.62 ms (bench: layer+head+sample minus layer)
 """
 import sys
@@ -15,15 +15,15 @@ from models.demos.blackhole.hy4_preview.spec.policy import expected_tokens
 CTX = ("2k", "64k", "1M")
 PLAIN = dict(zip(CTX, (62.2, 67.6, 69.5)))
 MOE = {4: 363.0, 8: 430.0, 16: 584.0}
-FULL = {  # ctx -> {S: us per full layer}
-    "2k": {1: 259.1, 2: 288.3, 4: 331.5},
-    "64k": {1: 368.2, 2: 443.4, 4: 539.8},
-    "1M": {1: 452.2, 2: 521.3, 4: 635.0},
+FULL = {  # ctx -> {S: us per full layer}  (verify-rows RESULT.md latency table, compact attend + A1 merge, merged b633624e336)
+    "2k": {1: 256.0, 2: 260.0, 4: 284.0},
+    "64k": {1: 347.0, 2: 369.0, 4: 397.0},
+    "1M": {1: 431.0, 2: 452.0, 4: 513.0},
 }
 SHARED_ATT = {
-    "2k": {1: 148.9, 2: 171.2, 4: 206.2},
-    "64k": {1: 148.4, 2: 175.1, 4: 205.5},
-    "1M": {1: 155.6, 2: 180.1, 4: 218.1},
+    "2k": {1: 149.0, 2: 147.0, 4: 166.0},
+    "64k": {1: 146.0, 2: 148.0, 4: 165.0},
+    "1M": {1: 153.0, 2: 160.0, 4: 187.0},
 }
 # MTP layer (no routed experts) us per call, S rows: filled from bench2 (S=1) / bench3 (S=4); S=2 interpolated
 MTP_US = {"2k": {1: 1482.0, 4: 1650.0}, "64k": {1: 1596.0, 4: 1778.0}, "1M": {1: 2330.0, 4: 2508.0}}

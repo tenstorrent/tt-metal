@@ -303,4 +303,14 @@ class Hy4PoolDecoder(Hy4Decoder):
 
     def prepare_blocks(self):
         """per-layer MoE blocks at batch_per_device = S (weights shared with the S = 1 blocks: ``for_batch``); call BEFORE any trace capture."""
-        self._blks = [None if ly.spec.mlp == DENSE else ly.blk.for_batch(self.S) for ly in self.ch.layers]
+        self._blks, self.blk_buffers = [], None
+        for ly in self.ch.layers:
+            if ly.spec.mlp == DENSE:
+                self._blks.append(None)
+                continue
+            nb = ly.blk.for_batch(
+                self.S, buffers=self.blk_buffers
+            )  # ONE dispatch / combine scratch set at the new size shared by all layers (``for_batch`` allocates a new set when ``buffers`` is None)
+            if self.blk_buffers is None:
+                self.blk_buffers = nb.decode.buffers
+            self._blks.append(nb)

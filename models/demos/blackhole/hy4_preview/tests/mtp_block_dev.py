@@ -85,10 +85,12 @@ def main():
                         md, ids[p0 + 1 : p0 + S + 1].reshape(1, S).to(torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT
                     )
                     h = upload(md, H[p0 : p0 + S].reshape(1, 1, S, HID).bfloat16())
-                    ctx.mode = "dense"
+                    ctx.mode = (
+                        "dense" if p0 + S <= 2048 else "topk"
+                    )  # rows beyond 2048 keys select their top-2048 with the MTP layer's own indexer
                     ctx.set_step([p0])
                     tabs = ly.attn.rope_tabs_opt(p0, S)
-                    dense8 = ctx.dense_ids8()
+                    dense8 = ctx.dense_ids8() if ctx.mode == "dense" else None
                     taps = {}
                     out = mtp.forward(tok, h, tabs, dense8, taps=taps)
                     ttnn.synchronize_device(md)
@@ -107,11 +109,17 @@ def main():
                 rec["row_min"], rec["row_min_no0"] = round(min(per_row), 4), round(
                     min(per_row[1:]) if m > 1 else per_row[0], 4
                 )
+                if m > 2048 + S:
+                    rec["pcc_out_topk_rows"] = round(pcc(dev[2048 + S :], g["out"][2048 + S : m]), 5)
                 for k in ("x0", "a", "x1", "y", "x2"):
                     if k in tapsall:
                         rec["pcc_" + k] = round(pcc(torch.cat(tapsall[k]), g[k][:m]), 5)
                 d1 = torch.cat(d1)
                 rec["d1_eq_oracle"] = round(float((d1 == g["d1"][:m]).float().mean()), 4)
+                if m > 2048 + S:
+                    rec["d1_eq_oracle_topk_rows"] = round(
+                        float((d1[2048 + S :] == g["d1"][2048 + S : m]).float().mean()), 4
+                    )
                 if (
                     "main" in g
                 ):  # first-draft acceptance proxy: MTP argmax at row t == the main model's argmax at row t+1 (oracle fp32 logits of the dumped hidden states)

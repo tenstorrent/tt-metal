@@ -276,12 +276,15 @@ class Hy4SpecRunner:
         ttnn.deallocate(a_tok)
 
     def capture(self):
-        self.body()  # compile
+        """eager warm round (compiles every program; it is a REAL round: its result is returned, the state has advanced), then the trace capture (records, executes nothing)."""
+        self.body()
         ttnn.synchronize_device(self.dec.md)
+        warm = self.read()
         self.trace = ttnn.begin_trace_capture(self.dec.md, cq_id=0)
         self.body()
         ttnn.end_trace_capture(self.dec.md, self.trace, cq_id=0)
         ttnn.synchronize_device(self.dec.md)
+        return warm
 
     def load(self, pending, pos, drafts, cap=None):
         """transition (admission / reload): pending token x_P, P and the k drafts of every user row (host -> persistent device tensors)."""
