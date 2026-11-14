@@ -30,7 +30,8 @@ void store_trainable_parameters_as(const serialization::NamedParameters& paramet
 // dtype with store_trainable_parameters_as(), whose contract applies; unset, or set to null, leaves them in the dtype
 // the model builds them in. precision.reduce_dtype (same names) becomes the dtype the gradient syncs sum in when a call
 // passes none (autograd::AutoContext::set_gradient_reduce_dtype), stored every time: unset or null stores none, so each
-// gradient is summed in its own dtype and nothing carries over from a config applied earlier in the process. A script
+// gradient is summed in its own dtype and nothing carries over from a config applied earlier in the process. With
+// FLOAT32 stored, module parameters also add up their gradients in fp32 (see autograd::Tensor::add_grad). A script
 // that sets the default itself does so after this call. The block must be a map of known keys, and any other key or
 // name is a TT_FATAL; both are read before anything changes. Returns the master dtype it applied, if any.
 std::optional<ttnn::DataType> apply_precision_config(

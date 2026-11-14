@@ -111,6 +111,11 @@ void py_module(nb::module_& m) {
 
         py_tensor.def("is_grad_initialized", &Tensor::is_grad_initialized, "Check if gradient is initialized");
         py_tensor.def(
+            "is_parameter",
+            &Tensor::is_parameter,
+            "Whether this tensor is a module parameter, the tensors whose gradients add up in fp32 under "
+            "precision.reduce_dtype: float32.");
+        py_tensor.def(
             "assign",
             [](const TensorPtr& self, const TensorPtr& other) {
                 self->assign(other->get_value(PreferredPrecision::NATIVE));
