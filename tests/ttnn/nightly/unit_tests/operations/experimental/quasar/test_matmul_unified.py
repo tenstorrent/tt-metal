@@ -1634,19 +1634,9 @@ def test_auto_config_batched_a_unbatched_b(device, sharded_out):
         ((1, 320, 32), (1, 32, 64), (320, 64), False),
         ((1, 128, 32), (1, 32, 128), (128, 128), False),
         ((16, 32, 32), (32, 512), (512, 512), False),
-        # fp32 accumulation exercises the fp32 branch of the subblock search (h * w <= 4). It cannot run until the
-        # Quasar 2D factory sets unpack_modes for the fp32 partials DFB (#61018); strict so it flags when fixed.
-        pytest.param(
-            (1, 128, 32),
-            (1, 32, 128),
-            (128, 128),
-            True,
-            marks=pytest.mark.xfail(
-                reason="#61018: fp32_dest_acc_en fails in the 2D factory (partials DFB has no unpack_modes entry)",
-                raises=RuntimeError,
-                strict=True,
-            ),
-        ),
+        # fp32 accumulation exercises the fp32 branch of the subblock search (h * w <= 4) and reloads fp32 partials
+        # through DEST, which needs this PR's section hand-off (#62102); the #61018 xfail it carried is stale.
+        ((1, 128, 32), (1, 32, 128), (128, 128), True),
     ],
     ids=[
         "400x400",
