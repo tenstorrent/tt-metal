@@ -718,6 +718,18 @@ ALWI void heaviside_tile_init() { MATH(SFPU_UNARY_INIT(heaviside)); }
 // clang-format on
 template <bool approx = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE, int iterations = 8>
 ALWI void expm1_tile(uint32_t idst, VectorMode vector_mode = VectorMode::RC) {
+    MATH(if constexpr (ckernel::sfpu::expm1_bf16_whole_tile && !is_fp32_dest_acc_en && iterations == 8) {
+        if (vector_mode == VectorMode::RC) {
+            SFPU_UNARY_CALL(
+                DST_SYNC_MODE,
+                is_fp32_dest_acc_en,
+                calculate_expm1,
+                (approx, is_fp32_dest_acc_en, 32),
+                idst,
+                VectorMode::None);
+            return;
+        }
+    });
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
