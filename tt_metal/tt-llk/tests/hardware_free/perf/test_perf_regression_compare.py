@@ -137,6 +137,35 @@ def test_unchanged_run_still_compares_every_point(tmp_path):
     assert len(result["records"]) == 2
 
 
+def test_renamed_module_compares_through_schema_alias(tmp_path):
+    baseline = [
+        _csv(
+            tmp_path,
+            "baseline.csv",
+            _INIT,
+            _TILE_LOOP,
+            module="perf_vif_targets",
+        )
+    ]
+    current = [
+        _csv(
+            tmp_path,
+            "current.csv",
+            _INIT,
+            _TILE_LOOP,
+            module="perf_vif_equiv_sweep",
+        )
+    ]
+
+    result = compare_runs(current, baseline)
+
+    assert len(result["records"]) == 2
+    assert not result["new_points"]
+    assert {record["test_module"] for record in result["records"]} == {
+        "perf_vif_equiv_sweep"
+    }
+
+
 def test_new_config_is_reported_not_flagged(tmp_path):
     baseline = [_csv(tmp_path, "b.csv", _INIT, _TILE_LOOP, tile_cnt=4)]
     # tile_cnt=8 exists on the current side only, so it has nothing to compare to.
