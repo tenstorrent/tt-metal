@@ -85,6 +85,7 @@ def build_flux3_klein_text_encoder(
         ccl_manager=ccl_manager,
         is_fsdp=is_fsdp,
         high_fidelity_linears=True,
+        rank4_hidden_states=True,
     )
     shards = sorted((Path(snapshot) / SUBFOLDER).glob("model-*.safetensors"))
     cache.load_model(
