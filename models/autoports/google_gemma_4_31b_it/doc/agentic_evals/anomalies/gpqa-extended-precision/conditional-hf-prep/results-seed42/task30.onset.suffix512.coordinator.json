@@ -1,0 +1,14 @@
+{
+  "task": 30,
+  "case": "task30.onset.suffix512",
+  "written_unix": 1794670979.2105231,
+  "cause": "anomaly",
+  "reference_reproduction": true,
+  "evidence": [
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42/task30.onset.suffix512.hf.semantic-triage.json",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42/task30.onset.suffix512.hf.private.json",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/tt-controls-summary.json"
+  ],
+  "coordinator_reason": "Root read the entire continuation. It repeats the same reaction route and rejection four complete times and begins another, without a new calculation or check. Independent review agrees. Mechanical flag=false misses semantic repetition; terminal cap truncation is not the classification criterion.",
+  "limits": "One HF seed42/512-token continuation on reconstructed suffix512 input. Reference behavior exists on this diagnostic input; no native-prompt equivalence, equal incidence, or exclusion of earlier precision drift. No policy change selected."
+}

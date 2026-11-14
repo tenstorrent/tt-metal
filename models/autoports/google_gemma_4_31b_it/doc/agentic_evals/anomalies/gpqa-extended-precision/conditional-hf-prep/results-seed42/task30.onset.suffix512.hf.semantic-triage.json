@@ -1,0 +1,58 @@
+{
+  "task": "30",
+  "diagnostic": "HF seed 42 free-running continuation from saved suffix512",
+  "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42/task30.onset.suffix512.hf.private.json",
+  "comparison_context": {
+    "hf_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "prompt_tokens": 512,
+    "prompt_source": "Saved prompt_token_ids; no chat rerender",
+    "weights_dtype": "bfloat16",
+    "hf_rng_note": "HF RNG differs from TT. Matching seed labels do not imply matching sampled token streams.",
+    "suffix_context": "The exact retained suffix of reconstructed reply IDs removes 4557 earlier reply tokens and adds none. It changes the position origin and is not the original native prompt. Native sampled token IDs were unavailable; close completion token counts do not prove token identity.",
+    "matched_tt_files": [
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-served/task30.onset.suffix512.json",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-full/task30.onset.suffix512.json"
+    ],
+    "matched_tt_review_files": [
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-served/task30.onset.suffix512.semantic-triage.json",
+      "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-full/task30.onset.suffix512.semantic-triage.json"
+    ],
+    "ranges": "Character ranges are zero-based, half-open offsets in the saved HF text. Evidence below is paraphrased.",
+    "teacher_forced_note": "A chosen-token teacher-forced comparison is present and executed in the saved diagnostic artifacts; this semantic review does not assess it."
+  },
+  "seeds": [
+    {
+      "seed": 42,
+      "text_chars": 1493,
+      "generated_tokens": 512,
+      "semantic_anomaly": true,
+      "mechanical_flag": false,
+      "observed_malformed_text": false,
+      "evidence": [
+        {
+          "char_range": [0, 413],
+          "paraphrase": "Reconsiders the problem, traces toluene through p-nitrotoluene and p-nitrobenzoic acid, then rejects 1,4-dinitrobenzene as inconsistent with that route. It raises the possibility of a synthesis problem but adds no discriminating check or resolution."
+        },
+        {
+          "char_range": [413, 1409],
+          "paraphrase": "Returns to the same reaction sequence and the same rejection of 1,4-dinitrobenzene across successive cycles. The candidate and route analysis do not advance to a new chemical premise, alternative pathway, or supported answer."
+        },
+        {
+          "char_range": [1409, 1493],
+          "paraphrase": "Starts the reaction sequence again and ends after the partial intermediate name 'p-'. This occurs at the requested 512-token diagnostic boundary and is treated as truncation, not malformed text."
+        }
+      ],
+      "stray_tokens": "No stray-language tokens or unrelated text fragments observed.",
+      "basis": "The continuation repeatedly revisits the same candidate and the same route-based rejection without a new check or resolving step. This is a semantic loop despite the stored mechanical flag being false. The final mid-phrase ending matches the requested output cap and is not counted as malformed."
+    }
+  ],
+  "pattern_comparison": "The matched served and full-precision TT seed-42 continuations also repeat product/symmetry speculation and revisit the rejected dinitrobenzene route. HF seed 42 has a similar broad failure-to-progress pattern, expressed mainly as repeated route checking. The TT artifacts decode 1023 tokens per continuation while HF generated 512; the samples also use different RNG streams. The agreement is qualitative evidence from these saved strings only, not a matched-sample causal comparison.",
+  "review_summary": "This one HF continuation is semantically anomalous and coherent with the repeated-cycle pattern in the corresponding TT continuations. It is an additional conditional observation, not an estimate of frequency and not sufficient by itself to attribute the pattern to precision or to make a population-level claim.",
+  "limits": [
+    "This host-only review covers one HF seed-42 continuation from a reconstructed 512-token suffix, not the original full prompt or native response.",
+    "The HF and TT continuations have different RNG streams and different decode budgets. Shared seed labels do not establish token-by-token matching.",
+    "The original native reply's sampled token IDs are unavailable, and truncation changes both context and position origin. No causal attribution to precision or model-wide conclusion follows.",
+    "No official score or score change is assessed. The chosen-token teacher-forced comparison is present and executed but outside this semantic review.",
+    "The mechanical flag is preserved as saved. It is not semantic pass/fail evidence."
+  ]
+}

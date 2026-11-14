@@ -1,0 +1,61 @@
+{
+  "task": "110",
+  "diagnostic": "pinned HF suffix512 conditional free-running continuation",
+  "source": "conditional-hf-prep/results-seed42/task110.onset.suffix512.hf.private.json",
+  "source_metadata": "task110.onset.suffix512.private.json",
+  "hf_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+  "review_scope": "Host-only semantic reading of the entire saved HF result text; one completed seed42 sample of 512 generated tokens.",
+  "comparison_context": {
+    "learned_context": "../learned.json",
+    "original_triage": "../current/gpqa-extended198-head-bfp8/digest/110.triage.json",
+    "served_source": "first-wave-served/task110.onset.suffix512.json",
+    "served_review": "first-wave-served/task110.onset.suffix512.semantic-triage.json",
+    "full_source": "first-wave-full/task110.onset.suffix512.json",
+    "full_review": "first-wave-full/task110.onset.suffix512.semantic-triage.json",
+    "observed_comparison": "The HF text repeats the C6 propanoate-placement conclusion in a fixed bullet sentence. The matched TT served seed-42 continuation alternates that conclusion with the assertion that C6 also has a methyl; the matched TT full-precision seed-42 continuation repeats a proposed product-name conclusion. Both existing TT semantic reviews judge their seed-42 texts anomalous. The wording/forms differ, while all three saved strings remain on the same C6/product-identity issue.",
+    "limits": "The HF artifact has one seed42 sample capped at512 generated tokens; matched TT diagnostics are capped at1024 generated tokens. HF and TT sampling RNGs differ, so the nominal shared seed does not make token trajectories equivalent. The prompt is the saved exact512-token suffix of reconstructed reply IDs, with1,830 earlier tokens removed and position origin changed; raw native sampled IDs are unavailable. These observations compare saved strings only."
+  },
+  "seeds": [
+    {
+      "index": 0,
+      "seed": 42,
+      "text_chars": 2632,
+      "generated_tokens": 512,
+      "semantic_anomaly": true,
+      "mechanical_flag": true,
+      "evidence": [
+        {
+          "char_range": [
+            0,
+            2632
+          ],
+          "paraphrase": "The continuation opens by asserting that the product must place propanoate at C6, then repeats the same conclusion in the same indented bullet form through almost the entire sample. It adds no distinct structural check, resolves no competing option interpretation, and does not progress to another reaction step. The final bullet is cut off at the sample boundary."
+        }
+      ],
+      "basis": "A single fixed product-placement assertion is repeated across the complete saved continuation, which supports a semantic anomaly judgment independent of the diagnostic cap.",
+      "observed_malformed_text": {
+        "observed": false,
+        "stray_tokens_or_language": false,
+        "description": "The text is readable and uses consistent indentation. There is no separate malformed fragment, stray language, or unusual whitespace tail. The final mid-phrase cut coincides with the512-token diagnostic cap and is not counted as malformed text."
+      },
+      "mechanical_observation": "mechanical_flag reproduces the saved HF result flag exactly; the host semantic and malformed-text judgments are separate."
+    }
+  ],
+  "pattern_comparison": "The HF sample is semantically degenerate in the observed text. The matched TT served and full-precision seed-42 samples also received anomaly judgments for repeated C6/product reasoning, with different surface forms. Because the HF sample is shorter and uses a different RNG, this is a descriptive comparison of these saved diagnostic outputs, not a claim of trajectory equivalence or a precision effect.",
+  "official_scoring": {
+    "status": "completed per run instruction",
+    "assessment": "Not assessed or changed by this semantic review."
+  },
+  "teacher_forced_continuation": {
+    "exists": true,
+    "executed": true,
+    "assessment": "Not assessed by this review."
+  },
+  "limitations": [
+    "Only the one completed HF seed42/512-token result is reviewed; no inference about prevalence or broader model behavior follows.",
+    "The continuation is conditioned on a shortened suffix of reconstructed IDs, not the original full prompt. The native completion token count and reconstructed completion token count agree, but raw native sampled token IDs are unavailable; count agreement does not establish token identity.",
+    "HF's512-token cap differs from the matched TT1024-token cap. A mid-phrase ending at the cap is not independently treated as malformed.",
+    "HF and TT RNG behavior differs despite the same nominal seed. No precision-causation or model-cause conclusion is made.",
+    "The chosen teacher-forced diagnostic exists and was executed; this semantic review assesses only the saved free-running HF text and makes no judgment about teacher-forced results."
+  ]
+}

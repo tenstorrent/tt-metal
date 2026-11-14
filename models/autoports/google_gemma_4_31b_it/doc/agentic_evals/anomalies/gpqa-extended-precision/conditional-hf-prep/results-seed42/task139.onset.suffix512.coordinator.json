@@ -1,0 +1,14 @@
+{
+  "task": 139,
+  "case": "task139.onset.suffix512",
+  "written_unix": 1794673052.1618295,
+  "cause": "anomaly",
+  "reference_reproduction": true,
+  "evidence": [
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42/task139.onset.suffix512.hf.semantic-triage.json",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42/task139.onset.suffix512.hf.private.json",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/task139_reconstruction_limit.json"
+  ],
+  "coordinator_reason": "Root read the entire continuation: the same isotope-assumption/reagent pair repeats eight complete times, followed by a partial ninth pair, with no distinct check or new inference. Independent review agrees on semantic repetition. Mechanical flag=false misses the loop; terminal formula truncation is excluded from anomaly evidence.",
+  "limits": "One HF seed42/512-token continuation on reconstructed suffix512 input. Reference repetition exists on this diagnostic input; no native-prompt equivalence, equal incidence, or exclusion of earlier precision drift. Task139 reconstruction has a documented completion-count mismatch. No policy change selected."
+}

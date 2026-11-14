@@ -1,0 +1,14 @@
+{
+  "task": 127,
+  "case": "task127.onset.suffix512",
+  "written_unix": 1794667819.5084026,
+  "cause": "anomaly",
+  "reference_reproduction": true,
+  "evidence": [
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42/task127.onset.suffix512.hf.semantic-triage.json",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42/task127.onset.suffix512.hf.private.json",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/tt-controls-summary.json"
+  ],
+  "coordinator_reason": "Root read the entire continuation. Identical translation/comparison blocks repeat several times without a new region, calculation or check. Fresh independent review agrees. Mechanical flag=false is a false negative for this semantic repetition; the token cap is not the anomaly criterion.",
+  "limits": "One HF seed42 continuation with512 generated tokens on reconstructed suffix512 input. Establishes reference repetition under this diagnostic input only, not equal incidence, native-request equivalence, or exclusion of earlier precision drift. HF and TT RNG differ. No precision change selected."
+}

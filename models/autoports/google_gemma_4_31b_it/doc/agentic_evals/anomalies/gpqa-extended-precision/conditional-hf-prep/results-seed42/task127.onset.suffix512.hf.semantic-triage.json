@@ -1,0 +1,78 @@
+{
+  "task": "127",
+  "artifact": "conditional-hf-prep/results-seed42/task127.onset.suffix512.hf.private.json",
+  "scope": "Host-only semantic review of the entire stored pinned-HF seed-42 free-running text. The saved teacher-forced chosen comparison is present with 64 positions and is outside this review.",
+  "range_convention": "Character ranges are zero-based and half-open, measured on the saved text string.",
+  "context": {
+    "source_packet": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/gpqa-extended198-head-bfp8/digest/analysis.private/127-f469c1ffa95d32cc.json",
+    "onset_record": "task127.onset.suffix512.private.json",
+    "prompt": "Exact 512-token suffix of saved reconstructed prompt_token_ids; 6,944 preceding tokens removed from a 7,456-token reconstructed prefix.",
+    "prompt_position_limit": "Suffix reconstruction changes the position origin and is not the original native prompt. Native raw token IDs are unavailable; matching token counts do not establish the original sampled path.",
+    "model": {
+      "revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+      "device": "cpu",
+      "weights_dtype": "bfloat16",
+      "prompt_tokens": 512,
+      "prefill_chunk": 512
+    },
+    "sampling": {
+      "seed": 42,
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": 20,
+      "rng_note": "HF RNG differs from TT. Seeds are diagnostic; native request settings are in case_metadata."
+    },
+    "generation": {
+      "generated_tokens": 512,
+      "requested_tokens": 512,
+      "wall_s": 1022.8847097810358
+    },
+    "native_onset": "Selected semantic-cycle onset around reasoning character 12,061; this is an estimated onset after repeated sequence rereading, not uniquely attributed first-error location."
+  },
+  "semantic_anomaly": true,
+  "mechanical_flag": false,
+  "mechanical_flag_field": "results[0].flag",
+  "observed_malformed_text": false,
+  "text_chars": 915,
+  "semantic_ranges": [
+    {
+      "chars": [
+        0,
+        915
+      ],
+      "paraphrase": "The entire response repeats the same GCC (A) versus GTC (V) comparison and translates the same adjacent codons. “Difference” and “Let’s re-translate” each recur four times; after each pass it starts the same translation again. It performs no distinct candidate or region check and reaches no new conclusion."
+    }
+  ],
+  "progress_and_checks": {
+    "distinct_candidate_or_numerical_checks": [],
+    "new_regions_checked": [],
+    "recheck_count": "At least three unchanged rechecks after the initial comparison (four identical comparison/translation cycles are present).",
+    "sustained_unchanged_cycles": "Yes; the unchanged comparison-and-translation pattern spans the full 915-character reply.",
+    "stray_tokens": "No unrelated or visibly corrupt tokens observed in the saved text. The ending is an incomplete copied codon line at the requested 512-token cap; this is a normal cap boundary and is not malformed text."
+  },
+  "tt_comparison": {
+    "first_wave_served_seed42": {
+      "artifact": "first-wave-served/task127.onset.suffix512.json",
+      "text_chars": 2055,
+      "mechanical_flag": false,
+      "review": "first-wave-served/task127.onset.suffix512.semantic-triage.json",
+      "reviewed_pattern": "Same A/B excerpt and GCC/A versus GTC/V codon translations recur without resolution; saved review labels semantic anomaly true and malformed text false."
+    },
+    "first_wave_full_seed42": {
+      "artifact": "first-wave-full/task127.onset.suffix512.json",
+      "text_chars": 2515,
+      "mechanical_flag": false,
+      "review": "first-wave-full/task127.onset.suffix512.semantic-triage.json",
+      "reviewed_pattern": "Same local codon translation and Ala-versus-Val statement recur; saved review labels semantic anomaly true and malformed text false."
+    },
+    "comparison": "HF shows the same broad local semantic cycle as both TT seed-42 texts. HF is capped at 512 generated tokens; each TT free-running continuation is capped at 1,024. RNG implementations differ, so this is a qualitative text comparison, not a matched-sequence comparison."
+  },
+  "teacher_forced_chosen": "The HF artifact contains teacher_forced_chosen probabilities for 64 positions. This semantic triage does not assess those values or infer a numerical cause.",
+  "limits": [
+    "This is one diagnostic HF continuation, not a scored task response or population estimate.",
+    "The reconstructed 512-token suffix changes prompt position origin and omits 6,944 tokens; the observed behavior does not establish the original native answer path or native-prompt equivalence.",
+    "HF sampling RNG differs from TT; the differing token/text trajectories cannot establish equal incidence or a cause.",
+    "No precision-causation, population, GPQA correctness, or scoring conclusion is made.",
+    "The mechanical digest flag is false as saved; semantic review is a separate judgment."
+  ]
+}

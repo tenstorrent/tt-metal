@@ -1,0 +1,71 @@
+{
+  "task": "145",
+  "diagnostic": "Host-only semantic review of the completed pinned-HF seed-42 suffix512 continuation",
+  "source": "conditional-hf-prep/results-seed42/task145.onset.suffix512.hf.private.json",
+  "reference_context": {
+    "learned": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/learned.json",
+    "suffix_packet": "task145.onset.suffix512.private.json",
+    "tt_served_text": "first-wave-served/task145.onset.suffix512.json",
+    "tt_served_review": "first-wave-served/task145.onset.suffix512.semantic-triage.json",
+    "tt_full_text": "first-wave-full/task145.onset.suffix512.json",
+    "tt_full_review": "first-wave-full/task145.onset.suffix512.semantic-triage.json",
+    "original_pattern": "The original response was reviewed as sustained syn/anti and stereochemical-orientation reconsideration that restated assignments without resolving the checks, then selected C and stopped normally. Its onset packet identifies a concrete malformed-fragment boundary but does not establish the unique first error."
+  },
+  "assessment_scope": "Review of the one complete saved HF free-running text only. TFchosen was executed but is not assessed here. No answer correctness, score, cause, or population claim is made.",
+  "hf_run_context": {
+    "revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "device": "cpu",
+    "weights_dtype": "bfloat16",
+    "prompt_tokens": 512,
+    "prompt_source": "Saved prompt_token_ids, no chat rerender",
+    "prefill_chunk": 512,
+    "sampling_note": "HF RNG differs from TT; seed 42 is diagnostic and does not align sampled tokens.",
+    "prompt_origin_limit": "The input is the exact retained suffix of 512 reconstructed IDs, with 5,352 earlier IDs removed and a changed position origin; it is not the original native prompt.",
+    "generated_tokens": 512,
+    "output_cap_comparison": "HF generated-token cap is 512; matched TT seed-42 free-running diagnostics use a 1,024-token cap. Their saved text lengths therefore differ in part because the cap differs."
+  },
+  "seeds": [
+    {
+      "seed": 42,
+      "text_chars": 1408,
+      "mechanical_flag": true,
+      "semantic_anomaly": true,
+      "observed_malformed_text": {
+        "observed": false,
+        "stray_language": false,
+        "actual_bad_fragments": false,
+        "description": "The text is readable English, consisting of repeated ordinary words. Its final saved characters end mid-phrase at 'as'; this output boundary is not treated as malformed text. No stray language or isolated-token fragment is visible."
+      },
+      "evidence": [
+        {
+          "char_range": [
+            0,
+            1408
+          ],
+          "paraphrase": "The entire continuation repeats the self-referential phrase 'I said, as I said' 64 times. It supplies no new proposition, candidate comparison, chemical/numerical check, or reasoning step, and never advances toward a task answer. The final repetition is truncated at the saved boundary."
+        }
+      ],
+      "progress_and_checks": "No candidate or numerical check is present to evaluate for progress. The visible repetition is an unchanged verbal cycle, not a substantive recheck; it persists across the entire output despite the absence of a task-relevant proposition.",
+      "tt_seed42_comparison": {
+        "served": "The served TT continuation is 3,237 characters and mechanically flagged true. It repeatedly asserts F(down), C7(right), C4(left), clockwise/R and inserts 'Wait, let me re-verify again' without changing or resolving the assignment. HF shares repetitive non-progress, but its phrase loop has no stereochemical content and does not reproduce the served TT text's cycle.",
+        "full": "The full-precision TT continuation is 2,048 characters and mechanically flagged true. Its entire visible text is isolated repeated 'a' characters separated by spaces. That is malformed output, unlike the readable HF self-repetition.",
+        "comparison_limits": "HF generated-token cap is 512 versus the matched TT cap of 1,024. The saved conditioning suffix is reconstructed and its position origin differs from the original response; HF and TT RNG streams differ, so matching nominal seeds do not align trajectories. No token-by-token or causal comparison is supported."
+      },
+      "original_pattern_comparison": "The original response's substantive cycle repeatedly reconsidered syn/anti and orientation assignments. This HF text is anomalous repetition but contains none of those checks, so it does not reproduce the original specific reasoning cycle. Its short output also cannot locate the original response's onset.",
+      "basis": "Semantic judgment follows the visible full-span unchanged repetition, independently of the saved mechanical flag."
+    }
+  ],
+  "overall": "This seed-42 HF continuation is semantically anomalous because the complete visible text is an unchanged self-referential loop with no task progress. It is readable rather than malformed, and its surface pattern does not match the original stereochemistry cycle or either TT seed-42 text. As an extra control, it is a positive observation of degeneration on this shortened reconstructed suffix, while comparative interpretation remains inconclusive about native-prompt behavior, cause, or relative model/configuration behavior.",
+  "limits": [
+    "The HF run requested 512 prompt tokens from saved reconstructed IDs; native sampled token IDs for the original response are unavailable, and the HF/TT RNG streams differ.",
+    "The HF free-running output cap is 512 generated tokens versus 1,024 for matched TT diagnostics; the HF end at a mid-phrase boundary is not malformed text.",
+    "The HF generated text ends at a mid-phrase output boundary; that cutoff is not counted as malformed text.",
+    "A single diagnostic continuation does not support incidence or population claims.",
+    "TFchosen was executed but is outside this semantic review."
+  ],
+  "assessment_status": {
+    "semantic_text_review": "complete for the saved seed-42 HF continuation",
+    "TFchosen": "executed but not assessed in this artifact",
+    "scoring": "not assessed"
+  }
+}

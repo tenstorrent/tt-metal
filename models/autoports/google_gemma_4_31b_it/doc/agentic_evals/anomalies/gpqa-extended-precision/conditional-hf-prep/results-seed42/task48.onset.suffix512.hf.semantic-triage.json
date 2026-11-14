@@ -1,0 +1,73 @@
+{
+  "task": "48",
+  "diagnostic": "pinned HF suffix512 conditional free-running continuation",
+  "source": "conditional-hf-prep/results-seed42/task48.onset.suffix512.hf.private.json",
+  "source_metadata": "task48.onset.suffix512.private.json",
+  "hf_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+  "review_scope": "Host-only semantic review of the entire saved HF free-running text; one completed seed42 sample of 512 generated tokens. The executed teacher-forced chosen diagnostic is outside this review.",
+  "comparison_context": {
+    "learned_context": "../../../../learned.json",
+    "original_pattern": "The onset metadata describes repeated reconsideration of the diyne atom mapping, incompatible ring/product descriptions, and methyl placement/naming without resolution. The saved TT reviews describe continued repetition of this unresolved chemistry issue in the suffix controls.",
+    "served_source": "../../first-wave-served/task48.onset.suffix512.json",
+    "served_review": "../../first-wave-served/task48.onset.suffix512.semantic-triage.json",
+    "full_source": "../../first-wave-full/task48.onset.suffix512.json",
+    "full_review": "../../first-wave-full/task48.onset.suffix512.semantic-triage.json",
+    "observed_comparison": "HF repeatedly asserts the same diethylidenecyclobutane product and then repeats a check for another reaction without performing a distinct check. The served TT seed42 text repeats the same product assertion using the substrate formula; its existing review judges the text semantically anomalous. The full-precision TT seed42 text is a repeated 'Wait, I think' phrase loop; its review also judges it anomalous. HF and served TT share a chemistry/product-revisiting pattern, while full-precision TT has a different surface loop.",
+    "comparison_limits": "HF generated-token cap is 512; the matched TT free-running diagnostics use 1,024-token caps. HF and TT RNG behavior differs despite the shared nominal seed, so the texts are not aligned trajectories. The prompt is the exact retained suffix of 512 reconstructed IDs with 3,040 earlier IDs removed and a changed position origin; it is not the original native prompt. Native sampled token IDs are unavailable. These observations compare the saved texts only."
+  },
+  "hf_run_context": {
+    "device": "cpu",
+    "weights_dtype": "bfloat16",
+    "prompt_tokens": 512,
+    "prompt_source": "Saved prompt_token_ids, no chat rerender",
+    "prefill_chunk": 512,
+    "sampling_note": "HF RNG differs from TT; seed42 is diagnostic and does not align sampled tokens.",
+    "generated_tokens": 512,
+    "mechanical_flag": false
+  },
+  "seeds": [
+    {
+      "seed": 42,
+      "text_chars": 1547,
+      "semantic_anomaly": true,
+      "mechanical_flag": false,
+      "evidence": [
+        {
+          "char_range": [
+            0,
+            1547
+          ],
+          "paraphrase": "Across the complete saved text, the model repeats the assertion that the named diyne gives a 1,2-diethylidenecyclobutane, followed by the same question about whether another reaction remains. A character-level count confirms eight complete appearances of each sentence, followed by the start of another product assertion that is cut off at the output boundary. There is no new reaction, candidate comparison, atom-mapping derivation, or resolution in these repetitions."
+        }
+      ],
+      "progress_and_checks": "No distinct candidate or numerical check is carried out. The repeated invitation to check for another reaction is not followed by a new reaction step or evidence. The same verbal/semantic cycle persists over the sample even though the saved mechanical flag is false.",
+      "observed_malformed_text": {
+        "observed": false,
+        "stray_tokens_or_language": false,
+        "description": "The saved text is readable English and chemistry notation; no stray token fragment or language switch is observed. Its final product assertion ends mid-phrase exactly at the 512-token diagnostic boundary. That cap cut is not classified as malformed text."
+      },
+      "basis": "The sustained no-progress repetition supports a semantic anomaly judgment independently of the false stored detector flag. Reaching the diagnostic cap is not itself counted as an anomaly.",
+      "tt_seed42_comparison": {
+        "served": "The served TT seed42 continuation is also a readable repeated product assertion followed by a repeated check for another reaction. Its semantic review marks it anomalous; the mechanical flag is true. HF and served TT therefore share the broad unresolved product-cycle pattern, with different wording and output lengths.",
+        "full": "The full-precision TT seed42 continuation is a repeated 'Wait, I think' phrase loop, judged semantically anomalous by its review with a true mechanical flag. It does not reproduce HF's chemistry wording or product cycle.",
+        "comparison_limits": "The HF cap is 512 generated tokens and the TT caps are 1,024. Same nominal seed does not align the distinct HF and TT RNG streams. The reconstructed suffix removes earlier context and shifts position origin. This is a descriptive comparison of saved outputs, not evidence of trajectory equivalence or a precision effect."
+      }
+    }
+  ],
+  "overall": "The completed HF sample is semantically anomalous in the observed text despite a false mechanical flag: the same chemistry/product assertion and nominal follow-up question recur without substantive progress. This is one positive observation on the shortened reconstructed suffix. Alongside the two anomalous TT samples, it provides a descriptive comparison but remains inconclusive about native-prompt behavior, precision/configuration differences, or any cause.",
+  "teacher_forced_continuation": {
+    "exists": true,
+    "executed": true,
+    "assessment": "Not assessed by this semantic review."
+  },
+  "official_scoring": {
+    "assessment": "Not assessed or changed by this semantic review."
+  },
+  "limits": [
+    "Only one completed HF seed42 continuation is reviewed; this does not establish incidence or population behavior.",
+    "HF uses a 512-token suffix of reconstructed completion IDs, with 3,040 earlier IDs removed and position origin changed; it is not the original prompt. Matching reconstructed and native completion token counts do not establish identity because raw native sampled IDs are unavailable.",
+    "HF's 512 generated-token cap differs from the matched TT 1,024-token caps. Ending mid-phrase at the HF cap is not treated as malformed text.",
+    "HF and TT RNG behavior differs despite the nominal shared seed. No trajectory-equivalence, precision-causality, or model-cause conclusion is made.",
+    "Teacher-forced chosen exists and was executed, but this artifact assesses only the saved HF free-running text."
+  ]
+}

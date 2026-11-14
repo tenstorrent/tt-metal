@@ -1,0 +1,96 @@
+{
+  "task": "139",
+  "diagnostic": "HF seed-42 suffix-512 free-running semantic review",
+  "source": "conditional-hf-prep/results-seed42/task139.onset.suffix512.hf.private.json",
+  "review_context": {
+    "learned_context": "../../learned.json",
+    "suffix_case": "task139.onset.suffix512.private.json",
+    "served_comparison": "first-wave-served/task139.onset.suffix512.json",
+    "served_review": "first-wave-served/task139.onset.suffix512.semantic-triage.json",
+    "full_comparison": "first-wave-full/task139.onset.suffix512.json",
+    "full_review": "first-wave-full/task139.onset.suffix512.semantic-triage.json",
+    "hf_revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "device": "cpu",
+    "dtype": "bfloat16",
+    "prompt_tokens": 512,
+    "prompt_source": "Saved prompt_token_ids, no chat rerender",
+    "sampling": {
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": 20
+    },
+    "seed": 42,
+    "generated_tokens": 512,
+    "prompt_truncation": "Exact suffix of reconstructed prompt IDs:512 retained,4673 removed; position origin changed. Not the original native prompt.",
+    "reconstruction_limit": "Raw native sampled token IDs are unavailable; matching completion counts do not establish sampled-token identity.",
+    "selected_onset_limit": "Selected semantic point before renewed reconsideration, not a uniquely established first error; earlier precision effects are not ruled out."
+  },
+  "per_seed": [
+    {
+      "seed": 42,
+      "mechanical_flag": false,
+      "semantic_anomaly": true,
+      "observed_malformed_text": {
+        "observed": false,
+        "stray_tokens_or_language": false,
+        "actual_bad_fragments": false,
+        "description": "The final line stops inside the NaBH3CN formula at the 512-token diagnostic cap. This is a terminal cap cutoff, not malformed-text evidence. No stray language or unrelated tokens are visible."
+      },
+      "evidence_spans": [
+        {
+          "char_start": 0,
+          "char_end": 166,
+          "paraphrase": "The opening assumes NaBH4 is the close analog and already incorporates a heavier isotope, then identifies NaBH4/NaBH3CN as reagent X. This asserts a candidate but does not test the reaction clues or establish a new discriminator."
+        },
+        {
+          "char_start": 166,
+          "char_end": 1536,
+          "paraphrase": "The text repeats the same two-line sequence: assume NaBH4 is the close analog and has a heavier isotope, then say NaBH4 or NaBH3CN is reagent X. The assumption line recurs 8 times and the reagent-X line appears 8 times in full, followed by another occurrence cut off inside the formula at the boundary. No distinct candidate check, numerical check, or changed inference appears."
+        }
+      ],
+      "assessment": "Semantic anomaly: after an initial candidate assertion, the response sustains an unchanged two-line loop for essentially the full continuation. The decision is based on the repeated return without new evidence or inference, not on the terminal cutoff. Mechanical flag is copied exactly and remains a separate measure."
+    }
+  ],
+  "matched_tt_comparison": {
+    "summary": "HF seed 42 shares the broad no-progress borohydride analogy/isotope reconsideration pattern in both TT matched-seed outputs, while the exact wording and mechanical flags differ. The full-precision TT seed-42 text similarly repeats the NaBH4/NaBH3CN analogy and isotope question; the served TT seed-42 text alternates whether NaBH4 or NaBH3CN is the close analog and includes a doubled-slash fragment. These align semantically at a broad level with the HF response but are distinct sampled continuations.",
+    "first_wave_full_seed42": {
+      "mechanical_flag": false,
+      "semantic_review": "semantic-triage labels true",
+      "range": [
+        0,
+        2986
+      ],
+      "paraphrase": "Repeatedly reopens the close-analog question, states the NaBH4/NaBH3CN relation, mentions reductive amination, and asks about heavier isotopes/NaBD4 without a new discriminating check. The review notes no stray language or actual malformed fragment; the unfinished terminal formula is cap truncation."
+    },
+    "first_wave_served_seed42": {
+      "mechanical_flag": true,
+      "semantic_review": "semantic-triage labels true",
+      "range": [
+        0,
+        2875
+      ],
+      "paraphrase": "Repeatedly alternates whether NaBH3CN or NaBH4 is the close analog without resolving the choice. The text contains a visible doubled slash before “close analog” and is cut off at the cap; the review treats the fragment separately from the semantic loop."
+    }
+  },
+  "distinct_evidence_progress": "No distinct candidate/reaction or numerical check appears in the HF text. The matched full-precision TT seed 44 does contain initial NaBH4 and LiAlH4 product/oxygen-count checks before sustained unchanged cycling; its review credits those checks as progress. This distinction is retained rather than treating any cycle as evidence that no prior progress occurred.",
+  "teacher_forced_scope": {
+    "status": "Teacher-forced chosen continuation data is present in the HF file and the associated chosen-64 comparison was executed; it is not assessed by this semantic review.",
+    "comparison_metrics": {
+      "positions": 64,
+      "hf_vs_tt_top1_agreement_first_wave_served": 0.875,
+      "hf_vs_tt_top1_agreement_first_wave_full": 0.984375
+    }
+  },
+  "limits": [
+    "HF used a 512-token suffix prompt; TT first-wave diagnostics also used the saved 512-token suffix, but HF and TT RNG streams differ. Seed labels do not imply matched sampled tokens.",
+    "The removed 4673-token prefix changes position origin. This is not the original native prompt trajectory or a reproduction of it.",
+    "The source reconstructed completion from a pinned native template because raw native sampled token IDs were unavailable; completion-count agreement is not identity evidence.",
+    "This is a semantic reading of the one completed HF seed-42 free-running text. It does not establish cause, precision causality, prevalence, population behavior, or score impact.",
+    "Teacher-forced chosen-token data exists and was executed, but this artifact does not assess it."
+  ],
+  "assessment_status": {
+    "free_running_hf_seed42": "reviewed",
+    "teacher_forced_chosen": "exists/executed; not assessed here",
+    "scoring": "not assessed by this artifact"
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "task": 145,
+  "case": "task145.onset.suffix512",
+  "written_unix": 1794670006.3305686,
+  "cause": "anomaly",
+  "reference_reproduction": true,
+  "evidence": [
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42/task145.onset.suffix512.hf.semantic-triage.json",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42/task145.onset.suffix512.hf.private.json",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/tt-controls-summary.json"
+  ],
+  "coordinator_reason": "Entire continuation repeats the same short ordinary phrase without new content or progress. Root full-text inspection and independent review agree. Actual detector=true supports but does not determine classification; cap is excluded.",
+  "review_count_correction": {
+    "reviewer_reported": 64,
+    "exact_occurrences_in_saved_text": 127,
+    "characters": 1408,
+    "basis": "Literal substring count over entire saved text; independent review retained unchanged. Count correction does not change semantic classification."
+  },
+  "limits": "One HF seed42/512-token continuation on reconstructed suffix512 input. Diagnostic reference existence only, not native trajectory equivalence or equal incidence. Surface repetition differs from some TT samples; no precision-specific causal conclusion or policy change."
+}

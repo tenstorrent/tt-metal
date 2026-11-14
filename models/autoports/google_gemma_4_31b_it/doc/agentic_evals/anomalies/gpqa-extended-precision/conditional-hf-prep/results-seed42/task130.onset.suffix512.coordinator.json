@@ -1,0 +1,14 @@
+{
+  "task": 130,
+  "case": "task130.onset.suffix512",
+  "written_unix": 1794668880.628269,
+  "cause": "anomaly",
+  "reference_reproduction": true,
+  "evidence": [
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42/task130.onset.suffix512.hf.semantic-triage.json",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42/task130.onset.suffix512.hf.private.json",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/tt-controls-summary.json"
+  ],
+  "coordinator_reason": "Root read the entire continuation and agrees with the independent review. Initial comparison of options progresses, then the same wording conflict and candidate conclusion recur across repeated cycles without new analysis. The terminal partial word is a cap artifact, not the anomaly criterion. Mechanical flag=false misses this semantic repetition.",
+  "limits": "One HF seed42 continuation with512 generated tokens on reconstructed suffix512 input. Reference repetition exists here; no native-prompt equivalence, equal incidence or precision-specific causal conclusion. No precision change selected."
+}

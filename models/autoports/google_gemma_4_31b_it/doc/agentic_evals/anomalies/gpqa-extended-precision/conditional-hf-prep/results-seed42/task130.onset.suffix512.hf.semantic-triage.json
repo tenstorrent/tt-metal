@@ -1,0 +1,82 @@
+{
+  "task": "130",
+  "diagnostic": "conditional pinned-HF suffix512 seed42 semantic triage",
+  "source": "conditional-hf-prep/results-seed42/task130.onset.suffix512.hf.private.json",
+  "scope": "Fresh host-only review of the entire saved HF free-running text. One diagnostic seed only. The saved chosen teacher-forced continuation exists and was executed, but is not assessed here. No score or population claim.",
+  "range_convention": "Character ranges are zero-based and half-open on the saved text string.",
+  "conditioning": {
+    "revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "device": "cpu",
+    "weights_dtype": "bfloat16",
+    "prompt_tokens": 512,
+    "prompt_source": "Saved prompt_token_ids, no chat rerender",
+    "seed": 42,
+    "generated_tokens": 512,
+    "requested_tokens": 512,
+    "sampling": {
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": 20
+    },
+    "rng_comparison": "HF RNG differs from TT. Seed42 identifies this HF diagnostic sample and does not make its sampled tokens comparable to TT.",
+    "suffix_prompt_tokens": 512,
+    "removed_prefix_tokens": 4297,
+    "position_context_limit": "This is the exact suffix of saved reconstructed IDs, not the original prompt. Removing 4,297 earlier tokens changes context and position origin. Raw native sampled token IDs are unavailable; matching reconstructed and native completion counts do not establish exact replay.",
+    "onset_limit": "The source onset is a selected semantic window before repeated diene-name, symmetry, and proton-count reconsideration; it is not a uniquely established first-error location."
+  },
+  "semantic_anomaly": true,
+  "mechanical_flag": false,
+  "mechanical_flag_field": "results[0].flag",
+  "observed_malformed_text": false,
+  "malformed_text_observation": "No stray language or malformed fragment is visible. The initial 'Unless the molecule...' continues the suffix-conditioned context. The final 'But' is cut off at the requested 512-token boundary; this cap ending is not malformed text.",
+  "text_chars": 1544,
+  "semantic_ranges": [
+    {
+      "chars": [0, 704],
+      "paraphrase": "The text resumes an asymmetry/signal question, rereads the 6H-at-about-1-ppm datum, lists options A-D, and makes one candidate comparison: it says option B fits two 6H singlets. This is a brief candidate assessment, though it does not perform a numerical check or resolve the prompt's conflicting 2H wording."
+    },
+    {
+      "chars": [704, 1544],
+      "paraphrase": "After selecting B, the text repeatedly reopens whether the question asks for a 6H plus 2H signal or two 6H signals. It reproduces the same two-6H interpretation and B selection, then asks the same question again. The last repetition is cut off at the token cap."
+    }
+  ],
+  "progress_and_checks": {
+    "distinct_candidate_or_numerical_checks": [
+      "One initial option-list comparison identifies B as matching two 6H singlets. No numerical calculation or additional independent candidate test appears."
+    ],
+    "new_regions_checked": [],
+    "recheck_count": "At least two completed repetitions after the initial B selection, followed by another partial repetition at the cap.",
+    "sustained_unchanged_cycles": "Yes, over the latter portion (approximately characters 704-1544): the same 6H-plus-2H versus two-6H wording conflict is reopened and returns to B without new evidence or a distinct discriminating check.",
+    "stray_tokens": "No unrelated or visibly corrupt tokens observed. The terminal cutoff is the requested generation cap, not malformed text."
+  },
+  "tt_comparison": {
+    "first_wave_served_seed42": {
+      "artifact": "first-wave-served/task130.onset.suffix512.json",
+      "text_chars": 4311,
+      "mechanical_flag": false,
+      "review": "first-wave-served/task130.onset.suffix512.semantic-triage.json",
+      "reviewed_pattern": "The served TT review labels the seed anomalous: it repeatedly revisits the one-proton doublet versus equivalent proton groups and symmetry, without a distinct resolving check."
+    },
+    "first_wave_full_seed42": {
+      "artifact": "first-wave-full/task130.onset.suffix512.json",
+      "text_chars": 4577,
+      "mechanical_flag": true,
+      "review": "first-wave-full/task130.onset.suffix512.semantic-triage.json",
+      "reviewed_pattern": "The full-precision TT review labels the seed anomalous: it repeatedly alternates nonsymmetry with the same 6H-singlet objection and adds no new structural or spectral check."
+    },
+    "comparison": "HF also shows a semantic loop in the selected suffix-conditioned text, after one initial option comparison. The local HF loop concerns the contradictory 6H/2H wording and repeated return to B; the TT reviews describe loops around symmetry and the 1H doublet/6H signal mismatch. This is a per-text qualitative comparison. HF generated 512 tokens, while each TT free-running text generated 1,024; HF and TT RNGs differ, and their suffix prompt reconstruction/position context limits prevent matched-trajectory interpretation."
+  },
+  "teacher_forced_continuation": {
+    "chosen_exists": true,
+    "executed": true,
+    "assessment": "Not assessed in this semantic review."
+  },
+  "limits": [
+    "One HF diagnostic seed is not a population estimate or scored task response.",
+    "The exact saved suffix removes 4,297 earlier reconstructed tokens and changes position origin; it does not reproduce the original native prompt context.",
+    "HF sampling RNG differs from TT, and raw native sampled token IDs are unavailable. These texts are not token-matched comparisons.",
+    "The selected onset does not establish where the original response first went wrong.",
+    "No cause, precision attribution, task correctness, score, or prevalence conclusion is made.",
+    "The chosen teacher-forced comparison was executed, but its numerical result is outside this review."
+  ]
+}

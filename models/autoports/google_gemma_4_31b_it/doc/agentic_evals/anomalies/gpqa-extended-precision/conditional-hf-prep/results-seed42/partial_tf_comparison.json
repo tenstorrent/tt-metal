@@ -1,0 +1,118 @@
+{
+  "status": "eight_case_batch_complete",
+  "scope": "First64 saved teacher-forced positions; not whole-reply accuracy or causal exclusion of earlier precision drift. Free-running semantic decisions are separate.",
+  "cases": [
+    {
+      "case": "task110.onset.suffix512",
+      "comparisons": {
+        "first-wave-served": {
+          "positions": 64,
+          "top1_agreement": 0.953125
+        },
+        "first-wave-full": {
+          "positions": 64,
+          "top1_agreement": 0.984375
+        }
+      },
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42/task110.onset.suffix512.hf.private.json"
+    },
+    {
+      "case": "task127.onset.suffix512",
+      "comparisons": {
+        "first-wave-served": {
+          "positions": 64,
+          "top1_agreement": 0.796875
+        },
+        "first-wave-full": {
+          "positions": 64,
+          "top1_agreement": 0.90625
+        }
+      },
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42/task127.onset.suffix512.hf.private.json"
+    },
+    {
+      "case": "task129.onset.suffix512",
+      "comparisons": {
+        "first-wave-served": {
+          "positions": 64,
+          "top1_agreement": 0.953125
+        },
+        "first-wave-full": {
+          "positions": 64,
+          "top1_agreement": 1.0
+        }
+      },
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42/task129.onset.suffix512.hf.private.json"
+    },
+    {
+      "case": "task130.onset.suffix512",
+      "comparisons": {
+        "first-wave-served": {
+          "positions": 64,
+          "top1_agreement": 0.859375
+        },
+        "first-wave-full": {
+          "positions": 64,
+          "top1_agreement": 0.984375
+        }
+      },
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42/task130.onset.suffix512.hf.private.json"
+    },
+    {
+      "case": "task145.onset.suffix512",
+      "comparisons": {
+        "first-wave-served": {
+          "positions": 64,
+          "top1_agreement": 0.9375
+        },
+        "first-wave-full": {
+          "positions": 64,
+          "top1_agreement": 0.90625
+        }
+      },
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42/task145.onset.suffix512.hf.private.json"
+    },
+    {
+      "case": "task30.onset.suffix512",
+      "comparisons": {
+        "first-wave-served": {
+          "positions": 64,
+          "top1_agreement": 0.96875
+        },
+        "first-wave-full": {
+          "positions": 64,
+          "top1_agreement": 0.984375
+        }
+      },
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42/task30.onset.suffix512.hf.private.json"
+    },
+    {
+      "case": "task48.onset.suffix512",
+      "comparisons": {
+        "first-wave-served": {
+          "positions": 64,
+          "top1_agreement": 0.921875
+        },
+        "first-wave-full": {
+          "positions": 64,
+          "top1_agreement": 0.984375
+        }
+      },
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42/task48.onset.suffix512.hf.private.json"
+    },
+    {
+      "case": "task139.onset.suffix512",
+      "comparisons": {
+        "first-wave-served": {
+          "positions": 64,
+          "top1_agreement": 0.875
+        },
+        "first-wave-full": {
+          "positions": 64,
+          "top1_agreement": 0.984375
+        }
+      },
+      "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42/task139.onset.suffix512.hf.private.json"
+    }
+  ]
+}

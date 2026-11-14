@@ -1,0 +1,68 @@
+{
+  "task": "129",
+  "diagnostic": "conditional pinned-HF suffix512 seed42 semantic triage",
+  "source": "anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42/task129.onset.suffix512.hf.private.json",
+  "scope": "Host-only semantic review of the complete saved HF free-running text. One diagnostic seed only. Teacher-forced chosen continuation exists and was executed, but is not assessed here. No score or population claim.",
+  "conditioning": {
+    "revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "device": "cpu",
+    "weights_dtype": "bfloat16",
+    "prompt_tokens": 512,
+    "prompt_source": "Saved prompt_token_ids, no chat rerender",
+    "seed": 42,
+    "generated_tokens": 512,
+    "requested_tokens": 512,
+    "rng_comparison": "HF RNG differs from TT; seed42 labels this diagnostic HF sample and does not make its sampled tokens comparable to TT.",
+    "suffix_prompt_tokens": 512,
+    "removed_prefix_tokens": 860,
+    "position_context_limit": "This is the exact suffix of saved reconstructed IDs, not the original prompt. Removing 860 earlier tokens changes context and position origin. The source record reports reconstructed completion 7861 versus native 7865 (four tokens short); native sampled token IDs are unavailable, so this is not exact native replay.",
+    "onset_limit": "The source onset is a reproducible selected window just before the first reported stray curly-apostrophe-s fragment in the reconstructed original reasoning, not proof of the first model error."
+  },
+  "seeds": [
+    {
+      "seed": 42,
+      "text_chars": 1123,
+      "semantic_anomaly": false,
+      "mechanical_flag": false,
+      "observed_malformed_text": {
+        "present": false,
+        "description": "No stray language or clear malformed token fragment is visible. The initial “too blue.” is a continuation fragment from the suffix prompt. The output ends mid-equation at the requested 512-token boundary; this cap ending is not malformed text."
+      },
+      "evidence": [
+        {
+          "char_range": [
+            0,
+            704
+          ],
+          "paraphrase": "Continues the optical-threshold reasoning by calculating observed Lyman-alpha wavelengths for z=2.1, 2.3, 2.4, and 1.9, distinguishing the first three as optical-range candidates and 1.9 as near/possibly too blue. These are distinct numerical checks and count as progress."
+        },
+        {
+          "char_range": [
+            704,
+            1123
+          ],
+          "paraphrase": "Rechecks z=2.1, 2.3, and 2.4 with the same arithmetic and optical-range judgments, then starts another z=2.4 calculation that is cut mid-equation by the generation cap. This is one partial recheck sequence; the saved text does not contain multiple completed unchanged cycles."
+        }
+      ],
+      "basis": "The distinct four-candidate calculation pass is meaningful progress. The text then repeats part of that candidate sequence once, but one partial recheck before a hard token cap is insufficient to classify sustained semantic looping. The cap boundary itself is not anomaly evidence."
+    }
+  ],
+  "tt_comparison": {
+    "served": "The three TT served suffix512 texts independently repeat redshift/wavelength calculations and cycle among candidate cutoffs without settling a controlling optical criterion; their saved semantic triage marks all three anomalous despite false mechanical flags.",
+    "full": "The three full-precision TT suffix512 texts also show repeated threshold rationale and candidate sequences; their saved semantic triage marks all three anomalous despite false mechanical flags.",
+    "comparison": "This HF seed shows a distinct initial candidate pass plus only one partial recheck before its cap. It does not reproduce the sustained repeated cycles visible in the TT samples. This is a per-text behavioral comparison only."
+  },
+  "teacher_forced_continuation": {
+    "chosen_exists": true,
+    "executed": true,
+    "assessment": "not assessed in this semantic review"
+  },
+  "limits": [
+    "HF has one reviewed seed here; it is not a population estimate.",
+    "HF seed42 is not RNG-matched to TT seed42, and suffix512 conditioning truncates 860 reconstructed prefix tokens and changes position origin.",
+    "Reconstructed native completion is four tokens shorter than the recorded native completion and raw native sampled IDs are unavailable; exact native replay is not established.",
+    "The selected onset window does not establish the first model error.",
+    "No cause, precision attribution, task correctness, score, or prevalence conclusion is made.",
+    "The chosen teacher-forced check exists and was executed; its result is outside this review."
+  ]
+}

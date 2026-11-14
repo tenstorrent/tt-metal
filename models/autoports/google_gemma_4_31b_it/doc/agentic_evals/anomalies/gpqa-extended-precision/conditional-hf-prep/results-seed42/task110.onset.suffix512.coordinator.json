@@ -1,0 +1,14 @@
+{
+  "task": 110,
+  "case": "task110.onset.suffix512",
+  "written_unix": 1794665771.1441038,
+  "cause": "anomaly",
+  "reference_reproduction": true,
+  "evidence": [
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42/task110.onset.suffix512.hf.semantic-triage.json",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42/task110.onset.suffix512.hf.private.json",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/tt-controls-summary.json"
+  ],
+  "coordinator_reason": "Read the entire HF continuation: after an initial assertion, the same conclusion repeats without new checks or progress throughout the512-token window. The cap itself is not the reason. Fresh semantic review agrees; detector=true is auxiliary. Served/full TT also reproduce semantic anomalies on this saved prefix.",
+  "limits": "One HF seed42 continuation on reconstructed suffix512 tokens; positive existence evidence only. Does not establish native-request equivalence, equal incidence, or exclude earlier precision drift. HF and TT RNG differ. No policy change justified by this case alone."
+}

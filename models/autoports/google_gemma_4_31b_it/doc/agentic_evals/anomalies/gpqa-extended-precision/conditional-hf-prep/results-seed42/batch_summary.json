@@ -1,0 +1,191 @@
+{
+  "status": "completed_and_adjudicated",
+  "exit_code": 0,
+  "wall_seconds": 8326.342539072037,
+  "launch": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42/launch.json",
+  "revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+  "precision": "HF CPU BF16",
+  "sampling": {
+    "temperature": 1.0,
+    "top_p": 0.95,
+    "top_k": 20,
+    "seed": 42,
+    "max_new_tokens": 512
+  },
+  "cases": [
+    {
+      "task": 110,
+      "prompt_tokens": 512,
+      "generated_tokens": 512,
+      "seed": 42,
+      "mechanical_flag": true,
+      "reference_reproduction": true,
+      "coordinator": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42/task110.onset.suffix512.coordinator.json",
+      "semantic_review": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42/task110.onset.suffix512.hf.semantic-triage.json",
+      "tf_chosen_comparison": {
+        "first-wave-served": {
+          "positions": 64,
+          "top1_agreement": 0.953125
+        },
+        "first-wave-full": {
+          "positions": 64,
+          "top1_agreement": 0.984375
+        }
+      }
+    },
+    {
+      "task": 129,
+      "prompt_tokens": 512,
+      "generated_tokens": 512,
+      "seed": 42,
+      "mechanical_flag": false,
+      "reference_reproduction": null,
+      "coordinator": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42/task129.onset.suffix512.coordinator.json",
+      "semantic_review": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42/task129.onset.suffix512.hf.semantic-triage.json",
+      "tf_chosen_comparison": {
+        "first-wave-served": {
+          "positions": 64,
+          "top1_agreement": 0.953125
+        },
+        "first-wave-full": {
+          "positions": 64,
+          "top1_agreement": 1.0
+        }
+      }
+    },
+    {
+      "task": 127,
+      "prompt_tokens": 512,
+      "generated_tokens": 512,
+      "seed": 42,
+      "mechanical_flag": false,
+      "reference_reproduction": true,
+      "coordinator": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42/task127.onset.suffix512.coordinator.json",
+      "semantic_review": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42/task127.onset.suffix512.hf.semantic-triage.json",
+      "tf_chosen_comparison": {
+        "first-wave-served": {
+          "positions": 64,
+          "top1_agreement": 0.796875
+        },
+        "first-wave-full": {
+          "positions": 64,
+          "top1_agreement": 0.90625
+        }
+      }
+    },
+    {
+      "task": 130,
+      "prompt_tokens": 512,
+      "generated_tokens": 512,
+      "seed": 42,
+      "mechanical_flag": false,
+      "reference_reproduction": true,
+      "coordinator": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42/task130.onset.suffix512.coordinator.json",
+      "semantic_review": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42/task130.onset.suffix512.hf.semantic-triage.json",
+      "tf_chosen_comparison": {
+        "first-wave-served": {
+          "positions": 64,
+          "top1_agreement": 0.859375
+        },
+        "first-wave-full": {
+          "positions": 64,
+          "top1_agreement": 0.984375
+        }
+      }
+    },
+    {
+      "task": 145,
+      "prompt_tokens": 512,
+      "generated_tokens": 512,
+      "seed": 42,
+      "mechanical_flag": true,
+      "reference_reproduction": true,
+      "coordinator": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42/task145.onset.suffix512.coordinator.json",
+      "semantic_review": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42/task145.onset.suffix512.hf.semantic-triage.json",
+      "tf_chosen_comparison": {
+        "first-wave-served": {
+          "positions": 64,
+          "top1_agreement": 0.9375
+        },
+        "first-wave-full": {
+          "positions": 64,
+          "top1_agreement": 0.90625
+        }
+      }
+    },
+    {
+      "task": 30,
+      "prompt_tokens": 512,
+      "generated_tokens": 512,
+      "seed": 42,
+      "mechanical_flag": false,
+      "reference_reproduction": true,
+      "coordinator": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42/task30.onset.suffix512.coordinator.json",
+      "semantic_review": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42/task30.onset.suffix512.hf.semantic-triage.json",
+      "tf_chosen_comparison": {
+        "first-wave-served": {
+          "positions": 64,
+          "top1_agreement": 0.96875
+        },
+        "first-wave-full": {
+          "positions": 64,
+          "top1_agreement": 0.984375
+        }
+      }
+    },
+    {
+      "task": 48,
+      "prompt_tokens": 512,
+      "generated_tokens": 512,
+      "seed": 42,
+      "mechanical_flag": false,
+      "reference_reproduction": true,
+      "coordinator": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42/task48.onset.suffix512.coordinator.json",
+      "semantic_review": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42/task48.onset.suffix512.hf.semantic-triage.json",
+      "tf_chosen_comparison": {
+        "first-wave-served": {
+          "positions": 64,
+          "top1_agreement": 0.921875
+        },
+        "first-wave-full": {
+          "positions": 64,
+          "top1_agreement": 0.984375
+        }
+      }
+    },
+    {
+      "task": 139,
+      "prompt_tokens": 512,
+      "generated_tokens": 512,
+      "seed": 42,
+      "mechanical_flag": false,
+      "reference_reproduction": true,
+      "coordinator": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42/task139.onset.suffix512.coordinator.json",
+      "semantic_review": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42/task139.onset.suffix512.hf.semantic-triage.json",
+      "tf_chosen_comparison": {
+        "first-wave-served": {
+          "positions": 64,
+          "top1_agreement": 0.875
+        },
+        "first-wave-full": {
+          "positions": 64,
+          "top1_agreement": 0.984375
+        }
+      }
+    }
+  ],
+  "positive_shortened_input_cases": [
+    110,
+    127,
+    130,
+    145,
+    30,
+    48,
+    139
+  ],
+  "inconclusive_cases": [
+    129
+  ],
+  "next": "Task129 same-input seed42/1024 extension; task147 separate predeclared seed43 control is outside this batch.",
+  "scope": "One diagnostic continuation per reconstructed suffix512 input. Positive observations establish reference repetition on these inputs only, not native-prompt equivalence, comparable incidence, or exclusion of earlier precision drift. Mechanical flags are distinct from complete-text semantic review. TF chosen comparisons cover only64 positions, not whole replies. Per-case wall values in raw helper output may be cumulative; use launch interval for batch wall time. No evaluation score change."
+}
