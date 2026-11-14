@@ -418,15 +418,16 @@ constexpr bool matmul_fe_tile_mop() {
 #endif
 
 #ifdef TRISC_MATH
-// a plain call that takes none of the matmul forms in a kernel with no constant block (minimal_matmul's default cells): main's
-// math code, so the kernel's math TRISC is main's
+// a plain call that takes none of the matmul forms in a kernel with no constant block (minimal_matmul's default cells), and every
+// plain call in a kernel bound by the kernel config buffer: main's math code, so the kernel's math TRISC is main's
 template <std::uint32_t llk_dir, bool row_mop_on, std::uint32_t kt_key, DataFormat form_out, int in1_order, bool row_end_fold, DataFormat in0_format,
           DataFormat in1_format, DataFormat out_format, std::uint32_t block_rt, std::uint32_t block_ct>
 constexpr bool matmul_fe_main_math() {
     return llk_dir == 0 && !row_mop_on && kt_key == 0 && form_out == DataFormat::Invalid && in1_order == 0 && !row_end_fold &&
            in0_format == DataFormat::Invalid && in1_format == DataFormat::Invalid && out_format == DataFormat::Invalid && block_rt == 0 &&
-           block_ct == 0 && matmul_fe_tile_mop<false, 0, DataFormat::Invalid>() &&
-           !matmul_fe_mark::is_used_d<8, std::integral_constant<std::uint32_t, block_rt + kt_key>>(0);
+           block_ct == 0 &&
+           (LLK_SIZE_MODE || (matmul_fe_tile_mop<false, 0, DataFormat::Invalid>() &&
+                              !matmul_fe_mark::is_used_d<8, std::integral_constant<std::uint32_t, block_rt + kt_key>>(0)));
 }
 #endif
 
@@ -992,8 +993,9 @@ ALWI void matmul_block_init_fe(
     std::uint32_t ct_dim = 1,
     std::uint32_t rt_dim = 1,
     std::uint32_t kt_dim = 1) {
-    constexpr DataFormat f = matmul_fe_phase_format<in0_cb, in1_cb>();
-    constexpr std::uint32_t AUTO = MATMUL_REUSE_DIR_AUTO;
+    // a kernel bound by the kernel config buffer runs main's direction and math
+    constexpr DataFormat f = LLK_SIZE_MODE ? DataFormat::Invalid : matmul_fe_phase_format<in0_cb, in1_cb>();
+    constexpr std::uint32_t AUTO = LLK_SIZE_MODE ? 0 : MATMUL_REUSE_DIR_AUTO;
     matmul_block_init<
         false,
         matmul_fe_unpack_ttsync<mark>(),
@@ -1021,8 +1023,9 @@ ALWI void matmul_block_fe(
     std::uint32_t ct_dim,
     std::uint32_t rt_dim,
     std::uint32_t kt_dim) {
-    constexpr DataFormat f = matmul_fe_phase_format<in0_cb, in1_cb>();
-    constexpr std::uint32_t AUTO = MATMUL_REUSE_DIR_AUTO;
+    // a kernel bound by the kernel config buffer runs main's direction and math
+    constexpr DataFormat f = LLK_SIZE_MODE ? DataFormat::Invalid : matmul_fe_phase_format<in0_cb, in1_cb>();
+    constexpr std::uint32_t AUTO = LLK_SIZE_MODE ? 0 : MATMUL_REUSE_DIR_AUTO;
     matmul_block<
         false,
         matmul_fe_unpack_ttsync<mark>(),
