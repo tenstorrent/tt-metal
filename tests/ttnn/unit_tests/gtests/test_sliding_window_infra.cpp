@@ -3,8 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <fmt/base.h>
+#include <algorithm>
+#include <array>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "gtest/gtest.h"
 #include <tt-logger/tt-logger.hpp>
@@ -79,6 +82,82 @@ TEST(SlidingWindowHash, ExplicitCeilPadSeparatesKeys) {
     auto same_as_computed = computed;
     same_as_computed.ceil_pad_hw = computed.get_ceil_pad_hw();
     EXPECT_EQ(computed.get_hash(), same_as_computed.get_hash());
+}
+
+SlidingWindowConfig conv3x3(uint32_t batch, uint32_t h, uint32_t w, const std::array<uint32_t, 4>& padding) {
+    return SlidingWindowConfig{
+        .batch_size = batch,
+        .input_hw = {h, w},
+        .window_hw = {3, 3},
+        .stride_hw = {1, 1},
+        .padding = padding,
+        .num_cores_nhw = 1,
+        .core_range_set = tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange({0, 0}, {0, 0}))};
+}
+
+// The whole image's border comes from the boundary: every border position has its own stick, interior positions none.
+TEST(ExternalHaloSpec, WholeImageBorderMapsEachPositionToItsOwnStick) {
+    constexpr uint32_t batch = 2, h = 4, w = 5, hp = h + 2, wp = w + 2;
+    const auto spec = external_halo_spec(conv3x3(batch, h, w, {1, 1, 1, 1}));
+    ASSERT_EQ(spec.sticks_per_image(), 2 * wp + 2 * h);
+
+    std::vector<int> hits(batch * spec.sticks_per_image(), 0);
+    for (uint32_t b = 0; b < batch; ++b) {
+        for (uint32_t r = 0; r < hp; ++r) {
+            for (uint32_t c = 0; c < wp; ++c) {
+                const int64_t idx = spec.boundary_index(b, r, c);
+                const bool border = r == 0 || r == hp - 1 || c == 0 || c == wp - 1;
+                if (!border) {
+                    EXPECT_EQ(idx, -1) << "b " << b << " r " << r << " c " << c;
+                    continue;
+                }
+                ASSERT_GE(idx, static_cast<int64_t>(b * spec.sticks_per_image()));
+                ASSERT_LT(idx, static_cast<int64_t>((b + 1) * spec.sticks_per_image()));
+                hits[idx]++;
+            }
+        }
+    }
+    EXPECT_TRUE(std::all_of(hits.begin(), hits.end(), [](int n) { return n == 1; }));
+
+    // Top row, bottom row, then the left and the right column of the interior rows.
+    EXPECT_EQ(spec.boundary_index(0, 0, 0), 0);
+    EXPECT_EQ(spec.boundary_index(0, hp - 1, 0), wp);
+    EXPECT_EQ(spec.boundary_index(0, 1, 0), 2 * wp);
+    EXPECT_EQ(spec.boundary_index(0, 1, wp - 1), 2 * wp + h);
+    EXPECT_EQ(spec.boundary_index(1, 0, 0), spec.sticks_per_image());
+}
+
+// A width slice of a wider image: an inner slice takes only the top and bottom rows above and below its columns,
+// an edge slice also the image's side border.
+TEST(ExternalHaloSpec, WidthSliceTakesTheBorderOfItsColumns) {
+    constexpr uint32_t h = 4, image_w = 8, wb = image_w + 2;
+    const ExternalHaloWindow inner_window{
+        .col_offset = 3, .boundary_w = image_w, .dev_pad_left = 1, .dev_pad_right = 1};
+    const auto inner = external_halo_spec(conv3x3(1, h, 2, {1, 1, 0, 0}), inner_window);
+    ASSERT_EQ(inner.sticks_per_image(), 2 * wb + 2 * h);
+    for (uint32_t c = 0; c < 2; ++c) {
+        EXPECT_EQ(inner.boundary_index(0, 0, c), 1 + 3 + c);
+        EXPECT_EQ(inner.boundary_index(0, h + 1, c), wb + 1 + 3 + c);
+        for (uint32_t r = 1; r <= h; ++r) {
+            EXPECT_EQ(inner.boundary_index(0, r, c), -1);
+        }
+    }
+
+    const ExternalHaloWindow right_window{
+        .col_offset = 5, .boundary_w = image_w, .dev_pad_left = 1, .dev_pad_right = 1};
+    const auto right = external_halo_spec(conv3x3(1, h, 3, {1, 1, 0, 1}), right_window);
+    EXPECT_EQ(right.boundary_index(0, 0, 3), wb - 1);
+    EXPECT_EQ(right.boundary_index(0, 1, 3), 2 * wb + h);
+    EXPECT_EQ(right.boundary_index(0, h, 3), 2 * wb + h + h - 1);
+}
+
+TEST(ExternalHaloSpec, RejectsWindowsOutsideTheImage) {
+    const auto config = conv3x3(1, 4, 2, {1, 1, 0, 0});
+    EXPECT_ANY_THROW(external_halo_spec(config, ExternalHaloWindow{.col_offset = 3}));
+    EXPECT_ANY_THROW(external_halo_spec(config, ExternalHaloWindow{.col_offset = 7, .boundary_w = 8}));
+    EXPECT_ANY_THROW(external_halo_spec(
+        conv3x3(1, 4, 2, {1, 1, 1, 0}),
+        ExternalHaloWindow{.col_offset = 3, .boundary_w = 8, .dev_pad_left = 1, .dev_pad_right = 1}));
 }
 
 INSTANTIATE_TEST_SUITE_P(
