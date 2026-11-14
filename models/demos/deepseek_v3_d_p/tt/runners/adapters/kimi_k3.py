@@ -60,6 +60,13 @@ class KimiK3Adapter(MLAPrefillAdapter):
 
     # RadixArk's Kimi-K3-DSpark: a DFlash-style drafter (num_target_layers=93) tapping 7/23/51/67/83.
     # Its golden is keyed to prefill_trace_default's prompt, so the two move together.
+    #
+    # DFlash2 (lightseekorg/kimi-k3-dflash2, MLA, taps 19/37/66/78/90) attaches the same way: point
+    # DFLASH_HF_MODEL (or dflash_checkpoint_path) at its checkpoint and the runtime picks the MLA drafter from
+    # its config.json (DFlashDrafterConfig.hf_attention_mode), writing one 576-wide latent cache that migrates
+    # as the "dflash_latent" table config. Its golden is a latent_cache.safetensors (dflash_kv_validation) set
+    # via PREFILL_DFLASH_GOLDEN_KV_DIR. Not the default: no DFlash2 checkpoint or golden is staged yet, and the
+    # DSpark golden below is what CI checks. Swap both defaults together once they are.
     supports_dflash = True
     # The drafter partial is one more handoff plane (TtKimiK3Runtime._pack_activation), not a 2H width.
     dflash_partial_separate_plane = True
