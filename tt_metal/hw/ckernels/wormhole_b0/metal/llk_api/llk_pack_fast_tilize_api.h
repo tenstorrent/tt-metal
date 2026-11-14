@@ -11,6 +11,41 @@
  * LLK PACK FAST TILIZE
  *************************************************************************/
 
+/**
+ * @brief Whether fast_tilize_init/block/uninit must take the plain tilize path for this block.
+ *
+ * The predicate does not check the L1 format of 32x32 tiles (input format support stays the caller contract:
+ * the fast unpack takes Float16_b or Float32); 16x32 tiny tiles need an even width and Float16_b or Float32,
+ * both with 16-row faces (see ckernel::fast_tilize_block_supported). Both the input and the
+ * output CB are checked, tile shape, face geometry and L1 format, through this thread's arrays, which cover every CB
+ * index and are generated from the same descriptor on every thread (the unpack-source and pack-destination L1 formats
+ * of a CB are equalized by the JIT), so all three threads reach the same decision even when the two CBs differ.
+ *
+ * @param icb: Input circular buffer identifier.
+ * @param ocb: Output circular buffer identifier.
+ * @param block: Block width in tiles (full_dim at init/uninit).
+ */
+inline bool llk_fast_tilize_needs_fallback(
+    const std::uint32_t icb, const std::uint32_t ocb, const std::uint32_t block) {
+    const std::uint32_t in_id = get_output_id(icb);
+    const std::uint32_t out_id = get_output_id(ocb);
+    return !(
+        ckernel::fast_tilize_block_supported(
+            get_output_tile_r_dim(in_id),
+            get_output_tile_c_dim(in_id),
+            get_output_face_r_dim(in_id),
+            get_output_num_faces(in_id),
+            get_output_dst_format(in_id),
+            block) &&
+        ckernel::fast_tilize_block_supported(
+            get_output_tile_r_dim(out_id),
+            get_output_tile_c_dim(out_id),
+            get_output_face_r_dim(out_id),
+            get_output_num_faces(out_id),
+            get_output_dst_format(out_id),
+            block));
+}
+
 inline void llk_pack_fast_tilize_init(
     const std::uint32_t input_operand, const std::uint32_t pack_output, const std::uint32_t unit_dim) {
     const std::uint8_t input_id = get_output_id(input_operand);

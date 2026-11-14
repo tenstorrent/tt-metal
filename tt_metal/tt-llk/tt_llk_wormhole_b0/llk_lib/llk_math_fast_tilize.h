@@ -9,6 +9,7 @@
 #include "ckernel_template.h"
 #include "cmath_common.h"
 #include "llk_assert.h"
+#include "llk_fast_tilize_common.h"
 #include "llk_math_common.h"
 
 using namespace ckernel;
@@ -186,7 +187,7 @@ inline void _llk_math_fast_tilize_uninit_(const std::uint32_t unpack_dst_format)
  * @param unpack_dst_format: Destination data format (DataFormat enum underlying value); affects the bottom-face offset.
  * @param unit_dim: Number of tiles processed per iteration; must match the unpacker.
  * @param num_units: Number of units processed in this call.
- * @param num_faces: Number of faces per tile (must be 2 or 4).
+ * @param num_faces: Number of faces per tile, valid values = <2, 4>; 2 (16x32 tiny tiles) only together with unit_dim 2.
  * @note Call @ref _llk_math_fast_tilize_init_ with matching unpack_dst_format and unit_dim before this function.
  * @note On the unpack thread, @ref _llk_unpack_fast_tilize_block_ must feed the tiles into SrcA/SrcB.
  * @note On the pack thread, @ref _llk_pack_fast_tilize_block_ drains the split dest halves into tilized L1 output.
@@ -199,6 +200,7 @@ inline void _llk_math_fast_tilize_block_(
     const std::uint32_t num_faces = 4)
 {
     LLK_ASSERT(num_faces == 2 || num_faces == 4, "num_faces must be 2 or 4");
+    LLK_ASSERT(fast_tilize_unit_supports_faces(unit_dim, num_faces), FAST_TILIZE_TINY_TILE_UNIT_DIM_MSG);
     // split dest and write the top faces in the first half and the bottom faces in the second half (or more precisely quarter, since dest sync half)
     // make life easier by lying to set_dst_write_addr that tile shape is 32x16 so correct stride is obtained for dst_index
     math::set_dst_write_addr<DstTileShape::Tile32x16, UnpackDestination::SrcRegs>(dst_index);
