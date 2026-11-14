@@ -150,18 +150,11 @@ def main():
         T("sdpa_pf_kernel", lambda: PP.sparse_sdpa_pf(q_rm, kv, ids, pf.scale, 128, pf.ckc_sdpa))
         out, stats = PP.sparse_sdpa_pf(q_rm, kv, ids, pf.scale, 128, pf.ckc_sdpa)
         T("merge_scale_ops", lambda: pf._pf_merge_scale(stats))
-        scale = pf._pf_merge_scale(stats)
-
-        def post():
-            s_rm = ttnn.permute(ttnn.to_layout(scale, ttnn.ROW_MAJOR_LAYOUT), (0, 3, 2, 1))
-            s_t = ttnn.to_layout(s_rm, ttnn.TILE_LAYOUT)
-            return [s_t]
-
-        T("scale_permute", post)
-        s_t = post()[0]
+        s_t = pf._pf_merge_scale(stats)
         T("o_tilize", lambda: ttnn.to_layout(out, ttnn.TILE_LAYOUT))
         o_t = ttnn.to_layout(out, ttnn.TILE_LAYOUT)
         T("o_mul_scale", lambda: ttnn.multiply(o_t, s_t))
+        T("o_mul_scale_bfp8", lambda: ttnn.multiply(o_t, s_t, dtype=ttnn.bfloat8_b))
         o_s = ttnn.multiply(o_t, s_t)
         T("rs_heads", lambda: pf._rs(o_s, 1))
         # whole layer
