@@ -1345,7 +1345,7 @@ PERF_TEST_SCHEMAS_QSR = {
         },
     },
     "perf_matmul_quasar": {
-        "version": 5,
+        "version": 6,
         "columns": [
             "c_dimm",
             "dest_acc",
@@ -1374,6 +1374,7 @@ PERF_TEST_SCHEMAS_QSR = {
             "num_faces_c_dim_B",
             "num_faces_r_dim_A",
             "num_faces_r_dim_B",
+            "quasar_variant",
             "r_dimm",
             "tile_cnt",
             "unpack_to_dest",

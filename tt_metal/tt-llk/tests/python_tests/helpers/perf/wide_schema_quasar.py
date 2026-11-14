@@ -112,6 +112,7 @@ DB_SCHEMA = [
     Column("output_tile_cnt", "int64", True, "configuration"),
     Column("pool_type", "string", True, "configuration"),
     Column("r_dimm", "int64", True, "configuration"),
+    Column("quasar_variant", "string", True, "configuration"),
     Column("relu_config", "int64", True, "configuration"),
     Column("relu_type", "string", True, "configuration"),
     Column("reuse_dest_type", "string", True, "configuration"),

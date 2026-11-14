@@ -10,6 +10,7 @@ from ctypes import c_uint32
 from dataclasses import dataclass, field
 from typing import Optional
 
+from .chip_architecture import quasar_variant
 from .format_config import DataFormat
 from .golden_generators import TILE_DIMENSIONS
 from .llk_params import (
@@ -321,6 +322,21 @@ class SFPU_CLOBBER_LREGS(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return "#define SFPU_CLOBBER_LREGS" if self.clobber_lregs else ""
+
+
+@dataclass
+class QUASAR_VARIANT(TemplateParameter):
+    """The Quasar part variant this build targets, recorded as a perf CSV column.
+
+    The variant comes from ``TT_METAL_QUASAR_VARIANT`` at import time and changes which formats
+    and register hints a test sweeps, but it is invisible in the parameter tuple. This reads the
+    same variable so rows from different variants stay distinguishable; it emits no code.
+    """
+
+    quasar_variant: str = field(default_factory=lambda: quasar_variant() or "quasar")
+
+    def convert_to_cpp(self) -> str:
+        return ""
 
 
 @dataclass
