@@ -14,33 +14,28 @@ import torch
 _LOADER = Path(__file__).resolve().parents[3] / "experimental" / "lora" / "ltx_adapter_loader.py"
 
 
-def _load_loader():
-    """Import the loader's pure key-parsing code without ttnn (its device-side imports are stubbed)."""
+@pytest.fixture(scope="module")
+def loader():
+    """Import the loader's pure key-parsing code without ttnn (its device-side imports are stubbed).
+
+    The stubs and the loaded module live in sys.modules only while this fixture is active, under a
+    private module name, and no existing module is modified.
+    """
     pkg = "models.tt_dit.experimental.lora"
     stubs = {
         "models.tt_dit.layers.lora": types.SimpleNamespace(LoRAMixin=type("LoRAMixin", (), {})),
         f"{pkg}.promote": types.SimpleNamespace(promote_to_lora=lambda *a, **k: None),
     }
-    saved = {k: sys.modules.get(k) for k in stubs}
-    sys.modules.update(stubs)
-    try:
-        spec = importlib.util.spec_from_file_location(f"{pkg}.ltx_adapter_loader", _LOADER)
+    name = f"{pkg}._ltx_adapter_loader_under_test"
+    with pytest.MonkeyPatch.context() as mp:
+        for key, stub in stubs.items():
+            mp.setitem(sys.modules, key, stub)
+        spec = importlib.util.spec_from_file_location(name, _LOADER)
         mod = importlib.util.module_from_spec(spec)
-        for name in ("models", "models.tt_dit", "models.tt_dit.experimental", pkg):
-            sys.modules.setdefault(name, types.ModuleType(name)).__path__ = []
-        sys.modules[spec.name] = mod
+        mp.setitem(sys.modules, name, mod)
         spec.loader.exec_module(mod)
-    finally:
-        for k, v in saved.items():
-            if v is None:
-                sys.modules.pop(k, None)
-            else:
-                sys.modules[k] = v
-    return mod
+        yield mod
 
-
-_loader = _load_loader()
-_alpha_key, _collect_pairs, _parse_target = _loader._alpha_key, _loader._collect_pairs, _loader._parse_target
 
 RANK = 4
 ALPHA = 8.0
@@ -56,7 +51,8 @@ TARGETS = [
 
 @pytest.mark.parametrize("block_prefix", ["transformer_blocks", "blocks"])
 @pytest.mark.parametrize("outer", ["", "diffusion_model."])
-def test_alpha_reaches_every_target(block_prefix, outer):
+def test_alpha_reaches_every_target(loader, block_prefix, outer):
+    _alpha_key, _collect_pairs, _parse_target = loader._alpha_key, loader._collect_pairs, loader._parse_target
     raw = {}
     for t in TARGETS:
         base = f"{outer}{block_prefix}.3.{t}"
@@ -72,7 +68,8 @@ def test_alpha_reaches_every_target(block_prefix, outer):
         assert alphas.get(_alpha_key(*parsed), float(RANK)) / RANK == ALPHA / RANK == 2.0, base
 
 
-def test_missing_alpha_defaults_to_rank():
+def test_missing_alpha_defaults_to_rank(loader):
+    _alpha_key, _collect_pairs = loader._alpha_key, loader._collect_pairs
     raw = {
         "transformer_blocks.0.ff.net.2.lora_A.weight": torch.zeros(RANK, 8),
         "transformer_blocks.0.ff.net.2.lora_B.weight": torch.zeros(8, RANK),
@@ -81,7 +78,8 @@ def test_missing_alpha_defaults_to_rank():
     assert alphas.get(_alpha_key(0, "ff", "ff2"), float(RANK)) == float(RANK)
 
 
-def _fused_delta(alphas):
+def _fused_delta(_loader, alphas):
+    _alpha_key = _loader._alpha_key
     D, IN = 8, 6
     gen = torch.Generator().manual_seed(0)
     qkvs = {x: {"A": torch.randn(RANK, IN, generator=gen), "B": torch.randn(D, RANK, generator=gen)} for x in "qkv"}
@@ -111,12 +109,12 @@ def _fused_delta(alphas):
     return fused, torch.cat(expected, dim=0)
 
 
-def test_fused_qkv_uses_each_projections_alpha():
-    fused, expected = _fused_delta({"q": 4.0, "k": 8.0, "v": 16.0})
+def test_fused_qkv_uses_each_projections_alpha(loader):
+    fused, expected = _fused_delta(loader, {"q": 4.0, "k": 8.0, "v": 16.0})
     torch.testing.assert_close(fused, expected)
 
 
-def test_fused_qkv_equal_and_missing_alpha_unchanged():
+def test_fused_qkv_equal_and_missing_alpha_unchanged(loader):
     for alphas in ({"q": 8.0, "k": 8.0, "v": 8.0}, {}):
-        fused, expected = _fused_delta(alphas)
+        fused, expected = _fused_delta(loader, alphas)
         torch.testing.assert_close(fused, expected)
