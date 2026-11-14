@@ -520,20 +520,19 @@ class Decoder:
         """
         if name in ("qkv", "o", "down"):
             return ttnn.to_memory_config(self.decode_weights[name], ttnn.DRAM_MEMORY_CONFIG)
-        full = ttnn.to_memory_config(self.decode_weights["qkv" if name == "qk" else "gate_up"], ttnn.DRAM_MEMORY_CONFIG)
-        k, n = full.shape[-2], full.shape[-1]
+        # Slice the parts straight out of the sharded decode weight: copying the whole fused weight first and slicing the copy
+        # reads and writes the bytes twice and holds a full-size extra tensor while the parts are made.
+        fused = self.decode_weights["qkv" if name == "qk" else "gate_up"]
+        shape = list(fused.shape)
+        zeros = [0] * len(shape)
+        n = shape[-1]
         if name == "qk":
             # Tied K=V: the decode copy packs [q | k | v] per rank, prefill takes [q | k].
             width = n - self.kv_heads * self.head_dim
-            out = ttnn.slice(full, [0] * len(full.shape), list(full.shape)[:-1] + [width])
-            ttnn.deallocate(full)
-            return out
+            return ttnn.slice(fused, zeros, shape[:-1] + [width], memory_config=ttnn.DRAM_MEMORY_CONFIG)
         half = n // 2
-        shape = list(full.shape)
-        zeros = [0] * len(shape)
-        gate = ttnn.slice(full, zeros, shape[:-1] + [half])
-        up = ttnn.slice(full, zeros[:-1] + [half], shape[:-1] + [n])
-        ttnn.deallocate(full)
+        gate = ttnn.slice(fused, zeros, shape[:-1] + [half], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        up = ttnn.slice(fused, zeros[:-1] + [half], shape[:-1] + [n], memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return gate, up
 
     def _pref_linear(self, x, name, activation=None, weight=None):
