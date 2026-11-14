@@ -275,7 +275,7 @@ bool remote_kernel_cached(IDevice* device, const std::shared_ptr<Kernel>& kernel
     BuildEnvManager& build_env_manager = MetalContext::instance(extract_context_id(device)).build_env_manager();
     for (int i = 0; i < num_binaries; ++i) {
         const JitBuildState& bs = build_env_manager.get_kernel_build_state(
-            device->build_id(), core_type, proc_class, kernel->get_kernel_processor_type(i));
+            device->build_id(), core_type, proc_class, kernel->get_kernel_build_processor(i));
         if (!bs.warmed_elf_reusable(kernel->get_full_kernel_name())) {
             return false;
         }
@@ -295,7 +295,7 @@ void finalize_preprocess_reuse_cache(IDevice* device, const std::shared_ptr<Kern
     BuildEnvManager& build_env_manager = MetalContext::instance(extract_context_id(device)).build_env_manager();
     for (int i = 0; i < num_binaries; ++i) {
         const JitBuildState& bs = build_env_manager.get_kernel_build_state(
-            device->build_id(), core_type, proc_class, kernel->get_kernel_processor_type(i));
+            device->build_id(), core_type, proc_class, kernel->get_kernel_build_processor(i));
         bs.write_reuse_cache(kernel->get_full_kernel_name());
     }
 }
@@ -331,7 +331,7 @@ KernelCompileDescriptor build_kernel_descriptor(
     int num_binaries = kernel->expected_num_binaries();
     for (int i = 0; i < num_binaries; ++i) {
         const JitBuildState& bs = build_env_manager.get_kernel_build_state(
-            device->build_id(), core_type, proc_class, kernel->get_kernel_processor_type(i));
+            device->build_id(), core_type, proc_class, kernel->get_kernel_build_processor(i));
         desc.request.targets.push_back(bs.export_target_recipe(kernel.get()));
         desc.expected_elf_paths.push_back(bs.get_target_out_path(kernel->get_full_kernel_name()));
     }

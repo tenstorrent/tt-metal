@@ -409,11 +409,26 @@ void LaunchProgramAsync(IDevice& device, Program& program, bool force_slow_dispa
                 tt::llrt::send_reset_go_signal(MetalEnvAccessor(metal_ctx.get_env()).impl(), device_id, physical_core);
             }
 
+            // The group's kernel text offsets are CCE0's. A kernel on another CCE of a Keraunos tile was built for
+            // that CCE's SRAM, which sits one SRAM size up in the CCE's own view.
+            const uint32_t eth_cce = programmable_core_type == HalProgrammableCoreType::IDLE_ETH
+                                         ? metal_ctx.get_cluster().get_keraunos_eth_cce(device_id, physical_core)
+                                         : 0;
+            dev_msgs::launch_msg_t launch_msg = kg->launch_msg;
+            if (eth_cce != 0) {
+                const uint32_t cce_base = eth_cce * hal.get_dev_size(programmable_core_type, HalL1MemAddrType::BASE);
+                auto kernel_text_offsets = launch_msg.view().kernel_config().kernel_text_offset();
+                for (uint32_t i = 0; i < kernel_text_offsets.size(); i++) {
+                    if (kernel_text_offsets[i] != 0) {
+                        kernel_text_offsets[i] += cce_base;
+                    }
+                }
+            }
             tt::llrt::write_launch_msg_to_core(
                 MetalEnvAccessor(metal_ctx.get_env()).impl(),
                 device_id,
                 physical_core,
-                kg->launch_msg.view(),
+                launch_msg.view(),
                 kg->go_msg.view(),
                 hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::LAUNCH));
         }

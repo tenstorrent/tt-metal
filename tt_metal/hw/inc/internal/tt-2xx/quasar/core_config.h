@@ -44,8 +44,6 @@ enum class TensixProcessorTypes : uint8_t {
     COUNT = 24
 };
 
-// A Keraunos ethernet core is one HSIO tile: both CCEs, eight harts each. Processors interleave the
-// CCEs, so processor 2 * hart + eth_cce is that CCE's hart (DM0 = CCE0 hart 0, DM1 = CCE1 hart 0).
 enum class EthProcessorTypes : uint8_t {
     DM0 = 0,
     DM1 = 1,
@@ -55,15 +53,7 @@ enum class EthProcessorTypes : uint8_t {
     DM5 = 5,
     DM6 = 6,
     DM7 = 7,
-    DM8 = 8,
-    DM9 = 9,
-    DM10 = 10,
-    DM11 = 11,
-    DM12 = 12,
-    DM13 = 13,
-    DM14 = 14,
-    DM15 = 15,
-    COUNT = 16
+    COUNT = 8
 };
 
 enum class DispatchEngineProcessorTypes : uint8_t {
@@ -133,8 +123,7 @@ constexpr uint8_t MaxProcessorsPerCoreType = 24;
 constexpr uint8_t MaxProcessorsForThreadingVariables =
     16;  // 8 DMs + 4 compute engine slots; round up to multiple of 8 for alignment
 constexpr uint8_t MaxDMProcessorsPerCoreType = 8;
-// Per-processor startup slots: 8 DMs + 4 TRISCs per engine on Tensix, 16 harts on a Keraunos core.
-constexpr uint8_t MaxNumKernels = 16;
+constexpr uint8_t MaxNumKernels = MaxDMProcessorsPerCoreType + 4;  // +4 for the 4 TRISCs per engine.
 constexpr uint8_t NumTensixDispatchClasses = 3;
 constexpr uint8_t NumEthDispatchClasses = 2;
 constexpr uint8_t NumDramDispatchClasses = 1;

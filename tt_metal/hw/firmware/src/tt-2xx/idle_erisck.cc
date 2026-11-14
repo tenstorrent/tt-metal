@@ -36,7 +36,7 @@ uint32_t _start() {
     uint32_t my_kt = launch_msg->kernel_config.kernel_text_offset[hartid];
     uint32_t thread_0_hartid = hartid;
     if (launch_msg->kernel_config.enables & (1u << hartid)) {
-        for (uint32_t j = 0; j < PROCESSOR_COUNT; j++) {
+        for (uint32_t j = 0; j < MaxDMProcessorsPerCoreType; j++) {
             if ((launch_msg->kernel_config.enables & (1u << j)) &&
                 launch_msg->kernel_config.kernel_text_offset[j] == my_kt) {
                 thread_0_hartid = j;

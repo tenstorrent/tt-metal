@@ -450,7 +450,7 @@ bool Kernel::binaries_exist_on_disk(const IDevice* device, const std::string& bi
             device->build_id(),
             core_type,
             processor_class,
-            this->get_kernel_processor_type(i),
+            this->get_kernel_build_processor(i),
             binary_root,
             this->kernel_full_name_);
 
@@ -473,7 +473,7 @@ std::vector<std::string> Kernel::file_paths(const IDevice& device, const std::st
             device.build_id(),
             core_type,
             processor_class,
-            this->get_kernel_processor_type(i),
+            this->get_kernel_build_processor(i),
             binary_root,
             this->kernel_full_name_));
     }
@@ -502,7 +502,12 @@ ll_api::BufRwInfo Kernel::query_buf_rw(const IDevice& device) const {
         const uint32_t processor_type = this->get_kernel_processor_type(i);
         const auto load_type = hal.get_jit_build_config(core_type, processor_class, processor_type).memory_load;
         const std::string path = build_env_manager.get_kernel_binary_path(
-            device.build_id(), core_type, processor_class, processor_type, binary_root, this->kernel_full_name_);
+            device.build_id(),
+            core_type,
+            processor_class,
+            this->get_kernel_build_processor(i),
+            binary_root,
+            this->kernel_full_name_);
         const ll_api::BinaryMetadata& md = llrt::get_binary_metadata(path, load_type);
         info.reads.insert(md.buf_rw.reads.begin(), md.buf_rw.reads.end());
         info.writes.insert(md.buf_rw.writes.begin(), md.buf_rw.writes.end());
@@ -596,7 +601,21 @@ std::vector<uint32_t> Kernel::get_processor_indices_for_binary(int binary_index)
 
 uint8_t DataMovementKernel::expected_num_binaries() const { return 1; }
 
-uint8_t EthernetKernel::expected_num_binaries() const { return 1; }
+// One binary per CCE on a Keraunos ethernet core (the kernel's text and data are linked into the CCE's own SRAM),
+// and one everywhere else.
+uint8_t EthernetKernel::expected_num_binaries() const {
+    const auto& hal = MetalContext::instance(this->get_context_id()).hal();
+    return hal.get_build_variants(hal.get_programmable_core_type_index(this->get_kernel_programmable_core_type()));
+}
+
+uint32_t EthernetKernel::get_kernel_build_processor(int index) const {
+    TT_ASSERT(0 <= index && index < expected_num_binaries(), "index out of bounds");
+    const auto& hal = MetalContext::instance(this->get_context_id()).hal();
+    const uint32_t processors = hal.get_processor_types_count(
+        hal.get_programmable_core_type_index(this->get_kernel_programmable_core_type()),
+        enchantum::to_underlying(HalProcessorClassType::DM));
+    return enchantum::to_underlying(this->config_.processor) + static_cast<uint32_t>(index) * processors;
+}
 
 uint8_t DramKernel::expected_num_binaries() const { return 1; }
 
@@ -1156,11 +1175,12 @@ void EthernetKernel::generate_binaries(IDevice* device, JitBuildOptions& /*build
                                    .hal()
                                    .get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
-    int erisc_id = enchantum::to_underlying(this->config_.processor);
-    jit_build(
-        build_env_manager_for(*device).get_kernel_build_state(
-            device->build_id(), erisc_core_type, dm_class_idx, erisc_id),
-        this);
+    for (int i = 0; i < this->expected_num_binaries(); i++) {
+        jit_build(
+            build_env_manager_for(*device).get_kernel_build_state(
+                device->build_id(), erisc_core_type, dm_class_idx, this->get_kernel_build_processor(i)),
+            this);
+    }
 }
 
 void DramKernel::generate_binaries(IDevice* device, JitBuildOptions& /*build_options*/) const {
@@ -1260,8 +1280,14 @@ void EthernetKernel::read_binaries(IDevice* device, const std::string& binary_ro
                          .hal()
                          .get_jit_build_config(erisc_core_type, k_EthDmClassIndex, erisc_id)
                          .memory_load;
+    for (int i = 0; i < this->expected_num_binaries(); i++) {
     const auto binary_path = build_env_manager_for(*device).get_kernel_binary_path(
-        device->build_id(), erisc_core_type, k_EthDmClassIndex, erisc_id, binary_root, this->kernel_full_name_);
+        device->build_id(),
+        erisc_core_type,
+        k_EthDmClassIndex,
+        this->get_kernel_build_processor(i),
+        binary_root,
+        this->kernel_full_name_);
     const ll_api::memory& binary_mem =
         llrt::get_risc_binary(binary_path, load_type, [this](ll_api::memory& binary_mem) {
             if (tt::tt_metal::MetalContext::instance(this->get_context_id()).rtoptions().get_erisc_iram_enabled() &&
@@ -1283,6 +1309,7 @@ void EthernetKernel::read_binaries(IDevice* device, const std::string& binary_ro
     binaries.push_back(&binary_mem);
     [[maybe_unused]] uint32_t binary_size = binary_mem.get_packed_size();
     log_debug(LogLoader, "ERISC={}, name={}, size={} (bytes)", erisc_id, this->name(), binary_size);
+    }
     this->set_binaries(device_build_env_for(*device).build_key(), std::move(binaries));
 }
 
@@ -1331,7 +1358,10 @@ bool EthernetKernel::configure(
     const auto& hal = context.hal();
     auto device_id = device->id();
     auto ethernet_core = device->ethernet_core_from_logical_core(logical_core);
-    const ll_api::memory& binary_mem = *this->binaries(device_build_env_for(*device).build_key())[0];
+    // The binary built for this core's CCE (binary i is CCE i; every other core has one binary).
+    const uint32_t eth_cce = env.get_cluster().get_keraunos_eth_cce(device_id, ethernet_core);
+    const auto& cce_binaries = this->binaries(device_build_env_for(*device).build_key());
+    const ll_api::memory& binary_mem = *cce_binaries[std::min<size_t>(eth_cce, cce_binaries.size() - 1)];
 
     if (hal.get_core_kernel_stored_in_config_buffer(this->get_kernel_programmable_core_type())) {
         uint32_t offset_idx = hal.get_processor_index(

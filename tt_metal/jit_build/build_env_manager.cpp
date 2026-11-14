@@ -37,7 +37,9 @@ BuildEnvManager::BuildEnvManager(const Hal& hal) {
         kernel_build_state_indices_[programmable_core].resize(processor_class_count);
         firmware_build_state_indices_[programmable_core].resize(processor_class_count);
         for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
-            const uint32_t processor_types_count = hal.get_processor_types_count(programmable_core, processor_class);
+            // A kernel has one build state per processor and build variant (per-CCE builds on Keraunos).
+            const uint32_t processor_types_count = hal.get_processor_types_count(programmable_core, processor_class) *
+                                                   hal.get_build_variants(programmable_core);
             kernel_build_state_indices_[programmable_core][processor_class] = {kernel_index, processor_types_count};
             kernel_index += processor_types_count;
 
@@ -129,7 +131,15 @@ std::vector<JitBuildState> create_build_state(JitBuildEnv& build_env, const JitD
             }
         }
     } else {
-        total_num_build_states = hal.get_total_num_risc_processors();
+        for (uint32_t programmable_core = 0; programmable_core < hal.get_programmable_core_type_count();
+             programmable_core++) {
+            const uint32_t processor_class_count =
+                hal.get_processor_classes_count(hal.get_programmable_core_type(programmable_core));
+            for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
+                total_num_build_states += hal.get_processor_types_count(programmable_core, processor_class) *
+                                          hal.get_build_variants(programmable_core);
+            }
+        }
     }
     std::vector<JitBuildState> build_states;
     build_states.reserve(total_num_build_states);
@@ -150,7 +160,8 @@ std::vector<JitBuildState> create_build_state(JitBuildEnv& build_env, const JitD
 
             const uint32_t num_build_states =
                 is_fw ? hal.get_processor_class_num_fw_binaries(programmable_core, processor_class)
-                      : hal.get_processor_types_count(programmable_core, processor_class);
+                      : hal.get_processor_types_count(programmable_core, processor_class) *
+                            hal.get_build_variants(programmable_core);
             for (uint32_t build_state_idx = 0; build_state_idx < num_build_states; build_state_idx++) {
                 config.processor_id = build_state_idx;
                 build_states.emplace_back(build_env, config, hal);

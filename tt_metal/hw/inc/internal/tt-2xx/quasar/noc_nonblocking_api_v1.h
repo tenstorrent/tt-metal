@@ -336,7 +336,7 @@ inline __attribute__((always_inline)) uint32_t noc_get_interim_inline_value_addr
     uint32_t offset = dst_noc_addr & 0xF;
 
 #if defined(COMPILE_FOR_IDLE_ERISC)
-    uintptr_t src_addr = MEM_IERISC_L1_INLINE_BASE + (2 * MEM_L1_INLINE_SIZE_PER_NOC) * proc_type;
+    uintptr_t src_addr = ETH_CCE_LOCAL_BASE + MEM_IERISC_L1_INLINE_BASE + (2 * MEM_L1_INLINE_SIZE_PER_NOC) * proc_type;
 #elif defined(COMPILE_FOR_ERISC)
     uintptr_t src_addr = MEM_AERISC_L1_INLINE_BASE + (2 * MEM_L1_INLINE_SIZE_PER_NOC) * proc_type;
 #else

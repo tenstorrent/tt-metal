@@ -648,7 +648,15 @@ uint32_t finalize_kernel_bins(
             const auto& binaries = kernel->binaries(build_key);
             uint32_t num_binaries = kernel->expected_num_binaries();
             TT_ASSERT(kernel->get_kernel_programmable_core_type() == programmable_core_type);
+            // A Keraunos ethernet kernel has a binary per CCE, linked at that CCE's SRAM base. The group records
+            // CCE0's text offsets; the launch message for a core on another CCE is shifted by that CCE's base.
+            const bool per_cce_binaries =
+                programmable_core_type == HalProgrammableCoreType::IDLE_ETH &&
+                hal.get_build_variants(programmable_core_type_index) > 1;
             for (uint32_t i = 0; i < num_binaries; i++) {
+                if (per_cce_binaries && i > 0) {
+                    break;
+                }
                 uint32_t kernel_text_offset = 0;
                 if (hal.get_core_kernel_stored_in_config_buffer(programmable_core_type)) {
                     kernel_text_offset = offset;

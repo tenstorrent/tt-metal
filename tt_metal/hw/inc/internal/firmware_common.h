@@ -167,6 +167,13 @@ uint32_t firmware_config_init(
 #pragma GCC unroll ProgrammableCoreType::COUNT
     for (uint32_t index = 0; index < ProgrammableCoreType::COUNT; index++) {
         kernel_config_base[index] = launch_msg_address->kernel_config.kernel_config_base[index];
+#if defined(ARCH_QUASAR)
+        // The host's kernel config base is a CCE-relative offset; an ethernet CCE's own SRAM sits at
+        // ETH_CCE_LOCAL_BASE in its view (0 for CCE0, and for every other core type).
+        if (index == ProgrammableCoreType::IDLE_ETH) {
+            kernel_config_base[index] += ETH_CCE_LOCAL_BASE;
+        }
+#endif
         sem_l1_base[index] =
             (uint32_t tt_l1_ptr*)(kernel_config_base[index] + launch_msg_address->kernel_config.sem_offset[index]);
     }

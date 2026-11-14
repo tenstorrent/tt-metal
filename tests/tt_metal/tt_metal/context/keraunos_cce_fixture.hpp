@@ -78,11 +78,11 @@ protected:
         unreserved_noc_ = hal.get_dev_noc_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
     }
 
-    // Descriptor core (4, hsio) is HSIO hsio CCE 0.
-    std::optional<Hsio> hsio_core(uint32_t hsio) const {
+    // Descriptor core (4, hsio) is HSIO hsio CCE 0, and (5, hsio) is its CCE 1.
+    std::optional<Hsio> hsio_core(uint32_t hsio, uint32_t eth_cce = 0) const {
         const auto& chiplet = soc_desc_of(device_).get_arch_descriptor().get_keraunos();
         for (const auto& core : chiplet.cores) {
-            if (core.hsio == hsio && core.eth_cce == 0) {
+            if (core.hsio == hsio && core.eth_cce == eth_cce) {
                 const CoreCoord logical =
                     soc_desc_of(device_).get_logical_ethernet_core_from_physical({core.coord.x, core.coord.y});
                 return Hsio{logical, core.hsio, core.eth_cce};

@@ -8,11 +8,11 @@
 
 struct DevicePrintMemoryLayout {
 #if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
-    // Both CCEs of a Keraunos HSIO tile, eight harts each. EthProcessorTypes::COUNT is 16.
+    // Eight harts, same buffer as a CCE. EthProcessorTypes::COUNT is 8.
 #if !defined(DEVICE_PRINT_BUFFER_SIZE)
-    DevicePrintBuffer<1632, 16> buffer;
+    DevicePrintBuffer<1632, 8> buffer;
 #else
-    DevicePrintBuffer<DEVICE_PRINT_BUFFER_SIZE, 16> buffer;
+    DevicePrintBuffer<DEVICE_PRINT_BUFFER_SIZE, 8> buffer;
 #endif
 #elif defined(COMPILE_FOR_DRISC)
     // CCE is DM-only: one buffer covers all eight harts, same layout as dispatch.

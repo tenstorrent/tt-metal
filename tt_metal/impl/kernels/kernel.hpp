@@ -405,6 +405,9 @@ public:
     HalProgrammableCoreType get_kernel_programmable_core_type() const { return this->programmable_core_type_; }
     HalProcessorClassType get_kernel_processor_class() const { return this->processor_class_; }
     virtual uint32_t get_kernel_processor_type(int index) const = 0;
+    // The build state (within the core type and class) that binary `index` is built by. It is the processor type,
+    // except on a core with per-CCE builds, where each CCE has its own block of build states.
+    virtual uint32_t get_kernel_build_processor(int index) const { return this->get_kernel_processor_type(index); }
 
     CoreType get_kernel_core_type() const;
     void set_full_name(const std::string& s) { kernel_full_name_ = s; }
@@ -629,6 +632,7 @@ public:
     ~EthernetKernel() override = default;
 
     uint32_t get_kernel_processor_type(int index) const override;
+    uint32_t get_kernel_build_processor(int index) const override;
     void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
     void read_binaries(IDevice* device, const std::string& binary_root) override;
 

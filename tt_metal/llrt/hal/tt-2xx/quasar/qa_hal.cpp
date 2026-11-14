@@ -104,19 +104,19 @@ public:
         // (which XIPify's check_relaxed expects); --no-relax only stops the linker from acting on them.
         flags += "-Wl,--no-relax ";
         if (params.core_type == HalProgrammableCoreType::IDLE_ETH) {
-            // processor_id is the firmware index (= CCE) for firmware and the processor (2 * hart + eth_cce)
-            // for kernels. Each CCE's image is linked into its own SRAM.
-            const uint32_t eth_cce = params.processor_id % MEM_IERISC_ETH_CCES;
-            const uint32_t hart = params.processor_id / MEM_IERISC_ETH_CCES;
-            const DeviceAddr eth_cce_base = MEM_IERISC_ETH_CCE_BASE(eth_cce);
-            const DeviceAddr text = eth_cce_base + MEM_IERISC_FIRMWARE_BASE;
-            const DeviceAddr data = eth_cce_base + MEM_IERISC_GLOBAL_BASE;
-            const DeviceAddr tls = eth_cce_base + MEM_IERISC_LOCAL_BASE;
+            // Firmware is built per CCE (processor_id is the CCE); a kernel's processor_id is
+            // MEM_IERISC_LOCAL_HARTS * CCE + hart. Each build is linked into its own CCE's SRAM, at the CCE's base.
+            const uint32_t eth_cce = params.is_fw ? params.processor_id : params.processor_id / MEM_IERISC_LOCAL_HARTS;
+            const uint32_t hart = params.is_fw ? 0 : params.processor_id % MEM_IERISC_LOCAL_HARTS;
+            const DeviceAddr cce_base = MEM_IERISC_ETH_CCE_BASE(eth_cce);
+            const DeviceAddr text = cce_base + MEM_IERISC_FIRMWARE_BASE;
+            const DeviceAddr data = cce_base + MEM_IERISC_GLOBAL_BASE;
+            const DeviceAddr tls = cce_base + MEM_IERISC_LOCAL_BASE;
             if (params.is_fw) {
                 flags += fmt::format("-Wl,--defsym=__fw_text={} ", text);
                 flags += fmt::format("-Wl,--defsym=__text_size={} ", MEM_IERISC_FIRMWARE_SIZE);
             } else {
-                const DeviceAddr kn_text = eth_cce_base + MEM_IERISC_KERNEL_BASE + hart * MEM_IERISC_KERNEL_SIZE;
+                const DeviceAddr kn_text = cce_base + MEM_IERISC_KERNEL_BASE + hart * MEM_IERISC_KERNEL_SIZE;
                 flags += fmt::format("-Wl,--defsym=__kn_text={} ", kn_text);
                 flags += fmt::format("-Wl,--defsym=__text_size={} ", MEM_IERISC_KERNEL_SIZE);
                 flags += fmt::format("-Wl,--defsym=__kn_data={} ", data + MEM_IERISC_GLOBAL_SIZE * (1 + hart));
@@ -408,8 +408,11 @@ public:
         auto defines = HalJitBuildQueryBase::defines(params);
         defines.push_back("ARCH_QUASAR");
         if (params.core_type == HalProgrammableCoreType::IDLE_ETH) {
-            // Which CCE of the HSIO tile this firmware or kernel image runs on (see qa_hal_idle_eth.cpp).
-            defines.push_back(fmt::format("ETH_PHYSICAL_CCE_ID={}", params.processor_id % MEM_IERISC_ETH_CCES));
+            // Which CCE of its HSIO tile this firmware or kernel build runs on: where its own SRAM sits in its
+            // view, and where the sibling CCE's does.
+            const uint32_t eth_cce = params.is_fw ? params.processor_id : params.processor_id / MEM_IERISC_LOCAL_HARTS;
+            defines.push_back(fmt::format("ETH_CCE_LOCAL_BASE={}", MEM_IERISC_ETH_CCE_BASE(eth_cce)));
+            defines.push_back(fmt::format("ETH_CCE_PEER_BASE={}", MEM_IERISC_ETH_CCE_BASE(1 - eth_cce)));
         }
         // ttsim does not model the tensix global semaphore registers. UMD picks ttsim over RTL
         // emulation by the same .so test.
@@ -562,15 +565,16 @@ public:
 
     std::string weakened_firmware_target_name(const Params& params) const override {
         if (params.core_type == HalProgrammableCoreType::IDLE_ETH) {
-            return idle_eth_firmware_name(params.processor_id);
+            // A kernel links against the firmware of its own CCE.
+            return idle_eth_firmware_name(
+                params.is_fw ? params.processor_id : params.processor_id / MEM_IERISC_LOCAL_HARTS);
         }
         return HalJitBuildQueryBase::weakened_firmware_target_name(params);
     }
 
 private:
-    // One firmware image per CCE; a kernel links against the image of the CCE its processor is on.
-    static std::string idle_eth_firmware_name(uint32_t processor_id) {
-        const uint32_t eth_cce = processor_id % MEM_IERISC_ETH_CCES;
+    // One firmware image per CCE.
+    static std::string idle_eth_firmware_name(uint32_t eth_cce) {
         return eth_cce == 0 ? "erisc" : fmt::format("eth_cce{}", eth_cce);
     }
 };
@@ -607,6 +611,8 @@ void Hal::initialize_qa(
         static_cast<uint32_t>(EthProcessorTypes::COUNT);
     this->core_info_[static_cast<std::size_t>(HalProgrammableCoreType::IDLE_ETH)].num_physical_riscs_ =
         static_cast<uint32_t>(EthProcessorTypes::COUNT);
+    // One build of each ethernet kernel per CCE of an HSIO tile.
+    this->core_info_[static_cast<std::size_t>(HalProgrammableCoreType::IDLE_ETH)].build_variants_ = MEM_IERISC_ETH_CCES;
     this->core_info_[static_cast<std::size_t>(HalProgrammableCoreType::DISPATCH)].num_physical_riscs_ =
         static_cast<uint32_t>(DispatchEngineProcessorTypes::COUNT);
 

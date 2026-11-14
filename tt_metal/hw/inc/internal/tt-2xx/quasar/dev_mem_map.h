@@ -342,9 +342,9 @@
 // Routing path sizes (union = same memory, consolidated from intermediate aliases)
 #define MEM_ERISC_FABRIC_ROUTING_PATH_SIZE_1D ROUTING_PATH_SIZE_1D
 #define MEM_ERISC_FABRIC_ROUTING_PATH_SIZE ROUTE_TABLE_SIZE_2D  // Union size
-// The active slot has no processors, but its translation unit instantiates the same 16-hart
-// mailboxes_t as idle ethernet; this size is what lets its static_assert accept the struct.
-#define MEM_ERISC_MAILBOX_SIZE 49152
+// Eight ethernet harts instantiate the same mailboxes_t as a CCE. The active slot has no
+// processors; this size is what lets that translation unit's static_assert accept the struct.
+#define MEM_ERISC_MAILBOX_SIZE 32768
 #define MEM_ERISC_KERNEL_CONFIG_SIZE (25 * 1024)
 #define MEM_ERISC_BASE 0
 
@@ -397,27 +397,36 @@
 // Register-width write of offset 0 programs the reset vector. A larger write stays in SRAM.
 #define MEM_IERISC_L1_SIZE (4 * 1024 * 1024)
 #define MEM_IERISC_UNCACHED_BASE 0x800000
-// This core's uncached alias of its own SRAM. Idle ethernet is 8 MiB up. Every other core uses
-// the worker window. Callers use this name; MEM_WORKER_UNCACHED_BASE is the +4 MiB window only.
+// This core's uncached alias of its own SRAM: 8 MiB above the CCE's own base (CCE0 8 MiB, CCE1 12 MiB), so a
+// CCE-relative offset plus this name is the alias address. Every other core uses the worker window.
+// Callers use this name; MEM_WORKER_UNCACHED_BASE is the +4 MiB window only.
 #if defined(COMPILE_FOR_IDLE_ERISC)
-#define MEM_L1_UNCACHED_BASE MEM_IERISC_UNCACHED_BASE
+#define MEM_L1_UNCACHED_BASE (ETH_CCE_LOCAL_BASE + MEM_IERISC_UNCACHED_BASE)
 #else
 #define MEM_L1_UNCACHED_BASE MEM_WORKER_UNCACHED_BASE
 #endif
 #define MEM_IERISC_LOCAL_SIZE MEM_DM_LOCAL_SIZE
 #define MEM_SUBORDINATE_IERISC_LOCAL_SIZE MEM_IERISC_LOCAL_SIZE
 #define MEM_IERISC_LOCAL_HARTS 8
-// One idle-ethernet core is a whole HSIO tile: CCE0's SRAM, then CCE1's. Each CCE sees CCE0's SRAM at
-// local 0 and CCE1's at local MEM_IERISC_L1_SIZE (the native layout bring-up programs), so a core
-// offset is the same address in either CCE's view. CCE1 runs its own image from its own SRAM, laid out
-// like CCE0's but MEM_IERISC_ETH_CCE_BASE(1) up. The mailbox is shared and lives in CCE0's SRAM.
+// One idle-ethernet core is one CCE of an HSIO tile, so a tile is two cores (CCE0 and CCE1). Each CCE sees
+// its own SRAM at local 0, and the sibling CCE's SRAM in the next window, MEM_IERISC_PEER_CCE_BASE (cached;
+// the uncached alias is MEM_L1_UNCACHED_BASE above it). Bring-up programs that view for both CCEs.
 #define MEM_IERISC_ETH_CCES 2
 #define MEM_IERISC_ETH_CCE_BASE(eth_cce) ((eth_cce) * MEM_IERISC_L1_SIZE)
+// The host and the HAL use CCE-relative offsets (CCE0's view). A firmware or kernel build is linked at its own CCE's
+// native addresses, where ETH_CCE_LOCAL_BASE is that CCE's SRAM and ETH_CCE_PEER_BASE its sibling's (the JIT defines
+// both per build).
+#ifndef ETH_CCE_LOCAL_BASE
+#define ETH_CCE_LOCAL_BASE 0
+#endif
+#ifndef ETH_CCE_PEER_BASE
+#define ETH_CCE_PEER_BASE MEM_IERISC_L1_SIZE
+#endif
+#define MEM_IERISC_PEER_CCE_BASE ETH_CCE_PEER_BASE
 // Offsets 0..63 are reset-vector registers, not SRAM. Reserve through 128 and start the mailbox there.
 #define MEM_IERISC_RESERVED_SIZE 128
 #define MEM_IERISC_MAILBOX_BASE MEM_IERISC_RESERVED_SIZE
-// Holds mailboxes_t for 16 harts (DevicePrintBuffer<1632, 16> alone is 26 KiB).
-#define MEM_IERISC_MAILBOX_SIZE 49152
+#define MEM_IERISC_MAILBOX_SIZE 32768
 #define MEM_IERISC_MAILBOX_END (MEM_IERISC_MAILBOX_BASE + MEM_IERISC_MAILBOX_SIZE)
 #define MEM_IERISC_L1_INLINE_BASE MEM_IERISC_MAILBOX_END
 #define MEM_IERISC_L1_INLINE_END MEM_IERISC_L1_INLINE_BASE
@@ -455,7 +464,7 @@
 #define MEM_IERISC_EXIT_NODE_TABLE_BASE MEM_IERISC_FABRIC_ROUTING_PATH_END
 #define MEM_IERISC_EXIT_NODE_TABLE_END (MEM_IERISC_EXIT_NODE_TABLE_BASE + MEM_EXIT_NODE_TABLE_SIZE)
 
-// Offset 0 of each CCE's SRAM is that CCE's reset-vector register. Every hart of the CCE starts there.
+// Offset 0 is the reset-vector register. Every hart starts there.
 #define ETH_BOOT_HART_RESET_VECTOR 0
 #define IERISC_RESET_PC ETH_BOOT_HART_RESET_VECTOR
 #define SUBORDINATE_IERISC_RESET_PC ETH_BOOT_HART_RESET_VECTOR

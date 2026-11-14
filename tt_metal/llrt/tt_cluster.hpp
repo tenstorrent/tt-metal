@@ -392,6 +392,8 @@ public:
     bool is_dram_core(const tt::tt_metal::CoreCoord& core, ChipId chip_id) const;
     bool is_dispatch_core(const tt::tt_metal::CoreCoord& core, ChipId chip_id) const;
     tt::tt_metal::CoreCoord get_logical_ethernet_core_from_virtual(ChipId chip, tt::tt_metal::CoreCoord core) const;
+    // Which CCE of its HSIO tile a Keraunos ethernet core is (0 or 1). 0 for every other core.
+    uint32_t get_keraunos_eth_cce(ChipId chip, tt::tt_metal::CoreCoord virtual_core) const;
 
     // These two functions should be removed in favor of direct translation.
     std::unordered_map<int, int> get_worker_logical_to_virtual_x(ChipId chip_id) const;

@@ -5,7 +5,6 @@
 #include "risc_firmware_initializer.hpp"
 
 #include <algorithm>
-#include <array>
 #include <cstdint>
 #include <chrono>
 #include <future>
@@ -1411,6 +1410,10 @@ void RiscFirmwareInitializer::initialize_firmware(
                 for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
                     auto num_build_states = hal_.get_processor_class_num_fw_binaries(core_type_idx, processor_class);
                     for (uint32_t eriscv_id = 0; eriscv_id < num_build_states; eriscv_id++) {
+                        if (is_idle_eth && quasar_ethernet &&
+                            eriscv_id != cluster_.get_keraunos_eth_cce(device_id, virtual_core)) {
+                            continue;  // One image per CCE; load only this core's.
+                        }
                         auto fw_path = build_env_manager.get_firmware_binary_path(
                             device_id, core_type_idx, processor_class, eriscv_id);
                         const ll_api::memory& binary_mem = llrt::get_risc_binary(fw_path);
@@ -1447,21 +1450,17 @@ void RiscFirmwareInitializer::initialize_firmware(
                 }
             }
             if (quasar_ethernet) {
-                // All harts start together, and the completion slots are 0. The L1 wipe leaves them at 0, so seed
-                // INIT or hart 0 treats the other harts as finished before they have written their slots. Each
-                // subordinate (processors 1..N-1) has one byte; idle_erisc.cc reads them as two words.
+                // All eight harts start together, and the completion word is 0. The L1 wipe leaves it at 0, so seed
+                // INIT or hart 0 treats the other harts as finished before they have written their slots.
                 const auto factory = hal_.get_dev_msgs_factory(core_type);
                 const uint64_t mailbox_addr = hal_.get_dev_addr(core_type, HalL1MemAddrType::MAILBOX);
                 const uint64_t subordinate_sync_addr =
                     mailbox_addr +
                     factory.offset_of<dev_msgs::mailboxes_t>(dev_msgs::mailboxes_t::Field::subordinate_sync);
-                std::array<uint8_t, 2 * sizeof(uint64_t)> subordinate_init{};
-                const uint32_t subordinates = hal_.get_num_risc_processors(core_type) - 1;
-                TT_ASSERT(subordinates <= subordinate_init.size());
-                std::fill_n(subordinate_init.begin(), subordinates, dev_msgs::RUN_SYNC_MSG_INIT);
+                const uint64_t subordinate_init = dev_msgs::RUN_SYNC_MSG_ALL_SUBORDINATES_DMS_INIT;
                 cluster_.write_core(
-                    subordinate_init.data(),
-                    subordinate_init.size(),
+                    &subordinate_init,
+                    sizeof(subordinate_init),
                     tt_cxy_pair(device_id, virtual_core),
                     subordinate_sync_addr);
             }
@@ -1481,21 +1480,14 @@ void RiscFirmwareInitializer::initialize_firmware(
                     // we switch to runtime FW. Must happen before we write PC and deassert.
                     disable_eth_interrupts(device_id, virtual_core);
                 }
-                cluster_.write_reg(
-                    &jit_build_config.fw_launch_addr_value,
-                    tt_cxy_pair(device_id, virtual_core),
-                    jit_build_config.fw_launch_addr);
-                if (quasar_ethernet) {
-                    // A Keraunos core has one image and reset vector per CCE; the first is written above.
-                    const uint32_t images = hal_.get_processor_class_num_fw_binaries(core_type_idx, 0);
-                    for (uint32_t image = 1; image < images; image++) {
-                        const auto& image_config = hal_.get_jit_build_config(core_type_idx, 0, image);
-                        cluster_.write_reg(
-                            &image_config.fw_launch_addr_value,
-                            tt_cxy_pair(device_id, virtual_core),
-                            image_config.fw_launch_addr);
-                    }
+                uint32_t fw_launch_addr_value = jit_build_config.fw_launch_addr_value;
+                if (is_idle_eth && quasar_ethernet) {
+                    // The CCE's image is linked at its native SRAM base.
+                    fw_launch_addr_value += cluster_.get_keraunos_eth_cce(device_id, virtual_core) *
+                                            hal_.get_dev_size(core_type, HalL1MemAddrType::BASE);
                 }
+                cluster_.write_reg(
+                    &fw_launch_addr_value, tt_cxy_pair(device_id, virtual_core), jit_build_config.fw_launch_addr);
             } else {
                 constexpr uint32_t mailbox_index = 0;
                 tt::llrt::internal_::send_msg_to_eth_mailbox(

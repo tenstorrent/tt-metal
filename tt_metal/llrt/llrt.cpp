@@ -256,6 +256,12 @@ bool test_load_write_read_risc_binary(
     uint64_t l1_noc_offset = jit_build_config.l1_noc_offset;
 
     auto core_type = get_core_type(env, chip_id, core);
+    if (core_type == tt_metal::HalProgrammableCoreType::IDLE_ETH) {
+        // A Keraunos CCE's build is linked at its native SRAM base (CCE1's is one SRAM size up), and so is its
+        // scratch area for initialised thread-local data.
+        local_init_addr += static_cast<uint64_t>(cluster.get_keraunos_eth_cce(chip_id, core)) *
+                           hal.get_dev_size(tt_metal::HalProgrammableCoreType::IDLE_ETH, tt_metal::HalL1MemAddrType::BASE);
+    }
     // Depending on the arch, active ethernet may be shared local memory with the base firmware
     // Primary risc is shared
     // TODO: Move this query into the HAL
