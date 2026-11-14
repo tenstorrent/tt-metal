@@ -19,6 +19,8 @@ void kernel_main() {
     constexpr uint32_t partial_chunks_per_row = get_arg(args::partial_chunks_per_row);  // 0 or 1
     constexpr uint32_t full_chunk_size_bytes = get_arg(args::full_chunk_size_bytes);
     constexpr uint32_t partial_chunk_size_bytes = get_arg(args::partial_chunk_size_bytes);
+    constexpr uint32_t h_logical = get_arg(args::h_logical);
+    constexpr uint32_t h_padded = get_arg(args::h_padded);
 
     constexpr uint32_t onepage = 1;
 
@@ -29,7 +31,14 @@ void kernel_main() {
 
     const uint32_t end_row_id = start_row_id + num_rows;
 
+    // One div/mod per kernel entry; hot loop uses add-and-wrap (no div/mod per row).
+    // Identity path (h_padded == h_logical, i.e. output compact) emits page_id = row_id.
+    constexpr bool kRemapNeeded = (h_padded != h_logical);
+    uint32_t outer = kRemapNeeded ? start_row_id / h_logical : 0;
+    uint32_t inner = kRemapNeeded ? start_row_id % h_logical : 0;
+
     for (uint32_t row_id = start_row_id; row_id < end_row_id; ++row_id) {
+        const uint32_t page_id = kRemapNeeded ? (outer * h_padded + inner) : row_id;
         // Process all full chunks for this row
         for (uint32_t chunk_idx = 0; chunk_idx < full_chunks_per_row; ++chunk_idx) {
             dfb_out.wait_front(onepage);
@@ -41,7 +50,7 @@ void kernel_main() {
                 s,
                 full_chunk_size_bytes,
                 {},
-                {.page_id = row_id, .offset_bytes = byte_offset});
+                {.page_id = page_id, .offset_bytes = byte_offset});
 
             noc.async_writes_flushed();
             dfb_out.pop_front(onepage);
@@ -58,10 +67,17 @@ void kernel_main() {
                 s,
                 partial_chunk_size_bytes,
                 {},
-                {.page_id = row_id, .offset_bytes = byte_offset});
+                {.page_id = page_id, .offset_bytes = byte_offset});
 
             noc.async_writes_flushed();
             dfb_out.pop_front(onepage);
+        }
+
+        if constexpr (kRemapNeeded) {
+            if (++inner == h_logical) {
+                inner = 0;
+                ++outer;
+            }
         }
     }
     noc.async_write_barrier();
