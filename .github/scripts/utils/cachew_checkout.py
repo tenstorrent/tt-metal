@@ -44,8 +44,11 @@ def main():
             helper = response.read()
     except urllib.error.URLError as error:
         print(f"Could not download the migration helper from {url}: {error}", file=sys.stderr)
-        print("Check action_sha in .github/cachew-checkout.json (it must be a pushed commit of tenstorrent/.github"
-              " that has actions/cachew-checkout/migrate.py), or set CACHEW_MIGRATE_PY to a local copy.", file=sys.stderr)
+        print(
+            "Check action_sha in .github/cachew-checkout.json (it must be a pushed commit of tenstorrent/.github"
+            " that has actions/cachew-checkout/migrate.py), or set CACHEW_MIGRATE_PY to a local copy.",
+            file=sys.stderr,
+        )
         return 2
     with tempfile.TemporaryDirectory() as directory:
         path = Path(directory) / "migrate.py"
