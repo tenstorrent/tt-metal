@@ -672,6 +672,12 @@ Tensor prelu(
 Tensor prelu(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
     const auto& s_a = input_a.logical_shape();
     const auto volume = input_b.logical_volume();
+    if (volume == 1 && s_a.rank() >= 1) {
+        // A one-element weight is shared by every channel, as torch's default PReLU(num_parameters=1).
+        ttsl::SmallVector<std::uint32_t> ones(s_a.rank(), 1);
+        const Tensor shared = ttnn::reshape(input_b, ttnn::Shape(ones));
+        return ttnn::where(ttnn::ltz(input_a, output_mem_config), ttnn::multiply(input_a, shared), input_a);
+    }
     TT_FATAL(
         s_a[1] == volume,
         "Mismatch of parameter numbers and input channel size. Found parameter numbers = {} and channel size = {}.",
