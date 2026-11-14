@@ -103,10 +103,25 @@ inline void llk_math_eltwise_binary_mul_bcast_cols_init_custom(
  * heads in place (see @ref _llk_math_bcast_cols_reuse_custom_).
  *
  * @tparam math_fidelity: FPU fidelity phases, values = <LoFi/HiFi2/HiFi3/HiFi4>.
+ * @param operandA: CB id of srcA; its tile shape configures the FPU face-row traversal.
  * @param dst_index: First destination tile index.
  * @param ct_dim: Number of column tiles written, into dest range [dst_index, dst_index + ct_dim).
  * @note Run @ref llk_math_eltwise_binary_mul_bcast_cols_init_custom (same math_fidelity) first.
  */
+template <MathFidelity math_fidelity>
+inline void llk_math_eltwise_binary_mul_bcast_cols_custom(
+    const std::uint32_t operandA, const std::uint32_t dst_index, const std::uint32_t ct_dim) {
+    SAN_HOOK(unsupported());
+    LLK_ASSERT(
+        (dst_index + ct_dim <= get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()),
+        "dst range out of bounds");
+
+    const std::uint32_t operand_id = get_operand_id(operandA);
+    const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
+
+    _llk_math_bcast_cols_reuse_custom_<EltwiseBinaryType::ELWMUL, math_fidelity>(ct_dim, tensor_shape, dst_index);
+}
+
 template <MathFidelity math_fidelity>
 inline void llk_math_eltwise_binary_mul_bcast_cols_custom(
     const std::uint32_t dst_index, const std::uint32_t ct_dim = 1) {
@@ -115,7 +130,6 @@ inline void llk_math_eltwise_binary_mul_bcast_cols_custom(
         (dst_index + ct_dim <= get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()),
         "dst range out of bounds");
 
-    math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
-    _llk_math_bcast_cols_reuse_custom_<EltwiseBinaryType::ELWMUL, math_fidelity>(ct_dim);
-    math::clear_dst_reg_addr();
+    _llk_math_bcast_cols_reuse_custom_<EltwiseBinaryType::ELWMUL, math_fidelity>(
+        ct_dim, ckernel::DEFAULT_TENSOR_SHAPE, dst_index);
 }
