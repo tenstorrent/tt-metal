@@ -119,6 +119,7 @@ def main():
                 pf_rows=PF,
                 log=lambda **kw: res(**kw) if (kw["c"] % 8 == 0 or kw["c"] == kw["of"] - 1 or kw["c"] < 6) else None,
                 mem_sample_s=float(os.environ.get("MEMS", "0")),
+                mem_every=int(os.environ.get("MEM_EVERY", "1")),
             )
         maxch = int(os.environ.get("MAXCHUNKS", "0"))
         for si, rep, LEN in [

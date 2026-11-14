@@ -45,13 +45,16 @@ class MemSampler:
     """
 
     def __init__(self, md, interval):
-        self.md, self.interval, self.stop = md, interval, False
+        self.md, self.interval, self.stop, self.active = md, interval, False, True
         self.peak, self.min_free, self.n = 0, 1 << 62, 0
         self.th = threading.Thread(target=self._run, daemon=True)
         self.th.start()
 
     def _run(self):
         while not self.stop:
+            if not self.active:
+                time.sleep(0.01)
+                continue
             v = dram_view(self.md)
             a = v.get("alloc_per_bank", -1)
             if a >= 0:
@@ -67,13 +70,14 @@ class MemSampler:
 
 
 class Hy4PoolPrefill:
-    def __init__(self, dec, pf_rows=512, log=None, mem_sample_s=0.0):
+    def __init__(self, dec, pf_rows=512, log=None, mem_sample_s=0.0, mem_every=1):
         assert pf_rows in (512, 1024)
         self.dec, self.ch, self.md = dec, dec.ch, dec.ch.md
         self.rows = int(self.md.shape[0])
         self.cols = int(self.md.shape[1])
         self.pf_rows = pf_rows
         self.log = log or (lambda **kw: None)
+        self.mem_every = max(1, int(mem_every))
         self.mem = MemSampler(self.md, mem_sample_s) if mem_sample_s > 0 else None
         self.mem_peak_per_bank = 0  # max over all prefill chunks of the sampled peak allocation
         self.mem_min_free_per_bank = 1 << 62
@@ -113,6 +117,9 @@ class Hy4PoolPrefill:
             tc = time.time()
             if self.mem:
                 self.mem.reset()
+                self.mem.active = (
+                    c % self.mem_every
+                ) == 0  # sampling slows the host ~5x: only every mem_every-th chunk is sampled (its time is not representative)
             x4, ids_by_layer = ch.prefill(ids, start=c * PF, ids_by_layer=ids_by_layer)
             enders = [r for r in range(self.rows) if c * PF <= lens[r] - 1 < (c + 1) * PF]
             if enders:
@@ -139,8 +146,9 @@ class Hy4PoolPrefill:
             mem = {}
             if self.mem:
                 pk, mf, n = self.mem.reset()
-                self.mem_peak_per_bank = max(self.mem_peak_per_bank, pk)
-                self.mem_min_free_per_bank = min(self.mem_min_free_per_bank, mf)
+                if n:
+                    self.mem_peak_per_bank = max(self.mem_peak_per_bank, pk)
+                    self.mem_min_free_per_bank = min(self.mem_min_free_per_bank, mf)
                 mem = dict(peak_alloc_per_bank=pk, min_free_per_bank=mf, mem_samples=n)
             self.log(event="prefill_chunk", c=c, of=nch, chunk_sec=round(dt, 3), sec=round(time.time() - t0, 1), **mem)
         for t in ids_by_layer.values():
