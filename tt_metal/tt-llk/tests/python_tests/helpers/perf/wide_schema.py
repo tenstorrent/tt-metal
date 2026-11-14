@@ -81,6 +81,8 @@ DB_SCHEMA = [
     # configuration
     Column("acc_to_dest", "bool", True, "configuration"),
     Column("alpha_bits", "int64", True, "configuration"),
+    Column("api_fmt", "string", True, "configuration"),
+    Column("api_op", "string", True, "configuration"),
     Column("approx_mode", "string", True, "configuration"),
     Column("beta_bits", "int64", True, "configuration"),
     Column("binary_init_before_ema", "bool", True, "configuration"),
