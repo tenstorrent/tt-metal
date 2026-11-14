@@ -111,3 +111,19 @@ def assert_shards_equal(actual: dict[tuple, np.ndarray], expected: dict[tuple, n
     assert actual.keys() == expected.keys(), (sorted(actual), sorted(expected))
     for group in expected:
         np.testing.assert_array_equal(actual[group], expected[group], err_msg=f"group {group}")
+
+
+class Loader:
+    """A stateful dataloader stand-in for the tests and the driver: its only state is how many batches it handed out."""
+
+    def __init__(self) -> None:
+        self.position = 0
+
+    def advance(self) -> None:
+        self.position += 1
+
+    def get_state_dict(self) -> dict:
+        return {"position": self.position}
+
+    def set_state_dict(self, state: dict) -> None:
+        self.position = int(state["position"])

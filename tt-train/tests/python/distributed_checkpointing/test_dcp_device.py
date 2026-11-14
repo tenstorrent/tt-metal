@@ -5,22 +5,27 @@
 """Same-world round trips of ``ttml.distributed_checkpointing`` on the shared ``[1, 2]`` TP and FSDP fixtures.
 
 Every parameter and optimizer moment must come back device for device, bit for bit, into a fresh model and
-optimizer; the header and the optimizer scalars must come back; the FSDP gate must refuse a gathered module; a
-strict load must name what is missing. Cross-world loads live in ``test_dcp_cross_world.py``, which needs no open
+optimizer; the header and the optimizer scalars must come back; the scheduler, the dataloader and every random
+generator must resume where the save left them; the FSDP gate must refuse a gathered module; a strict load must
+name what is missing. Cross-world loads live in ``test_dcp_cross_world.py``, which needs no open
 device of its own.
 
 ``tp_mesh`` and ``fsdp_mesh`` are both module-scoped and each reopens the device with its own axis names, so the two
 groups must not interleave: the TP tests come first, the FSDP test last.
 """
 
+import random
+
 import numpy as np
 import pytest
 import torch
 import ttnn
+from dcp_oracle import Loader
 from tp_block import TPBlock, fresh_tp, make_adamw, train_step
 
 import ttml
 import ttml.distributed_checkpointing as dcp
+from ttml.common.schedulers import CosineAnnealingScheduler
 from ttml.fsdp import _ShardedState
 from ttml.modules import AbstractModuleBase, LinearLayer, Parameter
 
@@ -317,6 +322,97 @@ def test_a_cpp_model_round_trips_on_the_same_world_and_warns_that_only_this_tp_s
     with pytest.warns(UserWarning, match="restores correctly only onto the same TP size"):
         dcp.load(path, model=fresh)
     _assert_same_shards(_model_shards(fresh.parameters()), saved)
+
+
+def _ttml_draw():
+    """One tensor from the ttml generator (``rand`` without a seed draws its seed from it), as seen by device 0."""
+    value = ttml.ops.rand((1, 1, 32, 32)).get_value(NATIVE)
+    return ttnn.to_torch(ttnn.get_device_tensors(value)[0])
+
+
+def test_train_state_resumes_where_the_save_left_it(tp_mesh, tmp_path):
+    """The scheduler, the dataloader and every generator continue exactly as the uninterrupted run would, and so
+    does the next training step, taken with the restored moments, step count and LR."""
+    ctx = ttml.autograd.AutoContext.get_instance()
+    model, params, opt = fresh_tp(DIM)
+    sched = CosineAnnealingScheduler(opt, T_max=8)
+    loader = Loader()
+    ctx.set_seed(123)
+    random.seed(4)
+    np.random.seed(5)
+    torch.manual_seed(6)
+    for _ in range(3):
+        train_step(model, opt, DIM)
+        sched.step()
+        loader.advance()
+    path = str(tmp_path / dcp.step_dir_name(3))
+    dcp.save(path, model=model, optimizer=opt, scheduler=sched, dataloader=loader, header={"step": 3})
+    stored = dcp.read_train_state(path)
+    assert set(stored) == {"scheduler", "dataloader", "rng"} and stored["dataloader"] == {"position": 3}
+    assert set(stored["rng"]) == {"format", "ranks"} and list(stored["rng"]["ranks"]) == ["0"]
+    assert set(stored["rng"]["ranks"]["0"]) == {"ttml", "python", "numpy", "ttml_init", "torch"}
+    lrs_at_save = sched.get_last_lrs()
+    opt_lrs_at_save = opt.get_group_lrs()  # the optimizer holds float32 LRs, the scheduler doubles
+
+    # The uninterrupted run continues for one step, a real one: this is what a resumed run must reproduce.
+    train_step(model, opt, DIM, input_scale=0.5)
+    after_step = _model_shards(params)
+    after_state, after_scalars = _state(opt)
+    sched.step()
+    loader.advance()
+    expected = {
+        "lrs": sched.get_last_lrs(),
+        "loader": loader.get_state_dict(),
+        "ttml": _ttml_draw(),
+        "python": random.random(),
+        "numpy": float(np.random.random()),
+        "torch": torch.rand(2).tolist(),
+    }
+
+    model2, params2, opt2 = fresh_tp(DIM)
+    sched2 = CosineAnnealingScheduler(opt2, T_max=8)
+    loader2 = Loader()
+    ctx.set_seed(999)
+    random.seed(0)
+    np.random.seed(0)
+    torch.manual_seed(0)
+    loaded = dcp.load(path, model=model2, optimizer=opt2, scheduler=sched2, dataloader=loader2, rng=True)
+    assert loaded.restored == [
+        "scheduler",
+        "dataloader",
+        "rng.ttml",
+        "rng.python",
+        "rng.numpy",
+        "rng.ttml_init",
+        "rng.torch",
+    ]
+    assert loaded.train_state == stored and loaded.missing == [] and loaded.header == {"step": 3}
+    assert sched2.get_last_lrs() == lrs_at_save and opt2.get_group_lrs() == opt_lrs_at_save
+    train_step(model2, opt2, DIM, input_scale=0.5)
+    _assert_same_shards(_model_shards(params2), after_step)
+    _assert_same_shards(_state(opt2)[0], after_state)
+    assert _state(opt2)[1] == after_scalars
+    sched2.step()
+    loader2.advance()
+    assert sched2.get_last_lrs() == expected["lrs"]
+    assert loader2.get_state_dict() == expected["loader"]
+    assert torch.equal(_ttml_draw(), expected["ttml"])
+    assert random.random() == expected["python"] and float(np.random.random()) == expected["numpy"]
+    assert torch.rand(2).tolist() == expected["torch"]
+
+    # Not asked for, not touched: a plain load leaves the generators alone.
+    before = ctx.get_generator_state()
+    plain = dcp.load(path, model=model2)
+    assert plain.restored == [] and ctx.get_generator_state() == before
+
+    # Asked for but absent: a strict load refuses before touching anything, a lenient one lists it.
+    bare = str(tmp_path / "bare")
+    dcp.save(bare, model=model, rng=False)
+    assert dcp.read_train_state(bare) == {}
+    with pytest.raises(dcp.MissingKeyError):  # allow-pytest.raises: the fixture matches on device error text
+        dcp.load(bare, model=model2, scheduler=sched2)
+    lenient = dcp.load(bare, model=model2, scheduler=sched2, rng=True, strict=False)
+    assert lenient.missing == ["train_state/scheduler", "train_state/rng"] and lenient.restored == []
 
 
 def test_fsdp_round_trip_and_the_sharded_state_gate(fsdp_mesh, tmp_path):

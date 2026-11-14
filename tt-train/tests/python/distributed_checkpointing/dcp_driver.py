@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import random
 import sys
 
 import numpy as np
@@ -33,10 +34,15 @@ import ttnn
 
 import ttml
 import ttml.distributed_checkpointing as dcp
+from ttml.common.schedulers import CosineAnnealingScheduler
 from ttml.models import EmbeddingPlacement, WeightTyingType
 from ttml.models.llama import Llama, LlamaConfig
 from ttml.models.llama.transformer import compute_swiglu_intermediate_size
+from ttml.common.utils import set_seed
+from ttml.distributed_checkpointing._train_state import capture_process_rng, restore_process_rng
 from ttml.sharding import Sharding
+
+from dcp_oracle import Loader
 
 NATIVE = ttml.autograd.PreferredPrecision.NATIVE
 # head_dim = hidden_size / num_attention_heads must be a multiple of 32 (RoPE); the head counts must be multiples of
@@ -51,6 +57,7 @@ TINY = dict(
 )
 SEQ_LEN = 32  # a whole tile: the SDPA kernel wants the sequence dimension unpadded
 MESH_OPEN_FAILED = 3  # exit status when this host cannot open the requested mesh; the tests skip on it
+T_MAX = 16  # cosine schedule length, longer than any --steps the tests use, so the LR keeps moving
 
 
 def parse_mesh(text: str) -> tuple[int, ...]:
@@ -82,7 +89,8 @@ def build(tp: bool, fsdp: bool, tie: bool, sizes: dict):
     params = model.parameters()
     cfg = ttml.optimizers.AdamWConfig.make(lr=1e-3, beta1=0.9, beta2=0.999, epsilon=1e-8, weight_decay=0.0)
     optimizer = ttml.optimizers.AdamW(params, cfg)
-    return config, model, params, optimizer
+    scheduler = CosineAnnealingScheduler(optimizer, T_max=T_MAX)
+    return config, model, params, optimizer, scheduler
 
 
 def inputs(config: LlamaConfig, seed: int):
@@ -136,10 +144,13 @@ def loss_of(model, config: LlamaConfig, tokens, mask, targets):
     )
 
 
-def train(model, params, optimizer, config, steps: int, seed: int, start: int = 0) -> None:
+def train(model, params, optimizer, scheduler, loader, config, steps: int, seed: int, start: int = 0) -> None:
     """``steps`` training steps numbered from ``start``: step ``n`` draws batch ``seed + n``, so a run resumed from
-    a checkpoint repeats the batches the uninterrupted run would have drawn."""
+    a checkpoint repeats the batches the uninterrupted run would have drawn. The generators are seeded only when
+    the run starts, at step 0; a resumed step continues from the generators the checkpoint restored."""
     ctx = ttml.autograd.AutoContext.get_instance()
+    if start == 0:
+        set_seed(seed)
     mesh = ttml.mesh()
     needs_sync = any(mesh.axis_size(name) > 1 for name in mesh.axis_names if name != "tp")
     for step in range(start, start + steps):
@@ -150,6 +161,8 @@ def train(model, params, optimizer, config, steps: int, seed: int, start: int = 
         if needs_sync:
             ttml.sync_gradients(params)
         optimizer.step()
+        scheduler.step()
+        loader.advance()
         ctx.reset_graph()
 
 
@@ -219,9 +232,29 @@ def canonical_name(name: str, config: LlamaConfig) -> str:
     return name
 
 
-def reference(model, params, optimizer, config, seed: int) -> dict[str, np.ndarray]:
+def reference(model, params, optimizer, scheduler, loader, config, seed: int) -> dict[str, np.ndarray]:
+    """The run as it stands: every parameter and optimizer tensor and scalar in canonical layout, the logits on a fixed
+    batch and what a resumed run does next. The dump leaves the run where it found it: the probes below step the
+    scheduler and the loader and draw from the generators, and all three are put back, so the optimizer scalars
+    compared are the ones the save or the load left and a step taken afterwards is the run's own next step."""
     tp = ttml.mesh().axis_size("tp") if config.use_tp else 1
     out: dict[str, np.ndarray] = {}
+    scheduler_state, loader_state, generators = (
+        scheduler.get_state_dict(),
+        loader.get_state_dict(),
+        capture_process_rng(),
+    )
+    # What a resumed run does next: the scheduler's next LRs, the loader's next position and the next draw of each
+    # generator (the ttml one as its state text: nothing draws from it on the host).
+    scheduler.step()
+    out["train:next_lrs"] = np.asarray(scheduler.get_last_lrs())
+    loader.advance()
+    out["train:loader_position"] = np.asarray(loader.position)
+    out["train:ttml_generator"] = np.asarray(ttml.autograd.AutoContext.get_instance().get_generator_state())
+    out["train:python_next"] = np.asarray(random.random())
+    out["train:numpy_next"] = np.asarray(np.random.random())
+    scheduler.set_state_dict(scheduler_state)  # writes the LRs back into the optimizer as they were
+    loader.set_state_dict(loader_state)
     for name, tensor in params.items():
         out["param:" + canonical_name(name, config)] = canonicalize(name, gather(tensor), config, tp)
 
@@ -242,18 +275,24 @@ def reference(model, params, optimizer, config, seed: int) -> dict[str, np.ndarr
     logits = model(tokens, mask)
     out["logits"] = full_logits(logits, config)
     ttml.autograd.AutoContext.get_instance().reset_graph()
+    restore_process_rng(generators)  # after the forward too, which draws from the ttml generator with dropout
     return out
 
 
 RESUME = "resume:"
 
 
-def resume_reference(model, params, optimizer, config, seed: int, step: int) -> dict[str, np.ndarray]:
+def resume_reference(
+    model, params, optimizer, scheduler, loader, config, seed: int, step: int
+) -> dict[str, np.ndarray]:
     """One more training step, numbered ``step`` so it draws that step's batch, then the reference again under the
     ``resume:`` prefix: the run one step after the checkpoint. Taken on the saving world after its save and on the
     loading world after its load, the two agree only if the optimizer carried its moments and step count across."""
-    train(model, params, optimizer, config, 1, seed, start=step)
-    return {RESUME + key: value for key, value in reference(model, params, optimizer, config, seed).items()}
+    train(model, params, optimizer, scheduler, loader, config, 1, seed, start=step)
+    return {
+        RESUME + key: value
+        for key, value in reference(model, params, optimizer, scheduler, loader, config, seed).items()
+    }
 
 
 def compare(actual: dict[str, np.ndarray], expected: dict[str, np.ndarray], logits_tolerance: float) -> list[str]:
@@ -279,6 +318,9 @@ def compare(actual: dict[str, np.ndarray], expected: dict[str, np.ndarray], logi
             print(f"{key}: max |diff| / max |ref| = {rel:.4f} (tolerance {logits_tolerance})")
             if rel > logits_tolerance:
                 problems.append(f"{key} differ by {rel:.4f} of their scale (tolerance {logits_tolerance})")
+        elif a.dtype.kind in "US" or e.dtype.kind in "US":
+            if not np.array_equal(a, e):
+                problems.append(f"{key}: text differs")
         elif not exact and base is not None and base.startswith("state:"):
             scale = float(np.max(np.abs(e))) + 1e-6
             rel = float(np.max(np.abs(a - e))) / scale
@@ -361,18 +403,21 @@ def main(argv=None) -> int:
         print(f"MESH_OPEN_FAILED: {str(err).splitlines()[0]}")
         return MESH_OPEN_FAILED
     try:
-        config, model, params, optimizer = build(args.tp, args.fsdp, args.tie, sizes)
+        config, model, params, optimizer, scheduler = build(args.tp, args.fsdp, args.tie, sizes)
+        loader = Loader()
         if args.command == "save":
-            train(model, params, optimizer, config, args.steps, args.seed)
+            train(model, params, optimizer, scheduler, loader, config, args.steps, args.seed)
             result = dcp.save(
                 args.dir,
                 model=model,
                 optimizer=optimizer,
+                scheduler=scheduler,
+                dataloader=loader,
                 header={"step": args.steps, "mesh": list(mesh_shape), "axes": list(axes)},
             )
-            ref = reference(model, params, optimizer, config, args.seed)
+            ref = reference(model, params, optimizer, scheduler, loader, config, args.seed)
             if args.resume_step:
-                ref.update(resume_reference(model, params, optimizer, config, args.seed, args.steps))
+                ref.update(resume_reference(model, params, optimizer, scheduler, loader, config, args.seed, args.steps))
             np.savez(reference_path, config=json.dumps(sizes), **ref)
             print(
                 json.dumps(
@@ -386,17 +431,22 @@ def main(argv=None) -> int:
                 )
             )
             return 0
-        result = dcp.load(args.dir, model=model, optimizer=optimizer)
-        actual = reference(model, params, optimizer, config, args.seed)
+        result = dcp.load(args.dir, model=model, optimizer=optimizer, scheduler=scheduler, dataloader=loader, rng=True)
+        actual = reference(model, params, optimizer, scheduler, loader, config, args.seed)
         resumed = args.resume_step and any(key.startswith(RESUME) for key in expected)
         if resumed:
-            actual.update(resume_reference(model, params, optimizer, config, args.seed, args.steps))
+            actual.update(resume_reference(model, params, optimizer, scheduler, loader, config, args.seed, args.steps))
         else:
             expected = {key: value for key, value in expected.items() if not key.startswith(RESUME)}
             print("NOTE: no training step after the load; the run one step on is not compared")
         problems = compare(actual, expected, 0.0 if args.same_layout else args.logits_tolerance)
         if result.header.get("step") != args.steps:
             problems.append(f"header step {result.header.get('step')} != {args.steps}")
+        expected_restored = ["scheduler", "dataloader", "rng.ttml", "rng.python", "rng.numpy", "rng.ttml_init"]
+        if "torch" in sys.modules:
+            expected_restored.append("rng.torch")
+        if result.restored != expected_restored:
+            problems.append(f"restored {result.restored} != {expected_restored}")
         print(
             json.dumps(
                 {
@@ -405,6 +455,7 @@ def main(argv=None) -> int:
                     "fast_path_keys": len(result.fast_path_keys),
                     "missing": result.missing,
                     "unexpected": result.unexpected,
+                    "restored": result.restored,
                     "stats": result.stats,
                 }
             )
