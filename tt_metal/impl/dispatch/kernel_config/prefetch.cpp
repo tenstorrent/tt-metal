@@ -25,7 +25,7 @@
 #include "impl/debug/inspector/inspector.hpp"
 #include <tt-umd/types/core_coordinates.hpp>
 #include <tt-umd/types/xy_pair.hpp>
-#include "dispatch/system_memory_manager.hpp"
+#include "dispatch/host_cq.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include <impl/dispatch/dispatch_query_manager.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
@@ -100,9 +100,9 @@ void PrefetchKernel::GenerateStaticConfigs() {
 
     if (static_config_.is_h_variant.value() && this->static_config_.is_d_variant.value()) {
         uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
-        uint32_t command_queue_start_addr = device_->sysmem_manager().backing().cq_base_addr(cq_id_, channel);
+        uint32_t command_queue_start_addr = cq_backing(*device_).cq_base_addr(cq_id_, channel);
         uint32_t issue_queue_start_addr = command_queue_start_addr + cq_start;
-        uint32_t issue_queue_size = device_->sysmem_manager().get_issue_queue_size(cq_id_);
+        uint32_t issue_queue_size = host_cq(*device_, cq_id_).issue_queue_size();
 
         static_config_.my_downstream_cb_sem_id = tt::tt_metal::CreateSemaphore(
             *program_, logical_core_, my_dispatch_constants.dispatch_buffer_pages(), GetCoreType());
@@ -153,9 +153,9 @@ void PrefetchKernel::GenerateStaticConfigs() {
         // PREFETCH_H services a remote chip, and so has a different channel
         channel = descriptor_.cluster().get_assigned_channel_for_device(servicing_device_id_);
         uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
-        uint32_t command_queue_start_addr = device_->sysmem_manager().backing().cq_base_addr(cq_id_, channel);
+        uint32_t command_queue_start_addr = cq_backing(*device_).cq_base_addr(cq_id_, channel);
         uint32_t issue_queue_start_addr = command_queue_start_addr + cq_start;
-        uint32_t issue_queue_size = device_->sysmem_manager().get_issue_queue_size(cq_id_);
+        uint32_t issue_queue_size = host_cq(*device_, cq_id_).issue_queue_size();
 
         static_config_.pcie_base = issue_queue_start_addr;
         static_config_.pcie_size = issue_queue_size;
@@ -452,7 +452,7 @@ void PrefetchKernel::CreateKernel() {
         {"DOWNSTREAM_CB_PAGES", std::to_string(dependent_config_.downstream_cb_pages.value())},
         {"MY_DOWNSTREAM_CB_SEM_ID", std::to_string(static_config_.my_downstream_cb_sem_id.value())},
         {"DOWNSTREAM_CB_SEM_ID", std::to_string(dependent_config_.downstream_cb_sem_id.value())},
-        {"IS_CQ_DRAM_BACKED", std::to_string(device_->sysmem_manager().is_dram_backed())},
+        {"IS_CQ_DRAM_BACKED", std::to_string(cq_backing(*device_).is_dram_backed())},
         {"PCIE_BASE", std::to_string(static_config_.pcie_base.value())},
         {"PCIE_SIZE", std::to_string(static_config_.pcie_size.value())},
         {"PREFETCH_Q_BASE", std::to_string(static_config_.prefetch_q_base.value())},
@@ -528,7 +528,7 @@ void PrefetchKernel::CreateKernel() {
         }
     }
 
-    if (device_->sysmem_manager().is_dram_backed()) {
+    if (cq_backing(*device_).is_dram_backed()) {
         defines["DRAM_BACKED_CQ_BANK_ID"] = std::to_string(CqBacking::kDramBankId);
     }
 

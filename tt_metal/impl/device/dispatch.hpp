@@ -69,10 +69,7 @@ void write_to_core_unchecked(
 void issue_core_read_command_sequence(const CoreReadDispatchParams& dispatch_params);
 
 void read_core_data_from_completion_queue(
-    const ReadCoreDataDescriptor& read_descriptor,
-    uint8_t cq_id,
-    SystemMemoryManager& sysmem_manager,
-    std::atomic<bool>& exit_condition);
+    const ReadCoreDataDescriptor& read_descriptor, HostCq& cq, std::atomic<bool>& exit_condition);
 
 }  // namespace device_dispatch
 

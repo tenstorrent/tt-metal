@@ -12,6 +12,17 @@
       "introduced_by_pr": 51559,
       "grace": "4w",
       "owners": ["riverwuTT"]
+    },
+    {
+      "id": "idevice-sysmem-manager",
+      "description": "IDevice::sysmem_manager() is deprecated (tt-metal#64081): SystemMemoryManager was removed, and host command queues (HostCq, CqBacking) are internal to tt_metal with no public replacement. The deprecated pure virtual stays so that out-of-tree IDevice subclasses and callers still compile; every in-repo override throws. The cleanup PR deletes the declaration from device.hpp and mesh_device.hpp, the SystemMemoryManager forward declarations, and the throwing overrides in device.cpp and mesh_device.cpp.",
+      "files": [
+        "tt_metal/api/tt-metalium/device.hpp",
+        "tt_metal/api/tt-metalium/mesh_device.hpp"
+      ],
+      "introduced_by_pr": 65577,
+      "grace": "4w",
+      "owners": ["ezaiakinTT"]
     }
   ]
 }

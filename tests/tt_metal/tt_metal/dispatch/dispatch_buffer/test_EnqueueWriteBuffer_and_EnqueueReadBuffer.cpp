@@ -11,7 +11,7 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "allocator/allocator.hpp"
-#include "dispatch/system_memory_manager.hpp"
+#include "dispatch/host_cq.hpp"
 #include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
 #include <array>
@@ -279,7 +279,7 @@ void test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
     // Clear out command queue
     uint16_t channel =
         tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device->id());
-    const CqBacking& backing = device->sysmem_manager().backing();
+    const CqBacking& backing = cq_backing(*device);
     uint32_t cq_size = backing.cq_size();
     uint32_t cq_start =
         MetalContext::instance().dispatch_mem_map().get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
@@ -1063,7 +1063,7 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestWrapHostHugepageOnEnqueueRea
     for (const auto& mesh_device : devices_) {
         auto* device = mesh_device->impl().get_devices()[0];
         uint32_t page_size = 2048;
-        uint32_t command_issue_region_size = device->sysmem_manager().get_issue_queue_size(0);
+        uint32_t command_issue_region_size = host_cq(*device, 0).issue_queue_size();
         uint32_t cq_start = MetalContext::instance().dispatch_mem_map().get_host_command_queue_addr(
             CommandQueueHostAddrType::UNRESERVED);
 
@@ -1082,7 +1082,7 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestIssueMultipleReadWriteComman
     for (const auto& mesh_device : devices_) {
         auto* device = mesh_device->impl().get_devices()[0];
         uint32_t page_size = 2048;
-        uint32_t command_queue_size = device->sysmem_manager().get_cq_size();
+        uint32_t command_queue_size = cq_backing(*device).cq_size();
         uint32_t num_pages = command_queue_size / page_size;
 
         TestBufferConfig config = {.num_pages = num_pages, .page_size = page_size, .buftype = BufferType::DRAM};
@@ -1099,7 +1099,7 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestWrapCompletionQOnInsufficien
 
     for (const auto& mesh_device : devices_) {
         auto* device = mesh_device->impl().get_devices()[0];
-        uint32_t command_completion_region_size = device->sysmem_manager().get_completion_queue_size(0);
+        uint32_t command_completion_region_size = host_cq(*device, 0).completion_queue_size();
 
         uint32_t first_buffer_size =
             tt::round_up(static_cast<uint32_t>(command_completion_region_size * 0.95), large_page_size);
@@ -1331,7 +1331,7 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestWrapCompletionQOnInsufficien
     // Using default 75-25 issue and completion queue split
     for (const auto& mesh_device : devices_) {
         auto* device = mesh_device->impl().get_devices()[0];
-        uint32_t command_completion_region_size = device->sysmem_manager().get_completion_queue_size(0);
+        uint32_t command_completion_region_size = host_cq(*device, 0).completion_queue_size();
 
         uint32_t num_pages_buff_1 = 9;
         uint32_t page_size_buff_1 = 2048;
@@ -1470,7 +1470,7 @@ TEST_F(UnitMeshMultiCQMultiDeviceBufferFixture, TestIssueMultipleReadWriteComman
         auto* device = mesh_device->impl().get_devices()[0];
         log_info(tt::LogTest, "Running On Device {}", device_id);
         uint32_t page_size = 2048;
-        uint32_t command_queue_size = device->sysmem_manager().get_cq_size();
+        uint32_t command_queue_size = cq_backing(*device).cq_size();
         uint32_t num_pages = command_queue_size / page_size;
 
         TestBufferConfig config = {.num_pages = num_pages, .page_size = page_size, .buftype = BufferType::DRAM};

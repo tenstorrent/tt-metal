@@ -4,7 +4,7 @@
 
 #include "gtest/gtest.h"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
-#include "dispatch/system_memory_manager.hpp"
+#include "dispatch/host_cq.hpp"
 #include "allocator/allocator.hpp"
 #include "dispatch/host_device_transfer.hpp"
 
@@ -294,7 +294,7 @@ TEST_P(MeshBufferReadWriteTests, WriteReadLoopback) {
     {
         uint16_t channel =
             tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(local_device->id());
-        const CqBacking& backing = local_device->sysmem_manager().backing();
+        const CqBacking& backing = cq_backing(*local_device);
         uint32_t cq_size = backing.cq_size();
         uint32_t cq_start = MetalContext::instance().dispatch_mem_map().get_host_command_queue_addr(
             CommandQueueHostAddrType::UNRESERVED);

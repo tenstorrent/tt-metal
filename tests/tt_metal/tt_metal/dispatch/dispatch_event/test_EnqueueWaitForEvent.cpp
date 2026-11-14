@@ -20,7 +20,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include "impl/dispatch/dispatch_settings.hpp"
-#include "impl/dispatch/system_memory_manager.hpp"
+#include "impl/dispatch/host_cq.hpp"
 #include "dispatch_test_utils.hpp"
 #include "gtest/gtest.h"
 #include "multi_command_queue_fixture.hpp"

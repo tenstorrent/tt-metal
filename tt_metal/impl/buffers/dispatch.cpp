@@ -430,9 +430,9 @@ int32_t calculate_num_pages_available_in_cq(
     const BufferWriteDispatchParams& dispatch_params,
     const BufferDispatchConstants& dispatch_constants,
     uint32_t byte_offset_in_cq) {
-    SystemMemoryManager& sysmem_manager = dispatch_params.device->sysmem_manager();
     uint32_t space_availableB = std::min(
-        dispatch_constants.issue_queue_cmd_limit - sysmem_manager.get_issue_queue_write_ptr(dispatch_params.cq_id),
+        dispatch_constants.issue_queue_cmd_limit -
+            host_cq(*dispatch_params.device, dispatch_params.cq_id).issue_queue_write_ptr(),
         dispatch_constants.max_prefetch_cmd_size);
     int32_t num_pages_available =
         (int32_t(space_availableB) - int32_t(byte_offset_in_cq)) / int32_t(dispatch_params.page_size_to_write);
@@ -466,13 +466,12 @@ PartialPageSpec calculate_partial_page_spec(const Buffer& buffer) {
 }
 
 // Generate dispatch constants
-BufferDispatchConstants generate_buffer_dispatch_constants(
-    const SystemMemoryManager& sysmem_manager, CoreType /*dispatch_core_type*/, uint32_t cq_id) {
+BufferDispatchConstants generate_buffer_dispatch_constants(const HostCq& cq) {
     BufferDispatchConstants buf_dispatch_constants;
 
-    buf_dispatch_constants.issue_queue_cmd_limit = sysmem_manager.get_issue_queue_limit(cq_id);
+    buf_dispatch_constants.issue_queue_cmd_limit = cq.issue_queue_limit();
     buf_dispatch_constants.max_prefetch_cmd_size =
-        sysmem_manager.metal_context().dispatch_mem_map().max_prefetch_command_size();
+        cq.backing().context().dispatch_mem_map().max_prefetch_command_size();
 
     return buf_dispatch_constants;
 }
@@ -701,7 +700,7 @@ void issue_sharded_buffer_pinned_dispatch_command_sequence(
     const uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
     const uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
 
-    SystemMemoryManager& sysmem_manager = dispatch_params.device->sysmem_manager();
+    HostCq& cq = host_cq(*dispatch_params.device, dispatch_params.cq_id);
     uint32_t num_worker_counters = sub_device_ids.size();
 
     const uint8_t* src_ptr = static_cast<const uint8_t*>(src);
@@ -734,7 +733,7 @@ void issue_sharded_buffer_pinned_dispatch_command_sequence(
         }
 
         const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
-        void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, dispatch_params.cq_id);
+        void* cmd_region = cq.issue_queue_reserve(cmd_sequence_sizeB);
         HugepageDeviceCommand command_sequence(metal_ctx, cmd_region, cmd_sequence_sizeB);
 
         for (const auto& sub_device_id : sub_device_ids) {
@@ -752,9 +751,7 @@ void issue_sharded_buffer_pinned_dispatch_command_sequence(
             cmd_sequence_sizeB,
             command_sequence.write_offset_bytes());
 
-        sysmem_manager.issue_queue_push_back(cmd_sequence_sizeB, dispatch_params.cq_id);
-        sysmem_manager.fetch_queue_reserve_back(dispatch_params.cq_id);
-        sysmem_manager.fetch_queue_write(cmd_sequence_sizeB, dispatch_params.cq_id);
+        cq.publish(cmd_sequence_sizeB);
     }
 
     // Update total_pages_written to prevent redundant wait commands on subsequent cores
@@ -774,7 +771,7 @@ void issue_sharded_buffer_pinned_dispatch_command_sequence(
         // Use calculator to compute command sequence size
         DeviceCommandCalculator calculator(metal_ctx);
         calculator.add_dispatch_write_packed_large_unicast(write_sub_cmds.size());
-        void* cmd_region = sysmem_manager.issue_queue_reserve(calculator.write_offset_bytes(), dispatch_params.cq_id);
+        void* cmd_region = cq.issue_queue_reserve(calculator.write_offset_bytes());
         HugepageDeviceCommand command_sequence(metal_ctx, cmd_region, calculator.write_offset_bytes());
 
         // Add write packed large unicast command
@@ -787,9 +784,7 @@ void issue_sharded_buffer_pinned_dispatch_command_sequence(
             calculator.write_offset_bytes(),
             command_sequence.write_offset_bytes());
 
-        sysmem_manager.issue_queue_push_back(calculator.write_offset_bytes(), dispatch_params.cq_id);
-        sysmem_manager.fetch_queue_reserve_back(dispatch_params.cq_id);
-        sysmem_manager.fetch_queue_write(calculator.write_offset_bytes(), dispatch_params.cq_id);
+        cq.publish(calculator.write_offset_bytes());
 
         calculator.clear();
 
@@ -801,7 +796,7 @@ void issue_sharded_buffer_pinned_dispatch_command_sequence(
             calculator.add_prefetch_relay_linear_packed(relay_sub_cmds.size());
         }
 
-        cmd_region = sysmem_manager.issue_queue_reserve(calculator.write_offset_bytes(), dispatch_params.cq_id);
+        cmd_region = cq.issue_queue_reserve(calculator.write_offset_bytes());
         HugepageDeviceCommand prefetch_command_sequence(metal_ctx, cmd_region, calculator.write_offset_bytes());
 
         // Add relay linear packed command
@@ -819,9 +814,7 @@ void issue_sharded_buffer_pinned_dispatch_command_sequence(
             calculator.write_offset_bytes(),
             prefetch_command_sequence.write_offset_bytes());
 
-        sysmem_manager.issue_queue_push_back(calculator.write_offset_bytes(), dispatch_params.cq_id);
-        sysmem_manager.fetch_queue_reserve_back(dispatch_params.cq_id);
-        sysmem_manager.fetch_queue_write(calculator.write_offset_bytes(), dispatch_params.cq_id);
+        cq.publish(calculator.write_offset_bytes());
 
         // Clear for next batch
         write_sub_cmds.clear();
@@ -979,8 +972,8 @@ void issue_buffer_dispatch_command_sequence(
     }
 
     const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
-    SystemMemoryManager& sysmem_manager = dispatch_params.device->sysmem_manager();
-    void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, dispatch_params.cq_id);
+    HostCq& cq = host_cq(*dispatch_params.device, dispatch_params.cq_id);
+    void* cmd_region = cq.issue_queue_reserve(cmd_sequence_sizeB);
 
     HugepageDeviceCommand command_sequence(metal_ctx, cmd_region, cmd_sequence_sizeB);
 
@@ -1005,9 +998,7 @@ void issue_buffer_dispatch_command_sequence(
         cmd_sequence_sizeB,
         command_sequence.write_offset_bytes());
 
-    sysmem_manager.issue_queue_push_back(cmd_sequence_sizeB, dispatch_params.cq_id);
-    sysmem_manager.fetch_queue_reserve_back(dispatch_params.cq_id);
-    sysmem_manager.fetch_queue_write(cmd_sequence_sizeB, dispatch_params.cq_id);
+    cq.publish(cmd_sequence_sizeB);
 
     if (use_pinned_memory) {
         // Send CQ_PREFETCH_CMD_RELAY_LINEAR command in a separate fetch Q entry to ensure it will be processed in
@@ -1032,7 +1023,7 @@ void issue_buffer_dispatch_command_sequence(
             calculator.add_prefetch_relay_linear();
         }
         const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
-        void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, dispatch_params.cq_id);
+        void* cmd_region = cq.issue_queue_reserve(cmd_sequence_sizeB);
         HugepageDeviceCommand command_sequence(metal_ctx, cmd_region, cmd_sequence_sizeB);
 
         if (dispatch_params.remote_chip) {
@@ -1042,9 +1033,7 @@ void issue_buffer_dispatch_command_sequence(
             command_sequence.add_prefetch_relay_linear(
                 dispatch_params.pinned_src_noc_xy, relay_data_size, relay_src_addr);
         }
-        sysmem_manager.issue_queue_push_back(cmd_sequence_sizeB, dispatch_params.cq_id);
-        sysmem_manager.fetch_queue_reserve_back(dispatch_params.cq_id);
-        sysmem_manager.fetch_queue_write(cmd_sequence_sizeB, dispatch_params.cq_id);
+        cq.publish(cmd_sequence_sizeB);
     }
 }
 
@@ -1082,8 +1071,7 @@ void write_interleaved_buffer_to_device(
             const int32_t num_pages_available_in_cq =
                 calculate_num_pages_available_in_cq(dispatch_params, buf_dispatch_constants, byte_offset_in_cq);
             if (num_pages_available_in_cq <= 0) {
-                SystemMemoryManager& sysmem_manager = dispatch_params.device->sysmem_manager();
-                sysmem_manager.wrap_issue_queue_wr_ptr(dispatch_params.cq_id);
+                host_cq(*dispatch_params.device, dispatch_params.cq_id).wrap_issue_queue_wr_ptr();
                 continue;
             }
 
@@ -1137,8 +1125,7 @@ void write_sharded_buffer_to_core(
             const int32_t num_pages_available_in_cq =
                 calculate_num_pages_available_in_cq(dispatch_params, buf_dispatch_constants, data_offset_bytes);
             if (num_pages_available_in_cq <= 0) {
-                SystemMemoryManager& sysmem_manager = dispatch_params.device->sysmem_manager();
-                sysmem_manager.wrap_issue_queue_wr_ptr(dispatch_params.cq_id);
+                host_cq(*dispatch_params.device, dispatch_params.cq_id).wrap_issue_queue_wr_ptr();
                 continue;
             }
 
@@ -1162,7 +1149,6 @@ bool write_to_device_buffer(
     const std::shared_ptr<experimental::PinnedMemory>& pinned_memory,
     const CoreRangeSet* logical_core_filter) {
     TTZoneScopedD(DISPATCH);
-    SystemMemoryManager& sysmem_manager = buffer.device()->sysmem_manager();
     ContextId context_id = tt::tt_metal::extract_context_id(buffer.device());
     const auto& hal = tt::tt_metal::MetalContext::instance(context_id).hal();
 
@@ -1171,7 +1157,7 @@ bool write_to_device_buffer(
     }
 
     const BufferDispatchConstants buf_dispatch_constants =
-        generate_buffer_dispatch_constants(sysmem_manager, dispatch_core_type, cq_id);
+        generate_buffer_dispatch_constants(host_cq(*buffer.device(), cq_id));
 
     // TODO: When writing to L1, modify this function to use enqueue_write_to_core
     // Determine whether pinned direct read is feasible, and derive src noc params
@@ -1445,10 +1431,10 @@ void issue_read_buffer_dispatch_command_sequence(
     MetalContext& metal_ctx = tt::tt_metal::MetalContext::instance(context_id);
     const auto& hal = metal_ctx.hal();
 
-    SystemMemoryManager& sysmem_manager = dispatch_params.device->sysmem_manager();
+    HostCq& cq = host_cq(*dispatch_params.device, dispatch_params.cq_id);
 
     // Mock/emulated devices don't have real hardware to read from, skip actual dispatch
-    if (sysmem_manager.env_impl().get_cluster().is_mock_or_emulated()) {
+    if (cq.backing().env().get_cluster().is_mock_or_emulated()) {
         return;
     }
 
@@ -1507,7 +1493,7 @@ void issue_read_buffer_dispatch_command_sequence(
     }
     const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
 
-    void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, dispatch_params.cq_id);
+    void* cmd_region = cq.issue_queue_reserve(cmd_sequence_sizeB);
     HugepageDeviceCommand command_sequence(metal_ctx, cmd_region, cmd_sequence_sizeB);
 
     uint32_t last_index = num_worker_counters - 1;
@@ -1555,9 +1541,7 @@ void issue_read_buffer_dispatch_command_sequence(
     // Mark whether completion read is needed
     dispatch_params.requires_completion_read = !use_pinned_transfer;
 
-    sysmem_manager.issue_queue_push_back(cmd_sequence_sizeB, dispatch_params.cq_id);
-    sysmem_manager.fetch_queue_reserve_back(dispatch_params.cq_id);
-    sysmem_manager.fetch_queue_write(cmd_sequence_sizeB, dispatch_params.cq_id);
+    cq.publish(cmd_sequence_sizeB);
 }
 
 // Top level functions to copy device buffers into the completion queue
@@ -1642,10 +1626,7 @@ std::shared_ptr<tt::tt_metal::CompletionReaderVariant> generate_interleaved_buff
 }
 
 void copy_completion_queue_data_into_user_space(
-    const ReadBufferDescriptor& read_buffer_descriptor,
-    uint32_t cq_id,
-    SystemMemoryManager& sysmem_manager,
-    std::atomic<bool>& exit_condition) {
+    const ReadBufferDescriptor& read_buffer_descriptor, HostCq& cq, std::atomic<bool>& exit_condition) {
     TTZoneScopedD(DISPATCH);
     const auto& [page_size, padded_page_size, buffer_page_mapping, core_page_mapping, dst, dst_offset, num_pages_read] =
         read_buffer_descriptor;
@@ -1666,8 +1647,7 @@ void copy_completion_queue_data_into_user_space(
     }
 
     while (remaining_bytes_to_read != 0) {
-        uint32_t completion_queue_write_ptr_and_toggle =
-            sysmem_manager.completion_queue_wait_front(cq_id, exit_condition);
+        uint32_t completion_queue_write_ptr_and_toggle = cq.completion_queue_wait_front(exit_condition);
 
         if (exit_condition) {
             break;
@@ -1675,8 +1655,8 @@ void copy_completion_queue_data_into_user_space(
 
         uint32_t completion_q_write_ptr = (completion_queue_write_ptr_and_toggle & 0x7fffffff) << 4;
         uint32_t completion_q_write_toggle = completion_queue_write_ptr_and_toggle >> (31);
-        uint32_t completion_q_read_ptr = sysmem_manager.get_completion_queue_read_ptr(cq_id);
-        uint32_t completion_q_read_toggle = sysmem_manager.get_completion_queue_read_toggle(cq_id);
+        uint32_t completion_q_read_ptr = cq.completion_queue_read_ptr();
+        uint32_t completion_q_read_toggle = cq.completion_queue_read_toggle();
 
         uint32_t bytes_avail_in_completion_queue;
         if (completion_q_write_ptr > completion_q_read_ptr and completion_q_write_toggle == completion_q_read_toggle) {
@@ -1684,7 +1664,7 @@ void copy_completion_queue_data_into_user_space(
         } else {
             // Completion queue write pointer on device wrapped but read pointer is lagging behind.
             //  In this case read up until the end of the completion queue first
-            bytes_avail_in_completion_queue = sysmem_manager.get_completion_queue_limit(cq_id) - completion_q_read_ptr;
+            bytes_avail_in_completion_queue = cq.completion_queue_limit() - completion_q_read_ptr;
         }
 
         // completion queue write ptr on device could have wrapped but our read ptr is lagging behind
@@ -1698,7 +1678,7 @@ void copy_completion_queue_data_into_user_space(
             void* contiguous_dst = (void*)(uint64_t(dst) + contig_dst_offset);
             if (page_size == padded_page_size) {
                 uint32_t data_bytes_xfered = bytes_xfered - offset_in_completion_q_data;
-                sysmem_manager.backing().read_cq_memory(
+                cq.backing().read_cq_memory(
                     contiguous_dst, data_bytes_xfered, completion_q_read_ptr + offset_in_completion_q_data);
                 contig_dst_offset += data_bytes_xfered;
                 offset_in_completion_q_data = 0;
@@ -1743,7 +1723,7 @@ void copy_completion_queue_data_into_user_space(
                         num_bytes_to_copy = page_size;
                     }
 
-                    sysmem_manager.backing().read_cq_memory(
+                    cq.backing().read_cq_memory(
                         (char*)(uint64_t(contiguous_dst) + dst_offset_bytes),
                         num_bytes_to_copy,
                         completion_q_read_ptr + src_offset_bytes);
@@ -1814,7 +1794,7 @@ void copy_completion_queue_data_into_user_space(
                     }
                 }
 
-                sysmem_manager.backing().read_cq_memory(
+                cq.backing().read_cq_memory(
                     (char*)(uint64_t(dst) + dst_offset_bytes),
                     num_bytes_to_copy,
                     completion_q_read_ptr + src_offset_bytes);
@@ -1824,7 +1804,7 @@ void copy_completion_queue_data_into_user_space(
             dst_offset_bytes += num_bytes_to_copy;
             contig_dst_offset = dst_offset_bytes;
         }
-        sysmem_manager.completion_queue_pop_front(num_pages_xfered, cq_id);
+        cq.completion_queue_pop_front(num_pages_xfered);
     }
 }
 

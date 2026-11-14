@@ -24,7 +24,7 @@
 #include "host_api.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "system_memory_cq_interface.hpp"
-#include "system_memory_manager.hpp"
+#include "host_cq.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_impl.hpp"
 #include "impl/dispatch/dispatch_mem_map.hpp"
@@ -47,10 +47,11 @@ T val(T v) {
 }
 }  // namespace
 
-// Reads a host-side CQ pointer of cq_id, in 16 B units.
-uint32_t read_host_cq_ptr(const CqBacking& backing, uint8_t cq_id, CommandQueueHostAddrType type, bool device_written) {
+// Reads a host-side CQ pointer of cq, in 16 B units.
+uint32_t read_host_cq_ptr(const HostCq& cq, CommandQueueHostAddrType type, bool device_written) {
+    const CqBacking& backing = cq.backing();
     return backing.read_host_cq_word(
-        cq_id, backing.context().dispatch_mem_map().get_host_command_queue_addr(type), device_written);
+        cq.id(), backing.context().dispatch_mem_map().get_host_command_queue_addr(type), device_written);
 }
 
 void match_device_program_data_with_host_program_data(const char* host_file, const char* device_file) {
@@ -349,16 +350,14 @@ void print_progress_bar(float progress, bool init = false) {
     }
 }
 
-void dump_completion_queue_entries(
-    std::ofstream& cq_file, SystemMemoryManager& sysmem_manager, const SystemMemoryCQInterface& cq_interface) {
-    MetalContext& metal_ctx = sysmem_manager.metal_context();
-    const CqBacking& backing = sysmem_manager.backing();
+void dump_completion_queue_entries(std::ofstream& cq_file, const HostCq& cq) {
+    const SystemMemoryCQInterface& cq_interface = cq.cq_interface();
+    const CqBacking& backing = cq.backing();
+    MetalContext& metal_ctx = backing.context();
     uint32_t completion_write_ptr =
-        read_host_cq_ptr(backing, cq_interface.id, CommandQueueHostAddrType::COMPLETION_Q_WR, /*device_written=*/true)
-        << 4;
+        read_host_cq_ptr(cq, CommandQueueHostAddrType::COMPLETION_Q_WR, /*device_written=*/true) << 4;
     uint32_t completion_read_ptr =
-        read_host_cq_ptr(backing, cq_interface.id, CommandQueueHostAddrType::COMPLETION_Q_RD, /*device_written=*/false)
-        << 4;
+        read_host_cq_ptr(cq, CommandQueueHostAddrType::COMPLETION_Q_RD, /*device_written=*/false) << 4;
     uint32_t completion_q_bytes = cq_interface.completion_fifo_size << 4;
     TT_ASSERT(completion_q_bytes % DispatchSettings::TRANSFER_PAGE_SIZE == 0);
     uint32_t base_addr = (cq_interface.issue_fifo_limit << 4);
@@ -366,11 +365,10 @@ void dump_completion_queue_entries(
     // Read out in pages, this is fine since all completion Q entries are page aligned.
     std::vector<uint8_t> read_data;
     read_data.resize(DispatchSettings::TRANSFER_PAGE_SIZE);
-    log_info(
-        tt::LogMetal, "Reading Device {} CQ {}, Completion Queue...", sysmem_manager.get_device_id(), cq_interface.id);
+    log_info(tt::LogMetal, "Reading Device {} CQ {}, Completion Queue...", backing.device_id(), cq_interface.id);
     cq_file << fmt::format(
         "Device {}, CQ {}, Completion Queue: write_ptr={:#010x}, read_ptr={:#010x}\n",
-        sysmem_manager.get_device_id(),
+        backing.device_id(),
         cq_interface.id,
         completion_write_ptr,
         completion_read_ptr);
@@ -445,25 +443,24 @@ void dump_completion_queue_entries(
     std::cout << std::endl;
 }
 
-void dump_issue_queue_entries(
-    std::ofstream& iq_file, SystemMemoryManager& sysmem_manager, const SystemMemoryCQInterface& cq_interface) {
-    MetalContext& metal_ctx = sysmem_manager.metal_context();
-    const CqBacking& backing = sysmem_manager.backing();
+void dump_issue_queue_entries(std::ofstream& iq_file, const HostCq& cq) {
+    const SystemMemoryCQInterface& cq_interface = cq.cq_interface();
+    const CqBacking& backing = cq.backing();
+    MetalContext& metal_ctx = backing.context();
     // TODO: Issue Q read ptr is not prefetcly updated 0 try to read it out from chip on dump?
-    uint32_t issue_read_ptr =
-        read_host_cq_ptr(backing, cq_interface.id, CommandQueueHostAddrType::ISSUE_Q_RD, /*device_written=*/true) << 4;
-    uint32_t issue_write_ptr =
-        read_host_cq_ptr(backing, cq_interface.id, CommandQueueHostAddrType::ISSUE_Q_WR, /*device_written=*/false) << 4;
+    uint32_t issue_read_ptr = read_host_cq_ptr(cq, CommandQueueHostAddrType::ISSUE_Q_RD, /*device_written=*/true) << 4;
+    uint32_t issue_write_ptr = read_host_cq_ptr(cq, CommandQueueHostAddrType::ISSUE_Q_WR, /*device_written=*/false)
+                               << 4;
     uint32_t issue_q_bytes = cq_interface.issue_fifo_size << 4;
     uint32_t issue_q_base_addr = cq_interface.offset + cq_interface.cq_start;
 
     // Read out in 4K pages, could do ISSUE_Q_ALIGNMENT chunks to match the entries but this is ~2x faster.
     std::vector<uint8_t> read_data;
     read_data.resize(DispatchSettings::TRANSFER_PAGE_SIZE);
-    log_info(tt::LogMetal, "Reading Device {} CQ {}, Issue Queue...", sysmem_manager.get_device_id(), cq_interface.id);
+    log_info(tt::LogMetal, "Reading Device {} CQ {}, Issue Queue...", backing.device_id(), cq_interface.id);
     iq_file << fmt::format(
         "Device {}, CQ {}, Issue Queue: write_ptr={:#010x}, read_ptr={:#010x} (read_ptr not currently implemented)\n",
-        sysmem_manager.get_device_id(),
+        backing.device_id(),
         cq_interface.id,
         issue_write_ptr,
         issue_read_ptr);
@@ -581,34 +578,23 @@ void dump_issue_queue_entries(
 // Define a queue type, for when they're interchangeable.
 enum cq_queue_t { CQ_COMPLETION_QUEUE = 0, CQ_ISSUE_QUEUE = 1 };
 
-void dump_command_queue_raw_data(
-    std::ofstream& out_file,
-    SystemMemoryManager& sysmem_manager,
-    const SystemMemoryCQInterface& cq_interface,
-    cq_queue_t queue_type) {
-    const CqBacking& backing = sysmem_manager.backing();
+void dump_command_queue_raw_data(std::ofstream& out_file, const HostCq& cq, cq_queue_t queue_type) {
+    const SystemMemoryCQInterface& cq_interface = cq.cq_interface();
+    const CqBacking& backing = cq.backing();
 
     // The following variables depend on completion Q vs issue Q
     uint32_t write_ptr, read_ptr, base_addr, bytes_to_read = 0;
     std::string queue_type_name;
     if (queue_type == CQ_COMPLETION_QUEUE) {
-        write_ptr = read_host_cq_ptr(
-                        backing, cq_interface.id, CommandQueueHostAddrType::COMPLETION_Q_WR, /*device_written=*/true)
-                    << 4;
-        read_ptr = read_host_cq_ptr(
-                       backing, cq_interface.id, CommandQueueHostAddrType::COMPLETION_Q_RD, /*device_written=*/false)
-                   << 4;
+        write_ptr = read_host_cq_ptr(cq, CommandQueueHostAddrType::COMPLETION_Q_WR, /*device_written=*/true) << 4;
+        read_ptr = read_host_cq_ptr(cq, CommandQueueHostAddrType::COMPLETION_Q_RD, /*device_written=*/false) << 4;
         bytes_to_read = cq_interface.completion_fifo_size << 4;  // Page-aligned, Issue Q is not.
         TT_ASSERT(bytes_to_read % DispatchSettings::TRANSFER_PAGE_SIZE == 0);
         base_addr = cq_interface.issue_fifo_limit << 4;
         queue_type_name = "Completion";
     } else if (queue_type == CQ_ISSUE_QUEUE) {
-        write_ptr =
-            read_host_cq_ptr(backing, cq_interface.id, CommandQueueHostAddrType::ISSUE_Q_WR, /*device_written=*/false)
-            << 4;
-        read_ptr =
-            read_host_cq_ptr(backing, cq_interface.id, CommandQueueHostAddrType::ISSUE_Q_RD, /*device_written=*/true)
-            << 4;
+        write_ptr = read_host_cq_ptr(cq, CommandQueueHostAddrType::ISSUE_Q_WR, /*device_written=*/false) << 4;
+        read_ptr = read_host_cq_ptr(cq, CommandQueueHostAddrType::ISSUE_Q_RD, /*device_written=*/true) << 4;
         bytes_to_read = cq_interface.issue_fifo_size << 4;
         base_addr = cq_interface.offset + cq_interface.cq_start;
         queue_type_name = "Issue";
@@ -621,15 +607,12 @@ void dump_command_queue_raw_data(
     read_data.resize(DispatchSettings::TRANSFER_PAGE_SIZE);
     out_file << std::endl;
     out_file << fmt::format(
-                    "Device {}, CQ {}, {} Queue Raw Data:\n",
-                    sysmem_manager.get_device_id(),
-                    cq_interface.id,
-                    queue_type_name)
+                    "Device {}, CQ {}, {} Queue Raw Data:\n", backing.device_id(), cq_interface.id, queue_type_name)
              << std::hex;
     log_info(
         tt::LogMetal,
         "Reading Device {} CQ {}, {} Queue Raw Data...",
-        sysmem_manager.get_device_id(),
+        backing.device_id(),
         cq_interface.id,
         queue_type_name);
     print_progress_bar(0.0, true);
@@ -666,17 +649,17 @@ void dump_command_queue_raw_data(
     std::cout << std::endl;
 }
 
-void dump_cqs(std::ofstream& cq_file, std::ofstream& iq_file, SystemMemoryManager& sysmem_manager, bool dump_raw_data) {
-    for (uint8_t cq_id = 0; cq_id < sysmem_manager.num_cqs(); cq_id++) {
-        const SystemMemoryCQInterface& cq_interface = sysmem_manager.cq(cq_id).cq_interface();
+void dump_cqs(std::ofstream& cq_file, std::ofstream& iq_file, IDevice& device, bool dump_raw_data) {
+    for (uint8_t cq_id = 0; cq_id < device.num_hw_cqs(); cq_id++) {
+        const HostCq& cq = host_cq(device, cq_id);
         // Dump completion queue + issue queue
-        dump_completion_queue_entries(cq_file, sysmem_manager, cq_interface);
-        dump_issue_queue_entries(iq_file, sysmem_manager, cq_interface);
+        dump_completion_queue_entries(cq_file, cq);
+        dump_issue_queue_entries(iq_file, cq);
 
         // This is really slow, so don't do it by default. It's sometimes helpful to read the raw bytes though.
         if (dump_raw_data) {
-            dump_command_queue_raw_data(cq_file, sysmem_manager, cq_interface, CQ_COMPLETION_QUEUE);
-            dump_command_queue_raw_data(iq_file, sysmem_manager, cq_interface, CQ_ISSUE_QUEUE);
+            dump_command_queue_raw_data(cq_file, cq, CQ_COMPLETION_QUEUE);
+            dump_command_queue_raw_data(iq_file, cq, CQ_ISSUE_QUEUE);
         }
     }
 }

@@ -47,18 +47,18 @@ void issue_record_event_commands(
     IDevice* device,
     ChipId device_id,
     uint32_t event_id,
-    uint8_t cq_id,
+    HostCq& cq,
     uint32_t num_command_queues,
-    SystemMemoryManager& manager,
     ttsl::Span<const SubDeviceId> sub_device_ids,
     ttsl::Span<const uint32_t> expected_num_workers_completed,
     bool notify_host,
     bool clear_count) {
+    const uint8_t cq_id = cq.id();
     std::vector<uint32_t> event_payload(DispatchSettings::EVENT_PADDED_SIZE / sizeof(uint32_t), 0);
     event_payload[0] = event_id;
 
-    MetalContext& metal_ctx = manager.metal_context();
-    const uint32_t l1_alignment = manager.env_impl().get_hal().get_alignment(HalMemType::L1);
+    MetalContext& metal_ctx = cq.backing().context();
+    const uint32_t l1_alignment = cq.backing().env().get_hal().get_alignment(HalMemType::L1);
     const uint32_t num_worker_counters = sub_device_ids.size();
     const uint32_t num_cqs_per_dispatch_core =
         metal_ctx.get_dispatch_query_manager().cq_dispatch_layout().num_cqs_per_core;
@@ -92,7 +92,7 @@ void issue_record_event_commands(
     }
     const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
 
-    void* cmd_region = manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
+    void* cmd_region = cq.issue_queue_reserve(cmd_sequence_sizeB);
 
     HugepageDeviceCommand command_sequence(metal_ctx, cmd_region, cmd_sequence_sizeB);
 
@@ -155,21 +155,18 @@ void issue_record_event_commands(
             flush_prefetch, DispatchSettings::EVENT_PADDED_SIZE, true, pad1, event_payload.data());
     }
 
-    manager.issue_queue_push_back(cmd_sequence_sizeB, cq_id);
-
-    manager.fetch_queue_reserve_back(cq_id);
-    manager.fetch_queue_write(cmd_sequence_sizeB, cq_id);
-    manager.set_last_issued_event(cq_id, event_id);
+    cq.publish(cmd_sequence_sizeB);
+    cq.set_last_issued_event(event_id);
 }
 
-void issue_wait_for_event_commands(
-    uint8_t cq_id, uint8_t event_cq_id, SystemMemoryManager& sysmem_manager, uint32_t event_id) {
-    MetalContext& metal_ctx = sysmem_manager.metal_context();
+void issue_wait_for_event_commands(HostCq& cq, uint8_t event_cq_id, uint32_t event_id) {
+    const uint8_t cq_id = cq.id();
+    MetalContext& metal_ctx = cq.backing().context();
     tt::tt_metal::DeviceCommandCalculator calculator(metal_ctx);
     calculator.add_dispatch_wait();
     const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
 
-    void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
+    void* cmd_region = cq.issue_queue_reserve(cmd_sequence_sizeB);
 
     HugepageDeviceCommand command_sequence(metal_ctx, cmd_region, cmd_sequence_sizeB);
     uint32_t completion_q0_last_event_addr = metal_ctx.dispatch_mem_map().get_device_command_queue_addr(
@@ -183,30 +180,26 @@ void issue_wait_for_event_commands(
     command_sequence.add_dispatch_wait(
         CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_MEMORY, last_completed_event_address, 0, event_id);
 
-    sysmem_manager.issue_queue_push_back(cmd_sequence_sizeB, cq_id);
-
-    sysmem_manager.fetch_queue_reserve_back(cq_id);
-
-    sysmem_manager.fetch_queue_write(cmd_sequence_sizeB, cq_id);
+    cq.publish(cmd_sequence_sizeB);
 }
 
-void read_events_from_completion_queue(
-    ReadEventDescriptor& event_descriptor, ChipId device_id, uint8_t cq_id, SystemMemoryManager& sysmem_manager) {
+void read_events_from_completion_queue(ReadEventDescriptor& event_descriptor, HostCq& cq) {
+    const CqBacking& backing = cq.backing();
     // Mock devices write no completion queue data, so the event counts as completed.
-    if (sysmem_manager.env_impl().get_cluster().is_mock_or_emulated()) {
-        sysmem_manager.set_last_completed_event(cq_id, event_descriptor.get_global_event_id());
+    if (backing.env().get_cluster().is_mock_or_emulated()) {
+        cq.set_last_completed_event(event_descriptor.get_global_event_id());
         return;
     }
 
-    uint32_t read_ptr = sysmem_manager.get_completion_queue_read_ptr(cq_id);
+    uint32_t read_ptr = cq.completion_queue_read_ptr();
     thread_local static std::vector<uint32_t> dispatch_cmd_and_event(
         (sizeof(CQDispatchCmd) + DispatchSettings::EVENT_PADDED_SIZE) / sizeof(uint32_t));
-    sysmem_manager.backing().read_cq_memory(
+    backing.read_cq_memory(
         dispatch_cmd_and_event.data(), sizeof(CQDispatchCmd) + DispatchSettings::EVENT_PADDED_SIZE, read_ptr);
 
     CQDispatchCmd* dispatch_cmd = reinterpret_cast<CQDispatchCmd*>(dispatch_cmd_and_event.data());
     uint32_t expected_padding_value = HugepageDeviceCommand::random_padding_value();
-    uint16_t expected_pad1 = (device_id << 8) | cq_id;
+    uint16_t expected_pad1 = (backing.device_id() << 8) | cq.id();
 
     TT_FATAL(
         dispatch_cmd->base.cmd_id == CQ_DISPATCH_CMD_WRITE_LINEAR_H_HOST && dispatch_cmd->write_linear_host.is_event &&
@@ -229,8 +222,8 @@ void read_events_from_completion_queue(
         "Event Order Issue: expected to read back completion signal for event {} but got {}!",
         event_descriptor.event_id,
         event_completed);
-    sysmem_manager.completion_queue_pop_front(1, cq_id);
-    sysmem_manager.set_last_completed_event(cq_id, event_descriptor.get_global_event_id());
+    cq.completion_queue_pop_front(1);
+    cq.set_last_completed_event(event_descriptor.get_global_event_id());
     log_trace(
         LogAlways,
         "Completion queue popped event {} (global: {})",

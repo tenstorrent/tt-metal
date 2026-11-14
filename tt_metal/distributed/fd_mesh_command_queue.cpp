@@ -42,7 +42,7 @@
 #include "sub_device/sub_device_manager_tracker.hpp"
 #include "tt-metalium/program.hpp"
 #include <tt_stl/strong_type.hpp>
-#include "dispatch/system_memory_manager.hpp"
+#include "dispatch/host_cq.hpp"
 #include "trace/trace_buffer.hpp"
 #include "trace/trace_capture_buffer.hpp"
 #include "tt_metal/impl/threading/thread_pool.hpp"
@@ -388,9 +388,8 @@ void FDMeshCommandQueue::clear_expected_num_workers_completed() {
             mesh_device_,
             device->id(),
             event.impl().id(),
-            id_,
+            host_cq(*device, id_),
             mesh_device_->num_hw_cqs(),
-            device->sysmem_manager(),
             sub_device_ids,
             expected_num_workers_completed_,
             true, /* notify_host */
@@ -813,7 +812,7 @@ void FDMeshCommandQueue::finish_nolock(ttsl::Span<const SubDeviceId> sub_device_
         for (const auto& sub_device_id : buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids)) {
             const uint32_t wait_count = expected_num_workers_completed_[*sub_device_id];
             for (auto* device : mesh_device_->impl().get_devices()) {
-                write_rt_profiler_flush(id_, sub_device_id, device->sysmem_manager(), wait_count);
+                write_rt_profiler_flush(host_cq(*device, id_), sub_device_id, wait_count);
             }
         }
     }
@@ -1035,9 +1034,8 @@ MeshEvent FDMeshCommandQueue::enqueue_record_event_helper(
             mesh_device_,
             mesh_device_->impl().get_device(coord)->id(),
             event.impl().id(),
-            id_,
+            host_cq(*mesh_device_->impl().get_device(coord), id_),
             mesh_device_->num_hw_cqs(),
-            mesh_device_->impl().get_device(coord)->sysmem_manager(),
             sub_device_ids,
             expected_num_workers_completed_,
             notify_host);
@@ -1103,9 +1101,8 @@ void FDMeshCommandQueue::enqueue_wait_for_event(const MeshEvent& sync_event) {
     TT_FATAL(!trace_id_.has_value(), "Event Synchronization is not supported during trace capture.");
     for_each_local(mesh_device_, sync_event.impl().device_range(), [&](const auto& coord) {
         event_dispatch::issue_wait_for_event_commands(
-            id_,
+            host_cq(*mesh_device_->impl().get_device(coord), id_),
             sync_event.impl().mesh_cq_id(),
-            mesh_device_->impl().get_device(coord)->sysmem_manager(),
             sync_event.impl().id());
     });
     auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
@@ -1188,12 +1185,10 @@ MultiProducerSingleConsumerQueue<CompletionReaderVariant>& FDMeshCommandQueue::g
 void FDMeshCommandQueue::copy_buffer_data_to_user_space(MeshBufferReadDescriptor& read_buffer_descriptor) {
     auto reader_lambda = [this](IDevice* device, uint32_t num_reads) {
         auto& read_descriptor_queue = this->get_read_descriptor_queue(device);
+
         for (int i = 0; i < num_reads; i++) {
             buffer_dispatch::copy_completion_queue_data_into_user_space(
-                std::get<ReadBufferDescriptor>(*(read_descriptor_queue.pop())),
-                id_,
-                device->sysmem_manager(),
-                exit_condition_);
+                std::get<ReadBufferDescriptor>(*(read_descriptor_queue.pop())), host_cq(*device, id_), exit_condition_);
         }
     };
 
@@ -1221,14 +1216,13 @@ void FDMeshCommandQueue::copy_buffer_data_to_user_space(MeshBufferReadDescriptor
 void FDMeshCommandQueue::read_completion_queue_event(MeshReadEventDescriptor& read_event_descriptor) {
     auto& device_range = read_event_descriptor.device_range;
     for_each_local(mesh_device_, device_range, [&](const auto& coord) {
-        auto device = mesh_device_->impl().get_device(coord);
-        device->sysmem_manager().completion_queue_wait_front(id_, exit_condition_);
+        HostCq& cq = host_cq(*mesh_device_->impl().get_device(coord), id_);
+        cq.completion_queue_wait_front(exit_condition_);
 
         if (exit_condition_.load()) {
             return;
         }
-        event_dispatch::read_events_from_completion_queue(
-            read_event_descriptor.single_device_descriptor, device->id(), id_, device->sysmem_manager());
+        event_dispatch::read_events_from_completion_queue(read_event_descriptor.single_device_descriptor, cq);
     });
 }
 
@@ -1238,7 +1232,7 @@ void FDMeshCommandQueue::read_l1_data_from_completion_queue(MeshCoreDataReadDesc
     }
     Device* device = mesh_device_->impl().get_device(read_l1_data_descriptor.device_coord);
     device_dispatch::read_core_data_from_completion_queue(
-        read_l1_data_descriptor.single_core_descriptor, id_, device->sysmem_manager(), exit_condition_);
+        read_l1_data_descriptor.single_core_descriptor, host_cq(*device, id_), exit_condition_);
 }
 
 void FDMeshCommandQueue::reset_worker_state(
@@ -1297,8 +1291,7 @@ void FDMeshCommandQueue::reset_worker_state(
         // and retains all barriers; batching changes only host submission granularity.
         program_dispatch::reset_worker_dispatch_state_on_device(
             mesh_device_,
-            devices[i]->sysmem_manager(),
-            id_,
+            host_cq(*devices[i], id_),
             expected_num_workers_completed_,
             cq_shared_state_->worker_launch_message_buffer_state,
             reset_launch_msg_state,
@@ -1339,19 +1332,17 @@ void FDMeshCommandQueue::write_program_commands_to_devices(
             program_dispatch::pack_program_command_sequence(
                 program_cmd_seq, stall_first, stall_before_program, true, packed);
             for (auto* device : devices) {
-                auto& manager = device->sysmem_manager();
-                manager.issue_queue_reserve(size, id_);
-                manager.cq_write(packed.data(), size, manager.get_issue_queue_write_ptr(id_));
-                manager.issue_queue_push_back(size, id_);
-                manager.fetch_queue_reserve_back(id_);
-                manager.fetch_queue_write(size, id_);
+                HostCq& cq = host_cq(*device, id_);
+                cq.issue_queue_reserve(size);
+                cq.cq_write(packed.data(), size, cq.issue_queue_write_ptr());
+                cq.publish(size);
             }
             return;
         }
     }
     for (auto* device : devices) {
         program_dispatch::write_program_command_sequence(
-            program_cmd_seq, device->sysmem_manager().cq(id_), stall_first, stall_before_program);
+            program_cmd_seq, host_cq(*device, id_), stall_first, stall_before_program);
     }
 }
 
@@ -1372,7 +1363,7 @@ void FDMeshCommandQueue::write_go_signal_sequences_to_unused_sub_grids(
     for (auto& device : mesh_device_->impl().get_devices()) {
         if (!chip_ids_in_workload.contains(device->id())) {
             write_go_signal_sequence(
-                device->sysmem_manager().cq(id_),
+                host_cq(*device, id_),
                 mesh_device_,
                 sub_device_id,
                 expected_num_workers_completed,
@@ -1475,7 +1466,7 @@ void FDMeshCommandQueue::enqueue_command_list_patch(
         IDevice& device = *mesh_device_->impl().get_device(coord);
         const Buffer& device_buffer = *buffer.get_device_buffer(coord);
         const DeviceAddr aligned_page_size = device_buffer.aligned_page_size();
-        auto& sysmem_manager = device.sysmem_manager();
+        HostCq& cq = host_cq(device, id_);
         bank_destinations.assign(num_banks, std::nullopt);
 
         // Returns the NOC endpoint and address of a byte offset in the buffer, resolving each bank once per device.
@@ -1500,7 +1491,7 @@ void FDMeshCommandQueue::enqueue_command_list_patch(
         // Writes device_patches[begin, end) as one fetch-queue entry.
         auto enqueue_patch_batch = [&](size_t begin, size_t end, uint32_t write_bytes, bool append_stall) {
             const uint32_t cmd_sequence_sizeB = write_bytes + (append_stall ? stall_size : 0);
-            void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, id_);
+            void* cmd_region = cq.issue_queue_reserve(cmd_sequence_sizeB);
             HugepageDeviceCommand command_sequence(metal_ctx, cmd_region, cmd_sequence_sizeB);
             for (size_t i = begin; i < end; ++i) {
                 const MeshBufferPatch& patch = device_patches[i].get();
@@ -1513,9 +1504,7 @@ void FDMeshCommandQueue::enqueue_command_list_patch(
                 // command list before these writes land.
                 command_sequence.add_dispatch_wait_with_prefetch_stall(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0);
             }
-            sysmem_manager.issue_queue_push_back(cmd_sequence_sizeB, id_);
-            sysmem_manager.fetch_queue_reserve_back(id_);
-            sysmem_manager.fetch_queue_write(cmd_sequence_sizeB, id_);
+            cq.publish(cmd_sequence_sizeB);
         };
 
         // Pack writes into batches no larger than max_command_size. The last batch also carries the stall.
@@ -1575,9 +1564,8 @@ void FDMeshCommandQueue::submit_replay_buffer(
     for (auto* device : mesh_device_->impl().get_devices()) {
         trace_dispatch::issue_trace_commands(
             mesh_device_,
-            device->sysmem_manager(),
+            host_cq(*device, id_),
             dispatch_md,
-            id_,
             expected_num_workers_completed_,
             cq_shared_state_->worker_launch_message_buffer_state);
     }
@@ -1881,8 +1869,7 @@ void FDMeshCommandQueue::wait_for_completion(bool reset_launch_msg_state) {
         for (auto* device : mesh_device_->impl().get_devices()) {
             program_dispatch::reset_worker_dispatch_state_on_device(
                 mesh_device_,
-                device->sysmem_manager(),
-                id_,
+                host_cq(*device, id_),
                 expected_num_workers_completed_,
                 cq_shared_state_->worker_launch_message_buffer_state,
                 reset_launch_msg_state,
@@ -1910,9 +1897,9 @@ void FDMeshCommandQueue::finish_and_reset_in_use() {
         const uint32_t current_event = last_event_id_;
         for (auto* device : mesh_device_->impl().get_devices()) {
             TT_ASSERT(
-                device->sysmem_manager().get_last_completed_event(id_) == current_event,
+                host_cq(*device, id_).last_completed_event() == current_event,
                 "Current event must be equal to last completed event");
-            device->sysmem_manager().reset_events(id_, UINT32_MAX);
+            host_cq(*device, id_).reset_events(UINT32_MAX);
         }
         // The next event ID is 0.
         last_event_id_ = UINT32_MAX;

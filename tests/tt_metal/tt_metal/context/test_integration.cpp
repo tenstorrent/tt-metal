@@ -33,7 +33,7 @@
 
 // Internal access
 #include "llrt/hal_types.hpp"
-#include "dispatch/system_memory_manager.hpp"
+#include "dispatch/host_cq.hpp"
 #include "impl/context/context_types.hpp"
 #include "distributed/mesh_device_impl.hpp"
 #include "context/metal_env_accessor.hpp"
@@ -922,8 +922,8 @@ TEST(MetalContextIntegrationTest, MeshDevicePropagatesContextId) {
     auto submesh_1 = mesh_device->create_submesh(distributed::MeshShape(1, 2));
     EXPECT_EQ(submesh_1->impl().get_context_id(), context_id);
 
-    SystemMemoryManager& sysmem_manager = mesh_device->impl().get_devices()[0]->sysmem_manager();
-    EXPECT_EQ(&sysmem_manager.metal_context(), &mesh_device->impl().metal_context());
+    CqBacking& backing = cq_backing(*mesh_device->impl().get_devices()[0]);
+    EXPECT_EQ(&backing.context(), &mesh_device->impl().metal_context());
 }
 
 TEST(MetalEnvMockCCL, FabricConfiguredBeforeCreate_CreatesMeshAndQuerySucceeds) {

@@ -31,7 +31,7 @@ class LaunchMessageRingBufferState;
 class MetalContext;
 class Program;
 class Semaphore;
-class SystemMemoryManager;
+class HostCq;
 enum class ProgramBinaryStatus : uint8_t;
 struct KernelGroup;
 struct ProgramCommandSequence;
@@ -248,18 +248,14 @@ void reset_config_buf_mgrs_and_expected_workers(
 
 void reset_worker_dispatch_state_on_device(
     distributed::MeshDevice* mesh_device,
-    SystemMemoryManager& manager,
-    uint8_t cq_id,
+    HostCq& cq,
     const DispatchArray<uint32_t>& expected_num_workers_completed,
     const DispatchArray<LaunchMessageRingBufferState>& worker_launch_message_buffer_state,
     bool reset_launch_msg_state,
     ttsl::Span<const vector_aligned<uint32_t>> setup_commands);
 
 void set_num_worker_sems_on_dispatch(
-    SystemMemoryManager& manager,
-    uint8_t cq_id,
-    uint32_t num_worker_sems,
-    ttsl::Span<const uint32_t> workers_per_sub_device);
+    HostCq& cq, uint32_t num_worker_sems, ttsl::Span<const uint32_t> workers_per_sub_device);
 
 // Wait for number of workers to complete and then reset the counter on the device
 void reset_expected_num_workers_completed_on_device(

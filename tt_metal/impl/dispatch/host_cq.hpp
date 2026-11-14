@@ -13,6 +13,8 @@
 
 namespace tt::tt_metal {
 
+class IDevice;
+
 // One hardware command queue of a device, seen from the host. It owns the ring state of the issue and completion
 // queues and how far the host has got with events, and writes through the device's CqBacking.
 class HostCq final : public CommandSink {
@@ -21,6 +23,8 @@ public:
     HostCq(CqBacking& backing, uint8_t cq_id, const SystemMemoryCQInterface& cq_interface);
 
     uint8_t id() const { return cq_id_; }
+
+    CqBacking& backing() const { return backing_; }
 
     const SystemMemoryCQInterface& cq_interface() const { return cq_interface_; }
 
@@ -90,5 +94,8 @@ private:
     std::atomic<uint32_t> last_issued_event_{0};
     std::atomic<uint32_t> last_completed_event_{0};
 };
+
+// The device's CQ cq_id. The device must be a single device, not a MeshDevice.
+HostCq& host_cq(IDevice& device, uint8_t cq_id);
 
 }  // namespace tt::tt_metal

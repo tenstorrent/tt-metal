@@ -19,12 +19,6 @@
 #include "tt_metal/impl/dispatch/ringbuffer_cache.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
 
-// Forward declaration of the FDMeshCQTestAccessor class
-// This is used to access the system memory manager from cq test fixtures
-namespace tt::tt_metal::tt_dispatch_tests::Common {
-class FDMeshCQTestAccessor;
-}  // namespace tt::tt_metal::tt_dispatch_tests::Common
-
 #include "trace/trace_node.hpp"
 
 namespace tt::tt_metal {
@@ -52,9 +46,6 @@ struct MeshBufferPatch {
 
 class FDMeshCommandQueue final : public MeshCommandQueueBase {
 private:
-    // This class can now access private members of FDMeshCommandQueue
-    // This is used to access the system memory manager from cq test fixtures
-    friend class tt_dispatch_tests::Common::FDMeshCQTestAccessor;
     friend class SubDeviceSetupCacheTestAccessor;
 
     void populate_read_descriptor_queue();

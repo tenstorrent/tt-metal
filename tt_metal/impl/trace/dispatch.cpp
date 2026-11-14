@@ -15,7 +15,7 @@
 #include "hal_types.hpp"
 #include "dispatch/launch_message_ring_buffer_state.hpp"
 #include <tt_stl/strong_type.hpp>
-#include "dispatch/system_memory_manager.hpp"
+#include "dispatch/host_cq.hpp"
 #include "trace_buffer.hpp"
 #include <tt-metalium/math.hpp>
 #include "tt_metal/impl/dispatch/device_command.hpp"
@@ -28,13 +28,12 @@ namespace tt::tt_metal::trace_dispatch {
 
 void issue_trace_commands(
     distributed::MeshDevice* mesh_device,
-    SystemMemoryManager& sysmem_manager,
+    HostCq& cq,
     const TraceDispatchMetadata& dispatch_md,
-    uint8_t cq_id,
     const DispatchArray<uint32_t>& expected_num_workers_completed,
     const DispatchArray<LaunchMessageRingBufferState>& worker_launch_message_buffer_state) {
-    MetalContext& metal_ctx = sysmem_manager.metal_context();
-    void* cmd_region = sysmem_manager.issue_queue_reserve(dispatch_md.cmd_sequence_sizeB, cq_id);
+    MetalContext& metal_ctx = cq.backing().context();
+    void* cmd_region = cq.issue_queue_reserve(dispatch_md.cmd_sequence_sizeB);
 
     HugepageDeviceCommand command_sequence(metal_ctx, cmd_region, dispatch_md.cmd_sequence_sizeB);
 
@@ -54,7 +53,7 @@ void issue_trace_commands(
         // Wait to ensure that all kernels have completed. Then send the reset_rd_ptr go_signal.
         command_sequence.add_dispatch_go_signal_mcast(
             expected_num_workers_completed[index],
-            sysmem_manager.env_impl().get_hal().make_go_msg_u32(
+            cq.backing().env().get_hal().make_go_msg_u32(
                 dev_msgs::RUN_MSG_REPLAY_TRACE, metal_ctx.dispatch_mem_map().get_dispatch_message_update_offset(index)),
             metal_ctx.dispatch_mem_map().get_dispatch_stream_index(index),
             desc.num_traced_programs_needing_go_signal_multicast && mesh_device->impl().has_noc_mcast_txns(id)
@@ -97,12 +96,7 @@ void issue_trace_commands(
     command_sequence.add_prefetch_exec_buf(
         dispatch_md.trace_buffer_address, page_size_log2, dispatch_md.trace_buffer_num_pages);
 
-    sysmem_manager.issue_queue_push_back(dispatch_md.cmd_sequence_sizeB, cq_id);
-
-    sysmem_manager.fetch_queue_reserve_back(cq_id);
-
-    const bool stall_prefetcher = true;
-    sysmem_manager.fetch_queue_write(dispatch_md.cmd_sequence_sizeB, cq_id, stall_prefetcher);
+    cq.publish(dispatch_md.cmd_sequence_sizeB, /*stall_prefetcher=*/true);
 }
 
 uint32_t compute_trace_cmd_size(ContextId context_id, uint32_t num_sub_devices) {

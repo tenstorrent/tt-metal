@@ -15,7 +15,7 @@
 #include "mesh_command_queue_base.hpp"
 #include "mesh_workload_impl.hpp"
 #include "tt-metalium/program.hpp"
-#include "dispatch/system_memory_manager.hpp"
+#include "dispatch/host_cq.hpp"
 #include <internal/service/service_core_manager.hpp>
 #include "impl/internal/service/service_core_manager_impl.hpp"
 #include "impl/context/metal_context.hpp"
@@ -156,8 +156,7 @@ void EventSynchronize(const MeshEvent& event) {
     TT_FATAL(mesh_cq != nullptr, "MeshCommandQueue is not a MeshCommandQueueBase");
     for (const auto& coord : event.impl().device_range()) {
         auto* physical_device = event.device()->impl().get_device(coord);
-        while (physical_device->sysmem_manager().get_last_completed_event(event.impl().mesh_cq_id()) <
-               event.impl().id()) {
+        while (host_cq(*physical_device, event.impl().mesh_cq_id()).last_completed_event() < event.impl().id()) {
             mesh_cq->throw_if_reader_failed();
         }
     }
@@ -176,7 +175,7 @@ bool EventQuery(const MeshEvent& event) {
     for (const auto& coord : event.impl().device_range()) {
         auto* physical_device = event.device()->impl().get_device(coord);
         event_completed &=
-            physical_device->sysmem_manager().get_last_completed_event(event.impl().mesh_cq_id()) >= event.impl().id();
+            host_cq(*physical_device, event.impl().mesh_cq_id()).last_completed_event() >= event.impl().id();
     }
     return event_completed;
 }

@@ -53,7 +53,8 @@
 #include <tt-logger/tt-logger.hpp>
 #include "llrt/metal_soc_descriptor.hpp"
 #include "tt-metalium/program.hpp"
-#include "dispatch/system_memory_manager.hpp"
+#include "dispatch/cq_backing.hpp"
+#include "dispatch/host_cq.hpp"
 #include "tracy/Tracy.hpp"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 #include "tt_metal/impl/dispatch/hardware_command_queue.hpp"
@@ -323,18 +324,17 @@ void Device::configure_command_queue_programs(DispatchTopology* dispatch_topolog
                 context_->dispatch_mem_map().get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
             pointers.resize(cq_start / sizeof(uint32_t));
             for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
-                // Reset the host manager's pointer for this command queue
-                this->sysmem_manager_->reset(cq_id);
+                HostCq& cq = host_cq(cq_id);
+                cq.reset();
 
-                const CqBacking& backing = this->sysmem_manager_->backing();
-                const uint32_t cq_offset = backing.cq_base_addr(cq_id, channel);
+                const uint32_t cq_offset = cq_backing_->cq_base_addr(cq_id, channel);
                 pointers[host_issue_q_rd_ptr / sizeof(uint32_t)] = (cq_start + cq_offset) >> 4;
                 pointers[host_issue_q_wr_ptr / sizeof(uint32_t)] = (cq_start + cq_offset) >> 4;
                 pointers[host_completion_q_wr_ptr / sizeof(uint32_t)] =
-                    (cq_start + this->sysmem_manager_->get_issue_queue_size(cq_id) + cq_offset) >> 4;
+                    (cq_start + cq.issue_queue_size() + cq_offset) >> 4;
                 pointers[host_completion_q_rd_ptr / sizeof(uint32_t)] =
-                    (cq_start + this->sysmem_manager_->get_issue_queue_size(cq_id) + cq_offset) >> 4;
-                backing.write_cq_memory(
+                    (cq_start + cq.issue_queue_size() + cq_offset) >> 4;
+                cq_backing_->write_cq_memory(
                     serviced_device_id, channel, pointers.data(), pointers.size() * sizeof(uint32_t), cq_offset);
             }
         }
@@ -353,9 +353,7 @@ void Device::configure_command_queue_programs(DispatchTopology* dispatch_topolog
 }
 
 void Device::init_command_queue_host() {
-    // SystemMemoryManager now has internal stubs for mock/emulated devices
-    sysmem_manager_ =
-        std::make_unique<SystemMemoryManager>(MetalEnvAccessor(*env_).impl(), *context_, this->id_, this->num_hw_cqs());
+    create_host_cqs();
 
     // For mock/emulated devices, skip HWCommandQueue creation (they don't need real command queues)
     if (MetalEnvAccessor(*env_).impl().get_cluster().is_mock_or_emulated()) {
@@ -618,7 +616,7 @@ bool Device::close() {
     this->ethernet_cores_.clear();
     this->command_queue_programs_.clear();
     this->command_queues_.clear();
-    this->sysmem_manager_.reset();
+    destroy_host_cqs();
     {
         std::lock_guard<std::mutex> lock(optimal_dram_bank_to_logical_worker_assignment_mutex_);
         this->optimal_dram_bank_to_logical_worker_assignment_.clear();
@@ -833,14 +831,55 @@ HWCommandQueue& Device::command_queue(std::optional<uint8_t> cq_id) {
     return *command_queues_[actual_cq_id];
 }
 
-SystemMemoryManager& Device::sysmem_manager() {
-    // Mock and emulated devices skip init_command_queue_host, so their manager is created here on first use.
-    if (!sysmem_manager_) {
-        sysmem_manager_ = std::make_unique<SystemMemoryManager>(
-            MetalEnvAccessor(*env_).impl(), *context_, this->id_, this->num_hw_cqs());
+void Device::create_host_cqs() {
+    // A lazily created set may exist; its CQs must go before their backing.
+    destroy_host_cqs();
+    // Build locally so a throw leaves the device without CQs rather than with a partial set.
+    std::unique_ptr<CqBacking> backing =
+        CqBacking::create(MetalEnvAccessor(*env_).impl(), *context_, this->id_, this->num_hw_cqs());
+    const std::vector<SystemMemoryCQInterface> cq_interfaces = backing->make_cq_interfaces(this->num_hw_cqs());
+    std::vector<std::unique_ptr<HostCq>> cqs;
+    cqs.reserve(cq_interfaces.size());
+    for (uint8_t cq_id = 0; cq_id < cq_interfaces.size(); cq_id++) {
+        cqs.push_back(std::make_unique<HostCq>(*backing, cq_id, cq_interfaces[cq_id]));
     }
-    return *sysmem_manager_;
+    cq_backing_ = std::move(backing);
+    host_cqs_ = std::move(cqs);
 }
+
+void Device::destroy_host_cqs() {
+    host_cqs_.clear();
+    cq_backing_.reset();
+}
+
+CqBacking& Device::cq_backing() {
+    // Mock and emulated devices skip init_command_queue_host, so theirs are created here on first use.
+    if (!cq_backing_) {
+        create_host_cqs();
+    }
+    return *cq_backing_;
+}
+
+HostCq& Device::host_cq(uint8_t cq_id) {
+    cq_backing();
+    TT_ASSERT(cq_id < host_cqs_.size(), "CQ {} is out of range: device {} has {} CQs", cq_id, id_, host_cqs_.size());
+    return *host_cqs_[cq_id];
+}
+
+SystemMemoryManager& Device::sysmem_manager() { TT_THROW("SystemMemoryManager was removed (tt-metal#64081)"); }
+
+namespace {
+
+Device& as_device(IDevice& device) {
+    TT_FATAL(dynamic_cast<Device*>(&device) != nullptr, "Device {} has no host CQs; pass a single device", device.id());
+    return static_cast<Device&>(device);
+}
+
+}  // namespace
+
+HostCq& host_cq(IDevice& device, uint8_t cq_id) { return as_device(device).host_cq(cq_id); }
+
+CqBacking& cq_backing(IDevice& device) { return as_device(device).cq_backing(); }
 
 void Device::enable_program_cache() {
     log_info(tt::LogMetal, "Enabling program cache on device {}", this->id_);

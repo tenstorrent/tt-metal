@@ -13,7 +13,7 @@
 #include "llrt/hal.hpp"
 #include <cstdint>
 #include <tt_stl/strong_type.hpp>
-#include "dispatch/system_memory_manager.hpp"
+#include "dispatch/host_cq.hpp"
 #include <tt-metalium/math.hpp>
 #include "tt_metal/distributed/mesh_workload_utils.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
@@ -158,14 +158,13 @@ void write_go_signal_sequence(
     sink.publish(cmd_sequence_sizeB);
 }
 
-void write_rt_profiler_flush(
-    uint8_t cq_id, SubDeviceId sub_device_id, SystemMemoryManager& sysmem_manager, uint32_t wait_count) {
-    MetalContext& metal_ctx = sysmem_manager.metal_context();
+void write_rt_profiler_flush(HostCq& cq, SubDeviceId sub_device_id, uint32_t wait_count) {
+    MetalContext& metal_ctx = cq.backing().context();
     DeviceCommandCalculator calculator(metal_ctx);
     calculator.add_dispatch_rt_profiler_flush();
     uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
 
-    void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
+    void* cmd_region = cq.issue_queue_reserve(cmd_sequence_sizeB);
 
     HugepageDeviceCommand flush_cmd_sequence(metal_ctx, cmd_region, cmd_sequence_sizeB);
     const uint32_t wait_stream = metal_ctx.dispatch_mem_map().get_dispatch_stream_index(*sub_device_id);
@@ -173,8 +172,6 @@ void write_rt_profiler_flush(
 
     TT_ASSERT(flush_cmd_sequence.size_bytes() == flush_cmd_sequence.write_offset_bytes());
 
-    sysmem_manager.issue_queue_push_back(cmd_sequence_sizeB, cq_id);
-    sysmem_manager.fetch_queue_reserve_back(cq_id);
-    sysmem_manager.fetch_queue_write(cmd_sequence_sizeB, cq_id);
+    cq.publish(cmd_sequence_sizeB);
 }
 }  // namespace tt::tt_metal::distributed

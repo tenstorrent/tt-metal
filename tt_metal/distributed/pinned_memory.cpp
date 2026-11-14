@@ -21,7 +21,7 @@
 #include <tt-metalium/distributed.hpp>
 #include "impl/context/metal_env_impl.hpp"
 #include <tt-umd/chip_helpers/sysmem_buffer.hpp>
-#include "impl/dispatch/system_memory_manager.hpp"
+#include "impl/dispatch/host_cq.hpp"
 #include "llrt/tt_cluster.hpp"
 #include <distributed/mesh_device_impl.hpp>
 #include <distributed/mesh_device_view_impl.hpp>
@@ -330,8 +330,7 @@ void PinnedMemoryImpl::add_barrier_event(const distributed::MeshEvent& event) {
         bool all_devices_completed = true;
         for (const auto& coord : event.impl().device_range()) {
             auto* physical_device = event.device()->impl().get_device(coord);
-            if (physical_device->sysmem_manager().get_last_completed_event(event.impl().mesh_cq_id()) <
-                event.impl().id()) {
+            if (host_cq(*physical_device, event.impl().mesh_cq_id()).last_completed_event() < event.impl().id()) {
                 all_devices_completed = false;
                 break;
             }

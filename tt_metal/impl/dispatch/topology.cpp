@@ -27,7 +27,7 @@
 #include "program/program_impl.hpp"
 #include "program.hpp"
 #include <experimental/fabric/fabric.hpp>
-#include "system_memory_manager.hpp"
+#include "host_cq.hpp"
 #include <tt-umd/types/core_coordinates.hpp>
 #include <tt-umd/types/xy_pair.hpp>
 #include "dispatch_mem_map.hpp"
@@ -803,9 +803,9 @@ void DispatchTopology::configure_dispatch_cores(Device* device) {
                 const uint32_t completion_q1_last_event_ptr =
                     mem_map.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q1_LAST_EVENT, cq_id);
                 // Initialize completion queue write pointer and read pointer copy
-                uint32_t issue_queue_size = device->sysmem_manager().get_issue_queue_size(cq_id);
+                uint32_t issue_queue_size = host_cq(*device, cq_id).issue_queue_size();
                 uint32_t completion_queue_start_addr =
-                    cq_start + issue_queue_size + device->sysmem_manager().backing().cq_base_addr(cq_id, channel);
+                    cq_start + issue_queue_size + cq_backing(*device).cq_base_addr(cq_id, channel);
                 uint32_t completion_queue_start_addr_16B = completion_queue_start_addr >> 4;
                 std::vector<uint32_t> completion_queue_wr_ptr = {completion_queue_start_addr_16B};
                 detail::WriteToDeviceL1(

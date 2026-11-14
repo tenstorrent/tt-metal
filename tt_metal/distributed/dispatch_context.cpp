@@ -30,7 +30,7 @@
 #include "impl/device/device_impl.hpp"
 #include "impl/dispatch/cq_shared_state.hpp"
 #include "impl/dispatch/dispatch_core_manager.hpp"
-#include "impl/dispatch/system_memory_manager.hpp"
+#include "impl/dispatch/host_cq.hpp"
 #include "llrt/hal/generated/dev_msgs.hpp"
 #include "llrt/rtoptions.hpp"
 #include "llrt/llrt.hpp"
@@ -274,9 +274,8 @@ void DispatchContext::unwind_failed_fd_setup(
     for (::tt::tt_metal::Device* device : devices) {
         device->command_queue_programs_.clear();
         device->command_queues_.clear();
-        // Drop the fast-dispatch SystemMemoryManager that init_command_queue_host() installed, after the
-        // queues that reference it. Device::sysmem_manager() creates a fresh one on demand.
-        device->sysmem_manager_.reset();
+        // Drop the host CQs init_command_queue_host() installed, after the queues that reference them.
+        device->destroy_host_cqs();
     }
     context.set_fast_dispatch_mode(false);
 }
@@ -451,8 +450,8 @@ void DispatchContext::terminate_fast_dispatch(distributed::MeshDevice* mesh_devi
         }
     }
 
-    // HWCommandQueue holds a reference to sysmem_manager_. Clear now so any future
-    // init_command_queue_host call can safely replace sysmem_manager_ without dangling references
+    // HWCommandQueue holds a reference to a HostCq. Clear now so any future init_command_queue_host call can safely
+    // replace the host CQs without dangling references
     for (const auto& device : active_devices) {
         device->command_queue_programs_.clear();
         device->command_queues_.clear();

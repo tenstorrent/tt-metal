@@ -539,8 +539,8 @@ protected:
         cmds.push_back(CommandBuilder::build_dispatch_terminate(metal_ctx));
         cmds.push_back(CommandBuilder::build_prefetch_terminate(metal_ctx));
     }
-    virtual void* get_completion_queue_buffer() { return mgr_->get_completion_queue_ptr(fdcq_->id()); }
-    virtual uint32_t get_completion_queue_buffer_size() { return mgr_->get_completion_queue_size(fdcq_->id()); }
+    virtual void* get_completion_queue_buffer() { return cq_->completion_queue_ptr(); }
+    virtual uint32_t get_completion_queue_buffer_size() { return cq_->completion_queue_size(); }
 
     uint32_t get_page_size() const { return page_size_; }
     uint32_t get_num_pages() const { return num_pages_; }
@@ -764,7 +764,7 @@ private:
         DeviceCommandCalculator exec_buf_calc(metal_ctx);
         exec_buf_calc.add_prefetch_exec_buf();
         uint32_t cmd_size = exec_buf_calc.write_offset_bytes();
-        void* cmd_buffer_base = mgr_->issue_queue_reserve(cmd_size, fdcq_->id());
+        void* cmd_buffer_base = cq_->issue_queue_reserve(cmd_size);
         // Use DeviceCommand helper (HugepageDeviceCommand) to write to the issue queue memory
         HugepageDeviceCommand exec_cmd(metal_ctx, cmd_buffer_base, cmd_size);
         exec_cmd.add_prefetch_exec_buf(
@@ -774,13 +774,13 @@ private:
         device_data.overflow_check(device_);
 
         // Submit and execute commands
-        mgr_->issue_queue_push_back(exec_cmd.write_offset_bytes(), fdcq_->id());
+        cq_->issue_queue_push_back(exec_cmd.write_offset_bytes());
 
         // Write the commands to the device-side fetch queue with STALL FLAG
         bool stall_prefetcher = true;  // true with exec buff execution
         const auto start = std::chrono::steady_clock::now();
-        mgr_->fetch_queue_reserve_back(fdcq_->id());
-        mgr_->fetch_queue_write(cmd_size, fdcq_->id(), stall_prefetcher);
+        cq_->fetch_queue_reserve_back();
+        cq_->fetch_queue_write(cmd_size, stall_prefetcher);
 
         // Wait for completion of the issued commands
         if (wait_for_completion) {
@@ -2094,7 +2094,7 @@ protected:
         device_ = remote_device_;
         // We need access to remote chips issue queue to execute commands like
         // CQ_PREFETCH_CMD_RELAY_LINEAR_H in PREFETCH_H (channel 1 region)
-        mgr_ = &remote_device_->sysmem_manager();
+        cq_ = &host_cq(*remote_device_, fdcq_->id());
 
         // Execution through exec_buf is always disabled for standalone commands like
         // CQ_PREFETCH_CMD_RELAY_LINEAR_H
@@ -3155,7 +3155,7 @@ public:
     // survives validation, and the completion region the dispatcher actually writes into.
     void dirty_host_completion_buffer(void* completion_queue_buffer, uint32_t size_bytes) override {
         PrefetcherHostTestFixture::dirty_host_completion_buffer(completion_queue_buffer, size_bytes);
-        if (mgr_->is_dram_backed()) {
+        if (cq_backing(*device_).is_dram_backed()) {
             std::vector<uint32_t> dirty(size_bytes / sizeof(uint32_t), HOST_DATA_DIRTY_PATTERN);
             tt::tt_metal::MetalContext::instance().get_cluster().write_dram_vec(
                 dirty.data(), size_bytes, this->device_->id(), completion_dram_channel(), completion_dram_addr());
@@ -3169,15 +3169,14 @@ public:
     // tail + head ring segments into one contiguous staging span. Padding past the written span keeps
     // its dirty fill.
     void refresh_completion_data() override {
-        const uint8_t cq_id = fdcq_->id();
         std::atomic<bool> exit_condition{false};
         const auto [write_ptr_16B, write_toggle] =
-            Common::split_ptr_toggle(mgr_->completion_queue_wait_front(cq_id, exit_condition));
+            Common::split_ptr_toggle(cq_->completion_queue_wait_front(exit_condition));
         const uint32_t write_ptr_bytes = write_ptr_16B << 4;
-        const uint32_t read_ptr_bytes = mgr_->get_completion_queue_read_ptr(cq_id);
-        const uint32_t read_toggle = mgr_->get_completion_queue_read_toggle(cq_id);
-        const uint32_t completion_base = mgr_->get_issue_queue_limit(cq_id);
-        const uint32_t completion_limit = mgr_->get_completion_queue_limit(cq_id);
+        const uint32_t read_ptr_bytes = cq_->completion_queue_read_ptr();
+        const uint32_t read_toggle = cq_->completion_queue_read_toggle();
+        const uint32_t completion_base = cq_->issue_queue_limit();
+        const uint32_t completion_limit = cq_->completion_queue_limit();
         uint32_t bytes_written = 0;
         if (write_toggle == read_toggle) {
             if (write_ptr_bytes > read_ptr_bytes) {
@@ -3207,7 +3206,7 @@ public:
 private:
     // Copy dst.size() bytes out of the completion region, starting region_offset bytes past its base.
     void read_completion_region(uint32_t region_offset, std::span<uint8_t> dst) {
-        if (mgr_->is_dram_backed()) {
+        if (cq_backing(*device_).is_dram_backed()) {
             tt::tt_metal::slow_dispatch::ReadFromDeviceDRAMChannel(
                 *this->device_, completion_dram_channel(), completion_dram_addr() + region_offset, dst);
             return;
@@ -3218,15 +3217,13 @@ private:
     // Host address of the completion region base. Only call this when the CQ is host-backed: the
     // DRAM-backed form of get_completion_queue_ptr mirrors the whole region through DRAM on every call,
     // which this fixture avoids by reading back only the written span.
-    uint8_t* completion_region_host_ptr() const {
-        return static_cast<uint8_t*>(mgr_->get_completion_queue_ptr(fdcq_->id()));
-    }
+    uint8_t* completion_region_host_ptr() const { return static_cast<uint8_t*>(cq_->completion_queue_ptr()); }
 
-    // DRAM address of the completion region base, matching SystemMemoryManager::get_completion_queue_ptr.
+    // DRAM address of the completion region base, matching HostCq::completion_queue_ptr.
     uint32_t completion_dram_addr() const {
         const uint8_t cq_id = fdcq_->id();
-        const SystemMemoryCQInterface& cq_iface = mgr_->cq(cq_id).cq_interface();
-        return mgr_->backing().cq_base_addr(cq_id, /*channel=*/0) + cq_iface.cq_start +
+        const SystemMemoryCQInterface& cq_iface = cq_->cq_interface();
+        return cq_backing(*device_).cq_base_addr(cq_id, /*channel=*/0) + cq_iface.cq_start +
                cq_iface.command_issue_region_size;
     }
     int completion_dram_channel() const {
@@ -3497,7 +3494,6 @@ protected:
         TT_FATAL(!use_exec_buf_, "Issue queue wrap stress test must submit commands directly to the issue queue");
 
         constexpr uint32_t transfer_size_bytes = 16384;
-        const uint8_t cq_id = fdcq_->id();
         const CoreCoord first_worker = this->worker_start();
         const CoreRange worker_range = this->worker_range(first_worker, /*multi_core=*/false);
         const uint32_t l1_base = device_->allocator_impl()->get_base_allocator_addr(HalMemType::L1);
@@ -3513,10 +3509,10 @@ protected:
         DeviceCommandCalculator barrier_calc(metal_ctx);
         barrier_calc.add_dispatch_wait();
         const uint32_t barrier_bytes = barrier_calc.write_offset_bytes();
-        const uint32_t issue_alignment = mgr_->is_dram_backed()
+        const uint32_t issue_alignment = cq_backing(*device_).is_dram_backed()
                                              ? MetalContext::instance().hal().get_alignment(HalMemType::DRAM)
                                              : MetalContext::instance().hal().get_alignment(HalMemType::HOST);
-        const uint32_t issue_limit = mgr_->get_issue_queue_limit(cq_id);
+        const uint32_t issue_limit = cq_->issue_queue_limit();
 
         // Deterministic prefix / post-wrap payloads. Every write targets the same L1 address, so replaying
         // them is idempotent and only the surviving last write has to be validated.
@@ -3544,7 +3540,7 @@ protected:
         // boundary, then submits one command that has to wrap - i.e. exactly one ring wrap per iteration.
         const uint32_t num_iterations = get_num_iterations();
         for (uint32_t iter = 0; iter < num_iterations; ++iter) {
-            const uint32_t write_ptr = mgr_->get_issue_queue_write_ptr(cq_id);
+            const uint32_t write_ptr = cq_->issue_queue_write_ptr();
             TT_FATAL(write_ptr < issue_limit, "Issue queue write pointer must be below its limit");
             const uint32_t tail_bytes = issue_limit - write_ptr;
 
@@ -3564,7 +3560,7 @@ protected:
                 tail_bytes,
                 prefix_cmd_bytes);
 
-            const bool toggle_before = mgr_->cq(cq_id).cq_interface().issue_fifo_wr_toggle;
+            const bool toggle_before = cq_->cq_interface().issue_fifo_wr_toggle;
             execute_generated_commands(
                 {make_command(prefix_payload, write_addr)},
                 device_data,
@@ -3572,8 +3568,8 @@ protected:
                 prefix_iterations,
                 /*wait_for_completion=*/false);
 
-            const uint32_t pre_wrap_write_ptr = mgr_->get_issue_queue_write_ptr(cq_id);
-            const bool pre_wrap_toggle = mgr_->cq(cq_id).cq_interface().issue_fifo_wr_toggle;
+            const uint32_t pre_wrap_write_ptr = cq_->issue_queue_write_ptr();
+            const bool pre_wrap_toggle = cq_->cq_interface().issue_fifo_wr_toggle;
             TT_FATAL(pre_wrap_toggle == toggle_before, "Issue queue wrapped while filling the deterministic prefix");
 
             execute_generated_commands(
@@ -3583,8 +3579,8 @@ protected:
                 1,
                 /*wait_for_completion=*/true);
 
-            const uint32_t post_wrap_write_ptr = mgr_->get_issue_queue_write_ptr(cq_id);
-            const bool post_wrap_toggle = mgr_->cq(cq_id).cq_interface().issue_fifo_wr_toggle;
+            const uint32_t post_wrap_write_ptr = cq_->issue_queue_write_ptr();
+            const bool post_wrap_toggle = cq_->cq_interface().issue_fifo_wr_toggle;
             EXPECT_NE(post_wrap_toggle, pre_wrap_toggle);
             EXPECT_LT(post_wrap_write_ptr, pre_wrap_write_ptr);
         }
@@ -3601,17 +3597,16 @@ protected:
     void run_completion_queue_wrap_stress_test() {
         TT_FATAL(!use_exec_buf_, "Completion queue wrap stress test must submit commands directly to the issue queue");
 
-        const uint8_t cq_id = fdcq_->id();
         const uint32_t completion_queue_size = get_completion_queue_buffer_size();
         constexpr uint32_t completion_page_size = DispatchSettings::TRANSFER_PAGE_SIZE;
         const uint32_t total_pages = completion_queue_size / completion_page_size;
-        const uint32_t completion_base = mgr_->get_issue_queue_limit(cq_id);
-        const uint32_t completion_limit = mgr_->get_completion_queue_limit(cq_id);
+        const uint32_t completion_base = cq_->issue_queue_limit();
+        const uint32_t completion_limit = cq_->completion_queue_limit();
         // The iteration bookkeeping assumes the completion ring starts drained at its base.
         TT_FATAL(
-            mgr_->get_completion_queue_read_ptr(cq_id) == completion_base,
+            cq_->completion_queue_read_ptr() == completion_base,
             "Completion queue wrap stress test expects the ring to start empty at its base (read ptr {}, base {})",
-            mgr_->get_completion_queue_read_ptr(cq_id),
+            cq_->completion_queue_read_ptr(),
             completion_base);
 
         const CoreCoord first_worker = this->worker_start();
@@ -3633,10 +3628,10 @@ protected:
         // from-the-base chunk to drain the ring exactly.
         const auto drain_completion_pages = [&](uint32_t pages) {
             while (pages > 0) {
-                const uint32_t read_ptr = mgr_->get_completion_queue_read_ptr(cq_id);
+                const uint32_t read_ptr = cq_->completion_queue_read_ptr();
                 const uint32_t pages_to_limit = (completion_limit - read_ptr) / completion_page_size;
                 const uint32_t chunk = std::min(pages, pages_to_limit);
-                mgr_->completion_queue_pop_front(chunk, cq_id);
+                cq_->completion_queue_pop_front(chunk);
                 pages -= chunk;
             }
         };
@@ -3680,7 +3675,7 @@ protected:
                 /*num_iterations=*/1,
                 /*wait_for_completion=*/false,
                 /*wait_for_host_writes=*/true);
-            const uint32_t pre_wrap_ptr_and_toggle = mgr_->completion_queue_wait_front(cq_id, exit_condition);
+            const uint32_t pre_wrap_ptr_and_toggle = cq_->completion_queue_wait_front(exit_condition);
             drain_completion_pages(fill_pages);
 
             // Phase 2: a single write whose padded footprint spans the region end, forcing the device
@@ -3718,7 +3713,7 @@ protected:
                 /*num_iterations=*/1,
                 /*wait_for_completion=*/false,
                 /*wait_for_host_writes=*/true);
-            const uint32_t post_wrap_ptr_and_toggle = mgr_->completion_queue_wait_front(cq_id, exit_condition);
+            const uint32_t post_wrap_ptr_and_toggle = cq_->completion_queue_wait_front(exit_condition);
             const auto pre_wrap = Common::split_ptr_toggle(pre_wrap_ptr_and_toggle);
             const auto post_wrap = Common::split_ptr_toggle(post_wrap_ptr_and_toggle);
             EXPECT_NE(pre_wrap.toggle, post_wrap.toggle);
@@ -4032,7 +4027,7 @@ TEST_P(PrefetcherThroughputTestFixture, HostToDRAMPagedWriteThroughput) {
     const uint64_t total_cmd_bytes =
         (static_cast<uint64_t>(num_iterations) * per_iter_total) + barrier_calc.write_offset_bytes();
 
-    void* cmd_buffer_base = mgr_->issue_queue_reserve(total_cmd_bytes, fdcq_->id());
+    void* cmd_buffer_base = cq_->issue_queue_reserve(total_cmd_bytes);
     HugepageDeviceCommand dc(metal_ctx, cmd_buffer_base, total_cmd_bytes);
 
     std::vector<uint32_t> entry_sizes;
@@ -4054,12 +4049,12 @@ TEST_P(PrefetcherThroughputTestFixture, HostToDRAMPagedWriteThroughput) {
     device_data.overflow_check(device_);
 
     // Submit and execute commands
-    mgr_->issue_queue_push_back(dc.write_offset_bytes(), fdcq_->id());
+    cq_->issue_queue_push_back(dc.write_offset_bytes());
 
     const auto start = std::chrono::steady_clock::now();
     for (const uint32_t sz : entry_sizes) {
-        mgr_->fetch_queue_reserve_back(fdcq_->id());
-        mgr_->fetch_queue_write(sz, fdcq_->id());
+        cq_->fetch_queue_reserve_back();
+        cq_->fetch_queue_write(sz, /*stall_prefetcher=*/false);
     }
     distributed::Finish(mesh_device_->mesh_command_queue());
     const auto end = std::chrono::steady_clock::now();

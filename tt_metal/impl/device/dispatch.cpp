@@ -11,7 +11,7 @@
 #include "device/device_manager.hpp"
 #include "dispatch/device_command.hpp"
 #include "dispatch/device_command_calculator.hpp"
-#include "dispatch/system_memory_manager.hpp"
+#include "dispatch/host_cq.hpp"
 #include <tt-metalium/math.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
 
@@ -83,8 +83,8 @@ void issue_core_write_command_sequence(const CoreWriteDispatchParams& dispatch_p
 
     const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
 
-    SystemMemoryManager& sysmem_manager = dispatch_params.device->sysmem_manager();
-    void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, dispatch_params.cq_id);
+    HostCq& cq = host_cq(*dispatch_params.device, dispatch_params.cq_id);
+    void* cmd_region = cq.issue_queue_reserve(cmd_sequence_sizeB);
     HugepageDeviceCommand command_sequence(metal_ctx, cmd_region, cmd_sequence_sizeB);
 
     for (uint32_t i = 0; i < num_worker_counters; ++i) {
@@ -103,9 +103,7 @@ void issue_core_write_command_sequence(const CoreWriteDispatchParams& dispatch_p
         dispatch_params.size_bytes,
         (uint8_t*)dispatch_params.src);
 
-    sysmem_manager.issue_queue_push_back(cmd_sequence_sizeB, dispatch_params.cq_id);
-    sysmem_manager.fetch_queue_reserve_back(dispatch_params.cq_id);
-    sysmem_manager.fetch_queue_write(cmd_sequence_sizeB, dispatch_params.cq_id);
+    cq.publish(cmd_sequence_sizeB);
 }
 
 namespace {
@@ -187,8 +185,8 @@ void issue_core_read_command_sequence(const CoreReadDispatchParams& dispatch_par
     calculator.add_prefetch_relay_linear();
     const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
 
-    SystemMemoryManager& sysmem_manager = dispatch_params.device->sysmem_manager();
-    void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, dispatch_params.cq_id);
+    HostCq& cq = host_cq(*dispatch_params.device, dispatch_params.cq_id);
+    void* cmd_region = cq.issue_queue_reserve(cmd_sequence_sizeB);
     HugepageDeviceCommand command_sequence(metal_ctx, cmd_region, cmd_sequence_sizeB);
 
     // We only need the write barrier + prefetch stall for the last wait cmd
@@ -215,22 +213,16 @@ void issue_core_read_command_sequence(const CoreReadDispatchParams& dispatch_par
         dispatch_params.size_bytes,
         dispatch_params.address);
 
-    sysmem_manager.issue_queue_push_back(cmd_sequence_sizeB, dispatch_params.cq_id);
-    sysmem_manager.fetch_queue_reserve_back(dispatch_params.cq_id);
-    sysmem_manager.fetch_queue_write(cmd_sequence_sizeB, dispatch_params.cq_id);
+    cq.publish(cmd_sequence_sizeB);
 }
 
 void read_core_data_from_completion_queue(
-    const ReadCoreDataDescriptor& read_descriptor,
-    uint8_t cq_id,
-    SystemMemoryManager& sysmem_manager,
-    std::atomic<bool>& exit_condition) {
+    const ReadCoreDataDescriptor& read_descriptor, HostCq& cq, std::atomic<bool>& exit_condition) {
     uint32_t completion_queue_read_offset = sizeof(CQDispatchCmd);
     const uint32_t num_bytes_to_read = read_descriptor.size_bytes;
     uint32_t num_bytes_read = 0;
     while (num_bytes_read < num_bytes_to_read) {
-        const uint32_t completion_queue_write_ptr_and_toggle =
-            sysmem_manager.completion_queue_wait_front(cq_id, exit_condition);
+        const uint32_t completion_queue_write_ptr_and_toggle = cq.completion_queue_wait_front(exit_condition);
 
         if (exit_condition) {
             break;
@@ -238,8 +230,8 @@ void read_core_data_from_completion_queue(
 
         const uint32_t completion_q_write_ptr = (completion_queue_write_ptr_and_toggle & 0x7fffffff) << 4;
         const uint32_t completion_q_write_toggle = completion_queue_write_ptr_and_toggle >> (31);
-        const uint32_t completion_q_read_ptr = sysmem_manager.get_completion_queue_read_ptr(cq_id);
-        const uint32_t completion_q_read_toggle = sysmem_manager.get_completion_queue_read_toggle(cq_id);
+        const uint32_t completion_q_read_ptr = cq.completion_queue_read_ptr();
+        const uint32_t completion_q_read_toggle = cq.completion_queue_read_toggle();
 
         uint32_t num_bytes_available_in_completion_queue;
         if (completion_q_write_ptr > completion_q_read_ptr and completion_q_write_toggle == completion_q_read_toggle) {
@@ -247,14 +239,13 @@ void read_core_data_from_completion_queue(
         } else {
             // Completion queue write pointer on device wrapped but read pointer is lagging behind.
             //  In this case read up until the end of the completion queue first
-            num_bytes_available_in_completion_queue =
-                sysmem_manager.get_completion_queue_limit(cq_id) - completion_q_read_ptr;
+            num_bytes_available_in_completion_queue = cq.completion_queue_limit() - completion_q_read_ptr;
         }
 
         const uint32_t num_bytes_to_copy = std::min(
             num_bytes_to_read - num_bytes_read, num_bytes_available_in_completion_queue - completion_queue_read_offset);
 
-        sysmem_manager.backing().read_cq_memory(
+        cq.backing().read_cq_memory(
             (char*)(uint64_t(read_descriptor.dst) + num_bytes_read),
             num_bytes_to_copy,
             completion_q_read_ptr + completion_queue_read_offset);
@@ -262,7 +253,7 @@ void read_core_data_from_completion_queue(
         num_bytes_read += num_bytes_to_copy;
         const uint32_t num_pages_read =
             tt::div_up(num_bytes_to_copy + completion_queue_read_offset, DispatchSettings::TRANSFER_PAGE_SIZE);
-        sysmem_manager.completion_queue_pop_front(num_pages_read, cq_id);
+        cq.completion_queue_pop_front(num_pages_read);
         completion_queue_read_offset = 0;
     }
 }

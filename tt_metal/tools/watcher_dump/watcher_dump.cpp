@@ -16,7 +16,7 @@
 #include "impl/debug/noc_logging.hpp"
 #include "impl/device/device_impl.hpp"
 #include "impl/dispatch/debug_tools.hpp"
-#include "impl/dispatch/system_memory_manager.hpp"
+#include "impl/dispatch/host_cq.hpp"
 #include <impl/debug/watcher_server.hpp>
 
 using namespace tt;
@@ -74,9 +74,7 @@ void dump_data(
         devices.push_back(std::unique_ptr<IDevice>(device));
         if (dump_cqs) {
             cout << "Dumping Command Queues into: " << cq_dir.string() << endl;
-            std::unique_ptr<SystemMemoryManager> sysmem_manager =
-                std::make_unique<SystemMemoryManager>(env_impl, MetalContext::instance(), id, num_hw_cqs);
-            ::internal::dump_cqs(cq_file, iq_file, *sysmem_manager, dump_cqs_raw_data);
+            ::internal::dump_cqs(cq_file, iq_file, *device, dump_cqs_raw_data);
         }
     }
 

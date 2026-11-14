@@ -25,6 +25,8 @@
 #include <tt-metalium/experimental/device.hpp>
 
 namespace tt::tt_metal {
+class CqBacking;
+class HostCq;
 class SubDeviceManagerTracker;
 class AllocatorImpl;
 class DispatchTopology;
@@ -38,7 +40,7 @@ class DispatchContext;
 }  // namespace experimental
 
 // A physical PCIexpress Tenstorrent device
-class Device : public IDevice {
+class Device final : public IDevice {
 public:
     Device() = delete;
     Device(
@@ -128,6 +130,8 @@ public:
     uint32_t get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& cores) const override;
 
     SystemMemoryManager& sysmem_manager() override;
+    HostCq& host_cq(uint8_t cq_id);
+    CqBacking& cq_backing();
     HWCommandQueue& command_queue(std::optional<uint8_t> cq_id = std::nullopt);
 
     // Metal trace device capture mode
@@ -239,10 +243,13 @@ private:
     // TODO #20966: Remove this member
     std::weak_ptr<distributed::MeshDevice> mesh_device;
 
-    std::unique_ptr<SystemMemoryManager> sysmem_manager_;
+    // Host side of the fast-dispatch command queues: where they live, and one HostCq per hardware CQ over it.
+    void create_host_cqs();
+    void destroy_host_cqs();
+    std::unique_ptr<CqBacking> cq_backing_;
+    std::vector<std::unique_ptr<HostCq>> host_cqs_;
     uint8_t num_hw_cqs_ = 1;
 
-    // SystemMemoryManager is the interface to the hardware command queue
     std::vector<std::unique_ptr<HWCommandQueue>> command_queues_;
 
     std::set<CoreCoord> ethernet_cores_;

@@ -13,7 +13,7 @@
 #include "buffer.hpp"
 #include "core_coord.hpp"
 #include <tt_stl/span.hpp>
-#include "dispatch/system_memory_manager.hpp"
+#include "dispatch/host_cq.hpp"
 
 #include <tt-umd/types/core_coordinates.hpp>
 
@@ -144,10 +144,7 @@ void copy_interleaved_buffer_to_completion_queue(
     const std::shared_ptr<experimental::PinnedMemory>& pinned_memory = nullptr);
 
 void copy_completion_queue_data_into_user_space(
-    const ReadBufferDescriptor& read_buffer_descriptor,
-    uint32_t cq_id,
-    SystemMemoryManager& sysmem_manager,
-    std::atomic<bool>& exit_condition);
+    const ReadBufferDescriptor& read_buffer_descriptor, HostCq& cq, std::atomic<bool>& exit_condition);
 
 // Selects all sub-devices in the sub device stall group if none are specified
 ttsl::Span<const SubDeviceId> select_sub_device_ids(
