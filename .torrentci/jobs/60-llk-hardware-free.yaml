@@ -10,7 +10,7 @@
 #   llk-ci (the ci-build chain image does not import on prod today); the
 #   Python requirements go into a venv at job time, as llk-ci bakes them in.
 # - The JUnit reports are not published (artifact storage is tight).
-# No triggers: run it by hand.
+# Runs through the pr-gate dashboard (.torrentci/dashboards/gates.yaml).
 jobs:
   - id: llk-hardware-free
     description: Run PR Gate's host-only LLK hardware-free tests (no card)
