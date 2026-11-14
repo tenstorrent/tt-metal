@@ -49,10 +49,9 @@ void kernel_main() {
                           uint32_t width_size,
                           uint32_t size_2d,
                           uint32_t single_block_size) {
-        uint32_t padding_rows = num_rows == 32 ? 0 : 32 - num_rows;
-        bool has_rows = (num_rows + padding_rows) > 0;
+        const uint32_t padding_rows = tile_height - num_rows;
 
-        dfb_in0.reserve_back(single_block_size * has_rows);
+        dfb_in0.reserve_back(single_block_size);
         uint32_t l1_write_addr = dfb_in0.get_write_ptr();
 
         for (uint32_t k = start_row_id; k < start_row_id + num_rows; k++) {
@@ -130,7 +129,7 @@ void kernel_main() {
         dataflow_kernel_lib::fill_l1_range<element_size>(l1_write_addr, row_pad_bytes, pad_value);
         l1_write_addr += row_pad_bytes;
 
-        dfb_in0.push_back(single_block_size * has_rows);
+        dfb_in0.push_back(single_block_size);
     };
 
     const uint32_t width_size = get_arg(args::width_size);
@@ -145,21 +144,21 @@ void kernel_main() {
         uint32_t single_sub_block_size_row_arg = get_arg(args::single_sub_block_size_row_arg);
 
         for (uint32_t b = 0; b < single_block_size_col_arg; b++) {
-            uint32_t this_block_num_rows = tile_height;
-            if (start_row_id + tile_height > total_num_rows) {
-                this_block_num_rows = total_num_rows - start_row_id;
+            // Compute consumes a block for every output tile-row, including those past the source height.
+            uint32_t this_block_num_rows = 0;
+            if (start_row_id < total_num_rows) {
+                this_block_num_rows =
+                    (total_num_rows - start_row_id < tile_height) ? total_num_rows - start_row_id : tile_height;
             }
-            if (this_block_num_rows > 0) {
-                for (uint32_t m = 0; m < width_size; m += sub_block_width_size) {
-                    uint32_t start_column_id_u = start_column_id + m;
-                    read_block(
-                        this_block_num_rows,
-                        start_row_id,
-                        start_column_id_u,
-                        sub_block_width_size,
-                        size_2d,
-                        single_sub_block_size_row_arg);
-                }
+            for (uint32_t m = 0; m < width_size; m += sub_block_width_size) {
+                uint32_t start_column_id_u = start_column_id + m;
+                read_block(
+                    this_block_num_rows,
+                    start_row_id,
+                    start_column_id_u,
+                    sub_block_width_size,
+                    size_2d,
+                    single_sub_block_size_row_arg);
             }
             start_row_id += tile_height;
         }

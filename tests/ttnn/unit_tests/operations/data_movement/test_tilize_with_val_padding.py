@@ -992,6 +992,32 @@ def test_tilize_with_val_padding_block_per_node_cb_size(device, input_shape, pad
             ), "tilize_with_val_padding must reuse the cached program on a cache hit"
 
 
+# Wide rows select the block-interleaved factory; the output height exceeds the input height rounded up
+# to a tile, so whole tile-rows (and, for batched inputs, every later slice) lie past the source rows.
+@pytest.mark.parametrize(
+    "input_shape, output_shape",
+    [
+        ([1, 1, 100, 2048], [1, 1, 256, 2048]),
+        ([2, 1, 100, 2048], [2, 1, 192, 2048]),
+        ([1, 1, 100, 2048], [1, 1, 256, 2112]),
+    ],
+)
+def test_tilize_with_val_padding_block_output_taller_than_input(device, input_shape, output_shape):
+    pad_value = 3.0
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    tt_output = ttnn.tilize_with_val_padding(tt_input, output_shape, pad_value, use_multicore=True)
+
+    torch_golden = pytorch_tilize_with_val_padding(torch_input, output_shape, pad_value)
+    assert_equal(torch_golden, tt_output.cpu().to_torch_with_padded_shape())
+
+
 @pytest.mark.parametrize("pad_value", [10.2, 0.0])
 def test_tilize_with_val_padding_width_sharded_to_width_sharded(device, pad_value):
     """WIDTH_SHARDED (legacy) input -> WIDTH_SHARDED (legacy) output, with height padding.
