@@ -91,16 +91,19 @@ def create_sinusoidal_pos_embedding_ttnn(
 
     # Reshape time for broadcasting: [batch] -> [batch, 1]
     time_reshaped = ttnn.reshape(time, (-1, 1))
+    if time_reshaped.dtype != ttnn.float32:
+        time_reshaped = ttnn.typecast(time_reshaped, ttnn.float32)
 
-    # Compute sin input: time * scaling_factor (broadcasts to [batch, half_dim])
-    sin_input = ttnn.matmul(time_reshaped, scaling_factor)
+    # Compute sin input: time * scaling_factor (broadcasts to [batch, half_dim]). The phases reach about 1571 rad,
+    # so this stays an fp32 elementwise multiply: bfloat16 or a matmul's reduced-precision inputs cannot resolve them.
+    sin_input = ttnn.multiply(time_reshaped, scaling_factor)
 
     # Compute sin and cos
     sin_emb = ttnn.sin(sin_input)
     cos_emb = ttnn.cos(sin_input)
 
     # Concatenate to get [batch, dimension]
-    embeddings = ttnn.concat([sin_emb, cos_emb], dim=-1)
+    embeddings = ttnn.typecast(ttnn.concat([sin_emb, cos_emb], dim=-1), ttnn.bfloat16)
 
     # Clean up
     ttnn.deallocate(indices)

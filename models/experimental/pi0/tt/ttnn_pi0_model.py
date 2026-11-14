@@ -76,7 +76,8 @@ class PI0ModelTTNN:
         pad_steps = ((self.denoise_config.num_steps + 31) // 32) * 32
 
         # Create timestep indices on device using ttnn.arange
-        self.timestep_indices = ttnn.arange(0, pad_steps, 1, device=self.device, dtype=ttnn.bfloat16)
+        # fp32: bfloat16 cannot hold the timesteps (0.9 becomes 0.8984).
+        self.timestep_indices = ttnn.arange(0, pad_steps, 1, device=self.device, dtype=ttnn.float32)
 
         x_t_torch = torch.randn(1, self.config.action_horizon, self.config.action_dim)
         self.x_t_ttnn = ttnn.from_torch(
