@@ -46,6 +46,10 @@ pytest models/experimental/openvla/tests/test_siglip_pcc.py -v
 
 # Vision backbone tests (uses random weights, no download needed)
 pytest models/experimental/openvla/tests/test_openvla_vision_pcc.py -v
+
+# Accuracy against the Hugging Face reference; the checkpoint tests skip without OPENVLA_WEIGHTS
+MESH_DEVICE=N150 HF_MODEL=meta-llama/Llama-2-7b-hf OPENVLA_WEIGHTS=<path_to_openvla_weights> \
+    pytest models/experimental/openvla/tests/test_openvla_accuracy.py -v
 ```
 
 ### Run Demo (TTNN Single Inference)
@@ -94,19 +98,23 @@ pytest models/experimental/openvla/tt/open_vla.py::test_openvla_model -v
 
 - Precision is auto-selected based on device (see table above)
 
-## PCC Test Results
+## Accuracy Tests
 
-| Component | PCC |
-|-----------|-----|
-| Vision Encoder (DINOv2) | 0.98+ |
-| Vision Encoder (SigLIP) | 0.99+ |
-| Full Model | TBD |
+`tests/test_openvla_accuracy.py` compares against openvla/openvla-7b (revision 47a0ec7f) run on CPU in float32:
+the timm towers of `PrismaticVisionBackbone` for the vision features and transformers' `LlamaForCausalLM` for
+the language model, on a fixed 224x224 test pattern and the prompt
+`In: What action should the robot take to pick up the red block?\nOut:`.
+
+| Test | Tolerance | ttsim Wormhole |
+|------|-----------|----------------|
+| DINOv2 features, checkpoint weights | PCC > 0.97 | 0.981 |
+| SigLIP features, checkpoint weights | PCC > 0.97 | 0.988 |
+| Logits after 2 decoder layers, BOS + 256 patches + prompt | PCC > 0.97, TT top-1 in reference top-5 | 0.996, same top-1 |
+| `predict_action` token order | returned tokens are the generated ones, all action tokens | |
 
 ## Known Issues
 
-1. **Layer 0-2 Hidden State Divergence**: There's a numerical divergence in early LLM layers between PyTorch and TT implementations that needs investigation.
-
-2. **Token 31872 Inflation**: When using BFP8 for LM head, token 31872 can have inflated logits. Fixed by using BF16 for LM head.
+1. **Token 31872 Inflation**: When using BFP8 for LM head, token 31872 can have inflated logits. Fixed by using BF16 for LM head.
 
 ## References
 
