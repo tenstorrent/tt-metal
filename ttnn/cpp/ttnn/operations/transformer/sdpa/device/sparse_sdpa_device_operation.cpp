@@ -250,6 +250,7 @@ ttsl::hash::hash_t SparseSDPAOperation::compute_program_hash(const SparseSDPAPar
     // tensor shape (the shard-grid strides), which is baked into the accessor at create time and is NOT
     // re-emitted on a cache-hit fast path — so a sharded kv MUST recompile when its shape changes, else a hit
     // would reuse stale strides and read the wrong banks. (K_DIM is pinned via q's hashed shape regardless.)
+    const auto plan = SparseSDPAProgramFactory::select_plan(attrs, t);
     return tt::tt_metal::operation::hash_operation<SparseSDPAOperation>(
         std::bit_cast<uint32_t>(attrs.scale),
         attrs.v_dim,
@@ -278,7 +279,10 @@ ttsl::hash::hash_t SparseSDPAOperation::compute_program_hash(const SparseSDPAPar
         t.indices.logical_shape(),
         t.indices.dtype(),
         t.attention_sink,
-        attrs.worker_core_grid);
+        attrs.worker_core_grid,
+        // The split-K plan depends on the free L1 (live L1 tensors), which the fields above do not pin.
+        plan.split_k,
+        plan.num_used);
 }
 
 Tensor sparse_sdpa(
