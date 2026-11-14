@@ -14,6 +14,7 @@ Needs the real checkpoint: HF_MODEL (and TT_CACHE_PATH for the weight cache), as
 """
 import json
 import os
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -177,6 +178,56 @@ def _shared_prefix_len(ids_a, ids_b):
         if ids_a[i] != ids_b[i]:
             return i
     return n
+
+
+def test_traced_prefill_behind_a_resumed_user_lands_in_its_own_row(monkeypatch):
+    """Sequential prefill of a resumed (cached-prefix) user followed by a fresh user on the traced path: each
+    user's logits must land in its own row, and the traced user must be read at its own last token."""
+    vocab = 8
+    generator = object.__new__(Generator)
+    model_args = SimpleNamespace(
+        max_batch_size=32,
+        vocab_size=vocab,
+        max_batched_prefill_size=32,
+        trace_prefill=True,
+        max_prefill_chunk_size=4096,
+        num_devices=1,
+        prefill_len_cutoff=512,
+    )
+    model = SimpleNamespace(
+        mesh_device=None,
+        process_logits_after_prefill_trace=lambda hidden, last_token_idx: hidden,
+        process_output_prefill=lambda out, last_token_idx: torch.full((1, vocab), 200.0 + last_token_idx),
+    )
+    generator._ttt_generator = SimpleNamespace(
+        model=[model],
+        model_args=[model_args],
+        data_parallel=1,
+        _get_prefill_user_page_table=lambda *args, **kwargs: None,
+    )
+    generator.release_persistent_capture = lambda: None
+    generator.trace_id_prefill = {"128_0": "captured"}
+    generator._prefill_trace_capture_frozen = False
+    generator._easy_trace_prefill = lambda *args, **kwargs: SimpleNamespace(cpu=lambda blocking=False: None)
+    generator._align_cached_prefix_offsets = lambda offsets, *args, **kwargs: offsets
+    generator._Generator__prefill_forward_resumed_user_text = lambda *args, **kwargs: torch.full((1, vocab), 100.0)
+    monkeypatch.setattr(ttnn, "synchronize_device", lambda mesh_device: None)
+
+    tokens = torch.zeros(2, 128, dtype=torch.long)
+    rot_mats = (torch.zeros(2, 1, 128, 4), torch.zeros(2, 1, 128, 4))
+    kv_cache = [[(torch.zeros(1, 1, 32, 1), torch.zeros(1, 1, 32, 1))]]
+    logits = generator.prefill_forward_text(
+        tokens,
+        rot_mats,
+        page_table=torch.ones(2, 4, dtype=torch.int32),
+        kv_cache=kv_cache,
+        prompt_lens=[128, 100],
+        enable_trace=True,
+        empty_slots=[0, 1],
+        start_pos=[64, 0],
+    )
+    assert logits[0, 0, 0].item() == 100.0, "the resumed user's row was overwritten"
+    assert logits[1, 0, 0].item() == 200.0 + (99 % 32), "the traced user's row must hold its own last token"
 
 
 @torch.no_grad()
