@@ -885,6 +885,17 @@ std::vector<Tensor> logit_bw(
 // result:  2 * input * grad_data
 std::vector<Tensor> square_bw(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
+    // One program whose gradient is the generated SFPU kernel, for the calls it serves; every
+    // other call keeps the composite below.
+    if (generated_bf16_kernel_applies(grad, input, output_mem_config)) {
+        return {ttnn::operations::unary_backward::launch_unary_backward(
+            ttnn::operations::unary_backward::UnaryBackwardOpType::SQUARE_BW,
+            grad,
+            input,
+            input.dtype(),
+            output_mem_config.value_or(input.memory_config()))};
+    }
+
     std::vector<Tensor> grad_tensor;
     Tensor grad_result = ttnn::multiply(
         ttnn::multiply(grad, 2.0f, std::nullopt, output_mem_config), input, std::nullopt, output_mem_config);
