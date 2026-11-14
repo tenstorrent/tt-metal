@@ -16,7 +16,7 @@ import torch
 
 import ttnn
 
-from ...layers.conv2d import configure_conv2d
+from ...layers.conv2d import Conv2dBlocking, configure_conv2d
 from ...parallel.config import Flux2VaeParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils import cache, tensor
@@ -57,6 +57,28 @@ def decoder_slice_params(sizes, h_factor: int, w_factor: int = 1) -> dict[tuple[
                 for cin, cout in partitioned:
                     table.setdefault((h // h_factor + 2, local_w, cin, cout), 0)
             h, w = (h - 2) // 2 + 1, (w - 2) // 2 + 1
+    return table
+
+
+# Full-K weights plus the activation block a core can hold next to the resident DiT (the largest that fit: 1.33 MB)
+CONV_FULL_K_L1_BYTES = 1_350_000
+# Decoder convs whose double-buffered program clashes with the resident DiT's L1 (job 210339: 1024 x 1024, level 0)
+DECODER_SINGLE_BUFFER_CONVS = frozenset({(130, 258, 256, 128)})
+
+
+def decoder_conv_blocking(slice_table) -> dict[tuple[int, int, int, int], Conv2dBlocking]:
+    """64 activation rows per core with double-buffered activations and weights; the full inner dimension and
+    height-sharded activations where a 3 x 3 conv's full-K weights fit in L1, block-sharded where they do not."""
+    table = {}
+    for key in slice_table:
+        cin, cout = key[2:]
+        fits = 2 * 9 * cin * (cout + 64) <= CONV_FULL_K_L1_BYTES
+        table[key] = Conv2dBlocking(
+            act_block_h_override=64,
+            double_buffer=key not in DECODER_SINGLE_BUFFER_CONVS,
+            full_inner_dim=fits,
+            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED if fits else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        )
     return table
 
 
@@ -119,11 +141,9 @@ class Flux3KleinVae:
         self._decoder = Flux2VaeDecoder(
             parallel_config=decoder_parallel, use_conv3d=False, group_norm_2d=True, local_attention=True, **common
         )
+        slice_table = decoder_slice_params(sizes, int(device.shape[h_axis]), int(device.shape[tp_axis]))
         configure_conv2d(
-            self._decoder,
-            slice_params={
-                mesh_shape: decoder_slice_params(sizes, int(device.shape[h_axis]), int(device.shape[tp_axis]))
-            },
+            self._decoder, slice_params={mesh_shape: slice_table}, shape_blocking=decoder_conv_blocking(slice_table)
         )
         load(self._decoder, decoder_parallel, SUBFOLDER)
 
