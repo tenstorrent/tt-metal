@@ -92,6 +92,24 @@ std::optional<ttnn::DataType> resolve_reduce_dtype(std::optional<ttnn::DataType>
     return reduce_dtype.has_value() ? reduce_dtype : autograd::ctx().get_gradient_reduce_dtype();
 }
 
+std::optional<int> reduce_scatter_route_dim(
+    const ttnn::Tensor& tensor,
+    const ttsl::SmallVector<uint32_t>& cluster_axes,
+    std::optional<ttnn::DataType> reduce_dtype) {
+    check_reduce_dtype(reduce_dtype);
+    // The route pays off only for a sum in fp32 of a narrower tensor, whose all-gather then carries the narrower dtype.
+    // It is taken for a sum over one axis, the DDP case it was measured for; a sum over several axes (DDP with CP)
+    // keeps one all-reduce per axis.
+    if (reduce_dtype != ttnn::DataType::FLOAT32 || tensor.dtype() == ttnn::DataType::FLOAT32 ||
+        cluster_axes.size() != 1U || tensor.logical_volume() < kFp32ReduceScatterMinElements) {
+        return std::nullopt;
+    }
+    const auto& mesh_shape = autograd::ctx().get_device().shape();
+    TT_FATAL(cluster_axes[0] < mesh_shape.dims(), "Cluster axis must be within mesh shape");
+    const uint32_t num_devices = mesh_shape[cluster_axes[0]];
+    return num_devices > 1U ? whole_tile_scatter_dim(tensor, num_devices) : std::nullopt;
+}
+
 ttnn::Tensor synchronize_tensor(
     const ttnn::Tensor& tensor,
     const ttsl::SmallVector<uint32_t>& cluster_axes,
@@ -116,13 +134,7 @@ ttnn::Tensor synchronize_tensor(
     // intermediate.
     const bool sum_in_fp32 = reduce_dtype == ttnn::DataType::FLOAT32 && dtype != ttnn::DataType::FLOAT32;
     ttnn::Tensor result = sum_in_fp32 ? ttnn::typecast(tensor, ttnn::DataType::FLOAT32) : tensor;
-    // The reduce-scatter route pays off only for a sum in fp32 of a narrower tensor, whose all-gather then carries the
-    // narrower dtype. It is taken for a sum over one axis, the DDP case it was measured for; a sum over several axes
-    // (DDP with CP) keeps one all-reduce per axis.
-    const auto scatter_dim =
-        sum_in_fp32 && cluster_axes.size() == 1U && tensor.logical_volume() >= kFp32ReduceScatterMinElements
-            ? whole_tile_scatter_dim(tensor, scaler)
-            : std::nullopt;
+    const auto scatter_dim = reduce_scatter_route_dim(tensor, cluster_axes, reduce_dtype);
     if (scatter_dim.has_value()) {
         result = ttml::ttnn_fixed::distributed::reduce_scatter(result, *scatter_dim, cluster_axes[0]);
         result = ttnn::multiply(result, inv_scaler, dtype);

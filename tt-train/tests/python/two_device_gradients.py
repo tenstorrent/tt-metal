@@ -83,21 +83,3 @@ def per_device(tensor) -> np.ndarray:
     """``tensor`` read back with device i's copy at index i."""
     composer = ttnn.create_mesh_composer(device(), ttnn.MeshComposerConfig([1, 0]))
     return ttml.autograd.create_tensor(tensor).to_numpy(ttnn.DataType.FLOAT32, composer=composer)
-
-
-def device_operations(call) -> tuple:
-    """``call``'s result and the device operations it runs, in order, recorded with ttnn's graph capture."""
-    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
-    try:
-        result = call()
-    finally:
-        captured = ttnn.graph.end_graph_capture()
-    return result, [name for name in ttnn.graph.extract_calltrace(captured) if name.endswith("DeviceOperation")]
-
-
-def divides_before_gathering(operations: list) -> bool:
-    """Whether a sum divides by the device count before an all-gather, as the fp32 reduce-scatter route does so that its
-    all-gather carries bf16; ttnn's all_reduce divides after its sum is complete (as the C++ route test checks)."""
-    if "BinaryNgDeviceOperation" not in operations or "AllGatherAsyncDeviceOperation" not in operations:
-        return False
-    return operations.index("BinaryNgDeviceOperation") < operations.index("AllGatherAsyncDeviceOperation")

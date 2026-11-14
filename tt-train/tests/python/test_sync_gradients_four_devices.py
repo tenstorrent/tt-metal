@@ -15,8 +15,6 @@ import ttnn
 import ttml
 
 from two_device_gradients import (
-    device_operations,
-    divides_before_gathering,
     exact_mean,
     fp32_all_reduce_mean,
     make_gradients,
@@ -46,13 +44,11 @@ def test_reduce_scatter_route_matches_the_fp32_all_reduce_over_four_devices(four
     values = make_gradients(512, 1024, seed=11, devices=4)
     gradients = per_device_tensor(values).get_value()
 
-    fp32, operations = device_operations(
-        lambda: ttml.core.distributed.synchronize_tensor(gradients, [_DP_AXIS], reduce_dtype=_FP32)
-    )
+    fp32 = ttml.core.distributed.synchronize_tensor(gradients, [_DP_AXIS], reduce_dtype=_FP32)
     all_reduce = fp32_all_reduce_mean(gradients, [_DP_AXIS])
     bf16 = ttml.core.distributed.synchronize_tensor(gradients, [_DP_AXIS])
 
-    assert divides_before_gathering(operations)
+    assert ttml.core.distributed.reduce_scatter_route_dim(gradients, [_DP_AXIS], reduce_dtype=_FP32) == 3
     fp32_values = per_device(fp32)
     np.testing.assert_array_equal(fp32_values, per_device(all_reduce))
     for copy in fp32_values[1:]:

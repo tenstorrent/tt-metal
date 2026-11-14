@@ -24,6 +24,15 @@ void check_reduce_dtype(std::optional<ttnn::DataType> reduce_dtype);
 // synchronize_tensor takes reduce_dtype only as an argument.
 std::optional<ttnn::DataType> resolve_reduce_dtype(std::optional<ttnn::DataType> reduce_dtype);
 
+// The tensor dim synchronize_tensor's reduce-scatter route scatters `tensor` along for these arguments, or none when
+// the sum takes the all-reduce. The route is taken only by a sum in fp32 of a narrower tensor over one mesh axis, of at
+// least 2^19 elements per device, along a dim that splits into whole-tile slices for that axis's devices and that no
+// other mesh axis already splits.
+std::optional<int> reduce_scatter_route_dim(
+    const ttnn::Tensor& tensor,
+    const ttsl::SmallVector<uint32_t>& cluster_axes,
+    std::optional<ttnn::DataType> reduce_dtype = std::nullopt);
+
 // Averages `tensor` over the devices of `cluster_axes`. `reduce_dtype` is the dtype the values are summed in: unset or
 // BFLOAT16 sums in the tensor's own dtype (bf16 gradients in tt-train); FLOAT32 sums a narrower tensor in fp32 and
 // writes the mean back in the tensor's dtype, which keeps most of the low bits a bf16 sum rounds away at every hop. The

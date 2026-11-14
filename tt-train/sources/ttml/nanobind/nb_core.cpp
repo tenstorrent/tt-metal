@@ -241,6 +241,20 @@ void py_module(nb::module_& m) {
             "The dtype a gradient sum runs in: reduce_dtype once check_reduce_dtype accepts it, else the stored "
             "training_config.precision.reduce_dtype (AutoContext.get_gradient_reduce_dtype), which may be None.");
         py_distributed.def(
+            "reduce_scatter_route_dim",
+            [](const ttnn::Tensor& tensor,
+               const std::vector<uint32_t>& cluster_axes,
+               std::optional<ttnn::DataType> reduce_dtype) {
+                return ttml::core::distributed::reduce_scatter_route_dim(
+                    tensor, ttsl::SmallVector<uint32_t>(cluster_axes.begin(), cluster_axes.end()), reduce_dtype);
+            },
+            nb::arg("tensor"),
+            nb::arg("cluster_axes"),
+            nb::kw_only(),
+            nb::arg("reduce_dtype") = nb::none(),
+            "The tensor dim synchronize_tensor's fp32 reduce-scatter route scatters along for these arguments, or None "
+            "when the sum takes the all-reduce.");
+        py_distributed.def(
             "synchronize_tensor",
             [](const ttnn::Tensor& tensor,
                const std::vector<uint32_t>& cluster_axes,

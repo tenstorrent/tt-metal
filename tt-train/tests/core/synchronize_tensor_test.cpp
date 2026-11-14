@@ -10,9 +10,7 @@
 #include <cmath>
 #include <core/xtensor_utils.hpp>
 #include <cstdint>
-#include <functional>
 #include <random>
-#include <string>
 #include <tt-metalium/bfloat16.hpp>
 #include <utility>
 #include <vector>
@@ -24,8 +22,6 @@
 #include "test_utils/mesh_utils.hpp"
 #include "test_utils/program_cache.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
-#include "ttnn/graph/graph_processor.hpp"
-#include "ttnn/graph/graph_trace_utils.hpp"
 #include "ttnn_fixed/distributed/ttnn_ops.hpp"
 
 using namespace ttml;
@@ -74,40 +70,6 @@ xt::xarray<float> exact_mean(const xt::xarray<float>& values) {
 double share_equal(const xt::xarray<float>& result, const xt::xarray<float>& expected) {
     const auto equal = xt::sum(xt::cast<std::int64_t>(xt::equal(result, expected)))();
     return static_cast<double>(equal) / static_cast<double>(expected.size());
-}
-
-// The device operations `call` runs, in order, recorded with ttnn's graph capture.
-std::vector<std::string> device_operations(const std::function<ttnn::Tensor()>& call) {
-    ttnn::graph::ScopedGraphCapture capture(ttnn::graph::GraphProcessor::RunMode::NORMAL);
-    {
-        [[maybe_unused]] const auto result = call();
-    }
-    std::vector<std::string> operations;
-    for (const auto& name : ttnn::graph::extract_calltrace(capture.end_graph_capture())) {
-        if (name.ends_with("DeviceOperation")) {
-            operations.push_back(name);
-        }
-    }
-    return operations;
-}
-
-const std::vector<std::string> kReduceScatterRoute = {
-    "TypecastDeviceOperation",
-    "ReduceScatterMinimalAsyncDeviceOperation",
-    "BinaryNgDeviceOperation",
-    "AllGatherAsyncDeviceOperation"};
-
-// Whether a sum's device operations divide by the device count before an all-gather, as the reduce-scatter route
-// does so that its all-gather carries the narrower dtype. ttnn's all_reduce divides after its sum is complete, whether
-// it runs a reduce-scatter and an all-gather or, for a shape that doesn't split, a gather and a local reduce.
-bool divides_before_gathering(const std::vector<std::string>& operations) {
-    const auto mean = std::ranges::find(operations, "BinaryNgDeviceOperation");
-    const auto gather = std::ranges::find(operations, "AllGatherAsyncDeviceOperation");
-    return mean != operations.end() && gather != operations.end() && mean < gather;
-}
-
-bool casts(const std::vector<std::string>& operations) {
-    return std::ranges::find(operations, "TypecastDeviceOperation") != operations.end();
 }
 
 class SynchronizeTensorTest : public test_utils::Mesh1x2Fixture {
@@ -258,30 +220,26 @@ TEST_F(SynchronizeTensorTest, SynchronizeGradientsTakesTheConfiguredReduceDtypeU
     expect_same_on_every_device(synchronize(ttnn::DataType::FLOAT32), fp32);
 }
 
-// Which route each sum takes, from the device operations it runs: only an fp32 sum of a large bf16 tensor that splits
-// into whole-tile slices takes the reduce-scatter route; an fp32 tensor needs no cast and gains nothing from it.
+// Which route each sum takes: only an fp32 sum of a large bf16 tensor that splits into whole-tile slices takes the
+// reduce-scatter route, scattering its last dim here; an fp32 tensor needs no cast and gains nothing from it, and a sum
+// over two axes keeps one all-reduce per axis.
 TEST_F(SynchronizeTensorTest, OnlyALargeNarrowerTensorTakesTheReduceScatterRoute) {
     const auto large = upload(make_gradients(512, 1024, 3));
     const auto small = upload(make_gradients(64, 128, 1));
     const auto no_whole_tile_slices = upload(make_gradients(544, 992, 4));
     const auto large_fp32 = ttnn::typecast(large, ttnn::DataType::FLOAT32);
-    const auto operations = [](const ttnn::Tensor& tensor, std::optional<ttnn::DataType> reduce_dtype) {
-        return device_operations(
-            [&] { return core::distributed::synchronize_tensor(tensor, {kDdpAxis}, reduce_dtype); });
+    const auto route = [](const ttnn::Tensor& tensor, std::optional<ttnn::DataType> reduce_dtype) {
+        return core::distributed::reduce_scatter_route_dim(tensor, {kDdpAxis}, reduce_dtype);
     };
 
-    EXPECT_EQ(operations(large, ttnn::DataType::FLOAT32), kReduceScatterRoute);
-    for (const auto& tensor : {small, no_whole_tile_slices}) {
-        const auto all_reduce = operations(tensor, ttnn::DataType::FLOAT32);
-        EXPECT_TRUE(casts(all_reduce));
-        EXPECT_FALSE(divides_before_gathering(all_reduce));
-    }
-    for (const auto& [tensor, reduce_dtype] : std::vector<std::pair<ttnn::Tensor, std::optional<ttnn::DataType>>>{
-             {large_fp32, ttnn::DataType::FLOAT32}, {large, std::nullopt}, {large, ttnn::DataType::BFLOAT16}}) {
-        const auto all_reduce = operations(tensor, reduce_dtype);
-        EXPECT_FALSE(casts(all_reduce));
-        EXPECT_FALSE(divides_before_gathering(all_reduce));
-    }
+    EXPECT_EQ(route(large, ttnn::DataType::FLOAT32), 3);
+    EXPECT_EQ(route(small, ttnn::DataType::FLOAT32), std::nullopt);
+    EXPECT_EQ(route(no_whole_tile_slices, ttnn::DataType::FLOAT32), std::nullopt);
+    EXPECT_EQ(route(large_fp32, ttnn::DataType::FLOAT32), std::nullopt);
+    EXPECT_EQ(route(large, std::nullopt), std::nullopt);
+    EXPECT_EQ(route(large, ttnn::DataType::BFLOAT16), std::nullopt);
+    EXPECT_EQ(
+        core::distributed::reduce_scatter_route_dim(large, {0U, kDdpAxis}, ttnn::DataType::FLOAT32), std::nullopt);
 }
 
 namespace {
