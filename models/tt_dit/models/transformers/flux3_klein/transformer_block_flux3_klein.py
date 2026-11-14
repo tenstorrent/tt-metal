@@ -22,30 +22,37 @@ HEAD_DIM = 128
 MLP_RATIO = 3
 # Ring SDPA (q, k) chunks by the rows each device holds (image + text), where the shared table keyed by the logical
 # length picks badly; other row counts keep the Attention defaults.
+# At the 4096 rows the streaming path's smaller score block fits larger q chunks.
 RING_SDPA_CHUNKS_BY_LOCAL_ROWS: dict[int, tuple[int, int]] = {
     2560: (160, 512),
     2688: (160, 512),
     2816: (160, 512),
     3072: (192, 512),
-    8320: (128, 640),
-    8960: (128, 640),
+    8320: (160, 640),
+    8960: (256, 512),
 }
 
 
 class Flux3KleinAttention(Attention):
+    """Ring SDPA on the streaming compute path with fp32 dest accumulation (bf16 score block), with
+    RING_SDPA_CHUNKS_BY_LOCAL_ROWS's chunks where it has the per-device rows."""
+
     def get_ring_sdpa_program_config(self, per_device_seq_len: int) -> ttnn.SDPAProgramConfig:
         rows = per_device_seq_len // self.parallel_config.sequence_parallel.factor
-        chunks = RING_SDPA_CHUNKS_BY_LOCAL_ROWS.get(rows)
-        if chunks is None:
-            return super().get_ring_sdpa_program_config(per_device_seq_len)
         key = ("local", rows)
         if key not in self.ring_sdpa_program_config:
-            self.ring_sdpa_program_config[key] = ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=self.get_ring_sdpa_core_grid(per_device_seq_len),
-                q_chunk_size=chunks[0],
-                k_chunk_size=chunks[1],
-                exp_approx_mode=self.ring_sdpa_exp_approx,
-            )
+            chunks = RING_SDPA_CHUNKS_BY_LOCAL_ROWS.get(rows)
+            if chunks is None:
+                config = super().get_ring_sdpa_program_config(per_device_seq_len)
+            else:
+                config = ttnn.SDPAProgramConfig(
+                    compute_with_storage_grid_size=self.get_ring_sdpa_core_grid(per_device_seq_len),
+                    q_chunk_size=chunks[0],
+                    k_chunk_size=chunks[1],
+                    exp_approx_mode=self.ring_sdpa_exp_approx,
+                )
+            config.streaming_fp32_dest = True
+            self.ring_sdpa_program_config[key] = config
         return self.ring_sdpa_program_config[key]
 
 
