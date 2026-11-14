@@ -65,6 +65,8 @@ CB_REDUCE_SCALER = 24
 CB_U_F32 = 25
 CB_CONV_ACC = 26
 CB_SCRATCH = 27
+CB_SQ_O = 28
+CB_RINV_O = 29
 NUM_CB_SLOTS = 64
 
 
@@ -81,8 +83,12 @@ def _cb_plan(Kt, Vt):
         ((CB_CONV_ACC,), CONV_ACC_DEPTH),
         ((CB_Y_QK,), 2 * Kt * trb),
         ((CB_V,), Vt * trb),
-        ((CB_SQ,), max(Kt, Vt) * trb),
+        # L2-norm and RMS-norm squares / rsqrt columns get separate buffers: they are pushed in
+        # different counts and read by index, so a shared FIFO would leave a phase's block wrapped.
+        ((CB_SQ,), Kt * trb),
         ((CB_RINV,), 2 * trb),
+        ((CB_SQ_O,), Vt * trb),
+        ((CB_RINV_O,), trb),
         ((CB_KQ_ROWS,), 2 * Kt * trb),
         ((CB_KNT,), Kt * trb),
         ((CB_D,), trb),

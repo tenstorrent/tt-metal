@@ -43,14 +43,16 @@ constexpr uint32_t HISTORY = 3;
 FORCE_INLINE uint32_t row_offset(uint32_t p) { return (p >> 4) * 2 * FACE_BYTES + (p & 15) * SEG_BYTES; }
 
 template <typename Accessor>
-FORCE_INLINE void read_row(const Accessor& acc, uint32_t page, uint32_t src_row, uint32_t dst_tile, uint32_t dst_row) {
+__attribute__((noinline)) void read_row(
+    const Accessor& acc, uint32_t page, uint32_t src_row, uint32_t dst_tile, uint32_t dst_row) {
     const uint32_t src_off = row_offset(src_row);
     const uint32_t dst = dst_tile + row_offset(dst_row);
     noc_async_read(acc.get_noc_addr(page, src_off), dst, SEG_BYTES);
     noc_async_read(acc.get_noc_addr(page, src_off + FACE_BYTES), dst + FACE_BYTES, SEG_BYTES);
 }
 
-FORCE_INLINE void copy_local_row(uint32_t src_tile, uint32_t src_row, uint32_t dst_tile, uint32_t dst_row) {
+__attribute__((noinline)) void copy_local_row(
+    uint32_t src_tile, uint32_t src_row, uint32_t dst_tile, uint32_t dst_row) {
     const uint32_t src = src_tile + row_offset(src_row);
     const uint32_t dst = dst_tile + row_offset(dst_row);
     noc_async_read(get_noc_addr(src), dst, SEG_BYTES);
@@ -58,7 +60,8 @@ FORCE_INLINE void copy_local_row(uint32_t src_tile, uint32_t src_row, uint32_t d
 }
 
 template <typename Accessor>
-FORCE_INLINE void write_row(const Accessor& acc, uint32_t src_tile, uint32_t src_row, uint32_t page, uint32_t dst_row) {
+__attribute__((noinline)) void write_row(
+    const Accessor& acc, uint32_t src_tile, uint32_t src_row, uint32_t page, uint32_t dst_row) {
     const uint32_t src = src_tile + row_offset(src_row);
     const uint32_t dst_off = row_offset(dst_row);
     noc_async_write(src, acc.get_noc_addr(page, dst_off), SEG_BYTES);
@@ -67,7 +70,7 @@ FORCE_INLINE void write_row(const Accessor& acc, uint32_t src_tile, uint32_t src
 
 // Rows [lo, hi) of tile row tr (global row indices) of one tile column into an L1 tile.
 template <typename Accessor>
-FORCE_INLINE void read_tile_rows(
+__attribute__((noinline)) void read_tile_rows(
     const Accessor& acc, uint32_t page, uint32_t tile_row_base, uint32_t lo, uint32_t hi, uint32_t dst) {
     if (hi - lo == TILE_ROWS) {
         noc_async_read(acc.get_noc_addr(page), dst, TILE_BYTES);

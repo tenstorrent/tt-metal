@@ -72,6 +72,8 @@ constexpr uint32_t cb_out_rows = 23;
 constexpr uint32_t cb_reduce_scaler = 24;
 constexpr uint32_t cb_u_f32 = 25;
 constexpr uint32_t cb_conv_acc = 26;
+constexpr uint32_t cb_sq_o = 28;
+constexpr uint32_t cb_rinv_o = 29;
 
 constexpr uint32_t TILE_ROWS = 32;
 constexpr uint32_t CONV_TAPS = 4;
@@ -102,10 +104,16 @@ ALWI void begin_loads(uint32_t cb) {
     copy_init(cb);
 }
 
-ALWI void pack_at(uint32_t dst, uint32_t cb, uint32_t idx) {
+ALWI void load(uint32_t cb, uint32_t tile, uint32_t dst) { copy_tile(cb, tile, dst); }
+
+// Every packed buffer here is Float32, so the packer is reconfigured once per window (pack_first),
+// not per tile.
+ALWI void pack_first(uint32_t dst, uint32_t cb, uint32_t idx) {
     pack_reconfig_data_format(cb);
     pack_tile<true>(dst, cb, idx);
 }
+
+ALWI void pack_at(uint32_t dst, uint32_t cb, uint32_t idx) { pack_tile<true>(dst, cb, idx); }
 
 ALWI void wait_sfpu_before_fpu() {
 #ifdef TRISC_MATH
@@ -119,6 +127,8 @@ struct Buffers {
     DataflowBuffer y_qk{cb_y_qk};
     DataflowBuffer sq{cb_sq};
     DataflowBuffer rinv{cb_rinv};
+    DataflowBuffer sq_o{cb_sq_o};
+    DataflowBuffer rinv_o{cb_rinv_o};
     DataflowBuffer d{cb_d};
     DataflowBuffer kq_rows{cb_kq_rows};
     DataflowBuffer reads{cb_reads};
@@ -132,11 +142,11 @@ ALWI void gates_block() {
     cb_wait_front(cb_gate_in, 2);
     tile_regs_acquire();
     begin_loads(cb_gate_in);
-    copy_tile(cb_gate_in, 1, 0);  // a
-    copy_tile(cb_gate_in, 0, 3);  // b
+    load(cb_gate_in, 1, 0);  // a
+    load(cb_gate_in, 0, 3);  // b
     begin_loads(cb_gate_w);
-    copy_tile(cb_gate_w, 1, 1);  // dt_bias (row 0)
-    copy_tile(cb_gate_w, 0, 2);  // A_log (row 0)
+    load(cb_gate_w, 1, 1);  // dt_bias (row 0)
+    load(cb_gate_w, 0, 2);  // A_log (row 0)
     sfpu_bcast_row_init();
     sfpu_add_bcast_row(0, 1);
     softplus_tile_init();
@@ -154,7 +164,7 @@ ALWI void gates_block() {
     tile_regs_commit();
     cb_reserve_back(cb_gates, 2);
     tile_regs_wait();
-    pack_at(0, cb_gates, 0);
+    pack_first(0, cb_gates, 0);
     pack_at(3, cb_gates, 1);
     tile_regs_release();
     cb_push_back(cb_gates, 2);
@@ -165,11 +175,11 @@ ALWI void gates_block() {
 ALWI void conv_two_taps(uint32_t col, uint32_t tap0) {
     tile_regs_acquire();
     begin_loads(cb_window);
-    copy_tile(cb_window, tap0, 0);
-    copy_tile(cb_window, tap0 + 1, 2);
+    load(cb_window, tap0, 0);
+    load(cb_window, tap0 + 1, 2);
     begin_loads(cb_conv_w);
-    copy_tile(cb_conv_w, CONV_TAPS * col + tap0, 1);
-    copy_tile(cb_conv_w, CONV_TAPS * col + tap0 + 1, 3);
+    load(cb_conv_w, CONV_TAPS * col + tap0, 1);
+    load(cb_conv_w, CONV_TAPS * col + tap0 + 1, 3);
     sfpu_bcast_row_init();
     sfpu_mul_bcast_row(0, 1);
     sfpu_mul_bcast_row(2, 3);
@@ -186,31 +196,31 @@ ALWI void conv_block() {
     for (uint32_t col = 0; col < pair_cols; ++col) {
         cb_wait_front(cb_window, CONV_TAPS);
         cb_reserve_back(cb_conv_acc, 1);
-        conv_two_taps(col, 0);
-        tile_regs_wait();
-        pack_at(0, cb_conv_acc, 0);
-        tile_regs_release();
-        conv_two_taps(col, 2);
-        tile_regs_wait();
-        pack_reconfig_l1_acc(1);
-        pack_at(0, cb_conv_acc, 0);
-        pack_reconfig_l1_acc(0);
-        tile_regs_release();
+        // Taps (0, 1) seed the partial sum, taps (2, 3) add onto it by packer L1 accumulation.
+#pragma GCC unroll 1
+        for (uint32_t tap0 = 0; tap0 < CONV_TAPS; tap0 += 2) {
+            conv_two_taps(col, tap0);
+            tile_regs_wait();
+            pack_reconfig_l1_acc(tap0 == 0 ? 0 : 1);
+            pack_first(0, cb_conv_acc, 0);
+            pack_reconfig_l1_acc(0);
+            tile_regs_release();
+        }
         cb_push_back(cb_conv_acc, 1);
         cb_pop_front(cb_window, CONV_TAPS);
 
         cb_wait_front(cb_conv_acc, 1);
         tile_regs_acquire();
         begin_loads(cb_conv_acc);
-        copy_tile(cb_conv_acc, 0, 0);
+        load(cb_conv_acc, 0, 0);
         silu_tile_init();
         silu_tile(0);
         tile_regs_commit();
         tile_regs_wait();
         if (col < 2 * Kt) {
-            pack_at(0, cb_y_qk, col);
+            pack_first(0, cb_y_qk, col);
         } else {
-            pack_at(0, cb_v, col - 2 * Kt);
+            pack_first(0, cb_v, col - 2 * Kt);
         }
         tile_regs_release();
         cb_pop_front(cb_conv_acc, 1);
@@ -219,9 +229,10 @@ ALWI void conv_block() {
     cb_push_back(cb_v, Vt);
 }
 
-// Squares of `count` tiles of an fp32 buffer starting at `base` (the input is kept) -> cb_sq.
-ALWI void square_block(DataflowBuffer& in_buf, DataflowBuffer& sq_buf, uint32_t base, uint32_t count, uint32_t in_cb) {
-    if (in_cb == cb_y_qk) {
+// Squares of `count` tiles of an fp32 buffer starting at `base` (the input is kept) -> sq_buf.
+template <uint32_t in_cb, uint32_t sq_cb>
+ALWI void square_block(DataflowBuffer& in_buf, DataflowBuffer& sq_buf, uint32_t base, uint32_t count) {
+    if constexpr (in_cb == cb_y_qk) {
         ckl::eltwise_chain(
             ckl::IterationShape::tiles(count),
             ckl::CopyTile<ckl::input(
@@ -232,29 +243,47 @@ ALWI void square_block(DataflowBuffer& in_buf, DataflowBuffer& sq_buf, uint32_t 
                 ckl::DataFormatReconfig::Enabled,
                 ckl::TileAddressing::Offset)>{in_buf, base},
             ckl::Square<>{},
-            ckl::PackTile<ckl::output(cb_sq)>{sq_buf});
+            ckl::PackTile<ckl::output(sq_cb)>{sq_buf});
     } else {
         ckl::eltwise_chain(
             ckl::IterationShape::tiles(count),
             ckl::CopyTile<ckl::input(
                 cb_o_acc, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None, ckl::InputTileMapping::Block)>{in_buf},
             ckl::Square<>{},
-            ckl::PackTile<ckl::output(cb_sq)>{sq_buf});
+            ckl::PackTile<ckl::output(sq_cb)>{sq_buf});
     }
 }
 
-template <uint32_t out_cb, typename PostOp>
-ALWI void row_sum(Buffers& bufs, DataflowBuffer& out_buf, uint32_t width, PostOp post_op) {
+// Post-reduce op on the column-0 row sum: rsqrt(sum * PreMul + add) * post_mul.
+template <uint32_t PreMulBits>
+struct RsqrtPost {
+    uint32_t add_bits;
+    uint32_t post_mul_bits;
+    ALWI void operator()(uint32_t dst) const {
+        binop_with_scalar_tile_init();
+        if constexpr (PreMulBits != ONE_BITS) {
+            mul_unary_tile(dst, PreMulBits);
+        }
+        add_unary_tile(dst, add_bits);
+        rsqrt_tile_init();
+        rsqrt_tile(dst);
+        binop_with_scalar_tile_init();
+        mul_unary_tile(dst, post_mul_bits);
+    }
+};
+
+template <uint32_t sq_cb, uint32_t out_cb, typename PostOp>
+ALWI void row_sum(Buffers& bufs, DataflowBuffer& sq_buf, DataflowBuffer& out_buf, uint32_t width, PostOp post_op) {
     ckl::reduce<
         PoolType::SUM,
         ReduceDim::REDUCE_ROW,
-        cb_sq,
+        sq_cb,
         cb_reduce_scaler,
         out_cb,
         ckl::ReduceInputPolicy::BulkWaitBulkPop,
         ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
         ReduceFp32Mode::Accurate>(
-        bufs.sq,
+        sq_buf,
         bufs.scaler,
         out_buf,
         ckl::ReduceInputBlockShape::row(width),
@@ -263,26 +292,21 @@ ALWI void row_sum(Buffers& bufs, DataflowBuffer& out_buf, uint32_t width, PostOp
         post_op);
 }
 
+// rsqrt(sum of squares of the Kt tiles of cb_y_qk at `base` + 1e-6) * post_mul -> cb_rinv.
+ALWI void l2_inverse_norm(Buffers& bufs, uint32_t base, uint32_t post_mul_bits) {
+    square_block<cb_y_qk, cb_sq>(bufs.y_qk, bufs.sq, base, Kt);
+    row_sum<cb_sq, cb_rinv>(bufs, bufs.sq, bufs.rinv, Kt, RsqrtPost<ONE_BITS>{L2_EPS_BITS, post_mul_bits});
+}
+
 // ---------------------------------------------------------------- l2norm_block
 // rinv_q = K^-1/2 rsqrt(sum q^2 + 1e-6), rinv_k = rsqrt(sum k^2 + 1e-6);
 // kn -> cb_kq_rows[0, Kt), qn -> cb_kq_rows[Kt, 2Kt), d = rowsum(qn * kn) -> cb_d, kn^T -> cb_knT.
 ALWI void l2norm_block(Buffers& bufs) {
-    square_block(bufs.y_qk, bufs.sq, 0, Kt, cb_y_qk);
-    row_sum<cb_rinv>(bufs, bufs.rinv, Kt, [](uint32_t dst) {
-        binop_with_scalar_tile_init();
-        add_unary_tile(dst, L2_EPS_BITS);
-        rsqrt_tile_init();
-        rsqrt_tile(dst);
-        binop_with_scalar_tile_init();
-        mul_unary_tile(dst, Q_SCALE_BITS);
-    });
-    square_block(bufs.y_qk, bufs.sq, Kt, Kt, cb_y_qk);
-    row_sum<cb_rinv>(bufs, bufs.rinv, Kt, [](uint32_t dst) {
-        binop_with_scalar_tile_init();
-        add_unary_tile(dst, L2_EPS_BITS);
-        rsqrt_tile_init();
-        rsqrt_tile(dst);
-    });
+    // q then k: one loop body keeps a single expansion of the square chain and the reduce.
+#pragma GCC unroll 1
+    for (uint32_t part = 0; part < 2; ++part) {
+        l2_inverse_norm(bufs, part * Kt, part == 0 ? Q_SCALE_BITS : ONE_BITS);
+    }
 
     cb_wait_front(cb_rinv, 2);
     cb_reserve_back(cb_kq_rows, 2 * Kt);
@@ -290,11 +314,11 @@ ALWI void l2norm_block(Buffers& bufs) {
     for (uint32_t kt = 0; kt < Kt; ++kt) {
         tile_regs_acquire();
         begin_loads(cb_y_qk);
-        copy_tile(cb_y_qk, kt, 0);       // q
-        copy_tile(cb_y_qk, Kt + kt, 2);  // k
+        load(cb_y_qk, kt, 0);       // q
+        load(cb_y_qk, Kt + kt, 2);  // k
         begin_loads(cb_rinv);
-        copy_tile(cb_rinv, 0, 1);
-        copy_tile(cb_rinv, 1, 3);
+        load(cb_rinv, 0, 1);
+        load(cb_rinv, 1, 3);
         sfpu_bcast_col_init();
         sfpu_mul_bcast_col(0, 1);  // qn
         sfpu_mul_bcast_col(2, 3);  // kn
@@ -302,7 +326,7 @@ ALWI void l2norm_block(Buffers& bufs) {
         mul_binary_tile(0, 2, 1);  // qn * kn
         tile_regs_commit();
         tile_regs_wait();
-        pack_at(2, cb_kq_rows, kt);
+        pack_first(2, cb_kq_rows, kt);
         pack_at(0, cb_kq_rows, Kt + kt);
         pack_at(1, cb_sq, kt);
         tile_regs_release();
@@ -312,7 +336,7 @@ ALWI void l2norm_block(Buffers& bufs) {
     cb_pop_front(cb_rinv, 2);
     cb_pop_front(cb_y_qk, 2 * Kt);
 
-    row_sum<cb_d>(bufs, bufs.d, Kt, ckl::NoOp{});
+    row_sum<cb_sq, cb_d>(bufs, bufs.sq, bufs.d, Kt, ckl::NoOp{});
 
     cb_wait_front(cb_kq_rows, 2 * Kt);
     cb_reserve_back(cb_knT, Kt);
@@ -323,7 +347,7 @@ ALWI void l2norm_block(Buffers& bufs) {
         transpose_tile(cb_kq_rows, kt, 0);
         tile_regs_commit();
         tile_regs_wait();
-        pack_at(0, cb_knT, kt);
+        pack_first(0, cb_knT, kt);
         tile_regs_release();
     }
     cb_push_back(cb_knT, Kt);
@@ -364,12 +388,12 @@ ALWI void token_step(Buffers& bufs, bool first_in_pair, bool last_in_pair, bool 
     for (uint32_t vt = 0; vt < Vt; ++vt) {
         tile_regs_acquire();
         begin_loads(cb_reads);
-        copy_tile(cb_reads, vt, 0);
+        load(cb_reads, vt, 0);
         begin_loads(cb_tok_coef);
-        copy_tile(cb_tok_coef, COEF_ALPHA, 1);
-        copy_tile(cb_tok_coef, COEF_BETA_SEL, 3);
+        load(cb_tok_coef, COEF_ALPHA, 1);
+        load(cb_tok_coef, COEF_BETA_SEL, 3);
         begin_loads(cb_v);
-        copy_tile(cb_v, vt, 2);
+        load(cb_v, vt, 2);
         sfpu_bcast_col_init();
         sfpu_mul_bcast_col(0, 1);
         sub_binary_tile_init();
@@ -378,7 +402,7 @@ ALWI void token_step(Buffers& bufs, bool first_in_pair, bool last_in_pair, bool 
         sfpu_mul_bcast_col(2, 3);
         tile_regs_commit();
         tile_regs_wait();
-        pack_at(2, cb_u, vt);
+        pack_first(2, cb_u, vt);
         tile_regs_release();
     }
     cb_push_back(cb_u, Vt);
@@ -388,13 +412,13 @@ ALWI void token_step(Buffers& bufs, bool first_in_pair, bool last_in_pair, bool 
     for (uint32_t vt = 0; vt < Vt; ++vt) {
         tile_regs_acquire();
         begin_loads(cb_reads);
-        copy_tile(cb_reads, Vt + vt, 0);
+        load(cb_reads, Vt + vt, 0);
         begin_loads(cb_tok_coef);
-        copy_tile(cb_tok_coef, COEF_ALPHA_SEL, 1);
+        load(cb_tok_coef, COEF_ALPHA_SEL, 1);
         begin_loads(cb_u_f32);
-        copy_tile(cb_u_f32, vt, 2);
+        load(cb_u_f32, vt, 2);
         begin_loads(cb_d);
-        copy_tile(cb_d, 0, 3);
+        load(cb_d, 0, 3);
         sfpu_bcast_col_init();
         sfpu_mul_bcast_col(0, 1);
         sfpu_mul_bcast_col(2, 3);
@@ -405,7 +429,7 @@ ALWI void token_step(Buffers& bufs, bool first_in_pair, bool last_in_pair, bool 
         if (!first_in_row) {
             pack_reconfig_l1_acc(1);
         }
-        pack_at(0, cb_o_acc, vt);
+        pack_first(0, cb_o_acc, vt);
         pack_reconfig_l1_acc(0);
         tile_regs_release();
     }
@@ -427,10 +451,10 @@ ALWI void token_step(Buffers& bufs, bool first_in_pair, bool last_in_pair, bool 
         const uint32_t count = (n_state - first) < UPDATE_BATCH ? (n_state - first) : UPDATE_BATCH;
         tile_regs_acquire();
         begin_loads(cb_tok_coef);
-        copy_tile(cb_tok_coef, COEF_ALPHA, UPDATE_BATCH);
+        load(cb_tok_coef, COEF_ALPHA, UPDATE_BATCH);
         begin_loads(src);
         for (uint32_t i = 0; i < count; ++i) {
-            copy_tile(src, first + i, i);
+            load(src, first + i, i);
         }
         sfpu_bcast_col_init();
         for (uint32_t i = 0; i < count; ++i) {
@@ -446,7 +470,7 @@ ALWI void token_step(Buffers& bufs, bool first_in_pair, bool last_in_pair, bool 
         tile_regs_commit();
         tile_regs_wait();
         for (uint32_t i = 0; i < count; ++i) {
-            pack_at(i, dst, first + i);
+            pack_first(i, dst, first + i);
         }
         tile_regs_release();
     }
@@ -466,27 +490,21 @@ ALWI void token_step(Buffers& bufs, bool first_in_pair, bool last_in_pair, bool 
 // ---------------------------------------------------------------- rmsnorm_gate_block
 // out = ((o (*)col rsqrt(mean o^2 + eps)) (*)row w) * silu(z)
 ALWI void rmsnorm_gate_block(Buffers& bufs, uint32_t eps_bits) {
-    square_block(bufs.o_acc, bufs.sq, 0, Vt, cb_o_acc);
-    row_sum<cb_rinv>(bufs, bufs.rinv, Vt, [eps_bits](uint32_t dst) {
-        binop_with_scalar_tile_init();
-        mul_unary_tile(dst, INV_V_BITS);
-        add_unary_tile(dst, eps_bits);
-        rsqrt_tile_init();
-        rsqrt_tile(dst);
-    });
-    cb_wait_front(cb_rinv, 1);
+    square_block<cb_o_acc, cb_sq_o>(bufs.o_acc, bufs.sq_o, 0, Vt);
+    row_sum<cb_sq_o, cb_rinv_o>(bufs, bufs.sq_o, bufs.rinv_o, Vt, RsqrtPost<INV_V_BITS>{eps_bits, ONE_BITS});
+    cb_wait_front(cb_rinv_o, 1);
     cb_wait_front(cb_z, Vt);
     cb_reserve_back(cb_out_rows, Vt);
     for (uint32_t vt = 0; vt < Vt; ++vt) {
         tile_regs_acquire();
         begin_loads(cb_o_acc);
-        copy_tile(cb_o_acc, vt, 0);
-        begin_loads(cb_rinv);
-        copy_tile(cb_rinv, 0, 1);
+        load(cb_o_acc, vt, 0);
+        begin_loads(cb_rinv_o);
+        load(cb_rinv_o, 0, 1);
         begin_loads(cb_norm_w);
-        copy_tile(cb_norm_w, vt, 2);
+        load(cb_norm_w, vt, 2);
         begin_loads(cb_z);
-        copy_tile(cb_z, vt, 3);
+        load(cb_z, vt, 3);
         sfpu_bcast_col_init();
         sfpu_mul_bcast_col(0, 1);
         sfpu_bcast_row_init();
@@ -497,13 +515,13 @@ ALWI void rmsnorm_gate_block(Buffers& bufs, uint32_t eps_bits) {
         mul_binary_tile(0, 3, 0);
         tile_regs_commit();
         tile_regs_wait();
-        pack_at(0, cb_out_rows, vt);
+        pack_first(0, cb_out_rows, vt);
         tile_regs_release();
     }
     cb_push_back(cb_out_rows, Vt);
     cb_pop_front(cb_o_acc, Vt);
     cb_pop_front(cb_z, Vt);
-    cb_pop_front(cb_rinv, 1);
+    cb_pop_front(cb_rinv_o, 1);
 }
 
 }  // namespace
