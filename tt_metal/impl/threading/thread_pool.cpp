@@ -49,7 +49,7 @@ std::vector<uint32_t> get_allowed_cpus() {
         CPU_ZERO_S(size, set);
         if (sched_getaffinity(getpid(), size, set) == 0) {
             std::vector<uint32_t> cpus;
-            for (long cpu = 0; cpu < static_cast<long>(size * CHAR_BIT); ++cpu) {
+            for (long cpu = 0; cpu < n; ++cpu) {
                 if (CPU_ISSET_S(cpu, size, set)) {
                     cpus.push_back(static_cast<uint32_t>(cpu));
                 }
@@ -112,6 +112,9 @@ bool balanced_physical_device_numa(ContextId context_id) {
 }
 
 uint32_t get_cpu_core_for_physical_device(ContextId context_id, uint32_t physical_device_id) {
+    // Serialize concurrent callers: the per-node round-robin counters below are shared mutable state.
+    static std::mutex mutex;
+    const std::lock_guard<std::mutex> lock(mutex);
     // One snapshot of the allowed CPUs, taken on first use, feeds both the NUMA map and the fallback.
     static const std::vector<uint32_t> allowed_cpus = get_allowed_cpus();
     static std::unordered_map<int, std::vector<uint32_t>> cpu_cores_per_numa_node =
