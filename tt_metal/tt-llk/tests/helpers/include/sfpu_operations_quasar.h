@@ -346,6 +346,10 @@ void init_unary_sfpu_operation_quasar()
     {
         hardshrink_init();
     }
+    else if constexpr (OPERATION == SfpuType::threshold)
+    {
+        threshold_init();
+    }
     else if constexpr (OPERATION == SfpuType::hardtanh)
     {
         hardtanh_init();
