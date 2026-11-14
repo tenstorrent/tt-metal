@@ -2653,6 +2653,26 @@ def test_spec_plan_for_the_lone_user():
     assert spec_plan_for(4, 3, T, menv).k_by_rows == ((4, 3),)
     assert isinstance(spec_plan_for(32, 3, T, menv), T["SpecReject"])
     assert spec_plan_for(4, 3, T, env).k_by_rows == ((1, 3), (4, 1))
+    # GLM53_SPEC_STEPS_PER_CALL = M: effective_k M (K + 1) - 1 (num_speculative_tokens must reach it), fused_sample
+    # only, every draft cap k -> M (k + 1) - 1; refused with the deferred (async) verify
+    e4 = dict(env, GLM53_SPEC_STEPS_PER_CALL="4")
+    p = spec_plan_for(4, 15, T, e4)
+    assert p.effective_k == 15 and p.accept_modes == ("fused_sample",) and p.k_by_rows == ((1, 15), (4, 1))
+    r = spec_plan_for(4, 3, T, e4)
+    assert isinstance(r, T["SpecReject"]) and r.supported_k == (15,)
+    p = spec_plan_for(16, 15, T, dict(menv, GLM53_SPEC_STEPS_PER_CALL="4"))
+    assert p.effective_k == 15 and p.accept_modes == ("fused_sample",) and p.k_by_rows == ((4, 15), (8, 7), (16, 7))
+    assert spec_plan_for(16, 15, T, dict(menv, GLM53_SPEC_STEPS_PER_CALL="2")).effective_k == 7
+    assert isinstance(spec_plan_for(4, 15, T, dict(e4, GLM53_STACK_VLLM_SPEC_ASYNC="1")), T["SpecReject"])
+    assert spec_plan_for(4, 3, T, dict(env, GLM53_SPEC_STEPS_PER_CALL="1")).accept_modes == ("argmax_ids",)
+    assert gvs.spec_plugin_k(3, 1) == 3 and gvs.spec_plugin_k(1, 4) == 7
+    ids, counts, n = gvs.fused_sample_block([dict(n=1, a=[5, 6, 9]), dict(n=0, a=[7, 1, 1])], 2, 4, 8, -1)
+    assert n == 3 and counts.tolist() == [1, 1, 3, 1] and ids[2].tolist() == [5, 6, 7] + [-1] * 5
+    assert ids[0].tolist() == [0] + [-1] * 7
+    ids, counts, n = gvs.fused_sample_block([{0: dict(n=0, a=[3, 4]), 2: dict(n=1, a=[5, 6])}], {1: 2, 0: 0}, 4, 4, -1)
+    assert n == {2: 2, 0: 1} and counts.tolist() == [1, 2, 1, 1] and ids[1].tolist() == [5, 6, -1, -1]
+    with expect_error(ValueError, "committed tokens for a 2-column"):
+        gvs.fused_sample_block([dict(n=1, a=[5, 6]), dict(n=0, a=[7, 1])], 0, 4, 2, -1)
 
 
 def _spec_adapter(K: int = 3, good=lambda step: 3):
@@ -2697,7 +2717,124 @@ def _block(rows: dict, K: int):
     return ct, cp, ac
 
 
-def test_served_spec_lone_user_flow():
+def _fused_verify(ad, kv, Kp: int, rows: dict, table):
+    """the plugin's fused_sample verify (GLM53_SPEC_STEPS_PER_CALL): a [B, 1 + Kp] block (rows: plugin row ->
+    (committed token, its position, the K drafts); the columns past them padded, position -1) -> the model's
+    (accepted_token_ids, accepted_counts), checked as the runner checks them (each row's prefix ends at its count)"""
+    W = 1 + Kp
+    tok = torch.zeros(B, W, dtype=torch.int32)
+    pos = torch.full((B, W), -1, dtype=torch.int32)
+    nv = torch.zeros(B, dtype=torch.int32)
+    for i, (t, p, d) in rows.items():
+        tok[i, 0], pos[i, 0] = t, p
+        for j, x in enumerate(d):
+            tok[i, 1 + j], pos[i, 1 + j] = x, p + 1 + j
+        nv[i] = len(d)
+    out = ad.decode_forward(tok, pos, page_table=table, kv_cache=kv, sampling_params=_greedy(B), num_valid_drafts=nv,
+                            accepted_counts=torch.ones(B, dtype=torch.int32), spec_mode="fused_sample")  # fmt: skip
+    assert out.spec_mode == "fused_sample"
+    ids, counts = out.accepted_token_ids, out.accepted_counts
+    for i in range(B):
+        c = int(counts[i])
+        assert PLACEHOLDER_TOKEN_ID not in ids[i, :c].tolist()
+        assert all(int(v) == PLACEHOLDER_TOKEN_ID for v in ids[i, c:].tolist())
+    return ids, counts
+
+
+def _served_chain_lone(monkeypatch):
+    """GLM53_SPEC_STEPS_PER_CALL = 3 on the lone-user served path: effective_k 3 (K + 1) - 1 = 11; propose hands the
+    device's K drafts in the 11-wide block, the verify (fused_sample) chains 3 device steps -- every record collected
+    after the last replay -- and commits all their tokens at once; the stream equals plain greedy and each proposal
+    continues the chain's last step (the plugin's count = the 3 steps' total); a second live row: the ordinary decode
+    answers one token per row (count 1)"""
+    monkeypatch.setenv("GLM53_SPEC_STEPS_PER_CALL", "3")
+    K, M = 3, 3
+    Kp = gvs.spec_plugin_k(K, M)
+    ad, backend, gen, kv = _spec_adapter(K, good=lambda step: step % (K + 1))
+    assert ad.spec_steps_per_call == M and Kp == 11
+    prompt = _prompt(100, 7)
+    table = _table([_blocks(0, 400)], B)
+    out, _ = ad.prefill_forward(_history([prompt]), page_table=table, kv_cache=kv, prompt_lens=[100], start_pos=[0],
+                                empty_slots=[0], sampling_params=_greedy(1))  # fmt: skip
+    stream, pos = [int(out[0, 0])], 100
+    ids = ad.decode_forward(torch.tensor([[stream[-1]], [0], [0], [0]]), torch.tensor([pos, -1, -1, -1]),
+                            page_table=table, kv_cache=kv, sampling_params=_greedy(B))  # fmt: skip
+    stream.append(int(ids[0, 0]))
+    pos += 1
+    ct, cp, ac = _block({0: ([stream[-1]], pos)}, Kp)
+    s0 = backend.spec.counters["steps"]
+    for _ in range(4):
+        do = ad.propose_draft_tokens(Kp, ct, cp, ac)
+        assert do.num_valid.tolist() == [K, 0, 0, 0] and tuple(do.draft_token_ids.shape) == (B, Kp)
+        drafts = [int(v) for v in do.draft_token_ids[0, :K].tolist()]
+        acc, counts = _fused_verify(ad, kv, Kp, {0: (stream[-1], pos, drafts)}, table)
+        new = [int(v) for v in acc[0, : int(counts[0])].tolist()]
+        assert M <= len(new) <= M * (K + 1) and counts[1:].tolist() == [1, 1, 1]
+        ct, cp, ac = _block({0: (new, pos + 1)}, Kp)
+        stream += new
+        pos += len(new)
+    assert backend.spec.counters["steps"] - s0 == 4 * M == ad.spec_stats["fused"] and ad.spec_stats["calls"] == 4
+    assert gen.counters["spec_chains"] == 4 and ad.spec_stats["committed"] == len(stream) - 2
+    assert ad.spec_stats["committed"] > 4 * M  # (drafts accepted inside the chain)
+    assert stream == [(prompt[-1] + 1 + i) % VOCAB for i in range(len(stream))]  # = plain greedy (next = t + 1)
+    do = ad.propose_draft_tokens(Kp, ct, cp, ac)
+    drafts = [int(v) for v in do.draft_token_ids[0, :K].tolist()]
+    p2 = _prompt(80, 30)
+    table2 = _table([_blocks(0, 400), _blocks(1, 300)], B)
+    out2, _ = ad.prefill_forward(_history([p2]), page_table=table2[1:2], kv_cache=kv, prompt_lens=[80], start_pos=[0],
+                                 empty_slots=[1], sampling_params=_greedy(1))  # fmt: skip
+    tok2 = int(out2[0, 0])
+    acc, counts = _fused_verify(ad, kv, Kp, {0: (stream[-1], pos, drafts), 1: (tok2, 80, [])}, table2)
+    assert tuple(acc.shape) == (B, 1) and counts.tolist() == [1, 1, 1, 1] and ad.spec_stats["fallback"] == 1
+    assert int(acc[0, 0]) == (stream[-1] + 1) % VOCAB and int(acc[1, 0]) == (tok2 + 1) % VOCAB
+    ad.release_request(1)
+    ad.release_request(0)
+
+
+def _served_chain_multi(monkeypatch):
+    """GLM53_SPEC_STEPS_PER_CALL = 4 with GLM53_SPEC_MULTI (G 2, K 1: effective_k 7): a verify of both users' blocks
+    chains 4 multi-user device steps and commits each user's 4 steps' tokens; both streams equal plain greedy"""
+    monkeypatch.setenv("GLM53_SPEC_STEPS_PER_CALL", "4")
+    K, G, M = 1, 2, 4
+    Kp = gvs.spec_plugin_k(K, M)
+    backend = _MockSpecMultiBackend(B, K, G, lambda step: K if step % 3 else 0)
+    gen = Glm53Generator(backend, tokenizer=SimpleNamespace(stop_token_ids=()), max_batch=B, max_seq_len=SEQ)
+    ad = GLM53StackForCausalLM(gen, B, SEQ, spec=True)
+    kv = ad.allocate_kv_cache((NUM_BLOCKS, 1, BLOCK_SIZE, LATENT_DIM), torch.bfloat16, 45)
+    ad.warmup_model_prefill(kv_cache=kv, enable_trace=True, can_sample_on_device=True)
+    ad.warmup_model_decode(kv_cache=kv, enable_trace=True, max_batch_size=B, num_blocks=BPS, can_sample_on_device=True)
+    assert ad.spec_multi_capable and ad.spec_steps_per_call == M
+    pa, pb = _prompt(100, 7), _prompt(90, 20)
+    table = _table([_blocks(0, 400), _blocks(1, 400)], B)
+    out, _ = ad.prefill_forward(_history([pa]), page_table=table[0:1], kv_cache=kv, prompt_lens=[100], start_pos=[0],
+                                empty_slots=[0], sampling_params=_greedy(1))  # fmt: skip
+    sa = [int(out[0, 0])]
+    out, _ = ad.prefill_forward(_history([pb]), page_table=table[1:2], kv_cache=kv, prompt_lens=[90], start_pos=[0],
+                                empty_slots=[1], sampling_params=_greedy(1))  # fmt: skip
+    sb = [int(out[0, 0])]
+    want = lambda p, s: [(p[-1] + 1 + i) % VOCAB for i in range(len(s))]  # noqa: E731
+    ids = ad.decode_forward(torch.tensor([[sa[-1]], [sb[-1]], [0], [0]]), torch.tensor([100, 90, -1, -1]),
+                            page_table=table, kv_cache=kv, sampling_params=_greedy(B))  # fmt: skip
+    sa.append(int(ids[0, 0]))
+    sb.append(int(ids[1, 0]))
+    pa_, pb_ = 101, 91
+    ct, cp, ac = _block({0: ([sa[-1]], pa_), 1: ([sb[-1]], pb_)}, Kp)
+    for _ in range(3):
+        do = ad.propose_draft_tokens(Kp, ct, cp, ac)
+        assert do.num_valid.tolist() == [K, K, 0, 0]
+        da, db = ([int(v) for v in do.draft_token_ids[i, :K].tolist()] for i in (0, 1))
+        acc, counts = _fused_verify(ad, kv, Kp, {0: (sa[-1], pa_, da), 1: (sb[-1], pb_, db)}, table)
+        na, nb = ([int(v) for v in acc[i, : int(counts[i])].tolist()] for i in (0, 1))
+        assert M <= len(na) <= M * (K + 1) and M <= len(nb) <= M * (K + 1)
+        ct, cp, ac = _block({0: (na, pa_ + 1), 1: (nb, pb_ + 1)}, Kp)
+        sa += na
+        sb += nb
+        pa_, pb_ = pa_ + len(na), pb_ + len(nb)
+    assert ad.spec_stats["fused"] == 3 * M == backend.spec.counters["steps"] and ad.spec_stats["calls"] == 3
+    assert sa == want(pa, sa) and sb == want(pb, sb)
+
+
+def test_served_spec_lone_user_flow(monkeypatch):
     """the plugin's calls for one greedy request (SPEC_DECODE_CONTRACT.md section 5): prefill (+ the MTP seed: enter /
     leave), an ordinary decode, propose (the bootstrap: K drafts), verify (the fused step: K + 1 argmax ids, the walk
     accepts what the device accepted), propose (the step's drafts) ... -- the committed stream equals plain greedy, the
@@ -2763,6 +2900,7 @@ def test_served_spec_lone_user_flow():
     assert stream == [(prompt[-1] + 1 + i) % VOCAB for i in range(len(stream))]
     ad.release_request(0)  # released while speculating: abort, no leave
     assert backend.spec.counters.get("aborts") == 1 and getattr(gen._binding(kv), "spec", None) is None
+    _served_chain_lone(monkeypatch)
     assert "ttnn" not in sys.modules
 
 
@@ -2779,7 +2917,7 @@ def test_served_spec_declines_sampled_rows():
     assert do.num_valid.tolist() == [0, 0, 0, 0] and backend.spec.counters["enters"] == 0
 
 
-def test_served_spec_multi_user_flow():
+def test_served_spec_multi_user_flow(monkeypatch):
     """GLM53_SPEC_MULTI on the served path (the fixed-G v1, G = 2, K = 1 on the 4-slot mock: group bases 0 / 2): a new
     request takes the lowest free group base (the second one lands in generator slot 2, invisible to the plugin), each
     prefill fills its user's MTP cache, the MTP seed runs once both users are live; propose hands K drafts to BOTH rows
@@ -2867,6 +3005,7 @@ def test_served_spec_multi_user_flow():
         pb_ += 1
     assert sb == want(pb, sb)
     _served_alt_flow()
+    _served_chain_multi(monkeypatch)
     assert "ttnn" not in sys.modules
 
 

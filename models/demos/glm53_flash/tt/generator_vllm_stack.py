@@ -183,6 +183,54 @@ def spec_async_enabled(env=os.environ, async_decode: bool | None = None) -> bool
 
 SPEC_ASYNC = spec_async_enabled()
 
+# GLM53_SPEC_STEPS_PER_CALL = M (default 1: unchanged): a served verify runs up to M device speculative steps back to back
+# (Glm53Generator.spec_step_chain: each ONE trace replay, verify + accept + draft on the device, step j + 1 verifying the
+# bonus and drafts step j left there -- no host input between them) and answers with every step's committed tokens at
+# once, in the contract's fused_sample mode (the device accepted already). The plugin's effective_k becomes
+# M (K + 1) - 1, so its verify block and the scheduler's lookahead (effective_k + 1 = M (K + 1) KV slots past the step's
+# own tokens) cover the M steps' positions; the drafter still proposes the device's K drafts. One vLLM step (scheduler +
+# accept walk + input build + record wait: F24 measured +4.4 ms per served spec step at 1M) per M device steps, the same
+# tokens as M separate steps (vLLM truncates a commit at a stop token / max_tokens). Synchronous scheduling only.
+STEPS_ENV = "GLM53_SPEC_STEPS_PER_CALL"
+
+
+def spec_steps_per_call(env=os.environ) -> int:
+    """GLM53_SPEC_STEPS_PER_CALL (default 1): the device speculative steps one served verify may chain"""
+    m = int(env.get(STEPS_ENV, "1") or 1)
+    if m < 1:
+        raise ValueError(f"{STEPS_ENV}={m}: at least 1")
+    return m
+
+
+def spec_plugin_k(K: int, m: int) -> int:
+    """the plugin's effective_k for K drafts per device step and m steps per call: m (K + 1) - 1 (m = 1: K)"""
+    return int(m) * (int(K) + 1) - 1
+
+
+def fused_sample_block(recs: list, r, B: int, W: int, pad: int) -> tuple:
+    """a chain's records (Glm53Generator.spec_step_chain, step order) -> the fused_sample verify's
+    ``accepted_token_ids [B, W]`` (a speculating row: every step's committed tokens a[0..n] in order, then ``pad``;
+    any other row: 0 then ``pad``, count 1 -- the argmax_ids answer's padding row), ``accepted_counts [B]`` and the
+    committed count per user (r = {plugin row: group base} with records {base: record} -> {base: count}; r = the
+    lone plugin row -> its count). Pure."""
+    ids = torch.full((int(B), int(W)), int(pad), dtype=torch.int32)
+    ids[:, 0] = 0
+    counts = torch.ones(int(B), dtype=torch.int32)
+    rows = list(r.items()) if isinstance(r, dict) else [(r, None)]
+    total = {}
+    for i, g in rows:
+        toks = []
+        for rec in recs:
+            x = rec if g is None else rec[g]
+            toks += [int(v) for v in x["a"][: int(x["n"]) + 1]]
+        if not toks or len(toks) > int(W):
+            raise ValueError(f"plugin row {i}: {len(toks)} committed tokens for a {W}-column fused_sample block")
+        ids[i, : len(toks)] = torch.tensor(toks, dtype=torch.int32)
+        counts[i] = len(toks)
+        total[g] = len(toks)
+    return ids, counts, (total if isinstance(r, dict) else total[None])
+
+
 # GLM53_STACK_SPEC_TIMING=1 (default off): the served step's host decomposition. Every decode_forward (a verify or an
 # ordinary decode) and prefill_forward of the adapter is timed, and the gap between the adapter's consecutive calls
 # (= vLLM's scheduler + the plugin's accept walk / output processing / input build, i.e. everything outside the model)
@@ -202,7 +250,7 @@ class _SpecTiming:
 
     def reset(self):
         self.sum = {k: 0.0 for k in self.KEYS}
-        self.n = {"decode": 0, "fused": 0, "fallback": 0, "prefill": 0, "seed": 0, "outside_pf": 0}
+        self.n = {"decode": 0, "fused": 0, "fallback": 0, "prefill": 0, "seed": 0, "outside_pf": 0, "steps": 0}
         self.pf_outside = 0.0
 
     def gap(self, now, prefill=False):
@@ -217,11 +265,12 @@ class _SpecTiming:
     def report(self, stats):
         n = max(1, self.n["decode"])
         ms = lambda k, d=n: 1e3 * self.sum[k] / max(1, d)  # noqa: E731
+        steps = max(1, self.n["steps"])  # (device spec steps: GLM53_SPEC_STEPS_PER_CALL chains several per fused call)
         logger.info(
             f"GLM53 stack spec timing ({self.n['decode']} decode calls: {self.n['fused']} fused, {self.n['fallback']} "
-            f"fallback / ordinary): per decode call outside (vLLM + plugin) {ms('outside'):.2f} ms, adapter "
-            f"{ms('adapter'):.2f} ms, submit {ms('submit', max(1, self.n['fused'])):.2f} ms, collect (device wait + "
-            f"read) {ms('collect', max(1, self.n['fused'])):.2f} ms per fused step; prefill calls {self.n['prefill']} "
+            f"fallback / ordinary; {self.n['steps']} device spec steps): per decode call outside (vLLM + plugin) "
+            f"{ms('outside'):.2f} ms, adapter {ms('adapter'):.2f} ms, submit {ms('submit', steps):.2f} ms, collect "
+            f"(device wait + read) {ms('collect', steps):.2f} ms per device spec step; prefill calls {self.n['prefill']} "
             f"mean {ms('prefill', max(1, self.n['prefill'])):.1f} ms (+ {1e3 * self.pf_outside / max(1, self.n['outside_pf']):.2f} "
             f"ms outside before each); seeds {self.n['seed']} mean {ms('seed', max(1, self.n['seed'])):.1f} ms; "
             f"spec {stats}"
@@ -261,6 +310,17 @@ def _install_spec_timing(cls):
                 t.sum["collect"] += pc() - t0
 
         g.spec_step_submit, g.spec_step_collect = submit, collect
+        chain = getattr(g, "spec_step_chain", None)
+        if chain is not None:  # (GLM53_SPEC_STEPS_PER_CALL: the replays + record copies = submit, its collects counted)
+
+            def chained(*a, **k):
+                t0, c0 = pc(), t.sum["collect"]
+                try:
+                    return chain(*a, **k)
+                finally:
+                    t.sum["submit"] += (pc() - t0) - (t.sum["collect"] - c0)
+
+            g.spec_step_chain = chained
         g._spec_timing_wrapped = True
 
     dec, pf, seed = cls.decode_forward, cls.prefill_forward, cls._spec_seed
@@ -277,6 +337,7 @@ def _install_spec_timing(cls):
         finally:
             t1 = pc()
             fused = self.spec_stats["fused"] > f0
+            t.n["steps"] += self.spec_stats["fused"] - f0
             t.n["decode"] += 1
             t.n["fused" if fused else "fallback"] += 1
             t.sum["adapter"] += (t1 - t0) - (t.sum["submit"] - s0) - (t.sum["collect"] - c0)
@@ -327,15 +388,24 @@ def spec_plan_for(max_num_seqs: int, requested_k: int, types: dict, env=os.envir
     user in generator slot 0 of a B in [K + 1, 4] build; ``k_by_rows`` ((1, K), (max_num_seqs, 1)) and
     ``DraftOutput.num_valid`` = 0 whenever more than one row is live keep every other step an ordinary decode;
     ``argmax_ids`` only (greedy: sampled rows decode plainly through ``supports_narrow_decode``), the drafter's state
-    on device (no hidden feed: the step reads the head's h itself)."""
+    on device (no hidden feed: the step reads the head's h itself). GLM53_SPEC_STEPS_PER_CALL = M > 1: effective_k =
+    M (K + 1) - 1 (num_speculative_tokens must reach it), every k_by_rows cap k -> M (k + 1) - 1, ``fused_sample``
+    only (the verify chains up to M device steps and returns their committed tokens; synchronous scheduling)."""
     if not spec_enabled(env):
         return types["SpecReject"](reason=f"{SPEC_ENV}=1 with GLM53_SPEC_K > 0 enables the stack's speculative step")
     K = int(env.get("GLM53_SPEC_K"))
     B, req = int(max_num_seqs), int(requested_k)
-    if req < K:
+    M = spec_steps_per_call(env)
+    Kp, modes = spec_plugin_k(K, M), (("fused_sample",) if M > 1 else ("argmax_ids",))
+    if M > 1 and env.get(SPEC_ASYNC_ENV, "0") == "1":
+        return types["SpecReject"](reason=f"{STEPS_ENV}={M} chains device steps in a synchronous verify only "
+                                   f"({SPEC_ASYNC_ENV}=1 defers one step's readback)")  # fmt: skip
+    if req < Kp:
         return types["SpecReject"](
-            reason=f"the stack's speculative step drafts exactly K = {K} (GLM53_SPEC_K); num_speculative_tokens {req}",
-            supported_k=(K,),
+            reason=f"the stack's speculative step drafts exactly K = {K} (GLM53_SPEC_K)"
+            + (f", {M} steps per verify ({STEPS_ENV}): effective_k {Kp}" if M > 1 else "")
+            + f"; num_speculative_tokens {req}",
+            supported_k=(Kp,),
         )
     if env.get(SPEC_MULTI_ENV, "0") == "1":
         from models.autoports.zai_org_glm_5_3_flash.tt.generator import spec_multi_k_by_rows
@@ -347,14 +417,14 @@ def spec_plan_for(max_num_seqs: int, requested_k: int, types: dict, env=os.envir
                 supported_k=tuple(k for k in (1, 2, 3) if k + 1 <= B) if B <= W else (),
             )
         return types["SpecPlan"](
-            effective_k=K,
+            effective_k=Kp,
             lanes_per_request=1,
             extra_bytes_per_seq=0,
             extra_bytes_per_token=0,
-            accept_modes=("argmax_ids",),
+            accept_modes=modes,
             drafter_state="internal",
             supports_narrow_decode=True,
-            k_by_rows=spec_multi_k_by_rows(K, B, W),
+            k_by_rows=tuple((rows, spec_plugin_k(k, M)) for rows, k in spec_multi_k_by_rows(K, B, W)),
         )
     if not K + 1 <= B <= SPEC_MAX_ROWS:
         ok = tuple(k for k in (1, 2, 3) if k + 1 <= B) if B <= SPEC_MAX_ROWS else ()
@@ -363,14 +433,14 @@ def spec_plan_for(max_num_seqs: int, requested_k: int, types: dict, env=os.envir
             supported_k=ok,
         )
     return types["SpecPlan"](
-        effective_k=K,
+        effective_k=Kp,
         lanes_per_request=1,
         extra_bytes_per_seq=0,
         extra_bytes_per_token=0,
-        accept_modes=("argmax_ids",),
+        accept_modes=modes,
         drafter_state="internal",
         supports_narrow_decode=True,
-        k_by_rows=((1, K), (B, 1)) if B > 1 else (),
+        k_by_rows=((1, Kp), (B, 1)) if B > 1 else (),
     )
 
 
@@ -890,7 +960,14 @@ class GLM53StackForCausalLM:
         self._spec_pending = None  # the outstanding deferred verify (SpecReadback) until _spec_collect
         self._spec_lock = threading.Lock()  # (the plugin may finalize a verify off the engine thread)
         self.spec_stats = dict(fused=0, fallback=0, committed=0, enters=0, proposals=0, declines=0, seeds=0,
-                               deferred=0)  # fmt: skip
+                               deferred=0, calls=0)  # fmt: skip
+        # GLM53_SPEC_STEPS_PER_CALL: the device steps a verify chains (fused_sample; spec_stats fused counts device
+        # steps, calls the verifies that ran them)
+        self.spec_steps_per_call = spec_steps_per_call() if self.spec else 1
+        if self.spec_steps_per_call > 1 and self.spec_async:
+            raise ValueError(
+                f"{STEPS_ENV}={self.spec_steps_per_call} needs a synchronous verify (not {SPEC_ASYNC_ENV})"
+            )
         # GLM53_SPEC_SAMPLED: sampled rows speculate on a sampled verify head only (spec_ids_are_sampled is a class
         # declaration: refuse the launch rather than answer sampled rows with the target argmax)
         self.spec_sampled = self.spec and SPEC_SAMPLED
@@ -1497,8 +1574,10 @@ class GLM53StackForCausalLM:
         process_decode_output_host complete it); the fallback's ids are host ids (no read event)."""
         from models.demos.glm53_flash.tt.vllm_spec import contract_types
 
-        if spec_mode != "argmax_ids":
-            raise NotImplementedError(f"spec_mode {spec_mode!r}: the stack adapter verifies in argmax_ids only")
+        if spec_mode not in ("argmax_ids", "fused_sample"):
+            raise NotImplementedError(
+                f"spec_mode {spec_mode!r}: the stack adapter verifies in argmax_ids / fused_sample"
+            )
         kv = self._kv(kv_cache)
         tok = torch.as_tensor(tokens).to(torch.int64)
         pos = torch.as_tensor(start_pos).to(torch.int64)
@@ -1522,6 +1601,11 @@ class GLM53StackForCausalLM:
                 row = None if rows is None else rows[r]
             self._alias, self._chain = alias, []
             if (
+                spec_mode == "fused_sample"
+            ):  # GLM53_SPEC_STEPS_PER_CALL: up to M device steps, as many as the block holds
+                m = max(1, min(self.spec_steps_per_call, W // (self.gen.spec_k() + 1)))
+                return self._fused_sample_out(self.gen.spec_step_chain(kv, m, page_row=row), r, B, W)
+            if (
                 self.spec_async and not read_from_device
             ):  # the deferred readback: the record's copy rides behind the step
                 self._spec_pending = rb = SpecReadback(self.gen.spec_step_submit(kv, page_row=row), r, B, W)
@@ -1537,7 +1621,32 @@ class GLM53StackForCausalLM:
             ids = out[0][:, 0, : self.vocab_size].argmax(dim=-1).to(torch.int32)
         else:
             ids = torch.as_tensor(out).to(torch.int32)
+        if spec_mode == "fused_sample":  # (one committed token per row: column 0's, count 1)
+            return VerifyOutput(spec_mode="fused_sample", accepted_token_ids=ids.reshape(B, 1),
+                                accepted_counts=torch.ones(B, dtype=torch.int32))  # fmt: skip
         return VerifyOutput(spec_mode="argmax_ids", argmax_ids=ids.reshape(B, 1))
+
+    def _fused_sample_out(self, recs: list, r, B: int, W: int):
+        """a chain's records -> ``VerifyOutput(fused_sample)`` (fused_sample_block) + the adapter's bookkeeping: the
+        committed count its proposal must continue (_spec_n: total - 1), the stats (fused per device step)"""
+        from models.demos.glm53_flash.tt.vllm_spec import PLACEHOLDER_TOKEN_ID, contract_types
+
+        ids, counts, total = fused_sample_block(recs, r, B, W, PLACEHOLDER_TOKEN_ID)
+        multi = isinstance(r, dict)
+        self._spec_n = {g: t - 1 for g, t in total.items()} if multi else total - 1
+        st = self.spec_stats
+        f0 = st["fused"]
+        st["fused"] += len(recs)
+        st["calls"] += 1
+        st["committed"] += sum(total.values()) if multi else total
+        if st["fused"] // 256 > f0 // 256:
+            per = st["fused"] * (len(r) if multi else 1)
+            logger.info(f"GLM53 stack spec{' (multi)' if multi else ''}: {st} (tau per user per device step "
+                        f"{st['committed'] / max(1, per):.2f}, {st['fused'] / max(1, st['calls']):.2f} steps per "
+                        "verify)")  # fmt: skip
+        return contract_types()["VerifyOutput"](
+            spec_mode="fused_sample", accepted_token_ids=ids, accepted_counts=counts
+        )
 
     def _fused_row(self, kv, alias, tok, pos, nv):
         """the plugin row of the speculating request when the verify block is exactly its next step (else None): one
@@ -1548,15 +1657,17 @@ class GLM53StackForCausalLM:
         K = self.gen.spec_k()
         B, W = (int(v) for v in tok.shape)
         live = [i for i in range(B) if int(pos[i, 0]) >= 0]
-        if sp is None or len(live) != 1 or W != K + 1:
+        if sp is None or len(live) != 1 or W < K + 1:  # (GLM53_SPEC_STEPS_PER_CALL: the block is M (K + 1) wide)
             return None
         r = live[0]
         p0 = int(pos[r, 0])
         if alias[r] != 0 or int(nv[r]) != K or p0 != int(b.slots[0].seq_len) or int(tok[r, 0]) != int(sp["bonus"]):
             return None
-        if [int(v) for v in tok[r, 1:].tolist()] != [int(v) for v in sp["drafts"]]:
+        if [int(v) for v in tok[r, 1 : K + 1].tolist()] != [int(v) for v in sp["drafts"]]:
             return None
-        if [int(v) for v in pos[r].tolist()] != list(range(p0, p0 + W)):
+        if [int(v) for v in pos[r, : K + 1].tolist()] != list(range(p0, p0 + K + 1)):
+            return None
+        if any(int(v) >= 0 for v in pos[r, K + 1 :].tolist()):  # (a padded column carries position -1)
             return None
         return r
 
@@ -1657,7 +1768,8 @@ class GLM53StackForCausalLM:
         if self.spec_multi_capable:
             return self._propose_multi(K, ct, cp, ac, b, kv, live, drafts, nvalid, DraftOutput)
         r = live[0] if len(live) == 1 else None
-        ok = r is not None and self._alias[r] == 0 and K == self.gen.spec_k() and self._spec_lone(kv)
+        Kp = spec_plugin_k(self.gen.spec_k(), self.spec_steps_per_call)  # (the plugin's effective_k)
+        ok = r is not None and self._alias[r] == 0 and K == Kp and self._spec_lone(kv)
         if ok:
             last = int(ac[r]) - 1
             # the block's last committed token sits at the slot's cache length (the next input: model_runner
@@ -1684,8 +1796,10 @@ class GLM53StackForCausalLM:
             self._spec_stop(kv)
             self.spec_stats["declines"] += 1
             return DraftOutput(draft_token_ids=drafts, num_valid=nvalid)
-        drafts[r] = torch.tensor([int(v) for v in d[:K]], dtype=torch.int32)
-        nvalid[r] = K
+        # (the device's K drafts: fewer than the block's effective_k with GLM53_SPEC_STEPS_PER_CALL)
+        kk = min(K, len(d))
+        drafts[r, :kk] = torch.tensor([int(v) for v in d[:kk]], dtype=torch.int32)
+        nvalid[r] = kk
         self.spec_stats["proposals"] += 1
         return DraftOutput(draft_token_ids=drafts, num_valid=nvalid)
 
@@ -1695,7 +1809,8 @@ class GLM53StackForCausalLM:
         length -- the bootstrap's drafts (entering) or the last fused step's, which continue exactly its committed
         block per user; else every row declines (the speculation is left: the next step decodes plainly)"""
         rows = {i: self._alias[i] for i in live}
-        pick = self._spec_multi_pick(kv) if K == self.gen.spec_k_max() else None  # (K: the plugin's effective_k)
+        Kp = spec_plugin_k(self.gen.spec_k_max(), self.spec_steps_per_call)  # (K: the plugin's effective_k)
+        pick = self._spec_multi_pick(kv) if K == Kp else None
         active = pick[1] if pick is not None else None
         ok = active is not None and sorted(rows.values()) == active
         if ok and ((self._spec_active is not None and active != self._spec_active)

@@ -2813,6 +2813,50 @@ class Glm53Generator(_ReadinessGenerator):
         self.counters["spec_readback_async"] = self.counters.get("spec_readback_async", 0) + int(bool(events))
         return h
 
+    def spec_step_chain(self, kv_cache, m: int, page_row=None) -> list:
+        """GLM53_SPEC_STEPS_PER_CALL (the served adapter's fused_sample verify): up to m speculative steps back to back
+        -> their records in step order (m' in [1, m] of them). Each step is ONE trace replay (verify + accept + draft on
+        the device) whose inputs -- the bonus in the token row, the drafts in the candidate rows, the verify base -- are
+        the previous step's device outputs, so no host write separates the replays and the records equal m' spec_step
+        calls'. Every record's copy is enqueued right behind its own step (the backend spec step's read_async: a fresh
+        host buffer per call), and all are collected (spec_step_collect, in order) after the last replay: one host wait
+        per m' device steps. m' stops short of m where one more step would pass the context / the drafter's cache (the
+        single step's check, per step) or the slot's page-table coverage (every verify position of the m' steps and the
+        last step's drafts inside mapped blocks); the first step keeps spec_step's checks. page_row: as
+        spec_step_submit's (written once, before the first replay)."""
+        b = self._binding(kv_cache)
+        self._spec_settle(b)
+        sp = self.backend.spec
+        if getattr(b, "spec", None) is None:
+            raise RuntimeError("spec_step_chain without spec_enter")
+        K, multi = int(sp.K), bool(self.spec_groups())
+        bases = sorted(b.spec["groups"]) if multi else [0]  # (GLM53_SPEC_PARTIAL: the entered subset)
+        L = {s: int(b.slots[s].seq_len) for s in bases}
+        if page_row is not None:
+            rows = {int(s): r for s, r in page_row.items()} if multi else {0: page_row}
+            self._write_page_rows(b, rows, {s: L[s] + K + 1 for s in rows})
+        lim, bs = self._spec_limit(b), int(self.backend.block_size)
+        if any(L[s] + 2 * K + 1 > lim for s in bases):
+            raise ValueError(f"speculative step at lengths {L}: the next step's positions pass the context")
+        n = 1  # (step j's verify base is at most L + j (K + 1); its drafts reach K past its K + 1 verify positions)
+        while n < int(m) and all(L[s] + (n + 1) * (K + 1) + K <= min(lim, int(b.coverage[s]) * bs) for s in bases):
+            n += 1
+        read_async = getattr(sp, "read_async", None)
+        handles = []
+        for _ in range(n):
+            sp.step()
+            pending, events = read_async() if callable(read_async) else (sp.read(), [])
+            handles.append(SpecPending(binding=b, L=None, pending=pending, events=list(events)))
+        c = self.counters
+        c["spec_readback_async"] = c.get("spec_readback_async", 0) + sum(bool(h.events) for h in handles)
+        c["spec_chains"] = c.get("spec_chains", 0) + 1
+        recs = []
+        for h in handles:  # (collect advances the slots: each record's base is the length the previous one left)
+            h.L = {s: int(b.slots[s].seq_len) for s in bases} if multi else int(b.slots[0].seq_len)
+            b.spec_pending = h
+            recs.append(self.spec_step_collect(h))
+        return recs
+
     def spec_step_collect(self, handle: SpecPending) -> dict:
         """spec_step's host half (once per handle; later calls return the record): wait for the record's copy, parse
         it (the backend spec step's finish_read), slot 0's cache length += n + 1, the bonus = the next input"""
