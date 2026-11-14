@@ -15,8 +15,12 @@ from models.demos.minimax_m3.vision import format
 
 
 class StubEmbeddingReader:
+    """Values are built once per key and kept, so a repeated fetch costs a lookup rather than a fresh
+    randn of the whole value — the store it stands in for returns a view of what it already holds."""
+
     def __init__(self, hidden: int):
         self.hidden = hidden
+        self._values: dict[bytes, memoryview] = {}
 
     def fetch(self, media_key: bytes) -> memoryview:
         return self.fetch_batch([FetchRequest(media_key)])[0]
@@ -29,6 +33,9 @@ class StubEmbeddingReader:
         return out
 
     def _value(self, media_key: bytes) -> memoryview:
+        cached = self._values.get(media_key)
+        if cached is not None:
+            return cached
         try:
             n = stub_key_tokens(media_key)
         except (ValueError, struct.error) as e:
@@ -38,4 +45,5 @@ class StubEmbeddingReader:
         gen = torch.Generator().manual_seed(int.from_bytes(hashlib.sha256(media_key).digest()[:7], "little"))
         rows = (torch.randn(n, self.hidden, generator=gen) * 0.02).to(torch.bfloat16)
         format.embeddings(buf, self.hidden)[:] = rows.view(torch.int16).numpy()
+        self._values[media_key] = buf
         return buf
