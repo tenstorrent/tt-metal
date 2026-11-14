@@ -9,6 +9,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/operations/data_movement/sharded/sharded_common.hpp"
+#include "ttnn/operations/data_movement/common/datacopy_rounding.hpp"
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/math.hpp>
@@ -178,7 +179,12 @@ ProgramDescriptor ShardedToInterleavedPartialProgramFactory::create_descriptor(
         compute_desc.kernel_source = "ttnn/cpp/ttnn/kernel/compute/eltwise_copy.cpp";
         compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
         compute_desc.core_ranges = used_cores;
-        compute_desc.config = ComputeConfigDescriptor{};
+        ComputeConfigDescriptor compute_config{};
+        if (ttnn::operations::data_movement::datacopy_rounds_fp32_to_bf16(
+                input.device()->arch(), input_cb_data_format, output_cb_data_format)) {
+            compute_config.fp32_dest_acc_en = true;
+        }
+        compute_desc.config = compute_config;
         compute_desc.compile_time_args = {num_units_per_shard};
     }
 
