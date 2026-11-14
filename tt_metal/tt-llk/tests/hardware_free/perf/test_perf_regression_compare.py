@@ -12,6 +12,7 @@ Run: pytest test_perf_regression_compare.py
 """
 
 import pathlib
+import runpy
 import sys
 
 import pandas as pd
@@ -28,6 +29,7 @@ from regression_compare import (  # noqa: E402
     compare_runs,
     render_report,
 )
+from test_name_aliases import TEST_NAME_ALIASES  # noqa: E402
 
 # Magnitudes are realistic cycle counts, not toy numbers: the verdict depends on
 # an absolute cycle floor, so a test written at 100 cycles would prove nothing
@@ -164,6 +166,31 @@ def test_renamed_module_compares_through_schema_alias(tmp_path):
     assert {record["test_module"] for record in result["records"]} == {
         "perf_vif_equiv_sweep"
     }
+
+
+def test_sparse_gate_aliases_match_schema_catalog():
+    catalog = runpy.run_path(
+        str(
+            _PERF.parent
+            / "tests"
+            / "python_tests"
+            / "helpers"
+            / "perf"
+            / "test_schemas.py"
+        )
+    )
+    schema_aliases = {}
+    for catalog_name in ("PERF_TEST_SCHEMAS", "PERF_TEST_SCHEMAS_QSR"):
+        for entry in catalog[catalog_name].values():
+            schema_aliases.update(
+                {
+                    old: current
+                    for old, current in entry.get("test_name_aliases", {}).items()
+                    if old != current
+                }
+            )
+
+    assert TEST_NAME_ALIASES == schema_aliases
 
 
 def test_new_config_is_reported_not_flagged(tmp_path):
