@@ -86,7 +86,7 @@ inline void _llk_unpack_A_top32_rm_(
 
         for (std::uint32_t face_index = 0; face_index < num_faces - 1; face_index++)
         {
-            TTI_UNPACR(SrcA, 0b01'00'01'00, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 0);
+            TTI_UNPACR(SrcA, 0b01'00'01'00, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
         }
 
         TTI_UNPACR(SrcA, 0b01'00'01'00, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
