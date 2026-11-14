@@ -52,10 +52,11 @@ inline void llk_unpack_AB_reduce_init(const std::uint32_t operandA, const std::u
     _llk_unpack_reduce_init_<pool_type, reduce_dim>(
         bfd_a, bfd_b, tensor_shape, ckernel::trisc::NUM_TILES, src_2x /*clear_data_src*/);
 
+    // EN_32BIT_DEST does not affect the MxFp4 -> MxFp4_2x_B reconfig validity today; DST_ACCUM_MODE keeps it honest.
     if (src_2x) {
-        _llk_unpack_reconfig_data_format_src_<p_unpacr::UNP_A, false /*EN_32BIT_DEST*/>(
+        _llk_unpack_reconfig_data_format_src_<p_unpacr::UNP_A, DST_ACCUM_MODE>(
             get_operand_src_format(operandA_id), static_cast<std::uint32_t>(DataFormat::MxFp4_2x_B));
-        _llk_unpack_reconfig_data_format_src_<p_unpacr::UNP_B, false /*EN_32BIT_DEST*/>(
+        _llk_unpack_reconfig_data_format_src_<p_unpacr::UNP_B, DST_ACCUM_MODE>(
             get_operand_src_format(operandB_id), static_cast<std::uint32_t>(DataFormat::MxFp4_2x_B));
     }
 }
@@ -71,9 +72,9 @@ inline void llk_unpack_AB_reduce_init(const std::uint32_t operandA, const std::u
 inline void llk_unpack_AB_reduce_uninit(const std::uint32_t operandA) {
     const std::uint32_t operandA_id = get_operand_id(operandA);
     if (static_cast<DataFormat>(get_operand_src_format(operandA_id)) == DataFormat::MxFp4) {
-        _llk_unpack_reconfig_data_format_src_<p_unpacr::UNP_A, false /*EN_32BIT_DEST*/>(
+        _llk_unpack_reconfig_data_format_src_<p_unpacr::UNP_A, DST_ACCUM_MODE>(
             get_operand_src_format(operandA_id), unpack_dst_format[operandA_id]);
-        _llk_unpack_reconfig_data_format_src_<p_unpacr::UNP_B, false /*EN_32BIT_DEST*/>(
+        _llk_unpack_reconfig_data_format_src_<p_unpacr::UNP_B, DST_ACCUM_MODE>(
             get_operand_src_format(operandA_id), unpack_dst_format[operandA_id]);
     }
 }
