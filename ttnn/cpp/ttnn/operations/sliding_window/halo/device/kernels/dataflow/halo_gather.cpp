@@ -17,9 +17,9 @@
 
 constexpr uint16_t TILE_SIZE = 32;
 
-// Runtime args of the block_start_offset == 0 reader when the external halo is on.
+// Runtime args of the block_start_offset == 0 reader when the prologue or the external halo is on.
 namespace reader0_rta {
-enum : uint32_t { CONFIG_INDEX, EXTERNAL_CONFIG_ADDR, HALO_BOUNDARY_ADDR };
+enum : uint32_t { CONFIG_INDEX, EXTERNAL_CONFIG_ADDR, HALO_BOUNDARY_ADDR, PROLOGUE_SCALE_ADDR, PROLOGUE_SHIFT_ADDR };
 }  // namespace reader0_rta
 
 template <uint32_t N, uint16_t PaddingValue>
@@ -314,6 +314,28 @@ void kernel_main() {
     noc.async_read_barrier();
 #endif
 
+#ifdef PROLOGUE_AFFINE
+    // The [1, C] scale and shift tiles for the compute kernel's silu(x * scale + shift), loaded once.
+    if constexpr (block_start_offset == 0) {
+        constexpr auto affine_scale_args = TensorAccessorArgs<PROLOGUE_AFFINE_CTA>();
+        constexpr auto affine_shift_args = TensorAccessorArgs<affine_scale_args.next_compile_time_args_offset()>();
+        const auto scale_accessor = TensorAccessor(
+            affine_scale_args, get_arg_val<uint32_t>(reader0_rta::PROLOGUE_SCALE_ADDR), PROLOGUE_TILE_BYTES);
+        const auto shift_accessor = TensorAccessor(
+            affine_shift_args, get_arg_val<uint32_t>(reader0_rta::PROLOGUE_SHIFT_ADDR), PROLOGUE_TILE_BYTES);
+        experimental::CB scale_cb(PROLOGUE_SCALE_CB);
+        experimental::CB shift_cb(PROLOGUE_SHIFT_CB);
+        scale_cb.reserve_back(PROLOGUE_NTILES);
+        shift_cb.reserve_back(PROLOGUE_NTILES);
+        for (uint32_t t = 0; t < PROLOGUE_NTILES; t++) {
+            noc_async_read_page(t, scale_accessor, scale_cb.get_write_ptr() + t * PROLOGUE_TILE_BYTES);
+            noc_async_read_page(t, shift_accessor, shift_cb.get_write_ptr() + t * PROLOGUE_TILE_BYTES);
+        }
+        noc_async_read_barrier();
+        scale_cb.push_back(PROLOGUE_NTILES);
+        shift_cb.push_back(PROLOGUE_NTILES);
+    }
+#endif
     const uint16_t my_noc_x = my_x[noc.get_noc_id()];
     const uint16_t my_noc_y = my_y[noc.get_noc_id()];
 
