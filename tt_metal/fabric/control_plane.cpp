@@ -394,7 +394,7 @@ void ControlPlane::init_control_plane(
     std::optional<std::reference_wrapper<const std::map<FabricNodeId, ChipId>>>
         logical_mesh_chip_id_to_physical_chip_id_mapping) {
     const auto& cluster = this->cluster_.get();
-    const auto& driver = cluster.get_driver();
+    const auto& driver = this->cluster_.get().get_driver();
     const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
     const auto& rtoptions = this->rtoptions_.get();
 
@@ -525,6 +525,11 @@ void ControlPlane::init_control_plane(
     // with a FabricConfig that differs from peers.
     this->routing_table_generator_ = std::make_unique<RoutingTableGenerator>(*this->topology_mapper_);
 
+    if (this->fabric_uses_flat_addressing() && this->get_fabric_config() != FabricConfig::DISABLED) {
+        this->fabric_over_noc_routing_table_generator_ =
+            std::make_unique<FabricOverNocRoutingTableGenerator>(*this->topology_mapper_, this->cluster_.get());
+    }
+
     this->generate_intermesh_connectivity();
 
     // After intermesh, so intra-mesh directions and the mesh graph are settled.
@@ -551,7 +556,7 @@ void ControlPlane::init_control_plane(
 
 void ControlPlane::init_control_plane_auto_discovery() {
     const auto& cluster = this->cluster_.get();
-    const auto& driver = cluster.get_driver();
+    const auto& driver = this->cluster_.get().get_driver();
     const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
     const auto& rtoptions = this->rtoptions_.get();
     // MGD_DEFAULT is allowed: it is resolved below from the mesh graph auto-discovery generates.
@@ -633,6 +638,15 @@ void ControlPlane::init_control_plane_auto_discovery() {
         topology_mapping_timeout,
         this->physical_system_descriptor_.get());
     this->load_physical_chip_mapping(topology_mapper_->get_local_logical_mesh_chip_id_to_physical_chip_id_mapping());
+
+    // Horizon x2: AXI crossbar is invisible to Topology Mapper and will not be detected in auto-discovery
+    // Current workaround is to force users to supply a custom Horizon MGD file and chip mapping (see
+    // FabricUnicastWrite2DevBothChipsFixture::SetUp() in test_horizon_x2_fabric_unicast_write.cpp for details). Issue
+    // tracked in #64515
+    TT_FATAL(
+        this->get_fabric_config() == FabricConfig::DISABLED || !(this->fabric_uses_flat_addressing()),
+        "Auto-discovery does not work for Fabric over NoC-based topologies, supply an MGD file and chip mapping "
+        "instead.");
 
     // Automatically export physical chip mesh coordinate mapping to generated/fabric directory after topology mapper is
     // created This ensures ttnn-visualizer topology remains functional
@@ -934,7 +948,10 @@ void ControlPlane::initialize_fabric_context() {
 void ControlPlane::load_physical_chip_mapping(
     const std::map<FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
     this->logical_mesh_chip_id_to_physical_chip_id_mapping_ = logical_mesh_chip_id_to_physical_chip_id_mapping;
-    this->validate_mesh_connections();
+    // Fabric-over-NoC architectures have no ethernet links, so skip checking their connections
+    if (!this->fabric_uses_flat_addressing()) {
+        this->validate_mesh_connections();
+    }
 }
 
 const tt::tt_metal::PhysicalSystemDescriptor& ControlPlane::descriptor_to_map_on() const {
@@ -1607,6 +1624,53 @@ size_t ControlPlane::get_num_live_routing_planes(
         fabric_node_id.mesh_id,
         fabric_node_id.chip_id);
     return this->router_port_directions_to_num_routing_planes_map_.at(fabric_node_id).at(routing_direction);
+}
+
+bool ControlPlane::fabric_uses_flat_addressing() const {
+    if (this->logical_mesh_chip_id_to_physical_chip_id_mapping_.empty()) {
+        return false;
+    }
+    const auto& first = *this->logical_mesh_chip_id_to_physical_chip_id_mapping_.begin();
+    const uint32_t phys_id = first.second;
+    const auto ip_variant = this->cluster_.get().get_soc_desc(phys_id).get_arch_descriptor().get_ip_variant();
+    return this->cluster_.get().arch() == tt::ARCH::QUASAR && ip_variant == tt::IpVariant::HORIZON;
+}
+
+tt::tt_fabric::fabric_flat_address_routing_l1_info_t ControlPlane::init_fabric_flat_address_routing_table_(
+    const FabricNodeId& src_node) const {
+    tt::tt_fabric::fabric_flat_address_routing_l1_info_t routing_table = {};
+    routing_table.my_mesh_id = *src_node.mesh_id;
+    routing_table.my_device_id = src_node.chip_id;
+    return routing_table;
+}
+
+void ControlPlane::configure_routing_tables_for_fabric_flat_address() {
+    this->fabric_flat_address_routing_tables_.clear();
+
+    this->fabric_over_noc_routing_table_generator_->generate_routing_table();
+    const auto& flat_addr_table = this->fabric_over_noc_routing_table_generator_->get_routing_table();
+
+    for (const auto& [src_node, src_phys] : this->logical_mesh_chip_id_to_physical_chip_id_mapping_) {
+        auto routing_table = this->init_fabric_flat_address_routing_table_(src_node);
+
+        for (const auto& [dst_node, dst_phys] : this->logical_mesh_chip_id_to_physical_chip_id_mapping_) {
+            // Index by physical chip ID — the kernel receives dst_dev_id as the physical chip ID.
+            const auto& entry = flat_addr_table[0][src_phys][dst_phys];
+            for (uint32_t x = 0; x < tt::tt_fabric::MAX_HORIZON_NOC_X; x++) {
+                for (uint32_t y = 0; y < tt::tt_fabric::MAX_HORIZON_NOC_Y; y++) {
+                    routing_table.flat_addr[0][dst_phys][x][y] = entry.flat_addr[x][y];
+                }
+            }
+        }
+
+        this->fabric_flat_address_routing_tables_[src_phys] = routing_table;
+        log_info(
+            tt::LogFabric,
+            "Fabric-over-NoC routing table built for chip {} (my_mesh={} my_device={})",
+            src_phys,
+            routing_table.my_mesh_id,
+            routing_table.my_device_id);
+    }
 }
 
 // Only builds the routing table representation, does not actually populate the routing tables in memory of the
@@ -2963,8 +3027,22 @@ void ControlPlane::write_fabric_telemetry_to_all_chips(const FabricNodeId& fabri
     this->cluster_.get().l1_barrier(physical_chip_id);
 }
 
-void ControlPlane::write_routing_tables_to_all_chips() const {
-    // Configure the routing tables on the chips
+void ControlPlane::write_routing_tables_for_fabric_flat_address_() const {
+    for (const auto& [phys_chip_id, info] : this->fabric_flat_address_routing_tables_) {
+        write_to_all_cores(
+            *this,
+            this->cluster_,
+            this->hal_,
+            &info,
+            sizeof(info),
+            tt::tt_metal::HalL1MemAddrType::ROUTING_TABLE,
+            phys_chip_id,
+            tt::tt_metal::HalProgrammableCoreType::TENSIX);
+        this->cluster_.get().l1_barrier(phys_chip_id);
+    }
+}
+
+void ControlPlane::write_routing_tables_for_fabric_ethernet_() const {
     TT_ASSERT(
         this->intra_mesh_routing_tables_.size() == this->inter_mesh_routing_tables_.size(),
         "Intra mesh routing tables size mismatch with inter mesh routing tables");
@@ -3000,6 +3078,14 @@ void ControlPlane::write_routing_tables_to_all_chips() const {
             this->write_fabric_connections_to_tensix_cores(fabric_node_id.mesh_id, fabric_node_id.chip_id);
             this->write_fabric_telemetry_to_all_chips(fabric_node_id);
         }
+    }
+}
+
+void ControlPlane::write_routing_tables_to_all_chips() const {
+    if (this->fabric_uses_flat_addressing()) {
+        this->write_routing_tables_for_fabric_flat_address_();
+    } else {
+        this->write_routing_tables_for_fabric_ethernet_();
     }
 }
 
@@ -3433,7 +3519,7 @@ void ControlPlane::write_udm_fabric_connections_to_tensix_cores(
     std::unordered_set<tt::tt_metal::CoreCoord> dispatch_mux_cores_translated =
         tensix_config.get_translated_dispatch_mux_cores();
 
-    const auto& soc_desc = cluster.get_soc_desc(physical_chip_id);
+    const auto& soc_desc = this->cluster_.get().get_soc_desc(physical_chip_id);
     const std::vector<tt::umd::CoreCoord>& all_tensix_cores =
         soc_desc.get_cores(CoreType::TENSIX, CoordSystem::TRANSLATED);
 

@@ -15,6 +15,7 @@
 // UMD: EthCoord is a UMD type alias used in the private method
 // get_physical_chip_id_from_eth_coord(). No tt-metalium equivalent exists yet.
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
+#include <tt-metalium/experimental/fabric/fabric_over_noc_routing_table_generator.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/context/metal_env.hpp>
@@ -39,6 +40,8 @@ struct EthCoord;
 
 namespace umd {
 class ClusterDescriptor;
+class TTDevice;
+struct CoreCoord;
 }
 
 namespace llrt {
@@ -131,6 +134,8 @@ public:
     void print_all_ethernet_connections() const;
 
     // Converts chip level routing tables to per ethernet channel
+    bool fabric_uses_flat_addressing() const;
+    void configure_routing_tables_for_fabric_flat_address();
     void configure_routing_tables_for_fabric_ethernet_channels();
     void write_routing_tables_to_all_chips() const;
     void write_fabric_telemetry_to_all_chips(const FabricNodeId& fabric_node_id) const;
@@ -451,6 +456,7 @@ private:
     std::unique_ptr<tt::tt_metal::PhysicalSystemDescriptor> fsd_physical_system_descriptor_;
     std::unique_ptr<tt::tt_fabric::TopologyMapper> topology_mapper_;
     std::unique_ptr<RoutingTableGenerator> routing_table_generator_;
+    std::unique_ptr<FabricOverNocRoutingTableGenerator> fabric_over_noc_routing_table_generator_;
     std::unique_ptr<MeshGraph> mesh_graph_;
     // The live view re-discovered by refresh_connectivity_diff(). Held as a member because
     // link_health_ keeps a pointer to it between refreshes; physical_system_descriptor_ cannot be
@@ -481,6 +487,9 @@ private:
         intra_mesh_routing_tables_;  // table that will be written to each ethernet core
     std::map<FabricNodeId, std::vector<std::vector<chan_id_t>>>
         inter_mesh_routing_tables_;  // table that will be written to each ethernet core
+    // Fabric-over-NOC architectures: pre-built routing structs keyed by physical chip id.
+    // Populated by configure_routing_tables_for_fabric_flat_address() during discovery phase.
+    std::map<uint32_t, tt::tt_fabric::fabric_flat_address_routing_l1_info_t> fabric_flat_address_routing_tables_;
     // Store the logical direction assigned to each exit node (an exit node is fully specified by
     // a FabricNodeId and logical channel id)
     std::map<FabricNodeId, std::unordered_map<chan_id_t, RoutingDirection>> exit_node_directions_;
@@ -575,6 +584,10 @@ private:
 
     using Routing2DActionVectors = std::array<std::uint8_t, Routing2DCodec::ACTION_VECTOR_CAPACITY_BYTES>;
 
+    void write_routing_tables_for_fabric_flat_address_() const;
+    void write_routing_tables_for_fabric_ethernet_() const;
+    tt::tt_fabric::fabric_flat_address_routing_l1_info_t init_fabric_flat_address_routing_table_(
+        const FabricNodeId& src_node) const;
     void write_routing_tables_to_eth_cores(MeshId mesh_id, ChipId chip_id) const;
     void write_routing_info_to_devices(
         MeshId mesh_id,

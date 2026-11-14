@@ -2518,4 +2518,10 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state(
 }  // namespace tt::tt_fabric::mesh::experimental
 
 // API IMPL files for new architectures will be included here as they are added
+#if defined(ARCH_WORMHOLE) || defined(ARCH_BLACKHOLE)
 #include "tt_metal/fabric/hw/inc/mesh/tt-1xx/api_impl.h"
+#elif defined(ARCH_QUASAR) && defined(IP_VARIANT_HORIZON)
+#include "tt_metal/fabric/hw/inc/mesh/tt-2xx/quasar_horizon/api_impl.h"
+#else
+#error "API for requested architecture not found"
+#endif

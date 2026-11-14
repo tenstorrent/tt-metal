@@ -878,7 +878,7 @@ public:
     }
     // True when TT_METAL_NOC_ATT was set explicitly.
     bool is_noc_att_specified() const { return noc_att_specified_; }
-    void set_noc_att_map(std::string map) { noc_att_map_ = std::move(map); }
+    void set_noc_att_map(const std::string& map) { noc_att_map_ = map; }
 
     bool get_skip_eth_cores_with_retrain() const { return skip_eth_cores_with_retrain; }
 

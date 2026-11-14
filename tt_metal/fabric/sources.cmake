@@ -21,6 +21,7 @@ set(FABRIC_SOURCES
     control_plane.cpp
     mesh_graph_descriptor.cpp
     routing_table_generator.cpp
+    fabric_over_noc_routing_table_generator.cpp
     axis_route_topology.cpp
     mcast_reverse_tree.cpp
     mesh_graph.cpp
