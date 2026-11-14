@@ -39,8 +39,9 @@ class Native:
             raise RuntimeError("synchronize_device inside capture")
         self.syncs += 1
 
-    def allocate_tensor_on_device(self, shape, *args):
-        out = SimpleNamespace(shape=shape)
+    def allocate_tensor_on_device(self, spec, *args):
+        # `spec` is `tensor()`'s (*shape, dtype): the allocation has that shape, dtype and device, like ttnn's.
+        out = SimpleNamespace(shape=spec[:-1], spec=spec, get_dtype=lambda: spec[-1], device=lambda: "mesh")
         self.allocated.append(out)
         return out
 
@@ -111,6 +112,11 @@ def vocoder(m, native):
     return obj
 
 
+def live_trace(v, key="z"):
+    """Mark a captured trace at another key live on `v`: no eager warm may run then."""
+    type(v)._forward_device._tracers_keyed[v] = {key: SimpleNamespace(trace_captured=True)}
+
+
 def tensor(length=32, dtype="bf16"):
     return SimpleNamespace(
         shape=(1, length, 32), spec=(1, length, 32, dtype), get_dtype=lambda: dtype, device=lambda: "mesh"
@@ -170,6 +176,53 @@ class PreparationTest(unittest.TestCase):
         self.assertTrue(p.trace_audio)
         self.assertFalse(p._warming_audio_trace)
 
+    def test_skipped_decode_warm_keeps_the_audio_warm_a_capture_needs(self):
+        # MINIMAX_H3_WARMUP_SKIP_DECODE_WARM=1 skips the VAE canvas warm; the audio length warm stays when audio
+        # is traced, because each capture needs its length's eager warm and none may run once a trace is live.
+        for trace_audio, expected in ((True, [False, False, True, True, True, True]), (False, [])):
+            with self.subTest(trace_audio=trace_audio):
+                native = Native()
+                m = manager(native)
+                names = {"warmup", "_warm_audio_decode", "_capture_audio", "_audio_ccl_transient"}
+                ns = {
+                    "_skip_decode_warm": lambda: True,
+                    "_is_host_rank": lambda: False,
+                    "tqdm": SimpleNamespace(tqdm=lambda x, **kw: x),
+                    "sys": SimpleNamespace(stderr=None),
+                    "_TQDM_BAR_FORMAT": "",
+                }
+                cls = type(
+                    "Pipeline",
+                    (),
+                    methods("pipelines/minimax_h3/pipeline_minimax_h3.py", "MiniMaxH3Pipeline", names, ns),
+                )
+                p = cls()
+                p.dynamic_length = False
+                p.bucket_denoise = True
+                p.trace_audio = trace_audio
+                p.use_persistent_ccl_buffers = False
+                p.audio_ccl_manager = m
+                p.vae_output_type = "yuv420"
+                p.mesh_device = SimpleNamespace(num_program_cache_entries=lambda: 0)
+                p._warm_denoise_buckets = lambda *args: {}
+                p._warm_vae_decode = lambda: self.fail("the VAE canvas warm is skipped")
+                p._warm_prompt_encoder = lambda: None
+                p._host_log = lambda *args: None
+                p._audio_warm_inputs = lambda: [tensor(32), tensor(64)]
+                v = vocoder(m, native)
+                live = type(v)._forward_device._tracers_keyed.setdefault(v, {})
+
+                def decode(x, traced=False):
+                    out = v.forward_device_BTC(x, t_pad=0, traced=traced, trace_key=x.shape)
+                    if traced:
+                        live[x.shape] = SimpleNamespace(trace_captured=True)  # what a real capture leaves
+                    return out
+
+                p._prepare_audio_decoder = lambda: decode
+                p._capture_traces = lambda prompt, fitted, overrides, trace_audio: p._capture_audio(trace_audio)
+                p.warmup()
+                self.assertEqual(v.calls, expected)
+
     def test_untraced_nonpersistent_policy_still_releases_buffers(self):
         ns = methods("pipelines/minimax_h3/pipeline_minimax_h3.py", "MiniMaxH3Pipeline", {"_audio_ccl_transient"}, {})
         for trace, warming, persistent in [
@@ -196,6 +249,9 @@ class PreparationTest(unittest.TestCase):
         a, b = vocoder(m, native), vocoder(m, native)
         x = tensor()
         a.forward_device_BTC(x, t_pad=0, trace_key="a")
+        # With a trace live no eager warm can run, so a mismatch is rejected rather than re-warmed.
+        live_trace(a)
+        live_trace(b)
         for target, value, pad, key in [
             (b, x, 0, "a"),
             (a, tensor(64), 0, "a"),
@@ -216,6 +272,7 @@ class PreparationTest(unittest.TestCase):
                 v = vocoder(m, native)
                 x = tensor()
                 v.forward_device_BTC(x, t_pad=0, trace_key="a")
+                live_trace(v)
                 if mutation == "mesh":
                     v.mesh_device = object()
                 elif mutation == "manager":
@@ -259,11 +316,11 @@ class PreparationTest(unittest.TestCase):
             with self.assertRaises(type(error)):
                 v.forward_device_BTC(x, t_pad=0, trace_key="a")
             v.fail = None
-            with self.assertRaisesRegex(RuntimeError, "prepar|warm"):
-                v.forward_device_BTC(x, t_pad=0, traced=True, trace_key="a")
+            self.assertEqual(v._prepared_audio_ccl, {})
             self.assertIsNone(getattr(m, "_audio_buffer_record", None))
-            v.forward_device_BTC(x, t_pad=0, trace_key="a")
+            # Nothing was prepared, so the traced call runs its own eager warm before the capture.
             v.forward_device_BTC(x, t_pad=0, traced=True, trace_key="a")
+            self.assertEqual(v.calls, [False, False, True])
 
     def test_eager_after_capture_requires_release(self):
         native = Native()
@@ -295,8 +352,55 @@ class PreparationTest(unittest.TestCase):
         x = tensor()
         v.forward_device_BTC(x, t_pad=0, trace_key="a")
         v.release_trace()
+        self.assertEqual(v._prepared_audio_ccl, {})
+        live_trace(v)
         with self.assertRaisesRegex(RuntimeError, "prepar|warm"):
             v.forward_device_BTC(x, t_pad=0, traced=True, trace_key="a")
+        self.assertEqual(v.calls, [False])
+
+    def test_traced_decode_after_release_warms_eagerly_before_capture(self):
+        # A server guard calls the pipeline's release_traces() and then a traced decode (ltx-server
+        # _h3_guard_audio_trace). The capture must not run over unprepared buffers: with no trace live the
+        # traced call first runs the eager warm itself, on a copy of its input, then captures from the input.
+        native = Native()
+        m = manager(native)
+        v = vocoder(m, native)
+        x = tensor()
+        v.forward_device_BTC(x, t_pad=0, trace_key="a")
+        v.forward_device_BTC(x, t_pad=0, traced=True, trace_key="a")
+        v.release_trace()
+        copies = len(native.copies)
+        seen = []
+        forward = type(v)._forward_device
+
+        def record(self, x_in, *, traced=False, tracer_trace_key=None):
+            seen.append((x_in, traced))
+            return forward(self, x_in, traced=traced, tracer_trace_key=tracer_trace_key)
+
+        record._tracers_keyed = forward._tracers_keyed
+        type(v)._forward_device = record
+        v.forward_device_BTC(x, t_pad=0, traced=True, trace_key="a")
+        self.assertEqual(v.calls, [False, True, False, True])
+        (warm_in, warm_traced), (cap_in, cap_traced) = seen
+        self.assertFalse(warm_traced)
+        self.assertTrue(cap_traced)
+        self.assertIsNot(warm_in, x)
+        self.assertIs(cap_in, x)
+        # the warm's input copy and its own replay-copy slot, both freed (Native raises on a sync or copy in capture)
+        self.assertEqual([src for src, _ in native.copies[copies:]], [x, warm_in])
+        self.assertIn(warm_in, native.freed)
+        # prepared again: the next traced call replays without another warm
+        v.forward_device_BTC(x, t_pad=0, traced=True, trace_key="a")
+        self.assertEqual(v.calls, [False, True, False, True, True])
+
+    def test_new_shape_with_a_live_trace_is_still_rejected(self):
+        native = Native()
+        v = vocoder(manager(native), native)
+        v.forward_device_BTC(tensor(32), t_pad=0, trace_key=(32,))
+        live_trace(v, (32,))
+        with self.assertRaisesRegex(RuntimeError, "prepar|warm"):
+            v.forward_device_BTC(tensor(64), t_pad=0, traced=True, trace_key=(64,))
+        self.assertEqual(v.calls, [False])
 
     def test_eager_warm_compiles_the_replay_input_copy(self):
         # A replay copies its input into the trace's slot (ttnn.copy); the eager warm builds that program first.
@@ -308,7 +412,7 @@ class PreparationTest(unittest.TestCase):
         self.assertEqual(len(native.copies), 1)
         src, slot = native.copies[0]
         self.assertIs(src, x)
-        self.assertEqual(slot.shape, x.spec)
+        self.assertEqual(slot.spec, x.spec)
         self.assertEqual(native.freed, [slot])
         v.forward_device_BTC(x, t_pad=0, traced=True, trace_key="a")
         self.assertEqual(len(native.copies), 1)

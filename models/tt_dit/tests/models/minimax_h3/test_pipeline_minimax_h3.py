@@ -18,12 +18,18 @@ from __future__ import annotations
 import os
 
 import pytest
+import torch
 from loguru import logger
 
 import ttnn
 
 from ....models.transformers.minimax_h3.length_classes import length_class
-from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS, resolve_canvas_size
+from ....pipelines.minimax_h3.packing import (
+    MINIMAX_H3_AUDIO_CHANNELS,
+    MINIMAX_H3_FPS,
+    audio_latent_num_frames,
+    resolve_canvas_size,
+)
 from ....pipelines.minimax_h3.pipeline_minimax_h3 import (
     _DIT_FSDP_ENV,
     _DYNAMIC_LENGTH_ENV,
@@ -395,6 +401,73 @@ def test_t2va_dynamic_length_zero_misses_full_warm(mesh_device, reset_seeds):
     )
     assert_generation_ok(output, align_num_frames(get_num_frames(10)))
     _assert_no_denoise_misses(pipeline, 5, 10)
+    pipeline.release_traces()
+
+
+def _assert_same_audio(reference: torch.Tensor, waveform: torch.Tensor, label: str) -> None:
+    """Bit-identical, else a waveform PCC of at least 0.999."""
+    assert waveform.shape == reference.shape, f"{label}: shape {tuple(waveform.shape)} != {tuple(reference.shape)}"
+    if torch.equal(waveform, reference):
+        logger.info(f"{label}: bit-identical to the untraced decode")
+        return
+    pcc = torch.corrcoef(torch.stack([reference.flatten().double(), waveform.flatten().double()]))[0, 1].item()
+    logger.info(f"{label}: waveform PCC {pcc:.6f} against the untraced decode")
+    assert pcc >= 0.999, f"{label}: waveform PCC {pcc:.6f} < 0.999"
+
+
+# MESH_4X8_RING reserves no trace region; the audio traces need one (sulphur's galaxy worker reserves 640 MiB).
+MESH_4X8_RING_AUDIO_TRACE = pytest.param(
+    (4, 8), {**MESH_4X8_RING.values[1], "trace_region_size": 640 << 20}, id="4x8_audio_trace", marks=MESH_4X8_RING.marks
+)
+
+
+@pytest.mark.timeout(3600)
+@pytest.mark.parametrize(
+    ("mesh_device", "device_params"), [MESH_4X8_RING_AUDIO_TRACE], indirect=["mesh_device", "device_params"]
+)
+def test_traced_audio_decode_after_release(mesh_device, reset_seeds):
+    """A traced audio decode right after `release_traces` captures cleanly and matches the untraced decode.
+
+    A server guard (ltx-server's `_h3_guard_audio_trace`) calls `release_traces` before a decode whenever the job
+    compiled programs since the warm, then decodes traced. The release drops the decoder's prepared CCL buffers
+    and tpad masks, so the capture must run its own eager warm first instead of failing.
+    """
+    weights = weights_dir("transformer", "text_encoder", "vae", "audio_vae")
+    pipeline = MiniMaxH3Pipeline.create_pipeline(
+        mesh_device=mesh_device,
+        weights_dir=weights,
+        vae_output_type="yuv420",
+        dynamic_length=False,
+        warmup=False,
+        trace_audio=True,
+    )
+    assert pipeline.trace_audio and pipeline.bucket_denoise
+    decoder = pipeline._prepare_audio_decoder()
+    channels = pipeline.audio_config["latent_channels"]
+    generator = torch.Generator().manual_seed(SEED)
+
+    def rows_for(duration_s: int) -> tuple[torch.Tensor, int]:
+        num_latents = audio_latent_num_frames(get_num_frames(duration_s))
+        return torch.randn(MINIMAX_H3_AUDIO_CHANNELS * num_latents, channels, generator=generator), num_latents
+
+    def decode(rows: torch.Tensor, num_latents: int, *, traced: bool) -> torch.Tensor:
+        pipeline.trace_audio = traced
+        try:
+            return pipeline._decode_audio(decoder, rows, num_latents)
+        finally:
+            pipeline.trace_audio = True
+
+    five, four = rows_for(5), rows_for(4)
+    reference5 = decode(*five, traced=False)
+    reference4 = decode(*four, traced=False)
+    # What the guard does: release, then decode traced with no eager warm in between.
+    pipeline.release_traces()
+    _assert_same_audio(reference5, decode(*five, traced=True), "capture after release_traces")
+    _assert_same_audio(reference5, decode(*five, traced=True), "replay")
+    # A new length after a second release.
+    pipeline.release_traces()
+    _assert_same_audio(reference4, decode(*four, traced=True), "capture of a new length after release_traces")
+    _assert_same_audio(reference4, decode(*four, traced=True), "replay of the new length")
     pipeline.release_traces()
 
 

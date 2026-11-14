@@ -467,14 +467,26 @@ class Vocoder(Module):
             return self._device_to_host(y_dev)
         key = (trace_key, tuple(x_dev.shape), x_dev.get_dtype(), t_pad, id(self.mesh_device))
         manager = self.ccl_manager
+        tracers = type(self)._forward_device._tracers_keyed.get(self, {})
+        trace_live = any(t.trace_captured for t in tracers.values())
         if traced:
             prepared = self._prepared_audio_ccl.get(key)
+            if (prepared is None or prepared[0] is not manager) and not trace_live:
+                # No trace is live (first decode after `release_trace`, e.g. a server's guard that releases
+                # before a decode, or a warm that skipped the decode warm): run the eager warm a capture needs
+                # here, on a copy because the forward may free its input. Its output is dropped; the capture
+                # below computes the result as before. With another trace live an eager warm is unsafe, so
+                # that case still raises.
+                warm = ttnn.allocate_tensor_on_device(x_dev.spec, x_dev.device())
+                ttnn.copy(x_dev, warm)
+                self.forward_device_BTC(warm, t_pad=t_pad, traced=False, trace_key=trace_key)
+                ttnn.deallocate(warm)
+                prepared = self._prepared_audio_ccl.get(key)
             if prepared is None or prepared[0] is not manager:
                 raise RuntimeError("audio CCL is not prepared for this decoder/shape; warm before capture")
             buffers = prepared[1]
         else:
-            tracers = type(self)._forward_device._tracers_keyed.get(self, {})
-            if any(t.trace_captured for t in tracers.values()):
+            if trace_live:
                 raise RuntimeError("release audio traces before eager warmup")
             self._prepared_audio_ccl.pop(key, None)
             buffers = None

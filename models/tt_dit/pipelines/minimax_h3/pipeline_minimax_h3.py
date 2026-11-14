@@ -2636,10 +2636,12 @@ class MiniMaxH3Pipeline:
             else:
                 fitted = self._warm_denoise_buckets(prompt, generation_kwargs, overrides)
             # Diagnostic mode (MINIMAX_H3_WARMUP_SKIP_DECODE_WARM=1): skip the decode length/canvas warms
-            # (the audio length warm has hung on this mesh).
-            if not _skip_decode_warm():
-                if self.vae_output_type == "yuv420":
-                    self._warm_vae_decode()
+            # (the audio length warm has hung on this mesh). An audio capture needs the eager warm of every
+            # length it captures (it prepares the trace's CCL buffers), so with audio traced that warm stays.
+            skip_decode_warm = _skip_decode_warm()
+            if not skip_decode_warm and self.vae_output_type == "yuv420":
+                self._warm_vae_decode()
+            if not skip_decode_warm or trace_audio:
                 self._warm_audio_decode()
             self._warm_prompt_encoder()
             # Every program is compiled by now; traces are captured last.
@@ -3090,9 +3092,9 @@ class MiniMaxH3Pipeline:
         self._release_denoise_traces()
 
     def _release_denoise_traces(self) -> None:
-        """Release only the denoise traces. The audio decoder's release also drops the vocoder's
-        tpad masks, which only an eager decode rebuilds; an audio capture after that would write
-        them inside the trace."""
+        """Release only the denoise traces. The audio decoder's release also drops its traces, the
+        vocoder's tpad masks and its prepared CCL buffers, so its next traced decode pays an eager
+        warm and a capture again."""
         transformer = self._transformer
         if transformer is None:
             return
