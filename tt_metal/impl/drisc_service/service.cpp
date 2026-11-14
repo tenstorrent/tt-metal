@@ -277,6 +277,20 @@ std::array<Seat, 2> bank_seats(tt::umd::Cluster& cluster, ChipId chip, const met
             soc.get_dram_core_for_channel(channel, static_cast<int>(sub), tt::CoordSystem::TRANSLATED);
         bank_noc_xy_addr[sub] = static_cast<uint16_t>(abi::noc_xy(c.x, c.y));
     }
+    std::array<std::vector<uint16_t>, 2> stream_dram_noc_xy_addr;
+    for (uint32_t view = 0; view < soc.get_num_dram_views(); view++) {
+        const int view_channel = static_cast<int>(soc.get_channel_for_dram_view(static_cast<int>(view)));
+        for (uint32_t sub = 0; sub < abi::BANK_ENDPOINTS; sub++) {
+            const tt::umd::CoreCoord c =
+                soc.get_dram_core_for_channel(view_channel, static_cast<int>(sub), tt::CoordSystem::TRANSLATED);
+            const uint8_t mask = soc.get_dram_endpoint_noc_mask(CoreCoord(c.x, c.y));
+            for (uint32_t noc = 0; noc < stream_dram_noc_xy_addr.size(); noc++) {
+                if (((mask >> noc) & 1u) == 0) {
+                    stream_dram_noc_xy_addr[noc].push_back(static_cast<uint16_t>(abi::noc_xy(c.x, c.y)));
+                }
+            }
+        }
+    }
     std::array<Seat, 2> seats{};
     for (uint32_t noc = 0; noc < seats.size(); noc++) {
         const CoreCoord translated = soc.get_physical_dram_core_from_logical(logical.at(1 - noc));
@@ -300,7 +314,8 @@ std::array<Seat, 2> bank_seats(tt::umd::Cluster& cluster, ChipId chip, const met
                 {.asic_id = asic_id, .noc0_x = static_cast<uint32_t>(noc0.x), .noc0_y = static_cast<uint32_t>(noc0.y)},
             .noc2axi_mask = mask,
             .bank_size = soc.dram_view_size,
-            .bank_noc_xy_addr = bank_noc_xy_addr};
+            .bank_noc_xy_addr = bank_noc_xy_addr,
+            .stream_dram_noc_xy_addr = stream_dram_noc_xy_addr[noc]};
     }
     return seats;
 }
@@ -514,11 +529,46 @@ void SeatClient::validate(const abi::KernelCommand& command) const {
         "drisc_service: source {:#x} + {} B lies in a peer window, which must never be read through",
         command.src_addr,
         command.size);
+    if (abi::command_kind(command) != abi::CMD_SINGLE) {
+        return;
+    }
+    // The kernel reads such a source with the GDDR DMA engine, whatever endpoint it names (its dma_readable()).
+    const bool src_by_dma = command.size % abi::LOCAL_SIZE_ALIGN == 0 &&
+                            in_own_bank(command.src_noc_xy_addr, command.src_addr, command.size);
+    const auto expect_noc2axi = [&](const char* side, uint16_t noc_xy_addr) {
+        TT_FATAL(
+            std::ranges::find(seat_.stream_dram_noc_xy_addr, noc_xy_addr) == seat_.stream_dram_noc_xy_addr.end(),
+            "drisc_service: {} coords {:#x} are a DRAM core whose NIU for NoC{} is in stream mode, so the access would "
+            "reach that DRISC's L1, not DRAM; name the bank's NoC{} endpoint (get_preferred_worker_core_for_dram_view)",
+            side,
+            noc_xy_addr,
+            seat_.noc,
+            seat_.noc);
+    };
+    if (!src_by_dma) {
+        expect_noc2axi("source", command.src_noc_xy_addr);
+    }
+    expect_noc2axi("destination", command.dst_noc_xy_addr);
+}
+
+bool SeatClient::in_own_bank(uint16_t noc_xy_addr, uint64_t addr, uint32_t size) const {
+    return std::ranges::find(seat_.bank_noc_xy_addr, noc_xy_addr) != seat_.bank_noc_xy_addr.end() &&
+           size <= seat_.bank_size && addr <= seat_.bank_size - size;
+}
+
+abi::KernelCommand SeatClient::local_if_own_bank(const abi::KernelCommand& command) const {
+    if (abi::command_kind(command) != abi::CMD_SINGLE || command.size % abi::LOCAL_SIZE_ALIGN != 0 ||
+        !in_own_bank(command.src_noc_xy_addr, command.src_addr, command.size) ||
+        !in_own_bank(command.dst_noc_xy_addr, command.dst_addr, command.size)) {
+        return command;
+    }
+    return abi::make_local_command(command.src_addr, command.dst_addr, command.size);
 }
 
 std::optional<uint64_t> SeatClient::issue(const abi::KernelCommand& command) {
-    validate(command);
-    return post(command);
+    const abi::KernelCommand sent = local_if_own_bank(command);
+    validate(sent);
+    return post(sent);
 }
 
 std::optional<uint64_t> SeatClient::post(const abi::KernelCommand& command) {
@@ -559,13 +609,15 @@ std::optional<uint64_t> SeatClient::issue_batch(std::span<const abi::KernelComma
         abi::BATCH_MAX_COMMANDS,
         commands.size());
     for (const abi::KernelCommand& command : commands) {
-        validate(command);
+        validate(local_if_own_bank(command));
     }
     if (in_flight() >= abi::CLIENT_QUEUE_CAPACITY) {
         return std::nullopt;
     }
     const uint32_t entry = issued_ % abi::CLIENT_QUEUE_CAPACITY;
-    std::copy(commands.begin(), commands.end(), batch_slots_ + entry * abi::BATCH_MAX_COMMANDS);
+    std::ranges::transform(commands, batch_slots_ + entry * abi::BATCH_MAX_COMMANDS, [this](const auto& command) {
+        return local_if_own_bank(command);
+    });
     const abi::NocEndpoint batch_slot{batch_device_addr_ + entry * abi::BATCH_SLOT_SIZE, pcie_noc_xy_addr_};
     return post(abi::make_batch_command(batch_slot, static_cast<uint32_t>(commands.size())));
 }

@@ -46,6 +46,8 @@ struct Seat {
     uint8_t noc2axi_mask;  // NIUs DRISC firmware leaves in NOC2AXI mode; the kernel never drives these
     uint64_t bank_size;    // NoC-addressable bytes of the bank (dram_view_size)
     std::array<uint16_t, abi::BANK_ENDPOINTS> bank_noc_xy_addr;  // every endpoint of the bank, TRANSLATED
+    // The chip's DRAM cores whose NIU for `noc` is in stream mode, TRANSLATED: traffic there reaches the DRISC's L1.
+    std::vector<uint16_t> stream_dram_noc_xy_addr;
 };
 
 // The two seats of DRAM view `bank`, as named by dram_sender_logical_cores: [0] is the bank's NOC1-endpoint DRISC,
@@ -110,7 +112,8 @@ public:
     bool has_window() const { return window_ != nullptr; }
 
     // Writes `command` into the slot's next queue entry and rings its doorbell, and returns its ticket for done().
-    // Returns nothing and does nothing when abi::CLIENT_QUEUE_CAPACITY commands are in flight.
+    // Returns nothing and does nothing when abi::CLIENT_QUEUE_CAPACITY commands are in flight. A CMD_SINGLE whose
+    // source and destination both lie in this seat's bank, in 16 B units, is sent as the CMD_LOCAL that copies it.
     // Throws, issuing nothing, when the command is not CMD_SINGLE or CMD_LOCAL, its size is 0, its source coords do not
     // fit in abi::CMD_KIND_SHIFT bits, src or dst is not 64 B aligned, src and dst overlap on one endpoint, a CMD_LOCAL
     // size is not a multiple of abi::LOCAL_SIZE_ALIGN or runs past the NoC-addressable part of the bank, or its source
@@ -161,6 +164,8 @@ private:
     void request_attach(uint32_t slot);
     bool acked() const;
     std::optional<uint64_t> post(const abi::KernelCommand& command);
+    bool in_own_bank(uint16_t noc_xy_addr, uint64_t addr, uint32_t size) const;
+    abi::KernelCommand local_if_own_bank(const abi::KernelCommand& command) const;
     std::string describe_state() const;
     void validate(const abi::KernelCommand& command) const;
 
