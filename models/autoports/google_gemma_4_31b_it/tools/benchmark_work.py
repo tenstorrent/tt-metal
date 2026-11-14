@@ -62,7 +62,13 @@ def decode_work(positions, batch_size, precision=None):
             or precision["kv_cache_dtype"] != "bfloat8_b"
         ):
             raise ValueError("Work model supports unchanged BFP4 decoder/BFP8 KV with head-only precision changes")
-        head_bytes = {"bfp4": BFP4_BYTES, "bfp8": BFP8_BYTES, "bf16": 2}[groups["lm_head"]]
+        head_bytes = {
+            "bfp4": BFP4_BYTES,
+            "bfp4_hifi2": BFP4_BYTES,
+            "bfp8": BFP8_BYTES,
+            "bfp8_lofi": BFP8_BYTES,
+            "bf16": 2,
+        }[groups["lm_head"]]
     weights = (
         BFP4_BYTES * sum(n * projection_elements(d, kv, shared, physical=True) for n, d, kv, _, shared in LAYERS)
         + head_bytes * H * V

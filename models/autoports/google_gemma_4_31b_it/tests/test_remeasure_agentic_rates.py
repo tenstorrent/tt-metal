@@ -76,7 +76,7 @@ def test_collector_rejects_wrong_precision_before_model_call(monkeypatch, tmp_pa
 def test_head_precision_changes_only_head_dram_estimate():
     w = importlib.import_module("benchmark_work")
     policy = {
-        "weight_groups": {"attention": "bfp4", "mlp": "bfp4", "down": "bfp4", "lm_head": "bfp8"},
+        "weight_groups": {"attention": "bfp4", "mlp": "bfp4", "down": "bfp4", "lm_head": "bfp8_lofi"},
         "layer_exceptions": {},
         "kv_cache_dtype": "bfloat8_b",
     }
