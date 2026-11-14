@@ -19,18 +19,41 @@ namespace nb = nanobind;
 
 void bind_repeat(nb::module_& mod) {
     const auto* doc = R"doc(
-        Returns a new tensor filled with repetition of input :attr:`input_tensor` according to number of times specified in :attr:`shape`.
+        Returns a tensor that repeats `input_tensor` along each dimension the number of times given in `repeat_dims`.
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
-            repeat_dims (SmallVector): The number of repetitions for each dimension.
+            repeat_dims (List[int]): the number of repetitions for each dimension. A list shorter than the tensor's rank is padded with 1s at the front, and a longer list adds leading dimensions to the output.
 
         Keyword Args:
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-            optional_output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`: an interleaved input keeps its memory configuration. A sharded input keeps its memory layout and buffer type, with a shard spec derived for the output shape, when such a spec can be derived; otherwise, and for an empty output, the output is interleaved in the input's buffer type. When ``optional_output_tensor`` is given, the output uses its memory configuration.
+            optional_output_tensor (ttnn.Tensor, optional): Preallocated output tensor, with the output's shape, dtype and layout. Defaults to `None`.
 
         Returns:
-            ttnn.Tensor: the output tensor.
+            ttnn.Tensor: the output tensor, with the same dtype and layout as the input.
+
+        Note:
+            Supported dtypes and layouts:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - BFLOAT16, FLOAT32, INT32, UINT32, UINT16
+                 - TILE, ROW_MAJOR
+               * - BFLOAT8_B
+                 - TILE
+
+            A 0 in ``repeat_dims`` returns an empty tensor.
+
+            For a ``BFLOAT16`` TILE input whose last two dims are not both multiples of 32, input values must not be
+            NaN when either of those dims is repeated.
+
+        Memory Support:
+            - Interleaved: DRAM and L1
+            - Sharded: HEIGHT_SHARDED, WIDTH_SHARDED and BLOCK_SHARDED input and output in L1; DRAM-sharded input is also accepted
+            - ND sharded: DRAM and L1
     )doc";
 
     ttnn::bind_function<"repeat">(

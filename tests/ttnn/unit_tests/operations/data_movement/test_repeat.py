@@ -10,6 +10,13 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
+from tests.ttnn.unit_tests.operations.data_movement.docstring_support import (
+    check_readable,
+    docstring_dtype_layout_params,
+    docstring_interleaved_buffer_type_params,
+    interleaved_memory_config,
+)
+from tests.ttnn.unit_tests.operations.data_movement.data_movement_test_utils import assert_exact, full_range_input
 
 layouts = [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT]
 
@@ -259,3 +266,56 @@ def test_pc_with_different_shapes_in_sequence(device):
         for i in range(64):
             z_torch = ttnn.to_torch(z_tt[i : i + 1])
             assert torch.allclose(z_torch, y, atol=1e-2), f"z_torch[{i}] != y"
+
+
+_BLOCK_FLOATS = (ttnn.bfloat8_b, ttnn.bfloat4_b)
+
+
+def _one_exponent_input(shape, seed=0):
+    """Values in +-[1, 2) for a block float. They share one exponent, so values an op moves into another block of the
+    tile come back exactly."""
+    torch.manual_seed(seed)
+    magnitude = 1 + torch.rand(shape)
+    return torch.where(torch.rand(shape) < 0.5, -magnitude, magnitude)
+
+
+@pytest.mark.parametrize("buffer_type", docstring_interleaved_buffer_type_params(ttnn.repeat))
+@pytest.mark.parametrize("dtype, layout", docstring_dtype_layout_params(ttnn.repeat))
+def test_repeat_docstring_supported_inputs(dtype, layout, buffer_type, device):
+    """Runs every dtype, layout and interleaved buffer type the ttnn.repeat docstring lists.
+
+    Each one also checks the other ``repeat_dims`` rules the docstring states and the default ``memory_config``.
+    """
+    check_readable(dtype, layout, buffer_type)
+    memory_config = interleaved_memory_config(buffer_type)
+    input_tensor = ttnn.from_torch(
+        full_range_input((1, 1, 32, 32), dtype), dtype=dtype, layout=layout, device=device, memory_config=memory_config
+    )
+    expected = ttnn.to_torch(input_tensor)
+    output = ttnn.repeat(input_tensor, [1, 2, 1, 2], memory_config=memory_config)
+
+    assert output.dtype == dtype
+    assert output.layout == layout
+    assert output.memory_config().buffer_type == buffer_type
+    assert_exact(expected.repeat(1, 2, 1, 2), ttnn.to_torch(output))
+
+    # A shorter repeat_dims is padded with 1s at the front, and a longer one adds leading dimensions.
+    assert_exact(expected.repeat(1, 1, 1, 2), ttnn.to_torch(ttnn.repeat(input_tensor, [2])))
+    assert_exact(expected.repeat(2, 1, 1, 1, 3), ttnn.to_torch(ttnn.repeat(input_tensor, [2, 1, 1, 1, 3])))
+    # A 0 in repeat_dims returns an empty tensor.
+    assert list(ttnn.repeat(input_tensor, [1, 0, 1, 1]).shape) == [1, 0, 32, 32]
+    # With memory_config=None, an interleaved input keeps its memory configuration.
+    assert ttnn.repeat(input_tensor, [1, 2, 1, 1]).memory_config() == memory_config
+
+    # A shape that is not tile-aligned. On a TILE input, repeating its last two dims runs a compute kernel that holds
+    # BFLOAT16 zeros by value: a BFLOAT16 input leaves out NaN, as the docstring requires, and its zeros are compared
+    # by value. Values also move into new blocks, so block floats get values with one exponent.
+    bfloat16_tile = dtype == ttnn.bfloat16 and layout == ttnn.TILE_LAYOUT
+    if dtype in _BLOCK_FLOATS:
+        x = _one_exponent_input((1, 1, 30, 30))
+    else:
+        x = full_range_input((1, 1, 30, 30), dtype, nan=not bfloat16_tile)
+    unaligned = ttnn.from_torch(x, dtype=dtype, layout=layout, device=device, memory_config=memory_config)
+    output = ttnn.repeat(unaligned, [1, 2, 1, 2], memory_config=memory_config)
+    expected = ttnn.to_torch(unaligned).repeat(1, 2, 1, 2)
+    assert_exact(expected, ttnn.to_torch(output), signed_zeros=not bfloat16_tile)
