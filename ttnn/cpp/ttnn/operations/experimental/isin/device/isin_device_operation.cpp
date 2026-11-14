@@ -45,10 +45,20 @@ IsInDeviceOperation::spec_return_value_t IsInDeviceOperation::compute_output_spe
 IsInDeviceOperation::tensor_return_value_t IsInDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.optional_out) {
+        const auto& out = *tensor_args.optional_out;
+        TT_FATAL(out.dtype() == OUTPUT_TENSOR_DATA_TYPE, "Preallocated output should be of uint32 dtype");
+        // The writer stores one uint32 per element as a single flat row, so the output must match that exactly.
+        const Shape expected_shape{tensor_args.elements_tensor.logical_volume()};
         TT_FATAL(
-            tensor_args.optional_out->dtype() == OUTPUT_TENSOR_DATA_TYPE,
-            "Preallocated output should be of uint32 dtype");
-        return *tensor_args.optional_out;
+            out.logical_shape() == expected_shape,
+            "Preallocated output must have the flattened elements shape {}, got {}",
+            expected_shape,
+            out.logical_shape());
+        TT_FATAL(out.layout() == OUTPUT_TENSOR_LAYOUT, "Preallocated output must be in ROW_MAJOR layout");
+        TT_FATAL(!out.is_sharded(), "Preallocated output is sharded");
+        TT_FATAL(out.is_allocated(), "Preallocated output's buffer is null");
+        TT_FATAL(out.storage_type() == StorageType::DEVICE, "Preallocated output is not on a device");
+        return out;
     }
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.elements_tensor.device());
 }
