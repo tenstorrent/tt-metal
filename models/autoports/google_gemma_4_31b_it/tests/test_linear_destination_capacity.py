@@ -63,3 +63,35 @@ def test_projection_subblock_respects_destination_capacity(fp32, bf16_weight, de
     assert len(configs) == 1
     selected = configs[0].get("subblock_w", configs[0].get("out_subblock_w"))
     assert selected == (2 if decoding and per_core_n == 6 else 4 if fp32 else 8)
+
+
+@pytest.mark.parametrize("bf16", [False, True])
+@pytest.mark.parametrize("sliding", [False, True])
+def test_decode_geometry_guard_uses_actual_weight_dtype(bf16, sliding):
+    source = Path(__file__).parents[1] / "tt/multichip_decoder.py"
+    tree = ast.parse(source.read_text())
+    guard = next(
+        n
+        for n in ast.walk(tree)
+        if isinstance(n, ast.For)
+        and isinstance(n.target, ast.Tuple)
+        and [getattr(t, "id", None) for t in n.target.elts] == ["name", "block"]
+    )
+    weights = {"self_attn.o_proj.weight": SimpleNamespace(dtype="BF16" if bf16 else "BFP4")}
+    if not sliding:
+        weights["self_attn.qk_proj.weight"] = SimpleNamespace(dtype="BF16" if bf16 else "BFP4")
+    obj = SimpleNamespace(
+        weights=weights,
+        geometry={
+            "self_attn.qk_proj": {"block": 21},
+            "self_attn.o_proj": {"block": 8 if sliding else 16},
+            "mlp.down_proj": {"block": 11},
+        },
+    )
+    exec(
+        compile(ast.Module(body=[guard], type_ignores=[]), str(source), "exec"),
+        {"obj": obj, "ttnn": SimpleNamespace(bfloat16="BF16")},
+    )
+    assert obj.geometry["self_attn.qk_proj"]["block"] == (3 if bf16 and not sliding else 21)
+    assert obj.geometry["self_attn.o_proj"]["block"] == (8 if bf16 or sliding else 16)
+    assert obj.geometry["mlp.down_proj"]["block"] == 11

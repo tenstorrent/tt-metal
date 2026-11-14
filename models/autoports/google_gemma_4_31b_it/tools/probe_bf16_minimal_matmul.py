@@ -13,6 +13,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--include-gate", action="store_true")
+    parser.add_argument("--include-decode", action="store_true")
     args = parser.parse_args()
     import torch
     from ttnn.types import BlackholeComputeKernelConfig
@@ -55,10 +56,24 @@ def main():
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
             )
 
-        shapes = [(32, 5376, 4096, False), (64, 5376, 4096, False)]
+        shapes = [(32, 5376, 4096, False, None), (64, 5376, 4096, False, None)]
         if args.include_gate:
-            shapes.append((1024, 5376, 5632, True))
-        for m, k, n, gate in shapes:
+            shapes.append((1024, 5376, 5632, True, None))
+        if args.include_decode:
+            shapes.extend([(32, 5376, 4608, False, 3), (32, 4096, 5632, False, 8), (32, 5632, 5632, False, 11)])
+        for m, k, n, gate, decode_block in shapes:
+            input_memory = ttnn.L1_MEMORY_CONFIG
+            if decode_block:
+                activation_cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))])
+                input_memory = ttnn.MemoryConfig(
+                    ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                    ttnn.BufferType.L1,
+                    ttnn.ShardSpec(activation_cores, (32, k // 8), ttnn.ShardOrientation.ROW_MAJOR),
+                )
+                decode_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+                    in0_block_w=decode_block, per_core_M=1, per_core_N=n // 32 // 8, num_workers_per_dram_bank=2
+                )
+
             memory = ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.WIDTH_SHARDED,
                 ttnn.BufferType.DRAM,
@@ -76,19 +91,29 @@ def main():
             for repeat in range(2):
                 a = torch.randn(1, 1, m, k).bfloat16()
                 b = (torch.randn(1, 1, k, n) / k**0.5).bfloat16()
-                x, w = upload(a, ttnn.L1_MEMORY_CONFIG), upload(b, memory)
+                x, w = upload(a, input_memory), upload(b, memory)
                 tensors.extend([x, w])
                 cases.append((a, b, x, w))
             cached = None
             for repeat, (a, b, x, w) in enumerate(cases):
-                out = ttnn.experimental.minimal_matmul(
-                    input_tensor=x,
-                    weight_tensor=w,
-                    config=config,
-                    compute_kernel_config=kernel,
-                    dtype=ttnn.bfloat16,
-                    memory_config=ttnn.L1_MEMORY_CONFIG if gate else ttnn.DRAM_MEMORY_CONFIG,
-                )
+                if decode_block:
+                    out = ttnn.linear(
+                        x,
+                        w,
+                        program_config=decode_config,
+                        compute_kernel_config=kernel,
+                        dtype=ttnn.bfloat16,
+                        memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+                    )
+                else:
+                    out = ttnn.experimental.minimal_matmul(
+                        input_tensor=x,
+                        weight_tensor=w,
+                        config=config,
+                        compute_kernel_config=kernel,
+                        dtype=ttnn.bfloat16,
+                        memory_config=ttnn.L1_MEMORY_CONFIG if gate else ttnn.DRAM_MEMORY_CONFIG,
+                    )
                 actual = ttnn.to_torch(out, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0)).float()
                 expected = a.float() @ b.float()
                 pcc = float(torch.corrcoef(torch.stack([expected.flatten(), actual.flatten()]))[0, 1])
@@ -104,7 +129,8 @@ def main():
                     m=m,
                     k=k,
                     n=n,
-                    output="L1" if gate else "DRAM",
+                    output="L1_WIDTH_SHARDED" if decode_block else "L1" if gate else "DRAM",
+                    decode_block=decode_block,
                     repeat=repeat,
                     pcc=pcc,
                     rrmse=rrmse,

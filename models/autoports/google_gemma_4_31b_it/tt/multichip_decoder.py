@@ -215,6 +215,11 @@ class MultichipDecoder(OptimizedDecoder):
             obj.geometry["mlp.gate_proj"]["readers"] = 2
             obj.geometry["mlp.up_proj"]["readers"] = 2
             obj.geometry["mlp.down_proj"]["block"] = 11
+        # BF16 weight triple buffering needs smaller K blocks than the BFP4 tuning.
+        for name, block in (("self_attn.qk_proj", 3), ("self_attn.o_proj", 8)):
+            weight = obj.weights.get(name + ".weight")
+            if weight is not None and weight.dtype == ttnn.bfloat16:
+                obj.geometry[name]["block"] = block
         dram_grid = mesh_device.dram_grid_size()
         obj.banks = dram_grid.x * dram_grid.y
         dram_cores = ttnn.CoreRangeSet(
