@@ -5,13 +5,17 @@
 // halo's optional inputs, each against the default path on the same shapes:
 // - halo_boundary: halo of an image whose border comes from the boundary tensor must equal, bit for bit, halo with
 //   zero padding of the image with that border written in (same output sticks, data movement only).
+// - prologue_scale / prologue_shift: silu(x * scale + shift) in the untilize pass, against a host fp32 golden of the
+//   default output; padding sticks stay pad_val.
 
 #include <gtest/gtest.h>
 
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <optional>
 #include <random>
+#include <string>
 #include <vector>
 
 #include <tt-metalium/data_formats/bfloat16.hpp>
@@ -148,12 +152,13 @@ Tensor halo(
     MeshDevice& device,
     const Tensor& input,
     const SlidingWindowConfig& config,
-    const prim::HaloOptionalInputs& optional_inputs = {}) {
+    const prim::HaloOptionalInputs& optional_inputs = {},
+    uint32_t pad_val = 0) {
     return ttnn::halo(
         input,
         config,
         compute_config(device),
-        /*pad_val=*/0,
+        pad_val,
         /*remote_read=*/false,
         /*transpose_mcast=*/false,
         /*is_out_tiled=*/true,
@@ -165,8 +170,9 @@ std::vector<float> run_halo(
     MeshDevice& device,
     const Tensor& input,
     const SlidingWindowConfig& config,
-    const prim::HaloOptionalInputs& optional_inputs = {}) {
-    const Tensor out = halo(device, input, config, optional_inputs);
+    const prim::HaloOptionalInputs& optional_inputs = {},
+    uint32_t pad_val = 0) {
+    const Tensor out = halo(device, input, config, optional_inputs, pad_val);
     // Each core's output shard has max_out_nsticks_per_core slots; only the first (its input range) are written.
     const auto boundaries = generate_shard_boundaries(config);
     const uint32_t slots = generate_max_out_nsticks_per_core(boundaries);
@@ -230,6 +236,121 @@ TEST_F(HaloTest, ExternalHaloWidthSlicesEqualTheBorderedImage) {
             {.halo_boundary = boundary,
              .external_window = {.col_offset = c0, .boundary_w = w, .dev_pad_left = 1, .dev_pad_right = 1}});
         EXPECT_EQ(actual, expected) << "columns [" << c0 << ", " << c1 << ")";
+    }
+}
+
+// 512 channels = 16 tiles per row, wider than one pack_untilize block.
+TEST_F(HaloTest, PrologueAppliesAffineSiluToTheInputOnly) {
+    auto& device = *device_;
+    if (device.arch() != tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "Wormhole refuses this fixture's fp32 dest; the conv2d prologue test covers Wormhole";
+    }
+    for (uint32_t c : {64u, 512u}) {
+        constexpr uint32_t n = 1, h = 16, w = 32, num_cores = 4;
+        Image x = random_image(n, h, w, c, c + 1);
+        Image scale = random_image(1, 1, 1, c, c + 2);
+        Image shift = random_image(1, 1, 1, c, c + 3);
+        const Tensor input = height_sharded(device, x, Layout::TILE, num_cores);
+        const auto config = conv3x3(x, {1, 1, 1, 1}, num_cores);
+
+        // NaN padding marks which output sticks are padding.
+        const auto plain = run_halo(device, input, config, {}, /*pad_val=*/0x7FC0);
+        const auto actual = run_halo(
+            device,
+            input,
+            config,
+            {.prologue_scale = dram(device, scale.data, ttnn::Shape({1, 1, 1, c}), Layout::TILE),
+             .prologue_shift = dram(device, shift.data, ttnn::Shape({1, 1, 1, c}), Layout::TILE)});
+        ASSERT_EQ(actual.size(), plain.size());
+
+        size_t failures = 0;
+        for (size_t i = 0; i < plain.size(); ++i) {
+            if (std::isnan(plain[i])) {
+                failures += actual[i] != 0.0f;
+                continue;
+            }
+            const float z = plain[i] * static_cast<float>(scale.data[i % c]) + static_cast<float>(shift.data[i % c]);
+            const float golden = z / (1.0f + std::exp(-z));
+            failures += std::abs(actual[i] - golden) > 0.02f + 0.02f * std::abs(golden);
+        }
+        EXPECT_EQ(failures, 0u) << "c " << c;
+    }
+}
+
+// Both together: the prologue output inside, the boundary's sticks (already activated by the caller) in the border.
+TEST_F(HaloTest, PrologueWithExternalHalo) {
+    auto& device = *device_;
+    if (device.arch() != tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "Wormhole refuses this fixture's fp32 dest; the conv2d prologue test covers Wormhole";
+    }
+    constexpr uint32_t n = 1, h = 16, w = 32, c = 128, num_cores = 4;
+    Image framed = random_image(n, h + 2, w + 2, c, 11);
+    Image x = interior(framed);
+    Image scale = random_image(1, 1, 1, c, 12);
+    Image shift = random_image(1, 1, 1, c, 13);
+    const auto border = border_sticks(framed);
+    const Tensor input = height_sharded(device, x, Layout::TILE, num_cores);
+    const auto config = conv3x3(x, {1, 1, 1, 1}, num_cores);
+    const Tensor boundary = dram(device, border, ttnn::Shape({1, 1, border.size() / c, c}), Layout::ROW_MAJOR);
+    const Tensor scale_t = dram(device, scale.data, ttnn::Shape({1, 1, 1, c}), Layout::TILE);
+    const Tensor shift_t = dram(device, shift.data, ttnn::Shape({1, 1, 1, c}), Layout::TILE);
+
+    const auto plain = run_halo(device, input, config);
+    const auto external = run_halo(device, input, config, {.halo_boundary = boundary});
+    const auto prologue = run_halo(device, input, config, {.prologue_scale = scale_t, .prologue_shift = shift_t});
+    const auto both = run_halo(
+        device, input, config, {.halo_boundary = boundary, .prologue_scale = scale_t, .prologue_shift = shift_t});
+    ASSERT_EQ(both.size(), plain.size());
+    // external - plain is the border alone (zero inside); prologue is zero on the border.
+    std::vector<float> expected(plain.size());
+    for (size_t i = 0; i < plain.size(); ++i) {
+        expected[i] = prologue[i] + (external[i] - plain[i]);
+    }
+    EXPECT_EQ(both, expected);
+}
+
+// The prologue's scale / shift circular buffers use the bf16 output format, so a bfloat8_b input must be rejected, as
+// must a shift without a scale.
+TEST_F(HaloTest, PrologueRejectsUnsupportedInputs) {
+    auto& device = *device_;
+    constexpr uint32_t c = 64, num_cores = 4;
+    Image x = random_image(1, 16, 32, c, 21);
+    Image scale = random_image(1, 1, 1, c, 22);
+    const auto config = conv3x3(x, {1, 1, 1, 1}, num_cores);
+    const Tensor bf8_input = height_sharded(device, x, Layout::TILE, num_cores, DataType::BFLOAT8_B);
+    const Tensor bf8_scale = dram(device, scale.data, ttnn::Shape({1, 1, 1, c}), Layout::TILE, DataType::BFLOAT8_B);
+    EXPECT_ANY_THROW(halo(device, bf8_input, config, {.prologue_scale = bf8_scale, .prologue_shift = bf8_scale}));
+
+    const Tensor input = height_sharded(device, x, Layout::TILE, num_cores);
+    const Tensor scale_t = dram(device, scale.data, ttnn::Shape({1, 1, 1, c}), Layout::TILE);
+    EXPECT_ANY_THROW(halo(device, input, config, {.prologue_shift = scale_t}));
+}
+
+// Every core reads the same scale / shift pages, so channel-split shards are refused: a width-sharded input in
+// 32-channel shards with a 32-channel scale / shift would give channels 32-63 the scale / shift of 0-31.
+TEST_F(HaloTest, PrologueRejectsChannelShardedInput) {
+    auto& device = *device_;
+    if (device.arch() != tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "Wormhole refuses this fixture's fp32 dest before the sharding check";
+    }
+    constexpr uint32_t c = 64, num_cores = 2, sticks = 16 * 32;
+    Image x = random_image(1, 16, 32, c, 23);
+    Image scale = random_image(1, 1, 1, c / num_cores, 24);
+    const CoreRangeSet grid(CoreRange({0, 0}, {num_cores - 1, 0}));
+    const MemoryConfig mem(TensorMemoryLayout::WIDTH_SHARDED, BufferType::L1, ShardSpec(grid, {sticks, c / num_cores}));
+    const TensorSpec spec(
+        ttnn::Shape({1, 1, sticks, c}), TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem));
+    const Tensor input = from_bf16(x.data, spec).to_device(&device, mem);
+    auto config = conv3x3(x, {1, 1, 1, 1}, 1);
+    config.num_cores_c = num_cores;
+    config.core_range_set = grid;
+    const Tensor scale_t = dram(device, scale.data, ttnn::Shape({1, 1, 1, c / num_cores}), Layout::TILE);
+    try {
+        halo(device, input, config, {.prologue_scale = scale_t, .prologue_shift = scale_t});
+        FAIL() << "halo accepted a prologue on a width-sharded input";
+    } catch (const std::exception& e) {
+        const std::string what = e.what();
+        EXPECT_NE(what.find("height-sharded input whose shards hold all"), std::string::npos) << what;
     }
 }
 
