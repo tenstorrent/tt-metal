@@ -1,0 +1,464 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+"""mhc_post — fused post-sublayer half of one mHC wrap (registry model).
+
+    X'_j = post_j * F + sum_i comb[i][j] * X_i     (comb applied transposed)
+
+Regime R1 (plain mode, see op_design.md): one device program, work split over
+token-tile rows x C-column tiles, every coefficient product in fp32 SFPU
+lanes. Regime R2 (stats / collapse): the same pass also projects the bf16 X'
+on W, combines the per-core partials across the row group (fixed 2-level
+tree), runs the next hc step on the row's root and collapses y.
+"""
+
+from __future__ import annotations
+
+import ttnn
+
+from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
+
+from .mhc_post_program_descriptor import (
+    MAX_FEED_LINKS,
+    create_program_descriptor,
+    feed_plan,
+    worker_list,
+)
+
+N_STREAMS = 4  # DeepSeek-V4 / V4.1 hc_mult (contract)
+NG = N_STREAMS * (N_STREAMS + 2)
+FEED_GROUP = 4  # feed_split tagger: C splits into column blocks for a group of up to 4 chips
+
+
+# ---------------------------------------------------------------------------
+# 1. INPUT_TAGGERS — inputs = (F_shape, X_shape, post_shape, comb_shape)
+# ---------------------------------------------------------------------------
+
+
+def tag_alignment(inputs, axes):
+    """Token dim (dim -2 of F) tile-aligned or not."""
+    f_shape = inputs[0]
+    return "tile_aligned" if f_shape[-2] % 32 == 0 else "h_non_aligned"
+
+
+def tag_feed_split(inputs, axes):
+    """C (F's last dim) splits into FEED_GROUP column blocks of whole tiles."""
+    C = inputs[0][-1]
+    return "block_aligned" if C % (32 * FEED_GROUP) == 0 else "not_block_aligned"
+
+
+INPUT_TAGGERS = {
+    "alignment": tag_alignment,
+    "feed_split": tag_feed_split,
+}
+
+
+# ---------------------------------------------------------------------------
+# 2. SUPPORTED — Phase 0 baseline (R1 plain, fp32 streams / sublayer)
+# ---------------------------------------------------------------------------
+
+SUPPORTED = {
+    "dtype": [ttnn.float32, ttnn.bfloat16],
+    "sublayer_dtype": [ttnn.float32, ttnn.bfloat16],
+    "layout": [ttnn.TILE_LAYOUT],
+    "fp32_dest_acc_en": [True],
+    "mode": ["plain", "stats", "collapse"],
+    "coef_source": ["separate", "packed"],
+    "alignment": ["tile_aligned", "h_non_aligned"],
+    "norm": ["off", "on"],
+    "feed": ["off", "on"],
+    "feed_split": ["block_aligned", "not_block_aligned"],
+}
+
+
+# ---------------------------------------------------------------------------
+# 3. EXCLUSIONS
+# ---------------------------------------------------------------------------
+
+EXCLUSIONS = []
+
+
+# ---------------------------------------------------------------------------
+# Compute config
+# ---------------------------------------------------------------------------
+
+
+def default_compute_kernel_config() -> ttnn.ComputeConfigDescriptor:
+    """HiFi4, fp32 DEST, approximation off."""
+    return ttnn.ComputeConfigDescriptor(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        fp32_dest_acc_en=True,
+        math_approx_mode=False,
+    )
+
+
+# ---------------------------------------------------------------------------
+# 4. validate()
+# ---------------------------------------------------------------------------
+
+
+def _check_call(
+    input_tensor,
+    residual,
+    post,
+    comb,
+    *,
+    post_col,
+    comb_col,
+    stats_weight,
+    collapse_pre,
+    hc_scale,
+    hc_base,
+    norm_weight,
+    feed_output,
+    feed_semaphores,
+    output_tensor,
+    stats_output=None,
+    hc_output=None,
+    y_output=None,
+    feed_num_links=1,
+    feed_cluster_axis=1,
+):
+    """Malformed calls (not support refusals): clear ValueErrors."""
+    if collapse_pre is not None and stats_weight is None:
+        raise ValueError("mhc_post: collapse_pre requires stats_weight")
+    if collapse_pre is not None:
+        if hc_scale is None or len(hc_scale) != 3:
+            raise ValueError("mhc_post: collapse mode needs hc_scale = (a_pre, a_post, a_res)")
+        if hc_base is None or len(hc_base) != NG:
+            raise ValueError(f"mhc_post: collapse mode needs hc_base of {NG} values")
+    if norm_weight is not None and collapse_pre is None:
+        raise ValueError("mhc_post: norm_weight requires collapse mode (collapse_pre)")
+    if feed_output is not None:
+        if collapse_pre is None:
+            raise ValueError("mhc_post: feed_output requires collapse mode (collapse_pre)")
+        if feed_semaphores is None or len(feed_semaphores) != 2:
+            raise ValueError("mhc_post: feed_output requires feed_semaphores = [ready, arrival]")
+        if feed_num_links not in range(1, MAX_FEED_LINKS + 1):
+            raise ValueError(f"mhc_post: feed_num_links must be 1..{MAX_FEED_LINKS}")
+        if feed_cluster_axis not in (0, 1):
+            raise ValueError("mhc_post: feed_cluster_axis must be 0 or 1")
+        mesh_shape = tuple(residual.device().shape)
+        G = mesh_shape[feed_cluster_axis] if len(mesh_shape) == 2 else 1
+        if G < 2:
+            raise ValueError(f"mhc_post: the feed needs >= 2 chips along cluster axis {feed_cluster_axis}")
+        if ttnn.get_fabric_config() == ttnn.FabricConfig.DISABLED:
+            raise ValueError("mhc_post: the feed needs an active fabric")
+        fs, ls = tuple(input_tensor.shape), tuple(feed_output.shape)
+        C = fs[-1]
+        if C % (32 * G) != 0:
+            raise ValueError(f"mhc_post: C={C} does not split into {G} column blocks of whole tiles")
+        want = fs[:-2] + (G * fs[-2], C // G)
+        if (
+            ls != want
+            or feed_output.dtype != ttnn.bfloat16
+            or feed_output.layout != ttnn.TILE_LAYOUT
+            or feed_output.memory_config() != ttnn.DRAM_MEMORY_CONFIG
+        ):
+            raise ValueError(f"mhc_post: feed_output must be {want} bfloat16 TILE DRAM interleaved, got {ls}")
+    f_shape, x_shape = tuple(input_tensor.shape), tuple(residual.shape)
+    if len(f_shape) < 2 or len(f_shape) > 4 or len(x_shape) != len(f_shape):
+        raise ValueError(f"mhc_post: F {f_shape} and X {x_shape} must have the same rank, 2..4")
+    C = f_shape[-1]
+    if C % 32 != 0:
+        raise ValueError(f"mhc_post: C={C} must be a multiple of 32")
+    if f_shape[:-1] != x_shape[:-1] or x_shape[-1] != N_STREAMS * C:
+        raise ValueError(f"mhc_post: X {x_shape} must be (..., T, {N_STREAMS}*C) for F {f_shape}")
+    for name, t, col, width in (("post", post, post_col, N_STREAMS), ("comb", comb, comb_col, N_STREAMS**2)):
+        s = tuple(t.shape)
+        if s[:-1] != f_shape[:-1]:
+            raise ValueError(f"mhc_post: {name} {s} must share F's leading dims {f_shape[:-1]}")
+        if col < 0 or col + width > 32 or col + width > s[-1]:
+            raise ValueError(f"mhc_post: {name}_col={col} must keep {width} values inside one tile row of {s}")
+        if t.dtype != ttnn.float32 or t.layout != ttnn.TILE_LAYOUT:
+            raise ValueError(f"mhc_post: {name} must be float32 TILE")
+    if stats_weight is not None:
+        ws = tuple(stats_weight.shape)
+        if ws[-2:] != (x_shape[-1], 32) or any(d != 1 for d in ws[:-2]):
+            raise ValueError(f"mhc_post: stats_weight {ws} must be (1.., {x_shape[-1]}, 32)")
+        if stats_weight.dtype != ttnn.float32 or stats_weight.layout != ttnn.TILE_LAYOUT:
+            raise ValueError("mhc_post: stats_weight must be float32 TILE")
+    if collapse_pre is not None:
+        s = tuple(collapse_pre.shape)
+        if s[:-1] != f_shape[:-1] or s[-1] < N_STREAMS:
+            raise ValueError(f"mhc_post: collapse_pre {s} must be (..., T, >= {N_STREAMS}) for F {f_shape}")
+        if collapse_pre.dtype != ttnn.float32 or collapse_pre.layout != ttnn.TILE_LAYOUT:
+            raise ValueError("mhc_post: collapse_pre must be float32 TILE")
+    if norm_weight is not None:
+        ns = tuple(norm_weight.shape)
+        if len(ns) < 2 or ns[-2:] != (1, C) or any(d != 1 for d in ns[:-2]):
+            raise ValueError(f"mhc_post: norm_weight {ns} must be (1.., 1, {C})")
+        if norm_weight.dtype != ttnn.float32 or norm_weight.layout != ttnn.TILE_LAYOUT:
+            raise ValueError("mhc_post: norm_weight must be float32 TILE")
+    lead = f_shape[:-1]
+    inputs = (input_tensor, residual, post, comb, stats_weight, collapse_pre, norm_weight)
+    for name, t, shape, dtype in (
+        ("output_tensor", output_tensor, x_shape, residual.dtype),
+        ("stats_output", stats_output, lead + (32,), ttnn.float32),
+        ("hc_output", hc_output, lead + (NG,), ttnn.float32),
+        ("y_output", y_output, lead + (C,), ttnn.bfloat16),
+    ):
+        if t is None:
+            continue
+        if (
+            tuple(t.shape) != shape
+            or t.dtype != dtype
+            or t.layout != ttnn.TILE_LAYOUT
+            or t.memory_config() != ttnn.DRAM_MEMORY_CONFIG
+        ):
+            raise ValueError(f"mhc_post: {name} must be {shape} {dtype} TILE DRAM interleaved")
+        addr = t.buffer_address()
+        for i in inputs:
+            if i is not None and i.buffer_address() == addr:
+                raise ValueError(f"mhc_post: {name} aliases an input")
+
+
+def validate(
+    input_tensor,
+    residual,
+    post,
+    comb,
+    *,
+    compute_kernel_config=None,
+    post_col=0,
+    comb_col=0,
+    stats_weight=None,
+    collapse_pre=None,
+    hc_scale=None,
+    hc_base=None,
+    norm_weight=None,
+    feed_output=None,
+    feed_semaphores=None,
+    output_tensor=None,
+    stats_output=None,
+    hc_output=None,
+    y_output=None,
+    feed_num_links=1,
+    feed_cluster_axis=1,
+):
+    _check_call(
+        input_tensor,
+        residual,
+        post,
+        comb,
+        post_col=post_col,
+        comb_col=comb_col,
+        stats_weight=stats_weight,
+        collapse_pre=collapse_pre,
+        hc_scale=hc_scale,
+        hc_base=hc_base,
+        norm_weight=norm_weight,
+        feed_output=feed_output,
+        feed_semaphores=feed_semaphores,
+        output_tensor=output_tensor,
+        stats_output=stats_output,
+        hc_output=hc_output,
+        y_output=y_output,
+        feed_num_links=feed_num_links,
+        feed_cluster_axis=feed_cluster_axis,
+    )
+    cfg = compute_kernel_config if compute_kernel_config is not None else default_compute_kernel_config()
+    if collapse_pre is not None:
+        mode = "collapse"
+    elif stats_weight is not None:
+        mode = "stats"
+    else:
+        mode = "plain"
+    layout = (
+        ttnn.TILE_LAYOUT
+        if all(t.layout == ttnn.TILE_LAYOUT for t in (input_tensor, residual))
+        else ttnn.ROW_MAJOR_LAYOUT
+    )
+    axes = {
+        "dtype": residual.dtype,
+        "sublayer_dtype": input_tensor.dtype,
+        "layout": layout,
+        "fp32_dest_acc_en": bool(cfg.fp32_dest_acc_en),
+        "mode": mode,
+        "coef_source": "packed" if post.buffer_address() == comb.buffer_address() else "separate",
+        "norm": "on" if norm_weight is not None else "off",
+        "feed": "on" if feed_output is not None else "off",
+    }
+    shapes = (tuple(input_tensor.shape), tuple(residual.shape), tuple(post.shape), tuple(comb.shape))
+    for axis_name, tagger in INPUT_TAGGERS.items():
+        axes[axis_name] = tagger(shapes, axes)
+
+    for axis, allowed in SUPPORTED.items():
+        if axes[axis] not in allowed:
+            raise UnsupportedAxisValue(f"mhc_post: {axis}={axes[axis]!r} not in SUPPORTED {allowed}")
+    for exc in EXCLUSIONS:
+        if all(axes.get(k) == v for k, v in exc.items()):
+            raise ExcludedCell(f"mhc_post: unsupported combination (refinement candidate): {exc}")
+    return axes
+
+
+def _feed_mesh_program(build, mesh, max_grid, feed_output, feed_semaphores, links, axis):
+    """The feed call: one program per chip (regime R4 — the workers' program is every chip's, plus this chip's
+    port kernels and fabric connections), one generic_op over the mesh. Each chip's program carries a
+    custom_program_hash over everything that shapes its argument layout: generic_op's cache keys a kernel on its
+    source, cores and compile-time args but not on the per-core argument counts (fabric_ring_exchange README)."""
+    import hashlib
+
+    G, chips = feed_plan(mesh, axis)
+    _, ports = worker_list(mesh, max_grid)
+    if ports is None:
+        raise ValueError("mhc_post: the feed needs an active fabric on a multi-chip mesh")
+    port_map = {(k, l): ports[2 * l + k] for l in range(MAX_FEED_LINKS) for k in (0, 1)}
+    port_list = [port_map[(k, l)] for l in range(links) for k in (0, 1)]
+    mesh_desc = ttnn.MeshProgramDescriptor()
+    for rc in chips:
+        feed = dict(
+            chips=chips,
+            coord=rc,
+            me=chips[rc]["p"],
+            G=G,
+            links=links,
+            ports=port_map,
+            port_list=port_list,
+            d_tensor=feed_output,
+            semaphores=[int(a) for a in feed_semaphores],
+        )
+        program = build(feed)
+        key = repr(
+            (
+                "mhc_post|feed",
+                rc,
+                links,
+                feed["layout"],
+                [(str(k.kernel_source), list(k.compile_time_args), str(k.core_ranges)) for k in program.kernels],
+                [(c.total_size, str(c.core_ranges)) for c in program.cbs],
+            )
+        )
+        program.custom_program_hash = int.from_bytes(hashlib.sha1(key.encode()).digest()[:8], "little") >> 1
+        r, c = rc
+        mesh_desc[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(r, c), ttnn.MeshCoordinate(r, c))] = program
+    return mesh_desc
+
+
+# ---------------------------------------------------------------------------
+# Public entry point
+# ---------------------------------------------------------------------------
+
+
+def mhc_post(
+    input_tensor: ttnn.Tensor,
+    residual: ttnn.Tensor,
+    post: ttnn.Tensor,
+    comb: ttnn.Tensor,
+    *,
+    compute_kernel_config: ttnn.ComputeConfigDescriptor = None,
+    post_col: int = 0,
+    comb_col: int = 0,
+    stats_weight: ttnn.Tensor = None,
+    collapse_pre: ttnn.Tensor = None,
+    hc_scale: list = None,
+    hc_base: list = None,
+    hc_norm_width: float = None,
+    hc_norm_eps: float = 1e-6,
+    hc_eps: float = 1e-6,
+    hc_sinkhorn_iters: int = 20,
+    output_tensor: ttnn.Tensor = None,
+    stats_output: ttnn.Tensor = None,
+    hc_output: ttnn.Tensor = None,
+    y_output: ttnn.Tensor = None,
+    max_grid: ttnn.CoreCoord = None,
+    norm_weight: ttnn.Tensor = None,
+    norm_eps: float = 1e-6,
+    feed_output: ttnn.Tensor = None,
+    feed_semaphores: list = None,
+    feed_num_links: int = 1,
+    feed_cluster_axis: int = 1,
+):
+    axes = validate(
+        input_tensor,
+        residual,
+        post,
+        comb,
+        compute_kernel_config=compute_kernel_config,
+        post_col=post_col,
+        comb_col=comb_col,
+        stats_weight=stats_weight,
+        collapse_pre=collapse_pre,
+        hc_scale=hc_scale,
+        hc_base=hc_base,
+        norm_weight=norm_weight,
+        feed_output=feed_output,
+        feed_semaphores=feed_semaphores,
+        output_tensor=output_tensor,
+        stats_output=stats_output,
+        hc_output=hc_output,
+        y_output=y_output,
+        feed_num_links=feed_num_links,
+        feed_cluster_axis=feed_cluster_axis,
+    )
+    cfg = compute_kernel_config if compute_kernel_config is not None else default_compute_kernel_config()
+    device = residual.device()
+    mode = axes["mode"]
+    lead = list(input_tensor.shape)[:-1]
+    C = input_tensor.shape[-1]
+
+    def alloc(shape, dtype):
+        return ttnn.allocate_tensor_on_device(
+            ttnn.Shape(shape), dtype, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
+        )
+
+    if output_tensor is None:
+        output_tensor = alloc(list(residual.shape), residual.dtype)
+    hc = None
+    if mode in ("stats", "collapse") and stats_output is None:
+        stats_output = alloc(lead + [32], ttnn.float32)
+    if mode == "collapse":
+        if hc_output is None:
+            hc_output = alloc(lead + [NG], ttnn.float32)
+        if y_output is None:
+            y_output = alloc(lead + [C], ttnn.bfloat16)
+        hc = dict(
+            scale=list(hc_scale),
+            base=list(hc_base),
+            norm_width=float(hc_norm_width) if hc_norm_width is not None else float(N_STREAMS * C),
+            norm_eps=hc_norm_eps,
+            hc_eps=hc_eps,
+            sinkhorn_iters=int(hc_sinkhorn_iters),
+        )
+
+    def build(feed=None):
+        return create_program_descriptor(
+            input_tensor,
+            residual,
+            post,
+            comb,
+            output_tensor,
+            n=N_STREAMS,
+            post_col=post_col,
+            comb_col=comb_col,
+            math_fidelity=cfg.math_fidelity,
+            math_approx_mode=bool(cfg.math_approx_mode),
+            max_grid=max_grid,
+            mode=mode,
+            w_tensor=stats_weight,
+            pre_tensor=collapse_pre,
+            stats_tensor=stats_output,
+            hc_tensor=hc_output,
+            y_tensor=y_output,
+            hc=hc,
+            norm_tensor=norm_weight,
+            norm_eps=norm_eps,
+            feed=feed,
+        )
+
+    io = [input_tensor, residual, post, comb]
+    io += [t for t in (stats_weight, collapse_pre, norm_weight, stats_output, hc_output, y_output) if t is not None]
+    if feed_output is None:
+        program_descriptor = build()
+    else:
+        program_descriptor = _feed_mesh_program(
+            build, device, max_grid, feed_output, feed_semaphores, feed_num_links, feed_cluster_axis
+        )
+        io.append(feed_output)
+    # Output tensor must be last.
+    ttnn.generic_op(io + [output_tensor], program_descriptor)
+    if mode == "plain":
+        return output_tensor
+    if mode == "stats":
+        return output_tensor, stats_output
+    return output_tensor, stats_output, hc_output, y_output

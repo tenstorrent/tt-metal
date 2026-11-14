@@ -155,6 +155,55 @@ void kernel_main() {
     const uint32_t ring_base = get_read_ptr(cb_mixed_out_tiles);  // nothing consumed yet: the CB base
     uint32_t ring_slot = 0;
 
+#ifndef MHC_FEED_L1
+#define MHC_FEED_L1 0
+#endif
+    // feed L1 landing (Perf 2, MHC_FEED_L1 = 1; 0 = the R4 DRAM-staged path, the host's fit / T % 32 carve-out): my
+    // remote-destined y tiles go straight into the port cores' resident landing (CB_FEED_LANDY on the ports; its
+    // address arrives with the arm, in word 0 of my own, otherwise unused, cb_feed_poll), each port's chunks
+    // bank-major, so its sender sends them from there as soon as their rows are published. Common args FEED_L1..:
+    // slot bits, links, DRAM banks, images, section stride.
+    [[maybe_unused]] uint32_t published = 0;
+#if MHC_FEED_L1
+    constexpr uint32_t FEED_L1 = FEED_PORTS + 1 + MAX_FEED_PORTS;
+    [[maybe_unused]] uint32_t land_base = 0;
+    [[maybe_unused]] auto wait_armed = [&]() {
+        if constexpr (feed) {
+            if (published++ == 0) {
+                noc_semaphore_wait_min(
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_feed_rows_id)),
+                    get_common_arg_val<uint32_t>(FEED_PORTS));
+                invalidate_l1_cache();
+                land_base = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_feed_poll));
+            }
+        }
+    };
+    // y tile (t, c) of remote column block d -> its landing slot on its port
+    [[maybe_unused]] auto land_dst = [&](uint32_t t, uint32_t c, uint32_t me, uint32_t cbt, uint32_t ht) -> uint64_t {
+        const uint32_t d = c / cbt, cc = c - d * cbt;
+        const uint32_t links = get_common_arg_val<uint32_t>(FEED_L1 + 1);
+        const uint32_t nimg = get_common_arg_val<uint32_t>(FEED_L1 + 3);
+        // the landing of port (slot of d, link) holds, per destination of its slot and image, its banks'
+        // pages bank-major (rel. bank b = r % nb of r = my D page index inside the image's block, b % links = link)
+        const uint32_t slot_bits = get_common_arg_val<uint32_t>(FEED_L1);
+        const uint32_t nb = get_common_arg_val<uint32_t>(FEED_L1 + 2);
+        const uint32_t img = t / ht, r = (t - img * ht) * cbt + cc;
+        const uint32_t n = ht * cbt, q = n / nb, rem = n - q * nb;
+        const uint32_t b = r % nb, link = b % links;
+        const uint32_t slot = (slot_bits >> d) & 1;
+        uint32_t di = 0;
+        for (uint32_t e = 0; e < d; ++e) {
+            di += (e != me && ((slot_bits >> e) & 1) == slot) ? 1 : 0;
+        }
+        auto cnt_lt = [links, link](uint32_t m) { return m > link ? (m - link + links - 1) / links : 0; };
+        const uint32_t m = b < rem ? b : rem;
+        const uint32_t off =
+            (di * nimg + img) * get_common_arg_val<uint32_t>(FEED_L1 + 4) + cnt_lt(b) * q + cnt_lt(m) + r / nb;
+        const uint32_t port = 2 * link + slot;
+        const uint32_t xy = get_common_arg_val<uint32_t>(FEED_PORTS + 1 + port);
+        return get_noc_addr(xy & 0xFFFF, xy >> 16, land_base + off * 2048);
+    };
+#endif
     // y tiles of one column pass of row t (block_cols tiles; the filler units' y, u >= cols, are dropped)
     [[maybe_unused]] auto write_y_pass = [&](uint32_t t, uint32_t cb0, uint32_t cols) {
         const uint32_t y_page = get_tile_size(cb_y_out);
@@ -181,7 +230,16 @@ void kernel_main() {
                         const auto d_acc = TensorAccessor(d_args, get_common_arg_val<uint32_t>(FEED_BASE), y_page);
                         dst = d_acc.get_noc_addr(d_row * cb_tiles + (c - me * cb_tiles));
                     } else {  // staged for the ports
+#if MHC_FEED_L1
+                        wait_armed();
+                        dst = land_dst(t, c, me, cb_tiles, ht);
+#ifdef MHC_ABLATE_LANDW
+                        cb_pop_front(cb_y_out, 1);  // ablation: the landing writes stubbed (wrong D)
+                        continue;
+#endif
+#else
                         dst = y_acc.get_noc_addr(t * c_tiles + c);
+#endif
                     }
                 } else {
                     dst = y_acc.get_noc_addr(t * c_tiles + c);
@@ -196,7 +254,23 @@ void kernel_main() {
     };
     // feed: my row's staged y has landed in DRAM -> my published-row count into my slot of every port's cb_feed_poll
     // (the first only once every port armed me: zeroed its slots, then counted on my SEM_FEED_ROWS)
-    [[maybe_unused]] uint32_t published = 0;
+#if MHC_FEED_L1
+    [[maybe_unused]] uint32_t rows_done = 0;
+    [[maybe_unused]] auto publish_row = [&]() {
+        if constexpr (feed) {
+            MaybeDeviceZoneScope("w_publish");
+            noc_async_write_barrier();
+            const uint32_t n_ports = get_common_arg_val<uint32_t>(FEED_PORTS);
+            wait_armed();
+            ++rows_done;
+            const uint32_t slot = get_write_ptr(cb_feed_poll) + (group * group_q + member_q) * 16;
+            for (uint32_t p = 0; p < n_ports; ++p) {
+                const uint32_t xy = get_common_arg_val<uint32_t>(FEED_PORTS + 1 + p);
+                noc_inline_dw_write(get_noc_addr(xy & 0xFFFF, xy >> 16, slot), rows_done);
+            }
+        }
+    };
+#else  // the R4 DRAM-staged path (unchanged)
     [[maybe_unused]] auto publish_row = [&]() {
         if constexpr (feed) {
             MaybeDeviceZoneScope("w_publish");
@@ -213,6 +287,7 @@ void kernel_main() {
             }
         }
     };
+#endif
 
     // ---------------- R2 state ----------------
     [[maybe_unused]] uint32_t f32_page = 0, leader_slots_base = 0, root_slots_base = 0;

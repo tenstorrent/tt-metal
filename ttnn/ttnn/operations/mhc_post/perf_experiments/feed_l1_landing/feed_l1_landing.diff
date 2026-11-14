@@ -1,0 +1,599 @@
+diff -ruN a/ttnn/ttnn/operations/mhc_post/kernels/mhc_post_port_reader.cpp b/ttnn/ttnn/operations/mhc_post/kernels/mhc_post_port_reader.cpp
+--- a/ttnn/ttnn/operations/mhc_post/kernels/mhc_post_port_reader.cpp	2026-11-14 12:08:30.323096257 +0000
++++ b/ttnn/ttnn/operations/mhc_post/kernels/mhc_post_port_reader.cpp	2026-11-14 12:08:30.324956303 +0000
+@@ -34,6 +34,13 @@
+     constexpr uint32_t read_batch = get_compile_time_arg_val(11);   // chunks in flight per read barrier
+     constexpr uint32_t ring_chunks = get_compile_time_arg_val(12);  // chunk slots of cb_chunks
+     constexpr auto y_args = TensorAccessorArgs<13>();
++    // feed L1 landing (feed_l1_landing): 0 dram (R4 staging in y_output), 1 stage (y tiles in the ports' landing,
++    // natural order round-robin over the ports: staged from there over the NoC), 2 direct (the sender sends from its
++    // own landing; this reader only arms the workers and signals each published wave to the sender)
++    constexpr uint32_t l1_mode = get_compile_time_arg_val(y_args.next_compile_time_args_offset());
++    constexpr uint32_t cb_landy = get_compile_time_arg_val(y_args.next_compile_time_args_offset() + 1);
++    constexpr uint32_t nports = get_compile_time_arg_val(y_args.next_compile_time_args_offset() + 2);
++    constexpr uint32_t port_arg0 = get_compile_time_arg_val(y_args.next_compile_time_args_offset() + 3);
+     constexpr uint32_t chunk_bytes = run_pages * page_bytes;
+     static_assert(page_bytes == 2048, "the feed moves bf16 tiles");
+
+@@ -73,6 +80,14 @@
+         for (uint32_t k = 0; k < num_workers; ++k) {
+             *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(poll + k * 16) = 0;
+         }
++        if constexpr (l1_mode > 0) {  // the landing address, into word 0 of every worker's own cb_feed_poll, first
++            const uint32_t lb = get_write_ptr(cb_landy);
++            for (uint32_t k = 0; k < num_workers; ++k) {
++                const uint32_t xy = get_common_arg_val<uint32_t>(k);
++                noc_inline_dw_write(get_noc_addr(xy & 0xFFFF, xy >> 16, poll), lb);
++            }
++            noc_async_write_barrier();
++        }
+         for (uint32_t k = 0; k < num_workers; ++k) {
+             const uint32_t xy = get_common_arg_val<uint32_t>(k);
+             noc_semaphore_inc(get_noc_addr(xy & 0xFFFF, xy >> 16, rows_sem), 1);
+@@ -94,9 +109,36 @@
+         }
+     };
+
++    if constexpr (l1_mode >= 3) {  // stream / greedy: the sender polls per chunk itself once my slots are zeroed
++        if (n_dest > 0) {
++            cb_reserve_back(cb_chunks, 1);
++            cb_push_back(cb_chunks, 1);
++        }
++        return;
++    }
++    if constexpr (l1_mode == 2) {
++        for (uint32_t i0 = 0; n_dest > 0 && i0 < max_rows; i0 += wave_rows) {  // no destination: nothing to send
++            {
++                MaybeDeviceZoneScope("p_wait_wave");
++                wait_wave((i0 + wave_rows) < max_rows ? (i0 + wave_rows) : max_rows);
++            }
++            cb_reserve_back(cb_chunks, 1);
++            cb_push_back(cb_chunks, 1);
++        }
++        return;
++    }
+     const uint32_t scr = get_write_ptr(cb_yscr);
+-    auto y_page = [&](uint32_t d, uint32_t img, uint32_t t, uint32_t col) {
+-        return y_acc.get_noc_addr((img * g.ht + t) * g.c_tiles + d * g.blk_tiles + col);
++    [[maybe_unused]] const uint32_t land_base = l1_mode == 1 ? get_write_ptr(cb_landy) : 0;
++    const bool shifted_rank = g.t_rows % 32 != 0;  // T % 32 != 0: my own block is staged too (rank = d)
++    auto y_page = [&](uint32_t d, uint32_t img, uint32_t t, uint32_t col) -> uint64_t {
++        if constexpr (l1_mode == 1) {
++            const uint32_t rank = d - ((!shifted_rank && d > g.me) ? 1 : 0);
++            const uint32_t u = ((rank * g.nimg + img) * g.ht + t) * g.blk_tiles + col;
++            const uint32_t xy = get_common_arg_val<uint32_t>(port_arg0 + u % nports);
++            return get_noc_addr(xy & 0xFFFF, xy >> 16, land_base + (u / nports) * page_bytes);
++        } else {
++            return y_acc.get_noc_addr((img * g.ht + t) * g.c_tiles + d * g.blk_tiles + col);
++        }
+     };
+     // my y rows [y0, y0 + n) of column col (n >= 1, at most two tile rows) -> scratch pair k; returns the source
+     // row address function over rows y0 % 32 .. (rows >= 32 in the second tile)
+diff -ruN a/ttnn/ttnn/operations/mhc_post/kernels/mhc_post_port_sender.cpp b/ttnn/ttnn/operations/mhc_post/kernels/mhc_post_port_sender.cpp
+--- a/ttnn/ttnn/operations/mhc_post/kernels/mhc_post_port_sender.cpp	2026-11-14 12:08:30.323116115 +0000
++++ b/ttnn/ttnn/operations/mhc_post/kernels/mhc_post_port_sender.cpp	2026-11-14 12:08:30.325016698 +0000
+@@ -65,6 +65,12 @@
+     constexpr uint32_t ring_chunks = get_compile_time_arg_val(8);  // chunk slots of the ring
+     constexpr uint32_t cb_land = get_compile_time_arg_val(9);      // landing of shared D tile rows (Refinement 2b)
+     constexpr auto d_args = TensorAccessorArgs<10>();
++    // feed L1 landing (feed_l1_landing): 2 = direct — my chunks sit bank-major in my own landing (cb_landy, written
++    // by the workers): sent straight from there, wave by wave as the reader signals them on cb_chunks
++    constexpr uint32_t l1_mode = get_compile_time_arg_val(d_args.next_compile_time_args_offset());
++    constexpr uint32_t cb_landy = get_compile_time_arg_val(d_args.next_compile_time_args_offset() + 1);
++    constexpr uint32_t group_q = get_compile_time_arg_val(d_args.next_compile_time_args_offset() + 2);
++    constexpr uint32_t cb_poll = get_compile_time_arg_val(d_args.next_compile_time_args_offset() + 3);
+     static_assert(page_bytes == 2048, "the feed moves bf16 tiles");
+     constexpr uint32_t chunk_bytes = run_pages * page_bytes;
+     static_assert(group >= 1 && group + 1 <= 12, "PacketHeaderPool: <= 12 headers per RISC");
+@@ -147,14 +153,30 @@
+         for (uint32_t k = 0; k < n_dest; ++k) {
+             total[k] = 0;
+         }
+-        for (uint32_t i0 = 0, w = 0; i0 < max_rows; i0 += wave_rows, ++w) {
+-            uint32_t ci = 0, pages = 0;  // the walk is the same for every destination
+-            mhc_feed::for_each_item<num_banks, run_pages, wave_rows>(
+-                g, w, ci, [&](uint32_t c, const mhc_feed::Item& it) {
+-                    pages += (!it.piece && c % links == link) ? 1 : 0;
+-                });
++        // direct: per image my D pages [a, a + N) of a destination, rel. bank b = r % nb holds cnt(b) of them;
++        // link `link` sends the banks b % links == link, in chunks of run_pages consecutive same-bank pages
++        constexpr uint32_t nb = num_banks;
++        const uint32_t nimg = g.nimg, n_img = g.ht * g.blk_tiles, q = n_img / nb, rem = n_img - q * nb;
++        const uint32_t sec = ((n_img + nb - 1) / nb) * ((nb + links - 1) / links);  // section stride (tiles)
++        auto cnt_lt = [link](uint32_t m) { return m > link ? (m - link + links - 1) / links : 0; };
++        if constexpr (l1_mode >= 2) {
++            uint32_t chunks = 0;
++            for (uint32_t b = link; b < nb; b += links) {
++                chunks += (q + (b < rem ? 1 : 0) + run_pages - 1) / run_pages;
++            }
+             for (uint32_t k = 0; k < n_dest; ++k) {
+-                total[k] += pages;
++                total[k] = chunks * nimg;
++            }
++        } else {
++            for (uint32_t i0 = 0, w = 0; i0 < max_rows; i0 += wave_rows, ++w) {
++                uint32_t ci = 0, pages = 0;  // the walk is the same for every destination
++                mhc_feed::for_each_item<num_banks, run_pages, wave_rows>(
++                    g, w, ci, [&](uint32_t c, const mhc_feed::Item& it) {
++                        pages += (!it.piece && c % links == link) ? 1 : 0;
++                    });
++                for (uint32_t k = 0; k < n_dest; ++k) {
++                    total[k] += pages;
++                }
+             }
+         }
+
+@@ -171,6 +193,182 @@
+             }
+             unflushed = 0;
+         };
++        if constexpr (l1_mode >= 3) {
++            // stream: a chunk goes as soon as the workers that wrote its pages published the rows holding them
++            // (their counts in my cb_poll, local L1) — not a whole wave: the publications of the one deferred-norm
++            // wave spread over ~12 us. sent bitmap: <= 256 chunks a port (the landing budget bounds it).
++            const uint32_t land_base = get_write_ptr(cb_landy);
++            const uint32_t poll = get_write_ptr(cb_poll);
++            const uint32_t c_base = g.c_tiles / group_q, c_extra = g.c_tiles - c_base * group_q;
++            auto member = [&](uint32_t c) {
++                const uint32_t big = c_extra * (c_base + 1);
++                return c < big ? c / (c_base + 1) : c_extra + (c - big) / c_base;
++            };
++            auto group_of = [&](uint32_t t) {
++                const uint32_t big = g.rows_extra * (g.rows_base + 1);
++                return t < big ? t / (g.rows_base + 1) : g.rows_extra + (t - big) / g.rows_base;
++            };
++            // per chunk: bitmask of its pages already sent (stream: all at once; greedy: maximal ready runs)
++            constexpr bool greedy = l1_mode == 4;
++            static uint8_t sentmask[256];  // .bss, not the RISC stack
++            for (uint32_t i = 0; i < 256; ++i) {
++                sentmask[i] = 0;
++            }
++            uint32_t left = 0, totalp[MAX_DEST], sentp[MAX_DEST];
++            for (uint32_t k = 0; k < n_dest; ++k) {
++                totalp[k] = 0;
++                sentp[k] = 0;
++                for (uint32_t b = link; b < nb; b += links) {
++                    totalp[k] += (q + (b < rem ? 1 : 0)) * nimg;
++                }
++                left += totalp[k];
++            }
++            cb_wait_front(cb_chunks, 1);  // my poll slots are zeroed: a count there is this call's
++            MaybeDeviceZoneScope("s_send");
++            while (left > 0) {
++                invalidate_l1_cache();
++                uint32_t idx = 0;
++                for (uint32_t k = 0; k < n_dest; ++k) {
++                    const uint32_t t = dest_idx + k * DEST_WORDS;
++                    const uint32_t d = get_arg_val<uint32_t>(t);
++                    for (uint32_t img = 0; img < nimg; ++img) {
++                        const uint32_t a0 = (img * g.htd + g.me * g.ht) * g.blk_tiles;
++                        for (uint32_t b = link; b < nb; b += links) {
++                            const uint32_t cnt = q + (b < rem ? 1 : 0);
++                            const uint32_t m_ = b < rem ? b : rem;
++                            const uint32_t sec_off = (k * nimg + img) * sec + cnt_lt(b) * q + cnt_lt(m_);
++                            for (uint32_t m = 0; m < cnt; m += run_pages, ++idx) {
++                                const uint32_t n = mhc_feed::min_u(run_pages, cnt - m);
++                                const uint32_t full = (1u << n) - 1;
++                                uint32_t mask = sentmask[idx];
++                                if (mask == full) {
++                                    continue;
++                                }
++                                uint32_t readym = 0;  // ready pages of the chunk
++                                for (uint32_t i = 0; i < n; ++i) {
++                                    const uint32_t r = b + (m + i) * nb, trow = r / g.blk_tiles;
++                                    const uint32_t ty = img * g.ht + trow;
++                                    const uint32_t wk =
++                                        group_of(ty) * group_q + member(d * g.blk_tiles + r - trow * g.blk_tiles);
++                                    const uint32_t have =
++                                        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(poll + wk * 16);
++                                    if (have > mhc_feed::local_row(g, ty)) {
++                                        readym |= 1u << i;
++                                    } else if (!greedy) {
++                                        break;
++                                    }
++                                }
++                                if (!greedy && readym != full) {
++                                    continue;
++                                }
++                                readym &= ~mask;
++                                for (uint32_t i0 = 0; i0 < n;) {  // the maximal runs of ready unsent pages
++                                    if (!(readym & (1u << i0))) {
++                                        ++i0;
++                                        continue;
++                                    }
++                                    uint32_t i1 = i0 + 1;
++                                    while (i1 < n && (readym & (1u << i1))) {
++                                        ++i1;
++                                    }
++                                    const uint32_t np = i1 - i0;
++                                    mask |= ((1u << np) - 1) << i0;
++                                    left -= np;
++                                    const uint32_t src = land_base + (sec_off + m + i0) * page_bytes;
++                                    const uint64_t dst = out.get_noc_addr(a0 + b + (m + i0) * nb, 0, 0);
++                                    const uint32_t bytes = np * page_bytes;
++                                    volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = hdrs[unflushed];
++                                    if (hdr_dest[unflushed] != k) {
++                                        route_to(
++                                            hdr,
++                                            static_cast<uint16_t>(get_arg_val<uint32_t>(t + 1)),
++                                            static_cast<uint16_t>(get_arg_val<uint32_t>(t + 2)),
++                                            static_cast<uint16_t>(get_arg_val<uint32_t>(t + 3)));
++                                        hdr_dest[unflushed] = k;
++                                    }
++                                    sentp[k] += np;
++                                    if (sentp[k] == totalp[k]) {
++                                        hdr->to_noc_fused_unicast_write_atomic_inc(
++                                            NocUnicastAtomicIncFusedCommandHeader{dst, arrival_noc, 1, true}, bytes);
++                                    } else {
++                                        hdr->to_noc_unicast_write(NocUnicastCommandHeader{dst}, bytes);
++                                    }
++                                    conn.wait_for_empty_write_slot();
++                                    conn.send_current_slot_non_blocking(src, bytes, reinterpret_cast<uint32_t>(hdr));
++                                    if (++unflushed == group) {
++                                        noc_async_writes_flushed();
++                                        unflushed = 0;
++                                    }
++                                    i0 = i1;
++                                }
++                                sentmask[idx] = mask;
++                            }
++                        }
++                    }
++                }
++            }
++            noc_async_writes_flushed();
++            unflushed = 0;
++            cb_pop_front(cb_chunks, 1);
++        } else if constexpr (l1_mode == 2) {
++            const uint32_t land_base = get_write_ptr(cb_landy);
++            auto hdr_flush = [&]() {
++                noc_async_writes_flushed();  // sources + headers of the in-flight packets have left L1
++                unflushed = 0;
++            };
++            for (uint32_t i0 = 0, w = 0; i0 < max_rows; i0 += wave_rows, ++w) {
++                cb_wait_front(cb_chunks, 1);  // every worker published the wave into my landing
++                MaybeDeviceZoneScope("s_send");  // fabric slot waits + sends of one wave, straight from the landing
++                for (uint32_t k = 0; k < n_dest; ++k) {
++                    const uint32_t t = dest_idx + k * DEST_WORDS;
++                    for (uint32_t img = 0; img < nimg; ++img) {
++                        const uint32_t a0 = (img * g.htd + g.me * g.ht) * g.blk_tiles;  // my first D page, image img
++                        for (uint32_t b = link; b < nb; b += links) {
++                            const uint32_t cnt = q + (b < rem ? 1 : 0);
++                            const uint32_t m_ = b < rem ? b : rem;
++                            const uint32_t sec_off = (k * nimg + img) * sec + cnt_lt(b) * q + cnt_lt(m_);
++                            for (uint32_t m = 0; m < cnt; m += run_pages) {
++                                const uint32_t n = mhc_feed::min_u(run_pages, cnt - m);
++                                uint32_t wv = 0;
++                                for (uint32_t i = m; i < m + n; ++i) {
++                                    const uint32_t lr =
++                                        mhc_feed::local_row(g, img * g.ht + (b + i * nb) / g.blk_tiles) / wave_rows;
++                                    wv = lr > wv ? lr : wv;
++                                }
++                                if (wv != w) {
++                                    continue;
++                                }
++                                const uint32_t src = land_base + (sec_off + m) * page_bytes;
++                                const uint64_t dst = out.get_noc_addr(a0 + b + m * nb, 0, 0);
++                                const uint32_t bytes = n * page_bytes;
++                                volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = hdrs[unflushed];
++                                if (hdr_dest[unflushed] != k) {
++                                    route_to(
++                                        hdr,
++                                        static_cast<uint16_t>(get_arg_val<uint32_t>(t + 1)),
++                                        static_cast<uint16_t>(get_arg_val<uint32_t>(t + 2)),
++                                        static_cast<uint16_t>(get_arg_val<uint32_t>(t + 3)));
++                                    hdr_dest[unflushed] = k;
++                                }
++                                if (++sent[k] == total[k]) {
++                                    hdr->to_noc_fused_unicast_write_atomic_inc(
++                                        NocUnicastAtomicIncFusedCommandHeader{dst, arrival_noc, 1, true}, bytes);
++                                } else {
++                                    hdr->to_noc_unicast_write(NocUnicastCommandHeader{dst}, bytes);
++                                }
++                                conn.wait_for_empty_write_slot();
++                                conn.send_current_slot_non_blocking(src, bytes, reinterpret_cast<uint32_t>(hdr));
++                                if (++unflushed == group) {
++                                    hdr_flush();
++                                }
++                            }
++                        }
++                    }
++                }
++                cb_pop_front(cb_chunks, 1);
++            }
++            hdr_flush();
++        } else
+         for (uint32_t i0 = 0, w = 0; i0 < max_rows; i0 += wave_rows, ++w) {
+             MaybeDeviceZoneScope("s_send");  // ring waits (reader-bound) + fabric slot waits + sends of one wave
+             for (uint32_t k = 0; k < n_dest; ++k) {
+diff -ruN a/ttnn/ttnn/operations/mhc_post/kernels/mhc_post_writer.cpp b/ttnn/ttnn/operations/mhc_post/kernels/mhc_post_writer.cpp
+--- a/ttnn/ttnn/operations/mhc_post/kernels/mhc_post_writer.cpp	2026-11-14 12:08:30.323160400 +0000
++++ b/ttnn/ttnn/operations/mhc_post/kernels/mhc_post_writer.cpp	2026-11-14 12:08:30.325143390 +0000
+@@ -155,6 +155,61 @@
+     const uint32_t ring_base = get_read_ptr(cb_mixed_out_tiles);  // nothing consumed yet: the CB base
+     uint32_t ring_slot = 0;
+
++#ifndef MHC_FEED_L1
++#define MHC_FEED_L1 0
++#endif
++    // feed L1 landing (MHC_FEED_L1: 1 stage, 2 direct, 3 stream, 4 greedy): my remote-destined y tiles go into the port cores' landing
++    // (CB_FEED_LANDY on the ports; its address arrives with the arm, in word 0 of my own, otherwise unused,
++    // cb_feed_poll). Common args FEED_L1..: slot bits, links, DRAM banks, images, direct section stride.
++    [[maybe_unused]] uint32_t published = 0;
++#if MHC_FEED_L1
++    constexpr uint32_t FEED_L1 = FEED_PORTS + 1 + MAX_FEED_PORTS;
++    [[maybe_unused]] uint32_t land_base = 0;
++    [[maybe_unused]] auto wait_armed = [&]() {
++        if constexpr (feed) {
++            if (published++ == 0) {
++                noc_semaphore_wait_min(
++                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_feed_rows_id)),
++                    get_common_arg_val<uint32_t>(FEED_PORTS));
++                invalidate_l1_cache();
++                land_base = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_feed_poll));
++            }
++        }
++    };
++    // y tile (t, c) of remote column block d -> its landing slot on its port
++    [[maybe_unused]] auto land_dst = [&](uint32_t t, uint32_t c, uint32_t me, uint32_t cbt, uint32_t ht) -> uint64_t {
++        const uint32_t d = c / cbt, cc = c - d * cbt;
++        const uint32_t links = get_common_arg_val<uint32_t>(FEED_L1 + 1);
++        const uint32_t nimg = get_common_arg_val<uint32_t>(FEED_L1 + 3);
++        uint32_t port, off;
++        if constexpr (MHC_FEED_L1 >= 2) {
++            // direct: the landing of port (slot of d, link) holds, per destination of its slot and image, its banks'
++            // pages bank-major (rel. bank b = r % nb of r = my D page index inside the image's block, b % links = link)
++            const uint32_t slot_bits = get_common_arg_val<uint32_t>(FEED_L1);
++            const uint32_t nb = get_common_arg_val<uint32_t>(FEED_L1 + 2);
++            const uint32_t img = t / ht, r = (t - img * ht) * cbt + cc;
++            const uint32_t n = ht * cbt, q = n / nb, rem = n - q * nb;
++            const uint32_t b = r % nb, link = b % links;
++            const uint32_t slot = (slot_bits >> d) & 1;
++            uint32_t di = 0;
++            for (uint32_t e = 0; e < d; ++e) {
++                di += (e != me && ((slot_bits >> e) & 1) == slot) ? 1 : 0;
++            }
++            auto cnt_lt = [links, link](uint32_t m) { return m > link ? (m - link + links - 1) / links : 0; };
++            const uint32_t m = b < rem ? b : rem;
++            off = (di * nimg + img) * get_common_arg_val<uint32_t>(FEED_L1 + 4) + cnt_lt(b) * q + cnt_lt(m) + r / nb;
++            port = 2 * link + slot;
++        } else {
++            // stage: natural order over every remote block, spread round-robin over the ports
++            const uint32_t nports = 2 * links;
++            const uint32_t u = ((d - (d > me ? 1 : 0)) * nimg * ht + t) * cbt + cc;
++            port = u % nports;
++            off = u / nports;
++        }
++        const uint32_t xy = get_common_arg_val<uint32_t>(FEED_PORTS + 1 + port);
++        return get_noc_addr(xy & 0xFFFF, xy >> 16, land_base + off * 2048);
++    };
++#endif
+     // y tiles of one column pass of row t (block_cols tiles; the filler units' y, u >= cols, are dropped)
+     [[maybe_unused]] auto write_y_pass = [&](uint32_t t, uint32_t cb0, uint32_t cols) {
+         const uint32_t y_page = get_tile_size(cb_y_out);
+@@ -181,7 +236,16 @@
+                         const auto d_acc = TensorAccessor(d_args, get_common_arg_val<uint32_t>(FEED_BASE), y_page);
+                         dst = d_acc.get_noc_addr(d_row * cb_tiles + (c - me * cb_tiles));
+                     } else {  // staged for the ports
++#if MHC_FEED_L1
++                        wait_armed();
++                        dst = land_dst(t, c, me, cb_tiles, ht);
++#ifdef MHC_ABLATE_LANDW
++                        cb_pop_front(cb_y_out, 1);  // ablation: the landing writes stubbed (wrong D)
++                        continue;
++#endif
++#else
+                         dst = y_acc.get_noc_addr(t * c_tiles + c);
++#endif
+                     }
+                 } else {
+                     dst = y_acc.get_noc_addr(t * c_tiles + c);
+@@ -196,7 +260,23 @@
+     };
+     // feed: my row's staged y has landed in DRAM -> my published-row count into my slot of every port's cb_feed_poll
+     // (the first only once every port armed me: zeroed its slots, then counted on my SEM_FEED_ROWS)
+-    [[maybe_unused]] uint32_t published = 0;
++#if MHC_FEED_L1
++    [[maybe_unused]] uint32_t rows_done = 0;
++    [[maybe_unused]] auto publish_row = [&]() {
++        if constexpr (feed) {
++            MaybeDeviceZoneScope("w_publish");
++            noc_async_write_barrier();
++            const uint32_t n_ports = get_common_arg_val<uint32_t>(FEED_PORTS);
++            wait_armed();
++            ++rows_done;
++            const uint32_t slot = get_write_ptr(cb_feed_poll) + (group * group_q + member_q) * 16;
++            for (uint32_t p = 0; p < n_ports; ++p) {
++                const uint32_t xy = get_common_arg_val<uint32_t>(FEED_PORTS + 1 + p);
++                noc_inline_dw_write(get_noc_addr(xy & 0xFFFF, xy >> 16, slot), rows_done);
++            }
++        }
++    };
++#else  // the R4 DRAM-staged path (unchanged)
+     [[maybe_unused]] auto publish_row = [&]() {
+         if constexpr (feed) {
+             MaybeDeviceZoneScope("w_publish");
+@@ -213,6 +293,7 @@
+             }
+         }
+     };
++#endif
+
+     // ---------------- R2 state ----------------
+     [[maybe_unused]] uint32_t f32_page = 0, leader_slots_base = 0, root_slots_base = 0;
+diff -ruN a/ttnn/ttnn/operations/mhc_post/mhc_post_program_descriptor.py b/ttnn/ttnn/operations/mhc_post/mhc_post_program_descriptor.py
+--- a/ttnn/ttnn/operations/mhc_post/mhc_post_program_descriptor.py	2026-11-14 12:08:30.322556315 +0000
++++ b/ttnn/ttnn/operations/mhc_post/mhc_post_program_descriptor.py	2026-11-14 12:08:30.323649194 +0000
+@@ -74,12 +74,24 @@
+ # its rectangles of consecutive cores: 2-4 on the 11-wide grid). Knob: False = every core reads its own.
+ COEF_MCAST = True
+ MAX_FEED_LINKS = 2  # feed: port cores reserved per direction (2 directions), whatever feed_num_links is
+-FEED_CHUNKS_IN_FLIGHT = 4  # feed: packets in flight per port (fabric_all_gather's 4-chunk batch, 112 KiB ring)
++FEED_CHUNKS_IN_FLIGHT = int(os.environ.get("MHC_FEED_GROUP", "4"))  # feed: packets in flight per port (fabric_all_gather 4-chunk batch)
+ FEED_READ_BATCH = 4  # feed: chunks the port reader keeps in flight per read barrier (ring = in-flight packets + this)
+ FEED_WAVE_ROWS = 1  # feed: local rows per port wave (the ports stream row i while the workers finish row i+1)
+ # feed, T % 32 != 0: L1 of the landing port for the shared D tile rows (<= G - 1 a image, Cb tiles each; the largest
+ # golden shape, C 7168, needs 336 KiB)
+ FEED_LAND_BUDGET = 768 * 1024
++# feed L1-direct landing (perf round 2, feed_l1_landing): the workers NoC-write their remote-destined y tiles straight
++# into a resident landing in the port cores' L1 instead of the y_output DRAM staging.
++#   direct (T % 32 == 0): each port's landing holds ITS chunks bank-major (every chunk of 7 same-bank D pages is
++#                         contiguous): the sender sends straight from it, no restaging;
++#   stage  (any T):       the landing holds the y tiles in natural order, spread over every port; the port reader
++#                         stages chunks (and the shifted D tiles of T % 32 != 0) from it over the NoC as before.
++#   dram:                 the R4 DRAM-staged path — taken when the landing of a port exceeds FEED_L1_LAND_BUDGET.
++FEED_L1_MODE = os.environ.get("MHC_FEED_L1", "stream")
++# port L1 for the y landing + the shared-row landing (T % 32 != 0); above it the DRAM-staged path (fit predicate)
++FEED_L1_LAND_BUDGET = int(os.environ.get("MHC_FEED_L1_BUDGET", str(1 << 30)))  # experiment cap; the fit decides
++FEED_L1_MARGIN = 64 * 1024  # port L1 kept free above the CBs (L1 buffers: the caller's global semaphores, ...)
++FEED_STREAM_MAX_CHUNKS = 256  # stream: the port sender's sent-chunk bitmap
+ COMBINE_FANIN = 11  # leader fan-in of the 2-level combine tree (<= 16, ledger symbol)
+ PARTIAL_DEPTH = 2  # per-row partial / sum-of-squares pages in flight to the writer
+ Y_BLOCKS = 2  # collapse: y blocks in flight to the writer
+@@ -136,6 +148,7 @@
+ CB_FEED_YSCR = 27  # feed, T % 32 != 0 (port cores): port reader's private y tiles of a shifted chunk (2 per tile)
+ CB_FEED_LAND = 28  # feed, T % 32 != 0 (port cores): landing of the shared D tile rows (compact contributor blocks)
+ CB_KPAGES = 30  # fused mix: the row's 1 + n K pages, built by compute from cb_coef_cols (UnpackToDestFp32)
++CB_FEED_LANDY = 31  # feed L1 landing (port cores): the workers' remote-destined y tiles (direct / stage)
+ CB_RSTD_LANE = 29  # norm: root's rstd in SFPU lane layout, computed before the hc step (compute -> writer)
+
+ # Semaphore ids (R2)
+@@ -572,9 +585,18 @@
+         assert len(port_xy) <= 2 * MAX_FEED_LINKS
+         feed_common += [len(port_xy)] + [v.x | (v.y << 16) for v in port_xy]
+         feed_common += [0] * (2 * MAX_FEED_LINKS - len(port_xy))
++        worker_cb_bytes = sum(-(-c.total_size // 64) * 64 for c in cbs)
++        l1 = feed_l1_plan(device, feed, t_tiles, ht_img, c_tiles, f_tensor.shape[-2], worker_cb_bytes, len(workers))
++        feed["l1"] = l1
++        # FEED_L1 (common args 14..): slot bits, links, DRAM banks, images, direct section stride
++        if l1["mode"] > 0:
++            feed_common += [l1["slot_bits"], feed["links"], _num_dram_banks(device), l1["nimg"], l1["S"]]
++    writer_defines = _diag_defines("writer")
++    if feed is not None:
++        writer_defines = writer_defines + [("MHC_FEED_L1", str(feed["l1"]["mode"]))]
+     writer = ttnn.KernelDescriptor(
+         kernel_source=str(KERNEL_DIR / "mhc_post_writer.cpp"),
+-        defines=_diag_defines("writer"),
++        defines=writer_defines,
+         core_ranges=core_ranges,
+         compile_time_args=writer_ct,
+         runtime_args=writer_rt,
+@@ -766,6 +788,58 @@
+     return [r for r in range(htd) if (TILE * r) // T != (min(TILE * r + TILE, G * T) - 1) // T]
+
+
++def feed_l1_plan(device, feed, t_tiles, ht_img, c_tiles, T, worker_cb_bytes, n_workers):
++    """Landing mode and size of the feed L1 landing (FEED_L1_MODE). Returns dict(mode = 0 dram / 1 stage / 2 direct,
++    land_tiles per port core, S = direct section stride (tiles), nimg, slot_bits = bit d set when chip d's first hop
++    leaves through port slot 1)."""
++    plan, me_rc, links = feed["chips"], feed["coord"], feed["links"]
++    me = plan[me_rc]
++    G, p = feed["G"], me["p"]
++    blk = c_tiles // G
++    nimg = t_tiles // ht_img
++    nb = _num_dram_banks(device)
++    shifted = T % TILE != 0
++    nports = 2 * links
++    slot_bits = sum(1 << d for d, sl in me["slot_of"].items() if sl == 1)
++    N = ht_img * blk
++    S = -(-N // nb) * -(-nb // links)
++    mode = FEED_L1_MODE
++    if mode in ("direct", "stream", "greedy") and shifted:
++        # T % 32 != 0: the stage variant (the port reader assembles the shifted D tiles from the landing over the
++        # NoC) measured slower than the DRAM staging (T150 C5120 2 links: +3.6 us fastest / +3.5 us slowest), so the
++        # shifted feed keeps the R4 DRAM-staged path; MHC_FEED_L1=stage forces it for experiments
++        mode = "dram"
++    land = 0
++    per_slot = [sum(1 for d, sl in me["slot_of"].items() if sl == k) for k in (0, 1)]
++    if mode in ("direct", "stream", "greedy"):
++        land = max(per_slot) * nimg * S
++    elif mode == "stage":
++        nrank = G if shifted else G - 1
++        land = -(-nrank * t_tiles * blk // nports)
++    run_pages = max(1, int(ttnn.get_tt_fabric_max_payload_size_bytes()) // 2048)
++    if mode in ("stream", "greedy"):  # chunks of the busiest port (its sent-chunk bitmap)
++        per_link = max(
++            sum(-(-(N // nb + (1 if b < N % nb else 0)) // run_pages) for b in range(l, nb, links)) for l in range(links)
++        )
++        if max(per_slot) * nimg * per_link > FEED_STREAM_MAX_CHUNKS:
++            mode = "direct"
++    shared = nimg * len(feed_shared_rows(T, G)) * blk  # the shared-row landing (Refinement 2b)
++    # fit (exact CB layout of a port core): the port CBs above the workers' CBs (the poll spans both), the landing last
++    ring = 2048 * ((FEED_CHUNKS_IN_FLIGHT + FEED_READ_BATCH) * run_pages if mode == "stage" else 2)
++    port_top = max(worker_cb_bytes, ring) + 16 * n_workers + (2 * run_pages * 2048 if shifted else 0) + shared * 2048
++    room = int(ttnn.get_max_worker_l1_unreserved_size()) - FEED_L1_MARGIN - port_top
++    # below: ring + landing under the workers' CB top, so the poll (placed at the workers' top) cannot overlap it
++    below = ring + land * 2048 <= worker_cb_bytes
++    if land * 2048 > FEED_L1_LAND_BUDGET or (not below and land * 2048 > room):
++        mode, land = "dram", 0
++    if os.environ.get("MHC_FL_PRINT"):
++        print(f"FL_PLAN T={T} C={c_tiles * 32} links={links} mode={mode} land={land} room={room // 2048} "
++              f"worker_cb={worker_cb_bytes // 1024}K below={below}", flush=True)
++    if mode == "dram":
++        below = False
++    return dict(below=below, mode={"dram": 0, "stage": 1, "direct": 2, "stream": 3, "greedy": 4}[mode], land_tiles=land, S=S, nimg=nimg, slot_bits=slot_bits)
++
++
+ def _add_feed_ports(program, device, feed, y_tensor, R, row_ranges, Q, c_tiles, ht_img, T, workers):
+     """The 2 * links port cores of this chip: reader (RISCV_1) stages chunks from y_output, sender (RISCV_0) sends
+     them over the fabric. Port (slot k, link l) sends to the destinations whose first hop leaves through slot k.
+@@ -800,8 +874,16 @@
+
+     worker_xy = [device.worker_core_from_logical_core(c) for c in workers]
+     worker_xy = [v.x | (v.y << 16) for v in worker_xy]
++    port_xy = [device.worker_core_from_logical_core(c) for c in port_cores_used]
++    port_xy = [v.x | (v.y << 16) for v in port_xy]
++    l1 = feed["l1"]
++    l1_mode = l1["mode"]
++    # direct: the ring only carries the reader's per-wave "published" signal (2 pages: one wave of run-ahead)
++    ring_pages = 2 if l1_mode >= 2 else ring_chunks * run_pages
++    program.cbs = list(program.cbs) + [_cb(CB_FEED_CHUNKS, d_tensor.dtype, page, ring_pages, port_crs)]
++    if l1_mode > 0 and l1["below"]:  # the landing at the bottom of the port's L1, under the workers' CB top
++        program.cbs = list(program.cbs) + [_cb(CB_FEED_LANDY, d_tensor.dtype, page, l1["land_tiles"], port_crs)]
+     program.cbs = list(program.cbs) + [
+-        _cb(CB_FEED_CHUNKS, d_tensor.dtype, page, ring_chunks * run_pages, port_crs),
+         # on the workers too: one CB config, so a worker's get_write_ptr is the ports' slot address
+         _cb(CB_FEED_POLL, ttnn.float32, 16 * len(workers), 1, _merged_ranges(list(workers) + list(port_cores_used))),
+     ]
+@@ -809,6 +891,11 @@
+         program.cbs = list(program.cbs) + [_cb(CB_FEED_YSCR, d_tensor.dtype, page, 2 * run_pages, port_crs)]
+     if land_tiles > 0:  # same CB on every port core and every chip's program: the same address everywhere
+         program.cbs = list(program.cbs) + [_cb(CB_FEED_LAND, d_tensor.dtype, page, land_tiles, port_crs)]
++    if l1_mode > 0 and not l1["below"]:  # the workers' y landing: LAST, above the poll. A port-only CB placed below the poll is not
++        # seen by the poll's address computation (Program::allocate_circular_buffers takes the max region end only
++        # over allocators whose core range EQUALS one of the CB's ranges): the poll then overlaps it on the ports
++        # (measured: the workers' published counts corrupted landed y words at links = 1).
++        program.cbs = list(program.cbs) + [_cb(CB_FEED_LANDY, d_tensor.dtype, page, l1["land_tiles"], port_crs)]
+     ready_addr, arrival_addr = feed["semaphores"]
+     land = device.worker_core_from_logical_core(ports[(0, 0)])
+     reader_rt, sender_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+@@ -857,17 +944,19 @@
+                 args += list(ttnn.setup_fabric_connection(me["node"], first, link_ids[l], program, core))
+             sender_rt[core.x][core.y] = args
+             layout.append((k, l, len(dests), expect_in))
+-    feed["layout"] = layout
++    feed["layout"] = layout + [("l1", l1_mode, l1["land_tiles"])]
+     port_ct = [CB_FEED_CHUNKS, page, run_pages, num_banks, links, FEED_WAVE_ROWS, max_rows]
+     reader_ct = (
+         port_ct
+         + [Q, SEM_FEED_ROWS, CB_FEED_POLL, CB_FEED_YSCR, FEED_READ_BATCH, ring_chunks]
+         + list(ttnn.TensorAccessorArgs(y_tensor).get_compile_time_args())
++        + [l1_mode, CB_FEED_LANDY, 2 * links, len(worker_xy)]
+     )
+     sender_ct = (
+         port_ct
+         + [FEED_CHUNKS_IN_FLIGHT, ring_chunks, CB_FEED_LAND]
+         + list(ttnn.TensorAccessorArgs(d_tensor).get_compile_time_args())
++        + [l1_mode, CB_FEED_LANDY, Q, CB_FEED_POLL]
+     )
+     program.kernels = list(program.kernels) + [
+         ttnn.KernelDescriptor(
+@@ -876,7 +965,7 @@
+             core_ranges=port_crs,
+             compile_time_args=reader_ct,
+             runtime_args=reader_rt,
+-            common_runtime_args=worker_xy,  # the same on every port (per-core it would set the unique-RTA region)
++            common_runtime_args=worker_xy + (port_xy if l1_mode > 0 else []),  # the same on every port (per-core it would set the unique-RTA region)
+             config=ttnn.ReaderConfigDescriptor(),
+         ),
+         ttnn.KernelDescriptor(

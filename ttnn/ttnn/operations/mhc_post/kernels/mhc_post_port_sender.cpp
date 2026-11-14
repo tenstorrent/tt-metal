@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// mhc_post feed port sender (RISCV_0, NoC1), regime R4 feed-DRAM-staged.
+// mhc_post feed port sender (RISCV_0, NoC1). Perf 2: with the L1 landing (l1_mode 1) my chunks are sent straight from
+// my resident landing, each once its rows are published; the R4 feed-DRAM-staged ring path is the host's carve-out.
 //
 // TRANSPORT from the fabric examples (fabric_all_gather's sender, fabric_ring_exchange's direct 2-D sends):
 //   ready fence  this program running means every earlier command on this chip is done (the previous call's feed
@@ -65,6 +66,13 @@ void kernel_main() {
     constexpr uint32_t ring_chunks = get_compile_time_arg_val(8);  // chunk slots of the ring
     constexpr uint32_t cb_land = get_compile_time_arg_val(9);      // landing of shared D tile rows (Refinement 2b)
     constexpr auto d_args = TensorAccessorArgs<10>();
+    // feed L1 landing (Perf 2): 1 = my chunks sit bank-major in my own resident landing (cb_landy, NoC-written by the
+    // workers) and each goes as soon as the workers that wrote its pages published them; 0 = the R4 DRAM-staged path
+    // (chunks restaged by the port reader into the cb_chunks ring)
+    constexpr uint32_t l1_mode = get_compile_time_arg_val(d_args.next_compile_time_args_offset());
+    constexpr uint32_t cb_landy = get_compile_time_arg_val(d_args.next_compile_time_args_offset() + 1);
+    constexpr uint32_t group_q = get_compile_time_arg_val(d_args.next_compile_time_args_offset() + 2);
+    constexpr uint32_t cb_poll = get_compile_time_arg_val(d_args.next_compile_time_args_offset() + 3);
     static_assert(page_bytes == 2048, "the feed moves bf16 tiles");
     constexpr uint32_t chunk_bytes = run_pages * page_bytes;
     static_assert(group >= 1 && group + 1 <= 12, "PacketHeaderPool: <= 12 headers per RISC");
@@ -147,14 +155,30 @@ void kernel_main() {
         for (uint32_t k = 0; k < n_dest; ++k) {
             total[k] = 0;
         }
-        for (uint32_t i0 = 0, w = 0; i0 < max_rows; i0 += wave_rows, ++w) {
-            uint32_t ci = 0, pages = 0;  // the walk is the same for every destination
-            mhc_feed::for_each_item<num_banks, run_pages, wave_rows>(
-                g, w, ci, [&](uint32_t c, const mhc_feed::Item& it) {
-                    pages += (!it.piece && c % links == link) ? 1 : 0;
-                });
+        // landing: per image my D pages [a, a + N) of a destination, rel. bank b = r % nb holds cnt(b) of them;
+        // link `link` sends the banks b % links == link, in chunks of run_pages consecutive same-bank pages
+        constexpr uint32_t nb = num_banks;
+        const uint32_t nimg = g.nimg, n_img = g.ht * g.blk_tiles, q = n_img / nb, rem = n_img - q * nb;
+        const uint32_t sec = ((n_img + nb - 1) / nb) * ((nb + links - 1) / links);  // section stride (tiles)
+        auto cnt_lt = [link](uint32_t m) { return m > link ? (m - link + links - 1) / links : 0; };
+        if constexpr (l1_mode != 0) {  // my chunks per destination stream: an empty one still counts once below
+            uint32_t chunks = 0;
+            for (uint32_t b = link; b < nb; b += links) {
+                chunks += (q + (b < rem ? 1 : 0) + run_pages - 1) / run_pages;
+            }
             for (uint32_t k = 0; k < n_dest; ++k) {
-                total[k] += pages;
+                total[k] = chunks * nimg;
+            }
+        } else {
+            for (uint32_t i0 = 0, w = 0; i0 < max_rows; i0 += wave_rows, ++w) {
+                uint32_t ci = 0, pages = 0;  // the walk is the same for every destination
+                mhc_feed::for_each_item<num_banks, run_pages, wave_rows>(
+                    g, w, ci, [&](uint32_t c, const mhc_feed::Item& it) {
+                        pages += (!it.piece && c % links == link) ? 1 : 0;
+                    });
+                for (uint32_t k = 0; k < n_dest; ++k) {
+                    total[k] += pages;
+                }
             }
         }
 
@@ -171,58 +195,178 @@ void kernel_main() {
             }
             unflushed = 0;
         };
-        for (uint32_t i0 = 0, w = 0; i0 < max_rows; i0 += wave_rows, ++w) {
-            MaybeDeviceZoneScope("s_send");  // ring waits (reader-bound) + fabric slot waits + sends of one wave
+        if constexpr (l1_mode != 0) {
+            // a chunk goes as soon as the workers that wrote its pages published the rows holding them
+            // (their counts in my cb_poll, local L1) — not a whole wave: the publications of the one deferred-norm
+            // wave spread over ~12 us. sent bitmap: <= 256 chunks a port (the landing budget bounds it).
+            const uint32_t land_base = get_write_ptr(cb_landy);
+            const uint32_t poll = get_write_ptr(cb_poll);
+            const uint32_t c_base = g.c_tiles / group_q, c_extra = g.c_tiles - c_base * group_q;
+            auto member = [&](uint32_t c) {
+                const uint32_t big = c_extra * (c_base + 1);
+                return c < big ? c / (c_base + 1) : c_extra + (c - big) / c_base;
+            };
+            auto group_of = [&](uint32_t t) {
+                const uint32_t big = g.rows_extra * (g.rows_base + 1);
+                return t < big ? t / (g.rows_base + 1) : g.rows_extra + (t - big) / g.rows_base;
+            };
+            // per chunk: bitmask of its pages already sent (a chunk goes whole, once every page of it is ready;
+            // sending partial ready runs measured slower: smaller packets)
+            static uint8_t sentmask[256];  // .bss, not the RISC stack
+            for (uint32_t i = 0; i < 256; ++i) {
+                sentmask[i] = 0;
+            }
+            uint32_t left = 0, totalp[MAX_DEST], sentp[MAX_DEST];
             for (uint32_t k = 0; k < n_dest; ++k) {
-                const uint32_t t = dest_idx + k * DEST_WORDS;
-                const bool local = is_local(k);
-                uint32_t ci = 0;
-                mhc_feed::for_each_item<num_banks, run_pages, wave_rows>(
-                    g, w, ci, [&](uint32_t c, const mhc_feed::Item& it) {
-                        if (c % links != link) {
-                            return;
-                        }
-                        cb_wait_front(cb_chunks, run_pages * (unflushed + 1));
-                        const uint32_t src = ring_base + slot * chunk_bytes;
-                        slot = (slot + 1 == ring_chunks) ? 0 : slot + 1;
-                        uint64_t dst;
-                        uint32_t bytes;
-                        if (it.piece) {
-                            dst = get_noc_addr(land_x, land_y, land_base + mhc_feed::piece_offset(g, it));
-                            bytes = mhc_feed::piece_bytes(it);
-                        } else {
-                            dst = out.get_noc_addr(it.j, 0, 0);  // the same page on the destination chip
-                            bytes = it.n * page_bytes;
-                        }
-                        if (local) {
-                            noc_async_write(src, dst, bytes);
-                            self_pieces += it.piece ? 1 : 0;
-                        } else {
-                            volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = hdrs[unflushed];  // free: flushed before reuse
-                            if (hdr_dest[unflushed] != k) {
-                                route_to(
-                                    hdr,
-                                    static_cast<uint16_t>(get_arg_val<uint32_t>(t + 1)),
-                                    static_cast<uint16_t>(get_arg_val<uint32_t>(t + 2)),
-                                    static_cast<uint16_t>(get_arg_val<uint32_t>(t + 3)));
-                                hdr_dest[unflushed] = k;
+                totalp[k] = 0;
+                sentp[k] = 0;
+                for (uint32_t b = link; b < nb; b += links) {
+                    totalp[k] += (q + (b < rem ? 1 : 0)) * nimg;
+                }
+                left += totalp[k];
+            }
+            cb_wait_front(cb_chunks, 1);  // my poll slots are zeroed: a count there is this call's
+            MaybeDeviceZoneScope("s_send");
+            while (left > 0) {
+                invalidate_l1_cache();
+                uint32_t idx = 0;
+                for (uint32_t k = 0; k < n_dest; ++k) {
+                    const uint32_t t = dest_idx + k * DEST_WORDS;
+                    const uint32_t d = get_arg_val<uint32_t>(t);
+                    for (uint32_t img = 0; img < nimg; ++img) {
+                        const uint32_t a0 = (img * g.htd + g.me * g.ht) * g.blk_tiles;
+                        for (uint32_t b = link; b < nb; b += links) {
+                            const uint32_t cnt = q + (b < rem ? 1 : 0);
+                            const uint32_t m_ = b < rem ? b : rem;
+                            const uint32_t sec_off = (k * nimg + img) * sec + cnt_lt(b) * q + cnt_lt(m_);
+                            for (uint32_t m = 0; m < cnt; m += run_pages, ++idx) {
+                                const uint32_t n = mhc_feed::min_u(run_pages, cnt - m);
+                                const uint32_t full = (1u << n) - 1;
+                                uint32_t mask = sentmask[idx];
+                                if (mask == full) {
+                                    continue;
+                                }
+                                uint32_t readym = 0;  // ready pages of the chunk
+                                for (uint32_t i = 0; i < n; ++i) {
+                                    const uint32_t r = b + (m + i) * nb, trow = r / g.blk_tiles;
+                                    const uint32_t ty = img * g.ht + trow;
+                                    const uint32_t wk =
+                                        group_of(ty) * group_q + member(d * g.blk_tiles + r - trow * g.blk_tiles);
+                                    const uint32_t have =
+                                        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(poll + wk * 16);
+                                    if (have > mhc_feed::local_row(g, ty)) {
+                                        readym |= 1u << i;
+                                    } else {
+                                        break;
+                                    }
+                                }
+                                if (readym != full) {
+                                    continue;
+                                }
+                                readym &= ~mask;
+                                for (uint32_t i0 = 0; i0 < n;) {  // the maximal runs of ready unsent pages
+                                    if (!(readym & (1u << i0))) {
+                                        ++i0;
+                                        continue;
+                                    }
+                                    uint32_t i1 = i0 + 1;
+                                    while (i1 < n && (readym & (1u << i1))) {
+                                        ++i1;
+                                    }
+                                    const uint32_t np = i1 - i0;
+                                    mask |= ((1u << np) - 1) << i0;
+                                    left -= np;
+                                    const uint32_t src = land_base + (sec_off + m + i0) * page_bytes;
+                                    const uint64_t dst = out.get_noc_addr(a0 + b + (m + i0) * nb, 0, 0);
+                                    const uint32_t bytes = np * page_bytes;
+                                    volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = hdrs[unflushed];
+                                    if (hdr_dest[unflushed] != k) {
+                                        route_to(
+                                            hdr,
+                                            static_cast<uint16_t>(get_arg_val<uint32_t>(t + 1)),
+                                            static_cast<uint16_t>(get_arg_val<uint32_t>(t + 2)),
+                                            static_cast<uint16_t>(get_arg_val<uint32_t>(t + 3)));
+                                        hdr_dest[unflushed] = k;
+                                    }
+                                    sentp[k] += np;
+                                    if (sentp[k] == totalp[k]) {
+                                        hdr->to_noc_fused_unicast_write_atomic_inc(
+                                            NocUnicastAtomicIncFusedCommandHeader{dst, arrival_noc, 1, true}, bytes);
+                                    } else {
+                                        hdr->to_noc_unicast_write(NocUnicastCommandHeader{dst}, bytes);
+                                    }
+                                    conn.wait_for_empty_write_slot();
+                                    conn.send_current_slot_non_blocking(src, bytes, reinterpret_cast<uint32_t>(hdr));
+                                    if (++unflushed == group) {
+                                        noc_async_writes_flushed();
+                                        unflushed = 0;
+                                    }
+                                    i0 = i1;
+                                }
+                                sentmask[idx] = mask;
                             }
+                        }
+                    }
+                }
+            }
+            noc_async_writes_flushed();
+            unflushed = 0;
+            cb_pop_front(cb_chunks, 1);
+        } else {
+            for (uint32_t i0 = 0, w = 0; i0 < max_rows; i0 += wave_rows, ++w) {
+                MaybeDeviceZoneScope("s_send");  // ring waits (reader-bound) + fabric slot waits + sends of one wave
+                for (uint32_t k = 0; k < n_dest; ++k) {
+                    const uint32_t t = dest_idx + k * DEST_WORDS;
+                    const bool local = is_local(k);
+                    uint32_t ci = 0;
+                    mhc_feed::for_each_item<num_banks, run_pages, wave_rows>(
+                        g, w, ci, [&](uint32_t c, const mhc_feed::Item& it) {
+                            if (c % links != link) {
+                                return;
+                            }
+                            cb_wait_front(cb_chunks, run_pages * (unflushed + 1));
+                            const uint32_t src = ring_base + slot * chunk_bytes;
+                            slot = (slot + 1 == ring_chunks) ? 0 : slot + 1;
+                            uint64_t dst;
+                            uint32_t bytes;
                             if (it.piece) {
-                                hdr->to_noc_fused_unicast_write_atomic_inc(
-                                    NocUnicastAtomicIncFusedCommandHeader{dst, land_arrival, 1, true}, bytes);
-                            } else if (++sent[k] == total[k]) {
-                                hdr->to_noc_fused_unicast_write_atomic_inc(
-                                    NocUnicastAtomicIncFusedCommandHeader{dst, arrival_noc, 1, true}, bytes);
+                                dst = get_noc_addr(land_x, land_y, land_base + mhc_feed::piece_offset(g, it));
+                                bytes = mhc_feed::piece_bytes(it);
                             } else {
-                                hdr->to_noc_unicast_write(NocUnicastCommandHeader{dst}, bytes);
+                                dst = out.get_noc_addr(it.j, 0, 0);  // the same page on the destination chip
+                                bytes = it.n * page_bytes;
                             }
-                            conn.wait_for_empty_write_slot();
-                            conn.send_current_slot_non_blocking(src, bytes, reinterpret_cast<uint32_t>(hdr));
-                        }
-                        if (++unflushed == group) {
-                            flush();
-                        }
-                    });
+                            if (local) {
+                                noc_async_write(src, dst, bytes);
+                                self_pieces += it.piece ? 1 : 0;
+                            } else {
+                                volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr =
+                                    hdrs[unflushed];  // free: flushed before reuse
+                                if (hdr_dest[unflushed] != k) {
+                                    route_to(
+                                        hdr,
+                                        static_cast<uint16_t>(get_arg_val<uint32_t>(t + 1)),
+                                        static_cast<uint16_t>(get_arg_val<uint32_t>(t + 2)),
+                                        static_cast<uint16_t>(get_arg_val<uint32_t>(t + 3)));
+                                    hdr_dest[unflushed] = k;
+                                }
+                                if (it.piece) {
+                                    hdr->to_noc_fused_unicast_write_atomic_inc(
+                                        NocUnicastAtomicIncFusedCommandHeader{dst, land_arrival, 1, true}, bytes);
+                                } else if (++sent[k] == total[k]) {
+                                    hdr->to_noc_fused_unicast_write_atomic_inc(
+                                        NocUnicastAtomicIncFusedCommandHeader{dst, arrival_noc, 1, true}, bytes);
+                                } else {
+                                    hdr->to_noc_unicast_write(NocUnicastCommandHeader{dst}, bytes);
+                                }
+                                conn.wait_for_empty_write_slot();
+                                conn.send_current_slot_non_blocking(src, bytes, reinterpret_cast<uint32_t>(hdr));
+                            }
+                            if (++unflushed == group) {
+                                flush();
+                            }
+                        });
+                }
             }
         }
         flush();

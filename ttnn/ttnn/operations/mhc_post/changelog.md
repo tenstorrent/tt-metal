@@ -511,3 +511,122 @@ check on both focus cases.
 |---|---|---|---|---|---|
 | `ckl::MulBinary` / `ckl::Addcmul` (eltwise_chain SFPU binary elements) | capability | each element writes ONE output tile from full-tile DEST operands; there is no element that updates several output tiles from one operand load with a per-row-group coefficient vector reused across the 4 SFPU vectors of that group, so every operand had to be re-unpacked once per output stream (20 copies + 24 SFPU calls a unit) | 25 904 / pass | 13 967 / pass | `kernels/mhc_post_compute.cpp:155` (`mix::sweep`, `MixSweep`) |
 | no helper (eltwise / broadcast family: a "lane-select merge" of broadcast tiles) | capability | building the K page needs, per row group, the vector at offset {1, 8, 9} of three column-broadcast tiles moved into one tile; no chain element selects vectors across DEST tiles (custom `KMerge` sfpi element; broadcasts / pack stay helper elements) | n/a (no helper path) | 4 120 / row (whole build) | `kernels/mhc_post_compute.cpp:308` (`mix::kmerge`, `KMerge`) |
+
+## Perf 2 — slice-sharing placement + feed L1 landing (perf tournament round 2)
+- Date: 2026-11-14
+- Focus (LOOSE_CASES `attention`, unchanged): DeepSeek-V4.1 T160 C5120 bf16, packed mixes, HiFi2, fp32 DEST, collapse
+  + norm, with (LOOSE_CASES[0]) and without (LOOSE_CASES[1]) the feed, BH 1×4 mesh (FABRIC_2D_TORUS_XY, 2 links),
+  105 workers / chip (+ 4 port cores), R = 5 × Q = 21.
+- Instrument: `tests/ttnn/unit_tests/operations/mhc_post/perf_feed_measure.py` (the `eval.ccl_perf` protocol;
+  `eval/golden_tests/mhc_post/perf_measure.py` still TT_FATALs: "Writes are not supported during trace capture", its
+  `prepare_mhc_post` uploads inside the trace — eval-harness issue, recorded again, not fixed here). 5 experiments
+  per variant, kept by `python -m eval.ccl_perf compare`. `CCL_PERF_NOCHECK=1` for the ablations.
+
+### Whole op (fastest / slowest chip, µs)
+| case | before | placement | final | compare (final vs before) |
+|---|---|---|---|---|
+| collapse + norm + feed (LOOSE_CASES[0]) | 142.52 / 145.61 | 127.30 / 129.64 | **113.12 / 116.66** | win (−29.40, −20.6 %) |
+| collapse + norm, no feed (LOOSE_CASES[1]) | 111.18 / 112.96 | 96.36 / 98.24 | **96.37 / 98.16** | win (−14.81, −13.3 %) |
+
+Not dispatch-bound (max gap 0.60 µs). Exposed feed time (feed − no-feed, fastest chip): 31.3 → 16.8 µs. Results in
+`.perf2/` of the run (base / ws / final), the experiments' own A/Bs in their `out/` dirs.
+
+### Measured breakdown (before; device 1 unless stated, µs, median / max over 105 cores)
+- New permanent zones: the feed port kernels had none — port reader `p_arm`, `p_wait_wave`, `p_stage`; port sender
+  `s_ready`, `s_send`, `s_arrival`, `s_landing` (host `MHC_POST_PERF_ZONES=port`). The W-share experiment added
+  `r_share_fwd`, `r_share_wait`, `r_issue_slices` (reader); the landing extends `w_publish` / `s_send`.
+- Cumulative ablation (fastest chip, no-feed / feed): base 111.2 / 142.5; F/X reads stubbed 91.0 / 126.8; + writes
+  90.7 / 124.2; + mix 77.3 / 111.3; **every payload stubbed 73.2 / 106.8**; compute only stubbed 96.4 / 126.3. Over
+  60 % of the call is scaffolding, and the feed's exposed ~33 µs does not move with the payloads.
+- Compute: `c_wait_coef` 17.5 / 31.4, `c_kbuild` 4.1, per pass `c_mix` 14.1 + `c_collapse` 3.75 + `c_ysq` 0.76,
+  `c_wait_w` 15.3 / 32.8 per core (first K-block), rows end 82.6 / 90.8, then the ~20 µs tail (lead fold 11.8, root
+  fold 11.3, `c_rstd` 5.0, root writer `w_root` 16.2, `c_norm` 4.2). **On the slowest cores coef + W wait ≈ 42 µs
+  constant** (11.5 + 30.3, 30.8 + 11.1, 21.4 + 21.4): the shared resident W lands at an absolute 60–67 µs, so W
+  supply, not the coefficients, gated the row loop. `r_push_slices` 29.5 / 54 — and still 30.7 with every payload
+  stubbed.
+- Feed (all 4 chips): every row is published in ONE wave at ~107–113 µs (deferred roots), then `p_stage` (port DRAM
+  restaging of ~300 KB / port) 18–25 µs, `s_send` ends 133–140, `s_arrival` up to 18 µs on the chip whose peers lag.
+  `p_arm` 19 µs, hidden at the start.
+- Ranked headroom: (1) feed exposed transport ~31 µs — OVERLAP (the links do not bind; the restaging chain after the
+  last publish does); (2) W-slice availability (~15 µs median compute stall, 30 µs even all-stubbed); (3) tail chain
+  ~20 µs; (4) start-up coefficient wait 17.5 median. DRAM roofline ≈ 37 µs: nothing is at a data-movement ceiling.
+
+### Portfolio (hard cap: 2 experiments) and verdicts
+1. **`w_share_early`** (local data availability, reader / host) — **WIN, graduated.** Diagnosis (zones + a per-link
+   NoC model): the share's DRAM read is 0.7 µs; the forward is NoC-link-congestion bound — on the 106-worker feed grid
+   (11 columns) the row-major R × Q split with Q = 21 puts a column member's 5 cores on a diagonal (next group 2 rows
+   down, 1 column left) whose forwards wrap the torus (14.4 hops average, busiest link 1.22 MB → 14.5 µs floor;
+   measured 14.9 / 28.4), then every core waits for its slowest peer (12.5 / 48.3). Fix: **interleaved strip
+   placement** (host only) — member q's R cores in one grid column at rows g·s + p, row group g in its compact band;
+   members that lose a strip to the ports take the free core nearest the band (busiest link 0.72 MB, 6.4 hops). Menu
+   (fastest no-feed / feed, µs): HEAD 111.18 / 142.71; issue W before block 0 + forward at start (row-major): reader
+   span 131.9 (regression — the forward stalls the reader's command buffer, delaying block 0 and the coefficients);
+   forward behind block 0: 130.2 (regression); banded strips 102.79 / 132.09; banded + early forward 101.72 / 132.03;
+   banded + early issue 106.94 / 137.83; **interleaved strips 96.47 / 127.32 (graduated)**; interleaved + early forward
+   100.84 / 131.28. In-op: `r_share_fwd` 14.9 / 28.4 → 3.5 / 10.4, W pushed 59.3 / 67.6 → 38.9 / 42.4, `c_wait_w`
+   14.7 → 0.06 µs per core, `c_lead_fold` 11.5 → 5.7, rows end 82.3 / 90.0 → 65.7 / 76.1. Bit-identical (work
+   indices g·Q + q, hence every grouping, unchanged). Coefficient multicast regroups automatically (19 senders vs 13).
+2. **`feed_l1_landing`** (OVERLAP, cross-device; the design's R5) — **WIN, graduated.** Workers NoC-write their
+   remote-destined y tiles straight into a resident landing in the port cores' L1 (per port, bank-major, so each
+   7-page same-bank chunk is contiguous); the port sender sends each chunk as soon as the workers that wrote its pages
+   have published (local scan of `cb_feed_poll`), no y_output DRAM staging, no port restaging. Menu (feed fastest /
+   slowest, on the pre-placement op, same-session base 142.56 / 145.36): stage (landing in natural order, the port
+   reader restages over the NoC) 147.20 / 149.66 (regression); direct (send the whole wave from L1) 142.23 / 144.74;
+   **stream (per-chunk readiness) 139.73 / 144.20 (win, −2.83 / −1.17; graduated)**; stream with 8 packets in flight
+   140.88 / 145.56; greedy (also partial ready runs) 141.53 / 146.31 (small packets). Alone it was small because every
+   worker's landing writes widened the publish spread (110–121 µs) through the same NoC congestion; **on top of the
+   placement it is worth −14.18 / −12.98 µs** (127.30 / 129.64 → 113.12 / 116.66; no-feed +0.01, null). Bit-exact
+   (bf16 tiles moved, never touched). T320 2 links (pre-placement): 261.49 / 264.70 → 252.14 / 260.78.
+- Not floated (cap), ranked for the next round: the tail chain (~20 µs; root writer 16 µs: permute → rstd unicast →
+  hc permute back → stats / hc writes), the start-up coefficient multicast (now the critical data supply,
+  `c_wait_coef` 17.6 / 27.9), the feed's remaining exposure (~17 µs: the busy direction carries 2 blocks = 400 KB per
+  port vs 200 KB on the light one — a TRANSPORT rebalance; and the y-write publish spread), `p_arm` (19 µs, hidden).
+
+### Graduation (domain, carve-outs)
+- **Placement: the one path for every W mode with R > 1** (stats / collapse ± norm, ± feed, all dtypes). Plain mode
+  has no slice sharing (row-major, untouched). Row-major when R > grid rows (no strip fits — e.g. T640 C1792 R = 20;
+  feasibility). On the 110-worker single-chip grid with Q = 22 the strips are exactly row-major (identical program).
+  No carve-out earned.
+- **L1 landing: the one feed path wherever it can be built.** Replaced code deleted from the experiment (stage / direct
+  / greedy variants and their knobs); the R4 DRAM-staged path stays ONLY for two earned carve-outs (`feed_l1_plan`):
+  - *T % 32 != 0* — measured regression / not built: the shifted D tiles are assembled on the ports; the only landing
+    variant that handles them (stage) measured 271.28 / 274.34 → 274.90 / 277.80 µs at T150 C5120 2 links. A
+    stream-style shifted variant is untested (open).
+  - *the landing does not fit the port's L1* — inexpressible: land_tiles = max dests per direction × images ×
+    ceil(Ht·Cb / nb) × ceil(nb / links) pages must fit under the workers' CB top (with the 2-page signal ring) or
+    above the poll CB within `get_max_worker_l1_unreserved_size()` − 64 KB − the port's other CBs (e.g. T ≥ 640 at
+    C 5120, or T160 C5120 at 1 link: 800 KB vs ~706 KB free). T640 on the DRAM path measured null against base.
+  - (static) ≤ 256 chunks per port (the sender's sent bitmap) — implied by the fit, never binding.
+  Allocator caveat recorded in the descriptor: `Program::allocate_circular_buffers` does not see a port-only CB below
+  the poll CB (workers + ports), so the poll would overlap it on the ports — the landing goes under the workers' CB top
+  or after the poll (the experiment hit this as corrupted landed words at 1 link).
+- **Integration bug caught at graduation (recorded because it faked a speedup):** while stripping the knobs, the
+  sender's per-stream chunk totals were left uncomputed in landing mode, so its end-of-call "empty stream" increment
+  fired for every destination — the peers' arrival counters kept +1 across calls (no longer trace-safe), later calls'
+  arrival waits returned early (the cleaned build measured 112.29 µs — fake) and 19 T % 32 != 0 feed cells failed
+  after aligned cells in the same session. Fixed (totals = chunks × images per stream); the numbers above are after
+  the fix and match the experiment's build (113.16).
+- Kernel-config ring: worker writer +~424 B (landing path), port reader −4.6 KB, sender −2.1 KB; not dispatch-bound.
+  L1: no new worker CB; port cores: 400 KB landing at the focus case under the workers' CB top, chunk ring 112 → 4 KB.
+
+### Guard set (single chip, profiler, median of 4 calls, µs: Perf 1 final → Perf 2 final)
+| path | Perf 1 | Perf 2 |
+|---|---|---|
+| plain fp32 T160 C5120 | 94.9 | 93.8 |
+| plain fp32 T1024 C1792 (multi-row, ragged) | 179.1 (173.8–184.0) | 184.6 (179.3–190.5) — identical program (plain: no W, no feed), run-to-run spread |
+| plain bf16 packed T160 / T1280 | 58.7 / 277.8 | 59.1 / 277.6 |
+| stats T160 / T1280 | 64.6 / 364.5 | 64.4 / 354.3 |
+| collapse T160 | 89.5 | 89.6 |
+| collapse + norm T160 / T1280 | 95.0 / 486.4 | 95.2 / 479.4 |
+| collapse + norm separate T1280 | 487.5 | 485.6 |
+No regression on any path; the feed path is covered by the mesh harness above.
+
+### Golden
+test_golden.py 574 passed / 0 failed; test_feed.py 148 / 148 (after the fix above); test_regression.py 33 / 35 (the 2
+known `test_projection_hifi4` failures of Refinement 1, unchanged); unit tests 11 / 11; the harness's golden check on
+both focus cases.
+
+### Helper bypasses — none
+No raw-LLK path graduated (placement is host-only; the landing is dataflow: NoC writes + the op's existing raw fabric
+sender, whose kernel-head justification — `ttnn.setup_fabric_connection` args + 2-D node routing that
+`ccl_helpers_dataflow.hpp`'s connection policy does not take — is unchanged and covers the new streaming loop).

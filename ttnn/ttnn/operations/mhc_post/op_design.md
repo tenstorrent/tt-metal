@@ -314,6 +314,21 @@ R5 replaces step 1's DRAM hop with a NoC write into port L1 slots under credit s
 chain (~25 µs) exceeds a row and the mid-loop hc on a root worker stalls the combine, so the deferred roots win and
 step 3's chain still starts at the end of the row loop.
 
+**As implemented (Perf 2): L1 landing (R5-style).** The workers NoC-write their remote-destined y tiles straight into
+a resident landing in the port cores' L1 (`CB_FEED_LANDY`, each port's chunks bank-major: every 7-page same-bank
+chunk contiguous; its address reaches the workers with the arm, in word 0 of their own `cb_feed_poll`), publish as
+before, and the port sender sends each chunk as soon as the workers that wrote its pages published them (a local scan
+of `cb_feed_poll`) — no y_output DRAM staging, no port restaging; the port reader only arms. Carve-outs to the R4
+DRAM-staged path (`feed_l1_plan`): T % 32 != 0 (shifted D tiles; the only built landing variant for them measured
+slower) and a landing that does not fit the port's L1 (e.g. T ≥ 640 at C 5120, or 1 link at T 160). A port-only CB is
+placed either under the workers' CB top or after the poll CB (the allocator does not see a port-only CB below the
+poll: they would overlap).
+
+**Placement (Perf 2).** With slice sharing (W, R > 1) a column member's R cores sit in one grid column (rows
+g·s + p, s = grid rows // R) — `interleaved_strip_placement` — so the share forwards are short vertical hops (the
+row-major split put them on a torus-wrapping diagonal: NoC-link-bound). Indices g·Q + q, hence every grouping and
+bit, are unchanged; row-major when R > grid rows.
+
 ### Placement as a TARGET axis
 
 `memory_layout` is not in TARGET: inputs are DRAM-interleaved only, so no shard scheme is designed. The physical realization of the R1 split would be BLOCK_SHARDED (rows × C-ranges), a knob-turn because each core's work is self-contained. Splitting along C for the stats is a scheme change (the combine in R2).

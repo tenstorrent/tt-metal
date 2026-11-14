@@ -1,7 +1,9 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// mhc_post feed port reader (RISCV_1, NoC0), regime R4 feed-DRAM-staged.
+// mhc_post feed port reader (RISCV_1, NoC0). Perf 2: with the L1 landing (l1_mode 1, the default wherever it fits and
+// T % 32 == 0) it only arms the workers and hands them the landing address; the R4 feed-DRAM-staged path below is the
+// host's carve-out (feed_l1_plan).
 //
 // One port core per (direction slot, link). The workers stage the y tiles bound for other chips in y_output and,
 // behind their write barrier, write each row count they finished into their slot of every port's cb_poll (a
@@ -34,6 +36,11 @@ void kernel_main() {
     constexpr uint32_t read_batch = get_compile_time_arg_val(11);   // chunks in flight per read barrier
     constexpr uint32_t ring_chunks = get_compile_time_arg_val(12);  // chunk slots of cb_chunks
     constexpr auto y_args = TensorAccessorArgs<13>();
+    // feed L1 landing (Perf 2): 1 = the workers write my chunks straight into my resident landing (cb_landy) and the
+    // sender streams them from there — this reader only arms the workers (and hands them the landing address);
+    // 0 = the R4 DRAM-staged path below (the host's carve-out: the landing does not fit, or T % 32 != 0)
+    constexpr uint32_t l1_mode = get_compile_time_arg_val(y_args.next_compile_time_args_offset());
+    constexpr uint32_t cb_landy = get_compile_time_arg_val(y_args.next_compile_time_args_offset() + 1);
     constexpr uint32_t chunk_bytes = run_pages * page_bytes;
     static_assert(page_bytes == 2048, "the feed moves bf16 tiles");
 
@@ -73,6 +80,14 @@ void kernel_main() {
         for (uint32_t k = 0; k < num_workers; ++k) {
             *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(poll + k * 16) = 0;
         }
+        if constexpr (l1_mode > 0) {  // the landing address, into word 0 of every worker's own cb_feed_poll, first
+            const uint32_t lb = get_write_ptr(cb_landy);
+            for (uint32_t k = 0; k < num_workers; ++k) {
+                const uint32_t xy = get_common_arg_val<uint32_t>(k);
+                noc_inline_dw_write(get_noc_addr(xy & 0xFFFF, xy >> 16, poll), lb);
+            }
+            noc_async_write_barrier();
+        }
         for (uint32_t k = 0; k < num_workers; ++k) {
             const uint32_t xy = get_common_arg_val<uint32_t>(k);
             noc_semaphore_inc(get_noc_addr(xy & 0xFFFF, xy >> 16, rows_sem), 1);
@@ -94,6 +109,13 @@ void kernel_main() {
         }
     };
 
+    if constexpr (l1_mode != 0) {  // the sender polls the published counts per chunk itself once my slots are zeroed
+        if (n_dest > 0) {
+            cb_reserve_back(cb_chunks, 1);
+            cb_push_back(cb_chunks, 1);
+        }
+        return;
+    }
     const uint32_t scr = get_write_ptr(cb_yscr);
     auto y_page = [&](uint32_t d, uint32_t img, uint32_t t, uint32_t col) {
         return y_acc.get_noc_addr((img * g.ht + t) * g.c_tiles + d * g.blk_tiles + col);

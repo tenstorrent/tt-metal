@@ -1,0 +1,32 @@
+== device 0 run 20480: kernel span 151.9 us
+zone                    risc         n cores     start min/med/max     dur med/max     end med/max  sum/core med
+p_arm                   NCRISC       4     4     0.3/   0.3/   0.3   28.17/ 33.84    28.4/  34.1       28.17
+s_ready                 BRISC        4     4     0.9/   1.0/   1.0   10.49/ 17.80    11.5/  18.8       10.49
+s_send                  BRISC        4     4    25.1/  28.5/  34.2   95.55/104.66   124.1/ 131.3       95.55
+w_norm_row              BRISC      105   105    71.1/  85.3/ 110.3   21.80/ 36.78   107.2/ 111.4       21.80
+w_publish               BRISC      105   105   106.5/ 106.9/ 111.1    0.27/  0.55   107.2/ 111.3        0.27
+s_arrival               BRISC        4     4   119.3/ 124.8/ 131.8   11.20/ 20.71   136.3/ 151.9       11.20
+== device 1 run 20481: kernel span 148.4 us
+zone                    risc         n cores     start min/med/max     dur med/max     end med/max  sum/core med
+p_arm                   NCRISC       4     4     0.3/   0.3/   0.3   25.75/ 25.81    26.0/  26.1       25.75
+s_ready                 BRISC        4     4     1.0/   1.0/   1.0    8.72/ 16.51     9.7/  17.5        8.72
+s_send                  BRISC        4     4    25.0/  26.1/  26.2   98.43/103.91   124.5/ 130.1       98.43
+w_norm_row              BRISC      105   105    71.6/  85.6/ 110.9   22.78/ 36.58   108.2/ 112.0       22.78
+w_publish               BRISC      105   105   107.4/ 108.0/ 111.7    0.27/  0.51   108.2/ 112.0        0.27
+s_arrival               BRISC        4     4   119.7/ 125.0/ 130.6    8.96/ 18.23   134.2/ 148.4        8.96
+== device 2 run 20482: kernel span 135.3 us
+zone                    risc         n cores     start min/med/max     dur med/max     end med/max  sum/core med
+p_arm                   NCRISC       4     4     0.3/   0.3/   0.3   25.98/ 27.07    26.3/  27.3       25.98
+s_ready                 BRISC        4     4     1.0/   1.0/   1.0    1.91/  2.46     2.9/   3.4        1.91
+s_send                  BRISC        4     4    25.9/  26.3/  27.4  101.68/108.66   128.7/ 134.7      101.68
+w_norm_row              BRISC      105   105    73.4/  86.2/ 111.2   22.09/ 35.37   108.5/ 112.3       22.09
+w_publish               BRISC      105   105   107.5/ 108.2/ 112.0    0.27/  0.87   108.5/ 112.2        0.27
+s_arrival               BRISC        4     4   122.4/ 129.2/ 135.2    0.10/  0.10   129.3/ 135.3        0.10
+== device 3 run 20483: kernel span 132.8 us
+zone                    risc         n cores     start min/med/max     dur med/max     end med/max  sum/core med
+p_arm                   NCRISC       4     4     0.3/   0.3/   0.3   25.21/ 25.37    25.5/  25.7       25.21
+s_ready                 BRISC        4     4     1.0/   1.0/   1.0    1.18/  1.43     2.2/   2.4        1.18
+s_send                  BRISC        4     4    25.5/  25.5/  25.7  100.49/106.48   126.0/ 132.2      100.49
+w_norm_row              BRISC      105   105    73.8/  87.7/ 112.4   21.82/ 35.96   109.6/ 114.2       21.82
+w_publish               BRISC      105   105   108.9/ 109.3/ 113.7    0.27/  0.62   109.6/ 114.2        0.27
+s_arrival               BRISC        4     4   120.8/ 126.7/ 132.7    0.36/  4.51   128.8/ 132.8        0.36

@@ -74,12 +74,20 @@ SLICE_SHARE = True
 # its rectangles of consecutive cores: 2-4 on the 11-wide grid). Knob: False = every core reads its own.
 COEF_MCAST = True
 MAX_FEED_LINKS = 2  # feed: port cores reserved per direction (2 directions), whatever feed_num_links is
-FEED_CHUNKS_IN_FLIGHT = 4  # feed: packets in flight per port (fabric_all_gather's 4-chunk batch, 112 KiB ring)
+FEED_CHUNKS_IN_FLIGHT = 4  # feed: packets in flight per port (fabric_all_gather's 4-chunk batch; 8 measured slower)
 FEED_READ_BATCH = 4  # feed: chunks the port reader keeps in flight per read barrier (ring = in-flight packets + this)
 FEED_WAVE_ROWS = 1  # feed: local rows per port wave (the ports stream row i while the workers finish row i+1)
 # feed, T % 32 != 0: L1 of the landing port for the shared D tile rows (<= G - 1 a image, Cb tiles each; the largest
 # golden shape, C 7168, needs 336 KiB)
 FEED_LAND_BUDGET = 768 * 1024
+# feed L1 landing (Perf 2): the workers NoC-write their remote-destined y tiles straight into a resident landing in
+# the port cores' L1, each port's chunks bank-major (every chunk of 7 same-bank D pages contiguous), and the port
+# sender sends each chunk from there as soon as the workers that wrote it published its rows — no y_output DRAM
+# staging, no port restaging. Carve-outs to the R4 DRAM-staged path (feed_l1_plan): T % 32 != 0 (the shifted D tiles
+# are assembled on the ports; the only built landing variant for them measured slower than DRAM staging) and a
+# landing that does not fit the port's L1.
+FEED_L1_MARGIN = 64 * 1024  # port L1 kept free above the CBs (L1 buffers: the caller's global semaphores, ...)
+FEED_STREAM_MAX_CHUNKS = 256  # landing: the port sender's sent-chunk bitmap
 COMBINE_FANIN = 11  # leader fan-in of the 2-level combine tree (<= 16, ledger symbol)
 PARTIAL_DEPTH = 2  # per-row partial / sum-of-squares pages in flight to the writer
 Y_BLOCKS = 2  # collapse: y blocks in flight to the writer
@@ -136,6 +144,7 @@ CB_FEED_POLL = 26  # feed (workers + ports, one address): the workers' published
 CB_FEED_YSCR = 27  # feed, T % 32 != 0 (port cores): port reader's private y tiles of a shifted chunk (2 per tile)
 CB_FEED_LAND = 28  # feed, T % 32 != 0 (port cores): landing of the shared D tile rows (compact contributor blocks)
 CB_KPAGES = 30  # fused mix: the row's 1 + n K pages, built by compute from cb_coef_cols (UnpackToDestFp32)
+CB_FEED_LANDY = 31  # feed L1 landing (port cores): the workers' remote-destined y tiles
 CB_RSTD_LANE = 29  # norm: root's rstd in SFPU lane layout, computed before the hc step (compute -> writer)
 
 # Semaphore ids (R2)
@@ -611,9 +620,18 @@ def create_program_descriptor(
         assert len(port_xy) <= 2 * MAX_FEED_LINKS
         feed_common += [len(port_xy)] + [v.x | (v.y << 16) for v in port_xy]
         feed_common += [0] * (2 * MAX_FEED_LINKS - len(port_xy))
+        worker_cb_bytes = sum(-(-c.total_size // 64) * 64 for c in cbs)
+        l1 = feed_l1_plan(device, feed, t_tiles, ht_img, c_tiles, f_tensor.shape[-2], worker_cb_bytes, len(workers))
+        feed["l1"] = l1
+        # FEED_L1 (common args 14..): slot bits, links, DRAM banks, images, section stride
+        if l1["mode"] > 0:
+            feed_common += [l1["slot_bits"], feed["links"], _num_dram_banks(device), l1["nimg"], l1["S"]]
+    writer_defines = _diag_defines("writer")
+    if feed is not None:
+        writer_defines = writer_defines + [("MHC_FEED_L1", str(feed["l1"]["mode"]))]
     writer = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "mhc_post_writer.cpp"),
-        defines=_diag_defines("writer"),
+        defines=writer_defines,
         core_ranges=core_ranges,
         compile_time_args=writer_ct,
         runtime_args=writer_rt,
@@ -805,6 +823,37 @@ def feed_shared_rows(T, G):
     return [r for r in range(htd) if (TILE * r) // T != (min(TILE * r + TILE, G * T) - 1) // T]
 
 
+def feed_l1_plan(device, feed, t_tiles, ht_img, c_tiles, T, worker_cb_bytes, n_workers):
+    """The feed L1 landing of this chip's ports. Returns dict(mode = 1 landing / 0 the R4 DRAM-staged path,
+    land_tiles per port core, S = section stride (tiles), nimg, slot_bits = bit d set when chip d's first hop leaves
+    through port slot 1, below = the landing sits under the workers' CB top)."""
+    plan, links = feed["chips"], feed["links"]
+    me = plan[feed["coord"]]
+    blk = c_tiles // feed["G"]
+    nimg = t_tiles // ht_img
+    nb = _num_dram_banks(device)
+    slot_bits = sum(1 << d for d, sl in me["slot_of"].items() if sl == 1)
+    N = ht_img * blk
+    S = -(-N // nb) * -(-nb // links)
+    per_slot = [sum(1 for d, sl in me["slot_of"].items() if sl == k) for k in (0, 1)]
+    land = max(per_slot) * nimg * S
+    run_pages = max(1, int(ttnn.get_tt_fabric_max_payload_size_bytes()) // 2048)
+    # chunks of the busiest port (its sent-chunk bitmap; never binding while the landing fits L1)
+    per_link = max(
+        sum(-(-(N // nb + (1 if b < N % nb else 0)) // run_pages) for b in range(l, nb, links)) for l in range(links)
+    )
+    # fit (exact CB layout of a port core): the port CBs above the workers' CBs (the poll spans both), the landing
+    # last; or the landing (+ the 2-page signal ring) under the workers' CB top, where the poll cannot overlap it
+    ring = 2 * 2048
+    port_top = max(worker_cb_bytes, ring) + 16 * n_workers
+    room = int(ttnn.get_max_worker_l1_unreserved_size()) - FEED_L1_MARGIN - port_top
+    below = ring + land * 2048 <= worker_cb_bytes
+    fits = below or land * 2048 <= room
+    if T % TILE != 0 or not fits or max(per_slot) * nimg * per_link > FEED_STREAM_MAX_CHUNKS:
+        return dict(below=False, mode=0, land_tiles=0, S=S, nimg=nimg, slot_bits=slot_bits)
+    return dict(below=below, mode=1, land_tiles=land, S=S, nimg=nimg, slot_bits=slot_bits)
+
+
 def _add_feed_ports(program, device, feed, y_tensor, R, row_ranges, Q, c_tiles, ht_img, T, workers):
     """The 2 * links port cores of this chip: reader (RISCV_1) stages chunks from y_output, sender (RISCV_0) sends
     them over the fabric. Port (slot k, link l) sends to the destinations whose first hop leaves through slot k.
@@ -839,8 +888,14 @@ def _add_feed_ports(program, device, feed, y_tensor, R, row_ranges, Q, c_tiles, 
 
     worker_xy = [device.worker_core_from_logical_core(c) for c in workers]
     worker_xy = [v.x | (v.y << 16) for v in worker_xy]
+    l1 = feed["l1"]
+    l1_mode = l1["mode"]
+    # landing: the ring only carries the reader's "slots zeroed" signal to the sender (2 pages)
+    ring_pages = 2 if l1_mode else ring_chunks * run_pages
+    program.cbs = list(program.cbs) + [_cb(CB_FEED_CHUNKS, d_tensor.dtype, page, ring_pages, port_crs)]
+    if l1_mode > 0 and l1["below"]:  # the landing at the bottom of the port's L1, under the workers' CB top
+        program.cbs = list(program.cbs) + [_cb(CB_FEED_LANDY, d_tensor.dtype, page, l1["land_tiles"], port_crs)]
     program.cbs = list(program.cbs) + [
-        _cb(CB_FEED_CHUNKS, d_tensor.dtype, page, ring_chunks * run_pages, port_crs),
         # on the workers too: one CB config, so a worker's get_write_ptr is the ports' slot address
         _cb(CB_FEED_POLL, ttnn.float32, 16 * len(workers), 1, _merged_ranges(list(workers) + list(port_cores_used))),
     ]
@@ -848,6 +903,13 @@ def _add_feed_ports(program, device, feed, y_tensor, R, row_ranges, Q, c_tiles, 
         program.cbs = list(program.cbs) + [_cb(CB_FEED_YSCR, d_tensor.dtype, page, 2 * run_pages, port_crs)]
     if land_tiles > 0:  # same CB on every port core and every chip's program: the same address everywhere
         program.cbs = list(program.cbs) + [_cb(CB_FEED_LAND, d_tensor.dtype, page, land_tiles, port_crs)]
+    if (
+        l1_mode > 0 and not l1["below"]
+    ):  # the workers' y landing: LAST, above the poll. A port-only CB placed below the poll is not
+        # seen by the poll's address computation (Program::allocate_circular_buffers takes the max region end only
+        # over allocators whose core range EQUALS one of the CB's ranges): the poll then overlaps it on the ports
+        # (measured: the workers' published counts corrupted landed y words at links = 1).
+        program.cbs = list(program.cbs) + [_cb(CB_FEED_LANDY, d_tensor.dtype, page, l1["land_tiles"], port_crs)]
     ready_addr, arrival_addr = feed["semaphores"]
     land = device.worker_core_from_logical_core(ports[(0, 0)])
     reader_rt, sender_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
@@ -896,17 +958,19 @@ def _add_feed_ports(program, device, feed, y_tensor, R, row_ranges, Q, c_tiles, 
                 args += list(ttnn.setup_fabric_connection(me["node"], first, link_ids[l], program, core))
             sender_rt[core.x][core.y] = args
             layout.append((k, l, len(dests), expect_in))
-    feed["layout"] = layout
+    feed["layout"] = layout + [("l1", l1_mode, l1["land_tiles"])]
     port_ct = [CB_FEED_CHUNKS, page, run_pages, num_banks, links, FEED_WAVE_ROWS, max_rows]
     reader_ct = (
         port_ct
         + [Q, SEM_FEED_ROWS, CB_FEED_POLL, CB_FEED_YSCR, FEED_READ_BATCH, ring_chunks]
         + list(ttnn.TensorAccessorArgs(y_tensor).get_compile_time_args())
+        + [l1_mode, CB_FEED_LANDY]
     )
     sender_ct = (
         port_ct
         + [FEED_CHUNKS_IN_FLIGHT, ring_chunks, CB_FEED_LAND]
         + list(ttnn.TensorAccessorArgs(d_tensor).get_compile_time_args())
+        + [l1_mode, CB_FEED_LANDY, Q, CB_FEED_POLL]
     )
     program.kernels = list(program.kernels) + [
         ttnn.KernelDescriptor(
