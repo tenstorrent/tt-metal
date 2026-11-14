@@ -305,7 +305,7 @@ def create_sharded_memory_config_(
             raise RuntimeError("Invalid core_grid type")
 
         grid_coord_1 = ttnn.CoreCoord(core_grid[0].x - 1, core_grid[0].y - 1)
-        grid_coord_2 = ttnn.CoreCoord(core_grid[1].x - 1, core_grid[0].y)
+        grid_coord_2 = ttnn.CoreCoord(core_grid[1].x - 1, core_grid[0].y + core_grid[1].y - 1)
         shard_grid = ttnn.CoreRangeSet(
             {
                 ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord_1),
@@ -355,7 +355,7 @@ def create_sharded_memory_config_(
         else:
             raise RuntimeError("Invalid sharding scheme")
 
-    if tile_layout and shard_shape[0] % 32 != 0 and shard_shape[1] % 32 != 0:
+    if tile_layout and (shard_shape[0] % 32 != 0 or shard_shape[1] % 32 != 0):
         raise RuntimeError("Incorrect tensor shape")
     shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, shard_orientation)
     memory_config = MemoryConfig(tensor_memory_layout, BufferType.L1, shard_spec)

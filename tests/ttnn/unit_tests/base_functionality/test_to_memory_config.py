@@ -2855,3 +2855,45 @@ def test_create_sharded_memory_config_height_sharded_tile_layout_pads_to_tiles(d
         torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
     )
     assert_equal(torch_input, ttnn.to_torch(tensor))
+
+
+@pytest.mark.parametrize("strategy", [ttnn.ShardStrategy.HEIGHT, ttnn.ShardStrategy.WIDTH], ids=["height", "width"])
+def test_create_sharded_memory_config_tile_layout_rejects_unaligned_shard_shape(expect_error, strategy):
+    with expect_error(RuntimeError, "Incorrect tensor shape"):
+        ttnn.create_sharded_memory_config_(
+            (1, 1, 32, 33),
+            ttnn.CoreGrid(x=8, y=4),
+            strategy,
+            ttnn.ShardOrientation.ROW_MAJOR,
+            tile_layout=True,
+        )
+
+
+def test_create_sharded_memory_config_tile_layout_accepts_aligned_shard_shape():
+    memory_config = ttnn.create_sharded_memory_config_(
+        (1, 1, 32, 1024),
+        ttnn.CoreGrid(x=8, y=4),
+        ttnn.ShardStrategy.WIDTH,
+        ttnn.ShardOrientation.ROW_MAJOR,
+        tile_layout=True,
+    )
+    assert tuple(memory_config.shard_spec.shape) == (32, 32)
+
+
+def test_create_sharded_memory_config_two_core_grids_span_both_grids():
+    grid_1 = ttnn.CoreGrid(x=2, y=3)
+    grid_2 = ttnn.CoreGrid(x=4, y=5)
+    memory_config = ttnn.create_sharded_memory_config_(
+        (1, 1, 2 * 3 + 4 * 5, 64),
+        [grid_1, grid_2],
+        ttnn.ShardStrategy.HEIGHT,
+        ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    shard_grid = memory_config.shard_spec.grid
+    assert shard_grid.num_cores() == grid_1.x * grid_1.y + grid_2.x * grid_2.y
+    ranges = {(r.start.x, r.start.y, r.end.x, r.end.y) for r in shard_grid.ranges()}
+    assert ranges == {(0, 0, 1, 2), (0, 3, 3, 7)}
+    grid_size = shard_grid.bounding_box().grid_size()
+    assert grid_size.x == max(grid_1.x, grid_2.x)
+    assert grid_size.y == grid_1.y + grid_2.y
