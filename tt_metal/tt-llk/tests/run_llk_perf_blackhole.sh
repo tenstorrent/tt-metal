@@ -63,7 +63,7 @@ mkdir -p perf_data
 PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
 PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
 PYTEST_MARK_EXPR="perf and not accuracy"
-if [[ "${PIPELINE:-}" != nightly ]]; then
+if [[ "${PIPELINE:-}" != nightly && "${PIPELINE:-}" != baseline ]]; then
   PYTEST_MARK_EXPR+=" and not nightly"
 fi
 

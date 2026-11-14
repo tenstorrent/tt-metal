@@ -31,6 +31,7 @@
   "perf_vif_targets": 2.9
  },
  "blackhole": {
+  "perf_compressed_custom_mm": 8.2,
   "perf_custom_mm": 56.4,
   "perf_custom_mm_reuse_dest_srcb": 28.4,
   "perf_eltwise_bcast_col_custom": 1.3,

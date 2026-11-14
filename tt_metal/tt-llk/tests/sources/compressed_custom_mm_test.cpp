@@ -188,7 +188,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
             compressed_mm_isolate_dvalids<false>(LOOP_FACTOR, 1 /* num_calls */, KT_DIM, CT_DIM, buffer_C[0], 0 /* meta_bytes_per_call */);
         }

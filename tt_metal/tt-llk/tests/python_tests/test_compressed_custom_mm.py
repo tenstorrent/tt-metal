@@ -268,5 +268,5 @@ def test_compressed_custom_mm_rounding_accuracy(boot_mode=BootMode.DEFAULT):
         COMPRESSED_MM_FORMATS[0],
         (1, 2, 1),
         boot_mode,
-        max_ulp=2,
+        max_ulp=1,
     )
