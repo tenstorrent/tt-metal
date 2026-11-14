@@ -46,6 +46,8 @@ ProgramDescriptor MorehClipGradNormStep1Operation::create_descriptor(
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
     auto* device = tmp_pow_sum.device();
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
@@ -98,6 +100,8 @@ ProgramDescriptor MorehClipGradNormStep1Operation::create_descriptor(
 
     const auto cb_data_format = datatype_to_dataformat_converter(tmp_pow_sum.dtype());
     const uint32_t cb_tile_size = tile_size(cb_data_format);
+    const auto acc_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : cb_data_format;
+    const uint32_t acc_tile_size = tile_size(acc_data_format);
 
     ProgramDescriptor desc;
 
@@ -144,10 +148,10 @@ ProgramDescriptor MorehClipGradNormStep1Operation::create_descriptor(
             .buffer_index = tt::CBIndex::c_25, .data_format = cb_data_format, .page_size = cb_tile_size}}},
     });  // |x|^p
     desc.cbs.push_back(CBDescriptor{
-        .total_size = im2_t * cb_tile_size,
+        .total_size = im2_t * acc_tile_size,
         .core_ranges = core_group_1,
         .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = tt::CBIndex::c_26, .data_format = cb_data_format, .page_size = cb_tile_size}}},
+            .buffer_index = tt::CBIndex::c_26, .data_format = acc_data_format, .page_size = acc_tile_size}}},
     });  // Add[|x|^p * exp(log(|x|) * decimal)]
     desc.cbs.push_back(CBDescriptor{
         .total_size = im3_t * cb_tile_size,
@@ -206,7 +210,15 @@ ProgramDescriptor MorehClipGradNormStep1Operation::create_descriptor(
         {"REDUCE_OP", "PoolType::SUM"},
         {"REDUCE_DIM", "ReduceDim::REDUCE_SCALAR"},
     };
-    compute_desc.config = ComputeConfigDescriptor{};
+    if (fp32_dest_acc_en) {
+        compute_desc.defines.emplace_back("FP32_DEST_ACC_EN", "1");
+    }
+    compute_desc.config = ComputeConfigDescriptor{
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = dst_full_sync_en,
+        .math_approx_mode = math_approx_mode,
+    };
     compute_desc.runtime_args.reserve(num_cores_to_be_used);
 
     ////////////////////////////////////////////////////////////////////////////
