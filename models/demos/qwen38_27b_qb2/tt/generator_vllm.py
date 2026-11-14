@@ -14,6 +14,7 @@ from loguru import logger
 import ttnn
 from models.demos.qwen38_27b_qb2.tt.generator import build_generator, fabric_router_config
 from models.demos.qwen38_27b_qb2.tt.model import ModelCache
+from models.demos.qwen38_27b_qb2.tt.prefix_cache import PrefixSnapshots, prefix_snapshot_settings
 
 
 class Qwen38ForCausalLM:
@@ -23,7 +24,7 @@ class Qwen38ForCausalLM:
     _SEED_MODULUS = (1 << 31) - _MAX_CONTEXT - 1
 
     model_capabilities = {
-        "supports_prefix_caching": False,
+        "supports_prefix_caching": prefix_snapshot_settings()[0] > 0,
         "supports_async_decode": True,
         "supports_sample_on_device": True,
         "max_device_top_k": 32,
@@ -56,6 +57,7 @@ class Qwen38ForCausalLM:
         self.batch_size, self.context = batch_size, context
         self.host_compatibility = os.environ.get("QWEN_VLLM_HOST_COMPATIBILITY") in ("1", "all")
         self.cache = None
+        self.prefix_snapshots = None
         self._sampling_key = None
         self._decode_bound = False
         self._last_device_sampling = None
@@ -123,6 +125,15 @@ class Qwen38ForCausalLM:
         )
         table = torch.zeros(self.batch_size, (self.context + 31) // 32, dtype=torch.int32)
         self.generator.bind_cache(self.cache, table)
+        capacity, minimum, margin = prefix_snapshot_settings()
+        if capacity:
+            self.prefix_snapshots = PrefixSnapshots(self.generator, capacity, minimum=minimum, margin=margin)
+            logger.info(
+                "Qwen3.8 prefix snapshots: {} entries, {:.1f} MiB per device, prefixes of at least {} tokens",
+                capacity,
+                capacity * self.prefix_snapshots.bytes_per_entry() / 2**20,
+                minimum,
+            )
         return self.cache
 
     def _cache(self, kv_cache):
@@ -191,6 +202,55 @@ class Qwen38ForCausalLM:
             self._sampling_key = key
         return True
 
+    def _resume_prefixes(self, tokens, table, kv_cache, ends, starts, slots):
+        # Chunked prefill is disabled for this model: a nonzero start is a prefix hit.
+        store = self.prefix_snapshots
+        rows = torch.as_tensor(tokens)
+        resume, restores, sources = [], [], {}
+        for row, (start, end) in enumerate(zip(starts, ends)):
+            found = store.find(rows[row], start) if start > 0 else None
+            if found is not None:
+                restores.append((slots[row], found[1]))
+                sources[row] = found
+            resume.append(found[0] if found is not None else 0)
+            if start > 0:
+                logger.debug(
+                    "Qwen3.8 prefix cache: {} tokens, vLLM hit {}, resuming at {}, prefilling {}",
+                    end,
+                    start,
+                    resume[row],
+                    end - resume[row],
+                )
+        if restores:
+            model = self.generator.model
+            if getattr(model, "_resident_decode_bucket", None) is not None:
+                model.suspend_decode_bucket(discard_slots=[slot for slot, _ in restores])
+            for slot, index in restores:
+                store.restore(slot, index)
+        for row, (end, slot) in enumerate(zip(ends, slots)):
+            mark = store.mark(end, resume[row])
+            if mark is None:
+                continue
+            key = store.key(rows[row], mark)
+            if key in store:
+                continue
+            if resume[row] == 0:
+                self.generator.reset_recurrent_slots([slot])
+            outputs = self.generator.prefill_forward(
+                rows[row : row + 1, resume[row] : mark],
+                page_table=table,
+                kv_cache=kv_cache,
+                prompt_lens=[mark - resume[row]],
+                start_pos=[resume[row]],
+                slots=[slot],
+            )
+            del outputs
+            if row in sources:
+                store.demote(*sources[row])
+            store.save(slot, key)
+            resume[row] = mark
+        return resume
+
     def prefill_forward(
         self,
         tokens,
@@ -207,6 +267,8 @@ class Qwen38ForCausalLM:
         starts = [0] * len(ends) if start_pos is None else torch.as_tensor(start_pos).reshape(-1).tolist()
         slots = list(range(len(ends))) if empty_slots is None else list(empty_slots)
         table = self._table(page_table, slots)
+        if self.prefix_snapshots is not None:
+            starts = self._resume_prefixes(tokens, table, kv_cache, ends, starts, slots)
         fresh = [slot for slot, start in zip(slots, starts) if start == 0]
         if fresh:
             self.generator.reset_recurrent_slots(fresh)
