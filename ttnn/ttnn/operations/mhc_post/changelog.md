@@ -217,3 +217,72 @@
   Size limit: the landing holds nimg · nsh · Cb tiles; above `FEED_LAND_BUDGET` (768 KiB; largest golden 336 KiB)
   the host refuses with a ValueError.
 - Tests added: tests/ttnn/unit_tests/operations/mhc_post/probes/probe_012.py (non-aligned feed matrix on the mesh).
+
+## Refinement 3 — Feed OVERLAP: hide the exchange behind the local work (perf-flagged feed case)
+- Date: 2026-11-14
+- Measurement: `eval/golden_tests/mhc_post/perf_measure.py` still cannot trace the call (its `prepare_mhc_post` re-uploads
+  the inputs inside the trace capture: `TT_FATAL: Writes are not supported during trace capture`, then a teardown
+  hang). Added `tests/ttnn/unit_tests/operations/mhc_post/perf_feed_measure.py`: the same `eval.ccl_perf.run` protocol
+  (spin + 5 traced calls × 100 × 5 experiments, golden-checked first, same mesh / fabric config / trace region via
+  the golden conftest's mesh cache), with the op's args captured from one `call_mhc_post_mesh` and every later call
+  dispatch-only. Compared with `python -m eval.ccl_perf compare`. All numbers below: fastest-chip mean, 5 experiments,
+  BH 1×4 mesh (QuietBox 2, physical 2×2), FABRIC_2D_TORUS_XY, 2 links.
+- **Per-chip breakdown (OVERLAP — the transport the op leaves exposed):**
+
+  | | feed (LOOSE_CASES[0]) | no feed (LOOSE_CASES[1]) | exposed |
+  |---|---|---|---|
+  | before (Refinement 2b) | 224.7 µs | 167.2 µs | 57.5 µs |
+  | after | 200.0 µs (slowest 204.3) | 167.2 µs | 32.8 µs |
+
+  Per-core timeline (device profiler, harness conditions): the workers finish at ~166 µs in both programs. Before,
+  wave 0 (the first published row) became ready only at ~166 µs — the deferred roots return every row's rstd at the
+  end, so norm, the y writes and the publication all sit in the tail — and the 4 port cores then took 38 µs (slot A,
+  one destination) / 58 µs (slot B, the neighbour + the far chip's block) to drain 5 waves. Ablations before: port
+  DRAM reads stubbed −21.5 µs, fabric sends stubbed ~0 (the links do not bind), and the ports' NoC polling of the 106
+  worker counters cost 4.3 µs per wave.
+- What was done (each lever labelled; each kept by `compare`):
+  1. **OVERLAP — port reader batching + cached wave polling** (`FEED_READ_BATCH` = 4 chunks per read barrier, ring
+     = `FEED_CHUNKS_IN_FLIGHT + FEED_READ_BATCH`, byte-identical 112 KiB; a wave re-reads only workers not yet done):
+     224.7 → 207.6 µs.
+  2. **OVERLAP — push publication**: each worker writes its published-row count into its slot of every port's
+     `cb_feed_poll` (inline 4 B write behind its y write barrier); the ports zero their slots and then arm each worker
+     (`SEM_FEED_ROWS`) before its first write, so no slot holds a previous call's count. Removes the NoC polling
+     (~2 µs wave-0 detection + a 5.5 µs re-poll round per port): 207.6 → 200.0 µs.
+  3. **OVERLAP — lagged root work, parked knob** (`NORM_ROOT_LAG`, `NORM_ROWS_IN_FLIGHT`): virtual-row schedule in
+     compute + writer — the root work of row t runs `root_lag` rows after it and norm_block / y writes / publication
+     `NORM_ROWS_IN_FLIGHT − 1` rows after it, inside the row loop (per-row rstd landing bits, writer-side rstd
+     expansion, wrap-aware `cb_y_hold` of `norm_lag + 1` rows — the Σy² reload addresses wrapped pages as
+     `idx − hold_pages`, the unpacker's uint32 address arithmetic). Correct (norm gates 8/8, feed gates 11/11 at 1/3)
+     but slower everywhere measured: T160 feed +43 µs (1/3), +32 µs (2/5) vs deferred; T1280 collapse + norm single
+     chip 872 / 692 / 690 µs (1/3, 2/5, 3/8) vs 646 µs deferred. Why: the root chain (fold → permute → hc → rstd,
+     ≈ 25 µs, Refinement 1) is longer than a row (≈ 14 µs at T160), and a mid-loop hc on a root core — which is also
+     a worker — delays its partials, which stalls every later row's combine; deferred, the roots' hc steps run in
+     parallel once in the tail. Parked at 0 = the deferred schedule (rstd expanded by the reader, as before).
+  - TRANSPORT unchanged (fabric_all_gather / fabric_ring_exchange settings): `FEED_CHUNKS_IN_FLIGHT` 8 measured
+    206.95 vs 207.5 µs (−0.3 %, inside the AG report's "8 gains ≤ 2 %"), kept at 4; reader batch 8 was slower
+    (209.4 µs).
+  - Measurement pitfall recorded: extra `DeviceZoneScopedN` zones in the port kernels make the harness report ~192 µs
+    for the same per-core timeline (≈ 210 µs on every chip in the dumped log) — the busy port RISCs exhaust the
+    profiler marker budget and the per-call duration loses their end markers. Headline numbers are zone-free.
+- Remaining exposed (32.8 µs), measured: after the workers end (~166 µs) the busy-slot ports move 200 tiles each
+  (vs 100 on slot A: the far chip's block takes one direction) at ~0.6 µs per 7-tile chunk on both the DRAM-staging
+  reader and the fabric sender (balanced, ~13–14 GB/s per port; neither waits on the other), plus ~3 µs of launch
+  skew / arrival. Stubbing the staging reads now saves 5.7 µs; stubbing the sends saves nothing.
+  Next levers, not taken here: (a) balance the far block across both directions — fabric_all_gather does it with a
+  store-and-forward relay through the neighbour (2-D direct routing fixes the far chip's first hop), ≈ −6 to −8 µs;
+  (b) R5 feed-L1-direct (no DRAM staging: ≈ −6 µs on the port, −2.4 MB DRAM) — the reader stops binding but the
+  sender then does; (c) roots off the worker cores (e.g. the idle TRISCs of the port cores) so a lagged root no
+  longer stalls the grid — the only way the transport can start before the tail at T160.
+- Accuracy achieved: unchanged bits — feed output bit-exact (the all-to-all of the no-feed call's y), X'/stats/hc the
+  same bits as the no-feed call; norm gates within 1 bf16 step; golden gates as before.
+- Golden test progress: test_feed.py 48/48 selected (16 feed gates, 4 loose feed cases, 28 h_non_aligned cells);
+  test_golden.py collapse + stats 210/210, plain packed 136/136; test_regression.py 33/35 (the 2 known
+  `test_projection_hifi4` calibration failures of Refinement 1); unit tests 11/11.
+- No regression (single chip, profiler, bf16 packed HiFi2 unless noted): T160 plain / stats / collapse 76.3 / 109.6 /
+  134.2 µs, collapse + norm 154 µs; T1280 378.6 / 480.7 / 561 / 646 µs; plain fp32 T160 / T640 C7168 / T1024 C1792
+  116 / 506 / ~197 µs. No DISPATCH-BOUND flag (max gap 0.60 µs).
+- Issues encountered: perf_measure.py's in-trace upload (above); the compute program size of the lagged path at
+  T640 C1280 (block_cols 4) overflowed the 70 656 B kernel-config buffer until the schedule lambdas were forced
+  inline (outlined, each copy inlined its own LLK helpers: trisc0 12.1 → 17.3 KB; forced inline 11.8 KB).
+- Tests added: `tests/ttnn/unit_tests/operations/mhc_post/perf_feed_measure.py` (+ `perf_mesh` fixture in that
+  directory's conftest; not collected by default); probes/probe_013..021 (timeline / norm-lag probes).

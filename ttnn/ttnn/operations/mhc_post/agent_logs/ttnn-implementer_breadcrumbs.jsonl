@@ -8,3 +8,8 @@
 {"event":"fix_applied","refinement":2,"step":"feed","detail":"port slots per chip from distinct first-hop directions (1x4 on a 2x2 qb2 mixes E/W and N/S); per-worker published-row semaphores polled by ports (a shared counter let fast workers row i+1 satisfy wave i)","ts":"2026-11-14T02:19:39+00:00"}
 {"event":"test_run","refinement":2,"result":"partial","detail":"norm 66/66, feed aligned 100/100 + loose 4/4, test_feed 16/16; h_non_aligned feed excluded -> 2b; norm cost +20us T160 (tail-bound: deferred roots)","ts":"2026-11-14T02:34:37+00:00"}
 {"event":"test_run","refinement":"2b","result":"pass","h_non_aligned_feed":"28/28","test_feed_rest":"120/120","probe":"probe_012 6/6","ts":"2026-11-14T03:16:29+00:00"}
+{"event":"hypothesis","text":"feed exposed 57.5us: wave0 ready only at loop end (deferred roots), ports DRAM-read bound + 4.3us NoC poll per wave","ts":"2026-11-14T04:54:39+00:00"}
+{"event":"test_run","test":"perf_feed_measure.py","status":"pass","feed_us":207.6,"note":"batched port reads + cached poll","ts":"2026-11-14T04:54:39+00:00"}
+{"event":"fix_applied","text":"lagged-root norm schedule knob; loses at T160 (+43/+32us) and T1280; parked NORM_ROOT_LAG=0","ts":"2026-11-14T04:54:39+00:00"}
+{"event":"device_print_observation","text":"profiler zones in port kernels exhaust marker budget: harness reports 192us for a ~210us timeline (artifact)","ts":"2026-11-14T04:54:39+00:00"}
+{"event":"test_run","test":"perf_feed_measure.py","status":"pass","feed_us":200,"nofeed_us":167.2,"note":"push publication with armed handshake","ts":"2026-11-14T04:54:39+00:00"}

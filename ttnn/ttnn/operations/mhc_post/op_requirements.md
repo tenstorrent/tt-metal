@@ -86,7 +86,7 @@
 
 **Result (2026-11-14)**: EXCLUSIONS is empty. The generalized walk (`mhc_post_feed_walk.hpp`) visits alone D tile rows as bank-run page chunks (the port reader assembles shifted tiles from ≤ 2 y tiles with ≤ 8 face-row NoC copies in L1) and shared D tile rows as compact per-contributor pieces sent to the destination's landing port (fused write + inc), which merges and writes each shared tile — one chip, one core per D tile. Own block staged + placed by the slot-0 ports (local writes). Golden: 28/28 h_non_aligned feed cells; 120/120 other test_feed.py tests (100 aligned cells, 4 loose, 16 feed gates). Probe_012: links 1 / 2, 2–3 images, T = 1, 5, 77, 150, 1000, repeated calls — all bit-exact.
 
-### [ ] Refinement 3 — Feed OVERLAP: hide the exchange behind the local work (perf-flagged feed case)
+### [x] Refinement 3 — Feed OVERLAP: hide the exchange behind the local work (perf-flagged feed case)
 
 **Type**: perf
 
@@ -98,6 +98,8 @@
 - **Harness precondition (blocker, not the op's):** `eval/golden_tests/mhc_post/perf_measure.py` currently cannot measure any case — `prepare_mhc_post`'s `call()` re-uploads every input with `from_torch` on each call, which raises `TT_FATAL: Writes are not supported during trace capture` inside `ccl_perf.measure`'s trace capture (and the broken teardown hung the device once). Reported in verification_report.md; the eval owner must fix it (upload once in `prepare_mhc_post`, `call()` dispatches only) before this slot can produce numbers.
 
 **Done when**: measured with `CCL_PERF_EXPERIMENTS=5 … perf_measure.py` and kept by `python -m eval.ccl_perf compare`: the fastest-chip mean of the flagged feed case improves beyond noise with the slowest chip not worse; the per-chip breakdown (exposed transport before / after) is recorded in the changelog; no DISPATCH-BOUND flag; golden suite (incl. `test_feed.py`) green; no regression on the config-spanning guard set (one representative per kernel path: plain fp32, plain bf16, stats, collapse, collapse + norm, collapse + norm + feed).
+
+**Outcome**: feed case fastest chip 224.7 → 200.0 µs (slowest 227.8 → 204.3; no-feed 167.2 µs both) — exposed transport 57.5 → 32.8 µs, via port-reader batching + cached polling (−17.1 µs) and push publication with an armed handshake (−7.6 µs); measured with `tests/ttnn/unit_tests/operations/mhc_post/perf_feed_measure.py` (the harness protocol, dispatch-only — perf_measure.py still uploads inside the trace). The lagged-root schedule is built but parked (`NORM_ROOT_LAG = 0`): the ≈ 25 µs root chain is longer than a T160 row and a mid-loop hc on a root worker stalls the combine (+32…43 µs at T160, +44…226 µs at T1280). What binds now: everything is still published in the tail (~166 µs), then the busy-slot ports move 2× the tiles of the others at ~13–14 GB/s with reader and sender balanced. Next: balance the far block over both directions (AG relay, ≈ −6…8 µs), R5 L1-direct (≈ −6 µs + −2.4 MB DRAM), or move the root hc off the worker cores so publication can start before the tail; not done here (each is a separate topology change).
 
 ### [ ] Refinement 4 — Local pass toward the DRAM roofline (perf-flagged collapse + norm case)
 

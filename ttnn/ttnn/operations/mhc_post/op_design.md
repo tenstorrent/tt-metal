@@ -303,6 +303,14 @@ hc_step_row(t);                              // [collapse, root] custom SFPU blo
 
 R5 replaces step 1's DRAM hop with a NoC write into port L1 slots under credit semaphores.
 
+**As implemented (Refinement 3).** Step 1's "landed" signal is a per-worker count pushed into every port's
+`cb_feed_poll` slot (inline write behind the y write barrier; the port zeroes its slots, then arms each worker on
+`SEM_FEED_ROWS`, before any count may land), so the wave wait is a local scan. The port reader keeps
+`FEED_READ_BATCH` staging chunks in flight per barrier. The lagged-root schedule (`NORM_ROOT_LAG` > 0: rstd within
+`NORM_ROWS_IN_FLIGHT − 1` rows, publication inside the row loop) is built but parked at 0: at T160 / T1280 the root
+chain (~25 µs) exceeds a row and the mid-loop hc on a root worker stalls the combine, so the deferred roots win and
+step 3's chain still starts at the end of the row loop.
+
 ### Placement as a TARGET axis
 
 `memory_layout` is not in TARGET: inputs are DRAM-interleaved only, so no shard scheme is designed. The physical realization of the R1 split would be BLOCK_SHARDED (rows × C-ranges), a knob-turn because each core's work is self-contained. Splitting along C for the stats is a scheme change (the combine in R2).
