@@ -4,7 +4,7 @@
 
 #include "impl/metal2_host_api/program_spec/validation/placement/placement.hpp"
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal {
 
 void ValidateNodeCapacity(const ValidationContext& ctx, tt::ARCH arch, uint32_t max_slots_per_core) {
     for (const auto& work_unit : ctx.spec.work_units) {
@@ -17,4 +17,4 @@ void ValidateNodeCapacity(const ValidationContext& ctx, tt::ARCH arch, uint32_t 
     ValidateScratchpadBindersPerNode(ctx, arch);
 }
 
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal

@@ -23,6 +23,8 @@ from pathlib import Path
 from unittest import mock
 
 HARNESS = Path(__file__).with_name("run_multirank_pcc.sh")
+REPO = HARNESS.resolve().parents[6]
+MANIFESTS = "models/demos/deepseek_v3_d_p/tt/runners/manifests"
 STUB = r"""
 import json
 import os
@@ -39,7 +41,7 @@ root = Path(os.environ["TEST_ROOT"])
 def record(kind):
     with tempfile.NamedTemporaryFile(mode="w", suffix=".json", dir=root / "records", delete=False) as f:
         selected_env = {key: value for key, value in os.environ.items()
-                        if key.startswith(("PREFILL_", "TEST_", "TT_MESH_", "TT_METAL_OPERATION_"))}
+                        if key.startswith(("PREFILL_", "TEST_", "TT_MESH_", "TT_METAL_OPERATION_", "OMPI_COMM_WORLD_RANK"))}
         json.dump({"kind": kind, "args": args, "env": selected_env}, f)
 
 def shell_command():
@@ -48,6 +50,23 @@ def shell_command():
 
 if name == "sleep":
     time.sleep(0.02)
+elif name == "setsid":
+    # A process group of its own, so the harness's group kill reaches the stub ranks.
+    os.setsid()
+    os.execvp(args[0], args)
+elif name == "timeout":
+    # Only `timeout N tail --pid=P -f /dev/null` (wait for the runner) is used; BSD tail has no --pid.
+    pid_args = [arg for arg in args if arg.startswith("--pid=")]
+    if args[1:2] != ["tail"] or not pid_args:
+        os.execvp(args[1], args[1:])
+    pid, deadline = int(pid_args[0].split("=", 1)[1]), time.monotonic() + float(args[0])
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            sys.exit(0)
+        time.sleep(0.01)
+    sys.exit(124)
 elif name.startswith("mpirun"):
     record("mpi")
     if "--output-filename" in args:
@@ -56,44 +75,104 @@ elif name.startswith("mpirun"):
         log.write_text("stub rank log\n")
     os.environ["TEST_MPI_HOST"] = args[args.index("--host") + 1] if "--host" in args else ""
     os.environ["OMPI_COMM_WORLD_RANK"] = "0"
+    os.environ["TEST_MPI_NP"] = args[args.index("-np") + 1] if "-np" in args else "1"
     if "bash" in args:
         sys.exit(shell_command())
     index = next(i for i, arg in enumerate(args) if arg.endswith("python3"))
     sys.exit(subprocess.call(args[index:], env=os.environ))
 elif args and args[0].endswith("ttrun.py"):
     record("runner_launch")
+    mpi_args = args[args.index("--mpi-args") + 1].split() if "--mpi-args" in args else []
+    if "--output-filename" in mpi_args:
+        os.environ["TEST_RUNNER_LOGS"] = mpi_args[mpi_args.index("--output-filename") + 1]
     # Explicit bindings do not produce discovery artifacts in real tt-run.
     if "--rank-binding" not in args:
         rankfile = Path.cwd() / "generated/ttrun/test/rankfile"
         rankfile.parent.mkdir(parents=True, exist_ok=True)
-        hosts = ["worker%d" % i for i in range(4)]
-        rankfile.write_text("".join("rank %d=%s slot=0\n" % (i, host) for i, host in enumerate(hosts)))
+        if args[args.index("--mesh-graph-descriptor") + 1].endswith("4x4_sp1_mgd.textproto"):
+            # Discovery picks its own ring start: rotate the given hosts, two meshes on each.
+            hosts = args[args.index("--hosts") + 1].split(",")
+            hosts = hosts[1:] + hosts[:1]
+            ranks = [host for host in hosts for _ in range(2)]
+            if os.environ.get("TEST_TTRUN_INTERLEAVE"):
+                ranks = hosts + hosts
+            lines = ["rank %d=%s slot=%d\n" % (i, host, ranks[:i].count(host)) for i, host in enumerate(ranks)]
+            (rankfile.parent / "rank_bindings.yaml").write_text("rank_bindings: []\n")
+        else:
+            lines = ["rank %d=worker%d slot=0\n" % (i, i) for i in range(4)]
+        rankfile.write_text("".join(lines))
     sys.exit(shell_command())
 elif args and args[0].endswith("gen_pipeline_binding.py"):
     record("probe")
     out = Path(args[args.index("--out") + 1])
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text("rank_bindings: []\n")
+    if "--layout" in args and args[args.index("--layout") + 1] == "4x4":
+        # Distinct per host, so the test can tell which probe landed on which rank.
+        host = int(os.environ["OMPI_COMM_WORLD_RANK"])
+        halves = [list(range(16 * h + 100 * host, 16 * h + 100 * host + 16)) for h in (0, 1)]
+        out.write_text("rank_bindings:\n" + "".join(
+            "  - {rank: %d, mesh_id: %d, mesh_host_rank: 0, env_overrides: {TT_VISIBLE_DEVICES: \"%s\"}}\n"
+            % (r, r, ",".join(map(str, ids))) for r, ids in enumerate(halves)))
+    else:
+        out.write_text("rank_bindings: []\n")
 elif args[:1] == ["-m"] and args[1].endswith("prefill_runner"):
     record("runner")
-    Path(os.environ["PREFILL_MIGRATION_TABLE_PATH"]).touch()
+    crash = os.environ.get("TEST_RUNNER_CRASH")
+    if os.environ.get("TEST_RUNNER_HANDLED_TRACEBACK"):
+        # A traceback the rank logged and recovered from (logger.exception): no uncaught-exception marker.
+        log = Path(os.environ["TEST_RUNNER_LOGS"]) / "1" / "rank.1" / "stderr"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        log.write_text("Traceback (most recent call last):\nRuntimeError: retrying the D2D connect\n")
+    if crash != "bringup":
+        Path(os.environ["PREFILL_MIGRATION_TABLE_PATH"]).touch()
+    if crash:
+        # Rank 1's device times out: it leaves a traceback and an Inspector dump, then hangs in
+        # teardown, as in run 40947298596. Only the watchdog's kill ends it. Mid-request, as there,
+        # it waits for the producer first so the test does not race the producer's launch.
+        deadline = time.monotonic() + 15
+        while crash == "request" and not (root / "producer_started").exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        log = Path(os.environ["TEST_RUNNER_LOGS"]) / "1" / "rank.1" / "stderr"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        log.write_text(
+            "Traceback (most recent call last):\nRuntimeError: TIMEOUT: device timeout\n"
+            "PREFILL_UNCAUGHT_EXCEPTION: RuntimeError\n"
+        )
+        inspector = Path(os.environ["TT_METAL_HOME"]) / "generated" / "inspector"
+        inspector.mkdir(parents=True, exist_ok=True)
+        (inspector / "dispatch.yaml").write_text("stub inspector dump\n")
+        while True:
+            time.sleep(0.05)
     deadline = time.monotonic() + 15
     while not (root / "producer_done").exists():
         if time.monotonic() > deadline:
             sys.exit(99)
         time.sleep(0.01)
+    if os.environ.get("TEST_RUNNER_HANDLED_TRACEBACK"):
+        time.sleep(11)  # outlive one 10 s pass of the crash watchdog, so it has seen the traceback
     sys.exit(int(os.environ.get("TEST_RUNNER_RC", "0")))
 elif args[:1] == ["-m"] and args[1].endswith("prefill_producer"):
     record("producer")
+    if os.environ.get("TEST_RUNNER_CRASH") or os.environ.get("TEST_PRODUCER_HANG"):
+        # Blocked on layer completions that never come; exits only when its launcher is killed.
+        (root / "producer_started").touch()
+        parent = os.getppid()
+        while os.getppid() == parent:
+            time.sleep(0.05)
+        sys.exit(143)
     verdict_dir = Path(os.environ["PREFILL_PCC_SUMMARY_DIR"])
     verdict_dir.mkdir(parents=True, exist_ok=True)
     mode = os.environ.get("TEST_VERDICT", "pass")
-    for rank in range(4):
-        if rank == 3 and mode == "missing":
+    # One mpirun launches every producer rank; this stub stands in for all of them.
+    num_ranks = int(os.environ["TEST_MPI_NP"])
+    last = num_ranks - 1
+    threshold = float(os.environ["PREFILL_STANDALONE_CHUNKED_PCC"])
+    for rank in range(num_ranks):
+        if rank == last and mode == "missing":
             continue
-        verdict = {"rank": rank, "ok": True, "min_pcc": 0.99, "threshold": 0.85,
+        verdict = {"rank": rank, "ok": True, "min_pcc": 0.99, "threshold": threshold,
                    "slots_checked": 1, "per_cache": {"kvpe": 0.99}}
-        if rank == 3:
+        if rank == last:
             if mode == "false":
                 verdict["ok"] = False
             elif mode == "truthy":
@@ -104,7 +183,7 @@ elif args[:1] == ["-m"] and args[1].endswith("prefill_producer"):
             elif mode == "nan":
                 verdict["min_pcc"] = float("nan")
                 verdict["per_cache"]["kvpe"] = float("nan")
-        filename_rank = 4 if rank == 3 and mode == "wrong_rank" else rank
+        filename_rank = num_ranks if rank == last and mode == "wrong_rank" else rank
         (verdict_dir / ("rank%d.json" % filename_rank)).write_text(json.dumps(verdict))
     (root / "producer_done").touch()
 elif args and args[0].endswith("summarize_ci_run.py"):
@@ -127,7 +206,16 @@ else:
 
 class MultirankPccHarnessTests(unittest.TestCase):
     def run_harness(
-        self, model, *, verdict="pass", runner_rc=0, missing_cache=False, hosts=None, config=None, extra_env=None
+        self,
+        model,
+        *,
+        verdict="pass",
+        runner_rc=0,
+        missing_cache=False,
+        hosts=None,
+        config=None,
+        extra_env=None,
+        args=(),
     ):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -135,7 +223,8 @@ class MultirankPccHarnessTests(unittest.TestCase):
         (root / "records").mkdir()
         bin_dir = root / "bin"
         bin_dir.mkdir()
-        for name in ("python3", "mpirun", "mpirun-ulfm", "sleep"):
+        # setsid and timeout stand in for the Linux tools so the harness also runs on macOS.
+        for name in ("python3", "mpirun", "mpirun-ulfm", "sleep", "setsid", "timeout"):
             executable = bin_dir / name
             executable.write_text(f"#!{sys.executable}\n" + STUB)
             executable.chmod(0o755)
@@ -143,9 +232,8 @@ class MultirankPccHarnessTests(unittest.TestCase):
         metal.mkdir()
         mgd_dir = metal / "models/demos/common/prefill/runners/topology_configuration/ci"
         mgd_dir.mkdir(parents=True)
-        for model_key in ("kimi27", "glm52"):
-            for system in ("sc1", "sc4"):
-                (mgd_dir / f"{model_key}_{system}_mgd.textproto").touch()
+        for system in ("sc1", "sc4"):
+            (mgd_dir / f"{system}_mgd.textproto").touch()
         # manifest_env() reads PREFILL_MAX_SEQ_LEN / PREFILL_NUM_USERS straight off these, so the
         # fake tree needs them or the harness dies before it launches anything. Values mirror the
         # real manifests; only their presence and the sc1 override path are under test here.
@@ -153,18 +241,24 @@ class MultirankPccHarnessTests(unittest.TestCase):
         manifest_dir.mkdir(parents=True)
         for model_key, max_seq_len, num_users in (
             ("kimi27", 256000, 86),
-            ("glm52", 1049600, 28),
             ("mistral4", 61440, 1),
         ):
             (manifest_dir / f"{model_key}.json").write_text(
                 json.dumps({"env": {"PREFILL_MAX_SEQ_LEN": max_seq_len, "PREFILL_NUM_USERS": num_users}})
             )
+        # Kimi-K3's and GLM-5.3's layouts are their manifests', so the harness reads the real ones.
+        for name in ("kimi_k3.json", "glm53.json", "glm53_4x4.json", "glm53_mtp_kv_share.json"):
+            shutil.copyfile(REPO / MANIFESTS / name, manifest_dir / name)
         checkpoint = root / "checkpoint"
         checkpoint.mkdir()
         (checkpoint / "config.json").write_text("{}")
         cache = root / "cache"
         if not missing_cache:
             (cache / "mistral_small_4_bh_8dev/8x1").mkdir(parents=True)
+            (cache / "kimi_k3_bh_16dev/4x4_sp1").mkdir(parents=True)
+            (cache / "kimi_k3_bh_16dev/4x4_sp1/layer_0.tensorbin").touch()
+            (cache / "glm_5_3_bh_16dev/4x4_sp1").mkdir(parents=True)
+            (cache / "glm_5_3_bh_16dev/4x4_sp1/layer_0.tensorbin").touch()
         golden = root / "golden"
         (golden / "kv_cache").mkdir(parents=True)
         for layer in range(36):
@@ -177,6 +271,13 @@ class MultirankPccHarnessTests(unittest.TestCase):
         ci_failure = metal / "models/common/ci_failure.py"
         ci_failure.parent.mkdir(parents=True)
         shutil.copyfile(HARNESS.parents[6] / "models/common/ci_failure.py", ci_failure)
+        # The 4x4 legs hand tt-run these descriptors.
+        for path in (
+            "models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_intragalaxy_2x4x4_sp1_mgd.textproto",
+            "models/demos/common/prefill/runners/topology_configuration/ci/sc4_4x4_sp1_mgd.textproto",
+        ):
+            (metal / path).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(REPO / path, metal / path)
         ttrun_dir = root / "ttop"
         ttrun_dir.mkdir()
         if hosts is None:
@@ -199,6 +300,7 @@ class MultirankPccHarnessTests(unittest.TestCase):
         command = ["bash", str(harness), model]
         if config is not None:
             command.append(config)
+        command.extend(args)
         result = subprocess.run(command, env=env, text=True, capture_output=True, timeout=30)
         records = [json.loads(path.read_text()) for path in (root / "records").glob("*.json")]
         return result, records
@@ -227,7 +329,6 @@ class MultirankPccHarnessTests(unittest.TestCase):
         for key, value in {
             "PREFILL_SP": "8",
             "PREFILL_TP": "1",
-            "PREFILL_PCC_GOLDEN_LEN": "56320",
             "PREFILL_MAX_SEQ_LEN": "61440",
             "PREFILL_PRODUCER_CHUNKS": "11",
             "PREFILL_PRODUCER_CHECK_PCC": "1",
@@ -240,17 +341,16 @@ class MultirankPccHarnessTests(unittest.TestCase):
         self.assertEqual(len(producer_mpi), 1)
         mpi_args = producer_mpi[0]["args"]
         self.assertEqual(mpi_args[mpi_args.index("-np") + 1], "4")
-        self.assertTrue(producer["PREFILL_MIGRATION_DEVICE_MAP_PATH"].endswith("device_map_r0.json"))
-        self.assertEqual(
-            runner["PREFILL_MIGRATION_DEVICE_MAP_PATH"].replace(".json", "_r0.json"),
-            producer["PREFILL_MIGRATION_DEVICE_MAP_PATH"],
-        )
+        # Both get the base path: the runner writes device_map_r<rank>.json and each producer rank
+        # resolves its own suffix from it.
+        self.assertTrue(runner["PREFILL_MIGRATION_DEVICE_MAP_PATH"].endswith("device_map.json"))
+        self.assertEqual(runner["PREFILL_MIGRATION_DEVICE_MAP_PATH"], producer["PREFILL_MIGRATION_DEVICE_MAP_PATH"])
         self.assertIn("PCC GATE PASS", result.stdout)
 
     def test_existing_models_use_discovery_and_four_hosts(self):
-        for model in ("kimi27", "glm52"):
+        for model, config in (("kimi27", "sc4"), ("glm53", "sc4")):
             with self.subTest(model=model):
-                result, records = self.run_harness(model)
+                result, records = self.run_harness(model, config=config)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 launch = self.one_record(records, "runner_launch")["args"]
                 self.assertIn("--mesh-graph-descriptor", launch)
@@ -259,14 +359,20 @@ class MultirankPccHarnessTests(unittest.TestCase):
                 self.assertFalse([record for record in records if record["kind"] == "probe"])
                 producer = self.one_record(records, "producer")["env"]
                 self.assertEqual(producer["TEST_MPI_HOST"], "worker0:1,worker1:1,worker2:1,worker3:1")
-                expected_length = 256000 if model == "kimi27" else 1049600
+                expected_length = 256000 if model == "kimi27" else 1064960
                 self.assertEqual(producer["PREFILL_MAX_SEQ_LEN"], str(expected_length))
-                self.assertEqual(producer["PREFILL_PRODUCER_CHUNKS"], str(expected_length // 5120))
+                # The request can be shorter than the window: GLM-5.3 sends 1044480 of its 1064960.
+                request_len = {"kimi27": 256000, "glm53": 1044480}[model]
+                self.assertEqual(producer["PREFILL_PRODUCER_CHUNKS"], str(request_len // 5120))
 
     def test_sc1_windows_preserve_model_defaults(self):
-        for model, expected_length in (("mistral4", 61440), ("kimi27", 256000), ("glm52", 256000)):
+        for model, config, expected_length in (
+            ("mistral4", "sc1", 61440),
+            ("kimi27", "sc1", 256000),
+            ("glm53", "sc1", 1064960),
+        ):
             with self.subTest(model=model):
-                result, records = self.run_harness(model, config="sc1")
+                result, records = self.run_harness(model, config=config)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertEqual(self.one_record(records, "runner")["env"]["PREFILL_NUM_USERS"], "1")
                 self.assertEqual(
@@ -339,7 +445,7 @@ class MultirankPccHarnessTests(unittest.TestCase):
             "missing": "expected exactly ranks 0..3",
             "false": "ok is not literally true",
             "truthy": "ok is not literally true",
-            "empty": "slots_checked is 0",
+            "empty": "slots_checked is not",
             "nan": "non-finite",
             "wrong_rank": "expected exactly ranks 0..3",
         }
@@ -365,6 +471,278 @@ class MultirankPccHarnessTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("requires exactly one Galaxy host", result.stdout + result.stderr)
         self.assertFalse([record for record in records if record["kind"] in ("mpi", "probe", "runner_launch")])
+
+    SC4_HOSTS = ["c07u08", "c07u02", "c08u02", "c08u08"]
+
+    def test_kimi_k3_sc4_is_eight_4x4_stages_from_the_manifest(self):
+        result, records = self.run_harness("kimi_k3", hosts=self.SC4_HOSTS)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse([record for record in records if record["kind"] == "probe"])
+        launch = self.one_record(records, "runner_launch")["args"]
+        self.assertNotIn("--rank-binding", launch)
+        self.assertIn("--force-rediscovery", launch)
+        self.assertTrue(launch[launch.index("--mesh-graph-descriptor") + 1].endswith("ci/sc4_4x4_sp1_mgd.textproto"))
+        self.assertEqual(launch[launch.index("--hosts") + 1], ",".join(self.SC4_HOSTS))
+        runner = self.one_record(records, "runner")["env"]
+        # The stage shape is the manifest's, which the runner applies itself: the launcher exports none of it.
+        self.assertTrue(runner["PREFILL_MANIFEST"].endswith("manifests/kimi_k3.json"))
+        for key in ("PREFILL_SP", "PREFILL_TP", "PREFILL_SP_AXIS", "PREFILL_NUM_USERS"):
+            self.assertNotIn(key, runner, key)
+        self.assertTrue(runner["PREFILL_TTNN_CACHE"].endswith("cache"))
+        producer = self.one_record(records, "producer")["env"]
+        self.assertTrue(producer["PREFILL_PRODUCER_MANIFEST"].endswith("manifests/kimi_k3.json"))
+        # The manifest's 2560-token chunk (640 tokens per chip), and the 1M request in those chunks.
+        self.assertEqual(producer["PREFILL_CHUNK_SIZE"], "2560")
+        self.assertEqual(producer["PREFILL_PRODUCER_CHUNKS"], str(1049600 // 2560))
+        self.assertEqual(runner["PREFILL_MIGRATION_DEVICE_MAP_PATH"], producer["PREFILL_MIGRATION_DEVICE_MAP_PATH"])
+        self.assertIn("PCC GATE PASS", result.stdout)
+
+    def test_kimi_k3_4x4_producers_follow_the_discovered_ring(self):
+        result, records = self.run_harness("kimi_k3", hosts=self.SC4_HOSTS)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        producer_mpi = [r for r in records if r["kind"] == "mpi" and "prefill_producer" in r["args"][-1]]
+        self.assertEqual(len(producer_mpi), 1)
+        mpi_args = producer_mpi[0]["args"]
+        self.assertEqual(mpi_args[mpi_args.index("-np") + 1], "8")
+        # The stub's discovery starts the ring at the hostfile's second host.
+        self.assertEqual(mpi_args[mpi_args.index("--host") + 1], "c07u02:2,c08u02:2,c08u08:2,c07u08:2")
+        self.assertIn("--map-by", mpi_args)
+
+    def test_kimi_k3_sc1_is_sc4s_first_two_4x4_stages_on_one_galaxy(self):
+        result, records = self.run_harness("kimi_k3", config="sc1", hosts=self.SC4_HOSTS[:1])
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        launch = self.one_record(records, "runner_launch")["args"]
+        self.assertTrue(
+            launch[launch.index("--mesh-graph-descriptor") + 1].endswith(
+                "topology_configuration/pipeline_prefill_intragalaxy_2x4x4_sp1_mgd.textproto"
+            )
+        )
+        runner = self.one_record(records, "runner")["env"]
+        # 24 layers, 12 per tray half, at sc4's slot count.
+        self.assertEqual(runner["PREFILL_NUM_LAYERS"], "24")
+        self.assertEqual(runner["PREFILL_NUM_USERS"], "127")
+        self.assertNotIn("PREFILL_SP_AXIS", runner)
+        producer_mpi = [r for r in records if r["kind"] == "mpi" and "prefill_producer" in r["args"][-1]]
+        mpi_args = producer_mpi[0]["args"]
+        self.assertEqual(mpi_args[mpi_args.index("-np") + 1], "2")
+        self.assertEqual(mpi_args[mpi_args.index("--host") + 1], "c07u08:2")
+        producer = self.one_record(records, "producer")["env"]
+        self.assertEqual(producer["PREFILL_NUM_LAYERS"], "24")
+        self.assertEqual(producer["PREFILL_CHUNK_SIZE"], "2560")
+        self.assertIn("PCC GATE PASS", result.stdout)
+
+    def test_kimi_k3_8x4_configs_put_the_8x4_stage_back(self):
+        for config, descriptor, layers in (
+            ("sc4_8x4", "ci/sc4_mgd.textproto", None),
+            ("sc1_8x4", "ci/sc1_mgd.textproto", "24"),
+        ):
+            with self.subTest(config=config):
+                result, records = self.run_harness("kimi_k3", config=config)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                launch = self.one_record(records, "runner_launch")["args"]
+                self.assertTrue(launch[launch.index("--mesh-graph-descriptor") + 1].endswith(descriptor))
+                runner = self.one_record(records, "runner")["env"]
+                producer = self.one_record(records, "producer")["env"]
+                for env in (runner, producer):
+                    self.assertEqual(
+                        (env["PREFILL_SP"], env["PREFILL_TP"], env["PREFILL_SP_AXIS"], env["PREFILL_CHUNK_SIZE"]),
+                        ("8", "4", "0", "5120"),
+                    )
+                self.assertEqual(runner["PREFILL_NUM_USERS"], "100")
+                self.assertEqual(runner.get("PREFILL_NUM_LAYERS"), layers)
+                self.assertEqual(producer["PREFILL_PRODUCER_CHUNKS"], str(1049600 // 5120))
+                # The 8x4 cache, not the 4x4 one: no 4x4 cache check runs.
+                self.assertNotIn("no 4x4 weight cache", result.stdout + result.stderr)
+
+    def test_kimi_k3_4x4_rejects_interleaved_discovery(self):
+        result, records = self.run_harness("kimi_k3", hosts=self.SC4_HOSTS, extra_env={"TEST_TTRUN_INTERLEAVE": "1"})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("interleaved hosts across ranks", result.stdout + result.stderr)
+        self.assertFalse([record for record in records if record["kind"] == "producer"])
+
+    def run_with_a_rank_crash(self, when):
+        summaries = tempfile.TemporaryDirectory()
+        self.addCleanup(summaries.cleanup)
+        result, records = self.run_harness(
+            "kimi_k3",
+            hosts=self.SC4_HOSTS,
+            extra_env={"TEST_RUNNER_CRASH": when, "PREFILL_SUMMARIES": summaries.name},
+        )
+        output = result.stdout + result.stderr
+        # The bring-up path exits with the killed runner's status, the request path with 1.
+        self.assertNotEqual(result.returncode, 0, output)
+        self.assertIn("a rank crashed: ", output)
+        evidence = Path(summaries.name) / "pcc" / "kimi_k3"
+        self.assertIn("rank.1/stderr", (evidence / "rank_crashed").read_text())
+        self.assertTrue((evidence / "ranklogs" / "runner" / "1" / "rank.1" / "stderr").is_file())
+        self.assertEqual(
+            [path.name for path in (evidence / "inspector").glob("*/dispatch.yaml")], ["dispatch.yaml"], output
+        )
+        return output, records
+
+    def test_a_handled_traceback_does_not_stop_the_run(self):
+        result, _ = self.run_harness("kimi_k3", hosts=self.SC4_HOSTS, extra_env={"TEST_RUNNER_HANDLED_TRACEBACK": "1"})
+        output = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 0, output)
+        self.assertNotIn("a rank crashed", output)
+
+    def test_a_silent_hang_dumps_stacks_and_triage_then_stops_the_run(self):
+        summaries = tempfile.TemporaryDirectory()
+        self.addCleanup(summaries.cleanup)
+        result, records = self.run_harness(
+            "glm53",
+            hosts=self.SC4_HOSTS,
+            extra_env={"TEST_PRODUCER_HANG": "1", "PREFILL_STALL_SECS": "1", "PREFILL_SUMMARIES": summaries.name},
+        )
+        output = result.stdout + result.stderr
+        self.assertNotEqual(result.returncode, 0, output)
+        self.assertIn("STALL: no rank or producer log output", output)
+        self.assertIn("stopped by the stall watchdog", output)
+        commands = [r["args"][-1] for r in records if r["kind"] == "mpi" and r["args"][-2:-1] == ["-lc"]]
+        # Stacks first, on every host, then tt-triage into the triage dir the job uploads.
+        signal = next(i for i, c in enumerate(commands) if "pkill -USR1" in c)
+        triage = next(i for i, c in enumerate(commands) if "tt-triage.py" in c)
+        self.assertLess(signal, triage)
+        self.assertIn(f"{summaries.name}/triage", commands[triage])
+        self.assertIn("no log output for", (Path(summaries.name) / "pcc" / "glm53" / "stalled").read_text())
+
+    def test_a_rank_crash_mid_request_stops_the_producer_and_keeps_the_evidence(self):
+        output, records = self.run_with_a_rank_crash("request")
+        self.assertIn("stopped after a rank crashed", output)
+        self.one_record(records, "producer")
+
+    def test_a_rank_crash_during_bringup_fails_before_the_producer(self):
+        output, records = self.run_with_a_rank_crash("bringup")
+        self.assertIn("runner exited before publishing the KV table", output)
+        self.assertFalse([record for record in records if record["kind"] == "producer"])
+
+    def test_kimi_k3_4x4_needs_four_hosts(self):
+        result, records = self.run_harness("kimi_k3", hosts=self.SC4_HOSTS[:2])
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("requires exactly 4 cabled Galaxy hosts", result.stderr)
+        self.assertFalse([record for record in records if record["kind"] in ("mpi", "probe", "runner_launch")])
+
+    def test_kimi_k3_4x4_missing_cache_fails_before_launch(self):
+        result, records = self.run_harness("kimi_k3", hosts=self.SC4_HOSTS, missing_cache=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("no 4x4 weight cache", result.stdout + result.stderr)
+        self.assertFalse([record for record in records if record["kind"] in ("probe", "runner_launch")])
+
+    def test_glm53_sc4_and_sc1_are_8x4_stages_from_the_manifest(self):
+        for config, descriptor in (("sc4", "ci/sc4_mgd.textproto"), ("sc1", "ci/sc1_mgd.textproto")):
+            with self.subTest(config=config):
+                result, records = self.run_harness("glm53", config=config)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                launch = self.one_record(records, "runner_launch")["args"]
+                self.assertTrue(launch[launch.index("--mesh-graph-descriptor") + 1].endswith(descriptor))
+                runner = self.one_record(records, "runner")["env"]
+                producer = self.one_record(records, "producer")["env"]
+                # glm53.json carries no stage layout, so the adapter's 8x4 default applies.
+                self.assertTrue(runner["PREFILL_MANIFEST"].endswith("manifests/glm53.json"))
+                for key in ("PREFILL_SP", "PREFILL_TP", "PREFILL_SP_AXIS"):
+                    self.assertNotIn(key, runner, key)
+                self.assertEqual(producer["PREFILL_CHUNK_SIZE"], "5120")
+                self.assertEqual(producer["PREFILL_PRODUCER_CHUNKS"], str(1044480 // 5120))
+                self.assertNotIn("no 4x4 weight cache", result.stdout + result.stderr)
+                self.assertIn("PCC GATE PASS", result.stdout)
+
+    def test_glm53_sc4_4x4_is_eight_4x4_stages_from_its_manifest(self):
+        result, records = self.run_harness("glm53", config="sc4_4x4", hosts=self.SC4_HOSTS)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        launch = self.one_record(records, "runner_launch")["args"]
+        self.assertTrue(launch[launch.index("--mesh-graph-descriptor") + 1].endswith("ci/sc4_4x4_sp1_mgd.textproto"))
+        producer_mpi = [r for r in records if r["kind"] == "mpi" and "prefill_producer" in r["args"][-1]]
+        self.assertEqual(producer_mpi[0]["args"][producer_mpi[0]["args"].index("-np") + 1], "8")
+        runner = self.one_record(records, "runner")["env"]
+        # The stage shape and the slots are the manifest's, which the runner applies itself.
+        self.assertTrue(runner["PREFILL_MANIFEST"].endswith("manifests/glm53_4x4.json"))
+        for key in ("PREFILL_SP", "PREFILL_TP", "PREFILL_SP_AXIS", "PREFILL_NUM_USERS"):
+            self.assertNotIn(key, runner, key)
+        self.assertTrue(runner["PREFILL_TTNN_CACHE"].endswith("cache"))
+        producer = self.one_record(records, "producer")["env"]
+        self.assertTrue(producer["PREFILL_PRODUCER_MANIFEST"].endswith("manifests/glm53_4x4.json"))
+        self.assertEqual(producer["PREFILL_MAX_SEQ_LEN"], "1064960")
+        self.assertEqual((runner["PREFILL_CHUNK_SIZE"], producer["PREFILL_CHUNK_SIZE"]), ("2560", "2560"))
+        self.assertEqual(producer["PREFILL_PRODUCER_CHUNKS"], str(1044480 // 2560))
+        self.assertIn("PCC GATE PASS", result.stdout)
+
+    def test_glm53_sc1_4x4_is_two_4x4_stages_on_one_galaxy(self):
+        result, records = self.run_harness("glm53", config="sc1_4x4", hosts=self.SC4_HOSTS[:1])
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        launch = self.one_record(records, "runner_launch")["args"]
+        self.assertTrue(
+            launch[launch.index("--mesh-graph-descriptor") + 1].endswith(
+                "topology_configuration/pipeline_prefill_intragalaxy_2x4x4_sp1_mgd.textproto"
+            )
+        )
+        runner = self.one_record(records, "runner")["env"]
+        # All 78 layers over the two tray halves, one slot, as the 8x4 sc1 runs.
+        self.assertNotIn("PREFILL_NUM_LAYERS", runner)
+        self.assertEqual(runner["PREFILL_NUM_USERS"], "1")
+        self.assertTrue(runner["PREFILL_MANIFEST"].endswith("manifests/glm53_4x4.json"))
+        producer_mpi = [r for r in records if r["kind"] == "mpi" and "prefill_producer" in r["args"][-1]]
+        self.assertEqual(producer_mpi[0]["args"][producer_mpi[0]["args"].index("-np") + 1], "2")
+        producer = self.one_record(records, "producer")["env"]
+        self.assertEqual(producer["PREFILL_CHUNK_SIZE"], "2560")
+        self.assertIn("PCC GATE PASS", result.stdout)
+
+    def test_glm53_4x4_missing_cache_names_the_glm_dir(self):
+        result, records = self.run_harness("glm53", config="sc4_4x4", hosts=self.SC4_HOSTS, missing_cache=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("no 4x4 weight cache at", result.stdout + result.stderr)
+        self.assertIn("glm_5_3_bh_16dev/4x4_sp1", result.stdout + result.stderr)
+        self.assertFalse([record for record in records if record["kind"] in ("probe", "runner_launch")])
+
+    def test_glm53_mtp_runs_8x4_stages_from_its_manifest(self):
+        # The stub's verdicts carry no MTP caches, so the gate fails; the launch is what is under test.
+        for config in ("sc4", "sc1"):
+            with self.subTest(config=config):
+                _, records = self.run_harness("glm53", config=config, args=["--variant", "mtp_kv_share"])
+                runner = self.one_record(records, "runner")["env"]
+                self.assertTrue(runner["PREFILL_MANIFEST"].endswith("manifests/glm53_mtp_kv_share.json"))
+                self.assertNotIn("PREFILL_SP_AXIS", runner)
+                producer = self.one_record(records, "producer")["env"]
+                self.assertEqual(producer["PREFILL_CHUNK_SIZE"], "5120")
+
+    def test_glm53_mtp_4x4_configs_export_the_4x4_layout_over_its_manifest(self):
+        for config, hosts, ranks in (("sc4_4x4", self.SC4_HOSTS, "8"), ("sc1_4x4", self.SC4_HOSTS[:1], "2")):
+            with self.subTest(config=config):
+                _, records = self.run_harness("glm53", config=config, hosts=hosts, args=["--variant", "mtp_kv_share"])
+                producer_mpi = [r for r in records if r["kind"] == "mpi" and "prefill_producer" in r["args"][-1]]
+                self.assertEqual(producer_mpi[0]["args"][producer_mpi[0]["args"].index("-np") + 1], ranks)
+                runner = self.one_record(records, "runner")["env"]
+                producer = self.one_record(records, "producer")["env"]
+                self.assertTrue(runner["PREFILL_MANIFEST"].endswith("manifests/glm53_mtp_kv_share.json"))
+                for env in (runner, producer):
+                    self.assertEqual(
+                        tuple(
+                            env[k]
+                            for k in (
+                                "PREFILL_SP",
+                                "PREFILL_TP",
+                                "PREFILL_SP_AXIS",
+                                "PREFILL_CHUNK_SIZE",
+                                "PREFILL_TP_SHARD_KV",
+                            )
+                        ),
+                        ("4", "4", "1", "2560", "1"),
+                    )
+                if config == "sc4_4x4":
+                    # The MTP variants keep their manifest's slots.
+                    self.assertNotIn("PREFILL_NUM_USERS", runner)
+
+    def test_only_kimi_k3_has_the_8x4_configs_and_only_glm53_the_4x4_configs(self):
+        for model, config in (
+            ("kimi27", "sc4_8x4"),
+            ("kimi27", "sc4_4x4"),
+            ("kimi_k3", "sc4_4x4"),
+            ("glm53", "sc4_8x4"),
+        ):
+            with self.subTest(model=model, config=config):
+                result, records = self.run_harness(model, config=config)
+                self.assertEqual(result.returncode, 2)
+                self.assertIn(f"{model} does not support config '{config}'", result.stderr)
+                self.assertFalse(records)
 
     def test_runner_failure_after_successful_producer_fails(self):
         result, records = self.run_harness("mistral4", runner_rc=17)

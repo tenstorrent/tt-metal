@@ -18,7 +18,7 @@ from ttnn.model_preprocessing import preprocess_model_parameters, preprocess_lin
 from models.common.utility_functions import (
     tt2torch_tensor,
 )
-from tests.ttnn.utils_for_testing import check_with_pcc
+from tt_py_test_utils_common.utils_for_testing import check_with_pcc
 
 
 def generate_token_embeddings(image_tensor, lidar_tensor, seq_len, n_embd):

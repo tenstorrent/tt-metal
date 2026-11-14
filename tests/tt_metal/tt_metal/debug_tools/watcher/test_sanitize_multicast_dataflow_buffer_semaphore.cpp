@@ -16,10 +16,10 @@
 #include <vector>
 
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include <tt-metalium/vocabulary/node_coord.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include "debug_tools_fixture.hpp"
 #include "impl/context/metal_context.hpp"
@@ -29,9 +29,6 @@ namespace {
 
 using namespace tt;
 using namespace tt::tt_metal;
-using experimental::NodeCoord;
-using experimental::NodeRange;
-using experimental::NodeRangeSet;
 
 const std::string kKernelDirectory = "tests/tt_metal/tt_metal/test_kernels/dataflow/";
 // The resource exists on logical nodes (0,0) and (1,0), and on the sender (0,1), which binds it.
@@ -40,10 +37,9 @@ const NodeRangeSet kResourceNodes(std::vector<NodeRange>{NodeRange({0, 0}, {1, 0
 // A borrowed-memory DFB's backing tensor also covers logical node (2,0), past the DFB's own nodes.
 const NodeRangeSet kBackingNodes(std::vector<NodeRange>{NodeRange({0, 0}, {2, 0}), NodeRange(kSender)});
 
-experimental::DataMovementHardwareConfig DataMovementConfig(DataMovementProcessor processor, NOC noc) {
+DataMovementHardwareConfig DataMovementConfig(DataMovementProcessor processor, NOC noc) {
     return {
-        .config_1xx =
-            experimental::DataMovementHardwareConfig::DataMovement1XXConfig{.processor = processor, .noc = noc},
+        .config_1xx = DataMovementHardwareConfig::DataMovement1XXConfig{.processor = processor, .noc = noc},
     };
 }
 
@@ -97,12 +93,12 @@ void RunSemaphoreMulticastTest(
     const bool is_relay = op == SemaphoreMulticast::RELAY;
     const NodeCoord rect_start = mesh_device.worker_core_from_logical_core({0, 0});
     const NodeCoord rect_end = mesh_device.worker_core_from_logical_core({end_x, 0});
-    const experimental::KernelSpecName kernel_name{"semaphore_multicast_writer"};
-    const experimental::SemaphoreSpecName flag_name{"flag"};
-    const experimental::SemaphoreSpecName target_name{"target"};
-    const experimental::ProgramSpec spec{
+    const KernelSpecName kernel_name{"semaphore_multicast_writer"};
+    const SemaphoreSpecName flag_name{"flag"};
+    const SemaphoreSpecName target_name{"target"};
+    const ProgramSpec spec{
         .name = "watcher_multicast_semaphore",
-        .kernels = {experimental::KernelSpec{
+        .kernels = {KernelSpec{
             .unique_id = kernel_name,
             .source = kKernelDirectory + "semaphore_multicast_writer.cpp",
             .semaphore_bindings =
@@ -124,13 +120,13 @@ void RunSemaphoreMulticastTest(
         }},
         .semaphores =
             {
-                experimental::SemaphoreSpec{
+                SemaphoreSpec{
                     .unique_id = flag_name,
                     .target_nodes = is_relay ? NodeRangeSet(kSender) : kResourceNodes,
                 },
-                experimental::SemaphoreSpec{.unique_id = target_name, .target_nodes = kResourceNodes},
+                SemaphoreSpec{.unique_id = target_name, .target_nodes = kResourceNodes},
             },
-        .work_units = {experimental::WorkUnitSpec{
+        .work_units = {WorkUnitSpec{
             .name = "main",
             .kernels = {kernel_name},
             .target_nodes = kSender,
@@ -154,19 +150,19 @@ void RunDataflowBufferMulticastTest(
     const NodeCoord sender = mesh_device.worker_core_from_logical_core(kSender);
     const NodeCoord rect_start = mesh_device.worker_core_from_logical_core({0, 0});
     const NodeCoord rect_end = mesh_device.worker_core_from_logical_core({end_x, 0});
-    const experimental::KernelSpecName producer_name{"dataflow_buffer_multicast_writer"};
-    const experimental::KernelSpecName consumer_name{"idle_consumer"};
-    const experimental::DFBSpecName dataflow_buffer_name{"target"};
-    const experimental::TensorParamName backing_name{"backing"};
+    const KernelSpecName producer_name{"dataflow_buffer_multicast_writer"};
+    const KernelSpecName consumer_name{"idle_consumer"};
+    const DFBSpecName dataflow_buffer_name{"target"};
+    const TensorParamName backing_name{"backing"};
     constexpr uint32_t entry_size = 1024;
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "watcher_multicast_dataflow_buffer",
         .kernels =
             {
-                experimental::KernelSpec{
+                KernelSpec{
                     .unique_id = producer_name,
                     .source = kKernelDirectory + "dataflow_buffer_multicast_writer.cpp",
-                    .dfb_bindings = {experimental::ProducerOf(dataflow_buffer_name, "target")},
+                    .dfb_bindings = {ProducerOf(dataflow_buffer_name, "target")},
                     .compile_time_args =
                         {
                             {"sender_x", static_cast<uint32_t>(sender.x)},
@@ -182,20 +178,20 @@ void RunDataflowBufferMulticastTest(
                         },
                     .hw_config = DataMovementConfig(DataMovementProcessor::RISCV_0, NOC::NOC_0),
                 },
-                experimental::KernelSpec{
+                KernelSpec{
                     .unique_id = consumer_name,
                     .source = kKernelDirectory + "blank.cpp",
-                    .dfb_bindings = {experimental::ConsumerOf(dataflow_buffer_name, "target")},
+                    .dfb_bindings = {ConsumerOf(dataflow_buffer_name, "target")},
                     .hw_config = DataMovementConfig(DataMovementProcessor::RISCV_1, NOC::NOC_1),
                 },
             },
-        .dataflow_buffers = {experimental::DataflowBufferSpec{
+        .dataflow_buffers = {DataflowBufferSpec{
             .unique_id = dataflow_buffer_name,
             .entry_size = entry_size,
             .num_entries = 2,
             .data_format_metadata = tt::DataFormat::Float16_b,
         }},
-        .work_units = {experimental::WorkUnitSpec{
+        .work_units = {WorkUnitSpec{
             .name = "main",
             .kernels = {producer_name, consumer_name},
             .target_nodes = kResourceNodes,
@@ -212,8 +208,8 @@ void RunDataflowBufferMulticastTest(
     Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
     experimental::SetProgramRunArgs(
         program,
-        experimental::ProgramRunArgs{
-            .tensor_args = {{backing_name, experimental::TensorArgument{backing}}},
+        ProgramRunArgs{
+            .tensor_args = {{backing_name, TensorArgument{backing}}},
         });
     LaunchAndCheck(mesh_device, std::move(program), expect_error);
 }
@@ -228,21 +224,21 @@ void RunDataflowBufferReadPointerTest(distributed::MeshDevice& mesh_device) {
     const NodeCoord sender = mesh_device.worker_core_from_logical_core(kSender);
     const NodeCoord rect_start = mesh_device.worker_core_from_logical_core({0, 0});
     const NodeCoord rect_end = mesh_device.worker_core_from_logical_core({1, 0});
-    const experimental::KernelSpecName producer_name{"read_pointer_producer"};
-    const experimental::KernelSpecName consumer_name{"read_pointer_multicast"};
-    const experimental::DFBSpecName dataflow_buffer_name{"target"};
-    const experimental::SemaphoreSpecName ready_name{"ready"};
-    const experimental::SemaphoreSpecName valid_name{"valid"};
+    const KernelSpecName producer_name{"read_pointer_producer"};
+    const KernelSpecName consumer_name{"read_pointer_multicast"};
+    const DFBSpecName dataflow_buffer_name{"target"};
+    const SemaphoreSpecName ready_name{"ready"};
+    const SemaphoreSpecName valid_name{"valid"};
     constexpr uint32_t entry_size = 1024;
     constexpr uint32_t pattern = 0x5EED0000;
-    const experimental::ProgramSpec spec{
+    const ProgramSpec spec{
         .name = "watcher_multicast_dataflow_buffer_read_pointer",
         .kernels =
             {
-                experimental::KernelSpec{
+                KernelSpec{
                     .unique_id = producer_name,
                     .source = kKernelDirectory + "dataflow_buffer_read_pointer_producer.cpp",
-                    .dfb_bindings = {experimental::ProducerOf(dataflow_buffer_name, "target")},
+                    .dfb_bindings = {ProducerOf(dataflow_buffer_name, "target")},
                     .compile_time_args =
                         {
                             {"sender_x", static_cast<uint32_t>(sender.x)},
@@ -252,10 +248,10 @@ void RunDataflowBufferReadPointerTest(distributed::MeshDevice& mesh_device) {
                         },
                     .hw_config = DataMovementConfig(DataMovementProcessor::RISCV_1, NOC::NOC_1),
                 },
-                experimental::KernelSpec{
+                KernelSpec{
                     .unique_id = consumer_name,
                     .source = kKernelDirectory + "dataflow_buffer_read_pointer_multicast.cpp",
-                    .dfb_bindings = {experimental::ConsumerOf(dataflow_buffer_name, "target")},
+                    .dfb_bindings = {ConsumerOf(dataflow_buffer_name, "target")},
                     .semaphore_bindings =
                         {
                             {.semaphore_spec_name = ready_name, .accessor_name = "ready"},
@@ -277,7 +273,7 @@ void RunDataflowBufferReadPointerTest(distributed::MeshDevice& mesh_device) {
                     .hw_config = DataMovementConfig(DataMovementProcessor::RISCV_0, NOC::NOC_0),
                 },
             },
-        .dataflow_buffers = {experimental::DataflowBufferSpec{
+        .dataflow_buffers = {DataflowBufferSpec{
             .unique_id = dataflow_buffer_name,
             .entry_size = entry_size,
             .num_entries = 2,
@@ -285,10 +281,10 @@ void RunDataflowBufferReadPointerTest(distributed::MeshDevice& mesh_device) {
         }},
         .semaphores =
             {
-                experimental::SemaphoreSpec{.unique_id = ready_name, .target_nodes = kResourceNodes},
-                experimental::SemaphoreSpec{.unique_id = valid_name, .target_nodes = kResourceNodes},
+                SemaphoreSpec{.unique_id = ready_name, .target_nodes = kResourceNodes},
+                SemaphoreSpec{.unique_id = valid_name, .target_nodes = kResourceNodes},
             },
-        .work_units = {experimental::WorkUnitSpec{
+        .work_units = {WorkUnitSpec{
             .name = "main",
             .kernels = {producer_name, consumer_name},
             .target_nodes = kResourceNodes,

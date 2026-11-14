@@ -25,9 +25,13 @@ from pathlib import Path
 
 # tt-llk/perf is not a package. Same path insert the other gate tests use.
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "perf"))
+import perf_schema_derive as schema_derive  # noqa: E402
 from perf_schema_derive import (  # noqa: E402
     PARAM_BASES,
     ROOT,
+    _is_functional_only,
+    _param_fields_in_tree,
+    _schema_fields_in_tree,
     class_field_specs,
     class_post_init_copies,
     column_sets_in_tree,
@@ -304,6 +308,44 @@ async def _run_b():
     ]
 
 
+def test_helper_calls_and_nested_config_kwargs_participate_in_consistency():
+    groups = _synthetic_column_sets(
+        """
+def _templates():
+    return [LOOP_FACTOR(1)]
+
+def _runtimes_a():
+    return [NUM_FACES()]
+
+def _runtimes_b():
+    return [NUM_FACES(), APPROX_MODE()]
+
+def _run_a():
+    return create_test_or_perf_config(
+        test_config_kwargs=dict(
+            test_name="sources/a.cpp",
+            templates=_templates(),
+            runtimes=_runtimes_a(),
+        )
+    )
+
+def _run_b():
+    return create_test_or_perf_config(
+        test_config_kwargs=dict(
+            test_name="sources/a.cpp",
+            templates=_templates(),
+            runtimes=_runtimes_b(),
+        )
+    )
+"""
+    )
+    assert len(groups) == 2
+    assert sorted(path for paths in groups.values() for path in paths) == [
+        "sources/a.cpp (_run_a)",
+        "sources/a.cpp (_run_b)",
+    ]
+
+
 def test_functional_only_and_partly_visible_functions_are_skipped():
     groups = _synthetic_column_sets(
         """
@@ -315,6 +357,12 @@ def test_functional():
 
 def _run_spread(extra):
     return PerfConfig(templates=[LOOP_FACTOR(1), *extra])
+
+def _partly_dynamic(extra):
+    return [NUM_FACES(), *extra]
+
+def _run_partly_dynamic(extra):
+    return PerfConfig(templates=_partly_dynamic(extra))
 
 def _run_conditional(c):
     return PerfConfig(templates=[LOOP_FACTOR(1), NUM_FACES() if c else None])
@@ -374,6 +422,83 @@ def test_emitted_fields_see_helper_returns_and_post_init_copies():
     assert set(emitted_fields(plain, specs)) == {"num_blocks"}
     helper = ast.parse("generate_input_dim((32, 32), (32, 32))").body[0].value
     assert emitted_fields(helper, specs) == []
+
+
+def test_local_list_helpers_are_resolved_per_file():
+    specs = class_field_specs()
+    helpers = helper_returned_param_calls(specs)
+    post_init = class_post_init_copies()
+
+    faces = ast.parse(
+        """
+def _templates():
+    return [NUM_FACES()]
+
+execute_llk(is_perf=True, test_config_kwargs=dict(templates=_templates()))
+"""
+    )
+    tiles = ast.parse(
+        """
+def _templates():
+    return [TILE_COUNT()]
+
+execute_llk(is_perf=True, test_config_kwargs=dict(templates=_templates()))
+"""
+    )
+    assert "num_faces" in _param_fields_in_tree(faces, specs, helpers, post_init)
+    assert "tile_cnt" in _param_fields_in_tree(tiles, specs, helpers, post_init)
+
+
+def test_execute_llk_adds_loop_factor_to_the_derived_schema():
+    specs = class_field_specs()
+    tree = ast.parse(
+        """
+execute_llk(
+    is_perf=True,
+    test_config_kwargs=dict(templates=[NUM_FACES()]),
+)
+"""
+    )
+    fields = _schema_fields_in_tree(
+        tree,
+        specs,
+        helper_returned_param_calls(specs),
+        class_post_init_copies(),
+        "loop_factor",
+    )
+    assert {"num_faces", "loop_factor"} <= fields
+
+
+def test_execute_llk_defaults_to_functional_only():
+    function = ast.parse(
+        """
+def run():
+    return execute_llk(test_config_kwargs=dict(templates=[NUM_FACES()]))
+"""
+    ).body[0]
+    assert _is_functional_only(function)
+
+
+def test_runner_selection_skips_blaze_and_follows_real_helper(tmp_path, monkeypatch):
+    (tmp_path / "helpers" / "perf").mkdir(parents=True)
+    (tmp_path / "perf_example.py").write_text("from test_example import run as _run\n")
+    (tmp_path / "test_example.py").write_text(
+        "from helpers.perf.blaze import execute_llk\n"
+        "from helpers.compressed_utils import run\n"
+    )
+    (tmp_path / "helpers" / "perf" / "blaze.py").write_text(
+        "def execute_llk():\n"
+        "    return create_test_or_perf_config(test_config_kwargs={})\n"
+    )
+    runner = tmp_path / "helpers" / "compressed_utils.py"
+    runner.write_text(
+        "def run():\n"
+        "    return execute_llk(is_perf=True, "
+        "test_config_kwargs=dict(templates=[NUM_FACES()]))\n"
+    )
+
+    monkeypatch.setattr(schema_derive, "ROOT", tmp_path)
+    assert list(schema_derive._perf_test_sources(False)) == [("perf_example", runner)]
 
 
 # Run mode, not a sweep parameter: published, deliberately never in the catalog.

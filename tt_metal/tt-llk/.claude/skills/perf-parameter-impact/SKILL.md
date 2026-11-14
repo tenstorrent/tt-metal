@@ -36,19 +36,11 @@ generator and, when needed, the C++ kernel to determine:
 Flag stale-report risk when current test axes are absent from the CSV. Never
 claim an independent effect for parameters the test does not vary independently.
 
-Before trending `TILE_LOOP` or `MATH_ISOLATE` across reports, check three
-accounting facts:
-
-- the perf schema version, `PERF_TEST_SCHEMAS[...]["version"]` in
-  `helpers/perf/test_schemas.py`, not a CSV column. It changes when columns
-  change, and that CSV is not comparable to the previous one. A `tile_cnt`
-  accounting change can make rows incomparable without a version bump;
-- whether `tile_cnt` counts operand tiles. The `.post.csv` divides by
-  `loop_factor * tile_cnt`, so two operand tiles per SFPU call publish about
-  half a result tile;
-- whether 16-bit `dest_acc=Yes` doubled dest handshakes relative to
-  `dest_acc=No`. That mixes a datapath change with twice the section-done
-  traffic.
+Before trending `TILE_LOOP` or `MATH_ISOLATE` across reports, check the
+schema version, whether `tile_cnt` counts operand tiles, and whether 16-bit
+`dest_acc=Yes` doubles Dest handshakes
+([perf-facts](../perf-test/references/perf-facts.md), "Accounting"). Analyze
+only a report that passed `perf-report` validation.
 
 ### 2. Filter and audit
 
@@ -123,8 +115,8 @@ cases:
   Dropping it manufactures pairs across unlike configurations and charges their
   combined difference to `P`.
 
-Quasar matmul is the standing example: `matmul_dimensions()` still halves the
-destination tile budget when `dest_acc=Yes`. Perf keeps dest-full tall and
+Quasar matmul is the standing example: `matmul_tile_dimensions()` sizes the
+grid from a destination tile budget that halves when `dest_acc=Yes`. Perf keeps dest-full tall and
 wide (`(1, max_tiles)` and `(max_tiles, 1)` × `kt={1, 4}`), so dest_acc=No
 is an 8-tile grid and dest_acc=Yes is a 4-tile grid. Geometry is not free to
 match across `dest_acc`. Pairing while ignoring geometry compares different
@@ -187,6 +179,11 @@ Flag structural confounding such as:
 
 ### 7. Build the bottleneck model
 
+Isolates are stage costs only when they are slices of `L1_TO_L1` (`perf-test`).
+First check, per config, that every isolate is at or below `L1_TO_L1`. If an
+isolate is above it, the isolate does extra work; report that as a test defect
+and do not assign bottlenecks from it.
+
 Interpret:
 
 - `L1_TO_L1`: observed end-to-end cost;
@@ -241,41 +238,9 @@ Order the report:
 ### Default absolute-cycle charts
 
 For matmul-style reports with format, fidelity, and destination-accumulation
-axes, use this design unless the user requests another:
-
-1. Add clickable fidelity options for values the **current sweep actually
-   emits**. Quasar matmul keeps LoFi–HiFi4 for Float16 and LoFi-only for
-   Float16_b, Int8, and MX; do not show empty HiFi panels as if they were
-   measured.
-2. Under the selected fidelity, show absolute cycles by composite
-   input/register mode, output format, and geometry/destination accumulation.
-   Geometry labels should name dest-full **tall vs wide** and `kt=1` vs
-   `kt=4`, not the old 12/9 dest-fill factorization set.
-3. Before placing `dest_acc=No` and `Yes` bars side by side, audit whether both
-   arms contain identical geometries and other relevant configurations.
-4. If common geometry exists, restrict the split bars to that common support,
-   state the reduced coverage, and use the same color for each metric pair with
-   `dest_acc` distinguished by opacity or another restrained treatment.
-5. If no common geometry exists, as in the current Quasar matmul sweep (8-tile
-   vs 4-tile dest-full), do not split input/register or output-format
-   categories into adjacent `dest_acc` bars. Either omit that split in favor of
-   the geometry chart or use separate panels labeled **observed bundled
-   population: dest_acc + geometry**. Explicitly state that gaps between
-   panels are descriptive and are not a `dest_acc` effect.
-6. In the geometry chart, encode both geometry and destination accumulation in
-   the x-axis label. Keep four metric bars per composite category and do not
-   split them again.
-7. Add a red min–max whisker to every absolute-cycle bar. Calculate the minimum
-   and maximum from exactly the rows summarized by that bar.
-8. Call this an **observed min–max range**, not variance. It is sensitive to
-   extreme configurations and is not a repeated-run noise estimate.
-9. Hover must show category, metric, `dest_acc` when applicable, geometric
-   mean, minimum, maximum, and max-minus-min range.
-10. State sample counts separately for every displayed subgroup and composite
-    geometry/destination category.
-
-Use a custom themed SVG when the built-in chart cannot draw per-bar min–max
-whiskers. Use host-theme colors; never hardcode red or other colors.
+axes, follow [references/matmul-charts.md](references/matmul-charts.md)
+unless the user requests another design. Use a custom themed SVG when the
+built-in chart cannot draw per-bar min–max whiskers.
 
 Chart requirements:
 

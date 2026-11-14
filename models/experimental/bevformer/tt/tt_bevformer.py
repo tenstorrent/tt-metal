@@ -87,8 +87,8 @@ class TTBEVFormer:
         return self.transformer.prepare_frame(img_metas, frame)
 
     def __call__(self, img, frame, prev_bev=None):
-        """``img`` the ``bs * num_cams`` normalized images, ``(bs * num_cams, 3, H, W)`` bfloat16
-        ROW_MAJOR, sample-major; ``frame`` from :meth:`prepare_frame`; ``prev_bev`` the
+        """``img`` the ``bs * num_cams`` normalized images, sample-major, one DRAM tensor per camera
+        as TTResNet reads them; ``frame`` from :meth:`prepare_frame`; ``prev_bev`` the
         previous frame's ``(bs, bev_h * bev_w, C)`` BEV or None. Returns the class logits
         ``(L, bs, num_query, num_classes)``, boxes ``(L, bs, num_query, code_size)`` in
         ``TTBEVFormerHead``'s channel order, and this frame's BEV ``(bs, bev_h * bev_w, C)``. L is

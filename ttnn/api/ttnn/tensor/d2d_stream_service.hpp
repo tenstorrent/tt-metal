@@ -174,6 +174,13 @@ struct D2DStreamConfig {
     // Both sides must match. Needs a 2D fabric, share_fabric_links and no stage_gate.
     // TT_METAL_FABRIC_DISABLE_INTERMESH_VC=1 turns it on for every stream.
     bool relay = false;
+
+    // Relay mode, receiver side: whether this process builds another D2D service on the same mesh after this
+    // receiver, as a middle pipeline stage builds its outbound sender after its inbound receiver. Then each entry
+    // relay takes a second forward lane only while another link of that direction stays free, so the later
+    // service still finds a router (two services on one chip cannot share one). A terminal stage builds no
+    // later service: it sets false, and its entry relays take every lane they can use.
+    bool reserve_links_for_later_service = true;
 };
 
 // Identifies the two endpoints of a MULTI-HOST D2D pair and the communicator the
