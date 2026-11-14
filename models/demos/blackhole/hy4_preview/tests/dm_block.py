@@ -81,6 +81,8 @@ class Block:
         self.fuse = ("sparse" in os.environ.get("HY4_FUSE", "")) if fuse is None else fuse
         self.xchg = ("xchg" in os.environ.get("HY4_FUSE", "")) if xchg is None else xchg  # A2: fabric exchange fused with the merge (replaces to_owner + a2a + merge)
         self.xm = None
+        self.xchg2 = "xchg2" in os.environ.get("HY4_FUSE", "") if xchg is None else False
+        self.xm2 = None
         self.safe = safe  # merge reference = true max over the sources and the sink (+18 us: ttnn.max over dim 0) instead of the sink
         self.tile, self.softmax = (
             tile,
@@ -226,6 +228,12 @@ class Block:
         st["qg"] = self.gather_q(q_pad)
         if upto == 1:
             return st["qg"]
+        if self.xchg2 and self.tile and upto >= 99:
+            if self.xm2 is None:
+                import hy4_xmerge
+
+                self.xm2 = hy4_xmerge.XMergeFused(self.md, self.S)
+            return self.xm2(st["qg"], kv, idx8, sink, self.mod, self.kc, self.G, self.ckc, SCALE)
         st["out"] = self.kernel(st["qg"], kv, idx8)
         if upto == 2:
             return st["out"]

@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(HERE), "probes", "idx_1m"))
 from dk_dev import pcc, timed_traced
 from dm_block import close_row, open_row
 import hy4_idx_score as IS
-from idx_pipe import Ccl, colid_tensor, select_v2
+from idx_pipe import Ccl, colid_tensor, select_v2, cs_cand2, cs_gather, topk_ids
 from idx_common import gid_of
 
 import ttnn
@@ -22,7 +22,28 @@ COLS, HEADS, DIM, TOPK = 8, 32, 128, 2048
 TOTALS = [int(x) for x in os.environ.get("TOTALS", "16384,65536,262144,1048576").split(",")]
 SS = [int(x) for x in os.environ.get("SS", "1,2").split(",")]
 MODES = os.environ.get("MODES", "random,heavy,recent").split(",")
+V3 = os.environ.get("V3", "0") == "1"
 CFG = tuple(int(v) for v in os.environ.get("CFG", "16:512:512:4").split(":"))  # B:kb:kloc:split
+
+
+def select_v3(ccl, colid, rows, n, B=64, kb=256, G=8, kloc=512, K=TOPK, split=4, total=None):
+    """hierarchical local stage: B blocks (top-kb each) -> G groups per row (top-kb of G*kb) -> top-kloc of the G group winners; then AG + merge as v2."""
+    S = int(rows.shape[2])
+    m = n // B
+    blk = ttnn.reshape(rows, [1, 1, S * B, m])
+    bids = topk_ids(blk, kb, m)
+    bv, bg = cs_cand2(ttnn.reshape(rows, [S * B, 1, 1, m]), ttnn.reshape(bids, [S * B, 1, 1, kb]), colid, 1, m, B, split)
+    per = B // G  # blocks per group
+    c2 = ttnn.reshape(bv, [1, 1, S * G, per * kb])
+    pos2 = topk_ids(c2, kb)
+    gids, gvals = cs_gather(ttnn.reshape(pos2, [S * G, 1, 1, kb]), ttnn.reshape(bg, [S * G, 1, 1, per * kb]), ttnn.reshape(bv, [S * G, 1, 1, per * kb]), split)
+    c3 = ttnn.reshape(gvals, [1, 1, S, G * kb])
+    pos3 = topk_ids(c3, kloc)
+    lids, lvals = cs_gather(ttnn.reshape(pos3, [S, 1, 1, kloc]), ttnn.reshape(gids, [S, 1, 1, G * kb]), ttnn.reshape(gvals, [S, 1, 1, G * kb]), split)
+    av, ai = ccl.ag(lvals), ccl.ag(lids)
+    W = int(av.shape[-1])
+    pos4 = ttnn.reshape(topk_ids(ttnn.reshape(av, [1, 1, S, W]), K), [S, 1, 1, K])
+    return cs_gather(pos4, ai, None, split)[0]
 
 
 def emit(d):
@@ -57,6 +78,8 @@ def main():
     try:
         for total in TOTALS:
             n = total // COLS
+            B3 = min(64, n // 2048) if n >= 16384 else 1
+            G3 = max(1, B3 // 8)
             B = max(1, min(B0, n // kb))  # blocks of >= kb keys (16k total: 4 blocks)
             for S in SS:
                 for mode in MODES:
@@ -80,7 +103,8 @@ def main():
                     dev_scores = torch.zeros(S, total)
                     for c in range(COLS):
                         dev_scores[:, gid[c]] = sc_all[c]
-                    ids = select_v2(ccl, colid, score, n, B, kb, kl, TOPK, sp, False, total)
+                    sel = (lambda sc: select_v3(ccl, colid, sc, n, B3, 256, G3, 512, TOPK, sp, total)) if V3 else (lambda sc: select_v2(ccl, colid, sc, n, B, kb, kl, TOPK, sp, False, total))
+                    ids = sel(score)
                     idh = ttnn.to_torch(ids, mesh_composer=ttnn.ConcatMeshToTensor(md, dim=0)).reshape(COLS, S, TOPK).long()
                     r = {"test": "idx_chain_exact", "total": total, "S": S, "mode": mode, "cols_identical": bool((idh == idh[0:1]).all())}
                     idh = idh[0]
@@ -99,8 +123,8 @@ def main():
                     emit(r)
                     if mode == MODES[0]:
                         us_sc = timed_traced(md, lambda: IS.idx_score(q_my, kd, w_d, n, S))
-                        us_sel = timed_traced(md, lambda: select_v2(ccl, colid, score, n, B, kb, kl, TOPK, sp, False, total))
-                        us_all = timed_traced(md, lambda: select_v2(ccl, colid, IS.idx_score(q_my, kd, w_d, n, S), n, B, kb, kl, TOPK, sp, False, total))
+                        us_sel = timed_traced(md, lambda: sel(score))
+                        us_all = timed_traced(md, lambda: sel(IS.idx_score(q_my, kd, w_d, n, S)))
                         qs = torch.zeros(1, HEADS, 32, DIM)
                         qs[0, :, :S] = q
                         q_st = mk(md, qs.to(torch.bfloat16), ttnn.bfloat16, ttnn.TILE_LAYOUT)

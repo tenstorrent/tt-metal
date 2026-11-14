@@ -100,6 +100,39 @@ def run_xchg_pcc(md):
             raise
 
 
+def run_x2_pcc(md):
+    sel = os.environ.get("CASES")
+    for kind, ctx, S, fmt in CASES:
+        tag = f"{kind}_{ctx}_S{S}_{fmt}"
+        if sel and tag not in sel.split(","):
+            continue
+        c = DM.Case(md, kind, ctx, S, fmt, seed=3)
+        blk = DM.mk_block(md, S, fuse=True, xchg=False)
+        blk.xchg2 = True
+        idx8 = blk.idx_rows(c.idx_dev)
+        outs = [blk.run(c.q_dev, c.kv_dev, idx8, c.sinkrow3_dev) for _ in range(3)]
+        got = [DM.result_to_heads(md, o, S, True) for o in outs]
+        ps = [round(pcc(g, c.ref), 6) for g in got]
+        emit({"test": "xchg2_pcc", "case": tag, "pcc_per_call": ps, "finite": bool(all(torch.isfinite(g).all() for g in got)), "pass": bool(min(ps) >= DM.GATE)})
+        c.free()
+
+
+def run_x2_lat(md):
+    v = os.environ.get("X2V", "a2b")  # one variant per process: the persistent L1 buffers of the variants stack at the top of L1
+    for fmt in os.environ.get("X2F", "bf16,scaled").split(","):
+        for S in (1, 2):
+            c = DM.Case(md, "random", 65536, S, fmt, seed=5)
+            blk = DM.mk_block(md, S, fuse=True, xchg=(v == "a2"))
+            blk.xchg2 = v == "a2b"
+            if v == "a1":
+                blk.xchg = False
+            idx8 = blk.idx_rows(c.idx_dev)
+            us = timed_traced(md, lambda: blk.run(c.q_dev, c.kv_dev, idx8, c.sinkrow3_dev))
+            emit({"test": "xchg2_lat", "variant": v, "fmt": fmt, "S": S, "us": us})
+            c.free()
+            blk.xm = blk.xm2 = None
+
+
 def run_xchg_lat(md):
     for fmt in ("bf16", "scaled"):
         for S in (1, 2):
@@ -140,7 +173,7 @@ def run_lat(md):
 if __name__ == "__main__":
     full, md = open_row()
     try:
-        for name, fn in [("pcc", run_pcc), ("lat", run_lat), ("xpcc", run_xchg_pcc), ("xlat", run_xchg_lat)]:
+        for name, fn in [("pcc", run_pcc), ("lat", run_lat), ("xpcc", run_xchg_pcc), ("xlat", run_xchg_lat), ("x2pcc", run_x2_pcc), ("x2lat", run_x2_lat)]:
             if os.environ.get("TEST", "pcc") in (name, "all"):
                 fn(md)
     finally:

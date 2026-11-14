@@ -189,3 +189,160 @@ class XMerge:
                 mpd[ttnn.MeshCoordinateRange(coord, coord)] = prog
         ttnn.generic_op([x, sink, self.out, self.land], mpd)
         return self.out
+
+
+class XMergeFused(XMerge):
+    """A2b: split kernel + partial exchange + merge in ONE mesh program (flag HY4_FUSE=sparse,xchg2). The leader cores of the split kernel write their (o, ms, l) runs straight into the comm cores' persistent
+    L1 staging (remote owners) or into the own landing slot (owner == this chip); the comm cores open their fabric connection at launch, wait for the runs (local semaphore) and send; no DRAM round trip, no
+    separate program. Full 32x32 tiles, nsplit = lanes = links = 2 (the validated xchg config)."""
+
+    SEMX = 15
+
+    def __init__(self, md, S, nsplit=2, links=2):
+        super().__init__(md, S, nsplit=nsplit, links=links, compact=0, lanes=links)
+        grid = self.grid
+        # merge cores below the split cores (8 S G <= 64 cores), comm cores on the last row
+        y0 = int(os.environ.get("HY4_XM_Y0", "7"))
+        self.mcores = [(i % grid.x, y0 + i // grid.x) for i in range(S * nsplit)]
+        self.comm = {(d, l): (links * d + l + int(os.environ.get("HY4_XM_CX", "0")), int(os.environ.get("HY4_XM_CY", str(grid.y - 1)))) for d in (0, 1) for l in range(links)}
+        # rebuild the landing tensor on the new merge cores
+        self.mset = _cores(self.mcores)
+        w = NC * self.lt * self.tb // 2
+        mc = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(self.mset, [1, w], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        self.land = ttnn.from_torch(
+            torch.zeros(len(self.mcores), w, dtype=torch.bfloat16),
+            device=md, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, memory_config=mc,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(md),
+        )
+        self.gper = len(range(0, nsplit, links))
+        self.pk_run = self.tpc // 2 + 1
+        stage_pkts = S * 4 * self.gper * self.pk_run
+        cset = _cores(list(self.comm.values()))
+        sw = stage_pkts * 4096 // 2
+        smc = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1,
+            ttnn.ShardSpec(cset, [1, sw], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        self.stage = ttnn.from_torch(
+            torch.zeros(len(self.comm), sw, dtype=torch.bfloat16),
+            device=md, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, memory_config=smc,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(md),
+        )
+        ttnn.synchronize_device(md)
+
+    def __call__(self, qg, kv, idx8, sink, mod, kc, G, ckc, scale):
+        md, S, ns, tpc, LT = self.md, self.S, self.nsplit, self.tpc, self.lt
+        T, PK = 2048, 4096
+        ST, A, W, R, ONE, OUT = 40, 41, 42, 43, 44, 45
+        gsem_addr = ttnn.get_global_semaphore_address(self.gsem)
+        land_base, stage_base = self.land.buffer_address(), self.stage.buffer_address()
+        dev_land = ttnn.get_device_tensors(self.land)
+        m_xy = [self._phys(*c) for c in self.mcores]
+        comm_xy = {k: self._phys(*v) for k, v in self.comm.items()}
+        rows, cols = tuple(md.shape)
+        mpd = ttnn.MeshProgramDescriptor()
+        out_split = None
+        for r in range(rows):
+            for col in range(cols):
+                coord = ttnn.MeshCoordinate(r, col)
+                src = md.get_fabric_node_id(coord)
+                fwd_n = md.get_fabric_node_id(ttnn.MeshCoordinate(r, (col + 1) % RING))
+                bwd_n = md.get_fabric_node_id(ttnn.MeshCoordinate(r, (col - 1) % RING))
+                idx = r * cols + col
+
+                def xchg(t, g, col=col):
+                    if g != 0:
+                        return [0] * 10
+                    j, s = t // S, t % S
+                    ent = []
+                    if j == col:
+                        flag = 2
+                        for gg in range(ns):
+                            mx, my = m_xy[s * ns + gg]
+                            ent += [mx, my, land_base + (col * LT) * T]
+                    else:
+                        d = (j - col) % RING
+                        dr, dd = (0, d) if d <= 4 else (1, RING - d)
+                        nd = 4 if dr == 0 else 3
+                        di = nd - dd
+                        flag = 1
+                        for gg in range(ns):
+                            lane, gidx = gg % self.links, gg // self.links
+                            cx, cy = comm_xy[(dr, lane)]
+                            k_run = (s * nd + di) * self.gper + gidx
+                            ent += [cx, cy, stage_base + k_run * self.pk_run * PK]
+                    return [flag, tpc, ns, PK, gsem_addr, self.SEMX] + ent
+
+                parts = mod.sparse_sdpa_split(qg, kv, idx8, 512, scale, kc, G, ckc, None, emit_stats=3, owner_s=S, xchg=xchg, build_only=True, out=out_split)
+                out_split = parts["out"]
+                kernels = list(parts["kernels"])
+                cbs = list(parts["cbs"])
+                tdesc = None
+
+                def cb(i, n_, cores, page=T):
+                    return ttnn.CBDescriptor(
+                        total_size=page * n_, core_ranges=cores,
+                        format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=i, data_format=ttnn.bfloat16, page_size=page)],
+                    )
+
+                cb_land = ttnn.cb_descriptor_from_sharded_tensor(A, dev_land[idx])
+                cb_land.core_ranges = self.mset
+                cb_land.total_size = NC * LT * T
+                cb_land.format_descriptors = [ttnn.CBFormatDescriptor(buffer_index=A, data_format=ttnn.bfloat16, page_size=T)]
+                cbs += [cb_land, cb(ST, 1, self.mset), cb(W, NC, self.mset), cb(R, 1, self.mset), cb(ONE, 1, self.mset), cb(OUT, tpc, self.mset)]
+                rt_r, rt_w, rt_c = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+                for m, (cx, cy) in enumerate(self.mcores):
+                    s, g = m // ns, m % ns
+                    rt_r[cx][cy] = [s, g, col]
+                    rt_w[cx][cy] = [s, g * tpc]
+                    rt_c[cx][cy] = []
+                if os.environ.get("HY4_XM_NOMERGE") == "1":
+                    cbs = [c_ for c_ in cbs if c_ is not cb_land]
+                kernels += [] if os.environ.get("HY4_XM_NOMERGE") == "1" else [
+                    ttnn.KernelDescriptor(
+                        kernel_source=f"{KDIR}/xm_reader_v2.cpp", source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+                        core_ranges=self.mset, compile_time_args=[S, tpc, ST, A, ONE, int(os.environ.get("HY4_XM_DBG", "0"))] + _acc(sink),
+                        runtime_args=rt_r, common_runtime_args=[0, sink.buffer_address(), gsem_addr],
+                        config=ttnn.ReaderConfigDescriptor()),
+                    ttnn.KernelDescriptor(
+                        kernel_source=f"{KDIR}/mrg_writer.cpp", source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+                        core_ranges=self.mset, compile_time_args=[tpc, OUT] + _acc(self.out),
+                        runtime_args=rt_w, common_runtime_args=[self.out.buffer_address()],
+                        config=ttnn.WriterConfigDescriptor()),
+                    ttnn.KernelDescriptor(
+                        kernel_source=f"{KDIR}/mrg2_compute.cpp", source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+                        core_ranges=self.mset, compile_time_args=[tpc, ST, A, W, R, ONE, OUT],
+                        runtime_args=rt_c, common_runtime_args=[],
+                        config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True)),
+                ]
+                comm_kidx = {}
+                for name, ndist, dr in (("fwd", 4, 0), ("bwd", 3, 1)):
+                    for lk in range(self.links):
+                        if os.environ.get("HY4_XM_NOCOMM") == "1":
+                            continue
+                        cx, cy = self.comm[(dr, lk)]
+                        rt = ttnn.RuntimeArgs()
+                        rt[cx][cy] = [col] + [v for xy in m_xy for v in xy]
+                        kernels.append(ttnn.KernelDescriptor(
+                            kernel_source=f"{KDIR}/xm_comm_v2.cpp", source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+                            core_ranges=_cores([(cx, cy)]),
+                            compile_time_args=[dr, ndist, S, tpc, ns, lk, self.links, self.SEMX, 1 + 2 * len(m_xy), int(os.environ.get("HY4_XM_DBG", "0"))],
+                            runtime_args=rt, common_runtime_args=[stage_base, land_base, gsem_addr],
+                            config=ttnn.WriterConfigDescriptor()))
+                        comm_kidx[(name, lk)] = len(kernels) - 1
+                sem_cores = _cores(list(parts["cores"]) + list(self.comm.values()))
+                sems = list(parts["semaphores"]) + [ttnn.SemaphoreDescriptor(self.SEMX, ttnn.CoreType.WORKER, sem_cores, 0)]
+                prog = ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=cbs)
+                for (name, lk), ki in comm_kidx.items():
+                    dst = fwd_n if name == "fwd" else bwd_n
+                    cx, cy = self.comm[(0 if name == "fwd" else 1, lk)]
+                    fargs = ttnn.setup_routing_plane_connection(src, [dst], [lk], prog, ki, ttnn.CoreCoord(cx, cy))
+                    prog.kernels[ki].runtime_args[cx][cy].extend(fargs)
+                prog.custom_program_hash = (0x7B3 << 40) | (hash((parts["hash_parts"], os.environ.get("HY4_XM_DBG", "0"), os.environ.get("HY4_XM_NOCOMM", "0"), os.environ.get("HY4_XM_NOMERGE", "0"), ns, self.links, col, tuple(_acc(sink)), tuple(_acc(self.out)))) & ((1 << 40) - 1))
+                mpd[ttnn.MeshCoordinateRange(coord, coord)] = prog
+        ttnn.generic_op([qg, kv, idx8, out_split, self.out, self.land, self.stage, sink], mpd)
+        return self.out

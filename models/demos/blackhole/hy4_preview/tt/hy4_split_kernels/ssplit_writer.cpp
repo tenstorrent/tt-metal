@@ -184,6 +184,33 @@ void kernel_main() {
             return h * S + tok;
         }
     };
+    // fused partial exchange (fuse-sparse-merge A2b): rt args 4..: xflag (0 off, 1 remote owner: write into the comm cores' staging, 2 own owner: write into the own landing slot), TPC, NSPLIT, PKT, gsem addr, local sem id,
+    // then per merge-core run g: (x, y, run base address)
+    const uint32_t xflag = get_arg_val<uint32_t>(4);
+    const uint32_t xtpc = get_arg_val<uint32_t>(5), xn = get_arg_val<uint32_t>(6), xpkt = get_arg_val<uint32_t>(7);
+    const uint32_t xgsem = get_arg_val<uint32_t>(8), xsem = get_arg_val<uint32_t>(9);
+    auto xaddr = [&](uint32_t g, uint32_t tile, bool stat) -> uint64_t {
+        const uint32_t ex = get_arg_val<uint32_t>(10 + 3 * g), ey = get_arg_val<uint32_t>(11 + 3 * g), eb = get_arg_val<uint32_t>(12 + 3 * g);
+        uint32_t a;
+        if (xflag == 1) {
+            a = stat ? eb + (xtpc / 2) * xpkt + tile * 2048 : eb + (tile / 2) * xpkt + (tile % 2) * 2048;
+        } else {
+            a = stat ? eb + (xtpc + tile) * 2048 : eb + tile * 2048;
+        }
+        return get_noc_addr(ex, ey, a);
+    };
+    auto xchg_write_o = [&](uint32_t src) {
+        for (uint32_t ct = 0; ct < vDHt; ++ct) {
+            noc_async_write(src + ct * 2048, xaddr(ct / xtpc, ct % xtpc, false), 2048);
+        }
+    };
+    auto xchg_write_stats = [&](uint32_t src) {
+        for (uint32_t g = 0; g < xn; ++g) {
+            for (uint32_t t = 0; t < 2; ++t) {
+                noc_async_write(src + t * 2048, xaddr(g, t, true), 2048);
+            }
+        }
+    };
     for (uint32_t tok = tok_start; tok < tok_start + tok_count; ++tok) {
         // K-gather phase: process this token's active chunks (reader signals per chunk; is_last ends the token).
         // Gather rows [0,split) on the writer's NoC into the reader-reserved destination, then ack.
@@ -382,9 +409,13 @@ void kernel_main() {
                     }
                 }
                 if constexpr (emit_tile) {
-                    for (uint32_t t = 0; t < 2; ++t) {
-                        noc.async_write(
-                            scr, stats, 2048, {.offset_bytes = t * 2048}, {.page_id = tok * (vDHt + 2) + vDHt + t});
+                    if (xflag == 0) {
+                        for (uint32_t t = 0; t < 2; ++t) {
+                            noc.async_write(
+                                scr, stats, 2048, {.offset_bytes = t * 2048}, {.page_id = tok * (vDHt + 2) + vDHt + t});
+                        }
+                    } else {
+                        xchg_write_stats(scr.get_write_ptr());
                     }
                 } else {
                     for (uint32_t h = 0; h < out_heads; ++h) {
@@ -404,8 +435,12 @@ void kernel_main() {
             l_cb.pop_front(1);
         }
         if constexpr (emit_tile) {
-            for (uint32_t ct = 0; ct < vDHt; ++ct) {
-                noc.async_write(out_cb, out, 2048, {.offset_bytes = ct * 2048}, {.page_id = tok * (vDHt + 2) + ct});
+            if (xflag == 0) {
+                for (uint32_t ct = 0; ct < vDHt; ++ct) {
+                    noc.async_write(out_cb, out, 2048, {.offset_bytes = ct * 2048}, {.page_id = tok * (vDHt + 2) + ct});
+                }
+            } else {
+                xchg_write_o(out_cb.get_read_ptr());
             }
         } else {
             for (uint32_t h = 0; h < out_heads; ++h) {
@@ -417,6 +452,13 @@ void kernel_main() {
         {
             DeviceZoneScopedN("W_OUTWR");
             noc.async_write_barrier();
+        }
+        if (xflag != 0) {  // fused exchange: the runs are in the comm cores' staging / the own landing slot; signal them
+            for (uint32_t g = 0; g < xn; ++g) {
+                const uint32_t ex = get_arg_val<uint32_t>(10 + 3 * g), ey = get_arg_val<uint32_t>(11 + 3 * g);
+                noc_semaphore_inc(get_noc_addr(ex, ey, xflag == 1 ? get_semaphore(xsem) : xgsem), 1);
+            }
+            noc_async_atomic_barrier();
         }
         out_cb.pop_front(block_tiles);
     }
