@@ -558,7 +558,7 @@ class Flux2Pipeline:
             if prompt_upsample_temperature is not None:
                 prompts = self._prompt_encoder.upsample(
                     prompts,
-                    max_length=224,  # TODO: this should be higher
+                    max_length=512,
                     temperature=prompt_upsample_temperature,
                     traced=traced,
                 )
