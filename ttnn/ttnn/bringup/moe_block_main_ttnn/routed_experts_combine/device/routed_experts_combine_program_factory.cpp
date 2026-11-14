@@ -85,7 +85,12 @@ void set_fill(
             call->exact_limit,
             done,
             token,
-            wait ? 1u : 0u};
+            wait ? 1u : 0u,
+            call->prev_counts ? addr(*call->prev_counts) : 0u,
+            call->prev_landing ? addr(*call->prev_landing) : 0u,
+            call->prev_sem,
+            call->prev_spc,
+            static_cast<uint32_t>(call->prev_core.x) | static_cast<uint32_t>(call->prev_core.y) << 16};
         if (sig == sv.fill_sig) {
             return;
         }

@@ -907,6 +907,27 @@ void set_combine_fill_args(
         const uint32_t tabb = static_cast<uint32_t>(call->runs.buffer()->aligned_page_size());
         TT_FATAL(tabb <= kFillTabBytes, "routed_experts_combine: a fill run table of {} B > {}", tabb, kFillTabBytes);
         const auto rx = mesh_device.worker_core_from_logical_core(plan.collector);
+        if (call->prev_counts) {
+            const uint32_t n = topo.num_chips(), spc = call->prev_spc;
+            TT_FATAL(
+                ring > 0 && call->prev_landing.has_value() && n <= 32 && n < 256 && spc > 0 && spc % 16 != 0 &&
+                    spc < 256 && 4 * spc + 128 + 4 * ((spc + 15) / 16 * 16) <= plan.fill_chunk && kFillArgs >= 18,
+                "routed_experts_combine: the prev counts (P.62b) need the exact ring, the landing rows, <= 32 chips "
+                "and "
+                "a tag word past the slots (spc {}: not a multiple of 16, below 256; a row and its window in a staging "
+                "slot)",
+                spc);
+            const auto& ct = *call->prev_counts;
+            TT_FATAL(
+                ct.dtype() == DataType::UINT32 && ct.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM &&
+                    ct.buffer()->num_pages() == 1 && ct.buffer()->page_size() >= 4 * n * spc,
+                "routed_experts_combine: the prev counts are one uint32 DRAM page of chips x spc words");
+            const auto& lt = *call->prev_landing;
+            TT_FATAL(
+                lt.dtype() == DataType::UINT32 && lt.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM &&
+                    lt.buffer()->aligned_page_size() == 4 * ((spc + 15) / 16 * 16) && lt.buffer()->num_pages() == 2 * n,
+                "routed_experts_combine: the prev landing rows are 2 x chips uint32 DRAM pages of al16(spc) words");
+        }
         for (size_t i = 0; i < h.fill_ports.size(); ++i) {
             const auto& fp = h.fill_ports[i];
             auto& rt = tt::tt_metal::GetRuntimeArgs(program, fp.kernel, fp.core);
@@ -925,6 +946,22 @@ void set_combine_fill_args(
             if (ring) {    // (P.60: the port reads its ring slot from the ordinal word)
                 w[10] = static_cast<uint32_t>(call->exact_ordinal->buffer()->address());
                 w[11] = ring | kFxPages << 16;
+            }
+            if (call->prev_counts) {  // (P.62b: the counts row - targets: the chips whose first hop is this port)
+                const uint32_t n = topo.num_chips(), spc = call->prev_spc, spw = (spc + 15) / 16 * 16;
+                uint32_t mask = 0;
+                for (uint32_t k = 0; k < n && fp.li == 0; ++k) {
+                    if (k != me && static_cast<uint32_t>(*first_hop(ch, topo.coord(k), topo)) == fp.dir) {
+                        mask |= 1u << k;
+                    }
+                }
+                const auto pc = mesh_device.worker_core_from_logical_core(call->prev_core);
+                w[12] = static_cast<uint32_t>(call->prev_counts->buffer()->address());
+                w[13] = static_cast<uint32_t>(call->prev_landing->buffer()->address());
+                w[14] = call->prev_sem;
+                w[15] = static_cast<uint32_t>(pc.x) | static_cast<uint32_t>(pc.y) << 16;
+                w[16] = mask;
+                w[17] = (i == 0 ? 1u : 0u) | spc << 8 | spw << 16 | n << 24;
             }
         }
         return;

@@ -9,8 +9,9 @@ Terms:
               tests/test_moe_prev_replicas.py (P.60).
   wall_ms   = to the end of the sync after the last layer.
   side      = off (prev switched off in the loaded model: no planner, the stock combine fill, the empty map; P.56's
-              `_side`) or prev:<host2> (MOE_REPLICAS=prev with MOE_PREV_HOST=device and MOE_PREV_HOST2=<host2>,
-              switched in the loaded model: expert_prev.set_host2).
+              `_side`) or prev:<host2>[:<planner>] (MOE_REPLICAS=prev with MOE_PREV_HOST=device, MOE_PREV_HOST2=<host2>
+              and, P.62b, MOE_PLANNER=<planner> (default: the setting's), switched in the loaded model:
+              expert_prev.set_host2 / set_planner).
   excl      = a wrapped call's exclusive host time (nested wrapped calls charged to the inner one): every ttnn op
               (FastOperation.__call__, C++ and Python forks apart), ttnn.bringup.run_prepared, PrevReplicas.before /
               after (their own Python), transfers and the engram worker's wait (P.57's HostClock).
@@ -65,9 +66,13 @@ def _set_side(mesh, side: str) -> None:
     if side == "off":
         _side(mesh, "off")
         return
-    _, host2 = side.split(":")
-    XP.set_host2(host2)
-    _side(mesh, "prev", "device")
+    # (prev:<host2>[:<planner>]; P.62b: _side's mode sets MOE_PREV_HOST2 itself - "device" meant host2 legacy, so
+    # P.62's prev:lean side ran P.60's device path; the mode is now lean for host2 lean)
+    parts = side.split(":")
+    host2 = parts[1]
+    XP.set_planner(parts[2] if len(parts) > 2 else None)
+    _side(mesh, "prev", "lean" if host2 == "lean" else "device")
+    assert XP.host2() == host2, (XP.host2(), host2)
 
 
 def _chunk(model, layers, tokens, st, state, clock=None):

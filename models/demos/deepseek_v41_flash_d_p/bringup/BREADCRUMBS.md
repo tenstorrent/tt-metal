@@ -1515,3 +1515,68 @@ The one this change broke (test_seeded: `git add state.json`) is fixed.
   171.3 ms (spread 8.2); p51200 (random ids, DS41-228) device_ms_total 156.49, device_ms_experts 75.99, wall 177.6
   (spread 42.6: two runs of 10 at 207.7 / 215.9 ms, loadavg 11.8; the other eight 173.3-182.2), host overhead 21.1,
   1656 launches (run_prepared not counted), 0 new programs.
+
+## P.62b (perf, attempt 1): P.56's planner folded into programs that already run (MOE_PLANNER launch | folded)
+- Expected per chunk (written before any code change; perf_guide 3 and 4 "moved time"; real novel / code chunks 1..10,
+  MOE_REPLICAS=prev on both sides): host -3.5 to -3.9 ms (P.62's accounting: the planner launch +3.7-3.8 ms a chunk,
+  40 x ~85-95 us, removed; plus ~+0.1-0.3 ms back: one more patched head arg a call, the folded tail's desc). Device
+  -2 to -4 ms (the planner program's ~0.1 ms a layer, 3.8-5.0 ms a chunk, is mostly its launch / exchange skew; the
+  plan's own ~30-40 us runs on the head's watcher RISC after its work, hidden while the head's other cores run; the
+  count packets ride the combine's ports after their rows: +~1-3 us a call). Target: prev host <= off host + 1.5 ms.
+- Design (before code): the head has no free core on the 8x4 (11 x 10 grid at the 110 cap: 10 x 10 matmul cores + the
+  mover column, both data-movement RISCs taken), so the planner is a tail of the head's watcher kernel (NCRISC, after
+  its watch and Y send), its L1 the arena past the head's own bytes (head 948 KB of a 1386 KB arena). The count packets
+  go out from the combine's link-0 port senders after their main loop (one chip port also writes the chip's own row
+  locally, tagged with the call ordinal + 1 so the next head knows a plan is pending).
+- Built (MOE_PLANNER = launch | folded, tt/settings.py, default folded; folded needs MOE_PREV_HOST=device +
+  MOE_PREV_HOST2=lean, the OWN_ROWS head path and >= 2 MoE layers a chunk, else that call runs launch):
+  1. Fork routed_experts_combine (`set_combine_fill_exact(..., prev_counts, prev_landing, prev_sem, prev_spc,
+     prev_core)`, fill args 12..17, in the fill signature): after the main loop and the fill drain each link-0 port
+     reads the chip's counts row (64 B-aligned window into a free staging slot) and sends it to the chips its first hop
+     leads to (fused write into landing row (G[0] & 1) x chips + me, atomic increment of the arrival word on the
+     watcher core); the chip's first port also writes its own landing row, last word = G[0] + 1 (the tag).
+  2. Fork fused_head (`tail=HeadTail(ct, l1)`, `tail_desc=`; `fused_head_tail_core`): the watcher kernel
+     (xg_watcher.cpp, NCRISC) runs `kernels/prev_planner.hpp` after its work; L1 = arena + al64(head arena bytes);
+     the pending layer's addresses from a 64 B descriptor a layer (SRC_TAIL, patched per call). The planner's body
+     moved into that header (tt/kernels/moe_prev_planner.cpp ROLE 0 includes it: one copy of the arithmetic). Folded
+     input (counts arg 0): own row from the landing rows, plan only if its tag == G[0] + 1, bounded count wait.
+  3. tt/expert_prev.py: `head_tail()` (kwargs for the head: the pending call's descriptor), `on_head()` (fill args
+     with the prev counts, once), after() books the ordinal and leaves the call pending; the block's last MoE layer
+     plans at once with the standalone folded planner (`_plan_now`: one prepared mesh program on the watcher cell, no
+     senders) so nothing is pending at a chunk's end; `flush()` at reset / fill_off / set_mode / a non-folded call.
+     Arrival word: a global semaphore on the watcher cell (L1_SMALL). Adapter: `_fold_ok`, the head kwargs; MOE_TRACE
+     does not trace folded calls (the last layer's plan is an eager launch after() makes).
+- Cores (rule 18): none added. Count packets on the combine's existing port cores; the tail on the head's existing
+  watcher core; the standalone folded planner 1 core a chip (the watcher cell), once a chunk.
+- Results (tests/test_prev_host_account.py, P62_SIDES=off,prev:lean:launch,prev:lean:folded, 10 alternating clean
+  rounds a side, chunks 1..10 of fresh requests; host = to the last enqueue, busy = host - engram wait, wall = to the
+  sync; the test's prev:lean side fixed first, DS41-262):
+
+  | prompt | side | host ms | busy ms | wall ms | prev - off host (busy +- se) |
+  |---|---|---|---|---|---|
+  | novel | off | 163.43 | 151.60 | 177.29 | |
+  | novel | prev lean launch (P.62) | 169.95 | 158.70 | 175.84 | +6.53 (+7.11 +- 1.20) |
+  | novel | prev lean folded (P.62b) | 164.42 | 152.89 | 170.92 | +0.99 (+1.30 +- 1.00) |
+  | code | off | 165.43 | 154.37 | 174.94 | |
+  | code | prev lean launch | 168.65 | 158.21 | 173.68 | +3.22 (+3.84 +- 1.02) |
+  | code | prev lean folded | 165.40 | 154.13 | 170.67 | -0.03 (-0.24 +- 1.23) |
+
+  Target prev host <= off host + 1.5 ms: met (novel +1.0, code 0.0). Folded's identified host over off (instrumented,
+  novel, us a chunk): combine launch +563, PrevReplicas.after +180 (wrapper incl.), fused_head +167 (the tail's
+  patched arg), the one standalone plan +151, before +101; launch's planner run_prepared +4057 is gone.
+- Device (gate unit P.62b#test_moe_prev_replicas, one profiled pass a side, the setting's mode first = lean folded):
+  novel off 166.82 -> folded 150.11 ms (P.60 device path 152.45, legacy 155.07); code 156.95 -> 145.75 (149.38,
+  152.23); planner program 0.04 / 0.08 ms a chunk (was 3.7 / 4.9). The tail's plan ~31k cycles + map ~7k, its count
+  wait ~1.8k (quick model; the launch path's wait 622k = launch skew). Every check: maxdiff 0, repeat 0, mirror 0
+  mismatches of 477 (both prompts, three paths), plans identical across legacy / device / lean-folded.
+- `measure --task P.62b` (change on: MOE_PLANNER=folded ENGRAM_TABLE=resident): determinism 0 (novel, code, state);
+  quick min layer PCC 0.60548579 at L39 (= P.52-P.62), host transfers per layer 0, clean wall 167.1 ms (spread 5.5;
+  P.62's measure 171.3); p51200 (random ids) device_ms_total 155.65 (P.62 156.49), device_ms_experts 74.59 (75.99),
+  wall 176.0 (spread 50.7, loadavg 7-9), host overhead 20.4, 1656 launches (run_prepared not counted).
+- Gotchas: DS41-260 (the head's patch store is per variant: the first tail run planned layer 0 at the wrong ordinals
+  because the tail's descriptor arg was never patched); DS41-261 (no free head core); DS41-262 (P.62's accounting
+  prev:lean side was P.60's device path). Fork suites not run (OV-25).
+- Re-run: accounting `P62_SIDES=off,prev:lean:launch,prev:lean:folded scripts/run_safe_pytest.sh --run-all
+  --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_prev_host_account.py` (~8 min, devjob); gate unit
+  `gate P.62b --spec <spec> --check --unit 'P.62b#test_moe_prev_replicas'` (~8 min); quick `P56_QUICK=1` on that test
+  (~1.5 min).

@@ -309,13 +309,15 @@ void kernel_main() {
     const uint32_t f_par = call & 1;
     const uint32_t f_rx = f_rxy & 0xFFFF, f_ry = f_rxy >> 16;
     const uint32_t f_words = f_done + 4 * 32 * f_par;  // (this call's flag words, on every chip's words core)
+    uint32_t f_g0 = 0;                                 // (the ordinal word: the call's G[0])
     {
         uint32_t f_jp = f_page, f_jw = f_wpage;  // (the pages read: in the call's ring slot)
         if (f_ring & 0xFFFF) {  // (f_pg as scratch: the ordinal's 64 B line, read before the page lands there)
             noc_async_read(get_noc_addr_from_bank_id<true>(0, f_ord), f_pg, 64);
             noc_async_read_barrier();
             invalidate_l1_cache();
-            const uint32_t slot = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(f_pg)[0] % (f_ring & 0xFFFF);
+            f_g0 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(f_pg)[0];
+            const uint32_t slot = f_g0 % (f_ring & 0xFFFF);
             f_jp += slot * (f_ring >> 16);
             f_jw += slot * (f_ring >> 16);
         }
@@ -916,6 +918,51 @@ void kernel_main() {
     }
 #endif
     flush();
+#ifdef REC_FX
+    // P.62b (MOE_PLANNER=folded; set_combine_fill_exact prev_*): this chip's expert counts row (its slots of the fused
+    // head's counts, read here: the head ran before this program) to the replica planner of every chip in my mask - a
+    // fused write into landing row (G[0] & 1) x chips + me and an atomic increment of the planner's arrival word - and,
+    // on the chip's first port, into my own landing row (the tag word G[0] + 1 says call G[0] is pending). After the
+    // main loop and the fill: the rows keep the link; the staging slots are free (every piece sent and flushed)
+    if (const uint32_t p_cnt = get_arg_val<uint32_t>(a + 12); p_cnt != 0) {
+        const uint32_t p_land = get_arg_val<uint32_t>(a + 13), p_sem = get_arg_val<uint32_t>(a + 14);
+        const uint32_t p_xy = get_arg_val<uint32_t>(a + 15), p_mask = get_arg_val<uint32_t>(a + 16);
+        const uint32_t p_w = get_arg_val<uint32_t>(a + 17);
+        const uint32_t spc = (p_w >> 8) & 0xFF, spw = (p_w >> 16) & 0xFF, nc = p_w >> 24;
+        if (p_mask != 0 || (p_w & 1) != 0) {
+            const uint32_t rs = me * spc * 4, win = rs & ~63u, len = ((rs + spc * 4 + 63) & ~63u) - win;
+            const uint32_t l_win = f_stg, l_pay = f_stg + len;  // (a staging slot holds both: the host checks)
+            noc_async_read(get_noc_addr_from_bank_id<true>(0, p_cnt + win), l_win, len);
+            noc_async_read_barrier();
+            invalidate_l1_cache();
+            const volatile tt_l1_ptr uint32_t* cw =
+                reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(l_win + rs - win);
+            volatile tt_l1_ptr uint32_t* pay = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l_pay);
+            for (uint32_t j = 0; j < spw; ++j) {
+                pay[j] = j < spc ? cw[j] : 0u;
+            }
+            pay[spw - 1] = f_g0 + 1;
+            const InterleavedAddrGen<true> lg = {.bank_base_address = p_land, .page_size = spw * 4};
+            const uint64_t to = lg.get_noc_addr((f_g0 & 1) * nc + me);  // (my row: the same address on every chip)
+            const uint64_t arrival = get_noc_addr(p_xy & 0xFFFF, p_xy >> 16, p_sem);
+            for (uint32_t k = 0; k < nc; ++k) {
+                if (((p_mask >> k) & 1) == 0) {
+                    continue;
+                }
+                auto* h = hdr_at(k, 0);
+                h->to_noc_fused_unicast_write_atomic_inc(
+                    NocUnicastAtomicIncFusedCommandHeader{to, arrival, 1, true}, spw * 4);
+                conn.wait_for_empty_write_slot();
+                conn.send_current_slot_non_blocking(l_pay, spw * 4, reinterpret_cast<uint32_t>(h));
+                noc_async_writes_flushed();  // (the payload and the header left L1 before either is reused)
+            }
+            if (p_w & 1) {
+                noc_async_write(l_pay, to, spw * 4);
+                noc_async_write_barrier();
+            }
+        }
+    }
+#endif
     misc[1] = returned;
 #ifdef REC_FUSED
     misc[101] = hbase + n_inj;

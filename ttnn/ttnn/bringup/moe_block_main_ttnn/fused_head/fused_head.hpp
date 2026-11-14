@@ -115,6 +115,8 @@ struct FusedHeadSetup {
     // a token loop's programs (one each: the loop's offsets are args), unpadded / padded (actual_start / end)
     std::vector<std::shared_ptr<HeadPatchStore>> patches;
     std::vector<std::shared_ptr<HeadPatchStore>> patches_padded;
+    // P.62b: the programs with a HeadTail (their watcher has more address args: their own patch store)
+    std::vector<std::shared_ptr<HeadPatchStore>> patches_tail;
     mutable std::optional<Tensor> arena;  // the default arena (made on first use)
 };
 const FusedHeadSetup& setup_fused_head(
@@ -148,6 +150,16 @@ FusedHeadOutputs fused_head(
     const std::optional<Tensor>& actual_start = std::nullopt,
     const std::optional<Tensor>& actual_end = std::nullopt,
     uint32_t loop = 0,
-    const std::optional<Tensor>& xq = std::nullopt);
+    const std::optional<Tensor>& xq = std::nullopt,
+    const std::optional<HeadTail>& tail = std::nullopt,
+    const std::optional<Tensor>& tail_desc = std::nullopt);
+
+// P.62b: the watcher core a HeadTail runs on (logical; the same cell on every chip) and the tail's L1 offset in the
+// arena (the head's own bytes a core, 64 B aligned) for the head a fused_head call with these arguments runs.
+std::pair<tt::tt_metal::CoreCoord, uint32_t> fused_head_tail_core(
+    MoEBlockResources& resources,
+    const MoEDtypes& dtypes,
+    uint32_t accumulators,
+    std::optional<int64_t> l1_free = std::nullopt);
 
 }  // namespace ttnn::operations::bringup::moe_block_main::fused_head

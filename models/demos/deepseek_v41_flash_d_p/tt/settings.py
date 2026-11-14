@@ -564,6 +564,19 @@ TABLE = {
         "is the planner launch ~90-100 us a call (one program or 32: within ~5 us), the combine's fill path ~27-38 us a "
         "call, Python ~5 us a call; lean removes ~0.2-0.7 ms a chunk of it. Same plans: outputs bit-identical",
     ),
+    "MOE_PLANNER": Setting(
+        "folded",
+        ("launch", "folded"),
+        "P.62b (owner 2026-11-14, MOE_REPLICAS=prev with MOE_PREV_HOST=device and MOE_PREV_HOST2=lean only): where "
+        "P.56's planner runs. launch = P.62 as built: one planner program a MoE call (sender cores exchange the counts, "
+        "a planner core plans; ~90 us of host a call, DS41-258). folded = no planner launch a call: the combine's link-0 "
+        "port senders send the chip's counts row after their main loop (routed_experts_combine prev_counts), and the "
+        "NEXT MoE call's fused head plans it on its watcher core after its own work (fused_head tail, "
+        "kernels/prev_planner.hpp; its L1 the arena past the head's; no core added: the head holds all 110); the "
+        "chunk's last MoE call plans at once with one standalone launch (nothing pending at a chunk's end). Needs the "
+        "OWN_ROWS head path and two MoE layers a chunk; any other call, and MOE_TRACE=moe, runs launch. Same "
+        "arithmetic on the same inputs: plans, maps, pages and outputs bit-identical",
+    ),
     "MOE_TRACE": Setting(
         "off",
         ("off", "moe"),

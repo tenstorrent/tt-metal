@@ -326,7 +326,12 @@ void bind_routed_experts_combine(nb::module_& mod) {
            uint32_t limit_cycles,
            uint32_t ring,
            const std::optional<ttnn::Tensor>& ordinal,
-           bool wait) {
+           bool wait,
+           const std::optional<ttnn::Tensor>& prev_counts,
+           const std::optional<ttnn::Tensor>& prev_landing,
+           uint32_t prev_sem,
+           uint32_t prev_spc,
+           std::tuple<uint32_t, uint32_t> prev_core) {
             std::optional<CombineFillCall> call;
             if (enabled) {
                 TT_FATAL(gate_up && down && runs && jobs, "set_combine_fill_exact: needs gate_up, down, runs, jobs");
@@ -339,7 +344,15 @@ void bind_routed_experts_combine(nb::module_& mod) {
                     .exact_limit = limit_cycles,
                     .exact_ring = ring,
                     .exact_ordinal = ordinal,
-                    .exact_wait = wait};
+                    .exact_wait = wait,
+                    .prev_counts = prev_counts,
+                    .prev_landing = prev_landing,
+                    .prev_sem = prev_sem,
+                    .prev_spc = prev_spc,
+                    .prev_core = tt::tt_metal::CoreCoord(std::get<0>(prev_core), std::get<1>(prev_core))};
+                TT_FATAL(
+                    prev_counts.has_value() == prev_landing.has_value(),
+                    "set_combine_fill_exact: prev_counts and prev_landing go together");
             }
             set_combine_fill_exact(resources, enabled, call);
         },
@@ -353,6 +366,11 @@ void bind_routed_experts_combine(nb::module_& mod) {
         nb::arg("ring") = 0u,
         nb::arg("ordinal") = nb::none(),
         nb::arg("wait") = true,
+        nb::arg("prev_counts") = nb::none(),
+        nb::arg("prev_landing") = nb::none(),
+        nb::arg("prev_sem") = 0u,
+        nb::arg("prev_spc") = 0u,
+        nb::arg("prev_core") = std::make_tuple(0u, 0u),
         R"doc(
             MOE_REPLICAS=exact (P.55b): the next combine calls build the port senders with the exact fill (REC_FX):
             each port reads its jobs from `jobs` (uint32 DRAM, per chip COMBINE_FX_PAGES rows of COMBINE_FX_PAGE_WORDS:
@@ -364,7 +382,13 @@ void bind_routed_experts_combine(nb::module_& mod) {
             ring > 0 (P.60): `jobs` holds `ring` page sets of COMBINE_FX_PAGES rows a chip and each port reads the
             call's set itself, word 0 of `ordinal` (uint32 DRAM; a device counter) mod ring - no per-call host value;
             a cache hit then writes the fill args only when one of them changed. wait False (P.60): the flat expert's
-            readers do not wait for a landed copy (no token). Defaults: the behaviour before these options.
+            readers do not wait for a landed copy (no token). prev_counts / prev_landing / prev_sem / prev_spc /
+            prev_core (P.62b, MOE_PLANNER=folded; needs ring): after their main loop the link-0 ports send this chip's
+            row of prev_counts (the fused head's counts, chips x prev_spc uint32) to every chip their first hop leads
+            to - into row (G[0] & 1) x chips + me of prev_landing (rows of prev_spc rounded up to 16 words, the last the
+            tag G[0] + 1), with an atomic increment of L1 word prev_sem on logical core prev_core there - and the
+            chip's first port writes it into its own landing row: the replica planner's input (fused_head's tail).
+            Defaults: the behaviour before these options.
         )doc");
     mod.def(
         "combine_fill_exact_words",

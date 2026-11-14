@@ -39,6 +39,14 @@ Terms
   runs replicas off (counted: `stats`).
 * request start (begin_chunk at start 0 or a replay): the reset program empties every job page and the global state
   (a new epoch: every layer state reads as empty) and every layer runs its first chunk off. Nothing crosses requests.
+* MOE_PLANNER=folded (P.62b; with MOE_PREV_HOST=device and MOE_PREV_HOST2=lean): no planner launch a call. The
+  combine's link-0 port senders send the chip's counts row after their main loop (set_combine_fill_exact prev_*: the
+  same fused write + atomic increment as the sender cores; the chip's first port writes its own row too, tagged with
+  the ordinal + 1), and the NEXT MoE call's fused head plans it on its watcher core after its own work (fused_head
+  tail: kernels/prev_planner.hpp, the planner's L1 the arena past the head's; the pending layer's buffers from a
+  64 B descriptor a layer). The block's last layer a chunk plans at once with a standalone folded planner (one launch a
+  chunk, no senders), so nothing is pending at a chunk's end; flush() plans a pending call (a request's reset, a
+  switch). Same arithmetic, inputs and order: same plans, maps, pages and states.
 
 Data (uint32, DRAM, one page each unless said): global state [GW] (word 0 the ordinal, 1 the epoch, 2..4 cumulative
 new copies / pieces / dropped, stamps [W] at 16, budgets [W][chips][4 directions] at 16 + W: pieces | jobs << 16), a
@@ -81,6 +89,19 @@ def set_host2(mode: str | None) -> None:
 
 def host2() -> str:
     return _HOST2[0] or settings.get("MOE_PREV_HOST2")
+
+
+_PLANNER: list = [None]  # (MOE_PLANNER override: tests switch it in a loaded model, set_planner)
+
+
+def set_planner(mode: str | None) -> None:
+    """Tests: MOE_PLANNER (launch | folded) for every PrevReplicas from now on (None: the setting's)."""
+    assert mode in (None, "launch", "folded"), mode
+    _PLANNER[0] = mode
+
+
+def planner() -> str:
+    return _PLANNER[0] or settings.get("MOE_PLANNER")
 
 
 def _u32(host: np.ndarray, mesh, shard: bool = False) -> ttnn.Tensor:
@@ -377,6 +398,21 @@ class PrevReplicas:
         self._reset_pp: dict = {}
         self._fx_w = None  # (device mode: the fill args' gate_up / down - fixed; the planner's jobs name their own)
         self._fx_on = False  # (P.62 lean: the combine's fill args set (device mode); fill_off() clears it)
+        self._fx_fold = False  # (P.62b: the set fill args carry the prev counts (folded))
+        # P.62b (MOE_PLANNER=folded): the head's watcher core (the planner tail runs there; the arrival word too), the
+        # tail, the call whose plan is pending (the next folded head plans it), the block's last layer (it plans at once)
+        blk = layer.block()
+        tx, ty, _ = mb.fused_head_tail_core(blk.resources, blk.dtypes, blk.accumulators, blk.l1_free)
+        self.tail_core = (int(tx), int(ty))
+        tc = ttnn.CoreCoord(*self.tail_core)
+        self.sem_t = ttnn.create_global_semaphore(
+            mesh, ttnn.CoreRangeSet([ttnn.CoreRange(tc, tc)]), 0, ttnn.BufferType.L1_SMALL
+        )
+        self.sem_t_addr = int(ttnn.get_global_semaphore_address(self.sem_t))
+        self.tail = mb.HeadTail(ct=geo.ct(0, self.pages), l1=64 + geo.l1_bytes())
+        self._pending = None
+        self.last_layer = None  # (set by the adapter: the largest main layer index on this block)
+        self._fold_pp = None
         self.stats = {"calls": 0, "ready": 0, "off": 0, "off_copies": 0, "plans": 0}
         logger.info(
             f"MOE_REPLICAS=prev: {n} chips, {ncall} MoE calls a chunk, ring {geo.W}, {geo.pcs} pieces a copy, "
@@ -518,6 +554,12 @@ class PrevReplicas:
         """MOE_PREV_HOST2=lean (P.62) on the device host path: one planner program for the mesh, the fill args once."""
         return self.mode == "device" and (_HOST2[0] or self._host2) == "lean"
 
+    def folded(self) -> bool:
+        """MOE_PLANNER=folded (P.62b) on the lean path: the plan in the next MoE call's fused head, the counts from the
+        combine's ports (no planner launch); needs two MoE layers a chunk at least (a layer's own head never plans it).
+        """
+        return self.lean() and planner() == "folded" and self.geo.ncall >= 2
+
     def _mesh_tables(self):
         """P.62: the chip-independent tables of the one-program planner (memoized): (mesh id, me by fabric chip id,
         chip id by position, first hop direction by (me, k), eth channel by (me, direction), a chip of each direction
@@ -651,6 +693,116 @@ class PrevReplicas:
         md[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(self.R - 1, self.C - 1))] = prog
         return md, 1 + len(used), 8 + 3 * len(used)
 
+    def _planner_desc_fold(self, io: list):
+        """P.62b: the standalone folded planner (the block's last layer a chunk, flush()): the planner core alone on the
+        head's watcher core (the arrival word is there), one mesh program, the own row from the landing rows (counts arg
+        0); the combine's ports sent the counts."""
+        geo = self.geo
+        landing, G, st, rb, gu, d, consts = io
+        mesh_id, ndev, me_of, chip_of, hop, chan, rep, used, nodes = self._mesh_tables()
+        prog = ttnn.ProgramDescriptor()
+        l1 = geo.l1_bytes()
+        cc = ttnn.CoreCoord(*self.tail_core)
+        crs = ttnn.CoreRangeSet([ttnn.CoreRange(cc, cc)])
+        prog.cbs = [
+            ttnn.CBDescriptor(
+                total_size=l1, core_ranges=crs, format_descriptors=[ttnn.CBFormatDescriptor(0, ttnn.uint8, l1)]
+            )
+        ]
+        rt = ttnn.RuntimeArgs()
+        rt[cc.x][cc.y] = (
+            [0]
+            + [int(t.buffer_address()) for t in (landing, G, st, rb, gu, d, consts)]
+            + [0, self.sem_t_addr]
+            + self._ring_args()
+            + _bytes_to_words(me_of)
+        )
+        prog.kernels = [
+            ttnn.KernelDescriptor(
+                kernel_source=self.src,
+                source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
+                core_ranges=crs,
+                compile_time_args=geo.ct(0, self._ringpg(), 1),
+                runtime_args=rt,
+                config=ttnn.DataMovementConfigDescriptor(
+                    processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.RISCV_0_default
+                ),
+            )
+        ]
+        md = ttnn.MeshProgramDescriptor()
+        md[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(self.R - 1, self.C - 1))] = prog
+        return md
+
+    def _desc(self, layer) -> ttnn.Tensor:
+        """P.62b: the layer's descriptor for the head's planner tail (made at its first folded call, one 64 B page):
+        its state, router bias, gate/up, down, then the landing rows, global state, directions + empty map, the arrival
+        word, the job ring; word 15 the mark 'P62B'."""
+        d = getattr(layer, "_prev_desc", None)
+        if d is None:
+            w = np.zeros(16, dtype=np.uint32)
+            w[:9] = [
+                int(t.buffer_address())
+                for t in (layer._prev_state, layer.head_w.router_bias, layer.w_gu, layer.w_d, self.landing, self.G)
+            ] + [int(self.consts.buffer_address()), self.sem_t_addr, int(self.rings()[0].buffer_address())]
+            w[15] = 0x50364232
+            d = layer._prev_desc = _u32(w.reshape(1, 1, 1, 16), self.mesh)
+        return d
+
+    def head_tail(self, layer) -> dict:
+        """P.62b: the fused head's kwargs of a folded call - the planner tail and the pending call's layer descriptor
+        (none pending: this layer's; the tail then finds no tag and plans nothing)."""
+        return {"tail": self.tail, "tail_desc": self._desc(self._pending if self._pending is not None else layer)}
+
+    def on_head(self, layer, head) -> None:
+        """P.62b: after a folded call's head - the combine's fill args with the prev counts (once: the head's counts
+        tensor is the block's persistent one)."""
+        if self._fx_on and self._fx_fold:
+            return
+        if self._fx_w is None:
+            self._fx_w = (layer.w_gu, layer.w_d)
+        _mb().set_combine_fill_exact(
+            self.res,
+            True,
+            self._fx_w[0],
+            self._fx_w[1],
+            self.tables.runs,
+            self.rings()[0],
+            self.limit,
+            ring=self.geo.W,
+            ordinal=self.G,
+            wait=False,
+            prev_counts=head.counts,
+            prev_landing=self.landing,
+            prev_sem=self.sem_t_addr,
+            prev_spc=self.geo.spc,
+            prev_core=self.tail_core,
+        )
+        self._fx_on, self._fx_fold = True, True
+
+    def _plan_now(self, layer) -> None:
+        """P.62b: the standalone folded planner for layer's last call (its counts already sent by the combine)."""
+        io = [
+            self.landing,
+            self.G,
+            layer._prev_state,
+            layer.head_w.router_bias,
+            layer.w_gu,
+            layer.w_d,
+            self.consts,
+        ]
+        if self._fold_pp is None:
+            self._fold_pp = ttnn.bringup.prepare_program(self._planner_desc_fold(io), io)
+            assert self._fold_pp.patch_count == 7, f"folded planner: {self._fold_pp.patch_count} patched slots, want 7"
+            logger.info(f"MOE_REPLICAS=prev: folded planner prepared (core {self.tail_core}, one mesh program)")
+        ttnn.bringup.run_prepared(self._fold_pp, io)
+
+    def flush(self) -> None:
+        """P.62b: a pending folded plan planned now (a request's reset, a switch of path or side, a call that is not
+        folded): afterwards the device state is complete, as after the launch path."""
+        if self._pending is not None:
+            layer, self._pending = self._pending, None
+            self._plan_now(layer)
+
     def _reset_desc(self):
         geo = self.geo
         md = ttnn.MeshProgramDescriptor()
@@ -693,6 +845,7 @@ class PrevReplicas:
     def reset(self, layers) -> None:
         """A request starts (begin_chunk at start 0 / a replay): every job page and the global state emptied on the
         device (a new epoch), every layer's plan forgotten (its first call runs off)."""
+        self.flush()
         key = (self.mode, self.lean())
         pp = self._reset_pp.get(key)
         if pp is None:
@@ -716,7 +869,10 @@ class PrevReplicas:
                 layer._prev_dirty = False
                 self.stats["off_copies"] += 1
         layer._prev_used = ok
-        if self._fx_on:  # (P.62 lean: the device mode's fill args are already set - the same every call)
+        if getattr(layer, "_prev_fold", False) and self.folded():  # (P.62b: on_head sets the fill args)
+            return
+        self.flush()  # (P.62b: a call that is not folded - a pending plan first)
+        if self._fx_on and not self._fx_fold:  # (P.62 lean: the device mode's fill args are already set)
             return
         if self.mode == "device":  # (P.60: the same args every call - the ports read their ring slot from G[0])
             if self._fx_w is None:
@@ -733,7 +889,7 @@ class PrevReplicas:
                 ordinal=self.G,
                 wait=False,
             )
-            self._fx_on = self.lean()
+            self._fx_on, self._fx_fold = self.lean(), False
             return
         _mb().set_combine_fill_exact(
             self.res, True, layer.w_gu, layer.w_d, self.tables.runs, self.rings()[o % self.geo.W], self.limit
@@ -741,16 +897,21 @@ class PrevReplicas:
 
     def fill_off(self) -> None:
         """The combine's exact fill switched off (prev off in a loaded model, tests): the next before() sets it again."""
+        self.flush()
         _mb().set_combine_fill_exact(self.res, False)
-        self._fx_on = False
+        self._fx_on = self._fx_fold = False
 
     def set_mode(self, mode: str) -> None:
         """Tests: the host path (MOE_PREV_HOST) switched in a loaded model; the fill args are set again."""
+        self.flush()
         self.mode = mode
-        self._fx_on = False
+        self._fx_on = self._fx_fold = False
 
     def after(self, layer, counts: ttnn.Tensor) -> None:
         """After layer's MoE call (counts: its fused head's per-chip counts): the planner (device) for its next call."""
+        if getattr(layer, "_prev_fold", False) and self.folded():  # (P.62b: planned by the next head, or now)
+            self.after_host(layer)
+            return
         lean = self.lean()
         pp = self._plan_pp.get((self.mode, lean))
         if lean and pp is not None:  # (P.62 lean: the steady call - dispatch and the ordinals, nothing else)
@@ -806,6 +967,10 @@ class PrevReplicas:
         layer._prev_dirty = True
         self.ord += 1
         self.stats["plans"] += 1
+        if getattr(layer, "_prev_fold", False) and self.folded():  # (P.62b: this call's head planned the pending one)
+            self._pending = layer
+            if layer.layer == self.last_layer:  # (the chunk's last MoE call: planned now, nothing left pending)
+                self.flush()
 
     # ------------------------------------------------------------------ read back (tests, reports)
     def read_global(self) -> np.ndarray:

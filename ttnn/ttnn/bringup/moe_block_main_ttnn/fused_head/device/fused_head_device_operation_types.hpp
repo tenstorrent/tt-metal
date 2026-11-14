@@ -45,6 +45,8 @@ struct FusedHeadParams {
     // cached program each: its tokens' offsets in the routing rows, route words and dispatch buffer; a split's last
     // loop plans every loop's tokens of the split)
     uint32_t loops = 1, loop = 0;
+    // P.62b (MOE_PLANNER=folded): the watcher's tail (HeadTail), hashed; none by default
+    std::optional<HeadTail> tail;
 
     static constexpr auto attribute_names = std::forward_as_tuple("plan_key");
     auto attribute_values() const { return std::forward_as_tuple(plan_key); }
@@ -70,6 +72,8 @@ struct FusedHeadInputs {
     // replicated), read on device each call; the chunk in main's rotated layout over the SP rows. Padding tokens are
     // not routed (no route words, not planned). Absent: every row is real.
     std::optional<Tensor> actual_start, actual_end;
+    // P.62b: the tail's descriptor (uint32 DRAM, one 64 B page a chip), exactly when FusedHeadParams.tail is set
+    std::optional<Tensor> tail_desc;
 };
 
 }  // namespace ttnn::operations::bringup::moe_block_main::fused_head

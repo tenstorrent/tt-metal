@@ -305,3 +305,29 @@ API port to this tree (main's API of 2026-11-06 that this base, origin/main `b78
   kernels/dataflow/combine_port_writer.cpp}, routed_experts_combine/routed_experts_combine_nanobind.cpp, README.md;
   tests: models/demos/deepseek_v41_flash_d_p/tests/test_moe_prev_replicas.py (legacy vs device, bit-identical, the
   host mirror), tests/test_moe_prev_host_probe.py (host us a call)
+
+### Folded replica planner: count packets from the combine's ports, the planner as the head's watcher tail (2026-11-14, deepseek_v41_flash_d_p P.62b)
+- What: (1) routed_experts_combine: `set_combine_fill_exact(..., prev_counts, prev_landing, prev_sem, prev_spc,
+  prev_core)` (CombineFillCall fields; fill args 12..17 of the port senders; the fill signature includes them): under
+  REC_FX each link-0 port, after its main loop and fill drain, sends the chip's counts row to the chips its first hop
+  leads to (fused write + atomic increment, combine_port_writer.cpp), the chip's first port also into its own landing
+  row with the tag G[0] + 1; the port keeps G[0] from the ordinal read. (2) fused_head: `tail=HeadTail(ct, l1)`,
+  `tail_desc=` (FusedHeadParams.tail hashed, FusedHeadInputs.tail_desc as HeadSrc SRC_TAIL, patched per call; the
+  watcher kernel gets W_PREV / W_PREV_A / W_PREV_CT and runs `kernels/prev_planner.hpp` after its work, its L1 the
+  arena past the head's bytes; `fused_head_tail_core`); tail programs use their own patch store
+  (FusedHeadSetup.patches_tail). (3) `fused_head/device/kernels/prev_planner.hpp`: the replica planner's body (moved
+  from models/demos/deepseek_v41_flash_d_p/tt/kernels/moe_prev_planner.cpp ROLE 0, which now includes it), with the
+  folded input (counts 0: own row from the landing rows, a plan only when its tag says the call is pending, a bounded
+  count wait). Defaults (no prev_counts, no tail): the programs as before (the port's new code is skipped on arg 12 = 0).
+- Why: P.62 measured prev's host over off as one 32-chip planner launch a MoE call (~90 us, DS41-258); the owner asked
+  for no launch of its own. The head has no free core at the 110-core cap, so the planner rides the watcher's NCRISC.
+- Needed by: deepseek_v41_flash_d_p P.62b (MOE_PLANNER=folded).
+- Files: routed_experts_combine/device/combine_program.{hpp,cpp}, routed_experts_combine/device/
+  routed_experts_combine_program_factory.cpp, routed_experts_combine/device/kernels/dataflow/combine_port_writer.cpp,
+  routed_experts_combine/routed_experts_combine_nanobind.cpp, fused_head/fused_head.{hpp,cpp},
+  fused_head/fused_head_nanobind.cpp, fused_head/device/head_program.{hpp,cpp},
+  fused_head/device/fused_head_device_operation{.cpp,_types.hpp}, fused_head/device/kernels/prev_planner.hpp,
+  fused_head/device/kernels/dataflow/xg_watcher.cpp, README.md.
+- Tests: none added to tests/ (the head's tail needs a whole MoE block and a planner state: the model's
+  tests/test_moe_prev_replicas.py checks it - plans, maps, pages bit-identical to the launch path, host mirror 0
+  mismatches, outputs bit-identical); fork suites not run on the 8x4 (OV-25: task F.1).

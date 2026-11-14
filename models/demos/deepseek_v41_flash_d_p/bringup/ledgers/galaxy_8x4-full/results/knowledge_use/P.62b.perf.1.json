@@ -1,0 +1,122 @@
+{
+ "used": [
+  {
+   "id": "DS41-258",
+   "how": "a prepared 32-chip launch costs ~90 us whatever its shape, so the planner was folded into programs that already run (combine ports + the head's watcher tail) instead of trimming its launch",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-259",
+   "how": "judged host prev vs off with 10 alternating clean rounds a side and busy = host - engram wait with its standard error (test_prev_host_account.py), not one pass a side",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-228",
+   "how": "measured on real novel / code prompts, chunks 1..10, not the random-token profile",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-254",
+   "how": "kept the combine's fill args set once (ring + ordinal, signature check) and added the count packet args to that fixed set: no per-call fill write",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-250",
+   "how": "Blackhole DRAM alignment: the combine reads the counts row through its 64 B-aligned window and the planner keeps whole-page job writes",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-260",
+   "how": "found here: tail programs got their own head patch store (FusedHeadSetup.patches_tail) after the shared store left the tail's descriptor arg unpatched",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-261",
+   "how": "found here: the head holds all 110 cores, so the planner runs as the watcher kernel's tail in the arena past the head's bytes",
+   "traced": null,
+   "cited": true
+  }
+ ],
+ "contradicted": [
+  {
+   "id": "DS41-259",
+   "evidence": "its prev:lean accounting numbers (and P.62 BREADCRUMBS' 'novel lean / code lean' columns) were measured on P.60's device path: tests/test_prev_host_account.py _set_side set MOE_PREV_HOST2=lean, then _side(mesh, 'prev', 'device') set it back to legacy (test_moe_prev_replicas.py _side: set_host2('lean' if mode == 'lean' else 'legacy')); fixed in P.62b, DS41-262",
+   "cited": false
+  },
+  {
+   "id": "DS41-258",
+   "evidence": "the 'lean' figure 93-94 us a call came from the same accounting run, so it is P.60's per-chip planner; P.62's gate unit (correct host2) measured 85.3-85.5 vs 91.5-92.2 us. The entry's conclusion holds: P.62b folded run_prepared 92 us a call -> 4.8 us (no launch)",
+   "cited": true
+  }
+ ],
+ "missing": [
+  "which cores and RISCs of the fused head are free on each box (none on the 8x4 at the 110 cap): had to read head_program.cpp's placement",
+  "the fused head's patch store is per (loop, padded) only: a new program variant with extra address args needs its own store"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "no padding or duplicated work: the counts rows are the 13 real slots plus the existing landing row padding to 16 words (one word now the tag)"
+  },
+  {
+   "id": "OV-23",
+   "answer": "done",
+   "evidence": "the folded standalone planner (the chunk's last call, flush) is a prepared mesh program (expert_prev._plan_now: prepare_program once, run_prepared, patch_count 7 asserted); host 151 us a chunk for its one call (accounting, novel); the reset and launch-path planner stay prepared; the head tail and count packets are C++ fork code (no Python-built op)"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork suite run; only the model-level tests (test_moe_prev_replicas quick + gate unit, test_prev_host_account, measure)"
+  }
+ ],
+ "cited_only": [
+  "DS41-262"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "moe_replication",
+  "task": "P.62b",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-14T13:24:22",
+  "head": "fab7d36a53f",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.62b.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.62b_prev_replicas.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.62b.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_prev_host_account.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/expert_prev.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/kernels/moe_prev_planner.cpp",
+   "models/demos/deepseek_v41_flash_d_p/tt/moe_block_main_adapter.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/README.md",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/fused_head/device/fused_head_device_operation.cpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/fused_head/device/fused_head_device_operation_types.hpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/fused_head/device/head_program.cpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/fused_head/device/head_program.hpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/fused_head/device/kernels/dataflow/xg_watcher.cpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/fused_head/device/kernels/prev_planner.hpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/fused_head/fused_head.cpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/fused_head/fused_head.hpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/fused_head/fused_head_nanobind.cpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/routed_experts_combine/device/combine_program.cpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/routed_experts_combine/device/combine_program.hpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/routed_experts_combine/device/kernels/dataflow/combine_port_writer.cpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/routed_experts_combine/device/routed_experts_combine_program_factory.cpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/routed_experts_combine/routed_experts_combine_nanobind.cpp"
+  ]
+ }
+}

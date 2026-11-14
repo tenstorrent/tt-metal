@@ -115,6 +115,20 @@ each default off (= the source's program):
   program-cache hit then writes the fill args (and the readers' wait args) only when one of them changed (a signature
   per program, routed_experts_combine_program_factory.cpp set_fill). `wait` False: the flat expert's readers do not
   wait for a landed copy and the call has no token (the copies of a device planner land in earlier calls).
+  `set_combine_fill_exact(..., prev_counts=None, prev_landing=None, prev_sem=0, prev_spc=0, prev_core=(0, 0))` (P.62b,
+  DeepSeek-V4.1 MOE_PLANNER=folded; needs `ring`; defaults = the behaviour before): after the main loop and the fill,
+  each link-0 port sends this chip's row of `prev_counts` (the head's counts, chips x prev_spc uint32) to every chip its
+  first hop leads to (a fused write into landing row (G[0] & 1) x chips + me, rows of al16(prev_spc) words, the last
+  the tag G[0] + 1, and an atomic increment of L1 word `prev_sem` on logical core `prev_core` there); the chip's first
+  port writes the row into its own landing row. The replica planner's input, without a program of its own.
+- `fused_head(..., tail=HeadTail(ct, l1), tail_desc=)` (P.62b; default none = the source's program): a tail on the
+  watcher core's kernel (`xg_watcher.cpp` W_PREV, its NCRISC after the watch and the second Y routing send) running
+  `fused_head/device/kernels/prev_planner.hpp` - DeepSeek-V4.1's replica planner (MOE_REPLICAS=prev) for the previous
+  MoE call - with compile args `ct` (PP_CT0 order), its L1 `l1` bytes of the arena past the head's own bytes on the
+  watcher core (`fused_head_tail_core(resources, dtypes, accumulators, l1_free)` -> (x, y, offset)), the pending
+  layer's buffers from `tail_desc` (one 64 B uint32 DRAM page a chip, its address patched per call). No core added (the
+  head holds every core of the 11 x 10 grid at the 110-core cap). Tail programs keep their own patch store (their
+  watcher has one more address arg).
 - Slot map uneven split (P.55c, `router_rows.hpp slot_of`): a copy word `slot | lb << 9` gives each holder the tokens
   whose 15-bit hash is in its range (own slot [0, lb_0)); copy words below 512 keep the even split.
 
@@ -179,6 +193,12 @@ runner smoke (tt-d-gen engine): pass.
   reader's args on 32 chips) ~350-470 us of a ~810-930 us launch; with ring + wait False the hit writes nothing
   (set_fill ~5 us) and the launch is ~470-525 us, the stock combine's ~440-520. Same device program, same bytes.
 
+- P.62b (Galaxy 8x4, DeepSeek-V4.1 MOE_REPLICAS=prev, 40 layers, real novel / code prompts, chunks 1..10): the planner
+  as the head's tail plus the combine's count packets instead of one planner program a MoE call - host prev - off
+  +6.5 / +3.2 ms a chunk (P.62's launch) -> +1.0 / -0.03 ms (10 alternating rounds a side); device 152.45 / 149.38 ->
+  150.11 / 145.75 ms (one profiled pass a side); the tail's plan ~31k cycles + map ~7k, its count wait ~2k cycles.
+  Plans, maps, job pages and outputs bit-identical (host mirror 0 mismatches of 477).
+
 ## Limits
 
 - Blackhole, a 2D fabric (FABRIC_2D or FABRIC_2D_TORUS_XY); the mesh opened with L1_SMALL for the words' slab and a
@@ -192,6 +212,9 @@ runner smoke (tt-d-gen engine): pass.
   ~1.4 ms on one link, ~0.87 ms on both links of a hop; it reads the home slot again from DRAM (no hand-off from the
   gate/up cores' L1); one spare slot a chip; jobs on one port run one after the other (30 a port at most); flag words
   32 a chip, 4 waits a chip.
+- The head's tail (P.62b) runs on the watcher's NCRISC after its work: a tail longer than the head's remaining work
+  extends the head; its L1 must fit in the call's arena past the head's bytes (the block's arena spans the combine's
+  need, so on the 8x4 ~430 KB are free there); the count packets need <= 32 chips and a tag word past the slots.
 - Kernels are main's of 2026-11-06 (`f93403fa228`); this branch's kernel APIs may differ (JIT errors show at first
   use).
 

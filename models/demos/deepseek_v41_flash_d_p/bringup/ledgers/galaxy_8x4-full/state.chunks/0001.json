@@ -5277,6 +5277,7 @@
   "attempt": 1,
   "attempts": 0,
   "duration_s": 0.0,
+  "full_pending": true,
   "history": [
    {
     "s": 0.0,
@@ -5291,6 +5292,47 @@
   "role": "perf",
   "stamp": null,
   "started": "2026-11-14T12:31:19",
+  "status": "PASS",
+  "units": null,
+  "waiting": null
+ },
+ "P.62b": {
+  "ab_pending": null,
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "6effc559166a5f585020d694aabe04f985d789aa",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "3a81858569143578c4beac9c613747508e11748f",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "e6413c1d49e3d144b0349ea968e1ea4d7d941470",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "5ff0e6dc-db2b-468d-9409-0e40a2e3594d"
+  },
+  "attempt": 1,
+  "attempts": 0,
+  "duration_s": 0.0,
+  "history": [
+   {
+    "s": 0.0,
+    "status": "PASS",
+    "t": "2026-11-14T13:32:00"
+   }
+  ],
+  "last_run": "2026-11-14T13:32:00",
+  "log": "/scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/moe_replication/logs/P.62b.log",
+  "rc": 0,
+  "reason": [],
+  "role": "perf",
+  "stamp": null,
+  "started": "2026-11-14T13:32:00",
   "status": "PASS",
   "units": null,
   "waiting": null

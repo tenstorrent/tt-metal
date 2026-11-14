@@ -88,6 +88,16 @@ struct CombineFillCall {
     uint32_t exact_ring = 0;
     std::optional<Tensor> exact_ordinal;
     bool exact_wait = true;
+    // P.62b (DeepSeek-V4.1 MOE_PLANNER=folded; needs exact_ring): after its main loop each link-0 port sends this
+    // chip's expert counts row (prev_counts: the fused head's counts, one uint32 page [chips x prev_spc]; the chip's
+    // own slots) to every chip whose first hop is that port - a fused write into row (G[0] & 1) x chips + me of
+    // prev_landing (uint32 DRAM, rows of al16(prev_spc) words; the last word the tag G[0] + 1) and an atomic increment
+    // of the word prev_sem on core prev_core (logical) there: the replica planner's input, read by the next fused
+    // head's watcher tail (HeadTail). The chip's first port also writes the row into its own landing row. Absent: no
+    // packet.
+    std::optional<Tensor> prev_counts, prev_landing;
+    uint32_t prev_sem = 0, prev_spc = 0;
+    tt::tt_metal::CoreCoord prev_core{0, 0};
 };
 inline constexpr uint32_t kFxPages = 9, kFxChipPage = 8, kFxPageWords = 256, kFxMaxJobs = 30, kFxWaits = 4;
 inline constexpr uint32_t kFxWords = 452;  // the exact words a chip: 2 x 32 flags, 8 x 16 stamps, 4 x 64 arrivals,

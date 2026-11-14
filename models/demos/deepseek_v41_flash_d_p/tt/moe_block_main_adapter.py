@@ -283,8 +283,9 @@ def _prev_of(layer, res):
         assert (
             settings.get("MOE_FILL") == "piggyback"
         ), "MOE_REPLICAS=prev carries its copies on the combine (MOE_FILL=piggyback)"
-        ncall = sum(1 for m in _MAIN_LAYERS if m.mesh is layer.mesh and m.block().resources is res)
-        hit = _PREV[id(res)] = (res, PrevReplicas(layer, res, ncall))
+        mine = [m for m in _MAIN_LAYERS if m.mesh is layer.mesh and m.block().resources is res]
+        hit = _PREV[id(res)] = (res, PrevReplicas(layer, res, len(mine)))
+        hit[1].last_layer = max(m.layer for m in mine)  # (P.62b: the chunk's last MoE call plans at once)
     return hit[1]
 
 
@@ -419,6 +420,7 @@ class TtMoEBlockMainLayer:
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
             )
         self._prev_ord, self._prev_dirty, self._prev_off_rb, self._prev_used = None, False, None, False
+        self._prev_fold = False  # (P.62b MOE_PLANNER=folded: this call's plan rides the next head; set every call)
         self._pre_done = False  # (MOE_TRACE=moe, P.61: pre_call() already ran this call's guard)
         self.dims, self.act = block_dims(cfg, slots=rows * cols * self.spc)
         self.dtypes = block_dtypes()
@@ -1052,6 +1054,7 @@ class TtMoEBlockMainLayer:
         pr = _prev_of(self, blk.resources) if self._prev else None
         if pr is not None:  # (MOE_REPLICAS=prev, P.56: the guard and this call's carried copies)
             if not self._pre_done:  # (MOE_TRACE=moe, P.61: the trace's caller ran pre_call() outside the capture)
+                self._prev_fold = self._fold_ok(pr, blk)
                 pr.before(self)
         elif self.replicas:
             self._exact_call(blk)
@@ -1093,19 +1096,33 @@ class TtMoEBlockMainLayer:
         mode = None
         if self._prev:
             pr = _prev_of(self, blk.resources)
-            if pr.mode != "device":
-                return None
+            if pr.mode != "device" or self._fold_ok(pr, blk):
+                return None  # (P.62b folded: the chunk's last layer plans with a launch after() makes - not traced)
             mode = pr.mode
         elif self.replicas and settings.get("MOE_REPLICAS") != "prev":
             return None  # (runtime / exact: host-chosen fill per call)
-        return (self.layer, self.chunk, bool(self._prev), mode, self.counts_buf is not None, bool(self.fold))
+        return (
+            self.layer,
+            self.chunk,
+            bool(self._prev),
+            mode,
+            self.counts_buf is not None,
+            bool(self.fold),
+        )
+
+    def _fold_ok(self, pr, blk) -> bool:
+        """P.62b: this call's plan is folded (MOE_PLANNER=folded): the OWN_ROWS path's own head call takes the tail."""
+        return pr.folded() and self.own_rows and blk.loops * blk.splits == 1 and not blk.pad_rows
 
     def pre_call(self) -> None:
         """Outside the trace, before a captured or replayed call: P.56's guard (a host decision from host ordinals; its
         reset copy of the router bias is an eager op, never captured) and the combine's fill args (the same every
         call under MOE_PREV_HOST=device: a no-op once set)."""
         if self._prev:
-            _prev_of(self, self.block().resources).before(self)
+            blk = self.block()
+            pr = _prev_of(self, blk.resources)
+            self._prev_fold = self._fold_ok(pr, blk)
+            pr.before(self)
 
     def post_call_host(self) -> None:
         """After a replayed call: the host bookkeeping the captured call did once in Python - the planner's ordinals
@@ -1150,6 +1167,7 @@ class TtMoEBlockMainLayer:
             else None
         )
         arena = ttnn.allocate_tensor_on_device(blk.arena_spec, self.mesh)
+        pr = _prev_of(self, blk.resources) if self._prev and self._prev_fold else None  # (P.62b: the planner tail)
         head = mb.fused_head(
             x,
             weights.head,
@@ -1160,7 +1178,10 @@ class TtMoEBlockMainLayer:
             l1_free=blk.l1_free,
             arena=arena,
             **({"xq": xq} if xq is not None else {}),
+            **(pr.head_tail(self) if pr is not None else {}),
         )
+        if pr is not None:
+            pr.on_head(self, head)
         self._last_head = head
         _record_counts(self, head.counts)
         if not fed:  # (the feed buffer is persistent)

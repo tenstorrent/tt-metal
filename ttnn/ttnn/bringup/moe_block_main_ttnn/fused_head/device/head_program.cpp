@@ -2183,8 +2183,18 @@ std::vector<KernelDescriptor> ChipProgram::gather(std::vector<CBDescriptor>& cbs
         const auto tail = y_args(ykeys[1], h.watcher);
         add(wl, tail);
     }
+    if (bufs.tail !=
+        nullptr) {  // (P.62b: the replica planner's tail - its descriptor, its L1 past the head's, my chip)
+        define(watcher, "W_PREV");
+        define(watcher, "W_PREV_A", iv(wl.size()));
+        add(wl, Args{S(SRC_TAIL), base + head_tail_l1_offset(h), me});
+    }
     set_rt(watcher, h.watcher, wl);
     routing_accessors(watcher);
+    if (bufs.tail != nullptr) {
+        define(watcher, "W_PREV_CT", iv(watcher.compile_time_args.size()));
+        watcher.compile_time_args.insert(watcher.compile_time_args.end(), bufs.tail->ct.begin(), bufs.tail->ct.end());
+    }
     std::vector<KernelDescriptor> ks;
     push(ks, reader);
     push(ks, sender);
@@ -2825,6 +2835,10 @@ HeadTensorShapes head_tensor_shapes(const HeadModel& h) {
     return s;
 }
 
+CoreCoord head_tail_core(const HeadModel& h) { return h.watcher; }
+
+uint32_t head_tail_l1_offset(const HeadModel& h) { return u32(al64(h.arena_bytes)); }
+
 CoreRangeSet head_arena_cores(const HeadModel& h) {
     std::vector<CoreCoord> extra = h.pcores;
     for (const auto& c : h.all_ports()) {
@@ -2849,6 +2863,13 @@ tt::tt_metal::WorkloadDescriptor build_head_workload(
     TT_FATAL(
         arena->shard_spec().grid().contains(head_arena_cores(model)),
         "fused_head: the arena must span the matmul cores, the router cores, the ports and the watcher");
+    TT_FATAL(
+        buffers.tail == nullptr ||
+            (buffers[SRC_TAIL] != nullptr &&
+             arena->aligned_size_per_bank() >= uint64_t(head_tail_l1_offset(model)) + buffers.tail->l1),
+        "fused_head: the watcher's tail (P.62b) needs its descriptor and {} B of the arena past the head's {} B a core",
+        buffers.tail ? buffers.tail->l1 : 0u,
+        head_tail_l1_offset(model));
     tt::tt_metal::WorkloadDescriptor workload;
     if (patches) {
         patches->assign(model.N, HeadPatches{});
