@@ -31,6 +31,7 @@ import tokenizers
 import torch
 import torch.nn as nn
 import transformers
+from packaging.version import Version
 from PIL import Image
 from safetensors import safe_open
 from timm.models.vision_transformer import LayerScale
@@ -42,6 +43,7 @@ import ttnn
 from models.experimental.openvla.tt import tt_optimized_openvla_vision
 from models.tt_transformers.demo.simple_text_demo import create_tt_page_table
 from models.tt_transformers.tt.common import (
+    Mode,
     PagedAttentionConfig,
     get_block_size,
     get_padded_prefill_len,
@@ -175,7 +177,34 @@ class PerfCheckpoints:
 CHECKPOINTS = PerfCheckpoints()
 
 
-def map_openvla_hf_to_meta_keys(loaded_weights):
+def permute_hf_to_meta_qk(tensor: torch.Tensor, n_heads: Optional[int] = None, head_dim: int = 128) -> torch.Tensor:
+    """Convert Hugging Face split-half Q/K weights or biases to Meta interleaved RoPE layout."""
+    out_dim = tensor.shape[0]
+    inferred_heads = n_heads if n_heads is not None else out_dim // head_dim
+    if inferred_heads <= 0 or out_dim % (inferred_heads * 2) != 0:
+        raise ValueError(
+            f"Cannot permute tensor of shape {tuple(tensor.shape)} with n_heads={inferred_heads}, head_dim={head_dim}"
+        )
+    half_head_dim = (out_dim // inferred_heads) // 2
+    if tensor.ndim == 2:
+        in_dim = tensor.shape[1]
+        return (
+            tensor.reshape(inferred_heads, 2, half_head_dim, in_dim)
+            .transpose(1, 2)
+            .reshape(out_dim, in_dim)
+            .contiguous()
+        )
+    if tensor.ndim == 1:
+        return (
+            tensor.reshape(inferred_heads, 2, half_head_dim)
+            .transpose(1, 2)
+            .reshape(out_dim)
+            .contiguous()
+        )
+    return tensor
+
+
+def map_openvla_hf_to_meta_keys(loaded_weights, head_dim: int = 128, permute_qk: bool = True):
     hf_to_meta = {
         # Top level mappings
         "language_model.model.embed_tokens.weight": "tok_embeddings.weight",
@@ -223,18 +252,26 @@ def map_openvla_hf_to_meta_keys(loaded_weights):
         "language_model.model.layers.{layer}.mlp.down_proj.weight": "layers.{layer}.feed_forward.w2.weight",
     }
 
+    qk_suffixes = ("wq.weight", "wk.weight", "wq.bias", "wk.bias")
+
     meta_state_dict = {}
     for key, tensor in loaded_weights.items():
+        target_key = None
         if key in hf_to_meta:
             # Direct match for top-level keys
-            meta_state_dict[hf_to_meta[key]] = tensor
+            target_key = hf_to_meta[key]
         elif "language_model.model.layers." in key:
             # Extract layer number and form a template key
             parts = key.split(".")
             layer_num = parts[3]
             template_key = "language_model.model.layers.{layer}." + ".".join(parts[4:])
             if template_key in hf_to_meta:
-                meta_state_dict[hf_to_meta[template_key].format(layer=layer_num)] = tensor
+                target_key = hf_to_meta[template_key].format(layer=layer_num)
+
+        if target_key is not None:
+            if permute_qk and target_key.endswith(qk_suffixes):
+                tensor = permute_hf_to_meta_qk(tensor, head_dim=head_dim)
+            meta_state_dict[target_key] = tensor
 
     return meta_state_dict
 
@@ -597,7 +634,9 @@ class OpenVLALanguageModel(GenerationMixin):
     def set_decoder(self, decoder: nn.Module) -> None:
         pass
 
-    def tie_weights(self) -> None:
+    _supports_sdpa: bool = False
+
+    def tie_weights(self, *args, **kwargs) -> None:
         pass
 
     def resize_token_embeddings(
@@ -626,9 +665,7 @@ class OpenVLALanguageModel(GenerationMixin):
     ):
         assert input_ids is None, f"{self.__class__.__name__} does not accept input_ids"
         assert position_ids is None, f"{self.__class__.__name__} does not accept position_ids"
-        assert past_key_values is None, f"{self.__class__.__name__} does not accept past_key_values"
         assert labels is None, f"{self.__class__.__name__} does not accept labels"
-        assert not use_cache, f"{self.__class__.__name__} does not accept use_cache"
         assert not output_attentions, f"{self.__class__.__name__} does not accept output_attentions"
         assert not output_hidden_states, f"{self.__class__.__name__} does not accept output_hidden_states"
         assert return_dict, f"{self.__class__.__name__} does not accept return_dict=False"
@@ -650,9 +687,20 @@ class OpenVLALanguageModel(GenerationMixin):
         if padding != 0:
             inputs_embeds = ttnn.pad(inputs_embeds, [(0, 0), (0, 0), (0, padding), (0, 0)], 0)
 
+        rope_setup = self.model[0].rope_setup
+        cos_prefill = (
+            rope_setup.cos_matrix_prefill
+            if hasattr(rope_setup, "cos_matrix_prefill")
+            else rope_setup.cos_matrix
+        )
+        sin_prefill = (
+            rope_setup.sin_matrix_prefill
+            if hasattr(rope_setup, "sin_matrix_prefill")
+            else rope_setup.sin_matrix
+        )
         tt_rot_mats_prefill_global = [
-            self.model[0].rope_setup.cos_matrix[:, :, : inputs_embeds.shape[2], :],
-            self.model[0].rope_setup.sin_matrix[:, :, : inputs_embeds.shape[2], :],
+            cos_prefill[:, :, : inputs_embeds.shape[2], :],
+            sin_prefill[:, :, : inputs_embeds.shape[2], :],
         ]
         page_table_user = self._get_prefill_user_page_table(self.page_table, self.tt_kv_cache[0], seq_len)
         tt_page_table = ttnn.from_torch(
@@ -667,7 +715,7 @@ class OpenVLALanguageModel(GenerationMixin):
             inputs_embeds,
             None,
             rot_mats_global=tt_rot_mats_prefill_global,
-            mode="prefill",
+            mode=Mode.PREFILL,
             page_table=tt_page_table,
             kv_cache=self.tt_kv_cache[0],
             get_last_token=((seq_len - 1) // 32) * 32,
@@ -688,12 +736,13 @@ class OpenVLALanguageModel(GenerationMixin):
         current_pos = torch.tensor([seq_len], dtype=torch.int32)
         # Convert prefilled_token to int32 for TT compatibility
         out_tok = prefilled_token.to(torch.int32).view(1)  # Ensure shape [1] and int32
-        output_toks = []
+        # Prefill already predicts Action 0; decode produces the remaining (num_actions - 1) tokens.
+        output_toks = [output_logits.cpu().view(1, 1, -1)]
         CHECKPOINTS.checkpoint("end_PREFILL")
         decode_tokens = [prefilled_token.item()]
 
         # Use cropped page_table_user for decode (same as prefill)
-        for i in range(self.num_actions):
+        for i in range(max(0, self.num_actions - 1)):
             # Run decode forward
             # CUse self.tt_kv_cache[0] to match what prefill write to
             # Prefill: model[0].forward(..., kv_cache=self.tt_kv_cache[0], ...)
@@ -924,12 +973,16 @@ class PrismaticVisionBackbone(nn.Module):
                     device=ttnn_device,
                     custom_preprocessor=tt_optimized_openvla_vision.custom_preprocessor_siglip,
                 )
+                siglip_pos_embed = getattr(self.featurize_parameters_2, "pos_embed", None)
+                if siglip_pos_embed is not None and siglip_pos_embed.layout != ttnn.TILE_LAYOUT:
+                    siglip_pos_embed = ttnn.to_layout(siglip_pos_embed, layout=ttnn.TILE_LAYOUT)
 
                 def siglip_forward_no_norm(x2):
                     output = tt_optimized_openvla_vision.ttnn_featurizer(
                         embedding=lambda x: tt_optimized_openvla_vision.siglip_patch_embeddings(
                             x,
                             parameters=self.featurize_parameters_2.patch_embed.patch_embeddings,
+                            pos_embed=siglip_pos_embed,
                         ),
                         encoder=lambda x: tt_optimized_openvla_vision.siglip_encoder(
                             x,
@@ -1107,7 +1160,10 @@ class PrismaticPreTrainedModel(PreTrainedModel):
     @property
     def _supports_sdpa(self) -> bool:
         """Check LLM supports SDPA Attention"""
-        return self.language_model._supports_sdpa
+        language_model = getattr(self, "language_model", None)
+        if language_model is None:
+            return False
+        return bool(getattr(language_model, "_supports_sdpa", False))
 
 
 class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
@@ -1117,10 +1173,10 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
         if config.use_fused_vision_backbone is None:
             raise ValueError("Missing config field `use_fused_vision_backbone`")
 
-        if timm.__version__ not in {"0.9.10", "0.9.11", "0.9.12", "0.9.16", "1.0.22"}:
+        if Version(timm.__version__) < Version("0.9.10"):
             raise NotImplementedError(
-                "TIMM Version must be >= 0.9.10 and < 1.0.0 or == 1.0.22 (breaking); please raise a GitHub Issue "
-                "if you urgently need support for latest TIMM versions."
+                "TIMM Version must be >= 0.9.10; please raise a GitHub Issue "
+                "if you urgently need support for older TIMM versions."
             )
 
         if (transformers.__version__ != "4.40.1") or (tokenizers.__version__ != "0.19.1"):
@@ -1203,8 +1259,11 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
     def set_decoder(self, decoder: nn.Module) -> None:
         self.language_model.set_decoder(decoder)
 
-    def tie_weights(self) -> None:
-        self.language_model.tie_weights()  # Note: `Llama-2` and `Mistral` don't tie weights (no-op)
+    def tie_weights(self, *args, **kwargs) -> None:
+        try:
+            self.language_model.tie_weights(*args, **kwargs)  # Note: `Llama-2` and `Mistral` don't tie weights (no-op)
+        except TypeError:
+            self.language_model.tie_weights()
 
     def resize_token_embeddings(
         self, new_num_tokens: Optional[int] = None, pad_to_multiple_of: Optional[int] = None
@@ -1270,8 +1329,13 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
         # Note :: We only support forward passes with the following cases:
         #   => Multimodal Forward :: (pixel_values is not None) and (input_ids/embeds.shape[0] == pixel_values.shape[0])
 
+        has_nonempty_past = past_key_values is not None and (
+            not hasattr(past_key_values, "get_seq_length") or past_key_values.get_seq_length() > 0
+        )
         if (input_ids.shape[0] == pixel_values.shape[0]) or (inputs_embeds.shape[0] == pixel_values.shape[0]):
-            assert past_key_values is None, "Unexpected key `past_key_values` provided during multi-modal forward!"
+            assert not (self.ttnn_device is None and has_nonempty_past), (
+                "Unexpected key `past_key_values` provided during multi-modal forward!"
+            )
             assert labels is None
 
             # Visual Feature Extraction
@@ -1474,12 +1538,16 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
         ):
             raise ValueError("Generation with batch size > 1 is not currently supported!")
 
+        has_cached_tokens = past_key_values is not None and (
+            not hasattr(past_key_values, "get_seq_length") or past_key_values.get_seq_length() > 0
+        )
+
         # Handle `past_key_values` (cache) =>> assume `input_ids` just has unprocessed tokens
-        if past_key_values is not None:
+        if has_cached_tokens and input_ids is not None:
             input_ids = input_ids[:, -1:]
 
         # If `inputs_embeds` are passed, we only want to use them in the 1st generation step
-        if inputs_embeds is not None and past_key_values is None:
+        if inputs_embeds is not None and not has_cached_tokens:
             model_inputs = {"inputs_embeds": inputs_embeds}  # Note: HF expects "inputs_embeds" (plural)
         else:
             model_inputs = {"input_ids": input_ids}
@@ -1657,16 +1725,30 @@ class TTOpenVLAForActionPrediction(PrismaticForConditionalGeneration, Generation
         return self.norm_stats[unnorm_key]["action"]
 
 
+def _get_openvla_device_params(is_single_device: Optional[bool] = None) -> Dict[str, Any]:
+    """Return device_params compatible with single-chip N150/P150 (no FABRIC_1D) and multi-chip meshes."""
+    if is_single_device is None:
+        mesh_env = os.environ.get("MESH_DEVICE")
+        if mesh_env is not None:
+            is_single_device = mesh_env in ("N150", "P150")
+        else:
+            try:
+                is_single_device = len(ttnn.get_device_ids()) <= 1
+            except Exception:
+                is_single_device = True
+    params: Dict[str, Any] = {
+        "trace_region_size": 30000000,
+        "num_command_queues": 1,
+        "l1_small_size": 81920,
+    }
+    if not is_single_device:
+        params["fabric_config"] = ttnn.FabricConfig.FABRIC_1D
+    return params
+
+
 @pytest.mark.parametrize(
     "device_params",
-    [
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "trace_region_size": 30000000,
-            "num_command_queues": 1,
-            "l1_small_size": 81920,
-        }
-    ],
+    [_get_openvla_device_params()],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -1700,14 +1782,7 @@ def test_language_model(mesh_device, prompt):
 
 @pytest.mark.parametrize(
     "device_params",
-    [
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "trace_region_size": 30000000,
-            "num_command_queues": 1,
-            "l1_small_size": 81920,
-        }
-    ],
+    [_get_openvla_device_params()],
     indirect=True,
 )
 @pytest.mark.parametrize(

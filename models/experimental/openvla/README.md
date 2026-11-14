@@ -46,6 +46,9 @@ pytest models/experimental/openvla/tests/test_siglip_pcc.py -v
 
 # Vision backbone tests (uses random weights, no download needed)
 pytest models/experimental/openvla/tests/test_openvla_vision_pcc.py -v
+
+# OpenVLA correctness & sequence alignment regression tests
+pytest models/experimental/openvla/tests/test_openvla_correctness.py -v
 ```
 
 ### Run Demo (TTNN Single Inference)
@@ -93,6 +96,13 @@ pytest models/experimental/openvla/tt/open_vla.py::test_openvla_model -v
 ## Precision Notes
 
 - Precision is auto-selected based on device (see table above)
+
+## Correctness Reference & Tolerances
+
+- **Reference Environment**: `transformers>=4.40.1`, `timm>=0.9.10` (`requirements-dev.txt` uses `timm>=1.0.0`), `openvla/openvla-7b` checkpoint.
+- **SigLIP Patch Embeddings + Positional Embeddings (`test_siglip_pcc.py`)**: `bfloat16` TTNN vs `float32` `timm` reference (`PCC >= 0.9995`).
+- **LLaMA-2 Q/K RoPE Permutation (`test_openvla_correctness.py`)**: HF split-half Q/K weights converted via `permute_hf_to_meta_qk` preserve attention scores (`rtol=1e-4, atol=1e-4` in `float32`).
+- **Action Sequence Alignment**: 7 action tokens per inference (`Action 0` from prefill logits + `Actions 1..6` from autoregressive decode; no EOS token included in the 7-DoF action sequence).
 
 ## PCC Test Results
 
