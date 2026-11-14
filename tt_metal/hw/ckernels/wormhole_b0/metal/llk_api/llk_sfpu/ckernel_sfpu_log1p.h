@@ -138,11 +138,31 @@ template <bool APPROXIMATION_MODE, bool FAST_APPROX, bool is_fp32_dest_acc_en, i
 inline void calculate_log1p() {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat result = calculate_log1p_fp32<is_fp32_dest_acc_en>(sfpi::dst_reg[0]);
-        if constexpr (!is_fp32_dest_acc_en) {
+        if constexpr (is_fp32_dest_acc_en) {
+            // log1p(±0) = ±0: the reduction flattens -0.0 to +0.0 (m + t, t = 0 at k = 0), so
+            // the destination is written only for non-zero inputs: a ±0 lane keeps the input
+            // verbatim, which is the required result, and t = 0 at k = 0 is exactly why the
+            // reduction cannot deliver it. Test zero before the reduction so the original
+            // input need not stay live across it. This avoids extending register lifetimes;
+            // the analogous late restore in expm1 exceeds the available LRegs with the tested
+            // toolchain. Predication still executes the reduction and only masks the writeback,
+            // so this is a correctness fix, not a fast
+            // path. is_zero is an integer compare, (as<vUInt>(inp) << 1) == 0, exact for ±0 and
+            // deterministic-false for NaN/±inf/subnormals, so the pass-through does not lean on
+            // the float compare's NaN semantics, which SFPSETCC leaves unspecified for a NaN
+            // comparand (tests/ttnn/unit_tests/operations/eltwise/test_nextafter.py). fp32-only: the
+            // reduction already yields +0.0 for a zero input and the 16-bit convert/store cannot
+            // reintroduce the sign, so there is no sign to preserve.
+            // Kept here, not in calculate_log1p_fp32, so the shared asinh/acosh/atanh and
+            // logaddexp callers, which never need it, do not pay for it.
+            sfpi::vFloat inp = sfpi::dst_reg[0];
+            v_if(!sfpi::is_zero(inp)) { sfpi::dst_reg[0] = calculate_log1p_fp32<is_fp32_dest_acc_en>(inp); }
+            v_endif;
+        } else {
+            sfpi::vFloat result = calculate_log1p_fp32<is_fp32_dest_acc_en>(sfpi::dst_reg[0]);
             result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
+            sfpi::dst_reg[0] = result;
         }
-        sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
     }
 }
