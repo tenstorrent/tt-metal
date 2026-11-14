@@ -604,12 +604,18 @@ def read_spread() -> int:
 
 
 def spread_device_groups(table, fnids, spread: int) -> list:
-    """``spread`` device groups of the same chips, group k rotated to start at chip k * (len / spread) of the mesh order, so
-    layer L (group L % spread) is read from a different chip than its neighbours. spread 1 = the one group in mesh order (as
-    before)."""
+    """The device groups layer L reads from (group L % len). spread 1: ONE group of every chip (as before). spread > 1: ``spread``
+    single-chip groups, chips k * (len / spread) of the mesh order, so neighbouring layers are read through different chips.
+    Single chips because ``add_device_group`` sorts a group's chips and returns an existing identical group
+    (kv_chunk_address_table.cpp): rotations of the full chip list all collapse into the one group whose first chip is
+    (0, 0) -- measured 11-14 08:06, 100 % of d2h still on chip 0 with 32 rotated groups. A single-chip group lists only the
+    replica it is read from; the KV Manager writes into the prefill galaxy only for decode-to-prefill pulls and the store,
+    both off on this stack."""
+    if int(spread) <= 1:
+        return [table.add_device_group(list(fnids))]
     spread = min(int(spread), len(fnids))
     step = len(fnids) // spread
-    return [table.add_device_group(list(fnids[k * step :]) + list(fnids[: k * step])) for k in range(spread)]
+    return [table.add_device_group([fnids[k * step]]) for k in range(spread)]
 
 
 def read_back(exp: V41KvExport, cfg, slot: int, prompt_tokens: int) -> dict:
