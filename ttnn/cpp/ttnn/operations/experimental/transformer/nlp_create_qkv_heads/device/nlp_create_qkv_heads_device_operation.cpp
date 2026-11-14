@@ -7,6 +7,7 @@
 
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/device_operation.hpp"
+#include "ttnn/overpadded_tile.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/common/hash_without_rows.hpp"
 
@@ -49,6 +50,7 @@ void NlpCreateHeadsDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     using namespace tt::constants;
     const auto& input_tensor = tensor_args.input_tensor_q;
+    ttnn::device_operation::detail::validate_no_overpadded_tile_input(input_tensor, "nlp_create_qkv_heads");
     const auto input_shape = input_tensor.padded_shape();
 
     // NOTE: Checks for head_dim and shape[3] is done in nlp_create_qkv_heads because it's needed to infer head_dim

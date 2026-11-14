@@ -7,6 +7,7 @@
 #include <string_view>
 
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/overpadded_tile.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config.hpp"
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 #include "tt-metalium/hal_types.hpp"
@@ -2788,6 +2789,9 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
     const auto& input_tensor_a = args.input_tensors.at(0);
     const auto& input_tensor_b = args.input_tensors.at(1);
     const auto& optional_input_tensors = args.optional_input_tensors;
+
+    ttnn::device_operation::detail::validate_no_overpadded_tile_input(input_tensor_a, "matmul");
+    ttnn::device_operation::detail::validate_no_overpadded_tile_input(input_tensor_b, "matmul");
 
     auto a_shape =
         operations::matmul::utilities::get_matmul_tensor_logical_shape(input_tensor_a, attributes.transpose_a);

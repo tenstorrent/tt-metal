@@ -4,6 +4,7 @@
 
 #include "typecast_device_op.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/overpadded_tile.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
 #include <tt-metalium/hal.hpp>
@@ -80,6 +81,7 @@ TypecastDeviceOperation::program_factory_t TypecastDeviceOperation::select_progr
 void TypecastDeviceOperation::validate_on_program_cache_miss(
     const TypecastParams& args, const TypecastInputs& tensor_args) {
     const auto& input_tensor = tensor_args.input;
+    ttnn::device_operation::detail::validate_no_overpadded_tile_input(input_tensor, "typecast");
     const auto& preallocated_output_tensor = tensor_args.preallocated_output;
 
     auto out_memory_config = args.output_memory_config;
