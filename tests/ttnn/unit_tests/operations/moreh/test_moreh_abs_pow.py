@@ -69,3 +69,13 @@ def test_moreh_abs_pow(p, device):
 def test_moreh_abs_pow_corner_cases(input_shape, fp32_dest_acc_en, provide_output, device):
     torch.manual_seed(0)
     run_moreh_abs_pow_test(input_shape, 2.5, device, fp32_dest_acc_en=fp32_dest_acc_en, provide_output=provide_output)
+
+
+def test_moreh_abs_pow_rejects_other_output_dtype(device, expect_error):
+    # Every buffer, including the output, uses the input's data format.
+    x = ttnn.from_torch(torch.randn(1, 1, 64, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    out = ttnn.from_torch(
+        torch.zeros(1, 1, 64, 64, dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    with expect_error(RuntimeError, "must match the input dtype"):
+        ttnn.moreh_abs_pow(x, 2.0, output=out)
