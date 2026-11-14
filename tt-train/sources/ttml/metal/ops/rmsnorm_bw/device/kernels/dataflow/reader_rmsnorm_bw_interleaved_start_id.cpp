@@ -29,6 +29,8 @@ constexpr uint32_t Wt = get_compile_time_arg_val(3);
 // The layout of dL_dout and the gate for head_merged_row; 1 and 1 when ungated.
 constexpr uint32_t layout_Ht = get_compile_time_arg_val(4);
 constexpr uint32_t layout_num_heads = get_compile_time_arg_val(5);
+// Tiles of each row this core reads: Wt, or its slice of the row.
+constexpr uint32_t St = get_compile_time_arg_val(6);
 
 #ifdef DO_MASK_W
 constexpr bool do_mask_w = true;
@@ -45,6 +47,9 @@ constexpr bool gated = false;
 #if defined(GATED) && !defined(EVERYTHING_FITS_IN_L1)
 #error "Gated mode needs EVERYTHING_FITS_IN_L1, like the compute kernel: streaming would read the gate twice."
 #endif
+#if defined(GATED) || !defined(EVERYTHING_FITS_IN_L1)
+static_assert(St == Wt, "Only ungated rows resident in L1 are split into slices.");
+#endif
 
 void kernel_main() {
     uint32_t runtime_args_counter = 0U;
@@ -55,13 +60,16 @@ void kernel_main() {
     uint32_t gate_address = get_arg_val<uint32_t>(runtime_args_counter++);
     uint32_t num_rows_to_process = get_arg_val<uint32_t>(runtime_args_counter++);
     uint32_t start_row = get_arg_val<uint32_t>(runtime_args_counter++);
+    // First tile of this core's slice within each row; 0 without slicing.
+    uint32_t slice_start = get_arg_val<uint32_t>(runtime_args_counter++);
 
     constexpr uint16_t one = 0x00003F80;  // (bfloat16)1.0 -> uint16_t
     constexpr uint16_t zero = 0x0;
     constexpr uint16_t minus_inf = 0xFF80;  // (bfloat16)-inf -> uint16_t
     // Generate mask tile.
     if constexpr (do_mask_w) {
-        generate_mask_tile(cb_mask_w_idx, one, zero, mask_w);
+        // Only the slice holding the row's last tile has width padding; a full-width mask keeps every column.
+        generate_mask_tile(cb_mask_w_idx, one, zero, slice_start + St == Wt ? mask_w : tt::constants::TILE_WIDTH);
     }
     // Generate tile with scalar.
     generate_tile_with_packed_bfloat16_value(cb_scaler_idx, packed_scaler);
@@ -73,7 +81,7 @@ void kernel_main() {
     // The input may be fp32; every other tensor read here is bf16.
     const uint32_t input_tile_bytes = get_tile_size(cb_input_idx);
     const uint32_t tile_bytes = get_tile_size(cb_dL_out_idx);
-    constexpr auto input_args = TensorAccessorArgs<6>();
+    constexpr auto input_args = TensorAccessorArgs<7>();
     constexpr auto gamma_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto rms_a_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
     constexpr auto dL_out_args = TensorAccessorArgs<rms_a_args.next_compile_time_args_offset()>();
@@ -90,11 +98,13 @@ void kernel_main() {
         // Read RMS(a) once per row - shape [B,1,S,1], one scalar per row
         read_tiles_by_row(cb_rms_a_idx, rms_a_address_generator, r, 1, tile_bytes, 1);
 
-        const uint32_t merged_row_start = head_merged_row<layout_Ht, layout_num_heads>(r) * Wt;
-        // Issues the reads of the input, dL_dout and gate blocks at column c; the caller barriers and pushes them.
+        const uint32_t row_start = (r * Wt) + slice_start;
+        const uint32_t merged_row_start = head_merged_row<layout_Ht, layout_num_heads>(r) * Wt + slice_start;
+        // Issues the reads of the input, dL_dout and gate blocks at column c of the slice; the caller barriers and
+        // pushes them.
         auto read_row_blocks = [&](const uint32_t c) {
             read_tiles_by_row</* UseBarrier = */ false>(
-                cb_input_idx, input_address_generator, (r * Wt) + c, block_size, input_tile_bytes, block_size);
+                cb_input_idx, input_address_generator, row_start + c, block_size, input_tile_bytes, block_size);
             read_tiles_by_row</* UseBarrier = */ false>(
                 cb_dL_out_idx, dL_out_address_generator, merged_row_start + c, block_size, tile_bytes, block_size);
             if constexpr (gated) {
@@ -111,7 +121,7 @@ void kernel_main() {
         };
 
         // First pass: read row data for first compute phase
-        for (uint32_t c = 0; c < Wt; c += block_size) {
+        for (uint32_t c = 0; c < St; c += block_size) {
             read_row_blocks(c);
 #ifndef EVERYTHING_FITS_IN_L1
             // If not everything fits in L1, we need to reread gamma for each row.
@@ -121,7 +131,8 @@ void kernel_main() {
 #else
             // If everything fits in L1, we can read gamma only once.
             if (r == start_row) {
-                read_tiles_by_row(cb_gamma_idx, gamma_address_generator, c, block_size, tile_bytes, block_size);
+                read_tiles_by_row(
+                    cb_gamma_idx, gamma_address_generator, slice_start + c, block_size, tile_bytes, block_size);
                 // Barrier called by read_tiles_by_row with UseBarrier=true above
             } else {
                 noc_async_read_barrier();

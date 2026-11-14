@@ -11,6 +11,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "metal/common/program_utils.hpp"
+#include "metal/ops/common/rmsnorm_common.hpp"
 #include "rmsnorm_fw_device_operation.hpp"
 #include "rmsnorm_fw_device_operation_types.hpp"
 
@@ -51,6 +52,8 @@ constexpr auto kOutputCbIndex = tt::CBIndex::c_8;
 constexpr auto kRmsOutputCbIndex = tt::CBIndex::c_9;
 constexpr auto kOutputIntermediateCbIndex = tt::CBIndex::c_10;
 constexpr auto kGateCbIndex = tt::CBIndex::c_11;
+constexpr auto kSlicePartialCbIndex = tt::CBIndex::c_12;
+constexpr auto kGatheredPartialsCbIndex = tt::CBIndex::c_13;
 
 constexpr uint32_t kNumMaskTiles = 1U;
 constexpr uint32_t kNumScalerTiles = 1U;
@@ -59,6 +62,8 @@ constexpr uint32_t kNumRmsAfterReductionTiles = 2U;
 constexpr uint32_t kNumInverseRmsAfterReductionTiles = 2U;
 constexpr uint32_t kNumRmsOutputTiles = 2U;
 constexpr uint32_t kNumEpsTiles = 1U;
+
+constexpr uint32_t kPartialsSemId = 0U;
 
 const std::string kMaskWDefineKey = "DO_MASK_W";
 const std::string kReturnRMSDefineKey = "RETURN_RMS";
@@ -71,6 +76,41 @@ const std::string kGatedDefineKey = "GATED";
 namespace ttml::metal::ops::rmsnorm_fw::device {
 
 namespace {
+
+// L1 bytes when row_tiles tiles of each row and of gamma stay resident, with the partial exchange of num_slices cores
+// per row.
+uint64_t required_l1_bytes(
+    const uint32_t row_tiles,
+    const uint32_t num_slices,
+    const uint32_t input_single_tile_size_bytes,
+    const bool gated) {
+    const uint32_t bfloat16_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float16_b);
+    const uint32_t float32_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float32);
+    const uint32_t twice_block_size = 2U * get_block_size(row_tiles, 3U);
+    const uint64_t weight_memory = row_tiles * (input_single_tile_size_bytes + bfloat16_single_tile_size_bytes);
+    const uint64_t mask_scaler_eps_memory =
+        (kNumMaskTiles + kNumScalerTiles + kNumEpsTiles) * bfloat16_single_tile_size_bytes;
+    const uint64_t rms_memory =
+        (kNumRmsBeforeReductionTiles + kNumRmsAfterReductionTiles + kNumInverseRmsAfterReductionTiles) *
+        float32_single_tile_size_bytes;
+    // output, fp32 output intermediate and, in gated mode, the gate
+    const uint64_t block_memory = twice_block_size * (bfloat16_single_tile_size_bytes + float32_single_tile_size_bytes +
+                                                      (gated ? bfloat16_single_tile_size_bytes : 0U));
+    const uint64_t rms_output_memory = kNumRmsOutputTiles * bfloat16_single_tile_size_bytes;
+    return weight_memory + mask_scaler_eps_memory + rms_memory + block_memory + rms_output_memory +
+           rmsnorm::row_slice_exchange_l1_bytes(num_slices);
+}
+
+// The forward's row split, with slices whose rows and gamma stay resident in L1.
+rmsnorm::RowSlicePlan make_plan(const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const auto& input = tensor_args.input;
+    const bool gated = tensor_args.gate.has_value();
+    const uint32_t input_single_tile_size_bytes = tt::tile_size(datatype_to_dataformat_converter(input.dtype()));
+    return rmsnorm::make_row_slice_plan(
+        input, gated, args.max_row_slices, [&](const uint32_t slice_tiles, const uint32_t num_slices) {
+            return required_l1_bytes(slice_tiles, num_slices, input_single_tile_size_bytes, gated);
+        });
+}
 
 struct RMSNormForwardBuffers {
     tt::tt_metal::Buffer* input;
@@ -121,7 +161,6 @@ tt::tt_metal::ProgramDescriptor RMSNormForwardProgramFactory::create_descriptor(
     TT_FATAL(padded_tensor_shape.rank() == 4U, "Input tensor must be 4D");
     uint32_t Wt = padded_tensor_shape[-1] / tt::constants::TILE_WIDTH;
     uint32_t Ht = padded_tensor_shape[-2] / tt::constants::TILE_HEIGHT;
-    uint32_t total_rows_to_process = num_tile_rows(input);
 
     // Gated mode reads the gate and writes the output in the head-merged layout; <1, 1> is the identity.
     const uint32_t layout_Ht = gated ? Ht : 1U;
@@ -135,45 +174,31 @@ tt::tt_metal::ProgramDescriptor RMSNormForwardProgramFactory::create_descriptor(
     uint32_t packed_scaler = pack_two_bfloat16_to_uint32(1.F / static_cast<float>(num_inner));
     uint32_t packed_eps = pack_two_bfloat16_to_uint32(args.epsilon);
     uint32_t mask_w = num_inner % tt::constants::TILE_WIDTH;
-    uint32_t block_size = get_block_size(Wt, 3U);
 
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
-        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_rows_to_process);
-    const WorkSplit split = compute_tile_row_work_split(input);
-    check_work_split(
-        split, num_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2);
+    const auto plan = make_plan(args, tensor_args);
+    const uint32_t St = plan.slice_tiles;
+    const uint32_t num_slices = plan.num_slices;
+    const auto cores = rmsnorm::row_slice_cores(plan, compute_with_storage_grid_size);
+    const auto& all_cores = cores.all_cores;
+    const auto& core_group_1 = cores.core_group_1;
+    const auto& core_group_2 = cores.core_group_2;
+    const uint32_t block_size = get_block_size(St, 3U);
 
     // -------------------------------------------------------------------------
     // 2) Create and configure circular buffers
     // -------------------------------------------------------------------------
     uint32_t twice_block_size = 2U * block_size;
-    const uint32_t available_L1_in_bytes =
-        device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
 
-    // Memory allocation for L1 cache
-    const uint64_t weight_memory = Wt * (input_single_tile_size_bytes + bfloat16_single_tile_size_bytes);
-    const uint64_t mask_scaler_eps_memory =
-        (kNumMaskTiles + kNumScalerTiles + kNumEpsTiles) * bfloat16_single_tile_size_bytes;
-    const uint64_t rms_memory =
-        (kNumRmsBeforeReductionTiles + kNumRmsAfterReductionTiles + kNumInverseRmsAfterReductionTiles) *
-        float32_single_tile_size_bytes;
-    // output, fp32 output intermediate and, in gated mode, the gate
-    const uint64_t block_memory = twice_block_size * (bfloat16_single_tile_size_bytes + float32_single_tile_size_bytes +
-                                                      (gated ? bfloat16_single_tile_size_bytes : 0U));
-    const uint64_t rms_output_memory = kNumRmsOutputTiles * bfloat16_single_tile_size_bytes;
-    // Total L1 memory required
-    const uint64_t required_L1_in_bytes =
-        weight_memory + mask_scaler_eps_memory + rms_memory + block_memory + rms_output_memory;
-    const bool everything_fits_in_l1 = required_L1_in_bytes <= available_L1_in_bytes;
+    const bool everything_fits_in_l1 = plan.fits_in_l1();
     check_gated_row_fits_in_l1(gated, everything_fits_in_l1, Wt);
 
-    const uint64_t required_L1_in_bytes_except_gamma = required_L1_in_bytes - Wt * bfloat16_single_tile_size_bytes +
+    const uint64_t required_L1_in_bytes_except_gamma = plan.l1_bytes_required - St * bfloat16_single_tile_size_bytes +
                                                        twice_block_size * bfloat16_single_tile_size_bytes;
-    const bool everything_except_gamma_fits_in_l1 = required_L1_in_bytes_except_gamma <= available_L1_in_bytes;
+    const bool everything_except_gamma_fits_in_l1 = required_L1_in_bytes_except_gamma <= plan.l1_bytes_available;
 
     const uint32_t num_input_tiles =
-        (everything_fits_in_l1 | everything_except_gamma_fits_in_l1) ? Wt : twice_block_size;
-    const uint32_t num_gamma_tiles = everything_fits_in_l1 ? Wt : twice_block_size;
+        (everything_fits_in_l1 | everything_except_gamma_fits_in_l1) ? St : twice_block_size;
+    const uint32_t num_gamma_tiles = everything_fits_in_l1 ? St : twice_block_size;
 
     auto data_format = tt::DataFormat::Float16_b;
     auto precise_data_format = tt::DataFormat::Float32;
@@ -228,6 +253,9 @@ tt::tt_metal::ProgramDescriptor RMSNormForwardProgramFactory::create_descriptor(
             all_cores, kGateCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size));
     }
 
+    rmsnorm::add_row_slice_exchange(
+        desc, all_cores, kSlicePartialCbIndex, kGatheredPartialsCbIndex, kPartialsSemId, num_slices);
+
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels
     // -------------------------------------------------------------------------
@@ -261,7 +289,7 @@ tt::tt_metal::ProgramDescriptor RMSNormForwardProgramFactory::create_descriptor(
     defines["REDUCE_DIM"] = "ReduceDim::REDUCE_ROW";
 
     std::vector<uint32_t> reader_compile_time_args{
-        packed_scaler, packed_eps, mask_w, Wt, block_size, layout_Ht, layout_num_heads};
+        packed_scaler, packed_eps, mask_w, Wt, block_size, layout_Ht, layout_num_heads, St};
     // An absent gate or rms still appends a null accessor (two zero-valued args), so the offsets do not depend on the
     // mode.
     tt::tt_metal::TensorAccessorArgs(buffers.input).append_to(reader_compile_time_args);
@@ -270,7 +298,8 @@ tt::tt_metal::ProgramDescriptor RMSNormForwardProgramFactory::create_descriptor(
     desc.kernels.push_back(
         make_reader_kernel_descriptor(all_cores, reader_compile_time_args, defines, kReaderKernelPath));
 
-    std::vector<uint32_t> writer_compile_time_args{Wt, block_size, layout_Ht, layout_num_heads};
+    std::vector<uint32_t> writer_compile_time_args{
+        Wt, block_size, layout_Ht, layout_num_heads, St, num_slices, kPartialsSemId};
     tt::tt_metal::TensorAccessorArgs(buffers.output).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(buffers.rms).append_to(writer_compile_time_args);
     desc.kernels.push_back(
@@ -282,10 +311,10 @@ tt::tt_metal::ProgramDescriptor RMSNormForwardProgramFactory::create_descriptor(
 
     // Group 1 compile-time arguments
     std::vector<uint32_t> compute_group_1_args = {
-        num_rows_per_core_group_1,  // per_core_block_cnt
-        block_size,                 // per_core_block_size
-        Wt                          // num_inner / TILE_W
-    };
+        plan.rows_per_group_1,  // per_core_block_cnt
+        block_size,             // per_core_block_size
+        St,                     // num_inner / TILE_W
+        num_slices};
 
     desc.kernels.push_back(make_compute_kernel_descriptor(
         core_group_1, compute_group_1_args, defines, kComputeKernelPath, /*fp32_dest_acc_en=*/true));
@@ -293,10 +322,10 @@ tt::tt_metal::ProgramDescriptor RMSNormForwardProgramFactory::create_descriptor(
     // Group 2 (if present) compile-time arguments
     if (!core_group_2.ranges().empty()) {
         std::vector<uint32_t> compute_group_2_args = {
-            num_rows_per_core_group_2,  // per_core_block_cnt
-            block_size,                 // per_core_block_size
-            Wt                          // num_inner / TILE_W
-        };
+            plan.rows_per_group_2,  // per_core_block_cnt
+            block_size,             // per_core_block_size
+            St,                     // num_inner / TILE_W
+            num_slices};
 
         desc.kernels.push_back(make_compute_kernel_descriptor(
             core_group_2, compute_group_2_args, defines, kComputeKernelPath, /*fp32_dest_acc_en=*/true));
@@ -306,15 +335,22 @@ tt::tt_metal::ProgramDescriptor RMSNormForwardProgramFactory::create_descriptor(
     // 5) Assign runtime args for each core
     // -------------------------------------------------------------------------
     // Slots as named at the top of the file; override_runtime_arguments() rewrites the addresses on every cache hit.
-    // An absent gate or rms goes in as nullptr, which writes 0. num_rows/start_row follow from the hashed input shape.
+    // An absent gate or rms goes in as nullptr, which writes 0. The rest follows from the hashed input spec and device.
     auto& reader = desc.kernels[kReaderKernelIdx];
     auto& writer = desc.kernels[kWriterKernelIdx];
-    for_each_core_with_work(split, [&](const CoreWork& work) {
-        const auto& [core, core_index, num_rows, start_row, in_group_1] = work;
-        // Reader kernel: (input_addr, gamma_addr, gate_addr, number_of_rows, offset_in_rows)
-        reader.emplace_runtime_args(core, {buffers.input, buffers.gamma, buffers.gate, num_rows, start_row});
-        // Writer kernel: (dst_addr, dst_rms_addr, number_of_rows, offset_in_rows)
-        writer.emplace_runtime_args(core, {buffers.output, buffers.rms, num_rows, start_row});
+    rmsnorm::for_each_row_slice_core(plan, [&](const rmsnorm::RowSliceWork& work) {
+        // Reader kernel: (input_addr, gamma_addr, gate_addr, number_of_rows, offset_in_rows, slice_start)
+        reader.emplace_runtime_args(
+            work.core,
+            {buffers.input, buffers.gamma, buffers.gate, work.num_rows, work.start_row, work.slice * St});
+        // Writer kernel: (dst_addr, dst_rms_addr, num_rows, offset_in_rows, [slice, in_one_column, peer NOC x/y...])
+        tt::tt_metal::KernelDescriptor::RTArgList writer_args;
+        writer_args.push_back(buffers.output);
+        writer_args.push_back(buffers.rms);
+        writer_args.push_back(work.num_rows);
+        writer_args.push_back(work.start_row);
+        writer_args.append(rmsnorm::row_slice_exchange_args(plan, work, *device));
+        writer.emplace_runtime_args(work.core, writer_args);
     });
 
     // -------------------------------------------------------------------------
@@ -329,7 +365,6 @@ void RMSNormForwardProgramFactory::override_runtime_arguments(
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    const WorkSplit split = compute_tile_row_work_split(tensor_args.input);
     const auto buffers = get_buffers(tensor_args, output);
 
     const uint32_t input_addr = buffers.input->address();
@@ -340,9 +375,8 @@ void RMSNormForwardProgramFactory::override_runtime_arguments(
 
     auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(program, kReaderKernelIdx);
     auto& writer_runtime_args = tt::tt_metal::GetRuntimeArgs(program, kWriterKernelIdx);
-    for_each_core_with_work(split, [&](const CoreWork& work) {
-        const auto& core = work.core;
-
+    // The reader and the writer run on the same cores.
+    rmsnorm::for_each_core_with_runtime_args(writer_runtime_args, [&](const tt::tt_metal::CoreCoord& core) {
         auto& reader_args = reader_runtime_args[core.x][core.y];
         reader_args[kInputAddrIdx] = input_addr;
         reader_args[kGammaAddrIdx] = gamma_addr;

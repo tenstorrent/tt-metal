@@ -92,6 +92,7 @@ TEST_F(ProgramCachePlacementTest, RmsNormFw_L1InputAfterDramDoesNotReuseTheProgr
             /*gate=*/std::nullopt,
             /*return_intermediates=*/false,
             /*epsilon=*/1e-6F,
+            ttml::metal::ops::rmsnorm::kMaxRowSlices,
             /*preallocated_rms=*/std::nullopt,
             zeros_on_device(kShape));
     });
@@ -109,6 +110,7 @@ TEST_F(ProgramCachePlacementTest, RmsNormBw_L1InputAfterDramDoesNotReuseTheProgr
             dL_dout,
             /*gate=*/std::nullopt,
             /*compute_dgamma=*/true,
+            ttml::metal::ops::rmsnorm::kMaxRowSlices,
             zeros_on_device(kShape),
             zeros_on_device(kShape));
     });

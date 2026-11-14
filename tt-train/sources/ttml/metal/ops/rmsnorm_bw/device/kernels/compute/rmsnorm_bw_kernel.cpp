@@ -20,7 +20,11 @@
 constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(0);
 constexpr uint32_t block_size = get_compile_time_arg_val(1);
 constexpr uint32_t mask_w = get_compile_time_arg_val(2);
+// Tiles of each row this core handles: the whole row, or its slice of it.
 constexpr uint32_t Wt = get_compile_time_arg_val(3);
+// Cores that share each row; they exchange their partial scale through the writer.
+constexpr uint32_t num_slices = get_compile_time_arg_val(4);
+constexpr bool sliced = num_slices > 1U;
 
 // CBs with input data
 constexpr uint32_t cb_input_idx = tt::CBIndex::c_0;
@@ -40,6 +44,8 @@ constexpr uint32_t cb_dL_dgate_idx = tt::CBIndex::c_13;
 constexpr uint32_t cb_recip_rms_a_bcasted_idx = tt::CBIndex::c_10;
 constexpr uint32_t cb_scale_idx = tt::CBIndex::c_11;
 constexpr uint32_t cb_du_idx = tt::CBIndex::c_14;
+constexpr uint32_t cb_slice_partial_idx = tt::CBIndex::c_15;
+constexpr uint32_t cb_gathered_partials_idx = tt::CBIndex::c_16;
 
 #ifdef DO_MASK_W
 constexpr bool do_mask_w = true;
@@ -67,6 +73,7 @@ constexpr bool gated = false;
 static_assert(
     !gated || everything_fits_in_l1,
     "Gated mode needs the row resident in L1: cb_du holds the whole row for the stages after the gate stage.");
+static_assert(!sliced || (everything_fits_in_l1 && !gated), "Only ungated rows resident in L1 are split into slices.");
 
 // Gradient with respect to the RMSNorm output, read by every stage below. In gated mode cb_dL_out holds the gradient
 // of the gated output rmsnorm(a) * silu(gate), so the stages read du = dL_dout * silu(gate) from cb_du instead.
@@ -327,7 +334,9 @@ inline void compute_du_and_dL_dgate(const uint32_t row) {
 }
 
 inline void reduce_scale() {
-    // Reduces the accumulated scale tile in cb_scale along the inner dimension (C) and pushes it back reduced.
+    // Reduces the accumulated scale tile of the row along the inner dimension (C) and pushes the result to cb_scale.
+    // A sliced core reduces its slice's scale only and sends it to its row-group, and the row's scale is the sum of the
+    // gathered partials of all slices.
     cb_wait_front(cb_scale_idx, onetile);
     const uint32_t reduced_scale_register = 0U;
     tile_regs_acquire();
@@ -337,16 +346,34 @@ inline void reduce_scale() {
     // matmul reverses operands (in0 -> SrcB, in1 -> SrcA), so reconfig in reversed (in1, in0) order.
     reconfig_data_format(cb_mat_mul_reduce, cb_scale_idx);
     matmul_init(cb_scale_idx, cb_mat_mul_reduce, 0);
-    matmul_tiles(
-        cb_scale_idx,
-        cb_mat_mul_reduce,
-        /* tile_idx */ 0,
-        /* tile_idx */ 0,
-        reduced_scale_register);
+    matmul_tiles(cb_scale_idx, cb_mat_mul_reduce, /* tile_idx */ 0, /* tile_idx */ 0, reduced_scale_register);
     tile_regs_commit();
 
     // Pop the non-reduced scale tile from the CB.
     cb_pop_front(cb_scale_idx, onetile);
+    if constexpr (!sliced) {
+        pack_and_push(reduced_scale_register, cb_scale_idx);
+        return;
+    }
+    pack_and_push(reduced_scale_register, cb_slice_partial_idx);
+
+    cb_wait_front(cb_gathered_partials_idx, num_slices);
+    const uint32_t partial_register = reduced_scale_register + 1U;
+    tile_regs_acquire();
+    reconfig_data_format_srca(cb_mat_mul_reduce, cb_gathered_partials_idx);
+    copy_init(cb_gathered_partials_idx);
+    copy_tile(cb_gathered_partials_idx, /* tile_idx */ 0, reduced_scale_register);
+    for (uint32_t partial = 1; partial < num_slices; ++partial) {
+        copy_init(cb_gathered_partials_idx);
+        copy_tile(cb_gathered_partials_idx, partial, partial_register);
+        add_binary_tile_init();
+        add_binary_tile(reduced_scale_register, partial_register, reduced_scale_register);
+    }
+    // compute_dL_da expects srcA on a bf16 CB at the start of a row, as the matmul above leaves it.
+    reconfig_data_format_srca(cb_gathered_partials_idx, cb_mat_mul_reduce);
+    tile_regs_commit();
+
+    cb_pop_front(cb_gathered_partials_idx, num_slices);
     pack_and_push(reduced_scale_register, cb_scale_idx);
 }
 

@@ -691,3 +691,77 @@ inline void mcast_sender_signal_receivers_loopback(
     noc_semaphore_set_multicast_loopback_src(receiver_sem_addr, receiver_sem_noc_addr, num_dests_including_self);
     noc_async_atomic_barrier();
 }
+
+/**
+ * One round of an all-gather of one tile among `num_peers` cores: this core's tile from cb_local goes to slot `slot`
+ * of cb_gathered on every peer, itself included, and cb_gathered is pushed with all num_peers tiles once the other
+ * peers' tiles have arrived.
+ *
+ * All peers must create cb_local and cb_gathered with the same tile size, cb_gathered at the same address with
+ * 2 * num_peers tiles, and run the same rounds in the same order. A peer can be at most one round ahead, as it needs
+ * this core's tile of a round to finish it, so it writes its next round into the other half of cb_gathered as soon
+ * as this core has sent its tile. Reserving both halves before sending makes sure that half has been consumed.
+ *
+ * Semaphore `sem_id` counts the tiles the other peers delivered, so round `round` (counted from 0) is complete at
+ * (round + 1) * (num_peers - 1). Call all_gather_tile_finish after the last round.
+ *
+ * With `in_one_column`, the peers are one column of the NOC in slice order, from peer 0 to peer num_peers - 1, so the
+ * tile and the semaphore increments each go out as one multicast instead of one write per peer.
+ */
+template <uint32_t num_peers>
+inline void all_gather_tile(
+    const uint32_t cb_local,
+    const uint32_t cb_gathered,
+    const uint32_t slot,
+    const uint32_t (&peer_noc_x)[num_peers],
+    const uint32_t (&peer_noc_y)[num_peers],
+    const uint32_t sem_id,
+    const uint32_t round,
+    const bool in_one_column) {
+    const uint32_t tile_bytes = get_tile_size(cb_gathered);
+    const uint32_t sem_addr = get_semaphore(sem_id);
+    cb_wait_front(cb_local, onetile);
+    cb_reserve_back(cb_gathered, 2U * num_peers);
+    const uint32_t src_addr = get_read_ptr(cb_local);
+    const uint32_t dst_addr = get_write_ptr(cb_gathered) + slot * tile_bytes;
+    // NOC 1 runs the other way, so its multicast rectangle starts at the far corner.
+    const uint32_t first = noc_index == 0U ? 0U : num_peers - 1U;
+    const uint32_t last = num_peers - 1U - first;
+    if (in_one_column) {
+        noc_async_write_multicast_loopback_src(
+            src_addr,
+            get_noc_multicast_addr(
+                peer_noc_x[first], peer_noc_y[first], peer_noc_x[last], peer_noc_y[last], dst_addr),
+            tile_bytes,
+            num_peers);
+    } else {
+        for (uint32_t peer = 0; peer < num_peers; ++peer) {
+            noc_async_write(src_addr, get_noc_addr(peer_noc_x[peer], peer_noc_y[peer], dst_addr), tile_bytes);
+        }
+    }
+    // The tile must land before the semaphore increment that announces it.
+    noc_async_write_barrier();
+    cb_pop_front(cb_local, onetile);
+    if (in_one_column) {
+        // Without loopback, so this core's own counter is left out.
+        noc_semaphore_inc_multicast(
+            get_noc_multicast_addr(
+                peer_noc_x[first], peer_noc_y[first], peer_noc_x[last], peer_noc_y[last], sem_addr),
+            1U,
+            num_peers - 1U);
+    } else {
+        for (uint32_t peer = 0; peer < num_peers; ++peer) {
+            if (peer != slot) {
+                noc_semaphore_inc(get_noc_addr(peer_noc_x[peer], peer_noc_y[peer], sem_addr), 1U);
+            }
+        }
+    }
+    noc_semaphore_wait_min(get_sem_ptr(sem_id), (round + 1U) * (num_peers - 1U));
+    cb_push_back(cb_gathered, num_peers);
+}
+
+// After the last round of all_gather_tile every increment to this core has arrived, so its counter can be reset.
+inline void all_gather_tile_finish(const uint32_t sem_id) {
+    noc_async_atomic_barrier();
+    noc_semaphore_set(get_sem_ptr(sem_id), 0U);
+}
