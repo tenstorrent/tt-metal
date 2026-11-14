@@ -69,11 +69,11 @@ void configure_fabric_cores(tt::tt_metal::MetalEnvImpl& env_impl, tt::tt_metal::
     const auto& fabric_context = control_plane.get_fabric_context();
     const auto& builder_context = fabric_context.get_builder_context();
     const auto addresses_to_clear = builder_context.get_fabric_router_addresses_to_clear();
-    const auto& router_config = builder_context.get_fabric_router_config();
-    std::vector<uint32_t> router_zero_buf(router_config.router_buffer_clear_size_words, 0);
+    std::vector<uint32_t> router_zero_buf;
     for (const auto& [router_chan, _] : router_chans_and_direction) {
         auto router_logical_core = soc_desc.get_eth_core_for_channel(router_chan, CoordSystem::LOGICAL);
-        for (const auto& address : addresses_to_clear) {
+        for (const auto& [address, size_words] : addresses_to_clear) {
+            router_zero_buf.assign(size_words, 0);
             tt::tt_metal::detail::WriteToDeviceL1(device, router_logical_core, address, router_zero_buf, CoreType::ETH);
         }
     }

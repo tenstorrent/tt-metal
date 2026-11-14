@@ -348,7 +348,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(const FabricContext& fabr
         // remote write during bring-up, which shifts the Ethernet core UMD ends up using for all
         // subsequent remote reads.
         if (this->multi_txq_enabled()) {
-            this->router_buffer_clear_size_words = num_words_consumed_per_counter;
+            this->router_buffer_clear_size_words = num_words_consumed_per_counter / sizeof(uint32_t);
         }
 
         next_l1_addr = tt::align(next_l1_addr, field_size);

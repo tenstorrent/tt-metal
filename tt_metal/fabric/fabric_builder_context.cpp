@@ -299,17 +299,20 @@ chan_id_t FabricBuilderContext::get_fabric_master_router_chan(ChipId chip_id) co
     return master_router_chans_[chip_id];
 }
 
-std::vector<size_t> FabricBuilderContext::get_fabric_router_addresses_to_clear() const {
-    std::vector<size_t> addresses_to_clear = {
-        router_config_->edm_local_sync_address,
-        router_config_->edm_local_tensix_sync_address,
-        router_config_->termination_signal_address};
+std::vector<std::pair<size_t, size_t>> FabricBuilderContext::get_fabric_router_addresses_to_clear() const {
+    std::vector<std::pair<size_t, size_t>> addresses_to_clear = {
+        {router_config_->edm_local_sync_address, 1},
+        {router_config_->edm_local_tensix_sync_address, 1},
+        {router_config_->termination_signal_address, 1}};
 
     if (router_config_->multi_txq_enabled()) {
-        addresses_to_clear.push_back(router_config_->to_sender_channel_remote_ack_counters_base_addr);
-        addresses_to_clear.push_back(router_config_->to_sender_channel_remote_completion_counters_base_addr);
-        addresses_to_clear.push_back(router_config_->receiver_channel_remote_ack_counters_base_addr);
-        addresses_to_clear.push_back(router_config_->receiver_channel_remote_completion_counters_base_addr);
+        const size_t counter_words = router_config_->router_buffer_clear_size_words;
+        addresses_to_clear.emplace_back(router_config_->to_sender_channel_remote_ack_counters_base_addr, counter_words);
+        addresses_to_clear.emplace_back(
+            router_config_->to_sender_channel_remote_completion_counters_base_addr, counter_words);
+        addresses_to_clear.emplace_back(router_config_->receiver_channel_remote_ack_counters_base_addr, counter_words);
+        addresses_to_clear.emplace_back(
+            router_config_->receiver_channel_remote_completion_counters_base_addr, counter_words);
     }
 
     return addresses_to_clear;
