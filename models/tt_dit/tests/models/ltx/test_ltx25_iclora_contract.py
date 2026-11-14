@@ -321,11 +321,11 @@ def test_concurrent_session_is_refused_without_wait(contract):
     pipe = contract.create()
     pipe._call_lock.acquire()
     try:
-        with pytest.raises(
+        with pytest.raises(  # allow-pytest.raises: CPU-only conftest
             ValueError, match="concurrent"
         ):  # allow-pytest.raises: CPU-only run excludes native conftest
             pipe.generate_r2v("x", seed=1)
-        with pytest.raises(
+        with pytest.raises(  # allow-pytest.raises: CPU-only conftest
             ValueError, match="concurrent"
         ):  # allow-pytest.raises: CPU-only run excludes native conftest
             pipe.warmup_buffers()
