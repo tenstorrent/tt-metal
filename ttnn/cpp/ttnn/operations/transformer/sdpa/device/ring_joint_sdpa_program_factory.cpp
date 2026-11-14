@@ -1896,12 +1896,15 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // now for out0
     const uint32_t out_in0_block_w = Sk_chunk_t;
 
-    // Ring-joint streaming supports single-Q-subblock shapes; only fp32 dest acc stays on the legacy path.
-    const bool use_streaming_compute = !fp32_dest_acc_en;
+    // Ring-joint streaming supports single-Q-subblock shapes; fp32 dest acc stays on the legacy path unless
+    // streaming_fp32_dest opts in.
+    const bool streaming_fp32_dest = args.program_config.has_value() && args.program_config->streaming_fp32_dest;
+    const bool use_streaming_compute = !fp32_dest_acc_en || streaming_fp32_dest;
+    // The streaming-only features below are not supported with streaming_fp32_dest: they keep requiring bf16 dest.
     // Validated in validate_on_program_cache_miss.
-    TT_ASSERT(args.kv_stripe_split == 1 || use_streaming_compute);
+    TT_ASSERT(args.kv_stripe_split == 1 || !fp32_dest_acc_en);
     TT_FATAL(
-        !kv_pad_rotation_enabled || use_streaming_compute,
+        !kv_pad_rotation_enabled || !fp32_dest_acc_en,
         "kv_actual_isl requires the ring-joint streaming compute path; the compute_common.hpp path selected by "
         "fp32_dest_acc_en=true is not supported.");
 
@@ -1910,13 +1913,13 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // the legacy fp32 path (sdpa_ring/sdpa_inner_loop) would leave compute waiting on K/V chunks the
     // reader never pushed. Require streaming rather than risk a deadlock.
     TT_FATAL(
-        !(joint_is_sharded && logical_l < L) || use_streaming_compute,
+        !(joint_is_sharded && logical_l < L) || !fp32_dest_acc_en,
         "Sharded joint with a padded joint tail (logical_l {} < padded L {}) requires the streaming compute "
         "path (set fp32_dest_acc_en=false)",
         logical_l,
         L);
     TT_FATAL(
-        use_streaming_compute || !v_shares_k_buffer,
+        !fp32_dest_acc_en || !v_shares_k_buffer,
         "Latent-V ring attention is implemented only for streaming compute (fp32_dest_acc_en must be false)");
     log_debug(
         tt::LogOp,
@@ -2478,7 +2481,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
     if (args.program_config.has_value() && args.program_config->matmul_math_fidelity.has_value()) {
-        TT_FATAL(use_streaming_compute, "matmul_math_fidelity needs the streaming compute path (fp32_dest_acc_en=false)");
+        TT_FATAL(!fp32_dest_acc_en, "matmul_math_fidelity needs the streaming compute path (fp32_dest_acc_en=false)");
         defines["SDPA_MATMUL_FIDELITY"] =
             std::to_string(static_cast<uint32_t>(*args.program_config->matmul_math_fidelity));
     }
@@ -2521,8 +2524,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // Use fp32 precision for cb_sum_A/B when fp32 accumulation is enabled so
     // the running softmax denominator doesn't lose precision with K-iter rounding.
     tt::DataFormat sum_df = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-    // Use fp32 precision for cb_qk_im when fp32 accumulation is enabled so operations on QK retain precision.
-    tt::DataFormat qk_im_df = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    // Use fp32 precision for cb_qk_im when fp32 accumulation is enabled so operations on QK retain precision. The
+    // streaming kernel's pack/unpack reconfigs assume a bf16 score block, so streaming_fp32_dest keeps it bf16.
+    tt::DataFormat qk_im_df =
+        (fp32_dest_acc_en && !streaming_fp32_dest) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
 
     uint32_t q_tile_size = tt::tile_size(q_df);
     uint32_t k_tile_size = tt::tile_size(k_df);
