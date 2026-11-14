@@ -215,6 +215,11 @@ ttnn::Tensor slice(
             modified_ends[i] = ends[i];
             modified_step[i] = step[i];
         }
+        TT_FATAL(
+            modified_ends[i] <= input_shape[i],
+            "Ends {} must be less than or equal to the shape of the tensor {}",
+            modified_ends[i],
+            input_shape[i]);
     }
 
     auto output_dim_i = [&modified_begins, &modified_step](size_t i, const ttsl::SmallVector<uint32_t>& modified_ends) {
