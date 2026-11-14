@@ -39,7 +39,44 @@ enum class DataType {
     MXINT8 = 15,
     MXINT4 = 16,
     MXINT2 = 17,
-    INVALID = 18,
+    // GGUF quantized weights, one value per format: TILE layout, each page one GGUF record, see GgufTraits.
+    GGUF_Q8_0 = 18,
+    GGUF_Q4_0 = 19,
+    GGUF_IQ4_NL = 20,
+    GGUF_MXFP4 = 21,
+    GGUF_NVFP4 = 22,
+    GGUF_Q6_K = 23,
+    GGUF_Q4_K = 24,
+    GGUF_Q5_K = 25,
+    GGUF_Q3_K = 26,
+    GGUF_Q2_K = 27,
+    GGUF_IQ4_XS = 28,
+    GGUF_TQ2_0 = 29,
+    GGUF_Q2_0 = 30,
+    GGUF_Q1_0 = 31,
+    GGUF_IQ2_XXS = 32,
+    GGUF_IQ1_S = 33,
+    GGUF_IQ2_S = 34,
+    GGUF_IQ3_S = 35,
+    GGUF_IQ3_XXS = 36,
+    GGUF_IQ2_XS = 37,
+    GGUF_IQ1_M = 38,
+    GGUF_Q4_1 = 39,
+    GGUF_Q5_0 = 40,
+    GGUF_Q5_1 = 41,
+    GGUF_TQ1_0 = 42,
+    // Expanded GGUF layouts, made by from_gguf from the GGUF format of the same name (gguf_source_dtype): exact,
+    // larger pages that the matmul decodes faster. The codebook formats hold each grid entry's level codes instead of
+    // its grid index (no lookup per matmul); TQ1_0 holds its weights as TQ2_0's 2-bit codes.
+    GGUF_IQ2_XXS_EXPANDED = 43,
+    GGUF_IQ1_S_EXPANDED = 44,
+    GGUF_IQ2_S_EXPANDED = 45,
+    GGUF_IQ3_S_EXPANDED = 46,
+    GGUF_IQ3_XXS_EXPANDED = 47,
+    GGUF_IQ2_XS_EXPANDED = 48,
+    GGUF_IQ1_M_EXPANDED = 49,
+    GGUF_TQ1_0_EXPANDED = 50,
+    INVALID = 51,
 };
 
 std::ostream& operator<<(std::ostream& os, const tt::tt_metal::DataType& data_type);
@@ -72,6 +109,41 @@ bool is_block_float(DataType dtype);
 // True for the MX formats. Kept separate from is_block_float(): BFP and MX share the "TILE-only,
 // packed on the host" property but use different encodings, packers and supported architectures.
 bool is_mx(DataType dtype);
+
+// True for the GGUF formats. Their pages hold GGUF records, not values: ops that do not handle GGUF see
+// DataFormat::Invalid for them, and the host converts them only with from_gguf / to_gguf.
+bool is_gguf(DataType dtype);
+
+// True for the expanded GGUF layouts (DataType::GGUF_*_EXPANDED).
+bool is_gguf_expanded(DataType dtype);
+
+// The GGUF format whose blocks from_gguf takes and to_gguf returns for a GGUF dtype: itself, or the format an
+// expanded layout is made from.
+DataType gguf_source_dtype(DataType dtype);
+
+// One GGUF format. A page holds the record of 32 columns of N by 32 * group_tiles rows of K: their GGUF bytes, with
+// the bits regrouped for the Blackhole decoder (scale fields, then or after the codes parts of page_tiles K tiles
+// each). An expanded layout's page holds the same weights in more bytes (block_bytes); the other fields are those of
+// the decoder's page it fills.
+struct GgufTraits {
+    uint32_t format_id;    // the decoder's format number (ckernel::gguf::Format)
+    uint32_t block_elems;  // elements per GGUF block
+    uint32_t block_bytes;  // bytes per GGUF block (expanded layouts: page bytes per block_elems rows of a column)
+    uint32_t group_tiles;  // K tiles per page
+    uint32_t page_tiles;   // K tiles per codes part
+    uint32_t code_bytes;   // bytes per codes part
+    uint32_t scale_rows;   // 64-byte rows of scale fields per page
+    uint32_t fp16_rows;    // the last scale rows: fp16 fields, given fp32 copies in the decoder's L1 page
+    uint32_t code_offset;  // bytes of grid levels before the codes in the decoder's L1 page (codebook formats)
+
+    uint32_t page_height() const { return 32 * group_tiles; }
+    uint32_t page_bytes() const { return 32 * page_height() * block_bytes / block_elems; }
+
+    // Bytes of the decoder's L1 page of page_tiles K tiles (ckernel::gguf::page_layout).
+    uint32_t l1_page_bytes() const;
+};
+
+const GgufTraits& gguf_traits(DataType dtype);
 
 tt::DataFormat datatype_to_dataformat_converter(DataType datatype);
 tt::tt_metal::DataType dataformat_to_datatype_converter(tt::DataFormat dataformat);

@@ -29,6 +29,81 @@ mxint4 = DataType.MXINT4
 mxint2 = DataType.MXINT2
 MX_DTYPES = (mxfp8_e4m3, mxfp8_e5m2, mxfp6_e2m3, mxfp6_e3m2, mxfp4, mxint8, mxint4, mxint2)
 
+# GGUF quantized weights, TILE layout [K, N], made with ttnn.from_gguf.
+gguf_q8_0 = DataType.GGUF_Q8_0
+gguf_q4_0 = DataType.GGUF_Q4_0
+gguf_iq4_nl = DataType.GGUF_IQ4_NL
+gguf_mxfp4 = DataType.GGUF_MXFP4
+gguf_nvfp4 = DataType.GGUF_NVFP4
+gguf_q6_k = DataType.GGUF_Q6_K
+gguf_q4_k = DataType.GGUF_Q4_K
+gguf_q5_k = DataType.GGUF_Q5_K
+gguf_q3_k = DataType.GGUF_Q3_K
+gguf_q2_k = DataType.GGUF_Q2_K
+gguf_iq4_xs = DataType.GGUF_IQ4_XS
+gguf_tq2_0 = DataType.GGUF_TQ2_0
+gguf_q2_0 = DataType.GGUF_Q2_0
+gguf_q1_0 = DataType.GGUF_Q1_0
+gguf_iq2_xxs = DataType.GGUF_IQ2_XXS
+gguf_iq1_s = DataType.GGUF_IQ1_S
+gguf_iq2_s = DataType.GGUF_IQ2_S
+gguf_iq3_s = DataType.GGUF_IQ3_S
+gguf_iq3_xxs = DataType.GGUF_IQ3_XXS
+gguf_iq2_xs = DataType.GGUF_IQ2_XS
+gguf_iq1_m = DataType.GGUF_IQ1_M
+gguf_q4_1 = DataType.GGUF_Q4_1
+gguf_q5_0 = DataType.GGUF_Q5_0
+gguf_q5_1 = DataType.GGUF_Q5_1
+gguf_tq1_0 = DataType.GGUF_TQ1_0
+# Expanded layouts of some GGUF formats: ttnn.from_gguf takes the format's blocks and ttnn.to_gguf returns them, exactly;
+# the pages are larger and the matmul is faster. Opt-in, for when the memory is there.
+gguf_iq2_xxs_expanded = DataType.GGUF_IQ2_XXS_EXPANDED
+gguf_iq1_s_expanded = DataType.GGUF_IQ1_S_EXPANDED
+gguf_iq2_s_expanded = DataType.GGUF_IQ2_S_EXPANDED
+gguf_iq3_s_expanded = DataType.GGUF_IQ3_S_EXPANDED
+gguf_iq3_xxs_expanded = DataType.GGUF_IQ3_XXS_EXPANDED
+gguf_iq2_xs_expanded = DataType.GGUF_IQ2_XS_EXPANDED
+gguf_iq1_m_expanded = DataType.GGUF_IQ1_M_EXPANDED
+gguf_tq1_0_expanded = DataType.GGUF_TQ1_0_EXPANDED
+GGUF_DTYPES = (
+    gguf_q8_0,
+    gguf_q4_0,
+    gguf_iq4_nl,
+    gguf_mxfp4,
+    gguf_nvfp4,
+    gguf_q6_k,
+    gguf_q4_k,
+    gguf_q5_k,
+    gguf_q3_k,
+    gguf_q2_k,
+    gguf_iq4_xs,
+    gguf_tq2_0,
+    gguf_q2_0,
+    gguf_q1_0,
+    gguf_iq2_xxs,
+    gguf_iq1_s,
+    gguf_iq2_s,
+    gguf_iq3_s,
+    gguf_iq3_xxs,
+    gguf_iq2_xs,
+    gguf_iq1_m,
+    gguf_q4_1,
+    gguf_q5_0,
+    gguf_q5_1,
+    gguf_tq1_0,
+)
+# GGUF format -> its expanded layout.
+GGUF_EXPANDED = {
+    gguf_iq2_xxs: gguf_iq2_xxs_expanded,
+    gguf_iq1_s: gguf_iq1_s_expanded,
+    gguf_iq2_s: gguf_iq2_s_expanded,
+    gguf_iq3_s: gguf_iq3_s_expanded,
+    gguf_iq3_xxs: gguf_iq3_xxs_expanded,
+    gguf_iq2_xs: gguf_iq2_xs_expanded,
+    gguf_iq1_m: gguf_iq1_m_expanded,
+    gguf_tq1_0: gguf_tq1_0_expanded,
+}
+
 
 def is_mx_dtype(dtype) -> bool:
     return dtype in MX_DTYPES

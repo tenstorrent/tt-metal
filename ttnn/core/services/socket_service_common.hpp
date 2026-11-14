@@ -52,7 +52,8 @@ inline ttnn::Tensor make_zero_host_tensor(const tt::tt_metal::TensorSpec& spec) 
         case DataType::UINT32:
             return ttnn::Tensor::from_vector<uint32_t>(std::vector<uint32_t>(bytes / sizeof(uint32_t)), spec);
         case DataType::FP8_E4M3: TT_THROW("StreamService: FP8_E4M3 is not supported");
-        case DataType::INVALID: TT_THROW("StreamService: invalid global_spec data type");
+        case DataType::INVALID:
+        default: TT_THROW("StreamService: unsupported global_spec data type {}", spec.data_type());
     }
     TT_THROW("Unreachable");
 }
