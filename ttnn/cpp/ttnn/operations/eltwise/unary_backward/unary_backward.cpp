@@ -971,6 +971,18 @@ std::vector<Tensor> elu_bw(
 // result: torch.where((input > 0), grad, grad * torch.exp(input / alpha))
 std::vector<Tensor> celu_bw(
     const Tensor& grad, const Tensor& input, float alpha, const std::optional<MemoryConfig>& output_mem_config) {
+    // One program whose gradient is the generated SFPU kernel, for the calls it serves at the
+    // fitted scalar values; every other call keeps the composite below.
+    if (generated_bf16_kernel_applies(grad, input, output_mem_config) &&
+        std::bit_cast<uint32_t>(alpha) == 0x3f800000u) {
+        return {ttnn::operations::unary_backward::launch_unary_backward(
+            ttnn::operations::unary_backward::UnaryBackwardOpType::CELU_BW,
+            grad,
+            input,
+            input.dtype(),
+            output_mem_config.value_or(input.memory_config()))};
+    }
+
     std::vector<Tensor> grad_tensor;
     float div_alpha = (1.0 / alpha);
     Tensor div_result = ttnn::multiply(input, div_alpha, std::nullopt, output_mem_config);
