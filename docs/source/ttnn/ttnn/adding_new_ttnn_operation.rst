@@ -341,7 +341,7 @@ Implement the example as a standard ``ttnn`` pytest:
 
     def test_example(device):
         # Create tensor
-        tensor = ttnn.rand((2, 3), ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        tensor = ttnn.rand((2, 3), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
         # Call the new operation
         output_tensor = ttnn.example(tensor)
