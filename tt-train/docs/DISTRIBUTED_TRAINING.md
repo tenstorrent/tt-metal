@@ -405,7 +405,9 @@ The default MGD directory used by the training scripts is:
 $TT_METAL_RUNTIME_ROOT/tt_metal/fabric/mesh_graph_descriptors/
 ```
 
-Common examples include:
+Common examples in that directory include `t3k_mesh_graph_descriptor.textproto` (8-device T3K, 2×4 mesh) and `single_galaxy_mesh_graph_descriptor.textproto` (32-device Galaxy, 8×4 mesh).
+
+The 1D descriptors used by several training examples are in `$TT_METAL_HOME/tests/tt_metal/tt_fabric/custom_mesh_descriptors/`:
 - `galaxy_1x32_mesh_graph_descriptor.textproto` - For 32-device Galaxy setups (1×32 mesh)
 - `t3k_1x8_mesh_graph_descriptor.textproto` - For 8-device T3K setups (1×8 mesh)
 
