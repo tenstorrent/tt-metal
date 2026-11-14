@@ -162,8 +162,11 @@ In `ttt_remote_sync` both ranks run this script. The constructor picks the role:
 
 Rules and limitations of `ttt_remote_sync`:
 
-- **Llama only, no FSDP**, and `model_source` must be a HuggingFace Hub id
-  (rank 0 loads its weights from it, rank 1 its config and tokenizer; a local path raises `ValueError`).
+- **Llama or Qwen3, no FSDP**, and `model_source` must be a HuggingFace Hub id
+  (rank 0 loads its weights from it, rank 1 its tokenizer and its config; a local path raises `ValueError`).
+  Rank 1 uses the config that tt-transformers bundles for the model name, if there is one.
+- **Tested layouts:** one device on each rank (GSM8K, Qwen3) and two devices on each rank (BoolQ, Llama).
+  Other layouts, for example a mixed split or a Qwen3 rank 0 with more than one device, are not tested.
 - **Rank 1 boots with dummy weights**, and rank 0 pushes its weights as
   version 0 before training starts. Rank 1 starts at weight_version -1 and
   refuses to generate until that push arrives. A batch generated before a push carries
@@ -261,7 +264,7 @@ optimizer state end up sharded `1/N` across the FSDP axis.
 
 ### TTTRolloutSampler
 
-Rollout-rank sampler for Llama on tt-transformers
+Rollout-rank sampler for Llama and Qwen3 on tt-transformers
 ([`ttml/trainers/grpo_trainer/remote_rollout/ttt_rollout_sampler.py`](../sources/ttml/ttml/trainers/grpo_trainer/remote_rollout/ttt_rollout_sampler.py)),
 selected with `rollout_backend: "ttt_remote_sync"`. It splits the rollout mesh into `[1, 1]`
 submeshes and runs one data-parallel model per submesh with on-device sampling
@@ -767,15 +770,15 @@ python3 boolq/boolq_training_example.py \
 Remote rollouts (`rollout_backend: "ttt_remote_sync"`): the
 same script on two tt-run ranks, with rank 1 generating through
 `tt-transformers` inside a captured ttnn trace (much faster than ttml decode).
-[`boolq/run_remote_rollout.sh`](../sources/examples/grpo/boolq/run_remote_rollout.sh)
+[`run_remote_rollout.sh`](../sources/examples/grpo/run_remote_rollout.sh)
 launches it with
 [`grpo_boolq_llama_1b_remote_rollout.yaml`](../configs/training_configs/grpo_boolq_llama_1b_remote_rollout.yaml)
-and the rank bindings in `boolq/configurations/`; see
+and the rank bindings in `configurations/`; see
 [Rollout modes](#rollout-modes) and the examples README for adapting it to
 other hardware.
 
 ```bash
-./tt-train/sources/examples/grpo/boolq/run_remote_rollout.sh
+./tt-train/sources/examples/grpo/run_remote_rollout.sh --example boolq
 ```
 
 ### BoolQ Accuracy Evaluation
@@ -802,6 +805,18 @@ greedy eval on a held-out split every step.
 
 ```bash
 python3 reverse_text/reverse_text_training_example.py
+```
+
+### GSM8K Training
+
+[`gsm8k/gsm8k_training_example.py`](../sources/examples/grpo/gsm8k/gsm8k_training_example.py) —
+trains a think-tagged Qwen3-0.6B SFT checkpoint on GSM8K math problems with
+remote rollouts (`rollout_backend: "ttt_remote_sync"`, 1 TTML chip + 1 TTT
+chip), rewarding the correct answer and the `<think>`/`<answer>` format. See the
+[examples README](../sources/examples/grpo/README.md#gsm8k-qwen3-06b-remote-rollouts).
+
+```bash
+./tt-train/sources/examples/grpo/run_remote_rollout.sh --example gsm8k
 ```
 
 ### Plotting

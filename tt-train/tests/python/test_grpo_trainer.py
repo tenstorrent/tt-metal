@@ -824,7 +824,7 @@ def _run_train_loop_on_host(monkeypatch, num_batches=1):
         self._num_generation_batches = num_batches
         self.rollout_batch_source = _Source()
 
-    monkeypatch.setattr(grpo_trainer_module, "init_distributed_training", lambda config: None)
+    monkeypatch.setattr(grpo_trainer_module, "init_distributed_training", lambda config, device_config: None)
     monkeypatch.setattr(grpo_trainer_module, "is_rollout_rank", lambda config: False)
     monkeypatch.setattr(GRPOTrainer, "_build_policy", fake_build_policy)
     monkeypatch.setattr(
@@ -1147,7 +1147,7 @@ def _trainer_with_remote_rollout(monkeypatch, client, reward_funcs, callbacks=()
             weight_sync_every=1,
         )
 
-    monkeypatch.setattr(grpo_trainer_module, "init_distributed_training", lambda config: None)
+    monkeypatch.setattr(grpo_trainer_module, "init_distributed_training", lambda config, device_config: None)
     monkeypatch.setattr(grpo_trainer_module, "is_rollout_rank", lambda config: False)
     monkeypatch.setattr(GRPOTrainer, "_build_policy", build_policy)
     monkeypatch.setattr(sync_remote_rollout_batch_source, "weights_ref_hf_dict", lambda model: {})
@@ -1191,7 +1191,7 @@ def test_failed_trainer_shuts_down_the_rollout_server(
 @pytest.mark.parametrize(
     "model_type, enable_fsdp, local_source, message",
     [
-        ("qwen3", False, False, "supports Llama models only"),
+        ("mistral", False, False, "supports Llama and Qwen3 models only"),
         ("llama", True, False, "does not support FSDP"),
         ("llama", False, True, "needs a HuggingFace Hub model id"),
     ],
@@ -1204,6 +1204,44 @@ def test_validate_remote_inputs_rejects(tmp_path, expect_error, model_type, enab
             SimpleNamespace(enable_fsdp=enable_fsdp),
             str(tmp_path) if local_source else HF_MODEL_ID,
         )
+
+
+def test_register_hub_config_downloads_only_unregistered_names(monkeypatch, tmp_path):
+    from ttml.trainers.grpo_trainer.remote_rollout import ttt_rollout_sampler
+
+    downloads = []
+    monkeypatch.setattr(ttt_rollout_sampler.ModelArgs, "LOCAL_HF_PARAMS", {"Llama-3.2-1B-Instruct": "registered"})
+    monkeypatch.setattr(ttt_rollout_sampler, "snapshot_download", lambda **kw: downloads.append(kw) or str(tmp_path))
+
+    ttt_rollout_sampler._register_hub_config("unsloth/Llama-3.2-1B-Instruct")
+    ttt_rollout_sampler._register_hub_config("Qwen/Qwen3-0.6B")
+
+    assert downloads == [{"repo_id": "Qwen/Qwen3-0.6B", "allow_patterns": ["config.json"]}]
+    assert ttt_rollout_sampler.ModelArgs.LOCAL_HF_PARAMS == {
+        "Llama-3.2-1B-Instruct": "registered",
+        "Qwen3-0.6B": str(tmp_path),
+    }
+
+
+@pytest.mark.parametrize("rollout_mesh", [[1, 1], [1, 2]])
+@pytest.mark.parametrize("trainer_mesh", [[1, 1], [1, 2]])
+@pytest.mark.parametrize("rank", [0, 1])
+def test_init_distributed_training_sets_fabric_on_multi_device_ranks(monkeypatch, rank, trainer_mesh, rollout_mesh):
+    """Only a rank whose own mesh has more than one device enables fabric."""
+    from ttml.trainers.grpo_trainer import distributed
+
+    calls = []
+    monkeypatch.setattr(ttnn, "distributed_context_is_initialized", lambda: True)
+    monkeypatch.setattr(ttnn, "distributed_context_get_size", lambda: 2)
+    monkeypatch.setattr(ttnn, "distributed_context_get_rank", lambda: rank)
+    monkeypatch.setattr(ttnn, "set_fabric_config", calls.append)
+    config = _remote_grpo_config()
+    config.remote_rollout.mesh_shape = rollout_mesh
+
+    distributed.init_distributed_training(config, SimpleNamespace(total_devices=lambda: trainer_mesh[1]))
+
+    own_mesh = rollout_mesh if rank == distributed.TTT_RANK else trainer_mesh
+    assert calls == ([ttnn.FabricConfig.FABRIC_2D] if own_mesh[1] > 1 else [])
 
 
 class _RepeatSampler(_EchoSampler):
