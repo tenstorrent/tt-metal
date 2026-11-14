@@ -35,6 +35,7 @@ target_sources(
             attention_softmax/attention_softmax.hpp
             concatenate_heads/concatenate_heads.hpp
             sdpa/sdpa.hpp
+            sdpa/sparse_ring_sdpa.hpp
             sdpa/sparse_sdpa.hpp
             sdpa/sparse_sdpa_msa.hpp
             sdpa_decode/sdpa_decode.hpp

@@ -17,6 +17,7 @@
 #include "sdpa.hpp"
 #include "sparse_sdpa.hpp"
 #include "sparse_sdpa_msa.hpp"
+#include "sparse_ring_sdpa.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -165,6 +166,59 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla_wrapper(
         kv_cache_num_layers,
         kv_cache_layer_idx,
         kv_valid_end_tensor);
+}
+
+ttnn::Tensor sparse_ring_sdpa_wrapper(
+    const ttnn::Tensor& input_tensor_q,
+    const ttnn::Tensor& input_tensor_k,
+    const ttnn::Tensor& input_tensor_v,
+    const ttnn::Tensor& block_mask,
+    const std::optional<ttnn::Tensor>& pooled_k,
+    const std::optional<ttnn::Tensor>& pooled_v,
+    ttnn::Tensor& persistent_output_buffer_k,
+    ttnn::Tensor& persistent_output_buffer_v,
+    std::size_t logical_n,
+    const SDPAProgramConfig& program_config,
+    std::optional<float> scale,
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    int32_t dim,
+    const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
+    uint32_t num_links,
+    uint32_t cluster_axis,
+    const MeshDevice& mesh_device,
+    ttnn::ccl::Topology topology,
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
+    CoreCoord ccl_core_grid_offset,
+    bool use_column_major_ccl,
+    uint32_t block_size,
+    std::optional<uint32_t> q_blocks_per_pass,
+    const std::optional<ttnn::Tensor>& block_counts) {
+    return ttnn::transformer::sparse_ring_sdpa(
+        input_tensor_q,
+        input_tensor_k,
+        input_tensor_v,
+        block_mask,
+        pooled_k,
+        pooled_v,
+        persistent_output_buffer_k,
+        persistent_output_buffer_v,
+        logical_n,
+        program_config,
+        dim,
+        multi_device_global_semaphore,
+        num_links,
+        cluster_axis,
+        mesh_device,
+        topology,
+        subdevice_id,
+        ccl_core_grid_offset,
+        scale,
+        compute_kernel_config,
+        use_column_major_ccl ? ttnn::ccl::CoreAllocationStrategy::COL_MAJOR
+                             : ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR,
+        block_size,
+        q_blocks_per_pass,
+        block_counts);
 }
 
 std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> exp_ring_joint_scaled_dot_product_attention_wrapper(
@@ -815,6 +869,93 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("kv_cache_layer_idx").noconvert() = nb::none(),
         nb::arg("kv_valid_end_tensor").noconvert() = nb::none(),
         nb::arg("dynamic_local_n") = false);
+
+    ttnn::bind_function<"sparse_ring_sdpa", "ttnn.transformer.">(
+        mod,
+        R"doc(
+        Block-sparse ring attention with the ring all-gather of K/V fused, non-causal, no joint tokens, batch 1.
+
+        Blocks are square, block_size (B) tokens. Per head and local B-row Q block, `block_mask` names the global
+        B-token K/V blocks computed exactly, and nothing else is added to it. A Q block whose softmax has no entry at
+        all (no kept block, and no pooled entry in kept-only mode) outputs zeros. Two modes:
+
+        - Sol-Attn: pass pooled_k and pooled_v. Every other block enters the same softmax through one pooled entry:
+          score q * mean(k), value mean(v), weighted by the block's token count. The pooled-entry column bias is
+          generated on device.
+        - Kept blocks only (e.g. the VSA fine branch): omit pooled_k and pooled_v. The softmax normalizes over the
+          kept blocks.
+
+        The op balances the work of each mask by itself, on device, every call (so under traces too): each head's Q
+        blocks are dealt over its cores by cost (kept blocks plus a fixed amount, more on the pooled route) when the
+        even split is clearly uneven, and with a 1D fabric whole Q blocks (all heads) are swapped between devices whose
+        loads differ.
+
+        Args:
+            input_tensor_q (ttnn.Tensor): [1, H, N/ring_size, D] TILE, sequence-sharded on cluster_axis; bf16,
+                bfloat8_b or bfloat4_b: k, v and the pooled tensors share one dtype; q has it or is bf16.
+            input_tensor_k (ttnn.Tensor): [1, H, N/ring_size, D] TILE, all-gather input.
+            input_tensor_v (ttnn.Tensor): [1, H, N/ring_size, D] TILE, all-gather input.
+            block_mask (ttnn.Tensor): [1, H, nqb_pad, ring_size * nb_pad] uint32 ROW_MAJOR. Entry
+                [0, h, qb, s * nb_pad + b] != 0 computes block b of shard s exactly for local Q block qb.
+            pooled_k (ttnn.Tensor, optional): [1, H, ring_size * nb_pad, D] TILE in k's dtype, mean K per block
+                (zero padding). Omit together with pooled_v for kept-blocks-only attention.
+            pooled_v (ttnn.Tensor, optional): [1, H, ring_size * nb_pad, D] TILE in k's dtype, mean V per block.
+
+        Keyword args:
+            persistent_output_buffer_k (ttnn.Tensor): gathered K buffer.
+            persistent_output_buffer_v (ttnn.Tensor): gathered V buffer.
+            logical_n (int): logical (unpadded) global sequence length.
+            program_config (ttnn.SDPAProgramConfig): q_chunk_size must equal block_size; k_chunk_size sets the K/V
+                piece size and must be a multiple of block_size.
+            scale (float, optional): defaults to D to the power of -0.5.
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional).
+            dim (int): all-gather dimension; must be the sequence dimension (2 or -2).
+            multi_device_global_semaphore (List[ttnn.GlobalSemaphore]): all-gather semaphores.
+            num_links (int), cluster_axis (int), mesh_device (ttnn.MeshDevice), topology (ttnn.Topology),
+            subdevice_id (optional), ccl_core_grid_offset (ttnn.CoreCoord), use_column_major_ccl (bool):
+                as ring_joint_scaled_dot_product_attention.
+            block_size (int): mask block size in tokens (square blocks). Only 64 is supported.
+                nb_pad = round_up(ceil(N/ring_size / block_size), 32). Defaults to 64.
+            q_blocks_per_pass (int, optional): at most this many Q blocks per core per pass (1 to 32). Every core
+                keeps its Q blocks and their softmax state in L1; when they do not fit, each core's blocks are split
+                into the same number of passes and each pass replays the ring over the K/V gathered once. Defaults
+                to None: the most blocks whose buffers fit L1. The pass count may not exceed the smallest number of
+                blocks a working core holds.
+            block_counts (ttnn.Tensor, optional): [1, 1, 1, ring_size * nb_pad] uint32 ROW_MAJOR, replicated: the
+                real tokens of each global block (0 to block_size, real tokens first), for padding inside the
+                sequence (e.g. VSA's ragged 4x4x4 tiles). Tokens past a block's count are never attended; a block of
+                count 0 is never computed or pooled. Defaults to None: full blocks except the shard and logical_n
+                tails.
+
+        Returns:
+            ttnn.Tensor: [1, H, N/ring_size, D], same layout as input_tensor_q.
+        )doc",
+        &sparse_ring_sdpa_wrapper,
+        nb::arg("input_tensor_q").noconvert(),
+        nb::arg("input_tensor_k").noconvert(),
+        nb::arg("input_tensor_v").noconvert(),
+        nb::arg("block_mask").noconvert(),
+        nb::arg("pooled_k").noconvert() = nb::none(),
+        nb::arg("pooled_v").noconvert() = nb::none(),
+        nb::kw_only(),
+        nb::arg("persistent_output_buffer_k").noconvert(),
+        nb::arg("persistent_output_buffer_v").noconvert(),
+        nb::arg("logical_n"),
+        nb::arg("program_config").noconvert(),
+        nb::arg("scale") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("dim"),
+        nb::arg("multi_device_global_semaphore"),
+        nb::arg("num_links"),
+        nb::arg("cluster_axis"),
+        nb::arg("mesh_device"),
+        nb::arg("topology"),
+        nb::arg("subdevice_id") = nb::none(),
+        nb::arg("ccl_core_grid_offset"),
+        nb::arg("use_column_major_ccl") = false,
+        nb::arg("block_size") = 64,
+        nb::arg("q_blocks_per_pass") = nb::none(),
+        nb::arg("block_counts").noconvert() = nb::none());
 
     const auto* const ring_mla_doc = R"doc(
         Causal Ring MLA attention over a single KV tensor.
