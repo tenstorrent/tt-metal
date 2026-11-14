@@ -249,9 +249,10 @@ def sync_gradients(
     (e.g. ``lora_A`` in ``LoraColumnParallelLinear``). Nothing enforces this;
     see #63970 for a known violation.
 
-    FSDP interaction: parameters sharded by ``ttml.fsdp.fully_shard`` on a
-    mesh axis listed in ``axis_names`` are skipped for that axis — the FSDP
-    backward hook already reduce-scattered the grad into shard shape.
+    The sum is ``ttml.core.distributed.synchronize_gradients`` along the listed
+    axes, which skips, for each parameter, any axis its value is sharded on.
+    That covers ``ttml.fsdp.fully_shard``: its backward hook reduce-scatters the
+    grad into shard shape and reinstalls the Shard-labelled shard as the value.
 
     Args:
         parameters: A ``NamedParameters`` mapping (e.g. ``model.parameters()``).
@@ -268,35 +269,14 @@ def sync_gradients(
         return
 
     # An axis of one device has nothing to average over.
-    axes = tuple(m.axis_index(name) for name in axis_names if m.has_axis(name))
-    axes = tuple(a for a in axes if m.shape[a] > 1)
+    axes = [m.axis_index(name) for name in axis_names if m.has_axis(name)]
+    axes = [a for a in axes if m.shape[a] > 1]
     if not axes:
         return
-    if reduce_dtype is None:
-        reduce_dtype = ttml.autograd.AutoContext.get_instance().get_gradient_reduce_dtype()
-
-    for _, param in parameters.items():
-        if not param.is_grad_initialized():
-            continue
-
-        # Drop axes on which this particular parameter is FSDP-sharded
-        axes_for_param = tuple(a for a in axes if not _param_is_fsdp_sharded(param, a))
-        if not axes_for_param:
-            continue
-
-        param.set_grad(
-            ttml.core.distributed.synchronize_tensor(param.get_grad(), axes_for_param, reduce_dtype=reduce_dtype)
-        )
+    ttml.core.distributed.synchronize_gradients(parameters, axes, reduce_dtype=reduce_dtype)
 
 
 def _check_reduce_dtype(reduce_dtype) -> None:
     """Raise unless ``reduce_dtype`` is ``None``, ``ttnn.DataType.BFLOAT16`` or ``ttnn.DataType.FLOAT32``."""
     if reduce_dtype not in (None, ttnn.DataType.BFLOAT16, ttnn.DataType.FLOAT32):
         raise ValueError(f"reduce_dtype must be None, BFLOAT16 or FLOAT32, got {reduce_dtype}")
-
-
-def _param_is_fsdp_sharded(param, axis_index: int) -> bool:
-    """True if ``param`` is FSDP-sharded on the given mesh axis."""
-    if getattr(param, "_fsdp_managed", False) and getattr(param, "_fsdp_axis", None) == axis_index:
-        return True
-    return False

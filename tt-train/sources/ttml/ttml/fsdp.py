@@ -28,8 +28,9 @@ Hybrid FSDP + DDP (HSDP) on a 2D mesh ``[D, F]`` with axes
     # DDP-replicated shards across the "dp" axis; FSDP-sharded params are
     # skipped on the "fsdp" axis (already reduce-scattered in backward-post)
     # but still reduced on the "dp" axis to average across DP replicas.
-    # The per-param axis filter in ttml.sync_gradients is what makes the
-    # same single call cover pure DDP, pure FSDP, and HSDP.
+    # ttml.sync_gradients skips, per parameter, any axis its value is
+    # sharded on (backward-post reinstalls the Shard-labelled shard), which
+    # is what makes the same single call cover pure DDP, pure FSDP, and HSDP.
 
 Contract:
     * Call ``fully_shard`` BEFORE ``create_optimizer`` so optimizer state
@@ -871,9 +872,9 @@ def _mark_fsdp_managed(parameter: Parameter, shard_dim: int, axis_index: int) ->
 
     The wrapper-side marker is used by ``fully_shard``'s own dedup (so a
     second pass can skip already-managed wrappers, e.g. tied weights). The
-    tensor-side marker is what downstream infra — ``ttml.sync_gradients``,
-    the Muon guard, ``ttml.fsdp.is_fsdp_managed`` — looks at, since it
-    iterates ``model.parameters()`` (autograd tensors).
+    tensor-side marker is what downstream infra — the Muon guard,
+    ``ttml.fsdp.is_fsdp_managed`` — looks at, since it iterates
+    ``model.parameters()`` (autograd tensors).
 
     For eager wraps the autograd tensor exists already and the mirror runs
     immediately. For lazy wraps the tensor doesn't exist yet, so the mirror
