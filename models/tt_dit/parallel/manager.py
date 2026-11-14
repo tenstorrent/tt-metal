@@ -425,9 +425,29 @@ class CCLManager:
         self._ping_pong_buffer_cache.clear()
         self._ping_pong_buffer_indices.clear()
         self._fused_norm_stats_buffer_cache.clear()
-        self.reset_global_semaphores()
+        self.reset_global_semaphores(all_pools=True)
+        self._reset_ping_pong_indices()
         ttnn.synchronize_device(self.mesh_device)
         return len(entries), nbytes
+
+    def _reset_ping_pong_indices(self):
+        """Put every host-side ping-pong index back to where a new manager starts it, so the
+        next capture pairs each op with the same semaphore and buffer halves a fresh process
+        would (the semaphores themselves were just zeroed)."""
+        for name in (
+            "rs_ping_pong_idx",
+            "rs_ping_pong_idx_fused",
+            "ag_ping_pong_idx",
+            "exp_ring_ping_pong_idx",
+            "np_ping_pong_idx",
+            "np_fused_ping_pong_idx",
+            "sr_ping_pong_idx",
+            "barrier_idx",
+            "barrier_fused_idx",
+        ):
+            setattr(self, name, [0, 0])
+        for key in self._strided_ag_mm_sem_idx:
+            self._strided_ag_mm_sem_idx[key] = 0
 
     def get_rs_ping_pong_semaphore(self, mesh_axis):
         """
@@ -969,8 +989,24 @@ class CCLManager:
             logical_w=logical_w,
         )
 
-    def reset_global_semaphores(self):
-        """Reset all global semaphores to 0"""
+    def reset_global_semaphores(self, all_pools: bool = False):
+        """Reset the global semaphores to 0. all_pools also zeroes the fused reduce-scatter,
+        exp-ring, barrier and strided all-gather-matmul pools, which a shape reset must clear
+        too: left with a previous shape's counts they no longer match what the next capture
+        expects (a 10 s render after a 6 s -> 10 s reset hung on the device, task #3986 leg d1)."""
+        if all_pools:
+            for pool in (
+                self.rs_ping_pong_semaphores_fused,
+                self.exp_ring_ping_pong_semaphores,
+                self.barrier_semaphores,
+            ):
+                for axis in (0, 1):
+                    for sem in pool[axis]:
+                        ttnn.reset_global_semaphore_value(sem, 0)
+            for halves in self._strided_ag_mm_sem_cache.values():
+                for sems in halves:
+                    for sem in sems:
+                        ttnn.reset_global_semaphore_value(sem, 0)
         for axis in [0, 1]:
             for sem in self.np_ping_pong_semaphores[axis]:
                 ttnn.reset_global_semaphore_value(sem, 0)

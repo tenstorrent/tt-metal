@@ -77,24 +77,75 @@ def _view(allocated, free, largest, size, banks=2):
     )
 
 
+class FakeSemTTNN:
+    def __init__(self):
+        self.zeroed = []
+
+    def reset_global_semaphore_value(self, sem, value):
+        self.zeroed.append((sem, value))
+
+
+class CCLManagerSemaphoreReset(unittest.TestCase):
+    def test_all_pools_zeroes_every_pool_and_default_keeps_the_old_set(self):
+        ttnn = FakeSemTTNN()
+        ns = _lift("parallel/manager.py", ["reset_global_semaphores"], {"ttnn": ttnn}, cls="CCLManager")
+        pool = lambda tag: {a: [f"{tag}{a}{i}" for i in range(2)] for a in (0, 1)}  # noqa: E731
+        m = SimpleNamespace(
+            **{
+                f"{k}_semaphores": pool(k)
+                for k in ("np_ping_pong", "sr_ping_pong", "rs_ping_pong", "ag_ping_pong", "exp_ring_ping_pong", "barrier")
+            },
+            rs_ping_pong_semaphores_fused=pool("rsf"),
+            np_fused_ping_pong_semaphores=None,
+            barrier_fused_semaphores=pool("bf"),
+            np_region_progress_semaphores=None,
+            _strided_ag_mm_sem_cache={(0, 2): [["s0a", "s0b"], ["s1a"]]},
+        )
+        reset = ns["reset_global_semaphores"].__get__(m)
+        reset()
+        base = {s for s, _ in ttnn.zeroed}
+        self.assertFalse(any(s.startswith(("exp", "barrier", "rsf", "s0", "s1")) for s in base))
+        ttnn.zeroed.clear()
+        reset(all_pools=True)
+        every = {s for s, v in ttnn.zeroed if v == 0}
+        expect = {s for p in vars(m).values() if isinstance(p, dict) and 0 in p for a in (0, 1) for s in p[a]}
+        expect |= {"s0a", "s0b", "s1a"}
+        self.assertEqual(every, expect)
+
+
 class CCLManagerRelease(unittest.TestCase):
     def manager(self, ttnn):
         ns = _lift(
             "parallel/manager.py",
-            ["_cached_buffer_entries", "cached_buffer_bytes", "release_shape_buffers"],
+            ["_cached_buffer_entries", "cached_buffer_bytes", "release_shape_buffers", "_reset_ping_pong_indices"],
             {"ttnn": ttnn},
             cls="CCLManager",
         )
         resets = []
-        m = SimpleNamespace(mesh_device="mesh", reset_global_semaphores=lambda: resets.append(1))
-        for k in ("_cached_buffer_entries", "cached_buffer_bytes", "release_shape_buffers"):
+        m = SimpleNamespace(mesh_device="mesh", reset_global_semaphores=lambda **kw: resets.append(kw))
+        for k in ("_cached_buffer_entries", "cached_buffer_bytes", "release_shape_buffers", "_reset_ping_pong_indices"):
             setattr(m, k, ns[k].__get__(m))
         rs = [[FakeTensor(10, 1), FakeTensor(5, 2)], [FakeTensor(10, 3), None]]
         ag = [FakeTensor(7, 4), FakeTensor(7, 5)]
         m._ping_pong_buffer_cache = {((1, 2), 3, 0): rs, ("ag", (4,), 0, 1, "bf16"): ag}
         m._ping_pong_buffer_indices = {((1, 2), 3, 0): 1, ("ag", (4,), 0, 1, "bf16"): 0}
         m._fused_norm_stats_buffer_cache = {"k": {"bufs": [FakeTensor(3, 6), FakeTensor(3, 7)], "idx": 1}}
+        for name in self.IDX:
+            setattr(m, name, [1, 1])
+        m._strided_ag_mm_sem_idx = {(0, 2): 1, (1, 2): 1}
         return m, resets
+
+    IDX = (
+        "rs_ping_pong_idx",
+        "rs_ping_pong_idx_fused",
+        "ag_ping_pong_idx",
+        "exp_ring_ping_pong_idx",
+        "np_ping_pong_idx",
+        "np_fused_ping_pong_idx",
+        "sr_ping_pong_idx",
+        "barrier_idx",
+        "barrier_fused_idx",
+    )
 
     def test_frees_every_cached_tensor_once_and_resets_semaphores(self):
         ttnn = FakeTTNN()
@@ -105,7 +156,10 @@ class CCLManagerRelease(unittest.TestCase):
         self.assertEqual(sorted(freed), [1, 2, 3, 4, 5, 6, 7])
         self.assertEqual(ttnn.log[0], ("sync",))  # nothing freed while a collective may still read it
         self.assertEqual(ttnn.log[-1], ("sync",))
-        self.assertEqual(resets, [1])
+        self.assertEqual(resets, [{"all_pools": True}])
+        # Host indices back where a new manager starts them, matching the zeroed semaphores.
+        self.assertEqual({n: getattr(m, n) for n in self.IDX}, {n: [0, 0] for n in self.IDX})
+        self.assertEqual(m._strided_ag_mm_sem_idx, {(0, 2): 0, (1, 2): 0})
         caches = (m._ping_pong_buffer_cache, m._ping_pong_buffer_indices, m._fused_norm_stats_buffer_cache)
         self.assertEqual(caches, ({}, {}, {}))
 
