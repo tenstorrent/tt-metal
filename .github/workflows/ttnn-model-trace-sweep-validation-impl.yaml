@@ -68,6 +68,14 @@ jobs:
     runs-on: ubuntu-latest
     env:
       PYTHONPATH: ${{ github.workspace }}
+      # Reconstruct reads the ttnn-ops dataset from Snowflake (SELF_SERVE.TTNN_OPS_V6)
+      # via the SVC_TTOPS_SWEEPS service account (RSA keypair). Only the private key
+      # is a secret (repo secret SWEEPS_SNOWFLAKE_KEY); the rest is non-sensitive config.
+      SNOWFLAKE_ACCOUNT: TLUIIGS-MN66866
+      SNOWFLAKE_USER: SVC_TTOPS_SWEEPS
+      SNOWFLAKE_ROLE: SELF_SERVE_READER_TTNN_OPS_V6
+      SNOWFLAKE_WAREHOUSE: PUBLIC
+      SNOWFLAKE_DATABASE: SELF_SERVE
     outputs:
       master-json-artifact-name: ${{ steps.set-artifact-names.outputs.master-json-artifact-name }}
       preflight-artifact-name: ${{ steps.set-artifact-names.outputs.preflight-artifact-name }}
@@ -113,7 +121,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install pyyaml psycopg2-binary tqdm
+          pip install pyyaml tqdm snowflake-connector-python cryptography
 
       - name: Set artifact names
         id: set-artifact-names
@@ -121,10 +129,12 @@ jobs:
           echo "master-json-artifact-name=ttnn-operations-master-json" >> "$GITHUB_OUTPUT"
           echo "preflight-artifact-name=validation-preflight" >> "$GITHUB_OUTPUT"
 
+      # The service-account key is scoped to only the steps that read Snowflake
+      # (not the dependency-install step, which runs third-party package code).
       - name: Reconstruct master JSON from manifest
         if: ${{ inputs.pinned-trace-id == '' }}
         env:
-          TTNN_OPS_DATABASE_URL: ${{ secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL }}
+          SNOWFLAKE_PRIVATE_KEY: ${{ secrets.SWEEPS_SNOWFLAKE_KEY }}
           MANIFEST_PATH: ${{ inputs.manifest-path }}
           MODELS_FILTER: ${{ inputs.models-filter }}
           SCOPE_TARGET: ${{ inputs.scope-targets }}
@@ -155,7 +165,7 @@ jobs:
       - name: Reconstruct master JSON from pinned trace
         if: ${{ inputs.pinned-trace-id != '' }}
         env:
-          TTNN_OPS_DATABASE_URL: ${{ secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL }}
+          SNOWFLAKE_PRIVATE_KEY: ${{ secrets.SWEEPS_SNOWFLAKE_KEY }}
           PINNED_TRACE_ID: ${{ inputs.pinned-trace-id }}
         run: |
           mkdir -p model_tracer/traced_operations
