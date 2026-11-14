@@ -221,6 +221,10 @@ inline __attribute__((always_inline)) bool bufferHasRoom(uint32_t additional_slo
 
 #if defined(ARCH_QUASAR)
 inline __attribute__((always_inline)) uint64_t quasar_read_wall_clock_64() {
+#if defined(COMPILE_FOR_DISPATCH_ENGINE)
+    // Dispatch engines don't have Neos, so they can't read a Neo wall clock.
+    return get_timestamp();
+#else
 #if defined(COMPILE_FOR_TRISC)
     // The wall clock counter is per-Neo. Empirically the four Neo wall clocks are synchronized and
     // cycle-aligned, so a TRISC reading its own Neo's clock stays on the same timeline as the others.
@@ -237,6 +241,7 @@ inline __attribute__((always_inline)) uint64_t quasar_read_wall_clock_64() {
     uint32_t time_low = *reinterpret_cast<volatile tt_reg_ptr uint32_t*>(wall_clock_0_addr);
     uint32_t time_high = *reinterpret_cast<volatile tt_reg_ptr uint32_t*>(wall_clock_1_at_addr);
     return (static_cast<uint64_t>(time_high) << 32) | time_low;
+#endif
 }
 #endif
 

@@ -337,9 +337,9 @@ def test_full_buffer():
             120 * OP_COUNT * RISC_COUNT * ZONE_COUNT,
             110 * OP_COUNT * RISC_COUNT * ZONE_COUNT,
         ],
-        # Note: using emu-quasar-2x3_DISPATCH for both dispatch modes
         "quasar": [
-            2 * QUASAR_OP_COUNT * QUASAR_RISC_COUNT * QUASAR_ZONE_COUNT,
+            2 * QUASAR_OP_COUNT * QUASAR_RISC_COUNT * QUASAR_ZONE_COUNT,  # emu-quasar-2x3_DISPATCH
+            4 * QUASAR_OP_COUNT * QUASAR_RISC_COUNT * QUASAR_ZONE_COUNT,  # emu-trinity
         ],
     }
     TEST_BIN_DICT = {
