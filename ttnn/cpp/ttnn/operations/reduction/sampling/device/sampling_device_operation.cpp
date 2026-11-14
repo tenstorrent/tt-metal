@@ -122,6 +122,11 @@ void SamplingDeviceOperation::validate_on_program_cache_miss(
             preallocated_output_tensor.value().memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
             "Only INTERLEAVED memory layout is supported for outputs!");
 
+        TT_FATAL(
+            preallocated_output_tensor.value().layout() == Layout::ROW_MAJOR,
+            "Only ROW_MAJOR layout is supported for outputs, got: {}!",
+            preallocated_output_tensor.value().layout());
+
         const auto& sampling_pre_out = preallocated_output_tensor.value();
         const auto& sampling_pre_out_shape = sampling_pre_out.logical_shape();
         TT_FATAL(

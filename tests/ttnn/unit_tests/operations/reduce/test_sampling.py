@@ -328,3 +328,56 @@ def test_sampling_subcores_callback(shape, k, p, seed, k_dtype, device, sub_core
 
     logger.info(f"cache_entries_counter.total={device.cache_entries_counter.total}")
     assert device.cache_entries_counter.total > 0
+
+
+def test_sampling_preallocated_output_layout(device, expect_error):
+    """A ROW_MAJOR preallocated output is exact with k=1 (greedy); a TILE one must be rejected.
+
+    sampling writes one 4-byte index per user contiguously in page 0, so a TILE output used to
+    read back as scrambled indices. The layout is now checked next to the output dtype and
+    INTERLEAVED checks.
+    """
+    if not (is_wormhole_b0() or is_blackhole()):
+        pytest.skip("UINT32 dtype is only supported on Wormhole/Blackhole")
+
+    num_users, vocab = 32, 64
+    torch.manual_seed(7)
+    values = torch.zeros(num_users, vocab)
+    argpos = [(2 * user) % vocab for user in range(num_users)]
+    for user, pos in enumerate(argpos):
+        values[user, pos] = 10.0
+    torch_values = values.reshape(1, 1, num_users, vocab).bfloat16()
+    torch_indices = (
+        torch.arange(vocab, dtype=torch.int32).reshape(1, 1, 1, vocab).repeat(1, 1, num_users, 1).contiguous()
+    )
+
+    input_values = ttnn.from_torch(torch_values, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    input_indices = ttnn.from_torch(torch_indices, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    k = ttnn.from_torch(
+        torch.full((num_users,), 1, dtype=torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    p = ttnn.from_torch(
+        torch.full((num_users,), 1.0, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+    temp = ttnn.from_torch(
+        torch.ones(num_users, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+
+    out = ttnn.from_torch(
+        torch.zeros(1, 1, 1, num_users, dtype=torch.int32),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+    ttnn.sampling(input_values, input_indices, k=k, p=p, temp=temp, output_tensor=out)
+    got = ttnn.to_torch(out).to(torch.int64).flatten()
+    assert torch.equal(got, torch.tensor(argpos, dtype=torch.int64)), "ROW_MAJOR preallocated output must stay exact"
+
+    tile_out = ttnn.from_torch(
+        torch.zeros(1, 1, 1, num_users, dtype=torch.int32), dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    with expect_error(RuntimeError, "Only ROW_MAJOR layout is supported for outputs"):
+        ttnn.sampling(input_values, input_indices, k=k, p=p, temp=temp, output_tensor=tile_out)
