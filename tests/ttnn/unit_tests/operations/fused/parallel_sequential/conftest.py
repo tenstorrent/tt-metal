@@ -10,6 +10,7 @@ import ttnn
 _FUSION_FACTORIES = (
     ttnn.LayerNormMultiCoreProgramFactory,
     ttnn.LayerNormShardedProgramFactory,
+    ttnn.LayerNormWidthSplitProgramFactory,
     ttnn.SliceTileProgramFactory,
 )
 
