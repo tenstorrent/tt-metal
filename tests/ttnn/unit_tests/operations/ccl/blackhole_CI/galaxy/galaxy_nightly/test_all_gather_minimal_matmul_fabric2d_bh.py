@@ -39,16 +39,18 @@ def _run(
     N_block,
     subblock_h,
     subblock_w,
+    rows_per_call=None,
 ):
+    """Runs the calls (rows per device of each in rows_per_call) and returns how many programs they added."""
+    rows_per_call = rows_per_call or [rows_per_device] * NUM_CALLS
     other_axis = 1 - gather_axis
     ring, others = mesh_device.shape[gather_axis], mesh_device.shape[other_axis]
     full_grid = mesh_device.compute_with_storage_grid_size()
     grid = ttnn.CoreCoord(full_grid.x - 1, full_grid.y)
     assert grid.y % NUM_LINKS == 0
 
-    rows = others * rows_per_device
     torch.manual_seed(0)
-    torch_inputs = [torch.randn(rows, K) for _ in range(NUM_CALLS)]
+    torch_inputs = [torch.randn(others * rows, K) for rows in rows_per_call]
     torch_weight = torch.randn(K, ring * n_per_device)
 
     def dims(row_dim, gather_dim):
@@ -80,7 +82,7 @@ def _run(
 
     matmul_cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
     gathered = ttnn.allocate_tensor_on_device(
-        ttnn.Shape([rows_per_device, K]), ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh_device, ttnn.DRAM_MEMORY_CONFIG
+        ttnn.Shape([max(rows_per_call), K]), ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh_device, ttnn.DRAM_MEMORY_CONFIG
     )
     counters = [ttnn.create_global_semaphore(mesh_device, matmul_cores, 0) for _ in range(2)]
     barrier = ttnn.create_global_semaphore(mesh_device, matmul_cores, 0)
@@ -102,6 +104,7 @@ def _run(
     )
 
     # Back to back, no synchronisation in between.
+    programs_before = mesh_device.num_program_cache_entries()
     outputs = [
         ttnn.experimental.all_gather_minimal_matmul_async(
             input_tensor=tt_input,
@@ -127,16 +130,17 @@ def _run(
         ttnn.from_torch(torch_weight, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT), dtype=torch.float32
     )
     composer = ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=shape, dims=dims(0, 1))
-    for call, (torch_input, tt_output) in enumerate(zip(torch_inputs, outputs)):
+    for call, (rows, torch_input, tt_output) in enumerate(zip(rows_per_call, torch_inputs, outputs)):
         expected = torch_input.to(torch.bfloat16).float() @ device_weight
         actual = ttnn.to_torch(tt_output, mesh_composer=composer).float()
         assert actual.shape == expected.shape, (call, actual.shape, expected.shape)
         for i in range(others):
             for j in range(ring):
-                m = slice(i * rows_per_device, (i + 1) * rows_per_device)
+                m = slice(i * rows, (i + 1) * rows)
                 n = slice(j * n_per_device, (j + 1) * n_per_device)
                 passed, pcc = comp_pcc(expected[m, n], actual[m, n], 0.9999)
                 assert passed, f"call {call}, rows {i}, ring position {j}: {pcc}"
+    return mesh_device.num_program_cache_entries() - programs_before
 
 
 # Kimi-K3 KDA's input projection geometry on the TP ring (640 rows per device, 11 x 10 matmul grid, 2 x 36 tiles per
@@ -186,6 +190,16 @@ def _galaxy(fabric_config, id):
 @pytest.mark.parametrize("case", _CASES)
 def test_all_gather_minimal_matmul_fabric2d(mesh_device, case):
     _run(mesh_device, **case)
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params", [_galaxy(ttnn.FabricConfig.FABRIC_2D_TORUS_XY, "SP8xTP4-torus-xy")], indirect=True
+)
+def test_all_gather_minimal_matmul_fabric2d_row_count_cache(mesh_device):
+    # Up to 640 rows per device each of the 10 core rows has one 2-row M block and the output buffer holds one row;
+    # more rows need a separate program. Across the boundary both ways on one gathered buffer: 2 programs in all.
+    mesh_device.clear_program_cache()
+    assert _run(mesh_device, **dict(_KDA, K=1024, rows_per_call=[640, 1280, 608, 960, 640])) == 2
 
 
 @pytest.mark.parametrize(

@@ -231,9 +231,8 @@ void kernel_main() {
         in1_mcast_args;
     auto in1_tx = in1_mcast_args.optional_sender(noc_obj);
     auto in1_rx = in1_mcast_args.optional_receiver(noc_obj);
-    // In column chunks (two or three per block), a block's first chunk goes in an in1_mcast round: the receivers'
-    // handshake covers the whole block, which they reserved first. Each later chunk has its own pipe with no
-    // handshake, used once per block; a receiver clears its flag before acking the next block's first chunk.
+    // Chunked in1: the first chunk goes in the in1_mcast round (its handshake covers the block); later chunks use their
+    // own handshake-less pipes, once per block.
     constexpr dataflow_kernel_lib::McastArgs<
         get_named_compile_time_arg_val("in1_chunk1_mcast_ct_offset"),
         get_named_compile_time_arg_val("in1_chunk1_mcast_rt_offset")>
@@ -530,10 +529,8 @@ void kernel_main() {
                     }
 #else
                     if constexpr (in1_chunk_w > 0) {
-                        // The K block in column chunks of in1_chunk_w columns (all K rows), chunk-major in L1
-                        // (chunk c is chunk_tiles tiles from c * chunk_tiles, chunk_w tiles per K row), so
-                        // each chunk is one multicast. This core's compute and the column's receivers start on a
-                        // chunk as it lands; chunk c + 1 is read (its own transaction id) while chunk c goes out.
+                        // The K block in chunk-major column chunks, one multicast each; chunk c + 1 is read while chunk
+                        // c goes out.
                         constexpr uint32_t n_chunks = in1_chunks;
                         constexpr uint32_t chunk_w = N_block_tiles / n_chunks;
                         constexpr uint32_t chunk_tiles = chunk_w * K_block_tiles;

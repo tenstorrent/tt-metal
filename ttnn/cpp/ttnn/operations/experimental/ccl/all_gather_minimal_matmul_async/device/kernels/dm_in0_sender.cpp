@@ -188,9 +188,8 @@ void kernel_main() {
 #endif
     }
 #ifdef FABRIC_2D
-    // This core's part in the Fabric2D exchange (program factory, append_fabric_2d_roles): whether it sends blocks
-    // (then it waits for the entry of the device it sends to), and whether and to which fabric node it announces this
-    // device's entry.
+    // Fabric2D role (append_fabric_2d_roles): whether this core sends (and waits for its target's entry), and to which
+    // fabric node it announces this device's entry.
     const bool fabric_sends = get_arg_val<uint32_t>(argidx++);
     const bool fabric_announces = get_arg_val<uint32_t>(argidx++);
     const uint16_t announce_mesh_id = get_arg_val<uint32_t>(argidx++);
@@ -317,11 +316,8 @@ void kernel_main() {
     auto pkt_hdrs_forward = allocate_and_init_packet_headers(
         detail::valid_targets(0), unicast_route_info_forward, in0_reader, num_tiles_to_write_per_packet, in3_tile_size);
 #ifdef FABRIC_2D
-    // Fabric2D: a fabric core joins the fabric just before its first fabric write, so the matmul never waits for the
-    // mux to come up. Entry barrier: each device announces its entry to the device that writes into it, whose
-    // writes into this device wait for it; without it a fast peer's next call lands in a gathered buffer this device
-    // is still reading. The announcement lands on the row's other fabric core (beside this one), which on the
-    // destination is the core that writes into this device, so each sending core gets exactly one per call.
+    // Fabric2D: join the fabric at the first fabric write. Entry barrier: announce this device's entry to the device
+    // that writes into it, so a fast peer's next call never lands in a buffer still being read.
     auto join_fabric = [&]() {
         mux_connection_handle_backward = mux_backward.build_and_connect(fabric_mux_l1_base_semaphore_id);
         mux_connection_handle_forward = mux_forward.build_and_connect(fabric_mux_l1_base_semaphore_id);
@@ -361,14 +357,10 @@ void kernel_main() {
         noc_obj.async_atomic_barrier();
         return true;
     };
-    // Every fabric core passes the forwarding point at least once per call (2 or more devices, at least one M block
-    // per core), so each joins, announces and closes its mux connection once per call, and each sending core consumes
-    // one announcement.
+    // Every fabric core passes here at least once per call, so it joins, announces and closes its mux once per call.
     bool joined_fabric = false;
     bool fabric_open = false;
-    // Until the neighbour has entered, this core keeps receiving this device's own blocks and holds their forwards: a
-    // held block stays in this core's in0 buffer until its slot is reserved again, in0_cb_blocks blocks later, so up to
-    // in0_cb_blocks - 1 can wait. A late neighbour then stalls this row only after that many blocks.
+    // Until the neighbour has entered, hold the forwards in the in0 buffer (up to in0_cb_blocks - 1 blocks).
     struct HeldForward {
         uint32_t m_tile, k_left_start, k_right_start, m_block_tiles, k_left_tiles, k_right_tiles, l1;
     };

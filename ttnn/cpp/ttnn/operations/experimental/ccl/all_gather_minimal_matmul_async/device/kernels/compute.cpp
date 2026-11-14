@@ -347,12 +347,8 @@ void add_bias_and_addcmul_block(
     intermediate_cb.pop_front(out_block_num_tiles);
 }
 
-// One K block of an output block (adapted from compute_common.hpp): each subblock runs the block's inner dimension in
-// one matmul_block_k call. Accumulating blocks pack into the subblock's slot of partials_cb (packer L1 accumulation).
-// DIRECT_OUT (the last K block, subblock_h == 1): each subblock reloads its partials into DEST, adds the last block
-// and packs to out_cb, published a subblock at a time; pieces past a partial block are pushed empty, as the writers
-// take the full block. With in1 column chunks the first row waits for each chunk and accumulating blocks go
-// chunk-major, so a chunk serves every row before the next one is needed.
+// One K block of an output block (adapted from compute_common.hpp). DIRECT_OUT (last K block) reloads the partials,
+// adds this block and packs to out_cb a subblock at a time. With in1 chunks, accumulating blocks go chunk-major.
 template <bool DIRECT_OUT>
 void matmul_blocks_k(
     CircularBuffer& in0_cb,

@@ -201,9 +201,8 @@ void fabric_mux_connection_rt_args(
     std::vector<uint32_t>& worker_rt_args,
     const std::optional<std::array<uint32_t, 4>>& client_semaphore_ids = std::nullopt) {
     if (client_semaphore_ids.has_value()) {
-        // The client words of ttnn::ccl::fabric_mux_connection_rt_args (ccl_common.cpp, same order), with the client's
-        // four local semaphores at ids every client shares: the launch writes them in one multicast instead of one
-        // write per client core (10 us of launch time per call on the KDA Galaxy).
+        // Client words of ttnn::ccl::fabric_mux_connection_rt_args (same order). The client semaphores share ids, so
+        // the launch writes them in one multicast instead of one write per client core.
         worker_rt_args.insert(
             worker_rt_args.end(),
             {static_cast<uint32_t>(mux_connection_valid),
@@ -500,10 +499,8 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
     // Fabric2D (the KDA Galaxy path): input blocks reach a whole row or column of the matmul grid in one multicast
     // write instead of hopping core to core. Every other configuration keeps the core-to-core relay.
     const bool mcast = fabric_2d && !transpose_core_grid;
-    // With multicast, the last K block packs straight to the output over its reloaded FP32 partials (compute.cpp
-    // matmul_blocks_k<true>): for a plain matmul output (no fused bias, ternary, SwiGLU or activation) with
-    // one-tile-high subblocks and FP32 partials, which unpack to DEST, and whole N blocks of whole subblocks (the
-    // output goes out in subblock pieces).
+    // Multicast path: the last K block packs straight to the output over its FP32 partials. Needs a plain output (no
+    // bias, ternary, SwiGLU or activation), 1-tile-high subblocks, whole subblocks per N block.
     const bool direct_out = mcast && !fuse_swiglu && !use_bias && !use_fused_ternary && !fused_activation.has_value() &&
                             subblock_h == 1 && fp32_dest_acc_en && K_blocks > 1 &&
                             N_tiles_per_core % N_block_tiles == 0 && N_block_tiles % subblock_w == 0;
@@ -853,12 +850,8 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         defines["CHUNK_TILE_OFFSETS"] = offsets_csv;
     }
 
-    // in1 in column chunks: the injector multicasts each K block chunk by chunk (the first chunk in the in1_mcast
-    // round, each later one on its own pipe) and the compute starts on the first chunk while the rest is in flight.
-    // For one full N block per core (the chunk-major layout assumes it) and whole K blocks per device (a Linear tail
-    // block's padding rows take the zero-filling block read). A chunk is the widest whole number of subblocks that
-    // divides the block in two or three chunks and whose reads fit one transaction id: each chunk costs a multicast and
-    // a flag, so a few wide chunks beat many narrow ones.
+    // in1 in 2-3 column chunks per K block, so compute starts on the first chunk while the rest is in flight. Needs one
+    // N block per core and whole K blocks per device; chunk = widest whole-subblock split whose reads fit one trid.
     uint32_t in1_chunk_w = 0;
     if (mcast && N_blocks_per_core == 1 && N_tiles_per_core == N_block_tiles &&
         K_tiles_per_device % K_block_tiles == 0) {
@@ -879,9 +872,7 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
     };
     const bool row_mop = mcast && device->arch() == tt::ARCH::BLACKHOLE &&
                          full_tile(input_tensor.tensor_spec().tile()) && full_tile(weight_tensor.tensor_spec().tile());
-    // The multicast path's options, read by the kernels as constexprs. With direct output the compute publishes the
-    // output a subblock at a time and the writers take it in those pieces; a Fabric2D fabric core holds its forwards
-    // in the in0 buffer (in0_cb_blocks blocks) until its neighbour entered.
+    // Multicast path options, read by the kernels as constexprs.
     const tt::tt_metal::KernelDescriptor::NamedCompileTimeArgs agmm_named_args = {
         {"mcast", mcast},
         {"row_mop", row_mop},
@@ -902,7 +893,7 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         in1_defines["USE_MUX"] = "1";
     }
 
-    // Fabric2D Ring: both neighbours must be one link away, i.e. the fabric wraps this axis (else use Linear).
+    // Fabric2D Ring: both neighbours must be one link away (get_usable_topology already picks Linear on an open axis).
     if (fabric_2d && topology == ttnn::ccl::Topology::Ring) {
         const auto self_node = device->get_fabric_node_id(sender_device_coord);
         for (const auto& neighbour : {forward_coord, backward_coord}) {
@@ -919,9 +910,8 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         }
     }
 
-    // Fabric2D Linear: the two ends of the line address each other by fabric node (rank 0 sends its blocks to the last
-    // rank, the last rank announces its entry to rank 0). Both go along the line, so the first hop must be the link to
-    // the line neighbour; on an axis the fabric wraps it is not.
+    // Fabric2D Linear: rank 0 and the last rank address each other along the line, so the first hop must be the line
+    // link; on an axis the fabric wraps it is not.
     std::optional<tt::tt_fabric::FabricNodeId> linear_far_end_node;
     if (linear_2d && (ring_index == 0 || ring_index == ring_size - 1)) {
         TT_FATAL(
@@ -1510,14 +1500,8 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         desc.kernels[kComputeKernelIdx].emplace_common_runtime_args(compute_common_args);
     }
 
-    // Fabric2D: what an in0 fabric core does with the fabric, after its mux args: [sends (and waits), announces,
-    // announce mesh, announce chip] (dm_in0_sender.cpp). The backward sender (in0_bwd_idx) uses the link to
-    // forward_coord, the forward sender the link to backward_coord. A core announces its device's entry to the rank
-    // that writes into this device, and a sending core waits for the entry of the rank it writes into.
-    //   Ring: both send, each announces to and waits for the neighbour it sends to.
-    //   Linear: the forward sender sends to rank - 1 and the backward sender of rank 0 to the last rank. Rank r is
-    //   written by rank r + 1 (rank 0 for the last rank), so the backward sender announces to rank r + 1 and the
-    //   last rank's forward sender to rank 0.
+    // Fabric2D in0 fabric core roles: [sends, announces, announce mesh, announce chip] (dm_in0_sender.cpp). A core
+    // waits for the device it writes into and announces to the one writing into it (Linear: r writes to r - 1).
     const auto append_fabric_2d_roles = [&](std::vector<uint32_t>& args, bool backward_sender) {
         const bool connected = mux_connection_valid(backward_sender ? 0 : 1);
         const auto& neighbour = backward_sender ? forward_coord : backward_coord;
@@ -1889,9 +1873,7 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         desc.kernels[k].named_compile_time_args = agmm_named_args;
     }
 
-    // in1 down each column from its row-0 injector, in0 along each row from its x = 0 injector (the fabric cores at
-    // the far end of the row receive it like any core and forward it to the neighbour chips from their L1). Without
-    // multicast the kernels see the channels as absent.
+    // in1 down each column from row 0, in0 along each row from x = 0; without multicast the channels are absent.
     std::array<std::reference_wrapper<tt::tt_metal::KernelDescriptor>, 2> in1_targets{
         desc.kernels[kIn1SenderKernelIdx], desc.kernels[kIn1ReceiverKernelIdx]};
     std::array<std::reference_wrapper<tt::tt_metal::KernelDescriptor>, 3> in0_targets{
