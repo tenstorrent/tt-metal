@@ -7,10 +7,12 @@ import torch
 
 import ttnn
 
-from ...layers.conv2d import Conv2d, configure_conv2d
+from ...layers.conv2d import Conv2d, Conv2dBlocking, configure_conv2d
 from ...parallel.config import vae_all_gather
 from ...parallel.manager import CCLManager
 from ...utils.check import assert_quality
+
+_HEIGHT = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
@@ -235,3 +237,62 @@ def test_conv2d_input_size_change(
         assert_quality(torch_output, tt_out_torch, pcc=0.999_500)
 
     assert len(tt_model._prepared) == 2
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 20000000}],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    ("height", "width", "in_channels", "out_channels", "blocking"),
+    [
+        (128, 256, 256, 128, Conv2dBlocking(64, double_buffer=True, full_inner_dim=True, shard_layout=_HEIGHT)),
+        (256, 256, 128, 128, Conv2dBlocking(64, double_buffer=True, full_inner_dim=True, shard_layout=_HEIGHT)),
+        (128, 256, 256, 128, Conv2dBlocking(64, full_inner_dim=True, shard_layout=_HEIGHT)),
+        (64, 128, 512, 512, Conv2dBlocking(64, double_buffer=True, shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED)),
+    ],
+    ids=["height_sharded", "height_sharded_c128", "single_buffer", "block_sharded"],
+)
+def test_conv2d_blocking(
+    *,
+    mesh_device: ttnn.Device,
+    height: int,
+    width: int,
+    in_channels: int,
+    out_channels: int,
+    blocking: Conv2dBlocking,
+) -> None:
+    """A conv with `blocking`, one whose `shape_blocking` names the default blocking for this shape, and one with the
+    default blocking: the first matches torch and the default, the second is the default."""
+    torch_model = torch.nn.Conv2d(in_channels=in_channels, out_channels=out_channels, kernel_size=3, padding=1)
+    torch.nn.init.normal_(torch_model.weight)
+    torch.nn.init.normal_(torch_model.bias)
+    torch_model.eval()
+
+    torch_input = torch.randn(1, in_channels, height, width)
+    with torch.no_grad():
+        torch_output = torch_model(torch_input)
+
+    shape = (height, width, in_channels, out_channels)
+    outputs = []
+    for kwargs in ({"blocking": blocking}, {"blocking": blocking, "shape_blocking": {shape: Conv2dBlocking()}}, {}):
+        tt_model = Conv2d(
+            in_channels,
+            out_channels,
+            kernel_size=3,
+            padding=1,
+            mesh_device=mesh_device,
+            **kwargs,
+        )
+        tt_model.load_torch_state_dict(torch_model.state_dict())
+        tt_input = ttnn.from_torch(
+            torch_input.permute(0, 2, 3, 1), dtype=ttnn.bfloat16, device=mesh_device, layout=ttnn.TILE_LAYOUT
+        )
+        outputs.append(ttnn.to_torch(ttnn.get_device_tensors(tt_model(tt_input))[0]))
+
+    tuned, per_shape_default, default = outputs
+    assert_quality(torch_output, tuned.permute(0, 3, 1, 2), pcc=0.999_500)
+    assert torch.equal(per_shape_default, default)
+    assert torch.equal(tuned, default), f"max |tuned - default| = {(tuned - default).abs().max().item()}"
