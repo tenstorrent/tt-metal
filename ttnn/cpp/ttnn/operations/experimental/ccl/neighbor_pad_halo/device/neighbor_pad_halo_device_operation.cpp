@@ -43,6 +43,8 @@ void NpHaloDeviceOperation::validate_on_program_cache_miss(
 
     // Only the 2D (H+W) compact-buffer path is implemented (the deployed VAE always pads both H and W).
     TT_FATAL(args.np_pad_dim2.has_value(), "NpHalo: requires 2D padding (H+W); np_pad_dim2 must be set.");
+    TT_FATAL(args.np_num_links > 0, "NpHalo: np_num_links must be > 0");
+    TT_FATAL(args.np_pad2_num_links > 0, "NpHalo: np_pad2_num_links must be > 0");
 
     // The halo_buffer is pre-allocated by the caller and written in place
     const auto& halo_buffer = tensor_args.halo_buffer;

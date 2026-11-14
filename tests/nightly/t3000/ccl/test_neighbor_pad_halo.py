@@ -1233,3 +1233,37 @@ def test_neighbor_pad_halo_reuse(mesh_device, device_params):
         print(f"iter {it}: OK", flush=True)
     mesh_device.reset_sub_device_stall_group()
     mesh_device.clear_loaded_sub_device_manager()
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["2x4"], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize(
+    "num_links, pad2_num_links, message",
+    [(0, 1, "np_num_links must be > 0"), (1, 0, "np_pad2_num_links must be > 0")],
+    ids=["zero_h_links", "zero_w_links"],
+)
+def test_neighbor_pad_halo_rejects_zero_links(
+    mesh_device, device_params, expect_error, num_links, pad2_num_links, message
+):
+    grid = mesh_device.compute_with_storage_grid_size()
+    cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+    sems = [ttnn.create_global_semaphore(mesh_device, cores, 0) for _ in range(3)]
+    x = ttnn.from_torch(torch.randn(1, 1, 8, 8, 32).bfloat16(), layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
+    with expect_error(RuntimeError, message):
+        ttnn.experimental.neighbor_pad_halo(
+            x,
+            x,
+            np_padding_h=1,
+            np_padding_w=1,
+            np_cluster_axis=0,
+            np_num_links=num_links,
+            np_topology=ttnn.Topology.Linear,
+            h_neighbor_semaphore=sems[0],
+            barrier_semaphore=sems[1],
+            w_neighbor_semaphore=sems[2],
+            np_pad_dim2=3,
+            np_pad2_left=1,
+            np_pad2_right=1,
+            np_pad2_cluster_axis=1,
+            np_pad2_num_links=pad2_num_links,
+        )
