@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from models.demos.llama3_70b_galaxy.tt.model_config import get_core_ranges
 from models.demos.llama3_70b_galaxy.tt.qwen_model_config import TtQwenModelArgs
 
 _PREFETCHER_ENV = ("QWEN_BH_PREFETCHER", "QWEN_BH_UNFUSED_CCL")
@@ -68,3 +69,15 @@ def test_blackhole_prefetcher_never_stages_decode_first(monkeypatch):
         )
         assert args.use_prefetcher and args.is_blackhole
         assert args.prepare_decode_before_prefill is False
+
+
+def test_blackhole_prefetcher_uses_available_dram_banks():
+    _, dram_cores, _, receiver_cores, _, _, _, _ = get_core_ranges(
+        num_reader_cores=7,
+        num_global_cb_receivers=3,
+        is_functional_test=False,
+        is_blackhole=True,
+    )
+
+    assert [(core.x, core.y) for core in dram_cores] == [(x, 0) for x in range(7)]
+    assert len(receiver_cores) == 21

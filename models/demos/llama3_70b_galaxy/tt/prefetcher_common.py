@@ -49,12 +49,14 @@ class TtLlamaPrefetcherSetup(LightweightModule):
         self.n_layers = n_layers
 
         ###### Set up GlobalCB ######
-        # Blackhole galaxy has 8 DRAM banks and a 12x10 tensix grid (vs Wormhole's 12 banks / 7x10),
-        # so the prefetcher ring is 8 readers x 3 receivers (=24, same RING_SIZE) instead of 12 x 2.
+        # Blackhole has a 12x10 tensix grid and up to 8 DRAM banks (vs Wormhole's 12 banks / 7x10).
+        # Harvested Blackhole devices expose fewer banks, so use one reader per bank reported by the device.
         is_blackhole = _mesh_is_blackhole(mesh_device)
         self.is_blackhole = is_blackhole
         if is_blackhole:
-            num_reader_cores = 8
+            dram_grid_size = mesh_device.dram_grid_size()
+            assert dram_grid_size.y == 1, "Galaxy prefetching assumes a one-dimensional DRAM grid"
+            num_reader_cores = dram_grid_size.x
             num_global_cb_receivers = 3
         else:
             num_reader_cores = 12
