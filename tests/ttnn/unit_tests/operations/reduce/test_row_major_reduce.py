@@ -806,6 +806,59 @@ def test_tile_reduce_h_axis_split(device, reduce_op, dtype, fast_and_approximate
     assert_numeric_metrics(torch_ref, output, check_ulp=False, **metrics)
 
 
+# Shapes that take the W split: few tile rows (NC*Ht) and Wt at or above the split threshold.
+_TILE_W_SPLIT_SHAPES = [
+    (1, 1, 32, 8192),  # one tile row, Wt=256 (the threshold)
+    (1, 1, 32, 128256),  # Llama-3 vocabulary, uneven last block
+    (1, 1, 64, 10000),  # two tile rows, non-aligned W
+    (2, 3, 32, 9000),  # NC=6, non-aligned W
+]
+
+
+@pytest.mark.parametrize("reduce_op", ["mean", "sum"])
+# Engine selection applies only to FLOAT32.
+@pytest.mark.parametrize(
+    "dtype, fast_and_approximate_mode",
+    [(ttnn.bfloat16, False), (ttnn.float32, False), (ttnn.float32, True)],
+    ids=["bf16", "fp32_sfpu", "fp32_fpu"],
+)
+@pytest.mark.parametrize(
+    "output_layout", [None, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT], ids=["default", "rm", "tile"]
+)
+@pytest.mark.parametrize("shape", _TILE_W_SPLIT_SHAPES)
+def test_tile_reduce_w_axis_split(device, reduce_op, dtype, fast_and_approximate_mode, output_layout, shape):
+    """W reduce on wide TILE input with few tile rows: column blocks on separate cores."""
+    torch.manual_seed(0)
+    # Row means of 10^4 uniform values differ by less than one bfloat16 ulp; scale rows apart so PCC sees the rows.
+    row_scale = torch.linspace(0.5, 2.0, shape[-2]).reshape(-1, 1)
+    torch_input = (torch.rand(shape) * row_scale).to(_torch_dtype(dtype))
+    torch_ref = _golden(torch_input, reduce_op, dim=-1, keepdim=False)
+
+    tt_input = ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    assert tt_input.layout == ttnn.TILE_LAYOUT
+    tt_input = ttnn.fill_implicit_tile_padding(tt_input, -42.0)
+
+    ttnn_op = _OPS[reduce_op][1]
+    op_kwargs = {
+        "dim": -1,
+        "keepdim": False,
+        "output_layout": output_layout,
+        "fast_and_approximate_mode": fast_and_approximate_mode,
+    }
+    tt_output = ttnn_op(tt_input, **op_kwargs)
+    assert tt_output.layout == (output_layout or ttnn.TILE_LAYOUT)
+    output = ttnn.to_torch(tt_output)
+
+    if dtype == ttnn.float32:
+        # Accurate FP32 uses SFPU; fast mode and Quasar use the tf32 FPU bound.
+        fpu = fast_and_approximate_mode or device.arch() == ttnn.device.Arch.QUASAR
+        rtol, atol = (0.004, 1e-3) if fpu else (1e-5, 1e-5)
+        metrics = dict(pcc_threshold=0.999, rtol=rtol, atol=atol, frobenius_threshold=0.003, check_ulp=False)
+    else:
+        metrics = _metrics(dtype, reduce_op)
+    assert_numeric_metrics(torch_ref, output, **metrics)
+
+
 # Block-float formats only exist in TILE layout: an RM output would have to widen to BFLOAT16, so
 # sum/mean reject the request instead of silently changing the dtype.
 @pytest.mark.parametrize("reduce_op", ["mean", "sum"])
