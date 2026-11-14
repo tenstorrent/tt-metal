@@ -153,8 +153,9 @@ void deassert_trisc() {
 
 thread_local LocalDFBInterface g_dfb_interface[dfb::NUM_DFBS] __attribute__((used));
 thread_local uintptr_t g_dfb_config_base_addr __attribute__((used));
+thread_local uint32_t g_dfb_bound_mask __attribute__((used));
 overlay::RemapperAPI g_remapper_configurator __attribute__((used));
-volatile TxnDFBDescriptor g_txn_dfb_descriptor[32] __attribute__((used));
+TxnDFBDescriptor g_txn_dfb_descriptor[32] __attribute__((used));
 volatile KernelBarrier g_kernel_barrier[NUM_KERNEL_BARRIERS] __attribute__((used));
 thread_local DFBImplicitProgress g_dfb_progress[dfb::NUM_DFBS] __attribute__((used));
 uint32_t g_dfb_exit_record[dfb::NUM_KERNEL_DM_HARTS][NUM_DFB_POOL_TXN_IDS] __attribute__((used));

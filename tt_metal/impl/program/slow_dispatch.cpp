@@ -229,12 +229,11 @@ void ConfigureDeviceWithProgram(IDevice& device, Program& program, bool force_sl
                         logical_core, dfbs_on_core, dfb_config_vec);
 
                     uint64_t addr = kernel_config_base + program.impl().get_program_config(index).dfb_offset;
-                    write_program_config(
-                        metal_ctx,
-                        device_id,
-                        physical_core,
-                        std::span<const uint8_t>(dfb_config_vec.data(), bytes_written),
-                        addr);
+                    ScopedHostTransfer upload(
+                        &metal_ctx.host_transfer_stats(), HostTransferCategory::ProgramConfigSlowDispatch, bytes_written);
+                    // The DMs walk the DFB config through the cached view without invalidating L2.
+                    metal_ctx.get_cluster().write_core_with_snoop_if_required(
+                        dfb_config_vec.data(), bytes_written, tt_cxy_pair(device_id, physical_core), addr);
                 }
 
                 // CrossNodeDFB dense index in the worker kernel-config window. Full host
