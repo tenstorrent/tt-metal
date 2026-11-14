@@ -50,6 +50,8 @@ class Flux2VaeDecoder(Module):
         ccl_manager: CCLManager | None,
         use_conv3d: bool = False,
         local_query_attention: bool = False,
+        group_norm_2d: bool = False,
+        local_attention: bool = False,
     ) -> None:
         super().__init__()
 
@@ -63,6 +65,8 @@ class Flux2VaeDecoder(Module):
             w_factor=parallel_config.w_parallel.factor if parallel_config.w_parallel is not None else 1,
             use_conv3d=use_conv3d,
             local_query_attention=local_query_attention,
+            group_norm_2d=group_norm_2d,
+            local_attention=local_attention,
         )
 
         if ctx.tp_axis is not None and ctx.ccl_manager is None:

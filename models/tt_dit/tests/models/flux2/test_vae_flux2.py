@@ -116,18 +116,23 @@ def prep_data(
     [(1, 1024, 1024)],
     ids=["1024"],
 )
+@pytest.mark.parametrize(
+    ("tp_axis", "h_axis", "w_axis", "local_2d"),
+    [(0, 1, None, False), (None, 1, 0, False), (None, 1, 0, True)],
+    ids=["h_tp", "hw", "hw_local"],
+)
 def test_vae_flux2_decoder(
     *,
     mesh_device: ttnn.Device,
     batch_size: int,
     height: int,
     width: int,
+    tp_axis: int | None,
+    h_axis: int,
+    w_axis: int | None,
+    local_2d: bool,
 ) -> None:
     torch.manual_seed(0)
-
-    tp_axis = 0
-    h_axis = 1 - tp_axis
-    w_axis = None
 
     torch_model = _load_pruned_torch_model()
 
@@ -147,6 +152,8 @@ def test_vae_flux2_decoder(
         parallel_config=vae_parallel_config,
         ccl_manager=ccl_manager,
         use_conv3d=False,
+        group_norm_2d=local_2d,
+        local_attention=local_2d,
     )
     tt_model.load_torch_state_dict(torch_model.state_dict())
 

@@ -33,6 +33,12 @@ class VaeContext:
       * ``w_factor > 1`` shards W across ``w_mesh_axis``.
     Both default to ``factor=1`` (disabled) so existing TP-only callers are unchanged.
     The H/W mesh axes must differ from ``tp_axis``.
+
+    Without channel TP, two options keep the activations on their shard:
+      * ``group_norm_2d``: with H and W both sharded, GroupNorm gathers per-group sums over both
+        axes instead of the activations over W.
+      * ``local_attention``: attention keeps its queries on the shard and gathers only the
+        normalized rows for K / V.
     """
 
     device: ttnn.MeshDevice
@@ -46,6 +52,13 @@ class VaeContext:
     # VaeAttention computes only each device's own query rows (its H partition, split over tp_axis where even).
     local_query_attention: bool = False
     group_norm_max_block_rows: int | None = None
+    group_norm_2d: bool = False
+    local_attention: bool = False
+
+    def __post_init__(self) -> None:
+        if (self.group_norm_2d or self.local_attention) and self.tp_axis is not None:
+            msg = "group_norm_2d and local_attention need full channels per device (tp_axis None)"
+            raise ValueError(msg)
 
 
 @dataclass(frozen=True)
@@ -488,7 +501,10 @@ class VaeAttention(Module):
 
         # Norm runs on the AG'd full-spatial tensor inside forward(), so the inner norm should NOT
         # AG/partition again. Bypass the _VaeSpatialGroupNorm wrap by handing _norm a TP-only ctx.
-        norm_ctx = replace(ctx, h_factor=1, w_factor=1, h_mesh_axis=None, w_mesh_axis=None)
+        # With local_attention it runs on the local shard instead.
+        norm_ctx = (
+            ctx if ctx.local_attention else replace(ctx, h_factor=1, w_factor=1, h_mesh_axis=None, w_mesh_axis=None)
+        )
         self.norm = _norm(norm, num_channels=num_channels, ctx=norm_ctx)
         # Fused QKV: one ColParallelLinear with chunks=3 replaces three RowParallelLinear+RS+AG
         # round-trips. Each output is fractured on out_dim (channels) and gets AG'd before SDPA.
@@ -571,7 +587,52 @@ class VaeAttention(Module):
 
         return qkv.squeeze(-1) if is_1d else qkv
 
+    def _forward_local(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        identity = x
+        n, h, w, c = x.shape
+
+        x = self.norm.forward(x)
+        if x.layout != ttnn.TILE_LAYOUT:
+            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+        local = x.reshape([n, 1, h * w, c])
+        full = local
+        for mesh_axis, factor in (
+            (self._ctx.h_mesh_axis, self._ctx.h_factor),
+            (self._ctx.w_mesh_axis, self._ctx.w_factor),
+        ):
+            if factor > 1:
+                full = self._ccl_manager.all_gather(full, dim=2, mesh_axis=mesh_axis, use_hyperparams=True)
+
+        q, k, v = self.to_qkv.forward(local, compute_kernel_config=self._mm_compute_kernel_config)
+        ttnn.deallocate(k)
+        ttnn.deallocate(v)
+        unused_q, k, v = self.to_qkv.forward(full, compute_kernel_config=self._mm_compute_kernel_config)
+        ttnn.deallocate(unused_q)
+
+        program_config = self._sdpa_program_config
+        rows = h * w
+        if rows % program_config.q_chunk_size:
+            program_config = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=program_config.compute_with_storage_grid_size,
+                q_chunk_size=max(d for d in range(32, program_config.q_chunk_size + 1, 32) if rows % d == 0),
+                k_chunk_size=program_config.k_chunk_size,
+                exp_approx_mode=program_config.exp_approx_mode,
+            )
+        x = ttnn.transformer.scaled_dot_product_attention(
+            q,
+            k,
+            v,
+            is_causal=False,
+            program_config=program_config,
+            compute_kernel_config=self._sdpa_compute_kernel_config,
+        )
+        x = self.to_out.forward(x, compute_kernel_config=self._mm_compute_kernel_config)
+        return x.reshape([n, h, w, c]) + identity
+
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        if self._ctx.local_attention:
+            return self._forward_local(x)
+
         identity = x  # [N, H/h, W/w, C/tp] when SP+TP active; identity captured pre-AG
 
         # SDPA over the full spatial extent → AG H+W once (no-op when SP inactive).
@@ -839,19 +900,101 @@ class _VaeSpatialGroupNorm(Module):
         return x
 
 
+class _VaeSpatial2dGroupNorm(Module):
+    """GroupNorm for activations sharded on H and W with full channels per device.
+
+    The per-group sums are formed locally, all-gathered over both mesh axes (h x w x G values) and
+    applied as one per-channel affine, with the activation folded into the add.
+    """
+
+    def __init__(
+        self,
+        num_groups: int,
+        num_channels: int,
+        *,
+        eps: float,
+        ctx: VaeContext,
+        activation_fn: str | None = None,
+    ) -> None:
+        super().__init__()
+        assert ctx.ccl_manager is not None
+        assert num_channels % num_groups == 0
+        self.num_channels = num_channels
+        self.num_groups = num_groups
+        self.eps = eps
+        self._ctx = ctx
+        self._fused_activation = ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU) if activation_fn == "silu" else None
+        self.activation_fn = None if activation_fn == "silu" else activation_fn
+        self.weight = Parameter(total_shape=[1, 1, 1, num_channels], device=ctx.device, dtype=ttnn.float32)
+        self.bias = Parameter(total_shape=[1, 1, 1, num_channels], device=ctx.device, dtype=ttnn.float32)
+        self.to_groups = Parameter(total_shape=[1, 1, num_channels, num_groups], device=ctx.device, dtype=ttnn.float32)
+        self.from_groups = Parameter(
+            total_shape=[1, 1, num_groups, num_channels], device=ctx.device, dtype=ttnn.float32
+        )
+
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        state["weight"] = state["weight"].reshape(1, 1, 1, self.num_channels)
+        state["bias"] = state["bias"].reshape(1, 1, 1, self.num_channels)
+        selector = torch.eye(self.num_groups).repeat_interleave(self.num_channels // self.num_groups, dim=0)
+        state["to_groups"] = selector.reshape(1, 1, self.num_channels, self.num_groups)
+        state["from_groups"] = selector.t().contiguous().reshape(1, 1, self.num_groups, self.num_channels)
+
+    def _group_sums(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        """(N, 1, HW_local, C) -> per-group sums over every device, (N, 1, 1, G)."""
+        sums = ttnn.matmul(ttnn.sum(x, dim=2, keepdim=True), self.to_groups.data)
+        ccl = self._ctx.ccl_manager
+        sums = ccl.all_gather(sums, dim=1, mesh_axis=self._ctx.h_mesh_axis, use_hyperparams=False)
+        sums = ccl.all_gather(sums, dim=1, mesh_axis=self._ctx.w_mesh_axis, use_hyperparams=False)
+        return ttnn.sum(sums, dim=1, keepdim=True)
+
+    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        n, h, w, c = x.shape
+        if x.layout != ttnn.TILE_LAYOUT:
+            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+        x = ttnn.reshape(x, (n, 1, h * w, c))
+        scale = 1.0 / (c // self.num_groups * h * w * self._ctx.h_factor * self._ctx.w_factor)
+        x32 = ttnn.typecast(x, ttnn.float32)
+        mean_g = ttnn.multiply(self._group_sums(x32), scale)
+        sq = ttnn.multiply(x32, x32)
+        ttnn.deallocate(x32)
+        var_g = ttnn.subtract(ttnn.multiply(self._group_sums(sq), scale), ttnn.multiply(mean_g, mean_g))
+        ttnn.deallocate(sq)
+        # fp32 until the final cast: bias - mean * gamma cancels badly in bf16.
+        inv_g = ttnn.rsqrt(ttnn.add(var_g, self.eps))
+        gamma = ttnn.multiply(ttnn.matmul(inv_g, self.from_groups.data), self.weight.data)
+        beta = ttnn.subtract(self.bias.data, ttnn.multiply(ttnn.matmul(mean_g, self.from_groups.data), gamma))
+        gamma = ttnn.typecast(gamma, x.dtype)
+        beta = ttnn.typecast(beta, x.dtype)
+        scaled = ttnn.multiply(x, gamma)
+        if self._fused_activation is not None:
+            out = ttnn.add(scaled, beta, activations=[self._fused_activation])
+        else:
+            out = _apply_activation_fn(ttnn.add(scaled, beta), self.activation_fn)
+        ttnn.deallocate(scaled)
+        return ttnn.reshape(out, (n, h, w, c))
+
+
 def _norm(
     norm: VaeNormDesc,
     num_channels: int,
     *,
     ctx: VaeContext,
     activation_fn: str | None = None,
-) -> GroupNorm | _VaeSpatialGroupNorm | VaeRmsNorm:
+) -> GroupNorm | _VaeSpatialGroupNorm | _VaeSpatial2dGroupNorm | VaeRmsNorm:
     """Build the norm module.
 
     ``activation_fn`` is applied after the norm; the module folds it into the fused GN op
     when that path is used and runs it separately otherwise. Callers just call ``forward``.
     """
     if isinstance(norm, VaeNormDescGroup):
+        if ctx.group_norm_2d and ctx.h_factor > 1 and ctx.w_factor > 1:
+            return _VaeSpatial2dGroupNorm(
+                num_groups=norm.num_groups,
+                num_channels=num_channels,
+                eps=norm.eps,
+                ctx=ctx,
+                activation_fn=activation_fn,
+            )
         # SP-active: fused DistributedGroupNorm (stats AG on one spatial axis).
         if ctx.h_factor > 1 or ctx.w_factor > 1:
             return _VaeSpatialGroupNorm(
