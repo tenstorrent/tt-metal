@@ -1676,3 +1676,81 @@ The one this change broke (test_seeded: `git add state.json`) is fixed.
   PROBE_ALLOW_MESH=1 and PROBE_SIDES=on,mesh.
 
 > Overseer, 2026-11-14 15:45: P.63b was STOPPED and its code REVERTED (mesh head hung the 8x4 on first launch; DS41-264/265: small payoff for a large rewrite). Its diff is kept in /scratch/dnijemcevic/replication/p63b/. The entries DS41-264..266 stay as findings.
+
+## P.64 (perf, attempt 1): fewer attention-side launches - the window write as one prepared program (ATTN_FUSE legacy | on)
+- Census first (tests/test_attn_launch_census.py, new, diagnostic; 8 layers 0,1,2,3,14,20,21,24, novel chunk 3, legacy):
+  every layer's attention issues the same window-write group (WINDOW_KV_FORMAT=bf16_tiles, WINDOW_KV_KEEP=snapshot128,
+  tt/attention._window_region): untilize of the chip's own rows (cores.to_rm, ~58 us), the ring write
+  (WindowRing.put: 3 x ttnn.slice ~57 us + 3 x ttnn.bringup.slice_write ~33 us), the region write (_put_rows:
+  slice_write ~75 us) and the neighbour send (WindowSend, run_prepared ~100 us): 9 launches, ~520 us host a layer.
+  Reuse layers (30 of 40): 16 attention launches a layer, 7 of them this group's slices / slice_writes.
+- Expected per chunk (written before any code change; perf_guide 3 and 4: launches on a host-bound chunk): the
+  region write, the 3 ring slices and the 3 ring slice_writes go into the send's prepared program (a copy kernel on
+  the second data-movement RISC of the send's core row; the send reads the carry from the untilized rows instead of
+  the region): 9 -> 2 launches a layer, -280 launches a chunk (40 layers); host -10 to -13 ms a chunk (~-320 us a
+  layer: -171 slices, -99 slice_writes, -75 region write, +~20-30 us for the bigger prepared call with its value
+  slots); device ~0 to -1 ms (7 small programs and their dispatch gaps gone, a ~10-20 us copy on 4 cores beside the
+  send); wall: as much of the host cut as the chunk is host-bound (P.63: host ~156 ms vs device ~145-150 ms), so
+  ~-5 to -10 ms on real chunks 1..10, ~0 at p51200 (device-bound there). Bit-identical outputs (data movement only).
+- Not in this pick (next candidates, from the census): the window snapshot (write_snapshot: 2 high_bw_all_gathers of
+  every chip's whole 192-row ring + slice + update_padded_kv_cache, 4 launches ~470 us host a layer, plus the
+  gathers' device time) - a fabric broadcast of the owner's 128 rows would replace it; q_a's input typecast; the
+  compressor layers' slice / to_layout / mesh_partition (4 layers only).
+- Terms: launch = one outermost ttnn op call or one run_prepared; host = first host call of a chunk to the last
+  layer's enqueue; wall = to the sync after the last layer (clean: profiler off); device = rt profiler, each program's
+  slowest chip summed; us a call = host time of one launch (Python wrapper inclusive); prev / off = MOE_REPLICAS=prev
+  on / switched off in the same model; legacy / on = ATTN_FUSE.
+- Built (ATTN_FUSE = legacy | on, tt/settings.py, default on):
+  - tt/window_send.py `WindowSend.fused(region, tail, rows, ring, pieces)`: one prepared program a call (io [region,
+    tail, rows, ring]; the ring pieces 12 value slots, unused ones n = 0). Send kernel = the legacy kernel reading the
+    sent pages and the last chip's kept pages from `rows`' last 128 rows (_KERNEL_FUSED, made by text edits of
+    _KERNEL, asserted); copy kernel (_COPY_KERNEL) on the send core's NCRISC (COPY_CORES = 1): rows -> region rows
+    [128, 128 + q_rows) and -> the ring pieces. Its own fabric connection (setup_fabric_connection on the new program).
+  - tt/attention.py: `WindowRing.plan` (put's host bookkeeping + pieces; put = plan + the old ops),
+    `TtWindowCache.write_own(defer=True)` returns the pieces (the carry still taken first, the pin's pieces still
+    copied by the old ops), `_window_region` with ATTN_FUSE=on, a bf16 region, a ring and > 1 chip: no region
+    slice_write, the fused call at step 4 (after the carry's own writes to the kept tail, as the send was).
+  - Applies to every box with > 1 chip and q_rows >= 128 (the region path's own condition); 1 chip / bfp8 regions /
+    WINDOW_KV_KEEP=full: legacy path unchanged.
+- Cores (rule 18): the fused program uses core (0, 0) a chip, both data-movement RISCs (was: the send on (0, 0) +
+  slice / slice_write on an 8-core row and the region slice_write on max_grid). Prepared (OV-23): yes, the only
+  Python-built op touched. Fork suites not run (OV-25); no fork changed.
+- Bits: data movement only. tests/test_window_write_fused.py (new): fused vs legacy ops on random rows, 5 piece
+  patterns x 3 layers x copy cores 1/2/4/8, every chip's region, kept tail and ring byte-equal, and equal to the send's
+  definition. tests/test_attn_launch_census.py: 8-layer model, novel chunks 0..3, legacy vs on: 0 of 88 differ (every
+  chip: layer streams, served snapshots, kept tails).
+- Per call (probe, 8x4, "two pieces" case, median): legacy group (region slice_write + 2 x slice + 2 x slice_write +
+  send) host 306 us a layer, device 64.5 us (6 programs); fused host 74 us (1 copy core; 81 / 96 / 123 at 2 / 4 / 8),
+  device 54 us (1 program). In the model (census): fused run_prepared 86-150 us a call vs the legacy send 65-100 us.
+- Launches: census 8 layers 462 -> 406 (-7 a layer at chunk 3: 3 pieces; -5 at chunk 5: 2 pieces, one whole); p51200
+  1656 (P.63) -> 1376 a chunk.
+- Gate unit P.64#test_moe_prev_replicas (PASS, change on, one pass a side; prev = lean folded), chunks 1..10 mean:
+
+  | prompt | side | host ms | wall ms | device ms | (P.63 gate unit, same side: host / wall / device) |
+  |---|---|---|---|---|---|
+  | novel | prev | 144.4 | 162.9 | 148.33 | 155.6 / 166.5 / 149.85 |
+  | novel | off | 207.4 | 235.2 | 167.71 | slow side again (P.63 242.6 / 260.2; DS41-259) |
+  | code | prev | 150.0 | 164.5 | 144.89 | 156.3 / 165.2 / 145.16 |
+  | code | off | 146.9 | 169.7 | 156.07 | 151.0 / 166.8 / 155.9 |
+
+  maxdiff 0, repeat 0, mirror 0 mismatches of 477 (both prompts, three host paths). The host is now at or below the
+  device time on prev (host 144-150 vs device 145-148 ms), so further host cuts show in the wall only as the device
+  shrinks too.
+- `measure --task P.64` parts (change on: ATTN_FUSE=on ENGRAM_TABLE=resident): determinism 0 (novel, code, state);
+  quick min layer PCC 0.60548579 at L39 (= P.52-P.63: the same output bytes), host transfers per layer 0, clean wall
+  161.8 ms (spread 9.7; P.63 166.6); p51200 (random ids) wall 173.7 (spread 22.5; P.63 175.2), device_ms_total 154.93
+  (155.07), device_ms_experts 74.17, device_ms_attention 47.69, host overhead 18.8 (20.1), 1376 launches (1656), host
+  launch ms 110.6.
+- Expected vs got: launches -280 a chunk (exact); host -10 to -13 ms expected; per-call numbers give ~-8 to -9 ms
+  (40 layers x ~200-230 us; fewer pieces at some starts); the gate unit's prev host -6 to -11 ms vs P.63's (one pass a
+  side, +-4 ms noise); device ~0 (-0.1 to -1.5); wall -1 to -5 ms on real chunks (the chunk is now device-bound on prev).
+  The orchestrator's A/B gives the on / off table.
+- Next host pick from the census: write_snapshot (2 high_bw_all_gathers of every chip's whole ring + slice +
+  update_padded_kv_cache a layer, ~4 launches ~470 us host and the gathers' device time) -> a fabric broadcast of the
+  owner chips' 128 rows (e.g. a third kernel in this same fused program); then q_a's input typecast, the compressor
+  layers' slice / to_layout / mesh_partition (4 layers).
+- Re-run: probe `WW_CORES=1,2,4,8 scripts/run_safe_pytest.sh --run-all --no-precompile
+  models/demos/deepseek_v41_flash_d_p/tests/test_window_write_fused.py -s` (~30 s); census `CENSUS_SIDES=legacy,on
+  scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_attn_launch_census.py
+  -s` (~2.5 min; CENSUS_COMPARE=0 CENSUS_PASSES=3 for host ms); gate unit `gate P.64 --spec <spec> --check --unit
+  'P.64#test_moe_prev_replicas'` (~9 min, devjob).

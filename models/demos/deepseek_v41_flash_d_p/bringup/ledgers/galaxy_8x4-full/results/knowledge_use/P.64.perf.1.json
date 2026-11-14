@@ -1,0 +1,93 @@
+{
+ "used": [
+  {
+   "id": "DS41-258",
+   "how": "a prepared launch on 32 chips costs ~70-100 us whatever it does, and only folding into a program that already runs removes it: the region / ring copies went into the window send's own prepared program instead of a new prepared copy op",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-265",
+   "how": "per-chip arg bytes are the launch's host cost: chose 1 copy core (fused call 74 us) over 4 / 8 cores (96 / 123 us) after the probe; the region segment frozen, only the ring pieces as value slots",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-210",
+   "how": "the copy kernel's args are fixed slots (io addresses, core index, 1 + RING_PIECES segments of 3), no variable-length list; unused ring pieces sent as n = 0",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-146",
+   "how": "the fused program is prepared once on shape (lazily, first call) and every io address (region, tail, rows, ring) is patched per call; no buffer allocated mid-forward",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-171",
+   "how": "started from a launch census (op x section x call site per layer, tests/test_attn_launch_census.py) instead of device time, as the census lesson says",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-251",
+   "how": "P.57's fix list item 6 (attention-side launch cuts) and its per-op us a call were the starting estimate",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-259",
+   "how": "host per chunk compared on alternating sides (census4: legacy, on, legacy, on) and per call by medians, not one pass a side",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "prepared_program: PreparedProgram.patch_count also counts the value slots of every core (2016 = 32 x (15 io + 48 value)); the README says only that value slots are never matched to io addresses"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "no padding or duplicated work: unused ring pieces carry n = 0 and copy nothing; the copy kernel moves exactly the rows the legacy slice / slice_write ops moved (tests/test_window_write_fused.py, every chip byte-equal)"
+  },
+  {
+   "id": "OV-23",
+   "answer": "done",
+   "evidence": "the fused window write is built once and dispatched through ttnn.bringup.prepare_program / run_prepared with value_slots (tt/window_send.WindowSend.fused); host 74 us a call (probe) / 86-150 us in the model; no other Python-built op touched, none non-prepared"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork unit or regression suite run on the 8x4; only the new tests (test_window_write_fused.py, test_attn_launch_census.py) and the model-level checks (measure determinism / quick / p51200, gate unit test_moe_prev_replicas)"
+  }
+ ],
+ "cited_only": [
+  "DS41-267"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "moe_replication",
+  "task": "P.64",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-14T16:25:48",
+  "head": "ee8ef578a11",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.64.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.64_prev_replicas.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.64.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_attn_launch_census.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_window_write_fused.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/attention.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/window_send.py"
+  ]
+ }
+}

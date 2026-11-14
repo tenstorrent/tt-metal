@@ -589,6 +589,18 @@ TABLE = {
         "the probe found the per-program patch loop, not the per-device dispatch, to be what a mesh program would "
         "remove (DS41-258). Host only: outputs bit-identical",
     ),
+    "ATTN_FUSE": Setting(
+        "on",
+        ("legacy", "on"),
+        "P.64 (owner 2026-11-14: fewer host calls, attention-side small ops): the window write of every layer "
+        "(WINDOW_KV_FORMAT=bf16_tiles with WINDOW_KV_KEEP=snapshot128 / ring / none, more than one chip; "
+        "tt/attention._window_region). legacy = the chip's own untilized rows written by ttnn.bringup.slice_write "
+        "into the region, the ring's 2-4 pieces each by ttnn.slice + ttnn.bringup.slice_write, then the neighbour "
+        "send (tt/window_send.WindowSend, prepared): 9 launches a layer with the untilize. on = the region rows and "
+        "the ring pieces copied by a second kernel (NCRISC of the send core, COPY_CORES=1) in the send's own prepared "
+        "program, the ring pieces as per-call values, the send reading the carry from the untilized rows "
+        "(WindowSend.fused): 2 launches a layer, -280 a chunk on 8x4. Data movement only: outputs bit-identical",
+    ),
     "MOE_TRACE": Setting(
         "off",
         ("off", "moe"),

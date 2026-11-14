@@ -1,0 +1,108 @@
+{
+ "used": [
+  {
+   "id": "DS41-225",
+   "how": "the pattern the task named: the kernels find their chip by the routing table's my_device_id and look up their per-chip values in a table (mesh_overlay.hpp)",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-258",
+   "how": "a mesh program keeps the per-device dispatch: so per-chip data went to a DRAM table and an L1_SMALL landing, not into the runtime args (each launch's args are copied to all 32 chips)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-263",
+   "how": "sized the target (head ~2 us, combine ~3 us a chip of patching after P.63) and the expected host saving per chunk",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-210",
+   "how": "the dispatcher sends a kernel's per-core args at the kernel's longest list: padding every chip's lists to the longest costs no extra bytes, so the mesh program pads freely",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-146",
+   "how": "the overlay table and landing are allocated once per cached program (top-down DRAM, L1_SMALL), never per call, so no address-keyed cache moves",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "what differs between the fused head's / combine's per-chip programs (defines with the chip index, arg lists of chip-dependent length, port / accumulator placement): now DS41-264",
+  "that each launch copies its runtime args to every chip (~83 KB a chip a head call), which a mesh program does not remove: now DS41-265",
+  "how a data-movement kernel can write a compute kernel's runtime args on the same core (launch message rta_offset[2..4]) and whether that is safe on Blackhole (the hang, DS41-266, may be this)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "no padding or duplication of work: the arg-list padding is free (DS41-210: sent at the kernel's max length anyway) and no op does more work"
+  },
+  {
+   "id": "OV-23",
+   "answer": "n/a",
+   "evidence": "no Python-built op added or touched: fused_head is a C++ device op (WorkloadDescriptor); the mesh program is built once per cache entry and patched per call like before"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork regression / unit suite run on the 8x4; only the model's diagnostic probe (tests/test_mesh_program_probe.py), and after the hang no device run at all"
+  }
+ ],
+ "cited_only": [
+  "DS41-264",
+  "DS41-265",
+  "DS41-266"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "moe_replication",
+  "task": "P.63b",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-14T15:28:15",
+  "head": "a39123e5c25",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.63b.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_mesh_program_probe.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/moe_block_main_adapter.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/CMakeLists.txt",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/README.md",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/common/device/kernels/mesh_overlay.hpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/common/mesh_uniform.cpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/common/mesh_uniform.hpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/common/sources.cmake",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/fused_head/device/fused_head_device_operation.cpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/fused_head/device/fused_head_device_operation_types.hpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/fused_head/device/kernels/compute/router_compute.cpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/fused_head/device/kernels/compute/se_compute.cpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/fused_head/device/kernels/dataflow/planner_only.cpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/fused_head/device/kernels/dataflow/ra_y_send.cpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/fused_head/device/kernels/dataflow/router_brisc.cpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/fused_head/device/kernels/dataflow/router_ncrisc.cpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/fused_head/device/kernels/dataflow/se_brisc.cpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/fused_head/device/kernels/dataflow/se_ncrisc.cpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/fused_head/device/kernels/dataflow/xg_reader.cpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/fused_head/device/kernels/dataflow/xg_sender.cpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/fused_head/device/kernels/dataflow/xg_watcher.cpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/fused_head/device/kernels/ra_plan.hpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/fused_head/device/kernels/route_words.hpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/fused_head/fused_head.cpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/fused_head/fused_head.hpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/fused_head/fused_head_nanobind.cpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/routed_experts_combine/device/routed_experts_combine_program_factory.cpp"
+  ]
+ }
+}
