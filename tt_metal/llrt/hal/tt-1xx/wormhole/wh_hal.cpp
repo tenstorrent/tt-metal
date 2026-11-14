@@ -169,6 +169,11 @@ public:
         return defines;
     }
 
+protected:
+    // TRISCs and BRISC with Max_Req_Count 4. NCRISC runs kernels from IRAM on Wormhole, so it is left off.
+    std::optional<uint32_t> default_risc_prefetch_ctrl() const override { return 0x8F; }
+
+public:
     std::vector<std::string> srcs(const Params& params) const override {
         auto srcs = HalJitBuildQueryBase::srcs(params);
         if (params.core_type == HalProgrammableCoreType::ACTIVE_ETH) {
