@@ -4202,13 +4202,58 @@ tasks:
       top5_overlap: '>= limit'
       chunk_wall_ms: '> 0'
       device_ms_total: '> 0'
+- id: P.62b
+  title: 'Fold P.56''s planner into the combine (no separate planner launch): counts packets from the combine''s port senders, planner core in the next layer''s head;
+    removes ~3.7 ms host a chunk'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - P.62
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
+  - models/demos/common/bringup/testing
+  - models/demos/common/bringup/tests
+  - ttnn/ttnn/bringup
+  brief:
+    details: 'OWNER 2026-11-14: replicas must not cost host time. P.62 (DS41-258/259, BREADCRUMBS P.62) accounted it fully: prev adds one extra 32-chip launch per
+      MoE layer, the planner (85-102 us a call, ~3.7 ms a chunk); the rest is ~1-2 ms (combine fill path, Python). A mesh-wide planner program did not help (dispatch
+      per device remains). Remove the planner''s launch by folding it into programs that already run every layer, per P.62''s written plan: the planner''s count packets
+      go out from the combine''s port senders (the combine holds the fabric port cores all layer) and the planner compute core moves into the NEXT layer''s fused
+      head (which already has the router counts, P.45); respect the 110-core cap (rule 18); no new launch, no per-call runtime-arg changes. Plans, slots and outputs
+      bit-identical to today''s prev (host mirror 0 mismatches). MEASURE: host / device / wall per chunk, prev vs off, real novel AND code chunks 1..10 (test_moe_prev_replicas.py
+      with P.62''s accounting test tests/test_prev_host_account.py, 10 alternating rounds a side). Target: prev host <= off host + 1.5 ms. Fork changes in the combine
+      and fused head behind an option, CHANGELOG entries; no fork suites on the 8x4. SAFETY: a hang or reset need: STOP and report, never reset. Report plainly, short,
+      every term defined.'
+  ab:
+    env:
+      MOE_PLANNER: launch
+      ENGRAM_TABLE: resident
+    change:
+      MOE_PLANNER: folded
+      ENGRAM_TABLE: resident
+  ab_positions:
+  - 51200
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py && scripts/run_safe_pytest.sh --run-all
+      --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_moe_prev_replicas.py && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile
+      models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      chunk_wall_ms: '> 0'
+      device_ms_total: '> 0'
 - id: P.63
   title: 'One program for the whole mesh for the fused head and the combine (instead of 32 per-chip programs a launch): fewer host dispatches per layer'
   step: perf
   role: perf
   device: true
   deps:
-  - P.62
+  - P.62b
   paths:
   - models/demos/deepseek_v41_flash_d_p/tt
   - models/demos/deepseek_v41_flash_d_p/tests/
