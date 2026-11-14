@@ -33,6 +33,13 @@ struct DramPrefetcherTensorGeometry {
     uint32_t coalesced_num_pages = 0;
     // One receiver's slice of one block: what each receiver is delivered per block.
     uint32_t block_size_per_receiver = 0;
+    // The shard height (the rows allocated per bank) is padded to a multiple of num_blocks in the block layout only;
+    // the reader must not read the pad rows from DRAM (they lie past the end of the shard) and delivers them as zeros.
+    // num_full_blocks blocks lie entirely inside the shard; the next block holds partial_block_num_pages pages of
+    // partial_block_page_size bytes of real rows (possibly 0 pages); the rest are all pad.
+    uint32_t num_full_blocks = 0;
+    uint32_t partial_block_page_size = 0;
+    uint32_t partial_block_num_pages = 0;
 };
 
 // The block geometry dram_prefetcher derives from its weight tensors and its sender -> receivers layout.
