@@ -100,6 +100,29 @@ def test_adaptive_pool2d_rejects_mismatched_windows(device, input_hw, output_hw,
         )
 
 
+# Window bounds reach output_size * input_size, which no longer fits in 32 bits from a 65536-long dimension
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize(
+    "input_shape, output_size",
+    [
+        ((1, 16, 65536, 1), (65536, 1)),
+        ((1, 16, 1, 65536), (1, 65536)),
+        ((1, 16, 131072, 1), (32768, 1)),
+    ],
+    ids=["h65536_identity", "w65536_identity", "h131072_to_32768"],
+)
+@pytest.mark.parametrize("pool_type", ["max", "avg"])
+def test_adaptive_pool2d_large_input_dim(device, tensor_map, input_shape, output_size, pool_type):
+    run_adaptive_pool2d(
+        device=device,
+        tensor_map=tensor_map,
+        input_shape=input_shape,
+        output_size=output_size,
+        dtype=ttnn.bfloat16,
+        pool_type=pool_type,
+    )
+
+
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "input_shape, output_size, num_slices",
