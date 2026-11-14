@@ -16,9 +16,7 @@ constexpr uint32_t MAX_PACK_UNTILIZE_WIDTH = 8;
 constexpr uint32_t NUM_RISCV_DATA_MOVEMENT_CORES = 2;
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #ifdef PROLOGUE_AFFINE
-#include "api/compute/bcast.h"
-#include "api/compute/eltwise_binary_sfpu.h"
-#include "api/compute/compute_kernel_api.h"
+#include "ttnn/cpp/ttnn/kernel_lib/untilize_affine_helpers.hpp"
 #endif
 
 void kernel_main() {
@@ -32,39 +30,14 @@ void kernel_main() {
 
     compute_kernel_hw_startup(src_cb_id, out_cb_id0);
 #ifdef PROLOGUE_AFFINE
-    // Untilizes silu(x * scale + shift) with per-channel [1, C] scale and shift tiles, one tile at a time: the row
-    // broadcast multiply (FPU) and the shift broadcast into dest need different unpack setups, so both inits run per
-    // tile.
-    constexpr uint32_t scale_cb_id = get_compile_time_arg_val(5);
-    constexpr uint32_t shift_cb_id = get_compile_time_arg_val(6);
-    cb_wait_front(scale_cb_id, tiles_per_row);
-    cb_wait_front(shift_cb_id, tiles_per_row);
-    pack_untilize_init<1, tiles_per_row>(src_cb_id, out_cb_id0);
-    add_binary_tile_init();
-    silu_tile_init();
-    for (uint32_t block_idx = 0; block_idx < total_blocks; block_idx++) {
-        const uint32_t out_cb_id = (block_idx % 2 == 0) ? out_cb_id0 : out_cb_id1;
-        for (uint32_t r = 0; r < block_size; r++) {
-            cb_wait_front(src_cb_id, tiles_per_row);
-            cb_reserve_back(out_cb_id, tiles_per_row);
-            for (uint32_t c = 0; c < tiles_per_row; c++) {
-                tile_regs_acquire();
-                mul_bcast_rows_init(src_cb_id, scale_cb_id);
-                mul_tiles_bcast<BroadcastType::ROW>(src_cb_id, scale_cb_id, c, c, 0);
-                unary_bcast_init<BroadcastType::ROW>(shift_cb_id);
-                unary_bcast<BroadcastType::ROW>(shift_cb_id, c, 1);
-                add_binary_tile(0, 1, 0);
-                silu_tile(0);
-                tile_regs_commit();
-                tile_regs_wait();
-                pack_untilize_dest<1, tiles_per_row>(out_cb_id, 1, c);
-                tile_regs_release();
-            }
-            cb_pop_front(src_cb_id, tiles_per_row);
-            cb_push_back(out_cb_id, tiles_per_row);
-        }
-    }
-    pack_untilize_uninit(out_cb_id0);
+    compute_kernel_lib::untilize_affine_silu<
+        tiles_per_row,
+        block_size,
+        src_cb_id,
+        get_compile_time_arg_val(5),
+        get_compile_time_arg_val(6),
+        out_cb_id0,
+        out_cb_id1>(total_blocks);
 #else
 
     // Initialize once before the loop
