@@ -949,3 +949,48 @@ def test_sharded_norm_residual_dtype_differs_from_input(
     max_abs = (output - expected).abs().max().item()
     # The interleaved path with the same dtypes reaches PCC >= 0.99995 and max abs error <= 0.06 here.
     assert pcc > 0.9999 and max_abs < 0.1, f"pcc={pcc:.6f} max_abs={max_abs:.4g}"
+
+
+# The per-core reduce factor (num_blocks / W) and the cross-core factor (1 / num_blocks) are not powers of
+# two for 3, 5, 6 or 7 width blocks or for widths such as 96 or 768. Packed into a bfloat16 scaler tile they
+# were rounded by ~0.2%, which biased E[x], so x - E[x] was off by about 0.002 * mean. With a mean of 100 and
+# a standard deviation of 1 that made the error ~3x the interleaved op's. Power-of-two factors are controls.
+@pytest.mark.parametrize(
+    ("num_cores_h", "num_cores_w", "block_wt", "two_stage"),
+    [
+        (2, 1, 3, False),
+        (2, 3, 1, False),
+        (2, 3, 2, False),
+        (2, 6, 1, False),
+        (2, 7, 1, False),
+        (2, 8, 3, False),
+        (2, 3, 1, True),
+        (2, 1, 2, False),
+        (2, 4, 2, False),
+    ],
+    ids=["w96_c1", "w96_c3", "w192_c3", "w192_c6", "w224_c7", "w768_c8", "w192_2x3_two_stage", "w64_c1", "w256_c4"],
+)
+def test_layer_norm_sharded_large_mean_non_power_of_two_blocks(device, num_cores_h, num_cores_w, block_wt, two_stage):
+    torch.manual_seed(0)
+    h = 128
+    if two_stage:
+        w = TILE_WIDTH * block_wt * num_cores_h * num_cores_w
+        block_ht = h // TILE_WIDTH
+    else:
+        w = TILE_WIDTH * block_wt * num_cores_w
+        block_ht = h // (TILE_WIDTH * num_cores_h)
+    mem_config = create_sharded_mem_config(h, w, num_cores_h, num_cores_w, two_stage)
+    tt_input = ttnn.from_torch(
+        torch.randn((h, w)) + 100.0,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=mem_config,
+    )
+    x = ttnn.to_torch(tt_input).double()
+    expected = torch.nn.functional.layer_norm(x, [w], eps=1e-12)
+
+    output = ttnn_layer_norm_sharded(device, tt_input, False, block_ht, block_wt).double().reshape(expected.shape)
+    rel_err = ((output - expected).abs().max() / expected.abs().max()).item()
+    # Power-of-two block counts and the interleaved op stay near 0.02-0.03 here; the bfloat16 scalers gave 0.06-0.10.
+    assert rel_err < 0.04, f"max abs error / max |expected| = {rel_err:.4g}"

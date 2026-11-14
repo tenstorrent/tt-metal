@@ -273,9 +273,14 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
     // the physical 128).
     float winv = (grid.num_blocks == 1) ? (1.0f / logical_K) : (static_cast<float>(grid.num_blocks) / logical_K);
     float cinv = is_post_all_gather ? (1.0f / num_distributed_devices) : (1.0f / grid.num_blocks);
-    auto bfloat_cinv = bfloat16(cinv);
+    // The scaler tiles are bfloat16, so 1/3, 1/5, 1/6, 1/7 (and num_blocks/logical_K for such counts) would be
+    // rounded by up to ~0.2% and bias E[x] and Var[x]. The non-distributed, non-Welford kernel instead reduces
+    // with a 1.0 scaler (exact) and multiplies the result by winv / cinv as float32 in DEST, as the interleaved
+    // kernel does with 1/W.
+    const bool scale_reduce_in_dest = !is_pre_all_gather && !is_post_all_gather && !use_welford;
+    auto bfloat_cinv = bfloat16(scale_reduce_in_dest ? 1.0f : cinv);
     auto bfloat_cinv_one = bfloat16(1.0f);
-    auto bfloat_winv = bfloat16(winv);
+    auto bfloat_winv = bfloat16(scale_reduce_in_dest ? 1.0f : winv);
 
     // Build mcast NOC coordinates
     std::vector<std::uint32_t> mcast_noc_x, mcast_noc_y;
@@ -360,6 +365,9 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
         .legacy_reduction = legacy_reduction,
         .eps = eps,
         .per_core_recip_lut_size = block_w,
+        .scale_reduce_in_dest = scale_reduce_in_dest,
+        .reduce_scale_w = winv,
+        .reduce_scale_c = cinv,
         .reader_noc = reader_noc,
         .writer_noc = writer_noc,
         .compute_hw = to_compute_hardware_config(compute_kernel_config),

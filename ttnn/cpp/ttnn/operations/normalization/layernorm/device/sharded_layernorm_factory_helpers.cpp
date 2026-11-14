@@ -1067,6 +1067,11 @@ m2::KernelSpec::CompileTimeArgs compute_compile_time_args(
         {"num_blocks_second_stage", workers.num_blocks_second_stage},
     };
 
+    if (c.scale_reduce_in_dest) {
+        args.emplace("reduce_scale_w", std::bit_cast<uint32_t>(c.reduce_scale_w));
+        args.emplace("reduce_scale_c", std::bit_cast<uint32_t>(c.reduce_scale_c));
+    }
+
     if (c.use_welford) {
         // Number of valid (logical) columns in the final tile of the width. The kernel uses this
         // both to bound the partial Welford tile and, via last_block_w, to weight the final width
