@@ -123,6 +123,7 @@ class MiniMaxM3PrefillAdapter(PrefillModelAdapter):
 
     # TtPrefillRuntime.prefill_forward runs PREFILL_FORWARD_TOKENS_BUDGET / PREFILL_CHUNK_SIZE chunks per forward.
     supports_packed_forward = True
+    supports_media = True
 
     # The D2D hidden state ships in the residual stream's layer-boundary layout (see tt/residual.py).
     @property
@@ -197,6 +198,15 @@ class MiniMaxM3PrefillAdapter(PrefillModelAdapter):
             from models.common.multimedia_store.mooncake_store import MooncakeEmbeddingReader
 
             media_embedding_reader = MooncakeEmbeddingReader.open(media_store_config)
+        elif params.is_first_rank and int(os.environ.get("PREFILL_MEDIA_MAX_REFS", 0)):
+            if os.environ.get("PREFILL_MEDIA_STUB_EMBEDDINGS") != "1":
+                raise ValueError(
+                    "PREFILL_MEDIA_MAX_REFS > 0 needs the media embedding store (PREFILL_MEDIA_STORE_MASTER) "
+                    "or PREFILL_MEDIA_STUB_EMBEDDINGS=1"
+                )
+            from models.demos.minimax_m3.vision.stub_reader import StubEmbeddingReader
+
+            media_embedding_reader = StubEmbeddingReader(hf_config.hidden_size)
 
         # EXPERT_DTYPE selects the MoE routed-expert weight dtype (bf4 default here / bf8). The tilized
         # cache holds both, so either stays on the fast cache path. Same knob name as the M3 generate +

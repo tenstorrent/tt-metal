@@ -812,7 +812,7 @@
   cmd: |
     # Host-only tests have no mesh id; run them here: chunk layout, model variants / config checks, checkpoint
     # dequant, router precision, compute configs and the shared-expert 2D blocking.
-    pytest --timeout 300 models/demos/minimax_m3/tests/unit/ -k "(1x1 and not msa_layer) or rotated_chunk_layout or packed_forward_layout or test_model_variants or test_checkpoint_dequant or test_router_precision or test_precision_configs or test_shared_overlap_config or adapter_packed_forward"
+    pytest --timeout 300 models/demos/minimax_m3/tests/unit/ -k "(1x1 and not msa_layer) or rotated_chunk_layout or packed_forward_layout or test_model_variants or test_checkpoint_dequant or test_router_precision or test_precision_configs or test_shared_overlap_config or adapter_packed_forward or one_batched_fetch"
     # The media module the encoder service loads, against Hugging Face's image processor.
     pytest --timeout 120 models/demos/minimax_m3/tests/unit/test_vision_media.py
     # The prefill runner's media embedding store, against a fake client and a local Mooncake master.
@@ -831,7 +831,8 @@
   cmd: |
     export TT_METAL_WATCHER=30
     export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
-    # -k 8x4: ring_joint / MSA SP / KV cache / EP MoE / model_sp / attention(+chunked) / dense_mlp@8x4
+    # -k 8x4: ring_joint / MSA SP / KV cache / EP MoE / model_sp / attention(+chunked) / dense_mlp /
+    # media splice vs HF reference, all @8x4
     pytest --timeout 900 models/demos/minimax_m3/tests/unit/ -k "8x4"
   model: minimax-m3
   skus:
