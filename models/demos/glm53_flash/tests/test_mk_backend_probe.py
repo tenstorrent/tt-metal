@@ -148,6 +148,11 @@ def test_mk_backend_probe(mesh_device, monkeypatch):
             f"(per-chip shapes {sorted(filled)}) in {time.perf_counter() - t0:.1f} s"
         )
         del filled
+    if (
+        WIDTH < B
+    ):  # a narrow / native width's head is a view of the base head: the base (full-width) step runs eagerly first
+        backend.decode(io, kv, B)  # (the generator warmup order; MkHead.width_view asserts base.h)
+        ttnn.synchronize_device(mesh_device)
     t0 = time.perf_counter()
     backend.decode(io, kv, WIDTH)  # one eager step (compiles)
     ttnn.synchronize_device(mesh_device)
