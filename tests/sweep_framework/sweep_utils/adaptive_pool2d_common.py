@@ -29,6 +29,7 @@ def run_adaptive_pool2d(
     dram_slice_config=None,
     memory_config=ttnn.DRAM_MEMORY_CONFIG,
     sharding=None,
+    compute_kernel_config=None,
 ):
     in_n, in_c, in_h, in_w = input_shape
     out_h, out_w = output_size
@@ -66,6 +67,7 @@ def run_adaptive_pool2d(
             memory_config=memory_config,
             dram_slice_config=dram_slice_config,
             applied_shard_scheme=sharding,
+            compute_kernel_config=compute_kernel_config,
         )
 
         torch_output = golden_adaptive_avg_pool2d(
