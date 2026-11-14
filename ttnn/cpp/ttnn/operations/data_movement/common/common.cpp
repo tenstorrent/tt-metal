@@ -5,6 +5,10 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 
 #include <algorithm>
+#include <array>
+#include <optional>
+#include <tuple>
+#include <utility>
 #include "ttnn/operations/core/program_cache_l1.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/data_movement/squeeze/squeeze.hpp"
@@ -988,11 +992,25 @@ void push_buffer_set(
     });
 }
 
-BlockPlan make_block_plan(
+namespace {
+
+// What make_block_plan splits: the grid, the tiled shape, and the block-size limit (what the L1 free
+// right now allows, capped by max_block_tiles). block_l1_fit reads the same inputs, so the plan and
+// its cache key cannot disagree.
+struct BlockSplitInputs {
+    tt::tt_metal::CoreCoord grid_size;
+    tt::tt_metal::CoreRangeSet available_grid;
+    uint32_t num_tiles_per_col = 0;
+    uint32_t num_tiles_per_row = 0;
+    uint32_t num_blocks = 0;
+    uint32_t cb_block_size_limit = 0;
+};
+
+BlockSplitInputs block_split_inputs(
     BlockDirection direction,
     BlockCoreOrder core_order,
     const Tensor& input_tensor,
-    const Tensor& output_tensor,
+    const ttnn::Shape& output_padded_shape,
     uint32_t input_single_tile_size,
     uint32_t output_single_tile_size,
     uint32_t tile_height,
@@ -1005,17 +1023,19 @@ BlockPlan make_block_plan(
         core_order == BlockCoreOrder::ColumnMajor || !sub_core_grids.has_value(),
         "RowMajor core order splits over the whole grid and cannot honour sub_core_grids");
 
-    const tt::tt_metal::CoreCoord grid_size = input_tensor.device()->compute_with_storage_grid_size();
-    const tt::tt_metal::CoreRangeSet default_grid(tt::tt_metal::CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1}));
-    tt::tt_metal::CoreRangeSet available_grid = sub_core_grids.has_value() ? sub_core_grids.value() : default_grid;
+    BlockSplitInputs in;
+    in.grid_size = input_tensor.device()->compute_with_storage_grid_size();
+    in.available_grid =
+        sub_core_grids.has_value()
+            ? sub_core_grids.value()
+            : tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange({0, 0}, {in.grid_size.x - 1, in.grid_size.y - 1}));
 
     // Tilize splits over the output (tiled) shape; untilize over the input (tiled) shape. They only
     // coincide when nothing is padded away -- see BlockDirection.
-    const auto& padded =
-        (direction == BlockDirection::Tilize) ? output_tensor.padded_shape() : input_tensor.padded_shape();
-    const uint32_t num_tiles_per_col = padded[-2] / tile_height;
-    const uint32_t num_tiles_per_row = padded[-1] / tile_width;
-    const uint32_t num_blocks = (padded[-1] * padded[-2]) / (tile_height * tile_width);
+    const auto& padded = (direction == BlockDirection::Tilize) ? output_padded_shape : input_tensor.padded_shape();
+    in.num_tiles_per_col = padded[-2] / tile_height;
+    in.num_tiles_per_row = padded[-1] / tile_width;
+    in.num_blocks = (padded[-1] * padded[-2]) / (tile_height * tile_width);
 
     // Fold the staging buffer (bytes/tile + fixed) into the limit or the region overruns L1. Only
     // the tilize direction has one, so untilize budgets the input/output pair alone.
@@ -1026,15 +1046,101 @@ BlockPlan make_block_plan(
     const uint32_t budget_for_tiles = (max_l1_size > fixed_staging_bytes) ? (max_l1_size - fixed_staging_bytes) : 0;
     const uint32_t bytes_per_tile_pair = input_single_tile_size + output_single_tile_size + staging_bytes_per_tile;
     const uint32_t l1_block_size_limit = (bytes_per_tile_pair == 0) ? 0 : budget_for_tiles / bytes_per_tile_pair;
-    const uint32_t cb_block_size_limit =
+    in.cb_block_size_limit =
         max_block_tiles.has_value() ? std::min(l1_block_size_limit, *max_block_tiles) : l1_block_size_limit;
+    return in;
+}
+
+}  // namespace
+
+BlockL1Fit block_l1_fit(
+    BlockDirection direction,
+    BlockCoreOrder core_order,
+    const Tensor& input_tensor,
+    const ttnn::Shape& output_padded_shape,
+    uint32_t input_single_tile_size,
+    uint32_t output_single_tile_size,
+    uint32_t tile_height,
+    uint32_t tile_width,
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids,
+    std::optional<uint32_t> max_block_tiles) {
+    const BlockSplitInputs in = block_split_inputs(
+        direction,
+        core_order,
+        input_tensor,
+        output_padded_shape,
+        input_single_tile_size,
+        output_single_tile_size,
+        tile_height,
+        tile_width,
+        sub_core_grids,
+        max_block_tiles);
+    const size_t grid_area = (core_order == BlockCoreOrder::RowMajor)
+                                 ? static_cast<size_t>(in.grid_size.x) * in.grid_size.y
+                                 : in.available_grid.num_cores();
+
+    // The fit is a pure function of these five values, but the fallback search behind it costs about
+    // 30 us for a wide row on a few cores, too much for every dispatch. Cache hits repeat the same
+    // shape at the same free L1, so a few recent answers per thread cover them.
+    using FitKey = std::tuple<size_t, uint32_t, uint32_t, uint32_t, uint32_t>;
+    const FitKey key{grid_area, in.num_blocks, in.num_tiles_per_row, in.num_tiles_per_col, in.cb_block_size_limit};
+    constexpr size_t kRecentFits = 8;
+    thread_local std::array<std::optional<std::pair<FitKey, BlockL1Fit>>, kRecentFits> recent_fits;
+    thread_local size_t next_slot = 0;
+    for (const auto& recent : recent_fits) {
+        if (recent.has_value() && recent->first == key) {
+            return recent->second;
+        }
+    }
+
+    // split_blocks_for_tilize_wh only falls back to smaller blocks when the unconstrained block is
+    // larger than the limit (free L1, capped by max_block_tiles); otherwise neither enters the split.
+    BlockL1Fit fit;
+    const auto unconstrained =
+        ttnn::compute_ncores_wh(grid_area, in.num_blocks, in.num_tiles_per_row, in.num_tiles_per_col);
+    if (unconstrained.single_block_size > in.cb_block_size_limit) {
+        fit = BlockL1Fit{
+            .limited = true,
+            .sizes = ttnn::try_compute_ncores_wh_sb(
+                grid_area, in.num_blocks, in.num_tiles_per_row, in.num_tiles_per_col, in.cb_block_size_limit),
+        };
+    }
+    recent_fits[next_slot] = std::make_pair(key, fit);
+    next_slot = (next_slot + 1) % kRecentFits;
+    return fit;
+}
+
+BlockPlan make_block_plan(
+    BlockDirection direction,
+    BlockCoreOrder core_order,
+    const Tensor& input_tensor,
+    const Tensor& output_tensor,
+    uint32_t input_single_tile_size,
+    uint32_t output_single_tile_size,
+    uint32_t tile_height,
+    uint32_t tile_width,
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids,
+    std::optional<uint32_t> max_block_tiles) {
+    const bool has_staging = (direction == BlockDirection::Tilize);
+    BlockSplitInputs in = block_split_inputs(
+        direction,
+        core_order,
+        input_tensor,
+        output_tensor.padded_shape(),
+        input_single_tile_size,
+        output_single_tile_size,
+        tile_height,
+        tile_width,
+        sub_core_grids,
+        max_block_tiles);
 
     BlockPlan plan;
-    plan.split = (core_order == BlockCoreOrder::RowMajor)
-                     ? ttnn::split_blocks_for_tilize_wh(
-                           grid_size, num_blocks, num_tiles_per_row, num_tiles_per_col, cb_block_size_limit)
-                     : ttnn::split_blocks_for_tilize_wh(
-                           available_grid, num_blocks, num_tiles_per_row, num_tiles_per_col, cb_block_size_limit);
+    plan.split =
+        (core_order == BlockCoreOrder::RowMajor)
+            ? ttnn::split_blocks_for_tilize_wh(
+                  in.grid_size, in.num_blocks, in.num_tiles_per_row, in.num_tiles_per_col, in.cb_block_size_limit)
+            : ttnn::split_blocks_for_tilize_wh(
+                  in.available_grid, in.num_blocks, in.num_tiles_per_row, in.num_tiles_per_col, in.cb_block_size_limit);
 
     // The work split hands out exactly two block widths, so there are exactly two buffer sets:
     //

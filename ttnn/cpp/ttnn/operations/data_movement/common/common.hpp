@@ -234,6 +234,30 @@ BlockPlan make_block_plan(
 // sweep, #56622), so Quasar keeps every tilize block at or under this width.
 constexpr uint32_t QUASAR_MAX_TILIZE_BLOCK_TILES = 128;
 
+// The part of make_block_plan's split that free L1 (and `max_block_tiles`) decides. When the
+// unconstrained block is over that limit, the split falls back to the smaller `sizes` (nullopt if
+// none fits); everything else in the plan follows from the shapes and the grid. Two calls with
+// equal attributes and tensor specs build the same plan exactly when this is equal, so a
+// compute_program_hash can key on it per dispatch without building the plan. Pass the same
+// `max_block_tiles` as to make_block_plan. The output is given by its padded shape, since a hash has
+// no output tensor.
+struct BlockL1Fit {
+    bool limited = false;
+    std::optional<ttnn::NcoresWHsb> sizes;
+};
+
+BlockL1Fit block_l1_fit(
+    BlockDirection direction,
+    BlockCoreOrder core_order,
+    const Tensor& input_tensor,
+    const ttnn::Shape& output_padded_shape,
+    uint32_t input_single_tile_size,
+    uint32_t output_single_tile_size,
+    uint32_t tile_height,
+    uint32_t tile_width,
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids,
+    std::optional<uint32_t> max_block_tiles = std::nullopt);
+
 // The buffer set whose block width this core was assigned. Asserts the core belongs to exactly one
 // set: an unmatched core silently defaulting to `full_set` would bind the wrong-width buffers, and
 // a downstream size check only catches that when the widths happen to differ numerically.

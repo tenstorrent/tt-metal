@@ -99,10 +99,7 @@ ttnn::Tensor tilize_with_val_padding(
                                  : input_single_tile_size;
 
     uint32_t num_tiles_per_row = output_padded_shape[-1] / tt::constants::TILE_WIDTH;
-    uint32_t num_tiles_per_col = output_padded_shape[-2] / tt::constants::TILE_HEIGHT;
 
-    bool enough_space_width = operations::data_movement::is_enough_space(
-        input_tensor, input_single_tile_size, output_single_tile_size, num_tiles_per_col);
     bool enough_space_height = operations::data_movement::is_enough_space(
         input_tensor, input_single_tile_size, output_single_tile_size, num_tiles_per_row);
 
@@ -114,7 +111,6 @@ ttnn::Tensor tilize_with_val_padding(
             memory_config.value_or(input_tensor.memory_config()),
             output_dtype.value_or(input_tensor.dtype()),
             use_multicore,
-            enough_space_width,
             enough_space_height,
             sub_core_grids);
     };
