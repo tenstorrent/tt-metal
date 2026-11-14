@@ -48,6 +48,7 @@
   "perf_math_matmul": 19132.8,
   "perf_matmul": 4257.8,
   "perf_matmul_custom": 2831.7,
+  "perf_matmul_custom_compressed": 397.7,
   "perf_matmul_in1_column_stride": 9.1,
   "perf_pack": 543.9,
   "perf_pack_dest_bank": 4.4,
