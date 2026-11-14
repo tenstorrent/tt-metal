@@ -13,10 +13,9 @@ import glob
 import json
 import os
 import re
-import runpy
-from pathlib import Path
 
 import pandas as pd
+from test_name_aliases import canonical_test_name
 
 # 5 runs of one commit on Blackhole moved at most 1.9% and 25 cycles (#53752).
 DEFAULT_THRESHOLD = 0.02
@@ -49,29 +48,8 @@ def _is_metric(col):
 MODULE_COL = "test_module"
 
 
-def _load_test_name_aliases():
-    """Load old -> current module names from the perf schema catalog."""
-    catalog_path = (
-        Path(__file__).parents[1]
-        / "tests"
-        / "python_tests"
-        / "helpers"
-        / "perf"
-        / "test_schemas.py"
-    )
-    namespace = runpy.run_path(str(catalog_path))
-    aliases = {}
-    for catalog_name in ("PERF_TEST_SCHEMAS", "PERF_TEST_SCHEMAS_QSR"):
-        for entry in namespace[catalog_name].values():
-            aliases.update(entry.get("test_name_aliases", {}))
-    return aliases
-
-
-TEST_NAME_ALIASES = _load_test_name_aliases()
-
-
 def _canonical_module(module):
-    return TEST_NAME_ALIASES.get(module, module)
+    return canonical_test_name(module)
 
 
 def _is_ignored(col):
