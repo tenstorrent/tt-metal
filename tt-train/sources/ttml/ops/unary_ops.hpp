@@ -21,5 +21,7 @@ autograd::TensorPtr broadcast_batch(const autograd::TensorPtr& tensor, uint32_t 
 autograd::TensorPtr log_softmax(const autograd::TensorPtr& tensor, int dim);
 autograd::TensorPtr log_softmax_moreh(const autograd::TensorPtr& tensor, int dim);
 autograd::TensorPtr exp(const autograd::TensorPtr& tensor);
+autograd::TensorPtr sigmoid(const autograd::TensorPtr& tensor);
+autograd::TensorPtr tanh(const autograd::TensorPtr& tensor);
 autograd::TensorPtr clip(const autograd::TensorPtr& tensor, float lo, float hi);
 }  // namespace ttml::ops
