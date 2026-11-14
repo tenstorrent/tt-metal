@@ -177,6 +177,7 @@ void bind_normalization_layernorm_operation(nb::module_& mod) {
             residual_input_tensor (ttnn.Tensor, optional): Defaults to `None`.
             program_config (ttnn.ProgramConfig, optional): Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig)
+            recip_tensor (ttnn.Tensor, optional): Reciprocal lookup tensor used by the Welford algorithm. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.

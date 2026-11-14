@@ -31,6 +31,8 @@ void bind_pad(nb::module_& mod) {
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
             padding (List[Tuple[int, int]]): padding to apply. Each element is a tuple of 2 integers: the number of values to add before and after the tensor in that dimension. A list shorter than the tensor's rank applies to the trailing dimensions.
+            output_padded_shape (List[int] of length 4): the 4D output shape to pad to; used by the explicit-shape overload instead of `padding`.
+            input_tensor_start (List[int] of length 4): the 4D position of the input inside `output_padded_shape`; used by the explicit-shape overload.
             value (float): value to pad with. Integer values are converted to float32, so ``INT32`` and ``UINT32`` values with a magnitude above 2^24 may be rounded.
 
         Keyword Args:

@@ -36,6 +36,7 @@ void bind_reduction_cumsum_operation(nb::module_& mod) {
             reverse_order (bool, optional, default False): whether to perform accumulation from the end to the beginning of accumulation axis.
             out (ttnn.Tensor, optional): preallocated output. If specified, `out` must have same shape as `input`, and must be on the same device.
             disable_compensated_sum (bool, optional, default False): Deprecated (temporary opt-out for internal CI bring-up, slated for removal). fp32 cumsum uses a compensated (Kahan) accumulation to keep the running sum accurate along the scan. Set True to fall back to the plain sequential sum instead. Intended for parity checks and debugging; it has no effect on integer inputs, which accumulate exactly regardless.
+            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.

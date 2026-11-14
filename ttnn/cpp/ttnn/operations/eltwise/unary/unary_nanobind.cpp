@@ -2154,6 +2154,7 @@ void py_module(nb::module_& mod) {
         Keyword args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            sub_core_grids (ttnn.CoreRangeSet, optional): Sub core grids to run the operation on. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.

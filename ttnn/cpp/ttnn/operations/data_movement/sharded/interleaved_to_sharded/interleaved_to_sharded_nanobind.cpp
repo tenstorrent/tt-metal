@@ -32,6 +32,8 @@ void bind_interleaved_to_sharded(nb::module_& mod) {
 
         Keyword Args:
             * :attr:`output_dtype` (Optional[ttnn.DataType]): Output data type, defaults to same as input.
+            * :attr:`keep_l1_aligned` (bool, optional): accepted for compatibility; the program always keeps shard offsets L1-aligned. Defaults to `False`.
+            * :attr:`preallocated_output` (ttnn.Tensor, optional): Preallocated output tensor for the ``sharded_memory_config`` overload. Defaults to `None`.
 
         Example 1 (using grid, shape, scheme, orienttion):
 

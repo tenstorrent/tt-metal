@@ -52,6 +52,8 @@ void bind_reshape_view_operation(nb::module_& mod) {
             Args:
                 input_tensor (ttnn.Tensor): the input tensor.
                 shape (ttnn.Shape or List[int]): the new shape. As a list or tuple, one dimension may be `-1`.
+                logical_shape (ttnn.Shape or List[int]): the logical shape; used by the two-shape overload instead of `shape`.
+                padded_shape (ttnn.Shape or List[int]): the padded shape; used by the two-shape overload.
 
             Keyword Args:
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration of the output tensor. Defaults to `None`, which matches the input tensor's memory configuration. If ``memory_config`` specifies a sharded layout without ``shard_spec``, the input tensor's ``shard_spec`` is used as the seed grid (layout should match the input).

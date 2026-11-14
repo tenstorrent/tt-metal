@@ -36,6 +36,7 @@ void bind_tilize_with_val_padding(nb::module_& mod) {
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
                 dtype (data type, optional): Data type of the output tensor. Defaults to `None`.
                 use_multicore (bool, optional): Whether to use multicore. Defaults to `True`.
+                sub_core_grids (ttnn.CoreRangeSet, optional): Sub core grids to run the operation on. Defaults to `None`.
 
             Returns:
                 ttnn.Tensor: the output tensor.
@@ -79,6 +80,7 @@ void bind_tilize_with_zero_padding(nb::module_& mod) {
                 * :attr:`memory_config`: Memory Config of the output tensor.
                 * :attr:`dtype`: Data type of the output tensor.
                 * :attr:`use_multicore`: Whether to use multicore.
+                * :attr:`sub_core_grids`: Sub core grids to run the operation on.
         )doc";
 
     ttnn::bind_function<"tilize_with_zero_padding">(

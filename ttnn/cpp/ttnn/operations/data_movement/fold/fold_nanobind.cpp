@@ -34,6 +34,11 @@ void bind_fold_operation(nb::module_& mod) {
             input (ttnn.Tensor): Input tensor [N, H, W, C].
             stride_h (int): Stride along H.
             stride_w (int): Stride along W.
+            use_transpose_as_fold (bool, optional): Use the legacy transpose-based implementation (not compatible with `collapse_output=True`). Defaults to `False`.
+            output_shape (ttnn.Shape, optional): Output shape to use instead of the one inferred from the input. Defaults to `None`.
+            padding (List[int] of length 2, 4 or 6): Input padding as `[pad_h, pad_w]`, `[pad_h_top, pad_h_bottom, pad_w_left, pad_w_right]` or `[pad_h_top, pad_h_bottom, pad_w_left, pad_w_right, pad_c_front, pad_c_back]`. Defaults to `[0, 0]`.
+            grid_size (ttnn.CoreRangeSet, optional): Core grid for the sharded transpose-based path. Defaults to `None`.
+            override_memory_config (ttnn.MemoryConfig, optional): Memory configuration to apply to the output tensor. Defaults to `None`.
             collapse_output (bool, optional): Default False. When True, returns
                 (1, 1, N * Hp/stride_h * Wp/stride_w, Cp * stride_h * stride_w) instead.
     )doc";

@@ -22,6 +22,9 @@ void bind_roll(nb::module_& mod) {
             input_tensor: A tensor whose elements will be rolled. A TILE layout tensor must use the standard 32x32 tile.
             shifts: The number of places by which elements are shifted. Can be an integer or a list of integers (one per dimension).
             dim: The dimension(s) along which to roll. If shifts is a list, then dim must be a list of the same length as shifts.
+
+        Keyword Args:
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
         )doc";
 
     ttnn::bind_function<"roll">(

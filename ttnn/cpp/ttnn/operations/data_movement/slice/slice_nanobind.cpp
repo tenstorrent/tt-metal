@@ -51,7 +51,8 @@ void bind_slice(nb::module_& mod) {
         Returns a slice of the input tensor, given the start and end indices of each dimension and an optional step.
 
         ``slice_start`` and ``slice_end`` can also be passed positionally as ``ttnn.Tensor`` objects; that overload also
-        takes the ``slice_dim`` and ``num_devices`` keywords.
+        takes the ``slice_dim`` and ``num_devices`` keywords. The fixed-size array overload binds the same values as
+        ``starts``, ``ends`` and ``steps``.
 
         Args:
             input_tensor (ttnn.Tensor): Input tensor, on device.
