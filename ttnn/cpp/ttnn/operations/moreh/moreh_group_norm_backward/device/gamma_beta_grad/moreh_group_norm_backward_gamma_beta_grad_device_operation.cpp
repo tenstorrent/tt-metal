@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <utility>
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
@@ -49,15 +50,20 @@ void MorehGroupNormBackwardGammaBetaGradOperation::validate_tensors(
     // input (N, C, H, W)
     C = input.padded_shape()[1];
     TT_FATAL(C % num_groups == 0, "input_shape[1] must be divisible by num_groups.");
-    // gamma_grad (1, 1, 1, C)
-    if (gamma_grad.has_value()) {
-        C = gamma_grad.value().logical_shape()[-1];
-        TT_FATAL(C % num_groups == 0, "gamma_grad_shape[-1] must be divisible by num_groups.");
-    }
-    // beta_grad (1, 1, 1, C)
-    if (beta_grad.has_value()) {
-        C = beta_grad.value().logical_shape()[-1];
-        TT_FATAL(C % num_groups == 0, "beta_grad_shape[-1] must be divisible by num_groups.");
+    // gamma_grad and beta_grad (1, 1, 1, C), with C the input's channel count: the writer stores one
+    // value per input channel, so a narrower tensor would be written past its end.
+    const auto input_channels = input.logical_shape()[1];
+    for (const auto& [grad, name] : {std::pair{&gamma_grad, "gamma_grad"}, std::pair{&beta_grad, "beta_grad"}}) {
+        if (!grad->has_value()) {
+            continue;
+        }
+        const auto& grad_shape = grad->value().logical_shape();
+        TT_FATAL(
+            grad_shape[-1] == input_channels && grad_shape.volume() == input_channels,
+            "moreh_group_norm_backward: {} shape {} must be (1, 1, 1, {}) to match the input's channels",
+            name,
+            grad_shape,
+            input_channels);
     }
 
     // mean (1, 1, N, num_groups)
