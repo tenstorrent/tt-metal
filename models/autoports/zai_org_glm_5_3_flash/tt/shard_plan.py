@@ -969,6 +969,20 @@ def shard_sel2(pair: int, r8: bool = True) -> bool:
     return on
 
 
+def shard_prefilter(pair: int) -> bool:
+    """rev 74 GLM53_DSA_SHARD_PREFILTER (default 0): the exact merge pre-filter (dsa_shard.hpp PREFILTER, the kernels'
+    MLA_DSA_SHARD_PREFILTER; emulated by helper_merge prefilter=True): each merge helper reports the min over its lists
+    of their TOPK / NCHIPS-th largest key, the coordinator broadcasts the min L, the helpers keep their keys >= L before
+    the radix rounds -- the same T_g, k_rem and quotas over ~TOPK keys instead of NCHIPS x TOPK; the pair / the 2x4
+    never take it"""
+    return pair > 2 and _flag("GLM53_DSA_SHARD_PREFILTER")
+
+
+def pf_kth(keys, rank: int) -> int:
+    """dsa_shard.hpp pf_kth: the rank-th largest of keys (duplicates counted), 0 below rank keys (no bound)"""
+    return 0 if len(keys) < rank else sorted(keys, reverse=True)[rank - 1]
+
+
 def local_all_pools(n_closed: int, c: int, C: int) -> int:
     """dsa_shard.hpp local_all_pools: the valid pools of chunk core c of C at n_closed closed local pools (pool tiles
     c, c + C, .. < ceil(n_closed / 32), each min(32, n_closed - its first pool) columns)"""
@@ -1518,7 +1532,9 @@ def local_select_sel2(core_keys: list, k: int = 512) -> dict:
 
 
 # ------------------------------------------------------------------ the rev-59 global merge on helpers (emulation)
-def helper_merge(lists: list, rank: int, k: int = 512, digit_bits: int = 4, kph: int = 1, own=None) -> dict:
+def helper_merge(
+    lists: list, rank: int, k: int = 512, digit_bits: int = 4, kph: int = 1, own=None, prefilter: bool = False
+) -> dict:
     """ix_dm0.cpp (the coordinator) + att_dsa_shard_dm1.cpp merge_help (helper q holds chip q's list), step by step:
     lists[q] = chip q's candidate records [(key, core)] in its (core, local) order. Per round the helpers' 16-bin
     histograms of their compacted candidates are summed in helper order (sum_hist), the digit picked as the local
@@ -1536,7 +1552,12 @@ def helper_merge(lists: list, rank: int, k: int = 512, digit_bits: int = 4, kph:
     (mkeys) and takes the core ids from the x_ag records (rq) at the same index.
     digit_bits=8 (R8, GLM53_DSA_SHARD_R8): 4 rounds of radix_round's two levels -- each helper's coarse report
     (r8_hist), the coordinator's coarse pick, the pulled bucket's fine counts and the fine pick; `hists` holds both
-    levels' sums per round (= the 4-bit run's rounds 2 r, 2 r + 1) and `messages` 4 rounds fewer."""
+    levels' sums per round (= the 4-bit run's rounds 2 r, 2 r + 1) and `messages` 4 rounds fewer.
+    Rev 74, prefilter=True (GLM53_DSA_SHARD_PREFILTER, dsa_shard.hpp PREFILTER): before the rounds each helper reports
+    (the min over its lists of their ceil(k / NCHIPS)-th largest key, its key count); L = their min (0 when the union holds
+    <= k keys: round 0's done case) is broadcast (one more message) and every helper keeps its keys >= L in place, list by
+    list; round 0's done check reads the union's total. T_g, k_rem, done, the quotas are the prefilter=False integers;
+    `hists` (the survivors' sums) and `messages` (+ 1) differ; `prefilter_l` / `survivors` report the bound."""
     if digit_bits not in (4, 8):
         raise ValueError(f"digit_bits {digit_bits}: 4 or 8")
     assert kph >= 1 and len(lists) % kph == 0, (kph, len(lists))
@@ -1544,14 +1565,45 @@ def helper_merge(lists: list, rank: int, k: int = 512, digit_bits: int = 4, kph:
     mk = [[kk for i in range(kph) for kk, _ in lists[h * kph + i]] for h in range(nh)]  # the helpers' mkeys
     ln = [[len(lists[h * kph + i]) for i in range(kph)] for h in range(nh)]  # their len[i]
     prefix, mask, k_rem, msgs, sums = 0, 0, k, 1, []  # (the start message)
+    total = sum(len(v) for v in mk)
+    pf_l, survivors = None, total
+    if prefilter:  # rev 74: the helpers' bound report + the L message, then the stable in-place filter per list
+        prank = -(-k // len(lists))  # (= TOPK / NCHIPS on the 8x4: 16; ceil keeps NCHIPS x prank >= k)
+        bounds = []
+        for h in range(nh):
+            b0, kmin = 0, None
+            for i in range(kph):
+                kq = pf_kth(mk[h][b0 : b0 + ln[h][i]], prank)
+                kmin = kq if kmin is None else min(kmin, kq)
+                b0 += ln[h][i]
+            bounds.append(kmin)
+        pf_l = min(bounds) if total > k else 0
+        for h in range(nh):
+            v, m, b0 = mk[h], 0, 0
+            for i in range(kph):
+                mi = 0
+                for e in range(ln[h][i]):
+                    kk = v[b0 + e]
+                    if kk >= pf_l:
+                        v[m] = kk
+                        m += 1
+                        mi += 1
+                b0 += ln[h][i]
+                ln[h][i] = mi
+            del v[m:]
+        survivors = sum(len(v) for v in mk)
+        msgs += 1
     for r in range(32 // digit_bits):
         # one histogram over each helper's union (its whole compacted array), summed in helper order (sum_hist); round
-        # 0's total m <= k -> done (before the pick: no pull)
-        step = radix_round(r, digit_bits, mk, mask, prefix, k_rem, sums, stop=(lambda m: m <= k) if r == 0 else None)
+        # 0's total m <= k -> done (before the pick: no pull); prefilter: the union's pre-filter total decides
+        stop = None
+        if r == 0:
+            stop = (lambda m: total <= k) if prefilter else (lambda m: m <= k)
+        step = radix_round(r, digit_bits, mk, mask, prefix, k_rem, sums, stop=stop)
         msgs += 1
         if step is None:
             return dict(T_g=0, k_rem=0, done=True, helper_quota=[0] * len(lists), core_quota={}, messages=msgs,
-                        hists=sums)  # fmt: skip
+                        hists=sums, prefilter_l=pf_l, survivors=survivors)  # fmt: skip
         prefix, mask, k_rem = step
         for h in range(nh):  # in-place compaction, list by list: the write index never passes the read index
             v, m, b0 = mk[h], 0, 0
@@ -1585,7 +1637,17 @@ def helper_merge(lists: list, rank: int, k: int = 512, digit_bits: int = 4, kph:
         if kk == prefix:
             cq[core] = cq.get(core, 0) + 1
             q -= 1
-    return dict(T_g=prefix, k_rem=k_rem, done=False, helper_quota=hq, core_quota=cq, messages=msgs, hists=sums)
+    return dict(
+        T_g=prefix,
+        k_rem=k_rem,
+        done=False,
+        helper_quota=hq,
+        core_quota=cq,
+        messages=msgs,
+        hists=sums,
+        prefilter_l=pf_l,
+        survivors=survivors,
+    )
 
 
 def serial_merge(lists: list, rank: int, k: int = 512) -> dict:

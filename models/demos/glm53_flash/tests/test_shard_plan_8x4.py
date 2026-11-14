@@ -331,6 +331,45 @@ def _topk_records(cores: list, k: int) -> list:
 
 
 @pytest.mark.parametrize(
+    "case",
+    ["random", "ties", "few", "empty", "one_chip", "all_empty", "lengths", "dups", "adversarial", "boundary", "full"],
+)
+def test_helper_merge_prefilter(case):
+    """rev 74 GLM53_DSA_SHARD_PREFILTER (dsa_shard.hpp PREFILTER): the pre-filtered merge (the min over the chips of
+    their 16th-largest list key as L, the keys >= L kept before the rounds, round 0's done check on the union's total)
+    == the unfiltered merge and the serial merge -- T_g, k_rem, done, the per-chip quotas, every chip's per-core quotas
+    -- at kph 1 / 2 / 4, 4- and 8-bit digits; one message more; on full lists (the >= 64 K regime) the survivors stay
+    near 512 instead of 32 x 512"""
+    gen = torch.Generator().manual_seed(74 + len(case))
+    if case == "full":  # every chip a full local top-512 of a different random population (the long-context regime)
+        lists = []
+        for q in range(32):
+            keys = torch.randint(1 << 28, 1 << 31, (512,), generator=gen)
+            cores = torch.randint(0, 64, (512,), generator=gen)
+            lists.append([(int(kk), int(cc)) for kk, cc in zip(keys.tolist(), cores.tolist())])
+    else:
+        lists = _lists(gen, case)
+    for rank in (0, 5, 18, 31):
+        ref = SP.serial_merge(lists, rank)
+        for kph in (1, 2, 4):
+            for bits in (4, 8):
+                base = SP.helper_merge(lists, rank, kph=kph, digit_bits=bits)
+                got = SP.helper_merge(lists, rank, kph=kph, digit_bits=bits, prefilter=True)
+                assert (got["T_g"], got["core_quota"]) == (ref["T_g"], ref["core_quota"]), (case, rank, kph, bits)
+                for key in ("T_g", "k_rem", "done", "helper_quota", "core_quota"):
+                    assert got[key] == base[key], (case, rank, kph, bits, key)
+                assert got["messages"] == base["messages"] + 1, (case, rank, kph, bits)
+                assert got["survivors"] <= base["survivors"]
+                if not got["done"]:
+                    assert got["prefilter_l"] <= got["T_g"]
+                    assert got["survivors"] >= 512
+    if case == "full":
+        got = SP.helper_merge(lists, 0, kph=4, digit_bits=8, prefilter=True)
+        logger.info(f"PREFILTER full lists: L {got['prefilter_l']:#x} survivors {got['survivors']} of {32 * 512}")
+        assert got["survivors"] < 4 * 512, got["survivors"]
+
+
+@pytest.mark.parametrize(
     "case", ["random", "ties", "few", "empty", "one_chip", "all_empty", "lengths", "dups", "adversarial", "boundary"]
 )
 def test_helper_merge_kph(case):

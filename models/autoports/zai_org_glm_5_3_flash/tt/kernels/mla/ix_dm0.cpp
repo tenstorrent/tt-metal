@@ -451,6 +451,26 @@ void kernel_main() {
             msg[1] = mladsa::TOPK;
             msg[2] = msg[3] = 0;
             hsend(scr + MSG_OFF, mlashard::merge_msg(j, 0), mladsa::MSG_BYTES);  // start: y_ag holds every list
+#if defined(MLA_DSA_SHARD_PREFILTER)
+            // rev 74 PREFILTER (dsa_shard.hpp): the helpers' (min over their lists of the PF_RANK-th largest key, their
+            // key count) -> L = the min, the union's total; L in merge slot 0 (0: no filter -- a list below PF_RANK
+            // keys, or the union <= TOPK keys, round 0's done case)
+            uint32_t pf_total = 0;
+            {
+                mk::wait_handoff(H_SEM, mlashard::NHELP);
+                invalidate_l1_cache();
+                uint32_t pf_l = 0xFFFFFFFFu;
+                for (uint32_t hh = 0; hh < mlashard::NHELP; ++hh) {
+                    const uint32_t b = hist[hh * (mladsa::HIST_SLOT_BYTES / 4)];
+                    pf_l = b < pf_l ? b : pf_l;
+                    pf_total += hist[hh * (mladsa::HIST_SLOT_BYTES / 4) + 1];
+                }
+                msg[0] = pf_total > mladsa::TOPK ? pf_l : 0;
+                msg[1] = pf_total;
+                msg[2] = msg[3] = 0;
+                hsend(scr + MSG_OFF, mlashard::merge_msg(j, 0), mladsa::MSG_BYTES);
+            }
+#endif
             uint32_t prefix = 0, k_rem = mladsa::TOPK;
             bool done = false;
             for (uint32_t r = 0; r < mladsa::ROUNDS; ++r) {
@@ -464,6 +484,9 @@ void kernel_main() {
                     for (uint32_t b = 0; b < mladsa::BINS; ++b) {
                         m += h[b];
                     }
+#if defined(MLA_DSA_SHARD_PREFILTER)
+                    m = pf_total;  // (the survivors are >= TOPK whenever the union is: the done case is the union's)
+#endif
                     if (m <= mladsa::TOPK) {  // fewer candidates than k: every one is selected (T_g below every key)
                         msg[0] = msg[1] = 0;
                         msg[2] = 1;  // done

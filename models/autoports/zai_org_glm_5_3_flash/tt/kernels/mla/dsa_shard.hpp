@@ -460,4 +460,54 @@ inline __attribute__((always_inline)) void sel2_sum(volatile tt_l1_ptr uint32_t*
     }
 }
 #endif
+// rev 74, PREFILTER (MLA_DSA_SHARD_PREFILTER, tt/mk_mla.py GLM53_DSA_SHARD_PREFILTER; the 8x4 only, unset: every
+// build of rev 73 unchanged). THE EXACT MERGE PRE-FILTER (doc/perf/ctx16_decode.md, F16's K16 bound). Past ~64 K tokens
+// every chip's list is a full local top-512, so the global merge's helpers histogram and compact NCHIPS x 512 = 16 K
+// keys per token -- twice or more at full size: an index score's order key concentrates in a few exponent bins, so
+// rounds 0 and 1 barely shrink the lists. The bound: let K_q = the PF_RANK-th largest key of chip q's list (PF_RANK =
+// TOPK / NCHIPS = 16). Chip q holds >= PF_RANK keys >= K_q >= L = min_q K_q, so the union holds >= NCHIPS PF_RANK =
+// TOPK keys
+// >= L and the global threshold T_g >= L: every key < L lies outside the global top-512, every key >= T_g (the ties
+// included) is >= L. Each helper reports (min over its KPH lists of K_q, its key count) in one extra report; the
+// coordinator broadcasts L (0 = no filter: some list holds < PF_RANK keys, or the union <= TOPK keys) in merge slot 0
+// (the start slot: no helper reads its content) and the helpers keep their keys >= L, stable per list; the rounds then
+// see ~TOPK + O(NCHIPS) keys. Every round's pick is unchanged (the dropped keys lie strictly below T_g: a bucket above
+// T_g's digit loses none, T_g's own bucket keeps every key >= T_g), so T_g, k_rem, the tie counts per list and the
+// per-chip / per-core quotas are the rev-73 integers (tt/shard_plan.py helper_merge prefilter=True;
+// test_shard_plan_8x4 test_helper_merge_prefilter). Round 0's "<= TOPK keys: done" check reads the pre-filter total.
+// One more report + message per token on the existing H_SEM / SEL_SEM handshake: no new semaphore, fabric phase or L1.
+#if defined(MLA_DSA_SHARD_PREFILTER)
+static_assert(PAIR == 8 && LINE == 4, "PREFILTER: the 8x4 shard");
+constexpr uint32_t PF_RANK = CAND_MAX / NCHIPS;  // keys of a chip's list that bound the global threshold
+static_assert(PF_RANK * NCHIPS == CAND_MAX && PF_RANK >= 1 && PF_RANK <= 32, "PREFILTER: TOPK = NCHIPS x PF_RANK");
+// the PF_RANK-th largest key of src[0, n) (duplicates counted), 0 below PF_RANK keys (no bound: 0 keeps every key)
+inline uint32_t pf_kth(volatile tt_l1_ptr uint32_t* src, uint32_t n) {
+    if (n < PF_RANK) {
+        return 0;
+    }
+    uint32_t top[PF_RANK];  // ascending: top[0] = the PF_RANK-th largest so far
+    for (uint32_t i = 0; i < PF_RANK; ++i) {
+        const uint32_t k = src[i];
+        uint32_t p = i;
+        while (p > 0 && top[p - 1] > k) {
+            top[p] = top[p - 1];
+            --p;
+        }
+        top[p] = k;
+    }
+    for (uint32_t i = PF_RANK; i < n; ++i) {
+        const uint32_t k = src[i];
+        if (k <= top[0]) {
+            continue;  // (most keys: one compare)
+        }
+        uint32_t p = 0;
+        while (p + 1 < PF_RANK && top[p + 1] < k) {
+            top[p] = top[p + 1];
+            ++p;
+        }
+        top[p] = k;
+    }
+    return top[0];
+}
+#endif
 }  // namespace mlashard

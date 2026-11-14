@@ -111,3 +111,72 @@ All expected savings are estimates until `chain_ctx_1` measures them.
 Every booked line carries ISL (per user), OSL (per user) and concurrency. The probes book the traced per-chip phase
 split (min / median / max µs) for DSA layer 3, so the merge, local select, scoring and attention terms read directly
 against the table above.
+
+## F19 (2026-11-14): the exact merge pre-filter, built (`GLM53_DSA_SHARD_PREFILTER`, mk_mla rev 74)
+
+The user's target is ISL ~1 M at 1 / 2 / 4 / 8 / 16 users. Every DSA layer's global merge there runs on full lists: each
+of the 32 chips' local top-512 lists is full, so the merge helpers histogram and compact 32 x 512 = 16,384 keys per token.
+
+**Bound.** K_q = the 16th-largest key of chip q's list (16 = TOPK / NCHIPS); L = min_q K_q. Each chip has >= 16 keys
+>= K_q >= L, so the union has >= 512 keys >= L and T_g >= L. Every key < L is outside the global top-512; every key
+>= T_g, the ties included, is >= L. (The bound uses the MIN over the chips; the max would not be safe.)
+
+**Protocol** (all on-chip, after the all-gather; no new semaphore, fabric phase or L1 buffer):
+1. The coordinator sends start (merge slot 0, as before).
+2. Each helper computes, for each of its KPH lists, the 16th-largest key with a 16-entry sorted insert (one compare for
+   most keys), and reports (min over its lists, its key count) through the existing H_SEM report.
+3. The coordinator takes L = the min and the union's total, and sends L in merge slot 0. No helper reads the start
+   slot's content. L = 0 (no filter) when a list holds < 16 keys or the union holds <= 512.
+4. The helpers keep their keys >= L, stable per list:
+   - KPH 1: into `mcand`. `mkeys` stays whole for helper rank's per-core tie count.
+   - KPH > 1: in place, `len[i]` updated.
+5. The 4 R8 rounds and the tie round then run unchanged on the survivors. Round 0's "<= TOPK: done" check reads the
+   union's total, not the survivors.
+
+**Why the selection is identical.** Every dropped key is strictly below T_g. In each round, the buckets above T_g's
+digit lose no key, and T_g's own bucket keeps every key >= T_g. So each digit pick, k_rem, the per-list counts of keys
+== T_g (list order kept), the per-chip quotas (chip order) and helper rank's per-core quotas (re-read from this chip's
+x_ag records) are the rev-73 integers. Emulated by `shard_plan.helper_merge(prefilter=True)`;
+`test_shard_plan_8x4.py::test_helper_merge_prefilter` holds it equal to the unfiltered and the serial merge on 11 cases
+(random, ties, few, empty, one_chip, all_empty, lengths, dups, adversarial, boundary, full), at KPH 1 / 2 / 4 and 4 / 8-bit
+digits.
+
+**Survivors** (emulator, 32 full lists):
+
+| Lists | Survivors |
+|---|---|
+| uniform | 667-779 of 16,384 |
+| one exponent bin (24 shared bits) | 871 |
+| chips with very different score scales | 14,347 (the bound is weak; the round-robin 128-token sharding makes this unlikely) |
+
+**Kernel check (no device).** `-fsyntax-only` with the 8x4 JIT flags at KPH 1 / 2 / 4: error sets identical with and
+without the define (only the harness's placeholder compile-time args fail). A marker `static_assert` in each pre-filter
+block fires only with the define.
+
+**Cost model (estimates, not measured).** From the zero-key B 16 phase split (merge 705 us per DSA layer =
+2 tokens x 9 full passes over 2,048 keys + handshakes): about 18 ns per key-pass, about 5 us per handshake.
+- Base: random keys need about 1 heavy round (hist + compaction); real index scores, whose order keys concentrate in a
+  few exponent bins, need about 2.
+- Pre-filter: a K16 pass (about 6 ns per key) + one compaction pass + one handshake, then rounds on about 100 keys per
+  helper.
+
+| ISL (per user) | OSL | Concurrency | Width / KPH | Merge saving per DSA layer | Per step (11 layers) |
+|---|---|---|---|---|---|
+| 1,048,000 | -- | 16 | 16 / 4, 2 tokens per lane | ~70 (random keys) - 215 (real) us | ~0.8 - 2.4 ms |
+| 1,048,000 | -- | 8 | 16 / 4, 1 token per lane | ~35 - 107 us | ~0.4 - 1.2 ms |
+| 1,048,000 | -- | 1 / 2 / 4 | 4 (narrow) / 2 | ~13 - 50 us | ~0.15 - 0.55 ms |
+
+F16's -3 to -6 ms at 16 users was scaled from the inflated zero-key merge. The probe matrix measures it.
+
+**Follow-ups.**
+- After the filter about 800 keys survive. Collapsing the 4 radix-round handshakes into one survivor gather on the
+  coordinator would save another about 20 us per token.
+- Width 8 for 5-8 users (wt_w8 0e1a6b024bc) once both are in one tree.
+
+**Chain.** `_logs/mesh/chain_pf2_1.sh` (runner `run_mk_pf2.sh`, shadow root `tt-metal-pf2`):
+1. A hang-safe layers 0-7 probe at 1 M x 16.
+2. The ids gates: 32 K x 16 and ~1 M x 1, base vs pre-filter.
+3. The full-model 1 M probe matrix at N 16 / 8 / 4 / 2 / 1, plus N 1 on the B 4 build. Random keys; the b16 shape is
+   narrow width 4 for N <= 4 and width 16 for N 8 / 16, via the probe's new `GLM53_MK_PROBE_WIDTH` /
+   `GLM53_MK_PROBE_LIVE`.
+4. ~1 M x 4 e2e.

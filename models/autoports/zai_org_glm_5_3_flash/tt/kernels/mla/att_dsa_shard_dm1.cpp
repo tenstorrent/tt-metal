@@ -442,6 +442,27 @@ void kernel_main() {
         uint32_t prefix = 0, mask = 0;
         volatile tt_l1_ptr uint32_t* src = mkeys;
         uint32_t nsrc = n;
+#if defined(MLA_DSA_SHARD_PREFILTER)
+        // rev 74 PREFILTER (dsa_shard.hpp): report (this list's PF_RANK-th largest key, its count), take L (merge slot
+        // 0), keep the keys >= L in mcand (list order); mkeys stays whole for the per-core tie count below
+        hist[0] = mlashard::pf_kth(mkeys, n);
+        hist[1] = n;
+        report();
+        noc_semaphore_wait_min(sel_sem, ++msgs);
+        invalidate_l1_cache();
+        {
+            const uint32_t pf_l = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mbox + mlashard::merge_msg(j, 0))[0];
+            uint32_t m = 0;
+            for (uint32_t i = 0; i < n; ++i) {
+                const uint32_t k = mkeys[i];
+                if (k >= pf_l) {
+                    mcand[m++] = k;
+                }
+            }
+            src = mcand;
+            nsrc = m;
+        }
+#endif
         for (uint32_t r = 0; r < mladsa::ROUNDS; ++r) {
             const uint32_t shift = 32 - mladsa::RADIX_BITS * (r + 1);
 #if defined(MLA_DSA_R8)
@@ -621,6 +642,40 @@ void kernel_main() {
                 }
                 return true;
             });
+#endif
+#if defined(MLA_DSA_SHARD_PREFILTER)
+        // rev 74 PREFILTER (dsa_shard.hpp): report (the min over the KPH lists of their PF_RANK-th largest key, the
+        // keys), take L (merge slot 0), keep the keys >= L in place list by list (stable; len[i] = the survivors)
+        {
+            uint32_t kmin = 0xFFFFFFFFu, b0 = 0;
+            for (uint32_t i = 0; i < mlashard::KPH; ++i) {
+                const uint32_t kq = mlashard::pf_kth(mkeys + b0, len[i]);
+                kmin = kq < kmin ? kq : kmin;
+                b0 += len[i];
+            }
+            hist[0] = kmin;
+            hist[1] = ntot;
+            report();
+            noc_semaphore_wait_min(sel_sem, ++msgs);
+            invalidate_l1_cache();
+            const uint32_t pf_l = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mbox + mlashard::merge_msg(j, 0))[0];
+            uint32_t m = 0;
+            b0 = 0;
+            for (uint32_t i = 0; i < mlashard::KPH; ++i) {
+                const uint32_t li = len[i];
+                uint32_t mi = 0;
+                for (uint32_t e = 0; e < li; ++e) {
+                    const uint32_t k = mkeys[b0 + e];
+                    if (k >= pf_l) {
+                        mkeys[m++] = k;
+                        ++mi;
+                    }
+                }
+                b0 += li;
+                len[i] = mi;
+            }
+            ntot = m;
+        }
 #endif
         uint32_t prefix = 0, mask = 0;
         uint32_t nsrc = ntot;

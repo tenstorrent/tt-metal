@@ -33,6 +33,12 @@ B = int(os.environ.get("GLM53_MK_B", "4"))  # user slots = one 4-row chunk
 SEQ = int(os.environ.get("GLM53_MK_SEQ", "2048"))
 POS = int(os.environ.get("GLM53_MK_POS", "0"))  # decode position of every row (ISL: the DSA indexer scores 0..POS)
 N_REPLAY = int(os.environ.get("GLM53_MK_N", "20"))
+# 2026-11-14 (the 1 M x 1 / 2 / 4 / 8 / 16 users matrix): GLM53_MK_PROBE_WIDTH = the decode width of the eager step
+# and the trace (one of the backend's native / narrow widths, e.g. 4 on a B 16 build with GLM53_STACK_NARROW_WIDTHS=4;
+# default B: the launch as before); GLM53_MK_PROBE_LIVE = rows 0 .. LIVE - 1 decode at POS, the rest of the width idle
+# (cur_pos -1: the served idle slot, as the generator writes it); default every row of the width
+WIDTH = int(os.environ.get("GLM53_MK_PROBE_WIDTH", "0") or 0) or B
+LIVE = int(os.environ.get("GLM53_MK_PROBE_LIVE", "0") or 0) or WIDTH
 TRACE_MB = int(os.environ.get("GLM53_MODEL_TRACE_MB", "512"))
 # the reference's SERVED worker L1 (pmk_layer WORKER_L1_SERVED): 16 KB more allocatable L1 than the mk_dense note's
 # 1,264,512 -- the 45-layer stack sits at that floor (the sharded pool / the attached TP prefill clashed by 1 KB,
@@ -93,7 +99,10 @@ def test_mk_backend_probe(mesh_device, monkeypatch):
         obm = OwnerBlockMap(*spec)
         rows = [obm.set_row(s, list(range(s * bps, (s + 1) * bps)), bps) for s in range(B)]
         backend.write(io.page_table, torch.tensor(rows, dtype=torch.int32))
-    backend.write(io.cur_pos, torch.full((B,), POS, dtype=torch.int32))
+    assert 1 <= LIVE <= WIDTH <= B, (LIVE, WIDTH, B)
+    cur = torch.full((B,), POS, dtype=torch.int32)
+    cur[LIVE:] = -1  # (GLM53_MK_PROBE_LIVE: the idle rows)
+    backend.write(io.cur_pos, cur)
     # GLM53_MK_PROBE_RANDKEYS=1 (2026-11-13, the long-context B 16 decode study): the DSA layers' pooled-key stores hold
     # random keys, different on every chip, instead of zeros. With zeros every index score ties: the radix rounds never
     # compact, the tie round resolves every key, and the ties pick the lowest pools, so a few chips do every user's
@@ -121,7 +130,7 @@ def test_mk_backend_probe(mesh_device, monkeypatch):
         )
         del filled
     t0 = time.perf_counter()
-    backend.decode(io, kv, B)  # one eager step (compiles)
+    backend.decode(io, kv, WIDTH)  # one eager step (compiles)
     ttnn.synchronize_device(mesh_device)
     logger.info(f"first eager step {time.perf_counter() - t0:.1f} s")
     if os.environ.get("GLM53_MLA_PROBE") == "1":  # the DSA layers' MLA program marks (chip 0) after the eager step
@@ -157,7 +166,7 @@ def test_mk_backend_probe(mesh_device, monkeypatch):
                 except Exception as e:  # noqa: BLE001
                     logger.info(f"MK_BACKEND_MARKS: layer {layers[i]}: unreadable ({e})")
     t0 = time.perf_counter()
-    tr = backend.capture_decode(io, kv, B)
+    tr = backend.capture_decode(io, kv, WIDTH)
     ttnn.synchronize_device(mesh_device)
     logger.info(f"decode trace captured in {time.perf_counter() - t0:.1f} s")
     backend.replay(tr)
@@ -168,7 +177,8 @@ def test_mk_backend_probe(mesh_device, monkeypatch):
     ttnn.synchronize_device(mesh_device)
     step_us = (time.perf_counter() - t0) / N_REPLAY * 1e6
     logger.info(
-        f"MK_BACKEND_PROBE: mesh {MESH} layers {len(layers)} ({layers[0]}-{layers[-1]}) B {B} native_t {native} pos {POS} "
+        f"MK_BACKEND_PROBE: mesh {MESH} layers {len(layers)} ({layers[0]}-{layers[-1]}) B {B} width {WIDTH} live {LIVE} "
+        f"native_t {native} pos {POS} "
         f"dsa_shard {os.environ.get('GLM53_DSA_SHARD', '0')}: traced decode step "
         f"{step_us:.1f} us = {step_us / len(layers):.1f} us per layer"
     )
