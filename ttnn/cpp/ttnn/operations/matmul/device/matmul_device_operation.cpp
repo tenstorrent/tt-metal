@@ -286,6 +286,21 @@ void validate_matmul_optional_tensors(
             output_tensor_spec.memory_config().buffer_type(),
             attributes.output_mem_config.buffer_type());
 
+        // The output shard orientation is chosen by the program config, not by the requested memory
+        // config, so a request for the other orientation would be silently ignored (metadata says one
+        // orientation, the shards are laid out in the other). Reject it instead.
+        if (attributes.output_mem_config.shard_spec().has_value() &&
+            output_tensor_spec.memory_config().shard_spec().has_value()) {
+            const auto& requested = attributes.output_mem_config.shard_spec().value();
+            const auto& computed = output_tensor_spec.memory_config().shard_spec().value();
+            TT_FATAL(
+                requested.orientation == computed.orientation,
+                "matmul: the requested output shard orientation ({}) is not produced by the selected program "
+                "config ({}), so the request would be ignored",
+                requested.orientation == ShardOrientation::ROW_MAJOR ? "ROW_MAJOR" : "COL_MAJOR",
+                computed.orientation == ShardOrientation::ROW_MAJOR ? "ROW_MAJOR" : "COL_MAJOR");
+        }
+
         // A real 1D conversion (exactly one direction, not a single 1x1 core) is expected -
         // don't warn about it. Any other mismatch still warns.
         const bool is_single_core = is_1d_column && is_1d_row;
