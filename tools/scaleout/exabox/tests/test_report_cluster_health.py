@@ -764,9 +764,7 @@ class TestStoreWrite(unittest.TestCase):
             self.assertTrue(date_dir.is_dir())
             _assert_shared_dir_mode(self, date_dir)
             self.assertEqual(date_dir.stat().st_gid, store.stat().st_gid)
-            current_umask = os.umask(0)
-            os.umask(current_umask)
-            expected_mode = 0o777 & ~current_umask
+            expected_mode = 0o777 & ~0o022  # the umask the run above used, not the host's
             for ancestor in (store, Path(tmp) / "nested"):
                 self.assertEqual(ancestor.stat().st_mode & 0o777, expected_mode, f"{ancestor} was modified")
 

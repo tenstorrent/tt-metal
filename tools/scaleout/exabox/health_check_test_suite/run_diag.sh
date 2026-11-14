@@ -39,8 +39,8 @@ Tiers:
               + QSFP tests
   deploy      3 resets + full GDDR pattern set + eth bandwidth + didt matmul stress (pytest)
               + post-test reset + triage + QSFP tests
-  pre_reboot  Data collection before a BMC reboot: snapshot + triage + QSFP tests
-              + sys-triage. No resets, no tests.
+  pre_reboot  Data collection before a BMC reboot: snapshot + tray 12 V feed latches
+              + triage + QSFP tests + sys-triage. No resets, no tests.
 
 The QSFP tests check ETH link training, cabling and module state across all 448
 ports. They run on medium, deploy and pre_reboot when \`tt-bh-glx-cluster-debug\` is on PATH
@@ -51,6 +51,12 @@ sys-triage collects the syseng system and per-tray triage bundle (FW stack, FRU,
 DIAG, lspci, kernel logs, per-chip vuart) into <output dir>/logs/sys_triage/, as the last
 step of pre_reboot only. It runs when \`sys-triage\` is on PATH (same .deb) and the BMC
 credentials are set; otherwise the phase reports SKIP with the reason. It never gates the run.
+
+The tray 12 V feed check (pre_reboot only, right after the snapshot) reads each tray's two
+hot-swap controllers (STATUS_WORD, STATUS_INPUT, STATUS_IOUT) and its CPLD power-good latch
+in-band through ipmitool. A latched VIN_UV_WARN, VIN_UV_FAULT, OFF, IOUT_OC or a CPLD 12 V
+loss FAILs that tray, naming its BDF range and HSC address: check the bus bar / tray 12 V
+feed. Reads only; nothing is written to the hot-swap controllers. It never gates the run.
 
 Forwarded options (see diag_runner.py --help for details):
   --dry-run              Print intended subprocess calls without executing destructive steps
@@ -72,6 +78,7 @@ Forwarded options (see diag_runner.py --help for details):
                          internal links are still checked against the collector's built-in
                          topology table; only the cabling checks narrow, and they say so
                          rather than reporting coverage they don't have
+  --skip-tray-power      Skip the tray 12 V feed latch reads
   --skip-sys-triage      Skip the sys-triage bundle
   --sys-triage-path PATH Override the sys-triage binary
   --bmc-ip IP            BMC address for sys-triage (default: \$BMC_IP)
