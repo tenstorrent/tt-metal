@@ -667,6 +667,7 @@ class TtMoEGatePrefill(LightweightModule):
         is_balanced: bool = False,
         hash_table: torch.Tensor = None,
         cache_dump_mode: ttnn.DumpTensorMode = ttnn.DumpTensorMode.DISTRIBUTED_GATHER,
+        expert_id_map: ttnn.Tensor = None,
     ):
         """
         Args:
@@ -708,6 +709,9 @@ class TtMoEGatePrefill(LightweightModule):
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
             )
+        if expert_id_map is not None and fallback_mode != GateComputeMode.DEVICE_FP32:
+            raise ValueError("Expert ID mapping requires DEVICE_FP32 top-k routing")
+        self.expert_id_map = expert_id_map
         self.fallback_mode = fallback_mode
         self.is_balanced = is_balanced
         # Memoization of the per-(actual_isl, padding_side, actual_start) padding_config built on HOST.
@@ -1220,6 +1224,7 @@ class TtMoEGatePrefill(LightweightModule):
             score_func=self.config.score_func,
             padding_config=padding_config,
             weights_layout=ttnn.ROW_MAJOR_LAYOUT if self.config.n_activated_experts <= 32 else ttnn.TILE_LAYOUT,
+            expert_id_map=self.expert_id_map,
         )
         # padding_config is memoized + owned by build_padding_config (reused across forwards/replays). Do
         # NOT deallocate it here even on the owns_padding_config path — freeing it breaks the next cache hit.
