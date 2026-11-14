@@ -757,15 +757,15 @@ Hardmish:
 - {input: Float16, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 8192}]}
 - {input: Float16, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
 - {input: Float16_b, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: 65536.0, ulp: 1}, {low: 65536.0, high: .inf}]}
-- {input: Float16_b, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 1}]}
+- {input: Float16_b, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
 - {input: Float16_b, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16_b, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 65536}]}
+- {input: Float16_b, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
 - {input: Float16_b, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
 - {input: Float32, output: Float16, dest: 'No', domains: [{low: -.inf, high: -65536.0}, {low: -65536.0, high: -6.103515625e-05, ulp: 1}, {low: -6.103515625e-05, high: 6.103515625e-05}, {low: 6.103515625e-05, high: 65536.0, ulp: 0}, {low: 65536.0, high: .inf}]}
 - {input: Float32, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: 65536.0, ulp: 1}, {low: 65536.0, high: .inf}]}
-- {input: Float32, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 1}]}
+- {input: Float32, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
 - {input: Float32, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
-- {input: Float32, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 65536}]}
+- {input: Float32, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
 - {input: Float32, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
 Hardshrink:
 - {input: Float16, output: Float16, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
