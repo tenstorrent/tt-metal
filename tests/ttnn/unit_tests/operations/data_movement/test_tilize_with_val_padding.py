@@ -9,6 +9,13 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc
+from tests.ttnn.unit_tests.operations.data_movement.docstring_support import (
+    check_readable,
+    docstring_dtype_layout_params,
+    docstring_interleaved_buffer_type_params,
+    interleaved_memory_config,
+)
+from tests.ttnn.unit_tests.operations.data_movement.data_movement_test_utils import assert_exact, full_range_input
 from tests.ttnn.python_api_testing.sweep_tests.ttnn_pytorch_ops import (
     tilize_with_val_padding as pytorch_tilize_with_val_padding,
 )
@@ -1114,3 +1121,57 @@ def test_tilize_with_val_padding_wide_row_dram_width_sharded(device):
 
     assert tt_tile.layout == ttnn.TILE_LAYOUT
     assert torch.equal(torch_tensor, ttnn.to_torch(tt_tile))
+
+
+# A pad value of the kind the docstring's pad_value line asks for: a float for BFLOAT16 and FLOAT32, and for the
+# integer dtypes an int at the end of the documented range.
+_DOCSTRING_PAD_VALUES = {
+    ttnn.bfloat16: -2.5,
+    ttnn.float32: -2.5,
+    ttnn.int32: -(2**24),
+    ttnn.uint32: 2**32 - 1,
+    ttnn.uint16: 2**16 - 1,
+}
+
+
+@pytest.mark.parametrize("buffer_type", docstring_interleaved_buffer_type_params(ttnn.tilize_with_val_padding))
+@pytest.mark.parametrize("dtype, layout", docstring_dtype_layout_params(ttnn.tilize_with_val_padding))
+@pytest.mark.parametrize(
+    "input_shape, output_tensor_shape",
+    [
+        ((2, 3, 50, 70), (2, 3, 128, 96)),  # pads the height past the next multiple of 32
+        ((2, 50, 64), (2, 64, 128)),  # pads the width past the next multiple of 32
+        ((1, 1, 40, 2000), (1, 1, 64, 2048)),  # a last dim of more than 1024
+        ((2, 2, 2, 50, 50), (2, 2, 2, 64, 64)),  # rank 5
+    ],
+    ids=["height", "width", "wide", "rank5"],
+)
+def test_tilize_with_val_padding_docstring_supported_inputs(
+    input_shape, output_tensor_shape, dtype, layout, buffer_type, device
+):
+    """Runs every dtype, layout and interleaved buffer type the ttnn.tilize_with_val_padding docstring lists.
+
+    The output shapes follow the docstring's output_tensor_shape rules. The data must come back unchanged and the
+    padding must hold pad_value. BFLOAT16 inputs leave out NaN, as the docstring requires, and compare zeros by value.
+    """
+    check_readable(dtype, layout, buffer_type)
+    memory_config = interleaved_memory_config(buffer_type)
+    pad_value = _DOCSTRING_PAD_VALUES[dtype]
+    input_tensor = ttnn.from_torch(
+        full_range_input(input_shape, dtype, nan=dtype != ttnn.bfloat16),
+        dtype=dtype,
+        layout=layout,
+        device=device,
+        memory_config=memory_config,
+    )
+    output = ttnn.tilize_with_val_padding(input_tensor, list(output_tensor_shape), pad_value)
+
+    assert output.layout == ttnn.TILE_LAYOUT
+    assert output.dtype == dtype
+    assert output.memory_config() == memory_config
+    assert list(output.shape) == list(input_shape)
+    assert list(output.padded_shape) == list(output_tensor_shape)
+    expected = torch.full(output_tensor_shape, pad_value, dtype=torch.float64)
+    expected[tuple(slice(0, size) for size in input_shape)] = ttnn.to_torch(input_tensor).to(torch.float64)
+    actual = ttnn.from_device(output).to_torch_with_padded_shape()
+    assert_exact(expected, actual, signed_zeros=dtype != ttnn.bfloat16)
