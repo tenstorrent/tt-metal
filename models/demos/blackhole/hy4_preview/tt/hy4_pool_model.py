@@ -11,7 +11,6 @@ import torch
 
 import ttnn
 from models.demos.blackhole.hy4_preview.config import DENSE
-from models.demos.blackhole.hy4_preview.tt import hy4_dense as D
 from models.demos.blackhole.hy4_preview.tt import hy4_pool as HP
 from models.demos.blackhole.hy4_preview.tt.hy4_attn_opt import Opt
 from models.demos.blackhole.hy4_preview.tt.hy4_chain import HID, NSTREAM
@@ -41,13 +40,27 @@ class Hy4PoolDecoder(Hy4Decoder):
         self.mlp = []
         for ly in ch.layers:
             self.mlp.append(
-                with_decode_cfg(ly.dense, pn1=2, pn2=4, bw1=32, bw2=8) if ly.spec.mlp == DENSE else (ly.shared_dec if getattr(ly, "shared_dec", None) is not None else with_decode_cfg(ly.shared))
+                with_decode_cfg(ly.dense, pn1=2, pn2=4, bw1=32, bw2=8)
+                if ly.spec.mlp == DENSE
+                else (ly.shared_dec if getattr(ly, "shared_dec", None) is not None else with_decode_cfg(ly.shared))
             )
         self.kv_pools, self.key_pools = [], []
         for ly in ch.layers:
-            kv = ttnn.empty([1, 1, pages * 64, 656], dtype=ttnn.fp8_e4m3, layout=ttnn.ROW_MAJOR_LAYOUT, device=md, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            kv = ttnn.empty(
+                [1, 1, pages * 64, 656],
+                dtype=ttnn.fp8_e4m3,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=md,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
             kp = (
-                ttnn.empty([pages, 1, 64, 128], dtype=key_dtype, layout=ttnn.TILE_LAYOUT, device=md, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                ttnn.empty(
+                    [pages, 1, 64, 128],
+                    dtype=key_dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=md,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
                 if ly.attn.has_indexer
                 else None
             )
@@ -56,6 +69,17 @@ class Hy4PoolDecoder(Hy4Decoder):
             ly.attn.init_pool(self.ctx, kv, kp)
         self.trace = None
         self.out = None
+        self.far = None
+        from models.demos.blackhole.hy4_preview.tt import hy4_fuse_ar as FAR
+
+        if (
+            FAR.enabled()
+        ):  # HY4_FUSE_AR=1 (needs HY4_IHC_FUSED=1): one-shot all-reduce of the attention o-path and MoE partials inside the next iHC pre; built last (after the CCLManager / XMerge / pools)
+            assert os.environ.get("HY4_IHC_FUSED", "0") == "1", "HY4_FUSE_AR needs HY4_IHC_FUSED=1"
+            FAR.patch_dsv4_tail()
+            self.far = FAR.shared(md)
+            for ly in ch.layers:
+                ly.attn.far_defer = True
 
     # ------------------------------------------------------------------ host side
     def set_inputs(self, tokens, pos):
@@ -64,7 +88,9 @@ class Hy4PoolDecoder(Hy4Decoder):
         cs = [rope_tables(torch.tensor([p]), rope.dim, rope.theta, rope.interleave) for p in pos]
         cos = torch.stack([x[0].reshape(1, 1, 64) for x in cs]).reshape(ROWS, 1, 1, 64)
         sin = torch.stack([x[1].reshape(1, 1, 64) for x in cs]).reshape(ROWS, 1, 1, 64)
-        cp = lambda t, dt, lay, tgt: ttnn.copy_host_to_device_tensor(ttnn.from_torch(t, dtype=dt, layout=lay, mesh_mapper=self.mapper), tgt)
+        cp = lambda t, dt, lay, tgt: ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(t, dtype=dt, layout=lay, mesh_mapper=self.mapper), tgt
+        )
         cp(torch.tensor(tokens, dtype=torch.int32).reshape(ROWS, 1, 1), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, self.tok)
         cp(cos, ttnn.bfloat16, ttnn.TILE_LAYOUT, self.cos)
         cp(sin, ttnn.bfloat16, ttnn.TILE_LAYOUT, self.sin)
@@ -139,10 +165,18 @@ class Hy4PoolDecoder(Hy4Decoder):
 
     def fill_synthetic(self, tokens, gen, chunk=65536, same_all_layers=True):
         """FAST SYNTHETIC FILL (long-context perf / capacity tests; NOT a real context): random SCALED_FP8 rows and indexer keys for the first ``tokens`` tokens of every user, written by slice_copy.
-        One random chunk is generated on the host per call and reused for every layer (same_all_layers), so a 1M fill takes seconds."""
+        One random chunk is generated on the host per call and reused for every layer (same_all_layers), so a 1M fill takes seconds.
+        """
         dp = ttnn.experimental.deepseek_prefill
         md = self.md
-        rep = lambda t, dt, lay: ttnn.from_torch(t, device=md, dtype=dt, layout=lay, mesh_mapper=ttnn.ReplicateTensorToMesh(md), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        rep = lambda t, dt, lay: ttnn.from_torch(
+            t,
+            device=md,
+            dtype=dt,
+            layout=lay,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(md),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
         for c0 in range(0, tokens, chunk):
             n = min(chunk, tokens - c0)
             assert n % HP.CHUNK == 0
@@ -155,7 +189,15 @@ class Hy4PoolDecoder(Hy4Decoder):
             for kv, kp in zip(self.kv_pools, self.key_pools):
                 HP.slice_copy(nat, kv, self.ctx.colid, 64, HP.ROWB, n // 512, dst_page0=c0 // 512)
                 if kp is not None:
-                    HP.slice_copy(kb, ttnn.reshape(kp, [1, 1, self.pages * 64, 128]), self.ctx.colid, 8, HP.KEYTILE, n // 512, dst_page0=c0 // 512)
+                    HP.slice_copy(
+                        kb,
+                        ttnn.reshape(kp, [1, 1, self.pages * 64, 128]),
+                        self.ctx.colid,
+                        8,
+                        HP.KEYTILE,
+                        n // 512,
+                        dst_page0=c0 // 512,
+                    )
             ttnn.synchronize_device(md)
             for t in (lat, rope, f8, sc, nat, kd, kb):
                 ttnn.deallocate(t)
@@ -172,23 +214,35 @@ class Hy4PoolDecoder(Hy4Decoder):
         x = ttnn.concat([e32] * NSTREAM, dim=2)  # packed [1,1,4,D]
         ttnn.deallocate(e32)
         y = pp_m = None
+        from models.demos.blackhole.hy4_preview.tt import hy4_fuse_ar as FAR
+
+        pre = (
+            (lambda ihc, x, w, y, pp, xo: FAR.pre_with(ihc, self.far, x, w, y, pp, xo))
+            if self.far is not None
+            else (lambda ihc, x, w, y, pp, xo: ihc.pre(x, w, y=y, pp_prev=pp, x_out=xo))
+        )
         for i, ly in enumerate(ch.layers):
             wa, wm = ly.ihcf_a.norm_weight(ly.hw_in, 1), ly.ihcf_m.norm_weight(ly.hw_post, 1)
             if y is None:
                 h, _, pp_a = ly.ihcf_a.pre(x, wa)
             else:
-                h, _, pp_a, x = ly.ihcf_a.pre(x, wa, y=y, pp_prev=pp_m, x_out=x)
-                ttnn.deallocate(y)
+                h, _, pp_a, x = pre(ly.ihcf_a, x, wa, y, pp_m, x)
+                if getattr(y, "part", None) is None:
+                    ttnn.deallocate(y)
             a = self._attn(ly, None, h)
             ttnn.deallocate(h)
-            h2, _, pp_m, x = ly.ihcf_m.pre(x, wm, y=a, pp_prev=pp_a, x_out=x)
-            ttnn.deallocate(a)
+            h2, _, pp_m, x = pre(ly.ihcf_m, x, wm, a, pp_a, x)
+            if getattr(a, "part", None) is None:
+                ttnn.deallocate(a)
             y = self._mlp(i, ly, h2)
             ttnn.deallocate(h2)
         last = ch.layers[-1]
-        _, _, _, x = last.ihcf_m.pre(x, last.ihcf_m.norm_weight(last.hw_post, 1), y=y, pp_prev=pp_m, x_out=x)
-        ttnn.deallocate(y)
-        x4 = ttnn.to_layout(ttnn.reshape(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), [1, NSTREAM, 1, HID]), ttnn.TILE_LAYOUT)
+        _, _, _, x = pre(last.ihcf_m, x, last.ihcf_m.norm_weight(last.hw_post, 1), y, pp_m, x)
+        if getattr(y, "part", None) is None:
+            ttnn.deallocate(y)
+        x4 = ttnn.to_layout(
+            ttnn.reshape(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), [1, NSTREAM, 1, HID]), ttnn.TILE_LAYOUT
+        )
         hn, logits = ch.head(x4)
         ttnn.deallocate(hn)
         ttnn.deallocate(x4)
