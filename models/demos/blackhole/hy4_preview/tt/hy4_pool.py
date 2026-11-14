@@ -66,7 +66,7 @@ def row_write(src, ids, dst, n=1, page=ROWB):
     return ttnn.generic_op([src, ids, dst], prog)
 
 
-def slice_copy(src, dst, colid, units, page, npages, dst_page0=0, ncores=32):
+def slice_copy(src, dst, colid, units, page, npages, dst_page0=0, ncores=32, kernel="slice_copy.cpp"):
     """natural-order ``src`` pages -> this column's slices in ``dst`` (see slice_copy.cpp). units = 64 (rows) or 8 (key tiles); page = bytes per page (704 rows, 1088 bfp8 tiles, 2048 bf16 tiles).
     npages = number of 512-token pool pages to copy, written at pool page ``dst_page0``."""
     md = dst.device()
@@ -79,7 +79,7 @@ def slice_copy(src, dst, colid, units, page, npages, dst_page0=0, ncores=32):
         rt[x][y] = [i]
     ct = [units, page, nc, 0] + _acc(src) + _acc(dst) + _acc(colid)
     k = ttnn.KernelDescriptor(
-        kernel_source=f"{KDIR}/slice_copy.cpp",
+        kernel_source=f"{KDIR}/{kernel}",
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=cs,
         compile_time_args=ct,
@@ -88,7 +88,7 @@ def slice_copy(src, dst, colid, units, page, npages, dst_page0=0, ncores=32):
         config=ttnn.ReaderConfigDescriptor(),
     )
     prog = ttnn.ProgramDescriptor(kernels=[k], semaphores=[], cbs=[_cb(cs, units * page + 64)])
-    prog.custom_program_hash = _hash(0x9B2, units, page, nc, tuple(ct))
+    prog.custom_program_hash = _hash(0x9B2, units, page, nc, tuple(ct), kernel)
     return ttnn.generic_op([src, dst, colid], prog)
 
 
@@ -154,4 +154,12 @@ def colid_host(rows=4, nvalid=None):
     c = torch.zeros(rows, COLS, 1, 16, dtype=torch.int32)
     c[:, :, 0, 0] = torch.arange(COLS)[None, :]
     c[:, :, 0, 1] = 1 << 30 if nvalid is None else torch.as_tensor(nvalid, dtype=torch.int32)[:, None]
+    return c
+
+
+def colid_masked_host(skip_rows, rows=4):
+    """colid page with element 2 = 1 on the mesh rows in ``skip_rows`` (slice_copy_masked.cpp copies nothing there)."""
+    c = colid_host(rows)
+    for r in skip_rows:
+        c[int(r), :, 0, 2] = 1
     return c
