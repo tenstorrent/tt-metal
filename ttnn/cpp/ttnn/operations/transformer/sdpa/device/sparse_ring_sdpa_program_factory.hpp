@@ -75,6 +75,14 @@ inline uint32_t sparse_ring_multipass_pairs() {
     return (s != nullptr && std::atoi(s) > 0) ? 1u : 0u;
 }
 
+// TT_SPARSE_RING_BANKED_READS=1: the reader issues each contiguous K/V block read bank by bank, with one NoC read
+// state per bank and only the source / destination per tile (SDPA_READER_BANKED_READS). Same pages, same L1
+// destinations, same barriers; only the issue order changes. Default off.
+inline uint32_t sparse_ring_banked_reads() {
+    const char* s = std::getenv("TT_SPARSE_RING_BANKED_READS");
+    return (s != nullptr && std::atoi(s) > 0) ? 1u : 0u;
+}
+
 inline uint32_t sparse_ring_dyn_split() {
     const char* s = std::getenv("TT_SPARSE_RING_DYN_SPLIT");
     if (s == nullptr) {

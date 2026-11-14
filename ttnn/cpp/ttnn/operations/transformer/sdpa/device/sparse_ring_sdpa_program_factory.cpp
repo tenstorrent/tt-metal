@@ -1511,6 +1511,10 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         reader_kernel.opt_level = tt::tt_metal::KernelBuildOptLevel::Os;
         reader_kernel.defines.emplace_back("SDPA_READER_FLATTEN_READS", "1");
     }
+    if (sparse_ring_banked_reads() > 0) {
+        reader_kernel.defines.emplace_back("SDPA_READER_BANKED_READS", "1");
+        log_info(tt::LogOp, "SparseRingSDPA: reader issues K/V block reads bank by bank (TT_SPARSE_RING_BANKED_READS)");
+    }
 
     KernelDescriptor writer_kernel{};
     writer_kernel.kernel_source =

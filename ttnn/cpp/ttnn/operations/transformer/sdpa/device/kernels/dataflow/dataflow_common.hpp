@@ -1128,6 +1128,84 @@ inline void issue_block_reads(
     }
 }
 
+#if defined(SDPA_READER_BANKED_READS)
+template <typename T, typename = void>
+struct has_page_runs : std::false_type {};
+template <typename T>
+struct has_page_runs<
+    T,
+    std::void_t<
+        decltype(std::declval<const T&>().contiguous_page_stride()),
+        decltype(std::declval<const T&>().num_contiguous_pages(0u, 1u)),
+        decltype(std::declval<const T&>().get_noc_addr(0u)),
+        decltype(std::declval<const T&>().get_aligned_page_size())>> : std::true_type {};
+
+// SDPA_READER_BANKED_READS: issue_block_reads for a contiguous block (row_stride == cols), bank by bank.
+// The accessor's pages p, p + S, p + 2S, ... (S = contiguous_page_stride(), the bank count for interleaved
+// buffers) sit get_aligned_page_size() apart in one bank (num_contiguous_pages), so each bank's pages are
+// read with one set_state (bank coordinates, length) and then only the (source, destination) pair per tile.
+// Same pages, same L1 destinations, same caller barrier as issue_block_reads; only the issue order changes.
+// Returns false, having issued nothing, when the block does not qualify; the caller then uses issue_block_reads.
+template <typename ReaderType>
+inline bool issue_block_reads_banked(
+    const ReaderType& reader,
+    uint32_t base_tile_id,
+    uint32_t row_stride,
+    uint32_t num_rows,
+    uint32_t cols,
+    uint32_t dst_row_origin,
+    uint32_t dst_addr,
+    uint32_t outer_stride,
+    uint32_t inner_stride,
+    uint32_t barrier_threshold) {
+    if constexpr (!has_page_runs<ReaderType>::value) {
+        return false;
+    } else {
+        const uint32_t n = num_rows * cols;
+        const uint32_t page_stride = reader.contiguous_page_stride();
+        const uint32_t tile_bytes = reader.get_aligned_page_size();
+        if (barrier_threshold != 0 || row_stride != cols || cols == 0 || n <= page_stride ||
+            tile_bytes > NOC_MAX_BURST_SIZE) {
+            return false;
+        }
+        // L1 step from linear tile k to k + page_stride: whole rows when cols divides page_stride, else
+        // page_stride columns within a row.
+        uint32_t dst_step;
+        if (page_stride % cols == 0) {
+            dst_step = (page_stride / cols) * outer_stride;
+        } else if (cols % page_stride == 0) {
+            dst_step = page_stride * inner_stride;
+        } else {
+            return false;
+        }
+        const uint32_t end_page = base_tile_id + n;
+        for (uint32_t j = 0; j < page_stride; ++j) {
+            if (reader.num_contiguous_pages(base_tile_id + j, end_page) != (n - 1 - j) / page_stride + 1) {
+                return false;
+            }
+        }
+        uint32_t row = dst_row_origin;
+        uint32_t col = 0;
+        for (uint32_t j = 0; j < page_stride; ++j) {
+            const uint64_t first = reader.get_noc_addr(base_tile_id + j);
+            noc_async_read_one_packet_set_state(first, tile_bytes, 0, noc_index);
+            uint32_t src = static_cast<uint32_t>(first);
+            uint32_t dst = dst_addr + row * outer_stride + col * inner_stride;
+            for (uint32_t k = j; k < n; k += page_stride) {
+                noc_async_read_one_packet_with_state(src, dst, 0, noc_index);
+                src += tile_bytes;
+                dst += dst_step;
+            }
+            if (++col == cols) {
+                col = 0;
+                ++row;
+            }
+        }
+        return true;
+    }
+}
+#endif
+
 // Zero-fill a (num_rows × cols) tile block in L1. Same dst arithmetic as issue_block_reads.
 // reader is used only to derive the per-tile page size. No periodic barrier: fills source
 // from local L1 (MEM_ZEROS_BASE) and completes fast, so they don't push the NIU outstanding
@@ -1401,6 +1479,19 @@ struct PaddedAddrGenerator {
         uint32_t barrier_count = 0;
 
         // Valid segment: real reads.
+#if defined(SDPA_READER_BANKED_READS)
+        if (!issue_block_reads_banked(
+                reader,
+                tensor_shape.id_of(slice.d0, slice.d1, d2_start, slice.d3_start),
+                tensor_shape.stride2(),
+                valid_rows,
+                cols,
+                /*dst_row_origin=*/0,
+                dst_addr,
+                outer_stride,
+                inner_stride,
+                barrier_threshold))
+#endif
         issue_block_reads(
             reader,
             tensor_shape.id_of(slice.d0, slice.d1, d2_start, slice.d3_start),
