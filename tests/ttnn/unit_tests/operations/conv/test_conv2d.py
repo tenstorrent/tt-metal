@@ -309,3 +309,37 @@ def test_prepare_conv_weights_rejects_zero_params(device, override, field, expec
             input_dtype=ttnn.bfloat16,
             **_conv_zero_param_kwargs(device, override),
         )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize("act_block_w_div", [8, 16])
+@pytest.mark.parametrize("in_channels", [256, 512])
+def test_conv2d_width_sharded_rejects_invalid_act_block_w_div(device, in_channels, act_block_w_div, expect_error):
+    out_channels = 64
+    tt_input = ttnn.from_torch(
+        torch.randn(1, 1, 64, in_channels, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+    tt_weight = ttnn.from_torch(torch.randn(out_channels, in_channels, 3, 3, dtype=torch.bfloat16), dtype=ttnn.bfloat16)
+    conv_config = ttnn.Conv2dConfig(
+        weights_dtype=ttnn.bfloat16,
+        shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        act_block_w_div=act_block_w_div,
+    )
+    with expect_error(RuntimeError, "Invalid act_block_w_div"):
+        ttnn.conv2d(
+            input_tensor=tt_input,
+            weight_tensor=tt_weight,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            device=device,
+            kernel_size=(3, 3),
+            stride=(1, 1),
+            padding=(1, 1),
+            batch_size=1,
+            input_height=8,
+            input_width=8,
+            conv_config=conv_config,
+        )

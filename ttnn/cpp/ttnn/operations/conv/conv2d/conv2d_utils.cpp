@@ -528,13 +528,18 @@ Conv2dBlockConfig determine_per_core_conv_block_config(
 
     } else if (parallel_config.shard_scheme == TensorMemoryLayout::WIDTH_SHARDED) {
         TT_FATAL(act_block_w_div > 0, "Config Error: act_block_w_div must be greater than 0.");
-        TT_ASSERT(
-            padded_in_channels % (32 * parallel_config.grid.num_cores() * act_block_w_div) == 0,
-            "Padded In Channels = {}, num_cores = {}, act_block_w_div = {}",
+        const uint32_t width_shard_cores = parallel_config.grid.num_cores();
+        const uint32_t window_in_width = padded_in_channels * window_h * window_w;
+        TT_FATAL(
+            window_in_width % (width_shard_cores * act_block_w_div) == 0 &&
+                (window_in_width / (width_shard_cores * act_block_w_div)) % tt::constants::TILE_WIDTH == 0,
+            "Invalid act_block_w_div {} for width sharded conv2d with in_channels {} and {} cores: "
+            "in_channels * kernel_h * kernel_w must divide evenly by cores * act_block_w_div into a whole number of "
+            "32-wide tiles (in_channels divisible by 32 * cores * act_block_w_div is sufficient)",
+            act_block_w_div,
             padded_in_channels,
-            parallel_config.grid.num_cores(),
-            act_block_w_div);
-        act_block_w = (padded_in_channels * window_h * window_w) / (parallel_config.grid.num_cores() * act_block_w_div);
+            width_shard_cores);
+        act_block_w = window_in_width / (width_shard_cores * act_block_w_div);
     }
 
     TT_ASSERT(act_block_w % tt::constants::TILE_HEIGHT == 0);

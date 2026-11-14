@@ -333,6 +333,7 @@ void bind_conv2d(nb::module_& mod) {
             This is only useful when the input channels is greater than 32 * num_cores. For n150, that's 32 * 64 =  2048.
             This is a divisor of the activation block width.
             A value of 1 means no reduction, and a value of 2 means the activation block width is halved.
+            Must be greater than 0, and in_channels * kernel_h * kernel_w / (num_cores * act_block_w_div) must be a whole number of 32-wide tiles, where num_cores is the number of cores the input is width sharded over (in_channels divisible by 32 * num_cores * act_block_w_div is sufficient). Other values are rejected.
         )doc");
 
     py_conv_config.def_rw("reshard_if_not_optimal", &Conv2dConfig::reshard_if_not_optimal, R"doc(
