@@ -205,6 +205,10 @@ template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void gelu_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     if constexpr (APPROXIMATION_MODE) {
+        // calculate_gelu_appx stores through ADDR_MOD_6: dest += 2 per row, the same programming
+        // typecast and the fp32 exp use.
+        addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+
         sfpi::vConstFloatPrgm0 = 0.5f;
 
         // Load the packed 6-segment LUT coefficients directly into the LRegs via sfpi.
@@ -227,33 +231,36 @@ void gelu_init() {
     }
 }
 
+// result = 0.5 * x + lut(x): 6-entry SFPLUTFP32 table in LReg0-2/4-6 and 0.5 in vConstFloatPrgm0
+// (LReg12), both loaded by gelu_init<true>.
+//
+// Raw TTI rather than sfpi::lut: sfpi already lands the LUT result in LReg7, but serialises every
+// row as load / lut / mad / store plus a TTINCRWC (5 slots, and the SFPU stalls on each
+// adjacency). Pipelined, the next row's SFPLOAD and the previous row's SFPSTORE sit between the
+// MAD and the LUT that feeds it (4 slots per row). The steady-state body is recorded once and
+// replayed; the store walks dest through ADDR_MOD_6 (dest += 2, programmed by gelu_init<true>), so
+// no TTINCRWC per row. Same LUT mode bits and the same x * LReg12 + lut MAD as before; only the
+// register roles and the schedule change.
 template <int ITERATIONS>
 inline void calculate_gelu_appx() {
-    sfpi::vLut16ss s01 = sfpi::l_reg[sfpi::LRegs::LReg0];
-    sfpi::vLut16ss s23 = sfpi::l_reg[sfpi::LRegs::LReg1];
-    sfpi::vLut16ss s45 = sfpi::l_reg[sfpi::LRegs::LReg2];
-    sfpi::vLut16ii i01 = sfpi::l_reg[sfpi::LRegs::LReg4];
-    sfpi::vLut16ii i23 = sfpi::l_reg[sfpi::LRegs::LReg5];
-    sfpi::vLut16ii i45 = sfpi::l_reg[sfpi::LRegs::LReg6];
+    static_assert(ITERATIONS >= 2, "calculate_gelu_appx pipelines at least two rows");
+    constexpr unsigned LUT_MODE = sfpi::SFPLUTFP32_MOD0_FP16_6ENTRY_TABLE1 | sfpi::SFPLUTFP32_MOD0_SGN_UPDATE;
 
+    TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);
+    TTI_SFPLUTFP32(p_sfpu::LREG7, LUT_MODE);
+    TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG12, p_sfpu::LREG7, p_sfpu::LREG7, 0);
+    // Body for row r: load row r+1, store row r (dest += 2), lut row r+1, mad row r+1.
+    load_replay_buf<Exec>(0 /*start*/, 4 /*len*/, [] {
+        TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 2 /*row r+1*/);
+        TTI_SFPSTORE(p_sfpu::LREG7, InstrModLoadStore::DEFAULT, ADDR_MOD_6, 0);
+        TTI_SFPLUTFP32(p_sfpu::LREG7, LUT_MODE);
+        TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG12, p_sfpu::LREG7, p_sfpu::LREG7, 0);
+    });
 #pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat in = sfpi::dst_reg[0];
-        sfpi::vFloat half = sfpi::vConstFloatPrgm0;
-        sfpi::vFloat half_in = in * half;
-        sfpi::vFloat result = sfpi::lut(in, s01, i01, s23, i23, s45, i45, sfpi::LutSign::Update);
-        result = half_in + result;
-
-        sfpi::dst_reg[0] = result;
-        sfpi::dst_reg++;
+    for (int d = 2; d < ITERATIONS; d++) {
+        TTI_REPLAY(0, 4, 0, 0);
     }
-
-    sfpi::l_reg[sfpi::LRegs::LReg0] = s01;
-    sfpi::l_reg[sfpi::LRegs::LReg1] = s23;
-    sfpi::l_reg[sfpi::LRegs::LReg2] = s45;
-    sfpi::l_reg[sfpi::LRegs::LReg4] = i01;
-    sfpi::l_reg[sfpi::LRegs::LReg5] = i23;
-    sfpi::l_reg[sfpi::LRegs::LReg6] = i45;
+    TTI_SFPSTORE(p_sfpu::LREG7, InstrModLoadStore::DEFAULT, ADDR_MOD_6, 0);
 }
 
 // FP32 erf: n16/d16 parity rational coefficients, MaxULP=1 vs FP64.
