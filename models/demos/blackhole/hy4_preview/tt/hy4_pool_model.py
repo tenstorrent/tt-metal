@@ -126,3 +126,32 @@ class Hy4PoolDecoder(Hy4Decoder):
         ttnn.deallocate(hn)
         ttnn.deallocate(x4)
         return logits
+
+    def release(self):
+        if self.trace is not None:
+            ttnn.release_trace(self.md, self.trace)
+            self.trace = None
+            self.out = None
+
+    def fill_synthetic(self, tokens, gen, chunk=65536, same_all_layers=True):
+        """FAST SYNTHETIC FILL (long-context perf / capacity tests; NOT a real context): random SCALED_FP8 rows and indexer keys for the first ``tokens`` tokens of every user, written by slice_copy.
+        One random chunk is generated on the host per call and reused for every layer (same_all_layers), so a 1M fill takes seconds."""
+        dp = ttnn.experimental.deepseek_prefill
+        md = self.md
+        rep = lambda t, dt, lay: ttnn.from_torch(t, device=md, dtype=dt, layout=lay, mesh_mapper=ttnn.ReplicateTensorToMesh(md), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        for c0 in range(0, tokens, chunk):
+            n = min(chunk, tokens - c0)
+            assert n % HP.CHUNK == 0
+            lat = rep(torch.randn(1, 1, n, 512, generator=gen).bfloat16(), ttnn.bfloat16, ttnn.TILE_LAYOUT)
+            rope = rep(torch.randn(1, 1, n, 64, generator=gen).bfloat16(), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT)
+            f8, sc = dp.per_token_cast_to_fp8(lat, round_scale_to_power_of_two=True)
+            nat = dp.pack_scaled_fp8_kv_cache(f8, sc, rope)
+            kd = rep(torch.randn(1, 1, n, 128, generator=gen).bfloat16(), ttnn.bfloat16, ttnn.TILE_LAYOUT)
+            kb = ttnn.typecast(kd, ttnn.bfloat8_b)
+            for kv, kp in zip(self.kv_pools, self.key_pools):
+                HP.slice_copy(nat, kv, self.ctx.colid, 64, HP.ROWB, n // 512, dst_page0=c0 // 512)
+                if kp is not None:
+                    HP.slice_copy(kb, ttnn.reshape(kp, [1, 1, self.pages * 64, 128]), self.ctx.colid, 8, HP.KEYTILE, n // 512, dst_page0=c0 // 512)
+            ttnn.synchronize_device(md)
+            for t in (lat, rope, f8, sc, nat, kd, kb):
+                ttnn.deallocate(t)

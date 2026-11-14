@@ -43,7 +43,7 @@ def _pad_rows(t, to):
 class PoolCtx:
     """Process-wide state of the pool decode path: persistent per-step device tensors, the shared XMerge, the split-kernel module, the select-pipeline parameters."""
 
-    def __init__(self, md, mc, ccl, pages, rows=4, S=1, mode="topk", bucket_tokens=None, xchg=None, fuse=None, sel=None):
+    def __init__(self, md, mc, ccl, pages, rows=4, S=1, mode="topk", bucket_tokens=None, xchg=None, fuse=None, sel=None, xm=None):
         self.md, self.mc, self.ccl, self.rows, self.S, self.pages = md, mc, ccl, rows, S, pages
         self.mode = mode
         self.bucket_tokens = bucket_tokens or pages * HP.CHUNK
@@ -76,14 +76,21 @@ class PoolCtx:
         )
         R = NC * S
         self.G, self.kc = (8, 128) if R * 8 <= 120 else (4, 256)
-        self.xm = None
-        if self.xchg:
+        self.xm = xm  # an existing XMerge (tests that rebuild the ctx per bucket must share the ONE per-process object)
+        if self.xchg and xm is None:
             from models.demos.blackhole.hy4_preview.tt import hy4_xmerge
 
             self.xm = hy4_xmerge.XMerge(md, S, nsplit=int(os.environ.get("HY4_XM_NSPLIT", "2")))  # ONE per process, before the first trace capture
         self.ids8 = {}  # index-source layer -> idx8 tensor of the current step
         self.ids8_dense = None
         self.step_pos = None
+
+    def set_bucket(self, tokens, mode=None):
+        """decode bucket (call before capturing the trace of this bucket): the score kernel / select pipeline cover ``tokens`` tokens of the pool (tokens / 8 local rows per column)."""
+        assert tokens % 256 == 0 and tokens <= self.pages * HP.CHUNK
+        self.bucket_tokens, self.n_local = tokens, tokens // NC
+        if mode is not None:
+            self.mode = mode
 
     # ---- host side (outside traces)
     def set_step(self, pos):
@@ -169,6 +176,22 @@ class PoolCtx:
         return ttnn.to_layout(r, ttnn.TILE_LAYOUT)
 
 
+def select_global(ctx, qh, w32, key_view):
+    """decode indexer chain on the key pool: score kernel (kv_len per column from ctx.kvcnt) -> select_v2 -> global top-2048 ids uint32 [S,1,1,2048] (identical on all columns).
+    qh [S,1,32,128] TILE (heads = tile rows), w32 [1,1,32,32] TILE (row = query row, col = head), key_view [1,1,pages*64,128] bfp8 TILE."""
+    from models.demos.blackhole.hy4_preview.tt import hy4_idx_score as IS
+    from models.demos.blackhole.hy4_preview.tt.hy4_idx_select import select_v2
+
+    S, n = ctx.S, ctx.n_local
+    score = IS.idx_score(qh, key_view, w32, 0, S, kvt=ctx.kvcnt, n_rows=n)  # [1,1,S,n]
+    sel = ctx.sel
+    B = max(1, min(sel["B"], n // sel["kb"]))
+    kb, kloc = min(sel["kb"], n // B), min(sel["kloc"], n)
+    gids = select_v2(ctx.ag, ctx.colid, score, n, B, kb, kloc, K, sel["split"], False, None)
+    ttnn.deallocate(score)
+    return gids
+
+
 def merge3(x, sinkcol, S):
     """stock-op merge (no fused kernel): x [1,8*S,32,576] TILE (src-major then user), sinkcol [1,S,32,1] -> [1,S,32,512]"""
     V = 512
@@ -220,23 +243,14 @@ class Hy4AttentionPool(Hy4AttentionOpt):
 
     def pool_select(self, d, o, tabs):
         """global top-2048 ids [S,1,1,2048] (natural positions) of this full-indexer layer from the key pool."""
-        from models.demos.blackhole.hy4_preview.tt import hy4_idx_score as IS
-        from models.demos.blackhole.hy4_preview.tt.hy4_idx_select import select_v2
-
         ctx, S = self.ctx, self.ctx.S
-        n = ctx.n_local
         q = self.idx_q(o, d, tabs)  # [1,32,S,128]
         qh = q_headrows(q, S)
         ttnn.deallocate(q)
         w32 = _pad_rows(d["iw"], 32)
-        score = IS.idx_score(qh, self.key_view, w32, 0, S, kvt=ctx.kvcnt, n_rows=n)  # [1,1,S,n]
+        gids = select_global(ctx, qh, w32, self.key_view)
         for t in (qh, w32):
             ttnn.deallocate(t)
-        sel = ctx.sel
-        B = max(1, min(sel["B"], n // sel["kb"]))
-        kb, kloc = min(sel["kb"], n // B), min(sel["kloc"], n)
-        gids = select_v2(ctx.ag, ctx.colid, score, n, B, kb, kloc, K, sel["split"], False, None)
-        ttnn.deallocate(score)
         return gids
 
     # ------------------------------------------------------------------ step
