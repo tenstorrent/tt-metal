@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <variant>
 #include <cmath>
 
 #include <tt-metalium/constants.hpp>
@@ -45,6 +46,8 @@ struct CBIndices {
     uint32_t gather_config1 = 32;
     uint32_t untilize_out_cb_id0 = 32;
     uint32_t untilize_out_cb_id1 = 32;
+    uint32_t affine_scale_cb_id = 32;
+    uint32_t affine_shift_cb_id = 32;
     uint32_t external_config_cb_id = 32;
     uint32_t get_next_cb_id() { return next_cb_id++; }
 
@@ -91,10 +94,13 @@ ProgramDescriptor build_halo_program(
     Buffer* gather_config_buffer0,
     Buffer* gather_config_buffer1,
     const std::vector<uint16_t>& number_of_blocks_per_core,
+    const std::optional<Tensor>& prologue_scale,
+    const std::optional<Tensor>& prologue_shift,
     Buffer* external_config_buffer,
     const std::optional<Tensor>& halo_boundary) {
     const auto& pad_val = operation_attributes.pad_val;
     const bool external_halo = operation_attributes.external_halo;
+    const bool prologue_affine = operation_attributes.prologue_affine;
     const int block_size = UNTILIZE_BLOCK_SIZE;
     const uint32_t ncores_nhw = operation_attributes.config.num_cores_nhw;
     const uint32_t max_out_nsticks_per_core = operation_attributes.max_out_nsticks_per_core;
@@ -195,14 +201,23 @@ ProgramDescriptor build_halo_program(
         add_cb(desc, all_cores, cb_indices.untilize_out_cb_id0, out_df, untilize_out_cb_num_pages, out_tile_size);
         add_cb(desc, all_cores, cb_indices.untilize_out_cb_id1, out_df, untilize_out_cb_num_pages, out_tile_size);
 
-        const std::vector<uint32_t> compute_ct_args = {
+        if (prologue_affine) {
+            cb_indices.affine_scale_cb_id = cb_indices.get_next_cb_id();
+            cb_indices.affine_shift_cb_id = cb_indices.get_next_cb_id();
+            add_cb(desc, all_cores, cb_indices.affine_scale_cb_id, out_df, ntiles_per_block, out_tile_size);
+            add_cb(desc, all_cores, cb_indices.affine_shift_cb_id, out_df, ntiles_per_block, out_tile_size);
+        }
+        std::vector<uint32_t> compute_ct_args = {
             cb_indices.src_cb_id,
             input_to_writer_cb_id0,
             input_to_writer_cb_id1,
             ntiles_per_block,                        // number of tiles in the width dimension (channels)
             clamped_block_size_height / TILE_HEIGHT  // number of tiles in height dimension that make up a block
-
         };
+        if (prologue_affine) {
+            compute_ct_args.push_back(cb_indices.affine_scale_cb_id);
+            compute_ct_args.push_back(cb_indices.affine_shift_cb_id);
+        }
         auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
             get_compute_kernel_config_args(input_tensor.device()->arch(), operation_attributes.compute_kernel_config);
 
@@ -212,6 +227,9 @@ ProgramDescriptor build_halo_program(
         compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
         compute_desc.core_ranges = all_cores;
         compute_desc.compile_time_args = compute_ct_args;
+        if (prologue_affine) {
+            compute_desc.defines.emplace_back("PROLOGUE_AFFINE", "1");
+        }
         compute_desc.config = ComputeConfigDescriptor{
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
@@ -340,6 +358,18 @@ ProgramDescriptor build_halo_program(
         tt::tt_metal::TensorAccessorArgs(gather_config_buffer1).append_to(core_1_reader_ct_args);
     }
     KernelDescriptor::Defines reader_0_defines = reader_defines;
+    if (prologue_affine) {
+        const Buffer* scale_buffer = prologue_scale.value().buffer();
+        const Buffer* shift_buffer = prologue_shift.value().buffer();
+        reader_0_defines.emplace_back("PROLOGUE_AFFINE", "1");
+        reader_0_defines.emplace_back("PROLOGUE_AFFINE_CTA", std::to_string(core_0_reader_ct_args.size()));
+        reader_0_defines.emplace_back("PROLOGUE_SCALE_CB", std::to_string(cb_indices.affine_scale_cb_id));
+        reader_0_defines.emplace_back("PROLOGUE_SHIFT_CB", std::to_string(cb_indices.affine_shift_cb_id));
+        reader_0_defines.emplace_back("PROLOGUE_NTILES", std::to_string(ntiles_per_block));
+        reader_0_defines.emplace_back("PROLOGUE_TILE_BYTES", std::to_string(out_tile_size));
+        tt::tt_metal::TensorAccessorArgs(scale_buffer).append_to(core_0_reader_ct_args);
+        tt::tt_metal::TensorAccessorArgs(shift_buffer).append_to(core_0_reader_ct_args);
+    }
     if (external_halo) {
         const Buffer* boundary_buffer = halo_boundary.value().buffer();
         TT_ASSERT(boundary_buffer->page_size() == stick_nbytes);
@@ -389,7 +419,7 @@ ProgramDescriptor build_halo_program(
         .noc = NOC::RISCV_1_default,
     };
 
-    if (config_tensors_in_dram || external_halo) {
+    if (config_tensors_in_dram || prologue_affine || external_halo) {
         uint32_t core_index = 0;
         for (const auto& core : cores) {
             uint32_t index = 0;
@@ -398,10 +428,17 @@ ProgramDescriptor build_halo_program(
             } else if (is_block_sharded) {
                 index = is_rm_orientation ? core.y : core.x;
             }
-            if (external_halo) {
-                // Slot order of halo_gather.cpp's reader-0 runtime args.
+            if (prologue_affine || external_halo) {
+                // Slot order of halo_gather.cpp's reader-0 runtime args; a feature that is off leaves its slots 0.
+                using Arg = std::variant<uint32_t, Buffer*>;
                 reader_0_desc.emplace_runtime_args(
-                    core, {index, external_config_buffer, halo_boundary.value().buffer()});
+                    core,
+                    std::vector<Arg>{
+                        index,
+                        external_halo ? Arg{external_config_buffer} : Arg{0u},
+                        external_halo ? Arg{halo_boundary.value().buffer()} : Arg{0u},
+                        prologue_affine ? Arg{prologue_scale.value().buffer()} : Arg{0u},
+                        prologue_affine ? Arg{prologue_shift.value().buffer()} : Arg{0u}});
             } else {
                 reader_0_desc.runtime_args.emplace_back(core, std::vector<uint32_t>{index});
             }
@@ -552,6 +589,8 @@ tt::tt_metal::WorkloadDescriptor UntilizeWithHaloProgramFactory::create_workload
         gather0_buf,
         gather1_buf,
         number_of_blocks_per_core,
+        tensor_args.prologue_scale,
+        tensor_args.prologue_shift,
         external_config_buf,
         tensor_args.halo_boundary);
 

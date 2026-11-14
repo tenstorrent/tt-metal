@@ -45,6 +45,27 @@ void HaloDeviceOperation::validate_on_program_cache_miss(
     const bool is_block_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
     ttnn::operations::sliding_window::validate_sliding_window_shard_grid(
         shard_spec.grid, is_block_sharded, shard_spec.orientation);
+    if (args.prologue_affine) {
+        TT_FATAL(
+            input_tensor.layout() == Layout::TILE && input_tensor.dtype() == DataType::BFLOAT16,
+            "halo prologue_affine needs a BFLOAT16 TILE input (it runs in the untilize pass), got {} {}",
+            input_tensor.dtype(),
+            input_tensor.layout());
+        TT_FATAL(
+            tensor_args.prologue_scale.has_value() && tensor_args.prologue_shift.has_value(),
+            "halo prologue_affine needs the scale and shift tensors");
+        for (const auto& t : {tensor_args.prologue_scale.value(), tensor_args.prologue_shift.value()}) {
+            TT_FATAL(
+                t.layout() == Layout::TILE && t.dtype() == input_tensor.dtype(),
+                "prologue scale / shift must be TILE tensors of the input's dtype");
+            TT_FATAL(
+                t.padded_shape()[-1] == shard_spec.shape[1] && t.padded_shape()[-2] == tt::constants::TILE_HEIGHT,
+                "prologue scale / shift must be [1, C] padded to one tile row with C = the shard width ({}), got {}; "
+                "every core reads the same pages, so each shard must hold all channels",
+                shard_spec.shape[1],
+                t.padded_shape());
+        }
+    }
     if (args.external_halo) {
         TT_FATAL(tensor_args.halo_boundary.has_value(), "halo external_halo needs the halo_boundary tensor");
         const auto& b = tensor_args.halo_boundary.value();
@@ -176,8 +197,13 @@ Tensor halo(
             .is_out_tiled = is_out_tiled,
             .config_tensors_in_dram = config_tensors_in_dram,
             .compute_kernel_config = compute_kernel_config,
+            .prologue_affine = optional_inputs.prologue_scale.has_value() || optional_inputs.prologue_shift.has_value(),
             .external_halo = optional_inputs.halo_boundary.has_value(),
             .external_window = optional_inputs.external_window},
-        HaloInputs{input_tensor, optional_inputs.halo_boundary});
+        HaloInputs{
+            input_tensor,
+            optional_inputs.prologue_scale,
+            optional_inputs.prologue_shift,
+            optional_inputs.halo_boundary});
 }
 }  // namespace ttnn::prim
