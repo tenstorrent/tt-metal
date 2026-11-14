@@ -23,6 +23,8 @@ class _ReachedMetadata(Exception):
 def _audio_decoder():
     vocoder = object.__new__(Vocoder)
     object.__setattr__(vocoder, "_tpad_mask_cache", {(256, 49, "bf16"): ("M", "inv")})
+    # Prepared persistent CCL buffers (34e6943a5b7): kept across a denoise re-capture, dropped by `release_trace`.
+    object.__setattr__(vocoder, "_prepared_audio_ccl", {(256, 49, "bf16"): "prepared"})
     decoder = object.__new__(MiniMaxH3AudioDecoder)
     object.__setattr__(decoder, "decoder", vocoder)
     return decoder
@@ -85,6 +87,7 @@ def test_cold_capture_keeps_the_audio_tpad_masks(monkeypatch, expect_error):
     assert fake._transformer.released == 1
     # `_capture_audio` traces with no prep run, so a cleared mask would be uploaded inside the capture.
     assert masks == {(256, 49, "bf16"): ("M", "inv")}
+    assert fake._audio_decoder.decoder._prepared_audio_ccl == {(256, 49, "bf16"): "prepared"}
 
 
 def test_gate_off_releases_the_audio_traces_too(monkeypatch, expect_error):
@@ -93,6 +96,7 @@ def test_gate_off_releases_the_audio_traces_too(monkeypatch, expect_error):
     _denoise_until_metadata(fake, monkeypatch, expect_error)
     assert fake._transformer.released == 1
     assert fake._audio_decoder.decoder._tpad_mask_cache == {}
+    assert fake._audio_decoder.decoder._prepared_audio_ccl == {}
 
 
 def test_untraced_denoise_releases_nothing(monkeypatch, expect_error):
@@ -107,3 +111,4 @@ def test_release_traces_still_drops_the_audio_tpad_masks():
     pm.MiniMaxH3Pipeline.release_traces(fake)
     assert fake._transformer.released == 1
     assert fake._audio_decoder.decoder._tpad_mask_cache == {}
+    assert fake._audio_decoder.decoder._prepared_audio_ccl == {}
