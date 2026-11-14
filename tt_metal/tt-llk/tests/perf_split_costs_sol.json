@@ -13,6 +13,8 @@
   "perf_fused": 0.0,
   "perf_math_matmul": 11894.6,
   "perf_matmul": 2736.2,
+  "perf_matmul_custom": 2831.7,
+  "perf_matmul_in1_column_stride": 9.1,
   "perf_pack": 468.4,
   "perf_pack_dest_bank": 4.2,
   "perf_pack_untilize": 182.9,
@@ -29,7 +31,9 @@
   "perf_vif_targets": 6.4
  },
  "blackhole": {
+  "perf_compressed_custom_mm": 85.6,
   "perf_custom_mm": 165.1,
+  "perf_custom_mm_reuse_dest_srcb": 27.3,
   "perf_eltwise_bcast_col_custom": 2.5,
   "perf_eltwise_binary": 1542.2,
   "perf_eltwise_binary_broadcast": 2867.5,
@@ -43,6 +47,9 @@
   "perf_fused": 0.0,
   "perf_math_matmul": 19132.8,
   "perf_matmul": 4257.8,
+  "perf_matmul_custom": 2831.7,
+  "perf_matmul_custom_compressed": 397.7,
+  "perf_matmul_in1_column_stride": 9.1,
   "perf_pack": 543.9,
   "perf_pack_dest_bank": 4.4,
   "perf_pack_untilize": 774.5,

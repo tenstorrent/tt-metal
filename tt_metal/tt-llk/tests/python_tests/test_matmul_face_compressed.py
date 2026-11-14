@@ -16,6 +16,7 @@ from helpers.compressed_utils import (
 )
 from helpers.param_config import parametrize
 from helpers.stimuli_config import StimuliConfig
+from helpers.test_variant_parameters import CUSTOM_MM_CALLS
 from helpers.tile_constants import FACE_C_DIM
 
 
@@ -231,7 +232,15 @@ SUPPORTED_M = {1, 8}
 SUPPORTED_FORMATS = {FMT_CODE[f] for f in ("bfp0", "bfp2", "bfp4")}
 
 
-def run_face_compressed(M, K, N, assignment, pcc_threshold=None):
+def run_face_compressed(
+    M,
+    K,
+    N,
+    assignment,
+    pcc_threshold=None,
+    calls=CUSTOM_MM_CALLS(),
+    golden_multiplier=1,
+):
     run_compressed(
         M,
         K,
@@ -245,6 +254,8 @@ def run_face_compressed(M, K, N, assignment, pcc_threshold=None):
         pack_b,
         encode_meta,
         pcc_threshold=pcc_threshold,
+        calls=calls,
+        golden_multiplier=golden_multiplier,
     )
 
 
@@ -439,3 +450,17 @@ def test_matmul_face_compressed_deepseek(shape, switch_mult, seed):
         K, N, DEEPSEEK_T420, switch_mult=switch_mult, seed=seed
     )
     run_face_compressed(M, K, N, assignment)
+
+
+@blackhole_only
+def test_matmul_face_compressed_back_to_back_calls():
+    M, K, N = 1, 128, 64
+    assignment = assign_clustered(K, N, ("bfp4", "bfp2"), COMPRESSION_GRANULARITY)
+    run_face_compressed(
+        M,
+        K,
+        N,
+        assignment,
+        calls=CUSTOM_MM_CALLS(num_calls=2, rearm=False),
+        golden_multiplier=2,
+    )
