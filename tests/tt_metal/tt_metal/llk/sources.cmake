@@ -6,12 +6,15 @@ set(UNIT_TESTS_LLK_SRC
     test_broadcast.cpp
     test_compute_kernel_sentinel.cpp
     test_copy_block_matmul_partials.cpp
+    test_copy_dest_rows.cpp
     test_csa_index_remap_compute.cpp
     test_cumsum.cpp
     test_custom_mm_operands.cpp
     test_deepseek_binary_dest_reuse.cpp
     test_dropout_sfpu_compute.cpp
     test_fp8_typecast.cpp
+    test_gdn_decode_math.cpp
+    test_gdn_decode_sfpu.cpp
     test_generic_moe_gate_compute.cpp
     test_golden_impls.cpp
     test_hadamard_compute.cpp
