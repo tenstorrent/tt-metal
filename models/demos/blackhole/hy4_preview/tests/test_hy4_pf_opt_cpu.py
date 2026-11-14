@@ -19,8 +19,18 @@ def test_default_off_and_all(monkeypatch):
 
 # per-chip (K, N) of every prefill linear at M = 512 (TP8 columns)
 SHAPES = {
-    "q_a": (6144, 256), "kv_a": (6144, 576), "q_b": (2048, 2048), "gate": (6144, 2048), "o_proj": (2048, 6144), "idx_wq_b": (2048, 4096),
-    "idx_wk": (6144, 128), "idx_wp": (6144, 32), "dense_gu": (6144, 4608), "dense_down": (2304, 6144), "shared_gu": (6144, 512), "shared_down": (256, 6144),
+    "q_a": (6144, 256),
+    "kv_a": (6144, 576),
+    "q_b": (2048, 2048),
+    "gate": (6144, 2048),
+    "o_proj": (2048, 6144),
+    "idx_wq_b": (2048, 4096),
+    "idx_wk": (6144, 128),
+    "idx_wp": (6144, 32),
+    "dense_gu": (6144, 4608),
+    "dense_down": (2304, 6144),
+    "shared_gu": (6144, 512),
+    "shared_down": (256, 6144),
 }
 
 
@@ -64,3 +74,12 @@ def test_mask1_equals_slice_add_concat():
     full = torch.zeros(n, T)
     full[:, start : start + n] = m
     assert torch.equal(a, sc + full)
+
+
+def test_moe_tokens_parse():
+    from models.demos.blackhole.hy4_preview.tt.hy4_pf_opt import PfOpt
+
+    assert PfOpt.parse("shfold").shfold and not PfOpt.parse("shfold").mm2d
+    assert PfOpt.parse("moeall").shfold and not PfOpt.parse("moeall").rtall
+    assert not PfOpt.parse("all").shfold  # `all` is the attention/indexer/dense stack only
+    assert PfOpt.parse("rtall").any

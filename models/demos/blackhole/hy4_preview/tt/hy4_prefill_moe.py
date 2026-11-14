@@ -19,6 +19,30 @@ NUM_ROUTED, HIDDEN, INTER, TOPK = 256, 6144, 2048, 8
 ROWS, COLS = 4, 8
 EPC = NUM_ROUTED // (ROWS * COLS)  # 8
 _SHARED = {}
+_TRASH = (
+    []
+)  # HY4_PF_KEEP=1: tensors that would be freed inside the block are parked here until flush_trash() (after the caller synchronised the mesh)
+
+
+def _keep(name):
+    k = os.environ.get(
+        "HY4_PF_KEEP", "1"
+    )  # default ON: correctness fix (see tests/dev_pfmoe.py, moe-prefill RESULT); HY4_PF_KEEP=0 restores the racy eager frees
+    return k in ("1", "all") or (k != "0" and name in k.split(","))
+
+
+def _free(t, name="?"):
+    """ttnn.deallocate, or park the tensor when HY4_PF_KEEP=1 (the cross-device hazard hypothesis: a peer chip's combine/dispatch writes into a buffer that this chip has
+    just freed and re-allocated while its own previous op is still reading the old contents)."""
+    if _keep(name):
+        _TRASH.append(t)
+    else:
+        ttnn.deallocate(t)
+
+
+def flush_trash():
+    while _TRASH:
+        ttnn.deallocate(_TRASH.pop())
 
 
 def _ckc():
@@ -94,7 +118,7 @@ class Hy4UnifiedMoE:
         idx2 = ttnn.reshape(indices, [N, TOPK])
         idx_t = ttnn.to_layout(idx2, ttnn.TILE_LAYOUT)
         hist = ttnn.experimental.deepseek_prefill.masked_bincount(idx_t, sh.dispatch_table, NUM_ROUTED, TOPK)
-        ttnn.deallocate(idx_t)
+        _free(idx_t, "idx_t")
         offsets, counts, region_offsets, _ = ttnn.experimental.deepseek_prefill.offset_cumsum(
             hist,
             cluster_axis=0,
@@ -103,7 +127,7 @@ class Hy4UnifiedMoE:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             use_l1_small_for_semaphores=sh.l1_small,
         )
-        ttnn.deallocate(hist)
+        _free(hist, "hist")
         idx3 = ttnn.reshape(indices, [1, N, TOPK])
         disp, meta = ttnn.experimental.deepseek_prefill.dispatch(
             input_tensor=x_rm,
@@ -127,7 +151,7 @@ class Hy4UnifiedMoE:
             num_workers_per_sender=sh.workers,
             use_l1_small_for_semaphores=sh.l1_small,
         )
-        ttnn.deallocate(offsets)
+        _free(offsets, "offsets")
         disp2 = ttnn.reshape(disp, [sh.max_buf, x_rm.shape[2]])
         out = ttnn.experimental.deepseek_prefill.unified_routed_expert_moe(
             disp2,
@@ -141,7 +165,7 @@ class Hy4UnifiedMoE:
             compute_kernel_config=sh.ckc,
             activation=ttnn.RoutedExpertActivation.ClampedSiluGlu,
         )
-        ttnn.deallocate(disp)
+        _free(disp, "disp")
         out5 = ttnn.reshape(out, [1, 1, sh.max_buf, out.shape[-1]])
         comb = ttnn.experimental.deepseek_prefill.combine(
             out5,
@@ -160,14 +184,14 @@ class Hy4UnifiedMoE:
             use_fp8_combine=False,
             use_l1_small_for_semaphores=sh.l1_small,
         )
-        for t in (out, meta, counts, region_offsets):
-            ttnn.deallocate(t)
+        for nm, t in (("out", out), ("meta", meta), ("counts", counts), ("region", region_offsets)):
+            _free(t, nm)
         w5 = ttnn.reshape(scores, [1, 1, N, TOPK, 1])
         i5 = ttnn.reshape(indices, [1, 1, N, TOPK])
         summed = ttnn.experimental.deepseek_prefill.post_combine_reduce(
             comb, w5, i5, sh.dispatch_table, expert_dim=3, output_memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
-        ttnn.deallocate(comb)
+        _free(comb, "comb")
         return summed
 
 
@@ -177,11 +201,11 @@ def reduce_scatter_tokens(part, cc):
     r_ = ttnn.reduce_scatter(
         part, dim=3, cluster_axis=1, num_links=cc.num_links, topology=cc.topology, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
-    ttnn.deallocate(part)
+    _free(part, "part")
     out = ttnn.experimental.all_to_all_async_generic(
         r_, in_dim=3, out_dim=2, num_links=cc.num_links, topology=ttnn.Topology.Ring, cluster_axis=1
     )
-    ttnn.deallocate(r_)
+    _free(r_, "rs")
     return out
 
 
@@ -207,14 +231,34 @@ def route_cols(gate, hh_own, mc, cc):
     return sc_all, ix_all, (sc, ix, ixf, scf)
 
 
-def moe_cols(um, gate, hh_own, mc, cc):
-    """Column-split MoE of a whole chunk. hh_own [1,1,n,D] tile bf16: the n = N/8 normed hidden rows THIS column owns (own 32-token chunks in order) -> [1,1,n,D]."""
+def moe_cols(um, gate, hh_own, mc, cc, shared=None, pf=None):
+    """Column-split MoE of a whole chunk. hh_own [1,1,n,D] tile bf16: the n = N/8 normed hidden rows THIS column owns (own 32-token chunks in order) -> [1,1,n,D].
+    shared (a DSV41SharedExpertColTP, prefill config) + HY4_PF_OPT token ``shfold``: the shared-expert partial of the GATHERED hidden (same row order as the
+    routed partial) is added before the reduce-scatter, so the output already contains routed + shared and no shared all-reduce is needed.
+    """
+    from models.demos.blackhole.hy4_preview.tt.hy4_pf_opt import PfOpt
+
+    pf = pf or PfOpt.from_env()
+    flush_trash()  # tensors parked by the PREVIOUS block (HY4_PF_KEEP): a whole layer of work separates them from now
     D = hh_own.shape[3]
     h = mc.allgather(hh_own, cc, axis=1, dim=2)
-    sc_all, ix_all, junk = route_cols(gate, hh_own, mc, cc)
+    if pf.rtall:
+        n_all = h.shape[2]
+        gy = int(os.environ.get("HY4_PF_RT_GY", "0")) or min(4, max(1, n_all // 128))
+        sc_all, ix_all = gate.forward(h, grid=(gy, 8))
+        junk = ()
+    else:
+        sc_all, ix_all, junk = route_cols(gate, hh_own, mc, cc)
     x_rm = ttnn.reshape(ttnn.to_layout(h, ttnn.ROW_MAJOR_LAYOUT), [1, h.shape[2], D])
-    ttnn.deallocate(h)
+    shp = shared.forward(h) if (pf.shfold and shared is not None) else None
+    _free(h, "h")
     part = um.forward(x_rm, sc_all, ix_all)
+    if shp is not None:
+        part2 = ttnn.add(part, shp, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        _free(part, "part")
+        _free(shp)
+        part = part2
     for t_ in (x_rm, sc_all, ix_all) + tuple(junk):
-        ttnn.deallocate(t_)
-    return reduce_scatter_tokens(part, cc)
+        _free(t_, "route")
+    out = reduce_scatter_tokens(part, cc)
+    return out

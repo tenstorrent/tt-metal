@@ -2,12 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 """HY4_PF_OPT: prefill-chunk (512 rows per mesh row) levers found by program task prefill-roof, all flag-gated, default OFF.
 
-Tokens (comma list, ``all`` = every token): 
+Tokens (comma list, ``all`` = every token):
   mm2d   explicit MatmulMultiCoreReuseMultiCast (2D) program configs for the M=512 prefill linears (attention q_a/kv_a/q_b/gate/o_proj, indexer wq_b/wk, dense MLP, shared expert)
   hifi2  HiFi2 (fp32 accumulation kept) for the prefill attention / indexer-projection / MLP linears (decode keeps HiFi4)
   a2a2   heads<->sequence all_to_all_async_generic with num_links=2 (bit-identical, 331 -> 174 us)
   kc64   sparse_sdpa k_chunk_size 64 (default 128)
   rope1  indexer q/k rope as ONE rotary_embedding_llama on the 128-wide head (identity cos/sin on the non-rope span) instead of slice/matmul/mul/mul/add/slice/concat
+  shfold (MoE prefill) shared-expert partial computed on the all-gathered hidden and added to the routed partial BEFORE the column reduce-scatter (no shared all-reduce)
+  rtall  (MoE prefill) router on all N gathered rows of the column instead of own rows + pack + all-gather of the routing
   mask1  indexer in-chunk causal fix as one add with a full-width mask (instead of slice + add + concat)
 Never applied to decode (row count < 256 keeps the stock path).
 """
@@ -15,6 +17,9 @@ import os
 from dataclasses import dataclass
 
 ALL = ("mm2d", "hifi2", "a2a2", "kc64", "rope1", "mask1")
+# MoE prefill block levers (task moe-prefill, tt/hy4_prefill_moe.py); `moeall` = every MoE token confirmed so far (not part of `all`)
+MOE = ("shfold", "rtall")
+MOE_CONFIRMED = ("shfold",)  # rtall measured neutral (+16 us): not in the stack
 
 
 @dataclass(frozen=True)
@@ -25,13 +30,17 @@ class PfOpt:
     kc64: bool = False
     rope1: bool = False
     mask1: bool = False
+    shfold: bool = False
+    rtall: bool = False
 
     @classmethod
     def parse(cls, s):
         toks = {t.strip() for t in (s or "").split(",") if t.strip()}
         if "all" in toks:
             toks = set(ALL)
-        bad = toks - set(ALL)
+        if "moeall" in toks:
+            toks = (toks - {"moeall"}) | set(MOE_CONFIRMED)
+        bad = toks - set(ALL) - set(MOE)
         assert not bad, f"unknown HY4_PF_OPT tokens {bad}"
         return cls(**{t: True for t in toks})
 
@@ -41,7 +50,7 @@ class PfOpt:
 
     @property
     def any(self):
-        return any(getattr(self, t) for t in ALL)
+        return any(getattr(self, t) for t in ALL + MOE)
 
 
 def mcast_params(M, K, N, max_gx=12):
