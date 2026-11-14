@@ -658,22 +658,22 @@ GATHERING_BUILD_VARIANTS = [
     ),
     (
         "reduce_block_max_row (reduce_custom)",
-        "test_reduce_block_max.py::test_reduce_block_max[formats:Float16_b->Float16_b-block_ct_dim:1-num_faces:4]",
+        "test_reduce_block_max.py::test_reduce_block_max[formats:Float16_b->Float16_b-block_ct_dim:1-tile_dimensions:[32, 32]]",
         "math",
     ),
     (
         "reduce_block_max_row fp32 Dest",
-        "test_reduce_block_max.py::test_reduce_block_max[formats:Float16_b->Float32-block_ct_dim:1-num_faces:4]",
+        "test_reduce_block_max.py::test_reduce_block_max[formats:Float16_b->Float32-block_ct_dim:1-tile_dimensions:[32, 32]]",
         "math",
     ),
     (
         "reduce_block_max_row runtime (reduce_runtime_custom)",
-        "test_reduce_block_max.py::test_reduce_block_max_runtime[formats:Float16_b->Float16_b-block_ct_dim:1-num_faces:4]",
+        "test_reduce_block_max.py::test_reduce_block_max_runtime[formats:Float16_b->Float16_b-block_ct_dim:1-tile_dimensions:[32, 32]]",
         "math",
     ),
     (
         "reduce_block_max_row runtime fp32 Dest",
-        "test_reduce_block_max.py::test_reduce_block_max_runtime[formats:Float16_b->Float32-block_ct_dim:1-num_faces:4]",
+        "test_reduce_block_max.py::test_reduce_block_max_runtime[formats:Float16_b->Float32-block_ct_dim:1-tile_dimensions:[32, 32]]",
         "math",
     ),
     (
