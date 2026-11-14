@@ -76,6 +76,13 @@ void NLPCreateQKVHeadsDecodeDeviceOperation::validate_on_program_cache_miss(
             "Both batch_offset and slice_size must be provided or neither");
         if (batch_offset.has_value() && operation_attributes.slice_size.has_value()) {
             TT_FATAL(batch_offset.value().logical_shape()[0] == 1, "batch_offset must be unary tensor");
+            // The reader takes the first 32-bit word of the first page as an unsigned row offset, so a
+            // floating point offset would be bit-reinterpreted into a garbage row index.
+            TT_FATAL(
+                batch_offset.value().dtype() == tt::tt_metal::DataType::INT32 ||
+                    batch_offset.value().dtype() == tt::tt_metal::DataType::UINT32,
+                "batch_offset must be INT32 or UINT32, got {}",
+                batch_offset.value().dtype());
             num_users = operation_attributes.slice_size.value();
         }
 
