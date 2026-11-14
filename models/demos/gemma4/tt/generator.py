@@ -2907,7 +2907,11 @@ class ChunkedPrefillPageTableGuardMixin:
                 continue
             try:
                 host = ttnn.to_torch(ttnn.get_device_tensors(tok)[0]).reshape(-1).to(torch.int64)
-            except Exception:
+            except Exception as exc:
+                logger.warning(
+                    f"gemma4 decode feedback: could not read the sampled token for model {i} ({exc}); "
+                    "the next decode step will reuse the previous token"
+                )
                 continue
             pad_w = int(feedback.shape[-1])
             buf = torch.zeros(pad_w, dtype=torch.int64)
