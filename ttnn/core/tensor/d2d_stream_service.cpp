@@ -1159,6 +1159,8 @@ struct D2DStreamServiceReceiver::Impl {
     // Per-coord service-core L1 words (service cores differ per device).
     std::map<tt::tt_metal::distributed::MeshCoordinate, DeviceAddr> consumed_counter_addrs;
     std::map<tt::tt_metal::distributed::MeshCoordinate, DeviceAddr> termination_addrs;
+    // Per coord, arrived's increments per transfer: one per sender lane, or per relay lane in relay mode.
+    std::map<tt::tt_metal::distributed::MeshCoordinate, uint32_t> num_lanes;
     // Fabric-link lease — mirror of the sender. Single per-coord link_grant word
     // (0 = idle/done, 1 = granted one drain); same ping-pong protocol. Always set
     // from Config in create_pair (this member default never takes effect).
@@ -1352,6 +1354,30 @@ DeviceAddr D2DStreamServiceSender::get_metadata_addr(const tt::tt_metal::distrib
     return it->second;
 }
 
+tt::tt_metal::StreamOutputCounters D2DStreamServiceSender::get_output_counters(
+    const tt::tt_metal::distributed::MeshCoordinate& coord) const {
+    TT_FATAL(impl_->socket.has_value(), "D2DStreamServiceSender::get_output_counters: socket not built");
+    const CoreCoord core = get_service_core(coord);
+    // The config address build_sender_side hands the kernels.
+    const DeviceAddr config_addr = impl_->socket->get_config_buffer()->address();
+    const uint32_t bytes_acked_offset =
+        tt::tt_metal::distributed::MeshSocket::sender_bytes_acked_offset(tt::tt_metal::hal::get_l1_alignment());
+    DeviceAddr forwarded_addr = config_addr + bytes_acked_offset;
+    if (impl_->relay) {
+        // An exit chip runs the exit relay, which the entry relay credits in cable_acked[slot].
+        const auto& relay = *impl_->relay;
+        const auto [p, k] = relay.plan.slot_of.at(coord);
+        if (coord == relay.plan.cables[p].exit_coord) {
+            forwarded_addr = relay.words[p].acked_base + k * relay.word_stride;
+        }
+    }
+    return {
+        .produced = {core, get_data_ready_counter_addr(coord), impl_->num_workers},
+        .pushed = {impl_->worker_cores.start_coord, get_consumed_sem_addr(), 1},
+        .forwarded = {core, forwarded_addr, 1},
+    };
+}
+
 uint32_t D2DStreamServiceSender::get_metadata_size_bytes() const { return impl_->metadata_size_bytes; }
 
 void D2DStreamServiceSender::wait_for_fabric_links() {
@@ -1510,6 +1536,29 @@ DeviceAddr D2DStreamServiceReceiver::get_metadata_addr() const {
         impl_->metadata_size_bytes > 0,
         "D2DStreamServiceReceiver::get_metadata_addr: metadata not configured (Config::metadata_size_bytes == 0)");
     return impl_->metadata_l1_addr;
+}
+
+tt::tt_metal::StreamInputCounters D2DStreamServiceReceiver::get_input_counters(
+    const tt::tt_metal::distributed::MeshCoordinate& coord) const {
+    TT_FATAL(impl_->socket.has_value(), "D2DStreamServiceReceiver::get_input_counters: socket not built");
+    auto it = impl_->num_lanes.find(coord);
+    TT_FATAL(
+        it != impl_->num_lanes.end(), "D2DStreamServiceReceiver::get_input_counters: no receiver at coord {}", coord);
+    const CoreCoord core = get_service_core(coord);
+    // bytes_sent is the first word of the config address build_receiver_side hands the kernels.
+    DeviceAddr arrived_addr = impl_->socket->get_config_buffer()->address();
+    if (impl_->relay) {
+        // An entry chip runs the entry relay, which counts its own coord's landings in arrived[slot].
+        const auto& relay = *impl_->relay;
+        const auto [p, k] = relay.plan.slot_of.at(coord);
+        if (coord == relay.plan.cables[p].entry_coord) {
+            arrived_addr = relay.words[p].arrived_base + k * relay.word_stride;
+        }
+    }
+    return {
+        .arrived = {core, arrived_addr, it->second},
+        .consumed = {core, get_consumed_counter_addr(coord), impl_->num_workers},
+    };
 }
 
 void D2DStreamServiceReceiver::wait_for_fabric_links() {
@@ -2207,6 +2256,7 @@ SenderSideResources build_sender_side(
 struct ReceiverSideResources {
     std::map<distributed::MeshCoordinate, DeviceAddr> consumed_counter_addrs;
     std::map<distributed::MeshCoordinate, DeviceAddr> termination_addrs;
+    std::map<distributed::MeshCoordinate, uint32_t> num_lanes;
     std::map<distributed::MeshCoordinate, DeviceAddr> link_grant_addrs;
     std::optional<GlobalSemaphore> data_ready_sem;
     std::shared_ptr<distributed::MeshBuffer> metadata_buffer;
@@ -2316,6 +2366,7 @@ ReceiverSideResources build_receiver_side(
     constexpr bool worker_sync_enabled = true;
     auto workload = std::make_unique<distributed::MeshWorkload>();
     const uint32_t socket_config_addr = static_cast<uint32_t>(receiver_socket.get_config_buffer()->address());
+    std::map<distributed::MeshCoordinate, uint32_t> lanes_by_coord;
 
     for (const auto& coord : cfg.relay ? no_coords : coords) {
         const Buffer* recv_buf = backing.mesh_buffer().get_device_buffer(coord);
@@ -2329,6 +2380,7 @@ ReceiverSideResources build_receiver_side(
         // The sender's lane count, as the sender chose it: how many data-landed
         // increments the receiver awaits per transfer (one per sender lane).
         const uint32_t num_lanes = sender_lanes.at(coord);
+        lanes_by_coord.emplace(coord, num_lanes);
 
         const auto ws = make_worker_sync_args(
             device,
@@ -2376,6 +2428,7 @@ ReceiverSideResources build_receiver_side(
     return ReceiverSideResources{
         .consumed_counter_addrs = std::move(consumed_counter_addrs),
         .termination_addrs = std::move(termination_addrs),
+        .num_lanes = std::move(lanes_by_coord),
         .link_grant_addrs = std::move(link_grant_addrs),
         .data_ready_sem = std::move(data_ready_sem),
         .metadata_buffer = std::move(metadata_buffer),
@@ -3275,6 +3328,7 @@ std::unique_ptr<D2DStreamServiceReceiver> D2DStreamService::finalize_receiver(
         .num_workers = CMAKE_UNIQUE_NAMESPACE::core_range_size(cfg.receiver_worker_cores),
         .consumed_counter_addrs = std::move(res.consumed_counter_addrs),
         .termination_addrs = std::move(res.termination_addrs),
+        .num_lanes = std::move(res.num_lanes),
         .share_fabric_links = cfg.share_fabric_links,
         .link_grant_addrs = std::move(res.link_grant_addrs),
         .data_ready_sem = std::move(res.data_ready_sem),
@@ -3438,6 +3492,9 @@ void D2DStreamService::build_relay_receiver(D2DStreamServiceReceiver& receiver, 
             static_cast<uint32_t>(relay.words[p].acked_base + k * relay.word_stride),
             entry_node,
             CMAKE_UNIQUE_NAMESPACE::relay_noc(mesh, impl.service_cores, cable.entry_coord));
+        // The entry relay sends one bytes_sent increment per lane it uses for c.
+        const uint32_t lanes = CMAKE_UNIQUE_NAMESPACE::relay_target_lanes(relay, c);
+        impl.num_lanes.emplace(c, lanes);
         workload->add_program(
             tm_distributed::MeshCoordinateRange(c),
             CMAKE_UNIQUE_NAMESPACE::build_receiver_program(
@@ -3454,8 +3511,7 @@ void D2DStreamService::build_relay_receiver(D2DStreamServiceReceiver& receiver, 
                 static_cast<uint32_t>(impl.metadata_l1_addr),
                 /*share_fabric_links=*/true,
                 static_cast<uint32_t>(impl.link_grant_addrs.at(c)),
-                // The entry relay sends one bytes_sent increment per lane it uses for c.
-                CMAKE_UNIQUE_NAMESPACE::relay_target_lanes(relay, c),
+                lanes,
                 std::nullopt,
                 0u,
                 t_node,
@@ -3465,6 +3521,8 @@ void D2DStreamService::build_relay_receiver(D2DStreamServiceReceiver& receiver, 
     // 2. Entry chips: the entry relay, in place of their receiver service.
     for (uint32_t p = 0; p < plan.cables.size(); ++p) {
         const auto e = plan.cables[p].entry_coord;
+        // The exit relay lands each of e's transfers with one increment per cable lane.
+        impl.num_lanes.emplace(e, peer.cables[p].z_lanes);
         workload->add_program(
             tm_distributed::MeshCoordinateRange(e),
             CMAKE_UNIQUE_NAMESPACE::build_entry_relay_program(

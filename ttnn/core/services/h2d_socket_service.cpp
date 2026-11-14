@@ -1169,6 +1169,32 @@ CoreCoord H2DStreamService::get_service_core(const distributed::MeshCoordinate& 
     return it->second;
 }
 
+StreamInputCounters H2DStreamService::get_input_counters(const distributed::MeshCoordinate& coord) const {
+    require_owner(is_owner_, "H2DStreamService::get_input_counters");
+    for (const auto& s : sockets_) {
+        if (s->get_active_cores()[0].device_coord == coord) {
+            TT_FATAL(
+                s->get_fifo_size() % socket_page_size_ == 0,
+                "H2DStreamService::get_input_counters: fifo_size {} B is not a whole number of {} B socket pages, so "
+                "each wrap also adds the bytes past the last page to bytes_sent. Pass a multiple of the socket page "
+                "as fifo_size_bytes, or 0 to auto-size.",
+                s->get_fifo_size(),
+                socket_page_size_);
+            const CoreCoord core = get_service_core(coord);
+            // bytes_sent is the first word of the receiver's socket config; metadata takes one page.
+            const uint32_t pages = num_socket_pages_ + (cfg_.metadata_size_bytes > 0 ? 1 : 0);
+            return {
+                .arrived = {core, s->get_config_buffer_address(), pages * socket_page_size_},
+                .consumed = {core, get_consumed_counter_addr(coord), num_workers_},
+            };
+        }
+    }
+    TT_THROW(
+        "H2DStreamService::get_input_counters: no socket at coord {} (does this coord participate in this "
+        "service?).",
+        coord);
+}
+
 DeviceAddr H2DStreamService::get_metadata_addr() const {
     require_owner(is_owner_, "H2DStreamService::get_metadata_addr");
     TT_FATAL(

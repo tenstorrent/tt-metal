@@ -30,6 +30,7 @@
 #include <tt-metalium/mesh_workload.hpp>
 
 #include "ttnn/distributed/distributed_tensor.hpp"
+#include "ttnn/services/stream_counter.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace tt::tt_metal::distributed {
@@ -173,6 +174,13 @@ public:
     // Logical CoreCoord of the service core on this coord's device. Combine with
     // get_consumed_counter_addr to build the NoC destination workers inc into.
     CoreCoord get_service_core(const distributed::MeshCoordinate& coord) const;
+
+    // This coord's input counters. arrived is the bytes_sent word on its service core: the host adds every page
+    // it pushes, data and metadata alike (one step per transfer). consumed is the consumed-counter: one step is
+    // every worker's inc for a transfer.
+    // Owner-only; TT_FATALs in connector mode, or when the FIFO isn't whole socket pages, since each wrap would
+    // then also add the bytes past the last page.
+    StreamInputCounters get_input_counters(const distributed::MeshCoordinate& coord) const;
 
     // L1 address of the metadata destination, uniform across every worker core.
     DeviceAddr get_metadata_addr() const;

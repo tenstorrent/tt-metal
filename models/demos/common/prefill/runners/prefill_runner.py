@@ -13,6 +13,7 @@ from typing import Optional
 
 import torch
 from loguru import logger
+from ttnn.stream_hang_detection import StreamHangDetector
 
 import ttnn
 from models.common.utility_functions import is_blackhole
@@ -29,6 +30,7 @@ from models.demos.common.prefill.prefill_chunk import (
     sentinel_words,
     validate_chunks,
 )
+from models.demos.common.prefill.runners.hang_detector import arm_hang_detector
 from models.demos.common.prefill.runners.layer_completion_layout import layer_completion_layout
 from models.demos.common.prefill.runners.layer_completion_ring_reader import scheduler_shm_name
 from models.demos.common.prefill.runners.layer_completion_ring_writer import LayerCompletionRingWriter
@@ -946,6 +948,7 @@ def run_request_loop(
     layer_ack_service=None,
     before_first_chunk=None,
     sockets=None,
+    hang_detector: Optional[StreamHangDetector] = None,
 ) -> None:
     inbound = inbound or D2DBoundary()
     outbound = outbound or D2DBoundary()
@@ -1008,6 +1011,8 @@ def run_request_loop(
         _lease_reclaim(inbound, outbound)
         if _is_shutdown_sentinel(meta):
             # Drain: no inbound grant, as nothing follows the sentinel.
+            if hang_detector is not None:
+                hang_detector.stop()
             logger.info(f"[pp rank {rank}] SHUTDOWN sentinel received after {c} forwards; exiting request loop")
             if sockets.tokens is None:
                 ttnn.deallocate(inp)
@@ -1494,6 +1499,21 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
 
     logger.info(f"[pp rank {rank}] setup complete, entering request loop")
 
+    hang_detector = arm_hang_detector(
+        mesh_device,
+        rank,
+        h2d=h2d_service,
+        d2d_in=inbound.activation,
+        d2d_out=outbound.activation,
+        d2h=d2h_service,
+        idx_in=inbound.indices,
+        idx_out=outbound.indices,
+        acks_per_chunk=layout.rank_record_count,
+        # What _capture_trace will do before the first real chunk.
+        sends_warmup=traced and hasattr(runtime, "send_warmup_inputs"),
+        warmup_acks=getattr(runtime, "warmup_ack_count", lambda: 0)(),
+        layers=f"{first_layer_idx}-{first_layer_idx + num_my_layers - 1}",
+    )
     try:
         run_request_loop(
             runtime,
@@ -1510,8 +1530,11 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             layer_ack_service=layer_ack_service,
             before_first_chunk=_capture_trace if traced else None,
             sockets=sockets,
+            hang_detector=hang_detector,
         )
     finally:
+        if hang_detector is not None:
+            hang_detector.stop()
         import gc
 
         sockets.release_traces()
