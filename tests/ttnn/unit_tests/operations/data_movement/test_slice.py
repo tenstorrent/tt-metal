@@ -2552,3 +2552,24 @@ def test_slice_rm_wide_row_after_l1_fills(device):
         assert torch.equal(ttnn.to_torch(output), torch_expected)
     finally:
         ttnn.deallocate(resident)
+
+
+@pytest.mark.parametrize(
+    "shape, ends, dtype",
+    [
+        ([1, 80, 80, 80], [1, 80, 77, 80], torch.float32),
+        ([1, 80, 80, 160], [1, 80, 77, 160], torch.bfloat16),
+        ([2, 40, 80, 80], [2, 40, 77, 80], torch.float32),
+        ([1229, 6, 80], [1229, 5, 80], torch.float32),
+    ],
+)
+def test_slice_rm_uneven_core_split(device, shape, ends, dtype):
+    torch.manual_seed(0)
+    torch_input = torch.randn(shape, dtype=dtype)
+    begins = [0] * len(shape)
+    expected = torch_input[tuple(slice(b, e) for b, e in zip(begins, ends))]
+
+    ttnn_input = ttnn.from_torch(torch_input, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    actual = ttnn.to_torch(ttnn.slice(ttnn_input, begins, ends))
+
+    assert_equal(expected, actual)
