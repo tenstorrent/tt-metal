@@ -1903,11 +1903,25 @@ void call_binary_sfpu_operation_init([[maybe_unused]] std::uint32_t zero_point =
         // polynomial coefficients the Wormhole kernel keeps in vConstFloatPrgm0..2.
         SFPU_BINARY_INIT_FN(add1, logsigmoid_init, (APPROXIMATION_MODE));
     }
+    else if constexpr (BINOP == BinaryOp::BITWISE_AND)
+    {
+        // The bitwise SfpuTypes select the ADDR_MOD_6 (dest += 2) setup the kernel's
+        // store-side increment depends on. Mirrors binary_bitwise_tile_init.
+        SFPU_BINARY_INIT(bitwise_and);
+    }
+    else if constexpr (BINOP == BinaryOp::BITWISE_OR)
+    {
+        SFPU_BINARY_INIT(bitwise_or);
+    }
+    else if constexpr (BINOP == BinaryOp::BITWISE_XOR)
+    {
+        SFPU_BINARY_INIT(bitwise_xor);
+    }
     else
     {
         // BinaryOps without a dedicated SfpuType use the baseline binary addrmod setup.
-        // BITWISE_AND/OR/XOR, RSUB_INT32 and MASK(_POSINF) land here: those kernels need
-        // no per-op init beyond the standard binary addrmod configuration.
+        // RSUB_INT32 and MASK(_POSINF) land here: those kernels need no per-op init beyond
+        // the standard binary addrmod configuration.
         SFPU_BINARY_INIT(add1);
     }
 }
