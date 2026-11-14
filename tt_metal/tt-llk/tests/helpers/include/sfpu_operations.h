@@ -139,6 +139,12 @@ constexpr std::uint32_t EXP_WITH_BASE_SCALE_FP32 = EXP_WITH_BASE_SCALE_BF16 << 1
 // ignores ITERATIONS (tt-llk#1486), so its callers run it per face over all four faces.
 constexpr int EXP_APPROX_CLAMP_ITERATIONS = 8;
 
+// Lrelu's slope, 0.1f (LRELU_NEGATIVE_SLOPE in sfpu_dispatch_constants.py). A test's params.h may define
+// another, as a generated BF16 sweep does at the slope its kernel serves.
+#ifndef LRELU_SLOPE_BITS
+#define LRELU_SLOPE_BITS 0x3dcccccdu
+#endif
+
 template <bool APPROXIMATION_MODE, bool IS_FP32_DEST_ACC_EN, int ITERATIONS, bool CLAMP_NEGATIVE, std::uint32_t EXP_BASE_SCALE_FACTOR>
 inline __attribute__((always_inline)) void calculate_exponential_const_scale()
 {
@@ -1236,7 +1242,7 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     }
     else if constexpr (OPERATION == SfpuType::lrelu)
     {
-        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_lrelu_, (APPROX_MODE), dst_index, vector_mode, ITERATIONS, 0x3dcccccdu /* slope = 0.1f */);
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_lrelu, (APPROX_MODE, ITERATIONS, DST_ACCUM_MODE), dst_index, vector_mode, LRELU_SLOPE_BITS);
     }
     else if constexpr (OPERATION == SfpuType::add_int32)
     {
