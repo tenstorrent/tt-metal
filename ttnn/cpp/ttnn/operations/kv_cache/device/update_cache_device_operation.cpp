@@ -17,6 +17,21 @@ UpdateKVCacheOperation::program_factory_t UpdateKVCacheOperation::select_program
     return UpdateCacheMultiCoreProgramFactory{};
 }
 
+namespace {
+// The fill and update factories launch on every core of the input shard grid and give each core one shard
+// of work, so a grid with more cores than shards makes the extra cores write past the input into the cache.
+void validate_one_shard_per_core(const Tensor& input_tensor) {
+    const auto& shard_spec = input_tensor.shard_spec().value();
+    const uint32_t num_rows = input_tensor.physical_volume() / input_tensor.padded_shape()[-1];
+    const uint32_t num_shards = num_rows / shard_spec.shape[0];
+    TT_FATAL(
+        shard_spec.grid.num_cores() == num_shards,
+        "Input shard grid must have one core per shard: {} cores for {} shards",
+        shard_spec.grid.num_cores(),
+        num_shards);
+}
+}  // namespace
+
 void UpdateKVCacheOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& cache_tensor = tensor_args.cache;
@@ -85,6 +100,7 @@ void UpdateKVCacheOperation::validate_on_program_cache_miss(
             TT_FATAL(
                 input_tensor.padded_shape()[-2] % input_tensor.shard_spec().value().shape[0] == 0,
                 "Seq len must be divisible by shard height!");
+            validate_one_shard_per_core(input_tensor);
         }
 
         TT_FATAL(
@@ -121,6 +137,7 @@ void UpdateKVCacheOperation::validate_on_program_cache_miss(
                         input_tensor.shard_spec().value().shape[0] ==
                     0,
                 "Error");
+            validate_one_shard_per_core(input_tensor);
         } else {
             TT_FATAL(
                 input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
