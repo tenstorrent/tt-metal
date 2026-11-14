@@ -516,3 +516,31 @@ def test_rotary_embedding_decode_program_cache_reuse(W, Z, Y, X, cache_size, in_
         f"expected {expected_entries} program-cache entry/entries, got {device.num_program_cache_entries()} "
         f"(token_idx must not be hashed)"
     )
+
+
+# The output keeps the input's logical shape when the sequence (prefill) or head (decode) dim is not a
+# multiple of 32; only the padded shape is tile aligned.
+@pytest.mark.parametrize("S", [1, 17, 33, 50, 100])
+@pytest.mark.parametrize("X", [32, 64])
+@pytest.mark.parametrize("token_idx", [None, 5])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+def test_rotary_embedding_unaligned_seq_keeps_logical_shape(S, X, token_idx, layout, device):
+    if token_idx is not None and layout == ttnn.ROW_MAJOR_LAYOUT:
+        pytest.skip("Decode mode takes tilized inputs")
+    torch.manual_seed(0)
+    input_shape = [1, 2, S, X] if token_idx is None else [1, 1, S, X]
+    x = torch.randn(input_shape).bfloat16().float()
+    cos_cached = torch.randn([1, 1, 2048, X]).bfloat16().float()
+    sin_cached = torch.randn([1, 1, 2048, X]).bfloat16().float()
+
+    xt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=layout, device=device)
+    cost = ttnn.from_torch(cos_cached, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    sint = ttnn.from_torch(sin_cached, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    xtt = ttnn.experimental.rotary_embedding(xt, cost, sint, token_idx)
+
+    assert list(xtt.shape) == input_shape
+    assert xtt.padded_shape[-2] == divup(S, 32) * 32
+
+    p, o = comp_pcc(apply_rotary_pos_emb(x, cos_cached, sin_cached, token_idx), ttnn.to_torch(xtt), 0.999)
+    logger.info(o)
+    assert p

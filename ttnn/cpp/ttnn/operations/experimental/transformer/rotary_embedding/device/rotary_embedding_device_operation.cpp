@@ -99,10 +99,22 @@ void RotaryEmbeddingDeviceOperation::validate_on_program_cache_miss(
 tt::tt_metal::TensorSpec RotaryEmbeddingDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
-    auto shape = input_tensor.padded_shape();
+    // The output keeps the input's logical shape; only its padded shape is tile aligned.
+    const auto& logical_shape = input_tensor.logical_shape();
+    auto padded_shape = input_tensor.padded_shape();
     if (!args.token_idx.has_value()) {
-        shape[-2] = tt::round_up(args.seq_len, TILE_HEIGHT);
+        padded_shape[-2] = tt::round_up(args.seq_len, TILE_HEIGHT);
     }
+    auto output_spec = [&](const tt::tt_metal::MemoryConfig& mem_config) {
+        return tt::tt_metal::TensorSpec(
+            logical_shape,
+            tt::tt_metal::TensorLayout::fromPaddedShape(
+                input_tensor.dtype(),
+                tt::tt_metal::PageConfig(input_tensor.layout()),
+                mem_config,
+                logical_shape,
+                padded_shape));
+    };
 
     if (args.output_mem_config.is_sharded()) {
         tt::tt_metal::ShardSpec shard_spec{CoreRangeSet(), {0, 0}};
@@ -126,16 +138,10 @@ tt::tt_metal::TensorSpec RotaryEmbeddingDeviceOperation::compute_output_specs(
         }
         auto mem_config = tt::tt_metal::MemoryConfig(
             args.output_mem_config.memory_layout(), args.output_mem_config.buffer_type(), shard_spec);
-        return tt::tt_metal::TensorSpec(
-            shape,
-            tt::tt_metal::TensorLayout(
-                input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), mem_config));
+        return output_spec(mem_config);
     }
 
-    return tt::tt_metal::TensorSpec(
-        shape,
-        tt::tt_metal::TensorLayout(
-            input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), args.output_mem_config));
+    return output_spec(args.output_mem_config);
 }
 
 Tensor RotaryEmbeddingDeviceOperation::create_output_tensors(
