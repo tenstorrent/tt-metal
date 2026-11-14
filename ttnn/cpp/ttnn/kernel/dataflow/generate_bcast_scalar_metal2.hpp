@@ -41,11 +41,23 @@ FORCE_INLINE void generate_bcast_row_scalar(DFB& dfb, uint32_t scalar) {
 }
 
 // HW-bcast scalar
-// Tile is assumed to have 16-bit elements
-// Scalar is assumed to be a 16-bit value double packed into a u32
+// A 16-bit tile keeps the upper half of the scalar, which the caller double packs (the packed low
+// half is never read). A 32-bit tile keeps the whole word, so a float32 scalar keeps every mantissa
+// bit. Element 0 is the only datum the HW-broadcast reads, so one word is enough for either width.
 template <typename DFB>
 FORCE_INLINE void generate_bcast_unary_scalar(DFB& dfb, uint32_t scalar) {
-    const uint32_t scalar_val = scalar >> 16;
+    const DataFormat data_format = dfb.get_dataformat();
+    uint32_t scalar_val = scalar >> 16;
+    switch (static_cast<uint32_t>(data_format) & 0x1Fu) {
+        case static_cast<uint32_t>(DataFormat::Float32):
+        case static_cast<uint32_t>(DataFormat::Int32):
+#ifndef ARCH_QUASAR  // Quasar has no UInt32 data format
+        case static_cast<uint32_t>(DataFormat::UInt32):
+#endif
+            scalar_val = scalar;
+            break;
+        default: break;
+    }
     dfb.reserve_back(1);
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dfb.get_write_ptr());
     ptr[0] = scalar_val;
