@@ -71,7 +71,7 @@ static_assert(!is_used<2>(0), "matmul_fe_mark: an untouched tag<N> must read unu
          : MATMUL_FE_MARK())
 // a block key: the constant itself, 0xFF where the argument is not a constant expression; taken by value, since a reference to a
 // run-time dim moved its register allocation (minimal_matmul)
-#define MATMUL_FE_CK(x) (__builtin_constant_p(::ckernel::matmul_fe_cb(x)) ? ::ckernel::matmul_fe_mark::dim(x) : 0xFFu)
+#define MATMUL_FE_CK(x) (__builtin_constant_p(::ckernel::matmul_fe_cb(::ckernel::matmul_fe_mark::dim(x))) ? ::ckernel::matmul_fe_mark::dim(x) : 0xFFu)
 #define FAST_TILIZE_MARK() sizeof(::ckernel::matmul_fe_mark::set<3>)
 // 0, completing tag 8 for a plain call whose ct and rt are constant expressions and tag 7 otherwise; the dims pass by value, so
 // the test takes no address of them (a reference moved the register allocation of run-time-dim kernels), and through matmul_fe_cb,
