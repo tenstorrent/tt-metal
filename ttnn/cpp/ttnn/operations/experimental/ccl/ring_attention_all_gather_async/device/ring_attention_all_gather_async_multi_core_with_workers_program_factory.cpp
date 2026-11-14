@@ -1172,11 +1172,14 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         if (has_metadata) {
             tt::tt_metal::TensorAccessorArgs(kv_actual_isl->buffer()).append_to(args);
         }
-        if (has_balance) {
-            for (tt::tt_metal::Buffer* const buf :
-                 {balance->table, balance->partner, balance->q, balance->mask, balance->out}) {
-                tt::tt_metal::TensorAccessorArgs(buf).append_to(args);
-            }
+        // The writer declares the balancing accessors in every build (one binary layout), so they are always appended.
+        for (tt::tt_metal::Buffer* const buf :
+             {has_balance ? balance->table : nullptr,
+              has_balance ? balance->partner : nullptr,
+              has_balance ? balance->q : nullptr,
+              has_balance ? balance->mask : nullptr,
+              has_balance ? balance->out : nullptr}) {
+            tt::tt_metal::TensorAccessorArgs(buf).append_to(args);
         }
         return args;
     };
