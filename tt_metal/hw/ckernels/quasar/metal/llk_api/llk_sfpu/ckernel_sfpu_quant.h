@@ -12,6 +12,13 @@
 
 namespace ckernel::sfpu {
 
+static_assert(
+    p_sfpu::sfp_sfpcast_mod::SM32_TO_2SC == sfpi::SFPCAST_MOD1_SM32_TO_INT32,
+    "SM32_TO_2SC must match SFPI's Quasar SFPCAST Mod1");
+static_assert(
+    p_sfpu::sfp_sfpcast_mod::TWO_SC_TO_SM == sfpi::SFPCAST_MOD1_INT32_TO_SM32,
+    "TWO_SC_TO_SM must match SFPI's Quasar SFPCAST Mod1");
+
 // The three quant-family binary ops, selected at compile time by one op-templated
 // init/execute pair below (quant / requant / dequant).
 enum class QuantVariant : std::uint8_t { Quant, Requant, Dequant };
