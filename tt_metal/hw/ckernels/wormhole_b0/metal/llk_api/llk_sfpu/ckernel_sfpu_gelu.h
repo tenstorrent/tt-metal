@@ -324,6 +324,13 @@ inline void calculate_gelu() {
                 v_endif;
             }
             v_endif;
+            // NaN: x > GELU_SAT is not NaN-aware. Wormhole has no compare instruction, so it lowers
+            // to SFPMAD (GELU_SAT - x) and a sign test of the result; a NaN out of SFPMAD carries the
+            // product's sign, so a sign-set NaN fails the test and keeps the default 0, while +NaN
+            // passes, takes the region and propagates. is_nan tests exponent and mantissa only, so
+            // either sign returns x.
+            v_if(sfpi::is_nan(x)) { result = x; }
+            v_endif;
             sfpi::dst_reg[0] = result;
             sfpi::dst_reg++;
         }
