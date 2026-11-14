@@ -268,6 +268,9 @@ static ttnn::Tensor bound_matmul(
         input_tensor_b_adjusted = ttnn::transpose(input_tensor_b, -1, -2, input_tensor_b.memory_config());
     }
 
+    // The output shape below is computed from the original tensors, which need the requested flags.
+    const bool requested_transpose_a = parameters.transpose_a;
+    const bool requested_transpose_b = parameters.transpose_b;
     // We need to change the transpose_a and transpose_b flags if we manually transposed
     // the input tensors
     if (needs_manual_transpose_a) {
@@ -286,6 +289,10 @@ static ttnn::Tensor bound_matmul(
         input_tensor_b_adjusted,
         parameters.transpose_a,
         get_fp32_dest_acc_en(matmul_struct.compute_kernel_config));
+    // The reuse factory has no fused bias, whether the config was given or auto-selected.
+    if (bias.has_value() && std::holds_alternative<MatmulMultiCoreReuseProgramConfig>(chosen_program_config)) {
+        post_process_bias = true;
+    }
 
     // Activations the op does not fuse run after it, in order: a unified config's when the bias is added after the op
     // (the kernels run it on the finished sum), then the caller's unless a user grid has the op fuse it into its auto
@@ -304,14 +311,24 @@ static ttnn::Tensor bound_matmul(
         parameters.user_fused_activation = std::nullopt;
     }
 
+    // A post-added bias can broadcast the matmul result up to the output's shape, so the matmul then writes its own.
+    std::optional<Tensor> matmul_output_tensor = optional_output_tensor;
+    if (post_process_bias && optional_output_tensor.has_value() &&
+        optional_output_tensor->logical_shape().volume() !=
+            utilities::compute_matmul_output_shape(
+                input_tensor_a_adjusted, input_tensor_b_adjusted, parameters.transpose_a, parameters.transpose_b)
+                .volume()) {
+        matmul_output_tensor = std::nullopt;
+    }
+
     auto attributes = ttnn::prim::qsr::create_matmul_attributes(
-        input_tensor_a_adjusted, input_tensor_b_adjusted, parameters, {optional_output_tensor});
+        input_tensor_a_adjusted, input_tensor_b_adjusted, parameters, {matmul_output_tensor});
 
     auto output_tensor = ttnn::prim::qsr::matmul(
                              input_tensor_a_adjusted,
                              input_tensor_b_adjusted,
                              post_process_bias ? std::nullopt : bias,
-                             optional_output_tensor,
+                             matmul_output_tensor,
                              attributes)
                              .at(0);
 
@@ -319,7 +336,7 @@ static ttnn::Tensor bound_matmul(
         output_tensor = ttnn::operations::experimental::quasar::reshape(
             output_tensor,
             utilities::compute_matmul_output_shape(
-                input_tensor_a, input_tensor_b, attributes.transpose_a, attributes.transpose_b));
+                input_tensor_a, input_tensor_b, requested_transpose_a, requested_transpose_b));
     }
 
     // Apply bias as post-processing if needed
@@ -345,7 +362,7 @@ static ttnn::Tensor bound_matmul(
     }
 
     const auto& matmul_shape = utilities::compute_matmul_output_shape(
-        input_tensor_a, input_tensor_b, attributes.transpose_a, attributes.transpose_b);
+        input_tensor_a, input_tensor_b, requested_transpose_a, requested_transpose_b);
 
     ttnn::Shape result_shape = (bias.has_value()) ? utilities::compute_matmul_with_bias_output_shape(
                                                         matmul_shape, bias.value().logical_shape())
