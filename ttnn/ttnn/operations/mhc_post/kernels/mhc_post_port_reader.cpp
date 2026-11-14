@@ -30,7 +30,10 @@ void kernel_main() {
     constexpr uint32_t sem_rows_id = get_compile_time_arg_val(8);
     constexpr uint32_t cb_poll = get_compile_time_arg_val(9);  // private scratch: one 16 B slot per worker
     constexpr uint32_t cb_yscr = get_compile_time_arg_val(10);  // private scratch: 2 y tiles per staged tile
-    constexpr auto y_args = TensorAccessorArgs<11>();
+    constexpr uint32_t read_batch = get_compile_time_arg_val(11);   // chunks in flight per read barrier
+    constexpr uint32_t ring_chunks = get_compile_time_arg_val(12);  // chunk slots of cb_chunks
+    constexpr auto y_args = TensorAccessorArgs<13>();
+    constexpr uint32_t chunk_bytes = run_pages * page_bytes;
     static_assert(page_bytes == 2048, "the feed moves bf16 tiles");
 
     size_t a = 0;
@@ -58,24 +61,30 @@ void kernel_main() {
     const uint32_t num_workers = g.r * group_q;
     const uint32_t poll = get_write_ptr(cb_poll);
     const uint32_t rows_sem = get_semaphore(sem_rows_id);
-    uint32_t done_upto = 0;  // workers [0, done_upto) are known to have published the current wave
-    // wait until every worker k published min(i1, rows of its group) rows
+    // wait until every worker k published min(i1, rows of its group) rows. `ready_rows` = rows every worker has
+    // published (a worker with all its rows counts as max_rows); a poll round re-reads only the workers not yet
+    // done (their slot caches the last count: counts only grow), so once the rows have landed later waves cost
+    // nothing (a full 106-worker poll is ~4 us).
+    uint32_t ready_rows = 0;
+    bool polled = false;
     auto wait_wave = [&](uint32_t i1) {
-        done_upto = 0;
-        while (done_upto < num_workers) {
-            for (uint32_t k = done_upto; k < num_workers; ++k) {
-                const uint32_t xy = get_arg_val<uint32_t>(workers_idx + k);
-                noc_async_read(get_noc_addr(xy & 0xFFFF, xy >> 16, rows_sem), poll + k * 16, 4);
+        while (ready_rows < i1) {
+            for (uint32_t k = 0; k < num_workers; ++k) {
+                if (!polled || *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(poll + k * 16) <
+                                   mhc_feed::group_rows(g, k / group_q)) {
+                    const uint32_t xy = get_arg_val<uint32_t>(workers_idx + k);
+                    noc_async_read(get_noc_addr(xy & 0xFFFF, xy >> 16, rows_sem), poll + k * 16, 4);
+                }
             }
             noc_async_read_barrier();
             invalidate_l1_cache();
-            while (done_upto < num_workers) {
-                const uint32_t rows = mhc_feed::group_rows(g, done_upto / group_q);
-                const uint32_t need = i1 < rows ? i1 : rows;
-                if (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(poll + done_upto * 16) < need) {
-                    break;
+            polled = true;
+            ready_rows = max_rows;
+            for (uint32_t k = 0; k < num_workers; ++k) {
+                const uint32_t cnt = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(poll + k * 16);
+                if (cnt < mhc_feed::group_rows(g, k / group_q) && cnt < ready_rows) {
+                    ready_rows = cnt;
                 }
-                ++done_upto;
             }
         }
     };
@@ -100,6 +109,22 @@ void kernel_main() {
         };
     };
 
+    // Whole-page chunks (every page one whole y tile) are read `read_batch` at a time behind one barrier; a chunk
+    // occupies one ring slot (the sender walks the slots in the same order) and is pushed alone (a push may not
+    // cross the ring end).
+    const uint32_t ring_base = get_write_ptr(cb_chunks);  // nothing reserved yet: the ring's base
+    uint32_t slot = 0, pending = 0;  // ring slot of the first unpushed chunk; chunks read but not pushed
+    auto flush = [&]() {
+        if (pending > 0) {
+            noc_async_read_barrier();
+            for (uint32_t k = 0; k < pending; ++k) {
+                cb_push_back(cb_chunks, run_pages);
+            }
+            slot = (slot + pending) % ring_chunks;
+            pending = 0;
+        }
+    };
+
     for (uint32_t i0 = 0, w = 0; i0 < max_rows; i0 += wave_rows, ++w) {
         const uint32_t i1 = (i0 + wave_rows) < max_rows ? (i0 + wave_rows) : max_rows;
         wait_wave(i1);  // the wave is in y_output
@@ -111,8 +136,32 @@ void kernel_main() {
                     if (c % links != link) {
                         return;
                     }
-                    cb_reserve_back(cb_chunks, run_pages);
-                    const uint32_t l1 = get_write_ptr(cb_chunks);
+                    bool aligned = !it.piece;  // every page of the chunk is one whole y tile
+                    for (uint32_t p = 0; aligned && p < it.n; ++p) {
+                        const uint32_t drow = (it.j + p * num_banks) / g.blk_tiles;
+                        aligned = (32 * (drow - (drow / g.htd) * g.htd) - g.me * g.t_rows) % 32 == 0;
+                    }
+                    if (!aligned) {
+                        flush();
+                    }
+                    cb_reserve_back(cb_chunks, run_pages * (pending + 1));
+                    const uint32_t l1 = ring_base + ((slot + pending) % ring_chunks) * chunk_bytes;
+                    if (aligned) {
+                        for (uint32_t p = 0; p < it.n; ++p) {
+                            const uint32_t jp = it.j + p * num_banks;
+                            const uint32_t drow = jp / g.blk_tiles, col = jp - drow * g.blk_tiles;
+                            const uint32_t img = drow / g.htd, row = drow - img * g.htd;
+                            noc_async_read(
+                                y_page(d, img, (32 * row - g.me * g.t_rows) / 32, col),
+                                l1 + p * page_bytes,
+                                page_bytes);
+                        }
+                        if (++pending == read_batch) {
+                            flush();
+                        }
+                        return;
+                    }
+                    slot = (slot + 1) % ring_chunks;  // pending == 0 here: this chunk is pushed below
                     if (!it.piece) {
                         bool shifted = false;
                         for (uint32_t p = 0; p < it.n; ++p) {
@@ -170,5 +219,6 @@ void kernel_main() {
                     cb_push_back(cb_chunks, run_pages);
                 });
         }
+        flush();  // the wave's last chunks go out before the next wave's wait
     }
 }

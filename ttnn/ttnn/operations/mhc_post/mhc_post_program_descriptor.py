@@ -48,6 +48,7 @@ W_RESIDENT_BUDGET = 256 * 1024  # bytes of resident W slice (R2 vs R2-W-streamed
 W_STREAM_BLOCKS = 2  # W-streamed: column passes of W in flight
 MAX_FEED_LINKS = 2  # feed: port cores reserved per direction (2 directions), whatever feed_num_links is
 FEED_CHUNKS_IN_FLIGHT = 4  # feed: packets in flight per port (fabric_all_gather's 4-chunk batch, 112 KiB ring)
+FEED_READ_BATCH = 4  # feed: chunks the port reader keeps in flight per read barrier (<= ring - in-flight packets)
 FEED_WAVE_ROWS = 1  # feed: local rows per port wave (the ports stream row i while the workers finish row i+1)
 # feed, T % 32 != 0: L1 of the landing port for the shared D tile rows (<= G - 1 a image, Cb tiles each; the largest
 # golden shape, C 7168, needs 336 KiB)
@@ -665,6 +666,7 @@ def _add_feed_ports(program, device, feed, y_tensor, R, row_ranges, Q, c_tiles, 
     page = d_tensor.buffer_page_size()
     run_pages = max(1, int(ttnn.get_tt_fabric_max_payload_size_bytes()) // page)
     ring_chunks = 2 * FEED_CHUNKS_IN_FLIGHT
+    assert 1 <= FEED_READ_BATCH <= ring_chunks - FEED_CHUNKS_IN_FLIGHT, "reader batch + sender in flight <= ring"
     num_banks = _num_dram_banks(device)
     max_rows = row_ranges[0][1]
     t_tiles = sum(cnt for _, cnt in row_ranges)
@@ -743,7 +745,7 @@ def _add_feed_ports(program, device, feed, y_tensor, R, row_ranges, Q, c_tiles, 
     port_ct = [CB_FEED_CHUNKS, page, run_pages, num_banks, links, FEED_WAVE_ROWS, max_rows]
     reader_ct = (
         port_ct
-        + [Q, SEM_FEED_ROWS, CB_FEED_POLL, CB_FEED_YSCR]
+        + [Q, SEM_FEED_ROWS, CB_FEED_POLL, CB_FEED_YSCR, FEED_READ_BATCH, ring_chunks]
         + list(ttnn.TensorAccessorArgs(y_tensor).get_compile_time_args())
     )
     sender_ct = (
