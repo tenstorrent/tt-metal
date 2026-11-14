@@ -27,6 +27,7 @@ void bind_bernoulli_operation(nb::module_& mod) {
             dtype (ttnn.DataType, optional): Output tensor dtype, default float32.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Configuration for the compute kernel. Defaults to `None`.
+            seed (int, optional): Seed for the random number generator; `0` draws a random seed instead. Defaults to `0`.
 
         Returns:
             ttnn.Tensor: the output tensor.
