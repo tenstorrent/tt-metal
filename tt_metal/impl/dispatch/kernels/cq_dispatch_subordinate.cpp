@@ -421,11 +421,11 @@ bool realtime_profiler_record_ring_full(uint32_t next_wr_idx) {
     return ((next_wr_idx - rt_record_rd_idx) & REALTIME_PROFILER_RECORD_WR_IDX_MASK) >= REALTIME_PROFILER_RECORD_SLOTS;
 }
 
-// Publish the open record slot to the RT-profiler BRISC and open the next one (record ring protocol in
-// realtime_profiler_msgs.h). Lossless: while every other slot is still unread, wait rather than reuse one.
-// A slot's stale end time is fixed up by the BRISC (see realtime_profiler_read_and_enqueue), not here.
+// Reserve the next record slot before the go signal is sent, so the program it launches cannot finish before its
+// slot is open (record ring protocol in realtime_profiler_msgs.h). Lossless: while every other slot is still unread,
+// wait rather than reuse one.
 FORCE_INLINE
-void publish_realtime_profiler_record(volatile tt_l1_ptr realtime_profiler_msg_t* msg) {
+void reserve_realtime_profiler_record_slot(volatile tt_l1_ptr realtime_profiler_msg_t* msg) {
     const uint32_t next_wr_idx = (rt_record_wr_idx + 1) & REALTIME_PROFILER_RECORD_WR_IDX_MASK;
     // The next slot was last used by record (next_wr_idx - SLOTS); it is free once the BRISC has read that.
     // Only re-read record_rd_idx when the cached copy says the ring is full. A stale read only overstates the
@@ -448,6 +448,13 @@ void publish_realtime_profiler_record(volatile tt_l1_ptr realtime_profiler_msg_t
                 wait_cycles != 0 ? wait_cycles : 1;
         }
     }
+}
+
+// Publish the open record slot to the RT-profiler BRISC and open the reserved one.
+// A slot's stale end time is fixed up by the BRISC (see realtime_profiler_read_and_enqueue), not here.
+FORCE_INLINE
+void publish_realtime_profiler_record(volatile tt_l1_ptr realtime_profiler_msg_t* msg) {
+    const uint32_t next_wr_idx = (rt_record_wr_idx + 1) & REALTIME_PROFILER_RECORD_WR_IDX_MASK;
     // Move the local writers (this kernel and the compute helper) to the new slot before the BRISC can
     // start reading the old one.
     rt_record_wr_idx = next_wr_idx;
@@ -883,6 +890,7 @@ void kernel_main() {
         if (rt_profiler_enabled) {
             record_realtime_timestamp(rt_profiler_msg, true);
             popped_pid = pop_program_id(rt_profiler_msg);
+            reserve_realtime_profiler_record_slot(rt_profiler_msg);
         }
 #if DEVICE_PRINT_DISPATCH_ENABLED
         device_print_dispatcher.execute();
