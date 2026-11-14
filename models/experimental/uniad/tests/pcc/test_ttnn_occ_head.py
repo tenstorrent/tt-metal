@@ -6,7 +6,7 @@ import pytest
 import torch
 from loguru import logger
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 from models.experimental.uniad.reference.occ_head import OccHead
 from models.experimental.uniad.tt.ttnn_occ_head import TtOccHead
 from models.experimental.uniad.tests.common import load_torch_model

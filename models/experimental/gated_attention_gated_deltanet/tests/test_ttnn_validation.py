@@ -78,7 +78,9 @@ def test_gated_attention_ttnn():
 
     from torch_functional.gated_attention import gated_attention_forward
     from tt.ttnn_gated_attention import gated_attention_forward_ttnn
-    from tests.test_gated_attention import make_gated_attention_params
+    from models.experimental.gated_attention_gated_deltanet.tests.test_gated_attention import (
+        make_gated_attention_params,
+    )
 
     params = make_gated_attention_params()
 
@@ -125,7 +127,7 @@ def test_gated_deltanet_recurrent_ttnn(seq_len=16):
 
     from torch_functional.gated_deltanet import gated_deltanet_forward
     from tt.ttnn_gated_deltanet import gated_deltanet_forward_ttnn
-    from tests.test_gated_deltanet import make_gated_deltanet_params
+    from models.experimental.gated_attention_gated_deltanet.tests.test_gated_deltanet import make_gated_deltanet_params
 
     params = make_gated_deltanet_params(seq_len=seq_len)
 
@@ -197,7 +199,7 @@ def test_gated_deltanet_chunked_ttnn(seq_len=128, chunk_size=128):
 
     from tt import ttnn_delta_rule_seq
     from tt.ttnn_gated_deltanet import gated_deltanet_forward_ttnn
-    from tests.test_gated_deltanet import make_gated_deltanet_params
+    from models.experimental.gated_attention_gated_deltanet.tests.test_gated_deltanet import make_gated_deltanet_params
 
     params = make_gated_deltanet_params(seq_len=seq_len, batch_size=1, num_heads=12, num_v_heads=12, head_v_dim=128)
 
@@ -381,7 +383,9 @@ def benchmark_gated_attention(warmup=3, iterations=10):
 
     from torch_functional.gated_attention import gated_attention_forward
     from tt.ttnn_gated_attention import gated_attention_forward_ttnn
-    from tests.test_gated_attention import make_gated_attention_params
+    from models.experimental.gated_attention_gated_deltanet.tests.test_gated_attention import (
+        make_gated_attention_params,
+    )
 
     params = make_gated_attention_params()
 
@@ -454,7 +458,7 @@ def benchmark_gated_deltanet(warmup=3, iterations=10, seq_len=16, mode="recurren
 
     from torch_functional.gated_deltanet import gated_deltanet_forward
     from tt.ttnn_gated_deltanet import gated_deltanet_forward_ttnn
-    from tests.test_gated_deltanet import make_gated_deltanet_params
+    from models.experimental.gated_attention_gated_deltanet.tests.test_gated_deltanet import make_gated_deltanet_params
 
     params = make_gated_deltanet_params(seq_len=seq_len)
 

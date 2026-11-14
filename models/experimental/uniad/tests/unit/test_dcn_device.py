@@ -20,7 +20,7 @@ from torch.nn.modules.utils import _pair
 
 from models.experimental.uniad.tt.ttnn_modulated_deform_conv import TtModulatedDeformConv2dDevice
 from models.experimental.uniad.tt.ttnn_resnet import modulated_deform_conv2d as ref_modulated_deform_conv2d
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 8192}], indirect=True)

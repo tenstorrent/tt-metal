@@ -13,7 +13,7 @@
 #include "impl/metal2_host_api/program_spec/validation/validate_spec.hpp"
 #include "impl/metal2_host_api/sram_arena_support.hpp"
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal {
 
 // ----------------------------------------------------------------------------
 // Resource validation: declarations, bindings, and cross-kernel usage of every
@@ -54,18 +54,19 @@ void ValidateDFBAliasing(const ValidationContext& ctx);
 // all dfb used are validated in metadata collection step.
 
 // prefetcher_pipe.cpp
-void ValidatePrefetcherPipeParameter(const PrefetcherPipeParameter& pipe, uint32_t l1_alignment);
+void ValidatePrefetcherPipeParameter(const experimental::PrefetcherPipeParameter& pipe, uint32_t l1_alignment);
 void ValidatePrefetcherPipeBindings(const KernelSpec& kernel);
 void ValidatePrefetcherPipesUsed(const ValidationContext& ctx);
 struct PrefetcherPipeRoles {
-    std::unordered_map<PrefetcherPipeParamName, NodeRangeSet> pipe_receiver_set;
-    std::unordered_map<PrefetcherPipeParamName, const KernelSpec*> receiver_kernel_of;
+    std::unordered_map<experimental::PrefetcherPipeParamName, NodeRangeSet> pipe_receiver_set;
+    std::unordered_map<experimental::PrefetcherPipeParamName, const KernelSpec*> receiver_kernel_of;
 };
 PrefetcherPipeRoles ValidatePrefetcherPipeRoles(const ValidationContext& ctx);
 void ValidatePrefetcherPipeLanesAndRelays(
     const ValidationContext& ctx, const PrefetcherPipeRoles& roles, tt::ARCH arch);
 
 // sram_arena.cpp
+namespace experimental {
 void ValidateSRAMArenaParameter(const SRAMArenaParameter& parameter);
 void ValidateSRAMArenaParametersUsed(const ValidationContext& ctx);
 void ValidateSRAMArenaAllocation(
@@ -75,6 +76,7 @@ void ValidateSRAMArenaAllocation(
     const NodeRangeSet& occupied_nodes,
     uint64_t size_per_node,
     uint32_t l1_alignment);
+}  // namespace experimental
 
 // scratchpad.cpp
 void ValidateScratchpadSpec(
@@ -109,4 +111,4 @@ inline void ValidateAccessorNameLength(const KernelId& kernel_id, std::string_vi
         MAX_ACCESSOR_NAME_LENGTH);
 }
 
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal

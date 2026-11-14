@@ -27,7 +27,7 @@
 #include <string>
 #include <vector>
 
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
@@ -43,11 +43,11 @@ namespace ttnn::operations::moreh::moreh_mean_backward::test {
 namespace {
 
 using ::tt::tt_metal::DataType;
+using ::tt::tt_metal::KernelSpec;
 using ::tt::tt_metal::Layout;
 using ::tt::tt_metal::PageConfig;
 using ::tt::tt_metal::TensorLayout;
 using ::tt::tt_metal::TensorSpec;
-using ::tt::tt_metal::experimental::KernelSpec;
 using Op = MorehMeanBackwardOperation;
 
 struct Case {

@@ -31,8 +31,9 @@
   budget_type: integration
 
 # --- Sockets (distributed HD socket) ---
+# H2DSocketHostPushOrderingStress uses a single-device fixture, so *HDSocketFixture* does not select it.
 - name: bh_multicard_sockets
-  cmd: ./build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter='*HDSocketFixture*'
+  cmd: ./build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter='*HDSocketFixture*:*H2DSocketHostPushOrderingStress*'
   skus:
     bh_loudbox:
       timeout: 10

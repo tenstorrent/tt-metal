@@ -4,7 +4,7 @@
 
 import pytest
 import ttnn
-from tests.ttnn.unit_tests.operations.reduce.test_topk import run_topk_test
+from tt_py_test_utils_common.topk_test_utils import run_topk_test
 
 
 @pytest.mark.parametrize(

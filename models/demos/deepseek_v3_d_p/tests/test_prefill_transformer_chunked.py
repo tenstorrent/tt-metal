@@ -86,7 +86,7 @@ from models.demos.deepseek_v3_d_p.utils.test_utils import (
     token_normalized,
     unrotate_cache_layer,
 )
-from tests.ttnn.utils_for_testing import comp_pcc
+from tt_py_test_utils_common.utils_for_testing import comp_pcc
 
 CHUNK = PREFILL_CHUNK_TOKENS  # 5120 tokens per chunk
 SEQ_CACHE = 55 * 1024  # 56320 KV cache length (1 user)
@@ -3393,9 +3393,9 @@ def run_chunked_transformer_padded_trace(
             assert_threshold=LAYER_PCC_THRESHOLD if kv_pcc_threshold is None else kv_pcc_threshold,
             # Sparse models are gated at FULL depth (assert_full_depth): their deep-layer KV is the
             # product under test, and GATED_LAYER_DEPTH would leave every layer past 10 unasserted.
-            assert_layer_depth=None
-            if assert_full_depth
-            else (GATED_LAYER_DEPTH if num_layers > GATED_LAYER_DEPTH else None),
+            assert_layer_depth=(
+                None if assert_full_depth else (GATED_LAYER_DEPTH if num_layers > GATED_LAYER_DEPTH else None)
+            ),
             tp_shard_kv=kv_dedup,
         )
         # REQUIRED on the sparse path, not best-effort: GLM has two device caches and checking only the

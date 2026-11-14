@@ -58,7 +58,7 @@ from models.demos.deepseek_v3_d_p.utils.test_utils import (
     read_sharded_rows,
     unrotate_cache_layer,
 )
-from tests.ttnn.utils_for_testing import comp_pcc
+from tt_py_test_utils_common.utils_for_testing import comp_pcc
 
 CHUNK = PREFILL_CHUNK_TOKENS  # 5120 tokens per chunk
 SEQ_CACHE = 55 * 1024  # 56320 KV cache length (1 user)

@@ -32,33 +32,33 @@ constexpr auto kIdma1DStrided =
 void run_kernel(
     distributed::MeshDevice& mesh_device,
     const std::string& kernel_path,
-    experimental::KernelSpec::CompileTimeArgs compile_time_args) {
-    const experimental::KernelSpecName DM_KERNEL{"idma"};
-    const experimental::NodeCoord node{0, 0};
+    KernelSpec::CompileTimeArgs compile_time_args) {
+    const KernelSpecName DM_KERNEL{"idma"};
+    const NodeCoord node{0, 0};
 
-    experimental::KernelSpec dm_kernel_spec{
+    KernelSpec dm_kernel_spec{
         .unique_id = DM_KERNEL,
         .source = kernel_path,
         .num_threads = 1,
         .compile_time_args = std::move(compile_time_args),
-        .hw_config = experimental::DataMovementHardwareConfig{},
+        .hw_config = DataMovementHardwareConfig{},
     };
 
-    experimental::WorkUnitSpec main_wu{
+    WorkUnitSpec main_wu{
         .name = "main",
         .kernels = {DM_KERNEL},
         .target_nodes = node,
     };
 
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "idma",
         .kernels = {dm_kernel_spec},
         .work_units = {main_wu},
     };
     Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
 
-    experimental::ProgramRunArgs params;
-    params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{.kernel = DM_KERNEL}};
+    ProgramRunArgs params;
+    params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{.kernel = DM_KERNEL}};
     experimental::SetProgramRunArgs(program, params);
 
     distributed::MeshWorkload workload;
