@@ -274,13 +274,18 @@ class Hy4ChainLayer:
         h4 = ttnn.reshape(h, [G, COLS, 32, HID])
         own = ttnn.mesh_partition(h4, dim=1, cluster_axis=1)  # [G,1,32,D]
         own = ttnn.reshape(own, [1, 1, G * 32, HID])
-        routed_own = moe_cols(self.um, self.blk.gate, own, ch.mc, ch.ccl)  # [1,1,n/8,D]
+        from models.demos.blackhole.hy4_preview.tt.hy4_pf_opt import PfOpt
+
+        pfo = PfOpt.from_env()  # HY4_PF_OPT=shfold: the shared expert joins the routed partial before the column reduce-scatter (no shared all-reduce)
+        routed_own = moe_cols(self.um, self.blk.gate, own, ch.mc, ch.ccl, shared=self.shared if pfo.shfold else None, pf=pfo)  # [1,1,n/8,D]
         ttnn.deallocate(own)
         g = ch.mc.allgather(routed_own, ch.ccl, axis=1, dim=2)  # [1,1,n,D] rows ordered [c][g][32]
         ttnn.deallocate(routed_own)
         g = ttnn.reshape(g, [COLS, G, 32, HID])
         g = ttnn.permute(g, (1, 0, 2, 3))
         routed = ttnn.reshape(g, [1, 1, n, HID])
+        if pfo.shfold:
+            return routed
         sh = D.allreduce_cols(self.shared.forward(h))
         y = ttnn.add(routed, sh)
         ttnn.deallocate(routed)

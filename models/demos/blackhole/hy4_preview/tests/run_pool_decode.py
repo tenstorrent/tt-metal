@@ -28,6 +28,7 @@ CTXS = [int(x) for x in os.environ.get("CTXS", "").split(",") if x]
 PAGES = int(os.environ.get("PAGES", str(max([c // 512 for c in CTXS] + [8]))))
 TAG = os.environ.get("TAGNAME", "p")
 PAD = 120002
+PF_ROWS = int(os.environ.get("PF_ROWS", "512"))  # prefill chunk rows per user (D23-1: 1024 for long prompts)
 
 
 def l1v(md):
@@ -60,20 +61,28 @@ def main():
         res(event="built", sec=round(time.time() - t0, 1), **{"dram": dram_view(md)}, kv_fmt=ch.kv_fmt)
         dec = Hy4PoolDecoder(ch, PAGES, mode="dense")
         res(event="pool_built", pages=PAGES, **l1v(md), **{"dram": dram_view(md)})
-        ids = torch.full((4, CHUNK), PAD, dtype=torch.long)
+        ids = torch.full((4, PF_ROWS), PAD, dtype=torch.long)
         for r in range(4):
             ids[r, : lens[r]] = torch.tensor(prompts[r])
         toks = pos = None
         if os.environ.get("NOSTAGEA", "0") != "1":
             t0 = time.time()
             x4, _ = ch.prefill(ids)
+            ttnn.synchronize_device(md)
+            res(event="prefill_cold_s", sec=round(time.time() - t0, 2), rows=PF_ROWS)
+            ttnn.deallocate(x4)
+            ch.reset()
+            t0 = time.time()
+            x4, _ = ch.prefill(ids)  # warm second call: steady-state chunk time (78 layers, 4 users x PF_ROWS rows)
+            ttnn.synchronize_device(md)
+            res(event="prefill_warm_chunk_ms", ms=round((time.time() - t0) * 1e3, 1), rows=PF_ROWS)
             hn, logits = ch.head(x4)
-            lg = ttnn.to_torch(logits, mesh_composer=ttnn.ConcatMesh2dToTensor(md, dims=(0, 3), mesh_shape=tuple(md.shape))).reshape(4, CHUNK, -1).float()
+            lg = ttnn.to_torch(logits, mesh_composer=ttnn.ConcatMesh2dToTensor(md, dims=(0, 3), mesh_shape=tuple(md.shape))).reshape(4, PF_ROWS, -1).float()
             first = [int(lg[r, lens[r] - 1].argmax()) for r in range(4)]
             ttnn.synchronize_device(md)
             res(event="prefill", sec=round(time.time() - t0, 2), first_tokens=first, lens=lens)
             ttnn.deallocate(x4)
-            dec.handoff(CHUNK)
+            dec.handoff(PF_ROWS)
             ch.reset()
             res(event="dram_before_trace", **dram_view(md))
             toks = [[t] for t in first]
@@ -114,14 +123,14 @@ def main():
             except Exception as e:  # noqa: BLE001
                 res(event="vs_bf16_chain_tokens", err=repr(e)[:200])
             K = 8
-            ids2 = torch.full((4, CHUNK), PAD, dtype=torch.long)
+            ids2 = torch.full((4, PF_ROWS), PAD, dtype=torch.long)
             for r in range(4):
                 seq = list(prompts[r]) + toks[r][:K]
                 ids2[r, : len(seq)] = torch.tensor(seq)
             ch.reset()
             x4b, _ = ch.prefill(ids2)
             _, lgb = ch.head(x4b)
-            lgb = ttnn.to_torch(lgb, mesh_composer=ttnn.ConcatMesh2dToTensor(md, dims=(0, 3), mesh_shape=tuple(md.shape))).reshape(4, CHUNK, -1).float()
+            lgb = ttnn.to_torch(lgb, mesh_composer=ttnn.ConcatMesh2dToTensor(md, dims=(0, 3), mesh_shape=tuple(md.shape))).reshape(4, PF_ROWS, -1).float()
             for r in range(4):
                 pcs, agree = [], []
                 for j in range(K):
