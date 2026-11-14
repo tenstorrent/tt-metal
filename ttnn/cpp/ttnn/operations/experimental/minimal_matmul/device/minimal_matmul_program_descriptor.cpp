@@ -14,6 +14,7 @@
 // per-core row range from it, and override_runtime_arguments re-applies it on every cache hit.
 //
 
+#include "minimal_matmul_default_blocks.hpp"
 #include "minimal_matmul_device_operation.hpp"
 
 #include <tt-metalium/constants.hpp>
@@ -57,28 +58,6 @@ using tt::tt_metal::WorkUnitSpec;
 using tt::tt_metal::experimental::KernelAdvancedOptions;
 
 namespace {
-
-std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> determine_default_block_sizes(
-    uint32_t M, uint32_t K, uint32_t N, bool fp32_dest_acc_en) {
-    (void)K;  // K not used for determining defaults currently
-    uint32_t M_block_tiles = 8;
-    uint32_t K_block_tiles = 8;
-    uint32_t N_block_tiles = 8;
-
-    uint32_t subblock_h = 2;
-    uint32_t subblock_w = 2;
-    if (!fp32_dest_acc_en) {
-        if (N >= M) {
-            subblock_h = 2;
-            subblock_w = 4;
-        } else {
-            subblock_h = 4;
-            subblock_w = 2;
-        }
-    }
-
-    return {M_block_tiles, K_block_tiles, N_block_tiles, subblock_h, subblock_w};
-}
 
 // Build a linear order of cores along one axis for data movement, plus index of the current core
 std::pair<std::vector<CoreCoord>, uint32_t> build_core_order_for_axis(
@@ -336,7 +315,16 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
     const uint32_t N_tiles_per_chunk = N_tiles / N_chunks;
 
     auto [default_M_block_tiles, default_K_block_tiles, default_N_block_tiles, default_subblock_h, default_subblock_w] =
-        determine_default_block_sizes(M, K, N, fp32_dest_acc_en);
+        determine_default_block_sizes(
+            M,
+            K,
+            N,
+            fp32_dest_acc_en,
+            in0_tile_size,
+            in1_tile_size,
+            out_tile_size,
+            in2_tile_size,
+            intermediate_tile_size);
 
     /**
      * TODO: Pick optimal subblock sizes. Currently a simple default is used.

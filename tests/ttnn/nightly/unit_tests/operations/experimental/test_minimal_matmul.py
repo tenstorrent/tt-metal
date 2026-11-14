@@ -467,6 +467,29 @@ def test_linear_tile_padding(device, M, K, N, M_block_size, K_block_size, N_bloc
     assert check_result["relative_rmse"] < 0.02
 
 
+@pytest.mark.parametrize("M,K,N", [(32, 32, 32), (256, 256, 256), (129, 257, 385), (1000, 96, 96)])
+@pytest.mark.parametrize("fp32_acc", [True, False], ids=["fp32_acc", "fp16_acc"])
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16], ids=["fp32", "bf16"])
+def test_linear_default_config_dtype(device, M, K, N, fp32_acc, dtype):
+    torch_input = torch.randn((M, K), dtype=torch.float32)
+    weight_input = torch.randn((K, N), dtype=torch.float32)
+    torch_output = torch_input @ weight_input
+
+    tt_input = ttnn.from_torch(torch_input, dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_weight = ttnn.from_torch(weight_input, dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT)
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=fp32_acc,
+        packer_l1_acc=True,
+    )
+    tt_output = ttnn.experimental.minimal_matmul(tt_input, tt_weight, compute_kernel_config=compute_config)
+    check_result = assert_quality(torch_output, ttnn.to_torch(tt_output))
+    assert check_result["pcc"] > 0.999_500
+    assert check_result["relative_rmse"] < 0.02
+
+
 @pytest.mark.parametrize("act_dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.float32], ids=["bf16", "bf8b", "fp32"])
 @pytest.mark.parametrize("weight_dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.float32], ids=["bf16", "bf8b", "fp32"])
 @pytest.mark.parametrize("bias_dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.float32], ids=["bf16", "bf8b", "fp32"])
