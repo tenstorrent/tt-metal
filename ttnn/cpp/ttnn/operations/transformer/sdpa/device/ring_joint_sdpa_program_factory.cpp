@@ -975,7 +975,6 @@ void apply_ring_joint_scalar_runtime_args(
     }
 }
 
-
 }  // namespace
 
 namespace ttnn::prim {
