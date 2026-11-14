@@ -28,6 +28,7 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
@@ -118,6 +119,7 @@ void kernel_main() {
                 hdr_dest[h] = 0xFFFFFFFFu;
             }
             ctl = PacketHeaderPool::allocate_header();
+            MaybeDeviceZoneScope("s_ready");
             conn.open();
 
             for (uint32_t k = 0; k < n_ready; ++k) {
@@ -170,6 +172,7 @@ void kernel_main() {
             unflushed = 0;
         };
         for (uint32_t i0 = 0, w = 0; i0 < max_rows; i0 += wave_rows, ++w) {
+            MaybeDeviceZoneScope("s_send");  // ring waits (reader-bound) + fabric slot waits + sends of one wave
             for (uint32_t k = 0; k < n_dest; ++k) {
                 const uint32_t t = dest_idx + k * DEST_WORDS;
                 const bool local = is_local(k);
@@ -251,6 +254,7 @@ void kernel_main() {
     // landing port also counts every piece); re-arm
     const uint32_t expect = expect_in + (is_landing ? mhc_feed::landing_pieces<run_pages>(g) : 0);
     if (expect > 0) {
+        MaybeDeviceZoneScope("s_arrival");
         volatile tt_l1_ptr uint32_t* arrived = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arrival_addr);
         noc_semaphore_wait_min(arrived, expect);
         noc_semaphore_inc(get_noc_addr(arrival_addr), 0u - expect);
@@ -260,6 +264,7 @@ void kernel_main() {
     // landing port: merge every shared D tile from its contributors' compact blocks (the drained ring is the
     // scratch) and write it to my D
     if (is_landing && g.nsh > 0) {
+        MaybeDeviceZoneScope("s_landing");
         constexpr uint32_t cap = ring_chunks * run_pages;  // tiles a batch
         for (uint32_t img = 0; img < g.nimg; ++img) {
             for (uint32_t row = 0, s = 0; row < g.htd; ++row) {

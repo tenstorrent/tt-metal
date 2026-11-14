@@ -16,6 +16,7 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 #include "ttnn/ttnn/operations/mhc_post/kernels/mhc_post_feed_walk.hpp"
 
 void kernel_main() {
@@ -67,12 +68,15 @@ void kernel_main() {
     // count one on every worker's SEM_FEED_ROWS; a worker writes its first count only once every port armed it, so no
     // slot holds a previous call's count when it is read. The wave wait is then a local scan (no NoC polling).
     const uint32_t rows_sem = get_semaphore(sem_rows_id);
-    for (uint32_t k = 0; k < num_workers; ++k) {
-        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(poll + k * 16) = 0;
-    }
-    for (uint32_t k = 0; k < num_workers; ++k) {
-        const uint32_t xy = get_common_arg_val<uint32_t>(k);
-        noc_semaphore_inc(get_noc_addr(xy & 0xFFFF, xy >> 16, rows_sem), 1);
+    {
+        MaybeDeviceZoneScope("p_arm");
+        for (uint32_t k = 0; k < num_workers; ++k) {
+            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(poll + k * 16) = 0;
+        }
+        for (uint32_t k = 0; k < num_workers; ++k) {
+            const uint32_t xy = get_common_arg_val<uint32_t>(k);
+            noc_semaphore_inc(get_noc_addr(xy & 0xFFFF, xy >> 16, rows_sem), 1);
+        }
     }
     // wait until every worker k published min(i1, rows of its group) rows; `ready_rows` = rows every worker has
     // published (a worker with all its rows counts as max_rows)
@@ -128,7 +132,11 @@ void kernel_main() {
 
     for (uint32_t i0 = 0, w = 0; i0 < max_rows; i0 += wave_rows, ++w) {
         const uint32_t i1 = (i0 + wave_rows) < max_rows ? (i0 + wave_rows) : max_rows;
-        wait_wave(i1);  // the wave is in y_output
+        {
+            MaybeDeviceZoneScope("p_wait_wave");
+            wait_wave(i1);  // the wave is in y_output
+        }
+        MaybeDeviceZoneScope("p_stage");  // DRAM reads of the wave + waits for free ring slots (sender-bound)
         for (uint32_t k = 0; k < n_dest; ++k) {
             const uint32_t d = get_arg_val<uint32_t>(dest_idx + k);
             uint32_t ci = 0;  // item index within (wave, destination): the sender counts the same way
