@@ -596,6 +596,7 @@ def open_ring_joint_sdpa_runtime(
     mesh_config,
     *,
     fp32_dest_acc_en: bool = False,
+    dst_full_sync_en: bool = False,
     trace_region_size: int = 0,
     topology: Topology = None,
     reserve_llk_kernel_config: bool = True,
@@ -666,6 +667,7 @@ def open_ring_joint_sdpa_runtime(
                 math_approx_mode=False,
                 fp32_dest_acc_en=fp32_dest_acc_en,
                 packer_l1_acc=False,
+                dst_full_sync_en=dst_full_sync_en,
             ),
         )
     except Exception:
@@ -5685,6 +5687,30 @@ def test_ring_joint_attention_sdpa_accuracy(model_name, fp32_dest_acc_en):
         rmse_threshold=rmse_threshold,
         fp32_dest_acc_en=fp32_dest_acc_en,
     )
+
+
+@pytest.mark.parametrize("fp32_dest_acc_en", [False, True], ids=["bf16_acc", "fp32_acc"])
+def test_ring_joint_attention_sdpa_dst_full_sync_accuracy(fp32_dest_acc_en):
+    """dst_full_sync_en doubles the dest tiles the factory sizes subblocks for, so the compute kernel must be built in
+    full-sync mode too: with fp32 dest a half-sync kernel sees half the dest the subblocks were sized for and does not
+    compile. The bf16 case runs full sync end to end."""
+    mesh_config = MESH_CONFIG
+    model = MODEL_CONFIGS["wan2_2_1xGLX"]
+    qk_configs = get_model_qk_configs(model, fp32_dest_acc_en=fp32_dest_acc_en)[:1]
+    assert qk_configs, f"{model.name}: no q/k config fits with fp32_dest_acc_en={fp32_dest_acc_en}"
+    runtime = open_ring_joint_sdpa_runtime(mesh_config, fp32_dest_acc_en=fp32_dest_acc_en, dst_full_sync_en=True)
+    try:
+        run_ring_joint_sdpa_model_configs(
+            mesh_config,
+            model,
+            qk_configs,
+            pcc_threshold=DEFAULT_PCC_THRESHOLD_FP32 if fp32_dest_acc_en else DEFAULT_PCC_THRESHOLD,
+            rmse_threshold=DEFAULT_RMSE_THRESHOLD,
+            runtime=runtime,
+            fp32_dest_acc_en=fp32_dest_acc_en,
+        )
+    finally:
+        close_ring_joint_sdpa_runtime(runtime)
 
 
 @pytest.mark.parametrize(
