@@ -13,6 +13,9 @@
 // A q_b core: the RoPE table rows its compute needs (do_rope: it holds a head's last tiles), then its
 // Nc result tiles -- row-major bf16, a 1x32 tile is 32 contiguous values -- into row q_row of q at
 // byte q_col_bytes.
+//
+// COMP (on is_comp cores): before q, its compressor-column tile into comp_output's one row at byte
+// comp_col_bytes.
 void kernel_main() {
     constexpr uint32_t nc_tiles = get_arg(args::nc_tiles);
     constexpr uint32_t rope_tiles = get_arg(args::rope_tiles);
@@ -31,6 +34,18 @@ void kernel_main() {
         const auto sin = TensorAccessor(tensor::sin);
         read_rope_table_rows(noc, cos, sin, 0, rope_tiles, cs_cb, cs_raw_cb, row_tile_bytes);
     }
+
+#ifdef COMP
+    if (get_arg(args::is_comp) != 0) {
+        CircularBuffer comp_x_cb(dfb::comp_x);
+        const auto comp_output = TensorAccessor(tensor::comp_output);
+        comp_x_cb.wait_front(1);
+        noc_async_write(
+            comp_x_cb.get_read_ptr(), comp_output.get_noc_addr(0, get_arg(args::comp_col_bytes)), row_tile_bytes);
+        noc.async_write_barrier();
+        comp_x_cb.pop_front(1);
+    }
+#endif
 
     const auto q = TensorAccessor(tensor::q);
     out_cb.wait_front(nc_tiles);

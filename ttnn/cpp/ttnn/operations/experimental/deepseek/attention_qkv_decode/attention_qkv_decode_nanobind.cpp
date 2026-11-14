@@ -54,6 +54,11 @@ void bind_attention_qkv_decode(::nanobind::module_& mod) {
                 tensor-prefetcher rings, which then deliver the weights' slabs instead of DRAM reads: one
                 whole-slab entry per core, so each call drains one queued request per weight. The receivers
                 must be exactly the roles' cores. Empty (the default) reads the DRAM slabs.
+            w_comp (Optional[ttnn.Tensor]): ``[K, N_c]`` TILE DRAM, ND-sharded one ``[K, 32]`` slab per output
+                tile, at most 64 tiles: extra output columns ``tokens @ w_comp`` (a column-split compressor),
+                computed on that many q_b cores ahead of their q_b work. Always read from DRAM.
+            comp_output (Optional[ttnn.Tensor]): ``[1, 1, 1, N_c]`` bfloat16 ROW_MAJOR DRAM, overwritten with
+                ``tokens @ w_comp``. Given with ``w_comp``.
 
         Returns:
             ttnn.Tensor: q ``[1, 1, heads, head_dim]`` bfloat16 ROW_MAJOR.
@@ -72,7 +77,9 @@ void bind_attention_qkv_decode(::nanobind::module_& mod) {
         nb::kw_only(),
         nb::arg("epsilon") = 1e-6f,
         nb::arg("memory_config") = std::nullopt,
-        nb::arg("prefetcher_pipes") = ttnn::PrefetcherPipeList{});
+        nb::arg("prefetcher_pipes") = ttnn::PrefetcherPipeList{},
+        nb::arg("w_comp") = std::nullopt,
+        nb::arg("comp_output") = std::nullopt);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek::detail

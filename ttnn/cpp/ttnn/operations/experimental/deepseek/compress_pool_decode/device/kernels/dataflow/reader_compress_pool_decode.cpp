@@ -58,14 +58,22 @@ void kernel_main() {
     constexpr uint32_t cb_kv_scratch_id = get_compile_time_arg_val(17);
     constexpr uint32_t cb_pos_id = get_compile_time_arg_val(18);
     constexpr uint32_t cb_raw_scratch_id = get_compile_time_arg_val(19);
+    constexpr uint32_t has_index_key = get_compile_time_arg_val(20);
+    constexpr uint32_t index_norm_weight_is_tile = get_compile_time_arg_val(21);
+    constexpr uint32_t key_tiles = get_compile_time_arg_val(22);
+    constexpr uint32_t key_w_chunk = get_compile_time_arg_val(23);
+    constexpr uint32_t cb_key_w_id = get_compile_time_arg_val(24);
+    constexpr uint32_t cb_key_gamma_id = get_compile_time_arg_val(25);
 
-    constexpr auto kv_args = TensorAccessorArgs<20>();
+    constexpr auto kv_args = TensorAccessorArgs<26>();
     constexpr auto win_kv_args = TensorAccessorArgs<kv_args.next_compile_time_args_offset()>();
     constexpr auto win_slot_args = TensorAccessorArgs<win_kv_args.next_compile_time_args_offset()>();
     constexpr auto prev_slot_args = TensorAccessorArgs<win_slot_args.next_compile_time_args_offset()>();
     constexpr auto norm_weight_args = TensorAccessorArgs<prev_slot_args.next_compile_time_args_offset()>();
     constexpr auto cos_args = TensorAccessorArgs<norm_weight_args.next_compile_time_args_offset()>();
     constexpr auto sin_args = TensorAccessorArgs<cos_args.next_compile_time_args_offset()>();
+    constexpr auto index_wk_args = TensorAccessorArgs<sin_args.next_compile_time_args_offset()>();
+    constexpr auto index_norm_weight_args = TensorAccessorArgs<index_wk_args.next_compile_time_args_offset()>();
 
     const uint32_t t = get_arg_val<uint32_t>(0);
     const uint32_t kv_addr = get_arg_val<uint32_t>(1);
@@ -80,6 +88,12 @@ void kernel_main() {
     const uint32_t sin_addr = get_arg_val<uint32_t>(10);
     const bool do_rope = get_arg_val<uint32_t>(11) != 0;
     const uint32_t rope_tile_idx = get_arg_val<uint32_t>(12);
+    const uint32_t index_wk_addr = get_arg_val<uint32_t>(13);
+    const uint32_t index_norm_weight_addr = get_arg_val<uint32_t>(14);
+    const bool is_key_core = get_arg_val<uint32_t>(15) != 0;
+    const uint32_t key_idx = get_arg_val<uint32_t>(16);
+    // A key RoPE core gets its cos / sin pair twice: for the latent's tile, then for the key's.
+    constexpr uint32_t cs_pages = has_index_key != 0 ? 4u : 2u;
 
     constexpr uint32_t tile_rows = 32;
     constexpr uint32_t face_bytes = 16 * 16 * 2;
@@ -151,7 +165,7 @@ void kernel_main() {
     if constexpr (has_rope != 0) {
         if (do_rope) {
             CircularBuffer cs_cb(cb_cs_id);
-            cs_cb.reserve_back(2);
+            cs_cb.reserve_back(cs_pages);
             cs_l1 = cs_cb.get_write_ptr();
             const auto cos_acc = TensorAccessor(cos_args, cos_addr);
             const auto sin_acc = TensorAccessor(sin_args, sin_addr);
@@ -200,7 +214,10 @@ void kernel_main() {
             copy_l1_words(cs_l1 + face_row_bytes, raw_l1 + 192u, face_row_bytes);
             copy_l1_words(cs_l1 + 2u * face_row_bytes, raw_l1 + 256u, face_row_bytes);
             copy_l1_words(cs_l1 + 3u * face_row_bytes, raw_l1 + 320u, face_row_bytes);
-            cs_cb.push_back(2);
+            if constexpr (cs_pages > 2) {
+                copy_l1_words(cs_l1 + 2u * row_tile_bytes, cs_l1, 2u * row_tile_bytes);
+            }
+            cs_cb.push_back(cs_pages);
         }
     }
 
@@ -238,5 +255,42 @@ void kernel_main() {
         patch_tile_row(tile_l1, kv_scratch_l1, win_slot_idx % tile_rows);
         noc_async_write(tile_l1, win_tile_noc, cache_tile_bytes);
         noc_async_write_barrier();
+    }
+
+    // Key core key_idx: its tile of index_norm_weight, and column tile key_idx of index_wk ([Dh, Dk],
+    // tile (k, n) at k * key_tiles + n) streamed down K in key_w_chunk-tile pages.
+    if constexpr (has_index_key != 0) {
+        if (is_key_core) {
+            CircularBuffer key_gamma_cb(cb_key_gamma_id);
+            CircularBuffer key_w_cb(cb_key_w_id);
+            key_gamma_cb.reserve_back(1);
+            const uint32_t key_gamma_l1 = key_gamma_cb.get_write_ptr();
+            const auto key_norm_acc = TensorAccessor(index_norm_weight_args, index_norm_weight_addr);
+            if constexpr (index_norm_weight_is_tile != 0) {
+                noc_async_read(key_norm_acc.get_noc_addr(key_idx, 0), raw_l1, 64u);
+                noc_async_read(key_norm_acc.get_noc_addr(key_idx, face_bytes), raw_l1 + 64u, 64u);
+            } else {
+                noc_async_read(key_norm_acc.get_noc_addr(0, key_idx * row_tile_bytes), key_gamma_l1, row_tile_bytes);
+            }
+
+            const auto wk_acc = TensorAccessor(index_wk_args, index_wk_addr);
+            for (uint32_t k0 = 0; k0 < head_tiles; k0 += key_w_chunk) {
+                key_w_cb.reserve_back(key_w_chunk);
+                uint32_t w_l1 = key_w_cb.get_write_ptr();
+                for (uint32_t k = k0; k < k0 + key_w_chunk; ++k) {
+                    noc_async_read(wk_acc.get_noc_addr(k * key_tiles + key_idx), w_l1, cache_tile_bytes);
+                    w_l1 += cache_tile_bytes;
+                }
+                noc_async_read_barrier();
+                if (k0 == 0) {
+                    if constexpr (index_norm_weight_is_tile != 0) {
+                        copy_l1_words(key_gamma_l1, raw_l1, face_row_bytes);
+                        copy_l1_words(key_gamma_l1 + face_row_bytes, raw_l1 + 64u, face_row_bytes);
+                    }
+                    key_gamma_cb.push_back(1);
+                }
+                key_w_cb.push_back(key_w_chunk);
+            }
+        }
     }
 }

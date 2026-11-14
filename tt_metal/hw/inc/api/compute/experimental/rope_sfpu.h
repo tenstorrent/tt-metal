@@ -45,7 +45,8 @@ ALWI void rope_sfpu_inplace_rows(const std::uint32_t scale_fp32) {
     static_assert((x_base % 4) == 0 && (x_stride % 4) == 0, "x rows must be 4-row aligned");
     MATH(SAN_HOOK(unsupported()));
     MATH((sfpu::sfpu_rope_dest_setup()));
-    MATH((sfpu::sfpu_rope_all_rows<Ht, Wt, x_base, x_stride, cos_base, sin_base, cs_stride, has_scale>(scale_fp32)));
+    MATH((sfpu::sfpu_rope_all_rows<Ht, Wt, x_base, x_stride, cos_base, sin_base, cs_stride, has_scale, DST_ACCUM_MODE>(
+        scale_fp32)));
 }
 
 /**

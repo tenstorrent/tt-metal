@@ -14,12 +14,134 @@
 #include "api/compute/experimental/mul_reduce_scalar.h"
 #include "api/compute/experimental/rmsnorm.h"
 #include "api/compute/experimental/rope_sfpu.h"
+#include "api/compute/matmul.h"
 #include "api/compute/pack.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/circular_buffer.h"
 
 using namespace ckernel;
+
+namespace {
+
+// stat_cb <- sum(src^2) over src_cb's front 1x32 tile.
+ALWI void push_sum_of_squares(uint32_t src_cb_id, uint32_t stat_cb_id) {
+    CircularBuffer stat_cb(stat_cb_id);
+    reconfig_data_format(src_cb_id, src_cb_id);
+    pack_reconfig_data_format(stat_cb_id);
+    stat_cb.reserve_back(1);
+    tile_regs_acquire();
+    fill_tile_init();
+    fill_tile(0, 0.0F);
+    mul_reduce_scalar_init_fidelity<MathFidelity::HiFi4>(src_cb_id, src_cb_id);
+    mul_reduce_scalar_tile_fidelity<MathFidelity::HiFi4, MathFidelity::HiFi4, true>(
+        src_cb_id, src_cb_id, stat_cb_id, 1, 1.0F, 0);
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_tile(0, stat_cb_id);
+    mul_reduce_scalar_uninit();
+    tile_regs_release();
+    stat_cb.push_back(1);
+}
+
+// scale_hub_cb <- rsqrt(inv_n * sum of the num_stats gathered stats + eps), on the hub.
+template <uint32_t num_stats>
+ALWI void push_rms_scale(uint32_t gather_cb_id, uint32_t scale_hub_cb_id, uint32_t inv_n_bits, uint32_t eps_bits) {
+    CircularBuffer gather_cb(gather_cb_id);
+    CircularBuffer scale_hub_cb(scale_hub_cb_id);
+    gather_cb.wait_front(num_stats);
+    scale_hub_cb.reserve_back(1);
+    reconfig_data_format(gather_cb_id, gather_cb_id);
+    pack_reconfig_data_format(scale_hub_cb_id);
+    tile_regs_acquire();
+    if constexpr (num_stats == 1) {
+        copy_init(gather_cb_id);
+        copy_tile(gather_cb_id, 0, 0);
+    } else {
+        add_init(gather_cb_id, gather_cb_id);
+        add_tiles(gather_cb_id, gather_cb_id, 0, 1, 0);
+        if constexpr (num_stats > 2) {
+            add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(gather_cb_id);
+            for (uint32_t i = 2; i < num_stats; ++i) {
+                add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(gather_cb_id, i, 0);
+            }
+        }
+    }
+    binop_with_scalar_tile_init();
+    mul_unary_tile(0, inv_n_bits);
+    add_rsqrt_tile_init();
+    add_rsqrt_tile<false, VectorMode::RC_custom, 1>(0, eps_bits);
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_tile(0, scale_hub_cb_id);
+    tile_regs_release();
+    gather_cb.pop_front(num_stats);
+    scale_hub_cb.push_back(1);
+}
+
+// out_cb (and second_cb when given) <- src * scale * gamma, consuming the three fronts. The caller has
+// reserved out_cb / second_cb.
+ALWI void pack_rms_scaled(
+    uint32_t src_cb_id, uint32_t scale_cb_id, uint32_t gamma_cb_id, uint32_t out_cb_id, int32_t second_cb_id) {
+    CircularBuffer gamma_cb(gamma_cb_id);
+    CircularBuffer scale_cb(scale_cb_id);
+    gamma_cb.wait_front(1);
+    scale_cb.wait_front(1);
+    reconfig_data_format(scale_cb_id, scale_cb_id);
+    pack_reconfig_data_format(out_cb_id);
+    tile_regs_acquire();
+    copy_init(scale_cb_id);
+    copy_tile(scale_cb_id, 0, 0);
+    reconfig_data_format_srca(scale_cb_id, src_cb_id);
+    rmsnorm_bcast_scalar_reuse_tiles_init_fidelity<EltwiseBinaryType::ELWMUL, 1, MathFidelity::HiFi4>(src_cb_id);
+    rmsnorm_bcast_scalar_reuse_tiles_fidelity<EltwiseBinaryType::ELWMUL, 1, MathFidelity::HiFi4, true>(
+        src_cb_id, 0, 0, 0);
+    reconfig_data_format(gamma_cb_id, gamma_cb_id);
+    mul_reuse_dest_init_fidelity<EltwiseBinaryReuseDestType::DEST_TO_SRCA, MathFidelity::HiFi4>(gamma_cb_id);
+    mul_reuse_dest_tiles_fidelity<EltwiseBinaryReuseDestType::DEST_TO_SRCA, MathFidelity::HiFi4>(gamma_cb_id, 0, 0);
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_tile(0, out_cb_id);
+    if (second_cb_id >= 0) {
+        pack_reconfig_data_format(static_cast<uint32_t>(second_cb_id));
+        pack_tile(0, static_cast<uint32_t>(second_cb_id));
+    }
+    tile_regs_release();
+    gamma_cb.pop_front(1);
+    scale_cb.pop_front(1);
+    CircularBuffer(src_cb_id).pop_front(1);
+}
+
+// out_cb <- interleaved RoPE of src_cb's front tile with cs_cb's front (cos, sin) pair.
+ALWI void push_rope(uint32_t src_cb_id, uint32_t cs_cb_id, uint32_t out_cb_id) {
+    CircularBuffer src_cb(src_cb_id);
+    CircularBuffer cs_cb(cs_cb_id);
+    CircularBuffer out_cb(out_cb_id);
+    src_cb.wait_front(1);
+    cs_cb.wait_front(2);
+    out_cb.reserve_back(1);
+    reconfig_data_format(src_cb_id, src_cb_id);
+    pack_reconfig_data_format(out_cb_id);
+    pack_init(out_cb_id);
+    tile_regs_acquire();
+    copy_init(src_cb_id);
+    copy_tile(src_cb_id, 0, 0);
+    copy_init(cs_cb_id);
+    copy_tile(cs_cb_id, 0, 1);
+    copy_tile(cs_cb_id, 1, 2);
+    rope_sfpu_fused_init();
+    rope_sfpu_init();
+    rope_sfpu_inplace<1, 1>();
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_tile(0, out_cb_id);
+    tile_regs_release();
+    out_cb.push_back(1);
+    src_cb.pop_front(1);
+    cs_cb.pop_front(2);
+}
+
+}  // namespace
 
 void kernel_main() {
     constexpr uint32_t do_pool = get_compile_time_arg_val(0);
@@ -47,14 +169,22 @@ void kernel_main() {
     constexpr uint32_t cb_scale = get_compile_time_arg_val(17);
     constexpr uint32_t cb_out_latent = get_compile_time_arg_val(18);
     constexpr uint32_t cb_out_rope = get_compile_time_arg_val(19);
+    constexpr uint32_t has_index_key = get_compile_time_arg_val(20);
+    constexpr uint32_t key_tiles = get_compile_time_arg_val(21);
+    constexpr uint32_t key_w_chunk = get_compile_time_arg_val(22);
+    constexpr uint32_t inv_key_n_bits = get_compile_time_arg_val(23);
+    constexpr uint32_t cb_key_in = get_compile_time_arg_val(24);
+    constexpr uint32_t cb_key_w = get_compile_time_arg_val(25);
+    constexpr uint32_t cb_key_mm = get_compile_time_arg_val(26);
+    constexpr uint32_t cb_key_gamma = get_compile_time_arg_val(27);
+    constexpr uint32_t cb_key_out = get_compile_time_arg_val(28);
 
     const bool is_hub = get_arg_val<uint32_t>(0) != 0;
     const bool do_rope = get_arg_val<uint32_t>(1) != 0;
+    const bool is_key_core = get_arg_val<uint32_t>(2) != 0;
+    const bool is_key_hub = get_arg_val<uint32_t>(3) != 0;
 
     CircularBuffer kv_cb(cb_kv);
-    CircularBuffer gamma_cb(cb_gamma);
-    CircularBuffer local_stat_cb(cb_local_stat);
-    CircularBuffer scale_cb(cb_scale);
     CircularBuffer out_latent_cb(cb_out_latent);
 
     compute_kernel_hw_startup(cb_kv, cb_kv, cb_out_latent);
@@ -115,126 +245,77 @@ void kernel_main() {
     }
 
     // 3. Local sum of squares -> cb_local_stat[0][0]
-    reconfig_data_format(src_cb_id, src_cb_id);
-    pack_reconfig_data_format(cb_local_stat);
-    local_stat_cb.reserve_back(1);
-    tile_regs_acquire();
-    fill_tile_init();
-    fill_tile(0, 0.0F);
-    mul_reduce_scalar_init_fidelity<MathFidelity::HiFi4>(src_cb_id, src_cb_id);
-    mul_reduce_scalar_tile_fidelity<MathFidelity::HiFi4, MathFidelity::HiFi4, true>(
-        src_cb_id, src_cb_id, cb_local_stat, 1, 1.0F, 0);
-    tile_regs_commit();
-    tile_regs_wait();
-    pack_tile(0, cb_local_stat);
-    mul_reduce_scalar_uninit();
-    tile_regs_release();
-    local_stat_cb.push_back(1);
+    push_sum_of_squares(src_cb_id, cb_local_stat);
 
     // 4. Hub core sums per-core stats, scales by 1/Dh, and computes rsqrt(mean + eps)
     if (is_hub) {
-        CircularBuffer gather_cb(cb_gather_stats);
-        CircularBuffer scale_hub_cb(cb_scale_hub);
-        gather_cb.wait_front(num_cores);
-        scale_hub_cb.reserve_back(1);
-        reconfig_data_format(cb_gather_stats, cb_gather_stats);
-        pack_reconfig_data_format(cb_scale_hub);
-        tile_regs_acquire();
-        if constexpr (num_cores == 1) {
-            copy_init(cb_gather_stats);
-            copy_tile(cb_gather_stats, 0, 0);
-        } else {
-            add_init(cb_gather_stats, cb_gather_stats);
-            add_tiles(cb_gather_stats, cb_gather_stats, 0, 1, 0);
-            if constexpr (num_cores > 2) {
-                add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_gather_stats);
-                for (uint32_t i = 2; i < num_cores; ++i) {
-                    add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_gather_stats, i, 0);
-                }
-            }
-        }
-        binop_with_scalar_tile_init();
-        mul_unary_tile(0, inv_n_bits);
-        add_rsqrt_tile_init();
-        add_rsqrt_tile<false, VectorMode::RC_custom, 1>(0, eps_bits);
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(0, cb_scale_hub);
-        tile_regs_release();
-        gather_cb.pop_front(num_cores);
-        scale_hub_cb.push_back(1);
+        push_rms_scale<num_cores>(cb_gather_stats, cb_scale_hub, inv_n_bits, eps_bits);
     }
 
     // 5. Scale by rsqrt * norm_weight -> cb_out_latent (and cb_tmp if do_rope)
-    gamma_cb.wait_front(1);
-    scale_cb.wait_front(1);
-    out_latent_cb.reserve_back(1);
     CircularBuffer tmp_cb(cb_tmp);
-    if constexpr (has_rope != 0) {
-        if (do_rope) {
-            tmp_cb.reserve_back(1);
-        }
+    out_latent_cb.reserve_back(1);
+    const bool latent_rope = has_rope != 0 && do_rope;
+    if (latent_rope) {
+        tmp_cb.reserve_back(1);
     }
-
-    reconfig_data_format(cb_scale, cb_scale);
-    pack_reconfig_data_format(cb_out_latent);
-    tile_regs_acquire();
-    copy_init(cb_scale);
-    copy_tile(cb_scale, 0, 0);
-    reconfig_data_format_srca(cb_scale, src_cb_id);
-    rmsnorm_bcast_scalar_reuse_tiles_init_fidelity<EltwiseBinaryType::ELWMUL, 1, MathFidelity::HiFi4>(src_cb_id);
-    rmsnorm_bcast_scalar_reuse_tiles_fidelity<EltwiseBinaryType::ELWMUL, 1, MathFidelity::HiFi4, true>(
-        src_cb_id, 0, 0, 0);
-    reconfig_data_format(cb_gamma, cb_gamma);
-    mul_reuse_dest_init_fidelity<EltwiseBinaryReuseDestType::DEST_TO_SRCA, MathFidelity::HiFi4>(cb_gamma);
-    mul_reuse_dest_tiles_fidelity<EltwiseBinaryReuseDestType::DEST_TO_SRCA, MathFidelity::HiFi4>(cb_gamma, 0, 0);
-    tile_regs_commit();
-    tile_regs_wait();
-    pack_tile(0, cb_out_latent);
-    if constexpr (has_rope != 0) {
-        if (do_rope) {
-            pack_reconfig_data_format(cb_tmp);
-            pack_tile(0, cb_tmp);
-        }
-    }
-    tile_regs_release();
+    pack_rms_scaled(src_cb_id, cb_scale, cb_gamma, cb_out_latent, latent_rope ? static_cast<int32_t>(cb_tmp) : -1);
     out_latent_cb.push_back(1);
-    if constexpr (has_rope != 0) {
-        if (do_rope) {
-            tmp_cb.push_back(1);
-        }
+    if (latent_rope) {
+        tmp_cb.push_back(1);
     }
-    gamma_cb.pop_front(1);
-    scale_cb.pop_front(1);
-    CircularBuffer(src_cb_id).pop_front(1);
 
     // 6. Optional RoPE on trailing rope_tiles cores -> cb_out_rope
-    if constexpr (has_rope != 0) {
-        if (do_rope) {
-            tmp_cb.wait_front(1);
-            CircularBuffer cs_cb(cb_cs);
-            CircularBuffer out_rope_cb(cb_out_rope);
-            cs_cb.wait_front(2);
-            out_rope_cb.reserve_back(1);
-            reconfig_data_format(cb_tmp, cb_tmp);
-            pack_reconfig_data_format(cb_out_rope);
-            pack_init(cb_out_rope);
+    if (latent_rope) {
+        push_rope(cb_tmp, cb_cs, cb_out_rope);
+    }
+
+    // 7. Index key core n: (latent @ index_wk)[:, 32n : 32n + 32], RMS-normalized over the key_tiles
+    //    key cores (the writer gathers the stats on key core 0), times its gamma tile, RoPE'd on a
+    //    RoPE core -> cb_key_out.
+    if constexpr (has_index_key != 0) {
+        if (is_key_core) {
+            CircularBuffer key_in_cb(cb_key_in);
+            CircularBuffer key_w_cb(cb_key_w);
+            CircularBuffer key_mm_cb(cb_key_mm);
+
+            // The latent phase left SrcA on 1x32 tiles; the matmul unpacks 32x32 in1 tiles into it.
+            compute_kernel_hw_startup<SrcOrder::Reverse>(cb_key_in, cb_key_w, cb_key_mm);
+            key_in_cb.wait_front(num_cores);
+            key_mm_cb.reserve_back(1);
             tile_regs_acquire();
-            copy_init(cb_tmp);
-            copy_tile(cb_tmp, 0, 0);
-            copy_init(cb_cs);
-            copy_tile(cb_cs, 0, 1);
-            copy_tile(cb_cs, 1, 2);
-            rope_sfpu_fused_init();
-            rope_sfpu_init();
-            rope_sfpu_inplace<1, 1>();
+            fill_tile_init();
+            fill_tile(0, 0.0F);
+            matmul_block_init(cb_key_in, cb_key_w, false, 1, 1, num_cores);
+            for (uint32_t k0 = 0; k0 < num_cores; k0 += key_w_chunk) {
+                key_w_cb.wait_front(key_w_chunk);
+                for (uint32_t k = 0; k < key_w_chunk; ++k) {
+                    matmul_block(cb_key_in, cb_key_w, k0 + k, k, 0, false, 1, 1, num_cores);
+                }
+                key_w_cb.pop_front(key_w_chunk);
+            }
             tile_regs_commit();
             tile_regs_wait();
-            pack_tile(0, cb_out_rope);
+            pack_tile(0, cb_key_mm);
             tile_regs_release();
-            out_rope_cb.push_back(1);
-            tmp_cb.pop_front(1);
-            cs_cb.pop_front(2);
+            key_mm_cb.push_back(1);
+            key_in_cb.pop_front(num_cores);
+
+            compute_kernel_hw_startup(cb_key_mm, cb_key_mm, cb_local_stat);
+            key_mm_cb.wait_front(1);
+            push_sum_of_squares(cb_key_mm, cb_local_stat);
+            if (is_key_hub) {
+                push_rms_scale<key_tiles>(cb_gather_stats, cb_scale_hub, inv_key_n_bits, eps_bits);
+            }
+
+            const uint32_t key_norm_cb = do_rope ? cb_tmp : cb_key_out;
+            CircularBuffer key_norm(key_norm_cb);
+            key_norm.reserve_back(1);
+            pack_rms_scaled(cb_key_mm, cb_scale, cb_key_gamma, key_norm_cb, -1);
+            key_norm.push_back(1);
+            if (do_rope) {
+                push_rope(cb_tmp, cb_cs, cb_key_out);
+            }
         }
     }
 }

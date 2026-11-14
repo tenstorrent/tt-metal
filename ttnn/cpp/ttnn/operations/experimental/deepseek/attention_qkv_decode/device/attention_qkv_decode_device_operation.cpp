@@ -9,7 +9,6 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
-
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
@@ -138,6 +137,36 @@ void AttentionQkvDecodeDeviceOperation::validate_on_program_cache_miss(
     validate_gamma(t.q_a_gamma, "q_a_gamma", q_lora, weight_role_cores(WeightRole::QA));
     validate_gamma(t.kv_gamma, "kv_gamma", head_dim, weight_role_cores(WeightRole::KV));
 
+    TT_FATAL(
+        t.w_comp.has_value() == t.comp_output.has_value(),
+        "attention_qkv_decode: w_comp and comp_output must be given together");
+    if (t.w_comp.has_value()) {
+        const Tensor& w_comp = *t.w_comp;
+        const Tensor& comp_output = *t.comp_output;
+        TT_FATAL(
+            w_comp.storage_type() == StorageType::DEVICE && comp_output.storage_type() == StorageType::DEVICE,
+            "attention_qkv_decode: w_comp and comp_output must be on device");
+        validate_weight(w_comp, "w_comp", k, tt::constants::TILE_WIDTH);
+        const uint32_t n_comp = w_comp.logical_shape()[-1];
+        TT_FATAL(
+            n_comp % tt::constants::TILE_WIDTH == 0 && n_comp / tt::constants::TILE_WIDTH <= kNumQbCores,
+            "attention_qkv_decode: w_comp's {} columns must be at most {} tiles, one per q_b core",
+            n_comp,
+            kNumQbCores);
+        TT_FATAL(
+            comp_output.layout() == Layout::ROW_MAJOR && comp_output.dtype() == DataType::BFLOAT16 &&
+                !comp_output.is_sharded() && comp_output.buffer()->buffer_type() == BufferType::DRAM &&
+                comp_output.logical_shape()[-1] == n_comp && comp_output.logical_shape().volume() == n_comp,
+            "attention_qkv_decode: comp_output must be a DRAM-interleaved ROW_MAJOR bfloat16 [1, 1, 1, {}], got {}",
+            n_comp,
+            comp_output.logical_shape());
+        TT_FATAL(
+            tokens_shard.grid.contains(weight_role_cores(WeightRole::QB)),
+            "attention_qkv_decode: with w_comp the tokens replica must also cover the q_b cores {}, got {}",
+            weight_role_cores(WeightRole::QB).str(),
+            tokens_shard.grid.str());
+    }
+
     if (!args.prefetcher_pipes.empty()) {
         const uint32_t k_tiles = k / tt::constants::TILE_WIDTH;
         const std::array<uint32_t, kNumWeightRoles> slab_bytes = {
@@ -244,7 +273,9 @@ ttnn::Tensor attention_qkv_decode(
     const ttnn::Tensor& cache_pos,
     float epsilon,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
-    const ttnn::PrefetcherPipeList& prefetcher_pipes) {
+    const ttnn::PrefetcherPipeList& prefetcher_pipes,
+    const std::optional<ttnn::Tensor>& w_comp,
+    const std::optional<ttnn::Tensor>& comp_output) {
     using OperationType =
         ttnn::operations::experimental::deepseek::attention_qkv_decode::AttentionQkvDecodeDeviceOperation;
     using namespace ttnn::operations::experimental::deepseek::attention_qkv_decode;
@@ -272,6 +303,8 @@ ttnn::Tensor attention_qkv_decode(
         .sin = sin,
         .kv_cache = kv_cache,
         .cache_pos = cache_pos,
+        .w_comp = w_comp,
+        .comp_output = comp_output,
     };
     return ttnn::device_operation::launch<OperationType>(attrs, tensor_args);
 }

@@ -34,6 +34,11 @@ namespace ttnn::experimental::deepseek {
 //              the three weights' slabs instead of DRAM reads, one whole-slab entry per core per call. The
 //              receivers must be exactly the roles' cores. Each call drains one request per weight, queued in the
 //              weights' own ND-sharded layout.
+//   w_comp:    optional ``[K, N_c]`` TILE DRAM, ND-sharded one ``[K, 32]`` slab per output tile (N_c / 32 <= 64):
+//              extra output columns ``tokens @ w_comp`` (e.g. a column-split compressor), computed on that many
+//              of the q_b cores before their q_b work. Always read from DRAM.
+//   comp_output: ``[1, 1, 1, N_c]`` bfloat16 ROW_MAJOR DRAM, overwritten with ``tokens @ w_comp``; given with
+//              w_comp.
 //
 // Returns: q ``[1, 1, heads, head_dim]`` bfloat16 ROW_MAJOR, by default flash_mqa_decode's layout (every
 // head HEIGHT_SHARDED on core (0, 0)).
@@ -50,6 +55,8 @@ Tensor attention_qkv_decode(
     const Tensor& cache_pos,
     float epsilon = 1e-6f,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    const ttnn::PrefetcherPipeList& prefetcher_pipes = {});
+    const ttnn::PrefetcherPipeList& prefetcher_pipes = {},
+    const std::optional<Tensor>& w_comp = std::nullopt,
+    const std::optional<Tensor>& comp_output = std::nullopt);
 
 }  // namespace ttnn::experimental::deepseek

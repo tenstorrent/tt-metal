@@ -36,6 +36,8 @@ const TensorParamName SIN{"sin"};
 const TensorParamName KV_CACHE{"kv_cache"};
 const TensorParamName CACHE_POS{"cache_pos"};
 const TensorParamName Q{"q"};
+const TensorParamName W_COMP{"w_comp"};
+const TensorParamName COMP_OUT{"comp_output"};
 
 const DFBSpecName IN0_DFB{"in0"};
 const DFBSpecName W_PROJ_DFB{"w_proj"};
@@ -55,6 +57,8 @@ const DFBSpecName CS_RAW_DFB{"cs_raw"};
 const DFBSpecName OUT_DFB{"out"};
 const DFBSpecName CACHE_TILE_DFB{"cache_tile"};
 const DFBSpecName POS_DFB{"pos"};
+const DFBSpecName W_COMP_DFB{"w_comp"};
+const DFBSpecName COMP_X_DFB{"comp_x"};
 
 const SemaphoreSpecName ARRIVE_SEM{"arrive"};
 const SemaphoreSpecName READY_SEM{"ready"};
@@ -119,6 +123,17 @@ ttnn::device_operation::ProgramArtifacts AttentionQkvDecodeDeviceOperation::Prog
     const std::vector<CoreCoord> qa_cores =
         corerange_to_cores(CoreRangeSet(CoreRange({kRowCoresX, 0}, {kGridX - 1, kGridY - 1})), std::nullopt, true);
     TT_FATAL(qa_cores.size() == q_lora_tiles && kv_cores.size() == head_tiles, "attention_qkv_decode: core roles");
+    // q_b core i also computes column tile comp_slot[i] of tokens @ w_comp when is_comp_core[i].
+    const bool has_comp = t.w_comp.has_value();
+    std::vector<bool> is_comp_core(qb_cores.size(), false);
+    std::vector<uint32_t> comp_slot(qb_cores.size(), 0);
+    if (has_comp) {
+        const auto indices = comp_core_indices(t.w_comp->logical_shape()[-1] / TILE_W);
+        for (uint32_t j = 0; j < indices.size(); ++j) {
+            is_comp_core[indices[j]] = true;
+            comp_slot[indices[j]] = j;
+        }
+    }
 
     const CoreCoord hub = qa_cores.front();
     const CoreCoord hub_phys = device->worker_core_from_logical_core(hub);
@@ -254,6 +269,17 @@ ttnn::device_operation::ProgramArtifacts AttentionQkvDecodeDeviceOperation::Prog
             .data_format_metadata = w_format,
             .advanced_options = {.prefetcher_pipe_relays = kv_pipe_names},
         });
+    }
+    if (has_comp) {
+        // On the q_b cores, after every wider DFB. Only the compressor-column cores fill them.
+        const tt::DataFormat w_comp_format = datatype_to_dataformat_converter(t.w_comp->dtype());
+        dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = W_COMP_DFB,
+            .entry_size = tt::tile_size(w_comp_format),
+            .num_entries = k_tiles,
+            .data_format_metadata = w_comp_format,
+        });
+        dataflow_buffers.push_back(row_dfb(COMP_X_DFB, 1));
     }
 
     const CoreRangeSet all_cores(CoreRange({0, 0}, {kGridX - 1, kGridY - 1}));
@@ -420,99 +446,124 @@ ttnn::device_operation::ProgramArtifacts AttentionQkvDecodeDeviceOperation::Prog
     // A q_b core holds nc_tiles of one head; the head's last core holds its rope tiles.
     auto qb_does_rope = [&](uint32_t i) { return static_cast<uint32_t>(((i + 1) * nc_tiles) % head_tiles == 0); };
 
-    // ---- q_b reader (RISCV_1, NOC 0): weight slab, then the multicast row ----
-    {
-        KernelSpec reader{
-            .unique_id = QB_READER,
-            .source = kernel_path("dataflow/reader_q_b.cpp"),
-            .dfb_bindings = {ProducerOf(W_QB_DFB, "w"), ProducerOf(ROW_DFB, "qkv_row")},
-            .semaphore_bindings = {SemaphoreBinding{.semaphore_spec_name = READY_SEM, .accessor_name = "ready"}},
-            .compile_time_args = {{"w_tiles", q_lora_tiles * nc_tiles}, {"row_tiles", row_tiles}},
-            .runtime_arg_schema = {.runtime_arg_names = {"shard_id"}},
-            .hw_config = dm_config(DataMovementProcessor::RISCV_1, NOC::NOC_0),
-        };
-        if (use_pipes) {
-            reader.compiler_options.defines.emplace("W_PIPE", "1");
-            reader.advanced_options.prefetcher_pipe_bindings = {
-                {.pipe_parameter_names = qb_pipe_names, .accessor_name = "w"}};
-        } else {
-            reader.tensor_bindings.push_back(TensorBinding{.tensor_parameter_name = W_QB, .accessor_name = "w"});
-        }
-        KernelRunArgs reader_run_args{.kernel = QB_READER};
-        for (uint32_t i = 0; i < qb_cores.size(); ++i) {
-            AddRuntimeArgsForNode(reader_run_args.runtime_arg_values, qb_cores[i], {{"shard_id", i}});
-        }
-        kernels.push_back(std::move(reader));
-        run_args.kernel_run_args.push_back(std::move(reader_run_args));
+    // With w_comp the q_b kernels also take the compressor-column path (COMP), on the cores is_comp marks: they first
+    // compute their tile of tokens @ w_comp from their own DRAM slab and write it into comp_output. One kernel per
+    // role still spans every q_b core, as the relay over q_b's pipes needs of its producer.
+    // ---- q_b reader (RISCV_1, NOC 0): (comp: its w_comp slab), weight slab, then the multicast row ----
+    KernelSpec qb_reader{
+        .unique_id = QB_READER,
+        .source = kernel_path("dataflow/reader_q_b.cpp"),
+        .dfb_bindings = {ProducerOf(W_QB_DFB, "w"), ProducerOf(ROW_DFB, "qkv_row")},
+        .semaphore_bindings = {SemaphoreBinding{.semaphore_spec_name = READY_SEM, .accessor_name = "ready"}},
+        .compile_time_args = {{"w_tiles", q_lora_tiles * nc_tiles}, {"row_tiles", row_tiles}},
+        .runtime_arg_schema = {.runtime_arg_names = {"shard_id"}},
+        .hw_config = dm_config(DataMovementProcessor::RISCV_1, NOC::NOC_0),
+    };
+    if (use_pipes) {
+        qb_reader.compiler_options.defines.emplace("W_PIPE", "1");
+        qb_reader.advanced_options.prefetcher_pipe_bindings = {
+            {.pipe_parameter_names = qb_pipe_names, .accessor_name = "w"}};
+    } else {
+        qb_reader.tensor_bindings.push_back(TensorBinding{.tensor_parameter_name = W_QB, .accessor_name = "w"});
     }
 
-    // ---- q_b compute: matmul, q_a's RMSNorm scale, RoPE ----
-    {
-        KernelSpec compute{
-            .unique_id = QB_COMPUTE,
-            .source = kernel_path("compute/compute_q_b.cpp"),
-            .dfb_bindings =
-                {ConsumerOf(ROW_DFB, "qkv_row"),
-                 ConsumerOf(W_QB_DFB, "w"),
-                 ConsumerOf(CS_DFB, "cs"),
-                 ProducerOf(OUT_DFB, "out")},
-            .compile_time_args =
-                {{"q_lora_tiles", q_lora_tiles},
-                 {"row_tiles", row_tiles},
-                 {"scaled_q_a_first", scaled_q_a_first},
-                 {"nc_tiles", nc_tiles},
-                 {"inv_n_bits", inv_q_lora_bits},
-                 {"eps_bits", eps_bits}},
-            .runtime_arg_schema = {.runtime_arg_names = {"do_rope"}},
-            .hw_config = compute_config(),
-        };
-        compute.compiler_options.opt_level = KernelBuildOptLevel::O3;
-        if (use_pipes) {
-            compute.compiler_options.defines.emplace("W_PIPE", "1");
-        }
-        for (const auto& dfb : {MM_OUT_DFB, STAT_DFB, SCALE_DFB, TMP_DFB}) {
-            compute.dfb_bindings.push_back(ProducerOf(dfb, dfb.get()));
-            compute.dfb_bindings.push_back(ConsumerOf(dfb, dfb.get()));
-        }
-        KernelRunArgs compute_run_args{.kernel = QB_COMPUTE};
-        for (uint32_t i = 0; i < qb_cores.size(); ++i) {
-            AddRuntimeArgsForNode(compute_run_args.runtime_arg_values, qb_cores[i], {{"do_rope", qb_does_rope(i)}});
-        }
-        kernels.push_back(std::move(compute));
-        run_args.kernel_run_args.push_back(std::move(compute_run_args));
+    // ---- q_b compute: (comp: tokens @ w_comp), matmul, q_a's RMSNorm scale, RoPE ----
+    KernelSpec qb_compute{
+        .unique_id = QB_COMPUTE,
+        .source = kernel_path("compute/compute_q_b.cpp"),
+        .dfb_bindings =
+            {ConsumerOf(ROW_DFB, "qkv_row"),
+             ConsumerOf(W_QB_DFB, "w"),
+             ConsumerOf(CS_DFB, "cs"),
+             ProducerOf(OUT_DFB, "out")},
+        .compile_time_args =
+            {{"q_lora_tiles", q_lora_tiles},
+             {"row_tiles", row_tiles},
+             {"scaled_q_a_first", scaled_q_a_first},
+             {"nc_tiles", nc_tiles},
+             {"inv_n_bits", inv_q_lora_bits},
+             {"eps_bits", eps_bits}},
+        .runtime_arg_schema = {.runtime_arg_names = {"do_rope"}},
+        .hw_config = compute_config(),
+    };
+    qb_compute.compiler_options.opt_level = KernelBuildOptLevel::O3;
+    if (use_pipes) {
+        qb_compute.compiler_options.defines.emplace("W_PIPE", "1");
+    }
+    for (const auto& dfb : {MM_OUT_DFB, STAT_DFB, SCALE_DFB, TMP_DFB}) {
+        qb_compute.dfb_bindings.push_back(ProducerOf(dfb, dfb.get()));
+        qb_compute.dfb_bindings.push_back(ConsumerOf(dfb, dfb.get()));
     }
 
-    // ---- q_b writer (RISCV_0, NOC 1): RoPE table rows, q into SDPA's layout ----
-    {
-        KernelSpec writer{
-            .unique_id = QB_WRITER,
-            .source = kernel_path("dataflow/writer_q_b.cpp"),
-            .dfb_bindings =
-                {ProducerOf(CS_DFB, "cs"),
-                 ProducerOf(CS_RAW_DFB, "cs_raw"),
-                 ConsumerOf(CS_RAW_DFB, "cs_raw"),
-                 ConsumerOf(OUT_DFB, "out")},
-            .tensor_bindings =
-                {TensorBinding{.tensor_parameter_name = COS, .accessor_name = "cos"},
-                 TensorBinding{.tensor_parameter_name = SIN, .accessor_name = "sin"},
-                 TensorBinding{.tensor_parameter_name = Q, .accessor_name = "q"}},
-            .compile_time_args =
-                {{"nc_tiles", nc_tiles}, {"rope_tiles", rope_tiles}, {"row_tile_bytes", row_tile_bytes}},
-            .runtime_arg_schema = {.runtime_arg_names = {"do_rope", "q_row", "q_col_bytes"}},
-            .hw_config = dm_config(DataMovementProcessor::RISCV_0, NOC::NOC_1),
-        };
-        KernelRunArgs writer_run_args{.kernel = QB_WRITER};
-        for (uint32_t i = 0; i < qb_cores.size(); ++i) {
-            const uint32_t first_tile = i * nc_tiles;
+    // ---- q_b writer (RISCV_0, NOC 1): RoPE table rows, (comp: its comp_output tile), q into SDPA's layout ----
+    KernelSpec qb_writer{
+        .unique_id = QB_WRITER,
+        .source = kernel_path("dataflow/writer_q_b.cpp"),
+        .dfb_bindings =
+            {ProducerOf(CS_DFB, "cs"),
+             ProducerOf(CS_RAW_DFB, "cs_raw"),
+             ConsumerOf(CS_RAW_DFB, "cs_raw"),
+             ConsumerOf(OUT_DFB, "out")},
+        .tensor_bindings =
+            {TensorBinding{.tensor_parameter_name = COS, .accessor_name = "cos"},
+             TensorBinding{.tensor_parameter_name = SIN, .accessor_name = "sin"},
+             TensorBinding{.tensor_parameter_name = Q, .accessor_name = "q"}},
+        .compile_time_args = {{"nc_tiles", nc_tiles}, {"rope_tiles", rope_tiles}, {"row_tile_bytes", row_tile_bytes}},
+        .runtime_arg_schema = {.runtime_arg_names = {"do_rope", "q_row", "q_col_bytes"}},
+        .hw_config = dm_config(DataMovementProcessor::RISCV_0, NOC::NOC_1),
+    };
+
+    if (has_comp) {
+        for (KernelSpec* kernel : {&qb_reader, &qb_compute, &qb_writer}) {
+            kernel->compiler_options.defines.emplace("COMP", "1");
+            kernel->runtime_arg_schema.runtime_arg_names.push_back("is_comp");
+        }
+        qb_reader.dfb_bindings.push_back(ProducerOf(IN0_DFB, "in0"));
+        qb_reader.dfb_bindings.push_back(ProducerOf(W_COMP_DFB, "w_comp"));
+        qb_reader.tensor_bindings.push_back(TensorBinding{.tensor_parameter_name = W_COMP, .accessor_name = "w_comp"});
+        qb_reader.compile_time_args.emplace("k_tiles", k_tiles);
+        qb_reader.runtime_arg_schema.runtime_arg_names.push_back("comp_shard_id");
+        qb_compute.dfb_bindings.push_back(ConsumerOf(IN0_DFB, "in0"));
+        qb_compute.dfb_bindings.push_back(ConsumerOf(W_COMP_DFB, "w_comp"));
+        qb_compute.dfb_bindings.push_back(ProducerOf(COMP_X_DFB, "comp_x"));
+        qb_compute.compile_time_args.emplace("k_tiles", k_tiles);
+        qb_writer.dfb_bindings.push_back(ConsumerOf(COMP_X_DFB, "comp_x"));
+        qb_writer.tensor_bindings.push_back(
+            TensorBinding{.tensor_parameter_name = COMP_OUT, .accessor_name = "comp_output"});
+        qb_writer.runtime_arg_schema.runtime_arg_names.push_back("comp_col_bytes");
+    }
+
+    KernelRunArgs qb_reader_run_args{.kernel = QB_READER};
+    KernelRunArgs qb_compute_run_args{.kernel = QB_COMPUTE};
+    KernelRunArgs qb_writer_run_args{.kernel = QB_WRITER};
+    for (uint32_t i = 0; i < qb_cores.size(); ++i) {
+        const uint32_t first_tile = i * nc_tiles;
+        AddRuntimeArgsForNode(qb_reader_run_args.runtime_arg_values, qb_cores[i], {{"shard_id", i}});
+        AddRuntimeArgsForNode(qb_compute_run_args.runtime_arg_values, qb_cores[i], {{"do_rope", qb_does_rope(i)}});
+        AddRuntimeArgsForNode(
+            qb_writer_run_args.runtime_arg_values,
+            qb_cores[i],
+            {{"do_rope", qb_does_rope(i)},
+             {"q_row", first_tile / head_tiles},
+             {"q_col_bytes", (first_tile % head_tiles) * row_tile_bytes}});
+        if (has_comp) {
+            const uint32_t is_comp = static_cast<uint32_t>(is_comp_core[i]);
             AddRuntimeArgsForNode(
-                writer_run_args.runtime_arg_values,
+                qb_reader_run_args.runtime_arg_values,
                 qb_cores[i],
-                {{"do_rope", qb_does_rope(i)},
-                 {"q_row", first_tile / head_tiles},
-                 {"q_col_bytes", (first_tile % head_tiles) * row_tile_bytes}});
+                {{"is_comp", is_comp}, {"comp_shard_id", comp_slot[i]}});
+            AddRuntimeArgsForNode(qb_compute_run_args.runtime_arg_values, qb_cores[i], {{"is_comp", is_comp}});
+            AddRuntimeArgsForNode(
+                qb_writer_run_args.runtime_arg_values,
+                qb_cores[i],
+                {{"is_comp", is_comp}, {"comp_col_bytes", comp_slot[i] * row_tile_bytes}});
         }
-        kernels.push_back(std::move(writer));
-        run_args.kernel_run_args.push_back(std::move(writer_run_args));
+    }
+    for (auto* kernel : {&qb_reader, &qb_compute, &qb_writer}) {
+        kernels.push_back(std::move(*kernel));
+    }
+    for (auto* kernel_run_args : {&qb_reader_run_args, &qb_compute_run_args, &qb_writer_run_args}) {
+        run_args.kernel_run_args.push_back(std::move(*kernel_run_args));
     }
 
     ////////////////////////////////////////////////////////////////////////////
@@ -547,6 +598,9 @@ ttnn::device_operation::ProgramArtifacts AttentionQkvDecodeDeviceOperation::Prog
     };
     if (!use_pipes) {
         tensors.insert(tensors.end(), {{W_QA, &t.w_q_a}, {W_KV, &t.w_kv}, {W_QB, &t.w_q_b}});
+    }
+    if (has_comp) {
+        tensors.insert(tensors.end(), {{W_COMP, &*t.w_comp}, {COMP_OUT, &*t.comp_output}});
     }
     Group<TensorParameter> tensor_parameters;
     for (const auto& [name, tensor] : tensors) {

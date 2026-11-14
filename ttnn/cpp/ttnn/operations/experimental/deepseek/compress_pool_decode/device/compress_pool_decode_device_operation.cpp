@@ -89,6 +89,141 @@ void validate_window_cache(const Tensor& t, const char* name, uint32_t head_dim)
         shape);
 }
 
+void validate_dram_tensor(const Tensor& t, const char* name, Layout layout, DataType dtype) {
+    TT_FATAL(t.storage_type() == StorageType::DEVICE, "compress_pool_decode: {} must be on device", name);
+    TT_FATAL(
+        t.layout() == layout && t.dtype() == dtype && !t.is_sharded() && t.buffer()->buffer_type() == BufferType::DRAM,
+        "compress_pool_decode: {} must be DRAM-interleaved {} {}, got {} {}",
+        name,
+        dtype,
+        layout,
+        t.dtype(),
+        t.layout());
+    if (layout == Layout::TILE) {
+        TT_FATAL(
+            t.tensor_spec().tile().get_height() == TILE_HEIGHT && t.tensor_spec().tile().get_width() == TILE_WIDTH,
+            "compress_pool_decode: {} must use 32x32 tiles",
+            name);
+    }
+}
+
+// A paged [n_blocks, 1, block_rows, width] pool; returns block_rows.
+uint32_t validate_block_pool(const Tensor& t, const char* name, Layout layout, uint32_t width) {
+    validate_dram_tensor(t, name, layout, DataType::BFLOAT16);
+    const auto& s = t.logical_shape();
+    TT_FATAL(
+        s.rank() == 4 && s[1] == 1 && s[2] % TILE_HEIGHT == 0 && s[3] == width,
+        "compress_pool_decode: {} must be [n_blocks, 1, block_rows, {}] with block_rows % 32 == 0, got {}",
+        name,
+        width,
+        s);
+    return s[2];
+}
+
+void validate_index_writes(const CompressPoolDecodeParams& args, const CompressPoolDecodeInputs& t) {
+    const uint32_t head_dim = args.head_dim;
+    const bool any_key = t.index_wk.has_value() || t.index_norm_weight.has_value() || t.idx_key_cache.has_value();
+    TT_FATAL(
+        any_key == args.has_index_key &&
+            (!args.has_index_key || (t.index_wk && t.index_norm_weight && t.idx_key_cache)),
+        "compress_pool_decode: index_wk, index_norm_weight and idx_key_cache must all be provided or all omitted");
+    TT_FATAL(
+        t.dense_kv.has_value() == t.dense_entry.has_value(),
+        "compress_pool_decode: dense_kv and dense_entry must both be provided or both omitted");
+    const bool any_write = args.has_index_key || args.has_comp_kv || args.has_dense;
+    if (!any_write) {
+        TT_FATAL(
+            !t.page_table && !t.entry && !t.page_row && !t.key_row,
+            "compress_pool_decode: page_table / entry / page_row / key_row need idx_key_cache, comp_kv or dense_kv");
+        return;
+    }
+    TT_FATAL(
+        args.do_pool && args.has_rope,
+        "compress_pool_decode: the cache writes need do_pool=True and cos / sin (they write the RoPE'd row)");
+
+    const bool paged = args.has_index_key || args.has_comp_kv;
+    if (paged) {
+        TT_FATAL(
+            t.page_table.has_value() && t.entry.has_value(),
+            "compress_pool_decode: idx_key_cache / comp_kv are written through page_table at entry; pass both");
+        validate_dram_tensor(*t.page_table, "page_table", Layout::ROW_MAJOR, DataType::INT32);
+        TT_FATAL(
+            t.page_table->logical_shape().rank() == 2,
+            "compress_pool_decode: page_table must be [rows, n_blocks], got {}",
+            t.page_table->logical_shape());
+        validate_slot_tensor(*t.entry, "entry");
+        if (t.page_row.has_value()) {
+            validate_slot_tensor(*t.page_row, "page_row");
+        }
+    } else {
+        TT_FATAL(
+            !t.page_table && !t.entry && !t.page_row,
+            "compress_pool_decode: page_table / entry / page_row are only read for idx_key_cache / comp_kv");
+    }
+
+    if (args.has_index_key) {
+        const uint32_t key_dim = args.index_head_dim;
+        TT_FATAL(
+            key_dim > 0 && key_dim % TILE_WIDTH == 0 && key_dim <= head_dim,
+            "compress_pool_decode: index_head_dim ({}) must be a multiple of {} in (0, {}]",
+            key_dim,
+            TILE_WIDTH,
+            head_dim);
+        TT_FATAL(
+            args.rope_dim <= key_dim,
+            "compress_pool_decode: the index key RoPEs the same trailing {} channels, wider than its {}",
+            args.rope_dim,
+            key_dim);
+        validate_dram_tensor(*t.index_wk, "index_wk", Layout::TILE, DataType::BFLOAT16);
+        const auto& ws = t.index_wk->logical_shape();
+        TT_FATAL(
+            ws[-2] == head_dim && ws[-1] == key_dim && ws.volume() == head_dim * key_dim,
+            "compress_pool_decode: index_wk must be [{}, {}] (K, N), got {}",
+            head_dim,
+            key_dim,
+            ws);
+        const auto& g = *t.index_norm_weight;
+        TT_FATAL(
+            g.storage_type() == StorageType::DEVICE && g.dtype() == DataType::BFLOAT16 && !g.is_sharded() &&
+                g.buffer()->buffer_type() == BufferType::DRAM && g.logical_shape()[-1] == key_dim &&
+                g.logical_shape().volume() == key_dim,
+            "compress_pool_decode: index_norm_weight must be DRAM-interleaved bfloat16 [1, 1, 1, {}], got {}",
+            key_dim,
+            g.logical_shape());
+        if (g.layout() == Layout::TILE) {
+            TT_FATAL(
+                g.tensor_spec().tile().get_height() == TILE_HEIGHT && g.tensor_spec().tile().get_width() == TILE_WIDTH,
+                "compress_pool_decode: tiled index_norm_weight must use 32x32 tiles");
+        }
+        const uint32_t rows = validate_block_pool(*t.idx_key_cache, "idx_key_cache", Layout::TILE, key_dim);
+        TT_FATAL(rows == args.block_rows, "compress_pool_decode: idx_key_cache and comp_kv block sizes differ");
+        if (t.key_row.has_value()) {
+            validate_dram_tensor(*t.key_row, "key_row", Layout::ROW_MAJOR, DataType::BFLOAT16);
+            TT_FATAL(
+                t.key_row->logical_shape()[-1] == key_dim && t.key_row->logical_shape().volume() == key_dim,
+                "compress_pool_decode: key_row must be [1, 1, 1, {}], got {}",
+                key_dim,
+                t.key_row->logical_shape());
+        }
+    } else {
+        TT_FATAL(!t.key_row.has_value(), "compress_pool_decode: key_row needs idx_key_cache");
+    }
+    if (args.has_comp_kv) {
+        const uint32_t rows = validate_block_pool(*t.comp_kv, "comp_kv", Layout::ROW_MAJOR, head_dim);
+        TT_FATAL(rows == args.block_rows, "compress_pool_decode: idx_key_cache and comp_kv block sizes differ");
+    }
+    if (args.has_dense) {
+        validate_dram_tensor(*t.dense_kv, "dense_kv", Layout::TILE, DataType::BFLOAT16);
+        const auto& s = t.dense_kv->logical_shape();
+        TT_FATAL(
+            s.rank() == 4 && s[0] == 1 && s[1] == 1 && s[3] == head_dim,
+            "compress_pool_decode: dense_kv must be [1, 1, rows, {}], got {}",
+            head_dim,
+            s);
+        validate_slot_tensor(*t.dense_entry, "dense_entry");
+    }
+}
+
 }  // namespace
 
 CompressPoolDecodeDeviceOperation::program_factory_t CompressPoolDecodeDeviceOperation::select_program_factory(
@@ -186,6 +321,8 @@ void CompressPoolDecodeDeviceOperation::validate_on_program_cache_miss(
             TILE_WIDTH,
             head_dim);
     }
+
+    validate_index_writes(args, t);
 }
 
 CompressPoolDecodeDeviceOperation::spec_return_value_t CompressPoolDecodeDeviceOperation::compute_output_specs(
@@ -230,13 +367,30 @@ std::vector<ttnn::Tensor> compress_pool_decode(
     const std::optional<ttnn::Tensor>& prev_slot,
     const std::optional<ttnn::Tensor>& cos,
     const std::optional<ttnn::Tensor>& sin,
-    bool do_pool) {
+    bool do_pool,
+    const std::optional<ttnn::Tensor>& index_wk,
+    const std::optional<ttnn::Tensor>& index_norm_weight,
+    const std::optional<ttnn::Tensor>& idx_key_cache,
+    const std::optional<ttnn::Tensor>& comp_kv,
+    const std::optional<ttnn::Tensor>& page_table,
+    const std::optional<ttnn::Tensor>& entry,
+    const std::optional<ttnn::Tensor>& page_row,
+    const std::optional<ttnn::Tensor>& dense_kv,
+    const std::optional<ttnn::Tensor>& dense_entry,
+    const std::optional<ttnn::Tensor>& key_row) {
     using OperationType =
         ttnn::operations::experimental::deepseek::compress_pool_decode::CompressPoolDecodeDeviceOperation;
     const uint32_t head_dim = kv.logical_shape()[-1];
     const bool has_window = win_kv.has_value();
     const bool has_rope = cos.has_value();
     const uint32_t rope_dim = has_rope ? cos->logical_shape()[-1] : 0u;
+    const bool has_index_key = idx_key_cache.has_value();
+    uint32_t block_rows = 0;
+    if (has_index_key) {
+        block_rows = idx_key_cache->logical_shape()[2];
+    } else if (comp_kv.has_value()) {
+        block_rows = comp_kv->logical_shape()[2];
+    }
     auto attrs = OperationType::operation_attributes_t{
         .epsilon = epsilon,
         .do_pool = do_pool,
@@ -248,6 +402,15 @@ std::vector<ttnn::Tensor> compress_pool_decode(
         .kv_sharded = kv.is_sharded(),
         .gate_sharded = gate.has_value() && gate->is_sharded(),
         .norm_weight_is_tile = norm_weight.layout() == tt::tt_metal::Layout::TILE,
+        .has_index_key = has_index_key,
+        .index_norm_weight_is_tile =
+            !index_norm_weight.has_value() || index_norm_weight->layout() == tt::tt_metal::Layout::TILE,
+        .index_head_dim = has_index_key ? idx_key_cache->logical_shape()[-1] : 0u,
+        .has_comp_kv = comp_kv.has_value(),
+        .has_dense = dense_kv.has_value(),
+        .has_page_row = page_row.has_value(),
+        .has_key_row = key_row.has_value(),
+        .block_rows = block_rows,
     };
     auto tensor_args = OperationType::tensor_args_t{
         .kv = kv,
@@ -259,6 +422,16 @@ std::vector<ttnn::Tensor> compress_pool_decode(
         .prev_slot = prev_slot,
         .cos = cos,
         .sin = sin,
+        .index_wk = index_wk,
+        .index_norm_weight = index_norm_weight,
+        .idx_key_cache = idx_key_cache,
+        .comp_kv = comp_kv,
+        .page_table = page_table,
+        .entry = entry,
+        .page_row = page_row,
+        .dense_kv = dense_kv,
+        .dense_entry = dense_entry,
+        .key_row = key_row,
     };
     return ttnn::device_operation::launch<OperationType>(attrs, tensor_args);
 }

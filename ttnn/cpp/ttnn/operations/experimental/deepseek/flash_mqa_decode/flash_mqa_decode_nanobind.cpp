@@ -27,17 +27,19 @@ void bind_flash_mqa_decode(::nanobind::module_& mod) {
             kv (ttnn.Tensor): ``[1, 1, rows, head_dim]`` TILE bfloat16 / bfloat8_b; rows a multiple of
                 ``k_chunk_size``.
             lengths (ttnn.Tensor): row-major int32 whose first row starts with
-                ``[ring_valid, selected_valid]`` and, optionally, ``ring_first_row``. Attends
-                ``kv[ring_first_row:ring_first_row + ring_valid]`` and
-                ``selected_kv[selected_row_offset:selected_row_offset + selected_valid]``.
-                ``ring_valid`` must be at least 1 and ``ring_first_row`` a multiple of 32. Read on device,
-                so it may change under a trace.
+                ``[ring_valid, selected_valid]`` and, optionally, ``ring_first_row`` and then
+                ``selected_first_row``. Attends ``kv[ring_first_row:ring_first_row + ring_valid]`` and
+                ``selected_valid`` rows of ``selected_kv`` from row ``selected_row_offset + selected_first_row``.
+                ``ring_valid`` must be at least 1, ``ring_first_row`` and ``selected_first_row`` multiples
+                of 32. Read on device, so it may change under a trace.
 
         Keyword Args:
             selected_kv (Optional[ttnn.Tensor]): ``[1, 1, rows, head_dim]`` TILE with kv's dtype.
             selected_row_offset (int): row of ``selected_kv`` holding selected row 0, a multiple of 32.
             ring_rows (int): most ring rows attended (one session's ring in a shared ``kv``), a multiple
                 of ``k_chunk_size``; 0 for all of kv's rows.
+            selected_rows (int): most selected rows attended (one session's rows in a shared
+                ``selected_kv``), a multiple of ``k_chunk_size``; 0 for all rows past ``selected_row_offset``.
             attention_sink (Optional[ttnn.Tensor]): bfloat16 TILE ``[heads, 32]``, ``sink / scale`` in
                 column 0.
             scale (Optional[float]): softmax scale, default ``head_dim ** -0.5``.
@@ -63,6 +65,7 @@ void bind_flash_mqa_decode(::nanobind::module_& mod) {
         nb::arg("selected_kv") = std::nullopt,
         nb::arg("selected_row_offset") = 0,
         nb::arg("ring_rows") = 0,
+        nb::arg("selected_rows") = 0,
         nb::arg("attention_sink") = std::nullopt,
         nb::arg("scale") = std::nullopt,
         nb::arg("k_chunk_size") = 64,

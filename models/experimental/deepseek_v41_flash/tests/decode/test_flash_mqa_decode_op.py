@@ -223,6 +223,58 @@ def test_flash_mqa_decode_session_slots(device, reset_seeds):
     assert device.num_program_cache_entries() == cache_entries
 
 
+def test_flash_mqa_decode_selected_slots(device, reset_seeds):
+    """Several sessions' rings and selected rows (the server's ``dense_kv`` slots): ``selected_rows`` caps the
+    selected segment at ``index_topk`` and the lengths' fourth entry picks its slot, rewritten on device."""
+    slots = 3
+    q = torch.randn(HEADS, HEAD_DIM).bfloat16().float()
+    rings = torch.randn(slots * WINDOW, HEAD_DIM).bfloat16().float()
+    dense = torch.randn(slots * INDEX_TOPK, HEAD_DIM).bfloat16().float()
+    sinks = torch.randn(HEADS)
+    tt_q = ttnn.from_torch(
+        q.reshape(1, 1, HEADS, HEAD_DIM),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=_q_memory_config(device),
+    )
+    tt_rings = ttnn.from_torch(
+        rings.reshape(1, 1, slots * WINDOW, HEAD_DIM), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    tt_dense = ttnn.from_torch(
+        dense.reshape(1, 1, slots * INDEX_TOPK, HEAD_DIM), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    sink_tile = torch.zeros(HEADS, ttnn.TILE_SIZE)
+    sink_tile[:, 0] = sinks / SCALE
+    tt_sink = ttnn.from_torch(sink_tile, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_lengths = ttnn.from_torch(torch.tensor([[1, 0, 0, 0]], dtype=torch.int32), dtype=ttnn.int32, device=device)
+
+    cache_entries = None
+    for slot, ring_len, selected_len in ((0, 128, 512), (2, 128, 512), (1, 40, 3), (2, 128, 300), (1, 1, 0)):
+        host = torch.tensor([[ring_len, selected_len, slot * WINDOW, slot * INDEX_TOPK]], dtype=torch.int32)
+        ttnn.copy_host_to_device_tensor(ttnn.from_torch(host, dtype=ttnn.int32), tt_lengths)
+        tt_out = ttnn.experimental.deepseek.flash_mqa_decode(
+            tt_q,
+            tt_rings,
+            tt_lengths,
+            selected_kv=tt_dense,
+            ring_rows=WINDOW,
+            selected_rows=INDEX_TOPK,
+            attention_sink=tt_sink,
+            scale=SCALE,
+        )
+        actual = ttnn.to_torch(tt_out).float().reshape(HEADS, HEAD_DIM)
+        ring = rings[slot * WINDOW : (slot + 1) * WINDOW]
+        selected = dense[slot * INDEX_TOPK : (slot + 1) * INDEX_TOPK]
+        expected = _reference(q, ring, selected, ring_len, selected_len, sinks)
+        passing, pcc = comp_pcc(expected, actual, 0.999)
+        logger.info(f"slot {slot} ring {ring_len} selected {selected_len}: PCC {pcc}")
+        assert passing, f"slot {slot} ring {ring_len} selected {selected_len}: PCC {pcc}"
+        if cache_entries is None:
+            cache_entries = device.num_program_cache_entries()
+    assert device.num_program_cache_entries() == cache_entries
+
+
 @pytest.mark.parametrize(
     "ring_len, selected_len",
     (

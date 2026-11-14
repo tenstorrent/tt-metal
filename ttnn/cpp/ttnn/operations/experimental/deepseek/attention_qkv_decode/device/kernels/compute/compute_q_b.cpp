@@ -17,6 +17,9 @@
 //
 // The row carries q_a unnormalized, and q_a times gamma from scaled_q_a_first: the RMSNorm scale, one
 // scalar, commutes with the matmul, so it is applied to the Nc results rather than to q_a's tiles.
+//
+// COMP (on is_comp cores): first tokens @ this core's w_comp slab, one 1x32 tile, for the writer to put in
+// comp_output. It runs while the hub is still gathering the row.
 using namespace ckernel;
 void kernel_main() {
     constexpr uint32_t q_lora_tiles = get_arg(args::q_lora_tiles);
@@ -48,6 +51,34 @@ void kernel_main() {
     CircularBuffer scale_cb(scale_cb_id);
     CircularBuffer tmp_cb(tmp_cb_id);
     CircularBuffer out_cb(out_cb_id);
+
+#ifdef COMP
+    if (get_arg(args::is_comp) != 0) {
+        constexpr uint32_t k_tiles = get_arg(args::k_tiles);
+        constexpr uint32_t in0_cb_id = dfb::in0;
+        constexpr uint32_t w_comp_cb_id = dfb::w_comp;
+        constexpr uint32_t comp_x_cb_id = dfb::comp_x;
+        CircularBuffer in0_cb(in0_cb_id);
+        CircularBuffer w_comp_cb(w_comp_cb_id);
+        CircularBuffer comp_x_cb(comp_x_cb_id);
+        compute_kernel_hw_startup<SrcOrder::Reverse>(in0_cb_id, w_comp_cb_id, comp_x_cb_id);
+        in0_cb.wait_front(k_tiles);
+        w_comp_cb.wait_front(k_tiles);
+        custom_mm_block_init_short<false, layout>(in0_cb_id, w_comp_cb_id, comp_x_cb_id, 1);
+        pack_block_contiguous_init(comp_x_cb_id);
+        comp_x_cb.reserve_back(1);
+        tile_regs_acquire();
+        custom_mm_block<layout, true>(in0_cb_id, w_comp_cb_id, 0, 0, 0, k_tiles, 1);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_block_contiguous(0, comp_x_cb_id, 1);
+        tile_regs_release();
+        custom_mm_block_uninit<layout>(comp_x_cb_id);
+        comp_x_cb.push_back(1);
+        in0_cb.pop_front(k_tiles);
+        w_comp_cb.pop_front(k_tiles);
+    }
+#endif
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(row_cb_id, w_cb_id, mm_out_cb_id);
     row_cb.wait_front(row_tiles);

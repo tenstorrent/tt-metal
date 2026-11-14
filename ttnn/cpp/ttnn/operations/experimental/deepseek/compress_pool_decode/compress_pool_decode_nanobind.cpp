@@ -47,6 +47,23 @@ void bind_compress_pool_decode(::nanobind::module_& mod) {
             sin (Optional[ttnn.Tensor]): ``[1, 1, 1, rope_dim]`` bfloat16 32x32 TILE DRAM.
             do_pool (bool): whether to pool, RMSNorm, and emit outputs (default ``True``).
 
+        With ``cos`` / ``sin`` the op can also write the closed group's entry in place
+        (``Dk = index_head_dim``, a multiple of 32 at least ``rope_dim``):
+
+            index_wk (Optional[ttnn.Tensor]): ``[Dh, Dk]`` (K, N) bfloat16 32x32 TILE DRAM.
+            index_norm_weight (Optional[ttnn.Tensor]): ``[1, 1, 1, Dk]`` bfloat16 (TILE or ROW_MAJOR DRAM).
+            idx_key_cache (Optional[ttnn.Tensor]): ``[n_blocks, 1, block_rows, Dk]`` bfloat16 TILE DRAM; gets
+                ``rope(rms_norm(latent @ index_wk, index_norm_weight, epsilon))`` at logical row ``entry``.
+            comp_kv (Optional[ttnn.Tensor]): ``[n_blocks, 1, block_rows, Dh]`` bfloat16 ROW_MAJOR DRAM; gets
+                ``roped_row`` at logical row ``entry``.
+            page_table (Optional[ttnn.Tensor]): ``[rows, n_blocks]`` int32 ROW_MAJOR DRAM mapping both pools'
+                logical blocks to physical ones.
+            entry (Optional[ttnn.Tensor]): ``[1]`` int32 logical row of ``idx_key_cache`` / ``comp_kv``.
+            page_row (Optional[ttnn.Tensor]): ``[1]`` int32 row of ``page_table`` (default 0).
+            dense_kv (Optional[ttnn.Tensor]): ``[1, 1, rows, Dh]`` bfloat16 TILE DRAM; gets ``roped_row``.
+            dense_entry (Optional[ttnn.Tensor]): ``[1]`` int32 row of ``dense_kv``; ``-1`` skips the write.
+            key_row (Optional[ttnn.Tensor]): ``[1, 1, 1, Dk]`` bfloat16 ROW_MAJOR DRAM; also gets the key.
+
         Returns:
             List[ttnn.Tensor]:
                 - ``[]`` if ``do_pool`` is ``False``.
@@ -65,7 +82,17 @@ void bind_compress_pool_decode(::nanobind::module_& mod) {
         nb::arg("prev_slot") = std::nullopt,
         nb::arg("cos") = std::nullopt,
         nb::arg("sin") = std::nullopt,
-        nb::arg("do_pool") = true);
+        nb::arg("do_pool") = true,
+        nb::arg("index_wk") = std::nullopt,
+        nb::arg("index_norm_weight") = std::nullopt,
+        nb::arg("idx_key_cache") = std::nullopt,
+        nb::arg("comp_kv") = std::nullopt,
+        nb::arg("page_table") = std::nullopt,
+        nb::arg("entry") = std::nullopt,
+        nb::arg("page_row") = std::nullopt,
+        nb::arg("dense_kv") = std::nullopt,
+        nb::arg("dense_entry") = std::nullopt,
+        nb::arg("key_row") = std::nullopt);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek::detail

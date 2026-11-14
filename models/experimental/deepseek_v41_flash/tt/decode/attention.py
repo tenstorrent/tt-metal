@@ -27,8 +27,9 @@ so in each step the layers have to run in order. Compressed layers decode one us
 
 The selected rows sit in a tiled ``[ring | selected]`` buffer the group shares (``sel_tile``),
 refreshed only by a select. A single-row step's SDPA (``flash_mqa_decode``) reads the layer's ring
-(its session's slot of it) and ``sel_tile``'s selected rows as two segments; a multi-row step first
-copies the ring over rows ``[0, window)``.
+(its session's slot of it) and ``sel_tile``'s selected rows as two segments, or, while the select keeps
+every entry, the session's ``dense_kv`` rows in place; a multi-row step first copies the ring over rows
+``[0, window)``.
 
 ``decode`` with ``S > 1`` steps ``S`` consecutive positions of one session at once (DSpark's
 parallel verify, ``DSPARK_PARALLEL_VERIFY.md``), equal to ``S`` single-row ``decode`` steps.
@@ -76,6 +77,7 @@ from models.experimental.deepseek_v4_flash.tt.layers import (
     Linear,
     LinearDecode,
     _core_grid_contains,
+    _receiver_cores_in_order,
     _slab_bytes,
     fused_rms_norm_gamma_memory_config,
 )
@@ -100,9 +102,17 @@ DECODE_LAYOUTS = {
 # A one-row step without a scoring select runs q, kv and ring write as one ``attention_qkv_decode``
 # (``DEEPSEEK_V41_FUSED_QKV=0``: q_a, q_b, kv, their RoPE and the ring write as separate ops).
 _FUSED_QKV = os.environ.get("DEEPSEEK_V41_FUSED_QKV", "1") not in ("0", "", "false", "False")
-# Up to ``index_topk`` entries the select keeps every entry, so a one-row step's select copies the session's
-# entries out of ``dense_kv`` instead of scoring them (``DEEPSEEK_V41_DENSE_SELECT=0``: always score).
+# Up to ``index_topk`` entries the select keeps every entry, so a one-row step attends the session's entries
+# in ``dense_kv`` instead of scoring them (``DEEPSEEK_V41_DENSE_SELECT=0``: always score).
 DENSE_SELECT = os.environ.get("DEEPSEEK_V41_DENSE_SELECT", "1") not in ("0", "", "false", "False")
+# The compressor's wkv / wgate as one bfloat8_b projection split by column over the TP ranks (each rank its
+# Dh / TP kv and gate columns at full K), whose rows one all-gather assembles; a one-row step through
+# attention_qkv_decode computes those columns on its q_b cores. ``DEEPSEEK_V41_COLUMN_COMPRESSOR=0``: two
+# bfloat16 row-parallel projections and their all-reduces.
+COLUMN_COMPRESSOR = os.environ.get("DEEPSEEK_V41_COLUMN_COMPRESSOR", "1") not in ("0", "", "false", "False")
+# A pooling step's compress_pool_decode also writes the closed group's index key, comp_kv and dense_kv rows
+# (``DEEPSEEK_V41_FUSED_POOL_WRITES=0``: index_wk, k_norm, RoPE and paged_update_cache as separate ops).
+FUSED_POOL_WRITES = os.environ.get("DEEPSEEK_V41_FUSED_POOL_WRITES", "1") not in ("0", "", "false", "False")
 # attention_qkv_decode's core roles on the 12x10 grid: the tokens replica covers it, q_a's 40 and kv's 16
 # cores hold one output tile and one [K, 32] weight slab each.
 _FUSED_QKV_GRID = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 9))})
@@ -401,8 +411,8 @@ class DeepSeekV41LayerCache(_StaticLayerCache):
     ``dense_kv`` (TILE DRAM ``[1, 1, N * index_topk, Dh]``, beside ``comp_kv``) holds each session's first
     ``index_topk`` compressed entries in entry order, session slot ``s`` at rows ``[s * index_topk, (s + 1) *
     index_topk)``. While a group has at most ``index_topk`` entries the select keeps all of them, so a dense
-    select (:meth:`DeepSeekV41Attention.decode` with ``dense``) copies the slot's rows into ``sel_tile``
-    instead of scoring. Every step that writes an entry below ``index_topk`` writes it here too.
+    step (:meth:`DeepSeekV41Attention.decode` with ``dense``) attends the slot's rows here in place instead of
+    scoring them into ``sel_tile``. Every step that writes an entry below ``index_topk`` writes it here too.
 
     Under speculative decode a ratio > 1 kv source's ``win_kv`` / ``win_gate`` are deeper than the ratio
     (``[1, 1, rows, Dh]``, row ``pos % rows``): a rejected draft's row then lands in a slot of its own, and
@@ -521,14 +531,16 @@ class DeepSeekV41Attention(DeepSeekV4Module):
     """V4.1 decode attention for layer ``layer_idx``.
 
     ``weights`` comes from :func:`~..config.attention_weights`. Weights the checkpoint keeps
-    in bf16 (compressor, index ``wk`` / ``weights_proj``) stay bf16; the rest use
-    ``weight_dtype``.
+    in bf16 (index ``wk`` / ``weights_proj``) stay bf16, the compressor's wkv / wgate are bfloat8_b
+    (bf16 with :data:`COLUMN_COMPRESSOR` off); the rest use ``weight_dtype``.
 
     ``tp_size > 1`` expects a 1xTP ``device``: q_a and kv stay full-width on every rank, q_b
     is head-sharded, o_a runs on each rank's complete output groups and the row-parallel o_b
-    all-reduces its partials. The compressor and the indexer projections are replicated, so every
-    rank writes the same caches; the select scores a share of the keys on each rank and merges
-    (see :class:`DeepSeekV41Indexer`), so every rank still selects the same rows.
+    all-reduces its partials. The compressor's wkv / wgate are column-split (row-parallel and
+    all-reduced with :data:`COLUMN_COMPRESSOR` off) and its rows gathered, and the indexer projections
+    are replicated, so every rank writes the same caches; the select scores a share of the keys on each
+    rank and merges (see :class:`DeepSeekV41Indexer`), so every rank still selects the same rows.
+    A one-row step through ``attention_qkv_decode`` computes the compressor's columns inside it.
 
     ``use_prefetcher`` streams q_a, q_b, kv, o_a and o_b through the rings of
     :func:`~.decode_prefetch.prefetch_rings`, in ``prefetch_buffers``; a ``fused_qkv`` layer's one-row steps run
@@ -745,7 +757,58 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         self.needs_normed_input = self.is_kv_source and self.compress_ratio > 1
         # A source's new entry reaches the compressed KV through its own select.
         assert self.is_index_source or not self.is_kv_source
-        if self.is_kv_source:
+        self.comp_proj = self.comp_kv_proj = self.comp_gate_proj = None
+        self.fused_comp_row = None
+        if self.is_kv_source and COLUMN_COMPRESSOR:
+            # Rank r's columns: wkv's r-th Dh / TP rows of [N, K], then wgate's. Every rank reads its own
+            # columns at full K, so the ranks' rows only need gathering, not summing. One 1x32 output tile
+            # per B core, kv's B cores first, then the rest of the tokens replica's: the slab per tile is
+            # the one attention_qkv_decode reads for it.
+            comp_kv_w = _fold_input_gain(weights["compressor.wkv.weight"], input_gain)
+            comp_gate_w = (
+                _fold_input_gain(weights["compressor.wgate.weight"], input_gain) if self.compress_ratio > 1 else None
+            )
+            comp_cols = self.head_dim // tp_size
+            comp_n = comp_cols * (2 if comp_gate_w is not None else 1)
+
+            def comp_weight():
+                parts = [w() if callable(w) else w for w in (comp_kv_w, comp_gate_w) if w is not None]
+                return torch.cat([p[r * comp_cols : (r + 1) * comp_cols] for r in range(tp_size) for p in parts])
+
+            comp_blocks = comp_n // ttnn.TILE_SIZE
+            comp_cores = _receiver_cores_in_order(self.kv_proj.b_core_grid())
+            taken = {(c.x, c.y) for c in comp_cores}
+            comp_cores += [
+                c for c in _receiver_cores_in_order(self._decode_activation_grid()) if (c.x, c.y) not in taken
+            ]
+            self.comp_proj = LinearDecode(
+                comp_weight,
+                device,
+                cache.file(f"compressor.{'wkv_wgate' if comp_gate_w is not None else 'wkv'}.col{tp_size}{fold_tag}"),
+                dtype=ttnn.bfloat8_b,
+                K=DECODE_LAYOUTS["compressor.wkv"]["K"],
+                N=comp_n,
+                n_blocks=comp_blocks,
+                mesh_mapper=ttnn.ShardTensorToMesh(device, dim=-1) if tp_size > 1 else None,
+                use_rm_hs=True,
+                dram_sharded_weight=True,
+                b_core_grid=(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(c, c) for c in comp_cores[:comp_blocks]})
+                    if len(comp_cores) >= comp_blocks
+                    else None
+                ),
+            )
+            if self.fused_qkv:
+                # attention_qkv_decode's compressor columns of one row; every rank writes its own.
+                self.fused_comp_row = ttnn.from_torch(
+                    torch.zeros(1, 1, 1, comp_n),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=replicate,
+                )
+        elif self.is_kv_source:
             # On kv's B cores (its ring's receivers under the prefetcher), which the decode
             # all-gather replica of the tokens already covers. Under TP both are row-parallel: the
             # matmuls are DRAM-bandwidth bound, and a replicated weight has every rank read all of it.
@@ -781,6 +844,7 @@ class DeepSeekV41Attention(DeepSeekV4Module):
                 if self.compress_ratio > 1
                 else None
             )
+        if self.is_kv_source:
             self.comp_norm = DeepSeekV4RMSNorm(
                 weights["compressor.norm.weight"], self.eps, device, cache.file("compressor.norm"), sharded=True
             )
@@ -879,9 +943,10 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         kv = _apply_rope(kv, cos, sin, self.rot, self.rope_dim)
         return q, kv, q_a
 
-    def _fused_qkv_into_ring(self, tokens, cos, sin, ring, sliding_pos):
+    def _fused_qkv_into_ring(self, tokens, cos, sin, ring, sliding_pos, comp: bool = False):
         """:meth:`_qkv` of one row as attention_qkv_decode, writing its kv into ``ring`` at ``sliding_pos``.
-        ``tokens`` is the replica on ``_FUSED_QKV_GRID``; returns q ``[1, 1, H_local, Dh]`` as SDPA reads it."""
+        ``tokens`` is the replica on ``_FUSED_QKV_GRID``; returns q ``[1, 1, H_local, Dh]`` as SDPA reads it.
+        ``comp`` also writes this rank's compressor columns of the row into ``fused_comp_row``."""
         _profile(self.device)
         pipes = []
         if self.fused_pipes is not None:
@@ -902,16 +967,30 @@ class DeepSeekV41Attention(DeepSeekV4Module):
             sliding_pos,
             epsilon=self.eps,
             prefetcher_pipes=pipes,
+            w_comp=self.comp_proj.weight if comp else None,
+            comp_output=self.fused_comp_row if comp else None,
         )
 
-    def _sdpa(self, q, kv, mask, sdpa_cur_pos, memory_config, sdpa_lengths=None, selected_kv=None, cos=None, sin=None):
+    def _sdpa(
+        self,
+        q,
+        kv,
+        mask,
+        sdpa_cur_pos,
+        memory_config,
+        sdpa_lengths=None,
+        selected_kv=None,
+        selected_row_offset=0,
+        cos=None,
+        sin=None,
+    ):
         """SDPA-decode of ``q`` ``[1, B, H_local, Dh]`` over K == V ``kv`` ``[B or 1, 1, Skv, Dh]``.
 
         Exactly one of ``sdpa_cur_pos`` (causal, ``[B]``) / ``mask`` (additive ``[B or 1, 1, 1, Skv]``) /
-        ``sdpa_lengths`` bounds the KV axis. ``sdpa_lengths`` (INT32 ``[..., 2 or 3]``, ``B == 1``) attends
+        ``sdpa_lengths`` bounds the KV axis. ``sdpa_lengths`` (INT32 ``[..., 2, 3 or 4]``, ``B == 1``) attends
         ``[0]`` ring rows of ``kv`` from row ``[2]`` (0 when absent: a session slot's ring in a shared
-        ``kv``) and the first ``[1]`` selected rows, rows ``window ..`` of ``selected_kv``, with
-        ``flash_mqa_decode``.
+        ``kv``) and the first ``[1]`` selected rows of ``selected_kv`` from row ``selected_row_offset + [3]``
+        (``[3]`` 0 when absent: a session slot's rows in a shared ``dense_kv``), with ``flash_mqa_decode``.
         """
         if sdpa_lengths is not None:
             return ttnn.experimental.deepseek.flash_mqa_decode(
@@ -919,8 +998,9 @@ class DeepSeekV41Attention(DeepSeekV4Module):
                 kv,
                 sdpa_lengths,
                 selected_kv=selected_kv,
-                selected_row_offset=self.window if selected_kv is not None else 0,
+                selected_row_offset=selected_row_offset,
                 ring_rows=self.window,
+                selected_rows=self.index_topk if selected_kv is not None else 0,
                 attention_sink=self.sdpa_sinks_tt,
                 scale=self.scaling,
                 k_chunk_size=_FLASH_MQA_K_CHUNK,
@@ -951,14 +1031,26 @@ class DeepSeekV41Attention(DeepSeekV4Module):
             q, kv, kv, is_causal=False, attn_mask=mask, **sdpa_kwargs
         )
 
-    def _attend(self, q, kv, mask, cos, neg_sin, sdpa_cur_pos=None, sdpa_lengths=None, selected_kv=None):
+    def _attend(
+        self,
+        q,
+        kv,
+        mask,
+        cos,
+        neg_sin,
+        sdpa_cur_pos=None,
+        sdpa_lengths=None,
+        selected_kv=None,
+        selected_row_offset=0,
+    ):
         """SDPA-decode of packed ``q`` ``[1, 1, B, H_local*Dh]`` (or :meth:`_fused_qkv_into_ring`'s
         ``[1, 1, H_local, Dh]``) over the dense K == V ``kv``, output RoPE, then o_a and o_b.
 
         ``B`` is the users, or one session's ``B`` rows (``kv`` ``[B, 1, Skv, Dh]``, row ``j``'s keys at batch
         ``j``). Exactly one of ``sdpa_cur_pos`` (causal, ``[B]``) / ``mask`` (additive ``[1 or B, 1, 1, Skv]``) /
-        ``sdpa_lengths`` (``B == 1``, with ``selected_kv``, see :meth:`_sdpa`) bounds the KV axis. ``cos`` /
-        ``neg_sin`` are :meth:`decode`'s. Returns the block's output on packed rows, ``[1, 1, B, D]``.
+        ``sdpa_lengths`` (``B == 1``, with ``selected_kv`` / ``selected_row_offset``, see :meth:`_sdpa`) bounds the
+        KV axis. ``cos`` / ``neg_sin`` are :meth:`decode`'s. Returns the block's output on packed rows,
+        ``[1, 1, B, D]``.
         """
         h, dh = self.local_num_heads, self.head_dim
         sdpa_ready = q.shape[-1] == dh
@@ -987,7 +1079,18 @@ class DeepSeekV41Attention(DeepSeekV4Module):
             # Fuse inverse RoPE into flash_mqa_decode on Blackhole and write directly to out_mem (core (0,0)),
             # so o_a's all_gather_for_matmul multicasts straight from (0,0) with no separate RoPE or gather.
             if self.device.arch() == ttnn.Arch.BLACKHOLE:
-                attn = self._sdpa(q, kv, mask, sdpa_cur_pos, out_mem, sdpa_lengths, selected_kv, cos=cos, sin=neg_sin)
+                attn = self._sdpa(
+                    q,
+                    kv,
+                    mask,
+                    sdpa_cur_pos,
+                    out_mem,
+                    sdpa_lengths,
+                    selected_kv,
+                    selected_row_offset,
+                    cos=cos,
+                    sin=neg_sin,
+                )
             else:
                 head_per_core = ttnn.MemoryConfig(
                     ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -1000,7 +1103,9 @@ class DeepSeekV41Attention(DeepSeekV4Module):
                         ttnn.ShardOrientation.ROW_MAJOR,
                     ),
                 )
-                attn = self._sdpa(q, kv, mask, sdpa_cur_pos, head_per_core, sdpa_lengths, selected_kv)
+                attn = self._sdpa(
+                    q, kv, mask, sdpa_cur_pos, head_per_core, sdpa_lengths, selected_kv, selected_row_offset
+                )
                 attn = _apply_rope(attn, cos, neg_sin, self.rot, self.rope_dim)
             return self._project_out(attn)
         attn = self._sdpa(q, kv, mask, sdpa_cur_pos, out_mem, sdpa_lengths=sdpa_lengths, selected_kv=selected_kv)
@@ -1045,8 +1150,10 @@ class DeepSeekV41Attention(DeepSeekV4Module):
     def _compressor_rows(self, tokens, to_dram: bool = True):
         """The compressor's ``kv`` / ``gate`` projections of the packed tokens, DRAM ``[1, 1, M, Dh]``
         each (``gate`` is ``None`` at ratio 1). ``to_dram=False`` leaves them as the matmuls wrote them,
-        ROW_MAJOR width-sharded over kv's B cores."""
+        ROW_MAJOR width-sharded over kv's B cores (the column-split ``comp_proj`` always gives DRAM rows)."""
         m = _packed_users(tokens)
+        if self.comp_proj is not None:
+            return self._gather_compressor_rows(self.comp_proj(_decode_activation(self.comp_proj, tokens)), m)
         local = tokens
         if self.tp_size > 1:
             # Each rank keeps its K-slice of every replica row, in place on the replica's cores.
@@ -1073,6 +1180,40 @@ class DeepSeekV41Attention(DeepSeekV4Module):
             ]
         return rows[0], rows[1] if len(rows) > 1 else None
 
+    def _gather_compressor_rows(self, local, m: int):
+        """``kv`` / ``gate`` DRAM ``[1, 1, M, Dh]`` (``gate`` ``None`` at ratio 1) from each rank's ``comp_proj``
+        columns ``local`` ``[M, Dh / TP]`` of kv, then of gate: gathered, a row is every rank's kv columns and
+        gate columns interleaved. Deallocates ``local`` unless it is ``fused_comp_row``."""
+        owned = local is not self.fused_comp_row
+        rows = local
+        if local.memory_config().buffer_type != ttnn.BufferType.DRAM:
+            rows = ttnn.to_memory_config(local, ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(local)
+        rows = ttnn.reshape(rows, [1, 1, m, rows.shape[-1]])
+        if self.tp_size > 1:
+            gathered = ttnn.all_gather(
+                rows,
+                dim=3,
+                cluster_axis=_tp_cluster_axis(self.device),
+                num_links=1,
+                topology=CCL_TOPOLOGY,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            if owned:
+                ttnn.deallocate(rows)
+            rows, owned = gathered, True
+        if self.compress_ratio == 1:
+            return ttnn.reshape(rows, [1, 1, m, self.head_dim]), None
+        cols = self.head_dim // self.tp_size
+        pairs = ttnn.reshape(rows, [1, m * self.tp_size, 2, cols])
+        kv, gate = (
+            ttnn.reshape(ttnn.slice(pairs, [0, 0, i, 0], [1, m * self.tp_size, i + 1, cols]), [1, 1, m, self.head_dim])
+            for i in (0, 1)
+        )
+        if owned:
+            ttnn.deallocate(rows)
+        return kv, gate
+
     def _tp_sum_rows(self, partial, m: int):
         """Sum a row-parallel projection's ``[M, N]`` partials over the TP ranks, keeping ``partial``'s layout."""
         if m == 1:
@@ -1095,23 +1236,48 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         ttnn.deallocate(partial)
         return out
 
-    def _pooled_latent(self, kv, gate, scache, win_slot, pool: bool, cos_win, sin_win):
+    def _pooled_latent(
+        self, kv, gate, scache, win_slot, pool: bool, cos_win, sin_win, entry, page_row, dense: bool, dense_entry
+    ):
         """:meth:`_latent` of one row of one session as ``compress_pool_decode``, which also RoPEs the closed group:
         ``(latent, row)``, the pre-RoPE latent (TILE DRAM ``[1, 1, 1, Dh]``) and its RoPE'd row (ROW_MAJOR DRAM),
-        else ``(None, None)``. ``kv`` / ``gate`` are :meth:`_compressor_rows` of the row, DRAM or sharded."""
+        else ``(None, None)``. ``kv`` / ``gate`` are :meth:`_compressor_rows` of the row, DRAM or sharded.
+
+        With :data:`FUSED_POOL_WRITES` a pooling step also does the select's writes of the closed group (what
+        :meth:`_write_index_key` and :meth:`_write_entries` do): its index key into ``idx_key_cache`` row ``entry``
+        (and ``scache.new_key_row``), and with ``dense_entry`` its row into ``dense_kv`` and, when ``dense``,
+        ``comp_kv``.
+        """
         windows = {}
         if self.compress_ratio > 1:
             assert (
                 scache.win_kv.shape[2] == self.compress_ratio
             ), "a window deeper than the ratio pairs through win_prev"
             windows = dict(gate=gate, win_kv=scache.win_kv, win_gate=scache.win_gate, win_slot=win_slot)
+        writes = {}
+        if pool:
+            writes = dict(cos=cos_win, sin=sin_win)
+        if pool and FUSED_POOL_WRITES:
+            writes.update(
+                index_wk=self.index_wk.weight,
+                index_norm_weight=self.index_k_norm.weight,
+                idx_key_cache=scache.idx_key_cache,
+                page_table=scache.idx_page_table,
+                entry=entry,
+                page_row=page_row,
+                key_row=scache.new_key_row,
+            )
+            if dense_entry is not None:
+                writes.update(dense_kv=scache.dense_kv, dense_entry=dense_entry)
+                if dense:
+                    writes.update(comp_kv=scache.comp_kv)
         outs = ttnn.experimental.deepseek.compress_pool_decode(
             kv,
             self.comp_norm_weight,
             epsilon=self.eps,
             do_pool=pool,
             **windows,
-            **(dict(cos=cos_win, sin=sin_win) if pool else {}),
+            **writes,
         )
         return (outs[0], outs[1]) if pool else (None, None)
 
@@ -1301,7 +1467,7 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         dense: bool = False,
         dense_entry: ttnn.Tensor | None = None,
         dense_offset: ttnn.Tensor | None = None,
-        dense_fill: bool = True,
+        dense_fill: bool = False,
     ) -> ttnn.Tensor:
         """One decode step: ``hidden`` ``[B, S, 1, D]`` -> the block's output, same shape.
 
@@ -1335,13 +1501,15 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         ``sliding_pos`` and ``win_slot`` already include those offsets, and ``entry`` stays the
         session's logical row.
 
-        ``dense`` (one row, with ``select``, while the group has at most ``index_topk`` entries) selects every
-        entry: the closed group's row goes into ``comp_kv`` and ``dense_kv``, and ``sel_tile``'s selected rows are
-        copied from the session's ``dense_kv`` rows (from row ``dense_offset``, INT32 ``[1]``; row 0 when ``None``)
-        instead of scored. ``dense_entry`` (INT32, one per ``entry``, or per ``received_entry``) is the ``dense_kv``
-        row of each entry this step writes: the slot's first row plus the entry, ``-1`` from ``index_topk`` on.
-        Without it no step writes ``dense_kv``. ``dense_fill=False`` skips that copy, for an index source whose group
-        already had ``sel_tile`` refreshed this step by an earlier index source sharing it.
+        ``dense`` (one row, while the group has at most ``index_topk`` entries) selects every entry: SDPA attends the
+        session's ``dense_kv`` rows in place, from row ``sdpa_lengths[3]`` (the slot's first row; absent with one
+        session's ``dense_kv``), so ``dense_kv`` must already hold this step's entry. With ``select`` the closed
+        group's row goes into ``comp_kv`` and ``dense_kv`` instead of being scored. ``dense_entry`` (INT32, one per
+        ``entry``, or per ``received_entry``) is the ``dense_kv`` row of each entry this step writes: the slot's first
+        row plus the entry, ``-1`` from ``index_topk`` on. Without it no step writes ``dense_kv``. ``dense_fill``
+        (with ``select``) also copies the slot's rows (from row ``dense_offset``, INT32 ``[1]``; row 0 when ``None``)
+        into ``sel_tile``, for a later stage that attends ``sel_tile`` without a ``dense_kv`` of its own; a step
+        without ``sdpa_lengths`` always copies them, since it attends ``sel_tile``.
         """
         b, s, _, d = hidden.shape
         assert (
@@ -1391,31 +1559,54 @@ class DeepSeekV41Attention(DeepSeekV4Module):
                 scache.sel_tile_rows is not None and scache.sel_tile_rows.shape[2] == s * stride
             ), f"build_decode_caches(..., verify_rows={s}) holds this step's selections"
         latent = roped = None
-        if self.is_kv_source:
+        pool_writes = False
+        pooled_step = s == 1 and win_prev is None and win_offset is None and self.device.arch() == ttnn.Arch.BLACKHOLE
+        # attention_qkv_decode computes the compressor's columns of the row too; they are pooled after it.
+        comp_in_qkv = fused and pooled_step and self.fused_comp_row is not None
+        if self.is_kv_source and not comp_in_qkv:
             # V4 marks its CSA/HCA compressor's decode the same way; V4.1 inlines the compressor
             # into this method, so without this the whole compressed path is one ATTENTION blob.
             with _region("COMPRESSOR"):
-                if s == 1 and win_prev is None and win_offset is None and self.device.arch() == ttnn.Arch.BLACKHOLE:
+                if pooled_step:
                     kv, gate = self._compressor_rows(tokens, to_dram=False)
-                    latent, roped = self._pooled_latent(kv, gate, scache, win_slot, pool, cos_win, sin_win)
+                    assert select or not pool, "a closed group is written by the select that follows it"
+                    latent, roped = self._pooled_latent(
+                        kv, gate, scache, win_slot, pool, cos_win, sin_win, entry, page_row, dense, dense_entry
+                    )
+                    pool_writes = pool and FUSED_POOL_WRITES
                 elif s == 1:
                     kv, gate = self._compressor_rows(tokens)
                     latent = self._latent(kv, gate, scache, win_slot, pool, win_prev, win_offset=win_offset)
                 else:
                     kv, gate = self._compressor_rows(tokens)
                     latent = self._latent_rows(kv, gate, scache, win_slot, pool_rows, win_prev)
-        assert latent is None or select, "a closed group is written by the select that follows it"
-        assert received_entry is None or (select and latent is None), "received rows are written by a non-source select"
         assert select or not candidates, "candidates are a select mode"
         if fused:
-            q = self._fused_qkv_into_ring(tokens, cos, sin, scache.kv, sliding_pos)
+            q = self._fused_qkv_into_ring(tokens, cos, sin, scache.kv, sliding_pos, comp=comp_in_qkv)
             q_a = None
+            if comp_in_qkv:
+                with _region("COMPRESSOR"):
+                    kv, gate = self._gather_compressor_rows(self.fused_comp_row, 1)
+                    assert select or not pool, "a closed group is written by the select that follows it"
+                    latent, roped = self._pooled_latent(
+                        kv, gate, scache, win_slot, pool, cos_win, sin_win, entry, page_row, dense, dense_entry
+                    )
+                    pool_writes = pool and FUSED_POOL_WRITES
         else:
             q, kv, q_a = self._qkv(tokens, cos, sin)
             if s == 1:
                 _update_cache_at(scache.kv, kv, sliding_pos)
                 ttnn.deallocate(kv)
-        assert not dense or (select and s == 1 and not candidates), "a dense select is a one-row, one-level select"
+        assert latent is None or select, "a closed group is written by the select that follows it"
+        assert received_entry is None or (select and latent is None), "received rows are written by a non-source select"
+        assert not dense or (s == 1 and not candidates), "a dense select is a one-row, one-level select"
+        assert not dense or scache.dense_kv is not None, "a dense step attends dense_kv"
+        assert (
+            not dense
+            or sdpa_lengths is None
+            or scache.dense_kv.shape[2] == self.index_topk
+            or sdpa_lengths.shape[-1] >= 4
+        ), "with several sessions' dense_kv, sdpa_lengths carries the slot's first dense_kv row"
         if select:
             if not dense:
                 # The select runs on the whole grid; keep q out of its L1 until SDPA.
@@ -1423,7 +1614,8 @@ class DeepSeekV41Attention(DeepSeekV4Module):
                 q = ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG)
             row = None
             if latent is not None:
-                self._write_index_key(latent, cos_win, sin_win, scache, entry, page_row, multi_row=s > 1)
+                if not pool_writes:
+                    self._write_index_key(latent, cos_win, sin_win, scache, entry, page_row, multi_row=s > 1)
                 row = roped if roped is not None else _apply_rope(latent, cos_win, sin_win, self.rot, self.rope_dim)
                 if scache.new_kv_row is not None:
                     if s == 1:
@@ -1434,11 +1626,11 @@ class DeepSeekV41Attention(DeepSeekV4Module):
                 self._write_received_key(scache, received_entry, page_row, multi_row=s > 1)
                 row, entry = (scache.new_kv_row if s == 1 else scache.new_kv_rows), received_entry
             assert not dense or row is None or dense_entry is not None, "a dense select writes its row's comp_kv entry"
-            if row is not None and dense_entry is not None:
+            if row is not None and dense_entry is not None and not pool_writes:
                 # The select op writes new_row into comp_kv itself.
                 self._write_entries(row, scache, entry, dense_entry, page_row, comp_kv=dense)
             if dense:
-                if dense_fill:
+                if dense_fill or sdpa_lengths is None:
                     ttnn.fill_cache(
                         scache.sel_tile,
                         scache.dense_kv,
@@ -1484,7 +1676,17 @@ class DeepSeekV41Attention(DeepSeekV4Module):
             out = self._attend(q, sel, mask, cos, neg_sin, sdpa_cur_pos=sdpa_cur_pos)
             return ttnn.reshape(out, [b, s, 1, d])
         if sdpa_lengths is not None:
-            out = self._attend(q, scache.kv, None, cos, neg_sin, sdpa_lengths=sdpa_lengths, selected_kv=scache.sel_tile)
+            selected, offset = (scache.dense_kv, 0) if dense else (scache.sel_tile, self.window)
+            out = self._attend(
+                q,
+                scache.kv,
+                None,
+                cos,
+                neg_sin,
+                sdpa_lengths=sdpa_lengths,
+                selected_kv=selected,
+                selected_row_offset=offset,
+            )
             return ttnn.reshape(out, [b, s, 1, d])
         if ring_offset is None:
             ttnn.fill_cache(scache.sel_tile, scache.kv, 0)
@@ -1504,9 +1706,9 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         for the ``n`` groups the rows close. ``cos`` / ``sin`` / ``neg_sin`` are TILE ``[1, 1, 1, Rd]`` for one
         row and ROW_MAJOR ``[1, 1, T, Rd]`` (one row per position) otherwise. One row bounds SDPA with
         ``sdpa_lengths`` ``[1, 2]`` instead of ``sdpa_cur_pos`` / ``mask``. ``rows > 1`` also gives
-        ``ring_rows`` (:meth:`_write_causal_rows`) and ``pool_rows``, the rows that close a group. An index source
-        selects ``dense`` while one row's group has at most ``index_topk`` entries, and gets ``dense_entry`` (session
-        slot 0) while a closing group's entry is below ``index_topk``.
+        ``ring_rows`` (:meth:`_write_causal_rows`) and ``pool_rows``, the rows that close a group. A compressed layer
+        is ``dense`` while one row's group has at most ``index_topk`` entries, and an index source gets ``dense_entry``
+        (session slot 0) while a closing group's entry is below ``index_topk``.
         """
         device, window, r = self.device, self.window, self.compress_ratio
         multi = rows > 1
@@ -1562,9 +1764,10 @@ class DeepSeekV41Attention(DeepSeekV4Module):
             below = [p // r if p // r < self.index_topk else -1 for p in positions if (p + 1) % r == 0]
             if below and max(below) >= 0:
                 kw["dense_entry"] = int32_rows(below)
+        # Every compressed layer of a dense group attends dense_kv, which its sources write before it.
+        kw["dense"] = DENSE_SELECT and not multi and counts[0] <= self.index_topk
         if self.is_index_source and counts[-1] > 0:
             kw["select"] = True
-            kw["dense"] = DENSE_SELECT and not multi and counts[0] <= self.index_topk
             # A row with no key yet still selects one; its mask hides the result.
             kw["index_pos"] = int32_rows([_SELECT_KV_RATE * max(n, 1) - 1 for n in counts])
             indexer = self.indexer
