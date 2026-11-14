@@ -456,6 +456,10 @@ sfpi_inline void _calculate_comp_unary_int_(int scalar)
 // a <u b  <=>  (a ^ 0x80000000) <s (b ^ 0x80000000). eq / ne only test bit equality and need no flip.
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
 sfpi_inline void calculate_comp_unary_uint32(const std::uint32_t scalar) {
+    static_assert(
+        COMP_MODE == SfpuType::unary_eq || COMP_MODE == SfpuType::unary_ne || COMP_MODE == SfpuType::unary_gt ||
+            COMP_MODE == SfpuType::unary_ge || COMP_MODE == SfpuType::unary_lt || COMP_MODE == SfpuType::unary_le,
+        "calculate_comp_unary_uint32 supports only unary_eq, unary_ne, unary_gt, unary_ge, unary_lt and unary_le");
     constexpr bool is_equality = COMP_MODE == SfpuType::unary_eq || COMP_MODE == SfpuType::unary_ne;
     constexpr std::uint32_t sign_bit = 0x80000000u;
     const int biased_scalar = static_cast<int>(is_equality ? scalar : scalar ^ sign_bit);
