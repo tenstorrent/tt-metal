@@ -131,18 +131,21 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
                 static_cast<int>(operation_attributes.output_mem_config.memory_layout()));
             TT_FATAL(!operation_attributes.negate, "TILE H-axis split does not support negate (min-reduce)");
         }
-        // INT32 MIN/MAX/SUM is supported via the SFPU reduce path (format deduced from the input CB
+        // INT32/UINT32 MIN/MAX/SUM are supported via the SFPU reduce path (format deduced from the input CB
         // in compute_kernel_lib::reduce). See common.hpp.
-        const bool is_int32_sfpu_reduce = tensor_args.dtype() == DataType::INT32 &&
-                                          use_sfpu_reduce_path(tensor_args.dtype(), operation_attributes.math_op);
-        // UINT32 is not accepted here. ttnn.sum/max/min convert UINT32 to INT32 before reaching this op.
+        const bool is_int_sfpu_reduce = is_int_reduce_dtype(tensor_args.dtype()) &&
+                                        use_sfpu_reduce_path(tensor_args.dtype(), operation_attributes.math_op);
         // MX (Quasar): the unpacker expands MX tiles to Float16_b, the FPU reduces them like bf16, and the packer
         // converts back for an MX output; the scaler ring stays Float16_b.
         TT_FATAL(
             tensor_args.dtype() == DataType::BFLOAT16 || tensor_args.dtype() == DataType::FLOAT32 ||
-                tensor_args.dtype() == DataType::BFLOAT8_B || is_mx(tensor_args.dtype()) || is_int32_sfpu_reduce,
+                tensor_args.dtype() == DataType::BFLOAT8_B || is_mx(tensor_args.dtype()) || is_int_sfpu_reduce,
             "Only FLOAT32, BFLOAT16, BFLOAT8_B and the MX formats are supported for generic reduction "
-            "(INT32 is supported for MAX/MIN/SUM; ttnn.sum/max/min route UINT32 through INT32) - got {}.",
+            "(INT32 and UINT32 are supported for MAX/MIN/SUM) - got {}.",
+            tensor_args.dtype());
+        TT_FATAL(
+            !(tensor_args.dtype() == DataType::UINT32 && tensor_args.device()->arch() == tt::ARCH::QUASAR),
+            "UINT32 reduce is not supported on Quasar, which has no UInt32 format - got {}.",
             tensor_args.dtype());
         TT_FATAL(
             !(is_mx(tensor_args.dtype()) && operation_attributes.negate),
