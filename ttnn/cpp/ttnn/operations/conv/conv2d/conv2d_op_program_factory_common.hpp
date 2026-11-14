@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <vector>
 
 #include "ttnn/operations/conv/conv2d/device/conv2d_device_operation_types.hpp"
 
@@ -80,7 +81,8 @@ std::vector<CBInfo> get_cb_info(
     bool is_1d_depthwise_conv,
     bool skip_act_cb_create,
     uint32_t input_channels_padded,
-    std::optional<uint32_t> reader_indices_actual_page_size = std::nullopt);
+    std::optional<uint32_t> reader_indices_actual_page_size = std::nullopt,
+    bool fp32_partials = false);
 
 const CBInfo& get_cb_info_by_name(const std::vector<CBInfo>& cb_info, Conv2dCb cb_name);
 CBInfo& access_cb_info_by_name(const std::vector<CBInfo>& cb_info, Conv2dCb cb_name);
@@ -128,6 +130,20 @@ void emit_cb_descriptors(
     tt::tt_metal::Buffer* input_buffer,
     tt::tt_metal::Buffer* output_buffer,
     tt::tt_metal::Buffer* indices_buffer);
+
+void mark_fp32_partials_reload(
+    const std::vector<CBInfo>& cb_info,
+    std::vector<tt::tt_metal::UnpackToDestMode>& unpack_to_dest_mode,
+    bool has_bias);
+
+bool partials_format_differs_from_output(const std::vector<CBInfo>& cb_info);
+
+conv_op_l1_usage predicted_conv2d_l1_usage(
+    const Conv2dParams& operation_attributes,
+    const Conv2dInputs& tensor_args,
+    std::optional<uint32_t> reader_indices_actual_page_size);
+
+bool fp32_partials_fit_in_l1(const Conv2dParams& operation_attributes, const Conv2dInputs& tensor_args);
 
 // Descriptor-path equivalent of post_conv2d_op_memory_checks().  Verifies that
 // the sum of non-globally-allocated CB sizes emitted on `desc` matches the L1
