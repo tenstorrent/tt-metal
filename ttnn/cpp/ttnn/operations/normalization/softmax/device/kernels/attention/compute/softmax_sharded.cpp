@@ -76,8 +76,9 @@ void kernel_main() {
     constexpr std::uint32_t block_h = get_arg(args::block_h);
     constexpr std::uint32_t block_w = get_arg(args::block_w);
     constexpr std::uint32_t subblock_w = get_arg(args::subblock_w);
-    constexpr bool causal_mask = get_arg(args::causal_mask) != 0;
+    constexpr bool full_row_mask = get_arg(args::full_row_mask) != 0;
     constexpr bool sharded_causal_mask = get_arg(args::sharded_causal_mask) != 0;
+    constexpr bool mask_per_row = get_arg(args::mask_per_row) != 0;
 #ifdef NUMERIC_STABLE
     constexpr bool numeric_stable = true;
 #else
@@ -135,9 +136,9 @@ void kernel_main() {
     DataflowBuffer dfb_fused_scale_obj(dfb::fused_scale);
     DataflowBuffer dfb_fused_attn_obj(dfb::fused_attn);
     DataflowBuffer dfb_scale_mask_obj(dfb::scale_mask);
-    constexpr auto mask_bcast = causal_mask ? ckl::BroadcastDim::None : ckl::BroadcastDim::Row;
+    constexpr auto mask_bcast = full_row_mask ? ckl::BroadcastDim::None : ckl::BroadcastDim::Row;
     constexpr auto mask_wait = sharded_causal_mask ? ckl::WaitPolicy::None : ckl::WaitPolicy::Upfront;
-    constexpr auto mask_pop = causal_mask ? ckl::PopPolicy::AtEnd : ckl::PopPolicy::None;
+    constexpr auto mask_pop = (mask_per_row || sharded_causal_mask) ? ckl::PopPolicy::AtEnd : ckl::PopPolicy::None;
 #ifdef ARCH_QUASAR
     if constexpr (sharded_causal_mask) {
         // The sharded-resident causal mask borrows the mask shard and, like in0, has no producer: the
@@ -548,7 +549,7 @@ void kernel_main() {
     // A non-causal attention mask is one row of block_w tiles that every row of the block re-waits
     // and reuses, so it is popped once here rather than per row. The causal paths set mask_pop to
     // AtEnd and so pop it inside the loop instead, so don't pop here in that case.
-    if constexpr (!causal_mask) {
+    if constexpr (!mask_per_row && !sharded_causal_mask) {
         dfb_fused_attn_obj.pop_front(block_w);
     }
 #endif  // FUSED_SCALE_MASK
