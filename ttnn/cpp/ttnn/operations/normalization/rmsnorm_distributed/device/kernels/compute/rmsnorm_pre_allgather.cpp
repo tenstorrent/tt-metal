@@ -4,8 +4,9 @@
 
 /*
  * This kernel computes rmsnorm statistics.
- * For rmsnorm we compute E(x**2) and return it as a one tile wide output
- * tensor containing E(x**2) in the left most column per tile.
+ * For rmsnorm we compute the sum of x^2 over the row and return it as a
+ * one tile wide output tensor containing the sum in the left most column
+ * per tile.
  */
 
 #include <cstdint>
