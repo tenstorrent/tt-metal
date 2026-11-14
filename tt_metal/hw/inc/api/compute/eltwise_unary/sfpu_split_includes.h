@@ -176,6 +176,10 @@
 #include "api/compute/eltwise_unary/clamp.h"
 #endif
 
+#ifdef SFPU_OP_HARDSWISH_INCLUDE
+#include "api/compute/eltwise_unary/hardswish.h"
+#endif
+
 #ifdef SFPU_OP_HARDTANH_INCLUDE
 #include "api/compute/eltwise_unary/hardtanh.h"
 #endif
