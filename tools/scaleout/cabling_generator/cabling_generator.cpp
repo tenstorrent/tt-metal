@@ -1829,6 +1829,9 @@ static tt::scaleout_tools::fsd::proto::FactorySystemDescriptor build_factory_sys
         host->set_rack(deployment_host.rack);
         host->set_shelf_u(deployment_host.shelf_u);
         host->set_motherboard(deployment_host.motherboard);
+        if (auto it = host_id_to_node.find(HostId(i)); it != host_id_to_node.end()) {
+            host->set_node_type(it->second->node_descriptor_name);
+        }
         if (auto it = host_id_to_instance_path.find(HostId(i)); it != host_id_to_instance_path.end()) {
             for (const auto& segment : it->second) {
                 host->add_instance_path(segment);
