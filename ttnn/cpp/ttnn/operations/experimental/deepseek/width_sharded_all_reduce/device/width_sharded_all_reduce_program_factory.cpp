@@ -92,12 +92,16 @@ struct CoalescedPlan {
 
 // Pick the fewest reducer cores per link whose ping-pong scratch fits in L1_SMALL (capped so
 // one op never exhausts L1_SMALL for later layers) and whose chunk fits in one fabric packet.
+// With `max_packet_bytes` the chunk is capped by it instead, and the scratch may take L1_SMALL past
+// the cap as long as it leaves the cap's worth free: fewer, larger packets, since the fabric is
+// packet-rate bound at these sizes. Chunks the scratch cannot hold fall back to smaller ones.
 std::optional<CoalescedPlan> plan_coalesced(
     const Tensor& input,
     const Tensor& output,
     uint32_t num_links,
     uint32_t ring_size,
-    const CoreRangeSet& sub_device_cores) {
+    const CoreRangeSet& sub_device_cores,
+    std::optional<uint32_t> max_packet_bytes) {
     const auto input_cores = input.memory_config().shard_spec()->grid;
     const auto output_cores = output.memory_config().shard_spec()->grid;
     const auto output_shard_shape = output.memory_config().shard_spec()->shape;
@@ -134,11 +138,11 @@ std::optional<CoalescedPlan> plan_coalesced(
     const uint64_t l1_small_align = l1_small_enabled ? allocator->get_alignment(BufferType::L1_SMALL) : 16;
     // Leave headroom in L1_SMALL (typically 8 KB) for Engram/MoE scratches and CCL semaphores.
     constexpr uint64_t kL1SmallScratchCap = 2560;
-    const uint64_t l1_small_cap =
-        l1_small_enabled
-            ? std::min<uint64_t>(
-                  allocator->get_statistics(BufferType::L1_SMALL).largest_free_block_bytes, kL1SmallScratchCap)
-            : 0;
+    const uint64_t l1_small_free =
+        l1_small_enabled ? allocator->get_statistics(BufferType::L1_SMALL).largest_free_block_bytes : 0;
+    const uint64_t l1_small_cap = std::min<uint64_t>(l1_small_free, kL1SmallScratchCap);
+    // With max_packet_bytes: any scratch that still leaves the cap's worth of L1_SMALL free.
+    const uint64_t l1_small_wide_cap = l1_small_free > kL1SmallScratchCap ? l1_small_free - kL1SmallScratchCap : 0;
 
     for (uint32_t r_link = 1; r_link <= max_r_link; ++r_link) {
         if (pages_per_link % r_link != 0) {
@@ -149,9 +153,14 @@ std::optional<CoalescedPlan> plan_coalesced(
         if (group_bytes > max_payload_bytes) {
             continue;
         }
+        if (max_packet_bytes.has_value() && group_bytes > *max_packet_bytes) {
+            continue;
+        }
         if (l1_small_enabled) {
             const uint64_t scratch_bytes = tt::align(2ull * ring_size * group_bytes, l1_small_align);
-            if (scratch_bytes > l1_small_cap) {
+            const bool fits =
+                scratch_bytes <= l1_small_cap || (max_packet_bytes.has_value() && scratch_bytes <= l1_small_wide_cap);
+            if (!fits) {
                 continue;
             }
         }
@@ -207,7 +216,8 @@ WidthShardedAllReduceMeshWorkloadFactory::create_mesh_workload(
             tensor_return_value,
             operation_attributes.num_links,
             operation_attributes.ring_size,
-            available_cores)) {
+            available_cores,
+            operation_attributes.max_packet_bytes)) {
         auto scratch = make_coalesced_scratch_tensor(
             tensor_return_value,
             operation_attributes.ring_size,

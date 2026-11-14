@@ -70,6 +70,12 @@ void kernel_main() {
     constexpr bool hidden_row_major = get_compile_time_arg_val(15) != 0;
     // Collapse output tiles: h x 32 chunks of the collapsed row (row-major) or 32x32 tiles (tiled).
     constexpr uint32_t collapse_tiles = get_compile_time_arg_val(16);
+    // The folded mix step (role 0, ROW_MAJOR streams, pre_mix): its weights (see hc_mix_collapse_streams), the
+    // sublayer output's h x 32 chunks and the mixed streams' shard, laid out as cb_hidden.
+    constexpr bool use_mix = get_compile_time_arg_val(17) != 0;
+    [[maybe_unused]] constexpr uint32_t cb_mix_w = get_compile_time_arg_val(18);
+    [[maybe_unused]] constexpr uint32_t cb_mix_sub = get_compile_time_arg_val(19);
+    [[maybe_unused]] constexpr uint32_t cb_mixed = get_compile_time_arg_val(20);
 
     if constexpr (role == 0) {
         // Every tile the row-major collapse handles (parameters, pre, hidden, collapsed row) is h x 32.
@@ -88,7 +94,49 @@ void kernel_main() {
         cb_wait_front(cb_pre, 1);
         pack_reconfig_data_format(cb_collapsed);
 
-        if constexpr (hidden_row_major) {
+        if constexpr (use_mix) {
+            static_assert(
+                !use_mix || (hidden_row_major && use_pre_mix),
+                "the folded mix step takes ROW_MAJOR streams and pre_mix");
+            // Chunk j: stream k's chunk j into Dst k, the sublayer output's into Dst H; the mixed streams come back
+            // in Dst 0..H-1 and the collapse in Dst H (needs a full-sync Dst: H + 1 fp32 tiles).
+            [[maybe_unused]] const volatile tt_l1_ptr uint16_t* pre =
+                reinterpret_cast<const volatile tt_l1_ptr uint16_t*>(get_tile_address(cb_pre, 0));
+            cb_wait_front(cb_mix_w, 1);
+            [[maybe_unused]] const volatile tt_l1_ptr uint16_t* mix_w =
+                reinterpret_cast<const volatile tt_l1_ptr uint16_t*>(get_tile_address(cb_mix_w, 0));
+            // The math thread reads the weights straight from L1; its data cache can hold an earlier program's lines.
+            invalidate_l1_cache();
+            cb_wait_front(cb_hidden, num_streams * collapse_tiles);
+            cb_wait_front(cb_mix_sub, collapse_tiles);
+            cb_reserve_back(cb_mixed, num_streams * collapse_tiles);
+            for (uint32_t j = 0; j < collapse_tiles; ++j) {
+                tile_regs_acquire();
+                copy_init(cb_hidden);
+                for (uint32_t k = 0; k < num_streams; ++k) {
+                    copy_tile(cb_hidden, k * collapse_tiles + j, k);
+                }
+                copy_init(cb_mix_sub);
+                copy_tile(cb_mix_sub, j, num_streams);
+                MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::unused, DST_ACCUM_MODE>()));
+                MATH((ckernel::sfpu::hc_mix_collapse_streams<num_streams>(mix_w, pre)));
+                tile_regs_commit();
+
+                cb_reserve_back(cb_collapsed, 1);
+                tile_regs_wait();
+                for (uint32_t k = 0; k < num_streams; ++k) {
+                    pack_tile<true>(k, cb_mixed, k * collapse_tiles + j);
+                }
+                pack_tile(num_streams, cb_collapsed);
+                tile_regs_release();
+                cb_push_back(cb_collapsed, 1);
+            }
+            // The reader raises the fn dot cores' semaphore on this; the program ends with it unpopped.
+            cb_push_back(cb_mixed, num_streams * collapse_tiles);
+            cb_pop_front(cb_hidden, num_streams * collapse_tiles);
+            cb_pop_front(cb_mix_sub, collapse_tiles);
+            cb_pop_front(cb_mix_w, 1);
+        } else if constexpr (hidden_row_major) {
             // Row k of the [H, D/8] shard is tiles [k * collapse_tiles, (k + 1) * collapse_tiles) of cb_hidden;
             // the SFPU forms sum_k pre[k] * row_k one h x 32 chunk at a time.
             [[maybe_unused]] const volatile tt_l1_ptr uint16_t* pre =

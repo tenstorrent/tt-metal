@@ -20,11 +20,14 @@ struct WidthShardedAllReduceParams {
     std::optional<uint32_t> cluster_axis;
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
     tt::tt_fabric::Topology topology = tt::tt_fabric::Topology::Linear;
+    // Largest payload of one fabric packet, which is one reducer core's group of faces. Unset keeps the
+    // ping-pong scratch inside the L1_SMALL cap (see plan_coalesced).
+    std::optional<uint32_t> max_packet_bytes;
 
-    static constexpr auto attribute_names =
-        std::forward_as_tuple("num_links", "ring_size", "cluster_axis", "sub_device_id", "topology");
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "num_links", "ring_size", "cluster_axis", "sub_device_id", "topology", "max_packet_bytes");
     auto attribute_values() const {
-        return std::make_tuple(num_links, ring_size, cluster_axis, sub_device_id, topology);
+        return std::make_tuple(num_links, ring_size, cluster_axis, sub_device_id, topology, max_packet_bytes);
     }
 };
 

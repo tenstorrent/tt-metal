@@ -20,7 +20,7 @@ over the ranks, each sublayer all-reduces its output, and everything else -- the
 """
 
 import os
-from typing import Optional
+from typing import NamedTuple, Optional
 
 import torch
 import ttnn
@@ -45,6 +45,27 @@ FOLD_INPUT_NORM = os.environ.get("DEEPSEEK_V41_FOLD_INPUT_NORM", "1") not in ("0
 # instead of reading it from DRAM per call.
 FUSED_HC_FN = os.environ.get("DEEPSEEK_V41_FUSED_HC_FN", "1") not in ("0", "", "false", "False")
 HC_FN_IN_L1 = os.environ.get("DEEPSEEK_V41_HC_FN_IN_L1", "0") not in ("0", "", "false", "False")
+# A one-row step folds attention's mix (ATTN_MIX, ``mix_streams``) into the FFN hyper-connection's program
+# (``DeepSeekV4HyperConnection.forward``'s ``mix``): its collapse cores mix their shard of the streams first, which
+# saves a launch and the streams' round trip through L1. Needs ``DEEPSEEK_V41_FUSED_HC_FN``.
+# ``DEEPSEEK_V41_FUSED_HC_MIX=0`` runs ``mix_streams`` on its own.
+FUSED_HC_MIX = os.environ.get("DEEPSEEK_V41_FUSED_HC_MIX", "1") not in ("0", "", "false", "False")
+# Likewise the FFN's mix (FFN_MIX) into the next layer's attention hyper-connection: :meth:`DeepSeekV41DecoderLayer.decode`
+# with ``defer_mix`` hands the step on as a :class:`PendingMix`. ``DEEPSEEK_V41_DEFER_FFN_MIX=0`` always mixes in place.
+DEFER_FFN_MIX = FUSED_HC_MIX and os.environ.get("DEEPSEEK_V41_DEFER_FFN_MIX", "1") not in ("0", "", "false", "False")
+
+
+class PendingMix(NamedTuple):
+    """A layer's FFN mix step not yet run: the streams it leaves are ``mix_streams(post, comb, sublayer_out,
+    streams)``. The next layer's :meth:`~DeepSeekV41DecoderLayer.decode` takes it in place of the streams and folds it
+    into its attention hyper-connection (or runs it first where it cannot); it consumes ``streams``, and
+    ``sublayer_out`` too when ``free_sublayer_out``."""
+
+    post: ttnn.Tensor
+    comb: ttnn.Tensor
+    sublayer_out: ttnn.Tensor
+    streams: ttnn.Tensor
+    free_sublayer_out: bool
 
 
 def _verify_rows(normed: ttnn.Tensor, device) -> ttnn.Tensor:
@@ -233,15 +254,72 @@ class DeepSeekV41DecoderLayer(DeepSeekV4DecoderLayer):
         if down.use_prefetcher:
             down.fetch_weights()
 
+    def _run_pending_mix(self, pending: PendingMix) -> ttnn.Tensor:
+        """The previous layer's deferred FFN mix, run on its own: the streams it leaves."""
+        with _region("FFN_MIX"):
+            streams = self._mix(pending.post, pending.comb, pending.sublayer_out, pending.streams)
+        ttnn.deallocate(pending.streams)
+        if pending.free_sublayer_out:
+            ttnn.deallocate(pending.sublayer_out)
+        return streams
+
+    def _attn_hc(self, hidden_streams, pre_mix, collapsed_layout, one_row: bool):
+        """ATTN_HC: ``(post, comb, collapsed, attn_pre, streams)``. ``hidden_streams`` is the streams, which are
+        returned as they are, or a :class:`PendingMix`, folded into the hyper-connection where it can be (one row,
+        see :data:`FUSED_HC_MIX`) and else run first; ``streams`` are then the mixed ones."""
+        if isinstance(hidden_streams, PendingMix):
+            pending = hidden_streams
+            if one_row and self.attn_hc.can_fold_mix(pending.post, pending.comb, pending.sublayer_out):
+                with _region("ATTN_HC"):
+                    post, comb, collapsed, attn_pre, streams = self.attn_hc(
+                        pending.streams,
+                        pre_mix=pre_mix,
+                        collapsed_layout=collapsed_layout,
+                        mix=(pending.post, pending.comb, pending.sublayer_out),
+                    )
+                ttnn.deallocate(pending.streams)
+                if pending.free_sublayer_out:
+                    ttnn.deallocate(pending.sublayer_out)
+                return post, comb, collapsed, attn_pre, streams
+            hidden_streams = self._run_pending_mix(pending)
+        with _region("ATTN_HC"):
+            post, comb, collapsed, attn_pre = self.attn_hc(
+                hidden_streams, pre_mix=pre_mix, collapsed_layout=collapsed_layout
+            )
+        return post, comb, collapsed, attn_pre, hidden_streams
+
+    def _attn_mix_and_ffn_hc(self, post, comb, attn_out, hidden_streams, attn_pre, one_row: bool):
+        """ATTN_MIX then FFN_HC: ``(post, comb, collapsed, ffn_pre, streams)`` for the FFN, ``streams`` the mixed
+        ones. A one-row step folds the mix into the FFN hyper-connection's program when it can (see
+        :data:`FUSED_HC_MIX`); otherwise ``mix_streams`` runs first. ``hidden_streams`` is consumed."""
+        if FUSED_HC_MIX and one_row and self.ffn_hc.can_fold_mix(post, comb, attn_out):
+            with _region("FFN_HC"):
+                post, comb, collapsed, ffn_pre, streams = self.ffn_hc(
+                    hidden_streams, pre_mix=attn_pre, mix=(post, comb, attn_out)
+                )
+            ttnn.deallocate(hidden_streams)
+            return post, comb, collapsed, ffn_pre, streams
+        with _region("ATTN_MIX"):
+            streams = self._mix(post, comb, attn_out, hidden_streams)
+        ttnn.deallocate(hidden_streams)
+        with _region("FFN_HC"):
+            post, comb, collapsed, ffn_pre = self.ffn_hc(streams, pre_mix=attn_pre)
+        return post, comb, collapsed, ffn_pre, streams
+
     def decode(
         self,
         hidden_streams: ttnn.Tensor,
         pre_mix: ttnn.Tensor,
         scache: _StaticLayerCache,
         image_mask: Optional[ttnn.Tensor] = None,
+        defer_mix: bool = False,
         **attn_inputs,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """One decode step: ``(streams [B, 1, hc, D], pre_mix [B, 1, 1, hc])`` -> the same pair for the next layer.
+
+        ``hidden_streams`` may also be the previous layer's :class:`PendingMix`. ``defer_mix`` lets a one-row step
+        return its own FFN mix as one in place of the streams (see :data:`DEFER_FFN_MIX`); only pass it when the
+        result goes straight to the next layer's :meth:`decode`.
 
         A verify block (``B == 1``, ``S == verify_rows``) passes ``[1, S, hc, D]`` / ``[1, S, 1, hc]`` instead,
         with ``attn_inputs`` from ``decode_inputs(..., rows=S)``; row ``j`` is position ``p + j``, and the
@@ -259,7 +337,8 @@ class DeepSeekV41DecoderLayer(DeepSeekV4DecoderLayer):
         ``image_mask`` (``[1, B]`` uint32, 1 for a token of an image span) makes the router rank those tokens with
         ``bias_vl``.
         """
-        b, s = hidden_streams.shape[0], hidden_streams.shape[1]
+        shape = (hidden_streams.streams if isinstance(hidden_streams, PendingMix) else hidden_streams).shape
+        b, s = shape[0], shape[1]
         if s > 1:
             assert b == 1 and s == self.verify_rows, f"a [{b}, {s}] block needs B == 1 and verify_rows == {s}"
 
@@ -276,7 +355,10 @@ class DeepSeekV41DecoderLayer(DeepSeekV4DecoderLayer):
                 logger.error(f"L1 layer {self.layer_idx} {tag}: {lo}")
 
         _l1("enter")
+        one_row = b == 1 and s == 1 and self.device.arch() == ttnn.Arch.BLACKHOLE
         if self.engram is not None:
+            if isinstance(hidden_streams, PendingMix):
+                hidden_streams = self._run_pending_mix(hidden_streams)
             with _region("ENGRAM"):
                 streams_in = hidden_streams
                 hidden_streams = self.engram(streams_in)
@@ -289,12 +371,11 @@ class DeepSeekV41DecoderLayer(DeepSeekV4DecoderLayer):
             and self.device.arch() == ttnn.Arch.BLACKHOLE
             and not self.self_attn.needs_normed_input
         )
-        with _region("ATTN_HC"):
-            # ROW_MAJOR [1, D/8] rows on the collapse cores: the layout sharded_rmsnorm would have written.
-            post, comb, collapsed, attn_pre = self.attn_hc(
-                hidden_streams, pre_mix=pre_mix, collapsed_layout=ttnn.ROW_MAJOR_LAYOUT if skip_input_norm else None
-            )
-            _l1("attn_hc")
+        # ROW_MAJOR [1, D/8] rows on the collapse cores: the layout sharded_rmsnorm would have written.
+        post, comb, collapsed, attn_pre, hidden_streams = self._attn_hc(
+            hidden_streams, pre_mix, ttnn.ROW_MAJOR_LAYOUT if skip_input_norm else None, one_row
+        )
+        _l1("attn_hc")
         with _region("INPUT_NORM"):
             if skip_input_norm:
                 normed = collapsed
@@ -316,16 +397,12 @@ class DeepSeekV41DecoderLayer(DeepSeekV4DecoderLayer):
         with _region("ATTENTION"):
             attn_out = self.self_attn.decode(normed, scache=scache, **attn_inputs)
             _l1("attn")
-        with _region("ATTN_MIX"):
-            streams_in = hidden_streams
-            hidden_streams = self._mix(post, comb, attn_out, streams_in)
-        ttnn.deallocate(streams_in)
+        post, comb, collapsed, ffn_pre, hidden_streams = self._attn_mix_and_ffn_hc(
+            post, comb, attn_out, hidden_streams, attn_pre, one_row
+        )
         ttnn.deallocate(normed)
         ttnn.deallocate(attn_out)
-        _l1("attn_mix")
-        with _region("FFN_HC"):
-            post, comb, collapsed, ffn_pre = self.ffn_hc(hidden_streams, pre_mix=attn_pre)
-            _l1("ffn_hc")
+        _l1("ffn_hc")
         with _region("POST_NORM"):
             if b == 1 and s == 1 and self.device.arch() == ttnn.Arch.BLACKHOLE:
                 # When fused_experts also runs the router and shared expert, decode_static skips
@@ -364,6 +441,9 @@ class DeepSeekV41DecoderLayer(DeepSeekV4DecoderLayer):
             streams_dram = hidden_streams
             hidden_streams = ttnn.to_memory_config(streams_dram, streams_config)
             ttnn.deallocate(streams_dram)
+        if defer_mix and DEFER_FFN_MIX and one_row:
+            # The MoE's output is not freed here, so the pending mix leaves it be too.
+            return PendingMix(post, comb, mlp_out, hidden_streams, False), ffn_pre
         with _region("FFN_MIX"):
             streams_out = self._mix(post, comb, mlp_out, hidden_streams)
         ttnn.deallocate(hidden_streams)
@@ -486,17 +566,23 @@ class DeepSeekV41PersistentMoeDecoderLayer(DeepSeekV41DecoderLayer):
         pre_mix: ttnn.Tensor,
         scache: _StaticLayerCache,
         image_mask: Optional[ttnn.Tensor] = None,
+        defer_mix: bool = False,
         **attn_inputs,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """One decode step: ``(streams [1, 1, hc, D], pre_mix [1, 1, 1, hc])`` -> the same pair for the next layer.
 
-        As :meth:`DeepSeekV41DecoderLayer.decode` for one row, the MoE on the server. On an Engram layer the
-        step's rows go to ``self.engram.write_rows`` before this call."""
-        b, s = hidden_streams.shape[0], hidden_streams.shape[1]
+        As :meth:`DeepSeekV41DecoderLayer.decode` for one row, the MoE on the server; ``hidden_streams`` may be a
+        :class:`PendingMix` and ``defer_mix`` returns one, unless the request runs the FFN mix itself. On an Engram
+        layer the step's rows go to ``self.engram.write_rows`` before this call."""
+        shape = (hidden_streams.streams if isinstance(hidden_streams, PendingMix) else hidden_streams).shape
+        b, s = shape[0], shape[1]
         assert b == 1 and s == 1, f"the persistent MoE decodes one row per step, got [{b}, {s}]"
         assert image_mask is None, "the persistent MoE's layer table holds the text router bias only"
 
+        one_row = self.device.arch() == ttnn.Arch.BLACKHOLE
         if self.engram is not None:
+            if isinstance(hidden_streams, PendingMix):
+                hidden_streams = self._run_pending_mix(hidden_streams)
             with _region("ENGRAM"):
                 streams_in = hidden_streams
                 hidden_streams = self.engram(streams_in)
@@ -504,10 +590,9 @@ class DeepSeekV41PersistentMoeDecoderLayer(DeepSeekV41DecoderLayer):
         skip_input_norm = (
             self.fold_input_norm and self.device.arch() == ttnn.Arch.BLACKHOLE and not self.self_attn.needs_normed_input
         )
-        with _region("ATTN_HC"):
-            post, comb, collapsed, attn_pre = self.attn_hc(
-                hidden_streams, pre_mix=pre_mix, collapsed_layout=ttnn.ROW_MAJOR_LAYOUT if skip_input_norm else None
-            )
+        post, comb, collapsed, attn_pre, hidden_streams = self._attn_hc(
+            hidden_streams, pre_mix, ttnn.ROW_MAJOR_LAYOUT if skip_input_norm else None, one_row
+        )
         with _region("INPUT_NORM"):
             if skip_input_norm:
                 normed = collapsed
@@ -523,14 +608,11 @@ class DeepSeekV41PersistentMoeDecoderLayer(DeepSeekV41DecoderLayer):
                 normed = self.input_layernorm(collapsed)
         with _region("ATTENTION"):
             attn_out = self.self_attn.decode(normed, scache=scache, **attn_inputs)
-        with _region("ATTN_MIX"):
-            streams_in = hidden_streams
-            hidden_streams = self._mix(post, comb, attn_out, streams_in)
-        ttnn.deallocate(streams_in)
+        post, comb, collapsed, ffn_pre, hidden_streams = self._attn_mix_and_ffn_hc(
+            post, comb, attn_out, hidden_streams, attn_pre, self.device.arch() == ttnn.Arch.BLACKHOLE
+        )
         ttnn.deallocate(normed)
         ttnn.deallocate(attn_out)
-        with _region("FFN_HC"):
-            post, comb, collapsed, ffn_pre = self.ffn_hc(hidden_streams, pre_mix=attn_pre)
         with _region("POST_NORM"):
             if self.device.arch() == ttnn.Arch.BLACKHOLE:
                 normed = ttnn.experimental.deepseek.sharded_rmsnorm(
@@ -553,6 +635,8 @@ class DeepSeekV41PersistentMoeDecoderLayer(DeepSeekV41DecoderLayer):
         with _region("MOE"):
             mlp_out = self.moe(normed)
         ttnn.deallocate(normed)
+        if defer_mix and DEFER_FFN_MIX and one_row:
+            return PendingMix(post, comb, mlp_out, hidden_streams, True), ffn_pre
         with _region("FFN_MIX"):
             streams_out = self._mix(post, comb, mlp_out, hidden_streams)
         ttnn.deallocate(hidden_streams)

@@ -9,6 +9,8 @@ streams arrive as ``[1, S, hc, D]`` ROW_MAJOR, width-sharded ``[S * hc, D / 8]``
 against the checkpoint's ``Block.hc_mixes`` / ``hc_pre`` (``tests/reference.py``), and against the same rows
 stepped one at a time through the single-row path. ``test_hyperconnection_decode_fused_fn`` runs single rows
 through ``fused_fn``, the program that computes ``fn`` itself, against the reference and the separate ``fn`` op.
+``test_hyperconnection_decode_fused_mix`` folds the previous sublayer's mix step into that program (``mix``) and
+checks it against ``mix_streams`` followed by the plain call.
 
     pytest models/experimental/deepseek_v41_flash/tests/decode/test_hyperconnection.py
 """
@@ -187,3 +189,64 @@ def test_hyperconnection_decode_fused_fn(device, layer, which, cache_name, fn_in
         for name in names:
             _pcc(expected[name], results["fused"][name], f"step {step} fused {name}")
             _pcc(results["separate"][name], results["fused"][name], f"step {step} fused vs separate {name}")
+
+
+@pytest.mark.skipif(_snapshot() is None, reason=f"V4.1-Flash checkpoint not found under {DEFAULT_MODEL_DIR}")
+@pytest.mark.timeout(1800)
+@pytest.mark.parametrize("sub_memory", ("dram", "l1"))
+@pytest.mark.parametrize("collapsed_layout", (None, ttnn.ROW_MAJOR_LAYOUT), ids=("tile", "rm_out"))
+@pytest.mark.parametrize(
+    "layer, which, cache_name",
+    ((1, "attn_hc", "hc_attn"), (39, "ffn_hc", "hc_ffn")),
+    ids=("layer1_attn", "layer39_ffn"),
+)
+@torch.no_grad()
+def test_hyperconnection_decode_fused_mix(device, layer, which, cache_name, collapsed_layout, sub_memory):
+    """One row through ``fused_fn`` with the previous sublayer's mix folded in (``mix``), against ``mix_streams``
+    followed by the same module without it (the decoder layer's ``DEEPSEEK_V41_FUSED_HC_MIX=0`` path), and the mixed
+    streams against torch. Each row runs twice, the second on the cached programs."""
+    snapshot = _snapshot()
+    config = load_config(snapshot)
+    loader = DeepseekV4WeightLoader(snapshot)
+    weights = _strip_prefix(decoder_layer_weights(loader, layer, config), which)
+    cache = WeightCache(CACHE_DIR).sub(f"layers.{layer}.{cache_name}")
+    module = DeepSeekV4HyperConnection(config, weights, device, cache=cache, row_major_streams=True, fused_fn=True)
+
+    hc, d = config.hc_mult, config.hidden_size
+    streams_config = width_sharded_l1_config(hc, d, device, num_cores=_HC_COLLAPSE_CORES, tile_height=1)
+    # attention's all-reduced row (L1 width-sharded) or the persistent MoE's (DRAM).
+    sub_config = (
+        ttnn.DRAM_MEMORY_CONFIG
+        if sub_memory == "dram"
+        else width_sharded_l1_config(1, d, device, num_cores=_HC_COLLAPSE_CORES, tile_height=1)
+    )
+
+    def to_tt(x, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG):
+        return ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=layout, device=device, memory_config=memory_config)
+
+    names = ("post", "comb", "collapsed", "pre", "streams")
+    for step in range(2):
+        torch.manual_seed(layer * 10 + step)
+        streams = torch.randn(1, 1, hc, d).bfloat16().float()
+        post = (2 * torch.sigmoid(torch.randn(1, 1, hc, 1))).bfloat16().float()
+        comb = torch.softmax(torch.randn(1, 1, hc, hc), dim=-1).bfloat16().float()
+        sub = torch.randn(1, 1, 1, d).bfloat16().float()
+        pre_mix = torch.rand(1, 1, 1, hc).bfloat16().float()
+        expected_streams = torch.einsum("ji,jd->id", comb[0, 0], streams[0, 0]) + post[0, 0] * sub[0, 0]
+
+        streams_tt = to_tt(streams, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=streams_config)
+        post_tt, comb_tt, pre_mix_tt = to_tt(post), to_tt(comb), to_tt(pre_mix)
+        sub_tt = to_tt(sub, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=sub_config)
+        assert module.can_fold_mix(post_tt, comb_tt, sub_tt)
+
+        mixed_tt = ttnn.experimental.deepseek.mix_streams(post_tt, comb_tt, sub_tt, streams_tt)
+        old = list(module(mixed_tt, pre_mix=pre_mix_tt, collapsed_layout=collapsed_layout)) + [mixed_tt]
+        new = module(streams_tt, pre_mix=pre_mix_tt, collapsed_layout=collapsed_layout, mix=(post_tt, comb_tt, sub_tt))
+        assert len(new) == len(names), f"{len(new)} outputs, expected {len(names)}"
+        for name, got_tt, ref_tt in zip(names, new, old):
+            _pcc(
+                ttnn.to_torch(ref_tt).float(),
+                ttnn.to_torch(got_tt).float(),
+                f"step {step} folded vs mix_streams {name}",
+            )
+        _pcc(expected_streams, ttnn.to_torch(new[4]).float(), f"step {step} folded streams vs torch")

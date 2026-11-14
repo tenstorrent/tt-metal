@@ -55,6 +55,78 @@ inline void hc_collapse_streams(const volatile tt_l1_ptr std::uint16_t* w) {
     _llk_math_eltwise_sfpu_done_();
 }
 
+// The previous sublayer's mix step, then the collapse, over h x 32 Dst tiles (h <= 16, faces 0 and 1):
+//   Dst tile k (k < H): stream k;  Dst tile H: the sublayer output;
+//   mixed_r = sum_k comb[k][r] * stream_k + post[r] * sublayer_out  -> Dst tile r,
+//   collapsed = sum_r pre[r] * mixed_r                                -> Dst tile H.
+// mix_w row r (H + 1 bf16 values) is comb[0..H-1][r], then post[r]; pre holds pre[r] at element r. Each mixed row is
+// built in its tile's free faces 2 and 3 (dst_reg[32 r + 16 ..]) while the streams are still needed, then moved down
+// as it is collapsed. Every pass keeps at most six vectors live.
+template <std::uint32_t H>
+inline void hc_mix_collapse_streams(
+    const volatile tt_l1_ptr std::uint16_t* mix_w, const volatile tt_l1_ptr std::uint16_t* pre) {
+    static_assert(H >= 1 && H <= 4, "the mix holds at most four streams in Dst");
+    _llk_math_eltwise_sfpu_start_(0);
+    auto bf16 = [](std::uint16_t bits) { return Converter::as_float(static_cast<std::uint32_t>(bits) << 16); };
+#pragma GCC unroll 4
+    for (std::uint32_t r = 0; r < H; ++r) {
+        const volatile tt_l1_ptr std::uint16_t* wr = mix_w + r * (H + 1);
+        {
+            const sfpi::vFloat wp = bf16(wr[H]);
+#pragma GCC unroll 16
+            for (std::uint32_t i = 0; i < 16; ++i) {
+                sfpi::dst_reg[32 * r + 16 + i] = sfpi::dst_reg[32 * H + i] * wp;
+            }
+        }
+        const sfpi::vFloat w0 = bf16(wr[0]);
+        const sfpi::vFloat w1 = bf16(wr[H > 1 ? 1 : 0]);
+        const sfpi::vFloat w2 = bf16(wr[H > 2 ? 2 : 0]);
+        const sfpi::vFloat w3 = bf16(wr[H > 3 ? 3 : 0]);
+#pragma GCC unroll 16
+        for (std::uint32_t i = 0; i < 16; ++i) {
+            sfpi::vFloat acc = sfpi::dst_reg[32 * r + 16 + i];
+            acc += sfpi::dst_reg[i] * w0;
+            if constexpr (H > 1) {
+                acc += sfpi::dst_reg[32 + i] * w1;
+            }
+            if constexpr (H > 2) {
+                acc += sfpi::dst_reg[64 + i] * w2;
+            }
+            if constexpr (H > 3) {
+                acc += sfpi::dst_reg[96 + i] * w3;
+            }
+            sfpi::dst_reg[32 * r + 16 + i] = acc;
+        }
+    }
+    const sfpi::vFloat p0 = bf16(pre[0]);
+    const sfpi::vFloat p1 = bf16(pre[H > 1 ? 1 : 0]);
+    const sfpi::vFloat p2 = bf16(pre[H > 2 ? 2 : 0]);
+    const sfpi::vFloat p3 = bf16(pre[H > 3 ? 3 : 0]);
+#pragma GCC unroll 16
+    for (std::uint32_t i = 0; i < 16; ++i) {
+        sfpi::vFloat m = sfpi::dst_reg[16 + i];
+        sfpi::dst_reg[i] = m;
+        sfpi::vFloat acc = m * p0;
+        if constexpr (H > 1) {
+            m = sfpi::dst_reg[48 + i];
+            sfpi::dst_reg[32 + i] = m;
+            acc += m * p1;
+        }
+        if constexpr (H > 2) {
+            m = sfpi::dst_reg[80 + i];
+            sfpi::dst_reg[64 + i] = m;
+            acc += m * p2;
+        }
+        if constexpr (H > 3) {
+            m = sfpi::dst_reg[112 + i];
+            sfpi::dst_reg[96 + i] = m;
+            acc += m * p3;
+        }
+        sfpi::dst_reg[32 * H + i] = acc;
+    }
+    _llk_math_eltwise_sfpu_done_();
+}
+
 // pre = sigmoid(pre_w * pre_scale + pre_b) + eps for an h x 32 Dst tile 0 whose row 0 interleaves
 // pre_w[k] (column 2k) and pre_b[k] (column 2k + 1), k < 8: the even- and odd-column vectors line up
 // w and b lane for lane, and pre[k] is left at column 2k.

@@ -30,6 +30,10 @@ void bind_width_sharded_all_reduce(nb::module_& mod) {
             subdevice_id (ttnn.SubDeviceId, optional): Worker subdevice.
             num_links (int, optional): Fabric links.
             topology (ttnn.Topology, optional): Fabric topology.
+            max_packet_bytes (int, optional): Largest payload of one fabric packet. A larger cap sends
+              fewer, larger packets to fewer reducer cores, at a ping-pong scratch of
+              2 * ring_size * packet bytes per reducer core taken from L1_SMALL (smaller packets when
+              it does not fit). Defaults to packets whose scratch fits a 2560 B L1_SMALL cap.
 
         Returns:
             ttnn.Tensor: ROW_MAJOR WIDTH_SHARDED tensor with the same shape and memory config as the input.
@@ -44,7 +48,8 @@ void bind_width_sharded_all_reduce(nb::module_& mod) {
         nb::arg("cluster_axis") = nb::none(),
         nb::arg("subdevice_id") = nb::none(),
         nb::arg("num_links") = nb::none(),
-        nb::arg("topology") = nb::none());
+        nb::arg("topology") = nb::none(),
+        nb::arg("max_packet_bytes") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::deepseek::width_sharded_all_reduce::detail

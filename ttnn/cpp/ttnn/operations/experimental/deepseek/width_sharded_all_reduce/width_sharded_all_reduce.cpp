@@ -18,7 +18,8 @@ ttnn::Tensor width_sharded_all_reduce(
     std::optional<uint32_t> cluster_axis,
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
     std::optional<uint32_t> num_links,
-    std::optional<tt::tt_fabric::Topology> topology) {
+    std::optional<tt::tt_fabric::Topology> topology,
+    std::optional<uint32_t> max_packet_bytes) {
     auto* mesh_device = input_tensor.device();
     TT_FATAL(mesh_device != nullptr, "width_sharded_all_reduce: MeshDevice is required");
     tt::tt_fabric::Topology topology_ = topology.value_or(::ttnn::ccl::get_usable_topology(
@@ -27,7 +28,8 @@ ttnn::Tensor width_sharded_all_reduce(
     std::optional<size_t> axis = cluster_axis.has_value() ? std::optional<size_t>(*cluster_axis) : std::nullopt;
     const uint32_t num_links_ =
         num_links.value_or(static_cast<uint32_t>(ttnn::operations::ccl::common::get_num_links(*mesh_device, axis)));
-    return ttnn::prim::width_sharded_all_reduce(input_tensor, cluster_axis, subdevice_id, num_links_, topology_);
+    return ttnn::prim::width_sharded_all_reduce(
+        input_tensor, cluster_axis, subdevice_id, num_links_, topology_, max_packet_bytes);
 }
 
 }  // namespace ttnn::experimental::deepseek

@@ -28,6 +28,10 @@ FORCE_INLINE uint32_t tile_face_index(uint32_t r, uint32_t c) {
 // fused_w is a one-core width shard on core (0, 0); every core that needs it reads its first row
 // straight out of that core's L1. Pushed (the program computes fused_w itself), the fn dot's root
 // writes the row into cb_fused_w on every core that needs it and then raises fused_w_sem.
+//
+// With the folded mix step a collapse core also reads the mix's inputs -- mix_comb's and mix_post's H rows, its
+// D/8 columns of mix_sublayer_out -- and lays the weights out for the compute (see hc_mix_collapse_streams). Once the
+// compute has packed the mixed shard it raises mix_sem on the fn dot cores that read their K-slices out of it.
 void kernel_main() {
     constexpr uint32_t role = get_compile_time_arg_val(0);
     constexpr uint32_t cb_fused_w = get_compile_time_arg_val(1);
@@ -54,11 +58,21 @@ void kernel_main() {
     constexpr bool collapsed_row_major = get_compile_time_arg_val(18) != 0;
     constexpr bool fused_w_pushed = get_compile_time_arg_val(19) != 0;
     constexpr uint32_t fused_w_sem = get_compile_time_arg_val(20);
+    constexpr bool use_mix = get_compile_time_arg_val(21) != 0;
+    constexpr uint32_t cb_mix_stage = get_compile_time_arg_val(22);
+    constexpr uint32_t cb_mix_w = get_compile_time_arg_val(23);
+    constexpr uint32_t cb_mix_sub = get_compile_time_arg_val(24);
+    constexpr uint32_t cb_mixed = get_compile_time_arg_val(25);
+    constexpr uint32_t sub_elems_per_page = get_compile_time_arg_val(26);
+    constexpr uint32_t mix_sem = get_compile_time_arg_val(27);
 
-    constexpr auto pre_bias_args = TensorAccessorArgs<21>();
+    constexpr auto pre_bias_args = TensorAccessorArgs<28>();
     constexpr auto post_bias_args = TensorAccessorArgs<pre_bias_args.next_compile_time_args_offset()>();
     constexpr auto comb_bias_args = TensorAccessorArgs<post_bias_args.next_compile_time_args_offset()>();
     constexpr auto pre_mix_args = TensorAccessorArgs<comb_bias_args.next_compile_time_args_offset()>();
+    constexpr auto mix_post_args = TensorAccessorArgs<pre_mix_args.next_compile_time_args_offset()>();
+    constexpr auto mix_comb_args = TensorAccessorArgs<mix_post_args.next_compile_time_args_offset()>();
+    constexpr auto mix_sub_args = TensorAccessorArgs<mix_comb_args.next_compile_time_args_offset()>();
 
     const uint32_t fused_w_addr = get_arg_val<uint32_t>(0);
     const uint32_t pre_bias_addr = get_arg_val<uint32_t>(1);
@@ -128,6 +142,67 @@ void kernel_main() {
             noc.async_read(pre_mix, cb_p, pre_mix_bytes, {.page_id = 0}, {.offset_bytes = 0});
             noc.async_read_barrier();
             cb_p.push_back(one_tile);
+        }
+
+        if constexpr (use_mix) {
+            const auto mix_post = TensorAccessor(mix_post_args, get_arg_val<uint32_t>(6));
+            const auto mix_comb = TensorAccessor(mix_comb_args, get_arg_val<uint32_t>(7));
+            const auto mix_sub = TensorAccessor(mix_sub_args, get_arg_val<uint32_t>(8));
+            const uint32_t col_start = get_arg_val<uint32_t>(9);
+            CircularBuffer cb_stg(cb_mix_stage);
+            CircularBuffer cb_w(cb_mix_w);
+            CircularBuffer cb_s(cb_mix_sub);
+            cb_stg.reserve_back(one_tile);
+            cb_w.reserve_back(one_tile);
+            cb_s.reserve_back(row_chunks);
+            // Rows 0..H-1 of face 0 of both tiles: comb[r][c] at element 16r + c, post[r] at element 16r.
+            constexpr uint32_t face_rows_bytes = num_streams * 16 * sizeof(uint16_t);
+            constexpr uint32_t post_stage_offset = 1024;
+            noc.async_read(mix_comb, cb_stg, face_rows_bytes, {.page_id = 0}, {.offset_bytes = 0});
+            noc.async_read(mix_post, cb_stg, face_rows_bytes, {.page_id = 0}, {.offset_bytes = post_stage_offset});
+            // This core's columns [col_start, col_start + out_tiles * 32), a page piece at a time: the core's slice
+            // of the row, which the h x 32 tiles of cb_mix_sub hold in order.
+            constexpr uint32_t num_cols = out_tiles * 32;
+            uint32_t col = col_start;
+            uint32_t dst_offset = 0;
+            while (col < col_start + num_cols) {
+                const uint32_t in_page = col % sub_elems_per_page;
+                uint32_t n = sub_elems_per_page - in_page;
+                if (n > col_start + num_cols - col) {
+                    n = col_start + num_cols - col;
+                }
+                noc.async_read(
+                    mix_sub,
+                    cb_s,
+                    n * sizeof(uint16_t),
+                    {.page_id = col / sub_elems_per_page, .offset_bytes = in_page * sizeof(uint16_t)},
+                    {.offset_bytes = dst_offset});
+                col += n;
+                dst_offset += n * sizeof(uint16_t);
+            }
+            noc.async_read_barrier();
+
+            // Row r of the weights: comb[0..H-1][r] (column r of comb, which mixes into stream r), then post[r].
+            const auto* stg = reinterpret_cast<const volatile tt_l1_ptr uint16_t*>(cb_stg.get_write_ptr());
+            auto* w = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_w.get_write_ptr());
+            for (uint32_t r = 0; r < num_streams; ++r) {
+                for (uint32_t j = 0; j < num_streams; ++j) {
+                    w[r * (num_streams + 1) + j] = stg[j * 16 + r];
+                }
+                w[r * (num_streams + 1) + num_streams] = stg[post_stage_offset / sizeof(uint16_t) + r * 16];
+            }
+            cb_w.push_back(one_tile);
+            cb_s.push_back(row_chunks);
+
+            // The fn dot reads the mixed shard as soon as it is packed.
+            CircularBuffer cb_m(cb_mixed);
+            cb_m.wait_front(hidden_pages);
+            const uint32_t num_dests = get_arg_val<uint32_t>(10);
+            Semaphore<> mixed_ready(mix_sem);
+            for (uint32_t i = 0; i < num_dests; ++i) {
+                mixed_ready.up(noc, get_arg_val<uint32_t>(11 + 2 * i), get_arg_val<uint32_t>(12 + 2 * i), 1);
+            }
+            noc.async_atomic_barrier();
         }
     }
 

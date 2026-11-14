@@ -34,6 +34,13 @@ constexpr uint32_t kFsCbCollapsedOut = tt::CBIndex::c_6;
 constexpr uint32_t kFsCbPostOut = tt::CBIndex::c_7;
 constexpr uint32_t kFsCbCombOut = tt::CBIndex::c_8;
 constexpr uint32_t kFsCbPreOut = tt::CBIndex::c_9;
+// The folded mix step, on the collapse cores (c_10 is the fn dot's pushed fused_w): the mix_comb / mix_post rows as
+// read, the weights the compute reads (see hc_mix_collapse_streams), the core's D/8 columns of mix_sublayer_out as
+// h x 32 tiles, and its shard of the mixed streams.
+constexpr uint32_t kFsCbMixStage = tt::CBIndex::c_11;
+constexpr uint32_t kFsCbMixW = tt::CBIndex::c_12;
+constexpr uint32_t kFsCbMixSub = tt::CBIndex::c_13;
+constexpr uint32_t kFsCbMixedStreams = tt::CBIndex::c_14;
 
 constexpr char kFsReaderKernelPath[] =
     "ttnn/cpp/ttnn/operations/experimental/deepseek/hyperconnection/device/kernels/dataflow/"
@@ -76,7 +83,8 @@ FusedSingleUserSharedVariables build_single_user_hc(
     const FusedSingleUserParams& operation_attributes,
     const FusedSingleUserInputs& tensor_args,
     FusedSingleUserTensorReturn& tensor_return_value,
-    const FusedWSource& fused_w_source) {
+    const FusedWSource& fused_w_source,
+    const MixedStreamsReaders* mixed_readers) {
     using namespace tt;
     using namespace tt::tt_metal;
 
@@ -92,6 +100,13 @@ FusedSingleUserSharedVariables build_single_user_hc(
     const uint32_t pre_mix_addr = use_pre_mix ? pre_mix_buffer->address() : 0u;
     const Buffer* pre_out_buffer = use_pre_mix ? tensor_return_value[3].buffer() : nullptr;
     const uint32_t pre_out_addr = use_pre_mix ? pre_out_buffer->address() : 0u;
+    // Validated: the mix step comes with pre_mix and ROW_MAJOR streams, and its output is the last one.
+    const bool use_mix = tensor_args.mix_post.has_value();
+    TT_FATAL(!use_mix || mixed_readers != nullptr, "the folded mix step needs the mixed streams' readers");
+    const Buffer* mix_post_buffer = use_mix ? tensor_args.mix_post->buffer() : nullptr;
+    const Buffer* mix_comb_buffer = use_mix ? tensor_args.mix_comb->buffer() : nullptr;
+    const Buffer* mix_sub_buffer = use_mix ? tensor_args.mix_sublayer_out->buffer() : nullptr;
+    Buffer* mixed_buffer = use_mix ? tensor_return_value.back().buffer() : nullptr;
 
     const CoreRangeSet collapse_cores = contiguous_cores(0, kCollapseCoreCount);
     const CoreCoord post_core{8, 0};
@@ -195,6 +210,36 @@ FusedSingleUserSharedVariables build_single_user_hc(
         }
     }
 
+    CBHandle mixed_streams_cb = 0;
+    uint32_t mix_sub_page_elems = 0;
+    if (use_mix) {
+        TT_FATAL(hidden_row_major, "the folded mix step works on ROW_MAJOR streams");
+        make_cb(kFsCbMixStage, collapse_cores);
+        make_cb(kFsCbMixW, collapse_cores);
+        const uint32_t page_bytes = row_tile.get_tile_size(param_format);
+        CreateCircularBuffer(
+            program,
+            collapse_cores,
+            CircularBufferConfig(row_chunks * page_bytes, {{kFsCbMixSub, param_format}})
+                .set_page_size(kFsCbMixSub, page_bytes)
+                .set_tile_dims(kFsCbMixSub, row_tile));
+        // Laid out as the streams' shard is: stream k's row is pages [k * row_chunks, (k + 1) * row_chunks).
+        mixed_streams_cb = CreateCircularBuffer(
+            program,
+            collapse_cores,
+            CircularBufferConfig(hidden_pages * page_bytes, {{kFsCbMixedStreams, hidden_format}})
+                .set_page_size(kFsCbMixedStreams, page_bytes)
+                .set_tile_dims(kFsCbMixedStreams, row_tile)
+                .set_globally_allocated_address(*mixed_buffer));
+        const auto& sub = *tensor_args.mix_sublayer_out;
+        mix_sub_page_elems = sub.shard_spec().has_value() ? static_cast<uint32_t>(sub.shard_spec()->shape[1])
+                                                          : static_cast<uint32_t>(sub.logical_shape()[-1]);
+        TT_FATAL(
+            mixed_readers->readers.size() == kCollapseCoreCount,
+            "the mixed streams need a reader list per collapse core, got {}",
+            mixed_readers->readers.size());
+    }
+
     const uint32_t pre_scale_bits = std::bit_cast<uint32_t>(operation_attributes.pre_scale);
     const uint32_t post_scale_bits = std::bit_cast<uint32_t>(operation_attributes.post_scale);
     const uint32_t comb_scale_bits = std::bit_cast<uint32_t>(operation_attributes.comb_scale);
@@ -223,11 +268,21 @@ FusedSingleUserSharedVariables build_single_user_hc(
             collapsed_row_major ? 1u : 0u,
             fused_w_source.pushed ? 1u : 0u,
             fused_w_source.semaphore_id,
+            use_mix ? 1u : 0u,
+            kFsCbMixStage,
+            kFsCbMixW,
+            kFsCbMixSub,
+            kFsCbMixedStreams,
+            mix_sub_page_elems,
+            use_mix ? mixed_readers->semaphore_id : 0u,
         };
         TensorAccessorArgs(pre_bias.buffer()).append_to(args);
         TensorAccessorArgs(post_bias.buffer()).append_to(args);
         TensorAccessorArgs(comb_bias.buffer()).append_to(args);
         TensorAccessorArgs(pre_mix_buffer).append_to(args);
+        TensorAccessorArgs(mix_post_buffer).append_to(args);
+        TensorAccessorArgs(mix_comb_buffer).append_to(args);
+        TensorAccessorArgs(mix_sub_buffer).append_to(args);
         return args;
     };
 
@@ -235,6 +290,8 @@ FusedSingleUserSharedVariables build_single_user_hc(
         return ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4,
             .fp32_dest_acc_en = true,
+            // The mix holds H + 1 fp32 tiles in Dst, past half of it.
+            .dst_full_sync_en = use_mix && role == kRoleCollapse,
             .math_approx_mode = false,
             .compile_args = {
                 role,
@@ -254,6 +311,10 @@ FusedSingleUserSharedVariables build_single_user_hc(
                 use_pre_mix ? 1u : 0u,
                 hidden_row_major ? 1u : 0u,
                 collapse_tiles,
+                use_mix ? 1u : 0u,
+                kFsCbMixW,
+                kFsCbMixSub,
+                kFsCbMixedStreams,
             }};
     };
 
@@ -272,6 +333,8 @@ FusedSingleUserSharedVariables build_single_user_hc(
     shared.has_collapse_writer = hidden_row_major && !collapsed_row_major;
     shared.hidden_cb = hidden_cb;
     shared.collapsed_output_cb = collapsed_output_cb;
+    shared.has_mix = use_mix;
+    shared.mixed_streams_cb = mixed_streams_cb;
 
     // Kernel groups start in creation order, ~0.2 us apart: comb, the longest chain (DRAM bias read,
     // Sinkhorn, DRAM write), goes first.
@@ -320,8 +383,24 @@ FusedSingleUserSharedVariables build_single_user_hc(
         comb_bias.buffer()->address(),
         pre_mix_addr,
         collapsed_out.buffer()->address()};
-    for (const auto& core : shared.collapse_cores) {
-        SetRuntimeArgs(program, shared.collapse_reader_kernel_id, core, reader_args);
+    for (uint32_t c = 0; c < shared.collapse_cores.size(); ++c) {
+        const auto& core = shared.collapse_cores[c];
+        std::vector<uint32_t> args = reader_args;
+        if (use_mix) {
+            // The mix's inputs, this core's first column, then the cores its mixed shard is pushed to.
+            args.push_back(mix_post_buffer->address());
+            args.push_back(mix_comb_buffer->address());
+            args.push_back(mix_sub_buffer->address());
+            args.push_back(c * d_tiles_per_core * constants::TILE_WIDTH);
+            const auto& readers = mixed_readers->readers[c];
+            args.push_back(static_cast<uint32_t>(readers.size()));
+            for (const auto& reader : readers) {
+                const CoreCoord phys = device->worker_core_from_logical_core(reader);
+                args.push_back(static_cast<uint32_t>(phys.x));
+                args.push_back(static_cast<uint32_t>(phys.y));
+            }
+        }
+        SetRuntimeArgs(program, shared.collapse_reader_kernel_id, core, args);
         if (shared.has_collapse_writer) {
             SetRuntimeArgs(program, shared.collapse_writer_kernel_id, core, {collapsed_out.buffer()->address(), 0u});
         }
@@ -352,6 +431,9 @@ void override_single_user_hc(
     const uint32_t pre_out_addr = tensor_args.pre_mix.has_value() ? tensor_return_value[3].buffer()->address() : 0u;
     UpdateDynamicCircularBufferAddress(program, shared.hidden_cb, *tensor_args.hidden_streams.buffer());
     UpdateDynamicCircularBufferAddress(program, shared.collapsed_output_cb, *tensor_return_value[2].buffer());
+    if (shared.has_mix) {
+        UpdateDynamicCircularBufferAddress(program, shared.mixed_streams_cb, *tensor_return_value.back().buffer());
+    }
 
     auto set_reader_args = [&](auto& args) {
         args[0] = fused_w_addr;
@@ -363,7 +445,13 @@ void override_single_user_hc(
     };
     auto& collapse_reader_args = GetRuntimeArgs(program, shared.collapse_reader_kernel_id);
     for (const auto& core : shared.collapse_cores) {
-        set_reader_args(collapse_reader_args[core.x][core.y]);
+        auto& args = collapse_reader_args[core.x][core.y];
+        set_reader_args(args);
+        if (shared.has_mix) {
+            args[6] = tensor_args.mix_post->buffer()->address();
+            args[7] = tensor_args.mix_comb->buffer()->address();
+            args[8] = tensor_args.mix_sublayer_out->buffer()->address();
+        }
     }
     if (shared.has_collapse_writer) {
         auto& collapse_writer_args = GetRuntimeArgs(program, shared.collapse_writer_kernel_id);

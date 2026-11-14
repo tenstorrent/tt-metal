@@ -222,11 +222,31 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
         )
         self.pre_scale, self.post_scale, self.comb_scale = (float(scale[0]), float(scale[1]), float(scale[2]))
 
+    def can_fold_mix(self, post: ttnn.Tensor, comb: ttnn.Tensor, sublayer_out: ttnn.Tensor) -> bool:
+        """Whether :meth:`forward` can take the previous sublayer's mix step ``(post, comb, sublayer_out)`` as
+        ``mix`` for one row of streams: the single-user program with the fused ``fn`` dot, ``post`` / ``comb``
+        bf16 TILE interleaved (as a hyper-connection returns them), ``sublayer_out`` a bf16 ROW_MAJOR
+        ``[1, 1, 1, D]`` row whose pages are a multiple of 32 wide."""
+        if not (self.row_major_streams and self.fused_fn and self.hc <= 4):
+            return False
+        for t in (post, comb):
+            if t.dtype != ttnn.bfloat16 or t.layout != ttnn.TILE_LAYOUT or t.is_sharded():
+                return False
+        if (
+            sublayer_out.dtype != ttnn.bfloat16
+            or sublayer_out.layout != ttnn.ROW_MAJOR_LAYOUT
+            or list(sublayer_out.shape) != [1, 1, 1, self.hidden]
+        ):
+            return False
+        page = sublayer_out.memory_config().shard_spec.shape[1] if sublayer_out.is_sharded() else self.hidden
+        return page % ttnn.TILE_SIZE == 0 and self.hidden % page == 0
+
     def forward(
         self,
         hidden_streams: ttnn.Tensor,
         pre_mix: ttnn.Tensor | None = None,
         collapsed_layout: ttnn.Layout | None = None,
+        mix: tuple | None = None,
     ):
         """``hidden_streams`` ``[B,S,hc,D]`` -> ``(post [B,S,hc,1], comb [B,S,hc,hc], collapsed [B,S,1,D])``.
 
@@ -243,16 +263,27 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
 
         ``collapsed_layout=ttnn.ROW_MAJOR_LAYOUT`` (``row_major_streams`` with ``T == 1``) returns ``collapsed``
         as ROW_MAJOR ``[1, D/8]`` rows on the 8 collapse cores instead of row 0 of their tiles.
+
+        ``mix`` ``(post, comb, sublayer_out)`` (see :meth:`can_fold_mix`; needs ``pre_mix``) folds the previous
+        sublayer's mix step into the same program: ``hidden_streams`` are then the streams before it, the collapse
+        and ``fn`` see ``mix_streams(post, comb, sublayer_out, hidden_streams)``, and those mixed streams are
+        returned fifth, in ``hidden_streams``' spec. ``hidden_streams`` is not consumed.
         """
         b, s, hc, d = hidden_streams.shape
         t = b * s
         assert collapsed_layout in (None, ttnn.TILE_LAYOUT) or (
             self.row_major_streams and t == 1
         ), "a ROW_MAJOR collapsed row needs one row of ROW_MAJOR streams"
+        assert mix is None or (
+            t == 1 and pre_mix is not None and self.can_fold_mix(*mix)
+        ), "the folded mix step needs one row, pre_mix and can_fold_mix"
 
         if self.row_major_streams:
             assert hidden_streams.layout == ttnn.ROW_MAJOR_LAYOUT, hidden_streams.layout
             if self.fused_fn and t == 1:
+                mix_kwargs = {}
+                if mix is not None:
+                    mix_kwargs = {"mix_post": mix[0], "mix_comb": mix[1], "mix_sublayer_out": mix[2]}
                 return ttnn.experimental.deepseek.fused_hyperconnection(
                     hidden_streams,
                     pre_bias=self.pre_b,
@@ -270,6 +301,7 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
                     fn_core_grid=self.fn_core_grid,
                     fn_reduce_fan_in=self.fn_reduce_fan_in,
                     fn_rms_norm_epsilon=self.norm_eps,
+                    **mix_kwargs,
                 )
             # fn reads each collapse core's [T*hc, D/8] shard as its slices of the T [1, hc*D] rows, and
             # the fused program gathers a row's shards into its collapse tiles.
