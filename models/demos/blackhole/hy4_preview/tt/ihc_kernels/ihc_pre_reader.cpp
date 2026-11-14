@@ -93,6 +93,11 @@ void kernel_main() {
     constexpr uint32_t WPAGE =
         get_compile_time_arg_val(q_args.next_compile_time_args_offset() + 1);  // 2048 (bf16) or 1088 (bfp8_b)
     const auto w_acc = TensorAccessor(w_args, w_addr, WPAGE);
+    constexpr uint32_t CSTD = get_compile_time_arg_val(
+        q_args.next_compile_time_args_offset() +
+        2);  // 1: constants from a DRAM tensor (page 10+G per core copy) instead of the persistent L1 shard
+    constexpr auto c_args = TensorAccessorArgs<q_args.next_compile_time_args_offset() + 3>();
+    const auto c_acc = TensorAccessor(c_args, get_common_arg_val<uint32_t>(8), 4096);
     const auto b_acc = TensorAccessor(b_args, b_addr, TILE);
     const auto n_acc = TensorAccessor(n_args, n_addr, TILE);
     const auto p_acc = TensorAccessor(p_args, p_addr, TILE);
@@ -214,7 +219,15 @@ void kernel_main() {
     // scale-diagonal,
     //    norm-weight rows >= T, A, R, the unused rows of the last x group (absent tokens must read as 0, never garbage)
     noc.write_zeros_l1_barrier();
-    // 3. constant tiles: a persistent L1 tensor backs the CB (built once by the host): just publish them
+    // 3. constant tiles: a persistent L1 tensor backs the CB (built once by the host): just publish them (CSTD: read
+    // them from DRAM first)
+    if constexpr (CSTD) {
+        cst.reserve_back(NCST);
+        for (uint32_t i = 0; i < NCST; ++i) {
+            noc.async_read(c_acc, cst, TILE, {.page_id = k * NCST + i, .offset_bytes = 0}, {.offset_bytes = i * TILE});
+        }
+        noc.async_read_barrier();
+    }
     cst.push_back(NCST);
     noc.async_read_barrier();
     STAMP(1)
