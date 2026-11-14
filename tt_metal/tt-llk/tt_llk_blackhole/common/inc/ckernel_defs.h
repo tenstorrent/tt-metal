@@ -324,6 +324,8 @@ enum class BinaryOp : std::uint8_t
     LOGICAL_RSHFT = 9,
     ADD_TOP_ROW   = 10,
     LT            = 11,
+    // geglu_tanh has a Blackhole kernel only: the harness dispatches it on Blackhole.
+    GEGLU_TANH = 63,
     GT            = 12,
     LE            = 13,
     GE            = 14,

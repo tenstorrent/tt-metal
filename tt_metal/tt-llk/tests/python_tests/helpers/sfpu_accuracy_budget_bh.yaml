@@ -1448,6 +1448,9 @@ SfpuElwsub:
 - {input: Float16_b, output: Float32, dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 3 variants / 98k lanes'}
 - {input: Float32, output: Float16_b, dest: 'Yes', measured: 1, note: 'bh: max 1 ULP, 5 variants / 82k lanes'}
 - {input: Float32, output: Float32, dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 7 variants / 78k lanes'}
+SfpuGegluTanh:
+- {input: Float16_b, output: Float16_b, dest: 'No', measured: 1, near_zero_atol: 1.925929944387236e-34, note: 'bh: below 1 ULP of the exact result; 0 where the logistic factor underflows, as stock'}
+- {input: Float16_b, output: Float16_b, dest: 'Yes', measured: 1, near_zero_atol: 1.925929944387236e-34, note: 'bh: below 1 ULP of the exact result; 0 where the logistic factor underflows, as stock'}
 SfpuIsclose:
 - {output: Float16_b, metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row; 0 ULP, 3 variants / 81920 lanes'}
 - {output: Float32, metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row; 0 ULP, 3 variants / 81920 lanes'}
