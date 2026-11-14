@@ -153,7 +153,9 @@ def run_unet_demo_single_image(
         else:
             y_pred = run_ttnn_inference(ttnn_model, x, batch_size, resolution, device, ttnn_configs)
 
-        y_pred_np = y_pred.detach().cpu().numpy()
+        # The model returns raw logits (no final sigmoid), so map them to probabilities
+        # before the 0.5 threshold in demo_utils.outline.
+        y_pred_np = torch.sigmoid(y_pred).detach().cpu().numpy()
         y_true_np = y_true.detach().cpu().numpy()
         output_path = os.path.join(PRED_DIR, filename)
         save_visualization(y_pred_np, y_true_np, output_path)
