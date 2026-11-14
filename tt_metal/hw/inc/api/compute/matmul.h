@@ -381,6 +381,31 @@ ALWI void matmul_block_math_dynamic_throttle(
 #endif
 
 #ifdef ARCH_BLACKHOLE
+// HiFi3 half sync with a 32-bit DEST and a 32-bit CB: in a kernel whose plain calls all have a run-time block (minimal_matmul) the
+// ttsync unpack and the row form read slower (224 2x1 bf16 +329 ns); with a constant block (bmm) both are 6-16 cy faster
+constexpr bool matmul_fe_hifi3_wide() {
+#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_UNPACK)
+    bool wide = false, bfp8 = false;
+    for (const std::uint8_t f : unpack_src_format) {
+        wide = wide || f == to_underlying(DataFormat::Float32) || f == to_underlying(DataFormat::Tf32);
+        bfp8 = bfp8 || f == to_underlying(DataFormat::Bfp8_b);
+    }
+    return MATH_FIDELITY == MathFidelity::HiFi3 && DST_SYNC_MODE == DstSync::SyncHalf && DST_ACCUM_MODE && wide && !bfp8;
+#else
+    return false;
+#endif
+}
+
+#ifdef TRISC_MATH
+// llk_math_matmul_tile_mop, and the tile MOP for a plain call in the matmul_fe_hifi3_wide class when no plain call has a constant block
+template <bool row_mop_on, std::uint32_t kt_key, DataFormat form_out>
+constexpr bool matmul_fe_tile_mop() {
+    return llk_math_matmul_tile_mop<row_mop_on, kt_key, form_out>() ||
+           (!row_mop_on && kt_key == 0 && matmul_fe_hifi3_wide() &&
+            !matmul_fe_mark::is_used_d<8, std::integral_constant<std::uint32_t, kt_key>>(0));
+}
+#endif
+
 // The unpack and math inits of matmul_block_init for the reuse direction the LLK runs
 template <
     std::uint32_t llk_dir,
@@ -409,7 +434,7 @@ ALWI void matmul_block_init_llk(
           matmul_elided_fidelity<in0_format, in1_format, out_format>(),
           MM_THROTTLE,
           row_mop_on,
-          llk_dir != 0 || llk_math_matmul_tile_mop<row_mop_on, kt_key, form_out>(),
+          llk_dir != 0 || matmul_fe_tile_mop<row_mop_on, kt_key, form_out>(),
           in1_order,
           llk_dir,
           row_end_fold,
@@ -490,7 +515,7 @@ ALWI void matmul_block_llk(
     // Dynamic throttling is only available on Blackhole architecture
     MATH((matmul_block_math_dynamic_throttle<
           row_mop_on,
-          llk_dir != 0 || llk_math_matmul_tile_mop<row_mop_on, kt_key, form_out>(),
+          llk_dir != 0 || matmul_fe_tile_mop<row_mop_on, kt_key, form_out>(),
           in1_order,
           in0_format,
           in1_format,
@@ -905,11 +930,14 @@ constexpr std::uint32_t matmul_fe_key(const std::uint32_t dim) {
     return (ct != 0xFFu && rt != 0xFFu && !LLK_SIZE_MODE) ? dim : 0;
 }
 
-// the unpack_auto_ttsync of a plain call: one value per kernel (MATMUL_FE_MARK), so its init and calls agree
+// the unpack_auto_ttsync of a plain call: one value per kernel (MATMUL_FE_MARK, and tag 8 read at the end of the unit), so
+// its init and calls agree
 template <std::size_t mark>
 constexpr std::uint32_t matmul_fe_unpack_ttsync() {
 #if defined(UCK_CHLKC_UNPACK)
-    return (mark == 1 && llk_unpack_AB_matmul_kernel_ttsync()) ? 1 : 0;
+    constexpr bool runtime_cut =
+        matmul_fe_hifi3_wide() && !matmul_fe_mark::is_used_d<8, std::integral_constant<std::size_t, mark>>(0);
+    return (mark == 1 && llk_unpack_AB_matmul_kernel_ttsync() && !runtime_cut) ? 1 : 0;
 #else
     return 0;
 #endif
@@ -988,34 +1016,48 @@ ALWI void matmul_block_fe(
 // dims
 #if defined(UCK_CHLKC_MATH)
 #define matmul_block_init(...) MATMUL_FE_CAT(MATMUL_FE_INIT_, MATMUL_FE_NARG(__VA_ARGS__))(__VA_ARGS__)
-#define MATMUL_FE_INIT_2(a, b) matmul_block_init_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), 1, 1>(__builtin_LINE(), a, b)
+#define MATMUL_FE_INIT_2(a, b) matmul_block_init_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), 1, 1, MATMUL_FE_SHAPE(1, 1)>(__builtin_LINE(), a, b)
 #define MATMUL_FE_INIT_3(a, b, tr) \
-    matmul_block_init_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), 1, 1>(__builtin_LINE(), a, b, tr)
+    matmul_block_init_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), 1, 1, MATMUL_FE_SHAPE(1, 1)>(__builtin_LINE(), a, b, tr)
 #define MATMUL_FE_INIT_4(a, b, tr, ct) \
-    matmul_block_init_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), MATMUL_FE_C(ct), 1>(__builtin_LINE(), a, b, tr, ct)
+    matmul_block_init_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), MATMUL_FE_C(ct), 1, MATMUL_FE_SHAPE(ct, 1)>(__builtin_LINE(), a, b, tr, ct)
 #define MATMUL_FE_INIT_5(a, b, tr, ct, rt)                                                  \
-    matmul_block_init_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), MATMUL_FE_C(ct), MATMUL_FE_C(rt)>( \
+    matmul_block_init_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), MATMUL_FE_C(ct), MATMUL_FE_C(rt), MATMUL_FE_SHAPE(ct, rt)>( \
         __builtin_LINE(), a, b, tr, ct, rt)
 #define MATMUL_FE_INIT_6(a, b, tr, ct, rt, kt)                                              \
-    matmul_block_init_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), MATMUL_FE_C(ct), MATMUL_FE_C(rt)>( \
+    matmul_block_init_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), MATMUL_FE_C(ct), MATMUL_FE_C(rt), MATMUL_FE_SHAPE(ct, rt)>( \
         __builtin_LINE(), a, b, tr, ct, rt, kt)
-#define MATMUL_FE_INIT_7(a, b, tr, ct, rt, kt, line) \
-    matmul_block_init_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), MATMUL_FE_C(ct), MATMUL_FE_C(rt)>(line, a, b, tr, ct, rt, kt)
+#define MATMUL_FE_INIT_7(a, b, tr, ct, rt, kt, line)                                                         \
+    matmul_block_init_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), MATMUL_FE_C(ct), MATMUL_FE_C(rt), MATMUL_FE_SHAPE(ct, rt)>( \
+        line, a, b, tr, ct, rt, kt)
 #define matmul_block(...) MATMUL_FE_CAT(MATMUL_FE_BLOCK_, MATMUL_FE_NARG(__VA_ARGS__))(__VA_ARGS__)
 // the experimental 2_0 call (no transpose argument)
 #define MATMUL_FE_BLOCK_8(...) matmul_block_fe<0xFFu, 0xFFu, 0xFFu, 0xFFu>(__builtin_LINE(), __VA_ARGS__)
 #define MATMUL_FE_BLOCK_9(a, b, i0, i1, d, tr, ct, rt, kt)                             \
-    matmul_block_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), MATMUL_FE_C(ct), MATMUL_FE_C(rt)>( \
+    matmul_block_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), MATMUL_FE_C(ct), MATMUL_FE_C(rt), MATMUL_FE_SHAPE(ct, rt)>( \
         __builtin_LINE(), a, b, i0, i1, d, tr, ct, rt, kt)
 #define MATMUL_FE_BLOCK_10(a, b, i0, i1, d, tr, ct, rt, kt, line)                      \
-    matmul_block_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), MATMUL_FE_C(ct), MATMUL_FE_C(rt)>( \
+    matmul_block_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), MATMUL_FE_C(ct), MATMUL_FE_C(rt), MATMUL_FE_SHAPE(ct, rt)>( \
         line, a, b, i0, i1, d, tr, ct, rt, kt)
 #else
-#define matmul_block_init(in0_cb_id, in1_cb_id, ...)                                                      \
-    matmul_block_init_fe<MATMUL_FE_C(in0_cb_id), MATMUL_FE_C(in1_cb_id), 0xFFu, 0xFFu, MATMUL_FE_MARK()>( \
-        __builtin_LINE(), in0_cb_id, in1_cb_id, ##__VA_ARGS__)
-#define matmul_block(in0_cb_id, in1_cb_id, ...)                                                       \
-    matmul_block_fe<MATMUL_FE_C(in0_cb_id), MATMUL_FE_C(in1_cb_id), 0xFFu, 0xFFu, MATMUL_FE_MARK()>( \
-        __builtin_LINE(), in0_cb_id, in1_cb_id, __VA_ARGS__)
+// the unpack and pack calls key no ct or rt (MATMUL_FE_MARK, MATMUL_FE_SHAPE only)
+#define matmul_block_init(...) MATMUL_FE_CAT(MATMUL_FE_UINIT_, MATMUL_FE_NARG(__VA_ARGS__))(__VA_ARGS__)
+#define MATMUL_FE_UINIT(a, b, ct, rt) \
+    matmul_block_init_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), 0xFFu, 0xFFu, MATMUL_FE_MARK() + MATMUL_FE_SHAPE(ct, rt)>
+#define MATMUL_FE_UINIT_2(a, b) MATMUL_FE_UINIT(a, b, 1, 1)(__builtin_LINE(), a, b)
+#define MATMUL_FE_UINIT_3(a, b, tr) MATMUL_FE_UINIT(a, b, 1, 1)(__builtin_LINE(), a, b, tr)
+#define MATMUL_FE_UINIT_4(a, b, tr, ct) MATMUL_FE_UINIT(a, b, ct, 1)(__builtin_LINE(), a, b, tr, ct)
+#define MATMUL_FE_UINIT_5(a, b, tr, ct, rt) MATMUL_FE_UINIT(a, b, ct, rt)(__builtin_LINE(), a, b, tr, ct, rt)
+#define MATMUL_FE_UINIT_6(a, b, tr, ct, rt, kt) MATMUL_FE_UINIT(a, b, ct, rt)(__builtin_LINE(), a, b, tr, ct, rt, kt)
+#define MATMUL_FE_UINIT_7(a, b, tr, ct, rt, kt, line) MATMUL_FE_UINIT(a, b, ct, rt)(line, a, b, tr, ct, rt, kt)
+#define matmul_block(...) MATMUL_FE_CAT(MATMUL_FE_UBLOCK_, MATMUL_FE_NARG(__VA_ARGS__))(__VA_ARGS__)
+#define MATMUL_FE_UBLOCK(a, b, ct, rt) \
+    matmul_block_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), 0xFFu, 0xFFu, MATMUL_FE_MARK() + MATMUL_FE_SHAPE(ct, rt)>
+// the experimental 2_0 call (no transpose argument)
+#define MATMUL_FE_UBLOCK_8(a, b, i0, i1, d, ct, rt, kt) MATMUL_FE_UBLOCK(a, b, ct, rt)(__builtin_LINE(), a, b, i0, i1, d, ct, rt, kt)
+#define MATMUL_FE_UBLOCK_9(a, b, i0, i1, d, tr, ct, rt, kt) \
+    MATMUL_FE_UBLOCK(a, b, ct, rt)(__builtin_LINE(), a, b, i0, i1, d, tr, ct, rt, kt)
+#define MATMUL_FE_UBLOCK_10(a, b, i0, i1, d, tr, ct, rt, kt, line) \
+    MATMUL_FE_UBLOCK(a, b, ct, rt)(line, a, b, i0, i1, d, tr, ct, rt, kt)
 #endif
 #endif
