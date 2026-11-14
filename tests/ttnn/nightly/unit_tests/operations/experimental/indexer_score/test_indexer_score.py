@@ -1009,7 +1009,7 @@ def test_indexer_score_streaming_qmcast_uneven_bands(device):
         (8, 128, 160, 2816, 1024, 32, 64, 0),  # G=5 -> group_rows=5, num_blocks=2 (target 64h/160 shape)
         (8, 128, 64, 3584, 1536, 32, 64, 0),  # G=2 -> group_rows=2, num_blocks=5 (deep split, 2 rows/block)
         (8, 128, 96, 2176, 768, 32, 64, 0),  # G=3 -> group_rows=3, num_blocks=3 (9 rows used)
-        (8, 128, 160, 2880, 1024, 32, 128, 0),  # G=5, num_blocks=2 + KC not dividing Tt (partial last band)
+        (8, 128, 160, 3264, 1024, 32, 128, 0),  # G=5, num_blocks=2 + KC not dividing Tt (partial last band)
     ],
     ids=["fill_5x2", "fill_2x5", "fill_3x3", "fill_5x2_partial"],
 )
