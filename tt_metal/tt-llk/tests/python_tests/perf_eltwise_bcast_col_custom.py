@@ -18,7 +18,10 @@ from helpers.param_config import (
 from helpers.perf.core import ALL_PERF_RUN_TYPES
 from helpers.stimuli_config import StimuliConfig
 from helpers.tile_constants import get_tile_params
-from test_eltwise_bcast_col_custom import create_eltwise_bcast_col_custom_config
+from test_eltwise_bcast_col_custom import (
+    BCAST_COL_CUSTOM_TILE_DIMENSIONS,
+    create_eltwise_bcast_col_custom_config,
+)
 
 
 @pytest.mark.perf
@@ -28,8 +31,7 @@ from test_eltwise_bcast_col_custom import create_eltwise_bcast_col_custom_config
     dest_acc=[DestAccumulation.No],
     math_fidelity=[MathFidelity.LoFi],
     broadcast_type=[BroadcastType.Column],
-    # Perf measures full 32x32 tiles; the functional sweep also runs 16x32 tiny tiles.
-    tile_rows=[32],
+    tile_dimensions=BCAST_COL_CUSTOM_TILE_DIMENSIONS,
     ct_dim=[1, 8],
     loop_factor=[64],
 )
@@ -40,12 +42,13 @@ def test_perf_eltwise_bcast_col_custom(
     dest_acc,
     math_fidelity,
     broadcast_type,
-    tile_rows,
+    tile_dimensions,
     ct_dim,
     loop_factor,
 ):
     # Derived exactly as the functional test derives them, so perf emits the same geometry.
-    tile_dims = [tile_rows, 32]
+    tile_dims = list(tile_dimensions)
+    tile_rows = tile_dims[0]
     face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(tile_dims)
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
         DestSync.Half,
@@ -72,6 +75,10 @@ def test_perf_eltwise_bcast_col_custom(
             tile_count_A=ct_dim,
             tile_count_B=1,
             tile_count_res=ct_dim,
+            num_faces=num_faces_r_dim * num_faces_c_dim,
+            face_r_dim=face_r_dim,
+            tile_dimensions=tile_dims,
+            use_dense_tile_dimensions=True,
         ),
         num_faces=num_faces_r_dim * num_faces_c_dim,
         face_r_dim=face_r_dim,

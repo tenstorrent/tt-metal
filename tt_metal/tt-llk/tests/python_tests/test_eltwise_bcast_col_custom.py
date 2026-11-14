@@ -87,9 +87,9 @@ class PRESERVE_SRC_ZERO_FLAG(TemplateParameter):
         return f"constexpr bool PRESERVE_SRC_ZERO_FLAG = {str(self.bcast_preserve).lower()};"
 
 
-# Row height of the srcA operand. 32 -> full 32x32 tiles (num_faces=4);
-# 16 -> 16x32 "tiny tiles" (one face-row, num_faces=2).
-_TILE_ROWS = [32, 16]
+# Tile shape of the srcA operand: 32x32 is a full tile (num_faces=4), 16x32 a "tiny tile" (one
+# face-row, num_faces=2). Shared with the perf module so the two sweeps stay aligned.
+BCAST_COL_CUSTOM_TILE_DIMENSIONS = [[32, 32], [16, 32]]
 # Each column tile is tile_rows x 32; srcA is one row of ct_dim tiles.
 _BCST_COL_RT_DIM = 1
 _CPP_SOURCE = "sources/eltwise_bcast_col_custom_test.cpp"
@@ -248,7 +248,7 @@ def _canonical_bcast_col_config(
     dest_acc=[DestAccumulation.No],
     math_fidelity=ALL_MATH_FIDELITIES,
     broadcast_type=[BroadcastType.Column],
-    tile_rows=_TILE_ROWS,
+    tile_dimensions=BCAST_COL_CUSTOM_TILE_DIMENSIONS,
     # Widths up to 256 fit a single dest section; 1024 (32 tiles) spans multiple
     # sections, exercising destination bank switching in the custom pipeline.
     input_width=list(range(32, 257, 32)) + [1024],
@@ -259,7 +259,7 @@ def test_eltwise_bcast_col_custom(
     dest_acc,
     math_fidelity,
     broadcast_type,
-    tile_rows,
+    tile_dimensions,
     input_width,
 ):
     if mathop != MathOperation.Elwmul and math_fidelity != MathFidelity.LoFi:
@@ -272,11 +272,12 @@ def test_eltwise_bcast_col_custom(
     ):
         pytest.skip("MUL bcast-col reuse scaffold is Blackhole-only")
 
+    tile_dims = list(tile_dimensions)
+    tile_rows = tile_dims[0]
     input_dimensions_A = [tile_rows, input_width]
     input_dimensions_B = [tile_rows, 32]
 
     # 32x32 tile => num_faces=4, 16x32 tiny tile => num_faces=2.
-    tile_dims = [tile_rows, 32]
     face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(tile_dims)
     num_faces = num_faces_r_dim * num_faces_c_dim
 
