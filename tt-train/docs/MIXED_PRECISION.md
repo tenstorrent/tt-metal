@@ -153,63 +153,8 @@ while the optimizer state and the master weights, which accumulate, stay in fp32
 bf16 parameters, fused `AdamW` keeps bf16 moments). A sum that is exact in fp32 would need new kernels; over 17
 TinyLlama runs per variant it made no difference to the loss against this one.
 
-### How the design was chosen
-
-The options below were measured on an 8-chip Blackhole p150b machine (1x8 line and ring, 2x4, the default 4352-byte
-fabric packets, eager dispatch) before the code was written. The bar was a sum clearly better than bf16 that changes
-training as little as possible, not a bit-exact one.
-
-**Precision on real gradients** (nano DeepSeek and TinyLlama, captured during training): the share of elements equal
-to the exact mean rounded once to bf16, and the mean error relative to that rounding error.
-
-| Devices | bf16 sum | fp32 sum | exact sum |
-|---|---|---|---|
-| 2 | 80-89%, ≤1.003× | 99.4-99.9%, ≤1.003× | 100%, 1× |
-| 4 | 61-67%, 1.6-1.8× | 97.5-98.8%, ≤1.010× | 100%, 1× |
-| 8 | 40-54%, 2.2-2.7× | 92.6-97.9%, 1.007-1.032× | 100%, 1× |
-
-The bf16 sum is also biased: it inflates every gradient by about 0.27% on 8 devices (0.08-0.13% on 2); the fp32 sum's
-bias is about 60 times smaller. Even on 2 devices the fp32 sum isn't exact, because of how the FPU adds: `add_tiles`
-of two bf16 values into an fp32 `Dst` aligns them with 10 fraction bits, so `1 + 2^-20` gives `1`, and only 50.2% of
-random bf16 pairs come out exact through `ttnn.add`. Accumulating into `Dst` instead (`copy_tile`, then `add_tiles`
-with `acc_to_dest`) adds at fp32 width, and the SFPU adds exactly; per tile on one core they cost 35 ns, 135 ns and
-325 ns.
-
-**Training impact:** nano DeepSeek, 2,000 steps on 8 devices, mean loss of the last 50 steps: bf16 sum 0.1068, fp32
-0.1066, exact 0.1074, against 0.1076 for a control that only sums the exact copies in reverse order. TinyLlama, 17 seeds per
-variant, steps 201-300: fp32 minus exact +0.007 (95% interval −0.085 to +0.100), bf16 minus exact −0.038 (−0.100 to
-+0.025). No variant trains measurably better.
-
-**Cost of one collective**, 64 MB of bf16 gradient per device:
-
-| Mesh | bf16 all-reduce | fp32 all-reduce | fp32 reduce-scatter, bf16 all-gather | exact sum |
-|---|---|---|---|---|
-| 1x8 line | 3.14 ms | 7.15 ms (2.28×) | 4.80 ms (1.53×) | 25.5 ms (8.1×) |
-| 1x8 ring | 1.95 ms | 4.76 ms (2.44×) | 3.10 ms (1.59×) | 20.2 ms (10.4×) |
-
-Up to 1 MB per device the two fp32 routes are within 3% of each other: a call there costs 155-190 µs of host time
-against 32-49 µs on the device. From 4 MB the reduce-scatter route takes 0.65-0.79 of the all-reduce's time: 0.71-0.79 at
-4 MB and 0.67-0.73 at 16 MB (1x2, 1x8 and 2x4 meshes), and 0.65-0.67 at 64 MB (1x8).
-
-**Options and verdicts:**
-
-| Option | What it showed | Verdict |
-|---|---|---|
-| fp32 all-reduce | twice the bytes of bf16; no slower than the reduce-scatter route up to 1 MB | used below 2^19 elements |
-| fp32 reduce-scatter, bf16 all-gather | 1.5 times the bytes; 1.53× bf16 at 64 MB on the line | used from 2^19 elements |
-| fp32 all-gather, then cast | same bits, 7.1 against 4.8 ms at 64 MB | not used |
-| exact sum (gather, SFPU adds) | +253 ms per nano DeepSeek step, +711 ms per TinyLlama step; no loss difference | not used |
-| bf16 on the wire, fp32 accumulation inside the reduce-scatter | would save the casts: at most 2-3% of a TinyLlama step; needs a kernel change, feasible with the accumulate-into-`Dst` add | possible later optimisation |
-| ttnn's direct reduce-scatter (≤512 KB) | device time within 10%, host dispatch dominates | no gain |
-| chains on a ring, slice exchange (all-to-all) | by a cost model 1.36× today's bytes on an 8-device ring, and 2.29× the busiest-link load of a bf16 reduce-scatter; need kernel work | not pursued |
-| fp32 gradients kept after the reduce | the fused optimizers take bf16 gradients; +2 bytes per parameter while gradients live | not done |
-| `FABRIC_1D` instead of `FABRIC_2D` | raw links 28.5-30.3 against 22.9 GB/s, but collectives within 1% at 4-64 MB (the ops cap near 21 GB/s per link), and rings would run as lines | no change |
-| 10240-byte fabric packets | 1.09-1.32× on 16-64 MB collectives, nothing below 1 MB | separate work |
-| trace | the whole nano DeepSeek sync 39.9 → 14.4 ms, TinyLlama unchanged; tt-train can't trace today | later |
-| bucketing small gradients | nano DeepSeek's whole sync, measured on its own: 249 calls take 39.9 ms eager and 14.4 ms replayed as a trace, against 3.1 ms for one 64 MB call; in a training-step profile on an older build the sync was a quarter of the step | the main lever for later |
-
-PyTorch's FSDP2 with `reduce_dtype=torch.float32` also reduce-scatters in fp32, but casts the result to the parameter's
-dtype, so with fp32 parameters its optimizer gets fp32 gradients; DDP's `bf16_compress_hook` sums in bf16.
+How this design was chosen, with the precision, training-impact and collective measurements behind it, is in
+[a comment on #56513](https://github.com/tenstorrent/tt-metal/issues/56513#issuecomment-6869872779).
 
 ## Loading values into a tensor
 
