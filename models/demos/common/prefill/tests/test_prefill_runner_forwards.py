@@ -290,7 +290,11 @@ def test_downstream_rank_writes_chunks_into_one_buffer_and_forwards_the_metadata
     monkeypatch.setattr(
         runner,
         "_d2d_recv",
-        lambda d2d_in, sockets, stage_metadata=None: (_Act([1, 1, F * rows, hidden]), [], runner._meta_from_words(next(it))),
+        lambda d2d_in, sockets, stage_metadata=None: (
+            _Act([1, 1, F * rows, hidden]),
+            [],
+            runner._meta_from_words(next(it)),
+        ),
     )
 
     runtime = _EchoRuntime()

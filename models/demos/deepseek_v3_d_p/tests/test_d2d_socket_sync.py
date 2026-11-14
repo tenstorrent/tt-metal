@@ -424,7 +424,9 @@ def test_d2d_socket_sync_shared_links(mesh_device, relay, extras, hidden):
                 assert len(drained) == 4
                 _assert_shards_equal(sent[1], drained[1], f"relay={relay} iter {it} bf16 tile")
                 _assert_shards_equal(sent[2], drained[2], f"relay={relay} iter {it} ids")
-            print(f"[d2d shared-links] relay={relay} extras={extras} hidden={hidden} iter {it}: {len(out_shards)} shards bit-exact")
+            print(
+                f"[d2d shared-links] relay={relay} extras={extras} hidden={hidden} iter {it}: {len(out_shards)} shards bit-exact"
+            )
 
             for t in sent:
                 ttnn.deallocate(t)
