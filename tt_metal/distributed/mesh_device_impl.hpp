@@ -466,6 +466,7 @@ public:
     // Returns the devices in the mesh in row-major order.
     std::vector<Device*> get_devices() const;
     const std::vector<Device*>& get_local_devices(const MeshCoordinateRange& range) const;
+    bool has_local_devices() const { return !local_devices_.empty(); }
     Device* get_device(ChipId physical_device_id) const;
     Device* get_device(const MeshCoordinate& coord) const;
     tt_fabric::FabricNodeId get_fabric_node_id(const MeshCoordinate& coord) const;
