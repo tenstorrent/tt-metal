@@ -9,14 +9,14 @@
 # stripped ttnn-import tree with zstd -1 (their compression-level 1). Names
 # drop the ref and run-id suffix: TorrentCI scopes artifacts to the producing
 # job execution. ccache is remote; no TorrentCI cache (large restores fail
-# today, torrentci#1179). Not yet here: triggers (run it by hand).
+# today, torrentci#1179). On afuller/baby-steps it runs on every merge-queue
+# entry; here it has no trigger: run it by hand.
 jobs:
   - id: asan-build
     description: Configure and compile tt-metal (ASan, --build-all) in the CI build image
     timeout: 4h
     # Remote ccache through the platform's proxy: TorrentCI sets
     # CCACHE_REMOTE_STORAGE (civ2).
-    # Run marker: cpm warm 1
     compiler-cache: ccache
     runs-on:
       kubernetes:
@@ -48,10 +48,12 @@ jobs:
         - name: packages-ubuntu-24.04-amd64-ASan-x86_64-linux-clang-20-libstdcpp
           path: packages.tar
           content-type: application/x-tar
+          retention: dependents
         # Consumed by build-docs as TT_FROM_PRECOMPILED_DIR=/work.
         - name: ttnn-import-ASan
           path: ttnn-import.tar.zst
           content-type: application/zstd
+          retention: dependents
     steps:
       - id: check-image
         kind: shell
