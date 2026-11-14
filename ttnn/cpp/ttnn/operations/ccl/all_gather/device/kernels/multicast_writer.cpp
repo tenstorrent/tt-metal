@@ -137,6 +137,24 @@ void kernel_main() {
                 1u});  // increment 1
     }
 
+    uint8_t sem_route_id_alt = 0;
+    if constexpr (enable_fabric && load_balance_across_alt_routes) {
+        sem_route_id_alt = PacketHeaderPool::allocate_header_n(num_connections);
+        uint8_t starts[1] = {1};
+
+        fabric_api::fabric_multicast_noc_unicast_atomic_inc_set_state<
+            UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
+            fabric_connection,
+            sem_route_id_alt,
+#ifndef FABRIC_2D
+            starts,
+#endif
+            ranges_alt,
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+                0u,    // ignore
+                1u});  // increment 1
+    }
+
     // Initialization barrier:
     // In some cases we don't have a guarantee that the output tensor has been allocated
     // on remote devices (every device's command queue executes asynchronously). So we wait
@@ -238,6 +256,12 @@ void kernel_main() {
             fabric_connection,
             sem_route_id,
             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{done_sem_noc_addr_in_pkt, 0});
+        if constexpr (load_balance_across_alt_routes) {
+            fabric_api::fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+                fabric_connection,
+                sem_route_id_alt,
+                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{done_sem_noc_addr_in_pkt, 0});
+        }
     }
 
     if constexpr (enable_fabric) {
