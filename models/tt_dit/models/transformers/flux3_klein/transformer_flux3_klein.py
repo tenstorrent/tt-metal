@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import itertools
 from dataclasses import dataclass, field
 
 import torch
@@ -43,9 +44,11 @@ MOD_SOURCES = (
     ("single_stream_modulations.txt.lin", 3),
     ("final_layer.image.adaLN_modulation.1", 2),
 )
-MOD_CHUNKS = 20
-MOD_SCALE_CHUNKS = (1, 4, 7, 10, 13, 16, 19)
-MOD_FINAL_SHIFT_CHUNK, MOD_FINAL_SCALE_CHUNK = 18, 19
+# Each source's chunks are (shift, scale) or (shift, scale, gate), concatenated in source order.
+MOD_SOURCE_STARTS = tuple(itertools.accumulate((n for _, n in MOD_SOURCES), initial=0))[:-1]
+MOD_CHUNKS = sum(n for _, n in MOD_SOURCES)
+MOD_SCALE_CHUNKS = tuple(start + 1 for start in MOD_SOURCE_STARTS)
+MOD_FINAL_SHIFT_CHUNK, MOD_FINAL_SCALE_CHUNK = MOD_SOURCE_STARTS[-1], MOD_SOURCE_STARTS[-1] + 1
 MOD_VEC_ROWS = 3
 VEC_ROW_OF_MODE_ID = (0, 1, 1, 2)
 
