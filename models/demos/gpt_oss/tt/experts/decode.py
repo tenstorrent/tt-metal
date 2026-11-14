@@ -209,18 +209,16 @@ class IndexedDecodeTensors:
     sparse_matmul ([E, 1, N] TILE BF16: tile row e holds expert e's bias in row 0) and the operand-only sparsity mask
     (the indexed kernels never read it). Built on device from the loaded bias tensors, so no new cache entries."""
 
-    def __init__(self, mesh_device, weights: ExpertWeights, config: ExpertConfig):
+    def __init__(self, mesh_device, weights: ExpertWeights, config: ExpertConfig, lazy=False):
+        """lazy: the bias tables are built (materialize) and freed (release) around each use instead of kept: they pad
+        every expert's row to a tile row (32x), ~36 MB per layer per device for gpt-oss-120b's 128 experts at TP=4."""
         import torch
 
         e = config.num_experts
-
-        def per_expert(bias):
-            # [1, E, N] -> [E, 1, N]: each expert's bias row in row 0 of its own tile row.
-            return ttnn.reshape(bias, (e, 1, bias.shape[-1]))
-
-        self.gate_bias = per_expert(weights.gate_proj_bias)
-        self.up_bias = per_expert(weights.up_proj_bias)
-        self.down_bias = per_expert(weights.down_proj_bias)
+        self.lazy, self._weights, self._e = lazy, weights, e
+        self.gate_bias = self.up_bias = self.down_bias = None
+        if not lazy:
+            self.materialize()
         self.unused_sparsity = ttnn.from_torch(
             torch.zeros((1, 1, 1, e), dtype=torch.bfloat16),
             device=mesh_device,
@@ -239,6 +237,26 @@ class IndexedDecodeTensors:
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+
+    def materialize(self):
+        """The [E, 1, N] bias tables (device reshapes of the [1, E, N] biases: no host transfer, trace-safe)."""
+        if self.gate_bias is None:
+            w, e = self._weights, self._e
+
+            def per_expert(bias):
+                # [1, E, N] -> [E, 1, N]: each expert's bias row in row 0 of its own tile row.
+                return ttnn.reshape(bias, (e, 1, bias.shape[-1]))
+
+            self.gate_bias = per_expert(w.gate_proj_bias)
+            self.up_bias = per_expert(w.up_proj_bias)
+            self.down_bias = per_expert(w.down_proj_bias)
+
+    def release(self):
+        """Free the bias tables of a lazy instance."""
+        if self.lazy and self.gate_bias is not None:
+            for t in (self.gate_bias, self.up_bias, self.down_bias):
+                t.deallocate(True)
+            self.gate_bias = self.up_bias = self.down_bias = None
 
 
 def decode_forward_indexed(

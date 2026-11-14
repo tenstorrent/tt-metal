@@ -16,7 +16,7 @@ import ttnn
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 
 from . import opt_switches
-from .fused_decode.config import ROUTER_DECODE_WEIGHT_DTYPE
+from .fused_decode.config import ROUTER_DECODE_WEIGHT_DTYPE, fast_topk_on
 from .fused_decode.stream import NBIAS, as_stream_tensor, linear_stream_rows, stream_linear_layout
 
 
@@ -294,7 +294,9 @@ class TopKRouter:
             out_page_bytes=64,
             heads=(self.top_k, self.num_experts),
         )
-        return router(hidden_states, self.weight_stream, self.ccl_manager.get_decode_router_out())
+        # the one-pass top-4 + softmax (fused_decode/config.py fast_topk_on, kernels/router_topk.hpp; same output bits)
+        fast = [("ROUTER_FAST_TOPK", "1")] if fast_topk_on() else None
+        return router(hidden_states, self.weight_stream, self.ccl_manager.get_decode_router_out(), extra_defines=fast)
 
     def _fused_call(self, hidden_states, use_throughput_experts):
         """Forward pass using fused matmul+topk+softmax kernel.

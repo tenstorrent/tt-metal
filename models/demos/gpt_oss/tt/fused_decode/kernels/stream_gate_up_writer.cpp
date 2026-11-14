@@ -55,7 +55,11 @@ void kernel_main() {
     noc_async_read(s_x.get_noc_addr(0), x_l1, kx * tiny_bytes);
     volatile tt_l1_ptr uint16_t* ones = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(x_l1 + kx * tiny_bytes);
     for (uint32_t i = 0; i < 32; ++i) {
+#ifdef W_TRANSPOSED
+        ones[i] = i < nbias ? 0x3F80 - ((3 * i) << 7) : 0;  // BF16 8^-i (K-grouped bias terms)
+#else
         ones[i] = i < nbias ? 0x3F80 : 0;  // BF16 1.0
+#endif
     }
     noc_async_read_barrier();
     cb_push_back(cb_x, kx + 1);

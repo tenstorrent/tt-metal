@@ -127,7 +127,17 @@ void kernel_main() {
             volatile tt_l1_ptr uint16_t* aug =
                 reinterpret_cast<volatile tt_l1_ptr uint16_t*>(slot + (seg_tiles - 1) * tiny_bytes);
             for (uint32_t i = 0; i < 32 * rows; ++i) {
+#ifdef W_TRANSPOSED
+                // w * 8^-j for bias term j (K-grouped bias tiles): lower the BF16 exponent field, 0 on underflow
+                aug[i] = 0;
+                if (i < 16 * rows && i % 16 < nbias) {
+                    const uint16_t wv = w[(i / 16) * 32 + order[e]];
+                    const uint32_t sh = (3 * (i % 16)) << 7;
+                    aug[i] = (wv & 0x7F80) > sh ? static_cast<uint16_t>(wv - sh) : 0;
+                }
+#else
                 aug[i] = (i < 16 * rows && i % 16 < nbias) ? w[(i / 16) * 32 + order[e]] : 0;
+#endif
             }
         }
         // Slot e is complete once all gate|up cores counted it; push each slot as it arrives (compute waits per slot).

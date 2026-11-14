@@ -22,8 +22,19 @@ def _page_bytes(t):
     return t.shape[-1] * (2 if t.dtype == ttnn.bfloat16 else 4)
 
 
+class EntryPartial:
+    """Decode input of the first layer with a vocab-sharded embedding (fused_decode/embed.py): its input boundary
+    all-reduces `partial` (already sent, site "entry") onto the zero flat `residual`."""
+
+    def __init__(self, residual, partial):
+        self.residual, self.partial = residual, partial
+
+
 class DecodeInputs:
-    def __init__(self, mesh_device, embedding_weight, rope_setup, hidden):
+    def __init__(self, mesh_device, embedding_weight, rope_setup, hidden, vshard=None):
+        """vshard = (offsets, Vd, boundary, partial): the table is vocab-sharded (fused_decode/embed.py); the row goes to
+        `partial`, which the op sends over the fabric for the first layer boundary (site "entry")."""
+        self.vshard = vshard
         self.mesh_device = mesh_device
         self.embedding_weight = embedding_weight
         self.cos_table, self.sin_table = rope_setup.cos_matrix, rope_setup.sin_matrix
@@ -72,6 +83,16 @@ class DecodeInputs:
         ct = [0, row_bytes, tok_page, rot_page, self.users, dim_tiles]
         for t in (tokens, self.embedding_weight, emb, rot_idxs, self.cos_table, self.sin_table):
             ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
+        defines = []
+        if self.vshard is not None:
+            offsets, vd, boundary, partial = self.vshard
+            residual = boundary._empty_flat()  # zeroed by the op
+            flat_bytes = boundary.tiles * 2048
+            for t in (offsets, partial, residual):
+                ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
+            ct += [flat_bytes] + boundary.notify_args()[1:]
+            scratch += 128 + flat_bytes
+            defines = [("EMB_VSHARD", str(vd))]
         rt = ttnn.RuntimeArgs()
         args = [
             tokens.buffer_address(),
@@ -86,6 +107,8 @@ class DecodeInputs:
         for c in self.rope_cores:
             p = mesh.worker_core_from_logical_core(c)
             args += [p.x, p.y]
+        if self.vshard is not None:
+            args += [offsets.buffer_address(), partial.buffer_address(), residual.buffer_address()]
         rt[CORE.x][CORE.y] = args
         kernel = ttnn.KernelDescriptor(
             kernel_source=str(KERNEL_DIR / "decode_inputs.cpp"),
@@ -93,14 +116,25 @@ class DecodeInputs:
             compile_time_args=ct,
             runtime_args=rt,
             config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_0),
+            defines=defines,
         )
         cb = ttnn.CBDescriptor(
             total_size=scratch,
             core_ranges=self.cores,
             format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=0, data_format=ttnn.bfloat16, page_size=scratch)],
         )
-        program = ttnn.ProgramDescriptor(kernels=[kernel], semaphores=[], cbs=[cb])
-        ttnn.generic_op(
-            [tokens, self.embedding_weight, rot_idxs, self.cos_table, self.sin_table, emb, cos, sin], program
-        )
-        return emb, [cos, sin]
+        io = [tokens, self.embedding_weight, rot_idxs, self.cos_table, self.sin_table, emb, cos, sin]
+        if self.vshard is None:
+            program = ttnn.ProgramDescriptor(kernels=[kernel], semaphores=[], cbs=[cb])
+            ttnn.generic_op(io, program)
+            return emb, [cos, sin]
+
+        def build():
+            return ttnn.ProgramDescriptor(kernels=[kernel], semaphores=[], cbs=[cb])
+
+        # the producer program + the boundary's fabric sender of the "entry" site (it multicasts the partial once the
+        # kernel has notified it)
+        program = boundary.sending_program(build, partial, "entry", self.cores)
+        ttnn.generic_op(io + [offsets, partial, residual], program)
+        emb.deallocate(True)
+        return EntryPartial(residual, partial), [cos, sin]

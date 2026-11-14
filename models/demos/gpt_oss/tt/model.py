@@ -15,7 +15,15 @@ from models.tt_transformers.tt.common import copy_host_to_device, rope_scaling_m
 from models.tt_transformers.tt.rope import RotarySetup
 
 from . import opt_switches
-from .fused_decode.config import fused_decode_supported
+from .fused_decode.config import embed_vshard_on, fused_decode_supported
+from .fused_decode.embed import (
+    VocabLocalize,
+    vshard_embedding,
+    vshard_offsets,
+    vshard_rows,
+    vshard_table,
+    vshard_table_from_cache,
+)
 from .fused_decode.inputs import DecodeInputs
 from .fused_decode.terminal import DecodeTerminal, FusedSamplingGenerator
 from .host_readback import DecodeHostReadback, DecodeHostRows
@@ -182,24 +190,54 @@ class Model:
         # live, then throws the result away (the replay uses the matrices bound at capture time).
         self._prefill_rope_slices = {}
 
+        # Fused decode at TP > 1 for gpt-oss-120b: the embedding table vocab-sharded over the TP devices
+        # (fused_decode/embed.py; decode: the first layer boundary all-reduces the row, site "entry").
+        tp = mesh_device.shape[1]
+        self.embed_vshard = self.fused_decode and embed_vshard_on(tp, hf_config.num_local_experts)
+        if self.embed_vshard:
+            ccl_manager.decode_boundary_sites = ("attn", "moe", "entry")
         if state_dict:
             embedding_weight = substate(state_dict, "model.embed_tokens")["weight"]
-            embedding_weight = embedding_weight.unsqueeze(0).unsqueeze(0)
+            if self.embed_vshard:
+                embedding_weight = vshard_table(embedding_weight.reshape(self.vocab_size, -1), tp)
+            else:
+                embedding_weight = embedding_weight.unsqueeze(0).unsqueeze(0)
         else:
             embedding_weight = None
+            if self.embed_vshard:
+                # a warm cache from before the vocab-sharded table: derive it from the replicated table's cache file
+                embedding_weight = vshard_table_from_cache(
+                    get_cache_file_name(tensor_cache_path, "model.embed_tokens.weight"),
+                    get_cache_file_name(tensor_cache_path, f"model.embed_tokens.weight_vshard{tp}"),
+                    self.vocab_size,
+                    tp,
+                )
 
         self.embedding_weight = ttnn.as_tensor(
             embedding_weight,
             dtype=ttnn.bfloat16,
             device=mesh_device,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            cache_file_name=get_cache_file_name(tensor_cache_path, "model.embed_tokens.weight"),
+            cache_file_name=get_cache_file_name(
+                tensor_cache_path, "model.embed_tokens.weight" + (f"_vshard{tp}" if self.embed_vshard else "")
+            ),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            **(
+                {"mesh_mapper": ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=(None, 2))}
+                if self.embed_vshard
+                else {}
+            ),
         )
-        # Fused decode: the token's embedding row and the Q/K RoPE rows come from one op (fused_decode/inputs.py).
+        self.embed_localize = None
+        if self.embed_vshard:
+            self.embed_vd = vshard_rows(self.vocab_size, tp)
+            self.embed_offsets = vshard_offsets(mesh_device, self.vocab_size, tp)
+            self.embed_localize = VocabLocalize(mesh_device, self.embed_offsets, self.embed_vd)
+        # Fused decode: the token's embedding row and the Q/K RoPE rows come from one op (fused_decode/inputs.py); with a
+        # vocab-sharded table it is built after the layers (it sends to their boundary).
         self.decode_inputs = (
             DecodeInputs(mesh_device, self.embedding_weight, self.rope_setup, hf_config.hidden_size)
-            if self.fused_decode
+            if self.fused_decode and not self.embed_vshard
             else None
         )
         self.layers = [
@@ -229,6 +267,20 @@ class Model:
             tensor_cache_path=get_cache_file_name(tensor_cache_path, "norm"),
             mesh_config=self.mesh_config,
         )
+        if self.embed_vshard:
+            hidden = hf_config.hidden_size
+            self.decode_inputs = DecodeInputs(
+                mesh_device,
+                self.embedding_weight,
+                self.rope_setup,
+                hidden,
+                vshard=(
+                    self.embed_offsets,
+                    self.embed_vd,
+                    ccl_manager.get_decode_boundary(hidden),
+                    ccl_manager.get_decode_partial(hidden),
+                ),
+            )
         if self.fused_decode:
             for i, layer in enumerate(self.layers):
                 last = i + 1 == len(self.layers)
@@ -279,7 +331,11 @@ class Model:
         self._prefill_sampling_active = False
         # sampling_dp: number of independent sampling groups (one per mesh row for row-sharded users)
         self.sampling_dp = mesh_device.shape[0] if users_row_sharded else 1
-        if self._supports_on_device_sampling:
+        # TP=1 fused decode (one chip): the full 201k vocab per device rules out the stock on-device sampler (prefill
+        # keeps host sampling), but decode samples from the fused LM head's top-32 candidates (fused_decode/
+        # terminal.py), so the decode sampler exists without _supports_on_device_sampling.
+        fused_decode_sampler = self.decode_terminal is not None and mesh_device.shape[1] == 1
+        if self._supports_on_device_sampling or fused_decode_sampler:
             # tt_ccl=None makes TTSampling fall back to ttnn.all_gather() which works on [4,8] meshes
             sampling_args = self.args if hasattr(self, "args") else self._make_sampling_args(hf_config, mesh_device)
             if self.decode_terminal is not None:
@@ -1200,6 +1256,14 @@ class Model:
         )
         return host_inputs
 
+    def _embed_prefill(self, tokens):
+        """Prefill token embedding (BFP8 tiles); a vocab-sharded table (fused_decode/embed.py): local rows + all-reduce."""
+        if self.embed_localize is None:
+            return ttnn.embedding(tokens, self.embedding_weight, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
+        return vshard_embedding(
+            self.embed_localize, tokens, self.embedding_weight, self.mesh_config.tp_axis, self.ccl_manager.num_links
+        )
+
     def transform_and_embed_prefill_inputs_device(
         self,
         tokens,
@@ -1208,7 +1272,7 @@ class Model:
         tt_chunk_start_idx=None,
     ):
         """Transform and embed tokens on device"""
-        tokens_embd = ttnn.embedding(tokens, self.embedding_weight, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
+        tokens_embd = self._embed_prefill(tokens)
         # Keep `tokens` allocated: trace replay updates this same device buffer via copy_host_to_device.
         # Deallocating it here breaks prefill trace replay with "Buffer must be allocated on device".
         if len(tokens_embd.shape) == 3:
@@ -1258,7 +1322,7 @@ class Model:
             tokens = ttnn.from_torch(tokens, device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
 
         if not trace_enabled:
-            tokens_embd = ttnn.embedding(tokens, self.embedding_weight, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
+            tokens_embd = self._embed_prefill(tokens)
             tokens.deallocate(True)
 
             # Ensure proper 4D shape

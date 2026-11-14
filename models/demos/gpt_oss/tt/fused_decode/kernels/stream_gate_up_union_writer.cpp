@@ -92,7 +92,12 @@ void kernel_main() {
     }
     volatile tt_l1_ptr uint16_t* ones = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(x_l1 + kx * tiny_bytes);
     for (uint32_t i = 0; i < 32 * rows; ++i) {
+#ifdef W_TRANSPOSED
+        // BF16 8^-j for bias term j (K-grouped bias tiles, fused_decode/stream.py bias_tiles_t)
+        ones[i] = (i < 16 * rows && i % 16 < nbias) ? 0x3F80 - ((3 * (i % 16)) << 7) : 0;
+#else
         ones[i] = (i < 16 * rows && i % 16 < nbias) ? 0x3F80 : 0;  // BF16 1.0
+#endif
     }
 #ifndef MOE_NO_ROUTER
     noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(1)), 1);

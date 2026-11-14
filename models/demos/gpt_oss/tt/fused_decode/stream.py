@@ -76,12 +76,46 @@ def bias_tiles(bias):
     return out.reshape(*lead, TILE, TILE)
 
 
-def _columns_with_bias(w, bias):
-    """w [E, K, N], bias [E, N] -> [E, n_tiles, k_tiles + 1, 32, 32] tile columns (bias tile last)."""
+# K-grouped (transposed) expert streams (../bfp4_quant.py, rounding "kmse"): every 32x32 tile is stored transposed,
+# [n, k], so a BFP4 group is 16 consecutive K values of one output column (inside one MXFP4 block); custom_mm
+# transposes it back on unpack (W_TRANSPOSED). The bias tile then holds, in row n, NBIAS terms s_j of one BFP4 group
+# (one shared exponent) with bias(n) = sum_j s_j 8^-j: the activation's bias multipliers are 8^-j (times the routing
+# score for down), so each term refines the previous one by the 3 bits of the shared grid.
+BIAS_STEP_LOG2 = 3
+
+
+def bias_tiles_t(bias):
+    """[..., 32] bias rows -> [..., 32, 32] transposed bias tiles: row n holds s_0..s_{NBIAS-1} (columns 0..NBIAS-1,
+    one BFP4 group, exactly on its grid) with sum_j s_j 2^(-3 j) = bias(n) to ~2^(-3 NBIAS) relative."""
+    lead = bias.shape[:-1]
+    b = bias.reshape(-1, TILE).float()
+    a = b.abs()
+    e = torch.frexp(a)[1] - 1  # floor(log2 |b|)
+    step = torch.ldexp(torch.ones_like(a), e - 2)
+    e = torch.where(torch.round(a / step) >= 8, e + 1, e)  # rounding up to 8 * step: use the next exponent
+    step = torch.ldexp(torch.ones_like(a), e - 2)
+    out = torch.zeros(b.shape[0], TILE, TILE)
+    r = b.clone()
+    for j in range(NBIAS):
+        s = r * 2.0 ** (BIAS_STEP_LOG2 * j)
+        q = torch.clamp(torch.round(s.abs() / step), max=7) * step * torch.sign(s)
+        q = torch.where(b == 0, torch.zeros_like(q), q)
+        out[:, :, j] = q
+        r = r - q * 2.0 ** (-BIAS_STEP_LOG2 * j)
+    return out.reshape(*lead, TILE, TILE)
+
+
+def _columns_with_bias(w, bias, transposed=False):
+    """w [E, K, N], bias [E, N] -> [E, n_tiles, k_tiles + 1, 32, 32] tile columns (bias tile last). transposed: every
+    tile stored [n, k] (K-grouped streams), the bias tile from bias_tiles_t."""
     E, K, N = w.shape
     n_tiles, k_tiles = N // TILE, K // TILE
-    cols = w.reshape(E, k_tiles, TILE, n_tiles, TILE).permute(0, 3, 1, 2, 4)
-    b = bias_tiles(bias.reshape(E, n_tiles, TILE)).to(cols.dtype)
+    if transposed:
+        cols = w.reshape(E, k_tiles, TILE, n_tiles, TILE).permute(0, 3, 1, 4, 2)
+        b = bias_tiles_t(bias.reshape(E, n_tiles, TILE)).to(cols.dtype)
+    else:
+        cols = w.reshape(E, k_tiles, TILE, n_tiles, TILE).permute(0, 3, 1, 2, 4)
+        b = bias_tiles(bias.reshape(E, n_tiles, TILE)).to(cols.dtype)
     return torch.cat([cols, b.unsqueeze(2)], dim=2)
 
 
@@ -98,7 +132,7 @@ def columns_per_bank(n, banks):
     return -(-n // TILE // banks)
 
 
-def stream_gate_up_layout(gate_up, gate_up_bias, banks, rot=0):
+def stream_gate_up_layout(gate_up, gate_up_bias, banks, rot=0, transposed=False):
     """One TP shard of [E, hidden, 2 * I_pad] packed [gate | up] weights and [E, 2 * I_pad] biases -> [rows, banks * 32]:
     bank b's shard is a column of tiles ordered expert -> (gate j, up j) for the P pairs j in [b * P, (b + 1) * P)
     -> K tile (hidden / 32 weight tiles + 1 bias tile). rot: the bank rotation (EXPERT_BANK_ROT)."""
@@ -106,18 +140,20 @@ def stream_gate_up_layout(gate_up, gate_up_bias, banks, rot=0):
     half = W // TILE // 2
     P = half // banks
     assert P * banks == half, f"{half} column pairs do not split over {banks} banks"
-    cols = _columns_with_bias(gate_up, gate_up_bias)
+    cols = _columns_with_bias(gate_up, gate_up_bias, transposed)
     order = [c for bank in range(banks) for j in range(bank * P, (bank + 1) * P) for c in (j, half + j)]
     return _bank_columns(cols[:, order], banks, rot)
 
 
-def stream_down_layout(down, down_bias, banks, rot=0):
+def stream_down_layout(down, down_bias, banks, rot=0, transposed=False):
     """One TP shard of [E, I_pad, hidden] down weights and [E, hidden] biases -> [rows, banks * 32]: bank b holds output
     columns [b * C, (b + 1) * C) (C = ceil(hidden / 32 / banks), zero padded), ordered expert -> column -> K tile
     (I_pad / 32 weight tiles + 1 bias tile)."""
     E, K, N = down.shape
     pad = columns_per_bank(N, banks) * banks * TILE - N
-    cols = _columns_with_bias(torch.nn.functional.pad(down, (0, pad)), torch.nn.functional.pad(down_bias, (0, pad)))
+    cols = _columns_with_bias(
+        torch.nn.functional.pad(down, (0, pad)), torch.nn.functional.pad(down_bias, (0, pad)), transposed
+    )
     return _bank_columns(cols, banks, rot)
 
 
@@ -280,6 +316,16 @@ def mark_cache_built(marker):
 def _page_bytes(tiles, tile_bytes):
     """Largest NOC packet holding whole tiles that divides a `tiles`-tile block."""
     return max(d for d in range(1, tiles + 1) if tiles % d == 0 and d * tile_bytes <= MAX_PACKET_BYTES) * tile_bytes
+
+
+def _segment_packets(tiles, tile_bytes):
+    """A `tiles`-tile block read as few NOC packets as possible, of whole tiles and near-equal size:
+    (packet bytes, full packets, tail bytes), tail < packet (0: every packet is full)."""
+    n = -(-tiles * tile_bytes // MAX_PACKET_BYTES)
+    while -(-tiles // n) * tile_bytes > MAX_PACKET_BYTES:
+        n += 1
+    pk = -(-tiles // n)
+    return pk * tile_bytes, tiles // pk, (tiles % pk) * tile_bytes
 
 
 _BANK_WORKERS = {}
@@ -467,8 +513,24 @@ class ExpertGateUpStream(_BankStreamOp):
     UINT16 / BF16 row-major buffers whose first k entries are the routed experts and their softmax weights; act: [k,
     I_pad] BF16 row-major L1, receives w_e * SwiGLU(gate_e, up_e) per routed expert e."""
 
-    def __init__(self, mesh_device, hidden, inter_pad, num_sel, swiglu_limit, alpha, readers):
+    def __init__(
+        self,
+        mesh_device,
+        hidden,
+        inter_pad,
+        num_sel,
+        swiglu_limit,
+        alpha,
+        readers,
+        weight_dtype=ttnn.bfloat4_b,
+        k_grouped=False,
+    ):
+        """k_grouped: K-grouped BFP4 weights, every tile stored transposed (stream_gate_up_layout transposed=True)."""
         super().__init__(mesh_device, readers, rot=EXPERT_BANK_ROT)
+        assert weight_dtype in (ttnn.bfloat4_b, ttnn.bfloat8_b), f"expert weight dtype {weight_dtype}"
+        self.weight_dtype = weight_dtype
+        self.tile_bytes = TILE_BYTES[weight_dtype]
+        self.defines = [("W_TRANSPOSED", "1")] if k_grouped else None
         self.kx = hidden // TILE
         self.kt = self.kx + 1
         self.num_sel = num_sel
@@ -477,9 +539,10 @@ class ExpertGateUpStream(_BankStreamOp):
         assert self.P % readers == 0, f"{self.P} pairs per bank do not split over {readers} readers"
         self.pairs = self.P // readers
         self.limit, self.alpha = swiglu_limit, alpha
-        self.col_bytes = self.kt * BFP4_TILE_BYTES
+        self.col_bytes = self.kt * self.tile_bytes
         self.expert_stride = 2 * self.P * self.col_bytes
-        self.page_bytes = _page_bytes(self.kt, BFP4_TILE_BYTES)
+        # Whole-tile NOC packets dividing a column (kt = 91: 13 tiles, 7488 B in BFP4 / 14144 B in BFP8, 7 per column).
+        self.page_bytes = _page_bytes(self.kt, self.tile_bytes)
 
     def weight_rows(self, num_experts):
         return num_experts * 2 * self.P * self.kt * TILE
@@ -488,7 +551,8 @@ class ExpertGateUpStream(_BankStreamOp):
         cb_x, cb_w, cb_idx, cb_scr, cb_act = 0, 1, 2, 3, 16
         cbs = [
             self._cb(cb_x, ttnn.bfloat16, TINY_BYTES, self.kt, tiny=True),
-            self._cb(cb_w, ttnn.bfloat4_b, BFP4_TILE_BYTES, 3 * self.kt),
+            # Triple-buffered weight columns: 3 * 91 tiles = 157 KB (BFP4) / 297 KB (BFP8) of L1 per core.
+            self._cb(cb_w, self.weight_dtype, self.tile_bytes, 3 * self.kt),
             self._cb(cb_idx, ttnn.uint16, 64, 1),
             self._cb(cb_scr, ttnn.bfloat16, 64, 1),
             self._cb(cb_act, ttnn.bfloat16, TINY_BYTES, 4, tiny=True),
@@ -508,7 +572,7 @@ class ExpertGateUpStream(_BankStreamOp):
                 self.logical_bank(bank) * self.P + r * self.pairs,
                 scores.buffer_address(),
             ]
-        reader_ct = [cb_w, cb_idx, self.kt, 2 * self.pairs, self.num_sel, self.expert_stride, BFP4_TILE_BYTES]
+        reader_ct = [cb_w, cb_idx, self.kt, 2 * self.pairs, self.num_sel, self.expert_stride, self.tile_bytes]
         reader_ct += [self.page_bytes, 64] + ttnn.TensorAccessorArgs(ids).get_compile_time_args()
         writer_ct = [
             cb_x,
@@ -525,7 +589,9 @@ class ExpertGateUpStream(_BankStreamOp):
             writer_ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
         compute_ct = [cb_x, cb_w, cb_act, self.kt, self.pairs, self.num_sel]
         compute_ct += [_f32_bits(v) for v in (self.limit, -self.limit, -3.0e38, self.alpha, 1.0 / self.alpha, 1.0)]
-        program = self._program("gate_up", cbs, reader_ct, reader_rt, writer_ct, writer_rt, compute_ct, "gate_up")
+        program = self._program(
+            "gate_up", cbs, reader_ct, reader_rt, writer_ct, writer_rt, compute_ct, "gate_up", defines=self.defines
+        )
         return ttnn.generic_op([weights, x, ids, scores, act], program)
 
 
@@ -535,8 +601,13 @@ class ExpertDownStream(_BankStreamOp):
     sum_e w_e * (act_e @ Wd_e + bd_e) (one matmul per output column over the K = k segments [w_e * act_e | w_e] of
     the routed experts)."""
 
-    def __init__(self, mesh_device, hidden, inter_pad, num_sel, readers):
+    def __init__(self, mesh_device, hidden, inter_pad, num_sel, readers, weight_dtype=ttnn.bfloat4_b, k_grouped=False):
+        """k_grouped: K-grouped BFP4 weights, every tile stored transposed (stream_down_layout transposed=True)."""
         super().__init__(mesh_device, readers, rot=EXPERT_BANK_ROT)
+        assert weight_dtype in (ttnn.bfloat4_b, ttnn.bfloat8_b), f"expert weight dtype {weight_dtype}"
+        self.weight_dtype = weight_dtype
+        self.tile_bytes = TILE_BYTES[weight_dtype]
+        self.defines = [("W_TRANSPOSED", "1")] if k_grouped else None
         self.hidden = hidden
         self.num_sel = num_sel
         self.inter_pad = inter_pad
@@ -544,8 +615,11 @@ class ExpertDownStream(_BankStreamOp):
         self.C = columns_per_bank(hidden, self.banks)
         assert self.C % readers == 0, f"{self.C} columns per bank do not split over {readers} readers"
         self.cols = self.C // readers
-        self.seg_bytes = self.seg_tiles * BFP4_TILE_BYTES
-        assert self.seg_bytes <= MAX_PACKET_BYTES, "one expert column segment must fit one NOC packet"
+        self.seg_bytes = self.seg_tiles * self.tile_bytes
+        # NOC packets per (expert, column) segment (seg_tiles = 25): one of 14400 B in BFP4; in BFP8 (27200 B, over
+        # the 16 KB burst) one of 13 tiles (14144 B) + a 12-tile tail (13056 B).
+        self.packet_bytes, self.full_packets, self.tail_bytes = _segment_packets(self.seg_tiles, self.tile_bytes)
+        assert self.full_packets * self.packet_bytes + self.tail_bytes == self.seg_bytes
         self.expert_stride = self.C * self.seg_bytes
 
     def weight_rows(self, num_experts):
@@ -558,7 +632,8 @@ class ExpertDownStream(_BankStreamOp):
         kt = self.num_sel * self.seg_tiles
         cbs = [
             self._cb(cb_in0, ttnn.bfloat16, TINY_BYTES, kt, tiny=True),
-            self._cb(cb_w, ttnn.bfloat4_b, BFP4_TILE_BYTES, 3 * kt),
+            # Triple-buffered column blocks: 3 * 100 tiles = 173 KB (BFP4) / 326 KB (BFP8) of L1 per core.
+            self._cb(cb_w, self.weight_dtype, self.tile_bytes, 3 * kt),
             self._cb(cb_idx, ttnn.uint16, 64, 1),
             self._cb(cb_scr, ttnn.bfloat16, 128, 1),
             self._cb(cb_out, ttnn.bfloat16, TINY_BYTES, 4, tiny=True),
@@ -578,8 +653,9 @@ class ExpertDownStream(_BankStreamOp):
                 out.buffer_address(),
                 self.logical_bank(bank) * self.C + r * self.cols,
             ]
-        reader_ct = [cb_w, cb_idx, self.seg_tiles, self.cols, self.num_sel, self.expert_stride, BFP4_TILE_BYTES]
+        reader_ct = [cb_w, cb_idx, self.seg_tiles, self.cols, self.num_sel, self.expert_stride, self.tile_bytes]
         reader_ct += ttnn.TensorAccessorArgs(ids).get_compile_time_args()
+        reader_ct += [self.packet_bytes, self.tail_bytes]
         writer_ct = [cb_in0, cb_out, cb_scr, self.seg_tiles, self.num_sel, NBIAS, self.cols, self.hidden // TILE]
         writer_ct += [self.inter_pad * 2]
         for t in (act, scores, out):
@@ -588,7 +664,9 @@ class ExpertDownStream(_BankStreamOp):
         compute_ct = [cb_in0, cb_w, cb_out, kt, self.cols]
 
         def build():
-            return self._program("down", cbs, reader_ct, reader_rt, writer_ct, writer_rt, compute_ct)
+            return self._program(
+                "down", cbs, reader_ct, reader_rt, writer_ct, writer_rt, compute_ct, defines=self.defines
+            )
 
         program = send[0].sending_program(build, out, send[1], self.cores) if send else build()
         return ttnn.generic_op([weights, act, ids, scores, out], program)
@@ -597,6 +675,8 @@ class ExpertDownStream(_BankStreamOp):
 class LinearStream(_BankStreamOp):
     """Dense decode linear y = x @ W + b for one token, weights streamed per DRAM bank (stream_linear_layout).
 
+    ROUTER_MERGE_SEM: program semaphore of the router's top-4 merge (out_mode 4 over more than 32 experts).
+
     x: x_pages = 0: the flat BF16 normed hidden of the layer boundary (fused_decode/boundary.py); otherwise a BF16
     32x32-tile tensor (any TensorAccessor layout; a DRAM source is staged in L1 first) whose activation is row
     (j / x_pages) of tile page (j % x_pages) for j < k_tiles (x_pages = 2: the [heads, 64] SDPA output, head by head).
@@ -604,7 +684,8 @@ class LinearStream(_BankStreamOp):
     out_mode:
       3: attention heads, out = (Q, K, V) BF16 [heads, head_tiles * 32] tile tensors, head h in row h,
          heads = (q_cols, k_cols) output tiles of Q and K;
-      4: router top-k + softmax, out = (ids, scores) [1, 32] UINT16 / BF16 row-major buffers, heads = (k, n_experts);
+      4: router top-k + softmax, out = (ids, scores) [1, 32] UINT16 / BF16 row-major buffers, heads = (k, n_experts)
+         (more than 32 experts: one 32-expert column per core, top-4 merged on the column-0 core);
          rows > 1 (only inside dflash/moe_fused.py MoEFused): per-row top-k, out = (union, weights): UINT16 [1, 64] =
          [U, the U union expert ids ascending], BF16 [1, 32 M]: row r's weight of union expert i at entry 32 r + i (0 if
          not routed);
@@ -617,6 +698,8 @@ class LinearStream(_BankStreamOp):
     stream_linear_writer.cpp item 5): x is the boundary's row-tile layout (x_pages = 0) or an [M, 32, 32 x_pages]
     source (one token row per user), out_mode 5 writes the row-tile partial, out_mode 3 [M, 32, head_tiles * 32] heads.
     """
+
+    ROUTER_MERGE_SEM = 4
 
     def __init__(
         self,
@@ -687,6 +770,7 @@ class LinearStream(_BankStreamOp):
         x_wait=None,
         notify=None,
         spec_tt=None,
+        rescore=None,
     ):
         """spec_tt = Tt (rows > 1): x (x_pages > 0) is / Q (out_mode 3) goes to block attention's packed layout
         (dflash/block_attention.py, Tt packed row-tiles per kv head) instead of [M, heads, head_dim].
@@ -700,7 +784,10 @@ class LinearStream(_BankStreamOp):
         (fused_decode/terminal.py TerminalExchange). rope_kv (out_mode 3, one user): a QKVRopeCache; Q and K are rotated
         in this op (kernels/stream_qkv_rope_compute.cpp) and K / V are written straight into the paged KV cache at the
         current position instead of the K / V head tensors (replacing rotary_embedding_llama_fused_qk and
-        paged_fused_update_cache)."""
+        paged_fused_update_cache).
+        rescore = (w8, R) (the one-token LM head with an exchange, fused_decode/terminal.py LM_RESCORE): these weights
+        (BFP4) give a first pass; each core then recomputes the columns of its R best outputs from w8 (BF8, the same
+        layout) and its top-K and those columns of the output come from the BF8 values."""
         pending = None
         if not isinstance(x, ttnn.Tensor):
             pending = x
@@ -718,7 +805,11 @@ class LinearStream(_BankStreamOp):
             outs = (out,) * 3
         cb_x, cb_w, cb_scr, cb_stage, cb_out = 0, 1, 3, 4, 16
         M = self.rows
-        stage = self.x_pages * M if x.memory_config().buffer_type == ttnn.BufferType.DRAM else 0
+        # A DRAM source is staged whole: x_pages tiles per row of tiles (TP = 1: the 64 SDPA output heads are two rows
+        # of tiles, kernels/stream_linear_writer.cpp x_row_tiles).
+        x_row_tiles = -(-self.kx // self.x_pages // TILE) if self.x_pages else 1
+        assert M == 1 or x_row_tiles == 1, "multi-row activations: at most 32 heads per user"
+        stage = self.x_pages * M * x_row_tiles if x.memory_config().buffer_type == ttnn.BufferType.DRAM else 0
         if spec_tt and self.x_pages and stage:  # the packed source: (heads / 8) kv heads x spec_tt row-tiles
             stage = (self.kx // self.x_pages // 8) * spec_tt * self.x_pages
         # A fused boundary's consumer can buffer all its weight columns: the readers stream them while the boundary
@@ -729,16 +820,42 @@ class LinearStream(_BankStreamOp):
         if self.prefetch_cols is not None:
             # Large columns (the LM head's ~97 KB): cap the ring at what L1 holds.
             w_cols = min(w_cols, max(3, self.prefetch_cols))
+        # Router over more than 32 experts (gpt-oss-120b: 128 = 4 columns, one per router core): each core's top-4 goes
+        # to the column-0 core, which merges them (kernels/stream_linear_writer.cpp ROUTER_MERGE).
+        router_merge = self.out_mode == 4 and M == 1 and self.n_tiles > 1
+        if router_merge:
+            assert self.cols == 1 and self.heads[0] == 4, "router merge: top-4, one 32-expert column per core"
         cbs = [
             self._cb(cb_x, ttnn.bfloat16, TINY_BYTES * M, self.kt, tiny=True, rows=M),
             self._cb(cb_w, self.weight_dtype, self.tile_bytes, w_cols * self.kt),
-            # router scratch (multi-row: union ids, [M, 32] weights, one logit row, top-k stage)
-            self._cb(cb_scr, ttnn.bfloat16, 64 if M == 1 else 128 + 64 * M + 128 + 64 * M, 1),
+            # router scratch (multi-row: union ids, [M, 32] weights, one logit row, top-k stage; merge: the top-k
+            # stage, this core's 4 entries at +32 and the merge lists at +64)
+            self._cb(
+                cb_scr, ttnn.bfloat16, (128 if router_merge else 64) if M == 1 else 128 + 64 * M + 128 + 64 * M, 1
+            ),
         ]
         if stage:
             cbs.append(self._cb(cb_stage, ttnn.bfloat16, 2048, stage))
         cbs.append(self._cb(cb_out, ttnn.bfloat16, TINY_BYTES * M, 4, tiny=True, rows=M))
         cb_y, cb_rot, cb_cs, cb_kv = 5, 6, 7, 12
+        rs_defines = []
+        if rescore is not None:
+            w8, R = rescore
+            assert self.readers == 1 and M == 1 and exchange is not None and rope_kv is None
+            cb_rs, cb_rsw, rs_sem = 6, 7, 3
+            page8 = _page_bytes(self.kt, BFP8_TILE_BYTES)
+            cbs += [
+                self._cb(cb_rs, ttnn.uint32, 64, 1),
+                self._cb(cb_rsw, ttnn.bfloat8_b, BFP8_TILE_BYTES, 2 * self.kt),
+            ]
+            rs_defines = [
+                ("LM_RESCORE", str(R)),
+                ("LM_RS_SEM", str(rs_sem)),
+                ("LM_RS_CB", str(cb_rs)),
+                ("LM_RS_CBW", str(cb_rsw)),
+                ("LM_RS_PAGE8", str(page8)),
+                ("LM_RS_COL8", str(self.kt * BFP8_TILE_BYTES)),
+            ]
         order = None
         if rope_kv is not None:
             assert self.out_mode == 3 and exchange is None
@@ -760,6 +877,8 @@ class LinearStream(_BankStreamOp):
                 gs_noc += [p.x, p.y]
         for i, (core, bank, r, vc) in enumerate(self.assignments):
             reader_rt[core.x][core.y] = [weights.buffer_address(), bank, vc, r * self.cols * self.col_bytes]
+            if rescore is not None:
+                reader_rt[core.x][core.y].append(rescore[0].buffer_address())
             if rope_kv is not None:  # KV_SPLIT: the core's first output column is a K / V column (not padding)
                 col0 = self._slot_columns(bank, r, order)[0]
                 reader_rt[core.x][core.y].append(int(self.heads[0] <= col0 < self.n_tiles))
@@ -783,6 +902,13 @@ class LinearStream(_BankStreamOp):
             if fuse is not None:
                 notify_arg = len(writer_rt[core.x][core.y])
                 writer_rt[core.x][core.y] = list(writer_rt[core.x][core.y]) + [v for p in fuse[3] for v in (p.x, p.y)]
+        merge_arg = None
+        if router_merge:
+            merge_core = next(c for c, b, r, _ in self.assignments if b * self.C + r * self.cols == 0)
+            mp = self.mesh_device.worker_core_from_logical_core(merge_core)
+            for core, *_ in self.assignments:
+                merge_arg = len(writer_rt[core.x][core.y])
+                writer_rt[core.x][core.y] = list(writer_rt[core.x][core.y]) + [mp.x, mp.y]
         reader_ct = [cb_w, self.kt, self.cols, self.tile_bytes, self.page_bytes, w_cols]
         writer_ct = [cb_x, cb_out, cb_scr, self.kx, self.x_pages, NBIAS, self.cols, self.n_tiles, self.out_mode]
         writer_ct += [self.out_page_bytes, stage, cb_stage, self.heads[0], self.heads[1], self.head_tiles]
@@ -811,6 +937,14 @@ class LinearStream(_BankStreamOp):
             defines = (defines or []) + [("BND_WAIT_N", str(b_.H)), ("BND_PH", str(b_.PH))]
         if extra_defines:
             defines = (defines or []) + list(extra_defines)
+        if router_merge:
+            defines = (defines or []) + [
+                ("ROUTER_MERGE", str(self.n_tiles)),
+                ("ROUTER_MERGE_SEM", str(self.ROUTER_MERGE_SEM)),
+                ("ROUTER_MERGE_ARG", str(merge_arg)),
+            ]
+        if rs_defines:
+            defines = (defines or []) + rs_defines
         if spec_tt:
             defines = (defines or []) + [("X_SPEC_TT" if self.x_pages else "Q_SPEC_TT", str(spec_tt))]
         if x_wait is not None:  # (semaphore id, count): x is written in the same program
@@ -853,6 +987,14 @@ class LinearStream(_BankStreamOp):
                 program.semaphores = list(program.semaphores) + [
                     ttnn.SemaphoreDescriptor(1, ttnn.CoreType.WORKER, self.cores, 0)
                 ]
+            if rescore is not None:
+                program.semaphores = list(program.semaphores) + [
+                    ttnn.SemaphoreDescriptor(3, ttnn.CoreType.WORKER, self.cores, 0)
+                ]
+            if router_merge:
+                program.semaphores = list(program.semaphores) + [
+                    ttnn.SemaphoreDescriptor(self.ROUTER_MERGE_SEM, ttnn.CoreType.WORKER, self.cores, 0)
+                ]
             if pending is not None:
                 program.kernels = list(program.kernels) + fused_kernels
                 program.cbs = list(program.cbs) + fused_cbs
@@ -883,6 +1025,8 @@ class LinearStream(_BankStreamOp):
         extra = [t for t in fused_io if all(t is not u for u in (x, *unique))] if pending is not None else []
         if exchange is not None:
             extra += [t for t in exchange.io if all(t is not u for u in (x, *unique, *extra))]
+        if rescore is not None:
+            extra.append(rescore[0])
         if rope_kv is not None:
             for t in rope_kv.io:
                 if all(t is not u for u in (x, *unique, *extra)):
