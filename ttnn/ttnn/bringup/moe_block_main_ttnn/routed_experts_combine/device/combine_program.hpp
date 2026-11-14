@@ -32,6 +32,9 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
+#include <tt-metalium/runtime_args_data.hpp>
+
+#include "ttnn/tensor/tensor.hpp"
 
 #include "combine_host.hpp"
 #include "../../common/mesh_routing.hpp"
@@ -52,6 +55,56 @@ namespace ttnn::operations::bringup::moe_block_main::routed_experts_combine {
 
 // Circular buffer indices on the combine's cores (disjoint from the flat expert's cells; all bound to the arena).
 inline constexpr uint8_t kCbInj = 0, kCbRow = 1, kCbMeta = 2, kCbTab = 3, kCbAcc = 4, kCbOut = 5, kCbW = 6;
+
+// MOE_FILL=piggyback (P.53): expert replica copies carried by the combine's port senders as extra fabric packets.
+// One job: chip src's port facing the first hop toward chip dst (link 0) reads pieces [p0, p1) of run table `table`
+// (expert_slot_copy's tables and chunking: each run cut in expert_slot_copy_chunk_bytes pieces, numbered across the
+// table's runs) from its own DRAM and writes them into chip dst's DRAM (fill.gu / fill.d: the same buffers on every
+// chip), sending a piece only when no row of its own is waiting; `last`: after the job's last piece, a flushed atomic
+// increment of word src of chip dst's done words (the fill's completion, cumulative).
+struct CombineFillJob {
+    uint32_t src = 0, dst = 0, table = 0, p0 = 0, p1 = 0;
+    bool last = false;
+};
+inline constexpr uint32_t kFillMaxJobs = 4;                  // jobs a port a call
+inline constexpr uint32_t kFillArgs = 6 + 4 * kFillMaxJobs;  // the port sender's fill args (the last ones)
+inline constexpr uint32_t kFillStages = 4;                   // pieces staged in a port's L1 (read, then sent)
+inline constexpr uint32_t kFillTabBytes = 16384;             // a run table's L1 copy on a port
+struct CombineFillCall {
+    Tensor gu, d, runs;  // the copied layer's routed weights (read on src, written on dst) and the run tables
+    std::vector<CombineFillJob> jobs;
+    uint32_t cap = 1;  // a piece goes only while the port's fabric channel holds fewer than cap packets (main loop)
+    // MOE_REPLICAS=exact (P.55b, REC_FX): the jobs are not runtime args but pages of this uint32 DRAM tensor, per chip
+    // [kFxPages, kFxPageWords] (page dir x L + link: that port's jobs; page kFxChipPage: the chip's waits; layout in
+    // combine_port_writer.cpp); `jobs` and `cap` are then unused. exact_limit: the cycles a relay's gate or the
+    // waiter's wait may take before it gives up (never a hang).
+    std::optional<Tensor> exact;
+    uint32_t exact_limit = 0;
+    // P.60 (MOE_REPLICAS=prev, MOE_PREV_HOST=device): exact_ring > 0 - `exact` holds exact_ring slots of kFxPages pages
+    // a chip (slot s = pages [s kFxPages, (s + 1) kFxPages)) and every port reads the call's slot itself: word 0 of
+    // exact_ordinal (uint32 DRAM, page 0 in bank 0; the device planner's call ordinal) mod exact_ring. The fill args
+    // then hold no per-call value, so a cache hit writes them only when they change (the factory's fill signature).
+    // exact_wait false: the flat expert's weight readers do not wait for a landed copy (no token: the copies of a
+    // device planner land in earlier calls). Defaults (0, nullopt, true): the behaviour before the option.
+    uint32_t exact_ring = 0;
+    std::optional<Tensor> exact_ordinal;
+    bool exact_wait = true;
+    // P.62b (DeepSeek-V4.1 MOE_PLANNER=folded; needs exact_ring): after its main loop each link-0 port sends this
+    // chip's expert counts row (prev_counts: the fused head's counts, one uint32 page [chips x prev_spc]; the chip's
+    // own slots) to every chip whose first hop is that port - a fused write into row (G[0] & 1) x chips + me of
+    // prev_landing (uint32 DRAM, rows of al16(prev_spc) words; the last word the tag G[0] + 1) and an atomic increment
+    // of the word prev_sem on core prev_core (logical) there: the replica planner's input, read by the next fused
+    // head's watcher tail (HeadTail). The chip's first port also writes the row into its own landing row. Absent: no
+    // packet.
+    std::optional<Tensor> prev_counts, prev_landing;
+    uint32_t prev_sem = 0, prev_spc = 0;
+    tt::tt_metal::CoreCoord prev_core{0, 0};
+};
+inline constexpr uint32_t kFxPages = 9, kFxChipPage = 8, kFxPageWords = 256, kFxMaxJobs = 30, kFxWaits = 4;
+inline constexpr uint32_t kFxWords = 452;  // the exact words a chip: 2 x 32 flags, 8 x 16 stamps, 4 x 64 arrivals,
+                                           // the landed word (P.55c: this call's token once the copy has landed)
+inline constexpr uint32_t kFxLanded = 448;
+inline constexpr uint32_t kFxL1 = 3328;  // a port's L1 for the exact path past the staging slots
 
 // What the combine is planned from (k3 TtK3TokenSplitMoE.__init__: combine_auto on the flat plan's free cells).
 struct CombinePlanInputs {
@@ -105,7 +158,8 @@ struct CombinePlan {
     uint32_t lut_off = 0, lut_bytes = 0;
     uint32_t tab_off_port = 0, tab_off_acc = 0;  // CB_TAB on the ports / accumulators
     uint32_t row_off = 0, meta_off = 0, acc_off = 0, out_off = 0, w_off = 0;
-    uint32_t loc_off = 0;  // the accumulators' local ring
+    uint32_t loc_off = 0;     // the accumulators' local ring
+    uint32_t fill_chunk = 0;  // MOE_FILL=piggyback: a fill piece's bytes (expert_slot_copy's chunk: the fabric payload)
 
     PortCores port_core;                                             // (chip, dir, link) -> logical core
     std::map<ChipCoord, std::vector<tt::tt_metal::CoreCoord>> accs;  // per chip, accumulator o's logical cell
@@ -166,12 +220,23 @@ struct CombineHandles {
     // source's offset args stale.
     mutable std::array<uint32_t, static_cast<size_t>(CombineBuf::Count)> last = filled_unpatched();
     std::vector<std::pair<tt::tt_metal::CBHandle, uint32_t>> arena_cbs;  // (CB, arena byte offset)
+    // cached_slots (P.63): each patch's runtime-args record in this program, filled on the first such hit (see
+    // FlatProgramHandles::slots). Empty: not filled yet.
+    mutable std::vector<tt::tt_metal::RuntimeArgsData*> slots;
     // The y writers' report (flat_program.hpp FlatCombineReport): the collector (virtual), its counts (arena offset),
     // and the L1 hand-off args (y_row_major.hpp SE_Y_L1): [nd, slot stride, table, words, writer index, gate x | y <<
     // 16, bar, words bytes to zero; per destination: noc x, noc y, slot base, slots, landed counter array].
     tt::tt_metal::CoreCoord collector;
     uint32_t counts_offset = 0;
     std::vector<CombineArg> l1_args;
+    // MOE_FILL=piggyback: per port of this chip (port id order) the sender's kernel, core and first fill arg index
+    struct FillPort {
+        tt::tt_metal::KernelHandle kernel;
+        tt::tt_metal::CoreCoord core;
+        uint32_t index;
+        uint32_t dir, li;
+    };
+    std::vector<FillPort> fill_ports;
 };
 
 // The combine's kernels, CBs and runtime args on chip `chip` of `program` (the flat expert's go on its own cells).
@@ -181,11 +246,31 @@ CombineHandles add_combine_program(
     ChipCoord chip,
     tt::tt_metal::distributed::MeshDevice& mesh_device,
     const CombineBuffers& buffers,
-    const FlatHandoff& flat);
+    const FlatHandoff& flat,
+    bool fill = false,
+    bool fill_exact = false);
+
+// MOE_FILL=piggyback: the port senders' fill args of chip `chip` for this call (call: none = no job; done: the fill's
+// done words' address). Written on every call (create and cache hit).
+void set_combine_fill_args(
+    tt::tt_metal::Program& program,
+    const CombineHandles& h,
+    const CombinePlan& plan,
+    ChipCoord chip,
+    tt::tt_metal::distributed::MeshDevice& mesh_device,
+    const CombineFillCall* call,
+    uint32_t done_addr,
+    bool exact = false,
+    uint32_t token = 0);
+
+// MOE_FILL=piggyback: the arena offset of a port's fill table and staging slots (they end at the arena's end).
+uint32_t combine_fill_offset(const CombinePlan& plan, bool exact = false);
 
 // Re-applies the buffers' addresses (a program-cache hit): a source's args (and the arena's CBs) only when its address
 // moved.
-void override_combine_addresses(tt::tt_metal::Program& program, const CombineHandles& h, const CombineBuffers& buffers);
+// cached_slots (P.63): through h.slots (the same values; no kernel lookup a patch).
+void override_combine_addresses(
+    tt::tt_metal::Program& program, const CombineHandles& h, const CombineBuffers& buffers, bool cached_slots = false);
 
 // The writers' l1_args with the buffers' current addresses.
 std::vector<uint32_t> resolve_l1_args(const CombineHandles& h, const CombineBuffers& buffers);

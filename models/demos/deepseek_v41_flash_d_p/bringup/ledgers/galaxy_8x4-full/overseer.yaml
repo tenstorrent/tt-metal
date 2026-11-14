@@ -950,6 +950,31 @@ fixes:
   - scripts/lib/tt_safe_run.sh
   released: '2026-11-13T19:42:20'
   placed: '2026-11-13T19:42:45'
+- id: FIX.32
+  title: 'Intermittent served-snapshot race after the P.67 merge (DS41-276): safe defaults first, then find and fix it'
+  gate:
+  - P.67
+  status: queued
+  t: '2026-11-14T20:19:22'
+  text: 'OVERSEER 2026-11-14 (owner away-ish, decide autonomously): after P.67 merged the replica branch, test_decoder_skip_decode
+    failed 1 of 4 runs (served_bytes_differ=16: layer 0''s served window snapshot differs between the off and decode runs,
+    4 records a case, only where the stop falls on a chunk boundary, 5120 and 10240). Suspects: P.64''s fused window write
+    (ATTN_FUSE, tt/window_send.py) and P.65''s one-program snapshot broadcast (CHEAP_CCL, tt/snapshot_send.py): new chip-to-chip
+    programs with no all-chip barrier between them (DS41-276). STEP 1 (first, before anything else): make the shipped defaults
+    safe: CHEAP_CCL and ATTN_FUSE default ''legacy'' in tt/settings.py (keep the code and the ''on'' values), and prove
+    the race is gone at those defaults: test_decoder_skip_decode passes 20 runs in a row (a loop in one process is fine;
+    report every run). STEP 2: find the race: which program (bisect with each switch alone, 20 runs each), where (the snapshot
+    read vs the window write / broadcast ordering, semaphores, the chunk-boundary stop path); fix it in the program (a barrier
+    or a semaphore wait, not a host sync per call); prove with 20 consecutive passes with BOTH switches on, outputs bit-identical
+    to legacy. STEP 3: only if step 2 proves out, set both defaults back to ''on''; else leave legacy and report. Measure
+    the host/wall cost of the legacy defaults vs on (real chunks 1..10, test_moe_prev_replicas). SAFETY: a hang or reset
+    need: STOP and report, never reset. Report plainly, short.'
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md
 classified:
   L.smoke:
     kind: framework

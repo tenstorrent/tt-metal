@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import ttnn
 
-from . import host_alloc
+from . import host_alloc, lean
 from .ccl import dealloc
 from .common import DRAM, cast
 from .cores import max_grid, sub_cores, sub_cores_tiled
@@ -55,6 +55,10 @@ class TtHcResidual:
         self.fold = settings.get("GLUE_FOLD") == "on"
         # FORK_OUT_BUFFERS=on (P.16, tt/host_alloc.reserve_forks): fused()'s stats row / partials scratch sites
         self.out_sites = (None, None)
+        # LEAN_PY=on (P.66, tt/host_alloc.reserve_forks): _collapse's stats row, which nothing reads on that path, into
+        # one load-time buffer when out_sites names no row site (ffn_residual's: its row would be read by the next
+        # layer on the non-collapse path)
+        self.dead_row_site = None
         self._scratch_shapes: dict = {}
 
     def __call__(self, x: ttnn.Tensor, mix: ttnn.Tensor, y: ttnn.Tensor) -> ttnn.Tensor:
@@ -75,18 +79,29 @@ class TtHcResidual:
             dealloc(yf)
         return out
 
-    def fused(self, x: ttnn.Tensor, mix: ttnn.Tensor, y: ttnn.Tensor, hc=None, collapse: bool = False):
+    def fused(
+        self,
+        x: ttnn.Tensor,
+        mix: ttnn.Tensor,
+        y: ttnn.Tensor,
+        hc=None,
+        collapse: bool = False,
+        out: ttnn.Tensor | None = None,
+        hc_out: ttnn.Tensor | None = None,
+    ):
         """MHC_FUSED=on (tt/model.py): the new streams, and, when ``hc`` (the tt/mhc.py:TtHcMixes that reads them
         next) is given, that step's partial row [1, 1, R, 32] (x' @ fn^T + sum x'^2), emitted by the same mhc_post
         pass (stats_weight); (streams, row or None). The pending pre stays the caller's (the whole mixes).
         ``collapse`` (POST_COLLAPSE=on, P.34; the caller checked the setting's conditions): ``row`` is that step's
         finished (hc, y) instead: the same pass collapses the new bf16 streams with this residual's own pre (the
         mixes' columns 0..n-1: the next step collapses with it, DS41-3) and runs the step's Sinkhorn on the row
-        (mhc_post collapse_pre=; = hc.fused(x', mix, row) bit for bit)."""
+        (mhc_post collapse_pre=; = hc.fused(x', mix, row) bit for bit). ``out`` / ``hc_out`` (MOE_TRACE=moe, P.61,
+        the collapse path only): load-time buffers for the new streams and that step's hc (the traced MoE half's
+        inputs); those objects are handed on."""
         if hc is None or self.mode != "fused":
             return TtHcResidual.__call__(self, x, mix, y), None
         if collapse and self.fold and x.dtype == ttnn.bfloat16 and y.dtype == ttnn.bfloat16:
-            return self._collapse(x, mix, y, hc)
+            return self._collapse(x, mix, y, hc, out=out, hc_out=hc_out)
         rows = x.shape[-2]
         n = self.n
         ro = so = None
@@ -134,7 +149,7 @@ class TtHcResidual:
         dealloc(comb)
         return out, row
 
-    def _collapse(self, x, mix, y, hc):
+    def _collapse(self, x, mix, y, hc, out=None, hc_out=None):
         """POST_COLLAPSE=on: (X', (hc, y_next)) from one mhc_post(collapse_pre=mix) pass (GLUE_FOLD's packed mixes)."""
         rows, n = x.shape[-2], self.n
         ro = so = None
@@ -143,7 +158,14 @@ class TtHcResidual:
             so = host_alloc.fork_out(
                 hc.mesh, self.out_sites[1], self._scratch(hc.mesh, rows, y.shape[-1]), ttnn.float32
             )
-        out, row, h, yn = ttnn.bringup.mhc_post(
+        if ro is None and self.dead_row_site is not None and lean.ON[0]:
+            ro = host_alloc.fork_out(hc.mesh, self.dead_row_site, (1, 1, rows, 32), ttnn.float32)
+        kw = hc.collapse_kwargs(mix, rows, y.shape[-1], x.dtype)
+        if hc_out is not None:  # (MOE_TRACE=moe: the step's hc into the layer's load-time buffer)
+            assert kw["hc_output"] is None, "hc_out: the step's hc has a site already"
+            kw["hc_output"] = hc_out
+            hc._given = (hc_out, hc._given[1])
+        o, row, h, yn = ttnn.bringup.mhc_post(
             y,
             x,
             mix,
@@ -155,11 +177,12 @@ class TtHcResidual:
             stats_output=ro,
             stats_scratch=so,
             max_grid=max_grid(),
-            **hc.collapse_kwargs(mix, rows, y.shape[-1], x.dtype),
+            output_tensor=out,
+            **kw,
         )
         if ro is None:  # (the stats row: nothing reads it on this path)
             dealloc(row)
-        return out, hc.collapse_outputs(h, yn)
+        return (o if out is None else out), hc.collapse_outputs(h, yn)
 
     def _scratch(self, mesh, rows: int, cols: int):
         key = (rows, cols)

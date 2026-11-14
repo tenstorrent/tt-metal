@@ -507,6 +507,250 @@ TABLE = {
         "Its routed weights are laid out from the checkpoint (cached beside the carried block's: "
         "<expert cache>.moe_main.<plan>.{w_gu,w_d}.tensorbin)",
     ),
+    "MOE_REPLICAS": Setting(
+        "prev",
+        ("off", "runtime", "exact", "prev"),
+        "P.46 / P.47 (owner 2026-11-12, expert replicas; MOE_BLOCK_SRC=main only; default off: owner 2026-11-12, "
+        "accepted as a switch). off = 12 "
+        "expert slots a chip (8x4), "
+        "slot b = checkpoint expert perm[b]. runtime = one more slot a chip on every MoE layer (13 at 8x4, uniform; "
+        "+1 / 12 of the routed weights' DRAM), slots 0 .. 11 as off - loaded from the off path's weight cache and "
+        "re-laid on the device (expert_slot_copy, local) - and the spare slot empty and unmapped until the layer's "
+        "set_replicas([(expert, chip)]) fills it at runtime: a chip-to-chip copy from the expert's home slot "
+        "(expert_slot_copy over the 2D fabric, table-driven, one cached program), then the layer's slot map written "
+        "into the router bias, in program order on CQ0. The fused head maps each (token, chosen expert) to one of the "
+        "expert's slots (own + copies) by a hash of the token (router_rows.hpp slot_of; the gate weight from the "
+        "expert before the map): an even split. No copies: the off path's outputs bit for bit. exact = P.55 (owner "
+        "2026-11-13, EXPERIMENTAL): the runtime layout (the same spare slot), filled by the hot experts of THIS layer "
+        "streamed inside the layer's own routed_experts_combine (set_combine_fill_exact, REC_FX: the port cores read "
+        "the home slot's blocks and send them over both links of the first hop, a ready flag every MOE_EXACT_BLOCK "
+        "pieces, receivers relaying to MOE_EXACT_FANOUT more; tt/expert_exact.py). P.55c: a layer's plan "
+        "(set_exact_jobs: hot experts, receivers, each holder's token share as a hash range in the slot map, "
+        "router_rows.hpp slot_of's uneven split) makes the receivers' flat expert compute the replica last and read it "
+        "once its copy landed (fx_wait.hpp); set_exact(fill=True) is the brief's fallback (spare slots filled ahead by "
+        "expert_slot_copy). No device planner: the head assigns slots before any chip knows the others' counts, so the "
+        "plans come from a counting run (tests/test_moe_exact_replicas.py); without a plan exact == runtime in a chunk. "
+        "Measured (P.55c, chunk 10 at 51,200, device ms a chunk off -> fill -> exact): novel 185.9 -> 161.5 -> 195.0, "
+        "code 170.5 -> 158.3 -> 175.6 (DS41-251). prev = P.56 (owner 2026-11-13, EXPERIMENTAL; needs MOE_FILL=piggyback): "
+        "the runtime layout; after every MoE call a device planner (tt/expert_prev.py, kernels/moe_prev_planner.cpp: "
+        "the chips' counts exchanged over the fabric, no host round trip) plans that layer's NEXT call (the next chunk): "
+        "hot experts of the busiest chips, receivers (least loaded, one spare slot a chip), the token shares (the "
+        "uneven split), written into the layer's router bias; the new copies ride the following MoE calls' combines "
+        "(REC_FX job pages the planner writes, MOE_FILL_PIECES a source port a call, a fence call before the use); a "
+        "layer whose plan is not complete in time (a request's first chunk, another call sequence) runs off for that "
+        "call. Outputs bit-identical to off",
+    ),
+    "MOE_PREV_HOST": Setting(
+        "device",
+        ("legacy", "device"),
+        "P.60 (overseer 2026-11-14, MOE_REPLICAS=prev only): the host side of P.56. legacy = P.56 as built: a ring of "
+        "W job tensors, the host hands each MoE call ring[o % W] and the flat expert's readers a fresh wait token every "
+        "call, so the combine's fill args change every call (~0.37 ms host a call on the 8x4: the combine's set_fill "
+        "rewrites every fill port's and every weight reader's args on 32 chips). device = one job tensor of W page sets "
+        "and every port reads the call's set from the planner's ordinal word (G[0] mod W, on the device); the "
+        "readers do not wait (a prev copy lands in earlier calls, fenced: P.56's page of waits is always empty); the "
+        "fill args are then the same every call and a cache hit writes none (routed_experts_combine's fill signature); "
+        "the planner takes one ring address instead of W. Same plans, slots, pages and math: outputs bit-identical",
+    ),
+    "MOE_PREV_HOST2": Setting(
+        "lean",
+        ("legacy", "lean"),
+        "P.62 (owner 2026-11-14, MOE_REPLICAS=prev with MOE_PREV_HOST=device only): the host cost prev adds over off. "
+        "legacy = P.60 as built (the planner and the reset: one program a chip, 32 a launch; the combine's fill args "
+        "handed to the fork every call). lean (tt/expert_prev.py): the planner and the reset ONE program for the whole "
+        "mesh (kernel MESH1: a chip finds its position, targets and fabric channel in tables keyed by the routing "
+        "table's my_device_id, DS41-225), the fill args set once (fill_off() / set_mode() set them again), the "
+        "planner's dispatch without per-call settings reads. Measured (P.62, 8x4, chunks 1..10): prev's host over off "
+        "is the planner launch ~90-100 us a call (one program or 32: within ~5 us), the combine's fill path ~27-38 us a "
+        "call, Python ~5 us a call; lean removes ~0.2-0.7 ms a chunk of it. Same plans: outputs bit-identical",
+    ),
+    "MOE_PLANNER": Setting(
+        "folded",
+        ("launch", "folded"),
+        "P.62b (owner 2026-11-14, MOE_REPLICAS=prev with MOE_PREV_HOST=device and MOE_PREV_HOST2=lean only): where "
+        "P.56's planner runs. launch = P.62 as built: one planner program a MoE call (sender cores exchange the counts, "
+        "a planner core plans; ~90 us of host a call, DS41-263). folded = no planner launch a call: the combine's link-0 "
+        "port senders send the chip's counts row after their main loop (routed_experts_combine prev_counts), and the "
+        "NEXT MoE call's fused head plans it on its watcher core after its own work (fused_head tail, "
+        "kernels/prev_planner.hpp; its L1 the arena past the head's; no core added: the head holds all 110); the "
+        "chunk's last MoE call plans at once with one standalone launch (nothing pending at a chunk's end). Needs the "
+        "OWN_ROWS head path and two MoE layers a chunk; any other call, and MOE_TRACE=moe, runs launch. Same "
+        "arithmetic on the same inputs: plans, maps, pages and outputs bit-identical",
+    ),
+    "MESH_PROGRAMS": Setting(
+        "on",
+        ("legacy", "on"),
+        "P.63 (owner 2026-11-14: fewer host us a MoE call): how a program-cache hit of the fused head and of "
+        "routed_experts_combine re-patches its 32 per-chip programs (OWN_ROWS path). legacy = a GetRuntimeArgs lookup "
+        "(the kernel found in the program's maps, a shared_ptr copy) for every moved address arg of every chip: "
+        "measured ~245 us of a ~470 us combine call (the flat expert's 766 args a chip) and ~117 us of a ~350 us head "
+        "call (P.63 probe, 8x4). on = each program keeps a pointer to each patched arg's runtime-args record, filled "
+        "on its first hit (fork option cached_slots): the same values written, no lookups. Not a single mesh program: "
+        "the probe found the per-program patch loop, not the per-device dispatch, to be what a mesh program would "
+        "remove (DS41-263). Host only: outputs bit-identical",
+    ),
+    "ATTN_FUSE": Setting(
+        "on",
+        ("legacy", "on"),
+        "P.64 (owner 2026-11-14: fewer host calls, attention-side small ops): the window write of every layer "
+        "(WINDOW_KV_FORMAT=bf16_tiles with WINDOW_KV_KEEP=snapshot128 / ring / none, more than one chip; "
+        "tt/attention._window_region). legacy = the chip's own untilized rows written by ttnn.bringup.slice_write "
+        "into the region, the ring's 2-4 pieces each by ttnn.slice + ttnn.bringup.slice_write, then the neighbour "
+        "send (tt/window_send.WindowSend, prepared): 9 launches a layer with the untilize. on = the region rows and "
+        "the ring pieces copied by a second kernel (NCRISC of the send core, COPY_CORES=1) in the send's own prepared "
+        "program, the ring pieces as per-call values, the send reading the carry from the untilized rows "
+        "(WindowSend.fused): 2 launches a layer, -280 a chunk on 8x4. Data movement only: outputs bit-identical",
+    ),
+    "CHEAP_CCL": Setting(
+        "on",
+        ("legacy", "on"),
+        "P.65 (owner 2026-11-14: fewer host calls; OV-45): the served window snapshot of every layer "
+        "(WINDOW_KV_KEEP=snapshot128, more than one chip; tt/attention.TtWindowCache.write_snapshot). legacy = every "
+        "chip's whole 192-row ring gathered over the mesh (two high_bw_all_gathers, TP then SP, ~6 MB into each chip), "
+        "the owner's rows sliced and concatenated, then ttnn.bringup.update_padded_kv_cache: 4-6 launches a layer. "
+        "on = one prepared program (tt/snapshot_send.SnapshotSend): each chip copies the blocks it holds, the owner "
+        "chip's 128 rows go to every chip's slab over a broadcast tree of 1-hop fabric unicasts (the owner's column, "
+        "then each row); 1 launch a layer, no gather buffer. Data movement only: outputs bit-identical",
+    ),
+    "LEAN_PY": Setting(
+        "on",
+        ("legacy", "on"),
+        "P.66 (owner 2026-11-14: fewer host calls, one change per run): the per-layer Python glue in tt/ trimmed "
+        "(tt/lean.py). legacy = the glue as before P.66. on = the same ops in the same order with less host work "
+        "around them (the block's step wrappers built once per layer instead of every call, no per-call dict / set / "
+        "closure building, fewer pybind queries before a free, constant per-call lookups hoisted to load time). Host "
+        "only: outputs bit-identical",
+    ),
+    "MOE_TRACE": Setting(
+        "off",
+        ("off", "moe"),
+        "P.61 (overseer 2026-11-14, owner away; moe_replication branch, default off until accepted): the MoE half of "
+        "every layer (ffn_norm through the combine and ffn_residual's mhc_post) replayed from a Metal trace. off = "
+        "every op launched from the host each chunk. moe = per layer and per shape (tt/moe_trace.py): two eager calls, "
+        "then one capture (every DRAM buffer the half allocates is kept for the trace's life, no hole a later "
+        "allocation could take), then execute_trace every call. attn_residual writes the half's inputs (the streams, "
+        "ffn_hc's mixes) into load-time buffers; P.56's guard (a host decision on host ordinals, its copy an eager op) "
+        "and the planner's host bookkeeping run outside the trace. Only the steady path traces (OWN_ROWS, FFN_FEED, "
+        "POST_COLLAPSE, MOE_BLOCK_SRC=main with its own head, MOE_REPLICAS off or prev with MOE_PREV_HOST=device); any "
+        "other call runs eager. Same programs, same inputs: outputs bit-identical to off",
+    ),
+    "MOE_PREV_FIXED": Setting(
+        "165",
+        None,
+        "MOE_REPLICAS=prev: a replica's fixed cost in tokens (the receiver reads the expert's 19.9 MB of weights, "
+        "~38.9 us, vs ~0.236 us a routed token: P.55a's fit A / (B / 32)); the planner gives a receiver x = (busiest - "
+        "receiver - this) / 2 of the hot expert's tokens",
+    ),
+    "MOE_PREV_MIN": Setting(
+        "64",
+        None,
+        "MOE_REPLICAS=prev: the fewest tokens a replica takes (the planner stops below; >= 1)",
+    ),
+    "MOE_PREV_SLACK": Setting(
+        "165",
+        None,
+        "MOE_REPLICAS=prev: a receiver that already holds the expert (no copy) is kept over the least loaded chip when "
+        "it is within this many tokens of it",
+    ),
+    "MOE_PREV_NEW": Setting(
+        "64",
+        None,
+        "MOE_REPLICAS=prev: the most new copies one plan (one layer, one chunk) makes; the fill budget limits too",
+    ),
+    "MOE_EXACT_BLOCK": Setting(
+        "32",
+        None,
+        "MOE_REPLICAS=exact: pieces (10880 B at the 8x4's fabric payload) a ready flag covers: after every this many "
+        "pieces of a copy path the sender's port sends a flushed atomic increment to the receiver (the block has "
+        "landed); a relay forwards a block once its flag is in, the receiver may compute on landed blocks",
+    ),
+    "MOE_EXACT_FANOUT": Setting(
+        "2",
+        None,
+        "MOE_REPLICAS=exact: the copies a chip sends of one hot expert (the home and every receiver that relays): a hot "
+        "expert with R receivers goes out as a tree (each receiver's parent the nearest chip already in it with fewer "
+        "than this many children), each edge one path a link of the first hop",
+    ),
+    "MOE_EXACT_CAP": Setting(
+        "8",
+        None,
+        "MOE_REPLICAS=exact: a copy piece leaves during the combine's main loop only in a round that sent no row and "
+        "while the port's fabric channel holds fewer than this many packets (rows keep priority)",
+    ),
+    "MOE_EXACT_LIMIT_MS": Setting(
+        "20",
+        None,
+        "MOE_REPLICAS=exact: the most a relay's gate or a receiver's wait for its copy may take in one call before it "
+        "gives up and flags the call (never a hang); ms at 1.35 GHz",
+    ),
+    "MOE_FILL": Setting(
+        "piggyback",
+        ("serial", "piggyback"),
+        "P.53 (owner 2026-11-12, EXPERIMENTAL, MOE_REPLICAS=runtime only; default serial: the owner's, tasks.yaml "
+        "ab.keep_default). How set_replicas fills a spare slot. serial = "
+        "P.47's expert_slot_copy, one program in program order (0.71-0.78 ms a 19 MiB copy alone, 2.79 ms with all 32 "
+        "chips copying), then the slot map. piggyback = the copy rides on the combine's fabric port senders "
+        "(routed_experts_combine's port writer, REC_FILL): set_replicas only queues the copy; every following MoE "
+        "call of ANOTHER layer carries MOE_FILL_PIECES pieces of it (the source chip's port facing the first hop to "
+        "the destination, link 0: a piece only in a round that sent no row, while its fabric channel holds fewer than "
+        "MOE_FILL_CAP packets; the call's remaining pieces while the port drains) and the slot map flips one MoE call "
+        "after the copy's last piece (its flushed done increment and the next call's start barrier on the same route: "
+        "the slot is filled before any token can reach it). Outputs bit-identical to serial once mapped",
+    ),
+    "MOE_FILL_PIECES": Setting(
+        "125",
+        None,
+        "MOE_FILL=piggyback: the copy pieces (expert_slot_copy chunks, 10880 B at the 8x4's fabric payload) a source "
+        "port carries in one combine call, split over its copies (a 19 MiB slot is 2000 pieces: 16 calls at 125; P.53's "
+        "microbenchmark: <= 1/16 slot a call hides 94-100 % of the pieces in the combine's main loop); 0 = the whole "
+        "copy in one call",
+    ),
+    "MOE_FILL_CAP": Setting(
+        "4",
+        None,
+        "MOE_FILL=piggyback: a fill piece leaves during the combine's main loop only while the port's fabric channel "
+        "holds fewer than this many packets (1: only an empty channel; P.53: 4 hid more pieces than 1)",
+    ),
+    "MOE_REPLICA_DEMO": Setting(
+        "off",
+        ("off", "rotate"),
+        "diagnostic (P.53 step 3: the fill's cost in a chunk; MOE_REPLICAS=runtime only). rotate = before every chunk "
+        "one MoE layer (the built ones in turn) gets a new replica table, a copy a chip (chip k: a home slot of chip "
+        "k + 1), through set_replicas - MOE_FILL decides how it is filled. Outputs stay bit-identical (a replica holds "
+        "the same expert). off = no table (the model never calls set_replicas itself)",
+    ),
+    "MOE_COUNTS": Setting(
+        "off",
+        ("off", "on"),
+        "P.45 (owner 2026-11-11, expert replication study; MOE_BLOCK_SRC=main only). on = every MoE layer copies its "
+        "fused head's per-chip expert counts (head.counts, uint32 [1, 1, 1, slots] a chip: the chip's own slots non-zero) "
+        "into its own device buffer allocated at load (one ttnn.copy a layer, one core: no allocation, sync or "
+        "readback in the layer loop); the model's sync() then reads every layer that ran in one readback (a device "
+        "concat, ~1.2 MB at 8x4) and, with MOE_COUNTS_DIR set, writes <MOE_COUNTS_DIR>/<MOE_COUNTS_TAG>_chunk<NN>.json "
+        "(NN = start // chunk; {chunk, start, layers: {L: {chips: [chips][slots], perm: [slots]}}}). Routing, "
+        "placement and outputs unchanged (bit-identical). off = no copy, no readback",
+    ),
+    "MOE_COUNTS_DIR": Setting(
+        "",
+        None,
+        "MOE_COUNTS=on: the directory of the per-chunk count files; empty = read back only, no file (the A/B's cost)",
+    ),
+    "MOE_COUNTS_TAG": Setting(
+        "counts",
+        None,
+        "MOE_COUNTS=on: the count files' name prefix (<tag>_chunk<NN>.json)",
+    ),
+    "EXPERT_X_PIECES": Setting(
+        "min8k",
+        ("legacy", "min8k"),
+        "P.59 (owner 2026-11-14, moe_replication branch): MOE_BLOCK_SRC=main only - the flat routed expert's x snake "
+        "cut-through pieces (ttnn.bringup.moe_block_main FlatLayoutOptions.x_min_piece_bytes, "
+        "flat_routed_expert_program_factory.cpp). legacy = the source's choice (4 pieces whenever the x block splits "
+        "into 4 16-byte-aligned pieces; 64-row sub-blocks: 4 x 4352 B). min8k = Marko Staletovic's 1e2ab798da1 "
+        "(x-pieces hunk only): the most of 4 / 2 / 1 pieces of at least 8 KB each (64-row sub-blocks: 2 x 8704 B; "
+        "128-row: still 4). Same math, only the forwarding granularity: outputs bit-identical. His one-chip "
+        "benchmark (12 experts x M tokens): M 256 946 -> 744 us, 2048 6034 -> 5026; M 64 unchanged",
+    ),
     "TAIL_A2A_PREPARED": Setting(
         "on",
         ("on", "off"),

@@ -122,6 +122,15 @@ public:
         return std::any_cast<std::shared_ptr<const T>>(it->second);
     }
 
+    // ---- per-call inputs an op reads from the resources (set by the caller between calls, e.g. MOE_FILL's jobs for
+    // the next routed_experts_combine): any value under a name, replaced or cleared at will; never frozen
+    void set_op_input(const std::string& name, std::any value) { inputs_[name] = std::move(value); }
+    void clear_op_input(const std::string& name) { inputs_.erase(name); }
+    const std::any* op_input(const std::string& name) const {
+        auto it = inputs_.find(name);
+        return it == inputs_.end() ? nullptr : &it->second;
+    }
+
     // After freeze(), creating a missing slot throws (trace capture / steady state).
     // MoEBlockConfig.token_loops = k, chunk_splits = b: the ops plan for them from here on. Drops every plan and
     // persistent tensor made so far (a block picking its loops by planning): only before any op call or weight
@@ -166,6 +175,7 @@ private:
     std::map<std::string, Tensor> tensors_;
     std::map<std::string, tt::tt_metal::TensorSpec> tensor_specs_;
     std::map<std::string, std::any> plans_;
+    std::map<std::string, std::any> inputs_;  // (set_op_input)
     // persistent_words: the slab and each core's occupied [offset, end) ranges in it
     std::optional<Tensor> words_slab_;
     uint32_t words_slab_capacity_ = 0;

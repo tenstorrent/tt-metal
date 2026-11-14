@@ -20,7 +20,7 @@ constexpr auto i_args = TensorAccessorArgs<b_args.next_compile_time_args_offset(
 constexpr uint32_t ARRF = 3, ARRB = 4, BIAS = 5, IDX = 11, K = get_compile_time_arg_val(3), RDY = 12;
 // args: bias^T, expert index tiles; my rows [G]; the arrivals (na: every other chip's partial of my owner
 // rows, slot = its source index) and their words (a word a slot, 16 B apart); the slots in their fixed sum order [G -
-// 1]
+// 1]; the tail (words, best, out, scale), the scores' L1, my row tile's first owned row; the planner's
 void kernel_main() {
     const uint32_t b_addr = get_arg_val<uint32_t>(0), i_addr = get_arg_val<uint32_t>(1);
     const uint32_t r0 = 2, na = get_arg_val<uint32_t>(r0 + G);
@@ -37,16 +37,21 @@ void kernel_main() {
     }
     const auto bg = TensorAccessor(b_args, b_addr, 4096);
     const auto ig = TensorAccessor(i_args, i_addr, 2048);
-    cb_reserve_back(BIAS, ET);
+#ifdef RT_SMAP_OFF
+    constexpr uint32_t BT = ET + 1;  // (replica slots: the layer's slot map, the bias's extra tile - router_rows.hpp)
+#else
+    constexpr uint32_t BT = ET;
+#endif
+    cb_reserve_back(BIAS, BT);
     cb_reserve_back(IDX, ET);
-    for (uint32_t t = 0; t < ET; ++t) {
+    for (uint32_t t = 0; t < BT; ++t) {
         noc_async_read(bg.get_noc_addr(t), get_write_ptr(BIAS) + t * 4096, 4096);
     }
     for (uint32_t t = 0; t < ET; ++t) {
         noc_async_read(ig.get_noc_addr(t), get_write_ptr(IDX) + t * 2048, 2048);
     }
     noc_async_read_barrier();
-    cb_push_back(BIAS, ET);
+    cb_push_back(BIAS, BT);
     cb_push_back(IDX, ET);
 #ifdef RT_NIT
     constexpr uint32_t NIT = RT_NIT;  // (router iterations: my row tile of each)
@@ -101,20 +106,26 @@ void kernel_main() {
             DeviceZoneScopedN("SE-RROWS");
             set_l1_data_cache<true>();
             invalidate_l1_cache();
+#ifdef RT_NIT
+            const uint32_t mt0 = get_arg_val<uint32_t>(t2 + 5) + it * 32 * RT_RBI;  // (my row tile of iteration it)
+#else
+            const uint32_t mt0 = get_arg_val<uint32_t>(t2 + 5);
+#endif
             rows_::make<K, ET>(
                 get_arg_val<uint32_t>(t2 + 1),
                 get_arg_val<uint32_t>(t2 + 4),
                 get_arg_val<uint32_t>(t2 + 2),
                 get_arg_val<uint32_t>(t2 + 3),
                 8,
-                16);
+                16,
+                mt0);
             set_l1_data_cache<false>();
             *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words + 16) = 1;
         }
     }  // (router iterations)
 #ifdef RA_PLAN
     {  // the second planner instance on this core (the routing exchange + planner: routing_stream)
-        const uint32_t rr = ab0 + nab + 2 + 5, rows2 = get_arg_val<uint32_t>(rr), B = get_arg_val<uint32_t>(rr + 1);
+        const uint32_t rr = ab0 + nab + 2 + 6, rows2 = get_arg_val<uint32_t>(rr), B = get_arg_val<uint32_t>(rr + 1);
         noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rows2), RA_NP_);
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rows2) = 0;
         if (B) {

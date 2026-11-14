@@ -1264,3 +1264,207 @@ the owner decides from P.50's A/B).
   load cold): off - code max |diff| per chunk run 1 [0.0156, 0.0156, 0.051, 0.079], run 2 [0.090, 0.154, 0.097, 0.219]
   (1443-1956 rows of 5120), novel 0 this time (DS41-233's cold chunk 0 difference is the same race, it does not show
   every run); on - 0 everywhere.
+
+## A light chip finishes its own experts at the DRAM floor, 0.467 ms, before any whole-expert copy lands
+- Measured (8x4, chunk 10 = tokens [51200, 56320), MOE_REPLICAS=off, 3 profiled runs a workload, real-time profiler):
+  routed_experts_combine (experts + combine, one program a chip) summed over 40 layers, slowest chip / shortest chip:
+  novel 56.3 / ~50 ms, code 47.0 / ~39 ms, random ids (the p51200 position profile) 63.2 / ~58 ms. The shortest
+  chip is the one that started last at the start barrier (DS41-248), so it is the work without host-dispatch skew.
+- Per-chip time model, fitted on those 360 layer calls (tests/moe_exact_model.py `fit`):
+  `reach_k = max(A x active experts, B x row tiles)`, layer = C0 + max_k reach_k; A = 19.9 MB / 512 GB/s = 38.9 us
+  (rmse 0.068 ms at A, 0.073 at 1.5 A, 0.100 at 2 A: the data prefer the DRAM rate), B = 7.55 us a 32-row tile,
+  C0 = 0.235 ms, R^2 0.966. With 12 experts a chip the floor is 0.467 ms: the median chip sits on it (busiest / mean
+  ~4.4 in tokens, but only ~2.3 in time).
+- Exact split (greedy planner; one replica a receiving chip, the 13th slot; a hot expert may get several), max mode
+  (copies free) vs deadline mode (each copy = 19.9 MB at P.47's 0.71 ms a link pair + 18 us an extra hop, store and
+  forward along the axis-0-then-axis-1 path, one copy at a time a link, starting one weight read after the home
+  starts the expert): novel 21.9 -> 10.1 ms a chunk, code 10.6 -> 2.9, random ids 30.9 -> 16.5. 0 of 335 (novel)
+  copies land before the receiver reaches the replica: they land at >= 0.75 ms, the receivers reach it at ~0.47.
+  Halving the copy time (two paths a copy) keeps 20.9 / 10.1 / 27.7 ms. Three gate runs agreed within ~0.3 ms.
+- Not modelled: the dispatch's own imbalance (it also moves rows to replicas), the combine rows on the same links
+  (~10 % of a link), and the home's L1 window: in ~94 % of the planned copies the copy outlasts the home's compute of
+  that expert (+ one weight read), so the source would need to hold the blocks or re-read them from DRAM
+  (`src_window_short`, results/P.55a_exact_bound.json).
+
+## A copy streamed in the layer's own combine moves ~7 GB/s a link while the combine runs, ~20 after
+tests/test_moe_exact_copy.py, layer 20, 8x4, a random 5120-token chunk (the combine alone 0.84-0.89 ms, every chip's
+own work 0.62-0.65 ms: its ports' main loops), MOE_EXACT_BLOCK 32 pieces (340 KiB), cap 8, AICLK 1350 MHz. Latency =
+the receiver's waiter port: its start barrier to the last flag of the copy; added = the combine program's device time
+(real-time profiler, slowest chip, median of 6, stock calls alternating in the window) minus the stock one.
+
+| case | copies | latency ms | added ms | first block ms |
+|---|---|---|---|---|
+| no job | 0 | - | +0.009 | - |
+| pair, 1 link | 1 | 1.397 | +0.630 | 0.065 |
+| pair, both links | 1 | 0.890 | +0.106 | 0.062 |
+| pair, 4 links (half via chip 4's spare slot, relayed) | 1 (+1 relay) | 0.761 | +0.008 | 0.064 |
+| neighbour, 32 copies at once | 32 | 0.954 | +0.254 | 0.038 |
+| real split, novel L20 (P.55a counts; 4 hot experts, relay trees depth 5) | 23 | 1.254 | +0.372 | 0.054 |
+| real split, code L20 (4 hot experts, depth 3) | 10 | 1.235 | +0.371 | 0.057 |
+
+Block arrivals (pair, both links, path 0, every 4th block, us): 65, 255, 402, 533, 623, 693, 762, 831: ~47 us a block
+while the combine's main loop runs (rows first, the experts reading their weights from the same DRAM), ~17 us after
+(~20 GB/s a link). One link alone 1.40 ms = 15.5 GB/s average, the rate expert_slot_copy reaches a link (P.47's
+0.71 ms used both links). A relay level adds ~0.05-0.1 ms (tree depth 5: the last receiver 1.25 ms vs the first 0.79).
+Two copies on one port go one after the other (the code split at first: 1.80 ms with 2 jobs a port; the tree now
+prefers a parent whose port toward the child is free: 1.24 ms).
+P.55a's model (moe_exact_model.py, chunk 10 at 51,200, every layer) with a copy edge taking the measured pair time:
+both links 0.89 ms: novel 5.87 ms a chunk (0 of 174 copies on time), code 1.25 (0 of 41); 4 links 0.76 ms: novel 8.74
+(0 of 269), code 2.44 (0 of 74). P.55a's own 0.71 / 2-path assumption gave 20.9 / 10.1.
+The final gate run (its recorded metrics, same code): pair both links 0.876 ms / +0.137, 4 links 0.772 / -0.004,
+neighbour 32 0.961 / +0.195, novel split 1.229 / +0.419, code split 1.229 / +0.297; the model: both links novel 6.16
+(0 of 183), code 1.36 (0 of 46); 4 links novel 8.55 (0 of 259), code 2.30 (0 of 63).
+
+## The exact split pays only with copies already in place; streamed in the layer's own combine it loses
+
+Chunk 10 at 51,200 (the device's own prefill of chunks 0-9, re-runs on the steady path), 8x4, 40 MoE layers, plans from
+the same chunk's counts (tests/moe_exact_model.Plan; A 38.9 us, B 7.55 us a row tile from P.55a's fit), median of 3
+profiled runs (real-time profiler; device = each program's slowest chip, summed):
+
+| prompt | side | device ms | experts+combine | dispatch | head | replicas |
+|---|---|---|---|---|---|---|
+| novel | off | 185.9 | 56.5 | 20.0 | 20.0 | 0 |
+| novel | fill (copies before the chunk, max-mode plan) | 161.5 | 39.2 | 11.2 | 17.8 | 512 |
+| novel | exact (streamed, deadline plan at 0.89 ms a copy) | 195.0 | 68.7 | 17.8 | 19.0 | 290 |
+| code | off | 170.5 | 46.5 | 14.4 | 17.1 | 0 |
+| code | fill | 158.3 | 38.9 | 11.2 | 16.6 | 295 |
+| code | exact | 175.6 | 51.7 | 13.9 | 17.4 | 67 |
+
+Every side bit-identical to off on every MoE layer's output (the exact side with every receiver's spare slot spoiled
+first: the receivers' wait works), the repeats bit-identical. The split also halves dispatch (its destinations even
+out). Streamed: the 23 (novel) / 8 (code) layers with copies take 2.10 / 1.98 ms each vs off 1.62 / 1.51 and fill
+0.93 / 0.96 (+1.0-1.2 ms a layer over the same split with the copies in place); the layers without copies +0.07 /
++0.02 ms (the exact program with empty jobs, after a copy layer's skew). P.55a's model with the whole-copy wait
+predicts 1.21 ms for those layers at 0.89 ms a copy edge; recalibrated it plans: 1.25 ms a copy -> novel 0.77 ms a
+chunk (44 copies), code 0.06; 1.6 ms -> 0.04 / 0. A copy tree lands in 1.25 ms (P.55b, one tree) to ~1.9 ms (19
+receivers of one expert, depth ~5), when the off layer's busiest chip is done at 1.0-1.9 ms: a copy within the call
+cannot arrive before the receiver would have to start the replica.
+
+## P.56's own host cost makes the chunk host-bound; a one-layer trace replays bit-identical
+DS41-256: where the host time of a chunk goes (P.57, 8x4, 2026-11-14).
+Measured by tests/test_host_bound.py (one process, shipped settings + MOE_FILL=piggyback, ENGRAM_TABLE=resident; side
+off = MOE_REPLICAS=prev switched off in the loaded model). host = first host call to the last op enqueued; wall = to
+the end of the closing sync; device = program real-time profiler, slowest chip a program, summed.
+
+| chunk | host | wall | device | regime |
+|---|---|---|---|---|
+| novel c1-10 mean, off | 160.5 | 180.9 | ~175-177 | device-bound (wall = device + ~4-8) |
+| novel c1-10 mean, prev | 185.0 | 186.6 | ~156-160 | host-bound (wall = host + 1.6 drain) |
+| p51200, off | 163.5 | 202.5 | 194.6 | device-bound (wall = device + 7.9) |
+| p51200, prev | 181.7 | 184.1 | 162.8 | host-bound (wall = host + 2.4) |
+
+Host parts, novel chunk 10, prev (instrumented 195.7 ms vs clean 190.3; the 5.4 ms wrapper overhead sits mostly in b):
+(a) Python in tt/ 34.4 (attention 11.0, ffn_residual 7.0, experts 4.1; ~6 ms of it is ttnn.deallocate via ccl.dealloc,
+1211 calls); (b) ttnn op launches 139.9 for 1732 calls (C++ 135.3, Python-registered forks 4.6); (c) run_prepared 8.9
+(planner 3.9, window_send 3.0); (d) transfers / waits 10.0 (the layer-1 wait for the async engram job 7.6, the engram
+rows' copy 2.4); (e) per chunk 2.5 (begin_chunk 0.5, embed ids 1.4, P.56 guard 0.6); (f) other 0.
+Top launches (us a call x calls): routed_experts_combine 731 x 40 (402 off), fused_head 301 x 40, slice 54 x 211,
+high_bw_all_gather 106 x 92, mhc_post 100 x 82, linear 55 x 144, rotary_embedding_indexed 56 x 136, slice_write 43 x
+164, update_padded_kv_cache 87 x 48, topk_large_indices 437 x 9, allocate_tensor_on_device 61 x 58, sparse_dispatch_2d
+89 x 40. Host by section (Python + its launches): experts 64.7 (50.5 off), attention 43.0, ffn_residual 27.3,
+compressor 13.4, engram_rows 10.0 (the wait), indexer 9.0, kv 8.5, q_a 7.3, attn_residual 5.9.
+cProfile (testing/profile.py host_profile, p51200 prev): decorators.py FastOperation.__call__ self 130 ms of ~192, the
+engram worker lock 11.7 ms.
+
+Trace prototype (side off, layer 21 at novel chunk 10, input cloned each run, 47 programs): capture after 3 warm runs
+(no "Cannot load new binaries": DS41-100's address-keyed caches are gone), 20 replays bit-identical to the untraced
+output (which repeats bit for bit), no hang. Host a layer 6.45 -> 0.020 ms; device a layer 3.93 (rt profiler) -> 3.54
+(10 replays back to back / 10).
+
+Trace blockers for a chunk-to-chunk trace (code reading at b8a57740c25):
+1. per-start host arguments baked in the commands: RopeTable.rows (ttnn.slice at start), update_padded_kv_cache
+   kv_actual_global / valid_global, the window server row, DeviceScalars.at(start), compressor slice_write row offsets,
+   ckv_bfp4's row0 value slot, ring_indexer_score_dsa chunk_start_idx and kv_len (the program grows with the prefix),
+   the window start class. Lift: one trace per start (memory not measured) or start as a device tensor (K-48 style).
+2. state written per chunk into tensors allocated in the chunk and kept after it (top-k / candidate stores keyed by
+   start, DS41-2). Lift: preallocated per-position stores.
+3. host inputs: token ids (embed: a new from_torch tensor a chunk) -> a fixed input buffer; engram rows already go into
+   reused buffers (tt/engram.py copy_host_to_device_tensor) but layer 1 waits for the worker inside the chunk -> finish
+   (or prefetch one chunk ahead) before the replay.
+4. P.56: the host guard (steady chunks are 40/40 ready; chunk 0 runs off -> keep chunk 0 eager) and the combine's ring
+   slot `ring[o % 44]` chosen on the host each call (40 calls a chunk: the pattern repeats every 11 chunks). Lift: the
+   slot from the device ordinal G[0], or W a multiple of the calls a chunk.
+5. not blockers: host reads in the chunk (0; MOE_COUNTS off), CCL semaphores (host-cycled handles and the combine's
+   device call counters replay fine in a fixed call sequence: the prototype), allocations inside the capture.
+
+## TP experts lose to EP on the flat op: a 32-row tile barely gets cheaper as the expert narrows
+(DS41-257, P.58, Galaxy 8x4, tests/test_moe_tp4_check.py; real-time profiler, slowest chip, median.)
+
+- Calibration of `ttnn.bringup.moe_block_main.flat_routed_expert` alone, bfp4 weights_nk, 11 x 10 cap:
+
+  | width I | slots a chip | A (one more active slot, 32 rows) | B (one more 32-row tile) | B per full-width equivalent |
+  |---|---|---|---|---|
+  | 2304 (EP) | 12 | 51.1 us | 7.66 us | 7.66 us |
+  | 512 (TP4 stand-in for 576) | 48 | 14.6 us | 6.25 us | 28.1 us (3.7x) |
+  | 256 (TP8 stand-in for 288) | 48 | 13.7 us | 4.85 us | 43.6 us (5.7x) |
+
+  A per byte holds roughly (1.28x worse at 512); B does not scale with the width: per row the op moves an H = 5120
+  wide x row in and an H wide y row out whatever I is, and under TP every chip of a group processes every row of the
+  group's experts (4x / 8x EP's rows a chip). The "balanced compute" estimate (B / g) is therefore wrong by ~4x.
+- At P.55a's chunk-10 counts (40 layers), flat op a chunk, novel / code: EP 52.5 / 42.5 ms, TP4 86.0 / 77.5 (x 1.125
+  from 512 to 576), TP8 125.9 / 119.0 (two 48-slice calls a layer: an upper bound).
+- Communication (head-driven, steered to layer 20's counts; extrapolated to 6 experts a token): TP4 dispatch +0.07 /
+  +0.10 ms a layer, combine +0.10 / +0.15 (novel / code); TP8 dispatch ~+0.5, combine ~+1.7 (uniform K 8 -> 16 the
+  combine cost went 0.09 -> 0.37 ms: superlinear, the linear extrapolation to K 48 is rough).
+- Per chunk at 51,200, device ms (EP off and EP + P.56 measured by P.56; TP = EP off + experts difference + 40 x
+  dispatch added): novel 175.2 / 156.1 / TP4 215.3 / TP8 334.8; code 164.0 / 153.1 / 209.1 / 329.8.
+- Precision: summing 4 / 8 partial rows in the combine's fp32 accumulators: rel error vs fp32 0.0561 / 0.0564 vs EP's
+  0.0560 (uniform routing, 512 tokens): no cost.
+- Op limits met on the way (each is work for a real TP build): flat op even gate/up split (flat_routed_expert_plan.cpp
+  "no even gate/up split": 2 I / 32 tiles into a multiple of 16 cores; 576 and 288 have none), fused head top-K even
+  and <= 16 (routing rows in 64 B), routing planner N x slots <= 1024 (head_plan.cpp), flat op <= 64 slots a chip.
+
+## P.56's combine host cost was its per-call fill arg rewrites, not the ring slot choice
+(DS41-259, P.60, Galaxy 8x4, 2026-11-14.)
+
+- Probe (tests/test_moe_prev_host_probe.py, 4 layers, novel chunks 0..3, median host us a combine call; plus
+  temporary C++ timers per pass of 16 calls): off ~440-520; prev legacy ~810-930, of it set_fill ~350-470 (fill
+  ports' args ~150-210, the flat expert readers' wait args ~190-260); legacy with ring[0] on every call 978 (no help);
+  legacy with set_combine_fill_exact once a pass 794 (no help: the C++ hit still rewrites every arg, the token is new
+  every call). With ring + wait False (MOE_PREV_HOST=device): set_fill ~5 us (the signature compare), launch ~470-525.
+- Why so slow: set_fill runs for each of the 32 per-chip programs and does a GetRuntimeArgs (a kernel lookup in the
+  program's maps + a shared_ptr copy) per fill port and per reader core; ~5-6 us a chip.
+- Full model (gate unit, chunks 1..10 mean): combine us a call off 340 / legacy 687 / device 362; host ms a chunk
+  novel 164.7 / 188.1 / 172.4, code 162.3 / 182.7 / 170.1.
+- The planner's run_prepared: 55.7 us a call in a tight loop (same io), 58.1 alternating layers' io, ~95 us inside
+  the chunk: the patches are not the cost; the rest is the 32-program dispatch with cold host caches (DS41-131).
+
+## The fused head's and the combine's per-chip programs differ in structure, not only in arg values
+
+(DS41-269; P.63b.) What one program for the whole mesh needs.
+
+Diff of the 32 per-chip programs (DS41_MESH_DIFF=<prefix>, diagnostic; common/mesh_uniform.cpp
+mesh_uniformity_report / mesh_views_dump; 8x4, novel chunk 1, MOE_REPLICAS=prev):
+
+| op | kernels | chip-dependent args a chip | structural differences |
+|---|---|---|---|
+| fused head | 11 (3 compute) | 4,280 per-core + 5 common (DM 4,046, compute 3,290 incl. different lengths) | 4 defines carry the chip index (RA_ME_ xg_sender / xg_watcher / ra_y_send / routers, RAP_ME routers, RT_SMAP_ME, RW_ME router_compute); arg-list lengths differ by chip (xg_sender 296 / 235, se_ncrisc 39 / 63, se_compute 44..60); patched address args sit at chip-dependent indices (xg_sender: +2 / +4 shifts); router_compute arg 10 is an address with a per-column offset. Core ranges, CBs, semaphores, compile args: the same. |
+| combine (flat expert + combine) | 17 (4 compute) | 3,047 per-core (down_weight_reader 31 a core: DRAM bank coordinates; port writer up to 317; accumulator reader up to 96; accumulator_compute 1) | port cores and accumulator cells differ by chip (port_placement.cpp place_nearest: next to each chip's Ethernet cores) - so CB and semaphore core ranges differ too. Union: 14 port cores, 21 accumulator cells. |
+
+Mechanism built (MESH_PROGRAMS2=on, fork option mesh_program; head only, the combine not started):
+* host (assemble_mesh_program): chip 0's descriptor, every list padded to the kernel's longest (free: the
+  dispatcher already sends each core of a kernel at the kernel's max length); defines that differ become an arg
+  (`(get_arg_val<uint32_t>(n))`); per chip and slot an entry: delta (added: constants, or the same buffer at another
+  offset), absolute (a constant where chip 0 has an address), anchor + offset (an address read at another index
+  than chip 0: one extra arg per core and buffer the host patches per call). Table: DRAM, replicated, a 960 B page
+  per (core unit, fabric chip id); landing: an L1_SMALL page a core. Head: 220 units, 4,599 entries (chip 1), 138
+  anchors, 6.76 MB table, 26,113 args a launch (per-chip legacy ~20.7K). A host check rebuilds every chip's args
+  from the mesh args and its rows (passed).
+* device (common/device/kernels/mesh_overlay.hpp): DM kernels read their row by my_device_id and apply it before
+  anything else; a compute kernel's entries are applied by the first DM kernel on its core into the three TRISC arg
+  copies (launch message rta_offset[2..4]) and released by a flag arg the TRISCs spin on.
+
+## The first mesh fused-head launch (MESH_PROGRAMS2=on) hung the 8x4
+
+(DS41-271; P.63b.) 1-layer probe, sides on (P.63) then mesh; on ran clean and bit-identical; the mesh head's
+first launch timed out (metal_context.cpp:806), then PCIe MMIO timeouts; triage could not attach; the safe runner
+reset and recovered the box ("All Detected Links are healthy"). No further device run (owner safety rule).
+Candidates, in the order to check (on a 2x2 first, or in slow dispatch with the watcher):
+1. the compute release: trisc_args() address (watcher off: no count word), the "fence" ordering on BH, TRISCs
+   spinning with invalidate_l1_cache(); a TRISC that never sees its flag hangs the program;
+2. a staged compute kernel whose stager DM kernel reads its args before... (no: the prologue is first) - check
+   every head kernel with MESH_OVL_FLAG has a DM kernel with a unit on every one of its cores;
+3. the NOC read of the row: InterleavedAddrGen page id (unit x chip ids + my_device_id) and an L1_SMALL landing
+   at the same address on every core (MeshBuffer sharded over the unit cores);
+4. a wrongly applied delta on a fabric connection arg (eth channel, EDM addresses) - the host check covers values,
+   not the device's decoding (desc bits: slot 14 | common 14 | type 15-16 | anchor 17-30).

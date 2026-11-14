@@ -2710,6 +2710,8 @@ def measure(orch: Orchestrator, tid: str, parts: list[str] | None) -> int:
     ab = task.get("ab") or {}
     old, _ = model_precision.switch_env(orch.spec, ab.get("env") or {})
     on, _ = model_precision.switch_env(orch.spec, ab.get("change") or {})
+    if ab_before(task):  # F230 as ab_report: ab.env is what both sides run with (P.67: measure ran 'new' without it)
+        on = old
     try:
         got = orch.ab_measure(task, "new", on, orch.ab_base(old, on, tid), orch.ab_code_key(task), only=parts)
     except InfraStop as e:

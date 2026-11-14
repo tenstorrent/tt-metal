@@ -334,6 +334,7 @@ void MoEBlockResources::release() {
 
 void MoEBlockResources::drop_state() {
     plans_.clear();
+    inputs_.clear();
     for (auto& [name, t] : tensors_) {
         t.deallocate(true);  // (a packed words slot: a view - marks it released, frees nothing)
     }

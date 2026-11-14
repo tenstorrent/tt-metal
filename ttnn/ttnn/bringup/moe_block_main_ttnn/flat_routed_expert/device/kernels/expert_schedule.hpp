@@ -105,10 +105,20 @@ inline void se_dyn_pin(SeDyn& d, uint32_t rps) {
     if (d.n_act < 2 || d.n_act > SE_MAX_E) {
         return;
     }
+#ifdef SE_FX_SPARE
+    // (P.55c: never pin the replica, it stays last; b among the others)
+    uint32_t b = d.eid[0] == SE_FX_SPARE ? 1 : 0;
+    for (uint32_t a = b + 1; a < d.n_act; ++a) {
+        b = d.eid[a] != SE_FX_SPARE && d.subs[a] > d.subs[b] ? a : b;
+    }
+    auto fx_spare = [&](uint32_t a) { return d.eid[a] == SE_FX_SPARE; };
+#else
     uint32_t b = 0;
     for (uint32_t a = 1; a < d.n_act; ++a) {
         b = d.subs[a] > d.subs[b] ? a : b;
     }
+    auto fx_spare = [](uint32_t) { return false; };
+#endif
     const uint32_t sb = d.subs[b];
 #if defined(SE_PIN_RATIO) && SE_PIN_RATIO > 0
     // Pin only a dominant expert: at least SE_PIN_RATIO x the mean of the others' sub-blocks. Below that the plain
@@ -130,10 +140,15 @@ inline void se_dyn_pin(SeDyn& d, uint32_t rps) {
     uint32_t n_small = 0, n_o = 0;
     for (uint32_t pass = 0; pass < 2; ++pass) {
         for (uint32_t a = 0; a < d.n_act; ++a) {
-            if (a != b && (d.subs[a] <= kPinSmall) == (pass == 0)) {
+            if (a != b && !fx_spare(a) && (d.subs[a] <= kPinSmall) == (pass == 0)) {
                 order[n_o++] = a;
                 n_small += pass == 0;
             }
+        }
+    }
+    for (uint32_t a = 0; a < d.n_act; ++a) {  // (P.55c: the replica after every other expert)
+        if (a != b && fx_spare(a)) {
+            order[n_o++] = a;
         }
     }
     uint32_t k = sb / SE_PIN_MIN;
@@ -248,6 +263,31 @@ inline void se_dyn_build(
             d.load_eid[b - 1] = e;
         }
     }
+#ifdef SE_FX_SPARE
+    // MOE_REPLICAS=exact (P.55c): the replica (local expert SE_FX_SPARE, the spare slot) last - its weights are copied
+    // in this call; every role builds the same order
+    for (uint32_t a = 0; a + 1 < d.n_act; ++a) {
+        if (d.eid[a] != SE_FX_SPARE) {
+            continue;
+        }
+        const uint32_t o = d.off[a], c = d.cnt[a];
+        const uint16_t sb = d.subs[a];
+        for (uint32_t b = a; b + 1 < d.n_act; ++b) {
+            d.off[b] = d.off[b + 1];
+            d.cnt[b] = d.cnt[b + 1];
+            d.subs[b] = d.subs[b + 1];
+            d.eid[b] = d.eid[b + 1];
+            d.load_eid[b] = d.eid[b];
+        }
+        const uint32_t z = d.n_act - 1;
+        d.off[z] = o;
+        d.cnt[z] = c;
+        d.subs[z] = sb;
+        d.eid[z] = SE_FX_SPARE;
+        d.load_eid[z] = SE_FX_SPARE;
+        break;
+    }
+#endif
 }
 
 // Reads the counts / regions rows and the global expert id table into SCRATCH (two SE_DYN_HALF halves of L1 this RISC

@@ -70,7 +70,8 @@ HeadShape head_shape_of(
     s.H = dims.emb_dim;
     s.I = dims.shared_expert_hidden_dim.value_or(0) / topology.C;
     s.G = topology.C;
-    s.E = dims.num_experts * dims.router.fold;
+    s.E = dims.router.candidates ? dims.router.candidates : dims.num_experts * dims.router.fold;
+    s.NE = dims.router.candidates ? dims.num_experts : 0;  // (replica slots)
     s.K = dims.top_k;
     s.latent = dims.latent_dim;
     s.fold = dims.router.fold;
@@ -308,6 +309,7 @@ const FusedHeadSetup& setup_fused_head(
         for (uint32_t i = 0; i < loops * cfg.splits(); ++i) {
             setup.patches.push_back(std::make_shared<HeadPatchStore>());
             setup.patches_padded.push_back(std::make_shared<HeadPatchStore>());
+            setup.patches_tail.push_back(std::make_shared<HeadPatchStore>());
         }
         return setup;
     });
@@ -323,7 +325,8 @@ FusedHeadWeights prepare_fused_head_weights(
     MoEBlockResources& resources,
     const MoEDtypes& dtypes,
     uint32_t accumulators,
-    std::optional<int64_t> l1_free) {
+    std::optional<int64_t> l1_free,
+    const std::optional<Tensor>& slot_map) {
     using namespace fused_head_entry_detail;
     const auto& setup = setup_fused_head(resources, dtypes, accumulators, l1_free);
     auto w = prepare_head_weights(
@@ -333,7 +336,8 @@ FusedHeadWeights prepare_fused_head_weights(
         to_floats(down),
         latent_down ? to_floats(*latent_down) : std::vector<float>{},
         to_floats(router_weight),
-        to_floats(router_bias));
+        to_floats(router_bias),
+        slot_map ? to_floats(*slot_map) : std::vector<float>{});
     return FusedHeadWeights{.w = w.w, .w_router = w.rw, .router_bias = w.rb, .router_index = w.rix};
 }
 
@@ -349,7 +353,10 @@ FusedHeadOutputs fused_head(
     const std::optional<Tensor>& actual_start,
     const std::optional<Tensor>& actual_end,
     uint32_t loop,
-    const std::optional<Tensor>& xq) {
+    const std::optional<Tensor>& xq,
+    const std::optional<HeadTail>& tail,
+    const std::optional<Tensor>& tail_desc,
+    bool cached_slots) {
     using namespace fused_head_entry_detail;
     TT_FATAL(
         resources.config().pad_tokens == 0 || actual_start.has_value(),
@@ -361,6 +368,9 @@ FusedHeadOutputs fused_head(
         loop,
         resources.config().splits(),
         loops);
+    TT_FATAL(
+        !(tail.has_value() && actual_start.has_value()),
+        "fused_head: a tail (P.62b) runs with unpadded chunks only (its programs' patch store)");
     const auto& setup = setup_fused_head(resources, dtypes, accumulators, l1_free);
     FusedHeadParams params{
         .config = setup.config,
@@ -368,13 +378,16 @@ FusedHeadOutputs fused_head(
         .model = setup.model,
         .words = setup.words,
         .arena = arena ? *arena : default_arena(resources, setup),
-        .patches = actual_start ? setup.patches_padded[loop] : setup.patches[loop],
+        .patches = actual_start ? setup.patches_padded[loop] : (tail ? setup.patches_tail[loop] : setup.patches[loop]),
         .loops = loops,
-        .loop = loop};
+        .loop = loop,
+        .tail = tail,
+        .cached_slots = cached_slots};
     auto in = call_inputs(setup, x, weights, x_full, xq);
     in.y = setup.y_loops[loop % loops];
     in.actual_start = actual_start;
     in.actual_end = actual_end;
+    in.tail_desc = tail_desc;
     FusedHeadOutputs out{
         .se = in.y,
         .rows = in.rows,
@@ -387,6 +400,12 @@ FusedHeadOutputs fused_head(
         .plan = in.plan};
     ttnn::prim::moe_block_main_fused_head(params, std::move(in));
     return out;
+}
+
+std::pair<tt::tt_metal::CoreCoord, uint32_t> fused_head_tail_core(
+    MoEBlockResources& resources, const MoEDtypes& dtypes, uint32_t accumulators, std::optional<int64_t> l1_free) {
+    const auto& setup = setup_fused_head(resources, dtypes, accumulators, l1_free);
+    return {head_tail_core(*setup.model), head_tail_l1_offset(*setup.model)};
 }
 
 }  // namespace ttnn::operations::bringup::moe_block_main::fused_head

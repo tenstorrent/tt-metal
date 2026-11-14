@@ -22,6 +22,11 @@
 #ifdef RT_MSYNC_OFF
 #define RT_MSYNC (get_common_arg_val<uint32_t>(0) + RT_MSYNC_OFF)
 #endif
+// RT_SMAP_OFF (replica slots, RouterSpec.candidates): the layer's slot map - the router bias's extra tile, read into
+// the bias region after its ET tiles (router_rows.hpp slot_of); RT_SMAP_ME this chip's index (r C + c)
+#ifdef RT_SMAP_OFF
+#define RT_SMAP (get_common_arg_val<uint32_t>(0) + RT_SMAP_OFF)
+#endif
 
 // RT_VALID (a padded chunk: fused_head(..., actual_start=, actual_end=), main's chunked-prefill metadata scalars): two
 // one-element uint32 DRAM tensors read on device every call (a trace replays with the values of the moment) - the

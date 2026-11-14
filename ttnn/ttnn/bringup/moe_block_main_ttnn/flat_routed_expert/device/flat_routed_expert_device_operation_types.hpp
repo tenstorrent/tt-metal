@@ -34,6 +34,11 @@ struct FlatLayoutOptions {
     // shares its exponents along K (e2m1 x ue8m0 experts: bfp8 exact, bfp4 in the checkpoint's groups). Default off
     // (= the source's program).
     bool weights_nk = false;
+    // (bring-up, DeepSeek-V4.1 P.59) the x snake's cut-through pieces: 0 = the source's choice (4 when x_bytes splits
+    // into 4 16-byte-aligned pieces, else 2, else 1); > 0 = the most of 4 / 2 / 1 whose pieces hold at least this
+    // many bytes (8192: Marko Staletovic's 1e2ab798da1 - each piece >= 8 KB; 64-row sub-blocks 2 pieces of 8.5 KB
+    // instead of 4 of 4.3 KB). Same math, only the forwarding granularity changes. Default 0 (= the source's program).
+    uint32_t x_min_piece_bytes = 0;
 
     // every field, for the plan cache key and the program hashes
     std::vector<uint32_t> key() const;
@@ -68,6 +73,10 @@ struct FlatRoutedExpertParams {
     uint32_t cmb_rt = 0;
     // combine overlap: the y writers' L1 hand-off args after the report args (SE_Y_L1)
     bool y_l1 = false;
+    // MOE_REPLICAS=exact (P.55c, inside routed_experts_combine with the exact copy): 1 + the local expert whose weights
+    // the call copies in (the spare slot) - scheduled last, never pinned, its weights read once the copy has landed
+    // (the weight readers' fx_wait.hpp args, FlatProgramHandles::fx_readers); 0: off. No effect on the plan
+    uint32_t fx_spare = 0;
     FlatLayoutOptions layout;
 
     static constexpr auto attribute_names = std::forward_as_tuple(
@@ -86,6 +95,7 @@ struct FlatRoutedExpertParams {
         "math_fidelity",
         "cmb_rt",
         "y_l1",
+        "fx_spare",
         "layout");
     auto attribute_values() const {
         return std::make_tuple(
@@ -104,6 +114,7 @@ struct FlatRoutedExpertParams {
             math_fidelity,
             cmb_rt,
             y_l1,
+            fx_spare,
             layout);
     }
 };
