@@ -11,7 +11,7 @@ from fuser.fuser_config import GlobalConfig
 from fuser.golden.fpu.eltwise import eltwise_golden
 from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
-from fuser.quasar.fpu.common import fidelity_source_formats
+from fuser.quasar.fpu.common import configure_alu_cfg, fidelity_source_formats
 from helpers.llk_params import (
     BroadcastType,
     MathOperation,
@@ -54,7 +54,7 @@ class EltwiseFpu(Fpu):
         if compute_unit.broadcast_type != BroadcastType.None_:
             broadcast_type = compute_unit.broadcast_type.cpp_enum_value
             acc_to_dest = compute_unit.acc_to_dest.cpp_enum_value
-            return (
+            return configure_alu_cfg(config, cfg_type="AluCfgType::DEFAULT") + (
                 f"// Operation {stage}: Eltwise {op} broadcast FPU\n"
                 f"_llk_math_eltwise_binary_broadcast_init_<ckernel::EltwiseBinaryType::{op}, {broadcast_type}, {math_fidelity}>"
                 f"({src_a_format}, {src_b_format}, {tensor_shape}, {acc_to_dest});\n"
@@ -63,7 +63,7 @@ class EltwiseFpu(Fpu):
         reuse_dest = compute_unit.reuse_dest.cpp_enum_value
         acc_to_dest = compute_unit.acc_to_dest.cpp_enum_value
 
-        return (
+        return configure_alu_cfg(config, cfg_type="AluCfgType::DEFAULT") + (
             f"// Operation {stage}: Eltwise {op} FPU\n"
             f"_llk_math_eltwise_binary_init_<ckernel::EltwiseBinaryType::{op}, {math_fidelity}, {reuse_dest}>"
             f"({src_a_format}, {src_b_format}, {tensor_shape}, {acc_to_dest});\n"

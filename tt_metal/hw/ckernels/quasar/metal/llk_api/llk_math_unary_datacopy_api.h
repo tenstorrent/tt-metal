@@ -41,7 +41,7 @@ inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand) {
 
     const DataFormat srcA_format = static_cast<DataFormat>(get_operand_dst_format(operand_id));
     const DataFormat srcB_format = static_cast<DataFormat>(get_operand_dst_format(operand_id));
-    _configure_default_alu_data_format_state_<EN_32BIT_DEST>(srcA_format, srcB_format);
+    _configure_alu_cfg_<AluCfgType::DEFAULT, EN_32BIT_DEST>(srcA_format, srcB_format);
 
     if constexpr (src_b_bcast_type == BroadcastType::NONE) {
         // 32-bit unpack-to-dest: math is a sync-only forwarder (unpacker wrrites DEST), no MOP to run.

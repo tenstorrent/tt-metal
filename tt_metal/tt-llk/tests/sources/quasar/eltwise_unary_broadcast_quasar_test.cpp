@@ -199,11 +199,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         if constexpr (unpack_to_dest)
         {
-            _configure_mov_ops_explicit_alu_data_format_state_<is_fp32_dest_acc_en>(math_format, math_format);
+            _configure_alu_cfg_<AluCfgType::MOV_OPS_EXPLICIT_FORMAT, is_fp32_dest_acc_en>(math_format, math_format);
         }
         else
         {
-            _configure_default_alu_data_format_state_<is_fp32_dest_acc_en>(math_format, math_format);
+            _configure_alu_cfg_<AluCfgType::DEFAULT, is_fp32_dest_acc_en>(math_format, math_format);
         }
         _llk_math_eltwise_unary_broadcast_init_<BROADCAST_TYPE, is_fp32_dest_acc_en, unpack_to_dest>(tensor_shape);
 

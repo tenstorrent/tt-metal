@@ -11,6 +11,7 @@ from fuser.fuser_config import GlobalConfig
 from fuser.golden.fpu.datacopy import datacopy_golden
 from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
+from fuser.quasar.fpu.common import configure_alu_cfg
 
 
 class UnaryBroadcastFpu(Fpu):
@@ -34,7 +35,7 @@ class UnaryBroadcastFpu(Fpu):
         broadcast_type = compute_unit.broadcast_type.cpp_enum_value
         tensor_shape = operation.tile_shape.cpp_value
         en_32bit_dest = config.dest_acc.cpp_enum_value
-        return (
+        return configure_alu_cfg(config, cfg_type="AluCfgType::DEFAULT") + (
             f"// Operation {stage}: Unary Broadcast FPU\n"
             f"_llk_math_eltwise_unary_broadcast_init_<{broadcast_type}, {en_32bit_dest}, false>"
             f"({tensor_shape});\n"
