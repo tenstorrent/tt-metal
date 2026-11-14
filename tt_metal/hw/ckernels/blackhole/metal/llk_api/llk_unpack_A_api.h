@@ -6,6 +6,7 @@
 #include <cstdint>
 #include "llk_unpack_A.h"
 #include "llk_unpack_common_api.h"
+#include "llk_size_mode.h"
 // llk_unpack_dummy(): debug-only SrcA flush on WH/BH (no WAIT/POP ordering role), defined in the debug
 // folder. Pulled in only so the shared compute-API dummy_unpack() resolves; on Quasar the same call is a
 // required TEN-4746 drain primitive defined inline in that arch's llk_unpack_A_api.h.
@@ -165,8 +166,11 @@ inline void llk_unpack_A_block(
         StateDiscard<std::uint32_t>(start_tile_index),
         StateDiscard<std::uint32_t>(ntiles)));
 
-    // Three or more tiles: one context acquire per block; one or two are cheaper per tile after a copy_init.
-    if constexpr ((BType == BroadcastType::NONE) && !acc_to_dest && (binary_reuse_dest == EltwiseBinaryReuseDestType::NONE)) {
+    // Three or more tiles: one context acquire per block; one or two are cheaper per tile after a copy_init. A size-mode kernel
+    // keeps main's per-tile loop.
+    if constexpr (
+        !LLK_SIZE_MODE && (BType == BroadcastType::NONE) && !acc_to_dest &&
+        (binary_reuse_dest == EltwiseBinaryReuseDestType::NONE)) {
         // Two or more four-face tiles take one handshake, as the math thread decides.
         if constexpr (DST_ACCUM_MODE && unpack_to_dest) {
             if (ntiles >= 2 &&
