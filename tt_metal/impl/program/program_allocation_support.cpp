@@ -45,17 +45,30 @@ void register_ephemeral_allocation(EphemeralAllocationMetadata& metadata, const 
     }
 }
 
-void prepare_ephemeral_allocation(EphemeralAllocationMetadata& metadata, PersistentL1Arena& persistent_l1) {
+void prepare_ephemeral_allocation(
+    EphemeralAllocationMetadata& metadata, PersistentL1Arena& persistent_l1, DeviceAddr floor) {
     auto& seals = metadata.seals[&persistent_l1];
+    const bool floor_above_arena_base = floor > persistent_l1.high_water_mark(CoreRangeSet());
     for (auto& region : metadata.regions) {
         const CoreRangeSet cores(region.core_range);
         for (const CoreCoord& core : corerange_to_cores(cores)) {
+            if (floor_above_arena_base) {
+                for (const auto& [begin, end] : persistent_l1.occupied_ranges(core)) {
+                    TT_FATAL(
+                        begin >= floor,
+                        "Kernel config ending at {} overlaps persistent L1 [{}, {}) on core {}",
+                        floor,
+                        begin,
+                        end,
+                        core.str());
+                }
+            }
             if (seals.contains(core)) {
                 continue;
             }
             seals.emplace(core, persistent_l1.seal(CoreRangeSet(CoreRange(core))));
         }
-        const uint64_t base_address = persistent_l1.high_water_mark(cores);
+        const uint64_t base_address = std::max<uint64_t>(persistent_l1.high_water_mark(cores), floor);
         if (region.l1_regions.empty()) {
             region.l1_regions.emplace_back(base_address, base_address);
         } else {
