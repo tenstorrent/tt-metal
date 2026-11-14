@@ -8,6 +8,13 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_equal
+from tests.ttnn.unit_tests.operations.data_movement.docstring_support import (
+    check_readable,
+    docstring_dtype_layout_params,
+    docstring_interleaved_buffer_type_params,
+    interleaved_memory_config,
+)
+from tests.ttnn.unit_tests.operations.data_movement.data_movement_test_utils import assert_exact, full_range_input
 from tests.ttnn.unit_tests.base_functionality.test_narrow import assert_quality
 
 
@@ -3617,3 +3624,31 @@ def test_untilize_multi_core_width_or_dtype_change_misses(device):
     device.disable_and_clear_program_cache()
     device.enable_program_cache()
     assert_program_cache_flat(device, run, variants, miss_indices=(3, 4, 5))
+
+
+@pytest.mark.parametrize("buffer_type", docstring_interleaved_buffer_type_params(ttnn.untilize))
+@pytest.mark.parametrize("dtype, layout", docstring_dtype_layout_params(ttnn.untilize))
+@pytest.mark.parametrize("shape", [(2, 3, 64, 96), (2, 3, 50, 70), (1, 1, 32, 2048)], ids=["aligned", "padded", "wide"])
+def test_untilize_docstring_supported_inputs(shape, dtype, layout, buffer_type, device):
+    """Runs every dtype, layout and interleaved buffer type the ttnn.untilize docstring lists, on a tile-aligned
+    shape, a shape with tile padding and a single wide tile row.
+
+    BFLOAT16 inputs leave out NaN, as the docstring requires, and compare zeros by value. A BFLOAT8_B input is compared
+    with its own block-float values, which its BFLOAT16 output holds exactly.
+    """
+    check_readable(dtype, layout, buffer_type)
+    memory_config = interleaved_memory_config(buffer_type)
+    input_tensor = ttnn.from_torch(
+        full_range_input(shape, dtype, nan=dtype != ttnn.bfloat16),
+        dtype=dtype,
+        layout=layout,
+        device=device,
+        memory_config=memory_config,
+    )
+    output = ttnn.untilize(input_tensor)
+
+    assert output.layout == ttnn.ROW_MAJOR_LAYOUT
+    assert output.dtype == (ttnn.bfloat16 if dtype == ttnn.bfloat8_b else dtype)
+    assert output.memory_config() == memory_config
+    assert list(output.shape) == list(shape)
+    assert_exact(ttnn.to_torch(input_tensor), ttnn.to_torch(output), signed_zeros=dtype != ttnn.bfloat16)
