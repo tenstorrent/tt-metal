@@ -183,11 +183,12 @@ ttnn::device_operation::ProgramArtifacts MorehMeanOperation::MorehMeanWFactory::
 
     auto compute_hw = ttnn::to_compute_hardware_config(compute_kernel_config);
     if (fp32_dest_acc_en) {
-        // Legacy left unpack_to_dest_mode entirely Default here (unlike the H factory). Metal 2.0
-        // requires the choice to be explicit once a consumed DFB is Float32 with a 32-bit dest
-        // register, so spell out the legacy Default: UnpackToSrc. Value-preserving.
+        // Legacy set unpack_to_dest_mode[CBIndex::c_24] = UnpackToDestFp32 when fp32 accumulation is
+        // on; reindexed onto the DFB name and translated to the Metal 2.0 spelling. Metal 2.0 also
+        // *requires* an explicit entry here (accum_dst is Float32 and the kernel consumes it with a
+        // 32-bit dest register).
         // TODO(#52269): Quasar unpack_modes are copied from Gen1 and not yet optimized for Quasar.
-        compute_hw.unpack_modes = ComputeHardwareConfig::ComputeUnpackModes{{ACCUM_DST_DFB, UnpackMode::UnpackToSrc}};
+        compute_hw.unpack_modes = ComputeHardwareConfig::ComputeUnpackModes{{ACCUM_DST_DFB, UnpackMode::UnpackToDest}};
     }
 
     // The compute kernel binds the mask DFB in every configuration: it constructs the buffer object
