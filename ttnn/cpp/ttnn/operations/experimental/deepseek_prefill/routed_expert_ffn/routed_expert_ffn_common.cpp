@@ -112,6 +112,14 @@ ttnn::Tensor routed_expert_ffn_chunked(
         TT_FATAL(x_shape[i] == 1, "routed_expert_ffn_chunked: x leading dim {} must be 1, got {}", i, x_shape[i]);
     }
     const uint32_t M = x_shape[-2];
+    // ttnn::narrow bounds-checks against the logical shape, so the chunk windows below (sized from the padded M)
+    // are only valid when x's logical M is already tile-aligned.
+    TT_FATAL(
+        x.logical_shape()[-2] == M,
+        "routed_expert_ffn_chunked: x logical M ({}) must be a multiple of TILE_SIZE ({}) so chunk windows stay "
+        "within the logical shape",
+        x.logical_shape()[-2],
+        ttnn::TILE_SIZE);
     const uint32_t N = down_proj.padded_shape()[-1];
     const uint32_t M_tiles = M / ttnn::TILE_SIZE;
     const uint32_t chunk_M = chunk_M_tiles * ttnn::TILE_SIZE;
@@ -128,6 +136,13 @@ ttnn::Tensor routed_expert_ffn_chunked(
             output->padded_shape(),
             M,
             N);
+        // The chunk views below are narrowed from full_output, so its logical M must also be tile-aligned.
+        TT_FATAL(
+            output->logical_shape()[-2] == M,
+            "routed_expert_ffn_chunked: supplied output logical M ({}) must be a multiple of TILE_SIZE ({}) so chunk "
+            "windows stay within the logical shape",
+            output->logical_shape()[-2],
+            ttnn::TILE_SIZE);
         full_output = *output;
     } else {
         ttsl::SmallVector<uint32_t> out_dims(x_rank, 1u);
