@@ -146,6 +146,13 @@ class Hy4Decoder:
         part = self.mlp[i].forward(h)
         tok = ttnn.to_layout(h, ttnn.ROW_MAJOR_LAYOUT)
         tok = ttnn.reshape(tok, [1, 1, 1, HID])
+        if getattr(ly, "blk_tp", None) is not None:  # HY4_MOE_TP32=1: TP32 routed experts (tt/hy4_moe_tp32_block)
+            out = ly.blk_tp.forward(h, tok, fold=part)
+            ttnn.deallocate(part)
+            out = ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)
+            y = ch.mc.allgather(out, ch.ccl, axis=1, dim=3)
+            ttnn.deallocate(out)
+            return y
         out = ly.blk.forward(h, tok, fold=part)  # [1,1,1,HID/8]
         ttnn.deallocate(part)
         out = ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)

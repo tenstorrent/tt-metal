@@ -1,0 +1,215 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+// SPDX-License-Identifier: Apache-2.0
+// X40 TP32 routed experts, BRISC of bank core b (NC = 8 bank cores).  Per call:
+//   route -> plan (distinct experts, na) -> meta page for compute; score tiles of the experts this core reduces (a = me
+//   + 8 j) x K slice (tiles 24 me .. 24 me + 23) -> cb_x partials P[a] (4 tiles) -> reducer core a % 8, slot ((a / 8) *
+//   8 + me); semaphore 0 counts them reducer: all 8 partials arrived -> cb_pr pushed (compute sums, swiglu, score) ->
+//   act tiles (cb_actl, 2 per expert) -> every core's cb_act slot a; semaphore 1 counts them cb_act pushed (2 na tiles)
+//   -> compute down -> cb_o (6 x 4 tiles) -> output tiles 24 me + 4 s + n of out (std tiles, rows 0..R-1)
+// CT: 0 cb_x, 1 cb_p, 2 cb_pr, 3 cb_sc, 4 cb_actl, 5 cb_act, 6 cb_o, 7 cb_meta, 8 cb_rt, 9 T, 10 R, 11 NMAX, then
+// TensorAccessorArgs(x), (route), (out) RT: 0 me, 1 first output tile.  Common: 0 x addr, 1 route addr, 2 out addr, 3..
+// physical (x, y) of the NC cores.
+#include <stdint.h>
+#include "api/dataflow/dataflow_api.h"
+#include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
+#include "tp_route.hpp"
+
+void kernel_main() {
+    constexpr uint32_t cb_x = get_compile_time_arg_val(0);
+    constexpr uint32_t cb_p = get_compile_time_arg_val(1);
+    constexpr uint32_t cb_pr = get_compile_time_arg_val(2);
+    constexpr uint32_t cb_sc = get_compile_time_arg_val(3);
+    constexpr uint32_t cb_actl = get_compile_time_arg_val(4);
+    constexpr uint32_t cb_act = get_compile_time_arg_val(5);
+    constexpr uint32_t cb_o = get_compile_time_arg_val(6);
+    constexpr uint32_t cb_meta = get_compile_time_arg_val(7);
+    constexpr uint32_t cb_rt = get_compile_time_arg_val(8);
+    constexpr uint32_t T = get_compile_time_arg_val(9);
+    constexpr uint32_t R = get_compile_time_arg_val(10);
+    constexpr uint32_t NMAX = get_compile_time_arg_val(11);
+    constexpr uint32_t NC = 8;
+    constexpr uint32_t KB = 24;
+    constexpr uint32_t TB = 64 * R;  // bytes of one in0 tile [R, 32] bf16
+    constexpr uint32_t FB = 32 * R;  // bytes of one face [R, 16]
+    constexpr uint32_t NJMAX = (NMAX + NC - 1) / NC;
+    constexpr uint32_t PNB = 512;  // bytes of an [8, 32] bf16 tile
+    constexpr uint32_t DBG = get_compile_time_arg_val(
+        12);  // 0 normal, 1 write the partials P of the first 6 experts, 2 write the act tiles of the first 12 experts
+    constexpr auto x_args = TensorAccessorArgs<13>();
+    constexpr auto r_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
+    constexpr auto o_args = TensorAccessorArgs<r_args.next_compile_time_args_offset()>();
+
+    const uint32_t me = get_arg_val<uint32_t>(0);
+    const uint32_t ocol0 = get_arg_val<uint32_t>(1);
+    const uint32_t x_addr = get_common_arg_val<uint32_t>(0);
+    const uint32_t route_addr = get_common_arg_val<uint32_t>(1);
+    const uint32_t o_addr = get_common_arg_val<uint32_t>(2);
+    auto nx = [&](uint32_t d) { return get_common_arg_val<uint32_t>(3 + 2 * d); };
+    auto ny = [&](uint32_t d) { return get_common_arg_val<uint32_t>(4 + 2 * d); };
+
+    Noc noc;
+    const auto x_acc = TensorAccessor(x_args, x_addr, 2048);
+    const auto r_acc = TensorAccessor(r_args, route_addr, T * 64);
+    const auto o_acc = TensorAccessor(o_args, o_addr, 2048);
+    experimental::CB cbx(cb_x), cbp(cb_p), cbpr(cb_pr), cbsc(cb_sc), cbactl(cb_actl), cbact(cb_act), cbo(cb_o),
+        cbmeta(cb_meta);
+    const uint32_t sem_p_addr = get_semaphore(0);
+    const uint32_t sem_a_addr = get_semaphore(1);
+    volatile tt_l1_ptr uint32_t* sem_p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_p_addr);
+    volatile tt_l1_ptr uint32_t* sem_a = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_a_addr);
+
+    // the landing buffers are reserved up front: their addresses (identical on every core) are the NoC destinations of
+    // the exchange
+    cbpr.reserve_back(NJMAX * NC * 4);
+    cbact.reserve_back(2 * NMAX);
+    const uint32_t pr_base = cbpr.get_write_ptr();
+    const uint32_t act_base = cbact.get_write_ptr();
+
+    // route, plan
+    uint16_t active[128];
+    const uint32_t rt_l1 =
+        cbmeta.get_write_ptr() + 64;  // meta page = 64 B counters + route staging (page is 64 + 64 T bytes)
+    noc_async_read(r_acc.get_noc_addr(0), rt_l1, T * 64);
+    noc_async_read_barrier();
+    volatile tt_l1_ptr uint32_t* route = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rt_l1);
+    const uint32_t na = tp_build_plan(route, T, active);
+    const uint32_t nj = (na > me) ? (na - me + NC - 1) / NC : 0;
+    {
+        cbmeta.reserve_back(1);
+        volatile tt_l1_ptr uint32_t* m = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cbmeta.get_write_ptr());
+        m[0] = na;
+        m[1] = nj;
+        cbmeta.push_back(1);
+    }
+    // score tiles (16x16 view of an [8, 32] tile: face f element index f * 128 + r * 16 + c) of the experts this core
+    // reduces
+    if (nj > 0) {
+        cbsc.reserve_back(nj);
+        for (uint32_t j = 0; j < nj; ++j) {
+            volatile tt_l1_ptr uint16_t* tile =
+                reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cbsc.get_write_ptr() + j * PNB);
+            const uint32_t e = active[me + NC * j];
+            for (uint32_t r = 0; r < 8; ++r) {
+                uint16_t s = 0;
+                if (r < T) {
+                    for (uint32_t k = 0; k < 8; ++k) {
+                        if ((route[r * 16 + k] & 255u) == e) {
+                            s = (uint16_t)(route[r * 16 + 8 + k] & 0xFFFFu);
+                        }
+                    }
+                }
+                for (uint32_t c = 0; c < 16; ++c) {
+                    tile[r * 16 + c] = s;
+                    tile[128 + r * 16 + c] = s;
+                }
+            }
+        }
+        cbsc.push_back(nj);
+    }
+
+    // x slice
+    cbx.reserve_back(KB);
+    for (uint32_t j = 0; j < KB; ++j) {
+        const uint32_t i = KB * me + j;
+        noc.async_read(x_acc, cbx, FB, {.page_id = i, .offset_bytes = 0}, {.offset_bytes = j * TB});
+        noc.async_read(x_acc, cbx, FB, {.page_id = i, .offset_bytes = 512}, {.offset_bytes = j * TB + FB});
+    }
+    noc.async_read_barrier();
+    cbx.push_back(KB);
+
+    if (DBG == 1) {
+        for (uint32_t a = 0; a < na; ++a) {
+            cbp.wait_front(4);
+            if (a < 6) {
+                for (uint32_t j = 0; j < 4; ++j) {
+                    const uint32_t pg = ocol0 + 4 * a + j;
+                    noc.async_write(cbp, o_acc, FB, {.offset_bytes = j * PNB}, {.page_id = pg, .offset_bytes = 0});
+                    noc.async_write(
+                        cbp, o_acc, FB, {.offset_bytes = j * PNB + 256}, {.page_id = pg, .offset_bytes = 512});
+                }
+                noc.async_write_barrier();
+            }
+            cbp.pop_front(4);
+        }
+        return;
+    }
+    // per group of 8 experts: partials -> reducers (one write barrier, then the semaphores); the core that reduces
+    // expert j = g (a = me + 8 g) then waits for its 8 partials, hands them to compute (cb_pr, 32 tiles per expert,
+    // never popped before the end) and sends the act of that expert to every core while the next group streams
+    const uint32_t ng = (na + 7) / 8;
+    for (uint32_t g = 0; g < ng; ++g) {
+        const uint32_t g0 = 8 * g;
+        const uint32_t n = (na - g0 < 8) ? (na - g0) : 8;
+        cbp.wait_front(4 * n);
+        const uint32_t src0 = cbp.get_read_ptr();
+        for (uint32_t i = 0; i < n; ++i) {
+            const uint32_t a = g0 + i;
+            const uint32_t r = a & 7u, j = a >> 3;
+            const uint32_t dst = pr_base + ((j * NC + me) * 4) * PNB;
+            noc_async_write(src0 + i * 4 * PNB, get_noc_addr(nx(r), ny(r), dst), 4 * PNB);
+        }
+        noc_async_write_barrier();
+        for (uint32_t i = 0; i < n; ++i) {
+            const uint32_t r = (g0 + i) & 7u;
+            noc_semaphore_inc(get_noc_addr(nx(r), ny(r), sem_p_addr), 1);
+        }
+        noc_async_atomic_barrier();
+        cbp.pop_front(4 * n);
+        if (g < nj) {
+            noc_semaphore_wait_min(sem_p, NC * (g + 1));
+            cbpr.push_back(32);
+            cbactl.wait_front(2);
+            const uint32_t src = cbactl.get_read_ptr();
+            const uint32_t a = me + NC * g;
+            for (uint32_t d = 0; d < NC; ++d) {
+                for (uint32_t c = 0; c < 2; ++c) {
+                    const uint32_t dst = act_base + (a * 2 + c) * TB;
+                    if constexpr (R == 8) {
+                        noc_async_write(src + c * PNB, get_noc_addr(nx(d), ny(d), dst), 512);
+                    } else {  // [8, 32] source tile (face 1 at +256) -> [R, 32] in0 tile (face 1 at + 32 R)
+                        noc_async_write(src + c * PNB, get_noc_addr(nx(d), ny(d), dst), FB);
+                        noc_async_write(src + c * PNB + 256, get_noc_addr(nx(d), ny(d), dst + FB), FB);
+                    }
+                }
+            }
+            noc_async_write_barrier();
+            for (uint32_t d = 0; d < NC; ++d) {
+                noc_semaphore_inc(get_noc_addr(nx(d), ny(d), sem_a_addr), 1);
+            }
+            noc_async_atomic_barrier();
+            cbactl.pop_front(2);
+        }
+    }
+    *sem_p = 0;
+    noc_semaphore_wait(sem_a, na);
+    *sem_a = 0;
+    cbact.push_back(2 * na);
+
+    if (DBG == 2) {
+        cbact.wait_front(2 * na);
+        for (uint32_t a = 0; a < na && a < 12; ++a) {
+            for (uint32_t c = 0; c < 2; ++c) {
+                const uint32_t pg = ocol0 + 2 * a + c;
+                noc.async_write(
+                    cbact, o_acc, FB, {.offset_bytes = (a * 2 + c) * TB}, {.page_id = pg, .offset_bytes = 0});
+                noc.async_write(
+                    cbact, o_acc, FB, {.offset_bytes = (a * 2 + c) * TB + FB}, {.page_id = pg, .offset_bytes = 512});
+            }
+        }
+        noc.async_write_barrier();
+        return;
+    }
+    // output
+    for (uint32_t s = 0; s < 6; ++s) {
+        cbo.wait_front((s + 1) * 4);
+        for (uint32_t w = 0; w < 4; ++w) {
+            const uint32_t pg = ocol0 + s * 4 + w;
+            const uint32_t t_off = (s * 4 + w) * PNB;
+            noc.async_write(cbo, o_acc, FB, {.offset_bytes = t_off}, {.page_id = pg, .offset_bytes = 0});
+            noc.async_write(cbo, o_acc, FB, {.offset_bytes = t_off + 256}, {.page_id = pg, .offset_bytes = 512});
+        }
+    }
+    noc.async_write_barrier();
+    cbo.pop_front(24);
+    noc_async_atomic_barrier();
+}
