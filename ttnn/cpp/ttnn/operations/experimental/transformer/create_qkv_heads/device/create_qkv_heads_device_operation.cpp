@@ -39,8 +39,8 @@ void CreateQKVHeadsDeviceOperation::validate_on_program_cache_miss(
         input_tensor.memory_config().memory_layout());
     ShardOrientation shard_orientation = input_tensor.shard_spec().value().orientation;
     bool rm = shard_orientation == ShardOrientation::ROW_MAJOR;
-    uint32_t num_h_cores = rm ? bbox.end_coord.y + 1 : bbox.end_coord.x + 1;
-    uint32_t num_w_cores = rm ? bbox.end_coord.x + 1 : bbox.end_coord.y + 1;
+    uint32_t num_h_cores = rm ? bbox.grid_size().y : bbox.grid_size().x;
+    uint32_t num_w_cores = rm ? bbox.grid_size().x : bbox.grid_size().y;
 
     TT_FATAL(
         args.num_q_heads > 0 && args.num_kv_heads > 0,
