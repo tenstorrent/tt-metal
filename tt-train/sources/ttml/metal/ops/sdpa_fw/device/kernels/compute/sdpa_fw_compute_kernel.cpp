@@ -94,6 +94,9 @@ constexpr uint32_t cb_cur_mm_out = tt::CBIndex::c_14;    // used for holding cur
 
 constexpr uint32_t cb_output = tt::CBIndex::c_15;
 constexpr uint32_t cb_gate = tt::CBIndex::c_16;
+constexpr uint32_t cb_partial_in = tt::CBIndex::c_17;     // split units: a merger's incoming partials
+constexpr uint32_t cb_partial_out = tt::CBIndex::c_18;    // split units: a sender's outgoing state
+constexpr uint32_t cb_partial_alpha = tt::CBIndex::c_19;  // split units: the partial's rescale factor
 
 // Finalize a chunk from its running state: out = (O / sum) [* sigmoid(gate)], and lse for the backward
 // pass. Consumes (pops) the three state CBs and the gate.
@@ -189,8 +192,13 @@ FORCE_INLINE void finalize_chunk(uint32_t cb_mm_out, uint32_t cb_max, uint32_t c
 // Layouts used below. Score CB (cb_attention_weights): the rows x Sk_chunk_t score tiles of one
 // step, row-major: row r, K tile n sits at r * Sk_chunk_t + n. Per-row state CBs (max, sum,
 // exp_max_diff): row r sits in slot r. Output accumulators: row r starts at r * vWt.
-// Runs the chunk's num_kv_steps K/V steps; the softmax state starts fresh at step 0.
-FORCE_INLINE void process_q_chunk(uint32_t item, uint32_t num_kv_steps) {
+// Runs K/V steps [k_begin, k_end) of the chunk; the softmax state starts fresh at k_begin.
+FORCE_INLINE void process_q_chunk(
+    uint32_t item,
+    uint32_t k_begin,
+    uint32_t k_end,
+    [[maybe_unused]] uint32_t role,  // role and num_partials only matter to split units
+    [[maybe_unused]] uint32_t num_partials) {
     cb_wait_front(cb_query, q_tiles);
 
     const uint32_t first_row_tile = sdpa_items::first_row_tile_of(item, q_num_chunks, Sq_chunk_t);
@@ -207,8 +215,8 @@ FORCE_INLINE void process_q_chunk(uint32_t item, uint32_t num_kv_steps) {
     uint32_t alias_cb_prev_mm_out = cb_prev_mm_out;
     uint32_t alias_cb_cur_mm_out = cb_cur_mm_out;
 
-    for (uint32_t k_step = 0; k_step < num_kv_steps; ++k_step) {
-        const bool first_step = (k_step == 0U);
+    for (uint32_t k_step = k_begin; k_step < k_end; ++k_step) {
+        const bool first_step = (k_step == k_begin);
         cb_wait_front(cb_key, k_tiles);
 
         reconfig_data_format(cb_query, cb_key);
@@ -360,7 +368,7 @@ FORCE_INLINE void process_q_chunk(uint32_t item, uint32_t num_kv_steps) {
             cb_reserve_back(cb_exp_max_diff, rows);
             for (uint32_t r0 = 0; r0 < rows; r0 += kRowsPerPass) {
                 update_exp_max_diffs<scaler_bits, scaler_bf16_bits>(
-                    alias_cb_prev_max, alias_cb_cur_max, cb_exp_max_diff, r0, rows_in_pass(r0, kRowsPerPass));
+                    alias_cb_prev_max, r0, alias_cb_cur_max, r0, cb_exp_max_diff, r0, rows_in_pass(r0, kRowsPerPass));
             }
             cb_push_back(cb_exp_max_diff, rows);
             cb_pop_front(alias_cb_prev_max, rows);
@@ -400,10 +408,14 @@ FORCE_INLINE void process_q_chunk(uint32_t item, uint32_t num_kv_steps) {
             cb_pop_front(alias_cb_cur_sum_exp, rows);
             cb_reserve_back(alias_cb_cur_sum_exp, rows);
             for (uint32_t r0 = 0; r0 < rows; r0 += kRowsPerPass / 2U) {
-                update_cur_exp_sums_inplace(
+                update_cur_exp_sums</* scale_b */ false>(
                     alias_cb_prev_sum_exp,
-                    alias_cb_cur_sum_exp,
                     cb_exp_max_diff,
+                    r0,
+                    alias_cb_cur_sum_exp,
+                    /* cb_alpha_b */ 0U,
+                    r0,
+                    alias_cb_cur_sum_exp,
                     r0,
                     rows_in_pass(r0, kRowsPerPass / 2U));
             }
@@ -419,6 +431,30 @@ FORCE_INLINE void process_q_chunk(uint32_t item, uint32_t num_kv_steps) {
         std::swap(alias_cb_prev_mm_out, alias_cb_cur_mm_out);
     }
 
+#ifdef SPLIT_UNITS
+    if (role == kUnitSender) {
+        send_partial<rows, kRowsPerPass>(
+            vWt, alias_cb_prev_mm_out, alias_cb_prev_max, alias_cb_prev_sum_exp, cb_partial_out);
+        cb_pop_front(cb_query, q_tiles);
+        return;
+    }
+    for (uint32_t p = 0; p < num_partials; ++p) {
+        merge_partial<scaler_bits, scaler_bf16_bits, rows, block_size>(
+            vWt,
+            alias_cb_prev_mm_out,
+            alias_cb_prev_max,
+            alias_cb_prev_sum_exp,
+            cb_partial_in,
+            alias_cb_cur_mm_out,
+            alias_cb_cur_max,
+            alias_cb_cur_sum_exp,
+            cb_exp_max_diff,
+            cb_partial_alpha);
+        std::swap(alias_cb_prev_max, alias_cb_cur_max);
+        std::swap(alias_cb_prev_sum_exp, alias_cb_cur_sum_exp);
+        std::swap(alias_cb_prev_mm_out, alias_cb_cur_mm_out);
+    }
+#endif
     finalize_chunk(alias_cb_prev_mm_out, alias_cb_prev_max, alias_cb_prev_sum_exp);
     cb_pop_front(cb_query, q_tiles);
 }
@@ -437,9 +473,16 @@ void kernel_main() {
     cb_wait_front(cb_attn_mask, kCausalMaskTilesFronted);
 #endif
 
-    for_each_work_item(/* arg_idx */ 0, [](uint32_t item) {
-        const uint32_t first_row_tile = sdpa_items::first_row_tile_of(item, q_num_chunks, Sq_chunk_t);
-        process_q_chunk(item, num_kv_steps_of_chunk<Ht, Sq_chunk_t, Sk_chunk_t>(first_row_tile));
+    // One call site: process_q_chunk is force-inlined and carries most of the kernel text.
+    for_each_work_unit(/* arg_idx */ 0, [](const WorkUnit& unit) {
+        for (uint32_t item = unit.item; item < unit.item + unit.num_items; ++item) {
+            const uint32_t first_row_tile = sdpa_items::first_row_tile_of(item, q_num_chunks, Sq_chunk_t);
+            const bool whole = (unit.role == kUnitWhole);
+            const uint32_t k_begin = whole ? 0U : unit.step_begin;
+            const uint32_t k_end =
+                whole ? num_kv_steps_of_chunk<Ht, Sq_chunk_t, Sk_chunk_t>(first_row_tile) : unit.step_end;
+            process_q_chunk(item, k_begin, k_end, unit.role, unit.num_partials);
+        }
     });
 
 #ifdef CAUSAL_MASK
