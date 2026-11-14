@@ -57,7 +57,7 @@ def _coverage_inputs(num_tiles, seed=0):
     return gate[perm].to(torch.bfloat16), up[perm].to(torch.bfloat16)
 
 
-def _run(device, gate_t, up_t, in_dtype, page_bytes, fp32_dest, dst_out=0):
+def _run(device, gate_t, up_t, in_dtype, page_bytes, fp32_dest, dst_out=0, dst_gate=0, dst_up=1):
     num_tiles = gate_t.numel() // TILE_ELEMS
     shape = [1, num_tiles, 32, 32]
 
@@ -123,7 +123,7 @@ def _run(device, gate_t, up_t, in_dtype, page_bytes, fp32_dest, dst_out=0):
         ttnn.KernelDescriptor(
             kernel_source="tests/tt_metal/tt_metal/test_kernels/compute/situ_glu.cpp",
             core_ranges=core,
-            compile_time_args=[num_tiles, dst_out],
+            compile_time_args=[num_tiles, dst_out, dst_gate, dst_up],
             runtime_args=[],
             config=ttnn.ComputeConfigDescriptor(fp32_dest_acc_en=fp32_dest),
         ),
