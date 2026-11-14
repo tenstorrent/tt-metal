@@ -79,7 +79,9 @@ def test_ltx25_iclora_output_dependent_collection(
     )
     (target / "resolved-fixture.json").write_text(json.dumps(fixture, indent=2) + "\n")
     acceptance = fixture["acceptance"]
-    pipe.warmup_buffers()
+    # traced=True already completed the reference-family warmup in construction,
+    # including eager audio initialization and capture. Only metadata was read/written
+    # since then: another full warmup repeats the same recipe and device state.
     first = acceptance["first_frame"]["path"]
     for index, seed in enumerate(acceptance["seeds"]):
         row = {

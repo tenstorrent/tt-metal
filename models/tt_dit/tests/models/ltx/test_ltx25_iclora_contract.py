@@ -598,7 +598,9 @@ def test_native_collector_warms_reference_once(contract, constructor_native, mon
     tree = ast.parse(path.read_text())
     collector = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name.startswith("test_"))
     collector.decorator_list = []  # Device parametrization only; execute the entire unchanged body.
-    namespace = dict(os=os, json=json, Path=Path, pytest=pytest, _now=lambda: "synthetic", _digest=contract.module.file_digest)
+    namespace = dict(
+        os=os, json=json, Path=Path, pytest=pytest, _now=lambda: "synthetic", _digest=contract.module.file_digest
+    )
     exec(compile(ast.Module(body=[collector], type_ignores=[]), str(path), "exec"), namespace)
     with pytest.raises(FirstGeneration):  # allow-pytest.raises: CPU-only run excludes native conftest
         namespace[collector.name](None, 1, 0, 2, "ring", False, dynamic_load)
