@@ -21,12 +21,14 @@ using namespace ckernel;
  * @tparam BROADCAST_TYPE: Broadcast type, values = <COL/ROW/SCALAR>
  * @tparam EN_32BIT_DEST: True if the Dest register is in 32-bit mode, values = <true/false>
  * @tparam unpack_to_dest: When true, unpack targets math dest (UNP_A); otherwise SrcB (UNP_B), values = <true/false>
+ * @tparam acc_to_dest: The math side accumulates the broadcast into dest, so it consumes a zeroed SrcA bank per tile.
  * @param buf_desc_id: Buffer descriptor for the UNPACR source.
  * @param num_tiles: Outer MOP loop count (tiles to unpack from L1).
  */
-template <std::uint32_t UNP_SEL, BroadcastType BROADCAST_TYPE, bool EN_32BIT_DEST, bool unpack_to_dest = false>
+template <std::uint32_t UNP_SEL, BroadcastType BROADCAST_TYPE, bool EN_32BIT_DEST, bool unpack_to_dest = false, bool acc_to_dest = false>
 inline void _llk_unpack_unary_broadcast_operands_mop_config_(const std::uint32_t buf_desc_id, const std::uint32_t num_tiles)
 {
+    static_assert(!(acc_to_dest && unpack_to_dest), "acc_to_dest is not supported when unpacking to dest");
     static_assert(
         unpack_to_dest || (UNP_SEL == p_unpacr::UNP_B),
         "UNP_SEL must be p_unpacr::UNP_B when unpack_to_dest is false - movA2D broadcast is not working on Quasar");
@@ -107,9 +109,9 @@ inline void _llk_unpack_unary_broadcast_operands_mop_config_(const std::uint32_t
     {
         temp.set_end_op(TT_OP_INC_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, 1));
     }
-    else if constexpr (EN_32BIT_DEST)
+    else if constexpr (EN_32BIT_DEST || acc_to_dest)
     {
-        // 32-bit dest uses ELWADD, which requires dvalid from both SrcA and SrcB.
+        // 32-bit dest and acc_to_dest use ELWADD, which requires dvalid from both SrcA and SrcB.
         // Data is unpacked to SrcB, so zero the unused engine (SrcA) and set its dvalid.
         const std::uint32_t clr_unused_unpacr_engine = nop_insn_for_unused_unpacker_engine<UNP_SEL>();
         temp.set_start_op(clr_unused_unpacr_engine);
@@ -124,17 +126,20 @@ inline void _llk_unpack_unary_broadcast_operands_mop_config_(const std::uint32_t
  * @tparam BROADCAST_TYPE: Broadcast type, values = <COL/ROW/SCALAR>
  * @tparam EN_32BIT_DEST: True if the Dest register is in 32-bit mode, values = <true/false>
  * @tparam unpack_to_dest: Route unpack to dest (UNP_A) vs SrcB (UNP_B), values = <true/false>
+ * @tparam acc_to_dest: The math side accumulates the broadcast into dest; not supported with unpack_to_dest.
  * @param buf_desc_id: Buffer descriptor for the UNPACR source.
  * @param num_tiles: Number of tiles in the outer unpack loop.
- * @note On the math thread, pair with @ref _llk_math_eltwise_unary_broadcast_init_ (T1) with matching BROADCAST_TYPE/EN_32BIT_DEST/unpack_to_dest.
+ * @note On the math thread, pair with @ref _llk_math_eltwise_unary_broadcast_init_ (T1) with matching
+ *       BROADCAST_TYPE/EN_32BIT_DEST/unpack_to_dest/acc_to_dest.
+ * @note With acc_to_dest, configure the SrcA unpacker format as well as SrcB (for example with _llk_unpack_configure_binary_).
  * @note @ref _llk_unpack_unary_broadcast_operands_ is the matching execute call on this thread.
  */
-template <std::uint32_t UNP_SEL, BroadcastType BROADCAST_TYPE, bool EN_32BIT_DEST, bool unpack_to_dest = false>
+template <std::uint32_t UNP_SEL, BroadcastType BROADCAST_TYPE, bool EN_32BIT_DEST, bool unpack_to_dest = false, bool acc_to_dest = false>
 inline void _llk_unpack_unary_broadcast_operands_init_(const std::uint32_t buf_desc_id, const std::uint32_t num_tiles)
 {
     cfg_rmw(THCON_UNPACKER0_REG0_TRANSPOSE_RMW, 0);
     cfg_rmw(THCON_UNPACKER1_REG0_TRANSPOSE_RMW, 0);
-    _llk_unpack_unary_broadcast_operands_mop_config_<UNP_SEL, BROADCAST_TYPE, EN_32BIT_DEST, unpack_to_dest>(buf_desc_id, num_tiles);
+    _llk_unpack_unary_broadcast_operands_mop_config_<UNP_SEL, BROADCAST_TYPE, EN_32BIT_DEST, unpack_to_dest, acc_to_dest>(buf_desc_id, num_tiles);
 }
 
 /**
