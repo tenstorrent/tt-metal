@@ -92,8 +92,8 @@ def slice_copy(src, dst, colid, units, page, npages, dst_page0=0, ncores=32):
     return ttnn.generic_op([src, dst, colid], prog)
 
 
-def id_filter(gids, colid, S, owners=COLS, out=None):
-    """gids uint32 RM [S,1,1,K] global ids -> idx8 uint32 RM [1,1,owners*S,K] local rows of THIS column (sentinel tail), rows (j, s) = j*S + s."""
+def id_filter(gids, colinfo, S, owners=COLS, out=None):
+    """gids uint32 RM [S,1,1,K] global ids (colinfo: per-device uint32 page, element 0 = column, element 1 = valid token count n: ids >= n are dropped; sentinel 0xFFFFFFFF is >= n) -> idx8 uint32 RM [1,1,owners*S,K] local rows of THIS column (sentinel tail), rows (j, s) = j*S + s."""
     md = gids.device()
     K = int(gids.shape[-1])
     if out is None:
@@ -106,19 +106,19 @@ def id_filter(gids, colid, S, owners=COLS, out=None):
     rt = ttnn.RuntimeArgs()
     for i, (x, y) in enumerate(cores):
         rt[x][y] = [i]
-    ct = [K, S, owners, 0] + _acc(gids) + _acc(colid) + _acc(out)
+    ct = [K, S, owners, 0] + _acc(gids) + _acc(colinfo) + _acc(out)
     k = ttnn.KernelDescriptor(
         kernel_source=f"{KDIR}/id_filter.cpp",
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=cs,
         compile_time_args=ct,
         runtime_args=rt,
-        common_runtime_args=[gids.buffer_address(), colid.buffer_address(), out.buffer_address()],
+        common_runtime_args=[gids.buffer_address(), colinfo.buffer_address(), out.buffer_address()],
         config=ttnn.ReaderConfigDescriptor(),
     )
     prog = ttnn.ProgramDescriptor(kernels=[k], semaphores=[], cbs=[_cb(cs, 2 * K * 4 + 64)])
     prog.custom_program_hash = _hash(0x9B3, K, S, owners, tuple(ct))
-    ttnn.generic_op([gids, colid, out], prog)
+    ttnn.generic_op([gids, colinfo, out], prog)
     return out
 
 
@@ -149,7 +149,9 @@ def key_counts(pos, rows=4):
     return out
 
 
-def colid_host(rows=4):
+def colid_host(rows=4, nvalid=None):
+    """[rows, COLS, 1, 16] int32: element 0 = column id, element 1 = valid token count of the row's user (``nvalid`` [rows], default 2**30)."""
     c = torch.zeros(rows, COLS, 1, 16, dtype=torch.int32)
     c[:, :, 0, 0] = torch.arange(COLS)[None, :]
+    c[:, :, 0, 1] = 1 << 30 if nvalid is None else torch.as_tensor(nvalid, dtype=torch.int32)[:, None]
     return c

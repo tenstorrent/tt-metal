@@ -113,14 +113,18 @@ def main():
         gi = g.clone()
         gi[gi == HP.SENT] = -1
         gd = rep(md, gi.to(torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
-        out = HP.id_filter(gd, colid, S)
+        ci = torch.zeros(8, 1, 1, 16, dtype=torch.int32)
+        ci[:, 0, 0, 0] = torch.arange(8)
+        ci[:, 0, 0, 1] = 1 << 19
+        cid2 = shard0(md, ci, ttnn.uint32)
+        out = HP.id_filter(gd, cid2, S)
         ttnn.synchronize_device(md)
         o = ttnn.to_torch(out, mesh_composer=ttnn.ConcatMeshToTensor(md, dim=0)).reshape(8, 8 * S, K).to(torch.int64) & 0xFFFFFFFF
         okf = True
         for c in range(8):
             for s in range(S):
                 ids_ = g[s, 0, 0].numpy()
-                v = ids_[ids_ != HP.SENT]
+                v = ids_[(ids_ != HP.SENT) & (ids_ < (1 << 19))]
                 _, cc, loc_ = HP.locate(v)
                 ref = loc_[cc == c]
                 for j in range(8):

@@ -103,27 +103,33 @@ class Hy4AttentionOpt(Hy4Attention):
         md, cfg, hw = self.md, self.cfg, self.host_w
         wd = fuse_dtype or kw.get("wdtype", ttnn.bfloat16)
         self._fuse_dtype = wd
-        parts = []
-        for c in range(self.cols):
-            p_ = [
-                hw["q_a"].tensor[..., c * 256 : (c + 1) * 256],
-                hw["kv_a"].tensor,
-                hw["gate"].tensor[..., c * 2048 : (c + 1) * 2048],
-            ]
-            if self.has_indexer:
-                p_ += [hw["idx_wk"].tensor, hw["idx_wp"].tensor]
-            parts.append(torch.cat(p_, dim=-1))
-        wcat = torch.cat(parts, dim=-1)
-        self._nloc = wcat.shape[-1] // self.cols
+        self._nloc = 256 + 576 + 2048 + ((128 + 32) if self.has_indexer else 0)
         self._offs = [0, 256, 256 + 576, 256 + 576 + 2048] + (
             [256 + 576 + 2048 + 128, self._nloc] if self.has_indexer else [self._nloc]
         )
-        self._wf_host = wcat
+        self._wf_host_ = None  # host concat built lazily (HY4_OPT=fuseproj / HY4_SKINNY=hproj only): 300 MB per layer
         self._wf = None  # built lazily (device memory only when the flag is used)
         self._tm = None
         self._rms_cfg = None
 
     # ---------------------------------------------------------------- helpers
+    @property
+    def _wf_host(self):
+        if self._wf_host_ is None:
+            hw = self.host_w
+            parts = []
+            for c in range(self.cols):
+                p_ = [
+                    hw["q_a"].tensor[..., c * 256 : (c + 1) * 256],
+                    hw["kv_a"].tensor,
+                    hw["gate"].tensor[..., c * 2048 : (c + 1) * 2048],
+                ]
+                if self.has_indexer:
+                    p_ += [hw["idx_wk"].tensor, hw["idx_wp"].tensor]
+                parts.append(torch.cat(p_, dim=-1))
+            self._wf_host_ = torch.cat(parts, dim=-1)
+        return self._wf_host_
+
     def _skinny_o(self, og):
         """HY4_SKINNY=oproj (default OFF): o_proj on the bank-local streaming kernel (tt/hy4_skinny.SkinnyLinear, T <= 16). Builds a second (bank-layout) copy of the o_proj weights
         (13.4 MB bfp8 per chip per layer) on first use: call once outside a trace (warmup). Returns None when the flag is off or T > 16."""

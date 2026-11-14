@@ -176,7 +176,11 @@ class Hy4ChainLayer:
         self.mtp = L >= cfg.num_hidden_layers
         if not self.mtp:
             self.ihc_a, self.ihc_m = hc("attn"), hc("mlp")
-        self.attn = Hy4Attention(
+        if os.environ.get("HY4_POOL", "0") == "1":  # integrated long-context decode: Hy4AttentionPool (superset of Hy4AttentionOpt / Hy4Attention; prefill unchanged)
+            from models.demos.blackhole.hy4_preview.tt.hy4_pool_decode import Hy4AttentionPool as _Attn
+        else:
+            _Attn = Hy4Attention
+        self.attn = _Attn(
             md,
             ch.mc,
             ch.ccl,
@@ -324,8 +328,9 @@ class Hy4ChainLayer:
 # ------------------------------------------------------------------ model
 class Hy4Chain:
     def __init__(
-        self, md, mc, ccl, ckpt="/ckpt", kv_fmt="bf16", wdt=None, wdtypes=None, idx_rope_first=None, weights=None
+        self, md, mc, ccl, ckpt="/ckpt", kv_fmt=None, wdt=None, wdtypes=None, idx_rope_first=None, weights=None
     ):
+        kv_fmt = kv_fmt or os.environ.get("HY4_KV_FMT", "bf16")  # "scaled_fp8" for the pool decode path (prefill then writes SCALED_FP8 rows)
         from models.demos.blackhole.hy4_preview.weights import Hy4Weights
 
         self.md, self.mc, self.ccl, self.kv_fmt = md, mc, ccl, kv_fmt

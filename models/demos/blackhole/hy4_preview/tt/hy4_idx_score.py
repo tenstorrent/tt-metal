@@ -26,10 +26,10 @@ def q_headrows(q, S):
     return ttnn.to_layout(x, ttnn.TILE_LAYOUT)
 
 
-def idx_score(q, keys, w, kv_len, S, ncores=None, kc=None, out=None, fid=None, kvt=None):
+def idx_score(q, keys, w, kv_len, S, ncores=None, kc=None, out=None, fid=None, kvt=None, n_rows=None):
     """kvt (optional): uint32/int32 ROW_MAJOR [.,16] per-device tensor whose element 0 is the number of valid keys of THIS device (trace-safe; kv_len is then ignored)."""
     md = keys.device()
-    n = int(keys.shape[2])
+    n = int(n_rows or keys.shape[2])  # n_rows: score only the first n_rows key rows of a larger pool tensor (decode bucket)
     assert n % 32 == 0 and S <= 16
     R = n // 32
     grid = md.compute_with_storage_grid_size()
