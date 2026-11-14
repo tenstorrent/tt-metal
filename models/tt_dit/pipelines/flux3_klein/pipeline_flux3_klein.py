@@ -216,7 +216,11 @@ class Flux3KleinPipeline:
         self._transformers: dict[str, Flux3KleinTransformer] = {}
         for model, snapshot in snapshots.items():
             transformer = Flux3KleinTransformer(
-                flow_map=model == "distilled", device=mesh_device, ccl_manager=self._ccl, parallel_config=parallel
+                flow_map=model == "distilled",
+                device=mesh_device,
+                ccl_manager=self._ccl,
+                parallel_config=parallel,
+                linear1=topology == ttnn.Topology.Ring,
             )
             cache.load_model(
                 transformer,

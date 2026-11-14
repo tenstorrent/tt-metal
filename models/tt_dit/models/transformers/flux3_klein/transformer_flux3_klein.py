@@ -317,7 +317,13 @@ class Flux3KleinEarlyStacks(Module):
     """The per-mode blocks that run before the modes are joined."""
 
     def __init__(
-        self, *, device: ttnn.MeshDevice, ccl_manager: CCLManager, parallel_config: DiTParallelConfig, is_fsdp: bool
+        self,
+        *,
+        device: ttnn.MeshDevice,
+        ccl_manager: CCLManager,
+        parallel_config: DiTParallelConfig,
+        is_fsdp: bool,
+        linear1: bool,
     ) -> None:
         super().__init__()
         self._ring = ccl_manager.topology == ttnn.Topology.Ring
@@ -327,7 +333,11 @@ class Flux3KleinEarlyStacks(Module):
                 mode,
                 ModuleList(
                     Flux3KleinTransformerBlock(
-                        device=device, ccl_manager=ccl_manager, parallel_config=parallel_config, is_fsdp=is_fsdp
+                        device=device,
+                        ccl_manager=ccl_manager,
+                        parallel_config=parallel_config,
+                        is_fsdp=is_fsdp,
+                        linear1=linear1,
                     )
                     for _ in range(EARLY_DEPTH)
                 ),
@@ -395,6 +405,7 @@ class Flux3KleinTransformer(Module):
         ccl_manager: CCLManager,
         parallel_config: DiTParallelConfig,
         is_fsdp: bool = False,
+        linear1: bool = False,
     ) -> None:
         super().__init__()
         tp_axis = parallel_config.tensor_parallel.mesh_axis
@@ -418,11 +429,15 @@ class Flux3KleinTransformer(Module):
             flow_map=flow_map, device=device, ccl_manager=ccl_manager, parallel_config=parallel_config
         )
         self.early = Flux3KleinEarlyStacks(
-            device=device, ccl_manager=ccl_manager, parallel_config=parallel_config, is_fsdp=is_fsdp
+            device=device, ccl_manager=ccl_manager, parallel_config=parallel_config, is_fsdp=is_fsdp, linear1=linear1
         )
         self.single_blocks = ModuleList(
             Flux3KleinTransformerBlock(
-                device=device, ccl_manager=ccl_manager, parallel_config=parallel_config, is_fsdp=is_fsdp
+                device=device,
+                ccl_manager=ccl_manager,
+                parallel_config=parallel_config,
+                is_fsdp=is_fsdp,
+                linear1=linear1,
             )
             for _ in range(SINGLE_DEPTH)
         )
