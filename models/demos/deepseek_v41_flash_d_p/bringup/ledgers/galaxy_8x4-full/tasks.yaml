@@ -3894,13 +3894,65 @@ tasks:
       top5_overlap: '>= limit'
       chunk_wall_ms: '> 0'
       device_ms_total: '> 0'
+- id: P.56
+  title: 'MoE replicas learned from the previous chunk: chunk K-1''s router counts pick each layer''s hot experts; their copies fill the replica slots for chunk K over the following layers'' combines (P.53 piggyback); A/B off vs prev on real back-to-back chunks'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - P.55c
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
+  - models/demos/common/bringup/testing
+  - models/demos/common/bringup/tests
+  - ttnn/ttnn/bringup
+  brief:
+    details: |-
+      OWNER 2026-11-13, EXPERIMENTAL (this branch only): the backup to P.55's exact replicas. P.55a/b showed a copy made inside the layer that needs it lands too late (0.77-1.23 ms vs ~0.47 ms when light chips go idle; links carry ~7 GB/s of copy while the combine runs). Here the copy has a whole chunk to land.
+
+      DESIGN (owner), behind a new MOE_REPLICAS value `prev` (default stays off; keep_default):
+      1. Learn: after layer L of chunk K-1, its router counts (P.45 MOE_COUNTS, on device) pick layer L's hot experts and the receiving chips (least loaded) for chunk K; the split of a hot expert's tokens between home and replicas follows the counts. On device; no host round trip, no sync. Chunk 0 of a request: replicas off (no history). Never carry a table across requests (novel vs code top-16 overlap ~0).
+      2. Fill: layer L's copies for chunk K travel as pieces on the combine port cores of the FOLLOWING layer calls (L+1 .. L39 of chunk K-1, then chunk K's early layers if needed), P.53's MOE_FILL=piggyback path (~0% combine cost at <= 1/8 slot a call, bit-exact, 100 calls no hang). A slot may be overwritten only after chunk K-1's layer L finished with it; it must be complete before chunk K's layer L experts start (flag per slot; if not complete, that layer runs replicas off for this chunk, counted and reported).
+      3. Use: chunk K's dispatch sends a hot expert's token rows to home or replica per the split (P.46/P.52 slot map, P.55c's planner/dispatch split where it helps: reuse P.55c's code behind its switch, P.54's saved work on branch exp/p54_wip where it helps).
+
+      MEASURE (the deliverable): back-to-back chunked prefill of real prompts, novel AND code, chunks 1..10 after chunk 0, device ms per chunk and clean wall per chunk, off vs prev, the fill included; per chunk the fraction of slots complete in time and the experts-phase ms. The orchestrator's A/B profile (random tokens, DS41-228) is reported but is not the deliverable. Accuracy within the recorded limits; prev must be deterministic for the same chunk sequence (bit-identical repeats of the same sequence).
+
+      P.55c RESULT (2026-11-14, chunk 10 at 51,200, device ms/chunk off / pre-filled oracle split / exact streamed): novel 187.6 / 156.6 / 194.5, code 170.7 / 157.9 / 180.2. The split pays 13-31 ms a chunk when the copies are in place BEFORE the layer; streaming inside the layer loses. P.55c's token split, replica-last order and receiver wait are on this branch behind MOE_REPLICAS=exact: reuse them. DS41-248 (a same-chunk device planner needs a count exchange inside the head) does not apply here: chunk K's plan comes from chunk K-1's counts, known a whole chunk ahead. DS41-247: the first re-run of a chunk is not a valid baseline (state carried from the real chunk): warm re-run first, check off vs off identical.
+
+      Expected size (to check, not a target): the replica table measured ~24.5 ms/chunk of imbalance on novel; learning from past chunks kept ~80-89% of the in-sample gain (CPU model) -> ~15-20 ms/chunk on novel before fill cost; less on code.
+
+      Report the design as built, the per-chunk table, what limits it. Agent rules 18 and 19 hold. Fork-first rule (ttnn/ttnn/bringup/INDEX.md). No device profiler per-op mode. SAFETY: a hang or a board reset need: STOP and report, never reset. Report in plain language, short, every term defined.
+  ab:
+    env:
+      MOE_REPLICAS: 'off'
+      ENGRAM_TABLE: resident
+    change:
+      MOE_REPLICAS: prev
+      MOE_FILL: piggyback
+      ENGRAM_TABLE: resident
+    keep_default: true
+  ab_positions:
+  - 51200
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_moe_prev_replicas.py
+      && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      chunk_wall_ms: '> 0'
+      device_ms_total: '> 0'
 - id: P.54
   title: 'MoE replicas end to end: back-to-back chunked prefill, device time and wall per chunk with the fill included - replicas off vs a table frozen after chunk 0 vs online learning'
   step: perf
   role: perf
   device: true
   deps:
-  - P.55c
+  - P.56
   paths:
   - models/demos/deepseek_v41_flash_d_p/tt
   - models/demos/deepseek_v41_flash_d_p/tests/
