@@ -477,6 +477,7 @@ class Flux3KleinPipeline:
             for t in self._upsampler_ranges:
                 ttnn.deallocate(t)
         self.clear_constant_caches()
+        self._prompt_encoder.close()
         for module in (*self._transformers.values(), self._text_encoder):
             module.deallocate_weights()
         self._vae.deallocate_weights()
