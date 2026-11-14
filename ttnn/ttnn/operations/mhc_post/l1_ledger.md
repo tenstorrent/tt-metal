@@ -84,6 +84,20 @@ differ. `mr_rows` = rows of the core's row group; `ccp` = the core's columns pad
 
 Port cores are not workers, so the port CBs do not add to a worker's footprint.
 
+## Refinement 4 changes (as implemented)
+
+| CB | Capacity (pages) | Page format | Producer | Consumer | Shares with / why not |
+|----|------------------|-------------|----------|----------|-----------------------|
+| `cb_w_slice` | unchanged | unchanged | reader (my 1/R share from DRAM) **+ the R−1 peer readers** (NoC writes of their shares into the same L1, counted on `SEM_W_SHARE`) — the reader pushes once all R shares landed, so the CB keeps one producer | compute | Slice sharing (`SLICE_SHARE`): the R cores of a column member hold the same slice; the peers' writes land before this core's reader pushes (one push, one producer for the CB protocol). Issued behind the first block's barrier instead of up front; the compute waits for it only at its first matmul K-block (in `MixPassFn`). |
+| `cb_norm_w` | unchanged | unchanged | reader + peer readers (same mechanism, same semaphore) | compute | Same sharing as W; needed only in norm_block. |
+| `cb_rstd_lane` (norm) | 1 | Float32 | compute (root: the rstd step, run before the hc step) | writer (root: lane vector ng+1 → token order → the Q unicasts) | New. Cannot be `cb_hc_out`: that would need the rstd and hc tiles in one 1-page CB in sequence; a shared single-instantiation variant (`hc_chain(rstd_only)`) measured a larger program (71.8 KB vs 71.2 KB, the kernel-config buffer). 4 KiB on every worker. |
+
+Kernel-config ring (not L1 but the binding budget at bc = 4): under trace replay a launch overlaps the previous one
+only if binaries + 2 × (args + CB / semaphore config) ≤ 70 656 B. The feed program at R = 5 / bc = 4 under the device
+profiler is at that edge: reader built -Os on the W path (`MHC_READER_OS`), writer's cold root / leader paths
+noinline -Os, the row group's coordinates as the writer's RT args (not the 105-entry table as common args). Without
+these the feed call is DISPATCH-BOUND (12.8 µs launch gap). Any growth of the worker program must re-check it.
+
 ## Symbol table
 
 | Symbol | Bound | Predicate establishing it |
@@ -95,7 +109,7 @@ Port cores are not workers, so the port CBs do not add to a worker's footprint.
 | `W_RESIDENT_BUDGET` | host constant 256 KiB → `n·core_c_tiles ≤ 64` | regime predicate R2 vs R2-W-streamed |
 | `cb_norm_w` pages | `core_c_tiles ≤ 64` under the same predicate (norm implies R2). When it is exceeded, w streams with `bc` like W (same predicate). | R2 predicate |
 | `fanin` | ≤ 16 | host constant `COMBINE_FANIN` = 11 (implemented) |
-| `bc` with W | ≤ `MAX_BLOCK_COLS_W` = 4 | kernel-config buffer (70 656 B): the fused program at bc = 5 measured 74 KB |
+| `bc` with W | ≤ `MAX_BLOCK_COLS_W` = 4, balanced passes `ceil(core_c_tiles / ceil(core_c_tiles / 4))` (Refinement 4) | kernel-config buffer (70 656 B): the fused program at bc = 5 measured 74 KB |
 | `ind`, `outd`, `cd`, `nr` | 2 each (Phase 0); `ind`/`outd` are counted in blocks of `bc` units (IN_BLOCKS / OUT_BLOCKS) | host constants |
 | `BLOCK_L1_BUDGET` | 384 KiB | host constant; total below stays < 1 MiB |
 
@@ -121,7 +135,7 @@ How each term scales:
 
 ## Data-movement budget
 
-Chosen split for stats/collapse (as implemented): the W-path chooser (per-core compute model, single-pass splits) — R = 2 at T160 / T1280, C5120 on 110 cores, so W crosses DRAM twice (+2.6 MB, ≈ 5 µs of DRAM time; it measured 35 % faster at T1280 than R = 1). Plain: the chooser's balanced R; the traffic is identical for every R.
+Chosen split for stats/collapse (as implemented, Refinement 4): the W-path chooser (per-core compute model counting the filler units of balanced passes, multi-pass splits allowed, W-resident splits preferred) — R = 5, Q = 21 (feed mesh, 105 of 106 workers) / Q = 22 (single chip) at T160 C5120: 1 row × 8 units (2 passes of 4) a core; T1280 C5120: R = 4 on 110 cores. Slice sharing makes W and w cross DRAM once at any R (each of the R cores of a column member reads 1/R and NoC-writes it to the other R−1). Plain: the chooser's balanced R; the traffic is identical for every R.
 
 | Tensor | DRAM crossings | Why that many | Cross-core traffic added |
 |--------|----------------|---------------|--------------------------|
@@ -129,13 +143,13 @@ Chosen split for stats/collapse (as implemented): the W-path chooser (per-core c
 | X | 1 | same; X'_j needs all n streams, and all n live in one unit | — |
 | post / comb / P | 1 per row group that owns the row = 1 (rows are partitioned). Packed: one tile read serves all three. | the row's tile is read by each core owning a column range of that row: **Q reads of a 4 KB tile per row** (≈ Q·Ht·4 KB; 2.2 MB at T=160, Q=106). This is above the minimum, and the cost is per-transaction rather than per-byte. | — (each core reads its own copy; an mcast per row group is the deferred alternative, but it is negligible next to X) |
 | X' | 1 write; **0 re-reads** (projection and y use the in-L1 bf16 copy) | `cb_mixed_bf16` residency | — |
-| W | R (1 when R = 1) | resident per core across its rows | R3 would make it 1 at any R |
-| w | 1 per row group (resident) | resident | — |
+| W | 1 (Refinement 4 slice sharing; R before) | resident per core across its rows; each of the R cores of a column member reads 1/R | (R−1)/R · n·C·128 B per member set over the NoC (≈ 2.1 MB at R = 5) |
+| w | 1 (slice sharing; R before) | resident | (R−1)/R of the core's w tiles to its peers |
 | stats | 1 write (root) | — | Ht·Q·4 KB partials to leaders, plus Ht·ceil(Q/fanin)·4 KB to roots |
 | hc | 1 write (root) | — | — |
 | y / D | 1 write; R4 (feed) adds (G−1)/G write + read of the staging; T % 32 ≠ 0 (Refinement 2b): the own block is staged too (+1/G write + read) and the ports read ≤ 2 y tiles per shifted D tile (staging read ≤ 2× for chips q ≥ 1) | R4 stepping stone (as implemented: the own block straight to D, the G−1 remote blocks to y_output then read by the ports) | rstd: Ht·Q·128 B (Refinement 2: one 128 B unicast per member per row). Fabric: (G−1)/G·T·C·2 B out per chip, ≤ 7-tile packets (bank-contiguous runs of the destination's D). Feed publication (Refinement 3): one 4 B inline write per (worker, row, port) into the ports' `cb_feed_poll` + one arm atomic per (port, worker) — replaces the ports' NoC polling. DRAM crossings unchanged (R5 would remove the staging). |
 
-Totals at T=160, C=5120, bf16, collapse + norm, R=1:
+Totals at T=160, C=5120, bf16, collapse + norm (R=1 at Refinement 3; at R=5 with slice sharing the DRAM total is the same and the coefficient reads drop from Q·Ht = 530 to 105 tile reads — one row a core):
 - DRAM ≈ 1.6 (F) + 6.6 (X) + 6.6 (X') + 2.6 (W) + 1.6 (y) + 0.2 (small) ≈ 19.2 MB, which is the roofline bytes.
 - Coefficient reads add ~2.2 MB of 4 KB transactions.
 - NoC cross-core ≈ 2.2 MB (partials) + 0.2 MB.

@@ -13,3 +13,7 @@
 {"event":"fix_applied","text":"lagged-root norm schedule knob; loses at T160 (+43/+32us) and T1280; parked NORM_ROOT_LAG=0","ts":"2026-11-14T04:54:39+00:00"}
 {"event":"device_print_observation","text":"profiler zones in port kernels exhaust marker budget: harness reports 192us for a ~210us timeline (artifact)","ts":"2026-11-14T04:54:39+00:00"}
 {"event":"test_run","test":"perf_feed_measure.py","status":"pass","feed_us":200,"nofeed_us":167.2,"note":"push publication with armed handshake","ts":"2026-11-14T04:54:39+00:00"}
+{"event":"hypothesis","refinement":4,"text":"R=1 split on the 106-worker mesh: 5 rows x 2 units, 52 cores compute a filler unit; row loop compute-bound (~10.8 us/unit), 32 us root tail","ts":"2026-11-14T06:19:17+00:00"}
+{"event":"fix_applied","refinement":4,"text":"R=5 split + resident W/norm-weight slice sharing across row groups, slices issued behind the first block, rstd before hc, chooser counts filler/balanced passes, kernel-config ring fit","ts":"2026-11-14T06:19:17+00:00"}
+{"event":"test_run","status":"pass","test":"perf_feed_measure.py","nofeed_us":"167.2->126.7","feed_us":"200.0->157.4","dispatch_bound":false,"ts":"2026-11-14T06:19:17+00:00"}
+{"event":"test_run","status":"pass","test":"golden test_golden collapse/stats 210/210, test_feed 148/148, test_regression 33/35 (2 known hifi4), unit 15/15","ts":"2026-11-14T06:19:17+00:00"}

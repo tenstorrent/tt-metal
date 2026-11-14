@@ -286,3 +286,70 @@
   inline (outlined, each copy inlined its own LLK helpers: trisc0 12.1 → 17.3 KB; forced inline 11.8 KB).
 - Tests added: `tests/ttnn/unit_tests/operations/mhc_post/perf_feed_measure.py` (+ `perf_mesh` fixture in that
   directory's conftest; not collected by default); probes/probe_013..021 (timeline / norm-lag probes).
+
+## Refinement 4 — Local pass toward the DRAM roofline (perf-flagged collapse + norm case)
+- Date: 2026-11-14
+- Measurement: `tests/ttnn/unit_tests/operations/mhc_post/perf_feed_measure.py` (the `eval.ccl_perf` protocol, inputs uploaded
+  once; perf_measure.py still uploads inside the trace), 5 experiments, BH 1×4 mesh (QuietBox 2), FABRIC_2D_TORUS_XY, kept by
+  `python -m eval.ccl_perf compare`:
+
+  | case | before (Refinement 3) | after | compare |
+  |---|---|---|---|
+  | collapse + norm, no feed (LOOSE_CASES[1], the target) | 167.2 µs fastest / 167.9 slowest | **126.7 / 128.0 µs** | win (−40.5 µs, noise 0.05) |
+  | collapse + norm + feed (LOOSE_CASES[0]) | 200.0 / 204.1 µs | **157.4 / 159.8 µs** | win (−42.6 µs, noise 0.09) |
+
+  Neither dispatch-bound (max gap 0.60 / 0.53 µs). Exposed transport (feed − no feed) 32.8 → 30.7 µs.
+- Breakdown before (per-core zones, no-feed call): on the 106-worker mesh the chooser picked R = 1 (5 rows × 2 units a
+  core; 52 of the 106 cores own 1 column and compute a zero filler unit: 1060 units computed for 800). Rows ended at
+  113–134 µs, then a ~32 µs root tail (lagged fold → root fold → hc → rstd → norm of every row → y writes). The unpacker
+  never waited on the reader in the row loop (5.8 µs, first row only): the row loop was compute-bound, ~10.8 µs a unit.
+- What was done (each lever measured on the target, kept):
+  1. **Split: R = 5 at T160** (knob-turn on the core assignment). Forced R = 5 alone: 164 µs — the 5 row groups re-read
+     their (identical) W slices: 13 MB of DRAM at start, the first blocks waited 26–60 µs.
+  2. **Slice sharing** (`SLICE_SHARE`, dataflow): the R cores of a column member hold the same resident W slice and norm
+     weight tiles; each reads 1/R from DRAM and NoC-writes it into the same L1 of the other R−1 (one write per peer per
+     slice), then incs their `SEM_W_SHARE`; W / w cross DRAM once at any R. With it, **the slices are issued behind the
+     first block's barrier** (coefficients + first block land first) and the compute waits for W only at its first
+     matmul K-block (MixPassFn), so pass 0 mixes while W arrives: 164 → 137 µs; + the norm weight shared: 130.3 µs.
+  3. **rstd before hc** on the root (OVERLAP of the tail): the root's compute runs the rstd step (one SFPU vector) on the
+     lane tile first and packs it to `cb_rstd_lane`; the root writer sends rstd to the members while the 20-iteration hc
+     step runs — hc leaves the norm's critical path: 130.3 → 125.2 µs.
+  4. **Chooser** (the knob's source of truth): the W-path per-core term counts the filler units of balanced passes
+     (`bc = ceil(cols / ceil(cols / 4))`, the program's `block_cols` with W is balanced the same way), multi-pass splits
+     are candidates, W-resident splits are preferred, and W counts once in the DRAM term (sharing). T160 C5120 → R = 5
+     (Q = 21 on the mesh, 22 single-chip); T1280 C5120 → R = 4 (110 cores). Mode-independent as before.
+  5. **Kernel-config ring** (needed for 1–4 at bc = 4 in the feed program under the profiler): the program first did not
+     fit the 70 656 B kernel-config buffer (71 168 B), then fitted but was DISPATCH-BOUND (12.8 µs launch gap: under trace
+     replay a launch overlaps the previous one only if binaries + 2 × args/CB config ≤ the ring). Fixes: reader built
+     `-Os` on the W path (`MHC_READER_OS` define; plain keeps -O2), the writer's cold root / leader paths `noinline` +
+     `optimize("Os")` (the hot X' store loop stays -O2: writer-wide -Os cost +2 µs), `copy_column_to_col0` noinline, the
+     hc-permutation outer loop not unrolled, the row group's 21 coordinates as the writer's per-core RT args instead of
+     the 105-entry table as common args. (The descriptor's `opt_level` does not reach the generic-op build: no effect.)
+  - Reused: the R2 combine, the resident W / norm-weight CBs, the root's lane tile and hc step, the reader's barrier
+    points. Added: `SEM_W_SHARE`, `CB_RSTD_LANE`, the rstd step (`RstdStep`), reader RT args (group, member, R peers),
+    writer RT args (row group's coordinates).
+- Single-chip no-regression (profiler, 110 cores, `test_mhc_post_perf.py`; before = Refinement 3's numbers):
+
+  | shape | before | after |
+  |---|---|---|
+  | plain fp32 T160 / T640 C7168 / T1024 C1792 | 116 / 506 / ~197–209 µs | 117–119 / 505 / 193–206 µs (unchanged path) |
+  | bf16 packed HiFi2 T160 plain / stats / collapse / collapse + norm | 76.3 / 109.6 / 134.2 / 154 µs | 77.0 / 91.3 / 115.0 / 122.3 µs |
+  | T1280 plain / stats / collapse / collapse + norm | 378.6 / 480.7 / 561 / 646 µs | 378.9 / 471.3 / 552.1 / 631.2 µs |
+
+- What binds now (no-feed, R = 5; zones + ablations at the intermediate 137 µs point): the compute — 72–77 µs of row
+  loop for 8 units with the F / X reads stubbed (~9 µs a unit: ~29 fp32 SFPU tile-ops a unit, Addcmul is already one
+  fused MAD per vector); with the reads, rows end 80–113 µs because all 105 cores issue their first blocks at once
+  (first-block barrier up to ~25–40 µs on the slowest cores); X' writes stubbed: no change. Then the root tail
+  (chunk folds → root fold → rstd → 8-unit norm_block ≈ 10 µs → y writes).
+- Accuracy achieved: unchanged gates — X' / stats / hc / y within the golden tolerances (stats rel L2 ≈ 4e-3 at HiFi2,
+  y PCC ≥ 0.99995, norm within 1 bf16 step); the stats grouping changes with the split (R), identical across stats /
+  collapse / feed calls as before; feed output bit-exact vs the no-feed y.
+- Golden test progress: test_golden.py stats + collapse (incl. norm) 210/210; plain bf16 T160 slice 7/7; test_feed.py
+  148/148; test_regression.py 33/35 (the 2 known `test_projection_hifi4` calibration failures of Refinement 1); unit tests
+  15/15.
+- Issues encountered: the kernel-config ring budget (above) — the worker program now sits within a few hundred bytes of
+  the trace-overlap limit in the feed program under the profiler; any growth of reader / writer / compute must re-check
+  `perf_feed_measure.py` for DISPATCH-BOUND. A clang-format pass mangled a temporary `#ifdef` ablation hook in the writer
+  (caught by the next compile; hooks removed).
+- Tests added: none (perf probes reuse `perf_feed_measure.py` / `test_mhc_post_perf.py`); probes/probe_022..033 (timeline
+  and ablation runs of probe_019's call).

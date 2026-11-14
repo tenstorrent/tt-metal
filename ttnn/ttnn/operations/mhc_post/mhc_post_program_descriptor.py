@@ -267,11 +267,6 @@ def _f32_bits(v):
     return struct.unpack("<I", struct.pack("<f", float(v)))[0]
 
 
-import os as _abl_os
-
-_ABL = [(d, "1") for d in _abl_os.environ.get("MHC_ABL", "").split(",") if d]
-
-
 def create_program_descriptor(
     f_tensor,
     x_tensor,
@@ -328,11 +323,6 @@ def create_program_descriptor(
     # the score sees (T, C, dtypes, has_W, |L|) only; with W the unit always counts the y tile (op_design.md)
     unit_bytes = f_page + 2 * n * x_page + (bf16_page if has_w else 0)
     R, Q = choose_split(t_tiles, c_tiles, len(workers), unit_bytes, int(has_w), n, C)
-    import os as _os
-
-    if _os.environ.get("MHC_FORCE_R"):
-        R = int(_os.environ["MHC_FORCE_R"])
-        Q = min(len(workers) // R, c_tiles)
     row_ranges = _split(t_tiles, R)
     col_ranges = _split(c_tiles, Q)
     used = workers[: R * Q]
@@ -477,7 +467,8 @@ def create_program_descriptor(
     reader_ct.extend(ttnn.TensorAccessorArgs(nw_for_args).get_compile_time_args())
     reader = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "mhc_post_reader.cpp"),
-        defines=_ABL,
+        # W path: build the reader -Os (kernel-config ring budget, see the reader); plain keeps -O2
+        defines=[("MHC_READER_OS", "1")] if has_w else [],
         core_ranges=core_ranges,
         compile_time_args=reader_ct,
         runtime_args=reader_rt,
@@ -555,7 +546,6 @@ def create_program_descriptor(
         feed_common += [0] * (2 * MAX_FEED_LINKS - len(port_xy))
     writer = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "mhc_post_writer.cpp"),
-        defines=_ABL,
         core_ranges=core_ranges,
         compile_time_args=writer_ct,
         runtime_args=writer_rt,
@@ -645,7 +635,6 @@ def create_program_descriptor(
         ]
     compute = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "mhc_post_compute.cpp"),
-        defines=_ABL,
         core_ranges=core_ranges,
         compile_time_args=compute_ct,
         runtime_args=compute_rt,

@@ -25,10 +25,13 @@
 //   expanded into column 0 of a cb_rstd_col page (the compute's COL broadcast), row by row. (Lagged norm knob,
 //   Refinement 3: the writer does this per row instead.)
 
-// -Os: the worker program's binaries + 2x its args / CB config must fit the 70 656 B kernel-config ring for trace
-// replays to overlap (else every launch waits for the previous one: DISPATCH-BOUND); the dataflow kernels' code speed
-// is not on the critical path (they issue NoC transfers and wait on the compute).
+// W path (MHC_READER_OS): -Os. The worker program's binaries + 2x its args / CB config must fit the 70 656 B
+// kernel-config ring for trace replays to overlap (else every launch waits for the previous one: DISPATCH-BOUND); with
+// the fused compute it does only at -Os, and the reader's code speed is not on that path's critical path (the
+// compute is). Plain mode (DRAM-streaming, small compute) keeps -O2.
+#ifdef MHC_READER_OS
 #pragma GCC optimize("Os")
+#endif
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 
@@ -321,14 +324,10 @@ void kernel_main() {
                 uint32_t x_l1 = get_write_ptr(cb_stream_tiles);
                 for (uint32_t u = 0; u < cols_in_pass; ++u) {
                     const uint32_t c = c_start + cb0 + u;
-#ifndef ABL_NOREAD
                     noc_async_read(f_acc.get_noc_addr(f_row + c), f_l1, f_page);
-#endif
                     f_l1 += f_page;
                     for (uint32_t i = 0; i < n; ++i) {
-#ifndef ABL_NOREAD
                         noc_async_read(x_acc.get_noc_addr(x_row + i * c_tiles + c), x_l1, x_page);
-#endif
                         x_l1 += x_page;
                     }
                 }

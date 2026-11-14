@@ -169,6 +169,7 @@ Pick the minimum `est`. Ties go to the smaller R (fewer W reads, smaller combine
 - With W, the per-core term is `rows·(ROW_NS_W + cols·UNIT_NS_W)`, fitted on device: the fused pass is compute-bound per core, not DRAM-fed.
 - Only splits whose column range fits one block pass (`cols ≤ MAX_BLOCK_COLS_W`) are candidates when any exists.
 - It still sees only (T, C, dtypes, has_W, |L|), so the stats-vs-collapse bit-identity holds.
+- **Refinement 4:** the per-core term counts the filler units of balanced passes (`rows·(ROW_NS_W + passes·bc·UNIT_NS_W)`, `bc = ceil(cols / ceil(cols / MAX_BLOCK_COLS_W))`, the same balanced `bc` the program uses with W); multi-pass splits are candidates; W-resident splits are preferred; W counts once in the DRAM term because the R cores of a column member share their resident W / w slices (each reads 1/R from DRAM and NoC-writes it to the other R−1 — the R3 family's saving, by unicast from the readers, no mcast). T160 C5120: R = 5 (1 row × 8 units a core) instead of R = 1 / R = 2.
 - Combine:
   - root(t) = member `(t − t0) mod Q`, with its work deferred past the root's own rows;
   - the level-1 fold is lagged one row;
