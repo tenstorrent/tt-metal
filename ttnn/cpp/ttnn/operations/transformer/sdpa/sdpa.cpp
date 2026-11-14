@@ -71,6 +71,12 @@ ttnn::Tensor scaled_dot_product_attention(
     if (attn_mask.has_value()) {
         const float effective_scale =
             scale.value_or(1.0f / std::sqrt(static_cast<float>(input_tensor_q.padded_shape()[-1])));
+        // The pre-scaling and the kernel's row-max folding assume scale > 0: at scale 0 the
+        // mask is multiplied by 1/0, and a negative scale flips the softmax ordering.
+        TT_FATAL(
+            effective_scale > 0.0f,
+            "scaled_dot_product_attention: scale must be greater than 0 when attn_mask is provided, got {}",
+            effective_scale);
         if (effective_scale != 1.0f) {
             effective_mask = ttnn::multiply(attn_mask.value(), 1.0f / effective_scale);
         }
