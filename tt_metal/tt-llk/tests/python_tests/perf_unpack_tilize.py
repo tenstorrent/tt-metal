@@ -4,7 +4,7 @@
 import pytest
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
-from helpers.golden_generators import TILE_DIMENSIONS
+from helpers.golden_generators import FACES_PER_TILE, TILE_DIMENSIONS
 from helpers.llk_params import PerfRunType
 from helpers.param_config import input_output_formats, parametrize
 from test_unpack_tilize import unpack_tilize
@@ -33,6 +33,7 @@ def _input_dimensions(rt_dim, ct_dim):
     ),
     rt_dim=[1, 2, 3, 4, 5, 6, 7, 8],
     ct_dim=[1, 2, 3, 4, 5, 6, 7, 8],
+    num_faces=[2, 4],
     run_types=[_PERF_RUN_TYPES],
     loop_factor=[PERF_LOOP_FACTOR],
     is_perf=[True],
@@ -42,6 +43,7 @@ def test_perf_unpack_tilize_float(
     formats,
     rt_dim,
     ct_dim,
+    num_faces,
     run_types,
     loop_factor,
     is_perf,
@@ -57,8 +59,12 @@ def test_perf_unpack_tilize_float(
     if formats.input_format == DataFormat.Bfp8_b:
         pytest.skip("Bfp8_b input not supported for unpack_tilize")
 
+    if formats.output_format == DataFormat.Bfp8_b and num_faces != FACES_PER_TILE:
+        pytest.skip("Bfp8_b output format only works with num_faces=4")
+
     unpack_tilize(
         formats,
+        num_faces=num_faces,
         input_dimensions=_input_dimensions(rt_dim, ct_dim),
         run_types=run_types,
         loop_factor=loop_factor,
@@ -72,6 +78,7 @@ def test_perf_unpack_tilize_float(
     formats=input_output_formats([DataFormat.Int32]),
     rt_dim=[1, 2],
     ct_dim=[1, 2],
+    num_faces=[2, 4],
     run_types=[_PERF_RUN_TYPES],
     loop_factor=[PERF_LOOP_FACTOR],
     is_perf=[True],
@@ -81,6 +88,7 @@ def test_perf_unpack_tilize_int(
     formats,
     rt_dim,
     ct_dim,
+    num_faces,
     run_types,
     loop_factor,
     is_perf,
@@ -88,6 +96,7 @@ def test_perf_unpack_tilize_int(
     unpack_tilize(
         formats,
         unpack_to_dest=True,
+        num_faces=num_faces,
         input_dimensions=_input_dimensions(rt_dim, ct_dim),
         run_types=run_types,
         loop_factor=loop_factor,
