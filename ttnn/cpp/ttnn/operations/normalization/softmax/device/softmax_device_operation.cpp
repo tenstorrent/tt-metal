@@ -293,6 +293,46 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
                                 program_config.block_w,
                                 program_config.block_h,
                                 num_cores_r * num_cores_c);
+
+                            if (attributes.is_causal_mask) {
+                                TT_FATAL(
+                                    mask.layout() == Layout::TILE,
+                                    "Causal mask must have TILE layout for sharded scale_mask_softmax; ROW_MAJOR causal mask is not supported.");
+                                if (mask.layout() == Layout::TILE) {
+                                    TT_FATAL(
+                                        tensors_args.input_tensor.padded_shape()[0] == mask.padded_shape()[0],
+                                        "Input and mask batch sizes must match, got input: {} vs mask: {}",
+                                        tensors_args.input_tensor.padded_shape(),
+                                        mask.padded_shape());
+                                    const uint32_t mask_Ht = mask.padded_shape()[-2] /
+                                                             tensors_args.input_tensor.tensor_spec().tile().get_height();
+                                    TT_FATAL(
+                                        mask_Ht > 0 && program_config.block_h % mask_Ht == 0,
+                                        "block_h ({}) must be a positive multiple of the causal mask height in tiles "
+                                        "({}). Mask shape is {}.",
+                                        program_config.block_h,
+                                        mask_Ht,
+                                        mask.padded_shape());
+                                }
+                            }
+                            if (mask.is_sharded()) {
+                                TT_FATAL(
+                                    mask.shard_spec().has_value(),
+                                    "Sharded mask must have a valid shard spec.");
+                                const auto& input_shard_spec = tensors_args.input_tensor.shard_spec().value();
+                                const auto& mask_shard_spec = mask.shard_spec().value();
+                                TT_FATAL(
+                                    mask_shard_spec.orientation == input_shard_spec.orientation,
+                                    "Sharded mask orientation ({}) must match input tensor orientation ({})",
+                                    mask_shard_spec.orientation,
+                                    input_shard_spec.orientation);
+                                TT_FATAL(
+                                    mask_shard_spec.grid == input_shard_spec.grid,
+                                    "Sharded mask core grid must match input tensor core grid");
+                                TT_FATAL(
+                                    mask.memory_config().memory_layout == tensors_args.input_tensor.memory_config().memory_layout,
+                                    "Sharded mask memory layout must match input tensor memory layout");
+                            }
                         } else {
                             TT_FATAL(
                                 attributes.is_causal_mask,
