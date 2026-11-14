@@ -33,7 +33,24 @@
 #include "../adaptive_chunk.hpp"
 #include "../weight_runs.hpp"
 
+#ifdef RING_PROBE_TIME
+#include "api/debug/dprint.h"
+#define PT_WALL() (*reinterpret_cast<volatile uint32_t*>(0xFFB121F0))
+#define PT(i, ...)                     \
+    {                                  \
+        const uint32_t _pt = PT_WALL(); \
+        __VA_ARGS__;                   \
+        pt[i] += PT_WALL() - _pt;      \
+    }
+#else
+#define PT(i, ...) __VA_ARGS__
+#endif
+
 void kernel_main() {
+#ifdef RING_PROBE_TIME
+    uint32_t pt[20] = {0};
+    const uint32_t pt_start = PT_WALL();
+#endif
     // -------------------------- runtime args ------------------------------
     const uint32_t x_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t counts_addr = get_common_arg_val<uint32_t>(1);
@@ -558,11 +575,14 @@ void kernel_main() {
         //   Receivers wait for BOTH valid semaphores at the end. Halves the
         //   per-K-block elapsed time at small per_core_M where mcast/handshake
         //   overhead dominates compute.
+#ifdef RING_PROBE_TIME
+        const uint32_t pt_p3 = PT_WALL();
+#endif
         for (uint32_t kb = 0; kb < num_blocks_gu; ++kb) {
-            x_stage_obj.reserve_back(g_in0_block_tiles_max);
-            cb_in1_gate_obj.reserve_back(g_in1_block_num_tiles);
+            PT(16, x_stage_obj.reserve_back(g_in0_block_tiles_max));
+            PT(16, cb_in1_gate_obj.reserve_back(g_in1_block_num_tiles));
             if constexpr (reader_mcasts_up) {
-                cb_in1_up_obj.reserve_back(g_in1_block_num_tiles);
+                PT(16, cb_in1_up_obj.reserve_back(g_in1_block_num_tiles));
             }
 
             // UP_SPLIT: slot reserved -> release writer to read `up` on NoC 1,
@@ -593,7 +613,7 @@ void kernel_main() {
             // work begins immediately. For core (0,0) (both senders), in0
             // runs first then in1, ~60µs sequentially — same as before.
             if (is_in0_sender) {
-                in0_ready_sem.wait(in0_num_receivers);
+                PT(3, in0_ready_sem.wait(in0_num_receivers));
                 in0_ready_sem.set(0);
 
                 uint32_t l1_x = x_stage_obj.get_write_ptr();
@@ -630,12 +650,16 @@ void kernel_main() {
                                 // of the shared row-major buffer (0 when x is a
                                 // standalone per-expert buffer).
                                 const uint32_t stick = x_start_stick + row_base + r;
+#ifndef RING_PROBE_NOX
                                 noc_read.async_read(
                                     x_acc_rm,
                                     CoreLocalMem<uint32_t>(l1_x),
                                     rm_kblock_bytes,
                                     {.page_id = stick, .offset_bytes = col_off_bytes},
                                     {});
+#else
+                                (void)stick; (void)col_off_bytes;
+#endif
                                 l1_x += rm_kblock_bytes;
                             }
                             // Skip the padding sticks in this tile-row (stale L1, dropped).
@@ -667,7 +691,7 @@ void kernel_main() {
                         }
                     }
                 }
-                noc_read.async_read_barrier();
+                PT(4, noc_read.async_read_barrier());
 
                 // Multicast only the real rows of the block. Valid tile-rows form a
                 // contiguous prefix from block_start; padding rows past the token
@@ -737,10 +761,10 @@ void kernel_main() {
                     // block, which is the whole point.
                     ++mc_seq;
                     if (mc_seq >= 3) {
-                        mcast_done_sem.wait_min(mc_seq - 2);
+                        PT(5, mcast_done_sem.wait_min(mc_seq - 2));
                     }
                 } else {
-                    in1_ready_sem.wait(in1_num_receivers);
+                    PT(5, in1_ready_sem.wait(in1_num_receivers));
                     in1_ready_sem.set(0);
                 }
 
@@ -754,6 +778,11 @@ void kernel_main() {
                 const uint32_t gate_col0 = my_nt_gu * per_core_N_gu;
                 const uint32_t gate_col_end =
                     (gate_col0 + per_core_N_gu < N_gate_tiles_full) ? gate_col0 + per_core_N_gu : N_gate_tiles_full;
+#ifdef RING_PROBE_CONTIG
+                Ring::probe_gu(noc_read, gate_acc, 0, local_expert_id, my_nt_gu, kb * in0_block_w_gu, in0_block_w_gu, l1_w_gate, gate_tile_bytes);
+                l1_w_gate += in0_block_w_gu * per_core_N_gu * gate_tile_bytes;
+                if (false)
+#endif
                 for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
 #ifdef RING_WEIGHTS
                     Ring::read_gu(
@@ -816,7 +845,7 @@ void kernel_main() {
                         l1_w_up += per_core_N_gu * up_tile_bytes;
                     }
                 }
-                noc_read.async_read_barrier();
+                PT(6, noc_read.async_read_barrier());
 
                 // IN1_WRITER_MCAST: gate is in L1 -- hand this slot to the writer, which
                 // multicasts it (and `up`, which it read itself) on NoC 1. Signalled BEFORE
@@ -827,7 +856,7 @@ void kernel_main() {
 
                 // UP_SPLIT: wait for the writer's NoC-1 `up` read before mcast.
                 if constexpr (up_split) {
-                    up_done_sem.wait_min(up_seq);
+                    PT(7, up_done_sem.wait_min(up_seq));
                 }
                 // GRID_Y == 1: no column receivers — skip mcast/valid-sem; the
                 // locally-read weights go straight to compute via cb_push_back.
@@ -895,11 +924,11 @@ void kernel_main() {
 
             // Step 3: receivers wait for both valid semaphores and push.
             if (!is_in0_sender) {
-                in0_valid_sem.wait(IN0_VALID);
+                PT(8, in0_valid_sem.wait(IN0_VALID));
                 x_stage_obj.push_back(g_in0_block_tiles_max);
             }
             if (!is_in1_sender) {
-                in1_valid_sem.wait(IN1_VALID);
+                PT(8, in1_valid_sem.wait(IN1_VALID));
                 cb_in1_gate_obj.push_back(g_in1_block_num_tiles);
                 if constexpr (reader_mcasts_up) {
                     cb_in1_up_obj.push_back(g_in1_block_num_tiles);
@@ -907,6 +936,9 @@ void kernel_main() {
             }
         }
 
+#ifdef RING_PROBE_TIME
+        pt[1] += PT_WALL() - pt_p3;
+#endif
         // IN1_WRITER_MCAST: drain the decoupled weight-multicast pipeline before phase 4.
         // in1_ready_sem is SHARED by phase 3 (gate/up mcast) and phase 4 (down mcast):
         // receivers up() it in both. Once the phase-3 multicast runs on the writer it can
@@ -915,7 +947,7 @@ void kernel_main() {
         // phase-4 mcast waits forever for acks that were eaten.
         if constexpr (writer_mcasts_in1) {
             if (is_in1_sender) {
-                mcast_done_sem.wait_min(mc_seq);
+                PT(9, mcast_done_sem.wait_min(mc_seq));
             }
         }
 
@@ -939,11 +971,14 @@ void kernel_main() {
         constexpr uint32_t ACT_VALID = 1;
         const uint32_t intermed_tile_bytes = cb_in0_down_full_obj.get_tile_size();
 
+#ifdef RING_PROBE_TIME
+        const uint32_t pt_p4 = PT_WALL();
+#endif
         for (uint32_t kb = 0; kb < num_blocks_d; ++kb) {
             const bool is_act_sender = (my_nt_d == kb);
 
-            cb_in1_down_obj.reserve_back(d_in1_block_num_tiles);
-            cb_in0_down_full_obj.reserve_back(d_in0_block_num_tiles);
+            PT(17, cb_in1_down_obj.reserve_back(d_in1_block_num_tiles));
+            PT(17, cb_in0_down_full_obj.reserve_back(d_in0_block_num_tiles));
 
             // DOWN_SPLIT: slot reserved -> release the writer to read the block on NoC 1.
             if constexpr (split_down) {
@@ -975,7 +1010,7 @@ void kernel_main() {
             // below on NoC 1.
             uint32_t in1_block_start = 0;
             if (is_in1_sender) {
-                in1_ready_sem.wait(in1_num_receivers);
+                PT(11, in1_ready_sem.wait(in1_num_receivers));
                 in1_ready_sem.set(0);
                 uint32_t l1_w = cb_in1_down_obj.get_write_ptr();
                 in1_block_start = l1_w;
@@ -991,6 +1026,10 @@ void kernel_main() {
                 const uint32_t down_col0 = my_nt_d * per_core_N_d;
                 const uint32_t down_col_end =
                     (down_col0 + per_core_N_d < N_down_tiles_full) ? down_col0 + per_core_N_d : N_down_tiles_full;
+#ifdef RING_PROBE_DOWN
+                Ring::probe_d(noc_read, down_acc, local_expert_id, my_nt_d, kb * in0_block_w_d, down_split_k, l1_w, down_tile_bytes);
+                if (false)
+#endif
                 for (uint32_t k = 0; k < down_split_k; ++k) {
                     const uint32_t row = kb * in0_block_w_d + k;
                     if (row < K_down_tiles) {
@@ -1013,11 +1052,11 @@ void kernel_main() {
             // that is BOTH senders (gy==0 && gx==kb) the DRAM-read barrier is no
             // longer hidden under the activated wait — measure before keeping.
             if (is_in1_sender) {
-                noc_read.async_read_barrier();
+                PT(12, noc_read.async_read_barrier());
                 // DOWN_SPLIT: the writer's block must have landed before it is multicast
                 // (or consumed locally at GRID_Y == 1).
                 if constexpr (split_down) {
-                    down_done_sem.wait_min(down_seq);
+                    PT(12, down_done_sem.wait_min(down_seq));
                 }
                 // GRID_Y == 1: no column receivers — skip mcast/valid-sem; this
                 // core consumes the locally-read down weight directly.
@@ -1062,8 +1101,8 @@ void kernel_main() {
                 // cb_in0_down_full is pushed FULL below, and the down matmul
                 // MAC-skips the rows past per_core_M.
                 const uint32_t re_act_tiles = per_core_M * in0_block_w_d;
-                cb_activated_obj.wait_front(act_tiles_max);
-                act_ready_sem.wait(GRID_X_NOC - 1);
+                PT(10, cb_activated_obj.wait_front(act_tiles_max));
+                PT(10, act_ready_sem.wait(GRID_X_NOC - 1));
                 act_ready_sem.set(0);
 
                 const uint32_t src_l1 = cb_activated_obj.get_read_ptr();
@@ -1108,7 +1147,7 @@ void kernel_main() {
 
             // Step 5: receivers wait for both valid sems and push.
             if (!is_act_sender) {
-                act_valid_sem.wait(ACT_VALID);
+                PT(13, act_valid_sem.wait(ACT_VALID));
             } else {
                 // The sender's own copy arrives via the INCL_SRC loopback, so it needs a wait
                 // too. async_writes_flushed() is not one: it polls NIU_MST_NONPOSTED_WR_REQ_SENT
@@ -1117,15 +1156,18 @@ void kernel_main() {
                 // Placed after the valid-sem mcast so receivers are not held up; note the
                 // wait is whole-queue, so it also covers that sem mcast's acks, not just
                 // the loopback copy.
-                noc.async_write_barrier();
+                PT(15, noc.async_write_barrier());
             }
             cb_in0_down_full_obj.push_back(d_in0_block_num_tiles);
 
             if (!is_in1_sender) {
-                in1_valid_sem.wait(IN1_VALID);
+                PT(14, in1_valid_sem.wait(IN1_VALID));
             }
             cb_in1_down_obj.push_back(d_in1_block_num_tiles);
         }
+#ifdef RING_PROBE_TIME
+        pt[2] += PT_WALL() - pt_p4;
+#endif
     }  // end chunk loop
     }  // end per-local-expert loop
 
@@ -1133,6 +1175,11 @@ void kernel_main() {
     // is a posted atomic; without an explicit barrier it can still be in
     // flight at kernel exit, leading to timing-dependent corruption.
     // (DSV41 hang fix) also drain this RISC's outstanding non-posted (multicast) writes before exit.
+#ifdef RING_PROBE_TIME
+    pt[0] = PT_WALL() - pt_start;
+    DPRINT("PT_R mt={} nt={} i1={} i0={} tot={} p3={} p4={} in0rdy={} xbar={} in1w={}\n", my_mt, my_nt_gu, (uint32_t)is_in1_sender, (uint32_t)is_in0_sender, pt[0], pt[1], pt[2], pt[3], pt[4], pt[5]);
+    DPRINT("PT_R2 mt={} nt={} gbar={} updone={} p3val={} mcdone={} actw={} d_in1rdy={} dbar={} actval={} d_in1val={} wbar={} resv3={} resv4={}\n", my_mt, my_nt_gu, pt[6], pt[7], pt[8], pt[9], pt[10], pt[11], pt[12], pt[13], pt[14], pt[15], pt[16], pt[17]);
+#endif
     noc.async_write_barrier();
     noc.async_atomic_barrier();
 }

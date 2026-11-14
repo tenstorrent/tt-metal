@@ -309,6 +309,10 @@ void kernel_main() {
                         // N-OOB hidden padding columns left UNWRITTEN: their up output lands on
                         // a down K position the down matmul never reduces (the compute bounds
                         // its K-loop by real_k_tiles), so stale L1 is dropped.
+#ifdef RING_PROBE_CONTIG
+                        Ring::probe_gu(noc_up, up_acc, 1, local_expert_id, my_nt_gu, kb * in0_block_w_gu, in0_block_w_gu, l1_w_up, up_tile_bytes);
+                        if (false)
+#endif
                         for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
 #ifdef RING_WEIGHTS
                             Ring::read_gu(
@@ -427,6 +431,10 @@ void kernel_main() {
                         // Both OOB directions left UNWRITTEN, matching the reader: the compute
                         // bounds its down K-loop by real_k_tiles and the writer's col guard drops
                         // phantom output columns.
+#ifdef RING_PROBE_DOWN
+                        Ring::probe_d(noc_up, down_acc, local_expert_id, my_nt_d, kb * in0_block_w_d + down_split_k, in0_block_w_d - down_split_k, l1_w, down_tile_bytes);
+                        if (false)
+#endif
                         for (uint32_t k = down_split_k; k < in0_block_w_d; ++k) {
                             const uint32_t row = kb * in0_block_w_d + k;
                             if (row < K_down_tiles) {
