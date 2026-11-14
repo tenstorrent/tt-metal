@@ -268,6 +268,9 @@ class ExpertCacheRunner:
         unconditional one. Returned tensors are this runner's persistent buffers when more than one
         branch runs (the tracers reuse their output tensors between calls). ``valid_11N1`` masks
         the sequence padding out of the residual diff (see ``cache_head``).
+
+        With the transformer's CFG batching, an untraced step runs both branches together (see
+        `_run_step_cfg_batched`) and returns new tensors rather than the persistent buffers.
         """
         cfg = self.config
         ctx = self.context
@@ -276,6 +279,16 @@ class ExpertCacheRunner:
 
         rope = {"rope_cos_1HND": rope_cos_1HND, "rope_sin_1HND": rope_sin_1HND, "trans_mat": trans_mat}
         multi_branch = len(prompts_1BLP) > 1
+        if multi_branch and self.model.cfg_batch and not traced:
+            return self._run_step_cfg_batched(
+                spatial_1BNI=spatial_1BNI,
+                prompts_1BLP=prompts_1BLP,
+                rope=rope,
+                N=N,
+                timestep=timestep,
+                gather_output=gather_output,
+                valid_11N1=valid_11N1,
+            )
         outputs: list[ttnn.Tensor] = []
 
         assert self.spatial_in is not None and self.prompt_in is not None and self.prev_fn_in is not None
@@ -284,9 +297,14 @@ class ExpertCacheRunner:
 
         for branch, branch_prompt_1BLP in enumerate(prompts_1BLP):
             t0 = time.perf_counter() if self.profile_enabled else 0.0
-            # Stage this branch's inputs in the shared slots (see `spatial_in` comment).
-            ttnn.copy(branch_prompt_1BLP, self.prompt_in)
-            prompt_1BLP = self.prompt_in
+            if traced:
+                # Stage this branch's inputs in the shared slots (see `spatial_in` comment).
+                ttnn.copy(branch_prompt_1BLP, self.prompt_in)
+                prompt_1BLP = self.prompt_in
+            else:
+                # Untraced, the pieces take the prompt as it is, so the cross-attention K/V cache (kept per
+                # prompt tensor) holds the K/V of each branch apart.
+                prompt_1BLP = branch_prompt_1BLP
             ttnn.copy(self.prev_fn_residual[branch], self.prev_fn_in)
 
             spatial_1BND, fn_residual, sums_1B12, temb_11BD, timestep_proj_1BTD = self.head(
@@ -365,3 +383,111 @@ class ExpertCacheRunner:
             self._tick("tail", t0)
 
         return outputs
+
+    def _run_step_cfg_batched(
+        self,
+        *,
+        spatial_1BNI: ttnn.Tensor,
+        prompts_1BLP: list[ttnn.Tensor],
+        rope: dict[str, ttnn.Tensor],
+        N: int | ttnn.Tensor,
+        timestep: ttnn.Tensor,
+        gather_output: bool,
+        valid_11N1: ttnn.Tensor | None,
+    ) -> list[ttnn.Tensor]:
+        """`run_step` for both CFG branches with the transformer's CFG batching (untraced).
+
+        Head and tail run once on the rows of both branches stacked per device ([1, 1, 2n, D], as in
+        `WanTransformer3DModel.inner_step_cfg`). The cache decision stays per branch: the middle
+        blocks run batched when both branches compute this step, and per branch otherwise.
+        """
+        cfg = self.config
+        ctx = self.context
+        model = self.model
+        assert len(prompts_1BLP) == self.NUM_BRANCHES, "CFG batching runs exactly the cond and the uncond branch"
+        prompt_pair = (prompts_1BLP[0], prompts_1BLP[1])
+        t0 = time.perf_counter() if self.profile_enabled else 0.0
+
+        spatial_1BND, fn_residuals, sums, temb_11BD, timestep_proj_1BTD = model.cache_head_cfg(
+            spatial_1BNI,
+            *prompt_pair,
+            rope["rope_cos_1HND"],
+            rope["rope_sin_1HND"],
+            rope["trans_mat"],
+            N,
+            timestep,
+            self.prev_fn_residual,
+            valid_11N1,
+            num_fn_blocks=cfg.Fn_compute_blocks,
+        )
+        t0 = self._tick("head", t0)
+
+        # Decide both branches in order, recording each before the next gate (as the per-branch loop does).
+        use_cache: list[bool] = []
+        cur_norms: list[float | None] = []
+        for branch in range(self.NUM_BRANCHES):
+            decision = ctx.gate(branch)
+            diff = None
+            cur_norm: float | None = None
+            if decision == "dynamic":
+                diff_sum, cur_norm = self.read_sums(sums[branch])
+                prev_norm = self._prev_norm(branch)
+                diff = diff_sum / prev_norm if prev_norm > 0.0 else float("inf")
+                branch_use_cache = ctx.decide(branch, diff)
+            else:
+                branch_use_cache = decision == "cache"
+            if branch_use_cache:
+                ctx.add_cached_step(branch)
+            else:
+                ctx.add_computed_step(branch)
+            use_cache.append(branch_use_cache)
+            cur_norms.append(cur_norm)
+            logger.debug(
+                f"[{ctx.name}] step {ctx.current_step} branch {branch}: "
+                f"{'CACHE' if branch_use_cache else 'compute'} (gate={decision}, diff={diff}, cfg batched)"
+            )
+        t0 = self._tick("decide", t0)
+
+        body_kwargs = {"num_fn_blocks": cfg.Fn_compute_blocks, "num_bn_blocks": cfg.Bn_compute_blocks, **rope}
+        n, d = spatial_1BND.shape[2] // 2, spatial_1BND.shape[3]
+
+        def halves(t: ttnn.Tensor) -> list[ttnn.Tensor]:
+            return [ttnn.slice(t, [0, 0, start, 0], [1, 1, start + n, d]) for start in (0, n)]
+
+        def record_computed(branch: int, bn_residual: ttnn.Tensor) -> None:
+            ttnn.copy(fn_residuals[branch], self.prev_fn_residual[branch])
+            self.prev_fn_norm[branch] = cur_norms[branch]  # None if not read this step -> computed lazily
+            self.forecasters[branch].update(bn_residual, ctx.current_step)
+
+        if not any(use_cache):
+            spatial_1BND, bn_residual = model.cache_body(
+                spatial_1BND, prompt_pair, timestep_proj_1BTD, N, **body_kwargs
+            )
+            for branch, branch_bn_residual in enumerate(halves(bn_residual)):
+                record_computed(branch, branch_bn_residual)
+            t0 = self._tick("body", t0)
+        else:
+            parts = halves(spatial_1BND)
+            for branch in range(self.NUM_BRANCHES):
+                if use_cache[branch]:
+                    parts[branch] = self.forecasters[branch].apply(parts[branch], ctx.current_step)
+                else:
+                    parts[branch], bn_residual = model.cache_body(
+                        parts[branch], prompts_1BLP[branch], timestep_proj_1BTD, N, **body_kwargs
+                    )
+                    record_computed(branch, bn_residual)
+            spatial_1BND = ttnn.concat(parts, dim=2)
+            t0 = self._tick("body" if not all(use_cache) else "apply_cache", t0)
+
+        outputs = model.cache_tail_cfg(
+            spatial_1BND,
+            *prompt_pair,
+            temb_11BD,
+            timestep_proj_1BTD,
+            N,
+            **rope,
+            num_bn_blocks=cfg.Bn_compute_blocks,
+            gather_output=gather_output,
+        )
+        self._tick("tail", t0)
+        return list(outputs)
