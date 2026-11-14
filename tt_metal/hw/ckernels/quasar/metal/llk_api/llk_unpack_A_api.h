@@ -274,8 +274,8 @@ inline void llk_unpack_A_block(
 }
 
 /**
- * @brief Toggle the unpacker engine to order a POP after its WAIT: STALLWAIT on SrcA-clear then a
- *        clear-SrcA UNPACR_NOP (no CB read, no DEST write, no pop). Reads nothing from L1.
+ * @brief Toggle the unpacker engine to order a POP after its WAIT: STALLWAIT on SrcA-clear then an
+ *        UNP_NOP-type UNPACR_NOP (no CB read, no DEST write, no pop). Reads nothing from L1.
  *
  * Call between llk_wait_tiles and llk_pop_tiles on a buffer that is being drained (by llk_pop_tiles) but
  * whose data is not needed. Unlike the WH/BH version -- a debug-only SrcA flush with no ordering role --

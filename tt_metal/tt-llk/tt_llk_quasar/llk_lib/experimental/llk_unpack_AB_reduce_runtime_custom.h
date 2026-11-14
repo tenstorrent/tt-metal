@@ -86,7 +86,7 @@ inline void _llk_unpack_AB_reduce_block_max_row_mop_config_runtime_(
         // ignores them (max(x, -inf) = x). This clear op is prepended before each face unpack (the MOP's first inner-loop op).
         constexpr std::uint32_t clr_mode = p_unpacr::UNP_CLRSRC_NEGINF;
         const std::uint32_t unpack_zero_srcA =
-            TT_OP_UNPACR_NOP(p_unpacr::UNP_A, 0, p_unpacr::UNP_STALL_UNP_WR, 0 /* clear curr bank */, clr_mode, p_unpacr::UNP_CLRSRC_ZERO /* UNP_CLR_SRC */);
+            TT_OP_UNPACR_NOP(p_unpacr::UNP_A, 0, p_unpacr::UNP_STALL_UNP_WR, 0 /* clear curr bank */, clr_mode, p_unpacr::UNP_CLRSRC);
 
         ckernel_template temp(MOP_OUTER_LOOP, MOP_INNER_LOOP, unpack_zero_srcA, unpack_srcA_face);
         temp.set_last_inner_loop_instr(unpack_srcA_face_last);

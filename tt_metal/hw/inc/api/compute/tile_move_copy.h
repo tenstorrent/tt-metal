@@ -77,14 +77,16 @@ ALWI void copy_init(
 }
 // clang-format off
 /**
- * Issues a single clear-SrcA unpacker NOP: it toggles the unpacker engine only -- no CB read, no DST
- * write, and it does NOT pop/drain the CB (the surrounding cb_pop_front does that). Call it between
- * cb_wait_front and cb_pop_front when a CB is being drained but its tile data is not needed.
+ * Issues a single unpacker NOP -- no CB read, no DST write, and it does NOT pop/drain the CB (the
+ * surrounding cb_pop_front does that). Call it between cb_wait_front and cb_pop_front when a CB is
+ * being drained but its tile data is not needed.
  *
- * On Quasar this is required: the hardware needs a real unpacker op between a WAIT_TILES and its
- * POP_TILES on the same CB, or the POP can retire before the tiles are available (TEN-4746 / #48552).
- * This NOP steps the unpacker to satisfy that ordering while reading nothing, so it does not disturb
- * PACKER_L1_ACC. On WH/BH there is no such ordering requirement and this compiles to a bare SrcA flush.
+ * What the NOP does differs per architecture:
+ * - Quasar: required. The hardware needs a real unpacker op between a WAIT_TILES and its POP_TILES on the same CB, or
+ *   the POP can retire before the tiles are available. The NOP only steps the unpacker to satisfy that ordering; it
+ *   leaves SrcA untouched.
+ * - WH/BH: there is no such ordering requirement and this compiles to a bare SrcA flush.
+ * On every architecture it reads nothing from L1, so PACKER_L1_ACC is undisturbed.
  * Each architecture supplies its own llk_unpack_dummy(); this helper dispatches to it through
  * UNPACK(...). This call is only available on the compute engine.
  *

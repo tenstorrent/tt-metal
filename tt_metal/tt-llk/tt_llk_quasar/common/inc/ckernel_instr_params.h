@@ -69,17 +69,11 @@ struct p_unpacr
     constexpr static std::uint32_t UNP_SET_DVALID    = 0x2;
     constexpr static std::uint32_t UNP_CLRSRC_ZERO   = 0x0;
     constexpr static std::uint32_t UNP_CLRSRC_NEGINF = 0x1;
-    constexpr static std::uint32_t UNP_CLRSRC_ONE    = 0x2;
-    constexpr static std::uint32_t UNP_CLRSRC_IMM    = 0x3;
 
     constexpr static std::uint32_t UNP_STALL_FPU_RD = 0x0;
     constexpr static std::uint32_t UNP_STALL_UNP_WR = 0x1;
 
     constexpr static std::uint32_t UNP_CLRSRC_RESET_ALL_BANKS = 0x1;
-    constexpr static std::uint32_t UNP_CLRSRC_ONE_FP16A       = 0x0;
-    constexpr static std::uint32_t UNP_CLRSRC_ONE_FP16B       = 0x1;
-    constexpr static std::uint32_t UNP_CLRSRC_ONE_TF32        = 0x1;
-    constexpr static std::uint32_t UNP_CLRSRC_ONE_INT8        = 0x2;
 };
 
 struct p_set_inc_sel
