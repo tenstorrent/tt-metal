@@ -1428,3 +1428,43 @@ Trace blockers for a chunk-to-chunk trace (code reading at b8a57740c25):
   novel 164.7 / 188.1 / 172.4, code 162.3 / 182.7 / 170.1.
 - The planner's run_prepared: 55.7 us a call in a tight loop (same io), 58.1 alternating layers' io, ~95 us inside
   the chunk: the patches are not the cost; the rest is the 32-program dispatch with cold host caches (DS41-131).
+
+## The fused head's and the combine's per-chip programs differ in structure, not only in arg values
+
+(DS41-264; P.63b.) What one program for the whole mesh needs.
+
+Diff of the 32 per-chip programs (DS41_MESH_DIFF=<prefix>, diagnostic; common/mesh_uniform.cpp
+mesh_uniformity_report / mesh_views_dump; 8x4, novel chunk 1, MOE_REPLICAS=prev):
+
+| op | kernels | chip-dependent args a chip | structural differences |
+|---|---|---|---|
+| fused head | 11 (3 compute) | 4,280 per-core + 5 common (DM 4,046, compute 3,290 incl. different lengths) | 4 defines carry the chip index (RA_ME_ xg_sender / xg_watcher / ra_y_send / routers, RAP_ME routers, RT_SMAP_ME, RW_ME router_compute); arg-list lengths differ by chip (xg_sender 296 / 235, se_ncrisc 39 / 63, se_compute 44..60); patched address args sit at chip-dependent indices (xg_sender: +2 / +4 shifts); router_compute arg 10 is an address with a per-column offset. Core ranges, CBs, semaphores, compile args: the same. |
+| combine (flat expert + combine) | 17 (4 compute) | 3,047 per-core (down_weight_reader 31 a core: DRAM bank coordinates; port writer up to 317; accumulator reader up to 96; accumulator_compute 1) | port cores and accumulator cells differ by chip (port_placement.cpp place_nearest: next to each chip's Ethernet cores) - so CB and semaphore core ranges differ too. Union: 14 port cores, 21 accumulator cells. |
+
+Mechanism built (MESH_PROGRAMS2=on, fork option mesh_program; head only, the combine not started):
+* host (assemble_mesh_program): chip 0's descriptor, every list padded to the kernel's longest (free: the
+  dispatcher already sends each core of a kernel at the kernel's max length); defines that differ become an arg
+  (`(get_arg_val<uint32_t>(n))`); per chip and slot an entry: delta (added: constants, or the same buffer at another
+  offset), absolute (a constant where chip 0 has an address), anchor + offset (an address read at another index
+  than chip 0: one extra arg per core and buffer the host patches per call). Table: DRAM, replicated, a 960 B page
+  per (core unit, fabric chip id); landing: an L1_SMALL page a core. Head: 220 units, 4,599 entries (chip 1), 138
+  anchors, 6.76 MB table, 26,113 args a launch (per-chip legacy ~20.7K). A host check rebuilds every chip's args
+  from the mesh args and its rows (passed).
+* device (common/device/kernels/mesh_overlay.hpp): DM kernels read their row by my_device_id and apply it before
+  anything else; a compute kernel's entries are applied by the first DM kernel on its core into the three TRISC arg
+  copies (launch message rta_offset[2..4]) and released by a flag arg the TRISCs spin on.
+
+## The first mesh fused-head launch (MESH_PROGRAMS2=on) hung the 8x4
+
+(DS41-266; P.63b.) 1-layer probe, sides on (P.63) then mesh; on ran clean and bit-identical; the mesh head's
+first launch timed out (metal_context.cpp:806), then PCIe MMIO timeouts; triage could not attach; the safe runner
+reset and recovered the box ("All Detected Links are healthy"). No further device run (owner safety rule).
+Candidates, in the order to check (on a 2x2 first, or in slow dispatch with the watcher):
+1. the compute release: trisc_args() address (watcher off: no count word), the "fence" ordering on BH, TRISCs
+   spinning with invalidate_l1_cache(); a TRISC that never sees its flag hangs the program;
+2. a staged compute kernel whose stager DM kernel reads its args before... (no: the prologue is first) - check
+   every head kernel with MESH_OVL_FLAG has a DM kernel with a unit on every one of its cores;
+3. the NOC read of the row: InterleavedAddrGen page id (unit x chip ids + my_device_id) and an L1_SMALL landing
+   at the same address on every core (MeshBuffer sharded over the unit cores);
+4. a wrongly applied delta on a fabric connection arg (eth channel, EDM addresses) - the host check covers values,
+   not the device's decoding (desc bits: slot 14 | common 14 | type 15-16 | anchor 17-30).

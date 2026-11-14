@@ -1624,3 +1624,55 @@ The one this change broke (test_seeded: `git add state.json`) is fixed.
 - Re-run: probe `PROBE_SIDES=legacy,on,legacy,on scripts/run_safe_pytest.sh --run-all --no-precompile
   models/demos/deepseek_v41_flash_d_p/tests/test_mesh_program_probe.py -s` (~2 min); gate unit `gate P.63 --spec
   <spec> --check --unit 'P.63#test_moe_prev_replicas'` (~11 min, devjob).
+
+## P.63b (perf, attempt 1): one program for the whole mesh, fused head and combine (MESH_PROGRAMS2 legacy | on) - HUNG, stopped
+- Expected per chunk (the estimate I worked from before writing code; this section itself was written at the end,
+  after the hang): host -5 to -7 ms (40 MoE layers x ~150 us: the head's ~2 us and the combine's ~3 us a chip of
+  cache-hit patching after P.63, x31 chips saved, plus the framework's per-program hit work); device +0.1 to +0.2 ms
+  (every head / combine kernel reads its table row from DRAM before it starts, ~1-2 us an op); wall: most of the host
+  cut while the chunk is host-bound (P.63: host ~156 ms vs device ~145-150 ms).
+- Terms: per-chip program = today's 32 programs a launch, one per chip; mesh program = ONE program every chip runs
+  with identical runtime args; table = a DRAM buffer (the same on every chip) holding, per chip, what differs; a chip
+  finds its row by its fabric chip id (my_device_id in the routing table in its L1, DS41-225's pattern). us a call =
+  host time of one op launch.
+- STEP 1, what differs between the 32 programs (DS41_MESH_DIFF=<prefix>, diagnostic, 2-layer probe; DS41-264):
+  head - kernels, cores, CBs, semaphores, compile args the same; 4 defines carry the chip index; 4,280 per-core args a
+  chip differ (compute kernels included, lists of chip-dependent length); patched addresses at chip-dependent indices.
+  combine - port and accumulator cores differ by chip (placed next to each chip's Ethernet cores), so CBs and
+  semaphores differ; 3,047 args a chip differ. And each launch copies its args to every chip: ~83 KB (head) / ~79 KB
+  (combine) a chip (DS41-265) - the ~220 us "enqueue" a mesh program keeps (DS41-258), and why per-chip data must not
+  go into the args.
+- Built (head only): fork option `fused_head(mesh_program=)`, hashed; model setting MESH_PROGRAMS2 (tt/settings.py).
+  common/mesh_uniform.cpp assembles the mesh program from the per-chip descriptors (args padded to each kernel's
+  longest - free, the dispatcher sends max length; differing defines -> args; per chip and slot a delta, absolute, or
+  anchor + offset entry; anchors = extra args the head patches per call) and checks on the host that every chip's args
+  are rebuilt exactly from the mesh args and its rows. common/device/kernels/mesh_overlay.hpp: data-movement kernels
+  apply their row first thing; a compute kernel's entries are applied by a data-movement kernel on its core into the
+  TRISC args, released by a flag. Head: 220 units, 4,599 entries (chip 1), 138 anchors, table 6.76 MB, 26,113 args a
+  launch (legacy ~20.7K: +6 % bytes copied). ra_plan.hpp / route_words.hpp read the chip index at run time.
+- Runs (8x4, tests/test_mesh_program_probe.py, 1 layer, novel chunks 0..3): (1) before the anchors / compute
+  entries the assembly refused and fell back to per-chip programs: outputs bit-identical to P.63 (on vs mesh side);
+  (2) with them the assembly passed its host check, and the FIRST mesh head launch HUNG: dispatch timeout
+  (metal_context.cpp:806), PCIe MMIO timeouts, triage could not attach; the safe runner reset and recovered the box
+  ("All Detected Links are healthy"). I did not trigger the reset. Owner safety rule: no device run after that.
+- Not measured: host us a call, host / device / wall per chunk on novel and code chunks 1..10, the 51,200 position -
+  nothing ran in mesh mode. The P.63 numbers stand.
+- Not done: the combine's mesh program (needs a uniform port / accumulator placement option in port_placement.cpp /
+  combine_program.cpp first; the overlay machinery is generic and would carry its args, but its flat expert and combine
+  builders create Programs, not descriptors, so the assembly needs a Program-path variant and a define plumbed into
+  their kernel creation).
+- State left for the orchestrator: MESH_PROGRAMS2 default legacy (the gate's frozen tests then run P.63's path,
+  unchanged); MESH_PROGRAMS2=on raises at model load (a clean error, not another hang and reset). The A/B "change on"
+  side (MESH_PROGRAMS2=on) will therefore fail at load: do not expect a measurement from this attempt.
+- Next (for whoever picks it up): find the hang off the 8x4 first (2x2 or loudbox with TT_METAL_WATCHER, or slow
+  dispatch); suspects in DS41-266's detail (compute flag release, the row's NOC read, desc decoding). Before more
+  work, weigh it: DS41-265 says the args' bytes copied 32x (~2.6 MB a head call) are the bigger host cost, and a mesh
+  program keeps them; fewer arg bytes (common args, a DRAM arg table per layer) would cut host time for both paths.
+- Cores (rule 18): none changed (the same kernels on the same cores). Prepared (OV-23): no Python-built op touched.
+  Fork suites not run (OV-25). Gate not run (stopped after the hang).
+- Re-run (do NOT run the mesh side on the 8x4 until the cause is fixed): diff `DS41_MESH_DIFF=/tmp/p63b/v
+  PROBE_LAYERS=2 PROBE_PASSES=1 PROBE_SIDES=on PROBE_COMPARE=0 scripts/run_safe_pytest.sh --run-all --no-precompile
+  models/demos/deepseek_v41_flash_d_p/tests/test_mesh_program_probe.py -s` (~1 min); mesh side needs
+  PROBE_ALLOW_MESH=1 and PROBE_SIDES=on,mesh.
+
+> Overseer, 2026-11-14 15:45: P.63b was STOPPED and its code REVERTED (mesh head hung the 8x4 on first launch; DS41-264/265: small payoff for a large rewrite). Its diff is kept in /scratch/dnijemcevic/replication/p63b/. The entries DS41-264..266 stay as findings.
