@@ -114,7 +114,7 @@ jobs:
       options: "--label runner-mode=sim"
     steps:
       - name: Checkout code
-        uses: tenstorrent/.github/actions/cachew-checkout@a1e96bdf5ba27204ec4a54c329c1e47415034496 # cachew checkout
+        uses: tenstorrent/.github/actions/cachew-checkout@df94420209fa5b7ef3301d610e06c76b1f047b1c # cachew checkout
         timeout-minutes: 20
         with:
           ref: ${{ inputs.ref || github.sha }}
