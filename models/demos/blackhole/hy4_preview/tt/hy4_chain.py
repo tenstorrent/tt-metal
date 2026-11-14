@@ -254,32 +254,48 @@ class Hy4ChainLayer:
         ttnn.deallocate(sh)
         return y
 
+    def _dbg(self, taps, name, t):
+        """debug taps: host copy (row r = device (r, 0)) of an intermediate, first 32 token rows."""
+        if taps is None:
+            return
+        c = int(self.ch.md.shape[1])
+        devs = ttnn.get_device_tensors(t)
+        taps[name] = [ttnn.to_torch(devs[r * c]).float() for r in range(int(self.ch.md.shape[0]))]
+
     def prefill_chunk(self, x4, start, ids_by_layer, taps=None):
-        """x4 [1,4,n,D] fp32 -> x4' (same layout). ids_by_layer: layer -> top-k ids of the full-indexer layers (IndexCache carry)."""
+        """x4 [1,4,n,D] fp32 -> x4' (same layout). ids_by_layer: layer -> top-k ids of the full-indexer layers (IndexCache carry).
+        taps (dict, debugging): host copies of pre_a, post_a, h_a, a, x4a, pre_m, post_m, h_m, y."""
         pre, post = self.ihc_a.pre_post(x4)
+        self._dbg(taps, "pre_a", pre)
+        self._dbg(taps, "post_a", post)
         raw = self.ihc_a.collapse(x4, pre)
         ttnn.deallocate(pre)
         h = self._norm(raw, self.w_in)
         ttnn.deallocate(raw)
+        self._dbg(taps, "h_a", h)
         src = self.spec.indexer_source
         ids_in = None if self.spec.indexer == FULL else ids_by_layer[src]
         a, ids = self.attn.prefill_chunk(h, start, ids_in=ids_in)
         ttnn.deallocate(h)
+        self._dbg(taps, "a", a)
         if self.spec.indexer == FULL:
             if self.L in ids_by_layer:
                 ttnn.deallocate(ids_by_layer[self.L])
             ids_by_layer[self.L] = ids
         x4 = self.ihc_a.expand(x4, a, post)
         ttnn.deallocate(a)
-        if taps is not None:
-            taps["after_attn"] = x4
+        self._dbg(taps, "x4a", x4)
         pre, post = self.ihc_m.pre_post(x4)
+        self._dbg(taps, "pre_m", pre)
+        self._dbg(taps, "post_m", post)
         raw = self.ihc_m.collapse(x4, pre)
         ttnn.deallocate(pre)
         h = self._norm(raw, self.w_post)
         ttnn.deallocate(raw)
+        self._dbg(taps, "h_m", h)
         y = self._mlp_prefill(h)
         ttnn.deallocate(h)
+        self._dbg(taps, "y", y)
         x4 = self.ihc_m.expand(x4, y, post)
         ttnn.deallocate(y)
         return x4
