@@ -19,7 +19,9 @@ Tensor padded_slice(
     ttsl::Span<const T> step,
     const MemoryConfig& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-    const std::optional<float>& pad_value = std::nullopt);
+    const std::optional<float>& pad_value = std::nullopt,
+    const std::optional<Tensor>& prologue_scale = std::nullopt,
+    const std::optional<Tensor>& prologue_shift = std::nullopt);
 
 template <typename T>
 Tensor padded_slice(
@@ -29,7 +31,9 @@ Tensor padded_slice(
     const ttsl::SmallVector<T>& step,
     const MemoryConfig& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-    const std::optional<float>& pad_value = std::nullopt) {
+    const std::optional<float>& pad_value = std::nullopt,
+    const std::optional<Tensor>& prologue_scale = std::nullopt,
+    const std::optional<Tensor>& prologue_shift = std::nullopt) {
     return padded_slice(
         input_tensor,
         ttsl::Span<const T>(begins),
@@ -37,7 +41,9 @@ Tensor padded_slice(
         ttsl::Span<const T>(step),
         memory_config_arg,
         optional_output_tensor,
-        pad_value);
+        pad_value,
+        prologue_scale,
+        prologue_shift);
 }
 
 }  // namespace ttnn::experimental

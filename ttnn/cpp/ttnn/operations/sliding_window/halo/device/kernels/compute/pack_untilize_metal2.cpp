@@ -20,6 +20,8 @@
 //   dfb::out1           — untilized output DFB for odd-numbered blocks, bound PRODUCER; only when the
 //                         factory defines SEPARATE_OUT1. Without the define, odd blocks are packed into
 //                         dfb::out0 as well (one DFB under both of the kernel's output names).
+//   dfb::scale, dfb::shift — one row of [1, C] scale / shift tiles, bound CONSUMER; only when the factory
+//                         defines PROLOGUE_AFFINE (the untilize then writes silu(x * scale + shift)).
 //   args::tiles_per_row — compile-time arg
 //   args::block_size    — compile-time arg
 //   args::total_blocks  — runtime arg
@@ -33,6 +35,9 @@
 constexpr uint32_t MAX_PACK_UNTILIZE_WIDTH = 8;
 constexpr uint32_t NUM_RISCV_DATA_MOVEMENT_CORES = 2;
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
+#ifdef PROLOGUE_AFFINE
+#include "ttnn/cpp/ttnn/kernel_lib/untilize_affine_helpers.hpp"
+#endif
 
 void kernel_main() {
     constexpr uint32_t src_dfb = dfb::src;
@@ -48,6 +53,11 @@ void kernel_main() {
     const uint32_t total_blocks = get_arg(args::total_blocks);
 
     compute_kernel_hw_startup(src_dfb, out_dfb0);
+#ifdef PROLOGUE_AFFINE
+    compute_kernel_lib::
+        untilize_affine_silu<tiles_per_row, block_size, src_dfb, dfb::scale, dfb::shift, out_dfb0, out_dfb1>(
+            total_blocks);
+#else
 
     // Initialize once before the loop
     compute_kernel_lib::untilize_init<tiles_per_row, src_dfb, out_dfb0>();
@@ -75,4 +85,5 @@ void kernel_main() {
 
     // Uninit after loop
     compute_kernel_lib::untilize_uninit<tiles_per_row, src_dfb, out_dfb0>();
+#endif
 }
