@@ -66,6 +66,10 @@
 #include "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_fused_activation.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/adaptive_chunk.hpp"
 
+#ifdef RING_PROBE_NOMM
+#define matmul_block(...) ((void)0)  // TIMING PROBE ONLY: no MACs, all CB handshakes kept
+#endif
+
 #ifdef FUSE_BIAS
 // Row-broadcast bias add (gpt-oss). Bias is a (1, N) tensor tiled to one
 // tile-row; add_tiles_bcast_rows adds its row 0 to every row of the output

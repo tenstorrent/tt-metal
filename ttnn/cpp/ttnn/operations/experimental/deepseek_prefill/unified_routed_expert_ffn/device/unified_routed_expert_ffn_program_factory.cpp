@@ -1041,6 +1041,19 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     if (ring_weights) {
         reader_defines.emplace_back("RING_WEIGHTS", "1");
         reader_defines.emplace_back("ADAPT_GRID_Y", std::to_string(GRID_Y));
+        // MOE_RING_FAST=1 (default off): single-packet weight reads with a pre-set NoC command-buffer state (weight_runs.hpp)
+        if (const char* rf = std::getenv("MOE_RING_FAST"); rf != nullptr && std::string(rf) != "0") {
+            reader_defines.emplace_back("RING_FAST_READ", "1");
+        }
+        // MOE_RING_PROBE=contig|down|both: TIMING PROBE ONLY (wrong data, right bytes), see weight_runs.hpp probe_gu/probe_d
+        if (const char* pr = std::getenv("MOE_RING_PROBE"); pr != nullptr) {
+            const std::string v = std::string(",") + pr + ",";
+            if (v.find(",noread,") != std::string::npos) reader_defines.emplace_back("RING_PROBE_NOREAD", "1");
+            if (v.find(",nox,") != std::string::npos) reader_defines.emplace_back("RING_PROBE_NOX", "1");
+            if (v.find(",time,") != std::string::npos) reader_defines.emplace_back("RING_PROBE_TIME", "1");
+            if (v.find(",contig,") != std::string::npos) reader_defines.emplace_back("RING_PROBE_CONTIG", "1");
+            if (v.find(",down,") != std::string::npos) reader_defines.emplace_back("RING_PROBE_DOWN", "1");
+        }
         if (ring_cores != 8 ||
             std::getenv("DSV41_RING_N_KERNEL") !=
                 nullptr) {  // table-driven reads (RingWeightsN); 8 cores keep the original reads unless asked
@@ -1131,6 +1144,15 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     if (ring_weights) {
         writer_kernel_desc.defines.emplace_back("RING_WEIGHTS", "1");
         writer_kernel_desc.defines.emplace_back("ADAPT_GRID_Y", std::to_string(GRID_Y));
+        if (const char* rf = std::getenv("MOE_RING_FAST"); rf != nullptr && std::string(rf) != "0") {
+            writer_kernel_desc.defines.emplace_back("RING_FAST_READ", "1");
+        }
+        if (const char* pr = std::getenv("MOE_RING_PROBE"); pr != nullptr) {
+            const std::string v = std::string(",") + pr + ",";
+            if (v.find(",noread,") != std::string::npos) writer_kernel_desc.defines.emplace_back("RING_PROBE_NOREAD", "1");
+            if (v.find(",contig,") != std::string::npos) writer_kernel_desc.defines.emplace_back("RING_PROBE_CONTIG", "1");
+            if (v.find(",down,") != std::string::npos) writer_kernel_desc.defines.emplace_back("RING_PROBE_DOWN", "1");
+        }
         if (ring_cores != 8 || std::getenv("DSV41_RING_N_KERNEL") != nullptr) {
             writer_kernel_desc.defines.emplace_back("RING_CORES", std::to_string(ring_cores));
         }
@@ -1222,6 +1244,10 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     // PACKER_L1_ACC controls cross-K-block accumulation via packer L1 RMW.
     tt::tt_metal::KernelDescriptor::Defines compute_defines;
     compute_defines.emplace_back("PACKER_L1_ACC", "1");
+    if (const char* pr = std::getenv("MOE_RING_PROBE"); pr != nullptr) {  // TIMING PROBE ONLY
+        const std::string v = std::string(",") + pr + ",";
+        if (v.find(",nomm,") != std::string::npos) compute_defines.emplace_back("RING_PROBE_NOMM", "1");
+    }
     // Dst-accumulator mode -> compute kernel: the fused-binary-activation dst budget and
     // the SFPU fp32-dest template derive from this, staying in sync with
     // DST_CAPACITY / ComputeConfig.fp32_dest_acc_en (single source above).

@@ -26,6 +26,20 @@
 // contiguous run exists: run() collapses to 1 and this degenerates to the per-tile read.
 namespace unified_routed_expert_ffn {
 
+#ifdef RING_FAST_READ
+// RING_FAST_READ: single-packet reads with a pre-set command-buffer state (moe-compute-kernel, X37). The ring weights of one
+// (ring core, expert) slice sit in ONE DRAM bank at consecutive tile pages, so the NoC target (bank x,y + address high bits) and the
+// size are set once per call and each tile costs only the in-bank address + L1 destination register writes, instead of a
+// TensorAccessor bank lookup (div/mod) + a full read command per tile. The state lives in the NoC read command buffer, which any
+// other read (accessor path, mcast sem ops do not touch it) overwrites: every call that uses it sets it first.
+FORCE_INLINE void ring_fast_set(uint64_t noc_addr, uint32_t bytes, uint8_t noc_id) {
+    noc_async_read_one_packet_set_state<false>(noc_addr, bytes, 0, noc_id);
+}
+FORCE_INLINE void ring_fast_read(uint32_t src_lo, uint32_t dst, uint8_t noc_id) {
+    noc_async_read_one_packet_with_state<true, false>(src_lo, dst, 0, noc_id);
+}
+#endif
+
 template <uint32_t SHARD_W = 0>
 struct WeightRuns {
     // Length of the maximal contiguous run starting at tile column j, clipped to end.
@@ -112,7 +126,36 @@ struct RingWeights {
         uint32_t ncols,
         uint32_t l1_base,
         uint32_t page_bytes) {
+#ifdef RING_PROBE_NOREAD
+        return;
+#endif
         const uint32_t base = (c * E + e) * PAGES_PER_CE;
+#ifdef RING_FAST_READ
+        const uint8_t nid = noc.get_noc_id();
+        const uint64_t a0 = acc.get_noc_addr(base, 0, nid);
+        const uint32_t lo = static_cast<uint32_t>(a0);
+        ring_fast_set(a0, page_bytes, nid);
+        for (uint32_t g = 0; g < FULL_G; ++g) {
+            const uint32_t pg = (g * R + row) * 4 + is_up;
+#pragma GCC unroll 2
+            for (uint32_t i = 0; i < 2; ++i) {
+                const uint32_t nl = 2 * g + i;
+                if (nl < ncols) {
+                    ring_fast_read(lo + (pg + 2 * i) * page_bytes, l1_base + nl * page_bytes, nid);
+                }
+            }
+        }
+        if constexpr (HALF) {
+            const uint32_t nl = 2 * FULL_G;
+            if (nl < ncols) {
+                ring_fast_read(
+                    lo + (FULL_G * R * 4 + (row >> 1) * 4 + 2 * (row & 1) + is_up) * page_bytes,
+                    l1_base + nl * page_bytes,
+                    nid);
+            }
+        }
+        return;
+#endif
 #pragma GCC unroll 2
         for (uint32_t g = 0; g < FULL_G; ++g) {
             const uint32_t page0 = base + (g * R + row) * 4 + is_up;
@@ -142,15 +185,69 @@ struct RingWeights {
         }
     }
 
+#if defined(RING_PROBE_CONTIG) || defined(RING_PROBE_DOWN)
+    // TIMING PROBE ONLY (wrong data placement, right bytes): gate (is_up=0) / up (is_up=1) read as HALF of the block-columns,
+    // each block-column's w K rows x 4 tiles as ONE contiguous read (what a layout-aware compute kernel could consume).
+    template <class Acc>
+    static FORCE_INLINE void probe_gu(
+        const Noc& noc, const Acc& acc, uint32_t is_up, uint32_t e, uint32_t c, uint32_t row0, uint32_t w, uint32_t l1_base,
+        uint32_t page_bytes) {
+        const uint32_t base = (c * E + e) * PAGES_PER_CE;
+        for (uint32_t gi = 0; gi < FULL_G / 2; ++gi) {
+            const uint32_t g = gi + is_up * (FULL_G / 2);
+            noc.async_read(
+                acc,
+                CoreLocalMem<uint32_t>(l1_base + gi * w * 4 * page_bytes),
+                w * 4 * page_bytes,
+                {.page_id = base + (g * R + row0) * 4},
+                {});
+        }
+    }
+    // TIMING PROBE ONLY: rows [row0, row0 + nrows) of one down K-block (inside one rotated chunk) as GD contiguous reads
+    template <class Acc>
+    static FORCE_INLINE void probe_d(
+        const Noc& noc, const Acc& acc, uint32_t e, uint32_t c, uint32_t row0, uint32_t nrows, uint32_t l1_base, uint32_t page_bytes) {
+        const uint32_t ch = row0 / CH;
+        const uint32_t j = row0 - ch * CH;
+        const uint32_t q = (c + NC - ch) % NC;
+        const uint32_t r = q * CH + j;
+        const uint32_t base = (c * E + e) * GD;
+        for (uint32_t g = 0; g < GD; ++g) {
+            noc.async_read(
+                acc,
+                CoreLocalMem<uint32_t>(l1_base + g * nrows * 4 * page_bytes),
+                nrows * 4 * page_bytes,
+                {.page_id = ((base + g) * RD + r) * 4},
+                {});
+        }
+    }
+#endif
+
     // down tiles of logical K row `row`, hidden columns [20 c, 20 c + 4 GD) of column c, into l1_base + n * page_bytes
     template <class Acc>
     static FORCE_INLINE void read_d(
         const Noc& noc, const Acc& acc, uint32_t e, uint32_t c, uint32_t row, uint32_t l1_base, uint32_t page_bytes) {
+#ifdef RING_PROBE_NOREAD
+        return;
+#endif
         const uint32_t ch = row / CH;
         const uint32_t j = row - ch * CH;
         const uint32_t q = (c + NC - ch) % NC;
         const uint32_t r = q * CH + j;
         const uint32_t base = (c * E + e) * GD;
+#ifdef RING_FAST_READ
+        {
+            const uint8_t nid = noc.get_noc_id();
+            const uint32_t pg0 = (base * RD + r) * 4;
+            const uint64_t a0 = acc.get_noc_addr(pg0, 0, nid);
+            const uint32_t lo = static_cast<uint32_t>(a0);
+            ring_fast_set(a0, 4 * page_bytes, nid);
+            for (uint32_t g = 0; g < GD; ++g) {
+                ring_fast_read(lo + g * RD * 4 * page_bytes, l1_base + 4 * g * page_bytes, nid);
+            }
+            return;
+        }
+#endif
         for (uint32_t g = 0; g < GD; ++g) {
             noc.async_read(
                 acc,
@@ -325,6 +422,23 @@ struct RingWeightsN {
         uint32_t l1_base,
         uint32_t page_bytes) {
         const uint32_t base = (c * E + e) * GU.pages;
+#ifdef RING_FAST_READ
+        {
+            const uint8_t nid = noc.get_noc_id();
+            const uint64_t a0 = acc.get_noc_addr(base, 0, nid);
+            const uint32_t lo = static_cast<uint32_t>(a0);
+            ring_fast_set(a0, page_bytes, nid);
+#pragma GCC unroll 9
+            for (uint32_t j = 0; j < COLS; ++j) {
+                if (j < ncols) {
+                    const uint32_t off = GU.half[j] ? GU.off[j] + (row >> 1) * 4 + 2 * (row & 1) + is_up
+                                                    : GU.off[j] + row * 4 + is_up + 2 * GU.sub[j];
+                    ring_fast_read(lo + off * page_bytes, l1_base + j * page_bytes, nid);
+                }
+            }
+            return;
+        }
+#endif
 #pragma GCC unroll 9
         for (uint32_t j = 0; j < COLS; ++j) {
             if (j < ncols) {
@@ -351,6 +465,27 @@ struct RingWeightsN {
                 (ch <= cr) ? CH.cum[cr + 1] - CH.cum[ch + 1] : NT - (CH.cum[ch + 1] - CH.cum[cr + 1]);
             const uint32_t r = before + o;
             const uint32_t base = (cr * E + e) * GD;
+#ifdef RING_FAST_READ
+            const uint8_t nid = noc.get_noc_id();
+            const uint64_t a0 = acc.get_noc_addr((base * RD + r) * 4, 0, nid);
+            const uint32_t lo = static_cast<uint32_t>(a0);
+            ring_fast_set(a0, 4 * page_bytes, nid);
+            for (uint32_t g = 0; g < GD; ++g) {
+                const int32_t left = static_cast<int32_t>(DT.tiles[s]) - static_cast<int32_t>(4 * g);
+                if (left >= 4) {
+                    ring_fast_read(lo + g * RD * 4 * page_bytes, l1_base + (DT.dst[s] + 4 * g) * page_bytes, nid);
+                } else if (left > 0) {
+                    // partial group (always the last of this sub-core): accessor read (clobbers the state, re-set per sub-core)
+                    noc.async_read(
+                        acc,
+                        CoreLocalMem<uint32_t>(l1_base + (DT.dst[s] + 4 * g) * page_bytes),
+                        static_cast<uint32_t>(left) * page_bytes,
+                        {.page_id = ((base + g) * RD + r) * 4},
+                        {});
+                }
+            }
+            continue;
+#endif
             for (uint32_t g = 0; g < GD; ++g) {
                 const int32_t left = static_cast<int32_t>(DT.tiles[s]) - static_cast<int32_t>(4 * g);
                 if (left > 0) {
