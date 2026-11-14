@@ -1339,3 +1339,50 @@ predicts 1.21 ms for those layers at 0.89 ms a copy edge; recalibrated it plans:
 chunk (44 copies), code 0.06; 1.6 ms -> 0.04 / 0. A copy tree lands in 1.25 ms (P.55b, one tree) to ~1.9 ms (19
 receivers of one expert, depth ~5), when the off layer's busiest chip is done at 1.0-1.9 ms: a copy within the call
 cannot arrive before the receiver would have to start the replica.
+
+## P.56's own host cost makes the chunk host-bound; a one-layer trace replays bit-identical
+DS41-251: where the host time of a chunk goes (P.57, 8x4, 2026-11-14).
+Measured by tests/test_host_bound.py (one process, shipped settings + MOE_FILL=piggyback, ENGRAM_TABLE=resident; side
+off = MOE_REPLICAS=prev switched off in the loaded model). host = first host call to the last op enqueued; wall = to
+the end of the closing sync; device = program real-time profiler, slowest chip a program, summed.
+
+| chunk | host | wall | device | regime |
+|---|---|---|---|---|
+| novel c1-10 mean, off | 160.5 | 180.9 | ~175-177 | device-bound (wall = device + ~4-8) |
+| novel c1-10 mean, prev | 185.0 | 186.6 | ~156-160 | host-bound (wall = host + 1.6 drain) |
+| p51200, off | 163.5 | 202.5 | 194.6 | device-bound (wall = device + 7.9) |
+| p51200, prev | 181.7 | 184.1 | 162.8 | host-bound (wall = host + 2.4) |
+
+Host parts, novel chunk 10, prev (instrumented 195.7 ms vs clean 190.3; the 5.4 ms wrapper overhead sits mostly in b):
+(a) Python in tt/ 34.4 (attention 11.0, ffn_residual 7.0, experts 4.1; ~6 ms of it is ttnn.deallocate via ccl.dealloc,
+1211 calls); (b) ttnn op launches 139.9 for 1732 calls (C++ 135.3, Python-registered forks 4.6); (c) run_prepared 8.9
+(planner 3.9, window_send 3.0); (d) transfers / waits 10.0 (the layer-1 wait for the async engram job 7.6, the engram
+rows' copy 2.4); (e) per chunk 2.5 (begin_chunk 0.5, embed ids 1.4, P.56 guard 0.6); (f) other 0.
+Top launches (us a call x calls): routed_experts_combine 731 x 40 (402 off), fused_head 301 x 40, slice 54 x 211,
+high_bw_all_gather 106 x 92, mhc_post 100 x 82, linear 55 x 144, rotary_embedding_indexed 56 x 136, slice_write 43 x
+164, update_padded_kv_cache 87 x 48, topk_large_indices 437 x 9, allocate_tensor_on_device 61 x 58, sparse_dispatch_2d
+89 x 40. Host by section (Python + its launches): experts 64.7 (50.5 off), attention 43.0, ffn_residual 27.3,
+compressor 13.4, engram_rows 10.0 (the wait), indexer 9.0, kv 8.5, q_a 7.3, attn_residual 5.9.
+cProfile (testing/profile.py host_profile, p51200 prev): decorators.py FastOperation.__call__ self 130 ms of ~192, the
+engram worker lock 11.7 ms.
+
+Trace prototype (side off, layer 21 at novel chunk 10, input cloned each run, 47 programs): capture after 3 warm runs
+(no "Cannot load new binaries": DS41-100's address-keyed caches are gone), 20 replays bit-identical to the untraced
+output (which repeats bit for bit), no hang. Host a layer 6.45 -> 0.020 ms; device a layer 3.93 (rt profiler) -> 3.54
+(10 replays back to back / 10).
+
+Trace blockers for a chunk-to-chunk trace (code reading at b8a57740c25):
+1. per-start host arguments baked in the commands: RopeTable.rows (ttnn.slice at start), update_padded_kv_cache
+   kv_actual_global / valid_global, the window server row, DeviceScalars.at(start), compressor slice_write row offsets,
+   ckv_bfp4's row0 value slot, ring_indexer_score_dsa chunk_start_idx and kv_len (the program grows with the prefix),
+   the window start class. Lift: one trace per start (memory not measured) or start as a device tensor (K-48 style).
+2. state written per chunk into tensors allocated in the chunk and kept after it (top-k / candidate stores keyed by
+   start, DS41-2). Lift: preallocated per-position stores.
+3. host inputs: token ids (embed: a new from_torch tensor a chunk) -> a fixed input buffer; engram rows already go into
+   reused buffers (tt/engram.py copy_host_to_device_tensor) but layer 1 waits for the worker inside the chunk -> finish
+   (or prefetch one chunk ahead) before the replay.
+4. P.56: the host guard (steady chunks are 40/40 ready; chunk 0 runs off -> keep chunk 0 eager) and the combine's ring
+   slot `ring[o % 44]` chosen on the host each call (40 calls a chunk: the pattern repeats every 11 chunks). Lift: the
+   slot from the device ordinal G[0], or W a multiple of the calls a chunk.
+5. not blockers: host reads in the chunk (0; MOE_COUNTS off), CCL semaphores (host-cycled handles and the combine's
+   device call counters replay fine in a fixed call sequence: the prototype), allocations inside the capture.

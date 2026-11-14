@@ -1,0 +1,106 @@
+{
+ "used": [
+  {
+   "id": "DS41-99",
+   "how": "started from its breakdown (host a call x ~1900 calls, begin_chunk); re-measured: ~1730 launches at ~80 us, begin_chunk now 0.5 ms but a 7.6-11.7 ms engram wait at layer 1",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-100",
+   "how": "trace prototype captures only after the program cache stops growing (warm until 2 quiet runs); found the address-keyed blocker gone (warm after 3 runs)",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-205",
+   "how": "its 'trace would take the host' claim tested: one-layer replay host 6.45 -> 0.02 ms",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-249",
+   "how": "P.56's device gain hidden by the wall: located the cause in P.56's own host cost (combine 402 -> 731 us, planner)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-228",
+   "how": "measured real novel chunks back to back besides the random-id p51200 chunk",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-2",
+   "how": "top-k / candidate stores per chunk listed as a trace blocker (allocated in the chunk, kept after)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-48",
+   "how": "start as a device tensor named as the lift for per-start program args",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [
+  {
+   "id": "DS41-100",
+   "evidence": "tests/test_host_bound.py trace prototype (P.57, 8x4): capture succeeded after 3 warm runs with no 'Cannot load new binaries'; the WeightedCombine address-keyed descriptor path is not on the default MOE_BLOCK_SRC=main path",
+   "cited": true
+  },
+  {
+   "id": "DS41-249",
+   "evidence": "P.57: with prev off the novel chunk is device-bound (host 160.5, wall 180.9, device ~177 ms c1-10); it is P.56's own +18-24 ms host that makes the chunk host-bound, not a pre-existing host floor",
+   "cited": false
+  }
+ ],
+ "missing": [
+  "a per-part host breakdown tool (Python / launches / prepared / waits) existed only as cProfile; tests/test_host_bound.py HostClock now does it",
+  "the per-call host cost of the moe_block_main C++ ops (fused_head ~300 us, combine ~400-730 us) was not recorded anywhere"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "no kernel, weight or work changed (analysis + test only)"
+  },
+  {
+   "id": "OV-23",
+   "answer": "done",
+   "evidence": "every Python-built op seen in the chunk goes through run_prepared (window_send, expert_prev planner, ckv_bfp4, fp8_rows, pair_pool; 8.9 ms a chunk, 40-99 us a call except bfp_round 253 us x 4); the Python-registered ops not prepared-dispatched are allocate_tensor_on_device (61 us x 58) and deallocate (14 us x 42), which are not program builders; no new op added"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork suite run; only the new test via the gate unit"
+  }
+ ],
+ "cited_only": [
+  "DS41-251"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "moe_replication",
+  "task": "P.57",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-14T06:27:12",
+  "head": "b8a57740c25",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.57.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.57_host_bound.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.57_host_off_p51200.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.57_host_off_p51200.pstats",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.57_host_prev_p51200.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.57_host_prev_p51200.pstats",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.57.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_host_bound.py"
+  ]
+ }
+}

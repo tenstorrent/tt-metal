@@ -1,0 +1,1372 @@
+{
+ "task": "P.57",
+ "t": "2026-11-14T06:19:56",
+ "mesh": [
+  8,
+  4
+ ],
+ "summary": {
+  "off": {
+   "host_ms": 182.21068999991985,
+   "wall_ms": 189.31887399958214,
+   "device": {
+    "device_ms": 177.16279757421896,
+    "span_ms": 219.97289073364257,
+    "busy_ms": 159.23718277746582,
+    "idle_ms": 60.73570795617676,
+    "programs": 1608,
+    "host_ms_profiled": 223.78574500180548
+   },
+   "instrumented": {
+    "host_ms": 185.64688000333263,
+    "wall_ms": 194.1302019986324,
+    "parts": {
+     "python": 32.78314505587332,
+     "op_dispatch": 136.5945419529453,
+     "op_dispatch_cpp": 131.59384399477858,
+     "op_dispatch_pyfork": 5.000697958166711,
+     "prepared": 5.051767991972156,
+     "transfer": 8.992156996100675,
+     "per_chunk": 2.2208820009836927,
+     "begin_chunk": 0.6653110031038523,
+     "embed": 1.5555709978798404,
+     "guard": 0.0,
+     "other": 0.004386005457490683
+    },
+    "python_by_section": {
+     "experts": 3.795,
+     "attention": 10.567,
+     "ffn_residual": 6.641,
+     "compressor": 1.869,
+     "indexer": 1.131,
+     "engram_rows": 0.023,
+     "q_a": 2.154,
+     "kv": 1.776,
+     "attn_residual": 1.767,
+     "layer_glue": 1.011,
+     "engram_kv": 0.142,
+     "engram_add": 0.155,
+     "attn_hc": 0.349,
+     "shared_expert": 0.271,
+     "ffn_hc": 0.236,
+     "attn_norm": 0.141,
+     "router": 0.172,
+     "moe_add": 0.169,
+     "ffn_collapse": 0.147,
+     "ffn_norm": 0.138,
+     "attn_collapse": 0.126
+    },
+    "host_by_section": {
+     "experts": 50.495,
+     "attention": 46.868,
+     "ffn_residual": 28.801,
+     "compressor": 13.517,
+     "indexer": 9.543,
+     "engram_rows": 8.919,
+     "q_a": 8.039,
+     "kv": 6.594,
+     "attn_residual": 5.959,
+     "embed": 1.556,
+     "layer_glue": 1.139,
+     "engram_kv": 0.849,
+     "engram_add": 0.676,
+     "begin_chunk": 0.669,
+     "attn_hc": 0.576,
+     "shared_expert": 0.271,
+     "ffn_hc": 0.236,
+     "attn_norm": 0.186,
+     "router": 0.172,
+     "moe_add": 0.169,
+     "ffn_collapse": 0.147,
+     "ffn_norm": 0.138,
+     "attn_collapse": 0.126
+    },
+    "ops": {
+     "op:bringup.moe_block_main.routed_experts_combine": {
+      "calls": 40,
+      "excl_ms": 15.711,
+      "us_per_call": 392.8
+     },
+     "op:slice": {
+      "calls": 211,
+      "excl_ms": 12.797,
+      "us_per_call": 60.6
+     },
+     "op:bringup.moe_block_main.fused_head": {
+      "calls": 40,
+      "excl_ms": 12.058,
+      "us_per_call": 301.5
+     },
+     "op:experimental.high_bw_all_gather": {
+      "calls": 92,
+      "excl_ms": 10.129,
+      "us_per_call": 110.1
+     },
+     "op:linear": {
+      "calls": 144,
+      "excl_ms": 8.787,
+      "us_per_call": 61.0
+     },
+     "op:bringup.mhc_post": {
+      "calls": 82,
+      "excl_ms": 8.386,
+      "us_per_call": 102.3
+     },
+     "op:bringup.slice_write": {
+      "calls": 164,
+      "excl_ms": 8.251,
+      "us_per_call": 50.3
+     },
+     "transfer:engram_wait": {
+      "calls": 2,
+      "excl_ms": 6.367,
+      "us_per_call": 3183.3
+     },
+     "op:bringup.moe_block_main.sparse_dispatch_2d": {
+      "calls": 40,
+      "excl_ms": 6.344,
+      "us_per_call": 158.6
+     },
+     "op:bringup.rotary_embedding_indexed": {
+      "calls": 136,
+      "excl_ms": 6.218,
+      "us_per_call": 45.7
+     },
+     "op:bringup.update_padded_kv_cache": {
+      "calls": 48,
+      "excl_ms": 4.482,
+      "us_per_call": 93.4
+     },
+     "op:bringup.rms_norm": {
+      "calls": 90,
+      "excl_ms": 4.253,
+      "us_per_call": 47.3
+     },
+     "op_py:allocate_tensor_on_device": {
+      "calls": 58,
+      "excl_ms": 4.045,
+      "us_per_call": 69.7
+     },
+     "op:bringup.topk_large_indices": {
+      "calls": 9,
+      "excl_ms": 4.022,
+      "us_per_call": 446.9
+     },
+     "op:to_layout": {
+      "calls": 53,
+      "excl_ms": 3.805,
+      "us_per_call": 71.8
+     },
+     "op:typecast": {
+      "calls": 81,
+      "excl_ms": 3.686,
+      "us_per_call": 45.5
+     },
+     "op:add": {
+      "calls": 40,
+      "excl_ms": 3.469,
+      "us_per_call": 86.7
+     },
+     "op:untilize_with_unpadding": {
+      "calls": 49,
+      "excl_ms": 3.216,
+      "us_per_call": 65.6
+     },
+     "prepared:window_send.py:__call__": {
+      "calls": 40,
+      "excl_ms": 3.175,
+      "us_per_call": 79.4
+     },
+     "transfer:copy_host_to_device_tensor": {
+      "calls": 2,
+      "excl_ms": 2.625,
+      "us_per_call": 1312.7
+     },
+     "op:concat": {
+      "calls": 49,
+      "excl_ms": 2.564,
+      "us_per_call": 52.3
+     },
+     "op:matmul": {
+      "calls": 41,
+      "excl_ms": 2.116,
+      "us_per_call": 51.6
+     },
+     "op:bringup.nlp_concat_heads": {
+      "calls": 40,
+      "excl_ms": 2.086,
+      "us_per_call": 52.1
+     },
+     "op:bringup.ring_indexer_score_dsa": {
+      "calls": 8,
+      "excl_ms": 2.035,
+      "us_per_call": 254.4
+     },
+     "op:bringup.sparse_sdpa": {
+      "calls": 40,
+      "excl_ms": 1.992,
+      "us_per_call": 49.8
+     },
+     "op:mesh_partition": {
+      "calls": 12,
+      "excl_ms": 1.484,
+      "us_per_call": 123.7
+     },
+     "prepared:ckv_bfp4.py:bfp_round": {
+      "calls": 4,
+      "excl_ms": 1.003,
+      "us_per_call": 250.8
+     },
+     "op:bringup.embedding": {
+      "calls": 9,
+      "excl_ms": 0.844,
+      "us_per_call": 93.8
+     },
+     "op:reshape": {
+      "calls": 25,
+      "excl_ms": 0.801,
+      "us_per_call": 32.1
+     },
+     "op:experimental.all_to_all_async_generic": {
+      "calls": 3,
+      "excl_ms": 0.779,
+      "us_per_call": 259.5
+     },
+     "op:multiply": {
+      "calls": 8,
+      "excl_ms": 0.689,
+      "us_per_call": 86.2
+     },
+     "begin_chunk:begin_chunk": {
+      "calls": 1,
+      "excl_ms": 0.6,
+      "us_per_call": 599.5
+     },
+     "op_py:deallocate": {
+      "calls": 42,
+      "excl_ms": 0.552,
+      "us_per_call": 13.1
+     },
+     "prepared:fp8_rows.py:pack_fp8_rows": {
+      "calls": 4,
+      "excl_ms": 0.508,
+      "us_per_call": 127.1
+     },
+     "transfer:to_device": {
+      "calls": 1,
+      "excl_ms": 0.456,
+      "us_per_call": 456.1
+     },
+     "prepared:pair_pool.py:pair_pool": {
+      "calls": 3,
+      "excl_ms": 0.365,
+      "us_per_call": 121.7
+     },
+     "op:scatter": {
+      "calls": 4,
+      "excl_ms": 0.309,
+      "us_per_call": 77.2
+     },
+     "op:experimental.deepseek_prefill.per_token_cast_to_fp8": {
+      "calls": 4,
+      "excl_ms": 0.298,
+      "us_per_call": 74.5
+     },
+     "op:bringup.mhc_pre_xing_pack": {
+      "calls": 3,
+      "excl_ms": 0.229,
+      "us_per_call": 76.4
+     },
+     "op:experimental.minimal_matmul": {
+      "calls": 2,
+      "excl_ms": 0.204,
+      "us_per_call": 102.0
+     },
+     "op_py:bringup.bfp_round": {
+      "calls": 4,
+      "excl_ms": 0.177,
+      "us_per_call": 44.3
+     },
+     "op_py:bringup.pack_fp8_rows": {
+      "calls": 4,
+      "excl_ms": 0.167,
+      "us_per_call": 41.8
+     },
+     "transfer:from_torch": {
+      "calls": 1,
+      "excl_ms": 0.166,
+      "us_per_call": 166.5
+     },
+     "op:bringup.mhc_pre_xing": {
+      "calls": 2,
+      "excl_ms": 0.147,
+      "us_per_call": 73.6
+     },
+     "op_py:bringup.pair_pool": {
+      "calls": 3,
+      "excl_ms": 0.125,
+      "us_per_call": 41.8
+     },
+     "op:clone": {
+      "calls": 1,
+      "excl_ms": 0.06,
+      "us_per_call": 60.4
+     }
+    },
+    "calls_all": 1738,
+    "op_calls": 1732
+   },
+   "host_ms_mean_c1_10": 160.49433430016506,
+   "wall_ms_mean_c1_10": 180.92332309970516,
+   "host_ms_c": [
+    159.3,
+    158.4,
+    156.2,
+    161.6,
+    159.0,
+    150.7,
+    159.7,
+    161.4,
+    154.4,
+    161.2,
+    182.2
+   ],
+   "wall_ms_c": [
+    175.2,
+    176.7,
+    180.8,
+    183.3,
+    178.6,
+    177.1,
+    183.0,
+    180.5,
+    180.1,
+    179.8,
+    189.3
+   ]
+  },
+  "off_p51200": {
+   "host_ms": 163.48770499462262,
+   "wall_ms": 202.47664799535414,
+   "device": {
+    "device_ms": 194.56663786328116,
+    "span_ms": 216.66262035510255,
+    "busy_ms": 175.08067445788575,
+    "idle_ms": 41.58194589721679,
+    "programs": 1583,
+    "host_ms_profiled": 220.0839459983399
+   },
+   "instrumented": {
+    "host_ms": 171.71126599714626,
+    "wall_ms": 203.0264549975982,
+    "parts": {
+     "python": 32.494143983058166,
+     "op_dispatch": 121.77296903246315,
+     "op_dispatch_cpp": 116.93869702139637,
+     "op_dispatch_pyfork": 4.834272011066787,
+     "prepared": 4.959641992172692,
+     "transfer": 10.512203996768221,
+     "per_chunk": 1.9655069991131313,
+     "begin_chunk": 0.7544149993918836,
+     "embed": 1.2110919997212477,
+     "guard": 0.0,
+     "other": 0.006799993570894003
+    },
+    "python_by_section": {
+     "experts": 3.772,
+     "attention": 10.552,
+     "ffn_residual": 6.593,
+     "compressor": 1.778,
+     "engram_rows": 0.022,
+     "indexer": 1.253,
+     "q_a": 2.193,
+     "attn_residual": 1.764,
+     "kv": 1.535,
+     "layer_glue": 0.99,
+     "engram_kv": 0.127,
+     "engram_add": 0.169,
+     "attn_hc": 0.376,
+     "shared_expert": 0.263,
+     "attn_norm": 0.148,
+     "ffn_hc": 0.217,
+     "router": 0.17,
+     "moe_add": 0.166,
+     "ffn_collapse": 0.147,
+     "ffn_norm": 0.133,
+     "attn_collapse": 0.126
+    },
+    "host_by_section": {
+     "experts": 45.477,
+     "attention": 44.83,
+     "ffn_residual": 26.222,
+     "compressor": 11.791,
+     "engram_rows": 10.5,
+     "indexer": 8.992,
+     "q_a": 7.121,
+     "attn_residual": 5.673,
+     "kv": 4.402,
+     "embed": 1.211,
+     "layer_glue": 1.114,
+     "engram_kv": 0.816,
+     "begin_chunk": 0.759,
+     "engram_add": 0.709,
+     "attn_hc": 0.652,
+     "shared_expert": 0.263,
+     "attn_norm": 0.219,
+     "ffn_hc": 0.217,
+     "router": 0.17,
+     "moe_add": 0.166,
+     "ffn_collapse": 0.147,
+     "ffn_norm": 0.133,
+     "attn_collapse": 0.126
+    },
+    "ops": {
+     "op:bringup.moe_block_main.routed_experts_combine": {
+      "calls": 40,
+      "excl_ms": 15.279,
+      "us_per_call": 382.0
+     },
+     "op:bringup.moe_block_main.fused_head": {
+      "calls": 40,
+      "excl_ms": 11.828,
+      "us_per_call": 295.7
+     },
+     "op:slice": {
+      "calls": 202,
+      "excl_ms": 10.283,
+      "us_per_call": 50.9
+     },
+     "op:experimental.high_bw_all_gather": {
+      "calls": 92,
+      "excl_ms": 9.426,
+      "us_per_call": 102.5
+     },
+     "op:bringup.mhc_post": {
+      "calls": 82,
+      "excl_ms": 7.745,
+      "us_per_call": 94.4
+     },
+     "op:linear": {
+      "calls": 144,
+      "excl_ms": 7.654,
+      "us_per_call": 53.2
+     },
+     "transfer:engram_wait": {
+      "calls": 2,
+      "excl_ms": 7.613,
+      "us_per_call": 3806.5
+     },
+     "op:bringup.slice_write": {
+      "calls": 164,
+      "excl_ms": 6.942,
+      "us_per_call": 42.3
+     },
+     "op:bringup.rotary_embedding_indexed": {
+      "calls": 136,
+      "excl_ms": 5.222,
+      "us_per_call": 38.4
+     },
+     "op:matmul": {
+      "calls": 41,
+      "excl_ms": 4.784,
+      "us_per_call": 116.7
+     },
+     "op:bringup.update_padded_kv_cache": {
+      "calls": 48,
+      "excl_ms": 4.057,
+      "us_per_call": 84.5
+     },
+     "op:bringup.topk_large_indices": {
+      "calls": 9,
+      "excl_ms": 3.992,
+      "us_per_call": 443.5
+     },
+     "op_py:allocate_tensor_on_device": {
+      "calls": 58,
+      "excl_ms": 3.911,
+      "us_per_call": 67.4
+     },
+     "op:bringup.moe_block_main.sparse_dispatch_2d": {
+      "calls": 40,
+      "excl_ms": 3.444,
+      "us_per_call": 86.1
+     },
+     "op:bringup.rms_norm": {
+      "calls": 90,
+      "excl_ms": 3.428,
+      "us_per_call": 38.1
+     },
+     "op:add": {
+      "calls": 40,
+      "excl_ms": 3.096,
+      "us_per_call": 77.4
+     },
+     "op:to_layout": {
+      "calls": 49,
+      "excl_ms": 3.051,
+      "us_per_call": 62.3
+     },
+     "prepared:window_send.py:__call__": {
+      "calls": 40,
+      "excl_ms": 2.94,
+      "us_per_call": 73.5
+     },
+     "op:typecast": {
+      "calls": 81,
+      "excl_ms": 2.928,
+      "us_per_call": 36.1
+     },
+     "transfer:copy_host_to_device_tensor": {
+      "calls": 2,
+      "excl_ms": 2.899,
+      "us_per_call": 1449.6
+     },
+     "op:untilize_with_unpadding": {
+      "calls": 49,
+      "excl_ms": 2.803,
+      "us_per_call": 57.2
+     },
+     "op:concat": {
+      "calls": 49,
+      "excl_ms": 2.116,
+      "us_per_call": 43.2
+     },
+     "op:bringup.sparse_sdpa": {
+      "calls": 40,
+      "excl_ms": 1.823,
+      "us_per_call": 45.6
+     },
+     "op:bringup.ring_indexer_score_dsa": {
+      "calls": 8,
+      "excl_ms": 1.801,
+      "us_per_call": 225.1
+     },
+     "op:bringup.nlp_concat_heads": {
+      "calls": 40,
+      "excl_ms": 1.793,
+      "us_per_call": 44.8
+     },
+     "prepared:ckv_bfp4.py:bfp_round": {
+      "calls": 4,
+      "excl_ms": 1.103,
+      "us_per_call": 275.9
+     },
+     "op:experimental.all_to_all_async_generic": {
+      "calls": 3,
+      "excl_ms": 0.794,
+      "us_per_call": 264.7
+     },
+     "op:reshape": {
+      "calls": 25,
+      "excl_ms": 0.78,
+      "us_per_call": 31.2
+     },
+     "op:bringup.embedding": {
+      "calls": 9,
+      "excl_ms": 0.701,
+      "us_per_call": 77.9
+     },
+     "begin_chunk:begin_chunk": {
+      "calls": 1,
+      "excl_ms": 0.634,
+      "us_per_call": 634.4
+     },
+     "op:multiply": {
+      "calls": 8,
+      "excl_ms": 0.586,
+      "us_per_call": 73.3
+     },
+     "op_py:deallocate": {
+      "calls": 42,
+      "excl_ms": 0.555,
+      "us_per_call": 13.2
+     },
+     "prepared:fp8_rows.py:pack_fp8_rows": {
+      "calls": 4,
+      "excl_ms": 0.512,
+      "us_per_call": 128.1
+     },
+     "prepared:pair_pool.py:pair_pool": {
+      "calls": 3,
+      "excl_ms": 0.403,
+      "us_per_call": 134.5
+     },
+     "op:scatter": {
+      "calls": 4,
+      "excl_ms": 0.26,
+      "us_per_call": 65.0
+     },
+     "op:experimental.deepseek_prefill.per_token_cast_to_fp8": {
+      "calls": 4,
+      "excl_ms": 0.257,
+      "us_per_call": 64.3
+     },
+     "transfer:to_device": {
+      "calls": 1,
+      "excl_ms": 0.241,
+      "us_per_call": 240.9
+     },
+     "transfer:from_torch": {
+      "calls": 1,
+      "excl_ms": 0.208,
+      "us_per_call": 208.4
+     },
+     "op:bringup.mhc_pre_xing_pack": {
+      "calls": 3,
+      "excl_ms": 0.207,
+      "us_per_call": 69.0
+     },
+     "op:bringup.mhc_pre_xing": {
+      "calls": 2,
+      "excl_ms": 0.193,
+      "us_per_call": 96.6
+     },
+     "op:experimental.minimal_matmul": {
+      "calls": 2,
+      "excl_ms": 0.183,
+      "us_per_call": 91.7
+     },
+     "op_py:bringup.bfp_round": {
+      "calls": 4,
+      "excl_ms": 0.181,
+      "us_per_call": 45.3
+     },
+     "op_py:bringup.pack_fp8_rows": {
+      "calls": 4,
+      "excl_ms": 0.173,
+      "us_per_call": 43.3
+     },
+     "op_py:bringup.pair_pool": {
+      "calls": 3,
+      "excl_ms": 0.134,
+      "us_per_call": 44.7
+     },
+     "op:clone": {
+      "calls": 1,
+      "excl_ms": 0.051,
+      "us_per_call": 51.4
+     }
+    },
+    "calls_all": 1713,
+    "op_calls": 1707
+   },
+   "host_ms_runs": [
+    160.0,
+    162.1,
+    163.6,
+    163.7,
+    163.5
+   ],
+   "wall_ms_runs": [
+    201.7,
+    200.8,
+    202.5,
+    204.0,
+    203.6
+   ]
+  },
+  "prev": {
+   "host_ms": 190.27126699802466,
+   "wall_ms": 192.05068399605807,
+   "device": {
+    "device_ms": 160.0446752539062,
+    "span_ms": 249.6332385690918,
+    "busy_ms": 143.66265426159669,
+    "idle_ms": 105.97058430749512,
+    "programs": 1648,
+    "host_ms_profiled": 254.04297299974132
+   },
+   "instrumented": {
+    "host_ms": 195.7251810017624,
+    "wall_ms": 196.09715099795721,
+    "parts": {
+     "python": 34.36353310098639,
+     "op_dispatch": 139.9339208874153,
+     "op_dispatch_cpp": 135.33013090636814,
+     "op_dispatch_pyfork": 4.603789981047157,
+     "prepared": 8.890263001376297,
+     "transfer": 10.018250992288813,
+     "per_chunk": 2.5157590134767815,
+     "begin_chunk": 0.5286359955789521,
+     "embed": 1.3767310010734946,
+     "guard": 0.6103920168243349,
+     "other": 0.003454006218817085
+    },
+    "python_by_section": {
+     "experts": 4.146,
+     "attention": 10.979,
+     "ffn_residual": 6.954,
+     "compressor": 2.059,
+     "engram_rows": 0.025,
+     "indexer": 1.181,
+     "kv": 1.776,
+     "q_a": 2.303,
+     "attn_residual": 1.821,
+     "layer_glue": 1.025,
+     "engram_kv": 0.143,
+     "engram_add": 0.174,
+     "attn_hc": 0.356,
+     "shared_expert": 0.276,
+     "ffn_hc": 0.226,
+     "attn_norm": 0.155,
+     "router": 0.173,
+     "moe_add": 0.17,
+     "ffn_collapse": 0.154,
+     "ffn_norm": 0.137,
+     "attn_collapse": 0.131
+    },
+    "host_by_section": {
+     "experts": 64.673,
+     "attention": 42.998,
+     "ffn_residual": 27.275,
+     "compressor": 13.424,
+     "engram_rows": 10.015,
+     "indexer": 8.95,
+     "kv": 8.496,
+     "q_a": 7.305,
+     "attn_residual": 5.903,
+     "embed": 1.377,
+     "layer_glue": 1.155,
+     "engram_kv": 0.879,
+     "engram_add": 0.729,
+     "attn_hc": 0.551,
+     "begin_chunk": 0.532,
+     "shared_expert": 0.276,
+     "ffn_hc": 0.226,
+     "attn_norm": 0.198,
+     "router": 0.173,
+     "moe_add": 0.17,
+     "ffn_collapse": 0.154,
+     "ffn_norm": 0.137,
+     "attn_collapse": 0.131
+    },
+    "ops": {
+     "op:bringup.moe_block_main.routed_experts_combine": {
+      "calls": 40,
+      "excl_ms": 29.237,
+      "us_per_call": 730.9
+     },
+     "op:bringup.moe_block_main.fused_head": {
+      "calls": 40,
+      "excl_ms": 12.037,
+      "us_per_call": 300.9
+     },
+     "op:slice": {
+      "calls": 211,
+      "excl_ms": 11.333,
+      "us_per_call": 53.7
+     },
+     "op:experimental.high_bw_all_gather": {
+      "calls": 92,
+      "excl_ms": 9.734,
+      "us_per_call": 105.8
+     },
+     "op:bringup.mhc_post": {
+      "calls": 82,
+      "excl_ms": 8.203,
+      "us_per_call": 100.0
+     },
+     "op:linear": {
+      "calls": 144,
+      "excl_ms": 7.851,
+      "us_per_call": 54.5
+     },
+     "transfer:engram_wait": {
+      "calls": 2,
+      "excl_ms": 7.59,
+      "us_per_call": 3795.1
+     },
+     "op:bringup.rotary_embedding_indexed": {
+      "calls": 136,
+      "excl_ms": 7.56,
+      "us_per_call": 55.6
+     },
+     "op:bringup.slice_write": {
+      "calls": 164,
+      "excl_ms": 7.114,
+      "us_per_call": 43.4
+     },
+     "op:bringup.update_padded_kv_cache": {
+      "calls": 48,
+      "excl_ms": 4.167,
+      "us_per_call": 86.8
+     },
+     "prepared:expert_prev.py:after": {
+      "calls": 40,
+      "excl_ms": 3.948,
+      "us_per_call": 98.7
+     },
+     "op:bringup.topk_large_indices": {
+      "calls": 9,
+      "excl_ms": 3.932,
+      "us_per_call": 436.9
+     },
+     "op:bringup.rms_norm": {
+      "calls": 90,
+      "excl_ms": 3.61,
+      "us_per_call": 40.1
+     },
+     "op_py:allocate_tensor_on_device": {
+      "calls": 58,
+      "excl_ms": 3.547,
+      "us_per_call": 61.2
+     },
+     "op:bringup.moe_block_main.sparse_dispatch_2d": {
+      "calls": 40,
+      "excl_ms": 3.541,
+      "us_per_call": 88.5
+     },
+     "op:to_layout": {
+      "calls": 53,
+      "excl_ms": 3.318,
+      "us_per_call": 62.6
+     },
+     "op:add": {
+      "calls": 40,
+      "excl_ms": 3.179,
+      "us_per_call": 79.5
+     },
+     "op:typecast": {
+      "calls": 81,
+      "excl_ms": 3.057,
+      "us_per_call": 37.7
+     },
+     "prepared:window_send.py:__call__": {
+      "calls": 40,
+      "excl_ms": 2.988,
+      "us_per_call": 74.7
+     },
+     "op:untilize_with_unpadding": {
+      "calls": 49,
+      "excl_ms": 2.908,
+      "us_per_call": 59.3
+     },
+     "transfer:copy_host_to_device_tensor": {
+      "calls": 2,
+      "excl_ms": 2.428,
+      "us_per_call": 1214.0
+     },
+     "op:concat": {
+      "calls": 49,
+      "excl_ms": 2.205,
+      "us_per_call": 45.0
+     },
+     "op:bringup.nlp_concat_heads": {
+      "calls": 40,
+      "excl_ms": 1.874,
+      "us_per_call": 46.8
+     },
+     "op:bringup.ring_indexer_score_dsa": {
+      "calls": 8,
+      "excl_ms": 1.865,
+      "us_per_call": 233.2
+     },
+     "op:matmul": {
+      "calls": 41,
+      "excl_ms": 1.839,
+      "us_per_call": 44.8
+     },
+     "op:bringup.sparse_sdpa": {
+      "calls": 40,
+      "excl_ms": 1.735,
+      "us_per_call": 43.4
+     },
+     "op:mesh_partition": {
+      "calls": 12,
+      "excl_ms": 1.53,
+      "us_per_call": 127.5
+     },
+     "prepared:ckv_bfp4.py:bfp_round": {
+      "calls": 4,
+      "excl_ms": 1.012,
+      "us_per_call": 253.0
+     },
+     "op:experimental.all_to_all_async_generic": {
+      "calls": 3,
+      "excl_ms": 0.814,
+      "us_per_call": 271.4
+     },
+     "op:reshape": {
+      "calls": 25,
+      "excl_ms": 0.78,
+      "us_per_call": 31.2
+     },
+     "op:bringup.embedding": {
+      "calls": 9,
+      "excl_ms": 0.679,
+      "us_per_call": 75.4
+     },
+     "op_py:deallocate": {
+      "calls": 42,
+      "excl_ms": 0.606,
+      "us_per_call": 14.4
+     },
+     "op:multiply": {
+      "calls": 8,
+      "excl_ms": 0.591,
+      "us_per_call": 73.9
+     },
+     "prepared:fp8_rows.py:pack_fp8_rows": {
+      "calls": 4,
+      "excl_ms": 0.531,
+      "us_per_call": 132.9
+     },
+     "begin_chunk:begin_chunk": {
+      "calls": 1,
+      "excl_ms": 0.469,
+      "us_per_call": 469.3
+     },
+     "prepared:pair_pool.py:pair_pool": {
+      "calls": 3,
+      "excl_ms": 0.411,
+      "us_per_call": 136.9
+     },
+     "guard:prev.after": {
+      "calls": 40,
+      "excl_ms": 0.4,
+      "us_per_call": 10.0
+     },
+     "transfer:to_device": {
+      "calls": 1,
+      "excl_ms": 0.295,
+      "us_per_call": 295.4
+     },
+     "op:scatter": {
+      "calls": 4,
+      "excl_ms": 0.279,
+      "us_per_call": 69.7
+     },
+     "op:experimental.deepseek_prefill.per_token_cast_to_fp8": {
+      "calls": 4,
+      "excl_ms": 0.262,
+      "us_per_call": 65.5
+     },
+     "op:bringup.mhc_pre_xing_pack": {
+      "calls": 3,
+      "excl_ms": 0.215,
+      "us_per_call": 71.6
+     },
+     "guard:prev.before": {
+      "calls": 40,
+      "excl_ms": 0.21,
+      "us_per_call": 5.3
+     },
+     "transfer:from_torch": {
+      "calls": 1,
+      "excl_ms": 0.204,
+      "us_per_call": 204.0
+     },
+     "op:experimental.minimal_matmul": {
+      "calls": 2,
+      "excl_ms": 0.194,
+      "us_per_call": 96.9
+     },
+     "op_py:bringup.bfp_round": {
+      "calls": 4,
+      "excl_ms": 0.19,
+      "us_per_call": 47.5
+     },
+     "op_py:bringup.pack_fp8_rows": {
+      "calls": 4,
+      "excl_ms": 0.181,
+      "us_per_call": 45.2
+     },
+     "op:bringup.mhc_pre_xing": {
+      "calls": 2,
+      "excl_ms": 0.141,
+      "us_per_call": 70.6
+     },
+     "op_py:bringup.pair_pool": {
+      "calls": 3,
+      "excl_ms": 0.139,
+      "us_per_call": 46.4
+     },
+     "op:clone": {
+      "calls": 1,
+      "excl_ms": 0.065,
+      "us_per_call": 65.3
+     }
+    },
+    "calls_all": 1778,
+    "op_calls": 1772
+   },
+   "host_ms_mean_c1_10": 185.04917990067042,
+   "wall_ms_mean_c1_10": 186.62749230061308,
+   "host_ms_c": [
+    187.9,
+    186.9,
+    176.1,
+    188.8,
+    186.7,
+    177.8,
+    184.9,
+    189.2,
+    180.8,
+    188.9,
+    190.3
+   ],
+   "wall_ms_c": [
+    192.2,
+    187.4,
+    178.6,
+    189.3,
+    187.1,
+    181.3,
+    187.1,
+    189.6,
+    184.4,
+    189.5,
+    192.1
+   ]
+  },
+  "prev_p51200": {
+   "host_ms": 181.7075740036671,
+   "wall_ms": 184.0735930018127,
+   "device": {
+    "device_ms": 162.80958266796875,
+    "span_ms": 231.71966582507324,
+    "busy_ms": 146.71061004223634,
+    "idle_ms": 85.00905578283691,
+    "programs": 1623,
+    "host_ms_profiled": 236.10824199568015
+   },
+   "instrumented": {
+    "host_ms": 188.38257499737665,
+    "wall_ms": 188.78945700271288,
+    "parts": {
+     "python": 32.57426326308632,
+     "op_dispatch": 133.65995079948334,
+     "op_dispatch_cpp": 129.23520580807235,
+     "op_dispatch_pyfork": 4.424744991410989,
+     "prepared": 8.68474597518798,
+     "transfer": 10.066312999697402,
+     "per_chunk": 3.3902419672813267,
+     "begin_chunk": 0.8097680038190447,
+     "embed": 1.9795279949903488,
+     "guard": 0.6009459684719332,
+     "other": 0.0070599926402792335
+    },
+    "python_by_section": {
+     "experts": 3.974,
+     "attention": 10.525,
+     "ffn_residual": 6.642,
+     "compressor": 1.691,
+     "engram_rows": 0.026,
+     "indexer": 1.159,
+     "q_a": 2.18,
+     "attn_residual": 1.752,
+     "kv": 1.538,
+     "layer_glue": 1.002,
+     "engram_kv": 0.143,
+     "engram_add": 0.158,
+     "attn_hc": 0.392,
+     "shared_expert": 0.263,
+     "ffn_hc": 0.225,
+     "attn_norm": 0.148,
+     "router": 0.177,
+     "moe_add": 0.165,
+     "ffn_collapse": 0.149,
+     "ffn_norm": 0.138,
+     "attn_collapse": 0.126
+    },
+    "host_by_section": {
+     "experts": 63.398,
+     "attention": 41.155,
+     "ffn_residual": 29.174,
+     "compressor": 11.416,
+     "engram_rows": 10.045,
+     "indexer": 8.562,
+     "q_a": 6.979,
+     "attn_residual": 5.696,
+     "kv": 4.337,
+     "embed": 1.98,
+     "layer_glue": 1.13,
+     "engram_kv": 0.847,
+     "begin_chunk": 0.815,
+     "engram_add": 0.72,
+     "attn_hc": 0.676,
+     "shared_expert": 0.263,
+     "ffn_hc": 0.225,
+     "attn_norm": 0.206,
+     "router": 0.177,
+     "moe_add": 0.165,
+     "ffn_collapse": 0.149,
+     "ffn_norm": 0.138,
+     "attn_collapse": 0.126
+    },
+    "ops": {
+     "op:bringup.moe_block_main.routed_experts_combine": {
+      "calls": 40,
+      "excl_ms": 28.877,
+      "us_per_call": 721.9
+     },
+     "op:experimental.high_bw_all_gather": {
+      "calls": 92,
+      "excl_ms": 12.087,
+      "us_per_call": 131.4
+     },
+     "op:bringup.moe_block_main.fused_head": {
+      "calls": 40,
+      "excl_ms": 11.834,
+      "us_per_call": 295.8
+     },
+     "op:slice": {
+      "calls": 202,
+      "excl_ms": 10.163,
+      "us_per_call": 50.3
+     },
+     "op:bringup.mhc_post": {
+      "calls": 82,
+      "excl_ms": 7.948,
+      "us_per_call": 96.9
+     },
+     "op:linear": {
+      "calls": 144,
+      "excl_ms": 7.495,
+      "us_per_call": 52.0
+     },
+     "transfer:engram_wait": {
+      "calls": 2,
+      "excl_ms": 7.485,
+      "us_per_call": 3742.4
+     },
+     "op:bringup.slice_write": {
+      "calls": 164,
+      "excl_ms": 6.653,
+      "us_per_call": 40.6
+     },
+     "op:bringup.rotary_embedding_indexed": {
+      "calls": 136,
+      "excl_ms": 5.211,
+      "us_per_call": 38.3
+     },
+     "op:bringup.update_padded_kv_cache": {
+      "calls": 48,
+      "excl_ms": 3.944,
+      "us_per_call": 82.2
+     },
+     "prepared:expert_prev.py:after": {
+      "calls": 40,
+      "excl_ms": 3.865,
+      "us_per_call": 96.6
+     },
+     "op:bringup.topk_large_indices": {
+      "calls": 9,
+      "excl_ms": 3.787,
+      "us_per_call": 420.8
+     },
+     "op_py:allocate_tensor_on_device": {
+      "calls": 58,
+      "excl_ms": 3.475,
+      "us_per_call": 59.9
+     },
+     "op:bringup.moe_block_main.sparse_dispatch_2d": {
+      "calls": 40,
+      "excl_ms": 3.454,
+      "us_per_call": 86.3
+     },
+     "op:bringup.rms_norm": {
+      "calls": 90,
+      "excl_ms": 3.345,
+      "us_per_call": 37.2
+     },
+     "op:add": {
+      "calls": 40,
+      "excl_ms": 3.147,
+      "us_per_call": 78.7
+     },
+     "op:to_layout": {
+      "calls": 49,
+      "excl_ms": 3.04,
+      "us_per_call": 62.0
+     },
+     "op:typecast": {
+      "calls": 81,
+      "excl_ms": 2.882,
+      "us_per_call": 35.6
+     },
+     "prepared:window_send.py:__call__": {
+      "calls": 40,
+      "excl_ms": 2.881,
+      "us_per_call": 72.0
+     },
+     "op:untilize_with_unpadding": {
+      "calls": 49,
+      "excl_ms": 2.753,
+      "us_per_call": 56.2
+     },
+     "transfer:copy_host_to_device_tensor": {
+      "calls": 2,
+      "excl_ms": 2.582,
+      "us_per_call": 1290.8
+     },
+     "op:concat": {
+      "calls": 49,
+      "excl_ms": 2.163,
+      "us_per_call": 44.1
+     },
+     "op:matmul": {
+      "calls": 41,
+      "excl_ms": 1.86,
+      "us_per_call": 45.4
+     },
+     "op:bringup.nlp_concat_heads": {
+      "calls": 40,
+      "excl_ms": 1.792,
+      "us_per_call": 44.8
+     },
+     "op:bringup.ring_indexer_score_dsa": {
+      "calls": 8,
+      "excl_ms": 1.735,
+      "us_per_call": 216.9
+     },
+     "op:bringup.sparse_sdpa": {
+      "calls": 40,
+      "excl_ms": 1.686,
+      "us_per_call": 42.2
+     },
+     "prepared:ckv_bfp4.py:bfp_round": {
+      "calls": 4,
+      "excl_ms": 1.102,
+      "us_per_call": 275.4
+     },
+     "op:experimental.all_to_all_async_generic": {
+      "calls": 3,
+      "excl_ms": 0.842,
+      "us_per_call": 280.7
+     },
+     "op:bringup.embedding": {
+      "calls": 9,
+      "excl_ms": 0.835,
+      "us_per_call": 92.7
+     },
+     "op:reshape": {
+      "calls": 25,
+      "excl_ms": 0.742,
+      "us_per_call": 29.7
+     },
+     "begin_chunk:begin_chunk": {
+      "calls": 1,
+      "excl_ms": 0.686,
+      "us_per_call": 686.1
+     },
+     "transfer:to_device": {
+      "calls": 1,
+      "excl_ms": 0.594,
+      "us_per_call": 593.6
+     },
+     "op:multiply": {
+      "calls": 8,
+      "excl_ms": 0.584,
+      "us_per_call": 73.1
+     },
+     "op_py:deallocate": {
+      "calls": 42,
+      "excl_ms": 0.581,
+      "us_per_call": 13.8
+     },
+     "prepared:fp8_rows.py:pack_fp8_rows": {
+      "calls": 4,
+      "excl_ms": 0.473,
+      "us_per_call": 118.2
+     },
+     "guard:prev.after": {
+      "calls": 40,
+      "excl_ms": 0.393,
+      "us_per_call": 9.8
+     },
+     "prepared:pair_pool.py:pair_pool": {
+      "calls": 3,
+      "excl_ms": 0.365,
+      "us_per_call": 121.6
+     },
+     "op:scatter": {
+      "calls": 4,
+      "excl_ms": 0.263,
+      "us_per_call": 65.8
+     },
+     "op:experimental.deepseek_prefill.per_token_cast_to_fp8": {
+      "calls": 4,
+      "excl_ms": 0.26,
+      "us_per_call": 65.1
+     },
+     "op:bringup.mhc_pre_xing_pack": {
+      "calls": 3,
+      "excl_ms": 0.246,
+      "us_per_call": 81.9
+     },
+     "transfer:from_torch": {
+      "calls": 1,
+      "excl_ms": 0.216,
+      "us_per_call": 216.1
+     },
+     "guard:prev.before": {
+      "calls": 40,
+      "excl_ms": 0.208,
+      "us_per_call": 5.2
+     },
+     "op:experimental.minimal_matmul": {
+      "calls": 2,
+      "excl_ms": 0.196,
+      "us_per_call": 98.0
+     },
+     "op_py:bringup.bfp_round": {
+      "calls": 4,
+      "excl_ms": 0.189,
+      "us_per_call": 47.2
+     },
+     "op_py:bringup.pack_fp8_rows": {
+      "calls": 4,
+      "excl_ms": 0.17,
+      "us_per_call": 42.6
+     },
+     "op:bringup.mhc_pre_xing": {
+      "calls": 2,
+      "excl_ms": 0.153,
+      "us_per_call": 76.4
+     },
+     "op_py:bringup.pair_pool": {
+      "calls": 3,
+      "excl_ms": 0.134,
+      "us_per_call": 44.7
+     },
+     "op:clone": {
+      "calls": 1,
+      "excl_ms": 0.067,
+      "us_per_call": 66.9
+     }
+    },
+    "calls_all": 1753,
+    "op_calls": 1747
+   },
+   "host_ms_runs": [
+    178.1,
+    181.7,
+    180.2,
+    183.7,
+    201.6
+   ],
+   "wall_ms_runs": [
+    181.9,
+    185.7,
+    183.6,
+    184.1,
+    203.6
+   ]
+  }
+ },
+ "trace": {
+  "layer": 21,
+  "start": 51200,
+  "untraced_warm_runs": 3,
+  "untraced_host_ms_layer": 6.454710499383509,
+  "untraced_wall_ms_layer": 6.643283999437699,
+  "untraced_repeat_identical": 1,
+  "untraced_device_ms_layer": 3.9271655390625004,
+  "untraced_device_idle_ms_layer": 2.2021167049560546,
+  "programs_layer": 47,
+  "trace_host_ms_layer": 0.02013049743254669,
+  "trace_device_ms_layer": 3.536847699433565,
+  "trace_bit_identical": 1
+ }
+}

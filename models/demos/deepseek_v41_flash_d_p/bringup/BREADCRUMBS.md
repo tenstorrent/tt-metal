@@ -1086,3 +1086,67 @@ The one this change broke (test_seeded: `git add state.json`) is fixed.
 - Host (OV-23): the planner's dispatch (run_prepared, 32 chip programs, 8 + 3 x senders addresses patched) 92.5 us a
   call (median), the pre-call hook (guard + the combine's fill args) 4.9 us: ~3.9 ms a chunk of host; the chunk's wall
   did not move (host-bound at ~190 ms on both sides).
+
+## P.57 (perf, attempt 1): host-bound wall with P.56 on: where the host time goes, fixability, one-layer trace prototype
+- Expected (written before any device run; perf_guide 1, 3): analysis only, no shipped change, so device 0 / host 0
+  saved by this step. Guess for the breakdown of the ~190 ms host per chunk (novel chunk 10, prev): ttnn op dispatch
+  (b) ~110-130 ms (~1650 outermost calls x ~70 us on 32 chips), Python in tt/ (a) ~30-45 ms, prepared launches (c)
+  ~8-12 ms (~100 calls x ~90 us), transfers / waits (d) < 3 ms (host_transfers_per_layer = 0; the engram worker join),
+  per-chunk host work (e) ~5-10 ms (begin_chunk with ENGRAM_ASYNC; P.56's guard ~0.2 ms). Trace (whole chunk) would
+  take (a)+(b)+(c) off the critical path: wall -> ~device + ~10 ms, i.e. ~190 -> ~165 ms prev (-25 to -30 ms a chunk);
+  a one-layer replay should cost < 0.1 ms host vs ~4-5 ms untraced.
+- What I did: tests/test_host_bound.py (no tt/ change, nothing shipped). One model load; side off / prev switched in the
+  loaded model (P.56's `_side`). Per side: the novel prompt chunks 0..10 back to back (warm, profiled = real-time
+  profiler on chunk 10, clean, instrumented passes) and one warm chunk at 51,200 (random ids, fresh state,
+  steady_state; clean x5, profiled, instrumented, then testing/profile.py host_profile = BRINGUP_PROFILE_HOST's
+  cProfile). Instrumentation (HostClock): FastOperation.__call__, ttnn.bringup.run_prepared, transfer functions,
+  PrevReplicas.before/after, the engram worker join, each charged its exclusive time; run_block's signposts give the
+  sections, Python = a section's time minus its wrapped calls. Trace prototype: side off, layer 21 at novel chunk 10.
+- Terms: host = first host call to the last op enqueued; wall = to the end of the closing sync; drain = wall - host;
+  device = each program's slowest chip, summed (rt profiler, never per-op mode).
+- Results (final run; c1-10 = mean of the clean pass, chunks 1..10):
+
+  | chunk | host | wall | device | wall explained |
+  |---|---|---|---|---|
+  | novel c1-10 off | 160.5 | 180.9 | 177.2 (c10) | device-bound: wall = device + ~4 |
+  | novel c1-10 prev | 185.0 | 186.6 | 160.0 (c10) | host-bound: wall = host + 1.6 drain |
+  | p51200 off | 163.5 | 202.5 | 194.6 | device-bound: wall = device + 7.9 (start-of-chunk idle) |
+  | p51200 prev | 181.7 | 184.1 | 162.8 | host-bound: wall = host + 2.4 |
+
+  So wall = max(host, device) + 2-8 ms holds; with prev OFF the chunk is not host-bound; P.56 adds ~18-24 ms of host
+  (combine 402 -> 731 us a call x 40 = +13.5, planner run_prepared 99 us x 40 = +3.9, guard +0.6), which moves the
+  regime and eats its own 17 ms device gain.
+- Host parts, novel chunk 10, prev (instrumented 195.7 vs clean 190.3 ms; op calls 1732 + 40 run_prepared):
+  (a) Python in tt/ 34.4 (attention 11.0, ffn_residual 7.0, experts 4.1, ~6 of it ttnn.deallocate); (b) op launches
+  139.9 (C++ 135.3, Python forks 4.6; ~80 us a call); (c) run_prepared 8.9; (d) transfers / waits 10.0 (layer 1 waits
+  7.6 ms for the async engram job, the rows' copy 2.4); (e) per chunk 2.5 (begin_chunk 0.5, ids 1.4, guard 0.6);
+  (f) other 0. Same shape off and at p51200 (op launches 122-140, Python 32-35). Full lists: results/
+  P.57_host_bound.json (per op: calls, us a call; per section).
+- Fix list (ms a chunk of host; the wall gains only down to the device, ~160 ms with prev):
+  1. Segment trace: the MoE / FFN half of each layer (experts + ffn_residual + router / shared expert / moe_add, ~93 ms
+     host, no per-start argument) as 40 traces replayed between eager attention: host ~185 -> ~95, wall -> device,
+     ~ -25 ms wall (prev). Needs 4 below, fixed input / output buffers. ~8-16 agent-hours.
+  2. Whole-chunk trace: host -> ~10 ms (inputs only); traced device ~10 % lower (prototype) -> wall ~145-150, ~ -35
+     to -40 ms. Needs every blocker below lifted: ~25-40 agent-hours.
+  3. P.56 ring slot on the device (the combine reads o % W from G[0]; one fixed job-ring address): -12 to -13 ms host
+     (combine back to ~400 us). ~3-5 h (fork option).
+  4. Engram job one chunk ahead (begin_chunk of chunk k+1 issued during chunk k; prefill knows the ids): -8 to -10 ms
+     host (the layer-1 wait). ~2-4 h (+ a serving-contract hook).
+  5. moe_block_main fused_head (301 us) / combine (402 us off) host: one mesh program with common args (DS41-145/147
+     pattern): ~ -10 to -14 ms. ~6-10 h.
+  6. Attention-side launch cuts (slice 211, rope 136, slice_write 164, to_layout / untilize / typecast / concat ~230
+     calls): -10 to -20 ms. ~6-12 h over a few picks.
+  7. all_gather (106 us x 92) / mhc_post (100 us x 82) cheaper launches: -5 to -8 ms. ~4-6 h.
+  8. Python glue trims (dealloc batching, section glue): -5 to -10 ms. ~4-8 h. (A trace removes 5-8 outright.)
+- Trace verdict: FEASIBLE at a fixed position (prototype), NOT yet chunk to chunk. Prototype (layer 21, side off, 47
+  programs, input cloned each run): capture after 3 warm runs, no capture error, 20 replays bit-identical, no hang;
+  host a layer 6.45 -> 0.020 ms, device a layer 3.93 -> 3.54 ms (trace_bit_identical 1). Blockers (detail in
+  known_issues_detail.md, DS41-251): per-start host args (rope slices, kv-write positions, window rows, scalars,
+  slice_write offsets, ckv row0, indexer start / kv_len) - per-start traces or start as a device tensor; per-chunk
+  stores allocated in the chunk (top-k / candidates) - preallocate; token ids input buffer; engram wait inside layer 1;
+  P.56's host ring slot and guard. Not blockers: host reads (0), CCL semaphores / device call counters (replayed fine),
+  allocations inside the capture. DS41-100's address-keyed blocker is gone.
+- Gotchas: a single-chunk clean wall varies +-10 ms run to run (off chunk 10: 169.6 vs 182.2 host in two runs); judge on
+  the c1-10 means. The rt-profiled pass's span / idle are inflated by the profiler's host overhead (span 220-250 ms).
+  The gate run writes results/P.57_host_*.pstats (host_profile's raw stats) beside the json.
+- Re-run: `gate P.57 --spec <spec> --check --unit P.57` (~7 min with the model load; devjob).

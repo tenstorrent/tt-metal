@@ -1,0 +1,163 @@
+{
+ "task": "P.57",
+ "t": "2026-11-14T06:19:48",
+ "runs_ms": [
+  191.8,
+  191.6,
+  203.4,
+  191.7,
+  196.7
+ ],
+ "top": [
+  {
+   "fn": "decorators.py:1217 __call__",
+   "self_ms": 130.29,
+   "cum_ms": 133.88,
+   "calls": 1658
+  },
+  {
+   "fn": "~:0 <method 'acquire' of '_thread.lock' objects>",
+   "self_ms": 11.73,
+   "cum_ms": 11.73,
+   "calls": 2
+  },
+  {
+   "fn": "test_host_bound.py:138 run",
+   "self_ms": 10.61,
+   "cum_ms": 22.75,
+   "calls": 175
+  },
+  {
+   "fn": "ccl.py:96 dealloc",
+   "self_ms": 5.89,
+   "cum_ms": 6.03,
+   "calls": 1211
+  },
+  {
+   "fn": "test_host_bound.py:161 call",
+   "self_ms": 1.88,
+   "cum_ms": 135.76,
+   "calls": 1658
+  },
+  {
+   "fn": "model.py:934 run",
+   "self_ms": 1.57,
+   "cum_ms": 167.61,
+   "calls": 618
+  },
+  {
+   "fn": "interface.py:95 run_block",
+   "self_ms": 1.55,
+   "cum_ms": 170.08,
+   "calls": 40
+  },
+  {
+   "fn": "moe_block_main_adapter.py:1080 _own_rows",
+   "self_ms": 1.33,
+   "cum_ms": 57.88,
+   "calls": 40
+  },
+  {
+   "fn": "~:0 <method 'get' of 'dict' objects>",
+   "self_ms": 0.98,
+   "cum_ms": 1.4,
+   "calls": 3493
+  },
+  {
+   "fn": "attention.py:869 write_own",
+   "self_ms": 0.96,
+   "cum_ms": 14.27,
+   "calls": 40
+  },
+  {
+   "fn": "attention.py:543 put",
+   "self_ms": 0.93,
+   "cum_ms": 11.92,
+   "calls": 80
+  },
+  {
+   "fn": "ccl.py:253 all_gather",
+   "self_ms": 0.9,
+   "cum_ms": 11.68,
+   "calls": 92
+  },
+  {
+   "fn": "host_alloc.py:137 mm_out",
+   "self_ms": 0.84,
+   "cum_ms": 1.17,
+   "calls": 120
+  },
+  {
+   "fn": "decorators.py:1122 _requires_slow_runtime",
+   "self_ms": 0.82,
+   "cum_ms": 0.82,
+   "calls": 1658
+  },
+  {
+   "fn": "attention.py:1091 _snapshot_rows",
+   "self_ms": 0.78,
+   "cum_ms": 16.57,
+   "calls": 40
+  },
+  {
+   "fn": "residual.py:137 _collapse",
+   "self_ms": 0.72,
+   "cum_ms": 10.16,
+   "calls": 77
+  },
+  {
+   "fn": "host_alloc.py:257 fork_out",
+   "self_ms": 0.68,
+   "cum_ms": 1.32,
+   "calls": 438
+  },
+  {
+   "fn": "attention.py:886 _pin_put",
+   "self_ms": 0.65,
+   "cum_ms": 0.93,
+   "calls": 1280
+  },
+  {
+   "fn": "model.py:186 _tensors",
+   "self_ms": 0.54,
+   "cum_ms": 0.87,
+   "calls": 1249
+  },
+  {
+   "fn": "model.py:198 _free",
+   "self_ms": 0.5,
+   "cum_ms": 2.31,
+   "calls": 631
+  },
+  {
+   "fn": "model.py:920 __call__",
+   "self_ms": 0.41,
+   "cum_ms": 171.24,
+   "calls": 40
+  },
+  {
+   "fn": "attention.py:1054 write_snapshot",
+   "self_ms": 0.4,
+   "cum_ms": 20.37,
+   "calls": 40
+  },
+  {
+   "fn": "mhc.py:131 collapse_kwargs",
+   "self_ms": 0.4,
+   "cum_ms": 1.03,
+   "calls": 79
+  },
+  {
+   "fn": "norm.py:134 _fork",
+   "self_ms": 0.39,
+   "cum_ms": 4.18,
+   "calls": 90
+  },
+  {
+   "fn": "rope.py:86 rope_stock",
+   "self_ms": 0.38,
+   "cum_ms": 2.51,
+   "calls": 48
+  }
+ ]
+}
