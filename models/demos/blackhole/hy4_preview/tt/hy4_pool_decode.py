@@ -18,9 +18,8 @@ import os
 import torch
 
 import ttnn
-from models.demos.blackhole.hy4_preview.config import DENSE, FULL
 from models.demos.blackhole.hy4_preview.tt import hy4_pool as HP
-from models.demos.blackhole.hy4_preview.tt.hy4_attn_opt import Hy4AttentionOpt, Opt
+from models.demos.blackhole.hy4_preview.tt.hy4_attn_opt import Hy4AttentionOpt
 from models.demos.blackhole.hy4_preview.tt.hy4_common import upload
 
 SCALE = 256**-0.5
@@ -40,10 +39,17 @@ def _pad_rows(t, to):
     return t if n == to else ttnn.pad(t, [(0, 0), (0, 0), (0, to - n), (0, 0)], 0)
 
 
+_POOL_AG_LINKS = int(
+    os.environ.get("HY4_POOL_AG_LINKS", "2")
+)  # links of the pool path's all_gather_async (q gather, key gather); see slot-diag/DIAG.md
+
+
 class PoolCtx:
     """Process-wide state of the pool decode path: persistent per-step device tensors, the shared XMerge, the split-kernel module, the select-pipeline parameters."""
 
-    def __init__(self, md, mc, ccl, pages, rows=4, S=1, mode="topk", bucket_tokens=None, xchg=None, fuse=None, sel=None, xm=None):
+    def __init__(
+        self, md, mc, ccl, pages, rows=4, S=1, mode="topk", bucket_tokens=None, xchg=None, fuse=None, sel=None, xm=None
+    ):
         self.md, self.mc, self.ccl, self.rows, self.S, self.pages = md, mc, ccl, rows, S, pages
         self.mode = mode
         self.bucket_tokens = bucket_tokens or pages * HP.CHUNK
@@ -53,14 +59,22 @@ class PoolCtx:
         self.fuse_sparse, self.xchg = "sparse" in fz, (("xchg" in fz) if xchg is None else xchg)
         self.fuse_idx = "idx" in fz
         self.sel = sel or dict(B=16, kb=512, kloc=512, split=4)
-        up = lambda t, dt, shard_dim=1, row_dim=0: upload(md, t, dt, ttnn.ROW_MAJOR_LAYOUT, shard_dim=shard_dim, row_dim=row_dim)
+        up = lambda t, dt, shard_dim=1, row_dim=0: upload(
+            md, t, dt, ttnn.ROW_MAJOR_LAYOUT, shard_dim=shard_dim, row_dim=row_dim
+        )
         self.colid = up(HP.colid_host(rows), ttnn.uint32)
         self.colinfo = up(HP.colid_host(rows, [1 << 20] * rows), ttnn.uint32)
         self.wr = up(HP.write_rows([0] * rows, rows), ttnn.int32)
-        self.upd = upload(md, torch.zeros(rows, NC, dtype=torch.int32), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, shard_dim=1, row_dim=0)
+        self.upd = upload(
+            md, torch.zeros(rows, NC, dtype=torch.int32), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, shard_dim=1, row_dim=0
+        )
         self.kvcnt = up(HP.key_counts([0] * rows, rows), ttnn.uint32)
-        self.ids_g = upload(md, torch.full((rows, 1, 1, K), -1, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, row_dim=0)
-        self.pt = upload(md, torch.arange(pages, dtype=torch.int32).reshape(1, pages), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+        self.ids_g = upload(
+            md, torch.full((rows, 1, 1, K), -1, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, row_dim=0
+        )
+        self.pt = upload(
+            md, torch.arange(pages, dtype=torch.int32).reshape(1, pages), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT
+        )
         self.kcfg_key = ttnn.create_sharded_memory_config(
             shape=(32, 128),
             core_grid=ttnn.num_cores_to_corerangeset(1, ttnn.CoreCoord(8, 8), row_wise=True),
@@ -72,7 +86,11 @@ class PoolCtx:
 
         self.mod = hy4_split
         self.ckc = ttnn.init_device_compute_kernel_config(
-            md.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=False
+            md.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
         )
         R = NC * S
         self.G, self.kc = (8, 128) if R * 8 <= 120 else (4, 256)
@@ -80,7 +98,9 @@ class PoolCtx:
         if self.xchg and xm is None:
             from models.demos.blackhole.hy4_preview.tt import hy4_xmerge
 
-            self.xm = hy4_xmerge.XMerge(md, S, nsplit=int(os.environ.get("HY4_XM_NSPLIT", "2")))  # ONE per process, before the first trace capture
+            self.xm = hy4_xmerge.XMerge(
+                md, S, nsplit=int(os.environ.get("HY4_XM_NSPLIT", "2"))
+            )  # ONE per process, before the first trace capture
         self.ids8 = {}  # index-source layer -> idx8 tensor of the current step
         self.ids8_dense = None
         self.step_pos = None
@@ -97,7 +117,13 @@ class PoolCtx:
         """pos [rows]: position of the token being decoded per user (keys 0..pos valid after the append)."""
         md = self.md
         up = lambda t, dt, tgt, shard_dim=1, row_dim=0: ttnn.copy_host_to_device_tensor(
-            ttnn.from_torch(t, dtype=dt, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=ttnn.ShardTensor2dMesh(md, dims=(row_dim, shard_dim), mesh_shape=tuple(md.shape))), tgt
+            ttnn.from_torch(
+                t,
+                dtype=dt,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(md, dims=(row_dim, shard_dim), mesh_shape=tuple(md.shape)),
+            ),
+            tgt,
         )
         pos = [int(p) for p in pos]
         wr = HP.write_rows(pos, self.rows)
@@ -121,7 +147,7 @@ class PoolCtx:
             mesh_device=self.md,
             topology=ttnn.Topology.Ring,
             multi_device_global_semaphore=self.ccl.get_ag_ping_pong_semaphore(),
-            num_links=2,
+            num_links=_POOL_AG_LINKS,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             barrier_semaphore=self.ccl.get_barrier_semaphore(),
         )
@@ -134,7 +160,7 @@ class PoolCtx:
             mesh_device=self.md,
             topology=ttnn.Topology.Ring,
             multi_device_global_semaphore=self.ccl.get_ag_ping_pong_semaphore(),
-            num_links=2,
+            num_links=_POOL_AG_LINKS,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             barrier_semaphore=self.ccl.get_barrier_semaphore(),
         )
@@ -157,17 +183,23 @@ class PoolCtx:
         q_rm = ttnn.to_layout(qfull, ttnn.ROW_MAJOR_LAYOUT)
         qg = self.gather_q(q_rm)  # [1,8,8S,576]
         ttnn.deallocate(q_rm)
-        out = self.mod.sparse_sdpa_split(qg, kv_pool, idx8, 512, SCALE, self.kc, self.G, self.ckc, None, emit_stats=3, owner_s=S)
+        out = self.mod.sparse_sdpa_split(
+            qg, kv_pool, idx8, 512, SCALE, self.kc, self.G, self.ckc, None, emit_stats=3, owner_s=S
+        )
         ttnn.deallocate(qg)
         if self.xm is not None:
             res = self.xm(out, sink)
         elif self.fuse_sparse:
             from models.demos.blackhole.hy4_preview.tt import hy4_merge
 
-            x = ttnn.experimental.all_to_all_async_generic(out, in_dim=1, out_dim=0, num_links=2, topology=ttnn.Topology.Ring, cluster_axis=1)
+            x = ttnn.experimental.all_to_all_async_generic(
+                out, in_dim=1, out_dim=0, num_links=2, topology=ttnn.Topology.Ring, cluster_axis=1
+            )
             res = hy4_merge.merge_fused(x, sink, S)
         else:
-            x = ttnn.experimental.all_to_all_async_generic(out, in_dim=1, out_dim=0, num_links=2, topology=ttnn.Topology.Ring, cluster_axis=1)
+            x = ttnn.experimental.all_to_all_async_generic(
+                out, in_dim=1, out_dim=0, num_links=2, topology=ttnn.Topology.Ring, cluster_axis=1
+            )
             res = merge3(x, sink, S)
         # res [1,S,32,512] TILE: rows 0..7 = the 8 real heads of user s -> [1,8,S,512]
         r = ttnn.to_layout(res, ttnn.ROW_MAJOR_LAYOUT)
@@ -178,7 +210,8 @@ class PoolCtx:
 
 def select_global(ctx, qh, w32, key_view):
     """decode indexer chain on the key pool: score kernel (kv_len per column from ctx.kvcnt) -> select_v2 -> global top-2048 ids uint32 [S,1,1,2048] (identical on all columns).
-    qh [S,1,32,128] TILE (heads = tile rows), w32 [1,1,32,32] TILE (row = query row, col = head), key_view [1,1,pages*64,128] bfp8 TILE."""
+    qh [S,1,32,128] TILE (heads = tile rows), w32 [1,1,32,32] TILE (row = query row, col = head), key_view [1,1,pages*64,128] bfp8 TILE.
+    """
     from models.demos.blackhole.hy4_preview.tt import hy4_idx_score as IS
     from models.demos.blackhole.hy4_preview.tt.hy4_idx_select import select_v2
 
@@ -211,7 +244,9 @@ class Hy4AttentionPool(Hy4AttentionOpt):
     def init_pool(self, ctx, kv_pool, key_pool4=None):
         self.ctx, self.kv_pool, self.key_pool4 = ctx, kv_pool, key_pool4
         S = ctx.S
-        self.idx8_buf = ctx.new_idx8() if self.has_indexer else None  # this layer's local ids (persistent; shared layers of this source read it)
+        self.idx8_buf = (
+            ctx.new_idx8() if self.has_indexer else None
+        )  # this layer's local ids (persistent; shared layers of this source read it)
         self.key_view = ttnn.reshape(key_pool4, [1, 1, ctx.pages * 64, 128]) if key_pool4 is not None else None
         so = self.host_w["sink_over_scale"].tensor.reshape(-1).float()  # [64] sink / scale per head
         t = torch.zeros(1, S, 32, NC)
@@ -222,7 +257,9 @@ class Hy4AttentionPool(Hy4AttentionOpt):
     # ------------------------------------------------------------------ pieces
     def pool_append_kv(self, lat, k_pe):
         dp = ttnn.experimental.deepseek_prefill
-        dram = ttnn.DRAM_MEMORY_CONFIG  # the stock quantiser / packer want DRAM-interleaved inputs (HY4_OPT=l1 keeps activations in L1)
+        dram = (
+            ttnn.DRAM_MEMORY_CONFIG
+        )  # the stock quantiser / packer want DRAM-interleaved inputs (HY4_OPT=l1 keeps activations in L1)
         lat = ttnn.to_memory_config(lat, dram)
         f8, sc = dp.per_token_cast_to_fp8(lat, round_scale_to_power_of_two=True)
         rope_rm = ttnn.to_layout(ttnn.to_memory_config(k_pe, dram), ttnn.ROW_MAJOR_LAYOUT)
