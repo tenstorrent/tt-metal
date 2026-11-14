@@ -14,7 +14,9 @@
 #include "core/tt_tensor_utils.hpp"
 #include "optimizers/adamw.hpp"
 #include "test_utils/optimizer_state.hpp"
+#include "test_utils/program_cache.hpp"
 #include "test_utils/random_data.hpp"
+#include "tt-metalium/bfloat16.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 
 using namespace ttml;
@@ -28,6 +30,12 @@ public:
     }
     static void TearDownTestSuite() {
         autograd::ctx().close_device();
+    }
+
+protected:
+    // Tests store gradient sync defaults; the next test starts from none.
+    void TearDown() override {
+        autograd::ctx().set_gradient_reduce_dtype(std::nullopt);
     }
 };
 
@@ -74,7 +82,6 @@ TEST_F(ParameterDtypeTest, ReadsMasterDtypeFromTheTrainingConfig) {
     EXPECT_THAT(
         [&] { apply("precision: float32"); },
         ThrowsMessage<std::runtime_error>(HasSubstr("training_config.precision must be a map")));
-    autograd::ctx().set_gradient_reduce_dtype(std::nullopt);
 }
 
 TEST_F(ParameterDtypeTest, AppliesThePrecisionConfig) {
@@ -179,4 +186,62 @@ TEST_F(ParameterDtypeTest, AppliesReduceDtypeAsTheGradientSyncDefault) {
     autograd::ctx().close_device();
     EXPECT_EQ(autograd::ctx().get_gradient_reduce_dtype(), std::nullopt);
     autograd::ctx().open_device();
+}
+
+// Stochastic rounding does nothing for fp32 parameters, so fused AdamW asked for both warns once, at construction.
+TEST_F(ParameterDtypeTest, AdamWWarnsOnceWhenStochasticRoundingMeetsFp32Parameters) {
+    const auto construct = [](const serialization::NamedParameters& parameters, bool stochastic_rounding) {
+        ::testing::internal::CaptureStdout();
+        ::testing::internal::CaptureStderr();
+        {
+            optimizers::AdamW optimizer(
+                parameters, optimizers::AdamWConfig{.stochastic_rounding = stochastic_rounding});
+        }
+        const auto output = ::testing::internal::GetCapturedStdout() + ::testing::internal::GetCapturedStderr();
+        size_t warnings = 0;
+        for (size_t at = output.find("stochastic_rounding has no effect"); at != std::string::npos;
+             at = output.find("stochastic_rounding has no effect", at + 1)) {
+            ++warnings;
+        }
+        return warnings;
+    };
+    const serialization::NamedParameters fp32_parameters{
+        {"first", autograd::create_tensor(random_values(ttnn::DataType::FLOAT32), /* requires_grad */ true)},
+        {"second", autograd::create_tensor(random_values(ttnn::DataType::FLOAT32), /* requires_grad */ true)}};
+    const serialization::NamedParameters bf16_parameters{
+        {"only", autograd::create_tensor(random_values(ttnn::DataType::BFLOAT16), /* requires_grad */ true)}};
+
+    EXPECT_EQ(construct(fp32_parameters, /* stochastic_rounding */ true), 1U);
+    EXPECT_EQ(construct(fp32_parameters, /* stochastic_rounding */ false), 0U);
+    EXPECT_EQ(construct(bf16_parameters, /* stochastic_rounding */ true), 0U);
+}
+
+// The bf16-only gradient consumers call this right before they read the gradients. An fp32 gradient is replaced by its
+// bf16 cast, rounded to nearest even as the host rounds it; a bf16 gradient, a parameter without one and a second call
+// are left alone.
+TEST_F(ParameterDtypeTest, CastsFp32GradientsToBf16Once) {
+    auto fp32_grad = autograd::create_tensor(random_values(ttnn::DataType::BFLOAT16), /* requires_grad */ true);
+    auto bf16_grad = autograd::create_tensor(random_values(ttnn::DataType::BFLOAT16), /* requires_grad */ true);
+    auto no_grad = autograd::create_tensor(random_values(ttnn::DataType::BFLOAT16), /* requires_grad */ true);
+    const auto fp32_values = random_values(ttnn::DataType::FLOAT32);
+    fp32_grad->set_grad(fp32_values);
+    bf16_grad->set_grad(random_values(ttnn::DataType::BFLOAT16));
+    const auto bf16_address = bf16_grad->get_grad().buffer()->address();
+    const serialization::NamedParameters parameters{
+        {"fp32_grad", fp32_grad}, {"bf16_grad", bf16_grad}, {"no_grad", no_grad}};
+
+    core::cast_fp32_gradients_to_bf16(parameters);
+
+    ASSERT_EQ(fp32_grad->get_grad().dtype(), ttnn::DataType::BFLOAT16);
+    const xt::xarray<float> expected = xt::cast<float>(xt::cast<bfloat16>(core::to_xtensor(fp32_values)));
+    EXPECT_EQ(test_utils::count_bit_mismatches(expected, core::to_xtensor(fp32_grad->get_grad())), 0U);
+    // The values are random fp32 ones, so the cast changed them: the check above isn't a copy of the input.
+    EXPECT_GT(test_utils::count_bit_mismatches(expected, core::to_xtensor(fp32_values)), 0U);
+    EXPECT_EQ(bf16_grad->get_grad().buffer()->address(), bf16_address);
+    EXPECT_FALSE(no_grad->is_grad_initialized());
+
+    const auto cast_address = fp32_grad->get_grad().buffer()->address();
+    core::cast_fp32_gradients_to_bf16(parameters);
+    EXPECT_EQ(fp32_grad->get_grad().buffer()->address(), cast_address);
+    EXPECT_EQ(bf16_grad->get_grad().buffer()->address(), bf16_address);
 }

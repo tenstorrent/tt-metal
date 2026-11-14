@@ -8,8 +8,11 @@ import numpy as np
 import pytest
 import ttml
 import ttnn
+from ttml.common import muon_optimizer
 from ttml.common.utils import create_optimizer
 from ttml.modules import AbstractModuleBase, Parameter
+
+from tensor_helpers import stored_dtypes
 
 
 def _make_python_optimizer_class():
@@ -364,6 +367,89 @@ def test_muon_with_adamw_group_options_cover_both_inner_optimizers(expect_error)
     assert opt.adamw_optimizer().get_param_groups()[0]["weight_decay"] == pytest.approx(0.05)
 
 
+@pytest.mark.requires_device
+def test_muon_with_adamw_rejects_fp32_master_weights(expect_error):
+    """Muon updates bf16 parameters only: MuonComposite refuses fp32 master weights before MuonWithAdamW builds its AdamW
+    half, with a message that names the parameter and points to fused AdamW."""
+    from ttml.common.muon_optimizer import MuonWithAdamW
+
+    model = _make_block_model()  # attention/weight and mlp/weight go to Muon
+    MuonWithAdamW({}, model.parameters())
+
+    ttml.core.apply_precision_config({"precision": {"master_dtype": "float32"}}, model.parameters())
+    with expect_error(RuntimeError, "MuonComposite supports bf16 parameters only, but parameter .* is stored as"):
+        MuonWithAdamW({}, model.parameters())
+
+
+class _PythonSGD(ttml.optimizers.OptimizerBase):
+    """A plain SGD written in Python, as a user registers one. Its update is bf16 math, so it casts fp32 gradients
+    first, as the C++ bf16-only optimizers do."""
+
+    def __init__(self, params):
+        super().__init__(params)
+        self._params = params
+
+    def get_name(self):
+        return "PythonSGD"
+
+    def step(self):
+        ttml.core.cast_fp32_gradients_to_bf16(self._params)
+        for tensor in self._params.values():
+            if tensor.is_grad_initialized():
+                tensor.set_value(ttnn.subtract(tensor.get_value(), ttnn.multiply(tensor.get_grad(), 1e-3)))
+
+    def zero_grad(self):
+        pass
+
+    def get_state_dict(self):
+        return {}
+
+    def set_state_dict(self, d):
+        pass
+
+    def get_steps(self):
+        return 0
+
+    def set_steps(self, s):
+        pass
+
+    def get_group_lrs(self):
+        return [1e-3]
+
+    def set_group_lrs(self, lrs):
+        pass
+
+
+@pytest.mark.requires_device
+def test_every_registered_optimizer_steps_on_fp32_gradients():
+    """With reduce_dtype float32 a parameter's gradient can reach any optimizer in fp32. Every type create_optimizer
+    accepts, C++ or registered from Python, steps on fp32 gradients and leaves its bf16 parameters bf16."""
+    muon_optimizer.register()  # what train.py does before it creates an optimizer
+    ttml.optimizers.register_optimizer("PythonSGD", lambda config, params: _PythonSGD(params))
+    types = ttml.optimizers.registered_optimizer_types()
+    assert {"AdamW", "SGD", "MuonComposite", "MuonWithAdamW", "NoOp", "PythonSGD"} <= set(types)
+    for optimizer_type in types:
+        model = _make_block_model()
+        parameters = model.parameters()
+        for tensor in parameters.values():
+            shape = tensor.get_value().shape
+            values = np.random.default_rng(1).uniform(-1.0, 1.0, size=tuple(shape)).astype(np.float32)
+            grad = ttml.autograd.Tensor.from_numpy(values, ttnn.Layout.TILE, ttnn.DataType.FLOAT32)
+            tensor.set_grad(grad.get_value(ttml.autograd.PreferredPrecision.NATIVE))
+            assert tensor.get_grad().dtype == ttnn.DataType.FLOAT32
+        optimizer = ttml.optimizers.create_optimizer({"type": optimizer_type, "lr": 1e-3}, parameters)
+        optimizer.step()
+        assert stored_dtypes(model) == {ttnn.DataType.BFLOAT16}, optimizer_type
+
+
+def test_module_parameters_are_marked_as_parameters():
+    """Registering a tensor in a module marks it as a parameter, the tensors whose gradients add up in fp32 under
+    reduce_dtype float32; a tensor no module registered isn't one. Empty tensors, so this needs no device."""
+    model = _make_block_model()
+    assert all(tensor.is_parameter() for tensor in model.parameters().values())
+    assert not ttml.autograd.Tensor().is_parameter()
+
+
 def test_registry_reads_variant_only_adamw_options():
     """Stochastic Rounding (AdamW) and Kahan Summation (AdamWComposite) are parsed only for the config that has the
     field, so a renamed field would silently drop its YAML key."""
@@ -376,10 +462,6 @@ def test_registry_reads_variant_only_adamw_options():
     for kahan_summation, num_buffers in ((True, len(params)), (False, 0)):
         opt = ttml.optimizers.create_optimizer({"type": "AdamWComposite", "kahan_summation": kahan_summation}, params)
         assert len(opt.get_state_dict()["kahan_compensation"]) == num_buffers
-
-
-def _stored_dtypes(model) -> set:
-    return {t.get_value(ttml.autograd.PreferredPrecision.NATIVE).dtype for t in model.parameters().values()}
 
 
 @pytest.mark.requires_device
@@ -402,7 +484,7 @@ def test_create_optimizer_applies_master_dtype(precision, expected):
 
     create_optimizer(model, {"training_config": training_config})
 
-    assert _stored_dtypes(model) == {expected}
+    assert stored_dtypes(model) == {expected}
 
 
 class _ModelWithoutParameters:

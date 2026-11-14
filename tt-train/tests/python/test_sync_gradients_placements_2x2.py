@@ -11,6 +11,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+import ttnn
 import ttml
 from sync_gradients_placements_common import (
     DIM,
@@ -27,6 +28,7 @@ from sync_gradients_placements_common import (
     _shards,
     is_sharded_on_axis,
 )
+from gradient_sync_helpers import exact_mean, fpu_add_bound, make_gradients, sharded_linear, to_bf16, upload
 from tp_block import TPBlock
 
 pytestmark = [
@@ -124,6 +126,53 @@ class TestHSDP:
         assert not is_sharded_on_axis(head, dp)
         assert not is_sharded_on_axis(head, fsdp)
         _assert_mean_over_axis(after_dp["Model/head/weight"], _shards(head), hsdp_mesh.shape, fsdp, "head over fsdp")
+
+    def test_fp32_reduce_keeps_the_hsdp_shard_in_fp32_for_the_dp_sum(self, hsdp_mesh):
+        """With reduce_dtype float32 the fsdp reduce-scatter leaves an fp32 shard, and the dp sum adds those fp32 shards
+        on the FPU. The result is the float64 mean within the bound of those two FPU adds. Rounded to bf16, about
+        98.5% of the elements land on the exact mean, against 76% when the shard is rounded to bf16 before the dp sum;
+        an exact fp32 sum would give 100%, the FPU's 10-bit alignment the rest."""
+        dp = hsdp_mesh.axis_index("dp")
+        D, F = hsdp_mesh.axis_size("dp"), hsdp_mesh.axis_size("fsdp")
+        assert (D, F) == (2, 2)  # the bound below counts one add per axis
+        values = make_gradients(64, 128, seed=8, devices=D * F)  # device k in mesh row-major order holds values[k]
+        exact = values.astype(np.float64).mean(axis=0)
+
+        def reduce(round_shard_to_bf16: bool):
+            _layer, state, tensor, shard_dim = sharded_linear(ttnn.DataType.FLOAT32)
+            gradients = upload(
+                values.reshape(D, F, *values.shape[2:]), [ttnn.PlacementShard(0), ttnn.PlacementShard(1)]
+            )
+            tensor.set_grad(gradients.get_value())
+            state.backward_post()
+            assert tensor.get_grad().dtype == ttnn.DataType.FLOAT32
+            if round_shard_to_bf16:
+                tensor.set_grad(ttnn.typecast(tensor.get_grad(), ttnn.DataType.BFLOAT16))
+            parameters = ttml.NamedParameters()
+            parameters["weight"] = tensor
+            ttml.core.distributed.synchronize_gradients(parameters, [dp], reduce_dtype=ttnn.DataType.FLOAT32)
+            grad = tensor.get_grad()
+            device_shards = _shards(grad)
+            shards = np.stack(device_shards).reshape(D, F, *device_shards[0].shape)
+            for row in range(1, D):
+                np.testing.assert_array_equal(shards[row], shards[0])  # every dp rank holds the same mean
+            return grad.dtype, np.concatenate(list(shards[0]), axis=shard_dim)[0]
+
+        fp32_dtype, fp32_shard = reduce(round_shard_to_bf16=False)
+        bf16_dtype, bf16_shard = reduce(round_shard_to_bf16=True)
+
+        assert fp32_dtype == ttnn.DataType.FLOAT32
+        assert bf16_dtype == ttnn.DataType.BFLOAT16
+        # The fsdp sum of each dp row (halved), then the dp sum of the two row means (halved).
+        row_means = values.astype(np.float64).reshape(D, F, *values.shape[1:]).mean(axis=1)
+        bound = 0.25 * (fpu_add_bound(values[0], values[1]) + fpu_add_bound(values[2], values[3]))
+        bound = bound + 0.5 * fpu_add_bound(row_means[0], row_means[1])
+        error = np.abs(fp32_shard.astype(np.float64) - exact)
+        np.testing.assert_array_less(error, bound * 1.01 + np.abs(exact) * 2.0**-22 + 1e-30)
+        fp32_share = np.mean(to_bf16(fp32_shard) == exact_mean(values)[0])
+        assert fp32_share >= 0.97
+        assert fp32_share > np.mean(bf16_shard == exact_mean(values)[0])
+        assert np.mean(error) < np.mean(np.abs(bf16_shard - exact))
 
     def test_causal_lm_collate_hsdp(self, hsdp_mesh):
         """``causal_lm_collate_fn`` with the HSDP mapper: the standard per-device shapes, the collapsed whole-mesh
