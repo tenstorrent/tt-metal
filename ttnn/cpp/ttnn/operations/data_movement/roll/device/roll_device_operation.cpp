@@ -23,6 +23,9 @@ void validate_roll(const RollParams& operation_attributes, const RollInputs& ten
     TT_FATAL(input.storage_type() == ttnn::StorageType::DEVICE, "Operands to roll need to be on device!");
     TT_FATAL(input.is_allocated(), "Operands need to be allocated in buffers on device!");
     TT_FATAL(input.is_sharded(), "Native sharded roll requires a sharded input");
+    TT_FATAL(
+        input.shard_spec().has_value(),
+        "Native sharded roll requires a legacy shard_spec (ND_SHARDED is not supported on this path)");
     TT_FATAL(operation_attributes.output_mem_config.is_sharded(), "Native sharded roll requires a sharded output");
     // The program factory enumerates a single rectangular grid row-major; a multi-range grid
     // would map cells to the wrong cores.
