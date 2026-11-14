@@ -181,8 +181,9 @@ TEST_F(SynchronizeTensorTest, Fp32SumIsCloserToTheExactMean) {
     EXPECT_GT(fp32_share, bf16_share);
 }
 
-// 512 x 1024 bf16 values per device is the size from which the reduce-scatter route is used.
-TEST_F(SynchronizeTensorTest, LargeFp32SumTakesTheReduceScatterRouteWithTheSameResult) {
+// 512 x 1024 bf16 values per device is the size from which the reduce-scatter route is used; the result is the fp32
+// all-reduce's either way (which route runs is checked below).
+TEST_F(SynchronizeTensorTest, LargeFp32SumEqualsTheFp32AllReduce) {
     const auto values = make_gradients(512, 1024, 3);
     const auto gradients = upload(values);
 
@@ -193,7 +194,7 @@ TEST_F(SynchronizeTensorTest, LargeFp32SumTakesTheReduceScatterRouteWithTheSameR
 }
 
 // 544 and 992 are whole tiles but not two whole tiles per device, so neither dim can be split for two devices.
-TEST_F(SynchronizeTensorTest, LargeFp32SumWithoutWholeTileSlicesUsesTheAllReduce) {
+TEST_F(SynchronizeTensorTest, LargeFp32SumWithoutWholeTileSlicesEqualsTheFp32AllReduce) {
     const auto gradients = upload(make_gradients(544, 992, 4));
 
     const auto fp32 = core::distributed::synchronize_tensor(gradients, {kDdpAxis}, ttnn::DataType::FLOAT32);
