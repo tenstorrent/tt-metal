@@ -9,7 +9,7 @@ on torch (no HuggingFace / AutoConfig), so they run on a single Wormhole/Blackho
 card without a downloaded checkpoint.
 
 Coverage:
-  * partial RoPE (rotate first rotary_dim dims, pass the rest through).
+  * partial RoPE (rotate first rotary_dim dims, pass the rest through), llama and indexed ops.
 """
 
 from types import SimpleNamespace
@@ -80,3 +80,46 @@ def test_partial_rope_wrapper(mesh_device, device_params, seq_len, reset_seeds):
     logger.info(f"partial rope: tail_pcc={tail_pcc}, head_pcc={head_pcc}, head-vs-input(should differ)={identity_pcc}")
     assert tail_pass, f"tail pass-through PCC fail: {tail_pcc}"
     assert head_pass, f"rotated head PCC fail: {head_pcc}"
+
+
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
+@pytest.mark.parametrize("seq_len", [128], ids=["s128"])
+@pytest.mark.parametrize("kv_actual", [0, 64], ids=["kv0", "kv64"])
+def test_partial_rope_indexed(mesh_device, device_params, seq_len, kv_actual, reset_seeds):
+    """Indexed partial RoPE: the op's rotary_dim path equals slice -> rotate -> concat, bit for bit."""
+    head_dim, rotary_dim, n_heads = 128, 64, 8
+
+    hf_config = SimpleNamespace(
+        head_dim=head_dim,
+        rotary_dim=rotary_dim,
+        rope_theta=5_000_000,
+        max_position_embeddings=4096,
+        rope_scaling=None,
+    )
+    rope_setup = create_rope_setup(mesh_device=mesh_device, hf_config=hf_config, datatype=ttnn.bfloat16)
+    cos = rope_setup.cos_matrix_prefill[:, :, : kv_actual + seq_len, :]
+    sin = rope_setup.sin_matrix_prefill[:, :, : kv_actual + seq_len, :]
+    trans = rope_setup.get_both_trans_mats()["prefill"]
+
+    q_tt = ttnn.from_torch(
+        torch.randn(1, n_heads, seq_len, head_dim),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    out = apply_rope(q_tt, (cos, sin), trans, is_decode_mode=False, kv_actual_global=kv_actual, cluster_axis=0)
+
+    head = ttnn.slice(q_tt, [0, 0, 0, 0], [1, n_heads, seq_len, rotary_dim])
+    tail = ttnn.slice(q_tt, [0, 0, 0, rotary_dim], [1, n_heads, seq_len, head_dim])
+    head = ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
+        head, cos, sin, trans, kv_actual_global=kv_actual, cluster_axis=0
+    )
+    ref = ttnn.concat([head, tail], dim=-1)
+
+    out_torch = ttnn.to_torch(ttnn.get_device_tensors(out)[0])
+    ref_torch = ttnn.to_torch(ttnn.get_device_tensors(ref)[0])
+    assert tuple(out_torch.shape) == tuple(ref_torch.shape)
+    assert torch.equal(out_torch, ref_torch), f"max abs diff {(out_torch - ref_torch).abs().max()}"
