@@ -212,17 +212,24 @@ void append_fabric_vc2_connection_rt_args(
             (i == vc2_sender_channel_flat) ? " <-- VC2" : "");
     }
 
-    // VC2 has exactly one sender channel at VC-relative index 0.
-    // The allocator's 2D API requires (vc_id=2, channel_id=0).
+    // VC2 has exactly one sender channel. Its buffer sits after the router's own VC0 and VC1 senders, so it comes
+    // from the router's published layout. A process that did not build the fabric (a fabric manager launched it) has
+    // none and takes the fabric-wide allocation.
     static constexpr size_t vc2_id = 2;
-    static constexpr size_t vc2_channel_idx = 0;
+    const auto* router_layout =
+        fabric_context.get_builder_context().find_router_channel_layout(src_fabric_node_id, fabric_router_channel);
+    const RouterChannelLayout::Channel vc2_channel =
+        router_layout != nullptr
+            ? router_layout->senders[vc2_id].at(0)
+            : RouterChannelLayout::Channel{
+                  static_cast<uint32_t>(static_channel_allocator->get_sender_channel_base_address(vc2_id, 0)),
+                  static_cast<uint32_t>(static_channel_allocator->get_sender_channel_number_of_slots(vc2_id, 0))};
 
     tt::tt_fabric::SenderWorkerAdapterSpec edm_connection = {
         .edm_noc_x = fabric_router_virtual_core.x,
         .edm_noc_y = fabric_router_virtual_core.y,
-        .edm_buffer_base_addr = static_channel_allocator->get_sender_channel_base_address(vc2_id, vc2_channel_idx),
-        .num_buffers_per_channel =
-            static_channel_allocator->get_sender_channel_number_of_slots(vc2_id, vc2_channel_idx),
+        .edm_buffer_base_addr = vc2_channel.base_address,
+        .num_buffers_per_channel = vc2_channel.num_slots,
         .edm_l1_sem_addr = edm_config.sender_channels_local_flow_control_semaphore_address[vc2_sender_channel_flat],
         .edm_connection_handshake_addr =
             edm_config.sender_channels_connection_semaphore_address[vc2_sender_channel_flat],

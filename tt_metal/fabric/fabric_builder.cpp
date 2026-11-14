@@ -136,6 +136,12 @@ void FabricBuilder::create_routers() {
         }
     }
 
+    for (const auto& [eth_chan, router] : routers_) {
+        if (auto layout = router->get_channel_layout()) {
+            builder_context_.publish_router_channel_layout(local_node_, eth_chan, std::move(*layout));
+        }
+    }
+
     // Record build state
     builder_context_.set_num_fabric_initialized_routers(device_->id(), routers_.size());
     if (!routers_.empty()) {

@@ -48,18 +48,6 @@ size_t FabricStaticSizedChannelsAllocator::get_receiver_channel_number_of_slots(
     return receiver_channels_num_buffers[vc_id][channel_id];
 }
 
-size_t FabricStaticSizedChannelsAllocator::get_remote_receiver_channel_number_of_slots(
-    size_t vc_id, size_t channel_id) const {
-    TT_FATAL(
-        vc_id < builder_config::MAX_NUM_VCS, "VC ID {} out of bounds (max {})", vc_id, builder_config::MAX_NUM_VCS);
-    TT_FATAL(
-        channel_id < remote_receiver_channels_num_buffers[vc_id].size(),
-        "Remote receiver channel ID {} out of bounds for VC{}",
-        channel_id,
-        vc_id);
-    return remote_receiver_channels_num_buffers[vc_id][channel_id];
-}
-
 size_t FabricStaticSizedChannelsAllocator::get_receiver_channel_base_address(size_t vc_id, size_t channel_id) const {
     TT_FATAL(
         vc_id < builder_config::MAX_NUM_VCS, "VC ID {} out of bounds (max {})", vc_id, builder_config::MAX_NUM_VCS);
@@ -172,61 +160,8 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
         }
     }
 
-    // set the base addresses for the local channels (allocate sequentially: VC0 channels, then VC1 channels)
-    uint32_t sender_buffer_addr = buffer_region_start;
-    for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
-        for (uint32_t i = 0; i < num_used_sender_channels_per_vc[vc]; i++) {
-            this->sender_channels_base_address[vc][i] = sender_buffer_addr;
-            sender_buffer_addr += this->sender_channels_size_bytes[vc][i];
-            log_trace(
-                tt::LogFabric, "VC{} Sender {} channel_start: {}", vc, i, this->sender_channels_base_address[vc][i]);
-        }
-    }
-
-    uint32_t receiver_buffer_addr = sender_buffer_addr;
-    for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
-        for (uint32_t i = 0; i < num_used_receiver_channels_per_vc[vc]; i++) {
-            this->receiver_channels_base_address[vc][i] = receiver_buffer_addr;
-            receiver_buffer_addr += this->receiver_channels_size_bytes[vc][i];
-            log_trace(
-                tt::LogFabric,
-                "VC{} Receiver {} channel_start: {}",
-                vc,
-                i,
-                this->receiver_channels_base_address[vc][i]);
-        }
-    }
-    uint32_t buffer_addr_end = receiver_buffer_addr;
-    this->channel_buffers_end_address = buffer_addr_end;
-
-    // set the base addresses for the remote channels
-    uint32_t remote_sender_buffer_addr = buffer_region_start;
-    for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
-        for (uint32_t i = 0; i < num_used_sender_channels_per_vc[vc]; i++) {
-            this->remote_sender_channels_base_address[vc][i] = remote_sender_buffer_addr;
-            remote_sender_buffer_addr += this->remote_sender_channels_size_bytes[vc][i];
-            log_trace(
-                tt::LogFabric,
-                "VC{} Remote Sender {} channel_start: {}",
-                vc,
-                i,
-                this->remote_sender_channels_base_address[vc][i]);
-        }
-    }
-
-    uint32_t remote_receiver_buffer_addr = remote_sender_buffer_addr;
-    for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
-        for (uint32_t i = 0; i < num_used_receiver_channels_per_vc[vc]; i++) {
-            this->remote_receiver_channels_base_address[vc][i] = remote_receiver_buffer_addr;
-            remote_receiver_buffer_addr += this->remote_receiver_channels_size_bytes[vc][i];
-            log_trace(
-                tt::LogFabric,
-                "VC{} Remote Receiver {} channel_start: {}",
-                vc,
-                i,
-                this->remote_receiver_channels_base_address[vc][i]);
-        }
-    }
+    assign_base_addresses();
+    const size_t buffer_addr_end = this->channel_buffers_end_address;
 
     log_trace(tt::LogFabric, "Available channel buffering space: {}", this->available_channel_buffering_space);
 
@@ -283,6 +218,104 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
     TT_FATAL(
         buffer_addr_end <= this->max_l1_loading_size,
         "Internal error - channel buffers spilled past the end of usable L1 region.");
+}
+
+FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
+    const FabricStaticSizedChannelsAllocator& reference,
+    const std::array<size_t, builder_config::MAX_NUM_VCS>& num_sender_channels_per_vc) :
+    FabricStaticSizedChannelsAllocator(reference) {
+    for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+        TT_FATAL(
+            num_sender_channels_per_vc[vc] <= reference.num_used_sender_channels_per_vc[vc],
+            "VC{} has {} sender channels, more than the {} the fabric allocates for",
+            vc,
+            num_sender_channels_per_vc[vc],
+            reference.num_used_sender_channels_per_vc[vc]);
+        this->num_used_sender_channels_per_vc[vc] = num_sender_channels_per_vc[vc];
+        for (size_t i = num_sender_channels_per_vc[vc]; i < builder_config::num_max_sender_channels; ++i) {
+            this->sender_channels_size_bytes[vc][i] = 0;
+            this->sender_channels_num_buffers[vc][i] = 0;
+            this->remote_sender_channels_size_bytes[vc][i] = 0;
+            this->remote_sender_channels_num_buffers[vc][i] = 0;
+            this->sender_channels_base_address[vc][i] = 0;
+            this->remote_sender_channels_base_address[vc][i] = 0;
+        }
+    }
+    assign_base_addresses();
+}
+
+RouterChannelLayout FabricStaticSizedChannelsAllocator::get_layout() const {
+    RouterChannelLayout layout;
+    for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+        for (size_t i = 0; i < num_used_sender_channels_per_vc[vc]; ++i) {
+            layout.senders[vc].push_back(
+                {static_cast<uint32_t>(sender_channels_base_address[vc][i]),
+                 static_cast<uint32_t>(sender_channels_num_buffers[vc][i])});
+        }
+        for (size_t i = 0; i < num_used_receiver_channels_per_vc[vc]; ++i) {
+            layout.receivers[vc].push_back(
+                {static_cast<uint32_t>(receiver_channels_base_address[vc][i]),
+                 static_cast<uint32_t>(receiver_channels_num_buffers[vc][i])});
+        }
+    }
+    return layout;
+}
+
+void FabricStaticSizedChannelsAllocator::assign_base_addresses() {
+    // Senders first, then receivers, each in VC order; the remote channels mirror the local ones.
+    uint32_t sender_buffer_addr = buffer_region_start;
+    for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+        for (uint32_t i = 0; i < num_used_sender_channels_per_vc[vc]; i++) {
+            this->sender_channels_base_address[vc][i] = sender_buffer_addr;
+            sender_buffer_addr += this->sender_channels_size_bytes[vc][i];
+            log_trace(
+                tt::LogFabric, "VC{} Sender {} channel_start: {}", vc, i, this->sender_channels_base_address[vc][i]);
+        }
+    }
+
+    uint32_t receiver_buffer_addr = sender_buffer_addr;
+    for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+        for (uint32_t i = 0; i < num_used_receiver_channels_per_vc[vc]; i++) {
+            this->receiver_channels_base_address[vc][i] = receiver_buffer_addr;
+            receiver_buffer_addr += this->receiver_channels_size_bytes[vc][i];
+            log_trace(
+                tt::LogFabric,
+                "VC{} Receiver {} channel_start: {}",
+                vc,
+                i,
+                this->receiver_channels_base_address[vc][i]);
+        }
+    }
+    this->channel_buffers_end_address = receiver_buffer_addr;
+
+    // set the base addresses for the remote channels
+    uint32_t remote_sender_buffer_addr = buffer_region_start;
+    for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+        for (uint32_t i = 0; i < num_used_sender_channels_per_vc[vc]; i++) {
+            this->remote_sender_channels_base_address[vc][i] = remote_sender_buffer_addr;
+            remote_sender_buffer_addr += this->remote_sender_channels_size_bytes[vc][i];
+            log_trace(
+                tt::LogFabric,
+                "VC{} Remote Sender {} channel_start: {}",
+                vc,
+                i,
+                this->remote_sender_channels_base_address[vc][i]);
+        }
+    }
+
+    uint32_t remote_receiver_buffer_addr = remote_sender_buffer_addr;
+    for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+        for (uint32_t i = 0; i < num_used_receiver_channels_per_vc[vc]; i++) {
+            this->remote_receiver_channels_base_address[vc][i] = remote_receiver_buffer_addr;
+            remote_receiver_buffer_addr += this->remote_receiver_channels_size_bytes[vc][i];
+            log_trace(
+                tt::LogFabric,
+                "VC{} Remote Receiver {} channel_start: {}",
+                vc,
+                i,
+                this->remote_receiver_channels_base_address[vc][i]);
+        }
+    }
 }
 
 void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
@@ -875,6 +908,7 @@ void FabricStaticSizedChannelsAllocator::emit_ct_args(std::vector<uint32_t>& ct_
 
 void FabricStaticSizedChannelsAllocator::emit_channel_allocations_ct_args(
     std::vector<uint32_t>& ct_args,
+    size_t num_sender_channels,
     size_t num_used_vc0_sender_channels,
     size_t num_used_vc1_sender_channels,
     size_t num_used_vc2_sender_channels,
@@ -931,6 +965,7 @@ void FabricStaticSizedChannelsAllocator::emit_channel_allocations_ct_args(
     const bool has_unused_channels = (num_unused_channels > 0) && num_used_sender_channels > 0;
 
     // Sender channel-to-entry index
+    const size_t sender_mapping_start = ct_args.size();
     if (has_unused_channels) {
         const size_t used_vc0_end = num_used_vc0_sender_channels;
         const size_t used_vc1_end = used_vc0_end + num_used_vc1_sender_channels;
@@ -963,6 +998,15 @@ void FabricStaticSizedChannelsAllocator::emit_channel_allocations_ct_args(
             ct_args.push_back(static_cast<uint32_t>(i));
         }
     }
+    // The kernel's table covers the fabric's sender channel positions. A router built with fewer channels has no
+    // entry for the rest; they are never serviced, so they point at entry 0.
+    const size_t num_mapped_sender_channels = ct_args.size() - sender_mapping_start;
+    TT_FATAL(
+        num_mapped_sender_channels <= num_sender_channels,
+        "The kernel has {} sender channels, fewer than the router's {}",
+        num_sender_channels,
+        num_mapped_sender_channels);
+    ct_args.insert(ct_args.end(), num_sender_channels - num_mapped_sender_channels, 0);
 
     // Receiver channel-to-entry index (receivers start after all sender entries)
     size_t receiver_entry_base = total_sender_channels;

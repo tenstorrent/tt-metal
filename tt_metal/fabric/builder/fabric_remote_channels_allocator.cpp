@@ -10,16 +10,20 @@
 namespace tt::tt_fabric {
 
 FabricRemoteChannelsAllocator::FabricRemoteChannelsAllocator(
-    const FabricStaticSizedChannelsAllocator& static_allocator) :
-    FabricChannelAllocator(static_allocator.topology_, static_allocator.options_, static_allocator.memory_regions_) {
-    // Extract remote receiver channel information from the static allocator for all VCs
+    const FabricStaticSizedChannelsAllocator& local_allocator, const RouterChannelLayout& peer_layout) :
+    FabricChannelAllocator(local_allocator.topology_, local_allocator.options_, local_allocator.memory_regions_) {
     for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
-        this->num_used_receiver_channels_per_vc_[vc] = static_allocator.num_used_receiver_channels_per_vc[vc];
-        for (size_t i = 0; i < static_allocator.num_used_receiver_channels_per_vc[vc]; i++) {
-            this->remote_receiver_channels_base_address_[vc][i] =
-                static_allocator.remote_receiver_channels_base_address[vc][i];
-            this->remote_receiver_channels_num_buffers_[vc][i] =
-                static_allocator.remote_receiver_channels_num_buffers[vc][i];
+        const auto& receivers = peer_layout.receivers[vc];
+        TT_FATAL(
+            receivers.size() == local_allocator.num_used_receiver_channels_per_vc[vc],
+            "The link peer has {} VC{} receiver channels, this router {}",
+            receivers.size(),
+            vc,
+            local_allocator.num_used_receiver_channels_per_vc[vc]);
+        this->num_used_receiver_channels_per_vc_[vc] = receivers.size();
+        for (size_t i = 0; i < receivers.size(); i++) {
+            this->remote_receiver_channels_base_address_[vc][i] = receivers[i].base_address;
+            this->remote_receiver_channels_num_buffers_[vc][i] = receivers[i].num_slots;
         }
     }
 }

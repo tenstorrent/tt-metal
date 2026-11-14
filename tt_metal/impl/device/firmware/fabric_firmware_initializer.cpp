@@ -358,8 +358,13 @@ void FabricFirmwareInitializer::init(
         log_info(tt::LogMetal, "Compiling fabric to setup fabric context for fabric termination");
         fabric_programs_.clear();
         fabric_programs_.resize(devices_.size());
+        std::vector<std::optional<tt::tt_fabric::FabricDeviceBuild>> builds(devices_.size());
         for (size_t i = 0; i < devices_.size(); ++i) {
-            fabric_programs_[i] = compile_fabric(devices_[i]);
+            builds[i] = build_fabric(devices_[i]);
+        }
+        exchange_channel_layouts();
+        for (size_t i = 0; i < devices_.size(); ++i) {
+            fabric_programs_[i] = compile_fabric(devices_[i], std::move(builds[i]));
         }
     } else {
         log_info(tt::LogMetal, "Fabric initialized through Fabric Manager");
@@ -471,20 +476,31 @@ void FabricFirmwareInitializer::begin_build_session() {
     build_session_ = tt::tt_fabric::begin_fabric_build_session(descriptor_->env_impl());
 }
 
-std::unique_ptr<Program> FabricFirmwareInitializer::compile_fabric(Device* dev) const {
+std::optional<tt::tt_fabric::FabricDeviceBuild> FabricFirmwareInitializer::build_fabric(Device* dev) const {
     if (!build_session_) {
-        return nullptr;
+        return std::nullopt;
     }
-    auto fabric_program = tt::tt_fabric::create_and_compile_fabric_program(
+    return tt::tt_fabric::build_fabric_routers(
         descriptor_->env_impl(),
         descriptor_->metal_context().get_dispatch_core_manager().get_dispatch_core_config(),
         dev,
         *build_session_);
-    if (!fabric_program) {
+}
+
+void FabricFirmwareInitializer::exchange_channel_layouts() const {
+    if (build_session_) {
+        tt::tt_fabric::exchange_fabric_router_channel_layouts(descriptor_->env_impl());
+    }
+}
+
+std::unique_ptr<Program> FabricFirmwareInitializer::compile_fabric(
+    Device* dev, std::optional<tt::tt_fabric::FabricDeviceBuild> build) const {
+    if (!build) {
         // Compile failure mostly comes from Nebula (TG)
         log_trace(tt::LogMetal, "Did not build fabric on Device {}", dev->id());
+        return nullptr;
     }
-    return fabric_program;
+    return tt::tt_fabric::compile_fabric_program(descriptor_->env_impl(), dev, std::move(*build));
 }
 
 void FabricFirmwareInitializer::configure_fabric(Device* dev, Program& fabric_program) const {
@@ -529,6 +545,7 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
     // One session per launch, created on this thread before the parallel compiles that read it.
     begin_build_session();
 
+    std::vector<std::optional<tt::tt_fabric::FabricDeviceBuild>> builds(devices_.size());
     std::vector<std::shared_future<void>> events;
     // The tasks write into this object, and detail::async futures do not join on destruction, so every exit
     // (including a throw from get() or configure_fabric()) must wait for all of them.
@@ -541,9 +558,20 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
         }
     } wait_for_compiles{events};
 
+    // Every device's routers exist, and have published their channel layouts, before any router kernel is created.
     events.reserve(devices_.size());
     for (size_t i = 0; i < devices_.size(); ++i) {
-        events.emplace_back(detail::async([this, i]() { fabric_programs_[i] = compile_fabric(devices_[i]); }));
+        events.emplace_back(detail::async([this, &builds, i]() { builds[i] = build_fabric(devices_[i]); }));
+    }
+    for (const auto& event : events) {
+        event.get();
+    }
+    events.clear();
+    exchange_channel_layouts();
+
+    for (size_t i = 0; i < devices_.size(); ++i) {
+        events.emplace_back(detail::async(
+            [this, &builds, i]() { fabric_programs_[i] = compile_fabric(devices_[i], std::move(builds[i])); }));
     }
 
     if (!has_flag(descriptor_->fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
@@ -579,8 +607,13 @@ void FabricFirmwareInitializer::compile_fabric_only() {
     fabric_programs_.clear();
     fabric_programs_.resize(devices_.size());
     begin_build_session();
+    std::vector<std::optional<tt::tt_fabric::FabricDeviceBuild>> builds(devices_.size());
     for (size_t i = 0; i < devices_.size(); ++i) {
-        fabric_programs_[i] = compile_fabric(devices_[i]);
+        builds[i] = build_fabric(devices_[i]);
+    }
+    exchange_channel_layouts();
+    for (size_t i = 0; i < devices_.size(); ++i) {
+        fabric_programs_[i] = compile_fabric(devices_[i], std::move(builds[i]));
     }
 }
 

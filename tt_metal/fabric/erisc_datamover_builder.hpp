@@ -272,10 +272,8 @@ struct FabricEriscDatamoverConfig {
 
     // Fabric channel allocator for L1 memory management
     // Points to the primary allocator (typically static allocator for single-pool configs)
+    // The fabric-wide allocation here; each router's builder replaces it with one laid out for its own channels.
     std::shared_ptr<FabricChannelAllocator> channel_allocator;
-
-    // Remote channels allocator - tracks remote receiver channel info for the remote ethernet core
-    std::shared_ptr<FabricRemoteChannelsAllocator> remote_channels_allocator;
 
 private:
     FabricEriscDatamoverConfig(const FabricContext& fabric_context, Topology topology);
@@ -465,6 +463,9 @@ public:
 
     // One past the last byte the router places below config.max_l1_loading_size.
     size_t get_allocated_l1_end_address() const { return config.allocated_l1_end_address; }
+
+    // This router's channel buffers, as its link peer and the routers feeding it address them.
+    RouterChannelLayout get_channel_layout() const;
 
     // Returns the resolved kernel build optimization level for this router.
     // This opt-level is per-builder/router, and should not be shared across builders.

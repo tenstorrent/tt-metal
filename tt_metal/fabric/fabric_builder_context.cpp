@@ -14,7 +14,11 @@
 #include "tt_metal/llrt/hal.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"
 #include <tt_stl/assert.hpp>
+#include <tt_stl/span.hpp>
 #include <tt-logger/tt-logger.hpp>
+#include "distributed_context.hpp"
+#include <algorithm>
+#include <type_traits>
 
 namespace tt::tt_fabric {
 
@@ -325,6 +329,101 @@ std::optional<std::pair<uint32_t, EDMStatus>> FabricBuilderContext::get_fabric_r
 
 std::pair<uint32_t, uint32_t> FabricBuilderContext::get_fabric_router_termination_address_and_signal() const {
     return std::make_pair(router_config_->termination_signal_address, TerminationSignal::IMMEDIATELY_TERMINATE);
+}
+
+void FabricBuilderContext::clear_router_channel_layouts() {
+    std::lock_guard lock(router_channel_layouts_mutex_);
+    router_channel_layouts_.clear();
+}
+
+void FabricBuilderContext::publish_router_channel_layout(
+    FabricNodeId node, chan_id_t eth_chan, RouterChannelLayout layout) {
+    std::lock_guard lock(router_channel_layouts_mutex_);
+    const bool inserted = router_channel_layouts_.try_emplace({node, eth_chan}, std::move(layout)).second;
+    TT_FATAL(inserted, "Router {} channel {} published its channel layout twice", node, eth_chan);
+}
+
+void FabricBuilderContext::exchange_router_channel_layouts(
+    const tt::tt_metal::distributed::multihost::DistributedContext& context) {
+    const auto world_size = static_cast<size_t>(*context.size());
+    if (world_size == 1) {
+        return;
+    }
+
+    // A router on another host needs only the receivers of the router across its link, so each router travels as one
+    // fixed-size record of its key and receiver channels.
+    struct Record {
+        uint32_t mesh_id = 0;
+        uint32_t chip_id = 0;
+        uint32_t eth_chan = 0;
+        uint32_t num_receivers = 0;
+        struct Receiver {
+            uint32_t vc = 0;
+            uint32_t base_address = 0;
+            uint32_t num_slots = 0;
+        };
+        std::array<Receiver, builder_config::num_max_receiver_channels> receivers{};
+    };
+    static_assert(std::is_trivially_copyable_v<Record>);
+
+    std::lock_guard lock(router_channel_layouts_mutex_);
+    std::vector<Record> local_records;
+    for (const auto& [key, layout] : router_channel_layouts_) {
+        Record record{.mesh_id = *key.first.mesh_id, .chip_id = key.first.chip_id, .eth_chan = key.second};
+        for (uint32_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+            for (const auto& channel : layout.receivers[vc]) {
+                TT_FATAL(record.num_receivers < record.receivers.size(), "Router {} has too many receivers", key.first);
+                record.receivers[record.num_receivers++] = {vc, channel.base_address, channel.num_slots};
+            }
+        }
+        local_records.push_back(record);
+    }
+
+    // Ranks publish different numbers of routers: gather the counts, then every rank's records padded to the largest.
+    auto num_local_records = static_cast<uint32_t>(local_records.size());
+    std::vector<uint32_t> num_records(world_size);
+    context.all_gather(
+        ttsl::as_writable_bytes(ttsl::Span<uint32_t>{&num_local_records, 1}),
+        ttsl::as_writable_bytes(ttsl::Span<uint32_t>{num_records.data(), num_records.size()}));
+    const size_t stride = *std::max_element(num_records.begin(), num_records.end());
+    local_records.resize(stride);
+    std::vector<Record> all_records(stride * world_size);
+    context.all_gather(
+        ttsl::as_writable_bytes(ttsl::Span<Record>{local_records.data(), local_records.size()}),
+        ttsl::as_writable_bytes(ttsl::Span<Record>{all_records.data(), all_records.size()}));
+
+    for (size_t rank = 0; rank < world_size; ++rank) {
+        for (size_t i = 0; i < num_records[rank]; ++i) {
+            const Record& record = all_records[(rank * stride) + i];
+            RouterChannelLayout layout;
+            for (uint32_t r = 0; r < record.num_receivers; ++r) {
+                const auto& receiver = record.receivers[r];
+                layout.receivers[receiver.vc].push_back({receiver.base_address, receiver.num_slots});
+            }
+            // A host's own routers are already here, with their senders.
+            router_channel_layouts_.try_emplace(
+                {FabricNodeId(MeshId{record.mesh_id}, record.chip_id), static_cast<chan_id_t>(record.eth_chan)},
+                std::move(layout));
+        }
+    }
+}
+
+const RouterChannelLayout* FabricBuilderContext::find_router_channel_layout(
+    FabricNodeId node, chan_id_t eth_chan) const {
+    std::lock_guard lock(router_channel_layouts_mutex_);
+    const auto it = router_channel_layouts_.find({node, eth_chan});
+    return it == router_channel_layouts_.end() ? nullptr : &it->second;
+}
+
+const RouterChannelLayout& FabricBuilderContext::get_router_channel_layout(
+    FabricNodeId node, chan_id_t eth_chan) const {
+    const auto* layout = find_router_channel_layout(node, eth_chan);
+    TT_FATAL(
+        layout != nullptr,
+        "No channel layout for the router at {} channel {}: its device's fabric build did not publish one",
+        node,
+        eth_chan);
+    return *layout;
 }
 
 FabricTensixDatamoverConfig& FabricBuilderContext::get_tensix_config() const {
