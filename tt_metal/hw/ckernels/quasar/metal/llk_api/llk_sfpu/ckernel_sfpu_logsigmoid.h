@@ -13,13 +13,34 @@
 namespace ckernel {
 namespace sfpu {
 
+// Mid-range polynomial. P(t) = sum c_k t^k approximates softplus(t) on [-4, 4], and the kernel
+// evaluates -P(-x) = sum d_k x^k directly in x. The coefficients are sign-adjusted per
+// d_k = -(-1)^k c_k: even k change sign, odd k keep it.
+constexpr float LOGSIGMOID_D0 = -0.6924354434013367f;      // -c0
+constexpr float LOGSIGMOID_D1 = 0.49275708198547363f;      // +c1
+constexpr float LOGSIGMOID_D2 = -0.12142381817102432f;     // -c2
+constexpr float LOGSIGMOID_D3 = 0.0031102809589356184f;    // +c3
+constexpr float LOGSIGMOID_D4 = 0.00330807245336473f;      // -c4
+constexpr float LOGSIGMOID_D5 = -0.00028794066747650504f;  // +c5
+constexpr float LOGSIGMOID_D6 = -5.3185409342404455e-05f;  // -c6, held in vConstFloatPrgm0
+constexpr float LOGSIGMOID_D7 = 7.1853546614875086e-06f;   // +c7, held in vConstFloatPrgm1
+constexpr float LOGSIGMOID_D8 = -7.4961114648886e-08f;     // -c8, held in vConstFloatPrgm2
+
+// logsigmoid(x) = -softplus(-x), with exp(-x) supplied by the caller in dst_index_in1. Needs
+// logsigmoid_init first: d6..d8 are read from vConstFloatPrgm0..2, which every exp init also programs
+// (the compute API re-runs each op's init per tile, so the exp that produces exp(-x) never sees these).
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_logsigmoid(
     const uint dst_index_in0,  // Index for input (x)
     const uint dst_index_in1,  // Index for exp(-x)
     const uint dst_index_out)  // Index for output
 {
-    // logsigmoid(x) = -softplus(-x)
+    // d4..d5 stay in the LRegs the row leaves free: sfpi re-emits a literal's SFPLOADI pair on
+    // every row. d0..d3 stay literals: one more live value fails to compile ("too few lregs"),
+    // the even/odd split of PolynomialEvaluator keeping two accumulators plus x and x^2 live.
+    sfpi::vFloat d4 = LOGSIGMOID_D4;
+    sfpi::vFloat d5 = LOGSIGMOID_D5;
+
     for (int d = 0; d < ITERATIONS; d++) {
         constexpr uint dst_tile_size_sfpi = 32;
 
@@ -27,28 +48,30 @@ inline void calculate_logsigmoid(
         sfpi::vFloat x = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
         sfpi::vFloat exp_neg_x = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
 
-        // Save original x as result; negate x since we compute softplus(-x)
+        // x <= -4: logsigmoid(x) ~= x (passthrough)
         sfpi::vFloat result = x;
-        x = -x;
 
-        v_if(x < -4.0f) {
-            // For very negative: use exp
+        v_if(x > 4.0f) {
+            // For very positive: logsigmoid(x) ~= -exp(-x)
             result = -exp_neg_x;
         }
-        v_elseif(x >= -4.0f && x < 4.0f) {
-            // Polynomial approximation for softplus(-x) in the mid-range
+        // -4 <= x <= 4 is implied here: v_elseif runs only where the v_if above was false, so the
+        // explicit `x >= -4.0f &&` the former code paid an SFPLOADI and a compare per row for is
+        // redundant; a NaN x fails both tests and passes through as the NaN it is either way.
+        v_elseif(x > -4.0f) {
+            // Mid-range: sum d_k x^k = -P(-x), bit-identical to negating x and the result since
+            // negation commutes with every SFPMAD rounding (plain Horner and the even/odd split alike).
             result = PolynomialEvaluator::eval(
                 x,
-                0.6924354434013367f,
-                0.49275708198547363f,
-                0.12142381817102432f,
-                0.0031102809589356184f,
-                -0.00330807245336473f,
-                -0.00028794066747650504f,
-                5.3185409342404455e-05f,
-                7.1853546614875086e-06f,
-                7.4961114648886e-08f);
-            result = -result;
+                LOGSIGMOID_D0,
+                LOGSIGMOID_D1,
+                LOGSIGMOID_D2,
+                LOGSIGMOID_D3,
+                d4,
+                d5,
+                sfpi::vConstFloatPrgm0,
+                sfpi::vConstFloatPrgm1,
+                sfpi::vConstFloatPrgm2);
         }
         v_endif;
         sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
@@ -56,8 +79,14 @@ inline void calculate_logsigmoid(
     }
 }
 
+// Programs d6..d8 into vConstFloatPrgm0..2 for calculate_logsigmoid. Nothing may program them
+// between this init and the row loop (exp_init and _init_reciprocal_ do).
 template <bool APPROXIMATION_MODE>
-void logsigmoid_init() {}
+void logsigmoid_init() {
+    sfpi::vConstFloatPrgm0 = LOGSIGMOID_D6;
+    sfpi::vConstFloatPrgm1 = LOGSIGMOID_D7;
+    sfpi::vConstFloatPrgm2 = LOGSIGMOID_D8;
+}
 
 }  // namespace sfpu
 }  // namespace ckernel
