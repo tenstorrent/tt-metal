@@ -190,3 +190,21 @@ def test_embedding_bw_rejects_sharded_index(device, expect_error):
 
     with expect_error(RuntimeError, "index tensor"):
         ttnn.embedding_bw(index, weights, grad, dtype=ttnn.bfloat16)
+
+
+def test_embedding_bw_rejects_wrong_size_preallocated_output(device, expect_error):
+    vocab, hidden = 256, 128
+    index = ttnn.from_torch(
+        torch.randint(0, vocab, (1, 1, 1, 64)), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    weights = ttnn.from_torch(
+        torch.randn(1, 1, vocab, hidden), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    grad = ttnn.from_torch(torch.randn(1, 1, 64, hidden), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    output = ttnn.from_torch(torch.zeros(1, 1, 32, 32), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    neighbour = ttnn.from_torch(
+        torch.full((1, 1, 64, 64), 768.0), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    with expect_error(RuntimeError, "Preallocated output shape"):
+        ttnn.embedding_bw(index, weights, grad, dtype=ttnn.bfloat16, output_tensor=output)
+    assert torch.equal(ttnn.to_torch(neighbour), torch.full((1, 1, 64, 64), 768.0, dtype=torch.bfloat16))
