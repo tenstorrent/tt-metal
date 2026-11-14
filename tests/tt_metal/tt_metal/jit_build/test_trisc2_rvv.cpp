@@ -50,6 +50,8 @@ namespace tt::tt_metal {
 namespace {
 
 constexpr const char* kRvvKernelPath = "tests/tt_metal/tt_metal/test_kernels/compute/trisc2_rvv_vadd.cpp";
+// The GGUF grid lookup kernel (experimental/gguf_lookup_rvv.h), IQ2_S.
+constexpr const char* kGgufLookupKernelPath = "tests/tt_metal/tt_metal/test_kernels/compute/gguf_lookup_rvv.cpp";
 // Matches the flags HalJitBuildQueryBlackHole::rvv_compile_flags emits.
 constexpr const char* kBhRvvMarch = "-march=rv32im_zmmul_zaamo_zba_zbb_xtttensixbh_zve32f";
 // The -mcpu Blackhole TRISC compiles pass ahead of kBhRvvMarch; sfpi g++ rejects any command without one.
@@ -162,6 +164,18 @@ protected:
         return program.impl().get_kernel(handle);
     }
 
+    std::shared_ptr<Kernel> compile_gguf_lookup_kernel(bool enable_trisc2_rvv) {
+        distributed::MeshDevice* device = devices_.at(0).get();
+        Program program = CreateProgram(*device);
+        KernelHandle handle = CreateKernel(
+            program,
+            kGgufLookupKernelPath,
+            CoreCoord{0, 0},
+            ComputeConfig{.enable_trisc2_rvv = enable_trisc2_rvv, .defines = {{"GGUF_FMT", "17"}}});
+        program.impl().compile(device);
+        return program.impl().get_kernel(handle);
+    }
+
     // Path of the kernel's compiled ELF for one compute processor (0=unpack, 1=math, 2=pack).
     std::string kernel_elf_path(const std::shared_ptr<Kernel>& kernel, int processor_id) {
         distributed::MeshDevice* device = devices_.at(0).get();
@@ -232,6 +246,19 @@ TEST_F(Trisc2RvvMockBlackholeFixture, VaddKernelCompilesToVectorCode) {
     auto kernel_off = compile_rvv_kernel(/*enable_trisc2_rvv=*/false);
     EXPECT_FALSE(kernel_elf_has_vector_code(kernel_off, 2))
         << "knob-off TRISC2 ELF unexpectedly contains vector instructions";
+}
+
+TEST_F(Trisc2RvvMockBlackholeFixture, GgufLookupKernelCompilesToVectorCode) {
+    if (!sfpi_supports_bh_zve32f()) {
+        GTEST_SKIP() << "bundled sfpi toolchain does not accept " << kBhRvvMarch;
+    }
+    auto kernel_on = compile_gguf_lookup_kernel(/*enable_trisc2_rvv=*/true);
+    EXPECT_TRUE(kernel_elf_has_vector_code(kernel_on, 2)) << "lookup_grid_rvv compiled to no vector instructions";
+    EXPECT_FALSE(kernel_elf_has_vector_code(kernel_on, 0));
+    EXPECT_FALSE(kernel_elf_has_vector_code(kernel_on, 1));
+
+    auto kernel_off = compile_gguf_lookup_kernel(/*enable_trisc2_rvv=*/false);
+    EXPECT_FALSE(kernel_elf_has_vector_code(kernel_off, 2));
 }
 
 }  // namespace tt::tt_metal
