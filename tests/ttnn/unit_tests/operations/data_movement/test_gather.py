@@ -719,6 +719,28 @@ def test_gather_rank1_nd_sharded_input(device):
     assert_equal(torch.gather(torch_input, 0, torch_index.long()), ttnn.to_torch(output))
 
 
+@pytest.mark.parametrize("shard_size", [36, 18])
+def test_gather_rank1_nd_sharded_sub_aligned_input_rejected(device, shard_size, expect_error):
+    num_cores = 4
+    total_len = shard_size * num_cores
+    grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, num_cores - 1))])
+    nd_shard_spec = ttnn.NdShardSpec(
+        ttnn.Shape([shard_size]), grid, ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardDistributionStrategy.CONTIGUOUS_1D
+    )
+    memory_config = ttnn.MemoryConfig(ttnn.BufferType.L1, nd_shard_spec)
+    torch_input = torch.arange(total_len, dtype=torch.float32).to(torch.bfloat16)
+    torch_index = torch.arange(total_len - 1, -1, -1, dtype=torch.int32)
+    tt_input = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=memory_config
+    )
+    tt_index = ttnn.from_torch(
+        torch_index, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=memory_config
+    )
+
+    with expect_error(RuntimeError, "not a multiple of the"):
+        ttnn.gather(tt_input, 0, index=tt_index, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+
 @pytest.mark.parametrize("buffer_type", docstring_interleaved_buffer_type_params(ttnn.gather))
 @pytest.mark.parametrize(
     "dtype, layout", docstring_dtype_layout_params(ttnn.gather, "Supported dtypes and layouts for input tensor values")

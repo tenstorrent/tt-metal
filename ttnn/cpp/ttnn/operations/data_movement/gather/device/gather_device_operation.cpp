@@ -146,14 +146,33 @@ void GatherDeviceOperation::validate_on_program_cache_miss(
         check_shard_row(tensor_args.input_tensor.memory_config(), tensor_args.input_tensor.element_size(), "input");
         check_shard_row(
             tensor_args.input_index_tensor.memory_config(), tensor_args.input_index_tensor.element_size(), "index");
+        ttnn::operations::data_movement::check_rank1_nd_shard_aligned(
+            "Gather",
+            "input",
+            tensor_args.input_tensor.memory_config(),
+            tensor_args.input_tensor.padded_shape(),
+            tensor_args.input_tensor.element_size());
+        ttnn::operations::data_movement::check_rank1_nd_shard_aligned(
+            "Gather",
+            "index",
+            tensor_args.input_index_tensor.memory_config(),
+            tensor_args.input_index_tensor.padded_shape(),
+            tensor_args.input_index_tensor.element_size());
         const bool output_is_sharded = tensor_args.output_tensor.has_value()
                                            ? tensor_args.output_tensor->is_sharded()
                                            : attributes.output_mem_config.is_sharded();
         if (output_is_sharded) {
+            const auto output_spec = compute_output_specs(attributes, tensor_args);
             const uint32_t output_elem_size = tensor_args.output_tensor.has_value()
                                                   ? tensor_args.output_tensor->element_size()
                                                   : tensor_args.input_tensor.element_size();
-            check_shard_row(compute_output_specs(attributes, tensor_args).memory_config(), output_elem_size, "output");
+            check_shard_row(output_spec.memory_config(), output_elem_size, "output");
+            ttnn::operations::data_movement::check_rank1_nd_shard_aligned(
+                "Gather",
+                "output",
+                output_spec.memory_config(),
+                output_spec.padded_shape(),
+                output_elem_size);
         }
     }
 }

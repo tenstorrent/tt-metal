@@ -482,6 +482,19 @@ uint32_t per_shard_page_size_bytes(const ttnn::Tensor& tensor, uint32_t row_byte
 // single transfer of the size the caller asks for, using the page size only as the distance between pages.
 bool has_subaligned_shard_row(const tt::tt_metal::MemoryConfig& memory_config, uint32_t element_size);
 
+// Validates that a rank-1 ND-sharded memory config has an aligned shard byte size.
+// noc_async_{read,write}_sharded walks a rank-1 ND spec one aligned page at a time, so a shard whose
+// payload is not alignment-sized causes out-of-bounds or misaligned page transfers once a transfer goes
+// past the shard's payload.
+void check_rank1_nd_shard_aligned(
+    const char* op_name,
+    const char* which,
+    const tt::tt_metal::MemoryConfig& mc,
+    const ttnn::Shape& padded_shape,
+    uint32_t element_size,
+    bool allow_first_shard_payload = false,
+    uint32_t end_elements = 0);
+
 bool codegen_supported_on_arch(const ttnn::Tensor& input);
 
 }  // namespace ttnn::operations::data_movement
