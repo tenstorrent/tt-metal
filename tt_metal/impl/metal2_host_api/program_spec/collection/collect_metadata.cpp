@@ -5,6 +5,7 @@
 #include "impl/metal2_host_api/program_spec/collection/collect_metadata.hpp"
 
 #include <unordered_set>
+#include <utility>
 
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
@@ -169,8 +170,21 @@ void CollectResourceUsers(const ProgramSpec& spec, CollectedSpecData& collected)
     }
 }
 
+NodeRangeSet InferDFBPlacement(
+    const CollectedSpecData::DFBEndpointInfo& endpoints,
+    const std::unordered_map<KernelSpecName, NodeRangeSet>& kernel_node_sets) {
+    NodeRangeSet node_set;
+    for (const auto& rec : endpoints.producers) {
+        node_set = node_set.merge(kernel_node_sets.at(rec.kernel->unique_id));
+    }
+    for (const auto& rec : endpoints.consumers) {
+        node_set = node_set.merge(kernel_node_sets.at(rec.kernel->unique_id));
+    }
+    return node_set;
+}
+
 // Phase 3 -- "Derived node sets". Needs phases 1 and 2.
-// Establishes: the invariants of kernel_node_set and dfb_node_set.
+// Establishes: the invariants of kernel_node_set and dfb_placements.
 void DeriveNodeSets(const ProgramSpec& spec, CollectedSpecData& collected) {
     // kernel_node_set: union of the target_nodes of every WorkUnitSpec containing the kernel (a kernel
     // may belong to multiple WorkUnitSpecs). (WorkUnitSpec.name is debug-only; no uniqueness invariant.)
@@ -195,20 +209,16 @@ void DeriveNodeSets(const ProgramSpec& spec, CollectedSpecData& collected) {
             kernel.unique_id);
     }
 
-    // dfb_node_set: union of the endpoint kernels' node sets, for each local DFB.
-    // (Collected, but unvalidated. Semantic integrity checks for DFB take place in ValidateProgramSpec.
-    //  Once those pass, producer and consumer coverages are guaranteed equal; here we union both
-    //  sides for safety before that guarantee holds.)
+    // dfb_placements: configuration follows endpoint kernels; allocation uses explicit placement when set.
+    // Collected, but unvalidated. Semantic integrity checks for DFB take place in ValidateProgramSpec.
     for (const auto& dfb : spec.dataflow_buffers) {
-        const auto& endpoints = collected.dfb_endpoints.at(dfb.unique_id);
-        NodeRangeSet node_set;
-        for (const auto& rec : endpoints.producers) {
-            node_set = node_set.merge(collected.kernel_node_set.at(rec.kernel->unique_id));
-        }
-        for (const auto& rec : endpoints.consumers) {
-            node_set = node_set.merge(collected.kernel_node_set.at(rec.kernel->unique_id));
-        }
-        collected.dfb_node_set[dfb.unique_id] = node_set;
+        NodeRangeSet configuration =
+            InferDFBPlacement(collected.dfb_endpoints.at(dfb.unique_id), collected.kernel_node_set);
+        NodeRangeSet allocation = dfb.advanced_options.override_placement
+                                      ? dfb.advanced_options.override_placement->merge_ranges()
+                                      : configuration;
+        collected.dfb_placements[dfb.unique_id] = {
+            .configuration = std::move(configuration), .allocation = std::move(allocation)};
     }
 }
 

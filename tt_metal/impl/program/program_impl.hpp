@@ -11,6 +11,7 @@
 #include "tt-metalium/circular_buffer_constants.h"
 #include "tt-metalium/circular_buffer_config.hpp"
 #include <tt_stl/assert.hpp>
+#include <tt_stl/optional_reference.hpp>
 #include "tt-metalium/core_coord.hpp"
 #include "tt-metalium/hal_types.hpp"     // HalProgrammableCoreType
 #include "tt-metalium/kernel_types.hpp"  // KernelHandle
@@ -62,6 +63,7 @@ class HWCommandQueue;
 class EnqueueProgramCommand;
 
 class Kernel;
+struct ScratchpadBindingHandle;
 
 namespace distributed {
 class MeshDevice;
@@ -376,8 +378,12 @@ public:
         const CircularBufferConfig& config,
         const experimental::GlobalCircularBuffer& global_circular_buffer);
 
+    // Register a DFB, defaulting its allocation placement to its configuration nodes.
+    // side-effect: Invalidates program allocation.
     uint32_t add_dataflow_buffer(
-        const CoreRangeSet& core_range_set, const experimental::dfb::DataflowBufferConfig& config);
+        const CoreRangeSet& core_range_set,
+        const experimental::dfb::DataflowBufferConfig& config,
+        ttsl::optional_reference<const CoreRangeSet> allocation_core_range_set = std::nullopt);
 
     uint32_t assign_dfb_device_slot(const experimental::dfb::detail::DataflowBufferImpl& dfb) const;
 
@@ -893,6 +899,16 @@ private:
     // Scratchpad allocation occurs once on Program creation, and is re-run if the DFB layout
     // is recomputed (due to a DFB size override at runtime).
     bool scratchpads_allocated_{false};
+
+    struct ScratchpadAllocationGroup {
+        CoreRangeSet cores;
+        std::vector<std::pair<Kernel*, ScratchpadBindingHandle*>> bindings;
+    };
+    // Reconstructed from binding metadata; used consistently for registration and allocation.
+    //
+    // Function does not mutate *this, but is non-const as it needs to return constructs containing mutable pointers
+    // to subobjects of *this.
+    std::vector<ScratchpadAllocationGroup> scratchpad_allocation_groups();
 
     static constexpr uint8_t core_to_kernel_group_invalid_index = 0xff;
     std::vector<std::vector<std::shared_ptr<KernelGroup>>> kernel_groups_;
