@@ -87,7 +87,7 @@ class Hy4IHCFused:
 
     def _consts(self, mesh, T):
         """persistent L1 tensor (one shard of NCST fp32 tiles per core of the 4x8 rectangle, identical content): the constant tiles of the compute kernel."""
-        key = (id(mesh), T, self.dim, self.hc_eps)
+        key = (id(self.device), T, self.dim, self.hc_eps)  # NOT id(mesh): x.device() returns a fresh Python object per call, so a per-call key leaked a new persistent L1 constants tensor (45 KB/core) per call
         c = _CST.get(key)
         if c is None:
             G = (T + 7) // 8

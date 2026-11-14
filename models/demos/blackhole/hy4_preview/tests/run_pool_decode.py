@@ -30,6 +30,11 @@ TAG = os.environ.get("TAGNAME", "p")
 PAD = 120002
 
 
+def l1v(md):
+    v = ttnn.get_memory_view(md, ttnn.BufferType.L1)
+    return dict(l1_alloc_per_bank=v.total_bytes_allocated_per_bank, l1_largest_free=v.largest_contiguous_bytes_free_per_bank)
+
+
 def res(**kw):
     print("RES " + json.dumps(kw), flush=True)
 
@@ -54,7 +59,7 @@ def main():
         ch.build_head()
         res(event="built", sec=round(time.time() - t0, 1), **{"dram": dram_view(md)}, kv_fmt=ch.kv_fmt)
         dec = Hy4PoolDecoder(ch, PAGES, mode="dense")
-        res(event="pool_built", pages=PAGES, **{"dram": dram_view(md)})
+        res(event="pool_built", pages=PAGES, **l1v(md), **{"dram": dram_view(md)})
         ids = torch.full((4, CHUNK), PAD, dtype=torch.long)
         for r in range(4):
             ids[r, : lens[r]] = torch.tensor(prompts[r])
@@ -76,7 +81,7 @@ def main():
             dec.set_inputs([t[-1] for t in toks], pos)
             t0 = time.time()
             dec.capture()
-            res(event="trace_captured", sec=round(time.time() - t0, 1), **dram_view(md))
+            res(event="trace_captured", sec=round(time.time() - t0, 1), **l1v(md), **dram_view(md))
             dram0 = dram_view(md)
             times, keep = [], []
             for s in range(NSTEPS):
