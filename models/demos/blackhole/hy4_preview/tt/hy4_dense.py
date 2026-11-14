@@ -8,25 +8,45 @@ shared expert: 6144 -> 2048 -> 6144 with the swiglu_limit 10 clamp (oracle), 256
 reduce_scatter, the dense layer sums the 8 column partials with ``allreduce_cols`` (reduce_scatter over the hidden dim + all_gather).
 """
 import ttnn
+from models.demos.blackhole.hy4_preview.tt.hy4_pf_opt import PfOpt
 from models.demos.blackhole.deepseek_v41_flash.tt.shared_expert_tp import DSV41SharedExpertColTP
 
 NO_CLAMP = 1.0e30
 
 
-def make_shared(mesh_device, w0, w1, w2, limit=10.0, decode=True, **kw):
+def _apply_pf(m, pf, rows=512):
+    """HY4_PF_OPT mm2d (+ hifi2): explicit 2D-mcast program configs for the T=``rows`` prefill linears of a DSV41SharedExpertColTP (stock auto configs ran at 21% of the HiFi2 ideal)."""
+    if not pf.mm2d:
+        return m
+    from models.demos.blackhole.hy4_preview.tt.hy4_pf_opt import make_pc
+
+    m.pc1 = make_pc(rows, m.dim, 2 * m.ic)
+    m.pc2 = make_pc(rows, m.ic, m.dim)
+    return m
+
+
+def make_shared(mesh_device, w0, w1, w2, limit=10.0, decode=True, pf_opt=None, **kw):
     """w0/w1 [1,1,6144,2048], w2 [1,1,2048,6144] host ([in, out]). decode=True: 1D-mcast program configs for T <= 32 rows."""
     base = dict(
         g1=(12, 8), g2=(12, 8), pn1=1, pn2=4, bw1=32, bw2=4
     )  # ict = 8 tiles per column: bw2 must divide 8; pn2*cores covers 192 out tiles
     base.update(kw)
-    return DSV41SharedExpertColTP(mesh_device, w0, w1, w2, limit=limit, cfg=decode, **base)
+    pf_opt = pf_opt if pf_opt is not None else PfOpt.from_env()  # HY4_PF_OPT, default OFF
+    if pf_opt.hifi2 and not decode:
+        base.setdefault("fid", "HiFi2")
+    m = DSV41SharedExpertColTP(mesh_device, w0, w1, w2, limit=limit, cfg=decode, **base)
+    return m if decode else _apply_pf(m, pf_opt)
 
 
-def make_dense(mesh_device, w0, w1, w2, decode=True, **kw):
+def make_dense(mesh_device, w0, w1, w2, decode=True, pf_opt=None, **kw):
     """Dense layer 0: w0/w1 [1,1,6144,18432], w2 [1,1,18432,6144] host. 72 inter tiles per column: gate|up = 144 output tiles (pn1=2 -> 72 cores), down 192 out tiles (pn2=4 -> 48 cores)."""
     base = dict(g1=(12, 8), g2=(12, 8), pn1=2, pn2=4, bw1=32, bw2=8)
     base.update(kw)
-    return DSV41SharedExpertColTP(mesh_device, w0, w1, w2, limit=NO_CLAMP, cfg=decode, **base)
+    pf_opt = pf_opt if pf_opt is not None else PfOpt.from_env()  # HY4_PF_OPT, default OFF
+    if pf_opt.hifi2 and not decode:
+        base.setdefault("fid", "HiFi2")
+    m = DSV41SharedExpertColTP(mesh_device, w0, w1, w2, limit=NO_CLAMP, cfg=decode, **base)
+    return m if decode else _apply_pf(m, pf_opt)
 
 
 def allreduce_cols(part, num_links=1, topology=None):

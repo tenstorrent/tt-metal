@@ -21,7 +21,7 @@ try:
     hl, yl = max(acts["dense"], key=lambda hy: hy[0].shape[1])
     hl, yl = hl.reshape(-1, 6144)[:T], yl.reshape(-1, 6144)[:T]
     tx = rep(md, hl.to(torch.bfloat16).reshape(1, 1, T, 6144))
-    for fid in os.environ.get("VARIANTS", "HiFi4,HiFi2,LoFi").split(","):
+    for fid in [x for x in os.environ.get("VARIANTS", "HiFi4,HiFi2,LoFi").split(",") if x]:
         dense = D.make_dense(md, w0, w1, w2, decode=False, fid=fid)
         full = D.allreduce_cols(dense.forward(tx))
         ttnn.synchronize_device(md)
@@ -61,6 +61,35 @@ try:
                         flush=True,
                     )
         del dense
+    if os.environ.get("DENSE_PF") == "1":  # integration check: make_dense(pf_opt=...) stock vs HY4_PF_OPT=all
+        from models.demos.blackhole.hy4_preview.tt.hy4_pf_opt import PfOpt
+
+        for v in ("off", "all"):
+            dense = D.make_dense(md, w0, w1, w2, decode=False, pf_opt=PfOpt.parse("" if v == "off" else v))
+            full = D.allreduce_cols(dense.forward(tx))
+            ttnn.synchronize_device(md)
+            got = dev0(full).reshape(T, 6144).float()
+            print("PF " + json.dumps({"dense_pf": v, "pcc": round(pcc(got, yl), 6), "partial_us": round(traced_us(md, lambda: dense.forward(tx), n=7, rep_=3), 1),
+                                      "with_ar_us": round(traced_us(md, lambda: D.allreduce_cols(dense.forward(tx)), n=7, rep_=3), 1)}), flush=True)
+            del dense
+    if os.environ.get("SHARED") == "1":  # layer-1 shared expert prefill chunk, stock vs HY4_PF_OPT (mm2d, mm2d+hifi2)
+        from models.demos.blackhole.hy4_preview.tt.hy4_pf_opt import PfOpt
+
+        g = torch.load(ACTS + "l1_gate_shared.pt")
+        s0, s1, s2 = (t(g["mlp.shared_experts.gate_proj.weight"]), t(g["mlp.shared_experts.up_proj.weight"]), t(g["mlp.shared_experts.down_proj.weight"]))
+        X = torch.cat([hh.reshape(-1, 6144) for hh, y, r_ in acts["moe"]])[:T]
+        xs = rep(md, X.to(torch.bfloat16).reshape(1, 1, T, 6144))
+        gg = (X.float() @ g["mlp.shared_experts.gate_proj.weight"].T).clamp(max=10.0)
+        uu = (X.float() @ g["mlp.shared_experts.up_proj.weight"].T).clamp(-10, 10)
+        ref = (torch.nn.functional.silu(gg) * uu) @ g["mlp.shared_experts.down_proj.weight"].T
+        for v in ("off", "mm2d", "mm2d,hifi2", "hifi2"):
+            sh = D.make_shared(md, s0, s1, s2, decode=False, pf_opt=PfOpt.parse("" if v == "off" else v))
+            full = D.allreduce_cols(sh.forward(xs))
+            ttnn.synchronize_device(md)
+            got = dev0(full).reshape(T, 6144).float()
+            print("PF " + json.dumps({"shared": v, "pcc": round(pcc(got, ref), 6), "partial_us": round(traced_us(md, lambda: sh.forward(xs), n=7, rep_=3), 1),
+                                      "with_ar_us": round(traced_us(md, lambda: D.allreduce_cols(sh.forward(xs)), n=7, rep_=3), 1)}), flush=True)
+            del sh
 finally:
     ttnn.close_mesh_device(md)
     ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
