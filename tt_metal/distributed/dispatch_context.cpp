@@ -272,11 +272,8 @@ std::string format_fd_l1_conflicts(const std::vector<FdL1Conflict>& conflicts) {
 void DispatchContext::unwind_failed_fd_setup(
     MetalContext& context, const std::vector<::tt::tt_metal::Device*>& devices) {
     for (::tt::tt_metal::Device* device : devices) {
-        device->command_queue_programs_.clear();
-        device->command_queues_.clear();
-        // Drop the fast-dispatch SystemMemoryManager that init_command_queue_host() installed, after the
-        // queues that reference it. Device::sysmem_manager() creates a fresh one on demand.
-        device->sysmem_manager_.reset();
+        // Device::sysmem_manager() creates a fresh SystemMemoryManager on demand.
+        device->release_command_queue_host_state();
     }
     context.set_fast_dispatch_mode(false);
 }

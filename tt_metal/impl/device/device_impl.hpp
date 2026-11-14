@@ -208,6 +208,9 @@ public:
 private:
     static constexpr uint32_t DEFAULT_NUM_SUB_DEVICES = 1;
 
+    // Clears the fast-dispatch host state of one open, so the device can be initialized again.
+    void release_command_queue_host_state();
+
     std::unique_ptr<AllocatorImpl> initialize_allocator(
         size_t l1_small_size,
         size_t trace_region_size,
