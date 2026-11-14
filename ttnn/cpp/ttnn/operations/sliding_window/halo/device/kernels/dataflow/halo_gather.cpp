@@ -17,6 +17,11 @@
 
 constexpr uint16_t TILE_SIZE = 32;
 
+// Runtime args of the block_start_offset == 0 reader when the external halo is on.
+namespace reader0_rta {
+enum : uint32_t { CONFIG_INDEX, EXTERNAL_CONFIG_ADDR, HALO_BOUNDARY_ADDR };
+}  // namespace reader0_rta
+
 template <uint32_t N, uint16_t PaddingValue>
 FORCE_INLINE void fill_with_val(uint32_t begin_addr) {
     volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(begin_addr);
@@ -335,6 +340,37 @@ void kernel_main() {
                 noc, padding_config_cb, out_cb, pad_cb.get_read_ptr());
         }
     }
+
+#ifdef EXTERNAL_HALO
+    if constexpr (block_start_offset == 0) {
+        constexpr auto ext_cfg_args = TensorAccessorArgs<EXTERNAL_HALO_CTA>();
+        constexpr auto boundary_args = TensorAccessorArgs<ext_cfg_args.next_compile_time_args_offset()>();
+        const auto ext_cfg = TensorAccessor(
+            ext_cfg_args, get_arg_val<uint32_t>(reader0_rta::EXTERNAL_CONFIG_ADDR), EXTERNAL_HALO_CFG_PAGE_BYTES);
+        const auto boundary = TensorAccessor(
+            boundary_args, get_arg_val<uint32_t>(reader0_rta::HALO_BOUNDARY_ADDR), EXTERNAL_HALO_STICK_BYTES);
+        experimental::CB ext_cfg_cb(EXTERNAL_HALO_CFG_CB);
+        const uint32_t ext_cfg_l1 = ext_cfg_cb.get_write_ptr();
+        noc_async_read_page(get_arg_val<uint32_t>(reader0_rta::CONFIG_INDEX), ext_cfg, ext_cfg_l1);
+        noc_async_read_barrier();
+        // This core's routes: (output stick, halo_boundary stick, count) uint16 triplets, ended by a zero count. They
+        // fill the padding sticks the padding config leaves out.
+        volatile tt_l1_ptr uint16_t* routes = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(ext_cfg_l1);
+        const uint32_t dst_base = out_cb.get_write_ptr();
+        for (uint32_t j = 0;; j += 3) {
+            const uint32_t dst = routes[j + 0];
+            const uint32_t src = routes[j + 1];
+            const uint32_t n = routes[j + 2];
+            if (n == 0) {
+                break;
+            }
+            for (uint32_t s = 0; s < n; ++s) {
+                noc_async_read_page(src + s, boundary, dst_base + (dst + s) * aligned_stick_nbytes);
+            }
+        }
+        noc_async_read_barrier();
+    }
+#endif
 
     // src_cb is the resident input shard, read in place by both split readers. Only the
     // block_start_offset == 0 reader does the reserve/push bookkeeping that marks it ready, so only
