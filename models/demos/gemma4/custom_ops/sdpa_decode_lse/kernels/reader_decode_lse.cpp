@@ -21,8 +21,8 @@
 
 #include "ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
 #include "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/dataflow_common.hpp"
-#ifdef SDPA_LSE_PAIR_SPLIT
-#include "pair_split.hpp"  // [sdpa_decode_lse] pair split
+#if defined(SDPA_LSE_PAIR_SPLIT) || defined(SDPA_LSE_HALF_BLOCK)
+#include "pair_split.hpp"  // [sdpa_decode_lse] pair split / half-block mode
 #endif
 
 void kernel_main() {
@@ -85,8 +85,8 @@ void kernel_main() {
     constexpr auto pos_args = TensorAccessorArgs<mask_args.next_compile_time_args_offset()>();
     constexpr auto page_table_args = TensorAccessorArgs<pos_args.next_compile_time_args_offset()>();
     constexpr auto attention_sink_args = TensorAccessorArgs<page_table_args.next_compile_time_args_offset()>();
-#ifdef SDPA_LSE_PAIR_SPLIT
-    // [sdpa_decode_lse] pair split: this device's half of every row's K chunks (its mesh column's parity)
+#if defined(SDPA_LSE_PAIR_SPLIT) || defined(SDPA_LSE_HALF_BLOCK)
+    // [sdpa_decode_lse] pair split / half-block mode: this device's pair half (its mesh column's parity)
     constexpr uint32_t pair_half = get_compile_time_arg_val(attention_sink_args.next_compile_time_args_offset());
     static_assert(sliding_window_size == 0, "sdpa_decode_lse pair split: no sliding window");
 #endif
@@ -187,6 +187,18 @@ void kernel_main() {
                 cur_pos = index_ptr[cur_batch / q_heads_parallel_factor];
             }
         }
+#ifdef SDPA_LSE_HALF_BLOCK
+        // [sdpa_decode_lse] half-block mode (pair-sharded global KV): this device holds chunk half pair_half of
+        // every logical block (chunks of SDPA_LSE_HALF_BLOCK tokens), entry i of the page table being its half of
+        // the row's block i; its keys are the chunks c with c % 2 == pair_half, attended as one compacted sequence
+        // whose last index is the effective cur_pos (-1 when this device owns none of the row's keys).
+        if (cur_pos != UINT32_MAX) {
+            constexpr uint32_t hb = SDPA_LSE_HALF_BLOCK;
+            const uint32_t n = cur_pos / hb;
+            const uint32_t len = ((n + 1 - pair_half) / 2) * hb + ((n % 2) == pair_half ? cur_pos % hb + 1 : 0);
+            cur_pos = len == 0 ? UINT32_MAX : len - 1;
+        }
+#endif
         if (cur_pos == UINT32_MAX) {
             // cur_pos of -1 indicates that the user should be skipped
             return;

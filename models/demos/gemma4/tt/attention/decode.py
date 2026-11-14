@@ -28,8 +28,12 @@ from models.demos.gemma4.custom_ops.paged_update_rows.op import enabled as packe
 from models.demos.gemma4.custom_ops.qkv_norm_rope import QkvNormRope
 from models.demos.gemma4.tt.ccl import ccl_allgather, oneshot_matmul_kwargs
 from models.demos.gemma4.tt.compute_config import sdpa_fp32_dest_acc_en, sdpa_math_fidelity
+from models.demos.gemma4.tt.kv_pair_shard import KV_PAIR_SHARD_ENV, kv_pair_shard_enabled
 from models.demos.gemma4.tt.mesh_orientation import decode_flag
 from models.demos.gemma4.tt.sdpa_pair_split import LOGIT_CLAMP, STATS_L_COL, STATS_M_COL, log_once, pair_split_enabled
+from models.demos.gemma4.tt.verify_multipos import TILE as MULTIPOS_TILE
+from models.demos.gemma4.tt.verify_multipos import log_once as multipos_log_once
+from models.demos.gemma4.tt.verify_multipos import multipos_layer_reason
 from models.demos.gemma4.tt.verify_prefix_lse import TILE as PREFIX_TILE
 from models.demos.gemma4.tt.verify_prefix_lse import log_once as prefix_log_once
 from models.demos.gemma4.tt.verify_prefix_lse import prefix_lse_layer_reason
@@ -337,11 +341,13 @@ def pair_split_active(weights, page_table, kv_cache, is_kv_shared, sequential_kv
     if getattr(weights, "pair", None) is None or not pair_split_enabled():
         return False
     reason = None
+    sharded = kv_pair_shard_enabled()  # the KV is split over the pair: only the pair view can read it
     if page_table is None or kv_cache is None:
         reason = "no paged KV cache"
-    elif is_kv_shared:
+    elif is_kv_shared and not sharded:
         reason = "KV-shared layer"
-    elif sequential_kv_write:
+    elif sequential_kv_write and not sharded:
+        # (under the shard the per-row write loop goes through the write table and the pair view reads)
         reason = "speculative verify (per-candidate KV write)"
     if reason is not None:
         log_once(f"a decode call keeps the 4-head attention: {reason}")
@@ -356,7 +362,11 @@ def pair_split_sdpa(
     this chip's half (``c % 2``) of the row's key chunks, with the stock call's program config and compute config,
     then ``pair_merge``. ``tt_q [1, B, G, D]`` bf16 TILE interleaved (the G q heads of the chip's KV group). Returns
     ``w_self * O_self [1, B, G, D]``, or None when the op refuses the call (logged once; the caller then runs the
-    stock op over every key on both chips of the pair and halves it)."""
+    stock op over every key on both chips of the pair and halves it).
+
+    ``GEMMA4_KV_PAIR_SHARD``: the chip holds only its half of every logical block (``tt/kv_pair_shard.py``), so the
+    op runs ``half_block=True`` over the logical table (each chip deriving its position from the row's) and a
+    refusal raises: no chip holds every key, the stock fallback would attend half of them."""
     from models.demos.gemma4.custom_ops.sdpa_decode_lse import SdpaDecodeLse
 
     kwargs = dict(
@@ -367,10 +377,14 @@ def pair_split_sdpa(
         program_config=program_config,
         compute_kernel_config=None,  # the stock call passes none: the op default (HiFi2, fp32 dest off)
     )
+    # pair_split=True: the half-block mode runs on the pair split's meshes too (one program per column parity)
     reason = SdpaDecodeLse.unsupported_reason(
-        tt_q, k_cache, v_cache, cache_pos, page_table, memory_config=ttnn.DRAM_MEMORY_CONFIG, **kwargs
+        tt_q, k_cache, v_cache, cache_pos, page_table, memory_config=ttnn.DRAM_MEMORY_CONFIG, pair_split=True, **kwargs
     )
+    half_block = kv_pair_shard_enabled()
     if reason is not None:
+        if half_block:
+            raise ValueError(f"{KV_PAIR_SHARD_ENV}: sdpa_decode_lse refuses a pair-sharded global decode: {reason}")
         log_once(f"sdpa_decode_lse refuses the call; the stock op attends every key on both chips: {reason}")
         return None
     out, stats = SdpaDecodeLse.op(
@@ -381,7 +395,8 @@ def pair_split_sdpa(
         page_table,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         stats_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        pair_split=True,
+        pair_split=not half_block,
+        half_block=half_block,
         **kwargs,
     )
     return pair_merge(out, stats, weights.pair_selector, mesh_config, ccl_manager, scale=kwargs["scale"])
@@ -465,6 +480,7 @@ def decode_forward(
     rope_presliced=False,
     rope_prepared=None,
     sdpa_scratch=None,
+    kv_write_table=None,
 ):
     """
     Single-token decode attention, fully on device.
@@ -490,6 +506,9 @@ def decode_forward(
         is_kv_shared: if True, skip K/V projection and cache update (use source layer's KV cache)
         sdpa_scratch: the model's persistent fp32 scratch of the split-independent decode SDPA
             (``GEMMA4_SDPA_DECODE_SPLITFREE``, custom_ops/sdpa_decode_splitfree); None keeps the stock op
+        kv_write_table: ``GEMMA4_KV_PAIR_SHARD`` -- the per-chip write table (``tt/kv_pair_shard.py``) the cache
+            writes go through instead of ``page_table`` (which the attention reads through), so a chip writes only
+            its own half of every logical block
     """
     tp = mesh_config.tp if mesh_config else 1
     # GEMMA4_SDPA_PAIR_SPLIT: a qualifying global layer decodes on its pair view (pair QKV / o_proj): each chip runs
@@ -714,6 +733,7 @@ def decode_forward(
                 num_local_kv_heads = 1 if weights.kv_replicated else config.num_key_value_heads // tp
                 eff_bs = effective_block_size(k_cache, config.head_dim, num_local_kv_heads)
                 batch = tt_k.shape[1]
+                write_table = kv_write_table if kv_write_table is not None else page_table
                 if sequential_kv_write and batch > 1:
                     # Speculative VERIFY: the B candidates sit at consecutive
                     # positions that share ONE paged block (all batch rows of the
@@ -747,7 +767,7 @@ def decode_forward(
                         kb = ttnn.to_memory_config(kb, single_user_mem)
                         vb = ttnn.to_memory_config(vb, single_user_mem)
                         pos_b = ttnn.slice(cache_pos, [b], [b + 1])
-                        pt_b = ttnn.slice(page_table, [b, 0], [b + 1, page_table.shape[1]])
+                        pt_b = ttnn.slice(write_table, [b, 0], [b + 1, write_table.shape[1]])
                         ttnn.experimental.paged_update_cache(
                             k_cache,
                             kb,
@@ -775,7 +795,7 @@ def decode_forward(
                     # size and head count come off the cache, which kv_fused_update_reason checked equal to the
                     # layer's view
                     ttnn.experimental.paged_fused_update_cache(
-                        k_cache, tt_k, v_cache, tt_v, update_idxs_tensor=cache_pos, page_table=page_table
+                        k_cache, tt_k, v_cache, tt_v, update_idxs_tensor=cache_pos, page_table=write_table
                     )
                     KV_FUSED_STATS["fused"] += 1
                 else:
@@ -783,7 +803,7 @@ def decode_forward(
                         k_cache,
                         tt_k,
                         update_idxs_tensor=cache_pos,
-                        page_table=page_table,
+                        page_table=write_table,
                         block_size=eff_bs,
                         num_kv_heads=num_local_kv_heads,
                         **paged_modulo_kwargs,
@@ -792,7 +812,7 @@ def decode_forward(
                         v_cache,
                         tt_v,
                         update_idxs_tensor=cache_pos,
-                        page_table=page_table,
+                        page_table=write_table,
                         block_size=eff_bs,
                         num_kv_heads=num_local_kv_heads,
                         **paged_modulo_kwargs,
@@ -1159,11 +1179,105 @@ def _packed_verify_sdpa(
     return out
 
 
+# ── GEMMA4_SPEC_VERIFY_MULTIPOS: a global layer's verify on the causal multi-position paged SDPA ─────────────────────
+# tt/verify_multipos.py holds the knob, the planner, the layouts (torch emulations of the ops below) and the argument
+# why "attend [0, c_b + p]" is the packed mask's rows; tt/spec_decode.py plans the record and uploads the positions.
+
+
+def multipos_verify_reason(multipos, config, weights, kv_cache, kv_modulo, B, P, tp):
+    """None when this packed verify call runs the multi-position SDPA with ``multipos`` (``{"plan", "cur_pos",
+    "page_table"}``), else why not: the layer's static check (``multipos_layer_reason``) and the record's plan
+    matching the call (rows, candidates, heads, the page table's ``B * G`` rows). Static values only (trace-safe)."""
+    plan = multipos["plan"]
+    h_local = config.num_attention_heads // tp
+    reason = multipos_layer_reason(
+        is_sliding=config.is_sliding,
+        cache_position_modulo=config.cache_position_modulo,
+        kv_modulo=kv_modulo,
+        nkv_local=1 if weights.kv_replicated else config.num_key_value_heads // tp,
+        h_local=h_local,
+        head_dim=config.head_dim,
+        cache_shape=tuple(kv_cache[0].padded_shape),
+    )
+    if reason is None and not plan.fits:
+        reason = plan.describe()
+    if reason is None and (plan.batch, plan.packed_p, plan.h_local, plan.head_dim) != (B, P, h_local, config.head_dim):
+        reason = (
+            f"the record's plan is for {plan.batch} rows x {plan.packed_p} candidates, {plan.h_local} heads of "
+            f"{plan.head_dim}; the call has {B} x {P}, {h_local} of {config.head_dim}"
+        )
+    if reason is None and int(multipos["page_table"].shape[0]) != plan.sdpa_batch:
+        reason = f"a {int(multipos['page_table'].shape[0])}-row page table for {plan.sdpa_batch} batch groups"
+    return reason
+
+
 def _free_source(src, out):
     """Free ``src`` once ``out`` was made from it, unless ttnn handed back the same buffer (a no-op layout change, pad
     or slice, or a reshape view)."""
     if out is not src and int(out.buffer_address()) != int(src.buffer_address()):
         ttnn.deallocate(src)
+
+
+def _multipos_verify_rows(tt_q, k_cache, v_cache, multipos, B, P, H_local, head_dim):
+    """The global layer's packed verify attention as ONE causal multi-position paged SDPA
+    (``spec_multi_pos_tiles = Tg``): each record row's KV is read once per group of ``Tg`` candidates, up to the
+    group's last position, instead of the rung's whole span under a mask.
+
+    ``tt_q [1, H_local, B*P (tile-padded), head_dim]`` (the prefill-style split after RoPE, row ``b*P + p``; consumed)
+    -> ROW_MAJOR, logical rows -> permute ``[1, B*P, H_local, D]`` -> zero rows ``H_local..31`` -> reshape
+    ``[1, B*G, Tg*32, D]`` (candidate ``p = g*Tg + j`` of row ``b`` = row tile ``j`` of group ``b*G + g``) -> TILE
+    DRAM bf16; the op against ``multipos["page_table"]`` ``[B*G, cols]`` and ``multipos["cur_pos"]`` ``[B*P]``
+    (entry ``b*P + p = c_b + p``); the output ``[1, B*G, Tg*32, D]`` -> ROW_MAJOR -> ``[1, B*P, 32, D]`` -> rows
+    ``0..H_local-1``. ``verify_multipos.multipos_q_layout`` / ``multipos_out_rows`` are these steps in torch.
+    Returns ``[1, B*P, H_local, head_dim]`` ROW_MAJOR in L1, the rows the o_proj tail takes."""
+    plan = multipos["plan"]
+    tg, groups = plan.tg, plan.groups
+    rows = B * P
+    dram = ttnn.DRAM_MEMORY_CONFIG
+    q = ttnn.to_layout(tt_q, ttnn.ROW_MAJOR_LAYOUT)
+    _free_source(tt_q, q)
+    if q.shape[2] != rows:
+        q_rows = ttnn.slice(q, [0, 0, 0, 0], [1, H_local, rows, head_dim])
+        _free_source(q, q_rows)
+        q = q_rows
+    q_c = ttnn.permute(q, (0, 2, 1, 3))  # [1, B*P, H_local, D]: candidate-major, heads within a candidate
+    _free_source(q, q_c)
+    if H_local < MULTIPOS_TILE:
+        q_pad = ttnn.pad(q_c, [(0, 0), (0, 0), (0, MULTIPOS_TILE - H_local), (0, 0)], value=0.0)
+        _free_source(q_c, q_pad)
+        q_c = q_pad
+    q_g = ttnn.reshape(q_c, (1, B * groups, tg * MULTIPOS_TILE, head_dim))
+    q_mp = ttnn.to_layout(q_g, ttnn.TILE_LAYOUT, memory_config=dram)
+    _free_source(q_g, q_mp)
+    if q_mp.dtype != ttnn.bfloat16:  # the op takes a bf16 Q
+        q_bf16 = ttnn.typecast(q_mp, ttnn.bfloat16)
+        ttnn.deallocate(q_mp)
+        q_mp = q_bf16
+    out = ttnn.transformer.paged_scaled_dot_product_attention_decode(
+        q_mp,
+        k_cache,
+        v_cache,
+        page_table_tensor=multipos["page_table"],
+        cur_pos_tensor=multipos["cur_pos"],
+        is_causal=True,
+        scale=1.0,
+        memory_config=dram,
+        program_config=ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(int(plan.grid[0]), int(plan.grid[1])),
+            q_chunk_size=32,
+            k_chunk_size=plan.k_chunk,
+            exp_approx_mode=False,
+            max_cores_per_head_batch=plan.max_cores_per_head_batch,
+        ),
+        spec_multi_pos_tiles=tg,
+    )
+    ttnn.deallocate(q_mp)
+    out_rm = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT, memory_config=dram)
+    _free_source(out, out_rm)
+    out_c = ttnn.reshape(out_rm, (1, rows, MULTIPOS_TILE, head_dim))  # candidate b*P + p, its heads in rows 0..
+    sdpa_rows = ttnn.slice(out_c, [0, 0, 0, 0], [1, rows, H_local, head_dim], memory_config=ttnn.L1_MEMORY_CONFIG)
+    _free_source(out_c, sdpa_rows)
+    return sdpa_rows
 
 
 def _packed_verify_out(tt_sdpa, weights, config, mesh_config, ccl_manager):
@@ -1442,7 +1556,9 @@ def _prefix_lse_verify_rows(
         cache_position_modulo=None,
         program_config=program_config,
         compute_kernel_config=None,  # the stock call's default (HiFi2, fp32 dest off), as the plain decode's
-        pair_split=pair is not None,
+        # GEMMA4_KV_PAIR_SHARD: the chip holds half of every logical block, the half-block mode reads it
+        pair_split=pair is not None and not kv_pair_shard_enabled(),
+        half_block=pair is not None and kv_pair_shard_enabled(),
     )
     parts = []
     for s in range(splits):
@@ -1582,7 +1698,9 @@ def packed_decode_forward(
     embed_idx=None,
     hot_pt=None,
     kv_modulo=None,
+    multipos=None,
     prefix_lse=None,
+    kv_write_table=None,
 ):
     """Packed multi-token decode attention — P query positions/slot in one pass.
 
@@ -1601,7 +1719,7 @@ def packed_decode_forward(
         attn_mask: [B, 1, H_local*P, S_k] head-major additive mask baking in
             the per-position causal upper bound and (sliding layers) the
             window lower bound. S_k must be a multiple of k_chunk (64).
-            None on a global layer the prefix + fresh split serves.
+            None on a global layer the multi-position SDPA serves.
         packed_p: P, the number of packed positions per slot.
         rope_packed: optional pre-gathered (cos_bp, sin_bp) for this layer
             type — identical for all layers of a type, so the caller gathers
@@ -1614,6 +1732,11 @@ def packed_decode_forward(
             ``page_table`` is a ring over an unbounded pool (the serving
             records' sliding span ring); None = the layer's own
             ``config.cache_position_modulo``.
+        multipos: GEMMA4_SPEC_VERIFY_MULTIPOS (global layers of the serving
+            records): ``{"plan": MultiposPlan, "cur_pos": [B*P] int32,
+            "page_table": [B*G, cols] int32}``; the attention runs the causal
+            multi-position SDPA (``_multipos_verify_rows``) when
+            ``multipos_verify_reason`` allows, else the masked SDPA below.
         prefix_lse: GEMMA4_SPEC_VERIFY_PREFIX_LSE (global layers of the
             serving records): ``{"plan": PrefixLsePlan, "cur_pos": [B] int32,
             "bias": [1, B, R, 1] fp32, "fresh_mask": [1, B, R, 32] fp32}``;
@@ -1655,6 +1778,12 @@ def packed_decode_forward(
             prefix_log_once(f"a global layer keeps the masked packed verify: {prefix_reason}")
     # the pair view (GEMMA4_SDPA_PAIR_SPLIT build): the QKV of the chip's whole KV group -- the same Q, K and V on both
     # chips of a pair, K / V those of the 4-head layout, so the KV write below is unchanged -- and the group's o_proj
+    if kv_write_table is not None and not (prefix_on and prefix_lse["plan"].pair):
+        why = prefix_reason if not prefix_on else "the prefix plan has no pair view"
+        raise ValueError(
+            f"{KV_PAIR_SHARD_ENV}: a pair-sharded global layer's verify reads only through the pair-view prefix + "
+            f"fresh split (GEMMA4_SPEC_VERIFY_PREFIX_LSE): {why}"
+        )
     prefix_pair = None
     head_tp = tp
     if prefix_on and prefix_lse["plan"].pair:
@@ -1676,8 +1805,10 @@ def packed_decode_forward(
     q_sharded_mem = _Q_SHARDED_MEM_CACHE.get(cache_key)
     # The loop-free custom op (GEMMA4_PACKED_KV_WRITE_OP=1) needs no sharded layout: the probe runs only when the
     # loop serves the write.
+    # GEMMA4_KV_PAIR_SHARD: the writes go through the per-chip write table (the reads through page_table)
+    write_table = kv_write_table if kv_write_table is not None else page_table
     rows_op_reason = (
-        packed_rows_op_reason(kv_cache, kv_write_idxs, page_table, B, P, nkv_local, head_dim, config, write_modulo)
+        packed_rows_op_reason(kv_cache, kv_write_idxs, write_table, B, P, nkv_local, head_dim, config, write_modulo)
         if packed_write_takes_fallback_loop(kv_staging, embed_idx, is_kv_shared)
         else "staging"
     )
@@ -1736,6 +1867,8 @@ def packed_decode_forward(
 
     # ── ⑤ KV write — loop-free persistent staging (primary) ────────────────
     if not is_kv_shared and kv_staging is not None and embed_idx is not None:
+        if kv_write_table is not None:
+            raise ValueError(f"{KV_PAIR_SHARD_ENV}: the staging KV write names physical pages, not per-chip halves")
         # Park Q off L1 (idle until the SDPA pack ⑥); merge intermediates live
         # in DRAM and Q never re-enters L1 before the SDPA call.
         tt_q = ttnn.to_memory_config(tt_q, ttnn.DRAM_MEMORY_CONFIG)
@@ -1772,7 +1905,7 @@ def packed_decode_forward(
                 tt_k,
                 tt_v,
                 kv_write_idxs,
-                page_table,
+                write_table,
                 B,
                 nkv_local,
                 eff_bs,
@@ -1785,7 +1918,7 @@ def packed_decode_forward(
                 tt_k,
                 tt_v,
                 kv_write_idxs,
-                page_table,
+                write_table,
                 B,
                 P,
                 nkv_local,
@@ -1797,7 +1930,7 @@ def packed_decode_forward(
 
     k_cache_use, v_cache_use = kv_cache
 
-    # ── ⑥' GEMMA4_SPEC_VERIFY_PREFIX_LSE: the keys [0, c_b - 1] as one causal decode per record row (read only up to
+    # ── ⑥'' GEMMA4_SPEC_VERIFY_PREFIX_LSE: the keys [0, c_b - 1] as one causal decode per record row (read only up to
     # the row) + the candidates' own keys from k_fresh / v_fresh, merged through their LSEs ────────────────────────────
     if prefix_on:
         tt_sdpa = _prefix_lse_verify_rows(
@@ -1818,6 +1951,17 @@ def packed_decode_forward(
         ttnn.deallocate(k_fresh)
         ttnn.deallocate(v_fresh)
         return _packed_verify_out(tt_sdpa, weights, config, mesh_config, ccl_manager)
+
+    # ── ⑥' GEMMA4_SPEC_VERIFY_MULTIPOS: a global layer's causal multi-position SDPA (the K/V of the P candidates is
+    # in the cache already, step ⑤) — the keys [0, c_b + p] the mask below would leave, read only up to the row ─────
+    if multipos is not None:
+        mp_reason = multipos_verify_reason(multipos, config, weights, kv_cache, kv_modulo, B, P, tp)
+        if mp_reason is None:
+            tt_sdpa = _multipos_verify_rows(tt_q, k_cache_use, v_cache_use, multipos, B, P, H_local, head_dim)
+            return _packed_verify_out(tt_sdpa, weights, config, mesh_config, ccl_manager)
+        if attn_mask is None:
+            raise ValueError(f"packed verify: no mask was built and the multi-position SDPA refuses: {mp_reason}")
+        multipos_log_once(f"a global layer keeps the masked packed verify: {mp_reason}")
 
     # ── ⑥ Head-major pack Q → [1, B, H_local*P, head_dim] → SDPA ────────────
     # ROW_MAJOR on purpose: P (< 32) never lands on a tile axis, so the

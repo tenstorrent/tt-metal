@@ -254,10 +254,11 @@ class SdpaDecodeLse:
         compute_kernel_config=None,
         memory_config=None,
         pair_split=False,
+        half_block=False,
     ):
         """None when the call is in contract (shapes, formats, layouts, the plan and its L1 fit; under ``pair_split``
-        a mesh with an even number of columns), else why."""
-        if pair_split:
+        or ``half_block`` a mesh with an even number of columns), else why."""
+        if pair_split or half_block:
             reason = P.pair_split_reason(_mesh_shape(q.device()))
             if reason is not None:
                 return reason
@@ -356,11 +357,22 @@ class SdpaDecodeLse:
         memory_config=None,
         stats_memory_config=None,
         pair_split=False,
+        owned=False,
+        half_block=False,
+        half=None,
     ):
         """Paged causal decode attention + row statistics. Returns ``(out [1, B, Hq, D] bf16 TILE, stats
         [1, B, PNH, 64] bf16 TILE)``; see the module docstring for the stats layout and the LSE convention.
         ``pair_split``: each device attends only its pair half of every row's keys (module docstring), one program
-        per mesh coordinate."""
+        per mesh coordinate. ``owned`` (pair-sharded global KV, ``tt/kv_pair_shard.py``): the stock single
+        program over each device's own compacted ``page_table`` and ``cur_pos``; a ``cur_pos = -1`` row writes
+        the empty-half sentinel (O = 0, m = -30000, l = 1) instead of being skipped. Exclusive with pair_split."""
+        assert not (pair_split and owned), "sdpa_decode_lse: owned and pair_split are exclusive"
+        # half_block (pair-sharded global KV, the half-block layout): each device of a pair holds the block_size-token
+        # half ``h`` (its column's parity, or ``half`` on every device -- a single-chip test) of every logical
+        # block in the slot the page table names; the kernels derive the effective cur_pos from the global one and
+        # the writer writes the empty-half sentinel when a device owns none of a row's keys.
+        assert not (half_block and (pair_split or owned)), "sdpa_decode_lse: half_block is its own mode"
         kw = dict(
             scale=scale,
             num_kv_heads=num_kv_heads,
@@ -420,9 +432,20 @@ class SdpaDecodeLse:
         def program(half=None):
             """One device's program. ``half``: its pair half under pair_split (appended to every kernel's
             compile-time args, so part of the program hash), None for the stock single program."""
-            pair_ct = list(plan.pair_ct(half)) if plan.pair_split else []
+            if half_block:
+                pair_ct = [int(half)]
+            else:
+                pair_ct = list(plan.pair_ct(half)) if plan.pair_split else []
             # [] without pair_split: the reader / writer descriptors stay exactly the stock ones (no defines)
             dm_defines = {"defines": list(plan.dataflow_defines)} if plan.pair_split else {}
+            # owned mode: only the writer differs (the -1 row sentinel); the reader stays the stock descriptor
+            writer_defines = {"defines": [("SDPA_LSE_OWNED", "1")]} if owned else dm_defines
+            compute_defines = list(plan.defines)
+            if half_block:
+                hb = ("SDPA_LSE_HALF_BLOCK", str(int(g.block_size)))
+                dm_defines = {"defines": [hb]}
+                writer_defines = {"defines": [hb, ("SDPA_LSE_OWNED", "1")]}
+                compute_defines = compute_defines + [hb]
             reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
             for (x, y), (r, w, c) in per_core.items():
                 reader_rt[x][y] = [int(v) for v in r]
@@ -461,13 +484,13 @@ class SdpaDecodeLse:
                     compile_time_args=writer_ct + pair_ct,
                     runtime_args=writer_rt,
                     config=ttnn.WriterConfigDescriptor(),
-                    **dm_defines,
+                    **writer_defines,
                 ),
                 ttnn.KernelDescriptor(
                     kernel_source=str(KERNEL_DIR / "sdpa_flash_decode_lse.cpp"),
                     core_ranges=core_set,
                     compile_time_args=list(plan.compute_ct) + pair_ct,
-                    defines=list(plan.defines),
+                    defines=compute_defines,
                     runtime_args=compute_rt,
                     config=ttnn.ComputeConfigDescriptor(
                         math_fidelity=fidelity,
@@ -479,7 +502,9 @@ class SdpaDecodeLse:
             ]
             return ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=cbs)
 
-        if plan.pair_split:
+        if half_block and half is not None:
+            programs = program(int(half))
+        elif plan.pair_split or half_block:
             # one program per mesh coordinate, the half = the column's parity (the pair is columns (c, c ^ 1));
             # generic_op hashes each coordinate range with its program, compile-time args included. The two
             # half programs are built once: MeshProgramDescriptor stores a copy per coordinate.

@@ -44,6 +44,7 @@ import torch
 
 import ttnn
 from models.demos.gemma4.tt.ccl import ccl_allgather
+from models.demos.gemma4.tt.kv_pair_shard import KV_PAIR_SHARD_ENV, kv_pair_shard_enabled
 from models.demos.gemma4.tt.lane_prefill import lane_frame_rows, lane_of_row, lane_row_groups
 from models.demos.gemma4.tt.sdpa_pair_split import pair_split_enabled
 from models.demos.gemma4.tt.spec_sampling import (
@@ -56,6 +57,15 @@ from models.demos.gemma4.tt.spec_sampling import (
     select_verify_ids,
     select_verify_ids_frame,
     spec_sampled_verify_enabled,
+)
+from models.demos.gemma4.tt.verify_multipos import log_once as multipos_log_once
+from models.demos.gemma4.tt.verify_multipos import (
+    multipos_extra_bytes,
+    multipos_layer_reason,
+    multipos_page_table,
+    multipos_positions,
+    plan_verify_multipos,
+    verify_multipos_enabled,
 )
 from models.demos.gemma4.tt.verify_prefix_lse import PrefixLseGeometry, fresh_causal_mask, kv_dtype_name
 from models.demos.gemma4.tt.verify_prefix_lse import log_once as prefix_log_once
@@ -3222,10 +3232,15 @@ class SpeculativeDecoder:
         for rec in recs.values():
             if rec.get("id") is not None:
                 ttnn.release_trace(self.mesh_device, rec["id"])
-            for key in ("v_ptl_slots", "verify_x", "vidx"):
+            for t in (rec.get("v_ptl_slots") or ()) if kv_pair_shard_enabled() else ():
+                self.target._kv_write_table_by_read.pop(id(t), None)
+            for key in ("v_ptl_slots", "v_wt_slots", "v_ptl_mp_own", "verify_x", "vidx"):
                 self._free_tensor_tree(rec.get(key))
         for S in self._srv_shape_bufs.values():
+            for t in (S.get("d_ptl_slots") or ()) if kv_pair_shard_enabled() else ():
+                self.target._kv_write_table_by_read.pop(id(t), None)
             for key in (
+                "d_wt_slots",
                 "anchor_tok",
                 "seed_idx",
                 "seed_tok",
@@ -3236,6 +3251,7 @@ class SpeculativeDecoder:
                 "d_ptl_slots",
                 "v_pos",
                 "v_pos_rows",
+                "v_cur_pos",
                 "v_prefix_pos",
                 "v_prefix_bias",
                 "prefix_fresh_mask",
@@ -3273,6 +3289,73 @@ class SpeculativeDecoder:
         sliding span ring of an unbounded sliding pool (serving_sliding_span_ring), else None (the rung)."""
         ring = self._pv_ring.get(lt)
         return ring if ring else self._srv_vring.get(lt)
+
+    def _srv_multipos_inputs(self):
+        """Whether the shapes carry the multi-position verify's cur_pos input (GEMMA4_SPEC_VERIFY_MULTIPOS on, plain
+        engine: the lane engine's inputs are lane frames and keep the masked verify)."""
+        return verify_multipos_enabled() and self._srv_lanes == 1
+
+    def _srv_multipos_plan(self, shape, s_k, widths):
+        """GEMMA4_SPEC_VERIFY_MULTIPOS: the ``MultiposPlan`` of record ``(shape, s_k)`` (``widths``: its verify table
+        width per layer type) when EVERY global layer takes the causal multi-position SDPA -- the record then builds
+        no full-attention mask -- else None, the reason logged once (every layer keeps the masked verify). The same
+        static per-layer check the layer makes (``verify_multipos.multipos_layer_reason``: layer configs, cache
+        shapes), then ``plan_verify_multipos`` on the device grid against the decode SDPA's CB budget."""
+        if not verify_multipos_enabled():
+            return None
+        from models.demos.gemma4.custom_ops.grid import sdpa_decode_cb_budget_bytes, sdpa_tile_bytes
+
+        B, K = shape
+        P = K + 1
+        types = self._srv_layer_types()
+        full = [i for i, lt in enumerate(types) if lt != "sliding_attention"]
+        reason = None
+        if self._srv_lanes > 1:
+            reason = "the lane engine (its record inputs are lane frames)"
+        elif not full:
+            reason = "no global layer"
+        geometry = set()
+        for i in full if reason is None else ():
+            attn = self.target.layers[i].self_attn
+            cfg = attn.config
+            k_cache = self.tt_kv_cache[i][0]
+            layer_reason = multipos_layer_reason(
+                is_sliding=cfg.is_sliding,
+                cache_position_modulo=cfg.cache_position_modulo,
+                kv_modulo=self._srv_span_ring(types[i]),
+                nkv_local=1 if attn.weights.kv_replicated else cfg.num_key_value_heads // self._tp,
+                h_local=cfg.num_attention_heads // self._tp,
+                head_dim=cfg.head_dim,
+                cache_shape=tuple(k_cache.padded_shape),
+            )
+            if layer_reason is not None:
+                reason = f"layer {i}: {layer_reason}"
+                break
+            geometry.add(
+                (types[i], int(cfg.head_dim), cfg.num_attention_heads // self._tp, sdpa_tile_bytes(k_cache.dtype))
+            )
+        if reason is None and len(geometry) != 1:
+            reason = f"the global layers differ in (type, head_dim, heads, K/V tile bytes): {sorted(geometry)}"
+        if reason is not None:
+            multipos_log_once(f"shape {shape}: every layer keeps the masked packed verify: {reason}")
+            return None
+        lt, head_dim, h_local, kv_tile_bytes = geometry.pop()
+        grid = self.mesh_device.compute_with_storage_grid_size()
+        plan = plan_verify_multipos(
+            B,
+            P,
+            head_dim,
+            h_local,
+            (int(grid.x), int(grid.y)),
+            budget_bytes=sdpa_decode_cb_budget_bytes(getattr(self.mesh_device, "arch", lambda: None)()),
+            kv_tile_bytes=kv_tile_bytes,
+            extra_bytes=multipos_extra_bytes(widths[lt], B * P),
+        )
+        if not plan.fits:
+            multipos_log_once(f"shape {shape} S_k={s_k}: every layer keeps the masked packed verify: {plan.describe()}")
+            return None
+        multipos_log_once(f"shape {shape} S_k={s_k}: {plan.describe()}")
+        return plan
 
     def _srv_prefix_lse_geometry(self, shape):
         """GEMMA4_SPEC_VERIFY_PREFIX_LSE: the ``PrefixLseGeometry`` of ``shape`` when EVERY global layer takes the
@@ -3364,7 +3447,11 @@ class SpeculativeDecoder:
         width per layer type) when the shape has a geometry and the prefix call fits (the op's planner against the
         decode SDPA's CB budget), else None (the record keeps the masked verify; the reason logged once)."""
         geometry = S.get("prefix_geom")
+        # GEMMA4_KV_PAIR_SHARD: the masked verify reads every key, which no chip holds
+        shard = kv_pair_shard_enabled() and bool(self.target._kv_pair_shard_layers)
         if geometry is None:
+            if shard:
+                raise ValueError(f"{KV_PAIR_SHARD_ENV}: shape {shape} has no prefix + fresh verify geometry")
             return None
         from models.demos.gemma4.custom_ops.grid import sdpa_decode_cb_budget_bytes
         from models.demos.gemma4.custom_ops.sdpa_decode_lse import planner as lse_planner
@@ -3378,6 +3465,8 @@ class SpeculativeDecoder:
             lse_planner,
         )
         if not plan.fits:
+            if shard:
+                raise ValueError(f"{KV_PAIR_SHARD_ENV}: shape {shape} S_k={s_k}: {plan.describe()}")
             prefix_log_once(f"shape {shape} S_k={s_k}: every layer keeps the masked packed verify: {plan.describe()}")
             return None
         rung_reason = prefix_lse_rung_reason(geometry.splits, s_k)
@@ -3399,6 +3488,7 @@ class SpeculativeDecoder:
             self._srv_from_torch(torch.zeros(B, self._srv_blocks, dtype=torch.int32), ttnn.int32, lane_dim=0)
             for _ in range(self._srv_n_slots)
         ]
+        d_wt_slots = self._srv_alloc_write_tables(d_ptl_slots)
         # The assistant reads each type's shared-KV layer: its table is that layer's slot.
         d_ptl = {lt: d_ptl_slots[slots[self.target.last_kv_layer_by_type[lt]]] for lt in self._pv_ring}
         ring = self._srv_span_ring("sliding_attention")
@@ -3424,6 +3514,7 @@ class SpeculativeDecoder:
             "seed_pi": seed_pi,  # [B] int32
             "d_ptl": d_ptl,  # {layer_type: [B, blocks] int32} the shared-KV layer's slot table per type
             "d_ptl_slots": d_ptl_slots,  # one [B, blocks] int32 table per KV group slot
+            "d_wt_slots": d_wt_slots,  # GEMMA4_KV_PAIR_SHARD: {global slot: its per-chip write table}
             "d_ptl_list": [d_ptl_slots[slot] for slot in slots],  # per target layer: its slot's table
             "v_pos": self._srv_from_torch(
                 torch.zeros(1, B * P, dtype=torch.int64), ttnn.uint32, lane_dim=1
@@ -3436,6 +3527,13 @@ class SpeculativeDecoder:
             "write_idxs": [
                 self._srv_from_torch(torch.zeros(B, dtype=torch.int32), ttnn.int32, lane_dim=0) for _ in range(P)
             ],
+            # GEMMA4_SPEC_VERIFY_MULTIPOS: [B*P] int32 cur_pos of the global layers' multi-position SDPA, entry
+            # b*P + p = c_b + p (verify_multipos.multipos_positions); None with the knob off
+            "v_cur_pos": (
+                self._srv_from_torch(torch.zeros(B * P, dtype=torch.int32), ttnn.int32, lane_dim=0)
+                if self._srv_multipos_inputs()
+                else None
+            ),
             # GEMMA4_SPEC_VERIFY_PREFIX_LSE (None with the knob off or a refused shape): the static geometry, the [B]
             # int32 prefix positions max(c_b - 1, 0), the [1, B, R, 1] fp32 row biases (verify_prefix_lse.prefix_bias)
             # and the constant [1, B, R, 32] fp32 fresh mask (fresh_causal_mask), built here, before any capture
@@ -3481,6 +3579,8 @@ class SpeculativeDecoder:
             ("v_pos_rows", B * H * P),  # [1, B*H*P]
         ]
         i32 = [("d_pi", B)] + [(("write_idxs", p), B) for p in range(P)]  # [B] each
+        if self._srv_multipos_inputs():
+            i32.append(("v_cur_pos", B * P))  # [B*P]
         if prefix:
             i32.append(("v_prefix_pos", B))  # [B] (GEMMA4_SPEC_VERIFY_PREFIX_LSE)
         width = max(n for _key, n in u32 + i32)
@@ -3526,10 +3626,26 @@ class SpeculativeDecoder:
             self._srv_from_torch(torch.zeros(B, widths[slot_type[slot]], dtype=torch.int32), ttnn.int32, lane_dim=0)
             for slot in range(self._srv_n_slots)
         ]
+        v_wt_slots = self._srv_alloc_write_tables(v_ptl_slots)
         # The flat-table fallback reads each type's representative pool layer.
         v_ptl = {lt: v_ptl_slots[slots[self._pv_ring_rep[lt]]] for lt in self._pv_ring}
-        # GEMMA4_SPEC_VERIFY_PREFIX_LSE: the record's prefix call plan
+        # GEMMA4_SPEC_VERIFY_PREFIX_LSE: the record's prefix call plan (takes precedence over the multi-position SDPA)
         prefix_plan = self._srv_prefix_lse_plan(shape, S, s_k, widths)
+        # GEMMA4_SPEC_VERIFY_MULTIPOS: the record's plan and its global slots' group tables [B*G, width] (row
+        # b*G + g = row b, verify_multipos.multipos_page_table; the slot's own table when G = 1)
+        mp = self._srv_multipos_plan(shape, s_k, widths) if prefix_plan is None else None
+        mp_slots, mp_own = {}, []
+        for slot in range(self._srv_n_slots) if mp is not None else ():
+            if slot_type[slot] == "sliding_attention":
+                continue
+            if mp.groups == 1:
+                mp_slots[slot] = v_ptl_slots[slot]
+                continue
+            t = self._srv_from_torch(
+                torch.zeros(B * mp.groups, widths[slot_type[slot]], dtype=torch.int32), ttnn.int32, lane_dim=0
+            )
+            mp_slots[slot] = t
+            mp_own.append(t)
         return {
             "shape": shape,
             "S_k": int(s_k),
@@ -3538,8 +3654,13 @@ class SpeculativeDecoder:
             "P": P,
             "v_ptl": v_ptl,  # {layer_type: [B, width_lt] int32} the representative layer's slot table per type
             "v_ptl_slots": v_ptl_slots,  # one [B, width of its type] int32 table per KV group slot
+            "v_wt_slots": v_wt_slots,  # GEMMA4_KV_PAIR_SHARD: {global slot: its per-chip write table}
             "v_ptl_list": [v_ptl_slots[slot] for slot in slots],  # per target layer: its slot's table
-            "prefix_lse": prefix_plan,  # PrefixLsePlan, or None: the global layers keep the masked verify
+            "mp": mp,  # MultiposPlan, or None: every layer runs the masked packed verify
+            "v_ptl_mp_slots": mp_slots,  # {global slot: [B*G, width] int32}
+            "v_ptl_mp_own": mp_own,  # the group tables allocated for G > 1 (freed by serving_release)
+            "v_ptl_mp_list": [mp_slots.get(slot) for slot in slots],  # per target layer; None on sliding layers
+            "prefix_lse": prefix_plan,  # PrefixLsePlan, or None: the global layers keep the masked (or multipos) verify
             # The replay's outputs the host reads back (serving_step): the user-major verify input and its
             # argmax ids, allocated here, before any capture, and written in place by the body (ttnn.copy).
             # Taken from the body's own op outputs inside the capture they were the one allocation after the
@@ -3757,10 +3878,13 @@ class SpeculativeDecoder:
         # TP-sharded (the chip's [1, 1, B*P, V/tp] slice, no vocab all-gather in the record).
         sharded_verify = self._srv_sharded_verify_argmax and self._tp > 1
         verify_kwargs = {"keep_logits_sharded": True} if sharded_verify else {}
+        # GEMMA4_SPEC_VERIFY_MULTIPOS: the global layers attend [0, c_b + p] per candidate through the causal
+        # multi-position SDPA (tt/verify_multipos.py), so the record builds no full-attention mask
+        mp = rec.get("mp")
         prefix_plan = rec.get("prefix_lse")
         if prefix_plan is not None:
             # GEMMA4_SPEC_VERIFY_PREFIX_LSE: the global layers attend each row's prefix causally plus the candidates'
-            # own K / V (tt/verify_prefix_lse.py), so the record builds no full-attention mask
+            # own K / V (tt/verify_prefix_lse.py), so the record builds no full-attention mask either
             verify_kwargs["verify_prefix_lse"] = {
                 "plan": prefix_plan,
                 "cur_pos": S["v_prefix_pos"],
@@ -3768,8 +3892,15 @@ class SpeculativeDecoder:
                 "fresh_mask": S["prefix_fresh_mask"],
             }
             mask_full, mask_slide = self._srv_masks_device(S, rec, full=False)
-        else:
+        elif mp is None:
             mask_full, mask_slide = self._srv_masks_device(S, rec)
+        else:
+            verify_kwargs["verify_multipos"] = {
+                "plan": mp,
+                "cur_pos": S["v_cur_pos"],
+                "page_tables": rec["v_ptl_mp_list"],
+            }
+            mask_full, mask_slide = self._srv_masks_device(S, rec, full=False)
         vlogits, vhidden = self.target.ttnn_packed_verify_forward(
             x=verify_x,
             position_idx=S["v_pos"],
@@ -3989,7 +4120,7 @@ class SpeculativeDecoder:
 
     def _srv_masks_device(self, S, rec, full=True):
         """In-trace additive masks [B, 1, H*P, S_k] (full) and [B, 1, H*P, S_r] (sliding) for the record; with
-        ``full=False`` (GEMMA4_SPEC_VERIFY_PREFIX_LSE: the global layers attend causally) the full mask is None and
+        ``full=False`` (GEMMA4_SPEC_VERIFY_MULTIPOS: the global layers attend causally) the full mask is None and
         only the sliding mask is built.
 
         Per key chunk, ``diff = iota - q`` (fp32, [B, 1, H*P, n] by the binary
@@ -4115,6 +4246,34 @@ class SpeculativeDecoder:
         h.deallocate(True)
         self._srv_uploaded[key] = host.clone()
 
+    def _srv_alloc_write_tables(self, read_slots):
+        """GEMMA4_KV_PAIR_SHARD: ``{slot: write table}`` for the global KV group slots of ``read_slots`` (one
+        persistent ``[B, cols]`` read table per slot): per chip ``[B, 2 * cols]`` at the device page's granularity
+        (``half_block_write_tables``), registered with the target so its pair-sharded layers' cache writes find it
+        (``Gemma4Model.kv_write_table_for``). Empty without the shard."""
+        if not (kv_pair_shard_enabled() and self.target._kv_pair_shard_layers):
+            return {}
+        out = {}
+        for slot, read in enumerate(read_slots):
+            if self._srv_slot_types[slot] != "full_attention":
+                continue
+            host = torch.zeros(int(read.shape[0]), int(read.shape[-1]), dtype=torch.int32)
+            wt = ttnn.to_device(self.target._kv_write_tables_host(host), self.mesh_device)
+            self.target._kv_write_table_by_read[id(read)] = wt
+            out[slot] = wt
+        return out
+
+    def _srv_copy_write_table(self, key, host_read, wt):
+        """Upload the per-chip write tables of the ``host_read`` slot table into ``wt`` unless unchanged."""
+        host_read = host_read.to(torch.int32)
+        prev = self._srv_uploaded.get(key)
+        if prev is not None and prev.shape == host_read.shape and torch.equal(prev, host_read):
+            return
+        h = self.target._kv_write_tables_host(host_read)
+        ttnn.copy_host_to_device_tensor(h, wt)
+        h.deallocate(True)
+        self._srv_uploaded[key] = host_read.clone()
+
     def _srv_slot_table(self, slot, rows, page_tables):
         """Host [B, cols] int64 table of one KV group slot for the step's rows: the installed per-layer table of
         the slot's first layer (every layer of a slot carries the same table, serving_check_group_tables),
@@ -4158,6 +4317,8 @@ class SpeculativeDecoder:
             if live < B:
                 d_host[live:] = d_host[0]
             self._srv_copy_if_changed(("d", shape, slot), d_host.to(torch.int32), S["d_ptl_slots"][slot], ttnn.int32)
+            if kv_pair_shard_enabled() and slot in S["d_wt_slots"]:
+                self._srv_copy_write_table(("dw", shape, slot), d_host, S["d_wt_slots"][slot])
             if rec is None:
                 continue
             v_host = self._srv_slot_table(slot, rows, pt)
@@ -4187,6 +4348,17 @@ class SpeculativeDecoder:
             self._srv_copy_if_changed(
                 ("v", shape, rec["S_k"], slot), v_host.to(torch.int32), rec["v_ptl_slots"][slot], ttnn.int32
             )
+            if kv_pair_shard_enabled() and slot in rec["v_wt_slots"]:
+                self._srv_copy_write_table(("vw", shape, rec["S_k"], slot), v_host, rec["v_wt_slots"][slot])
+            mp_table = rec.get("v_ptl_mp_slots", {}).get(slot)
+            if mp_table is not None and mp_table is not rec["v_ptl_slots"][slot]:
+                # GEMMA4_SPEC_VERIFY_MULTIPOS with G > 1: the global slot's table once per batch group
+                self._srv_copy_if_changed(
+                    ("vmp", shape, rec["S_k"], slot),
+                    multipos_page_table(v_host.to(torch.int32), rec["mp"].groups),
+                    mp_table,
+                    ttnn.int32,
+                )
 
     def _srv_greedy_plan(self, shape):
         """The all-greedy ``SamplingRowsPlan`` of ``shape`` (one per shape: the sampler stage of a replay without
@@ -4229,6 +4401,9 @@ class SpeculativeDecoder:
             for p in range(P):
                 wi = torch.tensor([c + p for c in pos], dtype=torch.int32)
                 self._srv_copy_if_changed(("widx", shape, p), wi, S["write_idxs"][p], ttnn.int32)
+            if S.get("v_cur_pos") is not None:
+                # the multi-position SDPA's per-candidate bounds (ascending per row, checked on the host)
+                self._srv_copy_if_changed(("vcur", shape), multipos_positions(pos, P), S["v_cur_pos"], ttnn.int32)
             if S.get("v_prefix_pos") is not None:
                 # the prefix call's causal bound per row, max(c_b - 1, 0)
                 self._srv_copy_if_changed(("vpre", shape), prefix_positions(pos), S["v_prefix_pos"], ttnn.int32)
@@ -4295,6 +4470,8 @@ class SpeculativeDecoder:
         }
         for p in range(P):
             values[("write_idxs", p)] = [int(c) + p for c in pos]
+        if S.get("v_cur_pos") is not None:
+            values["v_cur_pos"] = multipos_positions(pos, P).tolist()
         if S.get("v_prefix_pos") is not None:
             values["v_prefix_pos"] = prefix_positions(pos).tolist()
         for stage_key, rows_key, host_dtype, dev_dtype in (

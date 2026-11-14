@@ -126,6 +126,8 @@ def _stub_model(n_layers, rows, width):
         _pad_page_table_host_to_shape=pad,
         _replicate_to_mesh_mapper=lambda: None,
         mesh_config=None,
+        _kv_pair_shard_layers=frozenset(),  # GEMMA4_KV_PAIR_SHARD off
+        _kv_write_table_by_read={},
         _pads=pads,
     )
     return stub

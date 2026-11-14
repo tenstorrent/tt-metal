@@ -26,8 +26,8 @@
 #include "ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
 // [sdpa_decode_lse] the stock header by path (was "dataflow_common.hpp")
 #include "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/dataflow_common.hpp"
-#ifdef SDPA_LSE_PAIR_SPLIT
-#include "pair_split.hpp"  // [sdpa_decode_lse] pair split
+#if defined(SDPA_LSE_PAIR_SPLIT) || defined(SDPA_LSE_OWNED)
+#include "pair_split.hpp"  // [sdpa_decode_lse] pair split / owned mode: the empty-half sentinel values
 #endif
 
 #define MAX_TREE_REDUCTION_ROUNDS 6
@@ -72,8 +72,8 @@ void kernel_main() {
     static_assert(num_kv_heads == 1, "sdpa_decode_lse: one KV head per chip (the MQA output path)");
     static_assert(!is_out_sharded, "sdpa_decode_lse: interleaved output only");
     static_assert(!spec_multi_pos, "sdpa_decode_lse: no speculative multi-position mode");
-#ifdef SDPA_LSE_PAIR_SPLIT
-    // [sdpa_decode_lse] pair split: this device's half of every row's K chunks (its mesh column's parity)
+#if defined(SDPA_LSE_PAIR_SPLIT) || defined(SDPA_LSE_HALF_BLOCK)
+    // [sdpa_decode_lse] pair split / half-block mode: this device's pair half (its mesh column's parity)
     constexpr uint32_t pair_half = get_compile_time_arg_val(stats_args.next_compile_time_args_offset());
     static_assert(sliding_window_size == 0, "sdpa_decode_lse pair split: no sliding window");
 #endif
@@ -177,8 +177,62 @@ void kernel_main() {
             cb_index.pop_front(1);
         }
 
+#ifdef SDPA_LSE_HALF_BLOCK
+        // [sdpa_decode_lse] half-block mode (pair-sharded global KV): this device holds chunk half pair_half of
+        // every logical block (chunks of SDPA_LSE_HALF_BLOCK tokens), entry i of the page table being its half of
+        // the row's block i; its keys are the chunks c with c % 2 == pair_half, attended as one compacted sequence
+        // whose last index is the effective cur_pos (-1 when this device owns none of the row's keys).
+        if (cur_pos != UINT32_MAX) {
+            constexpr uint32_t hb = SDPA_LSE_HALF_BLOCK;
+            const uint32_t n = cur_pos / hb;
+            const uint32_t len = ((n + 1 - pair_half) / 2) * hb + ((n % 2) == pair_half ? cur_pos % hb + 1 : 0);
+            cur_pos = len == 0 ? UINT32_MAX : len - 1;
+        }
+#endif
         if (cur_pos == UINT32_MAX) {
             // cur_pos of -1 indicates that the user should be skipped
+#ifdef SDPA_LSE_OWNED
+            // [sdpa_decode_lse] owned mode (pair-sharded global KV): -1 also means this chip owns none of the
+            // row's blocks, so the row's root writes the empty-half sentinel the pair merge weighs to 0 (an
+            // inactive row's outputs are unused, so writing it there too is harmless). The reader and the
+            // compute returned before touching any CB; c_20 is free scratch on this core.
+            if (is_tree_root) {
+                constexpr uint32_t empty_out_tiles = PNHt * vDHt;
+                constexpr uint32_t fill_bytes = get_tile_size(cb_out);
+                static_assert(empty_out_tiles >= 3, "sdpa_decode_lse owned mode: c_20 holds the 3 sentinel tiles");
+                CircularBuffer cb_fill(cb_out);
+                const uint32_t zero_addr = cb_fill.get_write_ptr();
+                const uint32_t m_addr = zero_addr + fill_bytes;
+                const uint32_t l_addr = m_addr + fill_bytes;
+                volatile tt_l1_ptr uint32_t* zero_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(zero_addr);
+                volatile tt_l1_ptr uint32_t* m_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(m_addr);
+                volatile tt_l1_ptr uint32_t* l_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l_addr);
+                for (uint32_t i = 0; i < fill_bytes / sizeof(uint32_t); ++i) {
+                    zero_ptr[i] = 0;
+                    m_ptr[i] = PAIR_EMPTY_M_PACKED;
+                    l_ptr[i] = PAIR_EMPTY_L_PACKED;
+                }
+                const auto empty_out_writer = TensorAccessor(out_args, out_addr);
+                const auto empty_stats_writer = TensorAccessor(stats_args, stats_addr);
+                noc.async_write_barrier();
+                for (uint32_t t = 0; t < empty_out_tiles; ++t) {
+                    noc.async_write(
+                        CoreLocalMem<uint32_t>(zero_addr),
+                        empty_out_writer,
+                        fill_bytes,
+                        {},
+                        {.page_id = cur_batch * empty_out_tiles + t});
+                }
+                for (uint32_t t = 0; t < PNHt; ++t) {
+                    const uint32_t page = (cur_batch * PNHt + t) * 2;
+                    noc.async_write(
+                        CoreLocalMem<uint32_t>(m_addr), empty_stats_writer, fill_bytes, {}, {.page_id = page});
+                    noc.async_write(
+                        CoreLocalMem<uint32_t>(l_addr), empty_stats_writer, fill_bytes, {}, {.page_id = page + 1});
+                }
+                noc.async_write_barrier();
+            }
+#endif
             return;
         }
     }

@@ -13,6 +13,7 @@ import math
 import pytest
 import torch
 
+from models.demos.gemma4.tt import kv_pair_shard as kps
 from models.demos.gemma4.tt import mesh_orientation as mo
 from models.demos.gemma4.tt import sdpa_pair_split as ps
 
@@ -69,6 +70,26 @@ def _half_keys(pos, half):
     return list(range(lo * CHUNK, min(hi * CHUNK, pos + 1)))
 
 
+def _half_block_keys(pos, half):
+    """The keys pair half ``half`` attends under GEMMA4_KV_PAIR_SHARD, through the production helpers: positions
+    0..pos written through its write table (``kv_pair_shard.half_block_write_table``: CHUNK-token device pages,
+    logical blocks of 2 CHUNK tokens, the partner's half into the null block), then read back as the decode kernel
+    does -- the compacted sequence 0..``half_block_cur_pos`` over the logical table, entry j // CHUNK, offset
+    j % CHUNK. They are exactly the positions of the chunks of parity ``half``."""
+    n_logical = S // (2 * CHUNK)
+    gen = torch.Generator().manual_seed(7)
+    table = (torch.randperm(4 * n_logical, generator=gen)[:n_logical] + 1).unsqueeze(0)  # 0 is the null block
+    wt = kps.half_block_write_table(table, half)[0]
+    assert wt.shape == (2 * n_logical,) and set(wt[1 - half :: 2].tolist()) == {kps.NULL_BLOCK}
+    pages = {}
+    for p in range(pos + 1):
+        pages.setdefault(int(wt[p // CHUNK]), {})[p % CHUNK] = p
+    eff = int(kps.half_block_cur_pos(torch.tensor([pos]), half, CHUNK)[0])
+    keys = [pages[int(table[0, j // CHUNK])][j % CHUNK] for j in range(eff + 1)]
+    assert keys == [p for p in range(pos + 1) if (p // CHUNK) % 2 == half], (pos, half)
+    return keys
+
+
 def _reference(q_w, k_w, o_w, x, cache, scale):
     """Full GQA attention of every q head over keys 0..pos (the new K written at pos), then o_proj."""
     out = torch.zeros(len(CUR_POS), NQ * D)
@@ -99,9 +120,10 @@ def _regular_layout(q_w, k_w, o_w, x, cache, scale):
     return y
 
 
-def _pair_layout(q_w, k_w, o_w, x, cache, scale):
+def _pair_layout(q_w, k_w, o_w, x, cache, scale, keys_of=_half_keys):
     """The pair layout through the production helpers: per device column i the pair QKV block and o_proj block,
-    half i % 2 of the keys, the LSE merge (pair_merge_reference), the row sum. Returns (y, per-device K rows)."""
+    half i % 2 of the keys (``keys_of``), the LSE merge (pair_merge_reference), the row sum. Returns (y, per-device
+    K rows)."""
     kw = dict(num_q_heads=NQ, num_kv_heads=NKV, head_dim=D, tp=TP)
     wqkv = ps.pair_qkv_weight(q_w, k_w, k_w, **kw)  # [HIDDEN, TP * (G + 2) * D]
     wo = ps.pair_o_proj_weight(o_w.T, **kw)  # [TP * G * D, HIDDEN]
@@ -117,7 +139,7 @@ def _pair_layout(q_w, k_w, o_w, x, cache, scale):
         k_rows[i] = k_new
         for b, pos in enumerate(CUR_POS):
             kv = _with_new_token(cache, b, i // 2, k_new[b], pos)
-            out[i, b], m[i, b], l[i, b] = _attend(q[b].reshape(G, D), kv, _half_keys(pos, i % 2), scale)
+            out[i, b], m[i, b], l[i, b] = _attend(q[b].reshape(G, D), kv, keys_of(pos, i % 2), scale)
     merged = ps.pair_merge_reference(out, m, l, scale=scale)  # [TP, B, G, D]
     y = sum(merged[i].reshape(B, G * D) @ wo[i * G * D : (i + 1) * G * D] for i in range(TP))
     return y, k_rows
@@ -126,7 +148,9 @@ def _pair_layout(q_w, k_w, o_w, x, cache, scale):
 @pytest.mark.parametrize("scale", (1.0, 0.25))
 def test_pair_layout_sums_to_the_regular_layout_and_full_attention(scale):
     """(a) sum over the row of (w * O_half) @ Wo_pair[i] == the 4-head layout's sum of O_own @ Wo[i] == full attention
-    @ o_proj, and both chips of a pair write the same K / V (the KV head the 4-head layout writes there)."""
+    @ o_proj, and both chips of a pair write the same K / V (the KV head the 4-head layout writes there); (b) the same
+    with the half-block ownership of the pair-sharded global KV (GEMMA4_KV_PAIR_SHARD: each chip keeps the chunks of
+    its parity, written through its write table and read through the logical table, ``_half_block_keys``)."""
     q_w, k_w, o_w, x, cache = _model()
     ref = _reference(q_w, k_w, o_w, x, cache, scale)
     regular = _regular_layout(q_w, k_w, o_w, x, cache, scale)
@@ -135,6 +159,8 @@ def test_pair_layout_sums_to_the_regular_layout_and_full_attention(scale):
     torch.testing.assert_close(regular, ref, **tol)
     torch.testing.assert_close(pair, ref, **tol)
     torch.testing.assert_close(pair, regular, **tol)
+    half_block, _ = _pair_layout(q_w, k_w, o_w, x, cache, scale, keys_of=_half_block_keys)
+    torch.testing.assert_close(half_block, ref, **tol)
     for i in range(TP):
         kv_idx = (i * (NQ // TP)) * NKV // NQ  # the 4-head layout's KV head on column i
         assert kv_idx == i // 2

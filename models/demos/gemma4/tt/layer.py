@@ -368,6 +368,7 @@ class Gemma4DecoderLayer:
         traced_short_bucket=False,
         continuation=None,
         seq_shard=False,
+        kv_write_table=None,
     ):
         """
         Decoder layer forward pass.
@@ -385,6 +386,8 @@ class Gemma4DecoderLayer:
             seq_shard: GEMMA4_PREFILL_SEQ_PARALLEL (model._prefill_seq_parallel_applies): ``hidden_states`` and the
                 result are this chip's ``S / tp`` rows; the normed inputs are all-gathered over rows for attention
                 and the MLP, whose partial sums come back reduce-scattered over rows (ccl.py)
+            kv_write_table: GEMMA4_KV_PAIR_SHARD -- the per-chip write table a pair-sharded global layer's cache
+                writes go through (model.kv_write_table_for), None elsewhere
 
         Returns:
             hidden_states: [1, 1, seq_len, hidden_size] on device
@@ -431,6 +434,7 @@ class Gemma4DecoderLayer:
                 mm_attn_mask=mm_attn_mask,
                 traced_short_bucket=traced_short_bucket,
                 continuation=continuation,
+                kv_write_table=kv_write_table,
             )
 
         if (

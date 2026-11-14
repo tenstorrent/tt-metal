@@ -38,6 +38,7 @@ import torch
 import ttnn
 from models.demos.gemma4.tt.attention import Gemma4AttentionConfig
 from models.demos.gemma4.tt.ccl import ccl_allgather
+from models.demos.gemma4.tt.kv_pair_shard import kv_pair_shard_enabled
 from models.demos.gemma4.tt.layer import Gemma4DecoderLayer
 from models.demos.gemma4.tt.rms_norm import RMSNorm
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
@@ -133,7 +134,9 @@ class Gemma4AssistantModel:
                 max_seq_len=self.text_args.max_seq_len,
                 max_local_batch_size=max_local_batch_size,
                 bounded_sliding_kv_cache=bounded_sliding_kv_cache,
-                sdpa_pair_split=False,  # KV-shared layers: the 4-head decode path only, no pair weights
+                # KV-shared layers: the 4-head decode path, no pair weights -- except under GEMMA4_KV_PAIR_SHARD,
+                # where the target's global KV is split over each chip pair and only the pair view reads it
+                sdpa_pair_split=kv_pair_shard_enabled(),
             )
             self.layers.append(layer)
 

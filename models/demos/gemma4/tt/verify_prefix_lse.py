@@ -121,6 +121,8 @@ def prefix_lse_rung_reason(splits: int, s_k: int, env=None) -> Optional[str]:
     to 1.24x, under the adaptive policy's 1.25 entry, and halved multi-user short-context decode on the datasheet)
     and pay from the 131K rung ((1,5) 62.4..64.0 -> 58.0..62.8, (5,5) 86.2..93.1 -> 68.4..89.7)."""
     env = os.environ if env is None else env
+    if str(env.get("GEMMA4_KV_PAIR_SHARD", "0")) == "1":
+        return None  # pair-sharded global KV: only the prefix + fresh split reads it (the masked verify reads all)
     raw = str(env.get(VERIFY_PREFIX_LSE_SPLIT_MIN_SK_ENV, "") or "").strip()
     min_sk = int(raw) if raw else VERIFY_PREFIX_LSE_SPLIT_MIN_SK_DEFAULT
     if int(splits) > 1 and int(s_k) < min_sk:

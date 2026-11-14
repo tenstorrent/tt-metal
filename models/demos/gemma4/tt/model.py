@@ -29,6 +29,7 @@ from models.demos.gemma4.config import gemma4_kv_bfp8_enabled
 from models.demos.gemma4.tt.attention import Gemma4AttentionConfig, flush_deferred_bounded_fills
 from models.demos.gemma4.tt.compute_config import global_prefill_sdpa_fidelity
 from models.demos.gemma4.tt.generator_trace import short_prefill_stash_skipped
+from models.demos.gemma4.tt.kv_pair_shard import KV_PAIR_SHARD_ENV, half_block_write_tables, kv_pair_shard_enabled
 from models.demos.gemma4.tt.layer import Gemma4DecoderLayer
 from models.demos.gemma4.tt.mesh_orientation import decode_flag, set_decode_fusion_profile
 from models.demos.gemma4.tt.rms_norm import RMSNorm
@@ -656,6 +657,7 @@ class Gemma4Model:
         # Direct callers (text_demo, unit tests) pass them explicitly to
         # ``ttnn_prefill_forward`` and bypass this stash.
         self._prefill_input_ids_torch = None
+        self._prefill_page_table_host = None
         self._prefill_embeds_torch = None
         # The eager continuation's device inputs (attention/continuation.py), per prefill call.
         self._g4_prefill_continuation = None
@@ -796,6 +798,22 @@ class Gemma4Model:
                 )
                 layer.self_attn.kv_cache = kv_cache
             self.layers.append(layer)
+
+        # GEMMA4_KV_PAIR_SHARD (tt/kv_pair_shard.py): the global layers whose KV head sits on a chip pair (the
+        # pair-split view) keep half of every logical block per chip; their cache writes go through per-chip
+        # write tables, persistent device buffers beside the read tables (_attach_kv_write_tables), keyed by the
+        # read buffer they derive from.
+        self._kv_pair_shard_layers = frozenset()
+        self._kv_write_table_by_read = {}
+        if kv_pair_shard_enabled():
+            shard = [i for i, layer in enumerate(self.layers) if layer.self_attn.weights.pair is not None]
+            if not shard:
+                raise ValueError(
+                    f"{KV_PAIR_SHARD_ENV}=1 needs the pair-split view on the global layers (GEMMA4_SDPA_PAIR_SPLIT, "
+                    f"each global KV head on one chip pair of a one-row mesh); mesh {tuple(mesh_device.shape)}"
+                )
+            self._kv_pair_shard_layers = frozenset(shard)
+            logger.info(f"{KV_PAIR_SHARD_ENV}: global layers {sorted(shard)} keep half of every KV block per chip")
 
         # GEMMA4_SDPA_DECODE_SPLITFREE: the split-independent paged decode SDPA's persistent fp32 scratch
         # (``attach_sdpa_splitfree_scratch``), allocated with the KV caches. The vLLM build creates no caches here
@@ -1454,6 +1472,7 @@ class Gemma4Model:
                 keep_kv = True
 
             layer_page_table = page_tables_per_layer[i] if page_tables_per_layer is not None else page_table
+            layer_kv_write_table = self.kv_write_table_for(i, layer_page_table)
 
             layer_packed = None
             if packed is not None:
@@ -1465,6 +1484,9 @@ class Gemma4Model:
                 _hot = packed.get("hot_pt_sliding") if sliding else packed.get("hot_pt_full")
                 if _hot is None:
                     _hot = packed.get("hot_pt")
+                # GEMMA4_SPEC_VERIFY_MULTIPOS: a global layer's causal multi-position SDPA inputs (its group table)
+                _mp = packed.get("verify_multipos")
+                _mp_pt = _mp["page_tables"][i] if _mp is not None and not sliding else None
                 # GEMMA4_SPEC_VERIFY_PREFIX_LSE: a global layer's prefix positions, row biases and fresh mask
                 _pl = packed.get("verify_prefix_lse")
                 layer_packed = {
@@ -1476,6 +1498,11 @@ class Gemma4Model:
                     "embed_idx": packed.get("embed_idx_sliding") if sliding else packed.get("embed_idx_full"),
                     "hot_pt": _hot,
                     "kv_modulo": packed.get("kv_modulo_sliding") if sliding else None,
+                    "multipos": (
+                        {"plan": _mp["plan"], "cur_pos": _mp["cur_pos"], "page_table": _mp_pt}
+                        if _mp_pt is not None
+                        else None
+                    ),
                     "prefix_lse": _pl if _pl is not None and not sliding else None,
                 }
 
@@ -1505,6 +1532,7 @@ class Gemma4Model:
                 traced_short_bucket=traced_short_bucket,
                 continuation=continuation.for_layer(i) if continuation is not None else None,
                 seq_shard=seq_shard,
+                kv_write_table=layer_kv_write_table,
             )
 
             # For KV source layers during prefill, capture the K/V from the attention
@@ -1890,6 +1918,7 @@ class Gemma4Model:
         page_tables_per_layer=None,
         keep_logits_sharded=False,
         kv_modulo_sliding=None,
+        verify_multipos=None,
         verify_prefix_lse=None,
     ):
         """Packed-query speculative verify — all P candidates in ONE batch=1 pass.
@@ -1924,6 +1953,12 @@ class Gemma4Model:
                 sharded verify argmax, GEMMA4_SPEC_SHARDED_VERIFY_ARGMAX: no
                 vocab all-gather in the record). Default False gathers the
                 full vocab as before.
+            verify_multipos: GEMMA4_SPEC_VERIFY_MULTIPOS (the serving
+                records): ``{"plan", "cur_pos", "page_tables"}`` -- the
+                record's MultiposPlan, the [B*P] int32 candidate positions and
+                one [B*G, cols] table per layer (None for sliding layers); the
+                global layers then attend causally per candidate and
+                ``attn_mask_full`` may be None (tt/verify_multipos.py).
             verify_prefix_lse: GEMMA4_SPEC_VERIFY_PREFIX_LSE (the serving
                 records): ``{"plan", "cur_pos", "bias", "fresh_mask"}`` -- the
                 record's PrefixLsePlan, the [B] int32 prefix positions, the
@@ -1965,6 +2000,7 @@ class Gemma4Model:
             "hot_pt_full": hot_pt_full,
             "hot_pt_sliding": hot_pt_sliding,
             "kv_modulo_sliding": kv_modulo_sliding,
+            "verify_multipos": verify_multipos,
             "verify_prefix_lse": verify_prefix_lse,
         }
 
@@ -2198,9 +2234,57 @@ class Gemma4Model:
                     if slot is not None:
                         by_slot[slot] = shared
                 persistent.append(shared)
+            if self._kv_pair_shard_layers:
+                for t in by_batch.get(batch_key) or ():
+                    self._kv_write_table_by_read.pop(id(t), None)
             by_batch[batch_key] = persistent
+            if self._kv_pair_shard_layers:
+                self._attach_kv_write_tables(page_tables_per_layer, persistent)
         self._persistent_per_layer_page_tables = persistent
         return persistent
+
+    # GEMMA4_KV_PAIR_SHARD: set by __init__ when the knob is on (an instance built without it, e.g. a host-test
+    # stub, has no pair-sharded layer)
+    _kv_pair_shard_layers = frozenset()
+
+    def _kv_write_tables_host(self, pt_host):
+        """A pair-sharded global layer's per-chip write tables (``half_block_write_tables``) for its padded host
+        read table, as a host tensor sharded column by column."""
+        return ttnn.from_torch(
+            half_block_write_tables(pt_host, int(self.mesh_device.shape[1])),
+            device=None,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
+        )
+
+    def _attach_kv_write_tables(self, host_tables, persistent):
+        """Allocate the write tables of the pair-sharded layers' freshly built read buffers (one per buffer: the
+        layers of a KV-cache group slot share it), filled from the same host tables."""
+        for i in sorted(self._kv_pair_shard_layers):
+            read, pt = persistent[i], host_tables[i]
+            if read is None or isinstance(pt, ttnn.Tensor) or id(read) in self._kv_write_table_by_read:
+                continue
+            pt_host = self._pad_page_table_host_to_shape(
+                pt if pt.dim() > 1 else pt.unsqueeze(0), int(read.shape[0]), int(read.shape[-1])
+            )
+            self._kv_write_table_by_read[id(read)] = ttnn.to_device(
+                self._kv_write_tables_host(pt_host), self.mesh_device
+            )
+
+    def kv_write_table_for(self, layer_idx, read_table):
+        """The per-chip write table of a pair-sharded global layer reading through ``read_table`` (a persistent
+        buffer of ``_page_tables_to_ttnn``), None for every other layer. A pair-sharded layer whose read table
+        has no write table raises: its cache writes would land in both halves."""
+        if layer_idx not in self._kv_pair_shard_layers or read_table is None:
+            return None
+        wt = self._kv_write_table_by_read.get(id(read_table))
+        if wt is None:
+            raise ValueError(
+                f"{KV_PAIR_SHARD_ENV}: layer {layer_idx}'s page table is not a persistent read buffer with a write "
+                "table (a device table handed straight through?)"
+            )
+        return wt
 
     def _page_table_buffer_slots(self, page_tables_per_layer):
         """The KV-cache group slot of every layer (``page_table_group_slots``) when the persistent buffers are shared
@@ -2339,6 +2423,9 @@ class Gemma4Model:
                 )
                 host_cache[key] = host_pt
             ttnn.copy_host_to_device_tensor(host_pt, persistent[i])
+            wt = self._kv_write_table_by_read.get(id(persistent[i])) if self._kv_pair_shard_layers else None
+            if wt is not None:
+                ttnn.copy_host_to_device_tensor(self._kv_write_tables_host(pt_padded), wt)
         last_by_batch[batch_key] = new_last
 
     def prepare_inputs_prefill(
@@ -2460,6 +2547,8 @@ class Gemma4Model:
             page_table = _lane_table(page_table)
             pt_mapper = self.mesh_config.lane_shard_mapper(self.mesh_device, 0)
 
+        # GEMMA4_KV_PAIR_SHARD: the host table, broadcast by ttnn_prefill_forward when no per-layer stash comes
+        self._prefill_page_table_host = page_table if not lane_sharded else None
         tt_page_table = None
         if page_table is not None:
             tt_page_table = ttnn.from_torch(
@@ -2690,6 +2779,13 @@ class Gemma4Model:
             embeds_torch = self._prefill_embeds_torch
         if page_tables_per_layer is None:
             page_tables_per_layer = getattr(self, "_active_page_tables_per_layer", None)
+        if page_tables_per_layer is None and self._kv_pair_shard_layers:
+            # GEMMA4_KV_PAIR_SHARD: no per-layer stash (a prefill outside the vLLM bridge, e.g. the boot warmups):
+            # every layer takes the legacy host table, so the pair-sharded ones get a write table beside it
+            host = self._prefill_page_table_host
+            if host is None:
+                raise ValueError(f"{KV_PAIR_SHARD_ENV}: a prefill without a host page table")
+            page_tables_per_layer = [host if host.dim() > 1 else host.unsqueeze(0)] * len(self.layers)
         continuation = getattr(self, "_g4_prefill_continuation", None)
         if continuation is not None and page_tables_per_layer is not None:
             # The hybrid groups' host tables, cut on the host per group (the device layout is the model's).

@@ -84,7 +84,7 @@ def _no_decode_attention_env():
     the decode-attention knobs for its device tests (GEMMA4_SPEC_VERIFY_PREFIX_LSE=1 made the prefix-LSE geometry walk
     a stand-in target's integer layers) must not switch them here."""
     with pytest.MonkeyPatch.context() as mp:
-        for name in ("GEMMA4_SPEC_VERIFY_PREFIX_LSE", "GEMMA4_SDPA_PAIR_SPLIT"):
+        for name in ("GEMMA4_SPEC_VERIFY_PREFIX_LSE", "GEMMA4_SPEC_VERIFY_MULTIPOS", "GEMMA4_SDPA_PAIR_SPLIT"):
             mp.delenv(name, raising=False)
         yield
 

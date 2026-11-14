@@ -22,6 +22,8 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole
+from models.demos.gemma4.custom_ops.grid import compute_grid
+from models.demos.gemma4.custom_ops.sdpa_prefill_splitk.op import SdpaPrefillSplitK
 from models.demos.gemma4.tt.ccl import ccl_allreduce
 from models.demos.gemma4.tt.compute_config import prefill_linear_compute_kernel_config
 from models.demos.gemma4.tt.decode_matmul import DecodeLinear
@@ -419,6 +421,45 @@ def prefill_sdpa_program_config(head_dim, seq_len, sliding_window=None, num_head
     )
 
 
+SPLITK_ENV = "GEMMA4_PREFILL_SDPA_SPLITK"
+SPLITK_MIN_PREFIX_ENV = "GEMMA4_PREFILL_SDPA_SPLITK_MIN_PREFIX"
+
+
+def _splitk_eligible(q_chunk, k_cache, v_cache, page_table, chunk_start, geometry, program_config):
+    """Whether this chunked-prefill call takes ``SdpaPrefillSplitK`` (opt-in ``GEMMA4_PREFILL_SDPA_SPLITK=1``): a
+    host chunk start of at least ``GEMMA4_PREFILL_SDPA_SPLITK_MIN_PREFIX`` tokens (default 16384; one BH chip, 4 Q /
+    1 KV heads, head_dim 512, 4096 rows: 14.1 -> 10.8 ms at 16K, 50.8 -> 36.5 at 64K, 99.9 -> 71.8 at 128K), a
+    geometry where the split pays on this chip (``SdpaPrefillSplitK.pays``) and a call the op supports
+    (``SdpaPrefillSplitK.unsupported_reason``); everything else keeps the stock op."""
+    if os.environ.get(SPLITK_ENV, "0") != "1" or program_config is None:
+        return False
+    if chunk_start < int(os.environ.get(SPLITK_MIN_PREFIX_ENV, "16384")):
+        return False
+    gx, gy = compute_grid(q_chunk.device())
+    if not SdpaPrefillSplitK.pays(int(q_chunk.shape[1]), int(q_chunk.shape[2]), program_config.q_chunk_size, gx * gy):
+        return False  # the stock schedule already fills this chip (e.g. 8 heads on a 130-core chip)
+    ok = (
+        SdpaPrefillSplitK.unsupported_reason(
+            q_chunk,
+            k_cache,
+            v_cache,
+            page_table,
+            chunk_start,
+            num_kv_heads=geometry[0],
+            block_size=geometry[1],
+            q_chunk_size=program_config.q_chunk_size,
+            k_chunk_size=program_config.k_chunk_size,
+        )
+        is None
+    )
+    if ok and not getattr(_splitk_eligible, "_logged", False):
+        _splitk_eligible._logged = True
+        logger.info(
+            f"{SPLITK_ENV}: split-K prefill SDPA engaged (chunk start {chunk_start}, {int(q_chunk.shape[2])} rows)"
+        )
+    return ok
+
+
 def chunked_prefill_sdpa(
     tt_q,
     k_cache,
@@ -430,6 +471,7 @@ def chunked_prefill_sdpa(
     base_offset=0,
     num_kv_heads=None,
     mesh_config=None,
+    host_offset=None,
 ):
     """Chunked causal prefill SDPA over a paged KV cache.
 
@@ -536,6 +578,11 @@ def chunked_prefill_sdpa(
             mesh_mapper=mesh_config.lane_shard_mapper(q_full.device(), 0),
         )
 
+    # split-K (GEMMA4_PREFILL_SDPA_SPLITK): the layer's own KV geometry (num_kv_heads, block_size) on the cache
+    if num_kv_heads is not None:
+        splitk_geometry = (int(num_kv_heads), effective_block_size(k_cache, head_dim, num_kv_heads))
+    else:
+        splitk_geometry = (int(k_cache.padded_shape[1]), int(k_cache.padded_shape[2]))
     outs = []
     start = 0
     while start < seq_len:
@@ -570,6 +617,30 @@ def chunked_prefill_sdpa(
                 paged_cache_geometry=paged_cache_geometry,
             )
             chunk_start_t.deallocate(True)
+        elif (
+            isinstance(base_offset, ttnn.Tensor)
+            and host_offset is not None
+            and _splitk_eligible(
+                q_chunk, k_cache, v_cache, user_pt, int(host_offset) + start, splitk_geometry, program_config
+            )
+        ):
+            # the eager continuation's device start tensor keys the stock program on the chunk length only; the
+            # split-K op compiles nothing per position (its starts and K ranges are runtime args), so it takes the
+            # host start the caller passes alongside (``host_offset``)
+            out_chunk = SdpaPrefillSplitK.op(
+                q_chunk,
+                k_cache,
+                v_cache,
+                user_pt,
+                int(host_offset) + start,
+                num_kv_heads=splitk_geometry[0],
+                block_size=splitk_geometry[1],
+                scale=scale,
+                q_chunk_size=program_config.q_chunk_size,
+                k_chunk_size=program_config.k_chunk_size,
+                compute_kernel_config=compute_kernel_config,
+                exp_approx_mode=bool(getattr(program_config, "exp_approx_mode", False)),
+            )
         elif isinstance(base_offset, ttnn.Tensor):
             # Traced multi-chunk: runtime offset from device tensor. Generator
             # chunks are <= PREFILL_CHUNK_SIZE so ``start`` is 0 here.
@@ -598,6 +669,24 @@ def chunked_prefill_sdpa(
             )
             if start:
                 chunk_start_t.deallocate(True)
+        elif _splitk_eligible(
+            q_chunk, k_cache, v_cache, user_pt, int(base_offset) + start, splitk_geometry, program_config
+        ):
+            # GEMMA4_PREFILL_SDPA_SPLITK: the same attention with each (head, Q chunk)'s K range split over cores
+            out_chunk = SdpaPrefillSplitK.op(
+                q_chunk,
+                k_cache,
+                v_cache,
+                user_pt,
+                int(base_offset) + start,
+                num_kv_heads=splitk_geometry[0],
+                block_size=splitk_geometry[1],
+                scale=scale,
+                q_chunk_size=program_config.q_chunk_size,
+                k_chunk_size=program_config.k_chunk_size,
+                compute_kernel_config=compute_kernel_config,
+                exp_approx_mode=bool(getattr(program_config, "exp_approx_mode", False)),
+            )
         else:
             out_chunk = ttnn.transformer.chunked_scaled_dot_product_attention(
                 q_chunk,
