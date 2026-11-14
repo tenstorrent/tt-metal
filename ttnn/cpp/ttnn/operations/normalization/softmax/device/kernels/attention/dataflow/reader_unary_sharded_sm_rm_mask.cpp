@@ -53,44 +53,74 @@ void kernel_main() {
     constexpr std::uint32_t mask_read_tile_face_bytes = FLOAT32_DTYPE ? 64 : 32;
     constexpr std::uint32_t mask_read_tile_offset_bytes = FLOAT32_DTYPE ? 1024 : 512;
 
-    dfb_attn_obj.reserve_back(block_wt);
+#ifdef MASK_PER_ROW
+    constexpr std::uint32_t num_mask_rows = get_arg(args::block_ht);
+    constexpr std::uint32_t rows_per_batch = get_arg(args::rows_per_batch);
+    constexpr std::uint32_t mask_batch_stride = get_arg(args::mask_batch_stride);
+    constexpr std::uint32_t mask_max_batch_offset = get_arg(args::mask_max_batch_offset);
+    std::uint32_t rows_left_in_batch = get_arg(args::mask_rows_left_in_batch);
+#else
+    constexpr std::uint32_t num_mask_rows = 1;
+#endif
+    std::uint32_t curr_batch_offset = mask_start_tile_id;
+
 #ifndef ARCH_QUASAR
     std::uint32_t local_noc_x = my_x[noc.get_noc_id()];  // Gen1 loopback source; Quasar copies with the RISC below
     std::uint32_t local_noc_y = my_y[noc.get_noc_id()];
 #endif
-    std::uint32_t write_offset = 0;
-    for (std::uint32_t w = 0; w < block_wt; w++) {
-        noc.async_read(
-            addr_mask,
-            dfb_attn_obj,
-            mask_read_tile_face_bytes * 2,
-            {.page_id = mask_start_tile_id + w},
-            {.offset_bytes = write_offset});
-        noc.async_read_barrier();
-#ifdef ARCH_QUASAR
-        // Relocate the second half-row (cols 16..31) into face 1 with a scalar copy: the bytes are already
-        // resident from the barriered read above, and a NoC self-loopback (src coords == dst coords) spins
-        // on can_post or silently drops on Quasar (see local_l1_copy).
-        {
-            const std::uint32_t base = dfb_attn_obj.get_write_ptr() + write_offset;
-            local_l1_copy(
-                base + mask_read_tile_offset_bytes, base + mask_read_tile_face_bytes, mask_read_tile_face_bytes);
-        }
-#else
-        std::uint32_t src_addr = dfb_attn_obj.get_write_ptr() + write_offset + mask_read_tile_face_bytes;
-        noc.async_read(
-            UnicastEndpoint{},
-            dfb_attn_obj,
-            mask_read_tile_face_bytes,
-            {.noc_x = local_noc_x, .noc_y = local_noc_y, .addr = src_addr},
-            {.offset_bytes = write_offset + mask_read_tile_offset_bytes});
-#endif
-        write_offset += mask_tile_bytes;
-    }
-    noc.async_read_barrier();
-    dfb_attn_obj.push_back(block_wt);
-#endif
 
+    // Push reduce scalers before looping over mask rows so compute can drain c_3 without deadlocking.
+    dataflow_kernel_lib::
+        calculate_and_prepare_reduce_scaler<dfb_max_scaler, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_ROW>(
+            dfb_max_scaler_obj);
+    dataflow_kernel_lib::
+        calculate_and_prepare_reduce_scaler<dfb_sum_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
+            dfb_sum_scaler_obj);
+
+    for (std::uint32_t h = 0; h < num_mask_rows; h++) {
+        dfb_attn_obj.reserve_back(block_wt);
+        std::uint32_t write_offset = 0;
+        for (std::uint32_t w = 0; w < block_wt; w++) {
+            noc.async_read(
+                addr_mask,
+                dfb_attn_obj,
+                mask_read_tile_face_bytes * 2,
+                {.page_id = curr_batch_offset + w},
+                {.offset_bytes = write_offset});
+            noc.async_read_barrier();
+#ifdef ARCH_QUASAR
+            // Relocate the second half-row (cols 16..31) into face 1 with a scalar copy: the bytes are already
+            // resident from the barriered read above, and a NoC self-loopback (src coords == dst coords) spins
+            // on can_post or silently drops on Quasar (see local_l1_copy).
+            {
+                const std::uint32_t base = dfb_attn_obj.get_write_ptr() + write_offset;
+                local_l1_copy(
+                    base + mask_read_tile_offset_bytes, base + mask_read_tile_face_bytes, mask_read_tile_face_bytes);
+            }
+#else
+            std::uint32_t src_addr = dfb_attn_obj.get_write_ptr() + write_offset + mask_read_tile_face_bytes;
+            noc.async_read(
+                UnicastEndpoint{},
+                dfb_attn_obj,
+                mask_read_tile_face_bytes,
+                {.noc_x = local_noc_x, .noc_y = local_noc_y, .addr = src_addr},
+                {.offset_bytes = write_offset + mask_read_tile_offset_bytes});
+#endif
+            write_offset += mask_tile_bytes;
+        }
+        noc.async_read_barrier();
+        dfb_attn_obj.push_back(block_wt);
+#ifdef MASK_PER_ROW
+        --rows_left_in_batch;
+        if (rows_left_in_batch == 0) {
+            rows_left_in_batch = rows_per_batch;
+            if (curr_batch_offset < mask_max_batch_offset) {
+                curr_batch_offset += mask_batch_stride;
+            }
+        }
+#endif
+    }
+#else
     {
         dataflow_kernel_lib::
             calculate_and_prepare_reduce_scaler<dfb_max_scaler, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_ROW>(
@@ -99,4 +129,5 @@ void kernel_main() {
             calculate_and_prepare_reduce_scaler<dfb_sum_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
                 dfb_sum_scaler_obj);
     }
+#endif
 }
