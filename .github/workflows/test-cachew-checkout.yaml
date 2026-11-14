@@ -3,8 +3,7 @@
 name: Test cachew checkout
 
 on:
-  # Manual runs only. This was a temporary validation workflow; its automatic
-  # pull_request and push triggers have been retired.
+  # Manual runs only. The action's own tests run in tenstorrent/.github.
   workflow_dispatch:
     inputs:
       live-smoke:
@@ -25,89 +24,43 @@ permissions:
   contents: read
 
 jobs:
-  git-fixtures:
+  # The action, its migration helper and their tests live in
+  # tenstorrent/.github (actions/cachew-checkout). This repository checks its
+  # own consumers against the pin in .github/cachew-checkout.json.
+  consumers:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      # A plain checkout bootstraps the working tree, so every later step tests
-      # this commit's action rather than a pinned copy.
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         with:
           sparse-checkout: .github
           persist-credentials: false
+      # cachew_checkout.py runs tenstorrent/.github's migrate.py at the pinned
+      # commit, so this also proves the pin is a pushed commit there.
       - name: Verify all checkout consumers use cachew
         run: python3 .github/scripts/utils/cachew_checkout.py --check
-      - name: Verify the action pins match this tree
-        # The consumers' pin (ACTION_SHA) is the only pin. It must point at a pushed
-        # commit whose action runtime files match this tree. Squash merges leave a
-        # PR pin off main's history; refs/pull/<n>/head keeps it fetchable, so on
-        # main that only warns until the follow-up re-pin to the merge commit lands.
+      - name: Verify every consumer pins action_sha
+        run: python3 .github/scripts/utils/cachew_checkout.py --verify-pins
+      - name: Warn while the pin is not on tenstorrent/.github main
+        # Before an action change merges, the pin is on a pull request branch.
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          pins=$(grep -rhoE 'tenstorrent/tt-metal/\.github/actions/cachew-checkout@[0-9a-f]{40}' .github | cut -d@ -f2 | sort -u)
-          for sha in $pins; do git fetch --no-tags --depth=1 origin "$sha"; done
-          python3 .github/scripts/utils/cachew_checkout.py --verify-pins
-          if [ "$GITHUB_EVENT_NAME" = push ]; then
-            for sha in $pins; do
-              status=$(gh api "repos/$GITHUB_REPOSITORY/compare/main...$sha" --jq .status)
-              case "$status" in
-                behind|identical) ;;
-                *) echo "::warning::cachew pin $sha is not on main ($status); re-pin ACTION_SHA to the merge commit" ;;
-              esac
-            done
-          fi
-      - name: Working-tree action is a strict no-op on GitHub-hosted runners
-        id: hosted
-        uses: ./.github/actions/cachew-checkout
-        with:
-          path: hosted-noop
-          persist-credentials: false
-      - name: Verify no cachew state on a GitHub-hosted runner
-        env:
-          CONFIGURED: ${{ steps.hosted.outputs.cachew-configured }}
-          CHECKED_OUT: ${{ steps.hosted.outputs.cachew-checked-out }}
-        run: |
-          test "$CONFIGURED" = false
-          test "$CHECKED_OUT" = false
-          test -z "${CACHEW_SESSION_DIR:-}"
-          test -z "${GIT_CONFIG_GLOBAL:-}"
-          if ls "$RUNNER_TEMP"/cachew-* >/dev/null 2>&1; then echo "::error::cachew session on a hosted runner"; exit 1; fi
-          test "$(command -v git)" = "$(PATH=/usr/bin:/bin command -v git)"
-          git -C hosted-noop rev-parse HEAD
-      - name: Obtain the exact checkout implementation under test
-        uses: ./.github/actions/cachew-checkout
-        with:
-          repository: actions/checkout
-          ref: de0fac2e4500dabe0009e67214ff5f5447ce83dd
-          path: checkout-action
-          persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: '24'
-      - name: Test cache reuse, immediate fallback and cleanup
-        env:
-          CHECKOUT_ACTION_JS: ${{ github.workspace }}/checkout-action/dist/index.js
-          # Test-only: the fixtures are plain-HTTP loopback servers. The action
-          # itself clears this variable, so it cannot affect real checkouts.
-          CACHEW_TEST_ALLOW_LOOPBACK_HTTP: '1'
-        run: |
-          cmake --version
-          python3 -m unittest discover -s .github/actions/cachew-checkout/tests -v
+          sha=$(jq -r .action_sha .github/cachew-checkout.json)
+          status=$(gh api "repos/tenstorrent/.github/compare/main...$sha" --jq .status)
+          case "$status" in
+            behind|identical) ;;
+            *) echo "::warning::cachew pin $sha is not on tenstorrent/.github main ($status); re-pin once it merges" ;;
+          esac
 
   live-smoke:
     if: github.event_name == 'workflow_dispatch' && inputs.live-smoke
     runs-on: tt-ubuntu-2204-large-stable
     timeout-minutes: 20
     steps:
-      - name: Bootstrap this commit's action definition
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
-        with:
-          sparse-checkout: .github/actions/cachew-checkout
-          persist-credentials: false
       - name: Checkout through cachew with upstream fallback
         id: checkout
-        uses: ./.github/actions/cachew-checkout
+        uses: tenstorrent/.github/actions/cachew-checkout@a1e96bdf5ba27204ec4a54c329c1e47415034496 # cachew checkout
         with:
           cachew-url: ${{ inputs.cachew-url }}
           ref: ${{ github.sha }}
