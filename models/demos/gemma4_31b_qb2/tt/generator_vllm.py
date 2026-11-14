@@ -32,6 +32,24 @@ class Gemma4ForCausalLM:
     }
     decode_input_update_contract = 1
     MAX_PREFILL_TOKENS = 8192
+    # DRAM budget of the KV pool (QuietBox 2, per DRAM bank). The pool takes what start-up and the run time leave free:
+    #   bank size (allocator-reported) - reserve - everything that is not KV at the end of start-up, per row of the wide
+    #   backing. The reserve covers the run-time working set measured on the device (prefill activations, fragmentation:
+    #   at least 545 MiB beyond start-up; a +2000-row pool with 650 MiB free died of an out-of-memory error on its first
+    #   24K prompt, +1200 rows with 915 MiB free ran every KV-pressure test) plus the 267 MiB safe minimum of the old stack.
+    DRAM_BANK_BYTES = 4_205_232_512
+    DRAM_RESERVE_BYTES = 910 << 20
+    # Weights, persistent buffers, traces and prefill programs at 32 slots, without KV: allocated per bank at the end of
+    # start-up (2699 MiB speculative profile, 2696 MiB plain, 4200 rows) minus the KV rows. The same constant results
+    # from a pool 1200 rows larger (3095 MiB), so it does not depend on the pool.
+    NON_KV_BYTES = 1305 << 20
+    # One row of the wide KV backing per DRAM bank: 10 full-attention positions x K and V x [4, 128, 256] BF8 (17/16 bytes
+    # per value) spread over 8 banks.
+    KV_POSITIONS = 10
+    KV_ROW_BYTES = KV_POSITIONS * 2 * 4 * 128 * 256 * 17 // 16 // 8
+    # Free DRAM per bank that must remain after the decode traces exist; below it the first long prompts would run out
+    # of memory, so start-up stops instead.
+    MIN_FREE_AFTER_STARTUP_BYTES = 700 << 20
     # Draft length the launch settled on in spec_plan; 0 without speculation.
     spec_k = 0
 
@@ -165,7 +183,21 @@ class Gemma4ForCausalLM:
             Decoder.SLIDING_WINDOW_PAGES * Decoder.PAGE_SIZE * max_num_seqs
             + (Decoder.SLIDING_WINDOW_PAGES - 1) * Decoder.PAGE_SIZE
         )
-        return max_model_len + 5 * (tails + 2 * cls.MAX_PREFILL_TOKENS)
+        needed = max_model_len + 5 * (tails + 2 * cls.MAX_PREFILL_TOKENS)
+        # The rest of the DRAM budget becomes cache: more full-attention history stays resident (the plugin adds one
+        # output page per request on top of this count).
+        budget_rows = (cls.DRAM_BANK_BYTES - cls.DRAM_RESERVE_BYTES - cls.NON_KV_BYTES) // cls.KV_ROW_BYTES
+        return max(needed, (budget_rows - max_num_seqs) * Decoder.PAGE_SIZE)
+
+    @classmethod
+    def check_free_dram(cls, free_bytes_per_bank):
+        """Start-up stops when the traces left too little DRAM for the run-time working set."""
+        if free_bytes_per_bank < cls.MIN_FREE_AFTER_STARTUP_BYTES:
+            raise RuntimeError(
+                f"Only {free_bytes_per_bank >> 20} MiB of DRAM per bank is free after start-up "
+                f"(at least {cls.MIN_FREE_AFTER_STARTUP_BYTES >> 20} MiB are needed for prefill); "
+                "lower --max-num-seqs or --max-model-len"
+            )
 
     @staticmethod
     def _full_view(wide):
@@ -590,7 +622,8 @@ class Gemma4ForCausalLM:
         start = time.perf_counter()
         self.entry = self.generator.prepare_entries(states)[0]
         self.cur_state = kv_cache
-        used = ttnn.get_memory_view(self.mesh, ttnn.BufferType.DRAM).total_bytes_allocated_per_bank
+        view = ttnn.get_memory_view(self.mesh, ttnn.BufferType.DRAM)
+        used = view.total_bytes_allocated_per_bank
         logger.info(
             "Captured {} decode traces ({} rows) in {:.1f} s; DRAM allocated per bank {} MiB",
             len(states),
@@ -598,6 +631,7 @@ class Gemma4ForCausalLM:
             time.perf_counter() - start,
             used >> 20,
         )
+        self.check_free_dram(view.total_bytes_free_per_bank)
 
     def note_state_slots_moved(self, moves):
         self.prefill_slot_keys = {moves.get(slot, slot): key for slot, key in self.prefill_slot_keys.items()}
