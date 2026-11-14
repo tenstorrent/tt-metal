@@ -56,14 +56,29 @@ def compare_layers(taps, md, ref_of, rows_real, tag, nl):
     for L in range(nl):
         devs = to_rows(taps[L], md)
         rec = {"layer": L}
-        pc_all, mins = [], []
+        pc_all, mins, mins1, med, rel, relt = [], [], [], [], [], []
         for r in range(4):
             ref, p0 = ref_of(L, r)
             S = ref.shape[0]
             dev = devs[r].reshape(4, -1, 6144)[:, p0 : p0 + S].permute(1, 0, 2).float()
             pc_all.append(pcc(dev, ref))
-            mins.append(min(pcc(dev[t], ref[t]) for t in range(S)))
-        rec.update(pcc_rows=[round(x, 5) for x in pc_all], pcc_min=round(min(pc_all), 5), tok_min=round(min(mins), 4))
+            pt = [pcc(dev[t], ref[t]) for t in range(S)]
+            mins.append(min(pt))
+            mins1.append(
+                min(pt[1:]) if S > 1 else pt[0]
+            )  # without position 0 (the bos attention sink: massive activations)
+            med.append(sorted(pt)[len(pt) // 2])
+            rel.append(float((dev - ref).norm() / ref.norm()))
+            relt.append(float(((dev - ref).flatten(1).norm(dim=1) / ref.flatten(1).norm(dim=1)).median()))
+        rec.update(
+            pcc_rows=[round(x, 5) for x in pc_all],
+            pcc_min=round(min(pc_all), 5),
+            tok_min=round(min(mins), 4),
+            tok_min_no_pos0=round(min(mins1), 4),
+            tok_median=round(min(med), 4),
+            rel_l2=round(max(rel), 4),
+            rel_l2_tok_median=round(max(relt), 4),
+        )
         res(test=tag, **rec)
         out.append(rec)
     return out
