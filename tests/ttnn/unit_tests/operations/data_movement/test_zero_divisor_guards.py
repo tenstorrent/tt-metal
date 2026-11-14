@@ -94,6 +94,27 @@ def _interleaved_to_sharded_partial_shard_shape(device):
     _interleaved_to_sharded_partial(device, shard_shape=(0, 64), num_slices=1)
 
 
+def _fused_rms_minimal_zero_width(device):
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, (32, 32), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+    def tiled(shape):
+        return ttnn.from_torch(torch.zeros(shape).bfloat16(), layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem)
+
+    config = ttnn.LayerNormShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=(1, 1), subblock_w=1, block_h=1, block_w=1, inplace=False
+    )
+    weight = ttnn.from_torch(torch.ones(0, 32).bfloat16(), layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    semaphore = ttnn.create_global_semaphore(device, grid, 0)
+    ttnn.fused_rms_minimal(
+        tiled((1, 1, 32, 0)), config, 0, device, semaphore, weight=weight, stats=tiled((1, 1, 32, 32))
+    )
+
+
 @pytest.mark.parametrize(
     "run, message",
     [
@@ -106,6 +127,7 @@ def _interleaved_to_sharded_partial_shard_shape(device):
         (_interleaved_to_sharded_memory_config, "shard_shape must be greater than 0"),
         (_interleaved_to_sharded_partial, "num_slices must be greater than 0"),
         (_interleaved_to_sharded_partial_shard_shape, "shard_shape must be greater than 0"),
+        (_fused_rms_minimal_zero_width, "Input width must be greater than 0"),
     ],
     ids=[
         "fold",
@@ -117,6 +139,7 @@ def _interleaved_to_sharded_partial_shard_shape(device):
         "i2s_memory_config",
         "i2s_partial",
         "i2s_partial_shard_shape",
+        "fused_rms_minimal_width",
     ],
 )
 def test_zero_divisor_raises(device, expect_error, run, message):
