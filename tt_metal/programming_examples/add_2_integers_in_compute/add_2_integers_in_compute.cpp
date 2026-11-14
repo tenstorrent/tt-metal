@@ -71,10 +71,10 @@ int main() {
 
     // Create 3 circular buffers. Think them like pipes moving data from one core to another. cb_src0 and cb_src1 are
     // used to move data from the reader kernel to the compute kernel. cb_dst is used to move data from the compute
-    // kernel to the writer kernel. Each circular buffer is made up of 2 tiles. Thus when one tile is pushed and being
-    // used by the receiving end, the sending end can get the next piece of data ready to be pushed. Overlapping the
-    // operations. Leading to better performance. However there is a trade off, The more tiles in a circular buffer, the
-    // more memory is used. And Circular buffers are backed by L1(SRAM) memory and L1 is a precious resource. The
+    // kernel to the writer kernel. Each circular buffer holds one tile, which is sufficient because this example
+    // processes only one tile per input. In a multi-tile pipeline, allocating two tiles per circular buffer can allow
+    // the sender to prepare the next tile while the receiver processes the current tile (double buffering).
+    // Larger circular buffers use more L1(SRAM) memory, which is a precious resource. The
     // hardware supports up to 32 circular buffers and they all act the same.
     constexpr uint32_t num_tiles = 1;
     auto make_cb_config = [&](CBIndex cb_index) {
