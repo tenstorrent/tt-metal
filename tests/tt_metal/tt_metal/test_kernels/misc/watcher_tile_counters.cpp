@@ -40,6 +40,7 @@ void kernel_main() {
     // They ack once released so the producer DataflowBuffer destructor can drain.
     if (thread_idx >= num_consumers_to_run) {
         while (*sync_flag != 1) {
+            invalidate_l1_cache();  // the host sets the flag; drop the TRISC's cached copy so the next read sees it
         }
     }
 
@@ -52,6 +53,7 @@ void kernel_main() {
     // Running consumers hold the drained state until the host has logged the stalled counters.
     if (thread_idx < num_consumers_to_run) {
         while (*sync_flag != 1) {
+            invalidate_l1_cache();  // the host sets the flag; drop the TRISC's cached copy so the next read sees it
         }
     }
 #endif
