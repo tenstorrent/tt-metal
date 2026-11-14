@@ -1390,6 +1390,47 @@ def test_concat_dtype_uint8_sharded_s2s_tiled(device):
     assert torch.equal(got, torch.cat(torch_inputs, dim=3))
 
 
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])
+@pytest.mark.parametrize(
+    "shape, shard_shape, grid_size",
+    (
+        ((1, 1, 32, 64), (32, 64), (1, 1)),
+        ((1, 1, 128, 32), (32, 32), (4, 1)),
+        ((2, 3, 96, 64), (64, 64), (3, 3)),
+        ((4, 1, 200, 96), (96, 96), (5, 2)),
+    ),
+)
+def test_height_sharded_width_concat_block_float(device, dtype, shape, shard_shape, grid_size):
+    """A last-dim concat of HEIGHT_SHARDED block-float tiles must not re-quantise the values.
+
+    ConcatS2STiledProgramFactory transposes each tile on its way through the concat buffers. Block-float
+    tiles share one exponent per 16 values of a face row, so the transposed tile has to stay in bf16; only
+    bfloat8_b took that path, and bfloat4_b came back rounded to a coarser step.
+    """
+    torch.manual_seed(0)
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size[0] - 1, grid_size[1] - 1))})
+    mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, list(shard_shape), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    tt_inputs = [
+        ttnn.from_torch(
+            torch.randn(shape, dtype=torch.bfloat16) * 2,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=mem,
+        )
+        for _ in range(2)
+    ]
+    # The reference is the plain concat of the values each input already holds after quantisation.
+    expected = torch.cat([ttnn.to_torch(t) for t in tt_inputs], dim=3)
+
+    result = ttnn.concat(tt_inputs, dim=3)
+    assert_equal(expected, ttnn.to_torch(result))
+
+
 @pytest.mark.parametrize("buffer_type", docstring_interleaved_buffer_type_params(ttnn.concat))
 @pytest.mark.parametrize("dtype, layout", docstring_dtype_layout_params(ttnn.concat))
 def test_concat_docstring_supported_inputs(dtype, layout, buffer_type, device):
