@@ -572,7 +572,7 @@ def build_v41_kv_chunk_table(exp: V41KvExport, cfg, mesh_device, path: str) -> s
     table = D.KvChunkAddressTable({config_name(g): c for g, c in zip(GROUPS, configs)})
     rows, cols = (int(v) for v in mesh_device.shape)
     fnids = [mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(r, c)) for r in range(rows) for c in range(cols)]
-    group = table.add_device_group(fnids)
+    groups = spread_device_groups(table, fnids, read_spread())
     host = table_host()
     for fid in fnids:
         table.set_fabric_node_host(fid, host_name=host)
@@ -584,13 +584,32 @@ def build_v41_kv_chunk_table(exp: V41KvExport, cfg, mesh_device, path: str) -> s
             loc = D.KvCacheLocation()
             loc.noc_addr = _chunk_addr(t, b, row, n_banks, CHUNK_BYTES[g])
             loc.size_bytes = int(CHUNK_BYTES[g])
-            loc.device_group_index = group
+            loc.device_group_index = groups[int(L) % len(groups)]
             table.set(int(L), int(pos), int(slot), loc, GROUPS.index(g))
             n += 1
     logger.info(
-        f"[v41 kv export] table: {n} chunk locations over {len(GROUPS)} configs, {len(fnids)} chips, {n_banks} banks"
+        f"[v41 kv export] table: {n} chunk locations over {len(GROUPS)} configs, {len(fnids)} chips, {n_banks} banks, "
+        f"reads spread over {len(groups)} chip(s)"
     )
     return serialize_prebuilt_kv_chunk_table(table=table, path=path)
+
+
+def read_spread() -> int:
+    """tt-blaze DS41F-0154 (V41_EXPORT_READ_SPREAD, default 1): how many chips the KV Manager reads the export from. The KV
+    Manager reads every chunk of a device group from the group's FIRST chip (tt-d-gen kv_chunk_index_builder.cpp, "the
+    designated reader"), so with one group every migration leaves host 30 through chip (0, 0) -- trained to PCIe x1 there:
+    720 GB over one x1 link at ~0.5 GB/s in 24 min of AgentX c20, the prefill galaxy's bottleneck. The export is replicated
+    on every chip (the entries / keys / windows are SP-all-gathered before the write), so any chip can serve a read."""
+    return max(1, int(os.environ.get("V41_EXPORT_READ_SPREAD", "1")))
+
+
+def spread_device_groups(table, fnids, spread: int) -> list:
+    """``spread`` device groups of the same chips, group k rotated to start at chip k * (len / spread) of the mesh order, so
+    layer L (group L % spread) is read from a different chip than its neighbours. spread 1 = the one group in mesh order (as
+    before)."""
+    spread = min(int(spread), len(fnids))
+    step = len(fnids) // spread
+    return [table.add_device_group(list(fnids[k * step :]) + list(fnids[: k * step])) for k in range(spread)]
 
 
 def read_back(exp: V41KvExport, cfg, slot: int, prompt_tokens: int) -> dict:
