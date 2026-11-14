@@ -1761,21 +1761,23 @@ std::vector<Tensor> digamma_bw(
     float t_inf = std::numeric_limits<float>::infinity();
     float t_nan = std::nanf("");
     Tensor grad_a = ttnn::multiply(grad, ttnn::polygamma(input, 1, output_mem_config), std::nullopt, output_mem_config);
+    Tensor is_pole = ttnn::logical_and(
+        ttnn::le(input, 0.0f, std::nullopt, output_mem_config),
+        ttnn::eq(input, ttnn::floor(input, output_mem_config), std::nullopt, output_mem_config),
+        std::nullopt,
+        output_mem_config);
     grad_a = where(
-        ttnn::logical_and(
-            ttnn::eqz(input, output_mem_config), ttnn::eqz(grad, output_mem_config), std::nullopt, output_mem_config),
+        ttnn::logical_and(is_pole, ttnn::eqz(grad, output_mem_config), std::nullopt, output_mem_config),
         t_nan,
         grad_a,
         output_mem_config);
     grad_a = where(
-        ttnn::logical_and(
-            ttnn::eqz(input, output_mem_config), ttnn::ltz(grad, output_mem_config), std::nullopt, output_mem_config),
+        ttnn::logical_and(is_pole, ttnn::ltz(grad, output_mem_config), std::nullopt, output_mem_config),
         -t_inf,
         grad_a,
         output_mem_config);
     grad_a = where(
-        ttnn::logical_and(
-            ttnn::eqz(input, output_mem_config), ttnn::gtz(grad, output_mem_config), std::nullopt, output_mem_config),
+        ttnn::logical_and(is_pole, ttnn::gtz(grad, output_mem_config), std::nullopt, output_mem_config),
         t_inf,
         grad_a,
         output_mem_config);
@@ -1788,15 +1790,17 @@ std::vector<Tensor> polygamma_bw(
     std::vector<Tensor> grad_tensor;
     auto output_memory_config = output_mem_config.value_or(input.memory_config());
     float t_nan = std::nanf("");
-    float pos_neg = 1.0f;
-    if (n == 2 || n == 4 || n == 6 || n == 8 || n == 10) {
-        pos_neg = -1.0f;
-    }
+    float pos_neg = (n % 2 == 0) ? -1.0f : 1.0f;
     Tensor grad_a =
         ttnn::multiply(grad, ttnn::polygamma(input, (n + 1), output_mem_config), std::nullopt, output_mem_config);
+    Tensor is_pole = ttnn::logical_and(
+        ttnn::le(input, 0.0f, std::nullopt, output_mem_config),
+        ttnn::eq(input, ttnn::floor(input, output_mem_config), std::nullopt, output_mem_config),
+        std::nullopt,
+        output_mem_config);
     grad_a = where(
         ttnn::logical_and(
-            ttnn::le(input, 0.0f, std::nullopt, output_mem_config),
+            is_pole,
             ttnn::eqz(grad, output_mem_config),
             std::nullopt,
             output_mem_config),
@@ -1805,13 +1809,13 @@ std::vector<Tensor> polygamma_bw(
         output_mem_config);
     grad_a = where(
         ttnn::logical_and(
-            ttnn::eqz(input, output_mem_config), ttnn::gtz(grad, output_mem_config), std::nullopt, output_mem_config),
+            is_pole, ttnn::gtz(grad, output_mem_config), std::nullopt, output_mem_config),
         (-std::numeric_limits<float>::infinity() * pos_neg),
         grad_a,
         output_mem_config);
     grad_a = where(
         ttnn::logical_and(
-            ttnn::eqz(input, output_mem_config), ttnn::ltz(grad, output_mem_config), std::nullopt, output_mem_config),
+            is_pole, ttnn::ltz(grad, output_mem_config), std::nullopt, output_mem_config),
         (std::numeric_limits<float>::infinity() * pos_neg),
         grad_a,
         output_mem_config);
