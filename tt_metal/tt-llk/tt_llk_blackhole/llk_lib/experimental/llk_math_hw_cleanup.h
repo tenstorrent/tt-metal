@@ -32,10 +32,18 @@ inline void _llk_math_hw_cleanup_init_dest_sync_()
 /** Zero math/unpack-style ADDR_MOD_0..7 so stale increments cannot survive. */
 inline void _llk_math_hw_cleanup_poison_addr_mods_()
 {
-    for (std::uint8_t mod_index = 0; mod_index < 8; ++mod_index)
-    {
-        addr_mod_t {}.set(mod_index);
-    }
+    // set() expands to SETC16 with an immediate operand, so every index has to be a compile-time constant: a
+    // loop over the index only compiles when the optimiser happens to unroll it completely, and compute kernels
+    // can be built at any optimisation level.
+    const addr_mod_t zero {};
+    zero.set(ADDR_MOD_0);
+    zero.set(ADDR_MOD_1);
+    zero.set(ADDR_MOD_2);
+    zero.set(ADDR_MOD_3);
+    zero.set(ADDR_MOD_4);
+    zero.set(ADDR_MOD_5);
+    zero.set(ADDR_MOD_6);
+    zero.set(ADDR_MOD_7);
 }
 
 /**
