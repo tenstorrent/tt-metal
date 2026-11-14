@@ -1173,7 +1173,8 @@ inline bool issue_block_reads_banked(
         uint32_t dst_step;
         if (page_stride % cols == 0) {
             dst_step = (page_stride / cols) * outer_stride;
-        } else if (cols % page_stride == 0) {
+        } else if (cols % page_stride == 0 && outer_stride == cols * inner_stride) {
+            // In-row steps cross row wraps only when the rows sit back to back in L1.
             dst_step = page_stride * inner_stride;
         } else {
             return false;
