@@ -79,3 +79,44 @@ def test_missing_alpha_defaults_to_rank():
     }
     _, alphas, _, _ = _collect_pairs(raw)
     assert alphas.get(_alpha_key(0, "ff", "ff2"), float(RANK)) == float(RANK)
+
+
+def _fused_delta(alphas):
+    D, IN = 8, 6
+    gen = torch.Generator().manual_seed(0)
+    qkvs = {x: {"A": torch.randn(RANK, IN, generator=gen), "B": torch.randn(D, RANK, generator=gen)} for x in "qkv"}
+    captured = {}
+
+    class _Linear:
+        def register_lora(self, A, B, scale, name):
+            captured.update(A=A, B=B, scale=scale)
+            return 0
+
+    attn = types.SimpleNamespace(
+        is_self=True,
+        num_heads=1,
+        head_dim=D,
+        n_local_heads=1,
+        dim=D,
+        parallel_config=types.SimpleNamespace(tensor_parallel=types.SimpleNamespace(factor=1)),
+        to_qkv=_Linear(),
+    )
+    keyed = {_alpha_key(0, "attn1", f"to_{x}"): a for x, a in alphas.items()}
+    _loader._register_fused(attn, qkvs, keyed, 1.0, "t", 0, "attn1")
+    fused = captured["scale"] * (captured["B"] @ captured["A"])
+    expected = []
+    for x in "qkv":
+        B = _loader._permute_qk_rows(qkvs[x]["B"], 1, D) if x in "qk" else qkvs[x]["B"]
+        expected.append(alphas.get(x, float(RANK)) / RANK * (B @ qkvs[x]["A"]))
+    return fused, torch.cat(expected, dim=0)
+
+
+def test_fused_qkv_uses_each_projections_alpha():
+    fused, expected = _fused_delta({"q": 4.0, "k": 8.0, "v": 16.0})
+    torch.testing.assert_close(fused, expected)
+
+
+def test_fused_qkv_equal_and_missing_alpha_unchanged():
+    for alphas in ({"q": 8.0, "k": 8.0, "v": 8.0}, {}):
+        fused, expected = _fused_delta(alphas)
+        torch.testing.assert_close(fused, expected)
