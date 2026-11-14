@@ -1,4 +1,5 @@
-# Models merge-gate matrix (dedicated WH Galaxy runners).
+# Models merge-gate matrix. wh_galaxy_merge_gate is routing-only: the merge queue lands on
+# the dedicated CIv1 galaxies, every other trigger lands on the general wh_galaxy pool.
 #
 # Each entry: name, cmd, skus: { <sku>: { timeout: N } }, team, owner_id, model (optional).
 # For max allowed timeout refer to .github/time_budget.yaml (models -> merge_gate).
