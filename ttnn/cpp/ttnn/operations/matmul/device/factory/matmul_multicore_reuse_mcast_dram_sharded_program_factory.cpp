@@ -1434,6 +1434,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_mult
     const uint32_t x_num_shards = num_row_major_shards(in0_tensor, "activation");
     const uint32_t out_num_shards = num_row_major_shards(out_tensor, "output");
     std::vector<uint32_t> group_cores;
+    group_cores.reserve(work_cores.size());
     for (const auto& c : work_cores) {
         group_cores.push_back(virt(c));
     }
