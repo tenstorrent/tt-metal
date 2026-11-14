@@ -1,0 +1,10 @@
+{
+ "note": "Per-category JQL over DIIM summary + description (comments excluded: they mention resets/BMC generically). triage runs each query against the tickets that name the host.",
+ "queries": {
+  "gddr": "project = DIIM AND (summary ~ \"gddr\" OR summary ~ \"dram\" OR summary ~ \"ddr\" OR description ~ \"gddr\" OR description ~ \"\\\"dram training\\\"\" OR description ~ \"\\\"memory training\\\"\" OR description ~ \"bist\")",
+  "pcie": "project = DIIM AND (summary ~ \"pcie\" OR summary ~ \"pci\" OR summary ~ \"enumerat*\" OR summary ~ \"\\\"drops off\\\"\" OR summary ~ \"chips\" OR summary ~ \"\\\"chip missing\\\"\" OR summary ~ \"detected\" OR description ~ \"PcieHangError\" OR description ~ \"0xffffffff\" OR description ~ \"AER\" OR description ~ \"lspci\")",
+  "tensix": "project = DIIM AND (summary ~ \"tensix\" OR summary ~ \"nondetermin*\" OR summary ~ \"non-deterministic\" OR summary ~ \"pcc\" OR summary ~ \"ND\" OR summary ~ \"aiclk\" OR summary ~ \"noc\" OR summary ~ \"L1\" OR description ~ \"tensix\" OR description ~ \"aiclk\" OR description ~ \"\\\"physical cores\\\"\" OR description ~ \"nondetermin*\" OR description ~ \"\\\"PCC mismatch\\\"\")",
+  "bmc": "project = DIIM AND (summary ~ \"bmc\" OR summary ~ \"ipmi\" OR summary ~ \"redfish\" OR description ~ \"bmc\" OR description ~ \"ipmi\" OR description ~ \"ipmitool\" OR description ~ \"bmc_bots\" OR description ~ \"\\\"bmc bot\\\"\")",
+  "reset": "project = DIIM AND (summary ~ \"reset*\" OR summary ~ \"POST_RESET\" OR summary ~ \"\\\"power cycle\\\"\" OR summary ~ \"reboot*\" OR summary ~ \"recycle\" OR summary ~ \"POST\" OR description ~ \"POST_RESET\" OR description ~ \"glx_reset\" OR description ~ \"\\\"tt-smi -r\\\"\" OR description ~ \"ttop-ipmi-reset\" OR description ~ \"cpld\")"
+ }
+}
