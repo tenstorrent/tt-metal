@@ -13,13 +13,16 @@ void kernel_main() {
     constexpr uint32_t CB_STRIP = get_compile_time_arg_val(3);
     constexpr uint32_t ROW_B = get_compile_time_arg_val(4);   // output page bytes (n * 2)
     constexpr uint32_t MAXR = get_compile_time_arg_val(5);    // max key row tiles per core
-    constexpr uint32_t KVT = get_compile_time_arg_val(6);     // 1: kv_len is element 0 of a device tensor (trace-safe: per-device count of valid keys), else the runtime arg
+    constexpr uint32_t KVT = get_compile_time_arg_val(
+        6);  // 1: kv_len is element 0 of a device tensor (trace-safe: per-device count of valid keys), else the runtime
+             // arg; 2: element r is the count of query row r (verify rows: causal per row)
     constexpr uint32_t CB_KV = get_compile_time_arg_val(7);
     constexpr auto o_args = TensorAccessorArgs<8, 1>();
     constexpr auto k_args = TensorAccessorArgs<o_args.next_compile_time_args_offset(), o_args.next_common_runtime_args_offset()>();
     constexpr uint32_t TILE_B = 2048;
     const uint32_t o_addr = get_common_arg_val<uint32_t>(0);
     uint32_t kv_len = get_common_arg_val<uint32_t>(1);
+    uint32_t kv_row[S];
     const uint32_t row0 = get_arg_val<uint32_t>(0);
     const uint32_t nrows = get_arg_val<uint32_t>(1);
     const auto oa = TensorAccessor(o_args, o_addr, ROW_B);
@@ -33,6 +36,13 @@ void kernel_main() {
         noc_async_read_barrier();
         invalidate_l1_cache();
         kv_len = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kp);
+        for (uint32_t r = 0; r < S; ++r) {
+            kv_row[r] = KVT == 2 ? reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kp)[r] : kv_len;
+        }
+    } else {
+        for (uint32_t r = 0; r < S; ++r) {
+            kv_row[r] = kv_len;
+        }
     }
     cs.reserve_back(1);
     const uint32_t strip = cs.get_write_ptr();  // S rows x (MAXR * 64 B)
@@ -58,10 +68,10 @@ void kernel_main() {
     }
     // mask: global key index >= kv_len -> -inf (bf16 0xFF80)
     const uint32_t first = row0 * 32;
-    if (kv_len < first + nrows * 32) {
-        for (uint32_t r = 0; r < S; ++r) {
+    for (uint32_t r = 0; r < S; ++r) {
+        if (kv_row[r] < first + nrows * 32) {
             volatile tt_l1_ptr uint16_t* d = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(strip + r * SROW);
-            uint32_t from = kv_len > first ? kv_len - first : 0;
+            uint32_t from = kv_row[r] > first ? kv_row[r] - first : 0;
             for (uint32_t e = from; e < nrows * 32; ++e) {
                 d[e] = 0xFF80;
             }

@@ -40,11 +40,39 @@ def _core_set(n, gx):
     return ttnn.CoreRangeSet(rngs)
 
 
+def pick_split(S, grid_cores=120):
+    """(G, k_chunk) of the owner-layout decode split kernel for S verify rows per user (R = 8 S query rows of the gathered q, R*G <= grid_cores).
+    Measured (verify-rows gk1, 64k/1M, SCALED_FP8, balanced and one-column-skew keys): kc=128 beats kc=256 by 12-15 us whenever G >= 3 (a column holds ~2048/8 selected keys = 2 chunks of 128, run on 2 cores in parallel);
+    G=2 (S=6,7): kc=256; G=1 (S=8): kc=128. S=1: (8,128); S=2..5: (4,128) / (4,128) / (3,128) / (3,128); S=6,7: (2,256); S=8: (1,128).
+    Chunks per sender are unlimited since vrows (the old 'senders hold <= 2 chunks' assert lifted); the skew worst case (all 2048 keys on one column) runs 16 chunks over G senders.
+    """
+    R = 8 * S
+    G = max(1, min(8 if S == 1 else 4, grid_cores // R))
+    if G == 2:
+        return 2, 256
+    return G, 128
+
+
 def max_split(rows, grid_x, grid_y):
     return max(1, (grid_x * grid_y) // max(1, rows))
 
 
-def sparse_sdpa_split(q, kv, idx, v_dim, scale, k_chunk, split, ckc, sink, emit_stats=False, owner_s=0, xchg=None, build_only=False, out=None):
+def sparse_sdpa_split(
+    q,
+    kv,
+    idx,
+    v_dim,
+    scale,
+    k_chunk,
+    split,
+    ckc,
+    sink,
+    emit_stats=False,
+    owner_s=0,
+    xchg=None,
+    build_only=False,
+    out=None,
+):
     """q: bf16 ROW_MAJOR [1,H=32,S,D]; kv: fp8_e4m3 / bf16 ROW_MAJOR [1,1,R,D]; idx: uint32 ROW_MAJOR [1,1,S,TOPK]; sink: bf16 ROW_MAJOR [1,1,1,H].
     ``ckc``: the device compute kernel config (fidelity / approx / fp32 acc are read from it). -> bf16 ROW_MAJOR [1,H,S,v_dim].
     """
@@ -83,7 +111,10 @@ def sparse_sdpa_split(q, kv, idx, v_dim, scale, k_chunk, split, ckc, sink, emit_
         QMODE = 2
     assert n_cores <= grid.x * grid.y
     n_chunks_row = -(-topk // k_chunk)
-    assert G == 1 or -(-n_chunks_row // G) <= 2, "senders hold at most 2 chunks (ping-pong CB parity)"
+    # vrows: no limit on the chunks per sender (the sender parity is my_cnt & 1 in the writer; the flash loop is the stock one). HY4_SPLIT_MAX2=1 restores the old assert.
+    assert (
+        os.environ.get("HY4_SPLIT_MAX2", "0") != "1" or G == 1 or -(-n_chunks_row // G) <= 2
+    ), "senders hold at most 2 chunks (ping-pong CB parity)"
     DHt, vDHt = (
         D // 32,
         v_dim // 32,
@@ -128,19 +159,19 @@ def sparse_sdpa_split(q, kv, idx, v_dim, scale, k_chunk, split, ckc, sink, emit_
         else None
     )
     if out is None:
-      out = ttnn.allocate_tensor_on_device(
-        ttnn.Shape(
-            ([S // owner_s, owner_s, 32, v_dim + 64] if tile_out else [S // owner_s, 1, 8 * owner_s, v_dim + 32])
-            if owner_s
-            else ([1, H, S, v_dim + 32] if cols else [1, H, S, v_dim])
-        ),
-        bf,
-        ttnn.TILE_LAYOUT if tile_out else ttnn.ROW_MAJOR_LAYOUT,
-        md,
-        ttnn.L1_MEMORY_CONFIG
-        if os.environ.get("DSV41_SDPAOUT_L1", os.environ.get("DSV41_SDPA_L1")) == "1"
-        else ttnn.DRAM_MEMORY_CONFIG,
-      )
+        out = ttnn.allocate_tensor_on_device(
+            ttnn.Shape(
+                ([S // owner_s, owner_s, 32, v_dim + 64] if tile_out else [S // owner_s, 1, 8 * owner_s, v_dim + 32])
+                if owner_s
+                else ([1, H, S, v_dim + 32] if cols else [1, H, S, v_dim])
+            ),
+            bf,
+            ttnn.TILE_LAYOUT if tile_out else ttnn.ROW_MAJOR_LAYOUT,
+            md,
+            ttnn.L1_MEMORY_CONFIG
+            if os.environ.get("DSV41_SDPAOUT_L1", os.environ.get("DSV41_SDPA_L1")) == "1"
+            else ttnn.DRAM_MEMORY_CONFIG,
+        )
     cores = [(i % grid.x, i // grid.x) for i in range(n_cores)]
     core_set = _core_set(n_cores, grid.x)
 
@@ -415,7 +446,29 @@ def sparse_sdpa_split(q, kv, idx, v_dim, scale, k_chunk, split, ckc, sink, emit_
     )
     sems = [ttnn.SemaphoreDescriptor(id=i, core_ranges=core_set, initial_value=0) for i in range(max(1, 2 * (G - 1)))]
     if build_only:
-        return dict(kernels=[reader, writer, compute], semaphores=sems, cbs=cbs, out=out, core_set=core_set, cores=cores, G=G, hash_parts=(S, G, k_chunk, topk, int(fp8), int(scaled), int(emit_stats), D, v_dim, str(fid), int(approx), int(fp32)))
+        return dict(
+            kernels=[reader, writer, compute],
+            semaphores=sems,
+            cbs=cbs,
+            out=out,
+            core_set=core_set,
+            cores=cores,
+            G=G,
+            hash_parts=(
+                S,
+                G,
+                k_chunk,
+                topk,
+                int(fp8),
+                int(scaled),
+                int(emit_stats),
+                D,
+                v_dim,
+                str(fid),
+                int(approx),
+                int(fp32),
+            ),
+        )
     prog = ttnn.ProgramDescriptor(
         kernels=[reader, writer, compute],
         semaphores=sems,

@@ -26,10 +26,14 @@ def q_headrows(q, S):
     return ttnn.to_layout(x, ttnn.TILE_LAYOUT)
 
 
-def idx_score(q, keys, w, kv_len, S, ncores=None, kc=None, out=None, fid=None, kvt=None, n_rows=None):
-    """kvt (optional): uint32/int32 ROW_MAJOR [.,16] per-device tensor whose element 0 is the number of valid keys of THIS device (trace-safe; kv_len is then ignored)."""
+def idx_score(q, keys, w, kv_len, S, ncores=None, kc=None, out=None, fid=None, kvt=None, n_rows=None, kvt_rows=False):
+    """kvt (optional): uint32/int32 ROW_MAJOR [.,16] per-device tensor whose element 0 is the number of valid keys of THIS device (trace-safe; kv_len is then ignored).
+    kvt_rows=True (verify rows, S <= 16): element r is the number of valid keys of query row r (row r sees the keys up to its own position: causal among the verify rows).
+    """
     md = keys.device()
-    n = int(n_rows or keys.shape[2])  # n_rows: score only the first n_rows key rows of a larger pool tensor (decode bucket)
+    n = int(
+        n_rows or keys.shape[2]
+    )  # n_rows: score only the first n_rows key rows of a larger pool tensor (decode bucket)
     assert n % 32 == 0 and S <= 16
     R = n // 32
     grid = md.compute_with_storage_grid_size()
@@ -100,14 +104,20 @@ def idx_score(q, keys, w, kv_len, S, ncores=None, kc=None, out=None, fid=None, k
         kernel_source=f"{KDIR}/isc_writer.cpp",
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=core_set,
-        compile_time_args=[S, KC, OUT, STRIP, n * 2, maxr, int(kvt is not None), KVCB] + _acc(out) + (_acc(kvt) if kvt is not None else []),
+        compile_time_args=[S, KC, OUT, STRIP, n * 2, maxr, (2 if kvt_rows else 1) if kvt is not None else 0, KVCB]
+        + _acc(out)
+        + (_acc(kvt) if kvt is not None else []),
         runtime_args=rt_w,
-        common_runtime_args=[out.buffer_address(), int(kv_len) if kvt is None else 0] + ([kvt.buffer_address()] if kvt is not None else []),
+        common_runtime_args=[out.buffer_address(), int(kv_len) if kvt is None else 0]
+        + ([kvt.buffer_address()] if kvt is not None else []),
         config=ttnn.WriterConfigDescriptor(),
     )
-    fid = fid or {"hifi4": ttnn.MathFidelity.HiFi4, "hifi2": ttnn.MathFidelity.HiFi2, "lofi": ttnn.MathFidelity.LoFi}[
-        os.environ.get("HY4_IDX_FID", "hifi2")
-    ]
+    fid = (
+        fid
+        or {"hifi4": ttnn.MathFidelity.HiFi4, "hifi2": ttnn.MathFidelity.HiFi2, "lofi": ttnn.MathFidelity.LoFi}[
+            os.environ.get("HY4_IDX_FID", "hifi2")
+        ]
+    )
     cc = ttnn.ComputeConfigDescriptor(math_fidelity=fid, math_approx_mode=False, fp32_dest_acc_en=False)
     compute = ttnn.KernelDescriptor(
         kernel_source=f"{KDIR}/isc_compute.cpp",
@@ -120,7 +130,21 @@ def idx_score(q, keys, w, kv_len, S, ncores=None, kc=None, out=None, fid=None, k
     )
     prog = ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=[], cbs=cbs)
     prog.custom_program_hash = (0x1D5 << 40) | (
-        hash((S, n, ncores, KC, str(fid), int(kvt is not None), tuple(_acc(keys)), tuple(_acc(q)), tuple(_acc(w)), tuple(_acc(out))))
+        hash(
+            (
+                S,
+                n,
+                ncores,
+                KC,
+                str(fid),
+                int(kvt is not None),
+                int(kvt_rows),
+                tuple(_acc(keys)),
+                tuple(_acc(q)),
+                tuple(_acc(w)),
+                tuple(_acc(out)),
+            )
+        )
         & ((1 << 40) - 1)
     )
     ttnn.generic_op([q, keys, w] + ([kvt] if kvt is not None else []) + [out], prog)

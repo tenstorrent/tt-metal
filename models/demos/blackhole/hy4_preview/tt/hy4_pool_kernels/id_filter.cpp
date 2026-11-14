@@ -13,7 +13,10 @@ void kernel_main() {
     constexpr uint32_t S = get_compile_time_arg_val(1);
     constexpr uint32_t OWN = get_compile_time_arg_val(2);
     constexpr uint32_t cb_id = get_compile_time_arg_val(3);
-    constexpr auto g_args = TensorAccessorArgs<4>();
+    constexpr uint32_t PERROW =
+        get_compile_time_arg_val(4);  // 1: verify rows: element 2+s of colinfo = number of valid tokens of row s
+                                      // (causal among the verify rows); 0: element 1 for all rows
+    constexpr auto g_args = TensorAccessorArgs<5>();
     constexpr auto c_args = TensorAccessorArgs<g_args.next_compile_time_args_offset()>();
     constexpr auto o_args = TensorAccessorArgs<c_args.next_compile_time_args_offset()>();
     constexpr uint32_t RB = K * 4;
@@ -34,7 +37,7 @@ void kernel_main() {
     noc.async_read(c_acc, cb, 64, {.page_id = 0, .offset_bytes = 0}, {.offset_bytes = 2 * RB});
     noc.async_read_barrier();
     invalidate_l1_cache();
-    const uint32_t c = cid[0], nvalid = cid[1];
+    const uint32_t c = cid[0], nvalid = PERROW ? cid[2 + s] : cid[1];
     uint32_t n = 0;
     for (uint32_t i = 0; i < K; ++i) {
         const uint32_t t = in[i];

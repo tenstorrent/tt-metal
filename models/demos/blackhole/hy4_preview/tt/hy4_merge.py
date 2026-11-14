@@ -22,7 +22,9 @@ def _acc(t):
 def merge_fused(x, sink, S, nsplit=None, out=None):
     md = x.device()
     assert x.layout == ttnn.TILE_LAYOUT and x.dtype == ttnn.bfloat16
-    nsplit = nsplit or int(os.environ.get("HY4_MRG_NSPLIT", "16"))
+    nsplit = nsplit or int(
+        os.environ.get("HY4_MRG_NSPLIT", "16" if S * 16 <= 120 else "8")
+    )  # S=8 verify rows: 8 cores per row
     assert 16 % nsplit == 0
     tpc = 16 // nsplit
     grid = md.compute_with_storage_grid_size()
@@ -90,7 +92,8 @@ def merge_fused(x, sink, S, nsplit=None, out=None):
     )
     prog = ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=[], cbs=cbs)
     prog.custom_program_hash = (0x3E6 << 40) | (
-        hash((S, nsplit, os.environ.get("HY4_MRG_DBG", "0"), tuple(_acc(x)), tuple(_acc(sink)), tuple(_acc(out)))) & ((1 << 40) - 1)
+        hash((S, nsplit, os.environ.get("HY4_MRG_DBG", "0"), tuple(_acc(x)), tuple(_acc(sink)), tuple(_acc(out))))
+        & ((1 << 40) - 1)
     )
     ttnn.generic_op([x, sink, out], prog)
     return out
