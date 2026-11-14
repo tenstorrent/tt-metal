@@ -143,6 +143,15 @@ class ChunkPlan:
     physical: int  # padded length passed to the backend (multiple of MODEL_PREFILL_ALIGN)
 
 
+# GLM53_PF_TAIL_SPLIT=auto's per-key cost table (bucket: start=ms, ...; ...): the BH Galaxy 8x4 prefill key bench at SEQ 1 M
+# (chain_pf1m_2 pf1m_bench / pf1m_bench_1k, 2026-11-14, median of 5 replays); GLM53_PF_SPLIT_COSTS overrides it per system
+_PF_SPLIT_COSTS_DEFAULT = (
+    "1024:0=225.0,261120=431.4,523264=554.1,785408=679.6,1047552=802.5;"
+    "2048:0=334.0,260096=608.6,522240=739.3,784384=871.9,1046528=1000.9;"
+    "8192:0=1849.9,253952=1910.6,516096=2115.4,778240=2318.1,1040384=2525.6"
+)
+
+
 def plan_prefill(seq_len: int, start_pos: int = 0, chunk: int = PREFILL_CHUNK, align: int = MODEL_PREFILL_ALIGN):
     """Chunk plan for `seq_len` new tokens starting at absolute position `start_pos`: full `chunk`-token chunks and
     one partial last chunk padded to `align`. Any logical length >= 1 is accepted."""
@@ -1637,22 +1646,75 @@ class Glm53Generator(_ReadinessGenerator):
         fn = getattr(self.backend, "prefill_slice_rows", None)
         return int(fn(int(rows))) if fn is not None else 0
 
+    def _split_cost_ms(self, bucket: int, start: int) -> Optional[float]:
+        """device ms of one prefill replay of `bucket` rows starting at absolute position `start`, from the per-key cost
+        table (GLM53_PF_SPLIT_COSTS, default the BH Galaxy 8x4 SEQ-1M key bench): piecewise linear in the start, clamped
+        at both ends; None for a bucket the table does not carry"""
+        table = getattr(self, "_split_costs", None)
+        if table is None:
+            table = {}
+            spec = os.environ.get("GLM53_PF_SPLIT_COSTS", "") or _PF_SPLIT_COSTS_DEFAULT
+            for part in spec.split(";"):
+                if not part.strip():
+                    continue
+                bk, pts = part.split(":", 1)
+                table[int(bk)] = sorted(
+                    (int(a), float(m)) for a, m in (x.split("=") for x in pts.split(",") if x.strip())
+                )
+            self._split_costs = table
+        pts = table.get(int(bucket))
+        if not pts:
+            return None
+        if start <= pts[0][0]:
+            return pts[0][1]
+        for (s0, m0), (s1, m1) in zip(pts, pts[1:]):
+            if start <= s1:
+                return m0 + (m1 - m0) * (start - s0) / (s1 - s0)
+        return pts[-1][1]
+
     def _tail_split(self, plans: list) -> list:
         """GLM53_PF_TAIL_SPLIT = k >= 2 (default 0 = off): the request's LAST chunk, when it holds more tokens than the
         smallest prefill bucket b but fits k of them, runs as ceil(n / b) chunks of b (the last one partial) instead of
         one chunk padded to the next bucket -- a 4,150-token AgentX suffix replays 3 x 2,048 rows instead of 8,192. Every
         piece starts b tokens after the previous one (b is a multiple of every continuation alignment), uses the b-row
         keys the prefill already captured (no new trace), and goes through the slice-boundary rule afterwards like any
-        chunk. Counted in prefill_tail_splits / prefill_tail_rows_saved."""
-        k = int(os.environ.get("GLM53_PF_TAIL_SPLIT", "0") or 0)
+        chunk. Counted in prefill_tail_splits / prefill_tail_rows_saved.
+
+        GLM53_PF_TAIL_SPLIT = auto: EVERY chunk of the call is split into b-row pieces exactly when the pieces' summed
+        cost (_split_cost_ms at each piece's own start) is below the chunk's natural bucket at its start -- the long-
+        context term (the indexer key read / latent gather over the cached context) is paid once per replay, so at a
+        ~1 M offset 3 x 2,048 rows (~3.0 s) lose to one 8,192 replay (~2.5 s) while near the start of the window the
+        pieces win (2 x 2,048 at 64 K ~0.8 s vs 8,192 ~1.9 s). Served AgentX warm turns (uncached suffix p50 ~2.4 K at
+        offsets p50 ~65 K) are the target. The estimated saving is counted in prefill_split_ms_saved."""
+        mode = (os.environ.get("GLM53_PF_TAIL_SPLIT", "0") or "0").strip().lower()
+        auto = mode == "auto"
+        k = 0 if auto else int(mode)
         tpp = getattr(self.backend, "tpp", None)
-        if k < 2 or not plans or tpp is None or len(tpp.buckets) < 2:
+        if (not auto and k < 2) or not plans or tpp is None or len(tpp.buckets) < 2:
             return plans
+        if auto:
+            out = []
+            for pl in plans:
+                out.extend(self._split_chunk(pl, tpp, None))
+            return out
+        return list(plans[:-1]) + self._split_chunk(plans[-1], tpp, k)
+
+    def _split_chunk(self, last, tpp, k: Optional[int]) -> list:
+        """[last] unchanged, or its b-row pieces (k: the GLM53_PF_TAIL_SPLIT cap; None: the cost-table rule)"""
+        plans = [last]
         b = int(min(tpp.buckets))
-        last = plans[-1]
         pieces = -(-int(last.n_valid) // b)
         natural = next((int(c) for c in sorted(tpp.buckets) if c >= last.n_valid), None)
-        if last.n_valid <= b or pieces > k or natural is None or pieces * b >= natural:
+        if last.n_valid <= b or natural is None:
+            return plans
+        saved = 0.0
+        if k is None:
+            whole = self._split_cost_ms(natural, int(last.start))
+            parts = [self._split_cost_ms(b, int(last.start) + j * b) for j in range(pieces)]
+            if whole is None or any(c is None for c in parts) or sum(parts) >= whole:
+                return plans
+            saved = whole - sum(parts)
+        elif pieces > k or pieces * b >= natural:
             return plans
         if b % int(self.backend.continuation_align):
             return plans  # (a piece must start on the continuation grid)
@@ -1666,7 +1728,7 @@ class Glm53Generator(_ReadinessGenerator):
             return (
                 plans  # (the last piece would end on a chip slice boundary: keep the unsplit chunk, its rule applies)
             )
-        out = list(plans[:-1])
+        out = []
         for j in range(pieces):
             nv = min(b, int(last.n_valid) - j * b)
             out.append(ChunkPlan(start=last.start + j * b, offset=last.offset + j * b, n_valid=nv,
@@ -1675,6 +1737,8 @@ class Glm53Generator(_ReadinessGenerator):
         self.counters["prefill_tail_rows_saved"] = (
             self.counters.get("prefill_tail_rows_saved", 0) + natural - pieces * b
         )
+        if saved:
+            self.counters["prefill_split_ms_saved"] = round(self.counters.get("prefill_split_ms_saved", 0) + saved, 1)
         return out
 
     def _slice_safe(self, plans: list) -> list:
