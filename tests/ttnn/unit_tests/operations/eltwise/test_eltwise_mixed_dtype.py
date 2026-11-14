@@ -163,3 +163,40 @@ def test_typecast_rejects_mismatched_preallocated_output(device, expect_error):
         ttnn.unary_chain(input_tensor, typecast_to_bf16, output_tensor=output_tensor)
     with expect_error(RuntimeError, "dtype should match"):
         ttnn.typecast(input_tensor, ttnn.bfloat16, output_tensor=output_tensor)
+
+
+@pytest.mark.parametrize(
+    "op, torch_op",
+    [
+        (ttnn.eq, torch.eq),
+        (ttnn.ne, torch.ne),
+        (ttnn.gt, torch.gt),
+        (ttnn.lt, torch.lt),
+        (ttnn.ge, torch.ge),
+        (ttnn.le, torch.le),
+        (ttnn.add, torch.add),
+        (ttnn.subtract, torch.subtract),
+        (ttnn.rsub, lambda a, b: b - a),
+        (ttnn.squared_difference, lambda a, b: (a - b) ** 2),
+        (ttnn.multiply, torch.multiply),
+    ],
+    ids=["eq", "ne", "gt", "lt", "ge", "le", "add", "subtract", "rsub", "squared_difference", "multiply"],
+)
+@pytest.mark.parametrize("narrow_dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b], ids=["bf16", "bf8", "bf4"])
+@pytest.mark.parametrize("fp32_first", [True, False])
+def test_binary_float32_narrow_float_pair_keeps_float32_precision(device, op, torch_op, narrow_dtype, fp32_first):
+    # The float32 operand differs from the narrower one only below TF32 precision.
+    torch.manual_seed(0)
+    y = ttnn.to_torch(
+        ttnn.from_torch(torch.randn(1, 1, 64, 128) * 3 + 0.25, dtype=narrow_dtype, layout=ttnn.TILE_LAYOUT)
+    ).float()
+    x = y * (1 + (torch.rand(1, 1, 64, 128) - 0.5) * 2**-12)
+    a, b = (x, y) if fp32_first else (y, x)
+    a_dtype, b_dtype = (ttnn.float32, narrow_dtype) if fp32_first else (narrow_dtype, ttnn.float32)
+    result = op(
+        ttnn.from_torch(a, dtype=a_dtype, layout=ttnn.TILE_LAYOUT, device=device),
+        ttnn.from_torch(b, dtype=b_dtype, layout=ttnn.TILE_LAYOUT, device=device),
+        dtype=ttnn.float32,
+    )
+    expected = torch_op(a.double(), b.double()).float()
+    assert torch.equal(ttnn.to_torch(result).float(), expected)
