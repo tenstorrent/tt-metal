@@ -40,3 +40,36 @@ def test_isin_spans_two_subchunks(dtype, size, device):
     torch_result = torch.isin(elements, test_elements)
     ttnn_result = ttnn.to_torch(ttnn.experimental.isin(elements_ttnn, test_elements_ttnn))
     assert torch.equal(ttnn_result != 0, torch_result)
+
+
+def _isin_special_values(torch_dtype, ttnn_dtype, elements_values, test_elements_values, invert, device):
+    elements = torch.tensor(elements_values, dtype=torch.float32).to(torch_dtype)
+    test_elements = torch.tensor(test_elements_values, dtype=torch.float32).to(torch_dtype)
+    elements_ttnn = ttnn.from_torch(elements, device=device, dtype=ttnn_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
+    test_elements_ttnn = ttnn.from_torch(test_elements, device=device, dtype=ttnn_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    torch_result = torch.isin(elements.float(), test_elements.float(), invert=invert)
+    ttnn_result = ttnn.to_torch(ttnn.experimental.isin(elements_ttnn, test_elements_ttnn, invert=invert))
+    assert torch.equal(ttnn_result != 0, torch_result)
+
+
+_SPECIAL_ELEMENTS = [-0.0, 0.0, float("nan"), -float("nan"), 1.0, -1.0, float("inf"), -float("inf"), 2.5, -0.0] * 19
+_SPECIAL_TEST_ELEMENTS_CASES = [
+    [0.0, 1.0],  # +0.0 must also match -0.0
+    [-0.0, 3.0],  # -0.0 must also match +0.0
+    [float("nan"), 1.0],  # NaN matches nothing, not even an identical bit pattern
+    [-float("nan"), float("inf"), 2.5],
+]
+
+
+# bfloat16 is compared as raw bits on device, so the signed zeros and NaN need float semantics.
+@pytest.mark.parametrize("test_elements_values", _SPECIAL_TEST_ELEMENTS_CASES)
+@pytest.mark.parametrize("invert", [False, True])
+def test_isin_bfloat16_signed_zero_and_nan(test_elements_values, invert, device):
+    _isin_special_values(torch.bfloat16, ttnn.bfloat16, _SPECIAL_ELEMENTS, test_elements_values, invert, device)
+
+
+# float32 gets the same float semantics.
+@pytest.mark.parametrize("test_elements_values", _SPECIAL_TEST_ELEMENTS_CASES)
+def test_isin_float32_signed_zero_and_nan(test_elements_values, device):
+    _isin_special_values(torch.float32, ttnn.float32, _SPECIAL_ELEMENTS, test_elements_values, False, device)
