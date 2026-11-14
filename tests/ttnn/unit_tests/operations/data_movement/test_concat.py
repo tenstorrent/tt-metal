@@ -1412,3 +1412,28 @@ def test_concat_docstring_supported_inputs(dtype, layout, buffer_type, device):
     assert output.layout == layout
     assert output.memory_config().buffer_type == buffer_type
     assert_exact(torch.concat([ttnn.to_torch(t) for t in inputs], dim=2), ttnn.to_torch(output))
+
+
+def test_concat_single_input_rejects_out_of_range_dim(device, expect_error):
+    # A lone input used to be returned unchanged for any dim, so an out-of-range dim was silently
+    # ignored instead of raising like torch.cat does.
+    input_tensor = ttnn.from_torch(
+        torch.randn(1, 1, 32, 32, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+
+    with expect_error(RuntimeError, "out of bounds"):
+        ttnn.concat([input_tensor], dim=4)
+
+
+def test_concat_single_input_valid_dim_control(device):
+    # Control: a valid dim on a lone input still returns the tensor.
+    torch_input = torch.randn(1, 1, 32, 32, dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output = ttnn.concat([input_tensor], dim=-1)
+
+    assert list(output.shape) == [1, 1, 32, 32]
+    assert_exact(torch_input, ttnn.to_torch(output))
