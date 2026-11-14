@@ -99,7 +99,10 @@ def main():
         items = [(torch.tensor(i), kd) for i, kd in zip(mj["ids"], mj["kinds"])]
     else:
         items = [(torch.tensor([120000] + tok.encode(t).ids), "dump") for t in texts]
+    only = [int(x) for x in os.environ.get("ALPHA_PROMPTS", "").split(",") if x]
     for p, (ids, kind) in enumerate(items):
+        if only and p not in only:
+            continue
         H = torch.load(os.path.join(dump, f"final_hidden_p{p}.pt"))["final_normed"][0]
         assert H.shape[0] == ids.shape[0], (H.shape, ids.shape)
         r = chain_alpha(o, ids, H, k=k, zero0=zero0)

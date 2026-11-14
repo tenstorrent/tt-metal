@@ -33,13 +33,31 @@ class Hy4MoEBlock(DSV41MoEBlock):
         self.mesh_device = mesh_device
         self.decode_config = decode_cfg
         self.gate = Hy4Gate(mesh_device, weights["gate_weight"], weights["gate_bias"], mode=router_mode)
-        if getattr(self.gate, "_sk", None) is not None:  # HY4_SKINNY=router: the fused select writes the dispatch input formats directly (no to_memory_config)
-            self.gate._sk.out_mcs = (decode_cfg.dispatch_input_expert_scores_memory_config, decode_cfg.dispatch_input_memory_config)
+        if (
+            getattr(self.gate, "_sk", None) is not None
+        ):  # HY4_SKINNY=router: the fused select writes the dispatch input formats directly (no to_memory_config)
+            self.gate._sk.out_mcs = (
+                decode_cfg.dispatch_input_expert_scores_memory_config,
+                decode_cfg.dispatch_input_memory_config,
+            )
         if expert_state is not None:
             self.decode = self._weightless_decode(mesh_device, decode_cfg, buffers, expert_state=expert_state)
         else:
             self._build_decode(mesh_device, decode_cfg, weights, shared_in_moe, buffers)
         self.decode._mesh = mesh_device
+
+    def for_batch(self, batch_per_device, buffers=None):
+        """as the base, plus: the skinny router's fused select writes the dispatch inputs in place, whose memory configs depend on batch_per_device (the shared copy kept the batch-1 shard specs: TT_FATAL at 2 tokens per device)."""
+        import copy
+
+        nb = super().for_batch(batch_per_device, buffers=buffers)
+        sk = getattr(self.gate, "_sk", None)
+        if sk is not None:
+            nb.gate = copy.copy(self.gate)
+            nb.gate._sk = copy.copy(sk)
+            cfg = nb.decode_config
+            nb.gate._sk.out_mcs = (cfg.dispatch_input_expert_scores_memory_config, cfg.dispatch_input_memory_config)
+        return nb
 
     @staticmethod
     def _configs(mesh_device, batch_per_device, topology, shared_in_moe):

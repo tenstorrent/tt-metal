@@ -45,6 +45,10 @@ def main():
 
     tok = Tokenizer.from_file("/mnt/tt-data/Hy4-Preview/tokenizer.json")
     texts, kinds = [], []
+    extra = [tuple(x.split("=", 1)) for x in os.environ.get("TEXT_FILES", "").split(",") if x]
+    if extra:
+        SRC[:] = extra
+        DIALOGUES[:] = []
     for kind, f in SRC:
         if os.path.exists(f):
             t = open(f, errors="ignore").read()
