@@ -397,6 +397,8 @@ public:
             // WorkloadDescriptor variant only, when resolve_bindings bailed: the tensor buffer addresses
             // baked into the cached program, which a cache hit can only reuse if they are unchanged.
             std::vector<uint32_t> unpatchable_buffer_addresses;
+            // WorkloadDescriptor variant only: the buffer addresses last applied to this program's bindings.
+            std::vector<uint32_t> applied_buffer_addresses;
         };
         using cached_mesh_workload_t = AdaptedCachedMeshWorkload<shared_variables_t>;
 
@@ -697,6 +699,17 @@ public:
             const operation_attributes_t& attrs,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value) {
+            // WorkloadDescriptor variant: every program's shared variables carry the same workload descriptor, so the
+            // tensor buffers (and their addresses) are collected once per call, not once per program.
+            std::optional<CollectedTensorBuffers> collected_once;
+            std::vector<uint32_t> addresses_once;
+            const auto collect_once = [&](const shared_variables_t& sv) -> const std::vector<uint32_t>& {
+                if (!collected_once.has_value()) {
+                    collected_once = collect_tensor_buffers(tensor_args, tensor_return_value, sv.workload_descriptor);
+                    addresses_once = buffer_addresses(collected_once->buffers);
+                }
+                return addresses_once;
+            };
             for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
                 auto& sv = cached_workload.shared_variables.at(coordinate_range);
 
@@ -708,16 +721,22 @@ public:
                     // fast path covers cache hits even when the factory only sets
                     // `desc.cbs[i].buffer` and declares no rt-arg buffer bindings.
                     if (!sv.resolved_bindings.empty()) {
-                        auto collected =
-                            collect_tensor_buffers(tensor_args, tensor_return_value, sv.workload_descriptor);
-                        tt::tt_metal::apply_resolved_bindings(program, sv.resolved_bindings, collected.buffers);
+                        // Runtime-arg bindings hold only addresses, which usually repeat call to call: skip patching
+                        // what is already there. CB bindings attach the Buffer itself, so they always re-apply.
+                        // This relies on nothing else writing binding slots between calls: an override hook must not
+                        // write one conditionally or in place.
+                        const auto& addresses = collect_once(sv);
+                        if (!sv.resolved_bindings.cbs.empty() || sv.applied_buffer_addresses != addresses) {
+                            sv.applied_buffer_addresses.clear();  // a throw below must not leave a stale match
+                            tt::tt_metal::apply_resolved_bindings(
+                                program, sv.resolved_bindings, collected_once->buffers);
+                            sv.applied_buffer_addresses = addresses;
+                        }
                     } else if (!has_override_runtime_arguments() && !sv.unpatchable_buffer_addresses.empty()) {
                         // Overrides are exempt: some rewrite every buffer address themselves (e.g.
                         // minimal_matmul_strided_reduce_scatter_async), and the adapter cannot tell which.
-                        auto collected =
-                            collect_tensor_buffers(tensor_args, tensor_return_value, sv.workload_descriptor);
                         TT_FATAL(
-                            buffer_addresses(collected.buffers) == sv.unpatchable_buffer_addresses,
+                            collect_once(sv) == sv.unpatchable_buffer_addresses,
                             "{}: program cache hit on an entry built from a call that passed the same buffer in more "
                             "than one tensor slot, so its buffer addresses cannot be re-patched for the current "
                             "tensors. Pass distinct tensors to the first call (for example a clone of the repeated "
