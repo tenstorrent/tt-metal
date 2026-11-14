@@ -12,7 +12,7 @@ from models.experimental.uniad.reference import utils
 from models.experimental.uniad.tests.pcc.test_ttnn_motion_transformer_decoder import custom_preprocessor_motion_decoder
 from models.experimental.uniad.tt.ttnn_motion_head import TtMotionHead
 from models.experimental.uniad.tt import ttnn_utils
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 from ttnn.model_preprocessing import (
     preprocess_model_parameters,
@@ -21,7 +21,7 @@ from ttnn.model_preprocessing import (
     preprocess_layernorm_parameter,
 )
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 from models.experimental.uniad.tests.common import load_torch_model
 
 

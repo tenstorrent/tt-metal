@@ -58,7 +58,7 @@ import torch
 
 import ttnn
 from models.common.utility_functions import is_wormhole_b0
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 # (shard_h, num_cores, id).  num_units_per_shard for a ROW_MAJOR height shard == shard_h (independent of C).
 # With the 16-bit-capacity infra fix, ALL of these must round-trip; the shard_h > 255 cases are the ones that

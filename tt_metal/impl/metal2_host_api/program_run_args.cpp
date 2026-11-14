@@ -14,9 +14,9 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/runtime_args_data.hpp>
 #include <tt-metalium/experimental/sram_arena/sram_arena.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/experimental/metal2_host_api/tensor_spec_relaxations.hpp>
+#include <tt-metalium/workload/specification/tensor_spec_relaxations.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
@@ -27,7 +27,7 @@
 #include "impl/metal2_host_api/tensor_binding_crtas.hpp"
 #include "impl/program/program_impl.hpp"
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal {
 
 // ============================================================================
 // Validation Helpers
@@ -41,7 +41,8 @@ const Table<NodeCoord, std::vector<uint32_t>>& kernel_runtime_varargs(const Prog
     return kp.advanced_options.runtime_varargs;
 }
 
-const AdvancedKernelRunArgs::Varargs& kernel_common_runtime_varargs(const ProgramRunArgs::KernelRunArgs& kp) {
+const experimental::AdvancedKernelRunArgs::Varargs& kernel_common_runtime_varargs(
+    const ProgramRunArgs::KernelRunArgs& kp) {
     return kp.advanced_options.common_runtime_varargs;
 }
 
@@ -309,7 +310,7 @@ void ValidateTensorArgs(
 
 void ValidateSRAMArenaArgs(
     const Program& program,
-    const Table<SRAMArenaParamName, AdvancedProgramRunArgs::SRAMArenaArgument>& args,
+    const Table<experimental::SRAMArenaParamName, experimental::AdvancedProgramRunArgs::SRAMArenaArgument>& args,
     bool require_all) {
     const auto& declarations = program.impl().get_sram_arena_parameters();
     for (const auto& [name, argument] : args) {
@@ -328,7 +329,7 @@ void ValidateSRAMArenaArgs(
     if (require_all) {
         for (const auto& [name, declaration] : declarations) {
             TT_FATAL(
-                args.contains(SRAMArenaParamName{name}),
+                args.contains(experimental::SRAMArenaParamName{name}),
                 "SRAMArenaParameter '{}' is declared in the Program but has no SRAMArenaArgument entry.",
                 name);
         }
@@ -336,7 +337,8 @@ void ValidateSRAMArenaArgs(
 }
 
 void BindSRAMArenaArgs(
-    detail::ProgramImpl& program, const Table<SRAMArenaParamName, AdvancedProgramRunArgs::SRAMArenaArgument>& args) {
+    detail::ProgramImpl& program,
+    const Table<experimental::SRAMArenaParamName, experimental::AdvancedProgramRunArgs::SRAMArenaArgument>& args) {
     if (args.empty()) {
         return;
     }
@@ -472,7 +474,8 @@ void ValidateDFBRunOverrides(const detail::ProgramImpl& program_impl, const Prog
 // bind time in ProgramImpl::bind_prefetcher_pipe_parameters.
 void ValidatePrefetcherPipeArgs(
     const Program& program,
-    const Table<PrefetcherPipeParamName, AdvancedProgramRunArgs::PrefetcherPipeArgument>& pipe_args,
+    const Table<experimental::PrefetcherPipeParamName, experimental::AdvancedProgramRunArgs::PrefetcherPipeArgument>&
+        pipe_args,
     bool require_all) {
     const detail::ProgramImpl& program_impl = program.impl();
 
@@ -485,7 +488,7 @@ void ValidatePrefetcherPipeArgs(
             "ProgramRunArgs supplies a PrefetcherPipe argument for '{}', but the Program declares no "
             "PrefetcherPipeParameter of that name.",
             param_name);
-        const PrefetcherPipe& pipe = pipe_arg.get();
+        const experimental::PrefetcherPipe& pipe = pipe_arg.get();
         TT_FATAL(
             pipe.get_device() == binding->device,
             "PrefetcherPipeArgument for '{}' supplies a pipe allocated on a different MeshDevice than the one this "
@@ -534,7 +537,8 @@ void ValidatePrefetcherPipeArgs(
 // different object).
 void BindPrefetcherPipeArgs(
     detail::ProgramImpl& program_impl,
-    const Table<PrefetcherPipeParamName, AdvancedProgramRunArgs::PrefetcherPipeArgument>& pipe_args) {
+    const Table<experimental::PrefetcherPipeParamName, experimental::AdvancedProgramRunArgs::PrefetcherPipeArgument>&
+        pipe_args) {
     std::vector<detail::ProgramImpl::PrefetcherPipeParameterBind> binds;
     binds.reserve(pipe_args.size());
     for (const auto& [param_name, pipe_arg] : pipe_args) {
@@ -800,10 +804,10 @@ void PatchPerNodeBindingRtas(
         // TensorSpec validation already pins the per-node allocation flag (it is part of MemoryConfig equality),
         // so this only trips if the buffer disagrees with its own tensor's MemoryConfig.
         TT_FATAL(
-            per_core_allocation::is_per_core_allocation(*buffer),
+            experimental::per_core_allocation::is_per_core_allocation(*buffer),
             "Tensor argument for per-node TensorParameter '{}' is backed by a Buffer that is not per-node allocated.",
             handle.tensor_parameter_name);
-        const auto& node_addresses = per_core_allocation::get_per_core_addresses(*buffer);
+        const auto& node_addresses = experimental::per_core_allocation::get_per_core_addresses(*buffer);
         const uint32_t word = handle.addr_rta_offset / sizeof(uint32_t);
         for (const CoreCoord& node : kernel.logical_cores()) {
             auto a_it = node_addresses.find(node);
@@ -834,7 +838,9 @@ void PatchPerNodeBindingRtas(
 }
 
 uint32_t ResolveBorrowedDFBTensorAddress(
-    const dfb::detail::DataflowBufferImpl& dfb, const TensorParamName& tensor_name, const MeshTensor& tensor) {
+    const experimental::dfb::detail::DataflowBufferImpl& dfb,
+    const TensorParamName& tensor_name,
+    const MeshTensor& tensor) {
     const auto& buffer = *tensor.mesh_buffer().get_reference_buffer();
 
     // Attach-time legality checks (analogous to dynamic CB's
@@ -918,7 +924,7 @@ void AttachBorrowedDFBBuffers(
 // PUBLIC ENTRY POINTS: SetProgramRunArgs + UpdateTensorArgs
 // ============================================================================
 
-void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip_validation) {
+void experimental::SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip_validation) {
     log_debug(tt::LogMetal, "Setting ProgramRunArgs");
 
     // Metal 2.0 run-args API: only valid on a Program created from a ProgramSpec (the run-args
@@ -934,7 +940,7 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
         ValidateProgramRunArgs(program, params);
     }
 
-    detail::ProgramImpl& program_impl = program.impl();
+    tt_metal::detail::ProgramImpl& program_impl = program.impl();
 
     // Build a tensor_parameter_name -> MeshTensor lookup from the user's TensorArgument entries.
     // Used below to fill each kernel's TensorBinding CRTA section: at minimum, the binding's
@@ -1252,7 +1258,7 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
     // Apply size overrides BEFORE attaching borrowed buffers so the borrowed per-bank fit check in
     // AttachBorrowedDFBBuffers validates the NEW size. Overrides are applied as a single batch so an alias
     // group can be validated for size agreement before any DFB is mutated.
-    std::vector<detail::ProgramImpl::DfbSizeOverride> size_overrides;
+    std::vector<tt_metal::detail::ProgramImpl::DfbSizeOverride> size_overrides;
     size_overrides.reserve(params.dfb_run_overrides.size());
     for (const auto& dfb_params : params.dfb_run_overrides) {
         if (!dfb_params.entry_size.has_value() && !dfb_params.num_entries.has_value()) {
@@ -1271,16 +1277,16 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
     // Install arena addresses after DFB, tensor, and pipe checks succeed.
     BindSRAMArenaArgs(program_impl, params.advanced_options.sram_arena_args);
     for (const auto& [param_name, tensor] : tensor_by_param) {
-        program_impl.set_bound_tensor_footprint(param_name, detail::make_bound_tensor_footprint(*tensor));
+        program_impl.set_bound_tensor_footprint(param_name, tt_metal::detail::make_bound_tensor_footprint(*tensor));
     }
     program_impl.mark_program_run_args_initialized();
 }
 
-void UpdateTensorArgs(
+void experimental::UpdateTensorArgs(
     Program& program, const Table<TensorParamName, ProgramRunArgs::TensorArgument>& tensor_args, bool skip_validation) {
     log_debug(tt::LogMetal, "Updating tensor args (partial fast-path)");
 
-    detail::ProgramImpl& program_impl = program.impl();
+    tt_metal::detail::ProgramImpl& program_impl = program.impl();
     // Metal 2.0 run-args API: only valid on a Program created from a ProgramSpec. (A legacy Program
     // would also fail the initialized-check below, but this gives the accurate reason.)
     TT_FATAL(
@@ -1348,7 +1354,7 @@ void UpdateTensorArgs(
     // Process DFB runtime parameters to update borrowed-memory DFB backing L1 Buffer*s.
     AttachBorrowedDFBBuffers(program_impl, tensor_by_param);
     for (const auto& [param_name, tensor] : tensor_by_param) {
-        program_impl.set_bound_tensor_footprint(param_name, detail::make_bound_tensor_footprint(*tensor));
+        program_impl.set_bound_tensor_footprint(param_name, tt_metal::detail::make_bound_tensor_footprint(*tensor));
     }
 }
 
@@ -1571,10 +1577,10 @@ void ValidateUpdateProgramRunArgs(const Program& program, const ProgramRunArgs& 
     ValidatePrefetcherPipeArgs(program, params.advanced_options.prefetcher_pipe_args, /*require_all=*/false);
 }
 
-void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip_validation) {
+void experimental::UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip_validation) {
     log_debug(tt::LogMetal, "Updating ProgramRunArgs (partial fast-path)");
 
-    detail::ProgramImpl& program_impl = program.impl();
+    tt_metal::detail::ProgramImpl& program_impl = program.impl();
     // Metal 2.0 run-args API: only valid on a Program created from a ProgramSpec. (A legacy Program
     // would also fail the initialized-check below, but this gives the accurate reason.)
     TT_FATAL(
@@ -1707,7 +1713,7 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
     // ---- DFB size overrides (stateful: an unspecified DFB retains its current size) ----
     // Apply BEFORE re-attaching borrowed buffers below, so the borrowed per-bank fit check sees the
     // new size. Mirrors the SetProgramRunArgs path.
-    std::vector<detail::ProgramImpl::DfbSizeOverride> size_overrides;
+    std::vector<tt_metal::detail::ProgramImpl::DfbSizeOverride> size_overrides;
     size_overrides.reserve(params.dfb_run_overrides.size());
     for (const auto& dfb_params : params.dfb_run_overrides) {
         if (!dfb_params.entry_size.has_value() && !dfb_params.num_entries.has_value()) {
@@ -1766,7 +1772,7 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
         // Re-attach borrowed-memory DFBs for the supplied tensors (skip omitted ones).
         AttachBorrowedDFBBuffers(program_impl, tensor_by_param, /*require_all=*/false);
         for (const auto& [param_name, tensor] : tensor_by_param) {
-            program_impl.set_bound_tensor_footprint(param_name, detail::make_bound_tensor_footprint(*tensor));
+            program_impl.set_bound_tensor_footprint(param_name, tt_metal::detail::make_bound_tensor_footprint(*tensor));
         }
     }
 
@@ -1851,4 +1857,4 @@ ProgramRunArgs MergeProgramRunArgs(ProgramRunArgs base, std::span<const ProgramR
     return base;
 }
 
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal

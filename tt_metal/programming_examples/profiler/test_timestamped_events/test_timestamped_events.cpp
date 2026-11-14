@@ -18,9 +18,8 @@ using namespace tt::tt_metal;
 void RunFillUpAllBuffers(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, int loop_count, bool fast_dispatch) {
     CoreCoord compute_with_storage_size = mesh_device->compute_with_storage_grid_size();
-    const experimental::NodeRange all_nodes(
-        experimental::NodeCoord{0, 0},
-        experimental::NodeCoord{compute_with_storage_size.x - 1, compute_with_storage_size.y - 1});
+    const NodeRange all_nodes(
+        NodeCoord{0, 0}, NodeCoord{compute_with_storage_size.x - 1, compute_with_storage_size.y - 1});
 
     // Mesh workload + device range span the mesh; program encapsulates kernels
     distributed::MeshWorkload workload;
@@ -28,7 +27,7 @@ void RunFillUpAllBuffers(
 
     constexpr int loop_size = 200;
     constexpr int enqueue_times = 2;
-    const experimental::KernelSpec::CompilerOptions::Defines defines = {
+    const KernelSpec::CompilerOptions::Defines defines = {
         {"LOOP_COUNT", std::to_string(loop_count)}, {"LOOP_SIZE", std::to_string(loop_size)}};
 
     const std::string dm_src =
@@ -36,86 +35,86 @@ void RunFillUpAllBuffers(
     const std::string compute_src =
         "tt_metal/programming_examples/profiler/test_timestamped_events/kernels/timestamped_events_compute.cpp";
 
-    std::vector<experimental::KernelSpec> kernel_specs;
-    std::vector<experimental::KernelSpecName> wu_kernels;
+    std::vector<KernelSpec> kernel_specs;
+    std::vector<KernelSpecName> wu_kernels;
     if (mesh_device->arch() == tt::ARCH::QUASAR) {
-        const experimental::KernelSpecName DM_KERNEL{"timestamped_events_dm"};
-        const experimental::KernelSpecName COMPUTE_KERNEL{"timestamped_events_compute"};
+        const KernelSpecName DM_KERNEL{"timestamped_events_dm"};
+        const KernelSpecName COMPUTE_KERNEL{"timestamped_events_compute"};
         kernel_specs = {
-            experimental::KernelSpec{
+            KernelSpec{
                 .unique_id = DM_KERNEL,
                 .source = dm_src,
                 .num_threads = 6,
                 .compiler_options = {.defines = defines},
-                .hw_config = experimental::DataMovementHardwareConfig{},
+                .hw_config = DataMovementHardwareConfig{},
             },
-            experimental::KernelSpec{
+            KernelSpec{
                 .unique_id = COMPUTE_KERNEL,
                 .source = compute_src,
                 .num_threads = 4,
                 .compiler_options = {.defines = defines},
-                .hw_config = experimental::ComputeHardwareConfig{},
+                .hw_config = ComputeHardwareConfig{},
             },
         };
         wu_kernels = {DM_KERNEL, COMPUTE_KERNEL};
     } else {
-        const experimental::KernelSpecName BRISC_KERNEL{"timestamped_events_brisc"};
-        const experimental::KernelSpecName NCRISC_KERNEL{"timestamped_events_ncrisc"};
-        const experimental::KernelSpecName COMPUTE_KERNEL{"timestamped_events_compute"};
+        const KernelSpecName BRISC_KERNEL{"timestamped_events_brisc"};
+        const KernelSpecName NCRISC_KERNEL{"timestamped_events_ncrisc"};
+        const KernelSpecName COMPUTE_KERNEL{"timestamped_events_compute"};
         kernel_specs = {
-            experimental::KernelSpec{
+            KernelSpec{
                 .unique_id = BRISC_KERNEL,
                 .source = dm_src,
                 .num_threads = 1,
                 .compiler_options = {.defines = defines},
                 .hw_config =
-                    experimental::DataMovementHardwareConfig{
+                    DataMovementHardwareConfig{
                         .config_1xx =
-                            experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                            DataMovementHardwareConfig::DataMovement1XXConfig{
                                 .processor = DataMovementProcessor::RISCV_0,
                                 .noc = NOC::RISCV_0_default,
                             },
                     },
             },
-            experimental::KernelSpec{
+            KernelSpec{
                 .unique_id = NCRISC_KERNEL,
                 .source = dm_src,
                 .num_threads = 1,
                 .compiler_options = {.defines = defines},
                 .hw_config =
-                    experimental::DataMovementHardwareConfig{
+                    DataMovementHardwareConfig{
                         .config_1xx =
-                            experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                            DataMovementHardwareConfig::DataMovement1XXConfig{
                                 .processor = DataMovementProcessor::RISCV_1,
                                 .noc = NOC::RISCV_1_default,
                             },
                     },
             },
-            experimental::KernelSpec{
+            KernelSpec{
                 .unique_id = COMPUTE_KERNEL,
                 .source = compute_src,
                 .num_threads = 1,
                 .compiler_options = {.defines = defines},
-                .hw_config = experimental::ComputeHardwareConfig{},
+                .hw_config = ComputeHardwareConfig{},
             },
         };
         wu_kernels = {BRISC_KERNEL, NCRISC_KERNEL, COMPUTE_KERNEL};
     }
 
-    experimental::WorkUnitSpec wu{
+    WorkUnitSpec wu{
         .name = "timestamped_events",
         .kernels = wu_kernels,
         .target_nodes = all_nodes,
     };
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "timestamped_events",
         .kernels = kernel_specs,
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
-    experimental::ProgramRunArgs params;  // kernels take no runtime args
-    experimental::SetProgramRunArgs(program, params);
+    Program program = tt_metal::experimental::MakeProgramFromSpec(*mesh_device, spec);
+    ProgramRunArgs params;  // kernels take no runtime args
+    tt_metal::experimental::SetProgramRunArgs(program, params);
 
     workload.add_program(device_range, std::move(program));
     // One enqueue is enough to fill the L1 profiler buffer on Quasar

@@ -113,7 +113,7 @@ def test_bevformer_perf(device, execution, reset_seeds):
         scores, labels, _, boxes, valid = signposted_forward(device, run_sequence)[3]
         assert tt_model.planner.generation == generation, "the plan grew inside the measured sequence"
     else:
-        host_img = to_image_layout(img.flatten(0, 1), None)
+        host_img = to_image_layout(img.flatten(0, 1), device, upload=False)
         host_frames = [tt_model.host_frame(metas) for metas in frames[1:]]
         # The traces refill their previous BEV, a copy: the measured sequence starts from the live one's state.
         runner = TTBEVFormerTrace(tt_model, device, host_img, tt_frames[1], ttnn.clone(initial_prev_bev))

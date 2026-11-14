@@ -11,9 +11,9 @@
  *
  * A stop-gap that lets descriptor-based op factories re-patch Buffer addresses and the handful
  * of hash-excluded scalar runtime args on a program-cache hit — standing in for the legacy
- * override_runtime_arguments() path until Metal 2.0 lands. Metal 2.0 solves this at the
- * framework level with native Tensor/Buffer bindings, at which point THIS ENTIRE FILE AND ITS
- * IMPLEMENTATION ARE DELETED. Do not extend the API, do not depend on it outside the
+ * override_runtime_arguments() path while these factories migrate to Metal 2.0. Metal 2.0
+ * provides native Tensor/Buffer bindings at the framework level. Remove this header and its
+ * implementation after all callers have migrated. Do not extend the API, do not depend on it outside the
  * mesh-device-operation adapter. New code almost certainly wants the Metal 2.0 binding instead.
  *
  * CODE REVIEWERS: if anyone builds on top of this, reject immediately — unless it's Diego.

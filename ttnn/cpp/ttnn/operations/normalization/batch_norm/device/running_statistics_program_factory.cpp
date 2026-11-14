@@ -6,8 +6,8 @@
 
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include <bit>
@@ -17,7 +17,7 @@ namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
 using namespace ttnn::operations::normalization;
-using namespace tt::tt_metal::experimental;
+using namespace tt::tt_metal;
 
 // Kernel identities within the ProgramSpec. Names are file-local: CMake gives every source in a
 // unity-build target its own CMAKE_UNIQUE_NAMESPACE, so the sibling batch-norm factory can use the
@@ -175,7 +175,6 @@ ttnn::device_operation::ProgramArtifacts RunningStatistics::RunningStatisticsPro
     tensor_return_value_t& output) {
     using namespace tt;
     using namespace tt::tt_metal;
-    using namespace tt::tt_metal::experimental;
     using namespace CMAKE_UNIQUE_NAMESPACE;
 
     const auto& batch_mean_tensor = tensor_args.batch_mean.mesh_tensor();

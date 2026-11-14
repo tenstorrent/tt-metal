@@ -6,7 +6,7 @@
 
 #include "paged_fill_cache_device_operation_types.hpp"
 
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 #include "ttnn/metal_v2_artifacts.hpp"
 
@@ -23,7 +23,7 @@ struct PagedFillCacheProgramFactory {
     // Cache-hit re-derivation. Re-applies every tensor binding plus the args derived from what
     // compute_program_hash excludes — batch_idx_fallback and noop — which would otherwise freeze at
     // the cache-miss value.
-    static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
+    static tt::tt_metal::ProgramRunArgs override_runtime_arguments(
         const PagedFillCacheParams& operation_attributes,
         const PagedFillCacheInputs& tensor_args,
         Tensor& tensor_return_value,
@@ -42,7 +42,7 @@ struct PagedFillCacheMeshWorkloadFactory {
 
     // Called once per coordinate range on a cache hit. Every range this factory emits covers a
     // single coordinate, so the range's start coordinate decides `noop`.
-    static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
+    static tt::tt_metal::ProgramRunArgs override_runtime_arguments(
         const PagedFillCacheParams& operation_attributes,
         const PagedFillCacheInputs& tensor_args,
         Tensor& tensor_return_value,
