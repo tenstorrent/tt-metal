@@ -75,11 +75,7 @@ SUPPORTED = {
 # 3. EXCLUSIONS
 # ---------------------------------------------------------------------------
 
-EXCLUSIONS = [
-    # The feed writes chip q's y at rows [q*T, (q+1)*T) of the peers' feed output: with T % 32 != 0 those rows
-    # start inside a tile shared with chip q-1, which needs sub-tile row placement (Refinement 2b).
-    {"feed": "on", "alignment": "h_non_aligned"},
-]
+EXCLUSIONS = []
 
 
 # ---------------------------------------------------------------------------

@@ -49,6 +49,9 @@ W_STREAM_BLOCKS = 2  # W-streamed: column passes of W in flight
 MAX_FEED_LINKS = 2  # feed: port cores reserved per direction (2 directions), whatever feed_num_links is
 FEED_CHUNKS_IN_FLIGHT = 4  # feed: packets in flight per port (fabric_all_gather's 4-chunk batch, 112 KiB ring)
 FEED_WAVE_ROWS = 1  # feed: local rows per port wave (the ports stream row i while the workers finish row i+1)
+# feed, T % 32 != 0: L1 of the landing port for the shared D tile rows (<= G - 1 a image, Cb tiles each; the largest
+# golden shape, C 7168, needs 336 KiB)
+FEED_LAND_BUDGET = 768 * 1024
 COMBINE_FANIN = 11  # leader fan-in of the 2-level combine tree (<= 16, ledger symbol)
 PARTIAL_DEPTH = 2  # per-row partial / sum-of-squares pages in flight to the writer
 Y_BLOCKS = 2  # collapse: y blocks in flight to the writer
@@ -94,6 +97,8 @@ CB_RSTD_LAND = 23  # norm: reader-private landing of the root's rstd unicasts, o
 CB_RSTD_SEND = 24  # norm: root writer's 128 B rstd source (lane vector -> token order)
 CB_FEED_CHUNKS = 25  # feed (port cores): chunk ring between the port reader and the port sender
 CB_FEED_POLL = 26  # feed (port cores): port reader's private landing of the workers' SEM_FEED_ROWS (16 B each)
+CB_FEED_YSCR = 27  # feed, T % 32 != 0 (port cores): port reader's private y tiles of a shifted chunk (2 per tile)
+CB_FEED_LAND = 28  # feed, T % 32 != 0 (port cores): landing of the shared D tile rows (compact contributor blocks)
 
 # Semaphore ids (R2)
 SEM_LEADER_COUNT = 0  # partials landed in my leader slots
@@ -484,7 +489,9 @@ def create_program_descriptor(
         if not collapse:
             raise ValueError("mhc_post: the feed needs collapse mode")
         ht_img = f_pad[-2] // TILE
-        feed_common = [d_for_args.buffer_address(), feed["me"], feed["G"], c_tiles // feed["G"], ht_img]
+        # the block the workers write straight into D: mine when my rows start on a D tile boundary, else none (G)
+        own_block = feed["me"] if f_tensor.shape[-2] % TILE == 0 else feed["G"]
+        feed_common = [d_for_args.buffer_address(), own_block, feed["G"], c_tiles // feed["G"], ht_img]
     writer = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "mhc_post_writer.cpp"),
         core_ranges=core_ranges,
@@ -590,7 +597,9 @@ def create_program_descriptor(
         semaphores.append(ttnn.SemaphoreDescriptor(id=SEM_FEED_ROWS, core_ranges=core_ranges, initial_value=0))
     program = ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=semaphores, cbs=cbs)
     if feed is not None:
-        _add_feed_ports(program, device, feed, y_for_args, R, row_ranges, Q, c_tiles, f_pad[-2] // TILE, used)
+        _add_feed_ports(
+            program, device, feed, y_for_args, R, row_ranges, Q, c_tiles, f_pad[-2] // TILE, f_tensor.shape[-2], used
+        )
     return program
 
 
@@ -635,9 +644,17 @@ def feed_plan(mesh_device, cluster_axis):
     return G, chips
 
 
-def _add_feed_ports(program, device, feed, y_tensor, R, row_ranges, Q, c_tiles, ht_img, workers):
+def feed_shared_rows(T, G):
+    """D tile rows (of one image, G * T rows) that hold rows of more than one chip: none when T % 32 == 0."""
+    htd = -(-G * T // TILE)
+    return [r for r in range(htd) if (TILE * r) // T != (min(TILE * r + TILE, G * T) - 1) // T]
+
+
+def _add_feed_ports(program, device, feed, y_tensor, R, row_ranges, Q, c_tiles, ht_img, T, workers):
     """The 2 * links port cores of this chip: reader (RISCV_1) stages chunks from y_output, sender (RISCV_0) sends
-    them over the fabric. Port (slot k, link l) sends to the destinations whose first hop leaves through slot k."""
+    them over the fabric. Port (slot k, link l) sends to the destinations whose first hop leaves through slot k.
+    T % 32 != 0 (Refinement 2b): the ports of slot 0 also place my own block in my D (local writes), and port
+    (0, 0) is the landing port that merges and writes the shared D tile rows."""
     plan, me_rc, links = feed["chips"], feed["coord"], feed["links"]
     me = plan[me_rc]
     G, p = feed["G"], me["p"]
@@ -650,8 +667,19 @@ def _add_feed_ports(program, device, feed, y_tensor, R, row_ranges, Q, c_tiles, 
     ring_chunks = 2 * FEED_CHUNKS_IN_FLIGHT
     num_banks = _num_dram_banks(device)
     max_rows = row_ranges[0][1]
-    rows_base, rows_extra = divmod(sum(cnt for _, cnt in row_ranges), R)
-    geom = [c_tiles, c_tiles // G, ht_img, G, p, R, rows_base, rows_extra]
+    t_tiles = sum(cnt for _, cnt in row_ranges)
+    rows_base, rows_extra = divmod(t_tiles, R)
+    blk = c_tiles // G
+    shifted = T % TILE != 0
+    nsh = len(feed_shared_rows(T, G))
+    nimg = t_tiles // ht_img
+    land_tiles = nimg * nsh * blk
+    if land_tiles * page > FEED_LAND_BUDGET:
+        raise ValueError(
+            f"mhc_post: the feed's shared D tile rows ({land_tiles} tiles) exceed the landing budget "
+            f"({FEED_LAND_BUDGET} B)"
+        )
+    geom = [c_tiles, blk, ht_img, G, p, R, rows_base, rows_extra, T, -(-G * T // TILE), nimg, nsh]
 
     worker_xy = [device.worker_core_from_logical_core(c) for c in workers]
     worker_xy = [v.x | (v.y << 16) for v in worker_xy]
@@ -659,14 +687,20 @@ def _add_feed_ports(program, device, feed, y_tensor, R, row_ranges, Q, c_tiles, 
         _cb(CB_FEED_CHUNKS, d_tensor.dtype, page, ring_chunks * run_pages, port_crs),
         _cb(CB_FEED_POLL, ttnn.float32, 16 * len(workers), 1, port_crs),
     ]
+    if shifted:
+        program.cbs = list(program.cbs) + [_cb(CB_FEED_YSCR, d_tensor.dtype, page, 2 * run_pages, port_crs)]
+    if land_tiles > 0:  # same CB on every port core and every chip's program: the same address everywhere
+        program.cbs = list(program.cbs) + [_cb(CB_FEED_LAND, d_tensor.dtype, page, land_tiles, port_crs)]
     ready_addr, arrival_addr = feed["semaphores"]
+    land = device.worker_core_from_logical_core(ports[(0, 0)])
     reader_rt, sender_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
     layout = []
     for l in range(links):
         for k in (0, 1):
             core = ports[(k, l)]
             v = device.worker_core_from_logical_core(core)
-            dests = [d for d, sl in me["slot_of"].items() if sl == k]
+            remote = [d for d, sl in me["slot_of"].items() if sl == k]
+            dests = remote + ([p] if shifted and k == 0 else [])
             # one stream per (source chip, link) whose first hop toward me leaves through slot k
             expect_in = sum(
                 1 for rc, ch in plan.items() if ch["group"] == me["group"] and rc != me_rc and ch["slot_of"][p] == k
@@ -680,23 +714,26 @@ def _add_feed_ports(program, device, feed, y_tensor, R, row_ranges, Q, c_tiles, 
                 v.x,
                 v.y,
                 expect_in,
+                land.x,
+                land.y,
+                int((k, l) == (0, 0)),
                 len(dests),
-                len(dests),
-                int(len(dests) > 0),
+                len(remote),
+                int(len(remote) > 0),
             ]
-            for d in dests:
+            for d in dests:  # hops 0: my own block (local writes)
                 dn = plan[me["group"][d]]["node"]
                 args += [d, int(dn.chip_id), int(dn.mesh_id), abs(d - p)]
-            for d in dests:  # ready to the port of chip d that sends to me (its slot toward me, same link)
+            for d in remote:  # ready to the port of chip d that sends to me (its slot toward me, same link)
                 dn = plan[me["group"][d]]["node"]
                 tc = device.worker_core_from_logical_core(ports[(plan[me["group"][d]]["slot_of"][p], l)])
                 args += [int(dn.chip_id), int(dn.mesh_id), abs(d - p), tc.x, tc.y]
-            if dests:
-                first = plan[me["group"][dests[0]]]["node"]
+            if remote:
+                first = plan[me["group"][remote[0]]]["node"]
                 link_ids = ttnn.get_forwarding_link_indices(me["node"], first)
                 if len(link_ids) <= l:
                     raise ValueError(
-                        f"mhc_post: feed_num_links={links} but {me_rc} -> {me['group'][dests[0]]} has "
+                        f"mhc_post: feed_num_links={links} but {me_rc} -> {me['group'][remote[0]]} has "
                         f"{len(link_ids)} usable link(s)"
                     )
                 args += list(ttnn.setup_fabric_connection(me["node"], first, link_ids[l], program, core))
@@ -705,10 +742,14 @@ def _add_feed_ports(program, device, feed, y_tensor, R, row_ranges, Q, c_tiles, 
     feed["layout"] = layout
     port_ct = [CB_FEED_CHUNKS, page, run_pages, num_banks, links, FEED_WAVE_ROWS, max_rows]
     reader_ct = (
-        port_ct + [Q, SEM_FEED_ROWS, CB_FEED_POLL] + list(ttnn.TensorAccessorArgs(y_tensor).get_compile_time_args())
+        port_ct
+        + [Q, SEM_FEED_ROWS, CB_FEED_POLL, CB_FEED_YSCR]
+        + list(ttnn.TensorAccessorArgs(y_tensor).get_compile_time_args())
     )
     sender_ct = (
-        port_ct + [FEED_CHUNKS_IN_FLIGHT, ring_chunks] + list(ttnn.TensorAccessorArgs(d_tensor).get_compile_time_args())
+        port_ct
+        + [FEED_CHUNKS_IN_FLIGHT, ring_chunks, CB_FEED_LAND]
+        + list(ttnn.TensorAccessorArgs(d_tensor).get_compile_time_args())
     )
     program.kernels = list(program.kernels) + [
         ttnn.KernelDescriptor(

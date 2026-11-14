@@ -5,11 +5,14 @@
 //
 // One port core per (direction slot, link). The workers stage the y tiles bound for other chips in y_output and
 // count each local row they finished (behind their write barrier) in their own SEM_FEED_ROWS (a program semaphore:
-// 0 at every launch). Wave by wave (wave_rows local rows of every row group) this reader polls those counts until
-// every worker has published the wave (a per-worker minimum: a shared counter would let fast workers' later rows
-// stand in for a slow worker's row), then reads the chunks of its destinations (the shared chunk walk, this
-// link's share) from y_output into the chunk ring for the sender. Transport structure: fabric_all_gather's port
-// reader.
+// 0 at every launch). Wave by wave this reader polls those counts until every worker has published the wave (a
+// per-worker minimum: a shared counter would let fast workers' later rows stand in for a slow worker's row), then
+// stages the items of its destinations (the shared walk, this link's share) into the chunk ring for the sender:
+//   D pages   one y_output page each when chip me's rows start on a tile boundary; otherwise (T % 32 != 0) the
+//             (at most two) y tiles the D tile's rows span land in cb_yscr and their face rows are copied into
+//             place in L1 (Refinement 2b);
+//   pieces    my rows of a shared D tile row, run_pages columns, in the landing's compact layout.
+// Transport structure: fabric_all_gather's port reader.
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
@@ -26,7 +29,9 @@ void kernel_main() {
     constexpr uint32_t group_q = get_compile_time_arg_val(7);
     constexpr uint32_t sem_rows_id = get_compile_time_arg_val(8);
     constexpr uint32_t cb_poll = get_compile_time_arg_val(9);  // private scratch: one 16 B slot per worker
-    constexpr auto y_args = TensorAccessorArgs<10>();
+    constexpr uint32_t cb_yscr = get_compile_time_arg_val(10);  // private scratch: 2 y tiles per staged tile
+    constexpr auto y_args = TensorAccessorArgs<11>();
+    static_assert(page_bytes == 2048, "the feed moves bf16 tiles");
 
     size_t a = 0;
     mhc_feed::Geom g;
@@ -38,6 +43,10 @@ void kernel_main() {
     g.r = get_arg_val<uint32_t>(a++);
     g.rows_base = get_arg_val<uint32_t>(a++);
     g.rows_extra = get_arg_val<uint32_t>(a++);
+    g.t_rows = get_arg_val<uint32_t>(a++);
+    g.htd = get_arg_val<uint32_t>(a++);
+    g.nimg = get_arg_val<uint32_t>(a++);
+    g.nsh = get_arg_val<uint32_t>(a++);
     const uint32_t link = get_arg_val<uint32_t>(a++);
     const uint32_t y_addr = get_arg_val<uint32_t>(a++);
     const uint32_t n_dest = get_arg_val<uint32_t>(a++);
@@ -71,25 +80,95 @@ void kernel_main() {
         }
     };
 
-    for (uint32_t i0 = 0; i0 < max_rows; i0 += wave_rows) {
+    const uint32_t scr = get_write_ptr(cb_yscr);
+    auto y_page = [&](uint32_t d, uint32_t img, uint32_t t, uint32_t col) {
+        return y_acc.get_noc_addr((img * g.ht + t) * g.c_tiles + d * g.blk_tiles + col);
+    };
+    // my y rows [y0, y0 + n) of column col (n >= 1, at most two tile rows) -> scratch pair k; returns the source
+    // row address function over rows y0 % 32 .. (rows >= 32 in the second tile)
+    auto fetch = [&](uint32_t d, uint32_t img, uint32_t col, uint32_t y0, uint32_t n, uint32_t k) {
+        const uint32_t s0 = scr + 2 * k * page_bytes;
+        noc_async_read(y_page(d, img, y0 / 32, col), s0, page_bytes);
+        if ((y0 + n - 1) / 32 != y0 / 32) {
+            noc_async_read(y_page(d, img, y0 / 32 + 1, col), s0 + page_bytes, page_bytes);
+        }
+    };
+    auto src_row = [&](uint32_t k) {
+        const uint32_t s0 = scr + 2 * k * page_bytes;
+        return [s0](uint32_t r, uint32_t h) {
+            return r < 32 ? mhc_feed::tile_row_addr(s0, r, h) : mhc_feed::tile_row_addr(s0 + page_bytes, r - 32, h);
+        };
+    };
+
+    for (uint32_t i0 = 0, w = 0; i0 < max_rows; i0 += wave_rows, ++w) {
         const uint32_t i1 = (i0 + wave_rows) < max_rows ? (i0 + wave_rows) : max_rows;
         wait_wave(i1);  // the wave is in y_output
         for (uint32_t k = 0; k < n_dest; ++k) {
             const uint32_t d = get_arg_val<uint32_t>(dest_idx + k);
-            uint32_t ci = 0;  // chunk index within (wave, destination): the sender counts the same way
-            mhc_feed::for_each_chunk<num_banks, run_pages>(g, i0, i1, ci, [&](uint32_t c, uint32_t j, uint32_t n) {
-                if (c % links != link) {
-                    return;
-                }
-                cb_reserve_back(cb_chunks, run_pages);
-                uint32_t l1 = get_write_ptr(cb_chunks);
-                for (uint32_t p = 0; p < n; ++p) {
-                    noc_async_read(y_acc.get_noc_addr(mhc_feed::src_page(g, d, j + p * num_banks)), l1, page_bytes);
-                    l1 += page_bytes;
-                }
-                noc_async_read_barrier();
-                cb_push_back(cb_chunks, run_pages);
-            });
+            uint32_t ci = 0;  // item index within (wave, destination): the sender counts the same way
+            mhc_feed::for_each_item<num_banks, run_pages, wave_rows>(
+                g, w, ci, [&](uint32_t c, const mhc_feed::Item& it) {
+                    if (c % links != link) {
+                        return;
+                    }
+                    cb_reserve_back(cb_chunks, run_pages);
+                    const uint32_t l1 = get_write_ptr(cb_chunks);
+                    if (!it.piece) {
+                        bool shifted = false;
+                        for (uint32_t p = 0; p < it.n; ++p) {
+                            const uint32_t jp = it.j + p * num_banks;
+                            const uint32_t drow = jp / g.blk_tiles, col = jp - drow * g.blk_tiles;
+                            const uint32_t img = drow / g.htd, row = drow - img * g.htd;
+                            const uint32_t y0 = 32 * row - g.me * g.t_rows;  // alone: my rows start at tile row 0
+                            if (y0 % 32 == 0) {
+                                noc_async_read(y_page(d, img, y0 / 32, col), l1 + p * page_bytes, page_bytes);
+                            } else {
+                                fetch(d, img, col, y0, mhc_feed::rows_b(g, g.me, row), p);
+                                shifted = true;
+                            }
+                        }
+                        noc_async_read_barrier();
+                        if (shifted) {
+                            for (uint32_t p = 0; p < it.n; ++p) {
+                                const uint32_t jp = it.j + p * num_banks;
+                                const uint32_t drow = jp / g.blk_tiles;
+                                const uint32_t row = drow - (drow / g.htd) * g.htd;
+                                const uint32_t y0 = 32 * row - g.me * g.t_rows;
+                                if (y0 % 32 != 0) {
+                                    const uint32_t dst = l1 + p * page_bytes;
+                                    mhc_feed::copy_rows(
+                                        0,
+                                        y0 % 32,
+                                        mhc_feed::rows_b(g, g.me, row),
+                                        [dst](uint32_t r, uint32_t h) { return mhc_feed::tile_row_addr(dst, r, h); },
+                                        src_row(p));
+                                }
+                            }
+                            noc_async_read_barrier();
+                        }
+                    } else {
+                        const uint32_t y0 = 32 * it.row + it.a - g.me * g.t_rows;
+                        const uint32_t n = it.b - it.a;
+                        for (uint32_t col = it.c0; col < it.c1; ++col) {
+                            fetch(d, it.img, col, y0, n, col - it.c0);
+                        }
+                        noc_async_read_barrier();
+                        for (uint32_t col = it.c0; col < it.c1; ++col) {
+                            const uint32_t blk = l1 + (col - it.c0) * n * mhc_feed::TILE_ROW_BYTES;
+                            const uint32_t ra = it.a, rb = it.b;
+                            mhc_feed::copy_rows(
+                                ra,
+                                y0 % 32,
+                                n,
+                                [blk, ra, rb](uint32_t r, uint32_t h) {
+                                    return mhc_feed::compact_row_addr(blk, ra, rb, r, h);
+                                },
+                                src_row(col - it.c0));
+                        }
+                        noc_async_read_barrier();
+                    }
+                    cb_push_back(cb_chunks, run_pages);
+                });
         }
     }
 }

@@ -79,6 +79,8 @@ differ. `mr_rows` = rows of the core's row group; `ccp` = the core's columns pad
 | `cb_rstd_send` | 1 × 128 B | raw | root writer | root writer | Lane vector → token order before the Q unicasts. |
 | `cb_feed_chunks` (port cores) | `2 · FEED_CHUNKS_IN_FLIGHT · run_pages` (= 8 × 7 bf16 tiles = 112 KiB) | Float16_b | port reader | port sender | fabric_all_gather's 112 KiB ring; up to `FEED_CHUNKS_IN_FLIGHT` packets in flight. |
 | `cb_feed_poll` (port cores) | 1 × 16 B · #workers | raw | port reader (private) | port reader | Landing of the workers' SEM_FEED_ROWS reads. |
+| `cb_feed_yscr` (port cores, T % 32 ≠ 0) | `2 · run_pages` bf16 tiles (28 KiB) | Float16_b | port reader (private) | port reader | Refinement 2b: the ≤ 2 y tiles each staged D tile / piece column spans, before its face rows are copied into the ring slot. Cannot share `cb_feed_chunks`: the ring slot is the copy's destination, live at the same time. |
+| `cb_feed_land` (port cores, T % 32 ≠ 0) | `nimg · nsh · Cb` bf16 tiles (nsh ≤ G−1 shared D tile rows a image; C 7168: 168 tiles = 336 KiB; `FEED_LAND_BUDGET` 768 KiB, host refusal above) | raw (compact contributor blocks) | every chip's senders (fabric fused write + inc) and my own (local writes) | landing port's sender (merge) | Refinement 2b: shared D tile rows, written to D by this chip's landing port only. Allocated on every port core (one CB, one address on every core and chip) though only port (0,0) receives; port cores are otherwise idle L1. The merge reuses the drained `cb_feed_chunks` as its tile scratch. |
 
 Port cores are not workers, so the port CBs do not add to a worker's footprint.
 
@@ -131,7 +133,7 @@ Chosen split for stats/collapse (as implemented): the W-path chooser (per-core c
 | w | 1 per row group (resident) | resident | — |
 | stats | 1 write (root) | — | Ht·Q·4 KB partials to leaders, plus Ht·ceil(Q/fanin)·4 KB to roots |
 | hc | 1 write (root) | — | — |
-| y / D | 1 write; R4 (feed) adds (G−1)/G write + read of the staging | R4 stepping stone (as implemented: the own block straight to D, the G−1 remote blocks to y_output then read by the ports) | rstd: Ht·Q·128 B (Refinement 2: one 128 B unicast per member per row). Fabric: (G−1)/G·T·C·2 B out per chip, ≤ 7-tile packets (bank-contiguous runs of the destination's D). |
+| y / D | 1 write; R4 (feed) adds (G−1)/G write + read of the staging; T % 32 ≠ 0 (Refinement 2b): the own block is staged too (+1/G write + read) and the ports read ≤ 2 y tiles per shifted D tile (staging read ≤ 2× for chips q ≥ 1) | R4 stepping stone (as implemented: the own block straight to D, the G−1 remote blocks to y_output then read by the ports) | rstd: Ht·Q·128 B (Refinement 2: one 128 B unicast per member per row). Fabric: (G−1)/G·T·C·2 B out per chip, ≤ 7-tile packets (bank-contiguous runs of the destination's D). |
 
 Totals at T=160, C=5120, bf16, collapse + norm, R=1:
 - DRAM ≈ 1.6 (F) + 6.6 (X) + 6.6 (X') + 2.6 (W) + 1.6 (y) + 0.2 (small) ≈ 19.2 MB, which is the roofline bytes.

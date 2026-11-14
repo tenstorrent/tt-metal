@@ -73,7 +73,7 @@
 
 **Result (2026-11-14, partial)**: norm = on and feed = on are in SUPPORTED. Norm: 66/66 single-device cells; feed: 100/100 tile-aligned cells on the 1x4 mesh + the 4 loose feed cases, test_feed.py 16/16 (matches-no-feed at 1/2 links, raw y, FABRIC_2D, repeated calls with the semaphores back at 0, refusals); test_regression norm gates 4/4. Both PERF FOCUS cases (T160, aligned) run supported. EXCLUDED: feed = on with `alignment = h_non_aligned` (28 cells) → Refinement 2b. Measured: collapse + norm T160 154 µs vs 134 µs without norm; the norm's cost sits in the call's tail (deferred roots → rstd, norm_block, y writes and the feed publication all after the row loop) — see changelog.
 
-### [ ] Refinement 2b — feed for T % 32 != 0 (sub-tile row placement in the peers' feed output)
+### [x] Refinement 2b — feed for T % 32 != 0 (sub-tile row placement in the peers' feed output)
 
 **Goal**: remove `{"feed": "on", "alignment": "h_non_aligned"}` from EXCLUSIONS (28 golden feed cells: T = 1, 17, 77, 100, 150, 333, 1000). Chip q's y rows land at D rows [q·T, (q+1)·T) of every image; with T % 32 != 0 that block starts at row offset s = (q·T) mod 32 inside a tile, so (a) every destination tile of chip q is assembled from two y tile rows shifted by s rows, and (b) the first / last D tile row of each block is shared with chips q−1 / q+1 (T = 1: all G chips share one tile row). The own block's local write needs the same shift.
 
@@ -83,6 +83,8 @@
 - Everything else (worker set, ports, fence, arrival counts, staging, wave polling) is Refinement 2's R4 path unchanged; the chunk walk changes its unit from a D page to a (D page, source rows) pair.
 
 **Done when**: every h_non_aligned feed cell passes on the 1x4 mesh (bit-exact feed output); the Refinement 2 feed / norm gates stay green.
+
+**Result (2026-11-14)**: EXCLUSIONS is empty. The generalized walk (`mhc_post_feed_walk.hpp`) visits alone D tile rows as bank-run page chunks (the port reader assembles shifted tiles from ≤ 2 y tiles with ≤ 8 face-row NoC copies in L1) and shared D tile rows as compact per-contributor pieces sent to the destination's landing port (fused write + inc), which merges and writes each shared tile — one chip, one core per D tile. Own block staged + placed by the slot-0 ports (local writes). Golden: 28/28 h_non_aligned feed cells; 120/120 other test_feed.py tests (100 aligned cells, 4 loose, 16 feed gates). Probe_012: links 1 / 2, 2–3 images, T = 1, 5, 77, 150, 1000, repeated calls — all bit-exact.
 
 ### [ ] Refinement 3 — Feed OVERLAP: hide the exchange behind the local work (perf-flagged feed case)
 

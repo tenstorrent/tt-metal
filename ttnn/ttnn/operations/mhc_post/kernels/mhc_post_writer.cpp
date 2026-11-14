@@ -23,7 +23,9 @@
 //   every group member's cb_rstd_land, then incs their SEM_RSTD_COUNT. y is written after the root work (the
 //   compute normalizes every row once its rstd landed).
 // feed (R4): y tile (t, c) of column block p = c / Cb goes to the feed output D at rows [me*T, ..) of block me
-//   when p == me (written locally), else to y_output (staging, at its natural page) for the ports; after each of my
+//   when p == me (written locally; the host passes me = G when T % 32 != 0, where my rows do not start on a D tile
+//   boundary and the ports place my own block too), else to y_output (staging, at its natural page) for the
+//   ports; after each of my
 //   rows (behind a write barrier) my own SEM_FEED_ROWS counts it (the ports poll every worker's count: a shared
 //   counter could not tell "every worker published row i" from "fast workers published rows i and i+1").
 

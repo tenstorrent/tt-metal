@@ -178,3 +178,42 @@
     not counted against the workers').
 - Tests added: tests/ttnn/unit_tests/operations/mhc_post/test_mhc_post_perf.py `test_mhc_post_perf_{norm,nonorm}_t{160,1280}`
   (parameter-free collapse ± norm probes for `--profile`); probes/probe_006..011 (feed debugging, kept).
+
+## Refinement 2b — feed for T % 32 != 0 (sub-tile row placement in the peers' feed output)
+- Date: 2026-11-14
+- What was done:
+  - EXCLUSIONS: removed `{feed: on, alignment: h_non_aligned}` (now empty).
+  - **Walk** (`kernels/mhc_post_feed_walk.hpp`, shared by port reader, port sender and the landing merge): per
+    destination and wave, chip me's D tile rows (D has ceil(G·T/32) tile rows an image) split into
+    - *alone* rows (every valid row is mine): maximal runs of one wave → bank-run chunks of whole D pages (the
+      Refinement 2 chunking, unchanged);
+    - *shared* rows (rows of ≥ 2 chips; ≤ G−1 an image, the same rows on every chip): my rows [a, b) of all Cb
+      columns, `run_pages` columns a piece, in a compact layout (column c of contributor block [a, b) at
+      `a·64·Cb + c·(b−a)·64`, faces 0/1 top rows then faces 2/3 bottom rows).
+    An item's wave is the latest wave of the y tile rows it reads (a shifted D tile spans two, possibly in two
+    row groups). T % 32 == 0 reduces to the old walk (no shared rows, shift 0).
+  - **Port reader**: shift-0 pages read straight into the ring slot as before; shifted pages / pieces read their
+    ≤ 2 y tiles into `cb_feed_yscr`, then copy face rows into place with local NoC reads in runs that stay inside a
+    16-row face half (≤ 8 copies a tile).
+  - **Port sender**: pieces go to the destination's landing port (port (0,0), same core on every chip) as fused
+    write + arrival inc; local destination (hops 0) = my own block, written with local NoC writes, my own pieces
+    counted with one local inc. The landing port's drain waits for its streams plus every piece (count derived
+    from the geometry), merges each shared tile from its contributors' blocks (drained ring = scratch), writes it to
+    its D. No D tile is written by two chips.
+  - **Workers**: with T % 32 != 0 the host passes own block = G (none), so the own block is staged in y_output like
+    the remote ones and the slot-0 ports place it (no writer code change beyond the comment).
+  - Reused: the R4 worker set, ports, ready / arrival fences, staging, wave polling, bank-run chunking, the D
+    accessor. Added: shared-row landing CB + reader scratch CB, the landing merge, the local-destination path.
+- Accuracy achieved: feed output bit-exact (the all-to-all of the no-feed call's y) on all 4 chips; X', stats, hc
+  the same bits as the no-feed call.
+- Golden test progress: h_non_aligned feed cells 28/28 (T 1, 17, 77, 100, 150, 333, 1000); rest of test_feed.py
+  120/120 (100 tile-aligned cells, 4 loose feed cases, 16 feed gates incl. repeated calls / FABRIC_2D / links 1-2).
+  probes/probe_012.py: links 1 and 2, 2-3 images (T 77, 5, 1), T 150 / 1000, two calls each — all bit-exact.
+- Issues encountered: none on device (first run green). Cost (not measured — perf_measure.py still cannot trace
+  the call): for chips q ≥ 1 the ports read 2 y tiles per shifted D tile (2× staging read), the own block is staged
+  (+1/G of y written and read), plus ≤ 8 L1 face-row copies a tile on the port reader; shared rows are ≤ G−1 a
+  image and merged once. R5 (feed-L1-direct, Refinement 3) removes the staging reads; a worker-side shift (workers
+  hold consecutive rows) would remove the 2× read.
+  Size limit: the landing holds nimg · nsh · Cb tiles; above `FEED_LAND_BUDGET` (768 KiB; largest golden 336 KiB)
+  the host refuses with a ValueError.
+- Tests added: tests/ttnn/unit_tests/operations/mhc_post/probes/probe_012.py (non-aligned feed matrix on the mesh).
