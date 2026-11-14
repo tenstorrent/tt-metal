@@ -25,7 +25,7 @@ void bind_rotary_embedding(nb::module_& mod) {
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
-            cod_cache (ttnn.Tensor): the Cosine Cache tensor.
+            cos_cache (ttnn.Tensor): the Cosine Cache tensor.
             sin_cache (ttnn.Tensor): the Sine Cache tensor.
             token_index (int, optional): Defaults to `None`.
 

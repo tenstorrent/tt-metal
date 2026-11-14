@@ -76,7 +76,7 @@ void bind_full(nb::module_& mod) {
             layout (ttnn.Layout, optional): The layout of the tensor. Defaults to `None`.
             device (ttnn.Device | ttnn.MeshDevice, optional): The device on which the tensor will be allocated. Defaults to `None`.
             memory_config (ttnn.MemoryConfig, optional): The memory configuration of the tensor. Defaults to `None`.
-            output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
+            optional_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: A filled tensor of specified shape and value.
@@ -258,7 +258,7 @@ void bind_full_like(nb::module_& mod) {
             layout (ttnn.Layout, optional): The layout of the tensor. Defaults to the input tensor's layout.
             device (ttnn.Device | ttnn.MeshDevice, optional): The device on which the tensor will be allocated. Defaults to the input tensor's device.
             memory_config (ttnn.MemoryConfig, optional): The memory configuration of the tensor. Defaults to the input tensor's memory config.
-            output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
+            optional_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: A filled tensor.
@@ -323,7 +323,7 @@ void bind_zeros_like(nb::module_& mod) {
             layout (ttnn.Layout, optional): The layout of the tensor. Defaults to the input tensor's layout.
             device (ttnn.Device | ttnn.MeshDevice, optional): The device on which the tensor will be allocated. Defaults to the input tensor's device.
             memory_config (ttnn.MemoryConfig, optional): The memory configuration of the tensor. Defaults to the input tensor's memory config.
-            output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
+            optional_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: A tensor filled with 0.0.
@@ -377,7 +377,7 @@ void bind_ones_like(nb::module_& mod) {
             layout (ttnn.Layout, optional): The layout of the tensor. Defaults to the input tensor's layout.
             device (ttnn.Device | ttnn.MeshDevice, optional): The device on which the tensor will be allocated. Defaults to the input tensor's device.
             memory_config (ttnn.MemoryConfig, optional): The memory configuration of the tensor. Defaults to the input tensor's memory config.
-            output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
+            optional_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: A tensor filled with 1.0.

@@ -21,7 +21,7 @@ void bind_attention_softmax(nb::module_& mod) {
 
 
         Args:
-            input_tensor (ttnn.Tensor): the input tensor.
+            tensor (ttnn.Tensor): the input tensor.
 
 
         Keyword args:
@@ -55,7 +55,7 @@ void bind_attention_softmax(nb::module_& mod) {
 
 
         Args:
-            input_tensor (ttnn.Tensor): the input tensor.
+            tensor (ttnn.Tensor): the input tensor.
 
 
         Keyword args:

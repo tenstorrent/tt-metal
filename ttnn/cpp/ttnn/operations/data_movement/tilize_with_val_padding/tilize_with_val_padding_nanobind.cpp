@@ -77,7 +77,7 @@ void bind_tilize_with_zero_padding(nb::module_& mod) {
 
             Keyword Args:
                 * :attr:`memory_config`: Memory Config of the output tensor.
-                * :attr:`dtype`: Data type of the output tensor.
+                * :attr:`output_dtype`: Data type of the output tensor.
                 * :attr:`use_multicore`: Whether to use multicore.
         )doc";
 

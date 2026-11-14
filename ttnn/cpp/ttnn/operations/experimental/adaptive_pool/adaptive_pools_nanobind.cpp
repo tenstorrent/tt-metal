@@ -39,7 +39,6 @@ void bind_adaptive_avg_pool2d_operation(nb::module_& mod) {
             compute_kernel_config (DeviceComputeKernelConfig, optional): the device compute kernel configuration. Defaults to `None`.
             deallocate_input (bool, optional): whether to deallocate the input tensor. Defaults to `False`.
             reallocate_output (bool, optional): whether to reallocate the output tensor. Defaults to `True`.
-            queue_id (int, optional): the queue id to use for the operation. Defaults to `0`.
 
         Returns:
             ttnn.Tensor: the experimental adaptive average pooled output tensor.
@@ -103,7 +102,6 @@ void bind_adaptive_max_pool2d_operation(nb::module_& mod) {
             applied_shard_scheme (ttnn.TensorMemoryLayout, optional): the sharding scheme to apply to a non-pre-sharded input tensor. Defaults to `None`.
             deallocate_input (bool, optional): whether to deallocate the input tensor. Defaults to `False`.
             reallocate_output (bool, optional): whether to reallocate the output tensor. Defaults to `True`.
-            queue_id (int, optional): the queue id to use for the operation. Defaults to `0`.
 
         Returns:
             ttnn.Tensor: the experimental adaptive max pooled output tensor.
