@@ -3,8 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """FLUX 3 Klein's ring joint SDPA at every per-device length of its chunk tables (Blackhole Galaxy, SP8 x TP4), on the
-streaming compute path with fp32 dest. Checks: finite and deterministic output, error and PCC against an fp64 reference
-on sampled query rows with the K tail masked at logical_n."""
+streaming compute path with fp32 dest, on the 12 x 9 grid and with the CCL row's cores added (116 cores). Checks: finite
+and deterministic output, error and PCC against an fp64 reference on sampled query rows with the K tail masked at
+logical_n, and byte-identical outputs on both grids."""
 
 from __future__ import annotations
 
@@ -14,7 +15,10 @@ from loguru import logger
 
 import ttnn
 
-from ....models.transformers.flux3_klein.transformer_block_flux3_klein import RING_SDPA_CHUNKS_BY_LOCAL_ROWS
+from ....models.transformers.flux3_klein.transformer_block_flux3_klein import (
+    RING_SDPA_CCL_ROW_START_X,
+    RING_SDPA_CHUNKS_BY_LOCAL_ROWS,
+)
 from ....parallel.manager import CCLManager
 from ....utils.tensor import bf16_tensor
 from ....utils.test import ring_params_8k
@@ -64,13 +68,14 @@ def test_ring_sdpa_flux3_klein(*, mesh_device: ttnn.MeshDevice, rows: int) -> No
         mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=True
     )
 
-    def call() -> torch.Tensor:
+    def call(ccl_row_start_x: int | None) -> torch.Tensor:
         program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=grid,
             q_chunk_size=q_chunk,
             k_chunk_size=k_chunk,
             exp_approx_mode=True,
             streaming_fp32_dest=True,
+            ccl_row_sdpa_start_x=ccl_row_start_x,
         )
         out = ttnn.transformer.ring_joint_scaled_dot_product_attention(
             q,
@@ -102,12 +107,16 @@ def test_ring_sdpa_flux3_klein(*, mesh_device: ttnn.MeshDevice, rows: int) -> No
 
     rows_idx = torch.linspace(0, rows * SP - 1, SAMPLE_ROWS).long()
     ref = _reference(host[0], host[1], host[2], logical_n, rows_idx)
-    first, second = call(), call()
-    assert torch.isfinite(first.float()).all(), "non-finite attention output"
-    assert torch.equal(first.view(torch.int16), second.view(torch.int16)), "two identical calls differ"
-    got = first[0][:, rows_idx].double()
-    rel = ((got - ref).norm() / ref.norm()).item()
-    pcc = torch.corrcoef(torch.stack([got.flatten(), ref.flatten()]))[0, 1].item()
-    logger.info(f"rows {rows} chunks ({q_chunk}, {k_chunk}): rel err {rel:.3e}, PCC {pcc:.6f}")
-    assert rel <= MAX_REL_ERR, f"rel err {rel:.3e} > {MAX_REL_ERR}"
-    assert pcc >= MIN_PCC, f"PCC {pcc:.6f} < {MIN_PCC}"
+    outputs = {}
+    for label, start_x in (("108", None), ("116", RING_SDPA_CCL_ROW_START_X)):
+        first, second = call(start_x), call(start_x)
+        assert torch.isfinite(first.float()).all(), f"{label}: non-finite attention output"
+        assert torch.equal(first.view(torch.int16), second.view(torch.int16)), f"{label}: two identical calls differ"
+        got = first[0][:, rows_idx].double()
+        rel = ((got - ref).norm() / ref.norm()).item()
+        pcc = torch.corrcoef(torch.stack([got.flatten(), ref.flatten()]))[0, 1].item()
+        logger.info(f"rows {rows} chunks ({q_chunk}, {k_chunk}) {label} cores: rel err {rel:.3e}, PCC {pcc:.6f}")
+        assert rel <= MAX_REL_ERR, f"{label}: rel err {rel:.3e} > {MAX_REL_ERR}"
+        assert pcc >= MIN_PCC, f"{label}: PCC {pcc:.6f} < {MIN_PCC}"
+        outputs[label] = first
+    assert torch.equal(outputs["108"].view(torch.int16), outputs["116"].view(torch.int16)), "116 != 108 cores"
