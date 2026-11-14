@@ -100,12 +100,7 @@ void PrefetchKernel::GenerateStaticConfigs() {
 
     if (static_config_.is_h_variant.value() && this->static_config_.is_d_variant.value()) {
         uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
-        uint32_t cq_size = device_->sysmem_manager().get_cq_size();
-        uint32_t command_queue_start_addr =
-            device_->sysmem_manager().is_dram_backed()
-                ? get_absolute_cq_offset(
-                      channel, cq_id_, cq_size, device_->sysmem_manager().get_dram_region_base_addr())
-                : get_absolute_cq_offset(channel, cq_id_, cq_size);
+        uint32_t command_queue_start_addr = device_->sysmem_manager().backing().cq_base_addr(cq_id_, channel);
         uint32_t issue_queue_start_addr = command_queue_start_addr + cq_start;
         uint32_t issue_queue_size = device_->sysmem_manager().get_issue_queue_size(cq_id_);
 
@@ -158,12 +153,7 @@ void PrefetchKernel::GenerateStaticConfigs() {
         // PREFETCH_H services a remote chip, and so has a different channel
         channel = descriptor_.cluster().get_assigned_channel_for_device(servicing_device_id_);
         uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
-        uint32_t cq_size = device_->sysmem_manager().get_cq_size();
-        uint32_t command_queue_start_addr =
-            device_->sysmem_manager().is_dram_backed()
-                ? get_absolute_cq_offset(
-                      channel, cq_id_, cq_size, device_->sysmem_manager().get_dram_region_base_addr())
-                : get_absolute_cq_offset(channel, cq_id_, cq_size);
+        uint32_t command_queue_start_addr = device_->sysmem_manager().backing().cq_base_addr(cq_id_, channel);
         uint32_t issue_queue_start_addr = command_queue_start_addr + cq_start;
         uint32_t issue_queue_size = device_->sysmem_manager().get_issue_queue_size(cq_id_);
 
@@ -539,7 +529,7 @@ void PrefetchKernel::CreateKernel() {
     }
 
     if (device_->sysmem_manager().is_dram_backed()) {
-        defines["DRAM_BACKED_CQ_BANK_ID"] = std::to_string(device_->sysmem_manager().get_dram_region_bank_id());
+        defines["DRAM_BACKED_CQ_BANK_ID"] = std::to_string(CqBacking::kDramBankId);
     }
 
     // Runtime args offsets
