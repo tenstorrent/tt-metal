@@ -104,7 +104,7 @@ def run_mobilenetv2_imagenet_demo(
         input_tensors_all = []
         input_labels_all = []
         for iter in tqdm(range(iterations), desc="Preparing images"):
-            inputs, labels = get_batch(data_loader, resolution[0])
+            inputs, labels = get_batch(data_loader, resolution[0], resize_size=256)
             ttnn_input = torch.permute(inputs, (0, 2, 3, 1))
             ttnn_input = torch.nn.functional.pad(ttnn_input, (0, 16 - ttnn_input.shape[-1]), value=0)
             ttnn_input = ttnn.from_torch(
