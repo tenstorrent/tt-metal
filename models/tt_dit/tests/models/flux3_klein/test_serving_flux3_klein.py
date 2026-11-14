@@ -11,11 +11,8 @@ The prompt length and the reference's size within its bucket reach ring SDPA onl
 writes per request, so every request runs the programs warmup compiled for its bucket. A reference of a new shape still
 compiles the VAE encoder, so the test encodes each reference once before its requests and asserts no new program-cache
 entries around every request.
-
-Env: FLUX3_KLEIN_SERVE_SIZES (default 1024, comma-separated), FLUX3_KLEIN_SERVE_OUT (image dir).
 """
 
-import os
 from pathlib import Path
 
 import numpy as np
@@ -28,6 +25,7 @@ import ttnn
 from ....pipelines.flux3_klein.packing import DOWNSAMPLING_RATIO, MAX_TEXT_LENGTH
 from ....pipelines.flux3_klein.pipeline_flux3_klein import (
     REFERENCE_TOKEN_BUCKETS,
+    SIZES,
     WARMUP_PROMPT,
     Flux3KleinPipeline,
     Flux3KleinRequest,
@@ -98,9 +96,9 @@ def _reference(side: int) -> Image.Image:
 @pytest.mark.parametrize("device_params", [{**ring_params_8k, "l1_small_size": 65536}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
 @pytest.mark.parametrize("model", ["distilled"])
-def test_serving(*, mesh_device: ttnn.MeshDevice, model: str) -> None:
-    sizes = tuple(int(s) for s in os.environ.get("FLUX3_KLEIN_SERVE_SIZES", "1024").split(","))
-    out = Path(os.environ.get("FLUX3_KLEIN_SERVE_OUT", "flux3_klein_serving"))
+@pytest.mark.parametrize("sizes", [(1024,), SIZES], ids=["1024", "all_sizes"])
+def test_serving(*, mesh_device: ttnn.MeshDevice, model: str, sizes: tuple[int, ...]) -> None:
+    out = Path("flux3_klein_serving")
     out.mkdir(parents=True, exist_ok=True)
 
     pipeline = Flux3KleinPipeline.create(mesh_device, models=(model,))
