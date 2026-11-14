@@ -7,6 +7,7 @@ import torch
 
 import ttnn
 from models.demos.minimax_m3.tt.residual import activation_mapper
+from models.demos.minimax_m3.utils.profiler_utils import COARSE, zone
 
 
 class MediaInjectionBuffers:
@@ -144,7 +145,8 @@ class MediaPartials:
             self._is_img_rows,
         )
         ttnn.deallocate(self.is_img)
-        self.is_img = ttnn.to_layout(self._is_img_rows, ttnn.TILE_LAYOUT)
+        with zone("media_tilize", COARSE):
+            self.is_img = ttnn.to_layout(self._is_img_rows, ttnn.TILE_LAYOUT)
 
 
 def inject_media_embeddings(
