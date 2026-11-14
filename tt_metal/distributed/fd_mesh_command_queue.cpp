@@ -404,7 +404,7 @@ void FDMeshCommandQueue::clear_expected_num_workers_completed() {
 void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) {
     ZoneScopedN("EnqueueProgram");
     auto lock = lock_api_function_();
-    in_use_ = true;
+    this->mark_in_use();
     // The active sub-device manager id doubles as the key for per-program cached command sequences.
     const uint64_t active_sub_device_manager_id = *mesh_device_->get_active_sub_device_manager_id();
     const auto& sub_device_ids = mesh_workload.impl().determine_sub_device_ids(mesh_device_);
@@ -610,7 +610,7 @@ void FDMeshCommandQueue::enqueue_write_shard_to_core(
         return;
     }
 
-    in_use_ = true;
+    this->mark_in_use();
     TT_FATAL(!trace_id_.has_value(), "Writes are not supported during trace capture.");
     ScopedTransferStats transfer_stats(
         *this,
@@ -656,7 +656,7 @@ void FDMeshCommandQueue::enqueue_write_dram_core_counter(
         return;
     }
 
-    in_use_ = true;
+    this->mark_in_use();
     TT_FATAL(!trace_id_.has_value(), "Writes are not supported during trace capture.");
 
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
@@ -704,7 +704,7 @@ void FDMeshCommandQueue::enqueue_read_shard_from_core(
         return;
     }
 
-    in_use_ = true;
+    this->mark_in_use();
     TT_FATAL(!trace_id_.has_value(), "Reads are not supported during trace capture.");
     ScopedTransferStats transfer_stats(
         *this,
@@ -886,7 +886,7 @@ bool FDMeshCommandQueue::write_shard_to_device(
     }
 #endif
 
-    in_use_ = true;
+    this->mark_in_use();
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
     return buffer_dispatch::write_to_device_buffer(
         src,
@@ -915,7 +915,7 @@ void FDMeshCommandQueue::read_shard_from_device(
         return;
     }
 
-    in_use_ = true;
+    this->mark_in_use();
     TT_FATAL(!trace_id_.has_value(), "Reads are not supported during trace capture.");
 
     auto* device_buffer = buffer.get_device_buffer(device_coord);
@@ -1014,7 +1014,7 @@ MeshEvent FDMeshCommandQueue::enqueue_record_event_helper(
         return MeshEvent(0, *this, device_range.value_or(MeshCoordinateRange(mesh_device_->shape())));
     }
 
-    in_use_ = true;
+    this->mark_in_use();
     TT_FATAL(!trace_id_.has_value(), "Event Synchronization is not supported during trace capture.");
 
     auto& sysmem_manager = this->reference_sysmem_manager();
@@ -1091,7 +1091,7 @@ MeshEvent FDMeshCommandQueue::enqueue_record_event_to_host(
 
 void FDMeshCommandQueue::enqueue_wait_for_event(const MeshEvent& sync_event) {
     auto lock = lock_api_function_();
-    in_use_ = true;
+    this->mark_in_use();
     TT_FATAL(!trace_id_.has_value(), "Event Synchronization is not supported during trace capture.");
     for_each_local(mesh_device_, sync_event.impl().device_range(), [&](const auto& coord) {
         event_dispatch::issue_wait_for_event_commands(
@@ -1277,7 +1277,7 @@ void FDMeshCommandQueue::reset_worker_state(
     }
     cq_shared_state_->sub_device_cq_owner.clear();
     cq_shared_state_->sub_device_cq_owner.resize(num_sub_devices);
-    in_use_ = true;
+    this->mark_in_use();
     const auto devices = mesh_device_->impl().get_devices();
     auto cached =
         std::find_if(sub_device_setup_commands_.begin(), sub_device_setup_commands_.end(), [&](const auto& entry) {
@@ -1407,7 +1407,7 @@ void FDMeshCommandQueue::write_go_signal_sequences_to_unused_sub_grids(
 
 void FDMeshCommandQueue::enqueue_trace(const MeshTraceId& trace_id, bool blocking) {
     auto lock = lock_api_function_();
-    in_use_ = true;
+    this->mark_in_use();
     auto trace_inst = mesh_device_->get_mesh_trace(trace_id);
     submit_replay_buffer(trace_inst->desc->descriptors, trace_inst->desc->sub_device_ids, *trace_inst->mesh_buffer);
     if (blocking) {
@@ -1427,10 +1427,11 @@ void FDMeshCommandQueue::enqueue_command_list(
     TT_FATAL(
         mesh_device_->get_active_sub_device_manager_id() == sub_device_manager_id,
         "The active sub-device manager changed after the command list was built");
+    // Checked before before_submit queues anything, so a list rejected here sends nothing.
+    this->mark_in_use();
     if (before_submit) {
         before_submit();
     }
-    in_use_ = true;
     submit_replay_buffer(worker_descriptors, sub_device_ids, buffer);
     if (blocking) {
         this->finish_nolock();
@@ -1477,7 +1478,7 @@ void FDMeshCommandQueue::enqueue_command_list_patch(
     };
     std::vector<std::optional<BankDestination>> bank_destinations;
     std::vector<std::reference_wrapper<const MeshBufferPatch>> device_patches;
-    in_use_ = true;
+    this->mark_in_use();
     for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
         if (!mesh_device_->impl().is_local(coord)) {
             continue;
@@ -1912,6 +1913,14 @@ std::pair<bool, size_t> FDMeshCommandQueue::query_prefetcher_cache(uint64_t work
     return std::make_pair(result.value().is_cached, result.value().offset * this->prefetcher_dram_aligned_block_size_);
 }
 
+void FDMeshCommandQueue::mark_in_use() {
+    // An idle queue becoming busy takes over the dispatch state of this mesh's devices.
+    if (!in_use_.load(std::memory_order_acquire)) {
+        mesh_device_->impl().validate_no_overlapping_cq_owner();
+        in_use_ = true;
+    }
+}
+
 void FDMeshCommandQueue::reset_prefetcher_cache_manager() { prefetcher_cache_manager_->reset(); }
 
 void FDMeshCommandQueue::invalidate_prefetcher_cache_after_pinned_write() { this->reset_prefetcher_cache_manager(); }
@@ -1968,6 +1977,8 @@ void FDMeshCommandQueue::finish_and_reset_in_use() {
                 id_, is_reference_cq ? UINT32_MAX : 0, UINT32_MAX);
         }
         finish_nolock({});
+        // Another mesh may now use these devices and overwrite the prefetcher's ring, so forget what it caches.
+        this->reset_prefetcher_cache_manager();
 
         in_use_ = false;
     }
