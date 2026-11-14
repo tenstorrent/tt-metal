@@ -4296,13 +4296,57 @@ tasks:
       top5_overlap: '>= limit'
       chunk_wall_ms: '> 0'
       device_ms_total: '> 0'
+- id: P.63b
+  title: 'True mesh-wide programs for the fused head and the combine (chip-lookup tables, DS41-225 pattern): no per-chip runtime-arg patching at all'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - P.63
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
+  - models/demos/common/bringup/testing
+  - models/demos/common/bringup/tests
+  - ttnn/ttnn/bringup
+  brief:
+    details: 'OWNER 2026-11-14: "if it is a single program per mesh, try it." P.63 (DS41-263, BREADCRUMBS P.63) cut the head/combine per-call host cost by caching
+      argument slots (combine 352 -> ~248 us a call, head 342 -> 301): ~-6 ms host a chunk. What remains: ~150 us a MoE layer of per-chip patching (combine''s routed-expert
+      address args, 766 a chip; head 3.6 us x 32), plus ~220 us an op of Metal sending the program to 32 devices (a mesh program keeps those copies). Build TRUE mesh-wide
+      programs for the fused head and the combine: every chip gets identical runtime args; per-chip differences (addresses, neighbours, fabric channels, slot positions)
+      come from a device-side lookup table indexed by the chip''s own position (the DS41-225 pattern, already used by P.62''s mesh planner: find it). Kernels in both
+      fabric ops change; behind fork options + model setting MESH_PROGRAMS2 legacy|on. Bit-identical outputs. MEASURE: host us a call for both ops, host/device/wall
+      per chunk on real novel AND code chunks 1..10 (test_moe_prev_replicas.py) and at 51,200, off vs on. Expected: ~-6 ms host a chunk more. If the patching cannot
+      go without a per-call write, say why with numbers. No fork suites on the 8x4; CHANGELOG entries. SAFETY: a hang or reset need: STOP and report, never reset.
+      Report plainly, short, every term defined.'
+  ab:
+    env:
+      MESH_PROGRAMS2: legacy
+      ENGRAM_TABLE: resident
+    change:
+      MESH_PROGRAMS2: 'on'
+      ENGRAM_TABLE: resident
+  ab_positions:
+  - 51200
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py && scripts/run_safe_pytest.sh --run-all
+      --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_moe_prev_replicas.py && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile
+      models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      chunk_wall_ms: '> 0'
+      device_ms_total: '> 0'
 - id: P.64
   title: 'Fewer attention-side launches: fuse the small ops (slices, rope, slice_write, layout casts) around attention into fewer programs'
   step: perf
   role: perf
   device: true
   deps:
-  - P.63
+  - P.63b
   paths:
   - models/demos/deepseek_v41_flash_d_p/tt
   - models/demos/deepseek_v41_flash_d_p/tests/
