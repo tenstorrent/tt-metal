@@ -10,7 +10,7 @@
 #include <utility>
 
 #include "../access_types.h"
-// TODO(njokovic) issue #58443: Move instruction-buffer ownership to HAL and remove this dependency.
+// TODO: #58443 Move instruction-buffer ownership to HAL and remove this dependency.
 #include "ckernel.h" // TT_* emission uses ckernel::instrn_buffer.
 #include "llk_assert.h"
 #include "state_bank.h"
