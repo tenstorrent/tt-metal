@@ -17,6 +17,11 @@ path = pipe.generate_r2v("The bound subject walks through a garden", seed=11,
                          first_frame="previous-last.png", output_path="continuation.mp4")
 ```
 
+Traced construction warms only the bound reference stages, including the native
+cold-start kernel-manifest pass when needed. The subsequent explicit warmup uses
+the same reference buffers; eager construction leaves warmup to that call. The
+constructor keeps the fixture geometry, FPS and requested tracing settings.
+
 Resolve every null, set `resolved` to true, and retain the manifest alongside the
 source/build identity and outputs. Paths resolve relative to the manifest. All
 five split model files and the reference still must already exist locally; this

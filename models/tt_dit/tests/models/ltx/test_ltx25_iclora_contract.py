@@ -120,6 +120,7 @@ def test_fused_conv_warmup_and_r2v_wiring(contract):
         assert f[name] == c.fixture["assets"][name]["path"]
     assert f["diffusion_decoder"] is False
     assert f["run_warmup"] is False
+    assert f["ref_num_frames"] == 9
     assert f["use_ancestral_sampler"] is False
     assert f["fps"] == 24
     assert "extra_transformer_variants" not in f
@@ -342,16 +343,20 @@ def test_native_factory_and_imported_schedule_drift(contract, monkeypatch):
         KEYFRAME_S1_STRENGTH=0.5,
         KEYFRAME_S1_STRENGTH_COARSE=0.25,
     )
-    factory = object()
+    class NativeFactory:
+        @classmethod
+        def create_pipeline(cls):
+            return cls
+
     package.pipeline_ltx_distilled = distilled
     monkeypatch.setattr(c.module, "__package__", "synthetic_ltx")
     monkeypatch.setitem(sys.modules, "synthetic_ltx", package)
     monkeypatch.setitem(
         sys.modules,
         "synthetic_ltx.pipeline_ltx25_distilled",
-        SimpleNamespace(LTX25DistilledPipeline=SimpleNamespace(create_pipeline=factory)),
+        SimpleNamespace(LTX25DistilledPipeline=NativeFactory),
     )
-    assert c.raw_native_factory() is factory
+    assert issubclass(c.raw_native_factory()(), NativeFactory)
     for field, wrong in [
         ("DISTILLED_SIGMA_VALUES", [1, 0]),
         ("STAGE_2_DISTILLED_SIGMA_VALUES", [1, 0]),

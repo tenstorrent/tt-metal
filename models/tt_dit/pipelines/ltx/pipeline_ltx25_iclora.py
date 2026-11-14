@@ -130,7 +130,19 @@ def _native_factory():
         distilled.KEYFRAME_S1_STRENGTH == 0.5 and distilled.KEYFRAME_S1_STRENGTH_COARSE == 0.25,
         "imported keyframe strengths differ",
     )
-    return LTX25DistilledPipeline.create_pipeline
+    class ReferencePipeline(LTX25DistilledPipeline):
+        def __init__(self, *args, ref_num_frames, **kwargs):
+            # The base constructor forces warmup when traced, including its cold
+            # kernel-manifest pass. Bind the reference recipe before either pass
+            # can allocate or capture the default base trace families.
+            self._iclora_ref_num_frames = ref_num_frames
+            super().__init__(*args, **kwargs)
+
+        def warmup_buffers(self, *args, **kwargs):
+            kwargs.update(ref_num_frames=self._iclora_ref_num_frames, stages=("s1_ref", "s2_ref"))
+            return super().warmup_buffers(*args, **kwargs)
+
+    return ReferencePipeline.create_pipeline
 
 
 def _unique_object(pairs):
@@ -302,6 +314,7 @@ class LTX25ICLoRAPipeline:
             diffusion_decoder=False,
             use_ancestral_sampler=False,
             run_warmup=False,
+            ref_num_frames=g["ref_frames"],
             mode="av",
             num_frames=g["num_frames"],
             height=g["height"],
