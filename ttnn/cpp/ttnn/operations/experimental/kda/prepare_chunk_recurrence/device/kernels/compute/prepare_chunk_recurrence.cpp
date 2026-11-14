@@ -8,6 +8,7 @@
 //   qd=q*exp(G), kl=k*exp(G), kr=k*exp(-G)
 //   Akk=strictly_lower((beta*kl)@kr^T), Aqk=tril(qd@kr^T)
 //   kd=beta*kl, k_dec_t=(kr*exp(G_last))^T, dl=expm1(G_last)=exp(G_last)-1 (complement-form decay).
+// G-a = centered_mask@g with a = G_last/2, formed and exponentiated in FP32 DST.
 // dl is logically [K,1]: only its column 0 is defined, and consumers broadcast that column.
 // dl is computed in FP32, truncated to TF32 by the row-to-column transpose (source A), and stored in the output
 // format the caller selects; the model stores it in BF16. BF16 rounding is relative to |dl|, so for exp(G_last) < 0.5
@@ -329,8 +330,10 @@ KDA_PREP_HELPER void multiply_by_column_then(DFB0& a, DFB1& col, DFB2& b, DFB3& 
     }
 }
 
-// out_i = (a_i[1,Kt] @ b_i[1,Kt]^T) * mask, one tile per item: each product stays in DST and the mask multiplies it
-// as srcA (FP32). A destination acquire holds up to max_dst_tiles items' products.
+// out_i = (a_i[1,Kt] @ b_i[1,Kt]^T) * mask, one tile per item: each product stays in DST and moves to SrcB, the exact
+// mask to SrcA (at HiFi4 the multiplier takes one more mantissa bit of SrcB than of SrcA, per the fidelity-phase
+// model in tests/ttnn/nightly/unit_tests/operations/matmul/numeric_tolerances.py, so the FP32 data takes the wider
+// input). A destination acquire holds up to max_dst_tiles items' products.
 template <uint32_t Kt, typename DFB0, typename DFB1, typename DFB2, typename DFB3>
 KDA_PREP_HELPER void matmul_transposed_masked(DFB0& a, DFB1& b, DFB2& mask, DFB3& o, uint32_t items) {
     const uint32_t a_id = a.get_id();
@@ -352,9 +355,9 @@ KDA_PREP_HELPER void matmul_transposed_masked(DFB0& a, DFB1& b, DFB2& mask, DFB3
             }
         }
         reconfig_tracked(mask_id, mask_id);
-        mul_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(mask_id);
+        mul_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(mask_id);
         for (uint32_t item = 0; item < count; ++item) {
-            mul_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(mask_id, 0, item);
+            mul_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(mask_id, 0, item);
         }
         tile_regs_commit();
         tile_regs_wait();
@@ -424,14 +427,15 @@ KDA_ITEMS_HELPER void matmul_items(DFB0& a, DFB1& b, DFB2& o, uint32_t n, uint32
 //            (I-N)^-1 = (I+M3)(I+M3^2)B.
 // Eight matmuls in total, two fewer than a single 8-row Horner series over the same input.
 // Each block mask holds -1 on its level's strictly lower entries, so N1, L2 and L3 are each one exact product with
-// the raw Akk. Each stage runs over all n independent items, item i's tile at the front of its buffers + i.
+// the raw Akk; the mask is the first operand (SrcA) and the FP32 Akk the second (SrcB; see matmul_transposed_masked).
+// Each stage runs over all n independent items, item i's tile at the front of its buffers + i.
 template <typename DFB0, typename DFB1, typename DFB2, typename DFB3, typename DFB4, typename DFB5, typename DFB6>
 __attribute__((noinline)) void invert_items(
     DFB0& akk, DFB1& identity, DFB2& block_masks, DFB3& inverse, DFB4& matrix, DFB5& total, DFB6& product, uint32_t n) {
     using Op = ElementwiseBinaryOp;
     // Two-tile acquires: each dependent stage starts on the previous one's first tiles while it packs the rest.
     constexpr uint32_t inverse_block = 2;
-    binary_items(Op::Multiply, akk, 0, false, block_masks, 0, true, matrix, n, inverse_block);  // N1
+    binary_items(Op::Multiply, block_masks, 0, true, akk, 0, false, matrix, n, inverse_block);  // N1
     binary_items(Op::Add, identity, 0, true, matrix, 0, false, total, n, inverse_block);
     for (uint32_t step = 0; step < 2; ++step) {
         matmul_items(matrix, total, product, n, inverse_block);
@@ -442,7 +446,7 @@ __attribute__((noinline)) void invert_items(
     }
     matrix.pop_front(n);  // total holds A
 
-    binary_items(Op::Multiply, akk, 0, false, block_masks, 1, true, matrix, n, inverse_block);  // L2
+    binary_items(Op::Multiply, block_masks, 1, true, akk, 0, false, matrix, n, inverse_block);  // L2
     matmul_items(total, matrix, product, n, inverse_block);                                     // M2 = A L2
     matrix.pop_front(n);
     matmul_items(product, total, matrix, n, inverse_block);  // M2 A
@@ -451,7 +455,7 @@ __attribute__((noinline)) void invert_items(
     total.pop_front(n);
     matrix.pop_front(n);
 
-    binary_items(Op::Multiply, akk, 0, false, block_masks, 2, true, product, n, inverse_block);  // L3
+    binary_items(Op::Multiply, block_masks, 2, true, akk, 0, false, product, n, inverse_block);  // L3
     // Akk is dead after extracting L3; its buffer holds I+M3 below.
     akk.pop_front(n);
     auto& identity_plus_m3 = akk;
@@ -598,50 +602,26 @@ KDA_PREP_HELPER void prepare_v_beta(DFB0& v, DFB1& beta, DFB2& v_beta, uint32_t 
     v.pop_front(items * Ct * Vt);
 }
 
-// out_i = a @ b_i - c_i for a shared one-tile a and each item's row of Nt tiles b_i: the product stays in DST and the
-// subtraction takes it as srcA (in FP32, c's format), so it never round-trips through a buffer. A row wider than one
-// DST acquire runs in column groups.
-template <uint32_t Nt, typename DFB0, typename DFB1, typename DFB2, typename DFB3>
-KDA_PREP_HELPER void matmul_row_minus(DFB0& a, DFB1& b, DFB2& c, DFB3& o, uint32_t items) {
-    constexpr uint32_t group = kda::largest_divisor_at_most(Nt, max_dst_tiles);
-    const uint32_t a_id = a.get_id();
-    const uint32_t b_id = b.get_id();
-    const uint32_t c_id = c.get_id();
-    const uint32_t o_id = o.get_id();
-    o.reserve_back(items * Nt);
-    for (uint32_t item = 0; item < items; ++item) {
-        const uint32_t base = item * Nt;
-        c.wait_front(base + Nt);
-        for (uint32_t first = base; first < base + Nt; first += group) {
-            reconfig_tracked(b_id, a_id);
-            matmul_tiles_block_init(a_id, b_id, false, group, 1, 1);
-            tile_regs_acquire();
-            matmul_tiles_block(a_id, b_id, 0, first, 0, false, group, 1, 1);
-            reconfig_tracked(c_id, c_id);
-            sub_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(c_id);
-            for (uint32_t tile = 0; tile < group; ++tile) {
-                sub_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(c_id, first + tile, tile);
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tiles(0, o_id, first, group);
-            tile_regs_release();
-        }
-        o.push_back(Nt);
-    }
-}
-
-// exp(x) into exponential and its precise reciprocal exp(-x) into inverse, from one unpack of x (both FP32-accurate),
-// and the anchor's row exponential into anchor_exponential. The anchor is row-replicated and the broadcasts read only
+// x = centered_mask @ g (the exponent G-a, one tile per item and key tile) formed in DST; exp(x) into exponential
+// and its precise reciprocal exp(-x) into inverse, both from x in DST, so x never passes through a source register.
+// The anchor's row exponential goes into anchor_exponential: the anchor is row-replicated and the broadcasts read only
 // row 0, so only the face rows holding it are computed: VectorMode::R visits faces 0 and 1, and two of a face's eight
 // SFPU iterations span its first rows, row 0 included (one leaves part of row 0 unwritten, and kd, q_decay and k_dec_t
-// come out wrong); the rest of each anchor_exponential tile is unspecified.
+// come out wrong); the rest of each anchor_exponential tile is unspecified. The anchor's exponent is copied from L1
+// through SrcA, so it is rounded to TF32 (one TF32 ulp of |G_last|/2).
 // One tile of each per destination acquire: the anchor's unpack and pack then overlap the exponential and reciprocal
 // of the neighbouring acquires instead of running as a separate stage.
-template <typename DFB0, typename DFB1, typename DFB2, typename DFB3, typename DFB4>
+template <typename DFB0, typename DFB1, typename DFB2, typename DFB3, typename DFB4, typename DFB5>
 KDA_PREP_HELPER void gate_exponentials(
-    DFB0& in, DFB1& anchor, DFB2& exponential, DFB3& inverse, DFB4& anchor_exponential, uint32_t n) {
-    const uint32_t in_id = in.get_id();
+    DFB0& centered_mask,
+    DFB1& g,
+    DFB2& anchor,
+    DFB3& exponential,
+    DFB4& inverse,
+    DFB5& anchor_exponential,
+    uint32_t n) {
+    const uint32_t mask_id = centered_mask.get_id();
+    const uint32_t g_id = g.get_id();
     const uint32_t anchor_id = anchor.get_id();
     const uint32_t exp_id = exponential.get_id();
     const uint32_t inv_id = inverse.get_id();
@@ -650,16 +630,19 @@ KDA_PREP_HELPER void gate_exponentials(
     exponential.reserve_back(n);
     inverse.reserve_back(n);
     anchor_exponential.reserve_back(n);
-    reconfig_tracked_srca(in_id);
-    copy_init(in_id);
     for (uint32_t tile = 0; tile < n; ++tile) {
-        in.wait_front(tile + 1);
+        g.wait_front(tile + 1);
         anchor.wait_front(tile + 1);
         tile_regs_acquire();
-        exp_tile_init();
-        copy_tile(in_id, tile, 0);
-        exp_tile<false, false, InputClamping::ClampToNegative>(0, VectorMode::RC);
+        // Matmul maps in0=mask->srcB and in1=g->srcA; with Ct == 1 each output tile is one mask-by-g tile product.
+        reconfig_tracked(g_id, mask_id);
+        matmul_tiles_block_init(mask_id, g_id, false, 1, 1, 1);
+        matmul_tiles_block(mask_id, g_id, 0, tile, 0, false, 1, 1, 1);
+        reconfig_tracked_srca(anchor_id);
+        copy_init(anchor_id);
         copy_tile(anchor_id, tile, 2);
+        exp_tile_init();
+        exp_tile<false, false, InputClamping::ClampToNegative>(0, VectorMode::RC);
         exp_tile<false, false, InputClamping::ClampToNegative, 2>(2, VectorMode::R);
         copy_dest_values_init();
         copy_dest_values<DST_ACCUM_MODE ? DataFormat::Float32 : DataFormat::Float16_b>(0, 1);
@@ -686,11 +669,10 @@ template <
     typename DFB3,
     typename DFB4,
     typename DFB5,
-    typename DFB6,
-    typename DFB7>
+    typename DFB6>
 KDA_PREP_HELPER void prepare_gate_factors(
     DFB0& g,
-    DFB1& prefix_sum_mask,
+    DFB1& centered_mask,
     DFB2& sum_broadcast_matrix,
     DFB3& centered_decay,
     DFB4& centered_inverse_decay,
@@ -698,8 +680,7 @@ KDA_PREP_HELPER void prepare_gate_factors(
     uint32_t items,
 
     // intermediate
-    DFB6& centered_g,
-    DFB7& anchor_g) {
+    DFB6& anchor_g) {
     const uint32_t key_tiles = items * Ct * Kt;
 
     // G = cumsum(g). Anchor the separable pairwise factors at G_last/2 so neither
@@ -709,14 +690,9 @@ KDA_PREP_HELPER void prepare_gate_factors(
     // The sum-broadcast matrix carries half the gate scale, so this is the anchor G_last/2, replicated.
     matmul_blocks<Ct, Ct, Kt, false>(sum_broadcast_matrix, /*a_shared=*/true, g, anchor_g, items);
 
-    // G - anchor, the prefix sum kept in DST.
-    matmul_row_minus<Kt>(prefix_sum_mask, g, anchor_g, centered_g, items);
+    // exp(G-anchor), exp(anchor-G) and exp(G_last/2); see gate_exponentials. The anchor stays for prepare_final_decay.
+    gate_exponentials(centered_mask, g, anchor_g, centered_decay, centered_inverse_decay, anchor_decay, key_tiles);
     g.pop_front(key_tiles);
-
-    // exp(G-anchor), its precise reciprocal exp(anchor-G) and the row exponential exp(G_last/2). The anchor has its own
-    // buffer, so centered_decay can be packed while the anchor is still read. The anchor stays for prepare_final_decay.
-    gate_exponentials(centered_g, anchor_g, centered_decay, centered_inverse_decay, anchor_decay, key_tiles);
-    centered_g.pop_front(key_tiles);
 }
 
 // dl [K,1] = expm1(G_last) = exp(G_last) - 1 as a column (complement-form decay): for long-memory channels exp(G_last)
@@ -919,7 +895,7 @@ TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint3
     DataflowBuffer tril(dfb::tril);
     DataflowBuffer block_masks(dfb::block_masks);
     DataflowBuffer ones(dfb::ones);
-    DataflowBuffer gate_tril(dfb::gate_tril);
+    DataflowBuffer gate_centered(dfb::gate_centered);
     DataflowBuffer gate_ones(dfb::gate_ones);
 
     // Outputs, drained by the writer (and v_beta, k_decay_transposed by the reader).
@@ -949,7 +925,7 @@ TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint3
 
     compute_kernel_hw_startup(dfb::q, dfb::k, dfb::workspace_0);
     // The writer generates every constant at startup, in order of first use; each is awaited before its first use.
-    gate_tril.wait_front(chunk_matrix_tiles);
+    gate_centered.wait_front(chunk_matrix_tiles);
     gate_ones.wait_front(chunk_matrix_tiles);
 
     const uint32_t inverse_items = kda_prep::count_valid(work_item_start, work_item_count, num_chunks, valid_chunks);
@@ -964,13 +940,12 @@ TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint3
         g.wait_front(key_tiles);
         prepare_gate_factors<Ct, Kt>(
             g,
-            gate_tril,
+            gate_centered,
             gate_ones,
             centered_decay,
             centered_inverse_decay,
             anchor_decay,
             items,
-            /*centered_g=*/workspace_1,
             /*anchor_g=*/workspace_2);
 
         prepare_final_decay<Ct, Kt>(/*anchor_g=*/workspace_2, final_decay, items, /*final_decay_rows=*/workspace_1);

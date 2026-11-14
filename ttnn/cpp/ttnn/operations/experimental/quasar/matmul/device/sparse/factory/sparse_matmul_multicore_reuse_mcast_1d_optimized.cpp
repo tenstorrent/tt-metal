@@ -89,19 +89,18 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
 
     const auto in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);
     const auto in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);
-    // Tiles whose size is not a multiple of the DRAM alignment (e.g. bfp8 32x16 = 544B on Blackhole's
-    // 64B alignment) are padded to it in DRAM. in0/in1 are interleaved here, so the reader copies
-    // tiles at the padded stride; the CBs must hold pages at the aligned stride and the unpacker
-    // walks tiles at the same stride. No-op when already aligned. Replaces the staging-CB workaround.
-    const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
-    const uint32_t in0_aligned_tile_size = tt::align(in0_single_tile_size, dram_alignment);
-    const uint32_t in1_aligned_tile_size = tt::align(in1_single_tile_size, dram_alignment);
+    // Interleaved tiles are laid out in L1 at the NOC-aligned DRAM page stride (see get_interleaved_tile_stride);
+    // tensor-backed sharded operands keep their natural stride.
+    const uint32_t in0_aligned_tile_size =
+        ttnn::operations::experimental::quasar::matmul::utilities::get_interleaved_tile_stride(in0_single_tile_size);
+    const uint32_t in1_aligned_tile_size =
+        ttnn::operations::experimental::quasar::matmul::utilities::get_interleaved_tile_stride(in1_single_tile_size);
     const auto output_single_tile_size = output_tile.get_tile_size(output_data_format);
 
-    auto* const in0_buffer = a.buffer();
-    auto* const in1_buffer = b.buffer();
-    auto* const sparsity_buffer = sparsity.buffer();
-    auto* const out_buffer = output_tensor.buffer();
+    const auto* const in0_buffer = &a.mesh_buffer();
+    const auto* const in1_buffer = &b.mesh_buffer();
+    const auto* const sparsity_buffer = &sparsity.mesh_buffer();
+    const auto* const out_buffer = &output_tensor.mesh_buffer();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config.value());
@@ -316,10 +315,10 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         (std::uint32_t)batchA,   // batchA
         (std::uint32_t)false,    // reuse_in0_in_CB
         // sparsity args
-        (std::uint32_t)batchB,                                  // batchB
-        (std::uint32_t)sparsity.buffer()->aligned_page_size(),  // sparsity_pagesize
-        (std::uint32_t)!is_input_a_sparse,                      // bcast_A
-        (std::uint32_t)!nnz.has_value(),                        // get_batch_from_reader
+        (std::uint32_t)batchB,                                      // batchB
+        (std::uint32_t)sparsity.mesh_buffer().aligned_page_size(),  // sparsity_pagesize
+        (std::uint32_t)!is_input_a_sparse,                          // bcast_A
+        (std::uint32_t)!nnz.has_value(),                            // get_batch_from_reader
         // fuse op args
         (std::uint32_t)false,  // fuse_op
     };
@@ -355,8 +354,8 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         (std::uint32_t)batchA,   // batchA
         (std::uint32_t)true,     // bcast_B
         // sparsity args
-        (std::uint32_t)batchB,                                  // batchB
-        (std::uint32_t)sparsity.buffer()->aligned_page_size(),  // sparsity_pagesize
+        (std::uint32_t)batchB,                                      // batchB
+        (std::uint32_t)sparsity.mesh_buffer().aligned_page_size(),  // sparsity_pagesize
 
         // WRITER
         // out tensor args
@@ -576,7 +575,7 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
     uint32_t sparsity_cb_index0 = tt::CBIndex::c_6;
     uint32_t sparsity_cb_index1 = tt::CBIndex::c_7;
 
-    uint32_t sparsity_cb_size = sparsity.buffer()->aligned_page_size();
+    uint32_t sparsity_cb_size = sparsity.mesh_buffer().aligned_page_size();
     tt_metal::CircularBufferConfig sparsity_cb_config0 =
         tt_metal::CircularBufferConfig(
             sparsity_cb_size, {{sparsity_cb_index0, tt::tt_metal::datatype_to_dataformat_converter(sparsity.dtype())}})
@@ -780,10 +779,10 @@ void SparseMatmulMultiCoreReuseMcast1DProgramFactory::override_runtime_arguments
     auto& program = cached_program.program;
     auto& shared_vars = cached_program.shared_variables;
 
-    auto* src_buffer_a = tensor_args.input_tensors.at(0).buffer();
-    auto* src_buffer_b = tensor_args.input_tensors.at(1).buffer();
-    auto* sparsity_buffer = tensor_args.input_tensors.at(2).buffer();
-    auto* dst_buffer = tensor_return_value.at(0).buffer();
+    const auto* src_buffer_a = &tensor_args.input_tensors.at(0).mesh_buffer();
+    const auto* src_buffer_b = &tensor_args.input_tensors.at(1).mesh_buffer();
+    const auto* sparsity_buffer = &tensor_args.input_tensors.at(2).mesh_buffer();
+    const auto* dst_buffer = &tensor_return_value.at(0).mesh_buffer();
 
     // Manually unroll sender core
     // in0 sender

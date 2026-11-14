@@ -30,6 +30,7 @@
 #include <fmt/format.h>
 
 #include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
+#include "tt_metal/fabric/builder/fabric_trid_allocator.hpp"
 #include "tt_metal/fabric/builder/fabric_remote_channels_allocator.hpp"
 #include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
 #include "tt_metal/fabric/builder/connection_writer_adapter.hpp"
@@ -85,6 +86,58 @@ size_t FabricEriscDatamoverBuilder::get_max_packet_payload_size_for_arch(tt::ARC
  * @param is_receiver_channel_serviced Output parameter for receiver channel service flags
  */
 namespace {
+// The router's support matrix (fabric_erisc_router.cpp; the kernel keeps only the invariants every build has): the
+// configurations the router is built and validated for. Every router kernel's compile-time args pass through here, so
+// a configuration outside the matrix fails on the host, with its reason, instead of building a router for it.
+void validate_router_config(tt::ARCH arch, const std::unordered_map<std::string, uint32_t>& named_args) {
+    const auto arg = [&](const char* name) { return named_args.at(name); };
+    const bool is_2d = arg("IS_2D_FABRIC") != 0;
+    const bool udm_mode = arg("UDM_MODE") != 0;
+    const bool tensix_mux_mode = arg("FABRIC_TENSIX_EXTENSION_MUX_MODE") != 0 && !udm_mode;
+    const bool has_vc1 = arg("ACTUAL_VC1_SENDER_CHANNELS") > 0;
+    const uint32_t vc2_sender_channels = arg("ACTUAL_VC2_SENDER_CHANNELS");
+    const uint32_t num_active_eriscs = arg("NUM_ACTIVE_ERISCS");
+    const bool deadlock_avoidance = arg("ENABLE_DEADLOCK_AVOIDANCE") != 0;
+    const uint32_t local_tensix_connections = arg("NUM_DS_OR_LOCAL_TENSIX_CONNECTIONS");
+
+    TT_FATAL(
+        arch == tt::ARCH::BLACKHOLE || arch == tt::ARCH::WORMHOLE_B0,
+        "the router supports Blackhole and Wormhole only");
+    TT_FATAL(arch != tt::ARCH::WORMHOLE_B0 || num_active_eriscs == 1, "the router runs on one ERISC on Wormhole");
+    // VC1 traffic would go router to router around the muxes, but the host gives VC1's sender channels no slots there.
+    TT_FATAL(!(tensix_mux_mode && has_vc1), "VC1 with the Tensix mux extension is not supported");
+    // VC2 as FabricBuilderConfig builds it (Blackhole 2D, not UDM or the mux), with or without VC1: one worker channel
+    // into a receiver channel of its own that only delivers (neighbour exchange), counter credits.
+    TT_FATAL(
+        vc2_sender_channels == 0 || (is_2d && vc2_sender_channels == 1 && arg("DISABLE_RX_CH2_FORWARDING") != 0 &&
+                                     arg("VC2_USES_COUNTER_CREDITS") != 0),
+        "VC2 is supported as neighbour exchange on 2D routers");
+    TT_FATAL(
+        arg("ENABLE_FIRST_LEVEL_ACK_VC1") == 0 && arg("ENABLE_FIRST_LEVEL_ACK_VC2") == 0,
+        "first-level acks on VC1 / VC2 are not supported");
+    TT_FATAL(arg("VC2_CROSSOVER_TO_VC1") == 0, "VC2's crossover onto VC1 is not supported");
+    // UDM as connect_to_local_tensix_builder builds it: one ERISC, 2D meshes, one local Tensix connection (the relay).
+    TT_FATAL(
+        !udm_mode || (num_active_eriscs == 1 && is_2d && !has_vc1 && !deadlock_avoidance && !tensix_mux_mode &&
+                      local_tensix_connections == 1),
+        "UDM is supported on one-ERISC 2D meshes with one relay");
+    // The speedy path as ENABLE_SPEEDY_VC0 selects it: no bubble flow control or first-level acks on VC0, VC0's
+    // receiver forwarding off.
+    TT_FATAL(
+        arg("ENABLE_SPEEDY_VC0") == 0 || (!deadlock_avoidance && arg("ENABLE_FIRST_LEVEL_ACK_VC0") == 0 &&
+                                         arg("DISABLE_RX_CH0_FORWARDING") != 0 && !udm_mode),
+        "the speedy path needs VC0 without bubble flow control, first-level acks or receiver forwarding");
+    TT_FATAL(arg("ENABLE_RISC_CPU_DATA_CACHE") == 0, "the CPU data cache is not supported");
+    TT_FATAL(arg("ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA") == 0, "the TX queue's spin-wait send is not supported");
+    TT_FATAL(
+        arg("PERF_TELEMETRY_MODE") == 0 || arg("PERF_TELEMETRY_MODE") == 1,
+        "the perf recorder supports low-resolution bandwidth only");
+    TT_FATAL(!tensix_mux_mode || num_active_eriscs == 1, "Tensix mux mode is supported on one ERISC");
+    TT_FATAL(
+        local_tensix_connections == 0 || tensix_mux_mode || udm_mode,
+        "local Tensix connections are supported in mux mode and UDM only");
+}
+
 // Returns true when fabric 2-ERISC should be considered enabled for builders.
 // This is disabled for Wormhole and enabled for Blackhole when 2-eriscs can be dispatched to
 // and if we are not building with the tensix mux extension (due to stack size issue).
@@ -1030,6 +1083,15 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
                                           ? actual_sender_channels_per_vc_.value()[2]
                                           : config.num_used_sender_channels_per_vc[2];
 
+    // A worker channel: the first sender channel of each VC whose routing mode has a worker, which a worker (or the
+    // fabric's mux) connects to at run time; every other sender channel is forwarded into by an upstream router.
+    // VC0: the worker-connected channel; VC1 (inter-mesh): none; VC2 (neighbour exchange): its one channel. A channel
+    // position's role, whether or not trimming services it.
+    auto is_worker_channel = [&](size_t channel_id) -> bool {
+        const size_t vc2_first = actual_sender_channels_vc0 + actual_sender_channels_vc1;
+        return channel_id == get_worker_connected_sender_channel() ||
+               (actual_sender_channels_vc2 > 0 && channel_id == vc2_first);
+    };
     auto should_force_internal_sender_skip = [&](size_t channel_id) -> bool {
         if (channel_id >= num_sender_channels || channel_trimming_overrides_.has_value()) {
             return false;
@@ -1039,14 +1101,9 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
             return false;
         }
 
-        const size_t worker_channel = get_worker_connected_sender_channel();
-        const size_t vc2_start = actual_sender_channels_vc0 + actual_sender_channels_vc1;
-        const size_t vc2_end = vc2_start + actual_sender_channels_vc2;
-        const bool is_worker_channel = channel_id == worker_channel;
-        const bool is_vc2_channel = channel_id >= vc2_start && channel_id < vc2_end;
         const bool has_static_peer = this->sender_channel_connection_liveness_check_disable_array[channel_id];
 
-        return !is_worker_channel && !is_vc2_channel && !has_static_peer;
+        return !is_worker_channel(channel_id) && !has_static_peer;
     };
 
     const auto& builder_context = fabric_context.get_builder_context();
@@ -1081,11 +1138,19 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     const bool final_enable_deadlock_avoidance =
         base_enable_deadlock_avoidance && !vc0_is_terminal_or_source_only_after_trim;
     const bool final_enable_first_level_ack_vc0 = final_enable_deadlock_avoidance;
+    TT_FATAL(
+        !(this->udm_mode && final_enable_deadlock_avoidance),
+        "The fabric router does not support UDM (FabricTensixConfig::UDM) with deadlock avoidance (a torus or ring "
+        "axis): router at fabric node {}, Ethernet channel {}",
+        this->local_fabric_node_id,
+        this->my_eth_channel);
 
     // Bubble flow control requires the downstream receiver to hold at least two slots: an injection
     // channel only sends when it sees that many free, so a single-slot receiver stalls it forever.
     // Nothing in the allocator guarantees this -- its smallest buffer-slot option gives one slot -- so
     // check it per VC, and only where bubble flow control is actually enabled.
+    // The same far receiver's depth sets the free slots this router's injection channels send with.
+    uint32_t bubble_flow_control_injection_min_free_slots = 0;
     if (final_enable_deadlock_avoidance) {
         constexpr uint32_t k_bfc_protected_receiver_min_slots =
             builder_config::bubble_flow_control_protected_receiver_min_slots;
@@ -1105,6 +1170,17 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
             k_bfc_vc,
             remote_slots,
             k_bfc_protected_receiver_min_slots);
+        bubble_flow_control_injection_min_free_slots = builder_config::bubble_flow_control_injection_min_free_slots(
+            static_cast<uint32_t>(remote_slots), config.arch);
+        log_debug(
+            tt::LogFabric,
+            "Fabric node {}, Ethernet channel {}: bubble flow control injection sends with {} of {} far VC{} "
+            "receiver slots free",
+            this->local_fabric_node_id,
+            this->my_eth_channel,
+            bubble_flow_control_injection_min_free_slots,
+            remote_slots,
+            k_bfc_vc);
     }
     // Preserve the existing explicit single-sender behavior, allow the same
     // fast path when trimming collapses a wider VC0 router to the worker-only
@@ -1167,8 +1243,19 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     named_args["NUM_DOWNSTREAM_SENDERS_VC1"] = num_vc1_downstream_edms;
     named_args["WAIT_FOR_HOST_SIGNAL"] = static_cast<uint32_t>(this->wait_for_host_signal ? 1 : 0);
     named_args["SWITCH_INTERVAL"] = static_cast<uint32_t>(this->firmware_context_switch_interval);
+    named_args["ETH_TXQ_SEQ_UPDATE_TIMEOUT"] = this->eth_txq_seq_update_timeout;
     named_args["FUSE_RECEIVER_FLUSH_AND_COMPLETION_PTR"] = this->fuse_receiver_flush_and_completion_ptr;
     named_args["ENABLE_DEADLOCK_AVOIDANCE"] = final_enable_deadlock_avoidance ? 1 : 0;
+    if (final_enable_deadlock_avoidance) {
+        named_args["BUBBLE_FLOW_CONTROL_INJECTION_SENDER_CHANNEL_MIN_FREE_SLOTS"] =
+            bubble_flow_control_injection_min_free_slots;
+    }
+    // VC1 and VC2 together on a ring or torus axis (deadlock avoidance) have not been brought up.
+    TT_FATAL(
+        !(final_enable_deadlock_avoidance && num_receiver_channels == builder_config::num_max_receiver_channels),
+        "VC1 + VC2 on ring/torus routers is not supported yet: router at fabric node {}, Ethernet channel {}",
+        this->local_fabric_node_id,
+        this->my_eth_channel);
     named_args["ENABLE_SPEEDY_VC0"] = enable_speedy_vc0 ? 1 : 0;
     named_args["IS_INTERMESH_ROUTER"] = this->is_inter_mesh;
     named_args["IS_HANDSHAKE_SENDER"] = is_handshake_master;
@@ -1182,6 +1269,11 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     // agree across every VC1 link, since the acking receiver and upstream sender are on different
     // routers, so it cannot be enabled per-router.
     named_args["ENABLE_FIRST_LEVEL_ACK_VC1"] = 0;
+    // VC2 (neighbour exchange): one hop and no bubble flow control, so no first-level acks.
+    named_args["ENABLE_FIRST_LEVEL_ACK_VC2"] = 0;
+    // Whether VC2's receiver forwards onto VC1's downstream routers here (crossover, as FABRIC_2D_VC0_CROSSOVER_TO_VC1
+    // is for VC0). Neighbour exchange never forwards.
+    named_args["VC2_CROSSOVER_TO_VC1"] = 0;
     named_args["ENABLE_RISC_CPU_DATA_CACHE"] = enable_risc_cpu_data_cache;
     named_args["VC0_DOWNSTREAM_EDM_SIZE"] = vc0_downstream_edm_size;
     named_args["VC1_DOWNSTREAM_EDM_SIZE"] = vc1_downstream_edm_size;
@@ -1201,6 +1293,19 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     for (size_t i = 0; i < builder_config::num_max_sender_channels; i++) {
         named_args[fmt::format("LOCAL_SENDER_CH_{}_CONN_INFO_ADDR", i)] =
             static_cast<uint32_t>(config.sender_channels_worker_conn_info_base_address[i]);
+    }
+    // The worker channels' connection semaphores, one per VC (VC0's worker; VC2's where it is built; VC1 has none; 0
+    // without a worker). The router checks a worker's connection every pass, reading the semaphore at this
+    // compile-time address with the pass's first reads; the runtime args carry every channel's, for init.
+    {
+        const size_t vc0_worker = get_worker_connected_sender_channel();
+        const size_t vc2_worker = actual_sender_channels_vc0 + actual_sender_channels_vc1;
+        named_args["VC0_WORKER_CONNECTION_SEMAPHORE_ADDR"] =
+            static_cast<uint32_t>(config.sender_channels_connection_semaphore_address[vc0_worker]);
+        named_args["VC2_WORKER_CONNECTION_SEMAPHORE_ADDR"] =
+            actual_sender_channels_vc2 > 0
+                ? static_cast<uint32_t>(config.sender_channels_connection_semaphore_address[vc2_worker])
+                : 0;
     }
 
     // --- Status pointers ---
@@ -1310,6 +1415,12 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
                                             this->is_sender_channel_serviced_[risc_id][i])
                                       : 0;
     }
+    // Which sender channel positions are worker channels (is_worker_channel above), whether or not trimming services
+    // them. LIVE_CHECK_SKIP is the connection protocol, which differs from the role on a channel trimming forces on.
+    for (size_t i = 0; i < builder_config::num_max_sender_channels; i++) {
+        named_args[fmt::format("SENDER_CH_{}_IS_WORKER_CHANNEL", i)] =
+            (i < num_sender_channels) ? static_cast<uint32_t>(is_worker_channel(i)) : 0;
+    }
     for (size_t i = 0; i < builder_config::num_max_sender_channels; i++) {
         named_args[fmt::format("SENDER_CH_{}_IS_INJECTION", i)] =
             (i < num_sender_channels)
@@ -1320,9 +1431,17 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
         named_args[fmt::format("SENDER_CH_{}_ACK_NOC_ID", i)] =
             (i < num_sender_channels) ? static_cast<uint32_t>(config.sender_channel_ack_noc_ids[i]) : 0;
     }
+    // A worker channel's credits go out on a command buffer of their own, so the router can keep it programmed for
+    // them: VC0's worker channel on WR, VC2's on WR_REG. Every other channel keeps the config's (the atomics buffer).
+    using NocCmdBuf = FabricEriscDatamoverConfig::NocCmdBuf;
     for (size_t i = 0; i < builder_config::num_max_sender_channels; i++) {
+        NocCmdBuf ack_cmd_buf = config.sender_channel_ack_cmd_buf_ids[i];
+        if (i < num_sender_channels && is_worker_channel(i)) {
+            ack_cmd_buf =
+                i == get_worker_connected_sender_channel() ? NocCmdBuf::WR_CMD_BUF : NocCmdBuf::WR_REG_CMD_BUF;
+        }
         named_args[fmt::format("SENDER_CH_{}_ACK_CMD_BUF_ID", i)] =
-            (i < num_sender_channels) ? static_cast<uint32_t>(config.sender_channel_ack_cmd_buf_ids[i]) : 0;
+            (i < num_sender_channels) ? static_cast<uint32_t>(ack_cmd_buf) : 0;
     }
 
     // --- Receiver channel per-channel arrays (always emit MAX entries; 0 for unused) ---
@@ -1404,6 +1523,82 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     named_args["DISABLE_RX_CH0_FORWARDING"] = compute_disable_rx_forwarding(0);
     named_args["DISABLE_RX_CH1_FORWARDING"] = compute_disable_rx_forwarding(1);
     named_args["DISABLE_RX_CH2_FORWARDING"] = 1;  // VC2 receiver never forwards (always disabled)
+    // A receiver channel left serviced (the capture saw it consume packets) while its VC shows neither forwards nor
+    // local writes contradicts itself: every packet a receiver consumes is forwarded or written here. The router takes
+    // the two flags as agreeing (forwarding is off on a serviced channel only where the channel delivers every packet:
+    // VC2's, VC0's on a speedy router), so such a capture is a capture failure.
+    for (size_t vc = 0; vc < 2; vc++) {
+        const bool vc_has_receiver = vc == 0 || config.num_used_receiver_channels_per_vc[1] != 0;
+        const bool delivers_only = vc == 0 && enable_speedy_vc0;
+        TT_FATAL(
+            !vc_has_receiver || delivers_only || !this->is_receiver_channel_serviced_[risc_id][vc] ||
+                compute_disable_rx_forwarding(vc) == 0,
+            "Channel trimming capture is inconsistent for the router at fabric node {}, Ethernet channel {}: receiver "
+            "channel {} (VC{}) consumed packets but the capture records neither forwards nor local writes on its VC. "
+            "Recapture the channel trimming profile.",
+            this->local_fabric_node_id,
+            this->my_eth_channel,
+            vc,
+            vc);
+    }
+
+    // Receiver transaction IDs, per receiver channel: its completion group size, its number of IDs and its first ID,
+    // from the channel's final slot count and whether it is credited slot by slot (fabric_trid_allocator.hpp). Unused
+    // channels: 1 / 0 / 0.
+    {
+        namespace trids = tt::tt_fabric::trid_allocator;
+        std::vector<trids::ReceiverChannel> receivers;
+        for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+            // Channels credited slot by slot: under first-level acks (held completion credits stall bubble flow
+            // control), and on a Wormhole channel that forwards (its credits share the one TX queue with data, and a
+            // held group stalls a forwarding chain).
+            const bool first_level_ack = named_args.at(fmt::format("ENABLE_FIRST_LEVEL_ACK_VC{}", vc)) != 0;
+            const bool wormhole_forwards = config.arch == tt::ARCH::WORMHOLE_B0 &&
+                                           named_args.at(fmt::format("DISABLE_RX_CH{}_FORWARDING", vc)) == 0;
+            const bool credit_each_slot = first_level_ack || wormhole_forwards;
+            for (size_t i = 0; i < config.num_used_receiver_channels_per_vc[vc]; ++i) {
+                receivers.push_back(
+                    {static_channel_allocator->get_receiver_channel_number_of_slots(vc, i), credit_each_slot});
+            }
+        }
+        TT_FATAL(
+            receivers.size() == num_receiver_channels,
+            "receiver transaction IDs: {} receiver channels by VC, {} on the router",
+            receivers.size(),
+            num_receiver_channels);
+        const trids::Assignment ids = trids::assign_transaction_ids(receivers);
+        TT_FATAL(
+            !ids.error.has_value(),
+            "receiver transaction IDs at fabric node {}, Ethernet channel {}: {}",
+            this->local_fabric_node_id,
+            this->my_eth_channel,
+            ids.error.value_or(""));
+        for (size_t c = 0; c < builder_config::num_max_receiver_channels; ++c) {
+            const bool used = c < ids.channels.size();
+            named_args[fmt::format("RX_CH_{}_COMPLETION_GROUP_SIZE", c)] =
+                used ? static_cast<uint32_t>(ids.channels[c].group_size) : 1;
+            named_args[fmt::format("RX_CH_{}_NUM_TRIDS", c)] =
+                used ? static_cast<uint32_t>(ids.channels[c].num_ids) : 0;
+            named_args[fmt::format("RX_CH_{}_TRID_START", c)] = used ? static_cast<uint32_t>(ids.channels[c].start) : 0;
+            if (used) {
+                const trids::ChannelIds& ch = ids.channels[c];
+                log_debug(
+                    tt::LogFabric,
+                    "Fabric receiver transaction IDs: fabric node {}, Ethernet channel {}, RX_CH_{}: {} slots in "
+                    "groups of {}{}: {} groups, IDs {}..{} ({})",
+                    this->local_fabric_node_id,
+                    this->my_eth_channel,
+                    c,
+                    receivers[c].slots,
+                    ch.group_size,
+                    receivers[c].credit_each_slot ? " (credited per slot)" : "",
+                    ch.groups,
+                    ch.start,
+                    ch.start + ch.num_ids - 1,
+                    ch.num_ids >= ch.groups ? "one per group" : fmt::format("shared: group & {}", ch.num_ids - 1));
+            }
+        }
+    }
 
     // Credit amortization named compile-time args
     uint32_t sender_amort_freq = 0;
@@ -1462,6 +1657,7 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     receiver_channel_to_downstream_adapter->emit_ct_args(ct_args, config.num_fwd_paths);
     ct_args.push_back(0xabaddad9);
 
+    validate_router_config(config.arch, named_args);
     return {std::move(ct_args), std::move(named_args)};
 }
 
@@ -1778,10 +1974,11 @@ tt::tt_metal::KernelBuildOptLevel FabricEriscDatamoverBuilder::get_kernel_opt_le
     if (opt_level_override.has_value()) {
         return opt_level_override.value();
     }
-    // Use Os (optimize for size) when VC1 is active to fit in code space
-    // Use O3 (optimize for performance) otherwise
-    bool vc1_active = this->config.num_used_receiver_channels_per_vc[1] > 0;
-    return vc1_active ? tt::tt_metal::KernelBuildOptLevel::Os : tt::tt_metal::KernelBuildOptLevel::O3;
+    // Os (optimize for size) where the router would not fit in code space at O3, with VC1 and VC2 both active; O3
+    // (optimize for performance) otherwise.
+    const bool vc1_active = this->config.num_used_receiver_channels_per_vc[1] > 0;
+    const bool vc2_active = this->config.num_used_receiver_channels_per_vc[2] > 0;
+    return vc1_active && vc2_active ? tt::tt_metal::KernelBuildOptLevel::Os : tt::tt_metal::KernelBuildOptLevel::O3;
 }
 
 void FabricEriscDatamoverBuilder::teardown_from_host(
@@ -1805,6 +2002,10 @@ void FabricEriscDatamoverBuilder::set_wait_for_host_signal(bool wait_for_host_si
 
 void FabricEriscDatamoverBuilder::set_firmware_context_switch_type(FabricEriscDatamoverContextSwitchType type) {
     this->firmware_context_switch_type = type;
+}
+
+void FabricEriscDatamoverBuilder::set_eth_txq_seq_update_timeout(uint32_t cycles) {
+    this->eth_txq_seq_update_timeout = cycles;
 }
 
 void FabricEriscDatamoverBuilder::apply_channel_trimming_overrides(const ChannelTrimmingOverrides& overrides) {

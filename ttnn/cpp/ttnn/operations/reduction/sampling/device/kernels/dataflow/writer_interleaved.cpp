@@ -110,23 +110,32 @@ void kernel_main() {
     // get random number
     dfb_rand.wait_front(1);
     const CoreLocalMem<volatile uint16_t> rand_values(dfb_rand.get_read_ptr());
-    // Two elements of the random tile are independent integer digits in [0, 256] (floored on the
-    // SFPU; exact in BF16). A draw of exactly 256 (the inclusive upper endpoint, probability ~0)
-    // is clamped to 255 so both digits are 8-bit. The threshold is the lattice point
-    // (hi * 256 + lo) / 65536 in [0, 1 - 2^-16], uniform over 65536 equiprobable values.
-    // Elements 0 and 1 are the first two draws of the tile's first row: element 0 is lane 0 of
-    // rand_tile's first SFPU store, element 1 is lane 0 of its second store, which lands because
-    // rand() programs its dest address mode on every call. A dead low digit would collapse the
-    // threshold to hi / 256 and bring the 1/256 tail cutoff back
+    // Three independent digits, each uniform on {0, ..., 255}, become one threshold
+    // (d0 * 2^16 + d1 * 2^8 + d2) / 2^24. Every such multiple of 2^-24 is an exact FP32 value,
+    // and 2^-24 is the FP32 ulp on [0.5, 1). The largest threshold is 1 - 2^-24, so the draw is
+    // not capped at 255/256 the way a single packed BF16 uniform is.
+    // Elements 0, 1 and 2 are three different draws of the tile's first row: element 0 is lane 0
+    // of rand_tile's first SFPU store, element 1 is lane 0 of its second store (it lands because
+    // rand() programs its dest address mode on every call), and element 2 is lane 1 of the first
+    // store. A dead digit would put the threshold back on a coarser grid
     // (test_sampling_low_digit_reaches_the_tail).
-    constexpr uint32_t RAND_HI_ELEMENT = 0;
-    constexpr uint32_t RAND_LO_ELEMENT = 1;
+    // The digits stay in float: every partial value below is an integer under 2^24, so each step is
+    // exact in FP32. This core has no FPU, and int/float conversions pull extra soft-float routines
+    // into the kernel, which measurably slowed decode at W=256. A draw of exactly 256 (rand_tile's
+    // range is inclusive) is clamped so it cannot carry into the next digit.
+    constexpr uint32_t RAND_DIGIT_0 = 0;
+    constexpr uint32_t RAND_DIGIT_1 = 1;
+    constexpr uint32_t RAND_DIGIT_2 = 2;
     constexpr float RAND_DIGIT_MAX = 255.0f;
-    constexpr float RAND_LATTICE_SCALE = 1.0f / 65536.0f;
-    float rand_hi = bf16_to_f32(rand_values[RAND_HI_ELEMENT]);
-    float rand_lo = bf16_to_f32(rand_values[RAND_LO_ELEMENT]);
-    rand_hi = rand_hi > RAND_DIGIT_MAX ? RAND_DIGIT_MAX : rand_hi;
-    rand_lo = rand_lo > RAND_DIGIT_MAX ? RAND_DIGIT_MAX : rand_lo;
+    constexpr float RAND_DIGIT_BASE = 256.0f;
+    constexpr float RAND_GRID_SCALE = 1.0f / 16777216.0f;  // 2^-24
+    float digit_0 = bf16_to_f32(rand_values[RAND_DIGIT_0]);
+    float digit_1 = bf16_to_f32(rand_values[RAND_DIGIT_1]);
+    float digit_2 = bf16_to_f32(rand_values[RAND_DIGIT_2]);
+    digit_0 = digit_0 > RAND_DIGIT_MAX ? RAND_DIGIT_MAX : digit_0;
+    digit_1 = digit_1 > RAND_DIGIT_MAX ? RAND_DIGIT_MAX : digit_1;
+    digit_2 = digit_2 > RAND_DIGIT_MAX ? RAND_DIGIT_MAX : digit_2;
+    const float rand_f = ((digit_0 * RAND_DIGIT_BASE + digit_1) * RAND_DIGIT_BASE + digit_2) * RAND_GRID_SCALE;
     // wait for compute kernel
     dfb_final_indices.wait_front(num_users);
     dfb_local_values.wait_front(1);
@@ -198,8 +207,7 @@ void kernel_main() {
         end_id_local_phase_1 = start_id_local_phase_1 + (kept_tokens - FACE_WIDTH);
     }
 
-    // Stochastic sampling in float32
-    const float rand_f = (rand_hi * 256.0f + rand_lo) * RAND_LATTICE_SCALE;
+    // Stochastic sampling in float32. rand_f is the k/2^24 threshold assembled above.
     float cum_sum_f = 0.0f;
     uint32_t sampled_index = final_indices[local_indices[start_id_local_phase_0]];
     bool index_found = false;

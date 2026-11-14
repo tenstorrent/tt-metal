@@ -8,8 +8,10 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/math.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include <tt_stl/assert.hpp>
-#include "impl/context/metal_context.hpp"
+#include "distributed/mesh_device_impl.hpp"
+#include "impl/context/metal_env_impl.hpp"
 #include "tt_metal/fabric/fabric_mux_program_local_l1.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
@@ -85,6 +87,7 @@ size_t FabricMuxConfig::MemoryRegion::get_total_size() const { return num_units 
 */
 
 FabricMuxConfig::FabricMuxConfig(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
     uint8_t num_full_size_channels,
     uint8_t num_header_only_channels,
     uint8_t num_buffers_full_size_channel,
@@ -93,9 +96,8 @@ FabricMuxConfig::FabricMuxConfig(
     size_t base_l1_address,
     CoreType core_type,
     size_t usable_l1_end_address) :
-    // TODO(#52020): resolves the default context; replace with the const MeshDevice& form.
     FabricMuxConfig(
-        tt::tt_metal::MetalContext::instance().get_control_plane(),
+        mesh_device.impl().metal_env().get_control_plane(),
         num_full_size_channels,
         num_header_only_channels,
         num_buffers_full_size_channel,
@@ -221,11 +223,25 @@ FabricMuxConfig::FabricMuxConfig(
         memory_map_end_address_,
         l1_end_address,
         physical_l1_end_address);
+
+    // The fabric endpoints the mux can connect to. Cached here so the compile-time args need no context lookup; each
+    // getter picks its endpoint and fails there if it is unavailable.
+    const auto& builder_context = fabric_context.get_builder_context();
+    const auto& fabric_router_config = builder_context.get_fabric_router_config();
+    fabric_endpoint_status_address_ = fabric_router_config.edm_status_address;
+    if (auto* const static_channel_allocator = dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(
+            fabric_router_config.channel_allocator.get())) {
+        fabric_router_channel_num_buffers_ = static_channel_allocator->get_sender_channel_number_of_slots(0);
+    }
+    connect_via_tensix_ = fabric_context.is_tensix_enabled();
+    if (connect_via_tensix_ && builder_context.has_tensix_config()) {
+        fabric_tensix_channel_num_buffers_ = builder_context.get_tensix_config().get_num_buffers_per_channel();
+    }
 }
 
 std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_main_args(
-    const tt::tt_fabric::FabricEriscDatamoverConfig& /*fabric_router_config*/) const {
-    TT_FATAL(fabric_endpoint_channel_num_buffers_ > 0, "fabric_endpoint_channel_num_buffers_ must be larger than 0");
+    size_t fabric_endpoint_channel_num_buffers, bool wait_for_fabric_endpoint_ready) const {
+    TT_FATAL(fabric_endpoint_channel_num_buffers > 0, "fabric_endpoint_channel_num_buffers must be larger than 0");
     TT_FATAL(fabric_endpoint_status_address_ != 0, "fabric_endpoint_status_address_ must not be invalid address 0");
     return std::vector<uint32_t>{
         num_full_size_channels_,
@@ -241,71 +257,49 @@ std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_main_args(
         static_cast<uint32_t>(full_size_channels_region_.get_address()),
         static_cast<uint32_t>(local_fabric_router_status_region_.get_address()),
         static_cast<uint32_t>(fabric_endpoint_status_address_),
-        static_cast<uint32_t>(fabric_endpoint_channel_num_buffers_),
+        static_cast<uint32_t>(fabric_endpoint_channel_num_buffers),
         static_cast<uint32_t>(num_full_size_channel_iters_),
         static_cast<uint32_t>(num_iters_between_teardown_checks_),
         core_type_index_,
-        (uint32_t)wait_for_fabric_endpoint_ready_,
+        (uint32_t)wait_for_fabric_endpoint_ready,
         static_cast<uint32_t>(in_program_local_l1_),
         program_local_l1_cb_index_,
         l1_base_semaphore_id_};
 }
 
 std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_args() const {
-    const auto& builder_context =
-        tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().get_builder_context();
-    const auto& fabric_router_config = builder_context.get_fabric_router_config();
-
-    bool tensix_config_enabled = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() !=
-                                 tt::tt_fabric::FabricTensixConfig::DISABLED;
-    // current mux will connect to the fabric mux extension
-    if (tensix_config_enabled) {
-        const auto& fabric_tensix_config = builder_context.get_tensix_config();
-        fabric_endpoint_channel_num_buffers_ = fabric_tensix_config.get_num_buffers_per_channel();
+    if (connect_via_tensix_) {
+        TT_FATAL(fabric_tensix_channel_num_buffers_ > 0, "Error, fabric tensix config is uninitialized");
     } else {
-        auto* channel_allocator = fabric_router_config.channel_allocator.get();
-        auto* const static_channel_allocator =
-            dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator);
         TT_FATAL(
-            static_channel_allocator != nullptr, "Channel allocator must be a FabricStaticSizedChannelsAllocator.");
-        fabric_endpoint_channel_num_buffers_ = static_channel_allocator->get_sender_channel_number_of_slots(0);
+            fabric_router_channel_num_buffers_ > 0, "Channel allocator must be a FabricStaticSizedChannelsAllocator.");
     }
-    fabric_endpoint_status_address_ = fabric_router_config.edm_status_address;
-
-    auto ct_args = get_fabric_mux_compile_time_main_args(fabric_router_config);
+    auto ct_args = get_fabric_mux_compile_time_main_args(
+        connect_via_tensix_ ? fabric_tensix_channel_num_buffers_ : fabric_router_channel_num_buffers_,
+        /*wait_for_fabric_endpoint_ready=*/false);
     append_default_stream_ids_to_ct_args(ct_args);
     return ct_args;
 }
 
-std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_args_for_relay_mux(
-    const ControlPlane& control_plane) const {
-    const auto& fabric_router_config =
-        control_plane.get_fabric_context().get_builder_context().get_fabric_router_config();
-    auto* channel_allocator = fabric_router_config.channel_allocator.get();
-    auto* const static_channel_allocator =
-        dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator);
-    TT_FATAL(static_channel_allocator != nullptr, "Channel allocator must be a FabricStaticSizedChannelsAllocator.");
-
-    // For relay mux, always use fabric router config
-    fabric_endpoint_channel_num_buffers_ = static_channel_allocator->get_sender_channel_number_of_slots(0);
-    wait_for_fabric_endpoint_ready_ = true;
-    fabric_endpoint_status_address_ = fabric_router_config.edm_status_address;
-
-    auto ct_args = get_fabric_mux_compile_time_main_args(fabric_router_config);
+std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_args_for_relay_mux() const {
+    TT_FATAL(fabric_router_channel_num_buffers_ > 0, "Channel allocator must be a FabricStaticSizedChannelsAllocator.");
+    // The relay mux waits for the fabric router to be ready before connecting.
+    auto ct_args = get_fabric_mux_compile_time_main_args(
+        fabric_router_channel_num_buffers_, /*wait_for_fabric_endpoint_ready=*/true);
     append_default_stream_ids_to_ct_args(ct_args);
     return ct_args;
 }
 
 template <typename ProgramOrDescriptor>
 std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_run_time_args(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
     const FabricNodeId& src_fabric_node_id,
     const FabricNodeId& dst_fabric_node_id,
     uint32_t link_idx,
     ProgramOrDescriptor& mux_program_or_desc,
     const tt::tt_metal::CoreCoord& mux_logical_core) const {
-    // TODO(#52020): resolves the default context; replace with the const MeshDevice& form.
     return get_fabric_mux_run_time_args<ProgramOrDescriptor>(
-        tt::tt_metal::MetalContext::instance().get_control_plane(),
+        mesh_device.impl().metal_env().get_control_plane(),
         src_fabric_node_id,
         dst_fabric_node_id,
         link_idx,
@@ -346,9 +340,15 @@ std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_run_time_args(
 }
 
 template std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_run_time_args<tt::tt_metal::Program>(
-    const FabricNodeId&, const FabricNodeId&, uint32_t, tt::tt_metal::Program&, const tt::tt_metal::CoreCoord&) const;
+    const tt::tt_metal::distributed::MeshDevice&,
+    const FabricNodeId&,
+    const FabricNodeId&,
+    uint32_t,
+    tt::tt_metal::Program&,
+    const tt::tt_metal::CoreCoord&) const;
 
 template std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_run_time_args<tt::tt_metal::ProgramDescriptor>(
+    const tt::tt_metal::distributed::MeshDevice&,
     const FabricNodeId&,
     const FabricNodeId&,
     uint32_t,

@@ -47,6 +47,7 @@ from .device import (
     KERNEL_COMPLETE,
     TRISC_CORES,
     BootMode,
+    LLKAssertException,
     RiscCore,
     commit_tensix_soft_reset,
     exalens_device_setup,
@@ -611,6 +612,17 @@ class TestConfig:
                 "-I../../hw/ckernels/quasar/metal/llk_api",
                 "-I../../hw/ckernels/quasar/metal/llk_api/llk_sfpu",
             ]
+            # The variant's register headers, as the JIT build picks them (qa_hal.cpp).
+            # Saturn has none yet.
+            register_header_version = {
+                "": "2.0.0",
+                "horizon": "2.0.1",
+                "trinity": "2.0.2",
+            }.get(quasar_variant())
+            if register_header_version:
+                hw_specific_includes.append(
+                    f"-I../../hw/inc/internal/tt-2xx/tt-{register_header_version}/meta"
+                )
 
         if detailed_artefacts:
             TestConfig.OPTIONS_ALL += (
@@ -992,10 +1004,21 @@ class TestConfig:
 
     @staticmethod
     def resolve_worker_tensix_location():
-        """Bind TENSIX_LOCATION from the card once Exalens has a context."""
+        """Bind TENSIX_LOCATION from the card once Exalens has a context.
+
+        ttsim hosts a private chip in each xdist process, and a test only
+        touches one core, so every worker uses the first functional core. The
+        xdist index is not a core index there: ``-n`` can exceed the
+        descriptor, and a restarted worker (``gw32``, ``gw33``, ...) still has
+        a core. Silicon and the RTL server share one device, so the index
+        still selects a distinct core and a worker past the card is still an
+        error.
+        """
         index = TestConfig._PENDING_WORKER_INDEX
         if index is None:
             return
+        if TestConfig.runs_on_ttsim():
+            index = 0
         TestConfig.TENSIX_LOCATION = device_module.tensix_location_for_worker(index)
         TestConfig._PENDING_WORKER_INDEX = None
 
@@ -1412,15 +1435,24 @@ class TestConfig:
             *src_include_append,
         ]
 
-        # Counters on compiles every variant differently (counters.h), so it hashes apart from counters off.
-        counters = (
+        # Process-wide build switches live outside ``self.__dict__``, and CONSUME
+        # mode never rebuilds an ELF, so ``variant_id`` must key them explicitly.
+        build_modes = [
+            (
+                "llk-asserts-off"
+                if os.environ.get("TT_LLK_DISABLE_ASSERTS") == "1"
+                else "llk-asserts-on"
+            )
+        ]
+        # Counters compile every variant differently through counters.h.
+        build_modes += (
             [TestConfig._perf_counters_suffix()]
             if TestConfig.ENABLE_PERF_COUNTERS
             else []
         )
         self.variant_id = sha256(
             str(
-                " | ".join(temp_str + ["<<search-dirs>>"] + search_dirs + counters)
+                " | ".join(temp_str + ["<<search-dirs>>"] + search_dirs + build_modes)
             ).encode()
         ).hexdigest()
 
@@ -1497,6 +1529,12 @@ class TestConfig:
 
         if os.environ.get("TT_METAL_DISABLE_SFPLOADMACRO") == "1":
             OPTIONS_COMPILE += "-DDISABLE_SFPLOADMACRO "
+
+        # Extra -D flags for every kernel part, e.g. LLK_EXTRA_DEFINES="INP_FLOAT32" to build
+        # the ttnn float32-input arm of kernels that branch on it.
+        for define in os.environ.get("LLK_EXTRA_DEFINES", "").split(","):
+            if define.strip():
+                OPTIONS_COMPILE += f"-D{define.strip()} "
 
         if TestConfig.gathering_build():
             # Every RISC, the shared firmware included, so boot.h leaves gathering on everywhere.
@@ -2175,6 +2213,14 @@ class TestConfig:
 
         return
 
+    def _recover_hung_core(self):
+        # SimpleNamespace variants in the hw-free tests call this on self and don't model the device.
+        if TestConfig.TEST_TARGET.run_simulator or not hasattr(
+            device_module, "recover_tensix_core"
+        ):
+            return
+        device_module.recover_tensix_core(TestConfig.TENSIX_LOCATION)
+
     def wait_for_tensix_operations_finished(self, timeout=2, poll_callback=None):
         """
         Args:
@@ -2263,16 +2309,22 @@ class TestConfig:
                     )
                 return
 
-        handle_if_assert_hit(
-            self.temp_elfs,
-            core_loc=TestConfig.TENSIX_LOCATION,
-        )
+        # A Tensix stall outlives the TRISC soft reset on Blackhole: unwedge the core, or the next launch hangs too.
+        try:
+            handle_if_assert_hit(
+                self.temp_elfs,
+                core_loc=TestConfig.TENSIX_LOCATION,
+            )
+        except LLKAssertException:
+            getattr(self, "_recover_hung_core", lambda: None)()
+            raise
 
         trisc_hangs = [mailbox.name for mailbox in (mailboxes - completed_mailboxes())]
         if brisc_launch:
             trisc_hangs.append(
                 f"BRISC (soft reset 0x{soft_reset_bits(TestConfig.TENSIX_LOCATION):x})"
             )
+        getattr(self, "_recover_hung_core", lambda: None)()
         raise TimeoutError(
             f"Timeout reached: waited {timeout} seconds for {', '.join(trisc_hangs)}"
         )

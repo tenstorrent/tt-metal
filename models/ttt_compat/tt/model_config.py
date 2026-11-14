@@ -216,6 +216,12 @@ def should_pad_sampling_logits_to_power_of_2(
     return per_device_vocab > 0 and (per_device_vocab & (per_device_vocab - 1)) != 0
 
 
+def minimal_prefill_matmul_blocks(num_devices: int, grid) -> Tuple[int, int]:
+    if is_wormhole_b0() and num_devices == 1 and grid is not None and (grid.x, grid.y) == (8, 8):
+        return 4, 4
+    return 8, 1
+
+
 def disables_batched_prefill(base_model_name: str, device_name: str) -> bool:
     return (base_model_name == "Qwen3-32B" and device_name == "P150x4") or (
         base_model_name in ("Llama-3.1-8B", "Llama-3.2-1B", "Qwen3-0.6B")
@@ -580,6 +586,9 @@ class ModelArgs:
         "GATE_MM_OUTPUT",
     )
 
+    # Instance attribute set from DISTRIBUTED_PREFILL_NORM in __init__; see is_distributed_norm.
+    distributed_prefill_norm = False
+
     # GQA models padded to the tensor-parallel width when their KV heads do not divide it.
     PAD_HEADS_FOR_TP_MODELS = ("Qwen2.5-VL-3B", "Qwen2.5-VL-7B", "olmOCR-2-7B")
 
@@ -708,6 +717,10 @@ class ModelArgs:
         # Mathematically a no-op for softmax; keeps QK^T small enough for the bf16 score
         # intermediates of the decode SDPA kernel. See Attention._create_k_bias_shift.
         self.subtract_k_bias_post_rope = False
+        # Opt-in (DISTRIBUTED_PREFILL_NORM=1): distribute the prefill norm for dim <= 4096 too. Each device then
+        # normalizes its own shard instead of the gathered full width, which needs far less L1 for circular
+        # buffers (e.g. when the model shares its devices with another model). See is_distributed_norm.
+        self.distributed_prefill_norm = os.getenv("DISTRIBUTED_PREFILL_NORM") == "1"
 
         assert not os.getenv(
             "FAKE_DEVICE"
@@ -1514,10 +1527,15 @@ class ModelArgs:
         elif mode == Mode.PREFILL:
             if self.use_minimal_prefill_matmul(seq_len):
                 grid = self.mlp2_grid(seq_len)
+                m_block, subblock_w = minimal_prefill_matmul_blocks(
+                    self.num_devices, getattr(self, "max_grid_size", None)
+                )
                 return ttnn.MinimalMatmulConfig(
-                    M_block_size=8,
+                    M_block_size=m_block,
                     K_block_size=8,
                     N_block_size=8,
+                    subblock_h=1,
+                    subblock_w=subblock_w,
                     compute_with_storage_grid_size=ttnn.CoreCoord(grid[0], grid[1]),
                 )
             else:
@@ -1865,10 +1883,15 @@ class ModelArgs:
         elif mode == Mode.PREFILL:
             self.MAX_QKV_MM_SEQ_LEN = 2048
             if self.use_minimal_qkv_prefill_matmul(seq_len):
+                m_block, subblock_w = minimal_prefill_matmul_blocks(
+                    self.num_devices, getattr(self, "max_grid_size", None)
+                )
                 return ttnn.MinimalMatmulConfig(
-                    M_block_size=8,
+                    M_block_size=m_block,
                     K_block_size=8,
                     N_block_size=8,
+                    subblock_h=1,
+                    subblock_w=subblock_w,
                     compute_with_storage_grid_size=ttnn.CoreCoord(8, 10) if is_blackhole() else ttnn.CoreCoord(8, 8),
                 )
             else:
@@ -2768,7 +2791,11 @@ class ModelArgs:
             local_params = None
         return local_params
 
-    def is_distributed_norm(self, mode: Mode):
+    def is_distributed_norm(self, mode: Mode | str):
+        # RMSNorm.forward accepts "prefill"/"decode" strings too; compare them as Mode so DistributedNorm
+        # (which picks gather-or-not) and RMSNorm (which picks the gamma) always agree.
+        if isinstance(mode, str):
+            mode = Mode(mode)
         if not self.is_multichip:
             return False
         if all([dim > 1 for dim in list(self.mesh_device.shape)]):  # 2D grid
@@ -2776,6 +2803,8 @@ class ModelArgs:
         elif (
             self.dim > 4096 and mode == Mode.PREFILL
         ):  # Somewhere between 4k and 8k WH runs out of L1 if not distributed
+            return True
+        elif mode == Mode.PREFILL and self.distributed_prefill_norm:
             return True
         return False
 
@@ -5328,6 +5357,22 @@ def num_to_corerange(
         start_core,
         ttnn.CoreCoord(end_x, end_y),
     )
+
+
+def qk_fused_core_ranges(
+    batch: int,
+    row_size: int = 8,
+) -> Tuple[ttnn.CoreRange, ttnn.CoreRange]:
+    """
+    Core ranges for the fused QK ops: ``batch`` cores for Q, then ``batch`` cores for K.
+
+    ``rotary_embedding_llama_fused_qk`` reads the cos, sin and trans_mat shard that lands on
+    the core holding Q (or K) for that user, so every tensor it takes has to be sharded over
+    Q's cores followed by K's cores, in that order. This is the single definition of that
+    layout; callers that build a core grid for one of those tensors must use it.
+    """
+    k_start_core = ttnn.CoreCoord(batch % row_size, batch // row_size)
+    return num_to_corerange(batch, grid_x=row_size), num_to_corerange(batch, start_core=k_start_core, grid_x=row_size)
 
 
 def num_to_coregrid(x):
