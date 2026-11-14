@@ -117,7 +117,7 @@ void kernel_main() {
         for (uint32_t block_weight_h = 0; block_weight_h < num_blocks_weight_h; block_weight_h++) {
             if constexpr (split_reader_enabled) {
                 // Do the second half of the reads for act
-                experimental::set_read_state<coalesced_read_bytes>(noc, act_l1_read_addr);
+                set_activation_read_state<coalesced_read_bytes>(noc, act_l1_read_addr);
                 reader_idx = start_reader_idx;
 
                 if constexpr (!activation_reuse_enabled) {
