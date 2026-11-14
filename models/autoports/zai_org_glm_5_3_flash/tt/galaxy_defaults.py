@@ -141,3 +141,66 @@ def apply(mesh_shape, seq: int, isl: int | None = None) -> dict:
             os.environ[k] = v
             out[k] = v
     return out
+
+
+# Speculative decoding (the MTP drafter) is the DEFAULT decode of the 8x4 port -- the served glm53_flash_1m profile's
+# step (tt-inference-server workflows/model_specs/dev/llm.yaml) on the builds it was validated on at 1 M:
+#   B 16 (the served build): K 3 drafts; the multi-user steps 4 users x 3 (primary) and 8 users x 1
+#        (GLM53_SPEC_MULTI_ALT 8:1) and the lone-user 1 x 3 step (GLM53_SPEC_MULTI_LONE: its 4-row verify is the narrow
+#        width 4 with its L1 knobs, built from the weight cache); any subset of the group bases (GLM53_SPEC_PARTIAL); the
+#        sparse MTP layer (GLM53_SPEC_MTP_SPARSE). 1 / 2 / 4 / 8 live users at ISL 1,048,447: 95.5 / 75.5 / 61.6 / 41.1
+#        tok/s/u in-loop (chain_mu7_1, 2026-11-14) vs plain 47.6 / 46.7 / 32.5 / 30.9
+#   B 4: the single-user step (K 3, sparse MTP): 93.3 tok/s/u at 1 M (chain_m5_1 m5_k3_1m) vs plain 47.9
+# The served profile's GLM53_SPEC_SNAPSHOT_MTP (the MTP state in the prefix snapshots) is a serving knob and stays off
+# here. Rows a step cannot serve decode plainly and say so (spec_plan): more than 8 live users on the 16-row build (the
+# verify needs a candidate row per draft: 8 users x (1 + 1) rows fill it), more than one on B 4. A run that sets ANY
+# GLM53_SPEC_* variable configures speculation itself and gets none of these defaults; GLM53_SPEC_K=0 = plain.
+SPEC_KNOBS = {"GLM53_SPEC_K": "3", "GLM53_SPEC_ON_SHARD": "1", "GLM53_SPEC_MTP_SPARSE": "1"}
+SPEC_KNOBS_B16 = {
+    **SPEC_KNOBS,
+    "GLM53_SPEC_MULTI": "1",
+    "GLM53_SPEC_MULTI_USERS": "4",
+    "GLM53_SPEC_MULTI_ALT": "8:1",
+    "GLM53_SPEC_MULTI_LONE": "1",
+    "GLM53_SPEC_PARTIAL": "1",
+    "GLM53_SPEC_SAMPLED": "1",  # (only with a sampling head: GLM53_MK_SAMPLE=1 GLM53_MK_TOPK > 1; greedy rows unchanged)
+    "GLM53_STACK_NARROW_WIDTHS": "4",
+    "GLM53_DSA_NARROW_S1_DRAM": "1",
+    "GLM53_STACK_NARROW_PC_DRAM": "1",
+    "GLM53_KDA_POOL_BORROW": "1",
+    "GLM53_MK_WEIGHT_CACHE": "1",
+}
+SPEC_MAX_LIVE_B16 = 8  # spec_multi_plan(K, live, full=16): g = min(K + 1, 16 // live) < 2 past 8 users -> no draft
+
+
+def spec_plan(B: int, live: int) -> tuple:
+    """-> (the knobs a run of a B-row build with `live` users gets by default, "spec" / "plain", why) (pure)"""
+    B, live = int(B), int(live)
+    if B >= 16 and 1 <= live <= SPEC_MAX_LIVE_B16:
+        step = "the lone 1 x 3 step" if live == 1 else "4 users x 3" if live <= 4 else "8 users x 1"
+        return dict(SPEC_KNOBS_B16), "spec", f"the served B 16 steps ({step} for {live} live)"
+    if B >= 16:
+        return {}, "plain", f"{live} live users > {SPEC_MAX_LIVE_B16}: no candidate rows left on the 16-row build"
+    if B >= 4 and live == 1:
+        return dict(SPEC_KNOBS), "spec", "the single-user step (K 3, sparse MTP)"
+    return {}, "plain", f"no validated speculative step for B {B} with {live} live users"
+
+
+def apply_spec(mesh_shape, B: int, live: int, why_not: str = "") -> tuple:
+    """the speculative default (os.environ.setdefault, Galaxy only) -> ({knob: value} set, "spec" / "plain", why).
+    why_not: the caller's reason this run must decode plainly (a prefix / prefill-bench / image run)"""
+    if tuple(int(v) for v in mesh_shape) != GALAXY:
+        return {}, "plain", "not the 8x4 Galaxy"
+    explicit = sorted(k for k in os.environ if k.startswith("GLM53_SPEC_"))
+    if explicit:
+        k = int(os.environ.get("GLM53_SPEC_K", "0") or 0)
+        return {}, ("spec" if k > 0 else "plain"), f"explicit {', '.join(explicit)}"
+    if why_not:
+        return {}, "plain", why_not
+    knobs, mode, why = spec_plan(B, live)
+    out = {}
+    for k, v in knobs.items():
+        if os.environ.get(k) is None:
+            os.environ[k] = v
+            out[k] = v
+    return out, mode, why

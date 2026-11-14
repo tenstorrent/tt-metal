@@ -27,6 +27,12 @@ default 1). Gate = the HF greedy reference ids (GLM53_MK_IMAGE_EXPECT, else the 
 every id, the stack's top-5 per step (teacher-forced on the reference) logged when they differ. GLM53_MK_ISL = the
 prompt's length.
 
+Speculative decoding is the DEFAULT on the 8x4 Galaxy (tt/galaxy_defaults.py apply_spec: the served glm53_flash_1m
+profile's MTP steps -- B 16: 1..8 live users through the lone 1 x 3, 4 x 3 and 8 x 1 steps; B 4: one live user, K 3):
+a greedy text run decodes once, through the speculative step (GLM53_MK_SPEC_ONLY), and logs MK_ROW: decode spec | plain
+(why), ISL / OSL per user, concurrency, TTFT, tok/s/u, the step. GLM53_SPEC_K=0 = plain; any explicit GLM53_SPEC_*
+knob = the run's own speculation config (no defaults); GLM53_MK_SPEC_AB=1 = the plain pass first and its ids gate.
+
 Speculative A/B (Stage 17 M0, GLM53_SPEC_K=K with GLM53_MK_LIVE=1 and greedy): after the plain run the same prompt
 decodes through the backend's MTP speculative step on the same build (Glm53Generator.generate_batch(spec_k=K)); the
 ids must equal the plain ids up to the first near-tie (a mismatch fails only where the plain top-2 logit gap at that
@@ -401,7 +407,7 @@ def _spec_timing(tag: str, st: dict, tau: float, plain_ms: float) -> None:
     = tau (mean committed tokens per user per step) / the in-loop step"""
     steps = int(st.get("spec_steps", 0))
     if not steps or "spec_loop_s" not in st:
-        return
+        return None
     loop_ms = st["spec_loop_s"] * 1e3
     step_ms = loop_ms / steps
     eff = tau / step_ms * 1e3 if step_ms > 0 else 0.0
@@ -411,6 +417,23 @@ def _spec_timing(tag: str, st: dict, tau: float, plain_ms: float) -> None:
         f"{st.get('spec_tail_steps', 0)} steps in {st.get('spec_tail_s', 0) * 1e3:.0f} ms (decode_s "
         f"{st['decode_s'] * 1e3:.0f} ms); in-loop effective {eff:.1f} tok/s/u = {eff * plain_ms / 1e3:.2f}x the plain "
         f"{plain_ms:.1f} ms/step (tau {tau:.2f})"
+    )
+    return dict(step_ms=step_ms, eff=eff)
+
+
+def _ids_sha(outs) -> str:
+    """every user's generated ids, whole -> the 16-hex digest the MK_*_ALL_IDS lines carry"""
+    return hashlib.sha256(repr([list(o) for o in outs]).encode()).hexdigest()[:16]
+
+
+def _row(
+    mode: str, why: str, live: int, isl: int, ttft_ms: float, toks: float, step_ms: float, extra: str = ""
+) -> None:
+    """MK_ROW: the one line a chain books per run -- the decode mode (spec / plain) and why, ISL / OSL per user and the
+    concurrency, TTFT, decode tok/s per user (spec: the in-loop effective rate = tau / the in-loop step) and the step"""
+    logger.info(
+        f"MK_ROW: decode {mode} ({why}) | ISL {isl} (per user) OSL {OSL} (per user) concurrency {live} | TTFT "
+        f"{ttft_ms:.0f} ms | decode {toks:.1f} tok/s/u, {step_ms:.1f} ms per step{' | ' + extra if extra else ''}"
     )
 
 
@@ -501,13 +524,19 @@ def _spec_ab_multi(gen, backend, mesh_device, tok, prompts, plains, plain_timing
         f"{sum(len(p) - 1 for p in prompts)}); ids equal per user "
         f"{[r[0] is None for r in res] if plains is not None else 'SKIPPED (spec-only, no reference ids)'}"
     )
-    _spec_timing("MK_SPEC_MULTI", st, sum(taus) / max(1, G), plain_ms)
+    tim = _spec_timing("MK_SPEC_MULTI", st, sum(taus) / max(1, G), plain_ms)
     logger.info(f"MK_SPEC_MULTI_TEXT user 0: {tok.decode([t for t in souts[0] if 0 <= t < tok.vocab_size])!r}")
     logger.info(
         f"MK_SPEC_MULTI_STEP: (K, G) {st.get('spec_step')} of the steps {[s[:2] for s in gen.spec_steps()]} "
         f"for {G} live users (GLM53_SPEC_MULTI_ALT / _PARTIAL)"
     )
     logger.info(f"MK_SPEC backend spec counters: {backend.spec.counters}")
+    sha = _ids_sha(souts)
+    logger.info(f"MK_SPEC_ALL_IDS: sha256 {sha} ({G} users, {sum(len(o) for o in souts)} ids)")
+    kg = st.get("spec_step") or (K, G)
+    row = dict(tau=sum(taus) / max(1, G), steps=steps, spec_ms=spec_ms, eff=eff, ttft_ms=st["prefill_s"] * 1e3, sha=sha,
+               step=f"step (K, G) {tuple(kg)[:2]}", step_ms=tim["step_ms"] if tim else spec_ms,
+               eff_loop=tim["eff"] if tim else eff)  # fmt: skip
     tie = float(os.environ.get("GLM53_MK_SPEC_TIE", "1.0"))
     assert steps > 0, "the multi-user speculative path ran no step"
     min_tau = float(os.environ.get("GLM53_MK_SPEC_MIN_TAU", "0") or 0)
@@ -516,9 +545,10 @@ def _spec_ab_multi(gen, backend, mesh_device, tok, prompts, plains, plain_timing
     bad = [(u, f, g) for u, (f, g) in enumerate(res) if f is not None and g >= tie]
     assert not bad, (f"spec ids differ from plain where the plain top-2 gap >= {tie}: (user, index, gap) {bad}; "
                      f"{[(souts[u][: f + 4], plains[u][: f + 4]) for u, f, _ in bad]}")  # fmt: skip
+    return row
 
 
-def _spec_ab(gen, backend, mesh_device, tok, prompt, plain, plain_timing, plain_ms, K, stop) -> None:
+def _spec_ab(gen, backend, mesh_device, tok, prompt, plain, plain_timing, plain_ms, K, stop) -> dict:
     """Stage 17 M0: the same prompt through the speculative step (generate_batch(spec_k=K)) after the plain greedy run
     on the same build; MK_SPEC line + the gate (ids == plain up to the first near-tie)"""
     souts = gen.generate_batch([list(prompt)], OSL, stop_on_eos=stop, enable_trace=True, spec_k=K)
@@ -540,9 +570,14 @@ def _spec_ab(gen, backend, mesh_device, tok, prompt, plain, plain_timing, plain_
         f"{(first is None) if plain is not None else 'SKIPPED (spec-only, no reference ids)'} (first mismatch {first}, "
         f"plain top-2 gap {gap}); spec ids {sids[:24]}"
     )
-    _spec_timing("MK_SPEC", st, tau, plain_ms)
+    tim = _spec_timing("MK_SPEC", st, tau, plain_ms)
     logger.info(f"MK_SPEC_TEXT: {text!r}")
     logger.info(f"MK_SPEC backend spec counters: {backend.spec.counters}")
+    sha = _ids_sha(souts)
+    logger.info(f"MK_SPEC_ALL_IDS: sha256 {sha} (1 users, {len(sids)} ids)")
+    row = dict(tau=tau, steps=steps, spec_ms=spec_ms, eff=eff, ttft_ms=st["prefill_s"] * 1e3, sha=sha,
+               step=f"single-user step K {K}", step_ms=tim["step_ms"] if tim else spec_ms,
+               eff_loop=tim["eff"] if tim else eff)  # fmt: skip
     tie = float(os.environ.get("GLM53_MK_SPEC_TIE", "1.0"))
     assert steps > 0, "the speculative path ran no step"
     # GLM53_MK_SPEC_TTFT_RATIO (e.g. 1.10): the spec request's TTFT (its prefill fills the MTP cache) within that ratio
@@ -559,6 +594,15 @@ def _spec_ab(gen, backend, mesh_device, tok, prompt, plain, plain_timing, plain_
         f"spec ids differ from plain at {first} where the plain top-2 gap is {gap:.3f} >= {tie}: {sids[:first + 4]} vs "
         f"{plain[:first + 4]}"
     )
+    return row
+
+
+def _spec_row(r: dict, why: str, live: int, isl: int, K: int, plain_ms: float) -> None:
+    """the MK_ROW of a speculative run (r: _spec_ab / _spec_ab_multi's result)"""
+    pl = f"plain {plain_ms:.1f} ms/step = {1e3 / plain_ms:.1f} tok/s/u" if plain_ms == plain_ms else "plain unmeasured"
+    _row("spec", why, live, isl, r["ttft_ms"], r["eff_loop"], r["step_ms"],
+         f"{r['step']} K {K} tau {r['tau']:.2f} ({r['steps']} steps); end-to-end {r['eff']:.1f} tok/s/u "
+         f"({r['spec_ms']:.1f} ms per step with enter / leave / plain tail); {pl}; ids {r['sha']}")  # fmt: skip
 
 
 @pytest.mark.parametrize(
@@ -582,6 +626,27 @@ def test_mk_e2e(mesh_device, monkeypatch):
 
     # every knob an explicit environment value does not already set (the prefix run's prompts take the 8,192 buckets)
     DEFAULTS = GD.apply(MESH, SEQ, _ISL_SEQ)
+    # the speculative decode is the default (galaxy_defaults.apply_spec: the served profile's MTP steps on the builds they
+    # were validated on); a run sets GLM53_SPEC_K=0 for plain, or any GLM53_SPEC_* knob to configure speculation itself.
+    # A greedy text run then decodes ONCE, through the speculative step (GLM53_MK_SPEC_ONLY: one prefill per user -- at
+    # 1 M each pass prefills ~282 s per user); GLM53_MK_SPEC_AB=1 (or an explicit GLM53_MK_SPEC_ONLY=0) adds the plain
+    # pass first and its per-user ids gate
+    live0 = int(os.environ.get("GLM53_MK_LIVE", str(B)))
+    temp0 = float(os.environ.get("GLM53_MK_TEMP", "0") or 0)
+    dev_sampler = os.environ.get("GLM53_MK_SAMPLE", "0") == "1" and int(os.environ.get("GLM53_MK_TOPK", "1")) > 1
+    why_not = ("a prefix-cache run (its decode is plain)" if PREFIX else
+               "a prefill key bench run" if PF_BENCH > 0 else
+               "an image prompt (the MTP-cache prefill embeds token ids)" if (IMAGE_FEATS or IMAGE) else
+               "sampled without the device sampler (GLM53_MK_SAMPLE=1, GLM53_MK_TOPK > 1)" if temp0 > 0 and
+               not dev_sampler else "")  # fmt: skip
+    spec_set, spec_mode, spec_why = GD.apply_spec(MESH, B, live0, why_not)
+    spec_only_default = False
+    if spec_mode == "spec" and spec_set and temp0 == 0 and not why_not:
+        if os.environ.get("GLM53_MK_SPEC_ONLY") is None and os.environ.get("GLM53_MK_SPEC_AB", "0") != "1":
+            os.environ["GLM53_MK_SPEC_ONLY"] = "1"
+            spec_set["GLM53_MK_SPEC_ONLY"] = "1"
+            spec_only_default = True
+    logger.info(f"MK_DECODE: {spec_mode} ({spec_why}); defaults set {spec_set}")
     snapshot = default_snapshot_dir()
     mm_in = image_input(snapshot) if (IMAGE_FEATS or IMAGE) else None
     if mm_in is not None:  # the embedding table's extra rows (tt/mk_head.py mm_extra_rows), before the backend is built
@@ -663,11 +728,16 @@ def test_mk_e2e(mesh_device, monkeypatch):
     # (else the GLM53_MK_EXPECT_IDS_FILE json's step_ms, else unreported); the ids gate: GLM53_MK_EXPECT_IDS_FILE (a
     # GLM53_MK_DUMP_IDS json of the plain run), else SKIPPED and flagged in the MK_SPEC lines
     spec_k0 = int(os.environ.get("GLM53_SPEC_K", "0") or 0)
+    has_mtp = getattr(backend, "spec", None) is not None and backend.spec.drafter == "mtp"
+    if spec_only_default and has_mtp:  # (the default spec-only pass needs a step that serves every live user)
+        G_ = gen.spec_groups()
+        g_ = max((g for _k, g, _b in gen.spec_steps()), default=G_)
+        if not ((G_ and (live == G_ or (live <= g_ and gen.spec_partial_groups()))) or (not G_ and live == 1)):
+            spec_why = f"no built step serves {live} live users (G {G_}): the plain pass"
+            os.environ["GLM53_MK_SPEC_ONLY"] = "0"
     if os.environ.get("GLM53_MK_SPEC_ONLY", "0") == "1" and spec_k0 > 0:
         assert sampling is None and mm_in is None, "GLM53_MK_SPEC_ONLY: greedy text users only"
-        assert (
-            getattr(backend, "spec", None) is not None and backend.spec.drafter == "mtp"
-        ), "GLM53_MK_SPEC_ONLY: the MTP step"
+        assert has_mtp, "GLM53_MK_SPEC_ONLY: the MTP step"
         ref = _ref_ids(live)
         pms = float(os.environ.get("GLM53_MK_PLAIN_MS", "0") or 0)
         if not pms and os.environ.get("GLM53_MK_EXPECT_IDS_FILE"):
@@ -682,14 +752,15 @@ def test_mk_e2e(mesh_device, monkeypatch):
         G = gen.spec_groups()
         g_max = max((g for _k, g, _b in gen.spec_steps()), default=G)
         if G and (live == G or (live <= g_max and gen.spec_partial_groups())):
-            _spec_ab_multi(gen, backend, mesh_device, tok, prompts, ref, nan_t, pms, spec_k0, stop)
+            r = _spec_ab_multi(gen, backend, mesh_device, tok, prompts, ref, nan_t, pms, spec_k0, stop)
         elif not G and live == 1:
-            _spec_ab(
+            r = _spec_ab(
                 gen, backend, mesh_device, tok, prompts[0], None if ref is None else ref[0], nan_t, pms, spec_k0, stop
             )
         else:
             raise AssertionError(f"GLM53_MK_SPEC_ONLY: no step serves {live} live users (G {G}, partial "
                                  f"{gen.spec_partial_groups()})")  # fmt: skip
+        _spec_row(r, f"{spec_why}; spec only, no plain pass", live, len(ids), spec_k0, pms)
         if isinstance(source, MkTileCacheSource) and source._added:
             source.save_manifest()
         return
@@ -757,18 +828,26 @@ def test_mk_e2e(mesh_device, monkeypatch):
         g_max = max((g for _k, g, _b in gen.spec_steps()), default=G)
         multi_ok = bool(G) and (live == G or (live <= g_max and gen.spec_partial_groups()))
         if multi_ok and sampling is None and mm_in is None:
-            _spec_ab_multi(gen, backend, mesh_device, tok, prompts, outs, timing, step_ms, spec_k, stop)
+            r = _spec_ab_multi(gen, backend, mesh_device, tok, prompts, outs, timing, step_ms, spec_k, stop)
+            _spec_row(r, f"{spec_why}; after the plain pass", live, len(ids), spec_k, step_ms)
         elif sampling is not None and gen.spec_samples() and live == max(1, G) and mm_in is None:
             # GLM53_SPEC_SAMPLED + GLM53_MK_TEMP: the sampled verify speculates on sampled requests (no ids gate: a draw
             # differs from the plain run's by construction; the distribution is the host Monte Carlo's)
             _spec_sampled(gen, backend, mesh_device, tok, prompts, outs, timing, step_ms, spec_k, sampling)
+            logger.info("MK_ROW: decode spec (sampled: see the MK_SPEC_SAMPLED line)")
         elif not G and live == 1 and sampling is None and mm_in is None:
-            _spec_ab(gen, backend, mesh_device, tok, prompts[0], outs[0], timing, step_ms, spec_k, stop)
+            r = _spec_ab(gen, backend, mesh_device, tok, prompts[0], outs[0], timing, step_ms, spec_k, stop)
+            _spec_row(r, f"{spec_why}; after the plain pass", live, len(ids), spec_k, step_ms)
         else:  # (an image prompt never speculates: the MTP-cache prefill embeds token ids, not the feature rows)
             logger.info(
                 f"MK_SPEC: skipped (greedy text users: GLM53_MK_LIVE=1, or = GLM53_SPEC_MULTI_USERS {G} with "
                 f"GLM53_SPEC_MULTI=1; no GLM53_MK_TEMP, no image; live {live})"
             )
+            _row("plain", f"no speculative step serves {live} live users", live, len(ids), ttft_s * 1e3,
+                 1e3 / step_ms, step_ms, f"ids {_ids_sha(outs)}")  # fmt: skip
+    else:
+        _row("plain", spec_why if spec_mode == "plain" else "no MTP step on this build", live, len(ids), ttft_s * 1e3,
+             1e3 / step_ms, step_ms, f"ids {_ids_sha(outs)}")  # fmt: skip
     if PF_BENCH > 0:
         _pf_bench(backend, mesh_device, tok, PF_BENCH)
     if isinstance(source, TileCache) and not source.ready:
