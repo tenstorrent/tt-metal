@@ -261,7 +261,9 @@ def commit_tensix_soft_reset(
 # Bits 11-14 and 18 (the RISCs) are excluded: they are held in reset by the caller via get_soft_reset_mask(ALL_CORES).
 _PIPELINE_RESET_MASK = 0x7FF | (0x7 << 15)
 _SRCA_SRCB = 0b11  # SETDVALID/CLEARDVALID: satisfy and clear both SrcA and SrcB
-_CLOCK_KEEPALIVE_READS = 16  # thread-0 reads that keep unit clocks running while the stall drains
+_CLOCK_KEEPALIVE_READS = (
+    16  # thread-0 reads that keep unit clocks running while the stall drains
+)
 
 
 def recover_tensix_core(location: str = "0,0", device_id=0):
@@ -279,7 +281,7 @@ def recover_tensix_core(location: str = "0,0", device_id=0):
     )
     store.write_register("RISCV_DEBUG_REG_SOFT_RESET_0", held)
     ops = debug_tensix.device.instructions
-    debug_tensix.inject_instruction(ops.TT_OP_SETDVALID(_SRCA_SRCB), 0)   # thread 0
+    debug_tensix.inject_instruction(ops.TT_OP_SETDVALID(_SRCA_SRCB), 0)  # thread 0
     debug_tensix.inject_instruction(ops.TT_OP_CLEARDVALID(_SRCA_SRCB, 0), 0)  # thread 0
     # Unit clocks are gated when idle: reads keep them running while the wait drains and the reset is asserted.
     for _ in range(_CLOCK_KEEPALIVE_READS):
