@@ -88,9 +88,7 @@ public:
 
     bool is_dram_backed() const { return backing_->is_dram_backed(); }
 
-    uint32_t get_dram_region_base_addr() const;
-
-    uint32_t get_dram_region_bank_id() const;
+    CqBacking& backing() const { return *backing_; }
 
     AuxRegionAllocator& aux_region_allocator() { return backing_->aux_region_allocator(); }
 

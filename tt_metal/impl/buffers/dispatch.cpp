@@ -1641,32 +1641,8 @@ std::shared_ptr<tt::tt_metal::CompletionReaderVariant> generate_interleaved_buff
         dispatch_params.total_pages_read);
 }
 
-void read_completion_queue(
-    void* dst,
-    uint32_t size_bytes,
-    ChipId device_id,
-    uint16_t channel,
-    uint32_t completion_q_read_ptr,
-    uint32_t completion_q_data_offset,
-    const SystemMemoryManager& sysmem_manager) {
-    if (sysmem_manager.is_dram_backed()) {
-        const uint32_t dram_channel = sysmem_manager.metal_context()
-                                          .device_manager()
-                                          ->get_active_device(device_id)
-                                          ->allocator_impl()
-                                          ->get_dram_channel_from_bank_id(sysmem_manager.get_dram_region_bank_id());
-        sysmem_manager.env_impl().get_cluster().read_dram_vec(
-            dst, size_bytes, device_id, dram_channel, completion_q_read_ptr + completion_q_data_offset);
-    } else {
-        sysmem_manager.env_impl().get_cluster().read_sysmem(
-            dst, size_bytes, completion_q_read_ptr + completion_q_data_offset, device_id, channel);
-    }
-}
-
 void copy_completion_queue_data_into_user_space(
     const ReadBufferDescriptor& read_buffer_descriptor,
-    ChipId mmio_device_id,
-    uint16_t channel,
     uint32_t cq_id,
     SystemMemoryManager& sysmem_manager,
     std::atomic<bool>& exit_condition) {
@@ -1722,14 +1698,8 @@ void copy_completion_queue_data_into_user_space(
             void* contiguous_dst = (void*)(uint64_t(dst) + contig_dst_offset);
             if (page_size == padded_page_size) {
                 uint32_t data_bytes_xfered = bytes_xfered - offset_in_completion_q_data;
-                read_completion_queue(
-                    contiguous_dst,
-                    data_bytes_xfered,
-                    mmio_device_id,
-                    channel,
-                    completion_q_read_ptr,
-                    offset_in_completion_q_data,
-                    sysmem_manager);
+                sysmem_manager.backing().read_cq_memory(
+                    contiguous_dst, data_bytes_xfered, completion_q_read_ptr + offset_in_completion_q_data);
                 contig_dst_offset += data_bytes_xfered;
                 offset_in_completion_q_data = 0;
             } else {
@@ -1773,14 +1743,10 @@ void copy_completion_queue_data_into_user_space(
                         num_bytes_to_copy = page_size;
                     }
 
-                    read_completion_queue(
+                    sysmem_manager.backing().read_cq_memory(
                         (char*)(uint64_t(contiguous_dst) + dst_offset_bytes),
                         num_bytes_to_copy,
-                        mmio_device_id,
-                        channel,
-                        completion_q_read_ptr,
-                        src_offset_bytes,
-                        sysmem_manager);
+                        completion_q_read_ptr + src_offset_bytes);
 
                     src_offset_bytes += src_offset_increment;
                     dst_offset_bytes += num_bytes_to_copy;
@@ -1848,14 +1814,10 @@ void copy_completion_queue_data_into_user_space(
                     }
                 }
 
-                read_completion_queue(
+                sysmem_manager.backing().read_cq_memory(
                     (char*)(uint64_t(dst) + dst_offset_bytes),
                     num_bytes_to_copy,
-                    mmio_device_id,
-                    channel,
-                    completion_q_read_ptr,
-                    src_offset_bytes,
-                    sysmem_manager);
+                    completion_q_read_ptr + src_offset_bytes);
 
                 src_offset_bytes += src_offset_increment;
             }

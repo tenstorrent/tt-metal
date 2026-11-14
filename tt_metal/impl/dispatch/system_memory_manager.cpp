@@ -216,14 +216,4 @@ void SystemMemoryManager::fetch_queue_write(uint32_t command_size_B, const uint8
     backing_->fetch_queue_write(command_size_B, cq_id, stall_prefetcher);
 }
 
-uint32_t SystemMemoryManager::get_dram_region_base_addr() const {
-    TT_FATAL(this->is_dram_backed(), "CQs are not DRAM backed");
-    return env_.get_hal().get_dev_addr(HalDramMemAddrType::DRAM_BACKED_COMMAND_QUEUES);
-}
-
-uint32_t SystemMemoryManager::get_dram_region_bank_id() const {
-    TT_FATAL(this->is_dram_backed(), "CQs are not DRAM backed");
-    return 0;
-}
-
 }  // namespace tt::tt_metal

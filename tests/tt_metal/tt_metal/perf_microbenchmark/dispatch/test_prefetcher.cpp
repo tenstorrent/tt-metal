@@ -3226,11 +3226,11 @@ private:
     uint32_t completion_dram_addr() const {
         const uint8_t cq_id = fdcq_->id();
         const SystemMemoryCQInterface& cq_iface = mgr_->get_cq_interfaces()[cq_id];
-        return mgr_->get_dram_region_base_addr() + tt::tt_metal::get_relative_cq_offset(cq_id, mgr_->get_cq_size()) +
-               cq_iface.cq_start + cq_iface.command_issue_region_size;
+        return mgr_->backing().cq_base_addr(cq_id, /*channel=*/0) + cq_iface.cq_start +
+               cq_iface.command_issue_region_size;
     }
     int completion_dram_channel() const {
-        return this->device_->allocator_impl()->get_dram_channel_from_bank_id(mgr_->get_dram_region_bank_id());
+        return this->device_->allocator_impl()->get_dram_channel_from_bank_id(CqBacking::kDramBankId);
     }
 
     std::vector<uint8_t> quasar_completion_buf_;
