@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <sys/types.h>
 
@@ -13,6 +14,7 @@
 #include <stdexcept>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt_stl/reflection.hpp>
 #include <ttnn/operations/reduction/generic/generic_reductions.hpp>
 #include <ttnn/tensor/shape/shape.hpp>
 #include <ttnn/tensor/tensor.hpp>
@@ -22,8 +24,14 @@
 #include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/common/const_utils.hpp"
+#include "metal/common/program_utils.hpp"
 #include "metal/operations.hpp"
+#include "metal/ops/common/ring_sdpa_utils.hpp"
+#include "metal/ops/ring_sdpa_fw/device/ring_sdpa_fw_device_operation.hpp"
+#include "metal/ops/sdpa_fw/device/sdpa_fw_config.hpp"
+#include "metal/ops/sdpa_fw/device/sdpa_fw_device_operation_types.hpp"
 #include "test_utils/random_data.hpp"
+#include "test_utils/relative_l2.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/data_movement/repeat/repeat.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
@@ -31,6 +39,9 @@
 #include "ttnn_fixed/matmuls.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 #include "xtensor/generators/xbuilder.hpp"
+
+using ::testing::HasSubstr;
+using ::testing::ThrowsMessage;
 
 class SDPAForwardTest : public ::testing::Test {
 protected:
@@ -498,6 +509,10 @@ struct SDPATestConfig {
     float gate_min = -4.0F;  // sigmoid(-4) ~ 0.018
     float gate_max = 4.0F;   // sigmoid(+4) ~ 0.982
     float dropout_prob = 0.0F;
+    // 0 = program factory default.
+    ttml::metal::SDPAForwardProgramConfig program_config{};
+    bool return_intermediates = true;
+    std::optional<uint32_t> seed;  // input RNG seed; unset = fresh from the context generator
     float result_atol = 2e-2F;
     float result_rtol = 2e-2F;
     float intermediate_atol = 2e-2F;
@@ -505,7 +520,13 @@ struct SDPATestConfig {
     std::string test_name = "SDPA Test";
 };
 
-void run_sdpa_test(const SDPATestConfig& config) {
+// kernel_output, when given, receives the kernel's output so callers can compare runs with each other.
+// kernel_output receives the kernel's output; keep_alive receives the device inputs (Q, K, V, the mask tensor if
+// any), so a caller can hold them past the call and force the next call's inputs to other addresses.
+void run_sdpa_test(
+    const SDPATestConfig& config,
+    xt::xarray<float>* kernel_output = nullptr,
+    std::vector<ttnn::Tensor>* keep_alive = nullptr) {
     using namespace ttml;
 
     ASSERT_GT(config.num_query_heads, 0U) << "num_query_heads must be greater than zero";
@@ -520,30 +541,33 @@ void run_sdpa_test(const SDPATestConfig& config) {
     const uint32_t head_dim_kv = config.key_value_dim / config.num_key_heads;
     const uint32_t head_dim_v = effective_value_dim / config.num_key_heads;
 
-    auto& rng = ttml::autograd::ctx().get_generator();
-    uint32_t seed = rng();
+    const uint32_t seed = config.seed.has_value() ? config.seed.value() : ttml::autograd::ctx().get_generator()();
 
     const std::array<std::size_t, 4> query_shape{
         config.batch_size, config.num_query_heads, config.sequence_length, head_dim_q};
     const std::array<std::size_t, 4> kv_shape{
         config.batch_size, config.num_key_heads, config.sequence_length, head_dim_kv};
 
-    xt::xarray<float> query_tensor = ttml::test_utils::make_uniform_xarray<float>(query_shape, -1.0F, 1.0F, seed);
+    // Each input gets its own seed (the same seed on equal shapes would make Q, K and V identical), and
+    // is rounded to bf16 up front so the references see exactly what the device sees.
+    xt::xarray<float> query_tensor =
+        round_to_bf16(ttml::test_utils::make_uniform_xarray<float>(query_shape, -1.0F, 1.0F, seed));
 
-    xt::xarray<float> key_tensor = ttml::test_utils::make_uniform_xarray<float>(kv_shape, -1.0F, 1.0F, seed);
+    xt::xarray<float> key_tensor =
+        round_to_bf16(ttml::test_utils::make_uniform_xarray<float>(kv_shape, -1.0F, 1.0F, seed + 1U));
 
     const std::array<std::size_t, 4> value_shape{
         config.batch_size, config.num_key_heads, config.sequence_length, head_dim_v};
-    xt::xarray<float> value_tensor = ttml::test_utils::make_uniform_xarray<float>(value_shape, -1.0F, 1.0F, seed);
+    xt::xarray<float> value_tensor =
+        round_to_bf16(ttml::test_utils::make_uniform_xarray<float>(value_shape, -1.0F, 1.0F, seed + 2U));
 
     // Optional gate: (B, num_query_heads, S, head_dim_v) - same shape as the kernel output.
-    // Use a different seed so the gate is decorrelated from V (same shape, same seed would give identical data).
     std::optional<xt::xarray<float>> gate_tensor;
     if (config.use_gate) {
         const std::array<std::size_t, 4> gate_shape{
             config.batch_size, config.num_query_heads, config.sequence_length, head_dim_v};
         gate_tensor = round_to_bf16(
-            ttml::test_utils::make_uniform_xarray<float>(gate_shape, config.gate_min, config.gate_max, seed + 1U));
+            ttml::test_utils::make_uniform_xarray<float>(gate_shape, config.gate_min, config.gate_max, seed + 3U));
     }
 
     // Create attention mask in kernel-expected format (1, 1, S, S) - broadcasted across batches/heads.
@@ -561,7 +585,7 @@ void run_sdpa_test(const SDPATestConfig& config) {
     auto query = core::from_xtensor(query_tensor, &autograd::ctx().get_device());
     auto key = core::from_xtensor(key_tensor, &autograd::ctx().get_device());
     auto value = core::from_xtensor(value_tensor, &autograd::ctx().get_device());
-    const bool return_intermediates = true;
+    const bool return_intermediates = config.return_intermediates;
 
     // For Causal mask_type: kernel generates mask on-the-fly, we pass std::nullopt
     // For Arbitrary mask_type: we pass attn_mask tensor to kernel
@@ -575,13 +599,36 @@ void run_sdpa_test(const SDPATestConfig& config) {
     if (gate_tensor.has_value()) {
         kernel_gate = core::from_xtensor(gate_tensor.value(), &autograd::ctx().get_device());
     }
+    if (keep_alive != nullptr) {
+        keep_alive->assign({query, key, value});
+        if (kernel_mask.has_value()) {
+            keep_alive->push_back(kernel_mask.value());
+        }
+    }
 
     // Run SDPA kernel with new interface - this is our reference implementation
     auto result = ttml::metal::sdpa_fw(
-        query, key, value, config.mask_type, kernel_mask, config.dropout_prob, return_intermediates, kernel_gate);
+        query,
+        key,
+        value,
+        config.mask_type,
+        kernel_mask,
+        config.dropout_prob,
+        return_intermediates,
+        kernel_gate,
+        config.program_config);
     xt::xarray<float> result_xtensor =
         core::to_xtensor(result[0].value());  // Kernel returns (B, H, S, D) - heads NOT fused
-    xt::xarray<float> interm_xtensor = core::to_xtensor(result[1].value());
+    if (kernel_output != nullptr) {
+        *kernel_output = result_xtensor;
+    }
+    xt::xarray<float> interm_xtensor;
+    if (return_intermediates) {
+        ASSERT_TRUE(result[1].has_value()) << "intermediates requested but not returned in " << config.test_name;
+        interm_xtensor = core::to_xtensor(result[1].value());
+    } else {
+        ASSERT_FALSE(result[1].has_value()) << "intermediates returned although not requested in " << config.test_name;
+    }
 
     // Run composite SDPA implementation with split tensors - output is (B, H, S, D)
     // Composite always needs the mask tensor for comparison (even when kernel generates it on-the-fly)
@@ -605,10 +652,40 @@ void run_sdpa_test(const SDPATestConfig& config) {
     if (gate_tensor.has_value()) {
         constexpr float kGateAtol = 1e-4F;
         constexpr float kGateRtol = 8e-3F;
+        // The gate CB takes L1, so the gated run may resolve different chunks than an ungated run would.
+        // Reproduce the gated run's pick and pin the ungated run to it: both must use the same numerics.
+        auto* device = &autograd::ctx().get_device();
+        const uint64_t l1_budget_bytes = ttml::metal::available_l1_bytes(*device);
+        const auto grid = device->compute_with_storage_grid_size();
+        const auto picked = ttml::metal::ops::sdpa_fw::device::resolve_chunks(
+            config.program_config,
+            ttml::metal::ops::sdpa_fw::device::SDPAForwardShape{
+                .batch = config.batch_size,
+                .q_heads = config.num_query_heads,
+                .kv_heads = config.num_key_heads,
+                .St = config.sequence_length / 32U,
+                .qWt = head_dim_kv / 32U,
+                .vWt = head_dim_v / 32U,
+                .mask_type = config.mask_type,
+                .has_gate = true,
+                .return_intermediates = return_intermediates},
+            l1_budget_bytes,
+            grid.x * grid.y);
+        const ttml::metal::SDPAForwardProgramConfig pinned{
+            .q_chunk_size = picked.Sq_chunk_t * 32U,
+            .k_chunk_size = picked.Sk_chunk_t * 32U,
+            .heads_per_item = picked.heads_per_item};
         auto ungated = ttml::metal::sdpa_fw(
-            query, key, value, config.mask_type, kernel_mask, config.dropout_prob, return_intermediates);
+            query,
+            key,
+            value,
+            config.mask_type,
+            kernel_mask,
+            config.dropout_prob,
+            return_intermediates,
+            std::nullopt,
+            pinned);
         xt::xarray<float> ungated_xtensor = core::to_xtensor(ungated[0].value());
-        xt::xarray<float> ungated_interm_xtensor = core::to_xtensor(ungated[1].value());
 
         ASSERT_EQ(result_xtensor.shape(), ungated_xtensor.shape())
             << "Gated and ungated kernel outputs must have the same shape in " << config.test_name;
@@ -620,8 +697,11 @@ void run_sdpa_test(const SDPATestConfig& config) {
             << " (MSE: " << compute_mse(expected_from_ungated, result_xtensor) << ")";
 
         // (2) the logsumexp is packed before the gate path runs, so it must be bit-identical.
-        EXPECT_TRUE(xt::all(xt::equal(interm_xtensor, ungated_interm_xtensor)))
-            << "Gate changed the intermediates (logsumexp) in " << config.test_name;
+        if (return_intermediates) {
+            xt::xarray<float> ungated_interm_xtensor = core::to_xtensor(ungated[1].value());
+            EXPECT_TRUE(xt::all(xt::equal(interm_xtensor, ungated_interm_xtensor)))
+                << "Gate changed the intermediates (logsumexp) in " << config.test_name;
+        }
     }
 
     // All results are now in split format (B, H, S, D) - heads NOT fused
@@ -629,14 +709,34 @@ void run_sdpa_test(const SDPATestConfig& config) {
     ASSERT_EQ(result_xtensor.shape(), float_result.shape()) << "Kernel result shape mismatch in " << config.test_name;
     ASSERT_EQ(composite_result_xtensor.shape(), float_result.shape())
         << "Composite result shape mismatch in " << config.test_name;
-    ASSERT_EQ(interm_xtensor.shape(), float_intermediates.shape())
-        << "Intermediate shape mismatch in " << config.test_name;
+    if (return_intermediates) {
+        ASSERT_EQ(interm_xtensor.shape(), float_intermediates.shape())
+            << "Intermediate shape mismatch in " << config.test_name;
+    }
 
     // Compute MSE for validation
     float mse_kernel_vs_composite = compute_mse(result_xtensor, composite_result_xtensor);
     float mse_kernel_vs_float = compute_mse(result_xtensor, float_result);
     float mse_composite_vs_float = compute_mse(composite_result_xtensor, float_result);
-    float mse_kernel_vs_composite_interm = compute_mse(interm_xtensor, composite_interm_xtensor);
+    float mse_kernel_vs_composite_interm =
+        return_intermediates ? compute_mse(interm_xtensor, composite_interm_xtensor) : 0.0F;
+
+    // Scale checks against the float reference. The elementwise tolerances cannot see a uniform few-percent
+    // error (a 4% scale error on |O| <= 1 passes atol + rtol 2e-2; a 10% error in the softmax sum moves the
+    // LSE by 0.1, inside its bound at |LSE| ~ 4), and the cross-chunking check only catches chunking-dependent
+    // bugs. relative_l2 of O is sensitive to a uniform scale error, and the LSE (which the backward consumes
+    // directly) gets an absolute bound. Both bounds are measured: the suite's largest values on p150b are
+    // 0.0049 for relative_l2 (median 0.002) and 0.0146 for the LSE, with a margin for other inputs.
+    {
+        constexpr float kRelativeL2Bound = 1e-2F;
+        constexpr float kLseAbsBound = 3e-2F;
+        const float rel_l2 = ttml::test_utils::relative_l2(result_xtensor, float_result);
+        EXPECT_LT(rel_l2, kRelativeL2Bound) << "relative L2 against the float reference in " << config.test_name;
+        if (return_intermediates) {
+            const float lse_abs = xt::amax(xt::abs(interm_xtensor - float_intermediates))();
+            EXPECT_LT(lse_abs, kLseAbsBound) << "LSE against the float reference in " << config.test_name;
+        }
+    }
 
     // Primary validation: Kernel vs Composite (most reliable - both use same implementation approach)
     EXPECT_TRUE(xt::allclose(result_xtensor, composite_result_xtensor, config.result_atol, config.result_rtol))
@@ -657,10 +757,12 @@ void run_sdpa_test(const SDPATestConfig& config) {
             << "Composite vs Float result comparison failed in " << config.test_name
             << " (MSE: " << mse_composite_vs_float << ")";
 
-        EXPECT_TRUE(
-            xt::allclose(interm_xtensor, float_intermediates, config.intermediate_atol, config.intermediate_rtol))
-            << "Intermediate result comparison failed in " << config.test_name;
-    } else {
+        if (return_intermediates) {
+            EXPECT_TRUE(
+                xt::allclose(interm_xtensor, float_intermediates, config.intermediate_atol, config.intermediate_rtol))
+                << "Intermediate result comparison failed in " << config.test_name;
+        }
+    } else if (return_intermediates) {
         // Float implementation unreliable, compare intermediates between kernel and composite instead
         EXPECT_TRUE(
             xt::allclose(interm_xtensor, composite_interm_xtensor, config.intermediate_atol, config.intermediate_rtol))
@@ -740,8 +842,9 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_CausalMask_SingleTile) {
     run_sdpa_test(config);
 }
 
-// Disabled: non-deterministic accuracy failures — https://github.com/tenstorrent/tt-metal/issues/46121
-TEST_F(SDPAForwardTest, DISABLED_SDPAForwardTest_CausalMask_MHA_Batch4_Seq256) {
+// Re-enabled: was disabled under https://github.com/tenstorrent/tt-metal/issues/46121 (non-deterministic
+// accuracy failures across several tt-train tests, no root cause yet); passes on this kernel.
+TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_CausalMask_MHA_Batch4_Seq256) {
     SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
     // Multi-head attention with equal query and KV heads (standard MHA)
     // batch=4, seq=256 (8 tile rows), 6 heads with 128 dim per head
@@ -757,8 +860,9 @@ TEST_F(SDPAForwardTest, DISABLED_SDPAForwardTest_CausalMask_MHA_Batch4_Seq256) {
     run_sdpa_test(config);
 }
 
-// Disabled: non-deterministic accuracy failures — https://github.com/tenstorrent/tt-metal/issues/46121
-TEST_F(SDPAForwardTest, DISABLED_SDPAForwardTest_CausalMask_GQA_Batch16_Seq512) {
+// Re-enabled: was disabled under https://github.com/tenstorrent/tt-metal/issues/46121 (non-deterministic
+// accuracy failures across several tt-train tests, no root cause yet); passes on this kernel.
+TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_CausalMask_GQA_Batch16_Seq512) {
     SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
     // Grouped Query Attention with different query and KV heads
     // batch=16, seq=512 (16 tile rows), 8 query heads, 4 KV heads (2:1 ratio)
@@ -817,8 +921,9 @@ TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_Batch_12Heads_6Group) {
 // VALIDATION TESTS - Testing Error Conditions and Edge Cases
 // =============================================================================
 
-// Disabled: non-deterministic accuracy failures — https://github.com/tenstorrent/tt-metal/issues/46121
-TEST_F(SDPAForwardTest, DISABLED_ValidationTest_EdgeCaseDimensions) {
+// Re-enabled: was disabled under https://github.com/tenstorrent/tt-metal/issues/46121 (non-deterministic
+// accuracy failures across several tt-train tests, no root cause yet); passes on this kernel.
+TEST_F(SDPAForwardTest, NIGHTLY_ValidationTest_EdgeCaseDimensions) {
     using namespace ttml;
 
     // Test Case 1: Minimum viable dimensions
@@ -1040,8 +1145,9 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_DifferentVDim_SingleTile) {
     run_sdpa_test(config);
 }
 
-// Disabled: non-deterministic accuracy failures — https://github.com/tenstorrent/tt-metal/issues/46121
-TEST_F(SDPAForwardTest, DISABLED_SDPAForwardTest_DifferentVDim_MultiBatch) {
+// Re-enabled: was disabled under https://github.com/tenstorrent/tt-metal/issues/46121 (non-deterministic
+// accuracy failures across several tt-train tests, no root cause yet); passes on this kernel.
+TEST_F(SDPAForwardTest, SDPAForwardTest_DifferentVDim_MultiBatch) {
     // Multi-batch with different V dim
     SDPATestConfig config{
         .batch_size = 4U,
@@ -1057,9 +1163,8 @@ TEST_F(SDPAForwardTest, DISABLED_SDPAForwardTest_DifferentVDim_MultiBatch) {
 }
 
 TEST_F(SDPAForwardTest, SDPAForwardTest_CausalMask_TwoTileRows) {
-    // 64 seq len = 2 tile rows -> Ht=2 -> Sk_chunk_t=2. Forces the chunked inner loop with
-    // exactly one chunk per row and exercises the diagonal-chunk masking path for the
-    // smallest non-trivial chunk size.
+    // 64 seq len = 2 tile rows: the smallest shape where the K/V loop can take more than one step and
+    // the diagonal-chunk masking path runs.
     SDPATestConfig config{
         .batch_size = 1U,
         .sequence_length = 64U,
@@ -1088,8 +1193,7 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_NoMask_Small) {
 }
 
 TEST_F(SDPAForwardTest, SDPAForwardTest_NoMask_TwoTileRows) {
-    // 64 seq len -> Ht=2 -> Sk_chunk_t=2 on the no-mask compute path: chunked inner loop
-    // with no mask CB traffic.
+    // 64 seq len = 2 tile rows on the no-mask compute path: no mask CB traffic.
     SDPATestConfig config{
         .batch_size = 1U,
         .sequence_length = 64U,
@@ -1103,7 +1207,7 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_NoMask_TwoTileRows) {
 }
 
 TEST_F(SDPAForwardTest, SDPAForwardTest_ArbitraryMask_TwoTileRows) {
-    // 64 seq len -> Ht=2 -> Sk_chunk_t=2 on the arbitrary-mask compute path (USE_ATTN_MASK).
+    // 64 seq len = 2 tile rows on the arbitrary-mask compute path (USE_ATTN_MASK).
     SDPATestConfig config{
         .batch_size = 1U,
         .sequence_length = 64U,
@@ -1122,7 +1226,7 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ArbitraryMask_TwoTileRows) {
 //
 // Three things in the gate epilogue can break, and the table below covers each of them once:
 //   * the finalize block loop: Dh_v 96 / 128 / 160 give vWt 3 / 4 / 5 -> block_size 3 / 2 / 1;
-//   * the reader's row index: batch, head, GQA head->group mapping, and balanced light/heavy row pairs;
+//   * the reader's row index: batch, head, GQA head->group mapping, and non-consecutive items on a core;
 //   * the gate_args offset after mask_args, with (Arbitrary) and without (Causal / None) a DRAM mask.
 // run_sdpa_test with use_gate=true additionally checks, against the kernel's own ungated output, that
 // gated == ungated * sigmoid(gate) to ~2 bf16 ULP and that the logsumexp intermediates are bit-identical.
@@ -1200,9 +1304,8 @@ INSTANTIATE_TEST_SUITE_P(
             .mask_type = ttml::metal::AttentionMaskType::Causal,
             .use_gate = true,
             .test_name = "NIGHTLY_GQA_4Q_2KV"},
-        // Balanced parallelism: causal, even St, and B*H*St/2 >= number of cores (B=4, H=12, S=256 gives 192
-        // light/heavy row pairs), so the program factory selects the paired reader/compute/writer loops and the
-        // gate is read inside the paired read_row lambda.
+        // Many causal items (B=4, H=12, S=256): every core gets several items of different cost and the gate
+        // reads have to follow that item order.
         SDPATestConfig{
             .batch_size = 4U,
             .sequence_length = 256U,
@@ -1264,9 +1367,8 @@ TEST_F(SDPAForwardTest, GateTest_IsElementwiseNotBroadcast) {
     // head, row or column block, or broadcast over any axis, zeroes some open elements or lets some closed ones
     // through. Dh_v = 192 gives vWt = 6 -> block_size = 3: two finalize blocks that each fill DST, so the gate
     // copy has to offset by tile_idx into the second block and that block has to be re-initialised after the
-    // first block's gate code. B is sized from the grid so there are more rows than cores: some cores get two
-    // rows, so the per-row gate read and cb_pop_front run more than once per core. The B*H*St/2 row pairs stay
-    // below the core count, so the program factory keeps the non-balanced path.
+    // first block's gate code. B is sized from the grid so there are more items than cores: some cores get two
+    // items, so the per-item gate read and cb_pop_front run more than once per core.
     const uint32_t H = 2U, S = 64U, Dh_qk = 64U, Dh_v = 192U;
     const uint32_t St = S / 32U;
     const auto grid = ttml::autograd::ctx().get_device().compute_with_storage_grid_size();
@@ -1396,4 +1498,898 @@ TEST_F(SDPAForwardTest, GateTest_ProgramCacheHitReadsNewGate) {
         << ")";
     EXPECT_FALSE(xt::allclose(out_b_host, out_a_host, 8e-3F, 1e-4F))
         << "Cache-hit run reproduced the first gate's output: stale gate address";
+}
+
+// =============================================================================
+// q_chunk_size / k_chunk_size knobs: same numbers, different chunking.
+// =============================================================================
+
+struct ChunkKnobs {
+    uint32_t q_chunk_size;
+    uint32_t k_chunk_size;
+    uint32_t heads_per_item = 0U;
+};
+
+// One Q row with a wide K step, many Q rows with one K tile, square, and both rectangles.
+const std::vector<ChunkKnobs> kChunkKnobSweep = {{32, 256}, {128, 32}, {64, 64}, {128, 64}, {64, 256}};
+
+// Every chunking computes the same fp32 math in a different order and rounds once to bf16, so besides the
+// reference checks each row is held against the default pick: a mean absolute gap of 5e-4 is a few
+// bf16 ULP at the ~0.03-0.1 output magnitudes here, where the 2e-2 reference tolerance would let a
+// uniform few-percent rescale error through.
+constexpr float kCrossChunkingMeanAbsTol = 5e-4F;
+
+void run_chunk_knob_sweep(SDPATestConfig base, const std::vector<ChunkKnobs>& sweep) {
+    if (!base.seed.has_value()) {
+        base.seed = ttml::autograd::ctx().get_generator()();  // every row sees the same inputs
+    }
+    xt::xarray<float> default_output;
+    {
+        SDPATestConfig config = base;
+        config.program_config = {};
+        config.test_name = base.test_name + "_default";
+        SCOPED_TRACE(config.test_name);
+        run_sdpa_test(config, &default_output);
+    }
+    for (const auto& knobs : sweep) {
+        SDPATestConfig config = base;
+        config.program_config = {
+            .q_chunk_size = knobs.q_chunk_size,
+            .k_chunk_size = knobs.k_chunk_size,
+            .heads_per_item = knobs.heads_per_item};
+        config.test_name =
+            fmt::format("{}_q{}_k{}_h{}", base.test_name, knobs.q_chunk_size, knobs.k_chunk_size, knobs.heads_per_item);
+        SCOPED_TRACE(config.test_name);
+        xt::xarray<float> output;
+        run_sdpa_test(config, &output);
+        const float mean_abs_gap = xt::mean(xt::abs(output - default_output))();
+        EXPECT_LT(mean_abs_gap, kCrossChunkingMeanAbsTol)
+            << config.test_name << " differs from the default chunking by " << mean_abs_gap << " on average";
+    }
+}
+
+// Each row sweeps one shape through its chunkings; one TEST_P table so the shards spread the kernel
+// compiles (as GateShapes above), with the full sweeps NIGHTLY_ and one blocking row per compiled variant
+// (causal, causal + gate without intermediates, arbitrary, no mask + gate).
+struct ChunkKnobCase {
+    SDPATestConfig base;
+    std::vector<ChunkKnobs> sweep;
+};
+
+class SDPAForwardChunkKnobTest : public ::testing::TestWithParam<ChunkKnobCase> {
+protected:
+    void SetUp() override {
+        ttml::autograd::ctx().open_device();
+        ttml::autograd::ctx().set_seed(42);
+    }
+
+    void TearDown() override {
+        ttml::autograd::ctx().close_device();
+    }
+};
+
+TEST_P(SDPAForwardChunkKnobTest, MatchesDefaultChunking) {
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
+    run_chunk_knob_sweep(GetParam().base, GetParam().sweep);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    ChunkKnobs,
+    SDPAForwardChunkKnobTest,
+    ::testing::Values(
+        // Few items: most cores get one.
+        ChunkKnobCase{
+            SDPATestConfig{
+                .batch_size = 1U,
+                .sequence_length = 256U,
+                .query_dim = 128U,
+                .key_value_dim = 128U,
+                .num_query_heads = 2U,
+                .num_key_heads = 2U,
+                .mask_type = ttml::metal::AttentionMaskType::Causal,
+                .test_name = "NIGHTLY_Causal"},
+            kChunkKnobSweep},
+        // 144 sequences, GQA: many items per core at every chunking.
+        ChunkKnobCase{
+            SDPATestConfig{
+                .batch_size = 9U,
+                .sequence_length = 256U,
+                .query_dim = 1024U,     // 16 heads * 64
+                .key_value_dim = 256U,  // 4 kv heads * 64
+                .num_query_heads = 16U,
+                .num_key_heads = 4U,
+                .mask_type = ttml::metal::AttentionMaskType::Causal,
+                .test_name = "NIGHTLY_Causal_GQA_ManySeqs"},
+            kChunkKnobSweep},
+        // S = 12 tiles: 3-tile chunks give odd sub-blocks and a causal step count that is not a power of two.
+        ChunkKnobCase{
+            SDPATestConfig{
+                .batch_size = 1U,
+                .sequence_length = 384U,
+                .query_dim = 128U,
+                .key_value_dim = 128U,
+                .num_query_heads = 2U,
+                .num_key_heads = 2U,
+                .mask_type = ttml::metal::AttentionMaskType::Causal,
+                .test_name = "NIGHTLY_Causal_NonPow2"},
+            {{96, 96}, {32, 96}, {96, 32}, {128, 96}, {96, 384}}},
+        // GQA with 4 heads per group: stacks of 2 and 4 heads, with 1..4 Q rows each.
+        ChunkKnobCase{
+            SDPATestConfig{
+                .batch_size = 2U,
+                .sequence_length = 256U,
+                .query_dim = 512U,      // 8 heads * 64
+                .key_value_dim = 128U,  // 2 kv heads * 64
+                .num_query_heads = 8U,
+                .num_key_heads = 2U,
+                .mask_type = ttml::metal::AttentionMaskType::Causal,
+                .test_name = "NIGHTLY_Causal_HeadStacking"},
+            {{32, 64, 4}, {128, 256, 2}, {64, 32, 4}, {128, 64, 4}, {0, 0, 2}}},
+        // Blocking, GQA (two heads per K/V head): whole-sequence chunks (one item per sequence,
+        // Sk_chunk_t = St), and two stacked heads, the causal stamp at a nonzero row_base.
+        ChunkKnobCase{
+            SDPATestConfig{
+                .batch_size = 1U,
+                .sequence_length = 256U,
+                .query_dim = 256U,      // 4 heads * 64
+                .key_value_dim = 128U,  // 2 kv heads * 64
+                .num_query_heads = 4U,
+                .num_key_heads = 2U,
+                .mask_type = ttml::metal::AttentionMaskType::Causal,
+                .test_name = "Smoke_Causal"},
+            {{256, 256, 1}, {64, 64, 2}}},
+        // Blocking: the mask tensor shared by two stacked heads.
+        ChunkKnobCase{
+            SDPATestConfig{
+                .batch_size = 1U,
+                .sequence_length = 256U,
+                .query_dim = 128U,
+                .key_value_dim = 64U,
+                .num_query_heads = 2U,
+                .num_key_heads = 1U,
+                .mask_type = ttml::metal::AttentionMaskType::Arbitrary,
+                .test_name = "Smoke_Arbitrary"},
+            {{64, 64, 2}}},
+        // Blocking: no mask, vWt < qWt, gate.
+        ChunkKnobCase{
+            SDPATestConfig{
+                .batch_size = 1U,
+                .sequence_length = 128U,
+                .query_dim = 128U,
+                .key_value_dim = 128U,
+                .value_dim = 64U,
+                .num_query_heads = 1U,
+                .num_key_heads = 1U,
+                .mask_type = ttml::metal::AttentionMaskType::None,
+                .use_gate = true,
+                .test_name = "Smoke_None_Gate"},
+            {{64, 128, 1}}},
+        // Blocking: the RETURN_INTERMEDIATES-less compile with the gate and an explicit chunking, checked
+        // against the references (ValidationTest_IntermediateReturnModes covers it without the gate at the
+        // default pick). The chunking is the one the pick reaches at D=512 (four rows, two K/V tiles), which
+        // the sweeps do not run blocking: a causal row with Sq > Sk has rows fully masked inside a later K
+        // step.
+        ChunkKnobCase{
+            SDPATestConfig{
+                .batch_size = 1U,
+                .sequence_length = 128U,
+                .query_dim = 64U,
+                .key_value_dim = 64U,
+                .num_query_heads = 1U,
+                .num_key_heads = 1U,
+                .mask_type = ttml::metal::AttentionMaskType::Causal,
+                .use_gate = true,
+                .return_intermediates = false,
+                .test_name = "NoIntermediates_Gate"},
+            {{128, 64, 1}}},
+        // 3 x 2 mask tiles per step: the mask stamp's last DST pass is a 2-tile tail.
+        ChunkKnobCase{
+            SDPATestConfig{
+                .batch_size = 1U,
+                .sequence_length = 384U,
+                .query_dim = 128U,
+                .key_value_dim = 128U,
+                .num_query_heads = 2U,
+                .num_key_heads = 2U,
+                .mask_type = ttml::metal::AttentionMaskType::Arbitrary,
+                .test_name = "NIGHTLY_Arbitrary_NonPow2"},
+            {{96, 64, 1}, {96, 96, 1}}},
+        // The (1, 1, S, S) mask is read once per step and shared by the stacked heads; the blocking case of
+        // this is the {64, 64, 2} row of Smoke_Arbitrary.
+        ChunkKnobCase{
+            SDPATestConfig{
+                .batch_size = 1U,
+                .sequence_length = 256U,
+                .query_dim = 256U,     // 4 heads * 64
+                .key_value_dim = 64U,  // 1 kv head * 64
+                .num_query_heads = 4U,
+                .num_key_heads = 1U,
+                .mask_type = ttml::metal::AttentionMaskType::Arbitrary,
+                .test_name = "NIGHTLY_Arbitrary_HeadStacking"},
+            {{64, 64, 2}, {32, 128, 4}}},
+        // No mask, vWt < qWt, gate: the gate rows are stacked like the Q rows.
+        ChunkKnobCase{
+            SDPATestConfig{
+                .batch_size = 1U,
+                .sequence_length = 256U,
+                .query_dim = 512U,      // 4 heads * 128
+                .key_value_dim = 256U,  // 2 kv heads * 128
+                .value_dim = 128U,      // 2 kv heads * 64
+                .num_query_heads = 4U,
+                .num_key_heads = 2U,
+                .mask_type = ttml::metal::AttentionMaskType::None,
+                .use_gate = true,
+                .test_name = "NIGHTLY_None_Gate_HeadStacking"},
+            {{64, 128, 2}, {128, 64, 2}}},
+        ChunkKnobCase{
+            SDPATestConfig{
+                .batch_size = 1U,
+                .sequence_length = 256U,
+                .query_dim = 128U,
+                .key_value_dim = 128U,
+                .num_query_heads = 2U,
+                .num_key_heads = 2U,
+                .mask_type = ttml::metal::AttentionMaskType::Arbitrary,
+                .test_name = "NIGHTLY_Arbitrary"},
+            kChunkKnobSweep},
+        // No mask, vWt < qWt, gate: non-square PV geometry.
+        ChunkKnobCase{
+            SDPATestConfig{
+                .batch_size = 1U,
+                .sequence_length = 256U,
+                .query_dim = 256U,
+                .key_value_dim = 256U,
+                .value_dim = 128U,
+                .num_query_heads = 2U,
+                .num_key_heads = 2U,
+                .mask_type = ttml::metal::AttentionMaskType::None,
+                .use_gate = true,
+                .test_name = "NIGHTLY_None_DiffVDim_Gate"},
+            kChunkKnobSweep}),
+    [](const ::testing::TestParamInfo<ChunkKnobCase>& info) { return info.param.base.test_name; });
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_DefaultPick) {
+    // With the knobs at 0 the shape rule picks the chunking: larger than main's one Q row / four K tiles
+    // where L1 allows, and always something that fits.
+    using namespace ttml::metal::ops::sdpa_fw::device;
+    constexpr uint64_t kBudget = 1'300'000U;  // a test budget a little under a Blackhole core's L1
+    constexpr uint32_t kCores = 130U;         // the Blackhole p150 compute grid
+    const SDPAForwardShape tinyllama{
+        .batch = 1U,
+        .q_heads = 32U,
+        .kv_heads = 4U,
+        .St = 64U,
+        .qWt = 2U,
+        .vWt = 2U,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .has_gate = false,
+        .return_intermediates = true};
+    const auto picked = resolve_chunks({}, tinyllama, kBudget, kCores);
+    EXPECT_GE(picked.rows(), 4U) << "Sq=" << picked.Sq_chunk_t << " h=" << picked.heads_per_item;
+    EXPECT_GE(picked.Sk_chunk_t, 4U);
+    EXPECT_LE(l1_bytes(cb_tiles(tinyllama, picked)), kBudget);
+
+    SDPAForwardShape wide = tinyllama;  // head dim 512: the biggest chunks do not fit, the pick must degrade
+    wide.qWt = 16U;
+    wide.vWt = 16U;
+    const auto picked_wide = resolve_chunks({}, wide, kBudget, kCores);
+    EXPECT_LE(l1_bytes(cb_tiles(wide, picked_wide)), kBudget);
+
+    // A user knob pins its axis; the others are still picked.
+    const auto pinned = resolve_chunks({.k_chunk_size = 32U}, tinyllama, kBudget, kCores);
+    EXPECT_EQ(pinned.Sk_chunk_t, 1U);
+    EXPECT_GE(pinned.rows(), 4U);
+
+    // Few causal sequences (8 heads, S=2048): four-row chunks give 64 light/heavy pairs for 130 cores, so
+    // the pick shrinks to one row per chunk (256 pairs) and keeps every core on a balanced pair, as main
+    // did, instead of falling back to an unbalanced contiguous split.
+    SDPAForwardShape few_seqs = tinyllama;
+    few_seqs.q_heads = 8U;
+    few_seqs.kv_heads = 8U;
+    const auto picked_few = resolve_chunks({}, few_seqs, kBudget, kCores);
+    EXPECT_EQ(picked_few.Sq_chunk_t, 1U);
+    EXPECT_GE(num_work_units(few_seqs, picked_few, kCores), kCores);
+    EXPECT_EQ(picked_few.Sk_chunk_t, picked.Sk_chunk_t) << "the K/V step does not depend on the core count";
+
+    // An odd chunk count cannot pair: S=384 (12 tiles) gives three four-row chunks, and main paired every
+    // even tile count. With 64 sequences the pick shrinks to two-row chunks (six per sequence, 192 pairs for
+    // 130 cores) instead of keeping four-row chunks on an unbalanced contiguous split.
+    SDPAForwardShape odd_chunks = tinyllama;
+    odd_chunks.batch = 2U;
+    odd_chunks.St = 12U;
+    const auto picked_odd = resolve_chunks({}, odd_chunks, kBudget, kCores);
+    EXPECT_EQ(picked_odd.Sq_chunk_t, 2U);
+    EXPECT_GE(num_causal_pairs(odd_chunks, picked_odd), kCores);
+    EXPECT_EQ(num_work_units(odd_chunks, picked_odd, kCores), num_causal_pairs(odd_chunks, picked_odd))
+        << "the split must hand out pairs";
+
+    // A mask tensor: the item stacks four heads of the K/V group (they share the step's mask tiles) and keeps
+    // four rows, so one row per head, with the eight-tile K/V step of D=64; MHA has nothing to stack and gets
+    // the single-head mask rule (four rows, four K/V tiles).
+    SDPAForwardShape masked = tinyllama;
+    masked.mask_type = ttml::metal::AttentionMaskType::Arbitrary;
+    const auto picked_masked = resolve_chunks({}, masked, kBudget, kCores);
+    EXPECT_EQ(picked_masked.heads_per_item, 4U);
+    EXPECT_EQ(picked_masked.Sq_chunk_t, 1U);
+    EXPECT_EQ(picked_masked.Sk_chunk_t, 8U);
+    SDPAForwardShape masked_mha = masked;
+    masked_mha.kv_heads = masked_mha.q_heads;
+    const auto picked_mha = resolve_chunks({}, masked_mha, kBudget, kCores);
+    EXPECT_EQ(picked_mha.heads_per_item, 1U);
+    EXPECT_EQ(picked_mha.Sq_chunk_t, 4U);
+    EXPECT_EQ(picked_mha.Sk_chunk_t, 4U);
+    // A group of two stacks two heads with two rows each; a short masked shape (8 heads, S=256: 16 items at
+    // the full stacking) unstacks down to one head once the rows are at one, and still has only 64 items.
+    SDPAForwardShape masked_pairs = masked;
+    masked_pairs.kv_heads = 16U;
+    const auto picked_pairs = resolve_chunks({}, masked_pairs, kBudget, kCores);
+    EXPECT_EQ(picked_pairs.heads_per_item, 2U);
+    EXPECT_EQ(picked_pairs.Sq_chunk_t, 2U);
+    SDPAForwardShape masked_short = masked;
+    masked_short.q_heads = 8U;
+    masked_short.kv_heads = 2U;
+    masked_short.St = 8U;
+    const auto picked_short = resolve_chunks({}, masked_short, kBudget, kCores);
+    EXPECT_EQ(picked_short.heads_per_item, 1U);
+    EXPECT_EQ(picked_short.Sq_chunk_t, 1U);
+    EXPECT_EQ(num_work_items(masked_short, picked_short), 64U);
+    EXPECT_EQ(picked_short.Sk_chunk_t, 4U);
+
+    // Balancing can remove the stacking even when the K/V group has eight query heads.
+    masked_short.kv_heads = 1U;
+    masked_short.St = 16U;
+    const auto unstacked = resolve_chunks({}, masked_short, kBudget, kCores);
+    EXPECT_EQ(unstacked.heads_per_item, 1U);
+    EXPECT_EQ(unstacked.Sq_chunk_t, 1U);
+    EXPECT_EQ(unstacked.Sk_chunk_t, 4U);
+    const auto pinned_k = resolve_chunks({.k_chunk_size = 256U}, masked_short, kBudget, kCores);
+    EXPECT_EQ(pinned_k.heads_per_item, 1U);
+    EXPECT_EQ(pinned_k.Sk_chunk_t, 8U) << "balancing must preserve the user's K/V step";
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_SplitWork) {
+    // Host-only: causal chunks go out as (i, n-1-i) pairs, every item exactly once, when there is a pair for
+    // every core (main's rule); fewer pairs than cores, an odd chunk count and the other mask modes get
+    // contiguous blocks of items.
+    using namespace ttml::metal::ops::sdpa_fw::device;
+    constexpr uint32_t kCores = 130U;
+    const auto items_of = [](const CoreItemRuns& runs) {
+        std::vector<uint32_t> items;
+        for (const auto& run : runs) {
+            for (uint32_t i = 0; i < run.num_items; ++i) {
+                items.push_back(run.first_item + i);
+            }
+        }
+        return items;
+    };
+    const auto check_each_item_once = [&](const std::vector<CoreItemRuns>& per_core, uint32_t total_items) {
+        std::vector<uint32_t> seen(total_items, 0U);
+        for (const auto& runs : per_core) {
+            EXPECT_FALSE(runs.empty()) << "a core without work";
+            for (const uint32_t item : items_of(runs)) {
+                ASSERT_LT(item, total_items);
+                ++seen[item];
+            }
+        }
+        EXPECT_TRUE(std::all_of(seen.begin(), seen.end(), [](uint32_t n) { return n == 1U; }))
+            << "every item must be handed out exactly once";
+    };
+
+    SDPAForwardShape causal{
+        .batch = 1U,
+        .q_heads = 32U,
+        .kv_heads = 32U,
+        .St = 16U,
+        .qWt = 2U,
+        .vWt = 2U,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .has_gate = false,
+        .return_intermediates = true};
+    const SDPAForwardChunks four_rows{.Sq_chunk_t = 4U, .Sk_chunk_t = 8U, .heads_per_item = 1U};
+    // 32 sequences x 4 chunks = 128 items = 64 pairs. With 130 cores that is fewer pairs than cores, so as
+    // on main the items go out contiguously, one per core on 128 cores.
+    ASSERT_EQ(num_work_items(causal, four_rows), 128U);
+    ASSERT_EQ(num_causal_pairs(causal, four_rows), 64U);
+    EXPECT_EQ(num_work_units(causal, four_rows, kCores), 128U);
+    const auto unpaired = split_work(causal, four_rows, 128U, kCores);
+    ASSERT_EQ(unpaired.size(), 128U);
+    check_each_item_once(unpaired, 128U);
+    for (const auto& runs : unpaired) {
+        EXPECT_EQ(items_of(runs).size(), 1U) << "one item per core";
+    }
+    // With 64 cores every core gets a pair: paired on 64 cores.
+    constexpr uint32_t kPairCores = 64U;
+    ASSERT_EQ(num_work_units(causal, four_rows, kPairCores), 64U);
+    const uint32_t num_cores = std::min(kPairCores, num_work_units(causal, four_rows, kPairCores));
+    EXPECT_EQ(num_cores, 64U);
+    const auto paired = split_work(causal, four_rows, num_cores, kPairCores);
+    ASSERT_EQ(paired.size(), num_cores);
+    check_each_item_once(paired, 128U);
+    constexpr uint32_t kChunksPerSeq = 4U;
+    for (const auto& runs : paired) {
+        const auto items = items_of(runs);
+        ASSERT_EQ(items.size(), 2U) << "one pair per core";
+        const uint32_t seq = items[0] / kChunksPerSeq;
+        EXPECT_EQ(items[1] / kChunksPerSeq, seq) << "a pair stays inside one sequence";
+        EXPECT_EQ(items[0] % kChunksPerSeq + items[1] % kChunksPerSeq, kChunksPerSeq - 1U)
+            << "chunk i goes with chunk n-1-i";
+    }
+    // Fewer cores than pairs: pairs are shared out contiguously, still each item once.
+    const auto paired_fewer = split_work(causal, four_rows, 40U, 40U);
+    ASSERT_EQ(paired_fewer.size(), 40U);
+    check_each_item_once(paired_fewer, 128U);
+
+    // Odd chunk count (St=12, Sq=4 -> 3 chunks): contiguous over min(cores, items).
+    SDPAForwardShape odd = causal;
+    odd.St = 12U;
+    EXPECT_EQ(num_causal_pairs(odd, four_rows), 0U);
+    EXPECT_EQ(num_work_units(odd, four_rows, kCores), num_work_items(odd, four_rows));
+    const auto contiguous =
+        split_work(odd, four_rows, std::min(kCores, num_work_units(odd, four_rows, kCores)), kCores);
+    ASSERT_EQ(contiguous.size(), 96U);
+    check_each_item_once(contiguous, 96U);
+    for (const auto& runs : contiguous) {
+        EXPECT_EQ(runs.size(), 1U) << "a contiguous block is one run";
+    }
+
+    // No mask: items, not pairs.
+    SDPAForwardShape none = causal;
+    none.mask_type = ttml::metal::AttentionMaskType::None;
+    EXPECT_EQ(num_work_units(none, four_rows, kCores), 128U);
+    const uint32_t none_cores = std::min(kCores, num_work_units(none, four_rows, kCores));
+    const auto none_split = split_work(none, four_rows, none_cores, kCores);
+    ASSERT_EQ(none_split.size(), none_cores);
+    check_each_item_once(none_split, 128U);
+
+    EXPECT_ANY_THROW(split_work(causal, four_rows, 65U, kPairCores)) << "more cores than pairs is a caller bug";
+}
+
+// The production pick (four-row chunks, eight K/V tiles, light/heavy pairs) only lands on device when there
+// is a pair per core; the small blocking shapes resolve to one-row chunks. B is
+// sized from the grid: S=512 gives four chunks per sequence (two pairs), so B*H = cores/2 + 2 sequences give
+// cores + 4 pairs. A core with the (0, 3) pair walks two non-consecutive runs of its work list, and the two
+// cores with two pairs run the multi-item list, as TinyLlama does. D=32 keeps the host references cheap; the
+// pick does not depend on it below 128.
+TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_ChunkKnobs_DefaultPairedOnDevice) {
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
+    using namespace ttml::metal::ops::sdpa_fw::device;
+    constexpr uint32_t H = 2U, S = 512U, D = 32U;
+    auto* device = &ttml::autograd::ctx().get_device();
+    const auto grid = device->compute_with_storage_grid_size();
+    const uint32_t cores = static_cast<uint32_t>(grid.x * grid.y);
+    const uint32_t B = (cores / 2U + 2U + H - 1U) / H;
+    const SDPAForwardShape shape{
+        .batch = B,
+        .q_heads = H,
+        .kv_heads = H,
+        .St = S / 32U,
+        .qWt = D / 32U,
+        .vWt = D / 32U,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .has_gate = false,
+        .return_intermediates = true};
+    const auto picked = resolve_chunks({}, shape, ttml::metal::available_l1_bytes(*device), cores);
+    ASSERT_EQ(picked.Sq_chunk_t, 4U) << "the shape must take the production pick";
+    ASSERT_EQ(picked.Sk_chunk_t, 8U);
+    ASSERT_GE(num_causal_pairs(shape, picked), cores) << "a pair per core, so the split pairs";
+    run_sdpa_test(SDPATestConfig{
+        .batch_size = B,
+        .sequence_length = S,
+        .query_dim = H * D,
+        .key_value_dim = H * D,
+        .num_query_heads = H,
+        .num_key_heads = H,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .test_name = "ChunkKnobs_DefaultPairedOnDevice"});
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_DefaultFitsLargeHeadDim) {
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
+    run_sdpa_test(SDPATestConfig{
+        .batch_size = 1U,
+        .sequence_length = 256U,
+        .query_dim = 1024U,  // 2 heads * 512
+        .key_value_dim = 1024U,
+        .num_query_heads = 2U,
+        .num_key_heads = 2U,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .test_name = "ChunkKnobs_DefaultFitsLargeHeadDim"});
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Rejected) {
+    using namespace ttml;
+    const uint32_t S = 256U;
+    const std::array<std::size_t, 4> shape{1U, 2U, S, 64U};
+    auto make = [&](uint32_t seed) {
+        return core::from_xtensor(
+            test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, seed), &autograd::ctx().get_device());
+    };
+    auto query = make(1U);
+    auto key = make(2U);
+    auto value = make(3U);
+    auto run = [&](uint32_t q_chunk_size, uint32_t k_chunk_size, uint32_t heads_per_item = 0U) {
+        return metal::sdpa_fw(
+            query,
+            key,
+            value,
+            metal::AttentionMaskType::Causal,
+            std::nullopt,
+            0.0F,
+            false,
+            std::nullopt,
+            {.q_chunk_size = q_chunk_size, .k_chunk_size = k_chunk_size, .heads_per_item = heads_per_item});
+    };
+    EXPECT_NO_THROW(run(0U, 0U));
+    EXPECT_THAT([&] { run(48U, 0U); }, ThrowsMessage<std::exception>(HasSubstr("q_chunk_size (48)")));
+    EXPECT_THAT([&] { run(0U, 48U); }, ThrowsMessage<std::exception>(HasSubstr("k_chunk_size (48)")));
+    EXPECT_THAT([&] { run(96U, 0U); }, ThrowsMessage<std::exception>(HasSubstr("q_chunk_size (96)")));
+    EXPECT_THAT([&] { run(0U, 2U * S); }, ThrowsMessage<std::exception>(HasSubstr("k_chunk_size (512)")));
+    EXPECT_THAT([&] { run(0U, 0U, 2U); }, ThrowsMessage<std::exception>(HasSubstr("heads_per_item (2)")));
+
+    // Head dim 512 with whole-sequence chunks: the circular buffers do not fit L1.
+    const std::array<std::size_t, 4> wide_shape{1U, 2U, S, 512U};
+    auto make_wide = [&](uint32_t seed) {
+        return core::from_xtensor(
+            test_utils::make_uniform_xarray<float>(wide_shape, -1.0F, 1.0F, seed), &autograd::ctx().get_device());
+    };
+    auto wide_query = make_wide(4U);
+    auto wide_key = make_wide(5U);
+    auto wide_value = make_wide(6U);
+    EXPECT_THAT(
+        [&] {
+            metal::sdpa_fw(
+                wide_query,
+                wide_key,
+                wide_value,
+                metal::AttentionMaskType::Causal,
+                std::nullopt,
+                0.0F,
+                false,
+                std::nullopt,
+                {.q_chunk_size = S, .k_chunk_size = S});
+        },
+        ThrowsMessage<std::exception>(HasSubstr("SDPA forward circular buffers need")))
+        << "a user config that overflows L1 must be refused with a message, not die in the allocator";
+
+    // validate rejects a config that cannot fit even with the unset chunk sizes at one tile, and accepts one
+    // that fits at the floor, without building a program.
+    {
+        using namespace ttml::metal::ops::sdpa_fw::device;
+        const SDPAForwardShape wide = shape_of(
+            wide_query,
+            wide_key,
+            wide_value,
+            metal::AttentionMaskType::Causal,
+            /*has_gate=*/false,
+            /*return_intermediates=*/false);
+        const uint64_t budget = ttml::metal::available_l1_bytes(ttml::autograd::ctx().get_device());
+        EXPECT_THAT(
+            [&] { check_chunks({.q_chunk_size = S}, wide, budget); },
+            ThrowsMessage<std::exception>(HasSubstr("SDPA forward circular buffers need")));
+        EXPECT_NO_THROW(check_chunks({.k_chunk_size = 32U}, wide, budget));
+        EXPECT_NO_THROW(check_chunks({}, wide, budget));
+    }
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_ProgramCacheMissAndHit) {
+    // Two chunkings on the same tensors are two cached programs; the first one again is a hit, and a hit
+    // on a second live input set must read the new buffers.
+    using namespace ttml;
+    auto* device = &autograd::ctx().get_device();
+    device->enable_program_cache();
+    const std::array<std::size_t, 4> shape{1U, 2U, 256U, 64U};
+    auto make_host = [&](uint32_t seed) {
+        return round_to_bf16(test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, seed));
+    };
+    auto make = [&](const xt::xarray<float>& host) { return core::from_xtensor(host, device); };
+    struct Inputs {
+        ttnn::Tensor query, key, value;
+    };
+    const xt::xarray<float> first_q = make_host(1U), first_k = make_host(2U), first_v = make_host(3U);
+    const Inputs first{make(first_q), make(first_k), make(first_v)};
+    const Inputs second{make(make_host(4U)), make(make_host(5U)), make(make_host(6U))};  // both sets stay alive
+    auto run = [&](const Inputs& in, const metal::SDPAForwardProgramConfig& cfg) {
+        return core::to_xtensor(metal::sdpa_fw(
+                                    in.query,
+                                    in.key,
+                                    in.value,
+                                    metal::AttentionMaskType::Causal,
+                                    std::nullopt,
+                                    0.0F,
+                                    false,
+                                    std::nullopt,
+                                    cfg)[0]
+                                    .value());
+    };
+    const metal::SDPAForwardProgramConfig a{.q_chunk_size = 128U, .k_chunk_size = 256U};
+    const metal::SDPAForwardProgramConfig b{.q_chunk_size = 32U, .k_chunk_size = 64U};
+    const metal::SDPAForwardProgramConfig c{.q_chunk_size = 64U, .k_chunk_size = 128U};  // run once: a miss
+    const auto entries0 = device->num_program_cache_entries();
+    const xt::xarray<float> out_a = run(first, a);
+    const auto entries_a = device->num_program_cache_entries();
+    ASSERT_GT(entries_a, entries0) << "first config did not populate the cache";
+    const xt::xarray<float> out_b = run(first, b);
+    EXPECT_EQ(device->num_program_cache_entries(), entries_a + 1U) << "second config must miss: different program";
+    const xt::xarray<float> out_a_again = run(first, a);
+    EXPECT_EQ(device->num_program_cache_entries(), entries_a + 1U) << "first config again must hit";
+    EXPECT_TRUE(xt::all(xt::equal(out_a, out_a_again))) << "cache hit must reproduce the first run";
+    EXPECT_LT(xt::mean(xt::abs(out_a - out_b))(), kCrossChunkingMeanAbsTol) << "both chunkings compute the same op";
+
+    // Same shapes at other addresses: a hit that computes the new inputs. The two hits agreeing with each
+    // other would not show a stale Q/K/V address (both would be wrong the same way), so the reference is a
+    // third chunking run for the first time on these tensors: a miss, whose addresses are set from scratch.
+    const xt::xarray<float> out_a2 = run(second, a);
+    const xt::xarray<float> out_b2 = run(second, b);
+    EXPECT_EQ(device->num_program_cache_entries(), entries_a + 1U) << "other addresses must hit";
+    const xt::xarray<float> out_c2 = run(second, c);
+    EXPECT_EQ(device->num_program_cache_entries(), entries_a + 2U) << "the third config must miss";
+    EXPECT_FALSE(xt::allclose(out_a2, out_a, 1e-3F, 1e-3F)) << "hit reproduced the first inputs: stale addresses";
+    EXPECT_LT(xt::mean(xt::abs(out_a2 - out_c2))(), kCrossChunkingMeanAbsTol)
+        << "the hit on the second inputs must agree with the uncached run: stale addresses";
+    EXPECT_LT(xt::mean(xt::abs(out_b2 - out_c2))(), kCrossChunkingMeanAbsTol)
+        << "the hit on the second inputs must agree with the uncached run: stale addresses";
+
+    // The mask address is a reader runtime arg of its own: a hit with a second live mask tensor (same shape,
+    // other values and address) must read the new mask, not the first one. The anticausal mask runs at the
+    // four-step K chunking: for the later rows the first K steps are fully masked, so alpha = 0 has to wipe
+    // what those steps accumulated (the packed-sequence / sliding-window case), and the result is held
+    // against the host reference, not just against the causal run.
+    const std::array<std::size_t, 4> mask_shape{1U, 1U, 256U, 256U};
+    xt::xarray<float> lower = xt::tril(xt::ones<float>({256UL, 256UL}));
+    lower.reshape(mask_shape);
+    xt::xarray<float> upper = xt::triu(xt::ones<float>({256UL, 256UL}));
+    upper.reshape(mask_shape);
+    const ttnn::Tensor causal_mask = core::from_xtensor(lower, device);
+    const ttnn::Tensor anticausal_mask = core::from_xtensor(upper, device);  // both stay alive
+    const auto entries_before_masked = device->num_program_cache_entries();  // the uploads cache their own ops
+    auto run_masked = [&](const ttnn::Tensor& mask) {
+        return core::to_xtensor(metal::sdpa_fw(
+                                    first.query,
+                                    first.key,
+                                    first.value,
+                                    metal::AttentionMaskType::Arbitrary,
+                                    mask,
+                                    0.0F,
+                                    false,
+                                    std::nullopt,
+                                    b)[0]
+                                    .value());
+    };
+    const xt::xarray<float> out_causal = run_masked(causal_mask);
+    const auto entries_masked = device->num_program_cache_entries();
+    EXPECT_EQ(entries_masked, entries_before_masked + 1U) << "the mask tensor variant is its own program";
+    const xt::xarray<float> out_anticausal = run_masked(anticausal_mask);
+    EXPECT_EQ(device->num_program_cache_entries(), entries_masked) << "the second mask must hit";
+    EXPECT_LT(xt::mean(xt::abs(out_causal - out_a))(), kCrossChunkingMeanAbsTol)
+        << "the lower-triangular mask tensor must agree with the causal kernel mask";
+    const xt::xarray<float> anticausal_ref =
+        sdpa_split_heads_naive_with_intermediates(first_q, first_k, first_v, upper).first;
+    EXPECT_TRUE(xt::allclose(out_anticausal, anticausal_ref, 2e-2F, 2e-2F))
+        << "hit with the second mask does not match the anticausal reference: stale mask address, or the "
+           "fully masked first K steps leaked into the output";
+    EXPECT_LT(ttml::test_utils::relative_l2(out_anticausal, anticausal_ref), 1e-2F);
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_ChangeProgramHash) {
+    // The op hashes its attributes by reflection; the chunk knobs must take part, or a second config on
+    // the same shapes would silently reuse the first config's cached program.
+    using Params = ttml::metal::ops::sdpa_fw::device::SDPAForwardParams;
+    const Params base{.mask_type = ttml::metal::AttentionMaskType::Causal};
+    Params q_changed = base;
+    q_changed.program_config.q_chunk_size = 128U;
+    Params k_changed = base;
+    k_changed.program_config.k_chunk_size = 128U;
+    Params h_changed = base;
+    h_changed.program_config.heads_per_item = 2U;
+    EXPECT_NE(ttsl::hash::hash_objects_with_default_seed(base), ttsl::hash::hash_objects_with_default_seed(h_changed));
+    EXPECT_NE(ttsl::hash::hash_objects_with_default_seed(base), ttsl::hash::hash_objects_with_default_seed(q_changed));
+    EXPECT_NE(ttsl::hash::hash_objects_with_default_seed(base), ttsl::hash::hash_objects_with_default_seed(k_changed));
+    EXPECT_NE(
+        ttsl::hash::hash_objects_with_default_seed(q_changed), ttsl::hash::hash_objects_with_default_seed(k_changed));
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_RingPrimitive_SingleDevice) {
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
+    using namespace ttml;
+    auto* device = &autograd::ctx().get_device();
+    device->enable_program_cache();
+    const std::array<std::size_t, 4> q_shape{1U, 2U, 64U, 64U}, kv_shape{1U, 1U, 64U, 64U};
+    for (const auto mask_type : {metal::AttentionMaskType::Causal, metal::AttentionMaskType::None}) {
+        SCOPED_TRACE(mask_type == metal::AttentionMaskType::Causal ? "causal" : "none");
+        std::vector<ttnn::Tensor> first_buffers;
+        std::size_t entries = 0U;
+        for (uint32_t run = 0U; run < 2U; ++run) {
+            const uint32_t seed = 11U + 3U * run;
+            const auto q = round_to_bf16(test_utils::make_uniform_xarray<float>(q_shape, -1.0F, 1.0F, seed));
+            const auto k = round_to_bf16(test_utils::make_uniform_xarray<float>(kv_shape, -1.0F, 1.0F, seed + 1U));
+            const auto v = round_to_bf16(test_utils::make_uniform_xarray<float>(kv_shape, -1.0F, 1.0F, seed + 2U));
+            const auto query = core::from_xtensor(q, device);
+            const auto key = core::from_xtensor(k, device);
+            const auto value = core::from_xtensor(v, device);
+            // Invoke the ring factory itself, including its runtime-argument override on the second call.
+            const auto [output, intermediates] = ttnn::prim::ttml_ring_sdpa_fw(
+                query, key, value, /*ring_size=*/1U, /*ring_axis=*/0U, /*step=*/0U, mask_type);
+            const std::vector<ttnn::Tensor> buffers{query, key, value, output, intermediates};
+            if (run == 0U) {
+                first_buffers = buffers;
+                entries = device->num_program_cache_entries();
+            } else {
+                EXPECT_EQ(device->num_program_cache_entries(), entries);
+                for (std::size_t i = 0; i < buffers.size(); ++i) {
+                    EXPECT_NE(buffers[i].buffer()->address(), first_buffers[i].buffer()->address());
+                }
+            }
+            const xt::xarray<float> mask = mask_type == metal::AttentionMaskType::Causal
+                                               ? generate_mask(q)
+                                               : xt::xarray<float>(xt::ones<float>({1UL, 1UL, 64UL, 64UL}));
+            const auto [expected, expected_lse] = sdpa_split_heads_naive_with_intermediates(q, k, v, mask);
+            const auto actual = core::to_xtensor(output);
+            const auto actual_lse = core::to_xtensor(intermediates);
+            EXPECT_TRUE(xt::allclose(actual, expected, 2e-2F, 2e-2F));
+            EXPECT_LT(test_utils::relative_l2(actual, expected), 1e-2F);
+            EXPECT_LT(xt::amax(xt::abs(actual_lse - expected_lse))(), 3e-2F);
+        }
+    }
+}
+
+TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_RingChunking_SingleDevice) {
+    // Ring SDPA runs this op once per ring step with ring_chunking's config and the mask the step calls for
+    // (causal on the diagonal shard, none on the earlier shards), on per-device shards as short as a tile
+    // or two. Only the Galaxy ring test runs that path end to end, so this walks the same steps on one
+    // device: every (shard length, mask) the ring sends, each twice, so the second shard of a shape is a
+    // program-cache hit that must read the new buffers. The op only sees the (shard, mask) pair, so a mask
+    // the ring sends a device at several steps (none, at steps 1 and 2 of a 4-ring) runs once.
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
+    using namespace ttml;
+    constexpr uint32_t kRingSize = 4U, kDeviceRingId = 2U;  // steps 0..2 run: causal, none, none; step 3 skips
+    constexpr uint32_t kQHeads = 4U, kKvHeads = 2U, kHeadDim = 64U;
+    std::vector<metal::AttentionMaskType> masks;
+    for (uint32_t step = 0; step < kRingSize; ++step) {
+        const auto [runs, mask_type] = metal::ops::get_device_execution_info(
+            kDeviceRingId,
+            step,
+            kRingSize,
+            metal::AttentionMaskType::Causal,
+            ttnn_fixed::distributed::RingShiftDirection::Forward);
+        if (runs && std::find(masks.begin(), masks.end(), mask_type) == masks.end()) {
+            masks.push_back(mask_type);
+        }
+    }
+    ASSERT_EQ(masks.size(), 2U) << "device 2 of a 4-ring sees the causal and the unmasked step";
+    auto* device = &autograd::ctx().get_device();
+    device->enable_program_cache();
+    for (const uint32_t shard_len : {32U, 64U, 96U, 256U}) {  // 1, 2, 3 (no pairs) and 8 tiles
+        const metal::SDPAForwardProgramConfig config = metal::ops::ring_sdpa_fw::ring_chunking(shard_len);
+        ASSERT_EQ(config.q_chunk_size, 32U) << "ring runs one query tile-row per item";
+        ASSERT_EQ(shard_len % config.k_chunk_size, 0U) << "the K/V step must divide the shard";
+        for (const auto mask_type : masks) {
+            const std::string name = "RingChunking_S" + std::to_string(shard_len) +
+                                     (mask_type == metal::AttentionMaskType::Causal ? "_causal" : "_none");
+            const SDPATestConfig shard{
+                .batch_size = 1U,
+                .sequence_length = shard_len,
+                .query_dim = kQHeads * kHeadDim,
+                .key_value_dim = kKvHeads * kHeadDim,
+                .num_query_heads = kQHeads,
+                .num_key_heads = kKvHeads,
+                .mask_type = mask_type,
+                .program_config = config,
+                .test_name = name};
+            // The first shard's inputs stay alive through the second run, so the second run's land at other
+            // addresses (freed inputs of the same size would be reallocated where the first ones were, and a
+            // stale address would still read the right data).
+            std::vector<ttnn::Tensor> first_inputs;
+            run_sdpa_test(shard, nullptr, &first_inputs);
+            const auto entries = device->num_program_cache_entries();
+            std::vector<ttnn::Tensor> second_inputs;
+            run_sdpa_test(shard, nullptr, &second_inputs);
+            EXPECT_EQ(device->num_program_cache_entries(), entries) << name << ": the second shard must hit";
+            ASSERT_EQ(first_inputs.size(), second_inputs.size());
+            for (std::size_t i = 0; i < first_inputs.size(); ++i) {
+                EXPECT_NE(first_inputs[i].buffer()->address(), second_inputs[i].buffer()->address())
+                    << name << ": the second shard's inputs must sit at other addresses";
+            }
+        }
+    }
+}
+
+// =============================================================================
+// Long rows: the online softmax state against an fp64 reference.
+// =============================================================================
+
+namespace {
+
+// Unmasked single-head attention in double, row by row: out (S, D) as float, lse (S) as double.
+std::pair<xt::xarray<float>, std::vector<double>> sdpa_single_head_fp64(
+    const xt::xarray<float>& q, const xt::xarray<float>& k, const xt::xarray<float>& v) {
+    const std::size_t S = q.shape()[2], D = q.shape()[3], Dv = v.shape()[3];
+    const std::vector<double> qd(q.begin(), q.end()), kd(k.begin(), k.end()), vd(v.begin(), v.end());
+    const double scale = 1.0 / std::sqrt(static_cast<double>(D));
+    xt::xarray<float> out = xt::zeros<float>({1UL, 1UL, S, Dv});
+    std::vector<double> lse(S);
+    std::vector<double> scores(S), acc(Dv);
+    for (std::size_t i = 0; i < S; ++i) {
+        double row_max = -INFINITY;
+        for (std::size_t j = 0; j < S; ++j) {
+            double dot = 0.0;
+            for (std::size_t t = 0; t < D; ++t) {
+                dot += qd[i * D + t] * kd[j * D + t];
+            }
+            scores[j] = dot * scale;
+            row_max = std::max(row_max, scores[j]);
+        }
+        double sum = 0.0;
+        std::fill(acc.begin(), acc.end(), 0.0);
+        for (std::size_t j = 0; j < S; ++j) {
+            const double p = std::exp(scores[j] - row_max);
+            sum += p;
+            for (std::size_t t = 0; t < Dv; ++t) {
+                acc[t] += p * vd[j * Dv + t];
+            }
+        }
+        lse[i] = row_max + std::log(sum);
+        for (std::size_t t = 0; t < Dv; ++t) {
+            out(0, 0, i, t) = static_cast<float>(acc[t] / sum);
+        }
+    }
+    return {out, lse};
+}
+
+}  // namespace
+
+TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_LongRows_Fp64Reference) {
+    // O and the LSE against an fp64 reference on unmasked rows, at step counts the tests above never reach
+    // (they stay at <= 8). The kernel carries a bias per K/V step: measured on p150b (D=128, V in [0, 1]),
+    // O comes out high by about 0.037% per step and the LSE by about 0.00057 per step, linear in the step
+    // count and independent of S: at 64 steps O is 2.4% high and the LSE 0.037 high, at 8 steps 0.3% and
+    // 0.0024, at one step 0.003% and 0.0004. With Q = 0 (every score zero, the max never moves, alpha = exp(0))
+    // the LSE still grows by 0.00065 per step, consistent with a bias in alpha = exp(0). These are
+    // end-to-end device measurements; they do not isolate the contribution of TF32 truncation of the
+    // running sum in the Src registers. Pre-existing, main has the same loop; the
+    // bounds here hold the current error so a fix (or a regression) shows. See the TODO at step (2) of
+    // process_q_chunk in sdpa_fw_compute_kernel.cpp and https://github.com/tenstorrent/tt-metal/issues/64302.
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
+    using namespace ttml;
+    constexpr std::size_t D = 128U;
+    constexpr double kMeanRatioTol = 0.04;  // 64 steps: 2.4% measured
+    constexpr double kLseAbsTol = 0.06;     // 64 steps: 0.040 measured
+    struct Row {
+        std::size_t S;
+        uint32_t k_chunk_size;  // 0 = the pick
+    };
+    for (const Row row : {Row{2048U, 32U}, Row{2048U, 256U}, Row{8192U, 0U}}) {  // 64, 8 and (at the pick) 64 steps
+        const std::array<std::size_t, 4> shape{1U, 1U, row.S, D};
+        const xt::xarray<float> q = round_to_bf16(test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, 11U));
+        const xt::xarray<float> k = round_to_bf16(test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, 12U));
+        const xt::xarray<float> v = round_to_bf16(test_utils::make_uniform_xarray<float>(shape, 0.0F, 1.0F, 13U));
+        const auto [out_ref, lse_ref] = sdpa_single_head_fp64(q, k, v);
+        auto* device = &autograd::ctx().get_device();
+        const metal::SDPAForwardProgramConfig cfg{
+            .q_chunk_size = row.k_chunk_size == 0U ? 0U : 32U, .k_chunk_size = row.k_chunk_size};
+        auto result = metal::sdpa_fw(
+            core::from_xtensor(q, device),
+            core::from_xtensor(k, device),
+            core::from_xtensor(v, device),
+            metal::AttentionMaskType::None,
+            std::nullopt,
+            0.0F,
+            /*return_intermediates=*/true,
+            std::nullopt,
+            cfg);
+        const xt::xarray<float> out = core::to_xtensor(result[0].value());
+        const xt::xarray<float> interm = core::to_xtensor(result[1].value());
+        // The sum error is a scale error on every element of a row, so the mean ratio to the reference shows
+        // it where an elementwise or L2 check would mix it with the bf16 rounding of the output.
+        double ratio_sum = 0.0, lse_diff_max = 0.0;
+        for (std::size_t i = 0; i < row.S; ++i) {
+            lse_diff_max = std::max(lse_diff_max, std::abs(static_cast<double>(interm(0, 0, i, 0)) - lse_ref[i]));
+            for (std::size_t t = 0; t < D; ++t) {
+                ratio_sum += static_cast<double>(out(0, 0, i, t)) / out_ref(0, 0, i, t);
+            }
+        }
+        const double mean_ratio = ratio_sum / static_cast<double>(row.S * D);
+        const std::string what = fmt::format("S={} k_chunk_size={}", row.S, row.k_chunk_size);
+        EXPECT_NEAR(mean_ratio, 1.0, kMeanRatioTol) << "mean O / O_ref at " << what;
+        EXPECT_LT(lse_diff_max, kLseAbsTol) << "max |LSE - LSE_ref| at " << what;
+    }
 }

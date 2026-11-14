@@ -165,10 +165,21 @@ inline void sdpa_exp_tile_init() {
     sdpa_exp_tile_init</*approx*/ false, /*SCALE_EN*/ false>();
 }
 
-// Arch-dispatched scaled exp: exp(scale * x) over 8 face groups.
-//   WH: pre-multiplies by the BF16 scale via sfpi then calls accurate exp directly.
+// Arch-dispatched scaled exp, exp(scale * x): sdpa_exp_tile_scaled_init once, then sdpa_exp_tile_scaled /
+// sdpa_exp_tile_first_column_scaled per DST tile. The init's state (BH: ADDR_MOD_6 and LREG12/13) survives
+// the FPU ops and packs of a DST pass, so a helper that runs several exps per pass inits once per call;
+// call it again after any other SFPU op's init.
+//   WH: pre-multiplies by the BF16 scale via sfpi then calls accurate exp directly; nothing to init.
 //       `scaler_bf16` carries the host-side RNE conversion of `scaler_fp32` (low 16 bits).
 //   BH: folds the full FP32 scale into LREG12 at init time — one SFPU op fewer per element.
+template <uint32_t scaler_fp32>
+inline void sdpa_exp_tile_scaled_init() {
+#ifdef ARCH_BLACKHOLE
+    sdpa_exp_tile_init</*approx*/ false, /*SCALE_EN*/ true, scaler_fp32>();
+#endif
+}
+
+// Full tile, 8 face groups.
 template <uint32_t scaler_fp32, uint32_t scaler_bf16>
 inline void sdpa_exp_tile_scaled(uint32_t idst) {
 #ifdef ARCH_WORMHOLE
@@ -179,12 +190,11 @@ inline void sdpa_exp_tile_scaled(uint32_t idst) {
         VectorMode::RC);
 #endif
 #elif defined(ARCH_BLACKHOLE)
-    sdpa_exp_tile_init</*approx*/ false, /*SCALE_EN*/ true, scaler_fp32>();
     sdpa_exp_tile(idst);
 #endif
 }
 
-// Arch-dispatched scaled first-column exp: exp(scale * x) over column 0 only (4 iterations).
+// Column 0 only (4 iterations).
 template <uint32_t scaler_fp32, uint32_t scaler_bf16>
 inline void sdpa_exp_tile_first_column_scaled(uint32_t idst) {
 #ifdef ARCH_WORMHOLE
@@ -198,7 +208,6 @@ inline void sdpa_exp_tile_first_column_scaled(uint32_t idst) {
         VectorMode::C);
 #endif
 #elif defined(ARCH_BLACKHOLE)
-    sdpa_exp_tile_init</*approx*/ false, /*SCALE_EN*/ true, scaler_fp32>();
     MATH((sdpa_exp_tile_first_column(idst)));
 #endif
 }

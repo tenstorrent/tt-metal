@@ -4,12 +4,16 @@
 
 #include "sdpa_fw_program_factory.hpp"
 
+#include <algorithm>
 #include <bit>
 #include <cmath>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <utility>
 
 #include "metal/common/program_utils.hpp"
+#include "sdpa_fw_config.hpp"
+#include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
 
 namespace {
 
@@ -22,174 +26,63 @@ constexpr auto kWriterKernelPath =
 constexpr auto kComputeKernelPath =
     "tt-train/sources/ttml/metal/ops/sdpa_fw/device/kernels/compute/sdpa_fw_compute_kernel.cpp";
 
-// reader runtime args
-constexpr uint32_t kQueryBufferIdx = 0;
-constexpr uint32_t kKeyBufferIdx = 1U;
-constexpr uint32_t kValueBufferIdx = 2U;
-constexpr uint32_t kMaskBufferIdx = 3U;
-constexpr uint32_t kGateBufferIdx = 4U;
-
 // writer runtime args
 constexpr uint32_t kOutputBufferIdx = 0;
 constexpr uint32_t kIntermediateBufferIdx = 1U;
 
-constexpr auto kQueryCbIndex = tt::CBIndex::c_0;
-constexpr auto kKeyCbIndex = tt::CBIndex::c_1;
-constexpr auto kValueCbIndex = tt::CBIndex::c_2;
-constexpr auto kAttnMaskCbIndex = tt::CBIndex::c_3;
-constexpr auto kIntermediateCbIndex = tt::CBIndex::c_4;
-constexpr auto kReductionScalerCbIndex = tt::CBIndex::c_5;
-constexpr auto kMatMulReduceCbIndex = tt::CBIndex::c_6;  // used for matmul reduction
-constexpr auto kAttentionWeightsCbIndex = tt::CBIndex::c_7;
-
-constexpr auto kPrevMaxValueCbIndex = tt::CBIndex::c_8;  // used for holding max value during reduce
-constexpr auto kCurMaxValueCbIndex = tt::CBIndex::c_9;   // used for holding max value during reduce
-constexpr auto kExpMaxDiffCbIndex = tt::CBIndex::c_10;   // used for holding exp sum diff during reduce
-constexpr auto kPrevSumExpCbIndex = tt::CBIndex::c_11;   // used for holding exp sum during reduce
-constexpr auto kCurSumExpCbIndex = tt::CBIndex::c_12;    // used for holding exp sum during reduce
-constexpr auto kPrevMmOutCbIndex = tt::CBIndex::c_13;    // used for holding previous matmul output
-constexpr auto kCurMmOutCbIndex = tt::CBIndex::c_14;     // used for holding current matmul output
-
-constexpr auto kOutputCbIndex = tt::CBIndex::c_15;
-constexpr auto kGateCbIndex = tt::CBIndex::c_16;
-
-constexpr uint32_t kNumScalerTiles = 1U;
-constexpr uint32_t kNumCausalMaskTiles = 2U;  // [0] = causal-diag pattern (0 kept / -1e9 masked),
-                                              // [1] = all -1e9 (strictly past the diagonal)
-constexpr uint32_t kMaxValueHolderTiles = 1U;
-constexpr uint32_t kExpMaxDiffTiles = 1U;
-constexpr uint32_t kExpSumTiles = 1U;
-constexpr uint32_t kIntermediateTiles = 1U;  // logsumexp = max + log(sum_exp), single FP32 tile
-
 const std::string kReturnIntermediates = "RETURN_INTERMEDIATES";
 const std::string kUseAttnMaskDefKey = "USE_ATTN_MASK";
 const std::string kCausalMaskDefKey = "CAUSAL_MASK";
-const std::string kBalancedParallelismDefKey = "BALANCED_PARALLELISM";
 
 const std::string kHasGateDefKey = "HAS_GATE";
-
-// Pick the multi-tile K/V chunk size. Returns the number of K tiles processed per inner-loop
-// iteration of the compute kernel.
-//
-// Constraints:
-//   1. Must divide Ht (so the diagonal of the causal mask falls cleanly within a chunk,
-//      and so the reader never reads past the end of the sequence).
-//   2. Must fit DST under fp32_dest_acc_en=true (DST has 4 tiles): the chunked softmax
-//      holds Sk_chunk_t exp tiles live across one tile_regs cycle, so we cap at 4.
-//   3. Larger chunks amortize softmax / correction overhead more, but consume L1
-//      proportionally for cb_key, cb_value, and cb_attention_weights.
-//
-// We pick the largest power-of-2 in {1, 2, 4} that divides Ht. Bumping past 4 would require
-// either fp32_dest_acc_en=false (loses precision) or splitting the exp pass into multiple
-// DST cycles.
-uint32_t pick_sk_chunk_t(uint32_t Ht) {
-    constexpr uint32_t kMaxSkChunkT = 4U;
-    for (uint32_t c = kMaxSkChunkT; c > 1U; c /= 2U) {
-        if (Ht % c == 0U) {
-            return c;
-        }
-    }
-    return 1U;
-}
-
-/**
- * Calculate work-balanced pair distribution for causal SDPA.
- *
- * For causal attention, row i within a sequence processes (i+1) K/V tiles.
- * By pairing row i with row (St-1-i), each pair has constant work = St+1.
- * This enables perfect work balance across cores.
- *
- * @param total_pairs Total number of pairs = NC * St / 2
- * @param num_cores Number of cores to distribute across
- * @return Vector of (start_pair_idx, num_pairs) for each core
- */
-std::vector<std::pair<uint32_t, uint32_t>> calculate_balanced_pair_distribution(
-    uint32_t total_pairs, uint32_t num_cores) {
-    TT_FATAL(num_cores > 0, "calculate_balanced_pair_distribution: num_cores must be > 0");
-    std::vector<std::pair<uint32_t, uint32_t>> distribution;
-    distribution.reserve(num_cores);
-
-    const uint32_t pairs_per_core = total_pairs / num_cores;
-    const uint32_t remainder = total_pairs % num_cores;
-
-    uint32_t current_pair = 0;
-    for (uint32_t core = 0; core < num_cores; ++core) {
-        // First 'remainder' cores get one extra pair
-        const uint32_t pairs_for_this_core = pairs_per_core + (core < remainder ? 1 : 0);
-        distribution.emplace_back(current_pair, pairs_for_this_core);
-        current_pair += pairs_for_this_core;
-    }
-
-    return distribution;
-}
 
 }  // namespace
 
 namespace ttml::metal::ops::sdpa_fw::device {
 
-/**
- *   Helper struct to hold references to all kernels we create,
- *        used during runtime argument setup.
- */
 struct SDPAForwardKernels {
     tt::tt_metal::KernelHandle reader;
     tt::tt_metal::KernelHandle writer;
-    tt::tt_metal::KernelHandle compute_group_1;
-    tt::tt_metal::KernelHandle compute_group_2;
+    tt::tt_metal::KernelHandle compute;
 };
 
-/**
- * Set up the runtime arguments for the 4 relevant kernels (reader, writer, compute G1, compute G2)
- *        for each core in the grid. (Standard row-based distribution)
- */
-/**
- * Set up the runtime arguments for balanced parallelism mode.
- * In this mode, work is distributed by pairs rather than rows.
- * Each pair consists of a "light" row (early in sequence, less work) and
- * a "heavy" row (late in sequence, more work), providing balanced total work.
- */
-void assign_per_core_runtime_args_balanced(
+// Runtime args: the buffer addresses (reader, writer), then the core's item runs for all three kernels:
+// num_runs, (first_item, num_items) per run.
+void assign_per_core_runtime_args(
     tt::tt_metal::Program& program,
     const SDPAForwardKernels& kernels,
     const tt::tt_metal::Buffer* query_buffer,
     const tt::tt_metal::Buffer* key_buffer,
     const tt::tt_metal::Buffer* value_buffer,
+    const tt::tt_metal::Buffer* mask_buffer,
     const tt::tt_metal::Buffer* gate_buffer,
     const tt::tt_metal::Buffer* output_buffer,
     const tt::tt_metal::Buffer* intermediates_buffer,
-    uint32_t num_cores,
     uint32_t num_cores_y,
-    const std::vector<std::pair<uint32_t, uint32_t>>& pair_distribution) {
-    for (uint32_t i = 0; i < num_cores; i++) {
+    const std::vector<CoreItemRuns>& per_core_runs) {
+    for (uint32_t i = 0; i < per_core_runs.size(); i++) {
         const tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
-        const auto& [start_pair_idx, num_pairs] = pair_distribution[i];
+        const auto& runs = per_core_runs[i];
 
-        // Reader kernel: (query_addr, key_addr, value_addr, mask_addr(unused), gate_addr (optional), num_pairs,
-        // start_pair_idx)
-        SetRuntimeArgs(
-            program,
-            kernels.reader,
-            core,
-            {query_buffer->address(),
-             key_buffer->address(),
-             value_buffer->address(),
-             0,  // mask_addr unused for balanced causal - mask generated on chip
-             gate_buffer != nullptr ? gate_buffer->address() : 0,
-             num_pairs,
-             start_pair_idx});
+        std::vector<uint32_t> work_args{static_cast<uint32_t>(runs.size())};
+        for (const auto& run : runs) {
+            work_args.push_back(run.first_item);
+            work_args.push_back(run.num_items);
+        }
+        std::vector<uint32_t> reader_args = {
+            query_buffer->address(),
+            key_buffer->address(),
+            value_buffer->address(),
+            get_address_or_zero(mask_buffer),
+            get_address_or_zero(gate_buffer)};
+        reader_args.insert(reader_args.end(), work_args.begin(), work_args.end());
+        SetRuntimeArgs(program, kernels.reader, core, reader_args);
 
-        // Writer kernel: (output_addr, intermediates_addr, num_pairs, start_pair_idx)
-        SetRuntimeArgs(
-            program,
-            kernels.writer,
-            core,
-            {output_buffer->address(),
-             intermediates_buffer != nullptr ? intermediates_buffer->address() : 0,
-             num_pairs,
-             start_pair_idx});
+        std::vector<uint32_t> writer_args = {output_buffer->address(), get_address_or_zero(intermediates_buffer)};
+        writer_args.insert(writer_args.end(), work_args.begin(), work_args.end());
+        SetRuntimeArgs(program, kernels.writer, core, writer_args);
 
-        // Compute kernel: (start_pair_idx, num_pairs)
-        SetRuntimeArgs(program, kernels.compute_group_1, core, {start_pair_idx, num_pairs});
+        SetRuntimeArgs(program, kernels.compute, core, work_args);
     }
 }
 
@@ -215,13 +108,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     auto* device = query.device();
 
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*device);
-    const auto input_data_format = datatype_to_dataformat_converter(query.dtype());
-    const uint32_t bfloat16_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float16_b);
-    const uint32_t float32_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float32);
 
-    auto [qB, qNH, qS, qEmbd] = query.padded_shape().to_array_4D();
-    auto [kB, kNH, kS, kEmbd] = key.padded_shape().to_array_4D();
-    auto [vB, vNH, vS, vEmbd] = value.padded_shape().to_array_4D();
     TT_FATAL(
         query.physical_volume() % tt::constants::TILE_WIDTH == 0 &&
             key.physical_volume() % tt::constants::TILE_WIDTH == 0 &&
@@ -231,17 +118,23 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         key.physical_volume(),
         value.physical_volume());
 
-    const uint32_t St = qS / tt::constants::TILE_HEIGHT;  // num of tiles in seq len dim
-    const uint32_t NC = qB * qNH;
-    const uint32_t total_rows_to_process =
-        NC * St;  // total rows to process = batch_size * num_heads * num_tiles_in_seq_len
+    const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    const uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    const uint32_t num_available_cores = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
+    // The program config in tiles: Sq_chunk_t query tile-rows of heads_per_item heads are processed
+    // together against one pass over K/V, Sk_chunk_t K/V tiles per step. Unset knobs follow the shape rule in
+    // sdpa_fw_config.cpp; the ring SDPA path builds the program directly, so the knobs are checked here as
+    // well as in validate.
+    const SDPAForwardShape shape = shape_of(query, key, value, mask_type, args.has_gate, args.return_intermediates);
+    const SDPAForwardChunks chunks =
+        resolve_chunks(args.program_config, shape, available_l1_bytes(*device), num_available_cores);
+    const uint32_t Sq_chunk_t = chunks.Sq_chunk_t;
+    const uint32_t Sk_chunk_t = chunks.Sk_chunk_t;
+    const uint32_t heads_per_item = chunks.heads_per_item;
+    const uint32_t rows = chunks.rows();                              // tile-rows of one item
+    const uint32_t heads_per_group = shape.q_heads / shape.kv_heads;  // Q heads that share one K/V head
 
-    const uint32_t heads_per_group = qNH / kNH;  // we read heads_per_group heads from Q for one group of K and V
-    const uint32_t qWt = qEmbd / tt::constants::TILE_WIDTH;  // num of tiles in inner dim
-    const uint32_t kWt = kEmbd / tt::constants::TILE_WIDTH;
-    const uint32_t vWt = vEmbd / tt::constants::TILE_WIDTH;
-
-    const float scale = 1.0F / std::sqrt(static_cast<float>(qEmbd));
+    const float scale = 1.0F / std::sqrt(static_cast<float>(shape.qWt * tt::constants::TILE_WIDTH));
     const uint32_t scaler = std::bit_cast<uint32_t>(scale);
     // BF16 copy of the scale for the WH fused scale+exp path (SFPU multiplies P by a BF16
     // immediate there, while the LSE and the backward pass use the full FP32 scale). RNE
@@ -252,173 +145,40 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     const uint32_t minus_one = std::bit_cast<uint32_t>(-1.0F);  // used to transform mask from 1/0 to 0/-1
     const uint32_t custom_inf = std::bit_cast<uint32_t>(1e9F);  // used to transform mask from 0/-1 to 0/-1e9F
 
-    const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    const uint32_t num_cores_y = compute_with_storage_grid_size.y;
-    const uint32_t num_available_cores = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
+    const uint32_t num_cores = std::min(num_available_cores, num_work_units(shape, chunks, num_available_cores));
+    const auto all_cores = tt::tt_metal::num_cores_to_corerangeset(num_cores, compute_with_storage_grid_size);
+    const std::vector<CoreItemRuns> per_core_runs = split_work(shape, chunks, num_cores, num_available_cores);
 
-    // -------------------------------------------------------------------------
-    // Balanced Parallelism Decision
-    // -------------------------------------------------------------------------
-    // For causal SDPA, work per row follows triangular pattern: row i processes (i+1) K/V tiles.
-    // By pairing row i with row (St-1-i), each pair has constant work = St+1.
-    // This enables near-perfect work balance across cores.
-    //
-    // Conditions for balanced parallelism:
-    // 1. Causal mask (triangular workload pattern)
-    // 2. Even number of sequence tiles (St % 2 == 0) for clean pairing
-    // 3. Enough work for all cores (total_pairs >= num_available_cores)
-    const uint32_t pairs_per_seq = St / 2;
-    const uint32_t total_pairs = NC * pairs_per_seq;
-    const bool use_balanced_parallelism =
-        (mask_type == AttentionMaskType::Causal) && (St % 2 == 0) && (total_pairs >= num_available_cores) && (St > 0);
-
-    // Variables for work distribution (will be set based on parallelism mode)
-    uint32_t num_cores = 0;
-    tt::tt_metal::CoreRangeSet all_cores{};
-    tt::tt_metal::CoreRangeSet core_group_1{};
-    tt::tt_metal::CoreRangeSet core_group_2{};
-    uint32_t num_rows_per_core_group_1 = 0;
-    uint32_t num_rows_per_core_group_2 = 0;
-    std::vector<std::pair<uint32_t, uint32_t>> pair_distribution;
-
-    if (use_balanced_parallelism) {
-        // Use all available cores for balanced distribution
-        num_cores = std::min(num_available_cores, total_pairs);
-        all_cores = tt::tt_metal::num_cores_to_corerangeset(num_cores, compute_with_storage_grid_size, true);
-        core_group_1 = all_cores;  // All cores in one group for balanced mode
-
-        // Calculate pair distribution across cores
-        pair_distribution = calculate_balanced_pair_distribution(total_pairs, num_cores);
-
-        // For balanced mode, num_rows_per_core is 2 * num_pairs (each pair = 2 rows)
-        // But kernels will loop over pairs, not rows directly
-        num_rows_per_core_group_1 = pair_distribution.empty() ? 0 : pair_distribution[0].second * 2;
-    } else {
-        // Standard row-based distribution (existing approach)
-        auto work_split = tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_rows_to_process);
-        num_cores = std::get<0>(work_split);
-        all_cores = std::get<1>(work_split);
-        core_group_1 = std::get<2>(work_split);
-        core_group_2 = std::get<3>(work_split);
-        num_rows_per_core_group_1 = std::get<4>(work_split);
-        num_rows_per_core_group_2 = std::get<5>(work_split);
-    }
-
-    // DST register budget. fp32_dest_acc_en=true → 4 slots (FP32 accumulator);
-    // fp32_dest_acc_en=false → 8 slots (BF16). Mirrors TTNN's `dst_size` convention in their
-    // SDPA program factory. Two derived granularities follow:
-    //
-    //   * `block_size`     (cap = dst_size - 1) — for SFPU ops (`update_cur_mm_out`,
-    //     final normalization) that load `block_size` data tiles plus a 1-tile scratch
-    //     for `unary_bcast<COL>`. Needs `block_size + 1 <= dst_size`.
-    //   * `pv_block_size`  (cap = dst_size)     — for `matmul_block` in PV. The MOP writes
-    //     `ct_dim` output tiles directly, no scratch needed; can use the full DST budget.
-    //
-    // Both are clamped to divisors of `vWt` by `get_block_size`, so the matmul outer loop
-    // and the SFPU outer loop each tile `vWt` evenly without remainder handling.
+    // DST is the register file the math unit computes in: 4 tiles per half in fp32 mode (8 in bf16);
+    // the kernels run half-sync, so one pass gets one half.
+    // Everything below is "how many tiles go through DST per pass":
+    //   block_size     output tiles per pass in the element-wise loops, the accumulator rescale and the
+    //                  finalize (one slot stays free for the broadcast factor they multiply by)
+    //   qk_block_*     Q rows x K tiles per QK^T matmul_block call
+    //   pv_block_*     Q rows x V feature tiles per PV matmul_block call
+    //   sm_block_size  score tiles per pass of the exp step
     constexpr bool fp32_dest_acc_en = true;
     const uint32_t dst_size = fp32_dest_acc_en ? 4U : 8U;
-    const uint32_t block_size = get_block_size(vWt, dst_size - 1U);
-    const uint32_t pv_block_size = get_block_size(vWt, dst_size);
-
-    // Multi-tile K/V chunking factor. Compute kernel processes Sk_chunk_t K and V tiles per
-    // inner-loop iteration; reader pre-stages chunk-sized K/V blocks in L1.
-    const uint32_t Sk_chunk_t = pick_sk_chunk_t(St);
-    TT_FATAL(Sk_chunk_t > 0U && (St % Sk_chunk_t == 0U), "Sk_chunk_t={} must be > 0 and divide St={}", Sk_chunk_t, St);
-
-    const auto data_format = input_data_format;
-    const auto precise_data_format = tt::DataFormat::Float32;
+    const uint32_t block_size = get_block_size(shape.vWt, dst_size - 1U);
+    // The matmul rectangles come from ttnn's SDPA subblock search: the biggest h x w that fits DST and
+    // tiles the rows x cols output.
+    using ttnn::prim::detail::determine_largest_subblock_size;
+    const auto [qk_block_h, qk_block_w] = determine_largest_subblock_size(rows, Sk_chunk_t, dst_size);
+    const auto [pv_block_h, pv_block_w] = determine_largest_subblock_size(rows, shape.vWt, dst_size);
+    const uint32_t sm_block_size = dst_size;
 
     // -------------------------------------------------------------------------
-    // 2) Create and configure circular buffers
+    // 2) Create the circular buffers
     // -------------------------------------------------------------------------
 
-    [[maybe_unused]] auto cb_query = create_circular_buffer(
-        program, all_cores, kQueryCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * qWt);
-
-    // K and V are read in Sk_chunk_t-tile chunks. Double-buffer the chunks so the reader
-    // can overlap next-chunk DRAM with current-chunk compute.
-    [[maybe_unused]] auto cb_key = create_circular_buffer(
-        program, all_cores, kKeyCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * Sk_chunk_t * kWt);
-
-    [[maybe_unused]] auto cb_value = create_circular_buffer(
-        program, all_cores, kValueCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * Sk_chunk_t * vWt);
-
-    // create mask buffer if using attention mask from DRAM or generating causal mask on-the-fly.
-    // Not needed for AttentionMaskType::None.
-    //
-    // Sizing depends on the mask type:
-    //   - Causal (incl. balanced parallelism): two persistently-fronted pre-transformed tiles
-    //     generated on chip
-    //       [0] = causal-diagonal (0.0 on/below diagonal, -1e9 above) — applied on the
-    //             diagonal K tile of every row.
-    //       [1] = all -1e9 — applied on K tiles strictly past the diagonal inside the
-    //             diagonal chunk when Sk_chunk_t > 1.
-    //   - Arbitrary: Sk_chunk_t mask tiles per K chunk are streamed from DRAM; double-buffer them.
-    if (mask_type != AttentionMaskType::None) {
-        const uint32_t num_attn_mask_tiles =
-            (mask_type == AttentionMaskType::Causal) ? kNumCausalMaskTiles : (2U * Sk_chunk_t);
-        [[maybe_unused]] auto cb_attn_mask = create_circular_buffer(
-            program, all_cores, kAttnMaskCbIndex, data_format, bfloat16_single_tile_size_bytes, num_attn_mask_tiles);
+    // Depths and formats come from the CB plan in sdpa_fw_config.cpp, the same table l1_bytes summed when
+    // resolve_chunks checked the L1 budget. The mask, gate and intermediates CBs are only created when the
+    // config uses them (depth 0 otherwise).
+    for (const SDPAForwardCb& cb : cb_plan(cb_tiles(shape, chunks))) {
+        if (cb.tiles > 0U) {
+            create_circular_buffer(program, all_cores, cb.index, cb.format, tt::tile_size(cb.format), cb.tiles);
+        }
     }
-
-    // Create gate buffer if the model has a gating mechanism. Double-buffered to overlap DRAM reads with compute.
-    if (args.has_gate) {
-        [[maybe_unused]] auto cb_gate = create_circular_buffer(
-            program, all_cores, kGateCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * vWt);
-    }
-
-    // create intermediate buffer only if we need to return intermediates
-    // Intermediate shape: (B, H, S, 32) = 1 FP32 tile wide (logsumexp = max + log(sum_exp))
-    if (args.return_intermediates) {
-        [[maybe_unused]] auto cb_intermediate = create_circular_buffer(
-            program,
-            all_cores,
-            kIntermediateCbIndex,
-            precise_data_format,
-            float32_single_tile_size_bytes,
-            kIntermediateTiles);
-    }
-
-    [[maybe_unused]] auto cb_reduction_scaler = create_circular_buffer(
-        program, all_cores, kReductionScalerCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles);
-
-    [[maybe_unused]] auto cb_mat_mul_reduce = create_circular_buffer(
-        program, all_cores, kMatMulReduceCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles);
-
-    // Holds the Sk_chunk_t QK^T score tiles for the current K chunk. Sized to one chunk
-    // (not double-buffered) since softmax overwrites in-place, then the PV matmul consumes it.
-    //
-    // TODO: once LLK provides SFPU row-reduce-max and sub_bcast_col, the softmax can run
-    // entirely in DST at FP32 after the QK matmul, eliminating the pack/unpack round-trip
-    // through this CB for the softmax critical path (~20 ms regression).
-    [[maybe_unused]] auto cb_attention_weights = create_circular_buffer(
-        program, all_cores, kAttentionWeightsCbIndex, precise_data_format, float32_single_tile_size_bytes, Sk_chunk_t);
-
-    [[maybe_unused]] auto cb_prev_max_value = create_circular_buffer(
-        program, all_cores, kPrevMaxValueCbIndex, data_format, bfloat16_single_tile_size_bytes, kMaxValueHolderTiles);
-
-    [[maybe_unused]] auto cb_cur_max_value = create_circular_buffer(
-        program, all_cores, kCurMaxValueCbIndex, data_format, bfloat16_single_tile_size_bytes, kMaxValueHolderTiles);
-
-    // lets try to use precise data format for holding exp sum/diff values
-    [[maybe_unused]] auto cb_exp_max_diff = create_circular_buffer(
-        program, all_cores, kExpMaxDiffCbIndex, precise_data_format, float32_single_tile_size_bytes, kExpMaxDiffTiles);
-
-    [[maybe_unused]] auto cb_prev_exp_sum = create_circular_buffer(
-        program, all_cores, kPrevSumExpCbIndex, precise_data_format, float32_single_tile_size_bytes, kExpSumTiles);
-
-    [[maybe_unused]] auto cb_cur_exp_sum = create_circular_buffer(
-        program, all_cores, kCurSumExpCbIndex, precise_data_format, float32_single_tile_size_bytes, kExpSumTiles);
-
-    [[maybe_unused]] auto cb_prev_mm_out = create_circular_buffer(
-        program, all_cores, kPrevMmOutCbIndex, precise_data_format, float32_single_tile_size_bytes, vWt);
-
-    [[maybe_unused]] auto cb_cur_mm_out = create_circular_buffer(
-        program, all_cores, kCurMmOutCbIndex, precise_data_format, float32_single_tile_size_bytes, vWt);
-
-    [[maybe_unused]] auto cb_output =
-        create_circular_buffer(program, all_cores, kOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, vWt);
 
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels
@@ -497,11 +257,6 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         defines[kHasGateDefKey] = "1";
     }
 
-    // Add balanced parallelism define if using that mode
-    if (use_balanced_parallelism) {
-        defines[kBalancedParallelismDefKey] = "1";
-    }
-
     // Per-arch math fidelity. Wormhole has HW bug TT #38306: HiFi4 + fp32_dest_acc + matmul_block
     // corrupts FP32 dest accumulation, so we use HiFi3 there. Blackhole is unaffected and uses HiFi4.
     const auto math_fidelity = (device->arch() == tt::ARCH::WORMHOLE_B0) ? tt::tt_metal::MathFidelity::HiFi3
@@ -511,12 +266,14 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
 
     // Reader compile-time arguments
     std::vector<uint32_t> reader_compile_args = {
-        qWt,              // num tile in inner dim in query/key (d_qk/TILE_W)
-        vWt,              // num tile in inner dim in value (d_v/TILE_W)
-        St,               // num tile in seq len dim (S/TILE_H)
-        qNH,              // number of heads in query
+        shape.qWt,        // num tile in inner dim in query/key (d_qk/TILE_W)
+        shape.vWt,        // num tile in inner dim in value (d_v/TILE_W)
+        shape.St,         // num tile in seq len dim (S/TILE_H)
+        shape.q_heads,    // number of heads in query
         heads_per_group,  // number of heads per group
-        Sk_chunk_t,       // multi-tile K/V chunking factor
+        Sk_chunk_t,       // K/V tiles per inner-loop step
+        Sq_chunk_t,       // query tile-rows per Q chunk
+        heads_per_item,   // Q heads stacked in one item
     };
     tt::tt_metal::TensorAccessorArgs(query_buffer).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(key_buffer).append_to(reader_compile_args);
@@ -532,9 +289,11 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         kReaderKernelPath);
 
     std::vector<uint32_t> writer_compile_args = {
-        vWt,  // num tile in inner dim in output/value (d_v/TILE_W)
-        St,   // num tile in seq len dim (S/TILE_H)
-        qNH,  // number of heads in query
+        shape.vWt,       // num tile in inner dim in output/value (d_v/TILE_W)
+        shape.St,        // num tile in seq len dim (S/TILE_H)
+        shape.q_heads,   // number of heads in query
+        Sq_chunk_t,      // query tile-rows per Q chunk
+        heads_per_item,  // Q heads stacked in one item
     };
     tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_args);
     tt::tt_metal::TensorAccessorArgs(intermediates_buffer).append_to(writer_compile_args);
@@ -555,145 +314,51 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         return mode;
     };
 
-    if (use_balanced_parallelism) {
-        // For balanced parallelism, all cores are in one group with uniform work
-        // num_pairs is passed as compile-time arg (max pairs per core)
-        const uint32_t max_pairs_per_core = pair_distribution.empty() ? 0 : pair_distribution[0].second;
-
-        std::vector<uint32_t> compute_args = {
-            max_pairs_per_core,  // num_pairs (or max_pairs if some cores have fewer)
-            block_size,          // SFPU per-core block size (cap = dst_size - 1, needs scratch)
-            qWt,                 // num tile in inner dim in query/key (d_qk/TILE_W)
-            vWt,                 // num tile in inner dim in value (d_v/TILE_W)
-            St,                  // num_seq_len / TILE_H
-            scaler,              // sqrt(Et) - sdpa scaler factor
-            minus_one,           // used to transform mask from 1/0 to 0/-1
-            custom_inf,          // used to transform mask from 0/-1 to 0/-1e9F
-            Sk_chunk_t,          // multi-tile K/V chunking factor
-            pv_block_size,       // PV matmul_block ct_dim (cap = dst_size, no scratch)
-            scaler_bf16,         // BF16 (RNE) scale for the WH fused scale+exp path
-        };
-
-        kernels.compute_group_1 = tt::tt_metal::CreateKernel(
-            program,
-            kComputeKernelPath,
-            all_cores,
-            tt::tt_metal::ComputeConfig{
-                .math_fidelity = math_fidelity,
-                .fp32_dest_acc_en = true,
-                .unpack_to_dest_mode = create_unpack_to_dest_mode(),
-                .math_approx_mode = false,
-                .compile_args = compute_args,
-                .defines = defines});
-    } else {
-        // Standard mode: two potential core groups with different row counts
-
-        // Group 1 compile-time arguments
-        std::vector<uint32_t> compute_group_1_args = {
-            num_rows_per_core_group_1,  // per_core_block_cnt
-            block_size,                 // SFPU per-core block size (cap = dst_size - 1, needs scratch)
-            qWt,                        // num tile in inner dim in query/key (d_qk/TILE_W)
-            vWt,                        // num tile in inner dim in value (d_v/TILE_W)
-            St,                         // num_seq_len / TILE_H
-            scaler,                     // sqrt(Et) - sdpa scaler factor
-            minus_one,                  // used to transform mask from 1/0 to 0/-1
-            custom_inf,                 // used to transform mask from 0/-1 to 0/-1e9F
-            Sk_chunk_t,                 // multi-tile K/V chunking factor
-            pv_block_size,              // PV matmul_block ct_dim (cap = dst_size, no scratch)
-            scaler_bf16,                // BF16 (RNE) scale for the WH fused scale+exp path
-        };
-
-        kernels.compute_group_1 = tt::tt_metal::CreateKernel(
-            program,
-            kComputeKernelPath,
-            core_group_1,
-            tt::tt_metal::ComputeConfig{
-                .math_fidelity = math_fidelity,
-                .fp32_dest_acc_en = true,
-                .unpack_to_dest_mode = create_unpack_to_dest_mode(),
-                .math_approx_mode = false,
-                .compile_args = compute_group_1_args,
-                .defines = defines});
-
-        // Group 2 (if present) compile-time arguments
-        if (!core_group_2.ranges().empty()) {
-            std::vector<uint32_t> compute_group_2_args = {
-                num_rows_per_core_group_2,  // per_core_block_cnt
-                block_size,                 // SFPU per-core block size (cap = dst_size - 1, needs scratch)
-                qWt,                        // num tile in inner dim in query/key (d_qk/TILE_W)
-                vWt,                        // num tile in inner dim in value (d_v/TILE_W)
-                St,                         // num_seq_len / TILE_H
-                scaler,                     // sqrt(Et) - sdpa scaler factor
-                minus_one,                  // used to transform mask from 1/0 to 0/-1
-                custom_inf,                 // used to transform mask from 0/-1 to 0/-1e9F
-                Sk_chunk_t,                 // multi-tile K/V chunking factor
-                pv_block_size,              // PV matmul_block ct_dim (cap = dst_size, no scratch)
-                scaler_bf16,                // BF16 (RNE) scale for the WH fused scale+exp path
-            };
-
-            kernels.compute_group_2 = tt::tt_metal::CreateKernel(
-                program,
-                kComputeKernelPath,
-                core_group_2,
-                tt::tt_metal::ComputeConfig{
-                    .math_fidelity = math_fidelity,
-                    .fp32_dest_acc_en = true,
-                    .unpack_to_dest_mode = create_unpack_to_dest_mode(),
-                    .math_approx_mode = false,
-                    .compile_args = compute_group_2_args,
-                    .defines = defines});
-        }
-    }
+    const std::vector<uint32_t> compute_compile_args = {
+        block_size,      // output tiles per DST pass in the element-wise loops
+        shape.qWt,       // num tile in inner dim in query/key (d_qk/TILE_W)
+        shape.vWt,       // num tile in inner dim in value (d_v/TILE_W)
+        shape.St,        // num_seq_len / TILE_H
+        scaler,          // 1/sqrt(d) softmax scale, fp32 bits
+        scaler_bf16,     // BF16 (RNE) scale for the WH fused scale+exp path
+        minus_one,       // used to transform mask from 1/0 to 0/-1
+        custom_inf,      // used to transform mask from 0/-1 to 0/-1e9F
+        Sq_chunk_t,      // query tile-rows per Q chunk
+        Sk_chunk_t,      // K/V tiles per inner-loop step
+        qk_block_h,      // item rows per QK^T matmul_block call
+        qk_block_w,      // K tiles per QK^T matmul_block call
+        pv_block_h,      // item rows per PV matmul_block call
+        pv_block_w,      // V feature tiles per PV matmul_block call
+        sm_block_size,   // score tiles per DST pass in the exp step
+        heads_per_item,  // Q heads stacked in one item
+    };
+    kernels.compute = tt::tt_metal::CreateKernel(
+        program,
+        kComputeKernelPath,
+        all_cores,
+        tt::tt_metal::ComputeConfig{
+            .math_fidelity = math_fidelity,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .unpack_to_dest_mode = create_unpack_to_dest_mode(),
+            .math_approx_mode = false,
+            .compile_args = compute_compile_args,
+            .defines = defines});
 
     // -------------------------------------------------------------------------
     // 5) Assign runtime args for each core
     // -------------------------------------------------------------------------
-    if (use_balanced_parallelism) {
-        assign_per_core_runtime_args_balanced(
-            program,
-            kernels,
-            query_buffer,
-            key_buffer,
-            value_buffer,
-            gate_buffer,
-            output_buffer,
-            intermediates_buffer,
-            num_cores,
-            num_cores_y,
-            pair_distribution);
-    } else {
-        for_each_core_with_work(
-            num_cores,
-            num_cores_y,
-            core_group_1,
-            core_group_2,
-            num_rows_per_core_group_1,
-            num_rows_per_core_group_2,
-            [&](const CoreWork& work) {
-                const auto& [core, core_index, num_rows, start_row, in_group_1] = work;
-                SetRuntimeArgs(
-                    program,
-                    kernels.reader,
-                    core,
-                    {query_buffer->address(),
-                     key_buffer->address(),
-                     value_buffer->address(),
-                     mask_buffer != nullptr ? mask_buffer->address() : 0,
-                     gate_buffer != nullptr ? gate_buffer->address() : 0,
-                     num_rows,
-                     start_row});
-                SetRuntimeArgs(
-                    program,
-                    kernels.writer,
-                    core,
-                    {output_buffer->address(),
-                     intermediates_buffer != nullptr ? intermediates_buffer->address() : 0,
-                     num_rows,
-                     start_row});
-                SetRuntimeArgs(
-                    program, in_group_1 ? kernels.compute_group_1 : kernels.compute_group_2, core, {start_row});
-            });
-    }
+    assign_per_core_runtime_args(
+        program,
+        kernels,
+        query_buffer,
+        key_buffer,
+        value_buffer,
+        mask_buffer,
+        gate_buffer,
+        output_buffer,
+        intermediates_buffer,
+        num_cores_y,
+        per_core_runs);
 
     // -------------------------------------------------------------------------
     // 6) Return the fully configured program & relevant shared variables
@@ -702,10 +367,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         std::move(program),
         {/* sdpa_fw_reader_kernel      = */ kernels.reader,
          /* sdpa_fw_writer_kernel      = */ kernels.writer,
-         /* sdpa_fw_kernel_group_1     = */ kernels.compute_group_1,
-         /* sdpa_fw_kernel_group_2     = */ kernels.compute_group_2,
-         /* core_group_1               = */ core_group_1,
-         /* core_group_2               = */ core_group_2,
+         /* sdpa_fw_compute_kernel     = */ kernels.compute,
          /* num_cores                  = */ num_cores,
          /* num_cores_y                = */ num_cores_y}};
 }
@@ -741,21 +403,20 @@ void SDPAForwardProgramFactory::override_runtime_arguments(
         // Update input buffers for the reader kernel
         {
             auto& runtime_args = reader_runtime_args[core.x][core.y];
-            runtime_args[kQueryBufferIdx] = query_buffer->address();
-            runtime_args[kKeyBufferIdx] = key_buffer->address();
-            runtime_args[kValueBufferIdx] = value_buffer->address();
+            runtime_args[kReaderArgQuery] = query_buffer->address();
+            runtime_args[kReaderArgKey] = key_buffer->address();
+            runtime_args[kReaderArgValue] = value_buffer->address();
             // For causal mask, mask is generated on-chip (mask_buffer is nullptr)
             // For DRAM mask, use actual mask buffer address
-            runtime_args[kMaskBufferIdx] = (mask_buffer != nullptr) ? mask_buffer->address() : 0;
-            runtime_args[kGateBufferIdx] = (gate_buffer != nullptr) ? gate_buffer->address() : 0;
+            runtime_args[kReaderArgMask] = get_address_or_zero(mask_buffer);
+            runtime_args[kReaderArgGate] = get_address_or_zero(gate_buffer);
         }
 
         // Update output buffer for the writer kernel
         {
             auto& runtime_args = writer_runtime_args[core.x][core.y];
             runtime_args[kOutputBufferIdx] = output_buffer->address();
-            runtime_args[kIntermediateBufferIdx] =
-                intermediates_buffer != nullptr ? intermediates_buffer->address() : 0;
+            runtime_args[kIntermediateBufferIdx] = get_address_or_zero(intermediates_buffer);
         }
     });
 }
