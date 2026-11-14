@@ -358,7 +358,7 @@ std::vector<CBInfo> get_cb_info(
         .is_globally_allocated = true,
         .data_format = conv_input_df});
 
-    TT_FATAL(cb_info.size() == num_cbs, "Expected info for {} cbs  by got {}!", num_cbs, cb_info.size());
+    TT_FATAL(cb_info.size() == num_cbs, "Expected info for {} cbs but got {}!", num_cbs, cb_info.size());
     return cb_info;
 }
 

@@ -44,7 +44,6 @@ Tensor batch_norm(
     TT_FATAL(
         input.logical_shape().rank() >= 4,
         "batch_norm not supported for tensors with rank < 4. (rank={})",
-        input.logical_shape().rank(),
         input.logical_shape().rank());
 
     // output must have the same dtype as input
