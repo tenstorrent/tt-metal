@@ -14,6 +14,7 @@
 #include "api/tensor/tensor_accessor.h"
 #include "api/compile_time_args.h"
 #include "api/debug/kernel_profiler.hpp"
+#include "../persistent.h"
 
 // Shared dataflow helpers for the fused-experts pipeline (used by every DM kernel).
 //
@@ -545,6 +546,10 @@ inline void build_routing_scalars(
 // groups' matching H-slices are reduced onto group 0 (see the writer / compute kernels).
 constexpr uint32_t kNoDownShard = 0xFFFFFFFFu;
 
+// A hub's gather target, cumulative over the persistent op's iterations: num_producers chunks per expert of the
+// group plus its shared tiles, per iteration (a count that varies with the iteration's hits).
+inline uint32_t fe_gather_total = 0;
+
 // The always-active shared expert on the 6-expert path. Its I-tiles are dealt round-robin over the
 // groups (tile t to group t % num_groups), and a group's j-th tile runs on local core
 // j + first_local, which keeps it off hub0 (local core 0) and hub1 (the last one): first_local is the
@@ -778,8 +783,13 @@ inline void run_reader_loop(
         const uint32_t reduce_tiles = (num_expert_groups - 1u) * out_tiles;
         // The group's shared-expert tiles follow its routed activation in the cb_act block, which
         // every group sizes for the largest share so the pages stay in step chip-wide.
+        // FE_GROUP_EXPERTS > 1 (several-row requests): the block holds up to that many routed experts, the group's
+        // j-th (hit expert_group + 6j) at tile j * i_tiles, then the shared tiles.
         const uint32_t shared_tiles = shared_tiles_of_group(shared.i_tiles, expert_group, num_expert_groups);
-        const uint32_t act_tiles = i_tiles + shared.slots;
+        const uint32_t act_tiles = FE_GROUP_EXPERTS * i_tiles + shared.slots;
+        auto hit_of = [&](uint32_t j) { return expert_group + j * num_expert_groups; };
+        // This iteration's experts of the group (known once the ids are in).
+        uint32_t my_experts = 1u;
         const bool shared_core = local_idx >= shared.first_local && local_idx < shared.first_local + shared_tiles;
         // FE_SHARED_SPLIT > 1 (the host sets it only where a group has one shared tile): cores [first_local,
         // first_local + FE_SHARED_SPLIT) each take a K-range of that tile; first_local's is part 0.
@@ -842,88 +852,167 @@ inline void run_reader_loop(
             fetch_shared_down_all();
         }
         wait_for_ids();
+        // The group's per-token routing-weight tiles, one per expert: the producers fold them into the activation.
+        auto build_rscalars = [&]() {
+            DeviceZoneScopedN("FE_RSCALARS");
+            for (uint32_t j = 0; j < my_experts; ++j) {
+                build_routing_scalars(
+                    cb_bcast_id,
+                    cb_rscalar_id,
+                    hit_of(j),
+                    1u,
+                    weight_base,
+                    batch,
+                    rscalar_tile_h,
+                    rscalar_face_r_dim,
+                    rscalar_num_face_rows,
+                    rscalar_tile_bytes);
+            }
+        };
+#if FE_GROUP_EXPERTS > 1
+        // The merge wrote the count before the ids' semaphore (one barrier covers both).
+        my_experts = fe_group_hits(fe_wait_hits(iter), expert_group, num_expert_groups);
+        // The weight tiles are the writer's (write_gate_up.cpp): the route merge sends the weights after the ids.
+        (void)build_rscalars;
+#endif
 
         {
             DeviceZoneScopedN("FE_PHASE1_GATE_UP");
             // FE_ROUTED_SPLIT > 1 (one I-tile per producer, the host checks): the producer reads the first of the
             // slice's K-halves, its partner in the odd column the second.
             constexpr uint32_t kSplit = FE_ROUTED_SPLIT;
-            const uint32_t half = cores_per_expert / 2u;
+            const uint32_t half = FE_PARTNER_BASE;
             const bool routed_partner = kSplit > 1u && local_idx >= half && local_idx < half + num_producers;
             // Odd groups read their K-pieces in reverse: piece k of I-tile c sits on bank (6k + c) % 8, so in order
             // every group's first pieces load banks 0, 1, 4, 5 twice as hard as the rest; staggered, all 8 evenly.
             const bool reverse_pieces = kSplit > 1u && (expert_group & 1u) != 0u;
-            for (uint32_t s = 0; swiglu_core && s < i_shards_per_core; ++s) {
-                fetch_weight_one(
-                    noc,
-                    cb_bcast_id,
-                    cb_weights_id,
-                    expert_group,
-                    gate_up_slice_tiles / kSplit,
-                    gate_up_reserve_tiles,
-                    gate_up_tile_bytes,
-                    local_idx * i_shards_per_core + s,
-                    gate_up_args,
-                    ct_gu_addr_base,
-                    gate_up_k_shards / kSplit,
-                    gate_up_col_shards,
-                    0,
-                    reverse_pieces);
-            }
-            if (routed_partner) {
-                fetch_weight_one(
-                    noc,
-                    cb_bcast_id,
-                    cb_weights_id,
-                    expert_group,
-                    gate_up_slice_tiles / kSplit,
-                    gate_up_reserve_tiles,
-                    gate_up_tile_bytes,
-                    local_idx - half,
-                    gate_up_args,
-                    ct_gu_addr_base,
-                    gate_up_k_shards / kSplit,
-                    gate_up_col_shards,
-                    gate_up_k_shards / kSplit,
-                    reverse_pieces);
+            for (uint32_t j = 0; j < my_experts; ++j) {
+                for (uint32_t s = 0; swiglu_core && s < i_shards_per_core; ++s) {
+                    fetch_weight_one(
+                        noc,
+                        cb_bcast_id,
+                        cb_weights_id,
+                        hit_of(j),
+                        gate_up_slice_tiles / kSplit,
+                        gate_up_reserve_tiles,
+                        gate_up_tile_bytes,
+                        local_idx * i_shards_per_core + s,
+                        gate_up_args,
+                        ct_gu_addr_base,
+                        gate_up_k_shards / kSplit,
+                        gate_up_col_shards,
+                        0,
+                        reverse_pieces);
+                }
+                if (routed_partner) {
+                    fetch_weight_one(
+                        noc,
+                        cb_bcast_id,
+                        cb_weights_id,
+                        hit_of(j),
+                        gate_up_slice_tiles / kSplit,
+                        gate_up_reserve_tiles,
+                        gate_up_tile_bytes,
+                        local_idx - half,
+                        gate_up_args,
+                        ct_gu_addr_base,
+                        gate_up_k_shards / kSplit,
+                        gate_up_col_shards,
+                        gate_up_k_shards / kSplit,
+                        reverse_pieces);
+                }
             }
             if (shared_core && swiglu_core) {
                 fetch_shared_gate_up_tile();
             }
         }
 
-        if (down_core) {
-            DeviceZoneScopedN("FE_RSCALARS");
-            build_routing_scalars(
-                cb_bcast_id,
-                cb_rscalar_id,
-                expert_group,
-                1u,
-                weight_base,
-                batch,
-                rscalar_tile_h,
-                rscalar_face_r_dim,
-                rscalar_num_face_rows,
-                rscalar_tile_bytes);
+        if (down_core && FE_GROUP_EXPERTS == 1) {
+            build_rscalars();
         }
 
+        // The down slices in the compute's order: entry e is H-slice e / my_experts of the group's expert
+        // e % my_experts (each slice chains every expert in DEST).
+        const uint32_t down_entries = shards_per_core * my_experts;
+        auto fetch_down_entry = [&](uint32_t e) {
+            fetch_weight_one(
+                noc,
+                cb_bcast_id,
+                cb_down_w_id,
+                hit_of(e % my_experts),
+                down_slice_tiles,
+                down_reserve_tiles,
+                down_tile_bytes,
+                down_local * shards_per_core + e / my_experts,
+                down_args,
+                ct_down_addr_base);
+        };
+        // Several experts: the entries a slice at a time (my_experts reads), two slices in flight on alternating
+        // transaction ids, so a core's 5 * my_experts small reads are not as many serialized round trips.
+        auto fetch_down_batched = [&](uint32_t first, uint32_t end) {
+            CircularBuffer cb_dw(cb_down_w_id);
+            CircularBuffer cb_ids(cb_bcast_id);
+            CoreLocalMem<volatile uint32_t> ids(cb_ids.get_write_ptr());
+            const auto& cb_iface = get_local_cb_interface(cb_down_w_id);
+            const uint32_t entry_bytes = down_reserve_tiles * down_tile_bytes;
+            constexpr uint32_t kTrid[2] = {1u, 2u};
+            auto issue = [&](uint32_t e0, uint32_t ne, uint32_t dst, uint32_t trid) {
+                for (uint32_t e = e0; e < e0 + ne; ++e) {
+#if defined(FE_PERSISTENT)
+                    const uint32_t w_addr = ids[ct_down_addr_base + hit_of(e % my_experts)];
+#else
+                    const uint32_t w_addr = kernel_compile_time_args[ct_down_addr_base + ids[hit_of(e % my_experts)]];
+#endif
+                    const auto w = TensorAccessor(down_args, w_addr);
+                    ShardView w_shard(w);
+                    noc.async_read<NocOptions::TXN_ID>(
+                        w_shard,
+                        CoreLocalMem<uint32_t>(dst),
+                        down_slice_tiles * down_tile_bytes,
+                        {.shard_id = down_local * shards_per_core + e / my_experts, .offset_bytes = 0},
+                        {.offset_bytes = 0},
+                        {.trid = trid});
+                    dst += entry_bytes;
+                    if (dst >= cb_iface.fifo_limit) {
+                        dst -= cb_iface.fifo_size;
+                    }
+                }
+            };
+            const uint32_t chunk = my_experts;
+            auto count = [&](uint32_t e0) { return end - e0 < chunk ? end - e0 : chunk; };
+            if (first >= end) {
+                return;
+            }
+            cb_dw.reserve_back(count(first) * down_reserve_tiles);
+            issue(first, count(first), cb_dw.get_write_ptr(), kTrid[0]);
+            for (uint32_t e0 = first, k = 0; e0 < end; e0 += chunk, ++k) {
+                const uint32_t n0 = count(e0);
+                if (e0 + n0 < end) {
+                    const uint32_t n1 = count(e0 + n0);
+                    cb_dw.reserve_back((n0 + n1) * down_reserve_tiles);
+                    uint32_t next = cb_dw.get_write_ptr() + n0 * entry_bytes;
+                    if (next >= cb_iface.fifo_limit) {
+                        next -= cb_iface.fifo_size;
+                    }
+                    issue(e0 + n0, n1, next, kTrid[(k + 1u) % 2u]);
+                }
+                noc.async_read_barrier<NocOptions::TXN_ID>({.trid = kTrid[k % 2u]});
+                cb_dw.push_back(n0 * down_reserve_tiles);
+            }
+            noc_async_read_set_trid(0, noc.get_noc_id());
+        };
         // A gate_up-only core has no down shards: start past them.
-        uint32_t j_down = down_core ? 0u : shards_per_core;
-        if (!is_hub && down_core) {
+        uint32_t j_down = down_core ? 0u : down_entries;
+        if (!is_hub && down_core && my_experts > 1u) {
             DeviceZoneScopedN("FE_DOWN_PREFETCH");
-            const uint32_t prefetch = down_prefetch < shards_per_core ? down_prefetch : shards_per_core;
+            const uint32_t prefetch = down_prefetch < down_entries ? down_prefetch : down_entries;
+            fetch_down_batched(0u, prefetch);
+            j_down = prefetch;
+        } else if (!is_hub && down_core) {
+            DeviceZoneScopedN("FE_DOWN_PREFETCH");
+            const uint32_t prefetch = down_prefetch < down_entries ? down_prefetch : down_entries;
             for (; j_down < prefetch; ++j_down) {
-                fetch_weight_one(
-                    noc,
-                    cb_bcast_id,
-                    cb_down_w_id,
-                    expert_group,
-                    down_slice_tiles,
-                    down_reserve_tiles,
-                    down_tile_bytes,
-                    down_local * shards_per_core + j_down,
-                    down_args,
-                    ct_down_addr_base);
+                fetch_down_entry(j_down);
             }
         }
 
@@ -932,7 +1021,38 @@ inline void run_reader_loop(
         // A hub's reader runs the gather and broadcast, so it cannot prefetch like the others; its down slices are
         // instead issued now (when cb_weights has the room) and landed after the broadcast, in flight across it.
         uint32_t hub_down_issued = 0;
-        if (is_hub && down_core) {
+        if (is_hub && down_core && my_experts > 1u) {
+            // Several experts: the first n entries, each its own expert's shard, into consecutive reserves.
+            const uint32_t n = down_prefetch < down_entries ? down_prefetch : down_entries;
+            CircularBuffer cb_dw(cb_down_w_id);
+            if (cb_dw.pages_reservable_at_back(n * down_reserve_tiles)) {
+                CircularBuffer cb_ids(cb_bcast_id);
+                CoreLocalMem<volatile uint32_t> ids(cb_ids.get_write_ptr());
+                const auto& cb_iface = get_local_cb_interface(cb_down_w_id);
+                cb_dw.reserve_back(n * down_reserve_tiles);
+                uint32_t dst = cb_dw.get_write_ptr();
+                for (uint32_t e = 0; e < n; ++e) {
+#if defined(FE_PERSISTENT)
+                    const uint32_t w_addr = ids[ct_down_addr_base + hit_of(e % my_experts)];
+#else
+                    const uint32_t w_addr = kernel_compile_time_args[ct_down_addr_base + ids[hit_of(e % my_experts)]];
+#endif
+                    const auto w = TensorAccessor(down_args, w_addr);
+                    ShardView w_shard(w);
+                    noc.async_read(
+                        w_shard,
+                        CoreLocalMem<uint32_t>(dst),
+                        down_slice_tiles * down_tile_bytes,
+                        {.shard_id = down_local * shards_per_core + e / my_experts, .offset_bytes = 0},
+                        {.offset_bytes = 0});
+                    dst += down_reserve_tiles * down_tile_bytes;
+                    if (dst >= cb_iface.fifo_limit) {
+                        dst -= cb_iface.fifo_size;
+                    }
+                }
+                hub_down_issued = n;
+            }
+        } else if (is_hub && down_core) {
             const uint32_t n = down_prefetch < shards_per_core ? down_prefetch : shards_per_core;
             if (issue_weight_reads_if_room(
                     noc,
@@ -959,10 +1079,12 @@ inline void run_reader_loop(
                 // tiles sit right after the routed ones and belong to the last hub, whose range
                 // therefore stays contiguous.
                 const bool is_hub0 = gather.role == 1;
-                const uint32_t act_cols = i_tiles + shared_tiles;
+                // Several experts: one hub (the host's), multicasting the whole block.
+                const uint32_t act_cols = FE_GROUP_EXPERTS > 1 ? act_tiles : i_tiles + shared_tiles;
                 const uint32_t region_first = is_hub0 ? 0u : gather.split_col;
                 const uint32_t region_cols =
                     is_hub0 ? (gather.num_hubs > 1 ? gather.split_col : act_cols) : (act_cols - gather.split_col);
+                fe_gather_total += num_producers * my_experts + shared_tiles;
                 const uint32_t act_l1 = cb_act.get_write_ptr();
                 hub_gather_broadcast_block(
                     noc,
@@ -975,7 +1097,7 @@ inline void run_reader_loop(
                     act_tiles,
                     region_first,
                     region_cols,
-                    /*gather_target=*/(num_producers + shared_tiles) * (iter + 1u),
+                    /*gather_target=*/fe_gather_total,
                     sem_gather_id,
                     sem_bcast_id,
                     /*blocks_done=*/gather.num_hubs * (iter + 1u),
@@ -1007,18 +1129,12 @@ inline void run_reader_loop(
 
         {
             DeviceZoneScopedN("FE_PHASE2_DOWN");
-            for (; j_down < shards_per_core; ++j_down) {
-                fetch_weight_one(
-                    noc,
-                    cb_bcast_id,
-                    cb_down_w_id,
-                    expert_group,
-                    down_slice_tiles,
-                    down_reserve_tiles,
-                    down_tile_bytes,
-                    down_local * shards_per_core + j_down,
-                    down_args,
-                    ct_down_addr_base);
+            if (my_experts > 1u) {
+                fetch_down_batched(j_down, down_entries);
+                j_down = down_entries;
+            }
+            for (; j_down < down_entries; ++j_down) {
+                fetch_down_entry(j_down);
             }
         }
 

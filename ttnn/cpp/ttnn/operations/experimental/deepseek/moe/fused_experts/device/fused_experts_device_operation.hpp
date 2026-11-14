@@ -36,6 +36,10 @@ inline constexpr uint32_t kGridY = 8;
 // split at H/64/16 shards per core.
 inline constexpr uint32_t kParallelExperts = 6;
 inline constexpr uint32_t kDownCoresPerExpert = 2 * kGridY;
+// The persistent op's several-row requests: the union of the rows' selections, up to rows * top_k experts, goes
+// over the 6 groups round robin -- hit h to group h % 6, as its (h / 6)-th expert -- so a group runs up to this
+// many experts in a row, every one's gate_up before one gather, then every one's down chained in DEST.
+inline constexpr uint32_t kMaxGroupExperts = 8;
 
 // ROW_MAJOR + L1 + HEIGHT_SHARDED with a shard spec: the replicated activation row that
 // `all_gather_for_matmul` multicasts onto every matmul core and that `matmul_decode` consumes in
@@ -67,6 +71,12 @@ inline uint32_t fused_experts_input_rows(const Tensor& x) {
 inline bool fused_experts_rm_rows(const Tensor& x) {
     return x.layout() == tt::tt_metal::Layout::ROW_MAJOR && fused_experts_input_rows(x) > 1;
 }
+
+// The persistent op's several-row request (DSpark's verify block): the requester sends its `rows` token rows
+// already laid out as (rows x 32) tiles -- k_tiles of them, each its rows' 32 columns in face order -- so the
+// op's ROW_MAJOR [rows, H] replica shard holds the run of compute tiles itself and cb_input is aliased over it
+// like the one-row case's 1x32 faces. No core restripes anything. rows is a custom_mm in0 height.
+inline bool fused_experts_persistent_rows_ok(uint32_t rows) { return rows == 1 || rows == 2 || rows == 4 || rows == 8; }
 
 // One ROW_MAJOR row [1, H] is physically a sequence of 1x32 faces (same packing as rms_norm /
 // matmul_decode), so compute uses that tile with no tilize. Several rows share one tile row of the

@@ -18,14 +18,13 @@
 // DEST is fp32 here, so the partials add without a 16-bit rounding per step.
 //
 // Compile-time args: 0: cb_parts   1: num_parts   2: cb_rbias (the bias row, bias_tiles 1x32 tiles)
-//   3: cb_rout   4: bias_tiles   5: my_chip (the tile of this chip's 32 experts' biases)
+//   3: cb_rout   4: bias_tiles   5: my_chip (the tile of this chip's 32 experts' biases)   6: rows (the tiles' height)
 //
 // FE_PERSISTENT: once per iteration; popping cb_parts stays last (the reader's ready report waits on it).
 
 namespace {
 constexpr uint32_t kOneBits = 0x3f800000u;        // softplus beta and 1/beta: 1.0f
 constexpr uint32_t kThresholdBits = 0x41a00000u;  // 20.0f, ttnn.softplus's default threshold
-constexpr int kTinyTileIterations = 2;            // a 1x32 tile's rows of a face
 }  // namespace
 
 void kernel_main() {
@@ -35,6 +34,10 @@ void kernel_main() {
     constexpr uint32_t cb_rout_id = get_compile_time_arg_val(3);
     constexpr uint32_t bias_tiles = get_compile_time_arg_val(4);
     constexpr uint32_t my_chip = get_compile_time_arg_val(5);
+    constexpr uint32_t rows = get_compile_time_arg_val(6);
+    // SFPU iterations over a face's rows: 2 cover a 1x32 tile's; taller tiles take the whole face (the rows past
+    // the tile's are never packed).
+    constexpr int kTinyTileIterations = rows == 1u ? 2 : 8;
 
     compute_kernel_hw_startup(cb_parts_id, cb_rbias_id, cb_rout_id);
 
@@ -52,7 +55,8 @@ void kernel_main() {
             add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_parts_id, p, 0);
         }
         copy_init(cb_rbias_id);
-        copy_tile(cb_rbias_id, my_chip, 1);
+        // Several rows: the reader built this chip's bias tile at 0 (every row the same biases).
+        copy_tile(cb_rbias_id, rows == 1u ? my_chip : 0u, 1);
 
         softplus_tile_init();
         MATH(SFPU_UNARY_CALL(

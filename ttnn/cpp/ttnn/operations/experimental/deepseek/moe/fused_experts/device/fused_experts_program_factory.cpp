@@ -198,7 +198,11 @@ ProgramDescriptor build_program_descriptor(
     const uint32_t parallel_grid_y =
         expert_i_tiles % kDownCoresPerExpert != 0 && expert_i_tiles % kTallGateUpCoresPerExpert == 0 ? kGridY + 1u
                                                                                                      : kGridY;
-    const bool want_parallel = num_active == kParallelExperts;
+    // The persistent op's several-row requests run the union of the rows' selections, up to rows * top_k experts,
+    // over the same 6 groups (kMaxGroupExperts): num_active is that bound, a multiple of 6.
+    const bool want_parallel =
+        num_active == kParallelExperts || (persistent != nullptr && num_active % kParallelExperts == 0 &&
+                                           num_active / kParallelExperts <= kMaxGroupExperts);
     const bool have_parallel_grid = grid.x >= kParallelGridX && grid.y >= parallel_grid_y;
     if (want_parallel && !have_parallel_grid) {
         log_warning(
@@ -218,6 +222,8 @@ ProgramDescriptor build_program_descriptor(
     const uint32_t cores_per_expert = parallel_experts ? 2u * GRID_Y : num_weight_shards;
     const uint32_t down_cores_per_expert = parallel_experts ? kDownCoresPerExpert : num_weight_shards;
     const uint32_t num_expert_groups = parallel_experts ? kParallelExperts : 1u;
+    // The most experts a group runs in an iteration (FE_GROUP_EXPERTS): 1 but for several-row persistent requests.
+    const uint32_t group_experts = parallel_experts ? num_active / kParallelExperts : 1u;
     // Down/H shards per core: H is 64-column sharded, so 16 cores cover 4 shards each at H == 4096
     // and 5 at H == 5120.
     TT_FATAL(
@@ -267,7 +273,9 @@ ProgramDescriptor build_program_descriptor(
     const bool input_replicated = fused_experts_input_is_replicated(input_tensor);
     // Several ROW_MAJOR rows (from DRAM or a replica) are not a run of tiles, so neither the {1,0}
     // broadcast nor the alias applies: every core's writer restripes the rows into cb_input instead.
-    const bool rm_rows = fused_experts_rm_rows(input_tensor);
+    // The persistent op's several rows come as their (rows x 32) tiles (fused_experts_persistent_rows_ok), so its
+    // replica is aliased like a one-row one.
+    const bool rm_rows = fused_experts_rm_rows(input_tensor) && persistent == nullptr;
 
     // gate_up weights are [K=H, N=2I] per expert (TILE layout), reshaped+permuted on the
     // host into per-shard [gate_32 | up_32] blocks. Each DRAM shard is one I-tile of gate
@@ -471,7 +479,8 @@ ProgramDescriptor build_program_descriptor(
     // property. Fewer than two producers cannot be split, so that (and a caller asking for a single
     // hub) falls back to one hub owning the whole I dim.
     const uint32_t producer_cols = parallel_experts ? i_shards_per_core : swiglu_tiles_per_core;
-    const bool split_hubs = operation_attributes.two_hub_gather && num_producers >= 2u;
+    // Several experts per group gather into one hub, which multicasts the whole (small) block.
+    const bool split_hubs = operation_attributes.two_hub_gather && num_producers >= 2u && group_experts == 1u;
     const uint32_t hub0_producers = split_hubs ? num_producers / 2u : num_producers;
     const uint32_t num_hubs = split_hubs ? 2u : 1u;
     // hub0 owns I-tiles [0, split_col) of every expert; hub1 owns [split_col, i_tiles). With one hub
@@ -631,12 +640,14 @@ ProgramDescriptor build_program_descriptor(
     const uint32_t out_tile_bytes = input_tile.get_tile_size(out_df);
     const uint32_t dst_unit_bytes = rm_rows ? kRowChunkBytes : out_tile_bytes;
     const uint32_t dst_page_bytes = static_cast<uint32_t>(out_buffer->page_size());
+    // The persistent op never writes its output through pages (its partials go to the senders' staging), and a
+    // several-row partial's ROW_MAJOR pages are rows, not tiles.
     TT_FATAL(
-        dst_page_bytes >= dst_unit_bytes && dst_page_bytes % dst_unit_bytes == 0,
+        persistent != nullptr || (dst_page_bytes >= dst_unit_bytes && dst_page_bytes % dst_unit_bytes == 0),
         "fused_experts: output page size {} must be a multiple of the {}-byte compute tile",
         dst_page_bytes,
         dst_unit_bytes);
-    const uint32_t dst_tiles_per_page = dst_page_bytes / dst_unit_bytes;
+    const uint32_t dst_tiles_per_page = persistent != nullptr ? 1u : dst_page_bytes / dst_unit_bytes;
     TT_FATAL(
         !rm_rows || k_tiles % dst_tiles_per_page == 0,
         "fused_experts: ROW_MAJOR output pages ({} columns) must tile its {}-column rows",
@@ -692,7 +703,8 @@ ProgramDescriptor build_program_descriptor(
     // per core. cb_routing then also spans the router cores, at the same address, so each one stages
     // its slot locally and writes it to the leader's copy.
     const uint32_t router_cand_offset = (scratch_l1_offset + scratch_bytes + 63u) & ~63u;
-    const uint32_t router_cand_slot_bytes = run_router ? (top_k * 3u * 4u + 63u) & ~63u : 0u;
+    // The persistent op's several rows: each row's top_k in turn.
+    const uint32_t router_cand_slot_bytes = run_router ? (batch * top_k * 3u * 4u + 63u) & ~63u : 0u;
     const uint32_t routing_used_bytes =
         run_router ? router_cand_offset + num_router_cores * router_cand_slot_bytes : scratch_l1_offset + scratch_bytes;
     // The persistent leader reads the layer's E gate_up then E down addresses here (a DRAM read, so
@@ -732,7 +744,8 @@ ProgramDescriptor build_program_descriptor(
     // experts in it, not the token count.
     // The 6-expert path's single block also holds the group's shared-expert tiles after its routed
     // ones (shared_slots is 0 without a shared expert).
-    const uint32_t act_cb_bytes = act_slots * (experts_block * i_tiles + shared_slots) * act_tile_bytes;
+    const uint32_t act_cb_bytes =
+        act_slots * (std::max(experts_block, group_experts) * i_tiles + shared_slots) * act_tile_bytes;
     // Per-core down output: the single accumulated [B, H] output tile-row slice (kOutTilesPerCore
     // tiles), double-buffered.
     const uint32_t down_out_tiles = parallel_experts ? shards_per_core * kOutTilesPerCore : kOutTilesPerCore;
@@ -745,14 +758,16 @@ ProgramDescriptor build_program_descriptor(
     // be hundreds of KB, and the source weights stay resident in cb_bcast anyway.
     const tt::DataFormat scalar_df = tt::DataFormat::Float16_b;
     const uint32_t scalar_tile_bytes = input_tile.get_tile_size(scalar_df);
-    const uint32_t rscalar_cb_bytes = experts_block * scalar_tile_bytes;
+    const uint32_t rscalar_cb_bytes = std::max(experts_block, group_experts) * scalar_tile_bytes;
     // Per-core running accumulator for the weighted down-output sum (kOutTilesPerCore tiles),
     // double-buffered so the compute kernel can ping-pong the partial sum across experts.
     const uint32_t acc_tiles = parallel_experts ? shards_per_core * kOutTilesPerCore : kOutTilesPerCore;
     const uint32_t acc_cb_bytes = (parallel_experts ? 1u : 2u) * acc_tiles * out_tile_bytes;
     // Per-core staging for one expert's weighted down output. Serial: kOutTilesPerCore tiles,
     // double-buffered. Parallel: shards_per_core * 2 tiles for the reduce ping-pong.
-    const uint32_t wtmp_cb_bytes = (parallel_experts ? 1u : 2u) * acc_tiles * out_tile_bytes;
+    // Several experts per group: a producer holds each expert's routed-split partial (2 tiles) in its own slot.
+    const uint32_t wtmp_cb_bytes =
+        std::max((parallel_experts ? 1u : 2u) * acc_tiles, group_experts * kOutTilesPerCore) * out_tile_bytes;
     // Group-0 reduce scratch: the other (num_expert_groups-1) groups unicast their H-slice here.
     // Allocated on every core so L1 addresses match; unused on non-root groups.
     const uint32_t reduce_cb_bytes =
@@ -858,8 +873,8 @@ ProgramDescriptor build_program_descriptor(
     // Only the current block's down slices can be prefetched: compute consumes them in block order,
     // so going past the block would stall the reader before its next gather.
     const uint32_t down_slots = weights_cb_bytes / (down_reserve_tiles * down_tile_bytes);
-    const uint32_t down_prefetch =
-        std::min(parallel_experts ? shards_per_core : experts_block, down_slots > 1u ? down_slots - 1u : 0u);
+    const uint32_t down_prefetch = std::min(
+        parallel_experts ? shards_per_core * group_experts : experts_block, down_slots > 1u ? down_slots - 1u : 0u);
 
     // CB reuse: the gather/broadcast sync is a hard barrier between Phase 1 (gate_up) and Phase 2
     // (down) of a block, so Phase-1 buffers are dead during Phase 2 and can host Phase-2 buffers in
@@ -977,6 +992,17 @@ ProgramDescriptor build_program_descriptor(
             .id = sem_shared_part_id,
             .core_type = CoreType::WORKER,
             .core_ranges = all_cores,
+            .initial_value = 0,
+        });
+    }
+    // Several experts per group (persistent): the route merge's weights, sent after the ids, counted per iteration on
+    // the grid's writers (FE_SEM_WEIGHTS).
+    constexpr uint32_t sem_weights_id = 6;
+    if (group_experts > 1u) {
+        desc.semaphores.push_back(SemaphoreDescriptor{
+            .id = sem_weights_id,
+            .core_type = CoreType::WORKER,
+            .core_ranges = all_cores.merge(route_merge_set),
             .initial_value = 0,
         });
     }
@@ -1979,6 +2005,22 @@ ProgramDescriptor build_program_descriptor(
         }
     }
 
+    // The routed split's partner of producer c (local core c, the even column) is local core partner_base + c: the
+    // odd column's same row, or -- several experts per group, where gate_up dominates -- two rows down, so the
+    // gate_up readers span all 8 rows (rows 6-7 held only down and shared reads) and their NoC rows share the load.
+    const uint32_t partner_base = cores_per_expert / 2u;
+    // Several experts per group: the writer builds the weight tiles (FE_RSCALAR_CT: where these start).
+    const uint32_t writer_rscalar_ct = static_cast<uint32_t>(writer_ct_args.size());
+    writer_ct_args.insert(
+        writer_ct_args.end(),
+        {static_cast<uint32_t>(cb_bcast),
+         static_cast<uint32_t>(cb_rscalar),
+         num_weights,
+         batch,
+         input_tile_h,
+         face_r_dim,
+         num_face_rows,
+         scalar_tile_bytes});
     auto make_writer = [&](const CoreRangeSet& cores, DataMovementProcessor proc, NOC noc) {
         KernelDescriptor writer_desc;
         writer_desc.kernel_source = std::string(kKernelDir) + "/dataflow/write_gate_up.cpp";
@@ -1995,6 +2037,7 @@ ProgramDescriptor build_program_descriptor(
         if (fuse_ar) {
             writer_desc.defines.emplace_back("FE_ALL_REDUCE", "1");
         }
+        writer_desc.defines.emplace_back("FE_RSCALAR_CT", std::to_string(writer_rscalar_ct));
         for (const auto& cr : cores.ranges()) {
             for (const auto& core : cr) {
                 const uint32_t idx = core_index_for(core);
@@ -2038,9 +2081,9 @@ ProgramDescriptor build_program_descriptor(
                 writer_args.push_back(static_cast<uint32_t>(agg_noc.x));
                 writer_args.push_back(static_cast<uint32_t>(agg_noc.y));
                 // The routed split's peer: a producer's partner, or a partner's producer (the other column, same row).
-                const uint32_t half = cores_per_expert / 2u;
                 const uint32_t local = parallel_experts ? idx % cores_per_expert : 0u;
-                const uint32_t peer_idx = local < half ? idx + half : idx - half;
+                const uint32_t peer_idx =
+                    local < num_producers ? idx + partner_base : (local >= partner_base ? idx - partner_base : idx);
                 const auto peer_noc =
                     device->worker_core_from_logical_core(CoreCoord{peer_idx / GRID_Y, peer_idx % GRID_Y});
                 writer_args.push_back(static_cast<uint32_t>(peer_noc.x));
@@ -2132,6 +2175,7 @@ ProgramDescriptor build_program_descriptor(
             static_cast<uint32_t>(router_bias_buffer->page_size()),
         };
         TensorAccessorArgs(*router_bias_buffer).append_to(reducer_reader_ct_args);
+        reducer_reader_ct_args.push_back(batch);
         KernelDescriptor reducer_reader;
         reducer_reader.kernel_source = std::string(kKernelDir) + "/dataflow/router_reduce.cpp";
         reducer_reader.source_type = KernelDescriptor::SourceType::FILE_PATH;
@@ -2154,10 +2198,35 @@ ProgramDescriptor build_program_descriptor(
         reducer_compute.source_type = KernelDescriptor::SourceType::FILE_PATH;
         reducer_compute.core_ranges = CoreRangeSet(CoreRange(router_reducer, router_reducer));
         reducer_compute.compile_time_args = {
-            cb_rparts, kRouterParts, cb_rbias, cb_rout, router_tiles, all_reduce->device_index};
+            cb_rparts, kRouterParts, cb_rbias, cb_rout, router_tiles, all_reduce->device_index, batch};
         // fp32 DEST, so the partials add without a 16-bit rounding per step.
         reducer_compute.config =
             ComputeConfigDescriptor{.math_fidelity = MathFidelity::HiFi4, .fp32_dest_acc_en = true};
+        // Several rows: the reducer's RISCV_1 (FE_TOPK_HELPER) takes the second half of the rows' top-k, handed
+        // over through three semaphores of the reducer core (ids the control core's, elsewhere).
+        if (batch > 1u) {
+            constexpr uint32_t sem_topk_go_id = 11;
+            constexpr uint32_t sem_topk_addr_id = 12;
+            constexpr uint32_t sem_topk_done_id = 13;
+            for (uint32_t id : {sem_topk_go_id, sem_topk_addr_id, sem_topk_done_id}) {
+                desc.semaphores.push_back(SemaphoreDescriptor{
+                    .id = id,
+                    .core_type = CoreType::WORKER,
+                    .core_ranges = CoreRangeSet(CoreRange(router_reducer, router_reducer)),
+                    .initial_value = 0,
+                });
+            }
+            KernelDescriptor helper = reducer_reader;
+            helper.config =
+                DataMovementConfigDescriptor{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1};
+            helper.defines.emplace_back("FE_TOPK_HELPER", "1");
+            for (KernelDescriptor* k : {&reducer_reader, &helper}) {
+                k->defines.emplace_back("FE_TOPK_SEM_GO", std::to_string(sem_topk_go_id));
+                k->defines.emplace_back("FE_TOPK_SEM_ADDR", std::to_string(sem_topk_addr_id));
+                k->defines.emplace_back("FE_TOPK_SEM_DONE", std::to_string(sem_topk_done_id));
+            }
+            desc.kernels.push_back(std::move(helper));
+        }
         desc.kernels.push_back(std::move(reducer_reader));
         desc.kernels.push_back(std::move(reducer_compute));
         // The route merge takes every chip's candidates from the slots.
@@ -2329,8 +2398,9 @@ ProgramDescriptor build_program_descriptor(
             .buffer = out_buffer,
         });
         // Each output core's slot goes out as a single packet.
+        // (The persistent op's sender splits its sends into packets itself.)
         TT_FATAL(
-            core_bytes <= tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*device),
+            persistent != nullptr || core_bytes <= tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*device),
             "fused_experts: an all_reduce slot of {} B exceeds the {} B fabric packet",
             core_bytes,
             tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*device));
@@ -2612,6 +2682,9 @@ ProgramDescriptor build_program_descriptor(
         kernel.defines.emplace_back("FE_SEM_SHARED_PART", std::to_string(sem_shared_part_id));
         kernel.defines.emplace_back("FE_CB_WTMP", std::to_string(static_cast<uint32_t>(cb_wtmp)));
         kernel.defines.emplace_back("FE_ROUTED_SPLIT", std::to_string(routed_split) + "u");
+        kernel.defines.emplace_back("FE_GROUP_EXPERTS", std::to_string(group_experts) + "u");
+        kernel.defines.emplace_back("FE_SEM_WEIGHTS", std::to_string(sem_weights_id));
+        kernel.defines.emplace_back("FE_PARTNER_BASE", std::to_string(partner_base) + "u");
     }
     return desc;
 }

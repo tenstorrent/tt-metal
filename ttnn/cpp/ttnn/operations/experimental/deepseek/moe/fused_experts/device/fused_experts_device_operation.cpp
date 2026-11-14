@@ -267,9 +267,11 @@ void FusedExpertsDeviceOperation::validate_on_program_cache_miss(
         const uint32_t hidden_dim = static_cast<uint32_t>(x.logical_shape()[-1]);
         // The router cores read the activation from the same one-row cb_input the expert cores use: the
         // replica it is aliased over, or the {1,0} broadcast's copy.
+        // The persistent op's sharded router scores up to 8 rows at once (its (rows x 32)-tile replica, see
+        // fused_experts_persistent_rows); the others run on one token row.
         TT_FATAL(
-            batch == 1,
-            "fused_experts: router_weight runs on one token row, got {} rows ({})",
+            batch == 1 || (attributes.persistent.has_value() && fused_experts_persistent_rows_ok(batch)),
+            "fused_experts: router_weight runs on one token row (the persistent op: 1, 2, 4 or 8), got {} rows ({})",
             batch,
             x.memory_config());
         TT_FATAL(gate.storage_type() == StorageType::DEVICE, "fused_experts: router_weight must be on device");
@@ -600,7 +602,9 @@ void FusedExpertsDeviceOperation::validate_on_program_cache_miss(
         const auto& ar = *attributes.all_reduce;
         const auto& mem = attributes.output_memory_config;
         const auto grid = x.device()->compute_with_storage_grid_size();
-        const std::array<uint32_t, 2> ar_shard_shape{1, hidden / kDownCoresPerExpert};
+        // The persistent op's partial is its rows' (rows x 32) tiles: the rows of the shard.
+        const std::array<uint32_t, 2> ar_shard_shape{
+            attributes.persistent.has_value() ? batch : 1u, hidden / kDownCoresPerExpert};
         TT_FATAL(ar.ring_size > 1, "fused_experts: all_reduce needs more than one chip, got {}", ar.ring_size);
         if (!ar.cluster_axis.has_value()) {
             // One pass over a 2D mesh: a 2D fabric multicast reaches every chip, rows and columns at
@@ -625,7 +629,10 @@ void FusedExpertsDeviceOperation::validate_on_program_cache_miss(
             "fused_experts: all_reduce num_links must be in [1, {}], got {}",
             kDownCoresPerExpert,
             ar.num_links);
-        TT_FATAL(batch == 1, "fused_experts: all_reduce runs on one token row only, got {}", batch);
+        TT_FATAL(
+            batch == 1 || attributes.persistent.has_value(),
+            "fused_experts: all_reduce runs on one token row only, got {}",
+            batch);
         TT_FATAL(
             x.layout() == tt::tt_metal::Layout::ROW_MAJOR,
             "fused_experts: all_reduce needs a ROW_MAJOR input, got {}",
@@ -642,7 +649,9 @@ void FusedExpertsDeviceOperation::validate_on_program_cache_miss(
             mem);
         // The 6-expert path (num_experts == 6 on a >= 12-wide grid) is the only one with that output.
         TT_FATAL(
-            attributes.num_experts == kParallelExperts && grid.x >= 12,
+            (attributes.num_experts == kParallelExperts ||
+             (attributes.persistent.has_value() && attributes.num_experts == kParallelExperts * batch)) &&
+                grid.x >= 12,
             "fused_experts: all_reduce needs the 6-expert path (num_experts {} on a {}-wide grid)",
             attributes.num_experts,
             grid.x);
@@ -659,8 +668,8 @@ void FusedExpertsDeviceOperation::validate_on_program_cache_miss(
             attributes.all_reduce.has_value() && !attributes.all_reduce->cluster_axis.has_value(),
             "fused_experts: the persistent op reduces over the whole mesh, so it needs all_reduce over both axes");
         TT_FATAL(
-            input_replicated && batch == 1,
-            "fused_experts: the persistent op takes its token row into the one-row L1 replica, got {}",
+            input_replicated && fused_experts_persistent_rows_ok(batch),
+            "fused_experts: the persistent op takes its 1, 2, 4 or 8 token rows into the L1 replica, got {}",
             x.memory_config());
         TT_FATAL(
             tensor_args.router_weight.has_value(),
@@ -913,7 +922,9 @@ FusedExpertsDeviceOperation::invoke(
         const auto& socket_core = *persistent_socket_core;
         auto* mesh = input_tensor.device();
         const uint32_t num_links = attributes.all_reduce->num_links;
-        const uint32_t row_bytes = static_cast<uint32_t>(input_tensor.logical_shape()[-1]) * 2u;
+        // A request carries the replica's rows (fused_experts_persistent_rows: a (rows x 32)-tile run).
+        const uint32_t row_bytes =
+            static_cast<uint32_t>(input_tensor.logical_shape()[-1]) * 2u * fused_experts_input_rows(input_tensor);
         const uint32_t num_chips = static_cast<uint32_t>(mesh->shape().mesh_size());
         TT_FATAL(
             row_bytes % num_links == 0, "fused_experts: a {} B row does not split into {} parts", row_bytes, num_links);

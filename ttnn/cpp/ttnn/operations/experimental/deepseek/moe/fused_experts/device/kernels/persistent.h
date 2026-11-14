@@ -39,12 +39,26 @@
 
 constexpr uint32_t kFeStopBit = 0x80000000u;
 
+// The most experts one group runs per iteration (the program factory's kMaxGroupExperts bound): 1 unless the
+// persistent op takes several-row requests.
+#ifndef FE_GROUP_EXPERTS
+#define FE_GROUP_EXPERTS 1u
+#endif
+// The routed gate_up K-split's partners (FE_ROUTED_SPLIT): producer c's is the group's local core FE_PARTNER_BASE + c.
+#ifndef FE_PARTNER_BASE
+#define FE_PARTNER_BASE 8u
+#endif
+
 // Header words the control core writes at FE_HDR_ADDR before each go.
 constexpr uint32_t kFeHdrLayer = 0;
 constexpr uint32_t kFeHdrSharedGateUp = 1;
 constexpr uint32_t kFeHdrSharedDown = 2;
 constexpr uint32_t kFeHdrRouterGate = 3;
 constexpr uint32_t kFeHdrRouterBias = 4;
+// Several-row requests (FE_GROUP_EXPERTS > 1): the route merge's hit count -- the size of the union of the rows'
+// selections -- as (iter + 1) << 8 | hits, written into every grid core's header after the control core's (whose
+// layer-table row holds 0 here). Word 8 keeps it 16-byte aligned for the merge's multicast.
+constexpr uint32_t kFeHdrHits = 8;
 constexpr uint32_t kFeHdrWords = 16;
 // Then the go words, one per RISC of a worker core: BRISC, NCRISC, TRISC0-2.
 constexpr uint32_t kFeGoWords = 5;
@@ -81,6 +95,22 @@ FORCE_INLINE bool fe_wait_go(uint32_t iter) {
         return false;
     }
     return true;
+}
+
+// The hit count of iteration `iter` (see kFeHdrHits), once the route merge has written it.
+FORCE_INLINE uint32_t fe_wait_hits(uint32_t iter) {
+    volatile tt_l1_ptr uint32_t* word = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(FE_HDR_ADDR) + kFeHdrHits;
+    uint32_t v;
+    do {
+        invalidate_l1_cache();
+        v = *word;
+    } while ((v >> 8) != iter + 1u);
+    return v & 0xFFu;
+}
+
+// Expert group `group`'s share of `hits` hits dealt round robin over `groups` groups (hit h to group h % groups).
+FORCE_INLINE uint32_t fe_group_hits(uint32_t hits, uint32_t group, uint32_t groups) {
+    return group < hits ? (hits - group + groups - 1u) / groups : 0u;
 }
 
 // Back to the start of every CB in FE_REWIND_CBS, as the firmware left them at launch. The math TRISC

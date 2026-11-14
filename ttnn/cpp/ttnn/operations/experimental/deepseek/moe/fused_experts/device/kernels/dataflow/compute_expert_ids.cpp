@@ -400,8 +400,9 @@ void kernel_main() {
         // re-converting -- them out of the tile.
         CoreLocalMem<volatile uint16_t> sel_ids(routing_l1 + scratch_l1_offset + bitmap_bytes + rank_bytes);
         constexpr uint16_t kDropped = 0xFFFFu;
-        // The in-op router's winners carry their scores as fp32 bits (batch is 1 there), used as the weights.
-        uint32_t router_score_bits[top_k > 0u ? top_k : 1u];
+        // The in-op router's winners carry their scores as fp32 bits, used as the weights: row b's j-th at
+        // b * top_k + j (several rows only with the persistent op's sharded router).
+        uint32_t router_score_bits[top_k > 0u ? batch * top_k : 1u];
 
         {
             DeviceZoneScopedN("FE_ROUTE_SELECT");
@@ -410,7 +411,10 @@ void kernel_main() {
             }
             if constexpr (rank_from_router) {
                 constexpr uint32_t slot_words = router_cand_slot_bytes / 4u;
-                Semaphore<>(sem_router_id).wait_min(num_router_cores * (iter + 1u));
+                {
+                    DeviceZoneScopedN("FE_ROUTE_CAND_WAIT");
+                    Semaphore<>(sem_router_id).wait_min(num_router_cores * (iter + 1u));
+                }
 #if defined(FE_ROUTER_SHARDED)
                 // The sharded router: one slot per chip, written by its reducer (this chip's) or exchange sender
                 // (the others'), into alternate halves in alternate iterations -- a chip can be a row ahead.
@@ -419,32 +423,36 @@ void kernel_main() {
 #else
                 CoreLocalMem<volatile uint32_t> cand(routing_l1 + router_cand_offset);
 #endif
-                uint32_t head[num_router_cores > 0u ? num_router_cores : 1u];
-                for (uint32_t c = 0; c < num_router_cores; ++c) {
-                    head[c] = 0;
-                }
-                // Every slot holds a full top_k (each router core owns at least 32 >= top_k experts), so
-                // a head never runs off its slot within the top_k picks.
-                for (uint32_t j = 0; j < top_k; ++j) {
-                    uint32_t best_c = 0;
-                    uint32_t best_key = cand[head[0] * 3u];
-                    uint32_t best_id = cand[head[0] * 3u + 1u];
-                    for (uint32_t c = 1; c < num_router_cores; ++c) {
-                        const uint32_t at = c * slot_words + head[c] * 3u;
-                        const uint32_t key = cand[at];
-                        const uint32_t id = cand[at + 1u];
-                        if (key > best_key || (key == best_key && id < best_id)) {
-                            best_key = key;
-                            best_id = id;
-                            best_c = c;
-                        }
+                // A slot holds each row's top_k in turn (router_reduce.cpp): row b's from triplet b * top_k. Each
+                // slot's current head (key, id) is held in registers, so a pick scans those and reloads one head.
+                constexpr uint32_t kSlots = num_router_cores > 0u ? num_router_cores : 1u;
+                for (uint32_t b = 0; b < batch; ++b) {
+                    uint32_t head_key[kSlots];
+                    uint32_t head_id[kSlots];
+                    uint32_t head[kSlots];
+                    for (uint32_t c = 0; c < num_router_cores; ++c) {
+                        head[c] = c * slot_words + b * top_k * 3u;
+                        head_key[c] = cand[head[c]];
+                        head_id[c] = cand[head[c] + 1u];
                     }
-                    const uint32_t at = best_c * slot_words + head[best_c] * 3u;
-                    ++head[best_c];
-                    const uint16_t e = static_cast<uint16_t>(cand[at + 1u]);
-                    router_score_bits[j] = cand[at + 2u];
-                    sel_ids[j] = e;
-                    bitmap[e >> 5] |= 1u << (e & 31u);
+                    // Every slot holds a full top_k per row (each router core owns at least 32 >= top_k experts), so
+                    // a head never runs off its row within the top_k picks.
+                    for (uint32_t j = 0; j < top_k; ++j) {
+                        uint32_t best_c = 0;
+                        for (uint32_t c = 1; c < num_router_cores; ++c) {
+                            if (head_key[c] > head_key[best_c] ||
+                                (head_key[c] == head_key[best_c] && head_id[c] < head_id[best_c])) {
+                                best_c = c;
+                            }
+                        }
+                        const uint16_t e = static_cast<uint16_t>(head_id[best_c]);
+                        router_score_bits[b * top_k + j] = cand[head[best_c] + 2u];
+                        sel_ids[b * top_k + j] = e;
+                        bitmap[e >> 5] |= 1u << (e & 31u);
+                        head[best_c] += 3u;
+                        head_key[best_c] = cand[head[best_c]];
+                        head_id[best_c] = cand[head[best_c] + 1u];
+                    }
                 }
             } else if constexpr (rank_from_scores) {
                 // On-device top-k over the ranking row: one ascending scan per token keeping a sorted
@@ -535,27 +543,25 @@ void kernel_main() {
                     }
                 }
             }
-            // Zero the whole weight region up front: a token contributes to only its own k experts, and
-            // every other (hit, token) slot must read as zero.
-            for (uint32_t i = 0; i < num_active * batch; ++i) {
-                ids[num_weights + i] = 0;
-            }
-            for (uint32_t w = 0; w < bitmap_words; ++w) {
-                uint32_t word = bitmap[w];
-                while (word != 0u) {
-                    const uint32_t bit = static_cast<uint32_t>(__builtin_ctz(word));
-                    word &= word - 1u;
-                    const uint32_t e = (w << 5) + bit;
-                    // A union larger than the caller's bound overflows the fetch loop, which only runs
-                    // [0, num_active). Drop the surplus rather than writing past it; an under-sized
-                    // num_experts is the caller's error, and it costs those experts' contributions.
-                    if (n < num_active) {
-                        ids[n] = e;
-                        rank[e] = static_cast<uint16_t>(n);
-                    } else {
-                        rank[e] = kDropped;
+            {
+                DeviceZoneScopedN("FE_ROUTE_COMPACT");
+                for (uint32_t w = 0; w < bitmap_words; ++w) {
+                    uint32_t word = bitmap[w];
+                    while (word != 0u) {
+                        const uint32_t bit = static_cast<uint32_t>(__builtin_ctz(word));
+                        word &= word - 1u;
+                        const uint32_t e = (w << 5) + bit;
+                        // A union larger than the caller's bound overflows the fetch loop, which only runs
+                        // [0, num_active). Drop the surplus rather than writing past it; an under-sized
+                        // num_experts is the caller's error, and it costs those experts' contributions.
+                        if (n < num_active) {
+                            ids[n] = e;
+                            rank[e] = static_cast<uint16_t>(n);
+                        } else {
+                            rank[e] = kDropped;
+                        }
+                        ++n;
                     }
-                    ++n;
                 }
             }
         }
@@ -566,8 +572,11 @@ void kernel_main() {
         constexpr float scaling = __builtin_bit_cast(float, scaling_bits);
         constexpr float eps = __builtin_bit_cast(float, eps_bits);
         constexpr uint32_t sel_slots = top_k > 0u ? top_k : 1u;
-        {
-            DeviceZoneScopedN("FE_ROUTE_WEIGHTS_MCAST");
+        // Each row's weights into the weight region (hit-major, then row), zero where the row did not pick the hit.
+        auto compute_weights = [&]() {
+            for (uint32_t i = 0; i < num_active * batch; ++i) {
+                ids[num_weights + i] = 0;
+            }
             for (uint32_t b = 0; b < batch; ++b) {
                 float sel[sel_slots];
                 float sum = 0.0f;
@@ -578,7 +587,7 @@ void kernel_main() {
                         continue;
                     }
                     if constexpr (rank_from_router) {
-                        sel[j] = __builtin_bit_cast(float, router_score_bits[j]);
+                        sel[j] = __builtin_bit_cast(float, router_score_bits[b * top_k + j]);
                     } else {
                         // TILE: expert e sits in tile e/32 of the score row, column e%32 of token row b
                         // (16x16 faces). ROW_MAJOR decode is a linear [1, E] stick, so score[e] is at e*2.
@@ -604,6 +613,12 @@ void kernel_main() {
                     }
                 }
             }
+        };
+        {
+            DeviceZoneScopedN("FE_ROUTE_WEIGHTS_MCAST");
+#if !(defined(FE_ROUTE_STAGE) && FE_GROUP_EXPERTS > 1)
+            compute_weights();
+#endif
 
             // `num_active` may over-provision the union (its exact size is data dependent once B > 1, while
             // the program -- and any trace containing it -- is compiled for a fixed expert count). Unused
@@ -637,6 +652,27 @@ void kernel_main() {
         }
         {
             DeviceZoneScopedN("FE_ROUTE_IDS_MCAST");
+#if FE_GROUP_EXPERTS > 1
+            // The hit count, for every grid RISC's loops (persistent.h kFeHdrHits): staged in this core's own header
+            // word (its router-row header, which the next route go rewrites only after this iteration).
+            {
+                const uint32_t hits_l1 = FE_HDR_ADDR + kFeHdrHits * 4u;
+                *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(hits_l1) =
+                    ((iter + 1u) << 8) | (n < num_active ? n : num_active);
+                noc.async_write_multicast(
+                    CoreLocalMem<uint32_t>(hits_l1),
+                    MulticastEndpoint{},
+                    4u,
+                    num_dests,
+                    {.offset_bytes = 0},
+                    {.noc_x_start = mcast_start_x,
+                     .noc_y_start = mcast_start_y,
+                     .noc_x_end = mcast_end_x,
+                     .noc_y_end = mcast_end_y,
+                     .addr = hits_l1},
+                    /*linked=*/false);
+            }
+#endif
 #endif
 
             // ---- 2. Broadcast the ids to all other cores' L1 (same cb_bcast address). ----
@@ -659,6 +695,32 @@ void kernel_main() {
             sem.set(iter + 1u);
             sem.set_multicast(noc, mcast_start_x, mcast_start_y, mcast_end_x, mcast_end_y, num_dests, /*linked=*/false);
         }
+#if defined(FE_ROUTE_STAGE) && FE_GROUP_EXPERTS > 1
+        // Several rows: the weights (soft-float, several us for all the rows) come after the ids, which start the
+        // grid's weight reads; the grid's writers wait for them on FE_SEM_WEIGHTS to build the weight tiles.
+        {
+            DeviceZoneScopedN("FE_ROUTE_WEIGHTS_LATE");
+            compute_weights();
+            const uint32_t weights_l1 = bcast_l1 + num_weights * 4u;
+            noc.async_write_multicast(
+                CoreLocalMem<uint32_t>(weights_l1),
+                MulticastEndpoint{},
+                num_active * batch * 4u,
+                num_dests,
+                {.offset_bytes = 0},
+                {.noc_x_start = mcast_start_x,
+                 .noc_y_start = mcast_start_y,
+                 .noc_x_end = mcast_end_x,
+                 .noc_y_end = mcast_end_y,
+                 .addr = weights_l1},
+                /*linked=*/false);
+            noc.async_write_barrier();
+            Semaphore<> sem_w(FE_SEM_WEIGHTS);
+            sem_w.set(iter + 1u);
+            sem_w.set_multicast(
+                noc, mcast_start_x, mcast_start_y, mcast_end_x, mcast_end_y, num_dests, /*linked=*/false);
+        }
+#endif
 
 #if !defined(FE_ROUTE_STAGE)
         // ---- 4. Publish the activation to this core's compute kernel. ----
