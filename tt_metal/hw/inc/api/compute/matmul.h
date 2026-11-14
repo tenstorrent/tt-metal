@@ -765,7 +765,8 @@ template <
     std::uint32_t stream_z = 0,
     std::uint32_t block_rt = 0,
     std::uint32_t block_ct = 0,
-    std::uint32_t block_kt = 0>
+    std::uint32_t block_kt = 0,
+    DataFormat form_out_key = DataFormat::Invalid>
 ALWI void matmul_block_init(
     std::uint32_t in0_cb_id,
     std::uint32_t in1_cb_id,
@@ -799,7 +800,9 @@ ALWI void matmul_block_init(
     constexpr std::uint32_t unpack_ttsync =
         keyed ? llk_matmul_unpack_ttsync<unpack_auto_ttsync, block_rt, block_ct, block_kt, in0_format, in1_format, out_format>() : 0;
     constexpr std::uint32_t stream_z_on = keyed ? stream_z : 0;
-    constexpr DataFormat form_out = row_mop_form != 0 ? matmul_forced_form_key(row_mop_form) : (keyed ? out_format : DataFormat::Invalid);
+    constexpr DataFormat form_out = row_mop_form != 0 ? matmul_forced_form_key(row_mop_form)
+                                    : keyed ? (out_format != DataFormat::Invalid ? out_format : form_out_key)
+                                            : DataFormat::Invalid;
 #else
     constexpr std::uint32_t kt_key = kt_per_section;
 #endif
@@ -867,7 +870,8 @@ template <
     std::uint32_t stream_z = 0,
     std::uint32_t block_rt = 0,
     std::uint32_t block_ct = 0,
-    std::uint32_t block_kt = 0>
+    std::uint32_t block_kt = 0,
+    DataFormat form_out_key = DataFormat::Invalid>
 ALWI void matmul_block(
     std::uint32_t in0_cb_id,
     std::uint32_t in1_cb_id,
@@ -904,7 +908,9 @@ ALWI void matmul_block(
     constexpr std::uint32_t unpack_ttsync =
         keyed ? llk_matmul_unpack_ttsync<unpack_auto_ttsync, block_rt, block_ct, block_kt, in0_format, in1_format, out_format>() : 0;
     constexpr std::uint32_t stream_z_on = keyed ? stream_z : 0;
-    constexpr DataFormat form_out = row_mop_form != 0 ? matmul_forced_form_key(row_mop_form) : (keyed ? out_format : DataFormat::Invalid);
+    constexpr DataFormat form_out = row_mop_form != 0 ? matmul_forced_form_key(row_mop_form)
+                                    : keyed ? (out_format != DataFormat::Invalid ? out_format : form_out_key)
+                                            : DataFormat::Invalid;
 #else
     constexpr std::uint32_t kt_key = kt_per_section;
 #endif
@@ -1021,8 +1027,45 @@ constexpr std::uint32_t matmul_fe_unpack_ttsync() {
 #endif
 }
 
-// mark: MATMUL_FE_MARK() from the unpack and pack macros
-template <std::uint32_t in0_cb, std::uint32_t in1_cb, std::uint32_t ct, std::uint32_t rt, std::size_t mark = 0>
+// Whether an init can key the forms (MATMUL_FE_KDEC's want): run-time ct or rt, constant cbs and kt, and a forms key (llk_matmul_forms.h
+// matmul_fe_form_out over the kernel's CB formats). kt is a function argument: no class is instantiated per kt value
+template <std::uint32_t in0_cb, std::uint32_t in1_cb, std::uint32_t ct, std::uint32_t rt>
+constexpr bool matmul_fe_keyable(const std::uint32_t kt) {
+#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_UNPACK)
+    if constexpr (in0_cb < sizeof(unpack_src_format) && in1_cb < sizeof(unpack_src_format) && (ct == 0xFFu || rt == 0xFFu)) {
+        return kt != 0xFFu && matmul_fe_form_out(
+                                  MATH_FIDELITY,
+                                  DST_SYNC_MODE == DstSync::SyncFull,
+                                  DST_ACCUM_MODE,
+                                  kt,
+                                  static_cast<DataFormat>(unpack_src_format[in0_cb]),
+                                  static_cast<DataFormat>(unpack_src_format[in1_cb]),
+                                  unpack_src_format,
+                                  MM_THROTTLE) != DataFormat::Invalid;
+    }
+#endif
+    return false;
+}
+
+// the keyed form: the forms table's class of 5 k steps or more into Float16_b (matmul_fe_form_out), for the init and every call
+template <bool fkey>
+constexpr std::uint32_t matmul_fe_kt_key() {
+    return fkey ? 5 : 0;
+}
+template <bool fkey>
+constexpr DataFormat matmul_fe_out_key() {
+    return fkey ? DataFormat::Float16_b : DataFormat::Invalid;
+}
+
+// a call that names no cbs (the experimental 2_0 call, whose init is not a front-end init) never runs the keyed forms
+template <bool fkey>
+constexpr bool matmul_fe_unkeyed() {
+    static_assert(!fkey, "a front-end init keyed the matmul forms of a kernel whose 2_0 calls cannot follow it");
+    return false;
+}
+
+// mark: MATMUL_FE_MARK() from the unpack and pack macros; fkey: the kernel's forms key decision (MATMUL_FE_KDEC)
+template <std::uint32_t in0_cb, std::uint32_t in1_cb, std::uint32_t ct, std::uint32_t rt, std::size_t mark = 0, bool fkey = false>
 ALWI void matmul_block_init_fe(
     const std::uint32_t call_line,
     std::uint32_t in0_cb_id,
@@ -1037,7 +1080,7 @@ ALWI void matmul_block_init_fe(
     matmul_block_init<
         false,
         matmul_fe_unpack_ttsync<mark>(),
-        0,
+        matmul_fe_kt_key<fkey>(),
         DataFormat::Invalid,
         0,
         f,
@@ -1046,10 +1089,12 @@ ALWI void matmul_block_init_fe(
         false,
         0,
         matmul_fe_key<ct, rt>(rt),
-        matmul_fe_key<ct, rt>(ct)>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim, call_line);
+        matmul_fe_key<ct, rt>(ct),
+        0,
+        matmul_fe_out_key<fkey>()>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim, call_line);
 }
 
-template <std::uint32_t in0_cb, std::uint32_t in1_cb, std::uint32_t ct, std::uint32_t rt, std::size_t mark = 0>
+template <std::uint32_t in0_cb, std::uint32_t in1_cb, std::uint32_t ct, std::uint32_t rt, std::size_t mark = 0, bool fkey = false>
 ALWI void matmul_block_fe(
     const std::uint32_t call_line,
     std::uint32_t in0_cb_id,
@@ -1067,7 +1112,7 @@ ALWI void matmul_block_fe(
     matmul_block<
         false,
         matmul_fe_unpack_ttsync<mark>(),
-        0,
+        matmul_fe_kt_key<fkey>(),
         DataFormat::Invalid,
         0,
         f,
@@ -1076,7 +1121,9 @@ ALWI void matmul_block_fe(
         false,
         0,
         matmul_fe_key<ct, rt>(rt),
-        matmul_fe_key<ct, rt>(ct)>(
+        matmul_fe_key<ct, rt>(ct),
+        0,
+        matmul_fe_out_key<fkey>()>(
         in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, idst, transpose, ct_dim, rt_dim, kt_dim, call_line);
 }
 #endif
@@ -1095,35 +1142,41 @@ ALWI void matmul_block_fe(
 // ct and rt key only the math init; elsewhere naming them in the dispatch moved the register allocation of run-time
 // dims
 #if defined(UCK_CHLKC_MATH)
+// every math init and call carries the kernel's forms key decision (MATMUL_FE_KDEC); an init of run-time ct or rt and constant kt may key it
 #define matmul_block_init(...) MATMUL_FE_CAT(MATMUL_FE_INIT_, MATMUL_FE_NARG(__VA_ARGS__))(__VA_ARGS__)
-#define MATMUL_FE_INIT_2(a, b) matmul_block_init_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), 1, 1, MATMUL_FE_SHAPE(1, 1)>(__builtin_LINE(), a, b)
+#define MATMUL_FE_INIT_2(a, b) \
+    matmul_block_init_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), 1, 1, MATMUL_FE_SHAPE(1, 1), MATMUL_FE_KDEC(a, false)>(__builtin_LINE(), a, b)
 #define MATMUL_FE_INIT_3(a, b, tr) \
-    matmul_block_init_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), 1, 1, MATMUL_FE_SHAPE(1, 1)>(__builtin_LINE(), a, b, tr)
-#define MATMUL_FE_INIT_4(a, b, tr, ct) \
-    matmul_block_init_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), MATMUL_FE_C(ct), 1, MATMUL_FE_SHAPE(ct, 1)>(__builtin_LINE(), a, b, tr, ct)
-#define MATMUL_FE_INIT_5(a, b, tr, ct, rt)                                                  \
-    matmul_block_init_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), MATMUL_FE_C(ct), MATMUL_FE_C(rt), MATMUL_FE_SHAPE(ct, rt)>( \
+    matmul_block_init_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), 1, 1, MATMUL_FE_SHAPE(1, 1), MATMUL_FE_KDEC(a, false)>(__builtin_LINE(), a, b, tr)
+#define MATMUL_FE_INIT_4(a, b, tr, ct)                                                                         \
+    matmul_block_init_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), MATMUL_FE_C(ct), 1, MATMUL_FE_SHAPE(ct, 1), MATMUL_FE_KDEC(a, false)>( \
+        __builtin_LINE(), a, b, tr, ct)
+#define MATMUL_FE_INIT_5(a, b, tr, ct, rt)                                                                              \
+    matmul_block_init_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), MATMUL_FE_C(ct), MATMUL_FE_C(rt), MATMUL_FE_SHAPE(ct, rt), MATMUL_FE_KDEC(a, false)>( \
         __builtin_LINE(), a, b, tr, ct, rt)
-#define MATMUL_FE_INIT_6(a, b, tr, ct, rt, kt)                                              \
-    matmul_block_init_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), MATMUL_FE_C(ct), MATMUL_FE_C(rt), MATMUL_FE_SHAPE(ct, rt)>( \
+#define MATMUL_FE_INIT_6(a, b, tr, ct, rt, kt)                                                          \
+    matmul_block_init_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), MATMUL_FE_C(ct), MATMUL_FE_C(rt), MATMUL_FE_SHAPE(ct, rt), MATMUL_FE_KDEC(a, (::ckernel::matmul_fe_keyable<MATMUL_FE_C(a), MATMUL_FE_C(b), MATMUL_FE_C(ct), MATMUL_FE_C(rt)>(MATMUL_FE_CK(kt))))>( \
         __builtin_LINE(), a, b, tr, ct, rt, kt)
-#define MATMUL_FE_INIT_7(a, b, tr, ct, rt, kt, line)                                                         \
-    matmul_block_init_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), MATMUL_FE_C(ct), MATMUL_FE_C(rt), MATMUL_FE_SHAPE(ct, rt)>( \
+#define MATMUL_FE_INIT_7(a, b, tr, ct, rt, kt, line)                                                    \
+    matmul_block_init_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), MATMUL_FE_C(ct), MATMUL_FE_C(rt), MATMUL_FE_SHAPE(ct, rt), MATMUL_FE_KDEC(a, (::ckernel::matmul_fe_keyable<MATMUL_FE_C(a), MATMUL_FE_C(b), MATMUL_FE_C(ct), MATMUL_FE_C(rt)>(MATMUL_FE_CK(kt))))>( \
         line, a, b, tr, ct, rt, kt)
 #define matmul_block(...) MATMUL_FE_CAT(MATMUL_FE_BLOCK_, MATMUL_FE_NARG(__VA_ARGS__))(__VA_ARGS__)
 // the experimental 2_0 call (no transpose argument)
-#define MATMUL_FE_BLOCK_8(...) matmul_block_fe<0xFFu, 0xFFu, 0xFFu, 0xFFu>(__builtin_LINE(), __VA_ARGS__)
-#define MATMUL_FE_BLOCK_9(a, b, i0, i1, d, tr, ct, rt, kt)                             \
-    matmul_block_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), MATMUL_FE_C(ct), MATMUL_FE_C(rt), MATMUL_FE_SHAPE(ct, rt)>( \
+#define MATMUL_FE_BLOCK_8(a, ...) \
+    matmul_block_fe<0xFFu, 0xFFu, 0xFFu, 0xFFu, 0, ::ckernel::matmul_fe_unkeyed<MATMUL_FE_KDEC(a, false)>()>(__builtin_LINE(), a, __VA_ARGS__)
+#define MATMUL_FE_BLOCK_9(a, b, i0, i1, d, tr, ct, rt, kt)                                                               \
+    matmul_block_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), MATMUL_FE_C(ct), MATMUL_FE_C(rt), MATMUL_FE_SHAPE(ct, rt), MATMUL_FE_KDEC(a, false)>( \
         __builtin_LINE(), a, b, i0, i1, d, tr, ct, rt, kt)
-#define MATMUL_FE_BLOCK_10(a, b, i0, i1, d, tr, ct, rt, kt, line)                      \
-    matmul_block_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), MATMUL_FE_C(ct), MATMUL_FE_C(rt), MATMUL_FE_SHAPE(ct, rt)>( \
+#define MATMUL_FE_BLOCK_10(a, b, i0, i1, d, tr, ct, rt, kt, line)                                                        \
+    matmul_block_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), MATMUL_FE_C(ct), MATMUL_FE_C(rt), MATMUL_FE_SHAPE(ct, rt), MATMUL_FE_KDEC(a, false)>( \
         line, a, b, i0, i1, d, tr, ct, rt, kt)
 #else
-// the unpack and pack macros: the class rule's mark and the shape mark, and on a call that names ct, rt and kt the cell mark
+// the unpack and pack macros: the class rule's mark and the shape mark, and on a call that names ct, rt and kt the cell mark; every
+// init and call carries the kernel's forms key decision as the math macros do
 #define matmul_block_init(...) MATMUL_FE_CAT(MATMUL_FE_UINIT_, MATMUL_FE_NARG(__VA_ARGS__))(__VA_ARGS__)
 #define MATMUL_FE_UINIT(a, b, ct, rt) \
-    matmul_block_init_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), 0xFFu, 0xFFu, MATMUL_FE_MARK() + MATMUL_FE_SHAPE(ct, rt) + MATMUL_FE_PACK_SHAPE(ct, rt)>
+    matmul_block_init_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), 0xFFu, 0xFFu, MATMUL_FE_MARK() + MATMUL_FE_SHAPE(ct, rt) + MATMUL_FE_PACK_SHAPE(ct, rt), \
+                         MATMUL_FE_KDEC(a, false)>
 #if defined(UCK_CHLKC_PACK)
 // a dim that is a constant expression, 0xFF otherwise (by value, as MATMUL_FE_SHAPE)
 #define MATMUL_FE_V(x)                                                                   \
@@ -1141,7 +1194,8 @@ ALWI void matmul_block_fe(
 #endif
 #define MATMUL_FE_UCELL(a, b, ct, rt, kt)                                                                                \
     matmul_block_init_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), 0xFFu, 0xFFu,                                                \
-                         MATMUL_FE_CELL_MARK(a, b, ct, rt, kt) + MATMUL_FE_SHAPE(ct, rt) + MATMUL_FE_PACK_SHAPE(ct, rt)>
+                         MATMUL_FE_CELL_MARK(a, b, ct, rt, kt) + MATMUL_FE_SHAPE(ct, rt) + MATMUL_FE_PACK_SHAPE(ct, rt), \
+                         MATMUL_FE_KDEC(a, (::ckernel::matmul_fe_keyable<MATMUL_FE_C(a), MATMUL_FE_C(b), MATMUL_FE_CK(ct), MATMUL_FE_CK(rt)>(MATMUL_FE_CK(kt))))>
 #define MATMUL_FE_UINIT_2(a, b) MATMUL_FE_UINIT(a, b, 1, 1)(__builtin_LINE(), a, b)
 #define MATMUL_FE_UINIT_3(a, b, tr) MATMUL_FE_UINIT(a, b, 1, 1)(__builtin_LINE(), a, b, tr)
 #define MATMUL_FE_UINIT_4(a, b, tr, ct) MATMUL_FE_UINIT(a, b, ct, 1)(__builtin_LINE(), a, b, tr, ct)
@@ -1149,12 +1203,13 @@ ALWI void matmul_block_fe(
 #define MATMUL_FE_UINIT_6(a, b, tr, ct, rt, kt) MATMUL_FE_UCELL(a, b, ct, rt, kt)(__builtin_LINE(), a, b, tr, ct, rt, kt)
 #define MATMUL_FE_UINIT_7(a, b, tr, ct, rt, kt, line) MATMUL_FE_UCELL(a, b, ct, rt, kt)(line, a, b, tr, ct, rt, kt)
 #define matmul_block(...) MATMUL_FE_CAT(MATMUL_FE_UBLOCK_, MATMUL_FE_NARG(__VA_ARGS__))(__VA_ARGS__)
-#define MATMUL_FE_UBLOCK(a, b, ct, rt) \
-    matmul_block_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), 0xFFu, 0xFFu, MATMUL_FE_MARK() + MATMUL_FE_SHAPE(ct, rt)>
-#define MATMUL_FE_UBCELL(a, b, ct, rt, kt) \
-    matmul_block_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), 0xFFu, 0xFFu, MATMUL_FE_CELL_MARK(a, b, ct, rt, kt) + MATMUL_FE_SHAPE(ct, rt)>
+#define MATMUL_FE_UBCELL(a, b, ct, rt, kt)                                                                         \
+    matmul_block_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), 0xFFu, 0xFFu, MATMUL_FE_CELL_MARK(a, b, ct, rt, kt) + MATMUL_FE_SHAPE(ct, rt), \
+                    MATMUL_FE_KDEC(a, false)>
 // the experimental 2_0 call (no transpose argument)
-#define MATMUL_FE_UBLOCK_8(a, b, i0, i1, d, ct, rt, kt) MATMUL_FE_UBLOCK(a, b, ct, rt)(__builtin_LINE(), a, b, i0, i1, d, ct, rt, kt)
+#define MATMUL_FE_UBLOCK_8(a, b, i0, i1, d, ct, rt, kt)                                                                   \
+    matmul_block_fe<MATMUL_FE_C(a), MATMUL_FE_C(b), 0xFFu, 0xFFu, MATMUL_FE_MARK() + MATMUL_FE_SHAPE(ct, rt),             \
+                    ::ckernel::matmul_fe_unkeyed<MATMUL_FE_KDEC(a, false)>()>(__builtin_LINE(), a, b, i0, i1, d, ct, rt, kt)
 #define MATMUL_FE_UBLOCK_9(a, b, i0, i1, d, tr, ct, rt, kt) \
     MATMUL_FE_UBCELL(a, b, ct, rt, kt)(__builtin_LINE(), a, b, i0, i1, d, tr, ct, rt, kt)
 #define MATMUL_FE_UBLOCK_10(a, b, i0, i1, d, tr, ct, rt, kt, line) \

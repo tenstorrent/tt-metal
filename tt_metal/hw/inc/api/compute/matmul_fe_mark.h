@@ -49,6 +49,19 @@ constexpr unsigned dim(const unsigned x) {
 inline constexpr auto self_test_set = sizeof(set<1>);
 static_assert(is_used<1>(0), "matmul_fe_mark: a completed set<N> must make used(tag<N>) callable");
 static_assert(!is_used<2>(0), "matmul_fe_mark: an untouched tag<N> must read unused");
+// The forms key of the plain calls of run-time ct and rt, one per kernel: tag 11 keyed, 10 not, 12 unread. The reads and the set
+// take the call's cb argument type D and its line, so a call in a template whose cb argument is dependent reads at instantiation,
+// after the init that a kernel_main names before it.
+template <int N, typename D>
+struct set_d : set<N> {};
+template <int N, typename D, int L, typename = decltype(used(tag<N>{}))>
+constexpr bool is_used_dl(int) {
+    return true;
+}
+template <int N, typename D, int L>
+constexpr bool is_used_dl(...) {
+    return false;
+}
 }  // namespace ckernel::matmul_fe_mark
 
 // Auto TTSync slows fast tilize: a kernel that names a fast tilize init before its first plain matmul call keeps the
@@ -82,4 +95,13 @@ static_assert(!is_used<2>(0), "matmul_fe_mark: an untouched tag<N> must read unu
                  __builtin_constant_p(::ckernel::matmul_fe_cb(::ckernel::matmul_fe_dim(rt))))   \
                     ? 8                                                                         \
                     : 7>))
+// The forms key decision of a plain call (1 keyed, 0 not): the kernel's first call or init decides, keyed only where it is an init
+// that can key (want: matmul_fe_keyable), and every later one follows it, so the inits and calls of a kernel run one form whatever
+// the order the compiler reads them in. x: the call's in0 cb argument.
+#define MATMUL_FE_KUNDECIDED(x)                                                   \
+    (!::ckernel::matmul_fe_mark::is_used_dl<10, decltype(x), __LINE__>(0) && \
+     !::ckernel::matmul_fe_mark::is_used_dl<11, decltype(x), __LINE__>(0))
+#define MATMUL_FE_KDEC(x, want)                                                                                         \
+    (sizeof(::ckernel::matmul_fe_mark::set_d<MATMUL_FE_KUNDECIDED(x) ? ((want) ? 11 : 10) : 12, decltype(x)>) * 0 + \
+     (MATMUL_FE_KUNDECIDED(x) ? static_cast<bool>(want) : ::ckernel::matmul_fe_mark::is_used_dl<11, decltype(x), __LINE__>(0)))
 #endif

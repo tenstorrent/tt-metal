@@ -57,6 +57,19 @@
 #define MATMUL_TTSYNC_BLOCK_PROD false
 #endif
 
+// a minimal_matmul key (run-time ct and rt, constant kt): the forms table key of the front end's plain call (llk_matmul_forms.h
+// matmul_fe_form_out over the kernel's CB formats; in1 is the test's A operand, in0 its B), Invalid and 0 where it keeps main's form
+#if defined(MATMUL_PRODUCTION) && defined(MATMUL_PACK_KEYS) && defined(MATMUL_PACK_TILES)
+#define MATMUL_FE_FORM_OUT                                                                                                                   \
+    ckernel::matmul_fe_form_out(                                                                                                             \
+        MATH_FIDELITY, dest_sync == ckernel::DstSync::SyncFull, is_fp32_dest_acc_en, MATMUL_PK_KT, MATMUL_PK_IN_B, MATMUL_PK_IN_A, MATMUL_KERNEL_FORMATS, \
+        MATMUL_PK_THROTTLE)
+#define MATMUL_FE_FORM_KT (MATMUL_FE_FORM_OUT == DataFormat::Invalid ? 0u : static_cast<std::uint32_t>(MATMUL_PK_KT))
+#else
+#define MATMUL_FE_FORM_OUT DataFormat::Invalid
+#define MATMUL_FE_FORM_KT  0u
+#endif
+
 // Globals
 std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
@@ -120,7 +133,10 @@ constexpr bool matmul_true_main_key = false;
 #ifdef LLK_TRISC_UNPACK
 
 #include "llk_unpack_AB_matmul.h"
-#if defined(ARCH_BLACKHOLE) && (defined(MATMUL_ROW_LE_8) || defined(MATMUL_TRUE_MAIN) || defined(MATMUL_PRODUCTION))
+#if defined(ARCH_BLACKHOLE) && defined(MATMUL_PRODUCTION)
+// the compute API's: 8 rows unkeyed, the DEST's tiles under a forms key
+constexpr std::uint32_t matmul_max_row_tiles = MATMUL_FE_FORM_KT == 0 ? 8 : get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>();
+#elif defined(ARCH_BLACKHOLE) && (defined(MATMUL_ROW_LE_8) || defined(MATMUL_TRUE_MAIN))
 constexpr std::uint32_t matmul_max_row_tiles = 8;
 #elif defined(ARCH_BLACKHOLE)
 constexpr std::uint32_t matmul_max_row_tiles = get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>();
@@ -134,7 +150,7 @@ constexpr bool matmul_hoist_rows = matmul_force_form ? (MATMUL_FORCE_FORM_CHAR =
 #elif defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS)
 constexpr bool matmul_hoist_rows = unpack_AB_matmul_hoist_rows<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en, matmul_kt_key, MATMUL_OUT_FORMAT>();
 #elif defined(ARCH_BLACKHOLE) && defined(MATMUL_PRODUCTION)
-constexpr bool matmul_hoist_rows = unpack_AB_matmul_hoist_rows<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en, 0, DataFormat::Invalid>();
+constexpr bool matmul_hoist_rows = unpack_AB_matmul_hoist_rows<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en, MATMUL_FE_FORM_KT, MATMUL_FE_FORM_OUT>();
 #elif defined(ARCH_BLACKHOLE)
 constexpr bool matmul_hoist_rows = unpack_AB_matmul_hoist_rows<MATH_FIDELITY, dest_sync>();
 #endif
@@ -408,7 +424,8 @@ constexpr bool matmul_prod_may_pack_32bit = matmul_prod_kernel_has_32bit_cb() ||
                                             ckernel::matmul_format_is_32bit(static_cast<DataFormat>(UNPACK_B_IN)) ||
                                             ckernel::matmul_format_is_32bit(static_cast<DataFormat>(PACK_OUT));
 #endif
-constexpr bool matmul_tile_mop = !matmul_plain_row_form<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en>(matmul_prod_may_pack_32bit);
+constexpr bool matmul_tile_mop = MATMUL_FE_FORM_KT == 0 ? !matmul_plain_row_form<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en>(matmul_prod_may_pack_32bit)
+                                                        : !matmul_math_row_form<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en, MATMUL_FE_FORM_KT, MATMUL_FE_FORM_OUT>();
 #else
 constexpr bool matmul_tile_mop = false;
 #endif
@@ -443,7 +460,7 @@ constexpr bool matmul_half_end_fold_k = matmul_tile_mop && matmul_half_end_fold<
 #endif
 #line 198
 #elif defined(ARCH_BLACKHOLE) && defined(MATMUL_PRODUCTION)
-constexpr bool matmul_half_end_fold_k = matmul_tile_mop && matmul_half_end_fold<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en, 0, DataFormat::Invalid>();
+constexpr bool matmul_half_end_fold_k = matmul_tile_mop && matmul_half_end_fold<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en, MATMUL_FE_FORM_KT, DataFormat::Invalid>();
 #else
 constexpr bool matmul_half_end_fold_k = false;
 #endif

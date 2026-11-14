@@ -2885,6 +2885,99 @@ constexpr DataFormat matmul_forced_form_key(const char form)
     return form == 'R' ? DataFormat::Bfp2 : (form == 'h' ? DataFormat::Bfp2_b : (form == 'r' ? DataFormat::Bfp4 : DataFormat::Invalid));
 }
 
+// matmul_default_form of run-time arguments
+constexpr char matmul_default_form_of(const MathFidelity fidelity, const bool full_sync, const bool fp32_dest, const std::uint32_t kt_per_section, const DataFormat out)
+{
+    const int fmt = out == DataFormat::Float16_b ? 0
+                    : out == DataFormat::Float16 ? 1
+                    : out == DataFormat::Float32 ? 2
+                    : out == DataFormat::Bfp8_b  ? 3
+                    : out == DataFormat::Bfp4_b  ? 4
+                                                 : -1;
+    if (kt_per_section == 0 || fmt < 0)
+    {
+        return '.';
+    }
+    const std::uint32_t k_class = kt_per_section == 1 ? 0 : (kt_per_section <= 4 ? 1 : 2);
+    const std::uint32_t fid     = fidelity == MathFidelity::LoFi ? 0 : fidelity == MathFidelity::HiFi2 ? 1 : fidelity == MathFidelity::HiFi3 ? 2 : 3;
+    return matmul_forms_table[((k_class * 4 + fid) * 2 + (full_sync ? 1 : 0)) * 2 + (fp32_dest ? 1 : 0)][fmt];
+}
+
+// The output key of a plain call whose ct and rt are run-time and kt (the k steps per DEST section) constant, which names no output CB.
+// Every CB format of the kernel (formats: unpack_src_format) must key the same table form, so the form is the real output's; a Float32 CB
+// under a 32-bit DEST packs as Tf32, which the table keeps on main's form. The output candidates are the formats other than in0's and
+// in1's, or those two where no other is declared. Invalid (main's form) where the forms differ, where the shared form is main's, and on
+// the classes where a block the kernel may run is, for a candidate output, a main-form cell (matmul_grid_main_form, matmul_tiny_main_form)
+// or a forced-form cell (matmul_forced_form_cells), which the plain call cannot tell apart at compile time.
+template <std::size_t N>
+constexpr DataFormat matmul_fe_form_out(
+    const MathFidelity fidelity,
+    const bool full_sync,
+    const bool fp32_dest,
+    const std::uint32_t kt,
+    const DataFormat in0,
+    const DataFormat in1,
+    const std::uint8_t (&formats)[N],
+    const std::uint32_t throttle = 0)
+{
+    // measured on production minimal_matmul (ttnn device-only): LoFi blocks of 5 k steps or more into Float16_b gain; HiFi2 to HiFi4 keep
+    // main's math form after the phase elision and the other classes did not gain
+    if (fidelity != MathFidelity::LoFi || kt < 5 || throttle != 0)
+    {
+        return DataFormat::Invalid;
+    }
+    bool other = false;
+    for (const std::uint8_t b : formats)
+    {
+        other = other || (b != 0xff && static_cast<DataFormat>(b) != in0 && static_cast<DataFormat>(b) != in1);
+    }
+    const std::uint32_t max_tiles = full_sync ? (fp32_dest ? 8 : 16) : (fp32_dest ? 4 : 8);
+    char form                     = 0;
+    DataFormat out                = DataFormat::Invalid;
+    for (const std::uint8_t b : formats)
+    {
+        const DataFormat f = static_cast<DataFormat>(b);
+        if (b == 0xff)
+        {
+            continue;
+        }
+        const char g = (fp32_dest && f == DataFormat::Float32) ? '.' : matmul_default_form_of(fidelity, full_sync, fp32_dest, kt, f);
+        if (g == '.' || (form != 0 && g != form))
+        {
+            return DataFormat::Invalid;
+        }
+        form = g;
+        if (other && (f == in0 || f == in1))
+        {
+            continue;
+        }
+        out = f;
+        for (std::uint32_t rt = 1; rt <= max_tiles; rt++)
+        {
+            for (std::uint32_t ct = 1; rt * ct <= max_tiles; ct++)
+            {
+                for (const bool l1_acc : {false, true})
+                {
+                    if (matmul_grid_main_form(fidelity, !full_sync, fp32_dest, in1, in0, f, rt, ct, kt, 0, l1_acc) ||
+                        matmul_tiny_main_form(fidelity, !full_sync, fp32_dest, in1, in0, f, 32, 32, rt, ct, kt))
+                    {
+                        return DataFormat::Invalid;
+                    }
+                }
+            }
+        }
+        for (const matmul_forced_form_cell& c : matmul_forced_form_cells)
+        {
+            if (c.fidelity == fidelity && c.sync == (full_sync ? 1 : 0) && kt >= c.min_k && kt <= c.max_k && c.fp32_dest == fp32_dest && c.out == f && c.pack == f &&
+                (c.in == in0 || (!c.in0_only && c.in == in1)) && c.min_w * c.min_h <= max_tiles)
+            {
+                return DataFormat::Invalid;
+            }
+        }
+    }
+    return out == DataFormat::Float16_b ? out : DataFormat::Invalid;
+}
+
 // LoFi half sync rows of 8 tiles, one K tile, a narrow in1 into Bfp8 or Float16_b: the row MOP stretches the SrcA unpack, 1.7 to 2.7 cycles per block
 constexpr bool matmul_lofi_row8_row_mop_off(
     const MathFidelity fidelity,
