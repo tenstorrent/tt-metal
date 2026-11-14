@@ -49,6 +49,11 @@ W_STREAM_BLOCKS = 2  # W-streamed: column passes of W in flight
 COMBINE_FANIN = 11  # leader fan-in of the 2-level combine tree (<= 16, ledger symbol)
 PARTIAL_DEPTH = 2  # per-row partial / sum-of-squares pages in flight to the writer
 Y_BLOCKS = 2  # collapse: y blocks in flight to the writer
+NORM_ROWS_IN_FLIGHT = 2  # norm: rstd rows expanded ahead of the norm phase (cb_rstd_col depth)
+RSTD_SLOT_BYTES = 128  # norm: one row's rstd = 32 fp32 tokens
+# norm: y_b of all a core's rows stays in L1 until rstd returns (the roots run after their own rows, Refinement 1);
+# the largest golden shape (T2048 C7168: 64 rows x 3 cols) needs 384 KiB.
+Y_HOLD_BUDGET = 512 * 1024
 
 # Split-chooser model constants (catalog double_buffer measurements, Blackhole)
 DRAM_BW = 512e9
@@ -78,11 +83,18 @@ CB_HC_IN = 15  # collapse: stats in SFPU lane layout (writer -> compute)
 CB_HC_OUT = 16  # collapse: hc in lane layout (compute -> writer)
 CB_Y_OUT = 17  # collapse: y tiles (compute -> writer)
 CB_HC_TILE = 18  # collapse: writer-private landing of the hc tile in row layout
+CB_Y_HOLD = 19  # norm: bf16 y_b of every row of the core, held until its rstd lands (compute -> compute)
+CB_YSQ_ACC = 20  # norm: running elementwise sum of y_b^2 over the row (reload accumulator)
+CB_RSTD_COL = 21  # norm: rstd of the row in column 0 (reader -> compute, UnpackToDestFp32)
+CB_NORM_W = 22  # norm: norm weight tiles of my columns, resident (reader -> compute, Row broadcast)
+CB_RSTD_LAND = 23  # norm: reader-private landing of the root's rstd unicasts, one 128 B slot per row
+CB_RSTD_SEND = 24  # norm: root writer's 128 B rstd source (lane vector -> token order)
 
 # Semaphore ids (R2)
 SEM_LEADER_COUNT = 0  # partials landed in my leader slots
 SEM_ROOT_COUNT = 1  # chunk sums landed in my root slots
 SEM_READY_BITS = 2  # bit (t mod 32): leader(t) has freed its slots for row t
+SEM_RSTD_COUNT = 3  # norm: rstd rows landed in my cb_rstd_land slots
 
 NUM_CBS = 64
 
@@ -194,11 +206,15 @@ def create_program_descriptor(
     hc_tensor=None,
     y_tensor=None,
     hc=None,
+    norm_tensor=None,
+    norm_eps=1e-6,
 ):
     assert mode in ("plain", "stats", "collapse"), mode
     device = x_tensor.device()
     has_w = mode in ("stats", "collapse")
     collapse = mode == "collapse"
+    norm = norm_tensor is not None
+    assert not norm or collapse, "norm needs collapse mode"
 
     # ---------------- geometry ----------------
     f_pad = list(f_tensor.padded_shape)
@@ -250,7 +266,15 @@ def create_program_descriptor(
     out_ring_tiles = OUT_BLOCKS * block_cols * n
     max_passes = -(-max_core_c_tiles // block_cols)
     num_chunks = -(-Q // COMBINE_FANIN)
-    max_rooted = -(-row_ranges[0][1] // Q)  # rows a core roots (root(t) = member (t - t0) mod Q), deferred
+    max_rows = row_ranges[0][1]
+    max_rooted = -(-max_rows // Q)  # rows a core roots (root(t) = member (t - t0) mod Q), deferred
+    core_cols_padded = max_passes * block_cols  # a core's columns incl. the filler units of a ragged pass
+    hold_pages = max_rows * core_cols_padded if norm else 0
+    if hold_pages * bf16_page > Y_HOLD_BUDGET:
+        raise ValueError(
+            f"mhc_post: norm holds {hold_pages} y tiles per core ({max_rows} rows x {core_cols_padded} cols), "
+            f"over Y_HOLD_BUDGET; use a larger max_grid"
+        )
 
     # ---------------- CBs ----------------
     n_raw = 3 if collapse else 2
@@ -270,7 +294,8 @@ def create_program_descriptor(
             _cb(CB_SUMSQ_ACC, ttnn.float32, f32_page, 1, core_ranges),
             _cb(CB_PROJ_INTERM, ttnn.float32, f32_page, 1, core_ranges),
             _cb(CB_PROJ_OUT, ttnn.float32, f32_page, PARTIAL_DEPTH, core_ranges),
-            _cb(CB_SUMSQ_COL, ttnn.float32, f32_page, PARTIAL_DEPTH, core_ranges),
+            # one page per row (sum X'^2), two with the norm (+ sum y_b^2)
+            _cb(CB_SUMSQ_COL, ttnn.float32, f32_page, PARTIAL_DEPTH * (2 if norm else 1), core_ranges),
             _cb(CB_LEADER_SLOTS, ttnn.float32, f32_page, COMBINE_FANIN, core_ranges),
             _cb(CB_CHUNK_SUM, ttnn.float32, f32_page, 1, core_ranges),
             _cb(CB_ROOT_SLOTS, ttnn.float32, f32_page, num_chunks * max_rooted, core_ranges),
@@ -282,6 +307,15 @@ def create_program_descriptor(
             _cb(CB_HC_OUT, ttnn.float32, f32_page, 1, core_ranges),
             _cb(CB_Y_OUT, ttnn.bfloat16, bf16_page, Y_BLOCKS * block_cols, core_ranges),
             _cb(CB_HC_TILE, ttnn.float32, f32_page, 1, core_ranges),
+        ]
+    if norm:
+        cbs += [
+            _cb(CB_Y_HOLD, ttnn.bfloat16, bf16_page, hold_pages, core_ranges),
+            _cb(CB_YSQ_ACC, ttnn.float32, f32_page, 1, core_ranges),
+            _cb(CB_RSTD_COL, ttnn.float32, f32_page, NORM_ROWS_IN_FLIGHT, core_ranges),
+            _cb(CB_NORM_W, ttnn.float32, f32_page, core_cols_padded, core_ranges),
+            _cb(CB_RSTD_LAND, ttnn.float32, RSTD_SLOT_BYTES, max_rows, core_ranges),
+            _cb(CB_RSTD_SEND, ttnn.float32, RSTD_SLOT_BYTES, 1, core_ranges),
         ]
 
     # ---------------- per-core runtime args ----------------
@@ -321,6 +355,11 @@ def create_program_descriptor(
         w_resident,
         CB_W_SLICE,
         pre_wt,
+        int(norm),
+        CB_NORM_W,
+        CB_RSTD_COL,
+        CB_RSTD_LAND,
+        SEM_RSTD_COUNT,
     ]
     pre_for_args = pre_tensor if collapse else post_tensor
     w_for_args = w_tensor if has_w else post_tensor
@@ -330,6 +369,8 @@ def create_program_descriptor(
     reader_ct.extend(ttnn.TensorAccessorArgs(comb_tensor).get_compile_time_args())
     reader_ct.extend(ttnn.TensorAccessorArgs(pre_for_args).get_compile_time_args())
     reader_ct.extend(ttnn.TensorAccessorArgs(w_for_args).get_compile_time_args())
+    nw_for_args = norm_tensor if norm else post_tensor
+    reader_ct.extend(ttnn.TensorAccessorArgs(nw_for_args).get_compile_time_args())
     reader = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "mhc_post_reader.cpp"),
         core_ranges=core_ranges,
@@ -344,6 +385,7 @@ def create_program_descriptor(
             comb_col,
             pre_for_args.buffer_address(),
             w_for_args.buffer_address(),
+            nw_for_args.buffer_address(),
         ],
         config=ttnn.ReaderConfigDescriptor(),
     )
@@ -376,6 +418,10 @@ def create_program_descriptor(
         SEM_ROOT_COUNT,
         SEM_READY_BITS,
         n * (n + 2),
+        int(norm),
+        CB_RSTD_LAND,
+        CB_RSTD_SEND,
+        SEM_RSTD_COUNT,
     ]
     writer_ct.extend(ttnn.TensorAccessorArgs(out_tensor).get_compile_time_args())
     writer_ct.extend(ttnn.TensorAccessorArgs(stats_for_args).get_compile_time_args())
@@ -409,6 +455,9 @@ def create_program_descriptor(
             unpack_modes[cb] = ttnn.UnpackToDestMode.UnpackToDestFp32
     if collapse:
         unpack_modes[CB_HC_IN] = ttnn.UnpackToDestMode.UnpackToDestFp32
+    if norm:
+        for cb in (CB_YSQ_ACC, CB_RSTD_COL, CB_NORM_W):
+            unpack_modes[cb] = ttnn.UnpackToDestMode.UnpackToDestFp32
     compute_cfg = ttnn.ComputeConfigDescriptor(
         math_fidelity=math_fidelity,
         fp32_dest_acc_en=True,
@@ -444,6 +493,11 @@ def create_program_descriptor(
         CB_HC_IN,
         CB_HC_OUT,
         CB_Y_OUT,
+        int(norm),
+        CB_Y_HOLD,
+        CB_YSQ_ACC,
+        CB_RSTD_COL,
+        CB_NORM_W,
     ]
     compute_common = []
     if collapse:
@@ -455,6 +509,8 @@ def create_program_descriptor(
             _f32_bits(hc["norm_eps"]),
             _f32_bits(hc["hc_eps"]),
             int(hc["sinkhorn_iters"]),
+            _f32_bits(1.0 / C),  # norm: rstd = rsqrt(sum y^2 * (1/C) + norm_eps)
+            _f32_bits(norm_eps),
         ]
     compute = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "mhc_post_compute.cpp"),
@@ -469,6 +525,6 @@ def create_program_descriptor(
     if has_w:
         semaphores = [
             ttnn.SemaphoreDescriptor(id=s, core_ranges=core_ranges, initial_value=0)
-            for s in (SEM_LEADER_COUNT, SEM_ROOT_COUNT, SEM_READY_BITS)
+            for s in (SEM_LEADER_COUNT, SEM_ROOT_COUNT, SEM_READY_BITS, SEM_RSTD_COUNT)
         ]
     return ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=semaphores, cbs=cbs)

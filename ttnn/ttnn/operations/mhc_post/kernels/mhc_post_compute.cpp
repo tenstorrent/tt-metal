@@ -21,6 +21,10 @@
 // combine_row: fixed slot-order SFPU fold — level 1 eager at the row boundary on the row's leader, level 2 on the
 // row's root deferred past the root's own rows.
 // hc_step_row (collapse, root): the DeepSeek-V4 hc step as one custom SFPU program in lane layout.
+// norm: collapse packs y_b into cb_y_hold (held until rstd returns) and accumulates sum y_b^2 of the bf16 y_b
+// (reloaded, exact) into cb_ysq_acc; finalize_row row-sums it into a second cb_sumsq_col page (partial column
+// ng+1). The root's hc step also computes rstd = rsqrt(sum y^2 / C + norm_eps) in lane vector ng+1. After the root
+// work, norm_block per row: y = (y_b * rstd) * w (fp32 SFPU, one bf16 rounding) -> cb_y_out.
 //
 // Raw-LLK deviation (documented per the helper-first policy): the combine fold sums a RUNTIME number of slot
 // tiles (chunk size / chunk count) in one DEST window; eltwise_chain needs a compile-time element list, so the
@@ -81,6 +85,12 @@ constexpr uint32_t cb_stats = get_compile_time_arg_val(23);
 constexpr uint32_t cb_hc_in = get_compile_time_arg_val(24);
 constexpr uint32_t cb_hc_out = get_compile_time_arg_val(25);
 constexpr uint32_t cb_y_out = get_compile_time_arg_val(26);
+constexpr bool norm = get_compile_time_arg_val(27) != 0;
+constexpr uint32_t cb_y_hold = get_compile_time_arg_val(28);
+constexpr uint32_t cb_ysq_acc = get_compile_time_arg_val(29);
+constexpr uint32_t cb_rstd_col = get_compile_time_arg_val(30);
+constexpr uint32_t cb_norm_w = get_compile_time_arg_val(31);
+constexpr uint32_t cb_y_collapse = norm ? cb_y_hold : cb_y_out;  // collapse_block's destination
 
 constexpr uint32_t n_mix_coef = n + n * n;
 constexpr uint32_t n_coef = n_mix_coef + (collapse ? n : 0);
@@ -220,7 +230,7 @@ template <size_t... I, size_t... U>
 ALWI void collapse_units_impl(std::index_sequence<I...>, std::index_sequence<U...>) {
     auto elems = std::tuple_cat(
         collapse_term<I>(std::index_sequence<U...>{})...,
-        std::make_tuple(ckl::PackTile<ckl::output(cb_y_out), y_slot<U>()>{}...));
+        std::make_tuple(ckl::PackTile<ckl::output(cb_y_collapse), y_slot<U>()>{}...));
     std::apply([](auto... e) { ckl::eltwise_chain(ckl::IterationShape::one_tile(), e...); }, elems);
 }
 
@@ -231,6 +241,20 @@ ALWI void collapse_pass() {
         cb_wait_front(cb_mixed_bf16, n * block_cols);
         collapse_units_impl(std::make_index_sequence<n>{}, std::make_index_sequence<block_cols>{});
     }
+}
+
+// norm: Dsq_y += y_b[u]^2 for the pass's units — the bf16 y_b as packed (cb_y_hold pages base..base+B-1, the
+// hold is never popped before the norm phase so `base` counts from its first page).
+using HoldCopy = ckl::CopyTile<caller_managed(cb_y_hold), ckl::Dst::D1>;
+template <size_t... U>
+ALWI void ysq_pass_impl(uint32_t base, std::index_sequence<U...>) {
+    auto elems = std::tuple_cat(
+        std::make_tuple(ckl::CopyTile<ckl::input(cb_ysq_acc), ckl::Dst::D0>{}),
+        std::make_tuple(
+            HoldCopy{base + U},
+            ckl::Addcmul<DataFormat::Float32, ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D1, ckl::Dst::D0>{ONE_F32})...,
+        std::make_tuple(ckl::PackTile<ckl::output(cb_ysq_acc), ckl::Dst::D0>{}));
+    std::apply([](auto... e) { ckl::eltwise_chain(ckl::IterationShape::one_tile(), e...); }, elems);
 }
 
 // ---------------- project_block hooks ----------------
@@ -246,9 +270,15 @@ struct PassCols {
 // units of a ragged pass are zeros, their X' is 0 and their W rows are zeroed by the reader).
 struct MixPassFn {
     PassCols pc;
+    uint32_t hold_base;  // norm: cb_y_hold page of this row's first unit
     ALWI void operator()(uint32_t pass, uint32_t /*num_k_blocks*/, bool /*is_last*/) const {
         mix_pass(pc.cols(pass));
         collapse_pass();
+        if constexpr (norm) {
+            const uint32_t base = hold_base + pass * block_cols;
+            cb_wait_front(cb_y_hold, base + block_cols);
+            ysq_pass_impl(base, std::make_index_sequence<block_cols>{});
+        }
     }
 };
 struct PassIn1Offset {
@@ -271,6 +301,7 @@ struct HcParams {
     float base[4 * 6];
     float inv_norm_width, norm_eps, hc_eps;
     uint32_t iters;
+    float inv_c, y_norm_eps;  // norm: rstd = rsqrt(sum y^2 * inv_c + y_norm_eps)
 };
 
 #ifdef TRISC_MATH
@@ -418,6 +449,10 @@ inline void hc_step(const HcParams* p) {
         rows_step(e);
         cols_step(e);
     }
+    if constexpr (norm) {  // rstd of y in vector V_SUMSQ + 1 (in place of sum y_b^2)
+        to_vector<V_SUMSQ + 1>();
+        dst_reg[0] = rsqrt(vFloat(dst_reg[0]) * p->inv_c + p->y_norm_eps);
+    }
     ckernel::math::clear_dst_reg_addr();
 }
 }  // namespace hc
@@ -487,6 +522,8 @@ void kernel_main() {
         hcp.norm_eps = f(4 + n * (n + 2));
         hcp.hc_eps = f(5 + n * (n + 2));
         hcp.iters = get_common_arg_val<uint32_t>(6 + n * (n + 2));
+        hcp.inv_c = f(7 + n * (n + 2));
+        hcp.y_norm_eps = f(8 + n * (n + 2));
     }
 
     if constexpr (has_w && w_resident) {
@@ -511,10 +548,18 @@ void kernel_main() {
                 const uint32_t t = t_start + rb + r;
                 const PassCols pc{c_count};
                 const uint32_t num_passes = (c_count + block_cols - 1) / block_cols;
-                ckl::eltwise_chain(  // the row's sum of squares starts at 0
-                    ckl::IterationShape::one_tile(),
-                    ckl::FillScalar<ckl::Dst::D0>{0.0f},
-                    ckl::PackTile<ckl::output(cb_sumsq_acc), ckl::Dst::D0>{});
+                if constexpr (norm) {  // the row's sums of squares start at 0
+                    ckl::eltwise_chain(
+                        ckl::IterationShape::one_tile(),
+                        ckl::FillScalar<ckl::Dst::D0>{0.0f},
+                        ckl::PackTile<ckl::output(cb_sumsq_acc), ckl::Dst::D0>{},
+                        ckl::PackTile<ckl::output(cb_ysq_acc), ckl::Dst::D0>{});
+                } else {
+                    ckl::eltwise_chain(
+                        ckl::IterationShape::one_tile(),
+                        ckl::FillScalar<ckl::Dst::D0>{0.0f},
+                        ckl::PackTile<ckl::output(cb_sumsq_acc), ckl::Dst::D0>{});
+                }
                 // project_block: K-blocks = column passes; each pass is mixed by the PreKBlockFn
                 ::CircularBuffer in0_buf(cb_mixed_bf16), in1_buf(cb_w_slice), out_buf(cb_proj_out),
                     interm_buf(cb_proj_interm);
@@ -539,7 +584,7 @@ void kernel_main() {
                     interm_buf,
                     ckl::MatmulBlockShape::of(1, 1, 1, 1, pass_k_tiles, num_passes),
                     ckl::NoPostCompute{},
-                    MixPassFn{pc},
+                    MixPassFn{pc, (rb + r) * num_passes * block_cols},
                     1,
                     0,
                     ckl::NoPostKBlock{},
@@ -554,6 +599,13 @@ void kernel_main() {
                     ckl::CopyTile<ckl::input(cb_sumsq_acc), ckl::Dst::D0>{},
                     RowSumF32<ckl::Dst::D0>{},
                     ckl::PackTile<ckl::output(cb_sumsq_col), ckl::Dst::D0>{});
+                if constexpr (norm) {  // sum y_b^2 -> column 0 of the row's second cb_sumsq_col page (col ng+1)
+                    ckl::eltwise_chain(
+                        ckl::IterationShape::one_tile(),
+                        ckl::CopyTile<ckl::input(cb_ysq_acc), ckl::Dst::D0>{},
+                        RowSumF32<ckl::Dst::D0>{},
+                        ckl::PackTile<ckl::output(cb_sumsq_col), ckl::Dst::D0>{});
+                }
 
                 // combine_row level 1, lagged one row: I lead my chunk for row t-1 (rotating leaders spread the folds;
                 // the lag means the chunk's partials have landed by the time I get here)
@@ -584,6 +636,32 @@ void kernel_main() {
                     HcStep<ckl::Dst::D0>{{}, &hcp},
                     ckl::PackTile<ckl::output(cb_hc_out), ckl::Dst::D0>{});
             }
+        }
+    }
+
+    // norm_block, after the root work (rstd of a row returns only once its root has run): per row, per pass,
+    // y = (y_b * rstd) * w for the pass's units (filler units included: the writer drops them).
+    if constexpr (norm) {
+        const uint32_t num_passes = (c_count + block_cols - 1) / block_cols;
+        cb_wait_front(cb_norm_w, num_passes * block_cols);  // resident, never popped
+        for (uint32_t r = 0; r < t_count; ++r) {
+            cb_wait_front(cb_rstd_col, 1);
+            for (uint32_t p = 0; p < num_passes; ++p) {
+                cb_wait_front(cb_y_hold, block_cols);
+                for (uint32_t u = 0; u < block_cols; ++u) {
+                    ckl::eltwise_chain(
+                        ckl::IterationShape::one_tile(),
+                        ckl::UnaryBcast<ckl::BroadcastDim::Col, caller_managed(cb_rstd_col), ckl::Dst::D0>{0},
+                        ckl::CopyTile<caller_managed(cb_y_hold), ckl::Dst::D1>{u},
+                        ckl::MulBinary<ckl::Dst::D1, ckl::Dst::D0, ckl::Dst::D1>{},
+                        ckl::UnaryBcast<ckl::BroadcastDim::Row, caller_managed(cb_norm_w), ckl::Dst::D2>{
+                            p * block_cols + u},
+                        ckl::MulBinary<ckl::Dst::D1, ckl::Dst::D2, ckl::Dst::D1>{},
+                        ckl::PackTile<ckl::output(cb_y_out), ckl::Dst::D1>{});
+                }
+                cb_pop_front(cb_y_hold, block_cols);
+            }
+            cb_pop_front(cb_rstd_col, 1);
         }
     }
 }

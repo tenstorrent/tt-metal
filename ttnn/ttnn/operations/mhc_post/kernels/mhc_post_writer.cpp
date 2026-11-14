@@ -18,6 +18,10 @@
 //     waits on a root: every rooted row k has its own region of cb_root_slots (no reuse, no announcement); at the
 //     end the root hands them to compute, writes stats; collapse: permutes the stats tile into SFPU lane layout for
 //     the hc step and the hc result back into a row tile; writes hc. All semaphores are back to 0 at kernel end.
+// norm: the partial's column ng+1 carries sum y_b^2 (second page of cb_sumsq_col). The root's hc step leaves
+//   rstd in lane vector ng+1; the root copies it to token order (128 B) and unicasts it into slot (t - t_start) of
+//   every group member's cb_rstd_land, then incs their SEM_RSTD_COUNT. y is written after the root work (the
+//   compute normalizes every row once its rstd landed).
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
@@ -95,7 +99,13 @@ void kernel_main() {
     constexpr uint32_t sem_root_count_id = get_compile_time_arg_val(21);
     constexpr uint32_t sem_ready_bits_id = get_compile_time_arg_val(22);
     constexpr uint32_t ng = get_compile_time_arg_val(23);  // n(n+2): stats column of sum X'^2, hc width
-    constexpr auto out_args = TensorAccessorArgs<24>();
+    constexpr bool norm = get_compile_time_arg_val(24) != 0;
+    constexpr uint32_t cb_rstd_land = get_compile_time_arg_val(25);
+    constexpr uint32_t cb_rstd_send = get_compile_time_arg_val(26);
+    constexpr uint32_t sem_rstd_count_id = get_compile_time_arg_val(27);
+    constexpr uint32_t sumsq_pages = norm ? 2 : 1;  // per row: sum X'^2 [, sum y_b^2]
+    constexpr uint32_t rstd_bytes = 32 * sizeof(uint32_t);
+    constexpr auto out_args = TensorAccessorArgs<28>();
     [[maybe_unused]] constexpr auto stats_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto hc_args = TensorAccessorArgs<stats_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto y_args = TensorAccessorArgs<hc_args.next_compile_time_args_offset()>();
@@ -115,6 +125,20 @@ void kernel_main() {
     // A block window may wrap the ring (a ragged pass publishes fewer tiles): address it modulo the ring.
     const uint32_t ring_base = get_read_ptr(cb_mixed_out_tiles);  // nothing consumed yet: the CB base
     uint32_t ring_slot = 0;
+
+    // y tiles of one column pass of row t (block_cols tiles; the filler units' y, u >= cols, are dropped)
+    [[maybe_unused]] auto write_y_pass = [&](uint32_t t, uint32_t cb0, uint32_t cols) {
+        const uint32_t y_page = get_tile_size(cb_y_out);
+        const auto y_acc = TensorAccessor(y_args, get_common_arg_val<uint32_t>(3), y_page);
+        for (uint32_t u = 0; u < block_cols; ++u) {
+            cb_wait_front(cb_y_out, 1);
+            if (u < cols) {
+                noc_async_write(get_read_ptr(cb_y_out), y_acc.get_noc_addr(t * c_tiles + c_start + cb0 + u), y_page);
+                noc_async_writes_flushed();
+            }
+            cb_pop_front(cb_y_out, 1);
+        }
+    };
 
     // ---------------- R2 state ----------------
     [[maybe_unused]] uint32_t f32_page = 0, leader_slots_base = 0, root_slots_base = 0;
@@ -202,18 +226,8 @@ void kernel_main() {
                         cb_pop_front(cb_mixed_out_tiles, 1);
                     }
                 }
-                if constexpr (collapse) {  // the pass's y tiles
-                    const uint32_t y_page = get_tile_size(cb_y_out);
-                    const auto y_acc = TensorAccessor(y_args, get_common_arg_val<uint32_t>(3), y_page);
-                    for (uint32_t u = 0; u < block_cols; ++u) {  // filler units' y (u >= cols_in_pass) dropped
-                        cb_wait_front(cb_y_out, 1);
-                        if (u < cols_in_pass) {
-                            noc_async_write(
-                                get_read_ptr(cb_y_out), y_acc.get_noc_addr(t * c_tiles + c_start + cb0 + u), y_page);
-                            noc_async_writes_flushed();
-                        }
-                        cb_pop_front(cb_y_out, 1);
-                    }
+                if constexpr (collapse && !norm) {  // the pass's y tiles
+                    write_y_pass(t, cb0, cols_in_pass);
                 }
             }
 
@@ -223,13 +237,18 @@ void kernel_main() {
                 }
                 // ---- partial(t): merge sum X'^2 into column ng, send to leader(t) ----
                 cb_wait_front(cb_proj_out, 1);
-                cb_wait_front(cb_sumsq_col, 1);
+                cb_wait_front(cb_sumsq_col, sumsq_pages);
                 volatile tt_l1_ptr uint32_t* proj =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_proj_out));
                 volatile tt_l1_ptr uint32_t* sq =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_sumsq_col));
                 for (uint32_t row = 0; row < 32; ++row) {
                     proj[tile_word(row, ng)] = sq[tile_word(row, 0)];
+                }
+                if constexpr (norm) {  // sum y_b^2 -> column ng+1 (the second page)
+                    for (uint32_t row = 0; row < 32; ++row) {
+                        proj[tile_word(row, ng + 1)] = sq[f32_page / sizeof(uint32_t) + tile_word(row, 0)];
+                    }
                 }
                 const uint32_t leader_q = chunk_first + (t % chunk_size);
                 const uint32_t bit = 1u << (t % 32);
@@ -243,7 +262,7 @@ void kernel_main() {
                 noc_async_write_barrier();
                 noc_semaphore_inc(member_noc(leader_q, sem_leader), 1);
                 cb_pop_front(cb_proj_out, 1);
-                cb_pop_front(cb_sumsq_col, 1);
+                cb_pop_front(cb_sumsq_col, sumsq_pages);
             }
         }
     }
@@ -276,7 +295,7 @@ void kernel_main() {
                 uint32_t* st = reinterpret_cast<uint32_t*>(get_read_ptr(cb_stats));
                 cb_reserve_back(cb_hc_in, 1);
                 uint32_t* lanes = reinterpret_cast<uint32_t*>(get_write_ptr(cb_hc_in));
-                for (uint32_t v = 0; v <= ng; ++v) {
+                for (uint32_t v = 0; v <= ng + (norm ? 1 : 0); ++v) {  // [norm: + sum y_b^2 -> rstd]
                     permute_vector<true>(st + tile_word(0, v), lanes + lane_word(v, 0));
                 }
                 cb_push_back(cb_hc_in, 1);
@@ -291,10 +310,34 @@ void kernel_main() {
                     permute_vector<false>(hct + tile_word(0, v), lanes + lane_word(v, 0));
                 }
                 noc_async_write(get_write_ptr(cb_hc_tile), hc_acc.get_noc_addr(t), f32_page);
+                if constexpr (norm) {
+                    // rstd (lane vector ng+1) -> token order -> slot (t - t_start) of every member's landing
+                    uint32_t* send = reinterpret_cast<uint32_t*>(get_write_ptr(cb_rstd_send));
+                    for (uint32_t l = 0; l < 32; ++l) {
+                        send[l] = lanes[lane_word(ng + 1, l)];
+                    }
+                    const uint32_t land = get_write_ptr(cb_rstd_land) + (t - t_start) * rstd_bytes;
+                    for (uint32_t q = 0; q < group_q; ++q) {
+                        noc_async_write(get_write_ptr(cb_rstd_send), member_noc(q, land), rstd_bytes);
+                    }
+                    noc_async_write_barrier();  // landed before the counts (and before the next row reuses send)
+                    for (uint32_t q = 0; q < group_q; ++q) {
+                        noc_semaphore_inc(member_noc(q, get_semaphore(sem_rstd_count_id)), 1);
+                    }
+                }
                 noc_async_write_barrier();
                 cb_pop_front(cb_hc_out, 1);
             }
         }
     }
+    // ---- norm: y of every row, after its rstd returned (the compute normalizes rows in order) ----
+    if constexpr (norm) {
+        for (uint32_t r = 0; r < t_count; ++r) {
+            for (uint32_t cb0 = 0; cb0 < c_count; cb0 += block_cols) {
+                write_y_pass(t_start + r, cb0, (c_count - cb0) < block_cols ? (c_count - cb0) : block_cols);
+            }
+        }
+    }
+    noc_async_atomic_barrier();
     noc_async_write_barrier();
 }

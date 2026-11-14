@@ -19,6 +19,10 @@
 //   A ragged pass runs through the full-block compute (one instantiation of every chain: kernel-config budget):
 //     its filler F / X slots and W slots are ZEROED, so the filler units contribute exact zeros to X'@W, to the
 //     sum of squares and to y (the writer drops their X' / y).
+// norm: the norm weight tiles of my columns (filler zeroed) are resident in cb_norm_w (issued up front, pushed
+//   behind the first row's barrier). After my rows, the roots unicast each row's rstd (32 fp32 tokens) into slot
+//   (t - t_start) of my private landing cb_rstd_land and inc SEM_RSTD_COUNT; once all my rows' rstd landed, each is
+//   expanded into column 0 of a cb_rstd_col page (the compute's COL broadcast), row by row.
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
@@ -69,12 +73,18 @@ void kernel_main() {
     constexpr bool w_resident = get_compile_time_arg_val(12) != 0;
     constexpr uint32_t cb_w_slice = get_compile_time_arg_val(13);
     constexpr uint32_t pre_wt = get_compile_time_arg_val(14);
-    constexpr auto f_args = TensorAccessorArgs<15>();
+    constexpr bool norm = get_compile_time_arg_val(15) != 0;
+    constexpr uint32_t cb_norm_w = get_compile_time_arg_val(16);
+    constexpr uint32_t cb_rstd_col = get_compile_time_arg_val(17);
+    constexpr uint32_t cb_rstd_land = get_compile_time_arg_val(18);
+    constexpr uint32_t sem_rstd_count_id = get_compile_time_arg_val(19);
+    constexpr auto f_args = TensorAccessorArgs<20>();
     constexpr auto x_args = TensorAccessorArgs<f_args.next_compile_time_args_offset()>();
     constexpr auto post_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
     constexpr auto comb_args = TensorAccessorArgs<post_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto pre_args = TensorAccessorArgs<comb_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto w_args = TensorAccessorArgs<pre_args.next_compile_time_args_offset()>();
+    [[maybe_unused]] constexpr auto nw_args = TensorAccessorArgs<w_args.next_compile_time_args_offset()>();
     constexpr uint32_t n_mix_coef = n + n * n;
     constexpr uint32_t n_coef = n_mix_coef + (collapse ? n : 0);
     constexpr uint32_t w_pass_tiles = n * block_cols;  // W tiles of one column pass (ragged passes pad)
@@ -92,6 +102,7 @@ void kernel_main() {
     const uint32_t comb_col = get_common_arg_val<uint32_t>(5);
     [[maybe_unused]] const uint32_t pre_addr = get_common_arg_val<uint32_t>(6);
     [[maybe_unused]] const uint32_t w_addr = get_common_arg_val<uint32_t>(7);
+    [[maybe_unused]] const uint32_t nw_addr = get_common_arg_val<uint32_t>(8);
 
     const uint32_t f_page = get_tile_size(cb_sublayer_tiles);
     const uint32_t x_page = get_tile_size(cb_stream_tiles);
@@ -178,6 +189,22 @@ void kernel_main() {
             read_w_pass(p, l1 + p * w_pass_tiles * w_page);
         }
     }
+    // norm weight slice (resident): one tile per column of mine, per pass block_cols slots (filler zeroed)
+    [[maybe_unused]] uint32_t nw_total = 0;
+    if constexpr (norm) {
+        nw_total = get_local_cb_interface(cb_norm_w).fifo_num_pages;
+        const uint32_t nw_page = get_tile_size(cb_norm_w);
+        const auto nw_acc = TensorAccessor(nw_args, nw_addr, nw_page);
+        cb_reserve_back(cb_norm_w, nw_total);
+        const uint32_t l1 = get_write_ptr(cb_norm_w);
+        for (uint32_t k = 0; k < nw_total; ++k) {
+            if (k < c_count) {
+                noc_async_read(nw_acc.get_noc_addr(c_start + k), l1 + k * nw_page, nw_page);
+            } else {
+                zero_l1(l1 + k * nw_page, nw_page);
+            }
+        }
+    }
     if (t_count > 0) {
         issue_coef(t_start, 0);
     }
@@ -229,6 +256,11 @@ void kernel_main() {
                             cb_push_back(cb_w_slice, w_total);
                         }
                     }
+                    if constexpr (norm) {
+                        if (row_idx == 0) {
+                            cb_push_back(cb_norm_w, nw_total);
+                        }
+                    }
                     if (row_idx + 1 < t_count) {
                         issue_coef(t + 1, buf ^ 1);
                     }
@@ -240,6 +272,26 @@ void kernel_main() {
                 cb_push_back(cb_sublayer_tiles, block_cols);
                 cb_push_back(cb_stream_tiles, block_cols * n);
             }
+        }
+    }
+
+    // ---- norm: every row's rstd from its root -> column 0 of a cb_rstd_col page, in row order ----
+    if constexpr (norm) {
+        volatile tt_l1_ptr uint32_t* landed =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_rstd_count_id));
+        noc_semaphore_wait_min(landed, t_count);  // the roots finish their rows in any order: wait for all
+        noc_semaphore_set(landed, 0);
+        invalidate_l1_cache();
+        const uint32_t land = get_write_ptr(cb_rstd_land);  // never pushed: private landing, same address everywhere
+        for (uint32_t r = 0; r < t_count; ++r) {
+            const volatile tt_l1_ptr uint32_t* src =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(land + r * 32 * sizeof(uint32_t));
+            cb_reserve_back(cb_rstd_col, 1);
+            uint32_t* dst = reinterpret_cast<uint32_t*>(get_write_ptr(cb_rstd_col));
+            for (uint32_t l = 0; l < 32; ++l) {  // token l -> (row l, column 0): face 0 rows 0..15, face 2 16..31
+                dst[(l / FACE_DIM) * 2 * FACE_WORDS + (l % FACE_DIM) * FACE_DIM] = src[l];
+            }
+            cb_push_back(cb_rstd_col, 1);
         }
     }
 }

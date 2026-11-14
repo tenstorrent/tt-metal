@@ -60,7 +60,7 @@ SUPPORTED = {
     "mode": ["plain", "stats", "collapse"],
     "coef_source": ["separate", "packed"],
     "alignment": ["tile_aligned", "h_non_aligned"],
-    "norm": ["off"],
+    "norm": ["off", "on"],
     "feed": ["off"],
     "feed_split": ["block_aligned", "not_block_aligned"],
 }
@@ -155,6 +155,12 @@ def _check_call(
             raise ValueError(f"mhc_post: collapse_pre {s} must be (..., T, >= {N_STREAMS}) for F {f_shape}")
         if collapse_pre.dtype != ttnn.float32 or collapse_pre.layout != ttnn.TILE_LAYOUT:
             raise ValueError("mhc_post: collapse_pre must be float32 TILE")
+    if norm_weight is not None:
+        ns = tuple(norm_weight.shape)
+        if len(ns) < 2 or ns[-2:] != (1, C) or any(d != 1 for d in ns[:-2]):
+            raise ValueError(f"mhc_post: norm_weight {ns} must be (1.., 1, {C})")
+        if norm_weight.dtype != ttnn.float32 or norm_weight.layout != ttnn.TILE_LAYOUT:
+            raise ValueError("mhc_post: norm_weight must be float32 TILE")
     lead = f_shape[:-1]
     inputs = (input_tensor, residual, post, comb, stats_weight, collapse_pre, norm_weight)
     for name, t, shape, dtype in (
@@ -356,9 +362,11 @@ def mhc_post(
         hc_tensor=hc_output,
         y_tensor=y_output,
         hc=hc,
+        norm_tensor=norm_weight,
+        norm_eps=norm_eps,
     )
     io = [input_tensor, residual, post, comb]
-    io += [t for t in (stats_weight, collapse_pre, stats_output, hc_output, y_output) if t is not None]
+    io += [t for t in (stats_weight, collapse_pre, norm_weight, stats_output, hc_output, y_output) if t is not None]
     # Output tensor must be last.
     ttnn.generic_op(io + [output_tensor], program_descriptor)
     if mode == "plain":
