@@ -10,6 +10,7 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "cq_commands.hpp"
 #include "cq_helpers.hpp"
+#include "cq_trids.hpp"
 #include "telemetry.hpp"
 
 #include "internal/debug/sanitize.h"
@@ -691,6 +692,12 @@ private:
 };
 
 // Reader that releases a block of pages at a time. At most one block of pages can be available at a time.
+//
+// Writes that read from the CB are tagged with a NoC transaction ID per block, alternating between the two
+// cq_trids::DISPATCH_CB_WRITE trids. The tag is set on NCRISC_WR_CMD_BUF, which every CB-sourced write must go
+// through, and is sticky, so the write paths don't set it themselves. A block is returned to the writer once all
+// writes on its trid have been sent (i.e. have read their source data), which happens when the following block is
+// finished. Every write that reads from a block must be issued before the reader moves past that block.
 template <
     uint32_t my_sem_id,
     uint32_t cb_log_page_size,
@@ -705,13 +712,13 @@ class CBReaderWithReleasePolicy : public CBReader<my_sem_id, cb_log_page_size, c
 public:
     FORCE_INLINE void init() {
         this->CBReader<my_sem_id, cb_log_page_size, cb_blocks, cb_pages_per_block, cb_base>::init();
-        this->block_writes_checkpoint_ = noc_nonposted_writes_checkpoint(noc_index);
+        this->block_trid_idx_ = 0;
+        ncrisc_noc_set_transaction_id(noc_index, NCRISC_WR_CMD_BUF, cq_trids::DISPATCH_CB_WRITE[0]);
     }
 
     // Returns how much data is available. Will block until data is available. Tracks via blocked
     // counter addresses if check_blocking is true.May release old pages before cmd_ptr to
     // writer. Updates cmd_ptr on wrap-around.
-    // noc_increment_nonposted_writes_issued() must be called before calling this function.
     // If this function doesn't return sufficient data, there are two options:
     // 1. Process all the available data and then call this function again.
     // 2. Call get_cb_page_and_release_pages to attempt to get more data.
@@ -735,8 +742,8 @@ public:
     // handle the orphan data that would otherwise be lost and will then release old pages to writer.
     //
     // The argument to on_boundary is whether the next block is the first block in the circular buffer (in which case
-    // cmd_ptr is set to the base address after on_boundary is called).
-    // noc_increment_nonposted_writes_issued() must be called before on_boundary returns.
+    // cmd_ptr is set to the base address after on_boundary is called). Writes issued by on_boundary are tagged with
+    // the current block's trid.
     template <typename OnBoundaryFn>
     FORCE_INLINE uint32_t get_cb_page_and_release_pages(uintptr_t& cmd_ptr, OnBoundaryFn&& on_boundary) {
         if (this->cb_fence_ == this->block_next_start_addr_[this->rd_block_idx_]) {
@@ -758,23 +765,27 @@ public:
         if (pages_to_release != 0) {
             ReleasePolicy::template release<noc_idx, noc_xy, sem_id>(pages_to_release);
         }
+        // Leave the write cmd buf untagged for whatever runs after dispatch.
+        ncrisc_noc_set_transaction_id(noc_index, NCRISC_WR_CMD_BUF, cq_trids::DEFAULT);
     }
 
 private:
     FORCE_INLINE void release_block_pages() {
-        // When finishing a block, don't immediately return it, but just checkpoint the nonposted writes issued so
-        // far. We will wait for writes to be sent and will return the block when the next block is finished; this
-        // allows time for writes from that block to complete. Note: on archs that checkpoint with a count, this is
-        // incorrect if writes can be sent out of order. We should use transaction IDs instead in that case.
+        // When finishing a block, don't immediately return it; return the previous block instead, which gives that
+        // block's writes the time it took to process this one. The previous block's trid is the one the next block
+        // reuses, so wait for its writes to be sent before retagging.
+        const uint32_t next_trid_idx = this->block_trid_idx_ ^ 1;
+        const uint32_t next_trid = cq_trids::DISPATCH_CB_WRITE[next_trid_idx];
         if (released_prev_block_) {
             WAYPOINT("CBRW");
-            while (!noc_nonposted_writes_sent_since(noc_index, this->block_writes_checkpoint_));
+            while (!ncrisc_noc_nonposted_write_with_transaction_id_sent(noc_index, next_trid));
             ReleasePolicy::template release<noc_idx, noc_xy, sem_id>(cb_pages_per_block);
             WAYPOINT("CBRD");
         } else {
             released_prev_block_ = true;
         }
-        this->block_writes_checkpoint_ = noc_nonposted_writes_checkpoint(noc_index);
+        ncrisc_noc_set_transaction_id(noc_index, NCRISC_WR_CMD_BUF, next_trid);
+        this->block_trid_idx_ = next_trid_idx;
     }
 
     FORCE_INLINE void move_rd_to_next_block_and_release_pages() {
@@ -783,8 +794,8 @@ private:
     }
 
     bool released_prev_block_{false};
-    // Checkpoint of the nonposted writes issued at block entry; used to wait/clear before releasing credits.
-    uint32_t block_writes_checkpoint_{0};
+    // Index into cq_trids::DISPATCH_CB_WRITE of the trid the current block's writes are tagged with.
+    uint32_t block_trid_idx_{0};
 };
 
 template <uint32_t my_sem_id, uint32_t cb_log_page_size, uint32_t cb_base, uint32_t cb_end>
