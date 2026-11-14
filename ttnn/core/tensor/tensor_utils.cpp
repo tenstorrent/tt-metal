@@ -60,6 +60,7 @@ CBDescriptor cb_descriptor_from_sharded_tensor(
             .data_format = datatype_to_dataformat_converter(tensor.tensor_spec().tensor_layout().get_data_type()),
             .page_size = tensor.buffer()->aligned_page_size(),
             .tile = TileDescriptor(tensor.tensor_spec().tile())}},
+        .globally_allocated = true,
         .buffer = tensor.buffer(),
         .address_offset = address_offset,
         .global_circular_buffer = nullptr};

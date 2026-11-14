@@ -214,6 +214,7 @@ ProgramDescriptor DramPrefetcherProgramFactory::create_descriptor(
             .data_format = max_tile_size_df,
             .page_size = reader_cb_single_tile_size,
         }}},
+        .globally_allocated = true,
         .buffer = const_cast<Buffer*>(std::addressof(global_cb_buffer)),
     });
 
@@ -235,6 +236,7 @@ ProgramDescriptor DramPrefetcherProgramFactory::create_descriptor(
             .data_format = tensor_addrs_data_format,
             .page_size = tensor_addrs_single_tile_size,
         }}},
+        .globally_allocated = tensor_addrs_buffer != nullptr,
         .buffer = tensor_addrs_buffer,
     });
 
@@ -246,6 +248,7 @@ ProgramDescriptor DramPrefetcherProgramFactory::create_descriptor(
             .data_format = max_tile_size_df,
             .page_size = L1_ALIGNMENT,  // set to 16B so that the infra won't update write pointers to wrong location
         }}},
+        .globally_allocated = true,
         .global_circular_buffer = std::addressof(global_cb),
     });
 

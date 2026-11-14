@@ -629,6 +629,7 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
             .format_descriptors = {format},
         };
         if (buffer != nullptr) {
+            cb.globally_allocated = true;
             cb.buffer = buffer;
         }
         desc.cbs.push_back(std::move(cb));

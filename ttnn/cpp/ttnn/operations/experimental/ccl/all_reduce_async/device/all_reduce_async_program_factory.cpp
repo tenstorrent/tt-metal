@@ -412,6 +412,7 @@ tt::tt_metal::ProgramDescriptor AllReduceAsyncMeshWorkloadFactory::create_descri
             .data_format = df,
             .page_size = reduction_CB_single_tile_size,
         }}},
+        .globally_allocated = true,
         .buffer = buffer_tensor.buffer(),
     });
 
@@ -429,6 +430,7 @@ tt::tt_metal::ProgramDescriptor AllReduceAsyncMeshWorkloadFactory::create_descri
             .data_format = output_df,
             .page_size = out_CB_single_tile_size,
         }}},
+        .globally_allocated = true,
         .buffer = output_tensor.buffer(),  // TODO: Remove once new cb attached for output
     });
 

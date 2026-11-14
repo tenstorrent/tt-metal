@@ -177,6 +177,7 @@ ProgramDescriptor RotateDeviceOperation::NearestProgramFactory::create_descripto
                 .data_format = input_cb_data_format,
                 .page_size = aligned_input_stick_nbytes,
             }}},
+            .globally_allocated = true,
             .buffer = input_tensor.buffer(),
         });
     }
@@ -192,6 +193,7 @@ ProgramDescriptor RotateDeviceOperation::NearestProgramFactory::create_descripto
             .data_format = output_cb_data_format,
             .page_size = output_cb_page_size,
         }}},
+        .globally_allocated = any_sharded,
         .buffer = any_sharded ? output_tensor.buffer() : nullptr,
     });
 

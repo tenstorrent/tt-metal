@@ -79,6 +79,14 @@ struct CBDescriptor {
     FormatDescriptors format_descriptors;
     FormatDescriptors remote_format_descriptors;
 
+    // Whether the CB's memory comes from a buffer handed out by the L1 allocator (a dynamic CB), named by exactly one
+    // of `buffer`, `tensor` or `global_circular_buffer`, rather than from the program's own CB region. When false,
+    // none of them may be set.
+    //
+    // `buffer` or `tensor` may be left unset when the program is built and named by a later descriptor
+    // (apply_descriptor_runtime_args, or UpdateDynamicCircularBufferAddress): the program can be compiled and laid
+    // out before then, but not launched. `global_circular_buffer` must be set when the program is built.
+    bool globally_allocated = false;
     // TODO: Investigate avoiding storing pointers here
     Buffer* buffer = nullptr;
     const MeshTensor* tensor = nullptr;

@@ -110,6 +110,8 @@ public:
     void add_program(const MeshCoordinateRange& device_range, Program&& program);
     std::unordered_map<MeshCoordinateRange, Program>& get_programs() { return programs_; }
     const std::unordered_map<MeshCoordinateRange, Program>& get_programs() const { return programs_; }
+    // Throws if a program's CB is backed by a buffer that is not bound yet.
+    void check_circular_buffers_bound() const;
     void compile(MeshDevice* mesh_device);
     // Compile/finalize the workload and commit its kernel binaries to DRAM without executing it.
     // The returned owner must remain alive while commands referencing the binary addresses may execute.

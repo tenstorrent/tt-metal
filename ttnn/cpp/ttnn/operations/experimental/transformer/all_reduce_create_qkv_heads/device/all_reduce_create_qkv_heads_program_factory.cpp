@@ -486,6 +486,7 @@ ProgramDescriptor AllReduceCreateQkvHeadsMeshWorkloadFactory::create_descriptor(
             .data_format = df,
             .page_size = reduction_CB_single_tile_size,
         }}},
+        .globally_allocated = true,
         .buffer = buffer_tensor.buffer(),
     });
 
@@ -503,6 +504,7 @@ ProgramDescriptor AllReduceCreateQkvHeadsMeshWorkloadFactory::create_descriptor(
             .data_format = output_df,
             .page_size = out_CB_single_tile_size,
         }}},
+        .globally_allocated = true,
         .buffer = output_tensor.buffer(),  // TODO: Remove once new cb attached for output
     });
 

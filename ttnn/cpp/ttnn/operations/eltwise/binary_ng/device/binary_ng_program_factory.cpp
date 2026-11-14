@@ -1191,6 +1191,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                 .data_format = a_data_format,
                 .page_size = a_single_tile_size,
             }}},
+            .globally_allocated = a_sharded,
             .buffer = a_sharded ? a_buffer : nullptr,
         });
     }
@@ -1222,6 +1223,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                 .data_format = b_data_format,
                 .page_size = b_single_tile_size,
             }}},
+            .globally_allocated = b_sharded,
             .buffer = b_sharded ? b_buffer : nullptr,
         });
     }
@@ -1282,6 +1284,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                 .data_format = c_pack_data_format,
                 .page_size = c_single_tile_size,
             }}},
+            .globally_allocated = c_sharded,
             .buffer = c_sharded ? c_buffer : nullptr,
         });
     }

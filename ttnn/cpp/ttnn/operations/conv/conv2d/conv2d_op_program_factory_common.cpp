@@ -768,6 +768,7 @@ void emit_cb_descriptors(
                 .data_format = cb.data_format,
                 .page_size = cb.page_size,
             }}},
+            .globally_allocated = buffer != nullptr,
             .buffer = buffer,
             .address_offset = cb.address_offset,
         });

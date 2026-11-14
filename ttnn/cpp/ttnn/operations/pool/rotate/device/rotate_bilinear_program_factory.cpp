@@ -211,6 +211,7 @@ ProgramDescriptor RotateDeviceOperation::BilinearProgramFactory::create_descript
             .tile = output_tile,
             .face_geometry = output_face_geometry,
         }}},
+        .globally_allocated = any_sharded,
         .buffer = any_sharded ? output_tensor.buffer() : nullptr,
     });
 

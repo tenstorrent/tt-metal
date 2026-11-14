@@ -74,6 +74,7 @@ tt::tt_metal::ProgramDescriptor build_program(
     // A K x K slot of the landing buffer on each head core, in place.
     const auto landing_slot_cb = [&](uint32_t index, uint32_t slot) {
         auto cb = kda_factory_detail::cb_descriptor(index, state_tiles, state_tile, tt::DataFormat::Float32, head_set);
+        cb.globally_allocated = true;
         cb.buffer = in.landing.buffer();
         cb.address_offset = slot * state_tiles * state_tile;
         return cb;

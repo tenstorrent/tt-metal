@@ -252,12 +252,14 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpUnaryReluSharded) {
         .total_size = in_cb_npages * in_cb_pagesize,
         .core_ranges = all_cores,
         .format_descriptors = {in_format_descriptor},
+        .globally_allocated = true,
         .buffer = device_input_tensor.buffer(),
     };
     CBDescriptor output_cb_descriptor = {
         .total_size = in_cb_npages * in_cb_pagesize,
         .core_ranges = all_cores,
         .format_descriptors = {out_format_descriptor},
+        .globally_allocated = true,
         .buffer = device_output_tensor.buffer(),
     };
 

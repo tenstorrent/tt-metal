@@ -10,6 +10,7 @@ set(UNIT_TESTS_API_SOURCES
     allocator/test_per_core_bank_manager.cpp
     allocator/test_size_class_index.cpp
     circular_buffer/test_CircularBuffer_allocation.cpp
+    circular_buffer/test_CircularBuffer_bound_later.cpp
     circular_buffer/test_CircularBuffer_creation.cpp
     circular_buffer/test_CircularBuffer_non_blocking.cpp
     circular_buffer/test_CircularBuffer_wrapping.cpp

@@ -74,6 +74,7 @@ void add_cb(
             .data_format = df,
             .page_size = pagesize,
         }}},
+        .globally_allocated = buffer != nullptr,
         .buffer = buffer,
     });
 }

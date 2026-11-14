@@ -188,6 +188,7 @@ ProgramDescriptor CreateQKVHeadsProgramFactory::create_descriptor(
             .data_format = data_format,
             .page_size = single_tile_size,
         }}},
+        .globally_allocated = true,
         .buffer = input_tensor.buffer(),
     });
 
@@ -200,6 +201,7 @@ ProgramDescriptor CreateQKVHeadsProgramFactory::create_descriptor(
             .data_format = data_format,
             .page_size = single_tile_size,
         }}},
+        .globally_allocated = true,
         .buffer = output_q.buffer(),
     });
     // k sharded
@@ -211,6 +213,7 @@ ProgramDescriptor CreateQKVHeadsProgramFactory::create_descriptor(
             .data_format = data_format,
             .page_size = single_tile_size,
         }}},
+        .globally_allocated = true,
         .buffer = output_k.buffer(),
     });
     // v sharded
@@ -222,6 +225,7 @@ ProgramDescriptor CreateQKVHeadsProgramFactory::create_descriptor(
             .data_format = data_format,
             .page_size = single_tile_size,
         }}},
+        .globally_allocated = true,
         .buffer = output_v.buffer(),
     });
 

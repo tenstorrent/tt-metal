@@ -73,6 +73,7 @@ CBDescriptor make_cb(
         .data_format = data_format,
         .page_size = bytes_per_tile,
     });
+    cb_desc.globally_allocated = buffer != nullptr;
     cb_desc.buffer = buffer;
     return cb_desc;
 }

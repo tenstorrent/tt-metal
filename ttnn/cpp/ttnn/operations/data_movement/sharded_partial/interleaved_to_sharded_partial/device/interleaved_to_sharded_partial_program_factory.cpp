@@ -43,6 +43,7 @@ void push_i2s_partial_cb_pair(
         .data_format = data_format,
         .page_size = page_size,
     });
+    cb.globally_allocated = bound_buffer != nullptr;
     cb.buffer = bound_buffer;
     desc.cbs.push_back(std::move(cb));
 }
@@ -483,7 +484,7 @@ void InterleavedToShardedPartialProgramFactory::override_runtime_arguments(
         if (convert_df) {
             cb_addr_only.cbs.emplace_back();  // input CB placeholder (unbound; address unchanged)
         }
-        cb_addr_only.cbs.push_back(CBDescriptor{.buffer = dst_buffer});
+        cb_addr_only.cbs.push_back(CBDescriptor{.globally_allocated = dst_buffer != nullptr, .buffer = dst_buffer});
         tt::tt_metal::apply_descriptor_runtime_args(program, cb_addr_only);  // override-rebuild-ok: cb-addr-only
     }
 }

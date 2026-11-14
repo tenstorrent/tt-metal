@@ -632,6 +632,7 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_desc
                 .data_format = is_header ? DataFormat::RawUInt32 : plan.cb_data_format,
                 .page_size = is_header ? plan.packet_header_size_bytes : plan.input_page_size,
             }}},
+            .globally_allocated = buffer != nullptr,
             .buffer = buffer,
         });
     };

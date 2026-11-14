@@ -84,6 +84,7 @@ ProgramDescriptor create_single_tile_decode_descriptor(
             .data_format = input_cb_data_format,
             .page_size = input_single_tile_size,
         }}},
+        .globally_allocated = src_buffer != nullptr,
         .buffer = src_buffer,
     });
 
@@ -96,6 +97,7 @@ ProgramDescriptor create_single_tile_decode_descriptor(
             .data_format = cos_cb_data_format,
             .page_size = cos_single_tile_size,
         }}},
+        .globally_allocated = cos_buffer != nullptr,
         .buffer = cos_buffer,
     });
 
@@ -108,6 +110,7 @@ ProgramDescriptor create_single_tile_decode_descriptor(
             .data_format = sin_cb_data_format,
             .page_size = sin_single_tile_size,
         }}},
+        .globally_allocated = sin_buffer != nullptr,
         .buffer = sin_buffer,
     });
 
@@ -165,6 +168,7 @@ ProgramDescriptor create_single_tile_decode_descriptor(
             .data_format = output_cb_data_format,
             .page_size = output_single_tile_size,
         }}},
+        .globally_allocated = dst_buffer != nullptr,
         .buffer = dst_buffer,
     });
 
@@ -275,6 +279,7 @@ ProgramDescriptor create_multi_tile_decode_descriptor(
             .data_format = input_cb_data_format,
             .page_size = input_single_tile_size,
         }}},
+        .globally_allocated = src_buffer != nullptr,
         .buffer = src_buffer,
     });
 
@@ -287,6 +292,7 @@ ProgramDescriptor create_multi_tile_decode_descriptor(
             .data_format = cos_cb_data_format,
             .page_size = cos_single_tile_size,
         }}},
+        .globally_allocated = cos_buffer != nullptr,
         .buffer = cos_buffer,
     });
 
@@ -299,6 +305,7 @@ ProgramDescriptor create_multi_tile_decode_descriptor(
             .data_format = sin_cb_data_format,
             .page_size = sin_single_tile_size,
         }}},
+        .globally_allocated = sin_buffer != nullptr,
         .buffer = sin_buffer,
     });
 
@@ -357,6 +364,7 @@ ProgramDescriptor create_multi_tile_decode_descriptor(
             .data_format = output_cb_data_format,
             .page_size = output_single_tile_size,
         }}},
+        .globally_allocated = dst_buffer != nullptr,
         .buffer = dst_buffer,
     });
 

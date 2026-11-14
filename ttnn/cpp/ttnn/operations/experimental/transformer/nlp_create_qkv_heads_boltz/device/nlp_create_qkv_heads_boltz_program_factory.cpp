@@ -512,6 +512,7 @@ ProgramDescriptor NlpCreateHeadsBoltzDeviceOperation::Sharded::create_descriptor
             .data_format = cb_data_format,
             .page_size = single_tile_size,
         }}},
+        .globally_allocated = true,
         .buffer = std::get<0>(output).buffer(),
     });
 
@@ -528,6 +529,7 @@ ProgramDescriptor NlpCreateHeadsBoltzDeviceOperation::Sharded::create_descriptor
             .data_format = cb_data_format,
             .page_size = single_tile_size,
         }}},
+        .globally_allocated = true,
         .buffer = std::get<1>(output).buffer(),
     });
 
@@ -544,6 +546,7 @@ ProgramDescriptor NlpCreateHeadsBoltzDeviceOperation::Sharded::create_descriptor
             .data_format = cb_data_format,
             .page_size = single_tile_size,
         }}},
+        .globally_allocated = true,
         .buffer = std::get<2>(output).buffer(),
     });
 

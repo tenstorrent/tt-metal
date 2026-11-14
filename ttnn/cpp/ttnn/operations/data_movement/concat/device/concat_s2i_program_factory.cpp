@@ -42,6 +42,7 @@ tt::tt_metal::ProgramDescriptor ConcatS2IProgramFactory::create_descriptor(
                 .data_format = cb_data_format,
                 .page_size = input_page_size,
             }}},
+            .globally_allocated = true,
             .buffer = input_tensors[input_id].buffer(),
         });
     }

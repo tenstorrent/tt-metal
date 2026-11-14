@@ -144,6 +144,7 @@ ProgramDescriptor create_single_tile_descriptor(
             .data_format = input_cb_data_format,
             .page_size = input_single_tile_size,
         }}},
+        .globally_allocated = in_sharded,
         .buffer = in_sharded ? input.buffer() : nullptr,
     });
 
@@ -228,6 +229,7 @@ ProgramDescriptor create_single_tile_descriptor(
             .data_format = output_cb_data_format,
             .page_size = output_single_tile_size,
         }}},
+        .globally_allocated = out_sharded,
         .buffer = out_sharded ? output.buffer() : nullptr,
     });
 
@@ -526,6 +528,7 @@ ProgramDescriptor create_multi_tile_descriptor(
             .data_format = input_cb_data_format,
             .page_size = input_single_tile_size,
         }}},
+        .globally_allocated = in_sharded,
         .buffer = in_sharded ? input.buffer() : nullptr,
     });
 
@@ -620,6 +623,7 @@ ProgramDescriptor create_multi_tile_descriptor(
             .data_format = output_cb_data_format,
             .page_size = output_single_tile_size,
         }}},
+        .globally_allocated = out_sharded,
         .buffer = out_sharded ? output.buffer() : nullptr,
     });
 
