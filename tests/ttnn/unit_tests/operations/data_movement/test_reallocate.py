@@ -17,9 +17,6 @@ def test_reallocate_interleaved(device, mem_config, num_allocs):
     depth = 2
     batch = 2
 
-    if num_allocs == 2 and mem_config == ttnn.DRAM_MEMORY_CONFIG:
-        pytest.xfail("#7732: dram tensor corruption after move")
-
     shard_grid = ttnn.CoreRangeSet(
         {
             ttnn.CoreRange(
