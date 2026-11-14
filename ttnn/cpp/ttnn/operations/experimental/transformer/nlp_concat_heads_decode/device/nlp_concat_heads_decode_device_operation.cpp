@@ -36,7 +36,7 @@ void NLPConcatHeadsDecodeDeviceOperation::validate_on_program_cache_miss(
         "Input tensor layout must be TILE but got {}",
         input_tensor.layout());
     TT_FATAL(input_shape[0] == 1, "seqlen=1 for decode");
-    TT_FATAL(input_shape[1] <= 32, "currently only support less than 32 users");
+    TT_FATAL(input_shape[1] <= 32, "currently only support at most 32 users");
     TT_FATAL(input_shape[2] % 32 == 0, "padded heads must be a multiple of TILE_HEIGHT (32), got {}", input_shape[2]);
     TT_FATAL(input_shape[2] >= args.num_heads, "head_dim must be multiple of TILE_WIDTH");
 

@@ -31,7 +31,7 @@ void validate_tensors(const ConcatCodegenParams& operation_attributes, const Con
     auto shape_first = first_input.logical_shape();
     TT_FATAL(
         operation_attributes.dim < shape_first.rank(),
-        "ConcatCodegenDeviceOperation dim specified is larger than input tensor rank.");
+        "ConcatCodegenDeviceOperation dim must be less than the input tensor rank.");
     shape_first[operation_attributes.dim] = 0;
 
     for (const auto& in_ref : input_tensors) {

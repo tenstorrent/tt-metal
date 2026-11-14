@@ -72,7 +72,7 @@ void SliceWriteDeviceOperation::validate_on_program_cache_miss(
         // Check if start shape is <= end shape
         TT_FATAL(
             args.slice_start[i] <= args.slice_end[i],
-            "Slice start {} should be less than slice end {}",
+            "Slice start {} should not be greater than slice end {}",
             args.slice_start[i],
             args.slice_end[i]);
     }

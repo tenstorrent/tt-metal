@@ -83,24 +83,25 @@ void assert_subblock_compute_config_compatible(bool dst_full_sync_en, bool fp32_
         if (fp32_dest_acc_en) {
             TT_FATAL(
                 subblock_wt <= 4,
-                "subblock_wt={}, but subblock width must less than 4 tiles in fp32 mode when dst_full_sync_en is false",
+                "subblock_wt={}, but subblock width must be at most 4 tiles in fp32 mode when dst_full_sync_en is "
+                "false",
                 subblock_wt);
         } else {
             TT_FATAL(
                 subblock_wt <= 8,
-                "subblock_wt={}, but subblock width must less than 8 tiles when dst_full_sync_en is false",
+                "subblock_wt={}, but subblock width must be at most 8 tiles when dst_full_sync_en is false",
                 subblock_wt);
         }
     } else {
         if (fp32_dest_acc_en) {
             TT_FATAL(
                 subblock_wt <= 8,
-                "subblock_wt={}, but subblock width must less than 8 tiles in fp32 mode when dst_full_sync_en is true",
+                "subblock_wt={}, but subblock width must be at most 8 tiles in fp32 mode when dst_full_sync_en is true",
                 subblock_wt);
         } else {
             TT_FATAL(
                 subblock_wt <= 16,
-                "subblock_wt={}, but subblock width must less than 16 tiles when dst_full_sync_en is true",
+                "subblock_wt={}, but subblock width must be at most 16 tiles when dst_full_sync_en is true",
                 subblock_wt);
         }
     }
