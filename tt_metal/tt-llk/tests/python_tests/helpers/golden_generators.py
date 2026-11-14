@@ -2456,6 +2456,7 @@ class UnarySFPUGolden:
             MathOperation.UnaryBitwiseOr: self._unary_bitwise_or,
             MathOperation.UnaryBitwiseXor: self._unary_bitwise_xor,
             MathOperation.RsubScalarInt32: self._rsub_scalar_int32,
+            MathOperation.QuickGelu: self._quick_gelu,
             MathOperation.RemainderUint32: self._remainder_uint32,
             MathOperation.SumIntCol: self._sum_int_col,
             MathOperation.SumIntRow: self._sum_int_row,
@@ -3465,6 +3466,12 @@ class UnarySFPUGolden:
         phi = math.exp(-0.5 * x * x) / math.sqrt(2.0 * math.pi)
         cdf = 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
         return cdf + x * phi
+
+    def _quick_gelu(self, x):
+        # The exact value of the leaf in float64,
+        # at the input as the SFPU reads it (a subnormal as 0).
+        x = 0.0 if abs(float(x)) < 2.0**-126 else x
+        return self._in_fp64(x, lambda a: (a / (1 + torch.exp(-1.702 * a))))
 
     def _rand(self, x):
         # No element-wise golden exists: the midpoint is only valid ahead of a downstream op whose

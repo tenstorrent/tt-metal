@@ -132,6 +132,10 @@
 #include "api/compute/eltwise_unary/dropout.h"
 #endif
 
+#ifdef SFPU_OP_QUICK_GELU_INCLUDE
+#include "api/compute/quick_gelu.h"
+#endif
+
 #ifdef SFPU_OP_RAND_INCLUDE
 #include "api/compute/eltwise_unary/rand.h"
 #endif

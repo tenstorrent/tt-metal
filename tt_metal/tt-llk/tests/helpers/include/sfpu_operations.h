@@ -77,6 +77,9 @@
 #include "llk_sfpu/ckernel_sfpu_polygamma.h"
 #include "llk_sfpu/ckernel_sfpu_prelu.h"
 #include "llk_sfpu/ckernel_sfpu_quant.h"
+#ifdef ARCH_BLACKHOLE
+#include "llk_sfpu/ckernel_sfpu_quick_gelu.h"
+#endif
 #include "llk_sfpu/ckernel_sfpu_rdiv.h"
 #include "llk_sfpu/ckernel_sfpu_recip.h"
 #include "llk_sfpu/ckernel_sfpu_relu.h"
@@ -585,6 +588,12 @@ void call_unary_sfpu_operation_init(std::uint32_t math_format)
     {
         llk_math_eltwise_unary_sfpu_init<OPERATION>(mish_init<APPROX_MODE>);
     }
+#ifdef ARCH_BLACKHOLE
+    else if constexpr (OPERATION == SfpuType::quick_gelu)
+    {
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(ckernel::sfpu::quick_gelu_init);
+    }
+#endif
     else if constexpr (OPERATION == SfpuType::rdiv)
     {
         llk_math_eltwise_unary_sfpu_init<OPERATION>(rdiv_init<APPROX_MODE>);
@@ -1307,6 +1316,13 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     {
         SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_i0, (APPROX_MODE, ITERATIONS), dst_index, vector_mode);
     }
+#ifdef ARCH_BLACKHOLE
+    else if constexpr (OPERATION == SfpuType::quick_gelu)
+    {
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE, DST_ACCUM_MODE, calculate_quick_gelu, (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode);
+    }
+#endif
     else if constexpr (OPERATION == SfpuType::rdiv)
     {
         SFPU_UNARY_CALL(
