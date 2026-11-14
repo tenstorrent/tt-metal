@@ -165,8 +165,8 @@ inline void calculate_tanh_derivative_sech2() {
         sfpi::vFloat val = sfpi::dst_reg[0];
         sfpi::vFloat result = 0.0f;
 
-        // sech²(x) is an even function: sech²(-x) = sech²(x)
-        sfpi::vFloat a = sfpi::abs(val);
+        // sech²(x) is an even function: clear sign bit via setsgn so -NaN does not enter the guard
+        sfpi::vFloat a = sfpi::setsgn(val, 0);
 
         v_if(a < CORE_REGION_LIMIT) {
             // Core region: degree-10 polynomial in t = (2/9)·u - 1, u = a²
@@ -195,8 +195,12 @@ inline void calculate_tanh_derivative_sech2() {
         }
         v_endif;
 
-        // Explicit RNE rounding for BF16 output — SFPSTORE truncates toward zero by default.
-        if constexpr (!is_fp32_dest_acc_en) {
+        if constexpr (is_fp32_dest_acc_en) {
+            constexpr std::int32_t kInfBits = 0x7F800000;
+            v_if(sfpi::as<sfpi::vInt>(a) > kInfBits) { result = val; }
+            v_endif;
+        } else {
+            // Explicit RNE rounding for BF16 output — SFPSTORE truncates toward zero by default.
             result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
         }
 
