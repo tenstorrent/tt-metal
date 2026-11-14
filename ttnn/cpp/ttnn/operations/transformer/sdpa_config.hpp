@@ -34,6 +34,10 @@ struct SDPAProgramConfig {
     // features (attention sink, split KV, kv_actual_isl, sharded padded joint tail, latent V, matmul_math_fidelity)
     // still require fp32_dest_acc_en=false.
     bool streaming_fp32_dest = false;
+    // Ring joint only: also run SDPA on the cores (x .. grid.x - 1, grid.y) of the CCL row below the grid that the
+    // fused all-gather does not use (it takes num_links * 2 cores from ccl_core_grid_offset). Only the core a (head, Q
+    // chunk) unit runs on changes: outputs are byte-identical to the rectangle.
+    std::optional<uint32_t> ccl_row_sdpa_start_x = std::nullopt;
 };
 
 // Paired geometry for an HMA-shared paged K/V cache (chunked prefill SDPA and
