@@ -30,8 +30,7 @@ struct p_gpr_unpack
     constexpr static std::uint32_t ZERO_3                  = 11; // Zero data
     constexpr static std::uint32_t TMP0                    = 12; // Temp data
     constexpr static std::uint32_t TMP1                    = 13; // Temp data
-    constexpr static std::uint32_t TILE_SIZE               = 14; // Tile size
-    constexpr static std::uint32_t TILE_OFFSET             = 15; // Tile offset
+    // Slots 14 and 15 are free.
     constexpr static std::uint32_t L1_BUFFER_ADDR          = 17; // Holds address of fixed l1 buffer used for reduce in1
     constexpr static std::uint32_t TMP_LO                  = 18; // Temp data. Upper 16-bits always 0
     constexpr static std::uint32_t TMP_HI                  = 19; // Temp data. Lower 16-bits always 0
@@ -40,7 +39,7 @@ struct p_gpr_unpack
     constexpr static std::uint32_t TILE_SIZE_A             = 36; // Holds tile size for unpacker 0
     constexpr static std::uint32_t TILE_SIZE_B             = 37; // Holds tile size for unpacker 1
     constexpr static std::uint32_t KT_DIM                  = 38; // Holds matmul kt_dim
-    constexpr static std::uint32_t FACE_DIM_16x16          = 40; // Holds face dimension (16x16)
+    // Slot 40 is free.
     constexpr static std::uint32_t FACE_DIM_8x16           = 41; // Holds face dimension (8x16)
     constexpr static std::uint32_t FACE_DIM_4x16           = 42; // Holds face dimension (4x16)
     constexpr static std::uint32_t FACE_DIM_2x16           = 43; // Holds face dimension (2x16)

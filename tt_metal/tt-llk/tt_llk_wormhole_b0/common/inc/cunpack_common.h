@@ -226,7 +226,7 @@ inline constexpr std::uint32_t canonical_unpA_x_stride(const std::uint32_t unpac
 // This is the value programmed by configure_unpack_AB and the srca data-format reconfig,
 // so it serves as the documented baseline that operations which mutate Y-stride
 // (e.g. bcastA_B) must restore on uninit. It does not depend on the operand's face_r_dim;
-// FACE_R_DIM is the constant face row count (matches set_packer_strides and unpack_untilize).
+// FACE_R_DIM is the constant face row count (matches set_packer_strides).
 inline constexpr std::uint32_t canonical_unpA_y_stride(const std::uint32_t unpack_dst_format)
 {
     return FACE_R_DIM * canonical_unpA_x_stride(unpack_dst_format);
