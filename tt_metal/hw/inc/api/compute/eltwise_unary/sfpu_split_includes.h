@@ -200,6 +200,10 @@
 #include "api/compute/eltwise_unary/digamma.h"
 #endif
 
+#ifdef SFPU_OP_SWIGLU_OAI_INCLUDE
+#include "api/compute/swiglu_oai.h"
+#endif
+
 #ifdef SFPU_OP_TANHSHRINK_INCLUDE
 #include "api/compute/eltwise_unary/tanhshrink.h"
 #endif

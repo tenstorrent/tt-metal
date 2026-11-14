@@ -263,6 +263,7 @@ class MathOperation(Enum):
     SfpuElwmul = OpSpec("MUL", MathOpType.SFPU_BINARY)
     SfpuElwRightShift = OpSpec("RSHFT", MathOpType.SFPU_BINARY)
     SfpuElwsub = OpSpec("SUB", MathOpType.SFPU_BINARY)
+    SfpuSwigluOai = OpSpec("SWIGLU_OAI", MathOpType.SFPU_BINARY)
     SfpuXlogy = OpSpec("XLOGY", MathOpType.SFPU_BINARY)
     SfpuAddTopRow = OpSpec("ADD_TOP_ROW", MathOpType.SFPU_BINARY)
     SfpuElwdiv = OpSpec("DIV", MathOpType.SFPU_BINARY)
