@@ -319,9 +319,23 @@ TilizeDeviceOperation::program_factory_t TilizeDeviceOperation::select_program_f
         return ttnn::prim::TilizeMultiCoreBlockProgramFactory{};
     }
 
-    bool use_single_core = (operation_attributes.use_low_perf) || (!operation_attributes.use_multicore) ||
-                           (operation_attributes.sub_core_grids.has_value() &&
-                            (operation_attributes.sub_core_grids.value().num_cores() < 2));
+    // The single-core factory reads one full-width stick from a single page, which is only correct
+    // when a logical row lives in one page: interleaved input, or a sharded input whose shard is as
+    // wide as the row. A sharded input whose row spans several shards (WIDTH or BLOCK sharded, or
+    // ND sharded with narrow shards) must use the sharded-aware multi-core factory even when the
+    // caller asks for one core.
+    bool row_spans_shards = false;
+    if (input_tensor_a.memory_config().is_sharded()) {
+        const uint32_t logical_width = input_tensor_a.logical_shape()[-1];
+        const uint32_t shard_width = input_tensor_a.shard_spec().has_value()
+                                         ? input_tensor_a.shard_spec().value().shape[1]
+                                         : input_tensor_a.nd_shard_spec().value().shard_shape[-1];
+        row_spans_shards = shard_width < logical_width;
+    }
+    bool use_single_core = !row_spans_shards &&
+                           ((operation_attributes.use_low_perf) || (!operation_attributes.use_multicore) ||
+                            (operation_attributes.sub_core_grids.has_value() &&
+                             (operation_attributes.sub_core_grids.value().num_cores() < 2)));
     if (use_single_core) {
         return ttnn::prim::TilizeSingleCoreProgramFactory{};
     }
