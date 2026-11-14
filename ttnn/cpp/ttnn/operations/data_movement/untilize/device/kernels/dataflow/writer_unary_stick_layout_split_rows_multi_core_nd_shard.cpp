@@ -27,7 +27,8 @@ void kernel_main() {
     constexpr auto num_tiles_per_row = get_arg(args::num_tiles_per_row);
     constexpr auto tile_width = get_arg(args::tile_width);
     constexpr auto output_tensor_width = get_arg(args::output_tensor_width);
-    constexpr auto output_tensor_height = get_arg(args::output_tensor_height);
+    constexpr auto input_rows_per_plane = get_arg(args::input_rows_per_plane);
+    constexpr auto output_rows_per_plane = get_arg(args::output_rows_per_plane);
 
     const auto accessor_dst = TensorAccessor(tensor::dst);
     const auto accessor_src = TensorAccessor(tensor::src);
@@ -35,7 +36,7 @@ void kernel_main() {
     Noc noc;
     DataflowBuffer dfb_out(dfb::out);
 
-    auto write_tiles_in_current_block = [&](uint32_t block_height_index,
+    auto write_tiles_in_current_block = [&](uint32_t output_row_start,
                                             uint32_t width_wise_output_block_start_index,
                                             uint32_t num_unpadded_cols_per_input_block,
                                             uint32_t num_cols_already_processed_in_first_output_block,
@@ -47,7 +48,7 @@ void kernel_main() {
         for (uint32_t j = 0; j < num_rows_to_write; ++j) {
             uint32_t current_l1_read_addr = base_l1_read_addr + j * num_cols_per_input_block * output_element_size;
 
-            uint32_t num_rows_already_processed = block_height_index * tile_height + j;
+            uint32_t num_rows_already_processed = output_row_start + j;
             uint32_t num_pages_already_processed_in_previous_rows =
                 num_rows_already_processed * num_output_blocks_across_width;
             uint32_t output_page_id =
@@ -100,17 +101,23 @@ void kernel_main() {
             if (last_column_tensor_index_in_block >= output_tensor_width) {
                 num_unpadded_cols_per_input_block = (output_tensor_width - tile_index_width * tile_width);
             }
-            uint32_t last_row_tensor_index_in_block = (height_wise_input_block_index + 1) * tile_height - 1;
-            uint32_t num_rows_to_write = tile_height;
-            if (last_row_tensor_index_in_block >= output_tensor_height) {
-                num_rows_to_write = (output_tensor_height - height_wise_input_block_index * tile_height);
+            // Map the block's first padded input row to an output row plane by plane. The output may have fewer rows
+            // per plane than the padded input, so a tile row can start past the end of its output plane (write no
+            // rows, but still consume the block) or straddle it (write only the rows that exist).
+            uint32_t first_input_row = height_wise_input_block_index * tile_height;
+            uint32_t plane_index = first_input_row / input_rows_per_plane;
+            uint32_t row_in_plane = first_input_row % input_rows_per_plane;
+            uint32_t num_rows_to_write = 0;
+            if (row_in_plane < output_rows_per_plane) {
+                num_rows_to_write = std::min<uint32_t>(tile_height, output_rows_per_plane - row_in_plane);
             }
+            uint32_t output_row_start = plane_index * output_rows_per_plane + row_in_plane;
             uint32_t input_block_global_col_index = width_wise_input_block_index * num_cols_per_input_block;
             uint32_t width_wise_output_block_start_index = input_block_global_col_index / num_cols_per_output_block;
             uint32_t num_cols_already_processed_in_first_output_block =
                 input_block_global_col_index % num_cols_per_output_block;
             write_tiles_in_current_block(
-                height_wise_input_block_index,
+                output_row_start,
                 width_wise_output_block_start_index,
                 num_unpadded_cols_per_input_block,
                 num_cols_already_processed_in_first_output_block,

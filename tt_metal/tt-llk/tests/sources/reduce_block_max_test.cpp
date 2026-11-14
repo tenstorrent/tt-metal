@@ -425,7 +425,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     _llk_packer_wait_for_math_done_();
                 }
                 _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(0 /* dst_index */, L1_ADDRESS(buffer_Res[0]));
-                if constexpr (sync_with_math)
+                // Wormhole PACK_ISOLATE also releases every section to drain the packers.
+                if constexpr (sync_with_math || PERF_PACK_SECTION_RELEASE)
                 {
                     _llk_pack_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
                 }

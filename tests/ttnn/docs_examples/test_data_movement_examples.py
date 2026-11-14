@@ -18,13 +18,17 @@ def test_concat(device):
 
 
 def test_nonzero(device):
-    # Create a tensor with some zero and non-zero elements
+    # Create a rank-4 tensor with three non-zero elements
     input_tensor = torch.zeros((1, 1, 1, 32), dtype=torch.bfloat16)
+    input_tensor[0, 0, 0, [3, 10, 20]] = 1
     input_tensor_ttnn = ttnn.from_torch(input_tensor, device=device)
 
-    # Find indices of non-zero elements
-    nonzero_indices = ttnn.nonzero(input_tensor_ttnn)
-    logger.info("Non-zero Indices:", nonzero_indices)
+    # Find the non-zero elements: the first output holds the count, the second the (n, c, h, w) indices
+    count_tensor, indices_tensor = ttnn.nonzero(input_tensor_ttnn)
+    count = int(ttnn.to_torch(count_tensor)[0, 0, 0, 0])
+    indices = ttnn.to_torch(indices_tensor)[0, 0, 0, : 4 * count].reshape(count, 4)
+    logger.info(f"Non-zero count: {count}")  # 3
+    logger.info(f"Non-zero indices: {indices.tolist()}")  # [[0, 0, 0, 3], [0, 0, 0, 10], [0, 0, 0, 20]]
 
 
 def test_pad(device):
@@ -42,7 +46,7 @@ def test_permute(device):
 
     # Permute the tensor dimensions
     permuted_tensor = ttnn.permute(input_tensor, (0, 1, 3, 2))
-    logger.info("Permuted Tensor Shape:", permuted_tensor.shape)  # Permuted Tensor Shape: Shape([1, 1, 32, 64])
+    logger.info(f"Permuted Tensor Shape: {permuted_tensor.shape}")  # Shape([1, 1, 32, 64])
 
 
 def test_reshape(device):
@@ -114,12 +118,12 @@ def test_slice(device):
 
     # Slice the tensor
     sliced_tensor = ttnn.slice(input_tensor, [0, 0, 0, 0], [1, 1, 64, 16], [1, 1, 2, 1])
-    logger.info("Sliced Tensor Shape:", sliced_tensor.shape)  # Sliced Tensor Shape: Shape([1, 1, 32, 16])
+    logger.info(f"Sliced Tensor Shape: {sliced_tensor.shape}")  # Shape([1, 1, 32, 16])
 
     # Create a tensor to slice without step
     input_tensor = ttnn.rand((1, 1, 64, 32), dtype=ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
     output = ttnn.slice(input_tensor, [0, 0, 0, 0], [1, 1, 32, 32])
-    logger.info("Sliced Tensor Shape:", output.shape)  # Sliced Tensor Shape: Shape([1, 1, 32, 32])
+    logger.info(f"Sliced Tensor Shape: {output.shape}")  # Shape([1, 1, 32, 32])
 
 
 def test_tilize(device):

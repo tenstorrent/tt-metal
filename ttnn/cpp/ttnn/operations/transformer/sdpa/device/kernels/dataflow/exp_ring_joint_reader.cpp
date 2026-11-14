@@ -433,15 +433,14 @@ void kernel_main() {
                     if constexpr (mcast_enabled) {
                         noc.async_write_multicast(
                             CoreLocalMem<uint32_t>(cb_k_start_address),
-                            MulticastEndpoint{},
+                            cb_k,
                             k_chunk_tiles * k_tile_bytes,
                             mcast_num_dests,
                             {},
                             {.noc_x_start = prev_physical_x,
                              .noc_y_start = prev_physical_y,
                              .noc_x_end = next_physical_x,
-                             .noc_y_end = next_physical_y,
-                             .addr = cb_k_start_address},
+                             .noc_y_end = next_physical_y},
                             true /* linked: semaphore mcast follows */);
                         // Must be back-to-back after the linked data write — any flush between them
                         // deadlocks the linked transaction.
@@ -563,15 +562,14 @@ void kernel_main() {
                     if constexpr (mcast_enabled) {
                         noc.async_write_multicast(
                             CoreLocalMem<uint32_t>(cb_v_start_address),
-                            MulticastEndpoint{},
+                            cb_v,
                             v_chunk_tiles * v_tile_bytes,
                             mcast_num_dests,
                             {},
                             {.noc_x_start = prev_physical_x,
                              .noc_y_start = prev_physical_y,
                              .noc_x_end = next_physical_x,
-                             .noc_y_end = next_physical_y,
-                             .addr = cb_v_start_address},
+                             .noc_y_end = next_physical_y},
                             true /* linked: semaphore mcast follows */);
                         // Companion semaphore mcast — see K path above for rationale.
                         // V lands on the second (ping-pong) valid flag.

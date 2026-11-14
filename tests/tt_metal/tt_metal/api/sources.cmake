@@ -2,10 +2,13 @@
 # Module owners should update this file when adding/removing/renaming source files
 
 set(UNIT_TESTS_API_SOURCES
+    allocator/test_address_ranges.cpp
+    allocator/test_allocation_request.cpp
     allocator/test_free_list_opt_allocator.cpp
     allocator/test_l1_banking_allocator.cpp
     allocator/test_overlapped_bank_manager.cpp
     allocator/test_per_core_bank_manager.cpp
+    allocator/test_size_class_index.cpp
     circular_buffer/test_CircularBuffer_allocation.cpp
     circular_buffer/test_CircularBuffer_creation.cpp
     circular_buffer/test_CircularBuffer_non_blocking.cpp
@@ -35,6 +38,7 @@ set(UNIT_TESTS_API_SOURCES
     distribution_spec/test_buffer_distribution_spec.cpp
     sram_arena/test_sram_arena.cpp
     test_kernel_thread_sync.cpp
+    test_trisc_l1_cache.cpp
     test_banked.cpp
     test_bit_utils.cpp
     test_buffer_types_device_sync.cpp

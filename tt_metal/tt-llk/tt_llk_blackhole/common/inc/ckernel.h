@@ -824,7 +824,7 @@ inline void init_prng_seed(const std::uint32_t seed)
 
 inline constexpr bool is_valid_instruction_mode(InstrModLoadStore mode)
 {
-    return mode == InstrModLoadStore::INT32_2S_COMP || mode == InstrModLoadStore::INT32 || mode == InstrModLoadStore::LO16;
+    return mode == InstrModLoadStore::INT32_2S_COMP || mode == InstrModLoadStore::INT32 || mode == InstrModLoadStore::UINT16;
 }
 
 inline void apply_sign_magnitude_conversion(std::uint32_t src, std::uint32_t dst, InstrModCast cast_mode)
@@ -873,10 +873,9 @@ constexpr std::uint32_t get_dest_max_tiles()
 template <DstSync SYNC_MODE, DstTileShape TILE_SHAPE>
 inline std::uint32_t get_dest_max_tiles_rt()
 {
-    const bool accum_mode = llk_assert_fp32_dest_acc_en;
-    const std::uint32_t dest_register_size =
-        SYNC_MODE == DstSync::SyncHalf ? (accum_mode ? DEST_REGISTER_HALF_SIZE >> 1 : DEST_REGISTER_HALF_SIZE)
-                                       : (accum_mode ? DEST_REGISTER_FULL_SIZE >> 1 : DEST_REGISTER_FULL_SIZE);
+    const bool accum_mode                  = llk_assert_fp32_dest_acc_en;
+    const std::uint32_t dest_register_size = SYNC_MODE == DstSync::SyncHalf ? (accum_mode ? DEST_REGISTER_HALF_SIZE >> 1 : DEST_REGISTER_HALF_SIZE)
+                                                                            : (accum_mode ? DEST_REGISTER_FULL_SIZE >> 1 : DEST_REGISTER_FULL_SIZE);
     return dest_register_size >> DstTileSizeLog2[static_cast<int>(TILE_SHAPE)];
 }
 
