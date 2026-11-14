@@ -192,6 +192,27 @@ def test_post_splice_embeddings(
     check(got, want[first_chunk_start:], images, first_chunk_start, seq_len)
 
 
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (2, 4), (8, 4)])
+def test_same_bucket_compiles_once(mesh_device, device_params):
+    """Image counts that snap to the same table height reuse the program — what table_height is for.
+
+    One 10-token image and two totalling 20 both snap to a 32-row table at sp 1, 2 and 8. Their exact
+    heights differ (11 vs 21, 6 vs 11, 3 vs 4), so without the snapping the second forward would compile
+    its own embedding and where."""
+    torch.manual_seed(0)
+    table = torch.randn(VOCAB, HIDDEN, dtype=torch.bfloat16)
+    tokens = torch.randint(0, VOCAB, (CHUNK,), dtype=torch.int32)
+    one = [(10, 10, bytes([1]) * 32)]
+    two = [(10, 12, bytes([2]) * 32), (40, 8, bytes([3]) * 32)]
+    embs = {key: torch.randn(n, HIDDEN).to(torch.bfloat16) for _, n, key in one + two}
+
+    splice_chunks(mesh_device, table, tokens, one, Store(embs), 0, shard_vocab_on_sp=True)
+    entries = mesh_device.num_program_cache_entries()
+    splice_chunks(mesh_device, table, tokens, two, Store(embs), 0, shard_vocab_on_sp=True)
+
+    assert mesh_device.num_program_cache_entries() == entries, "a same-bucket image count recompiled"
+
+
 def test_one_batched_fetch_per_forward(monkeypatch):
     """A packed forward naming one image in two chunks reads every value in one fetch, before the next fetch could
     overwrite it."""
