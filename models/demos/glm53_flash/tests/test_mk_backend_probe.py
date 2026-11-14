@@ -79,8 +79,15 @@ def test_mk_backend_probe(mesh_device, monkeypatch):
     ep = os.environ.get("GLM53_MK_EP", "0") == "1"
     t0 = time.perf_counter()
     native = os.environ.get("GLM53_MK_NATIVE_T", "0") == "1"  # B > 4 as ONE launch of B rows (else 4-row chunks)
+    # narrow / native widths reuse the cached layer weights (StackBackend asserts weight_cache): the e2e construction
+    wcache = (
+        {}
+        if (os.environ.get("GLM53_STACK_NARROW_WIDTHS") or os.environ.get("GLM53_STACK_NATIVE_WIDTHS")
+            or os.environ.get("GLM53_MK_WEIGHT_CACHE") == "1")
+        else None
+    )  # fmt: skip
     backend = StackBackend(mesh_device, max_batch=B, layers=layers, hf_config=cfg, topk=1, sample=False, ep_weights=ep,
-                           native_t=native)  # fmt: skip
+                           native_t=native, weight_cache=wcache)  # fmt: skip
     logger.info(
         f"StackBackend built in {time.perf_counter() - t0:.0f} s: mesh {MESH}, layers {layers}, B {B}, ep {ep}, "
         f"native_t {native} (chunk {backend.chunk} x {backend.n_chunks})"
