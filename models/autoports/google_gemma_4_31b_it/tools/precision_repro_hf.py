@@ -143,7 +143,7 @@ def run_case(model, tokenizer, case_path, case, output_path, args, started, revi
             "device": "cpu",
             "weights_dtype": "bfloat16",
             "prefill_chunk": args.prefill_chunk,
-            "sampling_note": "HF RNG differs from TT. Seeds are diagnostic, native request was unseeded.",
+            "sampling_note": "HF RNG differs from TT. Seeds are diagnostic; native request settings are in case_metadata.",
             "case_metadata": case.get("metadata", {}),
             "results": [],
         }

@@ -1,0 +1,490 @@
+{
+  "precision": "stage12_bf16_hifi4_diagnostic",
+  "status": "complete_all_nine_reviewed",
+  "cases": {
+    "task30.onset.suffix512": {
+      "task": "30",
+      "semantic_anomalies": 3,
+      "trials": 3,
+      "seeds": [
+        42,
+        43,
+        44
+      ],
+      "mechanical_flags": [
+        false,
+        false,
+        false
+      ],
+      "coordinator_decision": "Accept fresh independent review: repeated unchanged product/symmetry candidate lists and route rejection in all three. No novel discriminating checks in repeated cycles. Short reproduction, not native equivalence or causal attribution.",
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-full/task30.onset.suffix512.semantic-triage.json",
+      "actual_precision": {
+        "config_id": "stage12_bf16_hifi4_diagnostic",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "diagnostic_decode_tps": [
+        17.17546857845363,
+        17.17264126656183,
+        17.177920897795197
+      ],
+      "rate_basis": "Traced token-out host-wall diagnostic; not vLLM or headline target",
+      "recorded_unix": 1794663186.0470526
+    },
+    "task48.onset.suffix512": {
+      "task": "48",
+      "semantic_anomalies": 3,
+      "trials": 3,
+      "seeds": [
+        42,
+        43,
+        44
+      ],
+      "mechanical_flags": [
+        true,
+        false,
+        true
+      ],
+      "coordinator_decision": "Accept fresh review: seeds42/44 repeated short phrase;43 repeats unchanged incompatible nomenclature and reaction checks. Three anomalous samples; diagnostic cap is not the cause. Short reconstruction only, no native equivalence or precision causality.",
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-full/task48.onset.suffix512.semantic-triage.json",
+      "actual_precision": {
+        "config_id": "stage12_bf16_hifi4_diagnostic",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "diagnostic_decode_tps": [
+        17.17666066626238,
+        17.178742919888037,
+        17.177615484341068
+      ],
+      "rate_basis": "Traced token-out host-wall diagnostic; not vLLM or headline target",
+      "recorded_unix": 1794663347.356997
+    },
+    "task110.onset.suffix512": {
+      "task": "110",
+      "semantic_anomalies": 3,
+      "trials": 3,
+      "seeds": [
+        42,
+        43,
+        44
+      ],
+      "mechanical_flags": [
+        true,
+        true,
+        true
+      ],
+      "coordinator_decision": "Accept3/3 semantic anomalies:42 repeated mapping then whitespace-tail collapse;43 fixed two-assertion cycle;44 repeated product claim. Seed43 boundary cutoff alone is not malformed; correction requested to reviewer auxiliary label. Short reproduction only, no native equivalence or precision causality.",
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-full/task110.onset.suffix512.semantic-triage.json",
+      "actual_precision": {
+        "config_id": "stage12_bf16_hifi4_diagnostic",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "diagnostic_decode_tps": [
+        17.177635469837256,
+        17.172670862072703,
+        17.17393140428963
+      ],
+      "rate_basis": "Traced token-out host-wall diagnostic; not vLLM or headline target",
+      "recorded_unix": 1794663524.4864163
+    },
+    "task127.onset.suffix512": {
+      "task": "127",
+      "semantic_anomalies": 2,
+      "trials": 3,
+      "seeds": [
+        42,
+        43,
+        44
+      ],
+      "mechanical_flags": [
+        false,
+        false,
+        false
+      ],
+      "coordinator_decision": "Partial override after root reads full seed43:42 repeated local translation,44 unchanged comparison prompt repeat are anomalies.43 checks new other regions and beginning then rechecks earlier difference; insufficient sustained unchanged cycling before cutoff, retain inconclusive/progressing. Two of three reproduce, seed42 suitable for conditional HF. No native equivalence or precision causality.",
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-full/task127.onset.suffix512.semantic-triage.json",
+      "actual_precision": {
+        "config_id": "stage12_bf16_hifi4_diagnostic",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "diagnostic_decode_tps": [
+        17.172330018805507,
+        17.17612105183155,
+        17.169469263471726
+      ],
+      "rate_basis": "Traced token-out host-wall diagnostic; not vLLM or headline target",
+      "recorded_unix": 1794663770.0813465,
+      "per_seed_coordinator": {
+        "42": "semantic_repetition_anomaly",
+        "43": "inconclusive_progressing_checks",
+        "44": "semantic_repetition_anomaly"
+      }
+    },
+    "task129.onset.suffix512": {
+      "task": "129",
+      "semantic_anomalies": 3,
+      "trials": 3,
+      "seeds": [
+        42,
+        43,
+        44
+      ],
+      "mechanical_flags": [
+        false,
+        false,
+        false
+      ],
+      "coordinator_decision": "Accept fresh3/3 review: after initial distinct wavelength calculations, repeated unchanged threshold rationale/candidate sequence occurs multiple times in each. No malformed text; semantic repetition remains anomalous despite false detector flags. Short reproduction only, no native equivalence or precision causality.",
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-full/task129.onset.suffix512.semantic-triage.json",
+      "actual_precision": {
+        "config_id": "stage12_bf16_hifi4_diagnostic",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "diagnostic_decode_tps": [
+        17.179395024703776,
+        17.169683593703308,
+        17.17477131760868
+      ],
+      "rate_basis": "Traced token-out host-wall diagnostic; not vLLM or headline target",
+      "recorded_unix": 1794663999.229436
+    },
+    "task130.onset.suffix512": {
+      "task": "130",
+      "semantic_anomalies": 3,
+      "trials": 3,
+      "seeds": [
+        42,
+        43,
+        44
+      ],
+      "mechanical_flags": [
+        true,
+        true,
+        true
+      ],
+      "coordinator_decision": "Accept3/3 fresh review: each repeatedly alternates same symmetry premise and proton-integration contradiction without new check; all detector flags true independently. Cutoffs not malformed. Short reproduction only, not native equivalence or precision causality.",
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-full/task130.onset.suffix512.semantic-triage.json",
+      "actual_precision": {
+        "config_id": "stage12_bf16_hifi4_diagnostic",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "diagnostic_decode_tps": [
+        17.175764459501213,
+        17.17537787540375,
+        17.179125698644242
+      ],
+      "rate_basis": "Traced token-out host-wall diagnostic; not vLLM or headline target",
+      "recorded_unix": 1794664112.6532872
+    },
+    "task139.onset.suffix512": {
+      "task": "139",
+      "semantic_anomalies": 3,
+      "trials": 3,
+      "seeds": [
+        42,
+        43,
+        44
+      ],
+      "mechanical_flags": [
+        false,
+        false,
+        false
+      ],
+      "coordinator_decision": "Accept3/3 fresh review:42/43 unchanged analogy/isotope claim cycles;44 first checks alternatives then repeats same full candidate/product/analogy sequence. No malformed text; cutoff excluded. Short reproduction only, not native equivalence or precision causality.",
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-full/task139.onset.suffix512.semantic-triage.json",
+      "actual_precision": {
+        "config_id": "stage12_bf16_hifi4_diagnostic",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "diagnostic_decode_tps": [
+        17.169328596702638,
+        17.171135368823222,
+        17.18009354500494
+      ],
+      "rate_basis": "Traced token-out host-wall diagnostic; not vLLM or headline target",
+      "recorded_unix": 1794664319.241619
+    },
+    "task145.onset.suffix512": {
+      "task": "145",
+      "semantic_anomalies": 3,
+      "trials": 3,
+      "seeds": [
+        42,
+        43,
+        44
+      ],
+      "mechanical_flags": [
+        true,
+        true,
+        false
+      ],
+      "coordinator_decision": "Accept3/3 fresh review:42 isolated-letter collapse;43 malformed repeated self-correction;44 six unchanged orientation/reverification blocks. Only44 directly matches original substantive semantic cycle; all three anomalous. Cutoffs excluded; short reconstruction only, not native equivalence or precision causality.",
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-full/task145.onset.suffix512.semantic-triage.json",
+      "actual_precision": {
+        "config_id": "stage12_bf16_hifi4_diagnostic",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "diagnostic_decode_tps": [
+        17.174538240906834,
+        17.17479086917452,
+        17.172927849766392
+      ],
+      "rate_basis": "Traced token-out host-wall diagnostic; not vLLM or headline target",
+      "recorded_unix": 1794664449.2217913
+    },
+    "task147.onset.suffix512": {
+      "task": "147",
+      "semantic_anomalies": 3,
+      "trials": 3,
+      "seeds": [
+        42,
+        43,
+        44
+      ],
+      "mechanical_flags": [
+        false,
+        false,
+        false
+      ],
+      "coordinator_decision": "Accept3/3 fresh review and root complete-text inspection:42 repeats unchanged candidate/clue sentence,43 alternates same element-class questions without checks,44 repeats generic fraction equation without testing candidates. Spelling/spacing defects are auxiliary, sustained repetition decisive. Short reconstruction only, no native equivalence or precision causality.",
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-full/task147.onset.suffix512.semantic-triage.json",
+      "actual_precision": {
+        "config_id": "stage12_bf16_hifi4_diagnostic",
+        "weight_groups": {
+          "attention": "bf16",
+          "mlp": "bf16",
+          "down": "bf16",
+          "lm_head": "bf16"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "HiFi4",
+          "mlp": "HiFi4",
+          "down": "HiFi4",
+          "lm_head": "HiFi4"
+        },
+        "activation_dtype": "bfloat16",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat16",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144,
+        "sdpa_compute_fidelity": "HiFi4"
+      },
+      "diagnostic_decode_tps": [
+        17.17240123893595,
+        17.174292721573458,
+        17.172712441687008
+      ],
+      "rate_basis": "Traced token-out host-wall diagnostic; not vLLM or headline target",
+      "recorded_unix": 1794664682.709017
+    }
+  },
+  "total_anomalous_samples": 26,
+  "total_samples": 27
+}

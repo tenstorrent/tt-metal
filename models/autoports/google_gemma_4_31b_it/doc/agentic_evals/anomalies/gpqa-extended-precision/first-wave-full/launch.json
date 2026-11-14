@@ -1,0 +1,29 @@
+{
+  "command": [
+    "timeout",
+    "3600",
+    "env",
+    "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+    "READINESS_TRACE_REGION_SIZE=134217728",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+    "models/autoports/google_gemma_4_31b_it/tools/precision_repro_batch.py",
+    "--cases",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first_wave_cases.json",
+    "--build-kwargs-file",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/full_precision_build_kwargs.json",
+    "--output-dir",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-full",
+    "--compare-dir",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-served"
+  ],
+  "started_unix": 1794662735.1106057,
+  "phase": "full",
+  "timeout_seconds": 3600,
+  "owner_check": [],
+  "owner_method": "benchmark_server.device_owners /proc fd scan; fuser unavailable, initial preflight ended before launch",
+  "environment_rule": "TT_VISIBLE_DEVICES/profiler/watcher removed; no reset",
+  "head": "e4f11621bec6c1aa8b070797b88c2401fdf31eeb",
+  "ended_unix": 1794664480.8445797,
+  "exit_code": 0,
+  "owners_after": []
+}

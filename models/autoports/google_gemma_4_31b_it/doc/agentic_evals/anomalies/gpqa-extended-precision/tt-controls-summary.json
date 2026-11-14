@@ -1,0 +1,842 @@
+{
+  "status": "tt_controls_complete_hf_pending",
+  "scope": "Nine reconstructed suffix512 cases, three1024-token continuations each. Not native replay or incidence estimation.",
+  "rate_basis": "Batch1 traced token-out diagnostic host wall, existing synchronous readbacks; no added sync/profiler, not serving/headline performance. Serial TT, no CPUHF/Dockerbuild overlap.",
+  "cases": {
+    "task30.onset.suffix512": {
+      "served": {
+        "precision": {
+          "config_id": "stage12_head_bfp8_lofi",
+          "weight_groups": {
+            "attention": "bfp4",
+            "mlp": "bfp4",
+            "down": "bfp4",
+            "lm_head": "bfp8_lofi"
+          },
+          "layer_exceptions": {},
+          "compute_fidelities": {
+            "attention": "LoFi",
+            "mlp": "LoFi",
+            "down": "LoFi",
+            "lm_head": "LoFi"
+          },
+          "activation_dtype": "bfloat8_b",
+          "residual_dtype": "bfloat16",
+          "ccl_dtype": {
+            "prefill": "bfloat8_b",
+            "decode": "bfloat16"
+          },
+          "kv_cache_dtype": "bfloat8_b",
+          "logits_dtype": "bfloat16",
+          "sampling_dtype": "bfloat16",
+          "embedding_dtype": "bfloat16",
+          "norm_dtype": "bfloat16",
+          "max_seq_len": 262144
+        },
+        "semantic_anomalies": 3,
+        "trials": 3,
+        "mechanical_flags": [
+          false,
+          false,
+          false
+        ],
+        "median_decode_tok_s_user": 35.077925091204925,
+        "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-served/task30.onset.suffix512.json",
+        "coordinator_decision": "Accept fresh semantic review: unchanged repeated hypothesis cycles; additional malformed/text repetitions in some seeds. Positive short diagnostic reproduction, not native-prompt equivalence or precision causality."
+      },
+      "full": {
+        "precision": {
+          "config_id": "stage12_bf16_hifi4_diagnostic",
+          "weight_groups": {
+            "attention": "bf16",
+            "mlp": "bf16",
+            "down": "bf16",
+            "lm_head": "bf16"
+          },
+          "layer_exceptions": {},
+          "compute_fidelities": {
+            "attention": "HiFi4",
+            "mlp": "HiFi4",
+            "down": "HiFi4",
+            "lm_head": "HiFi4"
+          },
+          "activation_dtype": "bfloat16",
+          "residual_dtype": "bfloat16",
+          "ccl_dtype": {
+            "prefill": "bfloat16",
+            "decode": "bfloat16"
+          },
+          "kv_cache_dtype": "bfloat16",
+          "logits_dtype": "bfloat16",
+          "sampling_dtype": "bfloat16",
+          "embedding_dtype": "bfloat16",
+          "norm_dtype": "bfloat16",
+          "max_seq_len": 262144,
+          "sdpa_compute_fidelity": "HiFi4"
+        },
+        "semantic_anomalies": 3,
+        "trials": 3,
+        "mechanical_flags": [
+          false,
+          false,
+          false
+        ],
+        "median_decode_tok_s_user": 17.17546857845363,
+        "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-full/task30.onset.suffix512.json",
+        "coordinator_decision": "Accept fresh independent review: repeated unchanged product/symmetry candidate lists and route rejection in all three. No novel discriminating checks in repeated cycles. Short reproduction, not native equivalence or causal attribution."
+      },
+      "chosen64_tf_comparison": {
+        "chosen": {
+          "tokens": 64,
+          "top1_agreement": 0.953125,
+          "served_sequence_log_probability": -29.001117987139764,
+          "full_sequence_log_probability": -27.865817416002173
+        }
+      },
+      "tf_limit": "Selected64 positions only; not whole-reply accuracy or exclusion of earlier drift."
+    },
+    "task48.onset.suffix512": {
+      "served": {
+        "precision": {
+          "config_id": "stage12_head_bfp8_lofi",
+          "weight_groups": {
+            "attention": "bfp4",
+            "mlp": "bfp4",
+            "down": "bfp4",
+            "lm_head": "bfp8_lofi"
+          },
+          "layer_exceptions": {},
+          "compute_fidelities": {
+            "attention": "LoFi",
+            "mlp": "LoFi",
+            "down": "LoFi",
+            "lm_head": "LoFi"
+          },
+          "activation_dtype": "bfloat8_b",
+          "residual_dtype": "bfloat16",
+          "ccl_dtype": {
+            "prefill": "bfloat8_b",
+            "decode": "bfloat16"
+          },
+          "kv_cache_dtype": "bfloat8_b",
+          "logits_dtype": "bfloat16",
+          "sampling_dtype": "bfloat16",
+          "embedding_dtype": "bfloat16",
+          "norm_dtype": "bfloat16",
+          "max_seq_len": 262144
+        },
+        "semantic_anomalies": 3,
+        "trials": 3,
+        "mechanical_flags": [
+          true,
+          false,
+          false
+        ],
+        "median_decode_tok_s_user": 35.07081870972121,
+        "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-served/task48.onset.suffix512.json",
+        "coordinator_decision": "Accept fresh semantic review: unchanged repeated hypothesis cycles; additional malformed/text repetitions in some seeds. Positive short diagnostic reproduction, not native-prompt equivalence or precision causality."
+      },
+      "full": {
+        "precision": {
+          "config_id": "stage12_bf16_hifi4_diagnostic",
+          "weight_groups": {
+            "attention": "bf16",
+            "mlp": "bf16",
+            "down": "bf16",
+            "lm_head": "bf16"
+          },
+          "layer_exceptions": {},
+          "compute_fidelities": {
+            "attention": "HiFi4",
+            "mlp": "HiFi4",
+            "down": "HiFi4",
+            "lm_head": "HiFi4"
+          },
+          "activation_dtype": "bfloat16",
+          "residual_dtype": "bfloat16",
+          "ccl_dtype": {
+            "prefill": "bfloat16",
+            "decode": "bfloat16"
+          },
+          "kv_cache_dtype": "bfloat16",
+          "logits_dtype": "bfloat16",
+          "sampling_dtype": "bfloat16",
+          "embedding_dtype": "bfloat16",
+          "norm_dtype": "bfloat16",
+          "max_seq_len": 262144,
+          "sdpa_compute_fidelity": "HiFi4"
+        },
+        "semantic_anomalies": 3,
+        "trials": 3,
+        "mechanical_flags": [
+          true,
+          false,
+          true
+        ],
+        "median_decode_tok_s_user": 17.177615484341068,
+        "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-full/task48.onset.suffix512.json",
+        "coordinator_decision": "Accept fresh review: seeds42/44 repeated short phrase;43 repeats unchanged incompatible nomenclature and reaction checks. Three anomalous samples; diagnostic cap is not the cause. Short reconstruction only, no native equivalence or precision causality."
+      },
+      "chosen64_tf_comparison": {
+        "chosen": {
+          "tokens": 64,
+          "top1_agreement": 0.9375,
+          "served_sequence_log_probability": -89.13736813919934,
+          "full_sequence_log_probability": -92.5258308003796
+        }
+      },
+      "tf_limit": "Selected64 positions only; not whole-reply accuracy or exclusion of earlier drift."
+    },
+    "task110.onset.suffix512": {
+      "served": {
+        "precision": {
+          "config_id": "stage12_head_bfp8_lofi",
+          "weight_groups": {
+            "attention": "bfp4",
+            "mlp": "bfp4",
+            "down": "bfp4",
+            "lm_head": "bfp8_lofi"
+          },
+          "layer_exceptions": {},
+          "compute_fidelities": {
+            "attention": "LoFi",
+            "mlp": "LoFi",
+            "down": "LoFi",
+            "lm_head": "LoFi"
+          },
+          "activation_dtype": "bfloat8_b",
+          "residual_dtype": "bfloat16",
+          "ccl_dtype": {
+            "prefill": "bfloat8_b",
+            "decode": "bfloat16"
+          },
+          "kv_cache_dtype": "bfloat8_b",
+          "logits_dtype": "bfloat16",
+          "sampling_dtype": "bfloat16",
+          "embedding_dtype": "bfloat16",
+          "norm_dtype": "bfloat16",
+          "max_seq_len": 262144
+        },
+        "semantic_anomalies": 3,
+        "trials": 3,
+        "mechanical_flags": [
+          true,
+          false,
+          true
+        ],
+        "median_decode_tok_s_user": 35.0875453929828,
+        "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-served/task110.onset.suffix512.json",
+        "coordinator_decision": "Accept fresh review: unchanged C3/C6 enolate/attachment contradiction cycles in all three continuations, two mechanically flagged. Short reproduction, not native equivalence or precision cause."
+      },
+      "full": {
+        "precision": {
+          "config_id": "stage12_bf16_hifi4_diagnostic",
+          "weight_groups": {
+            "attention": "bf16",
+            "mlp": "bf16",
+            "down": "bf16",
+            "lm_head": "bf16"
+          },
+          "layer_exceptions": {},
+          "compute_fidelities": {
+            "attention": "HiFi4",
+            "mlp": "HiFi4",
+            "down": "HiFi4",
+            "lm_head": "HiFi4"
+          },
+          "activation_dtype": "bfloat16",
+          "residual_dtype": "bfloat16",
+          "ccl_dtype": {
+            "prefill": "bfloat16",
+            "decode": "bfloat16"
+          },
+          "kv_cache_dtype": "bfloat16",
+          "logits_dtype": "bfloat16",
+          "sampling_dtype": "bfloat16",
+          "embedding_dtype": "bfloat16",
+          "norm_dtype": "bfloat16",
+          "max_seq_len": 262144,
+          "sdpa_compute_fidelity": "HiFi4"
+        },
+        "semantic_anomalies": 3,
+        "trials": 3,
+        "mechanical_flags": [
+          true,
+          true,
+          true
+        ],
+        "median_decode_tok_s_user": 17.17393140428963,
+        "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-full/task110.onset.suffix512.json",
+        "coordinator_decision": "Accept3/3 semantic anomalies:42 repeated mapping then whitespace-tail collapse;43 fixed two-assertion cycle;44 repeated product claim. Seed43 boundary cutoff alone is not malformed; correction requested to reviewer auxiliary label. Short reproduction only, no native equivalence or precision causality."
+      },
+      "chosen64_tf_comparison": {
+        "chosen": {
+          "tokens": 64,
+          "top1_agreement": 0.96875,
+          "served_sequence_log_probability": -23.15814573917484,
+          "full_sequence_log_probability": -20.597894856566022
+        }
+      },
+      "tf_limit": "Selected64 positions only; not whole-reply accuracy or exclusion of earlier drift."
+    },
+    "task127.onset.suffix512": {
+      "served": {
+        "precision": {
+          "config_id": "stage12_head_bfp8_lofi",
+          "weight_groups": {
+            "attention": "bfp4",
+            "mlp": "bfp4",
+            "down": "bfp4",
+            "lm_head": "bfp8_lofi"
+          },
+          "layer_exceptions": {},
+          "compute_fidelities": {
+            "attention": "LoFi",
+            "mlp": "LoFi",
+            "down": "LoFi",
+            "lm_head": "LoFi"
+          },
+          "activation_dtype": "bfloat8_b",
+          "residual_dtype": "bfloat16",
+          "ccl_dtype": {
+            "prefill": "bfloat8_b",
+            "decode": "bfloat16"
+          },
+          "kv_cache_dtype": "bfloat8_b",
+          "logits_dtype": "bfloat16",
+          "sampling_dtype": "bfloat16",
+          "embedding_dtype": "bfloat16",
+          "norm_dtype": "bfloat16",
+          "max_seq_len": 262144
+        },
+        "semantic_anomalies": 3,
+        "trials": 3,
+        "mechanical_flags": [
+          false,
+          false,
+          false
+        ],
+        "median_decode_tok_s_user": 35.06834340078073,
+        "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-served/task127.onset.suffix512.json",
+        "coordinator_decision": "Accept fresh review: unchanged local sequence comparison/codon retranslation cycles in all three; seed43 malformed nucleotide excerpt separately observed. Short reproduction, not native equivalence or precision cause."
+      },
+      "full": {
+        "precision": {
+          "config_id": "stage12_bf16_hifi4_diagnostic",
+          "weight_groups": {
+            "attention": "bf16",
+            "mlp": "bf16",
+            "down": "bf16",
+            "lm_head": "bf16"
+          },
+          "layer_exceptions": {},
+          "compute_fidelities": {
+            "attention": "HiFi4",
+            "mlp": "HiFi4",
+            "down": "HiFi4",
+            "lm_head": "HiFi4"
+          },
+          "activation_dtype": "bfloat16",
+          "residual_dtype": "bfloat16",
+          "ccl_dtype": {
+            "prefill": "bfloat16",
+            "decode": "bfloat16"
+          },
+          "kv_cache_dtype": "bfloat16",
+          "logits_dtype": "bfloat16",
+          "sampling_dtype": "bfloat16",
+          "embedding_dtype": "bfloat16",
+          "norm_dtype": "bfloat16",
+          "max_seq_len": 262144,
+          "sdpa_compute_fidelity": "HiFi4"
+        },
+        "semantic_anomalies": 2,
+        "trials": 3,
+        "mechanical_flags": [
+          false,
+          false,
+          false
+        ],
+        "median_decode_tok_s_user": 17.172330018805507,
+        "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-full/task127.onset.suffix512.json",
+        "coordinator_decision": "Partial override after root reads full seed43:42 repeated local translation,44 unchanged comparison prompt repeat are anomalies.43 checks new other regions and beginning then rechecks earlier difference; insufficient sustained unchanged cycling before cutoff, retain inconclusive/progressing. Two of three reproduce, seed42 suitable for conditional HF. No native equivalence or precision causality."
+      },
+      "chosen64_tf_comparison": {
+        "chosen": {
+          "tokens": 64,
+          "top1_agreement": 0.8125,
+          "served_sequence_log_probability": -166.8838670805884,
+          "full_sequence_log_probability": -167.99865643470696
+        }
+      },
+      "tf_limit": "Selected64 positions only; not whole-reply accuracy or exclusion of earlier drift."
+    },
+    "task129.onset.suffix512": {
+      "served": {
+        "precision": {
+          "config_id": "stage12_head_bfp8_lofi",
+          "weight_groups": {
+            "attention": "bfp4",
+            "mlp": "bfp4",
+            "down": "bfp4",
+            "lm_head": "bfp8_lofi"
+          },
+          "layer_exceptions": {},
+          "compute_fidelities": {
+            "attention": "LoFi",
+            "mlp": "LoFi",
+            "down": "LoFi",
+            "lm_head": "LoFi"
+          },
+          "activation_dtype": "bfloat8_b",
+          "residual_dtype": "bfloat16",
+          "ccl_dtype": {
+            "prefill": "bfloat8_b",
+            "decode": "bfloat16"
+          },
+          "kv_cache_dtype": "bfloat8_b",
+          "logits_dtype": "bfloat16",
+          "sampling_dtype": "bfloat16",
+          "embedding_dtype": "bfloat16",
+          "norm_dtype": "bfloat16",
+          "max_seq_len": 262144
+        },
+        "semantic_anomalies": 3,
+        "trials": 3,
+        "mechanical_flags": [
+          false,
+          false,
+          false
+        ],
+        "median_decode_tok_s_user": 35.06517514311139,
+        "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-served/task129.onset.suffix512.json",
+        "coordinator_decision": "Accept fresh independent semantic review, all three continuations. Repeated wavelength/redshift threshold cycles; root also inspected seed43 repeated block. Short reproduction only; not native equivalence or precision causality."
+      },
+      "full": {
+        "precision": {
+          "config_id": "stage12_bf16_hifi4_diagnostic",
+          "weight_groups": {
+            "attention": "bf16",
+            "mlp": "bf16",
+            "down": "bf16",
+            "lm_head": "bf16"
+          },
+          "layer_exceptions": {},
+          "compute_fidelities": {
+            "attention": "HiFi4",
+            "mlp": "HiFi4",
+            "down": "HiFi4",
+            "lm_head": "HiFi4"
+          },
+          "activation_dtype": "bfloat16",
+          "residual_dtype": "bfloat16",
+          "ccl_dtype": {
+            "prefill": "bfloat16",
+            "decode": "bfloat16"
+          },
+          "kv_cache_dtype": "bfloat16",
+          "logits_dtype": "bfloat16",
+          "sampling_dtype": "bfloat16",
+          "embedding_dtype": "bfloat16",
+          "norm_dtype": "bfloat16",
+          "max_seq_len": 262144,
+          "sdpa_compute_fidelity": "HiFi4"
+        },
+        "semantic_anomalies": 3,
+        "trials": 3,
+        "mechanical_flags": [
+          false,
+          false,
+          false
+        ],
+        "median_decode_tok_s_user": 17.17477131760868,
+        "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-full/task129.onset.suffix512.json",
+        "coordinator_decision": "Accept fresh3/3 review: after initial distinct wavelength calculations, repeated unchanged threshold rationale/candidate sequence occurs multiple times in each. No malformed text; semantic repetition remains anomalous despite false detector flags. Short reproduction only, no native equivalence or precision causality."
+      },
+      "chosen64_tf_comparison": {
+        "chosen": {
+          "tokens": 64,
+          "top1_agreement": 0.953125,
+          "served_sequence_log_probability": -52.567274265593284,
+          "full_sequence_log_probability": -56.39015626019247
+        }
+      },
+      "tf_limit": "Selected64 positions only; not whole-reply accuracy or exclusion of earlier drift."
+    },
+    "task130.onset.suffix512": {
+      "served": {
+        "precision": {
+          "config_id": "stage12_head_bfp8_lofi",
+          "weight_groups": {
+            "attention": "bfp4",
+            "mlp": "bfp4",
+            "down": "bfp4",
+            "lm_head": "bfp8_lofi"
+          },
+          "layer_exceptions": {},
+          "compute_fidelities": {
+            "attention": "LoFi",
+            "mlp": "LoFi",
+            "down": "LoFi",
+            "lm_head": "LoFi"
+          },
+          "activation_dtype": "bfloat8_b",
+          "residual_dtype": "bfloat16",
+          "ccl_dtype": {
+            "prefill": "bfloat8_b",
+            "decode": "bfloat16"
+          },
+          "kv_cache_dtype": "bfloat8_b",
+          "logits_dtype": "bfloat16",
+          "sampling_dtype": "bfloat16",
+          "embedding_dtype": "bfloat16",
+          "norm_dtype": "bfloat16",
+          "max_seq_len": 262144
+        },
+        "semantic_anomalies": 3,
+        "trials": 3,
+        "mechanical_flags": [
+          false,
+          true,
+          false
+        ],
+        "median_decode_tok_s_user": 35.08477486681492,
+        "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-served/task130.onset.suffix512.json",
+        "coordinator_decision": "Accept fresh independent semantic review, all three continuations. Repeated unresolved NMR integration and symmetry assignment cycles. Short reproduction only; not native equivalence or precision causality."
+      },
+      "full": {
+        "precision": {
+          "config_id": "stage12_bf16_hifi4_diagnostic",
+          "weight_groups": {
+            "attention": "bf16",
+            "mlp": "bf16",
+            "down": "bf16",
+            "lm_head": "bf16"
+          },
+          "layer_exceptions": {},
+          "compute_fidelities": {
+            "attention": "HiFi4",
+            "mlp": "HiFi4",
+            "down": "HiFi4",
+            "lm_head": "HiFi4"
+          },
+          "activation_dtype": "bfloat16",
+          "residual_dtype": "bfloat16",
+          "ccl_dtype": {
+            "prefill": "bfloat16",
+            "decode": "bfloat16"
+          },
+          "kv_cache_dtype": "bfloat16",
+          "logits_dtype": "bfloat16",
+          "sampling_dtype": "bfloat16",
+          "embedding_dtype": "bfloat16",
+          "norm_dtype": "bfloat16",
+          "max_seq_len": 262144,
+          "sdpa_compute_fidelity": "HiFi4"
+        },
+        "semantic_anomalies": 3,
+        "trials": 3,
+        "mechanical_flags": [
+          true,
+          true,
+          true
+        ],
+        "median_decode_tok_s_user": 17.175764459501213,
+        "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-full/task130.onset.suffix512.json",
+        "coordinator_decision": "Accept3/3 fresh review: each repeatedly alternates same symmetry premise and proton-integration contradiction without new check; all detector flags true independently. Cutoffs not malformed. Short reproduction only, not native equivalence or precision causality."
+      },
+      "chosen64_tf_comparison": {
+        "chosen": {
+          "tokens": 64,
+          "top1_agreement": 0.875,
+          "served_sequence_log_probability": -84.98881609435279,
+          "full_sequence_log_probability": -79.07452613306293
+        }
+      },
+      "tf_limit": "Selected64 positions only; not whole-reply accuracy or exclusion of earlier drift."
+    },
+    "task139.onset.suffix512": {
+      "served": {
+        "precision": {
+          "config_id": "stage12_head_bfp8_lofi",
+          "weight_groups": {
+            "attention": "bfp4",
+            "mlp": "bfp4",
+            "down": "bfp4",
+            "lm_head": "bfp8_lofi"
+          },
+          "layer_exceptions": {},
+          "compute_fidelities": {
+            "attention": "LoFi",
+            "mlp": "LoFi",
+            "down": "LoFi",
+            "lm_head": "LoFi"
+          },
+          "activation_dtype": "bfloat8_b",
+          "residual_dtype": "bfloat16",
+          "ccl_dtype": {
+            "prefill": "bfloat8_b",
+            "decode": "bfloat16"
+          },
+          "kv_cache_dtype": "bfloat8_b",
+          "logits_dtype": "bfloat16",
+          "sampling_dtype": "bfloat16",
+          "embedding_dtype": "bfloat16",
+          "norm_dtype": "bfloat16",
+          "max_seq_len": 262144
+        },
+        "semantic_anomalies": 3,
+        "trials": 3,
+        "mechanical_flags": [
+          true,
+          false,
+          false
+        ],
+        "median_decode_tok_s_user": 35.06407314345215,
+        "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-served/task139.onset.suffix512.json",
+        "coordinator_decision": "Accept fresh independent semantic review, all three continuations. Repeated borohydride analog and isotope-use cycles; doubled slash distinct from a normal diagnostic cutoff. Short reproduction only; not native equivalence or precision causality."
+      },
+      "full": {
+        "precision": {
+          "config_id": "stage12_bf16_hifi4_diagnostic",
+          "weight_groups": {
+            "attention": "bf16",
+            "mlp": "bf16",
+            "down": "bf16",
+            "lm_head": "bf16"
+          },
+          "layer_exceptions": {},
+          "compute_fidelities": {
+            "attention": "HiFi4",
+            "mlp": "HiFi4",
+            "down": "HiFi4",
+            "lm_head": "HiFi4"
+          },
+          "activation_dtype": "bfloat16",
+          "residual_dtype": "bfloat16",
+          "ccl_dtype": {
+            "prefill": "bfloat16",
+            "decode": "bfloat16"
+          },
+          "kv_cache_dtype": "bfloat16",
+          "logits_dtype": "bfloat16",
+          "sampling_dtype": "bfloat16",
+          "embedding_dtype": "bfloat16",
+          "norm_dtype": "bfloat16",
+          "max_seq_len": 262144,
+          "sdpa_compute_fidelity": "HiFi4"
+        },
+        "semantic_anomalies": 3,
+        "trials": 3,
+        "mechanical_flags": [
+          false,
+          false,
+          false
+        ],
+        "median_decode_tok_s_user": 17.171135368823222,
+        "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-full/task139.onset.suffix512.json",
+        "coordinator_decision": "Accept3/3 fresh review:42/43 unchanged analogy/isotope claim cycles;44 first checks alternatives then repeats same full candidate/product/analogy sequence. No malformed text; cutoff excluded. Short reproduction only, not native equivalence or precision causality."
+      },
+      "chosen64_tf_comparison": {
+        "chosen": {
+          "tokens": 64,
+          "top1_agreement": 0.875,
+          "served_sequence_log_probability": -96.53071224128564,
+          "full_sequence_log_probability": -83.67983485666491
+        }
+      },
+      "tf_limit": "Selected64 positions only; not whole-reply accuracy or exclusion of earlier drift."
+    },
+    "task145.onset.suffix512": {
+      "served": {
+        "precision": {
+          "config_id": "stage12_head_bfp8_lofi",
+          "weight_groups": {
+            "attention": "bfp4",
+            "mlp": "bfp4",
+            "down": "bfp4",
+            "lm_head": "bfp8_lofi"
+          },
+          "layer_exceptions": {},
+          "compute_fidelities": {
+            "attention": "LoFi",
+            "mlp": "LoFi",
+            "down": "LoFi",
+            "lm_head": "LoFi"
+          },
+          "activation_dtype": "bfloat8_b",
+          "residual_dtype": "bfloat16",
+          "ccl_dtype": {
+            "prefill": "bfloat8_b",
+            "decode": "bfloat16"
+          },
+          "kv_cache_dtype": "bfloat8_b",
+          "logits_dtype": "bfloat16",
+          "sampling_dtype": "bfloat16",
+          "embedding_dtype": "bfloat16",
+          "norm_dtype": "bfloat16",
+          "max_seq_len": 262144
+        },
+        "semantic_anomalies": 3,
+        "trials": 3,
+        "mechanical_flags": [
+          true,
+          false,
+          true
+        ],
+        "median_decode_tok_s_user": 35.0694430827618,
+        "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-served/task145.onset.suffix512.json",
+        "coordinator_decision": "Accept fresh review: seeds42/43 repeat unchanged stereochemical orientation checks; seed44 instead degenerates into repeated isolated letters. All three anomalous; only first two match specific original semantic cycle. Short diagnostic, not native equivalence or precision causality."
+      },
+      "full": {
+        "precision": {
+          "config_id": "stage12_bf16_hifi4_diagnostic",
+          "weight_groups": {
+            "attention": "bf16",
+            "mlp": "bf16",
+            "down": "bf16",
+            "lm_head": "bf16"
+          },
+          "layer_exceptions": {},
+          "compute_fidelities": {
+            "attention": "HiFi4",
+            "mlp": "HiFi4",
+            "down": "HiFi4",
+            "lm_head": "HiFi4"
+          },
+          "activation_dtype": "bfloat16",
+          "residual_dtype": "bfloat16",
+          "ccl_dtype": {
+            "prefill": "bfloat16",
+            "decode": "bfloat16"
+          },
+          "kv_cache_dtype": "bfloat16",
+          "logits_dtype": "bfloat16",
+          "sampling_dtype": "bfloat16",
+          "embedding_dtype": "bfloat16",
+          "norm_dtype": "bfloat16",
+          "max_seq_len": 262144,
+          "sdpa_compute_fidelity": "HiFi4"
+        },
+        "semantic_anomalies": 3,
+        "trials": 3,
+        "mechanical_flags": [
+          true,
+          true,
+          false
+        ],
+        "median_decode_tok_s_user": 17.174538240906834,
+        "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-full/task145.onset.suffix512.json",
+        "coordinator_decision": "Accept3/3 fresh review:42 isolated-letter collapse;43 malformed repeated self-correction;44 six unchanged orientation/reverification blocks. Only44 directly matches original substantive semantic cycle; all three anomalous. Cutoffs excluded; short reconstruction only, not native equivalence or precision causality."
+      },
+      "chosen64_tf_comparison": {
+        "chosen": {
+          "tokens": 64,
+          "top1_agreement": 0.875,
+          "served_sequence_log_probability": -77.91964299718484,
+          "full_sequence_log_probability": -82.04013594966591
+        }
+      },
+      "tf_limit": "Selected64 positions only; not whole-reply accuracy or exclusion of earlier drift."
+    },
+    "task147.onset.suffix512": {
+      "served": {
+        "precision": {
+          "config_id": "stage12_head_bfp8_lofi",
+          "weight_groups": {
+            "attention": "bfp4",
+            "mlp": "bfp4",
+            "down": "bfp4",
+            "lm_head": "bfp8_lofi"
+          },
+          "layer_exceptions": {},
+          "compute_fidelities": {
+            "attention": "LoFi",
+            "mlp": "LoFi",
+            "down": "LoFi",
+            "lm_head": "LoFi"
+          },
+          "activation_dtype": "bfloat8_b",
+          "residual_dtype": "bfloat16",
+          "ccl_dtype": {
+            "prefill": "bfloat8_b",
+            "decode": "bfloat16"
+          },
+          "kv_cache_dtype": "bfloat8_b",
+          "logits_dtype": "bfloat16",
+          "sampling_dtype": "bfloat16",
+          "embedding_dtype": "bfloat16",
+          "norm_dtype": "bfloat16",
+          "max_seq_len": 262144
+        },
+        "semantic_anomalies": 2,
+        "trials": 3,
+        "mechanical_flags": [
+          false,
+          true,
+          false
+        ],
+        "median_decode_tok_s_user": 35.07316842089782,
+        "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-served/task147.onset.suffix512.json",
+        "coordinator_decision": "Partial override after reading full seed42/44 texts:42 explores distinct W/Mo/Re/Os candidates and new fraction calculations; not enough evidence of sustained unchanged loop, retain as progressing/inconclusive.43 has repeated unchanged boilerplate.44 has a stray Korean word embedded in English chemistry; anomaly, but Ru-to-Mo candidate progress does not independently prove semantic loop. Two of three reproduce an anomaly."
+      },
+      "full": {
+        "precision": {
+          "config_id": "stage12_bf16_hifi4_diagnostic",
+          "weight_groups": {
+            "attention": "bf16",
+            "mlp": "bf16",
+            "down": "bf16",
+            "lm_head": "bf16"
+          },
+          "layer_exceptions": {},
+          "compute_fidelities": {
+            "attention": "HiFi4",
+            "mlp": "HiFi4",
+            "down": "HiFi4",
+            "lm_head": "HiFi4"
+          },
+          "activation_dtype": "bfloat16",
+          "residual_dtype": "bfloat16",
+          "ccl_dtype": {
+            "prefill": "bfloat16",
+            "decode": "bfloat16"
+          },
+          "kv_cache_dtype": "bfloat16",
+          "logits_dtype": "bfloat16",
+          "sampling_dtype": "bfloat16",
+          "embedding_dtype": "bfloat16",
+          "norm_dtype": "bfloat16",
+          "max_seq_len": 262144,
+          "sdpa_compute_fidelity": "HiFi4"
+        },
+        "semantic_anomalies": 3,
+        "trials": 3,
+        "mechanical_flags": [
+          false,
+          false,
+          false
+        ],
+        "median_decode_tok_s_user": 17.172712441687008,
+        "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-full/task147.onset.suffix512.json",
+        "coordinator_decision": "Accept3/3 fresh review and root complete-text inspection:42 repeats unchanged candidate/clue sentence,43 alternates same element-class questions without checks,44 repeats generic fraction equation without testing candidates. Spelling/spacing defects are auxiliary, sustained repetition decisive. Short reconstruction only, no native equivalence or precision causality."
+      },
+      "chosen64_tf_comparison": {
+        "chosen": {
+          "tokens": 64,
+          "top1_agreement": 0.90625,
+          "served_sequence_log_probability": -112.03028366440742,
+          "full_sequence_log_probability": -98.62573920489052
+        }
+      },
+      "tf_limit": "Selected64 positions only; not whole-reply accuracy or exclusion of earlier drift."
+    }
+  },
+  "summary": {
+    "served_anomalous": 26,
+    "full_anomalous": 26,
+    "trials_each": 27,
+    "all_nine_cases_reproduce": true,
+    "caution": "Equal counts use different inconclusive samples; not evidence of equal incidence. No precision change selected pending pinnedHFcontrols."
+  }
+}

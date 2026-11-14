@@ -1,0 +1,481 @@
+{
+  "precision": "stage12_head_bfp8_lofi",
+  "status": "served_complete_all_nine_cases_reviewed",
+  "cases": {
+    "task30.onset.suffix512": {
+      "task": "30",
+      "semantic_anomalies": 3,
+      "trials": 3,
+      "seeds": [
+        42,
+        43,
+        44
+      ],
+      "mechanical_flags": [
+        false,
+        false,
+        false
+      ],
+      "coordinator_decision": "Accept fresh semantic review: unchanged repeated hypothesis cycles; additional malformed/text repetitions in some seeds. Positive short diagnostic reproduction, not native-prompt equivalence or precision causality.",
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-served/task30.onset.suffix512.semantic-triage.json",
+      "actual_precision": {
+        "config_id": "stage12_head_bfp8_lofi",
+        "weight_groups": {
+          "attention": "bfp4",
+          "mlp": "bfp4",
+          "down": "bfp4",
+          "lm_head": "bfp8_lofi"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "LoFi",
+          "mlp": "LoFi",
+          "down": "LoFi",
+          "lm_head": "LoFi"
+        },
+        "activation_dtype": "bfloat8_b",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat8_b",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat8_b",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144
+      },
+      "diagnostic_decode_tps": [
+        35.077925091204925,
+        35.066759242224094,
+        35.08743474287404
+      ],
+      "rate_basis": "Traced token-out diagnostic only, not vLLM serving or headline target.",
+      "recorded_unix": 1794662213.4792316
+    },
+    "task48.onset.suffix512": {
+      "task": "48",
+      "semantic_anomalies": 3,
+      "trials": 3,
+      "seeds": [
+        42,
+        43,
+        44
+      ],
+      "mechanical_flags": [
+        true,
+        false,
+        false
+      ],
+      "coordinator_decision": "Accept fresh semantic review: unchanged repeated hypothesis cycles; additional malformed/text repetitions in some seeds. Positive short diagnostic reproduction, not native-prompt equivalence or precision causality.",
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-served/task48.onset.suffix512.semantic-triage.json",
+      "actual_precision": {
+        "config_id": "stage12_head_bfp8_lofi",
+        "weight_groups": {
+          "attention": "bfp4",
+          "mlp": "bfp4",
+          "down": "bfp4",
+          "lm_head": "bfp8_lofi"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "LoFi",
+          "mlp": "LoFi",
+          "down": "LoFi",
+          "lm_head": "LoFi"
+        },
+        "activation_dtype": "bfloat8_b",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat8_b",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat8_b",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144
+      },
+      "diagnostic_decode_tps": [
+        35.05637097516933,
+        35.07081870972121,
+        35.082780046455014
+      ],
+      "rate_basis": "Traced token-out diagnostic only, not vLLM serving or headline target.",
+      "recorded_unix": 1794662213.4796176
+    },
+    "task110.onset.suffix512": {
+      "task": "110",
+      "semantic_anomalies": 3,
+      "trials": 3,
+      "seeds": [
+        42,
+        43,
+        44
+      ],
+      "mechanical_flags": [
+        true,
+        false,
+        true
+      ],
+      "coordinator_decision": "Accept fresh review: unchanged C3/C6 enolate/attachment contradiction cycles in all three continuations, two mechanically flagged. Short reproduction, not native equivalence or precision cause.",
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-served/task110.onset.suffix512.semantic-triage.json",
+      "actual_precision": {
+        "config_id": "stage12_head_bfp8_lofi",
+        "weight_groups": {
+          "attention": "bfp4",
+          "mlp": "bfp4",
+          "down": "bfp4",
+          "lm_head": "bfp8_lofi"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "LoFi",
+          "mlp": "LoFi",
+          "down": "LoFi",
+          "lm_head": "LoFi"
+        },
+        "activation_dtype": "bfloat8_b",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat8_b",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat8_b",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144
+      },
+      "diagnostic_decode_tps": [
+        35.08778041666044,
+        35.0605053474496,
+        35.0875453929828
+      ],
+      "rate_basis": "Traced token-out diagnostic, not vLLM headline",
+      "recorded_unix": 1794662314.6684134
+    },
+    "task127.onset.suffix512": {
+      "task": "127",
+      "semantic_anomalies": 3,
+      "trials": 3,
+      "seeds": [
+        42,
+        43,
+        44
+      ],
+      "mechanical_flags": [
+        false,
+        false,
+        false
+      ],
+      "coordinator_decision": "Accept fresh review: unchanged local sequence comparison/codon retranslation cycles in all three; seed43 malformed nucleotide excerpt separately observed. Short reproduction, not native equivalence or precision cause.",
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-served/task127.onset.suffix512.semantic-triage.json",
+      "actual_precision": {
+        "config_id": "stage12_head_bfp8_lofi",
+        "weight_groups": {
+          "attention": "bfp4",
+          "mlp": "bfp4",
+          "down": "bfp4",
+          "lm_head": "bfp8_lofi"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "LoFi",
+          "mlp": "LoFi",
+          "down": "LoFi",
+          "lm_head": "LoFi"
+        },
+        "activation_dtype": "bfloat8_b",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat8_b",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat8_b",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144
+      },
+      "diagnostic_decode_tps": [
+        35.06834340078073,
+        35.07104656326931,
+        35.01620231398807
+      ],
+      "rate_basis": "Traced token-out diagnostic, not vLLM headline",
+      "recorded_unix": 1794662381.4097683
+    },
+    "task129.onset.suffix512": {
+      "task": "129",
+      "semantic_anomalies": 3,
+      "trials": 3,
+      "seeds": [
+        42,
+        43,
+        44
+      ],
+      "mechanical_flags": [
+        false,
+        false,
+        false
+      ],
+      "coordinator_decision": "Accept fresh independent semantic review, all three continuations. Repeated wavelength/redshift threshold cycles; root also inspected seed43 repeated block. Short reproduction only; not native equivalence or precision causality.",
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-served/task129.onset.suffix512.semantic-triage.json",
+      "actual_precision": {
+        "config_id": "stage12_head_bfp8_lofi",
+        "weight_groups": {
+          "attention": "bfp4",
+          "mlp": "bfp4",
+          "down": "bfp4",
+          "lm_head": "bfp8_lofi"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "LoFi",
+          "mlp": "LoFi",
+          "down": "LoFi",
+          "lm_head": "LoFi"
+        },
+        "activation_dtype": "bfloat8_b",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat8_b",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat8_b",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144
+      },
+      "diagnostic_decode_tps": [
+        35.06593549555517,
+        35.06517514311139,
+        35.06344421052806
+      ],
+      "rate_basis": "Traced token-out diagnostic, not vLLM headline",
+      "recorded_unix": 1794662712.3400493
+    },
+    "task130.onset.suffix512": {
+      "task": "130",
+      "semantic_anomalies": 3,
+      "trials": 3,
+      "seeds": [
+        42,
+        43,
+        44
+      ],
+      "mechanical_flags": [
+        false,
+        true,
+        false
+      ],
+      "coordinator_decision": "Accept fresh independent semantic review, all three continuations. Repeated unresolved NMR integration and symmetry assignment cycles. Short reproduction only; not native equivalence or precision causality.",
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-served/task130.onset.suffix512.semantic-triage.json",
+      "actual_precision": {
+        "config_id": "stage12_head_bfp8_lofi",
+        "weight_groups": {
+          "attention": "bfp4",
+          "mlp": "bfp4",
+          "down": "bfp4",
+          "lm_head": "bfp8_lofi"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "LoFi",
+          "mlp": "LoFi",
+          "down": "LoFi",
+          "lm_head": "LoFi"
+        },
+        "activation_dtype": "bfloat8_b",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat8_b",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat8_b",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144
+      },
+      "diagnostic_decode_tps": [
+        35.085845612381895,
+        35.05852126593659,
+        35.08477486681492
+      ],
+      "rate_basis": "Traced token-out diagnostic, not vLLM headline",
+      "recorded_unix": 1794662712.340414
+    },
+    "task139.onset.suffix512": {
+      "task": "139",
+      "semantic_anomalies": 3,
+      "trials": 3,
+      "seeds": [
+        42,
+        43,
+        44
+      ],
+      "mechanical_flags": [
+        true,
+        false,
+        false
+      ],
+      "coordinator_decision": "Accept fresh independent semantic review, all three continuations. Repeated borohydride analog and isotope-use cycles; doubled slash distinct from a normal diagnostic cutoff. Short reproduction only; not native equivalence or precision causality.",
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-served/task139.onset.suffix512.semantic-triage.json",
+      "actual_precision": {
+        "config_id": "stage12_head_bfp8_lofi",
+        "weight_groups": {
+          "attention": "bfp4",
+          "mlp": "bfp4",
+          "down": "bfp4",
+          "lm_head": "bfp8_lofi"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "LoFi",
+          "mlp": "LoFi",
+          "down": "LoFi",
+          "lm_head": "LoFi"
+        },
+        "activation_dtype": "bfloat8_b",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat8_b",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat8_b",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144
+      },
+      "diagnostic_decode_tps": [
+        35.06945050408264,
+        35.06407314345215,
+        35.05195236322051
+      ],
+      "rate_basis": "Traced token-out diagnostic, not vLLM headline",
+      "recorded_unix": 1794662712.3407216
+    },
+    "task145.onset.suffix512": {
+      "task": "145",
+      "semantic_anomalies": 3,
+      "trials": 3,
+      "seeds": [
+        42,
+        43,
+        44
+      ],
+      "mechanical_flags": [
+        true,
+        false,
+        true
+      ],
+      "coordinator_decision": "Accept fresh review: seeds42/43 repeat unchanged stereochemical orientation checks; seed44 instead degenerates into repeated isolated letters. All three anomalous; only first two match specific original semantic cycle. Short diagnostic, not native equivalence or precision causality.",
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-served/task145.onset.suffix512.semantic-triage.json",
+      "actual_precision": {
+        "config_id": "stage12_head_bfp8_lofi",
+        "weight_groups": {
+          "attention": "bfp4",
+          "mlp": "bfp4",
+          "down": "bfp4",
+          "lm_head": "bfp8_lofi"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "LoFi",
+          "mlp": "LoFi",
+          "down": "LoFi",
+          "lm_head": "LoFi"
+        },
+        "activation_dtype": "bfloat8_b",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat8_b",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat8_b",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144
+      },
+      "diagnostic_decode_tps": [
+        35.07030807364976,
+        35.06592899281126,
+        35.0694430827618
+      ],
+      "rate_basis": "Traced token-out diagnostic, not vLLM headline",
+      "recorded_unix": 1794662788.0224903
+    },
+    "task147.onset.suffix512": {
+      "task": "147",
+      "semantic_anomalies": 2,
+      "trials": 3,
+      "seeds": [
+        42,
+        43,
+        44
+      ],
+      "mechanical_flags": [
+        false,
+        true,
+        false
+      ],
+      "coordinator_decision": "Partial override after reading full seed42/44 texts:42 explores distinct W/Mo/Re/Os candidates and new fraction calculations; not enough evidence of sustained unchanged loop, retain as progressing/inconclusive.43 has repeated unchanged boilerplate.44 has a stray Korean word embedded in English chemistry; anomaly, but Ru-to-Mo candidate progress does not independently prove semantic loop. Two of three reproduce an anomaly.",
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-served/task147.onset.suffix512.semantic-triage.json",
+      "actual_precision": {
+        "config_id": "stage12_head_bfp8_lofi",
+        "weight_groups": {
+          "attention": "bfp4",
+          "mlp": "bfp4",
+          "down": "bfp4",
+          "lm_head": "bfp8_lofi"
+        },
+        "layer_exceptions": {},
+        "compute_fidelities": {
+          "attention": "LoFi",
+          "mlp": "LoFi",
+          "down": "LoFi",
+          "lm_head": "LoFi"
+        },
+        "activation_dtype": "bfloat8_b",
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": {
+          "prefill": "bfloat8_b",
+          "decode": "bfloat16"
+        },
+        "kv_cache_dtype": "bfloat8_b",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "max_seq_len": 262144
+      },
+      "diagnostic_decode_tps": [
+        35.067765627148404,
+        35.080006609572166,
+        35.07316842089782
+      ],
+      "rate_basis": "Traced token-out diagnostic, not vLLM headline",
+      "recorded_unix": 1794662825.1318681,
+      "per_seed_coordinator": {
+        "42": "progressing_or_inconclusive",
+        "43": "repeated_text_anomaly",
+        "44": "stray_language_token_anomaly"
+      }
+    }
+  },
+  "total_anomalous_samples": 26,
+  "total_samples": 27
+}

@@ -1,0 +1,25 @@
+{
+  "command": [
+    "timeout",
+    "3600",
+    "env",
+    "PYTHONPATH=/home/mvasiljevic/tt-metal-gemma4-31b-pipeline:/home/mvasiljevic/v5-agentic/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.27/runtime",
+    "READINESS_TRACE_REGION_SIZE=134217728",
+    "/home/mvasiljevic/tt-metal-gemma4-31b-pipeline/python_env/bin/python",
+    "models/autoports/google_gemma_4_31b_it/tools/precision_repro_batch.py",
+    "--cases",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first_wave_cases.json",
+    "--build-kwargs-file",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/setup/head_bfp8_build_kwargs.json",
+    "--output-dir",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/first-wave-served"
+  ],
+  "started_unix": 1794661702.5439765,
+  "phase": "served",
+  "timeout_seconds": 3600,
+  "owner_check": [],
+  "environment_rule": "TT_VISIBLE_DEVICES/profiler/watcher variables removed; no reset",
+  "head": "30d59bb033bd09472618ea32be3d9b36f46dfefe",
+  "ended_unix": 1794662669.2267013,
+  "exit_code": 0
+}
