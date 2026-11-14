@@ -12,7 +12,6 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
-#include <mutex>
 #include <utility>
 #include <vector>
 
@@ -30,15 +29,17 @@ public:
     // The referenced MetalEnvImpl and MetalContext must outlive this SystemMemoryManager.
     SystemMemoryManager(MetalEnvImpl& env, MetalContext& ctx, ChipId device_id, uint8_t num_hw_cqs);
 
-    uint32_t get_next_event(uint8_t cq_id);
+    // Per CQ, the last event issued to and completed by this device; the mesh command queue allocates the IDs.
+    void set_last_issued_event(uint8_t cq_id, uint32_t event_id);
 
-    uint32_t get_last_event(uint8_t cq_id);
+    uint32_t get_last_issued_event(uint8_t cq_id) const;
 
     void set_last_completed_event(uint8_t cq_id, uint32_t event_id);
 
-    uint32_t get_last_completed_event(uint8_t cq_id);
+    uint32_t get_last_completed_event(uint8_t cq_id) const;
 
-    uint32_t get_current_event(uint8_t cq_id);
+    // Sets both counters, skipping the ordering check in set_last_completed_event. The CQ must be idle.
+    void reset_events(uint8_t cq_id, uint32_t event_id);
 
     void reset(uint8_t cq_id);
 
@@ -91,10 +92,6 @@ public:
 
     void fetch_queue_write(uint32_t command_size_B, uint8_t cq_id, bool stall_prefetcher = false);
 
-    // Both CQs on the device must be idle when this is called.
-    void set_current_and_last_completed_event(
-        uint8_t cq_id, uint32_t current_event_id, uint32_t last_completed_event_id);
-
     bool is_dram_backed() const { return is_dram_backed_; }
 
     uint32_t get_dram_region_base_addr() const;
@@ -121,9 +118,11 @@ private:
     std::vector<SystemMemoryCQInterface> cq_interfaces;
     uint32_t cq_size = 0;
     uint32_t channel_offset = 0;
-    std::vector<uint32_t> cq_to_event;
-    std::vector<uint32_t> cq_to_last_completed_event;
-    mutable std::vector<std::mutex> cq_to_event_locks;
+    struct CqEventProgress {
+        std::atomic<uint32_t> last_issued{0};
+        std::atomic<uint32_t> last_completed{0};
+    };
+    std::unique_ptr<CqEventProgress[]> cq_events_;
     std::vector<tt_cxy_pair> prefetcher_cores;
     std::vector<std::unique_ptr<tt::umd::IoWindow>> prefetch_q_windows;
     std::vector<std::unique_ptr<tt::umd::IoWindow>> completion_q_windows;
