@@ -8,6 +8,7 @@ Fast post-commit tests for SDPA decode with a representative subset of parametri
 
 import random
 
+import math
 import torch
 import numpy as np
 import pytest
@@ -547,3 +548,36 @@ def test_sdpa_decode_broadcast_mask_batch(device, b, nh, nkv, s, d, dtype, grid_
         grid_size=grid_size,
         mask_dtype=mask_dtype,
     )
+
+
+def test_sdpa_decode_default_scale_unaligned_head_dim(device):
+    torch.manual_seed(0)
+    b, nh, nkv, s, d, cur_pos = 1, 8, 1, 256, 80, 200
+    Q = torch.randn(1, b, nh, d) * 2
+    K = torch.randn(b, nkv, s, d) * 2
+    V = torch.randn(b, nkv, s, d)
+    K_slice = K[:, :, : cur_pos + 1].repeat_interleave(nh // nkv, dim=1)
+    V_slice = V[:, :, : cur_pos + 1].repeat_interleave(nh // nkv, dim=1)
+    expected = torch.nn.functional.scaled_dot_product_attention(Q.permute(1, 2, 0, 3), K_slice, V_slice)
+    expected = expected.permute(2, 0, 1, 3)
+
+    to_tt = lambda x: ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=(8, 8), q_chunk_size=32, k_chunk_size=64, exp_approx_mode=False
+    )
+    tt_out = ttnn.transformer.scaled_dot_product_attention_decode(
+        to_tt(Q), to_tt(K), to_tt(V), cur_pos=[cur_pos] * b, is_causal=True, program_config=program_config
+    )
+    actual = ttnn.to_torch(tt_out)[:, :, :nh, :d]
+    tt_out_explicit = ttnn.transformer.scaled_dot_product_attention_decode(
+        to_tt(Q),
+        to_tt(K),
+        to_tt(V),
+        cur_pos=[cur_pos] * b,
+        is_causal=True,
+        scale=1 / math.sqrt(d),
+        program_config=program_config,
+    )
+
+    assert torch.equal(actual, ttnn.to_torch(tt_out_explicit)[:, :, :nh, :d])
+    assert_with_pcc(expected, actual, 0.999)
