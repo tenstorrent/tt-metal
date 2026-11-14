@@ -4060,6 +4060,12 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         # Do initial prefill
         prefill_len = len(prompt_tokens)
         total_len = prefill_len + max_gen_len  # Prepares mask for full length of output
+        max_seq_len = self.model[0].configuration.max_seq_len
+        if total_len > max_seq_len:
+            raise ValueError(
+                f"Prompt length {prefill_len} + max_gen_len {max_gen_len} = {total_len} exceeds max_seq_len "
+                f"{max_seq_len}; decode positions would run past the KV cache and rope table."
+            )
 
         prompt_tokens_tensor = torch.tensor(prompt_tokens, dtype=torch.long).reshape(1, -1)  # B, S
         # Suboptimal to allocate caches every time
@@ -4138,6 +4144,19 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 text=text,
             )
 
+    def _cap_max_gen_len(self, max_gen_len, prompt_len):
+        """Cap max_gen_len so prompt_len + max_gen_len fits max_seq_len; raise if the prompt alone does not leave room."""
+        max_seq_len = self.model[0].configuration.max_seq_len
+        room = max_seq_len - prompt_len
+        if room <= 0:
+            raise ValueError(f"Prompt length {prompt_len} leaves no room to generate within max_seq_len {max_seq_len}")
+        if max_gen_len > room:
+            logger.warning(
+                f"Capping max_gen_len {max_gen_len} to {room} (prompt {prompt_len}, max_seq_len {max_seq_len})"
+            )
+            max_gen_len = room
+        return max_gen_len
+
     def chat_completion(
         self,
         messages,
@@ -4155,6 +4174,8 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         vision_mask = None
         if vision_images is not None:
             vision_mask = create_vision_mask(model_input["input_ids"][0], encoder.image_token_id) or None
+
+        max_gen_len = self._cap_max_gen_len(max_gen_len, len(model_input["input_ids"][0]))
 
         tokens = []
 
@@ -4201,6 +4222,8 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         vision_mask = None
         if vision_images is not None:
             vision_mask = create_vision_mask(model_input["input_ids"][0], self.processor.image_token_id) or None
+
+        max_gen_len = self._cap_max_gen_len(max_gen_len, len(model_input["input_ids"]))
 
         tokens = []
 
@@ -4256,6 +4279,11 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             # Scheduler rows can retain a previous request's block IDs beyond
             # the current prompt. Padded prefill tokens must not write them.
             owned_blocks = num_blocks_in_seq(prefill_len, block_size)
+            if page_table.shape[1] < owned_blocks:
+                raise ValueError(
+                    f"Page table row has {page_table.shape[1]} blocks but a prompt of {prefill_len} tokens needs "
+                    f"{owned_blocks} blocks of {block_size} tokens; the K/V of the remaining tokens would not be cached."
+                )
             page_table = page_table[:, :owned_blocks]
             # Compatibility with VLLM warmup: prefill kernels run on the padded
             # prefill length (for example 32-token prompts become 128-token
