@@ -39,7 +39,13 @@ def main():
     lens = [len(p) for p in prompts]
     md = open_mesh(trace=int(float(os.environ.get("TRACE_BYTES", "700e6"))))
     try:
-        mc, ccl = mesh_4x8(), CCLManager(md, num_links=2, topology=ttnn.Topology.Ring)
+        from models.demos.blackhole.hy4_preview.tt import hy4_pool_decode as _pd
+        from models.demos.blackhole.hy4_preview.tt.hy4_ccl_safe import hy4_fabric_selftest
+
+        links = hy4_fabric_selftest(md)  # D34-2: per-boot CCL safety self-test (all_gather_async parity bug on 4-link rows)
+        _pd._POOL_AG_LINKS = links.pool_ag
+        res(event="fabric_selftest", per_op=links.per_op, num_links=links.num_links, pool_ag=links.pool_ag, sec=round(links.seconds, 1), forced=links.forced)
+        mc, ccl = mesh_4x8(), CCLManager(md, num_links=links.num_links, topology=ttnn.Topology.Ring)
         ch = Hy4Chain(md, mc, ccl, ckpt=CKPT)
         t0 = time.time()
         ch.add_layers(0, NL, log=lambda s: None)

@@ -5,6 +5,8 @@
 Build order (INTERFACE.md): mesh open (FABRIC_1D_RING) -> Hy4Chain with HY4_POOL=1 HY4_KV_FMT=scaled_fp8 (layers, head) -> Hy4PoolDecoder (PoolCtx incl. the ONE XMerge, pools, persistent inputs)
 -> prefill / synthetic fill -> hand-off -> set_inputs -> capture (eager warm step, then trace) -> run.
 """
+import os
+
 import torch
 
 import ttnn
@@ -94,6 +96,8 @@ class Hy4PoolDecoder(Hy4Decoder):
         return ly.attn.decode_step_pool(h, self.opt, tabs, self._dense8)
 
     def step(self):
+        if os.environ.get("HY4_IHC_FUSED", "0") == "1":
+            return self.step_fused()
         ch = self.ch
         self._dense8 = self.ctx.dense_ids8() if self.mode == "dense" else None
         e = ttnn.embedding(ttnn.reshape(self.tok, [1, 1]), ch.embed, layout=ttnn.TILE_LAYOUT)
@@ -155,3 +159,37 @@ class Hy4PoolDecoder(Hy4Decoder):
             ttnn.synchronize_device(md)
             for t in (lat, rope, f8, sc, nat, kd, kb):
                 ttnn.deallocate(t)
+
+    def step_fused(self):
+        """HY4_IHC_FUSED=1: iHC as the fused JIT kernels on packed streams [1,1,4,D] fp32 (one call per sub-block: expand of the previous sub-block + mixes + collapse + norm; the last expand is one extra call)."""
+        ch = self.ch
+        self._dense8 = self.ctx.dense_ids8() if self.mode == "dense" else None
+        e = ttnn.embedding(ttnn.reshape(self.tok, [1, 1]), ch.embed, layout=ttnn.TILE_LAYOUT)
+        e = ttnn.reshape(e, [1, 1, 1, HID // 8])
+        e = ch.mc.allgather(e, ch.ccl, axis=1, dim=3)
+        e32 = ttnn.typecast(e, ttnn.float32)
+        ttnn.deallocate(e)
+        x = ttnn.concat([e32] * NSTREAM, dim=2)  # packed [1,1,4,D]
+        ttnn.deallocate(e32)
+        y = pp_m = None
+        for i, ly in enumerate(ch.layers):
+            wa, wm = ly.ihcf_a.norm_weight(ly.hw_in, 1), ly.ihcf_m.norm_weight(ly.hw_post, 1)
+            if y is None:
+                h, _, pp_a = ly.ihcf_a.pre(x, wa)
+            else:
+                h, _, pp_a, x = ly.ihcf_a.pre(x, wa, y=y, pp_prev=pp_m, x_out=x)
+                ttnn.deallocate(y)
+            a = self._attn(ly, None, h)
+            ttnn.deallocate(h)
+            h2, _, pp_m, x = ly.ihcf_m.pre(x, wm, y=a, pp_prev=pp_a, x_out=x)
+            ttnn.deallocate(a)
+            y = self._mlp(i, ly, h2)
+            ttnn.deallocate(h2)
+        last = ch.layers[-1]
+        _, _, _, x = last.ihcf_m.pre(x, last.ihcf_m.norm_weight(last.hw_post, 1), y=y, pp_prev=pp_m, x_out=x)
+        ttnn.deallocate(y)
+        x4 = ttnn.to_layout(ttnn.reshape(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), [1, NSTREAM, 1, HID]), ttnn.TILE_LAYOUT)
+        hn, logits = ch.head(x4)
+        ttnn.deallocate(hn)
+        ttnn.deallocate(x4)
+        return logits

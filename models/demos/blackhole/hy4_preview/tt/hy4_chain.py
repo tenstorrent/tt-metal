@@ -176,6 +176,12 @@ class Hy4ChainLayer:
         self.mtp = L >= cfg.num_hidden_layers
         if not self.mtp:
             self.ihc_a, self.ihc_m = hc("attn"), hc("mlp")
+            if os.environ.get("HY4_IHC_FUSED", "0") == "1":  # fused iHC kernels (ihc-fuse e037d61bccb): packed [1,1,4T,D] streams, decode only
+                from models.demos.blackhole.hy4_preview.tt.hy4_ihc_fused import Hy4IHCFused
+
+                mk = lambda s_: Hy4IHCFused(md, sd[f"hc_{s_}_layer.hc_pre.hc_fn"].float(), sd[f"hc_{s_}_layer.hc_pre.hc_base"].float(), sd[f"hc_{s_}_layer.hc_pre.hc_scale"].float(), dim=HID, hc_eps=cfg.hc_eps, norm_eps=cfg.rms_norm_eps)
+                self.ihcf_a, self.ihcf_m = mk("attn"), mk("mlp")
+                self.hw_in, self.hw_post = sd["input_layernorm.weight"].float(), sd["post_attention_layernorm.weight"].float()
         if os.environ.get("HY4_POOL", "0") == "1":  # integrated long-context decode: Hy4AttentionPool (superset of Hy4AttentionOpt / Hy4Attention; prefill unchanged)
             from models.demos.blackhole.hy4_preview.tt.hy4_pool_decode import Hy4AttentionPool as _Attn
         else:
