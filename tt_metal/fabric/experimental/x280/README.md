@@ -106,6 +106,46 @@ const auto cleaned = runtime.cleanup(enqueued.session, std::chrono::seconds(3));
 TODO: a helper that runs this open, reset, reopen and boot sequence and returns
 a ready runtime, with the reset still an explicit caller opt-in.
 
+### Revive
+
+A hart that does not answer STOP (a loop that does not poll it, WFI with
+interrupts off, an exception loop, a trapped hart) is taken back to resident
+idle with an RNMI, without a reset and without touching other tiles or Tensix:
+
+```cpp
+// Escalate a cleanup that times out, per request:
+x280::ActiveRunRequest request{.image_path = image, .run_value = ++generation};
+request.revive_on_cleanup_timeout = true;
+// ... enqueue, then runtime.cleanup(id, timeout) returns CleanupOutcome::Revived
+// instead of latching the tile unhealthy.
+
+// Or directly, on any runtime-owned tile (it ends a live session):
+const auto revived = runtime.revive(tile);  // all four harts, 100 ms bounds
+if (!revived.revived()) {
+    // NotResponding: a hart inside a NoC access that never completes. Reset the ASIC.
+}
+// revived.harts[h].revive_epc: where hart h was.
+```
+
+- **What it costs.** On P300 at `kSafePllMhz`: trigger to every hart's
+  acknowledgement 5 us median, to all four harts back in resident idle 75 us,
+  to the next image enqueued 204 us (`x280_revive_test`). A cleanup that
+  escalates adds its own `cleanup_timeout` in front.
+- **What it reaches.** Any hart at an instruction boundary. It does not reach
+  a hart inside a NoC access that never completes, or a hart stopped by CEASE
+  (`x280_cease()`); both return `NotResponding` and need an ASIC reset. The
+  per-hart protocol's trap path parks a trapped hart in WFI for this reason.
+- **What it leaves.** All four harts in resident idle, with `stage` = 6
+  (`REVIVED`), `revive_epc` / `revive_cause` in the state record and the trap
+  record cleared; the image's result is lost. Outbound NOC windows the image
+  programmed stay programmed, and interrupt sources it enabled stay enabled
+  (§ 3, the active-image contract).
+- **What it needs.** A tile booted by this runtime's resident idle: `boot` and
+  `boot_tiles` write the RNMI handler registers before the reset release.
+  A tile booted otherwise in the same reset lifetime returns `NotInstalled`.
+- **Health.** `revive` is the one path that clears a tile's health latch, and
+  only after all four harts are confirmed back in resident idle.
+
 ### Tests
 
 Reversible device tests open with `LimEccPrimingPolicy::RequirePrepared`, so
@@ -125,9 +165,11 @@ changes the chip for the rest of a reset lifetime, or can wedge it, lives in
 its own executable and runs only when its `X280_ALLOW_*` variable is `1`:
 `x280_prime_test` (`X280_ALLOW_LIM_ECC_PRIME`), `x280_shape_test`
 (`X280_ALLOW_LIM_SHAPE_CHANGE`), `x280_pinned_input_test`
-(`X280_ALLOW_PINNED_INPUT_PREPARE`), `x280_active_failure_test`
-(`X280_ALLOW_ACTIVE_SESSION_FAILURE`) and `x280_pll_test`
-(`X280_ALLOW_PLL_SLEW`).
+(`X280_ALLOW_PINNED_INPUT_PREPARE`) and `x280_pll_test`
+(`X280_ALLOW_PLL_SLEW`). `x280_active_failure_test` and `x280_revive_test`
+strand harts on purpose and revive them, so they need no variable; they stay
+separate executables because a revive that fails leaves the tile for an ASIC
+reset.
 
 ### Building an X280 image
 
@@ -419,8 +461,8 @@ The reversible success image is the sentinel, `build/x280/firmware.bin`. Every a
 heartbeat, runs the image's `main`, reports terminal success, and waits for
 its own acknowledged return. The sentinel's `main` adds only the run-value
 echo. The test-only `firmware-active-session-fault.bin` image makes hart 2
-record an `ebreak` trap and CEASE while the other harts report success; only
-the separately gated `x280_active_failure_test` uses it.
+record an `ebreak` trap and park while the other harts report success; only
+the separate `x280_active_failure_test` uses it, and revives the tile after.
 
 ---
 
@@ -428,7 +470,7 @@ the separately gated `x280_active_failure_test` uses it.
 
 | What you want | How |
 |---|---|
-| Stop or restart a running L2CPU | No per-tile reset path; use runtime cleanup or reset the ASIC |
+| Stop or restart a running L2CPU | No per-tile reset path; use runtime cleanup, escalating to `revive` (RNMI) for a hart that does not answer STOP |
 | Run a new image on a running L2CPU | `X280Runtime::enqueue` through resident idle; never touches reset |
 | Full board recovery (clears PLL, NOC TLBs, etc.) | Reset the selected ASIC before reopening Metal |
 
@@ -440,6 +482,12 @@ stopped, and neither call reports a problem. The C++ runtime therefore admits
 reset release only through its cold-boot path and refuses state that cannot
 safely support it. Source: tt-isa-documentation
 `BlackholeA0/L2CPUTile/README.md`, § Reset.
+
+Any restart within a reset lifetime is therefore a software matter: `cleanup`
+for an image that answers STOP, and `revive` for a hart at any instruction
+boundary. An ASIC reset remains the recovery for a hart inside a NoC access
+that never completes, for a hart stopped by CEASE, and for the one-way steps
+(reset release, `WayEnable`).
 
 ---
 
@@ -517,6 +565,12 @@ obligations are left to the image, and `X280ActiveContract` in
    on a peer's flag must poll STOP too, or the coordinator strands on a flag
    nobody remains to set.
 
+An image may start on a tile whose previous image was revived rather than
+returned, which leaves its state as a chip reset would: an image that enables
+an interrupt clears every PLIC enable word, drains the source (the MSI catcher
+FIFO), completes it and clears `msip` before it enables it, and an image that
+opens an outbound NOC window programs every word of it.
+
 Publish a result with `x280_hart_set_result(hartid, value)`. The harness seeds
 nothing: `enqueue` clears the record first, so an image that computes nothing
 publishes zero. Only the sentinel echoes the run value, so
@@ -537,6 +591,7 @@ in the wrong state:
 | 3 | `POSTED` | terminal success committed; the host side is at fault |
 | 4 | `STOPPING` | awaiting the host's STOP |
 | 5 | `RETURNING` | awaiting `RETURN_ACK` |
+| 6 | `REVIVED` | taken back to resident idle by `revive`; `revive_epc` says where it was |
 
 ---
 
@@ -643,7 +698,8 @@ ctest --test-dir build -R x280      # image placement, pinned-input guards, host
 | `firmware.bin` | `src/main.c` | active session success image (the sentinel) |
 | `firmware-pinned-input-prepare.bin` | `src/x280_pinned_input.c` | pinned-input preparation, run by `X280Tile::prepare_pinned_input` (§ 1) |
 | `firmware-atomic-bench.bin` | `src/atomic_bench.c` | cross-hart atomics micro-benchmark (§ 7); in the active-image contract set |
-| `firmware-active-session-fault.bin` | `src/active_session_fault.c` | traps and CEASEs hart 2, for `x280_active_failure_test` only |
+| `firmware-active-session-fault.bin` | `src/active_session_fault.c` | traps hart 2, for `x280_active_failure_test` only |
+| `firmware-strand.bin` | `src/strand.c` | per-hart WFI or spin with interrupts off, exception loop, NoC burst or trap, for `x280_revive_test` only |
 
 Every image compiles with `-mcpu=sifive-x280 -march=rv64gc -mabi=lp64d
 -mcmodel=medany -O2 -Werror`, freestanding, and links with
@@ -788,8 +844,8 @@ handed to two producers). That's the "why atomics are required" demo.
 
 Whether AMOs work against *uncached* LIM is silicon-specific. Before any
 untrapped atomic runs, hart 0 arms `entry.S` **probe mode** and issues a
-single test op: if it faults, the handler skips it (instead of `CEASE`,
-which would permanently halt the hart and strand the L2CPU) and the run
+single test op: if it faults, the handler skips it (instead of parking
+the hart where only `X280Runtime::revive` reaches it) and the run
 aborts cleanly, writing 0 to its AMO-supported word and status
 `AB_STATUS_AMO_UNSUP`.
 

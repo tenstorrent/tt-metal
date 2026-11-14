@@ -97,8 +97,7 @@
  * step detects it *without* faulting the core (it arms entry.S probe
  * mode), reports AMO_UNSUPPORTED, and cleanly returns to the idle FW.
  * We never let an unprobed AMO hit the normal trap handler, which would
- * CEASE (permanently halt) the hart and strand the L2CPU until a chip
- * reset.
+ * park the hart outside the active protocol until X280Runtime::revive.
  */
 #include "x280.h"
 
@@ -312,8 +311,8 @@ static uint64_t run_increment_loop(unsigned op, uintptr_t counter_addr, uint64_t
  * AMO-to-LIM support probe (fault-safe)
  * ----------------------------------------------------------------------
  * We must NOT let an unsupported AMO hit entry.S's normal trap handler:
- * that writes mcause/mepc/mtval and executes CEASE, permanently halting
- * the hart (only a chip reset recovers). entry.S has a "probe mode":
+ * that writes mcause/mepc/mtval and parks the hart in WFI, where only
+ * X280Runtime::revive reaches it. entry.S has a "probe mode":
  * while this hart's probe state != 0, load/store/AMO access faults (cause
  * 5/7) and illegal-instruction (cause 2) are skipped (mepc+=4) and the state
  * is set to 2. So: arm probe mode, attempt one op, and check whether it

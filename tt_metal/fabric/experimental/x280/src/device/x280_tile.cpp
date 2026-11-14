@@ -235,6 +235,7 @@ size_t TileImpl::prepare_cold_boot_unlocked(const std::string& idle_image_path) 
     const auto image = read_image_file(idle_image_path, "resident-idle image", "ninja x280_images");
     load_idle_image_unlocked(image);
     set_reset_vectors_unlocked(X280_IDLE_FW_LOAD_ADDR);
+    set_rnmi_handlers_unlocked(idle_image_has_rnmi_entry(image.data(), image.size()));
     zero_hart_protocol_unlocked();
     return image.size();
 }
@@ -372,6 +373,7 @@ BootResult TileImpl::boot(const BootRequest& request) {
         const auto image = read_image_file(request.idle_image_path, "resident-idle image", "ninja x280_images");
         load_idle_image_unlocked(image);
         set_reset_vectors_unlocked(X280_IDLE_FW_LOAD_ADDR);
+        set_rnmi_handlers_unlocked(idle_image_has_rnmi_entry(image.data(), image.size()));
         zero_hart_protocol_unlocked();
 
         if (request.dry_run) {
@@ -616,6 +618,18 @@ uint32_t TileTestAccess::read_l2cpu_reset_raw() const {
     tile_->runtime_->require_mesh_live("TileTestAccess::read_l2cpu_reset_raw", &tile_->id());
     const std::lock_guard<std::mutex> serialise(tile_->chip_->lock());
     return tile_->chip_->read_l2cpu_reset_raw();
+}
+
+uint32_t TileTestAccess::read_reg32(uint64_t addr) const {
+    tile_->runtime_->require_mesh_live("TileTestAccess::read_reg32", &tile_->id());
+    const std::lock_guard<std::mutex> serialise(tile_->chip_->lock());
+    return tile_->transport().read_reg32(tile_->id().chip_id, tile_->core(), addr);
+}
+
+void TileTestAccess::write_reg32(uint64_t addr, uint32_t value) {
+    tile_->runtime_->require_mesh_live("TileTestAccess::write_reg32", &tile_->id());
+    const std::lock_guard<std::mutex> serialise(tile_->chip_->lock());
+    tile_->transport().write_reg32(tile_->id().chip_id, tile_->core(), addr, value);
 }
 
 }  // namespace detail

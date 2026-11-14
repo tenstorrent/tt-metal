@@ -64,6 +64,18 @@ constexpr uint64_t kNocTlb2mConfigBase = 0x2FF00000ull;
 constexpr uint64_t kL2cpuRegBase = 0xFFFFF7FEFFF10000ull;
 constexpr uint64_t kResetVectorStride = 8;  // per hart: {lo, hi}
 
+// RNMI, same register file (x280 PA 0x2001_04xx, tt-isa-documentation
+// BlackholeA0/L2CPUTile/RNMIs.md). The trigger word is level-triggered, bit h
+// for hart h: the host sets and clears it. Each hart has a handler pair, two
+// 32-bit halves each, the interrupt handler then the exception handler (a
+// fault while mnstatus.NMIE = 0). Both reset to 0 (measured), so a stray RNMI
+// before they are written jumps to PA 0.
+constexpr uint64_t kRnmiTrigger = kL2cpuRegBase + 0x414;
+constexpr uint64_t kRnmiHandlerBase = kL2cpuRegBase + 0x418;
+constexpr uint64_t kRnmiHandlerStride = 16;  // per hart: {handler lo, hi, exception lo, hi}
+// Per-hart run status (cease, halt, wfi and debug bits), read-only.
+constexpr uint64_t kHartRunStatus = kL2cpuRegBase + 0x400;
+
 // 64 B general-purpose scratch, x280 physical 0x2001_0100, at its high alias
 // (tt-isa-documentation BlackholeA0/L2CPUTile/MemoryMap.md, "External
 // peripherals"). Survives Metal and runtime opens; tt-smi -r clears it
