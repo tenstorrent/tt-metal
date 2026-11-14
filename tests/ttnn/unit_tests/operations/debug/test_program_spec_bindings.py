@@ -20,9 +20,9 @@ E = ttnn.experimental
 
 TENSOR_SPEC = ttnn.TensorSpec(ttnn.Shape([1, 1, 32, 32]), ttnn.bfloat16, ttnn.TILE_LAYOUT)
 
-# Every class and the fields Python binds. A field Metal adds to one of these types fails the ttnn build
+# Every class and the fields Python binds. A field added to one of these types fails the ttnn build
 # (program_spec.cpp counts each type's fields) until it is bound here or noted as C++ only, except for
-# DFBAdvancedOptions, which Python binds only in part. MeshProgramSpec and MeshProgramRunArgs are TT-NN's own.
+# DFBAdvancedOptions, which Python binds only in part.
 FIELDS = {
     E.MeshProgramSpec: {"programs"},
     E.MeshProgramRunArgs: {"programs"},
