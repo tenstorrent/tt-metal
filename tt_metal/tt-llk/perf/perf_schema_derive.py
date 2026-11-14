@@ -41,7 +41,11 @@ PARAM_BASES = {"TemplateParameter", "RuntimeParameter"}
 LIST_KWARGS = {"templates", "runtimes"}
 MARKER_COLUMN = "marker"
 QUASAR_DIR = "quasar"
-PERF_CONFIG_BUILDERS = {"PerfConfig", "create_test_or_perf_config"}
+PERF_CONFIG_BUILDERS = {"PerfConfig", "create_test_or_perf_config", "execute_llk"}
+SHARED_RUNNER_MODULES = {
+    "helpers.sdpa_bcast_utils",
+    "helpers.compressed_utils",
+}
 
 
 def iter_source_files(include_quasar: bool = True):
@@ -120,12 +124,50 @@ def _self_attr(node):
     return None
 
 
-def helper_returned_param_calls(specs: dict) -> dict:
-    """Map helper-function name -> the param constructor Calls it returns.
+def _param_calls_from_value(value, specs: dict) -> list | None:
+    """Return statically visible param calls, or ``None`` for a dynamic value."""
+    if value is None:
+        return None
+    if isinstance(value, ast.Call) and _call_name(value) in specs:
+        return [value]
+    if isinstance(value, (ast.List, ast.Tuple)):
+        if all(
+            isinstance(elt, ast.Call) and _call_name(elt) in specs for elt in value.elts
+        ):
+            return list(value.elts)
+    return None
 
-    ``generate_input_dim(...)`` returns ``INPUT_DIMENSIONS(...)``. Tests pass the
-    helper in templates=, so the derivation must follow the return.
-    """
+
+def _function_returned_param_calls(fn: ast.FunctionDef, specs: dict) -> list | None:
+    """Param constructor calls returned by ``fn``, ignoring nested functions."""
+    nested = {
+        n
+        for d in ast.walk(fn)
+        if isinstance(d, ast.FunctionDef) and d is not fn
+        for n in ast.walk(d)
+    }
+    calls = []
+    for node in ast.walk(fn):
+        if isinstance(node, ast.Return) and node not in nested:
+            returned = _param_calls_from_value(node.value, specs)
+            if returned is None:
+                return None
+            calls.extend(returned)
+    return calls or None
+
+
+def _local_returned_param_calls(tree: ast.AST, specs: dict) -> dict:
+    """Map local function names to returned parameter calls, scoped per file."""
+    local: dict[str, list] = {}
+    for fn in (n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)):
+        calls = _function_returned_param_calls(fn, specs)
+        if calls:
+            local[fn.name] = calls
+    return local
+
+
+def helper_returned_param_calls(specs: dict) -> dict:
+    """Map helper names to the parameter constructor calls they return."""
     helpers: dict[str, list] = {}
     for path in iter_source_files():
         try:
@@ -134,6 +176,7 @@ def helper_returned_param_calls(specs: dict) -> dict:
             continue
         for fn in (n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)):
             # Returns from a function nested inside fn belong to that function.
+            # Only bare parameter returns are global; returned lists stay per-file to avoid helper-name collisions.
             nested = {
                 n
                 for d in ast.walk(fn)
@@ -306,10 +349,50 @@ def _param_fields_in_tree(tree, specs, helpers=None, post_init=None) -> set:
       * a dict entry:            cfg = {"templates": [...], "runtimes": [...]}
     """
     fields = set()
-    for list_node in _param_lists(tree):
+    local_helpers = _local_returned_param_calls(tree, specs)
+
+    def add_list(list_node):
         for elt in list_node.elts:
-            if isinstance(elt, ast.Call):
-                fields.update(emitted_fields(elt, specs, helpers, post_init))
+            add_expr(elt)
+
+    def add_expr(expr):
+        if isinstance(expr, (ast.List, ast.Tuple, ast.Set)):
+            add_list(expr)
+            return
+        if isinstance(expr, ast.BinOp) and isinstance(expr.op, ast.Add):
+            add_expr(expr.left)
+            add_expr(expr.right)
+            return
+        if isinstance(expr, ast.IfExp):
+            add_expr(expr.body)
+            add_expr(expr.orelse)
+            return
+        if not isinstance(expr, ast.Call):
+            return
+        name = _call_name(expr)
+        if name in local_helpers:
+            for call in local_helpers[name]:
+                fields.update(emitted_fields(call, specs, helpers, post_init))
+            return
+        fields.update(emitted_fields(expr, specs, helpers, post_init))
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id in LIST_KWARGS:
+                    add_expr(node.value)
+        elif (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id in (*PERF_CONFIG_BUILDERS, "dict")
+        ):
+            for kw in node.keywords:
+                if kw.arg in LIST_KWARGS:
+                    add_expr(kw.value)
+        elif isinstance(node, ast.Dict):
+            for key, value in zip(node.keys, node.values):
+                if isinstance(key, ast.Constant) and key.value in LIST_KWARGS:
+                    add_expr(value)
     return fields
 
 
@@ -331,7 +414,12 @@ def _perf_test_sources(quasar: bool):
         for node in tree.body:
             if not isinstance(node, ast.ImportFrom) or not node.module:
                 continue
-            if node.module.startswith("helpers"):
+            # Follow helpers only when they are the shared runner (not
+            # chip_architecture / param_config / format_config / etc.).
+            if (
+                node.module.startswith("helpers")
+                and node.module not in SHARED_RUNNER_MODULES
+            ):
                 continue
             candidate = ROOT.joinpath(*node.module.split(".")).with_suffix(".py")
             if not candidate.exists():
@@ -384,6 +472,18 @@ def _perf_test_sources(quasar: bool):
             yield path.stem, source
 
 
+def _schema_fields_in_tree(tree, specs, helpers, post_init, loop_factor_column):
+    fields = _param_fields_in_tree(tree, specs, helpers, post_init)
+    if any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "execute_llk"
+        for node in ast.walk(tree)
+    ):
+        fields.add(loop_factor_column)
+    return fields
+
+
 def derive_perf_test_schemas(quasar: bool = False) -> dict:
     """{perf_test_name -> sorted column list}, derived statically from PerfConfig.
 
@@ -395,8 +495,9 @@ def derive_perf_test_schemas(quasar: bool = False) -> dict:
 
     Static approximation: it reads params passed as literal templates=/runtimes=
     lists (inline, via a variable, or as a dict entry), follows a helper that
-    returns a param object, and includes ``__post_init__`` copies of None-default
-    fields. Params built purely at runtime (comprehensions) are still invisible,
+    returns a param object or a list of them (resolved in the file that calls
+    it), and includes ``__post_init__`` copies of None-default fields. Params
+    built purely at runtime (comprehensions) are still invisible,
     which is why ``_assert_matches_catalog`` re-checks the catalog against the CSV
     a run actually produced.
     """
@@ -416,7 +517,9 @@ def derive_perf_test_schemas(quasar: bool = False) -> dict:
             continue
         if not _has_perfconfig(tree):
             continue
-        fields = _param_fields_in_tree(tree, specs, helpers, post_init)
+        fields = _schema_fields_in_tree(
+            tree, specs, helpers, post_init, ps.LOOP_FACTOR_COLUMN
+        )
         schemas[key] = sorted(set(fixed) | fields | {MARKER_COLUMN})
     return schemas
 
@@ -441,15 +544,14 @@ def _is_functional_only(fn) -> bool:
         and isinstance(n.func, ast.Name)
         and n.func.id in PERF_CONFIG_BUILDERS
     ]
-    return bool(calls) and all(
-        any(
-            kw.arg == "is_perf"
-            and isinstance(kw.value, ast.Constant)
-            and kw.value.value is False
-            for kw in call.keywords
-        )
-        for call in calls
-    )
+
+    def is_functional(call):
+        is_perf = next((kw.value for kw in call.keywords if kw.arg == "is_perf"), None)
+        if is_perf is None:
+            return _call_name(call) == "execute_llk"
+        return isinstance(is_perf, ast.Constant) and is_perf.value is False
+
+    return bool(calls) and all(is_functional(call) for call in calls)
 
 
 def _kernel_source(fn):
@@ -462,31 +564,46 @@ def _kernel_source(fn):
                     and isinstance(value, ast.Constant)
                 ):
                     return value.value
+        elif (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "dict"
+        ):
+            for keyword in node.keywords:
+                if keyword.arg == "test_name" and isinstance(
+                    keyword.value, ast.Constant
+                ):
+                    return keyword.value.value
     return None
 
 
 def _function_param_fields(fn, specs, helpers, post_init):
-    fields = set()
-    for list_node in _param_lists(fn):
-        for elt in list_node.elts:
-            for call in (
-                (elt.body, elt.orelse) if isinstance(elt, ast.IfExp) else (elt,)
-            ):
-                if not (
-                    isinstance(call, ast.Call)
-                    and (_call_name(call) in specs or _call_name(call) in helpers)
-                ):
-                    return None
-                fields.update(emitted_fields(call, specs, helpers, post_init))
-    return fields
+    def visible(expr):
+        if isinstance(expr, (ast.List, ast.Tuple, ast.Set)):
+            return all(visible(elt) for elt in expr.elts)
+        if isinstance(expr, ast.BinOp) and isinstance(expr.op, ast.Add):
+            return visible(expr.left) and visible(expr.right)
+        if isinstance(expr, ast.IfExp):
+            return visible(expr.body) and visible(expr.orelse)
+        return isinstance(expr, ast.Call) and (
+            _call_name(expr) in specs or _call_name(expr) in helpers
+        )
+
+    if any(not visible(list_node) for list_node in _param_lists(fn)):
+        return None
+    return _param_fields_in_tree(fn, specs, helpers, post_init)
 
 
 def column_sets_in_tree(tree, specs, helpers, post_init) -> dict:
     groups: dict = {}
+    file_helpers = dict(helpers or {})
+    file_helpers.update(_local_returned_param_calls(tree, specs))
     for fn in _config_functions(tree):
         if _is_functional_only(fn):
             continue
-        fields = _function_param_fields(fn, specs, helpers, post_init)
+        if _function_returned_param_calls(fn, specs) and not _has_perfconfig(fn):
+            continue
+        fields = _function_param_fields(fn, specs, file_helpers, post_init)
         if not fields:
             continue
         kernel = _kernel_source(fn)
