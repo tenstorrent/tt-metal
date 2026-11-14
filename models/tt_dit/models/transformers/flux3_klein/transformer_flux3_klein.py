@@ -18,7 +18,7 @@ from ....layers.normalization import DistributedLayerNorm
 from ....utils import tensor
 from ....utils.matmul import FusedMMRSConfig, register_fused_mmrs_configs, register_matmul_configs
 from ....utils.substate import rename_substate
-from .transformer_block_flux3_klein import HIDDEN, Flux3KleinTransformerBlock
+from .transformer_block_flux3_klein import HIDDEN, Flux3KleinTransformerBlock, fast_matmul_config
 
 if TYPE_CHECKING:
     from ....parallel.config import DiTParallelConfig
@@ -220,7 +220,13 @@ def gather_rows_over_sp(x: ttnn.Tensor, indices: ttnn.Tensor, *, ccl_manager: CC
 
 class Flux3KleinModulation(Module):
     def __init__(
-        self, *, flow_map: bool, device: ttnn.MeshDevice, ccl_manager: CCLManager, parallel_config: DiTParallelConfig
+        self,
+        *,
+        flow_map: bool,
+        device: ttnn.MeshDevice,
+        ccl_manager: CCLManager,
+        parallel_config: DiTParallelConfig,
+        weight_dtype: ttnn.DataType,
     ) -> None:
         super().__init__()
         self.device = device
@@ -244,7 +250,9 @@ class Flux3KleinModulation(Module):
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             ccl_manager=ccl_manager,
             chunks=MOD_CHUNKS,
+            compute_kernel_config=fast_matmul_config(device) if weight_dtype == ttnn.bfloat8_b else None,
         )
+        self.lin.weight.dtype = weight_dtype  # the bias stays bf16
         self._row_mask = None
         self.register_eviction_hook(self._release_row_mask)
 
@@ -300,7 +308,13 @@ class Flux3KleinEarlyStacks(Module):
     """The per-mode blocks that run before the modes are joined."""
 
     def __init__(
-        self, *, device: ttnn.MeshDevice, ccl_manager: CCLManager, parallel_config: DiTParallelConfig, is_fsdp: bool
+        self,
+        *,
+        device: ttnn.MeshDevice,
+        ccl_manager: CCLManager,
+        parallel_config: DiTParallelConfig,
+        is_fsdp: bool,
+        weight_dtype: ttnn.DataType,
     ) -> None:
         super().__init__()
         self._ring = ccl_manager.topology == ttnn.Topology.Ring
@@ -310,7 +324,11 @@ class Flux3KleinEarlyStacks(Module):
                 mode,
                 ModuleList(
                     Flux3KleinTransformerBlock(
-                        device=device, ccl_manager=ccl_manager, parallel_config=parallel_config, is_fsdp=is_fsdp
+                        device=device,
+                        ccl_manager=ccl_manager,
+                        parallel_config=parallel_config,
+                        is_fsdp=is_fsdp,
+                        weight_dtype=weight_dtype,
                     )
                     for _ in range(EARLY_DEPTH)
                 ),
@@ -372,6 +390,7 @@ class Flux3KleinTransformer(Module):
         ccl_manager: CCLManager,
         parallel_config: DiTParallelConfig,
         is_fsdp: bool = False,
+        weight_dtype: ttnn.DataType = ttnn.bfloat16,
     ) -> None:
         super().__init__()
         tp_axis = parallel_config.tensor_parallel.mesh_axis
@@ -392,14 +411,26 @@ class Flux3KleinTransformer(Module):
         self.emb_in_image = embedding("image")
         self.emb_in_image_cond = embedding("image_cond")
         self.modulation = Flux3KleinModulation(
-            flow_map=flow_map, device=device, ccl_manager=ccl_manager, parallel_config=parallel_config
+            flow_map=flow_map,
+            device=device,
+            ccl_manager=ccl_manager,
+            parallel_config=parallel_config,
+            weight_dtype=weight_dtype,
         )
         self.early = Flux3KleinEarlyStacks(
-            device=device, ccl_manager=ccl_manager, parallel_config=parallel_config, is_fsdp=is_fsdp
+            device=device,
+            ccl_manager=ccl_manager,
+            parallel_config=parallel_config,
+            is_fsdp=is_fsdp,
+            weight_dtype=weight_dtype,
         )
         self.single_blocks = ModuleList(
             Flux3KleinTransformerBlock(
-                device=device, ccl_manager=ccl_manager, parallel_config=parallel_config, is_fsdp=is_fsdp
+                device=device,
+                ccl_manager=ccl_manager,
+                parallel_config=parallel_config,
+                is_fsdp=is_fsdp,
+                weight_dtype=weight_dtype,
             )
             for _ in range(SINGLE_DEPTH)
         )

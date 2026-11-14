@@ -5,7 +5,7 @@
 """FLUX 3 Klein's linear1 (QKV + MLP-in as one all-gather-matmul, swiglu_chunk + grouped N) at the 4096 row
 counts: its q / k / v / MLP outputs must be byte-identical to the separate to_qkv and proj_mlp calls, and a whole
 block with linear1 and the one-tile TP barrier before proj_out must be byte-identical to the block without them,
-call after call."""
+call after call. Also in the fast mode (bfloat8_b weights, LoFi)."""
 
 from __future__ import annotations
 
@@ -52,18 +52,27 @@ def _same(a: ttnn.Tensor | list[torch.Tensor], b: ttnn.Tensor | list[torch.Tenso
 
 @pytest.mark.parametrize("device_params", [{**ring_params_8k, "l1_small_size": 65536}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(TP, SP)], indirect=True)
-def test_linear1(*, mesh_device: ttnn.MeshDevice) -> None:
+@pytest.mark.parametrize("weight_dtype", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["bf16", "bf8"])
+def test_linear1(*, mesh_device: ttnn.MeshDevice, weight_dtype: ttnn.DataType) -> None:
     tp_axis, sp_axis = 0, 1
     ccl = CCLManager(mesh_device=mesh_device, num_links=2, topology=ttnn.Topology.Ring)
     parallel = DiTGParallelConfigNoCFG(
         tensor_parallel=ParallelFactor(factor=TP, mesh_axis=tp_axis),
         sequence_parallel=ParallelFactor(factor=SP, mesh_axis=sp_axis),
     )
-    block = Flux3KleinTransformerBlock(device=mesh_device, ccl_manager=ccl, parallel_config=parallel)
+    block = Flux3KleinTransformerBlock(
+        device=mesh_device, ccl_manager=ccl, parallel_config=parallel, weight_dtype=weight_dtype
+    )
     gen = torch.Generator().manual_seed(0)
     missing = block.load_torch_state_dict(_random_state(gen), strict=False).missing_keys
     assert not missing, missing
     attn = block.attn
+    assert (
+        attn.to_qkv.weight.data.dtype
+        == block.proj_mlp.weight.data.dtype
+        == block.proj_out.weight.data.dtype
+        == weight_dtype
+    )
     full = mesh_device.compute_with_storage_grid_size()
 
     def rows_tensor(t: torch.Tensor) -> ttnn.Tensor:
