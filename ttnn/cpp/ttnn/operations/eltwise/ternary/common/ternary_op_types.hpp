@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <variant>
 #include "ttnn/tensor/tensor.hpp"
 
@@ -11,7 +12,7 @@ namespace ttnn::operations::ternary {
 
 // Type alias for scalar or tensor values
 // Supports float, int, and Tensor types
-using TensorScalarVariant = std::variant<float, int, Tensor>;
+using TensorScalarVariant = std::variant<float, std::int64_t, Tensor>;
 
 // Scalar variant for addcmul(float, int32, uint32)
 using ScalarVariant = std::variant<float, int32_t, uint32_t>;
