@@ -5,7 +5,9 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <variant>
+#include <vector>
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/metal_v2_artifacts.hpp"
@@ -21,6 +23,9 @@ namespace ttnn::operations::experimental::deepseek::attention_qkv_decode {
 //   q_a: x [8, 12) y [0, 10), one [K, 32] slab each (q_a's 40 output tiles)
 // q_a's and kv's results meet in one row on the hub (the first q_a core), which multicasts it over
 // the q_b and kv cores: the 8x10 rectangle at the origin.
+//
+// With w_comp, comp_cores(n) of the q_b cores also compute one [K, 32] column tile of tokens @ w_comp each
+// before their q_b work, which waits on the hub's row anyway.
 inline constexpr uint32_t kGridX = 12;
 inline constexpr uint32_t kGridY = 10;
 inline constexpr uint32_t kRowCoresX = 8;
@@ -37,6 +42,16 @@ inline CoreRangeSet weight_role_cores(WeightRole role) {
         case WeightRole::QB: return CoreRangeSet(CoreRange({0, 0}, {kRowCoresX - 1, kQbCoresY - 1}));
     }
     return {};
+}
+
+// Indices into the q_b cores (row-major over their 8x8 rectangle) of the n compressor-column cores, spread
+// evenly over it.
+inline std::vector<uint32_t> comp_core_indices(uint32_t n) {
+    std::vector<uint32_t> indices(n);
+    for (uint32_t i = 0; i < n; ++i) {
+        indices[i] = i * (kNumQbCores / n);
+    }
+    return indices;
 }
 
 struct AttentionQkvDecodeDeviceOperation {
@@ -60,6 +75,10 @@ struct AttentionQkvDecodeDeviceOperation {
         const Tensor& sin;
         const Tensor& kv_cache;
         const Tensor& cache_pos;
+        // tokens @ w_comp written into comp_output (both or neither): extra output columns, one slab per
+        // compressor-column core, read from DRAM whether or not the other weights come through pipes.
+        std::optional<Tensor> w_comp;
+        std::optional<Tensor> comp_output;
     };
 
     using spec_return_value_t = tt::tt_metal::TensorSpec;
@@ -97,6 +116,8 @@ ttnn::Tensor attention_qkv_decode(
     const ttnn::Tensor& cache_pos,
     float epsilon,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
-    const ttnn::PrefetcherPipeList& prefetcher_pipes);
+    const ttnn::PrefetcherPipeList& prefetcher_pipes,
+    const std::optional<ttnn::Tensor>& w_comp,
+    const std::optional<ttnn::Tensor>& comp_output);
 
 }  // namespace ttnn::prim

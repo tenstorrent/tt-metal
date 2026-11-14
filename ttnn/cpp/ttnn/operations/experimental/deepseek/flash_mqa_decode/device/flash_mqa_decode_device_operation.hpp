@@ -29,6 +29,8 @@ struct FlashMqaDecodeDeviceOperation {
         uint32_t selected_row_offset = 0;
         // Most ring rows attended; 0 for all of kv's rows.
         uint32_t ring_rows = 0;
+        // Most selected rows attended; 0 for all of selected_kv's rows past selected_row_offset.
+        uint32_t selected_rows = 0;
         MemoryConfig output_mem_config;
         ttnn::DeviceComputeKernelConfig compute_kernel_config;
     };
@@ -72,6 +74,7 @@ ttnn::Tensor flash_mqa_decode(
     const std::optional<ttnn::Tensor>& selected_kv,
     uint32_t selected_row_offset,
     uint32_t ring_rows,
+    uint32_t selected_rows,
     const std::optional<ttnn::Tensor>& attention_sink,
     std::optional<float> scale,
     uint32_t k_chunk_size,

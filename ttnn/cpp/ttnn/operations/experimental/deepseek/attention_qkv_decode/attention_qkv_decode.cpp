@@ -21,7 +21,9 @@ Tensor attention_qkv_decode(
     const Tensor& cache_pos,
     float epsilon,
     const std::optional<MemoryConfig>& memory_config,
-    const ttnn::PrefetcherPipeList& prefetcher_pipes) {
+    const ttnn::PrefetcherPipeList& prefetcher_pipes,
+    const std::optional<Tensor>& w_comp,
+    const std::optional<Tensor>& comp_output) {
     return ttnn::prim::attention_qkv_decode(
         tokens,
         w_q_a,
@@ -35,7 +37,9 @@ Tensor attention_qkv_decode(
         cache_pos,
         epsilon,
         memory_config,
-        prefetcher_pipes);
+        prefetcher_pipes,
+        w_comp,
+        comp_output);
 }
 
 }  // namespace ttnn::experimental::deepseek

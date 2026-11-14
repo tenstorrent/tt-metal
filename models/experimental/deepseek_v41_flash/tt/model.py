@@ -868,14 +868,21 @@ class DeepSeekV41Model(DeepSeekV4Model):
             if not any((ids[w], self._kv_source_of[w]) == (ids[li], src) for w in self._row_writers):
                 self._row_writers.add(li)
         self._row_groups = {self._kv_source_of[li] for li in self._row_writers}
-        # A dense select copies every entry into the group's sel_tile on its stage, the same rows for each of the
-        # group's index sources in a step, so only the first of them there copies.
+        # A dense step attends the group's dense_kv in place on a stage whose first index source of the group has
+        # written this step's entry there; that layer and the group's later ones there are its dense readers.
+        first_select = {}
+        for li in sorted(cfg.index_source_layer_ids):
+            if li < self.num_layers:
+                first_select.setdefault((ids[li], self._kv_source_of[li]), li)
+        self._dense_readers = {
+            li for li, src in self._kv_source_of.items() if li >= first_select.get((ids[li], src), self.num_layers)
+        }
+        # The group's other layers attend the sel_tile their stage received, so the first index source on the
+        # stage before copies every entry into it, when the next stage of the group has such a layer.
         self._dense_fillers = set()
-        for li in cfg.index_source_layer_ids:
-            if li >= self.num_layers:
-                continue
-            src = self._kv_source_of[li]
-            if not any((ids[w], self._kv_source_of[w]) == (ids[li], src) for w in self._dense_fillers):
+        for (stage, src), li in first_select.items():
+            later = [w for w, s in self._kv_source_of.items() if s == src and ids[w] > stage]
+            if later and any(w not in self._dense_readers for w in later if ids[w] == ids[later[0]]):
                 self._dense_fillers.add(li)
         # Past the candidate pool, the candidate source's blocks reach every stage of its group and the
         # first consumer on each stage builds that stage's pool.
@@ -1859,7 +1866,8 @@ class DeepSeekV41Model(DeepSeekV4Model):
         Pool and select tensors are built only for the ratios this variant actually runs, so a
         stage that ignores the r=2 bits has one op sequence across those variants. A ``dense`` ratio's select
         takes the slot's first ``dense_kv`` row (``dense_offset``, ``None`` with one slot) and the ``dense_kv`` row
-        of the entry it writes (``dense_entry``) instead of ``index_pos``.
+        of the entry it writes (``dense_entry``) instead of ``index_pos``; with several slots its dense readers'
+        ``sdpa_lengths`` carry ``dense_offset`` too (``dense_lengths``).
         """
         b = self._decode_batch
 
@@ -1885,6 +1893,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
             "index_pos": {},
             "dense_entry": {},
             "dense_offset": None,
+            "dense_lengths": {},
             # Even one session's page table is not the identity (block 0 is ZERO_BLOCK), so the paged
             # ops always read the slot's row.
             "page_row": field(3),
@@ -1939,6 +1948,11 @@ class DeepSeekV41Model(DeepSeekV4Model):
             )
             dense_base_f = ttnn.multiply(slot_f, float(self.config.index_topk))
             ctx["dense_offset"] = self._device_index(dense_base_f)
+            if b == 1:
+                offset = ttnn.reshape(ctx["dense_offset"], [1, 1, 1, 1])
+                ctx["dense_lengths"] = {
+                    ratio: ttnn.concat([ctx["sdpa_lengths"][ratio], offset], dim=-1) for ratio in dense
+                }
         for ratio in sm["index_ratios"]:
             if ratio in dense:
                 if ratio in ctx["entry"]:
@@ -2026,6 +2040,9 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 inputs["sdpa_cur_pos"] = ctx["sliding_curpos"]
             return inputs
         inputs["page_row"] = ctx["page_row"]
+        reads_dense = ratio in dense and attn.layer_idx in self._dense_readers
+        if reads_dense:
+            inputs["dense"] = True
         if attn.is_kv_source:
             pool = ratio == 1 or (ratio == 2 and r2_pool)
             inputs["pool"] = pool
@@ -2039,7 +2056,6 @@ class DeepSeekV41Model(DeepSeekV4Model):
         if attn.is_index_source and (ratio == 1 or (ratio == 2 and r2_select)):
             inputs["select"] = True
             if ratio in dense:
-                inputs["dense"] = True
                 inputs["dense_offset"] = ctx["dense_offset"]
                 inputs["dense_entry"] = ctx["dense_entry"].get(ratio)
                 inputs["dense_fill"] = attn.layer_idx in self._dense_fillers
@@ -2052,7 +2068,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 inputs["candidates"] = True
                 inputs["build_pool"] = attn.layer_idx in self._pool_builders
         if lengths is not None:
-            inputs["sdpa_lengths"] = lengths[ratio]
+            inputs["sdpa_lengths"] = ctx["dense_lengths"].get(ratio, lengths[ratio]) if reads_dense else lengths[ratio]
         elif causal:
             inputs["sdpa_cur_pos"] = ctx["curpos"][ratio]
         else:
@@ -2696,7 +2712,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
 
     def _sync_dense_entries(self, session_id: int) -> None:
         """Copy session ``session_id``'s first ``index_topk`` compressed entries out of every stage's ``comp_kv`` into
-        its slot of ``dense_kv``, which a dense select reads. For what writes or maps entries without a decode step:
+        its slot of ``dense_kv``, which a dense step attends. For what writes or maps entries without a decode step:
         a prefill commit, an import, a reload from the device park."""
         if not DENSE_SELECT:
             return

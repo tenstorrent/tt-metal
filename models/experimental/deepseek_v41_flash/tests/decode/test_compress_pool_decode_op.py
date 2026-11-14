@@ -13,13 +13,14 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.experimental.deepseek_v4_flash.tt.common import width_sharded_l1_config
+from models.experimental.deepseek_v4_flash.tt.common import _HIFI4, width_sharded_l1_config
 from models.experimental.deepseek_v4_flash.tt.decode.attention import (
     _apply_rope,
     _interleaved_rotate_matrix,
     _one_row_per_user,
     make_rope_table,
 )
+from models.experimental.deepseek_v41_flash.tt.decode.attention import _rows_on_one_core
 from models.experimental.deepseek_v4_flash.tt.layers import DeepSeekV4RMSNorm
 
 HEAD_DIM = 512
@@ -474,7 +475,174 @@ def test_compress_pool_decode_sequential_and_cache(device, reset_seeds):
                 assert device.num_program_cache_entries() == steady_cache_entries
 
 
-@pytest.mark.parametrize("mode", ("fused_pool_rope", "fused_nopool", "fused_ratio1", "baseline_pool_rope"))
+INDEX_HEAD_DIM = 128
+BLOCK_ROWS = 64
+N_BLOCKS = 4
+DENSE_ROWS = 512
+KEY_PCC_THRESHOLD = 0.999
+
+
+def _index_key_inputs(device, seed: int = 5):
+    """Host + device index_wk ``[Dh, Dk]``, k_norm gamma ``[1, 1, 1, Dk]`` and pre-filled caches: the TILE
+    ``idx_key_cache`` ``[blocks, 1, 64, Dk]``, ROW_MAJOR ``comp_kv`` ``[blocks, 1, 64, Dh]``, TILE ``dense_kv``
+    ``[1, 1, 512, Dh]``, ROW_MAJOR ``key_row`` and a 2-row ``page_table`` whose row 1 permutes the blocks."""
+    gen = torch.Generator().manual_seed(seed)
+    host = {
+        "index_wk": (torch.randn(HEAD_DIM, INDEX_HEAD_DIM, generator=gen) / HEAD_DIM**0.5).bfloat16().float(),
+        "index_norm_weight": (1.0 + 0.1 * torch.randn(1, 1, 1, INDEX_HEAD_DIM, generator=gen)).bfloat16().float(),
+        "idx_key_cache": torch.randn(N_BLOCKS, 1, BLOCK_ROWS, INDEX_HEAD_DIM, generator=gen).bfloat16().float(),
+        "comp_kv": torch.randn(N_BLOCKS, 1, BLOCK_ROWS, HEAD_DIM, generator=gen).bfloat16().float(),
+        "dense_kv": torch.randn(1, 1, DENSE_ROWS, HEAD_DIM, generator=gen).bfloat16().float(),
+        "key_row": torch.zeros(1, 1, 1, INDEX_HEAD_DIM),
+    }
+    layouts = {
+        "index_wk": ttnn.TILE_LAYOUT,
+        "index_norm_weight": ttnn.TILE_LAYOUT,
+        "idx_key_cache": ttnn.TILE_LAYOUT,
+        "comp_kv": ttnn.ROW_MAJOR_LAYOUT,
+        "dense_kv": ttnn.TILE_LAYOUT,
+        "key_row": ttnn.ROW_MAJOR_LAYOUT,
+    }
+    dev = {
+        name: ttnn.from_torch(
+            x, dtype=ttnn.bfloat16, layout=layouts[name], device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        for name, x in host.items()
+    }
+    host["page_table"] = torch.stack([torch.arange(N_BLOCKS), torch.tensor([1, 3, 0, 2])]).to(torch.int32)
+    dev["page_table"] = ttnn.from_torch(
+        host["page_table"],
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    return host, dev
+
+
+@pytest.mark.parametrize("ratio", (2, 1))
+@pytest.mark.parametrize("mem_mode", ("l1_kv_grid", "dram"))
+@pytest.mark.parametrize("dense_mode", ("none", "comp_and_dense", "dense_only"))
+@pytest.mark.parametrize("use_page_row", (True, False))
+def test_compress_pool_decode_index_key(device, reset_seeds, ratio, mem_mode, dense_mode, use_page_row):
+    """The fused index key (``index_wk`` matvec, k_norm, RoPE) and the cache writes of the closed group:
+    ``idx_key_cache`` / ``comp_kv`` at a logical entry through ``page_table``, ``dense_kv`` at ``dense_entry``
+    (``-1`` skips), ``key_row``. Two steps run, the second from the program cache with new indices; every row
+    the op does not own stays bit-exact."""
+    torch.manual_seed(77)
+    host, dev = _index_key_inputs(device)
+    norm_weight_host = (1.0 + 0.1 * torch.randn(1, 1, 1, HEAD_DIM)).bfloat16().float()
+    norm_w_tt = ttnn.from_torch(
+        norm_weight_host,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    win_kv_tt = win_gate_tt = None
+    if ratio == 2:
+        win_kv_tt, win_gate_tt = (
+            ttnn.from_torch(
+                torch.randn(1, 1, 2, HEAD_DIM).bfloat16().float(),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            for _ in range(2)
+        )
+    page_row = 1 if use_page_row else 0
+    rot = ttnn.from_torch(
+        _interleaved_rotate_matrix(ROPE_DIM),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    baseline_wk_norm = DeepSeekV4RMSNorm(host["index_norm_weight"].reshape(-1), EPS, device, sharded=True)
+
+    expected = {name: host[name].clone() for name in ("idx_key_cache", "comp_kv", "dense_kv")}
+    cache_entries = None
+    # (logical entry, dense row): block 2 row 37 (second tile row), then block 0 row 5; the second step's
+    # dense row -1 skips dense_kv.
+    for step, (entry, dense_row) in enumerate(((2 * BLOCK_ROWS + 37, 165), (5, -1))):
+        kv_host = torch.randn(1, HEAD_DIM).bfloat16().float()
+        kv_tt = _make_row_tensor(kv_host, device, mem_mode)
+        windows = {}
+        if ratio == 2:
+            windows = dict(
+                gate=_make_row_tensor(torch.randn(1, HEAD_DIM).bfloat16().float(), device, mem_mode),
+                win_kv=win_kv_tt,
+                win_gate=win_gate_tt,
+                win_slot=_slot_tensor(1, device),
+            )
+        cos_tt, sin_tt, cos_ref, sin_ref = _make_rope_tables(device, rope_dim=ROPE_DIM, seed=300 + step)
+        writes = dict(
+            index_wk=dev["index_wk"],
+            index_norm_weight=dev["index_norm_weight"],
+            idx_key_cache=dev["idx_key_cache"],
+            page_table=dev["page_table"],
+            entry=_slot_tensor(entry, device),
+            page_row=_slot_tensor(page_row, device) if use_page_row else None,
+            key_row=dev["key_row"],
+        )
+        if dense_mode != "none":
+            writes.update(dense_kv=dev["dense_kv"], dense_entry=_slot_tensor(dense_row, device))
+            if dense_mode == "comp_and_dense":
+                writes.update(comp_kv=dev["comp_kv"])
+
+        latent_tt, roped_tt = ttnn.experimental.deepseek.compress_pool_decode(
+            kv_tt, norm_w_tt, epsilon=EPS, do_pool=True, cos=cos_tt, sin=sin_tt, **windows, **writes
+        )
+        if cache_entries is None:
+            cache_entries = device.num_program_cache_entries()
+        else:
+            assert device.num_program_cache_entries() == cache_entries, "the second step reuses the program"
+
+        latent = ttnn.to_torch(latent_tt).float().reshape(1, HEAD_DIM)
+        roped = ttnn.to_torch(roped_tt).float().reshape(1, HEAD_DIM)
+        passing, pcc = comp_pcc(_torch_rope(latent, cos_ref, sin_ref), roped, PCC_THRESHOLD)
+        assert passing, f"step {step}: roped row PCC {pcc} < {PCC_THRESHOLD}"
+        # The key from the op's own latent, so only the key path is measured.
+        key_ref = _torch_rope(
+            _torch_rms_norm(latent @ host["index_wk"], host["index_norm_weight"].reshape(1, -1)), cos_ref, sin_ref
+        )
+
+        phys = int(host["page_table"][page_row, entry // BLOCK_ROWS])
+        row = entry % BLOCK_ROWS
+        actual_keys = ttnn.to_torch(dev["idx_key_cache"]).float()
+        key = actual_keys[phys, 0, row].reshape(1, -1)
+        passing, pcc = comp_pcc(key_ref, key, KEY_PCC_THRESHOLD)
+        logger.info(f"step {step} (ratio={ratio}, {mem_mode}, {dense_mode}, page_row={use_page_row}) key PCC: {pcc}")
+        assert passing, f"step {step}: index key PCC {pcc} < {KEY_PCC_THRESHOLD}"
+        assert torch.equal(ttnn.to_torch(dev["key_row"]).float().reshape(1, -1), key), "key_row != the cached key"
+
+        base_key = baseline_wk_norm(ttnn.linear(latent_tt, dev["index_wk"], compute_kernel_config=_HIFI4))
+        base_key = _apply_rope(base_key, cos_tt, sin_tt, rot, ROPE_DIM)
+        passing, pcc = comp_pcc(ttnn.to_torch(base_key).float().reshape(1, -1), key, KEY_PCC_THRESHOLD)
+        assert passing, f"step {step}: index key vs the ttnn chain PCC {pcc}"
+
+        expected["idx_key_cache"][phys, 0, row] = key
+        assert torch.equal(actual_keys, expected["idx_key_cache"]), "an idx_key_cache row the op does not own changed"
+        if dense_mode == "comp_and_dense":
+            expected["comp_kv"][phys, 0, row] = roped
+        assert torch.equal(ttnn.to_torch(dev["comp_kv"]).float(), expected["comp_kv"]), "comp_kv mismatch"
+        if dense_mode != "none" and dense_row >= 0:
+            expected["dense_kv"][0, 0, dense_row] = roped
+        assert torch.equal(ttnn.to_torch(dev["dense_kv"]).float(), expected["dense_kv"]), "dense_kv mismatch"
+
+
+@pytest.mark.parametrize(
+    "mode",
+    (
+        "fused_pool_rope",
+        "fused_nopool",
+        "fused_ratio1",
+        "baseline_pool_rope",
+        "fused_pool_rope_index_key",
+        "baseline_index_key",
+    ),
+)
 def test_compress_pool_decode_perf(device, reset_seeds, mode):
     """Warm dispatches of compress_pool_decode (vs baseline chain) for Tracy timing:
 
@@ -536,8 +704,74 @@ def test_compress_pool_decode_perf(device, reset_seeds, mode):
         ttnn.synchronize_device(device)
         return
 
+    host, dev = _index_key_inputs(device)
+    entry_tt = _slot_tensor(2 * BLOCK_ROWS + 37, device)
+    page_row_tt = _slot_tensor(1, device)
+    dense_entry_tt = _slot_tensor(165, device)
+
+    if mode == "baseline_index_key":
+        # The chain the fused writes replace (_write_index_key + _write_entries), from one pooled latent.
+        latent_tt, roped_tt = ttnn.experimental.deepseek.compress_pool_decode(
+            kv_tt, norm_w_tt, epsilon=EPS, cos=cos_tt, sin=sin_tt
+        )
+        k_norm = DeepSeekV4RMSNorm(host["index_norm_weight"].reshape(-1), EPS, device, sharded=True)
+        rot = ttnn.from_torch(
+            _interleaved_rotate_matrix(ROPE_DIM),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        for _ in range(10):
+            k = k_norm(ttnn.linear(latent_tt, dev["index_wk"], compute_kernel_config=_HIFI4))
+            k_roped = _apply_rope(k, cos_tt, sin_tt, rot, ROPE_DIM)
+            k_rows = _rows_on_one_core(k_roped)
+            ttnn.experimental.paged_update_cache(
+                dev["idx_key_cache"],
+                k_rows,
+                update_idxs_tensor=entry_tt,
+                page_table=dev["page_table"],
+                page_table_row_tensor=page_row_tt,
+            )
+            rows = _rows_on_one_core(roped_tt)
+            ttnn.experimental.paged_update_cache(
+                dev["comp_kv"],
+                rows,
+                update_idxs_tensor=entry_tt,
+                page_table=dev["page_table"],
+                page_table_row_tensor=page_row_tt,
+            )
+            ttnn.experimental.paged_update_cache(dev["dense_kv"], rows, update_idxs_tensor=dense_entry_tt)
+            for t in (k, k_roped, k_rows, rows):
+                ttnn.deallocate(t)
+        ttnn.synchronize_device(device)
+        return
+
     for _ in range(10):
-        if mode == "fused_pool_rope":
+        if mode == "fused_pool_rope_index_key":
+            outs = ttnn.experimental.deepseek.compress_pool_decode(
+                kv_tt,
+                norm_w_tt,
+                epsilon=EPS,
+                gate=gate_tt,
+                win_kv=win_kv_tt,
+                win_gate=win_gate_tt,
+                win_slot=win_slot_tt,
+                cos=cos_tt,
+                sin=sin_tt,
+                do_pool=True,
+                index_wk=dev["index_wk"],
+                index_norm_weight=dev["index_norm_weight"],
+                idx_key_cache=dev["idx_key_cache"],
+                comp_kv=dev["comp_kv"],
+                page_table=dev["page_table"],
+                entry=entry_tt,
+                page_row=page_row_tt,
+                dense_kv=dev["dense_kv"],
+                dense_entry=dense_entry_tt,
+                key_row=dev["key_row"],
+            )
+        elif mode == "fused_pool_rope":
             outs = ttnn.experimental.deepseek.compress_pool_decode(
                 kv_tt,
                 norm_w_tt,

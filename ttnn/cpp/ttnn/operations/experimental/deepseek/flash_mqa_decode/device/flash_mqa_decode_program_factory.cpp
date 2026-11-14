@@ -61,8 +61,10 @@ tt::tt_metal::ProgramDescriptor FlashMqaDecodeDeviceOperation::ProgramFactory::c
     const uint32_t kv_rows = kv.logical_shape()[2];
     const uint32_t ring_capacity = args.ring_rows ? args.ring_rows : kv_rows;
     const bool has_ring_offset = tensor_args.lengths.logical_shape()[-1] >= 3;
-    const uint32_t selected_capacity =
+    const bool has_selected_first_row = tensor_args.lengths.logical_shape()[-1] >= 4;
+    const uint32_t selected_rows_past_offset =
         has_selected ? tensor_args.selected_kv->logical_shape()[2] - args.selected_row_offset : 0;
+    const uint32_t selected_capacity = args.selected_rows ? args.selected_rows : selected_rows_past_offset;
     const uint32_t row_bytes = head_dim * static_cast<uint32_t>(q.element_size());
 
     const tt::DataFormat bf16_df = tt::DataFormat::Float16_b;
@@ -174,6 +176,8 @@ tt::tt_metal::ProgramDescriptor FlashMqaDecodeDeviceOperation::ProgramFactory::c
         {"max_ring_first_tile_row", (kv_rows - ring_capacity) / TILE_HEIGHT},
         {"selected_capacity", selected_capacity},
         {"selected_first_tile_row", args.selected_row_offset / TILE_HEIGHT},
+        {"has_selected_first_row", has_selected_first_row ? 1u : 0u},
+        {"max_selected_first_tile_row", (selected_rows_past_offset - selected_capacity) / TILE_HEIGHT},
         {"has_rope", has_rope ? 1u : 0u},
         {"rope_tiles", rope_tiles},
         {"cb_q_rm", cb_q_rm},

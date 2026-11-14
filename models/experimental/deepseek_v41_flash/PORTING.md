@@ -137,8 +137,8 @@ preconditions rather than from the math. Check these before asking for a device 
   rectangle (attention: q_a uses `n_blocks=8`, an 8x1 strip inside q_b's 8x8).
 - **Reuse replicas.** Projections that read the same activation should use the same cut
   (`K`, `n_blocks`, rectangle), so they all read the one all-gather replica. In attention,
-  `kv_proj`, `compressor.wkv` and `compressor.wgate` share one, and `q_b_proj` and
-  `indexer.wq_b` share another.
+  `kv_proj` and the compressor's column-split `wkv` / `wgate` (kv's B cores first) share one,
+  and `q_b_proj` and `indexer.wq_b` share another.
 - **Watch L1 headroom around whole-grid ops.** Move tensors you'll need later out to DRAM
   before an op that uses the full grid (attention spills q around `fused_lightning_select_kv`).
 - **Watch tile padding.** Reductions over a short axis stored in TILE layout run into the

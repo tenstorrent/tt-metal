@@ -96,22 +96,31 @@ void FlashMqaDecodeDeviceOperation::validate_on_program_cache_miss(
             "flash_mqa_decode: selected_row_offset ({}) must be a multiple of 32 within selected_kv's {} rows",
             args.selected_row_offset,
             rows);
+        const uint32_t capacity = args.selected_rows ? args.selected_rows : rows - args.selected_row_offset;
         TT_FATAL(
-            (rows - args.selected_row_offset) % args.k_chunk_size == 0,
-            "flash_mqa_decode: selected rows past the offset ({}) must be a multiple of k_chunk_size ({})",
-            rows - args.selected_row_offset,
-            args.k_chunk_size);
+            capacity % args.k_chunk_size == 0 && args.selected_row_offset + capacity <= rows,
+            "flash_mqa_decode: selected rows ({}) must be a multiple of k_chunk_size ({}) within selected_kv's {} rows "
+            "past the offset {}",
+            capacity,
+            args.k_chunk_size,
+            rows,
+            args.selected_row_offset);
     } else {
-        TT_FATAL(args.selected_row_offset == 0, "flash_mqa_decode: selected_row_offset needs a selected_kv");
+        TT_FATAL(
+            args.selected_row_offset == 0 && args.selected_rows == 0,
+            "flash_mqa_decode: selected_row_offset and selected_rows need a selected_kv");
     }
 
     TT_FATAL(
         (lengths.dtype() == DataType::INT32 || lengths.dtype() == DataType::UINT32) &&
             lengths.layout() == Layout::ROW_MAJOR && lengths.logical_shape()[-1] >= 2,
-        "flash_mqa_decode: lengths must be row-major int32 with [ring_valid, selected_valid(, ring_first_row)] in "
-        "its first row, got {} {}",
+        "flash_mqa_decode: lengths must be row-major int32 with [ring_valid, selected_valid(, ring_first_row(, "
+        "selected_first_row))] in its first row, got {} {}",
         lengths.dtype(),
         lengths.logical_shape());
+    TT_FATAL(
+        lengths.logical_shape()[-1] < 4 || tensor_args.selected_kv.has_value(),
+        "flash_mqa_decode: a selected_first_row in lengths needs a selected_kv");
 
     if (tensor_args.attention_sink.has_value()) {
         const auto& sink = tensor_args.attention_sink.value();
@@ -201,6 +210,7 @@ ttnn::Tensor flash_mqa_decode(
     const std::optional<ttnn::Tensor>& selected_kv,
     uint32_t selected_row_offset,
     uint32_t ring_rows,
+    uint32_t selected_rows,
     const std::optional<ttnn::Tensor>& attention_sink,
     std::optional<float> scale,
     uint32_t k_chunk_size,
@@ -223,6 +233,7 @@ ttnn::Tensor flash_mqa_decode(
         .num_s_blocks = num_s_blocks,
         .selected_row_offset = selected_row_offset,
         .ring_rows = ring_rows,
+        .selected_rows = selected_rows,
         .output_mem_config = memory_config.value_or(q.memory_config()),
         .compute_kernel_config = kernel_config_val,
     };

@@ -27,6 +27,17 @@ struct CompressPoolDecodeParams {
     bool kv_sharded = false;
     bool gate_sharded = false;
     bool norm_weight_is_tile = true;
+    // Index key k_norm(latent @ index_wk), RoPE'd, into idx_key_cache row ``entry``.
+    bool has_index_key = false;
+    bool index_norm_weight_is_tile = true;
+    uint32_t index_head_dim = 0;
+    // The RoPE'd row into comp_kv at ``entry`` / into dense_kv at ``dense_entry``.
+    bool has_comp_kv = false;
+    bool has_dense = false;
+    bool has_page_row = false;
+    bool has_key_row = false;
+    // Rows per page-table block of idx_key_cache / comp_kv.
+    uint32_t block_rows = 0;
 };
 
 struct CompressPoolDecodeInputs {
@@ -39,6 +50,16 @@ struct CompressPoolDecodeInputs {
     std::optional<Tensor> prev_slot;
     std::optional<Tensor> cos;
     std::optional<Tensor> sin;
+    std::optional<Tensor> index_wk;
+    std::optional<Tensor> index_norm_weight;
+    std::optional<Tensor> idx_key_cache;
+    std::optional<Tensor> comp_kv;
+    std::optional<Tensor> page_table;
+    std::optional<Tensor> entry;
+    std::optional<Tensor> page_row;
+    std::optional<Tensor> dense_kv;
+    std::optional<Tensor> dense_entry;
+    std::optional<Tensor> key_row;
 };
 
 struct CompressPoolDecodeDeviceOperation {
@@ -69,6 +90,16 @@ std::vector<ttnn::Tensor> compress_pool_decode(
     const std::optional<ttnn::Tensor>& prev_slot,
     const std::optional<ttnn::Tensor>& cos,
     const std::optional<ttnn::Tensor>& sin,
-    bool do_pool);
+    bool do_pool,
+    const std::optional<ttnn::Tensor>& index_wk,
+    const std::optional<ttnn::Tensor>& index_norm_weight,
+    const std::optional<ttnn::Tensor>& idx_key_cache,
+    const std::optional<ttnn::Tensor>& comp_kv,
+    const std::optional<ttnn::Tensor>& page_table,
+    const std::optional<ttnn::Tensor>& entry,
+    const std::optional<ttnn::Tensor>& page_row,
+    const std::optional<ttnn::Tensor>& dense_kv,
+    const std::optional<ttnn::Tensor>& dense_entry,
+    const std::optional<ttnn::Tensor>& key_row);
 
 }  // namespace ttnn::prim

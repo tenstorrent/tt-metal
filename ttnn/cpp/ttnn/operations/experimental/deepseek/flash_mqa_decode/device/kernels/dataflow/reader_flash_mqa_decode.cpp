@@ -19,6 +19,8 @@ void kernel_main() {
     constexpr uint32_t max_ring_first_tile_row = get_named_compile_time_arg_val("max_ring_first_tile_row");
     constexpr uint32_t selected_capacity = get_named_compile_time_arg_val("selected_capacity");
     constexpr uint32_t selected_first_tile_row = get_named_compile_time_arg_val("selected_first_tile_row");
+    constexpr uint32_t has_selected_first_row = get_named_compile_time_arg_val("has_selected_first_row");
+    constexpr uint32_t max_selected_first_tile_row = get_named_compile_time_arg_val("max_selected_first_tile_row");
     constexpr bool has_rope = get_named_compile_time_arg_val("has_rope") == 1;
     constexpr uint32_t rope_tiles = get_named_compile_time_arg_val("rope_tiles");
     constexpr uint32_t cb_q_rm = get_named_compile_time_arg_val("cb_q_rm");
@@ -50,13 +52,17 @@ void kernel_main() {
 
     const auto lengths_reader = TensorAccessor(lengths_args, lengths_addr);
     const uint32_t lengths_l1 = get_write_ptr(cb_lengths_scratch);
-    noc_async_read(lengths_reader.get_noc_addr(0), lengths_l1, (has_ring_offset ? 3 : 2) * sizeof(uint32_t));
+    constexpr uint32_t num_lengths = has_selected_first_row ? 4 : (has_ring_offset ? 3 : 2);
+    noc_async_read(lengths_reader.get_noc_addr(0), lengths_l1, num_lengths * sizeof(uint32_t));
     noc_async_read_barrier();
     volatile tt_l1_ptr uint32_t* lengths_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(lengths_l1);
     const flash_mqa_decode::Lengths lengths =
         flash_mqa_decode::clamp_lengths(lengths_ptr[0], lengths_ptr[1], ring_capacity, selected_capacity);
     const uint32_t ring_first_tile_row =
         has_ring_offset ? flash_mqa_decode::min_u32(lengths_ptr[2] / 32, max_ring_first_tile_row) : 0;
+    const uint32_t selected_base_tile_row =
+        selected_first_tile_row +
+        (has_selected_first_row ? flash_mqa_decode::min_u32(lengths_ptr[3] / 32, max_selected_first_tile_row) : 0);
     cb_reserve_back(cb_lengths, 1);
     volatile tt_l1_ptr uint32_t* compute_lengths =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_lengths));
@@ -114,7 +120,7 @@ void kernel_main() {
                 k_l1 += k_tile_bytes;
             }
         } else {
-            const uint32_t first_page = (selected_first_tile_row + first_tile_row) * DHt;
+            const uint32_t first_page = (selected_base_tile_row + first_tile_row) * DHt;
             for (uint32_t t = 0; t < k_chunk_tiles; ++t) {
                 noc_async_read_page(first_page + t, selected_reader, k_l1);
                 k_l1 += k_tile_bytes;

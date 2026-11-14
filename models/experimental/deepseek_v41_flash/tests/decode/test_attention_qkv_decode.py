@@ -63,8 +63,8 @@ def _bf4(w: torch.Tensor) -> torch.Tensor:
     return ttnn.to_torch(ttnn.from_torch(w, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT)).float()
 
 
-def _dram_sharded_weight(w: torch.Tensor, slab_width: int, device) -> ttnn.Tensor:
-    """``w`` ``[K, N]`` as bfloat4_b TILE, ND-sharded in DRAM one ``[K, slab_width]`` slab per core."""
+def _dram_sharded_weight(w: torch.Tensor, slab_width: int, device, dtype=ttnn.bfloat4_b) -> ttnn.Tensor:
+    """``w`` ``[K, N]`` as ``dtype`` TILE, ND-sharded in DRAM one ``[K, slab_width]`` slab per core."""
     memory_config = ttnn.MemoryConfig(
         ttnn.BufferType.DRAM,
         ttnn.NdShardSpec(
@@ -76,7 +76,7 @@ def _dram_sharded_weight(w: torch.Tensor, slab_width: int, device) -> ttnn.Tenso
     )
     return ttnn.from_torch(
         w.reshape(1, 1, *w.shape),
-        dtype=ttnn.bfloat4_b,
+        dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=memory_config,
@@ -232,7 +232,7 @@ def _cache_pos(pos: int, device) -> ttnn.Tensor:
     )
 
 
-def _run(tt: dict, cache_pos: ttnn.Tensor) -> ttnn.Tensor:
+def _run(tt: dict, cache_pos: ttnn.Tensor, **comp) -> ttnn.Tensor:
     return ttnn.experimental.deepseek.attention_qkv_decode(
         tt["tokens"],
         tt["w_q_a"],
@@ -245,6 +245,7 @@ def _run(tt: dict, cache_pos: ttnn.Tensor) -> ttnn.Tensor:
         tt["kv_cache"],
         cache_pos,
         epsilon=EPS,
+        **comp,
     )
 
 
@@ -327,6 +328,37 @@ def test_attention_qkv_decode_vs_today(device, heads):
     for i, what in enumerate(("q", "kv")):
         fused, ref = pccs["fused"][i], pccs["today"][i]
         assert 1 - fused <= 1.5 * (1 - ref), f"{what}: fused PCC {fused} well below today's {ref}"
+
+
+# A rank's compressor columns: kv + gate at TP4 (ratio 2), kv alone at TP4 (ratio 1), kv + gate on one chip.
+@pytest.mark.parametrize("n_comp", (256, 128, 1024), ids=("tp4_ratio2", "tp4_ratio1", "tp1_ratio2"))
+@torch.no_grad()
+def test_attention_qkv_decode_compressor_columns(device, n_comp):
+    """``w_comp``'s columns of the tokens row into ``comp_output``, beside an unchanged q and kv."""
+    heads, pos = 16, 77
+    host, tt = _setup(device, heads, 128)
+    w_comp = torch.randn(K, n_comp) / K**0.5
+    tt_w_comp = _dram_sharded_weight(w_comp, ttnn.TILE_SIZE, device, dtype=ttnn.bfloat8_b)
+    w_comp = ttnn.to_torch(tt_w_comp).float().reshape(K, n_comp)
+    comp_output = ttnn.from_torch(
+        torch.zeros(1, 1, 1, n_comp),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    expected_q, expected_kv = _reference(host, heads)
+    for step in range(2):
+        q = _run(tt, _cache_pos(pos + step, device), w_comp=tt_w_comp, comp_output=comp_output)
+        got_q = ttnn.to_torch(q).float().reshape(heads, HEAD_DIM)
+        got_kv = ttnn.to_torch(tt["kv_cache"]).float()[0, 0, pos + step]
+        got_comp = ttnn.to_torch(comp_output).float().reshape(-1)
+        q_pcc, kv_pcc = comp_pcc(expected_q, got_q, Q_PCC), comp_pcc(expected_kv, got_kv, KV_PCC)
+        comp_pcc_ = comp_pcc(host["x"].reshape(-1) @ w_comp, got_comp, KV_PCC)
+        logger.info(f"n_comp {n_comp} step {step}: q PCC {q_pcc[1]}, kv PCC {kv_pcc[1]}, comp PCC {comp_pcc_[1]}")
+        assert q_pcc[0] and kv_pcc[0], f"q PCC {q_pcc[1]}, kv PCC {kv_pcc[1]}"
+        assert comp_pcc_[0], f"compressor columns PCC {comp_pcc_[1]} < {KV_PCC}"
+        ttnn.deallocate(q)
 
 
 def _text_config():
@@ -415,11 +447,18 @@ def _decode_both(
 
 
 def _check_layer_fused_qkv(
-    device, tp_size: int, layers: tuple, monkeypatch, use_prefetcher: bool = False, dense_select: bool = True
+    device,
+    tp_size: int,
+    layers: tuple,
+    monkeypatch,
+    use_prefetcher: bool = False,
+    dense_select: bool = True,
+    separate_column_compressor: bool = True,
 ):
     """``layers`` on random weights, in order from position 0 past the ring wrap, with and without
     attention_qkv_decode: every layer's block output and ring must agree. ``use_prefetcher`` streams both
-    builds' ring weights through one set of rings, as a stage device does."""
+    builds' ring weights through one set of rings, as a stage device does. ``separate_column_compressor=False``
+    gives the separate build the bfloat16 row-parallel compressor instead of the bfloat8_b column split."""
     config = _text_config()
     seq_len = config.sliding_window + 4
     torch.manual_seed(0)
@@ -429,6 +468,7 @@ def _check_layer_fused_qkv(
     attns, caches = {}, {}
     for fused in (True, False):
         monkeypatch.setattr(attention_module, "_FUSED_QKV", fused)
+        monkeypatch.setattr(attention_module, "COLUMN_COMPRESSOR", fused or separate_column_compressor)
         attns[fused] = {
             i: DeepSeekV41Attention(
                 config,
@@ -519,6 +559,20 @@ def test_attention_layer_fused_qkv_index_source(device, layers, dense_select, mo
     """Index source layer 2 (and consumer 3) under dense (fused for pos >= 0) vs sparse select (fused at pos=0,
     separate _qkv + select_kv for pos >= 1)."""
     _check_layer_fused_qkv(device, 1, layers, monkeypatch, dense_select=dense_select)
+
+
+@pytest.mark.skipif(_text_config() is None, reason=f"no V4.1-Flash config.json under {DEFAULT_MODEL_DIR}")
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True, ids=["8x4"])
+@pytest.mark.parametrize("dense_select", (True, False), ids=("dense", "sparse"))
+@torch.no_grad()
+def test_attention_layer_column_compressor_tp4(mesh_device, dense_select, monkeypatch):
+    """Kv source 2 and its consumer on a 1x4 stage: the bfloat8_b column-split compressor (inside
+    attention_qkv_decode on its one-row steps) against the bfloat16 row-parallel one."""
+    if tuple(mesh_device.shape) != (8, 4):
+        pytest.skip(f"needs an 8x4 mesh, got {tuple(mesh_device.shape)}")
+    submesh = mesh_device.create_submesh(ttnn.MeshShape(1, 4), ttnn.MeshCoordinate(0, 0))
+    _check_layer_fused_qkv(submesh, 4, (2, 3), monkeypatch, dense_select=dense_select, separate_column_compressor=False)
 
 
 @pytest.mark.skipif(_text_config() is None, reason=f"no V4.1-Flash config.json under {DEFAULT_MODEL_DIR}")
