@@ -390,7 +390,6 @@ ttnn/cpp/ttnn/operations/data_movement/**/CMakeLists.txt @tenstorrent/metalium-d
 ttnn/cpp/ttnn/operations/data_movement/fold/ @tenstorrent/metalium-developers-convolutions
 ttnn/cpp/ttnn/operations/data_movement/gather/ @aczajkowskiTT @sjameelTT @bbradelTT @mgajewskiTT @nsorabaTT
 ttnn/cpp/ttnn/operations/data_movement/scatter/ @aczajkowskiTT @sjameelTT @bbradelTT @nsorabaTT
-ttnn/cpp/ttnn/operations/data_movement/sharded/reshard/**/nd_reshard* @tenstorrent/metalium-developers-ttnn-core
 ttnn/cpp/ttnn/operations/data_movement/sort/ @aczajkowskiTT @sjameelTT @bbradelTT @mgajewskiTT @nmauriceTT @nsorabaTT
 ttnn/cpp/ttnn/operations/kernel_helper_functions/ @tenstorrent/metalium-developers-mmfusedreduce
 ttnn/cpp/ttnn/operations/kernel_helper_functions/**/CMakeLists.txt @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-developers-infra
@@ -686,6 +685,8 @@ ttnn/cpp/ttnn/operations/core/data_movement_kernel/ @tenstorrent/metalium-develo
 ttnn/cpp/ttnn/operations/core/program_cache_l1.hpp @tenstorrent/metalium-developers-ops-leads @tenstorrent/metalium-developers-ttnn-core
 ttnn/cpp/ttnn/operations/core/work_split/ @tenstorrent/metalium-developers-ops-leads @tenstorrent/metalium-developers-ttnn-core
 ttnn/cpp/ttnn/operations/generic/ @tenstorrent/metalium-developers-ops-leads @tenstorrent/metalium-developers-ttnn-core
+# Golden functions for ops: owned by the ops leads.
+ttnn/ttnn/experimental_loader/golden_functions.py @tenstorrent/metalium-developers-ops-leads
 # More framework tests and shared test helpers: ttnn-core stays, with the other tests/ttnn/ owners.
 tests/ttnn/unit_tests/gtests/test_codegen_gates_unallocated.cpp @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
 tests/ttnn/unit_tests/gtests/test_work_split_tilize.cpp @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
