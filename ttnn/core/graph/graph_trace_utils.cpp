@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstdlib>  // std::strtoul
 #include <string>
+#include <unordered_set>
 
 #include <nlohmann/json.hpp>
 
@@ -63,6 +64,11 @@ uint32_t extract_peak_L1_memory_usage(const nlohmann::json& trace) {
     uint32_t total_buffer = 0;
     uint32_t peak_memory_usage = 0;
     std::vector<std::string> current_op;
+    // Buffer nodes whose bytes are part of total_buffer. A captured trace can free a buffer that it
+    // never allocated (allocated before the capture started, or allocated inside an op whose
+    // allocation node the leading scan does not reach), and subtracting those bytes from an
+    // unsigned running total wrapped the reported peak to roughly 4 GiB.
+    std::unordered_set<int> counted_buffer_nodes;
 
     for (size_t i = 0; i < trace.size(); ++i) {
         const auto& v = trace[i];
@@ -73,6 +79,7 @@ uint32_t extract_peak_L1_memory_usage(const nlohmann::json& trace) {
                     const auto& inner_v = trace[i];
                     if (inner_v[kNodeType] == "buffer" && inner_v[kParams][kType] == "L1") {
                         total_buffer += json_to_int(inner_v[kParams][kSize]);
+                        counted_buffer_nodes.insert(static_cast<int>(i));
                     } else if (inner_v[kNodeType] == kNodeTensor) {
                         continue;
                     } else {
@@ -94,10 +101,15 @@ uint32_t extract_peak_L1_memory_usage(const nlohmann::json& trace) {
             total_cb = 0;
         } else if (v[kNodeType] == kNodeBufferAllocate && v[kParams][kType] == "L1") {
             total_buffer += json_to_int(v[kParams][kSize]);
+            // A live capture records the buffer node as this node's only connection, and a
+            // deallocate names that same buffer node.
+            if (v.contains(kConnections) && !v[kConnections].empty()) {
+                counted_buffer_nodes.insert(v[kConnections][0].get<int>());
+            }
         } else if (v[kNodeType] == kNodeBufferDeallocate) {
             auto connection = v[kConnections][0].get<int>();
             auto buffer = trace[connection];
-            if (buffer[kParams][kType] == "L1") {
+            if (buffer[kParams][kType] == "L1" && counted_buffer_nodes.erase(connection) > 0) {
                 total_buffer -= json_to_int(buffer[kParams][kSize]);
             }
         } else if (v[kNodeType] == kNodeFunctionEnd) {
