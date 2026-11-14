@@ -196,6 +196,69 @@ void kernel_main() {
     DataflowBuffer dfb_out(dfb_out_id);
     DataflowBuffer dfb_x(dfb_x_id);
     DataflowBuffer dfb_xmm(dfb_xmm_id);
+#ifdef GN_ROW_STATS
+    constexpr uint32_t dfb_mrow_id = tt::CBIndex::c_1;
+    constexpr uint32_t dfb_rrow_id = tt::CBIndex::c_12;
+    constexpr uint32_t dfb_rowacc_id = tt::CBIndex::c_18;
+    DataflowBuffer dfb_mrow(dfb_mrow_id);
+    DataflowBuffer dfb_rrow(dfb_rrow_id);
+    DataflowBuffer dfb_rowacc(dfb_rowacc_id);
+    auto build_rows = [&](uint32_t stat_cb, uint32_t stat_stride, DataflowBuffer& rows, uint32_t rows_id) {
+        uint32_t min_group = 0;
+        uint32_t channels_left = num_channels_per_group;
+        uint32_t block_w_index = 0;
+        for (uint32_t nt = 0; nt < per_core_N; ++nt) {
+            uint32_t group_offset = 0;
+            for (uint32_t g = min_group; g < num_groups; ++g) {
+                const uint32_t mask_index = g * block_w + block_w_index;
+                reconfig_data_format(dfb_input_mask_id, stat_cb);
+                mul_bcast_scalar_init(dfb_input_mask_id, stat_cb);
+                tile_regs_acquire();
+                mul_tiles_bcast_scalar(dfb_input_mask_id, stat_cb, mask_index, g * stat_stride, dst0);
+                if (group_offset != 0) {
+                    reconfig_data_format_srca(dfb_rowacc_id);
+                    add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(dfb_rowacc_id);
+                    dfb_rowacc.wait_front(1);
+                    add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(dfb_rowacc_id, 0, dst0);
+                    dfb_rowacc.pop_front(1);
+                }
+                tile_regs_commit();
+                dfb_rowacc.reserve_back(1);
+                tile_regs_wait();
+                pack_tile(dst0, dfb_rowacc_id);
+                tile_regs_release();
+                dfb_rowacc.push_back(1);
+
+                const uint32_t cols_available = tile_width - group_offset;
+                const uint32_t cols_consumed = std::min(cols_available, channels_left);
+                channels_left -= cols_consumed;
+                group_offset += cols_consumed;
+                if (channels_left > 0) {
+                    ++block_w_index;
+                    break;
+                }
+                ++min_group;
+                channels_left = num_channels_per_group;
+                block_w_index = 0;
+                if (group_offset == tile_width) {
+                    break;
+                }
+            }
+            reconfig_data_format_srca(dfb_rowacc_id);
+            copy_init(dfb_rowacc_id);
+            dfb_rowacc.wait_front(1);
+            tile_regs_acquire();
+            copy_tile(dfb_rowacc_id, 0, dst0);
+            tile_regs_commit();
+            dfb_rowacc.pop_front(1);
+            rows.reserve_back(1);
+            tile_regs_wait();
+            pack_tile(dst0, rows_id);
+            tile_regs_release();
+            rows.push_back(1);
+        }
+    };
+#endif
 
 // tilize input from RM to tile layout
 #ifdef TILIZE_IN
@@ -480,6 +543,12 @@ void kernel_main() {
             dfb_ex_global_fp32.wait_front(2 * num_groups);
             dfb_ex2pe_fp32.wait_front(num_groups);
         }
+#ifdef GN_ROW_STATS
+        build_rows(dfb_ex_global_id, stats_tiles_per_group, dfb_mrow, dfb_mrow_id);
+        build_rows(dfb_ex2pe_id, 1, dfb_rrow, dfb_rrow_id);
+        dfb_mrow.wait_front(per_core_N);
+        dfb_rrow.wait_front(per_core_N);
+#endif
 
         // Start Final Normalization
         if constexpr (fp32_sfpu_normalizer) {
@@ -492,6 +561,7 @@ void kernel_main() {
             }
 
             for (uint32_t mt = 0; mt < out_block_h_actual; ++mt) {
+#ifndef GN_ROW_STATS
                 // This indicates the smallest group that is yet to be processed for this block
                 // As we iterate over nt, some of the groups will be completed, and we will update
                 // this variable
@@ -508,6 +578,7 @@ void kernel_main() {
                 // For each group, there are block_w number of mask tiles. As we iterate over nt,
                 // we will update this variable to track the correct index to use for the mask.
                 uint32_t block_w_index = 0;
+#endif
 
                 for (uint32_t nt = 0; nt < per_core_N; ++nt) {
                     dfb_in0.wait_front(1);
@@ -518,6 +589,31 @@ void kernel_main() {
                         dfb_in0_welford.wait_front(1);
                     }
 
+#ifdef GN_ROW_STATS
+                    reconfig_data_format_srcb(dfb_mrow_id);
+                    sub_bcast_rows_init(dfb_in0_id, dfb_mrow_id);
+                    tile_regs_acquire();
+                    sub_tiles_bcast_rows(dfb_in0_id, dfb_mrow_id, 0, nt, dst0);
+                    tile_regs_commit();
+                    dfb_xmm.reserve_back(1);
+                    tile_regs_wait();
+                    pack_tile(dst0, dfb_xmm_id);
+                    tile_regs_release();
+                    dfb_xmm.push_back(1);
+                    reconfig_data_format_srcb(dfb_mrow_id, dfb_rrow_id);
+                    mul_bcast_rows_init(dfb_xmm_id, dfb_rrow_id);
+                    dfb_xmm.wait_front(1);
+                    tile_regs_acquire();
+                    mul_tiles_bcast_rows(dfb_xmm_id, dfb_rrow_id, 0, nt, dst0);
+                    tile_regs_commit();
+                    dfb_xmm.pop_front(1);
+                    dfb_x.reserve_back(1);
+                    tile_regs_wait();
+                    pack_tile(dst0, dfb_x_id);
+                    tile_regs_release();
+                    dfb_x.push_back(1);
+                    reconfig_data_format_srcb(dfb_rrow_id, dfb_xmm_id);
+#else
                     uint32_t group_offset = 0;
                     for (uint32_t g = min_group; g < num_groups; ++g) {
                         dfb_xmm.reserve_back(1);
@@ -656,6 +752,7 @@ void kernel_main() {
                             break;
                         }
                     }
+#endif
                     dfb_in0.pop_front(1);
                     if constexpr (welford_fp32_alias) {
                         dfb_in0_welford.pop_front(1);
@@ -787,6 +884,10 @@ void kernel_main() {
         }
         // End Final Normalization
 
+#ifdef GN_ROW_STATS
+        dfb_mrow.pop_front(per_core_N);
+        dfb_rrow.pop_front(per_core_N);
+#endif
         dfb_ex_global.pop_front(2 * num_groups);
         dfb_ex2pe.pop_front(num_groups);
         if constexpr (fp32_sfpu_normalizer) {

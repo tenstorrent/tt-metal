@@ -128,23 +128,23 @@ DEVICE_PERF_EXPECTATIONS = {
         "blackhole": None,  # Only 1024x1024 tested on Blackhole
     },
     "vae_decode_1024x1024": {
-        "wormhole": 663_083_865,
+        # median of 3 wh_n150 runs 2026-11-04 (569.28M..569.89M); previous target 663.08M
+        "wormhole": 569_439_000,
         # mean of bh_p150 runs 2026-10-17..19 (254.07M..254.62M) after #60876 (padded_slice RM reader no longer
         # over-reads the input row); previous target 260.30M (2026-09-25, #55698)
         "blackhole": 254_384_000,
     },
     "vae_decode_512x512": {
-        "wormhole": 167_473_541,
+        "wormhole": 140_652_000,
         "blackhole": None,  # Only 1024x1024 tested on Blackhole
     },
     "vae_encode_1024x1024": {
-        "wormhole": 328_968_938,  # Note: this is an average value of 30 test runs due to high variability
+        "wormhole": 270_154_000,
         # bh_p150 run 2026-09-25 (137.84M) on #55698; previous target 141.18M
         "blackhole": 137_841_000,
     },
     "vae_encode_512x512": {
-        # Mean of two local Wormhole runs on 2026-09-25 after GroupNorm wait reordering (80.60-80.92 ms).
-        "wormhole": 80_760_000,
+        "wormhole": 65_761_000,
         "blackhole": None,  # Only 1024x1024 tested on Blackhole
     },
     "clip_encoder_1": {

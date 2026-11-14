@@ -261,6 +261,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     const bool fp32_sfpu_normalizer = welford_unpack_fp32_active;
     const bool enable_fp32_reconfig = groupnorm_needs_fp32_reconfig(
         {in_data_format, out_data_format, cb_data_format, gamma_beta_cb_data_format, in_mask_cb_data_format});
+    const bool row_stats = device->arch() == tt::ARCH::WORMHOLE_B0 && use_welford && !fp32_sfpu_normalizer &&
+                           !enable_fp32_reconfig && !tilize_in && math_fidelity == MathFidelity::HiFi4;
 
     const uint32_t cb_in0_welford_index =
         welford_fp32_alias ? static_cast<uint32_t>(tt::CBIndex::c_19) : static_cast<uint32_t>(tt::CBIndex::c_0);
@@ -790,6 +792,9 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     };
 
     eltwise_binary_defines["FP32_DEST_ACC"] = fp32_dest_acc_en ? "true" : "false";
+    if (row_stats) {
+        eltwise_binary_defines["GN_ROW_STATS"] = "1";
+    }
 
     std::string compute_kernel_path =
         (use_welford ? "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/welford_groupnorm.cpp"
@@ -1222,6 +1227,22 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
             .page_size = single_tile_size});
     }
     desc.cbs.push_back(std::move(ex2pe_desc));
+    if (row_stats) {
+        for (const auto& [idx, tiles] :
+             {std::pair<uint32_t, uint32_t>{tt::CBIndex::c_1, per_core_Nt},
+              std::pair<uint32_t, uint32_t>{tt::CBIndex::c_12, per_core_Nt},
+              std::pair<uint32_t, uint32_t>{tt::CBIndex::c_18, 2u}}) {
+            desc.cbs.push_back(CBDescriptor{
+                .total_size = tiles * single_tile_size,
+                .core_ranges = all_cores,
+                .format_descriptors = {{CBFormatDescriptor{
+                    .buffer_index = static_cast<uint8_t>(idx),
+                    .data_format = cb_data_format,
+                    .page_size = single_tile_size,
+                }}},
+            });
+        }
+    }
 
     // Runtime Args
     uint32_t eps_u = std::bit_cast<uint32_t>(eps);
