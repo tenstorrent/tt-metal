@@ -579,3 +579,62 @@ def test_index_fill_program_cache_hit_new_addresses(device, in_layout, out_layou
     assert device.num_program_cache_entries() == num_entries
     for a, b in zip(first, second):
         assert a.buffer_address() != b.buffer_address()
+
+
+@pytest.mark.parametrize("width", [33, 65])
+@pytest.mark.parametrize("dim", [2, 3])
+def test_index_fill_dram_to_height_sharded_unaligned_width(device, width, dim):
+    """Regression test for #63680: DRAM input with 33/65-element bfloat16 rows into HEIGHT_SHARDED L1
+    output must not overrun the 16B-aligned L1 row slots with the 64B-aligned DRAM page size."""
+    shape = (1, 1, 32, width)
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
+    out_cfg = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, [8, width], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+    torch_input = ((torch.arange(32 * width) % 255 - 127) / 8).reshape(shape).to(torch.bfloat16)
+    torch_index = torch.tensor([2], dtype=torch.int32)
+
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    tt_index = _make_index_tensor(torch_index, device)
+    tt_out = ttnn.index_fill(tt_input, dim, tt_index, 2.5, memory_config=out_cfg)
+
+    golden = torch.index_fill(torch_input, dim, torch_index.long(), 2.5)
+    assert_equal(ttnn.to_torch(tt_out), golden)
+
+
+def test_index_fill_width_sharded_spare_cores(device):
+    """Regression test for #63680: WIDTH_SHARDED input whose shard grid has spare cores
+    (3 width shards of 32 elements on 4 cores) must use the active shard count KW=3 and
+    leave spare cores idle without overrunning the output."""
+    shape = (2, 3, 64, 96)
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
+    in_cfg = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, [384, 32], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+    torch_input = ((torch.arange(torch.tensor(shape).prod().item()) % 33 - 16) / 8).reshape(shape).to(torch.bfloat16)
+    torch_index = torch.tensor([1], dtype=torch.int32)
+
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=in_cfg,
+    )
+    tt_index = _make_index_tensor(torch_index, device)
+    tt_out = ttnn.index_fill(tt_input, 1, tt_index, 2.5, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    golden = torch.index_fill(torch_input, 1, torch_index.long(), 2.5)
+    assert_equal(ttnn.to_torch(tt_out), golden)
