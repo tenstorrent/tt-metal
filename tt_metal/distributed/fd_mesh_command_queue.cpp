@@ -1350,8 +1350,8 @@ void FDMeshCommandQueue::write_program_commands_to_devices(
         }
     }
     for (auto* device : devices) {
-        CqCommandSink sink(device->sysmem_manager(), id_);
-        program_dispatch::write_program_command_sequence(program_cmd_seq, sink, stall_first, stall_before_program);
+        program_dispatch::write_program_command_sequence(
+            program_cmd_seq, device->sysmem_manager().cq(id_), stall_first, stall_before_program);
     }
 }
 
@@ -1371,9 +1371,8 @@ void FDMeshCommandQueue::write_go_signal_sequences_to_unused_sub_grids(
 
     for (auto& device : mesh_device_->impl().get_devices()) {
         if (!chip_ids_in_workload.contains(device->id())) {
-            CqCommandSink sink(device->sysmem_manager(), id_);
             write_go_signal_sequence(
-                sink,
+                device->sysmem_manager().cq(id_),
                 mesh_device_,
                 sub_device_id,
                 expected_num_workers_completed,

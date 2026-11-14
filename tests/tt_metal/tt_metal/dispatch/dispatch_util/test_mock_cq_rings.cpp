@@ -141,7 +141,7 @@ TEST_F(MockTwoCqRingsTest, CPU_MaxSizeCommandFitsTheIssueQueue) {
 
 // Each CQ of the lazily created mock manager has its own event counters.
 TEST_F(MockTwoCqRingsTest, CPU_EachCqHasItsOwnEventCounters) {
-    ASSERT_EQ(manager_->get_cq_interfaces().size(), kNumCqs);
+    ASSERT_EQ(manager_->num_cqs(), kNumCqs);
     manager_->set_last_issued_event(1, 7);
     manager_->set_last_completed_event(1, 5);
     EXPECT_EQ(manager_->get_last_issued_event(1), 7);
