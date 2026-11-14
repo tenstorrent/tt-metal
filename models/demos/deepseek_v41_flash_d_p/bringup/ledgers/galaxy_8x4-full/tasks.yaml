@@ -4065,13 +4065,97 @@ tasks:
       err_layer_L*: <= limit
       err_state_*_L*: <= limit
       top5_overlap: '>= limit'
+- id: P.60
+  title: 'P.56 host overhead off the critical path: the combine job-ring slot picked on the device (not per call on the host), the planner launch made cheap; so P.56 stops costing ~18-24 ms of host a chunk'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - P.59
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
+  - models/demos/common/bringup/testing
+  - models/demos/common/bringup/tests
+  - ttnn/ttnn/bringup
+  brief:
+    details: |-
+      OVERSEER 2026-11-14 (owner away; this branch only). P.57 measured that P.56 (MOE_REPLICAS=prev) adds ~18-24 ms of HOST time a chunk: the combine's host cost a call goes 402 -> 731 us because the host picks a different slot of P.56's job ring every call (x 40 calls), the planner launch is ~92.5-99 us a call (x 40), plus P.56's host guard. The chunk is host-bound with prev on (novel: host 185 ms vs device ~155 ms on P.59's min8k baseline), so P.56's device saving (-11.9 ms novel, -4.7 code with min8k, P.59) does not reach the wall. P.57's fix 3: pick the ring slot on the device (the combine reads its slot index from a device word the planner or a counter advances; no per-call runtime-arg change), estimated -12 to -13 ms host; also make the planner launch cheap (fold it into an existing program, or a prepared program with no per-call arg updates) and keep the guard host-light. Outputs must stay bit-identical to today's prev (same plans, same slots, same math).
+
+      MEASURE: host ms per chunk, device ms per chunk, clean wall per chunk, prev before vs after this change, real novel AND code chunks 1..10 back to back (P.56's test_moe_prev_replicas.py, extended), plus off for reference; combine and planner host us a call. The A/B is the old host path vs the new one with MOE_REPLICAS=prev on both sides. Report plainly, short, every term defined. Agent rules 18 and 19 hold; every Python-built op stays prepared. SAFETY: a hang or a board reset need: STOP and report, never reset.
+  ab:
+    env:
+      MOE_REPLICAS: prev
+      MOE_FILL: piggyback
+      MOE_PREV_HOST: legacy
+      ENGRAM_TABLE: resident
+    change:
+      MOE_REPLICAS: prev
+      MOE_FILL: piggyback
+      MOE_PREV_HOST: device
+      ENGRAM_TABLE: resident
+  ab_positions:
+  - 51200
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_moe_prev_replicas.py
+      && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      chunk_wall_ms: '> 0'
+      device_ms_total: '> 0'
+- id: P.61
+  title: 'Trace the MoE half of every layer (ffn norm through the combine): host launches of the MoE block replayed from a Metal trace, so device wins (P.56, P.59) reach the wall; at a fixed shape, no position-dependent args in the traced part'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - P.60
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
+  - models/demos/common/bringup/testing
+  - models/demos/common/bringup/tests
+  - ttnn/ttnn/bringup
+  brief:
+    details: |-
+      OVERSEER 2026-11-14 (owner away; this branch only; the owner asked for a traced run if the host bound is not fixable otherwise). P.57 (DS41-251) found the chunk host-bound once device work shrinks: ~1,732 op launches a chunk at ~80 us each; its fix 1 is to trace the second half of every layer (the MoE / FFN part, ~93 ms of host a chunk, none of it position-dependent), expected wall -> device time, ~-25 ms a chunk, after P.60 (P.56's host-chosen ring slot was a trace blocker). P.57's prototype captured and replayed layer 21 (47 programs) byte-identically: host 6.45 -> 0.020 ms a layer.
+
+      BUILD behind MOE_TRACE = off | moe (default off on this branch until accepted): capture, per layer, the MoE half (from after attention through the combine and the residual add) once per shape at warm-up, replay it every chunk. Lift what blocks it inside that half (buffers allocated during the call: allocate them up front; any host-chosen runtime arg: move to device words; P.56's guard: device-side). The attention half stays untraced. Chunk 0 of a request (replicas off) and prev must both work. Outputs bit-identical to untraced.
+
+      MEASURE: host, device and clean wall per chunk, untraced vs traced, real novel AND code chunks 1..10 back to back with P.56 prev on and off, and at 51,200; trace memory per layer; capture time. A/B: MOE_TRACE off vs moe. Report plainly, short, every term defined. Agent rules 18 and 19 hold. SAFETY: a hang or a board reset need: STOP and report, never reset.
+  ab:
+    env:
+      MOE_TRACE: 'off'
+      ENGRAM_TABLE: resident
+    change:
+      MOE_TRACE: moe
+      ENGRAM_TABLE: resident
+  ab_positions:
+  - 51200
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_moe_prev_replicas.py
+      && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      chunk_wall_ms: '> 0'
+      device_ms_total: '> 0'
 - id: P.54
   title: 'MoE replicas end to end: back-to-back chunked prefill, device time and wall per chunk with the fill included - replicas off vs a table frozen after chunk 0 vs online learning'
   step: perf
   role: perf
   device: true
   deps:
-  - P.59
+  - P.61
   paths:
   - models/demos/deepseek_v41_flash_d_p/tt
   - models/demos/deepseek_v41_flash_d_p/tests/
