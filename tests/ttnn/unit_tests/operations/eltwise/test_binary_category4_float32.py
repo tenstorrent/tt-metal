@@ -257,18 +257,17 @@ def test_ldexp(device, ttnn_op):
 
 
 def test_ldexp_exponent_underflow(device):
-    """b < -126: EXP2 underflows, the multiply sees 0, and ldexp returns +0
-    for every a — including the 4784 grid pairs whose true result is a normal
-    value as large as 1.41 (a = ±max bf16 with b = -127.5)."""
+    """b < -126, the half of EXP2's range test_ldexp does not cover, checked as in test_ldexp."""
     input_a, input_b = pairwise_from_values(
         binary_grid_values(dtype=torch.float32),
         binary_grid_values(high=LDEXP_MIN_EXPONENT - 0.5, include_zero=False, dtype=torch.float32),
     )
     result = ttnn.to_torch(ttnn.ldexp(to_float32_tt_tensor(input_a, device), to_float32_tt_tensor(input_b, device)))
+    result = _float32_result(result, "ldexp exponent underflow")
 
-    golden, _ = _golden_f64(_ldexp_f64, input_a, input_b)
+    golden, reference = _golden_f64(_ldexp_f64, input_a, input_b)
     assert (golden != 0).any(), "expected some representable results in the EXP2 underflow region"
-    assert_equal(torch.zeros_like(result), result)
+    _assert_ldexp(golden, reference, result, input_a, input_b)
 
 
 def test_ldexp_exponent_overflow(device):
