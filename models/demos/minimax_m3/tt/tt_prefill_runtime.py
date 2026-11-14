@@ -111,7 +111,12 @@ def _media_rows_of(reader, hidden: int, media_refs: list):
     value is fetched together and its rows are copied out before the next fetch."""
     keys = list(dict.fromkeys(ref.media_key for ref in media_refs))
     bufs = reader.fetch_batch([FetchRequest(k) for k in keys])
-    values = {key: media_format.embeddings(buf, hidden) for key, buf in zip(keys, bufs, strict=True)}
+    values = {}
+    for key, buf in zip(keys, bufs, strict=True):
+        kind = media_format.Header.read(buf).kind
+        if kind != "image":
+            raise ValueError(f"media key {key.hex()} holds {kind!r}, not image rows")
+        values[key] = media_format.embeddings(buf, hidden)
 
     def rows_of(ref):
         rows = values[ref.media_key]
@@ -486,7 +491,7 @@ class TtPrefillRuntime:
         for chunks in plan:
             inp = self.make_forward_input([[0] * chunk] * n_chunks, [c.actual_start for c in chunks])
             self.prefill_forward(inp, kv_cache, chunks)
-        if cfg.is_first_rank:
+        if cfg.is_first_rank and self.media_embedding_reader is not None:
             self._warm_media(kv_cache, chunk, n_chunks, empty)
         ttnn.synchronize_device(self.mesh_device)
         warmup_ms = (time.perf_counter() - t0) * 1000.0
