@@ -1328,10 +1328,13 @@ class GLM53StackForCausalLM:
           an image request (``vision``: image tokens in its history, a failed one included) -- the MTP-cache fill
             embeds token ids, so its image positions would carry the placeholder's embedding, not the feature rows;
         a fresh text request (generator start 0) clears its slot's verdict, a continuation keeps it."""
+        # GLM53_SPEC_SNAPSHOT_MTP (StackBackend.snapshot_has_mtp, F20): the snapshots carry the MTP layer's state, so an
+        # attach is a fresh start for the MTP history too (every warm turn of an agentic loop attaches)
+        mtp_snap = bool(getattr(self.gen.backend, "snapshot_has_mtp", lambda: False)())
         for i, g in enumerate(gslots):
-            if i in attach or i in vision:
+            if i in vision or (i in attach and not mtp_snap):
                 self._no_spec.add(int(g))
-            elif int(starts[i]) == 0:
+            elif int(starts[i]) == 0 or i in attach:
                 self._no_spec.discard(int(g))
 
     def _spec_seed(self, kv) -> None:

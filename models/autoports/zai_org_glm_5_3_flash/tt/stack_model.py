@@ -1603,7 +1603,7 @@ class StackBackend(ModelBackend):
         at boundary B needs the pools of [0, B), 2026-10-22); None: the whole slot. A slot outside a tensor's rows (a
         snapshot entry the store was not sized for) raises: never a copy out of bounds."""
         ops = []
-        for _key, t, rows, paged in self._dsa_tensors(kv):
+        for _key, t, rows, paged in self._dsa_tensors(kv) + self._mtp_slot_tensors():
             if not (0 <= src < rows and 0 <= dst < rows):
                 raise ValueError(f"DSA state copy {src} -> {dst}: a per-slot store of {rows} rows")
             n = _pages(t) // rows
@@ -1617,6 +1617,34 @@ class StackBackend(ModelBackend):
                 addr = int(t.buffer_address())
                 ops.append((1, addr, src * n, addr, dst * n, m, _pages_bytes(t), 0))
         return ops
+
+    def snapshot_has_mtp(self) -> bool:
+        """GLM53_SPEC_SNAPSHOT_MTP=1 (F20, default off) with the sparse MTP layer (GLM53_SPEC_MTP_SPARSE): the prefix
+        snapshot and restore (_state_copy -> _dsa_ops; not copy_slot's _state_ops) also move the MTP layer's per-slot
+        DSA state -- its pooled-key store
+        (the 128-token units < upto) and ring, rows = the main stores' slots + snapshot entries. The MTP latent pool is
+        paged by the generator's physical blocks (vLLM's prefix blocks carry it), so a request that resumes from a snapshot
+        finds its MTP history and may speculate (the served adapter's _spec_admit). Not in the host tier's export /
+        import (an entry restored from host keeps the device entry's previous MTP rows: lossless, lower tau)."""
+        if os.environ.get("GLM53_SPEC_SNAPSHOT_MTP", "0") != "1":
+            return False
+        sp = getattr(self, "spec", None)
+        st = sp.mtp_dsa_state() if sp is not None and callable(getattr(sp, "mtp_dsa_state", None)) else None
+        return st is not None
+
+    def _mtp_slot_tensors(self) -> list:
+        """snapshot_has_mtp: [(key, tensor, rows, unit_paged)] of the MTP layer's store + ring (the _dsa_tensors shape);
+        [] otherwise. Kept out of _dsa_tensors: that list is the 11 main layers' (pooled_store_tensors, the export
+        staging and the page DMA count on it)"""
+        if not self.snapshot_has_mtp():
+            return []
+        st = self.spec.mtp_dsa_state()
+        if st.get(
+            "paged", False
+        ):  # (GLM53_DSA_PAGED_POOLS: per-block stores, no per-slot rows -- the MTP layer refuses
+            return []  # paged pools anyway: spec_mtp_sparse_refusals)
+        return [("mtp.pools", st["pools"], int(st.get("pool_slots", st["slots"])), True),
+                ("mtp.ring", st["ring"], int(st["slots"]), False)]  # fmt: skip
 
     def _dsa_tensors(self, kv: StackCache) -> list:
         """[(key, tensor, rows, unit_paged)] of every distinct per-slot DSA tensor in a fixed order: the decode's

@@ -2086,6 +2086,25 @@ def test_spec_multi_lone_step():
     assert spec_pick_step(steps, [0], room=lambda i: i != 0) == (1, [0])  # no room on the lone step: the next one
 
 
+def test_spec_admit_keeps_speculation_on_attach_with_mtp_snapshots():
+    """GLM53_SPEC_SNAPSHOT_MTP (F20): a prefix attach keeps the request speculable when the backend's snapshots carry the
+    MTP layer's state (StackBackend.snapshot_has_mtp); without it the attach declines (the MTP history is missing); an
+    image request always declines; a fresh start clears an earlier verdict"""
+    import types
+
+    def admit(has_mtp, no_spec, starts, attach, vision):
+        obj = types.SimpleNamespace(gen=types.SimpleNamespace(backend=types.SimpleNamespace(
+            snapshot_has_mtp=lambda: has_mtp)), _no_spec=set(no_spec))  # fmt: skip
+        gvs.GLM53StackForCausalLM._spec_admit(obj, [0, 4, 8], starts, attach, vision)
+        return obj._no_spec
+
+    assert admit(False, set(), [0, 32768, 0], {1: 3}, ()) == {4}  # attach without MTP state: declines
+    assert admit(True, {4}, [0, 32768, 0], {1: 3}, ()) == set()  # attach with MTP state: speculable (verdict cleared)
+    assert admit(True, set(), [0, 0, 0], {}, (2,)) == {8}  # image rows: never
+    assert admit(True, {0}, [0, 0, 0], {}, ()) == set()  # a fresh start clears it
+    assert admit(False, {0}, [128, 0, 0], {}, ()) == {0}  # a continuation keeps it
+
+
 def test_mtp_prefill_span_covers_the_prompt():
     """the MTP-cache rows of a chunked prompt: every position 0 .. L - 2 exactly once (L - 1 is the bootstrap's)"""
     L, got = 300, []
