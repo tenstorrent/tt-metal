@@ -12,6 +12,7 @@ touch numpy views of host buffers and file descriptors. A byte budget bounds the
 from __future__ import annotations
 
 import os
+import secrets
 import shutil
 import threading
 import time
@@ -19,20 +20,34 @@ import zlib
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from math import prod
+from typing import Callable
 
 import numpy as np
 import ttnn
 
-from ._errors import CheckpointError
+from ._coordinator import (
+    Election,
+    PlanPart,
+    RankRecord,
+    ResultPart,
+    UnionPlan,
+    checked_payload,
+    current_group,
+    merge_plan_parts,
+    merge_results,
+    name_hash,
+    state_hash,
+)
+from ._errors import CheckpointError, CheckpointFatal
 from ._index import (
     FORMAT,
     VERSION,
     FileRecord,
-    Index,
     begin_staging,
     check_json,
     data_file_name,
     finalize_staging,
+    staging_dir,
     write_header,
     write_index,
 )
@@ -45,9 +60,9 @@ from ._state_dict import (
     collect_model,
     collect_optimizer,
     fsdp_gate,
-    world_record,
+    rank_record,
 )
-from ._train_state import TRAIN_STATE_KEY, capture_train_state
+from ._train_state import capture_train_state
 
 
 @dataclass
@@ -102,6 +117,99 @@ def _write_chunk(fd: int, offset: int, view: np.ndarray, budget: _ByteBudget, ch
         budget.release(charged)
 
 
+def _write_plan(
+    staging: str,
+    plan: SavePlan,
+    by_key: dict[str, LiveTensor],
+    threads: int | None,
+    max_inflight_bytes: int,
+    stats: dict,
+) -> dict[tuple[str, int], int]:
+    """Create this process's files in ``staging`` and write every planned chunk into them; returns the CRC32 per
+    (key, file). Files are synced to the filesystem before they are closed, the first failed write stops the readback
+    of the keys after it, and every descriptor opened is closed whatever fails."""
+    fds: dict[int, int] = {}
+    data_start: dict[int, int] = {}
+    budget = _ByteBudget(max_inflight_bytes)
+    crcs: dict[tuple[str, int], int] = {}
+    t2 = time.perf_counter()
+    readback_s = 0.0
+    synced = False
+    try:
+        for fplan in plan.files:
+            path = os.path.join(staging, fplan.path)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            data_start[fplan.index] = create_file(path, fplan.header, fplan.data_bytes)
+            fds[fplan.index] = os.open(path, os.O_RDWR)
+        workers = len(plan.files) if threads is None else threads
+        failed: list[BaseException] = []
+
+        def record_failure(future) -> None:
+            if not future.cancelled() and future.exception() is not None:
+                failed.append(future.exception())
+
+        with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+            futures = []
+            order = sorted(plan.items, key=lambda k: (-plan.infos[k].local_nbytes * len(plan.items[k]), k))
+            for key in order:
+                if failed:
+                    pool.shutdown(wait=True, cancel_futures=True)
+                    raise failed[0]
+                items = plan.items[key]
+                if not items:
+                    continue
+                info = plan.infos[key]
+                live_tensor = by_key[key]
+                charged = info.local_nbytes * len(items)
+                budget.acquire(charged)
+                value = live_tensor.tensor.get_value(NATIVE)
+                t_read = time.perf_counter()
+                host = value.cpu(coords=[ttnn.MeshCoordinate(list(it.chunk.mesh_coord)) for it in items])
+                host_rm = host.to(ttnn.ROW_MAJOR_LAYOUT)
+                del host
+                readback_s += time.perf_counter() - t_read
+                check_label_unchanged(live_tensor, "during readback")
+                buffer = host_rm.host_buffer()
+                per_item = charged // len(items)
+                for it in items:
+                    shard = buffer.get_shard(ttnn.MeshCoordinate(list(it.chunk.mesh_coord)))
+                    if shard is None:
+                        raise CheckpointError(f"{key}: no shard came back for coordinate {it.chunk.mesh_coord}")
+                    view = _logical_bytes(np.from_dlpack(shard), it.chunk.box.sizes, info.itemsize)
+                    if view.nbytes != it.nbytes:
+                        raise CheckpointError(
+                            f"{key}: shard at {it.chunk.mesh_coord} is {view.nbytes} bytes, planned {it.nbytes}"
+                        )
+                    future = pool.submit(
+                        _write_chunk, fds[it.file], data_start[it.file] + it.data_offset, view, budget, per_item
+                    )
+                    future.add_done_callback(record_failure)
+                    futures.append((key, it.file, future))
+                del buffer, host_rm
+            for key, file_index, future in futures:
+                crcs[(key, file_index)] = future.result()
+        for fd in fds.values():
+            os.fdatasync(fd)
+        synced = True
+    finally:
+        for fd in fds.values():
+            try:
+                os.close(fd)
+            except OSError:
+                if synced:
+                    raise
+    stats["readback_s"] = readback_s
+    stats["write_s"] = time.perf_counter() - t2
+    return crcs
+
+
+def _file_metadata(world_rank: int, mesh: int) -> Callable[[tuple[int, ...]], dict]:
+    return lambda c: {
+        "ttml.format": f"{FORMAT}/{VERSION}",
+        "ttml.writer": {"world_rank": world_rank, "mesh_id": mesh, "coord": list(c)},
+    }
+
+
 def save(
     ckpt_dir: str,
     *,
@@ -125,139 +233,121 @@ def save(
     device data file); ``max_inflight_bytes`` bounds the host buffers waiting to be written. An existing
     ``ckpt_dir`` is refused unless ``overwrite=True``. FSDP modules must be in their sharded state; with
     ``reshard_fsdp`` (default) they are resharded first.
+
+    Under ``tt-run`` with several ranks the call is collective: every rank calls it at the same point with the same
+    ``ckpt_dir``; each rank writes the shards of the coordinates it holds into its own files in a shared directory,
+    and rank 0 merges the ranks' parts into one index (``_coordinator``). The ranks' scheduler and dataloader states
+    must be equal, since the checkpoint stores one copy; their generators are stored per rank. A failure on any rank,
+    the local work included, makes every rank raise the same error class, and no point-to-point MPI traffic between
+    the ranks may be outstanding when save is called. The result on each rank lists that rank's files and bytes;
+    ``keys`` counts the whole checkpoint. A single process is the group of one and takes the same path.
     """
     if model is None and optimizer is None:
         raise CheckpointError("save needs a model and/or an optimizer")
     if optimizer is not None and model is None:
         raise CheckpointError("optimizer state is keyed by the model's parameters; pass model= as well")
-    if header is not None and not isinstance(header, dict):
-        raise CheckpointError(f"header must be a dict, not {type(header).__name__}")
-    header = check_json("header", header or {})  # before any device read or file write
     t0 = time.perf_counter()
     stats: dict[str, float] = {}
-    fsdp_gate(model, reshard_fsdp)
-    live: list[LiveTensor] = collect_model(model)
-    scalars: dict = {}
-    if optimizer is not None:
-        state_live, scalars = collect_optimizer(optimizer, live)
-        live.extend(state_live)
-    by_key = {lt.key: lt for lt in live}
-    world = world_record()
-    train_state = capture_train_state(
-        scheduler=scheduler, dataloader=dataloader, rng=rng, world_rank=world["ranks"][0]["world_rank"]
-    )
-    stats["collect_s"] = time.perf_counter() - t0
-
+    group = current_group()
+    rank, world_rank = group.rank, group.world_rank
     ckpt_dir = os.path.abspath(ckpt_dir)
-    if os.path.exists(ckpt_dir) and not overwrite:
-        raise CheckpointError(f"{ckpt_dir} already exists; pass overwrite=True to replace it")
-    os.makedirs(os.path.dirname(ckpt_dir), exist_ok=True)
-    staging, _ = begin_staging(ckpt_dir)
+    name = os.path.basename(ckpt_dir)
+
+    def collect():
+        if header is not None and not isinstance(header, dict):
+            raise CheckpointError(f"header must be a dict, not {type(header).__name__}")
+        user_header = check_json("header", header or {})  # before any device read or file write
+        fsdp_gate(model, reshard_fsdp)
+        live: list[LiveTensor] = collect_model(model)
+        scalars: dict = {}
+        if optimizer is not None:
+            state_live, scalars = collect_optimizer(optimizer, live)
+            live.extend(state_live)
+        train_state = capture_train_state(scheduler=scheduler, dataloader=dataloader, rng=rng, world_rank=world_rank)
+        shared_state = {k: v for k, v in train_state.items() if k != "rng"}
+        record = RankRecord.from_json(rank_record(rank, world_rank))
+        part = PlanPart(record, [lt.info for lt in live], state_hash(shared_state)).to_bytes()
+        return live, scalars, user_header, train_state, record, checked_payload(part, "this rank's plan part")
+
+    # Even the local work runs inside a phase: on a multi-rank world a rank that fails here stops every rank instead
+    # of leaving the others waiting in the first collective. On a single process the phase just runs it.
+    live, scalars, user_header, train_state, record, part = group.phase("collecting the live tensors", collect)
+    by_key = {lt.key: lt for lt in live}
+    stats["collect_s"] = time.perf_counter() - t0
+    group.agree("the checkpoint directory", name_hash(ckpt_dir))
+    group.agree("overwrite", int(bool(overwrite)))
+    nonce = group.allgather(secrets.randbits(31))[0]
+    staging = staging_dir(ckpt_dir, nonce)
+
+    def check_target() -> None:
+        if group.is_coordinator and os.path.exists(ckpt_dir) and not overwrite:
+            raise CheckpointError(f"{ckpt_dir} already exists; pass overwrite=True to replace it")
+        os.makedirs(os.path.dirname(ckpt_dir), exist_ok=True)
+        begin_staging(ckpt_dir, nonce, shared=True)  # every rank creates the same directory
+
+    union: UnionPlan | None = None
     try:
+        group.phase("checking the target directory", check_target)
         t1 = time.perf_counter()
-        plan: SavePlan = create_save_plan(
-            [lt.info for lt in live],
-            file_for_coord=lambda c: data_file_name(0, 0, c),
-            file_metadata=lambda c: {
-                "ttml.format": f"{FORMAT}/{VERSION}",
-                "ttml.writer": {"world_rank": 0, "mesh_id": 0, "coord": list(c)},
-            },
-        )
+        gathered = group.gather(part)
+
+        def merge_parts() -> bytes | None:
+            nonlocal union
+            if not group.is_coordinator:
+                return None
+            union = merge_plan_parts([PlanPart.from_bytes(b) for b in gathered])
+            return checked_payload(union.election().to_bytes(), "the owner election")
+
+        election = Election.from_bytes(group.broadcast(group.phase("merging the plan parts", merge_parts)))
         stats["plan_s"] = time.perf_counter() - t1
 
-        fds: dict[int, int] = {}
-        data_start: dict[int, int] = {}
-        budget = _ByteBudget(max_inflight_bytes)
-        crcs: dict[tuple[str, int], int] = {}
-        t2 = time.perf_counter()
-        readback_s = 0.0
-        synced = False
-        try:
-            for fplan in plan.files:
-                path = os.path.join(staging, fplan.path)
-                os.makedirs(os.path.dirname(path), exist_ok=True)
-                data_start[fplan.index] = create_file(path, fplan.header, fplan.data_bytes)
-                fds[fplan.index] = os.open(path, os.O_RDWR)
-            workers = len(plan.files) if threads is None else threads
-            failed: list[BaseException] = []  # the first failed write stops the readback of the keys after it
+        def write() -> tuple[SavePlan, bytes]:
+            plan = create_save_plan(
+                [lt.info for lt in live],
+                file_for_coord=lambda c: data_file_name(world_rank, record.mesh_id, c),
+                file_metadata=_file_metadata(world_rank, record.mesh_id),
+                owner_of=election.owner_of(rank),
+            )
+            crcs = _write_plan(staging, plan, by_key, threads, max_inflight_bytes, stats)
+            files = [
+                FileRecord(f.path, len(f.header) + f.data_bytes, world_rank, record.mesh_id, f.coord)
+                for f in plan.files
+            ]
+            shared_state = dict(train_state)
+            generators = shared_state.pop("rng", {})
+            result = ResultPart(
+                record, files, plan.entries(crcs), generators, plan.bytes_written, scalars, user_header, shared_state
+            )
+            return plan, checked_payload(result.to_bytes(), "this rank's result part")
 
-            def record_failure(future) -> None:
-                if not future.cancelled() and future.exception() is not None:
-                    failed.append(future.exception())
+        plan, result_bytes = group.phase("writing the shards", write)
+        gathered = group.gather(result_bytes)
 
-            with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
-                futures = []
-                order = sorted(plan.items, key=lambda k: (-plan.infos[k].local_nbytes * len(plan.items[k]), k))
-                for key in order:
-                    if failed:
-                        pool.shutdown(wait=True, cancel_futures=True)
-                        raise failed[0]
-                    items = plan.items[key]
-                    info = plan.infos[key]
-                    live_tensor = by_key[key]
-                    charged = info.local_nbytes * len(items)
-                    budget.acquire(charged)
-                    value = live_tensor.tensor.get_value(NATIVE)
-                    t_read = time.perf_counter()
-                    host = value.cpu(coords=[ttnn.MeshCoordinate(list(it.chunk.mesh_coord)) for it in items])
-                    host_rm = host.to(ttnn.ROW_MAJOR_LAYOUT)
-                    del host
-                    readback_s += time.perf_counter() - t_read
-                    check_label_unchanged(live_tensor, "during readback")
-                    buffer = host_rm.host_buffer()
-                    per_item = charged // len(items)
-                    for it in items:
-                        shard = buffer.get_shard(ttnn.MeshCoordinate(list(it.chunk.mesh_coord)))
-                        if shard is None:
-                            raise CheckpointError(f"{key}: no shard came back for coordinate {it.chunk.mesh_coord}")
-                        view = _logical_bytes(np.from_dlpack(shard), it.chunk.box.sizes, info.itemsize)
-                        if view.nbytes != it.nbytes:
-                            raise CheckpointError(
-                                f"{key}: shard at {it.chunk.mesh_coord} is {view.nbytes} bytes, planned {it.nbytes}"
-                            )
-                        future = pool.submit(
-                            _write_chunk, fds[it.file], data_start[it.file] + it.data_offset, view, budget, per_item
-                        )
-                        future.add_done_callback(record_failure)
-                        futures.append(((key, it.file), future))
-                    del buffer, host_rm
-                for key_file, future in futures:
-                    crcs[key_file] = future.result()
-            for fd in fds.values():
-                os.fdatasync(fd)
-            synced = True
-        finally:
-            for fd in fds.values():
+        def finalize() -> None:
+            if not group.is_coordinator:
+                return
+            index, header_json = merge_results([ResultPart.from_bytes(b) for b in gathered], union, name)
+            for record_ in index.files:
+                fd = os.open(os.path.join(staging, record_.path), os.O_RDONLY)  # by exact name: fresh attributes
                 try:
+                    size = os.fstat(fd).st_size
+                finally:
                     os.close(fd)
-                except OSError:
-                    if synced:
-                        raise
-        stats["readback_s"] = readback_s
-        stats["write_s"] = time.perf_counter() - t2
+                if size != record_.nbytes:
+                    raise CheckpointError(
+                        f"{record_.path}: {size} bytes on the shared filesystem, {record_.nbytes} reported by world rank "
+                        f"{record_.world_rank}"
+                    )
+            write_header(staging, header_json)
+            write_index(staging, index)
+            finalize_staging(staging, ckpt_dir, overwrite=overwrite)
 
-        write_header(
-            staging,
-            {
-                "format": FORMAT,
-                "version": VERSION,
-                "checkpoint_id": os.path.basename(ckpt_dir),
-                "user": header or {},
-                TRAIN_STATE_KEY: train_state,
-            },
-        )
-        index = Index(
-            checkpoint_id=os.path.basename(ckpt_dir),
-            world=world,
-            files=[FileRecord(f.path, len(f.header) + f.data_bytes, 0, 0, f.coord) for f in plan.files],
-            entries=plan.entries(crcs),
-            scalars=scalars,
-            writer_software={"ttml_distributed_checkpointing": "0.1"},
-        )
-        write_index(staging, index)
-        finalize_staging(staging, ckpt_dir, overwrite=overwrite)
+        group.phase("merging the index and finalizing", finalize)
+    except CheckpointFatal:
+        raise  # the staging directory is left in place; nothing else can be agreed on
     except BaseException:
-        shutil.rmtree(staging, ignore_errors=True)
+        if group.is_coordinator:
+            shutil.rmtree(staging, ignore_errors=True)
         raise
     stats["total_s"] = time.perf_counter() - t0
-    return SaveResult(ckpt_dir, plan.bytes_written, [f.path for f in plan.files], len(live), stats)
+    return SaveResult(ckpt_dir, plan.bytes_written, [f.path for f in plan.files], election.keys, stats)
