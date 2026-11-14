@@ -126,8 +126,10 @@ inline bool StringContainsGlob(const std::string_view haystack, const std::strin
 }
 
 // Check whether the given file contains a list of strings in any order. Doesn't check for
-// strings between lines in the file.
-inline bool FileContainsAllStrings(const std::string& file_name, const std::vector<std::string>& must_contain) {
+// strings between lines in the file. On a miss it logs the missing strings and the whole file, unless
+// report_missing is false (a poll that calls this until the file is complete: report once, on timeout).
+inline bool FileContainsAllStrings(
+    const std::string& file_name, const std::vector<std::string>& must_contain, bool report_missing = true) {
     std::fstream log_file;
     if (!OpenFile(file_name, log_file, std::fstream::in)) {
         return false;
@@ -165,6 +167,9 @@ inline bool FileContainsAllStrings(const std::string& file_name, const std::vect
     }
 
     // Reached EOF with strings yet to find.
+    if (!report_missing) {
+        return false;
+    }
     std::string missing_strings;
     for (const auto& s : must_contain_set) {
         missing_strings.append(&", \""[missing_strings.empty() ? 2 : 0]).append(s).push_back('"');
