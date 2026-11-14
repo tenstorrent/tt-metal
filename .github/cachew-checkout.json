@@ -1,4 +1,6 @@
 {
-  "action_sha": "45a9f39cef658f4047a577b4c853f18aa1b8db9d",
-  "exclude": ["tt_metal/tt-llk/"]
+  "action_sha": "a140c8c392c97a81ebe9919b8397a6d0e90febf3",
+  "exclude": [
+    "tt_metal/tt-llk/"
+  ]
 }
