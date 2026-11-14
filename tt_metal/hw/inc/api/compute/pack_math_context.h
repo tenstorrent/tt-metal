@@ -16,6 +16,8 @@ template <int api>
 struct llk_pack_matmul_api;
 template <int api>
 struct llk_pack_sfpu_api;
+template <int api>
+struct llk_pack_norm_api;
 }  // namespace ckernel::packer
 #define PACK_MATH_CONTEXT(matmul) ckernel::packer::llk_pack_math_context(matmul)
 #define PACK_SFPU_CONTEXT() ckernel::packer::llk_pack_sfpu_context()
@@ -24,6 +26,14 @@ struct llk_pack_sfpu_api;
     namespace ckernel::packer {             \
     template <>                             \
     struct llk_pack_matmul_api<api> {       \
+        static constexpr bool value = true; \
+    };                                      \
+    }
+// layernorm.h marks the norm kernels, which include matmul.h without being bound by matmul.
+#define PACK_NORM_API()                     \
+    namespace ckernel::packer {             \
+    template <>                             \
+    struct llk_pack_norm_api<1> {           \
         static constexpr bool value = true; \
     };                                      \
     }
@@ -40,4 +50,5 @@ struct llk_pack_sfpu_api;
 #define PACK_SFPU_CONTEXT()
 #define PACK_MATMUL_API(api)
 #define PACK_SFPU_API(api)
+#define PACK_NORM_API()
 #endif

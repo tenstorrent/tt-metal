@@ -388,11 +388,26 @@ struct llk_pack_matmul_api
     static constexpr bool value = false;
 };
 
+// Specialized by layernorm.h: the norm kernels, which include matmul.h without being bound by matmul.
+template <int api>
+struct llk_pack_norm_api
+{
+    static constexpr bool value = false;
+};
+
 // Only a kernel with a matmul API reaches the matmul contexts; dep, a template parameter of the caller, delays the lookup.
 template <std::uint32_t dep>
 constexpr bool llk_pack_matmul_kernel()
 {
     return llk_pack_matmul_api<dep * 0 + 1>::value || llk_pack_matmul_api<dep * 0 + 2>::value || llk_pack_matmul_api<dep * 0 + 3>::value;
+}
+
+// A matmul kernel other than a norm one, whose unpackers bound it: at half sync with fp32 DEST or at LoFi an earlier pack start
+// costs them L1 grants.
+template <std::uint32_t dep>
+constexpr bool llk_pack_late_start(const bool is_fp32_dest_acc_en)
+{
+    return (is_fp32_dest_acc_en || MATH_FIDELITY == MathFidelity::LoFi) && llk_pack_matmul_kernel<dep>() && !llk_pack_norm_api<dep * 0 + 1>::value;
 }
 
 // Specialized by the headers of the pack-thread SFPU inits (compute_kernel_api.h and seven eltwise_unary headers).

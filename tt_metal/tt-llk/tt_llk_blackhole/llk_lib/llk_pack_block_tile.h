@@ -30,10 +30,13 @@ inline constexpr bool pack_strides_u2d<PackMode::Default> = llk_pack_u2d;
 template <PackMode pack_mode>
 inline constexpr bool llk_pack_rmw_tile = DST_SYNC_MODE == DstSync::SyncFull && pack_mode == PackMode::Default;
 
-// The default per-tile pack writes the destination by bytes under both syncs, except at half sync with fp32 DEST and an
-// unpack to DEST, where its earlier start contends with the unpacker for L1.
+// The default per-tile pack writes the destination by bytes under both syncs, except at half sync where its earlier start
+// contends with the unpackers for L1: fp32 DEST with an unpack to DEST, and unpack-bound matmul (llk_pack_late_start).
 template <bool is_fp32_dest_acc_en, PackMode pack_mode>
-inline constexpr bool llk_pack_rmw_per_tile = pack_mode == PackMode::Default && (DST_SYNC_MODE == DstSync::SyncFull || !(is_fp32_dest_acc_en && llk_pack_u2d));
+inline constexpr bool llk_pack_rmw_per_tile =
+    pack_mode == PackMode::Default &&
+    (DST_SYNC_MODE == DstSync::SyncFull ||
+     !((is_fp32_dest_acc_en && llk_pack_u2d) || ckernel::packer::llk_pack_late_start<static_cast<std::uint32_t>(pack_mode)>(is_fp32_dest_acc_en)));
 
 // Unified cores, shared by the CB-id API below and the LLKOperand API (experimental/). They take
 // already-resolved scalar formats/geometry + the runtime write address; the per-source prologue
