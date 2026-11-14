@@ -86,3 +86,32 @@ def test_binary_relational_uint8_tensor_scalar(shape, scalar, ttnn_op, device):
     output_tensor = ttnn.to_torch(output_tensor, dtype=torch.uint8)
 
     assert torch.equal(output_tensor, torch_output)
+
+
+@pytest.mark.parametrize(
+    "ttnn_op, torch_op",
+    [
+        (ttnn.gt_, torch.gt),
+        (ttnn.ge_, torch.ge),
+        (ttnn.lt_, torch.lt),
+        (ttnn.le_, torch.le),
+        (ttnn.eq_, torch.eq),
+        (ttnn.ne_, torch.ne),
+    ],
+)
+@pytest.mark.parametrize("rhs_kind", ["uint8_tensor", "scalar"])
+def test_inplace_relational_uint8(ttnn_op, torch_op, rhs_kind, device):
+    torch_a = (torch.arange(32 * 32) % 256).reshape(1, 1, 32, 32).to(torch.int32)
+    torch_b = ((torch.arange(32 * 32) * 7) % 256).reshape(1, 1, 32, 32).to(torch.int32)
+    a = ttnn.from_torch(torch_a, dtype=ttnn.uint8, layout=ttnn.TILE_LAYOUT, device=device)
+    if rhs_kind == "scalar":
+        rhs = 100
+        expected = torch_op(torch_a, rhs)
+    else:
+        rhs = ttnn.from_torch(torch_b, dtype=ttnn.uint8, layout=ttnn.TILE_LAYOUT, device=device)
+        expected = torch_op(torch_a, torch_b)
+
+    ttnn_op(a, rhs)
+
+    assert a.dtype == ttnn.uint8
+    assert torch.equal(ttnn.to_torch(a).to(torch.int32), expected.to(torch.int32))

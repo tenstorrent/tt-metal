@@ -1043,6 +1043,25 @@ Tensor inplace_relational_binary(
     ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    if (lhs.dtype() == DataType::UINT8 || rhs.dtype() == DataType::UINT8) {
+        // There is no UINT8 compare kernel: compute in UINT16 like the out-of-place ops, then write back into lhs.
+        const Tensor a = lhs.dtype() == DataType::UINT8 ? ttnn::typecast(lhs, DataType::UINT16) : lhs;
+        const Tensor b = rhs.dtype() == DataType::UINT8 ? ttnn::typecast(rhs, DataType::UINT16) : rhs;
+        const Tensor result = ttnn::detail::invoke_binary_ng(
+            a,
+            b,
+            binary_op_type,
+            std::nullopt,
+            std::nullopt,
+            std::nullopt,
+            post_activations,
+            lhs_activations,
+            rhs_activations,
+            /*fast_and_approximate_mode*/ false,
+            sub_core_grids,
+            sub_device_id);
+        return ttnn::typecast(result, lhs.dtype(), std::nullopt, lhs, sub_core_grids);
+    }
     return ttnn::detail::invoke_binary_ng(
         lhs,
         rhs,
@@ -1067,6 +1086,20 @@ Tensor inplace_relational_binary(
     ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    if (lhs.dtype() == DataType::UINT8) {
+        const Tensor result = relational_binary<binary_op_type>(
+            ttnn::typecast(lhs, DataType::UINT16),
+            rhs,
+            std::nullopt,
+            std::nullopt,
+            std::nullopt,
+            post_activations,
+            lhs_activations,
+            rhs_activations,
+            sub_core_grids,
+            sub_device_id);
+        return ttnn::typecast(result, DataType::UINT8, std::nullopt, lhs, sub_core_grids);
+    }
     return relational_binary<binary_op_type>(
         lhs,
         rhs,
