@@ -174,6 +174,20 @@ class HYV4ForCausalLM:
             out[phys] = t.reshape(ROWS, -1)[phys].float()
         return out
 
+    def _drop_lazy_prefill_tensors(self):
+        """Free the tensors the chain prefill caches lazily (indexer top-k sentinel pads, mask1 masks). They are allocated at the first prefill of a given T, i.e. AFTER the decode trace was
+        captured; a persistent tensor allocated after capture can sit in DRAM the trace replays use as scratch, so the next decode corrupted it (garbage above ~1024 prompt tokens: the
+        T=1536 sentinel pad). Dropping them after every prefill call makes them transient (rebuilt per call)."""
+        for ly in self.ch.layers:
+            ix = getattr(ly.attn, "indexer", None)
+            if ix is None:
+                continue
+            for d in (getattr(ix, "_sent", None), getattr(ix, "_mask_full", None)):
+                if d:
+                    for t in d.values():
+                        self.ttnn.deallocate(t)
+                    d.clear()
+
     def _prefill_rows(self, prompts_by_phys):
         """prompts_by_phys {phys row: list[int] tokens} -> ({phys: logits[V]}, seconds). Leaves the decode caches of the OTHER rows untouched."""
         ttnn = self.ttnn
@@ -198,6 +212,7 @@ class HYV4ForCausalLM:
         t1 = time.perf_counter()
         self.dec.handoff_rows(nch * CHUNK, sorted(prompts_by_phys))
         self.ch.reset()  # free the concat-grown prefill caches and key caches
+        self._drop_lazy_prefill_tensors()
         ttnn.synchronize_device(self.md)
         logger.info(
             f"HY4 prefill call: rows={len(prompts_by_phys)} lens={sorted(lens.values())} chunks={nch} total={time.perf_counter() - t0:.2f}s "
