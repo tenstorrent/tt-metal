@@ -1359,3 +1359,75 @@ The one this change broke (test_seeded: `git add state.json`) is fixed.
   transfers per layer 0, wall 168.2 ms (spread 6.2; P.56's prev measure 182.3); p51200 (random ids, in-sample plan,
   DS41-228) device_ms_total 157.56, device_ms_experts 76.62, wall 177.7 (spread 6.5; P.56: 188.4), host overhead 20.1,
   1656 launches (the planner's run_prepared not counted).
+
+## P.61 (perf, attempt 1): MOE_TRACE=moe, the MoE half of every layer replayed from a Metal trace
+- Expected per chunk (written before any device run; perf_guide 1, 3; P.57 / P.60 numbers, MOE_REPLICAS=prev,
+  MOE_PREV_HOST=device): host -80 to -90 ms (P.57: the MoE / FFN half ~90 ms of host a chunk - experts 64.7,
+  ffn_residual 27.3 incl. Python; a replay ~0.02-0.05 ms a layer + the guard / planner bookkeeping ~0.01 ms), so host
+  ~172 -> ~85-95 ms (novel). Device -2 to -8 ms (P.57's one-layer prototype: 3.93 -> 3.54 ms a layer with the whole
+  layer traced; the MoE half alone gets a part of that: fewer dispatch gaps between its ~15 programs). Wall: the chunk
+  turns device-bound: novel prev 179.3 -> ~155-160 (-20 to -25 ms), code 175.0 -> ~150-155; prev off 181 -> ~165-172
+  (it was device-bound already: only the device cut and the start-of-chunk idle). At 51,200 (P.60 measure: wall 177.7,
+  device 157.6) -> ~158-162.
+- What I built (MOE_TRACE = off | moe, tt/settings.py; default off on this branch until accepted, per the task):
+  tt/moe_trace.py `SegmentTrace` on every main-model block (tt/model.py `TtDS41Block._segment`): ffn_norm only notes
+  its input, router .. moe_add do nothing, ffn_residual runs the whole MoE half (ffn_norm, the MoE block call: head,
+  dispatch, experts + combine, tilize + add, P.56's planner; ffn_residual's mhc_post with the next layer's attn_hc
+  row) - eager for the first 2 calls of a key, then captured once (~25 ms a layer; layer 0's first 186 ms), then
+  replayed with execute_trace every call. Inputs: attn_residual's mhc_post writes the new streams into one load-time
+  buffer (all layers) and ffn_hc's hc into one a layer (TtHcResidual.fused out= / hc_out=, mhc_post output_tensor /
+  hc_output); the head's x is already in the FFN_FEED buffer: no copy before a replay. Kept outside the trace each
+  call: P.56's guard (`TtMoEBlockMainLayer.pre_call`: a host decision on host ordinals; its reset copy of the router
+  bias is an eager op, issued only on a request's first chunk) and the planner's ordinals / MOE_COUNTS registry
+  (`post_call_host`, `PrevReplicas.after_host`). Only the steady path traces (OWN_ROWS, FFN_FEED, POST_COLLAPSE,
+  MOE_BLOCK_SRC=main with its own head; MOE_REPLICAS off or prev with MOE_PREV_HOST=device); anything else, the
+  decoder tail and DEEP_LAYERS=tail's source layer run eager. No device_params change: with trace_region_size 0 Metal
+  puts the trace's command buffer top-down in DRAM (tt_metal/distributed/mesh_trace.cpp:65).
+- Decisions: (1) DS41-255: every DRAM buffer the capture allocates stays allocated while the trace lives (frees held,
+  op outputs kept, a graph capture raises on a DRAM buffer allocated and freed inside the capture): 9.66 MiB a chip a
+  layer, ~386 MiB for 40 layers a key (the gate's prev test has 2 keys: off and prev). L1 (the block's arena) is freed
+  as in the eager call. (2) DS41-256: a capture first waits for the engram worker's uploads. (3) DS41-257: the
+  rt profiler's accounting of replays (testing/profiler.py trace_replay / remap_replays), so device_ms_total and the
+  sections stay right with the change on. (4) P.56's guard stays a host decision outside the trace (the brief said
+  "device-side"): it issues nothing on a steady chunk, so it is no blocker and needs no new device program.
+- Results (tests/test_moe_trace.py, one process, 40 layers, the model loaded once with MOE_TRACE=moe; untraced = the
+  same model with every SegmentTrace.enabled False; chunks 1..10 mean of fresh requests of 11 chunks; host = first host
+  call to the last layer's enqueue; clean wall = to the closing sync, nothing profiled; device = rt profiler, a separate
+  pass, each program's slowest chip summed; moe host = host time inside the MoE halves):
+
+  | prompt / side | host ms | clean wall ms | device ms | moe host ms |
+  |---|---|---|---|---|
+  | novel prev, untraced -> traced | 164.9 -> 114.3 | 173.0 -> 166.9 (-6.1) | 155.4 -> 150.0 | 56.0 -> 2.4 |
+  | novel off | 159.8 -> 117.0 | 176.4 -> 174.6 (-1.9) | 168.2 -> 164.8 | 51.4 -> 2.0 |
+  | code prev | 167.8 -> 117.7 | 173.5 -> 161.8 (-11.7) | 150.6 -> 146.2 | 56.5 -> 2.7 |
+  | code off | 163.4 -> 114.2 | 173.1 -> 166.7 (-6.4) | 157.0 -> 154.6 | 52.0 -> 2.3 |
+  | p51200 prev (random ids, median of 5) | 168.4 -> 121.5 | 179.1 (spread 54.9) -> 173.1 (spread 9.5) | 165.5 -> 158.9 | |
+
+  Every traced chunk's output equal to untraced bit for bit (all 4 passes, 2 traced clean passes each, and p51200).
+  Captures 80 (40 layers x prev / off), median 24.6 ms, max 186 ms (the first); 7240 replays in the run, no error.
+- Reading: host -47 to -51 ms a chunk (expected -80 to -90: P.57's "~90 ms MoE half" counted more than the half; the
+  half's own host was 51-56 ms, now 2-3). The chunk is no longer host-bound (host ~115 vs device ~150), so the wall
+  gains only the device cut and the host-bound spans: -2 to -12 ms (expected -20 to -25 prev). The device itself got
+  2-5 ms faster (fewer late-dispatch waits in the CCL programs). Wall - device is still ~15-17 ms: a diagnostic pass
+  (P61_ONLY=novel:prev, the rt timeline per chip) puts only ~2.7 ms a chunk at the traces (1.8 ms of idle before the 40
+  replays - Metal drains the device before each one, tt_metal/impl/trace/dispatch.cpp - 0.26 after, 0.59 inside); the
+  rest is eager idle (the chunk's start before the device has work, layer 1's wait for the engram job), which the
+  profiled pass inflates and cannot size.
+- Re-run: `scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_moe_trace.py`
+  (~12 min with the load, devjob); P61_QUICK=1 (4 layers, ~1.5 min); P61_ONLY=novel:prev (one pass set + the gaps).
+- `measure --task P.61` (change on: MOE_TRACE=moe ENGRAM_TABLE=resident): determinism 0 (novel, code, state); quick
+  min layer PCC 0.60548579 at L39 (= P.52-P.60: the same output bytes), host transfers per layer 0, clean wall 163.7 ms
+  (spread 5.3; P.60's measure 168.2); p51200 (random ids) device_ms_total 149.24 (P.60 157.56), device_ms_experts 69.13
+  (76.62), ffn_residual 9.89, wall 178.6 with a 26.2 ms spread (P.60 177.7, spread 6.5: this single run is noisy; the
+  test's 5-run medians above give 179.1 -> 173.1), host launches 1296 (1656), host overhead 29.4. The replays' device
+  time lands in its sections (profiler.trace_replay): experts and ffn_residual are filled, not 0.
+- Gate check: run with DS41_MOE_TRACE=moe exported (the setting's default is off on this branch; the orchestrator's
+  A/B sets both sides).
+- `gate P.61 --check` (DS41_MOE_TRACE=moe): every unit PASS - determinism 0, the ladder's last rung (every err_layer /
+  err_state within its noise floor, err_final_hidden 0.132 <= 0.242, top5 1.0), test_moe_prev_replicas (device mode:
+  prev = off bit for bit, repeat 0, mirror 0 mismatches of 477, novel device 164.8 -> 150.3, wall 178.4 -> 166.5; its
+  per-op experts / planner columns read 0 under the trace: its spy times the launches, which a replay does not make),
+  the profile (chunk_wall_ms 164.2, device_ms_total 141.52).
+- Next (not done): the remaining wall - device (~15 ms a chunk) is eager idle at the chunk's start and layer 1's
+  engram wait (DS41-251 fix 4: the engram job one chunk ahead), and ~2.7 ms at the 40 replay boundaries (Metal's drain
+  before each replay: fewer, longer traces need the attention's start-dependent arguments on the device).

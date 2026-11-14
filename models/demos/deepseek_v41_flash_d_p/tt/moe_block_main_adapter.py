@@ -419,6 +419,7 @@ class TtMoEBlockMainLayer:
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
             )
         self._prev_ord, self._prev_dirty, self._prev_off_rb, self._prev_used = None, False, None, False
+        self._pre_done = False  # (MOE_TRACE=moe, P.61: pre_call() already ran this call's guard)
         self.dims, self.act = block_dims(cfg, slots=rows * cols * self.spc)
         self.dtypes = block_dtypes()
         self.perm = expert_permutation(rows, cols, self.epc)
@@ -1050,7 +1051,8 @@ class TtMoEBlockMainLayer:
         xb = cast(x, ttnn.bfloat16)
         pr = _prev_of(self, blk.resources) if self._prev else None
         if pr is not None:  # (MOE_REPLICAS=prev, P.56: the guard and this call's carried copies)
-            pr.before(self)
+            if not self._pre_done:  # (MOE_TRACE=moe, P.61: the trace's caller ran pre_call() outside the capture)
+                pr.before(self)
         elif self.replicas:
             self._exact_call(blk)
         if not self.own_rows:
@@ -1076,6 +1078,42 @@ class TtMoEBlockMainLayer:
             dealloc(y)
             y = y32
         return y
+
+    # ------------------------------------------------------------------ MOE_TRACE=moe (P.61, tt/moe_trace.py)
+    def trace_key(self, fed: bool):
+        """The host facts a captured MoE call depends on (part of the trace key), or None when this call must run
+        eager: only the OWN_ROWS head path fed by attn_residual's pass (FFN_FEED) with MOE_REPLICAS off or prev under
+        MOE_PREV_HOST=device - runtime / exact choose fill jobs and slot maps on the host per call, legacy hands every
+        call another ring slot."""
+        if not (self.own_rows and fed and self.head_w is not None):
+            return None
+        blk = self.block()
+        if blk.loops * blk.splits != 1 or blk.pad_rows or blk.exchange_spec is None:
+            return None
+        mode = None
+        if self._prev:
+            pr = _prev_of(self, blk.resources)
+            if pr.mode != "device":
+                return None
+            mode = pr.mode
+        elif self.replicas and settings.get("MOE_REPLICAS") != "prev":
+            return None  # (runtime / exact: host-chosen fill per call)
+        return (self.layer, self.chunk, bool(self._prev), mode, self.counts_buf is not None, bool(self.fold))
+
+    def pre_call(self) -> None:
+        """Outside the trace, before a captured or replayed call: P.56's guard (a host decision from host ordinals; its
+        reset copy of the router bias is an eager op, never captured) and the combine's fill args (the same every
+        call under MOE_PREV_HOST=device: a no-op once set)."""
+        if self._prev:
+            _prev_of(self, self.block().resources).before(self)
+
+    def post_call_host(self) -> None:
+        """After a replayed call: the host bookkeeping the captured call did once in Python - the planner's ordinals
+        (its program ran from the trace) and MOE_COUNTS' registry of the layers that ran."""
+        if self._prev:
+            _prev_of(self, self.block().resources).after_host(self)
+        if self.counts_buf is not None:
+            _COUNTS.setdefault(id(self.mesh), (self.mesh, {}))[1][self.layer] = self
 
     def _own_rows(self, blk, x_own, weights, fed: bool = False):
         """OWN_ROWS: x [1, 1, S/(SP TP), H] -> one TP all-to-all into [1, 1, S/SP, H/TP] -> head, dispatch, experts +

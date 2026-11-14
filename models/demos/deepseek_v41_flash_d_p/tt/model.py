@@ -58,7 +58,7 @@ import torch
 import ttnn
 from models.demos.common.bringup.reference.interface import Ctx, run_block
 
-from . import ccl, ffn_feed, host_alloc
+from . import ccl, ffn_feed, host_alloc, moe_trace
 from .attention import TtWindowAttention, TtWindowCache, WindowTables, attention_weights, snapshot_cap, window_keep
 from .ccl import dealloc
 from .collapse import TtHcCollapse
@@ -628,6 +628,7 @@ class TtDS41Block:
         self.router_wts = indexer_glue()
         if self.router is not None:
             self.router.dense = not self.router_wts
+        self.seg = None  # MOE_TRACE=moe (P.61): the MoE half's trace (tt/moe_trace.prepare, at the model's load)
         self.fns = self._fns()
         # boundaries freed after their last reader (never "in": the caller owns it; never "out")
         last = {}
@@ -823,7 +824,9 @@ class TtDS41Block:
                 return ctx.extra.pop("attn_in")
 
             def attn_residual(ctx, x, mix, y):  # noqa: F811
-                out, row = self.attn_res.fused(x.streams, mix, y, self.ffn_hc, collapse=self.post_collapse)
+                # MOE_TRACE=moe (P.61): the new streams and ffn_hc's hc into the traced MoE half's input buffers
+                bufs = self.seg.outputs() if self.seg is not None else {}
+                out, row = self.attn_res.fused(x.streams, mix, y, self.ffn_hc, collapse=self.post_collapse, **bufs)
                 if row is not None:
                     ctx.extra["ffn_row"] = row
                 return out
@@ -942,6 +945,8 @@ class TtDS41Block:
             return run
 
         overrides = {s.name: wrap(s, self.fns[s.name]) for s in self.steps}
+        if self.seg is not None:  # MOE_TRACE=moe (P.61): the MoE half as one unit (tt/moe_trace.py), at ffn_residual
+            self._segment(overrides)
 
         def no_cpu(name):
             raise AssertionError(f"layer {self.layer}: step {name} has no device module (all-device model)")
@@ -952,6 +957,37 @@ class TtDS41Block:
             for slot in self.model.memo_last.get(self.layer, ()):
                 state.memo.drop(slot)
         return out
+
+    def _segment(self, overrides: dict) -> None:
+        """MOE_TRACE=moe (P.61): ffn_norm only notes its input, router .. moe_add do nothing, and ffn_residual runs the
+        whole MoE half - eager (the same wrapped steps, in order, with run_block's signposts) or from its trace."""
+        from models.demos.common.bringup.testing import profiler
+
+        steps, real = self.seg.steps, dict(overrides)
+
+        def eager(ctx, h, mix, x):
+            env = {"h_mid": h, "ffn_hc": mix, "ffn_in": x}
+            marks = ctx.extra.pop("seg_marks", None)  # (a capture: each step's first device-operation id)
+            for s in steps:
+                if marks is not None:
+                    marks.append((s.name, ttnn._ttnn.get_device_operation_id()))
+                profiler.signpost(s.name)
+                env[s.output] = real[s.name](ctx, *[env[n] for n in s.inputs])
+            return env["out"]
+
+        def note(ctx, x):
+            ctx.extra["seg_in"] = x
+            return Keep()
+
+        def skip(ctx, *args):
+            return Keep()
+
+        def segment(ctx, h, mix, y):
+            return self.seg(ctx, h, mix, ctx.extra.pop("seg_in"), eager)
+
+        overrides.update(
+            ffn_norm=note, router=skip, experts=skip, shared_expert=skip, moe_add=skip, ffn_residual=segment
+        )
 
 
 # ============================================================================================= model
@@ -1169,6 +1205,7 @@ class TtDS41Model:
                 self.memo_last.setdefault(i, []).append(slot)
         host_alloc.reserve_sites(self)  # HOST_ALLOC=on (P.15): the in-step gathers' outputs, at load time (DS41-146)
         host_alloc.reserve_forks(self)  # FORK_OUT_BUFFERS=on (P.16): the forks' in-layer outputs, at load time
+        moe_trace.prepare(self)  # MOE_TRACE=moe (P.61): the MoE half's input buffers, at load time
         self.load_seconds = time.time() - t0
 
     def _rows_to_device(self, x: torch.Tensor) -> ttnn.Tensor:

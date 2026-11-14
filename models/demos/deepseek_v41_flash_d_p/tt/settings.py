@@ -552,6 +552,19 @@ TABLE = {
         "fill args are then the same every call and a cache hit writes none (routed_experts_combine's fill signature); "
         "the planner takes one ring address instead of W. Same plans, slots, pages and math: outputs bit-identical",
     ),
+    "MOE_TRACE": Setting(
+        "off",
+        ("off", "moe"),
+        "P.61 (overseer 2026-11-14, owner away; moe_replication branch, default off until accepted): the MoE half of "
+        "every layer (ffn_norm through the combine and ffn_residual's mhc_post) replayed from a Metal trace. off = "
+        "every op launched from the host each chunk. moe = per layer and per shape (tt/moe_trace.py): two eager calls, "
+        "then one capture (every DRAM buffer the half allocates is kept for the trace's life, no hole a later "
+        "allocation could take), then execute_trace every call. attn_residual writes the half's inputs (the streams, "
+        "ffn_hc's mixes) into load-time buffers; P.56's guard (a host decision on host ordinals, its copy an eager op) "
+        "and the planner's host bookkeeping run outside the trace. Only the steady path traces (OWN_ROWS, FFN_FEED, "
+        "POST_COLLAPSE, MOE_BLOCK_SRC=main with its own head, MOE_REPLICAS off or prev with MOE_PREV_HOST=device); any "
+        "other call runs eager. Same programs, same inputs: outputs bit-identical to off",
+    ),
     "MOE_PREV_FIXED": Setting(
         "165",
         None,

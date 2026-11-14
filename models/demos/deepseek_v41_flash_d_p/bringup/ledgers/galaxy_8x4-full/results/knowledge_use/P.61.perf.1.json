@@ -1,0 +1,101 @@
+{
+ "used": [
+  {
+   "id": "DS41-251",
+   "how": "took its fix 1 (trace the MoE half) and its prototype (capture after warm calls, bit-identical replay) as the design; checked its blocker list against the half (only P.56's guard and the planner's host state were in it)",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-254",
+   "how": "a trace is captured only under MOE_PREV_HOST=device (the combine's fill args the same every call); legacy hands every call another ring slot and runs eager (TtMoEBlockMainLayer.trace_key)",
+   "traced": null,
+   "cited": true
+  },
+  {
+   "id": "DS41-100",
+   "how": "capture only after eager calls of the same key (WARM=2): every program compiled, the block's lazy buffers, slots and the planner prepared before the capture",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-146",
+   "how": "the traced half's input buffers (streams, ffn_hc's mixes) are allocated at load (moe_trace.prepare), never inside a forward",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-149",
+   "how": "TtHcResidual._collapse hands on the given out / hc_out objects, not mhc_post's new wrappers, so the trace's input check (h is the buffer) holds",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-183",
+   "how": "every model-level device run (quick probe, full measurement, diagnostic, measure, gate) started detached through devjob",
+   "traced": null,
+   "cited": true
+  }
+ ],
+ "contradicted": [
+  {
+   "id": "DS41-251",
+   "evidence": "Its trace-blocker list calls 'allocations inside the capture' not a blocker; that holds only for its prototype (replays back to back, nothing eager between). With eager attention between replays, a DRAM buffer the capture allocated and freed is a hole a later allocation can take and the next replay overwrites; Metal warns 'Allocating device buffers is potentially unsafe due to the existence of an active trace' (tt_metal/impl/allocator/allocator.cpp:140). P.61 keeps every capture-time DRAM buffer allocated and checks it with a graph capture (tt/moe_trace.py _Keep / _holes, DS41-255). Also its 'P.56's guard' blocker is not one for a MoE-half trace: the guard stays a host decision outside the trace (pre_call). Its estimate '~93 ms host a chunk' for the MoE / FFN half: the half's own host time measured 51-56 ms (tests/test_moe_trace.py moe_host_ms, 40 layers), so the trace removed ~50 ms, not ~90.",
+   "cited": true
+  }
+ ],
+ "missing": [
+  "Metal drains the device before every trace replay (tt_metal/impl/trace/dispatch.cpp issue_trace_commands): ~46 us of idle a replay measured here; worth a perf_guide line next to the trace row",
+  "a trace's programs keep their capture-time runtime ids: the rt profiler's sections need the replay mapped (DS41-257)",
+  "with trace_region_size 0 the trace's command buffer goes top-down in DRAM (no device_params change needed)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "no padding or duplicated work: the trace replays the same programs on the same buffers; the inputs are written in place by the producer (mhc_post output_tensor / hc_output), no copy"
+  },
+  {
+   "id": "OV-23",
+   "answer": "done",
+   "evidence": "no Python-built op added or changed; the one in the half (P.56's planner, ttnn.bringup.run_prepared) stays prepared and is captured in the trace (its host launch ~95 us a call is gone on replays)"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork regression or unit suite run; only the new tests/test_moe_trace.py (quick 4-layer, full 40-layer, one diagnostic pass) and the model-level measure / gate"
+  }
+ ],
+ "cited_only": [
+  "DS41-255",
+  "DS41-257"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "moe_replication",
+  "task": "P.61",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-14T11:12:19",
+  "head": "a1cd941aed0",
+  "touched": [
+   "models/demos/common/bringup/testing/profiler.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.61.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.61_ops.json.gz",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.61_prev_replicas.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.61_profile.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.61.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_moe_trace.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/expert_prev.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/model.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/moe_block_main_adapter.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/moe_trace.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/residual.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py"
+  ]
+ }
+}

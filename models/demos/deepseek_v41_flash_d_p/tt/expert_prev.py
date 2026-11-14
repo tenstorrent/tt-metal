@@ -586,6 +586,11 @@ class PrevReplicas:
                 f"MOE_REPLICAS=prev: planner prepared ({self.mode}), {cores} cores ({cores / self.geo.n:.1f} a chip)"
             )
         ttnn.bringup.run_prepared(pp, io)
+        self.after_host(layer)
+
+    def after_host(self, layer) -> None:
+        """after()'s host bookkeeping alone: the call ordinal (= the device's G[0], which the planner advances) and the
+        layer's plan ordinal for the guard. MOE_TRACE=moe (P.61): a replayed MoE half ran the planner from the trace."""
         layer._prev_ord = self.ord
         layer._prev_dirty = True
         self.ord += 1
