@@ -124,7 +124,6 @@ jobs:
           oauth-client-id: ${{ vars.TS_VAULT_OSPO_CLIENT_ID }}
           audience: ${{ vars.TS_VAULT_OSPO_AUDIENCE }}
           tags: tag:tt-gha-vault-ospo
-          args: --accept-routes
 
       - name: Wait for OSPO Vault listener
         id: vault-ready
@@ -1017,7 +1016,6 @@ jobs:
           oauth-client-id: ${{ vars.TS_VAULT_OSPO_CLIENT_ID }}
           audience: ${{ vars.TS_VAULT_OSPO_AUDIENCE }}
           tags: tag:tt-gha-vault-ospo
-          args: --accept-routes
 
       - name: Wait for OSPO Vault listener
         id: vault-ready
