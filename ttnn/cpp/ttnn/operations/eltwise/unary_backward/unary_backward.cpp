@@ -303,7 +303,7 @@ std::vector<Tensor> rdiv_bw(
         }
         grad_tensor.emplace_back(result);
     } else {
-        Tensor result = ttnn::zeros_like(grad, grad.dtype(), grad.layout(), std::nullopt, output_mem_config);
+        Tensor result = ttnn::zeros_like(input, input.dtype(), input.layout(), std::nullopt, output_mem_config);
         grad_tensor.emplace_back(result);
     }
     return grad_tensor;
@@ -640,7 +640,7 @@ std::vector<std::optional<ttnn::Tensor>> rsqrt_bw(
 
     std::vector<std::optional<Tensor>> result;
     if (!input_grad.has_value()) {
-        input_grad = ttnn::empty_like(grad, std::nullopt, std::nullopt, std::nullopt, output_mem_config);
+        input_grad = ttnn::empty_like(input, std::nullopt, std::nullopt, std::nullopt, output_mem_config);
     }
     float t_nan = std::nanf("");
 
