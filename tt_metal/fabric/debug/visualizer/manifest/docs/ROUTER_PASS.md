@@ -23,7 +23,7 @@ facts that take logic (computed facts), and the checks that come with them.
 
 The router pass knows only this router and its builder. What needs the rest of the chip or the fabric is left for the
 topology pass ([TOPOLOGY_PASS.md](TOPOLOGY_PASS.md)): the router's routing plane and cores, its link's peer and whether
-the link wraps or crosses hosts, and which sibling feeds
+the link wraps or the peer chip is on another MPI rank, and which sibling feeds
 each sender channel.
 
 ## Steps

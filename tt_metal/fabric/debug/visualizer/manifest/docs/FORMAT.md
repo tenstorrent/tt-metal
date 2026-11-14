@@ -293,7 +293,7 @@ these ids, and every block here is named by at least one. To read a router's, ch
 | Key | Value |
 | --- | --- |
 | `identity` | `eth_chan`, `logical_core` and `virtual_core`. The router's mesh and chip are in its path, and its direction and routing plane in its key |
-| `link` | `edge_capability`, `peer` (a router path, or null when the link reaches no active router), `cross_host`, `wrap` and `dispatch_link` |
+| `link` | `edge_capability`, `peer` (a router path, or null when the link reaches no active router), `cross_host` (true when the peer chip belongs to another MPI rank, which may run on the same host), `wrap` and `dispatch_link` |
 | `shape` | `num_vcs`, `senders_per_vc`, `receivers_per_vc`, `num_active_eriscs`, `channel_trimming_overrides_applied` and `has_tensix_extension` (the router's tensix mux carries its VC0 senders other than the worker channel) |
 | `credit_counters` | The four L1 credit counter arrays, `to_sender_ack`, `to_sender_completion`, `receiver_ack` and `receiver_completion`, each an L1 region plus `indexed_by`: `own_sender_channel` for the `to_sender` arrays, `peer_sender_channel` for the `receiver` arrays. Each element is one sender channel's, by its compact index |
 | `channels` | `senders` and `receivers`, each keyed `vc<v>` then `ch<c>`. VCs with no channels of that kind are left out |

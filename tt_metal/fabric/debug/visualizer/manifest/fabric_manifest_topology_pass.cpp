@@ -158,7 +158,7 @@ manifest::RouterRef get_master_router(
     return manifest::RouterRef{.node = node, .key = it->identity.key};
 }
 
-// Resolves the router's link to the peer router on its other end, and whether the link crosses hosts or wraps.
+// Resolves the router's link to the peer router on its other end, and whether it reaches another MPI rank or wraps.
 //
 // Unlike sibling routers, that are on the same chip, the peer is on a different chip. ControlPlane reports that far end
 // as a (chip, channel), and this turns it into the router living there.
@@ -184,7 +184,7 @@ manifest::RouterRef get_master_router(
 //   1. peer:        ControlPlane says chip 0 ch 9 is cabled to (chip 3, ch 0). That channel is an active router
 //                   facing E on plane 0, so link.peer = chip 3 E0. If the channel was trimmed from chip 3's
 //                   routing planes there is no router there, and link.peer stays empty.
-//   2. cross_host:  true when the cable leaves this host (the peer chip is owned by another host's process).
+//   2. cross_host:  true when the peer chip belongs to another MPI rank (which may run on the same host).
 //   3. wrap:        true when the link closes the ring. Chip 0 and chip 3 sit at coordinates 0 and 3 along the
 //                   east-west axis, and their delta (3) is the mesh length (4) minus one, so the link is a wrap.
 //                   The chip 0 to chip 1 link has delta 1, so it is not.

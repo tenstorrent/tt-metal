@@ -19,7 +19,7 @@ The topology pass finishes what the router pass couldn't:
 | The router pass leaves | The topology pass adds |
 | --- | --- |
 | Each router's Ethernet channel and the direction its builder built it facing | Its routing plane, which makes its key (such as `E0`), and its cores |
-| Each link's edge capability, and whether it's a dispatch link | The `peer` router on the other end, `cross_host`, and `wrap` |
+| Each link's edge capability, and whether it's a dispatch link | The `peer` router on the other end, `cross_host` (the peer chip is on another MPI rank), and `wrap` |
 | Producers for worker and tensix mux channels | Producers for channels a sibling feeds |
 | The local sync master's Ethernet channel | The master router's path |
 | The chip's Z port role, local sync and routers | The chip's place in its mesh, its ids, and whether it's local |
@@ -48,7 +48,7 @@ doesn't work out again something fabric has already decided, so it can't drift f
 | A router's routing plane | `control_plane.get_routing_plane_id()` |
 | A router's cores | The cluster's SoC descriptor (`get_eth_core_for_channel`) and `cluster.get_virtual_coordinate_from_logical_coordinates()` |
 | A link's peer | `control_plane.try_get_connected_mesh_chip_chan_ids()`, then the router the peer's builder built on that channel: one of its routing planes in the direction (`get_active_fabric_eth_routing_planes_in_direction()`), which `FabricBuilder` builds routers on |
-| A link's `cross_host` | `control_plane.is_cross_host_eth_link()` |
+| A link's `cross_host`: whether the peer chip is on another MPI rank, which may run on the same host | `control_plane.is_cross_host_eth_link()` |
 
 Two facts are the topology pass's own, because no object holds them directly. Each is built from the lookups above:
 
@@ -82,7 +82,7 @@ key, and its cores. Routers stay in the order they were published, by Ethernet c
 
 **3. Link peers** (`resolve_link_peer`). Each router's link gets its `peer`, `cross_host` and `wrap`. The peer is null
 when the link connects to nothing, or to a channel trimmed from the peer's routing planes. A peer can be on another
-chip, another mesh, or another host.
+chip, another mesh, or another MPI rank.
 
 **4. Sibling producers** (`resolve_sibling_producers`). Each connection the builder recorded names its source and
 target routers by Ethernet channel, and the sender channel it lands on. The target's sender channel gets the source as

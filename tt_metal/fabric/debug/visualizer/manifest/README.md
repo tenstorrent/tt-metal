@@ -182,7 +182,7 @@ who services it, its ring buffers, credits, and the edges to its sibling routers
 
 Runs at write time. It lays out every mesh and chip, decides which chips are local, and resolves each published router's
 Ethernet channels into the routers they name: its key, its peer on the other end of the link, whether the link wraps or
-crosses hosts, and its sibling producers.
+the peer chip is on another MPI rank, and its sibling producers.
 
 **Describe** ([docs/DESCRIBE.md](docs/DESCRIBE.md)).
 
