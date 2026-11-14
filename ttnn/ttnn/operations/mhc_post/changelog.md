@@ -405,3 +405,109 @@
 - Issues encountered: the kernel-config ring (above); `if constexpr` on the McastArgs `active` flag does not discard
   in the non-template `kernel_main` (the absent variant failed to compile), which is moot in the raw form.
 - Tests added: none (`perf_feed_measure.py` and `test_mhc_post_perf.py` reused).
+
+## Perf 1 — fused operand-outer SFPU mix + faster coefficient start-up (perf tournament round 1)
+- Date: 2026-11-14
+- Focus (LOOSE_CASES `attention`): DeepSeek-V4.1 T160 C5120 bf16, packed mixes, HiFi2, fp32 DEST, collapse + norm, with
+  and without the feed, BH 1×4 mesh (FABRIC_2D_TORUS_XY), 105 workers / chip, R = 5 × Q = 21, 8 units a core.
+- Instrument: `tests/ttnn/unit_tests/operations/mhc_post/perf_feed_measure.py` (the `eval.ccl_perf` protocol, inputs
+  uploaded once). `eval/golden_tests/mhc_post/perf_measure.py` still TT_FATALs in this op ("Event Synchronization is not
+  supported during trace capture": `prepare_mhc_post` re-uploads inputs inside the trace capture) — an eval-harness
+  issue, recorded, not fixed here. 5 experiments per variant, kept by `python -m eval.ccl_perf compare`.
+
+### Whole op (fastest / slowest chip)
+| case | before | after | compare |
+|---|---|---|---|
+| collapse + norm, no feed (LOOSE_CASES[1]) | 123.32 / 124.75 µs | **111.20 / 112.96 µs** | win (−12.12 µs, −9.8 %) |
+| collapse + norm + feed (LOOSE_CASES[0]) | 154.41 / 156.92 µs | **142.58 / 145.46 µs** | win (−11.83 µs, −7.7 %) |
+
+Neither dispatch-bound (max gap 0.52 / 0.60 µs). Results under `perf_experiments/round1_results/` (base / A / AB).
+
+### Measured breakdown (before; no-feed, device 1, zones; µs, median / max over 105 cores)
+New permanent instrumentation: `ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp` (`MaybeDeviceZoneScope`; compiled in
+only with the profiler AND the `KERNEL_PERF_ZONES` define, so the profiler-on headline measurement is not perturbed —
+the worker program has ~300 B of kernel-config ring headroom), zones at every stage boundary of reader / compute /
+writer (`r_*`, `c_*`, `w_*`), host env `MHC_POST_PERF_ZONES=reader|writer|compute|port|all` (+
+`MHC_POST_PERF_ZONES_TRISC=0|1|2`: all three worker kernels' zones at once overflow the 70 656 B buffer, so profile them
+in turns), `MHC_POST_ABLATE=reads,writes,mix,collapse,norm` stubbed-payload hooks, `perf_experiments/zone_timeline.py`.
+- Start-up: compute `c_wait_coef` **21.2 / 36.5** — the compute idles until the expanded coefficients arrive; the first
+  F/X block has always landed by then (`c_wait_in` ≈ 0). Chain: coefficient-multicast senders wait for every
+  receiver's ack (receivers ack after their first-block issue loop, `r_issue` up to 19 µs under the 105-core DRAM
+  burst), then each core's scalar `-Os` expand 6.0.
+- Row loop: `c_mix` **25.0 µs per 4-unit pass** (×2), `c_collapse` 3.7 / pass, `c_ysq` 0.7 / pass; rows end 93 / 102.
+- Tail (last row → kernel end ≈ 22): lead fold 10.9 (waits for the chunk's slowest partial), root fold, `c_rstd` 5.0
+  (waits for the root writer's lane permutation), root writer `w_root` 16.2 (permute → rstd unicast → hc permute back →
+  stats / hc writes: its end is the kernel end), `c_norm` 4.2, y writes.
+- Feed: worker timeline identical; the ports run ~34 µs after the last publish (exposed transport).
+- Ablation (no-feed fastest chip, µs): base 123.3; reads stubbed 100.3; + writes 99.1; mix 107.5; mix + collapse + norm
+  102.2; compute + reads 71.2; **every payload stubbed at once 69.7** — the coefficient chain, W slices, combine tree,
+  hc / rstd / norm sync chain are > half the call. Fully stubbed zones: `c_wait_coef` 7.9 (6 µs expand), W-slice sharing
+  `r_push_slices` 31 (mostly hidden), tail ≈ 21 (root writer 16).
+- Ranked headroom (DRAM roofline ≈ 37 µs, so nothing is at a data-movement ceiling): (1) start-up coefficient chain,
+  (2) mix SFPU compute, (3) tail chain, (4) feed exposed transport (34 µs), (5) W-slice sharing.
+
+### Portfolio (hard cap: 2 experiments) and verdicts
+1. **`fused_sfpu_mix`** (compute, T3) — **WIN, graduated.** One dst-sync window per unit, operand-outer: each of F,
+   X_0..X_3 is unpacked ONCE per unit (5 copies instead of 20) and one custom sfpi sweep updates all 4 output streams
+   (A_j = c·F, then A_j = fma(c, X_i, A_j)), the last sweep also folds Dsq; coefficients come from 5 per-row "K pages"
+   built on the compute from the column-0 pages (4 column broadcasts + an SFPU merge + an fp32 pack: exact), laid out
+   so one SFPU load serves the 4 vectors of a row group. Outputs are packed out of order at k = j·B + u (consumers
+   unchanged). Menu (isolated bench, R2, B = 4): baseline 25 904 ns / pass; fused 1-slot 14 879; double-buffered K page
+   14 902 (unpack-to-DEST fp32 blocks the math thread: no overlap); 2 accumulators in flight + double-buffered 14 032;
+   **2 accumulators in flight, 1 slot 13 967 (1.85×, ported)**. Isolated sweep: R2 B = 1 / 2 / 4 2.88 / 2.08 / 1.85×,
+   plain bf16 B = 1 / 4 / 6 2.89 / 1.86 / 1.73×, plain fp32 B = 4 / 6 2.26 / 2.16×. In-op `c_mix` 25.0 → 14.1 µs / pass
+   (+ `c_kbuild` 4.1 µs a row). Whole op alone: no-feed 123.32 → 111.46, feed 154.41 → 143.89 µs (wins).
+   Precision: X' bit-exact (same fp32 op order per element); **stats column 24 (Σ X'^2) is summed unit-major instead of
+   stream-major: ≤ 4 ULP (rel 3.4e-7)** — a reassociation, not a precision-contract change (fp32 DEST, HiFi2, approx off
+   unchanged); stats stays bit-identical across stats / collapse / feed calls. Code: compute binaries −2.2 KB (kernel-config
+   ring headroom up); L1 +20 KB per core (`cb_kpages`, ledger). Also fixed while porting: after a ragged plain pass the
+   `cb_mixed_out_tiles` window can wrap the ring end — out-of-order packs use a wrapped index (`out_index`, CT arg
+   `out_ring`). Rejected variant: the reader building the K pages (scalar L1 writes, 31 µs a row: +8.3 µs whole op).
+   Not tried: SFPLOADMACRO pipelining of the sweep (the SFPU is now ≈ 1 instr/cycle; ≈ 1.9 µs / unit left in it); folding
+   collapse into the sweep (needs SFPU bf16 RNE bit-identical to the packer's).
+2. **`coef_startup`** (local data availability, reader only) — **WIN (small), graduated.** `copy_column_to_col0` issues
+   its 16 loads ahead of the stores (expand 5.97 → 4.10 µs) and row t's expand runs right after the coefficient wait,
+   between issuing the first block's reads and its barrier (instead of after the barrier). Menu (whole op, no-feed /
+   feed fastest, µs, vs the same-session base 123.33 / 154.44): fast copy + early expand **121.95 / 153.21 (win / win)**;
+   fast copy only 123.01; early expand only 123.19 / feed rejected (slowest +0.56); receivers ack before issuing 123.59
+   (worse); all three 121.90 but slowest +4.5 (rejected); split push (P after post / comb) = final (dropped: more code);
+   row 0 own reads, no handshake: feed +5 µs (rejected — the late-ack stagger spaces out the first-block DRAM burst; with
+   coefficients everywhere at ~1.6 µs the trace replays turn bimodal). On top of the fused mix: no-feed 111.46 → 111.20
+   (−0.27, win), feed 143.89 → 142.58 (−1.31, win). Bit-identical. Reader +36 / +48 B.
+- Not floated (cap), ranked for round 2: the tail chain (root writer 16 µs, folds waiting on the slowest member), the
+  feed's exposed transport (34 µs: TRANSPORT — balance the far block over both directions; OVERLAP — R5 L1-direct, or
+  sending the bf16 y_b before the norm and normalizing at the destination), W-slice sharing (31 µs, mostly hidden),
+  the remaining start-up wait.
+
+### Graduation (domain, carve-outs)
+- Both are the op's ONE path everywhere — no predicate, no dual path. The fused mix replaced and deleted
+  `sublayer_term` / `stream_term` / `pack_block` / `sumsq_term` / `mix_units_j` / `mix_units` (every mode: plain fp32 / bf16,
+  stats, collapse ± norm, packed / separate coefficients, ragged passes). Structural requirements, always met: n = 4
+  (static_assert, contract) and 7 fp32 DEST slots (the op always runs full-sync DEST). **Carve-outs: none.** The
+  coef_startup subagent measured T1280 collapse + norm packed single-chip +4 µs (+0.7 %) on the pre-fused op; re-measured
+  on top of the fused mix it is flat (486.1 → 486.4 µs, overlapping ranges), so no carve-out was earned.
+- Instrumentation extended to the new path (`c_kbuild`, `c_mix` around the sweep loop, `r_expand_coef` at its new
+  place).
+
+### Guard set (single chip, profiler, median of 4 calls, µs: before → fused mix → final)
+| path | before | fused mix | final |
+|---|---|---|---|
+| plain fp32 T160 C5120 | 112.6 | 94.0 | 94.9 |
+| plain fp32 T1024 C1792 (multi-row, ragged) | 204.8 | 180.6 | 179.1 |
+| plain bf16 packed T160 / T1280 | 75.3 / 372.7 | 60.2 / 283.3 | 58.7 / 277.8 |
+| stats T160 / T1280 | 88.1 / 466.1 | 69.5 / 373.0 | 64.6 / 364.5 |
+| collapse T160 | 111.2 | 92.9 | 89.5 |
+| collapse + norm T160 / T1280 | 118.5 / 630.7 | 99.9 / 486.1 | 95.0 / 486.4 |
+| collapse + norm separate T1280 | 629.6 | 487.1 | 487.5 |
+No regression on any path (−15 % to −25 %); the feed path is covered by the mesh harness above.
+
+### Golden
+test_golden.py 574 passed / 0 failed; test_feed.py 148 / 148; test_regression.py 33 / 35 (the 2 known
+`test_projection_hifi4` failures, verified identical on the pre-round kernels); unit tests 11 / 11; the harness's golden
+check on both focus cases.
+
+### Helper bypasses
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| `ckl::MulBinary` / `ckl::Addcmul` (eltwise_chain SFPU binary elements) | capability | each element writes ONE output tile from full-tile DEST operands; there is no element that updates several output tiles from one operand load with a per-row-group coefficient vector reused across the 4 SFPU vectors of that group, so every operand had to be re-unpacked once per output stream (20 copies + 24 SFPU calls a unit) | 25 904 / pass | 13 967 / pass | `kernels/mhc_post_compute.cpp:155` (`mix::sweep`, `MixSweep`) |
+| no helper (eltwise / broadcast family: a "lane-select merge" of broadcast tiles) | capability | building the K page needs, per row group, the vector at offset {1, 8, 9} of three column-broadcast tiles moved into one tile; no chain element selects vectors across DEST tiles (custom `KMerge` sfpi element; broadcasts / pack stay helper elements) | n/a (no helper path) | 4 120 / row (whole build) | `kernels/mhc_post_compute.cpp:308` (`mix::kmerge`, `KMerge`) |

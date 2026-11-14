@@ -214,6 +214,8 @@ for (block_idx = 0; block_idx < num_blocks_this_core; ++block_idx) {   // = my t
     load_coefficients_row(block_idx);        // reader: post/comb (and P) tile(s) of row t → column-0 pages
     load_block(block_idx);                   // reader: F + n X tiles per unit, streamed (in_depth)
     mix_block(block_idx);                    // compute: X'_j for all units, pack → cb_mixed_out_tiles
+                                             //   (Perf 1: one window per unit, each operand unpacked once,
+                                             //   one sfpi sweep updates all n streams from the row's K pages)
                                              //   [R2] also → cb_mixed_bf16 (resident for the block),
                                              //   Xmix² L1-accumulated into cb_sumsq_acc
     store_block(block_idx);                  // writer: X' tiles → DRAM

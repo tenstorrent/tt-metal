@@ -1,0 +1,75 @@
+--- mhc_post_base/kernels/mhc_post_reader.cpp	2026-11-14 07:52:41.143877366 +0000
++++ mhc_post_cs/kernels/mhc_post_reader.cpp	2026-11-14 08:31:54.656088739 +0000
+@@ -9,7 +9,9 @@
+ //     cb_coef_cols (unpack-to-dest COL broadcast reads column 0 of faces 0 / 2). Page order:
+ //     [post_0..post_{n-1} | comb_00..comb_{n-1,n-1}] (comb row-major, comb[i][j] at page n + i*n + j).
+ //   load_block: per pass of block_cols units (column tiles c), one F tile and the n X tiles of stream i = 0..n-1
+-//     per unit, unit-major, one barrier per block; the ring holds IN_BLOCKS blocks.
++//     per unit, unit-major, one barrier per block; the ring holds IN_BLOCKS blocks. Row t's coefficients are
++//     expanded while its first block's reads are in flight (between their issue and the block's barrier), so the
++//     compute starts on whichever of the two lands last instead of the barrier + the expand.
+ // R2 (stats / collapse):
+ //   collapse: P (collapse_pre) columns 0..n-1 expand into pages n + n^2 .. of cb_coef_cols (one read when P is the
+ //     packed mixes tensor).
+@@ -55,17 +57,24 @@
+ constexpr uint32_t FACE_DIM = 16;
+
+ // Copy column `col` of a 32x32 fp32 tile into column 0 of `dst` (32 words: 16 in face 0, 16 in face 2).
+-// Plain (non-volatile) pointers: both are this RISC's private L1 pages, landed behind a read barrier.
+-// noinline: three call sites (post / comb / P), 24 calls a row off the critical path (kernel-config buffer budget)
+-__attribute__((noinline)) void copy_column_to_col0(const uint32_t* src, uint32_t col, uint32_t* dst) {
+-    const uint32_t src_face_col = (col / FACE_DIM);
+-    const uint32_t c = col % FACE_DIM;
++// Plain (non-volatile) pointers: both are this RISC's private L1 pages, landed behind a read barrier / the
++// coefficient semaphore. noinline: three call sites (post / comb / P) (kernel-config buffer budget). The 16 loads of
++// a face column are issued ahead of their stores (as the writer's permute_vector) so the RISC's L1 load latency
++// overlaps: the 28-column expand of a packed row takes 4.1 us instead of 6.0 us.
++__attribute__((noinline)) void copy_column_to_col0(
++    const uint32_t* __restrict src, uint32_t col, uint32_t* __restrict dst) {
++    const uint32_t* s0 = src + (col / FACE_DIM) * FACE_WORDS + col % FACE_DIM;
+     for (uint32_t half = 0; half < 2; ++half) {
+-        const uint32_t* s = src + (half * 2 + src_face_col) * FACE_WORDS + c;
+-        uint32_t* d = dst + (half * 2) * FACE_WORDS;
++        const uint32_t* s = s0 + half * 2 * FACE_WORDS;
++        uint32_t* d = dst + half * 2 * FACE_WORDS;
++        uint32_t v[FACE_DIM];
+ #pragma GCC unroll 16
+         for (uint32_t r = 0; r < FACE_DIM; ++r) {
+-            d[r * FACE_DIM] = s[r * FACE_DIM];
++            v[r] = s[r * FACE_DIM];
++        }
++#pragma GCC unroll 16
++        for (uint32_t r = 0; r < FACE_DIM; ++r) {
++            d[r * FACE_DIM] = v[r];
+         }
+     }
+ }
+@@ -391,6 +400,13 @@
+                     noc_semaphore_wait_min(coef_cnt, row_idx + 1);
+                     invalidate_l1_cache();
+                 }
++                if (cb0 == 0) {  // expand row t while my first block's reads fly: the compute starts at max(both)
++                    MaybeDeviceZoneScope("r_expand_coef");
++                    if (coef_role == 0) {  // no role: my own raw tiles (a sender's landed behind its send barrier,
++                        noc_async_read_barrier();  // a receiver's behind SEM_COEF)
++                    }
++                    expand_coef(buf);
++                }
+                 {
+                     MaybeDeviceZoneScope("r_barrier");
+                     noc_async_read_barrier();
+@@ -403,12 +419,8 @@
+                     issue_slices();
+                     slices_pending = (has_w && w_resident) || norm || slice_share > 1;
+                 }
+-                if (cb0 == 0) {
+-                    MaybeDeviceZoneScope("r_expand_coef");
+-                    if (row_idx + 1 < t_count && !coef_recv) {
+-                        issue_coef(t + 1, buf ^ 1);
+-                    }
+-                    expand_coef(buf);
++                if (cb0 == 0 && row_idx + 1 < t_count && !coef_recv) {  // prefetch row t+1 behind the barrier
++                    issue_coef(t + 1, buf ^ 1);
+                 }
+                 if constexpr (has_w && !w_resident) {
+                     cb_push_back(cb_w_slice, w_pass_tiles);

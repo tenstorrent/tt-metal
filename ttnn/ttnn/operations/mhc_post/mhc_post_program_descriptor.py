@@ -19,10 +19,29 @@ the chunk sums in chunk order, writes stats and (collapse) runs the hc step.
 
 from __future__ import annotations
 
+import os
 import struct
 from pathlib import Path
 
 import ttnn
+
+
+def _diag_defines(kernel):
+    """Breakdown-only kernel defines, off by default (never set by the eval / golden runs):
+    MHC_POST_PERF_ZONES=all | comma list of reader,writer,compute,port -> KERNEL_PERF_ZONES on those kernels (the
+      permanent MaybeDeviceZoneScope stage zones, profiler builds; all of them at once overflow the 70 656 B
+      kernel-config buffer, so profile the worker kernels in turns);
+    MHC_POST_ABLATE=a,b -> MHC_ABLATE_A, MHC_ABLATE_B (stubbed-payload ablation hooks in the kernels)."""
+    out = []
+    zones = os.environ.get("MHC_POST_PERF_ZONES", "")
+    if zones == "all" or kernel in zones.split(","):
+        out.append(("KERNEL_PERF_ZONES", "1"))
+    if kernel == "compute" and os.environ.get("MHC_POST_PERF_ZONES_TRISC"):  # 0 unpack, 1 math, 2 pack
+        out.append(("KERNEL_PERF_ZONES_TRISC", os.environ["MHC_POST_PERF_ZONES_TRISC"]))
+    for name in filter(None, os.environ.get("MHC_POST_ABLATE", "").split(",")):
+        out.append(("MHC_ABLATE_" + name.strip().upper(), "1"))
+    return out
+
 
 KERNEL_DIR = Path(__file__).parent / "kernels"
 
@@ -116,6 +135,7 @@ CB_FEED_CHUNKS = 25  # feed (port cores): chunk ring between the port reader and
 CB_FEED_POLL = 26  # feed (workers + ports, one address): the workers' published-row counts on the ports, 16 B each
 CB_FEED_YSCR = 27  # feed, T % 32 != 0 (port cores): port reader's private y tiles of a shifted chunk (2 per tile)
 CB_FEED_LAND = 28  # feed, T % 32 != 0 (port cores): landing of the shared D tile rows (compact contributor blocks)
+CB_KPAGES = 30  # fused mix: the row's 1 + n K pages, built by compute from cb_coef_cols (UnpackToDestFp32)
 CB_RSTD_LANE = 29  # norm: root's rstd in SFPU lane layout, computed before the hc step (compute -> writer)
 
 # Semaphore ids (R2)
@@ -379,6 +399,7 @@ def create_program_descriptor(
         _cb(CB_STREAM_TILES, x_tensor.dtype, x_page, n * in_depth, core_ranges),
         _cb(CB_COEF_RAW, ttnn.float32, coef_page, COEF_RAW_BUFS * n_raw, core_ranges),  # raw tiles per row
         _cb(CB_COEF_COLS, ttnn.float32, coef_page, n_coef * COEF_DEPTH, core_ranges),
+        _cb(CB_KPAGES, ttnn.float32, coef_page, 1 + n, core_ranges),
         _cb(CB_MIXED_OUT_TILES, out_tensor.dtype, out_page, out_ring_tiles, core_ranges),
     ]
     w_pages = 0
@@ -475,7 +496,7 @@ def create_program_descriptor(
     reader = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "mhc_post_reader.cpp"),
         # W path: build the reader -Os (kernel-config ring budget, see the reader); plain keeps -O2
-        defines=[("MHC_READER_OS", "1")] if has_w else [],
+        defines=([("MHC_READER_OS", "1")] if has_w else []) + _diag_defines("reader"),
         core_ranges=core_ranges,
         compile_time_args=reader_ct,
         runtime_args=reader_rt,
@@ -553,6 +574,7 @@ def create_program_descriptor(
         feed_common += [0] * (2 * MAX_FEED_LINKS - len(port_xy))
     writer = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "mhc_post_writer.cpp"),
+        defines=_diag_defines("writer"),
         core_ranges=core_ranges,
         compile_time_args=writer_ct,
         runtime_args=writer_rt,
@@ -570,6 +592,7 @@ def create_program_descriptor(
     # Every fp32 CB the compute reads only by copy / unpack-to-dest goes to DEST unpacked (never tf32 srcA/srcB).
     # CB_W_SLICE is NOT tagged: it is the matmul's in1 (FPU; W's 9-bit mantissa is exact in srcA).
     unpack_modes[CB_COEF_COLS] = ttnn.UnpackToDestMode.UnpackToDestFp32
+    unpack_modes[CB_KPAGES] = ttnn.UnpackToDestMode.UnpackToDestFp32
     if f_tensor.dtype == ttnn.float32:
         unpack_modes[CB_SUBLAYER_TILES] = ttnn.UnpackToDestMode.UnpackToDestFp32
     if x_tensor.dtype == ttnn.float32:
@@ -626,6 +649,8 @@ def create_program_descriptor(
         norm_lag,
         max(hold_pages, 1),
         CB_RSTD_LANE,
+        CB_KPAGES,
+        out_ring_tiles,
     ]
     compute_common = []
     if collapse:
@@ -642,6 +667,7 @@ def create_program_descriptor(
         ]
     compute = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "mhc_post_compute.cpp"),
+        defines=_diag_defines("compute"),
         core_ranges=core_ranges,
         compile_time_args=compute_ct,
         runtime_args=compute_rt,
@@ -846,6 +872,7 @@ def _add_feed_ports(program, device, feed, y_tensor, R, row_ranges, Q, c_tiles, 
     program.kernels = list(program.kernels) + [
         ttnn.KernelDescriptor(
             kernel_source=str(KERNEL_DIR / "mhc_post_port_reader.cpp"),
+            defines=_diag_defines("port"),
             core_ranges=port_crs,
             compile_time_args=reader_ct,
             runtime_args=reader_rt,
@@ -854,6 +881,7 @@ def _add_feed_ports(program, device, feed, y_tensor, R, row_ranges, Q, c_tiles, 
         ),
         ttnn.KernelDescriptor(
             kernel_source=str(KERNEL_DIR / "mhc_post_port_sender.cpp"),
+            defines=_diag_defines("port"),
             core_ranges=port_crs,
             compile_time_args=sender_ct,
             runtime_args=sender_rt,

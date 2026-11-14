@@ -36,6 +36,7 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 
 #define COLD __attribute__((noinline, optimize("Os")))
 
@@ -168,7 +169,10 @@ void kernel_main() {
             d_row = (img * grp + me) * ht + (t - img * ht);  // my rows of the feed output, image img
         }
         for (uint32_t u = 0; u < block_cols; ++u) {
-            cb_wait_front(cb_y_out, 1);
+            {
+                MaybeDeviceZoneScope("w_wait_y");
+                cb_wait_front(cb_y_out, 1);
+            }
             if (u < cols) {
                 const uint32_t c = c_start + cb0 + u;
                 uint64_t dst;
@@ -182,7 +186,9 @@ void kernel_main() {
                 } else {
                     dst = y_acc.get_noc_addr(t * c_tiles + c);
                 }
+#ifndef MHC_ABLATE_WRITES
                 noc_async_write(get_read_ptr(cb_y_out), dst, y_page);
+#endif
                 noc_async_writes_flushed();
             }
             cb_pop_front(cb_y_out, 1);
@@ -193,6 +199,7 @@ void kernel_main() {
     [[maybe_unused]] uint32_t published = 0;
     [[maybe_unused]] auto publish_row = [&]() {
         if constexpr (feed) {
+            MaybeDeviceZoneScope("w_publish");
             noc_async_write_barrier();
             const uint32_t n_ports = get_common_arg_val<uint32_t>(FEED_PORTS);
             if (published++ == 0) {
@@ -229,6 +236,7 @@ void kernel_main() {
     // must fit the 70 656 B kernel-config ring for trace replays to overlap (else every launch waits for the previous
     // one: DISPATCH-BOUND); the hot X' store loop stays -O2
     auto lead = [&](uint32_t t) COLD {
+        MaybeDeviceZoneScope("w_lead");
         const uint32_t root_q = (t - t_start) % group_q;  // root(t)
         volatile tt_l1_ptr uint32_t* cnt = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_leader);
         noc_semaphore_wait_min(cnt, chunk_size);
@@ -364,10 +372,18 @@ void kernel_main() {
                 const uint32_t valid = has_w ? cols_in_pass : b;
                 for (uint32_t u0 = 0; u0 < cols_in_pass; u0 += b) {
                     const uint32_t c = c_start + cb0 + u0;
-                    cb_wait_front(cb_mixed_out_tiles, b * n);
+                    {
+                        MaybeDeviceZoneScope("w_wait_xp");
+                        cb_wait_front(cb_mixed_out_tiles, b * n);
+                    }
+                    MaybeDeviceZoneScope("w_write_xp");
                     for (uint32_t j = 0; j < n; ++j) {  // block order: j-major, then unit
                         for (uint32_t u = 0; u < b; ++u) {
+#ifdef MHC_ABLATE_WRITES
+                            if (false) {
+#else
                             if (u < valid) {
+#endif
                                 noc_async_write(
                                     ring_base + ring_slot * out_page,
                                     out_acc.get_noc_addr(x_row + j * c_tiles + c + u),
@@ -409,8 +425,12 @@ void kernel_main() {
             }
             if (i < t_count) {
                 // ---- partial(t): merge sum X'^2 into column ng, send to leader(t) ----
-                cb_wait_front(cb_proj_out, 1);
-                cb_wait_front(cb_sumsq_col, sumsq_pages);
+                {
+                    MaybeDeviceZoneScope("w_wait_partial");
+                    cb_wait_front(cb_proj_out, 1);
+                    cb_wait_front(cb_sumsq_col, sumsq_pages);
+                }
+                MaybeDeviceZoneScope("w_send_partial");
                 volatile tt_l1_ptr uint32_t* proj =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_proj_out));
                 volatile tt_l1_ptr uint32_t* sq =
@@ -454,6 +474,7 @@ void kernel_main() {
         }
         const uint32_t rooted = member_q < t_count ? (t_count - member_q + group_q - 1) / group_q : 0;
         if (rooted > 0) {
+            MaybeDeviceZoneScope("w_wait_root_slots");
             volatile tt_l1_ptr uint32_t* cnt = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_root);
             noc_semaphore_wait_min(cnt, rooted * num_chunks);
             noc_semaphore_set(cnt, 0);
@@ -461,11 +482,13 @@ void kernel_main() {
             cb_push_back(cb_root_slots, rooted * num_chunks);
         }
         for (uint32_t k = 0; k < rooted; ++k) {
+            MaybeDeviceZoneScope("w_root");
             root_step(t_start + member_q + k * group_q);
         }
     }
     if constexpr (norm && !lagged) {  // deferred: the y rows in order (the reader expands rstd, the compute normalizes)
         for (uint32_t r = 0; r < t_count; ++r) {
+            MaybeDeviceZoneScope("w_norm_row");
             write_norm_row(r);
         }
     }

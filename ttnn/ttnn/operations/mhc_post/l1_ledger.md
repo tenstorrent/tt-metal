@@ -45,6 +45,7 @@ These rows supersede the planned R2 rows above where they differ. `nc` = number 
 | CB | Capacity (pages) | Page format | Producer | Consumer | Shares with / why not |
 |----|------------------|-------------|----------|----------|-----------------------|
 | `cb_coef_raw` | `2 · (2 \| 3)` (COEF_RAW_BUFS × raw tiles) | Float32 | reader | reader (private) | Double-buffered by row parity so that row t+1's tiles land while row t expands. Cannot alias `cb_coef_cols` (read while written). |
+| `cb_kpages` (Perf 1) | `1 + n` = 5 (20 KB) | Float32 (UnpackToDestFp32) | compute (`build_kpages`, row start) | compute (fused mix sweep) | The row's K pages: page s holds coef(s, j)[token R] at (R, C), j = 2·(C ≥ 16) + (C & 1), so one SFPU load serves the 4 vectors of a row group. Built from `cb_coef_cols` once per row, popped with it. Cannot alias `cb_coef_cols` (built from it, and collapse still broadcasts P from it). |
 | `cb_mixed_bf16` | `n·bc` | Float16_b | compute (mix pack) | compute (matmul in0, collapse) | Single consumer thread. It is the bf16 X' as written. Cannot be the writer's `cb_mixed_out_tiles` (two consumers). |
 | `cb_w_slice` | resident `passes·n·bc`, streamed `2·n·bc` | Float32 (not UnpackToDestFp32: FPU srcA) | reader | compute (matmul in1) | Layout per pass in K order j·bc+u. Filler rows of a ragged pass are zeroed. |
 | `cb_sumsq_acc` | 1 | Float32 (UnpackToDestFp32) | compute | compute | In-place reload accumulator, zeroed per row. Packer L1-acc is not used (fp32 DEST). Live across the whole row, so it cannot alias. |

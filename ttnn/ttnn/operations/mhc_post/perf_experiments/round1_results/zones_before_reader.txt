@@ -1,0 +1,15 @@
+== device 1 run 20481: kernel span 124.7 us
+zone                    risc         n cores     start min/med/max     dur med/max     end med/max  sum/core med
+NCRISC-KERNEL           NCRISC     105   105     0.0/   0.1/   0.6  114.93/116.34   115.0/ 116.5      114.93
+BRISC-KERNEL            BRISC      105   105     0.0/   0.1/   0.6  120.83/124.63   120.9/ 124.7      120.83
+TRISC-KERNEL            TRISC_1    105   105     0.0/   0.1/   0.2  119.16/122.69   119.2/ 122.8      119.16
+TRISC-KERNEL            TRISC_2    105   105     0.0/   0.1/   0.6  119.26/122.80   119.4/ 122.9      119.26
+TRISC-KERNEL            TRISC_0    105   105     0.0/   0.1/   0.9  119.05/122.66   119.2/ 122.8      119.05
+r_coef_send             NCRISC      13    13     0.4/   0.5/   0.8   16.44/ 26.09    16.9/  26.5       16.44
+r_coef_wait             NCRISC      91    91     1.4/   1.5/  13.2    9.13/ 25.36    13.2/  26.8        9.13
+r_issue                 NCRISC     800   105     0.4/  10.6/  59.5    0.21/ 19.34    11.0/  60.3        1.68
+r_reserve               NCRISC     210   105     0.3/  11.8/  37.7    0.06/  0.06    11.9/  37.8        0.11
+r_expand_coef           NCRISC     105   105     3.8/  16.6/  31.7    5.97/  5.99    22.5/  37.6        5.97
+r_barrier               NCRISC     210   105     1.6/  20.2/  60.3    1.90/ 22.94    23.2/  61.4        5.80
+r_push_slices           NCRISC     105   105    11.3/  31.8/  61.5   28.49/ 53.98    59.6/  67.9       28.49
+r_wait_rstd             NCRISC     105   105    47.6/  59.8/  68.1   54.71/ 67.43   114.5/ 115.9       54.71

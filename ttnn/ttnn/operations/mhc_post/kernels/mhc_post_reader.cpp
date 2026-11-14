@@ -9,7 +9,9 @@
 //     cb_coef_cols (unpack-to-dest COL broadcast reads column 0 of faces 0 / 2). Page order:
 //     [post_0..post_{n-1} | comb_00..comb_{n-1,n-1}] (comb row-major, comb[i][j] at page n + i*n + j).
 //   load_block: per pass of block_cols units (column tiles c), one F tile and the n X tiles of stream i = 0..n-1
-//     per unit, unit-major, one barrier per block; the ring holds IN_BLOCKS blocks.
+//     per unit, unit-major, one barrier per block; the ring holds IN_BLOCKS blocks. Row t's coefficients are
+//     expanded while its first block's reads are in flight (between their issue and the block's barrier), so the
+//     compute starts on whichever of the two lands last instead of the barrier + the expand.
 // R2 (stats / collapse):
 //   collapse: P (collapse_pre) columns 0..n-1 expand into pages n + n^2 .. of cb_coef_cols (one read when P is the
 //     packed mixes tensor).
@@ -47,6 +49,7 @@
 #endif
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 
 namespace {
 
@@ -54,17 +57,24 @@ constexpr uint32_t FACE_WORDS = 256;  // 16 x 16 fp32
 constexpr uint32_t FACE_DIM = 16;
 
 // Copy column `col` of a 32x32 fp32 tile into column 0 of `dst` (32 words: 16 in face 0, 16 in face 2).
-// Plain (non-volatile) pointers: both are this RISC's private L1 pages, landed behind a read barrier.
-// noinline: three call sites (post / comb / P), 24 calls a row off the critical path (kernel-config buffer budget)
-__attribute__((noinline)) void copy_column_to_col0(const uint32_t* src, uint32_t col, uint32_t* dst) {
-    const uint32_t src_face_col = (col / FACE_DIM);
-    const uint32_t c = col % FACE_DIM;
+// Plain (non-volatile) pointers: both are this RISC's private L1 pages, landed behind a read barrier / the
+// coefficient semaphore. noinline: three call sites (post / comb / P) (kernel-config buffer budget). The 16 loads of
+// a face column are issued ahead of their stores (as the writer's permute_vector) so the RISC's L1 load latency
+// overlaps: the 28-column expand of a packed row takes 4.1 us instead of 6.0 us.
+__attribute__((noinline)) void copy_column_to_col0(
+    const uint32_t* __restrict src, uint32_t col, uint32_t* __restrict dst) {
+    const uint32_t* s0 = src + (col / FACE_DIM) * FACE_WORDS + col % FACE_DIM;
     for (uint32_t half = 0; half < 2; ++half) {
-        const uint32_t* s = src + (half * 2 + src_face_col) * FACE_WORDS + c;
-        uint32_t* d = dst + (half * 2) * FACE_WORDS;
+        const uint32_t* s = s0 + half * 2 * FACE_WORDS;
+        uint32_t* d = dst + half * 2 * FACE_WORDS;
+        uint32_t v[FACE_DIM];
 #pragma GCC unroll 16
         for (uint32_t r = 0; r < FACE_DIM; ++r) {
-            d[r * FACE_DIM] = s[r * FACE_DIM];
+            v[r] = s[r * FACE_DIM];
+        }
+#pragma GCC unroll 16
+        for (uint32_t r = 0; r < FACE_DIM; ++r) {
+            d[r * FACE_DIM] = v[r];
         }
     }
 }
@@ -338,6 +348,7 @@ void kernel_main() {
             const uint32_t f_row = t * c_tiles;
             const uint32_t x_row = t * n * c_tiles;
             if (coef_send) {  // row t's tiles (prefetched) -> the row group, before my block reads
+                MaybeDeviceZoneScope("r_coef_send");
                 const uint32_t xy1 = get_arg_val<uint32_t>(coef_rt + 2);
                 const uint32_t dests = get_arg_val<uint32_t>(coef_rt + 3);
                 auto mc = [&](uint32_t a) {
@@ -355,16 +366,24 @@ void kernel_main() {
                     cb_reserve_back(cb_w_slice, w_pass_tiles);
                     read_w_pass(cb0 / block_cols, get_write_ptr(cb_w_slice), 0, w_pass_tiles);
                 }
-                cb_reserve_back(cb_sublayer_tiles, block_cols);
-                cb_reserve_back(cb_stream_tiles, block_cols * n);
+                {
+                    MaybeDeviceZoneScope("r_reserve");
+                    cb_reserve_back(cb_sublayer_tiles, block_cols);
+                    cb_reserve_back(cb_stream_tiles, block_cols * n);
+                }
                 uint32_t f_l1 = get_write_ptr(cb_sublayer_tiles);
                 uint32_t x_l1 = get_write_ptr(cb_stream_tiles);
                 for (uint32_t u = 0; u < cols_in_pass; ++u) {
+                    MaybeDeviceZoneScope("r_issue");
                     const uint32_t c = c_start + cb0 + u;
+#ifndef MHC_ABLATE_READS  // breakdown ablation: the F / X reads stubbed (the barrier / push sync kept)
                     noc_async_read(f_acc.get_noc_addr(f_row + c), f_l1, f_page);
+#endif
                     f_l1 += f_page;
                     for (uint32_t i = 0; i < n; ++i) {
+#ifndef MHC_ABLATE_READS
                         noc_async_read(x_acc.get_noc_addr(x_row + i * c_tiles + c), x_l1, x_page);
+#endif
                         x_l1 += x_page;
                     }
                 }
@@ -376,23 +395,32 @@ void kernel_main() {
                     }
                 }
                 if (coef_recv && cb0 == 0) {  // ack row t, wait for its tiles while my block's reads fly
+                    MaybeDeviceZoneScope("r_coef_wait");
                     noc_semaphore_inc(get_noc_addr(coef_xy0 & 0xFFFF, coef_xy0 >> 16, coef_sem), 1);
                     noc_semaphore_wait_min(coef_cnt, row_idx + 1);
                     invalidate_l1_cache();
                 }
-                noc_async_read_barrier();
+                if (cb0 == 0) {  // expand row t while my first block's reads fly: the compute starts at max(both)
+                    MaybeDeviceZoneScope("r_expand_coef");
+                    if (coef_role == 0) {  // no role: my own raw tiles (a sender's landed behind its send barrier,
+                        noc_async_read_barrier();  // a receiver's behind SEM_COEF)
+                    }
+                    expand_coef(buf);
+                }
+                {
+                    MaybeDeviceZoneScope("r_barrier");
+                    noc_async_read_barrier();
+                }
                 if (slices_pending) {
+                    MaybeDeviceZoneScope("r_push_slices");
                     push_slices();
                 }
                 if (row_idx == 0 && cb0 == 0) {
                     issue_slices();
                     slices_pending = (has_w && w_resident) || norm || slice_share > 1;
                 }
-                if (cb0 == 0) {
-                    if (row_idx + 1 < t_count && !coef_recv) {
-                        issue_coef(t + 1, buf ^ 1);
-                    }
-                    expand_coef(buf);
+                if (cb0 == 0 && row_idx + 1 < t_count && !coef_recv) {  // prefetch row t+1 behind the barrier
+                    issue_coef(t + 1, buf ^ 1);
                 }
                 if constexpr (has_w && !w_resident) {
                     cb_push_back(cb_w_slice, w_pass_tiles);
@@ -404,6 +432,7 @@ void kernel_main() {
     }
 
     if (slices_pending) {  // my only block was the first: W / the norm weight still in flight
+        MaybeDeviceZoneScope("r_push_slices");
         noc_async_read_barrier();
         push_slices();
     }
@@ -412,7 +441,10 @@ void kernel_main() {
     if constexpr (deferred_norm) {
         volatile tt_l1_ptr uint32_t* landed =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_rstd_count_id));
-        noc_semaphore_wait_min(landed, t_count);  // the roots finish their rows in any order: wait for all
+        {
+            MaybeDeviceZoneScope("r_wait_rstd");
+            noc_semaphore_wait_min(landed, t_count);  // the roots finish their rows in any order: wait for all
+        }
         noc_semaphore_set(landed, 0);
         invalidate_l1_cache();
         const uint32_t land = get_write_ptr(cb_rstd_land);  // never pushed: private landing, same address everywhere
