@@ -16,7 +16,6 @@ from safetensors.torch import load_file
 
 import ttnn
 
-from ....encoders.qwen3vl.model_qwen3vl import create_rope_tensors
 from ....parallel.config import EncoderParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....reference.ideogram4.constants import QWEN3_VL_ACTIVATION_LAYERS
@@ -24,7 +23,7 @@ from ....reference.ideogram4.dequant import dequant_fp8_state_dict
 from ....utils import tensor
 from ....utils.check import assert_quality
 from ....utils.tensor import bf16_tensor
-from .common import capture_layer_outputs, encoder_from_hf_config, hf_rope_params
+from .common import capture_layer_outputs, encoder_from_hf_config
 
 REPO = "Qwen/Qwen3-VL-8B-Instruct"
 FP8 = os.environ.get("IDEOGRAM4_WEIGHTS")
@@ -64,8 +63,11 @@ def _reference_lm(weights: str):
 )
 @pytest.mark.parametrize("masked", [pytest.param(False, id="nomask"), pytest.param(True, id="masked")])
 @pytest.mark.parametrize("seq_len", [128])
+@pytest.mark.parametrize(
+    "options", [pytest.param({}, id="default"), pytest.param({"rank4_hidden_states": True}, id="rank4")]
+)
 def test_qwen3vl_text_encoder(
-    *, mesh_device: ttnn.MeshDevice, submesh_shape, tp_axis, weights: str, masked: bool, seq_len: int
+    *, mesh_device: ttnn.MeshDevice, submesh_shape, tp_axis, weights: str, masked: bool, seq_len: int, options: dict
 ) -> None:
     torch.manual_seed(0)
     submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
@@ -73,8 +75,6 @@ def test_qwen3vl_text_encoder(
 
     lm = _reference_lm(weights)
     cfg = lm.config
-    head_dim = cfg.hidden_size // cfg.num_attention_heads
-    rope_theta, mrope_section = hf_rope_params(cfg)
 
     ids = torch.randint(0, cfg.vocab_size, (1, seq_len))
     with capture_layer_outputs(lm, QWEN3_VL_ACTIVATION_LAYERS) as caps:
@@ -82,26 +82,36 @@ def test_qwen3vl_text_encoder(
             lm(input_ids=ids, attention_mask=torch.ones_like(ids), use_cache=False)
     golden = [caps[i].float() for i in QWEN3_VL_ACTIVATION_LAYERS]
 
-    enc = encoder_from_hf_config(
-        cfg,
-        activation_layers=QWEN3_VL_ACTIVATION_LAYERS,
-        device=submesh,
-        parallel_config=EncoderParallelConfig(tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis)),
-        ccl_manager=CCLManager(submesh, num_links=1, topology=ttnn.Topology.Linear),
-        is_fsdp=True,
-    )
-    enc.load_torch_state_dict(lm.state_dict())
+    ccl_manager = CCLManager(submesh, num_links=1, topology=ttnn.Topology.Linear)
 
-    cos, sin = create_rope_tensors(1, seq_len, None, head_dim, rope_theta, mrope_section)
-    tt_ids = ttnn.from_torch(ids, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=submesh)
-    attn_mask = tensor.from_torch(torch.ones(1, seq_len, dtype=torch.bool), device=submesh) if masked else None
-    tt_caps = enc.forward(
-        tt_ids,
-        attention_mask=attn_mask,
-        pos_embeds=(bf16_tensor(cos, device=submesh), bf16_tensor(sin, device=submesh)),
-    )
+    def run(**options) -> list[torch.Tensor]:
+        enc = encoder_from_hf_config(
+            cfg,
+            activation_layers=QWEN3_VL_ACTIVATION_LAYERS,
+            device=submesh,
+            parallel_config=EncoderParallelConfig(tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis)),
+            ccl_manager=ccl_manager,
+            is_fsdp=True,
+            **options,
+        )
+        enc.load_torch_state_dict(lm.state_dict())
+
+        cos, sin = enc.create_rope_tensors(1, seq_len, None)
+        tt_ids = ttnn.from_torch(ids, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=submesh)
+        attn_mask = tensor.from_torch(torch.ones(1, seq_len, dtype=torch.bool), device=submesh) if masked else None
+        tt_caps = enc.forward(
+            tt_ids,
+            attention_mask=attn_mask,
+            pos_embeds=(bf16_tensor(cos, device=submesh), bf16_tensor(sin, device=submesh)),
+        )
+        return [tensor.to_torch(t, mesh_axes=[None, None, None]) for t in tt_caps]
+
+    outputs = run(**options)
 
     pcc = 0.99 if weights == "real" else 0.98  # random weights over 36 layers accumulate more bf16 error
-    for layer_idx, g, tt_t in zip(QWEN3_VL_ACTIVATION_LAYERS, golden, tt_caps):
-        logger.info(f"qwen3vl [{weights}] TP={tp_factor} layer {layer_idx}:")
-        assert_quality(g, tensor.to_torch(tt_t, mesh_axes=[None, None, None]), pcc=pcc)
+    for layer_idx, g, tt_t in zip(QWEN3_VL_ACTIVATION_LAYERS, golden, outputs):
+        logger.info(f"qwen3vl [{weights}] TP={tp_factor} {options} layer {layer_idx}:")
+        assert_quality(g, tt_t, pcc=pcc)
+
+    if options == {"rank4_hidden_states": True}:
+        assert all(torch.equal(a, b) for a, b in zip(outputs, run()))
