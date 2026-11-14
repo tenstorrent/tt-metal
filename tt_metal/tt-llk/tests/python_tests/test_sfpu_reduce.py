@@ -37,9 +37,11 @@ from helpers.sfpu_domains import generated_nan_sign_is_asserted, specials_safe
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
+    DEST_SYNC,
     LOOP_FACTOR,
     MATH_OP,
     NUM_BLOCKS,
+    NUM_FACES,
     NUM_TILES_IN_BLOCK,
     TILE_COUNT,
     generate_input_dim,
@@ -161,6 +163,8 @@ def _sfpu_reduce_config_kwargs(
     runtimes = [
         TILE_COUNT(tile_cnt),
         LOOP_FACTOR(loop_factor),
+        # The kernel is written for full 32x32 tiles (four faces).
+        NUM_FACES(4),
     ]
 
     return {
@@ -169,6 +173,8 @@ def _sfpu_reduce_config_kwargs(
         "templates": [
             generate_input_dim(input_dimensions, input_dimensions),
             APPROX_MODE(ApproximationMode.No),
+            # The kernel only syncs Dest in halves.
+            DEST_SYNC(DestSync.Half),
             MATH_OP(mathop=mathop, pool_type=reduce_pool),
         ],
         "runtimes": runtimes,

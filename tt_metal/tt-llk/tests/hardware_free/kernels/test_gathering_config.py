@@ -468,6 +468,7 @@ def test_where_without_sfploadmacro_replay_record_is_gathering_bracketed():
         MathOperation,
         PerfRunType,
         Transpose,
+        VectorMode,
     )
     from helpers.test_variant_parameters import (
         APPROX_MODE,
@@ -483,6 +484,7 @@ def test_where_without_sfploadmacro_replay_record_is_gathering_bracketed():
         TILE_COUNT,
         UNPACK_TRANS_FACES,
         UNPACK_TRANS_WITHIN_FACE,
+        VECTOR_MODE,
     )
     from helpers.tile_constants import MAX_NUM_FACES
 
@@ -509,6 +511,7 @@ def test_where_without_sfploadmacro_replay_record_is_gathering_bracketed():
             NUM_FACES(num_faces=MAX_NUM_FACES),
             UNPACK_TRANS_FACES(Transpose.No),
             UNPACK_TRANS_WITHIN_FACE(Transpose.No),
+            VECTOR_MODE(VectorMode.RC),
             PERF_RUN_TYPE(PerfRunType.L1_TO_L1),
         ],
         runtimes=[NUM_BLOCKS(tile_cnt_A), NUM_TILES_IN_BLOCK(1)],
@@ -655,22 +658,22 @@ GATHERING_BUILD_VARIANTS = [
     ),
     (
         "reduce_block_max_row (reduce_custom)",
-        "test_reduce_block_max.py::test_reduce_block_max[formats:Float16_b->Float16_b-block_ct_dim:1-num_faces:4]",
+        "test_reduce_block_max.py::test_reduce_block_max[formats:Float16_b->Float16_b-block_ct_dim:1-tile_dimensions:[32, 32]]",
         "math",
     ),
     (
         "reduce_block_max_row fp32 Dest",
-        "test_reduce_block_max.py::test_reduce_block_max[formats:Float16_b->Float32-block_ct_dim:1-num_faces:4]",
+        "test_reduce_block_max.py::test_reduce_block_max[formats:Float16_b->Float32-block_ct_dim:1-tile_dimensions:[32, 32]]",
         "math",
     ),
     (
         "reduce_block_max_row runtime (reduce_runtime_custom)",
-        "test_reduce_block_max.py::test_reduce_block_max_runtime[formats:Float16_b->Float16_b-block_ct_dim:1-num_faces:4]",
+        "test_reduce_block_max.py::test_reduce_block_max_runtime[formats:Float16_b->Float16_b-block_ct_dim:1-tile_dimensions:[32, 32]]",
         "math",
     ),
     (
         "reduce_block_max_row runtime fp32 Dest",
-        "test_reduce_block_max.py::test_reduce_block_max_runtime[formats:Float16_b->Float32-block_ct_dim:1-num_faces:4]",
+        "test_reduce_block_max.py::test_reduce_block_max_runtime[formats:Float16_b->Float32-block_ct_dim:1-tile_dimensions:[32, 32]]",
         "math",
     ),
     (

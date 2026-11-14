@@ -42,6 +42,7 @@ from helpers.test_variant_parameters import (
     BROADCAST_TYPE,
     DEST_SYNC,
     EN_DEST_REUSE,
+    ENABLE_DIRECT_INDEXING,
     IN_FACE_DIMS,
     LOOP_FACTOR,
     MATH_FIDELITY,
@@ -472,6 +473,9 @@ def _run_eltwise_binary_test(
             DEST_SYNC(dest_sync),
             REUSE_DEST_TYPE(reuse_dest_type=EltwiseBinaryReuseDestType.NONE),
             ACC_TO_DEST(acc_to_dest),
+            # Direct indexing is a Quasar-only feature; recorded as off so the perf CSV carries
+            # the same column as the Quasar side.
+            ENABLE_DIRECT_INDEXING(False),
         ],
         "runtimes": [
             generate_input_dim(
@@ -981,6 +985,7 @@ def _run_eltwise_binary_dest_reuse_test(
             EN_DEST_REUSE(),
             REUSE_DEST_TYPE(reuse_dest_type=reuse_dest_type),
             ACC_TO_DEST(False),
+            ENABLE_DIRECT_INDEXING(False),
         ],
         "runtimes": [
             generate_input_dim(

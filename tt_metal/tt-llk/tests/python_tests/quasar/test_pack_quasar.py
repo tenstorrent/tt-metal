@@ -335,7 +335,7 @@ def test_pack_quasar(
             TILE_COUNT(tile_cnt_A),
             NUM_BLOCKS(num_blocks),
             NUM_TILES_IN_BLOCK(tiles_in_block),
-            RELU_CONFIG(relu_config),
+            RELU_CONFIG(relu_config, relu_type),
             NUM_FACES_R_DIM(tile_shape.num_faces_r_dim),
             NUM_FACES_C_DIM(tile_shape.num_faces_c_dim),
             LOOP_FACTOR(loop_factor),

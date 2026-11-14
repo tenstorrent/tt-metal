@@ -225,7 +225,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             (block_tile + 2) % MAX_TILES_DEST /* dst_index_in2 */,
                             block_tile /* dst_index_out */,
                             SFPU_TERNARY_SCALAR /* value */,
-                            VectorMode::RC /* vector_mode */);
+                            VECTOR_MODE /* vector_mode */);
                     }
                 }
             }
@@ -266,7 +266,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             2 /* dst_index_in2 */,
                             0 /* dst_index_out */,
                             SFPU_TERNARY_SCALAR /* value */,
-                            VectorMode::RC /* vector_mode */);
+                            VECTOR_MODE /* vector_mode */);
                         _llk_math_dest_section_done_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
                     }
                 }

@@ -45,8 +45,9 @@ _OPS_WITHOUT_DEST_ACC = {
     MathOperation.ReluMin,
 }
 
+# Only the ops whose dispatcher reads FAST_MODE (sfpu_operations.h: sqrt, rsqrt; log and log1p
+# also read it but are not swept). Exp does not, so Yes/No built the same kernel under two labels.
 _OPS_WITH_FAST_MODE = {
-    MathOperation.Exp,
     MathOperation.Rsqrt,
     MathOperation.Sqrt,
 }

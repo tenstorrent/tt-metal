@@ -3,11 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import os
 import struct
 from abc import ABC, abstractmethod
 from ctypes import c_uint32
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Optional
 
+from .chip_architecture import quasar_variant
 from .format_config import DataFormat
 from .golden_generators import TILE_DIMENSIONS
 from .llk_params import (
@@ -29,6 +32,7 @@ from .llk_params import (
     MathFidelity,
     MathOperation,
     NarrowTile,
+    PackerReluType,
     PackUntilizeBenchmark,
     PerfRunType,
     ReduceOrder,
@@ -310,11 +314,49 @@ class SFPU_TERNARY_SCALAR(TemplateParameter):
 class SFPU_CLOBBER_LREGS(TemplateParameter):
     """Fill the SFPU registers with garbage before the op's init (``clobber_sfpu_lregs()``).
 
-    Honoured by ``sfpu_ternary_test.cpp`` only; other harnesses ignore it.
+    Honoured by ``sfpu_ternary_test.cpp`` only; other harnesses ignore it. ``clobber_lregs`` is
+    also a perf CSV column, so a perf row states whether it clobbered; False emits nothing.
     """
 
+    clobber_lregs: bool = True
+
     def convert_to_cpp(self) -> str:
-        return "#define SFPU_CLOBBER_LREGS"
+        return "#define SFPU_CLOBBER_LREGS" if self.clobber_lregs else ""
+
+
+@dataclass
+class QUASAR_VARIANT(TemplateParameter):
+    """The Quasar part variant this build targets, recorded as a perf CSV column.
+
+    The variant comes from ``TT_METAL_QUASAR_VARIANT`` at import time and changes which formats
+    and register hints a test sweeps, but it is invisible in the parameter tuple. This reads the
+    same variable so rows from different variants stay distinguishable; it emits no code.
+    """
+
+    quasar_variant: str = field(default_factory=lambda: quasar_variant() or "quasar")
+
+    def convert_to_cpp(self) -> str:
+        return ""
+
+
+@dataclass
+class SFPLOADMACRO(TemplateParameter):
+    """Whether the SFPLOADMACRO fast paths are compiled in, recorded as a perf CSV column.
+
+    The switch itself is ``TT_METAL_DISABLE_SFPLOADMACRO=1``, which ``TestConfig`` turns into
+    ``-DDISABLE_SFPLOADMACRO`` for every kernel part. This reads the same variable, so a macro-ON
+    and a macro-OFF capture carry different values instead of averaging together; it emits no code
+    of its own.
+    """
+
+    sfploadmacro: str = field(
+        default_factory=lambda: (
+            "Off" if os.environ.get("TT_METAL_DISABLE_SFPLOADMACRO") == "1" else "On"
+        )
+    )
+
+    def convert_to_cpp(self) -> str:
+        return ""
 
 
 @dataclass
@@ -2179,9 +2221,14 @@ class IN_TILE_DIMS(RuntimeParameter):
 
 @dataclass
 class RELU_CONFIG(RuntimeParameter):
-    """Packer ReLU config: packed 32-bit value (mode in low 2 bits, threshold in bits 16–31)."""
+    """Packer ReLU config: packed 32-bit value (mode in low 2 bits, threshold in bits 16–31).
+
+    ``relu_type`` is the mode by name. It is a perf CSV column only (not a kernel parameter):
+    ``relu_config`` mixes the mode with a threshold, so it states the mode on its own.
+    """
 
     relu_config: int = 0
+    relu_type: Optional[PackerReluType] = None
 
     def convert_to_cpp(self) -> str:
         return f"constexpr int RELU_CONFIG = {self.relu_config};"

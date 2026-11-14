@@ -244,11 +244,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_lib_pack_wrappers.h"
 #include "llk_pack_common.h"
 
-void pack_dest_bank_block(const Operand& buffer_Res, int dst_index, int block, std::uint32_t num_tiles_in_block)
+// The multi-tile pack MOP supports only full 4-face tiles (LLK_ASSERT in _llk_pack_mop_config_), and
+// the Blackhole tilize MOP handles one tile per invocation. Both pack one tile per call instead.
+inline bool pack_one_tile_per_call(std::uint32_t num_faces)
 {
-    if constexpr (tilize_en)
+    return tilize_en || num_faces != 4;
+}
+
+void pack_dest_bank_block(const Operand& buffer_Res, int dst_index, int block, std::uint32_t num_tiles_in_block, std::uint32_t num_faces)
+{
+    if (pack_one_tile_per_call(num_faces))
     {
-        // The Blackhole tilize MOP handles one tile per invocation regardless of its init-time num_tiles.
         for (std::uint32_t tile = 0; tile < num_tiles_in_block; ++tile)
         {
             LLK_ASSERT(
@@ -284,7 +290,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         START_PERF_MEASURE("INIT")
         _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, llk_test_pack_mode_v<false /* untilize */, tilize_en>>(
-            formats.pack_src, formats.pack_dst, TILE_WIDTH * TILE_HEIGHT /* tile_size */, FACE_R_DIM, TILE_C_DIM, num_faces);
+            formats.pack_src, formats.pack_dst, FACE_R_DIM * FACE_C_DIM * num_faces /* tile_size */, FACE_R_DIM, TILE_C_DIM, num_faces);
         _llk_pack_init_with_src_wrapper_<llk_test_pack_mode_v<false /* untilize */, tilize_en>, false /* zero_output */>(
             formats.pack_src,
             formats.pack_dst,
@@ -293,7 +299,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             num_faces,
             false /* partial_face */,
             false /* narrow_tile */,
-            tilize_en ? 1 : NUM_TILES_IN_BLOCK /* num_tiles */);
+            pack_one_tile_per_call(num_faces) ? 1 : NUM_TILES_IN_BLOCK /* num_tiles */);
         _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         reconfigure_packer_l1_acc(L1_ACC);
         PROFILER_SYNC();
@@ -309,7 +315,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (int block = 0; block < NUM_BLOCKS; ++block)
                 {
-                    pack_dest_bank_block(buffer_Res, DST_INDEX, block, NUM_TILES_IN_BLOCK);
+                    pack_dest_bank_block(buffer_Res, DST_INDEX, block, NUM_TILES_IN_BLOCK, num_faces);
                 }
             }
         }
@@ -320,7 +326,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 for (int block = 0; block < NUM_BLOCKS; ++block)
                 {
                     _llk_packer_wait_for_math_done_();
-                    pack_dest_bank_block(buffer_Res, DST_INDEX, block, NUM_TILES_IN_BLOCK);
+                    pack_dest_bank_block(buffer_Res, DST_INDEX, block, NUM_TILES_IN_BLOCK, num_faces);
                     _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
                 }
             }

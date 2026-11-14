@@ -22,12 +22,14 @@ from helpers.test_variant_parameters import (
     ),
     unpack_transpose_faces=[Transpose.No, Transpose.Yes],
     unpack_transpose_within_face=[Transpose.No, Transpose.Yes],
+    loop_factor=[32],
 )
 def test_perf_unpack_transpose(
     perf_report,
     formats,
     unpack_transpose_faces,
     unpack_transpose_within_face,
+    loop_factor,
 ):
     # Int32 format restrictions
     if formats.input_format == DataFormat.Int32:
@@ -71,7 +73,7 @@ def test_perf_unpack_transpose(
             TILE_COUNT(tile_count),
             UNPACK_TRANS_FACES(unpack_transpose_faces),
             UNPACK_TRANS_WITHIN_FACE(unpack_transpose_within_face),
-            LOOP_FACTOR(32),
+            LOOP_FACTOR(loop_factor),
         ],
         variant_stimuli=StimuliConfig(
             None,

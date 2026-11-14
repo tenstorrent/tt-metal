@@ -3,6 +3,7 @@
 
 
 import pytest
+from helpers.golden_generators import ELEMENTS_PER_TILE
 from helpers.llk_params import PerfRunType
 from helpers.param_config import parametrize
 from test_sfpu_reduce import (
@@ -15,6 +16,9 @@ from test_sfpu_reduce import (
 @pytest.mark.perf
 @parametrize(
     **SFPU_REDUCE_PERF_SWEEP,
+    # The WH/BH SFPU reduce perf measures a single 32x32 tile; stated as an axis so
+    # the geometry is visible instead of local constants in the body.
+    input_dimensions=[[32, 32]],
     run_types=[[PerfRunType.MATH_ISOLATE]],
     loop_factor=list(range(10, 201, 10)),
     is_perf=[True],
@@ -25,12 +29,12 @@ def test_perf_sfpu_reduce(
     dest_acc,
     mathop,
     reduce_pool,
+    input_dimensions,
     run_types,
     loop_factor,
     is_perf,
 ):
-    input_dimensions = [32, 32]
-    tile_count = 1
+    tile_count = input_dimensions[0] * input_dimensions[1] // ELEMENTS_PER_TILE
 
     _run_sfpu_reduce(
         _sfpu_reduce_config_kwargs(
