@@ -652,3 +652,24 @@ def test_embedding(
 
     tt_output_torch = tensor.to_torch(tt_out, mesh_axes=[None, None, 1])
     assert_quality(out, tt_output_torch, pcc=0.999998, relative_rmse=0.003)
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=["mesh_device"])
+def test_embedding_runtime_rows(mesh_device: ttnn.MeshDevice) -> None:
+    """`runtime_rows` gathers the same rows with one program for every index length."""
+    torch.manual_seed(0)
+    dictionary_size, embedding_size = 4096, 1280
+
+    tt_model = Embedding(dictionary_size, embedding_size, device=mesh_device)
+    tt_model.load_torch_state_dict({"weight": torch.randn(dictionary_size, embedding_size)})
+
+    added = 0
+    for sequence_length in (320, 32, 640):
+        inp = torch.randint(0, dictionary_size, [1, sequence_length])
+        tt_inp = tensor.from_torch(inp, device=mesh_device, dtype=ttnn.uint32, layout=ttnn.Layout.ROW_MAJOR)
+        expected = tensor.to_torch(tt_model.forward(tt_inp))
+        entries = mesh_device.num_program_cache_entries()
+        actual = tensor.to_torch(tt_model.forward(tt_inp, runtime_rows=True))
+        added += mesh_device.num_program_cache_entries() - entries
+        assert torch.equal(actual, expected), f"sequence_length={sequence_length}"
+    assert added == 1, f"{added} runtime-rows embedding programs"

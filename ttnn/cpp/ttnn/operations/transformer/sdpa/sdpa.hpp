@@ -140,7 +140,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     // Metadata path only: global real-token count, so attention stops at the tile holding the last real token.
     const std::optional<ttnn::Tensor>& kv_valid_end_tensor = std::nullopt,
     // The per-chip padded length is a runtime quantity: one cached program serves every length up to the
-    // gathered buffers' capacity. Needs logical_n as a tensor; non-causal MHA without joint tensors.
+    // gathered buffers' capacity. Needs logical_n as a tensor; MHA or grouped GQA without joint tensors, causal
+    // only when unbalanced.
     bool dynamic_local_n = false);
 
 std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(

@@ -898,8 +898,11 @@ class CCLManager:
         use_hyperparams: bool,
         use_persistent_buffer: bool = False,
         num_workers_per_link: int | None = None,
+        hyperparam_rows: int | None = None,
     ) -> ttnn.Tensor:
-        """`num_workers_per_link` pins the op's worker count (else it is picked from the output byte count)."""
+        """`num_workers_per_link` pins the op's worker count (else it is picked from the output byte count).
+        `hyperparam_rows` picks the hyperparameters for that row count instead of the tensor's, so every length
+        up to it runs one program."""
         if mesh_axis is None or self.mesh_device.shape[mesh_axis] == 1:
             return tensor
 
@@ -913,7 +916,7 @@ class CCLManager:
             tensor = ttnn.reshape(tensor, shape)
             dim += 4 - rank
 
-        params = self.get_ag_hyperparams(tensor.shape) if use_hyperparams else {}
+        params = self.get_ag_hyperparams(tensor.shape, rows=hyperparam_rows) if use_hyperparams else {}
         if num_workers_per_link is not None:
             params["num_workers_per_link"] = num_workers_per_link
 
@@ -952,9 +955,14 @@ class CCLManager:
         dim: int,
         mesh_axis: int | None,
         use_persistent_buffer: bool = False,
+        topology: ttnn.Topology | None = None,
     ) -> ttnn.Tensor:
+        """`topology` overrides the manager's for this call (non-persistent only: the pair follows the manager's)."""
         if mesh_axis is None or self.mesh_device.shape[mesh_axis] == 1:
             return tensor
+        if topology is not None and use_persistent_buffer:
+            msg = "a per-call reduce-scatter topology needs use_persistent_buffer=False"
+            raise ValueError(msg)
 
         rank = len(tensor.shape)
         if dim < 0:
@@ -975,7 +983,7 @@ class CCLManager:
             multi_device_global_semaphore=self.get_rs_ping_pong_semaphore(mesh_axis),
             num_links=self.num_links,
             memory_config=ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
-            topology=self.topology,
+            topology=topology or self.topology,
             cluster_axis=mesh_axis,
             **self.get_rs_hyperparams(tensor.shape),
         )
@@ -986,8 +994,8 @@ class CCLManager:
 
         return tensor
 
-    def get_ag_hyperparams(self, shape):
-        if shape[2] > 512:
+    def get_ag_hyperparams(self, shape, rows=None):
+        if (rows or shape[2]) > 512:
             return {
                 "chunks_per_sync": 16,
                 "num_workers_per_link": 3,

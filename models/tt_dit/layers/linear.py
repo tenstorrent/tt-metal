@@ -658,6 +658,8 @@ class RowParallelLinear(Module):
         dtype=None,
         gather_output: bool = False,
         reduce_scatter_dim: int = -1,
+        matmul_config=None,
+        reduce_scatter_topology: ttnn.Topology | None = None,
     ) -> ttnn.Tensor:
         """
         Expects x to be column fractured.
@@ -665,6 +667,8 @@ class RowParallelLinear(Module):
         Return output fractured on columns.
 
         `reduce_scatter_dim` selects the reduce-scatter axis (default -1, hidden); -2 splits on the sequence dim.
+        `matmul_config` is a frozen `MinimalMatmulConfig` that bypasses the shape-keyed table.
+        `reduce_scatter_topology` overrides the manager's topology for the reduce-scatter only.
         """
         if self.fsdp_mesh_axis is not None and self.mesh_device.shape[self.fsdp_mesh_axis] > 1:
             unsqueezed_weight = ttnn.unsqueeze_to_4D(self.weight.data)
@@ -682,7 +686,7 @@ class RowParallelLinear(Module):
             M, N = x[0].padded_shape[-2], weight.padded_shape[-1]
 
             core_grid = get_matmul_core_grid(self.mesh_device)
-            matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
+            matmul_config = matmul_config or get_matmul_config(M, K, N, core_grid, default_block_size)
             output = ttnn.experimental.minimal_matmul(
                 input_tensor=list(x),
                 weight_tensor=weight,
@@ -700,13 +704,18 @@ class RowParallelLinear(Module):
                 compute_kernel_config=compute_kernel_config or self.compute_config,
                 dtype=dtype,
                 default_block_size=default_block_size,
+                matmul_config=matmul_config,
             )
 
         if self._mesh_axis_size > 1:
             # Reduce over rows when replicating: N may be too narrow to scatter over the mesh axis.
             dim = -2 if gather_output else reduce_scatter_dim
             output = self.ccl_manager.reduce_scatter(
-                output, dim=dim, mesh_axis=self.mesh_axis, use_persistent_buffer=use_persistent_buffer
+                output,
+                dim=dim,
+                mesh_axis=self.mesh_axis,
+                use_persistent_buffer=use_persistent_buffer,
+                topology=reduce_scatter_topology,
             )
             if gather_output:
                 output = self.ccl_manager.all_gather(

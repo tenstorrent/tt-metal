@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import math
+
 import pytest
 import torch
 from loguru import logger
@@ -796,3 +798,37 @@ def test_distributed_group_norm_program_cache_hit(
         for i, (torch_input, tt_out) in enumerate(zip(torch_inputs, outputs)):
             logger.info(f"launch {i} vs torch:")
             assert_quality(torch_model(torch_input), tt_out, pcc=0.999_300)
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize(
+    ("leading", "embedding_dim"),
+    [((1,), 5120), ((1, 16), 128), ((1, 2), 128)],
+    ids=["hidden", "q_heads", "k_heads"],
+)
+def test_rmsnorm_row_capacity(mesh_device: ttnn.MeshDevice, leading: tuple[int, ...], embedding_dim: int) -> None:
+    """`row_capacity` runs one program for every row count up to it and tracks the default program's result."""
+    torch.manual_seed(0)
+    max_rows = 640
+    row_capacity = max_rows * math.prod(leading)
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True
+    )
+
+    torch_model = TorchRMSNorm(embedding_dim, norm_eps=1e-6, bias=False).to(dtype=torch.bfloat16)
+    tt_model = RMSNorm(embedding_dim, norm_eps=1e-6, bias=False, mesh_device=mesh_device)
+    tt_model.load_torch_state_dict(torch_model.state_dict())
+
+    added = 0
+    for rows in (320, 32, max_rows):
+        x = torch.randn(*leading, rows, embedding_dim, dtype=torch.bfloat16) * 2 + 4
+        tt_x = bf16_tensor(x, device=mesh_device)
+        default = ttnn.to_torch(tt_model(tt_x, compute_kernel_config=compute_kernel_config))
+        entries = mesh_device.num_program_cache_entries()
+        actual = ttnn.to_torch(tt_model(tt_x, compute_kernel_config=compute_kernel_config, row_capacity=row_capacity))
+        added += mesh_device.num_program_cache_entries() - entries
+        assert actual.shape == default.shape
+        assert_quality(default, actual, pcc=0.99999)
+        with torch.no_grad():
+            assert_quality(torch_model(x), actual, pcc=0.9995)
+    assert added == 1, f"{added} row-capacity norm programs"

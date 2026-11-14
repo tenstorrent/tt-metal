@@ -642,8 +642,8 @@ class Embedding(Module):
             device=device,
         )
 
-    def forward(self, x: ttnn.Tensor, /) -> ttnn.Tensor:
-        return ttnn.embedding(x, self.weight.data, layout=ttnn.TILE_LAYOUT)
+    def forward(self, x: ttnn.Tensor, /, *, runtime_rows: bool = False) -> ttnn.Tensor:
+        return ttnn.embedding(x, self.weight.data, layout=ttnn.TILE_LAYOUT, runtime_rows=runtime_rows)
 
 
 class LTXAdaLayerNormSingle(Module):

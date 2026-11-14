@@ -28,6 +28,7 @@ from ....parallel.manager import CCLManager
 from ....utils import tensor
 from ....utils.check import assert_quality
 from ....utils.tensor import bf16_tensor
+from ....utils.test import ring_params_8k_req_exact_devices
 
 # MiniMax-H3's `text_encoder/config.json` (text_config).
 HIDDEN_SIZE = 5120
@@ -350,3 +351,71 @@ def test_decoder_mlp_on_device(golden, seq_len, mesh_device, submesh_shape, tp_a
         else tensor.to_torch(out, mesh_axes=[None, None, None])
     )
     assert_quality(golden["mlp_out"].float(), got, pcc=0.99)
+
+
+@pytest.mark.parametrize(
+    ("mesh_device", "device_params"),
+    [pytest.param((4, 8), {**ring_params_8k_req_exact_devices, "l1_small_size": 65536}, id="tp4_sp8_fsdp8_ring")],
+    indirect=True,
+)
+def test_decoder_block_dynamic_length(mesh_device):
+    """`dynamic_length` tracks the default layer and adds no program of its own for a new length."""
+    torch.manual_seed(0)
+    tp_axis, sp_axis, capacity = 0, 1, 640
+    sp = tuple(mesh_device.shape)[sp_axis]
+    ccl = CCLManager(mesh_device, num_links=2, topology=ttnn.Topology.Ring)
+    ctx = Qwen3VlContext(
+        device=mesh_device,
+        tp_axis=tp_axis,
+        ccl_manager=ccl,
+        fsdp_mesh_axis=sp_axis,
+        sp_axis=sp_axis,
+        kv_gather_capacity=capacity * sp,
+        use_persistent_ccl_buffers=False,
+    )
+    lm = transformers.models.qwen3_vl.modeling_qwen3_vl.Qwen3VLTextModel._from_config(_config())
+    state = lm.layers[0].state_dict()
+
+    def build(ctx):
+        block = Qwen3VlDecoderLayer(
+            hidden_size=HIDDEN_SIZE,
+            intermediate_size=INTERMEDIATE_SIZE,
+            hidden_act=HIDDEN_ACT,
+            num_attention_heads=NUM_HEADS,
+            num_key_value_heads=NUM_KV_HEADS,
+            head_dim=HEAD_DIM,
+            rms_norm_eps=NORM_EPS,
+            ctx=ctx,
+        )
+        block.load_torch_state_dict(state)
+        return block
+
+    default, dynamic = build(ctx), build(dataclasses.replace(ctx, dynamic_length=True))
+    added = []
+    # Rows per chip: long, short (the K rotation's second program: its rows no longer exceed head_dim), then both
+    # sides of that change (64 / 96) and the capacity.
+    for rows in (160, 32, 96, 64, capacity):
+        seq_len = rows * sp
+        x = torch.randn(1, seq_len, HIDDEN_SIZE)
+        logical_n = tensor.from_torch(
+            torch.tensor([seq_len], dtype=torch.int64).reshape(1, 1, 1, 1),
+            device=mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.Layout.ROW_MAJOR,
+            mesh_axes=[..., None, None],
+        )
+
+        def run(block, **kwargs):
+            inputs = _shard_seq(x, mesh_device, sp_axis, 1, seq_len)
+            pos_embeds = _rope(mesh_device, seq_len, sp_axis=sp_axis, seq_pad=seq_len)
+            entries = mesh_device.num_program_cache_entries()
+            out = block.forward(inputs, attention_bias=None, pos_embeds=pos_embeds, **kwargs)
+            return _gather_seq(out, sp_axis, seq_len), mesh_device.num_program_cache_entries() - entries
+
+        # The dynamic layer goes first: the default layer's programs at this length must not hide its own.
+        got, programs = run(dynamic, logical_n=logical_n)
+        added.append(programs)
+        expected, _ = run(default)
+        assert_quality(expected, got, pcc=0.9999)
+    logger.info(f"programs added by the dynamic layer per length: {added}")
+    assert added[1:] == [1, 0, 0, 0], f"programs added per length: {added}"
