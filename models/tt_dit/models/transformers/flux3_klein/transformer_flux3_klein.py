@@ -216,9 +216,12 @@ class Flux3KleinModulation(Module):
         self.time_proj = Timesteps(
             num_channels=TIME_CHANNELS, cos_first=True, max_period=10000, dtype=ttnn.float32, mesh_device=device
         )
-        embedding = lambda: TimestepEmbedding(  # noqa: E731
-            TIME_CHANNELS, HIDDEN, act_fn="silu", dtype=ttnn.float32, bias=False, mesh_device=device
-        )
+
+        def embedding() -> TimestepEmbedding:
+            return TimestepEmbedding(
+                TIME_CHANNELS, HIDDEN, act_fn="silu", dtype=ttnn.float32, bias=False, mesh_device=device
+            )
+
         self.time_in = embedding()
         self.ref_time_in = embedding() if flow_map else None
         self.lin = ColParallelLinear(

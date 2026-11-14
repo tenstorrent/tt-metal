@@ -87,7 +87,7 @@ def reference_canvas(width: int, height: int) -> tuple[tuple[int, int], tuple[in
     scale = min(1.0, math.sqrt(MATCH_MAX_PIXELS / (width * height)), MAX_SIDE / max(width, height))
     while True:
         fit = (max(1, round(width * scale)), max(1, round(height * scale)))
-        canvas = tuple(min(MAX_SIDE, max(MIN_SIDE, -(-v // DOWNSAMPLING_RATIO) * DOWNSAMPLING_RATIO)) for v in fit)
+        canvas = tuple(min(MAX_SIDE, max(MIN_SIDE, ttnn.core.roundup(v, DOWNSAMPLING_RATIO))) for v in fit)
         if canvas[0] * canvas[1] <= MATCH_MAX_PIXELS:
             return fit, canvas
         scale *= 0.995

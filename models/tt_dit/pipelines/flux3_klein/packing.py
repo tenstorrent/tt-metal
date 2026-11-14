@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import torch
 
+import ttnn
+
 DOWNSAMPLING_RATIO = 16
 IMAGE_ROPE_SCALE = 0.5
 TEXT_PAD_MULTIPLE = 80
@@ -38,7 +40,7 @@ def text_ids(length: int) -> torch.Tensor:
 
 
 def padded_text_length(real_length: int) -> int:
-    return min(-(-real_length // TEXT_PAD_MULTIPLE) * TEXT_PAD_MULTIPLE, MAX_TEXT_LENGTH)
+    return min(ttnn.core.roundup(real_length, TEXT_PAD_MULTIPLE), MAX_TEXT_LENGTH)
 
 
 def pad_rows(rows: torch.Tensor, length: int) -> torch.Tensor:

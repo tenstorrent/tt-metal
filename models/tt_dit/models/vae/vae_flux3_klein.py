@@ -2,8 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""The FLUX.2 32-channel KL autoencoder on the FLUX 3 Klein mesh: main's Flux2VaeDecoder H-partitioned over one mesh
-axis and tensor-parallel over the other, main's Flux2VaeEncoder tensor-parallel and replicated. One instance of each
+"""The FLUX.2 32-channel KL autoencoder on the FLUX 3 Klein mesh: Flux2VaeDecoder H-partitioned over one mesh
+axis and tensor-parallel over the other, Flux2VaeEncoder tensor-parallel and replicated. One instance of each
 serves every shape (a Conv2d keeps its prepared weights per input shape); their conv slicing is set per instance."""
 
 from __future__ import annotations
@@ -21,7 +21,6 @@ from ...layers.conv2d import Conv2d, configure_conv2d
 from ...layers.normalization import GroupNorm
 from ...parallel.config import Flux2VaeParallelConfig
 from ...parallel.manager import CCLManager
-from ...pipelines.flux3_klein.packing import latent_shape
 from ...utils import cache, tensor
 from .vae import VaeAttention
 from .vae_flux2 import Flux2VaeDecoder, Flux2VaeEncoder
@@ -55,7 +54,7 @@ def decoder_slice_params(sizes, h_factor: int) -> dict[tuple[int, int, int, int]
         h = w = size
         for level, partitioned in zip(CONV_SLICES_PER_LEVEL, PARTITIONED_DECODER_CONVS_PER_LEVEL):
             for (cin, cout), slices in level.items():
-                table.setdefault((h, w, cin, cout), min(slices, max(1, -(-w // 32))))
+                table.setdefault((h, w, cin, cout), min(slices, max(1, ttnn.core.divup(w, 32))))
             if h_factor > 1:
                 for cin, cout in partitioned:
                     table.setdefault((h // h_factor + 2, w, cin, cout), 0)
@@ -90,7 +89,7 @@ def group_norm_out_blocks(norm: GroupNorm, batch: int, spatial: int, channels: i
         auto <<= 1
     if block_h <= GROUP_NORM_MAX_BLOCK_ROWS * auto:
         return -1
-    low = max(auto, -(-block_h // GROUP_NORM_MAX_BLOCK_ROWS))
+    low = max(auto, ttnn.core.divup(block_h, GROUP_NORM_MAX_BLOCK_ROWS))
     return next(d for d in range(low, block_h + 1) if block_h % d == 0)
 
 
@@ -186,7 +185,7 @@ class Flux3KleinVae:
 
     def decode(self, state: ttnn.Tensor, *, size: int) -> ttnn.Tensor:
         """Decode the SP-sharded fp32 latent state of a size x size image to a replicated [1, size, size, 3] image."""
-        h, w = latent_shape(size, size)
+        h = w = size // (SCALE * PATCH)
         decoder = self._decoder
 
         z = ttnn.typecast(state, ttnn.bfloat16)
@@ -207,7 +206,7 @@ class Flux3KleinVae:
         return out
 
     def encode(self, image) -> torch.Tensor:
-        """`[h * w, 128]` bf16 latent tokens of a PIL image (sides multiples of 16): main's encoder gives the latent mean,
+        """`[h * w, 128]` bf16 latent tokens of a PIL image (sides multiples of 16): Flux2VaeEncoder gives the latent mean,
         then the 2x2 patchify and the BatchNorm on the host, as pipeline_flux2.py does."""
         x = torch.from_numpy(np.asarray(image)).float() / 127.5 - 1.0
         x = tensor.from_torch(

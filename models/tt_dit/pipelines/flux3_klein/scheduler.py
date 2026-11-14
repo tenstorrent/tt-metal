@@ -39,7 +39,7 @@ class Flux3KleinScheduler:
     def step(self, index: int) -> Flux3KleinStep:
         t, t_next = self.schedule[index], self.schedule[index + 1]
         t_model = _bf16(t.item()).item()
-        t_next_model = t_next.reshape(1).to(torch.bfloat16).item()
+        t_next_model = _bf16(t_next.item()).item()
         return Flux3KleinStep(
             dt=(t_next - t).item(),
             embedding_t=(TIMESTEP_EMBED_SCALE * _bf16(t_model)).item(),
