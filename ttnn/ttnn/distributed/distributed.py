@@ -687,7 +687,8 @@ def close_mesh_device(mesh_device):
     """
     close_mesh_device(multi_device: ttnn.Multi) -> None:
 
-    Close the device and remove it from the device cache.
+    Close the device and remove it from the device cache. Submeshes created from the device that are still open are
+    closed with it; with fast dispatch, call `quiesce_devices()` first if one of them ran work.
     """
     return ttnn._ttnn.multi_device.close_mesh_device(mesh_device)
 

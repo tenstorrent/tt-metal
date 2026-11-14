@@ -2,10 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import gc
+
 import pytest
 
 import ttnn
 import torch
+from tt_py_test_utils_common.utility_functions import is_slow_dispatch
 
 
 def test_open_device():
@@ -32,6 +35,33 @@ def test_createdevice_matches_open_device_grid_defaults():
             ttnn.close_device(open_device_handle)
         if create_device_handle is not None:
             ttnn.close_device(create_device_handle)
+
+
+def test_closing_a_device_closes_its_open_submeshes():
+    """A submesh shares its parent's chip, so closing the parent closes the submesh too. One left open would keep the
+    chip open and close it when it is freed, under the next device opened on the chip. The submesh runs work first, so
+    with fast dispatch the test quiesces the command queue it shares with the parent before the close, as callers
+    must."""
+    torch_tensor = torch.rand((1, 1, 32, 32), dtype=torch.bfloat16)
+    device = ttnn.CreateDevice(device_id=0)
+    try:
+        submesh = device.create_submesh(ttnn.MeshShape(1, 1))
+        on_submesh = ttnn.from_torch(torch_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=submesh)
+        assert torch.equal(ttnn.to_torch(on_submesh), torch_tensor), "the tensor read back from the submesh differs"
+        ttnn.deallocate(on_submesh)
+        if not is_slow_dispatch():  # slow dispatch has no command queue use to clear, and quiesce_devices() fails there
+            device.quiesce_devices()
+    finally:
+        ttnn.close_device(device)
+
+    reopened = ttnn.CreateDevice(device_id=0)
+    try:
+        del device, submesh, on_submesh
+        gc.collect()
+        tensor = ttnn.from_torch(torch_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=reopened)
+        assert torch.equal(ttnn.to_torch(tensor), torch_tensor), "the tensor read back from the reopened device differs"
+    finally:
+        ttnn.close_device(reopened)
 
 
 def test_dispatch_core_config_defaults_follow_cluster_policy():

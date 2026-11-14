@@ -1139,8 +1139,6 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
 
     log_trace(tt::LogMetal, "Closing mesh device {}", this->id());
 
-    // Shut down the CQ first so dispatch_s sends TERMINATE to the profiler core with the
-    // final buffer; the push kernel, receiver thread, and callbacks must still be alive.
     if (is_initialized()) {
         if (metal_env().get_cluster().get_target_device_type() != tt::TargetDevice::Mock) {
             ReadMeshDeviceProfilerResults(*pimpl_wrapper, ProfilerReadState::LAST_FD_READ);
@@ -1149,11 +1147,6 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
         if (distributed_context_) {
             // Wait for all ranks to be ready to close the mesh device before proceeding.
             distributed_context_->barrier();
-        }
-
-        // TODO #20966: Remove these calls
-        for (auto* device : local_devices_) {
-            device->set_mesh_device(parent_mesh_);
         }
 
         // Only one mesh device can use a CQ on a physical device at a time, or else teardown or some other operation
@@ -1185,6 +1178,28 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
                     }
                 }
             }
+        }
+    }
+
+    // Shut down the CQ first so dispatch_s sends TERMINATE to the profiler core with the
+    // final buffer; the push kernel, receiver thread, and callbacks must still be alive.
+    if (is_initialized()) {
+        // Close the submeshes that are still open. They share this mesh's ScopedDevices, so an open one would keep the
+        // devices open past this close and close them when it is freed: after the MetalContext is destroyed below, or
+        // under the next mesh opened on them. They close after the checks above, so a failed check leaves them all
+        // open, and after this mesh's last profiler read, which stops at the first device that a submesh's read has
+        // already covered. A submesh whose close released the last reference to this mesh (running this close from
+        // ~MeshDevice) has marked itself as not initialized by then, so it is skipped here. (The parent that
+        // create_unit_meshes builds is never initialized, and leaves its unit meshes to close themselves.)
+        for (const auto& weak_submesh : submeshes_) {
+            if (auto submesh = weak_submesh.lock(); submesh && submesh->is_initialized()) {
+                submesh->close();
+            }
+        }
+
+        // TODO #20966: Remove these calls. They come after the submeshes' closes, which point the devices at this mesh.
+        for (auto* device : local_devices_) {
+            device->set_mesh_device(parent_mesh_);
         }
 
         for (auto* device : local_devices_) {
@@ -1240,9 +1255,11 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
         // meshes using the hybrid allocator. Cached programs outliving the persistent L1 arena is
         // handled by PersistentL1Arena::Seal's liveness token instead.
         sub_device_manager_tracker_.reset();
+        // Clear this before releasing the parent below, which can destroy it and run its close: that close must skip
+        // this mesh, whatever the order of the resets.
+        is_internal_state_initialized = false;
         scoped_devices_.reset();
         parent_mesh_.reset();
-        is_internal_state_initialized = false;
         if (distributed_context_) {
             distributed_context_.reset();
         }
@@ -2306,7 +2323,11 @@ bool MeshDevice::initialize(
     return pimpl_->initialize_impl(
         this, num_hw_cqs, l1_small_size, trace_region_size, worker_l1_size, l1_bank_remap, minimal);
 }
-bool MeshDevice::close() { return pimpl_->close_impl(this); }
+bool MeshDevice::close() {
+    // close_impl closes the open submeshes first, and each releases its reference to this mesh, which can be the last.
+    const auto keep_alive = shared_from_this();
+    return pimpl_->close_impl(this);
+}
 void MeshDevice::enable_program_cache() { pimpl_->enable_program_cache(); }
 void MeshDevice::clear_program_cache() { pimpl_->clear_program_cache(); }
 void MeshDevice::disable_and_clear_program_cache() { pimpl_->disable_and_clear_program_cache(); }

@@ -47,7 +47,8 @@ init_device_compute_kernel_config = ttnn._ttnn.operations.core.init_device_compu
 
 def close_device(device: "ttnn.device.Device"):
     """
-    Close the device and remove it from the device cache.
+    Close the device and remove it from the device cache. Submeshes created from the device that are still open are
+    closed with it; with fast dispatch, call `quiesce_devices()` first if one of them ran work.
 
     Args:
         device (ttnn.device.Device): The device to close.
