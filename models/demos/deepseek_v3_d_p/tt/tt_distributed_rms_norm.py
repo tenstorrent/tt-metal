@@ -188,6 +188,13 @@ class TtDistributedRmsNorm(LightweightModule):
         self.cluster_axis = cluster_axis
         self.num_links = num_links
         self.topology = topology
+        # The rms_norm_pre/post_all_gather default config, so the TP=1 path matches TP>1.
+        self.tp1_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+        )
 
         # Memory configs (None = use DRAM interleaved)
         self.input_memcfg = input_memcfg
@@ -332,6 +339,7 @@ class TtDistributedRmsNorm(LightweightModule):
                 weight=self.weight,
                 program_config=self.sharded_progcfg,
                 memory_config=self.output_memcfg,
+                compute_kernel_config=self.tp1_compute_kernel_config,
             )
 
         # Step 1: Pre-all-gather - each device computes local sum(x^2)

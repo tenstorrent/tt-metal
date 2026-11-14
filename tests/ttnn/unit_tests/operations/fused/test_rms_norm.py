@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_numeric_metrics
+from tests.ttnn.utils_for_testing import assert_numeric_metrics, ulp_distance
 
 import os
 
@@ -187,3 +187,127 @@ def test_rms_norm_0d(device, x, eps, w, b, dtype):
     assert torch.allclose(
         output.reshape(1), expected, rtol=rtol, atol=atol
     ), f"x={x} eps={eps} w={w} b={b}: ttnn={output.item()!r} torch={expected.item()!r}"
+
+
+@pytest.mark.parametrize("w", [2560, 4096, 16384])
+@pytest.mark.parametrize("outliers", [False, True])
+@pytest.mark.parametrize("use_weight", [False, True])
+def test_rms_norm_default_precision(device, w, outliers, use_weight):
+    # The default compute config must stay within 1 bf16 step of the correctly rounded result.
+    torch.manual_seed(0)
+    torch_input_tensor = torch.randn((1, 1, 32, w))
+    if outliers:
+        torch_input_tensor[..., torch.randperm(w)[:8]] *= 100
+    torch_input_tensor = torch_input_tensor.to(torch.bfloat16)
+    torch_weight = (torch.randn((w,)) * 0.1 + 1).to(torch.bfloat16)
+
+    x = torch_input_tensor.double()
+    expected = x / torch.sqrt((x * x).mean(-1, keepdim=True) + 1e-6)
+    if use_weight:
+        expected = expected * torch_weight.double()
+    expected = expected.to(torch.bfloat16)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, device=device, layout=ttnn.TILE_LAYOUT)
+    weight = ttnn.from_torch(torch_weight, device=device, layout=ttnn.TILE_LAYOUT) if use_weight else None
+    output_tensor = ttnn.to_torch(ttnn.rms_norm(input_tensor, epsilon=1e-6, weight=weight))
+
+    assert ulp_distance(expected, output_tensor).max().item() <= 1
+
+
+@pytest.mark.parametrize(
+    "h, w, grid_x, grid_y, strategy",
+    [(32, 4096, 8, 2, ttnn.ShardStrategy.WIDTH), (256, 4096, 8, 8, ttnn.ShardStrategy.BLOCK)],
+    ids=["width_sharded", "block_sharded"],
+)
+def test_rms_norm_default_precision_sharded(device, h, w, grid_x, grid_y, strategy):
+    grid = device.compute_with_storage_grid_size()
+    if grid.x < grid_x or grid.y < grid_y:
+        pytest.skip(f"needs a {grid_x}x{grid_y} core grid")
+    torch.manual_seed(0)
+    torch_input_tensor = torch.randn((1, 1, h, w)).to(torch.bfloat16)
+    torch_weight = (torch.randn((w,)) * 0.1 + 1).to(torch.bfloat16)
+
+    x = torch_input_tensor.double()
+    expected = x / torch.sqrt((x * x).mean(-1, keepdim=True) + 1e-6) * torch_weight.double()
+    expected = expected.to(torch.bfloat16)
+
+    memory_config = ttnn.create_sharded_memory_config(
+        shape=(1, 1, h, w),
+        core_grid=ttnn.CoreGrid(y=grid_y, x=grid_x),
+        strategy=strategy,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor, device=device, layout=ttnn.TILE_LAYOUT, memory_config=memory_config
+    )
+    weight = ttnn.from_torch(torch_weight, device=device, layout=ttnn.TILE_LAYOUT)
+    output_tensor = ttnn.to_torch(ttnn.rms_norm(input_tensor, epsilon=1e-6, weight=weight, memory_config=memory_config))
+
+    assert ulp_distance(expected, output_tensor).max().item() <= 1
+
+
+@pytest.mark.parametrize(
+    "arch, math_approx_mode, fp32_dest_acc_en",
+    [("WORMHOLE_B0", False, True), ("BLACKHOLE", False, True), ("QUASAR", True, False)],
+)
+def test_rms_norm_default_compute_config(arch, math_approx_mode, fp32_dest_acc_en):
+    config = ttnn.rmsnorm_default_compute_config(getattr(ttnn.device.Arch, arch))
+    assert config.math_fidelity == ttnn.MathFidelity.HiFi4
+    assert config.math_approx_mode == math_approx_mode
+    assert config.fp32_dest_acc_en == fp32_dest_acc_en
+
+
+def bf16_accumulation_config(device):
+    return ttnn.init_device_compute_kernel_config(
+        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=True, fp32_dest_acc_en=False
+    )
+
+
+def test_rms_norm_default_config_wide_subblock(device, expect_error):
+    memory_config = ttnn.create_sharded_memory_config(
+        shape=(1, 1, 32, 2048), core_grid=ttnn.CoreGrid(y=1, x=8), strategy=ttnn.ShardStrategy.WIDTH
+    )
+    input_tensor = ttnn.from_torch(
+        torch.randn((1, 1, 32, 2048)),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=memory_config,
+    )
+    program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=(8, 1), subblock_w=8, block_h=1, block_w=8, inplace=False
+    )
+
+    def run(compute_kernel_config=None):
+        output = ttnn.rms_norm(
+            input_tensor,
+            epsilon=1e-6,
+            memory_config=memory_config,
+            program_config=program_config,
+            compute_kernel_config=compute_kernel_config,
+        )
+        return ttnn.to_torch(output)
+
+    assert torch.equal(run(), run(bf16_accumulation_config(device)))
+    fp32_config = ttnn.init_device_compute_kernel_config(
+        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True
+    )
+    with expect_error(RuntimeError, "fp32_dest_acc_en"):
+        run(fp32_config)
+
+
+def test_rms_norm_default_config_row_major_weight(device):
+    # Too wide for fp32 accumulation with a ROW_MAJOR weight, but fits with bf16 accumulation.
+    w = 5632
+    torch.manual_seed(0)
+    input_tensor = ttnn.from_torch(
+        torch.randn((1, 1, 32, w)), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    weight = ttnn.from_torch(
+        torch.randn((1, 1, w // 32, 32)) * 0.1 + 1, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    output = ttnn.rms_norm(input_tensor, epsilon=1e-6, weight=weight)
+    expected = ttnn.rms_norm(
+        input_tensor, epsilon=1e-6, weight=weight, compute_kernel_config=bf16_accumulation_config(device)
+    )
+    assert torch.equal(ttnn.to_torch(output), ttnn.to_torch(expected))

@@ -32,7 +32,7 @@ from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_code_predictor import (
     preprocess_projection,
     project,
 )
-from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_talker import _compute_config, causal_mask
+from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_talker import _compute_config, _rms_norm_config, causal_mask
 from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_talker_decode import (
     CACHE_TILE_MULTIPLE,
     MLP_WEIGHT_DTYPE,
@@ -149,7 +149,7 @@ class TtCodePredictorCachedDecoder:
             )
         else:
             self.compute_config = _compute_config(device)
-        self._norm_config = self.compute_config if self._fp32 else None
+        self._norm_config = self.compute_config if self._fp32 else _rms_norm_config(device)
 
         self.heads = self.config["num_attention_heads"]
         self.kv_heads = self.config["num_key_value_heads"]

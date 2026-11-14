@@ -128,6 +128,13 @@ class Qwen38TPDecoder(Qwen38Decoder):
         self.ckc = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=True
         )
+        # The batch-1 Q/K norms use subblock_w=8, which needs bf16 accumulation.
+        self.qk_norm_ckc = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+        )
         self.projection_configs = {
             role: ttnn.WormholeComputeKernelConfig(
                 math_fidelity=getattr(ttnn.MathFidelity, self.policy[role + "_fidelity"]),

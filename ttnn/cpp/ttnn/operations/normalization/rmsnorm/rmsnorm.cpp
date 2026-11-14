@@ -14,9 +14,12 @@
 namespace ttnn {
 
 DeviceComputeKernelConfig rmsnorm_default_compute_config(tt::ARCH arch) {
-    bool approx_mode = true;
-    bool fp32_acc = false;
-    return init_device_compute_kernel_config(arch, std::nullopt, tt::tt_metal::MathFidelity::HiFi4, approx_mode, fp32_acc);
+    // Quasar's simulator does not support fp32 accumulation of bf16 inputs yet.
+    bool quasar = arch == tt::ARCH::QUASAR;
+    bool approx_mode = quasar;
+    bool fp32_acc = !quasar;
+    return init_device_compute_kernel_config(
+        arch, std::nullopt, tt::tt_metal::MathFidelity::HiFi4, approx_mode, fp32_acc);
 }
 
 Tensor rms_norm(
@@ -66,7 +69,18 @@ Tensor rms_norm(
 
     auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch()
                                                                    : ttnn::GetDefaultDevice()->arch();
-    auto kernel_config_val = compute_kernel_config.value_or(rmsnorm_default_compute_config(arch));
+    // fp32 accumulation can overflow L1 with a ROW_MAJOR weight or bias, and DEST with subblock_w > 4. Those cases
+    // use HiFi4, math_approx_mode=true, fp32_dest_acc_en=false, the default of rms_norm_pre/post_all_gather.
+    const bool row_major_affine = (weight.has_value() && weight->layout() == Layout::ROW_MAJOR) ||
+                                  (bias.has_value() && bias->layout() == Layout::ROW_MAJOR);
+    const auto* sharded_config = program_config.has_value()
+                                     ? std::get_if<prim::LayerNormShardedMultiCoreProgramConfig>(&*program_config)
+                                     : nullptr;
+    const bool wide_subblock = sharded_config != nullptr && sharded_config->subblock_w > 4;
+    auto kernel_config_val = compute_kernel_config.value_or(
+        row_major_affine || wide_subblock
+            ? init_device_compute_kernel_config(arch, std::nullopt, tt::tt_metal::MathFidelity::HiFi4, true, false)
+            : rmsnorm_default_compute_config(arch));
     return ttnn::prim::layer_norm(
         input_tensor,
         epsilon,
