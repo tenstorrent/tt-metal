@@ -6,7 +6,7 @@ import ttnn
 import pytest
 from tests.ttnn.nightly.unit_tests.operations.pool.test_avgpool2d import run_avg_pool2d
 
-pytestmark = pytest.mark.use_module_device
+pytestmark = pytest.mark.use_module_device({"l1_small_size": 16384})
 
 
 @pytest.fixture(scope="module")
@@ -304,3 +304,50 @@ def test_avg_pool2d_global_rejects_zero_batch(device, expect_error):
             stride=[1, 1],
             padding=[0, 0],
         )
+
+
+@pytest.mark.parametrize(
+    "out_dtype, in_c",
+    [
+        # Two or three channel cores whose row-major input shards were 24 wide against 32-wide output shards
+        (ttnn.bfloat16, 33),
+        (ttnn.bfloat16, 48),
+        (ttnn.bfloat16, 65),
+        (ttnn.bfloat16, 72),
+        (ttnn.bfloat8_b, 48),
+        # Input and output shards were already both 32 wide
+        (ttnn.bfloat16, 64),
+        (ttnn.bfloat16, 96),
+        (ttnn.bfloat8_b, 64),
+    ],
+)
+def test_avg_pool2d_tiled_out_auto_shard_channels(device, out_dtype, in_c):
+    in_n, in_h, in_w = 2, 16, 16
+    kernel_size, stride = [2, 2], [2, 2]
+    torch.manual_seed(0)
+    torch_input = torch.randn(in_n, in_c, in_h, in_w, dtype=torch.bfloat16)
+    ttnn_input = ttnn.from_torch(
+        torch_input.permute(0, 2, 3, 1).reshape(1, 1, in_n * in_h * in_w, in_c),
+        ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+    ttnn_output = ttnn.avg_pool2d(
+        input_tensor=ttnn_input,
+        batch_size=in_n,
+        input_h=in_h,
+        input_w=in_w,
+        channels=in_c,
+        kernel_size=kernel_size,
+        stride=stride,
+        padding=[0, 0],
+        dtype=out_dtype,
+        output_layout=ttnn.TILE_LAYOUT,
+    )
+    torch_output = torch.nn.functional.avg_pool2d(torch_input.float(), kernel_size, stride)
+    out_h, out_w = torch_output.shape[-2:]
+    ttnn_output = ttnn.to_torch(ttnn_output).float().reshape(in_n, out_h, out_w, in_c).permute(0, 3, 1, 2)
+    if out_dtype == ttnn.bfloat16:
+        assert torch.allclose(ttnn_output, torch_output, rtol=0.02, atol=0.05)
+    else:
+        assert torch.allclose(ttnn_output, torch_output, rtol=0.04, atol=0.15)
