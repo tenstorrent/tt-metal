@@ -147,6 +147,11 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
             ? (args.program_config->exp_approx_mode.has_value() ? args.program_config->exp_approx_mode.value() : true)
             : true;
 
+    TT_FATAL(
+        grid_size.x > 0 && grid_size.y > 0,
+        "compute_with_storage_grid_size must be non-zero, got ({}, {})",
+        grid_size.x,
+        grid_size.y);
     auto core_grid = CoreRangeSet(CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1}));
     constexpr uint32_t sender_semaphore_id = 0;
     constexpr uint32_t receiver_semaphore_id = 1;
@@ -161,6 +166,7 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
 
     // Parallelization scheme
     // We will choose parallelization factors for batch, num_heads, and q_seq_len in that order
+    TT_FATAL(B > 0, "Joint SDPA batch size must be > 0");
     uint32_t batch_parallel_factor = std::min(B, num_cores);
     uint32_t nh_parallel_factor = std::min(num_cores / batch_parallel_factor, NH);
     uint32_t q_parallel_factor = std::min(num_cores / (batch_parallel_factor * nh_parallel_factor), q_num_chunks);
