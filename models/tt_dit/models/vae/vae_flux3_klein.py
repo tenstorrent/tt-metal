@@ -2,8 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""The FLUX.2 32-channel KL autoencoder on the FLUX 3 Klein mesh: Flux2VaeDecoder H-partitioned over one mesh
-axis and tensor-parallel over the other, Flux2VaeEncoder tensor-parallel and replicated. One instance of each
+"""The FLUX.2 32-channel KL autoencoder on the FLUX 3 Klein mesh: Flux2VaeDecoder splits the image's rows over one
+mesh axis and its columns over the other, Flux2VaeEncoder is tensor-parallel and replicated. One instance of each
 serves every shape (a Conv2d keeps its prepared weights per input shape); their conv slicing is set per instance."""
 
 from __future__ import annotations
@@ -44,8 +44,8 @@ PARTITIONED_DECODER_CONVS_PER_LEVEL = (
 )
 
 
-def decoder_slice_params(sizes, h_factor: int) -> dict[tuple[int, int, int, int], int]:
-    """The decoder's conv slice table for square outputs of each size (the H-partitioned convs: 0, ttnn picks)."""
+def decoder_slice_params(sizes, h_factor: int, w_factor: int = 1) -> dict[tuple[int, int, int, int], int]:
+    """The decoder's conv slice table for square outputs of each size (the partitioned convs: 0, ttnn picks)."""
     table = {}
     for size in sizes:
         h = w = size
@@ -53,8 +53,9 @@ def decoder_slice_params(sizes, h_factor: int) -> dict[tuple[int, int, int, int]
             for (cin, cout), slices in level.items():
                 table.setdefault((h, w, cin, cout), min(slices, max(1, ttnn.core.divup(w, 32))))
             if h_factor > 1:
+                local_w = w // w_factor + 2 if w_factor > 1 else w
                 for cin, cout in partitioned:
-                    table.setdefault((h // h_factor + 2, w, cin, cout), 0)
+                    table.setdefault((h // h_factor + 2, local_w, cin, cout), 0)
             h, w = (h - 2) // 2 + 1, (w - 2) // 2 + 1
     return table
 
@@ -82,6 +83,7 @@ class Flux3KleinVae:
         self._dit_ccl = dit_ccl_manager
         self._dit_sp_axis = dit_sp_axis
         self.h_axis = h_axis
+        self.w_axis = tp_axis
         model_name = f"flux3_klein_vae_{cache.checkpoint_id(self._snapshot / SUBFOLDER / VAE_WEIGHTS)}"
         mesh_shape = tuple(device.shape)
         common = {
@@ -113,12 +115,15 @@ class Flux3KleinVae:
             )
             return module
 
-        decoder_parallel = Flux2VaeParallelConfig.from_axes(device, tp_axis=tp_axis, h_axis=h_axis, w_axis=None)
+        decoder_parallel = Flux2VaeParallelConfig.from_axes(device, tp_axis=None, h_axis=h_axis, w_axis=tp_axis)
         self._decoder = Flux2VaeDecoder(
-            parallel_config=decoder_parallel, use_conv3d=False, local_query_attention=True, **common
+            parallel_config=decoder_parallel, use_conv3d=False, group_norm_2d=True, local_attention=True, **common
         )
         configure_conv2d(
-            self._decoder, slice_params={mesh_shape: decoder_slice_params(sizes, int(device.shape[h_axis]))}
+            self._decoder,
+            slice_params={
+                mesh_shape: decoder_slice_params(sizes, int(device.shape[h_axis]), int(device.shape[tp_axis]))
+            },
         )
         load(self._decoder, decoder_parallel, SUBFOLDER)
 
@@ -135,8 +140,8 @@ class Flux3KleinVae:
         self._bn_std = torch.sqrt(state["bn.running_var"].float() + torch_vae.config.batch_norm_eps)
 
     def decode(self, state: ttnn.Tensor, *, size: int) -> ttnn.Tensor:
-        """Decode the SP-sharded fp32 latent state of a size x size image to a [1, size, size, 3] image H-sharded over
-        `h_axis`."""
+        """Decode the SP-sharded fp32 latent state of a size x size image to a [1, size, size, 3] image with its rows
+        sharded over `h_axis` and its columns over `w_axis`."""
         h = w = size // (SCALE * PATCH)
         decoder = self._decoder
 
@@ -153,6 +158,11 @@ class Flux3KleinVae:
         ttnn.deallocate(rows)
         z = decoder.preprocess_and_unpatchify(parted, height=size // SCALE, width=size // SCALE)
         ttnn.deallocate(parted)
+        rows = ttnn.to_layout(z, ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.deallocate(z)
+        z = ttnn.mesh_partition(rows, dim=2, cluster_axis=self.w_axis, memory_config=rows.memory_config())
+        ttnn.deallocate(rows)
+        z = ttnn.to_layout(z, ttnn.TILE_LAYOUT)
         out = decoder.forward(z, traced=False, gather_hw=False)
         ttnn.deallocate(z)
         return out
