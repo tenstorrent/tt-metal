@@ -168,6 +168,13 @@ def worker_list(device, max_grid):
     return [ttnn.CoreCoord(x, y) for y in range(gy) for x in range(gx) if (x, y) not in taken], ports
 
 
+def balanced_passes(cols, cap):
+    """(passes, block_cols) of a column range in passes of <= cap units, balanced so a ragged last pass carries the
+    fewest filler units (W path: a ragged pass runs the full block on zeroed filler units)."""
+    passes = -(-cols // cap)
+    return passes, -(-cols // passes)
+
+
 def choose_split(t_tiles, c_tiles, num_workers, unit_bytes, has_w, n, C):
     """op_design.md chooser: minimise est = max(total DRAM / DRAM_BW, per-core time); on an est tie (DRAM-bound,
     e.g. plain mode where total does not depend on R) the balanced split (smaller max core bytes) wins; then the
@@ -175,25 +182,30 @@ def choose_split(t_tiles, c_tiles, num_workers, unit_bytes, has_w, n, C):
     stats partial grouping is identical across the fused modes.
 
     Per-core time: plain = max core bytes / CORE_BW (DRAM-fed streaming). With W the fused pass is compute-bound
-    per core: rows * (ROW_NS_W + cols * UNIT_NS_W), and only splits whose column range fits one block pass
-    (cols <= MAX_BLOCK_COLS_W) are candidates when any exists (a multi-pass / ragged row measured slower: T160
-    C5120 R=5 127 us vs R=2 110 us)."""
+    per core: rows * (ROW_NS_W + units * UNIT_NS_W), where units counts the filler units of a ragged pass
+    (balanced passes of <= MAX_BLOCK_COLS_W); W crosses DRAM once when the R row groups share their resident
+    slices (SLICE_SHARE), else R times, and only W-resident splits are candidates when any exists (W-streamed
+    re-reads W per row). Refinement 4: multi-pass splits are candidates — R=5 at T160 C5120 (1 row x 8 units a core,
+    W shared) measured 125 us vs R=1 (5 rows x 2 units) 167 us on the 106-worker feed mesh."""
     cands = []
     for R in range(1, min(t_tiles, num_workers) + 1):
         Q = min(num_workers // R, c_tiles)
         if Q < 1:
             break
         rows, cols = -(-t_tiles // R), -(-c_tiles // Q)
-        total = t_tiles * c_tiles * unit_bytes + has_w * R * n * C * 128
+        resident = n * cols * 4096 <= W_RESIDENT_BUDGET
+        w_reads = 1 if (resident and SLICE_SHARE) else R
+        total = t_tiles * c_tiles * unit_bytes + has_w * w_reads * n * C * 128
         max_core = rows * cols * unit_bytes + has_w * n * cols * 4096
         if has_w:
-            core_s = rows * (ROW_NS_W + cols * UNIT_NS_W) * 1e-9
+            passes, bc = balanced_passes(cols, MAX_BLOCK_COLS_W)
+            core_s = rows * (ROW_NS_W + passes * bc * UNIT_NS_W) * 1e-9
         else:
             core_s = max_core / CORE_BW
         est = max(total / DRAM_BW, core_s)
-        cands.append(((est, max_core, R), R, Q, cols))
-    if has_w and any(c[3] <= MAX_BLOCK_COLS_W for c in cands):
-        cands = [c for c in cands if c[3] <= MAX_BLOCK_COLS_W]
+        cands.append(((est, max_core, R), R, Q, resident))
+    if has_w and any(c[3] for c in cands):
+        cands = [c for c in cands if c[3]]
     best = min(cands, key=lambda c: c[0])
     return best[1], best[2]
 
@@ -202,13 +214,15 @@ def dest_fp32_slots():
     return 8 if DST_FULL_SYNC else 4
 
 
-def choose_block_cols(core_c_tiles, bytes_per_block_col, mix_fixed_slots=MIX_FIXED_SLOTS, cap=None):
+def choose_block_cols(core_c_tiles, bytes_per_block_col, mix_fixed_slots=MIX_FIXED_SLOTS, cap=None, balance=False):
     """block_cols: the whole per-core column range, capped by L1 and by DEST (one accumulator per unit).
-    (Balancing the passes to equal size measured worse at T=1024 C=1792: 243 vs 215 us; a ragged pass runs as
-    one-unit blocks.)"""
+    Plain mode keeps the largest block (balancing the passes to equal size measured worse at T=1024 C=1792: 243 vs
+    215 us; a ragged pass runs as one-unit blocks). With W (balance=True) the passes are balanced: a ragged pass runs
+    the full block on filler units, which balancing minimises."""
     l1_cap = max(1, BLOCK_L1_BUDGET // max(1, bytes_per_block_col))
     dest_cap = dest_fp32_slots() - mix_fixed_slots
-    return max(1, min(core_c_tiles, l1_cap, dest_cap, cap if cap is not None else dest_cap))
+    bc = max(1, min(core_c_tiles, l1_cap, dest_cap, cap if cap is not None else dest_cap))
+    return balanced_passes(core_c_tiles, bc)[1] if balance else bc
 
 
 def _merged_ranges(cores):
@@ -341,7 +355,7 @@ def create_program_descriptor(
         if not w_resident:
             bytes_per_block_col += W_STREAM_BLOCKS * n * f32_page
     block_cols = choose_block_cols(
-        max_core_c_tiles, bytes_per_block_col, mix_fixed, MAX_BLOCK_COLS_W if has_w else None
+        max_core_c_tiles, bytes_per_block_col, mix_fixed, MAX_BLOCK_COLS_W if has_w else None, balance=bool(has_w)
     )
     in_depth = IN_BLOCKS * block_cols  # units
     out_ring_tiles = OUT_BLOCKS * block_cols * n
@@ -410,26 +424,20 @@ def create_program_descriptor(
     reader_rt = ttnn.RuntimeArgs()
     writer_rt = ttnn.RuntimeArgs()
     compute_rt = ttnn.RuntimeArgs()
+    # NoC coordinates of every used core (row-major L order), packed x | y << 16
+    xy = [(lambda v: v.x | (v.y << 16))(device.worker_core_from_logical_core(c)) for c in used] if has_w else []
     for g in range(R):
         t0, tn = row_ranges[g]
         for q in range(Q):
             c0, cn = col_ranges[q]
             core = used[g * Q + q]
-            # W sharing: + the R cores of my column member (by group), packed x | y << 16
-            peers = []
-            if w_share > 1:
-                peers = [device.worker_core_from_logical_core(used[g2 * Q + q]) for g2 in range(R)]
-                peers = [v.x | (v.y << 16) for v in peers]
+            # slice sharing: + the R cores of my column member (by group)
+            peers = [xy[g2 * Q + q] for g2 in range(R)] if w_share > 1 else []
             reader_rt[core.x][core.y] = [t0, tn, c0, cn, g, q] + peers
-            writer_rt[core.x][core.y] = [t0, tn, c0, cn, g, q]
+            # R2: + the Q members of my row group (the combine tree's destinations); per-core, not the whole table as
+            # common args: the args / CB config region counts twice against the kernel-config ring (trace replays)
+            writer_rt[core.x][core.y] = [t0, tn, c0, cn, g, q] + xy[g * Q : (g + 1) * Q]
             compute_rt[core.x][core.y] = [t0, tn, cn, q]
-
-    # coordinates of every used core (row-major L order), packed x | y << 16 (common args of the writer)
-    coord_table = []
-    if has_w:
-        for core in used:
-            v = device.worker_core_from_logical_core(core)
-            coord_table.append(v.x | (v.y << 16))
 
     # ---------------- kernels ----------------
     reader_ct = [
@@ -557,8 +565,7 @@ def create_program_descriptor(
             hc_for_args.buffer_address(),
             y_for_args.buffer_address(),
         ]
-        + feed_common
-        + coord_table,
+        + feed_common,
         config=ttnn.WriterConfigDescriptor(),
     )
 

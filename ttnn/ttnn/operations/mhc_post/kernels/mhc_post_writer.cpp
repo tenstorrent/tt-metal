@@ -37,6 +37,8 @@
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 
+#define COLD __attribute__((noinline, optimize("Os")))
+
 namespace {
 constexpr uint32_t FACE_WORDS = 256;
 constexpr uint32_t FACE_DIM = 16;
@@ -56,7 +58,7 @@ inline uint32_t lane_word(uint32_t v, uint32_t l) {
 // so the RISC's L1 load latency overlaps (a plain load-store loop costs ~20 cycles a word).
 template <bool ToLanes>
 inline void permute_vector(uint32_t* col, uint32_t* vec) {
-#pragma GCC unroll 4
+#pragma GCC unroll 1  // root tail only; kernel-config buffer budget (the 8-word batches stay unrolled)
     for (uint32_t g = 0; g < 4; ++g) {  // lanes 8g..8g+7 = tokens 8g..8g+7 = one row of the vector
         uint32_t* c = col + (g >> 1) * 2 * FACE_WORDS + (g & 1) * 8 * FACE_DIM;  // token 8g's row
         uint32_t* v = vec + g * FACE_DIM;
@@ -132,11 +134,11 @@ void kernel_main() {
     [[maybe_unused]] constexpr auto y_args = TensorAccessorArgs<hc_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto d_args = TensorAccessorArgs<y_args.next_compile_time_args_offset()>();
     constexpr uint32_t num_chunks = (group_q + fanin - 1) / fanin;
-    // common args: out, stats, hc, y addresses; feed: D address, me, G, Cb, Ht; then the core table
+    // common args: out, stats, hc, y addresses; feed: D address, me, G, Cb, Ht, the ports (R2: my row group's
+    // members are RT args 6..)
     constexpr uint32_t FEED_BASE = 4;
     constexpr uint32_t FEED_PORTS = FEED_BASE + 5;  // feed: port count, then MAX_FEED_PORTS port coordinates
     constexpr uint32_t MAX_FEED_PORTS = 4;
-    constexpr uint32_t COORD_BASE = feed ? FEED_PORTS + 1 + MAX_FEED_PORTS : FEED_BASE;
 
     const uint32_t t_start = get_arg_val<uint32_t>(0);
     const uint32_t t_count = get_arg_val<uint32_t>(1);
@@ -210,7 +212,7 @@ void kernel_main() {
     [[maybe_unused]] uint32_t sem_leader = 0, sem_root = 0, sem_ready = 0;
     [[maybe_unused]] uint32_t my_chunk = 0, chunk_first = 0, chunk_size = 0, my_pos = 0;
     auto member_noc = [&](uint32_t q, uint32_t addr) {
-        const uint32_t xy = get_common_arg_val<uint32_t>(COORD_BASE + group * group_q + q);
+        const uint32_t xy = get_arg_val<uint32_t>(6 + q);  // RT args 6..: my row group's members
         return get_noc_addr(xy & 0xFFFF, xy >> 16, addr);
     };
     // announce to my chunk that my leader slots are free for row `row`
@@ -223,7 +225,10 @@ void kernel_main() {
     // leader(t) duty, lagged one row (run after my own row t+1's stores): the chunk's partials -> compute (they
     // have long landed); the folded chunk sum -> slot `chunk` of region (t - t_start)/Q of root(t)'s
     // cb_root_slots; re-reserve the slots (compute popped them) and announce my next led row.
-    auto lead = [&](uint32_t t) {
+    // COLD: noinline + -Os (once a row / once a rooted row): the worker program's binaries + 2x its args / CB config
+    // must fit the 70 656 B kernel-config ring for trace replays to overlap (else every launch waits for the previous
+    // one: DISPATCH-BOUND); the hot X' store loop stays -O2
+    auto lead = [&](uint32_t t) COLD {
         const uint32_t root_q = (t - t_start) % group_q;  // root(t)
         volatile tt_l1_ptr uint32_t* cnt = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_leader);
         noc_semaphore_wait_min(cnt, chunk_size);
@@ -263,7 +268,7 @@ void kernel_main() {
 
     // ---- root work of row t (t - t_start = member_q + k*Q): the chunk sums landed in region k of cb_root_slots ->
     // compute; stats (+ hc) -> DRAM; norm: rstd -> every member ----
-    [[maybe_unused]] auto root_step = [&](uint32_t t) {
+    [[maybe_unused]] auto root_step = [&](uint32_t t) COLD {
         const auto stats_acc = TensorAccessor(stats_args, get_common_arg_val<uint32_t>(1), f32_page);
         [[maybe_unused]] const auto hc_acc = TensorAccessor(hc_args, get_common_arg_val<uint32_t>(2), f32_page);
         cb_wait_front(cb_stats, 1);

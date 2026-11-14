@@ -25,6 +25,10 @@
 //   expanded into column 0 of a cb_rstd_col page (the compute's COL broadcast), row by row. (Lagged norm knob,
 //   Refinement 3: the writer does this per row instead.)
 
+// -Os: the worker program's binaries + 2x its args / CB config must fit the 70 656 B kernel-config ring for trace
+// replays to overlap (else every launch waits for the previous one: DISPATCH-BOUND); the dataflow kernels' code speed
+// is not on the critical path (they issue NoC transfers and wait on the compute).
+#pragma GCC optimize("Os")
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 
@@ -35,7 +39,8 @@ constexpr uint32_t FACE_DIM = 16;
 
 // Copy column `col` of a 32x32 fp32 tile into column 0 of `dst` (32 words: 16 in face 0, 16 in face 2).
 // Plain (non-volatile) pointers: both are this RISC's private L1 pages, landed behind a read barrier.
-inline void copy_column_to_col0(const uint32_t* src, uint32_t col, uint32_t* dst) {
+// noinline: three call sites (post / comb / P), 24 calls a row off the critical path (kernel-config buffer budget)
+__attribute__((noinline)) void copy_column_to_col0(const uint32_t* src, uint32_t col, uint32_t* dst) {
     const uint32_t src_face_col = (col / FACE_DIM);
     const uint32_t c = col % FACE_DIM;
     for (uint32_t half = 0; half < 2; ++half) {
