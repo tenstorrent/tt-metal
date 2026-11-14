@@ -39,6 +39,12 @@ WORKFLOWS_CHANGED=false
 
 while IFS= read -r FILE; do
     case "$FILE" in
+        # tt-train's specific patterns - must come before the generic CMake catch-all.
+        tt-train/*(*/)CMakeLists.txt|tt-train/*(*/)*.@(cmake|cmake.in)|cmake/packaging.cmake)
+            CMAKE_CHANGED=true
+            TTTRAIN_CHANGED=true
+            ANY_CODE_CHANGED=true
+            ;;
         CMakeLists.txt|**/CMakeLists.txt|**/*.cmake|*.cmake.in|**/*.cmake.in|CMakePresets.json)
             CMAKE_CHANGED=true
             ANY_CODE_CHANGED=true
@@ -175,7 +181,13 @@ while IFS= read -r FILE; do
             TTNN_TESTS_CHANGED=true
             ANY_CODE_CHANGED=true
             ;;
-        tt-train/**/*.@(h|hpp|inl|c|cpp|py))
+        # The tt-train gate test lists. They are not source files but decide what the gates
+        # run, so a PR that only edits them must still build and run the train gate jobs.
+        tt-train/tests/ops/smoke_tests.txt|tt-train/tests/ops/run_smoke_tests.sh|tests/pipeline_reorg/train_pr_gate_tests.yaml|tests/pipeline_reorg/train_merge_gate_tests.yaml)
+            TTTRAIN_CHANGED=true
+            ANY_CODE_CHANGED=true
+            ;;
+        tt-train/*(*/)*.@(h|hpp|inl|c|cpp|py|fbs))
             TTTRAIN_CHANGED=true
             ANY_CODE_CHANGED=true
             ;;

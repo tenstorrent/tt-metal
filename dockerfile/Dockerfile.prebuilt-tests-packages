@@ -29,6 +29,10 @@ RUN --mount=type=bind,source=artifact,target=/tmp/pkgs \
             base=( /tmp/pkgs/tt-metalium_*.deb /tmp/pkgs/tt-metalium-jit_*.deb /tmp/pkgs/tt-metalium-validation_*.deb ); \
             product=( "/tmp/pkgs/${PRODUCT}"_*.deb "/tmp/pkgs/${PRODUCT}"-validation_*.deb ); \
             extra=() ;; \
+        smoke:tt-ml) \
+            base=( /tmp/pkgs/tt-metalium_*.deb /tmp/pkgs/tt-metalium-jit_*.deb /tmp/pkgs/tt-nn_*.deb ); \
+            product=( /tmp/pkgs/tt-ml-validation_*.deb ); \
+            extra=() ;; \
         examples:tt-metalium) \
             base=( /tmp/pkgs/tt-metalium_*.deb /tmp/pkgs/tt-metalium-jit_*.deb /tmp/pkgs/tt-metalium-dev_*.deb ); \
             product=( /tmp/pkgs/tt-metalium-examples_*.deb ); \
