@@ -34,6 +34,9 @@ def res(**kw):
     print("RES " + json.dumps(kw, default=str), flush=True)
 
 
+DEC = os.environ.get("DEC", "pool")
+
+
 def prefill(ch, dec, prompts):
     lens = [len(p) for p in prompts]
     ids = torch.full((4, CHUNK), PAD, dtype=torch.long)
@@ -43,7 +46,10 @@ def prefill(ch, dec, prompts):
     x4, _ = ch.prefill(ids)
     ttnn.synchronize_device(ch.md)
     ttnn.deallocate(x4)
-    dec.handoff(CHUNK)
+    if DEC == "pool":
+        dec.handoff(CHUNK)
+    else:
+        dec.load_prefill_cache()
     ch.reset()
     return lens
 
@@ -109,7 +115,12 @@ def main():
         ch = Hy4Chain(md, mc, ccl, ckpt=CKPT)
         ch.add_layers(0, NL, log=lambda s: None)
         ch.build_head()
-        dec = Hy4PoolDecoder(ch, 8, mode="dense")
+        if DEC == "pool":
+            dec = Hy4PoolDecoder(ch, 2048 if "longpos" in STAGES else 8, mode="dense")
+        else:
+            from models.demos.blackhole.hy4_preview.tt.hy4_decode import Hy4Decoder
+
+            dec = Hy4Decoder(ch, 2048)
         lens = prefill(ch, dec, prompts)
         res(event="built", nl=NL, lens=lens)
         ref = None
@@ -118,7 +129,10 @@ def main():
             dec.capture()
             ref = host_loop(dec, lens, STEPS)
             marg = [list(m) for m in MARG]
+            from models.demos.blackhole.hy4_preview.tt import hy4_decode as _d0
             from models.demos.blackhole.hy4_preview.tt import hy4_pool_model as _pm
+
+            _pm = _pm if DEC == "pool" else _d0
 
             _orig_rt = _pm.rope_tables
 
@@ -156,6 +170,69 @@ def main():
                 res(event="host_loop_ms", total=m(tl), set_inputs=m(ts_), run=m(tr_), readback_argmax=m(tk_))
             dec.release()
         dl = DeviceLoop(dec)
+        if "longpos" in STAGES:
+            from models.demos.blackhole.hy4_preview.tests.dev_common import pcc as _pcc
+            from models.demos.blackhole.hy4_preview.tt import hy4_pool_model as _pm2
+
+            CT = [int(c) for c in os.environ.get("CTXS", "2048,65536,262144,1048576").split(",")]
+            TOK = [1000, 2000, 3000, 4000]
+            dec.release()
+            gat = (
+                lambda t: ttnn.to_torch(t, mesh_composer=ttnn.ConcatMesh2dToTensor(md, dims=(0, 3), mesh_shape=(4, 8)))
+                .reshape(4, -1)
+                .float()
+            )
+            filled = False
+            orig = _pm2.rope_tables
+
+            def r64(positions, dim=64, theta=1e7, interleave=True):
+                pos_ = torch.as_tensor(positions, dtype=torch.float64)
+                inv = 1.0 / (theta ** (torch.arange(0, dim, 2, dtype=torch.float64) / dim))
+                ang = torch.outer(pos_, inv)
+                c_, s_ = ang.cos().float(), ang.sin().float()
+                return (
+                    (c_.repeat_interleave(2, dim=-1), s_.repeat_interleave(2, dim=-1))
+                    if interleave
+                    else (torch.cat([c_, c_], -1), torch.cat([s_, s_], -1))
+                )
+
+            for C in CT:
+                if C > 2048 and not filled:
+                    dec.fill_synthetic(max(CT) // 512 * 512, torch.Generator().manual_seed(11))
+                    filled = True
+                mode = "dense" if C <= 2048 else "topk"
+                dec.mode = mode
+                dec.ctx.set_bucket(C, mode)
+                dec.set_inputs(TOK, [C - 1] * 4)
+                dec.capture()
+                dec.run()
+                lgA = gat(dec.out)
+                _pm2.rope_tables = r64
+                dec.set_inputs(TOK, [C - 1] * 4)
+                dec.run()
+                lgB = gat(dec.out)
+                _pm2.rope_tables = orig
+                dec.release()
+                dl.capture_split(["G"])
+                dl.load_inputs(TOK, [C - 1] * 4)
+                ttnn.execute_trace(md, dl.trace, cq_id=0, blocking=False)
+                ttnn.synchronize_device(md)
+                lgC = gat(dl.out)
+                dl.release()
+                tvB = lgB.topk(2, dim=-1).values
+                res(
+                    event="longpos",
+                    ctx=C,
+                    mode=mode,
+                    pcc_hostfp32_vs_fp64=[round(_pcc(lgA[r], lgB[r]), 6) for r in range(4)],
+                    pcc_device_vs_fp64=[round(_pcc(lgC[r], lgB[r]), 6) for r in range(4)],
+                    maxabs_hostfp32_vs_fp64=round(float((lgA - lgB).abs().max()), 4),
+                    maxabs_device_vs_fp64=round(float((lgC - lgB).abs().max()), 4),
+                    argmax_equal_hostfp32_fp64=int((lgA.argmax(-1) == lgB.argmax(-1)).sum()),
+                    argmax_equal_device_fp64=int((lgC.argmax(-1) == lgB.argmax(-1)).sum()),
+                    top1_margin_fp64=[round(float(tvB[r, 0] - tvB[r, 1]), 4) for r in range(4)],
+                )
+            return
         variants = ["G"]
         if {"sample", "same"} & set(STAGES):
             variants += os.environ.get("VARS", "S,Fp,F").split(",")
@@ -426,25 +503,37 @@ def main():
                         ms_per_replay_incl_read=round(dt, 3),
                     )
         if "same" in STAGES:
-            # identical prompts in the 4 rows, same seed everywhere: sampled tokens must be equal across rows (slot independence of the whole chain incl. the sampler); different seeds differ; repeat is exact
+            # identical prompts in the 4 rows, same seed everywhere: the sampled tokens must be equal across rows (slot independence of the whole chain incl. the sampler) when every row is fed the same token
+            # (teacher forced: autoregression would amplify one numerical flip); different seeds differ; a repeat is exact
             dl.release()
             lens2 = prefill(ch, dec, [prompts[0]] * 4)
             dl.capture(variants)
-            for var, (T, k, p) in {"S": (0.9, 20, 1.0), "Fp": (0.9, 0, 1.0)}.items():
+            feed = [7] + [
+                int(x) for x in torch.randint(1000, 100000, (23,), generator=torch.Generator().manual_seed(3))
+            ]
+            for var, (T, k, p) in {"S": (0.9, 20, 1.0), "Fp": (0.9, 0, 1.0), "F": (0.9, 50, 0.9)}.items():
                 if var not in dl.ftid:
                     continue
                 for seeds, label in (([11, 11, 11, 11], "same_seed"), ([11, 12, 13, 14], "diff_seeds")):
                     dl.set_sampling([T] * 4, [k] * 4, [p] * 4, seeds)
-                    a, _, _ = run_dev(24, var, tokens=[7] * 4, pos=lens2)
-                    b, _, _ = run_dev(24, var, tokens=[7] * 4, pos=lens2)
-                    eq_rows = sum(1 for s in a if len(set(s)) == 1)
+
+                    def tf_run():
+                        out = []
+                        for st in range(24):
+                            dl.load_inputs([feed[st]] * 4, [lens2[0] + st] * 4)
+                            dl.submit(var)
+                            out.append(dl.tokens(dl.read_async()))
+                        return out
+
+                    a_, b_ = tf_run(), tf_run()
+                    eq_rows = sum(1 for x in a_ if len(set(x)) == 1)
                     res(
                         event="T2_slot_independence",
                         variant=var,
                         seeds=label,
                         steps_with_all_rows_equal=f"{eq_rows}/24",
-                        repeat_identical=a == b,
-                        stream_row0=[s[0] for s in a[:8]],
+                        repeat_identical=a_ == b_,
+                        stream_row0=[x[0] for x in a_[:8]],
                     )
         if "perf" in STAGES:
             for var in [v for v in variants if v in dl.ftid]:

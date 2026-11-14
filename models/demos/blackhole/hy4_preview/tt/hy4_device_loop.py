@@ -378,6 +378,19 @@ class DeviceLoop:
         ch = self.ch
         ch.mc.allgather(self.dummy_rm, ch.ccl, axis=1, dim=2)
 
+    def sample_first(self, logits, temperature, top_k, top_p, seed, pos):
+        """EAGER (prefill, not traced): the first token of one request from its last-prompt-token logits [1,1,1,SHARD] (all four mesh rows compute the same draw from the request's own row, the caller reads its row).
+        Same sampler bodies and RNG convention as decode (draw = f(seed, position of the token the logits belong to)); clobbers pos / seed / params (the plugin reloads them at the next decode).
+        """
+        t4, k4, p4 = [float(temperature)] * ROWS, [int(top_k)] * ROWS, [float(top_p)] * ROWS
+        self.load_inputs([0] * ROWS, [pos] * ROWS)
+        v = self.set_sampling(t4, k4, p4, [int(seed)] * ROWS)
+        if v == "G":
+            return self.greedy_v2(logits)
+        if v == "S":
+            return self.shared(logits)
+        return self.full(logits, plain=(v == "Fp"))
+
     def submit(self, variant="G"):
         """one decode step, non-blocking: step trace then the sampler trace; nothing is uploaded."""
         if getattr(self, "ftid", None) and variant in self.ftid:

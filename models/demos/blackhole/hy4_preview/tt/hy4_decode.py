@@ -102,7 +102,8 @@ class Hy4Decoder:
 
     def load_prefill_cache_rows(self, rows):
         """serving hand-off: like ``load_prefill_cache`` but ONLY the mesh rows ``rows`` take the prefill caches; the decode caches of the other rows (running requests) stay as they are.
-        Per-row blend kc <- kc * (1 - m) + new * m with m = 1 on the chosen rows (exact for m in {0, 1} while both operands are finite)."""
+        Per-row blend kc <- kc * (1 - m) + new * m with m = 1 on the chosen rows (exact for m in {0, 1} while both operands are finite).
+        """
         m = torch.zeros(ROWS, 1, 1, 1)
         for r in rows:
             m[r] = 1.0
@@ -219,6 +220,12 @@ class Hy4Decoder:
         self.out = self.step()
         ttnn.end_trace_capture(self.md, self.trace, cq_id=0)
         ttnn.synchronize_device(self.md)
+
+    def release(self):
+        if self.trace is not None:
+            ttnn.release_trace(self.md, self.trace)
+            self.trace = None
+            self.out = None
 
     def run(self):
         ttnn.execute_trace(self.md, self.trace, cq_id=0, blocking=False)
