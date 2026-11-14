@@ -77,11 +77,14 @@ def main():
         res(event="trace_captured", sec=round(time.time() - t0, 1), **dram_view(md))
         dram0 = dram_view(md)
         times = []
+        keep = []
         for s in range(NSTEPS):
             dec.set_inputs([t[-1] for t in toks], pos)
             t1 = time.perf_counter()
             out = dec.run()
-            nxt, _ = dec.read_argmax(out)
+            nxt, lgs = dec.read_argmax(out)
+            if s < 8:
+                keep.append(lgs.clone())
             times.append(time.perf_counter() - t1)
             for r in range(4):
                 toks[r].append(nxt[r])
@@ -101,6 +104,27 @@ def main():
             l1=l1_view(md),
         )
         json.dump({"prompts": prompts, "generated": toks, "lens": lens}, open(f"{OUT}/decode_tokens_{TAG}.json", "w"))
+        # consistency: decode logits of the first 8 steps vs the chain PREFILL path on prompt + generated tokens (same device, teacher forced)
+        K = 8
+        ids2 = torch.full((4, CHUNK), PAD, dtype=torch.long)
+        for r in range(4):
+            seq = list(prompts[r]) + toks[r][:K]
+            ids2[r, : len(seq)] = torch.tensor(seq)
+        ch.reset()
+        x4b, _ = ch.prefill(ids2)
+        _, lgb = ch.head(x4b)
+        lgb = (
+            ttnn.to_torch(lgb, mesh_composer=ttnn.ConcatMesh2dToTensor(md, dims=(0, 3), mesh_shape=tuple(md.shape)))
+            .reshape(4, CHUNK, -1)
+            .float()
+        )
+        for r in range(4):
+            pcs, agree = [], []
+            for j in range(K):
+                ref = lgb[r, lens[r] + j]
+                pcs.append(round(pcc(keep[j][r], ref), 4))
+                agree.append(int(keep[j][r].argmax()) == int(ref.argmax()))
+            res(event="decode_vs_prefill", row=r, pcc=pcs, argmax_agree=agree)
         # device-time of the traced step only (no host argmax / input copies)
         ttnn.synchronize_device(md)
         t1 = time.perf_counter()
