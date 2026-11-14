@@ -295,10 +295,10 @@ struct noc_traits_t<ShardView<Accessor>> {
     }
 };
 
-// ShardView::Shard: offset_bytes into a shard whose NoC address ShardView::shard already looked up.
+// ShardView::ResolvedShard: offset_bytes into a shard whose NoC address ShardView::shard already looked up.
 template <typename Accessor>
 struct noc_traits_t<tensor_accessor::detail::ShardEndpoint<Accessor>> {
-    using Shard = tensor_accessor::detail::ShardEndpoint<Accessor>;
+    using ResolvedShard = tensor_accessor::detail::ShardEndpoint<Accessor>;
     struct src_args_type {
         uint32_t offset_bytes = 0;
     };
@@ -306,14 +306,16 @@ struct noc_traits_t<tensor_accessor::detail::ShardEndpoint<Accessor>> {
         uint32_t offset_bytes = 0;
     };
     template <Noc::AddressType address_type>
-    static uint64_t src_addr(const Shard& src, const Noc& noc, const src_args_type& args) {
-        static_assert(address_type == Noc::AddressType::NOC, "ShardView::Shard can only be the NoC side of a transfer");
+    static uint64_t src_addr(const ResolvedShard& src, const Noc& noc, const src_args_type& args) {
+        static_assert(
+            address_type == Noc::AddressType::NOC, "ShardView::ResolvedShard can only be the NoC side of a transfer");
         ASSERT(src.noc_ == noc.get_noc_id());
         return add_offset(src.noc_addr_, args.offset_bytes);
     }
     template <Noc::AddressType address_type>
-    static uint64_t dst_addr(const Shard& dst, const Noc& noc, const dst_args_type& args) {
-        static_assert(address_type == Noc::AddressType::NOC, "ShardView::Shard can only be the NoC side of a transfer");
+    static uint64_t dst_addr(const ResolvedShard& dst, const Noc& noc, const dst_args_type& args) {
+        static_assert(
+            address_type == Noc::AddressType::NOC, "ShardView::ResolvedShard can only be the NoC side of a transfer");
         ASSERT(dst.noc_ == noc.get_noc_id());
         return add_offset(dst.noc_addr_, args.offset_bytes);
     }

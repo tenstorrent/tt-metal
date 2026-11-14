@@ -904,7 +904,7 @@ template <typename Accessor>
 struct ShardView;
 
 namespace tensor_accessor::detail {
-// ShardView<Accessor>::Shard (see there). Only ShardView makes one and only the NoC traits read it.
+// ShardView<Accessor>::ResolvedShard (see there). Only ShardView makes one and only the NoC traits read it.
 template <typename Accessor>
 class ShardEndpoint {
     friend struct ShardView<Accessor>;
@@ -928,13 +928,13 @@ struct ShardView {
         return accessor.get_shard_noc_addr(shard_id, offset, noc);
     }
 
-    // One shard of the tensor, looked up once: a NoC endpoint whose transfers take `{.offset_bytes}` into the shard.
+    // The shard's resolved NoC address, looked up once. Transfers take `{.offset_bytes}` into the shard.
     // A kernel that moves many pieces of one shard pays the shard lookup once per shard instead of once per transfer.
     // Valid only on the NoC it was looked up for.
-    using Shard = tensor_accessor::detail::ShardEndpoint<Accessor>;
+    using ResolvedShard = tensor_accessor::detail::ShardEndpoint<Accessor>;
     // The lookup is in software: it runs once per shard, so there is nothing for the address generator to walk.
-    Shard shard(uint32_t shard_id, uint8_t noc) const {
-        return Shard(tensor_accessor::detail::TransferAccess::shard(accessor, shard_id, 0, noc), noc);
+    ResolvedShard shard(uint32_t shard_id, uint8_t noc) const {
+        return ResolvedShard(tensor_accessor::detail::TransferAccess::shard(accessor, shard_id, 0, noc), noc);
     }
 };
 

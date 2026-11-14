@@ -101,7 +101,7 @@ Endpoints are used as sources or destinations for the `Noc` interface. Depending
 - `MulticastEndpoint` - For multicast NoC addresses
 - `TensorAccessor` / `PageView(accessor)` - For a tensor by page id: `{.page_id, .offset_bytes}`. The default for tensor transfers
 - `ShardView(accessor)` - For a sharded tensor by shard id: `{.shard_id, .offset_bytes}`
-- `ShardView::Shard` (from `ShardView(accessor).shard(shard_id, noc)`) - One shard of a tensor, looked up once: `{.offset_bytes}`. See [Addressing a Tensor by Page or Shard](#addressing-a-tensor-by-page-or-shard) for when to use each
+- `ShardView::ResolvedShard` (from `ShardView(accessor).shard(shard_id, noc)`) - One shard of a tensor, looked up once: `{.offset_bytes}`. See [Addressing a Tensor by Page or Shard](#addressing-a-tensor-by-page-or-shard) for when to use each
 - `BankView(accessor)` - For a tensor by allocator bank: `{.bank_id, .offset_bytes}`; see [Addressing a Tensor by Bank](#addressing-a-tensor-by-bank)
 - `AllocatorBank<AllocatorBankType>` - Legacy raw bank addressing (`{.bank_id, .addr}` with an absolute bank address), for buffers not bound as a tensor. Prefer `BankView`.
 
@@ -564,12 +564,12 @@ recorded for op-to-op R/W inference. Pick the form by how the kernel's work is o
 |---|---|---|
 | `accessor` or `PageView(accessor)` | `{.page_id, .offset_bytes}` | The kernel works in pages. This is the default: the same kernel works for interleaved and sharded tensors. A transfer stays inside one page. |
 | `ShardView(accessor)` | `{.shard_id, .offset_bytes}` | The kernel is built around shard ownership: it gathers from or scatters to the cores that own the tensor's shards, and moves byte ranges within a shard that are not whole pages (part of a page, or a run of pages in one transfer, which is valid because a shard is contiguous on its core). Each transfer typically names a different shard. Sharded tensors only. |
-| `ShardView::Shard`, from `ShardView(accessor).shard(shard_id, noc)` | `{.offset_bytes}` | As for `ShardView`, but the kernel makes many transfers into the same shard. The shard is looked up once, when the kernel moves onto it, and each transfer only adds its offset. |
+| `ShardView::ResolvedShard`, from `ShardView(accessor).shard(shard_id, noc)` | `{.offset_bytes}` | As for `ShardView`, but the kernel makes many transfers into the same shard. The shard is looked up once, when the kernel moves onto it, and each transfer only adds its offset. |
 
-- `offset_bytes` must stay inside the page (`PageView`) or the shard (`ShardView`, `ShardView::Shard`).
-- A `ShardView::Shard` is valid only on the NoC it was looked up for, can only be the NoC side of a transfer, and does
+- `offset_bytes` must stay inside the page (`PageView`) or the shard (`ShardView`, `ShardView::ResolvedShard`).
+- A `ShardView::ResolvedShard` is valid only on the NoC it was looked up for, can only be the NoC side of a transfer, and does
   not expose its address.
-- When each transfer names a different shard, use `ShardView` rather than a `ShardView::Shard` per transfer: on Quasar,
+- When each transfer names a different shard, use `ShardView` rather than a `ShardView::ResolvedShard` per transfer: on Quasar,
   `ShardView` lookups can be served by the hardware address generator.
 
 **Legacy API** (host sends each shard core's coordinates; the kernel adds the tensor's base address):
