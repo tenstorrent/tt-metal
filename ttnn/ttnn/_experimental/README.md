@@ -18,7 +18,7 @@ To add a new experimental module:
 
 ## Example
 
-The `moe` module in this directory can be imported as:
+The `moe_compute_utils` module in this directory can be imported as:
 ```python
 from ttnn.experimental.moe_compute_utils import cluster_distance
 # or
