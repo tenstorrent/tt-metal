@@ -483,3 +483,33 @@ def test_grid_sample_nearest_batched_work_partition(
     torch.testing.assert_close(ttnn.to_torch(output), expected, atol=0, rtol=0)
     # A previous overrun corrupted the grid allocation and affected subsequent operations.
     assert torch.equal(ttnn.to_torch(grid_device).view(torch.int16), ttnn.to_torch(grid_host).view(torch.int16))
+
+
+# One point per row: 4-byte raw grid rows and 12-byte precomputed rows, below the 16-byte L1 shard pitch.
+@pytest.mark.parametrize("mode, use_precomputed_grid", [("bilinear", False), ("bilinear", True), ("nearest", True)])
+def test_grid_sample_sharded_grid_unaligned_rows(device, mode, use_precomputed_grid):
+    torch.manual_seed(42)
+    input_tensor = torch.randn(1, 8, 16, 32).to(torch.bfloat16)
+    # Dyadic points keep bilinear weights exact; nearest needs points off the rounding ties.
+    grid = (
+        torch.randint(-12, 13, (1, 4, 8, 2)).float() / 8 if mode == "bilinear" else torch.rand(1, 4, 8, 2) * 1.8 - 0.9
+    )
+    expected = golden_grid_sample(input_tensor, grid, mode=mode, align_corners=False)
+    grid_host = ttnn.from_torch(grid, dtype=ttnn.float32 if use_precomputed_grid else ttnn.bfloat16)
+    if use_precomputed_grid:
+        grid_host = ttnn.prepare_grid_sample_grid(
+            grid_host, list(input_tensor.shape), mode=mode, align_corners=False, output_dtype=ttnn.bfloat16
+        )
+    memory_config = ttnn.create_sharded_memory_config(
+        (16, grid_host.shape[-1]),
+        ttnn.CoreGrid(y=1, x=2),
+        ttnn.ShardStrategy.HEIGHT,
+        ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    grid_device = ttnn.to_memory_config(ttnn.to_device(grid_host, device), memory_config)
+    input_device = ttnn.from_torch(input_tensor, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
+    output = ttnn.grid_sample(
+        input_device, grid_device, mode=mode, align_corners=False, use_precomputed_grid=use_precomputed_grid
+    )
+    torch.testing.assert_close(ttnn.to_torch(output), expected, atol=0.02, rtol=0.02)
