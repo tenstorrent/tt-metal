@@ -305,6 +305,14 @@ Tensor gather_dispatch(
         input_tensor_rank,
         index_tensor_rank);
 
+    // Checked on the caller's tensors: the transforms below would otherwise fail on the tile first, or carry it
+    // into the native factory, whose buffers are sized for 32x32 tiles and whose output always gets one.
+    ttnn::prim::validate_gather_tile_shape(input_tensor, "the input tensor");
+    ttnn::prim::validate_gather_tile_shape(input_index_tensor, "the index tensor");
+    if (optional_output_tensor.has_value()) {
+        ttnn::prim::validate_gather_tile_shape(*optional_output_tensor, "the output tensor");
+    }
+
     // Check for early exit for empty tensors tensors
     if (original_input_tensor_lshape == ttnn::Shape{}) {
         return input_tensor;

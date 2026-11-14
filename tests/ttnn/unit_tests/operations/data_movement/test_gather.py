@@ -660,6 +660,27 @@ def test_gather_rank_mismatch(input_shape, index_shape, device, expect_error):
         ttnn.gather(ttnn_input, -1, index=ttnn_index)
 
 
+@pytest.mark.parametrize("operand", ["input", "index", "output"])
+@pytest.mark.parametrize("tile", [[16, 32], [32, 16]], ids=["16x32", "32x16"])
+@pytest.mark.parametrize("dim", [-1, -2])
+def test_gather_rejects_non_32x32_tile(device, operand, tile, dim, expect_error):
+    input = torch.randn([2, 1, 64, 128], dtype=torch.bfloat16)
+    index = torch.randint(0, input.shape[dim], [2, 1, 64, 128], dtype=torch.int32)
+
+    def tile_for(name):
+        return ttnn.Tile(tile) if operand == name else ttnn.Tile([32, 32])
+
+    ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, tile=tile_for("input"), device=device)
+    ttnn_index = ttnn.from_torch(index, ttnn.uint32, layout=ttnn.TILE_LAYOUT, tile=tile_for("index"), device=device)
+    ttnn_output = None
+    if operand == "output":
+        ttnn_output = ttnn.from_torch(
+            torch.zeros_like(input), ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, tile=ttnn.Tile(tile), device=device
+        )
+    with expect_error(RuntimeError, f"has a {tile[0]}x{tile[1]} tile"):
+        ttnn.gather(ttnn_input, dim, index=ttnn_index, out=ttnn_output)
+
+
 def test_gather_rejects_row_major_out_for_tile_input(device, expect_error):
     torch.manual_seed(0)
     input = torch.randn(1, 1, 32, 64, dtype=torch.bfloat16)
