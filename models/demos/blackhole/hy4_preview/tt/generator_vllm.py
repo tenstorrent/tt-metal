@@ -89,7 +89,7 @@ class HYV4ForCausalLM:
             )
         return cls(mesh_device, max_batch_size, max_seq_len, tcap)
 
-    def __init__(self, mesh_device, max_num_seqs, max_seq_len, tcap):
+    def __init__(self, mesh_device, max_num_seqs, max_seq_len, tcap, *, vllm_config=None):  # vllm_config: vLLM's text-generation protocol check wants the keyword
         from models.demos.blackhole.hy4_preview.tt.hy4_chain import Hy4Chain, dram_view
         from models.demos.blackhole.hy4_preview.tt.hy4_decode import Hy4Decoder
         from models.demos.gpt_oss.config import mesh_4x8
