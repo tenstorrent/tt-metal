@@ -4,8 +4,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from models.demos.deepseek_v3_b1.demo.runner import run_generation
 
 
@@ -90,7 +88,7 @@ def test_run_generation_uses_bos_for_empty_prompt():
     assert result.generated_token_ids == [8, 9]
 
 
-def test_run_generation_stops_model_if_decode_raises():
+def test_run_generation_stops_model_if_decode_raises(expect_error):
     tokenizer = FakeTokenizer(prompt_tokens=[3], bos_token_id=1)
 
     class FailingModel(FakeModel):
@@ -100,7 +98,7 @@ def test_run_generation_stops_model_if_decode_raises():
 
     model = FailingModel(decode_outputs=[4])
 
-    with pytest.raises(RuntimeError, match="decode failed"):
+    with expect_error(RuntimeError, "decode failed"):
         run_generation(
             model=model,
             tokenizer=tokenizer,
@@ -114,11 +112,11 @@ def test_run_generation_stops_model_if_decode_raises():
     assert model.stopped
 
 
-def test_run_generation_rejects_negative_max_new_tokens():
+def test_run_generation_rejects_negative_max_new_tokens(expect_error):
     tokenizer = FakeTokenizer(prompt_tokens=[1], bos_token_id=1)
     model = FakeModel(decode_outputs=[])
 
-    with pytest.raises(ValueError, match="max_new_tokens must be >= 0"):
+    with expect_error(ValueError, "max_new_tokens must be >= 0"):
         run_generation(
             model=model,
             tokenizer=tokenizer,
