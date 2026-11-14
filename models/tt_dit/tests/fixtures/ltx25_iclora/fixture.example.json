@@ -1,0 +1,153 @@
+{
+  "schema_version": 1,
+  "resolved": false,
+  "assets": {
+    "transformer": {
+      "path": null,
+      "sha256": null,
+      "revision": null,
+      "model_version": "2.5",
+      "kind": "fused_ingredients09"
+    },
+    "text_encoder": {
+      "path": null,
+      "sha256": null,
+      "revision": null,
+      "model_version": "2.5",
+      "kind": "gemma4"
+    },
+    "video_vae": {
+      "path": null,
+      "sha256": null,
+      "revision": null,
+      "model_version": "2.5",
+      "kind": "conv"
+    },
+    "audio_vae": {
+      "path": null,
+      "sha256": null,
+      "revision": null,
+      "model_version": "2.5",
+      "kind": "audio"
+    },
+    "upsampler": {
+      "path": null,
+      "sha256": null,
+      "revision": null,
+      "model_version": "2.5",
+      "kind": "spatial_x2"
+    }
+  },
+  "fusion": {
+    "fused_sha256": null,
+    "base": {
+      "sha256": null,
+      "revision": null
+    },
+    "adapter": {
+      "repo": "Lightricks/LTX-2.5-22b-IC-LoRA-Ingredients",
+      "revision": "5f83f6f7e5e6cd6eadfade02a57f03b9212d6434",
+      "sha256": "ff873a5beada3c579a8137c7c53343916f78bcc9a529ba910143073fe8715e95",
+      "size_bytes": 1308787472,
+      "scale": 1.0
+    },
+    "recipe": {
+      "tool": null,
+      "revision": null,
+      "description": null
+    }
+  },
+  "reference": {
+    "path": null,
+    "sha256": null,
+    "permission": null
+  },
+  "generation": {
+    "mode": "r2v",
+    "quality_variant": "ingredients09-full-reference-conv-default",
+    "height": 512,
+    "width": 768,
+    "num_frames": 121,
+    "ref_frames": 121,
+    "fps": 24,
+    "reference_strength": 1.0,
+    "pin_s1_strength": 1.0,
+    "pin_s2_strength": 1.0,
+    "sampler": "deterministic_euler_s1_ref_s2_ref",
+    "s1_sigmas": [
+      1.0,
+      0.99375,
+      0.9875,
+      0.98125,
+      0.975,
+      0.909375,
+      0.725,
+      0.421875,
+      0.0
+    ],
+    "s2_sigmas": [
+      0.909375,
+      0.725,
+      0.421875,
+      0.0
+    ]
+  },
+  "environment": {
+    "LTX_REF_IMG0": "s2",
+    "LTX_REF_STILL_ENCODE": "1",
+    "LTX_KF_APPEND_TOKEN": "0",
+    "LTX_REF_FL_END_HOLD": "0",
+    "LTX_REF_FL_END_GUIDE": "",
+    "LTX_S1_SIGMAS": "",
+    "LTX_S2_SIGMAS": "",
+    "LTX_KEYFRAME_S1_SIGMAS": "",
+    "LTX_KEYFRAME_S1_STRENGTH": "0.5",
+    "LTX_KEYFRAME_S1_STRENGTH_COARSE": "0.25",
+    "LTX_KF_TRACE_PAD": "0",
+    "LTX_KF_TRACE_ANCHORS": "",
+    "LTX_QUANT": "",
+    "LTX_VIDEO_ONLY": "0",
+    "LTX_PROFILE_DENOISE_ONLY": "0",
+    "LTX_ITER_FAST": "0",
+    "LTX_GEN_EAGER_STAGES": "",
+    "LTX_WARMUP_T2V_ONLY": "0",
+    "LTX_WARMUP_ENCODERS": "1",
+    "LTX_WARMUP_CAPTURE": "1",
+    "LTX_S2_PROMPT_REUSE": "1",
+    "LTX_YUV_EXPORT": "1",
+    "LTX_ASYNC_EXPORT": "1",
+    "LTX_AUDIO_OVERLAP": "1",
+    "LTX_UPSAMPLER_RESIDENT": "1",
+    "LTX_DEVICE_PROMPT_HANDOFF": "0",
+    "LTX_EULER_TAIL_TRACE": "0",
+    "LTX_ITER_DIT_RESIDENT": "0",
+    "LTX_VAE_ENCODER_HOST": "0",
+    "LTX25_VAE_FALLBACK_23": "0",
+    "LTX25_TEXT_STACK": "gemma4",
+    "RUN_I2V": "1"
+  },
+  "acceptance": {
+    "prompt": null,
+    "seeds": [
+      10,
+      11,
+      12
+    ],
+    "first_frame": {
+      "path": null,
+      "sha256": null,
+      "permission": null
+    },
+    "last_frame": {
+      "path": null,
+      "sha256": null,
+      "permission": null
+    },
+    "quality_reference": {
+      "kind": "primary_recipe",
+      "revision": null,
+      "uri": null
+    },
+    "criteria": null
+  }
+}

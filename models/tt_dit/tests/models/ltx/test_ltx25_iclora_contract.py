@@ -2,7 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 """CPU contract tests: real public wrapper, synthetic assets, no native imports."""
-import copy
 import hashlib
 import importlib.util
 import json
@@ -51,9 +50,15 @@ def contract(tmp_path, monkeypatch):
     fixture["fusion"]["base"] = {"sha256": "b" * 64, "revision": "b" * 40}
     fixture["fusion"]["recipe"] = {"tool": "synthetic-test-only", "revision": "c" * 40, "description": "test double"}
     fixture["reference"].update(bind("sheet", True), permission="synthetic test image")
-    fixture["generation"].update(height=128, width=128, num_frames=9, ref_frames=9, quality_variant="synthetic-test-only")
+    fixture["generation"].update(
+        height=128, width=128, num_frames=9, ref_frames=9, quality_variant="synthetic-test-only"
+    )
     fixture["acceptance"].update(prompt="synthetic", seeds=[10, 11, 12], criteria="synthetic tests only")
-    fixture["acceptance"]["quality_reference"] = {"kind": "primary_recipe", "revision": "d" * 40, "uri": "synthetic:test"}
+    fixture["acceptance"]["quality_reference"] = {
+        "kind": "primary_recipe",
+        "revision": "d" * 40,
+        "uri": "synthetic:test",
+    }
     fixture["acceptance"]["first_frame"] = dict(bind("first", True), permission="synthetic")
     fixture["acceptance"]["last_frame"] = dict(bind("last", True), permission="synthetic")
     path = tmp_path / "fixture.json"
@@ -114,7 +119,18 @@ def test_fused_conv_warmup_and_r2v_wiring(contract):
     assert pipe.generate_r2v("hello", first_frame=first, last_frame=last, seed=42) is c.native.result
     prompt, kw = c.native.calls[-1]
     assert prompt == "hello"
-    assert kw == dict(output_path=None, output_type="rgb", images=[(first, 0, 1.0, 1.0), (last, 8, 1.0, 1.0)], reference_video=(c.fixture["reference"]["path"], 1.0), ref_frames=9, num_frames=9, height=128, width=128, fps=24, seed=42)
+    assert kw == dict(
+        output_path=None,
+        output_type="rgb",
+        images=[(first, 0, 1.0, 1.0), (last, 8, 1.0, 1.0)],
+        reference_video=(c.fixture["reference"]["path"], 1.0),
+        ref_frames=9,
+        num_frames=9,
+        height=128,
+        width=128,
+        fps=24,
+        seed=42,
+    )
     assert pipe.generate_r2v("export", seed=1, output_path="once.mp4") == "once.mp4"
     assert len(c.native.calls) == 2
     for output_type in ("float", "yuv"):
@@ -125,24 +141,37 @@ def test_fused_conv_warmup_and_r2v_wiring(contract):
     assert pipe.resolved_fixture["generation"]["fps"] == 24
 
 
-@pytest.mark.parametrize("target,value", [
-    (("resolved",), False), (("schema_version",), 2),
-    (("assets", "video_vae", "kind"), "diffusion"), (("assets", "video_vae", "model_version"), "2.3"),
-    (("assets", "transformer", "sha256"), "0" * 64), (("fusion", "fused_sha256"), "0" * 64),
-    (("fusion", "adapter", "sha256"), "0" * 64), (("fusion", "adapter", "size_bytes"), 1),
-    (("fusion", "recipe", "revision"), None), (("reference", "permission"), ""),
-    (("generation", "height"), 127), (("generation", "num_frames"), 8),
-    (("generation", "ref_frames"), 17), (("generation", "fps"), float("nan")),
-    (("generation", "sampler"), "ancestral"), (("generation", "s1_sigmas"), [1, 0]),
-    (("generation", "reference_strength"), -1), (("generation", "pin_s2_strength"), 2),
-    (("acceptance", "seeds"), [1]), (("environment", "LTX_REF_IMG0"), "1"),
-])
+@pytest.mark.parametrize(
+    "target,value",
+    [
+        (("resolved",), False),
+        (("schema_version",), 2),
+        (("assets", "video_vae", "kind"), "diffusion"),
+        (("assets", "video_vae", "model_version"), "2.3"),
+        (("assets", "transformer", "sha256"), "0" * 64),
+        (("fusion", "fused_sha256"), "0" * 64),
+        (("fusion", "adapter", "sha256"), "0" * 64),
+        (("fusion", "adapter", "size_bytes"), 1),
+        (("fusion", "recipe", "revision"), None),
+        (("reference", "permission"), ""),
+        (("generation", "height"), 127),
+        (("generation", "num_frames"), 8),
+        (("generation", "ref_frames"), 17),
+        (("generation", "fps"), float("nan")),
+        (("generation", "sampler"), "ancestral"),
+        (("generation", "s1_sigmas"), [1, 0]),
+        (("generation", "reference_strength"), -1),
+        (("generation", "pin_s2_strength"), 2),
+        (("acceptance", "seeds"), [1]),
+        (("environment", "LTX_REF_IMG0"), "1"),
+    ],
+)
 def test_invalid_fixture_rejected_before_native(contract, target, value):
     node = contract.fixture
     for key in target[:-1]:
         node = node[key]
     node[target[-1]] = value
-    with pytest.raises((ValueError, FileNotFoundError)):
+    with pytest.raises((ValueError, FileNotFoundError)):  # allow-pytest.raises: CPU-only run excludes native conftest
         contract.create()
     assert not hasattr(contract.native, "factory")
 
@@ -150,29 +179,41 @@ def test_invalid_fixture_rejected_before_native(contract, target, value):
 def test_bare_base_and_mutated_file_rejected(contract):
     c = contract
     c.fixture["fusion"]["base"]["sha256"] = c.fixture["assets"]["transformer"]["sha256"]
-    with pytest.raises(ValueError, match="base"):
+    with pytest.raises(ValueError, match="base"):  # allow-pytest.raises: CPU-only run excludes native conftest
         c.create()
     c.fixture["fusion"]["base"]["sha256"] = "b" * 64
     Path(c.fixture["assets"]["audio_vae"]["path"]).write_bytes(b"changed")
-    with pytest.raises(ValueError, match="digest"):
+    with pytest.raises(ValueError, match="digest"):  # allow-pytest.raises: CPU-only run excludes native conftest
         c.create()
 
 
-@pytest.mark.parametrize("option", ["transformer", "fps", "diffusion_decoder", "extra_transformer_variants", "run_warmup", "pipeline_class"])
+@pytest.mark.parametrize(
+    "option", ["transformer", "fps", "diffusion_decoder", "extra_transformer_variants", "run_warmup", "pipeline_class"]
+)
 def test_runtime_override_rejected(contract, option):
-    with pytest.raises(ValueError, match="runtime"):
+    with pytest.raises(ValueError, match="runtime"):  # allow-pytest.raises: CPU-only run excludes native conftest
         contract.create(**{option: True})
 
 
-@pytest.mark.parametrize("name,value", [("LTX_KF_APPEND_TOKEN", "True"), ("LTX25_VAE_FALLBACK_23", "1"), ("LTX25_TEXT_STACK", "gemma3"), ("LTX_S1_SIGMAS", "1,0"), ("LTX_VIDEO_ONLY", "1"), ("LTX_UNKNOWN_RECIPE", "1")])
+@pytest.mark.parametrize(
+    "name,value",
+    [
+        ("LTX_KF_APPEND_TOKEN", "True"),
+        ("LTX25_VAE_FALLBACK_23", "1"),
+        ("LTX25_TEXT_STACK", "gemma3"),
+        ("LTX_S1_SIGMAS", "1,0"),
+        ("LTX_VIDEO_ONLY", "1"),
+        ("LTX_UNKNOWN_RECIPE", "1"),
+    ],
+)
 def test_inherited_overrides_and_post_creation_drift_rejected(contract, monkeypatch, name, value):
     pipe = contract.create()
     monkeypatch.setenv(name, value)
-    with pytest.raises(ValueError, match="environment"):
+    with pytest.raises(ValueError, match="environment"):  # allow-pytest.raises: CPU-only run excludes native conftest
         contract.create()
-    with pytest.raises(ValueError, match="environment"):
+    with pytest.raises(ValueError, match="environment"):  # allow-pytest.raises: CPU-only run excludes native conftest
         pipe.generate_r2v("x", seed=1)
-    with pytest.raises(ValueError, match="environment"):
+    with pytest.raises(ValueError, match="environment"):  # allow-pytest.raises: CPU-only run excludes native conftest
         pipe.warmup_buffers()
     assert not contract.native.calls
 
@@ -203,7 +244,7 @@ def test_failure_or_interrupt_cannot_leave_stale_or_unbounded_state(contract, er
     for i in range(5):
         first = c.bind("failure" + str(i), True)["path"]
         c.native.error = error
-        with pytest.raises(type(error)):
+        with pytest.raises(type(error)):  # allow-pytest.raises: CPU-only run excludes native conftest
             pipe.generate_r2v("x", first_frame=first, seed=i)
         assert not c.native._i2v_cond_cache
         assert not pipe._endpoint_digests
@@ -213,18 +254,18 @@ def test_reference_mutation_fl2v_and_bad_endpoint(contract):
     c = contract
     c.fixture["generation"]["mode"] = "fl2v"
     pipe = c.create()
-    with pytest.raises(ValueError, match="both"):
+    with pytest.raises(ValueError, match="both"):  # allow-pytest.raises: CPU-only run excludes native conftest
         pipe.generate_r2v("x", seed=1)
     first = c.fixture["acceptance"]["first_frame"]["path"]
     Image.new("RGB", (64, 64)).save(first)
-    with pytest.raises(ValueError, match="geometry"):
+    with pytest.raises(ValueError, match="geometry"):  # allow-pytest.raises: CPU-only run excludes native conftest
         pipe.generate_r2v("x", seed=1, first_frame=first, last_frame=first)
     Image.new("RGB", (128, 128), "blue").save(c.fixture["reference"]["path"])
-    with pytest.raises(ValueError, match="digest"):
+    with pytest.raises(ValueError, match="digest"):  # allow-pytest.raises: CPU-only run excludes native conftest
         pipe.warmup_buffers()
 
 
 def test_example_is_explicitly_unresolved():
     module = load_module()
-    with pytest.raises(ValueError, match="unresolved"):
+    with pytest.raises(ValueError, match="unresolved"):  # allow-pytest.raises: CPU-only run excludes native conftest
         module.load_fixture(SOURCE.parents[2] / "tests/fixtures/ltx25_iclora/fixture.example.json")
