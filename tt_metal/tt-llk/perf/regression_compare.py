@@ -13,6 +13,8 @@ import glob
 import json
 import os
 import re
+import runpy
+from pathlib import Path
 
 import pandas as pd
 
@@ -45,6 +47,31 @@ def _is_metric(col):
 
 
 MODULE_COL = "test_module"
+
+
+def _load_test_name_aliases():
+    """Load old -> current module names from the perf schema catalog."""
+    catalog_path = (
+        Path(__file__).parents[1]
+        / "tests"
+        / "python_tests"
+        / "helpers"
+        / "perf"
+        / "test_schemas.py"
+    )
+    namespace = runpy.run_path(str(catalog_path))
+    aliases = {}
+    for catalog_name in ("PERF_TEST_SCHEMAS", "PERF_TEST_SCHEMAS_QSR"):
+        for entry in namespace[catalog_name].values():
+            aliases.update(entry.get("test_name_aliases", {}))
+    return aliases
+
+
+TEST_NAME_ALIASES = _load_test_name_aliases()
+
+
+def _canonical_module(module):
+    return TEST_NAME_ALIASES.get(module, module)
 
 
 def _is_ignored(col):
@@ -129,12 +156,13 @@ def _module_of(path):
 
 
 def _read_frames(paths):
-    """Each side's frames, stamped with their test module unless they carry one."""
+    """Read frames and canonicalize legacy module names before point matching."""
     frames = []
     for path in paths:
         frame = pd.read_csv(path)
         if MODULE_COL not in frame.columns:
             frame[MODULE_COL] = _module_of(path)
+        frame[MODULE_COL] = frame[MODULE_COL].map(_canonical_module)
         frames.append(frame)
     return frames
 
