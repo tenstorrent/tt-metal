@@ -23,6 +23,7 @@ from models.experimental.uniad.reference.runtime_tracker_base import RuntimeTrac
 from models.experimental.uniad.reference.query_interaction_module import QueryInteractionModule
 from models.experimental.uniad.reference.memory_bank import MemoryBank
 from models.experimental.uniad.reference.detr_track_3d_coder import DETRTrack3DCoder
+from models.experimental.uniad.reference.utils import inverse_sigmoid
 
 
 class UniAD(nn.Module):
@@ -599,6 +600,35 @@ class UniAD(nn.Module):
         out["sdc_track_bbox_results"] = result_dict["track_bbox_results"]
         out["sdc_embedding"] = sdc_instance.output_embedding[0]
         return out
+
+    def velo_update(self, ref_pts, velocity, l2g_r1, l2g_t1, l2g_r2, l2g_t2, time_delta):
+        """Move the reference points (inverse-sigmoid space) of active tracks by their velocity and the ego motion."""
+        time_delta = time_delta.type(torch.float)
+        num_query = ref_pts.size(0)
+        velo_pad_ = velocity.new_zeros((num_query, 1))
+        velo_pad = torch.cat((velocity, velo_pad_), dim=-1)
+
+        reference_points = ref_pts.sigmoid().clone()
+        pc_range = self.pc_range
+        reference_points[..., 0:1] = reference_points[..., 0:1] * (pc_range[3] - pc_range[0]) + pc_range[0]
+        reference_points[..., 1:2] = reference_points[..., 1:2] * (pc_range[4] - pc_range[1]) + pc_range[1]
+        reference_points[..., 2:3] = reference_points[..., 2:3] * (pc_range[5] - pc_range[2]) + pc_range[2]
+
+        reference_points = reference_points + velo_pad * time_delta
+
+        ref_pts = reference_points @ l2g_r1 + l2g_t1 - l2g_t2
+
+        g2l_r = torch.linalg.inv(l2g_r2).type(torch.float)
+
+        ref_pts = ref_pts @ g2l_r
+
+        ref_pts[..., 0:1] = (ref_pts[..., 0:1] - pc_range[0]) / (pc_range[3] - pc_range[0])
+        ref_pts[..., 1:2] = (ref_pts[..., 1:2] - pc_range[1]) / (pc_range[4] - pc_range[1])
+        ref_pts[..., 2:3] = (ref_pts[..., 2:3] - pc_range[2]) / (pc_range[5] - pc_range[2])
+
+        ref_pts = inverse_sigmoid(ref_pts)
+
+        return ref_pts
 
     def upsample_bev_if_tiny(self, outs_track):
         if outs_track["bev_embed"].size(0) == 100 * 100:

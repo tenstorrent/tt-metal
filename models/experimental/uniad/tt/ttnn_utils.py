@@ -50,11 +50,6 @@ def inverse_sigmoid(x, eps: float = 1e-5):
     return ttnn.log(ttnn.div(x1, x2))
 
 
-# Cache for per-level grid normalisation scale tensors. The scale only
-# depends on (h_l, w_l, device) and never changes within or across forwards
-# — caching avoids rebuilding the tiny bf16 tensor every encoder layer.
-_MSDA_GRID_SCALE_CACHE = {}
-
 # grid_sample bilinear otherwise accumulates the 4-corner reduction in bf16,
 # which costs ~0.05 PCC per encoder layer and compounds (seg-head DETR encoder
 # memory dropped to ~0.43 over 6 layers). HiFi4 + fp32 dest accumulation lifts
@@ -84,19 +79,6 @@ def _msda_grid_sample_compute_config(device):
         )
         _MSDA_GS_COMPUTE_CONFIG[arch] = cfg
     return cfg
-
-
-def _msda_grid_scale(h_l, w_l, device):
-    key = (int(h_l), int(w_l), id(device))
-    cached = _MSDA_GRID_SCALE_CACHE.get(key)
-    if cached is not None:
-        return cached
-    # Last-dim order is [2/w, 2/h] to match the (x, y) ordering used by
-    # sampling_locations along its last dim.
-    scale = torch.tensor([2.0 / w_l, 2.0 / h_l], dtype=torch.bfloat16)
-    cached = ttnn.from_torch(scale, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    _MSDA_GRID_SCALE_CACHE[key] = cached
-    return cached
 
 
 def multi_scale_deformable_attn_pytorch(
@@ -153,13 +135,8 @@ def multi_scale_deformable_attn_pytorch(
             _r(_enc_stats, "msda_split_value", _t, device)
             _t = _s(device)
 
-        # Normalize sampling locations to [-1, 1] via the cached (2,) scale
-        # tensor [2/w, 2/h] which broadcasts on the last dim. The bf16
-        # representation of 2/W (e.g. 2/50 ≈ 0.040039) costs PCC sdc_traj
-        # 0.9911 → 0.9909, still well above the 0.99 gate.
-        scale = _msda_grid_scale(h_l, w_l, device)
-        grid = sampling_locations[:, :, :, 0, :, :]
-        grid = ttnn.subtract(ttnn.multiply(grid, scale), 1.0)
+        # Sampling locations are already normalised to [0, 1]; map them to [-1, 1].
+        grid = ttnn.subtract(ttnn.multiply(sampling_locations[:, :, :, 0, :, :], 2.0), 1.0)
         if _enc_stats is not None:
             _r(_enc_stats, "msda_grids", _t, device)
             _t = _s(device)
@@ -247,11 +224,7 @@ def multi_scale_deformable_attn_pytorch(
 
     sampling_grids = []
     for lvl in range(num_levels):
-        h_l, w_l = spatial_shapes_int[lvl]
-        grid = sampling_locations[:, :, :, lvl, :, :]
-        scale = _msda_grid_scale(h_l, w_l, device)
-        grid = ttnn.subtract(ttnn.multiply(grid, scale), 1.0)
-        sampling_grids.append(grid)
+        sampling_grids.append(ttnn.subtract(ttnn.multiply(sampling_locations[:, :, :, lvl, :, :], 2.0), 1.0))
     if _enc_stats is not None:
         _r(_enc_stats, "msda_grids", _t, device)
 

@@ -849,6 +849,34 @@ class TtUniAD:
         out["sdc_embedding"] = sdc_instance.output_embedding[0]
         return out
 
+    def velo_update(self, ref_pts, velocity, l2g_r1, l2g_t1, l2g_r2, l2g_t2, time_delta):
+        """Host-side copy of the reference velo_update: a few rows of 3-vectors per frame. Returns a torch tensor."""
+
+        def to_torch(x):
+            if isinstance(x, ttnn.Tensor):
+                return ttnn.to_torch(x).to(torch.float32)
+            return torch.as_tensor(x, dtype=torch.float32)
+
+        ref_pts, velocity, l2g_r1, l2g_t1, l2g_r2, l2g_t2, time_delta = map(
+            to_torch, (ref_pts, velocity, l2g_r1, l2g_t1, l2g_r2, l2g_t2, time_delta)
+        )
+        pc_range = self.pc_range
+        velo_pad = torch.cat((velocity, velocity.new_zeros((velocity.shape[0], 1))), dim=-1)
+
+        reference_points = ref_pts.sigmoid()
+        reference_points[..., 0:1] = reference_points[..., 0:1] * (pc_range[3] - pc_range[0]) + pc_range[0]
+        reference_points[..., 1:2] = reference_points[..., 1:2] * (pc_range[4] - pc_range[1]) + pc_range[1]
+        reference_points[..., 2:3] = reference_points[..., 2:3] * (pc_range[5] - pc_range[2]) + pc_range[2]
+        reference_points = reference_points + velo_pad * time_delta
+
+        ref_pts = reference_points @ l2g_r1 + l2g_t1 - l2g_t2
+        ref_pts = ref_pts @ torch.linalg.inv(l2g_r2)
+
+        ref_pts[..., 0:1] = (ref_pts[..., 0:1] - pc_range[0]) / (pc_range[3] - pc_range[0])
+        ref_pts[..., 1:2] = (ref_pts[..., 1:2] - pc_range[1]) / (pc_range[4] - pc_range[1])
+        ref_pts[..., 2:3] = (ref_pts[..., 2:3] - pc_range[2]) / (pc_range[5] - pc_range[2])
+        return torch.special.logit(ref_pts, eps=1e-5)
+
     def _forward_single_frame_inference(
         self,
         img,
@@ -866,12 +894,20 @@ class TtUniAD:
 
         if l2g_r2 is not None and len(active_inst) > 0 and l2g_r1 is not None:
             ref_pts = active_inst.ref_pts
-            velo = active_inst.pred_boxes[:, -2:]
+            velo = ttnn.to_torch(active_inst.pred_boxes)[:, -2:]
             ref_pts = self.velo_update(ref_pts, velo, l2g_r1, l2g_t1, l2g_r2, l2g_t2, time_delta=time_delta)
             ref_pts = ref_pts.squeeze(0)
             dim = active_inst.query.shape[-1]
-            active_inst.ref_pts = self.reference_points(active_inst.query[..., : dim // 2])
-            active_inst.ref_pts[..., :2] = ref_pts[..., :2]
+            query_ref_pts = self.reference_points(
+                active_inst.query[:, : dim // 2],
+                self.parameters["reference_points"]["weight"],
+                bias=self.parameters["reference_points"]["bias"],
+            )
+            query_ref_pts = ttnn.to_torch(query_ref_pts).to(torch.float32)
+            query_ref_pts[..., :2] = ref_pts[..., :2]
+            active_inst.ref_pts = ttnn.from_torch(
+                query_ref_pts, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
+            )
 
         track_instances = TtInstances.cat([other_inst, active_inst], device=self.device)
 

@@ -53,26 +53,28 @@ class QueryInteractionModule(nn.Module):
         # attention
         tgt = out_embed
         tgt2 = self.self_attn(q[:, None], k[:, None], value=tgt[:, None])[0][:, 0]
-
+        tgt = tgt + tgt2
         tgt = self.norm1(tgt)
 
         # ffn
         x = self.linear1(tgt)
         x = self.activation(x)
         tgt2 = self.linear2(x)
-
+        tgt = tgt + tgt2
         tgt = self.norm2(tgt)
 
         if self.update_query_pos:
             x = self.linear_pos1(tgt)
             x = self.activation(x)
             query_pos2 = self.linear_pos2(x)
+            query_pos = query_pos + query_pos2
             query_pos = self.norm_pos(query_pos)
             track_instances.query[:, : dim // 2] = query_pos
 
         x = self.linear_feat1(tgt)
         x = self.activation(x)
         query_feat2 = self.linear_feat2(x)
+        query_feat = query_feat + query_feat2
         query_feat = self.norm_feat(query_feat)
         track_instances.query[:, dim // 2 :] = query_feat
         return track_instances
