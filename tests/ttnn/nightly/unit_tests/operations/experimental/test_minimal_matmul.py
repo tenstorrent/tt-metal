@@ -1355,3 +1355,46 @@ def test_create_perf_table(fidelity, dtype, fp32_acc):
             util_str = f"{math_util:.1f}"
 
         print(f"| ({M}, {K}, {N}) | {util_str} | {measured_ms_str} | {attrs_str} |")
+
+
+def _minimal_matmul_dtype_case(device):
+    M = K = N = 512
+    torch_a = torch.randint(0, 2, (M, K)).to(torch.bfloat16)
+    torch_w = torch.randint(0, 2, (K, N)).to(torch.bfloat16)
+    a = ttnn.from_torch(torch_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    w = ttnn.from_torch(torch_w, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    config = ttnn.MinimalMatmulConfig(
+        M_block_size=1,
+        K_block_size=1,
+        N_block_size=1,
+        subblock_h=1,
+        subblock_w=1,
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+    )
+    return torch_a, torch_w, a, w, config
+
+
+@pytest.mark.parametrize("output_dtype", [ttnn.int32, ttnn.uint32], ids=["int32", "uint32"])
+def test_minimal_matmul_rejects_integer_output_dtype(device, output_dtype, expect_error):
+    # The result is packed from the float DEST, so an integer output dtype only reinterprets the
+    # result bits and used to be accepted silently.
+    _, _, a, w, config = _minimal_matmul_dtype_case(device)
+    with expect_error(RuntimeError, "output dtype"):
+        ttnn.experimental.minimal_matmul(a, w, config=config, dtype=output_dtype)
+
+
+def test_minimal_matmul_float32_output_dtype_is_exact(device):
+    # 0/1 inputs with fp32 accumulation keep every partial sum an exact integer.
+    torch_a, torch_w, a, w, config = _minimal_matmul_dtype_case(device)
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+    output = ttnn.experimental.minimal_matmul(
+        a, w, config=config, compute_kernel_config=compute_config, dtype=ttnn.float32
+    )
+    assert output.dtype == ttnn.float32
+    assert torch.equal(ttnn.to_torch(output), torch_a.float() @ torch_w.float())
