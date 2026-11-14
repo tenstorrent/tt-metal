@@ -257,6 +257,28 @@ ALWI void ysq_pass_impl(uint32_t base, std::index_sequence<U...>) {
     std::apply([](auto... e) { ckl::eltwise_chain(ckl::IterationShape::one_tile(), e...); }, elems);
 }
 
+// ---------------- norm_block: y_u = (y_b[u] * rstd) * w[u] for the pass's units, one dst-sync window ----------
+// DEST: D0 = rstd (column broadcast, once per pass), D1 = w operand, the units' y in D2.. (block_cols <= 6).
+constexpr ckl::Dst Dn0 = ckl::Dst::D2;
+template <size_t U>
+constexpr ckl::Dst norm_slot() {
+    return static_cast<ckl::Dst>(static_cast<uint32_t>(Dn0) + U);
+}
+using RstdBcast = ckl::UnaryBcast<ckl::BroadcastDim::Col, caller_managed(cb_rstd_col), ckl::Dst::D0>;
+using NormWBcast = ckl::UnaryBcast<ckl::BroadcastDim::Row, caller_managed(cb_norm_w), ckl::Dst::D1>;
+template <size_t U>
+using HoldToSlot = ckl::CopyTile<caller_managed(cb_y_hold), norm_slot<U>()>;
+template <size_t... U>
+ALWI void norm_pass(uint32_t w_base, std::index_sequence<U...>) {
+    auto elems = std::tuple_cat(
+        std::make_tuple(RstdBcast{0}),
+        std::make_tuple(HoldToSlot<U>{U}, ckl::MulBinary<norm_slot<U>(), ckl::Dst::D0, norm_slot<U>()>{})...,
+        std::make_tuple(NormWBcast{w_base + U}, ckl::MulBinary<norm_slot<U>(), ckl::Dst::D1, norm_slot<U>()>{})...,
+        std::make_tuple(ckl::PackTile<ckl::output(cb_y_out), norm_slot<U>()>{}...));
+    std::apply([](auto... e) { ckl::eltwise_chain(ckl::IterationShape::one_tile(), e...); }, elems);
+}
+static_assert(!norm || block_cols + 2 <= ckl::DEST_AUTO_LIMIT, "norm_block: rstd + w + block_cols units in DEST");
+
 // ---------------- project_block hooks ----------------
 struct PassCols {
     uint32_t c_count;
@@ -648,17 +670,7 @@ void kernel_main() {
             cb_wait_front(cb_rstd_col, 1);
             for (uint32_t p = 0; p < num_passes; ++p) {
                 cb_wait_front(cb_y_hold, block_cols);
-                for (uint32_t u = 0; u < block_cols; ++u) {
-                    ckl::eltwise_chain(
-                        ckl::IterationShape::one_tile(),
-                        ckl::UnaryBcast<ckl::BroadcastDim::Col, caller_managed(cb_rstd_col), ckl::Dst::D0>{0},
-                        ckl::CopyTile<caller_managed(cb_y_hold), ckl::Dst::D1>{u},
-                        ckl::MulBinary<ckl::Dst::D1, ckl::Dst::D0, ckl::Dst::D1>{},
-                        ckl::UnaryBcast<ckl::BroadcastDim::Row, caller_managed(cb_norm_w), ckl::Dst::D2>{
-                            p * block_cols + u},
-                        ckl::MulBinary<ckl::Dst::D1, ckl::Dst::D2, ckl::Dst::D1>{},
-                        ckl::PackTile<ckl::output(cb_y_out), ckl::Dst::D1>{});
-                }
+                norm_pass(p * block_cols, std::make_index_sequence<block_cols>{});
                 cb_pop_front(cb_y_hold, block_cols);
             }
             cb_pop_front(cb_rstd_col, 1);

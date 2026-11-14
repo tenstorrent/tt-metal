@@ -116,3 +116,65 @@
     per policy).
   - test_mhc_post_perf.py: `test_mhc_post_perf_ds41` (plain / stats / collapse × T160 / T1280),
     `test_mhc_post_perf_hc_iters`, `test_mhc_post_perf_collapse_t160`.
+
+## Refinement 2 — norm + feed (y delivery: rstd return and the fabric all-to-all)
+- Date: 2026-11-14
+- What was done:
+  - SUPPORTED: norm += on, feed += on. EXCLUSIONS += {feed: on, alignment: h_non_aligned} (structural gap, Refinement 2b).
+  - **R2-norm** (reused: the combine tree, the hc block op, the partial-merge writer, the deferred root):
+    - collapse_block packs y_b into `cb_y_hold`; Σ y_b² of the bf16 y_b (reloaded, exact fp32) accumulates in
+      `cb_ysq_acc` next to Σ X'²; finalize_row row-sums it into a second `cb_sumsq_col` page that the writer merges
+      into partial column 25, so it rides the same fixed-order 2-level combine.
+    - The root's hc step also computes rstd = rsqrt(Σy²·(1/C) + norm_eps) in lane vector 25 (3-Newton fp32 rsqrt);
+      the root writer copies it to token order and unicasts 128 B into slot (t − t0) of every member's
+      `cb_rstd_land` + SEM_RSTD_COUNT; the member's reader expands it to a column-0 `cb_rstd_col` page.
+    - norm_block = y = (y_b · rstd) · w as one block chain per pass (rstd Col broadcast once, w Row broadcast
+      per unit, fp32 SFPU, one bf16 rounding), run after the root work: Refinement 1 deferred the roots past
+      their own rows, so rstd of every row returns only at the end of the call and the core holds all its rows'
+      y_b (≤ 384 KiB on the golden shapes, `Y_HOLD_BUDGET` 512 KiB).
+    - X', hc and stats (except column 25) are bit-identical with and without norm_weight.
+  - **R4 feed-DRAM-staged** (one MeshProgramDescriptor dispatch: every chip runs the worker program plus its own
+    port kernels):
+    - Worker set: whenever the fabric is active on a multi-chip mesh, 2·MAX_FEED_LINKS = 4 port cores on logical
+      row 0 (centred, the fabric_ring_exchange placement) leave the worker list, feed or not, so a feed call's X',
+      stats and hc are the bits of the same call without the feed. The kernel core sets stay merged rectangles
+      (general run-merge, ≤ 4 rectangles).
+    - Workers write their own column block of y straight into the local feed output D at rows [p·T, ...) and the
+      G−1 remote blocks to y_output (staging); after each row (behind a write barrier) they count it in their own
+      SEM_FEED_ROWS. The port reader polls every worker's count per wave (per-worker minimum: a shared counter
+      let fast workers' row i+1 stand in for a slow worker's row i — measured as stale tiles in D before the fix).
+    - TRANSPORT from the examples: port per (direction, link) (fabric_all_gather's reader + sender split); direct
+      2-D sends addressed by destination node, the far chip reached through the fabric (fabric_ring_exchange
+      `direct`); chunks = bank-contiguous runs of the destination's D pages, ≤ payload // 2048 = 7 tiles per packet
+      (14 KiB payload, AG report: the payload is the dominant transport knob); 4 packets in flight, 112 KiB ring
+      (AG baseline: 2 per batch is 16-18 % slower, 8 gains ≤ 2 %); one fused write + arrival increment on the last
+      packet of each stream (AG: increments stall the receiving router; every 16-32 chunks was 1-2 % faster at
+      size); ready fence from every destination before the first packet, both caller semaphores re-armed to 0
+      (repeated-call gate passes). Far block is not split per direction (direct 2-D routing fixes its first hop).
+    - Port slots are assigned per chip from its distinct first-hop directions: on a QuietBox 2 the 1×4 mesh sits on
+      a physical 2×2, so the directions mix E/W with N/S (a fixed E/W→slot map hung the fabric).
+- Accuracy achieved: norm passes every gate (≤ 1 bf16 step vs float64 of the norm on the op's own y_b, < 1e-3 of the
+  elements off the rounding, Σy² max rel ≤ 1e-5, end-to-end rel L2) on T 64–2048, C 128–7168; the feed output is
+  bit-exact (the all-to-all of the no-feed call's y) on every chip at 1 and 2 links, FABRIC_2D_TORUS_XY and FABRIC_2D.
+- Device time (BH p300c, single chip, profiler, bf16 packed HiFi2, collapse + norm vs collapse):
+  T160 C5120 154 µs vs 134 µs (+20 µs; bring-up op 131.3 µs); T1280 C5120 645 µs vs 561 µs. T1280 ablation of the
+  norm's +84 µs: Σy² accumulation ≈ 15 µs, norm_block compute ≈ 32 µs, the rest (≈ 37 µs) the y DRAM writes and the
+  rstd round trip, which all sit in the tail because the roots are deferred. Blocking norm_block over the pass
+  (one rstd broadcast per pass) moved it < 1 %: the tail, not the chain, binds. Lever (not taken here: it
+  restructures Refinement 1's deferred-root schedule and is the same change Refinement 3 needs for per-row feed
+  overlap): lag the root work a fixed number of rows instead of deferring it, so rstd returns within
+  `norm_rows_in_flight` rows and norm_block / the y writes / the feed publication run inside the row loop.
+  The feed call's per-chip time is not measured: `perf_measure.py` still uploads inputs inside the trace capture
+  (verification_report.md), which once hung the device.
+- Golden test progress: norm (single device) 66/66 collapse cells; feed (1×4 mesh) 100/100 tile-aligned cells +
+  4/4 loose feed cases, 28 xfail (h_non_aligned feed, EXCLUSIONS); test_feed.py gates 16/16 (matches-no-feed at
+  1/2 links × 5 shapes, raw-y feed, FABRIC_2D, repeated calls, refusals); test_regression norm gates 4/4; prior
+  slices unchanged (test_regression 44/46: the 2 known `test_projection_hifi4` calibration failures of Refinement 1).
+- Issues encountered:
+  - The h_non_aligned feed: chip q's rows start inside a D tile shared with chip q−1 (T = 1: every chip shares one
+    tile row), which needs sub-tile row placement → Refinement 2b.
+  - Under `--dev` (watcher) the feed program's worker kernels exceed the 70 656 B kernel-config buffer (71 168 B at
+    T160); non-dev builds fit. Debug the feed path with DEVICE_PRINT on the port kernels (a separate kernel group,
+    not counted against the workers').
+- Tests added: tests/ttnn/unit_tests/operations/mhc_post/test_mhc_post_perf.py `test_mhc_post_perf_{norm,nonorm}_t{160,1280}`
+  (parameter-free collapse ± norm probes for `--profile`); probes/probe_006..011 (feed debugging, kept).

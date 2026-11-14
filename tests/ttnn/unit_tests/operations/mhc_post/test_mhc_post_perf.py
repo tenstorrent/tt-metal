@@ -77,3 +77,49 @@ def test_mhc_post_perf_hc_iters(device, iters):
 def test_mhc_post_perf_collapse_t160(device):
     """One parameter-free collapse call (T160 C5120) for zone profiling (MHC_ABLATE=zones)."""
     test_mhc_post_perf_hc_iters(device, 20)
+
+
+def _perf_norm(device, T, norm):
+    """DeepSeek-V4.1's ffn_residual call (collapse + norm) next to the same call without norm_weight."""
+    from eval.golden_tests.mhc_post.feature_spec import _case
+    from eval.golden_tests.mhc_post.helpers import call_mhc_post, make_case
+
+    case = make_case(
+        _case((1, 1, T, N * 5120)),
+        mode="collapse",
+        coef_source="packed",
+        dtype=ttnn.bfloat16,
+        sublayer_dtype=ttnn.bfloat16,
+        norm="on" if norm else "off",
+    )
+    for _ in range(2):
+        call_mhc_post(
+            case,
+            mode="collapse",
+            coef_source="packed",
+            dtype=ttnn.bfloat16,
+            sublayer_dtype=ttnn.bfloat16,
+            device=device,
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            op=mhc_post,
+        )
+    ttnn.synchronize_device(device)
+
+
+def test_mhc_post_perf_norm_t160(device):
+    """collapse + norm, T160 C5120 (PERF FOCUS without the feed), parameter-free for --profile."""
+    _perf_norm(device, 160, True)
+
+
+def test_mhc_post_perf_nonorm_t160(device):
+    """the same call without norm_weight (the norm's cost is the difference)."""
+    _perf_norm(device, 160, False)
+
+
+def test_mhc_post_perf_norm_t1280(device):
+    """collapse + norm, T1280 C5120 (20 rows held per core)."""
+    _perf_norm(device, 1280, True)
+
+
+def test_mhc_post_perf_nonorm_t1280(device):
+    _perf_norm(device, 1280, False)

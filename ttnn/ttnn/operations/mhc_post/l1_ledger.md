@@ -62,6 +62,26 @@ These rows supersede the planned R2 rows above where they differ. `nc` = number 
 L1 at T160 C5120 (R=2, Q=55, bc=3, W resident) is well under budget: the R2 additions are ≈ 24 + 48 + 16 + 44 +
 20 + 12·4 KB ≈ 200 KB.
 
+## R2-norm and R4 feed as implemented (Refinement 2)
+
+These rows supersede the planned `cb_y_hold` / `cb_ysq_acc` / `cb_rstd_col` / `cb_norm_w` rows above where they
+differ. `mr_rows` = rows of the core's row group; `ccp` = the core's columns padded to whole passes
+(passes · bc).
+
+| CB | Capacity (pages) | Page format | Producer | Consumer | Shares with / why not |
+|----|------------------|-------------|----------|----------|-----------------------|
+| `cb_y_hold` | `mr_rows · ccp` (all the core's rows, not `nr`) | Float16_b | compute (collapse pack) | compute (Σy² reload, norm_block) | The roots run after their own rows (Refinement 1's deferred root), so rstd of any row returns only at the end of the call: every y_b of the core is held. Bounded by `Y_HOLD_BUDGET` = 512 KiB (largest golden shape T2048 C7168: 64 rows × 3 = 384 KiB). Cannot be `cb_y_out` (different consumer stage; the writer owns `cb_y_out`). Shrinks to `nr · ccp` once the root is lagged instead of deferred (Refinement 3/4 lever). |
+| `cb_ysq_acc` | 1 | Float32 (UnpackToDestFp32) | compute | compute | Reload accumulator of Σ y_b² (the bf16 y_b reloaded: an exact fp32 sum of the rounded values), zeroed with `cb_sumsq_acc` by the same fill chain. Live across the row with `cb_sumsq_acc`: no alias. |
+| `cb_sumsq_col` | `PARTIAL_DEPTH · 2` with norm | Float32 | compute | writer | Page 2 of a row carries Σ y_b² in column 0; the writer merges it into partial column ng+1 (25). Reused CB, not a new one. |
+| `cb_rstd_col` | `NORM_ROWS_IN_FLIGHT` = 2 | Float32 (UnpackToDestFp32) | reader | compute | Column-0 page (COL broadcast), expanded row by row from the landing. |
+| `cb_norm_w` | `ccp` | Float32 (UnpackToDestFp32, Row broadcast) | reader | compute | Resident w slice, filler zeroed. |
+| `cb_rstd_land` | `mr_rows` × 128 B | raw | root writers (remote NoC writes) | reader (private) | One slot per row: rows arrive from different roots in any order. 128 B = 32 fp32 tokens. |
+| `cb_rstd_send` | 1 × 128 B | raw | root writer | root writer | Lane vector → token order before the Q unicasts. |
+| `cb_feed_chunks` (port cores) | `2 · FEED_CHUNKS_IN_FLIGHT · run_pages` (= 8 × 7 bf16 tiles = 112 KiB) | Float16_b | port reader | port sender | fabric_all_gather's 112 KiB ring; up to `FEED_CHUNKS_IN_FLIGHT` packets in flight. |
+| `cb_feed_poll` (port cores) | 1 × 16 B · #workers | raw | port reader (private) | port reader | Landing of the workers' SEM_FEED_ROWS reads. |
+
+Port cores are not workers, so the port CBs do not add to a worker's footprint.
+
 ## Symbol table
 
 | Symbol | Bound | Predicate establishing it |
@@ -111,7 +131,7 @@ Chosen split for stats/collapse (as implemented): the W-path chooser (per-core c
 | w | 1 per row group (resident) | resident | — |
 | stats | 1 write (root) | — | Ht·Q·4 KB partials to leaders, plus Ht·ceil(Q/fanin)·4 KB to roots |
 | hc | 1 write (root) | — | — |
-| y / D | 1 write; R4 (feed) adds (G−1)/G write + read of the staging | R4 stepping stone | rstd: Ht·Q·128 B. Fabric: (G−1)/G·T·C·2 B out per chip. |
+| y / D | 1 write; R4 (feed) adds (G−1)/G write + read of the staging | R4 stepping stone (as implemented: the own block straight to D, the G−1 remote blocks to y_output then read by the ports) | rstd: Ht·Q·128 B (Refinement 2: one 128 B unicast per member per row). Fabric: (G−1)/G·T·C·2 B out per chip, ≤ 7-tile packets (bank-contiguous runs of the destination's D). |
 
 Totals at T=160, C=5120, bf16, collapse + norm, R=1:
 - DRAM ≈ 1.6 (F) + 6.6 (X) + 6.6 (X') + 2.6 (W) + 1.6 (y) + 0.2 (small) ≈ 19.2 MB, which is the roofline bytes.
