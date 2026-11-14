@@ -761,14 +761,14 @@ H2DSocketImpl::~H2DSocketImpl() noexcept {
 }
 
 void H2DSocketImpl::reserve_bytes(uint32_t num_bytes) {
-    uint32_t bytes_free = fifo_size_ - (bytes_sent_ - bytes_acked_);
+    uint32_t bytes_in_flight = bytes_sent_ - bytes_acked_;
     tt::tt_metal::internal::L1EccHaltWatch ecc_watch(mesh_device_);
-    while (bytes_free < num_bytes) {
+    while (bytes_in_flight + num_bytes > fifo_size_) {
         ecc_watch.poll();
         advance_h2d_simulator_socket_device(mesh_device_, recv_core_.device_coord);
         tt_driver_atomics::mfence();
         volatile uint32_t bytes_acked_value = bytes_acked_ptr_[0];
-        bytes_free = fifo_size_ - (bytes_sent_ - bytes_acked_value);
+        bytes_in_flight = bytes_sent_ - bytes_acked_value;
         bytes_acked_ = bytes_acked_value;
     }
 }
@@ -777,20 +777,18 @@ bool H2DSocketImpl::has_space(std::optional<uint32_t> num_bytes_to_check) {
     validate_host_socket_access(rank_owns_endpoint_, recv_core_);
     TT_FATAL(page_size_ > 0, "Page size must be set before checking for data.");
     uint32_t num_bytes = num_bytes_to_check.value_or(page_size_);
-    uint32_t bytes_free = fifo_size_ - (bytes_sent_ - bytes_acked_);
+    uint32_t bytes_in_flight = bytes_sent_ - bytes_acked_;
 
-    // bytes_acked_ is monotonically increasing -> more bytes acked => more bytes_free
-    // If we bytes_acked_old < bytes_acked_new => bytes_free_old < bytes_free_new
-    // If bytes_free_old > num_bytes then this is safe as bytes_free_new > bytes_free_old > num_bytes necessarily
-    if (bytes_free >= num_bytes) {
+    // bytes_acked_ is monotonically increasing -> more bytes acked => fewer bytes_in_flight
+    if (bytes_in_flight + num_bytes <= fifo_size_) {
         return true;
     }
 
     tt_driver_atomics::mfence();
     volatile uint32_t bytes_acked_value = bytes_acked_ptr_[0];
-    bytes_free = fifo_size_ - (bytes_sent_ - bytes_acked_value);
+    bytes_in_flight = bytes_sent_ - bytes_acked_value;
     bytes_acked_ = bytes_acked_value;
-    return bytes_free >= num_bytes;
+    return bytes_in_flight + num_bytes <= fifo_size_;
 }
 
 bool H2DSocketImpl::acked_past(uint32_t watermark) {
@@ -856,8 +854,10 @@ void H2DSocketImpl::set_page_size(uint32_t page_size) {
     uint32_t fifo_page_aligned_size = fifo_size_ - (fifo_size_ % page_size);
 
     if (next_fifo_wr_ptr >= fifo_page_aligned_size) {
-        bytes_sent_ += fifo_size_ - next_fifo_wr_ptr;
+        bytes_sent_ += fifo_size_ - write_ptr_;
         next_fifo_wr_ptr = 0;
+    } else {
+        bytes_sent_ += next_fifo_wr_ptr - write_ptr_;
     }
     write_ptr_ = next_fifo_wr_ptr;
     page_size_ = page_size;
@@ -937,13 +937,11 @@ bool H2DSocketImpl::try_write(void* data, uint32_t num_pages) {
     TT_FATAL(num_bytes <= fifo_curr_size_, "Cannot write more pages than the socket FIFO size.");
 
     // Non-blocking variant of reserve_bytes(): if there's not enough room, bail.
-    uint32_t bytes_free = fifo_size_ - (bytes_sent_ - bytes_acked_);
-    if (bytes_free < num_bytes) {
+    if ((bytes_sent_ - bytes_acked_) + num_bytes > fifo_size_) {
         tt_driver_atomics::mfence();
         volatile uint32_t bytes_acked_value = bytes_acked_ptr_[0];
         bytes_acked_ = bytes_acked_value;
-        bytes_free = fifo_size_ - (bytes_sent_ - bytes_acked_);
-        if (bytes_free < num_bytes) {
+        if ((bytes_sent_ - bytes_acked_) + num_bytes > fifo_size_) {
             advance_h2d_simulator_socket_device(mesh_device_, recv_core_.device_coord);
             return false;
         }

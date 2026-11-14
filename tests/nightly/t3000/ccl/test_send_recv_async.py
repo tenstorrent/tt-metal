@@ -233,3 +233,51 @@ def test_send_recv(
         dtype,
         layout,
     )
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    indirect=True,
+)
+@pytest.mark.parametrize("sync_between_ops", [True, False])
+def test_send_recv_async_mixed_page_sizes(mesh_device, sync_between_ops):
+    sender_coord = ttnn.MeshCoordinate(0, 0)
+    receiver_coord = ttnn.MeshCoordinate(0, 1)
+    core_coord = ttnn.CoreCoord(0, 0)
+    socket_connections = [
+        ttnn.SocketConnection(
+            ttnn.MeshCoreCoord(sender_coord, core_coord),
+            ttnn.MeshCoreCoord(receiver_coord, core_coord),
+        )
+    ]
+    socket_mem_config = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, 1088 * 2)
+    socket_config = ttnn.SocketConfig(socket_connections, socket_mem_config)
+    send_socket, recv_socket = ttnn.create_socket_pair(mesh_device, mesh_device, socket_config)
+
+    mesh_mapper_config = ttnn.MeshMapperConfig([ttnn.PlacementReplicate()], ttnn.MeshShape(1, 1))
+    memory_config = ttnn.DRAM_MEMORY_CONFIG
+
+    dtypes = [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat16, ttnn.bfloat8_b]
+    for step, dtype in enumerate(dtypes):
+        torch.manual_seed(100 + step)
+        input_tensor_torch = torch.randn((1, 1, 32, 32), dtype=torch.bfloat16)
+        sender_tensor = ttnn.from_torch(
+            input_tensor_torch,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=dtype,
+            memory_config=memory_config,
+            mesh_mapper=ttnn.create_mesh_mapper(
+                mesh_device, mesh_mapper_config, [sender_coord]
+            ),
+        )
+        recv_tensor = ttnn.allocate_tensor_on_device(sender_tensor.spec, mesh_device)
+        ttnn.experimental.send_async(sender_tensor, send_socket)
+        ttnn.experimental.recv_async(recv_tensor, recv_socket)
+        if sync_between_ops:
+            ttnn.synchronize_device(mesh_device)
+        recv_torch = ttnn.to_torch(ttnn.get_device_tensors(recv_tensor)[0])
+        expected_torch = ttnn.to_torch(ttnn.get_device_tensors(sender_tensor)[0])
+        passing, out = comp_pcc(expected_torch, recv_torch)
+        assert passing, f"Step {step} (dtype={dtype}, sync={sync_between_ops}) failed: {out}"
