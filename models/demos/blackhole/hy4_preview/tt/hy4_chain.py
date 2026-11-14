@@ -176,13 +176,32 @@ class Hy4ChainLayer:
         self.mtp = L >= cfg.num_hidden_layers
         if not self.mtp:
             self.ihc_a, self.ihc_m = hc("attn"), hc("mlp")
-            if os.environ.get("HY4_IHC_FUSED", "0") == "1":  # fused iHC kernels (ihc-fuse e037d61bccb): packed [1,1,4T,D] streams, decode only
+            if (
+                os.environ.get("HY4_IHC_FUSED", "0") == "1"
+            ):  # fused iHC kernels (ihc-fuse e037d61bccb): packed [1,1,4T,D] streams, decode only
                 from models.demos.blackhole.hy4_preview.tt.hy4_ihc_fused import Hy4IHCFused
 
-                mk = lambda s_: Hy4IHCFused(md, sd[f"hc_{s_}_layer.hc_pre.hc_fn"].float(), sd[f"hc_{s_}_layer.hc_pre.hc_base"].float(), sd[f"hc_{s_}_layer.hc_pre.hc_scale"].float(), dim=HID, hc_eps=cfg.hc_eps, norm_eps=cfg.rms_norm_eps)
+                mk = lambda s_: Hy4IHCFused(
+                    md,
+                    sd[f"hc_{s_}_layer.hc_pre.hc_fn"].float(),
+                    sd[f"hc_{s_}_layer.hc_pre.hc_base"].float(),
+                    sd[f"hc_{s_}_layer.hc_pre.hc_scale"].float(),
+                    dim=HID,
+                    hc_eps=cfg.hc_eps,
+                    norm_eps=cfg.rms_norm_eps,
+                )
                 self.ihcf_a, self.ihcf_m = mk("attn"), mk("mlp")
-                self.hw_in, self.hw_post = sd["input_layernorm.weight"].float(), sd["post_attention_layernorm.weight"].float()
-        if os.environ.get("HY4_POOL", "0") == "1":  # integrated long-context decode: Hy4AttentionPool (superset of Hy4AttentionOpt / Hy4Attention; prefill unchanged)
+                self.hw_in, self.hw_post = (
+                    sd["input_layernorm.weight"].float(),
+                    sd["post_attention_layernorm.weight"].float(),
+                )
+        if (
+            os.environ.get("HY4_POOL", "0") == "1" and os.environ.get("HY4_POOL_PF", "0") == "1"
+        ):  # pool-prefill: DIRECT-TO-POOL chunked prefill (no replicated cache, no hand-off); needs the pool (Hy4PoolDecoder) before the first prefill
+            from models.demos.blackhole.hy4_preview.tt.hy4_pf_attention import Hy4AttentionPF as _Attn
+        elif (
+            os.environ.get("HY4_POOL", "0") == "1"
+        ):  # integrated long-context decode: Hy4AttentionPool (superset of Hy4AttentionOpt / Hy4Attention; prefill unchanged)
             from models.demos.blackhole.hy4_preview.tt.hy4_pool_decode import Hy4AttentionPool as _Attn
         else:
             _Attn = Hy4Attention
@@ -235,7 +254,9 @@ class Hy4ChainLayer:
                 md, *sw, limit=D.NO_CLAMP, decode=False
             )  # coordinator 11-13: the shared expert is NOT clamped (CE 1.77 vs 0.79)
             self.shared_dec = None
-            if "shared" in os.environ.get("HY4_SKINNY", "").replace("all", "shared,router,oproj,hproj").split(","):  # HY4_SKINNY=shared: bank-local decode kernel (second weight copy, 5 MB/layer/chip)
+            if "shared" in os.environ.get("HY4_SKINNY", "").replace("all", "shared,router,oproj,hproj").split(
+                ","
+            ):  # HY4_SKINNY=shared: bank-local decode kernel (second weight copy, 5 MB/layer/chip)
                 self.shared_dec = D.make_shared(md, *sw, limit=D.NO_CLAMP, decode=True)
             del W
         if (
@@ -276,8 +297,12 @@ class Hy4ChainLayer:
         own = ttnn.reshape(own, [1, 1, G * 32, HID])
         from models.demos.blackhole.hy4_preview.tt.hy4_pf_opt import PfOpt
 
-        pfo = PfOpt.from_env()  # HY4_PF_OPT=shfold: the shared expert joins the routed partial before the column reduce-scatter (no shared all-reduce)
-        routed_own = moe_cols(self.um, self.blk.gate, own, ch.mc, ch.ccl, shared=self.shared if pfo.shfold else None, pf=pfo)  # [1,1,n/8,D]
+        pfo = (
+            PfOpt.from_env()
+        )  # HY4_PF_OPT=shfold: the shared expert joins the routed partial before the column reduce-scatter (no shared all-reduce)
+        routed_own = moe_cols(
+            self.um, self.blk.gate, own, ch.mc, ch.ccl, shared=self.shared if pfo.shfold else None, pf=pfo
+        )  # [1,1,n/8,D]
         ttnn.deallocate(own)
         g = ch.mc.allgather(routed_own, ch.ccl, axis=1, dim=2)  # [1,1,n,D] rows ordered [c][g][32]
         ttnn.deallocate(routed_own)
@@ -344,7 +369,9 @@ class Hy4Chain:
     def __init__(
         self, md, mc, ccl, ckpt="/ckpt", kv_fmt=None, wdt=None, wdtypes=None, idx_rope_first=None, weights=None
     ):
-        kv_fmt = kv_fmt or os.environ.get("HY4_KV_FMT", "bf16")  # "scaled_fp8" for the pool decode path (prefill then writes SCALED_FP8 rows)
+        kv_fmt = kv_fmt or os.environ.get(
+            "HY4_KV_FMT", "bf16"
+        )  # "scaled_fp8" for the pool decode path (prefill then writes SCALED_FP8 rows)
         from models.demos.blackhole.hy4_preview.weights import Hy4Weights
 
         self.md, self.mc, self.ccl, self.kv_fmt = md, mc, ccl, kv_fmt

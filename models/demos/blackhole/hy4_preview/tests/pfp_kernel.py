@@ -77,19 +77,20 @@ def main():
                 if nv:
                     idx[s, :nv] = torch.randperm(T, generator=g)[:nv]
             idx_dev = rep(md, idx.to(torch.int32).reshape(1, 1, S, K), ttnn.uint32)
-            out = PP.sparse_sdpa_pf(q_dev, kv_dev, idx_dev, SCALE, KC, ckc)
+            out, st = PP.sparse_sdpa_pf(q_dev, kv_dev, idx_dev, SCALE, KC, ckc)
             ttnn.synchronize_device(md)
-            o = d0(out).reshape(HT, S, V + 32).float()
+            o = d0(out).reshape(HT, S, V).float()
+            stf = d0(st).reshape(S, 2 * HT).float()
             ref, M, L = ref_sparse(q, kv_ref, idx, None, with_stats=True)  # [H,S,V], [H,S], [H,S]
             nz = torch.tensor(nvs) > 0
-            pc = pcc(o[:, nz, :V], ref[:, nz])
-            minrow = min(pcc(o[h, s, :V], ref[h, s]) for h in range(0, HT, 9) for s in range(0, S, 17) if nvs[s] > 0)
-            m_dev, l_dev = o[:, :, V], o[:, :, V + 1]
+            pc = pcc(o[:, nz], ref[:, nz])
+            minrow = min(pcc(o[h, s], ref[h, s]) for h in range(0, HT, 9) for s in range(0, S, 17) if nvs[s] > 0)
+            m_dev, l_dev = stf[:, :HT].t() * SCALE, stf[:, HT:].t()
             m_err = (m_dev[:, nz] - M[:, nz]).abs().max().item()
             l_rel = ((l_dev[:, nz] - L[:, nz]).abs() / L[:, nz]).max().item()
             emp = ~nz
             emp_ok = bool(torch.isinf(m_dev[:, emp]).all() and (l_dev[:, emp] == 0).all()) if emp.any() else None
-            us = traced_us(md, lambda: PP.sparse_sdpa_pf(q_dev, kv_dev, idx_dev, SCALE, KC, ckc), n=5, rep_=3)
+            us = traced_us(md, lambda: PP.sparse_sdpa_pf(q_dev, kv_dev, idx_dev, SCALE, KC, ckc)[0], n=5, rep_=3)
             R(
                 test="pf_kernel",
                 fid=fid,

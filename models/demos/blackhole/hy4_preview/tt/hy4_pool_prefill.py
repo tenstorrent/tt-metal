@@ -34,10 +34,13 @@ def _core_set(n, gx):
     return ttnn.CoreRangeSet(rngs)
 
 
-def sparse_sdpa_pf(q, kv, idx, scale, k_chunk=128, ckc=None, out=None, ncores=None, v_dim=512, task_heads=None):
+def sparse_sdpa_pf(
+    q, kv, idx, scale, k_chunk=128, ckc=None, out=None, ncores=None, v_dim=512, task_heads=None, compact=True
+):
     """q bf16 ROW_MAJOR [1,HT,S,576] (HT = 64 heads: head group hg = heads 32hg..32hg+31), kv SCALED_FP8 packed fp8 [1,1,R,656] (this column's pool shard), idx uint32 ROW_MAJOR [1,1,S,TOPK]
-    LOCAL row ids of this column (sentinel 0xFFFFFFFF = contiguous tail; a row with no local key emits max=-inf, sum=0). -> out bf16 ROW_MAJOR [1,HT,S,v_dim+32]: per head row
-    [512 o (normalised by the LOCAL sum, sink excluded) | m (scaled-logit domain) | l | 1.0 | zeros]."""
+    LOCAL row ids of this column (sentinel 0xFFFFFFFF = contiguous tail; a row with no local key emits max=-inf, sum=0).
+    compact=True (the pipeline form, needs HT == task heads): -> (out bf16 RM [1,HT,S,512] = o normalised by the LOCAL sum, sink excluded; stats bf16 RM [1,1,S,2H] per token page = [RAW max (x scale = scaled-logit domain) (H) | sum (H)]).
+    compact=False: -> out bf16 RM [1,HT,S,544]: per head row [512 o | m scaled | l | 1.0 | zeros] (tests)."""
     md = q.device()
     HT, S, D = int(q.shape[1]), int(q.shape[2]), int(q.shape[3])
     topk = int(idx.shape[3])
@@ -68,11 +71,23 @@ def sparse_sdpa_pf(q, kv, idx, scale, k_chunk=128, ckc=None, out=None, ncores=No
     TILE = 2048
     bf = ttnn.bfloat16
     k_in_tile, k_in_df = 1088, ttnn.bfloat8_b
-    emit_stats = 2
+    emit_stats = 1 if compact else 2
+    assert not compact or HG == 1
     sink = _dummy_sink(md, H)
+    stats = (
+        ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, S, 2 * H]), bf, ttnn.ROW_MAJOR_LAYOUT, md, ttnn.DRAM_MEMORY_CONFIG
+        )
+        if compact
+        else None
+    )
     if out is None:
         out = ttnn.allocate_tensor_on_device(
-            ttnn.Shape([1, HT, S, v_dim + 32]), bf, ttnn.ROW_MAJOR_LAYOUT, md, ttnn.DRAM_MEMORY_CONFIG
+            ttnn.Shape([1, HT, S, v_dim if compact else v_dim + 32]),
+            bf,
+            ttnn.ROW_MAJOR_LAYOUT,
+            md,
+            ttnn.DRAM_MEMORY_CONFIG,
         )
     cores = [(i % grid.x, i // grid.x) for i in range(NC)]
     core_set = _core_set(NC, grid.x)
@@ -210,7 +225,7 @@ def sparse_sdpa_pf(q, kv, idx, scale, k_chunk=128, ckc=None, out=None, ncores=No
         0,
         _bits(scale),
     ]
-    writer_ct += _acc(out) + _acc(kv) + _acc(sink) + _acc(q) + _acc(out)
+    writer_ct += _acc(out) + _acc(kv) + _acc(sink) + _acc(q) + _acc(stats if compact else out)
     fid = getattr(ckc, "math_fidelity", ttnn.MathFidelity.HiFi4)
     approx = bool(getattr(ckc, "math_approx_mode", False))
     fp32 = bool(getattr(ckc, "fp32_dest_acc_en", True)) and os.environ.get("SS_FP32", "1") == "1"
@@ -291,7 +306,7 @@ def sparse_sdpa_pf(q, kv, idx, scale, k_chunk=128, ckc=None, out=None, ncores=No
             0,
             sink.buffer_address(),
             q.buffer_address(),
-            out.buffer_address(),
+            (stats if compact else out).buffer_address(),
         ],
         config=ttnn.WriterConfigDescriptor(),
     )
@@ -317,6 +332,7 @@ def sparse_sdpa_pf(q, kv, idx, scale, k_chunk=128, ckc=None, out=None, ncores=No
                 H,
                 S,
                 NC,
+                emit_stats,
                 k_chunk,
                 topk,
                 str(fid),
@@ -333,8 +349,8 @@ def sparse_sdpa_pf(q, kv, idx, scale, k_chunk=128, ckc=None, out=None, ncores=No
         )
         & ((1 << 40) - 1)
     )
-    ttnn.generic_op([q, kv, idx, sink, out], prog)
-    return out
+    ttnn.generic_op([q, kv, idx, sink] + ([stats] if compact else []) + [out], prog)
+    return (out, stats) if compact else out
 
 
 _SINK = {}
@@ -351,3 +367,79 @@ def _dummy_sink(md, H):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
     return _SINK[k]
+
+
+# ------------------------------------------------------------------ small JIT kernels of the prefill path
+def _cores(n, gx):
+    return [(i % gx, i // gx) for i in range(n)]
+
+
+def _cset(cores):
+    return ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in cores])
+
+
+def _cbd(core_set, total):
+    return ttnn.CBDescriptor(
+        total_size=total,
+        core_ranges=core_set,
+        format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=0, data_format=ttnn.int32, page_size=total)],
+    )
+
+
+def pf_stair(score, colid):
+    """in place: causal staircase of this chunk's own 64-key slice (the last 64 columns of ``score`` RM [1,1,R,N], N % 64 == 0); colid per-device uint32 page (element 0 = column)."""
+    md = score.device()
+    R, N = int(score.shape[2]), int(score.shape[3])
+    assert N % 64 == 0
+    grid = md.compute_with_storage_grid_size()
+    nc = min(R, grid.x * grid.y)
+    cores = _cores(nc, grid.x)
+    cs = _cset(cores)
+    rt = ttnn.RuntimeArgs()
+    for i, (x, y) in enumerate(cores):
+        rt[x][y] = [i]
+    ct = [N, R, nc, 0] + _acc(score) + _acc(colid)
+    k = ttnn.KernelDescriptor(
+        kernel_source=f"{KDIR}/pf_stair.cpp",
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=cs,
+        compile_time_args=ct,
+        runtime_args=rt,
+        common_runtime_args=[score.buffer_address(), colid.buffer_address()],
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+    prog = ttnn.ProgramDescriptor(kernels=[k], semaphores=[], cbs=[_cbd(cs, 64 + 128)])
+    prog.custom_program_hash = (0x5B8 << 40) | (hash((N, R, nc, tuple(ct))) & ((1 << 40) - 1))
+    ttnn.generic_op([score, colid], prog)
+    return score
+
+
+def pf_id_filter(gids, colinfo, out=None):
+    """gids uint32 RM [R,1,1,K] global ids -> out uint32 RM [1,1,R,K] this column's local pool rows (sentinel tail); colinfo: per-device uint32 page (element 0 = column, element 1 = valid token count)."""
+    md = gids.device()
+    R, K = int(gids.shape[0]), int(gids.shape[-1])
+    if out is None:
+        out = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, R, K]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, md, ttnn.DRAM_MEMORY_CONFIG
+        )
+    grid = md.compute_with_storage_grid_size()
+    nc = min(R, grid.x * grid.y)
+    cores = _cores(nc, grid.x)
+    cs = _cset(cores)
+    rt = ttnn.RuntimeArgs()
+    for i, (x, y) in enumerate(cores):
+        rt[x][y] = [i]
+    ct = [K, R, nc, 0] + _acc(gids) + _acc(colinfo) + _acc(out)
+    k = ttnn.KernelDescriptor(
+        kernel_source=f"{KDIR}/pf_id_filter.cpp",
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=cs,
+        compile_time_args=ct,
+        runtime_args=rt,
+        common_runtime_args=[gids.buffer_address(), colinfo.buffer_address(), out.buffer_address()],
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+    prog = ttnn.ProgramDescriptor(kernels=[k], semaphores=[], cbs=[_cbd(cs, 2 * K * 4 + 64)])
+    prog.custom_program_hash = (0x5B9 << 40) | (hash((K, R, nc, tuple(ct))) & ((1 << 40) - 1))
+    ttnn.generic_op([gids, colinfo, out], prog)
+    return out
