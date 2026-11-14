@@ -8,6 +8,7 @@ from helpers.data_format_inference import unpacks_to_dest
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     TILE_DIMENSIONS,
+    DataCopyGolden,
     TilizeGolden,
     get_golden_generator,
 )
@@ -16,7 +17,6 @@ from helpers.llk_params import (
     L1Accumulation,
     PerfRunType,
     Tilize,
-    format_dict,
 )
 from helpers.param_config import (
     BlocksCalculationAlgorithm,
@@ -66,13 +66,20 @@ def get_valid_tilize_datacopy(formats):
     return [Tilize.No, Tilize.Yes]
 
 
+def get_valid_num_faces_pack_dest_bank(tilize):
+    """Tilize needs four faces (software limitation of the datacopy); otherwise two or four."""
+    if tilize == Tilize.Yes:
+        return [4]
+    return [2, 4]
+
+
 # Shared with perf_pack_dest_bank.py so the two sweeps stay aligned.
 PACK_DEST_BANK_SWEEP = dict(
     formats=InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     l1_acc=[L1Accumulation.No, L1Accumulation.Yes],
-    num_faces=4,
     tilize=get_valid_tilize_datacopy,
+    num_faces=get_valid_num_faces_pack_dest_bank,
     dest_index=0,
     input_dimensions=[[32, 32], [32, 64], [128, 32], [128, 64], [128, 256]],
 )
@@ -111,7 +118,10 @@ def _run_pack_dest_bank_test(
     )
 
     if tilize == Tilize.No:
-        golden_tensor = src_A.to(format_dict[formats.output_format])
+        generate_golden = get_golden_generator(DataCopyGolden)
+        golden_tensor = generate_golden(
+            src_A, formats.output_format, num_faces, input_dimensions
+        )
     else:
         generate_golden = get_golden_generator(TilizeGolden)
         golden_tensor = generate_golden(src_A, input_dimensions, formats.output_format)
