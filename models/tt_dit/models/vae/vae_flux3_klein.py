@@ -8,7 +8,6 @@ serves every shape (a Conv2d keeps its prepared weights per input shape); their 
 
 from __future__ import annotations
 
-import math
 import os
 from pathlib import Path
 
@@ -18,7 +17,6 @@ import torch
 import ttnn
 
 from ...layers.conv2d import configure_conv2d
-from ...layers.normalization import GroupNorm
 from ...parallel.config import Flux2VaeParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils import cache, tensor
@@ -61,41 +59,8 @@ def decoder_slice_params(sizes, h_factor: int) -> dict[tuple[int, int, int, int]
     return table
 
 
+# Larger encoder GroupNorm blocks (e.g. 95 rows for a 1600x912 reference) collide with the pipeline's resident L1.
 GROUP_NORM_MAX_BLOCK_ROWS = 64
-
-
-def group_norm_out_blocks(norm: GroupNorm, batch: int, spatial: int, channels: int) -> int:
-    """num_out_blocks for ``norm`` on a [batch, spatial, channels] input: -1 (the op's auto choice) unless that leaves
-    more than GROUP_NORM_MAX_BLOCK_ROWS tile rows per block, else the smallest divisor of the per-core block height
-    that does not."""
-    grid = norm._op_core_grid(batch, spatial)
-    virtual_rows = (grid.x // norm.num_virtual_cols) * grid.y
-    block_h = batch * math.ceil(spatial / ttnn.TILE_SIZE) // virtual_rows
-    target = max(
-        1, spatial * channels // (256 * 256 * (grid.x // norm.num_virtual_cols) * norm.num_virtual_cols * grid.y)
-    )
-    auto = 1
-    while auto < target and auto < 256:
-        auto <<= 1
-    if block_h <= GROUP_NORM_MAX_BLOCK_ROWS * auto:
-        return -1
-    low = max(auto, ttnn.core.divup(block_h, GROUP_NORM_MAX_BLOCK_ROWS))
-    return next(d for d in range(low, block_h + 1) if block_h % d == 0)
-
-
-def _bounded_group_norm_blocks(module) -> None:
-    if isinstance(module, GroupNorm):
-        forward = module.forward
-
-        def bounded(x, num_out_blocks=-1, compute_kernel_config=None, _forward=forward, _norm=module):
-            if num_out_blocks == -1:
-                batch, height, width, channels = x.shape
-                num_out_blocks = group_norm_out_blocks(_norm, batch, height * width, channels)
-            return _forward(x, num_out_blocks=num_out_blocks, compute_kernel_config=compute_kernel_config)
-
-        module.forward = bounded
-    for _, child in module.named_children():
-        _bounded_group_norm_blocks(child)
 
 
 class Flux3KleinVae:
@@ -158,10 +123,11 @@ class Flux3KleinVae:
         load(self._decoder, decoder_parallel, SUBFOLDER)
 
         encoder_parallel = Flux2VaeParallelConfig.from_axes(device, tp_axis=tp_axis, h_axis=None, w_axis=None)
-        self._encoder = Flux2VaeEncoder(parallel_config=encoder_parallel, **common)
+        self._encoder = Flux2VaeEncoder(
+            parallel_config=encoder_parallel, group_norm_max_block_rows=GROUP_NORM_MAX_BLOCK_ROWS, **common
+        )
         # ttnn picks the encoder's conv slicing (a reference can have any 16-px shape), not the shared table
         configure_conv2d(self._encoder, slice_params={mesh_shape: {}}, replace=True)
-        _bounded_group_norm_blocks(self._encoder)
         load(self._encoder, encoder_parallel, "vae_encoder_main")
 
         state = state_dict()

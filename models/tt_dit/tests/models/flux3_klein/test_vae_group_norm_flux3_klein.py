@@ -2,7 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Host-only check of the reference encoder's GroupNorm blocking (vae_flux3_klein.group_norm_out_blocks). No device.
+"""Host-only check of the reference encoder's GroupNorm blocking (normalization.bounded_group_norm_out_blocks with
+vae_flux3_klein.GROUP_NORM_MAX_BLOCK_ROWS). No device.
 
 A 1600x912 reference reaches the second down level as 400x228 = 2850 tile rows, which only a 6x5 grid splits evenly;
 the op's auto choice then keeps 95-row blocks whose static CBs collide with the pipeline's resident L1. Those blocks
@@ -15,11 +16,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from ....models.vae.vae_flux3_klein import GROUP_NORM_MAX_BLOCK_ROWS, group_norm_out_blocks
+from ....layers.normalization import bounded_group_norm_out_blocks
+from ....models.vae.vae_flux3_klein import GROUP_NORM_MAX_BLOCK_ROWS
 
 
 def _norm(grid_x: int, grid_y: int, num_virtual_cols: int) -> SimpleNamespace:
-    """The two things group_norm_out_blocks reads from a GroupNorm: its grid for the input and its virtual columns."""
+    """What bounded_group_norm_out_blocks reads from a GroupNorm: its grid for the input and its virtual columns."""
     grid = SimpleNamespace(x=grid_x, y=grid_y)
     return SimpleNamespace(_op_core_grid=lambda batch, spatial: grid, num_virtual_cols=num_virtual_cols)
 
@@ -33,9 +35,9 @@ def _norm(grid_x: int, grid_y: int, num_virtual_cols: int) -> SimpleNamespace:
         ((8, 8), 1, 2048 * 2048, 32, -1),
     ],
 )
-def test_group_norm_out_blocks(grid, nvc, spatial, channels, expected):
+def test_bounded_group_norm_out_blocks(grid, nvc, spatial, channels, expected):
     norm = _norm(*grid, nvc)
-    blocks = group_norm_out_blocks(norm, 1, spatial, channels)
+    blocks = bounded_group_norm_out_blocks(norm, 1, spatial, channels, GROUP_NORM_MAX_BLOCK_ROWS)
     assert blocks == expected
     if blocks != -1:
         block_h = -(-spatial // 32) // ((grid[0] // nvc) * grid[1])
