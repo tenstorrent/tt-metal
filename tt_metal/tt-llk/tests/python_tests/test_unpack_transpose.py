@@ -35,7 +35,7 @@ from helpers.utils import passed_test, result_tensor
 
 UNPACK_TRANSPOSE_SWEEP = {
     "formats": input_output_formats(
-        [DataFormat.Bfp8_b, DataFormat.Float16_b, DataFormat.Int32],
+        [DataFormat.Bfp8_b, DataFormat.Float16_b],
     ),
     "unpack_transpose_faces": [Transpose.No, Transpose.Yes],
     "unpack_transpose_within_face": [Transpose.No, Transpose.Yes],
@@ -44,7 +44,6 @@ UNPACK_TRANSPOSE_SWEEP = {
 
 
 def _skip_unsupported(
-    formats,
     unpack_transpose_faces,
     unpack_transpose_within_face,
 ):
@@ -53,21 +52,6 @@ def _skip_unsupported(
         and unpack_transpose_within_face == Transpose.No
     ):
         pytest.skip("At least one unpack transpose mode must be enabled")
-
-    if formats.input_format == DataFormat.Int32:
-        if formats.output_format != DataFormat.Int32:
-            pytest.skip(
-                f"Int32 -> {formats.output_format.name} conversion not supported by unpack"
-            )
-        pytest.skip("Unpack transpose is not supported for Int32")
-
-    if formats.output_format == DataFormat.Int32 and formats.input_format in (
-        DataFormat.Bfp8_b,
-        DataFormat.Float16_b,
-    ):
-        pytest.skip(
-            f"{formats.input_format.name} -> Int32 conversion not supported by pack"
-        )
 
 
 def _transpose_golden(
@@ -120,7 +104,6 @@ def _run_unpack_transpose(
     loop_factor=1,
 ):
     _skip_unsupported(
-        formats,
         unpack_transpose_faces,
         unpack_transpose_within_face,
     )
