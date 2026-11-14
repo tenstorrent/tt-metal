@@ -226,11 +226,21 @@ class MiniMaxH3Transformer3DModel(Module):
         kv_gather_capacity: int | None = None,
         use_persistent_ccl_buffers: bool = True,
         dynamic_length: bool = False,
+        audio_enabled: bool = True,
+        num_output_heads: int = 1,
+        pdd_head_fp32: bool = False,
     ) -> None:
         """`dynamic_length`: every length-keyed program choice is frozen at construction and the fused norms
-        are sized for `kv_gather_capacity / sp` rows per device. Defaults to the legacy, length-keyed behaviour."""
+        are sized for `kv_gather_capacity / sp` rows per device. Defaults to the legacy, length-keyed behaviour.
+
+        `audio_enabled=False` is MiniMax-H3-Image: no audio projections and no audio rows in the packed sequence.
+        `num_output_heads > 1` replaces the video head with that many per-step heads (PDD, Parallel Decoding
+        Distillation); `forward(output_head=k)` picks head k, and the weights load from a `pdd_heads.{weight,bias}`
+        stack of shape `[K, out, hidden]` / `[K, out]`."""
         super().__init__()
 
+        self.audio_enabled = audio_enabled
+        self.num_output_heads = num_output_heads
         self.hidden_size = hidden_size
         self.freq_dim = freq_dim
         self.mesh_device = mesh_device
@@ -241,6 +251,8 @@ class MiniMaxH3Transformer3DModel(Module):
         if dynamic_length and kv_gather_capacity is not None:
             norm_row_capacity = kv_gather_capacity // parallel_config.sequence_parallel.factor
         self._temb_state = StateTensor()
+        self._modulation_cache: dict = {}  # precompute_modulation: key -> per-block modulation tables
+        self.refine_at_input_length = False  # see prepare_static_sources
         self._timestep_idx_state: dict[int, StateTensor] = {}  # traced path only, keyed by padded length
         self._eye_states: dict[int, StateTensor] = {}
         # The source table `forward` gathers rows from, `[text | cond video | cond audio | audio | video]`
@@ -274,7 +286,7 @@ class MiniMaxH3Transformer3DModel(Module):
 
         # 1. Per-modality input projections. Inputs are replicated on TP, outputs TP-fractured.
         self.proj_in = ColParallelLinear(video_patch_dim, hidden_size, **col_kwargs)
-        self.audio_proj_in = ColParallelLinear(audio_in_channels, hidden_size, **col_kwargs)
+        self.audio_proj_in = ColParallelLinear(audio_in_channels, hidden_size, **col_kwargs) if audio_enabled else None
         self.context_embedder = ColParallelLinear(text_dim, hidden_size, **col_kwargs)
 
         # 2. Timestep embedding, shared by every AdaLN projection.
@@ -354,14 +366,51 @@ class MiniMaxH3Transformer3DModel(Module):
             norm_row_capacity=norm_row_capacity,
         )
         self.proj_out = Linear(hidden_size, video_patch_dim, bias=True, mesh_device=mesh_device)
-        self.audio_proj_out = Linear(hidden_size, audio_in_channels, bias=True, mesh_device=mesh_device)
+        self.audio_proj_out = (
+            Linear(hidden_size, audio_in_channels, bias=True, mesh_device=mesh_device) if audio_enabled else None
+        )
+        # PDD: one replicated head per denoise step. Eager or traced, switching heads only swaps which weight buffer
+        # the (shape-identical) matmul reads, so it compiles nothing new.
+        # The release runs these heads in fp32 (`F.linear` on fp32 weights after the final norm). `pdd_head_fp32`
+        # (env H3_IMAGE_PDD_FP32=1) keeps their weights fp32 with an fp32-accumulating HiFi4 matmul; default bf16.
+        head_kwargs = {}
+        if pdd_head_fp32:
+            head_kwargs = {
+                "dtype": ttnn.float32,
+                "compute_kernel_config": ttnn.init_device_compute_kernel_config(
+                    mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=True
+                ),
+            }
+        self.proj_out_heads = (
+            ModuleList(
+                [
+                    Linear(hidden_size, video_patch_dim, bias=True, mesh_device=mesh_device, **head_kwargs)
+                    for _ in range(num_output_heads)
+                ]
+            )
+            if num_output_heads > 1
+            else None
+        )
         # The heads' generic blocking is the same for every served length; resolve it once so the
-        # dynamic-length path neither scans the tables nor takes the small-M 1D branch per call.
+        # dynamic-length path neither scans the tables nor takes the small-M 1D branch per call. The PDD heads share
+        # the video head's shape and so its config.
         self._head_configs: dict[str, ttnn.MinimalMatmulConfig] = {}
         if dynamic_length:
             grid = get_matmul_core_grid(mesh_device)
-            for name, width in (("video", video_patch_dim), ("audio", audio_in_channels)):
+            heads = (("video", video_patch_dim),) + ((("audio", audio_in_channels),) if audio_enabled else ())
+            for name, width in heads:
                 self._head_configs[name] = get_matmul_config(_HEAD_CONFIG_ROWS, hidden_size, width, grid)
+
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        """Split a PDD head stack (`pdd_heads.weight` [K, out, hidden], `pdd_heads.bias` [K, out]) into per-step heads."""
+        weight, bias = state.pop("pdd_heads.weight", None), state.pop("pdd_heads.bias", None)
+        if weight is None:
+            return
+        if self.proj_out_heads is None or weight.shape[0] != self.num_output_heads:
+            raise ValueError(f"PDD stack has {weight.shape[0]} heads; the model was built for {self.num_output_heads}")
+        for k in range(weight.shape[0]):
+            state[f"proj_out_heads.{k}.weight"] = weight[k]
+            state[f"proj_out_heads.{k}.bias"] = bias[k]
 
     def prepare_static_sources(
         self,
@@ -388,14 +437,17 @@ class MiniMaxH3Transformer3DModel(Module):
             if stream is not None and stream.shape[2] % tile:
                 raise ValueError(f"{name} capacity {stream.shape[2]} must be a multiple of TILE ({tile})")
 
-        # Padding before the refiner, not after, keeps its programs independent of prompt length.
-        if prompt_1BLP.shape[2] < prompt_cap:
-            prompt_1BLP = pad_single(prompt_1BLP, dim=2, back=prompt_cap - prompt_1BLP.shape[2])
+        # Padding before the refiner, not after, keeps its programs independent of prompt length. A caller whose
+        # prompts already arrive padded to a warmed rung (`refine_at_input_length`) refines at that rung and pads
+        # after: the refiner then costs the rung, not the arena cap, and still compiles one program set per rung.
+        refine_rows = prompt_1BLP.shape[2] if self.refine_at_input_length else prompt_cap
+        if prompt_1BLP.shape[2] < refine_rows:
+            prompt_1BLP = pad_single(prompt_1BLP, dim=2, back=refine_rows - prompt_1BLP.shape[2])
         prompt_windows = None
-        if prompt_len < prompt_cap:
+        if prompt_len < refine_rows:
             self._prompt_windows_state.update(
                 from_torch(
-                    torch.tensor([0, prompt_len, prompt_cap], dtype=torch.int32),
+                    torch.tensor([0, prompt_len, refine_rows], dtype=torch.int32),
                     device=self.mesh_device,
                     dtype=ttnn.uint32,
                     layout=ttnn.Layout.ROW_MAJOR,
@@ -405,6 +457,8 @@ class MiniMaxH3Transformer3DModel(Module):
             )
             prompt_windows = self._prompt_windows_state.value
         refined = self.token_refiner(self.context_embedder(prompt_1BLP), cu_window_seqlens=prompt_windows)
+        if refined.shape[2] < prompt_cap:
+            refined = pad_single(refined, dim=2, back=prompt_cap - refined.shape[2])
         segments = [refined]
         if condition_video_1BKC is not None:
             segments.append(self.proj_in(condition_video_1BKC))
@@ -441,10 +495,10 @@ class MiniMaxH3Transformer3DModel(Module):
         self,
         *,
         video_1BVC: ttnn.Tensor,
-        audio_1BAC: ttnn.Tensor,
+        audio_1BAC: ttnn.Tensor | None,
         assembly_indices: ttnn.Tensor,
         video_out_indices: ttnn.Tensor,
-        audio_out_indices: ttnn.Tensor,
+        audio_out_indices: ttnn.Tensor | None,
         timestep: ttnn.Tensor,
         adaln_indices: ttnn.Tensor,
         timestep_indices: ttnn.Tensor,
@@ -456,8 +510,13 @@ class MiniMaxH3Transformer3DModel(Module):
         traced: bool = False,
         adaln_tile_map: ttnn.Tensor | None = None,
         adaln_expanded_indices: ttnn.Tensor | None = None,
-    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        output_head: int = 0,
+        modulation_key=None,
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
         """
+        Audio-free (`audio_enabled=False`): pass `audio_1BAC=None, audio_out_indices=None`; the source table is
+        `[text | condition video | video]` and the audio velocity returned is None. `output_head` picks the PDD head.
+
         Every stream is a fixed-capacity buffer, true rows leading; `prepare_static_sources` must run first.
 
         video_1BVC: [1, 1, V_cap, in_channels * prod(patch_size)], replicated on SP and TP. Target rows only.
@@ -476,9 +535,17 @@ class MiniMaxH3Transformer3DModel(Module):
             capture per `(pad_to, map present)`).
         adaln_tile_map / adaln_expanded_indices: `adaln_tilerow.tilerow_remap` tables, sharded on SP; the norms read
             their modulation through the tile-row map. `None` (no map for this request) means the per-token gather.
+        modulation_key: a key passed to `precompute_modulation` with this same `timestep`; the blocks then reuse
+            those modulation tables instead of running their adaLN projections (every block's 2688 -> 96768
+            linear, 13B params read per forward). The caller guarantees the timestep matches the key.
 
         Returns `(video_velocity, audio_velocity)` as [1, 1, V_cap, .] / [1, 1, A_cap, .], target rows only.
         """
+        block_tables = None
+        if modulation_key is not None:
+            if modulation_key not in self._modulation_cache:
+                raise KeyError(f"no precomputed modulation for key {modulation_key!r}; call precompute_modulation")
+            block_tables = self._modulation_cache[modulation_key]
         tile = ttnn.TILE_SIZE
         alignment = self.sp_factor * tile
         if pad_to % alignment:
@@ -499,10 +566,17 @@ class MiniMaxH3Transformer3DModel(Module):
             )
         if video_out_indices.shape[-1] != video_1BVC.shape[2]:
             raise ValueError("video_out_indices must match the video stream's capacity")
-        if audio_out_indices.shape[-1] != audio_1BAC.shape[2]:
+        if (audio_1BAC is None) != (audio_out_indices is None) or (audio_1BAC is not None) != self.audio_enabled:
+            raise ValueError(
+                f"audio_1BAC / audio_out_indices must both be {'given' if self.audio_enabled else 'None'} "
+                f"(audio_enabled={self.audio_enabled})"
+            )
+        if audio_1BAC is not None and audio_out_indices.shape[-1] != audio_1BAC.shape[2]:
             raise ValueError("audio_out_indices must match the audio stream's capacity")
+        if self.proj_out_heads is not None and not 0 <= output_head < self.num_output_heads:
+            raise ValueError(f"output_head {output_head} out of range for {self.num_output_heads} PDD heads")
         for name, stream in (("audio_1BAC", audio_1BAC), ("video_1BVC", video_1BVC)):
-            if stream.shape[2] % tile:
+            if stream is not None and stream.shape[2] % tile:
                 raise ValueError(f"{name} capacity {stream.shape[2]} must be a multiple of TILE ({tile})")
         if self._static_prefix_rows == 0:
             raise RuntimeError("prepare_static_sources must run before forward: the source-table prefix is unbound")
@@ -511,19 +585,24 @@ class MiniMaxH3Transformer3DModel(Module):
             t = ttnn.reshape(t, (1, t.shape[-1]))
             return t if t.dtype == ttnn.uint32 else ttnn.typecast(t, ttnn.uint32)
 
-        audio_rows = ttnn.to_layout(self.audio_proj_in(audio_1BAC), ttnn.ROW_MAJOR_LAYOUT)
+        audio_rows = (
+            ttnn.to_layout(self.audio_proj_in(audio_1BAC), ttnn.ROW_MAJOR_LAYOUT) if audio_1BAC is not None else None
+        )
         video_rows = ttnn.to_layout(self.proj_in(video_1BVC), ttnn.ROW_MAJOR_LAYOUT)
-        total_rows = self._static_prefix_rows + audio_rows.shape[2] + video_rows.shape[2]
-        self._ensure_source_table(total_rows, audio_rows.shape[3], audio_rows.dtype)
+        audio_count = audio_rows.shape[2] if audio_rows is not None else 0
+        total_rows = self._static_prefix_rows + audio_count + video_rows.shape[2]
+        self._ensure_source_table(total_rows, video_rows.shape[3], video_rows.dtype)
         if self._pending_prefix is not None:
             row = 0
             for segment in self._pending_prefix:
                 row = self._write_source_rows(segment, row)
                 ttnn.deallocate(segment)
             self._pending_prefix = None
-        row = self._write_source_rows(audio_rows, self._static_prefix_rows)
+        row = self._static_prefix_rows
+        if audio_rows is not None:
+            row = self._write_source_rows(audio_rows, row)
+            ttnn.deallocate(audio_rows)
         self._write_source_rows(video_rows, row)
-        ttnn.deallocate(audio_rows)
         ttnn.deallocate(video_rows)
 
         # `ttnn.embedding` takes the `[1, 1, rows, C]` table as is; indices never reach past
@@ -576,6 +655,7 @@ class MiniMaxH3Transformer3DModel(Module):
             eye=eye,
             adaln_tile_map=adaln_tile_map,
             adaln_expanded_indices=as_indices(adaln_expanded_indices) if adaln_expanded_indices is not None else None,
+            block_tables=block_tables,
             traced=traced,
             tracer_trace_key=(pad_to, adaln_tile_map is not None),
         )
@@ -591,15 +671,21 @@ class MiniMaxH3Transformer3DModel(Module):
                 hidden, dim=3, mesh_axis=self.tp_mesh_axis, use_hyperparams=False, **ag_kwargs
             )
 
-        video_all = self.proj_out(hidden, matmul_config=self._head_configs.get("video"))
-        audio_all = self.audio_proj_out(hidden, matmul_config=self._head_configs.get("audio"))
+        video_head = self.proj_out_heads[output_head] if self.proj_out_heads is not None else self.proj_out
+        video_all = video_head(hidden, matmul_config=self._head_configs.get("video"))
+        audio_all = (
+            self.audio_proj_out(hidden, matmul_config=self._head_configs.get("audio"))
+            if audio_1BAC is not None
+            else None
+        )
         if self.sp_factor > 1:
             video_all = self.ccl_manager.all_gather(
                 video_all, dim=2, mesh_axis=self.sp_mesh_axis, use_hyperparams=False, **ag_kwargs
             )
-            audio_all = self.ccl_manager.all_gather(
-                audio_all, dim=2, mesh_axis=self.sp_mesh_axis, use_hyperparams=False, **ag_kwargs
-            )
+            if audio_all is not None:
+                audio_all = self.ccl_manager.all_gather(
+                    audio_all, dim=2, mesh_axis=self.sp_mesh_axis, use_hyperparams=False, **ag_kwargs
+                )
 
         def select(all_rows: ttnn.Tensor, indices: ttnn.Tensor) -> ttnn.Tensor:
             table = ttnn.reshape(all_rows, (all_rows.shape[2], all_rows.shape[3]))
@@ -609,7 +695,8 @@ class MiniMaxH3Transformer3DModel(Module):
             )
             return ttnn.unsqueeze(gathered, 0)
 
-        return select(video_all, video_out_indices), select(audio_all, audio_out_indices)
+        audio_out = select(audio_all, audio_out_indices) if audio_all is not None else None
+        return select(video_all, video_out_indices), audio_out
 
     @traced_function(device=lambda self: self.mesh_device, clone_prep_inputs=False, prep_run=False)
     def run_blocks(
@@ -623,10 +710,11 @@ class MiniMaxH3Transformer3DModel(Module):
         eye: ttnn.Tensor | None = None,
         adaln_tile_map: ttnn.Tensor | None = None,
         adaln_expanded_indices: ttnn.Tensor | None = None,
+        block_tables: list[list[ttnn.Tensor]] | None = None,
     ) -> ttnn.Tensor:
         onehot = self.transformer_blocks[0].onehot_table(adaln_indices, temb.shape[2], eye)
         tilerow = self.transformer_blocks[0].tilerow_tables(adaln_tile_map, adaln_expanded_indices, temb.shape[2], eye)
-        for block in self.transformer_blocks:
+        for i, block in enumerate(self.transformer_blocks):
             hidden = block(
                 hidden,
                 logical_n,
@@ -636,11 +724,40 @@ class MiniMaxH3Transformer3DModel(Module):
                 rope_sin=rope_sin,
                 onehot=onehot,
                 tilerow=tilerow,
+                tables=block_tables[i] if block_tables is not None else None,
             )
         ttnn.deallocate(onehot)
         if tilerow is not None:
             ttnn.deallocate(tilerow[1])
         return hidden
+
+    def precompute_modulation(self, key, timestep: ttnn.Tensor) -> None:
+        """Compute every block's modulation tables for `timestep` once and keep them under `key`.
+
+        A sampler with a fixed schedule (H3-Image's 6 PDD steps) then passes `modulation_key=key` to `forward`,
+        which skips the per-block adaLN projections: 13B params streamed from DRAM per forward for a handful of
+        rows. Costs `6 tables x 32 rows x hidden_local` bf16 per block per key (about 0.5 MB at TP=4).
+
+        A key already held is kept as is (the caller guarantees a key always means the same timestep), so calling
+        this every step costs nothing after the first and never leaks the tables it would otherwise replace. The
+        tables live until `clear_modulation_cache`; nothing tears this model down, so a long-lived owner that
+        changes schedules should call it.
+        """
+        if key in self._modulation_cache:
+            return
+        if self.two_time is not None:
+            raise NotImplementedError("precomputed modulation does not cover two-time conditioning")
+        temb = self.time_embedder(self.time_proj(timestep))
+        self._modulation_cache[key] = [block.modulation_tables(temb) for block in self.transformer_blocks]
+        ttnn.deallocate(temb)
+
+    def clear_modulation_cache(self) -> None:
+        """Deallocate every `precompute_modulation` table and forget their keys."""
+        for tables in self._modulation_cache.values():
+            for block_tables in tables:
+                for table in block_tables:
+                    ttnn.deallocate(table)
+        self._modulation_cache.clear()
 
     def release_traces(self) -> None:
         """Release every captured `run_blocks` trace, across all `tracer_trace_key` buckets."""

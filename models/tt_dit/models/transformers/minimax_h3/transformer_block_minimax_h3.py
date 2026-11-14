@@ -226,6 +226,10 @@ class MiniMaxH3TransformerBlock(Module):
 
     # ------------------------------------------------------------------ modulation
 
+    def modulation_tables(self, temb: ttnn.Tensor) -> list[ttnn.Tensor]:
+        """The six modulation tables for `temb`, for a caller that reuses them across forwards (see `forward`)."""
+        return self._modulation_tables(temb)
+
     def _modulation_tables(self, temb: ttnn.Tensor) -> list[ttnn.Tensor]:
         """Project `temb` into the six per-(timestep, modality) modulation tables.
 
@@ -348,6 +352,7 @@ class MiniMaxH3TransformerBlock(Module):
         rope_sin: ttnn.Tensor,
         onehot: ttnn.Tensor | None = None,
         tilerow: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
+        tables: list[ttnn.Tensor] | None = None,
     ) -> ttnn.Tensor:
         """
         spatial_1BND: fractured N on SP, fractured hidden_size on TP
@@ -358,10 +363,13 @@ class MiniMaxH3TransformerBlock(Module):
 
         onehot / tilerow: the shared one-hot gather matrix (built here when absent) and the `(tile_map, selector)`
             pair from `tilerow_tables`; without the pair the norms take the per-token gather.
+        tables: this block's six modulation tables for `temb`, precomputed with `modulation_tables` (a sampler
+            whose timesteps are fixed computes them once); without them the block projects `temb` itself.
 
         Returns the block output, fractured N on SP and hidden_size on TP.
         """
-        tables = self._modulation_tables(temb)
+        if tables is None:
+            tables = self._modulation_tables(temb)
 
         if onehot is None:
             onehot = self.onehot_table(adaln_indices, temb.shape[2])
