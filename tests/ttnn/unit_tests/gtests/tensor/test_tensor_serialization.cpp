@@ -1369,7 +1369,7 @@ std::optional<std::string> mapping_permissions(uintptr_t address) {
 using TensorSerializationPinnedUploadTest = MeshDevice1x1Fixture;
 
 // load_tensor_flatbuffer maps the file MAP_SHARED so that a pinned upload pins the file's page-cache pages in place,
-// instead of making the kernel copy every page of a private mapping first. This checks both halves: the loader's
+// where a private mapping would be copied, not pinned (#63423). This checks both halves: the loader's
 // mapping is shared, and an upload from it creates a device-read-only pin.
 TEST_F(TensorSerializationPinnedUploadTest, LargeLoadedTensorUploadPinsSharedFileMapping) {
     const ttnn::Shape shape{1, 1, 1024, 9216};
@@ -1396,7 +1396,7 @@ TEST_F(TensorSerializationPinnedUploadTest, LargeLoadedTensorUploadPinsSharedFil
 
     // load_tensor_flatbuffer falls back to MAP_PRIVATE on a filesystem that refuses MAP_SHARED, so a private mapping
     // there is correct behavior, not a regression. Probe the filesystem directly to tell the two apart.
-    // LargeReadOnlyPrivateFileBackedWriteUsesReadOnlyPinnedMemory in unit_tests_tensor covers pinning the fallback.
+    // LargeReadOnlyPrivateFileBackedWriteIsCopiedNotPinned in unit_tests_tensor covers uploading the fallback.
     {
         const int fd = open(test_file.string().c_str(), O_RDONLY | O_CLOEXEC);
         ASSERT_NE(fd, -1) << strerror(errno);

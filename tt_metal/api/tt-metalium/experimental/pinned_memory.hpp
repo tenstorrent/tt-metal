@@ -183,6 +183,8 @@ public:
      * @param map_to_noc Whether to map the buffer to the NOC
      * @param access Device permissions for the mapping. Requesting ReadOnly throws unless
      *               GetMemoryPinningParameters(mesh_device).supports_read_only is true, so check that first.
+     *               A ReadOnly pin of a private file mapping (MAP_PRIVATE of a file) can loop forever in the kernel
+     *               (#63423). Create does not check for one, so do not pass such memory with ReadOnly.
      * @return Unique pointer to the created PinnedMemory instance
      */
     static std::shared_ptr<PinnedMemory> Create(
