@@ -4,6 +4,7 @@
 
 import glob
 import os
+from fractions import Fraction
 from os import listdir
 from os.path import isfile, join
 from typing import List, Optional, Union
@@ -16,6 +17,7 @@ from datasets import load_dataset, load_from_disk
 from evaluate import load
 from loguru import logger
 from scipy.io import wavfile
+from scipy.signal import resample_poly
 from tqdm import tqdm
 from transformers import (
     AutoFeatureExtractor,
@@ -50,8 +52,8 @@ def load_input_paths(folder_path):
     return files
 
 
-def read_wav_as_float(path):
-    """Read a wav file as (sampling_rate, mono float32 samples in [-1, 1]).
+def read_wav_as_float(path, target_rate=16000):
+    """Read a wav file as (sampling_rate, mono float32 samples in [-1, 1]) at target_rate (Whisper uses 16 kHz).
 
     scipy returns integer PCM wavs as int16/int32/uint8 arrays, but the Whisper feature extractor
     (and the Hugging Face dataset path) expects floating point audio in [-1, 1].
@@ -67,6 +69,10 @@ def read_wav_as_float(path):
         data = data.astype(np.float32)
     if data.ndim > 1:
         data = data.mean(axis=1)
+    if sampling_rate != target_rate:
+        ratio = Fraction(target_rate, sampling_rate)
+        data = resample_poly(data, ratio.numerator, ratio.denominator).astype(np.float32)
+        sampling_rate = target_rate
     return sampling_rate, data
 
 
