@@ -1,0 +1,123 @@
+---
+# The PR Gate "Build ASan ubuntu 24.04" compile (build-artifact.yaml with
+# build-type ASan, the clang-20 libstdc++ toolchain, tracy off, system SFPI,
+# skip-tt-train false => --build-all), in the image ci-build-image builds.
+# Then the package target and the two uploads the PR Gate makes
+# (publish-package, build-ttnn-import-artifact). A TorrentCI artifact is one
+# regular file, so each GitHub artifact is published as one tar: the .deb and
+# .ddeb files flat and uncompressed (their compression-level 0), and the
+# stripped ttnn-import tree with zstd -1 (their compression-level 1). Names
+# drop the ref and run-id suffix: TorrentCI scopes artifacts to the producing
+# job execution. ccache is remote; no TorrentCI cache (large restores fail
+# today, torrentci#1179). Trigger: every merge-queue entry
+# (.torrentci/triggers/merge-queue.yaml), for a historical trend; not a
+# required check.
+jobs:
+  - id: asan-build
+    description: Configure and compile tt-metal (ASan, --build-all) in the CI build image
+    timeout: 4h
+    # Remote ccache through the platform's proxy: TorrentCI sets
+    # CCACHE_REMOTE_STORAGE (civ2).
+    compiler-cache: ccache
+    runs-on:
+      kubernetes:
+        os: linux
+        arch: amd64
+        image: {from-job: ci-build-image, image: tt-metal-ci-build}
+        resources:
+          # Two cold runs (resource-summary, main container): 16 jobs peaked at
+          # 13.2 GiB anon memory, 32 jobs at 22.7 GiB. No CPU limit: a 16-CPU
+          # limit throttled 53% of periods. The renderer passes limits through
+          # as declared and requires none.
+          requests: {cpu: '16', memory: 24Gi, ephemeral-storage: 100Gi}
+          limits: {memory: 32Gi, ephemeral-storage: 150Gi}
+    env:
+      - {name: CMAKE_BUILD_PARALLEL_LEVEL, value: '16'}
+      - {name: CCACHE_DIR, value: /workspace/.cache/ccache}
+      - {name: CCACHE_BASEDIR, value: /workspace}
+      - {name: CCACHE_TEMPDIR, value: /tmp/ccache}
+      - {name: CCACHE_COMPRESS, value: 'true'}
+      - {name: CCACHE_COMPRESSLEVEL, value: '3'}
+      # TorrentCI's cache archive is capped at 5 GiB compressed.
+      - {name: CCACHE_MAXSIZE, value: 4G}
+      - {name: TRACY_NO_INVARIANT_CHECK, value: '1'}
+      - {name: TRACY_NO_ISA_EXTENSIONS, value: '1'}
+    artifacts:
+      publish:
+        # Consumed as packages-artifact-name by smoke, sdk-examples and
+        # build-prebuilt-tests-image (download into /work/pkgs/).
+        - name: packages-ubuntu-24.04-amd64-ASan-x86_64-linux-clang-20-libstdcpp
+          path: packages.tar
+          content-type: application/x-tar
+          retention: dependents
+        # Consumed by build-docs as TT_FROM_PRECOMPILED_DIR=/work.
+        - name: ttnn-import-ASan
+          path: ttnn-import.tar.zst
+          content-type: application/zstd
+          retention: dependents
+    steps:
+      - id: check-image
+        kind: shell
+        shell:
+          run:
+            - . tt_metal/sfpi-version
+            - echo "repo sfpi ${sfpi_version} ${sfpi_x86_64_debian_deb_hash}"
+            - echo "image sfpi $(cat /opt/tenstorrent/sfpi/.torrentci-sfpi-version)"
+            - test "$(cat /opt/tenstorrent/sfpi/.torrentci-sfpi-version)" = "${sfpi_version} ${sfpi_x86_64_debian_deb_hash}"
+      - id: submodules
+        kind: shell
+        shell:
+          run:
+            - git submodule sync --recursive
+            - git submodule update --init --recursive --depth 1 --jobs 4
+      - id: configure
+        kind: shell
+        shell:
+          run:
+            - mkdir -p "$CCACHE_DIR" "$CCACHE_TEMPDIR"
+            - >-
+              echo "restored ccache: $(du -sh "$CCACHE_DIR" | cut -f1), $(find "$CCACHE_DIR" -type f | wc -l) files"
+            - ccache -p | grep -v '^(default)' || true
+            - ccache -s -v
+            - ccache -z
+            - >-
+              ./build_metal.sh --build-dir build --build-type ASan
+              --toolchain-path cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
+              --build-all --enable-ccache --configure-only
+              --use-system-sfpi --disable-profiler
+      - id: compile
+        kind: shell
+        shell:
+          run:
+            - cmake --build build --target install
+            - ccache -s -v
+      - id: package
+        kind: shell
+        shell:
+          run:
+            - cmake --build build --target package
+            - ls -1sh build/*.deb build/*.ddeb || true
+      - id: stage-packages
+        kind: shell
+        shell:
+          run:
+            - >-
+              find build -maxdepth 1 -type f \( -name '*.deb' -o -name '*.ddeb' \)
+              -printf '%f\n' | sort > packages.list
+            - test -s packages.list
+            - tar -cf packages.tar -C build -T packages.list
+            - ls -l packages.tar
+      - id: stage-ttnn-import
+        kind: shell
+        shell:
+          run:
+            # Lean TT_FROM_PRECOMPILED_DIR tree (build/lib + runtime), as the
+            # PR Gate stages it.
+            - rm -rf ttnn-import
+            - mkdir -p ttnn-import/build/lib
+            - cp -a build/lib/*.so* ttnn-import/build/lib/
+            - find ttnn-import/build/lib -type f -name '*.so*' -exec strip --strip-unneeded {} +
+            - cp -a runtime ttnn-import/runtime
+            - du -sh ttnn-import ttnn-import/build/lib
+            - tar -I 'zstd -1 -T0' -cf ttnn-import.tar.zst -C ttnn-import .
+            - ls -l ttnn-import.tar.zst
