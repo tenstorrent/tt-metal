@@ -131,7 +131,7 @@ void kernel_main() {
 
     if (DBG == 1) {
         for (uint32_t a = 0; a < na; ++a) {
-            cbp.wait_front(4);
+            cbp.wait_front(4 * MT);
             if (a < 6) {
                 for (uint32_t j = 0; j < 4; ++j) {
                     const uint32_t pg = ocol0 + 4 * a + j;
@@ -141,7 +141,7 @@ void kernel_main() {
                 }
                 noc.async_write_barrier();
             }
-            cbp.pop_front(4);
+            cbp.pop_front(4 * MT);
         }
         return;
     }
