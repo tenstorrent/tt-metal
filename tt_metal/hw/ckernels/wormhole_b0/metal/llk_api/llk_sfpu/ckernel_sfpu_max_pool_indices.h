@@ -22,10 +22,11 @@ namespace sfpu {
  * @tparam is_fp32_dest_acc_en Whether Dest is in 32bit mode (true) or 16bit mode (false).
  * @tparam ITERATIONS The number of iterations to perform (unused).
  * @tparam layout Data layout format, either TILE (default) or ROW_MAJOR.
- * @tparam accumulate Whether to accumulate results for large kernels (default is false).
+ * @tparam accumulate Unsupported on this path, so it must be false; accumulation across chunks is only
+ *         implemented by the 32-row ROW_MAJOR path (_calculate_max_pool_with_indices_generic_).
  * @param values_tile_idx The index of the tile in the Dest register containing the data to be reduced.
  * @param indices_tile_idx The index of the tile in the Dest register containing the indices of the data.
- * @param chunk The chunk index for large kernel accumulation.
+ * @param chunk The chunk index for large kernel accumulation. Unused on this path.
  */
 template <
     bool APPROXIMATION_MODE,
@@ -34,7 +35,14 @@ template <
     DataLayout layout = DataLayout::TILE,
     bool accumulate = false>
 inline void _calculate_max_pool_with_indices_(
-    const std::uint32_t values_tile_idx, const std::uint32_t indices_tile_idx, const std::uint32_t chunk) {
+    const std::uint32_t values_tile_idx,
+    const std::uint32_t indices_tile_idx,
+    [[maybe_unused]] const std::uint32_t chunk) {
+    // Neither arm below reads accumulate or chunk, nor writes the accumulator tiles at
+    // values_tile_idx + 1 / indices_tile_idx + 1 that the 32-row path keeps the running max in, so
+    // a caller asking for accumulate here would silently get only the current chunk's max.
+    static_assert(!accumulate, "accumulate is only implemented for the 32-row ROW_MAJOR path (num_rows > 9)");
+
     // size of each tile in Dest is 64 rows
     constexpr std::uint32_t dst_tile_size = 64;
     const std::uint32_t values_tile_offset = values_tile_idx * dst_tile_size;
@@ -99,7 +107,6 @@ inline void _calculate_max_pool_with_indices_(
         process_columns(even_column_offset);
         process_columns(odd_column_offset);
     } else {
-        static_assert(!accumulate, "accumulate mode is not supported for TILE layout");
         // TILE (ORIGINAL) VERSION OF MPWI
         // F0
         // data
