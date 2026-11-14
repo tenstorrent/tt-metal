@@ -15,31 +15,10 @@ from ...layers.normalization import DistributedRMSNorm, LayerNorm, RMSNorm
 from ...parallel.config import DiTParallelConfig
 from ...parallel.manager import CCLManager
 from ...reference.ideogram4.constants import QWEN3_VL_ACTIVATION_LAYERS
-from ...utils.mochi import get_rot_transformation_mat
+from ...utils.mochi import get_rot_transformation_mat, rope_halfsplit_to_interleaved_perm
 from ...utils.padding import pad_weight_tensor
 from ...utils.substate import pop_substate
 from ...utils.tensor import bf16_tensor
-
-
-def rope_halfsplit_to_interleaved_perm(head_dim: int) -> torch.Tensor:
-    """Index permutation mapping the reference half-split RoPE layout to the interleaved
-    (adjacent-pair) layout that ``ttnn.experimental.rotary_embedding_llama`` + the 32x32
-    transformation matrix consume: ``out[2i] = in[i]``, ``out[2i+1] = in[i + head_dim/2]``.
-
-    Applied identically to the Q/K projection output channels, the QK-norm affine weights,
-    and the cos/sin tables. Because it is a SHARED permutation of head_dim on Q and K (and V/O
-    are untouched), attention Q·Kᵀ is invariant -> the layout swap is numerically neutral.
-    """
-    h = head_dim // 2
-    return torch.stack([torch.arange(h), torch.arange(h) + h], dim=1).flatten()
-
-
-def rope_halfsplit_to_interleaved(cos: torch.Tensor, sin: torch.Tensor, head_dim: int):
-    """Permute half-split cos/sin tables (cat(freqs,freqs)) into the interleaved
-    [f0,f0,f1,f1,...] layout expected by rotary_embedding_llama. Host-side helper for callers."""
-    perm = rope_halfsplit_to_interleaved_perm(head_dim)
-    return cos[..., perm], sin[..., perm]
-
 
 MATH_FIDELITY_HIFI2 = ttnn.MathFidelity.HiFi2
 MATH_FIDELITY_HIFI4 = ttnn.MathFidelity.HiFi4
