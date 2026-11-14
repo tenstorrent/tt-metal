@@ -113,6 +113,77 @@ def test_embedding_unaligned_RM_pages(
     assert_equal(torch_output_tensor, output_tensor)
 
 
+def test_embedding_preallocated_output(device, expect_error):
+    torch.manual_seed(1234)
+    torch_input_tensor = torch.randint(0, 511, (1, 32))
+    torch_weights = torch_random((512, 64), -0.1, 0.1, dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    weights = ttnn.from_torch(torch_weights, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    def output(dtype, shape=(1, 32, 64)):
+        return ttnn.from_torch(torch.zeros(shape), dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    out = output(ttnn.bfloat16)
+    ttnn.embedding(input_tensor, weights, output_tensor=out)
+    assert_equal(torch.nn.functional.embedding(torch_input_tensor, torch_weights), ttnn.to_torch(out))
+    with expect_error(RuntimeError, "must have the weights' dtype"):
+        ttnn.embedding(input_tensor, weights, output_tensor=output(ttnn.float32))
+    with expect_error(RuntimeError, "but the op writes"):
+        ttnn.embedding(input_tensor, weights, output_tensor=output(ttnn.bfloat16, (1, 16, 64)))
+    with expect_error(RuntimeError, "last dimension must be"):
+        ttnn.embedding(input_tensor, weights, output_tensor=output(ttnn.bfloat16, (1, 16, 128)))
+    with expect_error(RuntimeError, "the output tensor must be in"):
+        ttnn.embedding(
+            input_tensor,
+            weights,
+            output_tensor=ttnn.from_torch(
+                torch.zeros(1, 32, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+            ),
+        )
+    out = ttnn.from_torch(torch.zeros(1, 1, 32, 64), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn.embedding(input_tensor, weights, layout=ttnn.TILE_LAYOUT, output_tensor=out)
+    assert_equal(
+        torch.nn.functional.embedding(torch_input_tensor, torch_weights).float(), ttnn.to_torch(out).reshape(1, 32, 64)
+    )
+
+
+@pytest.mark.parametrize(
+    "layout, memory_layout, shard_shape, error",
+    [
+        pytest.param(ttnn.ROW_MAJOR_LAYOUT, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, (16, 64), None, id="rm_height"),
+        pytest.param(
+            ttnn.ROW_MAJOR_LAYOUT,
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            (32, 32),
+            "only supports height sharded",
+            id="rm_width",
+        ),
+        pytest.param(ttnn.TILE_LAYOUT, ttnn.TensorMemoryLayout.WIDTH_SHARDED, (32, 32), None, id="tile_width"),
+    ],
+)
+def test_embedding_preallocated_sharded_output(device, expect_error, layout, memory_layout, shard_shape, error):
+    torch.manual_seed(1234)
+    torch_input_tensor = torch.randint(0, 511, (1, 32))
+    torch_weights = torch_random((512, 64), -0.1, 0.1, dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    weights = ttnn.from_torch(torch_weights, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    shard_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))])
+    memory_config = ttnn.MemoryConfig(
+        memory_layout, ttnn.BufferType.L1, ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    )
+    out = ttnn.from_torch(
+        torch.zeros(1, 1, 32, 64), dtype=ttnn.bfloat16, layout=layout, device=device, memory_config=memory_config
+    )
+    if error:
+        with expect_error(RuntimeError, error):
+            ttnn.embedding(input_tensor, weights, layout=layout, output_tensor=out)
+        return
+    ttnn.embedding(input_tensor, weights, layout=layout, output_tensor=out)
+    assert_equal(
+        torch.nn.functional.embedding(torch_input_tensor, torch_weights), ttnn.to_torch(out).reshape(1, 32, 64)
+    )
+
+
 @pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("sentence_size", [384])
 @pytest.mark.parametrize("hidden_embedding_dim", [1024])
