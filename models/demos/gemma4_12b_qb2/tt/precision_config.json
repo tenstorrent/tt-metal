@@ -1,0 +1,117 @@
+{
+  "schema": "gemma4_12b_precision/v1",
+  "config_id": "bfp8_gelu_tanh",
+  "description": "BFP8 weights on every layer, gelu_pytorch_tanh in the gated MLP, BFP4 LoFi LM head, BFP8 KV cache",
+  "weights": {
+    "groups": {
+      "qkv": "fused q/k/v projection (column-parallel by head)",
+      "o": "o_proj (row-parallel, decode all-reduce / prefill reduce-scatter after it)",
+      "gate_up": "gate_proj + up_proj (FF1 + FF3, column-parallel; prefill packed copy uses the same dtype)",
+      "down": "down_proj (FF2, row-parallel)"
+    },
+    "default": {
+      "qkv": "bfp8",
+      "o": "bfp8",
+      "gate_up": "bfp8",
+      "down": "bfp8"
+    },
+    "layer_exceptions": []
+  },
+  "compute_fidelity": {
+    "decode_matmul": {
+      "default": {
+        "qkv": "lofi",
+        "o": "lofi",
+        "gate_up": "lofi",
+        "down": "lofi"
+      },
+      "layer_exceptions": []
+    },
+    "prefill_matmul": {
+      "default": {
+        "qkv": "lofi",
+        "o": "lofi",
+        "gate_up": "lofi",
+        "down": "lofi"
+      },
+      "layer_exceptions": [
+        {
+          "layers": "47",
+          "fidelity": {
+            "qkv": "hifi2",
+            "o": "hifi2",
+            "gate_up": "hifi2",
+            "down": "hifi2"
+          }
+        }
+      ]
+    },
+    "lm_head": "lofi",
+    "sdpa_decode": "hifi2fp32",
+    "sdpa_prefill": {
+      "sliding": "hifi2",
+      "full": "hifi2fp32"
+    },
+    "fixed": {
+      "norms": "hifi4fp32",
+      "rope_decode": "hifi4",
+      "sdpa_prefill_short_chunk": "hifi2"
+    }
+  },
+  "lm_head": {
+    "dtype": "bfp4"
+  },
+  "kv_cache": {
+    "dtype": "bfp8"
+  },
+  "ccl": {
+    "decode_all_reduce": {
+      "o": "bfp8",
+      "down": "bfp8"
+    },
+    "prefill_reduce_scatter_o": "bf16",
+    "prefill_all_gather": {
+      "qkv": "bf16",
+      "gate_up": "bfp8"
+    },
+    "prefill_reduce_scatter_down": "follows_prefill_mlp_product"
+  },
+  "activations": {
+    "residual": "bf16",
+    "decode_intermediates": "bf16",
+    "decode_intermediates_note": "decode matmul outputs kept on chip (qkv, gate_up, the MLP product, norm outputs) are BF16; the o_proj and down outputs that feed the decode all-reduce take ccl.decode_all_reduce (BFP8)",
+    "prefill_mlp_intermediates": {
+      "default": {
+        "gate_up": "bfp8",
+        "product": "bfp8"
+      },
+      "layer_exceptions": [
+        {
+          "layers": "10-11",
+          "dtype": {
+            "gate_up": "bf16",
+            "product": "bf16"
+          }
+        }
+      ]
+    }
+  },
+  "logits": {
+    "dtype": "bf16",
+    "softcap": "30 * tanh(x / 30) on device into the persistent BF16 logits buffer"
+  },
+  "sampling": {
+    "sampler": "split_topk",
+    "input_dtype": "bf16",
+    "note": "on-device two-level top-32 per chip over the vocab-sharded BF16 logits; greedy = lowest-id argmax"
+  },
+  "approximations": {
+    "gelu": "tanh"
+  },
+  "selection": {
+    "replaces": "b0_lmh4_lofi, the bring-up's speed-first selection: BFP4 weights on layers 13-26 / 35-39 and the fast GELU approximation. It scored 132 / 198 on GPQA Diamond against the 135 gate.",
+    "accuracy": "Teacher-forced on 8 GPQA Diamond reasoning traces (first 1000 generated tokens each, batch 8) against HF bf16 on CPU: KL(HF || TT) x 1000 over HF's top 20 73.9 -> 7.7, top-1 agreement 92.5% -> 97.6%, positions where HF is >= 90% sure and TT picks another token 12 -> 0 (HF fp32 vs bf16: 0.3 / 99.4% / 0). BFP8 weights alone give 28.1; the fast GELU was the larger share. Exact SDPA exp and HiFi2 matmuls moved KL by under 1.",
+    "gpqa_diamond": "198 questions, thinking on, T 1.0 / top-k 20 / top-p 0.95, 32 concurrent: 144 / 145 / 144 at seeds 42 / 43 / 44 (tt-agentic-bringup-qb2 runs 41834786537 / 41845983159 / 41845991057); same-protocol GPU reference 74.24.",
+    "speed": "vLLM, local QB2: 128/128 one user 12.6 -> 13.3 ms/token, 32 users 1380 -> 1317 tok/s; 4096/128 one user 15.9 -> 16.6 ms/token."
+  }
+}
