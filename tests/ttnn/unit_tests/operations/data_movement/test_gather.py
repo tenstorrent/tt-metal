@@ -131,6 +131,8 @@ def test_gather_multicore_cases(input_shape, index_shape, dim, device):
         ([1, 1, 512, 64], [1, 1, 512, 32], -1, torch.float32, ttnn.float32, ttnn.uint16),
         ([128, 64], [128, 32], 1, torch.bfloat16, ttnn.bfloat16, ttnn.uint16),
         ([2, 32, 96], [2, 32, 32], -1, torch.float32, ttnn.float32, ttnn.uint32),
+        ([2, 32, 96], [2, 32, 32], -1, torch.float32, ttnn.float32, ttnn.int32),
+        ([128, 64], [128, 32], 1, torch.bfloat16, ttnn.bfloat16, ttnn.int32),
     ],
 )
 def test_gather_datatype_cases(
