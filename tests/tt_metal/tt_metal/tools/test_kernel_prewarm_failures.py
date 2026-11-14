@@ -68,8 +68,10 @@ int main(int, char** argv) {
         {"/bin/sh", "-c", "echo 'x: error: bad'; exit 42"},
         {"/no/such/compiler"},
         {"/bin/sh", "-c", "kill -TERM $$"},
-        {"/bin/sh", "-c", "echo 'x: error: bad'; echo 'fatal error: Killed signal'; exit 1"},
-        {"/bin/sh", "-c", "echo 'x: error: bad'; echo 'No space left on device'; exit 1"}}) {
+        {"/bin/sh", "-c", "echo 'x: error: static assertion failed'; echo 'fatal error: Killed signal'; exit 1"},
+        {"/bin/sh", "-c", "echo 'x: error: static assertion failed'; echo 'No space left on device'; exit 1"},
+        {"/bin/sh", "-c", "echo 'x: error: cannot open output file'; exit 1"},
+        {"/bin/sh", "-c", "echo 'x: error: static assertion failed'; echo 'Read-only file system'; exit 1"}}) {
         auto result = failure::command(command, root);
         assert(!result.success() && !result.definite_compile_failure());
         auto transient = [&]() { throw failure::CompileFailure(result, true); };
@@ -124,7 +126,7 @@ int main(int, char** argv) {
     assert(noisy.diagnostic().starts_with("HEAD") && noisy.diagnostic().ends_with("TAIL\n"));
     // Infrastructure text hidden in discarded middle output still prevents negative caching.
     failure::CommandResult middle;
-    middle.consume("x: error: bad\n" + std::string(20000, 'a'));
+    middle.consume("x: error: static assertion failed\n" + std::string(20000, 'a'));
     middle.consume("No space left on device");
     middle.consume(std::string(20000, 'z'));
     middle.exit_code = 1;

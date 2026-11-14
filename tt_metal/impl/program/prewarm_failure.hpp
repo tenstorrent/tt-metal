@@ -38,6 +38,7 @@ struct CommandResult {
     int exit_code = -1;
     bool interrupted = false;
     bool timed_out = false;
+    bool error_marker = false;
     bool semantic_error = false;
     bool infrastructure_error = false;
     size_t bytes = 0;
@@ -55,9 +56,17 @@ struct CommandResult {
         }
         // Scan ALL bytes, including dropped output, with overlap for split diagnostics.
         std::string scan = scan_tail + std::string(chunk);
-        semantic_error |= scan.find(": error:") != std::string::npos;
+        error_marker |= scan.find(": error:") != std::string::npos;
+        // Only known semantic diagnostics qualify. A generic rc=1 / "error:" can be an
+        // output-directory, quota or other infrastructure fault with unchanged source inputs.
+        for (const char* text : {"static assertion failed", "was not declared in this scope", "is not a member of",
+                                 "has not been declared", "no matching function for call",
+                                 "class template argument deduction failed"}) {
+            semantic_error |= scan.find(text) != std::string::npos;
+        }
         for (const char* text : {"fatal error:", "internal compiler error", "No space left", "Permission denied",
-                                 "Cannot allocate memory", "cannot execute", "Killed signal", "Input/output error"}) {
+                                 "Cannot allocate memory", "cannot execute", "Killed signal", "Input/output error",
+                                 "Read-only file system", "Disk quota exceeded", "Too many open files"}) {
             infrastructure_error |= scan.find(text) != std::string::npos;
         }
         scan_tail = scan.substr(scan.size() > 128 ? scan.size() - 128 : 0);
@@ -65,7 +74,7 @@ struct CommandResult {
 
     bool success() const { return exit_code == 0 && !interrupted && !timed_out; }
     bool definite_compile_failure() const {
-        return exit_code == 1 && !interrupted && !timed_out && semantic_error && !infrastructure_error;
+        return exit_code == 1 && !interrupted && !timed_out && error_marker && semantic_error && !infrastructure_error;
     }
     std::string diagnostic() const {
         return head + (bytes > head.size() + tail.size() ? "\n[compiler output truncated]\n" : "") + tail;

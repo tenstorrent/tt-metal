@@ -191,7 +191,8 @@ prewarm does not regenerate it, and it self-heals on the next real load.
 
 ## Failed recipes and bounded diagnostics
 
-The manifest is preserved. A definite compiler error can create a separate
+The manifest is preserved. A recognized semantic compiler error (such as a static assertion, missing member
+or template deduction failure) can create a separate
 `.prewarm-failed-<target>` record in the kernel directory, outside the target
 artifacts removed after failure. Subsequent passes skip that failure only when
 its context still matches. The context includes the complete target recipe,
