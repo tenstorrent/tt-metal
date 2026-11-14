@@ -1656,6 +1656,12 @@ class Glm53Generator(_ReadinessGenerator):
             return plans
         if b % int(self.backend.continuation_align):
             return plans  # (a piece must start on the continuation grid)
+        rmax_fn = getattr(self.backend, "prefill_resume_max", None)
+        rmax = rmax_fn() if callable(rmax_fn) else None
+        if isinstance(rmax, int) and int(last.start) + (pieces - 1) * b > rmax:
+            # (F27: a piece would start past the last resumable start, where no bucket has a key -- e.g. a 2,100-token
+            # tail resumed at 1,046,400 under the 1,048,576 window: keep the chunk whole, clamp_lengths plans it tail-first)
+            return plans
         if slice_boundary(int(last.n_valid) - (pieces - 1) * b - 1, self._slice_rows(b)):
             return (
                 plans  # (the last piece would end on a chip slice boundary: keep the unsplit chunk, its rule applies)
