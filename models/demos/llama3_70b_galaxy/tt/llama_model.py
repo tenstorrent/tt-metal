@@ -17,6 +17,8 @@ from models.demos.llama3_70b_galaxy.tt.llama_rope import TtLlamaRotarySetup
 from models.demos.llama3_70b_galaxy.tt.prefetcher_common import TtLlamaPrefetcherSetup
 from models.demos.llama3_70b_galaxy.tt.llama_embedding import TtLlamaEmbedding
 from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
+from models.demos.llama3_70b_galaxy.tt import qwen_cp_prefill
+from models.demos.llama3_70b_galaxy.tt.qwen_opt_limits import qwen_prefill_opt_ok, set_prefill_total_len
 from models.common.sampling.generator import SamplingGenerator
 
 
@@ -1052,6 +1054,43 @@ class TtTransformer(LightweightModule):
             )
             rot_mats = (rot_cos_slice, rot_sin_slice)
 
+        if mode == "prefill":
+            # Total context of this prefill (cached prefix + new rows) and its cached prefix: the Qwen long-prefill
+            # gates in attention, MLP, CCL and the config getters read the total (qwen_opt_limits.qwen_prefill_opt_ok);
+            # the prefill norms (also the output norm in process_output_prefill* after this call) read both
+            # (qwen_opt_limits.prefill_norm: main's eps for any cached prefix).
+            set_prefill_total_len(self.model_config, start_pos + x.shape[-2], num_cached=start_pos)
+
+        # Qwen long prefill on Wormhole (batch 1, no prefix, S > 8192): context-parallel layout B
+        # (tt/qwen_cp_prefill.py; QWEN_CP_PREFILL=0 keeps the seq-parallel path below). Returns the same natural
+        # [1, 1, S, 1280] pre-norm output as that path.
+        if qwen_cp_prefill.cp_prefill_applies(
+            self.args, self.use_prefetcher, self.prefetcher_setup, mode, batch_size, start_pos, x.shape[-2]
+        ):
+            return qwen_cp_prefill.model_prefill(self, x, rot_mats, user_id, page_table, kv_cache)
+
+        # Qwen long prefill on Wormhole (batch 1, no prefix): sequence-parallel residual stream over the mesh rows.
+        # Each row keeps one S/8 chunk of the residual between layers, runs the norms and residual adds on it, gathers
+        # the norm outputs along the sequence for attention / MLP, and reduce-scatters WO / FF2 along the sequence
+        # instead of all-reducing them. The full sequence is gathered back after the last layer.
+        rows = self.args.cluster_shape[0]
+        seq_parallel = (
+            mode == "prefill"
+            and self.args.is_qwen
+            and self.use_prefetcher
+            and not getattr(self.args, "is_blackhole", False)
+            and self.prefetcher_setup is not None
+            and batch_size == 1
+            and start_pos == 0
+            and x.shape[-2] > 8192
+            and qwen_prefill_opt_ok(self.model_config, x.shape[-2])  # > QWEN_OPT_MAX_SEQ_LEN: main's residual
+            and x.shape[-2] % (rows * 32) == 0
+        )
+        if seq_parallel:
+            x_full = x
+            x = ttnn.mesh_partition(x_full, dim=2, cluster_axis=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            x_full.deallocate(True)
+
         h = None
         # x needs to be in bfloat16_b as it gets reused as the residual tensor
         for i, layer in enumerate(self.layers):
@@ -1068,7 +1107,12 @@ class TtTransformer(LightweightModule):
                 chunk_start_idx_tensor=chunk_start_idx if mode == "prefill" else None,
                 kv_cache=kv_cache[i] if kv_cache is not None else None,
                 batch_size=batch_size,
+                seq_parallel=seq_parallel,
             )
+        if seq_parallel:
+            x_local = x
+            x = self.tt_ccl.ring_all_gather_seq(x_local, ttnn.DRAM_MEMORY_CONFIG, "FF2")
+            x_local.deallocate(True)
         # ttnn.deallocate(h)
         if mode == "decode" and self.use_prefetcher:
             ttnn.deallocate(garbage_tensor)

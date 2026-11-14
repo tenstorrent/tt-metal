@@ -11,9 +11,16 @@ def ensure_gc():
     gc.collect()
 
 
+def pytest_configure(config):
+    config.addinivalue_line("markers", "host_only: runs on the host only; skips the 32-device Galaxy check")
+
+
 @pytest.fixture(autouse=True)
-def ensure_devices(ensure_devices_tg):
-    pass
+def ensure_devices(request):
+    # The device check enumerates the cluster, so host-only tests skip it and run on any machine.
+    if request.node.get_closest_marker("host_only"):
+        return
+    request.getfixturevalue("ensure_devices_tg")
 
 
 @pytest.fixture
