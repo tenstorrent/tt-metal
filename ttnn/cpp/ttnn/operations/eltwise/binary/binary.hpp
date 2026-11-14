@@ -168,11 +168,11 @@
         const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,                 \
         const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 
-// Tensor-int32_t bitwise binary op (no output_dtype, calls invoke_binary_ng)
-#define TTNN_BINARY_OP_TENSOR_INT32_BITWISE(NAME, OP_TYPE)                                \
+// Tensor-integer-scalar bitwise binary op (no output_dtype, calls invoke_binary_ng)
+#define TTNN_BINARY_OP_TENSOR_INT32_BITWISE(NAME, OP_TYPE, SCALAR_T)                      \
     Tensor NAME(                                                                          \
         const Tensor& lhs,                                                                \
-        int32_t rhs,                                                                      \
+        SCALAR_T rhs,                                                                     \
         const std::optional<MemoryConfig>& memory_config = std::nullopt,                  \
         const std::optional<Tensor>& output = std::nullopt,                               \
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {}, \
@@ -512,17 +512,17 @@ Tensor subalpha(
 TTNN_BINARY_OP_TENSOR_TENSOR(logical_right_shift, LOGICAL_RIGHT_SHIFT)
 TTNN_BINARY_OP_TENSOR_SCALAR(logical_right_shift, LOGICAL_RIGHT_SHIFT)
 TTNN_BINARY_OP_TENSOR_TENSOR_BITWISE(bitwise_and, BITWISE_AND)
-TTNN_BINARY_OP_TENSOR_INT32_BITWISE(bitwise_and, BITWISE_AND)
+TTNN_BINARY_OP_TENSOR_INT32_BITWISE(bitwise_and, BITWISE_AND, int64_t)
 TTNN_BINARY_OP_TENSOR_TENSOR_BITWISE(bitwise_or, BITWISE_OR)
-TTNN_BINARY_OP_TENSOR_INT32_BITWISE(bitwise_or, BITWISE_OR)
+TTNN_BINARY_OP_TENSOR_INT32_BITWISE(bitwise_or, BITWISE_OR, int64_t)
 TTNN_BINARY_OP_TENSOR_TENSOR_BITWISE(bitwise_xor, BITWISE_XOR)
-TTNN_BINARY_OP_TENSOR_INT32_BITWISE(bitwise_xor, BITWISE_XOR)
+TTNN_BINARY_OP_TENSOR_INT32_BITWISE(bitwise_xor, BITWISE_XOR, int64_t)
 TTNN_BINARY_OP_TENSOR_TENSOR_BITWISE(bitwise_left_shift, LEFT_SHIFT)
-TTNN_BINARY_OP_TENSOR_INT32_BITWISE(bitwise_left_shift, LEFT_SHIFT)
+TTNN_BINARY_OP_TENSOR_INT32_BITWISE(bitwise_left_shift, LEFT_SHIFT, int32_t)
 TTNN_BINARY_OP_TENSOR_TENSOR_BITWISE(bitwise_right_shift, RIGHT_SHIFT)
-TTNN_BINARY_OP_TENSOR_INT32_BITWISE(bitwise_right_shift, RIGHT_SHIFT)
+TTNN_BINARY_OP_TENSOR_INT32_BITWISE(bitwise_right_shift, RIGHT_SHIFT, int32_t)
 TTNN_BINARY_OP_TENSOR_TENSOR_BITWISE(logical_left_shift, LEFT_SHIFT)
-TTNN_BINARY_OP_TENSOR_INT32_BITWISE(logical_left_shift, LEFT_SHIFT)
+TTNN_BINARY_OP_TENSOR_INT32_BITWISE(logical_left_shift, LEFT_SHIFT, int32_t)
 TTNN_BINARY_OP_TENSOR_TENSOR(xlogy, XLOGY)
 TTNN_BINARY_OP_TENSOR_SCALAR(xlogy, XLOGY)
 Tensor hypot(
