@@ -20,10 +20,6 @@ namespace ckernel {
 namespace sfpu {
 
 // These constants and function should ideally go to SFPI
-// Copied from ckernel_sfpu_int_sum.h to avoid dependency complications
-#ifndef SFPU_SIGN_MAG_TO_TWOS_COMP_DEFINED
-#define SFPU_SIGN_MAG_TO_TWOS_COMP_DEFINED
-
 #define BIT_MASK_32 0xFFFFFFFF
 #define SIGN 0x80000000
 #define MAGNITUDE 0x7FFFFFFF
@@ -37,8 +33,6 @@ sfpi_inline vInt sfpu_sign_mag_to_twos_comp(vInt value) {
     v_endif;
     return value;
 }
-
-#endif  // SFPU_SIGN_MAG_TO_TWOS_COMP_DEFINED
 
 inline void equal_zero_init() {
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
