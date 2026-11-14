@@ -5196,3 +5196,127 @@ def test_binary_sharded_row_major_with_sub_core_grids(device):
     out = ttnn.add(a, b, sub_core_grids=grid)
 
     assert_with_pcc(torch_a + torch_b, ttnn.to_torch(out), 0.9999)
+
+
+def _num_cores_and_dram_banks(device):
+    grid = device.compute_with_storage_grid_size()
+    dram_grid = device.dram_grid_size()
+    return grid.x * grid.y, dram_grid.x * dram_grid.y
+
+
+@pytest.mark.parametrize(
+    "bank_multiple, plus, extra_tiles",
+    [
+        (0, 1, 0),
+        (0, 2, 0),
+        (1, -1, 0),
+        (1, 0, 0),
+        (1, 1, 0),
+        (2, 0, 0),
+        (4, 0, 0),
+        (4, 0, "half_cores"),
+        (4, 0, 7),
+    ],
+)
+@pytest.mark.parametrize("op_name", ["add", "subtract", "multiply"])
+def test_binary_ng_no_bcast_interleaved_rotated_start(device, bank_multiple, plus, extra_tiles, op_name):
+    """Interleaved no-broadcast binary_ng starts each core's tile range on a different DRAM bank and wraps to the
+    head of the range at the end. Every tile must still be written exactly once with the right value, including
+    ranges shorter than the bank count and the shorter ranges of the second core group."""
+    cores, banks = _num_cores_and_dram_banks(device)
+    per_core = bank_multiple * banks + plus
+    extra = cores // 2 if extra_tiles == "half_cores" else extra_tiles
+    total_tiles = cores * per_core + extra
+    shape = (1, 1, 32, 32 * total_tiles)
+
+    torch.manual_seed(0)
+    torch_a = torch.randint(-1000, 1000, shape, dtype=torch.int32)
+    torch_b = torch.randint(-1000, 1000, shape, dtype=torch.int32)
+    a = ttnn.from_torch(
+        torch_a, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    b = ttnn.from_torch(
+        torch_b, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    golden = {"add": torch.add, "subtract": torch.sub, "multiply": torch.mul}[op_name](torch_a, torch_b)
+
+    assert torch.equal(ttnn.to_torch(getattr(ttnn, op_name)(a, b)), golden)
+
+
+@pytest.mark.parametrize(
+    "a_shape, b_shape",
+    [
+        [[2, 3, 128, 1536], [1, 3, 128, 1536]],
+        [[2, 3, 128, 1536], [2, 1, 128, 1536]],
+        [[4, 96, 384], [4, 96, 384]],
+    ],
+)
+def test_binary_ng_no_bcast_interleaved_rotated_start_outer_dims(device, a_shape, b_shape):
+    """The rotated start lands mid-row and mid-batch, so the reader has to rebuild the operand page offsets (including
+    outer-dim broadcasts of b) from an arbitrary tile id."""
+    torch.manual_seed(0)
+    torch_a = torch.randint(-1000, 1000, a_shape, dtype=torch.int32)
+    torch_b = torch.randint(-1000, 1000, b_shape, dtype=torch.int32)
+    a = ttnn.from_torch(torch_a, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    b = ttnn.from_torch(torch_b, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    assert torch.equal(ttnn.to_torch(ttnn.add(a, b)), torch_a + torch_b)
+
+
+def test_binary_ng_no_bcast_interleaved_rotated_start_sub_core_grids(device):
+    torch.manual_seed(0)
+    grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(4, 4))])
+    _, banks = _num_cores_and_dram_banks(device)
+    shape = (1, 1, 32 * 16, 32 * 4 * banks)
+    torch_a = torch.randint(-1000, 1000, shape, dtype=torch.int32)
+    torch_b = torch.randint(-1000, 1000, shape, dtype=torch.int32)
+    a = ttnn.from_torch(torch_a, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    b = ttnn.from_torch(torch_b, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    assert torch.equal(ttnn.to_torch(ttnn.add(a, b, sub_core_grids=grid)), torch_a + torch_b)
+
+
+def test_binary_ng_no_bcast_interleaved_bfloat16_rotated_start(device):
+    torch.manual_seed(0)
+    cores, banks = _num_cores_and_dram_banks(device)
+    shape = (1, 1, 32 * cores, 32 * 4 * banks)
+    torch_a = torch.rand(shape, dtype=torch.bfloat16)
+    torch_b = torch.rand(shape, dtype=torch.bfloat16)
+    a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device)
+    b = ttnn.from_torch(torch_b, layout=ttnn.TILE_LAYOUT, device=device)
+
+    assert_with_pcc(torch_a + torch_b, ttnn.to_torch(ttnn.add(a, b)), 0.9999)
+
+
+@pytest.mark.skip_post_commit  # wall-clock perf guard; run in perf/nightly, not fast post-commit
+def test_binary_ng_no_bcast_interleaved_bank_aliased_ranges_bandwidth(device):
+    """With one tile row of 4 * banks tiles per core, every core's range used to start on the same DRAM bank, so all
+    cores read and wrote one bank at a time. Throughput must match a range one tile longer (no aliasing) instead of
+    dropping by about a quarter (Wormhole N150: 155 vs 212 GB/s before the per-core start rotation)."""
+    import time
+
+    cores, banks = _num_cores_and_dram_banks(device)
+
+    def _bytes_per_us(tiles_per_core, reps=50):
+        shape = (1, 1, 32 * cores, 32 * tiles_per_core)
+        a = ttnn.from_torch(torch.rand(shape, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+        b = ttnn.from_torch(torch.rand(shape, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+        out = ttnn.add(a, b)  # compile and allocate once
+        ttnn.synchronize_device(device)
+        best = float("inf")
+        for _ in range(5):
+            t0 = time.perf_counter()
+            for _ in range(reps):
+                ttnn.add(a, b, output_tensor=out)
+            ttnn.synchronize_device(device)
+            best = min(best, (time.perf_counter() - t0) * 1e6 / reps)
+        for t in (a, b, out):
+            ttnn.deallocate(t)
+        return 3 * cores * tiles_per_core * 32 * 32 * 2 / best
+
+    aliased = _bytes_per_us(4 * banks)
+    control = _bytes_per_us(4 * banks + 1)
+    assert aliased >= 0.85 * control, (
+        f"add with {4 * banks} tiles per core reaches {aliased / 1e3:.0f} GB/s vs {control / 1e3:.0f} GB/s with "
+        f"{4 * banks + 1}: every core's tile range starts on the same DRAM bank"
+    )

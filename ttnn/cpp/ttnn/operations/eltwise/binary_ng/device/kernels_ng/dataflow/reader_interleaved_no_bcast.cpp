@@ -65,90 +65,111 @@ void kernel_main() {
 #if !SRC_SHARDED || !SRC_SHARDED_B
     constexpr uint32_t onetile = 1;
     constexpr bool has_sharding = get_compile_time_arg_val(src_b_args.next_compile_time_args_offset()) == 1;
-    const uint32_t HtWt = Ht * Wt;
+#if ROTATE_START_BANK
+    // Each core owns a contiguous range of tiles. When the range length is a multiple of the DRAM bank count, every
+    // core starts on the same bank and all of them hit that bank in lockstep. Start core c on bank c % NUM_DRAM_BANKS
+    // instead, and wrap to the head of the range at the end. Reader and writer use the same order.
+    uint32_t rotation = 0;
+    if (dst_num_tiles > 1) {
+        const uint32_t core = start_tile_id / dst_num_tiles;
+        rotation = (core % NUM_DRAM_BANKS + NUM_DRAM_BANKS - start_tile_id % NUM_DRAM_BANKS) % NUM_DRAM_BANKS;
+        if (rotation >= dst_num_tiles) {
+            rotation = 0;
+        }
+    }
+#else
+    constexpr uint32_t rotation = 0;
+#endif
+    for (uint32_t pass = 0; pass < 2; ++pass) {
+        const uint32_t range_start = pass == 0 ? start_tile_id + rotation : start_tile_id;
+        const uint32_t range_tiles = pass == 0 ? dst_num_tiles - rotation : rotation;
+        if (range_tiles == 0) {
+            continue;
+        }
+        const uint32_t HtWt = Ht * Wt;
 
-    const uint32_t tiles_per_n = C * HtWt;
-    const uint32_t tiles_per_d = N * tiles_per_n;
-    const uint32_t tiles_per_nd = D * tiles_per_d;
-    const uint32_t offset_nd = start_tile_id % tiles_per_nd;
-    const uint32_t offset_d = offset_nd % tiles_per_d;
-    const uint32_t offset_n = offset_d % tiles_per_n;
-    const uint32_t offset_c = offset_n % HtWt;
-    uint32_t start_nd = start_tile_id / tiles_per_nd;
-    uint32_t start_d = offset_nd / tiles_per_d;
-    uint32_t start_n = offset_d / tiles_per_n;
-    uint32_t start_c = offset_n / HtWt;
-    uint32_t start_th = offset_c / Wt;
-    uint32_t start_tw = offset_c % Wt;
-    uint32_t end_tw = has_sharding ? start_tw + dst_shard_width : Wt;
+        const uint32_t tiles_per_n = C * HtWt;
+        const uint32_t tiles_per_d = N * tiles_per_n;
+        const uint32_t tiles_per_nd = D * tiles_per_d;
+        const uint32_t offset_nd = range_start % tiles_per_nd;
+        const uint32_t offset_d = offset_nd % tiles_per_d;
+        const uint32_t offset_n = offset_d % tiles_per_n;
+        const uint32_t offset_c = offset_n % HtWt;
+        uint32_t start_nd = range_start / tiles_per_nd;
+        uint32_t start_d = offset_nd / tiles_per_d;
+        uint32_t start_n = offset_d / tiles_per_n;
+        uint32_t start_c = offset_n / HtWt;
+        uint32_t start_th = offset_c / Wt;
+        uint32_t start_tw = offset_c % Wt;
+        uint32_t end_tw = has_sharding ? start_tw + dst_shard_width : Wt;
 
-    // this is the INPUT tile offset
-    uint32_t tile_offset =
-        start_nd * nD_stride + start_d * d_stride + start_n * n_stride + start_c * c_stride + start_th * a_row_wt;
-    uint32_t next_c_shift = c_stride - Ht * a_row_wt;
-    uint32_t next_n_shift = n_stride - c_stride * C;
-    uint32_t next_d_shift = d_stride - n_stride * N;
-    uint32_t next_nd_shift = nD_stride - d_stride * D;
+        // this is the INPUT tile offset
+        uint32_t tile_offset =
+            start_nd * nD_stride + start_d * d_stride + start_n * n_stride + start_c * c_stride + start_th * a_row_wt;
+        uint32_t next_c_shift = c_stride - Ht * a_row_wt;
+        uint32_t next_n_shift = n_stride - c_stride * C;
+        uint32_t next_d_shift = d_stride - n_stride * N;
+        uint32_t next_nd_shift = nD_stride - d_stride * D;
 
-    uint32_t tile_offset_b =
-        start_nd * nD_stride_b + start_d * d_stride_b + start_n * n_stride_b + start_c * c_stride_b +
-        start_th * b_row_wt;
-    uint32_t next_c_shift_b = c_stride_b - Ht * b_row_wt;
-    uint32_t next_n_shift_b = n_stride_b - c_stride_b * C;
-    uint32_t next_d_shift_b = d_stride_b - n_stride_b * N;
-    uint32_t next_nd_shift_b = nD_stride_b - d_stride_b * D;
+        uint32_t tile_offset_b = start_nd * nD_stride_b + start_d * d_stride_b + start_n * n_stride_b +
+                                 start_c * c_stride_b + start_th * b_row_wt;
+        uint32_t next_c_shift_b = c_stride_b - Ht * b_row_wt;
+        uint32_t next_n_shift_b = n_stride_b - c_stride_b * C;
+        uint32_t next_d_shift_b = d_stride_b - n_stride_b * N;
+        uint32_t next_nd_shift_b = nD_stride_b - d_stride_b * D;
 
-    uint32_t num_tiles_read = 0;
-    for (uint32_t nd = start_nd; nd < cND && num_tiles_read < dst_num_tiles; ++nd, start_d = 0) {
-        for (uint32_t d = start_d; d < D && num_tiles_read < dst_num_tiles; ++d, start_n = 0) {
-            for (uint32_t n = start_n; n < N && num_tiles_read < dst_num_tiles; ++n, start_c = 0) {
-                for (uint32_t c = start_c; c < C && num_tiles_read < dst_num_tiles; ++c, start_th = 0) {
-                    for (uint32_t th = start_th; th < Ht && num_tiles_read < dst_num_tiles; ++th) {
-                        for (uint32_t tw = start_tw; tw < end_tw && num_tiles_read < dst_num_tiles;
-                             ++tw, ++num_tiles_read) {
+        uint32_t num_tiles_read = 0;
+        for (uint32_t nd = start_nd; nd < cND && num_tiles_read < range_tiles; ++nd, start_d = 0) {
+            for (uint32_t d = start_d; d < D && num_tiles_read < range_tiles; ++d, start_n = 0) {
+                for (uint32_t n = start_n; n < N && num_tiles_read < range_tiles; ++n, start_c = 0) {
+                    for (uint32_t c = start_c; c < C && num_tiles_read < range_tiles; ++c, start_th = 0) {
+                        for (uint32_t th = start_th; th < Ht && num_tiles_read < range_tiles; ++th) {
+                            for (uint32_t tw = start_tw; tw < end_tw && num_tiles_read < range_tiles;
+                                 ++tw, ++num_tiles_read) {
 #if !SRC_SHARDED
-                            dfb_src.reserve_back(onetile);
-                            noc.async_read(
-                                src, dfb_src, src_tile_bytes, {.page_id = tile_offset + tw}, {.offset_bytes = 0});
+                                dfb_src.reserve_back(onetile);
+                                noc.async_read(
+                                    src, dfb_src, src_tile_bytes, {.page_id = tile_offset + tw}, {.offset_bytes = 0});
 #endif
 #if !SRC_SHARDED_B
-                            // read a tile from src_b
-                            dfb_src_b.reserve_back(onetile);
-                            noc.async_read(
-                                src_b,
-                                dfb_src_b,
-                                src_tile_bytes_b,
-                                {.page_id = tile_offset_b + tw},
-                                {.offset_bytes = 0});
+                                // read a tile from src_b
+                                dfb_src_b.reserve_back(onetile);
+                                noc.async_read(
+                                    src_b,
+                                    dfb_src_b,
+                                    src_tile_bytes_b,
+                                    {.page_id = tile_offset_b + tw},
+                                    {.offset_bytes = 0});
 #endif
 #if !SRC_SHARDED || !SRC_SHARDED_B
-                            noc.async_read_barrier();
+                                noc.async_read_barrier();
 #endif
 #if !SRC_SHARDED
-                            dfb_src.push_back(onetile);
+                                dfb_src.push_back(onetile);
 #endif
 #if !SRC_SHARDED_B
-                            dfb_src_b.push_back(onetile);
+                                dfb_src_b.push_back(onetile);
 #endif
+                            }
+                            if constexpr (!has_sharding) {
+                                // next row of tiles should start at the first column
+                                start_tw = 0;
+                            }
+                            tile_offset += a_row_wt;
+                            tile_offset_b += b_row_wt;
                         }
-                        if constexpr (!has_sharding) {
-                            // next row of tiles should start at the first column
-                            start_tw = 0;
-                        }
-                        tile_offset += a_row_wt;
-                        tile_offset_b += b_row_wt;
+                        tile_offset += next_c_shift;
+                        tile_offset_b += next_c_shift_b;
                     }
-                    tile_offset += next_c_shift;
-                    tile_offset_b += next_c_shift_b;
+                    tile_offset += next_n_shift;
+                    tile_offset_b += next_n_shift_b;
                 }
-                tile_offset += next_n_shift;
-                tile_offset_b += next_n_shift_b;
+                tile_offset += next_d_shift;
+                tile_offset_b += next_d_shift_b;
             }
-            tile_offset += next_d_shift;
-            tile_offset_b += next_d_shift_b;
+            tile_offset += next_nd_shift;
+            tile_offset_b += next_nd_shift_b;
         }
-        tile_offset += next_nd_shift;
-        tile_offset_b += next_nd_shift_b;
     }
 #endif
 }

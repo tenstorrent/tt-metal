@@ -1345,6 +1345,15 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         });
     }
 
+    // Interleaved, no broadcast: each core starts its contiguous tile range on a different DRAM bank, so cores whose
+    // range length is a multiple of the bank count do not all read and write one bank at a time. The compute kernel
+    // is order-independent here; reader and writer must agree on the order, so both get the define.
+    if (!inputs_row_major && !has_sharding && b.has_value() &&
+        operation_attributes.subtile_broadcast_type == SubtileBroadcastType::NONE) {
+        reader_defines["ROTATE_START_BANK"] = "1";
+        writer_defines["ROTATE_START_BANK"] = "1";
+    }
+
     // WRITER KERNEL DESCRIPTOR
     std::vector<uint32_t> writer_compile_time_args;
     std::vector<uint32_t> writer_common_runtime_args;
