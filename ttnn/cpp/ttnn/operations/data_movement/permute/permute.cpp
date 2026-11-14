@@ -9,6 +9,8 @@
 #include "ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
 
 #include <tt-metalium/hal.hpp>
+#include <algorithm>
+#include <string>
 #include "ttnn/tensor/tensor_utils.hpp"
 
 #include "ttnn/operations/core/core.hpp"
@@ -214,6 +216,28 @@ ttnn::Tensor permute(
     std::transform(dims.begin(), dims.end(), normalized_dims.begin(), [input_tensor](std::int64_t idx) {
         return input_tensor.logical_shape().get_normalized_index(idx);
     });
+    // A permutation repeats no dimension. Torch rejects one ("repeated dim in permute"), and with a
+    // repeated entry some dimension is dropped, so the output has the same volume as the input but
+    // values from the wrong places, with nothing to catch it: the check above only counts the
+    // entries, and get_normalized_index only bounds each one independently.
+    {
+        ttsl::SmallVector<uint32_t> sorted_dims(normalized_dims);
+        std::sort(sorted_dims.begin(), sorted_dims.end());
+        const bool has_duplicate_dims = std::adjacent_find(sorted_dims.begin(), sorted_dims.end()) != sorted_dims.end();
+        if (has_duplicate_dims) {
+            std::string dims_string;
+            for (const int64_t dim : dims) {
+                dims_string += std::to_string(dim);
+                dims_string += ",";
+            }
+            dims_string.pop_back();
+            TT_FATAL(
+                false,
+                "permute dims [{}] must be a permutation of the tensor's {} dimensions, but they repeat one",
+                dims_string,
+                input_rank);
+        }
+    }
     if (operations::data_movement::detail::is_permute_nop(input_tensor, normalized_dims)) {
         return ttnn::to_memory_config(input_tensor, memory_config.value_or(input_tensor.memory_config()));
     }
