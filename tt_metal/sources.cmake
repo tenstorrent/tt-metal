@@ -134,6 +134,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/tensor_prefetcher.hpp
     api/tt-metalium/experimental/tensor_serialization_support.hpp
     api/tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp
+    api/tt-metalium/experimental/work_split.hpp
     api/tt-metalium/tensor/host_tensor.hpp
     api/tt-metalium/tensor/mesh_tensor.hpp
     api/tt-metalium/tensor/spec/layout/alignment.hpp

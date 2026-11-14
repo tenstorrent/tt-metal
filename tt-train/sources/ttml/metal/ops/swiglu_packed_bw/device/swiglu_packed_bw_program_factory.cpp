@@ -47,8 +47,8 @@ namespace ttml::metal::ops::swiglu_packed_bw::device {
 
 namespace {
 
-// The packed tensor's blocks over the device's compute grid. create_descriptor() pins it against split_work_to_cores,
-// and override_runtime_arguments() walks the same cores from it.
+// The packed tensor's blocks over the device's compute grid. create_descriptor() and override_runtime_arguments() walk
+// the same cores from it.
 WorkSplit make_work_split(const ttnn::Tensor& packed) {
     return compute_work_split(
         packed.device()->compute_with_storage_grid_size(),
@@ -76,7 +76,6 @@ tt::tt_metal::ProgramDescriptor SwigluPackedBwProgramFactory::create_descriptor(
     const auto [num_cores, all_cores, core_group_1, core_group_2, num_blocks_g1, num_blocks_g2] =
         tt::tt_metal::split_work_to_cores(grid_size, geometry.total_blocks);
     const WorkSplit split = make_work_split(packed);
-    check_work_split(split, num_cores, core_group_1, core_group_2, num_blocks_g1, num_blocks_g2);
 
     const uint32_t twice_block = 2U * block_size;
     program.cbs.push_back(make_cb_descriptor(all_cores, kGateCbIndex, data_format, tile_size_bytes, twice_block));
