@@ -49,9 +49,9 @@ from helpers.format_config import DataFormat
 from helpers.golden_generators import TILE_DIM, MatmulGolden, get_golden_generator
 from helpers.llk_params import DestAccumulation, MathFidelity, format_dict
 from helpers.param_config import generate_combination, parametrize
+from helpers.perf.blaze import execute_llk
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
-from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     CRK_TILE_DIMM,
     IN_FACE_DIMS,
@@ -109,6 +109,7 @@ def _pack_in1_bfp(in1, kt_dim, ct_dim, code):
 # below keeps all three compression formats but only the grid corners (ct_dim and in0_rows at their extremes, both
 # kt_dim values) == 24 cases, and the full sweep runs nightly. The two are the same body.
 CORNER_GRID = matmul_grid(ct_dims=[1, 16], kt_dims=[2, 4], in0_face_r_dims=[1, 8])
+FULL_GRID = [point for point in matmul_grid() if point not in set(CORNER_GRID)]
 
 
 @blackhole_only
@@ -128,7 +129,7 @@ def test_compressed_custom_mm(
 @pytest.mark.nightly
 @parametrize(
     formats=COMPRESSED_MM_FORMATS,
-    ct_kt_rows=matmul_grid(),
+    ct_kt_rows=FULL_GRID,
 )
 def test_compressed_custom_mm_full_grid(
     formats,
@@ -142,6 +143,12 @@ def _run_compressed_custom_mm(
     formats,
     ct_kt_rows,
     boot_mode=BootMode.DEFAULT,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+    max_ulp=None,
 ):
     ct_dim, kt_dim, in0_rows = ct_kt_rows
     rt_dim = 1  # compressed_custom_mm contract: rt_dim is always 1
@@ -190,40 +197,50 @@ def _run_compressed_custom_mm(
     # Every tile carries the one BFP format under test, so the assignment is uniform.
     meta_bytes = encode_tile_meta([code] * (kt_dim * ct_dim), ct_dim)
 
-    configuration = TestConfig(
-        "sources/compressed_custom_mm_test.cpp",
-        formats,
-        runtimes=[
-            # num_faces_A is in0's active face count and num_faces_B is in1's full 4; the kernel CROSSES them into the
-            # unpB / unpA slots. num_faces is the pack count.
-            NUM_FACES(num_faces=2, num_faces_A=2, num_faces_B=4),
-            TILE_COUNT(output_tile_cnt),
-            CRK_TILE_DIMM(ct_dim, rt_dim, kt_dim),
-            IN_FACE_DIMS(in0_face_r_dim=in0_rows),
-        ],
-        # All three inputs are pre-packed L1 images, so they go to L1 verbatim: in0 is the dense
-        # partial-face run, in1 the BFP-compressed stream, buffer_C the meta words. The tile counts
-        # and formats below are only what reserves each operand's L1 region -- in1 is declared
-        # Bfp8_b (the widest BFP tile, 1088 B) so the reservation covers the stream whichever
-        # format this variant packs it in, exactly as compressed_utils.CompressedStimuliConfig does.
-        variant_stimuli=StimuliConfig(
-            buffer_A=in0_faces,
-            stimuli_A_format=in0_format,
-            tile_count_A=kt_dim,
-            buffer_B=packed_b,
-            stimuli_B_format=DataFormat.Bfp8_b,
-            tile_count_B=kt_dim * ct_dim,
-            buffer_C=meta_bytes,
-            stimuli_C_format=DataFormat.UInt32,
-            tile_count_C=(len(meta_bytes) + 4095) // 4096,
-            stimuli_res_format=formats.output_format,
-            tile_count_res=output_tile_cnt,
-        ),
-        dest_acc=DestAccumulation.No,
+    outcome = execute_llk(
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
         boot_mode=boot_mode,
+        test_config_kwargs=dict(
+            test_name="sources/compressed_custom_mm_test.cpp",
+            formats=formats,
+            templates=[],
+            runtimes=[
+                # num_faces_A is in0's active face count and num_faces_B is in1's full 4; the kernel CROSSES them into the
+                # unpB / unpA slots. num_faces is the pack count.
+                NUM_FACES(num_faces=2, num_faces_A=2, num_faces_B=4),
+                # Report cycles per output tile so K-dependent work remains visible
+                # while results across output widths stay directly comparable.
+                TILE_COUNT(output_tile_cnt),
+                CRK_TILE_DIMM(ct_dim, rt_dim, kt_dim),
+                IN_FACE_DIMS(in0_face_r_dim=in0_rows),
+            ],
+            # All three inputs are pre-packed L1 images, so they go to L1 verbatim: in0 is the dense
+            # partial-face run, in1 the BFP-compressed stream, buffer_C the meta words. The tile counts
+            # and formats below are only what reserves each operand's L1 region -- in1 is declared
+            # Bfp8_b (the widest BFP tile, 1088 B) so the reservation covers the stream whichever
+            # format this variant packs it in, exactly as compressed_utils.CompressedStimuliConfig does.
+            variant_stimuli=StimuliConfig(
+                buffer_A=in0_faces,
+                stimuli_A_format=in0_format,
+                tile_count_A=kt_dim,
+                buffer_B=packed_b,
+                stimuli_B_format=DataFormat.Bfp8_b,
+                tile_count_B=kt_dim * ct_dim,
+                buffer_C=meta_bytes,
+                stimuli_C_format=DataFormat.UInt32,
+                tile_count_C=(len(meta_bytes) + 4095) // 4096,
+                stimuli_res_format=formats.output_format,
+                tile_count_res=output_tile_cnt,
+            ),
+            dest_acc=DestAccumulation.No,
+        ),
     )
-
-    res_from_L1 = configuration.run().result
+    if is_perf:
+        return
+    res_from_L1 = outcome.result
     res_tensor = dense_result_rowmajor(
         torch.tensor(res_from_L1, dtype=torch_format), ct_dim, in0_rows
     )
@@ -232,9 +249,24 @@ def _run_compressed_custom_mm(
         res_tensor.numel() == golden_tensor.numel()
     ), "Result tensor and golden tensor are not of the same length"
 
+    accuracy_gate = (
+        {"max_ulp": max_ulp}
+        if max_ulp is not None
+        else {"custom_atol": matmul_acc_atol(golden_tensor, kt_dim)}
+    )
     assert passed_test(
         golden_tensor.flatten(),
         res_tensor.flatten(),
         formats.output_format,
-        custom_atol=matmul_acc_atol(golden_tensor, kt_dim),
+        **accuracy_gate,
     ), "Assert against golden failed"
+
+
+@blackhole_only
+def test_compressed_custom_mm_rounding_accuracy(boot_mode=BootMode.DEFAULT):
+    _run_compressed_custom_mm(
+        COMPRESSED_MM_FORMATS[0],
+        (1, 2, 1),
+        boot_mode,
+        max_ulp=1,
+    )
