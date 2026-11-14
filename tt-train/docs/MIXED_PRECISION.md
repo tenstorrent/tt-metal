@@ -111,8 +111,11 @@ the fused kernels require. Unset keeps the bf16 sum.
 - **FSDP.** `backward_post` reduce-scatters in the `reduce_dtype` given to `ttml.fsdp.fully_shard()`, else in the
   stored one, which it reads when it runs, as the DDP sync does. It first runs in the first backward, after the
   optimizer is created, so a script that shards before `create_optimizer()`, as `train.py` does, needs nothing else. A
-  `reduce_dtype` given to `fully_shard()` wins over the stored one. The fp32 sum needs a transient fp32 copy of each
-  gathered gradient, twice its bf16 size; the bf16 gradient is freed once it is cast.
+  `reduce_dtype` given to `fully_shard()` wins over the stored one. The fp32 sum holds more while a gradient is
+  reduced: an fp32 copy of the gathered gradient (the bf16 one is freed once it is cast), and the reduce-scatter's
+  working buffer, which ttnn allocates in its input's dtype at the input's size, twice that on a line
+  (`ReduceScatterMinimalAsyncDeviceOperation::compute_output_specs`). On a line that is about 12 bytes per gathered
+  element against 6 for the bf16 sum.
 - **Routes.** Both use the existing ttnn collectives. A gradient of at least 2^19 elements per device (1 MiB of bf16),
   synced over one mesh axis, with a dim that splits into whole-tile slices that no other mesh axis already splits, is
   reduce-scattered in fp32, its mean is written in the gradient's dtype, and that slice is all-gathered: a quarter fewer
@@ -124,16 +127,22 @@ the fused kernels require. Unset keeps the bf16 sum.
   `docs/source/tt-metalium/tt_metal/advanced_topics/compute_engines_and_dataflow_within_tensix.rst`), so the fp32 sum
   is not the exact fp32 sum. On real gradients over 8 devices its error is within 1-3% of the error of rounding the exact mean
   once to bf16, against 2.2-2.7 times that for the bf16 sum, which also inflates gradient magnitudes by about 0.27%.
-- **Cost.** Measured on an 8-chip Blackhole machine with `train.py`, median step of steps 6-30:
+- **Cost.** Measured on an 8-chip Blackhole machine with `train.py`, median step of steps 6-30 for DDP and of steps
+  3-12 for FSDP:
 
   | Model, mesh | bf16 sum | fp32 sum |
   |---|---|---|
-  | nano DeepSeek, 1x8 line | 127.0 ms | 133.7 ms (+5.3%) |
-  | TinyLlama, 1x8 line | 1675.6 ms | 1721.4 ms (+2.7%) |
-  | TinyLlama, 1x8 ring | 1651.7 ms | 1679.8 ms (+1.7%) |
+  | nano DeepSeek, DDP 1x8 line | 127.0 ms | 133.7 ms (+5.3%) |
+  | TinyLlama, DDP 1x8 line | 1675.6 ms | 1721.4 ms (+2.7%) |
+  | TinyLlama, DDP 1x8 ring | 1651.7 ms | 1679.8 ms (+1.7%) |
+  | TinyLlama, FSDP 1x8 line, batch 16 x 2048 | 755.4 ms | 817.6 ms (+8.2%) |
+  | Llama 8B, FSDP 1x8 line, memory-efficient runner, batch 16 x 2048 | 5025.4 ms | 5382.6 ms (+7.1%) |
 
-  Models with many small gradients pay per call rather than per byte, so fewer, larger collectives would cut most of
-  the cost.
+  FSDP pays more than DDP: its gradients go through the reduce-scatter alone, so fp32 doubles their bytes, while
+  DDP's reduce-scatter route pays 1.5 times. Peak device memory under FSDP (`train.py --track-memory`): Llama 8B goes
+  from 12.6 to 15.7 GB per device, the peak being the backward pass's reduce-scatter of the 525M-element embedding
+  and LM-head gradient; TinyLlama's peak is set by its forward activations and doesn't change. Models with many small
+  gradients pay per call rather than per byte, so fewer, larger collectives would cut most of the cost.
 - **Scope.** `reduce_dtype` covers the sum across devices. Two sums next to it still run in the gradient's dtype, until
   a later PR of #56513 keeps the gradient in fp32 from its second add to the optimizer step:
   - With gradient accumulation, the sum across micro-batches: `Tensor::add_grad` adds each micro-batch's gradient with

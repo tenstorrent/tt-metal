@@ -746,8 +746,10 @@ def fully_shard(
             ``mesh_axis`` with ``ttml.sync_gradients``; ``SFTTrainer`` and
             ``GRPOTrainer`` already do.
         reduce_dtype: The dtype the gradients are reduce-scattered in, as ``ttml.sync_gradients`` takes it:
-            ``ttnn.DataType.FLOAT32`` sums and averages in fp32 and casts the shard back to the gradient's dtype. It
-            needs a transient fp32 copy of each gathered gradient, twice its bf16 size, during backward. ``None``
+            ``ttnn.DataType.FLOAT32`` sums and averages in fp32 and casts the shard back to the gradient's dtype.
+            During backward it holds an fp32 copy of each gathered gradient plus the reduce-scatter's working buffer,
+            allocated in that fp32 dtype at the input's size (twice that on a line): about 12 bytes per gathered
+            element on a line, against 6 for the bf16 sum. ``None``
             takes the training config's ``precision.reduce_dtype`` that ``create_optimizer`` stores
             (``AutoContext.get_gradient_reduce_dtype``), read when the backward hook runs, as ``ttml.sync_gradients``
             does; with no default stored either, it sums in each gradient's own dtype. A value passed here applies to

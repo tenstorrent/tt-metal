@@ -240,12 +240,14 @@ FSDP splits the model state across `axis_size` ranks, then "unshards"
                                        ▼
                         ┌───────────────────────────────────┐
                         │  backward_post (autograd callback)│
-                        │   - reduce_scatter(m_grad)        │
+                        │   - m_value = local shard,        │
+                        │     deallocate gathered weight    │
+                        │   - cast m_grad to fp32 if the    │
+                        │     sum runs in fp32              │
+                        │   - reduce_scatter(m_grad),       │
+                        │     deallocate gathered grad      │
                         │   - mean over axis_size           │
-                        │   - m_value = local shard         │
                         │   - m_grad  = local-shard grad    │
-                        │   - deallocate gathered weight    │
-                        │     and gathered grad             │
                         └───────────────────────────────────┘
                                        │
                             optimizer.step() runs against shards
