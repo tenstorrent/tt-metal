@@ -151,6 +151,15 @@ void py_module(nb::module_& m) {
         "master dtype applied, or None.");
 
     m.def(
+        "validate_precision_config",
+        [](nb::dict training_config) {
+            ttml::core::validate_precision_config(ttml::nanobind::util::obj_to_yaml(training_config));
+        },
+        nb::arg("training_config"),
+        "Check training_config.precision without applying it, with the error apply_precision_config would raise: a map "
+        "of known keys (master_dtype, reduce_dtype), each \"bfloat16\" or \"float32\".");
+
+    m.def(
         "cast_fp32_gradients_to_bf16",
         &ttml::core::cast_fp32_gradients_to_bf16,
         nb::arg("parameters"),

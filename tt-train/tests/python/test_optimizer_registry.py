@@ -9,6 +9,7 @@ import pytest
 import ttml
 import ttnn
 from ttml.common import muon_optimizer
+from ttml.common.config import TrainingConfig
 from ttml.common.utils import apply_precision, create_optimizer
 from ttml.modules import AbstractModuleBase, Parameter
 
@@ -565,6 +566,26 @@ def test_create_optimizer_rejects_an_unknown_precision_key(expect_error):
 
 # The checks behind these bindings are covered case by case by ParameterDtypeTest in C++; Python adds the dict-to-YAML
 # conversion and the exception type, so each binding keeps one valid and one invalid case.
+
+
+def test_validate_precision_config_checks_without_applying(gradient_reduce_default, expect_error):
+    """A runner checks the block right after loading its config; a valid block stores nothing, an invalid one raises
+    what apply_precision_config would. No device needed."""
+    gradient_reduce_default(ttnn.DataType.BFLOAT16)
+    ttml.core.validate_precision_config({"precision": {"master_dtype": "float32", "reduce_dtype": "float32"}})
+    assert ttml.autograd.AutoContext.get_instance().get_gradient_reduce_dtype() == ttnn.DataType.BFLOAT16
+
+    with expect_error(RuntimeError, 'precision.reduce_dtype must be "bfloat16" or "float32"'):
+        ttml.core.validate_precision_config({"precision": {"reduce_dtype": "float16"}})
+
+
+def test_training_config_checks_the_precision_block_and_exposes_it(expect_error):
+    """TrainingConfig, which the runners build right after loading the YAML, checks the precision block, so a typo stops
+    the run before the model is built, and hands the block on as ``.precision``. No device needed."""
+    precision = {"master_dtype": "float32", "reduce_dtype": "float32"}
+    assert TrainingConfig({"training_config": {"precision": precision}}).precision == precision
+    with expect_error(RuntimeError, "Unknown key precision.master_dtpye"):
+        TrainingConfig({"training_config": {"precision": {"master_dtpye": "float32"}}})
 
 
 def test_apply_precision_takes_ttnn_dtypes_and_none_means_no_block(gradient_reduce_default):
