@@ -1150,3 +1150,59 @@ The one this change broke (test_seeded: `git add state.json`) is fixed.
   the c1-10 means. The rt-profiled pass's span / idle are inflated by the profiler's host overhead (span 220-250 ms).
   The gate run writes results/P.57_host_*.pstats (host_profile's raw stats) beside the json.
 - Re-run: `gate P.57 --spec <spec> --check --unit P.57` (~7 min with the model load; devjob).
+
+## P.58 (perf, attempt 1): TP=4 / TP=8 experts go/no-go (CPU model + dispatch/combine microbenchmark, no model change)
+- Expected per chunk (written before any code or device run; perf_guide 1-2, 4 "moved time"; chunk 10 at 51,200):
+  no model code changes, so 0 ms device and 0 ms host for the shipped model. The check itself: compute side as the
+  overseer's estimate (experts phase novel EP 49.9 -> TP4 ~29 / TP8 ~28 ms, code 38.7 -> ~28), maybe a few ms worse
+  with 4x / 8x more, smaller weight reads and 32-row padding per quarter expert. Communication: a token's rows go to
+  ~4.4 groups x 4 chips = ~17.6 chips (TP4) or ~3.3 x 8 = ~26 (TP8) instead of ~5.5 (EP), and the combine carries 4x
+  / 8x the rows (24 / 48 partial rows a token instead of 6); P.55a measured dispatch ~20 ms a chunk (novel), so my
+  guess is dispatch +20 to +40 ms and combine +10 to +30 ms a chunk for TP4 (more for TP8): TP4 chunk ~ 175 - 21 +
+  30..70 = ~185-225 ms vs EP + P.56 156 ms (novel) -> likely NO-GO unless the fabric hides most of the extra rows.
+  Host: TP4 as a real design adds no launch (same ops), so ~0.
+- No setting / switch added: the task is a check with no model change (the brief's generic "switch" text has nothing
+  to apply to); nothing ships, MOE_* settings untouched.
+- What I built: tests/moe_tp_model.py (CPU model: groups = mesh rows (TP4) / columns (TP8), chip k = r C + c as
+  flush_counts writes it; scaled and fitted variants; bias steering) and tests/test_moe_tp4_check.py (one mesh open,
+  ~3 min of device work). TP is emulated with the fork's ops unchanged: each 1/g slice of an expert is an expert of
+  its own on the g chips of its group, with the same router row and bias, so the fused head builds the TP route masks
+  itself and the combine sums the g partial rows in fp32 (reduce = 0, inside the combine). Three op limits forced
+  approximations (each also a cost of a real build): flat op cannot split 576 / 288 (stand-ins 512 / 256, compute x
+  1.125); fused head top-K <= 16 (TP4 run at 2 / 3 / 4 experts a token, TP8 at 1 / 2, cost fitted vs K / vs chips a
+  row goes to and taken at 6 experts); routing planner N x slots <= 1024 (head-driven runs at 32 slots a chip, the
+  compute runs at the true 48 / 2 x 48).
+- Results (gate unit P.58; DS41-252, detail in known_issues_detail.md):
+
+  | chunk 10 at 51,200, device ms | novel | code |
+  |---|---|---|
+  | EP off (P.56 measured, c1-10) | 175.2 | 164.0 |
+  | EP + P.56 prev (measured) | 156.1 | 153.1 |
+  | TP4 (model: EP off + experts diff + dispatch added) | 215.3 | 209.1 |
+  | TP8 (same; compute upper bound, comms extrapolated) | 334.8 | 329.8 |
+  | experts phase EP / TP4 / TP8 (flat measured at real counts + combine cost) | 57.4 / 94.8 / 197.9 | 45.3 / 86.3 / 190.0 |
+  | flat op alone a chunk EP / TP4 / TP8 | 52.5 / 86.0 / 125.9 | 42.5 / 77.5 / 119.0 |
+  | dispatch added / combine added a layer, TP4 | +0.068 / +0.099 ms | +0.103 / +0.148 ms |
+  | dispatch added / combine added a layer, TP8 | +0.48 / +1.68 ms | +0.53 / +1.70 ms |
+
+  (The iteration run before the gate, same code but the check: TP4 215.0 / 207.7, TP8 311.7 / 313.6; the TP8 combine
+  is a linear extrapolation from K 8 / 16 to 48 and moves the most.)
+  CPU model with P.55a's fit scaled (A / g, B / g): EP 49.9 / TP4 28.3 / TP8 26.0 (novel), the overseer's estimate;
+  with the device's own fits at the slice widths: EP ~37-42, TP4 ~64-69, TP8 ~78-81 ms a chunk over chunks 0-10 of
+  P.45's counts (compute only, both prompts). Busiest / mean (compute) novel chunk 10: EP 2.32, TP4 1.16, TP8 1.04 -
+  the balance is real, but each TP chip's row work does not shrink with the width (B 7.66 us a 32-row tile at 2304,
+  6.25 at 512, 4.85 at 256).
+- VERDICT: NO-GO for TP4 and TP8. Both are slower than EP off, let alone EP + P.56, on both prompts; the loss is the
+  compute (the flat op's per-row cost), not the fabric (TP4's comms add only ~7-10 ms a chunk). Precision is not the
+  issue (rel err vs fp32 EP 0.0560, TP4 0.0561, TP8 0.0564). Effort for a real TP4: a narrow-expert flat op (x read
+  once per row for all of a chip's slices, y partials summed on the chip before the combine) + head / planner limits
+  (top-K 24, 1536 slots) + 576-wide split: ~40-60 agent-hours, and it would still need the per-row cost to fall ~4x
+  to break even with P.56.
+- Gotchas: the realtime profiler window must hold only the timed calls (a warm call first: the first dispatch of a
+  routing is ~1 ms, program build); a handful of tokens (<= 6 of 5120) split an expert's slices when two experts tie
+  within the router's rounding (check >= 99.5 %).
+- Re-run: `gate P.58 --spec <spec> --check --unit P.58` (~4 min with the mesh open; devjob).
+- Final `gate P.58 --check`: PASS (determinism 0; P.58 unit 152 s, tp_checks_failed 0). `measure --task P.58` (no
+  switch, defaults; no model code changed): determinism 0 (novel, code, state), quick min layer PCC 0.60548579 at L39
+  (= P.52-P.56: the off path's bytes), host transfers per layer 0, wall 234.3 ms (spread 19.0; defaults without
+  ENGRAM_TABLE=resident, comparable with P.55b's 231.9, not with the 182 ms measures that set it).

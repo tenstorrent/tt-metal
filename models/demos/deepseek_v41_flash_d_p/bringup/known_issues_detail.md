@@ -1386,3 +1386,30 @@ Trace blockers for a chunk-to-chunk trace (code reading at b8a57740c25):
    slot from the device ordinal G[0], or W a multiple of the calls a chunk.
 5. not blockers: host reads in the chunk (0; MOE_COUNTS off), CCL semaphores (host-cycled handles and the combine's
    device call counters replay fine in a fixed call sequence: the prototype), allocations inside the capture.
+
+## TP experts lose to EP on the flat op: a 32-row tile barely gets cheaper as the expert narrows
+(DS41-252, P.58, Galaxy 8x4, tests/test_moe_tp4_check.py; real-time profiler, slowest chip, median.)
+
+- Calibration of `ttnn.bringup.moe_block_main.flat_routed_expert` alone, bfp4 weights_nk, 11 x 10 cap:
+
+  | width I | slots a chip | A (one more active slot, 32 rows) | B (one more 32-row tile) | B per full-width equivalent |
+  |---|---|---|---|---|
+  | 2304 (EP) | 12 | 51.1 us | 7.66 us | 7.66 us |
+  | 512 (TP4 stand-in for 576) | 48 | 14.6 us | 6.25 us | 28.1 us (3.7x) |
+  | 256 (TP8 stand-in for 288) | 48 | 13.7 us | 4.85 us | 43.6 us (5.7x) |
+
+  A per byte holds roughly (1.28x worse at 512); B does not scale with the width: per row the op moves an H = 5120
+  wide x row in and an H wide y row out whatever I is, and under TP every chip of a group processes every row of the
+  group's experts (4x / 8x EP's rows a chip). The "balanced compute" estimate (B / g) is therefore wrong by ~4x.
+- At P.55a's chunk-10 counts (40 layers), flat op a chunk, novel / code: EP 52.5 / 42.5 ms, TP4 86.0 / 77.5 (x 1.125
+  from 512 to 576), TP8 125.9 / 119.0 (two 48-slice calls a layer: an upper bound).
+- Communication (head-driven, steered to layer 20's counts; extrapolated to 6 experts a token): TP4 dispatch +0.07 /
+  +0.10 ms a layer, combine +0.10 / +0.15 (novel / code); TP8 dispatch ~+0.5, combine ~+1.7 (uniform K 8 -> 16 the
+  combine cost went 0.09 -> 0.37 ms: superlinear, the linear extrapolation to K 48 is rough).
+- Per chunk at 51,200, device ms (EP off and EP + P.56 measured by P.56; TP = EP off + experts difference + 40 x
+  dispatch added): novel 175.2 / 156.1 / TP4 215.3 / TP8 334.8; code 164.0 / 153.1 / 209.1 / 329.8.
+- Precision: summing 4 / 8 partial rows in the combine's fp32 accumulators: rel error vs fp32 0.0561 / 0.0564 vs EP's
+  0.0560 (uniform routing, 512 tokens): no cost.
+- Op limits met on the way (each is work for a real TP build): flat op even gate/up split (flat_routed_expert_plan.cpp
+  "no even gate/up split": 2 I / 32 tiles into a multiple of 16 cores; 576 and 288 have none), fused head top-K even
+  and <= 16 (routing rows in 64 B), routing planner N x slots <= 1024 (head_plan.cpp), flat op <= 64 slots a chip.

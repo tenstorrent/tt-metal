@@ -1,0 +1,84 @@
+{
+ "used": [
+  {
+   "id": "DS41-244",
+   "how": "P.55a's fit (A 38.9 us, B 7.55 us a tile, C0 0.235 ms) is the CPU model's scaled variant; the device calibration re-measured B at 2304 (7.66 us) and at the TP slice widths",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-228",
+   "how": "no random-id position profile for a routing-dependent check: real layer-20 counts (novel, code) steered into the router bias, P.55a / P.45 counts for the compute",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-249",
+   "how": "EP off and EP + P.56 per-chunk device times taken from P.56's final measurement as the baselines of the verdict",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-243",
+   "how": "40 capped matmuls ahead of every profiled window so the chips start the timed ops together",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-177",
+   "how": "every upload through tt/cores.from_torch (host build + to_device: no 120-core conversion programs)",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the flat op's per-row-tile cost does not scale with the expert width (x in / y out are H wide): any TP-experts or narrow-expert estimate must not scale B by 1/g (now DS41-252)",
+  "moe_block_main limits for a TP emulation: flat op even gate/up split (576 / 288 impossible), fused head top-K even and <= 16, routing planner N x slots <= 1024, flat op <= 64 slots a chip (DS41-252)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "no padding or inflated work: the TP slices run at the nearest width the flat op splits (512 / 256, narrower, not padded) and the result is scaled up by 576 / 512; no model change"
+  },
+  {
+   "id": "OV-23",
+   "answer": "n/a",
+   "evidence": "no Python-built op added or touched; the test calls the C++ device ops of ttnn.bringup.moe_block_main (fused_head, sparse_dispatch_2d, routed_experts_combine, flat_routed_expert)"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork regression / unit suite run; only the new tests/test_moe_tp4_check.py and the gate's determinism unit (reused)"
+  },
+  {
+   "id": "OV-41",
+   "answer": "done",
+   "evidence": "TP8 (mesh columns of 8) measured beside TP4 in every step: CPU model, flat calibration and real counts, head-driven dispatch / combine (uniform; real routing scaled by TP4's ratio), verdict; chip id = r * 4 + c confirmed from moe_block_main_adapter.flush_counts (ConcatMeshToTensor order); tp8_* metrics recorded. Overseer's compute-only TP8 28.1 ms reproduced with P.55a's scaled fit (26.0) but the device's per-tile cost at width 256 makes TP8 compute ~119-126 ms a chunk"
+  }
+ ],
+ "cited_only": [
+  "DS41-252"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "moe_replication",
+  "task": "P.58",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-14T08:00:51",
+  "head": "47d5205626a",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.58.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.58_tp_check.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.58.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/moe_tp_model.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_moe_tp4_check.py"
+  ]
+ }
+}

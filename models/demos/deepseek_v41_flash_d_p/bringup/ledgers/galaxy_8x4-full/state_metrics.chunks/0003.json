@@ -1064,5 +1064,13 @@
   "wall_ms_chunk_off_p51200": 202.477,
   "wall_ms_chunk_prev": 192.051,
   "wall_ms_chunk_prev_p51200": 184.074
+ },
+ "P.58": {
+  "ep_experts_ms_code": 45.277,
+  "ep_experts_ms_novel": 57.361,
+  "tp4_combine_added_ms": 0.0993,
+  "tp4_dispatch_added_ms": 0.0676,
+  "tp4_experts_ms_code": 86.266,
+  "tp4_experts_ms_novel": 94.832
  }
 }
