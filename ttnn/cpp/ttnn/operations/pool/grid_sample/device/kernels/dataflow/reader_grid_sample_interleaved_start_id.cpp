@@ -26,7 +26,7 @@ void kernel_main() {
     constexpr uint32_t scalar_cb_index = get_compile_time_arg_val(2);
     constexpr uint32_t input_stick_nbytes = get_compile_time_arg_val(3);
     constexpr uint32_t grid_stick_nbytes = get_compile_time_arg_val(4);
-
+    constexpr uint32_t input_batch = get_compile_time_arg_val(5);
     constexpr uint32_t input_height = get_compile_time_arg_val(6);
     constexpr uint32_t input_width = get_compile_time_arg_val(7);
     constexpr uint32_t grid_batches = get_compile_time_arg_val(8);
@@ -70,29 +70,44 @@ void kernel_main() {
 
     // Outer loop: iterate over spatial positions (output sticks)
     for (uint32_t spatial_pos = start_page_id; spatial_pos < end_id; ++spatial_pos) {
-        // Read the grid stick for this spatial position (contains grid_batches sets of coordinates)
-        noc.async_read(grid_tensor_accessor, grid_dfb, grid_stick_nbytes, {.page_id = spatial_pos}, {});
-        noc.async_read_barrier();
+        if (curr_batch < input_batch) {
+            // Read the grid stick for this spatial position (contains grid_batches sets of coordinates)
+            noc.async_read(grid_tensor_accessor, grid_dfb, grid_stick_nbytes, {.page_id = spatial_pos}, {});
+            noc.async_read_barrier();
 
-        // Cast to appropriate pointer type for grid data access
-        volatile tt_l1_ptr uint16_t* grid_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(grid_dfb.get_write_ptr());
+            // Cast to appropriate pointer type for grid data access
+            volatile tt_l1_ptr uint16_t* grid_ptr =
+                reinterpret_cast<volatile tt_l1_ptr uint16_t*>(grid_dfb.get_write_ptr());
 
-        // Inner loop: process grid_batches coordinate sets within this spatial position
-        for (uint32_t grid_idx = 0; grid_idx < grid_batches; ++grid_idx) {
-            // Direct template dispatch - no branching needed
-            process_grid_point<
-                grid_dtype,
-                use_precomputed_grid,
-                align_corners,
-                input_height,
-                input_width,
-                input_stick_nbytes,
-                in_nblocks_c,
-                input_chunk_nbytes,
-                last_chunk_partial,
-                input_cb_index,
-                scalar_cb_index>(noc, input_dfb, scalar_dfb, grid_ptr, grid_idx, input_tensor_accessor, batch_offset);
+            // Inner loop: process grid_batches coordinate sets within this spatial position
+            for (uint32_t grid_idx = 0; grid_idx < grid_batches; ++grid_idx) {
+                // Direct template dispatch - no branching needed
+                process_grid_point<
+                    grid_dtype,
+                    use_precomputed_grid,
+                    align_corners,
+                    input_height,
+                    input_width,
+                    input_stick_nbytes,
+                    in_nblocks_c,
+                    input_chunk_nbytes,
+                    last_chunk_partial,
+                    input_cb_index,
+                    scalar_cb_index>(
+                    noc, input_dfb, scalar_dfb, grid_ptr, grid_idx, input_tensor_accessor, batch_offset);
+            }
+        } else {
+            // Padding stick beyond valid batches - push zero-weight placeholder pages so the
+            // compute kernel receives the expected number of items without reading out-of-bounds.
+            for (uint32_t grid_idx = 0; grid_idx < grid_batches; ++grid_idx) {
+                scalar_dfb.reserve_back(1);
+                fill_four_val<scalar_cb_index>(scalar_dfb.get_write_ptr(), 0, 0, 0, 0);
+                scalar_dfb.push_back(1);
+                for (uint32_t c_i = 0; c_i < in_nblocks_c; ++c_i) {
+                    input_dfb.reserve_back(1);
+                    input_dfb.push_back(1);
+                }
+            }
         }
 
         // Update batch tracking (avoid division in loop)

@@ -30,7 +30,6 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
     bool use_precomputed_grid = operation_attributes.use_precomputed_grid;
     bool batch_output_channels = operation_attributes.batch_output_channels;
 
-    const bool is_sharded = grid_tensor.is_sharded();
     ProgramDescriptor desc;
 
     // Data formats and device
@@ -47,15 +46,23 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
     const uint32_t grid_height = grid_shape[1], grid_width = grid_shape[2];
     const uint32_t grid_hw = grid_height * grid_width;
     const uint32_t grid_batching_factor = get_grid_batching_factor(grid_tensor, use_precomputed_grid);
+    const uint32_t output_sticks_per_grid_stick = batch_output_channels ? 1U : grid_batching_factor;
+    const bool is_output_sharded = output_tensor.is_sharded();
+    const bool is_sharded =
+        grid_tensor.is_sharded() && is_output_sharded &&
+        grid_tensor.shard_spec().value().grid == output_tensor.shard_spec().value().grid &&
+        grid_tensor.shard_spec().value().orientation == output_tensor.shard_spec().value().orientation &&
+        output_tensor.shard_spec().value().shape[0] ==
+            grid_tensor.shard_spec().value().shape[0] * output_sticks_per_grid_stick;
     const bool enable_split_reader =
-        should_use_split_reader(input_tensor, grid_tensor, use_precomputed_grid, "bilinear");
+        is_sharded && should_use_split_reader(input_tensor, grid_tensor, use_precomputed_grid, "bilinear");
 
     tt::tt_metal::CoreRangeSet all_cores, core_group_1, core_group_2;
     uint32_t num_cores, grid_nsticks_per_core, output_nsticks_per_core = 0;
     uint32_t num_sticks_per_core_group_1 = 0, num_sticks_per_core_group_2 = 0;
     std::vector<CoreCoord> logical_cores;
     // Calculate total work and determine actual cores needed
-    const uint32_t total_grid_nsticks = grid_tensor.physical_volume() / grid_shape[-1];
+    const uint32_t total_grid_nsticks = input_batch * grid_hw;
 
     if (is_sharded) {
         const auto grid_shard_spec = grid_tensor.shard_spec().value();
@@ -66,6 +73,20 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
         all_cores = grid_shard_spec.grid;
         logical_cores = corerange_to_cores(
             all_cores, num_cores, grid_shard_spec.orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
+
+    } else if (is_output_sharded) {
+        const auto output_shard_spec = output_tensor.shard_spec().value();
+        output_nsticks_per_core = output_shard_spec.shape[0];
+        TT_FATAL(
+            output_nsticks_per_core % output_sticks_per_grid_stick == 0,
+            "Bilinear grid_sample output shard height must be divisible by the number of output rows per grid row ({})",
+            output_sticks_per_grid_stick);
+        grid_nsticks_per_core = output_nsticks_per_core / output_sticks_per_grid_stick;
+
+        num_cores = output_shard_spec.num_cores();
+        all_cores = output_shard_spec.grid;
+        logical_cores = corerange_to_cores(
+            all_cores, num_cores, output_shard_spec.orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
 
     } else {
         const auto compute_grid_size = device->compute_with_storage_grid_size();
@@ -200,7 +221,7 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
         static_cast<uint32_t>(std::ceil(static_cast<float>(output_shape[-1]) / tt::constants::FACE_WIDTH));
     const uint32_t output_cb_page_size = tt::constants::FACE_WIDTH * output_tensor.element_size();
     const uint32_t output_cb_pages =
-        is_sharded ? output_nsticks_per_core * out_ntiles_c : out_ntiles_c * BUFFERING_FACTOR;
+        is_output_sharded ? output_nsticks_per_core * out_ntiles_c : out_ntiles_c * BUFFERING_FACTOR;
     const uint32_t output_cb_index = cb_idx++;
     desc.cbs.push_back(CBDescriptor{
         .total_size = output_cb_pages * output_cb_page_size,
@@ -212,7 +233,7 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
             .tile = output_tile,
             .face_geometry = output_face_geometry,
         }}},
-        .buffer = is_sharded ? output_tensor.buffer() : nullptr,
+        .buffer = is_output_sharded ? output_tensor.buffer() : nullptr,
     });
 
     // Prepare stick size arguments with proper names
@@ -364,18 +385,18 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
     };
 
     std::vector<KernelDescriptor> compute_descs;
-    if (is_sharded || core_group_1.num_cores() > 0) {
+    if (is_output_sharded || core_group_1.num_cores() > 0) {
         compute_descs.push_back(make_compute_desc(
-            is_sharded ? all_cores : core_group_1,
-            grid_batching_factor * (is_sharded ? grid_nsticks_per_core : num_sticks_per_core_group_1)));
+            is_output_sharded ? all_cores : core_group_1,
+            grid_batching_factor * (is_output_sharded ? grid_nsticks_per_core : num_sticks_per_core_group_1)));
     }
-    if (!is_sharded && core_group_2.num_cores() > 0) {
+    if (!is_output_sharded && core_group_2.num_cores() > 0) {
         compute_descs.push_back(make_compute_desc(core_group_2, grid_batching_factor * num_sticks_per_core_group_2));
     }
 
-    // Writer kernel (interleaved only)
+    // Writer kernel (interleaved output only)
     KernelDescriptor writer_desc;
-    bool has_writer = !is_sharded;
+    bool has_writer = !is_output_sharded;
     if (has_writer) {
         // Writer compile-time arguments - expanded row by row for readability
         std::vector<uint32_t> writer_compile_time_args = {
@@ -422,9 +443,10 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
 
         for (uint32_t i = 0; i < num_cores; i++) {
             const CoreCoord& core = logical_cores[i];
-            const uint32_t grid_sticks =
-                core_group_1.contains(core) ? num_sticks_per_core_group_1 : num_sticks_per_core_group_2;
-            const uint32_t output_sticks = batch_output_channels ? grid_sticks : grid_sticks * grid_batching_factor;
+            const uint32_t grid_sticks = is_output_sharded
+                                             ? grid_nsticks_per_core
+                                             : (core_group_1.contains(core) ? num_sticks_per_core_group_1
+                                                                            : num_sticks_per_core_group_2);
 
             // Runtime arguments for interleaved reader - expanded row by row
             reader0_desc.emplace_runtime_args(
@@ -436,17 +458,23 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
                     grid_processed          // rt_arg[3]: grid_processed
                 });
 
-            // Runtime arguments for interleaved writer - expanded row by row
-            writer_desc.emplace_runtime_args(
-                core,
-                {
-                    output_tensor.buffer(),  // rt_arg[0]: output_buffer_address
-                    output_sticks,           // rt_arg[1]: output_sticks
-                    output_processed         // rt_arg[2]: output_processed
-                });
+            if (has_writer) {
+                const uint32_t output_sticks =
+                    batch_output_channels ? grid_sticks : grid_sticks * grid_batching_factor;
+
+                // Runtime arguments for interleaved writer - expanded row by row
+                writer_desc.emplace_runtime_args(
+                    core,
+                    {
+                        output_tensor.buffer(),  // rt_arg[0]: output_buffer_address
+                        output_sticks,           // rt_arg[1]: output_sticks
+                        output_processed         // rt_arg[2]: output_processed
+                    });
+
+                output_processed += output_sticks;
+            }
 
             grid_processed += grid_sticks;
-            output_processed += output_sticks;
         }
     }
 

@@ -142,6 +142,34 @@ void GridSampleOperation::validate_on_program_cache_miss(
         tt::constants::TILE_WIDTH,
         input_tensor.padded_shape()[-1],
         input_tensor.padded_shape());
+
+    if (operation_attributes.output_mem_config.shard_spec().has_value()) {
+        TT_FATAL(
+            output_memory_layout == TensorMemoryLayout::HEIGHT_SHARDED &&
+                operation_attributes.output_mem_config.buffer_type() == BufferType::L1,
+            "Sharded output tensor must use HEIGHT_SHARDED L1 memory configuration");
+        const uint32_t num_elements_per_grid_point = operation_attributes.use_precomputed_grid
+                                                         ? operation_attributes.mode == "nearest"
+                                                               ? PRECOMPUTED_GRID_ELEMENTS_PER_POINT_NEAREST
+                                                               : PRECOMPUTED_GRID_ELEMENTS_PER_POINT
+                                                         : STANDARD_GRID_ELEMENTS_PER_POINT;
+        const uint32_t grid_batching_factor = grid_last_dim / num_elements_per_grid_point;
+        const uint32_t output_sticks_per_grid_stick =
+            operation_attributes.batch_output_channels ? 1U : grid_batching_factor;
+        const uint32_t expected_shard_width =
+            input_tensor.padded_shape()[-1] * (operation_attributes.batch_output_channels ? grid_batching_factor : 1U);
+        const auto& output_shard_spec = operation_attributes.output_mem_config.shard_spec().value();
+        TT_FATAL(
+            output_shard_spec.shape[0] % output_sticks_per_grid_stick == 0,
+            "Output shard height ({}) must be divisible by the number of output rows per grid row ({})",
+            output_shard_spec.shape[0],
+            output_sticks_per_grid_stick);
+        TT_FATAL(
+            output_shard_spec.shape[1] == expected_shard_width,
+            "Output shard width ({}) must match padded output channel width ({})",
+            output_shard_spec.shape[1],
+            expected_shard_width);
+    }
 }
 
 tt::tt_metal::TensorSpec GridSampleOperation::compute_output_specs(
@@ -195,78 +223,73 @@ tt::tt_metal::TensorSpec GridSampleOperation::compute_output_specs(
     const auto& grid_padded_shape = grid_tensor.padded_shape();
     const auto& input_padded_shape = input_tensor.padded_shape();
 
-    // For bilinear mode with interleaved input/grid, keep output interleaved to avoid core count issues
-    // For nearest mode or sharded cases, use sharded output
-    if ((operation_attributes.mode == "bilinear" && !grid_tensor.memory_config().is_sharded() &&
-         operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED)) {
-        // Bilinear mode with interleaved tensors - use interleaved output (original behavior)
+    // For bilinear mode with interleaved output memory config, keep output interleaved.
+    // Otherwise, respect an explicit caller-provided shard spec or derive sharded output automatically.
+    if (operation_attributes.mode == "bilinear" &&
+        operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED) {
+        output_memory_config = operation_attributes.output_mem_config;
+    } else if (operation_attributes.output_mem_config.shard_spec().has_value()) {
+        // Caller provided an explicit shard spec - use it as is
         output_memory_config = operation_attributes.output_mem_config;
     } else {
-        // Check if user provided a shard spec - if so, respect it
-        if (operation_attributes.output_mem_config.shard_spec().has_value() &&
-            !grid_tensor.memory_config().is_sharded()) {
-            // User provided shard spec - use it as is
-            output_memory_config = operation_attributes.output_mem_config;
+        // Caller didn't provide a shard spec - generate one automatically
+        // Nearest mode or sharded cases - create sharded output configuration
+        const uint32_t input_padded_channel_width = input_tensor.padded_shape()[-1];
+
+        CoreRangeSet output_core_range_set;
+        ShardOrientation output_shard_orientation;
+        uint32_t grid_points_per_shard;
+
+        if (grid_tensor.memory_config().is_sharded()) {
+            // Case 1: Grid is sharded - use its sharding configuration
+            const ShardSpec grid_shard_spec = grid_tensor.shard_spec().value();
+
+            // Use the same core grid and orientation as the grid tensor
+            output_core_range_set = grid_shard_spec.grid;
+            output_shard_orientation = grid_shard_spec.orientation;
+            grid_points_per_shard = grid_shard_spec.shape[0];
         } else {
-            // User didn't provide shard spec - generate one automatically
-            // Nearest mode or sharded cases - create sharded output configuration
-            const uint32_t input_padded_channel_width = input_tensor.padded_shape()[-1];
+            // Case 2: Grid is not sharded - create sharding based on grid dimensions
+            const uint32_t total_grid_points =
+                grid_padded_shape[0] * grid_padded_shape[1] * grid_padded_shape[2];  // N * H * W
 
-            CoreRangeSet output_core_range_set;
-            ShardOrientation output_shard_orientation;
-            uint32_t grid_points_per_shard;
+            // Get device compute grid for sharding
+            tt::tt_metal::distributed::MeshDevice* device = input_tensor.device();
+            const auto compute_grid_size = device->compute_with_storage_grid_size();
 
-            if (grid_tensor.memory_config().is_sharded()) {
-                // Case 1: Grid is sharded - use its sharding configuration
-                const ShardSpec grid_shard_spec = grid_tensor.shard_spec().value();
+            // Split grid points across available cores
+            auto
+                [num_cores_used,
+                 all_cores_range,
+                 core_group_1_range,
+                 core_group_2_range,
+                 num_points_1,
+                 num_points_2] = tt::tt_metal::split_work_to_cores(compute_grid_size, total_grid_points);
 
-                // Use the same core grid and orientation as the grid tensor
-                output_core_range_set = grid_shard_spec.grid;
-                output_shard_orientation = grid_shard_spec.orientation;
-                grid_points_per_shard = grid_shard_spec.shape[0];
-            } else {
-                // Case 2: Grid is not sharded - create sharding based on grid dimensions
-                const uint32_t total_grid_points =
-                    grid_padded_shape[0] * grid_padded_shape[1] * grid_padded_shape[2];  // N * H * W
-
-                // Get device compute grid for sharding
-                tt::tt_metal::distributed::MeshDevice* device = input_tensor.device();
-                const auto compute_grid_size = device->compute_with_storage_grid_size();
-
-                // Split grid points across available cores
-                auto
-                    [num_cores_used,
-                     all_cores_range,
-                     core_group_1_range,
-                     core_group_2_range,
-                     num_points_1,
-                     num_points_2] = tt::tt_metal::split_work_to_cores(compute_grid_size, total_grid_points);
-
-                output_core_range_set = all_cores_range;
-                output_shard_orientation = ShardOrientation::ROW_MAJOR;
-                grid_points_per_shard = num_points_1;  // Use primary group size
-            }
-
-            // Calculate output shard dimensions based on grid points per core and batching
-            // For nearest interpolation, each grid point produces one output point per channel
-            const uint32_t output_shard_height = operation_attributes.batch_output_channels
-                                                     ? grid_points_per_shard
-                                                     : grid_points_per_shard * grid_batching_factor;
-
-            // Output width is the number of input channels, extended by batching factor if needed
-            const uint32_t output_shard_width = operation_attributes.batch_output_channels
-                                                    ? input_padded_channel_width * grid_batching_factor
-                                                    : input_padded_channel_width;
-
-            // Create sharding configuration
-            const TensorMemoryLayout output_memory_layout = TensorMemoryLayout::HEIGHT_SHARDED;
-            const BufferType output_buffer_type = BufferType::L1;
-
-            const ShardSpec output_shard_spec =
-                ShardSpec(output_core_range_set, {output_shard_height, output_shard_width}, output_shard_orientation);
-
-            output_memory_config = MemoryConfig(output_memory_layout, output_buffer_type, output_shard_spec);
+            output_core_range_set = all_cores_range;
+            output_shard_orientation = ShardOrientation::ROW_MAJOR;
+            grid_points_per_shard = num_points_1;  // Use primary group size
         }
+
+        // Calculate output shard dimensions based on grid points per core and batching
+        // For nearest interpolation, each grid point produces one output point per channel
+        const uint32_t output_shard_height = operation_attributes.batch_output_channels
+                                                 ? grid_points_per_shard
+                                                 : grid_points_per_shard * grid_batching_factor;
+
+        // Output width is the number of input channels, extended by batching factor if needed
+        const uint32_t output_shard_width = operation_attributes.batch_output_channels
+                                                ? input_padded_channel_width * grid_batching_factor
+                                                : input_padded_channel_width;
+
+        // Create sharding configuration
+        const TensorMemoryLayout output_memory_layout = TensorMemoryLayout::HEIGHT_SHARDED;
+        const BufferType output_buffer_type = BufferType::L1;
+
+        const ShardSpec output_shard_spec =
+            ShardSpec(output_core_range_set, {output_shard_height, output_shard_width}, output_shard_orientation);
+
+        output_memory_config = MemoryConfig(output_memory_layout, output_buffer_type, output_shard_spec);
     }
 
     // Batch and height dimensions: same as grid tensor's padded shape
@@ -321,6 +344,8 @@ ttnn::Tensor grid_sample(
         /*default_approx_mode=*/false,
         /*default_fp32_acc=*/false,
         /*default_l1_acc=*/false);
+    const MemoryConfig default_output_mem_config =
+        MemoryConfig(grid.memory_config().memory_layout(), grid.memory_config().buffer_type());
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .mode = mode,
@@ -328,7 +353,7 @@ ttnn::Tensor grid_sample(
             .align_corners = align_corners,
             .use_precomputed_grid = use_precomputed_grid,
             .batch_output_channels = batch_output_channels,
-            .output_mem_config = memory_config.value_or(grid.memory_config()),
+            .output_mem_config = memory_config.value_or(default_output_mem_config),
             .compute_kernel_config = resolved_compute_kernel_config,
         },
         OperationType::tensor_args_t{.input_tensor = input_tensor, .grid = grid});

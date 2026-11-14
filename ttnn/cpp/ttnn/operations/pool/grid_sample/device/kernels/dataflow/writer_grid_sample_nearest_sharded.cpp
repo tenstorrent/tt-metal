@@ -224,15 +224,15 @@ void kernel_main() {
 
         uint32_t batch_offset = curr_batch * input_height * input_width;
 
-        if constexpr (!is_sharded) {
-            noc.async_read(
-                grid_tensor_accessor, grid_dfb, grid_stick_nbytes, {.page_id = grid_stick_idx + start_page_id}, {});
-            noc.async_read_barrier();
-        }
         uint32_t output_write_offset =
             grid_stick_idx * grid_batching_factor * input_stick_nbytes + in_grid_row_idx * input_stick_nbytes;
 
         if (curr_batch < batch_size) {
+            if constexpr (!is_sharded) {
+                noc.async_read(
+                    grid_tensor_accessor, grid_dfb, grid_stick_nbytes, {.page_id = grid_stick_idx + start_page_id}, {});
+                noc.async_read_barrier();
+            }
             // Process nearest neighbor sampling and write directly to output
             process_grid_point_nearest<
                 grid_dtype,
