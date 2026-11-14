@@ -603,6 +603,42 @@ void place_output_tensors(
     }
 }
 
+// Helper to save tensor topologies from all tensors in a return value.
+// Used to restore topologies if validation fails after place_output_tensors.
+template <typename TensorReturnValue>
+std::vector<tt::tt_metal::TensorTopology> save_tensor_topologies(const TensorReturnValue& tensor_return_value) {
+    std::vector<tt::tt_metal::TensorTopology> saved_topologies;
+    ttsl::reflection::visit_object_of_type<Tensor>(
+        [&saved_topologies](const Tensor& t) { saved_topologies.push_back(t.tensor_topology()); },
+        tensor_return_value);
+    return saved_topologies;
+}
+
+// Helper to restore tensor topologies to all tensors in a return value.
+// Used to undo labeling if validation fails after place_output_tensors.
+template <typename TensorReturnValue>
+void restore_tensor_topologies(
+    TensorReturnValue& tensor_return_value,
+    const std::vector<tt::tt_metal::TensorTopology>& saved_topologies) {
+    auto it = saved_topologies.begin();
+    size_t tensor_count = 0;
+    ttsl::reflection::update_object_of_type<Tensor>(
+        [&it, &tensor_count, &saved_topologies](Tensor& t) {
+            TT_FATAL(
+                it != saved_topologies.end(),
+                "Tensor count mismatch: more tensors in return value than saved topologies");
+            t.update_tensor_topology(*it);
+            ++it;
+            ++tensor_count;
+        },
+        tensor_return_value);
+    TT_FATAL(
+        tensor_count == saved_topologies.size(),
+        "Tensor count mismatch: saved {} topologies but restored {}",
+        saved_topologies.size(),
+        tensor_count);
+}
+
 /**
  * Launch an operation on a mesh device.
  *
@@ -639,11 +675,28 @@ typename device_operation_t::tensor_return_value_t launch(
         return tensor_return_value;
     }
 
+    // Save original topologies before place_output_tensors assigns new labels.
+    // If validation in launch_operation_with_adapter fails, we restore these to avoid
+    // leaving the caller's tensors mislabelled (issue #64100).
+    auto saved_topologies = detail::save_tensor_topologies(tensor_return_value);
+
     detail::place_output_tensors<device_operation_t>(
         operation_attributes, tensor_args, input_tensors, mesh_device, tensor_return_value);
 
-    detail::launch_operation_with_adapter<MeshDeviceOperationAdapter<device_operation_t>>(
-        operation_attributes, tensor_args, tensor_return_value, mesh_device);
+    try {
+        detail::launch_operation_with_adapter<MeshDeviceOperationAdapter<device_operation_t>>(
+            operation_attributes, tensor_args, tensor_return_value, mesh_device);
+    } catch (...) {
+        // Validation or launch failed - restore original topologies so caller's tensors
+        // are not left mislabelled. Use noexcept wrapper to avoid losing the original exception.
+        try {
+            detail::restore_tensor_topologies(tensor_return_value, saved_topologies);
+        } catch (...) {
+            // If restore fails, log but don't propagate - preserve original exception
+            log_warning(tt::LogOp, "Failed to restore tensor topologies after validation failure");
+        }
+        throw;
+    }
 
     tracked_function.end(tensor_return_value);
     return tensor_return_value;
@@ -668,10 +721,29 @@ void prepare(
     auto tensor_return_value = device_operation_t::create_output_tensors(operation_attributes, tensor_args);
     auto* mesh_device = detail::get_mesh_device<device_operation_t>(operation_attributes, tensor_args);
     TT_FATAL(!mesh_device->get_device_ids().empty(), "Cannot prepare an operation for an inactive MeshDevice");
+
+    // Save original topologies before place_output_tensors assigns new labels.
+    // If validation in prepare_operation_with_adapter fails, we restore these to avoid
+    // leaving the caller's tensors mislabelled (issue #64100).
+    auto saved_topologies = detail::save_tensor_topologies(tensor_return_value);
+
     detail::place_output_tensors<device_operation_t>(
         operation_attributes, tensor_args, input_tensors, mesh_device, tensor_return_value);
-    detail::prepare_operation_with_adapter<MeshDeviceOperationAdapter<device_operation_t>>(
-        operation_attributes, tensor_args, tensor_return_value, mesh_device);
+
+    try {
+        detail::prepare_operation_with_adapter<MeshDeviceOperationAdapter<device_operation_t>>(
+            operation_attributes, tensor_args, tensor_return_value, mesh_device);
+    } catch (...) {
+        // Validation or preparation failed - restore original topologies so caller's tensors
+        // are not left mislabelled. Use noexcept wrapper to avoid losing the original exception.
+        try {
+            detail::restore_tensor_topologies(tensor_return_value, saved_topologies);
+        } catch (...) {
+            // If restore fails, log but don't propagate - preserve original exception
+            log_warning(tt::LogOp, "Failed to restore tensor topologies after preparation failure");
+        }
+        throw;
+    }
 }
 
 // invoke is now deprecated - use launch_on_device directly
