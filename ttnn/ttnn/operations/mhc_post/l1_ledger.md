@@ -97,6 +97,11 @@ only if binaries + 2 × (args + CB / semaphore config) ≤ 70 656 B. The feed pr
 profiler is at that edge: reader built -Os on the W path (`MHC_READER_OS`), writer's cold root / leader paths
 noinline -Os, the row group's coordinates as the writer's RT args (not the 105-entry table as common args). Without
 these the feed call is DISPATCH-BOUND (12.8 µs launch gap). Any growth of the worker program must re-check it.
+Refinement 5 (the coefficient multicast, +632 B reader, +1 semaphore id): made room by moving the ports' 106-word
+worker table from per-core to common RT args of the port reader (the program's unique-RTA region is the max over
+kernel groups, set by the port group: 928 → 688 B, counted twice). Measured (`TT_METAL_LOG_JIT_TELEMETRY=1`, feed
+program): kernel text 67 744 B + 2 × (688 RTA + 112 sem + 480 CB + 32) = 70 368 B ≤ 70 656 (288 B left). The
+mcast_pipe helper version (McastFamily) cost 828 B of reader text, 13 RT words and 2 semaphore ids: 416 B over.
 
 ## Symbol table
 
@@ -141,7 +146,7 @@ Chosen split for stats/collapse (as implemented, Refinement 4): the W-path choos
 |--------|----------------|---------------|--------------------------|
 | F | 1 | each unit has exactly one owner | — |
 | X | 1 | same; X'_j needs all n streams, and all n live in one unit | — |
-| post / comb / P | 1 per row group that owns the row = 1 (rows are partitioned). Packed: one tile read serves all three. | the row's tile is read by each core owning a column range of that row: **Q reads of a 4 KB tile per row** (≈ Q·Ht·4 KB; 2.2 MB at T=160, Q=106). This is above the minimum, and the cost is per-transaction rather than per-byte. | — (each core reads its own copy; an mcast per row group is the deferred alternative, but it is negligible next to X) |
+| post / comb / P | 1 per chunk of the row group that owns the row (Refinement 5: a row group = 1–4 one-rectangle chunks of consecutive cores; 14 chunks for the 5 row groups on the feed mesh at T160, 5 single-chip). Packed: one tile read serves all three. | `COEF_MCAST`: the chunk's first core reads row t's tiles and NoC-multicasts them into the same `cb_coef_raw` landing of the chunk (one ack per receiver per row, counter semaphore `SEM_COEF`). Before: **Q reads of the same 4 KB tile per row**, 21–22 cores on one DRAM bank at the call's start. | (chunk size − 1) · span per row and chunk over the NoC multicast (span = 4–12 KB); + 1 ack atomic per receiver per row |
 | X' | 1 write; **0 re-reads** (projection and y use the in-L1 bf16 copy) | `cb_mixed_bf16` residency | — |
 | W | 1 (Refinement 4 slice sharing; R before) | resident per core across its rows; each of the R cores of a column member reads 1/R | (R−1)/R · n·C·128 B per member set over the NoC (≈ 2.1 MB at R = 5) |
 | w | 1 (slice sharing; R before) | resident | (R−1)/R of the core's w tiles to its peers |
@@ -151,7 +156,7 @@ Chosen split for stats/collapse (as implemented, Refinement 4): the W-path choos
 
 Totals at T=160, C=5120, bf16, collapse + norm (R=1 at Refinement 3; at R=5 with slice sharing the DRAM total is the same and the coefficient reads drop from Q·Ht = 530 to 105 tile reads — one row a core):
 - DRAM ≈ 1.6 (F) + 6.6 (X) + 6.6 (X') + 2.6 (W) + 1.6 (y) + 0.2 (small) ≈ 19.2 MB, which is the roofline bytes.
-- Coefficient reads add ~2.2 MB of 4 KB transactions.
+- Coefficient reads: 105 tile reads (Refinement 4, one row a core) → 14 on the feed mesh / 5 single-chip (Refinement 5 multicast), 56 KB.
 - NoC cross-core ≈ 2.2 MB (partials) + 0.2 MB.
 
 > Cheapest-traffic split considered: C-columns-only (R = 1). W is read once, X' is never re-read, and nothing is added at DRAM. Implemented: the same (the chooser picks R = 1 whenever `tensor_c_tiles ≥ |L|`; the extra W bytes make every R > 1 lose on DRAM). Where R > 1 is forced (small C), the cheapest is R3 W-mcast, saving `(R−1)·n·C·128 B` of DRAM. It is deferred because W-resident R2 is already at the minimum on every shape where R = 1 fills the grid, including both perf-focus cases. The column ranges are identical across row groups, so the R3 family stays reachable without restructuring.

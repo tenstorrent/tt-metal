@@ -50,6 +50,10 @@ W_STREAM_BLOCKS = 2  # W-streamed: column passes of W in flight
 # tiles each and forward it to each other over the NoC, so these cross DRAM once instead of R times (Refinement 4).
 # Knob: False = every core reads its whole slices.
 SLICE_SHARE = True
+# Coefficient row reuse (Refinement 5): the Q cores of a row group need the same coefficient tile(s) of every row; one
+# sender per chunk of the row group reads them from DRAM and NoC-multicasts them to the chunk (a row group splits into
+# its rectangles of consecutive cores: 2-4 on the 11-wide grid). Knob: False = every core reads its own.
+COEF_MCAST = True
 MAX_FEED_LINKS = 2  # feed: port cores reserved per direction (2 directions), whatever feed_num_links is
 FEED_CHUNKS_IN_FLIGHT = 4  # feed: packets in flight per port (fabric_all_gather's 4-chunk batch, 112 KiB ring)
 FEED_READ_BATCH = 4  # feed: chunks the port reader keeps in flight per read barrier (ring = in-flight packets + this)
@@ -121,6 +125,7 @@ SEM_READY_BITS = 2  # bit (t mod 32): leader(t) has freed its slots for row t
 SEM_RSTD_COUNT = 3  # norm: rstd rows landed in my cb_rstd_land slots
 SEM_FEED_ROWS = 4  # feed (workers): armed by every port (its count slots are zeroed) before my first count
 SEM_W_SHARE = 5  # R2 W sharing: peers (same column member, other row groups) that forwarded their W share to me
+SEM_COEF = 6  # coefficient mcast: on a chunk's sender its receivers' acks, on a receiver the rows landed
 
 NUM_CBS = 64
 
@@ -416,6 +421,7 @@ def create_program_descriptor(
     compute_rt = ttnn.RuntimeArgs()
     # NoC coordinates of every used core (row-major L order), packed x | y << 16
     xy = [(lambda v: v.x | (v.y << 16))(device.worker_core_from_logical_core(c)) for c in used] if has_w else []
+    coef_mc = _coef_mcast_args(device, used, R, Q)
     for g in range(R):
         t0, tn = row_ranges[g]
         for q in range(Q):
@@ -423,7 +429,7 @@ def create_program_descriptor(
             core = used[g * Q + q]
             # slice sharing: + the R cores of my column member (by group)
             peers = [xy[g2 * Q + q] for g2 in range(R)] if w_share > 1 else []
-            reader_rt[core.x][core.y] = [t0, tn, c0, cn, g, q] + peers
+            reader_rt[core.x][core.y] = [t0, tn, c0, cn, g, q] + peers + coef_mc[(core.x, core.y)]
             # R2: + the Q members of my row group (the combine tree's destinations); per-core, not the whole table as
             # common args: the args / CB config region counts twice against the kernel-config ring (trace replays)
             writer_rt[core.x][core.y] = [t0, tn, c0, cn, g, q] + xy[g * Q : (g + 1) * Q]
@@ -454,6 +460,7 @@ def create_program_descriptor(
         root_lag,
         w_share,
         SEM_W_SHARE,
+        SEM_COEF,
     ]
     pre_for_args = pre_tensor if collapse else post_tensor
     w_for_args = w_tensor if has_w else post_tensor
@@ -642,9 +649,9 @@ def create_program_descriptor(
         config=compute_cfg,
     )
 
-    semaphores = []
+    semaphores = [ttnn.SemaphoreDescriptor(id=SEM_COEF, core_ranges=core_ranges, initial_value=0)]
     if has_w:
-        semaphores = [
+        semaphores += [
             ttnn.SemaphoreDescriptor(id=s, core_ranges=core_ranges, initial_value=0)
             for s in (SEM_LEADER_COUNT, SEM_ROOT_COUNT, SEM_READY_BITS, SEM_RSTD_COUNT, SEM_W_SHARE)
         ]
@@ -656,6 +663,34 @@ def create_program_descriptor(
             program, device, feed, y_for_args, R, row_ranges, Q, c_tiles, f_pad[-2] // TILE, f_tensor.shape[-2], used
         )
     return program
+
+
+def _coef_mcast_args(device, used, R, Q):
+    """Coefficient row reuse: per core its 4 reader RT args [role, a, b, dests] (role 0 none, 1 sender: a / b = the
+    chunk rectangle's NoC start / end, dests its other cores; 2 receiver: a = the sender). A row group (row-major
+    cores) splits into chunks of consecutive cores forming one rectangle; the chunk's first core sends; a 1-core
+    chunk reads its own."""
+    args = {(c.x, c.y): [0, 0, 0, 0] for c in used}
+    if not COEF_MCAST:
+        return args
+    noc = lambda c: (lambda v: v.x | (v.y << 16))(device.worker_core_from_logical_core(c))
+    for g in range(R):
+        chunks, cur = [], []
+        for c in used[g * Q : (g + 1) * Q]:
+            if cur and len(_merged_ranges(cur + [c]).ranges()) > 1:
+                chunks.append(cur)
+                cur = []
+            cur.append(c)
+        chunks.append(cur)
+        for ch in chunks:
+            if len(ch) < 2:
+                continue
+            xs, ys = [c.x for c in ch], [c.y for c in ch]
+            lo, hi = ttnn.CoreCoord(min(xs), min(ys)), ttnn.CoreCoord(max(xs), max(ys))
+            args[(ch[0].x, ch[0].y)] = [1, noc(lo), noc(hi), len(ch) - 1]
+            for c in ch[1:]:
+                args[(c.x, c.y)] = [2, noc(ch[0]), 0, 0]
+    return args
 
 
 # ---------------------------------------------------------------------------
@@ -762,7 +797,7 @@ def _add_feed_ports(program, device, feed, y_tensor, R, row_ranges, Q, c_tiles, 
             expect_in = sum(
                 1 for rc, ch in plan.items() if ch["group"] == me["group"] and rc != me_rc and ch["slot_of"][p] == k
             )
-            reader_rt[core.x][core.y] = geom + [l, y_tensor.buffer_address(), len(dests)] + dests + worker_xy
+            reader_rt[core.x][core.y] = geom + [l, y_tensor.buffer_address(), len(dests)] + dests
             args = geom + [
                 l,
                 d_tensor.buffer_address(),
@@ -814,6 +849,7 @@ def _add_feed_ports(program, device, feed, y_tensor, R, row_ranges, Q, c_tiles, 
             core_ranges=port_crs,
             compile_time_args=reader_ct,
             runtime_args=reader_rt,
+            common_runtime_args=worker_xy,  # the same on every port (per-core it would set the unique-RTA region)
             config=ttnn.ReaderConfigDescriptor(),
         ),
         ttnn.KernelDescriptor(

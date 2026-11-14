@@ -55,7 +55,9 @@ void kernel_main() {
     const uint32_t n_dest = get_arg_val<uint32_t>(a++);
     const uint32_t dest_idx = a;  // destination positions d
     a += n_dest;
-    const uint32_t workers_idx = a;  // used workers in L order (x | y << 16): worker k is in row group k / group_q
+    // used workers in L order (x | y << 16): worker k is in row group k / group_q. Common RT args (the same table on
+    // every port): as per-core args they set the program's unique-RTA region, which counts twice against the
+    // kernel-config ring (trace replays overlap only if it fits: Refinement 5)
 
     const auto y_acc = TensorAccessor(y_args, y_addr, page_bytes);
     const uint32_t num_workers = g.r * group_q;
@@ -69,7 +71,7 @@ void kernel_main() {
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(poll + k * 16) = 0;
     }
     for (uint32_t k = 0; k < num_workers; ++k) {
-        const uint32_t xy = get_arg_val<uint32_t>(workers_idx + k);
+        const uint32_t xy = get_common_arg_val<uint32_t>(k);
         noc_semaphore_inc(get_noc_addr(xy & 0xFFFF, xy >> 16, rows_sem), 1);
     }
     // wait until every worker k published min(i1, rows of its group) rows; `ready_rows` = rows every worker has

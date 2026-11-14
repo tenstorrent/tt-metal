@@ -24,6 +24,19 @@
 //   (t - t_start) of my private landing cb_rstd_land and inc SEM_RSTD_COUNT; once all my rows' rstd landed, each is
 //   expanded into column 0 of a cb_rstd_col page (the compute's COL broadcast), row by row. (Lagged norm knob,
 //   Refinement 3: the writer does this per row instead.)
+// Coefficient row reuse (Refinement 5, host COEF_MCAST): the Q cores of a row group need the same raw coefficient
+//   tiles of every row. One sender per row group (chunk) reads them from DRAM and multicasts them into the same
+//   cb_coef_raw landing of the others (one rectangle per chunk, handshake per row). Sender: row t's tiles
+//   (prefetched a row earlier, as without the mcast) are sent at the START of row t, before its block reads, once
+//   every receiver acked row t. Receiver: acks row t (its landing buffer of row t - 2 is long expanded) once its first
+//   block's reads are issued, waits for the data, then the block's barrier. Cores with no role read their own.
+//   One counter semaphore SEM_COEF: on the sender it counts the acks (cumulative, (row + 1) * num_dests), on a
+//   receiver the rows landed (row + 1) — a sender never receives, so the two uses never share a core.
+//   RAW NoC multicast, not the mcast_pipe SenderPipe / ReceiverPipe (helper substitution, measured): the worker
+//   program must fit the 70 656 B kernel-config ring with binaries + 2x its args / semaphore / CB config for trace
+//   replays to overlap. With the helper (McastFamily, 1-rectangle groups) the reader grew 828 B, its RT args 13 words
+//   and the semaphore table 2 ids: the feed program sat 416 B over the ring and was DISPATCH-BOUND (14.3 us launch
+//   gap, perf_feed_measure.py). This form needs 1 semaphore id and 4 RT words.
 
 // W path (MHC_READER_OS): -Os. The worker program's binaries + 2x its args / CB config must fit the 70 656 B
 // kernel-config ring for trace replays to overlap (else every launch waits for the previous one: DISPATCH-BOUND); with
@@ -94,7 +107,8 @@ void kernel_main() {
     // slice sharing across the R row groups (see issue_slices); 1 = every core reads its whole slices
     constexpr uint32_t slice_share = get_compile_time_arg_val(21);
     constexpr uint32_t sem_w_share_id = get_compile_time_arg_val(22);
-    constexpr auto f_args = TensorAccessorArgs<23>();
+    constexpr uint32_t sem_coef_id = get_compile_time_arg_val(23);
+    constexpr auto f_args = TensorAccessorArgs<24>();
     constexpr auto x_args = TensorAccessorArgs<f_args.next_compile_time_args_offset()>();
     constexpr auto post_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
     constexpr auto comb_args = TensorAccessorArgs<post_args.next_compile_time_args_offset()>();
@@ -118,6 +132,11 @@ void kernel_main() {
     const uint32_t comb_addr = get_common_arg_val<uint32_t>(3);
     const uint32_t post_col = get_common_arg_val<uint32_t>(4);
     const uint32_t comb_col = get_common_arg_val<uint32_t>(5);
+    // coefficient row reuse, RT args after the slice peers: role (0 none, 1 sender, 2 receiver), sender: rectangle
+    // start / end (NoC x | y << 16) and its destinations; receiver: the sender (x | y << 16)
+    constexpr uint32_t coef_rt = 6 + (slice_share > 1 ? slice_share : 0);
+    const uint32_t coef_role = get_arg_val<uint32_t>(coef_rt);
+    const uint32_t coef_xy0 = get_arg_val<uint32_t>(coef_rt + 1);
     [[maybe_unused]] const uint32_t pre_addr = get_common_arg_val<uint32_t>(6);
     [[maybe_unused]] const uint32_t w_addr = get_common_arg_val<uint32_t>(7);
     [[maybe_unused]] const uint32_t nw_addr = get_common_arg_val<uint32_t>(8);
@@ -144,6 +163,12 @@ void kernel_main() {
     auto raw_pre = [&](uint32_t b) {
         return pre_is_post ? raw_post(b) : (pre_is_comb ? raw_comb(b) : raw_post(b) + 2 * coef_page);
     };
+    // coefficient row reuse: my role (see the header); the multicast span covers every raw page a row lands
+    const bool coef_send = coef_role == 1;
+    const bool coef_recv = coef_role == 2;
+    const uint32_t coef_sem = get_semaphore(sem_coef_id);
+    volatile tt_l1_ptr uint32_t* coef_cnt = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(coef_sem);
+    const uint32_t coef_span = (collapse && !pre_is_post && !pre_is_comb ? 3 : (coef_shared ? 1 : 2)) * coef_page;
     // load_coefficients_row, issue half: the raw tiles of row t into landing buffer b (no barrier)
     auto issue_coef = [&](uint32_t t, uint32_t b) {
         noc_async_read(post_acc.get_noc_addr(t * post_wt), raw_post(b), coef_page);
@@ -294,7 +319,7 @@ void kernel_main() {
         }
         slices_pending = false;
     };
-    if (t_count > 0) {
+    if (t_count > 0 && !coef_recv) {
         issue_coef(t_start, 0);
     }
 
@@ -312,6 +337,18 @@ void kernel_main() {
             // behind its barrier the reader prefetches row t+1's tiles, then expands row t's.
             const uint32_t f_row = t * c_tiles;
             const uint32_t x_row = t * n * c_tiles;
+            if (coef_send) {  // row t's tiles (prefetched) -> the row group, before my block reads
+                const uint32_t xy1 = get_arg_val<uint32_t>(coef_rt + 2);
+                const uint32_t dests = get_arg_val<uint32_t>(coef_rt + 3);
+                auto mc = [&](uint32_t a) {
+                    return get_noc_multicast_addr(coef_xy0 & 0xFFFF, coef_xy0 >> 16, xy1 & 0xFFFF, xy1 >> 16, a);
+                };
+                noc_async_read_barrier();
+                noc_semaphore_wait_min(coef_cnt, (row_idx + 1) * dests);  // every receiver acked row t
+                noc_async_write_multicast(raw_post(buf), mc(raw_post(buf)), coef_span, dests);
+                noc_async_write_barrier();  // the tiles landed before the (atomic-path) count
+                noc_semaphore_inc_multicast(mc(coef_sem), 1, dests);
+            }
             for (uint32_t cb0 = 0; cb0 < c_count; cb0 += block_cols) {
                 const uint32_t cols_in_pass = (c_count - cb0) < block_cols ? (c_count - cb0) : block_cols;
                 if constexpr (has_w && !w_resident) {  // R2-W-streamed: this pass's W rows again
@@ -338,6 +375,11 @@ void kernel_main() {
                         zero_l1(x_l1, filler * n * x_page);
                     }
                 }
+                if (coef_recv && cb0 == 0) {  // ack row t, wait for its tiles while my block's reads fly
+                    noc_semaphore_inc(get_noc_addr(coef_xy0 & 0xFFFF, coef_xy0 >> 16, coef_sem), 1);
+                    noc_semaphore_wait_min(coef_cnt, row_idx + 1);
+                    invalidate_l1_cache();
+                }
                 noc_async_read_barrier();
                 if (slices_pending) {
                     push_slices();
@@ -347,7 +389,7 @@ void kernel_main() {
                     slices_pending = (has_w && w_resident) || norm || slice_share > 1;
                 }
                 if (cb0 == 0) {
-                    if (row_idx + 1 < t_count) {
+                    if (row_idx + 1 < t_count && !coef_recv) {
                         issue_coef(t + 1, buf ^ 1);
                     }
                     expand_coef(buf);
@@ -384,5 +426,9 @@ void kernel_main() {
             }
             cb_push_back(cb_rstd_col, 1);
         }
+    }
+
+    if (coef_role != 0) {  // my acks / the row counts are atomics
+        noc_async_atomic_barrier();
     }
 }

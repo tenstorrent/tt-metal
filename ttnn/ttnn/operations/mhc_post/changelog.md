@@ -353,3 +353,55 @@
   (caught by the next compile; hooks removed).
 - Tests added: none (perf probes reuse `perf_feed_measure.py` / `test_mhc_post_perf.py`); probes/probe_022..033 (timeline
   and ablation runs of probe_019's call).
+
+## Refinement 5 — Read the reuse-shared coefficient row once per row group and multicast it
+- Date: 2026-11-14
+- Measurement: `tests/ttnn/unit_tests/operations/mhc_post/perf_feed_measure.py` (the `eval.ccl_perf` protocol, 5
+  experiments, BH 1×4 mesh, FABRIC_2D_TORUS_XY), kept by `python -m eval.ccl_perf compare`:
+
+  | case | before (Refinement 4) | after | compare |
+  |---|---|---|---|
+  | collapse + norm, no feed (LOOSE_CASES[1]) | 126.8 / 128.0 µs (fastest / slowest) | **123.4 / 124.6 µs** | win (−3.3 µs, noise 0.05) |
+  | collapse + norm + feed (LOOSE_CASES[0]) | 157.4 / 159.8 µs | **154.5 / 156.9 µs** | win (−2.9 µs, noise 0.09) |
+
+  Neither dispatch-bound (max gap 0.60 / 0.52 µs).
+- What was done (scheme change: one injector + broadcast per row group):
+  1. **Coefficient multicast** (`COEF_MCAST`, host knob; False = every core reads its own). A row group (Q
+     row-major consecutive cores) splits into one-rectangle chunks (grid-row runs: 4 / 3 / 3 / 2 / 2 for the 5 groups
+     on the feed mesh, where the port cores leave a hole in row 0; 1 rectangle each single-chip). The first core of a
+     chunk reads row t's raw coefficient tiles (prefetched a row earlier, as before) and, at the start of row t
+     before its block reads, waits for every receiver's ack of row t, multicasts the 1–3 raw pages into the same
+     `cb_coef_raw` landing, write-barriers, then multicasts an atomic +1 on `SEM_COEF`. A receiver issues its first
+     block's reads, acks row t (atomic inc on the sender's `SEM_COEF`), and waits for its own `SEM_COEF` ≥ t + 1. The
+     ack means that row t − 1 is expanded, so the double-buffered landing is never overwritten while it is read.
+     Deadlock check: a reader reaching row r depends (through compute → writer → the combine tree) only on other
+     cores' rows ≤ r − 2, because the leader fold is lagged one row. The handshake only couples readers at the same
+     row. Multi-row shapes (T1280, 10 rows a core) were run: golden loose cases 112/112.
+  2. **Raw NoC multicast instead of mcast_pipe** (helper substitution, measured, documented at the reader head). The
+     McastFamily version (3-rectangle groups) overflowed the kernel-config buffer (71 040 > 70 656 B). The 1-rectangle
+     groups fit, but the feed call was DISPATCH-BOUND (14.3 µs launch gap): +828 B reader text (memset / memcpy from
+     the pipe's argument copies, the multicast + semaphore-multicast paths), 13 RT words and 2 semaphore ids. The
+     telemetry put it 416 B over the trace-overlap condition. The raw form costs +632 B of text, 4 RT words and
+     1 semaphore id.
+  3. **Kernel-config room**: the port reader's 106-word worker coordinate table, identical on every port, moved from
+     per-core to common RT args. The program's unique-RTA region (the max over kernel groups, set by the port group)
+     went 928 → 688 B, and that region counts twice under trace replay. Feed program now 67 744 B text + 2 × 1 312 B
+     config = 70 368 B against 70 656 B. Without this step the raw version was still DISPATCH-BOUND (12.8 µs gap, 192 B over).
+  - Reused: `cb_coef_raw` (the landing is the multicast destination, same address on every core), the reader's
+    coefficient prefetch and expand, the row loop's barrier points. Added: `SEM_COEF`, 4 reader RT args
+    (`_coef_mcast_args`), the sender / receiver steps in the reader.
+- Single-chip no-regression (profiler, `test_mhc_post_perf.py`; before = Refinement 4): plain fp32 T160 / T640 C7168 /
+  T1024 C1792 117–119 / 505 / 193–206 → 112–115 / 479–494 / 198–200 µs; bf16 packed HiFi2 T160 plain / stats / collapse /
+  collapse + norm 77.0 / 91.3 / 115.0 / 122.3 → 75–76 / 89 / 111.5 / 119 µs; T1280 plain / stats / collapse /
+  collapse + norm 378.9 / 471.3 / 552.1 / 631.2 → 372.7 / 466.5 / 549.5 / 631.3 µs.
+- What binds now: unchanged from Refinement 4. The fused fp32 SFPU compute takes ~9 µs a unit, the first block starts
+  with all ~105 cores hitting DRAM at once (the coefficient reads were part of that burst), then the norm tail. Next:
+  the fused multi-unit mix SFPU op. The worker program has 288 B of kernel-config ring left.
+- Accuracy achieved: bit-identical data path (the same coefficient bytes land in the same buffer); golden gates as
+  before.
+- Golden test progress: test_golden.py loose cases 112/112 (plain / stats / collapse / norm, T160–1280) +
+  separate-coefficient collapse cells 66/66 (2–3-page multicast span); test_feed.py 148/148; test_regression.py 33/35
+  (the 2 known `test_projection_hifi4` calibration failures of Refinement 1); unit tests 36/36.
+- Issues encountered: the kernel-config ring (above); `if constexpr` on the McastArgs `active` flag does not discard
+  in the non-template `kernel_main` (the absent variant failed to compile), which is moot in the raw form.
+- Tests added: none (`perf_feed_measure.py` and `test_mhc_post_perf.py` reused).
