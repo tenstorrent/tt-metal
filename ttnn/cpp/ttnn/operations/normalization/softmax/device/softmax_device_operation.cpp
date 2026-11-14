@@ -204,10 +204,15 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
         if (mask.is_sharded()) {  // sharded mask
             TT_FATAL(mask.layout() == Layout::TILE, "Sharded mask must have TILE layout");
             TT_FATAL(
+                mask.memory_config().memory_layout() == tensors_args.input_tensor.memory_config().memory_layout() &&
+                    mask.shard_spec() == tensors_args.input_tensor.shard_spec(),
+                "Sharded mask memory layout and shard spec must match input tensor");
+            TT_FATAL(
                 mask.padded_shape() == tensors_args.input_tensor.padded_shape(),
                 "Sharded mask shape must match input tensor shape");
         } else {
             if (mask.layout() == Layout::ROW_MAJOR) {
+                TT_FATAL(!attributes.is_causal_mask, "Causal mask does not support ROW_MAJOR layout");
                 const auto tile_width = tensors_args.input_tensor.tensor_spec().tile().get_width();
                 const auto tile_height = tensors_args.input_tensor.tensor_spec().tile().get_height();
                 ttnn::Shape expected_shape(
@@ -218,6 +223,11 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
                 TT_FATAL(mask.padded_shape() == expected_shape, "Non-sharded mask shape must match expected shape");
             } else {
                 const auto& input_tile = tensors_args.input_tensor.tensor_spec().tile();
+                TT_FATAL(
+                    mask.padded_shape()[-1] == tensors_args.input_tensor.padded_shape()[-1],
+                    "Non-sharded mask width ({}) must match input tensor width ({})",
+                    mask.padded_shape()[-1],
+                    tensors_args.input_tensor.padded_shape()[-1]);
                 TT_FATAL(
                     mask.padded_shape()[-2] >= input_tile.get_height() &&
                         mask.padded_shape()[-1] >= input_tile.get_width(),
@@ -271,6 +281,15 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
                             "shard width must equal to input tensor shape[3]!");
 
                         TT_FATAL(attributes.inplace, "Operation must be inplace for sharded multi-core program config");
+                        if (tensors_args.mask.has_value()) {
+                            const auto& mask = tensors_args.mask.value();
+                            const auto input_batch = tensors_args.input_tensor.padded_shape()[0];
+                            TT_FATAL(
+                                mask.padded_shape()[0] == 1 || mask.padded_shape()[0] == input_batch,
+                                "Mask batch size ({}) must be 1 or match input batch size ({}) for sharded softmax",
+                                mask.padded_shape()[0],
+                                input_batch);
+                        }
                         if (!attributes.is_scale_causal_mask_hw_dims_softmax) {
                             // grid
                             auto num_cores_c = program_config.compute_with_storage_grid_size.x;
