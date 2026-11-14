@@ -22,20 +22,24 @@ HEAD_DIM = 128
 MLP_RATIO = 3
 # Ring SDPA (q, k) chunks by the rows each device holds (image + text), where the shared table keyed by the logical
 # length picks badly; other row counts keep the Attention defaults.
-# At the 4096 rows the streaming path's smaller score block fits larger q chunks.
+# At the 4096 rows on 116 cores (12 x 9 + the CCL row's 8 free cores): 2 rounds of q 224, and 3 rounds of q 160 at
+# 4096 + 1 reference (2048-row text bucket).
 RING_SDPA_CHUNKS_BY_LOCAL_ROWS: dict[int, tuple[int, int]] = {
     2560: (160, 512),
     2688: (160, 512),
     2816: (160, 512),
     3072: (192, 512),
-    8320: (160, 640),
-    8960: (256, 512),
+    8192: (224, 512),
+    8320: (224, 512),
+    8960: (160, 512),
 }
+# The ring all-gather keeps the CCL row's cores x < 4 with 2 links
+RING_SDPA_CCL_ROW_START_X = 4
 
 
 class Flux3KleinAttention(Attention):
-    """Ring SDPA on the streaming compute path with fp32 dest accumulation (bf16 score block), with
-    RING_SDPA_CHUNKS_BY_LOCAL_ROWS's chunks where it has the per-device rows."""
+    """Ring SDPA on the streaming compute path with fp32 dest accumulation (bf16 score block), also on the CCL row's
+    cores from RING_SDPA_CCL_ROW_START_X on, with RING_SDPA_CHUNKS_BY_LOCAL_ROWS's chunks where it has the rows."""
 
     def get_ring_sdpa_program_config(self, per_device_seq_len: int) -> ttnn.SDPAProgramConfig:
         rows = per_device_seq_len // self.parallel_config.sequence_parallel.factor
@@ -52,6 +56,7 @@ class Flux3KleinAttention(Attention):
                     exp_approx_mode=self.ring_sdpa_exp_approx,
                 )
             config.streaming_fp32_dest = True
+            config.ccl_row_sdpa_start_x = RING_SDPA_CCL_ROW_START_X
             self.ring_sdpa_program_config[key] = config
         return self.ring_sdpa_program_config[key]
 
