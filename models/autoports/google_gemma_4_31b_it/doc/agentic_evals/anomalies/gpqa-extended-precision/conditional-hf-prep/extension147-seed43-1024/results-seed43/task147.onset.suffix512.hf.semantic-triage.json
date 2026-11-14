@@ -1,0 +1,87 @@
+{
+  "task": "147",
+  "artifact": "conditional-hf-prep/extension147-seed43-1024/results-seed43/task147.onset.suffix512.hf.private.json",
+  "scope": "Host-only semantic review of the entire saved pinned-HF seed-43 free-running text. The executed 64-position teacher_forced_chosen comparison is present in the source artifact and outside this assessment.",
+  "range_convention": "Character ranges are zero-based and half-open, measured on the saved text string.",
+  "context": {
+    "learned": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/learned.json",
+    "source_packet": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/gpqa-extended198-head-bfp8/digest/analysis.private/147-f5dfde3d31b4433c.json",
+    "onset_record": "task147.onset.suffix512.private.json",
+    "prompt": "Exact suffix of saved reconstructed prompt_token_ids: 512 retained IDs from an 18,841-token reconstructed prefix, with 18,329 earlier IDs removed.",
+    "prompt_position_limit": "This suffix reconstruction changes the position origin and is not the original native prompt. Raw native sampled token IDs are unavailable; matching token counts do not establish the original sampled path.",
+    "native_onset": "Selected boundary before a renewed AmF6 fraction/A1 contradiction cycle after about 38,000 reasoning characters; a concrete recalculate boundary, not a unique first-error attribution.",
+    "prior_512_review": "The earlier pinned-HF seed-43 512-generated-token continuation was assessed as semantic_anomaly=false: it calculated the AmF6 fraction and restated the candidate once, without sustained unchanged cycling. This 1024-token continuation is reviewed independently and adds five repeated validation cycles."
+  },
+  "semantic_anomaly": true,
+  "mechanical_flag": false,
+  "mechanical_flag_field": "results[0].flag",
+  "observed_malformed_text": false,
+  "text_chars": 2268,
+  "generation_counts": {
+    "requested_tokens": 1024,
+    "generated_tokens": 1024,
+    "streamed_generated_tokens": 1024,
+    "generated_token_ids": 1024,
+    "consistency": "All saved generation counts agree at 1,024."
+  },
+  "semantic_ranges": [
+    {
+      "chars": [
+        0,
+        748
+      ],
+      "paraphrase": "The continuation proposes A1=AmF7 and A2=AmF6, computes ωF(AmF6)=0.3196, and checks the bright-red, xenon-oxidation, decomposition, and fluoride-count clues before concluding Americium. The calculation and candidate are distinct task-relevant progress; several clue claims are asserted rather than independently substantiated."
+    },
+    {
+      "chars": [
+        748,
+        2242
+      ],
+      "paraphrase": "Five consecutive checklist cycles repeat the same AmF7/AmF6 assignment, fraction, bright-red and xenon-oxidation claims, decomposition, five-fluoride claim, and Americium conclusion. These cycles add no new candidate, calculation, discriminating check, or resolution; their sustained unchanged repetition supports a semantic anomaly."
+    },
+    {
+      "chars": [
+        2242,
+        2268
+      ],
+      "paraphrase": "The saved text ends mid-parenthesis at “So Y = Americium (” at the requested 1,024-token boundary. This cap truncation is not malformed-text evidence."
+    }
+  ],
+  "progress_and_checks": {
+    "distinct_candidate_or_numerical_checks": "One distinct candidate assignment (A1=AmF7, A2=AmF6) and one fraction calculation, followed by initial clue validation. The five later checklist cycles introduce no genuinely new candidates or checks.",
+    "new_regions_checked": "The opening checks the AmF7 candidate against the stated color, xenon-oxidation, decomposition, and binary-fluoride-count clues. The later cycles only restate those same claims.",
+    "recheck_count": "Five consecutive unchanged validation cycles after the initial candidate calculation and validation.",
+    "sustained_unchanged_cycles": "Yes. Five consecutive copies of the same clue checklist and conclusion follow the initial distinct candidate/calculation. The verdict is based on this sustained no-progress repetition, not a return or single recheck.",
+    "stray_tokens": "No unrelated, visibly corrupt, or stray-language tokens observed. The final mid-parenthesis cutoff is the requested output-cap boundary and is not malformed."
+  },
+  "tt_comparison": {
+    "first_wave_served_seed43": {
+      "artifact": "first-wave-served/task147.onset.suffix512.json",
+      "text_chars": 3198,
+      "mechanical_flag": true,
+      "semantic_review": "first-wave-served/task147.onset.suffix512.semantic-triage.json",
+      "reviewed_pattern": "After a brief AmF7/A1 reconsideration, the text repeats an identical generic question about A1 being something else; its saved review marks both semantic anomaly and malformed/repetitive text."
+    },
+    "first_wave_full_seed43": {
+      "artifact": "first-wave-full/task147.onset.suffix512.json",
+      "text_chars": 2991,
+      "mechanical_flag": false,
+      "semantic_review": "first-wave-full/task147.onset.suffix512.semantic-triage.json",
+      "reviewed_pattern": "After brief AmF7/RuF6 probes, the text repeatedly alternates lanthanide and transition-metal questions followed by “Let’s check” without reporting results; its saved review marks semantic anomaly and malformed text false."
+    },
+    "comparison": "The 1,024-token HF text has its own sustained no-progress pattern: repeated AmF7 validation after an initial fraction calculation. This differs from both TT surface patterns. HF and TT have the same 512-token reconstructed suffix and 1,024-token requested/generated caps, but HF and TT use different RNG streams; suffix truncation also changes the position origin. This is a qualitative matched-diagnostic comparison only and establishes neither a cause nor incidence/population behavior."
+  },
+  "teacher_forced_chosen": "The artifact records an executed 64-position teacher_forced_chosen comparison. It is outside this semantic text assessment; no numerical cause is inferred.",
+  "limits": [
+    "This is one diagnostic HF continuation, not a scored response or population estimate.",
+    "The exact retained 512-token suffix omits 18,329 earlier reconstructed IDs and changes the position origin; it cannot establish the native-prompt path or native-prompt equivalence.",
+    "HF and TT use different RNG streams. Both requested/generated 1,024 continuation tokens here, but text comparison does not establish equivalent sampled paths.",
+    "No cause, answer correctness, score, precision-causality, or population conclusion is made.",
+    "The saved mechanical flag is false and is reported separately from the semantic judgment."
+  ],
+  "assessment_status": {
+    "semantic_text_review": "complete for the entire saved seed-43 HF continuation",
+    "teacher_forced_chosen": "executed but not assessed",
+    "scoring": "not assessed"
+  }
+}

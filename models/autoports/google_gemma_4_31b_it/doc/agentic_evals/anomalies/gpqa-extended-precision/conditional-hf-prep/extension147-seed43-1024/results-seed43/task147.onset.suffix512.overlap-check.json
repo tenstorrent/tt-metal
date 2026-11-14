@@ -1,0 +1,15 @@
+{
+  "original": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-task147-seed43/task147.onset.suffix512.hf.private.json",
+  "extension": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/extension147-seed43-1024/results-seed43/task147.onset.suffix512.hf.private.json",
+  "token_field": "generated_token_ids",
+  "seed": 43,
+  "original_tokens": 512,
+  "extension_tokens": 1024,
+  "compared_tokens": 512,
+  "equal": true,
+  "mismatch_count": 0,
+  "first_mismatch_index": null,
+  "original_file_sha256": "baf4e877e62f03f58cd4326aa37e229fc6939f93fcaf467975fbeb416364cfc4",
+  "extension_file_sha256": "0f313f12db0bd9b227fb90d997c0ae4a9bd1090da01177760ecac4bfd584d8c5",
+  "scope": "Generated ID overlap only; does not establish HF/TT RNG equivalence or native sampled IDs."
+}

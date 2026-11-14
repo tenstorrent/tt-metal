@@ -1,0 +1,36 @@
+{
+  "task": 147,
+  "case": "task147.onset.suffix512",
+  "written_unix": 1794678621.416829,
+  "cause": "reference_behavior_on_shortened_input",
+  "reference_reproduction": true,
+  "seed": 43,
+  "generated_tokens": 1024,
+  "mechanical_flag": false,
+  "coordinator_reason": "Root read the entire saved text and agrees with fresh independent review. Initial candidate assignment and fraction calculation are progress; five subsequent unchanged clue-checklist cycles add no candidate, calculation or resolution. The terminal cap is excluded from the anomaly basis.",
+  "evidence": [
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/extension147-seed43-1024/results-seed43/task147.onset.suffix512.hf.semantic-triage.json",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/extension147-seed43-1024/results-seed43/task147.onset.suffix512.overlap-check.json",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/extension147-seed43-1024/results-seed43/task147.onset.suffix512.hf.private.json"
+  ],
+  "original_512_assessment": {
+    "status": "inconclusive_preserved",
+    "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-task147-seed43/task147.onset.suffix512.coordinator.json"
+  },
+  "overlap": "First512 generated IDs exactly equal original512 sample.",
+  "changed": "Only diagnostic generation cap extended512 to1024; no runtime, selected precision, sampling or evaluation-score change.",
+  "limits": "One shortened reconstructed suffix512 input removes18329 preceding IDs and changes position origin. This establishes reference repetition on the diagnostic input only, not native-prompt equivalence, equal incidence or exclusion of earlier precision drift. HF and TT RNG streams differ.",
+  "teacher_forced_comparison": {
+    "scope": "Chosen64 positions only; not whole-reply accuracy or exclusion of earlier precision drift.",
+    "comparisons": {
+      "first-wave-served": {
+        "positions": 64,
+        "top1_agreement": 0.890625
+      },
+      "first-wave-full": {
+        "positions": 64,
+        "top1_agreement": 0.96875
+      }
+    }
+  }
+}

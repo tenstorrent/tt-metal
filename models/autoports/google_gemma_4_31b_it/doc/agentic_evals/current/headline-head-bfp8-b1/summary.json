@@ -1,0 +1,89 @@
+{
+  "status": "complete",
+  "source": "vllm",
+  "precision": "stage12_head_bfp8_lofi",
+  "workload": {
+    "batch": 1,
+    "concurrency": 1,
+    "input_tokens": 4096,
+    "generated_tokens": 128,
+    "measured_requests": 8,
+    "warmup_requests": 1,
+    "measured_dataset_seed": 4101,
+    "warmup_dataset_seed": 4102,
+    "sampling_seed": 42,
+    "temperature": 1.0,
+    "top_k": 20,
+    "top_p": 0.95,
+    "enable_thinking": true,
+    "ignore_eos": true,
+    "random_range_ratio": 0.0,
+    "prefix_caching": true,
+    "cache_salt": "Fresh UUID per invocation, same original distinct-prompt/cache-cold isolation semantics; never reuse old salt/cache contents.",
+    "served_context": 262144,
+    "server_generation_override": {
+      "top_k": 32
+    },
+    "source_count_warning": "Old plan.json says2 requests; actual original raw/results/command all8. Use8, not staleplan."
+  },
+  "completed": 8,
+  "failed": 0,
+  "ttft_ms": 755.6317944836337,
+  "decode_tps": 34.77063666910312,
+  "prefill_tok_s": 5420.629504875494,
+  "measured_seconds": 35.26799304201268,
+  "comparison": {
+    "decode_tok_s_user": {
+      "measured": 34.77063666910312,
+      "baseline": 35.30854748895689,
+      "ratio": 0.9847654220264369,
+      "prediction_range": [
+        31.7776927400612,
+        37.073974863404736
+      ],
+      "prediction_hit": true
+    },
+    "prefill_tok_s": {
+      "measured": 5420.629504875494,
+      "baseline": 5428.223507866811,
+      "ratio": 0.9986010150502624,
+      "prediction_range": [
+        4613.989981686789,
+        5699.634683260152
+      ],
+      "prediction_hit": true
+    }
+  },
+  "sampling_modes": {
+    "prefill:host_compatibility": 8,
+    "prefill:device": 8,
+    "decode:device": 1016
+  },
+  "concurrency_verification": {
+    "server_max_num_seqs": 1,
+    "client_max_concurrency": 1,
+    "minimum_gap_from_last_token_to_next_start_seconds": 0.0003824080340564251,
+    "raw_max_concurrent_requests": 2,
+    "raw_metric_explanation": "vLLM serve.py calculate_metrics counts inclusive one-second buckets; adjacent serial requests share a bucket. This bucket metric is not simultaneous request concurrency. Client last-token times do not overlap subsequent starts; server and client limits both1."
+  },
+  "full_phase_host_wall_rooflines": {
+    "prefill_flops_pct": 12.761192983383742,
+    "decode_dram_pct": 33.53236789918579,
+    "timing_scope": "full_phase_wall_time",
+    "attribution": "Disjoint intervals between consecutive adapter-observed async completions, attributed to the ending completion phase; first interval starts at first client request. Plugin host sampling/output/scheduling, communication and idle gaps after adapter return fall inside following intervals; final client tail assigned to last phase. Operator decision4 approved attribution. No extra synchronization or live device profiler. Host wall time, not device time.",
+    "evidence": "roofline.json"
+  },
+  "device_time_available": false,
+  "device_time_missing_reason": "Live vLLM profiling prohibited; full-phase host-wall accounting is not device time or device roofline.",
+  "evidence": [
+    "perf-b1.json",
+    "perf-b1.json.command.json",
+    "perf-b1-server.json",
+    "launch_memory.json",
+    "logging-check/logging_check.json",
+    "roofline.json"
+  ],
+  "baseline_preserved": "models/autoports/google_gemma_4_31b_it/doc/benchmark/serving_rates-stage11-head_bfp4.json",
+  "interpretation": "Both predeclared precision-only comparison ranges hit. The BFP8 head is larger than BFP4; measured decode slowdown is accepted for the phase1 anomaly fix. This one matched comparison does not establish run-to-run spread or isolate every contributor.",
+  "quality_scope": "Synthetic random-input timing traffic with ignore_eos, not a natural-prompt quality evaluation. Some generated texts repeat (notably requests5 and7); no claim of coherent quality or that prior GPQA fixes explain these outputs. Natural eval responses are assessed separately under the stage anomaly procedure."
+}

@@ -1,0 +1,84 @@
+{
+  "task": "129",
+  "diagnostic": "conditional pinned-HF suffix512 seed42 semantic triage after 1024-token extension",
+  "source": "anomalies/gpqa-extended-precision/conditional-hf-prep/extension1024/results-seed42/task129.onset.suffix512.hf.private.json",
+  "scope": "Independent host-only semantic review of the complete saved HF free-running text. One diagnostic seed. Teacher-forced chosen continuation exists and was executed, but is outside this assessment. No score, population, or causal claim.",
+  "conditioning": {
+    "revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+    "device": "cpu",
+    "weights_dtype": "bfloat16",
+    "prompt_tokens": 512,
+    "prompt_source": "Saved prompt_token_ids, no chat rerender",
+    "seed": 42,
+    "generated_tokens": 1024,
+    "requested_tokens": 1024,
+    "rng_comparison": "HF RNG differs from TT; seed42 labels this diagnostic HF sample and does not make sampled tokens comparable to TT.",
+    "suffix_prompt_tokens": 512,
+    "removed_prefix_tokens": 860,
+    "position_context_limit": "Exact suffix of saved reconstructed IDs, not the original prompt. Removing 860 earlier tokens changes context and position origin. Source reports reconstructed completion 7861 versus native 7865 (four tokens short); raw native sampled IDs are unavailable, so this is not exact native replay.",
+    "onset_limit": "Selected reproducible window before the first reported stray curly-apostrophe-s fragment in reconstructed original reasoning; it does not prove the first model error."
+  },
+  "seeds": [
+    {
+      "seed": 42,
+      "text_chars": 2287,
+      "semantic_anomaly": true,
+      "mechanical_flag": false,
+      "observed_malformed_text": {
+        "present": false,
+        "description": "No stray language or clear malformed token fragment is visible. The initial ‘too blue.’ is a continuation fragment from the suffix prompt. The output ends mid-equation at the requested 1024-token boundary; this cap ending is not malformed text."
+      },
+      "evidence": [
+        {
+          "char_range": [
+            0,
+            696
+          ],
+          "paraphrase": "Continues the prior candidate discussion and computes observed Lyman-alpha wavelengths for z=2.1, 2.3, 2.4, and 1.9, judging the first three within the optical range and 1.9 near the blue edge. This distinct four-candidate pass counts as progress."
+        },
+        {
+          "char_range": [
+            696,
+            1381
+          ],
+          "paraphrase": "Repeats the same z=2.1, 2.3, 2.4, 1.9 calculations in the same order, with the same arithmetic and optical judgments; no new candidate or criterion is introduced."
+        },
+        {
+          "char_range": [
+            1381,
+            2066
+          ],
+          "paraphrase": "Runs the same four-redshift calculation and judgments for another full pass, again without a new check, discriminating premise, or resolution."
+        },
+        {
+          "char_range": [
+            2066,
+            2287
+          ],
+          "paraphrase": "Begins another unchanged pass with z=2.1 and starts the z=2.3 equation, then reaches the requested generation boundary mid-equation. The boundary itself is not anomaly or malformed-text evidence."
+        }
+      ],
+      "basis": "The initial distinct calculations are credited as progress. The text then completes two full unchanged recheck cycles and starts a third, repeatedly returning to the same optical-range judgments without adding a controlling criterion or settling the choice. This sustained semantic cycling supports the label independently of the false mechanical flag; the terminal cap is not part of the basis."
+    }
+  ],
+  "tt_comparison": {
+    "served": "The matched suffix512 TT served continuations are each capped at 1024 tokens; their stored semantic review marks all three anomalous despite false mechanical flags, citing repeated wavelength/redshift comparisons without a decisive optical cutoff.",
+    "full": "The matched suffix512 full-precision TT continuations are each capped at 1024 tokens; their stored semantic review marks all three anomalous despite false mechanical flags, citing sustained repetitions of threshold rationale and candidate calculations.",
+    "comparison": "This HF 1024-token continuation also shows sustained cycling, after its own initial distinct calculation pass. That is a behavioral description of these saved texts only. HF and TT samples have different RNG streams, and the reconstructed suffix prompt removes 860 prefix tokens and changes position origin; the native reconstructed completion also has a four-token discrepancy and lacks raw sampled IDs. These constraints prevent token-level or exact-replay comparison."
+  },
+  "prior_512_review": "The original HF 512-token continuation was reviewed as not anomalous: it had one distinct four-candidate pass followed by one partial recheck before the cap, insufficient for sustained looping. The 1024-token extension supplies two completed unchanged cycles and starts a third; this new evidence changes the per-text semantic assessment for the extended output.",
+  "teacher_forced_continuation": {
+    "chosen_exists": true,
+    "executed": true,
+    "assessment": "not assessed in this semantic review"
+  },
+  "limits": [
+    "One HF seed only; this is not a population estimate.",
+    "HF and TT RNG streams differ; identical seed labels do not imply matched sampled tokens.",
+    "This is a shortened reconstructed suffix: 860 earlier tokens were removed, changing context and position origin; it is not the original native prompt.",
+    "The source records reconstructed completion length 7861 versus native 7865 and says raw native sampled token IDs are unavailable; exact native replay is not established.",
+    "The selected onset window does not establish the first model error.",
+    "No cause, precision attribution, task correctness, score, or prevalence conclusion is made.",
+    "The executed teacher-forced chosen continuation is outside this semantic review."
+  ]
+}

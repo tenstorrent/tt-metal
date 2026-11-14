@@ -1,0 +1,99 @@
+{
+  "status": "complete",
+  "selected_policy": "stage12_head_bfp8_lofi",
+  "decision": "No further precision or runtime change selected: all nine shortened-input controls reproduce semantic degeneration in served TT, full BF16/HiFi4 TT and pinned BF16 HF. Diagnostic cap extensions129/147 resolve inconclusive512 samples, which remain preserved. This does not exclude earlier precision drift or establish native equivalence or equal incidence.",
+  "cases": {
+    "110": {
+      "reference_reproduction": true,
+      "scope": "Shortened suffix512 input; one seed42,512 generated tokens. No incidence or native trajectory equivalence claim.",
+      "evidence": "anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42/task110.onset.suffix512.coordinator.json"
+    },
+    "129": {
+      "reference_reproduction": true,
+      "status": "extension1024_positive_original512_inconclusive_preserved",
+      "scope": "One HF sample on reconstructed suffix512 with860 prefix tokens removed and four-token native completion count discrepancy. Reference repetition on this shortened input does not prove native trajectory equivalence, equal incidence, or exclude earlier precision drift. HF/TT RNG streams differ. Chosen64-position teacher forcing is not whole-reply accuracy.",
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/extension1024/results-seed42/task129.onset.suffix512.coordinator.json"
+    },
+    "127": {
+      "reference_reproduction": true,
+      "scope": "Shortened suffix512 input; one seed42,512 generated tokens; detector false but semantic repetition confirmed.",
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42/task127.onset.suffix512.coordinator.json"
+    },
+    "130": {
+      "reference_reproduction": true,
+      "scope": "Shortened suffix512 input, seed42/512 generated tokens; initial progress followed by repeated reasoning cycles despite detector=false.",
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42/task130.onset.suffix512.coordinator.json"
+    },
+    "145": {
+      "reference_reproduction": true,
+      "scope": "Shortened suffix512 input, seed42/512 generated tokens; phrase repetition throughout, reviewer count corrected by root.",
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42/task145.onset.suffix512.coordinator.json"
+    },
+    "30": {
+      "reference_reproduction": true,
+      "scope": "Shortened suffix512 input, seed42/512 generated tokens; unchanged reaction/rejection cycles despite detector=false.",
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42/task30.onset.suffix512.coordinator.json"
+    },
+    "48": {
+      "reference_reproduction": true,
+      "scope": "Shortened suffix512 input, seed42/512 generated tokens; eight unchanged assertion/planned-check cycles despite detector=false.",
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42/task48.onset.suffix512.coordinator.json"
+    },
+    "139": {
+      "reference_reproduction": true,
+      "scope": "Shortened suffix512, seed42/512 generated tokens; unchanged assumption/reagent loop despite detector=false.",
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42/task139.onset.suffix512.coordinator.json"
+    },
+    "147": {
+      "reference_reproduction": true,
+      "status": "extension1024_positive_original512_inconclusive_preserved",
+      "seed": 43,
+      "scope": "One shortened reconstructed suffix512 input removes18329 preceding IDs and changes position origin. This establishes reference repetition on the diagnostic input only, not native-prompt equivalence, equal incidence or exclusion of earlier precision drift. HF and TT RNG streams differ.",
+      "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/extension147-seed43-1024/results-seed43/task147.onset.suffix512.coordinator.json"
+    }
+  },
+  "tt_evidence": "../tt-controls-summary.json",
+  "diagnostic_hours": {
+    "served_wall": 0.2685229790872998,
+    "full_precision_wall": 0.4849261038833194,
+    "hf_seed42_batch_wall": 2.31287292752001,
+    "hf_task147_seed43_512_wall": 0.2907311844163471,
+    "hf_task129_seed42_1024_wall": 0.6097195539871851,
+    "hf_task147_seed43_1024_wall": 0.6074519432915582
+  },
+  "hf_attempt_accounting": {
+    "scope": "Measured launcher intervals for each listed CPU control attempt. These are diagnostic costs, not serving latency or evaluation replay time. Running attempts remain null until terminal collection; earlier TT/preflight records remain separately preserved.",
+    "attempts": [
+      {
+        "attempt": "hf_seed42_batch",
+        "status": "completed",
+        "exit_code": 0,
+        "wall_hours": 2.31287292752001,
+        "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42/launch.json"
+      },
+      {
+        "attempt": "hf_task147_seed43_512",
+        "status": "completed",
+        "exit_code": 0,
+        "wall_hours": 0.2907311844163471,
+        "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-task147-seed43/launch.json"
+      },
+      {
+        "attempt": "hf_task129_seed42_1024",
+        "status": "completed",
+        "exit_code": 0,
+        "wall_hours": 0.6097195539871851,
+        "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/extension1024/results-seed42/launch.json"
+      },
+      {
+        "attempt": "hf_task147_seed43_1024",
+        "status": "completed",
+        "exit_code": 0,
+        "wall_hours": 0.6074519432915582,
+        "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/extension147-seed43-1024/results-seed43/launch.json"
+      }
+    ]
+  },
+  "score_change": false,
+  "limits": "All results concern shortened reconstructed suffix512 inputs; no native equivalence, equal incidence or exclusion of earlier precision drift."
+}

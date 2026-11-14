@@ -1,0 +1,37 @@
+{
+  "task": 129,
+  "case": "task129.onset.suffix512",
+  "written_unix": 1794676454.4339235,
+  "cause": "reference_behavior_on_shortened_input",
+  "reference_reproduction": true,
+  "seed": 42,
+  "generated_tokens": 1024,
+  "mechanical_flag": false,
+  "coordinator_reason": "Root read the complete continuation and agrees with fresh review: one distinct four-candidate calculation pass is followed by two complete unchanged cycles and a partial fourth pass. No new criterion or progress appears in those repeats. Terminal cap alone is excluded from the anomaly basis.",
+  "evidence": [
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/extension1024/results-seed42/task129.onset.suffix512.hf.semantic-triage.json",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/extension1024/results-seed42/task129.onset.suffix512.overlap-check.json",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/extension1024/results-seed42/task129.onset.suffix512.hf.private.json"
+  ],
+  "original_512_assessment": {
+    "status": "inconclusive_preserved",
+    "evidence": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-seed42/task129.onset.suffix512.coordinator.json"
+  },
+  "overlap": "First512 generated IDs exactly match original512 sample; zero mismatches.",
+  "changed": "Diagnostic generation cap extended from512 to1024 only; no serving precision, runtime, sampling or evaluation-score change.",
+  "limits": "One HF sample on reconstructed suffix512 with860 prefix tokens removed and four-token native completion count discrepancy. Reference repetition on this shortened input does not prove native trajectory equivalence, equal incidence, or exclude earlier precision drift. HF/TT RNG streams differ. Chosen64-position teacher forcing is not whole-reply accuracy.",
+  "teacher_forced_comparison": {
+    "scope": "Chosen64-position diagnostic continuation, separate from semantic free-generation review; not whole-reply accuracy or exclusion of earlier precision drift.",
+    "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/extension1024/results-seed42/task129.onset.suffix512.hf.private.json",
+    "comparisons": {
+      "first-wave-served": {
+        "positions": 64,
+        "top1_agreement": 0.953125
+      },
+      "first-wave-full": {
+        "positions": 64,
+        "top1_agreement": 1.0
+      }
+    }
+  }
+}

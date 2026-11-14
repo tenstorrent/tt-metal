@@ -1,0 +1,163 @@
+{
+  "status": "complete",
+  "collected_unix": 1794678823.8159394,
+  "source": "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/current/headline-head-bfp8-b1/server-b1/server.log",
+  "devices": [
+    0,
+    1,
+    2,
+    3
+  ],
+  "mesh": "MeshShape([1, 4])",
+  "measurement_basis": "One shared mesh allocator measurement applied uniformly to participating devices; these are not independent physical allocator samples. KV uses replicated ttnn.zeros on the mesh with equal shape/dtype on every device.",
+  "batch": 1,
+  "concurrency": 1,
+  "served_max_context": 262144,
+  "events": [
+    {
+      "event": "serving_pool_budget",
+      "synthetic_token_budget": 262144,
+      "target_tokens_per_user": 32768,
+      "prior_turn_reserve_tokens_per_user": 24576,
+      "global_block_size": 64,
+      "b8_pool_ids_override": null,
+      "max_model_len": 262144,
+      "max_num_seqs": 1,
+      "basis": "normalized hybrid blocks plus prior-turn APC reserve; worker adds live sliding/output reserves"
+    },
+    {
+      "event": "serving_memory",
+      "phase": "before_serving_cache",
+      "allocator": {
+        "num_banks": 8,
+        "total_bytes_allocated_per_bank": 824498432,
+        "total_bytes_per_bank": 4255564160,
+        "total_bytes_free_per_bank": 3431065728,
+        "largest_contiguous_bytes_free_per_bank": 3401526144
+      },
+      "program_cache_entries": 20,
+      "generator_counters": null
+    },
+    {
+      "event": "serving_pool_launch_validation",
+      "pool_sizing": "fixed",
+      "pool_sizing_reason": "Stock plugin fixes its pool before loading weights; this launch validates its existing pool against measured shared-mesh allocator free space, not adaptive sizing.",
+      "measurement_basis": "One shared mesh allocator measurement applied uniformly to participating devices; these are not independent physical allocator samples. KV uses replicated ttnn.zeros on the mesh with equal shape/dtype on every device.",
+      "per_device": [
+        {
+          "device_id": 0,
+          "free_bytes": 27448525824,
+          "contiguous_free_bytes": 27212209152,
+          "pool_bytes": 5883207680,
+          "reserve_bytes": 954745344
+        },
+        {
+          "device_id": 1,
+          "free_bytes": 27448525824,
+          "contiguous_free_bytes": 27212209152,
+          "pool_bytes": 5883207680,
+          "reserve_bytes": 954745344
+        },
+        {
+          "device_id": 2,
+          "free_bytes": 27448525824,
+          "contiguous_free_bytes": 27212209152,
+          "pool_bytes": 5883207680,
+          "reserve_bytes": 954745344
+        },
+        {
+          "device_id": 3,
+          "free_bytes": 27448525824,
+          "contiguous_free_bytes": 27212209152,
+          "pool_bytes": 5883207680,
+          "reserve_bytes": 954745344
+        }
+      ],
+      "page_map_bytes": 1966080,
+      "prepared_reserve_bytes": 147472896,
+      "transient_reserve_bytes": 805306368,
+      "reserve_evidence": "doc/agentic_serving.json ledger; doc/optimized_vllm/memory_comparison.json; transient reserve is analytical, not a full-stack measured peak",
+      "trace_reserve_already_excluded": true,
+      "fits": true,
+      "remaining_bytes_after_reserves": 20374256128
+    },
+    {
+      "event": "serving_memory",
+      "phase": "after_serving_cache",
+      "allocator": {
+        "num_banks": 8,
+        "total_bytes_allocated_per_bank": 1561865472,
+        "total_bytes_per_bank": 4255564160,
+        "total_bytes_free_per_bank": 2693698688,
+        "largest_contiguous_bytes_free_per_bank": 2666125184
+      },
+      "program_cache_entries": 20,
+      "generator_counters": null
+    },
+    {
+      "event": "serving_memory",
+      "phase": "after_serving_prepare",
+      "allocator": {
+        "num_banks": 8,
+        "total_bytes_allocated_per_bank": 1571077376,
+        "total_bytes_per_bank": 4255564160,
+        "total_bytes_free_per_bank": 2684486784,
+        "largest_contiguous_bytes_free_per_bank": 2659555200
+      },
+      "program_cache_entries": 2357,
+      "generator_counters": {
+        "model_replays": 0,
+        "sample_replays": 0,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 0,
+        "captures": 3
+      }
+    },
+    {
+      "event": "serving_memory",
+      "phase": "before_serving_prefill",
+      "allocator": {
+        "num_banks": 8,
+        "total_bytes_allocated_per_bank": 1571077376,
+        "total_bytes_per_bank": 4255564160,
+        "total_bytes_free_per_bank": 2684486784,
+        "largest_contiguous_bytes_free_per_bank": 2659555200
+      },
+      "program_cache_entries": 2357,
+      "generator_counters": {
+        "model_replays": 0,
+        "sample_replays": 0,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 0,
+        "readbacks": 0,
+        "captures": 3
+      }
+    },
+    {
+      "event": "serving_memory",
+      "phase": "after_serving_prefill",
+      "allocator": {
+        "num_banks": 8,
+        "total_bytes_allocated_per_bank": 1571077376,
+        "total_bytes_per_bank": 4255564160,
+        "total_bytes_free_per_bank": 2684486784,
+        "largest_contiguous_bytes_free_per_bank": 2659555200
+      },
+      "program_cache_entries": 2357,
+      "generator_counters": {
+        "model_replays": 0,
+        "sample_replays": 1,
+        "token_refreshes": 0,
+        "position_refreshes": 0,
+        "page_refreshes": 60,
+        "readbacks": 1,
+        "captures": 3
+      }
+    }
+  ],
+  "smaller_pool_reason": "Stock plugin determines the fixed hybrid pool before loading model weights. This single-request B1 comparison preserves the original B1 pool policy and full262144 context; measured free memory validates that pool plus reserves fit. Increasing the pool would change the matched baseline configuration without enabling additional target concurrency (the required workload is C1). This is not adaptive pool-first sizing or an agentic-list concurrency selection.",
+  "limits": "Shared mesh allocator values repeated across devices are not independently sampled physical allocator values. Reserve includes analytical transient allowance; not a measured full-stack peak."
+}

@@ -1,0 +1,14 @@
+{
+  "task": 147,
+  "case": "task147.onset.suffix512",
+  "written_unix": 1794674120.4618967,
+  "cause": "inconclusive",
+  "reference_reproduction": null,
+  "status": "inconclusive512_requires1024",
+  "evidence": [
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-task147-seed43/task147.onset.suffix512.hf.private.json",
+    "models/autoports/google_gemma_4_31b_it/doc/agentic_evals/anomalies/gpqa-extended-precision/conditional-hf-prep/results-task147-seed43/task147.onset.suffix512.hf.semantic-triage.json"
+  ],
+  "coordinator_reason": "Root read the complete512-token continuation. It proposes a distinct candidate and performs a mass-fraction calculation before checking and revisiting clues. Independent review finds insufficient sustained no-progress cycling. Rechecks alone do not establish an anomaly, and the terminal cap cut does not establish a passing coherent control. Extend the same input/seed43/sampling to1024 and compare overlapping generated IDs.",
+  "limits": "Shortened reconstructed suffix512 input; HF and TT RNG differ. No native equivalence, precision-cause conclusion, policy change, or eval score change."
+}
