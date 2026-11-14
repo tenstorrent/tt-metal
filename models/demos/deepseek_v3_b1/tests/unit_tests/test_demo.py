@@ -20,7 +20,7 @@ class FakeTokenizer:
 
     def decode(self, token_ids: list[int], skip_special_tokens: bool = False) -> str:
         del skip_special_tokens
-        return f"<{token_ids[0]}>"
+        return "".join(f"<{token_id}>" for token_id in token_ids)
 
 
 class FakeModel:
@@ -130,3 +130,37 @@ def test_run_generation_rejects_negative_max_new_tokens():
 
     assert not model.started
     assert not model.stopped
+
+
+class ByteTokenizer:
+    """One token per UTF-8 byte, like a byte-fallback BPE splitting a multi-byte character."""
+
+    bos_token_id = 1
+
+    def encode(self, text: str, add_special_tokens: bool = True) -> list[int]:
+        del text, add_special_tokens
+        return [5]
+
+    def decode(self, token_ids: list[int], skip_special_tokens: bool = False) -> str:
+        del skip_special_tokens
+        return bytes(token_ids).decode("utf-8", errors="replace")
+
+
+def test_run_generation_does_not_split_multi_byte_characters():
+    text = "a龘🤯 b"
+    token_ids = list(text.encode("utf-8"))
+    streamed_chunks: list[str] = []
+
+    result = run_generation(
+        model=FakeModel(decode_outputs=token_ids),
+        tokenizer=ByteTokenizer(),
+        prompt="x",
+        max_new_tokens=len(token_ids),
+        make_input_tensor=lambda token_id: token_id,
+        extract_token_id=lambda output: output,
+        write_text=streamed_chunks.append,
+    )
+
+    assert "�" not in "".join(streamed_chunks)
+    assert "".join(streamed_chunks) == text
+    assert result.generated_text == text
