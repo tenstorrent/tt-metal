@@ -127,7 +127,8 @@ def test_s8192_minimal_matmul_l1_footprint(config, in0_dtype, weight_dtype, out_
 
 
 def test_s8192_minimal_matmul_configs_follow_the_l1_fit(device):
-    """Optimizations keeps the S8192 minimal_matmul configs only for dtype mixes whose buffers fit."""
+    """Optimizations keeps the S8192 minimal_matmul configs only where their buffers fit L1 and
+    their 4x2 subblock fits DEST. Only the data-parallel shape runs without fp32 accumulation."""
     require_single_device(device)
     if ttnn_is_blackhole(device):
         pytest.skip("the S8192 minimal_matmul configs are Wormhole-only")
@@ -135,12 +136,16 @@ def test_s8192_minimal_matmul_configs_follow_the_l1_fit(device):
     if grid.x < 8 or grid.y < 8:
         pytest.skip("the S8192 minimal_matmul configs need an 8x8 grid")
 
-    bf8 = Optimizations.build(device, max_batch_size=1, max_seq_len=8192, dtype=_BF8)
-    assert bf8.mlp.wi_minimal_config is not None and bf8.mlp.wo_minimal_config is not None
-    assert bf8.mlp.wi_prg_config is None and bf8.mlp.wo_prg_config is None
+    dp_bf8 = Optimizations.build(device, max_batch_size=12, max_seq_len=8192, dtype=_BF8, data_parallel=True)
+    assert dp_bf8.mlp.wi_minimal_config is not None and dp_bf8.mlp.wo_minimal_config is not None
+    assert dp_bf8.mlp.wi_prg_config is None and dp_bf8.mlp.wo_prg_config is None
 
-    bf16 = Optimizations.build(device, max_batch_size=1, max_seq_len=8192, dtype=_BF16)
-    assert bf16.mlp.wi_minimal_config is None and bf16.mlp.wo_minimal_config is None
+    dp_mixed = Optimizations.build(
+        device, max_batch_size=12, max_seq_len=8192, dtype=_BF8, mlp_wi_output_dtype=_BF16, data_parallel=True
+    )
+    assert dp_mixed.mlp.wi_minimal_config is None and dp_mixed.mlp.wo_minimal_config is None
 
-    mixed = Optimizations.build(device, max_batch_size=1, max_seq_len=8192, dtype=_BF8, mlp_wi_output_dtype=_BF16)
-    assert mixed.mlp.wi_minimal_config is None and mixed.mlp.wo_minimal_config is None
+    # Single-chip S8192 runs fp32 accumulation (#62271), so DEST holds 4 tiles and the 4x2 subblock does not fit.
+    for dtype in (_BF8, _BF16):
+        single = Optimizations.build(device, max_batch_size=1, max_seq_len=8192, dtype=dtype)
+        assert single.mlp.wi_minimal_config is None and single.mlp.wo_minimal_config is None

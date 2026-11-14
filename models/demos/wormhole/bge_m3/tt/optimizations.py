@@ -126,9 +126,10 @@ class Optimizations:
             core_grid,
             act_mem,
             wi_output_dtype=mlp_wi_output_dtype,
+            data_parallel=data_parallel,
         )
         attn_opts = _build_attention_optimizations(
-            mesh_device, max_seq_len, max_batch, dtype, hidden_size, core_grid, act_mem
+            mesh_device, max_seq_len, max_batch, dtype, hidden_size, core_grid, act_mem, data_parallel=data_parallel
         )
 
         # ── Norm ─────────────────────────────────────────────────────────
@@ -169,13 +170,18 @@ def _build_mlp_optimizations(
     act_mem,
     *,
     wi_output_dtype=None,
+    data_parallel=False,
 ):
     """MLP program/memory configs. The S8192 (JiT) shape resolves minimal_matmul
     configs for Wi/Wo when their dataflow buffers fit Wormhole L1 for the dtypes in
     use; other shapes, and dtype mixes that do not fit, use tuned or default program
     configs."""
-    wi_compute_kernel_cfg = mlp_wi_compute_kernel_config(mesh_device, max_seq_len, max_batch, dtype=dtype)
-    wo_compute_kernel_cfg = mlp_wo_compute_kernel_config(mesh_device, max_seq_len, max_batch, dtype=dtype)
+    wi_compute_kernel_cfg = mlp_wi_compute_kernel_config(
+        mesh_device, max_seq_len, max_batch, dtype=dtype, data_parallel=data_parallel
+    )
+    wo_compute_kernel_cfg = mlp_wo_compute_kernel_config(
+        mesh_device, max_seq_len, max_batch, dtype=dtype, data_parallel=data_parallel
+    )
     ln_input_mem = _ln_input_sharded_memory_config(max_seq_len, max_batch, mesh_device)
     # Dtypes the two matmuls run with (encoder.py): in0 of Wi is the LayerNorm output,
     # which keeps the model dtype; weights and biases are the model dtype; the Wi
@@ -250,7 +256,9 @@ def _build_mlp_optimizations(
     )
 
 
-def _build_attention_optimizations(mesh_device, max_seq_len, max_batch, dtype, hidden_size, core_grid, act_mem):
+def _build_attention_optimizations(
+    mesh_device, max_seq_len, max_batch, dtype, hidden_size, core_grid, act_mem, *, data_parallel=False
+):
     """Attention program/memory configs. The S8192 (JiT) shape resolves
     minimal_matmul configs for QKV/output; other shapes use tuned or defaults."""
     qkv_out_dim = 3 * hidden_size
@@ -261,11 +269,15 @@ def _build_attention_optimizations(mesh_device, max_seq_len, max_batch, dtype, h
     ln_input_mem = _ln_input_sharded_memory_config(max_seq_len, max_batch, mesh_device)
     out_minimal = _attention_output_minimal_matmul_config(mesh_device, max_seq_len, max_batch, hidden_size=hidden_size)
     return AttentionOptimizations(
-        qkv_compute_kernel_cfg=attention_qkv_compute_kernel_config(mesh_device, max_seq_len, max_batch, dtype=dtype),
-        output_compute_kernel_cfg=attention_output_compute_kernel_config(
-            mesh_device, max_seq_len, max_batch, dtype=dtype
+        qkv_compute_kernel_cfg=attention_qkv_compute_kernel_config(
+            mesh_device, max_seq_len, max_batch, dtype=dtype, data_parallel=data_parallel
         ),
-        score_compute_kernel_cfg=sdpa_compute_kernel_config(mesh_device, max_seq_len, max_batch, dtype=dtype),
+        output_compute_kernel_cfg=attention_output_compute_kernel_config(
+            mesh_device, max_seq_len, max_batch, dtype=dtype, data_parallel=data_parallel
+        ),
+        score_compute_kernel_cfg=sdpa_compute_kernel_config(
+            mesh_device, max_seq_len, max_batch, dtype=dtype, data_parallel=data_parallel
+        ),
         qkv_memcfg=act_mem,
         qkv_nomask_memcfg=_qkv_nomask_output_memory_config(max_seq_len, max_batch, mesh_device),
         create_heads_memcfg=_create_heads_output_memory_config(max_seq_len, max_batch, mesh_device),
@@ -447,7 +459,7 @@ def matmul_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_size=N
     return _make_compute_kernel(mesh_device, _default_fidelity(mesh_device), max_seq_len, max_batch_size)
 
 
-def mlp_wi_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_size=None, dtype=None):
+def mlp_wi_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_size=None, dtype=None, data_parallel=False):
     max_batch = 1 if max_batch_size is None else max(1, max_batch_size)
     # B8 shares the B1/B32 fidelity policy (LoFi for bf8, HiFi2 otherwise) on the
     # S512 shapes; fp32_dest_acc_en=False lifts subblock h*w cap to 8.
@@ -457,13 +469,13 @@ def mlp_wi_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_size=N
     # N300 B12/S8192: HiFi2 is lossless for bf8xbf8 (tt-perf-report advice) and
     # 2x HiFi4 throughput. fp32_dest_acc_en=False lifts subblock h*w cap to 8
     # (needed for the minimal_matmul 4x2 subblock winner).
-    if max_seq_len == 8192:
+    if max_seq_len == 8192 and data_parallel:
         # LoFi (bf8xbf8): matmuls are compute-bound per roofline; LoFi ~2x HiFi2.
         return _make_compute_kernel(mesh_device, ttnn.MathFidelity.LoFi, max_seq_len, max_batch, fp32_dest_acc_en=False)
     return matmul_compute_kernel_config(mesh_device, max_seq_len, max_batch)
 
 
-def mlp_wo_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_size=None, dtype=None):
+def mlp_wo_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_size=None, dtype=None, data_parallel=False):
     max_batch = 1 if max_batch_size is None else max(1, max_batch_size)
     if max_seq_len == 512 and max_batch == 1:
         return _make_compute_kernel(mesh_device, ttnn.MathFidelity.LoFi, max_seq_len, max_batch)
@@ -472,39 +484,43 @@ def mlp_wo_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_size=N
         return _make_compute_kernel(mesh_device, ttnn.MathFidelity.LoFi, max_seq_len, max_batch, fp32_dest_acc_en=False)
     # N300 B12/S8192: HiFi2 lossless for bf8xbf8. fp32_dest_acc_en=False for the
     # minimal_matmul 4x2 subblock (h*w=8 > 4 cap).
-    if max_seq_len == 8192:
+    if max_seq_len == 8192 and data_parallel:
         # LoFi (bf8xbf8): matmuls are compute-bound per roofline; LoFi ~2x HiFi2.
         return _make_compute_kernel(mesh_device, ttnn.MathFidelity.LoFi, max_seq_len, max_batch, fp32_dest_acc_en=False)
     return matmul_compute_kernel_config(mesh_device, max_seq_len, max_batch)
 
 
-def attention_qkv_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_size=None, dtype=None):
+def attention_qkv_compute_kernel_config(
+    mesh_device, max_seq_len=None, max_batch_size=None, dtype=None, data_parallel=False
+):
     max_batch = 1 if max_batch_size is None else max(1, max_batch_size)
     if max_seq_len == 512 and max_batch in (1, 8, 16, 32):
         fid = ttnn.MathFidelity.LoFi if dtype == ttnn.bfloat8_b else ttnn.MathFidelity.HiFi2
         return _make_compute_kernel(mesh_device, fid, max_seq_len, max_batch, fp32_dest_acc_en=False)
     # N300 B12/S8192: HiFi2 (2x HiFi4 throughput). fp32_dest_acc_en=False for
     # the minimal_matmul 4x2 subblock (h*w=8 > 4 cap).
-    if max_seq_len == 8192:
+    if max_seq_len == 8192 and data_parallel:
         # LoFi (bf8xbf8): matmuls are compute-bound per roofline; LoFi ~2x HiFi2.
         return _make_compute_kernel(mesh_device, ttnn.MathFidelity.LoFi, max_seq_len, max_batch, fp32_dest_acc_en=False)
     return matmul_compute_kernel_config(mesh_device, max_seq_len, max_batch)
 
 
-def attention_output_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_size=None, dtype=None):
+def attention_output_compute_kernel_config(
+    mesh_device, max_seq_len=None, max_batch_size=None, dtype=None, data_parallel=False
+):
     max_batch = 1 if max_batch_size is None else max(1, max_batch_size)
     if max_seq_len == 512 and max_batch in (1, 8, 16, 32):
         fid = ttnn.MathFidelity.LoFi if dtype == ttnn.bfloat8_b else ttnn.MathFidelity.HiFi2
         return _make_compute_kernel(mesh_device, fid, max_seq_len, max_batch, fp32_dest_acc_en=False)
     # N300 B12/S8192: HiFi2 (2x HiFi4 throughput). fp32_dest_acc_en=False for
     # the minimal_matmul 4x2 subblock (h*w=8 > 4 cap).
-    if max_seq_len == 8192:
+    if max_seq_len == 8192 and data_parallel:
         # LoFi (bf8xbf8): matmuls are compute-bound per roofline; LoFi ~2x HiFi2.
         return _make_compute_kernel(mesh_device, ttnn.MathFidelity.LoFi, max_seq_len, max_batch, fp32_dest_acc_en=False)
     return matmul_compute_kernel_config(mesh_device, max_seq_len, max_batch)
 
 
-def sdpa_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_size=None, dtype=None):
+def sdpa_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_size=None, dtype=None, data_parallel=False):
     max_batch = 1 if max_batch_size is None else max(1, max_batch_size)
     if max_seq_len == 512 and max_batch == 1:
         fid = ttnn.MathFidelity.LoFi if dtype == ttnn.bfloat8_b else ttnn.MathFidelity.HiFi2
@@ -526,7 +542,9 @@ def sdpa_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_size=Non
     # N300 B12/S8192: SDPA is 73% and COMPUTE-bound (33 TFLOP/s, mask read fully
     # overlapped in-model). LoFi ~2x the QK^T/PV matmul phase vs HiFi2. PCC-gated
     # (headroom 0.961 vs 0.94). Roofline says fidelity is the only real SDPA lever.
-    if max_seq_len == 8192:
+    # Single-chip S8192 keeps HiFi4 + fp32 accumulation for SDPA and every matmul: at LoFi
+    # the logits (130-176) turn Q/K error into PCC from 0.81 to 0.98 across inputs (#62271).
+    if max_seq_len == 8192 and data_parallel:
         return _make_compute_kernel(mesh_device, ttnn.MathFidelity.LoFi, max_seq_len, max_batch)
     return _make_compute_kernel(mesh_device, ttnn.MathFidelity.HiFi4, max_seq_len, max_batch_size)
 
@@ -714,6 +732,12 @@ def _minimal_matmul_l1_bytes(config, *, in0_dtype, in1_dtype, out_dtype, bias_dt
 
 
 def _minimal_matmul_fits_wormhole_l1(config, **dtypes):
+    # DEST holds 8 tiles in half-sync mode, 4 with fp32 accumulation, and
+    # minimal_matmul rejects a larger subblock. The S8192 configs (4x2) were tuned
+    # with fp32 accumulation off, so the single-chip S8192 model drops them.
+    max_dest_tiles = 4 if dtypes["fp32_dest_acc_en"] else 8
+    if config.subblock_h * config.subblock_w > max_dest_tiles:
+        return False
     return _WORMHOLE_L1_UNRESERVED_BASE_BYTES + _minimal_matmul_l1_bytes(config, **dtypes) <= _WORMHOLE_L1_SIZE_BYTES
 
 
