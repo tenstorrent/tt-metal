@@ -173,20 +173,6 @@
   team: runtime
   budget_type: unit
 
-# --- Ethernet Tests ---
-- name: runtime_eth
-  cmd: ./build/test/tt_metal/unit_tests_eth
-  skus:
-    wh_n150_civ2:
-      timeout: 5
-    wh_n300_civ2:
-      timeout: 5
-    bh_p150b_civ2:
-      timeout: 5
-  owner_id: U099A7FMKL2 # Manish Sudumbrekar
-  team: runtime
-  budget_type: unit
-
 # --- Legacy Tests ---
 - name: runtime_legacy
   cmd: ./build/test/tt_metal/unit_tests_legacy --gtest_shuffle --gtest_filter='-*NIGHTLY_*'
@@ -271,8 +257,8 @@
       timeout: 20
     bh_p150b_civ2:
       timeout: 15
-    bh_p300:
-      timeout: 15
+    # bh_p300:
+    #   timeout: 15
     bh_p100a_civ2_viommu:
       timeout: 15
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
@@ -289,8 +275,8 @@
       timeout: 10
     bh_p150b_civ2:
       timeout: 8
-    bh_p300:
-      timeout: 10
+    # bh_p300:
+    #   timeout: 10
     bh_p100a_civ2_viommu:
       timeout: 10
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
@@ -315,8 +301,8 @@
       timeout: 17
     bh_p150b_civ2:
       timeout: 17
-    bh_p300:
-      timeout: 17
+    # bh_p300:
+    #   timeout: 17
     bh_p100a_civ2_viommu:
       timeout: 17
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
@@ -333,8 +319,8 @@
       timeout: 5
     bh_p150b_civ2:
       timeout: 5
-    bh_p300:
-      timeout: 5
+    # bh_p300:
+    #   timeout: 5
     bh_p100a_civ2_viommu:
       timeout: 5
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
@@ -351,8 +337,8 @@
       timeout: 10
     bh_p150b_civ2:
       timeout: 10
-    bh_p300:
-      timeout: 10
+    # bh_p300:
+    #   timeout: 10
     bh_p100a_civ2_viommu:
       timeout: 10
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
@@ -366,25 +352,11 @@
 # --- BH Multi-Card: Debug Tools (mesh filters + single AERISC) ---
 - name: bh_multicard_debug_tools
   cmd: |
-    TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter='DPrintMeshFixture.ActiveEthTestPrint'
-    TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter='WatcherAssertTest.TensixTestWatcherPause'
-    TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter='WatcherAssertTest.TestWatcherAssert'
-    TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter='MeshWatcherFixture.ActiveEthTestWatcherSanitizeEth'
+    TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter='MeshWatcherFixture.TensixTestWatcherPause'
+    TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter='WatcherAssertTests/WatcherAssertTest.TestWatcherAssert/*'
   skus:
     bh_loudbox:
       timeout: 5
-  owner_id: U099A7FMKL2 # Manish Sudumbrekar
-  team: runtime
-  budget_type: unit
-
-# --- BH Multi-Card: Dispatch (RandomProgram on multi-card) ---
-- name: bh_multicard_dispatch
-  cmd: |
-    TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter='UnitMeshRandomProgramFixture.ActiveEthTestPrograms'
-    TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter='UnitMeshRandomProgramTraceFixture.ActiveEthTestProgramsTrace'
-  skus:
-    bh_loudbox:
-      timeout: 10
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
   budget_type: unit

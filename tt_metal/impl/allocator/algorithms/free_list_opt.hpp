@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-#include <sys/types.h>
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -14,6 +13,7 @@
 #include <vector>
 
 #include "allocator_algorithm.hpp"
+#include "size_class_index.hpp"
 #include "hal_types.hpp"
 
 namespace tt::tt_metal::allocator {
@@ -26,10 +26,7 @@ namespace tt::tt_metal::allocator {
 // - Metadata reuse to avoid allocations
 class FreeListOpt : public Algorithm {
 public:
-    enum class SearchPolicy {
-        FIRST,
-        BEST,
-    };
+    using SearchPolicy = SizeClassIndex::SearchPolicy;
     FreeListOpt(
         DeviceAddr max_size_bytes,
         DeviceAddr offset_bytes,
@@ -98,16 +95,7 @@ private:
     static constexpr size_t n_alloc_table_init_bucket_size = 10;  // Initial size of each bucket
     std::vector<std::vector<std::pair<DeviceAddr, size_t>>> allocated_block_table_;
 
-    // Size segregated list of free blocks. Idea comes from the TLSF paper, but instead of aiming for realtime
-    // the goal there is to not look at small blocks when allocating large blocks. Which the naive free list
-    // algorithm does not do. Configuring these 2 parameters needs real world data, but for now it's just
-    // number pulled out of thin air. Too low and it devolves into an array search, too high you pay cache misses
-
-    // Size class index is calculated by taking the log2 of the block size divided by the base size
-    // ex: size = 2048, base = 1024, log2(2048/1024) = 1, so size class index = 1
-    static constexpr size_t size_segregated_base = 1024;         // in bytes
-    const size_t size_segregated_count;                          // Number of size classes
-    std::vector<std::vector<size_t>> free_blocks_segregated_by_size_;
+    SizeClassIndex size_classes_;
 
     // internal functions
     // Given a block index, mark a chunk (from block start + offset to block start + offset + alloc_size) as allocated
@@ -117,19 +105,18 @@ private:
 
     size_t find_block_to_shrink(DeviceAddr shrink_size, bool bottom_up) const;
 
-    size_t get_size_segregated_index(DeviceAddr size_bytes) const {
-        // std::log2 is SLOW, so we use a simple log2 implementation for integers. I assume GCC compiles this to a
-        // count leading zeros instruction then a subtraction.
-        size_t lg = 0;
-        size_t n = size_bytes / size_segregated_base;
-        while (n >>= 1) {
-            lg++;
-        }
-        return std::min(size_segregated_count - 1, lg);
+    auto block_address_accessor() const {
+        return [this](size_t block_index) { return block_address_[block_index]; };
     }
+    auto block_size_accessor() const {
+        return [this](size_t block_index) { return block_size_[block_index]; };
+    }
+
     // Put the block at block_index into the size segregated list at the appropriate index (data taken from
-    // the SoA vectors)
-    void insert_block_to_segregated_list(size_t block_index);
+    // the SoA vectors). always_inline keeps it inlined into allocate_in_block.
+    __attribute__((always_inline)) void insert_block_to_segregated_list(size_t block_index) {
+        size_classes_.insert(block_index, block_size_[block_index], block_address_accessor());
+    }
 
     bool has_prev_block(size_t block_index) const { return block_prev_block_[block_index] != no_block; }
 

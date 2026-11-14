@@ -4,13 +4,14 @@
 from itertools import chain, product
 
 import pytest
+from conftest import skip_for_wormhole
 from helpers.format_config import DataFormat, is_dest_acc_needed
 from helpers.golden_generators import TILE_DIM
 from helpers.llk_params import (
+    ALL_MATH_FIDELITIES,
+    DEST_ACC_MODES,
     DestAccumulation,
     DestSync,
-    MathFidelity,
-    PerfRunType,
     StochasticRounding,
 )
 from helpers.matmul_sweep import (
@@ -22,8 +23,8 @@ from helpers.matmul_sweep import (
     skip_matmul_combination,
     sweep_tiny_tiles_matmul,
 )
-from helpers.param_config import DEST_SYNC_TILE_LIMITS, input_output_formats
-from helpers.perf.core import PerfConfig
+from helpers.param_config import input_output_formats, max_dest_tiles
+from helpers.perf.core import ALL_PERF_RUN_TYPES, PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     CRK_TILE_DIMM,
@@ -32,6 +33,7 @@ from helpers.test_variant_parameters import (
     IN_TILE_DIMS,
     LOOP_FACTOR,
     MATH_FIDELITY,
+    MATMUL_ROW_MOP,
     NUM_BLOCKS,
     NUM_FACES,
     NUM_TILES_IN_BLOCK,
@@ -49,27 +51,14 @@ MATMUL_FORMATS = input_output_formats(
         DataFormat.Float32,
     ]
 )
-DEST_ACC_MODES = [DestAccumulation.No, DestAccumulation.Yes]
 DEST_SYNC_MODES = [DestSync.Half, DestSync.Full]
 STOCHASTIC_ROUNDING_MODES = [StochasticRounding.No]
-MATH_FIDELITIES = [
-    MathFidelity.LoFi,
-    MathFidelity.HiFi2,
-    MathFidelity.HiFi3,
-    MathFidelity.HiFi4,
-]
 
 # Dest-fill RT x CT from dest capacity, dest occupancy blocks, and half-dest
 # mid-fill when they fit. KT 1 and 4 (long-K lives on perf_matmul).
 PERF_KT_DIMS = (1, 4)
 THROTTLE_LEVELS = (0, 5)
 DEST_HANDOFF_NUM_BLOCKS = 4
-
-
-def _dest_capacity(dest_sync, dest_acc) -> int:
-    return DEST_SYNC_TILE_LIMITS[dest_sync] // (
-        2 if dest_acc == DestAccumulation.Yes else 1
-    )
 
 
 def _dest_fill_rt_ct_pairs(max_tiles):
@@ -89,7 +78,7 @@ def _fits_tiny_perf_tile_shape(cfg) -> bool:
     rt_dim = cfg.tile_dimensions.rt_dim
     ct_dim = cfg.tile_dimensions.ct_dim
     kt_dim = cfg.tile_dimensions.kt_dim
-    max_tiles = _dest_capacity(cfg.dest_sync, cfg.dest_acc)
+    max_tiles = max_dest_tiles(cfg.dest_acc, cfg.dest_sync)
     half = max_tiles // 2
     return (
         cfg.dst_index == 0
@@ -123,7 +112,7 @@ def generate_perf_matmul_combinations():
                 continue
 
             for dest_sync in DEST_SYNC_MODES:
-                max_tiles = _dest_capacity(dest_sync, dest_acc)
+                max_tiles = max_dest_tiles(dest_acc, dest_sync)
                 for stochastic_mode in STOCHASTIC_ROUNDING_MODES:
                     for rt_dim, ct_dim in _dest_fill_rt_ct_pairs(max_tiles):
                         for kt_dim in PERF_KT_DIMS:
@@ -174,21 +163,26 @@ TINY_TILES_MATMUL_COMBINATIONS = [
 ALL_TEST_PARAMS = list(
     chain(
         (
-            (fidelity, cfg, throttle, 1)
+            (fidelity, cfg, throttle, 1, False)
             for fidelity, cfg, throttle in product(
-                MATH_FIDELITIES, MATMUL_COMBINATIONS, THROTTLE_LEVELS
+                ALL_MATH_FIDELITIES, MATMUL_COMBINATIONS, THROTTLE_LEVELS
             )
         ),
         (
-            (fidelity, cfg, 0, 1)
+            (fidelity, cfg, 0, 1, False)
             for fidelity, cfg in product(
-                MATH_FIDELITIES, TINY_TILES_MATMUL_COMBINATIONS
+                ALL_MATH_FIDELITIES, TINY_TILES_MATMUL_COMBINATIONS
             )
         ),
         (
-            (fidelity, cfg, 0, DEST_HANDOFF_NUM_BLOCKS)
-            for fidelity, cfg in product(MATH_FIDELITIES, MATMUL_COMBINATIONS)
+            (fidelity, cfg, 0, DEST_HANDOFF_NUM_BLOCKS, False)
+            for fidelity, cfg in product(ALL_MATH_FIDELITIES, MATMUL_COMBINATIONS)
             if cfg.tile_dimensions.kt_dim == 1
+        ),
+        # Blackhole row MOP at throttle 0: A/B against the first slice's throttle-0 per-tile rows.
+        (
+            pytest.param(fidelity, cfg, 0, 1, True, marks=skip_for_wormhole)
+            for fidelity, cfg in product(ALL_MATH_FIDELITIES, MATMUL_COMBINATIONS)
         ),
     )
 )
@@ -196,13 +190,14 @@ ALL_TEST_PARAMS = list(
 
 @pytest.mark.perf
 @pytest.mark.parametrize(
-    "math_fidelity,matmul_config,throttle,num_blocks", ALL_TEST_PARAMS
+    "math_fidelity,matmul_config,throttle,num_blocks,row_mop", ALL_TEST_PARAMS
 )
 def test_perf_math_matmul(
     math_fidelity,
     matmul_config,
     throttle,
     num_blocks,
+    row_mop,
     perf_report,
 ):
     """
@@ -226,14 +221,6 @@ def test_perf_math_matmul(
     if is_dest_acc_needed(formats) and matmul_config.dest_acc == DestAccumulation.No:
         pytest.skip("Dest accumulation must be enabled for this format")
 
-    run_types = [
-        PerfRunType.L1_TO_L1,
-        PerfRunType.UNPACK_ISOLATE,
-        PerfRunType.MATH_ISOLATE,
-        PerfRunType.PACK_ISOLATE,
-        PerfRunType.L1_CONGESTION,
-    ]
-
     variant_tile_count = (
         matmul_config.tile_dimensions.rt_dim
         * matmul_config.tile_dimensions.ct_dim
@@ -243,11 +230,12 @@ def test_perf_math_matmul(
     configuration = PerfConfig(
         "sources/math_matmul_test.cpp",
         formats,
-        run_types,
+        run_types=ALL_PERF_RUN_TYPES,
         templates=[
             MATH_FIDELITY(math_fidelity),
             DEST_SYNC(matmul_config.dest_sync),
             THROTTLE_LEVEL(throttle),
+            MATMUL_ROW_MOP(row_mop),
         ],
         runtimes=[
             DEST_INDEX(matmul_config.dst_index),
@@ -279,7 +267,11 @@ def test_perf_math_matmul(
                 matmul_config.tile_dimensions.in1_tile_r_dim,
                 matmul_config.tile_dimensions.in1_tile_c_dim,
             ),
-            LOOP_FACTOR(1024),
+            # 128 is 8× faster than the original 1024 and within 0.2% of its
+            # TILE_LOOP mean/median/max on a WH card (counters off).  Every
+            # variant still exceeds MOP_LOOP_MAX (127) so the mop_loops()
+            # factoring path remains exercised.
+            LOOP_FACTOR(128),
         ],
         variant_stimuli=StimuliConfig(
             None,

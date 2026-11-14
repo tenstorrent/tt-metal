@@ -43,8 +43,6 @@ struct Scratch {
     volatile tt_l1_ptr uint32_t* bucket_start;    // extent x experts_per_chip + 1, exclusive prefix sums with a total
     volatile tt_l1_ptr uint32_t* records;         // 3 words per kept (token, topk index)
     volatile tt_l1_ptr uint32_t* padding;         // [real_token_count, pad_side], when one was supplied
-    volatile tt_l1_ptr uint32_t* in_start;        // page offset of each chunk this stream reads
-    volatile tt_l1_ptr uint32_t* out_start;       // page offset of each chunk it writes downstream
     volatile tt_l1_ptr uint32_t* risc;            // INDEX_RISCS x index_risc_words
     uint32_t end;
 };
@@ -85,8 +83,6 @@ inline Scratch layout_scratch() {
     c.bucket_start = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kBlkBucketStart));
     c.records = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kBlkRecords));
     c.padding = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kBlkPadding));
-    c.in_start = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kBlkInStart));
-    c.out_start = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kBlkOutStart));
     c.risc = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kBlkRisc));
     c.end = a;
     // The host reserved exactly this; anything more would run into the global semaphores.

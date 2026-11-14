@@ -7,6 +7,7 @@
 
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/device_operation.hpp"
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 namespace ttnn::experimental::prim {
 
@@ -17,7 +18,7 @@ void RotateHalfDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const Tensor& input_tensor = tensor_args;
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to rotate half need to be on device!");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to rotate half need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor.is_allocated(), "Operands to rotate half need to be allocated in buffers on device!");
     TT_FATAL((input_tensor.layout() == Layout::TILE), "Inputs to rotate half must be tilized");
     TT_FATAL(input_tensor.padded_shape()[-1] % (TILE_WIDTH * 2) == 0, "Input X dim must be divisible into tiles");
     TT_FATAL(
@@ -33,7 +34,7 @@ tt::tt_metal::TensorSpec RotateHalfDeviceOperation::compute_output_specs(
     const Tensor& input_tensor = tensor_args;
     return tt::tt_metal::TensorSpec(
         input_tensor.logical_shape(),
-        TensorLayout::fromPaddedShape(
+        tt::tt_metal::experimental::tensor_layout_from_padded_shape(
             input_tensor.dtype(),
             PageConfig(Layout::TILE),
             operation_attributes.output_mem_config,

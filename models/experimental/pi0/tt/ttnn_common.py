@@ -154,8 +154,7 @@ def compute_position_ids_ttnn(
     Returns:
         Position IDs TTNN tensor (batch_size, seq_len)
     """
-    # Use moreh_cumsum for cumulative sum
-    cumsum = ttnn.moreh_cumsum(pad_masks, dim=1)
+    cumsum = ttnn.cumsum(pad_masks, dim=1)
 
     # Subtract 1 to get 0-indexed positions
     ones = ttnn.ones_like(cumsum)

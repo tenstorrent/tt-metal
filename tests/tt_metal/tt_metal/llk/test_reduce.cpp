@@ -270,8 +270,8 @@ void validate_reduce_result(
     EXPECT_TRUE(pass);
 }
 
-static experimental::KernelSpec::CompilerOptions::Defines build_reduce_defines(const ReduceConfig& test_config) {
-    experimental::KernelSpec::CompilerOptions::Defines reduce_defines;
+static KernelSpec::CompilerOptions::Defines build_reduce_defines(const ReduceConfig& test_config) {
+    KernelSpec::CompilerOptions::Defines reduce_defines;
     reduce_defines.emplace("REDUCE_DIM", get_reduce_dim_define_string(test_config.reduce_dim));
     switch (test_config.reduce_type) {
         case ReduceType::SUM: reduce_defines.emplace("REDUCE_OP", "PoolType::SUM"); break;
@@ -295,8 +295,17 @@ static inline tt::tt_metal::TensorSpec make_flat_dram_tensor_spec(
     return tt::tt_metal::TensorSpec(tt::tt_metal::Shape{total_entries, entry_size_words}, tensor_layout);
 }
 
+// Packs floats as bf16, two per word, in the order given.
+std::vector<std::uint32_t> pack_floats_as_bf16_words(const std::vector<float>& floats) {
+    std::vector<std::uint32_t> words(floats.size() / 2);
+    for (size_t i = 0; i < words.size(); i++) {
+        words[i] = pack_two_bfloat16_into_uint32({bfloat16(floats[2 * i]), bfloat16(floats[2 * i + 1])});
+    }
+    return words;
+}
+
 void run_single_core_reduce_program(distributed::MeshDevice& mesh_device, const ReduceConfig& test_config) {
-    const experimental::NodeCoord node{0, 0};
+    const NodeCoord node{0, 0};
 
     const ReduceDims dims = compute_and_validate_reduce_dims(test_config);
 
@@ -320,30 +329,30 @@ void run_single_core_reduce_program(distributed::MeshDevice& mesh_device, const 
 
     constexpr std::uint32_t num_buffer_tiles = 32;
     constexpr std::uint32_t num_output_buffer_tiles = 32;
-    const experimental::DFBSpecName SRC0_DFB{"src0_dfb"};
-    const experimental::DFBSpecName SRC1_DFB{"src1_dfb"};
-    const experimental::DFBSpecName DST_DFB{"dst_dfb"};
-    const experimental::KernelSpecName READER{"reader"};
-    const experimental::KernelSpecName WRITER{"writer"};
-    const experimental::KernelSpecName COMPUTE{"compute"};
-    const experimental::TensorParamName IN_TENSOR{"in_tensor"};
-    const experimental::TensorParamName OUT_TENSOR{"out_tensor"};
+    const DFBSpecName SRC0_DFB{"src0_dfb"};
+    const DFBSpecName SRC1_DFB{"src1_dfb"};
+    const DFBSpecName DST_DFB{"dst_dfb"};
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const KernelSpecName COMPUTE{"compute"};
+    const TensorParamName IN_TENSOR{"in_tensor"};
+    const TensorParamName OUT_TENSOR{"out_tensor"};
 
-    experimental::DataflowBufferSpec src0_dfb_spec{
+    DataflowBufferSpec src0_dfb_spec{
         .unique_id = SRC0_DFB,
         .entry_size = input_tile_bytes,
         .num_entries = num_buffer_tiles,
         .data_format_metadata = test_config.input_format,
         .tile_format_metadata = test_config.tile_shape,
     };
-    experimental::DataflowBufferSpec src1_dfb_spec{
+    DataflowBufferSpec src1_dfb_spec{
         .unique_id = SRC1_DFB,
         .entry_size = 2 * TILE_WIDTH * TILE_HEIGHT,
         .num_entries = 2,
         .data_format_metadata = tt::DataFormat::Float16_b,
         .tile_format_metadata = tt_metal::Tile({32, 32}),
     };
-    experimental::DataflowBufferSpec dst_dfb_spec{
+    DataflowBufferSpec dst_dfb_spec{
         .unique_id = DST_DFB,
         .entry_size = dims.single_tile_bytes,
         .num_entries = num_output_buffer_tiles,
@@ -353,8 +362,8 @@ void run_single_core_reduce_program(distributed::MeshDevice& mesh_device, const 
 
     // Build reader spec depending on reduce dim
     std::string reader_kernel_path;
-    experimental::KernelSpec::CompileTimeArgs reader_cta_bindings;
-    experimental::KernelSpec::CompilerOptions::Defines reader_defines;
+    KernelSpec::CompileTimeArgs reader_cta_bindings;
+    KernelSpec::CompilerOptions::Defines reader_defines;
     std::vector<std::string> reader_runtime_arg_names;
     if (test_config.reduce_dim == ReduceDim::H) {
         reader_kernel_path = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_transpose_wh_interleaved.cpp";
@@ -370,24 +379,24 @@ void run_single_core_reduce_program(distributed::MeshDevice& mesh_device, const 
         reader_runtime_arg_names = {"num_tiles", "scaler"};
     }
 
-    experimental::DataMovementHardwareConfig reader_hw_config;
+    DataMovementHardwareConfig reader_hw_config;
     if (mesh_device.arch() == tt::ARCH::QUASAR) {
-        reader_hw_config = experimental::DataMovementHardwareConfig{
+        reader_hw_config = DataMovementHardwareConfig{
             .config_2xx =
-                experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                DataMovementHardwareConfig::DataMovement2XXConfig{
                     .disable_dfb_implicit_sync_for_all = true,
                 },
         };
     } else {
-        reader_hw_config = experimental::DataMovementHardwareConfig{
+        reader_hw_config = DataMovementHardwareConfig{
             .config_1xx =
-                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                DataMovementHardwareConfig::DataMovement1XXConfig{
                     .processor = tt_metal::DataMovementProcessor::RISCV_1,
                     .noc = tt_metal::NOC::RISCV_1_default,
                 },
         };
     }
-    experimental::KernelSpec reader_spec{
+    KernelSpec reader_spec{
         .unique_id = READER,
         .source = reader_kernel_path,
         .num_threads = 1,
@@ -396,14 +405,14 @@ void run_single_core_reduce_program(distributed::MeshDevice& mesh_device, const 
             {{
                  .dfb_spec_name = SRC0_DFB,
                  .accessor_name = "out_data",
-                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                 .endpoint_type = DFBEndpointType::PRODUCER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
              },
              {
                  .dfb_spec_name = SRC1_DFB,
                  .accessor_name = "out_scaler",
-                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                 .endpoint_type = DFBEndpointType::PRODUCER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
              }},
         .tensor_bindings = {{.tensor_parameter_name = IN_TENSOR, .accessor_name = "src_tensor"}},
         .compile_time_args = reader_cta_bindings,
@@ -411,42 +420,42 @@ void run_single_core_reduce_program(distributed::MeshDevice& mesh_device, const 
         .hw_config = reader_hw_config,
     };
 
-    experimental::DataMovementHardwareConfig writer_hw_config;
+    DataMovementHardwareConfig writer_hw_config;
     if (mesh_device.arch() == tt::ARCH::QUASAR) {
-        writer_hw_config = experimental::DataMovementHardwareConfig{
+        writer_hw_config = DataMovementHardwareConfig{
             .config_2xx =
-                experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                DataMovementHardwareConfig::DataMovement2XXConfig{
                     .disable_dfb_implicit_sync_for_all = true,
                 },
         };
     } else {
-        writer_hw_config = experimental::DataMovementHardwareConfig{
+        writer_hw_config = DataMovementHardwareConfig{
             .config_1xx =
-                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                DataMovementHardwareConfig::DataMovement1XXConfig{
                     .processor = tt_metal::DataMovementProcessor::RISCV_0,
                     .noc = tt_metal::NOC::RISCV_0_default,
                 },
         };
     }
-    experimental::KernelSpec writer_spec{
+    KernelSpec writer_spec{
         .unique_id = WRITER,
         .source =
 
             "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank_2_0.cpp",
         .num_threads = 1,
-        .dfb_bindings = {experimental::ConsumerOf(DST_DFB, "in")},
+        .dfb_bindings = {ConsumerOf(DST_DFB, "in")},
         .tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles"}},
         .hw_config = writer_hw_config,
     };
 
-    experimental::ComputeHardwareConfig compute_hw_config;
-    compute_hw_config = experimental::ComputeHardwareConfig{
+    ComputeHardwareConfig compute_hw_config;
+    compute_hw_config = ComputeHardwareConfig{
         .fpu_math_fidelity = test_config.math_fidelity,
         .enable_32_bit_dest = test_config.fp32_dest_acc_en,
         .double_buffer_dest = !test_config.dst_full_sync_en,
     };
-    experimental::KernelSpec compute_spec{
+    KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = get_compute_kernel_name(test_config.reduce_dim),
         .num_threads = 1,
@@ -455,32 +464,32 @@ void run_single_core_reduce_program(distributed::MeshDevice& mesh_device, const 
             {{
                  .dfb_spec_name = SRC0_DFB,
                  .accessor_name = "in_data",
-                 .endpoint_type = experimental::DFBEndpointType::CONSUMER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                 .endpoint_type = DFBEndpointType::CONSUMER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
              },
              {
                  .dfb_spec_name = SRC1_DFB,
                  .accessor_name = "in_scaler",
-                 .endpoint_type = experimental::DFBEndpointType::CONSUMER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                 .endpoint_type = DFBEndpointType::CONSUMER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
              },
              {
                  .dfb_spec_name = DST_DFB,
                  .accessor_name = "out",
-                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                 .endpoint_type = DFBEndpointType::PRODUCER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
              }},
         .compile_time_args = {{"Ht", dims.Ht}, {"Wt", dims.Wt}, {"NC", dims.NC}},
         .hw_config = compute_hw_config,
     };
 
-    experimental::WorkUnitSpec wu{
+    WorkUnitSpec wu{
         .name = "main",
         .kernels = {READER, WRITER, COMPUTE},
         .target_nodes = node,
     };
 
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "single_core_reduce",
         .kernels = {reader_spec, writer_spec, compute_spec},
         .dataflow_buffers = {src0_dfb_spec, src1_dfb_spec, dst_dfb_spec},
@@ -495,10 +504,10 @@ void run_single_core_reduce_program(distributed::MeshDevice& mesh_device, const 
     Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
 
     // Reader/writer RTAs depend on reduce_dim
-    experimental::KernelRunArgs::RuntimeArgValues reader_named_rtas;
+    KernelRunArgs::RuntimeArgValues reader_named_rtas;
     std::uint32_t writer_num_tiles;
     if (test_config.reduce_dim == ReduceDim::H) {
-        reader_named_rtas = experimental::MakeRuntimeArgsForSingleNode(
+        reader_named_rtas = MakeRuntimeArgsForSingleNode(
             node,
             {
                 {"N", dims.N},
@@ -508,7 +517,7 @@ void run_single_core_reduce_program(distributed::MeshDevice& mesh_device, const 
             });
         writer_num_tiles = dims.num_tensor_tiles / dims.Ht;
     } else {
-        reader_named_rtas = experimental::MakeRuntimeArgsForSingleNode(
+        reader_named_rtas = MakeRuntimeArgsForSingleNode(
             node,
             {
                 {"num_tiles", dims.num_tensor_tiles},
@@ -518,21 +527,21 @@ void run_single_core_reduce_program(distributed::MeshDevice& mesh_device, const 
                                                                   : (dims.num_tensor_tiles / (dims.Wt * dims.Ht));
     }
 
-    experimental::ProgramRunArgs params;
+    ProgramRunArgs params;
     params.kernel_run_args = {
-        experimental::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
             .runtime_arg_values = std::move(reader_named_rtas),
         },
-        experimental::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(node, {{"num_tiles", writer_num_tiles}}),
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"num_tiles", writer_num_tiles}}),
         },
-        experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
+        ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
     params.tensor_args = {
-        {IN_TENSOR, experimental::ProgramRunArgs::TensorArgument{in_tensor}},
-        {OUT_TENSOR, experimental::ProgramRunArgs::TensorArgument{out_tensor}},
+        {IN_TENSOR, ProgramRunArgs::TensorArgument{in_tensor}},
+        {OUT_TENSOR, ProgramRunArgs::TensorArgument{out_tensor}},
     };
     experimental::SetProgramRunArgs(program, params);
 
@@ -551,10 +560,7 @@ void run_single_core_reduce_program(distributed::MeshDevice& mesh_device, const 
         // Decode the quantized values back (tile-major) and repack as bf16 for the golden source.
         std::vector<float> quantized = tt::tt_metal::unpack_mxfp4_tiles_into_float_vec(
             ttsl::make_const_span(mxfp4_packed), /*row_major_output=*/false);
-        src_vec.resize(quantized.size() / 2);
-        for (size_t i = 0; i < src_vec.size(); i++) {
-            src_vec[i] = pack_two_bfloat16_into_uint32({bfloat16(quantized[2 * i]), bfloat16(quantized[2 * i + 1])});
-        }
+        src_vec = pack_floats_as_bf16_words(quantized);
     } else {
         slow_dispatch::WriteToBuffer(in_tensor.mesh_buffer(), src_vec);
     }
@@ -575,6 +581,234 @@ void run_single_core_reduce_program(distributed::MeshDevice& mesh_device, const 
         test_config.reduce_type,
         test_config.fp32_dest_acc_en,
         test_config.dst_full_sync_en);
+}
+
+// Quasar 2x column reduce at the metal layer, plus the restore that follows it. One MxFp4 data tile is
+// column-reduced (SUM) by an MxFp4 scaler -- both operands MxFp4 is what selects the 2x-packed src-register
+// format -- and then added to that scaler with an ordinary add on the same two buffers. The add unpacks
+// through UNP_A and UNP_B on the op-agnostic Float16_b formats, so it is only right if reduce_uninit put
+// both unpackers and the ALU back. The scaler is laid out like the bf16 scaler the other readers generate
+// (1.0 in the first row of each face, 0 elsewhere), which MxFp4 encodes exactly, so gold_reduce_h applies.
+void run_single_core_reduce_h_mxfp4_2x_then_add(distributed::MeshDevice& mesh_device, bool fp32_dest_acc_en) {
+    const NodeCoord node{0, 0};
+    constexpr std::uint32_t num_input_tiles = 1;
+    const std::uint32_t mxfp4_tile_bytes = tt::tile_size(tt::DataFormat::MxFp4);
+    const std::uint32_t bf16_tile_bytes = tt::tile_size(tt::DataFormat::Float16_b);
+    constexpr std::uint32_t num_output_tiles = 2;  // tile 0: reduce, tile 1: add
+
+    const ReduceConfig reduce_config = {
+        .shape = {1, 1, TILE_HEIGHT, TILE_WIDTH},
+        .reduce_dim = ReduceDim::H,
+        .reduce_type = ReduceType::SUM,
+        .data_gen_rand_max = 12.0f,
+        .data_gen_seed = 1234,
+        .data_gen_offset = -6.0f,
+        .atol = 0.1f,
+        .rtol = 0.1f,
+        .golden_function = ::unit_tests::compute::gold_reduce_h,
+        .result_shape = {1, 1, TILE_HEIGHT, TILE_WIDTH},
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        // One fidelity phase multiplies FP4 by FP4 in full; a second would add nothing and cancel the 2x saving.
+        .math_fidelity = MathFidelity::LoFi,
+    };
+    const float scaler = get_scaler(reduce_config);
+
+    auto in_tensor =
+        MeshTensor::allocate_on_device(mesh_device, make_flat_dram_tensor_spec(mxfp4_tile_bytes, num_input_tiles));
+    auto scaler_tensor =
+        MeshTensor::allocate_on_device(mesh_device, make_flat_dram_tensor_spec(mxfp4_tile_bytes, num_input_tiles));
+    auto out_tensor =
+        MeshTensor::allocate_on_device(mesh_device, make_flat_dram_tensor_spec(bf16_tile_bytes, num_output_tiles));
+
+    const DFBSpecName SRC0_DFB{"src0_dfb"};
+    const DFBSpecName SRC1_DFB{"src1_dfb"};
+    const DFBSpecName DST_DFB{"dst_dfb"};
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const KernelSpecName COMPUTE{"compute"};
+    const TensorParamName IN_TENSOR{"in_tensor"};
+    const TensorParamName SCALER_TENSOR{"scaler_tensor"};
+    const TensorParamName OUT_TENSOR{"out_tensor"};
+
+    const DataflowBufferSpec src0_dfb_spec{
+        .unique_id = SRC0_DFB,
+        .entry_size = mxfp4_tile_bytes,
+        .num_entries = 2,
+        .data_format_metadata = tt::DataFormat::MxFp4,
+        .tile_format_metadata = tt_metal::Tile({TILE_HEIGHT, TILE_WIDTH}),
+    };
+    const DataflowBufferSpec src1_dfb_spec{
+        .unique_id = SRC1_DFB,
+        .entry_size = mxfp4_tile_bytes,
+        .num_entries = 2,
+        .data_format_metadata = tt::DataFormat::MxFp4,
+        .tile_format_metadata = tt_metal::Tile({TILE_HEIGHT, TILE_WIDTH}),
+    };
+    const DataflowBufferSpec dst_dfb_spec{
+        .unique_id = DST_DFB,
+        .entry_size = bf16_tile_bytes,
+        .num_entries = num_output_tiles,
+        .data_format_metadata = tt::DataFormat::Float16_b,
+        .tile_format_metadata = tt_metal::Tile({TILE_HEIGHT, TILE_WIDTH}),
+    };
+
+    const DataMovementHardwareConfig dm_hw_config{
+        .config_2xx =
+            DataMovementHardwareConfig::DataMovement2XXConfig{
+                .disable_dfb_implicit_sync_for_all = true,
+            },
+    };
+    const KernelSpec reader_spec{
+        .unique_id = READER,
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_data_and_scaler_tile_2_0.cpp",
+        .num_threads = 1,
+        .dfb_bindings =
+            {{
+                 .dfb_spec_name = SRC0_DFB,
+                 .accessor_name = "out_data",
+                 .endpoint_type = DFBEndpointType::PRODUCER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
+             },
+             {
+                 .dfb_spec_name = SRC1_DFB,
+                 .accessor_name = "out_scaler",
+                 .endpoint_type = DFBEndpointType::PRODUCER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
+             }},
+        .tensor_bindings =
+            {{.tensor_parameter_name = IN_TENSOR, .accessor_name = "src_tensor"},
+             {.tensor_parameter_name = SCALER_TENSOR, .accessor_name = "scaler_tensor"}},
+        .hw_config = dm_hw_config,
+    };
+    const KernelSpec writer_spec{
+        .unique_id = WRITER,
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank_2_0.cpp",
+        .num_threads = 1,
+        .dfb_bindings = {ConsumerOf(DST_DFB, "in")},
+        .tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"num_tiles"}},
+        .hw_config = dm_hw_config,
+    };
+    const KernelSpec compute_spec{
+        .unique_id = COMPUTE,
+        .source = "tests/tt_metal/tt_metal/test_kernels/compute/reduce_h_2x_then_add.cpp",
+        .num_threads = 1,
+        .dfb_bindings =
+            {{
+                 .dfb_spec_name = SRC0_DFB,
+                 .accessor_name = "in_data",
+                 .endpoint_type = DFBEndpointType::CONSUMER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
+             },
+             {
+                 .dfb_spec_name = SRC1_DFB,
+                 .accessor_name = "in_scaler",
+                 .endpoint_type = DFBEndpointType::CONSUMER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
+             },
+             {
+                 .dfb_spec_name = DST_DFB,
+                 .accessor_name = "out",
+                 .endpoint_type = DFBEndpointType::PRODUCER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
+             }},
+        .hw_config =
+            ComputeHardwareConfig{
+                .fpu_math_fidelity = reduce_config.math_fidelity,
+                .enable_32_bit_dest = reduce_config.fp32_dest_acc_en,
+                .double_buffer_dest = true,
+            },
+    };
+
+    const WorkUnitSpec wu{
+        .name = "main",
+        .kernels = {READER, WRITER, COMPUTE},
+        .target_nodes = node,
+    };
+    const ProgramSpec spec{
+        .name = "single_core_reduce_h_mxfp4_2x_then_add",
+        .kernels = {reader_spec, writer_spec, compute_spec},
+        .dataflow_buffers = {src0_dfb_spec, src1_dfb_spec, dst_dfb_spec},
+        .tensor_parameters =
+            {
+                {.unique_id = IN_TENSOR, .spec = in_tensor.tensor_spec()},
+                {.unique_id = SCALER_TENSOR, .spec = scaler_tensor.tensor_spec()},
+                {.unique_id = OUT_TENSOR, .spec = out_tensor.tensor_spec()},
+            },
+        .work_units = {wu},
+    };
+    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
+
+    ProgramRunArgs params;
+    params.kernel_run_args = {
+        ProgramRunArgs::KernelRunArgs{.kernel = READER},
+        ProgramRunArgs::KernelRunArgs{
+            .kernel = WRITER,
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"num_tiles", num_output_tiles}}),
+        },
+        ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
+    };
+    params.tensor_args = {
+        {IN_TENSOR, ProgramRunArgs::TensorArgument{in_tensor}},
+        {SCALER_TENSOR, ProgramRunArgs::TensorArgument{scaler_tensor}},
+        {OUT_TENSOR, ProgramRunArgs::TensorArgument{out_tensor}},
+    };
+    experimental::SetProgramRunArgs(program, params);
+
+    // Data: the same seeded stimulus as the other MxFp4 reduce tests, quantized to MxFp4 (tile-major).
+    // Scaler: the SUM scaler (1.0) in the first row of each face, 0 elsewhere (tile-major).
+    const std::vector<std::uint32_t> data_bf16 = create_random_vector_of_bfloat16(
+        bf16_tile_bytes, reduce_config.data_gen_rand_max, reduce_config.data_gen_seed, reduce_config.data_gen_offset);
+    const std::vector<bfloat16> data_native = unpack_uint32_vec_into_bfloat16_vec(data_bf16);
+    const std::vector<float> data_floats(data_native.begin(), data_native.end());
+    std::vector<float> scaler_floats(TILE_HW, 0.0f);
+    for (std::uint32_t face = 0; face < TILE_HW / FACE_HW; face++) {
+        for (std::uint32_t col = 0; col < FACE_WIDTH; col++) {
+            scaler_floats[face * FACE_HW + col] = scaler;
+        }
+    }
+    const std::vector<std::uint32_t> data_mxfp4 =
+        tt::tt_metal::pack_as_mxfp4_tiles(ttsl::make_const_span(data_floats), /*row_major_input=*/false);
+    const std::vector<std::uint32_t> scaler_mxfp4 =
+        tt::tt_metal::pack_as_mxfp4_tiles(ttsl::make_const_span(scaler_floats), /*row_major_input=*/false);
+    slow_dispatch::WriteToBuffer(in_tensor.mesh_buffer(), data_mxfp4);
+    slow_dispatch::WriteToBuffer(scaler_tensor.mesh_buffer(), scaler_mxfp4);
+    const std::vector<float> data_quantized =
+        tt::tt_metal::unpack_mxfp4_tiles_into_float_vec(ttsl::make_const_span(data_mxfp4), /*row_major_output=*/false);
+    const std::vector<float> scaler_quantized = tt::tt_metal::unpack_mxfp4_tiles_into_float_vec(
+        ttsl::make_const_span(scaler_mxfp4), /*row_major_output=*/false);
+    ASSERT_EQ(scaler_quantized, scaler_floats) << "the scaler must be exact in MxFp4";
+
+    LaunchProgram(mesh_device, std::move(program));
+
+    std::vector<std::uint32_t> result_vec;
+    slow_dispatch::ReadFromBuffer(out_tensor.mesh_buffer(), result_vec);
+    const std::uint32_t words_per_tile = TILE_HW / 2;
+    ASSERT_EQ(result_vec.size(), num_output_tiles * words_per_tile);
+
+    // Tile 0: the 2x column reduce, against the same golden the other column reduce tests use.
+    const std::vector<std::uint32_t> reduce_result(result_vec.begin(), result_vec.begin() + words_per_tile);
+    validate_reduce_result(
+        reduce_result, words_per_tile, reduce_config, pack_floats_as_bf16_words(data_quantized), scaler);
+
+    // Tile 1: data + scaler on the restored Float16_b formats (both inputs tile-major, as is the output).
+    std::vector<float> add_floats(TILE_HW);
+    for (std::uint32_t i = 0; i < TILE_HW; i++) {
+        add_floats[i] = data_quantized[i] + scaler_quantized[i];
+    }
+    const std::vector<std::uint32_t> add_golden = pack_floats_as_bf16_words(add_floats);
+    const std::vector<std::uint32_t> add_result(result_vec.begin() + words_per_tile, result_vec.end());
+    int argfail = -1;
+    const bool add_pass = packed_uint32_t_vector_comparison(
+        add_result,
+        add_golden,
+        [&](float a, float b) {
+            const float absdiff = fabsf(a - b);
+            return absdiff <= reduce_config.atol || absdiff <= reduce_config.rtol * fmaxf(fabsf(a), fabsf(b));
+        },
+        &argfail);
+    EXPECT_TRUE(add_pass) << "add after the 2x reduce is wrong at position " << argfail
+                          << ": reduce_uninit did not restore the unpacker/ALU formats";
 }
 
 }  // namespace unit_tests::compute::reduce
@@ -918,14 +1152,14 @@ TEST_F(LLKMeshDeviceSingleCardFixture, TensixComputeReduceWTinyTiles) {
     }
 }
 
-// Quasar-only: MxFp4 column-reduce (SUM) exercising the 2x-packed src-register format via GAPOOL.
-// Mirrors the LLK test_reduce_quasar_mxfp4_2x_gapool python test at the metal layer. Only the
+// Quasar-only: MxFp4 column-reduce (SUM) via GAPOOL with the reader's Float16_b scaler, so it runs the
+// plain MxFp4 -> Float16_b path; TensixComputeReduceColumnMxFp4X2 below covers the 2x-packed path, which
+// also needs an MxFp4 scaler. Only the
 // column (H) reduce is valid for MxFp4_2x: it issues GAPOOLs, the only op_mmul-family op (with
 // MVMUL/MVMULDI) that reads the 2x-packed SrcA correctly. Row/Scalar reduce commit per-face
 // results via ELWADDDI (not op_mmul), which reads MxFp4_2x SrcA as zero.
-// Disabled due to hang: tenstorrent/tt-metal#59923
-TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_TensixComputeReduceColumnMxFp4X2) {
-    if (MetalContext::instance().rtoptions().get_quasar_variant() == "trinity") {
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeReduceColumnMxFp4) {
+    if (MetalContext::instance().get_cluster().get_quasar_ip_variant() == tt::IpVariant::TRINITY) {
         GTEST_SKIP() << "MxFp4_2x register formats do not exist on Trinity";
     }
     ReduceConfig test_config = {
@@ -942,11 +1176,31 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_TensixComputeReduceColumnM
         .rtol = 0.1f,
         .golden_function = ::unit_tests::compute::gold_reduce_h,
         .result_shape = {1, 1, TILE_HEIGHT, TILE_WIDTH},
-        .math_fidelity = MathFidelity::HiFi4,
-        // MxFp4 + column (H) reduce auto-selects the 2x-packed src-register format on Quasar.
+        // Quasar's first fidelity phase covers the Float16_b operands in full
+        .math_fidelity = MathFidelity::LoFi,
+        // Plain MxFp4 path: the reader's scaler is Float16_b (see the comment above the test)
         .input_format = tt::DataFormat::MxFp4,
     };
     run_single_core_reduce_program(this->device(), test_config);
+}
+
+// Quasar-only: MxFp4 column-reduce (SUM) with an MxFp4 scaler, which runs the 2x-packed src-register
+// format (both operands MxFp4), then an ordinary add on the same buffers to check that reduce_uninit
+// restores both unpackers and the ALU. The metal-layer counterpart of the LLK test_reduce_quasar_mxfp4_2x_gapool
+// python test (which drives the LLK directly, not the llk_api init/uninit), for SUM with 16- and 32-bit Dest.
+// AVG takes the same GAPOOL path with a different scaler value, so SUM covers it.
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeReduceColumnMxFp4X2) {
+    if (MetalContext::instance().get_cluster().get_quasar_ip_variant() == tt::IpVariant::TRINITY) {
+        GTEST_SKIP() << "MxFp4_2x register formats do not exist on Trinity";
+    }
+    run_single_core_reduce_h_mxfp4_2x_then_add(this->device(), /*fp32_dest_acc_en=*/false);
+}
+
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeReduceColumnMxFp4X2Fp32Dest) {
+    if (MetalContext::instance().get_cluster().get_quasar_ip_variant() == tt::IpVariant::TRINITY) {
+        GTEST_SKIP() << "MxFp4_2x register formats do not exist on Trinity";
+    }
+    run_single_core_reduce_h_mxfp4_2x_then_add(this->device(), /*fp32_dest_acc_en=*/true);
 }
 
 // ============================================================================

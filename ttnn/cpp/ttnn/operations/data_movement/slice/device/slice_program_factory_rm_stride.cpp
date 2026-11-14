@@ -10,15 +10,14 @@
 #include <optional>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/math.hpp>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace ttnn::prim {
 
@@ -57,13 +56,14 @@ ttnn::device_operation::ProgramArtifacts SliceRmStrideProgramFactory::create_pro
             "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/writer_multicore_slice_nd.cpp";
     }
 
-    tt::DataFormat dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
+    tt::DataFormat dfb_data_format =
+        ttnn::operations::data_movement::get_slice_dfb_data_format(input_tensor.dtype(), device->arch());
     uint32_t actual_input_w = input_shape[-1];
     uint32_t input_bytes_per_row = actual_input_w * element_size;
     uint32_t dfb_entry_size = input_bytes_per_row;
 
-    auto src_buffer_alignment = input_tensor.buffer()->alignment();
-    auto dst_buffer_alignment = output.buffer()->alignment();
+    auto src_buffer_alignment = input_tensor.mesh_buffer().alignment();
+    auto dst_buffer_alignment = output.mesh_buffer().alignment();
     auto alignment = std::max(src_buffer_alignment, dst_buffer_alignment);
 
     uint32_t dfb_entry_size_aligned = tt::round_up(dfb_entry_size, alignment);
@@ -301,7 +301,7 @@ ttnn::device_operation::ProgramArtifacts SliceRmStrideProgramFactory::create_pro
     };
 }
 
-tt::tt_metal::experimental::ProgramRunArgs SliceRmStrideProgramFactory::override_runtime_arguments(
+ProgramRunArgs SliceRmStrideProgramFactory::override_runtime_arguments(
     const SliceParams& /*args*/,
     const SliceInputs& tensor_args,
     Tensor& output,

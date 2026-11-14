@@ -116,12 +116,12 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_in0 = dfb::cb_in0;
     constexpr uint32_t in0_single_tile_size_bytes = get_tile_size(cb_id_in0);
-    // Tiles whose size is not a multiple of the DRAM alignment are padded to it in DRAM, and the
-    // interleaved in0 CB pages are sized to match (see the program factory). The NOC reads the
-    // unpadded tile of data into each padded slot, and tiles are laid out / multicast at the padded
-    // stride. No-op when already aligned. The sharded path keeps the natural (unpadded) stride.
-    constexpr uint32_t in0_aligned_tile_size_bytes =
-        (in0_single_tile_size_bytes + (DRAM_ALIGNMENT - 1)) & ~(DRAM_ALIGNMENT - 1);
+    // Interleaved tiles are laid out in L1 at their DRAM page stride rounded up to the NOC DRAM read alignment,
+    // the entry size the program factory set (get_interleaved_tile_stride): 576 B for a 544 B bfp8 32x16 tile on
+    // Blackhole, the tile size itself on Wormhole and on Quasar (whose NOC reads at any offset and whose unpacker
+    // walks the ring at the format's own stride, e.g. 1056 B for an 8-bit MX tile).
+    constexpr uint32_t in0_aligned_tile_size_bytes = (in0_single_tile_size_bytes + NOC_DRAM_READ_ALIGNMENT_BYTES - 1) /
+                                                     NOC_DRAM_READ_ALIGNMENT_BYTES * NOC_DRAM_READ_ALIGNMENT_BYTES;
 #ifdef IN0_SHARDED
     constexpr uint32_t in0_block_size_bytes = in0_block_num_tiles * in0_single_tile_size_bytes;
 #else
@@ -426,7 +426,8 @@ void kernel_main() {
                         // stalls right after RBD). All the usual intervening work is gated out here:
                         //   - IN0_SHARDED: the borrowed shard is already resident, so there is no
                         //     interleaved NOC read (#ifndef IN0_SHARDED block skipped), and
-                        //     EXTRACT_SHARD_SUB_BLOCKS is off on this path (shard_w == in0_block_w), so
+                        //     EXTRACT_SHARD_SUB_BLOCKS is off on this path (shard_w == in0_block_w and
+                        //     at most one of the row-block / col-block counts exceeds 1), so
                         //     the sub-block self-read is skipped too;
                         //   - SKIP_MCAST (mcast_in1): the in0 mcast/sem block is elided;
                         //   - in0_last_ktile_w == 0 (K % 32 == 0): pad_last_ktile is skipped.

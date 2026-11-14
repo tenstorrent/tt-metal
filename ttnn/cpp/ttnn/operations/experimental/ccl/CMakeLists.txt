@@ -28,6 +28,8 @@ file(
     neighbor_pad_halo/device/kernels/*.cpp
     reduce_scatter_minimal_async/device/kernels/*.cpp
     reduce_scatter_minimal_direct/device/kernels/*.cpp
+    matmul_reduce_scatter_prefill/device/kernels/*.cpp
+    matmul_reduce_scatter_prefill/device/kernels/*.hpp
     ring_attention_all_gather_async/device/kernels/*.cpp
     ring_attention_all_gather_async/device/kernels/*.hpp
     rms_allgather/device/kernels/*.cpp
@@ -47,8 +49,11 @@ file(
     deepseek_b1_reduce_to_one/device/kernels/*.cpp
     moe_compute/device/kernels/*.cpp
     moe_compute/device/kernels/*.h
+    moe_compute/device/kernels/expert_rows/*.cpp
+    moe_compute/device/kernels/expert_rows/*.h
     moe_compute/device/hostdevcommon/*.hpp
     moe/selective_reduce_combine/device/kernels/*.cpp
+    moe/selective_reduce_combine/device/kernels/*.hpp
     all_gather_minimal_matmul_async/device/kernels/*.cpp
     all_gather_minimal_matmul_async/device/kernels/*.hpp
     send_recv_async/send_direct_async/device/kernels/*.cpp

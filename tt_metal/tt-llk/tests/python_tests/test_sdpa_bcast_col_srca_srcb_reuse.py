@@ -49,7 +49,7 @@ from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import MATH_FIDELITY, NUM_FACES, TILE_COUNT
 from helpers.tile_constants import FACE_C_DIM, MAX_FACE_R_DIM
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 # BF16 operands with the fidelity modes accepted by the SDPA correction selector.
 SDPA_FORMATS = input_output_formats([DataFormat.Float16_b])
@@ -171,11 +171,7 @@ def test_sdpa_bcast_col_srca_srcb_reuse(
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format

@@ -145,9 +145,9 @@ void kernel_main() {
     // per chip — so the local NOC address is the right one to name it by.
     const uint64_t peer_arrival_noc_addr = get_noc_addr(arrival_sem_addr);
 
-    // Nothing can go out until every statistics core has parked its rows. Only those
-    // cores signal; the fold cores beyond them have nothing to contribute here and
-    // wait to be released like the rest.
+    // Nothing can go out until every row's statistics are parked. Only the cores that
+    // park them signal — a row's leader where rows are split — and the rest wait to be
+    // released like them.
     ready_sem.wait(num_stat_cores);
     ready_sem.set(0);
 

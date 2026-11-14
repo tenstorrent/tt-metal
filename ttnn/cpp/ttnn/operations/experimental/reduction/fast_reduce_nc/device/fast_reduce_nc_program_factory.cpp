@@ -17,7 +17,6 @@ namespace ttnn::experimental::prim {
 using namespace tt;
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace {
 
@@ -67,9 +66,9 @@ std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_and_scale_spatial_dim
 
 // The tensor arguments create_program_artifacts and override_runtime_arguments both bind: the input, the
 // output and, when the output is split, the right channel region.
-decltype(tt::tt_metal::experimental::ProgramRunArgs::tensor_args) build_tensor_run_args(
+decltype(ProgramRunArgs::tensor_args) build_tensor_run_args(
     const FastReduceNCInputs& tensor_args, std::vector<Tensor>& outputs) {
-    decltype(tt::tt_metal::experimental::ProgramRunArgs::tensor_args) tensor_run_args;
+    decltype(ProgramRunArgs::tensor_args) tensor_run_args;
     tensor_run_args.emplace(FRNC_INPUT, TensorArgument{tensor_args.input.mesh_tensor()});
     tensor_run_args.emplace(FRNC_OUTPUT, TensorArgument{outputs.front().mesh_tensor()});
     if (outputs.size() > 1) {
@@ -142,7 +141,8 @@ ttnn::device_operation::ProgramArtifacts FastReduceNCProgramFactory::create_prog
     bool nd_sharded = tensor_args.input.nd_shard_spec().has_value() && tensor_return_value.nd_shard_spec().has_value();
     bool same_tiles = input_tile[0] == output_tile[0] && input_tile[1] == output_tile[1];
     bool divide_by_shards = false;
-    const auto& dspec = *tensor_return_value.buffer()->buffer_distribution_spec();
+    const auto& dspec =
+        *tensor_return_value.mesh_buffer().device_local_config().sharding_args.buffer_distribution_spec();
     if (nd_sharded && same_tiles && operation_attributes.dim == 0) {
         const NdShardSpec& input_nd_shard_spec = tensor_args.input.nd_shard_spec().value();
         const NdShardSpec& output_nd_shard_spec = tensor_return_value.nd_shard_spec().value();
@@ -285,6 +285,10 @@ ttnn::device_operation::ProgramArtifacts FastReduceNCProgramFactory::create_prog
     if (fp32_dest_acc_en) {
         compute_defines.emplace("FP32_DEST_ACC_EN", "1");
     }
+    const bool fp32_input_in_dest = fp32_dest_acc_en && input_data_format == tt::DataFormat::Float32;
+    if (fp32_input_in_dest) {
+        compute_defines.emplace("REDUCE_FP32_IN_DEST", "1");
+    }
 
     // Style A: op resolves a TTNN ComputeKernelConfig, so the arch-agnostic helper
     // carries the four knobs (math_fidelity / math_approx_mode / fp32_dest_acc_en /
@@ -292,11 +296,9 @@ ttnn::device_operation::ProgramArtifacts FastReduceNCProgramFactory::create_prog
     ComputeHardwareConfig compute_hw =
         ttnn::to_compute_hardware_config(operation_attributes.compute_kernel_config);
     // Metal 2.0 requires an explicit unpack_modes entry when a compute kernel consumes a
-    // Float32 DFB with enable_32_bit_dest = true. Legacy set no unpack_to_dest_mode (Default),
-    // which maps to UnpackToSrc. Only the input DFB (c_0) can be Float32; the zero DFB is BF16.
-    // unpack_modes is a plain member of the (single, generation-agnostic) ComputeHardwareConfig.
-    if (fp32_dest_acc_en && input_data_format == tt::DataFormat::Float32) {
-        compute_hw.unpack_modes.emplace(FRNC_IN0, UnpackMode::UnpackToSrc);
+    // Float32 DFB with enable_32_bit_dest = true.
+    if (fp32_input_in_dest) {
+        compute_hw.unpack_modes.emplace(FRNC_IN0, UnpackMode::UnpackToDest);
     }
 
     auto make_compute = [&](const KernelSpecName& unique_id, uint32_t num_cols_per_core_group) {
@@ -421,7 +423,7 @@ ttnn::device_operation::ProgramArtifacts FastReduceNCProgramFactory::create_prog
 
 // Only the tensor bindings carry per-dispatch state (buffer addresses); every other runtime arg derives
 // from the operation attributes and the TensorSpecs, which the program hash covers.
-tt::tt_metal::experimental::ProgramRunArgs FastReduceNCProgramFactory::override_runtime_arguments(
+ProgramRunArgs FastReduceNCProgramFactory::override_runtime_arguments(
     const FastReduceNCParams& /*operation_attributes*/,
     const FastReduceNCInputs& tensor_args,
     std::vector<Tensor>& outputs,

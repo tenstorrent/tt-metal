@@ -20,6 +20,7 @@ from tqdm import tqdm
 
 import ttnn
 from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 
 # Fabric packet payload limits (conservative round values below hardware maximums).
 MAX_PAYLOAD_SIZE_BH = 14 * 1024  # Blackhole hardware max ~15232 B
@@ -38,9 +39,25 @@ def combine_overlap_payload_size(routed_emb_dim: int) -> int:
     return routed_emb_dim + CMB_FABRIC2D_ROUTING_INFO_BYTES
 
 
+def dispatch_fabric2d_packet_bytes(routed_emb_dim: int) -> int:
+    """The fabric payload dispatch_fabric2d needs to send a whole bfloat16 token, padded to the 64 B DRAM
+    alignment, with its routing tail in one packet."""
+    token_page_bytes = -(-routed_emb_dim * 2 // 64) * 64
+    return token_page_bytes + CMB_FABRIC2D_ROUTING_INFO_BYTES
+
+
+def dispatch_fabric2d_min_payload_bytes(routed_emb_dim: int) -> int:
+    """The smallest fabric payload dispatch_fabric2d runs with. Below dispatch_fabric2d_packet_bytes it sends each
+    token as two packets, split at the 64 B-aligned half (first_packet_bytes in the kernel interface), the routing
+    tail riding on the second."""
+    token_page_bytes = -(-routed_emb_dim * 2 // 64) * 64
+    first_packet = (token_page_bytes // 2) & ~63
+    return max(first_packet, token_page_bytes - first_packet + CMB_FABRIC2D_ROUTING_INFO_BYTES)
+
+
 def routed_expert_combine_overlap_enabled(model_cfg) -> bool:
     """Whether the model opts into TtMoe's routed expert / combine_fabric2d overlap. Off unless the config names
-    ROUTED_EXPERT_COMBINE_OVERLAP = True (Kimi K2.7 and GLM 5.3 today)."""
+    ROUTED_EXPERT_COMBINE_OVERLAP = True (Kimi K2.7, GLM 5.3 and Mistral Small 4 today)."""
     return getattr(model_cfg, "ROUTED_EXPERT_COMBINE_OVERLAP", False)
 
 
@@ -51,18 +68,142 @@ def routed_expert_combine_overlap_arg(model_cfg):
     return None if routed_expert_combine_overlap_enabled(model_cfg) else False
 
 
+def moe_fabric2d_transport_enabled(model_cfg) -> bool:
+    """Whether the model opts into TtMoe's fabric2d transport (dispatch_fabric2d / combine_fabric2d). Off unless the
+    config names MOE_FABRIC2D_TRANSPORT = True (Kimi K2.7 and GLM 5.3 today)."""
+    return getattr(model_cfg, "MOE_FABRIC2D_TRANSPORT", False)
+
+
+def moe_fabric2d_split_tokens(model_cfg) -> bool:
+    """Whether a model on the fabric2d transport opens its mesh with only the payload a split token needs, so
+    dispatch_fabric2d sends each token as two half-size packets. Off unless the config names
+    MOE_FABRIC2D_SPLIT_TOKENS = True; no config does today.
+
+    Meant as a mitigation for the Blackhole fabric router hangs in #64573 (hangs #1 and #3), where routers writing
+    a whole ~12 KB GLM 5.3 token into DRAM on NOC1 wedged the DRAM endpoint. Splitting costs dispatch_fabric2d
+    ~2.5% at the GLM width and the GLM 5.3 prefill ~0-0.5% end to end."""
+    return getattr(model_cfg, "MOE_FABRIC2D_SPLIT_TOKENS", False)
+
+
+def moe_transport_arg(model_cfg):
+    """TtMoe's moe_transport for ``model_cfg``: None (fabric2d wherever it fits) for a model that opts in, "direct"
+    for every other."""
+    return None if moe_fabric2d_transport_enabled(model_cfg) else "direct"
+
+
 def moe_fabric_payload_size(model_cfg) -> int:
     """The fabric payload to open a mesh with for a model whose MoE is TtMoe.
 
     On Blackhole a model that opts into the overlap (routed_expert_combine_overlap_enabled) overlaps the routed
-    expert with combine_fabric2d, so the mesh needs room for half a bf16 token plus combine's routing tail.
-    Everywhere else TtMoe runs the routed expert then combine as separate ops, and the model's own
-    FABRIC_PAYLOAD_SIZE stands. TtMoe reads the payload back to decide whether to overlap, so a mesh opened any
-    other way simply runs without it. Deferred to avoid probing hardware at import time.
+    expert with combine_fabric2d, so the mesh needs room for half a bf16 token plus combine's routing tail, and one
+    that opts into the fabric2d transport (moe_fabric2d_transport_enabled) needs room for a whole routed token,
+    which dispatch_fabric2d then sends in one packet, or for half of one if the model also opts into
+    moe_fabric2d_split_tokens, in which case it sends two. Everywhere else the model's own FABRIC_PAYLOAD_SIZE stands. TtMoe
+    reads the payload back to decide whether to use either, so a mesh opened any other way simply runs without
+    them. No larger than needed: a larger max packet can leave the fabric routers fewer buffer slots, which every
+    fabric op pays for. Deferred to avoid probing hardware at import time.
     """
-    if is_blackhole() and routed_expert_combine_overlap_enabled(model_cfg):
-        return max(model_cfg.FABRIC_PAYLOAD_SIZE, combine_overlap_payload_size(model_cfg.EMB_SIZE))
-    return model_cfg.FABRIC_PAYLOAD_SIZE
+    payload = model_cfg.FABRIC_PAYLOAD_SIZE
+    if not is_blackhole():
+        return payload
+    if routed_expert_combine_overlap_enabled(model_cfg):
+        payload = max(payload, combine_overlap_payload_size(model_cfg.EMB_SIZE))
+    if moe_fabric2d_transport_enabled(model_cfg):
+        routed_emb_dim = getattr(model_cfg, "ROUTED_EXPERT_HIDDEN_SIZE", None) or model_cfg.EMB_SIZE
+        if moe_fabric2d_split_tokens(model_cfg):
+            payload = max(payload, dispatch_fabric2d_min_payload_bytes(routed_emb_dim))
+        else:
+            payload = max(payload, dispatch_fabric2d_packet_bytes(routed_emb_dim))
+    return payload
+
+
+# Values of TtMoe's moe_transport: dispatch and combine (TtDispatchModule, TtCombineModule), or dispatch_fabric2d
+# and combine_fabric2d (TtDispatch2dModule, TtCombine2dModule).
+MOE_TRANSPORTS = ("direct", "fabric2d")
+# Largest top-k dispatch_fabric2d accepts (validated in dispatch_fabric2d_device_operation.cpp).
+# combine_fabric2d has no such limit.
+DISPATCH_FABRIC2D_MAX_TOPK = 16
+
+
+def fabric2d_setup_error(
+    mesh_device, cluster_axis: int, emb_dim: int, op: str, num_experts_per_tok: int | None = None
+) -> str | None:
+    """Why `op` ("dispatch" or "combine", for dispatch_fabric2d or combine_fabric2d) cannot run on this mesh and
+    fabric, or None if it can.
+
+    Both ops send bf16 tokens one hop at a time around a ring on `cluster_axis`, and both check the ring size and
+    the packet size when they launch. dispatch_fabric2d sends a whole token in one packet; combine_fabric2d splits
+    one that does not fit into two halves. Whether the fabric came up with the ring wired needs a device tensor,
+    so axis_wired_into_ring checks that separately. `num_experts_per_tok` is checked for dispatch only.
+    """
+    if op not in ("dispatch", "combine"):
+        raise ValueError(f"op must be 'dispatch' or 'combine', got {op!r}")
+    if op == "dispatch" and num_experts_per_tok is not None and num_experts_per_tok > DISPATCH_FABRIC2D_MAX_TOPK:
+        return (
+            f"dispatch_fabric2d supports top-k up to {DISPATCH_FABRIC2D_MAX_TOPK}, "
+            f"got num_experts_per_tok={num_experts_per_tok}"
+        )
+    extent = mesh_device.shape[cluster_axis]
+    # Even, because the ops split the traffic to the opposite chip across both directions.
+    if extent < 4 or extent % 2 != 0:
+        return (
+            f"fabric2d dispatch/combine need an even ring of at least 4 chips on cluster_axis {cluster_axis}, "
+            f"got {extent}"
+        )
+    fabric_config = ttnn.get_fabric_config()
+    # FABRIC_1D_RING wraps axis 0 too, but the ops build 2D fabric routes, so it does not work.
+    wraps = (
+        fabric_config != ttnn.FabricConfig.FABRIC_1D_RING
+        and per_axis_topology(fabric_config)[cluster_axis] == ttnn.Topology.Ring
+    )
+    if not wraps:
+        return (
+            f"fabric2d dispatch/combine need a 2D fabric that wraps cluster_axis {cluster_axis} into a ring, "
+            f"got {fabric_config}"
+        )
+    if op == "dispatch":
+        packet_bytes = dispatch_fabric2d_min_payload_bytes(emb_dim)
+        what = f"dispatch_fabric2d sends a {emb_dim}-wide bf16 token as two halves at most"
+    else:
+        packet_bytes = combine_overlap_payload_size(emb_dim)
+        what = f"combine_fabric2d sends a {emb_dim}-wide bf16 token as two halves at most"
+    max_payload = ttnn.get_tt_fabric_max_payload_size_bytes()
+    if max_payload < packet_bytes:
+        return (
+            f"{what}, the last with a {CMB_FABRIC2D_ROUTING_INFO_BYTES} B routing tail ({packet_bytes} B), but "
+            f"the fabric max payload is {max_payload} B. Open the mesh with moe_fabric_payload_size for a model "
+            f"that opts in, or raise it with create_fabric_router_config(max_payload_size=...) in device_params."
+        )
+    return None
+
+
+def check_fabric2d_setup(
+    mesh_device, cluster_axis: int, emb_dim: int, op: str, num_experts_per_tok: int | None = None
+) -> None:
+    """Raise ValueError if `op` cannot run on this mesh and fabric; see fabric2d_setup_error."""
+    error = fabric2d_setup_error(mesh_device, cluster_axis, emb_dim, op, num_experts_per_tok)
+    if error is not None:
+        raise ValueError(error)
+
+
+def axis_wired_into_ring(tensor, cluster_axis: int) -> bool:
+    """Whether the fabric wired `cluster_axis` of the mesh `tensor` lives on into a ring.
+
+    The fabric config alone does not say: auto-discovery falls back TORUS_XY -> TORUS_Y -> TORUS_X -> MESH behind a
+    log warning when a wrap link is missing, and get_fabric_config() still reports the request. get_usable_topology
+    keeps Ring exactly when the closing link of every line along the axis is wired, the check dispatch_fabric2d
+    makes when it launches. combine_fabric2d does not check, and runs on such an axis unchecked.
+    """
+    return ttnn.get_usable_topology(tensor, ttnn.Topology.Ring, cluster_axis) == ttnn.Topology.Ring
+
+
+def check_axis_wired_into_ring(tensor, cluster_axis: int) -> None:
+    """Raise ValueError unless axis_wired_into_ring."""
+    if not axis_wired_into_ring(tensor, cluster_axis):
+        raise ValueError(
+            f"fabric2d dispatch/combine need cluster_axis {cluster_axis} wired into a ring, but the fabric "
+            f"{ttnn.get_fabric_config()} came up without a wrap link on that axis; check the wrap cabling"
+        )
 
 
 @dataclass
@@ -73,30 +214,43 @@ class MeshConfig:
     dispatch_group_size: int
     num_dispatch_groups: int
 
+    @property
+    def tp_axis(self) -> int:
+        return 1 - self.sp_axis
 
-def extract_mesh_config(mesh_device) -> MeshConfig:
+
+def extract_mesh_config(mesh_device, sp_axis: int = 0) -> MeshConfig:
     """
     Extract dispatch configuration from mesh device shape.
 
-    For 2D meshes (both dimensions > 1):
-      - sp_axis = 0 (sequence parallel along rows)
-      - dispatch_group_size = number of rows
-      - num_dispatch_groups = number of columns (EP ranks)
-
-    For 1D meshes:
-      - dispatch_group_size = total number of devices
-      - num_dispatch_groups = 1
-      - sp_axis = whichever dimension has size > 1
+    The dispatch groups run along `sp_axis` (sequence parallel), one group per index of the other
+    (TP / EP) axis:
+      - dispatch_group_size = mesh extent along sp_axis
+      - num_dispatch_groups = mesh extent along the other axis
     """
-    sp_axis = 0
-    dispatch_group_size = mesh_device.shape[sp_axis]
-    num_dispatch_groups = mesh_device.shape[1]
-
+    assert sp_axis in (0, 1), f"sp_axis must be 0 or 1, got {sp_axis}"
     return MeshConfig(
         sp_axis=sp_axis,
-        dispatch_group_size=dispatch_group_size,
-        num_dispatch_groups=num_dispatch_groups,
+        dispatch_group_size=mesh_device.shape[sp_axis],
+        num_dispatch_groups=mesh_device.shape[1 - sp_axis],
     )
+
+
+def ep_mesh_dims(sp_axis: int = 0) -> tuple[int, int]:
+    """ShardTensor2dMesh / MeshComposerConfig dims for a tensor laid out (group, chip, ...).
+
+    The chip-within-group dim goes on the SP mesh axis and the group dim on the other axis:
+    (1, 0) for sp_axis=0, (0, 1) for sp_axis=1.
+    """
+    assert sp_axis in (0, 1), f"sp_axis must be 0 or 1, got {sp_axis}"
+    return (1, 0) if sp_axis == 0 else (0, 1)
+
+
+def mesh_shard_dims(dim: int, axis: int) -> tuple:
+    """ShardTensor2dMesh dims that shard tensor dim ``dim`` over mesh axis ``axis`` and replicate over
+    the other axis: (None, dim) for axis=1, (dim, None) for axis=0."""
+    assert axis in (0, 1), f"axis must be 0 or 1, got {axis}"
+    return (None, dim) if axis == 1 else (dim, None)
 
 
 class ExpertMapping:
@@ -130,12 +284,12 @@ class ExpertMapping:
         Get global expert index for a given (group, chip, local_expert) position.
 
         Args:
-            group: Dispatch group index (corresponds to mesh column)
-            chip: Chip index within dispatch group (corresponds to mesh row)
+            group: Dispatch group index (the mesh coordinate off the SP axis)
+            chip: Chip index within dispatch group (the mesh coordinate along the SP axis)
             local_expert: Local expert index on the chip
             experts_per_chip: Number of experts per chip
-            dispatch_group_size: Number of chips per dispatch group (mesh rows)
-            num_dispatch_groups: Number of dispatch groups (mesh columns)
+            dispatch_group_size: Number of chips per dispatch group (mesh extent along the SP axis)
+            num_dispatch_groups: Number of dispatch groups (mesh extent off the SP axis)
             is_col_major: If True, column-major (group-first): experts 0-N in group 0
                          If False, row-major (chip-first): experts interleaved across groups
 
@@ -175,6 +329,29 @@ class ExpertMapping:
         return logical_chip_id * num_dispatch_groups + dispatch_group_idx
 
     @staticmethod
+    def metadata_source_for_sp_axis(
+        metadata: torch.Tensor,
+        num_dispatch_groups: int,
+        dispatch_group_size: int,
+        sp_axis: int,
+    ) -> torch.Tensor:
+        """
+        Re-encode the source field (metadata[..., 0]) of reference dispatch metadata as the device does.
+
+        The reference writes `compute_linearized_mesh_coord`, which is the device's row-major mesh index
+        only when SP runs along mesh rows. The dispatch op writes, and the combine op reads, the row-major
+        index, so at sp_axis=1 (chip on the column, group on the row) it is group * dispatch_group_size +
+        chip. Unfilled slots (negative) are left as they are. Returns `metadata` itself at sp_axis=0.
+        """
+        if sp_axis == 0:
+            return metadata
+        src = metadata[..., 0]
+        chip, group = src // num_dispatch_groups, src % num_dispatch_groups
+        out = metadata.clone()
+        out[..., 0] = torch.where(src >= 0, group * dispatch_group_size + chip, src)
+        return out
+
+    @staticmethod
     def gather_weights_for_mesh_distribution(
         torch_weights: list[dict],
         local_expert_idx: int,
@@ -182,6 +359,7 @@ class ExpertMapping:
         mesh_cols: int,
         experts_per_chip: int,
         is_col_major: bool = True,
+        sp_axis: int = 0,
     ) -> tuple[list, list, list]:
         """
         Gather gate/up/down weights for a local expert, ordered for mesh distribution.
@@ -194,28 +372,33 @@ class ExpertMapping:
         Args:
             torch_weights: List of weight dicts indexed by global expert ID
             local_expert_idx: Local expert index on each chip (0 to experts_per_chip-1)
-            mesh_rows: Number of mesh rows (= dispatch_group_size = chips per group)
-            mesh_cols: Number of mesh cols (= num_dispatch_groups)
+            mesh_rows: Number of mesh rows
+            mesh_cols: Number of mesh cols
             experts_per_chip: Number of experts per chip
             is_col_major: Expert ordering (True=column-major, False=row-major)
+            sp_axis: Mesh axis the dispatch groups run along. At 0 the chip within a group is the
+                mesh row and the group is the column; at 1 they swap.
 
         Returns:
             (gate_weights, up_weights, down_weights) - each a list of tensors in mesh order
         """
+        assert sp_axis in (0, 1), f"sp_axis must be 0 or 1, got {sp_axis}"
         gate_weights = []
         up_weights = []
         down_weights = []
 
+        dispatch_group_size, num_dispatch_groups = (mesh_rows, mesh_cols) if sp_axis == 0 else (mesh_cols, mesh_rows)
         # Row-major iteration matches mesh mapper dims=(0, 1)
         for row in range(mesh_rows):
             for col in range(mesh_cols):
+                group, chip = (col, row) if sp_axis == 0 else (row, col)
                 global_idx = ExpertMapping.get_global_expert_idx(
-                    group=col,
-                    chip=row,
+                    group=group,
+                    chip=chip,
                     local_expert=local_expert_idx,
                     experts_per_chip=experts_per_chip,
-                    dispatch_group_size=mesh_rows,
-                    num_dispatch_groups=mesh_cols,
+                    dispatch_group_size=dispatch_group_size,
+                    num_dispatch_groups=num_dispatch_groups,
                     is_col_major=is_col_major,
                 )
                 gate_weights.append(torch_weights[global_idx]["gate_proj"])
@@ -370,7 +553,8 @@ def get_gate_outputs(
     to a group are zeroed out.
 
     Args:
-        indices: Expert indices tensor (dispatch_group_size, seq_len_per_chip, num_experts_per_tok)
+        indices: Expert indices tensor (dispatch_group_size, seq_len_per_chip, num_experts_per_tok).
+            An entry equal to num_routed_experts marks a padded token and is not counted.
         dispatch_group_size: Number of chips in each dispatch group
         num_routed_experts: Total number of routed experts across all chips
         experts_per_chip: Number of experts per chip
@@ -413,7 +597,9 @@ def get_gate_outputs(
         for token in range(seq_len_per_chip):
             for topk_idx in range(num_experts_per_tok):
                 routed_expert = indices[chip, token, topk_idx]
-                expert_counter_dense[chip, routed_expert] += 1
+                # num_routed_experts marks a padded token, which goes to no expert.
+                if routed_expert != num_routed_experts:
+                    expert_counter_dense[chip, routed_expert] += 1
 
     # Create group masks from dispatch table: (num_dispatch_groups, 1, num_routed_experts)
     group_masks = (expert_dispatch_table >= 0).unsqueeze(1).to(torch.int32)
@@ -897,7 +1083,8 @@ def get_dispatch_input_mesh_mapper(mesh_device, sp_axis: int):
     """
     Create mesh mapper for dispatch input tensors (x, weights, indices).
 
-    These tensors are sharded across the SP axis and replicated across EP ranks.
+    These tensors are sharded across the SP axis and replicated across EP ranks: tensor dim 0
+    (dispatch_group_size) goes on mesh axis `sp_axis`.
 
     Args:
         mesh_device: TTNN mesh device
@@ -906,83 +1093,76 @@ def get_dispatch_input_mesh_mapper(mesh_device, sp_axis: int):
     Returns:
         ShardTensor2dMesh mapper configured for dispatch inputs
     """
-    return ttnn.ShardTensor2dMesh(
-        mesh_device,
-        mesh_shape=mesh_device.shape,
-        dims=(sp_axis, None),
-    )
+    return ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_device.shape, dims=mesh_shard_dims(0, sp_axis))
 
 
-def get_ep_mesh_mapper(mesh_device):
+def get_ep_mesh_mapper(mesh_device, sp_axis: int = 0):
     """
-    Create mesh mapper for expert-parallel tensors.
+    Create mesh mapper for expert-parallel tensors laid out (num_dispatch_groups, dispatch_group_size, ...).
 
-    Shards tensor dim 1 across mesh rows (dispatch_group_size),
-    tensor dim 0 across mesh cols (num_dispatch_groups).
+    Shards tensor dim 1 (dispatch_group_size) across the SP mesh axis and
+    tensor dim 0 (num_dispatch_groups) across the other axis.
     """
     return ttnn.ShardTensor2dMesh(
         mesh_device,
         mesh_shape=mesh_device.shape,
-        dims=(1, 0),
+        dims=ep_mesh_dims(sp_axis),
     )
 
 
-def get_expert_token_counts_mesh_mapper(mesh_device):
+def get_expert_token_counts_mesh_mapper(mesh_device, sp_axis: int = 0):
     """
     Create mesh mapper for expert_token_counts tensor.
 
     Shape: [num_dispatch_groups, dispatch_group_size, num_routed_experts]
 
-    Shards dimension 1 (dispatch_group_size) across mesh rows and
-    dimension 0 (num_dispatch_groups) across mesh columns.
+    Shards dimension 1 (dispatch_group_size) across the SP mesh axis and
+    dimension 0 (num_dispatch_groups) across the other axis.
     Each device receives [1, 1, num_routed_experts].
     """
-    return ttnn.ShardTensor2dMesh(
-        mesh_device,
-        mesh_shape=mesh_device.shape,
-        dims=(1, 0),  # Shard dim 1 across rows, shard dim 0 across cols
-    )
+    return get_ep_mesh_mapper(mesh_device, sp_axis)
 
 
-def get_tp_mesh_composer(mesh_device):
+def get_tp_mesh_composer(mesh_device, sp_axis: int = 0):
     """
-    Create mesh composer for TP sharded tensors; TP embedding dim over columns
+    Create mesh composer for TP sharded tensors: sequence over the SP axis, embedding dim over the TP axis.
     """
     return ttnn.create_mesh_composer(
         mesh_device,
         ttnn.MeshComposerConfig(
-            dims=[0, -1],
+            dims=[0, -1] if sp_axis == 0 else [-1, 0],
         ),
     )
 
 
-def get_sp_mesh_composer(mesh_device):
+def get_sp_mesh_composer(mesh_device, sp_axis: int = 0, concat_dim: int = 0):
     """
-    Create mesh composer for tensors replicated across TP columns.
+    Create mesh composer for tensors replicated across the TP axis.
 
-    Composes along SP axis (column) only, taking column 0 from each row.
+    Composes along the SP axis only, concatenating the SP shards on tensor dim ``concat_dim`` and taking
+    TP index 0 (the override shape spans the SP axis, so only one TP replica is read back).
     Use for gate outputs that are replicated across TP after all_reduce_async
-    (e.g., logits, topk_indices, topk_weights).
+    (e.g., logits, topk_indices, topk_weights), or with concat_dim=2 for a TP-replicated KV cache.
     """
-    return ttnn.create_mesh_composer(
-        mesh_device,
-        ttnn.MeshComposerConfig(
-            [0, 1],
-            ttnn.MeshShape(mesh_device.shape[0], 1),
-        ),
-    )
+    assert sp_axis in (0, 1), f"sp_axis must be 0 or 1, got {sp_axis}"
+    # The size-1 TP axis concatenates nothing; it only needs a dim distinct from concat_dim.
+    dims = [1 if concat_dim == 0 else 0] * 2
+    dims[sp_axis] = concat_dim
+    override = [1, 1]
+    override[sp_axis] = mesh_device.shape[sp_axis]
+    return ttnn.create_mesh_composer(mesh_device, ttnn.MeshComposerConfig(dims, ttnn.MeshShape(*override)))
 
 
-def get_ep_mesh_composer(mesh_device):
+def get_ep_mesh_composer(mesh_device, sp_axis: int = 0):
     """
     Create mesh composer for expert-parallel tensors.
 
-    Composes tensor dim 1 from mesh rows (dispatch_group_size),
-    tensor dim 0 from mesh cols (num_dispatch_groups).
+    Composes tensor dim 1 from the SP mesh axis (dispatch_group_size),
+    tensor dim 0 from the other axis (num_dispatch_groups).
     """
     return ttnn.create_mesh_composer(
         mesh_device,
-        ttnn.MeshComposerConfig(dims=[1, 0]),
+        ttnn.MeshComposerConfig(dims=list(ep_mesh_dims(sp_axis))),
     )
 
 

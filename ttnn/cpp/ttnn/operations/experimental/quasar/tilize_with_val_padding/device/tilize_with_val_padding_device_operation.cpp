@@ -8,6 +8,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 using namespace tt::tt_metal;
 using namespace tt::constants;
@@ -92,7 +93,7 @@ void TilizeWithValPaddingDeviceOperation::validate_on_program_cache_miss(
     const auto& input_shape = input_tensor.logical_shape();
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands need to be on device!");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor.is_allocated(), "Operands need to be allocated in buffers on device!");
     TT_FATAL(input_tensor.layout() == Layout::ROW_MAJOR, "Can only tilize row major data");
     TT_FATAL(
         input_tensor.dtype() == DataType::BFLOAT16 or input_tensor.dtype() == DataType::INT32 or
@@ -157,9 +158,9 @@ void TilizeWithValPaddingDeviceOperation::validate_on_program_cache_miss(
                                    ? input_tensor.shard_spec().value().shape[1]
                                    : input_tensor.nd_shard_spec().value().shard_shape[-1];
 
-        const uint32_t page_size_bytes = input_tensor.buffer()->page_size();
+        const uint32_t page_size_bytes = input_tensor.mesh_buffer().page_size();
         TT_FATAL(
-            page_size_bytes == input_tensor.buffer()->aligned_page_size(),
+            page_size_bytes == input_tensor.mesh_buffer().aligned_page_size(),
             "Input row-major shard width {} gives page size {} bytes, which must be aligned to {} bytes L1 SRAM "
             "buffer alignment "
             "requirement",
@@ -192,7 +193,7 @@ tt::tt_metal::TensorSpec TilizeWithValPaddingDeviceOperation::compute_output_spe
                           // factory, the output has the same shard spec as the input.
         return tt::tt_metal::TensorSpec(
             input_shape,
-            TensorLayout::fromPaddedShape(
+            tt::tt_metal::experimental::tensor_layout_from_padded_shape(
                 operation_attributes.output_dtype,
                 PageConfig(Layout::TILE),
                 mem_config,
@@ -202,7 +203,7 @@ tt::tt_metal::TensorSpec TilizeWithValPaddingDeviceOperation::compute_output_spe
 
     return tt::tt_metal::TensorSpec(
         input_shape,
-        TensorLayout::fromPaddedShape(
+        tt::tt_metal::experimental::tensor_layout_from_padded_shape(
             operation_attributes.output_dtype,
             PageConfig(Layout::TILE),
             operation_attributes.output_mem_config,

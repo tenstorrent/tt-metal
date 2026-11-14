@@ -88,6 +88,28 @@ def test_regression_message_carries_a_reproduce_command():
     assert "--baseline abc1234" in text
 
 
+def test_regression_message_links_the_report():
+    ctx = dict(
+        _CTX,
+        report_url="https://github.com/tenstorrent/tt-metal/actions/runs/1#summary-7",
+        artifact_url="https://github.com/tenstorrent/tt-metal/actions/runs/1/artifacts/9",
+    )
+    text = build_text("regressed", [_ROW], ctx)
+    assert (
+        "<https://github.com/tenstorrent/tt-metal/actions/runs/1#summary-7|full table>"
+        in text
+    )
+    assert "/artifacts/9|download the report and CSVs>" in text
+
+
+def test_without_report_links_the_message_points_at_the_run():
+    text = build_text("regressed", [_ROW], _CTX)
+    assert (
+        "attached to the <https://github.com/tenstorrent/tt-metal/actions/runs/1|gate run>"
+        in text
+    )
+
+
 def test_skipped_message_denies_the_green_check():
     ctx = dict(_CTX, reason="No baseline was found, so the gate compared nothing.")
     text = build_text("skipped", [], ctx)

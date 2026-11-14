@@ -11,7 +11,7 @@
 
 #include "impl/metal2_host_api/helpers.hpp"
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal {
 
 namespace {
 
@@ -43,6 +43,11 @@ void CollectNameLookups(const ProgramSpec& spec, CollectedSpecData& collected) {
         auto [it, inserted] =
             collected.tensor_parameter_by_name.try_emplace(tensor_parameter.unique_id, &tensor_parameter);
         TT_FATAL(inserted, "Duplicate TensorParameter name '{}'", tensor_parameter.unique_id);
+    }
+
+    for (const auto& parameter : spec.advanced_options.sram_arena_parameters) {
+        auto [it, inserted] = collected.sram_arena_parameter_by_name.try_emplace(parameter.unique_id, &parameter);
+        TT_FATAL(inserted, "Duplicate SRAMArenaParameter name '{}'", parameter.unique_id);
     }
 
     for (const auto& pipe_parameter : spec.advanced_options.prefetcher_pipe_parameters) {
@@ -117,7 +122,7 @@ void CollectResourceUsers(const ProgramSpec& spec, CollectedSpecData& collected)
     // against the pipe are in ValidateProgramSpec.) Only local DFBs can relay: the ring lives in
     // receiver-node L1.
     for (const auto& dfb : spec.dataflow_buffers) {
-        std::unordered_set<PrefetcherPipeParamName> relayed;
+        std::unordered_set<experimental::PrefetcherPipeParamName> relayed;
         for (const auto& pipe_name : dfb.advanced_options.prefetcher_pipe_relays) {
             TT_FATAL(
                 collected.prefetcher_pipe_by_name.contains(pipe_name),
@@ -262,4 +267,4 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
     return collected;
 }
 
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal

@@ -11,10 +11,10 @@
 // unpacked, into SrcA.  See llk_math_custom_mm_reuse_dest_srcb.h.
 //
 // Because the reuse LLK has no meaning without a DEST-resident in0 in the exact
-// layout custom_mm<dense_packing> produces, this test drives the WHOLE fused
+// layout custom_mm's Dense layout produces, this test drives the WHOLE fused
 // chain, exactly as the header documents it:
 //
-//   producer:  custom_mm<dense_packing=true>          out0 = A0 @ B0      -> DEST
+//   producer:  custom_mm<DenseSplitAcc>               out0 = A0 @ B0      -> DEST
 //   consumer:  custom_mm_reuse_dest_srcb<r=8>         out  = out0 @ B1    -> DEST
 //   pack:      the dense 16-rows-per-tile accumulator layout               -> L1
 //
@@ -23,7 +23,7 @@
 //      B0  be the producer weights           [32*KP, 32*KT]  (KT output tiles)
 //      B1  be the consumer weights           [32*KT, 32*NT]
 //
-// PRODUCER (custom_mm<dense_packing>, in0_r_dim=8, ct_dim=KT, kt_dim=KP):
+// PRODUCER (custom_mm<DenseSplitAcc>, in0_r_dim=8, ct_dim=KT, kt_dim=KP):
 //   out0[8, 32*KT] = A0[8, 32*KP] @ B0[32*KP, 32*KT]
 //   In DEST, dense_packing lays the KT output tiles 32 rows apart; within each
 //   tile face0 (cols 0..15) is at rows base+0..7 and face1 (cols 16..31) at
@@ -40,19 +40,12 @@
 //
 // Therefore the end-to-end golden is a plain chained matmul:
 //     golden = (A0 @ B0) @ B1
-// evaluated in fp32 and then narrowed / tilized to the consumer's accumulator
-// tile layout for comparison.  Only the first `r`(=8) rows of the output tile
-// are DEFINED (in0 is 8 rows tall); rows 8..31 are undefined and NOT asserted —
-// the python side validates only the defined lanes.
+// with LoFi products and the producer result narrowed to the DEST format.  The
+// packer writes each output tile's `r`(=8) defined rows as two 8-row faces
+// (cols 0..15, then cols 16..31); the rest of the tile is undefined and the
+// python side validates only the defined rows.
 //
 // Fidelity is LoFi only (both custom_mm and the reuse LLK are LoFi-only).
-//
-// This test is marked xfail on the python side: it is a faithful, correct-by-
-// construction transcription of the header pipeline, but the fused two-op chain
-// (DEST bank sharing + cross-thread sync between the producer and the reuse
-// consumer) cannot be validated at runtime in this environment (no Blackhole
-// card).  The bar met here is a clean Blackhole compile plus a golden that
-// mirrors the header math; see BLAZE_PROMOTION_TESTS_DONE.md conventions.
 // ============================================================================
 
 #include <algorithm>
@@ -76,7 +69,7 @@ static constexpr ckernel::DstSync DST_SYNC = ckernel::DstSync::SyncHalf;
 //   PRODUCER_KT     producer inner dim in tiles (its kt_dim)
 //   REUSE_KT        consumer inner dim in tiles (== producer ct_dim, # of DEST in0 tiles)
 //   REUSE_NT        consumer output width in tiles
-// src_tile_stride for a custom_mm dense_packing producer output is 32 DEST rows.
+// src_tile_stride for a Dense-layout custom_mm producer output is 32 DEST rows.
 static constexpr std::uint32_t SRC_TILE_STRIDE = 32;
 static constexpr std::uint32_t ISRC            = 0;   // DEST row of first producer output (in0) tile
 static constexpr std::uint32_t IDST            = 256; // DEST row of first consumer output tile (upper half)
@@ -161,15 +154,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
 
     // ---- producer custom_mm math: writes in0 = A0 @ B0 into DEST (dense layout) ----
-    // in0_tile_r_dim=8 -> operandB_face_r_dim = 8.  split_acc=true and
-    // dense_packing=true so the KT output tiles sit 32 rows apart in the 2x8-row
-    // dense layout the reuse LLK reads back.
-    _llk_math_custom_mm_init_<false /* transpose */, true /* split_acc */, true /* dense_packing */>(IN0_TILE_R_DIM, REUSE_KT /* producer ct_dim */);
+    // in0_tile_r_dim=8 -> operandB_face_r_dim = 8.  DenseSplitAcc so the KT
+    // output tiles sit 32 rows apart in the 2x8-row layout the reuse LLK reads back.
+    _llk_math_custom_mm_init_<false /* transpose */, CustomMmDestLayout::DenseSplitAcc>(IN0_TILE_R_DIM, REUSE_KT /* producer ct_dim */);
 
     _llk_math_wait_for_dest_available_<DST_SYNC>();
 
     // Producer output starts at DEST row ISRC (dst_index is a tile slot; ISRC=0).
-    _llk_math_custom_mm_<true /* finalize (split_acc requires it) */>(IN0_TILE_R_DIM, 0 /* dst_index (tile slot) */, PRODUCER_KT, REUSE_KT /* ct_dim */);
+    _llk_math_custom_mm_<CustomMmDestLayout::DenseSplitAcc, true /* finalize */>(
+        IN0_TILE_R_DIM, 0 /* dst_index (tile slot) */, PRODUCER_KT, REUSE_KT /* ct_dim */);
 
     // ---- consumer reuse math: out = in0(from DEST) @ B1, accumulated into DEST ----
     // Must follow the producer's LAST math instruction (custom_mm rewrites all
@@ -182,7 +175,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         IDST /* first output tile DEST row */,
         REUSE_KT /* kt_dim */,
         REUSE_NT /* nt_dim */,
-        SRC_TILE_STRIDE /* 32 for custom_mm dense_packing */);
+        SRC_TILE_STRIDE /* 32 for a Dense-layout custom_mm */);
 
     _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
 }

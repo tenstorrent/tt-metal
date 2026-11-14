@@ -8,7 +8,6 @@
 
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
-#include "tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h"
 
 #include <vector>
 #include <ostream>
@@ -106,6 +105,9 @@ public:
         return num_used_receiver_channels_per_vc[vc_id];
     }
 
+    // One past the last byte of the local channel buffers.
+    size_t get_channel_buffers_end_address() const { return channel_buffers_end_address; }
+
     // Legacy getters (assume VC0 for backward compatibility)
     size_t get_sender_channel_number_of_slots(size_t channel_id) const {
         return get_sender_channel_number_of_slots(0, channel_id);
@@ -159,6 +161,18 @@ private:
             std::array<size_t, tt::tt_fabric::builder_config::num_max_receiver_channels>,
             builder_config::MAX_NUM_VCS>& num_remote_receiver_buffer_slots_per_vc);
 
+    // Blackhole: the staged slot allocator's counts (fabric_slot_allocator.hpp), for the channels this router builds.
+    void configure_staged_buffer_slots(
+        Topology topology,
+        std::array<std::array<size_t, builder_config::num_max_sender_channels>, builder_config::MAX_NUM_VCS>&
+            num_sender_buffer_slots_per_vc,
+        std::array<std::array<size_t, builder_config::num_max_sender_channels>, builder_config::MAX_NUM_VCS>&
+            num_remote_sender_buffer_slots_per_vc,
+        std::array<std::array<size_t, builder_config::num_max_receiver_channels>, builder_config::MAX_NUM_VCS>&
+            num_receiver_buffer_slots_per_vc,
+        std::array<std::array<size_t, builder_config::num_max_receiver_channels>, builder_config::MAX_NUM_VCS>&
+            num_remote_receiver_buffer_slots_per_vc);
+
     // Configuration parameters
     std::array<size_t, builder_config::MAX_NUM_VCS> num_used_sender_channels_per_vc = {};
     std::array<size_t, builder_config::MAX_NUM_VCS> num_used_receiver_channels_per_vc = {};
@@ -166,6 +180,8 @@ private:
     size_t available_channel_buffering_space = 0;
     size_t max_l1_loading_size = 0;
     size_t buffer_region_start = 0;
+    // One past the last byte of the last channel buffer.
+    size_t channel_buffers_end_address = 0;
 
     // Tensix configuration channel counts
     static constexpr size_t num_sender_channels_with_tensix_config =

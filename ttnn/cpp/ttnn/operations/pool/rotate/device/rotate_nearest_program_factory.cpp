@@ -134,24 +134,26 @@ ProgramDescriptor RotateDeviceOperation::NearestProgramFactory::create_descripto
     const uint32_t aligned_output_stick_nbytes = any_sharded ? effective_channels * output_tensor.element_size()
                                                              : pool::get_aligned_stick_size(input_shape, output_tensor);
 
+    // DRAM and L1 align sticks differently: size the shared CB page for the larger, and stride both kernels by it.
+    const uint32_t output_cb_page_size = std::max(aligned_input_stick_nbytes, aligned_output_stick_nbytes);
+
     const uint32_t available_l1 = NUM_TILES_DEST * tt::constants::TILE_HW * element_size;
     const uint32_t l1_for_cb = available_l1 / NEAREST_BUFFERING_FACTOR;
-    const uint32_t max_cb_pages_from_l1 = l1_for_cb / aligned_input_stick_nbytes;
+    const uint32_t max_cb_pages_from_l1 = l1_for_cb / output_cb_page_size;
 
     const uint32_t max_sticks_per_core =
         any_sharded ? input_nsticks_per_core : std::max(num_sticks_per_core_group_1, num_sticks_per_core_group_2);
     uint32_t num_cb_pages = std::min(max_sticks_per_core, max_cb_pages_from_l1);
     TT_FATAL(
         num_cb_pages > 0,
-        "Not enough L1 for even a single CB page: aligned_input_stick_nbytes={} exceeds l1_for_cb={}",
-        aligned_input_stick_nbytes,
+        "Not enough L1 for even a single CB page: output_cb_page_size={} exceeds l1_for_cb={}",
+        output_cb_page_size,
         l1_for_cb);
     const uint32_t burst_size = num_cb_pages < MAX_BURST_SIZE ? num_cb_pages : MAX_BURST_SIZE;
     // CB total size must be an even multiple of burst_size (required by cb_push_back/cb_pop_front API)
     num_cb_pages = round_down(num_cb_pages, burst_size);
 
     uint32_t next_cb_index = tt::CBIndex::c_0;
-    const uint32_t output_cb_page_size = aligned_input_stick_nbytes;
 
     const uint32_t fill_cb_index = next_cb_index++;
     desc.cbs.push_back(CBDescriptor{
@@ -199,7 +201,7 @@ ProgramDescriptor RotateDeviceOperation::NearestProgramFactory::create_descripto
 
     std::vector<uint32_t> reader_compile_time_args = {
         output_cb_index,
-        aligned_input_stick_nbytes,
+        output_cb_page_size,
         input_batch,
         input_height,
         input_width,
@@ -220,6 +222,7 @@ ProgramDescriptor RotateDeviceOperation::NearestProgramFactory::create_descripto
         aligned_output_stick_nbytes,
         num_cb_pages,
         burst_size,
+        output_cb_page_size,
     };
 
     auto* output_buffer = output_tensor.buffer();

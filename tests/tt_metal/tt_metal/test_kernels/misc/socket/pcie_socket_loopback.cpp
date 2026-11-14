@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
+#include <algorithm>
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "api/socket_api.h"
@@ -15,6 +16,8 @@ void kernel_main() {
     constexpr bool pull_from_host = get_compile_time_arg_val(5);
     // L1 landing slot (page_size bytes) for DEVICE_PULL; unused for HOST_PUSH.
     constexpr uint32_t scratch_l1_addr = get_compile_time_arg_val(6);
+    // One NOC command moves at most a burst, so larger pages go out in burst-sized pieces.
+    constexpr uint32_t max_chunk_size = NOC_MAX_BURST_SIZE;
     SocketReceiverInterface receiver_socket = create_receiver_socket_interface(recv_socket_config_addr);
     SocketSenderInterface sender_socket = create_sender_socket_interface(sender_socket_config_addr);
 
@@ -39,27 +42,34 @@ void kernel_main() {
             uint32_t local_page_addr = pull_from_host ? scratch_l1_addr : receiver_socket.read_ptr;
             if constexpr (pull_from_host) {
                 // Pages available in H2D socket - read over PCIe
-                noc_read_with_state<noc_mode, read_cmd_buf, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT>(
-                    NOC_INDEX,
-                    pcie_xy_enc,
-                    ((static_cast<uint64_t>(read_addr_hi) << 32) | read_addr_lo) + receiver_socket.read_ptr -
-                        receiver_socket.fifo_addr,
-                    local_page_addr,
-                    page_size);
+                const uint64_t src_addr = ((static_cast<uint64_t>(read_addr_hi) << 32) | read_addr_lo) +
+                                          receiver_socket.read_ptr - receiver_socket.fifo_addr;
+                for (uint32_t offset = 0; offset < page_size; offset += max_chunk_size) {
+                    noc_read_with_state<noc_mode, read_cmd_buf, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT>(
+                        NOC_INDEX,
+                        pcie_xy_enc,
+                        src_addr + offset,
+                        local_page_addr + offset,
+                        std::min(max_chunk_size, page_size - offset));
+                }
                 noc_async_read_barrier();
             }
 
             // Wait for space in D2H socket
             socket_reserve_pages(sender_socket, 1);
             // Space available in D2H socket - write to host over PCIe
-            noc_wwrite_with_state<noc_mode, write_cmd_buf, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT, true, false>(
-                NOC_INDEX,
-                local_page_addr,
-                pcie_xy_enc,
+            const uint64_t dst_addr =
                 ((static_cast<uint64_t>(write_addr_hi) << 32) | sender_socket.downstream_fifo_addr) +
-                    sender_socket.write_ptr,
-                page_size,
-                1);
+                sender_socket.write_ptr;
+            for (uint32_t offset = 0; offset < page_size; offset += max_chunk_size) {
+                noc_wwrite_with_state<noc_mode, write_cmd_buf, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT, true, false>(
+                    NOC_INDEX,
+                    local_page_addr + offset,
+                    pcie_xy_enc,
+                    dst_addr + offset,
+                    std::min(max_chunk_size, page_size - offset),
+                    1);
+            }
 
             socket_push_pages(sender_socket, 1);
             // Notify Host that pages were pushed to D2H socket

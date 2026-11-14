@@ -2,19 +2,22 @@
 
 operands:
   - name: "input_A"
+    tile_dims: all
     dims: [256, 256]
     format: "Float16_b"
   - name: "input_B"
+    tile_dims: all
     dims: [256, 256]
     format: "Float16_b"
   - name: "elwmul_out"
+    tile_dims: all
     dims: [256, 256]
     format: "Float16_b"
 
 operations:
   - math:
       - type: "Fpu"
-        block_size: [64, 128]
+        block_tiles: [2, 4]
         in0: "input_A"
         in1: "input_B"
         operation: "Elwmul"
@@ -22,5 +25,5 @@ operations:
         math_fidelity: "LoFi"
     pack:
       - output: "elwmul_out"
-        block_size: [64, 128]
+        block_tiles: [2, 4]
         packer: "Packer"

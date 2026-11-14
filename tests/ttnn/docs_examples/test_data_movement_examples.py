@@ -14,28 +14,30 @@ def test_concat(device):
 
     # Concatenate along dimension 3
     concatenated_tensor = ttnn.concat([tensor1, tensor2], dim=3)
-    logger.info(
-        "Concatenated Tensor Shape:", concatenated_tensor.shape
-    )  # Concatenated Tensor Shape: Shape([1, 1, 64, 64])
+    logger.info(f"Concatenated Tensor Shape: {concatenated_tensor.shape}")  # Shape([1, 1, 64, 64])
 
 
 def test_nonzero(device):
-    # Create a tensor with some zero and non-zero elements
+    # Create a rank-4 tensor with three non-zero elements
     input_tensor = torch.zeros((1, 1, 1, 32), dtype=torch.bfloat16)
+    input_tensor[0, 0, 0, [3, 10, 20]] = 1
     input_tensor_ttnn = ttnn.from_torch(input_tensor, device=device)
 
-    # Find indices of non-zero elements
-    nonzero_indices = ttnn.nonzero(input_tensor_ttnn)
-    logger.info("Non-zero Indices:", nonzero_indices)
+    # Find the non-zero elements: the first output holds the count, the second the (n, c, h, w) indices
+    count_tensor, indices_tensor = ttnn.nonzero(input_tensor_ttnn)
+    count = int(ttnn.to_torch(count_tensor)[0, 0, 0, 0])
+    indices = ttnn.to_torch(indices_tensor)[0, 0, 0, : 4 * count].reshape(count, 4)
+    logger.info(f"Non-zero count: {count}")  # 3
+    logger.info(f"Non-zero indices: {indices.tolist()}")  # [[0, 0, 0, 3], [0, 0, 0, 10], [0, 0, 0, 20]]
 
 
 def test_pad(device):
     # Create a tensor to pad
     input_tensor = ttnn.rand((1, 1, 4, 4), dtype=ttnn.bfloat16, device=device)
 
-    # Pad the tensor with 1 zero on all sides
+    # Pad the last two dimensions with 12 zeros at the end
     padded_tensor = ttnn.pad(input_tensor, [(0, 0), (0, 0), (0, 12), (0, 12)], 0)
-    logger.info("Padded Tensor Shape:", padded_tensor.shape)  # Padded Tensor Shape: Shape([1, 1, 16, 16])
+    logger.info(f"Padded Tensor Shape: {padded_tensor.shape}")  # Shape([1, 1, 16, 16])
 
 
 def test_permute(device):
@@ -44,7 +46,7 @@ def test_permute(device):
 
     # Permute the tensor dimensions
     permuted_tensor = ttnn.permute(input_tensor, (0, 1, 3, 2))
-    logger.info("Permuted Tensor Shape:", permuted_tensor.shape)  # Permuted Tensor Shape: Shape([1, 1, 32, 64])
+    logger.info(f"Permuted Tensor Shape: {permuted_tensor.shape}")  # Shape([1, 1, 32, 64])
 
 
 def test_reshape(device):
@@ -54,7 +56,7 @@ def test_reshape(device):
 
     # Reshape the tensor
     reshaped_tensor = ttnn.reshape(input_tensor_tt, (1, 1, 2, 2))
-    logger.info("Reshaped Tensor Shape:", reshaped_tensor.shape)  # Reshaped Tensor Shape: Shape([1, 1, 2, 2])
+    logger.info(f"Reshaped Tensor Shape: {reshaped_tensor.shape}")  # Shape([1, 1, 2, 2])
 
 
 def test_scatter(device):
@@ -116,12 +118,12 @@ def test_slice(device):
 
     # Slice the tensor
     sliced_tensor = ttnn.slice(input_tensor, [0, 0, 0, 0], [1, 1, 64, 16], [1, 1, 2, 1])
-    logger.info("Sliced Tensor Shape:", sliced_tensor.shape)  # Sliced Tensor Shape: Shape([1, 1, 32, 16])
+    logger.info(f"Sliced Tensor Shape: {sliced_tensor.shape}")  # Shape([1, 1, 32, 16])
 
     # Create a tensor to slice without step
     input_tensor = ttnn.rand((1, 1, 64, 32), dtype=ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
     output = ttnn.slice(input_tensor, [0, 0, 0, 0], [1, 1, 32, 32])
-    logger.info("Sliced Tensor Shape:", output.shape)  # Sliced Tensor Shape: Shape([1, 1, 32, 32])
+    logger.info(f"Sliced Tensor Shape: {output.shape}")  # Shape([1, 1, 32, 32])
 
 
 def test_tilize(device):
@@ -159,12 +161,7 @@ def test_fill_rm(device):
 
     # Create input tensor
     input = torch.zeros((N, C, H, W))
-    xt = ttnn.Tensor(
-        input.reshape(-1).tolist(),
-        input.shape,
-        ttnn.bfloat16,
-        ttnn.TILE_LAYOUT,
-    ).to(device)
+    xt = ttnn.from_torch(input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT).to(device)
 
     # Fill the tensor
     output = ttnn.fill_rm(N, C, H, W, hOnes, wOnes, xt, val_hi, val_lo)
@@ -184,12 +181,7 @@ def test_fill_ones_rm(device):
 
     # Create input tensor
     input = torch.zeros((N, C, H, W))
-    xt = ttnn.Tensor(
-        input.reshape(-1).tolist(),
-        input.shape,
-        ttnn.bfloat16,
-        ttnn.TILE_LAYOUT,
-    ).to(device)
+    xt = ttnn.from_torch(input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT).to(device)
 
     # Fill the tensor
     output = ttnn.fill_ones_rm(N, C, H, W, hOnes, wOnes, xt)
@@ -243,7 +235,8 @@ def test_gather(device):
     )
 
     # Gather elements along dimension 1 using the index tensor
-    ttnn.gather(ttnn_input, 1, index=ttnn_index)
+    gathered_tensor = ttnn.gather(ttnn_input, 1, index=ttnn_index)
+    logger.info(f"Gathered Tensor Shape: {gathered_tensor.shape}")  # Shape([4, 2])
 
 
 def test_sort(device):

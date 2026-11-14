@@ -142,8 +142,9 @@ struct SpeedupsByTopology {
     double topology_geomean_speedup{};
     std::unordered_map<uint32_t, std::vector<double>> speedups_by_packet_size;
     std::unordered_map<uint32_t, double> geomean_speedup_by_packet_size;
-    std::unordered_map<NocSendType, std::vector<double>> speedups_by_ntype;
-    std::unordered_map<NocSendType, double> geomean_speedup_by_ntype;
+    // Keyed by the ntype label (see noc_send_type_label), so ntype option variants are kept apart.
+    std::unordered_map<std::string, std::vector<double>> speedups_by_ntype;
+    std::unordered_map<std::string, double> geomean_speedup_by_ntype;
 };
 
 class PostComparisonAnalyzer {

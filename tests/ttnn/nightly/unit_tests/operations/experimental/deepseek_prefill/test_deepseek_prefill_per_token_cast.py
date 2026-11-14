@@ -10,6 +10,8 @@ Mirrors DeepEP's reference (deepseek-ai/DeepEP deep_ep/utils/math.py):
 - per_token_cast_back: out = decode(e4m3) * scale
 """
 
+import functools
+
 import pytest
 import torch
 import ttnn
@@ -358,6 +360,32 @@ def create_u32_tensor(device, values):
 
 MAX_DISPATCH_BUFFER_TOKENS = 5 * 1024 * 8
 
+
+@functools.lru_cache(maxsize=1)
+def _cached_cast_back_inputs(capacity, H):
+    """The cast-back case's e4m3 input and its per-block scales, plus the trailing RNG state.
+
+    Drawn from seed 0 as the first thing in the test, so they depend only on the buffer capacity
+    and H -- both constants here. Every label/counts, scales_from_metadata and output_dtype
+    variation therefore rebuilt an identical pair, and the e4m3 draw alone profiled as 27% of this
+    file (a 1.2GB fp32 temporary cast down to 293MB). One entry serves every variation.
+    """
+    torch.manual_seed(0)
+    input_e4m3 = (torch.randn(capacity, H) * 3.0).clamp(-E4M3_MAX, E4M3_MAX).to(torch.float8_e4m3fn)
+    input_scale = torch.rand(capacity, H // BLOCK_W) * 4.0 - 2.0
+    return input_e4m3, input_scale, torch.get_rng_state()
+
+
+def cast_back_inputs(capacity, H):
+    """Cached cast-back inputs; leaves the RNG where drawing them inline would have.
+
+    Both tensors are shared between callers: read them, and copy before any in-place write.
+    """
+    input_e4m3, input_scale, rng_state = _cached_cast_back_inputs(capacity, H)
+    torch.set_rng_state(rng_state)
+    return input_e4m3, input_scale
+
+
 # Metadata scale path: the dispatch metadata row is [METADATA_HEADER routing ints][H/128 fp32-bit scales].
 METADATA_HEADER = 3  # This may change in the future, but the actual number is not important for the test
 # The number is just used to set the starting offset when reading the scales from the metadata row
@@ -398,8 +426,7 @@ def test_token_count_aware_cast_back(device, label, counts, scales_from_metadata
     # The op clamps its swept region to the buffer capacity, so rows past it are dropped (overflow case).
     total_valid_rows = min(running_offset, capacity)
 
-    input_e4m3 = (torch.randn(capacity, H) * 3.0).clamp(-E4M3_MAX, E4M3_MAX).to(torch.float8_e4m3fn)
-    input_scale = torch.rand(capacity, H // BLOCK_W) * 4.0 - 2.0
+    input_e4m3, input_scale = cast_back_inputs(capacity, H)
 
     e4m3_tt = _make_e4m3_from_torch(input_e4m3, device=device)
     # Feed the scales either as a plain (M, H/128) fp32 tensor or packed into the int32 metadata tail;

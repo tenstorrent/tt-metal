@@ -79,15 +79,30 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     if test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT:
         if test_vector["dtype"] == ttnn.bfloat8_b:
             return True, "bfloat8_b not supported with ROW_MAJOR_LAYOUT"
-
+    if any(0 in shape for shape in test_vector["stack_specs"]["tensors_shapes"]):
+        return True, "zero-volume stack is rejected by ttnn.stack (concat would raise SIGFPE on it)"
     return False, None
 
 
 def run(
-    split_specs,
+    stack_specs,
     dtype,
     layout,
     *,
     device,
-):
-    raise Exception("Stack is not supported, TODO: nanobind wrapper for concat")
+) -> list:
+    dim = stack_specs.get("dim", 0)  # torch.stack's default; one traced vector omits it
+    torch_input_tensors = [
+        torch_random(shape, -0.1, 0.1, dtype=torch.bfloat16) for shape in stack_specs["tensors_shapes"]
+    ]
+    input_tensors = [
+        ttnn.from_torch(tensor, device=device, layout=layout, dtype=dtype) for tensor in torch_input_tensors
+    ]
+
+    start_time = start_measuring_time()
+    result_tensor = ttnn.stack(input_tensors, dim)
+    e2e_perf = stop_measuring_time(start_time)
+    output_tensor = ttnn.to_torch(result_tensor)
+
+    torch_output_tensor = torch.stack(torch_input_tensors, dim=dim)
+    return [check_with_pcc(torch_output_tensor, output_tensor, 0.999), e2e_perf]

@@ -9,6 +9,7 @@
 set(TTNN_CORE_SRCS
     core/async_runtime.cpp
     core/cluster.cpp
+    core/command_list.cpp
     core/config.cpp
     core/core.cpp
     core/device.cpp
@@ -39,6 +40,7 @@ set(TTNN_CORE_SRCS
     core/tensor/host_buffer/functions.cpp
     core/tensor/serialization.cpp
     core/tensor/storage.cpp
+    core/tensor/topology_check.cpp
     core/tensor/tensor.cpp
     core/tensor/tensor_attributes.cpp
     core/tensor/tensor_impl.cpp
@@ -46,6 +48,7 @@ set(TTNN_CORE_SRCS
     core/services/h2d_socket_service.cpp
     core/services/d2h_socket_service.cpp
     core/services/layer_ack_service.cpp
+    core/tensor/d2d_pipeline_descriptor.cpp
     core/tensor/d2d_stream_service.cpp
     cpp/ttnn/operations/experimental/core_subset_write/copy_to_device_filtered.cpp
     core/tensor/tensor_utils.cpp
@@ -140,6 +143,7 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn-nanobind/operations/copy.cpp
     cpp/ttnn-nanobind/operations/core.cpp
     cpp/ttnn-nanobind/operations/trace.cpp
+    cpp/ttnn-nanobind/operations/command_list.cpp
     cpp/ttnn-nanobind/tensor_accessor_args.cpp
     cpp/ttnn-nanobind/mcast_host.cpp
     cpp/ttnn-nanobind/pipeline_module_nanobind.cpp
@@ -187,6 +191,7 @@ set(TTNNCPP_API_HEADERS
     api/tools/profiler/op_profiler_serialize.hpp
     api/ttnn/async_runtime.hpp
     api/ttnn/cluster.hpp
+    api/ttnn/command_list.hpp
     api/ttnn/common/constants.hpp
     api/ttnn/common/guard.hpp
     api/ttnn/common/queue_id.hpp
@@ -227,6 +232,9 @@ set(TTNNCPP_API_HEADERS
     api/ttnn/operation_concepts.hpp
     api/ttnn/prefetcher_pipe.hpp
     api/ttnn/reports.hpp
+    api/ttnn/tensor/d2d_pipeline_descriptor.hpp
+    api/ttnn/tensor/d2d_stage_gate.hpp
+    api/ttnn/tensor/d2d_stream_service.hpp
     api/ttnn/tensor/host_buffer/functions.hpp
     api/ttnn/tensor/layout/alignment.hpp
     api/ttnn/tensor/layout/layout.hpp
@@ -254,6 +262,7 @@ set(TTNNCPP_API_HEADERS
     cpp/ttnn/operations/creation/creation.hpp
     cpp/ttnn/operations/functions.hpp
     cpp/ttnn/operations/compute_throttle_utils.hpp
+    cpp/ttnn/operations/common/hash_without_rows.hpp
     cpp/ttnn/operations/cb_utils.hpp
     cpp/ttnn/operations/math.hpp
     cpp/ttnn/operations/trace.hpp

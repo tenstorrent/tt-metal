@@ -35,6 +35,7 @@ from fuser.validator import (
     REDUCE_PARAMS_REQUIRED,
     SRC_A_DIMS,
     SUB_BCAST_COL_REQUIRED,
+    TRANSPOSE_NEEDS_FULL_TILE,
     TRANSPOSE_WITHIN_FACE_REQUIRED,
     BinarySfpuMathSchema,
     FpuMathSchemaBase,
@@ -134,9 +135,9 @@ _no_transpose_mismatch = reject(
     "requires both transpose_faces and transpose_within_face to have the same value",
 )
 
-_block_full_width = reject(
-    lambda s, a, b: s.block_size[1] != a.dimensions[1],
-    "block width must be same as operand width",
+_block_divides_width = reject(
+    lambda s, a, b: a.dimensions[1] % s.block_size[1] != 0,
+    "operand width must be a multiple of the block width",
 )
 
 _reduce_col_only = reject(
@@ -154,6 +155,7 @@ _eltwise_checks = [
 _eltwise_lofi_checks = [*_eltwise_checks, LOFI_ONLY]
 
 _matmul_checks = [
+    NO_UNPACK_TO_DEST,
     NO_REUSE_DEST,
     NO_BROADCAST,
     MATMUL_OPERAND_DIMS,
@@ -180,6 +182,7 @@ UNPACKER_MAP = {
             INT32_NEEDS_UNPACK_TO_DEST,
             NO_TRANSPOSE_UNPACK_TO_DEST,
             _no_transpose_mismatch,
+            TRANSPOSE_NEEDS_FULL_TILE,
             reject(
                 lambda s, a, b: s.unpack_to_dest.value
                 and a.tile_shape.tile_dims != (32, 32),
@@ -193,9 +196,8 @@ UNPACKER_MAP = {
             IN0_REQUIRED,
             NO_BROADCAST,
             NO_TRANSPOSE,
-            _block_full_width,
+            _block_divides_width,
             NO_UNPACK_TO_DEST,
-            require_src_a_tiles((32, 32)),
         ],
     ),
     "UnpackerAB": (
@@ -275,6 +277,7 @@ FPU_MAP = {
             NO_BROADCAST,
             NO_TRANSPOSE_UNPACK_TO_DEST,
             _no_transpose_mismatch,
+            TRANSPOSE_NEEDS_FULL_TILE,
         ],
     ),
     "Matmul": (
@@ -316,6 +319,7 @@ FPU_MAP = {
     "Reduce": (
         lambda s: ReduceFpu(s.reduce_dim, s.reduce_pool),
         [
+            NO_UNPACK_TO_DEST,
             IN0_REQUIRED,
             IN1_REQUIRED,
             NO_REUSE_DEST,
@@ -368,17 +372,10 @@ FPU_MAP = {
     ),
 }
 
-# Quasar has no strided pack path for tiny tiles, so the shared full-tile rule carries
-# an arch-specific hint here.
-_untilize_full_tile = reject(
-    lambda s, output: output.tile_shape.total_num_faces() != 4,
-    "PackUntilize supports only 32x32 output tiles, tiny tiles need strided pack",
-)
-
 PACKER_MAP = {
     "Packer": (Packer, [L1_ACC_FORMAT_SUPPORTED]),
     "MatmulPacker": (MatmulPacker, [L1_ACC_FORMAT_SUPPORTED]),
-    "PackUntilize": (PackUntilize, [_untilize_full_tile, PACK_NO_L1_ACC]),
+    "PackUntilize": (PackUntilize, [PACK_NO_L1_ACC]),
 }
 
 OUTPUT_DIMS = {
@@ -610,6 +607,29 @@ PackEntrySchema = Union[
 
 class OperationSchema(OperationSchemaBase):
     dest_consuming_operations: ClassVar = frozenset({"TransposeDest"})
+
+    def _validate_sfpu_tile_shape(self, tile_shape, schemas):
+        for schema in schemas:
+            if not isinstance(schema, (UnarySfpuMathSchema, BinarySfpuMathSchema)):
+                continue
+            if tile_shape.face_r_dim != 16:
+                raise ValueError("Quasar SFPU requires 16-row faces")
+            if tile_shape.tile_dims == (32, 32):
+                continue
+            if isinstance(schema, UnarySfpuMathSchema):
+                allowed_iterations = ("tile", tile_shape.total_tile_size() // 32)
+                recommended = "tile"
+            elif isinstance(schema, TernarySfpuMathSchema):
+                continue  # Ternary iterations are already per face and fixed at eight.
+            else:
+                # Binary iterations: 32 supplies eight row-pair iterations to each selected face.
+                allowed_iterations = (32,)
+                recommended = 32
+            if schema.iterations not in allowed_iterations:
+                raise ValueError(
+                    f"Quasar {schema.type} on tiny tiles requires whole-tile iterations; "
+                    f"use iterations: {recommended}"
+                )
 
     math: List[MathSchema] = Field(..., min_length=1)
     pack: List[PackEntrySchema] = Field(..., min_length=1)

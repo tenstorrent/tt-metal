@@ -12,16 +12,15 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/tilize_utils.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/math.hpp>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace ttnn::operations::data_movement {
 
@@ -72,10 +71,10 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
         accumulated_total_per_dim[i] = num_total_dim * accumulated_total_per_dim[i - 1];
     }
 
-    auto src_buffer_alignment = input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+    auto src_buffer_alignment = input_tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? ::hal::get_dram_alignment()
                                     : ::hal::get_l1_alignment();
-    auto dst_buffer_alignment = output_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+    auto dst_buffer_alignment = output_tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? ::hal::get_dram_alignment()
                                     : ::hal::get_l1_alignment();
     auto alignment = std::max(src_buffer_alignment, dst_buffer_alignment);
@@ -124,7 +123,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
                 // Match `compute_dfb_size`: nrpb=2 only when num_chunks is even, else 1 to avoid ring-wrap straddle.
                 num_read_per_barrier = (chunking.num_chunks_per_stick % 2 == 0) ? 2 : 1;
             } else {
-                auto num_sticks_per_core_pad32 = round_up_to_mul32(num_sticks_per_core);
+                auto num_sticks_per_core_pad32 = tt::round_up(num_sticks_per_core, 32u);
                 num_sticks_per_core_read = tt::tt_metal::merge_num_sticks_to_read(
                     num_sticks_per_core_pad32, unpadded_row_size_bytes_offset, max_read_size);
                 num_read_per_barrier = num_sticks_per_core_pad32 / num_sticks_per_core_read;
@@ -181,14 +180,14 @@ struct SliceDfbSizing {
 // (misalign path uses a whole-stick memmove that doesn't compose with chunk boundaries).
 SliceDfbSizing compute_dfb_size(
     const Tensor& input,
-    const Tensor& output,
+    const TensorSpec& output,
     const Shape& output_tensor_start,
     const uint32_t num_sticks_per_core_group_1,
     const uint32_t num_sticks_per_core_group_2) {
-    auto src_buffer_alignment = input.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+    auto src_buffer_alignment = input.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? ::hal::get_dram_alignment()
                                     : ::hal::get_l1_alignment();
-    auto dst_buffer_alignment = output.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+    auto dst_buffer_alignment = output.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
                                     ? ::hal::get_dram_alignment()
                                     : ::hal::get_l1_alignment();
     const auto single_alignment = std::max(src_buffer_alignment, dst_buffer_alignment);
@@ -269,7 +268,7 @@ SliceDfbSizing compute_dfb_size(
             // Fallback when the shrink above couldn't reach an even num_chunks: nrpb=1 makes a straddle impossible.
             s.num_read_per_barrier = (s.chunking.num_chunks_per_stick % 2 == 0) ? 2 : 1;
         } else {
-            auto num_sticks_per_core_pad32 = round_up_to_mul32(num_input_pages);
+            auto num_sticks_per_core_pad32 = tt::round_up(num_input_pages, 32u);
             uint32_t num_sticks_per_core_read =
                 tt::tt_metal::merge_num_sticks_to_read(num_sticks_per_core_pad32, stride_for_merge, MAX_READ_SIZE);
             s.num_read_per_barrier = num_sticks_per_core_pad32 / num_sticks_per_core_read;
@@ -327,7 +326,7 @@ ttnn::device_operation::ProgramArtifacts SliceRmProgramFactory::create_program_a
             ? tt::tt_metal::split_work_to_cores(args.sub_core_grids.value(), num_unpadded_sticks)
             : tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_unpadded_sticks);
 
-    TT_FATAL(output.buffer() != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(output.is_allocated(), "Output buffer should be allocated on device!");
 
     // The kernels take the accessor's compile-time page size rather than a runtime one, so pin the
     // equivalence here: a route that skips slice.cpp's resharding guard fails loudly instead of
@@ -337,12 +336,14 @@ ttnn::device_operation::ProgramArtifacts SliceRmProgramFactory::create_program_a
     ttnn::operations::data_movement::check_accessor_page_size(
         output, output.padded_shape()[-1] * input.element_size(), "output");
 
-    tt::DataFormat dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
+    tt::DataFormat dfb_data_format =
+        ttnn::operations::data_movement::get_slice_dfb_data_format(input.dtype(), device->arch());
 
-    // DFB sizing (incl. chunking) derives from padded_shape + slice_start + alignment, all of which
-    // fold into compute_program_hash(), so cache entries stay distinct per unique DFB layout.
+    // DFB sizing (incl. chunking) derives from padded_shape + slice_start + alignment + the L1 free
+    // now, all of which fold into compute_program_hash(), so cache entries stay distinct per unique
+    // DFB layout.
     const auto sizing = ttnn::operations::data_movement::compute_dfb_size(
-        input, output, args.slice_start, num_sticks_per_core_group_1, num_sticks_per_core_group_2);
+        input, output.tensor_spec(), args.slice_start, num_sticks_per_core_group_1, num_sticks_per_core_group_2);
 
     const std::uint32_t num_dims = static_cast<std::uint32_t>(input.padded_shape().rank());
 
@@ -535,12 +536,18 @@ ttnn::device_operation::ProgramArtifacts SliceRmProgramFactory::create_program_a
     };
 }
 
-tt::tt_metal::experimental::ProgramRunArgs SliceRmProgramFactory::override_runtime_arguments(
+ProgramRunArgs SliceRmProgramFactory::override_runtime_arguments(
     const SliceParams& /*args*/,
     const SliceInputs& tensor_args,
     Tensor& output,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
     return slice_row_major_run_args(tensor_args, output);
+}
+
+uint32_t SliceRmProgramFactory::dfb_entry_size(
+    const SliceParams& args, const SliceInputs& tensor_args, const TensorSpec& output) {
+    return ttnn::operations::data_movement::compute_dfb_size(tensor_args.input, output, args.slice_start, 0, 0)
+        .dfb_entry_size;
 }
 
 }  // namespace ttnn::prim

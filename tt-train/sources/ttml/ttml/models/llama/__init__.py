@@ -4,12 +4,17 @@
 
 from __future__ import annotations
 
+import json
+import os
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from math import sqrt
+from pathlib import Path
 from typing import Optional
 
 import ttnn
 import ttml
+from ttml.common.utils import build_rope_params_from_config
 from ttml.modules import (
     AbstractModuleBase,
     ColumnParallelLinear,
@@ -35,6 +40,14 @@ class LlamaRopeScalingConfig:
     original_context_length: int = 0  # 0 means no scaling
 
 
+def _read_hf_config(path: str | os.PathLike) -> dict:
+    path = Path(path)
+    if path.is_dir():
+        path = path / "config.json"
+    with open(path) as f:
+        return json.load(f)
+
+
 @dataclass(frozen=True)
 class LlamaConfig:
     """Llama model hyper-parameters.
@@ -49,6 +62,10 @@ class LlamaConfig:
     ``embedding_placement`` selects how the token-embedding table is placed across the
     TP axis (see :class:`EmbeddingPlacement`); it defaults to ``Replicated`` (no
     sharding) and is ignored when ``use_tp=False``.
+
+    ``use_composite_sdpa`` runs the attention of the forward without a KV cache through
+    ``scaled_dot_product_attention_composite``, which also accepts non-broadcast masks such as
+    ``(B, 1, S, S)``. The KV-cache forward picks its SDPA from the mask shape.
     """
 
     hidden_size: int = 384
@@ -60,6 +77,7 @@ class LlamaConfig:
     max_position_embeddings: int = 256
     rope_theta: float = 10000.0
     attention_bias: bool = False
+    rms_norm_eps: float = 1e-5
     attention_dropout: float = 0.0
     mlp_dropout: float = 0.0
     runner_type: RunnerType = RunnerType.Default
@@ -67,6 +85,7 @@ class LlamaConfig:
     rope_scaling: LlamaRopeScalingConfig = field(default_factory=LlamaRopeScalingConfig)
     use_tp: bool = False
     embedding_placement: EmbeddingPlacement = EmbeddingPlacement.Replicated
+    use_composite_sdpa: bool = False
 
     def __post_init__(self):
         if self.max_position_embeddings % 32 != 0:
@@ -129,6 +148,61 @@ class LlamaConfig:
                     "Intermediate size must be divisible by TP size. "
                     f"intermediate_size={intermediate_size}, tp_size={tp_size}"
                 )
+
+    @classmethod
+    def from_hf(cls, hf_config: str | os.PathLike | Mapping, max_position_embeddings: int, **overrides) -> LlamaConfig:
+        """The architecture of a HuggingFace Llama checkpoint, read from its ``config.json``."""
+        if not isinstance(hf_config, Mapping):
+            hf_config = _read_hf_config(hf_config)
+        model_type = hf_config.get("model_type", "llama")
+        if model_type != "llama":
+            raise ValueError(f"model_type {model_type!r} is not a Llama checkpoint")
+        if (quantization := hf_config.get("quantization_config")) is not None:
+            method = quantization.get("quant_method", "unknown") if isinstance(quantization, Mapping) else "unknown"
+            raise ValueError(f"quantized checkpoints ({method}) are not supported")
+        # The model has no MLP bias, and the loader cannot load attention biases.
+        for bias in ("attention_bias", "mlp_bias"):
+            if hf_config.get(bias, False):
+                raise ValueError(f"{bias}=true is not supported")
+        if (hidden_act := hf_config.get("hidden_act", "silu")) != "silu":
+            raise ValueError(f"hidden_act {hidden_act!r} is not supported, only 'silu'")
+        hidden_size = hf_config["hidden_size"]
+        num_heads = hf_config["num_attention_heads"]
+        head_dim = hf_config.get("head_dim", hidden_size // num_heads)
+        if head_dim * num_heads != hidden_size:
+            raise ValueError(f"head_dim {head_dim} * num_attention_heads {num_heads} != hidden_size {hidden_size}")
+
+        # transformers v5 writes rope_theta and the scaling as rope_parameters; v4 as rope_theta and rope_scaling.
+        rope = hf_config.get("rope_parameters") or hf_config.get("rope_scaling") or {}
+        rope_type = rope.get("rope_type", rope.get("type", "default"))
+        if rope_type == "llama3":
+            rope_scaling = LlamaRopeScalingConfig(
+                scaling_factor=rope["factor"],
+                high_freq_factor=rope["high_freq_factor"],
+                low_freq_factor=rope["low_freq_factor"],
+                original_context_length=rope["original_max_position_embeddings"],
+            )
+        elif rope_type == "default":
+            rope_scaling = LlamaRopeScalingConfig()
+        else:
+            raise ValueError(f"rope type {rope_type!r} is not supported, only 'llama3' and 'default'")
+
+        architecture = dict(
+            hidden_size=hidden_size,
+            intermediate_size=hf_config["intermediate_size"],
+            num_hidden_layers=hf_config["num_hidden_layers"],
+            num_attention_heads=num_heads,
+            num_key_value_heads=hf_config.get("num_key_value_heads", num_heads),
+            vocab_size=hf_config["vocab_size"],
+            max_position_embeddings=max_position_embeddings,
+            rope_theta=rope.get("rope_theta", hf_config.get("rope_theta", 10000.0)),
+            rms_norm_eps=hf_config.get("rms_norm_eps", 1e-6),  # HF's default
+            weight_tying=(
+                WeightTyingType.Enabled if hf_config.get("tie_word_embeddings", False) else WeightTyingType.Disabled
+            ),
+            rope_scaling=rope_scaling,
+        )
+        return cls(**{**architecture, **overrides})
 
 
 class Llama(AbstractModuleBase):
@@ -197,21 +271,7 @@ class Llama(AbstractModuleBase):
         if config.weight_tying == ttml.models.WeightTyingType.Enabled:
             self.tok_emb.weight = self.fc.weight
 
-        head_dim = config.hidden_size // config.num_attention_heads
-
-        rope_scaling_params = ttml.ops.rope.RopeScalingParams()
-        if config.rope_scaling.scaling_factor != 0.0 and config.rope_scaling.original_context_length != 0:
-            rope_scaling_params.scaling_factor = config.rope_scaling.scaling_factor
-            rope_scaling_params.high_freq_factor = config.rope_scaling.high_freq_factor
-            rope_scaling_params.low_freq_factor = config.rope_scaling.low_freq_factor
-            rope_scaling_params.original_context_length = config.rope_scaling.original_context_length
-
-        rope_params = ttml.ops.rope.build_rope_params(
-            config.max_position_embeddings,
-            head_dim,
-            config.rope_theta,
-            rope_scaling_params,
-        )
+        rope_params = build_rope_params_from_config(config, config.hidden_size // config.num_attention_heads)
 
         # Depth-scaled init for the residual-writing projections (attention out-proj, MLP
         # down-proj): each of them adds its output into the residual stream, so the stream's
@@ -237,15 +297,17 @@ class Llama(AbstractModuleBase):
                     mlp_dropout=config.mlp_dropout,
                     intermediate_size=config.intermediate_size,
                     attention_bias=config.attention_bias,
+                    rms_norm_eps=config.rms_norm_eps,
                     use_tp=config.use_tp,
                     out_proj_init=out_proj_init,
                     down_proj_init=down_proj_init,
+                    use_composite_sdpa=config.use_composite_sdpa,
                 )
                 for _ in range(config.num_hidden_layers)
             ]
         )
 
-        self.ln_fc = RMSNormLayer(config.hidden_size)
+        self.ln_fc = RMSNormLayer(config.hidden_size, config.rms_norm_eps)
 
     def forward(
         self,
@@ -253,7 +315,9 @@ class Llama(AbstractModuleBase):
         mask: ttml.autograd.Tensor,
         kv_cache: Optional[ttml.models.KvCache] = None,
         new_tokens: Optional[int] = None,
+        unpadded_token_positions: Optional[ttml.autograd.Tensor] = None,
     ) -> ttml.autograd.Tensor:
+        """``unpadded_token_positions``: [B, S] UINT32 ROW_MAJOR, sharded like input, ids < max_position_embeddings."""
         # Token IDs must be padded to the tile boundary so the embedding lookup
         # produces a tile-aligned tensor.  The padding is stripped after lookup.
         TILE_SIZE = 32
@@ -282,12 +346,15 @@ class Llama(AbstractModuleBase):
             out_val = ttnn.slice(tok_emb_out.get_value(), slice_start, slice_end, step)
             out = ttml.autograd.create_tensor(out_val)
 
+        rope_positions = None
+        if unpadded_token_positions is not None:
+            rope_positions = ttml.ops.rope.RotaryEmbeddingPositions(unpadded_token_positions)
         for layer_idx, block in enumerate(self.blocks):
             extra_args = () if kv_cache is None else (kv_cache, layer_idx, new_tokens)
             if self.config.runner_type == ttml.models.RunnerType.MemoryEfficient:
-                out = memory_efficient_runner(block, out, mask, *extra_args)
+                out = memory_efficient_runner(block, out, mask, *extra_args, rope_positions=rope_positions)
             elif self.config.runner_type == ttml.models.RunnerType.Default:
-                out = block(out, mask, *extra_args)
+                out = block(out, mask, *extra_args, rope_positions=rope_positions)
             else:
                 raise ValueError("Unknown runner type. Supported runner types ['default', 'memory_efficient']")
 

@@ -21,6 +21,9 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_equal,
 )
 
+from tests.ttnn.nightly.unit_tests.operations.experimental.kda.recurrent_chunk_scan_test_utils import (
+    group_summary_nd_sharded,
+)
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import height_sharded_memory_config
 
 pytestmark = [
@@ -36,7 +39,7 @@ class _ProductionCase:
     groups_per_head: int
     key_dim: int
     value_dim: int
-    expected_duration_ns: int | None
+    expected_duration_ns: int
 
 
 _PRODUCTION_PERF_MARGIN = 0.05
@@ -61,30 +64,33 @@ _PRODUCTION_CASES = (
     _ProductionCase("sp2-tp4", 24, 4, 128, 128, 74808),
     _ProductionCase("sp4-tp2", 48, 2, 128, 128, 65831),
 )
+# The grouped model's summaries: BF16 head and tail slots in L1, one ND shard per group-head on its worker's core.
+# References are medians of five runs on the Blackhole LoudBox development machine bh-lb-42, whose DRAM-placement
+# medians in the same runs (97,625 / 75,386 / 65,397 ns) lie within 2% of the CI references above. Replace them with
+# CI runner medians once nightlies report them.
+_ND_SHARDED_DURATION_NS = {"sp1-tp8": 90327, "sp2-tp4": 71042, "sp4-tp2": 59443}
 
 
 def _affine_exclusive_scan_ops(
-    a: torch.Tensor | ttnn.Tensor,
-    b: torch.Tensor | ttnn.Tensor,
+    summaries: torch.Tensor | ttnn.Tensor,
     initial_state: torch.Tensor | ttnn.Tensor,
     output: torch.Tensor | ttnn.Tensor,
 ) -> tuple[perf_model.FpuOps, perf_model.SfpuOps]:
-    tensors = (a, b, initial_state, output)
-    if any(len(tensor.shape) != 3 for tensor in tensors):
+    if len(summaries.shape) != 4 or any(len(tensor.shape) != 3 for tensor in (initial_state, output)):
         raise ValueError("affine exclusive-scan tensor shapes are inconsistent")
-    if any(any(dimension <= 0 for dimension in tensor.shape) for tensor in tensors):
+    if any(any(dimension <= 0 for dimension in tensor.shape) for tensor in (summaries, initial_state, output)):
         raise ValueError("affine exclusive-scan tensor shapes must be positive")
 
-    batch_heads, key_dim, value_dim = initial_state.shape
-    if a.shape[0] % batch_heads:
-        raise ValueError("affine exclusive-scan tensor shapes are inconsistent")
-    groups_per_head = a.shape[0] // batch_heads
+    batch_heads, key_dim, value_dim = tuple(initial_state.shape)
+    slots, transforms, summary_rows, row_width = tuple(summaries.shape)
     if (
-        a.shape != (batch_heads * groups_per_head, key_dim, key_dim)
-        or b.shape != (a.shape[0], key_dim, value_dim)
-        or output.shape != b.shape
+        slots not in (1, 2)
+        or transforms % batch_heads
+        or (summary_rows, row_width) != (key_dim, key_dim + value_dim)
+        or tuple(output.shape) != (transforms, key_dim, value_dim)
     ):
         raise ValueError("affine exclusive-scan tensor shapes are inconsistent")
+    groups_per_head = transforms // batch_heads
 
     transitions = batch_heads * (groups_per_head - 1)
     return (
@@ -97,19 +103,18 @@ def _affine_exclusive_scan_ops(
 
 
 def _affine_exclusive_scan_performance(
-    a: ttnn.Tensor,
-    b: ttnn.Tensor,
+    summaries: ttnn.Tensor,
     initial_state: ttnn.Tensor,
     output: ttnn.Tensor,
     *,
     measured_ns: float,
     math_fidelity: ttnn.MathFidelity,
 ) -> perf_model.KdaPerformance:
-    fpu, sfpu = _affine_exclusive_scan_ops(a, b, initial_state, output)
+    fpu, sfpu = _affine_exclusive_scan_ops(summaries, initial_state, output)
     return perf_model.performance(
         fpu=fpu,
         sfpu=sfpu,
-        inputs=(a, b, initial_state),
+        inputs=(summaries, initial_state),
         outputs=(output,),
         measured_ns=measured_ns,
         math_fidelity=math_fidelity,
@@ -118,8 +123,7 @@ def _affine_exclusive_scan_performance(
 
 def test_affine_exclusive_scan_work_golden() -> None:
     fpu, sfpu = _affine_exclusive_scan_ops(
-        torch.empty((2, 2, 2)),
-        torch.empty((2, 2, 1)),
+        torch.empty((2, 2, 2, 3)),
         torch.empty((1, 2, 1)),
         torch.empty((2, 2, 1)),
     )
@@ -184,9 +188,36 @@ def _to_device(
     return ttnn.from_torch(tensor, dtype=dtype, layout=layout, device=device, memory_config=memory_config)
 
 
+def _pack(a: torch.Tensor, b: torch.Tensor, *, slots: int = 1) -> torch.Tensor:
+    """Packed [slots, N, K, K+V] summaries of [A | B] rows. An unsplit rank never reads a tail slot, so it is NaN."""
+    head = torch.cat([a, b], dim=-1)
+    return torch.stack([head, torch.full_like(head, float("nan"))][:slots])
+
+
+def _device_inputs(
+    host: tuple[torch.Tensor, torch.Tensor, torch.Tensor],
+    device: ttnn.Device,
+    dtype: ttnn.DataType = ttnn.float32,
+    *,
+    slots: int = 1,
+    placement: str = "interleaved",
+) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+    """Device summaries and FLOAT32 initial state; ``placement`` is interleaved, nd-sharded-l1 or height-sharded-l1."""
+    a, b, initial_state = host
+    transforms, key_dim, value_dim = a.shape[0], a.shape[1], b.shape[-1]
+    if placement == "interleaved":
+        memory_config = ttnn.DRAM_MEMORY_CONFIG
+    elif placement == "nd-sharded-l1":
+        memory_config = group_summary_nd_sharded(device, slots, transforms, key_dim, value_dim)
+    else:
+        assert placement == "height-sharded-l1"
+        memory_config = height_sharded_memory_config(device, slots * transforms, key_dim, key_dim + value_dim)
+    summaries = _to_device(_pack(a, b, slots=slots), device, dtype, memory_config=memory_config)
+    return summaries, _to_device(initial_state, device)
+
+
 def _run(
-    a: ttnn.Tensor,
-    b: ttnn.Tensor,
+    summaries: ttnn.Tensor,
     initial_state: ttnn.Tensor,
     groups_per_head: int,
     *,
@@ -194,17 +225,16 @@ def _run(
     memory_config: ttnn.MemoryConfig | None = None,
     compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None,
 ) -> ttnn.Tensor:
+    """Run on one device; summaries with a tail slot take initial_state as their (never read) tail seed."""
+    tail_entry_states = initial_state if tuple(summaries.shape)[0] == 2 else None
     with ttnn.manage_config("throw_exception_on_fallback", True):
         return ttnn.experimental.kda.affine_exclusive_scan(
-            a,
-            b,
+            summaries,
             initial_state,
             groups_per_head,
             actual_start=actual_start,
             local_rows=32 * groups_per_head,
-            tail_a=a,
-            tail_b=b,
-            tail_entry_states=initial_state,
+            tail_entry_states=tail_entry_states,
             memory_config=memory_config,
             compute_kernel_config=compute_kernel_config,
         )
@@ -241,38 +271,35 @@ def _composed_ttnn_baseline(
 
 
 @pytest.mark.parametrize("summary_dtype", [ttnn.float32, ttnn.bfloat16])
-@pytest.mark.parametrize("sharded_inputs", [False, True], ids=("interleaved", "height-sharded-l1"))
+@pytest.mark.parametrize(
+    "slots,placement",
+    [(1, "interleaved"), (2, "interleaved"), (2, "nd-sharded-l1"), (1, "height-sharded-l1")],
+    ids=["head-interleaved", "head-tail-interleaved", "head-tail-nd-sharded-l1", "head-height-sharded-l1"],
+)
 def test_affine_exclusive_scan_contract_and_trace(
     zero_actual_start,
     device: ttnn.Device,
     summary_dtype: ttnn.DataType,
-    sharded_inputs: bool,
+    slots: int,
+    placement: str,
 ) -> None:
+    """An unsplit rank scans slot 0; a NaN tail slot must not reach the entry states."""
     batch_heads, groups_per_head, key_dim, value_dim = 2, 4, 32, 32
-    a, b, initial_state = _host_inputs(batch_heads, groups_per_head, key_dim, value_dim)
-    expected = _oracle(a, b, initial_state, batch_heads, groups_per_head)
-    leading = batch_heads * groups_per_head
-    a_memory = (
-        height_sharded_memory_config(device, leading, key_dim, key_dim) if sharded_inputs else ttnn.DRAM_MEMORY_CONFIG
-    )
-    b_memory = (
-        height_sharded_memory_config(device, leading, key_dim, value_dim) if sharded_inputs else ttnn.DRAM_MEMORY_CONFIG
-    )
-    output_memory = ttnn.L1_MEMORY_CONFIG if sharded_inputs else ttnn.DRAM_MEMORY_CONFIG
-    a_tt = _to_device(a, device, summary_dtype, memory_config=a_memory)
-    b_tt = _to_device(b, device, summary_dtype, memory_config=b_memory)
-    state_tt = _to_device(initial_state, device)
-    snapshots = tuple(ttnn.to_torch(tensor).clone() for tensor in (a_tt, b_tt, state_tt))
+    host = _host_inputs(batch_heads, groups_per_head, key_dim, value_dim)
+    expected = _oracle(*host, batch_heads, groups_per_head)
+    output_memory = ttnn.DRAM_MEMORY_CONFIG if placement == "interleaved" else ttnn.L1_MEMORY_CONFIG
+    summaries_tt, state_tt = _device_inputs(host, device, summary_dtype, slots=slots, placement=placement)
+    snapshots = tuple(ttnn.to_torch(tensor).clone() for tensor in (summaries_tt, state_tt))
 
-    first = _run(a_tt, b_tt, state_tt, groups_per_head, memory_config=output_memory, actual_start=zero_actual_start)
+    first = _run(summaries_tt, state_tt, groups_per_head, memory_config=output_memory, actual_start=zero_actual_start)
     assert first.dtype == ttnn.float32
     assert first.layout == ttnn.TILE_LAYOUT
     assert first.memory_config() == output_memory
     assert tuple(ttnn.to_torch(first).shape) == (batch_heads * groups_per_head, key_dim, value_dim)
-    assert first.buffer_address() not in (a_tt.buffer_address(), b_tt.buffer_address(), state_tt.buffer_address())
+    assert first.buffer_address() not in (summaries_tt.buffer_address(), state_tt.buffer_address())
 
     trace_id = ttnn.begin_trace_capture(device, cq_id=0)
-    traced = _run(a_tt, b_tt, state_tt, groups_per_head, memory_config=output_memory, actual_start=zero_actual_start)
+    traced = _run(summaries_tt, state_tt, groups_per_head, memory_config=output_memory, actual_start=zero_actual_start)
     ttnn.end_trace_capture(device, trace_id, cq_id=0)
     for _ in range(2):
         ttnn.execute_trace(device, trace_id, cq_id=0, blocking=False)
@@ -283,24 +310,27 @@ def test_affine_exclusive_scan_contract_and_trace(
         expected, actual, name=f"{summary_dtype} exclusive entry states", pcc_threshold=0.999, nrmse_threshold=0.01
     )
     assert_accurate(
-        snapshots[2],
+        snapshots[1],
         actual.reshape(batch_heads, groups_per_head, key_dim, value_dim)[:, 0],
         name="exclusive first entry",
         pcc_threshold=0.999,
         nrmse_threshold=0.0006,
     )
     assert_bit_identical(actual, ttnn.to_torch(traced), name="trace replay")
-    for name, snapshot, tensor in zip(("a", "b", "initial_state"), snapshots, (a_tt, b_tt, state_tt), strict=True):
-        assert_bit_identical(snapshot, ttnn.to_torch(tensor), name=f"{name} immutability")
+    after = ttnn.to_torch(summaries_tt)
+    assert_bit_identical(snapshots[0][0], after[0], name="head slot immutability")
+    if slots == 2:
+        assert torch.isnan(after[1]).all(), "the NaN tail slot must stay untouched"
+    assert_bit_identical(snapshots[1], ttnn.to_torch(state_tt), name="initial_state immutability")
     ttnn.release_trace(device, trace_id)
 
 
 @pytest.mark.parametrize(
-    ("batch_heads", "groups_per_head", "key_dim", "value_dim", "summary_dtype", "sharded_inputs"),
+    ("batch_heads", "groups_per_head", "key_dim", "value_dim", "summary_dtype", "placement"),
     [
-        pytest.param(2, 1, 32, 32, ttnn.float32, False, id="bh2-g1-k32-v32-fp32-interleaved"),
-        pytest.param(2, 3, 32, 32, ttnn.bfloat16, True, id="bh2-g3-k32-v32-bf16-height-sharded-l1"),
-        pytest.param(3, 2, 32, 64, ttnn.float32, False, id="bh3-g2-k32-v64-fp32-interleaved"),
+        pytest.param(2, 1, 32, 32, ttnn.float32, "interleaved", id="bh2-g1-k32-v32-fp32-interleaved"),
+        pytest.param(2, 3, 32, 32, ttnn.bfloat16, "nd-sharded-l1", id="bh2-g3-k32-v32-bf16-nd-sharded-l1"),
+        pytest.param(3, 2, 32, 64, ttnn.float32, "height-sharded-l1", id="bh3-g2-k32-v64-fp32-height-sharded-l1"),
     ],
 )
 def test_affine_exclusive_scan_shape_accuracy(
@@ -311,22 +341,11 @@ def test_affine_exclusive_scan_shape_accuracy(
     key_dim: int,
     value_dim: int,
     summary_dtype: ttnn.DataType,
-    sharded_inputs: bool,
+    placement: str,
 ) -> None:
-    a, b, initial_state = _host_inputs(batch_heads, groups_per_head, key_dim, value_dim)
-    expected = _oracle(a, b, initial_state, batch_heads, groups_per_head)
-    leading = batch_heads * groups_per_head
-    a_memory = (
-        height_sharded_memory_config(device, leading, key_dim, key_dim) if sharded_inputs else ttnn.DRAM_MEMORY_CONFIG
-    )
-    b_memory = (
-        height_sharded_memory_config(device, leading, key_dim, value_dim) if sharded_inputs else ttnn.DRAM_MEMORY_CONFIG
-    )
-    device_inputs = (
-        _to_device(a, device, summary_dtype, memory_config=a_memory),
-        _to_device(b, device, summary_dtype, memory_config=b_memory),
-        _to_device(initial_state, device),
-    )
+    host = _host_inputs(batch_heads, groups_per_head, key_dim, value_dim)
+    expected = _oracle(*host, batch_heads, groups_per_head)
+    device_inputs = _device_inputs(host, device, summary_dtype, slots=2, placement=placement)
 
     output = _run(*device_inputs, groups_per_head, actual_start=zero_actual_start)
 
@@ -345,11 +364,7 @@ def test_affine_exclusive_scan_is_device_deterministic(
 ) -> None:
     case = _UNIT_CASE
     host = _host_inputs(case.batch_heads, case.groups_per_head, case.key_dim, case.value_dim, seed=1441)
-    device_inputs = (
-        _to_device(host[0], device, summary_dtype),
-        _to_device(host[1], device, summary_dtype),
-        _to_device(host[2], device),
-    )
+    device_inputs = _device_inputs(host, device, summary_dtype)
     expected = _oracle(*host, case.batch_heads, case.groups_per_head)
 
     def run() -> tuple[ttnn.Tensor]:
@@ -373,16 +388,8 @@ def test_affine_exclusive_scan_cache_hit_rebinds_fresh_tensors(
     case = _UNIT_CASE
     host_a = _host_inputs(case.batch_heads, case.groups_per_head, case.key_dim, case.value_dim, seed=1911)
     host_b = _host_inputs(case.batch_heads, case.groups_per_head, case.key_dim, case.value_dim, seed=1912)
-    device_a = (
-        _to_device(host_a[0], device),
-        _to_device(host_a[1], device),
-        _to_device(host_a[2], device),
-    )
-    device_b = (
-        _to_device(host_b[0], device),
-        _to_device(host_b[1], device),
-        _to_device(host_b[2], device),
-    )
+    device_a = _device_inputs(host_a, device)
+    device_b = _device_inputs(host_b, device)
 
     output_a = _run(*device_a, case.groups_per_head, actual_start=zero_actual_start)
     ttnn.synchronize_device(device)
@@ -407,7 +414,7 @@ def test_affine_exclusive_scan_default_compute_config_matches_explicit_defaults(
 ) -> None:
     case = _UNIT_CASE
     host = _host_inputs(case.batch_heads, case.groups_per_head, case.key_dim, case.value_dim, seed=817)
-    device_inputs = tuple(_to_device(tensor, device) for tensor in host)
+    device_inputs = _device_inputs(host, device)
     implicit = _run(*device_inputs, case.groups_per_head, actual_start=zero_actual_start)
     entries = device.num_program_cache_entries()
     explicit_config = ttnn.init_device_compute_kernel_config(
@@ -435,7 +442,7 @@ def test_affine_exclusive_scan_approximate_math_uses_distinct_accurate_program(
 ) -> None:
     case = _UNIT_CASE
     host = _host_inputs(case.batch_heads, case.groups_per_head, case.key_dim, case.value_dim, seed=818)
-    device_inputs = tuple(_to_device(tensor, device) for tensor in host)
+    device_inputs = _device_inputs(host, device)
     exact = _run(*device_inputs, case.groups_per_head, actual_start=zero_actual_start)
     entries = device.num_program_cache_entries()
     approximate_config = ttnn.init_device_compute_kernel_config(
@@ -461,7 +468,7 @@ def test_affine_exclusive_scan_rejects_unsupported_compute_config(
 ) -> None:
     case = _UNIT_CASE
     host = _host_inputs(case.batch_heads, case.groups_per_head, case.key_dim, case.value_dim)
-    device_inputs = tuple(_to_device(tensor, device) for tensor in host)
+    device_inputs = _device_inputs(host, device)
     unsupported_config = ttnn.types.BlackholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi4,
         packer_l1_acc=True,
@@ -478,20 +485,22 @@ def test_affine_exclusive_scan_rejects_unsupported_compute_config(
 @pytest.mark.requires_host_iommu
 @skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
 @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
+@pytest.mark.parametrize("placement", ["dram-head", "nd-sharded-l1-head-tail"])
 @pytest.mark.parametrize("case", _PRODUCTION_CASES, ids=lambda case: case.case_id)
 def test_affine_exclusive_scan_production_performance(
-    zero_actual_start, device: ttnn.Device, case: _ProductionCase
+    zero_actual_start, device: ttnn.Device, case: _ProductionCase, placement: str
 ) -> None:
     if not ttnn.device.IsProgramRealtimeProfilerActive():
         pytest.fail("Real-time profiler must be active for affine exclusive-scan performance checks")
 
     host = _host_inputs(case.batch_heads, case.groups_per_head, case.key_dim, case.value_dim, seed=117)
     expected = _oracle(*host, case.batch_heads, case.groups_per_head)
-    device_inputs = (
-        _to_device(host[0], device, ttnn.bfloat16),
-        _to_device(host[1], device, ttnn.bfloat16),
-        _to_device(host[2], device, ttnn.float32),
-    )
+    if placement == "dram-head":
+        device_inputs = _device_inputs(host, device, ttnn.bfloat16)
+        expected_duration_ns = case.expected_duration_ns
+    else:
+        device_inputs = _device_inputs(host, device, ttnn.bfloat16, slots=2, placement="nd-sharded-l1")
+        expected_duration_ns = _ND_SHARDED_DURATION_NS[case.case_id]
     compute_kernel_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
         math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -532,7 +541,7 @@ def test_affine_exclusive_scan_production_performance(
         math_fidelity=ttnn.MathFidelity.HiFi2,
     )
     logger.info(
-        f"affine exclusive scan {case.case_id}: measured_ns={duration_ns:.0f}, "
+        f"affine exclusive scan {case.case_id} {placement}: measured_ns={duration_ns:.0f}, "
         f"runtime_id={perf_record['runtime_id']}, work={performance.work}, "
         f"ideal_fpu_ns={performance.ideal_fpu_ns:.2f}, ideal_dram_ns={performance.ideal_dram_ns:.2f}, "
         f"ideal_ns={performance.ideal_ns:.2f}, "
@@ -540,26 +549,19 @@ def test_affine_exclusive_scan_production_performance(
         f"dram_utilization_pct={performance.dram_utilization_pct:.2f}, "
         f"utilization_pct={performance.utilization_pct:.2f}"
     )
-    if case.expected_duration_ns is not None:
-        lower = case.expected_duration_ns * (1 - _PRODUCTION_PERF_MARGIN)
-        upper = case.expected_duration_ns * (1 + _PRODUCTION_PERF_MARGIN)
-        assert lower <= duration_ns <= upper, (
-            f"{case.case_id} duration {duration_ns:.0f} ns outside [{lower:.0f}, {upper:.0f}] ns "
-            f"(reference {case.expected_duration_ns} ns, margin +/- {_PRODUCTION_PERF_MARGIN * 100:.0f}%)"
-        )
+    lower = expected_duration_ns * (1 - _PRODUCTION_PERF_MARGIN)
+    upper = expected_duration_ns * (1 + _PRODUCTION_PERF_MARGIN)
+    assert lower <= duration_ns <= upper, (
+        f"{case.case_id} {placement} duration {duration_ns:.0f} ns outside [{lower:.0f}, {upper:.0f}] ns "
+        f"(reference {expected_duration_ns} ns, margin +/- {_PRODUCTION_PERF_MARGIN * 100:.0f}%)"
+    )
 
 
 def test_affine_exclusive_scan_matches_composed_ttnn_baseline(zero_actual_start, device: ttnn.Device) -> None:
     batch_heads, groups_per_head, key_dim, value_dim = 2, 4, 32, 64
     a, b, initial_state = _host_inputs(batch_heads, groups_per_head, key_dim, value_dim, seed=812)
     expected = _oracle(a, b, initial_state, batch_heads, groups_per_head)
-    fused = _run(
-        _to_device(a, device),
-        _to_device(b, device),
-        _to_device(initial_state, device),
-        groups_per_head,
-        actual_start=zero_actual_start,
-    )
+    fused = _run(*_device_inputs((a, b, initial_state), device), groups_per_head, actual_start=zero_actual_start)
     with ttnn.manage_config("throw_exception_on_fallback", True):
         composed = _composed_ttnn_baseline(a, b, initial_state, device, batch_heads, groups_per_head)
     ttnn.synchronize_device(device)
@@ -578,19 +580,20 @@ def test_affine_exclusive_scan_matches_composed_ttnn_baseline(zero_actual_start,
 @pytest.mark.parametrize(
     ("case", "message"),
     [
-        ("host_a", "a must be an allocated device tensor"),
-        ("host_b", "b must be an allocated device tensor"),
+        ("host", "summaries must be an allocated device tensor"),
         ("host_state", "initial_state must be an allocated device tensor"),
-        ("dtype", "a and b must have matching dtypes"),
+        ("dtype", "summaries must be FLOAT32 or BFLOAT16"),
         ("state_dtype", "initial_state must be FLOAT32"),
-        ("layout", "b must use TILE layout"),
-        ("rank", "inputs must be rank 3"),
-        ("leading", "matching leading dimensions"),
-        ("nondivisible", "leading dimension must be divisible"),
-        ("nonsquare", "a must contain square"),
-        ("key_dim", "matching K dimensions"),
-        ("unaligned", "K and V must be positive and tile aligned"),
+        ("layout", "summaries must use TILE layout"),
+        ("rank", "summaries must be rank 4"),
+        ("slots", "summaries must hold 1 or 2 slots"),
+        ("nondivisible", "transforms per slot must be divisible by groups_per_head"),
+        ("no_offset", "summary rows must be"),
+        ("unaligned", "positive, tile-aligned K and V"),
         ("state_shape", "initial_state shape must be"),
+        ("tail_without_seed", "tail_entry_states is required exactly when the summaries hold a tail slot"),
+        ("seed_without_tail", "tail_entry_states is required exactly when the summaries hold a tail slot"),
+        ("tail_seed_shape", "tail_entry_states shape must match initial_state"),
     ],
 )
 def test_affine_exclusive_scan_rejects_invalid_inputs(
@@ -602,39 +605,50 @@ def test_affine_exclusive_scan_rejects_invalid_inputs(
 ) -> None:
     a, b, initial_state = _host_inputs(1, 4, 32, 32)
     groups_per_head = 4
-    a_tt = _to_device(a, device)
-    b_tt = _to_device(b, device)
+    packed = _pack(a, b)
+    summaries_tt = _to_device(packed, device)
     state_tt = _to_device(initial_state, device)
+    tail_entry_states = None
 
-    if case == "host_a":
-        a_tt = ttnn.from_torch(a, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
-    elif case == "host_b":
-        b_tt = ttnn.from_torch(b, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
+    if case == "host":
+        summaries_tt = ttnn.from_torch(packed, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
     elif case == "host_state":
         state_tt = ttnn.from_torch(initial_state, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
     elif case == "dtype":
-        b_tt = _to_device(b, device, ttnn.bfloat16)
+        summaries_tt = _to_device(packed, device, ttnn.bfloat8_b)
     elif case == "state_dtype":
         state_tt = _to_device(initial_state, device, ttnn.bfloat16)
     elif case == "layout":
-        b_tt = _to_device(b, device, layout=ttnn.ROW_MAJOR_LAYOUT)
+        summaries_tt = _to_device(packed, device, layout=ttnn.ROW_MAJOR_LAYOUT)
     elif case == "rank":
-        b_tt = _to_device(b.reshape(1, 4, 32, 32), device)
-    elif case == "leading":
-        b_tt = _to_device(b[:-1], device)
+        summaries_tt = _to_device(packed[0], device)
+    elif case == "slots":
+        summaries_tt = _to_device(packed.expand(3, -1, -1, -1).contiguous(), device)
     elif case == "nondivisible":
-        a_tt = _to_device(a[:-1], device)
-        b_tt = _to_device(b[:-1], device)
-    elif case == "nonsquare":
-        a_tt = _to_device(a[:, :, :31], device)
-    elif case == "key_dim":
-        b_tt = _to_device(b[:, :31], device)
+        summaries_tt = _to_device(packed[:, :-1], device)
+    elif case == "no_offset":
+        summaries_tt = _to_device(packed[..., :32], device)
     elif case == "unaligned":
-        b_tt = _to_device(b[:, :, :31], device)
+        summaries_tt = _to_device(packed[..., :63], device)
     elif case == "state_shape":
         state_tt = _to_device(initial_state[:, :, :31], device)
+    elif case == "tail_without_seed":
+        summaries_tt = _to_device(_pack(a, b, slots=2), device)
+    elif case == "seed_without_tail":
+        tail_entry_states = state_tt
+    elif case == "tail_seed_shape":
+        summaries_tt = _to_device(_pack(a, b, slots=2), device)
+        tail_entry_states = _to_device(initial_state[:, :, :31], device)
     with expect_error(RuntimeError, message):
-        _run(a_tt, b_tt, state_tt, groups_per_head, actual_start=zero_actual_start)
+        with ttnn.manage_config("throw_exception_on_fallback", True):
+            ttnn.experimental.kda.affine_exclusive_scan(
+                summaries_tt,
+                state_tt,
+                groups_per_head,
+                actual_start=zero_actual_start,
+                local_rows=32 * groups_per_head,
+                tail_entry_states=tail_entry_states,
+            )
 
 
 def test_affine_exclusive_scan_rejects_excess_workers(
@@ -645,19 +659,12 @@ def test_affine_exclusive_scan_rejects_excess_workers(
     grid = device.compute_with_storage_grid_size()
     worker_limit = min(grid.x * grid.y, 128)
     group_workers = worker_limit + 1
-    a, b, initial_state = _host_inputs(1, group_workers, 32, 32)
+    host = _host_inputs(1, group_workers, 32, 32)
 
     with expect_error(RuntimeError, f"supports at most {worker_limit} group workers on this device"):
-        _run(
-            _to_device(a, device),
-            _to_device(b, device),
-            _to_device(initial_state, device),
-            group_workers,
-            actual_start=zero_actual_start,
-        )
+        _run(*_device_inputs(host, device), group_workers, actual_start=zero_actual_start)
 
 
-@pytest.mark.parametrize("input_name", ["a", "b"])
 @pytest.mark.parametrize(
     "memory_layout",
     [ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.TensorMemoryLayout.BLOCK_SHARDED],
@@ -667,23 +674,19 @@ def test_affine_exclusive_scan_rejects_unsupported_input_sharding(
     zero_actual_start,
     device: ttnn.Device,
     expect_error: Callable,
-    input_name: str,
     memory_layout: ttnn.TensorMemoryLayout,
 ) -> None:
     a, b, initial_state = _host_inputs(1, 4, 32, 32)
     shard_spec = ttnn.ShardSpec(
         ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
-        [128, 32],
+        [128, 64],
         ttnn.ShardOrientation.ROW_MAJOR,
     )
     unsupported = ttnn.MemoryConfig(memory_layout, ttnn.BufferType.L1, shard_spec)
-    a_memory = unsupported if input_name == "a" else ttnn.DRAM_MEMORY_CONFIG
-    b_memory = unsupported if input_name == "b" else ttnn.DRAM_MEMORY_CONFIG
 
-    with expect_error(RuntimeError, f"{input_name} must use interleaved or height-sharded memory"):
+    with expect_error(RuntimeError, "summaries must use interleaved, height-sharded or ND-sharded memory"):
         _run(
-            _to_device(a, device, memory_config=a_memory),
-            _to_device(b, device, memory_config=b_memory),
+            _to_device(_pack(a, b), device, memory_config=unsupported),
             _to_device(initial_state, device),
             4,
             actual_start=zero_actual_start,
@@ -695,10 +698,9 @@ def test_affine_exclusive_scan_rejects_invalid_configuration(
     device: ttnn.Device,
     expect_error: Callable,
 ) -> None:
-    a, b, initial_state = _host_inputs(1, 4, 32, 32)
-    a_tt, b_tt, state_tt = _to_device(a, device), _to_device(b, device), _to_device(initial_state, device)
+    summaries_tt, state_tt = _device_inputs(_host_inputs(1, 4, 32, 32), device)
     with expect_error(RuntimeError, "groups_per_head must be positive"):
-        _run(a_tt, b_tt, state_tt, 0, actual_start=zero_actual_start)
+        _run(summaries_tt, state_tt, 0, actual_start=zero_actual_start)
 
     shard_spec = ttnn.ShardSpec(
         ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
@@ -707,4 +709,4 @@ def test_affine_exclusive_scan_rejects_invalid_configuration(
     )
     sharded = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
     with expect_error(RuntimeError, "output memory layout must be INTERLEAVED"):
-        _run(a_tt, b_tt, state_tt, 4, memory_config=sharded, actual_start=zero_actual_start)
+        _run(summaries_tt, state_tt, 4, memory_config=sharded, actual_start=zero_actual_start)

@@ -79,7 +79,18 @@ void kernel_main() {
             connections, route_id, hop_info, static_cast<uint16_t>(packet_payload_size_bytes));
     }
 
+    tt_l1_ptr uint32_t* source_l1_buffer = reinterpret_cast<tt_l1_ptr uint32_t*>(source_l1_buffer_address);
+    const uint32_t payload_size_words = packet_payload_size_bytes / sizeof(uint32_t);
+
     for (uint32_t i = 0; i < num_packets; i++) {
+        if constexpr (
+            noc_packet_type == NocPacketType::NOC_FUSED_UNICAST_ATOMIC_INC ||
+            noc_packet_type == NocPacketType::NOC_FUSED_UNICAST_SCATTER_WRITE_ATOMIC_INC) {
+            // Safe to overwrite: the previous packet's payload was flushed at the end of the last iteration.
+            for (uint32_t j = 0; j < payload_size_words; j++) {
+                source_l1_buffer[j] = tt::tt_fabric::fabric_router_tests::fused_atomic_inc_pattern_word(i + 1, j);
+            }
+        }
 #ifdef API_TYPE_Linear
         static_assert(
             fabric_packet_type != FabricPacketType::CHIP_SPARSE_MULTICAST,

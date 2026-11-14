@@ -4,6 +4,7 @@
 
 #include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
 
+#include <algorithm>
 #include <mutex>
 #include <sstream>
 #include <string>
@@ -18,6 +19,7 @@
 #include <tt_stl/assert.hpp>
 
 #include "ttnn/config.hpp"
+#include "ttnn/device_operation_detail.hpp"
 
 namespace ttnn::operations::ccl::common {
 
@@ -675,6 +677,49 @@ std::optional<TensorTopology> all_to_all_output_topology(
     const Tensor& input, std::optional<uint32_t> cluster_axis, int32_t out_dim) {
     return all_to_all_output_topology(
         input.tensor_topology(), cluster_axis, input.device()->shape(), input.logical_shape().rank(), out_dim);
+}
+
+tt::tt_metal::TensorTopology union_topology(
+    const std::vector<std::reference_wrapper<const tt::tt_metal::TensorTopology>>& operands,
+    std::vector<tt::tt_metal::distributed::MeshCoordinate> mesh_coords) {
+    TT_FATAL(!operands.empty(), "Cannot compute the union label of no operands");
+    const tt::tt_metal::TensorTopology& primary = operands.front().get();
+    const auto& primary_placements = primary.placements();
+    if (std::all_of(primary_placements.begin(), primary_placements.end(), [](const auto& placement) {
+            return std::holds_alternative<Replicate>(placement);
+        })) {
+        auto [placements, shape] = ttnn::device_operation::detail::compute_output_placements_and_shape(operands);
+        return tt::tt_metal::TensorTopology(std::move(shape), std::move(placements), std::move(mesh_coords));
+    }
+    // The first operand's rank is the result's; a sharded operand of another rank would have one side of the union
+    // dropped (the union keeps the highest rank), so it is left out. Fully replicated operands never decide the rank
+    // while something is sharded and are kept as they are.
+    const size_t rank = primary.distribution_shape().dims();
+    std::vector<std::reference_wrapper<const tt::tt_metal::TensorTopology>> same_rank;
+    same_rank.reserve(operands.size());
+    for (const auto& operand : operands) {
+        const auto& placements = operand.get().placements();
+        if (operand.get().distribution_shape().dims() == rank ||
+            std::all_of(placements.begin(), placements.end(), [](const auto& placement) {
+                return std::holds_alternative<Replicate>(placement);
+            })) {
+            same_rank.push_back(operand);
+            continue;
+        }
+        // The labels are formatted only when debug logging is on: this runs on every launch of the fused ops.
+        if (tt::LoggerRegistry::instance().get(tt::LogOp)->should_log(spdlog::level::debug)) {
+            log_debug(
+                tt::LogOp,
+                "union_topology leaves out the operand label {}: it is sharded with distribution rank {}, and the "
+                "result keeps the first operand's rank {} ({})",
+                describe(operand.get()),
+                operand.get().distribution_shape().dims(),
+                rank,
+                describe(primary));
+        }
+    }
+    auto [placements, shape] = ttnn::device_operation::detail::compute_output_placements_and_shape(same_rank);
+    return tt::tt_metal::TensorTopology(std::move(shape), std::move(placements), std::move(mesh_coords));
 }
 
 }  // namespace ttnn::operations::ccl::common

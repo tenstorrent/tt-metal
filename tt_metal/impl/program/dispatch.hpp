@@ -4,13 +4,11 @@
 
 #pragma once
 
-#include <circular_buffer.hpp>
 #include <device.hpp>
 #include <tt-metalium/program.hpp>
-#include <stdint.h>
+#include <cstdint>
 #include "impl/dispatch/vector_aligned.hpp"
 #include <tt_stl/span.hpp>
-#include <array>
 #include <functional>
 #include <memory>
 #include <unordered_map>
@@ -24,8 +22,6 @@
 #include "sub_device_types.hpp"
 #include "dispatch/worker_config_buffer.hpp"
 #include "trace/trace_node.hpp"
-
-#include <umd/device/types/core_coordinates.hpp>
 
 namespace tt::tt_metal {
 class Device;
@@ -157,9 +153,8 @@ std::vector<CrossNodeDFBCoreGroup> partition_cores_by_cross_node_dfb_payload(
         per_core_cross_node_dfbs,
     uint8_t num_program_slots);
 
-// Dense per-core PrefetcherPipe slot payload. The relay word of each slot also carries the
-// pipe's active credit lane count, resolved from the program's attachment at build time so a
-// relay / Attach that armed lanes after this core's participant record was added is picked up.
+// Dense per-core PrefetcherPipe slot payload. The relay word of each slot also carries the bound
+// pipe's credit lane count, which the participant record copied from the pipe at bind.
 std::vector<uint32_t> build_prefetcher_pipe_config_payload(
     const detail::ProgramImpl& program,
     const std::vector<detail::ProgramImpl::PrefetcherPipeParticipant>& sparse_participants);

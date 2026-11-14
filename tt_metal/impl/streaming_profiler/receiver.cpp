@@ -23,16 +23,15 @@
 #include <tt_stl/assert.hpp>
 
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
-#include <umd/device/cluster.hpp>
-#include <umd/device/io_window/io_window.hpp>
-#include <umd/device/pcie/tlb_handle.hpp>
-#include <umd/device/pcie/tlb_window.hpp>
-#include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/types/io_window_config.hpp>
+#include <tt-umd/io_window/io_window.hpp>
+#include <tt-umd/pcie/tlb_handle.hpp>
+#include <tt-umd/pcie/tlb_window.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
+#include <tt-umd/types/io_window_config.hpp>
 
-#include "context/metal_context.hpp"
+#include "context/metal_env_impl.hpp"
 #include "llrt/tt_cluster.hpp"
-#include "llrt/zone_meta.hpp"
+#include "llrt/observability_event_meta.hpp"
 #include "impl/streaming_profiler/spsc_packet.h"
 
 namespace tt::tt_metal::streaming_profiler {
@@ -176,15 +175,15 @@ Receiver::Receiver(tt::Cluster& cluster, std::unique_ptr<DevicePrograms> program
 }
 
 std::unique_ptr<Receiver> Receiver::create(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-    auto& mc = MetalContext::instance(mesh_device->impl().get_context_id());
+    auto& env = mesh_device->impl().metal_env();
     auto programs = std::make_unique<DevicePrograms>();
     if (!programs->boot(mesh_device)) {
         return nullptr;
     }
     // The first call sleeps while it measures the rate, so it is made here rather than on the sync thread.
     static_cast<void>(ns_per_tsc_tick());
-    service().register_builtin_consumers(mc.rtoptions());
-    std::unique_ptr<Receiver> receiver(new Receiver(mc.get_cluster(), std::move(programs)));
+    service().register_builtin_consumers(env.get_rtoptions());
+    std::unique_ptr<Receiver> receiver(new Receiver(env.get_cluster(), std::move(programs)));
     service().attach_receiver(*receiver);
     for (uint32_t d = 0; d < receiver->capture_context().devices.size(); d++) {
         std::vector<Stream*> owned;
@@ -217,13 +216,13 @@ Receiver::~Receiver() {
         programs_->verify_completeness(d);
     }
     log_report();
-    const uint64_t foreign = llrt::ZoneMetaRegistry::instance().foreign_sections();
-    const uint64_t collisions = llrt::ZoneMetaRegistry::instance().collisions();
+    const uint64_t foreign = llrt::ObservabilityEventMetaRegistry::instance().foreign_sections();
+    const uint64_t collisions = llrt::ObservabilityEventMetaRegistry::instance().collisions();
     if (collisions != 0 || foreign != 0) {
         log_warning(
             tt::LogMetal,
-            "[streaming profiler] zone names: {} id collisions, {} foreign metadata sections ignored (the JIT "
-            "cache holds ELFs from a different .tt_zone_meta layout)",
+            "[streaming profiler] event names: {} id collisions, {} foreign metadata sections ignored (the JIT "
+            "cache holds ELFs from a different .tt_event_descriptor_meta layout)",
             collisions,
             foreign);
     }

@@ -63,7 +63,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     const std::optional<ttnn::Tensor>& kv_actual_isl_tensor,
     std::optional<uint32_t> kv_cache_num_layers,
     std::optional<uint32_t> kv_cache_layer_idx,
-    const std::optional<ttnn::Tensor>& kv_valid_end_tensor) {
+    const std::optional<ttnn::Tensor>& kv_valid_end_tensor,
+    bool dynamic_local_n) {
     auto strategy = use_column_major_ccl ? ttnn::ccl::CoreAllocationStrategy::COL_MAJOR
                                          : ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR;
 
@@ -105,7 +106,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         kv_actual_isl_tensor,
         kv_cache_num_layers,
         kv_cache_layer_idx,
-        kv_valid_end_tensor);
+        kv_valid_end_tensor,
+        dynamic_local_n);
     return outputs;
 }
 
@@ -352,6 +354,14 @@ void bind_sdpa(nb::module_& mod) {
             attn_mask_block_map (ttnn.Tensor, optional): Defaults to `None`. Non causal with `attn_mask` only. [Bm x Hm x ceil(Sq / q_chunk) x ceil(Sk / k_chunk)] int32/uint32 ROW_MAJOR with the mask's batch and head dims, nonzero where a (q chunk, k chunk) block of the mask has a visible entry. Blocks flagged 0 are not read or computed; rows whose every block is 0 are unspecified. Heads whose K/V chunks are forwarded between their cores keep those chains, and stream every block, while fewer than 40 percent of the blocks in a sample of the map's rows are masked; skipping blocks pays only past that.
 
 
+        Grouped-query attention (non-causal, `nqh > nkh`) is scheduled automatically. Cores working on the query
+        heads of one KV head can share its K/V (read once, then forwarded core to core). With a single K chunk
+        (`k_chunk_size >= s`, `fp32_dest_acc_en=False`), each core also keeps a KV head's K/V across its consecutive
+        query chunks instead of re-reading it. When `q_chunk_size` does not divide `s`, a query chunk may run on into
+        the next query head of its group if that lowers the most query chunks any core runs (no `attn_mask`, no
+        `attention_sink`, tile-aligned unpadded `s`, `nkh == nvh`). None of this changes the output layout. Head
+        crossing can change the rounding of some rows with `fp32_dest_acc_en=False`, not the accuracy.
+
         Returns:
             ttnn.Tensor: the output tensor [b x nqh x s x dh] (or [b x 1 x s x nqh*dh] with output_concat_heads).
 
@@ -419,6 +429,8 @@ void bind_sdpa(nb::module_& mod) {
                 q_isl or tp*q_isl (tp = mesh_size/sp) — the only two values it can legally take.
             block_cyclic_cache_tp_sharded (bool): True = the cache is striped across ALL sp*tp devices (linear chip =
                 sp_coord*tp + tp_coord), so stripes = sp*tp and per-stripe chunk = block_cyclic_chunk_local/tp.
+            sub_core_grids (ttnn.CoreRangeSet, optional): restrict work to these cores (default: all cores of the
+                first subdevice). Part of the program-cache key.
         Returns:
             ttnn.Tensor: [1, H, S, v_dim] ROW-MAJOR, DRAM interleaved; dtype matches q (bf16->bf16, fp8->fp8).
         )doc",
@@ -436,7 +448,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("block_cyclic_sp_axis") = nb::none(),
         nb::arg("block_cyclic_chunk_local") = nb::none(),
         nb::arg("block_cyclic_cache_tp_sharded") = false,
-        nb::arg("attention_sink") = nb::none());
+        nb::arg("attention_sink") = nb::none(),
+        nb::arg("sub_core_grids") = nb::none());
 
     ttnn::bind_function<"sparse_sdpa_msa", "ttnn.transformer.">(
         mod,
@@ -569,7 +582,7 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("chunk_start_idx") = nb::none(),
         nb::kw_only(),
         nb::arg("chunk_start_idx_tensor") = nb::none(),
-        nb::arg("scale").noconvert() = nb::none(),
+        nb::arg("scale") = nb::none(),
         nb::arg("memory_config").noconvert() = nb::none(),
         nb::arg("program_config").noconvert() = nb::none(),
         nb::arg("compute_kernel_config").noconvert() = nb::none(),
@@ -621,7 +634,7 @@ void bind_sdpa(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("joint_strategy"),
         nb::arg("program_config").noconvert(),
-        nb::arg("scale").noconvert() = nb::none(),
+        nb::arg("scale") = nb::none(),
         nb::arg("compute_kernel_config").noconvert() = nb::none());
 
     const auto* const ring_joint_doc = R"doc(
@@ -722,6 +735,11 @@ void bind_sdpa(nb::module_& mod) {
                 slot_id[0] * kv_cache_num_layers + kv_cache_layer_idx.
             kv_cache_layer_idx (int, optional): Layer within the cache-user slot. None uses 0 and the
                 value must be less than kv_cache_num_layers.
+            dynamic_local_n (bool): Treat the per-chip padded sequence length as a runtime quantity: the program
+                hash ignores it, so one cached program serves every per-chip length up to the persistent
+                buffers' capacity, and a cache hit rewrites the per-core work split only when the length changed.
+                Requires logical_n as a tensor, non-causal MHA with a separate V and no joint tensors. The
+                program config should then be fixed per capacity, not per length. Defaults to False.
             kv_valid_end_tensor (ttnn.Tensor, optional): Global count of real tokens, read on-device;
                 attention stops at the tile holding the last real token of a partially filled chunk. Output
                 rows in the tiles past it are not written and hold unspecified values. Same one-element
@@ -795,7 +813,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("kv_actual_isl_tensor").noconvert() = nb::none(),
         nb::arg("kv_cache_num_layers").noconvert() = nb::none(),
         nb::arg("kv_cache_layer_idx").noconvert() = nb::none(),
-        nb::arg("kv_valid_end_tensor").noconvert() = nb::none());
+        nb::arg("kv_valid_end_tensor").noconvert() = nb::none(),
+        nb::arg("dynamic_local_n") = false);
 
     const auto* const ring_mla_doc = R"doc(
         Causal Ring MLA attention over a single KV tensor.

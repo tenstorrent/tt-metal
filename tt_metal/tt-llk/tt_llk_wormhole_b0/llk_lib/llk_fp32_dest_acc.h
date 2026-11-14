@@ -35,17 +35,19 @@ constexpr std::uint32_t MATH_DONE    = 0x46504110; // 'FPA' | 0x10
  *      have landed, so they are in effect before either thread is released.
  *
  * @tparam thread_id: TRISC thread compiling this specialization, values = <UnpackThreadId/MathThreadId/PackThreadId>
- * @param enable: MATH only. True to enable FP32 dest accumulation, false to disable.
+ * @param enable: True to enable FP32 dest accumulation, false to disable. MATH programs the CFG; every
+ *        thread records it for LLK_ASSERT_FP32_DEST_ACC_EN_MATCHES, so all three must pass the same value.
  * @note All three TRISC threads must call their specialization together. Not supported on Quasar.
  */
 template <ThreadId thread_id>
-inline void _llk_set_fp32_dest_acc_(bool enable = false)
+inline void _llk_set_fp32_dest_acc_(const bool enable)
 {
     static_assert(
         (thread_id == ThreadId::MathThreadId) || (thread_id == ThreadId::UnpackThreadId) || (thread_id == ThreadId::PackThreadId),
         "_llk_set_fp32_dest_acc_ requires a TRISC thread");
 
     tensix_sync();
+    LLK_ASSERT_BLOCK(llk_assert_fp32_dest_acc_en = enable);
 
     if constexpr (thread_id == ThreadId::UnpackThreadId)
     {

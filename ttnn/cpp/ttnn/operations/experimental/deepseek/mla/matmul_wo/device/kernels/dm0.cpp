@@ -5,6 +5,9 @@
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 #include "matmul_wo_ring_common.h"
 
 // Triple buffering constants
@@ -83,15 +86,18 @@ void kernel_main() {
     constexpr uint32_t w_size_per_layer = w_max_total_blocks * w_bytes_per_block;
     constexpr uint32_t w_layer_offset = layer_id * w_size_per_layer;
 
-    // Offset for layer_id
-    uint32_t w_dram_read_offset = w_layer_offset + w_addr;
+    // This core reads its own DRAM bank of w, by byte offset into the tensor's region of that bank
+    const auto w_accessor = TensorAccessor(w_args, w_addr);
+    const BankView w_bank(w_accessor);
+    uint32_t w_read_offset = w_layer_offset;
 
-    // DRAM bank's base NOC address
-    const uint64_t dram_noc_addr = get_noc_addr_from_bank_id<true>(dram_bank_id, /*bank_address_offset=*/0);
+    const Noc noc;
 
     //-------------------------------------------------------------------------
     // CB addresses
     //-------------------------------------------------------------------------
+    // The slots are addressed directly: the next block's reads are issued before the
+    // previous block is pushed, so the CB's write pointer lags the slot being filled.
     const uint32_t w_cb_base_addr = cb_r2c_w.get_write_ptr();
 
     // Precompute slot addresses (avoid multiply in hot loop)
@@ -107,12 +113,6 @@ void kernel_main() {
     }
 
     //-------------------------------------------------------------------------
-    // Expert loop
-    //-------------------------------------------------------------------------
-    // Set w state once before loop (will be reused for all txns)
-    noc_async_read_one_packet_set_state<true>(dram_noc_addr, w_bytes_per_txn, vchannel);
-
-    //-------------------------------------------------------------------------
     // Variables to track pipeline state
     //-------------------------------------------------------------------------
     uint32_t trid_to_issue = 1, trid_to_wait = 1, slot_to_issue = 0;
@@ -125,13 +125,19 @@ void kernel_main() {
     // Pipelined reading of W0/W1
     //-------------------------------------------------------------------------
     for (uint32_t block_id = 0; block_id < w_total_blocks; ++block_id) {
-        // Issue reads with current trid
-        noc_async_read_set_trid(trid_to_issue);
+        // Program the read state (bank, txn size, VC) with the trid this block's reads carry
+        noc.set_async_read_state<NocOptions::TXN_ID | NocOptions::CUSTOM_VC, w_bytes_per_txn>(
+            w_bank, w_bytes_per_txn, {.bank_id = dram_bank_id}, {.vc = vchannel, .trid = trid_to_issue});
 
         for (uint32_t txn_id = 0; txn_id < w_txns_per_block; ++txn_id) {
-            noc_async_read_one_packet_with_state_with_trid</*skip_ptr_update=*/false, /*skip_cmdbuf_chk=*/true>(
-                dram_noc_addr, w_dram_read_offset, slot_addr[slot_to_issue][txn_id], trid_to_issue);
-            w_dram_read_offset += w_bytes_per_txn;
+            noc.async_read_with_state<NocOptions::TXN_ID, w_bytes_per_txn>(
+                w_bank,
+                CoreLocalMem<uint32_t>(slot_addr[slot_to_issue][txn_id]),
+                w_bytes_per_txn,
+                {.bank_id = dram_bank_id, .offset_bytes = w_read_offset},
+                {},
+                {.trid = trid_to_issue});
+            w_read_offset += w_bytes_per_txn;
         }
 
         ADVANCE_SLOT(slot_to_issue);
@@ -139,7 +145,7 @@ void kernel_main() {
 
         // Only when we first start the pipeline, we don't have any txns in flight
         if (txns_in_flight) {
-            noc_async_read_barrier_with_trid(trid_to_wait);
+            noc.async_read_barrier<NocOptions::TXN_ID>({.trid = trid_to_wait});
             cb_r2c_w.push_back(w_tiles_per_block);
 
             ADVANCE_TRID(trid_to_wait);
@@ -153,7 +159,7 @@ void kernel_main() {
     }
 
     // Drain the pipeline - the last txn in flight
-    noc_async_read_barrier_with_trid(trid_to_wait);
+    noc.async_read_barrier<NocOptions::TXN_ID>({.trid = trid_to_wait});
     cb_r2c_w.push_back(w_tiles_per_block);
 
     // We have one extra slot reserved, which we won't use.

@@ -17,9 +17,11 @@ import pytest
 import torch
 from loguru import logger
 
+from models.common.ci_failure import DeterministicFailure, record_deterministic_failure
 from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM, resolve_trace_region_size
-from models.tt_transformers.demo.trace_region_config import get_logical_sku, get_supported_trace_region_size
-from tests.scripts.common import get_updated_device_params, run_process_and_get_result
+from models.ttt_compat.demo.trace_region_config import get_logical_sku, get_supported_trace_region_size
+from tests.scripts.common import run_process_and_get_result
+from tt_py_test_utils_common.device_params import get_updated_device_params
 
 # Constants for device configurations
 SIX_U_NUM_PCIE_DEVICES = 32
@@ -1209,6 +1211,10 @@ def pytest_runtest_makereport(item, call):
     # store test results for each phase of a call, which can
     # be "setup", "call", "teardown"
     item.stash.setdefault(phase_report_key, {})[rep.when] = rep
+
+    # Tell CI auto-retry that a re-run cannot fix this job (no-op unless CI_FAILURE_RECORDS is set)
+    if rep.failed and call.excinfo is not None and call.excinfo.errisinstance(DeterministicFailure):
+        record_deterministic_failure(f"{item.nodeid}: {call.excinfo.value}")
 
 
 @pytest.hookimpl(hookwrapper=True)

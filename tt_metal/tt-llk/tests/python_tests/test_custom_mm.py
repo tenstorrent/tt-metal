@@ -16,13 +16,15 @@ A standard tiled matmul ``C[M,N] = A[M,K] @ B[K,N]`` with the header's tile-shap
 
   in0 (A)  -> SrcB, tile shape ``[{1,2,4,8}, 32]``: only the top two faces, each
               ``face_r_dim = M`` rows tall. So M is restricted to {1,2,4,8}.
-  in1 (B)  -> SrcA, full ``[32,32]`` tiles.
-  rt_dim = 1, ct_dim in [1,16], kt_dim in [1,256], LoFi only.
+  in1 (B)  -> SrcA, full ``[32,32]`` tiles, or 2-face ``[32,16]`` ones for N = 16 * ct_dim
+              (``tile_c = 16``), which give ``[M,16]`` output tiles holding a single face.
+  rt_dim = 1, ct_dim in [1,34] (bounded by DEST capacity), kt_dim in [1,256], LoFi only.
 
-``split_acc=false`` / ``finalize=false``, so there is no finalization merge and DEST
-holds the plain accumulated product (custom_mm.h: finalize must be false when split_acc
-is false). The result is packed as ``ct_dim`` output tiles; inside each tile the two
-16-col faces (M x 16, row-major) sit contiguously, then pad out to a full 32-row tile.
+The SplitAcc layouts accumulate the second k-face apart and finalize on the last call,
+merging it back; the other layouts need no finalization. Either way DEST ends up holding the
+plain product. The result is packed as ``ct_dim`` output tiles; inside each tile the two
+16-col faces (M x 16, row-major), or the one face of a 16-col tile, sit contiguously, then pad
+out to a full 32-row tile.
 
 Only defined lanes are asserted
 -------------------------------
@@ -30,13 +32,13 @@ The LLK writes ONLY the top ``M`` rows of each output face. The remaining ``32 -
 of every 32-row DEST tile are undefined, so the reorder below drops the per-tile padding
 and compares ONLY the ``M`` defined rows of each tile against the golden ``A @ B``.
 
-The ``ct in {7,9,11}`` question
--------------------------------
-The unpack MOP splits each k-tile's ``ct_dim`` output tiles into
-``first_half = ceil(ct/2)`` and ``second_half = floor(ct/2)`` replay ranges
-(llk_unpack_AB_custom_mm.h, the block near lines 130-160). Odd ct_dim is the case where
-the two halves differ in length, so this sweep includes the odd widths 7, 9, 11 (as well
-as 1 and even widths) to settle whether that odd-ct split multiplies correctly.
+Unpack MOP slot splits
+----------------------
+The unpack MOP covers one k-tile per iteration and spreads its ``ct_dim - 1`` reuses over
+one, two or four template slots (llk_unpack_AB_custom_mm.h, _llk_unpack_AB_custom_mm_mop_config_):
+A0 alone for ct = 1, A0 + B for ct 2 and 3, A0..A3 for ct 4 to 34. Odd widths are the ones
+whose slots differ in length, so the sweeps include odd ct (3, 7, 25) as well as 1, even
+widths and both ends of each slot configuration.
 
 Blackhole only: these LLKs live only in the Blackhole tree and cannot run on WH/Quasar.
 This test writes a correct-by-construction golden; runtime pass/fail is a BH-card check.
@@ -49,20 +51,27 @@ import torch
 from conftest import blackhole_only, skip_for_quasar, skip_for_wormhole
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import MatmulGolden
-from helpers.llk_params import DestAccumulation, MathFidelity
+from helpers.llk_params import (
+    CustomMmDestLayout,
+    DestAccumulation,
+    DestSync,
+    MathFidelity,
+)
 from helpers.pack import pack_bfp4_b, pack_bfp8_b, pack_bfp16, pack_fp32
-from helpers.param_config import input_output_formats, parametrize
+from helpers.param_config import input_output_formats, max_dest_tiles, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     CRK_TILE_DIMM,
     CUSTOM_MM_CALLS,
+    CUSTOM_MM_LAYOUT,
+    DEST_SYNC,
     IN_FACE_DIMS,
     NUM_FACES,
     TemplateParameter,
 )
 from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM, FACE_C_DIM
-from helpers.tilize_untilize import tilize, untilize
+from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.unpack import unpack_bfp4_b, unpack_bfp8_b
 from helpers.utils import passed_test
 
@@ -78,8 +87,12 @@ SUPPORTED_M = (1, 2, 4, 8)
 _PACKERS = {
     DataFormat.Float16_b: pack_bfp16,
     DataFormat.Float32: pack_fp32,
-    DataFormat.Bfp8_b: lambda tensor: bytes(pack_bfp8_b(tensor)),
-    DataFormat.Bfp4_b: lambda tensor: bytes(pack_bfp4_b(tensor)),
+    DataFormat.Bfp8_b: lambda tensor, num_faces=4: bytes(
+        pack_bfp8_b(tensor, num_faces=num_faces)
+    ),
+    DataFormat.Bfp4_b: lambda tensor, num_faces=4: bytes(
+        pack_bfp4_b(tensor, num_faces=num_faces)
+    ),
 }
 
 _BFP_UNPACKERS = {
@@ -90,7 +103,7 @@ _BFP_UNPACKERS = {
 
 @dataclass
 class CUSTOM_MM_PRESERVE_SRC_ZERO_FLAG(TemplateParameter):
-    """Math sets the Src zero flag to keep before the custom_mm init, as a preceding copy_tile_init does."""
+    """Math sets the Src zero flag to keep before the custom_mm init, as a preceding copy_init does."""
 
     preserve: bool = False
 
@@ -98,8 +111,18 @@ class CUSTOM_MM_PRESERVE_SRC_ZERO_FLAG(TemplateParameter):
         return f"constexpr bool CUSTOM_MM_PRESERVE_SRC_ZERO_FLAG = {str(self.preserve).lower()};"
 
 
+@dataclass
+class CUSTOM_MM_TRANSPOSE(TemplateParameter):
+    """Each in1 tile holds B^T, and the init transposes each face back on unpack."""
+
+    transpose: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool CUSTOM_MM_TRANSPOSE = {str(self.transpose).lower()};"
+
+
 class CustomMMStimuliConfig(StimuliConfig):
-    """A into buffer_A (kt*2 faces of [M,16]), B tilized into buffer_B (kt*ct full tiles).
+    """A into buffer_A (kt*2 faces of [M,16]), B tilized into buffer_B (kt*ct [32,32] or [32,16] tiles).
 
     Mirrors compressed_utils.CompressedStimuliConfig but has no meta / buffer_C. The
     focused odd-K cases also use a uniform BFP4_b or BFP8_b stream for B.
@@ -128,73 +151,81 @@ class CustomMMStimuliConfig(StimuliConfig):
         write_to_device(location, self.buf_b_addr, self.packed_b)
 
 
-def _run_custom_mm(
+def _build_custom_mm(
     M,
     kt,
     ct,
     formats,
     dest_acc,
-    calls=CUSTOM_MM_CALLS(),
+    torch_a,
+    torch_b,
+    calls=None,
     preserve_zero_flag=False,
-    operands=None,
+    layout=CustomMmDestLayout.Dense,
+    dest_sync=DestSync.Half,
+    tile_c=DEFAULT_TILE_C_DIM,
+    transpose=False,
 ):
-    """Run custom_mm and check it against the golden; return the (M, N) result.
+    """Build (but do not run) one custom_mm variant; return it with its (M, N) golden.
 
-    ``operands`` optionally supplies ``(A, B)`` instead of the seeded random operands.
+    ``tile_c`` is the in1 and output tile width: 32, or 16 for [32,16] in1 tiles.
+    ``transpose`` stores each in1 tile as B^T: [tile_c, 32], so [32,32] or [16,32].
     """
     K = kt * DEFAULT_TILE_R_DIM
-    N = ct * DEFAULT_TILE_C_DIM
+    N = ct * tile_c
+    in1_num_faces = 2 * tile_c // FACE_C_DIM
     in0_format = formats.input_format
     in1_format = formats.input_format_B
     out_format = formats.output_format
     in0_packer = _PACKERS[in0_format]
     in1_packer = _PACKERS[in1_format]
 
-    if operands is None:
-        torch.manual_seed(0)
-        torch_a = torch.randn((M, K), dtype=torch.float32)
-        torch_b = torch.randn((K, N), dtype=torch.float32)
-    else:
-        torch_a, torch_b = operands
-
     # in0 (A -> SrcB): kt*2 faces of [M, 16], column-face order along K, contiguous.
     packed_a = b""
     for i in range(kt * 2):
         packed_a += in0_packer(torch_a[:, i * FACE_C_DIM : (i + 1) * FACE_C_DIM])
 
-    # in1 (B -> SrcA): kt*ct full [32,32] tiles, k-major / c-minor -- the order the SrcA
-    # CFGSHIFTMASK walk reads them (read_transposed=false: contiguous tiles).
+    # in1 (B -> SrcA): kt*ct [32,tile_c] tiles, k-major / c-minor -- the order the SrcA
+    # CFGSHIFTMASK walk reads them (read_transposed=false: contiguous tiles). With transpose
+    # each tile holds B^T, [tile_c, 32]; its faces still go along K in order for a [16,32] tile.
+    in1_tile_dims = (
+        [tile_c, DEFAULT_TILE_R_DIM] if transpose else [DEFAULT_TILE_R_DIM, tile_c]
+    )
     packed_b = b""
     golden_b = torch_b.clone()
     for r in range(kt):
         for c in range(ct):
-            blk = torch_b[
-                r * DEFAULT_TILE_R_DIM : (r + 1) * DEFAULT_TILE_R_DIM,
-                c * DEFAULT_TILE_C_DIM : (c + 1) * DEFAULT_TILE_C_DIM,
-            ]
-            # Face-major (tilized) layout inside each 32x32 tile. Tilize in the input
+            rows = slice(r * DEFAULT_TILE_R_DIM, (r + 1) * DEFAULT_TILE_R_DIM)
+            cols = slice(c * tile_c, (c + 1) * tile_c)
+            blk = torch_b[rows, cols]
+            if transpose:
+                blk = blk.T.contiguous()
+            # Face-major (tilized) layout inside each in1 tile. Tilize in the input
             # format so the returned dtype matches the packer (pack_fp32 rejects a
-            # bfloat16 tensor, which is tilize's default Float16_b dtype).
-            tiled_blk = tilize(
-                blk.reshape(-1),
+            # bfloat16 tensor, which is tilize_block's default Float16_b dtype).
+            tiled_blk = tilize_block(
+                blk,
+                dimensions=in1_tile_dims,
                 stimuli_format=in1_format,
-                tile_dimensions=[DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM],
+                tile_dimensions=in1_tile_dims,
+            ).flatten()
+            # BFP packers need the face count; the others pack the whole tensor.
+            packed_tile = (
+                in1_packer(tiled_blk, num_faces=in1_num_faces)
+                if in1_format in _BFP_UNPACKERS
+                else in1_packer(tiled_blk)
             )
-            packed_tile = in1_packer(tiled_blk)
             packed_b += packed_tile
             if in1_format in _BFP_UNPACKERS:
-                golden_b[
-                    r * DEFAULT_TILE_R_DIM : (r + 1) * DEFAULT_TILE_R_DIM,
-                    c * DEFAULT_TILE_C_DIM : (c + 1) * DEFAULT_TILE_C_DIM,
-                ] = untilize(
-                    _BFP_UNPACKERS[in1_format](packed_tile),
-                    tile_dimensions=[DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM],
-                ).reshape(
-                    DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM
+                stored = untilize_block(
+                    _BFP_UNPACKERS[in1_format](packed_tile, num_faces=in1_num_faces),
+                    dimensions=in1_tile_dims,
+                    tile_dimensions=in1_tile_dims,
                 )
+                golden_b[rows, cols] = stored.T if transpose else stored
 
     # Golden: plain A @ B (LoFi), row-major, NOT tilized -- the device-side layout is
-    # undone in the result reorder below. Instantiate MatmulGolden directly (not via
+    # undone in _device_rows. Instantiate MatmulGolden directly (not via
     # get_golden_generator) so the compile-producer's dummy generator does not break the
     # narrow-M reshape.
     golden = MatmulGolden()(
@@ -217,12 +248,19 @@ def _run_custom_mm(
         formats,
         templates=[
             CRK_TILE_DIMM(c_dimm=ct, r_dimm=1, k_dimm=kt),
-            calls,
+            calls if calls is not None else CUSTOM_MM_CALLS(),
             CUSTOM_MM_PRESERVE_SRC_ZERO_FLAG(preserve_zero_flag),
+            CUSTOM_MM_TRANSPOSE(transpose),
+            CUSTOM_MM_LAYOUT(layout),
+            DEST_SYNC(dest_sync),
         ],
         runtimes=[
-            # Result / in0 use 2 faces (M x 16 each); in1 (B) uses 4 full faces.
-            NUM_FACES(num_faces=2, num_faces_A=2, num_faces_B=4),
+            # Faces: in0 2 (M x 16 each); in1 4 and result 2, or 2 and 1 for 16-wide tiles.
+            NUM_FACES(
+                num_faces=tile_c // FACE_C_DIM,
+                num_faces_A=2,
+                num_faces_B=in1_num_faces,
+            ),
             IN_FACE_DIMS(in0_face_r_dim=M),
         ],
         variant_stimuli=CustomMMStimuliConfig(
@@ -230,23 +268,73 @@ def _run_custom_mm(
         ),
         dest_acc=dest_acc,
     )
+    return configuration, golden
 
-    res = configuration.run().result
+
+def _device_rows(res, M, ct, out_format, tile_c=DEFAULT_TILE_C_DIM):
+    """Undo the device result layout into row-major (M, N).
+
+    The device packs ct tiles; within a tile the tile_c // 16 faces (M x FACE_C_DIM, row-major)
+    sit contiguously, padded out to a full 32-row tile. Drop the per-tile padding
+    (span = len // ct) and reorder to row-major (M, N). Only the M defined rows survive.
+    """
     torch_out = torch.float32 if out_format == DataFormat.Float32 else torch.bfloat16
     res_tensor = torch.as_tensor(res, dtype=torch_out)
-
-    # Device packs ct tiles; within a tile the two 16-col faces (M x FACE_C_DIM, row-major)
-    # sit contiguously, padded out to a full 32-row tile. Drop the per-tile padding
-    # (span = len // ct) and reorder to row-major (M, N). Only the M defined rows survive.
-    faces_per_tile = DEFAULT_TILE_C_DIM // FACE_C_DIM
-    per_tile = res_tensor.reshape(ct, -1)[:, : M * DEFAULT_TILE_C_DIM]
-    res_tensor = (
+    faces_per_tile = tile_c // FACE_C_DIM
+    per_tile = res_tensor.reshape(ct, -1)[:, : M * tile_c]
+    return (
         per_tile.reshape(ct, faces_per_tile, M, FACE_C_DIM)
         .permute(2, 0, 1, 3)
-        .reshape(M, N)
+        .reshape(M, ct * tile_c)
     )
 
-    golden = golden.reshape(M, N).to(torch_out)
+
+def _seeded_operands(M, kt, ct, tile_c=DEFAULT_TILE_C_DIM):
+    torch.manual_seed(0)
+    torch_a = torch.randn((M, kt * DEFAULT_TILE_R_DIM), dtype=torch.float32)
+    torch_b = torch.randn((kt * DEFAULT_TILE_R_DIM, ct * tile_c), dtype=torch.float32)
+    return torch_a, torch_b
+
+
+def _run_custom_mm(
+    M,
+    kt,
+    ct,
+    formats,
+    dest_acc,
+    calls=CUSTOM_MM_CALLS(),
+    preserve_zero_flag=False,
+    operands=None,
+    layout=CustomMmDestLayout.Dense,
+    tile_c=DEFAULT_TILE_C_DIM,
+    transpose=False,
+):
+    """Run custom_mm and check it against the golden; return the (M, N) result.
+
+    ``operands`` optionally supplies ``(A, B)`` instead of the seeded random operands.
+    """
+    torch_a, torch_b = (
+        operands if operands is not None else _seeded_operands(M, kt, ct, tile_c)
+    )
+    out_format = formats.output_format
+    configuration, golden = _build_custom_mm(
+        M,
+        kt,
+        ct,
+        formats,
+        dest_acc,
+        torch_a,
+        torch_b,
+        calls,
+        preserve_zero_flag,
+        layout,
+        tile_c=tile_c,
+        transpose=transpose,
+    )
+    res_tensor = _device_rows(configuration.run().result, M, ct, out_format, tile_c)
+
+    torch_out = torch.float32 if out_format == DataFormat.Float32 else torch.bfloat16
+    golden = golden.reshape(M, ct * tile_c).to(torch_out)
 
     # K-aware absolute floor (Float16_b / bf16 dest only): the single LoFi MVMUL
     # accumulates the K-deep sum in a bf16 dest, so rounding noise grows ~linearly per
@@ -266,40 +354,132 @@ def _run_custom_mm(
 
     assert passed_test(
         golden, res_tensor, out_format, custom_atol=custom_atol, print_pcc=True
-    ), f"custom_mm matmul failed for M={M} kt={kt} ct={ct} formats={formats}"
+    ), f"custom_mm matmul failed for M={M} kt={kt} ct={ct} tile_c={tile_c} transpose={transpose} formats={formats}"
     return res_tensor
 
 
-# LoFi-only per the header ("fidelity: LoFi only"). Float16_b (16-bit dest) and Float32
-# (32-bit dest) cover both DEST widths.
-CUSTOM_MM_FORMATS = input_output_formats(
-    [DataFormat.Float16_b, DataFormat.Float32], same=True
-)
+# LoFi-only per the header ("fidelity: LoFi only").
+# kt = 2 accumulates over several unpack MOP iterations; kt = 1 is covered by the compact sweep.
+KT_DIMS = [2]
 
-# kt is in [1,256]; small even values cover the paired MOP path.
-KT_DIMS = [2, 4]
-
-# ct in [1,16]. Include 1, an even width, and the odd widths 7/9/11 that the header's
-# first_half/second_half MOP split treats asymmetrically (the ct in {7,9,11} question).
-CT_DIMS = [1, 2, 7, 9, 11, 16]
-
-
-def _dest_acc_for(formats):
-    # Float32 operands require a 32-bit dest; Float16_b uses the 16-bit dest.
-    if formats.input_format == DataFormat.Float32:
-        return DestAccumulation.Yes
-    return DestAccumulation.No
+# Dense layout, 32 DEST rows per output tile: 16 tiles fit a 16-bit SyncHalf DEST (512 rows), 8 a 32-bit one
+# (256 rows). 1 is the one-slot unpack MOP, 2 and 3 the two-slot ones, 4 the narrowest four-slot one and 7 an uneven
+# four-slot split.
+CT_DIMS_16BIT = [1, 2, 3, 4, 7, 16]
+CT_DIMS_32BIT = [1, 3, 4, 7]
 
 
 @blackhole_only
 @parametrize(
-    formats=CUSTOM_MM_FORMATS,
+    formats=input_output_formats([DataFormat.Float16_b], same=True),
     M=list(SUPPORTED_M),
     kt=KT_DIMS,
-    ct=CT_DIMS,
+    ct=CT_DIMS_16BIT,
 )
 def test_custom_mm(formats, M, kt, ct):
-    _run_custom_mm(M, kt, ct, formats, _dest_acc_for(formats))
+    _run_custom_mm(M, kt, ct, formats, DestAccumulation.No)
+
+
+@blackhole_only
+@parametrize(
+    formats=input_output_formats([DataFormat.Float32], same=True),
+    M=list(SUPPORTED_M),
+    kt=KT_DIMS,
+    ct=CT_DIMS_32BIT,
+)
+def test_custom_mm_fp32_dest(formats, M, kt, ct):
+    _run_custom_mm(M, kt, ct, formats, DestAccumulation.Yes)
+
+
+# A Float16_b output from a 32-bit DEST packs from a Float16_b source. The packer counts its DEST strides in pack
+# source datums, not DEST datums, so the layout strides must follow the pack source.
+NARROW_PACK_SRC_FORMATS = [
+    InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+]
+
+
+@blackhole_only
+@parametrize(
+    formats=NARROW_PACK_SRC_FORMATS,
+    M=[1, 8],
+    kt=KT_DIMS,
+    ct=[1, 4, 7],
+)
+def test_custom_mm_fp32_dest_narrow_pack_src(formats, M, kt, ct):
+    _run_custom_mm(M, kt, ct, formats, DestAccumulation.Yes)
+
+
+# The SplitAcc layouts accumulate the second k-face apart and finalize on the last call. kt = 1 finalizes with no
+# MOP iteration before it; the widths cover the one-, two- and four-slot unpack MOPs and fit the Default layout's
+# 8 tiles.
+SPLIT_ACC_LAYOUTS = [
+    CustomMmDestLayout.DefaultSplitAcc,
+    CustomMmDestLayout.DenseSplitAcc,
+]
+
+
+@blackhole_only
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b], same=True),
+    layout=SPLIT_ACC_LAYOUTS,
+    M=[1, 8],
+    kt=[1, 2, 9],
+    ct=[1, 3, 7],
+)
+def test_custom_mm_split_acc(formats, layout, M, kt, ct):
+    _run_custom_mm(M, kt, ct, formats, DestAccumulation.No, layout=layout)
+
+
+@blackhole_only
+@parametrize(layout=SPLIT_ACC_LAYOUTS, ct=[1, 2])
+def test_custom_mm_split_acc_multi_call(layout, ct):
+    """Only the last of several calls into the same tiles finalizes."""
+    formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
+    _run_custom_mm(
+        8,
+        8,
+        ct,
+        formats,
+        DestAccumulation.No,
+        CUSTOM_MM_CALLS(num_calls=4),
+        layout=layout,
+    )
+
+
+# kt above CUSTOM_MM_MAX_MOP_ITERATIONS (128) splits the unpack over several TT_MOPs, with the one-slot MOP at ct = 1
+# and the four-slot one at ct = 4 (Bfp8_b weights keep that B within L1). 256 is the widest kt_dim.
+LONG_K_CASES = [
+    pytest.param(
+        8,
+        200,
+        1,
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+        id="k200-ct1",
+    ),
+    pytest.param(
+        1,
+        256,
+        1,
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+        id="k256-ct1",
+    ),
+    pytest.param(
+        8,
+        130,
+        4,
+        InputOutputFormat(
+            DataFormat.Float16_b, DataFormat.Float16_b, DataFormat.Bfp8_b
+        ),
+        id="k130-ct4-bfp8",
+    ),
+]
+
+
+@blackhole_only
+@pytest.mark.parametrize("M,kt,ct,formats", LONG_K_CASES)
+def test_custom_mm_long_k(formats, M, kt, ct):
+    """kt_dim past one TT_MOP's 128 iterations, at the one- and four-slot unpack MOP widths."""
+    _run_custom_mm(M, kt, ct, formats, DestAccumulation.No)
 
 
 ODD_K_CASES = [
@@ -315,29 +495,11 @@ ODD_K_CASES = [
     pytest.param(
         1,
         9,
-        1,
-        InputOutputFormat(
-            DataFormat.Float16_b, DataFormat.Float16_b, DataFormat.Bfp8_b
-        ),
-        id="k9-ct1-bfp8-post0",
-    ),
-    pytest.param(
-        1,
-        9,
         2,
         InputOutputFormat(
             DataFormat.Float16_b, DataFormat.Float16_b, DataFormat.Bfp4_b
         ),
         id="k9-ct2-bfp4-post1",
-    ),
-    pytest.param(
-        8,
-        9,
-        3,
-        InputOutputFormat(
-            DataFormat.Float16_b, DataFormat.Float16_b, DataFormat.Bfp8_b
-        ),
-        id="k9-ct3-bfp8-post0",
     ),
 ]
 
@@ -345,8 +507,169 @@ ODD_K_CASES = [
 @blackhole_only
 @pytest.mark.parametrize("M,kt,ct,formats", ODD_K_CASES)
 def test_custom_mm_odd_k(formats, M, kt, ct):
-    """Exercise the single-K replay tail with both unpack tunings."""
+    """The post1 unpack tuning (Bfp4_b weights) at the one- and two-slot MOP widths, on a single and an odd kt."""
     _run_custom_mm(M, kt, ct, formats, DestAccumulation.No)
+
+
+# Compact layout: 16 DEST rows per output tile, so a 16-bit SyncHalf DEST (512 rows) holds 32 tiles and a
+# 32-bit one (256 rows) 16. 3 is the widest two-slot unpack MOP and 4 the narrowest four-slot one; 25 is an uneven
+# four-slot split and 32 the widest DEST-legal width.
+COMPACT_CT_DIMS_16BIT = [1, 3, 4, 7, 25, 32]
+COMPACT_CT_DIMS_32BIT = [1, 16]
+
+
+def _run_compact_against_default(
+    M, kt, ct, formats, dest_acc, dest_sync=DestSync.Half, tile_c=DEFAULT_TILE_C_DIM
+):
+    """Run custom_mm in the Compact layout and require it bit-identical to Default-layout runs.
+
+    The reference packs the same B in column slices narrow enough for the default 64-row
+    layout (8 tiles in a 16-bit SyncHalf DEST, 4 in a 32-bit one); only the compact run
+    takes ``dest_sync``. Both do the same MVMULs
+    in the same order, so any difference is a layout or unpack-walk error. A tolerance
+    against the fp32 golden cannot tell those apart from bf16 accumulation rounding at these
+    widths. A PCC check against the golden still guards the case of both being wrong alike.
+    """
+    out_format = formats.output_format
+    torch_a, torch_b = _seeded_operands(M, kt, ct, tile_c)
+    max_default_ct = max_dest_tiles(dest_acc)
+
+    compact, golden = _build_custom_mm(
+        M,
+        kt,
+        ct,
+        formats,
+        dest_acc,
+        torch_a,
+        torch_b,
+        layout=CustomMmDestLayout.Compact,
+        dest_sync=dest_sync,
+        tile_c=tile_c,
+    )
+    slices = []
+    for c0 in range(0, ct, max_default_ct):
+        width = min(max_default_ct, ct - c0)
+        cols = slice(c0 * tile_c, (c0 + width) * tile_c)
+        reference, _ = _build_custom_mm(
+            M,
+            kt,
+            width,
+            formats,
+            dest_acc,
+            torch_a,
+            torch_b[:, cols],
+            layout=CustomMmDestLayout.Default,
+            tile_c=tile_c,
+        )
+        slices.append((width, reference))
+
+    # Build every variant first: in the compile-producer phase the first run() skips the test.
+    compact.prepare()
+    for _, reference in slices:
+        reference.prepare()
+
+    result = _device_rows(compact.run().result, M, ct, out_format, tile_c)
+    expected = torch.cat(
+        [
+            _device_rows(reference.run().result, M, width, out_format, tile_c)
+            for width, reference in slices
+        ],
+        dim=1,
+    )
+
+    bits = torch.int32 if out_format == DataFormat.Float32 else torch.int16
+    mismatched = result.view(bits) != expected.view(bits)
+    assert not mismatched.any(), (
+        f"compact custom_mm differs from the default layout in {int(mismatched.sum())} of "
+        f"{mismatched.numel()} outputs (first at {mismatched.nonzero()[0].tolist()}) for "
+        f"M={M} kt={kt} ct={ct} tile_c={tile_c} formats={formats}"
+    )
+
+    pcc = torch.corrcoef(
+        torch.stack([result.float().flatten(), golden.float().flatten()])
+    )[0, 1]
+    assert pcc > 0.999, f"compact custom_mm PCC {pcc:.6f} against the golden"
+
+
+@blackhole_only
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b], same=True),
+    M=[1, 8],
+    kt=[1, 3],
+    ct=COMPACT_CT_DIMS_16BIT,
+)
+def test_custom_mm_compact(formats, M, kt, ct):
+    _run_compact_against_default(M, kt, ct, formats, DestAccumulation.No)
+
+
+@blackhole_only
+@parametrize(
+    formats=input_output_formats([DataFormat.Float32], same=True),
+    M=[1, 8],
+    kt=[2],
+    ct=COMPACT_CT_DIMS_32BIT,
+)
+def test_custom_mm_compact_fp32_dest(formats, M, kt, ct):
+    _run_compact_against_default(M, kt, ct, formats, DestAccumulation.Yes)
+
+
+@blackhole_only
+@parametrize(
+    formats=NARROW_PACK_SRC_FORMATS,
+    M=[1, 8],
+    kt=[2],
+    ct=COMPACT_CT_DIMS_32BIT,
+)
+def test_custom_mm_compact_fp32_dest_narrow_pack_src(formats, M, kt, ct):
+    """Compact strides from a Float16_b pack source on a 32-bit DEST, half the DEST row width."""
+    _run_compact_against_default(M, kt, ct, formats, DestAccumulation.Yes)
+
+
+# SyncFull gives a 16-bit DEST 1024 rows, room for 34 compact tiles: the widest unpack MOP, whose four slots carry
+# 8, 8, 8 and 8 reuses at ct = 33 and 8, 8, 8 and 9 at ct = 34.
+COMPACT_SYNC_FULL_CT_DIMS = [33, 34]
+
+
+@blackhole_only
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b], same=True),
+    M=[1, 8],
+    kt=[2],
+    ct=COMPACT_SYNC_FULL_CT_DIMS,
+)
+def test_custom_mm_compact_sync_full(formats, M, kt, ct):
+    _run_compact_against_default(
+        M, kt, ct, formats, DestAccumulation.No, dest_sync=DestSync.Full
+    )
+
+
+COMPACT_WIDE_BFP_CASES = [
+    pytest.param(
+        8,
+        3,
+        3,
+        InputOutputFormat(
+            DataFormat.Float16_b, DataFormat.Float16_b, DataFormat.Bfp4_b
+        ),
+        id="k3-ct3-bfp4-post1",
+    ),
+    pytest.param(
+        8,
+        2,
+        32,
+        InputOutputFormat(
+            DataFormat.Float16_b, DataFormat.Float16_b, DataFormat.Bfp4_b
+        ),
+        id="k2-ct32-bfp4-post1",
+    ),
+]
+
+
+@blackhole_only
+@pytest.mark.parametrize("M,kt,ct,formats", COMPACT_WIDE_BFP_CASES)
+def test_custom_mm_compact_wide_bfp(formats, M, kt, ct):
+    """The post1 unpack tuning (Bfp4_b weights) at the widest two-slot MOP and the widest four-slot one."""
+    _run_compact_against_default(M, kt, ct, formats, DestAccumulation.No)
 
 
 # Multi-call: K splits over back-to-back calls that accumulate into one DEST, the way the blaze
@@ -419,3 +742,113 @@ def test_custom_mm_flushes_denormal_srcb_after_keep_flag(ct):
     assert (
         torch.count_nonzero(kept) == 0
     ), f"denormal SrcB rows were not flushed: max |value| {kept.abs().max().item():.3e}"
+
+
+# N = 16: 2-face [32,16] in1 tiles and single-face [M,16] output tiles, so two MVMULs per tile instead of four.
+# The DEST layouts are unchanged; the output face 1 slot stays unused.
+N16 = 16
+N16_CT_DIMS_16BIT = [1, 3, 16]
+# Odd and above 1, so the Compact cases accumulate over several k-tiles.
+N16_COMPACT_KT = 3
+
+
+@blackhole_only
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b], same=True),
+    M=list(SUPPORTED_M),
+    kt=[1, 2],
+    ct=N16_CT_DIMS_16BIT,
+)
+def test_custom_mm_n16(formats, M, kt, ct):
+    _run_custom_mm(M, kt, ct, formats, DestAccumulation.No, tile_c=N16)
+
+
+@blackhole_only
+@parametrize(
+    formats=input_output_formats([DataFormat.Float32], same=True),
+    M=[1, 8],
+    kt=KT_DIMS,
+    ct=[1, 7],
+)
+def test_custom_mm_n16_fp32_dest(formats, M, kt, ct):
+    _run_custom_mm(M, kt, ct, formats, DestAccumulation.Yes, tile_c=N16)
+
+
+@blackhole_only
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b], same=True),
+    layout=[CustomMmDestLayout.Default] + SPLIT_ACC_LAYOUTS,
+    M=[1, 8],
+    kt=[1, 9],
+    ct=[1, 7],
+)
+def test_custom_mm_n16_layouts(formats, layout, M, kt, ct):
+    _run_custom_mm(M, kt, ct, formats, DestAccumulation.No, layout=layout, tile_c=N16)
+
+
+@blackhole_only
+@parametrize(layout=SPLIT_ACC_LAYOUTS, ct=[1, 2])
+def test_custom_mm_n16_split_acc_multi_call(layout, ct):
+    """Only the last of several calls into the same 16-wide tiles finalizes."""
+    formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
+    _run_custom_mm(
+        8,
+        8,
+        ct,
+        formats,
+        DestAccumulation.No,
+        CUSTOM_MM_CALLS(num_calls=4),
+        layout=layout,
+        tile_c=N16,
+    )
+
+
+@blackhole_only
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b], same=True),
+    M=[1, 8],
+    ct=[1, 25, 32],
+)
+def test_custom_mm_n16_compact(formats, M, ct):
+    _run_compact_against_default(
+        M, N16_COMPACT_KT, ct, formats, DestAccumulation.No, tile_c=N16
+    )
+
+
+# Long K and the BFP weight paths (Bfp4_b post1 tuning, Bfp8_b split over several TT_MOPs) with [32,16] in1 tiles.
+N16_BFP_LONG_K_CASE_IDS = ("k256-ct1", "k130-ct4-bfp8", "k9-ct2-bfp4-post1")
+N16_BFP_LONG_K_CASES = [
+    case for case in LONG_K_CASES + ODD_K_CASES if case.id in N16_BFP_LONG_K_CASE_IDS
+]
+assert len(N16_BFP_LONG_K_CASES) == len(N16_BFP_LONG_K_CASE_IDS)
+
+
+@blackhole_only
+@pytest.mark.parametrize("M,kt,ct,formats", N16_BFP_LONG_K_CASES)
+def test_custom_mm_n16_bfp_long_k(formats, M, kt, ct):
+    _run_custom_mm(M, kt, ct, formats, DestAccumulation.No, tile_c=N16)
+
+
+# transpose: each in1 tile holds B^T ([32,32], or [16,32] for N = 16) and the unpacker transposes each face back.
+# The full-width cases are the reference for the narrow ones. SplitAcc changes which DEST slot the second k-face
+# lands in, so it runs alongside Default.
+@blackhole_only
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b], same=True),
+    tile_c=[DEFAULT_TILE_C_DIM, N16],
+    layout=[CustomMmDestLayout.Default, CustomMmDestLayout.DefaultSplitAcc],
+    M=[1, 8],
+    kt=[1, 2],
+    ct=[1, 3, 7],
+)
+def test_custom_mm_transpose(formats, tile_c, layout, M, kt, ct):
+    _run_custom_mm(
+        M,
+        kt,
+        ct,
+        formats,
+        DestAccumulation.No,
+        layout=layout,
+        tile_c=tile_c,
+        transpose=True,
+    )

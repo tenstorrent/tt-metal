@@ -11,10 +11,9 @@
 
 /**
  * @brief Initializes transpose-dest. Configures the ALU state that transpose-dest
- * requires for both 16/32-bit dest (implied math format disabled, en_int32_dest_format off
- * because MOVD2A/B do not honor INT8 math), programming the srcA/srcB ALU format registers from the
- * operand's dest data format and enabling 32-bit dest when EN_32BIT_DEST is set, then loads the
- * bank0 replay buffer with the transpose-dest MOP.
+ * requires for both 16/32-bit dest (en_int32_dest_format off because MOVD2A/B do not honor INT8 math),
+ * programming the srcA/srcB ALU format registers from the operand's dest data format and enabling 32-bit dest
+ * when EN_32BIT_DEST is set, then loads the bank0 replay buffer with the transpose-dest MOP.
  *
  * @note Uses the state-tracked _configure_mov_ops_explicit_alu_data_format_state_ so a following
  * op (datacopy/matmul/reduce/binary) detects the non-default ALU state and reconfigures back to

@@ -11,12 +11,13 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/device/factories/tilize_with_val_padding_factory_helper.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
+using tt::tt_metal::experimental::AdvancedKernelRunArgs;
 
 namespace ttnn::prim {
 
@@ -51,7 +52,7 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreDefaultFac
     uint32_t unpadded_row_size_bytes = a.logical_shape()[-1] * a.element_size();    // Assuming bfloat16 dataformat
     uint32_t padded_row_size_bytes = output.padded_shape()[-1] * a.element_size();  // Assuming bfloat16 dataformat
 
-    TT_FATAL(output.buffer() != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(output.is_allocated(), "Output buffer should be allocated on device!");
 
     // ---------------------------------------------------------------------
     // Program-scope resource names (typed handles → generated dfb:: / tensor:: tokens)
@@ -105,10 +106,10 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreDefaultFac
     uint32_t elem_size = a.element_size();
     uint32_t num_pages_in_row = 1;
     uint32_t page_size = a.logical_shape()[-1] * a.element_size();
-    uint32_t aligned_page_size = a.buffer()->aligned_page_size();
+    uint32_t aligned_page_size = a.mesh_buffer().aligned_page_size();
     uint32_t size_of_valid_data_in_last_page_in_row = a.logical_shape()[-1] * a.element_size();
     if (a.is_sharded() && a.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED) {
-        page_size = a.buffer()->page_size();
+        page_size = a.mesh_buffer().page_size();
         uint32_t shard_width =
             a.shard_spec().has_value() ? a.shard_spec().value().shape[1] : a.nd_shard_spec().value().shard_shape[-1];
         num_pages_in_row = tt::div_up(a.logical_shape()[-1], shard_width);

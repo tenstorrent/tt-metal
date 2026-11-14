@@ -13,6 +13,7 @@
 #include <tt-metalium/workload_descriptor.hpp>
 
 #include <map>
+#include <vector>
 
 namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn::combine {
 
@@ -40,6 +41,9 @@ struct CombineL1 {
     // Both or neither; null: combine allocates its own.
     const tt::tt_metal::GlobalSemaphore* fwd_arrived = nullptr;
     const tt::tt_metal::GlobalSemaphore* final_arrived = nullptr;
+    // The channel counters, channel_semaphore_count of them. Null: combine allocates its own, which only an
+    // op that leaves L1 free may ask for -- see channel_semaphore_count.
+    const std::vector<tt::tt_metal::GlobalSemaphore>* channels = nullptr;
     tt::tt_metal::Buffer* arena = nullptr;  // null: circular buffers are static, at the allocator base
     // DRAM, of forwarding_buffer_spec. Null: combine allocates its own at cache miss and the cached workload keeps
     // it, which pins it wherever DRAM was free in the middle of that first forward.
@@ -48,6 +52,21 @@ struct CombineL1 {
 
 // The spec of combine's forwarding buffer: one page per relayed token, the token plus its forwarding metadata.
 tt::tt_metal::TensorSpec forwarding_buffer_spec(const CombineFabric2dParams& args, uint32_t token_size_bytes);
+
+// How many GlobalSemaphores CombineL1::channels holds for a ring of `ring_extent` chips.
+//
+// Caller-owned rather than allocated here, for two reasons that each suffice. A neighbouring chip bumps
+// vc_arrived and vc_freed across launches, so they must outlive the program exactly as fwd_arrived does.
+// And the routed expert's L1 arena takes every free byte before this op is built: a semaphore allocated at
+// cache miss would have nowhere to go, and one allocated in the arena's shadow would shrink the NEXT call's
+// arena, miss the cache, and allocate again.
+//
+// There are too many of them to be program semaphores. Of the 16 ids a core has, the ring and untilizer
+// handshakes already take 11, and a ring of 8 wants 19 counters.
+//
+// The caller hands over that many and nothing else: which one is which is this file's business, and it reads
+// them in order as credit_done, then each channel's arrived, freed and outbox.
+uint32_t channel_semaphore_count(uint32_t ring_extent);
 
 // Where a chip's routed-expert writers report: its collector's core and the per-step count array on it.
 struct CollectorTarget {

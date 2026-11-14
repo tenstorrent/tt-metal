@@ -6,6 +6,7 @@ import pytest
 import torch
 
 import ttnn
+from tt_py_test_utils_common.utility_functions import is_llk_assert_enabled
 
 INT32_MIN = -(2**31)
 INT32_MAX = 2**31 - 1
@@ -106,6 +107,16 @@ def shape_id(shape) -> str:
 
 def dtype_id(ttnn_dtype) -> str:
     return str(ttnn_dtype).split(".")[-1].lower()
+
+
+# Kernel config buffer size used when LLK asserts are on.
+LLK_ASSERT_KERNEL_CONFIG_SIZE = 100 * 1024
+
+
+def llk_assert_device_params():
+    if not is_llk_assert_enabled():
+        return {}
+    return {"worker_l1_size": ttnn.device.get_max_worker_l1_unreserved_size() - LLK_ASSERT_KERNEL_CONFIG_SIZE}
 
 
 # UINT32 only wraps-tested at exponents 0 and 1, where results stay below 2^31 and round-trip through torch.int32;
@@ -220,6 +231,7 @@ def test_pow_int_rejects_row_major_for_nontrivial_exponent(device, expect_error)
         ttnn.pow(tt_input, 2)
 
 
+@pytest.mark.parametrize("device_params", [llk_assert_device_params()], ids=["l1"], indirect=True)
 @pytest.mark.parametrize("ttnn_dtype, exponent", FULL_RANGE_CASES)
 def test_pow_int_full_range_wraps(ttnn_dtype, exponent, device):
     torch_input = random_full_range_input(DEFAULT_SHAPE, ttnn_dtype)

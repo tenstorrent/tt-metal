@@ -16,7 +16,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/mesh_coord.hpp>
-#include "impl/context/context_types.hpp"
+#include <tt-umd/types/core_coordinates.hpp>
 #include "impl/streaming_profiler/capture_context.hpp"
 
 namespace tt {

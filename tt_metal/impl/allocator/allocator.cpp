@@ -12,9 +12,7 @@
 #include <tt-metalium/buffer.hpp>
 #include "impl/buffers/buffer_impl.hpp"
 #include <enchantum/enchantum.hpp>
-#include <functional>
 #include <algorithm>
-#include <string>
 #include <mutex>
 
 #include <tt_stl/assert.hpp>
@@ -24,8 +22,8 @@
 #include "impl/trace/trace_buffer.hpp"
 #include <tt-metalium/math.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <umd/device/types/xy_pair.hpp>
 #include "impl/allocator/allocator.hpp"
+#include "tt_metal/impl/allocator/allocation_request.hpp"
 
 namespace tt::tt_metal {
 
@@ -164,11 +162,7 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
             "Per-core allocation requires AllocatorMode::HYBRID when opening the device");
         TT_FATAL(buffer_type == BufferType::L1, "per_core_allocation is only supported for L1 buffers");
         using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
-        TT_FATAL(buffer->has_shard_spec(), "per_core_allocation requires a shard_spec with core grid");
-        const auto& grid = buffer->shard_spec().tensor_shard_spec.grid;
-        bool row_major = buffer->shard_spec().tensor_shard_spec.orientation == ShardOrientation::ROW_MAJOR;
-        auto cores = corerange_to_cores(grid, std::nullopt, row_major);
-        TT_FATAL(!cores.empty(), "per_core_allocation: shard grid resolved to zero cores");
+        const std::vector<CoreCoord> cores = allocator::per_node_allocation_nodes(buffer->impl().shard_spec_);
         DeviceAddr alloc_size = buffer->aligned_size_per_bank();
 
         std::unordered_map<CoreCoord, DeviceAddr> addrs;
@@ -207,29 +201,12 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
             // buffer may instead be scanned against just the cores it occupies.
             //
             // Either way the scan spans devices: a mesh buffer holds the same address on all of them.
-            std::vector<CoreCoord> cores_to_scan;
             const bool scope_to_own_cores =
                 experimental::range_lockstep_allocation::is_range_lockstep_allocation(*buffer);
-            // A tensor carries both specs, so the order matters: the distribution spec wins, as it
-            // does in Buffer::num_cores(). Its cores_with_data() is the set that actually gets an
-            // allocation, which the shard grid overstates when the data does not fill it.
-            if (const auto& distribution_spec = buffer->buffer_distribution_spec();
-                scope_to_own_cores && distribution_spec.has_value()) {
-                cores_to_scan = distribution_spec->cores_with_data();
-            } else if (scope_to_own_cores && buffer->has_shard_spec()) {
-                const auto& grid = buffer->shard_spec().tensor_shard_spec.grid;
-                bool row_major = buffer->shard_spec().tensor_shard_spec.orientation == ShardOrientation::ROW_MAJOR;
-                cores_to_scan = corerange_to_cores(grid, std::nullopt, row_major);
-            }
-
-            // Scanning nothing is not a safe fallback -- it would place the buffer without avoiding
-            // anything. set_range_lockstep_allocation() requires one of the two specs and Buffer
-            // carries both through, so this cannot fire, but that invariant now lives in another
-            // file and this is where it is relied on.
-            TT_FATAL(
-                !scope_to_own_cores || !cores_to_scan.empty(),
-                "range lockstep resolved to zero cores to scan; the buffer must carry a shard spec or a "
-                "distribution spec naming the cores it occupies");
+            const std::vector<CoreCoord> cores_to_scan =
+                scope_to_own_cores ? allocator::range_lockstep_allocation_nodes(
+                                         buffer->buffer_distribution_spec(), buffer->impl().shard_spec_)
+                                   : std::vector<CoreCoord>{};
 
             // PrefetcherPipe / persistent L1 regions sit outside BankManager, so lockstep must avoid
             // them too. They stay unscoped under range lockstep: they are reservations this allocator
@@ -428,6 +405,18 @@ size_t AllocatorImpl::get_num_allocated_buffers() const {
     return allocated_buffers_.size();
 }
 
+std::vector<std::pair<DeviceAddr, DeviceAddr>> AllocatorImpl::get_dram_allocations() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return dram_manager_->get_allocated_ranges();
+}
+
+bool AllocatorImpl::is_buffer_allocated_at(size_t unique_id, DeviceAddr address) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return std::any_of(allocated_buffers_.begin(), allocated_buffers_.end(), [&](const Buffer* buffer) {
+        return buffer->unique_id() == unique_id && buffer->address() == address;
+    });
+}
+
 uint32_t AllocatorImpl::get_num_banks(const BufferType& buffer_type) const {
     // Don't lock mutex_ because the number of banks is a constant and does not change.
     switch (buffer_type) {
@@ -454,6 +443,18 @@ DeviceAddr AllocatorImpl::get_bank_size(const BufferType& buffer_type) const {
         }
     }
     return 0;
+}
+
+// Reject reserved, misaligned and out-of-range SRAM before constructing addressed buffers.
+void AllocatorImpl::validate_l1_range(DeviceAddr address, DeviceAddr size, BufferType buffer_type) const {
+    TT_FATAL(
+        buffer_type == BufferType::L1 || buffer_type == BufferType::L1_SMALL,
+        "SRAM range validation requires an L1 buffer type");
+    const DeviceAddr base =
+        buffer_type == BufferType::L1 ? config_->l1_unreserved_base : config_->worker_l1_size - config_->l1_small_size;
+    const DeviceAddr end = base + get_bank_size(buffer_type);
+    TT_FATAL(address % config_->l1_alignment == 0, "SRAM address must be aligned");
+    TT_FATAL(address >= base && address <= end && size <= end - address, "SRAM range is outside allocatable L1");
 }
 
 uint32_t AllocatorImpl::get_dram_channel_from_bank_id(uint32_t bank_id) const {

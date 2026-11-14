@@ -15,9 +15,9 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-import ttnn
 import ttml
 from bf16_ulp import assert_within_bf16_ulp
+from tensor_helpers import as_stored, sigmoid, to_device, to_host
 
 pytestmark = pytest.mark.requires_device
 
@@ -34,23 +34,6 @@ MAX_ULP_P99_DGATE = 10.0
 # groups run and the runtime-arg walk crosses the group boundary.
 SHAPES = [(1, 32, 32), (1, 64, 64), (1, 32, 96), (1, 128, 128), (1, 64, 512), (2, 2048, 128), (1, 4192, 32)]
 AUTOGRAD_SHAPES = [(1, 64, 64), (2, 128, 128)]
-
-
-def to_device(array):
-    return ttml.autograd.Tensor.from_numpy(array.astype(np.float32), layout=ttnn.Layout.TILE)
-
-
-def to_host(ttnn_tensor):
-    return ttml.autograd.create_tensor(ttnn_tensor).to_numpy().astype(np.float64)
-
-
-def as_stored(array):
-    """``array`` as bf16 on device, so the oracle sees what the kernel received."""
-    return to_host(to_device(array).get_value())
-
-
-def sigmoid(x):
-    return 1.0 / (1.0 + np.exp(-x))
 
 
 def reference_forward(gate, up):

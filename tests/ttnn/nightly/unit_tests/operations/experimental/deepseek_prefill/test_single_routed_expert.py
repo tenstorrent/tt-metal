@@ -8,6 +8,8 @@ Minimal single-device, single-expert test for TtRoutedExpert profiling.
 The simplest scenario: 1 chip, 1 expert, minimal dimensions.
 """
 
+import functools
+
 import pytest
 import torch
 from loguru import logger
@@ -37,6 +39,11 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import (
 )
 from tests.ttnn.utils_for_testing import comp_pcc
 
+# Every test in this module takes the function-scoped `device` fixture without
+# parametrizing device_params, so the device is opened once per module rather than
+# once per test.
+pytestmark = pytest.mark.use_module_device
+
 SINGLE_CHIP_MESH_PARAMS = [
     pytest.param(
         1,
@@ -60,6 +67,83 @@ _SITU_BETA_GATE = KimiK3Config.ACTIVATION_SITU_BETA
 _SITU_BETA_UP = KimiK3Config.ACTIVATION_SITU_LINEAR_BETA
 
 
+@functools.lru_cache(maxsize=1)
+def _cached_expert_weights(hidden_dim, emb_dim, weight_scale):
+    """The three projection weights for one expert, plus the RNG state left behind by drawing them.
+
+    Every run_* helper in this directory seeds 42, draws these three tensors, and then draws its
+    activations from the same stream. The weights are therefore a pure function of the dims and
+    the scale, while the activations depend on where the stream has been left -- so the state is
+    returned alongside and restored by the caller, keeping every drawn value bit-identical to
+    drawing the weights inline.
+
+    maxsize=1 because the sweeps hold a model fixed while they vary the active-token count, so
+    consecutive calls share dims for 89% of the cases; a larger cache holds hundreds of MB of
+    fp32 weights to catch the rest, and the goldens these feed have already overflowed a CI
+    runner once.
+    """
+    torch.manual_seed(42)
+    weights = {
+        "gate_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * weight_scale,
+        "up_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * weight_scale,
+        "down_proj": torch.randn(emb_dim, hidden_dim, dtype=torch.float32) * weight_scale,
+    }
+    return weights, torch.get_rng_state()
+
+
+def expert_weights(hidden_dim, emb_dim, weight_scale):
+    """Expert weights in torch.nn.Linear convention (out_features, in_features), as TorchExpert reads them.
+
+    Leaves the global RNG exactly where drawing the weights inline would have, so the caller's
+    next draw is unchanged. The returned tensors are shared between callers: read them, and copy
+    before any in-place write.
+    """
+    weights, rng_state = _cached_expert_weights(hidden_dim, emb_dim, weight_scale)
+    torch.set_rng_state(rng_state)
+    return dict(weights)
+
+
+@functools.lru_cache(maxsize=1)
+def _cached_expert_golden(hidden_dim, emb_dim, weight_scale, active_tokens, activation):
+    """The activations and the torch reference output for one expert case, plus the trailing RNG state.
+
+    The reference is three fp32 CPU matmuls over the full active slice and profiles as the single
+    largest cost in these files -- larger than the device work they exist to grade. It depends only
+    on the dims, the scale and the activation, so every layout and weight-placement variation of the
+    same case recomputes an identical tensor.
+
+    maxsize=1 is enough only because the sweeps parametrize the layout axes ABOVE the dims, so the
+    variations sharing a reference run back to back. Moving the dims above them again would scatter
+    those repeats and silently turn this into a pure cost. See expert_weights for the RNG contract.
+    """
+    weights = expert_weights(hidden_dim, emb_dim, weight_scale)
+    torch_active = torch.randn(active_tokens, emb_dim, dtype=torch.float32)
+    torch_expert = TorchExpert(
+        emb_dim,
+        hidden_dim,
+        weights,
+        activation=_TORCH_ACTIVATION[activation],
+        situ_beta=_SITU_BETA_GATE,
+        situ_linear_beta=_SITU_BETA_UP,
+    )
+    with torch.no_grad():
+        torch_output_active = torch_expert(torch_active)
+    return torch_active, torch_output_active, torch.get_rng_state()
+
+
+def expert_golden(hidden_dim, emb_dim, weight_scale, active_tokens, activation):
+    """Cached (activations, reference output) for one expert case.
+
+    Leaves the global RNG where drawing the activations inline would have. Both tensors are shared
+    between callers: read them, and copy before any in-place write.
+    """
+    torch_active, torch_output_active, rng_state = _cached_expert_golden(
+        hidden_dim, emb_dim, weight_scale, active_tokens, activation
+    )
+    torch.set_rng_state(rng_state)
+    return torch_active, torch_output_active
+
+
 def run_single_routed_expert(
     device,
     allocated_tokens: int,
@@ -73,6 +157,7 @@ def run_single_routed_expert(
     weights_dtype=ttnn.bfloat4_b,
     pcc_threshold: float = 0.97,
     min_cap_frac: tuple[float, float] | None = None,
+    count_overshoot: int = 0,
 ):
     """
     Simplest scenario: 1 chip, 1 expert. Shared body for the per-model entrypoints below — they
@@ -107,6 +192,10 @@ def run_single_routed_expert(
     each element is the floor for both of that half's tails). Set it on any case whose point is the saturated
     region: without it, a change to ``weight_scale``, the dims or the seed would quietly drop
     the case back into the near-linear middle of both tanhs while still passing.
+
+    ``count_overshoot`` is added to the token count handed to the device only, so the op sees
+    more active rows than its ``allocated_tokens`` capacity. The kernels must clamp it to the
+    capacity; the reference and the PCC still cover the ``active_tokens`` real rows.
     """
     if active_tokens is None:
         active_tokens = allocated_tokens
@@ -122,35 +211,16 @@ def run_single_routed_expert(
     logger.debug(f"Testing single routed expert: {allocated_tokens=}, {active_tokens=}, {emb_dim=}, {hidden_dim=}")
     logger.debug(f"Mesh: {device.shape}, num_devices={device.get_num_devices()}")
 
-    # Create random weights
-    torch.manual_seed(42)
-    weights = {
-        "gate_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * weight_scale,
-        "up_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * weight_scale,
-        "down_proj": torch.randn(emb_dim, hidden_dim, dtype=torch.float32) * weight_scale,
-    }
-
-    # Create torch reference
-    torch_expert = TorchExpert(
-        emb_dim,
-        hidden_dim,
-        weights,
-        activation=torch_activation,
-        situ_beta=_SITU_BETA_GATE,
-        situ_linear_beta=_SITU_BETA_UP,
-    )
+    weights = expert_weights(hidden_dim, emb_dim, weight_scale)
 
     # 2D input (allocated_tokens, emb_dim) — the single expert's dispatch buffer. The first
     # active_tokens rows hold real data; the rest is zero padding (a no-op when active==allocated).
-    torch_active = torch.randn(active_tokens, emb_dim, dtype=torch.float32)
+    torch_active, torch_output_active = expert_golden(hidden_dim, emb_dim, weight_scale, active_tokens, activation)
     torch_input = torch.zeros(allocated_tokens, emb_dim, dtype=torch.float32)
     torch_input[:active_tokens] = torch_active
     logger.debug(f"Input shape: {torch_input.shape}")
 
-    # Run torch reference over the active slice only.
-    logger.debug("Running torch reference...")
     with torch.no_grad():
-        torch_output_active = torch_expert(torch_active)
         if min_cap_frac is not None:
             # How far into each cap the inputs actually reach, so a saturation case can't
             # silently degrade into a near-linear run. Only the cases that assert it pay for the
@@ -216,7 +286,7 @@ def run_single_routed_expert(
         )
 
     global_expert_idx_tt = _make_idx_tensor([0])
-    expert_token_counts_tt = _make_idx_tensor([active_tokens])
+    expert_token_counts_tt = _make_idx_tensor([active_tokens + count_overshoot])
     expert_region_offsets_tt = _make_idx_tensor([0])
 
     # Create TtRoutedExpert
@@ -329,6 +399,10 @@ _ISL_FUNCTIONAL_SWEEP = [251, 768, 3001]
 _ISL_EXHAUSTIVE_SWEEP = [0, 128, 256, 512, 768, 1024, 2048, 4096, 5120]
 _ISL_EXHAUSTIVE_MODELS = ("kimi_k2_7", "glm_53")
 
+# Perf sweep: the exhaustive sweep plus 32/64/96 -- one to three tile-rows, below its first live
+# count -- so the perf gates also cover an expert that receives only a handful of tokens.
+_ISL_PERF_SWEEP = sorted([32, 64, 96] + _ISL_EXHAUSTIVE_SWEEP)
+
 
 def _isl_params(active_sweep, only_models=None):
     """Build the per-model (allocated_tokens, active_tokens, emb_dim, hidden_dim) parametrization over
@@ -371,14 +445,14 @@ def test_single_routed_expert_functional(
     )
 
 
-@pytest.mark.parametrize(
-    "allocated_tokens, active_tokens, emb_dim, hidden_dim",
-    _isl_params(_ISL_EXHAUSTIVE_SWEEP, only_models=_ISL_EXHAUSTIVE_MODELS),
-)
 @pytest.mark.parametrize("x_row_major", [True], ids=["x_rm"])
 # DRAM ND-sharded weights let the FFN read a whole K-row weight slice in one NoC request instead
 # of one per tile. Both layouts are swept so the interleaved default stays covered.
 @pytest.mark.parametrize("weights_dram_sharded", [False, True], ids=["w_interleaved", "w_ndshard"])
+@pytest.mark.parametrize(
+    "allocated_tokens, active_tokens, emb_dim, hidden_dim",
+    _isl_params(_ISL_EXHAUSTIVE_SWEEP, only_models=_ISL_EXHAUSTIVE_MODELS),
+)
 @pytest.mark.skipif(not is_blackhole(), reason="device-side count-aware sparsity is Blackhole-only")
 def test_single_routed_expert_isl_sweep(
     device,
@@ -549,4 +623,38 @@ def test_single_routed_expert_dsv4_clamped(
         weights_dtype=weights_dtype,
         pcc_threshold=pcc_threshold,
         min_cap_frac=min_cap_frac,
+    )
+
+
+# Over-capacity counts: counts[] is device-produced and only its shape is validated on the host, so
+# a count past the expert's region reaches the kernels unchecked. They clamp it to the program's
+# capacity; every row past that must be dropped without corrupting L1 or hanging. A buffer that is
+# full (allocated == active) puts the clamped last tile-row exactly at capacity, the case where the
+# row-major x multicast used to size its last tile-row from the unclamped count. Overshoots: one
+# stick past a tile-row, a few tile-rows, and far past L1.
+_OVER_CAPACITY_TOKENS = 512
+_OVER_CAPACITY_OVERSHOOTS = [1, 100, 100_000]
+
+
+@pytest.mark.parametrize("count_overshoot", _OVER_CAPACITY_OVERSHOOTS, ids=lambda o: f"over-{o}")
+@pytest.mark.parametrize("model_name", ["glm_53", "kimi_k2_7"])
+@pytest.mark.skipif(not is_blackhole(), reason="device-side count-aware sparsity is Blackhole-only")
+def test_single_routed_expert_over_capacity_count(device, model_name: str, count_overshoot: int):
+    config = {name: cfg for name, cfg, _ in SINGLE_EXPERT_MODELS}[model_name]
+    run_single_routed_expert(
+        device,
+        _OVER_CAPACITY_TOKENS,
+        config.EMB_SIZE,
+        config.MOE_INTERMEDIATE_SIZE,
+        x_row_major=True,
+        count_overshoot=count_overshoot,
+    )
+    # The device must still be healthy afterwards: a normal in-capacity run on the same device.
+    run_single_routed_expert(
+        device,
+        _OVER_CAPACITY_TOKENS,
+        config.EMB_SIZE,
+        config.MOE_INTERMEDIATE_SIZE,
+        active_tokens=_OVER_CAPACITY_TOKENS - 40,
+        x_row_major=True,
     )

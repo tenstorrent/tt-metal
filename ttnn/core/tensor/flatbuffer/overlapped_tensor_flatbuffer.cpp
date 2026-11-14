@@ -18,10 +18,11 @@ namespace ttnn {
 flatbuffers::Offset<flatbuffer::OverlappedTensors> overlapped_tensors_to_flatbuffer(
     const std::vector<ttnn::OverlappedTensorView>& views,
     flatbuffers::FlatBufferBuilder& builder,
-    std::vector<SerializedTensorBuffer>& buffers) {
+    std::vector<SerializedTensorBuffer>& buffers,
+    bool verify_shards) {
     TT_FATAL(!views.empty(), "Need at least one OverlappedTensorView to serialize");
 
-    auto fused_offset = ttnn::to_flatbuffer(views[0].fused_tensor, builder, buffers);
+    auto fused_offset = ttnn::to_flatbuffer(views[0].fused_tensor, builder, buffers, verify_shards);
 
     std::vector<flatbuffers::Offset<flatbuffer::OverlappedView>> view_offsets;
     view_offsets.reserve(views.size());

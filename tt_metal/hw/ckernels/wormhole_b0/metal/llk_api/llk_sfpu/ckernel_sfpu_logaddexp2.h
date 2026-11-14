@@ -23,7 +23,7 @@ namespace ckernel::sfpu {
 // from max(a, b), which is representable by assumption.
 //
 // Evaluated through the primitives that ckernel_sfpu_logaddexp.h already relies on:
-//     2^-|a - b|    = exp(-|a - b| * ln 2)    for an fp32 destination
+//     2^-|a - b|    by exp's fp32 body in base 2 for an fp32 destination
 //     2^-|a - b|    by exp2's bfloat16 body   for a bfloat16 destination
 //     log2(1 + t)   = log1p(t) * log2(e)
 // No new polynomial: log1p sees exactly the same (0, 1] argument range as it does in
@@ -46,8 +46,7 @@ namespace ckernel::sfpu {
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_sfpu_logaddexp2(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     constexpr uint dst_tile_size_sfpi = 32;
-    // ln 2 and log2(e). Both are the correctly rounded float32 nearest values.
-    constexpr float LN_TWO = 0.693147182f;
+    // log2(e), the correctly rounded float32 nearest value.
     constexpr float LOG2_E = 1.442695041f;
     // The first two of exp2's fractional-part coefficients, loaded once for the whole loop, as
     // in logaddexp. Only the bfloat16 path uses them.
@@ -60,13 +59,14 @@ inline void calculate_sfpu_logaddexp2(const uint dst_index_in0, const uint dst_i
         sfpi::vFloat result;
         a = _sfpu_logaddexp_max_gap_(a, b, result);
         // The exponential follows the destination precision, as in logaddexp. For fp32 it is
-        // the guarded exponential, for the reason given there. For bfloat16, _sfpu_exp2_bf16_
+        // the guarded exponential, for the reason given there, entered in base 2 so that -|a - b|
+        // is reduced exactly rather than rounded by a multiply with ln 2. For bfloat16, _sfpu_exp2_bf16_
         // is what exp2 uses for a bfloat16 result: logaddexp's exp_21f taken in base 2, so the
         // ln 2 multiply drops out, and like logaddexp's it rounds 2^0 to exactly 1. The
         // approximate body is not usable: its 255/256 at zero lands on the correction term
         // whose exact value at |a - b| = 0 is 1.
         if constexpr (is_fp32_dest_acc_en) {
-            b = _sfpu_exp_fp32_accurate_(a * -LN_TWO);
+            b = _sfpu_exp_fp32_accurate_base2_(-a);
             result = result + calculate_log1p_fp32<true>(b) * LOG2_E;
         } else {
             b = _sfpu_exp2_bf16_(-a, exp_c0, exp_c1, EXP_21F_BF16_C2);

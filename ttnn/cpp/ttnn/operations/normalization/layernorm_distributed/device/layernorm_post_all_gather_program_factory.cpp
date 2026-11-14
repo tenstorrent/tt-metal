@@ -8,8 +8,8 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt_stl/fmt.hpp>
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -25,7 +25,7 @@ using namespace tt::tt_metal;
 namespace ttnn::prim {
 
 namespace {
-namespace m2 = tt::tt_metal::experimental;
+namespace m2 = tt::tt_metal;
 using namespace ttnn::prim::layernorm_distributed_metal2;
 
 const m2::KernelSpecName POST_READER{"post_reader"};
@@ -300,10 +300,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherProgramFactory::c
         gb_defines.emplace("FUSE_BETA", "1");
     }
 
-    // The normalized result is staged in its own buffer only while gamma or beta still has to be
-    // applied; otherwise it is packed straight into the output. RMSNorm applies beta only in the
-    // company of gamma, so a beta without a gamma leaves it staged nowhere.
-    const bool uses_x_normed = is_rmsnorm ? (gamma.has_value()) : (gamma.has_value() || beta.has_value());
+    const bool uses_x_normed = gamma.has_value() || beta.has_value();
     // The gamma product needs a buffer of its own only when beta still has to be added to it.
     const bool uses_times_gamma_out = gamma.has_value() && beta.has_value();
 

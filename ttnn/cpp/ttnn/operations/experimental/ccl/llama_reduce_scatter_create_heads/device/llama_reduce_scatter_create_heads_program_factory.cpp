@@ -364,9 +364,9 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
 
     auto* input_tensor_buffer = input_tensor.buffer();
 
-    uint32_t q_base_addr = q_output_tensor.buffer()->address();
-    uint32_t k_base_addr = k_output_tensor.buffer()->address();
-    uint32_t v_base_addr = v_output_tensor.buffer()->address();
+    uint32_t q_base_addr = q_output_tensor.mesh_buffer().address();
+    uint32_t k_base_addr = k_output_tensor.mesh_buffer().address();
+    uint32_t v_base_addr = v_output_tensor.mesh_buffer().address();
 
     // cores for q
     const uint32_t q_num_cores = q_output_grid.num_cores();  // number of cores of the output
@@ -408,7 +408,7 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
 
     tt::tt_metal::Program program{};
 
-    auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device);
     size_t packet_size_bytes =
         input_tensor.dtype() == DataType::BFLOAT16 ? std::bit_floor(fabric_max_packet_size) : fabric_max_packet_size;
     uint32_t num_blocks_per_packet = packet_size_bytes / input_block_size;
@@ -787,6 +787,7 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
             if (forward_fabric_connection) {
                 const auto target_device_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
                 tt::tt_fabric::append_fabric_connection_rt_args(
+                    *mesh_device,
                     target_device_fabric_node_id,
                     forward_fabric_node_id.value(),
                     link_idx,
@@ -799,6 +800,7 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
             if (backward_fabric_connection) {
                 const auto target_device_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
                 tt::tt_fabric::append_fabric_connection_rt_args(
+                    *mesh_device,
                     target_device_fabric_node_id,
                     backward_fabric_node_id.value(),
                     link_idx,
@@ -868,9 +870,9 @@ void LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads
         auto& output_tensor_k = output_tensors.at(1);
         auto& output_tensor_v = output_tensors.at(2);
 
-        uint32_t q_base_addr = output_tensor_q.buffer()->address();
-        uint32_t k_base_addr = output_tensor_k.buffer()->address();
-        uint32_t v_base_addr = output_tensor_v.buffer()->address();
+        uint32_t q_base_addr = output_tensor_q.mesh_buffer().address();
+        uint32_t k_base_addr = output_tensor_k.mesh_buffer().address();
+        uint32_t v_base_addr = output_tensor_v.mesh_buffer().address();
 
         auto* input_tensor_buffer = input_tensor.buffer();
         auto* packet_buffer = intermediate_packet_buffer.buffer();

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""MiniMax-M3 MSA (sparse) attention — the real model forward for the sparse layers (3-59).
+"""MiniMax-M3 MSA (sparse) attention — the real model forward for the sparse_attention_freq==1 layers.
 
 Unlike the dense path (ring_joint, which reads the KV cache + gathers across SP *internally*),
 ``sparse_sdpa_msa`` is a pure dense-context kernel: it takes full-length K/V tensors and has no
@@ -27,8 +27,10 @@ selection; sparse_sdpa_msa applies no token mask.
 from loguru import logger
 
 import ttnn
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import assert_full_mesh_stripe_order
 from models.demos.minimax_m3.utils.profiler_utils import zone
 
+from ..compute_configs import matmul_compute_config
 from .operations import apply_qk_norm_per_head, apply_rope
 
 # sparse_sdpa_msa's per-core L1 block cache for the gathered K/V (as many slots as fit in free L1). On: at small SP
@@ -96,8 +98,9 @@ def index_branch_forward(
         128-wide index head), same as main attention. Our apply_rope(rope_mats=main 64-wide) matches.
       * norm: index_q_norm/index_k_norm gains ship in the checkpoint, applied per-head.
     """
+    mm_config = matmul_compute_config(hidden_states.device())
     iq = _split_index_heads(
-        ttnn.linear(hidden_states, weights.index_q_proj), index_dim
+        ttnn.linear(hidden_states, weights.index_q_proj, compute_kernel_config=mm_config), index_dim
     )  # [1, n_idx_local, S, index_dim]
     iq = apply_qk_norm_per_head(iq, weights.index_q_norm, rms_norm_eps)
     iq = apply_rope(
@@ -110,7 +113,7 @@ def index_branch_forward(
     )
 
     ik = _split_index_heads(
-        ttnn.linear(hidden_states, weights.index_k_proj), index_dim
+        ttnn.linear(hidden_states, weights.index_k_proj, compute_kernel_config=mm_config), index_dim
     )  # [1, 1, S, index_dim] (shared)
     ik = apply_qk_norm_per_head(ik, weights.index_k_norm, rms_norm_eps)
     ik = apply_rope(
@@ -333,15 +336,18 @@ _FABRIC_2D_CONFIGS = (
 _logged_index_k_routes = set()
 
 
-def _log_index_k_route_once(is_2d, *, sp, tp, rows):
-    if is_2d in _logged_index_k_routes:
+def _log_index_k_route_once(is_2d, *, sp, tp, rows, sp_axis=0):
+    if (is_2d, sp_axis) in _logged_index_k_routes:
         return
-    _logged_index_k_routes.add(is_2d)
+    _logged_index_k_routes.add((is_2d, sp_axis))
     fabric = ttnn.get_fabric_config()
     if is_2d:
         logger.info(f"[msa] index_k TP-dedup gather route: 2D full-mesh snake (fabric={fabric})")
         return
-    logger.info(f"[msa] index_k TP-dedup gather route: 1D TP-then-SP (fabric={fabric})")
+    logger.info(f"[msa] index_k TP-dedup gather route: TP-then-SP (fabric={fabric}, sp_axis={sp_axis})")
+    if sp_axis != 0:
+        # Not a fabric choice: the full-mesh snake would misorder the stripes at sp_axis=1.
+        return
     # The SP leg's extent is set by the slot capacity, not the written prefix (see the docstring above).
     logger.warning(
         f"[msa] index_k TP-dedup on 1D fabric: the SP leg moves ~(tp-1)/tp of the slot capacity "
@@ -378,9 +384,13 @@ def _gather_tp_sharded_index_k(
         "msa_cache_index_k_tp", (1, 1, rows * sp * tp, hd), index_k_cache.dtype
     )
 
-    is_2d = ttnn.get_fabric_config() in _FABRIC_2D_CONFIGS
-    _log_index_k_route_once(is_2d, sp=sp, tp=tp, rows=rows)
+    # The full-mesh snake orders the stripes by the cache's row-major topology label, which is the sp*tp order
+    # only with SP on mesh axis 0. With SP on axis 1 (chip (t, s) holds stripe s*tp + t) it would return rows
+    # out of order, so take the two-leg route, whose axis gathers follow physical coordinates.
+    is_2d = ttnn.get_fabric_config() in _FABRIC_2D_CONFIGS and sp_axis == 0
+    _log_index_k_route_once(is_2d, sp=sp, tp=tp, rows=rows, sp_axis=sp_axis)
     if is_2d:
+        assert_full_mesh_stripe_order(index_k_cache, sp_axis, "MiniMax index_k full-mesh gather")
         return ttnn.experimental.high_bw_all_gather(
             index_k_cache,
             dim=2,

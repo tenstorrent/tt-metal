@@ -90,7 +90,7 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(
     bool pass = true;
 
     try {
-        tt_metal::Program program = tt_metal::CreateProgram();
+        tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
         CoreCoord core = {0, 0};
 
@@ -239,7 +239,7 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(
     bool pass = true;
 
     try {
-        tt_metal::Program program = tt_metal::CreateProgram();
+        tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
 
         CoreCoord core = {0, 0};
 
@@ -266,12 +266,10 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(
             .size = dram_buffer_size,
         };
 
-        auto src_dram_buffer =
-            distributed::MeshBuffer::create(buffer_config, device_local_config, mesh_device.get());
+        auto src_dram_buffer = distributed::MeshBuffer::create(buffer_config, device_local_config, mesh_device.get());
         uint32_t dram_buffer_src_addr = src_dram_buffer->address();
 
-        auto dst_dram_buffer =
-            distributed::MeshBuffer::create(buffer_config, device_local_config, mesh_device.get());
+        auto dst_dram_buffer = distributed::MeshBuffer::create(buffer_config, device_local_config, mesh_device.get());
         uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 
         // input CB is larger than the output CB, to test the backpressure from the output CB all the way into the input
@@ -388,7 +386,7 @@ bool test_interleaved_l1_datacopy(
 
     bool pass = true;
 
-    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
     CoreCoord core = {0, 0};
 
     tt_metal::CircularBufferConfig cb_src0_config =

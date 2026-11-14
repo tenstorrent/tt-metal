@@ -35,7 +35,8 @@ ALWI void generic_moe_gate_init(uint32_t icb0, uint32_t icb1) {
 // scores_include_bias returns the biased selection scores as the payload (for
 // callers such as GPT-OSS that apply softmax to those logits). The default returns
 // the original scores; normalize, when enabled, operates on the chosen payload.
-// Keep is_fp32_dest_acc_en in its existing position for source compatibility.
+// is_fp32_dest_acc_en stays in its position for source compatibility; the gate requires a 16-bit Dst
+// (fp32_dest_acc_en=false), and the static_assert below rejects anything else.
 template <
     bool normalize = false,
     int num_selected_experts = 8,
@@ -48,6 +49,15 @@ template <
     bool scores_include_bias = false>
 ALWI void generic_moe_gate(uint32_t icb0, uint32_t icb1, uint32_t eps, uint32_t scale, uint32_t extra_scale = 0) {
     static_assert(num_selected_experts >= 1 && num_selected_experts <= 16);
+    // The SFPU top-k pairs each 16-bit expert id and score in one LReg lane and moves them with
+    // LO16_ONLY/HI16_ONLY SFPLOAD/SFPSTOREs (id from/to the indices tile, score from/to the scores tile),
+    // which address Dst as 16-bit rows. With fp32 Dest accumulation the FPU copy-add writes 32-bit rows,
+    // which the top-k would then read as 16-bit rows. is_fp32_dest_acc_en is kept for source compatibility
+    // and is not forwarded to the top-k; reject it (and DST_ACCUM_MODE) rather than compute garbage.
+    static_assert(
+        !is_fp32_dest_acc_en && !DST_ACCUM_MODE,
+        "generic_moe_gate: the SFPU top-k moves ids/scores with LO16_ONLY/HI16_ONLY (16-bit Dst rows) and needs a "
+        "16-bit Dst: fp32_dest_acc_en=false and is_fp32_dest_acc_en=false");
 
     // Copy add (FPU)
     UNPACK((llk_unpack_AB(icb0, icb1, 0, 0)));

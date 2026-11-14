@@ -78,7 +78,7 @@ void SortDeviceOperation::validate_on_program_cache_miss(
     const auto input_lshape = input.logical_shape();
     const auto input_pshape = input.padded_shape();
 
-    TT_FATAL(input.buffer() != nullptr, "Operands need to be allocated in buffers on the device. Buffer is null.");
+    TT_FATAL(input.is_allocated(), "Operands need to be allocated in buffers on the device. Buffer is null.");
     TT_FATAL(
         input.storage_type() == StorageType::DEVICE,
         "Operation requires input to be on Device. Input storage type: {}",
@@ -201,7 +201,7 @@ SortDeviceOperation::spec_return_value_t SortDeviceOperation::compute_output_spe
     // Create output tensors specs
     auto output_shape = tensor_args.input_tensor.logical_shape();
 
-    // Indices are always stored as unsigned integers.  The topk LLK uses LO16
+    // Indices are always stored as unsigned integers.  The topk LLK uses UINT16
     // (uint16) or INT32 (uint32) mode in the SFPU to track indices, so the CB
     // format must match.
     //

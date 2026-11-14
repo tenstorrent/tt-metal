@@ -119,6 +119,29 @@ def _run_face_loop(
     elements_per_face = face_r_dim * FACE_C_DIM
     faces_needed = math.ceil(num_elements / elements_per_face)
 
+    if (
+        faces_needed > 1
+        and not spec.face_specs
+        and not spec.masked_faces
+        and not spec.intervals
+        and (generator is not None or spec.seed is None)
+        and spec.distribution
+        in (
+            DistributionKind.UNIFORM,
+            DistributionKind.GAUSSIAN,
+            DistributionKind.LOG_UNIFORM,
+            DistributionKind.CONSTANT,
+        )
+    ):
+        strategy = lookup_strategy(spec.distribution)
+        return strategy.generate_face(
+            spec,
+            stimuli_format,
+            face_r_dim,
+            faces_needed * elements_per_face,
+            generator,
+        )[:num_elements]
+
     face_tensors: list[torch.Tensor] = []
     for face_idx in range(faces_needed):
         face_spec = spec

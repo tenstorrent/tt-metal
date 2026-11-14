@@ -12,6 +12,7 @@ void kernel_main() {
     uint32_t runtime_args_counter = 0U;
     uint32_t input_address = get_arg_val<uint32_t>(runtime_args_counter++);
     uint32_t gamma_address = get_arg_val<uint32_t>(runtime_args_counter++);
+    uint32_t gate_address = get_arg_val<uint32_t>(runtime_args_counter++);
     uint32_t num_rows_to_process = get_arg_val<uint32_t>(runtime_args_counter++);
     uint32_t start_row = get_arg_val<uint32_t>(runtime_args_counter++);
 
@@ -20,12 +21,16 @@ void kernel_main() {
     constexpr uint32_t cb_scaler_idx = tt::CBIndex::c_2;
     constexpr uint32_t cb_eps_idx = tt::CBIndex::c_3;
     constexpr uint32_t cb_gamma_idx = tt::CBIndex::c_4;
+    constexpr uint32_t cb_gate_idx = tt::CBIndex::c_11;
 
     constexpr uint32_t packed_scaler = get_compile_time_arg_val(0);
     constexpr uint32_t packed_eps = get_compile_time_arg_val(1);
     constexpr uint32_t mask_w = get_compile_time_arg_val(2);
     constexpr uint32_t Wt = get_compile_time_arg_val(3);
     constexpr uint32_t block_size = get_compile_time_arg_val(4);
+    // The gate's layout for head_merged_row; 1 and 1 when ungated.
+    constexpr uint32_t layout_Ht = get_compile_time_arg_val(5);
+    constexpr uint32_t layout_num_heads = get_compile_time_arg_val(6);
 
     constexpr uint32_t onetile = 1U;
 
@@ -33,6 +38,12 @@ void kernel_main() {
     constexpr bool do_mask_w = true;
 #else
     constexpr bool do_mask_w = false;
+#endif
+
+#ifdef GATED
+    constexpr bool gated = true;
+#else
+    constexpr bool gated = false;
 #endif
 
     // generate mask tile
@@ -47,12 +58,11 @@ void kernel_main() {
     generate_tile_with_packed_bfloat16_value(cb_eps_idx, packed_eps);
 
     const uint32_t tile_bytes = get_tile_size(cb_input_idx);
-    constexpr auto input_args = TensorAccessorArgs<5>();
+    const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma_idx);
+    constexpr auto input_args = TensorAccessorArgs<7>();
     constexpr auto gamma_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     const auto input_address_generator = TensorAccessor(input_args, input_address);
     const auto gamma_address_generator = TensorAccessor(gamma_args, gamma_address);
-
-    const uint32_t max_block_size = 4;
 
     for (uint32_t i = 0; i < num_rows_to_process; ++i) {
         uint32_t idx = (start_row + i) * Wt;
@@ -61,13 +71,22 @@ void kernel_main() {
         read_tiles_by_row(cb_input_idx, input_address_generator, idx, Wt, tile_bytes, Wt);
 
         if (i == 0) {
-            read_tiles_by_row(cb_gamma_idx, gamma_address_generator, 0, Wt, tile_bytes, Wt);
+            read_tiles_by_row(cb_gamma_idx, gamma_address_generator, 0, Wt, gamma_tile_bytes, Wt);
+        }
+        if constexpr (gated) {
+            constexpr auto gate_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
+            const auto gate_address_generator = TensorAccessor(gate_args, gate_address);
+            const uint32_t gate_idx = head_merged_row<layout_Ht, layout_num_heads>(start_row + i) * Wt;
+            read_full_row_tiles(
+                cb_gate_idx, gate_address_generator, Wt, block_size, get_tile_size(cb_gate_idx), gate_idx);
         }
 
 #elif defined(EVERYTHING_EXCEPT_GAMMA_FITS_IN_L1)
         read_tiles_by_row(cb_input_idx, input_address_generator, idx, Wt, tile_bytes, Wt);
 
-        read_full_row_tiles(cb_gamma_idx, gamma_address_generator, Wt, block_size, tile_bytes, 0);
+        for (uint32_t j = 0; j < Wt; j += block_size) {
+            read_tiles_by_row(cb_gamma_idx, gamma_address_generator, j, block_size, gamma_tile_bytes, block_size);
+        }
 #else
         read_full_row_tiles(cb_input_idx, input_address_generator, Wt, block_size, tile_bytes, idx);
 
@@ -75,7 +94,7 @@ void kernel_main() {
             read_tiles_by_row(cb_input_idx, input_address_generator, idx + j, block_size, tile_bytes, block_size);
 
             // reading gamma to L1
-            read_tiles_by_row(cb_gamma_idx, gamma_address_generator, j, block_size, tile_bytes, block_size);
+            read_tiles_by_row(cb_gamma_idx, gamma_address_generator, j, block_size, gamma_tile_bytes, block_size);
         }
 #endif
     }

@@ -71,6 +71,45 @@ def test_as_tensor_with_cache(tmp_path, device, height, width):
     assert torch.allclose(torch_input_tensor, torch_output_tensor)
 
 
+def test_as_tensor_cache_hit_applies_requested_memory_config(tmp_path, device):
+    torch_input_tensor = torch.rand((64, 32), dtype=torch.float32)
+    kwargs = dict(
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        cache_file_name=tmp_path / "cache_file",
+    )
+
+    dram_tensor = ttnn.as_tensor(torch_input_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG, **kwargs)
+    assert ttnn.get_memory_config(dram_tensor) == ttnn.DRAM_MEMORY_CONFIG
+
+    # The second call hits the cache, so it ignores the zeros and still has to honor the requested config.
+    l1_tensor = ttnn.as_tensor(torch.zeros_like(torch_input_tensor), memory_config=ttnn.L1_MEMORY_CONFIG, **kwargs)
+    assert ttnn.get_memory_config(l1_tensor) == ttnn.L1_MEMORY_CONFIG
+    assert torch.allclose(ttnn.to_torch(l1_tensor), torch_input_tensor)
+
+
+def test_as_tensor_cache_hit_applies_requested_sharded_memory_config(tmp_path, device):
+    torch_input_tensor = torch.rand((64, 32), dtype=torch.float32)
+    kwargs = dict(
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        cache_file_name=tmp_path / "cache_file",
+    )
+
+    dram_tensor = ttnn.as_tensor(torch_input_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG, **kwargs)
+    assert ttnn.get_memory_config(dram_tensor) == ttnn.DRAM_MEMORY_CONFIG
+
+    shard_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))])
+    shard_spec = ttnn.ShardSpec(shard_grid, (32, 32), ttnn.ShardOrientation.ROW_MAJOR)
+    sharded_l1 = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+
+    sharded_tensor = ttnn.as_tensor(torch.zeros_like(torch_input_tensor), memory_config=sharded_l1, **kwargs)
+    assert ttnn.get_memory_config(sharded_tensor) == sharded_l1
+    assert torch.allclose(ttnn.to_torch(sharded_tensor), torch_input_tensor)
+
+
 @pytest.mark.parametrize("height", [7])
 @pytest.mark.parametrize("width", [3])
 def test_as_tensor_with_cache_local_dump(tmp_path, device, height, width):
@@ -111,3 +150,48 @@ def test_as_tensor_local_dump_cleans_up_on_failure(tmp_path, monkeypatch, expect
             cache_dump_mode=ttnn.DumpTensorMode.LOCAL,
         )
     assert list(tmp_path.iterdir()) == [], "a failed dump must not leave a temp or partial cache file behind"
+
+
+@pytest.fixture
+def cache_with_failing_load(tmp_path, monkeypatch):
+    kwargs = dict(dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, cache_file_name=tmp_path / "cache_file")
+    ttnn.as_tensor(torch.rand((7, 3), dtype=torch.float32), **kwargs)
+    (cache_path,) = tmp_path.iterdir()
+
+    real_load = ttnn._ttnn.tensor.load_tensor_flatbuffer
+
+    def failing_load(*args, **kwargs):
+        raise RuntimeError("read error")
+
+    monkeypatch.setattr(ttnn._ttnn.tensor, "load_tensor_flatbuffer", failing_load)
+    return kwargs, cache_path, real_load
+
+
+def test_as_tensor_cache_load_failure_raises_and_keeps_file_without_repair(cache_with_failing_load, expect_error):
+    kwargs, cache_path, _ = cache_with_failing_load
+    good_bytes = cache_path.read_bytes()
+    with ttnn.as_tensor_cache_repair(False):
+        with expect_error(RuntimeError, "read error"):
+            ttnn.as_tensor(torch.zeros((7, 3), dtype=torch.float32), **kwargs)
+    assert cache_path.read_bytes() == good_bytes
+
+
+def test_as_tensor_cache_repair_scope_restores_previous_setting(expect_error):
+    with ttnn.as_tensor_cache_repair(False):
+        with ttnn.as_tensor_cache_repair(True):
+            assert ttnn.operations.core._as_tensor_cache_repair
+        assert not ttnn.operations.core._as_tensor_cache_repair
+    assert ttnn.operations.core._as_tensor_cache_repair
+    with expect_error(ValueError, "boom"):
+        with ttnn.as_tensor_cache_repair(False):
+            raise ValueError("boom")
+    assert ttnn.operations.core._as_tensor_cache_repair
+
+
+def test_as_tensor_cache_load_failure_regenerates_file_with_repair(cache_with_failing_load, monkeypatch):
+    kwargs, cache_path, real_load = cache_with_failing_load
+    replacement = torch.rand((7, 3), dtype=torch.float32)
+    tensor = ttnn.as_tensor(replacement, **kwargs)
+    assert torch.equal(ttnn.to_torch(tensor), replacement)
+    monkeypatch.setattr(ttnn._ttnn.tensor, "load_tensor_flatbuffer", real_load)  # read it back with the real loader
+    assert torch.equal(ttnn.to_torch(ttnn.load_tensor(cache_path)), replacement)

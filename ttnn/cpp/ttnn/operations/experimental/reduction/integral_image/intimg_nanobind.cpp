@@ -57,7 +57,7 @@ void bind_reduction_intimg_operation(nb::module_& mod) {
             import torch
 
             # Create a compliant tensor
-            input_tensor = torch.Tensor([3, 1, 2])
+            input_tensor = torch.rand(1, 32, 32, 8, dtype=torch.bfloat16)
 
             # Convert tensor to ttnn format
             input_tensor_ttnn = ttnn.from_torch(input_tensor, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)

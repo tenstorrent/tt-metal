@@ -14,29 +14,55 @@
 #include "ttnn-nanobind/bind_function.hpp"
 
 #include "concat.hpp"
+#include "concat_force.hpp"
 
 namespace ttnn::operations::data_movement::detail {
 
 void bind_concat(nb::module_& mod) {
     const auto* doc = R"doc(
+        Concatenates the input tensors along dimension `dim`.
+
+        All input tensors must be on the same device and have the same rank and dtype. Their shapes must match in
+        every dimension except `dim`, and the size of the output along `dim` is the sum of the inputs' sizes along
+        it. The inputs must be either all interleaved or all sharded.
+
+        Interleaved inputs with different layouts are converted to the first input's layout, or to ROW_MAJOR if a
+        ROW_MAJOR input is not tile-aligned. A TILE input that is padded along `dim` needs every input to be TILE.
+        Sharded inputs must also have the same layout, shard grid, sharding scheme and shard orientation.
 
         Args:
-            input_tensor (List of ttnn.Tensor): the input tensors.
-            dim (number): the concatenating dimension.
+            tensors (List[ttnn.Tensor]): the tensors to concatenate.
+            dim (int, optional): the dimension along which to concatenate; negative values count from the last dimension. Defaults to `0`.
 
         Keyword Args:
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-            output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
-            groups (int, optional): When `groups` is set to a value greater than 1, the inputs are split into N `groups` partitions, and elements are interleaved from each group into the output tensor. Each group is processed independently, and elements from each group are concatenated in an alternating pattern based on the number of groups. This is useful for recombining grouped convolution outputs during residual concatenation. Defaults to `1`. Currently, groups > `1` is only supported for two height sharded input tensors.
-
-        Keyword Args:
-            sub_core_grids (ttnn.CoreRangeSet, optional): Sub-core grid to use for interleaved (L1 or DRAM) output tensors. If provided, the concatenation will run on the specified sub-core grid instead of the full compute grid. Defaults to `None`.
-
-        Note:
-            Block-sharded width concat (`dim` = -1) requires each input to start on an L1 alignment boundary: the sum of the widths before it, times the element size, must be a multiple of the NOC alignment (16 bytes on Wormhole and Blackhole). A ragged width that breaks this is rejected, since the concat boundary falls inside a shard where the NOC cannot write. Pad each width to a multiple of `l1_alignment / element_size` elements, or concat before sharding.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration of the output tensor. Defaults to `None`, which gives a DRAM interleaved output.
+            output_tensor (ttnn.Tensor, optional): Must be `None`. Defaults to `None`.
+            groups (int, optional): When `groups` is set to a value greater than 1, the inputs are split into N `groups` partitions, and elements are interleaved from each group into the output tensor. Each group is processed independently, and elements from each group are concatenated in an alternating pattern based on the number of groups. This is useful for recombining grouped convolution outputs during residual concatenation. Defaults to `1`. Currently, groups > `1` is only supported for a width concat of two height-sharded tensors in L1.
+            sub_core_grids (ttnn.CoreRangeSet, optional): Sub-core grid to use when the inputs and the output are interleaved (L1 or DRAM). If provided, the concatenation will run on the specified sub-core grid instead of the full compute grid. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
+
+        Note:
+            Supported dtypes and layouts:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - BFLOAT16, FLOAT32, INT32, UINT32, UINT8
+                 - TILE, ROW_MAJOR
+               * - BFLOAT8_B
+                 - TILE
+
+            L1 block-sharded width concat (`dim` = -1) requires each input to start on an L1 alignment boundary: the sum of the widths before it, times the element size, must be a multiple of the NOC alignment (16 bytes on Wormhole and Blackhole). A ragged width that breaks this is rejected, since the concat boundary falls inside a shard where the NOC cannot write. Pad each width to a multiple of `l1_alignment / element_size` elements, or concat before sharding.
+
+        Memory Support:
+            - Interleaved: DRAM and L1
+            - Sharded: HEIGHT_SHARDED and WIDTH_SHARDED in DRAM and L1; BLOCK_SHARDED in L1
+            - The output can be interleaved or sharded independently of the inputs
+            - An L1 sharded output from L1 sharded inputs must have the inputs' sharding scheme, shard grid and shard orientation. A last-dim concat then needs HEIGHT_SHARDED or BLOCK_SHARDED inputs, and a second-to-last-dim concat needs WIDTH_SHARDED or BLOCK_SHARDED inputs
     )doc";
 
     ttnn::bind_function<"concat">(
@@ -50,6 +76,68 @@ void bind_concat(nb::module_& mod) {
         nb::arg("output_tensor").noconvert() = nb::none(),
         nb::arg("groups") = 1,
         nb::arg("sub_core_grids") = nb::none());
+
+    // Bound with a plain def rather than ttnn::bind_function: the latter tags the callable for
+    // auto_register_ttnn_cpp_operations, which would republish these as ttnn.* operations. They are
+    // meant to stay reachable only via this private module. See concat_force.hpp.
+    mod.def(
+        "concat_force_native",
+        &concat_force_native,
+        nb::arg("tensors"),
+        nb::arg("dim") = 0,
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("output_tensor").noconvert() = nb::none(),
+        nb::arg("groups") = 1,
+        nb::arg("sub_core_grids") = nb::none(),
+        nb::call_guard<nb::gil_scoped_release>(),
+        R"doc(
+            Verification only: runs the native concat implementation unconditionally. Not part of the ttnn
+            API; use ttnn.concat, which selects an implementation on its own.
+
+            Args:
+                tensors (List of ttnn.Tensor): the input tensors.
+                dim (number): the concatenating dimension.
+
+            Keyword Args:
+                memory_config (ttnn.MemoryConfig, optional): memory configuration for the output. Defaults to `None`.
+                output_tensor (ttnn.Tensor, optional): must be `None`; a preallocated output is rejected. Defaults to `None`.
+                groups (int, optional): number of interleaved groups. Defaults to `1`. Only supported for two height-sharded input tensors.
+                sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids to run the operation on. Defaults to `None`.
+
+            Returns:
+                ttnn.Tensor: the output tensor.
+        )doc");
+
+    mod.def(
+        "concat_force_codegen",
+        &concat_force_codegen,
+        nb::arg("tensors"),
+        nb::arg("dim") = 0,
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("output_tensor").noconvert() = nb::none(),
+        nb::arg("groups") = 1,
+        nb::arg("sub_core_grids") = nb::none(),
+        nb::call_guard<nb::gil_scoped_release>(),
+        R"doc(
+            Verification only: runs the codegen concat implementation, raising for a case outside its
+            support scope rather than falling back to native, and ignoring the perf demotions. Not part
+            of the ttnn API; use ttnn.concat, which selects an implementation on its own.
+
+            Args:
+                tensors (List of ttnn.Tensor): the input tensors.
+                dim (number): the concatenating dimension.
+
+            Keyword Args:
+                memory_config (ttnn.MemoryConfig, optional): memory configuration for the output. Defaults to `None`.
+                output_tensor (ttnn.Tensor, optional): must be `None`; a preallocated output is rejected. Defaults to `None`.
+                groups (int, optional): must be `1`. Defaults to `1`.
+                sub_core_grids (ttnn.CoreRangeSet, optional): must be `None`. Defaults to `None`.
+
+            Returns:
+                ttnn.Tensor: the output tensor.
+        )doc");
 }
 
 }  // namespace ttnn::operations::data_movement::detail

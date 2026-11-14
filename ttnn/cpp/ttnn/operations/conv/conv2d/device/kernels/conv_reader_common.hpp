@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <tt-metalium/constants.hpp>
+#include "api/tile_constants.h"
 #include <api/dataflow/dataflow_api.h>
 #include "api/dataflow/dataflow_buffer.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
@@ -13,11 +13,6 @@
 struct McastRect {
     uint32_t noc_x_start, noc_y_start, noc_x_end, noc_y_end;
 };
-
-#ifndef COMPILE_FOR_TRISC
-// Shorthand for the multicast destination args type used by Noc::async_write_multicast.
-using McastDst = noc_traits_t<MulticastEndpoint>::dst_args_mcast_type;
-#endif
 
 // Zero out all tiles for a given circular buffer.
 template <uint32_t cb_id, typename DFB>

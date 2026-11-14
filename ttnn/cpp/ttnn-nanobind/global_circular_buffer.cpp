@@ -47,9 +47,6 @@ void py_module(nb::module_& mod) {
                 size (int): Size of the global circular buffer per core in bytes.
                 buffer_type (BufferType): The type of buffer to use for the global circular buffer.
             )doc");
-
-    // DRAM-sender GCB factories live under ttnn.experimental.* — see
-    // ttnn/cpp/ttnn/operations/experimental/tensor_prefetcher/tensor_prefetcher_nanobind.cpp.
 }
 
 }  // namespace ttnn::global_circular_buffer

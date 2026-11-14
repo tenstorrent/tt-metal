@@ -11,18 +11,19 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/hal.hpp>
 
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
-#include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/kernel_spec.hpp>
+#include <tt-metalium/workload/specification/dataflow_buffer_spec.hpp>
+#include <tt-metalium/workload/specification/tensor_parameter.hpp>
+#include <tt-metalium/vocabulary/node_coord.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 namespace ttnn::prim::qsr {
 
 using namespace tt::tt_metal;
-namespace m2 = tt::tt_metal::experimental;
+namespace m2 = tt::tt_metal;
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
@@ -60,13 +61,13 @@ ttnn::device_operation::ProgramArtifacts MoveShardedProgramFactory::create_progr
 
     // total_size_bytes is derived from the tensor spec (aligned size per bank), not from any
     // storage address, so it is safe to send to the kernel as a runtime arg.
-    const uint32_t total_size_bytes = input.buffer()->aligned_size_per_bank();
+    const uint32_t total_size_bytes = input.mesh_buffer().aligned_size_per_bank();
 
     TT_FATAL(
-        input.buffer()->alignment() == output.buffer()->alignment(),
+        input.mesh_buffer().alignment() == output.mesh_buffer().alignment(),
         "Expected input buffer alignment ({} B) and output buffer alignment ({} B) to be equal",
-        input.buffer()->alignment(),
-        output.buffer()->alignment());
+        input.mesh_buffer().alignment(),
+        output.mesh_buffer().alignment());
 
     //
     // -------- Build the ProgramSpec --------

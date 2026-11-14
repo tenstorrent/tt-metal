@@ -18,10 +18,12 @@ from transformers.cache_utils import DynamicCache
 from ttnn.device import is_blackhole
 
 import ttnn
+from models.common.ci_failure import assert_perf_gate
 from models.common.utility_functions import comp_pcc, hf_cache_layer_kv
 from models.demos.deepseek_v3_d_p.reference.mla_reference import create_mla_reference
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     fabric2d_device_params,
+    torus_x_device_params,
     torus_xy_device_params,
     torus_y_device_params,
 )
@@ -51,10 +53,11 @@ from models.demos.deepseek_v3_d_p.utils.chunked_prefill_utils import (
     resolve_traces,
 )
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
-from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import is_high_power
+from models.demos.deepseek_v3_d_p.utils.prefill_summary_utils import emit_perf_metrics
+from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import require_high_power
 from models.demos.deepseek_v3_d_p.utils.test_utils import gather_cache_natural, preload_cache, tp_stripe_major_cache
-from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.realtime_profiler_utils import profile_realtime_program
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 
 def run_mla_inference(
@@ -73,6 +76,7 @@ def run_mla_inference(
     is_chunked=False,
     active_seq_len=None,
     actual_start=None,
+    layer_idx=0,
 ):
     """
     Utility function to run MLA inference without host comparison.
@@ -88,6 +92,7 @@ def run_mla_inference(
         is_balanced: Whether to use balanced chunk ordering
         topology: Topology (Linear or Ring)
         tt_kvpe_cache: Initialized KVPE cache on device
+        layer_idx: model layer to build (a GLM-5.3 shared layer reuses injected indices).
         is_chunked / active_seq_len / actual_start: prefill mode, passed straight to ttMLA and
             forward(). No chunk loop here -- one forward over the whole sequence -- so only two
             triples fit: single-shot (False/None/None) or one chunk (True/seq_len/0). Sparse must chunk.
@@ -112,7 +117,7 @@ def run_mla_inference(
         config,
         weights,
         mesh_device,
-        layer_idx=0,
+        layer_idx=layer_idx,
         seq_len=seq_len,
         sp_axis=sp_axis,
         tp_axis=tp_axis,
@@ -177,6 +182,8 @@ def run_mla_inference(
     )
     # GLM-5.3 indexer reuse (return_indices / inject_indices): capture this layer's top-k selection, or
     # feed a prior layer's to skip the indexer. Defaults leave the forward unchanged.
+    if inject_indices is not None:
+        assert tuple(inject_indices.shape) == mla_tt.indexer_indices_shape(), "injected indices' shape"
     mla_out = mla_tt.forward(
         hidden_states=tt_hidden_states,
         rope_tensors=rope_tensors,
@@ -522,7 +529,7 @@ DETERMINISM_REPS = 3
 # Realtime ("lightweight") profiler perf gate: in-process device program records, so no Tracy
 # subprocess, no signposts and no ops-CSV re-parse -- it runs on the plain build. Not comparable to
 # the Tracy path's number -- Tracy averages collectives across chips, this takes the max.
-K3_CHUNKED_RT_PERF_NS = 10_319_000
+K3_CHUNKED_RT_PERF_NS = 9_996_000
 K3_CHUNKED_RT_PERF_MARGIN = 0.03
 
 
@@ -556,8 +563,12 @@ def _run_chunked_prefill(
     profile=False,
     tight_cache=False,
     tp_shard_kv=False,
+    sp_axis=0,
 ):
     """Unified chunked-prefill scenario, decoupled from the reference.
+
+    `sp_axis` is the mesh axis the sequence is split over; TP takes the other one. 1 is the
+    4x4-stage layout, where SP's ring is mesh axis 1.
 
     `reference` selects how inputs + ground truth are produced -- independent of prefill_len / env:
       * "cpu"   -> synthetic inputs + torch MLA reference (k_pe in Meta basis). Partial-chunk iters
@@ -579,7 +590,7 @@ def _run_chunked_prefill(
         pytest.skip("profile needs reference=None (func) -- accuracy is the cpu/trace path's job")
     if profile and not ttnn.device.IsProgramRealtimeProfilerActive():
         pytest.fail("realtime profiler inactive (needs Blackhole, WORKER dispatch, fabric-tensix DM off)")
-    sp_axis, tp_axis = 0, 1
+    tp_axis = 1 - sp_axis
     if topology is None:
         topology = per_axis_topology()
     mesh_shape = list(mesh_device.shape)
@@ -944,7 +955,7 @@ def _run_chunked_prefill(
     #      Meta-style) and for NoPE, re-interleaved for a roped GPU trace -- see trace_pe_interleave. ----
     if any(users[u]["kv_post"] is not None for u in range(num_users)):
         cache_flat, stripes = gather_cache_natural(
-            tt_kvpe_cache.storage, mesh_device, tp_shard_kv
+            tt_kvpe_cache.storage, mesh_device, tp_shard_kv, sp_axis=sp_axis
         )  # [num_users, seq_cache, kvpe]
         p = blockcyclic_positions(stripes, chunk_size_global, seq_len_cache)
         kv_lora = config.kv_lora_rank
@@ -1330,14 +1341,22 @@ _CHUNKED_SCENARIOS = (
 
 
 @pytest.mark.parametrize(
-    "mesh_device,device_params",
+    "mesh_device,device_params,sp_axis",
     [
-        pytest.param((2, 2), fabric2d_device_params(l1_small_size=1152), id="fabric2d-2x2"),
-        pytest.param((2, 4), fabric2d_device_params(l1_small_size=1152), id="fabric2d-2x4"),
+        pytest.param((2, 2), fabric2d_device_params(l1_small_size=1152), 0, id="fabric2d-2x2"),
+        pytest.param((2, 4), fabric2d_device_params(l1_small_size=1152), 0, id="fabric2d-2x4"),
         # high_bw_all_gather parks readiness/completion semaphores in L1_SMALL. On 8x4 the
         # fallback fragments general L1 enough that a later op's static circular buffers collide.
         #
-        pytest.param((8, 4), torus_xy_device_params(l1_small_size=1152), id="torus-xy-8x4"),
+        pytest.param((8, 4), torus_xy_device_params(l1_small_size=1152), 0, id="torus-xy-8x4"),
+        # One 4x4 prefill stage (a Galaxy tray half): SP=4 on the axis-1 ring, TP=4 on the axis-0 line.
+        pytest.param(
+            (4, 4),
+            torus_x_device_params(l1_small_size=1152),
+            1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="torus-x-4x4-sp1",
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -1359,7 +1378,16 @@ _CHUNKED_SCENARIOS = (
 @pytest.mark.parametrize("tp_shard_kv", [False, True], ids=["sp_only", "tp_sharded"])
 @pytest.mark.timeout(0)
 def test_mla_chunked_prefill(
-    request, mesh_device, kwargs, reference, device_params, variant, use_metadata_tensor, determinism_check, tp_shard_kv
+    request,
+    mesh_device,
+    sp_axis,
+    kwargs,
+    reference,
+    device_params,
+    variant,
+    use_metadata_tensor,
+    determinism_check,
+    tp_shard_kv,
 ):
     """Unified chunked-prefill driver crossed with independent mesh and reference axes. Each
     functionality scenario (rotation edges, production depth, multi-user, deep prefix) runs on any mesh
@@ -1417,6 +1445,7 @@ def test_mla_chunked_prefill(
         use_metadata_tensor=use_metadata_tensor,
         determinism_check=determinism_check,
         tp_shard_kv=tp_shard_kv,
+        sp_axis=sp_axis,
         **kwargs,
     )
 
@@ -1459,10 +1488,6 @@ def test_mistral4_mla_chunked_prefill_loudbox(request, mesh_device, device_param
 )
 @pytest.mark.parametrize("variant", ["kimi_k3"], indirect=True, ids=["k3"])
 @pytest.mark.skipif(not is_blackhole(), reason="kimi_k3 and the realtime profiler are Blackhole-only")
-@pytest.mark.skipif(
-    not is_high_power(),
-    reason="perf job requires a high-power (>=130W TDP) host; guards the exabox.tenstorrent.com/power=14kw label",
-)
 @pytest.mark.timeout(0)
 def test_mla_chunked_perf_check(request, mesh_device, device_params, variant):
     """Kimi-K3 chunked-prefill MLA perf on the 8x4 Galaxy: 50k cached prefix + one fresh 5k chunk,
@@ -1471,6 +1496,7 @@ def test_mla_chunked_perf_check(request, mesh_device, device_params, variant):
     NOT comparable to test_kimi_k3_mla_chunked_perf_galaxy's 11_562_468: that number comes from the
     Tracy merge path, which averages collectives across chips, while this takes the max for every
     program. K3's forward is ~7% CCL, so the two disagree by construction."""
+    require_high_power("kimi_k3 MLA chunked perf")
     topology = per_axis_topology(device_params["fabric_config"])
     total_ns = _run_chunked_prefill(
         request,
@@ -1487,7 +1513,23 @@ def test_mla_chunked_perf_check(request, mesh_device, device_params, variant):
         f"kimi_k3 chunked 50k+5k realtime perf: {total_ns:,.0f} ns ({total_ns / 1e6:.3f} ms), "
         f"expected {K3_CHUNKED_RT_PERF_NS:,} ns, band [{lower:,.0f}, {upper:,.0f}]"
     )
-    assert lower <= total_ns <= upper, (
-        f"device time {total_ns:,.0f} ns outside band [{lower:,.0f}, {upper:,.0f}] "
-        f"(expected {K3_CHUNKED_RT_PERF_NS:,} ns, margin +/- {K3_CHUNKED_RT_PERF_MARGIN * 100:.1f}%)"
+    emit_perf_metrics(
+        "kimi_k3_mla_chunked_50k_5k_torus-xy-8x4",
+        "Kimi-K3 MLA chunked 50k+5k perf (torus-xy 8x4)",
+        {
+            "prefill_len": 50 * 1024,
+            "chunk": 5120,
+            "measured_ns": total_ns,
+            "measured_ms": total_ns / 1e6,
+            "expected_ns": K3_CHUNKED_RT_PERF_NS,
+            "perf_margin_pct": K3_CHUNKED_RT_PERF_MARGIN * 100.0,
+            "within_band": lower <= total_ns <= upper,
+        },
+    )
+    assert_perf_gate(
+        lower <= total_ns <= upper,
+        (
+            f"device time {total_ns:,.0f} ns outside band [{lower:,.0f}, {upper:,.0f}] "
+            f"(expected {K3_CHUNKED_RT_PERF_NS:,} ns, margin +/- {K3_CHUNKED_RT_PERF_MARGIN * 100:.1f}%)"
+        ),
     )

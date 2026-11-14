@@ -20,7 +20,7 @@
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/system_mesh.hpp>
 
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 
 #include "device/mock_device_util.hpp"
 

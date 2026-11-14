@@ -19,6 +19,7 @@
 #include <tt-metalium/kernel_types.hpp>
 #include "mesh_dispatch_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_command_queue.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 
@@ -58,6 +59,28 @@ TEST_F(MeshDispatchFixture, TensixCreateGlobalCircularBuffers) {
     }
 }
 
+// Runs in both fast and slow dispatch.
+TEST_F(MeshDispatchFixture, TensixCreateGlobalCircularBufferWithExplicitQueue) {
+    CoreRangeSet receivers(CoreRange({1, 1}, {1, 1}));
+    auto mesh_device = devices_[0];
+    std::vector<std::pair<CoreCoord, CoreRangeSet>> sender_receiver_core_mapping = {{CoreCoord(0, 0), receivers}};
+    auto global_cb = tt::tt_metal::experimental::GlobalCircularBuffer(
+        mesh_device->mesh_command_queue(0), sender_receiver_core_mapping, 3200, tt::tt_metal::BufferType::L1);
+    distributed::Synchronize(*mesh_device, std::nullopt);
+}
+
+// Runs in both fast and slow dispatch: a command queue id the device does not have is rejected in either mode.
+TEST_F(MeshDispatchFixture, TensixGlobalCircularBufferRejectsOutOfRangeCqId) {
+    CoreRangeSet receivers(CoreRange({1, 1}, {1, 1}));
+    auto mesh_device = devices_[0];
+    std::vector<std::pair<CoreCoord, CoreRangeSet>> sender_receiver_core_mapping = {{CoreCoord(0, 0), receivers}};
+    const uint8_t out_of_range_cq_id = mesh_device->num_hw_cqs();
+    EXPECT_ANY_THROW(tt::tt_metal::experimental::GlobalCircularBuffer(
+        *mesh_device, sender_receiver_core_mapping, 3200, tt::tt_metal::BufferType::L1, out_of_range_cq_id));
+    EXPECT_ANY_THROW(tt::tt_metal::experimental::CreateGlobalCircularBuffer(
+        *mesh_device, sender_receiver_core_mapping, 3200, tt::tt_metal::BufferType::L1, out_of_range_cq_id));
+}
+
 TEST_F(MeshDispatchFixture, TensixProgramGlobalCircularBuffersAPI) {
     CoreCoord sender_core = CoreCoord(0, 0);
     CoreRangeSet sender_cores = CoreRangeSet(CoreRange(sender_core));
@@ -80,7 +103,7 @@ TEST_F(MeshDispatchFixture, TensixProgramGlobalCircularBuffersAPI) {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-        tt_metal::Program program = CreateProgram();
+        tt_metal::Program program = CreateProgram(*mesh_device);
 
         tt::tt_metal::CreateKernel(
             program,
@@ -109,7 +132,7 @@ TEST_F(MeshDispatchFixture, TensixProgramGlobalCircularBuffersAPI) {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-        tt_metal::Program program = CreateProgram();
+        tt_metal::Program program = CreateProgram(*mesh_device);
 
         tt::tt_metal::CreateKernel(
             program,

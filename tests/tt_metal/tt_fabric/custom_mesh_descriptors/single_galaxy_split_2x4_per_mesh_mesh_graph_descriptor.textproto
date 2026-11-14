@@ -1,0 +1,33 @@
+# Single-galaxy: a BIG 2x4 TORUS_X mesh split across TWO host ranks (host_topology 1x2 -> each process
+# owns a 2x2 half of the one mesh), inter-connected to a separate 2x2 TORUS_Y mesh. Exercises per-mesh
+# heterogeneous configs where one mesh spans multiple processes: both of M_BIG's ranks must run the
+# SAME config (TORUS_X) while M_Y's rank runs TORUS_Y (each mesh's dim_types default). Checks that a
+# multi-process mesh with per-mesh config differences routes intra- and inter-mesh without hanging.
+mesh_descriptors {
+  name: "M_BIG"
+  arch: BLACKHOLE
+  device_topology { dims: [ 2, 4 ] dim_types: [ LINE, RING ] }
+  host_topology   { dims: [ 1, 2 ] }
+  channels { count: 2 policy: RELAXED }
+}
+mesh_descriptors {
+  name: "M_Y"
+  arch: BLACKHOLE
+  device_topology { dims: [ 2, 2 ] dim_types: [ RING, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: RELAXED }
+}
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M_BIG" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M_Y"  mesh_id: 1 } }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "M_BIG" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M_Y"  mesh_id: 1 } }
+    channels { count: 4 policy: RELAXED }
+  }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }

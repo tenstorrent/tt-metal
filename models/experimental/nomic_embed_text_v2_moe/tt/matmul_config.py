@@ -14,15 +14,13 @@ cached, which took a 2x37 forward from 5.3 to 4.8 ms.
 
 The dense projections run through ttnn.experimental.minimal_matmul, which measured 11% to 16%
 faster than the best 2D multicast config at every one of them at 8x512, and they write their
-outputs to L1 when they fit. The expert matmuls run in one of two layouts per pass
-(tt/experts.py): stacked on small passes, w1 and w2 each one unbatched 1D ttnn.matmul over every
-expert; transposed on large ones, w1 through minimal_matmul and w2 through a 2D ttnn.matmul.
-minimal_matmul takes no batched second operand, so the router and the transposed w2 keep
+outputs to L1 when they fit. The experts (tt/experts.py) run grouped_matmul, which takes no
+program config from here. minimal_matmul takes no batched second operand, so the router keeps
 ttnn.matmul.
 
-The two matmuls a GELU follows, fc1 above SMALL_M_TILES and the transposed w1, run as 2D
-multicast ttnn.matmul instead when the GELU is fused into them (gelu_on_packer): that program
-applies it from the packer, where it partly overlaps the matmul.
+fc1 above SMALL_M_TILES, which a GELU follows, runs as a 2D multicast ttnn.matmul instead when the
+GELU is fused into it (gelu_on_packer): that program applies it from the packer, where it partly
+overlaps the matmul.
 """
 
 from __future__ import annotations
@@ -217,9 +215,10 @@ def gelu_on_packer(variant: ttnn.GeluVariant) -> bool:
     The 2D program applies a fused activation from the packer (apply_activation_from_pack), beside
     the math thread computing the next subblock; minimal_matmul applies it on the math thread,
     where the tanh and accurate GELUs cost as much as their own op. On the packer the tanh GELU
-    hides under the matmul in part: 1630 us for the expert w1 and its GELU at 8x512 against 786 +
-    1353 unfused, 260 us for fc1 against 132 + 171; the accurate one 2227 against 786 + 1645. The
-    LUT, a few instructions a row, stays on minimal_matmul: 862 us over the w1 against 924.
+    hides under the matmul in part: 260 us for fc1 and its GELU at 8x512 against 132 + 171 unfused,
+    and 1630 against 786 + 1353 on the dense expert w1 the routed pass replaced, where the accurate
+    one took 2227 against 786 + 1645. The LUT, a few instructions a row, stays on minimal_matmul:
+    862 us over that w1 against 924. The routed w1 applies its GELU inside grouped_matmul.
     """
     return variant != ttnn.GeluVariant.FastLut
 
@@ -420,241 +419,3 @@ def _multicast_footprint(
     """
     a, w, o, p = (ttnn.tile_size(dtype) for dtype in (activation, weight, output, ttnn.float32))
     return 2 * k_block * (rows * a + cols * w) + rows * cols * (o + p)
-
-
-@cache
-def stacked_columns(n_tiles: int, grid: ttnn.CoreCoord) -> int:
-    """Output tiles a core of a stacked pass's w1 and gate spread (tt/experts.py), width-sharded.
-
-    The fewest that fit n_tiles on the grid, as a divisor of n_tiles so every core takes the same:
-    8 for the 768 tiles of E*F on 110 cores, 96 of them.
-    """
-    return min(d for d in _divisors(n_tiles) if n_tiles // d <= grid.x * grid.y)
-
-
-def stacked_w2_shard_tiles(m_tiles: int) -> int:
-    """The shard width, in tiles, the stacked w2 reads its activation in, by tile rows of M.
-
-    The 1D program multicasts each core's shard as one K block, and every core reads its weights a
-    block at a time, so narrow shards leave the reads latency-bound: 129 us at 8 tiles against 67
-    to 78 at 24 to 48, 128 tokens at LoFi. Counting the reshard into it, 32 is 4 us faster than 24
-    at 128 tokens. But each receiving core holds two blocks of m x width tiles beside the resident
-    shard of the same size: at 32 that is about 1 MB of a core at 10 tile rows, which clashed with
-    the L1 a test process holds at 3x100, so above 8 rows it is 24, which ran up to 384 tokens.
-    """
-    return 32 if m_tiles <= 8 else 24
-
-
-@cache
-def stacked_memory_config(tokens: int, n_tiles: int, width_tiles: int, grid: ttnn.CoreCoord) -> ttnn.MemoryConfig:
-    """(1, 1, t, N) width-sharded width_tiles a core, over the first N / width_tiles cores row by row."""
-    return ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(
-            ttnn.num_cores_to_corerangeset(n_tiles // width_tiles, grid, row_wise=True),
-            [ttnn.core.divup(tokens, ttnn.TILE_SIZE) * ttnn.TILE_SIZE, width_tiles * ttnn.TILE_SIZE],
-            ttnn.ShardOrientation.ROW_MAJOR,
-        ),
-    )
-
-
-@cache
-def stacked_columns_config(
-    m_tiles: int,
-    k_tiles: int,
-    n_tiles: int,
-    grid: ttnn.CoreCoord,
-    compute_kernel_config,
-    gelu: ttnn.GeluVariant | None = None,
-) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
-    """1D mcast_in0 writing stacked_columns output tiles a core: the stacked w1 and the gate spread.
-
-    One core multicasts the (t, K) activation and every core reads only its own weight columns,
-    K in one block. For w1 that block measured best with the GELU fused, 101 us at 128 tokens
-    against 108 for blocks of 12 or 8: the packer applies it once the last block is in. Splitting
-    a core's columns into smaller N blocks needs single-row M blocks, which re-multicast x per
-    block: 234 to 444 us.
-    """
-    columns = stacked_columns(n_tiles, grid)
-    sub_h, sub_w = _subblock(m_tiles, columns, dest_tiles(compute_kernel_config), wide=True)
-    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=grid,
-        in0_block_w=k_tiles,
-        out_subblock_h=sub_h,
-        out_subblock_w=sub_w,
-        out_block_h=m_tiles,
-        out_block_w=columns,
-        per_core_M=m_tiles,
-        per_core_N=columns,
-        fuse_batch=True,
-        fused_activation=None if gelu is None else gelu_activation(gelu),
-        mcast_in0=True,
-    )
-
-
-@cache
-def stacked_w2_config(
-    m_tiles: int, grid: ttnn.CoreCoord, compute_kernel_config
-) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
-    """(1, 1, t, E*F) width-sharded stacked_w2_shard_tiles(M) a core, times the stacked (E*F, H) w2.
-
-    One output column a core, 24 cores each reading its column of every expert's weight, and
-    each sharded core multicasting its K range as one block. A batched (1, E, t, F) w2 has to
-    multicast all of its activation from one core: 141 us at 128 tokens against 67 to 78 here.
-    """
-    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=grid,
-        in0_block_w=stacked_w2_shard_tiles(m_tiles),
-        out_subblock_h=_largest_divisor_at_most(m_tiles, dest_tiles(compute_kernel_config)),
-        out_subblock_w=1,
-        out_block_h=m_tiles,
-        out_block_w=1,
-        per_core_M=m_tiles,
-        per_core_N=1,
-        fuse_batch=True,
-        mcast_in0=True,
-    )
-
-
-@cache
-def expert_w1_transposed_config(
-    k_tiles: int,
-    tokens: int,
-    weight_dtype: ttnn.DataType,
-    activation_dtype: ttnn.DataType,
-    output_dtype: ttnn.DataType,
-    grid: ttnn.CoreCoord,
-    cb_bytes: int,
-    compute_kernel_config,
-) -> ttnn.MinimalMatmulConfig:
-    """(1, 1, E*F, H) x (1, 1, H, t), the transposed w1: every expert in one unbatched product.
-
-    minimal_matmul puts the 768 weight-row tiles on the grid's 11 columns and the token tiles on
-    its rows, fewer rows when there are fewer token tiles. Measured at HiFi2, where this matmul is
-    compute-bound given small enough N blocks: M blocks of 14 and K blocks of 8, with N blocks of 4
-    token tiles up to a share of 8 per core and 2 above, came within 3% of the best blocking from
-    576 to 4096 tokens. At 4096 that is 823 us against 997 for the core's whole share in 2 blocks.
-    With one token tile per core, M blocks of 10 were best (99 against 124 us at 128 tokens).
-    """
-    n_tiles = ttnn.core.divup(tokens, ttnn.TILE_SIZE)
-    grid_y = min(grid.y, max(n_tiles, 2))
-    n_share = ttnn.core.divup(n_tiles, grid_y)
-    if n_share == 1:
-        m_block, n_block = 10, 1
-    else:
-        m_block, n_block = 14, min(n_share, 4 if n_share <= 8 else 2)
-    k_block = _largest_divisor_at_most(k_tiles, 8)
-    while True:
-        sub_h, sub_w = _subblock(m_block, n_block, dest_tiles(compute_kernel_config), wide=True)
-        config = ttnn.MinimalMatmulConfig(
-            M_block_size=m_block,
-            K_block_size=k_block,
-            N_block_size=n_block,
-            subblock_h=sub_h,
-            subblock_w=sub_w,
-            compute_with_storage_grid_size=ttnn.CoreCoord(grid.x, grid_y),
-        )
-        footprint = minimal_matmul_footprint(config, weight_dtype, activation_dtype, output_dtype, bias=False)
-        if n_block == 1 or footprint <= cb_bytes:
-            return config
-        n_block = ttnn.core.divup(n_block, 2)
-
-
-# A core's share of token tiles in the fused transposed w1, raised where it has no divisor that
-# makes a useful block: 5, 7, 10 or 11 tiles would leave blocks 1 tile wide. A larger share only
-# leaves columns of the grid idle.
-_W1_TOKEN_SHARE_RAISED = {5: 6, 7: 8, 10: 12, 11: 12}
-
-
-@cache
-def expert_w1_gelu_config(
-    m_tiles: int,
-    k_tiles: int,
-    tokens: int,
-    grid: ttnn.CoreCoord,
-    variant: ttnn.GeluVariant,
-    compute_kernel_config,
-) -> ttnn.MatmulMultiCoreReuseMultiCastProgramConfig:
-    """2D multicast program for the transposed w1 with its GELU fused: (1, 1, E*F, H) x (1, 1, H, t).
-
-    The weight-row tiles over the grid's rows and the token tiles over its columns, K in one block,
-    which leaves the inputs single-buffered. Measured at 8x512, 12 token tiles a core: blocks of 11
-    x 4 tiles, 1630 us, against 1687 to 1963 for the other blocks tried. At 8x384, 9 a core: 7 x 9,
-    1258 us, against 1280 to 1380.
-    """
-    per_core_m = ttnn.core.divup(m_tiles, grid.y)
-    per_core_n = ttnn.core.divup(ttnn.core.divup(tokens, ttnn.TILE_SIZE), grid.x)
-    per_core_n = _W1_TOKEN_SHARE_RAISED.get(per_core_n, per_core_n)
-    if per_core_n <= 9:
-        block_w = per_core_n
-        block_h = next((d for d in (7, 11) if per_core_m % d == 0), 1)
-    else:
-        block_w = _largest_divisor_at_most(per_core_n, 4)
-        block_h = next((d for d in (11, 7) if per_core_m % d == 0), 1)
-    sub_h, sub_w = _subblock(block_h, block_w, dest_tiles(compute_kernel_config), wide=True)
-    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=grid,
-        in0_block_w=k_tiles,
-        out_subblock_h=sub_h,
-        out_subblock_w=sub_w,
-        out_block_h=block_h,
-        out_block_w=block_w,
-        per_core_M=per_core_m,
-        per_core_N=per_core_n,
-        transpose_mcast=False,
-        fuse_batch=True,
-        fused_activation=gelu_activation(variant),
-    )
-
-
-@cache
-def expert_w2_transposed_program_config(
-    m_tiles: int,
-    k_tiles: int,
-    tokens: int,
-    weight_dtype: ttnn.DataType,
-    activation_dtype: ttnn.DataType,
-    output_dtype: ttnn.DataType,
-    grid: ttnn.CoreCoord,
-    cb_bytes: int,
-    compute_kernel_config,
-) -> ttnn.MatmulMultiCoreReuseMultiCastProgramConfig:
-    """(1, E, H, F) x (1, E, F, t), the transposed w2. Experts are looped.
-
-    H goes over the grid's rows, 3 tiles on each of 8, and the tokens over its columns, which
-    uses 88 cores from 1024 tokens where the token-major split used 80. K takes blocks of 32
-    when a core holds at most 2 token tiles (209 against 221 us at 576 tokens) and 24 above
-    (893 against 920 at 4096), shrinking if the buffers do not fit. A subblock one H tile tall
-    and several tokens wide measured 1% to 4% faster than a 3-tile column from 384 tokens up.
-    """
-    per_core_m = ttnn.core.divup(m_tiles, grid.y)
-    per_core_n = ttnn.core.divup(ttnn.core.divup(tokens, ttnn.TILE_SIZE), grid.x)
-    limit = 32 if per_core_n <= 2 else 24
-    k_block = max(
-        (
-            d
-            for d in _divisors(k_tiles)
-            if d <= limit
-            and _multicast_footprint(per_core_m, per_core_n, d, weight_dtype, activation_dtype, output_dtype)
-            <= cb_bytes
-        ),
-        default=None,
-    )
-    if k_block is None:
-        raise ValueError(f"expert w2: no K block fits {cb_bytes} B at {tokens} tokens; lower MAX_TOKENS_PER_PASS")
-    budget = dest_tiles(compute_kernel_config)
-    sub_w = _largest_divisor_at_most(per_core_n, budget)
-    sub_h, sub_w = (1, sub_w) if sub_w > 1 else _subblock(per_core_m, per_core_n, budget)
-    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=grid,
-        in0_block_w=k_block,
-        out_subblock_h=sub_h,
-        out_subblock_w=sub_w,
-        out_block_h=per_core_m,
-        out_block_w=per_core_n,
-        per_core_M=per_core_m,
-        per_core_N=per_core_n,
-        transpose_mcast=False,
-        fuse_batch=False,
-    )

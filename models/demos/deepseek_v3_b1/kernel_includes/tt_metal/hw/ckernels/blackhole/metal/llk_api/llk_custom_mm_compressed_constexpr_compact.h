@@ -141,7 +141,12 @@ FORCE_INLINE void _emit_runs_(volatile uint* cfg, uint32_t& address_a, uint32_t 
     }
 }
 
-template <uint32_t KT_DIM, uint32_t CT_DIM, size_t NUM_PACKED, const std::array<uint32_t, NUM_PACKED>& FMT_PACKED>
+template <
+    uint32_t KT_DIM,
+    uint32_t CT_DIM,
+    size_t NUM_PACKED,
+    const std::array<uint32_t, NUM_PACKED>& FMT_PACKED,
+    ckernel::CustomMmDestLayout DEST_LAYOUT = ckernel::CustomMmDestLayout::DefaultSplitAcc>
 FORCE_INLINE void custom_mm_compressed_block_compact(
     uint32_t addr_in0, uint32_t addr_in1, uint32_t in0_face_r_dim, uint32_t dst_index) {
     static_assert(CT_DIM > 0, "CT_DIM must be > 0");
@@ -164,7 +169,7 @@ FORCE_INLINE void custom_mm_compressed_block_compact(
         constexpr size_t total_pairs = KT_DIM * CT_DIM / 2;
         _emit_runs_<0, total_pairs, NUM_PACKED, FMT_PACKED>(cfg, address_a, reg0_base, reg2_base);
     }));
-    MATH((_llk_math_custom_mm_<true>(in0_face_r_dim, dst_index, KT_DIM, CT_DIM)));
+    MATH((_llk_math_custom_mm_<DEST_LAYOUT>(in0_face_r_dim, dst_index, KT_DIM, CT_DIM)));
 }
 
 }  // namespace compressed

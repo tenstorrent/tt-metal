@@ -118,8 +118,14 @@ void kernel_main() {
     // K/V CB depth in chunks, and the writer's count of finished forwards that guards slot reuse.
     constexpr uint32_t kv_slots = get_compile_time_arg_val(36);
     constexpr uint32_t fwd_done_semaphore_id = get_compile_time_arg_val(37);
+    // K/V retention: Q heads per retention key (0 = off). A Q chunk with the same (batch, nq / kv_retain_group) as the
+    // previous one on this core finds K and V still at the front of their CBs (compute keeps them), so they are not
+    // read, received or pushed again. Host-gated to calls with one K chunk. A non-causal chain member gets its copy on
+    // the first Q chunk of its segment and forwards it once; causal prefix chains are off under retention.
+    constexpr uint32_t kv_retain_group = get_compile_time_arg_val(38);
+    static_assert(!(causal_chain && kv_retain_group != 0), "causal K/V chains do not combine with K/V retention");
 
-    constexpr auto q_args = TensorAccessorArgs<38>();
+    constexpr auto q_args = TensorAccessorArgs<39>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto mask_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -161,7 +167,9 @@ void kernel_main() {
     uint32_t is_sink = 0;
     uint32_t chain_batch = 0;
     uint32_t chain_head = 0;
-    uint32_t chain_heads_per_group = 1;
+    // Chains are keyed by (batch, nq / chain_key_q_heads) and chain_head holds the key. Under GQA it can be one KV head
+    // (when the factory picks that key), so the K/V a whole GQA group shares is read from DRAM once.
+    uint32_t chain_key_q_heads = 1;
     uint32_t prev_physical_x = 0;
     uint32_t prev_physical_y = 0;
     uint32_t next_physical_x = 0;
@@ -189,6 +197,7 @@ void kernel_main() {
         next_core_q_chunks = get_arg_val<uint32_t>(argidx++);
         mcast_num_dests = get_arg_val<uint32_t>(argidx++);
         mcast_sender_wait = get_arg_val<uint32_t>(argidx++);
+        chain_key_q_heads = get_arg_val<uint32_t>(argidx++);
 
         if (is_chain_participant) {
             Semaphore<>(valid_semaphore_id).set(VALID);
@@ -231,7 +240,6 @@ void kernel_main() {
         prev_seg_global_start = get_arg_val<uint32_t>(argidx++);
         prev_seg_count = get_arg_val<uint32_t>(argidx++);
         next_seg_global_start = get_arg_val<uint32_t>(argidx++);
-        chain_heads_per_group = get_arg_val<uint32_t>(argidx++);
     }
 
     // When chunked: only process K/V up to (chunk_start_idx + Q_chunk_length) tokens.
@@ -409,16 +417,18 @@ void kernel_main() {
         }
 
         // Global Q scheduling: iterate over a linear range of B*NQH*q_num_chunks chunks.
-        // - per_head_q_iter resets on (nb, nq) transition: chain forwarding's
-        //   `q_iter < next_core_q_chunks` gate expects this (chains are non-causal only).
+        // - per_head_q_iter resets on a segment transition: chain forwarding's `q_iter < next_core_q_chunks`
+        //   gate counts a core's Q chunks of one segment. A non-causal segment spans the chain key; a causal one
+        //   stays one Q head, since causal chains pool a key's per Q head segments (segment_index counts them).
         // - is_chunked: page-table read on nb transition, single-entry CB rotated forward.
         // - use_attention_sink: pushed every iter, since compute pops Sq_chunk_t per
         //   sdpa_inner_loop call and under global_q each iter is exactly one call.
         uint32_t prev_nb = static_cast<uint32_t>(-1);
-        uint32_t prev_nq = static_cast<uint32_t>(-1);
+        uint32_t prev_segment_key = static_cast<uint32_t>(-1);
         uint32_t per_head_q_iter = 0;
         uint32_t segment_index = 0;
         uint32_t mask_batch_offset = 0;
+        uint32_t retain_prev_nb = static_cast<uint32_t>(-1), retain_prev_key = static_cast<uint32_t>(-1);
         for (uint32_t global_q_iter = 0; global_q_iter < global_q_count; ++global_q_iter) {
             const auto decoded =
                 decompose_global_q_index(global_q_start + global_q_iter, q_num_chunks, NQH, use_zigzag_balancing);
@@ -440,13 +450,15 @@ void kernel_main() {
                     cb_page_table.push_back(1);
                 }
             }
-            if (decoded.nb != prev_nb || decoded.nq != prev_nq) {
+            const uint32_t chain_key = decoded.nq / chain_key_q_heads;
+            const uint32_t segment_key = is_causal ? decoded.nq : chain_key;
+            if (decoded.nb != prev_nb || segment_key != prev_segment_key) {
                 per_head_q_iter = 0;
-                if (prev_nq != static_cast<uint32_t>(-1)) {
+                if (prev_segment_key != static_cast<uint32_t>(-1)) {
                     ++segment_index;
                 }
                 prev_nb = decoded.nb;
-                prev_nq = decoded.nq;
+                prev_segment_key = segment_key;
             }
             if constexpr (use_attention_sink) {
                 constexpr uint32_t sink_tiles = use_streaming_compute ? 1 : Sq_chunk_t;
@@ -479,7 +491,7 @@ void kernel_main() {
             bool block_map_all_masked = false;
             volatile tt_l1_ptr uint32_t* block_map = nullptr;
             const bool use_row_map =
-                use_mask_block_map && !(chain_ignores_map && nb == chain_batch && nq == chain_head);
+                use_mask_block_map && !(chain_ignores_map && nb == chain_batch && chain_key == chain_head);
             if constexpr (use_mask_block_map) {
                 if (use_row_map) {
                     const uint32_t map_row =
@@ -596,21 +608,29 @@ void kernel_main() {
             const uint32_t first_k_chunk = use_row_map ? block_map_first : k_loop_start;
             const uint32_t k_head = nq / q_heads_per_k;
             const uint32_t v_head = nq / q_heads_per_v;
+            bool kv_retained = false;
+            if constexpr (kv_retain_group != 0) {
+                const uint32_t retain_key = nq / kv_retain_group;
+                kv_retained = nb == retain_prev_nb && retain_key == retain_prev_key;
+                retain_prev_nb = nb;
+                retain_prev_key = retain_key;
+            }
 
-            // Chain forwarding conditions are loop-invariant — compute once
+            // Chain forwarding conditions are loop-invariant — compute once. A retained K/V needs no transfer.
             bool chain_forward = false;
             bool chain_receive = false;
             // Causal chains: how many leading K/V chunks go to the next core and come from the previous one.
             uint32_t fwd_chunks = 0;
             uint32_t recv_chunks = 0;
             if constexpr (!is_causal) {
-                chain_forward = is_chain_participant && !is_sink && (nb == chain_batch && nq == chain_head) &&
-                                (q_iter < next_core_q_chunks);
-                chain_receive = is_chain_participant && !is_injector && (nb == chain_batch && nq == chain_head);
+                chain_forward = is_chain_participant && !is_sink && !kv_retained &&
+                                (nb == chain_batch && chain_key == chain_head) && (q_iter < next_core_q_chunks);
+                chain_receive = is_chain_participant && !is_injector && !kv_retained &&
+                                (nb == chain_batch && chain_key == chain_head);
             } else if constexpr (causal_chain) {
                 // Chains are built from each core's first segment only; a later segment has no partner.
-                const bool in_chain_head = is_chain_participant && (nb == chain_batch) &&
-                                           (nq / chain_heads_per_group == chain_head) && segment_index == 0;
+                const bool in_chain_head =
+                    is_chain_participant && (nb == chain_batch) && (chain_key == chain_head) && segment_index == 0;
                 // Heavy zigzag chunks need K/V prefixes that shrink along the chain; a hop carries what both need.
                 const auto needed = [&](uint32_t qc) {
                     return (std::min((qc + 1) * Sq_chunk_t, Skt) + Sk_chunk_t - 1) / Sk_chunk_t;
@@ -662,7 +682,9 @@ void kernel_main() {
                 // K: either read locally (injector or not participant) or receive from previous core
                 uint32_t cb_k_start_address = 0;
 
-                if (should_receive) {
+                if (kv_retained) {
+                    // K still at the front of cb_k (retained)
+                } else if (should_receive) {
                     // Receive forwarded K chunk from previous core
                     cb_k.reserve_back(k_chunk_tiles);
                     cb_k_start_address = cb_k.get_write_ptr();
@@ -789,6 +811,20 @@ void kernel_main() {
                     }
                 }
 
+                // Complete K forward: flush write and signal receiver(s) before the mask read, so the next core in a
+                // unicast chain doesn't wait on this core's mask DRAM reads (they would serialize down the chain).
+                // (mcast path already completed above — companion sent with linked write)
+                if (reader_forwards && should_forward) {
+                    if constexpr (!mcast_enabled) {
+                        noc.async_writes_flushed();
+                        if (!should_receive) {
+                            cb_k.push_back(k_chunk_tiles);
+                        }
+                        Semaphore<>(valid_semaphore_id)
+                            .relay_unicast(noc, Semaphore<>(receiver_semaphore_id), next_physical_x, next_physical_y);
+                    }
+                }
+
                 // Mask read — safe after linked write pair is complete.
                 // Stream the chunk one Q-tile-row (Sk_chunk_t tiles) at a time and push each row as
                 // soon as it lands, so the compute kernel can start applying a q_subblock's rows
@@ -834,19 +870,6 @@ void kernel_main() {
                     }
                 }
 
-                // Complete K forward: flush write and signal receiver(s)
-                // (mcast path already completed above — companion sent with linked write)
-                if (reader_forwards && should_forward) {
-                    if constexpr (!mcast_enabled) {
-                        noc.async_writes_flushed();
-                        if (!should_receive) {
-                            cb_k.push_back(k_chunk_tiles);
-                        }
-                        Semaphore<>(valid_semaphore_id)
-                            .relay_unicast(noc, Semaphore<>(receiver_semaphore_id), next_physical_x, next_physical_y);
-                    }
-                }
-
                 // Q subblock push: K is fully forwarded, now push Q one subblock at
                 // a time. Compute waits for K first (waiting for K*N tiles in cb_k_in),
                 // then waits for Q subblocks incrementally (accumulating waits on cb_q_in).
@@ -880,7 +903,9 @@ void kernel_main() {
                 // V: either read locally (injector or not participant) or receive from previous core
                 uint32_t cb_v_start_address = 0;
 
-                if (should_receive) {
+                if (kv_retained) {
+                    // V still at the front of cb_v (retained)
+                } else if (should_receive) {
                     // Receive forwarded V chunk from previous core
                     cb_v.reserve_back(v_chunk_tiles);
                     cb_v_start_address = cb_v.get_write_ptr();

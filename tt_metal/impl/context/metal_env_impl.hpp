@@ -167,6 +167,8 @@ private:
     tt_fabric::FabricManagerMode fabric_manager_ = tt_fabric::FabricManagerMode::DEFAULT;
     tt_fabric::FabricRouterConfig fabric_router_config_ = tt_fabric::FabricRouterConfig{};
     uint8_t num_fabric_active_routing_planes_ = 0;
+    tt_fabric::MeshId fabric_mesh_id_ = tt_fabric::MeshId{0};
+    tt_fabric::MeshHostRankId fabric_host_rank_ = tt_fabric::MeshHostRankId{0};
     std::map<tt_fabric::FabricNodeId, ChipId> logical_mesh_chip_id_to_physical_chip_id_mapping_;
     std::optional<std::string> custom_mesh_graph_desc_path_ = std::nullopt;
 
@@ -186,6 +188,8 @@ private:
 
     void construct_control_plane(const std::filesystem::path& mesh_graph_desc_path);
     void construct_control_plane();
+    // The current fabric settings, bundled for the ControlPlane constructor.
+    FabricConfigDescriptor control_plane_config() const;
     void initialize_control_plane_impl();
 
     struct QuasarDispatchCoresCacheKey {

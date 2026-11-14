@@ -28,12 +28,11 @@ from models.demos.common.prefill.runners.migration import (
 )
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
-    PREFILL_CHUNK_TOKENS,
     create_kv_chunk_address_table_block_cyclic,
     is_tp_deduped_kv_cache,
     kda_chunk_n_tokens,
-    kda_max_sequence_length,
     kda_segment_bytes,
+    kda_window,
     merged_num_layers,
     populate_kv_chunk_address_table_block_cyclic,
     populate_kv_chunk_address_table_dflash,
@@ -143,7 +142,7 @@ def build_and_serialize_kv_chunk_table(
     dflash_caches=None,
     dflash_spec=None,
     dflash_first_layer=0,
-    tp_axis=1,
+    tp_axis,
     first_layer_idx=0,
     num_my_layers=None,
     stage_layouts=None,
@@ -160,7 +159,7 @@ def build_and_serialize_kv_chunk_table(
 
     ``kda`` (Kimi-K3 only): a :class:`KdaTableSpec` describing the KDA state slabs. It adds configs "01"
     (recurrent) and "02" (convolution) after the kvpe config, on the contract's synthetic position axis
-    (strides 96 / 64 over ``KDA_VERSIONS`` aliased windows, see ``kda_position``) and published on the
+    (strides 96 / 64 over one window, see ``kda_position``), tagged Snapshot, and published on the
     model's layer axis via its own ``layer_rows``; ``layer_rows`` (the kvpe map) is honoured on the merged
     path as well.
 
@@ -170,8 +169,8 @@ def build_and_serialize_kv_chunk_table(
     the WHOLE cache, but any sub-cache migration (a [0, N) prefix, or a prompt shorter than
     max_seq_len) lists the wrong, block-cyclically-scattered chunks and fails its PCC check.
 
-    ``chunk_size_global`` is the block-cyclic period; the kimi builder hardcodes it as
-    PREFILL_CHUNK_TOKENS, so a non-default period is rejected here rather than mismapped.
+    ``chunk_size_global`` is the block-cyclic period: the prefill chunk size the caches were written
+    with (5120 on 8x4 stages, 2560 on 4x4). Every block-cyclic config here is laid out with it.
 
     ``index_kv_cache`` (sparse/DSA models only): when given, a single MERGED table describes BOTH
     caches — config 0 = the KVPE cache, config 1 = the index-key cache — sharing one device-group
@@ -203,11 +202,6 @@ def build_and_serialize_kv_chunk_table(
 
     KV dedup is read from the KVPE cache's declared topology (is_tp_deduped_kv_cache), so the table cannot
     disagree with the allocation. ``tp_axis`` is the dflash head-count geometry, not the dedup switch."""
-    assert chunk_size_global == PREFILL_CHUNK_TOKENS, (
-        f"create_kv_chunk_address_table_block_cyclic assumes a block-cyclic period of "
-        f"PREFILL_CHUNK_TOKENS={PREFILL_CHUNK_TOKENS}, but chunk_size_global={chunk_size_global}. "
-        f"A different period would mismap every position; re-introduce a parametrized builder if needed."
-    )
 
     primary_cache = kvpe_cache.storage
     # One tagged list of every cache this rank owns, merged into ONE table downstream. The tag routes
@@ -263,6 +257,7 @@ def build_and_serialize_kv_chunk_table(
             stage_layout=stage_layout,
             layer_rows=layer_rows,
             tp_axis=tp_axis if kv_dedup else None,
+            chunk_size_global=chunk_size_global,
         )
 
     return serialize_kv_chunk_table(
@@ -286,7 +281,7 @@ def _build_and_serialize_merged_kv_chunk_table(
     sp_axis,
     num_users,
     path,
-    tp_axis=1,
+    tp_axis,
     chunk_size_global=None,
     stage_layouts=None,
     index_layer_ids=None,
@@ -483,10 +478,11 @@ def _build_and_serialize_merged_kv_chunk_table(
         # One layer axis for every config: the KDA rows sit at their model layers, so the extent is the
         # kvpe config's (already widened to the model's layer count) or the KDA rows', whichever is larger.
         cfg.num_layers = max(configs[kvpe_config_name].num_layers, max(spec.layer_rows) + 1)
-        cfg.max_sequence_length = kda_max_sequence_length(spec.geometry)
+        cfg.max_sequence_length = kda_window(spec.geometry)
         cfg.num_slots = num_users
         cfg.chunk_n_tokens = kda_chunk_n_tokens(spec.geometry, kind)
         cfg.chunk_size_bytes = kda_segment_bytes(spec.geometry, kind)
+        cfg.tensor_type = disagg.KvChunkTensorType.Snapshot
         tensor = spec.tensor(kind)
         if tensor is not None:
             page = tensor.buffer_aligned_page_size()
@@ -540,6 +536,7 @@ def _build_and_serialize_merged_kv_chunk_table(
                 ),
                 tp_axis=tp_axis if kv_dedup else None,
                 alias_rows=kvpe_alias_rows if name == kvpe_config_name else None,
+                chunk_size_global=chunk_size_global,
             )
         else:  # one global kv-head of the drafter's K or V cache
             populate_kv_chunk_address_table_dflash(

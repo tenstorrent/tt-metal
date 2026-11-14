@@ -10,7 +10,7 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
-#include "tt-metalium/constants.hpp"
+#include "api/tile_constants.h"
 
 void kernel_main() {
     Noc noc;

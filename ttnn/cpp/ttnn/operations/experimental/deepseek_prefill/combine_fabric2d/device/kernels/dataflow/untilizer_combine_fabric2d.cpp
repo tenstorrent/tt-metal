@@ -28,19 +28,18 @@
 #include "combine_fabric2d_untilizer_rt_args.hpp"
 #include "combine_fabric2d_group_walk.hpp"
 
-// CMBF2D_OVERLAPPED guards the two things that genuinely differ between this op and the routed expert's
-// overlapped build -- which expert a walk step names, and the gate on the routed expert having written it.
-
 constexpr ::cmbf2d::UntilizerCtArgs ct{};
+
+// Set when the dispatched buffer is the output of a producer running beside this op, which reports each
+// expert's tile-rows as it writes them; otherwise every row exists before the launch.
+constexpr bool GATED = ct.ready_sem != ::cmbf2d::NO_SEMAPHORE;
 
 struct Dram {
     decltype(TensorAccessor(ct.dram_in_args, uint32_t{})) in;
     decltype(TensorAccessor(ct.dram_counts_args, uint32_t{})) counts;
     decltype(TensorAccessor(ct.dram_region_args, uint32_t{})) region;
     decltype(TensorAccessor(ct.dram_expert_offsets_args, uint32_t{})) expert_offsets;
-#ifdef CMBF2D_OVERLAPPED
     decltype(TensorAccessor(ct.dram_expert_table_args, uint32_t{})) expert_table;
-#endif
 };
 
 Dram open_dram() {
@@ -49,20 +48,14 @@ Dram open_dram() {
         TensorAccessor(ct.dram_in_args, rt.dram_in),
         TensorAccessor(ct.dram_counts_args, rt.dram_counts),
         TensorAccessor(ct.dram_region_args, rt.dram_region),
-        TensorAccessor(ct.dram_expert_offsets_args, rt.dram_expert_offsets)
-#ifdef CMBF2D_OVERLAPPED
-            ,
-        TensorAccessor(ct.dram_expert_table_args, rt.dram_expert_table)
-#endif
-    };
+        TensorAccessor(ct.dram_expert_offsets_args, rt.dram_expert_offsets),
+        TensorAccessor(ct.dram_expert_table_args, rt.dram_expert_table)};
 }
 
 ::cmbf2d::ControlTables read_control_tables(const Dram& dram) {
     constexpr uint32_t row_bytes = ct.num_routed_experts * 4;
-#ifdef CMBF2D_OVERLAPPED
     constexpr uint32_t ids_addr = ct.control_addr + ::cmbf2d::align_control((ct.dispatch_group_size + 2) * row_bytes);
     constexpr uint32_t ids_stride = ::cmbf2d::expert_table_row_stride(ct.experts_per_chip);
-#endif
     ::cmbf2d::ControlTables ctl{
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.control_addr),
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.control_addr + ct.dispatch_group_size * row_bytes),
@@ -70,19 +63,21 @@ Dram open_dram() {
         ct.num_routed_experts,
         ct.dispatch_group_size,
         ct.dispatch_capacity,
-#ifdef CMBF2D_OVERLAPPED
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ids_addr),
         ids_stride / 4,
-#endif
     };
     for (uint32_t r = 0; r < ct.dispatch_group_size; r++) {
         noc_async_read(dram.expert_offsets.get_noc_addr(r), ct.control_addr + r * row_bytes, row_bytes);
-#ifdef CMBF2D_OVERLAPPED
-        noc_async_read(
-            dram.expert_table.get_noc_addr(ct.expert_table_page_base + r),
-            ids_addr + r * ids_stride,
-            ct.experts_per_chip * 4);
-#endif
+        if constexpr (ct.has_expert_table != 0) {
+            noc_async_read(
+                dram.expert_table.get_noc_addr(ct.expert_table_page_base + r),
+                ids_addr + r * ids_stride,
+                ct.experts_per_chip * 4);
+        }
+    }
+    if constexpr (ct.has_expert_table == 0) {
+        ::cmbf2d::fill_contiguous_expert_ids(
+            ctl, ct.my_expert_base - ct.my_dg_index * ct.experts_per_chip, ct.experts_per_chip);
     }
     noc_async_read(dram.counts.get_noc_addr(0), (uint32_t)ctl.counts, row_bytes);
     noc_async_read(dram.region.get_noc_addr(0), (uint32_t)ctl.region, row_bytes);
@@ -90,15 +85,11 @@ Dram open_dram() {
     return ctl;
 }
 
+// Steps follow the producer's threshold-split order, which is this chip's slot order when there is no
+// threshold; the group's readers build the same walk from the same tables.
 ::cmbf2d::GroupWalk walk_for(const ::cmbf2d::ControlTables& ctl, uint32_t step) {
-#ifdef CMBF2D_OVERLAPPED
-    // Overlapped, steps are the routed expert's threshold-split order, not this chip's slot order; the
-    // group's readers build the same walk from the same tables.
     const uint32_t expert =
         ::cmbf2d::expert_at_step(ctl, ct.my_dg_index, ct.experts_per_chip, ct.expert_threshold, step);
-#else
-    const uint32_t expert = ct.my_expert_base + step;
-#endif
     return ::cmbf2d::group_walk(ctl, ct.walks_down != 0, expert, ct.my_dg_index, ct.num_destinations, [](uint32_t k) {
         return kernel_compile_time_args[ct.destination_base + k];
     });
@@ -109,7 +100,7 @@ uint64_t consumer_noc(uint32_t c, uint32_t addr) {
     return get_noc_addr(kernel_compile_time_args[w + 0], kernel_compile_time_args[w + 1], addr);
 }
 
-// The peer word names consumer c's `freed` count on this core; what it names is the owning op's choice.
+// The peer word is the semaphore id of consumer c's `freed` count on this core.
 volatile tt_l1_ptr uint32_t* freed_by(uint32_t c) {
     return ct.freed_ptr(kernel_compile_time_args[ct.consumer_base + c * ::cmbf2d::UNT_PEER_WORDS + 2]);
 }
@@ -157,7 +148,7 @@ void walk_my_batches(const ::cmbf2d::ControlTables& ctl, OnStep on_step, Body bo
         on_step(step);
         const ::cmbf2d::GroupWalk walk = walk_for(ctl, step);
         for (uint32_t b = 0; b < walk.num_batches(); b++, batch++) {
-            if (batch % ct.num_peers == ct.my_index) {
+            if (batch % ct.num_peers == ct.core_index()) {
                 body(b, walk);
             }
         }
@@ -177,38 +168,33 @@ void kernel_main() {
     *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_batches.get_write_ptr()) = mine;
     cb_batches.push_back(1);
 
-#ifdef CMBF2D_OVERLAPPED
-    // A step's tile-rows are the routed expert's output: wait until it reports them written. Only here,
-    // not in the counting walk above, which must finish before any expert is ready.
-#ifdef CMBF2D_PROGRESS_SEM
+    // With a producer beside us, a step's tile-rows are its output: wait until it reports them written. Only
+    // here, not in the counting walk above, which must finish before any expert is ready.
+    //
     // A unified-pass expert is written chunk by chunk, so its tile-rows are taken as the collector reports
     // them (`progress`), not all at once at the end; the per-row gate is in the batch loop below.
     bool gate_rows = false;
     uint32_t gate_step = 0;
     uint32_t gate_target = 0;
     uint32_t gate_base_row = 0;
-#endif
     const auto on_step = [&](uint32_t step) {
-        const uint32_t local =
-            ::cmbf2d::local_at_step(ctl, ct.my_dg_index, ct.experts_per_chip, ct.expert_threshold, step);
-        const uint32_t target =
-            ::cmbf2d::ready_target(ctl, ct.my_dg_index, ct.experts_per_chip, ct.expert_threshold, local);
-#ifdef CMBF2D_PROGRESS_SEM
-        gate_rows = !::cmbf2d::in_fused_pass(ctl, ct.my_dg_index, ct.expert_threshold, local);
-        if (gate_rows) {
-            // The collector counts the routed expert's steps, one per slot walked in each pass, not this
-            // walk's steps: the one whose completion makes `ready` reach target is target - 1.
-            gate_step = target - 1;
-            gate_target = target;
-            gate_base_row = ctl.region[ctl.expert_id(ct.my_dg_index, local)] / ::cmbf2d::UNT_BATCH_ROWS;
-            return;
+        if constexpr (GATED) {
+            const uint32_t local =
+                ::cmbf2d::local_at_step(ctl, ct.my_dg_index, ct.experts_per_chip, ct.expert_threshold, step);
+            const uint32_t target =
+                ::cmbf2d::ready_target(ctl, ct.my_dg_index, ct.experts_per_chip, ct.expert_threshold, local);
+            gate_rows = !::cmbf2d::in_fused_pass(ctl, ct.my_dg_index, ct.expert_threshold, local);
+            if (gate_rows) {
+                // The collector counts the routed expert's steps, one per slot walked in each pass, not this
+                // walk's steps: the one whose completion makes `ready` reach target is target - 1.
+                gate_step = target - 1;
+                gate_target = target;
+                gate_base_row = ctl.region[ctl.expert_id(ct.my_dg_index, local)] / ::cmbf2d::UNT_BATCH_ROWS;
+                return;
+            }
+            ::cmbf2d::wait_for_ready(ct.ready_sem, target);
         }
-#endif
-        ::cmbf2d::wait_for_ready(ct.ready_sem, target);
     };
-#else
-    const auto on_step = [](uint32_t) {};
-#endif
 
     Ring ring;
     walk_my_batches(ctl, on_step, [&](uint32_t b, const ::cmbf2d::GroupWalk& walk) {
@@ -217,13 +203,12 @@ void kernel_main() {
         }
         // The whole tile-row, a block of tiles at a time so the input window stays small. Whole because that
         // is the least an untilize can do, even when the walk wants only part of it.
-#ifdef CMBF2D_PROGRESS_SEM
-        if (gate_rows) {
+        if (GATED && gate_rows) {
             // Either the whole step is out, or the chunk holding this tile-row is.
             volatile tt_l1_ptr uint32_t* ready =
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(ct.ready_sem));
             volatile tt_l1_ptr uint32_t* progress =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(CMBF2D_PROGRESS_SEM));
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(ct.progress_sem));
             const uint32_t rel_row = walk.tile_row_of(b) - gate_base_row;
             const auto released = [&]() {
                 const uint32_t p = *progress;
@@ -238,7 +223,6 @@ void kernel_main() {
                 invalidate_l1_cache();
             }
         }
-#endif
         CircularBuffer cb_in(::cmbf2d::UNT_CB_IN);
         const uint32_t first_tile = walk.tile_row_of(b) * ct.tiles_per_row;
         for (uint32_t t = 0; t < ct.tiles_per_row; t += ct.block_tiles) {
@@ -253,13 +237,9 @@ void kernel_main() {
         ring.publish();
     });
 
+    // Every batch this core staged has been released by every consumer, so nothing is still counting up, and
+    // the counts are program semaphores the next launch re-initialises.
     while (ring.popped < ring.produced) {
         ring.reclaim_one();
-    }
-
-    // Every batch this core staged has been released by every consumer, so nothing is still counting up.
-    // Whether the counts need zeroing for the next launch depends on where they live.
-    for (uint32_t c = 0; c < ct.num_consumers; c++) {
-        ct.reset_freed_counter(freed_by(c));
     }
 }

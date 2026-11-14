@@ -171,7 +171,7 @@ std::optional<uint64_t> resolve_direct_neighbor_route_hash(
                     }
                     return std::nullopt;
                 }
-                const auto link_indices = tt::tt_fabric::get_forwarding_link_indices(source, destination);
+                const auto link_indices = tt::tt_fabric::get_forwarding_link_indices(*mesh_device, source, destination);
                 for (uint32_t link = 0; link < num_links; ++link) {
                     if (std::find(link_indices.begin(), link_indices.end(), link) == link_indices.end()) {
                         if (log_rejection) {
@@ -378,8 +378,8 @@ MeshRingPosition get_mesh_ring_position(
         }
         return MeshRingPosition{
             .transport_rank = transport_rank,
-            .tensor_rank = ttnn::ccl::snake_ring::row_major_index(
-                transport_rank, plan.mesh_rows, plan.mesh_cols, plan.orientation),
+            .tensor_rank = ttnn::ccl::snake_ring::tensor_index(
+                transport_rank, plan.mesh_rows, plan.mesh_cols, plan.orientation, plan.column_major_ranks),
             .forward_coord = forward_coord,
             .backward_coord = backward_coord};
     }

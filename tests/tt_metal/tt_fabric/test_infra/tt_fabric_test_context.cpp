@@ -324,7 +324,14 @@ void TestContext::setup_devices() {
     const auto& available_coords = this->fixture_->get_host_local_device_coordinates();
     for (const auto& coord : available_coords) {
         test_devices_.emplace(
-            coord, TestDevice(coord, this->fixture_, this->fixture_, &sender_memory_map_, &receiver_memory_map_));
+            coord,
+            TestDevice(
+                coord,
+                this->fixture_->get_mesh_device(),
+                this->fixture_,
+                this->fixture_,
+                &sender_memory_map_,
+                &receiver_memory_map_));
     }
 }
 
@@ -662,6 +669,12 @@ void TestContext::process_traffic_config(TestConfig& config) {
                 .is_2D_routing_enabled = fixture_->is_2D_routing_enabled(),
                 .mesh_shape = this->fixture_->get_mesh_shape(),
                 .topology = this->fixture_->get_topology()};
+            if (pattern.ntype->type == NocSendType::NOC_UNICAST_SCATTER_WRITE) {
+                traffic_parameters.scatter_chunk_sizes = scatter_chunk_sizes(
+                    pattern.ntype->options_or_default<ScatterWriteOptions>(),
+                    pattern.size.value(),
+                    fixture_->get_l1_alignment());
+            }
 
             TestTrafficConfig traffic_config = {
                 .parameters = traffic_parameters,
@@ -735,7 +748,7 @@ void TestContext::add_traffic_config(const TestTrafficConfig& traffic_config) {
         .link_id = traffic_config.link_id,
         .vc_id = traffic_config.vc_id,
         .chip_send_type = traffic_config.parameters.chip_send_type,
-        .noc_send_type = traffic_config.parameters.noc_send_type,
+        .noc_send_type = traffic_config.parameters.noc_send_type.type,
         .num_packets = traffic_config.parameters.num_packets,
         .payload_size_bytes = traffic_config.parameters.payload_size_bytes,
     });

@@ -9,7 +9,7 @@
 #ifdef ARCH_QUASAR
 #include "llk_math_eltwise_binary_sfpu_add_int.h"
 #else
-#include "sfpu/ckernel_sfpu_add_int.h"
+#include "ckernel_sfpu_add_int.h"
 #include "llk_math_eltwise_binary_sfpu_macros.h"
 #endif
 #endif
@@ -51,7 +51,7 @@ ALWI void add_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
         data_format == DataFormat::Int32 || data_format == DataFormat::UInt32 || data_format == DataFormat::UInt16,
         "Unsupported data format for add_int. Supported data formats are: Int32, UInt32, UInt16");
     constexpr InstrModLoadStore INSTRUCTION_MODE =
-        (data_format == DataFormat::UInt16) ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;
+        (data_format == DataFormat::UInt16) ? InstrModLoadStore::UINT16 : InstrModLoadStore::INT32;
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,

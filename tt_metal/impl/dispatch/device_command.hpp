@@ -4,8 +4,7 @@
 
 #pragma once
 
-#include <stdint.h>
-#include <tt_stl/aligned_allocator.hpp>
+#include <cstdint>
 #include <algorithm>
 #include <bit>
 #include <cstddef>
@@ -17,9 +16,7 @@
 #include "common/env_lib.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
-#include "memcpy.hpp"
 #include <tt_stl/span.hpp>
-#include "tt_align.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "vector_aligned.hpp"
 

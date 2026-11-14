@@ -41,9 +41,9 @@ inline void released_side(std::uint32_t& enabled_seen, std::uint32_t& disabled_s
     volatile std::uint32_t tt_reg_ptr* cfg = get_cfg_pointer();
     for (std::uint32_t i = 0; i < CYCLES; i++)
     {
-        _llk_set_fp32_dest_acc_<thread_id>();
+        _llk_set_fp32_dest_acc_<thread_id>(true /*enable*/);
         enabled_seen += dest_acc_field_set(cfg) ? 1 : 0;
-        _llk_set_fp32_dest_acc_<thread_id>();
+        _llk_set_fp32_dest_acc_<thread_id>(false /*enable*/);
         disabled_seen += dest_acc_field_set(cfg) ? 0 : 1;
     }
 }

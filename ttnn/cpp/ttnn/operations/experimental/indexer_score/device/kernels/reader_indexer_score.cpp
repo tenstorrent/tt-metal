@@ -10,7 +10,7 @@
 // sender reads DRAM + mcasts; receiver takes the L1->L1 copy; none is a plain DRAM read. q/w (row) and k
 // (column) mcast are independent; either may be off.
 
-#include <tt-metalium/constants.hpp>
+#include "api/tile_constants.h"
 
 #include "indexer_score_runtime_args.hpp"
 #include "indexer_schedule.hpp"
@@ -73,7 +73,8 @@ constexpr uint32_t bc_chunk_local = get_compile_time_arg_val(bc_ct_base + 1);
 constexpr uint32_t bc_sp = get_compile_time_arg_val(bc_ct_base + 2);
 constexpr uint32_t bc_shard_stride_gap = get_compile_time_arg_val(bc_ct_base + 3);
 constexpr uint32_t bc_slab_stride_gap = get_compile_time_arg_val(bc_ct_base + 4);
-constexpr bool full_mesh_rank_mapping = get_compile_time_arg_val(bc_ct_base + 5) != 0;
+// 0 = axis ring, 1 = full mesh with row-major tensor ranks, 2 = full mesh with column-major tensor ranks.
+constexpr uint32_t full_mesh_rank_mapping = get_compile_time_arg_val(bc_ct_base + 5);
 constexpr auto snake_orientation =
     static_cast<ttnn::ccl::snake_ring::Orientation>(get_compile_time_arg_val(bc_ct_base + 6));
 constexpr uint32_t rank_mapping_mesh_rows = get_compile_time_arg_val(bc_ct_base + 7);
@@ -149,20 +150,20 @@ struct McastDir {
     uint32_t ndst;            // number of receivers
 };
 
-/** Sender: data already at `addr` from DRAM; wait all receivers ready, mcast the block,
+/** Sender: data already at `cb`'s write pointer from DRAM; wait all receivers ready, mcast the block,
  *  then relay the valid flag into their recv semaphore. Mirrors chain_link. */
 template <uint32_t send_sem, uint32_t recv_sem, uint32_t valid_sem>
-inline void mcast_send(Noc noc, const McastDir& d, uint32_t addr, uint32_t bytes) {
+inline void mcast_send(Noc noc, const McastDir& d, const CircularBuffer& cb, uint32_t bytes) {
     Semaphore<> s(send_sem);
     s.wait(d.ndst);  // all receivers reserved their slot and signaled ready
     s.set(0);
     noc.async_write_multicast(
-        CoreLocalMem<uint32_t>(addr),
-        MulticastEndpoint{},
+        CoreLocalMem<uint32_t>(cb.get_write_ptr()),
+        cb,
         bytes,
         d.ndst,
         {},
-        {.noc_x_start = d.xs, .noc_y_start = d.ys, .noc_x_end = d.xe, .noc_y_end = d.ye, .addr = addr},
+        {.noc_x_start = d.xs, .noc_y_start = d.ys, .noc_x_end = d.xe, .noc_y_end = d.ye},
         /*linked=*/true);
     // back-to-back after the linked data write (a flush/barrier between would deadlock)
     Semaphore<>(valid_sem).relay_multicast(
@@ -198,7 +199,7 @@ inline void read_block_or_mcast(Noc noc, uint32_t ntiles, uint32_t bytes, const 
     noc.async_read_barrier();
     if constexpr (mcast_on) {
         if (dir.role == iscore::mcast_role_sender) {  // broadcast the block to the rest of the rect
-            mcast_send<send_sem, recv_sem, valid_sem>(noc, dir, addr, bytes);
+            mcast_send<send_sem, recv_sem, valid_sem>(noc, dir, cb, bytes);
         }
     }
     cb.push_back(ntiles);
@@ -305,7 +306,7 @@ inline void read_q_rows(Noc noc, const QAcc& q_acc, uint32_t q_row_start, const 
         noc.async_read_barrier();
         if constexpr (q_mcast_on) {
             if (q_dir.role == iscore::mcast_role_sender) {  // broadcast this row down the grid row
-                mcast_send<q_send_sem, q_recv_sem, q_valid_sem>(noc, q_dir, row_addr, row_tiles * q_tile_bytes);
+                mcast_send<q_send_sem, q_recv_sem, q_valid_sem>(noc, q_dir, cb, row_tiles * q_tile_bytes);
             }
         }
         cb.push_back(row_tiles);
@@ -397,7 +398,7 @@ inline void read_w_group(Noc noc, const WAcc& w_acc, uint32_t q_row_start, const
         }
         noc.async_read_barrier();
         if (q_mcast_on && q_dir.role == iscore::mcast_role_sender) {
-            mcast_send<q_send_sem, q_recv_sem, q_valid_sem>(noc, q_dir, addr, input_tiles * bf16_tile_bytes);
+            mcast_send<q_send_sem, q_recv_sem, q_valid_sem>(noc, q_dir, cb, input_tiles * bf16_tile_bytes);
         }
     }
     if constexpr (stream_heads || fuse_single) {

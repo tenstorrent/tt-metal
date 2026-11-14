@@ -37,12 +37,12 @@ Grep for "X" in tt_llk_{target_arch}/ (*.h files)
 Common SFPU includes:
 ```cpp
 #include "sfpi.h"
-#include "ckernel_sfpu_load_config.h"
+#include "sfpu/ckernel_sfpu_load_config.h"
 ```
 
 ```
 # Check what includes similar kernels use
-Glob for tt_llk_{target_arch}/common/inc/sfpu/ckernel_sfpu_*.h, then Read the top of each file
+Glob for tt_metal/hw/ckernels/{target_arch}/metal/llk_api/llk_sfpu/ckernel_sfpu_*.h, then Read the top of each file
 ```
 
 ### Wrong v_if Syntax

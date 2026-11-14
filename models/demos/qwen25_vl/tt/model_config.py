@@ -9,9 +9,9 @@ from loguru import logger
 
 import ttnn
 from models.demos.qwen25_vl.tt.common import nearest_multiple
-from models.tt_transformers.tt.load_checkpoints import load_hf_state_dict_filtered
-from models.tt_transformers.tt.model_config import DecodersPrecision
-from models.tt_transformers.tt.model_config import ModelArgs as TTModelArgs
+from models.ttt_compat.tt.load_checkpoints import load_hf_state_dict_filtered
+from models.ttt_compat.tt.model_config import DecodersPrecision
+from models.ttt_compat.tt.model_config import ModelArgs as TTModelArgs
 
 
 def find_qwen_vl_width_grid(width: int, tile_size: int, max_rows: int = 4, max_cols: int = 8) -> tuple[int, int]:
@@ -71,7 +71,7 @@ MAX_IMAGE_PIXELS = 11_000_000
 class ModelArgs(TTModelArgs):
     LOCAL_HF_PARAMS = {
         **TTModelArgs.LOCAL_HF_PARAMS,
-        "olmOCR-2-7B-1025": "models/tt_transformers/model_params/Qwen2.5-VL-7B-Instruct",
+        "olmOCR-2-7B-1025": "models/ttt_compat/model_params/Qwen2.5-VL-7B-Instruct",
     }
 
     def __init__(self, *args, **kwargs):
@@ -272,7 +272,7 @@ class VisionModelArgs(ModelArgs):
         """CCL helper shared by the tensor-parallel vision modules (created lazily so unit tests that build a
         single block get one too)."""
         if self.tt_ccl is None:
-            from models.tt_transformers.tt.ccl import TT_CCL
+            from models.ttt_compat.tt.ccl import TT_CCL
 
             self.tt_ccl = TT_CCL(self.mesh_device)
         return self.tt_ccl

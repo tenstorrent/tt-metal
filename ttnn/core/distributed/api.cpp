@@ -79,7 +79,9 @@ std::vector<Tensor> get_device_tensors(const Tensor& tensor) {
         std::vector<ttnn::Tensor> tensors;
         tensors.reserve(device_storage.get_coords().size());
         for (const auto& coord : device_storage.get_coords()) {
-            tensors.push_back(Tensor(DeviceStorage(device_storage, {coord})));
+            // Each shard is a tensor of its own held at one mesh coordinate and is labelled as such; the label of
+            // the tensor it was taken from describes shards this tensor does not hold.
+            tensors.push_back(Tensor(DeviceStorage::single_shard(device_storage, coord)));
         }
         return tensors;
     }

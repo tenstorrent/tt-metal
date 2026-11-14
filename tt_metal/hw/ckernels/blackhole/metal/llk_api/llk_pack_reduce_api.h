@@ -11,18 +11,17 @@
  * LLK PACK REDUCE
  *************************************************************************/
 
-// Unified core (explicit face_r_dim), shared by the CB-id API and the LLKOperand API (experimental/2_0/).
+// Pass the output geometry through one shared LLK mask configuration path.
+// The LLKOperand API (experimental/2_0/) supplies the same geometry from its output TensorShape.
 template <ReduceDim dim, PackMode pack_mode = PackMode::Default>
-inline void llk_pack_reduce_mask_config_impl(const std::uint32_t face_r_dim) {
-    _llk_pack_reduce_mask_config_<dim, pack_mode>(face_r_dim);
+inline void llk_pack_reduce_mask_config_impl(const ckernel::TensorShape& tensor_shape) {
+    _llk_pack_reduce_mask_config_<dim, pack_mode>(tensor_shape);
 }
 
-// Use the runtime face_r_dim of the output CB. Required for narrow tiles
-// (e.g. tile_dimensions=[1,32]) where face_r_dim differs from FACE_R_DIM.
+// Get the output shape from the output CB.
 template <ReduceDim dim, PackMode pack_mode = PackMode::Default>
 inline void llk_pack_reduce_mask_config(std::uint32_t ocb) {
-    const std::uint32_t output_id = get_output_id(ocb);
-    llk_pack_reduce_mask_config_impl<dim, pack_mode>(get_output_face_r_dim(output_id));
+    llk_pack_reduce_mask_config_impl<dim, pack_mode>(get_output_tensor_shape(get_output_id(ocb)));
 }
 
 inline void llk_pack_reduce_mask_clear() { _llk_pack_reduce_mask_clear_(); }

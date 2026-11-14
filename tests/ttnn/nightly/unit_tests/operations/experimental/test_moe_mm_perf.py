@@ -14,6 +14,7 @@ from tracy.process_model_log import (
 )
 
 from tests.ttnn.nightly.unit_tests.operations.experimental.test_moe_mm import SHAPE2TIME
+from tt_py_test_utils_common.utility_functions import is_wormhole_b0
 
 
 @pytest.mark.parametrize(
@@ -23,6 +24,9 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.test_moe_mm import SH
 @pytest.mark.parametrize("check_accuracy", [True], ids=["check_accuracy_True"])
 @pytest.mark.parametrize("dump_outputs", [False], ids=["dump_outputs_False"])
 def test_moe_mm_performance(M, K, N, L, C, check_accuracy, dump_outputs):
+    if not is_wormhole_b0():
+        pytest.skip("moe_gate_mm's ring is hardcoded for Wormhole's 12 DRAM views")
+
     command = f"pytest tests/ttnn/nightly/unit_tests/operations/experimental/test_moe_mm.py::test_moe_mm[dump_outputs_{dump_outputs}-check_accuracy_{check_accuracy}-M={M}-K={K}-N={N}-L={L}-C={C}-dispatch_row]"
     run_device_profiler(command, "ttnn_moe_mm_performance", device_analysis_types=["device_kernel_duration"])
 

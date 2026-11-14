@@ -22,7 +22,7 @@ from unittest.mock import Mock, create_autospec
 
 import pytest
 
-from models.demos.common.prefill.adapter import ADAPTER_PATHS, get_adapter
+from models.demos.common.prefill.adapter import ADAPTER_PATHS, PrefillRunParams, get_adapter
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime
@@ -79,21 +79,26 @@ def test_every_forward_call_binds_to_the_transformer():
         ({"kvpe_cache": object()}, ValueError, "owns its state"),
         ({"metadata": object()}, NotImplementedError, "no traced path"),
         ({"d2h_service": object()}, NotImplementedError, "host layer acks"),
-        ({"cache_user_id": 1}, ValueError, "single-user"),
+        ({"cache_user_id": 2}, ValueError, "outside the model's 2 slots"),
+        ({"cache_user_id": -1}, ValueError, "outside the model's 2 slots"),
     ],
 )
 def test_forward_rejects_unsupported_arguments_before_device_work(expect_error, kwargs, error, message):
     model = object.__new__(TtV4Transformer)
-    model.position = 0
+    model.slot_num, model.positions = 2, [0, 0]
     with expect_error(error, message):
         model.forward(object(), **kwargs)
 
 
-def test_forward_rejects_a_chunk_that_does_not_continue_the_state(expect_error):
+@pytest.mark.parametrize(
+    "cache_user_id, actual_start, message",
+    [(0, 0, "slot 0's attention state is at 5120"), (1, 5120, "slot 1's attention state is at 0")],
+)
+def test_forward_rejects_a_chunk_that_does_not_continue_its_slot(expect_error, cache_user_id, actual_start, message):
     model = object.__new__(TtV4Transformer)
-    model.position = 5120
-    with expect_error(ValueError, "attention state is at 5120"):
-        model.forward(object(), actual_start=0)
+    model.slot_num, model.positions = 2, [5120, 0]
+    with expect_error(ValueError, message):
+        model.forward(object(), actual_start=actual_start, cache_user_id=cache_user_id)
 
 
 def test_a_chunk_that_fails_mid_stack_makes_the_next_forward_demand_a_reset(expect_error):
@@ -101,7 +106,7 @@ def test_a_chunk_that_fails_mid_stack_makes_the_next_forward_demand_a_reset(expe
         raise RuntimeError("layer 1 failed")
 
     model = object.__new__(TtV4Transformer)
-    model.position = 5120
+    model.slot_num, model.positions = 2, [5120, 0]
     model.is_first_rank, model.is_last_rank, model.has_hash_layers = False, False, False
     model.mesh_device, model.sp_axis, model.first_layer_idx = SimpleNamespace(shape=(4, 8)), 0, 0
     model.layers = [Mock(return_value=object()), failing_layer]
@@ -109,12 +114,38 @@ def test_a_chunk_that_fails_mid_stack_makes_the_next_forward_demand_a_reset(expe
         model.forward(SimpleNamespace(shape=(1, 1, 1280, 64)), actual_start=5120)
 
     for actual_start in (5120, None):
-        with expect_error(RuntimeError, "reset_streams"):
+        with expect_error(RuntimeError, r"reset_streams\(0\)"):
             model.forward(object(), actual_start=actual_start)
+    # Only the failed chunk's slot is poisoned; the other user's state is where it was.
+    assert model.positions == [None, 0]
 
     model.layers = [Mock(), Mock()]
-    model.reset_streams()
-    assert model.position == 0
+    model.reset_streams(0)
+    assert model.positions == [0, 0]
+    for layer in model.layers:
+        layer.reset_state.assert_called_once_with(0)
+
+
+@pytest.mark.parametrize("args, slot", [((1,), 1), ((), 0)], ids=["slot1", "default-slot0"])
+def test_reset_streams_resets_only_the_named_slot(args, slot):
+    model = object.__new__(TtV4Transformer)
+    model.slot_num, model.positions = 2, [5120, 10240]
+    model.layers = [Mock(), Mock()]
+    model.reset_streams(*args)
+    expected = [5120, 10240]
+    expected[slot] = 0
+    assert model.positions == expected
+    for layer in model.layers:
+        layer.reset_state.assert_called_once_with(slot)
+
+
+def test_a_reset_that_fails_mid_stack_makes_the_slot_demand_another(expect_error):
+    model = object.__new__(TtV4Transformer)
+    model.slot_num, model.positions = 2, [5120, 10240]
+    model.layers = [Mock(), Mock(**{"reset_state.side_effect": RuntimeError("allocation failed")})]
+    with expect_error(RuntimeError, "allocation failed"):
+        model.reset_streams(1)
+    assert model.positions == [5120, None]
 
 
 @pytest.mark.parametrize(
@@ -122,7 +153,6 @@ def test_a_chunk_that_fails_mid_stack_makes_the_next_forward_demand_a_reset(expe
     [
         (dict(mtp_levels=1, use_trace=False, num_users=1, dflash_enabled=False), "no MTP predictor"),
         (dict(mtp_levels=0, use_trace=True, num_users=1, dflash_enabled=False), "eager-only"),
-        (dict(mtp_levels=0, use_trace=False, num_users=2, dflash_enabled=False), "single-user"),
         (dict(mtp_levels=0, use_trace=False, num_users=1, dflash_enabled=True), "no DFlash"),
         (dict(mtp_levels=0, use_trace=False, num_users=1, dflash_enabled=False, is_last_rank=False), "single-rank"),
         (dict(mtp_levels=0, use_trace=False, num_users=1, dflash_enabled=False, is_first_rank=False), "single-rank"),
@@ -138,16 +168,35 @@ def test_runtime_rejects_unsupported_config_before_the_shared_build(monkeypatch,
     parent_build.assert_not_called()
 
 
+def test_runtime_builds_more_than_one_user_slot(monkeypatch):
+    runtime = object.__new__(TtV4Runtime)
+    runtime.config = SimpleNamespace(
+        is_first_rank=True, is_last_rank=True, mtp_levels=0, use_trace=False, num_users=2, dflash_enabled=False
+    )
+    parent_build = create_autospec(TtPrefillRuntime._build_model)
+    monkeypatch.setattr(TtPrefillRuntime, "_build_model", parent_build)
+    runtime._build_model({})
+    parent_build.assert_called_once()
+
+
+@pytest.mark.parametrize("slot_id, reset_slot", [(0, 0), (1, 1), (None, 0)], ids=["slot0", "slot1", "none-is-slot0"])
 @pytest.mark.parametrize("actual_start, resets", [(0, True), (5120, False)])
-def test_runtime_resets_the_attention_state_only_at_request_head(monkeypatch, actual_start, resets):
+def test_runtime_resets_the_slot_state_only_at_request_head(monkeypatch, actual_start, resets, slot_id, reset_slot):
     runtime = object.__new__(TtV4Runtime)
     runtime.model = Mock()
     parent_chunk = create_autospec(TtPrefillRuntime.prefill_chunk)
     monkeypatch.setattr(TtPrefillRuntime, "prefill_chunk", parent_chunk)
     # Positional, as the runner calls it: slot_id is the third argument and actual_start the fourth.
-    runtime.prefill_chunk(object(), object(), 0, actual_start, actual_start + 5120)
-    assert runtime.model.reset_streams.called == resets
+    runtime.prefill_chunk(object(), object(), slot_id, actual_start, actual_start + 5120)
+    if resets:
+        runtime.model.reset_streams.assert_called_once_with(reset_slot)
+    else:
+        runtime.model.reset_streams.assert_not_called()
     parent_chunk.assert_called_once()
+    # The shared runtime gets the slot the reset used, so the chunk lands where the state was reset.
+    call = parent_chunk.call_args
+    forwarded = inspect.signature(TtPrefillRuntime.prefill_chunk).bind(*call.args, **call.kwargs)
+    assert forwarded.arguments["slot_id"] == slot_id
 
 
 @pytest.mark.parametrize("name, model_cfg", _ADAPTERS)
@@ -179,3 +228,35 @@ def test_adapter_allocates_no_kv_cache_and_no_weight_cache(name, model_cfg):
     adapter = get_adapter(name)
     assert adapter.allocate_kv_cache(mesh_device=None, hf_config=None, params=None).kvpe is None
     assert adapter.weight_cache_path((8, 4)) is None
+
+
+@pytest.mark.parametrize("name, model_cfg", _ADAPTERS)
+def test_adapter_builds_the_runner_single_rank_params_without_a_kv_only_layer(monkeypatch, name, model_cfg):
+    adapter = get_adapter(name)
+    tt = "models.demos.deepseek_v3_d_p.tt"
+    monkeypatch.setattr(f"{tt}.tt_ccl.per_axis_topology", lambda: None)
+    monkeypatch.setattr(type(adapter), "checkpoint_path", lambda self: Path("/checkpoint"))
+    monkeypatch.setattr(f"{tt}.v4.weights.v4_model_from_checkpoint", lambda *args, **kwargs: {})
+    monkeypatch.setattr(f"{tt}.v4.weights.V4CheckpointLayers", Mock())
+    runtime_cls = Mock()
+    monkeypatch.setattr(f"{tt}.v4.runtime.TtV4Runtime", runtime_cls)
+    # What prefill_runner.main passes on a single rank with MTP off.
+    params = PrefillRunParams(
+        mesh_shape=(8, 4),
+        num_layers=4,
+        first_layer_idx=0,
+        is_first_rank=True,
+        is_last_rank=True,
+        max_seq_len=10240,
+        chunk_size=5120,
+        num_users=2,
+        capacity_factor=8,
+        num_links=2,
+        gate_mode_name=adapter.default_gate_mode,
+        kv_only_last_layer=True,
+        weight_cache_path=None,
+    )
+    adapter.build_runtime(mesh_device=None, hf_config=adapter.load_hf_config(), params=params)
+    config = runtime_cls.call_args.kwargs["config"]
+    assert not config.kv_only_last_layer
+    assert config.num_users == 2

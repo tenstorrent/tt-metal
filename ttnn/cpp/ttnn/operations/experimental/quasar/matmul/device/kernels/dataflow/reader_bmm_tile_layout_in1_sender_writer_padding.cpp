@@ -165,13 +165,12 @@ void kernel_main() {
     constexpr uint32_t cb_id_in1 = get_named_compile_time_arg_val("cb_in1");
     constexpr uint32_t in1_single_tile_size_bytes = get_tile_size(cb_id_in1);
     constexpr const uint32_t in1_tile_hw = get_tile_hw(cb_id_in1);
-    // Tiles whose size is not a multiple of the DRAM alignment are padded to it in DRAM, and the
-    // interleaved in1 CB pages are sized to match (see the program factory). On the plain interleaved
-    // path the NOC reads the unpadded tile of data into each padded slot and tiles are laid out /
-    // multicast at the padded stride. No-op when already aligned. The sharded / DRAM-sharded paths
-    // keep their natural (unpadded) stride.
-    constexpr uint32_t in1_aligned_tile_size_bytes =
-        (in1_single_tile_size_bytes + (DRAM_ALIGNMENT - 1)) & ~(DRAM_ALIGNMENT - 1);
+    // Interleaved tiles are laid out in L1 at their DRAM page stride rounded up to the NOC DRAM read alignment,
+    // the entry size the program factory set (get_interleaved_tile_stride): 576 B for a 544 B bfp8 32x16 tile on
+    // Blackhole, the tile size itself on Wormhole and on Quasar (whose NOC reads at any offset and whose unpacker
+    // walks the ring at the format's own stride, e.g. 1056 B for an 8-bit MX tile).
+    constexpr uint32_t in1_aligned_tile_size_bytes = (in1_single_tile_size_bytes + NOC_DRAM_READ_ALIGNMENT_BYTES - 1) /
+                                                     NOC_DRAM_READ_ALIGNMENT_BYTES * NOC_DRAM_READ_ALIGNMENT_BYTES;
 #if !defined(IN1_SHARDED) && !defined(IN1_DRAM_WIDTH_SHARDED) && !defined(IN1_DRAM_HEIGHT_SHARDED)
     constexpr uint32_t in1_block_size_bytes = in1_block_num_tiles * in1_aligned_tile_size_bytes;
 #else
@@ -242,7 +241,7 @@ void kernel_main() {
         // Compute DRAM bank and offset for this batch
         uint32_t in1_dram_bank_id = b / in1_batches_per_bank;
         uint32_t in1_batch_in_shard = b % in1_batches_per_bank;
-        AllocatorBank<AllocatorBankType::DRAM> dram_src;
+        const BankView dram_src(s1);
         uint32_t in1_dram_batch_offset = in1_batch_in_shard * in1_batch_stride_bytes;
 #endif  // IN1_DRAM_HEIGHT_SHARDED
 
@@ -292,17 +291,17 @@ void kernel_main() {
                         uint32_t l1_write_addr_in1_offset = 0;
                         uint32_t next_bank_id_and_dram_stride_index = 0;
 
-                        AllocatorBank<AllocatorBankType::DRAM> dram_bank;
+                        const BankView dram_bank(s1);
                         for (uint32_t i = 0; i < num_dram_shards_to_read; ++i) {
                             uint32_t shard_bank_id = current_dram_bank_id[next_bank_id_and_dram_stride_index];
-                            uint32_t shard_base_addr = in1_tensor_addr;
+                            uint32_t shard_base_offset = 0;
                             if (i == 0) {
-                                shard_base_addr += dram_tensor_start_offset;
+                                shard_base_offset += dram_tensor_start_offset;
                             }
                             noc.set_async_read_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
                                 dram_bank,
                                 in1_single_tile_size_bytes,
-                                {.bank_id = shard_bank_id, .addr = shard_base_addr},
+                                {.bank_id = shard_bank_id, .offset_bytes = shard_base_offset},
                                 NocOptVals{.vc = vc});
 
                             uint32_t l1_read_addr_in1 = l1_read_addr_in1_offset;
@@ -319,7 +318,8 @@ void kernel_main() {
                                         dram_bank,
                                         CoreLocalMem<uint32_t>(l1_write_addr_in1_temp),
                                         in1_single_tile_size_bytes,
-                                        {.bank_id = shard_bank_id, .addr = shard_base_addr + l1_read_addr_in1_temp},
+                                        {.bank_id = shard_bank_id,
+                                         .offset_bytes = shard_base_offset + l1_read_addr_in1_temp},
                                         {},
                                         NocOptVals{.vc = vc});
                                     l1_read_addr_in1_temp += in1_single_tile_size_bytes;
@@ -357,7 +357,7 @@ void kernel_main() {
                                         dram_src,
                                         CoreLocalMem<uint32_t>(l1_write_addr_in1),
                                         in1_single_tile_size_bytes,
-                                        {.bank_id = in1_dram_bank_id, .addr = in1_tensor_addr + tile_byte_offset},
+                                        {.bank_id = in1_dram_bank_id, .offset_bytes = tile_byte_offset},
                                         {});
                                 }
                                 l1_write_addr_in1 += in1_single_tile_size_bytes;
@@ -408,19 +408,17 @@ void kernel_main() {
                         sender_sem.set(0);
 
                         // Now we have the block in the CB address, we can mcast to dests!
-                        MulticastEndpoint mcast_dst;
                         // num_dests must not include source, since we are NOT really doing a local copy!
                         noc.async_write_multicast(
                             CoreLocalMem<uint32_t>(static_cast<uint32_t>(in1_start_address)),
-                            mcast_dst,
+                            cb_in1,
                             in1_block_size_bytes,
                             in1_mcast_num_cores,
                             {},
                             {.noc_x_start = in1_mcast_dest_noc_start_x,
                              .noc_y_start = in1_mcast_dest_noc_start_y,
                              .noc_x_end = in1_mcast_dest_noc_end_x,
-                             .noc_y_end = in1_mcast_dest_noc_end_y,
-                             .addr = static_cast<uint32_t>(in1_start_address)},
+                             .noc_y_end = in1_mcast_dest_noc_end_y},
                             true);
 
                         // Note: no need for write barrier, since these two multicasts are done on the same noc id and
@@ -464,21 +462,22 @@ void kernel_main() {
                         uint32_t l1_write_addr_in3_offset = 0;
                         uint32_t next_bank_id_and_dram_stride_index = 0;
 
-                        AllocatorBank<AllocatorBankType::DRAM> bias_dram_bank;
+                        // Bias is read by bank, like in1.
+                        const BankView bias_dram_bank(s3);
                         for (uint32_t i = 0; i < num_dram_shards_to_read; ++i) {
                             uint32_t bias_shard_bank_id = current_dram_bank_id[next_bank_id_and_dram_stride_index];
-                            uint32_t bias_shard_base_addr = in3_tensor_addr;
+                            uint32_t bias_shard_base_offset = 0;
                             if (i == 0) {
                                 // dram_tensor_start_offset is in in1 tile bytes; convert to
                                 // bias tile bytes since bias_dtype may differ from in1_dtype.
-                                bias_shard_base_addr += (dram_tensor_start_offset / in1_single_tile_size_bytes) *
-                                                        bias_single_tile_size_bytes;
+                                bias_shard_base_offset += (dram_tensor_start_offset / in1_single_tile_size_bytes) *
+                                                          bias_single_tile_size_bytes;
                             }
 
                             noc.set_async_read_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
                                 bias_dram_bank,
                                 bias_single_tile_size_bytes,
-                                {.bank_id = bias_shard_bank_id, .addr = bias_shard_base_addr},
+                                {.bank_id = bias_shard_bank_id, .offset_bytes = bias_shard_base_offset},
                                 NocOptVals{.vc = vc});
 
                             uint32_t l1_read_addr_in3 = 0;
@@ -494,7 +493,8 @@ void kernel_main() {
                                     bias_dram_bank,
                                     CoreLocalMem<uint32_t>(l1_write_addr_in3),
                                     bias_single_tile_size_bytes,
-                                    {.bank_id = bias_shard_bank_id, .addr = bias_shard_base_addr + l1_read_addr_in3},
+                                    {.bank_id = bias_shard_bank_id,
+                                     .offset_bytes = bias_shard_base_offset + l1_read_addr_in3},
                                     {},
                                     NocOptVals{.vc = vc});
                                 l1_read_addr_in3 += bias_single_tile_size_bytes;
@@ -535,19 +535,17 @@ void kernel_main() {
                         sender_sem.set(0);
 
                         // Now we have the block in the CB address, we can mcast to dests!
-                        MulticastEndpoint mcast_dst;
                         // num_dests must not include source, since we are NOT really doing a local copy!
                         noc.async_write_multicast(
                             CoreLocalMem<uint32_t>(static_cast<uint32_t>(in3_start_address)),
-                            mcast_dst,
+                            cb_in3,
                             in3_block_size_bytes,
                             in1_mcast_num_cores,
                             {},
                             {.noc_x_start = in1_mcast_dest_noc_start_x,
                              .noc_y_start = in1_mcast_dest_noc_start_y,
                              .noc_x_end = in1_mcast_dest_noc_end_x,
-                             .noc_y_end = in1_mcast_dest_noc_end_y,
-                             .addr = static_cast<uint32_t>(in3_start_address)},
+                             .noc_y_end = in1_mcast_dest_noc_end_y},
                             true);
                         // Note: no need for write barrier, since these two multicasts are done on the same noc id, same
                         // vc, same cmd_buf Also, this only works because we are setting VCs statically (using
@@ -678,10 +676,10 @@ void kernel_main() {
 
 #ifdef IN1_DRAM_WIDTH_SHARDED
     // Restore only NCRISC read_cmd_buf NOC_CTRL_LO VC to firmware default; a full set_async_read_state
-    // would also clobber NOC_TARG_ADDR_* / NOC_AT_LEN_BE sticky regs that the next kernel's async_read_*_with_state fast paths read.
-    const uint32_t noc_rd_cmd_field = NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED |
-                                      NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1) |
-                                      NOC_RESP_STATIC_VC(READ_RESPONSE_STATIC_VC);
+    // would also clobber NOC_TARG_ADDR_* / NOC_AT_LEN_BE sticky regs that the next kernel's async_read_*_with_state
+    // fast paths read.
+    const uint32_t noc_rd_cmd_field = NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC |
+                                      NOC_CMD_STATIC_VC(1) | NOC_RESP_STATIC_VC(READ_RESPONSE_STATIC_VC);
     NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_CTRL_LO, noc_rd_cmd_field);
 #endif
 }

@@ -18,7 +18,6 @@ swaps in a walk. Nothing in the layer loop changes between them, which is the po
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -29,14 +28,15 @@ from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res import TtAttnRes
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res_stream import BLOCK_SIZE, TtAttnResWalk
 from models.demos.deepseek_v3_d_p.tt.attn_res.weights import CHECKPOINT_PREFIX, load_attn_res_weights
-from models.demos.deepseek_v3_d_p.tt.kda.config import KIMI_K3_PROJECTION_DTYPE
-from models.demos.deepseek_v3_d_p.tt.kimi_k3.attention import K3AttnContext, K3KdaChunk, build_attention
+from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState
+from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import KdaStates, allocate_native_state
+from models.demos.deepseek_v3_d_p.tt.kimi_k3.attention import K3AttnContext, build_attention, build_kda_scalars
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.block import TtKimiK3Block
-from models.demos.deepseek_v3_d_p.tt.kimi_k3.kda_state import KdaStateCache
+from models.demos.deepseek_v3_d_p.tt.kimi_k3.kda_geometry import kimi_k3_kda_geometry
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.layer_schedule import KimiK3LayerSchedule
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.residual import TtAttnResResidual
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import mark_layer_cached
-from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl, per_axis_topology
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
 
@@ -77,8 +77,8 @@ class TtKimiK3Transformer(LightweightModule):
         stale = [idx for idx in layers if layer_is_stale(Path(cache_path), idx, model_cfg)]
         if stale:
             logger.warning(
-                f"Kimi-K3 cache at {cache_path}: layers {stale} lack {KIMI_K3_PROJECTION_DTYPE.name} KDA projections; "
-                f"rebuild them from the checkpoint (test_transformer_depth does this, rebuilding only the projections)"
+                f"Kimi-K3 cache at {cache_path}: layers {stale} lack current-format KDA weights; rebuild them from "
+                f"the checkpoint (test_transformer_depth does this, rebuilding only the KDA weights)"
             )
         return all(layer_is_cached(Path(cache_path), idx, model_cfg) for idx in layers)
 
@@ -104,13 +104,6 @@ class TtKimiK3Transformer(LightweightModule):
         max_seq_len: Optional[int] = None,
         is_chunked: bool = False,
         slot_num: int = 1,
-        # Same quantity as `slot_num` -- the number of concurrent cache slots. Two names for one
-        # concept was a live trap: `slot_num` reached MLA's KV slots while `num_users` sized the KDA
-        # carries, and the shared runtime passes only `slot_num`, so a run configured for two users
-        # built a ONE-slot KDA cache and died on the second user's first chunk with
-        # `IndexError: list index out of range` in KdaStateCache.read. Default None means "whatever
-        # slot_num says"; passing both is allowed only if they agree.
-        num_users: Optional[int] = None,
         gate_fallback_mode=None,
         is_balanced: bool = False,
         build_tail: bool = True,
@@ -133,14 +126,6 @@ class TtKimiK3Transformer(LightweightModule):
             raise ValueError(
                 f"Kimi-K3 uses a dense MLA KV cache; got sparse_kv_cache_format={sparse_kv_cache_format!r}"
             )
-        # One number, whichever name the caller used. `slot_num` and `num_users` are the same
-        # quantity and disagreeing on it is not a preference, it is a broken model: MLA would size
-        # its KV slots one way and KDA its carries another, and the mismatch only surfaces on the
-        # second user's first chunk.
-        if num_users is not None and num_users != slot_num:
-            raise ValueError(f"slot_num={slot_num} and num_users={num_users} are the same quantity and must agree")
-        cache_slots = max(slot_num, num_users if num_users is not None else 1)
-        self.num_users = cache_slots
         self.padding_side = padding_side
         self.mesh_device = mesh_device
         # Resolve once, here, rather than letting `None` reach a collective. The MoE's
@@ -176,21 +161,8 @@ class TtKimiK3Transformer(LightweightModule):
                 mesh_device,
                 hidden_size=model_cfg.EMB_SIZE,
                 eps=model_cfg.RMS_NORM_EPS,
+                sp_axis=sp_axis,
                 tp_axis=tp_axis,
-                # Hand AttnRes the model's own CCL pools. Without this it falls back to one fixed,
-                # privately-allocated semaphore set, which is only safe while nothing else has a
-                # collective in flight on the same axis -- and Kimi-K3's KDA layers cycle tt_ccl's
-                # pools on exactly this axis between every AttnRes read.
-                tt_ccl=get_tt_ccl(mesh_device),
-                # The statistics fold engages at FOLD_MIN_CANDIDATES (4) sealed snapshots and swaps
-                # the collective for a permute/composite-all_reduce pair. A pipelined rank reaches
-                # that depth on its FIRST layer (it inherits `first_layer_idx // 12` snapshots),
-                # where a single-rank run of the same width never would — 36 layers tops out at 3.
-                # Exposed so the fold can be taken out of the picture when diagnosing an L1
-                # placement failure. #54876's author later corrected its cause to layers-per-rank
-                # (40 fails, 36 passes even at sealed depth 6); the earlier depth-4 reproductions
-                # were contaminated by un-reset devices.
-                fold_stats=os.environ.get("PREFILL_ATTN_RES_FOLD_STATS", "1") == "1",
                 weights=load_attn_res_weights(
                     mesh_device,
                     state_dict.get("attn_res_weights"),
@@ -232,7 +204,22 @@ class TtKimiK3Transformer(LightweightModule):
             # Rejects a KDA last layer, which would compute a recurrence and write nothing.
             self.schedule.validate_kv_only_last_layer()
 
-        if is_first_rank:
+        if is_first_rank and first_layer_idx > 0:
+            # A first rank past layer 0 exists only under the runner's PREFILL_PP_LAYER_OFFSET (capacity probes),
+            # standing in for a stage whose input arrives over D2D and which holds no embedding. A one-tile
+            # random table gives the same [1, 1, seq/sp, emb/tp] output (ids clamp to its last row), so the
+            # stage's memory is measured without the 0.55 GiB of real embedding weights.
+            import torch
+
+            self.embed = TtParallelEmbedding(
+                mesh_device=mesh_device,
+                vocab_size=ttnn.TILE_SIZE,
+                emb_dim=config.hidden_size,
+                torch_weight=torch.randn(ttnn.TILE_SIZE, config.hidden_size, dtype=torch.bfloat16),
+                sp_axis=sp_axis,
+                tp_axis=tp_axis,
+            )
+        elif is_first_rank:
             self.embed = TtParallelEmbedding(
                 mesh_device=mesh_device,
                 vocab_size=config.vocab_size,
@@ -243,11 +230,15 @@ class TtKimiK3Transformer(LightweightModule):
                 weight_cache_path=weight_cache_path,
             )
 
-        # Every KDA layer's carry, allocated once for the run so a capture can bake in its address.
-        # Built after the layers, since it needs the ttKDA instances; the attentions are wired to it
-        # as they are created.
-        self.kda_states: KdaStateCache | None = None
-        kda_layers: dict[int, object] = {}
+        # The KDA carries live in the engine-owned `KdaStates` slabs (one per rank, every slot and
+        # layer), handed over by the runtime at `compile()`. The model owns only one scratch carry,
+        # the state every KDA layer runs on: allocated once so a capture can bake in its address,
+        # from the same geometry the slabs use, and before the layers so each gets it at construction.
+        self.kda_states: KdaStates | None = None
+        self.kda_scratch: KdaState | None = None
+        if self.schedule.rank_kda_layer_ids():
+            geometry = kimi_k3_kda_geometry(mesh_device.shape, sp_axis, tp_axis)
+            self.kda_scratch = allocate_native_state(mesh_device, geometry)
 
         self.layers = []
         for local_idx in range(num_layers):
@@ -262,7 +253,7 @@ class TtKimiK3Transformer(LightweightModule):
                 layer_idx=layer_idx,
                 schedule=self.schedule,
                 seq_len=seq_len,
-                state_cache=None,
+                kda_scratch=self.kda_scratch,
                 sp_axis=sp_axis,
                 tp_axis=tp_axis,
                 num_links=num_links,
@@ -276,9 +267,6 @@ class TtKimiK3Transformer(LightweightModule):
                 first_layer_idx=first_layer_idx,
                 tp_shard_kv=tp_shard_kv,
             )
-            if not self.schedule.local_is_mla(local_idx):
-                kda_layers[layer_idx] = attention.kda
-
             self.layers.append(
                 TtKimiK3Block(
                     mesh_device,
@@ -317,12 +305,6 @@ class TtKimiK3Transformer(LightweightModule):
             if layer_state and not (kv_only_last_layer and is_last):
                 mark_layer_cached(weight_cache_path, layer_idx)
 
-        if kda_layers:
-            self.kda_states = KdaStateCache(kda_layers, num_slots=cache_slots)
-            for layer in self.layers:
-                if not layer.attention.writes_kv:
-                    layer.attention.bind_state_cache(self.kda_states)
-
         self.norm = None
         if is_last_rank and build_tail and not kv_only_last_layer:
             self.norm = TtDistributedRmsNorm(
@@ -344,26 +326,11 @@ class TtKimiK3Transformer(LightweightModule):
         PREFILL_USE_TRACE=1; without it the runner dies with AttributeError during compile().
 
         Kimi-K3 is trace-eligible for the reason `TtPrefillTransformer.set_trace_controller` gives:
-        its attention is KDA or dense MLA, never a sparse/DSA indexer. The KDA carries are
-        address-stable (`KdaStateCache` commits with `ttnn.copy` into persistent buffers), which a
-        capture requires -- but address-stable is necessary, not sufficient: it is ONE address per
-        layer, and the capture bakes in whichever slot it was recorded with. See the guard below.
+        its attention is KDA or dense MLA, never a sparse/DSA indexer. Its KDA carries are
+        capture-safe for every user slot: they live at fixed addresses in the engine's `KdaStates`
+        slabs and every load and store selects the slot on device from `metadata[0]`, the way MLA
+        selects its KV slot, so one capture serves any slot the request is on (#59977).
         """
-        # The KDA arm selects its carry with the HOST scalar `ctx.cache_user_id`
-        # (`attention.py`), so the slot is resolved at capture time, not at replay time. The
-        # captured forward is built with cache_user_id=0 (`tt_prefill_runtime.py::_forward_traced`)
-        # while the eager path passes the real slot, so every replay would read and overwrite
-        # slot 0's recurrent carry whatever slot the request is on -- silently, since a chunk's own
-        # output still looks right and only the NEXT chunk inherits the wrong state. MLA is
-        # unaffected: it takes its slot from device-resident metadata. Refuse rather than corrupt;
-        # fixing it properly needs the carry indexed on-device from that metadata.
-        if controller is not None and self.kda_states is not None and self.kda_states.num_slots > 1:
-            raise NotImplementedError(
-                f"traced prefill supports one KDA slot, but this model has "
-                f"{self.kda_states.num_slots}. A capture resolves the KDA slot at capture time, so "
-                f"every replay would advance slot 0's carry. Run multi-user Kimi-K3 with "
-                f"PREFILL_USE_TRACE=0."
-            )
         for layer in self.layers:
             layer.set_trace_controller(controller)
 
@@ -398,17 +365,19 @@ class TtKimiK3Transformer(LightweightModule):
     def _pack_handoff(self, live, sealed):
         """Fuse the live stream and the sealed set into the one tensor the D2D socket carries.
 
-        `[1,1,N,d]` and `[1,k,N,d]` concatenate on dim 1 into `[1,k+1,N,d]`: plane 0 is the
+        `sealed` is the list of snapshot tensors in seal order, `[1,S_i,N,d]` each, so with the
+        live stream they concatenate on dim 1 into `[1,k+1,N,d]`: plane 0 is the
         live stream at a constant offset, planes `1..k` the sealed set in seal order. The mesh
         mapper shards dims 2 and 3, so dim 1 only widens the per-chip shard and the global
         tensor still means what it says.
 
         Both inputs are owned here (`handoff` transferred them) and are freed once copied.
         """
-        packed = live if sealed is None else ttnn.concat([live, sealed], dim=1)
+        packed = live if sealed is None else ttnn.concat([live, *sealed], dim=1)
         if sealed is not None:
             ttnn.deallocate(live)
-            ttnn.deallocate(sealed)
+            for snapshot in sealed:
+                ttnn.deallocate(snapshot)
         assert packed.shape[1] == self.outbound_planes, (
             f"handoff packed {packed.shape[1]} planes, but this rank's outbound spec is "
             f"{self.outbound_planes}; the socket would reject it far from here"
@@ -431,11 +400,6 @@ class TtKimiK3Transformer(LightweightModule):
         live = ttnn.slice(packed, [0, 0, 0, 0], [1, 1, tokens, width])
         sealed = ttnn.slice(packed, [0, 1, 0, 0], [1, planes, tokens, width]) if planes > 1 else None
         return live, sealed
-
-    def reset_streams(self, slot: int = 0) -> None:
-        """Zero the KDA carries for a new request. Call outside any captured region."""
-        if self.kda_states is not None:
-            self.kda_states.reset(slot)
 
     def forward(
         self,
@@ -470,14 +434,19 @@ class TtKimiK3Transformer(LightweightModule):
         AttnRes is the running sum, and is exactly what the vLLM traces record as
         `decoder_output_layer_i` (pinned by `tests/kimi_k3/test_golden_contract.py`). That makes the
         per-layer PCC curve a tap rather than a separate forward.
+
+        `on_layer_hidden(global_idx, hidden)` is the drafter hook. DSpark taps target layer L at layer
+        L+1's AttnRes read before attention (the input of `attn_norm`), so it fires inside each layer
+        with that read, reported as the layer before it: under AttnRes a new read site would need its
+        own query. `hidden` is borrowed from the stream, so use or copy it before returning.
         """
+        attn_input_tap = None
         if on_layer_hidden is not None:
-            # DFlash's per-layer tap. Under AttnRes a tap is a READ SITE, and a site needs its own
-            # folded query in the walk order — so exposing one is a schedule change, not a callback.
-            raise NotImplementedError(
-                "Kimi-K3 does not support on_layer_hidden: under AttnRes every read needs its own "
-                "query and site, so a per-layer tap is a walk-schedule change rather than a hook"
-            )
+            first = self.first_layer_idx
+
+            def attn_input_tap(local_idx, hidden):
+                on_layer_hidden(first + local_idx - 1, hidden)
+
         if index_kv_cache is not None:
             raise ValueError("Kimi-K3 has no DSA indexer; index_kv_cache must be None")
         if return_intermediates:
@@ -498,20 +467,31 @@ class TtKimiK3Transformer(LightweightModule):
 
         if self.is_first_rank:
             hidden, inherited = ttnn.unsqueeze_to_4D(self.embed(token_ids)), None
+            if self.inbound_planes > 1:
+                # A first rank past layer 0 exists only under the runner's PREFILL_PP_LAYER_OFFSET (capacity
+                # probes): it takes tokens, so no upstream rank sends the sealed snapshots. Stand copies of the
+                # live stream in for them, at the shape and sharding the D2D receive would give.
+                inherited = ttnn.concat([hidden] * (self.inbound_planes - 1), dim=1)
         else:
             hidden, inherited = self._unpack_handoff(token_ids)
         residual = self._residual_factory(hidden, inherited)
         # The regression guard for the bug this handoff exists to fix: a rank that starts with
         # nothing sealed silently believes it is the start of the model and reads every layer
-        # against an empty set. Host metadata only (`block_residual.shape[1]`), so it is safe
+        # against an empty set. Host metadata only (the sealed snapshots' `shape[1]`), so it is safe
         # inside a trace capture.
         assert residual.num_sealed == self.inbound_planes - 1, (
             f"rank starting at layer {self.first_layer_idx} opened with {residual.num_sealed} sealed "
             f"snapshots, expected {self.inbound_planes - 1}"
         )
 
-        # Eager chunks build the KDA bounds once and share them across the KDA layers.
-        kda_chunk = K3KdaChunk(actual_start, actual_end) if metadata is None else None
+        # The KDA layers' slot and bounds, built once per chunk: borrowed
+        # from `metadata` when traced, uploaded from the host ints when eager; what was built here is freed
+        # below. A rank without KDA layers builds nothing.
+        kda_scalars, owned_scalars = (
+            build_kda_scalars(self.mesh_device, metadata, cache_user_id, actual_start, actual_end)
+            if self.kda_scratch is not None
+            else (None, ())
+        )
         try:
             for local_idx, layer in enumerate(self.layers):
                 ctx = K3AttnContext(
@@ -522,7 +502,8 @@ class TtKimiK3Transformer(LightweightModule):
                     actual_start=actual_start,
                     actual_end=actual_end,
                     metadata=metadata,
-                    kda_chunk=kda_chunk,
+                    kda_scalars=kda_scalars,
+                    kda_states=self.kda_states,
                 )
                 layer.forward(
                     residual,
@@ -533,12 +514,13 @@ class TtKimiK3Transformer(LightweightModule):
                     actual_end=actual_end,
                     actual_isl=actual_isl,
                     padding_side=padding_side,
+                    attn_input_tap=attn_input_tap,
                 )
                 if layer_tap is not None and not layer.kv_only:
                     layer_tap(local_idx, residual.current())
         finally:
-            if kda_chunk is not None:
-                kda_chunk.release()
+            for scalar in owned_scalars:
+                ttnn.deallocate(scalar)
 
         if self.kv_only_last_layer:
             # Nothing downstream reads the output; the walk's remaining sites go unconsumed.

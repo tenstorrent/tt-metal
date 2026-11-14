@@ -14,11 +14,13 @@
  * The host supplies geometry as compile arguments and (DST index, valid count)
  * pairs as runtime arguments, shared with the golden calculation.
  * Dirty ADDR_MOD_7 before each init to verify that fused-op state is reset.
+ * Compile argument 3 selects the FPU (GMPOOL) variant.
  */
 void kernel_main() {
     constexpr uint32_t count = get_compile_time_arg_val(0);
     constexpr uint32_t slots = get_compile_time_arg_val(1);
     constexpr uint32_t result_rows = get_compile_time_arg_val(2);
+    constexpr bool fpu = get_compile_time_arg_val(3);
     constexpr uint32_t input = tt::CBIndex::c_0;
     constexpr uint32_t output = tt::CBIndex::c_16;
     CircularBuffer in(input);
@@ -36,8 +38,13 @@ void kernel_main() {
             copy_tile(input, slot, slot);
         }
         MATH((addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 32}}.set(ADDR_MOD_7)));
-        block_max8_init();
-        block_max8(dst, valid_scores);
+        if constexpr (fpu) {
+            block_max8_fpu_init();
+            block_max8_fpu(dst, valid_scores);
+        } else {
+            block_max8_init();
+            block_max8(dst, valid_scores);
+        }
         tile_regs_commit();
         tile_regs_wait();
         pack_rows_to_addr_init(result_rows);

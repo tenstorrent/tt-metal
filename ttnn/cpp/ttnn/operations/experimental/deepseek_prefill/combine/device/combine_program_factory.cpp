@@ -27,11 +27,13 @@ namespace ttnn::operations::experimental::deepseek_prefill::combine {
 
 namespace detail {
 
-uint32_t get_num_pages(const ttnn::Tensor& tensor) { return (uint32_t)tensor.buffer()->num_pages(); }
+uint32_t get_num_pages(const ttnn::Tensor& tensor) { return (uint32_t)tensor.mesh_buffer().num_pages(); }
 
-uint32_t get_page_size(const ttnn::Tensor& tensor) { return (uint32_t)tensor.buffer()->page_size(); }
+uint32_t get_page_size(const ttnn::Tensor& tensor) { return (uint32_t)tensor.mesh_buffer().page_size(); }
 
-uint32_t get_aligned_page_size(const ttnn::Tensor& tensor) { return (uint32_t)tensor.buffer()->aligned_page_size(); }
+uint32_t get_aligned_page_size(const ttnn::Tensor& tensor) {
+    return (uint32_t)tensor.mesh_buffer().aligned_page_size();
+}
 
 uint32_t get_num_rows(const ttnn::Tensor& tensor) {
     auto logical_volume = tensor.logical_shape().volume();
@@ -94,6 +96,7 @@ namespace {
 // cores across links where more than one plane exists. (Kept file-local because the natural shared
 // home, ccl/common, is outside this op's code ownership.)
 std::vector<uint32_t> compute_per_neighbor_forwarding_links(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
     const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
     const std::vector<tt::tt_fabric::FabricNodeId>& dst_nodes,
     uint32_t core_link,
@@ -101,7 +104,7 @@ std::vector<uint32_t> compute_per_neighbor_forwarding_links(
     std::vector<uint32_t> per_conn_links;
     per_conn_links.reserve(dst_nodes.size());
     for (const auto& dst_node : dst_nodes) {
-        const auto links = tt::tt_fabric::get_forwarding_link_indices(src_fabric_node_id, dst_node);
+        const auto links = tt::tt_fabric::get_forwarding_link_indices(mesh_device, src_fabric_node_id, dst_node);
         TT_FATAL(
             !links.empty(), "No forwarding links from {} to {} neighbor {}", src_fabric_node_id, axis_label, dst_node);
         log_debug(
@@ -156,7 +159,8 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     const bool local_only = num_links == 0;
     TT_FATAL(
         !local_only || ((mesh_device->shape().mesh_size() == 1 ||
-                         (operation_attributes.axis == 0 && mesh_device->shape()[0] == 1)) &&
+                         (operation_attributes.axis.has_value() && *operation_attributes.axis <= 1 &&
+                          mesh_device->shape()[*operation_attributes.axis] == 1)) &&
                         operation_attributes.dispatch_group_size == 1 && topology == tt::tt_fabric::Topology::Linear),
         "Zero-link prefill combine requires a singleton communication domain, dispatch_group_size=1, and Linear "
         "topology");
@@ -822,10 +826,13 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     // Preserve the existing networked partition calculation.
     uint32_t mesh_row_coord = linearized_mesh_coord / mesh_cols;
     uint32_t mesh_col_coord = linearized_mesh_coord % mesh_cols;
-    uint32_t experts_per_dispatch_group = operation_attributes.experts_per_chip * mesh_rows;
-    uint32_t counter_offset = local_only ? 0
-                                         : mesh_col_coord * experts_per_dispatch_group +
-                                               mesh_row_coord * operation_attributes.experts_per_chip;
+    const bool sp_on_axis_1 = operation_attributes.axis.value_or(0) == 1;
+    uint32_t sp_coord = sp_on_axis_1 ? mesh_col_coord : mesh_row_coord;
+    uint32_t group_coord = sp_on_axis_1 ? mesh_row_coord : mesh_col_coord;
+    uint32_t experts_per_dispatch_group =
+        operation_attributes.experts_per_chip * (sp_on_axis_1 ? mesh_cols : mesh_rows);
+    uint32_t counter_offset =
+        local_only ? 0 : group_coord * experts_per_dispatch_group + sp_coord * operation_attributes.experts_per_chip;
 
     // reader_untilize runs on untilizer cores for BOTH layouts: TILE reads tiles into c_0 (for the
     // compute kernel), ROW_MAJOR reads rows straight into c_2 (no compute).  The compute kernel
@@ -1269,11 +1276,11 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         // std::vector — then promote to the RTArgList builder (replacing the
         // buffer-address slots with Buffer* entries) before emplace.
         std::vector<uint32_t> writer_runtime_args_raw = {
-            dispatched_buffer.buffer()->address(),
-            dispatched_metadata.buffer()->address(),
-            expert_token_counts.buffer()->address(),
-            expert_region_offsets.buffer()->address(),
-            output_tensor.buffer()->address(),
+            dispatched_buffer.mesh_buffer().address(),
+            dispatched_metadata.mesh_buffer().address(),
+            expert_token_counts.mesh_buffer().address(),
+            expert_region_offsets.mesh_buffer().address(),
+            output_tensor.mesh_buffer().address(),
             output_init_complete_semaphore_id,
             (uint32_t)init_semaphore.address(),
             (uint32_t)exit_semaphore.address(),
@@ -1332,10 +1339,11 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
                 // Portable RoutingPlaneConnectionManager path: one connection per physical first-hop
                 // direction used by the combine group, so traffic forwards across MULTIPLE hops. The
                 // writer reads num_connections first, then builds the manager from the appended args.
-                const std::vector<uint32_t> per_conn_links =
-                    compute_per_neighbor_forwarding_links(src_fabric_node_id, dst_nodes, core_link, "combine-axis");
+                const std::vector<uint32_t> per_conn_links = compute_per_neighbor_forwarding_links(
+                    *mesh_device, src_fabric_node_id, dst_nodes, core_link, "combine-axis");
                 writer_runtime_args_raw.push_back(static_cast<uint32_t>(dst_nodes.size()));
                 tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
+                    *mesh_device,
                     src_fabric_node_id,
                     dst_nodes,
                     per_conn_links,
@@ -1353,7 +1361,13 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
                 // Legacy per-direction array connection (FABRIC_1D linear/ring — never deadlocked).
                 for (const auto& dst_node : dst_nodes) {
                     tt::tt_fabric::append_fabric_connection_rt_args<tt::tt_metal::ProgramDescriptor>(
-                        src_fabric_node_id, dst_node, core_link, desc, sender_core, writer_runtime_args_raw);
+                        *mesh_device,
+                        src_fabric_node_id,
+                        dst_node,
+                        core_link,
+                        desc,
+                        sender_core,
+                        writer_runtime_args_raw);
                 }
             }
         }

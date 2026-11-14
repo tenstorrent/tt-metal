@@ -62,7 +62,9 @@ def prepare_ttnn_params(params, device):
 def bench_single_config(device, seq_len, batch_size, warmup=3, iterations=10):
     from torch_functional.gated_attention import gated_attention_forward
     from tt.ttnn_gated_attention import gated_attention_forward_ttnn
-    from tests.test_gated_attention import make_gated_attention_params
+    from models.experimental.gated_attention_gated_deltanet.tests.test_gated_attention import (
+        make_gated_attention_params,
+    )
 
     params = make_gated_attention_params(seq_len=seq_len, batch_size=batch_size)
     torch_out, _, _ = gated_attention_forward(**params)

@@ -131,6 +131,14 @@ inline __attribute__((always_inline)) void reset_counters_addrgen() {
     __builtin_riscv_ttrocc_addrgen_reset_counters(ADDRGEN);
 }
 
+// Quasar/Trinity: an addrgen register-file read at offset 0xC8 or above returns X; the register file is 0xC8 bytes.
+static_assert(
+    TT_ROCC_ACCEL_TT_ROCC_CPU0_ADDRESS_GEN_R_REG_FILE_SIZE == 0xC8,
+    "the address generator register file is 0xC8 bytes (register index 0..24)");
+static_assert(
+    TT_ROCC_ACCEL_TT_ROCC_CPU0_ADDRESS_GEN_R_MISC_REG_OFFSET + 8 <= 0xC8,
+    "MISC is the highest address generator register offset this file uses; it must lie inside the register file");
+
 /*
  * @fn setup_src_banking_addrgen<ADDRGEN>()
  *

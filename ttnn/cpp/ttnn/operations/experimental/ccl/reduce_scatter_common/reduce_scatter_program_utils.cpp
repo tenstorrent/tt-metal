@@ -175,14 +175,14 @@ RingIntermStagingParams reduce_scatter_ring_interm_staging_params(
         slice_C /= ring_size;
     }
 
-    const uint32_t single_tile_bytes = input_tensor.buffer()->page_size();
+    const uint32_t single_tile_bytes = input_tensor.mesh_buffer().page_size();
     const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
     const uint32_t num_pages_per_packet = packet_size_bytes / single_tile_bytes;
     const uint32_t num_tiles_to_write_per_packet = std::min(4u, num_pages_per_packet);
     const uint32_t max_dst_size = fp32_dest_acc_en ? 4u : 8u;
     const uint32_t tile_granularity = std::min(4u * num_tiles_to_write_per_packet, max_dst_size);
 
-    const uint32_t input_num_pages = input_tensor.buffer()->num_pages();
+    const uint32_t input_num_pages = input_tensor.mesh_buffer().num_pages();
     const uint32_t output_num_pages = input_num_pages / ring_size;
     const uint32_t output_batch_num_pages = output_num_pages / slice_B;
     const uint32_t output_channel_num_pages = output_batch_num_pages / slice_C;
@@ -396,7 +396,10 @@ void append_fabric_mux_connection_ct_args(
     const std::array<uint32_t, num_ct_args> ct_args = {
         mux_kernel_config.get_num_buffers(channel_type),
         mux_kernel_config.get_buffer_size_bytes(channel_type),
-        mux_kernel_config.get_status_address(),
+        // A mux in program-local L1 publishes its map's address in a semaphore, which its clients wait on in place
+        // of the status word; every other mux address is then an offset from that address.
+        mux_kernel_config.is_in_program_local_l1() ? mux_kernel_config.get_l1_base_semaphore_id()
+                                                   : static_cast<uint32_t>(mux_kernel_config.get_status_address()),
         mux_kernel_config.get_termination_signal_address(),
         num_workers_per_direction};
     writer_ct_args.reserve(writer_ct_args.capacity() + num_ct_args);
@@ -495,6 +498,18 @@ void append_fabric_mux_connection_rt_args(
     worker_rt_args.push_back(alloc_sem());
     worker_rt_args.push_back(static_cast<uint32_t>(termination_master_virtual_core.x));
     worker_rt_args.push_back(static_cast<uint32_t>(termination_master_virtual_core.y));
+}
+
+bool reduce_scatter_line_runtime_rows(
+    ttnn::ccl::Topology topology,
+    uint32_t normalized_dim,
+    uint32_t input_tensor_B,
+    uint32_t slice_C,
+    bool tiled_interleaved,
+    std::optional<uint32_t> chunks_per_sync,
+    std::optional<uint32_t> num_workers_per_link) {
+    return topology == ttnn::ccl::Topology::Linear && normalized_dim == 3 && input_tensor_B == 1 && slice_C == 1 &&
+           tiled_interleaved && chunks_per_sync.has_value() && num_workers_per_link.has_value();
 }
 
 }  // namespace ttnn::experimental::ccl

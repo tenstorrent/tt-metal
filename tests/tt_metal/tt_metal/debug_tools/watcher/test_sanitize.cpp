@@ -67,6 +67,7 @@ enum watcher_features_t {
     SanitizeNOCInlineWriteFromState,
     SanitizeNOCInlineWriteWithState,
     SanitizeNOCInvalidTxnId,
+    SanitizeNOCReadToRegAddr,
 };
 
 tt::tt_metal::HalMemType get_buffer_mem_type_for_test(watcher_features_t feature) {
@@ -95,7 +96,7 @@ uint32_t get_address_for_test(bool use_eth_core, tt::tt_metal::HalL1MemAddrType 
 CoreCoord get_core_coord_for_test(const std::shared_ptr<distributed::MeshBuffer>& buffer) {
     if (buffer->device_local_config().buffer_type == tt_metal::BufferType::L1) {
         return buffer->device()->worker_core_from_logical_core(
-            buffer->get_backing_buffer()->allocator()->get_logical_core_from_bank_id(0));
+            buffer->device()->allocator()->get_logical_core_from_bank_id(0));
     }
     auto logical_dram_core = buffer->device()->logical_core_from_dram_channel(0);
     return buffer->device()->virtual_core_from_logical_core(logical_dram_core, CoreType::DRAM);
@@ -148,6 +149,10 @@ void RunTestOnCore(
     if (feature == SanitizeNOCInvalidTxnId && is_eth_core) {
         GTEST_SKIP() << "Invalid txn-id sanitize test is TENSIX-only";
     }
+    // A read that lands in a local register is rejected on Quasar.
+    if (feature == SanitizeNOCReadToRegAddr && (!is_quasar || is_eth_core)) {
+        GTEST_SKIP() << "Read-into-register sanitize test is Quasar DM-only";
+    }
 
     // TENSIX cores use the Metal 2.0 variant; ETH cores stay on the legacy kernel/API.
     const std::string kernel_legacy = "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy_to_noc_coord.cpp";
@@ -164,7 +169,7 @@ void RunTestOnCore(
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    Program program = Program();
+    Program program = CreateProgram(*mesh_device);
     auto* device = mesh_device->impl().get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
 
@@ -226,7 +231,7 @@ void RunTestOnCore(
     // A copy kernel, we'll feed it incorrect inputs to test sanitization.
     KernelHandle dram_copy_kernel = 0;
     int noc = 0;
-    const experimental::KernelSpecName DRAM_COPY_KERNEL_NAME{"dram_copy"};
+    const KernelSpecName DRAM_COPY_KERNEL_NAME{"dram_copy"};
     if (is_eth_core) {
         // ETH cores: invoke the original (legacy) kernel via the legacy host API.
         tt_metal::EthernetConfig config = {.noc = tt_metal::NOC::NOC_0};
@@ -240,8 +245,8 @@ void RunTestOnCore(
         // TENSIX kernel is launched via Metal 2.0 on both gen1 (WH/BH) and gen2 (Quasar).
         // On Quasar, user DMs (DM2..DM7) run the kernel; multi_dm_race syncs them to race, else only dm_id executes.
         // On WH/BH, BRISC or NCRISC (selected by use_ncrisc) runs the kernel.
-        experimental::KernelSpec::CompileTimeArgs cta_bindings;
-        experimental::KernelSpec::CompilerOptions::Defines defines;
+        KernelSpec::CompileTimeArgs cta_bindings;
+        KernelSpec::CompilerOptions::Defines defines;
         if (is_quasar && multi_dm_race) {
             constexpr uint32_t num_dms = 6;
             constexpr uint32_t multi_dm_base_addr = 0xFFFF0000;
@@ -274,13 +279,13 @@ void RunTestOnCore(
         auto gen1_processor =
             use_ncrisc ? tt::tt_metal::DataMovementProcessor::RISCV_1 : tt::tt_metal::DataMovementProcessor::RISCV_0;
         auto gen1_noc = use_ncrisc ? tt_metal::NOC::RISCV_1_default : tt_metal::NOC::RISCV_0_default;
-        experimental::DataMovementHardwareConfig dm_cfg;
+        DataMovementHardwareConfig dm_cfg;
         if (is_quasar) {
-            dm_cfg = experimental::DataMovementHardwareConfig{};
+            dm_cfg = DataMovementHardwareConfig{};
         } else {
-            dm_cfg = experimental::DataMovementHardwareConfig{
+            dm_cfg = DataMovementHardwareConfig{
                 .config_1xx =
-                    experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                    DataMovementHardwareConfig::DataMovement1XXConfig{
                         .processor = gen1_processor,
                         .noc = gen1_noc,
                     },
@@ -290,7 +295,7 @@ void RunTestOnCore(
         if (!is_quasar) {
             noc = static_cast<int>(gen1_noc);
         }
-        experimental::KernelSpec dm_spec{
+        KernelSpec dm_spec{
             .unique_id = DRAM_COPY_KERNEL_NAME,
             .source = kernel_metal2,
             .num_threads = num_threads,
@@ -321,17 +326,17 @@ void RunTestOnCore(
                       "use_dram_bank_dst"}},
             .hw_config = dm_cfg,
         };
-        experimental::WorkUnitSpec wu{
+        WorkUnitSpec wu{
             .name = "main",
             .kernels = {DRAM_COPY_KERNEL_NAME},
-            .target_nodes = experimental::NodeCoord{core},
+            .target_nodes = NodeCoord{core},
         };
-        experimental::ProgramSpec spec{
+        ProgramSpec spec{
             .name = "watcher_sanitize",
             .kernels = {dm_spec},
             .work_units = {wu},
         };
-        program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+        program = tt_metal::experimental::MakeProgramFromSpec(*mesh_device, spec);
         if (is_quasar) {
             // Quasar SD does not yet expose a NOC index in the same way as legacy DMs; the watcher
             // log emits "noc0" for Metal 2.0 DM kernels. Match that so expected strings line up.
@@ -499,6 +504,11 @@ void RunTestOnCore(
             use_inline_dw_write_with_state = true;
             break;
         case SanitizeNOCInvalidTxnId: invalid_txn_id = k_invalid_txn_id; break;
+        case SanitizeNOCReadToRegAddr:
+            // The kernel's first NOC read lands buffer_size bytes at buffer_addr: point it at a local register.
+            buffer_addr = hal.get_noc_encoding_reg();  // the NOC node-id register
+            buffer_size = 4;
+            break;
         default:
             log_warning(LogTest, "Unrecognized feature to test ({}), skipping...", feature);
             GTEST_SKIP();
@@ -532,11 +542,11 @@ void RunTestOnCore(
         // ETH cores still go through the legacy API.
         tt_metal::SetRuntimeArgs(program, dram_copy_kernel, core, rta_values);
     } else {
-        const experimental::NodeCoord node{core};
-        experimental::ProgramRunArgs params;
-        params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
+        const NodeCoord node{core};
+        ProgramRunArgs params;
+        params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
             .kernel = DRAM_COPY_KERNEL_NAME,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                 node,
                 {{"local_buffer_addr", buffer_addr},
                  {"buffer_src_addr", input_buffer_addr},
@@ -560,7 +570,7 @@ void RunTestOnCore(
                  {"invalid_txn_id", invalid_txn_id},
                  {"use_dram_bank_dst", use_dram_bank_dst}}),
         }};
-        experimental::SetProgramRunArgs(program, params);
+        tt_metal::experimental::SetProgramRunArgs(program, params);
     }
     workload.add_program(device_range, std::move(program));
 
@@ -852,6 +862,25 @@ void RunTestOnCore(
                 risc_name,
                 k_invalid_txn_id,
                 k_max_user_txn_id);
+        } break;
+        case SanitizeNOCReadToRegAddr: {
+            expected = fmt::format(
+                "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc{} tried to unicast read {} "
+                "bytes to local L1[{:#08x}] from Tensix core w/ virtual coords {} L1[addr=0x{:08x}] (NOC read lands "
+                "in a local register; on Quasar the NIU can strand the response and stall L1 writes, reads must land "
+                "in L1).",
+                device->id(),
+                core_name,
+                core.x,
+                core.y,
+                virtual_core.x,
+                virtual_core.y,
+                risc_name,
+                noc,
+                buffer_size,
+                buffer_addr,
+                input_core_virtual_coords,
+                input_buffer_addr);
         } break;
         default:
             log_warning(LogTest, "Unrecognized feature to test ({}), skipping...", feature);
@@ -1147,6 +1176,16 @@ TEST_F(MeshWatcherFixture, QuasarTestWatcherSanitizeMultiDMRace) {
                 false,
                 false /*is_idle_eth_core*/,
                 true /*multi_dm_race*/);
+        },
+        this->devices_[0]);
+}
+
+// Quasar-only: a NOC read must land in L1, never in a local register.
+TEST_F(MeshWatcherFixture, QuasarTestWatcherSanitizeNOCReadToRegAddr) {
+    this->RunTestOnDevice(
+        [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+            CoreCoord core{0, 0};
+            RunTestOnCore(fixture, mesh_device, core, false, SanitizeNOCReadToRegAddr);
         },
         this->devices_[0]);
 }

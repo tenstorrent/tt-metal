@@ -75,8 +75,13 @@ PromotedScalarInput promote_int32_scalar_input(
         // Sharded inputs use the existing tilize path, as binary_ng did before
         // promotion, so later output memory-layout changes also use tile pages.
         if (input.is_sharded() && operation_sub_core_grids.has_value()) {
+            // An ND_SHARDED tensor is_sharded() with an empty shard_spec(); its grid is in nd_shard_spec().
+            const auto& memory_config = input.memory_config();
+            const auto& input_shard_grid = memory_config.shard_spec().has_value()
+                                               ? memory_config.shard_spec()->grid
+                                               : memory_config.nd_shard_spec().value().grid;
             TT_FATAL(
-                operation_sub_core_grids->contains(input.shard_spec()->grid),
+                operation_sub_core_grids->contains(input_shard_grid),
                 "INT32 scalar promotion requires the requested grid to contain all input shard cores");
         }
         const auto typecast_input =
@@ -1297,7 +1302,7 @@ static bool situ_glu_intermediates_fit_l1(const Tensor& gate) {
     const auto& allocator = gate.device()->allocator();
     const uint64_t l1_total = static_cast<uint64_t>(allocator->get_bank_size(tt::tt_metal::BufferType::L1)) *
                               allocator->get_num_banks(tt::tt_metal::BufferType::L1);
-    const uint64_t peak = SITU_GLU_L1_PEAK_INTERMEDIATES * gate.buffer()->size();
+    const uint64_t peak = SITU_GLU_L1_PEAK_INTERMEDIATES * gate.mesh_buffer().device_local_size();
     return peak * SITU_GLU_L1_BUDGET_DEN <= l1_total * SITU_GLU_L1_BUDGET_NUM;
 }
 

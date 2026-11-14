@@ -13,8 +13,7 @@
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-umd/types/arch.hpp>
 #include <tt-umd/types/cluster_descriptor_types.hpp>
-
-#include "impl/context/context_types.hpp"
+#include <tt-umd/types/core_coordinates.hpp>
 
 namespace tt::llrt {
 class RunTimeOptions;
@@ -23,6 +22,7 @@ class RunTimeOptions;
 namespace tt::tt_metal {
 
 class Hal;
+class MetalContext;
 
 // Device-specific configuration snapshot consumed by the JIT build system.
 //
@@ -67,25 +67,16 @@ struct JitDeviceConfig {
     uint32_t profiler_dram_bank_size_per_risc_bytes = 0;
 };
 
-// Construct a JitDeviceConfig by querying a live device through MetalContext.
+// Construct a JitDeviceConfig by querying a live device through the MetalContext that owns it.
 //
 // All topology and memory parameters (bank counts, PCIe core location,
 // harvesting mask, dispatch layout, etc.) are read from the cluster and SoC
 // descriptor for the given `device_id`; nothing is inferred from static
 // configuration files alone. Because of this, the device must be accessible at
-// call time.
+// call time, and the context's dispatch state must be initialized.
 //
-// `context_id` selects which MetalContext instance to query. It MUST match the
-// context that owns `device_id`. Passing the wrong id (including the default id
-// when `device_id` is owned by a non-default context) does NOT fail loudly:
-// MetalContext::instance(context_id) resolves to whichever context happens to
-// occupy that slot, and the no-arg fallback returns any existing context if the
-// requested slot is empty. The returned JitDeviceConfig is then a snapshot of
-// the wrong cluster's arch / topology / dispatch layout, and downstream queries
-// against `device_id` silently misbehave (mismatched harvesting masks, dispatch
-// cores in the wrong place, kernel build cache hits across clusters). Callers
-// must thread through the same ContextId they used to create the device.
-JitDeviceConfig create_jit_device_config(ChipId device_id, uint8_t num_hw_cqs, ContextId context_id);
+// Not thread-safe: may update ctx.rtoptions() (profiler program support count).
+JitDeviceConfig create_jit_device_config(ChipId device_id, uint8_t num_hw_cqs, MetalContext& ctx);
 
 // enumerate_jit_device_configs walks `core_descriptor_path` YAML; `soc_descriptor_path` must be the
 // matching SoC descriptor YAML used to derive base DRAM bank count (dram_views section).

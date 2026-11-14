@@ -267,17 +267,15 @@ struct DRAMStreamingMatmul {
             constexpr uint32_t num_subblocks_n = CTArgs::per_core_n / CTArgs::subblock_w;
             constexpr uint32_t num_tiles_k = CTArgs::subblock_k * CTArgs::num_subblocks_k;
             constexpr bool transpose = false;
-            constexpr bool split_acc = true;
-            constexpr bool dense_packing = false;
+            constexpr auto dest_layout = CustomMmDestLayout::DefaultSplitAcc;
 
             if constexpr (CTArgs::fp32_dest_acc_en != DST_ACCUM_MODE) {
-                custom_mm_block_init<transpose, split_acc, dense_packing, CTArgs::fp32_dest_acc_en>(
+                custom_mm_block_init<transpose, dest_layout, CTArgs::fp32_dest_acc_en>(
                     CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out);
             } else {
                 reconfig_full_operand<SrcOrder::Reverse>(CTArgs::cb_in0, CTArgs::cb_in1);
                 pack_reconfig_data_format<true>(CTArgs::cb_out);
-                custom_mm_block_init_short<transpose, split_acc, dense_packing>(
-                    CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out);
+                custom_mm_block_init_short<transpose, dest_layout>(CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out);
             }
 
             if constexpr (CTArgs::fuse_silu) {
@@ -299,13 +297,13 @@ struct DRAMStreamingMatmul {
                         // Intermediate subblocks: finalize=false (partial accumulation)
                         for (uint32_t sb_k = 0; sb_k < CTArgs::num_subblocks_k - 1; sb_k++) {
                             cb_wait_front(CTArgs::cb_in1, CTArgs::subblock_k);
-                            custom_mm_block<false>(
+                            custom_mm_block<dest_layout, false>(
                                 CTArgs::cb_in0, CTArgs::cb_in1, sb_k * CTArgs::subblock_k, 0, 0, CTArgs::subblock_k);
                             cb_pop_front(CTArgs::cb_in1, CTArgs::subblock_k);
                         }
                         // Final subblock: finalize=true
                         cb_wait_front(CTArgs::cb_in1, CTArgs::subblock_k);
-                        custom_mm_block<true>(
+                        custom_mm_block<dest_layout>(
                             CTArgs::cb_in0,
                             CTArgs::cb_in1,
                             (CTArgs::num_subblocks_k - 1) * CTArgs::subblock_k,
@@ -362,13 +360,13 @@ struct DRAMStreamingMatmul {
                         // Intermediate subblocks: finalize=false (partial accumulation)
                         for (uint32_t sb_k = 0; sb_k < CTArgs::num_subblocks_k - 1; sb_k++) {
                             cb_wait_front(CTArgs::cb_in1, CTArgs::subblock_k);
-                            custom_mm_block<false>(
+                            custom_mm_block<dest_layout, false>(
                                 CTArgs::cb_in0, CTArgs::cb_in1, sb_k * CTArgs::subblock_k, 0, w, CTArgs::subblock_k);
                             cb_pop_front(CTArgs::cb_in1, CTArgs::subblock_k);
                         }
                         // Final subblock: finalize=true
                         cb_wait_front(CTArgs::cb_in1, CTArgs::subblock_k);
-                        custom_mm_block<true>(
+                        custom_mm_block<dest_layout>(
                             CTArgs::cb_in0,
                             CTArgs::cb_in1,
                             (CTArgs::num_subblocks_k - 1) * CTArgs::subblock_k,
@@ -387,7 +385,7 @@ struct DRAMStreamingMatmul {
 
                 cb_push_back(CTArgs::cb_out, CTArgs::subblock_w);
             }
-            custom_mm_block_uninit<dense_packing>();
+            custom_mm_block_uninit<dest_layout>(CTArgs::cb_out);
             // Reset FP32 accum mode if different from DST_ACCUM_MODE
             if constexpr (CTArgs::fp32_dest_acc_en != DST_ACCUM_MODE) {
                 deepseek_compute_kernel_hw_startup<DST_ACCUM_MODE>(CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out);

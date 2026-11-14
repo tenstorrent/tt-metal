@@ -6,8 +6,8 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 
@@ -16,7 +16,6 @@ namespace ttnn::experimental::prim {
 using namespace tt::constants;
 using namespace tt;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 ttnn::device_operation::ProgramArtifacts
 NlpKVCacheLoadSliceDeviceOperation::NlpKVCacheLoadSliceProgramFactory::create_program_artifacts(
@@ -37,7 +36,7 @@ NlpKVCacheLoadSliceDeviceOperation::NlpKVCacheLoadSliceProgramFactory::create_pr
     uint32_t num_units_per_shard_width = shard_spec.shape[1] / TILE_WIDTH;
     auto num_tiles_per_core = num_units_per_shard_height * num_units_per_shard_width;
 
-    TT_ASSERT(output.buffer() != nullptr, "Output buffer should be allocated on device!");
+    TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
 
     // The Metal 2.0 binding layer works with the Metalium tensor type; extract once.
     const auto& input_mesh_tensor = a.mesh_tensor();

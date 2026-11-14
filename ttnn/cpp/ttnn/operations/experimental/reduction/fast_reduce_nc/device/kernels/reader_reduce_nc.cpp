@@ -30,7 +30,7 @@ void kernel_main() {
 
     constexpr uint32_t onetile = 1;
 
-    Noc noc;
+    const Noc noc;
     DataflowBuffer cb_in0_obj(dfb::in0);
     dataflow_kernel_lib::prepare_zero_tile<dfb::in1>();
 
@@ -49,7 +49,7 @@ void kernel_main() {
     for (uint32_t outer_id = start_id; outer_id < start_id + id_range_length; outer_id += outer_id_increment) {
         // Go through each tile of each shard.
         for (uint32_t id_offset = 0; id_offset < shard_factor; ++id_offset) {
-            uint32_t i = outer_id + id_offset;
+            const uint32_t i = outer_id + id_offset;
             auto read_tile_id = (dim == 0) ? (i) : (get_read_tile_id(i, reduce_tile_size, inner_tile_size));
             // Now reduce all tiles in the reduction dim. The first index is the
             // same as the output index. After that need to increment by the

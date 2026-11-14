@@ -42,6 +42,7 @@
 #include "api/debug/assert.h"
 #include "api/debug/ring_buffer.h"
 #include "api/debug/waypoint.h"
+#include "chunk_gdn_fused_rt_args.hpp"
 #include "chunk_gdn_handoff.hpp"
 
 // Runtime checks of the hand-off protocol's invariants (chunk_gdn_handoff_protocol.md, "Runtime checks"): compiled
@@ -163,7 +164,8 @@ void kernel_main() {
     // the VALIDs of different chunks cannot interleave.
     // N_INIT = init-barrier increments to expect before the first credit: the distinct producers that
     // serve this head. kickoff_wait_cycles holds the initial-state read back, out of chunk 0's
-    // input-read burst. Map: BH, then (NPH, NX, num, den) as in chunk_gdn_fused_map.hpp. Common args:
+    // input-read burst. Map: BH, then (NPH, NX, num, den) as in chunk_gdn_fused_map.hpp, then the DRAM row
+    // offset of this program's head 0 in initial_state (the protocol's head indices start at 0). Common args:
     // the producers' virtual worker coords x | y << 8, two per word, producer p in word p / 2.
     const uint32_t N_INIT = get_arg_val<uint32_t>(4);
     const uint32_t kickoff_wait_cycles = get_arg_val<uint32_t>(5);
@@ -175,6 +177,7 @@ void kernel_main() {
         get_arg_val<uint32_t>(9),
         get_arg_val<uint32_t>(10)};
     auto producer_word = [](uint32_t p) { return (get_common_arg_val<uint32_t>(p / 2) >> (16 * (p % 2))) & 0xFFFFu; };
+    const uint32_t s0_row = h + get_arg_val<uint32_t>(fused_rt::kReceiverHeadOffsetArg);
 #elif defined(GDN_MCAST_RECEIVER)
     const uint32_t vb_addr = get_arg_val<uint32_t>(3);
     const uint32_t s0_addr = get_arg_val<uint32_t>(4);
@@ -286,16 +289,13 @@ void kernel_main() {
     valid.set(VALID);
 
     // Stage a shared group: reserve + issue DRAM reads into this core's own CB slot, WITHOUT
-    // pushing (the write pointer must still address the slot when the mcast reads it). Returns
-    // the slot's L1 address — identical on every sibling core (same CB config, same push/pop
-    // history: exactly n tiles per chunk on both sides).
-    auto stage_group = [&](const auto& acc, uint32_t cb_id, uint32_t base, uint32_t n) -> uint32_t {
+    // pushing (the write pointer must still address the slot when the mcast reads it).
+    auto stage_group = [&](const auto& acc, uint32_t cb_id, uint32_t base, uint32_t n) {
         CircularBuffer cb(cb_id);
         cb.reserve_back(n);
         for (uint32_t t = 0; t < n; t++) {
             noc.async_read(acc, cb, tb, {.page_id = base + t}, {.offset_bytes = t * tb});
         }
-        return cb.get_write_ptr();
     };
 
     for (uint32_t c = 0; c < NC; c++) {
@@ -303,12 +303,12 @@ void kernel_main() {
         read_vslice(vb_acc, cb_vbeta, hc * Ct * Vt_full, Ct);  // private v_beta slice (unchanged)
 
         // Stage all six shared groups, then one barrier for the lot.
-        const uint32_t p_nkd = stage_group(nkd_acc, cb_nkd, hc * ck, ck);
-        const uint32_t p_qd = stage_group(qd_acc, cb_qdecay, hc * ck, ck);
-        const uint32_t p_it = stage_group(it_acc, cb_intra, hc * cc, cc);
-        const uint32_t p_kc = stage_group(kc_acc, cb_kdec_t, hc * kc, kc);
-        const uint32_t p_dl = stage_group(dl_acc, cb_dl, hc * 1, 1);
-        const uint32_t p_ti = stage_group(ti_acc, cb_Tinv, hc * cc, cc);
+        stage_group(nkd_acc, cb_nkd, hc * ck, ck);
+        stage_group(qd_acc, cb_qdecay, hc * ck, ck);
+        stage_group(it_acc, cb_intra, hc * cc, cc);
+        stage_group(kc_acc, cb_kdec_t, hc * kc, kc);
+        stage_group(dl_acc, cb_dl, hc * 1, 1);
+        stage_group(ti_acc, cb_Tinv, hc * cc, cc);
         noc.async_read_barrier();
 
         // All receivers have reserved this chunk's CB space (their slots are writable).
@@ -317,23 +317,26 @@ void kernel_main() {
 
         // Data mcasts, linked so they chain with the flag mcast on one static VC (data-before-
         // flag ordering). num_dests excludes the sender — no local copy is performed.
-        MulticastEndpoint mcast_dst;
-        auto mcast_group = [&](uint32_t addr, uint32_t n) {
+        // Each group goes from its staged slot, at the CB's write pointer, to the same slot on the
+        // receivers: the slot's L1 address is identical on every sibling core (same CB config, same
+        // push/pop history: exactly n tiles per chunk on both sides).
+        auto mcast_group = [&](uint32_t cb_id, uint32_t n) {
+            CircularBuffer cb(cb_id);
             noc.async_write_multicast(
-                CoreLocalMem<uint32_t>(addr),
-                mcast_dst,
+                CoreLocalMem<uint32_t>(cb.get_write_ptr()),
+                cb,
                 n * tb,
                 num_dests,
                 {},
-                {.noc_x_start = rcv_x0, .noc_y_start = rcv_y0, .noc_x_end = rcv_x1, .noc_y_end = rcv_y1, .addr = addr},
+                {.noc_x_start = rcv_x0, .noc_y_start = rcv_y0, .noc_x_end = rcv_x1, .noc_y_end = rcv_y1},
                 /*linked=*/true);
         };
-        mcast_group(p_nkd, ck);
-        mcast_group(p_qd, ck);
-        mcast_group(p_it, cc);
-        mcast_group(p_kc, kc);
-        mcast_group(p_dl, 1);
-        mcast_group(p_ti, cc);
+        mcast_group(cb_nkd, ck);
+        mcast_group(cb_qdecay, ck);
+        mcast_group(cb_intra, cc);
+        mcast_group(cb_kdec_t, kc);
+        mcast_group(cb_dl, 1);
+        mcast_group(cb_Tinv, cc);
         // Flush on EVERY arch, for two reasons. Blackhole: NoC latency exceeds L1<->RISCV latency,
         // so without it a receiver could see VALID with the data still in flight. All arches: the
         // flush proves every data mcast has read its L1 source slot; only then may the pushes
@@ -455,7 +458,8 @@ void kernel_main() {
         const uint32_t pw = producer_word(owner);
         gdn_handoff::credit_inc(noc, pw & 0xFFu, pw >> 8, credit_base + 4 * slot);
         if (FAULT == gdn_handoff::kFaultDoubleCredit && c == 0) {
-            gdn_handoff::credit_inc(noc, pw & 0xFFu, pw >> 8, credit_base + 4 * slot);  // C1 on the owner (or C2 at its exit)
+            gdn_handoff::credit_inc(
+                noc, pw & 0xFFu, pw >> 8, credit_base + 4 * slot);  // C1 on the owner (or C2 at its exit)
         }
     };
 #endif
@@ -518,7 +522,7 @@ void kernel_main() {
     }
     {
         DeviceZoneScopedN("rx_s0");
-        read_vslice(s0_acc, cb_S, h * Kt * Vt_full, Kt);
+        read_vslice(s0_acc, cb_S, s0_row * Kt * Vt_full, Kt);
     }
     for (uint32_t c = 0; c < NC; c++) {
         WAYPOINT("RXVL");

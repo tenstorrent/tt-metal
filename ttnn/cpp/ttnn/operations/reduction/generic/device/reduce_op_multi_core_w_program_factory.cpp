@@ -95,7 +95,6 @@ ReduceDeviceOperation::ReduceMultiCoreWProgramFactory::create_program_artifacts(
     tensor_return_value_t& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
-    using namespace tt::tt_metal::experimental;
     const auto& a = tensor_args.mesh_tensor();
     const auto& output = tensor_return_value.mesh_tensor();
     const bool rm_path = operation_attributes.row_major_w_dense_path;
@@ -321,6 +320,9 @@ ReduceDeviceOperation::ReduceMultiCoreWProgramFactory::create_program_artifacts(
     }
     // Accurate fp32: route Float32 through the SFPU (needs 32-bit DEST)
     const bool fp32_sfpu_reduce = is_sfpu_reduce && a.dtype() == DataType::FLOAT32 && fp32_dest_acc_en;
+    if (rm_path && dst_cb_data_format != src0_cb_data_format) {
+        reduce_defines["REDUCE_RM_MIXED_FORMAT"] = "1";
+    }
 
     // ---- Reader kernel ----
     Group<DFBBinding> reader_dfb_bindings;
@@ -773,13 +775,12 @@ ReduceDeviceOperation::ReduceMultiCoreWProgramFactory::create_program_artifacts(
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
-tt::tt_metal::experimental::ProgramRunArgs
-ReduceDeviceOperation::ReduceMultiCoreWProgramFactory::override_runtime_arguments(
+tt::tt_metal::ProgramRunArgs ReduceDeviceOperation::ReduceMultiCoreWProgramFactory::override_runtime_arguments(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    using namespace tt::tt_metal::experimental;
+    using namespace tt::tt_metal;
     const auto& a = tensor_args.mesh_tensor();
     const auto& output = tensor_return_value.mesh_tensor();
 

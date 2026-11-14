@@ -7,7 +7,6 @@ from enum import Enum
 from typing import List, Optional, Tuple
 
 import torch
-from helpers.device_io import read_from_device, write_to_device
 from helpers.llk_params import DataFormat, PartialFace, format_dict, format_tile_sizes
 from helpers.pack import (
     pack_bfp8_b,
@@ -35,6 +34,7 @@ from helpers.tile_constants import (
 from helpers.tile_shape import TileShape, construct_tile_shape
 from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.unpack import unpack_res_tiles
+from ttexalens.tt_exalens_lib import read_from_device, write_to_device
 
 L1_PACKERS = {
     DataFormat.Float16: pack_fp16,
@@ -98,14 +98,9 @@ class Operand:
             else PartialFace.No
         )
 
-        TILE_SIZES = {
-            DataFormat.Bfp8_b: 68,
-            DataFormat.Float32: 256,
-        }
-
         self.tile_size = (
-            TILE_SIZES.get(self.data_format, 128) * self.tile_shape.total_num_faces()
-        ) // 4
+            self.data_format.num_bytes_per_tile(self.tile_shape.total_tile_size()) // 16
+        )
 
     def generate_data(self):
         height, width = self.dimensions[0], self.dimensions[1]

@@ -144,6 +144,8 @@ def ReadDeviceProfiler(device):
 
 GetNumAvailableDevices = ttnn._ttnn.device.GetNumAvailableDevices
 ClearKernelCache = ttnn._ttnn.device.ClearKernelCache
+GetOperationTimeoutSeconds = ttnn._ttnn.device.GetOperationTimeoutSeconds
+SetOperationTimeoutSeconds = ttnn._ttnn.device.SetOperationTimeoutSeconds
 EnableMemoryReports = ttnn._ttnn.device.EnableMemoryReports
 DisableMemoryReports = ttnn._ttnn.device.DisableMemoryReports
 DeallocateBuffers = ttnn._ttnn.device.deallocate_buffers

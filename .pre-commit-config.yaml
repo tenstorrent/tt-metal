@@ -57,6 +57,21 @@ repos:
       # Override on the same line:  with pytest.raises(...):  # allow-pytest.raises: <why>
 - repo: local
   hooks:
+    # models/tt_transformers moved to models/ttt_compat. Its import path is aliased
+    # (models/tt_transformers/__init__.py), but nothing else is: a file path into the old
+    # folder fails at run time, or in pytest with exit code 4.
+    - id: ttt-compat-file-paths
+      name: "models/tt_transformers moved: use models/ttt_compat/ in file paths"
+      language: pygrep
+      files: \.py$
+      entry: '["'']models/tt_transformers/|/\s*["'']tt_transformers["'']|["'']tt_transformers["''],\s*["'']'
+    - id: ttt-compat-ci-paths
+      name: "models/tt_transformers moved: use models/ttt_compat/ in commands"
+      language: pygrep
+      files: (\.sh$|^tests/pipeline_reorg/.*\.ya?ml$)
+      entry: '(^|[\s"''=])models/tt_transformers/'
+- repo: local
+  hooks:
     - id: check-large-files
       name: check for large files (>500 KB)
       entry: python3 scripts/check_file_size.py
@@ -81,6 +96,14 @@ repos:
       entry: python3 scripts/validate_no_global_torch_imports.py
       language: system
       pass_filenames: false
+- repo: local
+  hooks:
+    - id: check-models-do-not-import-tests
+      name: Forbid models from importing the tests package
+      entry: python3 scripts/check_models_do_not_import_tests.py
+      language: system
+      pass_filenames: false
+      files: ^models/.*\.py$
 - repo: local
   hooks:
     - id: check-kernel-cb-ptrs
@@ -140,7 +163,21 @@ repos:
       entry: pytest -q -p no:cacheprovider --noconftest scripts/test_check_bool_from_arithmetic.py
       language: python
       additional_dependencies: ["pytest==8.3.5"]
-      files: ^scripts/(test_)?check_bool_from_arithmetic\.py$
+      files: ^scripts/(precommit_common\.py|(test_)?check_bool_from_arithmetic\.py)$
+      pass_filenames: false
+    - id: check-redefined-helpers
+      name: Use the shared host and device helpers instead of a local copy
+      entry: python3 scripts/check_redefined_helpers.py
+      language: system
+      types: [file]
+      files: ^(?:ttnn|tt_stl|tt-train|tests|models|tools|tt_metal/(?!third_party/|tt-llk/)).*\.(?:c|cc|cpp|cxx|h|hpp|inl)$
+      pass_filenames: true
+    - id: check-redefined-helpers-tests
+      name: Run the redefined-helper checker's tests when it or they change
+      entry: pytest -q -p no:cacheprovider --noconftest scripts/test_check_redefined_helpers.py
+      language: python
+      additional_dependencies: ["pytest==8.3.5"]
+      files: ^scripts/(precommit_common\.py|(test_)?check_redefined_helpers\.py)$
       pass_filenames: false
 - repo: local
   hooks:
@@ -243,6 +280,22 @@ repos:
           tt_metal/hw/ckernels/(wormhole_b0|blackhole)/metal/.*\.(h|hpp)|
           tt_metal/tt-llk/infra/check_sticky_cfg_restore\.py|
           tt_metal/tt-llk/infra/sticky_cfg_fields\.yaml
+        )$
+    - id: llk-format-field-mask
+      name: "llk: DataFormat masked before a shift into a 4-bit config field"
+      entry: python3 tt_metal/tt-llk/infra/check_format_field_mask.py
+      language: system
+      # Blocking. Fails only when a format value is shifted unmasked into a 4-bit field AND the
+      # write's mask covers the bit the spill (bit 4 of UInt8 = 30 / UInt32 = 24) lands on; a
+      # single-field RMW drops that bit at the register and is never a finding. A commit touching
+      # the checker is checked against the whole tree. Quasar's format fields are 5 bits wide and
+      # written through bitfields, so that tree is out of scope.
+      require_serial: true
+      files: |
+        (?x)^(
+          tt_metal/tt-llk/tt_llk_(wormhole_b0|blackhole)/.*\.(h|hpp)|
+          tt_metal/hw/ckernels/(wormhole_b0|blackhole)/metal/.*\.(h|hpp)|
+          tt_metal/tt-llk/infra/check_format_field_mask\.py
         )$
     - id: llk-xthread-cfg-wormhole
       name: "llk: cross-thread config write (wormhole)"

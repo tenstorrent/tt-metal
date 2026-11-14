@@ -3,9 +3,9 @@
 
 
 import ttnn
+from models.demos.common.prefill.prefill_chunk import PrefillChunk
 from models.demos.minimax_m3.utils.profiler_utils import FINE, zone
 
-from ..prefill_chunk import PrefillChunk
 from ..residual import use_sharded_residual
 from .config import AttentionConfig, ProgramConfig
 from .dense_sp import dense_sp_attention, dense_sp_attention_nocache
@@ -60,7 +60,7 @@ def attention_forward(
         position_idx: Position indices (unused in prefill)
         ccl_manager: Communication manager
         layer_idx: this layer's index, for the per-layer cache write
-        chunks: the forward's PrefillChunks (tt/prefill_chunk.py), one equal block of rows each; None = one
+        chunks: the forward's PrefillChunks (common/prefill/prefill_chunk.py), one equal block of rows each; None = one
             chunk in slot 0 at position 0. Projections run once on all rows; the attention core runs per non-empty
             chunk against its slot_id at its actual_start (>0 selects the cache-read paths). Empty chunks (the
             tail) get zero rows. A partial chunk's pad rows follow its real rows, so causality keeps them out of
@@ -172,7 +172,7 @@ def _attention_core(
     # QK-norm (MiniMax-M3): per-head RMSNorm over head_dim on the split Q/K
     # ([1, n_heads, S, head_dim]), applied BEFORE RoPE, on Q and K only. The gemma (1+w)
     # fold is baked into the gain at load (weights.py); local per head (no TP reduction).
-    if config.use_qk_norm and weights.q_norm is not None:
+    if weights.q_norm is not None:
         with zone("qk_norm", FINE):
             tt_q_pre, tt_k_pre = tt_q, tt_k
             tt_q = apply_qk_norm_per_head(tt_q, weights.q_norm, config.rms_norm_eps)
@@ -223,12 +223,12 @@ def _attention_core(
             )
 
     # Attention core — per-layer gate (config.is_sparse from M3 sparse_attention_freq):
-    #   MSA layers (3-59): index branch (index_q/k proj -> norm -> RoPE) + block-sparse SP attention
+    #   MSA layers (M3: 3-59): index branch (index_q/k proj -> norm -> RoPE) + block-sparse SP attention
     #     (msa_sp_attention_nocache): AllGather K/V/index_k across SP, keep q/index_q SP-sharded
     #     (S/sp rows/device), per-device causality via mesh-coord cluster_axis (cached_len + rank*S_local) -> SP-sharded
     #     output. num_groups = local KV heads (1 GQA group/KV head; 1 at TP=4). Degenerates to the
     #     full-context path at sp=1. cached_len is 0 for the first chunk (multi-chunk cache: TODO).
-    #   Dense layers (0-2): plain causal GQA SDPA (exact at sp=1). SP dense via dense_sp_attention
+    #   Dense layers (M3: 0-2): plain causal GQA SDPA (exact at sp=1). SP dense via dense_sp_attention
     #     (ring_joint, dense_sp.py) + the per-layer KV cache lifecycle is the remaining model-level wiring.
     if config.is_sparse:
         with zone("index_branch"):

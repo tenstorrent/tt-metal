@@ -251,6 +251,24 @@ class Gemma4ModelArgs:
         )
 
     @staticmethod
+    def served_weights_dir():
+        """The checkpoint directory the serving stack downloaded, if any.
+
+        tt-inference-server downloads the weights to ``MODEL_WEIGHTS_DIR`` and
+        exposes them again as the ``HF_MODEL`` symlink directory, while vLLM is
+        started with the hub id: the container's own hub cache then holds only
+        the config and tokenizer vLLM fetched, so resolving the id there finds
+        no safetensors (the shield Galaxy runs fail at the cold load that a
+        changed cache identity forces). The first of these that is a directory
+        holding safetensors is the checkpoint to read.
+        """
+        for env in ("MODEL_WEIGHTS_DIR", "HF_MODEL", "GEMMA4_MODEL_PATH"):
+            cand = os.environ.get(env)
+            if cand and os.path.isdir(cand) and any(Path(cand).glob("*.safetensors")):
+                return cand
+        return None
+
+    @staticmethod
     def load_state_dict(weights_path, dummy_weights=False):
         """Load model state dict from safetensors (fast) or HF checkpoint."""
         if dummy_weights:
@@ -258,7 +276,26 @@ class Gemma4ModelArgs:
 
         from pathlib import Path
 
+        if not Path(weights_path).is_dir():
+            # A hub id: resolve to the local snapshot so the safetensors path below
+            # serves it. The AutoModel fallback hands out tensors that die with the
+            # model object (transformers 5 loads lazily from an mmap it closes), and
+            # weights nothing touches while the model is alive -- the vision encoders
+            # -- then read as NaN / inf / zeros.
+            try:
+                from huggingface_hub import snapshot_download
+
+                weights_path = snapshot_download(weights_path, local_files_only=True)
+                logger.info(f"Resolved hub id to local snapshot {weights_path}")
+            except Exception as e:  # not cached locally: keep the hub id for the fallback
+                logger.info(f"No local snapshot for {weights_path} ({e}); using the AutoModel loader")
         safetensor_files = sorted(Path(weights_path).glob("*.safetensors"))
+        if not safetensor_files:
+            served = Gemma4ModelArgs.served_weights_dir()
+            if served and Path(served).resolve() != Path(weights_path).resolve():
+                logger.info(f"No safetensors under {weights_path}; reading the served checkpoint {served}")
+                weights_path = served
+                safetensor_files = sorted(Path(weights_path).glob("*.safetensors"))
         if safetensor_files:
             from safetensors.torch import load_file
 
@@ -277,7 +314,8 @@ class Gemma4ModelArgs:
 
         logger.info(f"No safetensors found, loading via AutoModelForCausalLM from {weights_path}")
         model = AutoModelForCausalLM.from_pretrained(weights_path, torch_dtype="auto")
-        state_dict = model.state_dict()
+        # Materialise every tensor before the model goes away (see above).
+        state_dict = {k: v.detach().clone() for k, v in model.state_dict().items()}
         del model
 
         if any(v.dtype == torch.float32 for v in state_dict.values()):

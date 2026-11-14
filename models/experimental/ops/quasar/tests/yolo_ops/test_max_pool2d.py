@@ -65,6 +65,8 @@ def _torch_max_pool2d(x_nchw: torch.Tensor) -> torch.Tensor:
     ],
 )
 def test_max_pool2d(ttnn_mesh_device, reset_seeds, variant, channels, hw):
+    # The Quasar pool fork gathers each 5x5 window with the loopback noc.async_read (the former
+    # RISC word-copy + L2-flush gather never finished on emu-quasar-2x3); passes there in ~6.5 min.
     mesh = ttnn_mesh_device
     n, c, h, w = U.BATCH, channels, hw, hw
 

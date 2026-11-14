@@ -9,7 +9,7 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -31,7 +31,7 @@ int main() {
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    Program program = CreateProgram();           // Encapsulates kernels and buffers
+    Program program = CreateProgram(*mesh_device);  // Encapsulates kernels and buffers
 
     const char* dprint_env = std::getenv("TT_METAL_DPRINT_CORES");
     if (!dprint_env || std::string(dprint_env).empty()) {

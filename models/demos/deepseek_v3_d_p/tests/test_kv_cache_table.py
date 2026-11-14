@@ -12,7 +12,11 @@ from loguru import logger
 from ttnn.device import is_blackhole
 
 import ttnn
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
+    fabric2d_device_params,
+    torus_x_device_params,
+    torus_xy_device_params,
+)
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_reference import build_weights
 from models.demos.deepseek_v3_d_p.tests.test_mla import run_mla_inference
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
@@ -31,8 +35,9 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     is_tp_deduped_kv_cache,
     populate_kv_chunk_address_table_block_cyclic,
     populate_kv_chunk_address_table_dflash,
+    striped_cache_to_host,
 )
-from tests.ttnn.utils_for_testing import assert_equal
+from tt_py_test_utils_common.utils_for_testing import assert_equal
 
 
 # sp x tp
@@ -385,6 +390,8 @@ def test_kimi_runner_kv_cache_table(mesh_device, seq_len, num_users, num_layers,
 @pytest.mark.parametrize("seq_len", [5 * 1024, 10 * 1024], ids=["seq5k", "seq10k"])
 @pytest.mark.parametrize("num_users", [1, 2], ids=["1user", "2users"])
 @pytest.mark.parametrize("num_layers", [1, 2], ids=["1layer", "2layers"])
+# (num_key_value_heads, head_dim) of the Kimi-K2.x DFlash and the Kimi-K3 DSpark drafters.
+@pytest.mark.parametrize("num_kv_heads, head_dim", [(8, 128), (16, 64)], ids=["dflash", "dspark"])
 @pytest.mark.skipif(not is_blackhole(), reason="DFlash is Blackhole-only")
 @pytest.mark.timeout(0)
 def test_dflash_kv_cache_mock(
@@ -392,6 +399,8 @@ def test_dflash_kv_cache_mock(
     seq_len,
     num_users,
     num_layers,
+    num_kv_heads,
+    head_dim,
     device_params,
 ):
     """DFlash analogue of test_kimi_kv_cache_mock (mock caches -> table -> readback). Global cache shape
@@ -401,9 +410,6 @@ def test_dflash_kv_cache_mock(
     mesh_shape = list(mesh_device.shape)
     sp_factor, tp_factor = mesh_shape[sp_axis], mesh_shape[tp_axis]
 
-    # dflash_drafter_config: head_dim 128, num_key_value_heads 8. 8 / tp(4) = 2 heads per chip.
-    head_dim = 128
-    num_kv_heads = 8
     heads_per_chip = num_kv_heads // tp_factor
     batch = num_users * num_layers
 
@@ -463,7 +469,7 @@ def test_dflash_kv_cache_mock(
         tt_k.buffer_address() != tt_v.buffer_address()
     ), "K and V must be distinct allocations for the per-config base address to mean anything"
 
-    CHUNK_SIZE_BYTES = (head_dim // 32) * 1088  # [1, 1, 32, 128] bfp8 = 4 tiles, 1024 + 64 bytes each
+    CHUNK_SIZE_BYTES = (head_dim // 32) * 1088  # [1, 1, 32, head_dim] bfp8: 1024 + 64 bytes a tile
     K_BASE, V_BASE = 0, num_kv_heads  # config id order == the src<->dst migration contract
 
     def table_config():
@@ -529,7 +535,7 @@ def test_dflash_kv_cache_mock(
         logger.info(f"[dflash] {name}: {num_kv_heads} head configs verified over {seq_len} tokens")
 
 
-def _shard_major_host(tensor, mesh_device, dtype=torch.bfloat16):
+def _shard_major_host(tensor, mesh_device, dtype=torch.bfloat16, sp_axis=0):
     """A block-cyclic cache gathered to host as [slots, 1, seq_len_cache, D] in SHARD-MAJOR order.
 
     The sparse (DSA) caches are striped across SP*TP, so tp-coord is NOT a replica to index with
@@ -538,12 +544,7 @@ def _shard_major_host(tensor, mesh_device, dtype=torch.bfloat16):
     order the address table addresses. The singleton dim 1 is kept so callers keep their [:, :, a:b, :]
     slicing. Dense (TP-replicated) caches must NOT use this -- take tp column 0 instead.
     """
-    sp, tp = mesh_device.shape[0], mesh_device.shape[1]
-    composed = ttnn.to_torch(
-        tensor, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape)
-    ).to(dtype)
-    local = composed.shape[2] // sp  # per-chip rows = seq_len_cache / (sp*tp)
-    flat = torch.cat([composed[:, t, s * local : (s + 1) * local] for s in range(sp) for t in range(tp)], dim=1)
+    flat = striped_cache_to_host(tensor, mesh_device, sp_axis).to(dtype)
     return flat.unsqueeze(1)
 
 
@@ -822,10 +823,18 @@ def test_glm53_tp_sharded_kv_cache_mock(
 # merged 2-config kimi table (config 0 = KVPE, config 1 = index) with tp_axis=None, and reads every
 # 32-token chunk back. test_glm53_tp_sharded_kv_cache_mock above covers the tp_axis=1 layout.
 @pytest.mark.parametrize(
-    "mesh_device,device_params",
+    "mesh_device,device_params,sp_axis",
     [
-        pytest.param((2, 4), fabric2d_device_params(), id="fabric2d-2x4"),
-        pytest.param((8, 4), torus_xy_device_params(), id="torus-xy-8x4"),
+        pytest.param((2, 4), fabric2d_device_params(), 0, id="fabric2d-2x4"),
+        pytest.param((8, 4), torus_xy_device_params(), 0, id="torus-xy-8x4"),
+        # One 4x4 prefill stage (a Galaxy tray half, run_4x4_stage_tests.sh): SP on the axis-1 ring.
+        pytest.param(
+            (4, 4),
+            torus_x_device_params(),
+            1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="torus-x-4x4-sp1",
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -839,6 +848,7 @@ def test_glm53_kv_cache_table(
     variant,
     config_only,
     device_params,
+    sp_axis,
 ):
     """Readback test for the standard (SP-only) GLM-5.3 merged KVPE + indexer KV chunk address table.
 
@@ -848,8 +858,7 @@ def test_glm53_kv_cache_table(
     config = config_only
     topology = per_axis_topology(device_params["fabric_config"])
 
-    sp_axis = 0
-    tp_axis = 1
+    tp_axis = 1 - sp_axis
     mesh_shape = list(mesh_device.shape)
     config.max_seq_len = seq_len
     logger.info(
@@ -983,7 +992,7 @@ def test_glm53_kv_cache_table(
     )
 
     # --- readback the index cache (config 1, bfp8 TILE) ---
-    index_kbuf_torch = _shard_major_host(index_kbuf, mesh_device)[:1]
+    index_kbuf_torch = _shard_major_host(index_kbuf, mesh_device, sp_axis=sp_axis)[:1]
     chunk_shape = [1, 1, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, index_head_dim]
     for position in range(0, seq_len, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
         pos_end = position + NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
@@ -994,7 +1003,7 @@ def test_glm53_kv_cache_table(
     logger.info(f"[glm53] index-cache (config {INDEX_CONFIG_ID}) readback verified over {seq_len} tokens")
 
     # --- readback the MLA KVPE cache (config 0, bf16 ROW_MAJOR) ---
-    tt_kvpe_cache_torch = _shard_major_host(tt_kvpe_cache.storage, mesh_device)[:1]
+    tt_kvpe_cache_torch = _shard_major_host(tt_kvpe_cache.storage, mesh_device, sp_axis=sp_axis)[:1]
     kvpe_chunk_shape = [1, 1, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, kvpe_head_dim]
     for position in range(0, seq_len, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
         pos_end = position + NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
@@ -1095,6 +1104,74 @@ def test_glm53_index_cache_pipeline_stage_addresses():
     mismatched = {k: (merged[k], golden[k]) for k in golden if merged[k] != golden[k]}
     assert not mismatched, f"{len(mismatched)} entries mismapped, e.g. {list(mismatched.items())[:2]}"
     logger.info(f"[glm53] merged 2-stage index-cache table matches the per-rank walk over {len(merged)} entries")
+
+
+@pytest.mark.parametrize("sp, tp", [(2, 4), (4, 4)], ids=["sp2-tp4", "sp4-tp4"])
+@pytest.mark.parametrize("tp_sharded", [False, True], ids=["tp-replicated", "tp-sharded"])
+def test_kvpe_pipeline_stage_addresses_sp_axis_1(sp, tp, tp_sharded):
+    """SP on mesh axis 1 (a 4x4 tray-half stage) must publish the table SP on axis 0 publishes.
+
+    Each chip is labelled by its LOGICAL (sp, tp) position and placed at its mesh coordinate for the
+    given axis, so a builder that reads mesh row r as SP row r gives SP row r the wrong chips (or, on
+    a non-square mesh, runs off the end). tp_sharded is GLM's KV dedup, where each chip of an SP row
+    holds its own 1/tp of the row's tokens. Host-only: the address math needs no device.
+    """
+    num_users, seq_len, num_banks = 2, 2 * PREFILL_CHUNK_TOKENS, BH_NUM_DRAM_BANKS
+    chunk_size_bytes = 19584
+    stage_ranges = [(0, 3), (3, 3)]
+    base_addrs = [0x1000_0000, 0x2000_0000]
+
+    def stage(rank, first_layer, count, sp_axis):
+        mesh_shape = (sp, tp) if sp_axis == 0 else (tp, sp)
+        fnids = [[None] * mesh_shape[1] for _ in range(mesh_shape[0])]
+        for s in range(sp):
+            for t in range(tp):
+                coord = [0, 0]
+                coord[sp_axis], coord[1 - sp_axis] = s, t
+                fnids[coord[0]][coord[1]] = ttnn.FabricNodeId(ttnn.MeshId(rank), s * tp + t)
+        return {
+            "rank": rank,
+            "first_layer": first_layer,
+            "count": count,
+            "base_addr": base_addrs[rank],
+            "num_banks": num_banks,
+            "host_tag": 0xABC0000 + rank,
+            "fnids": fnids,
+        }
+
+    def populate(sp_axis):
+        config = ttnn.experimental.disaggregation.KvChunkAddressTableConfig()
+        config.num_layers = sum(count for _, count in stage_ranges)
+        table = _RecordingKvChunkAddressTable()
+        populate_kv_chunk_address_table_block_cyclic(
+            lookup_table=table,
+            config=config,
+            mesh_device=None,
+            mesh_shape=(sp, tp) if sp_axis == 0 else (tp, sp),
+            seq_len=seq_len,
+            sp_axis=sp_axis,
+            tt_kvpe_cache=None,
+            chunk_size_bytes=chunk_size_bytes,
+            num_users=num_users,
+            stage_layout=[stage(rank, first, count, sp_axis) for rank, (first, count) in enumerate(stage_ranges)],
+            tp_axis=1 - sp_axis if tp_sharded else None,
+        )
+        return table.entries
+
+    sp0, sp1 = populate(0), populate(1)
+    assert sp1.keys() == sp0.keys(), f"sp_axis=1 covers {len(sp1)} entries vs {len(sp0)} at sp_axis=0"
+    mismatched = {k: (sp1[k], sp0[k]) for k in sp0 if sp1[k] != sp0[k]}
+    assert not mismatched, f"{len(mismatched)} entries differ at sp_axis=1, e.g. {list(mismatched.items())[:2]}"
+    for (_, _, position, _), (_, _, group) in sp1.items():
+        offset = position % PREFILL_CHUNK_TOKENS
+        expected_sp = offset // (PREFILL_CHUNK_TOKENS // sp)
+        if tp_sharded:
+            # One chip per 32-token run: TP index t of that SP row owns its t-th 1/tp of the row.
+            expected_tp = (offset % (PREFILL_CHUNK_TOKENS // sp)) // (PREFILL_CHUNK_TOKENS // (sp * tp))
+            assert [chip for _, chip in group] == [expected_sp * tp + expected_tp], (position, group)
+        else:
+            # The group of any token is one SP row: tp chips, all labelled with that row's SP index.
+            assert sorted(chip // tp for _, chip in group) == [expected_sp] * tp, (position, group)
 
 
 def test_glm53_tp_sharded_pipeline_stage_addresses():
