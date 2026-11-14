@@ -51,6 +51,7 @@ class OwnerBlockMap:
         self.rows: Dict[int, List[int]] = {}  # slot -> the logical blocks its live (covered) columns list
         self.evictions = 0
         self._undo: Optional[list] = None
+        self._snapped: set = set()  # chips whose idle list this open call already copied for its rollback
 
     @staticmethod
     def local_blocks_for(C: int, nb_global: int, max_batch: int, bpu: int = 2) -> int:
@@ -104,17 +105,25 @@ class OwnerBlockMap:
         self.free[g % self.C].append(g // self.C)
         self._log("push", g % self.C)
 
+    def _idle_snap(self, r: int) -> None:
+        """the rollback of chip r's idle (LRU) list: one copy per open call, taken before the call's first change to it.
+        (It logged each dropped block's index instead, which copied the whole list per drop: a 1M prefix attach drops
+        ~16K cached blocks, so the attach cost grew with the cached blocks of every other request -- 0.17 s per warm
+        turn with 1 cached 1M request, 2.2 s with 8; warm_fix 2026-11-14.)"""
+        if self._undo is not None and r not in self._snapped:
+            self._snapped.add(r)
+            self._undo.append(("idle_snap", r, OrderedDict(self.idle[r])))
+
     def _idle_add(self, b: int) -> None:
         r = self.phys[b] % self.C
+        self._idle_snap(r)
         self.idle[r][b] = None
-        self._log("idle_add", r, b)
 
     def _idle_drop(self, b: int) -> None:
         for r, od in enumerate(self.idle):
             if b in od:
-                keys = list(od)
+                self._idle_snap(r)
                 del od[b]
-                self._log("idle_drop", r, b, keys.index(b))
                 return
 
     def _set_refs(self, b: int, n: int) -> None:
@@ -137,13 +146,8 @@ class OwnerBlockMap:
                 self.free[op[1]].append(op[2])
             elif kind == "push":
                 self.free[op[1]].pop()
-            elif kind == "idle_add":
-                del self.idle[op[1]][op[2]]
-            elif kind == "idle_drop":
-                _, r, b, at = op
-                items = list(self.idle[r])
-                items.insert(at, b)
-                self.idle[r] = OrderedDict((k, None) for k in items)
+            elif kind == "idle_snap":  # chip r's idle list as the call found it (_idle_snap)
+                self.idle[op[1]] = op[2]
             elif kind == "refs":
                 _, b, old = op
                 if old is None:
@@ -160,14 +164,14 @@ class OwnerBlockMap:
         owner). Releases the blocks the slot's previous row listed that this row no longer lists (they stay mapped,
         evictable). Atomic: raises with the map unchanged."""
         assert self._undo is None, "set_row is not reentrant"
-        self._undo = []
+        self._undo, self._snapped = [], set()
         try:
             return self._set_row(slot, row, covered, keep)
         except (RuntimeError, ValueError):
             self._rollback(self._undo)
             raise
         finally:
-            self._undo = None
+            self._undo, self._snapped = None, set()
 
     def _set_row(self, slot: int, row: Sequence[int], covered: int, keep: int) -> List[int]:
         old = self.rows.get(slot, [])
@@ -283,14 +287,14 @@ class OwnerBlockMap:
         reused (the load overwrites its content); one cached on another owner moves; one live on another owner raises.
         Blocks of this call are never this call's eviction victims. Atomic. Returns the physical blocks."""
         assert self._undo is None, "admit is not reentrant"
-        self._undo = []
+        self._undo, self._snapped = [], set()
         try:
             return self._admit(pairs)
         except (RuntimeError, ValueError):
             self._rollback(self._undo)
             raise
         finally:
-            self._undo = None
+            self._undo, self._snapped = None, set()
 
     def _admit(self, pairs: Sequence) -> List[int]:
         listed = {int(b) for b, _j in pairs}
