@@ -294,6 +294,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
             }
         }
     } else {
+        const CoreCoord grid_start = all_cores.bounding_box().start_coord;
         for (uint32_t i = 0; i < all_core_coords.size(); ++i) {
             const NodeCoord node = all_core_coords[i];
 
@@ -326,7 +327,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
                     row_size_unpadded = last_block_row_size_unpadded;
                 }
             } else {
-                const CoreCoord& core = all_core_coords[i];
+                const CoreCoord core = {all_core_coords[i].x - grid_start.x, all_core_coords[i].y - grid_start.y};
                 if (row_major) {
                     block_start_row_offset = core.x * block_row_size;
                     block_start_row_id_offset = core.y * num_rows_block;
