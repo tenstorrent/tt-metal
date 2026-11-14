@@ -1003,3 +1003,43 @@ def test_attn_matmul_compute_grid_shorter_than_device(device):
     golden = (input_tensor_a.transpose(0, 2) @ input_tensor_b).transpose(0, 2)
     assert_numeric_metrics(golden, sub_grid_output, pcc_threshold=0.999, check_allclose=False, check_frobenius=False)
     assert torch.equal(sub_grid_output, full_grid_output)
+
+
+# The reader re-reads A tiles for every output tile while the writer stores output tiles, so an output
+# sharing A's buffer returned garbage for K >= 96.
+@pytest.mark.use_module_device
+@pytest.mark.parametrize("k", [64, 128])
+def test_attn_matmul_output_aliases_input(device, k, expect_error):
+    torch.manual_seed(0)
+    input_tensor_a = torch.randn([1, 8, 32, k]).bfloat16()
+    input_tensor_b = torch.randn([32, 1, k, k]).bfloat16()
+    tt_a = ttnn.from_torch(input_tensor_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_b = ttnn.from_torch(input_tensor_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    grid = device.compute_with_storage_grid_size()
+    grid_size = ttnn.CoreCoord(grid.x, grid.y)
+
+    with expect_error(RuntimeError, "must not alias an input buffer"):
+        ttnn.experimental.attn_matmul(
+            tt_a,
+            tt_b,
+            compute_with_storage_grid_size=grid_size,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            dtype=ttnn.bfloat16,
+            output_tensor=tt_a,
+        )
+
+    tt_out = ttnn.from_torch(
+        torch.zeros([1, 8, 32, k]).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    ttnn.experimental.attn_matmul(
+        tt_a,
+        tt_b,
+        compute_with_storage_grid_size=grid_size,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        dtype=ttnn.bfloat16,
+        output_tensor=tt_out,
+    )
+    golden = (input_tensor_a.transpose(0, 2) @ input_tensor_b).transpose(0, 2)
+    assert_numeric_metrics(
+        golden, ttnn.to_torch(tt_out), pcc_threshold=0.999, check_allclose=False, check_frobenius=False
+    )
