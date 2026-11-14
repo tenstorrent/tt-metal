@@ -64,6 +64,7 @@ ProgramDescriptor CopyDeviceOperation::SameMemoryConfig::create_descriptor(
         tilized ? tt::tile_size(input_cb_data_format) : input.padded_shape()[-1] * input.element_size();
     const uint32_t full_input_row = input_unit_size;
     if (sharded && !tilized) {
+        TT_FATAL(input.memory_config().shard_spec().has_value(), "Copy: sharded input must have shard_spec");
         input_unit_size = input.memory_config().shard_spec()->shape[1] * input.element_size();
     }
     const tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
@@ -71,6 +72,7 @@ ProgramDescriptor CopyDeviceOperation::SameMemoryConfig::create_descriptor(
         tilized ? tt::tile_size(output_cb_data_format) : output.padded_shape()[-1] * output.element_size();
     const uint32_t full_output_row = output_unit_size;
     if (sharded && !tilized) {
+        TT_FATAL(output.memory_config().shard_spec().has_value(), "Copy: sharded output must have shard_spec");
         output_unit_size = output.memory_config().shard_spec()->shape[1] * output.element_size();
     }
 
