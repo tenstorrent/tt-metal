@@ -1510,6 +1510,17 @@ std::vector<Tensor> cosh_bw(
 // #         )
 std::vector<Tensor> logiteps_bw(
     const Tensor& grad, const Tensor& input, float eps, const std::optional<MemoryConfig>& output_mem_config) {
+    // One program whose gradient is the generated SFPU kernel, for the calls it serves at the
+    // fitted scalar values; every other call keeps the composite below.
+    if (generated_bf16_kernel_applies(grad, input, output_mem_config) && std::bit_cast<uint32_t>(eps) == 0x00000000u) {
+        return {ttnn::operations::unary_backward::launch_unary_backward(
+            ttnn::operations::unary_backward::UnaryBackwardOpType::LOGITEPS_BW,
+            grad,
+            input,
+            input.dtype(),
+            output_mem_config.value_or(input.memory_config()))};
+    }
+
     std::vector<Tensor> grad_tensor;
     float low, high;
     low = eps;
