@@ -288,21 +288,9 @@ uint32_t extract_l1_output_buffer_allocation_size_per_core(const Tensor& output_
     return buffer->aligned_size_per_bank();
 }
 
-uint32_t extract_l1_buffer_allocation_peak_size_per_core(const nlohmann::json& trace) {
-    return extract_resource_usage_per_core(trace).peak_l1;
-}
-
-uint32_t extract_circular_buffers_peak_size_per_core(const nlohmann::json& trace) {
-    return extract_resource_usage_per_core(trace).peak_cb;
-}
-
 // calculate the size of buffer allocated/deallocated on each core
 static uint32_t calculate_buffer_allocation_size(const nlohmann::json& node) {
     return json_to_int(node.at(kParams).at(kMaxSizePerBank));
-}
-
-uint32_t extract_peak_memory_usage(const nlohmann::json& trace) {
-    return extract_resource_usage_per_core(trace).peak_total;
 }
 
 PeakMemoryUsagePerCore extract_resource_usage_per_core(const nlohmann::json& trace) {
