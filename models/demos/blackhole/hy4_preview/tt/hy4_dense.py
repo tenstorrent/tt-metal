@@ -13,8 +13,26 @@ from models.demos.blackhole.deepseek_v41_flash.tt.shared_expert_tp import DSV41S
 NO_CLAMP = 1.0e30
 
 
+class SkinnyDecodeShared:
+    """HY4_SKINNY=shared: the decode shared-expert partial on the bank-local streaming kernel (tt/hy4_skinny.SkinnyShared, T <= 16 rows); same forward contract as DSV41SharedExpertColTP."""
+
+    def __init__(self, mesh_device, w0, w1, w2, limit):
+        from models.demos.blackhole.hy4_preview.tt.hy4_skinny import SkinnyShared
+
+        self.sk = SkinnyShared(mesh_device, w0, w1, w2, limit=limit)
+
+    def forward(self, h):
+        return self.sk(h, int(h.shape[2]))
+
+
 def make_shared(mesh_device, w0, w1, w2, limit=10.0, decode=True, **kw):
-    """w0/w1 [1,1,6144,2048], w2 [1,1,2048,6144] host ([in, out]). decode=True: 1D-mcast program configs for T <= 32 rows."""
+    """w0/w1 [1,1,6144,2048], w2 [1,1,2048,6144] host ([in, out]). decode=True: 1D-mcast program configs for T <= 32 rows.
+    HY4_SKINNY=shared (default OFF): decode=True returns the bank-local skinny kernel (T <= 16 rows, no extra kwargs)."""
+    if decode and not kw:
+        from models.demos.blackhole.hy4_preview.tt.hy4_skinny import enabled
+
+        if enabled("shared"):
+            return SkinnyDecodeShared(mesh_device, w0, w1, w2, limit)
     base = dict(
         g1=(12, 8), g2=(12, 8), pn1=1, pn2=4, bw1=32, bw2=4
     )  # ict = 8 tiles per column: bw2 must divide 8; pn2*cores covers 192 out tiles

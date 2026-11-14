@@ -86,7 +86,7 @@ class SkinnyShared:
         assert self.ring // self.sbk1 <= 15 and self.ring // self.sbk2 <= 15 and self.ring % self.sbk1 == 0 and self.ring % self.sbk2 == 0
 
     def __call__(self, h, T, out=None):
-        """h: std tile tensor [1,1,T,6144] bf16 (DRAM or L1); -> out [1,1,32,6144] bf16 TILE (rows 0..T-1 valid)."""
+        """h: std tile tensor [1,1,T,6144] bf16 (DRAM or L1); -> out [1,1,T,6144] bf16 TILE (the same tensor the stock make_shared forward returns)."""
         assert T <= 16
         MT = 1 if T <= 8 else 2
         R = 8 if (MT == 2 or not self.tiny) else (2 if T <= 2 else 4 if T <= 4 else 8)  # rows of the in0 tiles
@@ -96,7 +96,7 @@ class SkinnyShared:
         core_set = _core_set(cores)
         if out is None:
             out = ttnn.allocate_tensor_on_device(
-                ttnn.Shape([1, 1, 32, 6144]), ttnn.bfloat16, ttnn.TILE_LAYOUT, md, ttnn.DRAM_MEMORY_CONFIG
+                ttnn.Shape([1, 1, T, 6144]), ttnn.bfloat16, ttnn.TILE_LAYOUT, md, ttnn.DRAM_MEMORY_CONFIG
             )
         ring, sbk1, sbk2 = self.ring, self.sbk1, self.sbk2
         (CB_X, CB_W, CB_GU, CB_GU16, CB_ACTL, CB_ACTL16, CB_ACT, CB_O, CB_ZERO, CB_ZERO16, CB_TMP, CB_TMP16) = range(12)
@@ -569,3 +569,127 @@ class SkinnyLinear:
         )
         ttnn.generic_op([x, self.w, out], prog)
         return out
+
+
+# --------------------------------------------------------------------------------------------------------------------------------------------------
+# fused h-proj: [q_a | kv_a | gate | (idx_wk | idx_wp)] = h @ W_c (N sharded over the mesh columns, K = 6144 full), output split in the writer
+# --------------------------------------------------------------------------------------------------------------------------------------------------
+class SkinnyProj:
+    """parts = SkinnyProj(md, wcat [1,1,6144, cols * nloc] host, widths)(h, T): the fused projection of Hy4AttentionOpt (``fuseproj``) on the 8 bank cores, the output columns of
+    every mesh column split into len(widths) tensors [1,1,T,width] (no ttnn.slice ops).  Output tiles (nloc / 32 per chip) are spread over the banks as evenly as possible; weight tiles of a
+    bank = PNC columns of KT = 192 tiles (zero tiles pad the banks with fewer valid columns)."""
+
+    KT = 192
+
+    def __init__(self, md, wcat, widths, kb=None, ring=None, remap=None, tiny=None):
+        self.md = md
+        rows, cols = tuple(md.shape)
+        K, Ntot = int(wcat.shape[-2]), int(wcat.shape[-1])
+        widths = [w for w in widths if w > 0]  # a zero-width tail part (shared layers: no indexer weights) is dropped
+        assert K == 6144 and Ntot % cols == 0 and len(widths) <= 5 and all(w % 32 == 0 for w in widths)
+        nloc = Ntot // cols
+        assert sum(widths) == nloc
+        self.widths = list(widths)
+        self.NT = nloc // 32
+        q, r = divmod(self.NT, NB)
+        self.valid = [q + 1 if b < r else q for b in range(NB)]
+        self.first = [sum(self.valid[:b]) for b in range(NB)]
+        self.PNC = q + (1 if r else 0)
+        ends, acc = [], 0
+        for w in widths:
+            acc += w // 32
+            ends.append(acc)
+        self.seg_end = ends + [self.NT] * (5 - len(ends))
+        w = wcat.float().reshape(K, cols, nloc)
+        tiles = torch.zeros(cols, NB, self.PNC * self.KT, 32, 32)
+        for c in range(cols):
+            wc = w[:, c, :]
+            for b in range(NB):
+                for j in range(self.valid[b]):
+                    g = self.first[b] + j
+                    blk = wc[:, 32 * g : 32 * g + 32].reshape(self.KT, 32, 32)
+                    tiles[c, b, j * self.KT : (j + 1) * self.KT] = blk
+        self.w = bank_seq_weight(md, tiles)
+        self.tiny = int(os.environ.get("HY4_SKINNY_TINY", "1") if tiny is None else tiny)
+        self.cores = bank_cores(md, 0)
+        for ent in filter(None, (remap if remap is not None else os.environ.get("HY4_SKINNY_REMAP", DEFAULT_REMAP)).split("/")):
+            b, xy = ent.split("@")
+            x, y = xy.split(".")
+            self.cores[int(b)] = ttnn.CoreCoord(int(x), int(y))
+        self.vcs = SK._vcs(self.cores)
+        self.phys = [md.worker_core_from_logical_core(ttnn.CoreCoord(c.x, c.y)) for c in self.cores]
+        self.fp32 = int(os.environ.get("HY4_SKINNY_FP32", "1"))
+        self.kb = int(kb or os.environ.get("HY4_SKINNY_PJ_KB", "48"))
+        self.ring = int(ring or os.environ.get("HY4_SKINNY_PJ_RING", str(8 * self.kb)))
+        assert self.KT % self.kb == 0 and self.ring % self.kb == 0 and self.ring // self.kb <= 15
+
+    def __call__(self, h, T):
+        assert T <= 16
+        MT = 1 if T <= 8 else 2
+        R = 8 if (MT == 2 or not self.tiny) else (2 if T <= 2 else 4 if T <= 4 else 8)
+        md, KT, PNC, kb = self.md, self.KT, self.PNC, self.kb
+        core_set = _core_set(self.cores)
+        outs = [
+            ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, T, wd]), ttnn.bfloat16, ttnn.TILE_LAYOUT, md, ttnn.DRAM_MEMORY_CONFIG)
+            for wd in self.widths
+        ]
+        outs5 = outs + [outs[-1]] * (5 - len(outs))
+        CB_X, CB_W, CB_O = range(3)
+        cbs = [SK._tiny_cb(core_set, CB_X, KT * MT, rows=R), SK._ring_cb(core_set, CB_W, self.ring), SK._tiny_cb(core_set, CB_O, PNC * MT)]
+        nsub = KT // kb
+        readers = []
+        for i, cc in enumerate(self.cores):
+            ph = [dict(addr=self.w.buffer_address(), sbk=kb, pn=PNC * nsub // nsub, nsub=nsub, nbuf=self.ring // kb)]
+            readers.append(
+                ttnn.KernelDescriptor(
+                    kernel_source=f"{KDIR}/hsk_reader.cpp",
+                    source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+                    core_ranges=_core_set([cc]),
+                    compile_time_args=SK.reader_ct(CB_W, i, self.vcs[i], ph),
+                    runtime_args=ttnn.RuntimeArgs(),
+                    common_runtime_args=[],
+                    config=ttnn.ReaderConfigDescriptor(),
+                )
+            )
+        SBW = (4 if self.fp32 else 5) // MT
+        while PNC % SBW:
+            SBW -= 1
+        rt_w = ttnn.RuntimeArgs()
+        for i, cc in enumerate(self.cores):
+            rt_w[cc.x][cc.y] = [i, self.first[i], self.valid[i]]
+        common_w = [h.buffer_address()] + [o.buffer_address() for o in outs5] + list(self.seg_end)
+        for q in self.phys:
+            common_w += [q.x, q.y]
+        ct_w = [CB_X, CB_O, NB, KT, PNC, SBW, 1, MT, R] + _acc(h)
+        for o in outs5:
+            ct_w += _acc(o)
+        writer = ttnn.KernelDescriptor(
+            kernel_source=f"{KDIR}/hsk_pj_writer.cpp",
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=core_set,
+            compile_time_args=ct_w,
+            runtime_args=rt_w,
+            common_runtime_args=common_w,
+            config=ttnn.WriterConfigDescriptor(),
+        )
+        compute = ttnn.KernelDescriptor(
+            kernel_source=f"{KDIR}/hsk_ln_compute.cpp",
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=core_set,
+            compile_time_args=[CB_X, CB_W, CB_O, KT, self.fp32, kb, PNC, SBW, MT],
+            runtime_args=ttnn.RuntimeArgs(),
+            common_runtime_args=[],
+            config=ttnn.ComputeConfigDescriptor(
+                math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=bool(self.fp32), math_approx_mode=True
+            ),
+        )
+        prog = ttnn.ProgramDescriptor(
+            kernels=readers + [writer, compute],
+            semaphores=[ttnn.SemaphoreDescriptor(id=i, core_ranges=core_set, initial_value=0) for i in range(3)],
+            cbs=cbs,
+        )
+        prog.custom_program_hash = _hash(
+            0x7B5, MT, R, self.fp32, self.ring, kb, PNC, tuple(self.widths), self.w.buffer_address(), tuple(_acc(h)), tuple(tuple(_acc(o)) for o in outs5),
+        )
+        ttnn.generic_op([h, self.w] + outs, prog)
+        return outs
