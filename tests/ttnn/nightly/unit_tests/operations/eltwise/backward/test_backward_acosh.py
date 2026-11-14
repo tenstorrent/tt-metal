@@ -12,7 +12,7 @@ from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs imp
 )
 
 
-# Test added for issue #6583
+# Test added for issue #6583 and issue #60821
 @pytest.mark.parametrize(
     "in_val, grad_val",
     [
@@ -22,6 +22,13 @@ from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs imp
         (0.5, 0.5),
         (1.0, 0.5),
         (0.0, 0.0),
+        (-1.0, 1.0),
+        (-1.0, 0.0),
+        (-1.0, -1.0),
+        (-1.5, -2.0),
+        (-2.0, 1.0),
+        (-5.0, 1.0),
+        (2.0, 1.0),
     ],
 )
 def test_bw_acosh_edge_cases(in_val, grad_val, device):
