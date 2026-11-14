@@ -4136,6 +4136,7 @@ tasks:
     change:
       MOE_TRACE: moe
       ENGRAM_TABLE: resident
+    keep_default: true
   ab_positions:
   - 51200
   gate:
@@ -4149,13 +4150,259 @@ tasks:
       top5_overlap: '>= limit'
       chunk_wall_ms: '> 0'
       device_ms_total: '> 0'
+- id: P.62
+  title: 'Why replicas make the host slower (prev vs off, +~7.7 ms host a chunk after P.60): account for every us, op by op and call by call, then remove it (planner
+    launch folded into an existing program or one mesh program, Python bookkeeping, guard)'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - P.61
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
+  - models/demos/common/bringup/testing
+  - models/demos/common/bringup/tests
+  - ttnn/ttnn/bringup
+  brief:
+    details: 'OWNER 2026-11-14: "sort out first why host got slower with replicas. It shouldn''t, it makes no sense." After P.60 (real prompts, chunks 1-10, MOE_PREV_HOST=device):
+      host per chunk novel off 164.7 / prev 172.4 ms, code 162.3 / 170.1 (+7.7 / +7.8). Known so far: planner launch ~95 us a call x 40 (~3.8 ms; 32 per-chip programs
+      a launch; 56 us in a tight loop), combine 360 vs 340 us a call (~0.8 ms), P.56''s host guard ~0.6 ms; ~2.5 ms NOT attributed (the overseer guessed Python in
+      tt/expert_prev.py; unmeasured).
+
+      STEP 1, ACCOUNT: host time per chunk prev vs off, attributed to every call and Python function that differs (cProfile + per-op host timers, both prompts), until
+      the difference is fully explained (residual < 0.5 ms). No guesses: measure.
+
+      STEP 2, REMOVE: whatever is not inherent. The planner does not need its own launch in principle: fold it into a program that already runs every layer (the fused
+      head, which already has the router counts, P.45; or the combine, which holds the fabric port cores all layer: P.60 noted races on the call counter and the ring
+      slot it clears) or make it ONE program for the whole mesh (DS41-225 pattern) instead of 32 per-chip programs. Remove Python bookkeeping off the per-layer path;
+      make the guard device-side. Each change bit-identical.
+
+      DELIVERABLE: host / device / wall per chunk, prev vs off, before vs after, novel AND code chunks 1..10 (test_moe_prev_replicas.py); the attribution table. Target:
+      prev''s host <= off''s + 1 ms. A/B: MOE_PREV_HOST2 legacy vs lean with prev on both sides; an accept makes lean the default on this branch. Report plainly,
+      short, every term defined. Agent rules 18 and 19; every Python-built op prepared. SAFETY: a hang or reset need: STOP and report, never reset.'
+  ab:
+    env:
+      MOE_PREV_HOST2: legacy
+      ENGRAM_TABLE: resident
+    change:
+      MOE_PREV_HOST2: lean
+      ENGRAM_TABLE: resident
+  ab_positions:
+  - 51200
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py && scripts/run_safe_pytest.sh --run-all
+      --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_moe_prev_replicas.py && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile
+      models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      chunk_wall_ms: '> 0'
+      device_ms_total: '> 0'
+- id: P.63
+  title: 'One program for the whole mesh for the fused head and the combine (instead of 32 per-chip programs a launch): fewer host dispatches per layer'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - P.62
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
+  - models/demos/common/bringup/testing
+  - models/demos/common/bringup/tests
+  - ttnn/ttnn/bringup
+  brief:
+    details: 'OWNER 2026-11-14: reduce host calls, one change per run. The chunk is host-bound (P.57, DS41-251/254: ~1,700 op launches a chunk at ~80 us each ~140
+      ms, plus ~34 ms of Python; host ~165-172 ms vs device ~153-167 ms), so device wins do not reach the wall.
+
+
+      P.57: the biggest single launches are the combine (~360 us a call after P.60) and the fused head (~301 us a call), each dispatched as 32 per-chip programs.
+      Make each ONE mesh-wide program (the DS41-225 pattern, already used elsewhere in this model: find it), with runtime args that do not change per call where possible.
+      P.57 estimate: -10 to -14 ms host a chunk.
+
+
+      Measure host / device / clean wall per chunk on real novel AND code chunks 1..10 back to back (tests/test_moe_prev_replicas.py, MOE_REPLICAS prev and off) and
+      at 51,200; host us a call for the ops you change; op launches per chunk. Outputs bit-identical unless a fused op changes rounding (then every accuracy metric
+      within its recorded limit). Report plainly, short, every term defined. Agent rules 18 and 19; every Python-built op prepared (ttnn.bringup.prepare_program /
+      run_prepared); fork-first (ttnn/ttnn/bringup/INDEX.md); no fork unit or regression suites on the 8x4, only the tests you add plus the model-level checks. SAFETY:
+      a hang or a board reset need: STOP and report, never reset.'
+  ab:
+    env:
+      MESH_PROGRAMS: legacy
+      ENGRAM_TABLE: resident
+    change:
+      MESH_PROGRAMS: 'on'
+      ENGRAM_TABLE: resident
+  ab_positions:
+  - 51200
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py && scripts/run_safe_pytest.sh --run-all
+      --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_moe_prev_replicas.py && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile
+      models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      chunk_wall_ms: '> 0'
+      device_ms_total: '> 0'
+- id: P.64
+  title: 'Fewer attention-side launches: fuse the small ops (slices, rope, slice_write, layout casts) around attention into fewer programs'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - P.63
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
+  - models/demos/common/bringup/testing
+  - models/demos/common/bringup/tests
+  - ttnn/ttnn/bringup
+  brief:
+    details: 'OWNER 2026-11-14: reduce host calls, one change per run. The chunk is host-bound (P.57, DS41-251/254: ~1,700 op launches a chunk at ~80 us each ~140
+      ms, plus ~34 ms of Python; host ~165-172 ms vs device ~153-167 ms), so device wins do not reach the wall.
+
+
+      P.57: attention-side small ops (slice, rope, slice_write, layout conversions/casts) cost many launches a layer. Count them per layer (op launches by type),
+      then fuse the cheapest-to-fuse groups (existing bring-up forks first: ttnn/ttnn/bringup/INDEX.md; a fused or prepared program; drop casts that a neighbouring
+      op can absorb). P.57 estimate: -10 to -20 ms host a chunk.
+
+
+      Measure host / device / clean wall per chunk on real novel AND code chunks 1..10 back to back (tests/test_moe_prev_replicas.py, MOE_REPLICAS prev and off) and
+      at 51,200; host us a call for the ops you change; op launches per chunk. Outputs bit-identical unless a fused op changes rounding (then every accuracy metric
+      within its recorded limit). Report plainly, short, every term defined. Agent rules 18 and 19; every Python-built op prepared (ttnn.bringup.prepare_program /
+      run_prepared); fork-first (ttnn/ttnn/bringup/INDEX.md); no fork unit or regression suites on the 8x4, only the tests you add plus the model-level checks. SAFETY:
+      a hang or a board reset need: STOP and report, never reset.'
+  ab:
+    env:
+      ATTN_FUSE: legacy
+      ENGRAM_TABLE: resident
+    change:
+      ATTN_FUSE: 'on'
+      ENGRAM_TABLE: resident
+  ab_positions:
+  - 51200
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py && scripts/run_safe_pytest.sh --run-all
+      --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_moe_prev_replicas.py && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile
+      models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      chunk_wall_ms: '> 0'
+      device_ms_total: '> 0'
+- id: P.65
+  title: Cheaper all_gather and mhc_post launches
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - P.64
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
+  - models/demos/common/bringup/testing
+  - models/demos/common/bringup/tests
+  - ttnn/ttnn/bringup
+  brief:
+    details: 'OWNER 2026-11-14: reduce host calls, one change per run. The chunk is host-bound (P.57, DS41-251/254: ~1,700 op launches a chunk at ~80 us each ~140
+      ms, plus ~34 ms of Python; host ~165-172 ms vs device ~153-167 ms), so device wins do not reach the wall.
+
+
+      P.57: all_gather and mhc_post launches cost ~5-8 ms host a chunk. Make them cheaper: prepared programs, mesh-wide programs, fixed runtime args, or fold them
+      into a neighbouring program. P.57 estimate: -5 to -8 ms host a chunk.
+
+
+      Measure host / device / clean wall per chunk on real novel AND code chunks 1..10 back to back (tests/test_moe_prev_replicas.py, MOE_REPLICAS prev and off) and
+      at 51,200; host us a call for the ops you change; op launches per chunk. Outputs bit-identical unless a fused op changes rounding (then every accuracy metric
+      within its recorded limit). Report plainly, short, every term defined. Agent rules 18 and 19; every Python-built op prepared (ttnn.bringup.prepare_program /
+      run_prepared); fork-first (ttnn/ttnn/bringup/INDEX.md); no fork unit or regression suites on the 8x4, only the tests you add plus the model-level checks. SAFETY:
+      a hang or a board reset need: STOP and report, never reset.'
+  ab:
+    env:
+      CHEAP_CCL: legacy
+      ENGRAM_TABLE: resident
+    change:
+      CHEAP_CCL: 'on'
+      ENGRAM_TABLE: resident
+  ab_positions:
+  - 51200
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py && scripts/run_safe_pytest.sh --run-all
+      --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_moe_prev_replicas.py && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile
+      models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      chunk_wall_ms: '> 0'
+      device_ms_total: '> 0'
+- id: P.66
+  title: Trim Python glue on the per-layer path in tt/ (~34 ms a chunk, ~6 ms freeing tensors)
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - P.65
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
+  - models/demos/common/bringup/testing
+  - models/demos/common/bringup/tests
+  - ttnn/ttnn/bringup
+  brief:
+    details: 'OWNER 2026-11-14: reduce host calls, one change per run. The chunk is host-bound (P.57, DS41-251/254: ~1,700 op launches a chunk at ~80 us each ~140
+      ms, plus ~34 ms of Python; host ~165-172 ms vs device ~153-167 ms), so device wins do not reach the wall.
+
+
+      P.57: ~34 ms of Python in tt/ a chunk, ~6 ms of it freeing device tensors. Profile per function (cProfile), remove per-layer allocations and frees (pre-allocated
+      buffers, deallocate only what must), hoist constant work out of the chunk loop, avoid per-call dict/list building. P.57 estimate: -5 to -10 ms host a chunk.
+
+
+      Measure host / device / clean wall per chunk on real novel AND code chunks 1..10 back to back (tests/test_moe_prev_replicas.py, MOE_REPLICAS prev and off) and
+      at 51,200; host us a call for the ops you change; op launches per chunk. Outputs bit-identical unless a fused op changes rounding (then every accuracy metric
+      within its recorded limit). Report plainly, short, every term defined. Agent rules 18 and 19; every Python-built op prepared (ttnn.bringup.prepare_program /
+      run_prepared); fork-first (ttnn/ttnn/bringup/INDEX.md); no fork unit or regression suites on the 8x4, only the tests you add plus the model-level checks. SAFETY:
+      a hang or a board reset need: STOP and report, never reset.'
+  ab:
+    env:
+      LEAN_PY: legacy
+      ENGRAM_TABLE: resident
+    change:
+      LEAN_PY: 'on'
+      ENGRAM_TABLE: resident
+  ab_positions:
+  - 51200
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py && scripts/run_safe_pytest.sh --run-all
+      --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_moe_prev_replicas.py && DS41_ENGRAM_TABLE=resident scripts/run_safe_pytest.sh --run-all --no-precompile
+      models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      chunk_wall_ms: '> 0'
+      device_ms_total: '> 0'
 - id: P.54
   title: 'MoE replicas end to end: back-to-back chunked prefill, device time and wall per chunk with the fill included - replicas off vs a table frozen after chunk 0 vs online learning'
   step: perf
   role: perf
   device: true
   deps:
-  - P.61
+  - P.66
   paths:
   - models/demos/deepseek_v41_flash_d_p/tt
   - models/demos/deepseek_v41_flash_d_p/tests/
