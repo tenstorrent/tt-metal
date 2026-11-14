@@ -173,7 +173,8 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
     bool is_in_tiled,
     int block_size,
     const tt::tt_metal::CoreRangeSet& shard_grid,
-    tt::tt_metal::ShardOrientation shard_orientation);
+    tt::tt_metal::ShardOrientation shard_orientation,
+    bool split_by_noc_direction = false);
 
 void visualize_sliding_window_op_config(const std::vector<std::vector<uint16_t>>& config);
 
