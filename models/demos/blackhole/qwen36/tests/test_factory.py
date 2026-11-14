@@ -229,6 +229,15 @@ def torch_routed_experts_reference(moe_state, x, routing):
 # --------------------------------------------------------------------------- #
 # PCC helpers
 # --------------------------------------------------------------------------- #
+def kv_pool_blocks(tokens, min_blocks=1, align=1):
+    """Paged KV blocks of kv_block_size() tokens that hold ``tokens``: at least ``min_blocks``, rounded up to ``align``.
+    Pools and page tables written in tokens give the same block counts at the default block size of 64."""
+    from models.demos.blackhole.qwen36.tt.tp_common import kv_block_size
+
+    n = max(int(min_blocks), -(-int(tokens) // kv_block_size()))
+    return -(-n // int(align)) * int(align)
+
+
 def compute_pcc(a, b):
     """Pearson correlation between two tensors (single canonical implementation)."""
     a_flat = a.float().flatten()
@@ -320,14 +329,15 @@ def _resolve_mesh_shape(max_tp=8):
     return (1, min(len(ttnn.get_device_ids()), max_tp))
 
 
-def parametrize_mesh_tp(max_tp=8):
+def parametrize_mesh_tp(max_tp=8, trace_region_size=None):
     """Parametrize a TP test over the env-selected mesh shape + FABRIC_1D.
 
     Mirrors the idiom the qwen TP tests used inline: ``MESH_DEVICE=P150`` -> (1,1),
     ``P150x4`` -> (1,4), ``P150x8`` -> (1,8); otherwise (1, min(num_devices, max_tp)).
     The mesh shape
     gets an explicit ``RxC`` id so node names (and ``pcc_thresholds.json`` mesh
-    keys) are readable.
+    keys) are readable. ``trace_region_size`` (optional) is added to ``device_params`` for
+    tests that capture a trace; when None the conftest fallback applies (unchanged behaviour).
     """
     shape = _resolve_mesh_shape(max_tp)
     # Local import to keep this test helper's module load light (see module docstring).
@@ -337,7 +347,16 @@ def parametrize_mesh_tp(max_tp=8):
         fn = pytest.mark.parametrize(
             "device_params",
             # l1_small_size required by ttnn.conv1d in the GDN prefill path
-            [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": GDN_CONV1D_L1_SMALL_SIZE}],
+            [
+                {
+                    # QWEN36_FABRIC_RING=1: a Galaxy column's Ring CCLs need the ring (torus) fabric.
+                    "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING
+                    if os.environ.get("QWEN36_FABRIC_RING") == "1"
+                    else ttnn.FabricConfig.FABRIC_1D,
+                    "l1_small_size": GDN_CONV1D_L1_SMALL_SIZE,
+                    **({"trace_region_size": trace_region_size} if trace_region_size is not None else {}),
+                }
+            ],
             indirect=True,
         )(fn)
         fn = pytest.mark.parametrize("mesh_device", [pytest.param(shape, id=f"{shape[0]}x{shape[1]}")], indirect=True)(

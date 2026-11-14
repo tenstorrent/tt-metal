@@ -370,6 +370,79 @@
   team: models
   budget_type: vllm
 
+# ── Qwen 3.8 MTP on BH Galaxy, MambaSpec runs on one machine ──
+# tt-inference-server qwen36_blackhole_mtp settings (TP=8 x DP=4) with the GDN state in vLLM MambaSpec blocks
+# (QWEN36_MAMBA_SPEC=1): block 1024, retention 0, 1,040,384 tokens per DP rank. One job serves the setting three
+# times on one Galaxy, so a comparison can be read against its own spread. The plugin takes no tt keys or
+# VLLM_TT_SPEC_* variables beyond main's: the chained and fused verifies are its fixed behavior.
+# c16:prefix24 = 24 distinct 30,720-token prefixes, 16 shuffled prompts each.
+# The model writes its weight cache under /work because the shared cache mount is read-only.
+- name: "Qwen3.8-27B MTP DP=4 MambaSpec runs, same machine (BH Galaxy)"
+  model: Qwen/Qwen3.8-27B
+  ab-driver: true
+  hf-snapshot-revision: 1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0
+  multimodal: false
+  server-timeout: 40
+  benchmark-timeout: 30
+  mesh-device: BH-Galaxy
+  arch: arch-blackhole
+  tt-config: '{"fabric_config": "FABRIC_1D_RING", "trace_region_size": 1073741824, "l1_small_size": 24576, "decode_interleave_prefill_steps": 1}'
+  additional-server-args: >-
+    --data_parallel_size 4 --max_num_seqs 8 --max_model_len 262144 --max_num_batched_tokens 525312 --async-scheduling --enable-chunked-prefill --long_prefill_token_threshold 16384 --enable-prefix-caching --limit-mm-per-prompt.image 1 --limit-mm-per-prompt.video 1 --mm-processor-cache-gb 0 --mm-processor-kwargs.max_pixels 1048576 --media-io-kwargs.video.num_frames 16 --speculative-config.method custom_class --speculative-config.model vllm_tt_plugin.model_owned_drafter --speculative-config.num_speculative_tokens 3
+  ab-arms: "M1|QWEN36_MAMBA_SPEC=1 QWEN36_MAX_TOKENS_ALL_USERS=1040384|--block_size 1024 --prefix-cache-retention-interval 0|1;M2|QWEN36_MAMBA_SPEC=1 QWEN36_MAX_TOKENS_ALL_USERS=1040384|--block_size 1024 --prefix-cache-retention-interval 0|1;M3|QWEN36_MAMBA_SPEC=1 QWEN36_MAX_TOKENS_ALL_USERS=1040384|--block_size 1024 --prefix-cache-retention-interval 0|0"
+  ab-bench: "32:256 8:128 16:384:prefix24"
+  default-chat-template-kwargs: '{"enable_thinking": false}'
+  extra-env: >-
+    TT_QWEN35_TEXT_VER=qwen36_blackhole
+    TT_MODEL_CLASS_OVERRIDES=TTQwen3_5ForConditionalGeneration=models.demos.blackhole.qwen36.tt.qwen36_vllm:Qwen36MTPContractForCausalLM
+    QWEN36_SPEC_K=3 QWEN36_SPEC_FAST_PREFILL=1 OMP_NUM_THREADS=8 HF_MODEL=Qwen/Qwen3.8-27B MESH_DEVICE=BH-Galaxy
+    QWEN36_MAX_TOKENS_ALL_USERS=525312 TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0 VLLM_IMAGE_FETCH_TIMEOUT=30
+    QWEN_SDPA_BF8=1 QWEN36_SPEC_FUSED=1 QWEN36_SPEC_CHAIN=1
+    QWEN36_SPEC_STEP_TIMING=1
+    QWEN36_SPEC_CHAIN_SAMPLED=1 QWEN36_SPEC_FUSED_AUDIT_EVERY=8
+    QWEN36_SPEC_CHAIN_AUDIT_EVERY=8 QWEN36_SPEC_CHUNKED_PREFILL=1 QWEN36_PREFILL_BIG_CHUNK=8192
+    QWEN36_PREFILL_RS_LINKS=2 QWEN36_PREFILL_RS_WORKERS=8 QWEN36_PREFILL_AGMM_TUNED=1 QWEN36_PREFILL_MASKED_BIG=1
+    QWEN36_SDPA_PREFIX_REUSE=auto QWEN36_SDPA_PREFILL_QSPLIT=32 QWEN36_PREFILL_MTP_LEAN=1
+    QWEN36_PREFILL_GDN_GLUE=1 QWEN36_PREFILL_HOST_TOLIST=1 QWEN36_JOIN_LOGITS_ONE_COPY=1
+    QWEN36_SPEC_STEP_VALUE_BLOCKS=4 QWEN36_SPEC_STEP_OPT=250 QWEN36_SPEC_STEP_NARROW_GR=1
+    QWEN36_DECODE_AR_ONESHOT=1 QWEN36_DECODE_AR_FUSE_RESIDUAL=1 QWEN36_SPEC_ACCEPT_KERNEL=1
+    QWEN36_SPEC_ACCEPT_KERNEL_SAMPLED=1 QWEN36_SPEC_CHAIN_KERNEL=1 QWEN36_SPEC_ARGMAX_FUSED=1
+    QWEN36_DRAFT_LMHEAD_BFP4=1 QWEN36_DRAFT_HEAD_DSHARD=1 QWEN36_LMHEAD_DSHARD=mc QWEN36_LMHEAD_DSHARD_OUT_PCN=10
+    QWEN36_LMHEAD_DSHARD_SCOPE=draft QWEN36_MTP_KV_ONLY=1 QWEN36_MTP_EMBED_ROW=1 QWEN36_SPEC_DR_OUTS_PREALLOC=1
+    QWEN36_SPEC_VFY_OUTS_PREALLOC=1 QWEN36_VERIFY_OUT_RES40=1 QWEN36_KV_WRITE_MULTIROW=1 QWEN36_SPEC_SDPA_PACKED=1
+    QWEN36_ATTN_GLUE_CUTS=1 TT_CACHE_PATH=/work/tt_cache/Qwen--Qwen3.8-27B
+  skus:
+    bh_galaxy:
+      timeout: 330
+      tier: 3
+  owner_id: U09LTAPEU2U # Viktor Pus
+  team: models
+  budget_type: vllm
+
+# Device unit tests of the GDN-state-in-vLLM stack on one Blackhole chip of a CI Galaxy (no server).
+- name: "Qwen3.8-27B GDN state device unit tests (BH Galaxy)"
+  model: Qwen/Qwen3.8-27B
+  ab-driver: true
+  device-tests-only: true
+  device-tests: >-
+    tests/ttnn/unit_tests/base_functionality/test_alias_view.py
+    tests/ttnn/unit_tests/operations/experimental/kda/test_gdn_spec_step.py
+    models/demos/blackhole/qwen36/tests/test_gdn_decode_step_paged.py
+    models/demos/blackhole/qwen36/tests/test_spec_block_state_device.py
+    models/demos/blackhole/qwen36/tests/test_spec_fused_kernels.py
+  multimodal: false
+  server-timeout: 10
+  benchmark-timeout: 10
+  mesh-device: BH-Galaxy
+  arch: arch-blackhole
+  skus:
+    bh_galaxy:
+      timeout: 150
+      tier: 2
+  owner_id: U09LTAPEU2U # Viktor Pus
+  team: models
+  budget_type: vllm
+
 # ── GPT-OSS ────────────────────────────────────────────────────────
 
 - name: "GPT-OSS-120B (low-latency)"

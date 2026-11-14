@@ -1042,8 +1042,11 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
 // PHASE B (scan): one chunk of the sequential recurrence. cur_S = the state input CB for this
 // chunk (reader-fed cb_S at chunk 0, then the compute-only ping-pong), dst = where the updated
 // state goes (the other ping-pong CB, or the final-state CB on the last chunk).
-template <uint32_t Ct, uint32_t Kt, uint32_t Vt>
-inline void scan_step(const GdnScanCbs& cb, uint32_t cur_S, uint32_t dst) {
+// kSnap (mid-scan snapshot, GDN_SNAPSHOT builds only; false = the code below is unchanged): S_new is packed a second
+// time, from the same DST registers, into the CB `snap` (fp32 like dst, so the packer needs no reconfig): the
+// snapshot holds exactly the bytes the next chunk consumes / the final state would hold.
+template <uint32_t Ct, uint32_t Kt, uint32_t Vt, bool kSnap = false>
+inline void scan_step(const GdnScanCbs& cb, uint32_t cur_S, uint32_t dst, uint32_t snap = 0) {
     constexpr uint32_t cc = Ct * Ct;
     constexpr uint32_t ck = Ct * Kt;
     constexpr uint32_t cv = Ct * Vt;
@@ -1147,6 +1150,9 @@ inline void scan_step(const GdnScanCbs& cb, uint32_t cur_S, uint32_t dst) {
         WAIT(cb.kdec_t, kc);
         WAIT(cb.dl, 1);
         CircularBuffer(dst).reserve_back(kv);
+        if constexpr (kSnap) {
+            CircularBuffer(snap).reserve_back(kv);
+        }
         matmul_init(cb.dl, cur_S, 0);
         for (uint32_t t0 = 0; t0 < kv; t0 += kDstTiles) {
             const uint32_t nb = (kv - t0 < kDstTiles) ? (kv - t0) : kDstTiles;
@@ -1167,9 +1173,17 @@ inline void scan_step(const GdnScanCbs& cb, uint32_t cur_S, uint32_t dst) {
             for (uint32_t j = 0; j < nb; j++) {
                 pack_tile(j, dst, t0 + j);
             }
+            if constexpr (kSnap) {
+                for (uint32_t j = 0; j < nb; j++) {
+                    pack_tile(j, snap, t0 + j);
+                }
+            }
             tile_regs_release();
         }
         CircularBuffer(dst).push_back(kv);
+        if constexpr (kSnap) {
+            CircularBuffer(snap).push_back(kv);
+        }
         POP(cb.kdec_t, kc);
         POP(cb.dl, 1);
     }

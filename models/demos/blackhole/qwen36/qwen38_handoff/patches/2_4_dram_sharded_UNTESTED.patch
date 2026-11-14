@@ -1,0 +1,365 @@
+diff --git a/models/demos/blackhole/qwen36/tt/attention/tp.py b/models/demos/blackhole/qwen36/tt/attention/tp.py
+index 7691db472a2..1a8197e0de7 100644
+--- a/models/demos/blackhole/qwen36/tt/attention/tp.py
++++ b/models/demos/blackhole/qwen36/tt/attention/tp.py
+@@ -76,6 +76,12 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
+             cache_path=c(_base + (".il" if _proj1d else ".dramshard")),
+             dtype=_attn_dtype,
+         )
++        # QWEN36_BFP4_DSHARD: extra DRAM-width-sharded BFP4 copy for the decode matmul (the interleaved copy above
++        # stays: prefill AGMM + flag-off). Distinct cache stem -- a cache hit restores the stored memory config.
++        if _proj1d and _attn_dtype == ttnn.bfloat4_b:
++            tw["wqkv_fused_dsh"] = tpc.load_dsh_weight(
++                "qkv", fused, mesh, -1, fused.shape[1], fused.shape[0] // args.num_devices, c(_base + ".dsh4")
++            )
+     else:
+         qkv_sharded = getattr(args, "attn_qg_weight_memcfg", None) is not None
+         qg_mc = args.attn_qg_weight_memcfg if qkv_sharded else ttnn.DRAM_MEMORY_CONFIG
+@@ -118,6 +124,12 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
+         cache_path=c("wo.dramshard" if wo_sharded else "wo"),
+         dtype=_attn_dtype,
+     )
++    # QWEN36_BFP4_DSHARD: extra DRAM-width-sharded BFP4 copy of wo for the decode matmul (interleaved-wo configs only).
++    if not wo_sharded and getattr(args, "proj_1d_decode", False) and _attn_dtype == ttnn.bfloat4_b:
++        _wo = state_dict["o_proj.weight"]
++        tw["wo_dsh"] = tpc.load_dsh_weight(
++            "wo", _wo, mesh, 0, _wo.shape[1] // args.num_devices, _wo.shape[0], c("wo.dsh4")
++        )
+     # QK norms: HF-correct zero-centered (1+weight), used uniformly at prefill AND decode
+     tw["q_norm"] = tpc.replicate(state_dict["q_norm.weight"].to(torch.float32) + 1.0, mesh, None)
+     tw["k_norm"] = tpc.replicate(state_dict["k_norm.weight"].to(torch.float32) + 1.0, mesh, None)
+@@ -144,6 +156,10 @@ class TPAttention:
+         # DECODE-only QKV / wo matmul configs: LoFi with BFP4 weights (QWEN36_BFP4_ATTN), else unchanged.
+         self.qkv_cfg = tpc.COMPUTE_LOFI if tpc.bfp4_attn_enabled() else self.compute_cfg
+         self.wo_cfg = tpc.COMPUTE_LOFI if tpc.bfp4_attn_enabled() else self.compute_cfg
++        # DECODE QKV / wo on the DRAM-sharded multi-reader matmul (QWEN36_BFP4_DSHARD): only when the loader made the
++        # extra weight copy. None -> the 1D path on the interleaved weight, exactly as before.
++        self._qkv_dsh = tpc.make_dsh("qkv", tw.get("wqkv_fused_dsh"), mesh)
++        self._wo_dsh = tpc.make_dsh("wo", tw.get("wo_dsh"), mesh)
+         # bf8 SDPA (QWEN_SDPA_BF8=1): bf8 Q + bf8 KV; keeps HiFi2 (HiFi4 was slower)
+         self._sdpa_bf8 = os.environ.get("QWEN_SDPA_BF8", "0") == "1"
+         # Must match load_attention_weights_tp gates
+@@ -189,6 +205,10 @@ class TPAttention:
+             qkv = tpc.all_gather_matmul_prefill(
+                 x, tw["wqkv_fused"], self.tt_ccl, self.compute_cfg, self.args.ccl_topology()
+             )
++        elif self._qkv_dsh is not None and x.shape[-2] <= tpc.TILE_SIZE:
++            # Decode: DRAM-sharded multi-reader matmul (QWEN36_BFP4_DSHARD). Output DRAM-interleaved, same as the 1D
++            # branch below, so the slices / _make_heads_decode see an identical tensor.
++            qkv = self._qkv_dsh(x, self.qkv_cfg, ttnn.DRAM_MEMORY_CONFIG)
+         elif getattr(self.args, "proj_1d_decode", False) and x.shape[-2] <= tpc.TILE_SIZE:
+             # Decode: small-grid 1D matmul (interleaved weight). Output DRAM so _make_heads_decode's
+             # to_memory_config(.,L1) stays a real copy before it deallocates the source.
+@@ -236,6 +256,9 @@ class TPAttention:
+     def _wo_proj(self, x, weight):
+         """Row-parallel output projection: DRAM-sharded decode/prefill matmul (K=attn_out_dim_tp),
+         matching the in-proj. Falls back to plain interleaved when no sharded memcfg."""
++        if self._wo_dsh is not None and x.shape[-2] <= tpc.TILE_SIZE and weight is self.tw["wo"]:
++            # Decode: DRAM-sharded multi-reader matmul (QWEN36_BFP4_DSHARD) -> DRAM-interleaved partial, as below.
++            return self._wo_dsh(x, self.wo_cfg, ttnn.DRAM_MEMORY_CONFIG)
+         if getattr(self.args, "proj_1d_decode", False) and x.shape[-2] <= tpc.TILE_SIZE:
+             # Decode: tuned ~32-core 1D matmul (interleaved weight) -> DRAM for the reduce-scatter.
+             return tpc.matmul_1d_decode(
+diff --git a/models/demos/blackhole/qwen36/tt/gdn/tp.py b/models/demos/blackhole/qwen36/tt/gdn/tp.py
+index e73feea4a5d..bc27bc32e04 100644
+--- a/models/demos/blackhole/qwen36/tt/gdn/tp.py
++++ b/models/demos/blackhole/qwen36/tt/gdn/tp.py
+@@ -234,6 +234,19 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
+             cache_path=c("qkvzab" + (".il" if _proj1d else ".dramshard")),
+             dtype=_in_dtype,
+         )
++        # QWEN36_BFP4_DSHARD: extra DRAM-width-sharded BFP4 copy for the decode matmul (interleaved copy stays for
++        # prefill AGMM / flag-off). N = 4160 is zero-padded PER DEVICE to a multiple of banks*readers*32 (4608 on 8
++        # banks); the padded output columns are never read (the slices in _project_qkvzab stop at 4128).
++        if _proj1d and _in_dtype == ttnn.bfloat4_b and tpc.dshard_group_enabled("gdn_in"):
++            _n = fused.shape[0] // tp
++            _n_pad = tpc.dsh_padded_n("gdn_in", _n, mesh.dram_grid_size().x)
++            _fused_dsh = fused
++            if _n_pad != _n and tpc.dsh_geometry_for_mesh("gdn_in", mesh, fused.shape[1], _n_pad) is not None:
++                _fused_dsh = torch.nn.functional.pad(fused.reshape(tp, _n, fused.shape[1]), (0, 0, 0, _n_pad - _n))
++                _fused_dsh = _fused_dsh.reshape(tp * _n_pad, fused.shape[1])
++            tw["qkvz_dsh"] = tpc.load_dsh_weight(
++                "gdn_in", _fused_dsh, mesh, -1, fused.shape[1], _n_pad, c("qkvzab.dsh4")
++            )
+     else:
+         fused = torch.cat(
+             [
+@@ -337,6 +350,9 @@ class TPGatedDeltaNet:
+         self.cfg = tpc.COMPUTE_HIFI2
+         # In-proj decode matmul only (prefill keeps self.cfg = HiFi2)
+         self.cfg_in = tpc.COMPUTE_LOFI if tpc.bfp4_gdn_in_enabled() else self.cfg
++        # Decode in-proj on the DRAM-sharded multi-reader matmul (QWEN36_BFP4_DSHARD) when the loader made the extra
++        # copy (BFP4 GDN in-proj only). None -> the 1D path on the interleaved weight, as before.
++        self._qkvz_dsh = tpc.make_dsh("gdn_in", tw.get("qkvz_dsh"), mesh)
+         # Must match load_gdn_weights_tp gates
+         self._dram_sharded = getattr(args, "gdn_qkvz_weight_memcfg", None) is not None
+         self._fuse_ab = self._dram_sharded
+@@ -1143,6 +1159,12 @@ class TPGatedDeltaNet:
+                     out_memory_config=_proj_mc,
+                 )
+                 qkvzab = ttnn.reshape(qkvzab, (1, S, qkvzab.shape[-1]))
++            elif self._qkvz_dsh is not None and S <= tpc.TILE_SIZE:
++                # Decode: DRAM-sharded multi-reader matmul (QWEN36_BFP4_DSHARD). Output [.., 4608] (zero-padded tail
++                # columns; the slices below never read past a/b's tile). Placement as the 1D branch.
++                qkvzab = self._qkvz_dsh(
++                    x, self.cfg_in, ttnn.L1_MEMORY_CONFIG if out_mc is not None else ttnn.DRAM_MEMORY_CONFIG
++                )
+             elif getattr(self.args, "proj_1d_decode", False) and S <= tpc.TILE_SIZE:
+                 # Decode: small-grid 1D matmul on the interleaved fused weight (beats the DRAM-sharded grid).
+                 qkvzab = tpc.matmul_1d_decode(
+diff --git a/models/demos/blackhole/qwen36/tt/mlp.py b/models/demos/blackhole/qwen36/tt/mlp.py
+index 3a55553e11a..61322143fd8 100644
+--- a/models/demos/blackhole/qwen36/tt/mlp.py
++++ b/models/demos/blackhole/qwen36/tt/mlp.py
+@@ -18,6 +18,7 @@ class MLPWeights:
+     w2: ttnn.Tensor  # down_proj [in, out], bfloat4_b (bfloat8_b if QWEN36_BFP4_MLP_DOWN=0 or MoE shared expert)
+     w3: ttnn.Tensor  # up_proj [in, out], bfloat4_b
+     w_gate_up: ttnn.Tensor = None  # TP prefill: tile-pair-interleaved packed [gate|up] for fused-swiglu AGMM
++    w2_dsh: ttnn.Tensor = None  # TP decode (QWEN36_BFP4_DSHARD): extra DRAM-width-sharded bfloat4_b copy of w2
+ 
+ 
+ def _build_gate_up(gate_w, up_w, mesh, tp, cache_path):
+@@ -56,6 +57,7 @@ def load_mlp_weights(
+     passes ttnn.bfloat8_b explicitly."""
+     from models.demos.blackhole.qwen36.tt import tp_common as _tpc
+ 
++    _explicit_down_dtype = down_dtype is not None  # MoE shared expert (bf8): never gets the DSH copy
+     down_dtype = _tpc.resolve_mlp_down_dtype(down_dtype)
+     tp = getattr(args, "num_devices", 1) if args is not None else 1
+ 
+@@ -119,6 +121,26 @@ def load_mlp_weights(
+                 w_gate_up=wgu,
+             )
+ 
++        # QWEN36_BFP4_DSHARD: extra DRAM-width-sharded BFP4 copy of w2 (decode only; new cache stem ".dsh4"). Dense
++        # MLP only (explicit down_dtype = MoE shared expert) and only with the 1D-decode MLP (interleaved w1/w3).
++        w2_dsh = None
++        if (
++            not _explicit_down_dtype
++            and down_dtype == ttnn.bfloat4_b
++            and args is not None
++            and getattr(args, "mlp_1d_decode", False)
++        ):
++            _k = args.hidden_dim // tp
++            w2_dsh = tpc.load_dsh_weight(
++                "down",
++                state_dict["down_proj.weight"],
++                mesh_device,
++                0,
++                _k,
++                args.dim,
++                cache("down_proj", ".dsh4"),
++            )
++
+         # Default: INTERLEAVED DRAM shards; ttnn.linear works for decode and prefill.
+         return MLPWeights(
+             w1=tpc.shard_w(
+@@ -146,6 +168,7 @@ def load_mlp_weights(
+                 dtype=down_dtype,
+             ),
+             w_gate_up=wgu,
++            w2_dsh=w2_dsh,
+         )
+ 
+     def load(name, dtype):
+@@ -206,6 +229,10 @@ class Qwen36MLP:
+             use_gateup_agmm=use_gateup_agmm,
+             down_dtype=down_dtype,
+         )
++        # Decode w2 on the DRAM-sharded multi-reader matmul (QWEN36_BFP4_DSHARD) when the extra copy was loaded.
++        self._w2_dsh = (
++            tpc.make_dsh("down", self.weights.w2_dsh, mesh_device) if self.num_devices > 1 else None
++        )
+         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+             math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True, packer_l1_acc=False
+         )
+@@ -367,7 +394,13 @@ class Qwen36MLP:
+         # down-proj OUTPUT in L1 for the tuned prefill path (DRAM input `hidden` + L1 output = the
+         # validated sweep outL1 config; tt_all_reduce already consumes an L1 partial).
+         mc_w2_out = ttnn.L1_MEMORY_CONFIG if (x.shape[-2] <= ttnn.TILE_SIZE or _prefill_tuned) else mc
+-        partial = ttnn.linear(hidden, w.w2, compute_kernel_config=ckc, memory_config=mc_w2_out, program_config=w2_pc)
++        if self._w2_dsh is not None and hidden.shape[-2] <= ttnn.TILE_SIZE:
++            # Decode: DRAM-sharded multi-reader w2 (BFP4, same LoFi cfg) -> L1 interleaved partial, as the 1D path.
++            partial = self._w2_dsh(hidden, ckc, mc_w2_out)
++        else:
++            partial = ttnn.linear(
++                hidden, w.w2, compute_kernel_config=ckc, memory_config=mc_w2_out, program_config=w2_pc
++            )
+         ttnn.deallocate(hidden)
+ 
+         if decode_ar is not None:
+diff --git a/models/demos/blackhole/qwen36/tt/tp_common.py b/models/demos/blackhole/qwen36/tt/tp_common.py
+index 5d09a4d73b2..39e2e5765be 100644
+--- a/models/demos/blackhole/qwen36/tt/tp_common.py
++++ b/models/demos/blackhole/qwen36/tt/tp_common.py
+@@ -97,6 +97,170 @@ def resolve_mlp_down_dtype(down_dtype=None):
+     return ttnn.bfloat4_b if on else ttnn.bfloat8_b
+ 
+ 
++# ---------------------------------------------------------------------------------------------
++# QWEN36_BFP4_DSHARD (default 1): DRAM-sharded MULTI-READER decode matmuls for the BFP4 weight groups
++# (implementation B's decode program, models/demos/qwen38_27b_qb2/tt/decoder.py `_linear`). Applies only to a
++# group whose BFP4 flag is on: MLP down (QWEN36_BFP4_MLP_DOWN), attention QKV and wo (QWEN36_BFP4_ATTN), GDN
++# in-proj (QWEN36_BFP4_GDN_IN). Each such group loads an EXTRA DRAM-WIDTH_SHARDED copy of its weight under a new
++# cache stem ("<stem>.dsh4"); the interleaved copy stays for prefill / flag-off. =0: no extra copies, the 1D path.
++# ---------------------------------------------------------------------------------------------
++BFP4_DSHARD_ENV = "QWEN36_BFP4_DSHARD"
++_DSHARD_LOGGED = False
++_DSH_WARNED = set()
++# group -> (in0 cores, in0_block_w, num_workers_per_dram_bank). Each is validated against the actual per-device
++# [K, N] in dsh_geometry (TP=4 27B: down 4352x5120, gdn_in 5120x4160->4608, qkv 5120x3584, wo 1536x5120).
++DSH_PARAMS = {
++    "down": (8, 17, 2),
++    "gdn_in": (10, 16, 2),
++    "qkv": (10, 16, 2),
++    "wo": (8, 6, 2),
++}
++
++
++def bfp4_dshard_enabled():
++    return os.environ.get(BFP4_DSHARD_ENV, "1") == "1"
++
++
++def dshard_group_enabled(group):
++    """True when `group` (down / qkv / wo / gdn_in) is BFP4 AND QWEN36_BFP4_DSHARD=1. Logs the set once."""
++    global _DSHARD_LOGGED
++    bfp4 = {
++        "down": bfp4_mlp_down_enabled(),
++        "qkv": bfp4_attn_enabled(),
++        "wo": bfp4_attn_enabled(),
++        "gdn_in": bfp4_gdn_in_enabled(),
++    }
++    on = bfp4_dshard_enabled()
++    if not _DSHARD_LOGGED:
++        _DSHARD_LOGGED = True
++        groups = [g for g in DSH_PARAMS if on and bfp4[g]]
++        logger.info(
++            f"{BFP4_DSHARD_ENV}={int(on)}: DRAM-sharded multi-reader decode matmuls for "
++            f"{groups if groups else 'no groups'} (others keep the 1D path)"
++        )
++    return on and bfp4[group]
++
++
++def dsh_padded_n(group, n, banks):
++    """N padded up to a multiple of banks * readers * 32 (every reader of every bank needs a whole tile column)."""
++    align = banks * DSH_PARAMS[group][2] * TILE_SIZE
++    return -(-n // align) * align
++
++
++def dsh_geometry(group, k, n, banks, grid_x):
++    """Geometry of the DRAM-sharded multi-reader matmul for a per-device [k, n] weight (n already padded), or None
++    if the shape can't use it (callers then keep the 1D path)."""
++    cores, block, readers = DSH_PARAMS[group]
++    t = TILE_SIZE
++    if banks < 1 or grid_x < cores or k % (t * cores) or n % (t * banks * readers):
++        return None
++    shard_tiles_k = k // t // cores
++    if shard_tiles_k % block:
++        return None
++    shard_width = n // banks
++    return dict(
++        cores=cores,
++        block=block,
++        readers=readers,
++        banks=banks,
++        shard_width=shard_width,
++        in_width=shard_tiles_k * t,
++        per_core_n=(shard_width // t * banks + cores - 1) // cores,
++    )
++
++
++def dsh_weight_memcfg(k, geom):
++    """DRAM WIDTH_SHARDED over the DRAM banks, shard [k, n/banks] (B: decoder_tp.py:274-292)."""
++    bank_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(geom["banks"] - 1, 0))})
++    return ttnn.MemoryConfig(
++        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
++        ttnn.BufferType.DRAM,
++        ttnn.ShardSpec(bank_grid, [k, geom["shard_width"]], ttnn.ShardOrientation.ROW_MAJOR),
++    )
++
++
++def dsh_in_memcfg(geom):
++    """Activation: one tile-row (M<=32) width-sharded [32, K/cores] over the first `cores` cores of row 0."""
++    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(geom["cores"] - 1, 0))})
++    return ttnn.MemoryConfig(
++        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
++        ttnn.BufferType.L1,
++        ttnn.ShardSpec(grid, [TILE_SIZE, geom["in_width"]], ttnn.ShardOrientation.ROW_MAJOR),
++    )
++
++
++def dsh_geometry_for_mesh(group, mesh, k, n):
++    return dsh_geometry(group, k, n, mesh.dram_grid_size().x, mesh.compute_with_storage_grid_size().x)
++
++
++def load_dsh_weight(group, torch_w, mesh, dim, k, n, cache_path, dtype=None):
++    """Extra DRAM-width-sharded copy of a BFP4 weight (torch [out, in]; per-device [k, n], n already padded to
++    dsh_padded_n) under its own cache stem, or None when the group is off / the shape is ineligible."""
++    if not dshard_group_enabled(group):
++        return None
++    geom = dsh_geometry_for_mesh(group, mesh, k, n)
++    if geom is None:
++        if (group, k, n) not in _DSH_WARNED:
++            _DSH_WARNED.add((group, k, n))
++            logger.warning(f"{BFP4_DSHARD_ENV}=1 but the {group} weight [{k}, {n}] can't use the DRAM-sharded layout")
++        return None
++    return shard_w(
++        torch_w,
++        mesh,
++        dim=dim,
++        memory_config=dsh_weight_memcfg(k, geom),
++        cache_path=cache_path,
++        dtype=ttnn.bfloat4_b if dtype is None else dtype,
++    )
++
++
++class DShardMatmul:
++    """Decode matmul on a DRAM-sharded BFP4 weight copy with `readers` workers per DRAM bank.
++
++    x [.., M<=32, K] (any layout) -> L1 width-shard [32, K/cores] on `cores` cores -> DRAM-sharded matmul (bf16 out,
++    L1 width-sharded) -> `out_memory_config` via sharded_to_interleaved (the consumers -- slices, all-reduce reshard,
++    tt_all_reduce -- all expect an interleaved tensor, exactly as with the 1D path)."""
++
++    def __init__(self, group, weight, mesh):
++        k, n = weight.shape[-2], weight.shape[-1]
++        geom = dsh_geometry_for_mesh(group, mesh, k, n)
++        assert geom is not None, f"{group} DSH weight [{k}, {n}] has no valid geometry"
++        self.group = group
++        self.weight = weight
++        self.n = n
++        self.in_mem = dsh_in_memcfg(geom)
++        self.progcfg = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
++            in0_block_w=geom["block"],
++            per_core_M=1,
++            per_core_N=geom["per_core_n"],
++            fused_activation=None,
++            num_workers_per_dram_bank=geom["readers"],
++        )
++
++    def __call__(self, x, compute_cfg, out_memory_config):
++        x_sh = ttnn.to_memory_config(x, self.in_mem)
++        out = ttnn.linear(
++            x_sh,
++            self.weight,
++            compute_kernel_config=compute_cfg,
++            program_config=self.progcfg,
++            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
++            dtype=ttnn.bfloat16,
++        )
++        if x_sh is not x:
++            ttnn.deallocate(x_sh)
++        res = ttnn.sharded_to_interleaved(out, out_memory_config)
++        ttnn.deallocate(out)
++        return res
++
++
++def make_dsh(group, weight, mesh):
++    """DShardMatmul for `weight` (an extra DSH copy, or None) if the flag is on, else None."""
++    if weight is None or not dshard_group_enabled(group):
++        return None
++    return DShardMatmul(group, weight, mesh)
++
++
+ # Grid helpers
+ def prefill_grid_default():
+     """BH P150: (8,10); WH: (8,8). y capped at 10 on BH (grid_x=10 breaks matmul)."""

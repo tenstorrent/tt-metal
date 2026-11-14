@@ -1134,10 +1134,15 @@ def test_fused_pool_cache_identity(device):
     from ttnn._ttnn.operations import transformer as _t
 
     hk, hv = NP_BH_KV_HEADS
-    nc, nv = 8, 2
+    # 16 chunks: BH*NC exceeds the cores the receivers leave on every grid, so the pool takes all of them.
+    nc, nv = 16, 2
     grid = device.compute_with_storage_grid_size()
     pool = min(grid.x * grid.y - hv * nv, hv * nc)
     _skip_unless_pool_fits(device, hv, nv, pool, nc)
+    if pool == hv * _t.chunk_gdn_fused_pool_home_producers(grid.x, grid.y, hv, nv, pool):
+        pytest.skip(
+            f"a pool of {pool} on the {grid.x}x{grid.y} grid has no extras, so pool_extra_share selects nothing"
+        )
     _skip_unless_geometry_fits(device, hv, nv, 3, nc, placement=1)
     _, tensors, s0 = _make_inputs(device, 1, nc * CHUNK, hk, hv, True, seed=20261003)
     const_tiles = _const_tiles(device)

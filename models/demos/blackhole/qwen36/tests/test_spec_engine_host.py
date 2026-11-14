@@ -10,6 +10,7 @@ accepted drafts then the bonus token, at positions s+1 .. s+m+1.
 
 Run: pytest models/demos/blackhole/qwen36/tests/test_spec_engine_host.py -q
 """
+
 import json
 import os
 import types
@@ -18,7 +19,7 @@ import pytest
 import torch
 from loguru import logger
 
-from models.demos.blackhole.qwen36.tt.model import Qwen36Model, spec_kv_write_conflicts
+from models.demos.blackhole.qwen36.tt.model import Qwen36Model, spec_kv_write_conflicts, spec_sdpa_read_table
 from models.demos.blackhole.qwen36.tt.spec_engine import (
     PLACEHOLDER_TOKEN_ID,
     MTPSpecEngine,
@@ -509,6 +510,7 @@ def test_propose_skip_plan():
 
 def test_mark_cleared_on_release_and_prefill(expect_error):
     def mk():
+        gens = [0, 0]
         return types.SimpleNamespace(
             _active={0},
             _fresh={},
@@ -519,9 +521,13 @@ def test_mark_cleared_on_release_and_prefill(expect_error):
             _no_draft={0},
             _speculated={0},
             _withheld_streak={0: 5},
+            _row_gens=lambda: gens,
             B=1,
             model=types.SimpleNamespace(),
             _last_hidden=[],
+            _phys=[0],
+            _dv_guard=None,  # QWEN36_DRAFT_VOCAB_FALLBACK off (MTPSpecEngine class default)
+            _paged_state=lambda: None,  # QWEN36_MAMBA_SPEC off
         )
 
     def clean(e):
@@ -532,8 +538,11 @@ def test_mark_cleared_on_release_and_prefill(expect_error):
     assert clean(eng)
     eng = mk()
     with expect_error(AssertionError, ".*"):  # stops at "prefill before prepare", after the state is cleared
-        MTPSpecEngine.prefill(eng, 0, [1, 2, 3], None)
+        MTPSpecEngine._prefill_row(eng, 0, [1, 2, 3], None)
     assert clean(eng)
+    eng = mk()
+    eng._phys, eng._prefill_row, eng.B = [1, 0], lambda *a: a, 2  # the runner slot goes through the slot map
+    assert MTPSpecEngine.prefill(eng, 0, [1, 2, 3], None)[0] == 1
 
 
 def _bare_engine(B, K=2, **kw):
@@ -543,6 +552,8 @@ def _bare_engine(B, K=2, **kw):
     e._parked, e._prompts, e._fresh_dirty = {}, {}, set()
     e._no_draft, e._speculated, e._withheld_streak = set(range(B)), set(range(B)), {u: 3 for u in range(B)}
     e._row_active, e._last_pt, e._last_cap_blocks, e.skipped_propose_calls = None, None, 4, 0
+    e.host_slotmap, e._phys, e._phys_perm = True, list(range(B)), None
+    e.fast_join, e._kc, e._fj_sel = False, 4, None  # QWEN36_SPEC_FAST_JOIN=0: the eager seed path
     e.__dict__.update(kw)
     return e
 
@@ -648,10 +659,19 @@ def test_release_and_remap_cover_parked_state():
     e = _bare_engine(2, _parked={0: ["a"]}, _prompts={0: ("p", None)}, _fresh_dirty={0})
     MTPSpecEngine.release(e, 0)
     assert e._parked == {} and e._prompts == {} and e._fresh_dirty == set()
+    # device remap (QWEN36_SPEC_SLOTMAP=0): the per-slot keys move with the state
     e = _bare_engine(2, _parked={0: ["a"]}, _prompts={0: ("p", None)}, _fresh_dirty={0}, _last_hidden=[0, 1])
+    e.host_slotmap = False
     e._gdn = [types.SimpleNamespace(remap_spec_slots=lambda r: None)]
     MTPSpecEngine.remap_slots(e, [1, 0])
-    assert set(e._parked) == {1} and set(e._prompts) == {1} and e._fresh_dirty == {1}
+    assert set(e._parked) == {1} and set(e._prompts) == {1} and e._fresh_dirty == {1} and e._phys == [0, 1]
+    # host slot map: the keys stay in engine rows, the map moves, and a release translates through it
+    e = _bare_engine(2, _parked={0: ["a"]}, _prompts={0: ("p", None)}, _fresh_dirty={0}, _last_hidden=[0, 1])
+    e._gdn = [types.SimpleNamespace()]  # no remap_spec_slots: a device call would raise
+    MTPSpecEngine.remap_slots(e, [1, 0])
+    assert set(e._parked) == {0} and set(e._prompts) == {0} and e._fresh_dirty == {0} and e._phys == [1, 0]
+    MTPSpecEngine.release(e, 1)  # runner slot 1 is engine row 0
+    assert e._parked == {} and e._prompts == {} and e._fresh_dirty == set() and e._active == {1}
 
 
 def test_verify_defers_fresh_row_left_out():
@@ -673,6 +693,7 @@ def test_verify_defers_fresh_row_left_out():
         _last_hidden=[None] * B,
     )
     e._stage_mtp_tables = e._warm_mtp_last = lambda *a, **k: None
+    e._stage_mtp_tables_rows = e._warm_mtp_last_rows = lambda *a, **k: None
     seeds, joins, prefills = [], [], []
     e._seed = lambda *a: (seeds.append(1), (torch.zeros(B, T, dtype=torch.int32), None))[1]
     e._join = lambda *a: (joins.append(a[5]), (torch.zeros(B, T, dtype=torch.int32), None))[1]
@@ -682,7 +703,7 @@ def test_verify_defers_fresh_row_left_out():
         e._fresh[slot] = len(prompt)
         e._fresh_dirty.discard(slot)
 
-    e.prefill = prefill
+    e._prefill_row = prefill  # a re-prefill is in engine rows
     tok = torch.ones(B, T, dtype=torch.int32)
     pt = torch.zeros(B, 4, dtype=torch.int32)
     one = torch.ones(B, dtype=torch.int32)
@@ -701,6 +722,24 @@ def test_verify_write_table():
     assert pt[0, 1].item() == 9  # input untouched
     full = torch.cat([torch.arange(1, 65), torch.zeros(1)]).to(torch.int32).reshape(1, 65)
     assert torch.equal(verify_write_table(full, [4094], [0], 64), full)
+
+
+def test_spec_sdpa_read_table_keeps_the_null_block_out_of_the_fused_sdpa():
+    # row 0: a 0-draft row at 2045 of block 2048 (its padded candidate 2048 lies in column 1, nulled by the write
+    # table); row 1: a real block in column 1; row 2: a padding row
+    pt = torch.tensor([[5, 9, 7], [3, 4, 8], [0, 0, 0]], dtype=torch.int32)
+    write = verify_write_table(pt, [2045, 2046, 0], [0, 3, 0], 2048)
+    assert write.tolist() == [[5, 0, 0], [3, 4, 0], [0, 0, 0]]
+    assert spec_sdpa_read_table(write).tolist() == [[5, 5, 5], [3, 4, 4], [0, 0, 0]]
+    assert write.tolist() == [[5, 0, 0], [3, 4, 0], [0, 0, 0]]  # input untouched
+
+
+def test_vfy_page_table_host_reads_the_fused_sdpa_table_without_null_blocks():
+    m = types.SimpleNamespace(_vfy_T=4, _vfy_B=2, _vfy_spec_groups=2)
+    write = torch.tensor([[5, 0, 0], [3, 4, 0]], dtype=torch.int32)
+    rows, users, groups = Qwen36Model._vfy_page_table_host(m, write)
+    assert torch.equal(users, write) and torch.equal(rows, write.repeat_interleave(4, dim=0))
+    assert groups.tolist() == [[5, 5, 5], [3, 4, 4]]
 
 
 @pytest.mark.parametrize(
@@ -788,6 +827,7 @@ def test_propose_writes_anchor_kv_of_kept_rows(recorded, monkeypatch):
     e._reseed_mtp_batched = lambda ctok, cpos, m, pt: reseeds.append(list(m))
     e._draft = lambda *a: torch.zeros(B, K, dtype=torch.int32)
     e._id_to_host = lambda t: [0] * B
+    e._ids_to_host = lambda ts: [[0] * B for _ in ts]
     monkeypatch.setattr(ttnn, "execute_trace", lambda *a, **k: None)
     ctok = torch.tensor([[11, -1, -1], [21, -1, -1], [31, -1, -1]])
     cpos = torch.tensor([[10, -1, -1], [20, -1, -1], [30, -1, -1]])

@@ -264,6 +264,28 @@ jobs:
               google/gemma-4-*) uv pip install -r models/demos/gemma4/requirements.txt ;;
             esac
 
+      - name: 📦 Locate model snapshot
+        # Offline hub lookups of a bare hub id need refs/main; a pinned revision may be the only snapshot.
+        if: ${{ matrix.test-group.hf-snapshot-revision }}
+        run: |
+          m="${{ matrix.test-group.model }}"
+          d="$HF_HUB_CACHE/models--${m//\//--}"
+          ls -la "$d" "$d/refs" "$d/snapshots" || true
+          rev="${{ matrix.test-group.hf-snapshot-revision }}"
+          if [ -d "$d/snapshots/$rev" ]; then
+            p="$d/snapshots/$rev"
+          elif [ -f "$d/refs/main" ]; then
+            p="$d/snapshots/$(cat "$d/refs/main")"
+          else
+            p="$(ls -d "$d"/snapshots/*/ 2>/dev/null | head -1)"
+          fi
+          if [ -z "$p" ] || [ ! -f "${p%/}/config.json" ]; then
+            echo "❌ No snapshot of ${{ matrix.test-group.model }} under $HF_HUB_CACHE on this runner"
+            exit 1
+          fi
+          echo "Serving from ${p%/}"
+          echo "HF_MODEL_LOCAL=${p%/}" >> "$GITHUB_ENV"
+
       - name: ⬇️ Checkout vLLM benchmark sources
         # The structured-output benchmark is a script under benchmarks/, which the
         # published vLLM distribution does not install. Fetch the tree at exactly
@@ -278,7 +300,33 @@ jobs:
           git -C vllm-source fetch --depth 1 origin "refs/tags/v${VLLM_VERSION}"
           git -C vllm-source checkout --detach FETCH_HEAD
 
+      - name: 🧪 Device unit tests
+        if: ${{ matrix.test-group.device-tests }}
+        timeout-minutes: 120
+        run: |
+          set -o pipefail
+          python3 -m pytest -p no:cacheprovider -rfEs ${{ matrix.test-group.device-tests }} 2>&1 | tee output/device_tests.log
+
+      - name: 🔀 Same-machine A/B
+        if: ${{ matrix.test-group.ab-driver && !matrix.test-group.device-tests-only }}
+        timeout-minutes: 300
+        env:
+          AB_MODEL: ${{ matrix.test-group.model }}
+          AB_COMMON_ENV: ${{ matrix.test-group.extra-env }}
+          AB_COMMON_ARGS: ${{ matrix.test-group.additional-server-args }}
+          AB_ENV_A: ${{ matrix.test-group.ab-env-a }}
+          AB_ARGS_A: ${{ matrix.test-group.ab-args-a }}
+          AB_ENV_B: ${{ matrix.test-group.ab-env-b }}
+          AB_ARGS_B: ${{ matrix.test-group.ab-args-b }}
+          AB_ARMS: ${{ matrix.test-group.ab-arms }}
+          AB_BENCH: ${{ matrix.test-group.ab-bench }}
+          AB_TT_CONFIG: ${{ matrix.test-group.tt-config }}
+          AB_CHAT_KWARGS: ${{ matrix.test-group.default-chat-template-kwargs }}
+          AB_SERVER_TIMEOUT: ${{ matrix.test-group.server-timeout }}
+        run: bash .github/scripts/vllm/qwen38_galaxy_ab_same_machine.sh
+
       - name: 🚀 Run server
+        if: ${{ !matrix.test-group.ab-driver }}
         timeout-minutes: 1
         run: |
           TT_CONFIG_RAW='${{ matrix.test-group.tt-config }}'
@@ -420,9 +468,16 @@ jobs:
             done
           fi
 
+          # A located snapshot dir is served under the hub id, so clients keep using the hub id.
+          SERVED_NAME_ARGS=()
+          if [ -n "${HF_MODEL_LOCAL:-}" ]; then
+            export HF_MODEL="$HF_MODEL_LOCAL"
+            SERVED_NAME_ARGS=(--served-model-name "${{ matrix.test-group.model }}")
+          fi
+
           # Build the VLLM server arguments array
           declare -a VLLM_SERVER_ARGS
-          VLLM_SERVER_ARGS+=(--model "$HF_MODEL")
+          VLLM_SERVER_ARGS+=(--model "$HF_MODEL" "${SERVED_NAME_ARGS[@]}")
           # Placed before the per-entry args so an entry can override it.
           VLLM_SERVER_ARGS+=("${DEFAULT_TOP_K_ARGS[@]}")
           VLLM_SERVER_ARGS+=("${ADDITIONAL_SERVER_ARGS[@]}")
@@ -437,6 +492,7 @@ jobs:
           echo $! > ${FILE_SERVER_PID}
 
       - name: ⏰ Wait for server to be ready
+        if: ${{ !matrix.test-group.ab-driver }}
         run: |
           echo "Waiting for server..."
 
@@ -508,6 +564,7 @@ jobs:
           exit 1
 
       - name: 📐 Run benchmark
+        if: ${{ !matrix.test-group.ab-driver }}
         timeout-minutes: ${{ matrix.test-group.benchmark-timeout }}
         uses: ./docker-job/.github/actions/run-with-log
         with:
@@ -532,6 +589,7 @@ jobs:
               --result-filename output/vllm_result.json \
               "${ADDITIONAL_BENCHMARK_ARGS[@]}"
       - name: Verify benchmark
+        if: ${{ !matrix.test-group.ab-driver }}
         run: |
           # `vllm bench serve` exits 0 even when individual requests fail (a crashed
           # engine surfaces as failed requests, not a non-zero exit). Gate on the saved result and
@@ -669,6 +727,14 @@ jobs:
           sys.exit(0 if ok else 1)
           EOF
 
+      - name: 🔁 Run greedy A/B dump
+        if: ${{ !cancelled() && matrix.test-group.greedy-dump }}
+        timeout-minutes: 45
+        run: |
+          python3 .github/scripts/vllm/qwen38_galaxy_ab_client.py \
+            --model "${{ matrix.test-group.model }}" \
+            --out output/greedy_dump.json
+
       - name: 📐 Run structured output benchmark
         if: ${{ matrix.test-group.structured-output }}
         timeout-minutes: ${{ matrix.test-group.structured-output-timeout || matrix.test-group.benchmark-timeout }}
@@ -795,7 +861,7 @@ jobs:
               --tt-chunked-prefill-budget="$BUDGET"
 
       - name: 🧹 Cleanup server process
-        if: always()
+        if: ${{ !matrix.test-group.ab-driver && (always()) }}
         run: |
           if [ -f "${FILE_SERVER_PID}" ]; then
             pid=$(cat "${FILE_SERVER_PID}")

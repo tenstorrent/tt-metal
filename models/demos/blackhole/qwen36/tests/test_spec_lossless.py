@@ -175,8 +175,10 @@ def test_spec_decode_matches_plain_greedy_up_to_near_ties(mesh_device, sampling_
     token_ids = _get_prompt(PROMPT_LEN, tokenizer)
     prompt_ids = token_ids[0].tolist()
     assert len(prompt_ids) == PROMPT_LEN, f"wanted a {PROMPT_LEN}-token prompt, got {len(prompt_ids)}"
-    kv_shape = [NUM_BLOCKS, model.args.n_local_kv_heads, BLOCK_SIZE, model.args.head_dim]
-    pt = torch.arange(NUM_BLOCKS, dtype=torch.int32).reshape(1, NUM_BLOCKS)
+    # Block 0 is vLLM's null block (the traced prefill's trash block, QWEN36_SPEC_FAST_PREFILL=1): the request owns
+    # blocks 1..NUM_BLOCKS, as in serving, so the fast prefill path is exercised instead of declining to eager.
+    kv_shape = [NUM_BLOCKS + 1, model.args.n_local_kv_heads, BLOCK_SIZE, model.args.head_dim]
+    pt = torch.arange(1, NUM_BLOCKS + 1, dtype=torch.int32).reshape(1, NUM_BLOCKS)
 
     # Spec verify advances GDN with the fused recurrent op; SpeculativeDecoder puts plain decode on
     # that same op because the composite decode kernel disagrees with it at ~1e-5, which flips greedy

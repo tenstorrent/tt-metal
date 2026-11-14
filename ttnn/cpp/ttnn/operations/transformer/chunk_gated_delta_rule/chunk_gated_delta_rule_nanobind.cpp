@@ -54,7 +54,9 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule_lau
     const std::optional<ttnn::Tensor>& tril,
     const std::optional<ttnn::Tensor>& ones,
     const std::optional<ttnn::Tensor>& masks,
-    std::optional<uint32_t> num_key_heads) {
+    std::optional<uint32_t> num_key_heads,
+    const std::optional<ttnn::Tensor>& snapshot_index,
+    const std::optional<ttnn::Tensor>& snapshot_state) {
     return ttnn::transformer::chunk_gated_delta_rule(
         q,
         k,
@@ -75,7 +77,9 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule_lau
         tril,
         ones,
         masks,
-        num_key_heads);
+        num_key_heads,
+        snapshot_index,
+        snapshot_state);
 }
 
 std::vector<ttnn::Tensor> chunk_gdn_prep_launch(
@@ -629,6 +633,16 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
                 flat path run with K != V: H = num_key_heads, K = flat q width / H (must divide). Without
                 it the flat path assumes K == V. For rank-4 q/k it is redundant and, if given, must
                 equal q's head count.
+            snapshot_index, snapshot_state (ttnn.Tensor, optional, together): mid-scan state
+                snapshots. snapshot_state [S, B*HV, K, V] fp32 TILE DRAM (S <= 8 slots) is written in
+                place: slot i receives the state after chunk snapshot_index[i] (the state after tokens
+                [0, (c+1)*chunk_size) of this call; the same fp32 bytes final_state would hold had the
+                call ended there). snapshot_index is a DRAM ROW_MAJOR uint32 tensor whose first page
+                holds the S chunk indices, valid ones first and strictly increasing, then values
+                >= the chunk count (0xFFFFFFFF), whose slots are left untouched. Read on device at every
+                launch (a trace snapshots wherever the indices were staged). Needs the fused program:
+                the default dispatch takes it whenever a fused geometry fits; an explicit phased or
+                mono program_config is refused. Absent (default): every program is unchanged.
 
         Returns:
             tuple[ttnn.Tensor, Optional[ttnn.Tensor]]:
@@ -661,7 +675,9 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         nb::arg("tril") = nb::none(),
         nb::arg("ones") = nb::none(),
         nb::arg("masks") = nb::none(),
-        nb::arg("num_key_heads") = nb::none());
+        nb::arg("num_key_heads") = nb::none(),
+        nb::arg("snapshot_index") = nb::none(),
+        nb::arg("snapshot_state") = nb::none());
 
     const auto* prep_doc =
         R"doc(

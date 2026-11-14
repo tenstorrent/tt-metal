@@ -22,10 +22,11 @@ from models.common.tests.vllm_stubs import stub_vllm_if_missing
 from models.common.utility_functions import comp_pcc
 from models.demos.blackhole.qwen36.tests.test_factory import parametrize_mesh_tp
 from models.demos.blackhole.qwen36.tt.model import Qwen36Model
+from models.demos.blackhole.qwen36.tt.tp_common import kv_block_size
 
 N_LAYERS = 8
 
-BLOCK = 64
+BLOCK = kv_block_size()
 # ISL under test. Override with QWEN36_BUCKET_TEST_CTX to compare against a server run at a
 # different ISL (the benchmark sweep was trimmed to 4096).
 CTX = int(os.environ.get("QWEN36_BUCKET_TEST_CTX", "8192"))
@@ -77,6 +78,7 @@ def test_bucket_selection():
 
 
 def test_positional_slot_remap_moves_gdn_state_and_keeps_full_width(monkeypatch):
+    monkeypatch.setenv("QWEN36_NS_SLOTMAP", "0")  # these test the device GDN remap path
     Qwen36ForCausalLM = _import_qwen36_vllm(monkeypatch)
     from models.tt_transformers.tt.generator import Generator
 
@@ -86,7 +88,8 @@ def test_positional_slot_remap_moves_gdn_state_and_keeps_full_width(monkeypatch)
         num_devices=2,
         args=SimpleNamespace(max_batch_size=4),
         sampling=None,
-        _remap_gdn_slots=remaps.append,
+        _remap_gdn_slots=lambda remap, live=None: remaps.append(remap),
+        remap_slot_rope_delta=lambda r: None,
     )
     wrapper = Qwen36ForCausalLM.__new__(Qwen36ForCausalLM)
     wrapper.model = [model]
@@ -130,6 +133,7 @@ def test_condense_remaps_gdn_before_decode_in_both_sampling_modes(monkeypatch, s
     the decode reads it, whether the step samples on host or device. Decode contract v1
     (vllm-tt-plugin#78) delivers slot_remap in both modes as a keyword; positional is the
     tt_transformers Generator signature (index 9)."""
+    monkeypatch.setenv("QWEN36_NS_SLOTMAP", "0")  # these test the device GDN remap path
     Qwen36ForCausalLM = _import_qwen36_vllm(monkeypatch)
     from models.tt_transformers.tt.generator import Generator
 
@@ -138,7 +142,8 @@ def test_condense_remaps_gdn_before_decode_in_both_sampling_modes(monkeypatch, s
         num_devices=4,
         args=SimpleNamespace(max_batch_size=8),
         sampling=None,
-        _remap_gdn_slots=lambda remap: events.append(("remap", list(remap))),
+        _remap_gdn_slots=lambda remap, live=None: events.append(("remap", list(remap))),
+        remap_slot_rope_delta=lambda r: None,
     )
     wrapper = Qwen36ForCausalLM.__new__(Qwen36ForCausalLM)
     wrapper.model = [model]
@@ -302,6 +307,7 @@ def _decode_warmup_harness(monkeypatch):
             num_devices=4,
             args=SimpleNamespace(max_batch_size=8),
             sampling=SimpleNamespace(set_trace_bucket=lambda _: None),
+            _gdn_prefill_scratch=None,  # no B=1 prefill scratch: the GDN slot-write trace capture is skipped
         )
     ]
     gen.mesh_device = object()
@@ -402,7 +408,14 @@ def test_prefill_warmup_prepares_eagerly_and_only_records_when_traced(monkeypatc
     """#56474: the eager call allocates/compiles prefill; the traced call records on the same buffers."""
     Qwen36ForCausalLM = _import_qwen36_vllm(monkeypatch)
     calls = []
-    model = SimpleNamespace(num_devices=4, args=SimpleNamespace(max_batch_size=8), _chunked_trace_id=None)
+    # No prefix cache and no short bucket traces: this test covers the chunk-trace prepare/record split only.
+    model = SimpleNamespace(
+        num_devices=4,
+        args=SimpleNamespace(max_batch_size=8),
+        _chunked_trace_id=None,
+        _prefix_cache=None,
+        short_prefill_trace_enabled=lambda: False,
+    )
 
     def record(device):
         calls.append("record")
@@ -415,15 +428,16 @@ def test_prefill_warmup_prepares_eagerly_and_only_records_when_traced(monkeypatc
     )
     model.record_prefill_trace_chunked = record
     model.warmup_gdn_slot_ops = lambda: calls.append("slot_ops")
-    wrapper = SimpleNamespace(model=[model], mesh_device="mesh")
+    wrapper = SimpleNamespace(model=[model], mesh_device="mesh", warmup_vision=lambda: calls.append("vision"))
     kv_cache = [(SimpleNamespace(shape=(100, 1, 64, 128)), None)]
 
     Qwen36ForCausalLM.warmup_model_prefill(wrapper, kv_cache, False)
     Qwen36ForCausalLM.warmup_model_prefill(wrapper, kv_cache, True)
     Qwen36ForCausalLM.warmup_model_prefill(wrapper, kv_cache, True)
 
+    # The vision tower warms only in the eager call, before any trace exists.
     prepare, unbind = ("prepare", (1, 128)), ("unbind", "batched")
-    assert calls == ["bind", prepare, unbind, "slot_ops", "bind", prepare, "record", unbind, "slot_ops"]
+    assert calls == ["vision", "bind", prepare, unbind, "slot_ops", "bind", prepare, "record", unbind, "slot_ops"]
 
 
 def test_prefill_prepare_is_idempotent_and_record_requires_it(monkeypatch, expect_error):
@@ -593,7 +607,10 @@ def _parametrize_traced(max_tp=8, trace_bytes=1073741824):
             "device_params",
             [
                 {
-                    "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                    # QWEN36_FABRIC_RING=1: a Galaxy column's Ring CCLs need the ring (torus) fabric.
+                    "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING
+                    if os.environ.get("QWEN36_FABRIC_RING") == "1"
+                    else ttnn.FabricConfig.FABRIC_1D,
                     "l1_small_size": GDN_CONV1D_L1_SMALL_SIZE,
                     "trace_region_size": trace_bytes,
                 }
@@ -727,6 +744,68 @@ def test_gdn_prefix_write_trace(mesh_device, reset_seeds, ensure_gc):
     logger.info(f"GDN_PREFIX_WRITE_RESULT width={B} bmax={BMAX} dtype=fp32 " f"cores=48 ms_per_write={prefix_ms:.6f}")
 
     ttnn.release_trace(mesh_device, tid)
+
+
+@torch.no_grad()
+@_parametrize_traced()
+@pytest.mark.parametrize("B", [1, 2, 4, 8, 9], ids=lambda b: f"w{b}")
+@pytest.mark.parametrize("BMAX", [8, 32], ids=lambda b: f"Bmax{b}")
+def test_gdn_conv_hist_prefix_write_trace(mesh_device, BMAX, B, reset_seeds, ensure_gc):
+    """Trace-safe prefix update of the fused-batched GDN conv history.
+
+    The history is ROW_MAJOR bf16 DRAM ``[Bmax, K-1, C]`` (row u = user u's K-1 previous conv inputs). A bucketed
+    decode of width B < Bmax produces only ``[B, K-1, C]`` and must update rows ``[0:B]`` IN PLACE (fixed
+    address) without touching the idle rows: ``ttnn.experimental.slice_write`` of the RM-interleaved new rows.
+    Unlike the TILE recurrent state (test_gdn_prefix_write_trace), no sharded staging is needed: the RM interleaved
+    slice_write writes the supplied output buffer directly. Checks eager and trace replay bit-exactly, with a distinct
+    value in every idle row so any overwrite is visible."""
+    if B > BMAX:
+        pytest.skip(f"width {B} > Bmax {BMAX}")
+    KH, C = 3, 2560
+    iters = int(os.environ.get("QWEN36_PREFIX_WRITE_ITERS", "20"))
+    base = torch.arange(BMAX, dtype=torch.float32).reshape(BMAX, 1, 1).expand(BMAX, KH, C).contiguous()
+    base = (base + torch.arange(KH, dtype=torch.float32).reshape(1, KH, 1) / 8.0).to(torch.bfloat16)
+    new = (
+        (100.0 + torch.arange(B, dtype=torch.float32)).reshape(B, 1, 1).expand(B, KH, C).contiguous().to(torch.bfloat16)
+    )
+    expected = base.clone()
+    expected[:B] = new
+
+    rep = ttnn.ReplicateTensorToMesh(mesh_device)
+
+    def rm(t, device=True):
+        kw = dict(device=mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG) if device else {}
+        return ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=rep, **kw)
+
+    hist, src, base_host = rm(base), rm(new), rm(base, device=False)
+    start, end, step = [0, 0, 0], [B, KH, C], [1, 1, 1]
+
+    def read():
+        return ttnn.to_torch(ttnn.get_device_tensors(hist)[0]).reshape(BMAX, KH, C)
+
+    # eager first (also compiles the program), then capture against the fixed address
+    ttnn.experimental.slice_write(src, hist, start, end, step)
+    ttnn.synchronize_device(mesh_device)
+    assert torch.equal(read(), expected), "eager RM prefix write changed active or idle history rows"
+
+    ttnn.copy_host_to_device_tensor(base_host, hist)
+    ttnn.synchronize_device(mesh_device)
+    tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    ttnn.experimental.slice_write(src, hist, start, end, step)
+    ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
+    ttnn.synchronize_device(mesh_device)
+    ttnn.copy_host_to_device_tensor(base_host, hist)  # reset, so the check below depends on the replay
+    ttnn.synchronize_device(mesh_device)
+
+    ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
+    ttnn.synchronize_device(mesh_device)
+    assert torch.equal(read(), expected), "trace replay changed active or idle history rows"
+    for _ in range(iters):  # idempotent: replays keep the idle rows intact
+        ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
+    ttnn.synchronize_device(mesh_device)
+    assert torch.equal(read(), expected), "repeated trace replays changed the idle history rows"
+    ttnn.release_trace(mesh_device, tid)
+    logger.info(f"PASSED: RM conv-history prefix write trace Bmax={BMAX} width={B}")
 
 
 @torch.no_grad()

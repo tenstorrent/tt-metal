@@ -54,6 +54,54 @@ void bind_view(nb::module_& mod) {
                 &ttnn::experimental::view),
             nb::arg("input_tensor"),
             nb::arg("shape")));
+
+    const auto* alias_doc = R"doc(
+        Zero-copy TILE view of an interleaved device tensor's buffer with a new shape and dtype.
+
+        The view shares the input's memory and keeps it alive. The bytes are reinterpreted, not converted, so
+        the view's values are meaningful only for data written through the view.
+
+        The intended input is a paged cache of shape [num_blocks, ...]. Interleaved page p lives on bank
+        p % num_banks, so a block holds the same bytes in the input and in the view only when the block's
+        page count is a multiple of the bank count. alias_view therefore requires:
+
+        * the input to have rank 3 or more, TILE layout and interleaved memory, and the input and the view
+          to have at least one element;
+        * the page count of one dim-0 slice of the input to be a multiple of the bank count;
+        * the bytes one dim-0 slice holds on each bank to be a whole number of view pages;
+        * the view to have rank 3 or more, and each of its dim-0 slices to lie inside one dim-0 slice of
+          the input or to cover whole dim-0 slices of the input;
+        * the view to fit inside the input's allocation on every bank.
+
+        Then dim-0 slice i of the input and view pages [i * n, (i + 1) * n) cover the same bytes, where
+        n = (pages of one input slice) * (input page size) / (view page size). Example: on 8 DRAM banks a
+        bfloat16 [N, 1, 1024, 256] input (256 tiles per block) can be viewed as float32 [N, 8, 128, 128]
+        (128 tiles per block). On 7 banks the same view raises.
+
+        With check_slices=False, only the first two rules and the last rule apply. Each dim-0 slice i of
+        the input then still owns bytes [i * s, (i + 1) * s) on every bank, with
+        s = (pages of one input slice) / num_banks * (input page size), but a view page may straddle two
+        slices. View page q holds bytes [(q // num_banks) * p, (q // num_banks + 1) * p) of bank
+        q % num_banks, with p the view page size. The caller must write only the view pages that lie
+        wholly inside the slice it owns. Example: a bfloat8_b [N, 1, 1024, 256] input holds 34,816 bytes
+        per block per bank, 8.5 float32 pages, so a float32 view needs check_slices=False, and each
+        block then holds 8 whole float32 pages per bank.
+
+        Args:
+            * input_tensor: device tensor that owns the buffer.
+            * shape: shape of the view.
+            * dtype: dtype of the view.
+            * check_slices: if True (default), raise unless every dim-0 slice of the input maps to whole
+              view pages.
+        )doc";
+    ttnn::bind_function<"alias_view", "ttnn.experimental.">(
+        mod,
+        alias_doc,
+        &ttnn::experimental::alias_view,
+        nb::arg("input_tensor"),
+        nb::arg("shape"),
+        nb::arg("dtype"),
+        nb::arg("check_slices") = true);
 }
 
 }  // namespace ttnn::operations::experimental::reshape::detail

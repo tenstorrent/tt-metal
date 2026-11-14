@@ -26,6 +26,17 @@ constexpr uint32_t kCbKdecT = 24;
 constexpr uint32_t kCbU = 17;
 constexpr uint32_t kMaskTiles = 3;
 
+// Mid-scan state snapshots (ChunkGdnParams::num_snapshots > 0, fused program only; GDN_SNAPSHOT kernels): two
+// receiver-only CBs on indices the receivers leave free (the producers' c_9 / c_12 live on disjoint cores).
+//   kCbSnap     the receiver's [K, Vtl] fp32 state slice of a snapshot chunk, packed by the scan compute next to the
+//               ping-pong state and drained by the scan writer into snapshot_state.
+//   kCbSnapCtl  one kSnapCtlBytes page: the snapshot chunk indices the scan writer reads from snapshot_index and hands
+//               to the scan compute (read_tile_value).
+constexpr uint32_t kCbSnap = 12;
+constexpr uint32_t kCbSnapCtl = 9;
+constexpr uint32_t kMaxSnapshots = 8;
+constexpr uint32_t kSnapCtlBytes = kMaxSnapshots * 4;
+
 // Fused-program semaphore ids: ready (unused by the fused variant, kept for the shared scan reader's trailing-arg
 // layout), init, then one VALID flag per hand-off slot at kSemValid + slot.
 constexpr uint32_t kFusedSemReady = 0;
