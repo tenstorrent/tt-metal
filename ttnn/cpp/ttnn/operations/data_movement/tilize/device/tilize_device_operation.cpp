@@ -95,6 +95,14 @@ bool can_use_sharded_optimized_factories(
             if (shard.orientation != ShardOrientation::ROW_MAJOR) {
                 return false;
             }
+            // Every core tilizes and writes a full shard, so the shards must cover the input height
+            // exactly. A partial last shard (or idle grid cores) would write tiles past the end of the
+            // interleaved output. The retile factory clamps its writes itself.
+            const auto physical_height = input_tensor.physical_volume() / input_tensor.padded_shape()[-1];
+            if (!is_retile(operation_attributes, tensor_args) &&
+                physical_height != static_cast<uint64_t>(shard.shape[0]) * shard.grid.num_cores()) {
+                return false;
+            }
         } else if (out_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
             return false;  // Only same-layout or L1 INTERLEAVED output supported for HEIGHT_SHARDED.
         }
