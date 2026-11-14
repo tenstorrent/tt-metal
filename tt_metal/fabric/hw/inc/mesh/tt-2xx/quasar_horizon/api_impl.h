@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Horizon (Quasar 2xx) mesh API implementation.
-// Uses Horizon crossbar routing via fabric_over_noc_routing_l1_info_t::flat_addr + noc_async_write.
+// Uses Horizon crossbar routing via fabric_flat_address_routing_l1_info_t::flat_addr + noc_async_write.
 // All functions except fabric_unicast_noc_unicast_write are TODO stubs.
 
 #pragma once
@@ -56,7 +56,7 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write(
     ASSERT(tile_x < HORIZON_ATT_WORKER_GRID_X);
     ASSERT(tile_y < tt::tt_fabric::MAX_HORIZON_NOC_Y);
     const auto* routing_table =
-        reinterpret_cast<const tt_l1_ptr tt::tt_fabric::fabric_over_noc_routing_l1_info_t*>(ROUTING_TABLE_BASE);
+        reinterpret_cast<const tt_l1_ptr tt::tt_fabric::fabric_flat_address_routing_l1_info_t*>(ROUTING_TABLE_BASE);
     // flat_addr[mesh][dev_id][noc_x_within_dev][noc_y_within_dev]
     const uint64_t remote_addr = routing_table->flat_addr[dst_mesh_id][dst_dev_id][tile_x][tile_y] + local_offset;
 

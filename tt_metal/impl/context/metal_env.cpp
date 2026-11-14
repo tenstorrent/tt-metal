@@ -469,10 +469,10 @@ void MetalEnvImpl::initialize_fabric_config() {
     }
 
     auto& cp = this->get_control_plane();
-    if (cp.is_fabric_over_noc()) {
+    if (cp.fabric_uses_flat_addressing()) {
         // Horizon (QUASAR arch + HORIZON variant): no Ethernet fabric routers.
         // Routing tables are built from crossbar flat addresses via get_flat_address().
-        cp.configure_routing_tables_for_fabric_over_noc();
+        cp.configure_routing_tables_for_fabric_flat_address();
     } else {
         // WH/BH/Quasar: Ethernet-based routing.
         this->get_cluster().configure_ethernet_cores_for_fabric_routers(

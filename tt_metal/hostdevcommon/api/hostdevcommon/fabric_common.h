@@ -1089,7 +1089,7 @@ static_assert(
 //             =      1     x           56             x         2          x         3          x 8 = 2688 bytes
 //   total     : 2704 bytes  (exact fit, zero waste)
 
-struct fabric_over_noc_routing_l1_info_t {
+struct fabric_flat_address_routing_l1_info_t {
     // ---- metadata: 16 bytes ----
     uint16_t my_mesh_id = 0;    // 2 B
     uint16_t my_device_id = 0;  // 2 B
@@ -1103,12 +1103,12 @@ struct fabric_over_noc_routing_l1_info_t {
 // Total: 16 + 1*56*2*3*8 = 2704 bytes
 
 static_assert(
-    sizeof(fabric_over_noc_routing_l1_info_t) == 2704, "fabric_over_noc_routing_l1_info_t must be 2704 bytes");
+    sizeof(fabric_flat_address_routing_l1_info_t) == 2704, "fabric_flat_address_routing_l1_info_t must be 2704 bytes");
 // Multi-mesh not currently supported on Fabric-over-NoC
 static_assert(MAX_HORIZON_MESHES == 1, "Multi-mesh not currently supported on Fabric-over-NoC");
 
-static_assert(offsetof(fabric_over_noc_routing_l1_info_t, flat_addr) == 16);
-static_assert(sizeof(fabric_over_noc_routing_l1_info_t) % 16 == 0);
+static_assert(offsetof(fabric_flat_address_routing_l1_info_t, flat_addr) == 16);
+static_assert(sizeof(fabric_flat_address_routing_l1_info_t) % 16 == 0);
 
 // Fabric connection synchronization region in L1
 // Used for multi-RISC synchronization when opening fabric connections

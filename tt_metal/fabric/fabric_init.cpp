@@ -52,7 +52,7 @@ std::unique_ptr<tt::tt_metal::Program> create_and_compile_fabric_program(
     tt::tt_metal::MetalEnvImpl& env_impl,
     const tt::tt_metal::DispatchCoreConfig& dispatch_core_config,
     tt::tt_metal::IDevice* device) {
-    if (env_impl.get_control_plane().is_fabric_over_noc()) {
+    if (env_impl.get_control_plane().fabric_uses_flat_addressing()) {
         // Horizon uses NOC crossbar for inter-chip communication; no ERISC fabric firmware needed.
         return nullptr;
     }

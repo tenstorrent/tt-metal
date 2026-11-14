@@ -8,7 +8,6 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/fabric/topology_mapper.hpp>
-#include <tt-umd/cluster.hpp>
 #include <tt-umd/types/core_coordinates.hpp>
 
 #include "llrt/metal_soc_descriptor.hpp"
@@ -44,7 +43,7 @@ void FabricOverNocRoutingTableGenerator::generate_routing_table() {
     // flat_addr is indexed by routing plane [0] — assert this assumption holds.
     TT_FATAL(
         mapping.size() <= MAX_HORIZON_DEVS_PER_MESH,
-        "configure_routing_tables_for_fabric_over_noc: expected at most {} devices in one mesh, got {}",
+        "configure_routing_tables_for_fabric_flat_address: expected at most {} devices in one mesh, got {}",
         MAX_HORIZON_DEVS_PER_MESH,
         mapping.size());
 

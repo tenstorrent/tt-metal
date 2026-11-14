@@ -586,7 +586,7 @@ void ControlPlane::init_control_plane(
     // with a FabricConfig that differs from peers.
     this->routing_table_generator_ = std::make_unique<RoutingTableGenerator>(*this->topology_mapper_);
 
-    if (this->is_fabric_over_noc() && this->get_fabric_config() != FabricConfig::DISABLED) {
+    if (this->fabric_uses_flat_addressing() && this->get_fabric_config() != FabricConfig::DISABLED) {
         this->fabric_over_noc_routing_table_generator_ =
             std::make_unique<FabricOverNocRoutingTableGenerator>(*this->topology_mapper_, this->cluster_.get());
     }
@@ -692,7 +692,7 @@ void ControlPlane::init_control_plane_auto_discovery() {
     // FabricUnicastWrite2DevBothChipsFixture::SetUp() in test_horizon_x2_fabric_unicast_write.cpp for details). Issue
     // tracked in #64515
     TT_FATAL(
-        this->get_fabric_config() == FabricConfig::DISABLED || !(this->is_fabric_over_noc()),
+        this->get_fabric_config() == FabricConfig::DISABLED || !(this->fabric_uses_flat_addressing()),
         "Auto-discovery does not work for Fabric over NoC-based topologies, supply an MGD file and chip mapping "
         "instead.");
 
@@ -958,7 +958,7 @@ void ControlPlane::load_physical_chip_mapping(
     const std::map<FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
     this->logical_mesh_chip_id_to_physical_chip_id_mapping_ = logical_mesh_chip_id_to_physical_chip_id_mapping;
     // Fabric-over-NoC architectures have no ethernet links, so skip checking their connections
-    if (!this->is_fabric_over_noc()) {
+    if (!this->fabric_uses_flat_addressing()) {
         this->validate_mesh_connections();
     }
 }
@@ -1634,7 +1634,7 @@ size_t ControlPlane::get_num_live_routing_planes(
     return this->router_port_directions_to_num_routing_planes_map_.at(fabric_node_id).at(routing_direction);
 }
 
-bool ControlPlane::is_fabric_over_noc() const {
+bool ControlPlane::fabric_uses_flat_addressing() const {
     if (this->logical_mesh_chip_id_to_physical_chip_id_mapping_.empty()) {
         return false;
     }
@@ -1644,22 +1644,22 @@ bool ControlPlane::is_fabric_over_noc() const {
     return this->cluster_.get().arch() == tt::ARCH::QUASAR && ip_variant == tt::IpVariant::HORIZON;
 }
 
-tt::tt_fabric::fabric_over_noc_routing_l1_info_t ControlPlane::init_fabric_over_noc_routing_table_(
+tt::tt_fabric::fabric_flat_address_routing_l1_info_t ControlPlane::init_fabric_flat_address_routing_table_(
     const FabricNodeId& src_node) const {
-    tt::tt_fabric::fabric_over_noc_routing_l1_info_t routing_table = {};
+    tt::tt_fabric::fabric_flat_address_routing_l1_info_t routing_table = {};
     routing_table.my_mesh_id = *src_node.mesh_id;
     routing_table.my_device_id = src_node.chip_id;
     return routing_table;
 }
 
-void ControlPlane::configure_routing_tables_for_fabric_over_noc() {
-    this->fabric_over_noc_routing_tables_.clear();
+void ControlPlane::configure_routing_tables_for_fabric_flat_address() {
+    this->fabric_flat_address_routing_tables_.clear();
 
     this->fabric_over_noc_routing_table_generator_->generate_routing_table();
     const auto& flat_addr_table = this->fabric_over_noc_routing_table_generator_->get_routing_table();
 
     for (const auto& [src_node, src_phys] : this->logical_mesh_chip_id_to_physical_chip_id_mapping_) {
-        auto routing_table = this->init_fabric_over_noc_routing_table_(src_node);
+        auto routing_table = this->init_fabric_flat_address_routing_table_(src_node);
 
         for (const auto& [dst_node, dst_phys] : this->logical_mesh_chip_id_to_physical_chip_id_mapping_) {
             // Index by physical chip ID — the kernel receives dst_dev_id as the physical chip ID.
@@ -1671,7 +1671,7 @@ void ControlPlane::configure_routing_tables_for_fabric_over_noc() {
             }
         }
 
-        this->fabric_over_noc_routing_tables_[src_phys] = routing_table;
+        this->fabric_flat_address_routing_tables_[src_phys] = routing_table;
         log_info(
             tt::LogFabric,
             "Fabric-over-NoC routing table built for chip {} (my_mesh={} my_device={})",
@@ -3034,8 +3034,8 @@ void ControlPlane::write_fabric_telemetry_to_all_chips(const FabricNodeId& fabri
     this->cluster_.get().l1_barrier(physical_chip_id);
 }
 
-void ControlPlane::write_routing_tables_for_fabric_over_noc_() const {
-    for (const auto& [phys_chip_id, info] : this->fabric_over_noc_routing_tables_) {
+void ControlPlane::write_routing_tables_for_fabric_flat_address_() const {
+    for (const auto& [phys_chip_id, info] : this->fabric_flat_address_routing_tables_) {
         write_to_all_cores(
             *this,
             this->cluster_,
@@ -3089,8 +3089,8 @@ void ControlPlane::write_routing_tables_for_fabric_ethernet_() const {
 }
 
 void ControlPlane::write_routing_tables_to_all_chips() const {
-    if (this->is_fabric_over_noc()) {
-        this->write_routing_tables_for_fabric_over_noc_();
+    if (this->fabric_uses_flat_addressing()) {
+        this->write_routing_tables_for_fabric_flat_address_();
     } else {
         this->write_routing_tables_for_fabric_ethernet_();
     }

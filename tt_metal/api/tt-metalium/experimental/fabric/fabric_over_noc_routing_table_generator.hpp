@@ -7,7 +7,6 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <vector>
 
 #include <hostdevcommon/fabric_common.h>
 #include <tt-metalium/device_types.hpp>

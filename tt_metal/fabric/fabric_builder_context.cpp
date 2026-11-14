@@ -200,7 +200,7 @@ FabricBuilderContext::FabricBuilderContext(const FabricContext& fabric_context) 
 
     tensix_config_ = nullptr;
 
-    if (!fabric_context.get_control_plane().is_fabric_over_noc()) {
+    if (!fabric_context.get_control_plane().fabric_uses_flat_addressing()) {
         router_config_ = create_edm_config();
         for (size_t direction = 0; direction < eth_chan_directions::COUNT; direction++) {
             router_with_mux_config_[direction] =

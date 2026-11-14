@@ -319,7 +319,7 @@ void FabricFirmwareInitializer::init(
         log_info(tt::LogMetal, "Initializing Fabric");
 #if defined(TT_UMD_BUILD_SIMULATION)
         if (rtoptions_.get_simulator_enabled()) {
-            if (!control_plane_.is_fabric_over_noc()) {
+            if (!control_plane_.fabric_uses_flat_addressing()) {
                 for (auto* dev : devices_) {
                     const auto fabric_node_id = control_plane_.get_fabric_node_id_from_physical_chip_id(dev->id());
                     cluster_.get_driver()->register_sim_fabric_node_id(
@@ -354,7 +354,7 @@ void FabricFirmwareInitializer::configure() {
         return;
     }
 
-    if (control_plane_.is_fabric_over_noc()) {
+    if (control_plane_.fabric_uses_flat_addressing()) {
         // No ERISC routers to sync.
         initialized_.test_and_set();
         return;
@@ -388,7 +388,7 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
         return;
     }
 
-    if (!control_plane_.is_fabric_over_noc()) {
+    if (!control_plane_.fabric_uses_flat_addressing()) {
         const auto& fabric_context = control_plane_.get_fabric_context();
         const auto& builder_ctx = fabric_context.get_builder_context();
         auto [termination_signal_address, signal] = builder_ctx.get_fabric_router_termination_address_and_signal();
@@ -434,7 +434,7 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
                 dev, master_router_logical_core, termination_signal_address, termination_signal, CoreType::ETH);
         }
 
-    }  // !is_fabric_over_noc()
+    }  // !fabric_uses_flat_addressing()
 
     devices_.clear();
     initialized_.clear();
