@@ -1321,6 +1321,56 @@ class ROPE(TemplateParameter):
 
 
 @dataclass
+class GGUF_DECODE_MM(TemplateParameter):
+    """sources/gguf_decode_mm_test.cpp: format id (0: Float32 in1 tiles, no decode), the weight's K and N tiles,
+    with matmul the rows of in0 the matmul computes and its faces in L1, and the decode's DEST row offset.
+    """
+
+    fmt_id: int = 0
+    kt: int = 1
+    nt: int = 1
+    matmul: bool = False
+    in0_rows: int = 32
+    in0_faces: int = 4
+    page_rows: int = 0
+
+    def convert_to_cpp(self) -> str:
+        lines: list[str] = [
+            f"constexpr std::uint32_t GGUF_FMT = {self.fmt_id};",
+            f"constexpr std::uint32_t GGUF_KT = {self.kt};",
+            f"constexpr std::uint32_t GGUF_NT = {self.nt};",
+            f"constexpr bool GGUF_MM = {str(self.matmul).lower()};",
+            f"constexpr std::uint32_t GGUF_IN0_ROWS = {self.in0_rows};",
+            f"constexpr std::uint32_t GGUF_IN0_FACES = {self.in0_faces};",
+            f"constexpr std::uint32_t GGUF_PAGE_ROWS = {self.page_rows};",
+        ]
+        return "\n".join(lines)
+
+
+GGUF_PERF_STEPS = ("decode", "params", "body", "matmul", "copy")
+
+
+@dataclass
+class GGUF_PERF(TemplateParameter):
+    """sources/gguf_decode_mm_perf.cpp: the step the math thread's tile loop runs (GGUF_PERF_STEPS), the format id
+    of a decode, the in0 rows of a matmul and the faces of a copied page."""
+
+    gguf_step: str = "decode"
+    gguf_fmt: int = 0
+    gguf_in0_rows: int = 32
+    gguf_page_faces: int = 4
+
+    def convert_to_cpp(self) -> str:
+        lines: list[str] = [
+            f"constexpr std::uint32_t GGUF_STEP = {GGUF_PERF_STEPS.index(self.gguf_step)};",
+            f"constexpr std::uint32_t GGUF_FMT = {self.gguf_fmt};",
+            f"constexpr std::uint32_t GGUF_IN0_ROWS = {self.gguf_in0_rows};",
+            f"constexpr std::uint32_t GGUF_PAGE_FACES = {self.gguf_page_faces};",
+        ]
+        return "\n".join(lines)
+
+
+@dataclass
 class TOPK_XL(TemplateParameter):
     k: int = 512
     num_chunks: int = 1

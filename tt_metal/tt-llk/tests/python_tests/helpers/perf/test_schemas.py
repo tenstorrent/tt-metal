@@ -981,6 +981,30 @@ PERF_TEST_SCHEMAS = {
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
         "test_name_aliases": {"perf_unpack_transpose": "perf_unpack_transpose"},
     },
+    "perf_gguf_decode": {
+        "version": 1,
+        "columns": [
+            "dest_acc",
+            "formats.input_A",
+            "formats.input_B",
+            "formats.output",
+            "formats.register_A",
+            "formats.register_B",
+            "formats.sfpu_src",
+            "formats.sfpu_dst",
+            "gguf_fmt",
+            "gguf_in0_rows",
+            "gguf_page_faces",
+            "gguf_step",
+            "loop_factor",
+            "marker",
+            "math_fidelity",
+            "tile_cnt",
+            "unpack_to_dest",
+        ],
+        "aliases": {},
+        "test_name_aliases": {"perf_gguf_decode": "perf_gguf_decode"},
+    },
 }
 
 

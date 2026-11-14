@@ -689,6 +689,12 @@ GATHERING_BUILD_VARIANTS = [
         "test_eltwise_unary_sfpu.py::test_exponential_clamp_negative[False]",
         "math",
     ),
+    (
+        # Records its MVMULs on every call, between the SFPU decodes of the GGUF weight tiles.
+        "dest_srca_mm after a GGUF decode",
+        "test_gguf_decode.py::test_gguf_decode_mm[fmt:Q4_K-rows:13]",
+        "math",
+    ),
 ]
 
 
