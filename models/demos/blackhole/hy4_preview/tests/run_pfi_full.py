@@ -83,12 +83,15 @@ def rep_prefill(ch, dec, md, prompts):
 def main():
     assert os.environ.get("HY4_POOL") == "1"
     assert (os.environ.get("HY4_POOL_PF") == "1") == (MODE == "pf")
-    d = torch.load(os.environ["SRC"])
+    srcs = [
+        torch.load(x) for x in os.environ["SRC"].split(",")
+    ]  # several prompt files in one boot (needles 64k then 256k)
+    d = srcs[0]
     LENS = [
         int(x) for x in os.environ.get("LENS", os.environ.get("LEN", "0")).split(",")
     ]  # several lengths in one boot (gates)
-    full = [list(p) for p in d["ids"]]
-    L = max(max(len(p[:n]) if n else len(p) for p in full) for n in LENS)
+    fulls = [[list(p) for p in x["ids"]] for x in srcs]
+    L = max(max(len(p[:n]) if n else len(p) for p in f) for f in fulls for n in LENS)
     md = open_mesh(trace=int(float(os.environ.get("TRACE_BYTES", "700e6"))))
     try:
         from models.demos.blackhole.hy4_preview.tt import hy4_pool_decode as _pd
@@ -118,14 +121,20 @@ def main():
                 mem_sample_s=float(os.environ.get("MEMS", "0")),
             )
         maxch = int(os.environ.get("MAXCHUNKS", "0"))
-        for rep, LEN in [(r_, n_) for n_ in LENS for r_ in range(1 + int(os.environ.get("REPEAT", "0")))]:
+        for si, rep, LEN in [
+            (s_, r_, n_)
+            for s_ in range(len(srcs))
+            for n_ in LENS
+            for r_ in range(1 + int(os.environ.get("REPEAT", "0")))
+        ]:
+            d, full = srcs[si], fulls[si]
             prompts = [p[:LEN] if LEN else p for p in full]
             if MODE == "pf":
                 if maxch:
                     prompts = [p[: maxch * PF] for p in prompts]
                 r = pp.prefill(prompts, keep_hidden=True)
                 first, hid, lens, sec = r.first, r.hidden, r.lens, r.total_sec
-                out["chunk_sec"] = r.chunk_sec
+                out[f"chunk_sec_s{si}"] = r.chunk_sec
                 if pp.mem:
                     out["mem_peak_alloc_per_bank"] = pp.mem_peak_per_bank
                     out["mem_min_free_per_bank"] = pp.mem_min_free_per_bank
@@ -136,13 +145,27 @@ def main():
                     )
             else:
                 first, hid, lens, sec = rep_prefill(ch, dec, md, prompts)
-            res(event="prefill_done", rep=rep, LEN=LEN, sec=round(sec, 1), first=first, lens=lens, **dram_view(md))
+            res(
+                event="prefill_done",
+                src=si,
+                rep=rep,
+                LEN=LEN,
+                sec=round(sec, 1),
+                first=first,
+                lens=lens,
+                **dram_view(md),
+            )
             if maxch:
                 return
             dec.ctx.set_bucket(decode_bucket(max(lens), pages), "topk")
             toks = decode(dec, first, lens, NSTEPS)
-            res(event="generated", rep=rep, LEN=LEN, toks=toks, keys=d.get("keys"))
-            out[f"first{LEN}_{rep}"], out[f"hid{LEN}_{rep}"], out[f"toks{LEN}_{rep}"], out[f"sec{LEN}_{rep}"] = (
+            res(event="generated", src=si, rep=rep, LEN=LEN, toks=toks, keys=d.get("keys"), depths=d.get("depths"))
+            (
+                out[f"first{LEN}_{rep}_s{si}"],
+                out[f"hid{LEN}_{rep}_s{si}"],
+                out[f"toks{LEN}_{rep}_s{si}"],
+                out[f"sec{LEN}_{rep}_s{si}"],
+            ) = (
                 first,
                 torch.stack(hid),
                 toks,
