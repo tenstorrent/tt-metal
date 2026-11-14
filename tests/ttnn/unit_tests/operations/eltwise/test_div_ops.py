@@ -7,6 +7,7 @@ import ttnn
 
 import pytest
 from tests.ttnn.utils_for_testing import assert_with_ulp
+from tt_py_test_utils_common.utility_functions import is_blackhole
 
 pytestmark = pytest.mark.use_module_device
 
@@ -268,8 +269,8 @@ def test_div_fp32_special_values(device, op):
     if op == ttnn.div_no_nan:
         # eqz compares exactly, so subnormal divisors keep division's flushed result.
         expected = torch.where(b == 0, 0.0, expected)
-    # SFPU multiplication produces positive zero for exact zero results.
-    expected = torch.where(expected == 0, 0.0, expected)
+    if not is_blackhole():
+        expected = torch.where(expected == 0, 0.0, expected)
     input_a = ttnn.from_torch(a, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     input_b = ttnn.from_torch(b, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     actual = ttnn.to_torch(op(input_a, input_b))
