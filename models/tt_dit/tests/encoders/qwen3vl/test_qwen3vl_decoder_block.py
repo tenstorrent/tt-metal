@@ -353,15 +353,23 @@ def test_decoder_mlp_on_device(golden, seq_len, mesh_device, submesh_shape, tp_a
     assert_quality(golden["mlp_out"].float(), got, pcc=0.99)
 
 
+_DYNAMIC_RING = {**ring_params_8k_req_exact_devices, "l1_small_size": 65536}
+
+
+# Rows per chip at the 5120-token prompt cap: 640 on the 4x8, 160 on the 4x32.
 @pytest.mark.parametrize(
-    ("mesh_device", "device_params"),
-    [pytest.param((4, 8), {**ring_params_8k_req_exact_devices, "l1_small_size": 65536}, id="tp4_sp8_fsdp8_ring")],
-    indirect=True,
+    ("mesh_device", "device_params", "capacity"),
+    [
+        pytest.param((4, 8), _DYNAMIC_RING, 640, id="tp4_sp8_fsdp8_ring"),
+        pytest.param((4, 8), _DYNAMIC_RING, 160, id="tp4_sp8_fsdp8_ring_cap160"),
+        pytest.param((4, 32), _DYNAMIC_RING, 160, id="tp4_sp32_fsdp32_ring"),
+    ],
+    indirect=["mesh_device", "device_params"],
 )
-def test_decoder_block_dynamic_length(mesh_device):
+def test_decoder_block_dynamic_length(mesh_device, capacity):
     """`dynamic_length` tracks the default layer and adds no program of its own for a new length."""
     torch.manual_seed(0)
-    tp_axis, sp_axis, capacity = 0, 1, 640
+    tp_axis, sp_axis = 0, 1
     sp = tuple(mesh_device.shape)[sp_axis]
     ccl = CCLManager(mesh_device, num_links=2, topology=ttnn.Topology.Ring)
     ctx = Qwen3VlContext(
@@ -393,8 +401,8 @@ def test_decoder_block_dynamic_length(mesh_device):
     default, dynamic = build(ctx), build(dataclasses.replace(ctx, dynamic_length=True))
     added = []
     # Rows per chip: long, short (the K rotation's second program: its rows no longer exceed head_dim), then both
-    # sides of that change (64 / 96) and the capacity.
-    for rows in (160, 32, 96, 64, capacity):
+    # sides of that change (64 / 96), the 1D matmul's last length (128) and the capacity.
+    for rows in (160, 32, 96, 64, 128, capacity):
         seq_len = rows * sp
         x = torch.randn(1, seq_len, HIDDEN_SIZE)
         logical_n = tensor.from_torch(
@@ -418,4 +426,4 @@ def test_decoder_block_dynamic_length(mesh_device):
         expected, _ = run(default)
         assert_quality(expected, got, pcc=0.9999)
     logger.info(f"programs added by the dynamic layer per length: {added}")
-    assert added[1:] == [1, 0, 0, 0], f"programs added per length: {added}"
+    assert added[1:] == [1, 0, 0, 0, 0], f"programs added per length: {added}"

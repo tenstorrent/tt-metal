@@ -95,12 +95,13 @@ def test_encoder_dynamic_length_default() -> None:
 
     on = dict(dynamic_length=True, blackhole=True, task="t2va", mesh_shape=(4, 8))
     assert resolve(None, **on)
+    assert resolve(None, **{**on, "mesh_shape": (4, 32)})
     assert not resolve(False, **on)
     for change in (
         {"dynamic_length": False},
         {"blackhole": False},
         {"task": "ref2va"},
-        {"mesh_shape": (4, 32)},
+        {"mesh_shape": (2, 4)},
     ):
         assert not resolve(None, **{**on, **change}), change
         assert resolve(True, **{**on, **change}), change
