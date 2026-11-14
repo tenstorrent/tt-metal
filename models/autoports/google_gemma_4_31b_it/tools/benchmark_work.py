@@ -5,6 +5,7 @@ FLOPs count useful projection/attention arithmetic (multiply-add = 2), not tile
 padding or pointwise transcendental operations. DRAM is an estimate of weights,
 KV and materialized tensors, not a measured memory-controller counter.
 """
+
 H, I, V, TP = 5376, 21504, 262144, 4
 BFP4_BYTES, BFP8_BYTES = 576 / 1024, 1088 / 1024
 LAYERS = ((50, 256, 16, 1024, False), (10, 512, 4, None, True))
@@ -49,11 +50,22 @@ def prefill_work(starts, ends):
     }
 
 
-def decode_work(positions, batch_size):
+def decode_work(positions, batch_size, precision=None):
     positions = [int(p) for p in positions if int(p) >= 0]
     # Weights are TP-sharded: sum full-model elements once, not four copies.
-    weights = BFP4_BYTES * (
-        sum(n * projection_elements(d, kv, shared, physical=True) for n, d, kv, _, shared in LAYERS) + H * V
+    head_bytes = BFP4_BYTES
+    if precision is not None:
+        groups = precision["weight_groups"]
+        if (
+            any(groups[k] != "bfp4" for k in ("attention", "mlp", "down"))
+            or precision["layer_exceptions"]
+            or precision["kv_cache_dtype"] != "bfloat8_b"
+        ):
+            raise ValueError("Work model supports unchanged BFP4 decoder/BFP8 KV with head-only precision changes")
+        head_bytes = {"bfp4": BFP4_BYTES, "bfp8": BFP8_BYTES, "bf16": 2}[groups["lm_head"]]
+    weights = (
+        BFP4_BYTES * sum(n * projection_elements(d, kv, shared, physical=True) for n, d, kv, _, shared in LAYERS)
+        + head_bytes * H * V
     )
     kv_read = sum(
         n * 2 * kv * d * BFP8_BYTES * sum(min(p + 1, window) if window else p + 1 for p in positions)
@@ -84,7 +96,7 @@ def decode_work(positions, batch_size):
 ASSUMPTIONS = {
     "architecture": "60 dense layers: 50 sliding_attention (32 Q,16 KV,dim256,window1024), 10 full_attention (32 Q,4 KV,dim512,K=V shared projection); hidden5376, intermediate21504, vocab262144; TP4",
     "prefill": "Useful dense projection and causal/sliding QK+AV multiply-adds only; one LM head row per nonempty adapter prefill row. Padding, softmax, norm, GELU and rotary arithmetic omitted from useful-FLOP numerator; all remain in wall-time denominator.",
-    "weights": "BFP4_B 576bytes/1024elements including shared exponents. Physical MLP intermediate22528 and output5632 padding from multichip_decoder.py; full TP-sharded weights read once per decode replay, not once per user. LoFi all projection groups.",
+    "weights": "Decoder BFP4_B 576bytes/1024elements; head uses observed precision (BFP4=576, BFP8=1088 bytes/1024elements, BF16=2bytes/element). Physical MLP intermediate22528 and output5632 padding from multichip_decoder.py; full TP-sharded weights read once per decode replay, not once per user. Observed compute fidelities retained in observer identity.",
     "kv": "BFP8_B 1088bytes/1024elements; estimated one K and V read per attended token and write per active row; global K=V projection shared but attention consumes both K and V. Cache reuse, SDPA tile rounding and repeated reads are not measured.",
     "other_dram": "Includes replicated BF16 norm weights, approximate residual/collective staging, embedding and logits; one physical32-row tile for all supported decode batches. L1 reuse and exact temporary/CCL traffic unknown. This is modeled DRAM traffic, not a hardware counter; no claim of exact utilization.",
     "sources": [

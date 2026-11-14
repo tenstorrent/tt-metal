@@ -43,7 +43,7 @@ def check(args, server):
     identity = before["identity"]
     if (
         identity["layers"] != list(range(60))
-        or identity["precision"]["config_id"] != "head_bfp4"
+        or identity["precision"] != server["precision"]
         or len(identity["device_ids"]) != TP
     ):
         raise ValueError("Observer model identity does not match full selected model")
@@ -122,7 +122,9 @@ def account(raw, start, end):
             prefill_tokens += detail["tokens"]
             amount = detail["flops"]
         else:
-            detail = decode_work(event["effective_positions"], event["batch_size"])
+            detail = decode_work(
+                event["effective_positions"], event["batch_size"], end.get("identity", {}).get("precision")
+            )
             decode_tokens += detail["active_tokens"]
             amount = detail["dram_bytes"]
         seconds[phase] += elapsed
@@ -176,6 +178,8 @@ def collect(args, server):
     # Collector runs before server stop: verify the same exporter is still alive.
     live = exchange(socket_path(server["phase_log"]), "check")
     healthy(live)
+    if live["identity"]["precision"] != server["precision"]:
+        raise ValueError("Observer precision differs from recorded server")
     if live["pid"] != end["pid"] or live["identity"] != end["identity"]:
         raise ValueError("Running observer changed since measured profile")
     if raw["failed"] or raw["completed"] != raw["num_prompts"]:

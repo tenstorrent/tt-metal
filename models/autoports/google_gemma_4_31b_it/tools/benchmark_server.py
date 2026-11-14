@@ -174,7 +174,7 @@ def argument(command, flag):
     raise RuntimeError(f"Actual server command missing {flag}")
 
 
-def observe(state, output, requested):
+def observe(state, output, requested, expected_precision=None):
     api = [p for p in descendants(state["pid"]) if "vllm.entrypoints.openai.api_server" in p["command"]]
     if len(api) != 1:
         raise RuntimeError(f"Expected one owned API server, observed {api}")
@@ -186,7 +186,10 @@ def observe(state, output, requested):
     pool = observed["serving_pool_budget"]
     assert registration["class"] == MODULE + ":Gemma4ForCausalLM", registration
     assert registration["layers"] == list(range(60)), registration
-    assert registration["precision"]["config_id"] == "head_bfp4", registration
+    if expected_precision is None:
+        assert registration["precision"]["config_id"] == "head_bfp4", registration
+    elif registration["precision"] != expected_precision:
+        raise ValueError("Observed precision differs from expected full policy")
     assert int(argument(command, "--max-num-seqs")) == pool["max_num_seqs"] == requested
     assert int(argument(command, "--max-model-len")) == pool["max_model_len"] == 262144
     assert argument(command, "--revision") == argument(command, "--tokenizer-revision") == REVISION
@@ -271,6 +274,9 @@ def main():
     parser.add_argument("--max-num-seqs", type=int, choices=(1, 8, 16, 32))
     parser.add_argument("--base-url", default="http://127.0.0.1:8000")
     parser.add_argument("--output", type=Path)
+    parser.add_argument(
+        "--expected-precision", type=Path, help="Validate full policy; does not select runtime precision"
+    )
     parser.add_argument("--stop", action="store_true", help="Stop only the recorded idle server")
     args = parser.parse_args()
     STATE.parent.mkdir(parents=True, exist_ok=True)
@@ -294,7 +300,12 @@ def main():
                 and old.get("phase_log") == expected_phase_log
                 and old.get("source_sha256_at_launch") == source_hashes()
             ):
-                observe(old, output, args.max_num_seqs)
+                observe(
+                    old,
+                    output,
+                    args.max_num_seqs,
+                    json.loads(args.expected_precision.read_text()) if args.expected_precision else None,
+                )
                 return
         if old:
             stop_owned(old)
@@ -387,7 +398,12 @@ def main():
                 continue
             state["startup_seconds"] = time.monotonic() - start
             write(STATE, state)
-            observe(state, output, args.max_num_seqs)
+            observe(
+                state,
+                output,
+                args.max_num_seqs,
+                json.loads(args.expected_precision.read_text()) if args.expected_precision else None,
+            )
             print(json.dumps({"ready": str(output), "startup_seconds": state["startup_seconds"]}))
             return
         raise RuntimeError(
