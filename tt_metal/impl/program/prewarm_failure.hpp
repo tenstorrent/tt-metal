@@ -209,6 +209,7 @@ inline void save(const std::filesystem::path& path, const std::string& context) 
     std::string name = path.string() + ".XXXXXX";
     const int fd = ::mkstemp(name.data());
     if (fd < 0) throw std::runtime_error("cannot create prewarm failure state");
+    ::fcntl(fd, F_SETFD, FD_CLOEXEC);
     const std::string data = "prewarm-failure-v1 " + context + "\n";
     size_t offset = 0;
     bool ok = true;

@@ -188,3 +188,49 @@ recompile, never a wrong binary. Verified by
 Note: `<name>.elf.xip.elf` next to a kernel ELF is a tt-triage debug
 disassembly dump written at load time (`tt_memory.cpp`), not a loaded binary;
 prewarm does not regenerate it, and it self-heals on the next real load.
+
+## Failed recipes and bounded diagnostics
+
+The manifest is preserved. A definite compiler error can create a separate
+`.prewarm-failed-<target>` record in the kernel directory, outside the target
+artifacts removed after failure. Subsequent passes skip that failure only when
+its context still matches. The context includes the complete target recipe,
+generated inputs, build key, environment and SFPI toolchain contents. Fresh
+compiler dependency discovery (`-M`, including system headers) and content
+hashes detect edited sources, edited dependencies and newly shadowing headers;
+a stale `build_key` or old `.dephash` alone cannot suppress a retry.
+
+Set `TT_METAL_KERNEL_PREWARM_RETRY_FAILED=1` (also `true` or `on`) to retry all
+recorded failures. Alternatively, while no pass is running, remove the relevant
+`.prewarm-failed-<target>` files. Neither action edits the manifest. Changed
+context automatically retries. Successful targets clear their failure records.
+
+Negative caching currently requires a directly invoked absolute compiler in a
+self-contained `sfpi/.../bin` installation. Unknown wrappers (including ccache),
+redirected GCC executable searches, preloaded libraries, compiler plugins,
+response files and incomplete dependency discovery conservatively remain
+retryable. Keep the toolchain stable during a pass, as required by the existing
+process-local compiler-version cache. Snapshotting toolchains and resolving
+current dependencies adds host CPU work; no end-to-end speedup is claimed.
+
+Compiler stdout and stderr share a pipe drained into an 8 KiB head plus 8 KiB
+tail window, with a small truncation annotation. Output is bounded while it is
+produced and is never spooled to an unbounded file. Each failed target emits one
+bounded diagnostic with exit status and total output bytes. A compiler invocation
+has a five-minute deadline; dependency discovery has a one-minute deadline.
+Signals, timeouts, launch errors, unexpected exit statuses, fatal/infrastructure
+diagnostics, link failures and missing context do not create negative entries.
+
+Each build-key batch reports `attempted`, `successful`, `failed`,
+`previously-failed-skipped`, `build-key-mismatch-entries`, duplicates, deferred
+targets and generated-file/lock failures separately. Successful counts include
+already up-to-date targets. The API returns successful targets, rather than
+attempted targets; the tool retains its best-effort exit status of zero, so
+callers must inspect the summary to distinguish a partial pass. Mismatch counts
+are per-build-key filtering counts, not compiler errors.
+
+A nonblocking kernel lock covers generated files, compilation and atomic failure
+record publication across concurrent prewarm passes. A competing pass reports
+the kernel's targets as deferred. These locks coordinate prewarm processes;
+callers must still keep an offline prewarm separate from active device JIT work.
+CPU regression coverage is in `tests/tt_metal/tt_metal/tools/test_kernel_prewarm_failures.py`.

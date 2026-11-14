@@ -88,7 +88,8 @@ void maybe_launch_prewarm(
 // root (RunTimeOptions::get_root_dir) used to locate the pre-compiled firmware bundle the link step
 // needs; empty falls back to the jit firmware subtree. Unlike the in-run batch this also builds the
 // device-init (cq_/fabric) kernels, so a subsequent real run holds the device only for device work,
-// not compilation. Returns targets built. Run before a device/broker job.
+// not compilation. Returns successful targets (including up-to-date targets), excluding failures
+// and previously-failed skips. Logs detailed best-effort accounting. Run before a device/broker job.
 std::size_t prewarm_manifest_offline(const std::string& out_root, const std::string& root_dir);
 
 // True iff this process should run the in-process cold-start (capture warmup -> off-device batch

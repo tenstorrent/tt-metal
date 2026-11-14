@@ -24,7 +24,7 @@ NATIVE = r'''
 using namespace tt::tt_metal::kernel_prewarm;
 namespace fs = std::filesystem;
 
-int main(int argc, char** argv) {
+int main(int, char** argv) {
     fs::path root(argv[1]);
     fs::create_directories(root);
     auto bad = failure::command({"/bin/sh", "-c", "echo 'x.cpp: error: static assertion failed: Index out of range' >&2; exit 1"}, root);
@@ -83,6 +83,14 @@ int main(int argc, char** argv) {
     auto link = [&]() { throw failure::CompileFailure(bad, false); };
     failure::target(state, false, fingerprint, link, cleanup);
     assert(!fs::exists(state));
+    // An interrupted writer's unfinished temporary record cannot suppress the next pass.
+    std::ofstream(state.string() + ".unfinished") << "prewarm-failure-v1 " << context;
+    assert(run().outcome == failure::Outcome::Failed);
+    fs::remove(state);
+    // State publication failures are reported and never turn a failed compile into success.
+    auto unavailable = failure::target(root / "missing/state", false, fingerprint, build, cleanup);
+    assert(unavailable.outcome == failure::Outcome::Failed);
+    assert(unavailable.diagnostic.find("state not saved") != std::string::npos);
     // Concurrent passes serialize an entire kernel, including generated files and target state.
     {
         failure::KernelLock first(root / "kernel.lock");
@@ -194,7 +202,7 @@ void sync_build_steps(std::vector<std::shared_future<void>>& events){for(auto& f
 """
 
 INTEGRATION_MAIN = r"""
-int main(int argc,char** argv) {
+int main(int,char** argv) {
  fs::path root=argv[1];fs::create_directories(root/"sfpi/compiler/bin");
  fs::path compiler=root/"sfpi/compiler/bin/g++";
  std::ofstream(compiler)<<"#!/bin/sh\nexec /usr/bin/c++ \"$@\"\n";
@@ -246,7 +254,7 @@ class PrewarmFailureTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="prewarm-integration-") as work:
             path = Path(work)
             (path / "test.cpp").write_text(harness)
-            subprocess.run(["c++", "-std=c++20", "-Wall", "-Wextra", "-pthread", "-I", str(ROOT), str(path / "test.cpp"), "-o", str(path / "test")], check=True, timeout=60)
+            subprocess.run(["c++", "-std=c++20", "-Wall", "-Wextra", "-Werror", "-pthread", "-I", str(ROOT), str(path / "test.cpp"), "-o", str(path / "test")], check=True, timeout=60)
             subprocess.run([str(path / "test"), str(path / "state")], check=True, timeout=60)
 
     def test_native_failure_policy(self):
@@ -257,7 +265,7 @@ class PrewarmFailureTests(unittest.TestCase):
             source.write_text("#include <atomic>\n" + NATIVE)
             binary = path / "test"
             subprocess.run(
-                ["c++", "-std=c++20", "-Wall", "-Wextra", "-pthread", "-I", str(ROOT), str(source), "-o", str(binary)],
+                ["c++", "-std=c++20", "-Wall", "-Wextra", "-Werror", "-pthread", "-I", str(ROOT), str(source), "-o", str(binary)],
                 check=True,
                 timeout=60,
             )
