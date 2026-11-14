@@ -88,12 +88,18 @@ tt::tt_metal::MemoryConfig compute_integer_output_mem_config(
     uint32_t out_n,
     uint32_t out_h,
     uint32_t out_w) {
+    TT_FATAL(
+        output_mem_config.shard_spec().has_value(),
+        "Upsample: output memory config must have shard_spec");
+    TT_FATAL(
+        input.memory_config().shard_spec().has_value(),
+        "Upsample: sharded input must have shard_spec");
     auto shard_spec = output_mem_config.shard_spec().value();
     if (mode == "bilinear") {
         // Bilinear: calculate to handle non-exact work distribution (input is haloed)
         const uint32_t total = out_n * out_h * out_w;
         const uint32_t padded = tt::round_up(total, shard_spec.num_cores());
-        shard_spec.shape = {padded / shard_spec.num_cores(), input.shard_spec()->shape[1]};
+       shard_spec.shape = {padded / shard_spec.num_cores(), input.shard_spec()->shape[1]};
     } else {
         // Nearest: output shard is input shard * scale factors
         shard_spec.shape = {input.shard_spec()->shape[0] * scale_h * scale_w, input.shard_spec()->shape[1]};
