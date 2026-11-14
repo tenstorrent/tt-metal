@@ -10,6 +10,7 @@ namespace ckernel {
 
 namespace sfpu {
 void softcap_init();
+void tiled_prod_init();
 }  // namespace sfpu
 
 // The bare init runs the common SFPU init, plus the op's own init for the ops whose Compute API
@@ -19,6 +20,10 @@ inline void llk_math_eltwise_unary_sfpu_init() {
     _llk_math_eltwise_sfpu_init_();
     if constexpr (sfpu_op == SfpuType::softcap) {
         sfpu::softcap_init();
+    } else if constexpr (sfpu_op == SfpuType::tiled_prod) {
+        // calculate_tiled_prod advances Dest through ADDR_MOD_6 and reads 1.0 from vConstFloatPrgm0,
+        // both set by tiled_prod_init.
+        sfpu::tiled_prod_init();
     }
 }
 
