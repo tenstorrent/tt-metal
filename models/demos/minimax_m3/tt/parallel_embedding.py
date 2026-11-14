@@ -175,8 +175,8 @@ class TtParallelEmbedding(LightweightModule):
 
         media_fn (2D only): called to get the MediaPartials whose image rows are spliced into the
         partials before the reduce-scatter, so the collective that already runs delivers them. It is a
-        callable, not a value, so that under PREFILL_PREFETCH_MEDIA the host fetch runs while the token
-        lookup below is already executing on the device. The 1D path has no reduce-scatter to ride and
+        callable, not a value, so the host fetch runs while the token lookup below is already
+        executing on the device. The 1D path has no reduce-scatter to ride and
         splices after the embedding instead (tt/media_injection.py)."""
         if not self.shard_vocab_on_sp:
             assert media_fn is None, "media partials need the 2D embedding; the 1D path splices afterwards"
@@ -219,8 +219,8 @@ class TtParallelEmbedding(LightweightModule):
         #     below then sums it into place, exactly, with no new collective. ttnn.embedding returns
         #     zeros where lookup is 0 (row 0 of the table), so one where() both supplies the image row
         #     here and suppresses the token embedding on the rows that did not get it.
-        # Called here, not earlier: steps 1 and 2 are already enqueued, so under
-        # PREFILL_PREFETCH_MEDIA the host's fetch overlaps the all-gather and the lookup.
+        # Called here, not earlier: steps 1 and 2 are already enqueued, so the host's fetch and
+        # upload overlap the all-gather and the lookup.
         media = media_fn() if media_fn is not None else None
         if media is not None:
             with zone("media_gather", COARSE):

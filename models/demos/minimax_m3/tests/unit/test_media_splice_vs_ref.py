@@ -83,7 +83,7 @@ def runtime_with(store, *, sp, chunk_size, mesh_shape, mesh_device=None, emb_tp_
         media_embedding_reader=store,
         mesh_device=mesh_device,
         media_buffers=None,
-        _media_partial_buffers={},
+        _media_partials_cache=None,
     )
 
 

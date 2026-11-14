@@ -29,7 +29,6 @@ Reference: models/demos/deepseek_v3_d_p/tt/tt_prefill_runtime.py (interface) and
 tests/galaxy_prefill_kv_pcc.py (cache readback + RoPE swizzle convention).
 """
 
-import os
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -105,15 +104,6 @@ class TtPrefillRuntimeConfig:
         return self.mesh_shape[self.tp_axis]
 
 
-def prefetch_media() -> bool:
-    """PREFILL_PREFETCH_MEDIA=1: fetch and upload the image rows from inside the embedding, after the
-    token lookup is enqueued, so the host's fetch overlaps device work instead of delaying it.
-
-    Off by default. The splice is correct either way — this only moves when the host work happens — so
-    it is a flag while the overlap is being measured, not a permanent fork."""
-    return os.environ.get("PREFILL_PREFETCH_MEDIA", "0").strip().lower() in ("1", "true", "yes", "on")
-
-
 def _media_rows_of(reader, hidden: int, media_refs: list):
     """One fetch_batch for the forward's refs, as a rows_of(ref) callable.
 
@@ -147,7 +137,7 @@ class TtPrefillRuntime:
         self.config = config
         self.media_embedding_reader = media_embedding_reader
         self.media_buffers = None
-        self._media_partial_buffers = {}
+        self._media_partials_cache = None
 
         assert (
             config.max_seq_len % config.chunk_size == 0
@@ -408,12 +398,11 @@ class TtPrefillRuntime:
             return None
         table, lookup, is_img = packed
         sp, height, hidden = table.shape
-        buffers = self._media_partial_buffers.get(height)
+        buffers = self._media_partials_cache
         if buffers is None:
-            buffers = self._media_partial_buffers[height] = MediaPartials(
+            buffers = self._media_partials_cache = MediaPartials(
                 self.mesh_device,
                 sp=sp,
-                height=height,
                 hidden=hidden,
                 s_total=lookup.shape[1],
                 mesh_shape=cfg.mesh_shape,
@@ -599,16 +588,9 @@ class TtPrefillRuntime:
             # The 2D embedding carries the image rows on its reduce-scatter; the 1D path has no
             # collective to ride and splices after the embedding instead.
             on_partials = bool(media_refs) and self.model.embedding.shard_vocab_on_sp
-            media_fn = None
-            if on_partials:
-                # The embedding calls this after enqueuing the lookup. Under PREFILL_PREFETCH_MEDIA the
-                # fetch happens there and overlaps that work; otherwise it is done here, as before, and
-                # the thunk just hands the result over.
-                if prefetch_media():
-                    media_fn = lambda: self._media_partials(chunks, media_refs)
-                else:
-                    partials = self._media_partials(chunks, media_refs)
-                    media_fn = lambda: partials
+            # The embedding calls this after enqueuing the lookup, so the host's fetch and upload
+            # overlap that work rather than delaying it.
+            media_fn = (lambda: self._media_partials(chunks, media_refs)) if on_partials else None
             x_embd = self._embed_tokens(input_tensor, media_fn=media_fn)
             ttnn.deallocate(input_tensor)
             if media_refs and not on_partials:
