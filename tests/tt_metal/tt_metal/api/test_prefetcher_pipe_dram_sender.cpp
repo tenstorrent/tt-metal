@@ -32,14 +32,13 @@
 #include <tt-metalium/experimental/dispatch_context.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
-#include "device_fixture.hpp"
 #include "multi_device_fixture.hpp"
 #include "tests/tt_metal/tt_metal/api/dram_sender_fixture.hpp"
 #include "distributed/mesh_device_impl.hpp"
@@ -47,7 +46,7 @@
 #include "impl/allocator/allocator.hpp"
 #include "impl/buffers/drisc_l1_arena.hpp"
 #include "impl/buffers/prefetcher_pipe_dram_sender_internal.hpp"
-#include "impl/context/metal_context.hpp"
+#include "impl/context/metal_env_impl.hpp"
 #include "impl/dataflow_buffer/prefetcher_pipe.hpp"
 #include "impl/dataflow_buffer/prefetcher_pipe_dram_sender_internal.hpp"
 #include "impl/kernels/kernel.hpp"  // DramConfig
@@ -119,8 +118,6 @@ uint32_t pattern_word(uint32_t receiver, uint32_t entry, uint32_t word) {
     return 0xD0FB0000u | (receiver << 12) | (entry << 8) | (word & 0xFFu);
 }
 
-ContextId context_id_of(distributed::MeshDevice& mesh_device) { return mesh_device.impl().get_context_id(); }
-
 // Where the host parks the sender's payload pattern in DRISC L1: above the arena's fixed zone, in
 // the region the arena reports as free for a co-resident DRISC kernel.
 DeviceAddr drisc_pattern_base(distributed::MeshDevice& mesh_device) {
@@ -128,8 +125,7 @@ DeviceAddr drisc_pattern_base(distributed::MeshDevice& mesh_device) {
 }
 
 uint64_t drisc_noc_addr(distributed::MeshDevice& mesh_device, DeviceAddr local_addr) {
-    return MetalContext::instance(context_id_of(mesh_device)).hal().get_l1_noc_offset(HalProgrammableCoreType::DRAM) +
-           local_addr;
+    return mesh_device.impl().metal_env().get_hal().get_l1_noc_offset(HalProgrammableCoreType::DRAM) + local_addr;
 }
 
 tt_cxy_pair drisc_cxy(distributed::MeshDevice& mesh_device, const CoreCoord& sender_logical) {
@@ -142,25 +138,21 @@ void write_drisc_l1(
     const CoreCoord& sender_logical,
     DeviceAddr local_addr,
     const std::vector<uint32_t>& words) {
-    MetalContext::instance(context_id_of(mesh_device))
-        .get_cluster()
-        .write_core(
-            words.data(),
-            words.size() * sizeof(uint32_t),
-            drisc_cxy(mesh_device, sender_logical),
-            drisc_noc_addr(mesh_device, local_addr));
+    mesh_device.impl().metal_env().get_cluster().write_core(
+        words.data(),
+        words.size() * sizeof(uint32_t),
+        drisc_cxy(mesh_device, sender_logical),
+        drisc_noc_addr(mesh_device, local_addr));
 }
 
 std::vector<uint32_t> read_drisc_l1(
     distributed::MeshDevice& mesh_device, const CoreCoord& sender_logical, DeviceAddr local_addr, uint32_t num_words) {
     std::vector<uint32_t> out(num_words, 0);
-    MetalContext::instance(context_id_of(mesh_device))
-        .get_cluster()
-        .read_core(
-            out.data(),
-            num_words * sizeof(uint32_t),
-            drisc_cxy(mesh_device, sender_logical),
-            drisc_noc_addr(mesh_device, local_addr));
+    mesh_device.impl().metal_env().get_cluster().read_core(
+        out.data(),
+        num_words * sizeof(uint32_t),
+        drisc_cxy(mesh_device, sender_logical),
+        drisc_noc_addr(mesh_device, local_addr));
     return out;
 }
 
@@ -196,7 +188,7 @@ void run_push_and_pop(
     distributed::MeshDevice& mesh_device, PipeSet& set, uint32_t num_entries, uint32_t entry_size = kEntrySize) {
     std::vector<experimental::PrefetcherPipeParamName> pipe_names;
     std::vector<experimental::PrefetcherPipeParameter> pipe_parameters;
-    experimental::ProgramRunArgs run_args;
+    ProgramRunArgs run_args;
     for (size_t s = 0; s < set.pipes.size(); ++s) {
         experimental::PrefetcherPipeParamName name{fmt::format("pipe_{}", s)};
         pipe_names.push_back(name);
@@ -208,19 +200,18 @@ void run_push_and_pop(
         run_args.advanced_options.prefetcher_pipe_args.emplace(
             name, experimental::PrefetcherPipeArgument{set.pipes[s]});
     }
-    experimental::KernelSpec receiver{
-        .unique_id = experimental::KernelSpecName{"receiver"}, .source = std::filesystem::path{kReceiverKernel}};
+    KernelSpec receiver{.unique_id = KernelSpecName{"receiver"}, .source = std::filesystem::path{kReceiverKernel}};
     receiver.advanced_options.prefetcher_pipe_bindings = {{.pipe_parameter_names = pipe_names, .accessor_name = "in"}};
     receiver.compile_time_args = {{"num_entries", num_entries}};
-    receiver.hw_config = experimental::DataMovementHardwareConfig{
-        .config_1xx = experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+    receiver.hw_config = DataMovementHardwareConfig{
+        .config_1xx = DataMovementHardwareConfig::DataMovement1XXConfig{
             .processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0}};
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "dram_sender_pipe_receiver",
         .kernels = {std::move(receiver)},
         .work_units =
             {{.name = "receiver_wu",
-              .kernels = {experimental::KernelSpecName{"receiver"}},
+              .kernels = {KernelSpecName{"receiver"}},
               .target_nodes = experimental::GetPrefetcherPipeReceiverCores(set.pipe_refs())}},
         .advanced_options = {.prefetcher_pipe_parameters = std::move(pipe_parameters)}};
     Program receiver_program = experimental::MakeProgramFromSpec(mesh_device, spec);
@@ -294,8 +285,7 @@ void expect_ring_slot(
 // credit blocks. The page header words name both block bases, and within a block a receiver's slot
 // is one L1_ALIGNMENT -- a DRAM-sender pipe reserves one credit lane per receiver.
 void expect_credits_drained(distributed::MeshDevice& mesh_device, PipeSet& set, uint32_t expected_units_per_receiver) {
-    const uint32_t l1_alignment =
-        MetalContext::instance(context_id_of(mesh_device)).hal().get_alignment(HalMemType::L1);
+    const uint32_t l1_alignment = mesh_device.impl().metal_env().get_hal().get_alignment(HalMemType::L1);
     const uint32_t stride_words = l1_alignment / sizeof(uint32_t);
 
     for (size_t s = 0; s < set.pipes.size(); ++s) {
@@ -323,8 +313,7 @@ void expect_credits_drained(distributed::MeshDevice& mesh_device, PipeSet& set, 
 // Credit is counted in L1_ALIGNMENT-byte units, so a run's expected credit is the bytes it moved --
 // payload plus any pad the sender published to snap onto a new entry grid.
 uint32_t credit_units(distributed::MeshDevice& mesh_device, uint32_t bytes) {
-    const uint32_t l1_alignment =
-        MetalContext::instance(context_id_of(mesh_device)).hal().get_alignment(HalMemType::L1);
+    const uint32_t l1_alignment = mesh_device.impl().metal_env().get_hal().get_alignment(HalMemType::L1);
     return bytes / l1_alignment;
 }
 
@@ -500,8 +489,7 @@ TEST_F(PrefetcherPipeDramSenderFixture, PipesOnDistinctSendersShareOneDriscOffse
     EXPECT_EQ(experimental::sender_state_drisc_l1_base(other_bank.pipes[0]), shared_base);
 
     auto& arena = mesh_device_->impl().drisc_l1_arena();
-    const uint32_t l1_alignment =
-        MetalContext::instance(context_id_of(*mesh_device_)).hal().get_alignment(HalMemType::L1);
+    const uint32_t l1_alignment = mesh_device_->impl().metal_env().get_hal().get_alignment(HalMemType::L1);
     // A config page is placed at the credit-block alignment so its page-relative block offsets are
     // line-aligned too; probe with the same alignment the live pages were allocated with.
     const uint32_t page_alignment = std::max(l1_alignment, PREFETCHER_PIPE_CREDIT_BLOCK_ALIGN);
@@ -635,20 +623,17 @@ TEST_F(PrefetcherPipeDramSenderFixture, BindingAcceptsAnyEntrySizeTheRingHolds) 
 
     const auto make_consumer = [&](uint32_t entry_size) {
         const experimental::PrefetcherPipeParamName name{"pipe"};
-        experimental::KernelSpec receiver{
-            .unique_id = experimental::KernelSpecName{"receiver"}, .source = std::filesystem::path{kReceiverKernel}};
+        KernelSpec receiver{.unique_id = KernelSpecName{"receiver"}, .source = std::filesystem::path{kReceiverKernel}};
         receiver.advanced_options.prefetcher_pipe_bindings = {{{name}, "in"}};
         receiver.compile_time_args = {{"num_entries", 1u}};
-        receiver.hw_config = experimental::DataMovementHardwareConfig{
-            .config_1xx = experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+        receiver.hw_config = DataMovementHardwareConfig{
+            .config_1xx = DataMovementHardwareConfig::DataMovement1XXConfig{
                 .processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0}};
-        experimental::ProgramSpec spec{
+        ProgramSpec spec{
             .name = "entry_size_consumer",
             .kernels = {std::move(receiver)},
             .work_units =
-                {{.name = "receiver_wu",
-                  .kernels = {experimental::KernelSpecName{"receiver"}},
-                  .target_nodes = receiver_cores}},
+                {{.name = "receiver_wu", .kernels = {KernelSpecName{"receiver"}}, .target_nodes = receiver_cores}},
             .advanced_options = {
                 .prefetcher_pipe_parameters = {
                     {.unique_id = name,
@@ -656,7 +641,7 @@ TEST_F(PrefetcherPipeDramSenderFixture, BindingAcceptsAnyEntrySizeTheRingHolds) 
                      .ring_size = ring_size,
                      .entry_size = entry_size}}}};
         Program program = experimental::MakeProgramFromSpec(*mesh_device_, spec);
-        experimental::ProgramRunArgs args;
+        ProgramRunArgs args;
         args.advanced_options.prefetcher_pipe_args.emplace(name, experimental::PrefetcherPipeArgument{set.pipes[0]});
         experimental::SetProgramRunArgs(program, args);
     };
@@ -680,8 +665,7 @@ TEST_F(PrefetcherPipeDramSenderFixture, EntrySizeNotDividingRingWrapsOnTheGap) {
     const CoreCoord sender_logical = set.mapping.at(0).first;
     const uint32_t ring_size = set.pipes[0].ring_size();
 
-    const uint32_t l1_alignment =
-        MetalContext::instance(context_id_of(*mesh_device_)).hal().get_alignment(HalMemType::L1);
+    const uint32_t l1_alignment = mesh_device_->impl().metal_env().get_hal().get_alignment(HalMemType::L1);
     // Two thirds of the creation entry size, rounded down to L1 alignment: divides neither it nor
     // the ring, so every lap ends on a gap.
     const uint32_t entry_size = ((kEntrySize * 2) / 3) / l1_alignment * l1_alignment;
@@ -722,8 +706,7 @@ TEST_F(PrefetcherPipeDramSenderFixture, EntryLargerThanNocBurstIsSplitIntoPacket
     constexpr uint32_t kNumReceivers = 1;
     constexpr uint32_t kNumEntries = 2;
     constexpr uint32_t kLargeEntrySize = 20 * 1024;
-    const uint32_t max_packet_bytes =
-        MetalContext::instance(context_id_of(*mesh_device_)).hal().get_noc_max_burst_size_bytes();
+    const uint32_t max_packet_bytes = mesh_device_->impl().metal_env().get_hal().get_noc_max_burst_size_bytes();
     ASSERT_GT(kLargeEntrySize, max_packet_bytes) << "this test needs an entry that spans several NoC packets";
     ASSERT_LE(
         kNumReceivers * kNumEntries * kLargeEntrySize,
@@ -841,7 +824,8 @@ TEST_F(PrefetcherPipeDramSenderFixture, DriscKernelReadsDramAndWorkerL1OverNoc) 
 
     Buffer* dram_device_buffer = dram_buffer->get_device_buffer(distributed::MeshCoordinate(0, 0));
     const auto dram_source = [&](uint32_t bank) {
-        const CoreCoord xy = MetalContext::instance(context_id_of(*mesh_device_))
+        const CoreCoord xy = mesh_device_->impl()
+                                 .metal_env()
                                  .get_cluster()
                                  .get_soc_desc(device->id())
                                  .get_preferred_worker_core_for_dram_view(
@@ -941,10 +925,9 @@ TEST_F(PrefetcherPipeDramSenderMultiDeviceFixture, ConfigPagesUsePerDeviceDramTo
     PipeSet set = make_pipe_set(*mesh_device_, bank_to_receivers, /*dual_senders_per_bank=*/true);
     ASSERT_EQ(set.pipes.size(), num_banks * kSendersPerBank);
 
-    const auto context_id = context_id_of(*mesh_device_);
-    const uint64_t dram_l1_noc_offset =
-        MetalContext::instance(context_id).hal().get_l1_noc_offset(HalProgrammableCoreType::DRAM);
-    auto& cluster = MetalContext::instance(context_id).get_cluster();
+    auto& env = mesh_device_->impl().metal_env();
+    const uint64_t dram_l1_noc_offset = env.get_hal().get_l1_noc_offset(HalProgrammableCoreType::DRAM);
+    auto& cluster = env.get_cluster();
     const uint32_t page_words = set.pipes.front().config_page_size() / sizeof(uint32_t);
 
     // Tracks whether this device pair actually places any sender differently. Harvest masks are a

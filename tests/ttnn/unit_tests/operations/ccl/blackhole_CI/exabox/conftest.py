@@ -9,7 +9,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from tests.scripts.common import get_updated_device_params
+from tt_py_test_utils_common.device_params import get_updated_device_params
 
 
 def pytest_configure(config):

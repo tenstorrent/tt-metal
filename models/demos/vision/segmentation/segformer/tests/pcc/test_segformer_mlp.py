@@ -12,7 +12,7 @@ from models.demos.vision.segmentation.segformer.common import load_config, load_
 from models.demos.vision.segmentation.segformer.reference.segformer_mlp import SegformerMLP
 from models.demos.vision.segmentation.segformer.tt.common import preprocess_linear_bias, preprocess_linear_weight
 from models.demos.vision.segmentation.segformer.tt.ttnn_segformer_mlp import TtSegformerMLP
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 
 def create_custom_mesh_preprocessor(mesh_mapper=None):

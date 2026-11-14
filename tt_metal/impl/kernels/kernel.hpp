@@ -18,7 +18,7 @@
 #include "api/tt-metalium/device.hpp"
 #include "impl/host_api/temp_quasar_api.hpp"
 #include "api/tt-metalium/experimental/offline_kernel_compile.hpp"
-#include <tt-metalium/experimental/metal2_host_api/scratchpad_spec.hpp>
+#include <tt-metalium/workload/specification/scratchpad_spec.hpp>
 #include "impl/context/metal_context.hpp"
 #include "impl/metal2_host_api/sram_arena_support.hpp"
 #include "core_coord.hpp"
@@ -127,7 +127,7 @@ struct DataflowBufferBindingHandle {
     // Watcher: the nodes the DFB's address is reserved on, as rectangles in NoC coordinates. Empty without Watcher NoC
     // sanitizing, and for a DFB borrowed from an interleaved tensor: that tensor holds the address in every L1 bank, so
     // no node set narrower than the whole grid limits a multicast into it.
-    std::vector<experimental::NodeRange> watcher_node_ranges;
+    std::vector<NodeRange> watcher_node_ranges;
 };
 using DataflowBufferBindingHandleMap = std::unordered_map<std::string, DataflowBufferBindingHandle>;
 
@@ -137,7 +137,7 @@ struct SemaphoreBindingHandle {
     SemScope scope = SemScope::LOCAL_NONATOMIC;
     uint32_t total_binder_harts = 0;
     // Watcher: the nodes the semaphore exists on, as for DataflowBufferBindingHandle::watcher_node_ranges.
-    std::vector<experimental::NodeRange> watcher_node_ranges;
+    std::vector<NodeRange> watcher_node_ranges;
 };
 // Metal 2.0: semaphore accessor names -> {semaphore id, scope}
 using SemaphoreBindingHandleMap = std::unordered_map<std::string, SemaphoreBindingHandle>;
@@ -199,8 +199,8 @@ struct ScratchpadBindingHandle {
     // as the build artifact of 2 kernels with/without shared allocation is the same.
     //
     // The ScratchpadSpecName serves as an identifier & does not carry specific meaning.
-    using AllocationIdentifier = experimental::ScratchpadSpecName;
-    std::optional<experimental::ScratchpadSpecName> shared_allocation_identifier;
+    using AllocationIdentifier = ScratchpadSpecName;
+    std::optional<ScratchpadSpecName> shared_allocation_identifier;
     std::optional<SRAMArenaSource> allocation_override;
 };
 
@@ -347,10 +347,9 @@ public:
             void(const std::string& accessor_name, uint16_t semaphore_id, SemScope scope, uint32_t total_binder_harts)>)
         const override;
     void process_watcher_node_ranges(
-        const std::function<void(
-            const std::string& accessor_name, const std::vector<experimental::NodeRange>& node_ranges)>& dfb_callback,
-        const std::function<
-            void(const std::string& accessor_name, const std::vector<experimental::NodeRange>& node_ranges)>&
+        const std::function<void(const std::string& accessor_name, const std::vector<NodeRange>& node_ranges)>&
+            dfb_callback,
+        const std::function<void(const std::string& accessor_name, const std::vector<NodeRange>& node_ranges)>&
             semaphore_callback) const override;
     void process_tensor_binding_handles(const std::function<void(
                                             const std::string& accessor_name,

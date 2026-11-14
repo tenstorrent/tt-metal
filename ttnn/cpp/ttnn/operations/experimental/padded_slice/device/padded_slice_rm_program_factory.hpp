@@ -10,7 +10,7 @@
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/metal_v2_artifacts.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 namespace ttnn::experimental::prim {
 
@@ -22,7 +22,7 @@ struct PaddedSliceRMProgramFactory {
     // Cache-hit hook: refreshes the input and output tensor bindings, which is what the program needs
     // between dispatches — every other argument follows from the slice bounds and the output sharding,
     // both part of the program-cache key.
-    static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
+    static tt::tt_metal::ProgramRunArgs override_runtime_arguments(
         const PaddedSliceParams& operation_attributes,
         const PaddedSliceInputs& tensor_args,
         Tensor& output,
