@@ -466,3 +466,106 @@ class SkinnyRouter:
         ttnn.deallocate(rank)
         ttnn.deallocate(score)
         return w, idx
+
+
+# --------------------------------------------------------------------------------------------------------------------------------------------------
+# o_proj (and any [K, N] linear with K sharded over the mesh columns): out partial = x @ W_c, N split over the 8 bank cores
+# --------------------------------------------------------------------------------------------------------------------------------------------------
+class SkinnyLinear:
+    """y [1,1,T,N] (bf16 TILE, partial per mesh column) = x [1,1,T,Kc] @ W_c, W [Ktot, N] host ([in, out]) split on K over the mesh columns, N = 8 banks x NCOL tiles.
+    Per core 'NCOL x KT' bfp8 tiles streamed column by column; x (KT tiles of rows 0..T-1) exchanged between the cores (tiny tiles), custom_mm LoFi fp32 accumulation."""
+
+    def __init__(self, md, w, sbk=None, ring=None, xsplit=1, remap=None, tiny=None):
+        self.md = md
+        rows, cols = tuple(md.shape)
+        Kt, N = int(w.shape[-2]), int(w.shape[-1])
+        assert Kt % (cols * 32) == 0 and N % (NB * 32) == 0
+        self.KT, self.NT = Kt // cols // 32, N // 32
+        self.NCOL = self.NT // NB
+        self.N = N
+        w = w.float().reshape(cols, self.KT * 32, N)
+        tl = lambda c, k, n: w[c, 32 * k : 32 * k + 32, 32 * n : 32 * n + 32]
+        tiles = torch.zeros(cols, NB, self.NCOL * self.KT, 32, 32)
+        for c in range(cols):
+            for b in range(NB):
+                tiles[c, b] = torch.stack([tl(c, k, self.NCOL * b + j) for j in range(self.NCOL) for k in range(self.KT)])
+        self.w = bank_seq_weight(md, tiles)
+        self.tiny = int(os.environ.get("HY4_SKINNY_TINY", "1") if tiny is None else tiny)
+        self.cores = bank_cores(md, 0)
+        for ent in filter(None, (remap if remap is not None else os.environ.get("HY4_SKINNY_REMAP", DEFAULT_REMAP)).split("/")):
+            b, xy = ent.split("@")
+            x, y = xy.split(".")
+            self.cores[int(b)] = ttnn.CoreCoord(int(x), int(y))
+        self.vcs = SK._vcs(self.cores)
+        self.phys = [md.worker_core_from_logical_core(ttnn.CoreCoord(c.x, c.y)) for c in self.cores]
+        self.fp32 = int(os.environ.get("HY4_SKINNY_FP32", "1"))
+        self.xsplit = xsplit
+        self.sbk = int(sbk or os.environ.get("HY4_SKINNY_LN_SBK", str(self.KT)))  # reader block tiles (multiple of KT: whole columns)
+        self.ring = int(ring or os.environ.get("HY4_SKINNY_LN_RING", str(6 * self.sbk)))
+        assert self.sbk % self.KT == 0 and (self.NCOL * self.KT) % self.sbk == 0 and self.ring % self.sbk == 0 and self.ring // self.sbk <= 15
+
+    def __call__(self, x, T, out=None):
+        assert T <= 16
+        MT = 1 if T <= 8 else 2
+        R = 8 if (MT == 2 or not self.tiny) else (2 if T <= 2 else 4 if T <= 4 else 8)
+        md, KT, PNC = self.md, self.KT, self.NCOL
+        core_set = _core_set(self.cores)
+        if out is None:
+            out = ttnn.allocate_tensor_on_device(
+                ttnn.Shape([1, 1, T, self.N]), ttnn.bfloat16, ttnn.TILE_LAYOUT, md, ttnn.DRAM_MEMORY_CONFIG
+            )
+        CB_X, CB_W, CB_O = range(3)
+        cbs = [SK._tiny_cb(core_set, CB_X, KT * MT, rows=R), SK._ring_cb(core_set, CB_W, self.ring), SK._tiny_cb(core_set, CB_O, PNC * MT)]
+        readers = []
+        for i, cc in enumerate(self.cores):
+            ph = [dict(addr=self.w.buffer_address(), sbk=self.sbk, pn=PNC * KT // self.sbk, nsub=1, nbuf=self.ring // self.sbk)]
+            readers.append(
+                ttnn.KernelDescriptor(
+                    kernel_source=f"{KDIR}/hsk_reader.cpp",
+                    source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+                    core_ranges=_core_set([cc]),
+                    compile_time_args=SK.reader_ct(CB_W, i, self.vcs[i], ph),
+                    runtime_args=ttnn.RuntimeArgs(),
+                    common_runtime_args=[],
+                    config=ttnn.ReaderConfigDescriptor(),
+                )
+            )
+        SBW = (4 if self.fp32 else 5) // MT
+        while PNC % SBW:
+            SBW -= 1
+        rt_w = ttnn.RuntimeArgs()
+        for i, cc in enumerate(self.cores):
+            rt_w[cc.x][cc.y] = [i, i * PNC]
+        common_w = [x.buffer_address(), out.buffer_address()]
+        for q in self.phys:
+            common_w += [q.x, q.y]
+        writer = ttnn.KernelDescriptor(
+            kernel_source=f"{KDIR}/hsk_ln_writer.cpp",
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=core_set,
+            compile_time_args=[CB_X, CB_O, NB, KT, PNC, SBW, self.xsplit, MT, R] + _acc(x) + _acc(out),
+            runtime_args=rt_w,
+            common_runtime_args=common_w,
+            config=ttnn.WriterConfigDescriptor(),
+        )
+        compute = ttnn.KernelDescriptor(
+            kernel_source=f"{KDIR}/hsk_ln_compute.cpp",
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=core_set,
+            compile_time_args=[CB_X, CB_W, CB_O, KT, self.fp32, KT, PNC, SBW, MT],
+            runtime_args=ttnn.RuntimeArgs(),
+            common_runtime_args=[],
+            config=ttnn.ComputeConfigDescriptor(
+                math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=bool(self.fp32), math_approx_mode=True
+            ),
+        )
+        prog = ttnn.ProgramDescriptor(
+            kernels=readers + [writer, compute],
+            semaphores=[ttnn.SemaphoreDescriptor(id=i, core_ranges=core_set, initial_value=0) for i in range(3)],
+            cbs=cbs,
+        )
+        prog.custom_program_hash = _hash(
+            0x7B4, MT, R, self.xsplit, self.fp32, self.ring, self.sbk, self.KT, self.NCOL, self.w.buffer_address(), tuple(_acc(x)), tuple(_acc(out)),
+        )
+        ttnn.generic_op([x, self.w, out], prog)
+        return out
