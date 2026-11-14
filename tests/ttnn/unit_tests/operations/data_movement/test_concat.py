@@ -1390,6 +1390,54 @@ def test_concat_dtype_uint8_sharded_s2s_tiled(device):
     assert torch.equal(got, torch.cat(torch_inputs, dim=3))
 
 
+# Concat of block-float tensors whose concat dim is not tile-aligned routes through the
+# untilize/re-tilize massage path. Block-float has no row-major form, so the inputs are untilized
+# as bfloat16 and re-tilized to the original dtype: the result must keep the input dtype rather
+# than silently coming back bfloat16.
+@pytest.mark.parametrize(
+    "shapes, dim",
+    [
+        ([[1, 1, 32, 40], [1, 1, 32, 40]], -1),  # unaligned width
+        ([[1, 1, 40, 64], [1, 1, 24, 64]], -2),  # unaligned height
+        ([[1, 1, 32, 40], [1, 1, 32, 24], [1, 1, 32, 40]], -1),  # three inputs
+        ([[1, 1, 32, 40], [1, 1, 32, 24]], 3),  # positive dim index
+        ([[1, 1, 32, 32], [1, 1, 32, 32]], -1),  # aligned control
+    ],
+    ids=["w_unaligned", "h_unaligned", "three_inputs", "positive_dim", "aligned_control"],
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])
+def test_tiled_concat_block_float_padded_dim(device, shapes, dim, dtype):
+    torch_input_tensors = [torch.rand(shape).bfloat16().float() for shape in shapes]
+    torch_output_tensor = torch.concat(torch_input_tensors, dim=dim)
+
+    ttnn_input_tensors = [
+        ttnn.from_torch(
+            torch_input_tensor,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        for torch_input_tensor in torch_input_tensors
+    ]
+    # Golden is torch.cat of the host-quantised inputs: to_torch of each bf8 input absorbs the
+    # block-float rounding, so only the concat itself is under test.
+    torch_output_tensor = torch.concat([ttnn.to_torch(t) for t in ttnn_input_tensors], dim=dim).float()
+
+    output = ttnn.concat(ttnn_input_tensors, dim=dim)
+
+    assert output.dtype == dtype
+    assert list(output.shape) == list(torch_output_tensor.shape)
+    # TILE layout pads the last two dims up to a tile multiple.
+    out_shape = torch_output_tensor.shape
+    expected_padded = [out_shape[0], out_shape[1], (out_shape[2] + 31) // 32 * 32, (out_shape[3] + 31) // 32 * 32]
+    assert list(output.padded_shape) == expected_padded
+
+    output_torch = ttnn.to_torch(output).float()
+    pcc_threshold = 0.99 if dtype == ttnn.bfloat8_b else 0.95
+    assert_with_pcc(torch_output_tensor, output_torch, pcc_threshold)
+
+
 @pytest.mark.parametrize("buffer_type", docstring_interleaved_buffer_type_params(ttnn.concat))
 @pytest.mark.parametrize("dtype, layout", docstring_dtype_layout_params(ttnn.concat))
 def test_concat_docstring_supported_inputs(dtype, layout, buffer_type, device):

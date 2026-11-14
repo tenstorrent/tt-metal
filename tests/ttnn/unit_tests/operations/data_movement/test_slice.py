@@ -2563,6 +2563,36 @@ def test_slice_rm_wide_row_after_l1_fills(device):
         ttnn.deallocate(resident)
 
 
+# Block-float tensors with a non-tile-aligned begin route through slice's row-major fallback
+# (rm_only). Block-float has no row-major form, so the input goes in as bfloat16 and the result
+# must come back with the caller's dtype instead of silently becoming bfloat16.
+@pytest.mark.parametrize(
+    "begins, ends",
+    [
+        ((0, 0, 0, 5), (1, 1, 64, 10)),  # unaligned width begin
+        ((0, 0, 3, 0), (1, 1, 40, 64)),  # unaligned height begin
+        ((0, 0, 0, 0), (1, 1, 64, 64)),  # aligned control: stays on the TILE path
+    ],
+    ids=["w_unaligned", "h_unaligned", "aligned_control"],
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])
+def test_slice_block_float_row_major_fallback(device, begins, ends, dtype):
+    torch.manual_seed(0)
+    torch_input = torch.rand((1, 1, 64, 64), dtype=torch.bfloat16)
+    golden = ttnn.to_torch(ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)).float()
+
+    tt_input = ttnn.from_torch(
+        torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    output = ttnn.slice(tt_input, list(begins), list(ends), [1, 1, 1, 1])
+
+    torch_expected = golden[begins[0] : ends[0], begins[1] : ends[1], begins[2] : ends[2], begins[3] : ends[3]]
+    assert output.dtype == dtype
+    assert list(output.shape) == list(torch_expected.shape)
+    pcc_threshold = 0.99 if dtype == ttnn.bfloat8_b else 0.95
+    assert_with_pcc(torch_expected, ttnn.to_torch(output).float(), pcc_threshold)
+
+
 def _docstring_unit_step_dtypes():
     """Dtypes the ttnn.slice docstring says need a ``slice_step`` of 1."""
     names = re.findall(r"``(\w+)``\s+tensors\s+need\s+a\s+``slice_step``\s+of\s+1", ttnn.slice.__doc__)

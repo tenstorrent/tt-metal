@@ -6,7 +6,7 @@ import pytest
 import torch
 import ttnn
 from tt_py_test_utils_common.utility_functions import torch_random, run_for_wormhole_b0, skip_for_blackhole
-from tests.ttnn.utils_for_testing import assert_equal
+from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc
 
 
 def test_embedding_rm_oversized_weight_double_buffer(device):
@@ -1139,3 +1139,55 @@ def test_embedding_fused_rank2_preallocated_output_cache_hit(device):
         expected = torch.nn.functional.embedding(indices, torch_weights)
         assert_equal(expected, ttnn.to_torch(output).reshape(expected.shape))
     assert device.num_program_cache_entries() == 1
+
+
+# A block-float TILE weight is untilized as bfloat16 (block-float has no row-major form), so the
+# output must come back in the caller's dtype rather than silently becoming bfloat16. The aligned
+# control keeps the weight's hidden dim a tile multiple.
+@pytest.mark.parametrize(
+    "hidden_embedding_dim",
+    [1024, 1000],
+    ids=["aligned", "unaligned"],
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])
+def test_embedding_block_float_weight(device, hidden_embedding_dim, dtype):
+    torch.manual_seed(0)
+    vocabulary_size = 16
+    torch_indices = torch.randint(0, vocabulary_size, (1, 5))
+    torch_weights = torch.rand((vocabulary_size, hidden_embedding_dim), dtype=torch.bfloat16)
+
+    weights = ttnn.from_torch(
+        torch_weights, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    indices = ttnn.from_torch(torch_indices, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    output = ttnn.embedding(indices, weights)
+    assert output.dtype == dtype
+
+    golden_weights = ttnn.to_torch(weights).float()
+    torch_expected = golden_weights[torch_indices]
+    assert list(output.shape) == list(torch_expected.shape)
+    pcc_threshold = 0.99 if dtype == ttnn.bfloat8_b else 0.95
+    assert_with_pcc(torch_expected, ttnn.to_torch(output).float(), pcc_threshold)
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])
+def test_embedding_block_float_weight_tile_layout(device, dtype):
+    torch.manual_seed(0)
+    vocabulary_size = 16
+    hidden_embedding_dim = 1000
+    torch_indices = torch.randint(0, vocabulary_size, (1, 5))
+    torch_weights = torch.rand((vocabulary_size, hidden_embedding_dim), dtype=torch.bfloat16)
+
+    weights = ttnn.from_torch(
+        torch_weights, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    indices = ttnn.from_torch(torch_indices, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    output = ttnn.embedding(indices, weights, layout=ttnn.TILE_LAYOUT)
+    assert output.dtype == dtype
+
+    torch_expected = ttnn.to_torch(weights).float()[torch_indices]
+    assert list(output.shape) == list(torch_expected.shape)
+    pcc_threshold = 0.99 if dtype == ttnn.bfloat8_b else 0.95
+    assert_with_pcc(torch_expected, ttnn.to_torch(output).float(), pcc_threshold)
