@@ -31,6 +31,8 @@ ttnn::device_operation::ProgramArtifacts PlusOneProgramFactory::create_program_a
     CoreRangeSet all_cores = CoreRangeSet(std::vector{CoreRange({0, 0}, {0, 0})});
     if (operation_attributes.sub_core_grids.has_value()) {
         all_cores = operation_attributes.sub_core_grids.value();
+    } else if (input.is_sharded() && input.shard_spec().has_value()) {
+        all_cores = input.shard_spec().value().grid;
     }
     // Interleaved input is not split across cores, so each extra core would add one more increment
     // to every value. Run it on one core.
@@ -41,7 +43,11 @@ ttnn::device_operation::ProgramArtifacts PlusOneProgramFactory::create_program_a
     const auto& input_shape = input.padded_shape();
     uint32_t W = input_shape[-1];
     uint32_t H = 1;
-    if (!input.is_sharded() && input_shape.size() > 1) {
+    if (input.is_sharded()) {
+        const auto& shard_shape = input.shard_spec().value().shape;
+        H = shard_shape[0];
+        W = shard_shape[1];
+    } else if (input_shape.size() > 1) {
         for (uint32_t i = 0; i < input_shape.size() - 1; ++i) {
             H *= input_shape[i];
         }
@@ -102,7 +108,7 @@ ttnn::device_operation::ProgramArtifacts PlusOneProgramFactory::create_program_a
         DataflowBufferSpec in0_dfb{
             .unique_id = IN0,
             .entry_size = aligned_input_page_size,
-            .num_entries = 1,
+            .num_entries = H,
             .data_format_metadata = input_cb_data_format,
         };
         in0_dfb.borrowed_from = INPUT;
