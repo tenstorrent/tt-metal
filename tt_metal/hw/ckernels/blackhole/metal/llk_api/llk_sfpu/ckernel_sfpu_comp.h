@@ -328,6 +328,34 @@ sfpi_inline void _calculate_comp_unary_int_(int scalar) {
     }
 }
 
+// Unsigned order maps onto signed order once the sign bit of both operands is flipped:
+// a <u b  <=>  (a ^ 0x80000000) <s (b ^ 0x80000000). eq / ne only test bit equality and need no flip.
+template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
+sfpi_inline void calculate_comp_unary_uint32(const std::uint32_t scalar) {
+    static_assert(
+        COMP_MODE == SfpuType::unary_eq || COMP_MODE == SfpuType::unary_ne || COMP_MODE == SfpuType::unary_gt ||
+            COMP_MODE == SfpuType::unary_ge || COMP_MODE == SfpuType::unary_lt || COMP_MODE == SfpuType::unary_le,
+        "calculate_comp_unary_uint32 supports only unary_eq, unary_ne, unary_gt, unary_ge, unary_lt and unary_le");
+    constexpr bool is_equality = COMP_MODE == SfpuType::unary_eq || COMP_MODE == SfpuType::unary_ne;
+    constexpr std::uint32_t sign_bit = 0x80000000u;
+    const int biased_scalar = static_cast<int>(is_equality ? scalar : scalar ^ sign_bit);
+    const sfpi::vInt sign_mask = static_cast<int>(sign_bit);
+
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++) {
+        sfpi::vInt v = sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>();
+        if constexpr (!is_equality) {
+            v = v ^ sign_mask;
+        }
+        sfpi::vInt val = 0;
+
+        apply_unary_int_comp<COMP_MODE>(v, biased_scalar, val);
+
+        sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>() = val;
+        sfpi::dst_reg++;
+    }
+}
+
 template <SfpuType COMP_MODE>
 sfpi_inline void apply_unary_float_comp(sfpi::vFloat v, sfpi::vFloat scalar, sfpi::vFloat& out_val);
 
