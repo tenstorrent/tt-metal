@@ -62,6 +62,15 @@ void kernel_main() {
     uint32_t index = index_idx;
     uint32_t input_elem_size_bytes = input_block_size_bytes / rows_per_block;
 
+#if !defined PADDED && !defined BINARY && !defined OUTPUT_SHARDED
+    // Consecutive equal tokens (token_type_ids of a single-segment batch are all 0, repeated padding) would all
+    // fetch the same weight page from one DRAM bank; copy the row already staged for the previous token instead.
+    // The reader is the only writer of the staging buffer, so the previous slot is intact until the next reserve.
+    CoreLocalMem<uint8_t> prev_mem(static_cast<uint8_t*>(nullptr));
+    input_token_t prev_token = 0;
+    bool have_prev = false;
+#endif
+
     bool read_indices = true;
     for (uint32_t i = 0; i < num_rows; ++i) {
         if (read_indices) {
@@ -88,7 +97,18 @@ void kernel_main() {
 #endif
             uint32_t current_chunk_size = (chunk < num_chunks - 1) ? chunk_size : last_chunk_size;
             uint32_t chunk_offset = chunk * chunk_size;
+#if !defined PADDED && !defined BINARY && !defined OUTPUT_SHARDED
+            if (num_chunks == 1 && have_prev && token == prev_token) {
+                noc.async_read(prev_mem, l1_write_mem, current_chunk_size, {.offset_bytes = 0}, {});
+            } else {
+                read_token_async(noc, token, weights, l1_write_mem, current_chunk_size, chunk_offset);
+            }
+            prev_mem = l1_write_mem;
+            prev_token = token;
+            have_prev = true;
+#else
             read_token_async(noc, token, weights, l1_write_mem, current_chunk_size, chunk_offset);
+#endif
             noc.async_read_barrier();
 #ifdef OUTPUT_SHARDED
             out_offset += chunk_size;
