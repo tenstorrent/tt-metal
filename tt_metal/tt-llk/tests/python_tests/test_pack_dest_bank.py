@@ -40,6 +40,7 @@ from helpers.test_variant_parameters import (
     TILIZE,
     generate_input_dim,
 )
+from helpers.tile_constants import get_tile_params
 from helpers.utils import passed_test, result_tensor
 
 
@@ -66,11 +67,14 @@ def get_valid_tilize_datacopy(formats):
     return [Tilize.No, Tilize.Yes]
 
 
-def get_valid_num_faces_pack_dest_bank(tilize):
-    """Tilize needs four faces (software limitation of the datacopy); otherwise two or four."""
+def get_valid_tile_dimensions_pack_dest_bank(tilize):
+    """Tilize needs full 32x32 tiles (software limitation of the datacopy); otherwise 32x32 or 16x32.
+
+    16x32 is a two-face tile with face_r_dim 16.
+    """
     if tilize == Tilize.Yes:
-        return [4]
-    return [2, 4]
+        return [[32, 32]]
+    return [[32, 32], [16, 32]]
 
 
 # Shared with perf_pack_dest_bank.py so the two sweeps stay aligned.
@@ -79,7 +83,7 @@ PACK_DEST_BANK_SWEEP = dict(
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     l1_acc=[L1Accumulation.No, L1Accumulation.Yes],
     tilize=get_valid_tilize_datacopy,
-    num_faces=get_valid_num_faces_pack_dest_bank,
+    tile_dimensions=get_valid_tile_dimensions_pack_dest_bank,
     dest_index=0,
     input_dimensions=[[32, 32], [32, 64], [128, 32], [128, 64], [128, 256]],
 )
@@ -89,7 +93,7 @@ def _run_pack_dest_bank_test(
     formats,
     dest_acc,
     l1_acc,
-    num_faces,
+    tile_dimensions,
     tilize,
     dest_index,
     input_dimensions,
@@ -109,6 +113,11 @@ def _run_pack_dest_bank_test(
         raise ValueError("perf_report must be provided when is_perf=True")
     if run_types is None:
         run_types = [PerfRunType.L1_TO_L1]
+
+    # num_faces follows the tile shape: 32x32 is four faces, 16x32 is two (face_r_dim stays 16).
+    face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(tile_dimensions)
+    assert face_r_dim == 16, "pack_dest_bank runs full-face tiles only"
+    num_faces = num_faces_r_dim * num_faces_c_dim
 
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
@@ -225,10 +234,10 @@ def _run_functional_pack_dest_bank(
 
 @parametrize(**PACK_DEST_BANK_SWEEP)
 def test_pack_dest_bank(
-    formats, dest_acc, l1_acc, num_faces, tilize, dest_index, input_dimensions
+    formats, dest_acc, l1_acc, tile_dimensions, tilize, dest_index, input_dimensions
 ):
     _run_pack_dest_bank_test(
-        formats, dest_acc, l1_acc, num_faces, tilize, dest_index, input_dimensions
+        formats, dest_acc, l1_acc, tile_dimensions, tilize, dest_index, input_dimensions
     )
 
 
@@ -236,12 +245,12 @@ def test_pack_dest_bank(
     formats=input_output_formats([DataFormat.Float16_b]),
     dest_acc=[DestAccumulation.No],
     l1_acc=[L1Accumulation.No, L1Accumulation.Yes],
-    num_faces=4,
+    tile_dimensions=[[32, 32]],
     tilize=[Tilize.No],
     dest_index=0,
 )
 def test_pack_dest_bank_two_blocked_packs_of_4(
-    formats, dest_acc, l1_acc, num_faces, tilize, dest_index
+    formats, dest_acc, l1_acc, tile_dimensions, tilize, dest_index
 ):
     if get_chip_architecture() != ChipArchitecture.WORMHOLE:
         pytest.skip("Wormhole-specific blocked pack regression")
@@ -250,7 +259,7 @@ def test_pack_dest_bank_two_blocked_packs_of_4(
         formats,
         dest_acc,
         l1_acc,
-        num_faces,
+        tile_dimensions,
         tilize,
         dest_index,
         [128, 64],
