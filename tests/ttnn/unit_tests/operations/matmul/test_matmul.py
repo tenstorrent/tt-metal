@@ -5578,6 +5578,23 @@ def test_matmul_1d_mcast_sharded_output_anchors_at_subdevice_start(device, mcast
         device.remove_sub_device_manager(mgr)
 
 
+@pytest.mark.parametrize(
+    "shape_a, shape_b",
+    [((0, 32), (64, 32)), ((32, 64), (32, 0)), ((2, 0, 32), (16, 32))],
+)
+def test_matmul_empty_input_rejects_mismatched_inner_dim(device, shape_a, shape_b, expect_error):
+    a = ttnn.from_torch(torch.zeros(shape_a), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    b = ttnn.from_torch(torch.zeros(shape_b), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(RuntimeError, "inner dimensions must match"):
+        ttnn.matmul(a, b)
+
+
+def test_matmul_empty_input_matching_inner_dim(device):
+    a = ttnn.from_torch(torch.zeros(0, 32), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    b = ttnn.from_torch(torch.randn(32, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    assert list(ttnn.matmul(a, b).shape) == [0, 64]
+
+
 @pytest.mark.parametrize("zero_field", ["per_core_M", "per_core_N"])
 @pytest.mark.parametrize("config_type", ["mcast_2d", "mcast_1d"])
 def test_matmul_sharded_output_rejects_zero_per_core_dims(device, expect_error, zero_field, config_type):
