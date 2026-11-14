@@ -11,6 +11,7 @@
 #include "api/core_local_mem.h"
 #include "matmul_dataflow_common.hpp"
 #include "ttnn/operations/common/shared_with_host/runtime_length.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
@@ -29,6 +30,8 @@ constexpr uint32_t padded_N_tiles = get_compile_time_arg_val(3);
 constexpr uint32_t M_block_tiles = get_compile_time_arg_val(4);
 constexpr uint32_t K_block_tiles = get_compile_time_arg_val(5);
 constexpr uint32_t N_block_tiles = get_compile_time_arg_val(6);
+constexpr uint32_t out_piece_tiles = get_named_compile_time_arg_val("out_piece_w");  // the compute's output pieces
+constexpr bool mcast = get_named_compile_time_arg_val("mcast");  // blocks go along the row in one multicast
 constexpr uint32_t N_blocks_per_core = get_compile_time_arg_val(7);
 constexpr uint32_t in0_tile_size = get_compile_time_arg_val(8);
 constexpr uint32_t out_tile_size = get_compile_time_arg_val(9);
@@ -173,13 +176,26 @@ void kernel_main() {
         mux_backward =
             parse_mux_connection_args<fabric_mux_num_buffers_per_channel, fabric_mux_channel_buffer_size_bytes>(
                 argidx, in0_core_order_index, backward_in0_core_order_index);
+#ifndef FABRIC_2D  // Fabric2D connects before its first fabric write (join_fabric below)
         mux_connection_handle_backward = mux_backward.build_and_connect(fabric_mux_l1_base_semaphore_id);
+#endif
     } else if (in0_core_order_index == forward_in0_core_order_index) {
         mux_forward =
             parse_mux_connection_args<fabric_mux_num_buffers_per_channel, fabric_mux_channel_buffer_size_bytes>(
                 argidx, in0_core_order_index, forward_in0_core_order_index);
+#ifndef FABRIC_2D  // Fabric2D connects before its first fabric write (join_fabric below)
         mux_connection_handle_forward = mux_forward.build_and_connect(fabric_mux_l1_base_semaphore_id);
+#endif
     }
+#ifdef FABRIC_2D
+    // This core's part in the Fabric2D exchange (program factory, append_fabric_2d_roles): whether it sends blocks
+    // (then it waits for the entry of the device it sends to), and whether and to which fabric node it announces this
+    // device's entry.
+    const bool fabric_sends = get_arg_val<uint32_t>(argidx++);
+    const bool fabric_announces = get_arg_val<uint32_t>(argidx++);
+    const uint16_t announce_mesh_id = get_arg_val<uint32_t>(argidx++);
+    const uint8_t announce_chip_id = get_arg_val<uint32_t>(argidx++);
+#endif
 #endif
 
 #ifdef FUSE_BIAS
@@ -262,7 +278,17 @@ void kernel_main() {
     const auto ternary_b_reader = TensorAccessor(ternary_b_args, ternary_b_addr);
 #endif
 
-    in0_valid_sem.set(VALID);
+    // With multicast each in0 block goes along the row from its injector (x = 0) in one multicast write; the fabric
+    // cores receive it like any core and forward it from L1 below. Otherwise the channel is absent.
+    constexpr dataflow_kernel_lib::McastArgs<
+        get_named_compile_time_arg_val("in0_mcast_ct_offset"),
+        get_named_compile_time_arg_val("in0_mcast_rt_offset")>
+        in0_mcast_args;
+    auto in0_tx = in0_mcast_args.optional_sender(noc_obj);
+    auto in0_rx = in0_mcast_args.optional_receiver(noc_obj);
+    if constexpr (!mcast) {
+        in0_valid_sem.set(VALID);
+    }
 
     // all gather
     volatile tt_l1_ptr uint32_t* out_ready_sem_backward_addr_ptr =
@@ -290,6 +316,91 @@ void kernel_main() {
 
     auto pkt_hdrs_forward = allocate_and_init_packet_headers(
         detail::valid_targets(0), unicast_route_info_forward, in0_reader, num_tiles_to_write_per_packet, in3_tile_size);
+#ifdef FABRIC_2D
+    // Fabric2D: a fabric core joins the fabric just before its first fabric write, so the matmul never waits for the
+    // mux to come up. Entry barrier: each device announces its entry to the device that writes into it, whose
+    // writes into this device wait for it; without it a fast peer's next call lands in a gathered buffer this device
+    // is still reading. The announcement lands on the row's other fabric core (beside this one), which on the
+    // destination is the core that writes into this device, so each sending core gets exactly one per call.
+    auto join_fabric = [&]() {
+        mux_connection_handle_backward = mux_backward.build_and_connect(fabric_mux_l1_base_semaphore_id);
+        mux_connection_handle_forward = mux_forward.build_and_connect(fabric_mux_l1_base_semaphore_id);
+        if (barrier_sem == 0 || !fabric_announces) {
+            return;
+        }
+        const bool far_fabric_core =
+            in0_core_order_index > std::min(forward_in0_core_order_index, backward_in0_core_order_index);
+        const uint64_t barrier_partner_noc_addr = safe_get_noc_addr(
+            far_fabric_core ? in0_sender_noc_x : in0_dest_noc_x,
+            far_fabric_core ? in0_sender_noc_y : in0_dest_noc_y,
+            barrier_sem,
+            0);
+        tt::tt_fabric::mesh::experimental::fabric_unicast_noc_unicast_atomic_inc(
+            in0_core_order_index == forward_in0_core_order_index ? mux_connection_handle_forward
+                                                                 : mux_connection_handle_backward,
+            PacketHeaderPool::allocate_header(),
+            announce_chip_id,
+            announce_mesh_id,
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_partner_noc_addr, 1});
+        noc_obj.async_writes_flushed();
+    };
+    // Whether the neighbour has entered (waiting for it if `wait`), consuming its announcement.
+    auto neighbour_entered = [&](bool wait) {
+        if (barrier_sem == 0 || !fabric_sends) {
+            return true;
+        }
+        auto* barrier_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem);
+        invalidate_l1_cache();
+        if (*barrier_ptr == 0) {
+            if (!wait) {
+                return false;
+            }
+            noc_semaphore_wait_min(barrier_ptr, 1);
+        }
+        noc_semaphore_inc(get_noc_addr(barrier_sem), uint32_t{0} - 1);
+        noc_obj.async_atomic_barrier();
+        return true;
+    };
+    // Every fabric core passes the forwarding point at least once per call (2 or more devices, at least one M block
+    // per core), so each joins, announces and closes its mux connection once per call, and each sending core consumes
+    // one announcement.
+    bool joined_fabric = false;
+    bool fabric_open = false;
+    // Until the neighbour has entered, this core keeps receiving this device's own blocks and holds their forwards: a
+    // held block stays in this core's in0 buffer until its slot is reserved again, in0_cb_blocks blocks later, so up to
+    // in0_cb_blocks - 1 can wait. A late neighbour then stalls this row only after that many blocks.
+    struct HeldForward {
+        uint32_t m_tile, k_left_start, k_right_start, m_block_tiles, k_left_tiles, k_right_tiles, l1;
+    };
+    constexpr uint32_t max_held = get_named_compile_time_arg_val("in0_cb_blocks") - 1;
+    HeldForward held[max_held + 1];
+    uint32_t num_held = 0;
+    // Sends a held block on. The forward sender writes into rank - 1; the backward sender into rank + 1 (Ring, the
+    // other half of the block) or, on a Linear line, from rank 0 into the last rank (the whole block).
+    auto forward_held = [&](const HeldForward& b) {
+        const bool to_previous = in0_core_order_index == forward_in0_core_order_index;
+        const bool whole_or_left = to_previous || is_linear;
+        forward_half_block_to_fabric_neighbor(
+            noc_obj,
+            b.m_tile,
+            whole_or_left ? b.k_left_start : b.k_right_start,
+            b.m_block_tiles,
+            b.k_left_tiles,
+            b.k_right_tiles,
+            num_tiles_to_write_per_packet,
+            b.l1,
+            K_tiles,
+            in0_reader,
+            to_previous ? mux_connection_handle_forward : mux_connection_handle_backward,
+            to_previous ? pkt_hdrs_backward : pkt_hdrs_forward,
+            in0_tile_size,
+            whole_or_left ? out_ready_sem_injector_noc_addr_forward_in_pkt
+                          : out_ready_sem_injector_noc_addr_backward_in_pkt,
+            whole_or_left,
+            M_tiles,
+            true);
+    };
+#endif
 
     // A following gather may reuse DRAM owned by the preceding collective. Its
     // remote writes must wait until every rank has entered this program. Data
@@ -298,6 +409,7 @@ void kernel_main() {
     // Every in0 core on every rank runs it symmetrically: out_ready_sem_noc0_x/y are
     // this core's own coordinates, so each core signals its counterpart on the
     // num_devices - 1 peers and waits for exactly that many arrivals in its own L1.
+#ifndef FABRIC_2D  // hop-range multicast is a 1D route; Fabric2D uses the announce barrier above
     if constexpr (topology == Topology::Ring && num_devices > 1) {
         if (barrier_sem != 0) {
             auto* barrier_connection =
@@ -320,6 +432,7 @@ void kernel_main() {
             noc_obj.async_atomic_barrier();
         }
     }
+#endif  // !FABRIC_2D
 #endif
 
     /**
@@ -478,6 +591,8 @@ void kernel_main() {
                         k_block_right_tile,
                         k_block_right_tile + k_right_tiles,
                         k_right_tiles);
+                } else if constexpr (mcast) {
+                    in0_rx->receive();
                 } else {
                     // Get from previous device
                     in0_receiver_sem.set(INVALID);
@@ -488,7 +603,11 @@ void kernel_main() {
                 // Critical to performance for sender to push data to compute before mcasting
                 // This frees sender to start next read earlier
                 cb_in0.push_back(in0_block_num_tiles);
-                if (!is_sink_core) {
+                if constexpr (mcast) {
+                    if (is_injector_core) {
+                        in0_tx->send(in0_start_address, in0_start_address, current_block_bytes);
+                    }
+                } else if (!is_sink_core) {
                     in0_sender_sem.wait(1);
                     in0_sender_sem.set(0);
 
@@ -511,6 +630,37 @@ void kernel_main() {
                 }
 #ifdef USE_MUX
                 if (n_block_iter == 0) {
+#ifdef FABRIC_2D
+                    // Skip the last K_blocks_per_device iterations: by then every block has reached every device.
+                    if (k_block_iter < (K_num_blocks - K_blocks_per_device)) {
+                        if (fabric_sends) {
+                            held[num_held++] = {
+                                m_tile,
+                                k_block_left_tile,
+                                k_block_right_tile,
+                                current_M_block_tiles,
+                                k_left_tiles,
+                                k_right_tiles,
+                                in0_start_address};
+                        }
+                        if (!joined_fabric) {
+                            join_fabric();
+                            joined_fabric = true;
+                        }
+                        if (!fabric_open) {
+                            // Wait once the buffer is full, or before the first block from a peer: that one can only
+                            // arrive once the peer's forwards (held the same way) go out.
+                            fabric_open =
+                                neighbour_entered(num_held > max_held || k_block_iter + 1 >= K_blocks_per_device);
+                        }
+                        for (uint32_t h = 0; fabric_open && h < num_held; h++) {
+                            forward_held(held[h]);
+                        }
+                        if (fabric_open) {
+                            num_held = 0;
+                        }
+                    }
+#else
                     if constexpr (is_linear) {
                         // Linear uni-ring: every (non-skipped) iter, every device sends ONE full
                         // K-block to its predecessor in the virtual ring. Dev 0
@@ -625,6 +775,7 @@ void kernel_main() {
                             }
                         }
                     }
+#endif
                 }
 #endif  // USE_MUX
             }
@@ -705,7 +856,7 @@ void kernel_main() {
                     // write_block_sync_granular_split is more generic (support multiple output tensors)
                     // But for N_chunks == 1 (non-split minimal_matmul), write_block_sync_granular should be faster
                     if constexpr (N_chunks == 1) {
-                        write_block_sync_granular<M_block_tiles, N_block_tiles>(
+                        write_block_sync_granular<M_block_tiles, N_block_tiles, out_piece_tiles>(
                             noc_obj,
                             std::get<0>(outputs_tuple),
                             out_shape,
@@ -739,7 +890,7 @@ void kernel_main() {
     noc_obj.async_atomic_barrier();
 
 #ifdef USE_MUX
-    if (mux_backward.connection_valid) {
+    if (mux_connection_handle_backward != nullptr) {
         close_mux(
             noc_obj,
             mux_connection_handle_backward,
@@ -752,7 +903,7 @@ void kernel_main() {
             mux_backward.termination_master_noc_x,
             mux_backward.termination_master_noc_y);
     }
-    if (mux_forward.connection_valid) {
+    if (mux_connection_handle_forward != nullptr) {
         close_mux(
             noc_obj,
             mux_connection_handle_forward,
