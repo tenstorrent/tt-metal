@@ -407,6 +407,8 @@ class TtMoEBlockMainLayer:
         # load-time router bias (the empty map: the guard's fallback), whether the planner wrote a map since then
         self._prev = prev_on()
         self._prev_state = None
+        # MESH_PROGRAMS (P.63): the head's and the combine's cache hits patch through cached runtime-args records
+        self._cached_slots = settings.get("MESH_PROGRAMS") == "on"
         if self._prev:
             from .expert_prev import _al16
 
@@ -1179,6 +1181,7 @@ class TtMoEBlockMainLayer:
             arena=arena,
             **({"xq": xq} if xq is not None else {}),
             **(pr.head_tail(self) if pr is not None else {}),
+            cached_slots=self._cached_slots,
         )
         if pr is not None:
             pr.on_head(self, head)
@@ -1212,6 +1215,7 @@ class TtMoEBlockMainLayer:
             weights.down,
             blk.resources,
             arena=arena,
+            cached_slots=self._cached_slots,
             **blk.expert_kw,
         )
         ttnn.deallocate(arena)

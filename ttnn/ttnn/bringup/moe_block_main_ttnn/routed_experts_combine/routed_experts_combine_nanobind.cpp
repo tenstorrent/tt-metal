@@ -104,6 +104,8 @@ void bind_routed_experts_combine(nb::module_& mod) {
                 None: the op allocates one for the call.
             layout: FlatLayoutOptions.
             combine: CombineConfig.
+            cached_slots: P.63 - a program-cache hit writes the moved addresses through each chip program's cached
+                runtime-args records (no kernel lookup a patch; host only, the same values). Default False.
 
         Returns:
             y_own [1, 1, S, Hr] bf16 row-major (persistent: one buffer for every call).
@@ -124,7 +126,8 @@ void bind_routed_experts_combine(nb::module_& mod) {
         nb::arg("activation"),
         nb::arg("arena") = nb::none(),
         nb::arg("layout") = flat_routed_expert::FlatLayoutOptions{},
-        nb::arg("combine") = CombineConfig{});
+        nb::arg("combine") = CombineConfig{},
+        nb::arg("cached_slots") = false);
 
     mod.def(
         "routed_experts_combine_arena_spec",

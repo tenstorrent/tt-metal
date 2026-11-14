@@ -55,6 +55,9 @@ struct RoutedExpertsCombineParams {
     // MOE_REPLICAS=exact (P.55b): the fill path's exact variant (REC_FX; hashed): jobs from a DRAM tensor, both links,
     // per-block flags, relays, the waiter's stamps; fill_done is then the exact words (kFxWords)
     bool fill_exact = false;
+    // P.63 (MESH_PROGRAMS=on): a cache hit patches through each program's cached runtime-args records and program
+    // pointer (host only, the same values written; not hashed)
+    bool cached_slots = false;
 
     static constexpr auto attribute_names = std::forward_as_tuple("S", "W", "plan_key", "fill", "fill_exact");
     auto attribute_values() const { return std::forward_as_tuple(S, W, plan_key, fill, fill_exact); }

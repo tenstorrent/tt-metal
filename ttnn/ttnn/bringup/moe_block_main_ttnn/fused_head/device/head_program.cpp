@@ -2883,21 +2883,37 @@ tt::tt_metal::WorkloadDescriptor build_head_workload(
 }
 
 void patch_head_program(
-    tt::tt_metal::Program& program, const HeadPatches& patches, const HeadBuffers& buffers, HeadLastAddresses& last) {
+    tt::tt_metal::Program& program,
+    const HeadPatches& patches,
+    const HeadBuffers& buffers,
+    HeadLastAddresses& last,
+    bool cached_slots) {
     // (grouped by source; a source's args only when its address differs from the one this program last got)
     const auto& args = patches.args;
+    auto record = [&](const HeadPatches::Arg& a) -> tt::tt_metal::RuntimeArgsData& {
+        return a.common ? tt::tt_metal::GetCommonRuntimeArgs(program, a.kernel)
+                        : tt::tt_metal::GetRuntimeArgs(program, a.kernel, a.core);
+    };
+    if (cached_slots && last.slots.size() != args.size()) {
+        last.slots.clear();
+        last.slots.reserve(args.size());
+        for (const auto& a : args) {
+            last.slots.push_back(&record(a));
+        }
+    }
     for (const auto& [i, j] : patches.groups) {
         const uint16_t src = args[i].src;
         const uint32_t addr = buffers.addresses[src];
-        auto value = [&](const HeadPatches::Arg& a) -> uint32_t& {
-            auto& data = a.common ? tt::tt_metal::GetCommonRuntimeArgs(program, a.kernel)
-                                  : tt::tt_metal::GetRuntimeArgs(program, a.kernel, a.core);
-            return data[a.index];
-        };
         if (last.a[src] != addr) {
             last.a[src] = addr;
-            for (size_t k = i; k < j; ++k) {
-                value(args[k]) = addr + args[k].offset;
+            if (cached_slots) {
+                for (size_t k = i; k < j; ++k) {
+                    (*last.slots[k])[args[k].index] = addr + args[k].offset;
+                }
+            } else {
+                for (size_t k = i; k < j; ++k) {
+                    record(args[k])[args[k].index] = addr + args[k].offset;
+                }
             }
             if (src == SRC_ARENA) {
                 const auto cbs = program.circular_buffers();

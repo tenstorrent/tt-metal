@@ -41,7 +41,8 @@ ttnn::Tensor routed_experts_combine(
     uint32_t activation,
     const std::optional<ttnn::Tensor>& arena = std::nullopt,
     const flat_routed_expert::FlatLayoutOptions& layout = {},
-    const CombineConfig& combine = {});
+    const CombineConfig& combine = {},
+    bool cached_slots = false);
 
 // MOE_FILL=piggyback (P.53): expert replica copies carried by the combine's port senders (CombineFillJob). enabled:
 // the next calls on these resources build the port senders with the fill path (a program of its own in the cache);

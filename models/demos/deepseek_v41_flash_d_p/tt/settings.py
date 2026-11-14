@@ -577,6 +577,18 @@ TABLE = {
         "OWN_ROWS head path and two MoE layers a chunk; any other call, and MOE_TRACE=moe, runs launch. Same "
         "arithmetic on the same inputs: plans, maps, pages and outputs bit-identical",
     ),
+    "MESH_PROGRAMS": Setting(
+        "on",
+        ("legacy", "on"),
+        "P.63 (owner 2026-11-14: fewer host us a MoE call): how a program-cache hit of the fused head and of "
+        "routed_experts_combine re-patches its 32 per-chip programs (OWN_ROWS path). legacy = a GetRuntimeArgs lookup "
+        "(the kernel found in the program's maps, a shared_ptr copy) for every moved address arg of every chip: "
+        "measured ~245 us of a ~470 us combine call (the flat expert's 766 args a chip) and ~117 us of a ~350 us head "
+        "call (P.63 probe, 8x4). on = each program keeps a pointer to each patched arg's runtime-args record, filled "
+        "on its first hit (fork option cached_slots): the same values written, no lookups. Not a single mesh program: "
+        "the probe found the per-program patch loop, not the per-device dispatch, to be what a mesh program would "
+        "remove (DS41-258). Host only: outputs bit-identical",
+    ),
     "MOE_TRACE": Setting(
         "off",
         ("off", "moe"),

@@ -244,7 +244,8 @@ void FusedHeadFactory::override_runtime_arguments(
             build_head_workload(m, b, all, &store.chips);
         }
     }
-    patch_head_program(program, store.chips[(*coord)[0] * attrs.config.shape.G + (*coord)[1]], b, *last);
+    patch_head_program(
+        program, store.chips[(*coord)[0] * attrs.config.shape.G + (*coord)[1]], b, *last, attrs.cached_slots);
 }
 
 }  // namespace ttnn::operations::bringup::moe_block_main::fused_head

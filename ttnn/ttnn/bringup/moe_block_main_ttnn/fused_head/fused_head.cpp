@@ -355,7 +355,8 @@ FusedHeadOutputs fused_head(
     uint32_t loop,
     const std::optional<Tensor>& xq,
     const std::optional<HeadTail>& tail,
-    const std::optional<Tensor>& tail_desc) {
+    const std::optional<Tensor>& tail_desc,
+    bool cached_slots) {
     using namespace fused_head_entry_detail;
     TT_FATAL(
         resources.config().pad_tokens == 0 || actual_start.has_value(),
@@ -380,7 +381,8 @@ FusedHeadOutputs fused_head(
         .patches = actual_start ? setup.patches_padded[loop] : (tail ? setup.patches_tail[loop] : setup.patches[loop]),
         .loops = loops,
         .loop = loop,
-        .tail = tail};
+        .tail = tail,
+        .cached_slots = cached_slots};
     auto in = call_inputs(setup, x, weights, x_full, xq);
     in.y = setup.y_loops[loop % loops];
     in.actual_start = actual_start;

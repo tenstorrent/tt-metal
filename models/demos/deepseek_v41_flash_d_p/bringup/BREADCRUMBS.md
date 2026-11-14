@@ -1580,3 +1580,47 @@ The one this change broke (test_seeded: `git add state.json`) is fixed.
   --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_prev_host_account.py` (~8 min, devjob); gate unit
   `gate P.62b --spec <spec> --check --unit 'P.62b#test_moe_prev_replicas'` (~8 min); quick `P56_QUICK=1` on that test
   (~1.5 min).
+
+## P.63 (perf, attempt 1): the fused head's and the combine's cache-hit patching (MESH_PROGRAMS legacy | on)
+- Expected per chunk (written after the 1-layer probe OV-43 asked for, before any A/B or gate run; real novel / code
+  chunks 1..10, 40 MoE layers): host -5 to -7 ms (combine ~-115 us and head ~-40 us a call, x 40); device 0 (the same
+  programs and the same runtime-arg values: host only); wall: as much of the host cut as the chunk is host-bound
+  (P.62b: host ~164-170 ms vs device ~146-150 ms, so most of it). Launches a chunk unchanged (0).
+- Terms: host = first host call of a chunk to the last layer's enqueue; wall = to the sync after the last layer;
+  device = rt profiler, each program's slowest chip summed; us a call = host time of one op launch (Python wrapper
+  inclusive); prev / off = MOE_REPLICAS=prev on / switched off in the same model; legacy / on = MESH_PROGRAMS.
+- STEP 1, the probe OV-43 asked for (tests/test_mesh_program_probe.py, new, diagnostic; 4 layers, novel chunks 1..3;
+  temporary C++ timers in the fork, removed): combine ~470 us a call = hit patching ~250 (the flat expert's 766 address
+  args a chip, 6.4 us a chip; the combine's own 132 args 0.3 us) + hash 4 + Metal's enqueue of 32 programs ~215; head
+  ~340 us = patching 3.6 us x 32 chips (~2,640 args a chip, the moved groups written) + ~220 enqueue. One patch
+  ~8 ns = GetRuntimeArgs (get_kernel's two hash lookups + a shared_ptr copy). Metal's enqueue already packs a
+  multi-device program once and copies it per device (fd_mesh_command_queue.cpp write_program_commands_to_devices),
+  so a mesh program saves the patch loop's x32, not the per-device copies (DS41-258).
+- Decision: not ONE mesh program (the task's literal ask). The probe says the cost a mesh program removes is the patch
+  loop; caching each patched arg's RuntimeArgsData* per program removes most of it with no kernel change, no fabric
+  rewrite of two 110-core ops and no hang risk. What a mesh program would still add on top: the remaining ~3 us
+  (combine) / ~2 us (head) a chip of patching = ~150 us a MoE layer, ~6 ms a chunk, needing DS41-225 tables in the
+  head's and the combine's fabric kernels (head_program.cpp 3,100 lines, combine_program.cpp 1,000): a separate pick.
+- Built (MESH_PROGRAMS = legacy | on, tt/settings.py, default on; fork option cached_slots on fused_head and
+  routed_experts_combine, default False): HeadLastAddresses::slots, FlatProgramHandles::slots, CombineHandles::slots
+  (one RuntimeArgsData* a patch, filled on the program's first hit) and the combine's Program* a chip
+  (shared_variables_t::program). Same values written: programs, runtime args and outputs bit-identical.
+- Probe, no timers (3 alternating rounds x 4 passes a side, median us a call): combine 468.2 -> 351.9, head 342.0 ->
+  300.6 (sparse_dispatch_2d 102 / 104, unchanged): -157 us a MoE layer, ~-6.3 ms host a chunk at 40 layers.
+- Gate unit P.63#test_moe_prev_replicas (PASS, change on, one pass a side; prev = lean folded): combine us a call
+  245.7 / 249.4 (novel / code; P.62 lean 352-354, P.60 device in this run 250.6 / 251.6 - its own hit also on). prev
+  chunks 1..10: novel host 155.6 / wall 166.5 / device 149.85 ms; code 156.3 / 165.2 / 145.16 (P.62b's gate unit:
+  host ~164-170). off: code host 151.0 / wall 166.8 / device 155.9; novel off host 242.6 / wall 260.2 is a slow side
+  (chunk 1 already 163 ms, most chunks ~250: host load, loadavg ~12; one pass a side, DS41-259). maxdiff 0, mirror 0
+  mismatches of 477, plans as P.62b.
+- `measure --task P.63` parts (change on: MESH_PROGRAMS=on ENGRAM_TABLE=resident): determinism 0 (novel, code,
+  state); quick min layer PCC 0.60548579 at L39 (= P.52-P.62b: the same output bytes), host transfers per layer 0,
+  clean wall 166.6 ms (spread 22.5; P.62b 167.1); p51200 (random ids) wall 175.2 (spread 7.7, loadavg 11.8; P.62b
+  176.0), device_ms_total 155.07 (155.65), device_ms_experts 74.07, host overhead 20.1 (20.4), 1656 launches (same),
+  0 new programs. At p51200 the chunk is device-bound (wall = device + ~20), so the host cut shows little there.
+- Expected vs got: host -5 to -7 ms a chunk expected; the per-call numbers give ~-6.3 ms; the A/B (orchestrator) gives
+  the chunk numbers. Launches a chunk: unchanged (host-only change). Cores (rule 18): none changed. Prepared (OV-23):
+  no Python-built op touched (both ops are C++ device ops). Fork suites not run (OV-25).
+- Re-run: probe `PROBE_SIDES=legacy,on,legacy,on scripts/run_safe_pytest.sh --run-all --no-precompile
+  models/demos/deepseek_v41_flash_d_p/tests/test_mesh_program_probe.py -s` (~2 min); gate unit `gate P.63 --spec
+  <spec> --check --unit 'P.63#test_moe_prev_replicas'` (~11 min, devjob).

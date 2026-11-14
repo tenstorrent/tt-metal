@@ -167,9 +167,12 @@ void RoutedExpertsCombineFactory::override_runtime_arguments(
     using namespace routed_experts_combine_factory_detail;
     const auto bufs = buffers_of(t, output);
     for (auto& [range, sv] : cached.shared_variables) {
-        auto& program = cached.workload.get_programs().at(range);
-        flat_routed_expert::override_flat_routed_expert_addresses(program, sv.flat, t.flat);
-        override_combine_addresses(program, sv.combine, bufs);
+        if (!p.cached_slots || sv.program == nullptr) {
+            sv.program = &cached.workload.get_programs().at(range);
+        }
+        auto& program = *sv.program;
+        flat_routed_expert::override_flat_routed_expert_addresses(program, sv.flat, t.flat, p.cached_slots);
+        override_combine_addresses(program, sv.combine, bufs, p.cached_slots);
         if (sv.report != report_addrs(bufs)) {
             set_report(program, sv, p, bufs);
         }

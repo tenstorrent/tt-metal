@@ -152,7 +152,8 @@ FusedHeadOutputs fused_head(
     uint32_t loop = 0,
     const std::optional<Tensor>& xq = std::nullopt,
     const std::optional<HeadTail>& tail = std::nullopt,
-    const std::optional<Tensor>& tail_desc = std::nullopt);
+    const std::optional<Tensor>& tail_desc = std::nullopt,
+    bool cached_slots = false);
 
 // P.62b: the watcher core a HeadTail runs on (logical; the same cell on every chip) and the tail's L1 offset in the
 // arena (the head's own bytes a core, 64 B aligned) for the head a fused_head call with these arguments runs.

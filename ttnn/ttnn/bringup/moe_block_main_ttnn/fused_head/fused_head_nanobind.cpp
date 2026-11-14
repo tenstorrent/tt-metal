@@ -177,6 +177,8 @@ void bind_fused_head(nb::module_& mod) {
             xq: x in bfloat8_b TILE (x's shape, DRAM) when dtypes.shared_activations is bfloat8_b - required then, None
                 otherwise: the shared expert's x (the engine's own-shard load and the gather read it; the router reads
                 x). With the DRAM fallback, x_full is gathered from xq.
+            cached_slots: P.63 - a program-cache hit writes the moved addresses through each chip program's cached
+                runtime-args records (no kernel lookup an arg; host only, the same values). Default False.
 
         Returns:
             FusedHeadOutputs: se, rows, xbuf, route and the combine plan (counts, regions, token_index, table,
@@ -200,7 +202,8 @@ void bind_fused_head(nb::module_& mod) {
         nb::arg("loop") = 0,
         nb::arg("xq") = nb::none(),
         nb::arg("tail") = nb::none(),
-        nb::arg("tail_desc") = nb::none());
+        nb::arg("tail_desc") = nb::none(),
+        nb::arg("cached_slots") = false);
     nb::class_<HeadTail>(
         mod,
         "HeadTail",

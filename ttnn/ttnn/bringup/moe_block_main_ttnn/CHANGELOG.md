@@ -331,3 +331,28 @@ API port to this tree (main's API of 2026-11-06 that this base, origin/main `b78
 - Tests: none added to tests/ (the head's tail needs a whole MoE block and a planner state: the model's
   tests/test_moe_prev_replicas.py checks it - plans, maps, pages bit-identical to the launch path, host mirror 0
   mismatches, outputs bit-identical); fork suites not run on the 8x4 (OV-25: task F.1).
+
+### Cache-hit patching through cached runtime-args records: `cached_slots` (2026-11-14, deepseek_v41_flash_d_p P.63)
+- What: `fused_head(..., cached_slots=False)` and `routed_experts_combine(..., cached_slots=False)` (FusedHeadParams /
+  RoutedExpertsCombineParams.cached_slots, not hashed). On: a program-cache hit writes each moved address arg through a
+  `RuntimeArgsData*` the program's patch state keeps (HeadLastAddresses::slots, FlatProgramHandles::slots,
+  CombineHandles::slots; filled on the program's first such hit), and the combine keeps its chip's `Program*`
+  (shared_variables_t::program) instead of the workload map lookup a chip. Off (default): GetRuntimeArgs /
+  GetCommonRuntimeArgs a patch, as before. Safe because a Kernel allocates its runtime-args records once (Kernel ctor,
+  core_to_runtime_args_data_) and only re-points their data; the records live as long as the cached program, the same
+  lifetime the existing `last` addresses assume. The same values are written: programs and outputs bit-identical.
+- Why: P.63's probe (8x4, 4 layers, C++ timers): the combine's hit patching was ~245-250 us of a ~470 us call (the
+  flat expert's 766 address args a chip, ~8 ns each: get_kernel's two hash lookups and a shared_ptr copy), the head's
+  3.6 us x 32 chips of a ~340 us call. One mesh program would remove that loop's x32 but keeps the per-device command
+  copies (Metal already packs a multi-device program once and copies it per device; DS41-258); the cached records
+  remove most of it without a kernel change.
+- Needed by: deepseek_v41_flash_d_p P.63 (MESH_PROGRAMS=on).
+- Files: fused_head/fused_head.{hpp,cpp}, fused_head/fused_head_nanobind.cpp, fused_head/device/head_program.{hpp,cpp},
+  fused_head/device/fused_head_device_operation{.cpp,_types.hpp}, flat_routed_expert/device/flat_program.hpp,
+  flat_routed_expert/device/flat_routed_expert_program_factory.cpp, routed_experts_combine/routed_experts_combine.{hpp,
+  cpp}, routed_experts_combine/routed_experts_combine_nanobind.cpp, routed_experts_combine/device/combine_program.{hpp,
+  cpp}, routed_experts_combine/device/routed_experts_combine_program_factory.{hpp,cpp},
+  routed_experts_combine/device/routed_experts_combine_device_operation_types.hpp, README.md.
+- Tests: none added to tests/ (host-only, same values: the model's tests/test_moe_prev_replicas.py and the ladder check
+  outputs; tests/test_mesh_program_probe.py in the model measures the host us a call); fork suites not run on the 8x4
+  (OV-25: task F.1).

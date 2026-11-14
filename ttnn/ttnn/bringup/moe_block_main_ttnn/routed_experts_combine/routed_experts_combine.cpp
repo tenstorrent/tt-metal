@@ -365,7 +365,8 @@ ttnn::Tensor routed_experts_combine(
     uint32_t activation,
     const std::optional<ttnn::Tensor>& arena,
     const flat_routed_expert::FlatLayoutOptions& layout,
-    const CombineConfig& combine) {
+    const CombineConfig& combine,
+    bool cached_slots) {
     using namespace routed_experts_combine_detail;
     const uint32_t rows_cap = table.logical_shape()[-2] * 32;
     const auto& st = state(resources, rows_cap, max_tokens_per_expert, activation, layout, combine);
@@ -397,6 +398,7 @@ ttnn::Tensor routed_experts_combine(
     params.plan_key = resources.plan_key();
     params.plan = st.plan;
     params.flat_plan = st.flat.plan;
+    params.cached_slots = cached_slots;
     std::optional<ttnn::Tensor> fill_done;
     if (const auto* f = fill_input(resources); f != nullptr && f->enabled) {
         params.fill = true;

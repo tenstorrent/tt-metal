@@ -717,7 +717,10 @@ FlatProgramHandles add_flat_routed_expert_program(
 }
 
 void override_flat_routed_expert_addresses(
-    tt::tt_metal::Program& program, const FlatProgramHandles& handles, const FlatRoutedExpertInputs& t) {
+    tt::tt_metal::Program& program,
+    const FlatProgramHandles& handles,
+    const FlatRoutedExpertInputs& t,
+    bool cached_slots) {
     using namespace tt::tt_metal;
     std::array<uint32_t, static_cast<size_t>(FlatAddr::Count)> addr{};
     addr[size_t(FlatAddr::X)] = t.x.buffer()->address();
@@ -738,9 +741,26 @@ void override_flat_routed_expert_addresses(
         moved[s] = handles.last[s] != addr[s];
         handles.last[s] = addr[s];
     }
-    for (const auto& pa : handles.patches) {
-        if (moved[size_t(pa.src)]) {
-            GetRuntimeArgs(program, pa.kernel, pa.core)[pa.index] = addr[size_t(pa.src)] + pa.offset;
+    if (cached_slots) {
+        auto& slots = handles.slots;
+        if (slots.size() != handles.patches.size()) {
+            slots.clear();
+            slots.reserve(handles.patches.size());
+            for (const auto& pa : handles.patches) {
+                slots.push_back(&GetRuntimeArgs(program, pa.kernel, pa.core));
+            }
+        }
+        for (size_t i = 0; i < handles.patches.size(); ++i) {
+            const auto& pa = handles.patches[i];
+            if (moved[size_t(pa.src)]) {
+                (*slots[i])[pa.index] = addr[size_t(pa.src)] + pa.offset;
+            }
+        }
+    } else {
+        for (const auto& pa : handles.patches) {
+            if (moved[size_t(pa.src)]) {
+                GetRuntimeArgs(program, pa.kernel, pa.core)[pa.index] = addr[size_t(pa.src)] + pa.offset;
+            }
         }
     }
     if (moved[size_t(FlatAddr::Arena)]) {

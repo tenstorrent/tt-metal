@@ -32,6 +32,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
+#include <tt-metalium/runtime_args_data.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 
@@ -219,6 +220,9 @@ struct CombineHandles {
     // source's offset args stale.
     mutable std::array<uint32_t, static_cast<size_t>(CombineBuf::Count)> last = filled_unpatched();
     std::vector<std::pair<tt::tt_metal::CBHandle, uint32_t>> arena_cbs;  // (CB, arena byte offset)
+    // cached_slots (P.63): each patch's runtime-args record in this program, filled on the first such hit (see
+    // FlatProgramHandles::slots). Empty: not filled yet.
+    mutable std::vector<tt::tt_metal::RuntimeArgsData*> slots;
     // The y writers' report (flat_program.hpp FlatCombineReport): the collector (virtual), its counts (arena offset),
     // and the L1 hand-off args (y_row_major.hpp SE_Y_L1): [nd, slot stride, table, words, writer index, gate x | y <<
     // 16, bar, words bytes to zero; per destination: noc x, noc y, slot base, slots, landed counter array].
@@ -264,7 +268,9 @@ uint32_t combine_fill_offset(const CombinePlan& plan, bool exact = false);
 
 // Re-applies the buffers' addresses (a program-cache hit): a source's args (and the arena's CBs) only when its address
 // moved.
-void override_combine_addresses(tt::tt_metal::Program& program, const CombineHandles& h, const CombineBuffers& buffers);
+// cached_slots (P.63): through h.slots (the same values; no kernel lookup a patch).
+void override_combine_addresses(
+    tt::tt_metal::Program& program, const CombineHandles& h, const CombineBuffers& buffers, bool cached_slots = false);
 
 // The writers' l1_args with the buffers' current addresses.
 std::vector<uint32_t> resolve_l1_args(const CombineHandles& h, const CombineBuffers& buffers);

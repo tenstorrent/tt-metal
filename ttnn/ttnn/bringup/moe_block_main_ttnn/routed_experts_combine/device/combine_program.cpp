@@ -1007,7 +1007,8 @@ void set_combine_fill_args(
     }
 }
 
-void override_combine_addresses(tt::tt_metal::Program& program, const CombineHandles& h, const CombineBuffers& bufs) {
+void override_combine_addresses(
+    tt::tt_metal::Program& program, const CombineHandles& h, const CombineBuffers& bufs, bool cached_slots) {
     using namespace combine_program_detail;
     // (a source's args - the arena's CBs with it - only when its address differs from the one they were last written
     // with: CombineHandles::last)
@@ -1019,9 +1020,25 @@ void override_combine_addresses(tt::tt_metal::Program& program, const CombineHan
             h.last[b] = a;
         }
     }
-    for (const auto& p : h.patches) {
-        if (moved[static_cast<size_t>(p.buf)]) {
-            tt::tt_metal::GetRuntimeArgs(program, p.kernel, p.core)[p.index] = addr_of(bufs, p.buf) + p.offset;
+    if (cached_slots) {
+        if (h.slots.size() != h.patches.size()) {
+            h.slots.clear();
+            h.slots.reserve(h.patches.size());
+            for (const auto& p : h.patches) {
+                h.slots.push_back(&tt::tt_metal::GetRuntimeArgs(program, p.kernel, p.core));
+            }
+        }
+        for (size_t i = 0; i < h.patches.size(); ++i) {
+            const auto& p = h.patches[i];
+            if (moved[static_cast<size_t>(p.buf)]) {
+                (*h.slots[i])[p.index] = addr_of(bufs, p.buf) + p.offset;
+            }
+        }
+    } else {
+        for (const auto& p : h.patches) {
+            if (moved[static_cast<size_t>(p.buf)]) {
+                tt::tt_metal::GetRuntimeArgs(program, p.kernel, p.core)[p.index] = addr_of(bufs, p.buf) + p.offset;
+            }
         }
     }
     if (moved[static_cast<size_t>(CombineBuf::Arena)]) {

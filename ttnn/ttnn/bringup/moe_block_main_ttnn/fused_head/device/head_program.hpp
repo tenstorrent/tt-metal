@@ -30,6 +30,7 @@
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/runtime_args_data.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/workload_descriptor.hpp>
 
@@ -166,6 +167,10 @@ struct HeadLastAddresses {
         v.fill(0xFFFFFFFFu);
         return v;
     }();
+    // cached_slots (P.63): each patch arg's runtime-args record (per-core or common) in this program, in
+    // HeadPatches::args order, filled on the first such hit (a Kernel keeps its records for its lifetime; only their
+    // data pointers move). Empty: not filled yet.
+    std::vector<tt::tt_metal::RuntimeArgsData*> slots;
 };
 
 class HeadModel;
@@ -221,7 +226,12 @@ tt::tt_metal::WorkloadDescriptor build_head_workload(
     std::vector<HeadPatches>* patches = nullptr);
 
 // Rewrites the address arguments (and the arena CBs) of one chip's cached program whose sources moved.
+// cached_slots (P.63): through last.slots (the same values; no kernel lookup an arg).
 void patch_head_program(
-    tt::tt_metal::Program& program, const HeadPatches& patches, const HeadBuffers& buffers, HeadLastAddresses& last);
+    tt::tt_metal::Program& program,
+    const HeadPatches& patches,
+    const HeadBuffers& buffers,
+    HeadLastAddresses& last,
+    bool cached_slots = false);
 
 }  // namespace ttnn::operations::bringup::moe_block_main::fused_head

@@ -47,6 +47,9 @@ struct FusedHeadParams {
     uint32_t loops = 1, loop = 0;
     // P.62b (MOE_PLANNER=folded): the watcher's tail (HeadTail), hashed; none by default
     std::optional<HeadTail> tail;
+    // P.63 (MESH_PROGRAMS=on): a cache hit patches through each program's cached runtime-args records (host only, the
+    // same values written; not hashed)
+    bool cached_slots = false;
 
     static constexpr auto attribute_names = std::forward_as_tuple("plan_key");
     auto attribute_values() const { return std::forward_as_tuple(plan_key); }

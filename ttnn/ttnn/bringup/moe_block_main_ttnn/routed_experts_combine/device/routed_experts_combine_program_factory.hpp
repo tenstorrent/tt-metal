@@ -26,6 +26,9 @@ struct RoutedExpertsCombineFactory {
         // (P.60, CombineFillCall::exact_ring > 0: the fill args this program last got; a hit with the same ones
         // writes nothing; empty: always written)
         std::vector<uint32_t> fill_sig;
+        // cached_slots (P.63): this chip's program in the cached workload (the workload's map is never changed
+        // after the build), filled on the first such hit; null: looked up by its range
+        tt::tt_metal::Program* program = nullptr;
     };
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 

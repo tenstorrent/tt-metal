@@ -129,6 +129,9 @@ each default off (= the source's program):
   layer's buffers from `tail_desc` (one 64 B uint32 DRAM page a chip, its address patched per call). No core added (the
   head holds every core of the 11 x 10 grid at the 110-core cap). Tail programs keep their own patch store (their
   watcher has one more address arg).
+- `fused_head(..., cached_slots=False)`, `routed_experts_combine(..., cached_slots=False)` (P.63; default False = the
+  source's patching): a program-cache hit writes the moved address args through runtime-args records each cached
+  program keeps (filled on its first such hit) instead of a GetRuntimeArgs lookup a patch. Host only, the same values.
 - Slot map uneven split (P.55c, `router_rows.hpp slot_of`): a copy word `slot | lb << 9` gives each holder the tokens
   whose 15-bit hash is in its range (own slot [0, lb_0)); copy words below 512 keep the even split.
 
@@ -198,6 +201,11 @@ runner smoke (tt-d-gen engine): pass.
   +6.5 / +3.2 ms a chunk (P.62's launch) -> +1.0 / -0.03 ms (10 alternating rounds a side); device 152.45 / 149.38 ->
   150.11 / 145.75 ms (one profiled pass a side); the tail's plan ~31k cycles + map ~7k, its count wait ~2k cycles.
   Plans, maps, job pages and outputs bit-identical (host mirror 0 mismatches of 477).
+
+- P.63 (Galaxy 8x4, DeepSeek-V4.1, 4-layer model, novel chunks 1..3, 3 alternating rounds of 4 passes a side, median
+  host us a call, Python inclusive): `cached_slots` off -> on: routed_experts_combine 468 -> 352, fused_head 342 -> 301.
+  Before (C++ timers): the combine's hit patching ~250 us of the call (flat expert 6.4 us a chip, 766 args), the
+  head's 3.6 us a chip; on: ~3 / ~2 us a chip. The rest of each call (~220-230 us) is Metal's enqueue of 32 programs.
 
 ## Limits
 
