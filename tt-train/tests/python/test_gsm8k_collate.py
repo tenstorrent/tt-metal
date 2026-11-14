@@ -6,12 +6,12 @@
 
 import ast
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 import ttnn
 
-import ttml
 from ttml.datasets import Batch
 
 EXAMPLE = Path(__file__).resolve().parents[2] / "sources" / "examples" / "gsm8k_finetune" / "gsm8k_finetune.py"
@@ -30,16 +30,16 @@ class _FakeTensor:
         return self._arr
 
 
-@pytest.fixture(autouse=True)
-def patch_tensor(monkeypatch):
-    monkeypatch.setattr(ttml.autograd.Tensor, "from_numpy", staticmethod(_FakeTensor.from_numpy))
+# The collate looks up `ttml.autograd.Tensor.from_numpy` in its module globals, so it is given a stand-in
+# `ttml` namespace instead of patching the (nanobind) ttml types.
+_FAKE_TTML = SimpleNamespace(autograd=SimpleNamespace(Tensor=_FakeTensor))
 
 
 def _load_collate():
     """Compile only gsm8k_collate_fn, so the script's heavy imports are not needed."""
     tree = ast.parse(EXAMPLE.read_text(encoding="utf-8"))
     fn = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "gsm8k_collate_fn")
-    ns = {"np": np, "ttml": ttml, "ttnn": ttnn, "Batch": Batch}
+    ns = {"np": np, "ttml": _FAKE_TTML, "ttnn": ttnn, "Batch": Batch}
     exec(compile(ast.Module(body=[fn], type_ignores=[]), str(EXAMPLE), "exec"), ns)
     return ns["gsm8k_collate_fn"]
 
