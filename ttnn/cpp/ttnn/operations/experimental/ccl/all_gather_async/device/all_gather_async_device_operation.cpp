@@ -72,7 +72,7 @@ void validate_row_dependent_invariants(const AllGatherAsyncParams& args, const A
         for (size_t i = 0; i < input_shape.size(); ++i) {
             if (i == args.dim) {
                 TT_FATAL(
-                    output_shape[i] <= input_shape[i] * args.ring_size,
+                    output_shape[i] == input_shape[i] * args.ring_size,
                     "Error, Output tensor shape at dimension {} should be {} but has {}",
                     i,
                     input_shape[i] * args.ring_size,

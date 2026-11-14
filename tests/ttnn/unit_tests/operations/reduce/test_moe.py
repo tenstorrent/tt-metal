@@ -88,3 +88,30 @@ def test_moe_rejects_non_bfloat16(bad_tensor, device, expect_error):
     }
     with expect_error(RuntimeError, "must be BFLOAT16"):
         ttnn.moe(tensors["input"], tensors["expert_mask"], tensors["topk_mask"], k)
+
+
+@pytest.mark.parametrize(
+    "out_shape, out_dtype, out_layout, msg_pattern",
+    [
+        ([1, 1, 32, 32], ttnn.bfloat16, ttnn.Layout.TILE, "Preallocated output padded shape must be"),
+        ([1, 1, 64, 64], ttnn.bfloat16, ttnn.Layout.TILE, "Preallocated output padded shape must be"),
+        ([1, 1, 64, 32], ttnn.float32, ttnn.Layout.TILE, "Preallocated output must be BFLOAT16"),
+        ([1, 1, 64, 32], ttnn.bfloat16, ttnn.Layout.ROW_MAJOR, "Preallocated output must be in tiled format"),
+    ],
+    ids=[
+        "wrong_height",
+        "wrong_width",
+        "wrong_dtype",
+        "wrong_layout",
+    ],
+)
+def test_moe_rejects_invalid_preallocated_output(out_shape, out_dtype, out_layout, msg_pattern, device, expect_error):
+    N, C, H, W, k = 1, 1, 64, 64, 32
+    ttnn_input = ttnn.from_torch(torch.zeros([N, C, H, W]), ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    ttnn_expert_mask = ttnn.from_torch(torch.zeros([N, C, 1, W]), ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    ttnn_topk_mask = ttnn.from_torch(torch.zeros([N, C, 1, k]), ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    preallocated_out = ttnn.from_torch(torch.zeros(out_shape), out_dtype, layout=out_layout, device=device)
+
+    with expect_error(RuntimeError, msg_pattern):
+        ttnn.moe(ttnn_input, ttnn_expert_mask, ttnn_topk_mask, k, output_tensor=preallocated_out)
+
