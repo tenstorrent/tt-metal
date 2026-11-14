@@ -1235,6 +1235,7 @@ def run_ring_joint_sdpa_model_configs(
     runtime: RingJointSDPARuntime = None,
     fp32_dest_acc_en: bool = False,
     use_attention_sink: bool = False,
+    streaming_fp32_dest: bool = False,
 ):
     """Run all q/k configs for one model while reusing shared inputs, mesh setup, and reference data."""
     qk_configs = list(qk_configs)
@@ -1414,6 +1415,7 @@ def run_ring_joint_sdpa_model_configs(
                 q_chunk_size=q_chunk_size,
                 k_chunk_size=k_chunk_size,
                 exp_approx_mode=False,
+                streaming_fp32_dest=streaming_fp32_dest,
             )
 
             reference_output = None
@@ -5686,6 +5688,39 @@ def test_ring_joint_attention_sdpa_accuracy(model_name, fp32_dest_acc_en):
         pcc_threshold=pcc_threshold,
         rmse_threshold=rmse_threshold,
         fp32_dest_acc_en=fp32_dest_acc_en,
+    )
+
+
+@pytest.mark.parametrize("model_name", ["wan2_2_1xGLX"])
+def test_ring_joint_attention_sdpa_streaming_fp32_dest_accuracy(model_name):
+    """streaming_fp32_dest at the fp32-dest thresholds."""
+    model = MODEL_CONFIGS[model_name]
+    qk_configs = get_model_qk_configs(model, fp32_dest_acc_en=True)
+    assert qk_configs, f"{model.name}: no q/k config fits with fp32 dest"
+    # The output depends on k_chunk_size only: one q chunk per k chunk is enough
+    q_chunk = min(q for q, _ in qk_configs)
+    run_ring_joint_sdpa_model_configs(
+        MESH_CONFIG,
+        model,
+        [(q, k) for q, k in qk_configs if q == q_chunk],
+        pcc_threshold=DEFAULT_PCC_THRESHOLD_FP32,
+        rmse_threshold=DEFAULT_RMSE_THRESHOLD,
+        fp32_dest_acc_en=True,
+        streaming_fp32_dest=True,
+    )
+
+
+@pytest.mark.parametrize("model_name", ["wan2_2_1xGLX"])
+def test_ring_joint_attention_sdpa_streaming_fp32_dest_determinism(model_name):
+    """Two calls on the streaming fp32-dest path give identical bytes."""
+    model = MODEL_CONFIGS[model_name]
+    run_ring_joint_sdpa_model_configs(
+        MESH_CONFIG,
+        model,
+        get_model_qk_configs(model, fp32_dest_acc_en=True)[:1],
+        num_iterations=2,
+        fp32_dest_acc_en=True,
+        streaming_fp32_dest=True,
     )
 
 

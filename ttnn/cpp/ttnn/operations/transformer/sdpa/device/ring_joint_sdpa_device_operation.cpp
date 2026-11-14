@@ -653,6 +653,14 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
 
     // Check that SDPA coregrid does not overlap with AllGather coregrid
     TT_FATAL(args.program_config.has_value(), "Program config must be provided");
+    if (args.program_config->streaming_fp32_dest) {
+        TT_FATAL(
+            get_fp32_dest_acc_en(args.compute_kernel_config),
+            "streaming_fp32_dest requires fp32_dest_acc_en=true in the compute kernel config");
+        TT_FATAL(
+            args.program_config->k_splits == 1 && !args.program_config->segmented_accumulation,
+            "streaming_fp32_dest is not supported with k_splits > 1 or segmented_accumulation");
+    }
     const auto strategy = args.all_gather_operation_attributes.core_allocation_strategy;
     if (strategy == ttnn::ccl::CoreAllocationStrategy::COL_MAJOR) {
         TT_FATAL(
