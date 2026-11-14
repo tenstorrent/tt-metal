@@ -2563,6 +2563,29 @@ def test_slice_rm_wide_row_after_l1_fills(device):
         ttnn.deallocate(resident)
 
 
+@pytest.mark.parametrize(
+    "torch_shape, slices",
+    [
+        ((1, 1, 32, 40), (Ellipsis, slice(0, 64))),
+        ((1, 1, 40, 32), (slice(None), slice(None), slice(0, 64), slice(None))),
+    ],
+    ids=["padded_width", "padded_height"],
+)
+def test_getitem_stop_past_logical_extent(device, torch_shape, slices):
+    # Python clamps a slice stop to the dimension size. The TILE tensor is padded to 64 in the
+    # sliced dim, so an unclamped stop (:64 on a logical 40) returns tile padding as real data.
+    torch_input = torch.randn(torch_shape, dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    assert list(tt_input.shape) == list(torch_shape)
+    assert list(tt_input.padded_shape) != list(tt_input.shape)
+
+    torch_output = torch_input[slices]
+    tt_output = ttnn.to_torch(tt_input[slices])
+
+    assert list(tt_output.shape) == list(torch_output.shape)
+    assert_equal(torch_output, tt_output)
+
+
 def _docstring_unit_step_dtypes():
     """Dtypes the ttnn.slice docstring says need a ``slice_step`` of 1."""
     names = re.findall(r"``(\w+)``\s+tensors\s+need\s+a\s+``slice_step``\s+of\s+1", ttnn.slice.__doc__)
