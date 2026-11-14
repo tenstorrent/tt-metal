@@ -13,9 +13,14 @@ import glob
 import json
 import os
 import re
+import runpy
+from pathlib import Path
 
 import pandas as pd
-from test_name_aliases import canonical_test_name
+
+canonical_test_name = runpy.run_path(
+    str(Path(__file__).with_name("test_name_aliases.py"))
+)["canonical_test_name"]
 
 # 5 runs of one commit on Blackhole moved at most 1.9% and 25 cycles (#53752).
 DEFAULT_THRESHOLD = 0.02
