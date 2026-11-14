@@ -90,6 +90,14 @@ void RotaryEmbeddingLlamaFusedQKDeviceOperation::validate_on_program_cache_miss(
     uint32_t q_num_cores = q_input_tensor.shard_spec()->grid.num_cores();
     uint32_t k_num_cores = k_input_tensor.shard_spec()->grid.num_cores();
     TT_FATAL(q_num_cores + k_num_cores <= 64, "Q and K must not exceed max core grid size of 64");
+    // The kernels rotate each core's shard with the one cos/sin row on that core (batch_per_core = 1).
+    TT_FATAL(
+        q_num_cores == q_batch_size && k_num_cores == k_batch_size,
+        "Q and K must be sharded one user per core, but got {} users on {} Q cores and {} users on {} K cores",
+        q_batch_size,
+        q_num_cores,
+        k_batch_size,
+        k_num_cores);
 
     bool is_overlap = q_input_tensor.shard_spec()->grid.intersects(k_input_tensor.shard_spec()->grid);
     TT_FATAL(!is_overlap, "Q and K must not overlap");
