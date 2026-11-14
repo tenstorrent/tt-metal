@@ -68,6 +68,7 @@ from typing import Any
 import torch
 
 import ttnn
+from models.common.hf_layer_type_attention import layer_type_attention
 
 
 @dataclass(frozen=True)
@@ -168,10 +169,7 @@ class Gemma4VllmLayout:
         n = num_layers if num_layers is not None else text_config.num_hidden_layers
         layer_types = full_layer_types[:n]
 
-        sliding_kv = int(text_config.num_key_value_heads)
-        sliding_hd = int(text_config.head_dim)
-        full_kv = int(getattr(text_config, "num_global_key_value_heads", None) or sliding_kv)
-        full_hd = int(getattr(text_config, "global_head_dim", None) or sliding_hd)
+        sliding_kv, sliding_hd, full_kv, full_hd = (int(v) for v in layer_type_attention(text_config))
 
         def kv_per_dev(num_kv_heads: int) -> int:
             return 1 if num_kv_heads < num_devices else num_kv_heads // min(num_devices, num_kv_heads)

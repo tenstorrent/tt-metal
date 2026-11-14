@@ -63,6 +63,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.hf_layer_type_attention import layer_type_attention
 from models.experimental.diffusion_gemma.checkpoint import build_tt_model_from_checkpoint_dir
 from models.experimental.diffusion_gemma.config import DiffusionConfig
 from models.experimental.diffusion_gemma.tt.generate import fixed_prefill_chunks_enabled, prefill_prompt_tokens
@@ -645,11 +646,8 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         if layer_types is None:
             raise ValueError(f"{cls.__name__}.get_kv_cache_spec requires text_config.layer_types")
 
-        sliding_kv_heads = text_config.num_key_value_heads
-        sliding_head_dim = text_config.head_dim
+        sliding_kv_heads, sliding_head_dim, full_kv_heads, full_head_dim = layer_type_attention(text_config)
         sliding_window = getattr(text_config, "sliding_window", None)
-        full_kv_heads = getattr(text_config, "num_global_key_value_heads", None) or sliding_kv_heads
-        full_head_dim = getattr(text_config, "global_head_dim", None) or sliding_head_dim
 
         tp = parallel_config.tensor_parallel_size
         # Match Gemma4 split_qkv/cache allocation: when KV heads < TP, each

@@ -21,6 +21,7 @@ import pytest
 import torch
 
 import ttnn
+from models.common.hf_layer_type_attention import layer_type_attention
 from models.demos.gemma4.config import MeshConfig, ModeConfig
 from models.demos.gemma4.tt.attention import Gemma4Attention, Gemma4AttentionConfig
 from models.demos.gemma4.tt.ccl import CCLManager
@@ -975,18 +976,17 @@ def _inject_missing_kv_shared_attention_weights(state_dict, hf_text_config, num_
     placeholders for any omitted entries.
     """
     hidden = int(hf_text_config.hidden_size)
+    attn = layer_type_attention(hf_text_config)
     for layer_idx in range(num_layers):
         attn_prefix = f"{prefix}layers.{layer_idx}.self_attn"
         layer_type = hf_text_config.layer_types[layer_idx]
         is_sliding = layer_type == "sliding_attention"
         if is_sliding:
-            num_kv_heads = int(hf_text_config.num_key_value_heads)
-            head_dim = int(hf_text_config.head_dim)
+            num_kv_heads = int(attn.sliding_kv_heads)
+            head_dim = int(attn.sliding_head_dim)
         else:
-            num_kv_heads = int(
-                getattr(hf_text_config, "num_global_key_value_heads", None) or hf_text_config.num_key_value_heads
-            )
-            head_dim = int(getattr(hf_text_config, "global_head_dim", None) or hf_text_config.head_dim)
+            num_kv_heads = int(attn.full_kv_heads)
+            head_dim = int(attn.full_head_dim)
         kv_size = num_kv_heads * head_dim
 
         state_dict.setdefault(

@@ -18,6 +18,7 @@ from vllm.model_executor.models.interfaces import SupportsMultiModal
 from vllm.multimodal import MULTIMODAL_REGISTRY
 
 import ttnn
+from models.common.hf_layer_type_attention import layer_type_attention
 from models.common.utility_functions import is_blackhole
 from models.demos.gemma4.config import gemma4_kv_bfp8_enabled
 from models.demos.gemma4.tt.attention import _RING_HEADROOM_BLOCK, SPEC_RING_HEADROOM_ENV
@@ -1832,11 +1833,8 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
                 "'sliding_attention' per layer); none found on this model"
             )
 
-        sliding_kv_heads = text_config.num_key_value_heads
-        sliding_head_dim = text_config.head_dim
+        sliding_kv_heads, sliding_head_dim, full_kv_heads, full_head_dim = layer_type_attention(text_config)
         sliding_window = getattr(text_config, "sliding_window", None)
-        full_kv_heads = getattr(text_config, "num_global_key_value_heads", None) or sliding_kv_heads
-        full_head_dim = getattr(text_config, "global_head_dim", None) or sliding_head_dim
 
         tp = parallel_config.tensor_parallel_size
         sliding_kv_heads_per_dev = sliding_kv_heads // tp
