@@ -202,6 +202,20 @@ def _maybe_acknowledge_trace_buffers_corruptible(owner, value):
     trace_allocation_tracker.acknowledge_corruptible(value)
 
 
+def _opts_in_to_decode_trace_recapture(owner):
+    """Whether every model of ``owner`` (a Generator) opts in to Generator._recapture_stale_decode_traces.
+
+    Read with getattr only: unbound Generator methods are also called on duck-typed test doubles, which then skip the
+    re-capture bookkeeping entirely.
+    """
+    models = getattr(owner, "model", None)
+    return (
+        isinstance(models, (list, tuple))
+        and len(models) > 0
+        and all(getattr(m, "_tt_recapture_decode_trace_on_new_programs", False) is True for m in models)
+    )
+
+
 def max_prefill_chunk_size_cutoff(sequence_length, max_prefill_chunk_size):
     return sequence_length > max_prefill_chunk_size
 
@@ -253,6 +267,10 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         self.trace_input_prefill_sampling = defaultdict(lambda: None)
         self.trace_output_prefill_sampling = defaultdict(lambda: None)
         self.trace_ids_decode = defaultdict(lambda: None)  # {device_sampling_bool: {device_id: trace_id}}
+        # Opt-in models only (see _recapture_stale_decode_traces): {device_sampling_bool: (program cache entries per
+        # model when that decode trace was captured, the kv_cache it was captured with)}, and the re-capture count.
+        self._decode_trace_baselines = {}
+        self._decode_trace_recaptures = 0
         self.trace_inputs_decode = defaultdict(lambda: None)
         self.trace_output_decode = defaultdict(lambda: None)
         self.prefill_traces_warmup = False
@@ -1210,6 +1228,14 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             raise
         if not already_pending and self._defer_trace_recording:
             self.finalize_deferred_traces()
+        if (
+            _opts_in_to_decode_trace_recapture(self)
+            and not self._defer_trace_recording
+            and not self._defer_prefill_recording
+        ):
+            # The prefill boundary: this call may have compiled programs (a new prefill length) after the decode
+            # traces were captured. Re-capture those traces here, before any of them replays.
+            self._recapture_stale_decode_traces()
         return result
 
     def _prefill_forward_text_impl(
@@ -2527,6 +2553,13 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 # is asserting the program cache is already warm for this variant.
                 sampling_module.capture_trace(logits=tt_out_trace[i], tt_out_tok=tt_out_tok, skip_precompile=True)
         logger.info("Done Capturing Decode Trace")
+        if _opts_in_to_decode_trace_recapture(self):
+            # Every decode trace install (_record_pending_traces, precapture_decode_trace_variants, the lazy capture
+            # of _decode_forward_trace_text, a re-capture) records the programs this trace was captured over.
+            self.__dict__.setdefault("_decode_trace_baselines", {})[on_device_sampling] = (
+                self._program_cache_entries(),
+                kv_cache,
+            )
 
         return trace_ids, tt_out_trace, *device_inputs
 
@@ -2628,6 +2661,12 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         ``reload_page_table`` refreshes only the page table while preserving
         device-produced token and position state.
         """
+        # Opt-in models: a trace older than the program cache is re-captured before it replays, whatever the reload
+        # flags (async decode steps reload nothing). Prefill calls already check; this covers programs compiled
+        # between a prefill and this step.
+        if _opts_in_to_decode_trace_recapture(self) and self.trace_ids_decode[on_device_sampling]:
+            self._recapture_stale_decode_traces(keys=(on_device_sampling,))
+
         # The trace is different depending on whether we are doing device sampling or not
         if not self.trace_ids_decode[on_device_sampling]:
             trace_ids, tt_out_trace, *device_inputs = self._capture_decode_trace_text(
@@ -2669,6 +2708,81 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         for i, trace_id in self.trace_ids_decode[on_device_sampling].items():
             ttnn.execute_trace(self.model_args[i].mesh_device, trace_id, cq_id=0, blocking=False)
         return self.trace_output_decode[on_device_sampling]
+
+    def _program_cache_entries(self):
+        return [self.model_args[i].mesh_device.num_program_cache_entries() for i in range(self.data_parallel)]
+
+    def _recapture_stale_decode_traces(self, keys=None):
+        """Re-capture every live decode trace (of ``keys``, default all) that is older than the program cache.
+
+        A program compiled after a decode trace was captured (the first prefill of a new length, say) can own
+        long-lived device buffers, e.g. the global semaphores of the prefill's ttnn.all_reduce, placed in the trace's
+        scratch region, which every replay of the trace overwrites. A trace whose program cache baseline (recorded by
+        _record_decode_trace_text) no longer matches is released and captured again over its own persistent inputs:
+        nothing is allocated outside the capture window, and the device-resident tokens, positions and page table stay
+        as they are, so no host reload is needed. The sampling trace of the current sampling configuration is captured
+        with it; the other configurations capture on first use, as after the first capture.
+
+        Runs at the end of every prefill call and before every decode replay, for models that opt in with
+        ``_tt_recapture_decode_trace_on_new_programs`` (see _opts_in_to_decode_trace_recapture). Returns the number of
+        traces re-captured.
+        """
+        if getattr(self, "_pending_deferred_decode_sampling", None) is not None:
+            # Its payload holds the current trace's logits for sampling; the next decode replay checks again.
+            return 0
+        baselines = self.__dict__.get("_decode_trace_baselines", {})
+        current = self._program_cache_entries()
+        stale = [
+            key
+            for key, (entries, _) in baselines.items()
+            if (keys is None or key in keys) and self.trace_ids_decode[key] and entries != current
+        ]
+        if not stale:
+            return 0
+        # As _record_pending_traces: capture in decode mode, then restore only the generator's own mode.
+        previous_mode = getattr(self, "mode", None)
+        self.mode = Mode.DECODE
+        for model in self.model:
+            model.switch_mode(Mode.DECODE)
+        try:
+            for on_device_sampling in stale:
+                entries, kv_cache = baselines[on_device_sampling]
+                self._decode_trace_recaptures = getattr(self, "_decode_trace_recaptures", 0) + 1
+                logger.info(
+                    f"Re-capturing the decode trace (on-device sampling: {on_device_sampling}): programs were compiled "
+                    f"after its capture (program cache entries {entries} -> {current}); "
+                    f"re-capture {self._decode_trace_recaptures}"
+                )
+                self._release_decode_trace(on_device_sampling)
+                trace_ids, tt_out_trace, *device_inputs = self._record_decode_trace_text(
+                    {
+                        "device_inputs": self.trace_inputs_decode[on_device_sampling],
+                        "kv_cache": kv_cache,
+                        "on_device_sampling": on_device_sampling,
+                    }
+                )
+                self.trace_ids_decode[on_device_sampling] = trace_ids
+                self.trace_inputs_decode[on_device_sampling] = device_inputs
+                self.trace_output_decode[on_device_sampling] = tt_out_trace
+        finally:
+            self.mode = previous_mode
+        return len(stale)
+
+    def _release_decode_trace(self, on_device_sampling):
+        """Release a decode trace, keeping its persistent inputs for the re-capture.
+
+        Only the device-sampling trace has sampling traces (captured over its output by _record_decode_trace_text and
+        sample_decode_on_device); those are released with it. The host-sampling trace has none, so releasing it leaves
+        the sampling traces alone.
+        """
+        for i, trace_id in self.trace_ids_decode[on_device_sampling].items():
+            mesh_device = self.model_args[i].mesh_device
+            ttnn.synchronize_device(mesh_device)  # no replay of the trace may still be queued
+            ttnn.release_trace(mesh_device, trace_id)
+            sampling_module = getattr(self.model[i], "sampling", None)
+            if on_device_sampling and sampling_module is not None:
+                sampling_module.reset_trace()
+        self.trace_ids_decode[on_device_sampling] = None
 
     def _apply_sampling_slot_remap(self, slot_remap) -> None:
         if slot_remap is None:
