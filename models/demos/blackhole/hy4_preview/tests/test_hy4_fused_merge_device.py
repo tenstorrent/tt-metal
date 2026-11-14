@@ -74,6 +74,46 @@ def run_pcc(md):
             emit({"test": "fused_merge_pcc", "case": tag, "error": str(e).strip().splitlines()[0][:300]})
 
 
+def run_xchg_pcc(md):
+    """A2: fabric exchange + merge in one program (HY4_XM_NSPLIT) vs torch full softmax"""
+    sel = os.environ.get("CASES")
+    for kind, ctx, S, fmt in CASES:
+        tag = f"{kind}_{ctx}_S{S}_{fmt}"
+        if sel and tag not in sel.split(","):
+            continue
+        try:
+            c = DM.Case(md, kind, ctx, S, fmt, seed=3)
+            blk = DM.mk_block(md, S, fuse=True, xchg=True)
+            idx8 = blk.idx_rows(c.idx_dev)
+            outs = []
+            for rep in range(3):  # repeated calls: semaphore / landing buffer reuse
+                outs.append(blk.run(c.q_dev, c.kv_dev, idx8, c.sinkrow3_dev))
+            got = [DM.result_to_heads(md, o, S, True) for o in outs]
+            ps = [round(pcc(g, c.ref), 6) for g in got]
+            emit({"test": "xchg_pcc", "case": tag, "pcc_per_call": ps, "finite": bool(all(torch.isfinite(g).all() for g in got)), "pass": bool(min(ps) >= DM.GATE)})
+            c.free()
+        except Exception as e:
+            import traceback
+
+            traceback.print_exc()
+            emit({"test": "xchg_pcc", "case": tag, "error": str(e).strip().splitlines()[0][:300]})
+            raise
+
+
+def run_xchg_lat(md):
+    for fmt in ("bf16", "scaled"):
+        for S in (1, 2):
+            c = DM.Case(md, "random", 65536, S, fmt, seed=5)
+            base = DM.mk_block(md, S, fuse=True, xchg=False)
+            xb = DM.mk_block(md, S, fuse=True, xchg=True)
+            idx8 = base.idx_rows(c.idx_dev)
+            a = timed_traced(md, lambda: base.run(c.q_dev, c.kv_dev, idx8, c.sinkrow3_dev))
+            b = timed_traced(md, lambda: xb.run(c.q_dev, c.kv_dev, idx8, c.sinkrow3_dev))
+            q2 = timed_traced(md, lambda: xb.run(c.q_dev, c.kv_dev, idx8, c.sinkrow3_dev, upto=2))
+            emit({"test": "xchg_lat", "fmt": fmt, "S": S, "block_a1_us": a, "block_a2_us": b, "qg_plus_kernel_us": q2, "xm_stage_us": round(b - q2, 1), "dbg": os.environ.get("HY4_XM_DBG", "0")})
+            c.free()
+
+
 def run_lat(md):
     for fmt in ("bf16", "scaled"):
         for S in (1, 2):
@@ -100,7 +140,7 @@ def run_lat(md):
 if __name__ == "__main__":
     full, md = open_row()
     try:
-        for name, fn in [("pcc", run_pcc), ("lat", run_lat)]:
+        for name, fn in [("pcc", run_pcc), ("lat", run_lat), ("xpcc", run_xchg_pcc), ("xlat", run_xchg_lat)]:
             if os.environ.get("TEST", "pcc") in (name, "all"):
                 fn(md)
     finally:
