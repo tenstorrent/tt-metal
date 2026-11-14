@@ -25,9 +25,17 @@ struct PointToPointOp {
 
         // put this in here to hash on tensor spec
         const tt::tt_metal::TensorSpec _input_tensor_spec;
+        // Distinguish in-place calls (optional_output_tensor aliasing input_tensor) in the
+        // program-cache key: resolve_bindings binds the receiver writer to slot 0 (input) when
+        // output aliases input, which would otherwise overwrite the input of a subsequent
+        // out-of-place call that hits the same cache entry (#63643).
+        const bool is_in_place = false;
 
-        static constexpr auto attribute_names = std::forward_as_tuple("send_coord", "receive_coord", "topology");
-        auto attribute_values() const { return std::forward_as_tuple(send_coord, receive_coord, topology); };
+        static constexpr auto attribute_names =
+            std::forward_as_tuple("send_coord", "receive_coord", "topology", "is_in_place");
+        auto attribute_values() const {
+            return std::forward_as_tuple(send_coord, receive_coord, topology, is_in_place);
+        };
     };
 
     struct tensor_args_t {

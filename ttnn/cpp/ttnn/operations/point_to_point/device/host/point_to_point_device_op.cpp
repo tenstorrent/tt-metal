@@ -270,8 +270,13 @@ ttnn::operations::point_to_point::PointToPointOp::tensor_return_value_t point_to
     const std::optional<ttnn::Tensor>& optional_output_tensor,
     const std::optional<ttnn::Tensor>& optional_intermediate_tensor) {
     using OperationType = ttnn::operations::point_to_point::PointToPointOp;
+    const bool is_in_place = optional_output_tensor.has_value() &&
+                             input_tensor.storage_type() == ttnn::StorageType::DEVICE &&
+                             optional_output_tensor->storage_type() == ttnn::StorageType::DEVICE &&
+                             optional_output_tensor->buffer() == input_tensor.buffer();
     return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{receiver_coord, sender_coord, topology, input_tensor.tensor_spec()},
+        OperationType::operation_attributes_t{
+            receiver_coord, sender_coord, topology, input_tensor.tensor_spec(), is_in_place},
         OperationType::tensor_args_t{input_tensor, optional_output_tensor, optional_intermediate_tensor});
 }
 }  // namespace ttnn::prim
