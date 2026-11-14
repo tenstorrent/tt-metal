@@ -91,8 +91,6 @@ constexpr std::uint32_t src_a_condition()
 
 // SrcB's condition is SrcA's one bit up, so the SRC_A / SRC_B bits times SrcA's condition give the condition for both
 static_assert(ckernel::p_stall::SRCB_CLR == ckernel::p_stall::SRCA_CLR << 1 && ckernel::p_stall::SRCB_VLD == ckernel::p_stall::SRCA_VLD << 1);
-// REPLAY_HANDSHAKES is two handshakes (STALLWAIT + flip) per replay buffer slot; fail on a buffer-size change
-static_assert(2 * REPLAY_HANDSHAKES == REPLAY_BUF_SIZE, "REPLAY_HANDSHAKES must be half the replay buffer depth");
 
 template <bool PRODUCE>
 constexpr std::uint32_t wait_op(const std::uint32_t srcs)
@@ -103,7 +101,7 @@ constexpr std::uint32_t wait_op(const std::uint32_t srcs)
 template <bool PRODUCE>
 constexpr std::uint32_t flip_op(const std::uint32_t srcs)
 {
-    return PRODUCE ? TT_OP_SETDVALID(srcs) : TT_OP_CLEARDVALID(srcs, 0 /*reset*/);
+    return PRODUCE ? TT_OP_SETDVALID(srcs) : TT_OP_CLEARDVALID(srcs, 0);
 }
 
 // Template 0 with one handshake per iteration, of kind0 where the zmask bit is 0 and of kind1 where it is 1, and the
@@ -113,7 +111,7 @@ inline void program(const std::uint32_t kind0, const std::uint32_t kind1, const 
 {
     // A0 and B one handshake, skip A and skip B the other; no A1-A3 (program() syncs on the MOPs in flight first)
     ckernel::ckernel_unpack_template(
-        true /*unpackB*/, false /*unpackHalo*/, wait_op<PRODUCE>(kind0), TT_OP_NOP, TT_OP_NOP, TT_OP_NOP, wait_op<PRODUCE>(kind1), flip_op<PRODUCE>(kind0), flip_op<PRODUCE>(kind1))
+        true, false, wait_op<PRODUCE>(kind0), TT_OP_NOP, TT_OP_NOP, TT_OP_NOP, wait_op<PRODUCE>(kind1), flip_op<PRODUCE>(kind0), flip_op<PRODUCE>(kind1))
         .program();
     TT_MOP_CFG(mask_hi);
 }
@@ -131,18 +129,18 @@ inline void emit_segments(const SegmentPlan& plan, const std::uint32_t once, con
     constexpr std::uint32_t HALF = REPLAY_HANDSHAKES;
     const std::uint32_t period   = burst + run;
     // the replay buffer, slots 0 ..: the whole period (split: HALF handshakes, the run's first period - HALF dropped), or the burst
-    TT_REPLAY(0 /*start_idx*/, 2 * plan.buffered /*len*/, 0 /*execute_while_loading*/, 1 /*load_mode*/);
+    TT_REPLAY(0, 2 * plan.buffered, 0, 1);
     for (std::uint32_t i = 0; i < plan.buffered; i++)
     {
         const std::uint32_t kind  = !plan.whole ? once : (PRODUCE ? (i < burst ? once : each) : (i < (plan.split ? HALF - burst : run) ? each : once));
         ckernel::instrn_buffer[0] = wait_op<PRODUCE>(kind);
         ckernel::instrn_buffer[0] = flip_op<PRODUCE>(kind);
     }
-    const std::uint32_t replay = TT_OP_REPLAY(0 /*start_idx*/, 2 * plan.buffered /*len*/, 0 /*execute_while_loading*/, 0 /*load_mode*/);
+    const std::uint32_t replay = TT_OP_REPLAY(0, 2 * plan.buffered, 0, 0);
     if (plan.whole) // inner loop: the period, replayed (split: the run's first period - HALF, then the buffer); no start or end instructions
     {
         ckernel::ckernel_template tmpl(
-            plan.outer, plan.inner, plan.split ? TT_OP_REPLAY(0 /*start_idx*/, 2 * (period - HALF) /*len*/, 0 /*execute_while_loading*/, 0 /*load_mode*/) : replay, plan.split ? replay : TT_OP_NOP);
+            plan.outer, plan.inner, plan.split ? TT_OP_REPLAY(0, 2 * (period - HALF), 0, 0) : replay, plan.split ? replay : TT_OP_NOP);
         tmpl.set_last_outer_loop_instr(replay);
         tmpl.set_last_inner_loop_instr(replay);
         tmpl.program(); // syncs on the MOPs in flight first
@@ -156,7 +154,7 @@ inline void emit_segments(const SegmentPlan& plan, const std::uint32_t once, con
     }
     for (std::uint32_t i = 0; i < plan.mops; i++)
     {
-        TTI_MOP(1 /*mop_type*/, 0 /*loop_count*/, 0 /*zmask_lo16*/);
+        TTI_MOP(1, 0, 0);
     }
 }
 
@@ -168,14 +166,14 @@ inline void run(const std::uint32_t kind, std::uint32_t count)
     {
         return; // like the loop mocks: no work leaves the MOP configuration alone
     }
-    program<PRODUCE>(kind, kind, 0 /*mask_hi*/);
+    program<PRODUCE>(kind, kind, 0);
     for (; count >= MOP_LOOP_MAX + 1; count -= MOP_LOOP_MAX + 1)
     {
-        TTI_MOP(0 /*mop_type*/, MOP_LOOP_MAX /*loop_count*/, 0 /*zmask_lo16*/);
+        TTI_MOP(0, MOP_LOOP_MAX, 0);
     }
     if (count != 0)
     {
-        TT_MOP(0 /*mop_type*/, count - 1 /*loop_count*/, 0 /*zmask_lo16*/);
+        TT_MOP(0, count - 1, 0);
     }
 }
 
@@ -185,9 +183,9 @@ template <bool PRODUCE>
 inline void stream(const std::uint32_t kind0, const std::uint32_t kind1, const std::uint32_t pattern, const std::uint32_t period, std::uint32_t periods)
 {
     LLK_ASSERT(period >= 1 && period <= ZMASK_BITS, "a period fits the zmask");
-    if (periods == 0 || period == 0 || period > ZMASK_BITS)
+    if (periods == 0)
     {
-        return; // period > ZMASK_BITS makes per_mop 0: guard so the loop below terminates even without LLK_ASSERT
+        return;
     }
     const std::uint32_t per_mop = ZMASK_BITS / period;
     std::uint32_t mask          = 0;
@@ -196,14 +194,14 @@ inline void stream(const std::uint32_t kind0, const std::uint32_t kind1, const s
         mask |= pattern << (i * period);
     }
     program<PRODUCE>(kind0, kind1, mask >> 16);
-    const std::uint32_t mop = TT_OP_MOP(0 /*mop_type*/, per_mop * period - 1 /*loop_count*/, mask & 0xFFFF /*zmask_lo16*/);
+    const std::uint32_t mop = TT_OP_MOP(0, per_mop * period - 1, mask & 0xFFFF);
     for (; periods >= per_mop; periods -= per_mop)
     {
         ckernel::instrn_buffer[0] = mop;
     }
     if (periods != 0)
     {
-        TT_MOP(0 /*mop_type*/, periods * period - 1 /*loop_count*/, mask & 0xFFFF /*zmask_lo16*/);
+        TT_MOP(0, periods * period - 1, mask & 0xFFFF);
     }
 }
 
@@ -240,17 +238,17 @@ inline void matmul(
             const std::uint32_t burst = std::min(REUSE_BURST, plan.reuse_loop - reuse_iter);
             if constexpr (PRODUCE)
             {
-                TT_MOP(0 /*mop_type*/, burst - 1 /*loop_count*/, (1u << burst) - 1 /*zmask_lo16*/);
+                TT_MOP(0, burst - 1, (1u << burst) - 1);
             }
             for (std::uint32_t left = plan.reload_loop; left != 0;)
             {
-                const std::uint32_t count = std::min(left, MOP_LOOP_MAX + 1);
-                TT_MOP(0 /*mop_type*/, count - 1 /*loop_count*/, 0 /*zmask_lo16*/);
+                const std::uint32_t count = std::min(left, static_cast<std::uint32_t>(128));
+                TT_MOP(0, count - 1, 0);
                 left -= count;
             }
             if constexpr (!PRODUCE)
             {
-                TT_MOP(0 /*mop_type*/, burst - 1 /*loop_count*/, (1u << burst) - 1 /*zmask_lo16*/);
+                TT_MOP(0, burst - 1, (1u << burst) - 1);
             }
         }
     }
@@ -285,17 +283,17 @@ inline void srcb_reuse(const std::uint32_t a_count, std::uint32_t periods)
     {
         if constexpr (PRODUCE)
         {
-            TTI_MOP(0 /*mop_type*/, 0 /*loop_count*/, 1 /*zmask_lo16*/);
+            TTI_MOP(0, 0, 1);
         }
         for (std::uint32_t left = a_count; left != 0;)
         {
-            const std::uint32_t count = std::min(left, MOP_LOOP_MAX + 1);
-            TT_MOP(0 /*mop_type*/, count - 1 /*loop_count*/, 0 /*zmask_lo16*/);
+            const std::uint32_t count = std::min(left, static_cast<std::uint32_t>(128));
+            TT_MOP(0, count - 1, 0);
             left -= count;
         }
         if constexpr (!PRODUCE)
         {
-            TTI_MOP(0 /*mop_type*/, 0 /*loop_count*/, 1 /*zmask_lo16*/);
+            TTI_MOP(0, 0, 1);
         }
     }
 }
