@@ -56,6 +56,7 @@ struct InputArgs {
     std::optional<uint32_t> min_connections = std::nullopt;  // Relaxed validation mode
     bool skip_retrain = false;                               // Report missing links without reset_ethernet_links
     bool cross_host_port_down = false;
+    bool skip_fw_bundle_version_check = false;
 
     // link_reset subcommand args
     std::optional<std::string> reset_host = std::nullopt;
@@ -123,6 +124,10 @@ cxxopts::Options create_validation_options() {
         "cross-host-port-down",
         "Bring down all cross-host Ethernet ports (from golden connectivity) and exit; requires "
         "--cabling-descriptor-path/--deployment-descriptor-path or --factory-descriptor-path",
+        cxxopts::value<bool>()->default_value("false"))(
+        "skip-fw-bundle-version-check",
+        "Warn instead of failing when hosts report different firmware bundle versions (e.g. during a firmware "
+        "rollout)",
         cxxopts::value<bool>()->default_value("false"))("h,help", "Print usage information");
 
     return options;
@@ -249,6 +254,7 @@ void parse_validation_args(int argc, char* argv[], InputArgs& input_args) {
         input_args.sweep_traffic_configs = result["sweep-traffic-configs"].as<bool>();
         input_args.skip_retrain = result["skip-retrain"].as<bool>();
         input_args.cross_host_port_down = result["cross-host-port-down"].as<bool>();
+        input_args.skip_fw_bundle_version_check = result["skip-fw-bundle-version-check"].as<bool>();
         input_args.validate_connectivity =
             input_args.cabling_descriptor_path.has_value() || input_args.fsd_path.has_value();
         if (input_args.skip_retrain) {
@@ -311,7 +317,10 @@ PhysicalSystemDescriptor generate_physical_system_descriptor(const InputArgs& in
     auto physical_system_descriptor = tt::tt_metal::run_physical_system_discovery(
         *context.get_cluster().get_cluster_desc(),
         context.get_distributed_context_ptr(),
-        context.rtoptions().get_target_device());
+        context.rtoptions().get_target_device(),
+        true,
+        true,
+        !input_args.skip_fw_bundle_version_check);
     log_output_rank0("Physical Discovery Complete");
     log_output_rank0("Detected Hosts: " + log_hostnames(physical_system_descriptor.get_all_hostnames()));
     return physical_system_descriptor;
@@ -444,7 +453,8 @@ int main(int argc, char* argv[]) {
             context_ref.get_distributed_context_ptr(),
             context_ref.rtoptions().get_target_device(),
             true,
-            true);
+            true,
+            !input_args.skip_fw_bundle_version_check);
         physical_system_descriptor.merge(std::move(new_psd));
         missing_asic_topology = run_connectivity_validation(input_args, physical_system_descriptor);
     }
@@ -468,7 +478,8 @@ int main(int argc, char* argv[]) {
         .cabling_descriptor_path = input_args.cabling_descriptor_path,
         .deployment_descriptor_path = input_args.deployment_descriptor_path,
         .fsd_path = input_args.fsd_path,
-        .fail_on_warning = input_args.fail_on_warning};
+        .fail_on_warning = input_args.fail_on_warning,
+        .check_fw_bundle_version = !input_args.skip_fw_bundle_version_check};
 
     eth_connections_healthy = generate_link_metrics(
         physical_system_descriptor,
