@@ -30,6 +30,26 @@ void MorehSgdOperation::validate_inputs(
     if (tensor_args.momentum_buffer_out.has_value()) {
         check_tensor(tensor_args.momentum_buffer_out.value(), "moreh_sgd", "momentum_buffer_out", {DataType::BFLOAT16});
     }
+
+    const auto& param_shape = params_in.logical_shape();
+    const auto check_shape = [&](const Tensor& tensor, const char* name) {
+        TT_FATAL(
+            tensor.logical_shape() == param_shape,
+            "moreh_sgd: {} shape {} must match the param shape {}",
+            name,
+            tensor.logical_shape(),
+            param_shape);
+    };
+    check_shape(grad, "grad");
+    if (tensor_args.momentum_buffer_in.has_value()) {
+        check_shape(tensor_args.momentum_buffer_in.value(), "momentum_buffer_in");
+    }
+    if (tensor_args.param_out.has_value()) {
+        check_shape(tensor_args.param_out.value(), "param_out");
+    }
+    if (tensor_args.momentum_buffer_out.has_value()) {
+        check_shape(tensor_args.momentum_buffer_out.value(), "momentum_buffer_out");
+    }
 };
 
 void MorehSgdOperation::validate_on_program_cache_miss(

@@ -123,3 +123,31 @@ def test_moreh_adamw_rejects_output_dtype_other_than_param(device, expect_error)
             amsgrad=False,
             param_out=param_out,
         )
+
+
+@pytest.mark.parametrize("mismatched", ["grad", "exp_avg_in", "param_out"])
+def test_moreh_adamw_rejects_shape_other_than_param(mismatched, device, expect_error):
+    # The program walks param_in's tiles in every buffer, so a smaller input is read past its end and a smaller
+    # output is written past its end, into whatever DRAM follows it.
+    shape, small = (1, 1, 64, 64), (1, 1, 32, 32)
+    tt = lambda s: ttnn.from_torch(torch.randn(s), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    param = tt(shape)
+    grad = tt(small if mismatched == "grad" else shape)
+    exp_avg = tt(small if mismatched == "exp_avg_in" else shape)
+    exp_avg_sq = tt(shape)
+    param_out = tt(small) if mismatched == "param_out" else None
+    with expect_error(RuntimeError, f"{mismatched} shape .* must match the param shape"):
+        ttnn.moreh_adamw(
+            param,
+            grad,
+            exp_avg,
+            exp_avg_sq,
+            lr=0.001,
+            beta1=0.9,
+            beta2=0.999,
+            eps=1e-8,
+            weight_decay=0.0,
+            step=1,
+            amsgrad=False,
+            param_out=param_out,
+        )
