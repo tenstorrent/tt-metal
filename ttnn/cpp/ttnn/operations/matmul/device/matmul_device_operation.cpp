@@ -6,6 +6,7 @@
 
 #include <string_view>
 
+#include "ttnn/device_operation_detail.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config.hpp"
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
@@ -3316,6 +3317,120 @@ MatmulDeviceOperation::tensor_return_value_t MatmulDeviceOperation::create_outpu
         output_tensors.emplace_back(create_device_tensor(output_spec, device));
     }
     return output_tensors;
+}
+
+namespace {
+
+using Placement = tt::tt_metal::distributed::MeshMapperConfig::Placement;
+using Shard = tt::tt_metal::distributed::MeshMapperConfig::Shard;
+
+// Where the dims of one operand of rank `rank` go in the output. `contracted` (K) goes nowhere and `kept` (a's M or b's
+// N, wherever the transpose flag puts it) goes to `kept_destination`; every other dim is a batch dim, aligned with the
+// output's from the right as compute_matmul_output_shape aligns them. A bias has neither, so all its dims align.
+struct OperandDims {
+    int rank = 0;
+    int contracted = -1;
+    int kept = -1;
+    int kept_destination = -1;
+};
+
+// `topology`'s placements with each Shard renumbered to the output dim its tensor dim becomes. A Shard keeps its
+// spelling: a negative dim stays negative, counted from the end of the output. nullopt when a Shard is on the
+// contracted dim or on no dim of the operand. Sets `moved` when a Shard's dim changes.
+std::optional<ttsl::SmallVector<Placement>> renumber_shards(
+    const tt::tt_metal::TensorTopology& topology, const OperandDims& dims, int output_rank, bool& moved) {
+    ttsl::SmallVector<Placement> placements = topology.placements();
+    for (auto& placement : placements) {
+        auto* shard = std::get_if<Shard>(&placement);
+        if (shard == nullptr) {
+            continue;
+        }
+        const int dim = shard->dim < 0 ? shard->dim + dims.rank : shard->dim;
+        if (dim < 0 || dim >= dims.rank || dim == dims.contracted) {
+            return std::nullopt;
+        }
+        const int destination = dim == dims.kept ? dims.kept_destination : dim + output_rank - dims.rank;
+        if (destination < 0) {
+            return std::nullopt;
+        }
+        const int spelled = shard->dim < 0 ? destination - output_rank : destination;
+        moved = moved || spelled != shard->dim;
+        shard->dim = spelled;
+    }
+    return placements;
+}
+
+}  // namespace
+
+// The default label is the union of the operands' labels, each Shard keeping its dim number. That is wrong wherever an
+// operand's dim lands elsewhere in the output: a's M and b's N become the output's last two dims wherever a transpose
+// flag puts them in the operand, and the batch dims of a lower-rank operand align from the right. This hook renumbers
+// those Shards and takes the same union. It returns empty, leaving the default, when no Shard moves; when an operand is
+// sharded on its contracted dim (each device then holds a partial sum, which no placement describes yet; the default
+// labels such an output Shard, not Replicate, on that mesh axis); for rank-1 operands; and for the multi-weight form.
+std::vector<tt::tt_metal::TensorTopology> MatmulDeviceOperation::compute_output_topologies(
+    const operation_attributes_t& attributes, const tensor_args_t& args) {
+    using tt::tt_metal::TensorTopology;
+    const auto& input_tensors = args.input_tensors;
+    if (input_tensors.size() != 2) {
+        return {};
+    }
+    const Tensor& a = input_tensors[0];
+    const Tensor& b = input_tensors[1];
+    const int a_rank = static_cast<int>(a.logical_shape().rank());
+    const int b_rank = static_cast<int>(b.logical_shape().rank());
+    if (a_rank < 2 || b_rank < 2) {
+        return {};
+    }
+    // A preallocated output may have another rank than the operands give the result, folding leading dims into its rows
+    // or adding leading dims of size 1 (validation checks only its last dim, its rows in whole tiles and its volume):
+    // its own dims are the ones the label counts.
+    const auto& outputs = args.optional_output_tensors;
+    const int output_rank = !outputs.empty() && outputs.front().has_value()
+                                ? static_cast<int>(outputs.front()->logical_shape().rank())
+                                : std::max(a_rank, b_rank);
+    if (output_rank < 2) {
+        return {};
+    }
+    const OperandDims a_dims{
+        .rank = a_rank,
+        .contracted = attributes.transpose_a ? a_rank - 2 : a_rank - 1,
+        .kept = attributes.transpose_a ? a_rank - 1 : a_rank - 2,
+        .kept_destination = output_rank - 2};
+    const OperandDims b_dims{
+        .rank = b_rank,
+        .contracted = attributes.transpose_b ? b_rank - 1 : b_rank - 2,
+        .kept = attributes.transpose_b ? b_rank - 2 : b_rank - 1,
+        .kept_destination = output_rank - 1};
+
+    std::vector<std::pair<const TensorTopology*, std::optional<ttsl::SmallVector<Placement>>>> operands;
+    operands.reserve(3);
+    bool moved = false;
+    operands.emplace_back(&a.tensor_topology(), renumber_shards(a.tensor_topology(), a_dims, output_rank, moved));
+    operands.emplace_back(&b.tensor_topology(), renumber_shards(b.tensor_topology(), b_dims, output_rank, moved));
+    if (!args.optional_input_tensors.empty() && args.optional_input_tensors.front().has_value()) {
+        const Tensor& bias = *args.optional_input_tensors.front();
+        const OperandDims bias_dims{.rank = static_cast<int>(bias.logical_shape().rank())};
+        operands.emplace_back(
+            &bias.tensor_topology(), renumber_shards(bias.tensor_topology(), bias_dims, output_rank, moved));
+    }
+    const bool renumbered =
+        std::all_of(operands.begin(), operands.end(), [](const auto& operand) { return operand.second.has_value(); });
+    if (!moved || !renumbered) {
+        return {};
+    }
+
+    std::vector<TensorTopology> labels;
+    labels.reserve(operands.size());
+    for (auto& [topology, placements] : operands) {
+        labels.emplace_back(
+            topology->distribution_shape(),
+            std::move(*placements),
+            std::vector<tt::tt_metal::distributed::MeshCoordinate>{});
+    }
+    auto [placements, distribution_shape] = ttnn::device_operation::detail::compute_output_placements_and_shape(
+        std::vector<std::reference_wrapper<const TensorTopology>>(labels.begin(), labels.end()));
+    return {TensorTopology(std::move(distribution_shape), std::move(placements), a.tensor_topology().mesh_coords())};
 }
 
 ttsl::hash::hash_t MatmulDeviceOperation::compute_descriptor_program_hash(
