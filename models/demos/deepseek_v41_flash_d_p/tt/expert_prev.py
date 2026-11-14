@@ -1,0 +1,565 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+"""MOE_REPLICAS=prev (P.56, owner 2026-11-13, EXPERIMENTAL): expert replicas learned from the previous chunk.
+
+Terms
+-----
+* slot / spare slot: a chip's experts (12 on the 8x4) and the 13th slot (MOE_REPLICAS=runtime's layout) that holds one
+  replica (a copy of another chip's expert) per layer.
+* call ordinal o: the MoE calls on one MoE block (mesh, chunk), counted from the model's load, on the host (this
+  module) and on the device (the planner's global state word 0) alike: every MoE call is followed by exactly one
+  planner run. A chunk makes NCALL calls (one a MoE layer, 40 on DeepSeek-V4.1-Flash): a layer called at o is called
+  next at o + NCALL.
+* plan (after layer L's call at o, on the device, kernels/moe_prev_planner.cpp): the planner core of every chip gets
+  every chip's expert counts of that call (the sender cores send each chip's own slots over the 2D fabric: no host
+  round trip, no sync), adds each spare slot's tokens to the expert it held, and plans layer L's NEXT call (o + NCALL,
+  the next chunk) with integer arithmetic, the same on every chip: repeatedly the busiest chip's biggest remaining
+  expert gets a receiver - the least loaded chip whose spare slot is free this plan - and x = (busiest - receiver -
+  MOE_PREV_FIXED) / 2 of its tokens (at most what it has left; stop below MOE_PREV_MIN); a receiver that already holds
+  the expert (filled earlier, no copy) is kept when it is within MOE_PREV_SLACK tokens of the best one. The slot map
+  (router_rows.hpp slot_of's uneven split, the shares as hash ranges: tt/moe_block_main_adapter.exact_map_words) goes
+  straight into layer L's router bias.
+* fill (P.53's piggyback, on REC_FX's device pages): a new copy (home chip h's slot -> chip k's spare slot of layer L)
+  is cut into pieces (expert_slot_copy's chunk, 10880 B on the 8x4; ~1830 a copy) and given to the calls o + 1 ..
+  o + NCALL - 2 in order, at most MOE_FILL_PIECES pieces a source port a call and 30 jobs a port page (the budgets of
+  every chip, simulated identically on every chip, live in the global state): chip h's port facing the first hop
+  toward k, link 0 (the route the next call's start barrier takes to k), carries them in that call's
+  routed_experts_combine (combine_port_writer.cpp REC_FX: a piece only in a round that sent no row, while the channel
+  holds fewer than MOE_FILL_CAP packets; the call's rest after the main loop). The jobs are written by the planner into
+  a ring of W job tensors (one a call ordinal mod W; the call passes ring[o % W]); a job names the copied layer's
+  weight buffers (words 6 / 7), so a call carries copies of any number of layers. A copy that does not fit in its
+  window is not made (that receiver is dropped for the plan, counted). Call o + NCALL - 1 is the fence: its start
+  barrier travels the pieces' routes after them, so every piece has landed before layer L's next call.
+* guard (host, no transfer): a layer's plan is used only when its next call comes at least NCALL ordinals after the
+  plan (every copy was then carried and fenced); otherwise (a request's first chunk, a skipped layer, a sequence of
+  another length) the layer's router bias gets its empty map back (a device copy of the load-time bias) and the call
+  runs replicas off (counted: `stats`).
+* request start (begin_chunk at start 0 or a replay): the reset program empties every job page and the global state
+  (a new epoch: every layer state reads as empty) and every layer runs its first chunk off. Nothing crosses requests.
+
+Data (uint32, DRAM, one page each unless said): global state [GW] (word 0 the ordinal, 1 the epoch, 2..4 cumulative
+new copies / pieces / dropped, stamps [W] at 16, budgets [W][chips][4 directions] at 16 + W: pieces | jobs << 16), a
+layer's state [SW] (0 epoch, 1 the plan's ordinal, 2 receivers, 3 kept (no copy), 4 new copies, 5 dropped, 6 / 7 the
+busiest chip's tokens before / after the plan (predicted), 8 the mean, 9 planned; hold [chips] at 16 (the expert in
+each spare slot, or NONE), ready [chips] (the first ordinal it may be used), receivers [chips] (this plan's expert a
+spare slot serves), shares [chips]), the landing rows [2 parities x chips, SPW] (the exchanged counts), the
+directions [chips x chips] (combine_fill_port).
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import numpy as np
+import torch
+from loguru import logger
+
+import ttnn
+
+from .settings import settings
+
+NONE = 0xFFFFFFFF
+KERNEL = Path(__file__).parent / "kernels" / "moe_prev_planner.cpp"
+SHARE_ONE = 1 << 15
+
+
+def _mb():
+    return ttnn.bringup.moe_block_main
+
+
+def _u32(host: np.ndarray, mesh, shard: bool = False) -> ttnn.Tensor:
+    t = torch.from_numpy(host.astype(np.uint32).view(np.int32).copy())
+    return ttnn.from_torch(
+        t,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0) if shard else ttnn.ReplicateTensorToMesh(mesh),
+    )
+
+
+def _al16(x: int) -> int:
+    return -(-int(x) // 16) * 16
+
+
+class Geometry:
+    """The planner's constants (compile-time args) on one mesh."""
+
+    def __init__(self, n: int, epc: int, spc: int, ncall: int, pieces: int, links: int, cpage: int):
+        self.n, self.epc, self.spc = int(n), int(epc), int(spc)
+        self.E = self.n * self.epc
+        assert self.E % 32 == 0
+        self.spw = _al16(self.spc)
+        self.ncall = int(ncall)
+        self.W = self.ncall + 4
+        self.pcs = int(pieces)
+        self.bud = int(settings.get("MOE_FILL_PIECES"))
+        assert 0 < self.bud < 1 << 16, "MOE_REPLICAS=prev: MOE_FILL_PIECES in 1 .. 65535"
+        self.cap = max(1, int(settings.get("MOE_FILL_CAP")))
+        self.maxj = int(_mb().COMBINE_FX_MAX_JOBS)
+        self.fix = int(settings.get("MOE_PREV_FIXED"))
+        self.minx = max(1, int(settings.get("MOE_PREV_MIN")))
+        self.slack = int(settings.get("MOE_PREV_SLACK"))
+        self.maxnew = int(settings.get("MOE_PREV_NEW"))
+        self.links = int(links)
+        self.cpage = int(cpage)
+        self.gw = _al16(16 + self.W + self.W * self.n * 4)
+        self.sw = _al16(16 + 4 * self.n)
+        self.mappage = self.E // 32
+
+    def ct(self, role: int) -> list:
+        return [
+            role,
+            self.n,
+            self.epc,
+            self.spc,
+            self.spw,
+            self.W,
+            self.ncall,
+            self.pcs,
+            self.bud,
+            self.cap,
+            self.maxj,
+            self.fix,
+            self.minx,
+            self.slack,
+            self.maxnew,
+            self.links,
+            self.cpage,
+            self.gw,
+            self.sw,
+            self.mappage,
+        ]
+
+    def l1_bytes(self) -> int:
+        a = lambda x: -(-x // 64) * 64  # noqa: E731
+        b = a(self.cpage) + a(self.n * self.spw * 4) + a(self.gw * 4) + a(self.sw * 4) + a(self.n * self.n * 4)
+        return (
+            64 + b + 4096 + 64 + 1024 + a(self.ncall * 16) + self.ncall * 1024 + 3 * self.E * 4 + 3 * self.n * 4 + 256
+        )
+
+
+# --------------------------------------------------------------------------------------------------------- host mirror
+def plan_host(geo: Geometry, rows: np.ndarray, G: np.ndarray, st: np.ndarray, dirs: np.ndarray, me: int | None = None):
+    """The planner's arithmetic on the host, word for word (tests compare the device's map, states and pages with it).
+    rows [chips, spc]: every chip's own slot counts of the call; G, st: the global and layer states before (copied);
+    dirs [chips, chips]. -> (map words [1024] row-major, G after, st after, jobs {(ring slot, chip, dir): [8 words]}
+    (every chip's when me is None))."""
+    n, epc, E, W = geo.n, geo.epc, geo.E, geo.W
+    G = G.astype(np.uint64).copy()
+    st = st.astype(np.uint64).copy()
+    g = int(G[0])
+    epoch = int(G[1])
+    SH, SR, SV, SX = 16, 16 + n, 16 + 2 * n, 16 + 3 * n
+    GS, GB = 16, 16 + W
+    if int(st[0]) != epoch:
+        st[0] = epoch
+        st[SH : SH + n] = NONE
+        st[SR : SR + n] = 0
+    st[SV : SV + n] = NONE
+    st[SX : SX + n] = 0
+    used = [False] * n
+    fail = [False] * n
+    load = [int(rows[b // epc, b % epc]) for b in range(E)]
+    nr = [0] * E
+    for k in range(n):
+        if int(st[SH + k]) != NONE:
+            load[int(st[SH + k])] += int(rows[k, epc])
+    T = [sum(load[c * epc : (c + 1) * epc]) for c in range(n)]
+    tsum, tmax0 = sum(T), max(T)
+    share = list(load)
+    nrec = nreuse = nnew = ndrop = pieces = 0
+    jobs: dict = {}
+
+    def alloc(h, k, tab):
+        nonlocal pieces
+        p = int(dirs[h, k])
+        room = 0
+        for o in range(g + 1, g + geo.ncall - 1):
+            s = o % W
+            v = int(G[GB + (s * n + h) * 4 + p]) if int(G[GS + s]) == o else 0
+            if (v >> 16) < geo.maxj and (v & 0xFFFF) < geo.bud:
+                room += geo.bud - (v & 0xFFFF)
+        if room < geo.pcs:
+            return 0
+        rem, p0, last = geo.pcs, 0, 0
+        for o in range(g + 1, g + geo.ncall - 1):
+            if not rem:
+                break
+            s = o % W
+            if int(G[GS + s]) != o:
+                G[GS + s] = o
+                G[GB + s * n * 4 : GB + (s + 1) * n * 4] = 0
+            v = int(G[GB + (s * n + h) * 4 + p])
+            u, j = v & 0xFFFF, v >> 16
+            if j >= geo.maxj or u >= geo.bud:
+                continue
+            take = min(geo.bud - u, rem)
+            G[GB + (s * n + h) * 4 + p] = (u + take) | (j + 1) << 16
+            if me is None or h == me:
+                jobs[(s, h, p, j)] = [tab | k << 8, p0, p0 + take, 0, 0, 0]
+            p0 += take
+            rem -= take
+            last = o
+        pieces += geo.pcs
+        return last
+
+    for _ in range(2 * n):
+        h = max(range(n), key=lambda c: (T[c], -c))
+        b = max(range(h * epc, (h + 1) * epc), key=lambda x: (share[x], -x))
+        if share[b] == 0:
+            break
+        kr = kn = None
+        for k in range(n):
+            if k == h or used[k]:
+                continue
+            if int(st[SH + k]) == b and int(st[SR + k]) <= g + geo.ncall and (kr is None or T[k] < T[kr]):
+                kr = k
+            if not fail[k] and int(st[SR + k]) <= g and nnew < geo.maxnew and (kn is None or T[k] < T[kn]):
+                kn = k
+        fresh = False
+        if kr is not None and (kn is None or T[kr] <= T[kn] + geo.slack):
+            k = kr
+        elif kn is not None:
+            k = kn
+            fresh = int(st[SH + kn]) != b
+        else:
+            break
+        gap = T[h] - T[k] - geo.fix
+        x = gap >> 1 if gap > 0 else 0
+        x = min(x, share[b])
+        if x < geo.minx:
+            break
+        if fresh:
+            last = alloc(h, k, b % epc)
+            if last == 0:
+                fail[k] = True
+                ndrop += 1
+                continue
+            st[SH + k] = b
+            st[SR + k] = last + 2
+            nnew += 1
+        else:
+            nreuse += 1
+        used[k] = True
+        st[SV + k] = b
+        st[SX + k] = x
+        nr[b] += 1
+        nrec += 1
+        share[b] -= x
+        T[h] -= x
+        T[k] += x + geo.fix
+    words = np.zeros(1024, dtype=np.uint64)
+    for b in range(E):
+        words[b] = (b // epc) * geo.spc + b % epc
+    first = 0
+    for b in range(E):
+        if nr[b] == 0:
+            continue
+        words[E + b] = nr[b] | first << 6
+        tot, acc, i = load[b], share[b], 0
+        for k in range(n):
+            if int(st[SV + k]) != b:
+                continue
+            lb = min(max(1, (acc * SHARE_ONE + tot // 2) // tot), SHARE_ONE - 1)
+            words[2 * E + first + i] = (k * geo.spc + epc) | lb << 9
+            acc += int(st[SX + k])
+            i += 1
+        first += nr[b]
+    st[1] = g
+    st[2:10] = [nrec, nreuse, nnew, ndrop, tmax0, max(T), tsum // n, 1]
+    st[10:14] = 0  # (the device's diagnostic cycle stamps: not mirrored, masked in comparisons)
+    G[0] = g + 1
+    G[2] += nnew
+    G[3] += pieces
+    G[4] += ndrop
+    return words.astype(np.uint32), G.astype(np.uint32), st.astype(np.uint32), jobs
+
+
+def map_words_of_tile(tile: np.ndarray) -> np.ndarray:
+    """The router bias's map tile (fp32 [32, 32] as read back, tile layout undone by ttnn) -> integer words [1024]."""
+    return np.rint(np.asarray(tile, dtype=np.float64).reshape(-1)).astype(np.uint64).astype(np.uint32)
+
+
+# ------------------------------------------------------------------------------------------------------------ device
+class PrevReplicas:
+    """One MoE block's prev-replica machinery (its resources): the ring of job tensors, the global state, the landing
+    rows, the directions, the planner / reset programs (prepared, OV-23) and the host ordinal with the guard."""
+
+    def __init__(self, layer, res, ncall: int):
+        from ttnn.bringup.combine_rf.sparse_all_gather_2d import mesh_plan
+
+        from .moe_block_main_adapter import _exact_fx
+        from .window_send import _torus
+
+        mb = _mb()
+        self.mesh, self.res = layer.mesh, res
+        mesh = self.mesh
+        n = mesh.get_num_devices()
+        self.R, self.C = tuple(mesh.shape)
+        fx = _exact_fx(layer, res)
+        self.tables, self.limit = fx["tables"], fx["limit"]
+        cpage = -(-4 * n * layer.spc // 64) * 64  # (head.counts: one row-major page of chips x spc uint32)
+        self.geo = Geometry(n, layer.epc, layer.spc, ncall, self.tables.pieces, int(fx["links"]), cpage)
+        geo = self.geo
+        dirs = np.zeros((n, n), dtype=np.uint32)
+        for a in range(n):
+            for b in range(n):
+                if a != b:
+                    dirs[a, b] = int(mb.combine_fill_port(res, a, b))
+        assert int(dirs.max()) < 4
+        self.dirs = dirs
+        # (the directions, then the empty map's tile: fp32 bits of each candidate's own slot, in tile order)
+        base = np.zeros(1024, dtype=np.uint32)
+        own = np.arange(geo.E)
+        base[: geo.E] = ((own // geo.epc) * geo.spc + own % geo.epc).astype(np.float32).view(np.uint32)
+        r, c = np.arange(1024) // 32, np.arange(1024) % 32
+        tiled = np.zeros(1024, dtype=np.uint32)
+        tiled[((r >> 4) * 2 + (c >> 4)) * 256 + (r & 15) * 16 + (c & 15)] = base
+        self.consts = _u32(np.concatenate([dirs.reshape(-1), tiled]).reshape(1, 1, 1, n * n + 1024), mesh)
+        G = np.zeros(geo.gw, dtype=np.uint32)
+        G[1] = 1  # (epoch 1: the layers' zeroed states, epoch 0, read as empty)
+        G[16 : 16 + geo.W] = NONE
+        self.G = _u32(G.reshape(1, 1, 1, geo.gw), mesh)
+        self.landing = _u32(np.zeros((1, 1, 2 * n, geo.spw), dtype=np.uint32), mesh)
+        PAGES, PW = mb.COMBINE_FX_PAGES, mb.COMBINE_FX_PAGE_WORDS
+        self.ring = [_u32(np.zeros((n, 1, PAGES, PW), dtype=np.uint32), mesh, shard=True) for _ in range(geo.W)]
+        cc = ttnn.CoreCoord(0, 0)
+        self.sem = ttnn.create_global_semaphore(
+            mesh, ttnn.CoreRangeSet([ttnn.CoreRange(cc, cc)]), 0, ttnn.BufferType.L1_SMALL
+        )
+        self.sem_addr = int(ttnn.get_global_semaphore_address(self.sem))
+        v = mesh.worker_core_from_logical_core(cc)
+        self.pxy = (int(v.x), int(v.y))
+        self.torus = _torus(mesh)
+        self.chips, _, self.wraps = mesh_plan(mesh, 1, self.torus)
+        self.src = KERNEL.read_text()
+        self.ord = 0  # (host ordinal = the device's G[0])
+        self._plan_pp = None
+        self._reset_pp = None
+        self.stats = {"calls": 0, "ready": 0, "off": 0, "off_copies": 0, "plans": 0}
+        logger.info(
+            f"MOE_REPLICAS=prev: {n} chips, {ncall} MoE calls a chunk, ring {geo.W}, {geo.pcs} pieces a copy, "
+            f"{geo.bud} a port a call, planner L1 {geo.l1_bytes()} B"
+        )
+
+    # ------------------------------------------------------------------ programs
+    def _node(self, ch):
+        return self.mesh.get_fabric_node_id(ttnn.MeshCoordinate(*ch))
+
+    def _planner_desc(self, io: list, cpage: int):
+        from ttnn.bringup.combine_rf.sparse_combine_l1 import route
+
+        geo = self.geo
+        counts, landing, G, st, rb, gu, d, consts = io
+        md = ttnn.MeshProgramDescriptor()
+        rings = [int(t.buffer_address()) for t in self.ring]
+        l1 = geo.l1_bytes()
+        cores = want = 0
+        for r in range(self.R):
+            for c in range(self.C):
+                me = r * self.C + c
+                groups: dict = {}
+                for k in range(geo.n):
+                    if k == me:
+                        continue
+                    kr, kc = divmod(k, self.C)
+                    hops = route((r, c), (kr, kc), self.R, self.C, self.wraps[0], self.wraps[1], 0)
+                    assert hops and hops[0][0] == (r, c), ((r, c), (kr, kc), hops)
+                    groups.setdefault(hops[0][1], []).append((kr, kc))
+                prog = ttnn.ProgramDescriptor()
+                kernels, cbs = [], []
+                dm = ttnn.DataMovementConfigDescriptor(
+                    processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.RISCV_0_default
+                )
+                cc = ttnn.CoreCoord(0, 0)
+                crs = ttnn.CoreRangeSet([ttnn.CoreRange(cc, cc)])
+                cbs.append(
+                    ttnn.CBDescriptor(
+                        total_size=l1, core_ranges=crs, format_descriptors=[ttnn.CBFormatDescriptor(0, ttnn.uint8, l1)]
+                    )
+                )
+                rt = ttnn.RuntimeArgs()
+                rt[0][0] = [
+                    int(counts.buffer_address()),
+                    int(landing.buffer_address()),
+                    int(G.buffer_address()),
+                    int(st.buffer_address()),
+                    int(rb.buffer_address()),
+                    int(gu.buffer_address()),
+                    int(d.buffer_address()),
+                    int(consts.buffer_address()),
+                    me,
+                    self.sem_addr,
+                ] + rings
+                kernels.append(
+                    ttnn.KernelDescriptor(
+                        kernel_source=self.src,
+                        source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
+                        core_ranges=crs,
+                        compile_time_args=geo.ct(0),
+                        runtime_args=rt,
+                        config=dm,
+                    )
+                )
+                cores += 1
+                want += 8
+                for gi, (port_dir, dsts) in enumerate(sorted(groups.items())):
+                    sc = ttnn.CoreCoord(1 + gi, 0)
+                    scr = ttnn.CoreRangeSet([ttnn.CoreRange(sc, sc)])
+                    sl1 = -(-geo.cpage // 64) * 64 + 64 + geo.spw * 4 + 128
+                    cbs.append(
+                        ttnn.CBDescriptor(
+                            total_size=sl1,
+                            core_ranges=scr,
+                            format_descriptors=[ttnn.CBFormatDescriptor(0, ttnn.uint8, sl1)],
+                        )
+                    )
+                    args = [
+                        int(counts.buffer_address()),
+                        int(landing.buffer_address()),
+                        int(G.buffer_address()),
+                        me,
+                        self.sem_addr,
+                        self.pxy[0],
+                        self.pxy[1],
+                        len(dsts),
+                    ]
+                    for ch in dsts:
+                        dn = self._node(ch)
+                        args += [int(dn.mesh_id), int(dn.chip_id)]
+                    port = self.chips[(r, c)][port_dir]
+                    args += list(
+                        ttnn.setup_fabric_connection(
+                            self._node((r, c)), self._node(port["peer"]), port["links"][0], prog, sc
+                        )
+                    )
+                    srt = ttnn.RuntimeArgs()
+                    srt[sc.x][sc.y] = args
+                    kernels.append(
+                        ttnn.KernelDescriptor(
+                            kernel_source=self.src,
+                            source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
+                            core_ranges=scr,
+                            compile_time_args=geo.ct(1),
+                            runtime_args=srt,
+                            config=dm,
+                        )
+                    )
+                    cores += 1
+                    want += 3
+                prog.cbs = cbs
+                prog.kernels = kernels
+                md[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(r, c), ttnn.MeshCoordinate(r, c))] = prog
+        return md, cores, want
+
+    def _reset_desc(self):
+        geo = self.geo
+        md = ttnn.MeshProgramDescriptor()
+        rings = [int(t.buffer_address()) for t in self.ring]
+        l1 = -(-geo.gw * 4 // 64) * 64 + 256
+        for r in range(self.R):
+            for c in range(self.C):
+                prog = ttnn.ProgramDescriptor()
+                cc = ttnn.CoreCoord(0, 0)
+                crs = ttnn.CoreRangeSet([ttnn.CoreRange(cc, cc)])
+                rt = ttnn.RuntimeArgs()
+                rt[0][0] = [int(self.G.buffer_address()), r * self.C + c] + rings
+                prog.cbs = [
+                    ttnn.CBDescriptor(
+                        total_size=l1, core_ranges=crs, format_descriptors=[ttnn.CBFormatDescriptor(0, ttnn.uint8, l1)]
+                    )
+                ]
+                prog.kernels = [
+                    ttnn.KernelDescriptor(
+                        kernel_source=self.src,
+                        source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
+                        core_ranges=crs,
+                        compile_time_args=geo.ct(2),
+                        runtime_args=rt,
+                        config=ttnn.DataMovementConfigDescriptor(
+                            processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.RISCV_0_default
+                        ),
+                    )
+                ]
+                md[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(r, c), ttnn.MeshCoordinate(r, c))] = prog
+        return md
+
+    # ------------------------------------------------------------------ the model's hooks
+    def reset(self, layers) -> None:
+        """A request starts (begin_chunk at start 0 / a replay): every job page and the global state emptied on the
+        device (a new epoch), every layer's plan forgotten (its first call runs off)."""
+        if self._reset_pp is None:
+            self._reset_pp = ttnn.bringup.prepare_program(self._reset_desc(), [self.G])
+        ttnn.bringup.run_prepared(self._reset_pp, [self.G])
+        for m in layers:
+            m._prev_ord = None
+
+    def before(self, layer) -> None:
+        """Before layer's MoE call: the guard (its plan is used only when every copy was carried and fenced), then the
+        combine's exact fill args with this call's job page ring slot."""
+        o = self.ord
+        ok = layer._prev_ord is not None and o >= layer._prev_ord + self.geo.ncall
+        self.stats["calls"] += 1
+        if ok:
+            self.stats["ready"] += 1
+        else:
+            self.stats["off"] += 1
+            if layer._prev_dirty:
+                ttnn.copy(layer._prev_off_rb, layer.head_w.router_bias)
+                layer._prev_dirty = False
+                self.stats["off_copies"] += 1
+        layer._prev_used = ok
+        _mb().set_combine_fill_exact(
+            self.res, True, layer.w_gu, layer.w_d, self.tables.runs, self.ring[o % self.geo.W], self.limit
+        )
+
+    def after(self, layer, counts: ttnn.Tensor) -> None:
+        """After layer's MoE call (counts: its fused head's per-chip counts): the planner (device) for its next call."""
+        io = [
+            counts,
+            self.landing,
+            self.G,
+            layer._prev_state,
+            layer.head_w.router_bias,
+            layer.w_gu,
+            layer.w_d,
+            self.consts,
+        ]
+        if self._plan_pp is None:
+            assert int(counts.shape[-1]) == self.geo.n * self.geo.spc, (counts.shape, self.geo.n, self.geo.spc)
+            assert counts.dtype == ttnn.uint32 and counts.layout == ttnn.ROW_MAJOR_LAYOUT, (counts.dtype, counts.layout)
+            md, cores, want = self._planner_desc(io, self.geo.cpage)
+            self._plan_pp = ttnn.bringup.prepare_program(md, io)
+            self._plan_cores = cores
+            # (8 io addresses on each planner core, 3 on each sender core: anything else matched a frozen value)
+            assert self._plan_pp.patch_count == want, f"planner: {self._plan_pp.patch_count} patched slots, want {want}"
+            logger.info(f"MOE_REPLICAS=prev: planner prepared, {cores} cores ({cores / self.geo.n:.1f} a chip)")
+        ttnn.bringup.run_prepared(self._plan_pp, io)
+        layer._prev_ord = self.ord
+        layer._prev_dirty = True
+        self.ord += 1
+        self.stats["plans"] += 1
+
+    # ------------------------------------------------------------------ read back (tests, reports)
+    def read_global(self) -> np.ndarray:
+        return _read(self.G)
+
+    def read_ring(self, s: int) -> np.ndarray:
+        """Ring slot s's job pages of every chip: [chips, pages, page words]."""
+        return read_all(self.ring[s]).reshape(self.geo.n, -1, _mb().COMBINE_FX_PAGE_WORDS)
+
+
+def _words(t) -> np.ndarray:
+    return (ttnn.to_torch(t).reshape(-1).to(torch.int64).numpy() & 0xFFFFFFFF).astype(np.uint32)
+
+
+def _read(t: ttnn.Tensor, chip: int = 0) -> np.ndarray:
+    return _words(ttnn.get_device_tensors(t)[chip])
+
+
+def read_all(t: ttnn.Tensor) -> np.ndarray:
+    """Every chip's copy of a uint32 tensor: [chips, words]."""
+    return np.stack([_words(d) for d in ttnn.get_device_tensors(t)])

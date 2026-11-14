@@ -269,13 +269,15 @@ void kernel_main() {
     // MOE_REPLICAS=exact (P.55b): the copy of a hot expert of THIS layer, streamed in this call. The jobs come from a
     // DRAM page of the exact jobs tensor (page dir x L + link: this port's; page 4 L: the chip's waits), not from the
     // args, so a device planner can write them. Job j (8 words at 16 + 8 j): [table | dst << 8, p0, p1, rxy (dst's
-    // words core; 0: mine), flag word | K << 16, gate (word + 1) | gK << 16, 0, 0]: pieces [p0, p1) of run table
+    // words core; 0: mine), flag word | K << 16, gate (word + 1) | gK << 16, gu, d]: pieces [p0, p1) of run table
     // `table` read from this chip's DRAM and written into chip dst's DRAM through this port's connection (rows first: a
     // piece in the main loop only in a round that sent no row and while fewer than cap packets sit in the channel; the
     // rest after it); every K pieces (and at p1) a flushed atomic increment of flag word w on dst (a per-block ready
     // flag: the block has landed). gate: a relay - piece p is read only once this chip's word (gate - 1) counts (p -
     // p0) / gK + 1 blocks (the incoming copy's flags; its pieces are numbered the same), so a receiver forwards the
-    // blocks it got. Flag words: 32 a call parity on the chip's words core (the call's parity from the port's own call
+    // blocks it got. gu / d (P.56, MOE_REPLICAS=prev): the copied layer's gate/up and down buffers (0: the call's), so
+    // one call carries copies of several layers (a device planner's jobs; K = 0: no flags). Flag words: 32 a call
+    // parity on the chip's words core (the call's parity from the port's own call
     // counter; the chip's zeroing port clears the other parity's words at the start, so they count from 0 every call).
     // The chip's waiter port records arrival times of the waited words' blocks and, after its own work, waits until
     // each waited word reaches its target (bounded by `limit` cycles: never a hang), then writes its stamps.
@@ -342,6 +344,7 @@ void kernel_main() {
     uint32_t f_j = 0;
     bool f_live = false;
     uint32_t f_dst = 0, f_p0 = 0, f_p1 = 0, f_dxy = 0, f_fw = 0, f_fk = 0, f_gw = 0, f_gk = 0;
+    uint32_t f_wj[2] = {f_w[0], f_w[1]};  // (the current job's weight buffers)
     uint32_t f_rd = 0, f_ok = 0, f_sd = 0, f_fl = 0;
     uint32_t f_r = 0, f_o = 0, f_n = 0;
     uint32_t f_gv = 0, f_gpoll = 0, f_gt0 = 0, f_status = 0, f_sent = 0, f_flags = 0, f_poll = 0;
@@ -364,6 +367,8 @@ void kernel_main() {
         f_fk = jb[4] >> 16;
         f_gw = jb[5] & 0xFFFF;
         f_gk = jb[5] >> 16;
+        f_wj[0] = jb[6] ? jb[6] : f_w[0];
+        f_wj[1] = jb[7] ? jb[7] : f_w[1];
         const InterleavedAddrGen<true> rg = {.bank_base_address = f_runs, .page_size = f_tabb};
         noc_async_read(rg.get_noc_addr(table), f_tab, f_tabb);
         noc_async_read_barrier();
@@ -528,8 +533,8 @@ void kernel_main() {
             const uint32_t w = e[0], bytes = e[5];
             const uint32_t len = bytes - f_o < F_CHUNK ? bytes - f_o : F_CHUNK;
             const uint32_t sl = f_rd % F_NSTG;
-            noc_async_read(get_noc_addr_from_bank_id<true>(e[1], f_w[w] + e[2] + f_o), f_stg + sl * F_CHUNK, len);
-            f_da[sl] = get_noc_addr_from_bank_id<true>(e[3], f_w[w] + e[4] + f_o);
+            noc_async_read(get_noc_addr_from_bank_id<true>(e[1], f_wj[w] + e[2] + f_o), f_stg + sl * F_CHUNK, len);
+            f_da[sl] = get_noc_addr_from_bank_id<true>(e[3], f_wj[w] + e[4] + f_o);
             f_len[sl] = len;
             f_o += len;
             if (f_o >= bytes) {

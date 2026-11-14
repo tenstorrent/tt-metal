@@ -987,3 +987,102 @@ The one this change broke (test_seeded: `git add state.json`) is fixed.
   last code edit): determinism 0 (novel, code, state); quick min layer PCC 0.60548579 at L39 (= P.52 / P.53 / P.55b:
   the off path's bytes), host transfers per layer 0, wall 182.6 ms (spread 3.9); p51200 wall 206.9 (spread 11.4).
   Final gate --check: PASS (ladder rung last within every limit, determinism 0; profile chunk_wall 182.7, device 171.4).
+
+## P.56 (perf, attempt 1): MoE replicas learned from the previous chunk (MOE_REPLICAS=prev)
+- Expected per chunk (written before any code change or device run; perf_guide 1-2, 4 "moved time"; chunks 1..10 of
+  a real prompt, chunk 0 runs off by design):
+  - device: P.55c's split with the copies in place saved 31.0 ms (novel) / 12.8 ms (code) at chunk 10; a plan from
+    chunk K-1's counts keeps ~80-89 % of the in-sample gain (owner's CPU model) -> ~25 / ~10 ms if every copy were in
+    place. The fill is the limit: P.53's piggyback hides ~1/16 slot a source port a call (125 pieces of ~1830), so a
+    port moves ~2.7 slots over the 38 other MoE calls of a chunk, ~8-10 new copies a layer a chunk over the mesh;
+    copies that stay hot are kept (no re-copy), so the tables fill over the first 2-4 chunks. Costs: one planner
+    program a layer (counts exchange over the fabric + the plan, 1 core + up to 4 sender cores) ~0.03-0.05 ms device
+    -> +1.2-2 ms; the exact combine program (REC_FX) on every MoE call +0.02-0.07 ms a layer (P.55c) -> +1-2 ms; the
+    carried pieces ~0-1 % of the combine. Net guess: novel -8 to -15 ms device from chunk ~3 on (less at chunks 1-2),
+    code -2 to -6 ms. The orchestrator's random-token profile (DS41-228) shows ~ +2 to +4 ms (costs only).
+  - host: +1 prepared launch a layer (the planner, 32 chip programs, addresses patched: ~60-100 us) and the combine's
+    fill args every call (~20 us) -> +3 to +5 ms a chunk; the off-map guard adds a launch only when a layer's plan is
+    not ready (chunk 0 of a request: 40 copies).
+- Design as built (MOE_REPLICAS=prev, needs MOE_FILL=piggyback; tt/expert_prev.py, tt/kernels/moe_prev_planner.cpp):
+  - Learn (on device, no host round trip, no sync): after EVERY MoE call a prepared planner program (ROLE 1: up to 4
+    sender cores a chip send the chip's own head.counts slots to every other chip over the 2D fabric, a fused write +
+    atomic increment, tail_send's pattern; ROLE 0: one planner core a chip waits for the 31 rows, adds each spare
+    slot's tokens to the expert it held, plans). The plan is integer arithmetic, identical on every chip: the busiest
+    chip's biggest remaining expert gets the least loaded free receiver and x = (busiest - receiver - 165) / 2 tokens
+    (MOE_PREV_FIXED 165 = one replica's weight read in tokens, P.55a's fit), stop below 64 tokens (MOE_PREV_MIN); a
+    receiver already holding the expert is kept within 165 tokens (MOE_PREV_SLACK). Split = the uneven hash split
+    (P.55c's slot_of), the map written straight into the layer's router bias (fp32 tile) for its NEXT call.
+  - Fill: the plan's NEW copies (spare slot not already holding the expert) are cut into 2000 pieces and given to the
+    calls o+1 .. o+38 in order (o = the layer's call ordinal; 40 MoE calls a chunk), at most MOE_FILL_PIECES (125) a
+    source port a call and 30 jobs a page, budgets for all chips simulated identically on every chip (global state);
+    the planner writes its own chip's jobs into a ring of 44 REC_FX job tensors (one a call ordinal), each job naming
+    the copied layer's weight buffers (fork change: words 6 / 7). Every MoE call runs the exact combine with ring[o %
+    44]; call o+39 is the fence (its start barrier follows the pieces on link 0 of the first hop). A copy that does not
+    fit its window is not made (receiver dropped, counted).
+  - Guard (host, no transfer): a layer's plan is used only if its next call comes >= 40 ordinals after the plan; else
+    the load-time empty map is copied back (device copy) and the call runs off. Request start (begin_chunk at 0 / a
+    replay): one reset program (all job page headers zeroed, a new epoch: every layer state reads empty); chunk 0 runs
+    off; nothing crosses requests (spare bytes from the old request are re-copied, not reused).
+  - Not P.53's REC_FILL path: its jobs are host runtime args, and the plan exists only on the device; the carry is
+    P.53's rules (first hop link 0, 125 pieces a port a call, cap 4, fence) on P.55's device-readable REC_FX pages.
+    P.55c's split (uneven map) and receiver order (replica last, fx_spare) are reused; P.54's exp/p54_wip not used.
+- Checks (tests/test_moe_prev_replicas.py, gate unit): every chunk's last-layer output prev vs off max |diff| 0, prev
+  repeat 0, off repeat 0; a host mirror (expert_prev.plan_host) replays all 440 planner runs a pass from the read-back
+  counts: every layer state, slot map, the global state and the pending job pages equal the device's, every chip the
+  same (attempt-1 run: 0 mismatches of 477 checks a prompt).
+- Results, attempt-1 full run (8x4, fresh requests, chunks 1..10 back to back after chunk 0; device ms = program real-
+  time profiler, slowest chip a program, summed; wall = unprofiled, sync before / after each chunk):
+
+  | prompt | device off -> prev (ms) | experts phase off -> prev | wall off -> prev | planner (device) | ready layers |
+  |---|---|---|---|---|---|
+  | novel | 174.9 -> 157.3 (-17.6) | 54.6 -> 44.1 | 195.3 -> 193.5 | 5.0 | 40/40 every chunk 1..10 |
+  | code | 163.1 -> 155.3 (-7.8) | 48.1 -> 42.1 | 191.1 -> 194.3 | 6.3 | 40/40 every chunk 1..10 |
+
+  Per chunk (novel, device off -> prev): c1 173.6 -> 155.7, c2 171.8 -> 155.7, c3 176.5 -> 156.2, c4 175.0 -> 159.7,
+  c5 173.4 -> 156.2, c6 177.4 -> 159.0, c7 175.2 -> 157.7, c8 173.7 -> 155.4, c9 174.7 -> 156.5, c10 177.7 -> 160.8;
+  code c1 170.7 -> 153.9, c2 167.2 -> 155.0, c3 160.9 -> 154.2, c4 159.2 -> 157.4, c5 160.5 -> 151.2, c6 166.6 -> 158.0,
+  c7 159.2 -> 153.2, c8 159.7 -> 157.7, c9 164.3 -> 157.2, c10 163.1 -> 155.4. Chunk 0 (off by design, planner only):
+  +13 / +9 ms. Receivers mapped a chunk: novel 204-233 (kept 90-144, new 77-222), code 232-338; slots complete in time
+  = every mapped slot (by construction); copies dropped for budget: novel 252 at c1 -> 6-31 from c4, code 130-330.
+  Full table per chunk and layer: results/P.56_prev_replicas.json.
+- MOE_FILL_PIECES=250 (1/8 slot a port a call, same code + the planner trims below): drops ~0 but the experts phase is
+  the same (novel 44.06, code 42.04 ms): the extra copies are marginal; device novel 174.9 -> 156.0, code 162.3 ->
+  152.5 (planner 4.0 / 5.2 ms). Default stays 125 (P.53's validated hiding).
+- Planner cost: core phases (cycles, chip 0, full model): reads 1.2k, counts wait 20k (15 us; 284k in the host-bound
+  4-layer quick model = launch skew, DS41-243), plan 36-50k, map + writes 7k after trims (36k before: base map tile
+  precomputed, five-step msb, batched job page read-modify-write). Program ~0.1-0.13 ms a layer = 4-5 ms a chunk.
+- What limits it: (1) the wall: the chunk is host-bound (~190 ms wall vs ~157 device), so the device gain does not
+  show in the clean wall per chunk; (2) the planner's 4-5 ms a chunk (a 32-chip program a layer, the exchange's skew);
+  (3) one spare slot a chip a layer; (4) the plan is chunk K-1's routing (P.55c's in-sample fill reached 156.6 novel at
+  chunk 10 vs 160.8 here); (5) DECODER_SKIP modes that skip layers on some chunks break the 40-call rhythm: the guard
+  then runs those layers off.
+- Gotchas: this Galaxy is Blackhole (-mcpu=tt-bh): job pages are written whole (1 KB read-modify-write) to keep DRAM
+  accesses 64 B aligned; DS41-250 (NONE); G's epoch starts at 1 so zeroed layer states read empty.
+- stock ttnn.copy (router bias <- load-time bias) is the guard's device copy, not a compute op; no INDEX op applies.
+  Cores: planner 1 + up to 4 sender cores a chip (rule 18 holds); the combine adds none.
+- Re-run: `gate P.56 --spec <spec> --check --unit 'P.56#test_moe_prev_replicas'` (~8 min, devjob);
+  `P56_QUICK=1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/
+  test_moe_prev_replicas.py` (4 layers, chunks 0-3, a whole copy a call: iterating only).
+- `measure --task P.56` (MOE_REPLICAS=prev MOE_FILL=piggyback ENGRAM_TABLE=resident): determinism 0 (novel, code,
+  state); quick min layer PCC 0.60548579 at L39 (= P.52-P.55c), host transfers per layer 0, wall 182.3 (spread 7.1);
+  p51200 device_ms_total 160.22, device_ms_experts 80.02, wall 188.4 (spread 11.6), 1656 launches (the planner's
+  run_prepared is not counted), 0 new programs. Comparable off sides (P.52-P.55c old): device 186.0-187.5, experts
+  104.8-106.0, wall 201.6-203.8. The p51200 profile re-runs one chunk, so its plan is in-sample (random ids): it
+  overstates the real prompts' gain (DS41-228).
+- FINAL (the gate unit on the final code, `gate P.56 --check --unit 'P.56#test_moe_prev_replicas'`: PASS, 365 s;
+  results/P.56.json, results/P.56_prev_replicas.json), chunks 1..10 mean:
+
+  | prompt | device off -> prev (ms) | experts phase off -> prev | wall off -> prev | planner (device) | max diff / repeat / mirror |
+  |---|---|---|---|---|---|
+  | novel | 175.15 -> 156.10 (-19.1, -10.9 %) | 54.74 -> 44.15 | 190.6 -> 191.6 | 4.08 | 0 / 0 / 0 of 477 |
+  | code | 164.00 -> 153.08 (-10.9, -6.7 %) | 48.15 -> 41.98 | 192.6 -> 192.1 | 5.31 | 0 / 0 / 0 of 477 |
+
+  Per chunk device off -> prev: novel c1 173.9 -> 155.2, c2 173.4 -> 152.9, c3 176.5 -> 155.3, c4 175.0 -> 154.5, c5
+  173.0 -> 153.8, c6 177.8 -> 158.5, c7 175.2 -> 156.8, c8 173.9 -> 154.0, c9 174.8 -> 161.2, c10 178.2 -> 159.0; code
+  c1 170.4 -> 152.2, c2 167.7 -> 152.3, c3 165.0 -> 150.4, c4 160.7 -> 157.0, c5 161.3 -> 150.4, c6 166.0 -> 156.2, c7
+  160.6 -> 151.0, c8 159.3 -> 151.9, c9 164.7 -> 156.1, c10 164.4 -> 153.4. The plans (receivers kept / new / dropped
+  per chunk) equal attempt 1's exactly: the same chunk sequence plans the same. Expected (above): novel -8 to -15,
+  code -2 to -6 device: beaten (the kept copies fill the tables from chunk 1, P.53's budget was enough).
+- Host (OV-23): the planner's dispatch (run_prepared, 32 chip programs, 8 + 3 x senders addresses patched) 92.5 us a
+  call (median), the pre-call hook (guard + the combine's fill args) 4.9 us: ~3.9 ms a chunk of host; the chunk's wall
+  did not move (host-bound at ~190 ms on both sides).

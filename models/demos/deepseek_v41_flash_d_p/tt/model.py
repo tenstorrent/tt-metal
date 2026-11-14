@@ -1331,6 +1331,10 @@ class TtDS41Model:
         self._last = last is True
         if start == 0 or replay:  # (P.43: the request starts here, the clamp of last_start)
             self._req = int(start)
+            if settings.get("MOE_REPLICAS") == "prev":  # (P.56: no replica table crosses requests; chunk 0 runs off)
+                from .moe_block_main_adapter import prev_reset
+
+                prev_reset(self.mesh)
         self._tail_mode = self.replay and last is True
         self._tail_at = None
         st = self.state

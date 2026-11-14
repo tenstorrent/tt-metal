@@ -509,7 +509,7 @@ TABLE = {
     ),
     "MOE_REPLICAS": Setting(
         "off",
-        ("off", "runtime", "exact"),
+        ("off", "runtime", "exact", "prev"),
         "P.46 / P.47 (owner 2026-11-12, expert replicas; MOE_BLOCK_SRC=main only; default off: owner 2026-11-12, "
         "accepted as a switch). off = 12 "
         "expert slots a chip (8x4), "
@@ -531,7 +531,37 @@ TABLE = {
         "expert_slot_copy). No device planner: the head assigns slots before any chip knows the others' counts, so the "
         "plans come from a counting run (tests/test_moe_exact_replicas.py); without a plan exact == runtime in a chunk. "
         "Measured (P.55c, chunk 10 at 51,200, device ms a chunk off -> fill -> exact): novel 185.9 -> 161.5 -> 195.0, "
-        "code 170.5 -> 158.3 -> 175.6 (DS41-246)",
+        "code 170.5 -> 158.3 -> 175.6 (DS41-246). prev = P.56 (owner 2026-11-13, EXPERIMENTAL; needs MOE_FILL=piggyback): "
+        "the runtime layout; after every MoE call a device planner (tt/expert_prev.py, kernels/moe_prev_planner.cpp: "
+        "the chips' counts exchanged over the fabric, no host round trip) plans that layer's NEXT call (the next chunk): "
+        "hot experts of the busiest chips, receivers (least loaded, one spare slot a chip), the token shares (the "
+        "uneven split), written into the layer's router bias; the new copies ride the following MoE calls' combines "
+        "(REC_FX job pages the planner writes, MOE_FILL_PIECES a source port a call, a fence call before the use); a "
+        "layer whose plan is not complete in time (a request's first chunk, another call sequence) runs off for that "
+        "call. Outputs bit-identical to off",
+    ),
+    "MOE_PREV_FIXED": Setting(
+        "165",
+        None,
+        "MOE_REPLICAS=prev: a replica's fixed cost in tokens (the receiver reads the expert's 19.9 MB of weights, "
+        "~38.9 us, vs ~0.236 us a routed token: P.55a's fit A / (B / 32)); the planner gives a receiver x = (busiest - "
+        "receiver - this) / 2 of the hot expert's tokens",
+    ),
+    "MOE_PREV_MIN": Setting(
+        "64",
+        None,
+        "MOE_REPLICAS=prev: the fewest tokens a replica takes (the planner stops below; >= 1)",
+    ),
+    "MOE_PREV_SLACK": Setting(
+        "165",
+        None,
+        "MOE_REPLICAS=prev: a receiver that already holds the expert (no copy) is kept over the least loaded chip when "
+        "it is within this many tokens of it",
+    ),
+    "MOE_PREV_NEW": Setting(
+        "64",
+        None,
+        "MOE_REPLICAS=prev: the most new copies one plan (one layer, one chunk) makes; the fill budget limits too",
     ),
     "MOE_EXACT_BLOCK": Setting(
         "32",

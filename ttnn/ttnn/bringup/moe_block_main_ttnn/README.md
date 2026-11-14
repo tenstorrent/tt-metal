@@ -94,7 +94,8 @@ each default off (= the source's program):
 - `set_combine_fill_exact(resources, enabled, gate_up=None, down=None, runs=None, jobs=None, limit_cycles=27e6)` (P.55b,
   MOE_REPLICAS=exact): the port senders stream copies inside the same call, their jobs read from `jobs` (uint32 DRAM,
   per chip COMBINE_FX_PAGES rows of COMBINE_FX_PAGE_WORDS: row dir x links + link = that port's jobs [table | dst << 8,
-  p0, p1, 0, flag word | K << 16, (gate word + 1) | gK << 16, 0, 0] from word 16, header [n jobs, cap]; row
+  p0, p1, 0, flag word | K << 16, (gate word + 1) | gK << 16, gu, d] from word 16 (gu / d, P.56: the copied layer's
+  gate/up and down buffer addresses, 0 = the call's `gate_up` / `down`; K = 0: no flags), header [n jobs, cap]; row
   COMBINE_FX_CHIP_PAGE = the chip's waits [_, _, n, _, ..., (word, target) x n from word 8]); a flushed flag increment
   every K pieces on dst; a gated job (relay) reads only blocks its own flags count; `combine_fill_exact_words(resources)`
   (flags by call parity, per-port stamps, block arrivals), `combine_fill_links(resources)`. Enabled is a program of its

@@ -223,7 +223,8 @@ _MAIN_LAYERS: list = []  # MOE_REPLICA_DEMO: the main (not at_chunk) layers buil
 
 
 def fill_piggyback() -> bool:
-    return replicas_on() and settings.get("MOE_FILL") == "piggyback"
+    """MOE_FILL=piggyback for set_replicas' tables (MOE_REPLICAS=runtime / exact; prev carries its own copies)."""
+    return replicas_on() and settings.get("MOE_FILL") == "piggyback" and not prev_on()
 
 
 def fill_queue(res):
@@ -260,8 +261,49 @@ def replica_demo(mesh) -> None:
 
 
 def replicas_on() -> bool:
-    """The spare slot exists (MOE_REPLICAS runtime, or exact: P.55b's streamed copies fill the same spare slot)."""
-    return settings.get("MOE_REPLICAS") in ("runtime", "exact")
+    """The spare slot exists (MOE_REPLICAS runtime, or exact: P.55b's streamed copies fill the same spare slot, or prev:
+    P.56's replicas learned from the previous chunk)."""
+    return settings.get("MOE_REPLICAS") in ("runtime", "exact", "prev")
+
+
+def prev_on() -> bool:
+    return settings.get("MOE_REPLICAS") == "prev"
+
+
+_PREV: dict = {}  # id(resources) -> (resources, expert_prev.PrevReplicas): MOE_REPLICAS=prev (P.56)
+
+
+def _prev_of(layer, res):
+    """The block's PrevReplicas, made at its first MoE call (every layer is built by then: NCALL = the main layers on
+    this block)."""
+    hit = _PREV.get(id(res))
+    if hit is None or hit[0] is not res:
+        from .expert_prev import PrevReplicas
+
+        assert (
+            settings.get("MOE_FILL") == "piggyback"
+        ), "MOE_REPLICAS=prev carries its copies on the combine (MOE_FILL=piggyback)"
+        ncall = sum(1 for m in _MAIN_LAYERS if m.mesh is layer.mesh and m.block().resources is res)
+        hit = _PREV[id(res)] = (res, PrevReplicas(layer, res, ncall))
+    return hit[1]
+
+
+def prev_reset(mesh) -> None:
+    """MOE_REPLICAS=prev: a request starts (tt/model.py begin_chunk at start 0 or a replay): every block's replica
+    state on the mesh emptied on the device, every layer's first call runs off (expert_prev.PrevReplicas.reset)."""
+    for res, pr in list(_PREV.values()):
+        if pr.mesh is mesh:
+            pr.reset([m for m in _MAIN_LAYERS if m.mesh is mesh and m.block().resources is res])
+
+
+def prev_stats(mesh) -> dict:
+    """MOE_REPLICAS=prev: the host guard's counters of every block on the mesh (calls, ready, off, ...)."""
+    out: dict = {}
+    for _, pr in _PREV.values():
+        if pr.mesh is mesh:
+            for k, v in pr.stats.items():
+                out[k] = out.get(k, 0) + v
+    return out
 
 
 def slot_map_words(perm, epc: int, spc: int, copies) -> torch.Tensor:
@@ -360,6 +402,23 @@ class TtMoEBlockMainLayer:
         self._bias = None  # (the router bias in candidate order, for the slot map's writes)
         self._staged = None  # (MOE_FILL=piggyback: the slot map staged on the device for the flip, and its table)
         self._staged_for = None
+        # MOE_REPLICAS=prev (P.56, tt/expert_prev.py): the layer's planner state (load time), its plan's ordinal, the
+        # load-time router bias (the empty map: the guard's fallback), whether the planner wrote a map since then
+        self._prev = prev_on()
+        self._prev_state = None
+        if self._prev:
+            from .expert_prev import _al16
+
+            n = rows * cols
+            self._prev_state = ttnn.from_torch(
+                torch.zeros(1, 1, 1, _al16(16 + 4 * n), dtype=torch.int32),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=mesh,
+                memory_config=DRAM,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+            )
+        self._prev_ord, self._prev_dirty, self._prev_off_rb, self._prev_used = None, False, None, False
         self.dims, self.act = block_dims(cfg, slots=rows * cols * self.spc)
         self.dtypes = block_dtypes()
         self.perm = expert_permutation(rows, cols, self.epc)
@@ -880,6 +939,8 @@ class TtMoEBlockMainLayer:
                     else {}
                 ),
             )
+            if self._prev_state is not None:  # (P.56: the empty map, for the guard's device copy)
+                self._prev_off_rb = ttnn.clone(self.head_w.router_bias, memory_config=DRAM)
         from models.demos.moe_block_main.tt.moe_block import MoEBlockWeights
 
         return MoEBlockWeights(head=self.head_w, expert_ids=self.gidx, gate_up=self.w_gu, down=self.w_d)
@@ -944,6 +1005,7 @@ class TtMoEBlockMainLayer:
         out.head_w = None
         out._can_feed = None  # (FFN_FEED: that block's own answer)
         out.counts_buf = None  # (MOE_COUNTS: the decoder tail's rows are not the chunk's; only the main layer records)
+        out._prev = False  # (MOE_REPLICAS=prev: only the main layer plans; the view keeps the empty map)
         out._views = []
         if self.replicas:  # (set_replicas on this layer updates the view's map, and its weights when it has its own)
             self._views.append(out)
@@ -986,7 +1048,10 @@ class TtMoEBlockMainLayer:
                 xb_.buffer_address()
             ), "xq_ready needs x = input_buffers()[0] (the norm wrote xq from it)"
         xb = cast(x, ttnn.bfloat16)
-        if self.replicas:
+        pr = _prev_of(self, blk.resources) if self._prev else None
+        if pr is not None:  # (MOE_REPLICAS=prev, P.56: the guard and this call's carried copies)
+            pr.before(self)
+        elif self.replicas:
             self._exact_call(blk)
         if not self.own_rows:
             assert not fed, "FFN_FEED: the feed is the OWN_ROWS path's"
@@ -994,8 +1059,14 @@ class TtMoEBlockMainLayer:
             if self.counts_buf is not None:
                 assert blk.loops * blk.splits == 1, "MOE_COUNTS: a block with token loops / splits has a head a loop"
                 _record_counts(self, blk.last_head.counts)
+            counts = blk.last_head.counts
         else:
             y = self._own_rows(blk, xb, weights, fed=fed)
+            own_head = blk.loops * blk.splits == 1 and not blk.pad_rows  # (_own_rows' own fused_head call)
+            counts = self._last_head.counts if own_head else blk.last_head.counts
+        if pr is not None:  # (the planner for this layer's next call, from this call's counts: on the device)
+            assert blk.loops * blk.splits == 1, "MOE_REPLICAS=prev: a block with token loops / splits has a head a loop"
+            pr.after(self, counts)
         if xb is not x:
             dealloc(xb)
         if fq is not None:

@@ -252,3 +252,15 @@ API port to this tree (main's API of 2026-11-06 that this base, origin/main `b78
   gate_up_weight_read.hpp,gate_up_x_forwarder.cpp,down_weight_reader.cpp}, routed_experts_combine/device/
   {combine_program.{hpp,cpp},routed_experts_combine_program_factory.cpp}, routed_experts_combine/device/kernels/
   dataflow/combine_port_writer.cpp; tests: models/demos/deepseek_v41_flash_d_p/tests/test_moe_exact_replicas.py
+
+### The exact fill's jobs name their own weight buffers (2026-11-14, deepseek_v41_flash_d_p P.56)
+- What: an exact-fill job's words 6 / 7 (were 0, unused) are the copied layer's gate/up and down buffer addresses; 0
+  keeps the call's (`set_combine_fill_exact`'s `gate_up` / `down`), so every existing jobs table (P.55b / P.55c, words
+  6 / 7 zero) runs as before, bit for bit. The port writer's REC_FX `f_load` takes them per job (`f_wj`), its reads
+  and remote writes use them.
+- Why: MOE_REPLICAS=prev (P.56): a device planner writes the copies of several layers into the job pages of one
+  carrier call (P.53's piggyback idea on REC_FX's device-readable pages, since the plan exists only on the device).
+- Cores: none added. Host: none.
+- Needed by: deepseek_v41_flash_d_p P.56 (tt/expert_prev.py, tt/kernels/moe_prev_planner.cpp)
+- Files: routed_experts_combine/device/kernels/dataflow/combine_port_writer.cpp, README.md; tests:
+  models/demos/deepseek_v41_flash_d_p/tests/test_moe_prev_replicas.py

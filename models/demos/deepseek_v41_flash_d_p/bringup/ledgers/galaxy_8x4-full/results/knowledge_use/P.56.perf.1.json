@@ -1,0 +1,111 @@
+{
+ "used": [
+  {
+   "id": "DS41-246",
+   "how": "the copies must be in place before the layer: plans for the NEXT chunk, copies carried by other layers' calls, a fence call, a host guard that runs a layer off when its copies are not fenced",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-241",
+   "how": "fill budget MOE_FILL_PIECES=125 pieces a source port a call and MOE_FILL_CAP=4 reused as the planner's per-port budget and the job pages' cap word; link 0 of the first hop",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-248",
+   "how": "no same-chunk planner: the plan comes from the previous call's counts, exchanged on the device after the layer (no count exchange inside the head)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-228",
+   "how": "the deliverable is measured on the real novel / code prompts back to back (tests/test_moe_prev_replicas.py), not on the A/B's random-token profile",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-229",
+   "how": "the planner reads head.counts as one row-major uint32 page of chips x spc words ([1, 1, 1, slots])",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-220",
+   "how": "no stock whole-mesh all_gather for the counts: the planner program's own sender cores send each chip's counts over the fabric (tail_send's pattern)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-243",
+   "how": "the planner's 0.21 ms counts wait in the host-bound 4-layer quick model read as launch skew, confirmed in the full model (15 us)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-247",
+   "how": "every pass is a fresh request from chunk 0 (new state), with an off-vs-off repeat that must be bit-identical as the baseline check",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-235",
+   "how": "bit-identity of prev vs off relies on COMBINE_SPLIT's order-free combine sums (the default); checked per chunk (max |diff| 0)",
+   "traced": true,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "Blackhole (this Galaxy compiles -mcpu=tt-bh) DRAM NoC alignment for small writes into a page: the planner writes whole 1 KB job pages (read-modify-write) to stay 64 B aligned; no entry says what a 32 B write at a 32 B offset does",
+  "the head's counts hold only a chip's own slots: a cross-chip consumer needs its own exchange (written in tt/expert_prev.py)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "nothing padded or duplicated to fit a kernel: the landing rows are 16-word DRAM pages (alignment), the copies are only the planner's chosen replicas; fork extended (per-job weight addresses) instead"
+  },
+  {
+   "id": "OV-23",
+   "answer": "done",
+   "evidence": "the planner and reset programs are Python-built (MeshProgramDescriptor) and dispatched through ttnn.bringup.prepare_program / run_prepared, built once, 8 + 3 x senders addresses patched a call (asserted: patch_count); host time per call measured in the gate unit: planner dispatch 92.5 us median, pre-call guard + fill args 4.9 us (~3.9 ms a chunk); the reset program runs once a request"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork regression suite run; only the model test test_moe_prev_replicas.py and the measure parts"
+  }
+ ],
+ "cited_only": [
+  "DS41-249",
+  "DS41-250"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "moe_replication",
+  "task": "P.56",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-14T02:01:46",
+  "head": "d8c1ea2c460",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.56.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.56_prev_replicas.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.56.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_moe_prev_replicas.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/expert_prev.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/kernels/moe_prev_planner.cpp",
+   "models/demos/deepseek_v41_flash_d_p/tt/model.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/moe_block_main_adapter.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/README.md",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/routed_experts_combine/device/kernels/dataflow/combine_port_writer.cpp"
+  ]
+ }
+}
