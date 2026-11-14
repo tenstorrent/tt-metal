@@ -158,7 +158,6 @@ class Flux3KleinPipeline:
         mesh_device: ttnn.MeshDevice,
         *,
         snapshots: dict[str, Path],
-        text_length: int = MAX_TEXT_LENGTH,
         sp_axis: int = 1,
         tp_axis: int = 0,
         topology: ttnn.Topology = ttnn.Topology.Ring,
@@ -169,7 +168,6 @@ class Flux3KleinPipeline:
         with upsampler_flux3_klein.SHARED_MESH_PARAMS, and every prompt is rewritten before it is encoded."""
         self._upsampler_ranges = reserve_upsampler_ranges(mesh_device) if upsample else None
         self._device = mesh_device
-        self._text_length = text_length
         self._sp_axis = sp_axis
         mesh_shape = tuple(mesh_device.shape)
         shared = next(iter(snapshots.values()))
@@ -214,6 +212,8 @@ class Flux3KleinPipeline:
             dit_ccl_manager=self._ccl,
             dit_sp_axis=sp_axis,
             sizes=SIZES,
+            tp_axis=tp_axis,
+            h_axis=sp_axis,
         )
         self._null_text = self._prompt_encoder.encode("") if "base" in snapshots else None
         self._upsampler = Flux3KleinSharedUpsampler(mesh_device) if upsample else None
@@ -266,7 +266,7 @@ class Flux3KleinPipeline:
         seed = caption_seed(prompt) if request.seed is None else request.seed
 
         t0 = time.time()
-        text = self._prompt_encoder.encode(prompt, self._text_length)
+        text = self._prompt_encoder.encode(prompt, MAX_TEXT_LENGTH)
         timings["encode"] = time.time() - t0
 
         t0 = time.time()
