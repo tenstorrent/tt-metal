@@ -1206,3 +1206,89 @@ The one this change broke (test_seeded: `git add state.json`) is fixed.
   switch, defaults; no model code changed): determinism 0 (novel, code, state), quick min layer PCC 0.60548579 at L39
   (= P.52-P.56: the off path's bytes), host transfers per layer 0, wall 234.3 ms (spread 19.0; defaults without
   ENGRAM_TABLE=resident, comparable with P.55b's 231.9, not with the 182 ms measures that set it).
+
+## P.59 (perf, attempt 1): flat expert x pieces of at least 8 KB (EXPERT_X_PIECES), then the replica / TP baseline re-measured
+- Expected per chunk (written before any device run; perf_guide 1-2, 5): device -4 to -8 ms (chunk 10, MOE_REPLICAS off),
+  all in the experts phase (routed_experts_combine; P.56 off: 54.7 ms novel / 48.2 code a chunk). Reason: Marko's
+  one-chip benchmark (12 experts x M rows) gives -21 % at M 256 and -17 % at M 2048, ~0 at M 64; our busiest chip has
+  ~4,000 token-slots a layer (~M 330 uniform) but the light chips sit at the DRAM floor (DS41-244), so only the busiest
+  chip's row term (B, per 32-row tile) shrinks: ~-0.1 to -0.2 ms a layer. With P.56 prev the gain is smaller (the
+  busiest chip already offloaded). Host: 0 (same program count; a different compile define only). Caveat: the change
+  does nothing when the plan's sub-block is 128 rows (x block 34,816 B: 4 pieces of 8,704 B already); it acts only at
+  64-row sub-blocks (17,408 B: legacy 4 x 4,352 B, min8k 2 x 8,704 B). The program factory's log line now prints the
+  piece bytes: check it.
+- What changed: fork option `FlatLayoutOptions.x_min_piece_bytes` (moe_block_main_ttnn flat_routed_expert; 0 = the
+  source's 4 pieces when aligned; > 0 = the most of 4 / 2 / 1 pieces of >= that many bytes: Marko Staletovic's
+  1e2ab798da1 x-pieces hunk, his :127-131, taken by hand behind the option because a plain 3-way merge would replace
+  the source's line; his DW split, gate/up hot/cold loop and TEMP env hooks not taken). In the plan key and program
+  hash (appended only when set). Model setting EXPERT_X_PIECES (legacy | min8k, default min8k) ->
+  tt/moe_block_main_adapter.py x_min_piece_bytes() -> the block's FlatLayoutOptions (and the _BLOCKS key). The
+  factory's log line prints the piece bytes. No new op, no host work, no cores (rule 18 unchanged).
+- Piece size the plan really gets (rule: check it): the model's combine-embedded flat plan and the standalone plan
+  both pick mt 2 (64-row sub-blocks) at H 5120, I 2304, 12 experts, 110-core cap: x block 17,408 B -> legacy 4 x
+  4,352 B, min8k 2 x 8,704 B (the model's log: "pieces 2 of 8704 B"). P.58's TP slice widths (512 / 256) plan mt 4:
+  34,816 B -> 4 x 8,704 B on both sides (no change).
+- Flat op alone (tests/test_expert_x_pieces.py::test_expert_x_pieces, 8x4, every chip 12 experts x M tokens,
+  real-time profiler, slowest chip, median of 10 behind 40 matmuls; outputs compared bit for bit on the written rows):
+
+  | M a expert | legacy ms | min8k ms | change | bit-identical |
+  |---|---|---|---|---|
+  | 64 | 0.657 | 0.661 | +0.5 % | yes |
+  | 256 | 1.012 | 0.822 | -18.8 % | yes |
+  | 512 | 1.760 | 1.447 | -17.8 % | yes |
+  | 1024 | 3.243 | 2.683 | -17.3 % | yes |
+
+- Model level, P.56's real-prompt test (tests/test_moe_prev_replicas.py, DS41_EXPERT_X_PIECES=legacy / min8k, two
+  processes, same day; chunks 1..10 mean; device = slowest chip a program, summed; experts phase =
+  routed_experts_combine; every maxdiff / repeat / mirror check 0 on both sides; routing counts identical):
+
+  | prompt | side | device off | device prev | experts off | experts prev | prev gain (device) |
+  |---|---|---|---|---|---|---|
+  | novel | legacy | 174.89 | 156.43 | 54.63 | 44.26 | -18.46 |
+  | novel | min8k | 166.73 (-8.16) | 154.86 (-1.57) | 46.14 (-8.49) | 42.85 (-1.41) | -11.87 |
+  | code | legacy | 163.33 | 153.59 | 48.14 | 42.03 | -9.74 |
+  | code | min8k | 156.56 (-6.77) | 151.82 (-1.77) | 41.87 (-6.27) | 40.83 (-1.20) | -4.74 |
+
+  Wall (unprofiled, host-bound): novel off 193.4 -> 187.7, prev 189.4 -> 190.9; code off 183.3 -> 178.5, prev 189.2
+  -> 186.8 (noise-level except off). Per chunk: generated/bringup_adhoc/P.59_{legacy,min8k}_prev_replicas.json.
+- P.55a's timing model refit (tests/test_moe_exact_bound.py, chunk 10, 3 workloads x 3 runs, 360 layer calls; A is
+  fixed at the DRAM rate by the model's design, 12 x 19.9 MB at 512 GB/s; B and C0 least squares):
+
+  | fit | A us / active expert | B us / 32-row tile | C0 ms | R^2 | rmse ms |
+  |---|---|---|---|---|---|
+  | P.55a (2026-11-13) | 38.9 | 7.55 | 0.235 | 0.966 | 0.068 |
+  | legacy (same day) | 38.9 | 7.66 | 0.220 | 0.963 | 0.072 |
+  | min8k | 38.9 | 5.96 | 0.249 | 0.970 | 0.050 |
+
+  With it, P.55a's exact-split bound shrinks (legacy -> min8k): novel max save 22.4 -> 13.4 ms, deadline 10.4 -> 4.2,
+  2-path 21.4 -> 13.1, ceiling 23.5 -> 15.2; code max 11.0 -> 5.1, deadline 3.1 -> 0.9; busiest / mean novel 2.33 ->
+  1.90. Measured experts at chunk 10 (shortest chip) novel 57.1 -> 49.5, code 47.3 -> 41.7 ms.
+- P.58's compute-side estimate redone (test_expert_x_pieces_layouts: the flat op at P.55a's real chunk-10 counts per
+  layout, both sides, one plan and one weight set; + P.58's measured combine / dispatch costs a layer, unchanged:
+  x pieces do not touch them; EP off / prev = this step's P.56 run). Device ms a chunk at 51,200:
+
+  | | novel legacy | novel min8k | code legacy | code min8k |
+  |---|---|---|---|---|
+  | EP off (measured) | 174.9 | 166.7 | 163.3 | 156.6 |
+  | EP + P.56 prev (measured) | 156.4 | 154.9 | 153.6 | 151.8 |
+  | TP4 (EP off + experts diff + dispatch added) | 215.1 | 215.7 | 208.5 | 207.4 |
+  | TP8 | 334.3 | 335.0 | 328.8 | 327.8 |
+  | flat a chunk EP / TP4 / TP8 | 52.5 / 86.0 / 125.6 | 43.8 / 86.0 / 125.8 | 42.4 / 77.6 / 118.7 | 36.8 / 77.6 / 118.8 |
+
+  Calibration slopes (A us a slot / B us a row tile): EP 51.3 / 7.75 -> 51.2 / 6.46; TP4 14.5 / 6.27 -> 14.6 /
+  6.26; TP8 13.6 / 4.84 -> 13.7 / 4.84. CPU model with the P.55a fit scaled (A / g, B / g, the overseer's estimate):
+  novel EP 49.9 -> 42.0, TP4 27.8 -> 27.4, TP8 25.5 -> 26.4; code EP 38.6 -> 33.8, TP4 27.0 -> 27.7, TP8 26.0 -> 27.1.
+  Verdict unchanged (TP4 / TP8 NO-GO); EP's lead over TP widens by ~8 ms (novel).
+- Reading: min8k is a real device win on the off path (-8 novel / -7 code ms a chunk, all in the experts phase, on
+  target with the expected -4 to -8); with P.56 prev on it adds only ~-1.6 ms because the replicas already cut the
+  busiest chip's row work, so P.56's own gain over the new baseline is -11.9 (novel) / -4.7 (code), down from -18.5 /
+  -9.7. The chunk stays host-bound (wall ~187-191 ms).
+- measure --task P.59 (EXPERT_X_PIECES=min8k ENGRAM_TABLE=resident): determinism 0 (novel, code, state); quick min
+  layer PCC 0.60548579 at L39 (= P.52-P.58: the same output bytes), host transfers per layer 0, wall 175.9 (spread
+  6.3); p51200 (random ids, MOE_REPLICAS off) device_ms_total 176.62, device_ms_experts 94.67, wall 192.4 (spread
+  10.3), 1656 launches, 0 new programs (earlier off sides: device 186.0-187.5, experts 104.8-106.0).
+- Re-run: `scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/
+  test_expert_x_pieces.py` (~1 + ~2.5 min); the baseline: P.56 / P.55a tests with DS41_EXPERT_X_PIECES=legacy|min8k
+  and BRINGUP_RECORD_TASK=P.59_<side> (~6 + ~4 min each, devjob).
+- Final `gate P.59 --check`: PASS (determinism 0; rung last err_final_hidden 0.132 vs 0.242, top5 1.0; profile
+  device_ms_total 164.02, chunk_wall_ms 176.7). x_pieces_* and baseline_* metrics recorded in results/P.59.json.

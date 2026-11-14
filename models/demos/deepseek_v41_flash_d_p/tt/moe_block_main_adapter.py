@@ -453,7 +453,7 @@ class TtMoEBlockMainLayer:
         from models.demos.moe_block_main.tt.moe_block import MoEBlock
 
         split = settings.get("COMBINE_SPLIT") == "on"
-        key = (id(self.mesh), self.chunk, split, self.spc)
+        key = (id(self.mesh), self.chunk, split, self.spc, x_min_piece_bytes())
         hit = _BLOCKS.get(key)
         if hit is None or hit[0] is not self.mesh:
             mb = _mb()
@@ -474,7 +474,7 @@ class TtMoEBlockMainLayer:
                 dtypes=self.dtypes,
                 activation=fw.ACTS[self.act],
                 max_tokens_per_expert=max(self.chunk, 256),
-                layout=mb.FlatLayoutOptions(weights_nk=True),
+                layout=mb.FlatLayoutOptions(weights_nk=True, x_min_piece_bytes=x_min_piece_bytes()),
             )
             logger.info(
                 f"MOE_BLOCK_MAIN chunk={self.chunk}: built in {time.time() - t0:.1f} s, accumulators "
@@ -1206,6 +1206,11 @@ _WEIGHT_KEYS = ("banks", "col0s", "n_rd", "n_rd_sg", "nd", "nk_gu", "np", "nu", 
 
 def _weight_layout(lay: dict) -> tuple:
     return tuple((k, repr(lay.get(k))) for k in _WEIGHT_KEYS)
+
+
+def x_min_piece_bytes() -> int:
+    """EXPERT_X_PIECES (P.59): the flat expert's FlatLayoutOptions.x_min_piece_bytes (0: the source's x pieces)."""
+    return {"legacy": 0, "min8k": 8192}[settings.get("EXPERT_X_PIECES")]
 
 
 def _flat_weights_module():

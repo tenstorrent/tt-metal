@@ -53,6 +53,10 @@ each default off (= the source's program):
   them) - the `ttnn.bringup.flat_routed_expert` fork's weights_nk (DS41-35). `flat_routed_expert_weights.py`:
   `flat_weight_regions(..., nk=)`, FlatRoutedExpert with `layout.weights_nk` takes [N, K] matrices. Off: the source's
   program and key.
+- `FlatLayoutOptions(x_min_piece_bytes=0)` (P.59, Marko Staletovic 1e2ab798da1's x-pieces hunk): the flat expert's x
+  snake cut-through pieces; 0 = the source's (4 when aligned), > 0 = the most of 4 / 2 / 1 of at least that many bytes
+  (8192: 64-row sub-blocks 2 x 8,704 B instead of 4 x 4,352 B; 128-row stay 4). Same math, bit-identical; flat op
+  -17 to -19 % at 256-1024 tokens an expert, 0 at 64 (DeepSeek-V4.1, 8x4). Off: the source's program and key.
 - `set_max_grid(max_x, max_y)` (module function; default (0, 0) = the whole grid): every op's planner (ports, fused
   head, flat experts, combine cells, fused tail) takes its grid from `common/core_grid.hpp` `block_grid()`, the compute
   grid cut to the cap - a Blackhole Galaxy's 110-core rule (DeepSeek-V4.1 FIX.15: 11 x 10 of the 12 x 10). Set once,
@@ -108,6 +112,12 @@ each default off (= the source's program):
   whose 15-bit hash is in its range (own slot [0, lb_0)); copy words below 512 keep the even split.
 
 ## Measured
+
+x pieces (P.59, Galaxy 8x4, DeepSeek-V4.1 H 5120 I 2304, 12 experts x M tokens a chip, mt 2 under the 110-core cap,
+flat op alone, real-time profiler, slowest chip, median of 10; models/demos/deepseek_v41_flash_d_p/tests/
+test_expert_x_pieces.py): x_min_piece_bytes 0 -> 8192, M 64 0.657 -> 0.661 ms, 256 1.012 -> 0.822, 512 1.760 -> 1.447,
+1024 3.243 -> 2.683; bit-identical. In the model (routed_experts_combine, 40 layers, real prompts, MOE_REPLICAS off):
+experts phase 54.6 -> 46.1 ms a chunk (novel), 48.1 -> 41.9 (code). Widths 512 / 256 plan mt 4: no change.
 
 combine fill (P.53, Galaxy 8x4, FABRIC_2D_TORUS_XY, DeepSeek-V4.1, carrier layer 20's combine on a random 5120-token
 chunk, copies into layer 19's spare slots, 2000 pieces of 10880 B a slot; device time of routed_experts_combine on the

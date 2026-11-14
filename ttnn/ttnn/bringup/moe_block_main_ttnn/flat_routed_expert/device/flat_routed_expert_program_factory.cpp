@@ -124,13 +124,29 @@ FlatProgramHandles add_flat_routed_expert_program(
     // successor has freed the block's slot. One snake a rectangle (2: the relay writes every block twice - GLM-5.3 M
     // 1024 238.7 vs 205.5 us / expert, multicast 211.5), 4 cut-through pieces, the forwarder on the gate/up NCRISC
     // (gate_up_x_forwarder.cpp) on NOC0 with 3 pieces in flight, the receiver (gate_up_core_reader.cpp, BRISC) on NOC1.
+    // (bring-up P.59, layout.x_min_piece_bytes > 0: Marko Staletovic's 1e2ab798da1 x-pieces hunk - the most (4 / 2 /
+    // 1) pieces of at least that many bytes (8192 there): the forwarder's bytes in flight bound the snake's x rate,
+    // and 3 x 4.3 KB starved the gate/up cores of 64-row sub-blocks (his flat us, DSv4.1-Flash 12 experts a chip, M
+    // 256 / 1024 / 2048, 4 vs 2 pieces: 946 / 3128 / 6034 vs 748 / 2610 / 5089; 128-row sub-blocks keep 4). 0: the
+    // source's choice.)
     const auto aligned = [&](uint32_t n) { return x_bytes % n == 0 && (x_bytes / n) % 16 == 0; };
-    const uint32_t x_pieces = aligned(4) ? 4 : (aligned(2) ? 2 : 1);
+    uint32_t x_pieces = aligned(4) ? 4 : (aligned(2) ? 2 : 1);
+    if (const uint32_t min_piece = cfg.layout.x_min_piece_bytes; min_piece > 0) {
+        x_pieces = 1;
+        for (uint32_t n : {4u, 2u}) {
+            if (aligned(n) && x_bytes / n >= min_piece) {
+                x_pieces = n;
+                break;
+            }
+        }
+    }
     constexpr uint32_t X_FWD_DEPTH = 3;
     log_info(
         tt::LogOp,
-        "flat_routed_expert: x read once (helpers), unicast snakes (snakes 1 pieces {} NCRISC forwarder NOC0 depth {})",
+        "flat_routed_expert: x read once (helpers), unicast snakes (snakes 1 pieces {} of {} B NCRISC forwarder NOC0 "
+        "depth {})",
         x_pieces,
+        x_bytes / x_pieces,
         X_FWD_DEPTH);
     struct XLink {
         uint32_t pred = 0, succ0 = 0;

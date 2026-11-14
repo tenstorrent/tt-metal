@@ -1,0 +1,93 @@
+{
+ "used": [
+  {
+   "id": "DS41-243",
+   "how": "test_expert_x_pieces.py: 40 matmuls (11 x 10 cores) ahead of every timed flat window, so a call's time excludes host dispatch waits; spreads 2-76 us",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-228",
+   "how": "judged the model-level gain on P.56's real-prompt test (novel + code, chunks 1-10), not on the random-token position profile",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-244",
+   "how": "P.55a fit keeps A fixed at the DRAM floor (38.9 us); the M 64 microbenchmark (weight-streaming bound, 0.657 vs 0.661 ms) shows x pieces do not move it, so only B / C0 are refit",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-252",
+   "how": "redid P.58's TP4 / TP8 compute estimate with the same method (flat op at P.55a's real chunk-10 counts per layout + P.58's combine / dispatch costs)",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-183",
+   "how": "every device run (tests, measure parts) started detached through devjob",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-122",
+   "how": "x_min_piece_bytes goes into FlatLayoutOptions::key() and the program hash (tagged, appended only when set), so legacy and min8k never share a cached program or plan in one process",
+   "traced": true,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "which sub-block height (mt) the flat plan picks per width on the 8x4: mt 2 (64 rows) at width 2304 with the 110-core cap, mt 4 at 512 / 256; the x-piece choice depends on it (now printed by the factory log line)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "no padding or inflated work: the change only alters the x forwarding granularity (pieces), same rows, same math"
+  },
+  {
+   "id": "OV-23",
+   "answer": "done",
+   "evidence": "no Python-built op added or touched: flat_routed_expert is a C++ device op (program cache + patch); the change is a compile-time arg in its C++ program factory"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork unit / regression suite run on the 8x4; only the new tests/test_expert_x_pieces.py and model-level checks (P.56 test, P.55a test, measure, gate)"
+  }
+ ],
+ "cited_only": [
+  "DS41-253"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "moe_replication",
+  "task": "P.59",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-14T08:58:22",
+  "head": "6a69d12c376",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.59.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.59_ops.json.gz",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.59_profile.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.59.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_expert_x_pieces.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/moe_block_main_adapter.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/README.md",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/flat_routed_expert/device/flat_routed_expert_device_operation_types.hpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/flat_routed_expert/device/flat_routed_expert_options.cpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/flat_routed_expert/device/flat_routed_expert_program_factory.cpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/flat_routed_expert/flat_routed_expert_nanobind.cpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/flat_routed_expert/flat_routed_expert_weights.py"
+  ]
+ }
+}

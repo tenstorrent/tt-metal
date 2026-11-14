@@ -210,7 +210,7 @@ def flat_weight_shapes(H, I, E, lay):
     return {"w_gu": (len(regions), regions[0].shape[0]), "w_d": (len(dregs), dregs[0].shape[0])}
 
 
-FLAT_LAYOUT_FIELDS = ("pin_ratio", "arena_bytes", "gu_read_pieces", "weights_nk")
+FLAT_LAYOUT_FIELDS = ("pin_ratio", "arena_bytes", "gu_read_pieces", "weights_nk", "x_min_piece_bytes")
 
 
 def flat_layout(layout=None, **kw):

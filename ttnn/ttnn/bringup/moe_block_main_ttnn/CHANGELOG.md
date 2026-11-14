@@ -264,3 +264,24 @@ API port to this tree (main's API of 2026-11-06 that this base, origin/main `b78
 - Needed by: deepseek_v41_flash_d_p P.56 (tt/expert_prev.py, tt/kernels/moe_prev_planner.cpp)
 - Files: routed_experts_combine/device/kernels/dataflow/combine_port_writer.cpp, README.md; tests:
   models/demos/deepseek_v41_flash_d_p/tests/test_moe_prev_replicas.py
+
+### The flat expert's x snake pieces of at least N bytes (2026-11-14, deepseek_v41_flash_d_p P.59)
+- What: `FlatLayoutOptions.x_min_piece_bytes` (default 0 = the source's choice: 4 cut-through pieces whenever the x
+  block splits into 4 16-byte-aligned pieces). > 0: the most of 4 / 2 / 1 pieces of at least that many bytes each.
+  Source: Marko Staletovic's WIP commit 1e2ab798da1 (origin/mstaletovic/flat-expert-perf-dw-split, parent 0c0bbe59d98
+  = this fork's source), its x-pieces hunk of flat_routed_expert_program_factory.cpp only (his :127-131, the
+  threshold 8 KB), taken behind the option instead of replacing the source's line; his DW split (FRE_DW_SPLIT), the
+  gate/up hot/cold loop and the TEMP env hooks are not taken. The option is in the plan key and the program hash
+  (FlatLayoutOptions::key() appends a tag + the value only when set: 0 keeps the source's key). The factory's log
+  line prints the piece bytes.
+- Why: the forwarder keeps 3 pieces in flight, so its bytes in flight bound the snake's x rate; at 64-row sub-blocks
+  (DeepSeek-V4.1: H 5120, the 110-core cap, mt 2, x block 17,408 B) 3 x 4,352 B starve the gate/up cores; 2 x 8,704 B
+  do not. Same math: outputs bit-identical (checked).
+- Measured (Galaxy 8x4, flat op alone, 12 experts x M tokens a chip, the block's plan, real-time profiler, slowest
+  chip, median of 10; tests/test_expert_x_pieces.py): M 64 0.657 -> 0.661 ms (+0.5 %), 256 1.012 -> 0.822 (-18.8 %),
+  512 1.760 -> 1.447 (-17.8 %), 1024 3.243 -> 2.683 (-17.3 %); bit-identical at every M.
+- Cores: none added. Host: none (a compile-time arg only).
+- Needed by: deepseek_v41_flash_d_p P.59 (EXPERT_X_PIECES=min8k: x_min_piece_bytes 8192, tt/moe_block_main_adapter.py)
+- Files: flat_routed_expert/device/{flat_routed_expert_device_operation_types.hpp,flat_routed_expert_options.cpp,
+  flat_routed_expert_program_factory.cpp}, flat_routed_expert/{flat_routed_expert_nanobind.cpp,
+  flat_routed_expert_weights.py}, README.md; tests: models/demos/deepseek_v41_flash_d_p/tests/test_expert_x_pieces.py

@@ -646,6 +646,17 @@ TABLE = {
         None,
         "MOE_COUNTS=on: the count files' name prefix (<tag>_chunk<NN>.json)",
     ),
+    "EXPERT_X_PIECES": Setting(
+        "min8k",
+        ("legacy", "min8k"),
+        "P.59 (owner 2026-11-14, moe_replication branch): MOE_BLOCK_SRC=main only - the flat routed expert's x snake "
+        "cut-through pieces (ttnn.bringup.moe_block_main FlatLayoutOptions.x_min_piece_bytes, "
+        "flat_routed_expert_program_factory.cpp). legacy = the source's choice (4 pieces whenever the x block splits "
+        "into 4 16-byte-aligned pieces; 64-row sub-blocks: 4 x 4352 B). min8k = Marko Staletovic's 1e2ab798da1 "
+        "(x-pieces hunk only): the most of 4 / 2 / 1 pieces of at least 8 KB each (64-row sub-blocks: 2 x 8704 B; "
+        "128-row: still 4). Same math, only the forwarding granularity: outputs bit-identical. His one-chip "
+        "benchmark (12 experts x M tokens): M 256 946 -> 744 us, 2048 6034 -> 5026; M 64 unchanged",
+    ),
     "TAIL_A2A_PREPARED": Setting(
         "on",
         ("on", "off"),
