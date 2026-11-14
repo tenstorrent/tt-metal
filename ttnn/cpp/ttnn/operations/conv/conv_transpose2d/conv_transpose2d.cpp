@@ -18,6 +18,9 @@
 #include "ttnn/operations/conv/conv_transpose2d/prepare_conv_transpose2d_weights.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/move/move.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include "ttnn/operations/data_movement/slice/slice.hpp"
+#include "ttnn/operations/core/to_layout/to_layout_op.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
@@ -1257,6 +1260,97 @@ ConvTranspose2dResultWithOptions conv_transpose2d(
     bool return_weights_and_bias) {
     using namespace operations::conv::conv_transpose2d;
     operations::conv::validate_conv_params(in_channels, out_channels, batch_size, kernel_size, stride, groups);
+
+    // torch crops the output when a padding side exceeds dilation * (kernel - 1). The conv2d micro-op
+    // derives its input padding as dilation * (kernel - 1) - padding in uint32
+    // (SlidingWindowConfig::get_transposed_real_padding), which wraps for those sides. Run with the
+    // reachable padding instead and crop the excess rows and columns off the output.
+    {
+        const auto padding_n4 = operations::sliding_window::get_pair_n4_padding(padding);
+        const uint32_t base_h = dilation[0] * (kernel_size[0] - 1);
+        const uint32_t base_w = dilation[1] * (kernel_size[1] - 1);
+        const std::array<uint32_t, 4> base = {base_h, base_h, base_w, base_w};
+        std::array<uint32_t, 4> excess{};
+        std::array<uint32_t, 4> reachable{};
+        bool has_excess = false;
+        for (size_t i = 0; i < 4; i++) {
+            excess[i] = padding_n4[i] > base[i] ? padding_n4[i] - base[i] : 0;
+            reachable[i] = padding_n4[i] - excess[i];
+            has_excess |= excess[i] > 0;
+        }
+        if (has_excess) {
+            auto full = ttnn::conv_transpose2d(
+                input_tensor,
+                weight_tensor,
+                device,
+                in_channels,
+                out_channels,
+                batch_size,
+                input_height,
+                input_width,
+                kernel_size,
+                stride,
+                reachable,
+                output_padding,
+                dilation,
+                groups,
+                dtype,
+                bias_tensor,
+                conv_config_,
+                compute_config_,
+                std::nullopt,
+                dram_slice_config_,
+                mirror_kernel,
+                /*return_output_dim=*/true,
+                /*return_weights_and_bias=*/true);
+            auto& [full_output, full_dims, weights_and_bias] = std::get<3>(full);
+            const auto [full_height, full_width] = full_dims;
+            TT_FATAL(
+                full_height > excess[0] + excess[1] && full_width > excess[2] + excess[3],
+                "conv_transpose2d: padding {} leaves no output for a {}x{} result",
+                padding_n4,
+                full_height,
+                full_width);
+            const uint32_t output_height = full_height - excess[0] - excess[1];
+            const uint32_t output_width = full_width - excess[2] - excess[3];
+
+            Tensor cropped = full_output;
+            const tt::tt_metal::Layout output_layout = cropped.layout();
+            const tt::tt_metal::DataType output_dtype = cropped.dtype();
+            if (cropped.is_sharded()) {
+                cropped = ttnn::to_memory_config(cropped, ttnn::DRAM_MEMORY_CONFIG);
+            }
+            if (output_layout == tt::tt_metal::Layout::TILE) {
+                cropped = ttnn::to_layout(
+                    cropped,
+                    tt::tt_metal::Layout::ROW_MAJOR,
+                    output_dtype == tt::tt_metal::DataType::BFLOAT8_B
+                        ? std::optional<tt::tt_metal::DataType>(tt::tt_metal::DataType::BFLOAT16)
+                        : std::nullopt);
+            }
+            const uint32_t channels = cropped.logical_shape()[-1];
+            cropped = ttnn::reshape(cropped, ttnn::Shape({batch_size, full_height, full_width, channels}));
+            cropped = ttnn::slice(
+                cropped,
+                ttsl::SmallVector<uint32_t>{0, excess[0], excess[2], 0},
+                ttsl::SmallVector<uint32_t>{batch_size, full_height - excess[1], full_width - excess[3], channels},
+                ttsl::SmallVector<uint32_t>{1, 1, 1, 1});
+            cropped =
+                ttnn::reshape(cropped, ttnn::Shape({1, 1, batch_size * output_height * output_width, channels}));
+            if (output_layout == tt::tt_metal::Layout::TILE) {
+                cropped = ttnn::to_layout(cropped, tt::tt_metal::Layout::TILE, output_dtype);
+            }
+            if (memory_config_.has_value()) {
+                cropped = ttnn::to_memory_config(cropped, memory_config_.value());
+            }
+            return result_to_result_with_options(
+                ConvTranspose2dResult{
+                    cropped, output_height, output_width, std::get<0>(weights_and_bias), std::get<1>(weights_and_bias)},
+                return_output_dim,
+                return_weights_and_bias);
+        }
+    }
+
     // Determine execution path based on configuration and input properties
     ConvT2dExecutionPath path = determine_conv_transpose2d_execution_path(input_tensor, dram_slice_config_);
 

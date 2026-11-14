@@ -11,6 +11,7 @@ from tt_py_test_utils_common.utility_functions import (
     is_blackhole,
 )
 import ttnn
+from tests.ttnn.utils_for_testing import check_with_pcc_without_tensor_printout
 
 from tests.ttnn.nightly.unit_tests.operations.conv.test_conv_transpose2d import (
     run_conv_transpose2d,
@@ -630,3 +631,78 @@ def test_prepare_conv_transpose2d_weights_rejects_zero_params(device, override, 
             input_dtype=ttnn.bfloat16,
             **_conv_transpose2d_zero_param_kwargs(device, override),
         )
+
+
+# (id, H, W, C, O, kernel, stride, padding, output_padding, dilation). The first 11 have a padding side larger than
+# dilation * (kernel - 1), which torch handles by cropping the output; the last 5 are in-range controls.
+_CONV_T_LARGE_PAD_CASES = [
+    ("k1s1p1", 8, 8, 32, 32, (1, 1), (1, 1), (1, 1), (0, 0), (1, 1)),
+    ("k1s1p2", 8, 8, 32, 32, (1, 1), (1, 1), (2, 2), (0, 0), (1, 1)),
+    ("k1s2p1", 8, 8, 32, 32, (1, 1), (2, 2), (1, 1), (0, 0), (1, 1)),
+    ("k2s2p2", 8, 8, 32, 32, (2, 2), (2, 2), (2, 2), (0, 0), (1, 1)),
+    ("k2s1p2", 8, 8, 32, 32, (2, 2), (1, 1), (2, 2), (0, 0), (1, 1)),
+    ("k3s1p3", 8, 8, 32, 32, (3, 3), (1, 1), (3, 3), (0, 0), (1, 1)),
+    ("k3s2p3op1", 8, 8, 32, 32, (3, 3), (2, 2), (3, 3), (1, 1), (1, 1)),
+    ("k4s2p4", 8, 8, 32, 32, (4, 4), (2, 2), (4, 4), (0, 0), (1, 1)),
+    ("k3d2p5", 8, 8, 32, 32, (3, 3), (1, 1), (5, 5), (0, 0), (2, 2)),
+    ("k3s1p3_16x16_c64", 16, 16, 64, 64, (3, 3), (1, 1), (3, 3), (0, 0), (1, 1)),
+    ("k5s1p5_16x16", 16, 16, 32, 32, (5, 5), (1, 1), (5, 5), (0, 0), (1, 1)),
+    ("ctrl_k2s2p1", 8, 8, 32, 32, (2, 2), (2, 2), (1, 1), (0, 0), (1, 1)),
+    ("ctrl_k3s1p2", 8, 8, 32, 32, (3, 3), (1, 1), (2, 2), (0, 0), (1, 1)),
+    ("ctrl_k4s2p1", 8, 8, 32, 32, (4, 4), (2, 2), (1, 1), (0, 0), (1, 1)),
+    ("ctrl_k4s2p3", 8, 8, 32, 32, (4, 4), (2, 2), (3, 3), (0, 0), (1, 1)),
+    ("ctrl_k3d2p4", 8, 8, 32, 32, (3, 3), (1, 1), (4, 4), (0, 0), (2, 2)),
+]
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 64 * 1024}], indirect=True)
+@pytest.mark.parametrize(
+    "case",
+    _CONV_T_LARGE_PAD_CASES,
+    ids=[c[0] for c in _CONV_T_LARGE_PAD_CASES],
+)
+def test_conv_transpose2d_padding_larger_than_kernel_reach(device, case):
+    _, H, W, C, O, kernel, stride, padding, output_padding, dilation = case
+    torch.manual_seed(0)
+    torch_input = torch.randn(1, C, H, W).bfloat16().float()
+    torch_weight = torch.randn(C, O, *kernel).bfloat16().float()
+    torch_bias = torch.randn(O).bfloat16().float()
+    torch_out = torch.nn.functional.conv_transpose2d(
+        torch_input,
+        torch_weight,
+        bias=torch_bias,
+        stride=stride,
+        padding=padding,
+        output_padding=output_padding,
+        dilation=dilation,
+    )
+
+    tt_input = ttnn.from_torch(
+        torch_input.permute(0, 2, 3, 1).reshape(1, 1, H * W, C).bfloat16(),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+    tt_weight = ttnn.from_torch(torch_weight.bfloat16(), dtype=ttnn.bfloat16)
+    tt_bias = ttnn.from_torch(torch_bias.reshape(1, 1, 1, O).bfloat16(), dtype=ttnn.bfloat16)
+    tt_out, (out_h, out_w) = ttnn.conv_transpose2d(
+        input_tensor=tt_input,
+        weight_tensor=tt_weight,
+        bias_tensor=tt_bias,
+        device=device,
+        in_channels=C,
+        out_channels=O,
+        batch_size=1,
+        input_height=H,
+        input_width=W,
+        kernel_size=kernel,
+        stride=stride,
+        padding=padding,
+        output_padding=output_padding,
+        dilation=dilation,
+        return_output_dim=True,
+    )
+    assert (out_h, out_w) == tuple(torch_out.shape[2:])
+    result = ttnn.to_torch(tt_out).float().reshape(1, out_h, out_w, O).permute(0, 3, 1, 2)
+    passing, pcc_msg = check_with_pcc_without_tensor_printout(result, torch_out, pcc=0.999)
+    assert passing, pcc_msg
