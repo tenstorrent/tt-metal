@@ -942,3 +942,31 @@ def test_prelu_scalar_honours_memory_config(input_shapes, device, weight, reques
 
     if requested_memcfg is not None:
         assert_equal(ttnn.to_torch(output), ttnn.to_torch(ttnn.prelu(input_tensor, weight)))
+
+
+@pytest.mark.parametrize("op", ["maximum", "minimum", "bias_gelu"])
+@pytest.mark.parametrize("activation_kind", ["post", "lhs"])
+def test_binary_composite_scalar_applies_activations(op, activation_kind, device):
+    torch.manual_seed(0)
+    scalar = 0.25
+    torch_a = torch.randn(1, 1, 32, 64, dtype=torch.bfloat16)
+    a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device)
+    b = ttnn.from_torch(torch.full_like(torch_a, scalar), layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_op = getattr(ttnn, op)
+    if activation_kind == "post":
+        kwargs = {"activations": [ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)]}
+    else:
+        kwargs = {"input_tensor_a_activations": [ttnn.UnaryWithParam(ttnn.UnaryOpType.SQUARE)]}
+
+    # The tensor-tensor overload applies the activations; the scalar overload must give the same result.
+    expected = ttnn.to_torch(ttnn_op(a, b, **kwargs)).float()
+    actual = ttnn.to_torch(ttnn_op(a, scalar, **kwargs)).float()
+
+    assert torch.allclose(actual, expected, rtol=1e-2, atol=1e-2), (actual - expected).abs().max()
+
+
+@pytest.mark.parametrize("op", ["maximum", "minimum", "bias_gelu"])
+def test_binary_composite_scalar_rejects_rhs_activations(op, device, expect_error):
+    a = ttnn.from_torch(torch.randn(1, 1, 32, 32, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(RuntimeError, "input_tensor_b_activations are not supported"):
+        getattr(ttnn, op)(a, 0.5, input_tensor_b_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)])
