@@ -192,6 +192,24 @@ def test_full_like(device, input_shape, fill_value):
     assert torch.allclose(torch_output_tensor, output_tensor)
 
 
+@pytest.mark.parametrize("shape", [(1, 1, 32, 32), (2, 33, 65)])
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+@pytest.mark.parametrize("fill_value", [0.1, -0.1, 1.01171875])
+@pytest.mark.parametrize("preallocated", [False, True])
+def test_full_like_rounding(device, shape, dtype, layout, fill_value, preallocated):
+    torch_input = torch.zeros(shape, dtype=dtype)
+    input_tensor = ttnn.from_torch(torch_input, layout=layout, device=device)
+    output_tensor = ttnn.empty_like(input_tensor) if preallocated else None
+    output = ttnn.full_like(input_tensor, fill_value, optional_tensor=output_tensor)
+    expected = torch.full_like(torch_input, fill_value)
+    torch.testing.assert_close(ttnn.to_torch(output), expected, rtol=0, atol=0)
+    if preallocated:
+        torch.testing.assert_close(ttnn.to_torch(output_tensor), expected, rtol=0, atol=0)
+    full = ttnn.full(shape, fill_value, dtype=input_tensor.dtype, layout=layout, device=device)
+    torch.testing.assert_close(ttnn.to_torch(full), expected, rtol=0, atol=0)
+
+
 @pytest.mark.parametrize(
     "input_shape",
     [[32, 32], [5, 96, 64], [1, 2, 64, 64], [1, 2, 4, 64, 64]],
