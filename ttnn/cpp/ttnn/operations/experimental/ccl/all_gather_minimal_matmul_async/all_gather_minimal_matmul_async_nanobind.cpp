@@ -161,6 +161,12 @@ void bind_all_gather_minimal_matmul_async(nb::module_& mod) {
         num_buffers_per_channel : Optional[int], default: 1
             The number of buffers per channel for the mux cores used for all gather.
 
+        swiglu_last_chunk : bool, default: False
+            The last chunk gets the fused SwiGLU (see fuse_swiglu): its weight columns are a tile-pair-interleaved
+            [gate|up] block and its output is half as wide; the chunks before it are plain (e.g. QKV and a gated MLP
+            input in one op). Needs chunks >= 2, explicit chunk_sizes and the transposed core grid. Each N core
+            computes an equal share of both groups.
+
         Returns
         -------
         std::vector<ttnn.Tensor>
@@ -253,7 +259,8 @@ void bind_all_gather_minimal_matmul_async(nb::module_& mod) {
             nb::arg("fsdp_topology") = nb::none(),
             nb::arg("fuse_swiglu") = false,
             nb::arg("chunk_sizes") = std::vector<uint32_t>{},
-            nb::arg("transpose_core_grid") = nb::none()});
+            nb::arg("transpose_core_grid") = nb::none(),
+            nb::arg("swiglu_last_chunk") = false});
 }
 
 }  // namespace ttnn::operations::experimental::ccl

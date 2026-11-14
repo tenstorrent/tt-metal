@@ -59,6 +59,11 @@ struct AllGatherMinimalMatmulAsyncParams {
     // so a pinned and an unpinned call that resolve alike share one program.
     std::optional<bool> transpose_core_grid;
 
+    // The last chunk gets the fused SwiGLU epilogue: its weight columns are tile-pair-interleaved [gate|up] and its
+    // output is half as wide. The chunks before it form N group A, it forms group B, and each N core computes an
+    // equal share of both (grouped N split).
+    bool swiglu_last_chunk;
+
     AllGatherMinimalMatmulAsyncParams(
         std::optional<const MinimalMatmulConfig> config,
         std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation,
@@ -85,7 +90,8 @@ struct AllGatherMinimalMatmulAsyncParams {
         ttnn::ccl::Topology fsdp_topology,
         bool fuse_swiglu = false,
         std::vector<uint32_t> chunk_sizes = {},
-        std::optional<bool> transpose_core_grid = std::nullopt) :
+        std::optional<bool> transpose_core_grid = std::nullopt,
+        bool swiglu_last_chunk = false) :
         config(config),
         fused_activation(std::move(fused_activation)),
         output_mem_config(std::move(output_mem_config)),
@@ -111,7 +117,8 @@ struct AllGatherMinimalMatmulAsyncParams {
         using_persistent_weight_buffer(using_persistent_weight_buffer),
         fsdp_topology(fsdp_topology),
         fuse_swiglu(fuse_swiglu),
-        transpose_core_grid(transpose_core_grid) {}
+        transpose_core_grid(transpose_core_grid),
+        swiglu_last_chunk(swiglu_last_chunk) {}
 
     // Structural fields that affect program-cache key.
     static constexpr auto attribute_names = std::make_tuple(
@@ -132,6 +139,7 @@ struct AllGatherMinimalMatmulAsyncParams {
         "fuse_swiglu",
         "fused_activation",
         "output_dtype",
+        "swiglu_last_chunk",
         // Selects DST_SYNC_MODE and the other compile-time compute settings.
         "compute_kernel_config");
 
@@ -154,6 +162,7 @@ struct AllGatherMinimalMatmulAsyncParams {
             this->fuse_swiglu,
             this->fused_activation,
             this->output_dtype,
+            this->swiglu_last_chunk,
             this->compute_kernel_config);
     }
 };
