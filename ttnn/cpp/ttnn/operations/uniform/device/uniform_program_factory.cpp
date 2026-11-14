@@ -155,7 +155,8 @@ ProgramDescriptor UniformDeviceOperation::UniformProgramFactory::create_descript
     compute_desc.kernel_source = COMPUTE_KERNEL_PATH;
     compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_desc.core_ranges = all_cores;
-    compute_desc.compile_time_args = {output_cb_id};
+    // One rand call per tile reads faster for Float32 outputs and slower for large Bfloat16 ones.
+    compute_desc.compile_time_args = {output_cb_id, static_cast<uint32_t>(output_dtype == DataType::FLOAT32)};
     compute_desc.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         // Retain generated values in FP32 until packing so reduced destination
