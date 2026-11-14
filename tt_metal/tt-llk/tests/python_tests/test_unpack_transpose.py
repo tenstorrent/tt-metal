@@ -138,9 +138,10 @@ def _run_unpack_transpose(
         )
         tile_count_B = tile_count
 
+    dest_acc = DestAccumulation.No
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
         DestSync.Half,
-        DestAccumulation.No,
+        dest_acc,
         formats,
         input_dimensions,
         TILE_DIMENSIONS,
@@ -168,7 +169,7 @@ def _run_unpack_transpose(
             tile_count_B=tile_count_B,
             tile_count_res=tile_count,
         ),
-        "dest_acc": DestAccumulation.No,
+        "dest_acc": dest_acc,
         "unpack_to_dest": False,
     }
 
