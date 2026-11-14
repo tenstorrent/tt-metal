@@ -22,6 +22,7 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
+#include "ttnn/operations/conv/conv2d/device/conv2d_device_operation.hpp"
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
 #include "ttnn/operations/data_movement/move/move.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
@@ -181,6 +182,147 @@ Result conv2d_L1(
         compute_grid_size,
         conv_is_1d_depthwise,
         coalesce_1d_depthwise_kw_reads);
+
+    // An explicitly requested shard layout skips the L1-fit search in
+    // determine_conv_config_for_auto_shard, and the width-sharded block config defaults act_block_h
+    // to the whole per-core activation height, which can overflow L1 at program build (the auto path
+    // avoids such schemes; the DRAM path slices the activation, so only the L1 path overflows). When
+    // the estimated demand does not fit and the caller did not pin act_block_h_override, retry with
+    // smaller act_block_h divisors, the same knob act_block_h_override sets manually; raise a clear
+    // error naming act_block_h_override when even the smallest block does not fit.
+    if (!mm_conv && parallel_config.shard_scheme == TensorMemoryLayout::WIDTH_SHARDED &&
+        conv_config.act_block_h_override == 0) {
+        const uint32_t l1_budget = device->l1_size_per_core();
+        Conv2dConfig estimate_config = conv_config;
+        estimate_config.weights_dtype = weight_dtype;
+        // Mirror the shape prepare_conv_weights produces (padded input channels by the kernel volume,
+        // padded output channels) so the circular buffer model matches the device program.
+        const ttnn::Shape estimate_weights_shape(
+            {1,
+             1,
+             in_channels_padded * kernel_size[0] * kernel_size[1],
+             tt::round_up(
+                 out_channels,
+                 tt::constants::TILE_WIDTH * get_num_cores_channels_from_parallel_config(output_parallel_config))});
+        const uint32_t input_datum_size = input_tensor.dtype() == DataType::FLOAT32 ? 4 : 2;
+        const uint32_t reader_indices_bytes = opt_conv_op_parallel_config.per_core_out_matrix_height_ntile *
+                                              tt::constants::TILE_HEIGHT * sizeof(uint16_t);
+        // The conv program shares per-core L1 between its circular buffers and the live L1 tensors:
+        // the haloed input the op reads, the pre-halo sharded input the caller still holds, the
+        // output shard, and the L1-resident reader indices config.
+        const auto& input_shard_spec = input_tensor_post_tm.memory_config().shard_spec();
+        const uint32_t input_shard_bytes =
+            input_shard_spec.has_value() ? input_shard_spec->shape[0] * input_shard_spec->shape[1] * input_datum_size
+                                         : 0;
+        uint32_t halo_output_bytes = 0;
+        if (input_shard_spec.has_value()) {
+            const sliding_window::SlidingWindowConfig halo_config{
+                .batch_size = batch_size,
+                .input_hw = {input_height, input_width},
+                .window_hw = {kernel_size[0], kernel_size[1]},
+                .stride_hw = {stride[0], stride[1]},
+                .padding = {{padding_n4[0], padding_n4[1], padding_n4[2], padding_n4[3]}},
+                .dilation_hw = {dilation[0], dilation[1]},
+                .num_cores_nhw = get_num_cores_nhw_from_parallel_config(parallel_config),
+                .core_range_set = input_shard_spec->grid,
+                .snap_to_tile = true,
+            };
+            halo_output_bytes =
+                sliding_window::calculate_precise_halo_output_elems(halo_config, input_shard_spec->shape) *
+                input_datum_size;
+        }
+        auto estimate_demand = [&](uint32_t act_block_h_override) {
+            Conv2dConfig cfg = estimate_config;
+            cfg.act_block_h_override = act_block_h_override;
+            auto [estimate_parallel_config, estimate_block_config, estimate_out_mem_config] = get_conv_configs(
+                cfg,
+                compute_config,
+                parallel_config,
+                output_parallel_config,
+                in_channels_padded,
+                out_channels,
+                batch_size,
+                output_height,
+                output_width,
+                kernel_size,
+                compute_grid_size,
+                conv_is_1d_depthwise,
+                coalesce_1d_depthwise_kw_reads);
+            const auto usage = ttnn::prim::calculate_L1_usage(
+                compute_config,
+                estimate_block_config,
+                opt_conv_op_parallel_config,
+                estimate_weights_shape,
+                sliding_window::SlidingWindowConfig{
+                    .input_hw = {input_height, input_width}, .window_hw = {kernel_size[0], kernel_size[1]}},
+                dilation,
+                cfg,
+                input_tensor.dtype(),
+                output_dtype,
+                output_width,
+                bias_tensor.has_value(),
+                conv_is_1d_depthwise,
+                in_channels_padded);
+            return usage.CB_allocation_size + usage.tensor_allocation_size + halo_output_bytes + input_shard_bytes +
+                   reader_indices_bytes;
+        };
+        const uint32_t default_demand = estimate_demand(0);
+        log_debug(
+            tt::LogOp,
+            "conv2d WIDTH_SHARDED L1 demand estimate: {} B (budget {} B, act_block_h {} tiles)",
+            default_demand,
+            l1_budget,
+            opt_conv_op_block_config.act_block_h_ntiles);
+        if (default_demand > l1_budget) {
+            const uint32_t default_act_block_h_ntiles = opt_conv_op_block_config.act_block_h_ntiles;
+            std::optional<uint32_t> fitted_act_block_h;
+            for (uint32_t act_block_h_ntiles = default_act_block_h_ntiles / 2; act_block_h_ntiles >= 1;
+                 --act_block_h_ntiles) {
+                if (default_act_block_h_ntiles % act_block_h_ntiles != 0) {
+                    continue;
+                }
+                const uint32_t candidate = act_block_h_ntiles * tt::constants::TILE_HEIGHT;
+                if (estimate_demand(candidate) <= l1_budget) {
+                    fitted_act_block_h = candidate;
+                    break;
+                }
+            }
+            if (fitted_act_block_h.has_value()) {
+                log_info(
+                    tt::LogOp,
+                    "conv2d: WIDTH_SHARDED activation block of {} B does not fit in {} B of per-core L1; retrying "
+                    "with act_block_h={} (pass act_block_h_override to pin it)",
+                    default_demand,
+                    l1_budget,
+                    fitted_act_block_h.value());
+                conv_config.act_block_h_override = fitted_act_block_h.value();
+                std::tie(opt_conv_op_parallel_config, opt_conv_op_block_config, conv_out_memory_config) =
+                    get_conv_configs(
+                        conv_config,
+                        compute_config,
+                        parallel_config,
+                        output_parallel_config,
+                        in_channels_padded,
+                        out_channels,
+                        batch_size,
+                        output_height,
+                        output_width,
+                        kernel_size,
+                        compute_grid_size,
+                        conv_is_1d_depthwise,
+                        coalesce_1d_depthwise_kw_reads);
+            } else {
+                TT_FATAL(
+                    false,
+                    "conv2d: WIDTH_SHARDED activation block config does not fit in L1: estimated {} B (circular "
+                    "buffers + output + haloed input) exceeds {} B of per-core L1 and no smaller act_block_h fits. "
+                    "Pass a smaller act_block_h_override (multiple of 32), use a different shard layout, or run with "
+                    "DRAM slicing.",
+                    default_demand,
+                    l1_budget);
+            }
+        }
+    }
 
     ttnn::Tensor weight_tensor_on_device = weight_tensor;
     std::optional<ttnn::Tensor> bias_tensor_on_device = bias_tensor;
