@@ -282,8 +282,22 @@ inline void relu_clamp_uint(uint threshold) {
 //   IS_LOWER_BOUND == true -> relu_min: result = max(x, threshold)
 //   IS_LOWER_BOUND == false -> relu_max/relu6: result = max(0, min(x, threshold))
 //
-// Load/store as signed 2's complement (DataLayout::I32). Since the sign-magnitude SFPSWAP path cannot
-// represent -2^31 (0x80000000 is -0), we use the plain int32 compare.
+// The Dest word is a two's-complement int32, loaded raw (Blackhole's INT32 load converts nothing).
+// For threshold >= 0 (every production relu_max/relu6 call, and relu_min with a non-negative bound)
+// the row goes through SFPSWAP, which orders its operands as sign-magnitude: every negative word
+// has its sign bit set and so ranks below every non-negative word, and the non-negative words
+// rank numerically. That is all these clamps need: max(x, t) is t for x < 0 and the numeric max
+// otherwise; max(0, min(x, t)) is 0 for x < 0 (min keeps x, the max against +0 drops it) and the
+// numeric clamp otherwise. INT_MIN (0x80000000, sign-magnitude -0) ranks below +0 too. Verified
+// bit-identical with the predicated compare it replaces on Blackhole silicon. Rows are 5
+// (relu_min) / 6 (relu_max) instructions instead of 9 / 10: load, the compiler's copy of the
+// threshold (SFPSWAP writes both operands), one SFPSWAP per bound, store, TTINCRWC. The threshold
+// stays in a general LReg: an SFPSWAP against a programmed constant register (LREG12) and a
+// store-side ADDR_MOD_6 increment were both seen to misbehave on silicon depending on what the
+// previous kernel left in the SFPU, so this keeps the same load/store shape as the predicated form.
+//
+// A negative relu_min threshold keeps the plain int32 compare: there the negative lanes must be
+// ordered numerically, which the sign-magnitude image does not do.
 template <bool APPROXIMATION_MODE, bool IS_LOWER_BOUND, int ITERATIONS = 8>
 inline void relu_clamp_int(uint threshold) {
     const vInt t = static_cast<int>(threshold);
@@ -291,17 +305,12 @@ inline void relu_clamp_int(uint threshold) {
     if constexpr (IS_LOWER_BOUND) {
         // relu_min: max(x, threshold)
         if (is_pos_threshold) {
+            const vSMag ts = sfpi::as<vSMag>(t);
 #pragma GCC unroll 8
             for (int d = 0; d < ITERATIONS; d++) {
-                vInt x = dst_reg[0].mode<sfpi::DataLayout::I32>();
-                // v_if(x < 0) is NOT redundant: the SFPU signed compare subtracts and tests the sign,
-                // which overflows when x and t are >= 2^31 apart and wrongly gives x>=t. Lifting negatives
-                // up to t first leaves only non-negative lanes for the x < t compare, which then cannot overflow.
-                v_if(x < 0) { x = t; }
-                v_endif;
-                v_if(x < t) { x = t; }
-                v_endif;
-                dst_reg[0].mode<sfpi::DataLayout::I32>() = x;
+                vInt raw = dst_reg[0].mode<sfpi::DataLayout::I32>();
+                vSMag x = sfpi::as<vSMag>(raw);
+                dst_reg[0].mode<sfpi::DataLayout::I32>() = sfpi::as<vInt>(sfpi::max(x, ts));
                 dst_reg++;
             }
         } else {
@@ -320,14 +329,13 @@ inline void relu_clamp_int(uint threshold) {
     } else {
         // relu_max/relu6: max(0, min(x, threshold))
         if (is_pos_threshold) {
+            const vSMag ts = sfpi::as<vSMag>(t);
+            const vSMag zero = sfpi::as<vSMag>(vInt(0));
 #pragma GCC unroll 8
             for (int d = 0; d < ITERATIONS; d++) {
-                vInt x = dst_reg[0].mode<sfpi::DataLayout::I32>();
-                v_if(x < 0) { x = 0; }
-                v_endif;
-                v_if(x > t) { x = t; }
-                v_endif;
-                dst_reg[0].mode<sfpi::DataLayout::I32>() = x;
+                vInt raw = dst_reg[0].mode<sfpi::DataLayout::I32>();
+                vSMag x = sfpi::as<vSMag>(raw);
+                dst_reg[0].mode<sfpi::DataLayout::I32>() = sfpi::as<vInt>(sfpi::max(sfpi::min(x, ts), zero));
                 dst_reg++;
             }
         } else {
