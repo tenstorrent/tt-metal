@@ -74,6 +74,39 @@ inline void POP(uint32_t cb, uint32_t n) { CircularBuffer(cb).pop_front(n); }
 #endif
 inline constexpr uint32_t kDstTiles = GDN_DST_TILES;
 
+// DST[idst + c] += a[a_tile] @ b[b_tile + c] for c < n: matmul_tiles on n consecutive in1 tiles of one in0 tile, with
+// in0 unpacked ONCE (it stays in SrcB while the n in1 tiles stream through SrcA) instead of once per product. Each
+// DST tile receives exactly the MVMUL sequence matmul_tiles issues for it, so the sums are bit-identical. As for
+// matmul_tiles a matmul_init must precede it, and b's tile size must be the unpacker's configured SrcA tile size
+// (the unpacker steps from one in1 tile to the next by it). This is matmul_tiles's own unpack / math pair given a
+// column count, not matmul_block: on Blackhole that one switches to the firmware-throttled MOP on request, whose
+// reordered fidelity phases would make the sums depend on the throttle state.
+inline void mm_tiles_row(uint32_t a, uint32_t b, uint32_t a_tile, uint32_t b_tile, uint32_t idst, uint32_t n) {
+#ifndef ARCH_QUASAR
+    UNPACK((llk_unpack_AB_matmul(a, b, a_tile, b_tile, n /*ct_dim*/, 1 /*rt_dim*/, 1 /*kt_dim*/)));
+    MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE>(idst, n /*ct_dim*/, 1 /*rt_dim*/)));
+#else
+    for (uint32_t c = 0; c < n; c++) {
+        matmul_tiles(a, b, a_tile, b_tile + c, idst + c);
+    }
+#endif
+}
+
+// Split the DST batch of output tiles [t0, t0 + nb) of an [M, Nt] tile grid (row-major) into its runs of tiles
+// that share an output row, and call f(mi, ni, j, n) for each: the run starts at grid tile (mi, ni), DST tile j,
+// and is n tiles long.
+template <typename F>
+inline void for_row_runs(uint32_t t0, uint32_t nb, uint32_t Nt, F&& f) {
+    for (uint32_t j = 0; j < nb;) {
+        const uint32_t t = t0 + j;
+        const uint32_t mi = t / Nt;
+        const uint32_t ni = t - mi * Nt;
+        const uint32_t n = (nb - j < Nt - ni) ? (nb - j) : (Nt - ni);
+        f(mi, ni, j, n);
+        j += n;
+    }
+}
+
 inline void mm(
     uint32_t a, uint32_t b, uint32_t o, uint32_t Mt, uint32_t Kt, uint32_t Nt, bool tr, bool skip_reconfig = false) {
     CircularBuffer(o).reserve_back(Mt * Nt);
@@ -1074,15 +1107,12 @@ inline void scan_step(const GdnScanCbs& cb, uint32_t cur_S, uint32_t dst) {
         for (uint32_t t0 = 0; t0 < cv; t0 += kDstTiles) {
             const uint32_t nb = (cv - t0 < kDstTiles) ? (cv - t0) : kDstTiles;
             tile_regs_acquire();
-            for (uint32_t j = 0; j < nb; j++) {
-                const uint32_t t = t0 + j;
-                const uint32_t mi = t / Vt;
-                const uint32_t ni = t - mi * Vt;
+            for_row_runs(t0, nb, Vt, [&](uint32_t mi, uint32_t ni, uint32_t j, uint32_t n) {
                 for (uint32_t ki = 0; ki < Kt; ki++) {
-                    matmul_tiles(cb.nkd, cur_S, mi * Kt + ki, ki * Vt + ni, j);  // DST[j]  = nkd @ S
+                    mm_tiles_row(cb.nkd, cur_S, mi * Kt + ki, ki * Vt + ni, j, n);  // DST[j..]  = nkd @ S
                 }
-                matmul_tiles(cb.eye, cb.vbeta, 0, t, j);  // DST[j] += I @ v_beta
-            }
+                mm_tiles_row(cb.eye, cb.vbeta, 0, t0 + j, j, n);  // DST[j..] += I @ v_beta
+            });
             tile_regs_commit();
             tile_regs_wait();
             for (uint32_t j = 0; j < nb; j++) {
@@ -1118,17 +1148,14 @@ inline void scan_step(const GdnScanCbs& cb, uint32_t cur_S, uint32_t dst) {
         for (uint32_t t0 = 0; t0 < cv; t0 += kDstTiles) {
             const uint32_t nb = (cv - t0 < kDstTiles) ? (cv - t0) : kDstTiles;
             tile_regs_acquire();
-            for (uint32_t j = 0; j < nb; j++) {
-                const uint32_t t = t0 + j;
-                const uint32_t mi = t / Vt;
-                const uint32_t ni = t - mi * Vt;
+            for_row_runs(t0, nb, Vt, [&](uint32_t mi, uint32_t ni, uint32_t j, uint32_t n) {
                 for (uint32_t ki = 0; ki < Kt; ki++) {
-                    matmul_tiles(cb.qdecay, cur_S, mi * Kt + ki, ki * Vt + ni, j);
+                    mm_tiles_row(cb.qdecay, cur_S, mi * Kt + ki, ki * Vt + ni, j, n);
                 }
                 for (uint32_t kc_ = 0; kc_ < Ct; kc_++) {
-                    matmul_tiles(cb.intra, cb.vnew, mi * Ct + kc_, kc_ * Vt + ni, j);
+                    mm_tiles_row(cb.intra, cb.vnew, mi * Ct + kc_, kc_ * Vt + ni, j, n);
                 }
-            }
+            });
             tile_regs_commit();
             tile_regs_wait();
             for (uint32_t j = 0; j < nb; j++) {
@@ -1151,17 +1178,12 @@ inline void scan_step(const GdnScanCbs& cb, uint32_t cur_S, uint32_t dst) {
         for (uint32_t t0 = 0; t0 < kv; t0 += kDstTiles) {
             const uint32_t nb = (kv - t0 < kDstTiles) ? (kv - t0) : kDstTiles;
             tile_regs_acquire();
-            for (uint32_t j = 0; j < nb; j++) {
-                matmul_tiles(cb.dl, cur_S, 0, t0 + j, j);
-            }
-            for (uint32_t j = 0; j < nb; j++) {
-                const uint32_t t = t0 + j;
-                const uint32_t mi = t / Vt;
-                const uint32_t ni = t - mi * Vt;
+            mm_tiles_row(cb.dl, cur_S, 0, t0, 0, nb);  // the one dl*I tile against the batch's consecutive state tiles
+            for_row_runs(t0, nb, Vt, [&](uint32_t mi, uint32_t ni, uint32_t j, uint32_t n) {
                 for (uint32_t kc_ = 0; kc_ < Ct; kc_++) {
-                    matmul_tiles(cb.kdec_t, cb.vnew, mi * Ct + kc_, kc_ * Vt + ni, j);
+                    mm_tiles_row(cb.kdec_t, cb.vnew, mi * Ct + kc_, kc_ * Vt + ni, j, n);
                 }
-            }
+            });
             tile_regs_commit();
             tile_regs_wait();
             for (uint32_t j = 0; j < nb; j++) {
