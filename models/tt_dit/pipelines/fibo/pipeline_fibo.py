@@ -25,7 +25,7 @@ from models.tt_dit.pipelines.cfg import CFGCombiner, create_submeshes, submesh_s
 from models.tt_dit.pipelines.events import PipelineEventCallback, SectionEnd, SectionStart, null_callback
 from models.tt_dit.pipelines.fibo.text_encoder import TextEncoder
 from models.tt_dit.pipelines.fibo.vlm import Vlm, clean
-from models.tt_dit.pipelines.pipeline_api import PipelineAPIMixin
+from models.tt_dit.pipelines.pipeline_api import Pipeline
 from models.tt_dit.solvers import EulerSolver, calculate_shift
 from models.tt_dit.utils.mesh import reshape_for_factor
 from models.tt_dit.utils.tensor import from_torch, from_torch_to_devices
@@ -145,6 +145,9 @@ class FiboPipelineConfig:
     cfg_enabled: bool
     sequence_lengths: tuple[int, ...]
 
+    # Capture traces and replay them.
+    trace: bool
+
     checkpoint_name: str
     vlm_checkpoint_name: str | None  # None leaves the VLM out
     edit: bool  # For a FIBO Edit checkpoint, which conditions on reference images
@@ -167,6 +170,7 @@ class FiboPipelineConfig:
         width: int = 1024,
         cfg_enabled: bool = True,
         sequence_lengths: Sequence[int] | None = None,
+        trace: bool = True,
         checkpoint_name: str = _DEFAULT_CHECKPOINT,
         vlm_checkpoint_name: str | None = _DEFAULT_VLM_CHECKPOINT,
         edit: bool,
@@ -199,13 +203,14 @@ class FiboPipelineConfig:
             width=width,
             cfg_enabled=cfg_enabled,
             sequence_lengths=tuple(sequence_lengths) if sequence_lengths is not None else preset["sequence_lengths"],
+            trace=trace,
             checkpoint_name=checkpoint_name,
             vlm_checkpoint_name=vlm_checkpoint_name,
             edit=edit,
         )
 
 
-class FiboPipeline(PipelineAPIMixin):
+class FiboPipeline(Pipeline):
     @classmethod
     def create_pipeline(
         cls,
@@ -214,6 +219,7 @@ class FiboPipeline(PipelineAPIMixin):
         width: int = 1024,
         height: int = 1024,
         cfg_enabled: bool = True,
+        trace: bool = True,
         checkpoint_name: str = _DEFAULT_CHECKPOINT,
         vlm_checkpoint_name: str | None = _DEFAULT_VLM_CHECKPOINT,
         edit: bool = False,
@@ -221,6 +227,7 @@ class FiboPipeline(PipelineAPIMixin):
         """``vlm_checkpoint_name=None`` leaves the VLM out, for structured prompts only."""
         config = FiboPipelineConfig.default(
             mesh_shape=mesh_device.shape,
+            trace=trace,
             checkpoint_name=checkpoint_name,
             vlm_checkpoint_name=vlm_checkpoint_name,
             edit=edit,
@@ -231,6 +238,7 @@ class FiboPipeline(PipelineAPIMixin):
         return cls(device=mesh_device, config=config)
 
     def __init__(self, *, device: ttnn.MeshDevice, config: FiboPipelineConfig) -> None:
+        super().__init__(offload_weights=False, trace=config.trace)
         self._cfg_parallel = config.dit_parallel_config.cfg_parallel.factor != 1
         self._sp_axis = config.dit_parallel_config.sequence_parallel.mesh_axis
         self._encoder_tp = config.encoder_parallel_config.tensor_parallel
@@ -322,9 +330,10 @@ class FiboPipeline(PipelineAPIMixin):
         self._warm_up_vlm(traced=False)
         self._generate_each_length(traced=False)
 
-        logger.info("pipeline capture run...")
-        self._warm_up_vlm(traced=True)
-        self._generate_each_length(traced=True)
+        if self.trace:
+            logger.info("pipeline capture run...")
+            self._warm_up_vlm(traced=True)
+            self._generate_each_length(traced=True)
 
     def _warm_up_vlm(self, *, traced: bool) -> None:
         if self._vlm is None:
@@ -341,13 +350,13 @@ class FiboPipeline(PipelineAPIMixin):
                 # Edit prompts must carry an edit instruction, and the JSON around it takes a few
                 # tokens.
                 prompt = json.dumps({"edit_instruction": "a " * (length - 16)})
-            self(
+            # A capture run is an ordinary call, so that the trace rule applies to it.
+            (self if traced else self.run_untraced)(
                 prompts=[prompt],
                 negative_prompts=[prompt],
                 images=images,
                 num_inference_steps=2,
                 use_vlm=False,
-                traced=traced,
                 cfg_scale=2 if self._cfg_enabled else 1,
             )
 
@@ -357,7 +366,7 @@ class FiboPipeline(PipelineAPIMixin):
     def _reshape_vlm(self) -> AbstractContextManager[None]:
         return reshape_for_factor(self._devices[-1], self._vlm_tp)
 
-    def __call__(
+    def _run(
         self,
         *,
         prompts: Sequence[str],
@@ -368,7 +377,7 @@ class FiboPipeline(PipelineAPIMixin):
         num_images_per_prompt: int = 1,
         cfg_scale: float = 5.0,
         use_vlm: bool = True,
-        traced: bool = True,
+        traced: bool | None = None,
         vae_traced: bool | None = None,
         encoder_traced: bool | None = None,
         vlm_traced: bool | None = None,
@@ -392,6 +401,7 @@ class FiboPipeline(PipelineAPIMixin):
         edit = self._vae_encoder is not None
         self._check_inputs(prompt_count=prompt_count, images=images, cfg_scale=cfg_scale, use_vlm=use_vlm)
 
+        traced = self.trace if traced is None else traced
         vae_traced = vae_traced if vae_traced is not None else traced
         encoder_traced = encoder_traced if encoder_traced is not None else traced
         vlm_traced = vlm_traced if vlm_traced is not None else traced

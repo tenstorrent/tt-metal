@@ -89,17 +89,19 @@ class _LoRAPipelineMixin:
         super().__init__(*args, lora_enabled=lora_enabled, **kwargs)
 
         # Fuse-mode bind/unbind adds and subtracts the delta in bf16; under
-        # dynamic_load=True the cache restore re-seeds the base every reload
-        # and drift is bounded. With dynamic_load=False the base weight is
+        # offload_weights=True the cache restore re-seeds the base every reload
+        # and drift is bounded. With offload_weights=False the base weight is
         # never refreshed, so W drifts by ~O(N · eps_bf16) over N swap cycles.
         # See models/tt_dit/layers/lora.py for the snapshot+reseed escape hatch.
-        if not getattr(self, "dynamic_load", True):
+        if not self.offload_weights:
             logger.warning(
-                "LoRA fuse-mode pipeline constructed with dynamic_load=False — "
+                "LoRA fuse-mode pipeline constructed with offload_weights=False — "
                 "repeated bind/unbind cycles will accumulate bf16 quantization "
                 "drift in the base weight. For long-lived sessions, snapshot "
                 "the transformer state dict at construction and re-seed via "
-                "load_torch_state_dict when drift becomes material."
+                "load_torch_state_dict when drift becomes material. On a traced "
+                "pipeline, call release_traces() after a re-seed and before the "
+                "next call: the re-seed replaces weights the traces read."
             )
 
     @classmethod
@@ -111,7 +113,7 @@ class _LoRAPipelineMixin:
     def _prepare_transformer(self, idx: int):
         """Re-apply any active LoRA delta after the transformer is reloaded.
 
-        Under dynamic_load the two transformers swap in and out of DRAM
+        Under offload_weights the two transformers swap in and out of DRAM
         between uses; each reload restores the cached *base* weights, so
         the merged LoRA delta is wiped. We walk this transformer's LoRA
         modules and re-merge their active adapter (no-op for modules that

@@ -60,12 +60,12 @@ VBENCH_GATE = {
 
 
 @pytest.mark.parametrize(
-    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp, quant_config_name",
+    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, offload_weights, device_params, topology, is_fsdp, quant_config_name",
     [
         # FSDP is needed for 2x2 with encoder now on device
         [(2, 2), (2, 2), 0, 1, 2, False, line_params_req_exact_devices, ttnn.Topology.Linear, True, None],
         [(2, 4), (2, 4), 0, 1, 1, True, line_params_req_exact_devices, ttnn.Topology.Linear, True, None],
-        # BH on 2x4 with dynamic_load to avoid init-time DRAM OOM
+        # BH on 2x4 with offload_weights to avoid init-time DRAM OOM
         [(2, 4), (2, 4), 1, 0, 2, True, line_params_req_exact_devices, ttnn.Topology.Linear, False, None],
         # WH on 4x8
         [(4, 8), (4, 8), 1, 0, 4, False, ring_params_req_exact_devices, ttnn.Topology.Ring, True, None],
@@ -127,7 +127,7 @@ def test_pipeline_performance(
     sp_axis: int,
     tp_axis: int,
     num_links: int,
-    dynamic_load: dict,
+    offload_weights: dict,
     topology: ttnn.Topology,
     width: int,
     height: int,
@@ -213,7 +213,8 @@ def test_pipeline_performance(
             vae_parallel_config=vae_parallel_config,
             encoder_parallel_config=encoder_parallel_config,
             num_links=num_links,
-            dynamic_load=dynamic_load,
+            offload_weights=offload_weights,
+            trace=traced,
             topology=topology,
             is_fsdp=is_fsdp,
             model_type=model_type,
@@ -240,7 +241,6 @@ def test_pipeline_performance(
                     prompts=[prompts[0]],
                     image_prompt=image_prompt,
                     num_inference_steps=2,  # Small number of steps to reduce test time.
-                    traced=traced,
                 )
 
     logger.info(f"Warmup completed in {benchmark_profiler.get_duration('run', 0):.2f}s")
@@ -265,7 +265,6 @@ def test_pipeline_performance(
                     num_inference_steps=num_inference_steps,
                     on_event=profiler_event_callback(benchmark_profiler, i),
                     seed=42,
-                    traced=traced,
                     output_type="uint8",
                 )
                 ttnn.synchronize_device(mesh_device)
@@ -293,7 +292,6 @@ def test_pipeline_performance(
                             num_inference_steps=num_inference_steps,
                             on_event=profiler_event_callback(gate_profiler, iteration),
                             seed=seed,
-                            traced=traced,
                             output_type="uint8",
                         )
                         ttnn.synchronize_device(mesh_device)

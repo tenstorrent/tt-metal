@@ -45,6 +45,7 @@ from ...utils.tensor import bf16_tensor
 from ...utils.torch_threads import cap_torch_threads_to_half_the_cpus
 from ...utils.tracing import StateTensor
 from ...utils.video import Audio
+from ..pipeline_api import Pipeline
 
 LTX_UPSAMPLER_HF_REF = "Lightricks/LTX-2.3:ltx-2.3-spatial-upscaler-x2-1.1.safetensors"
 
@@ -184,7 +185,22 @@ def euler_step(
 # =============================================================================
 
 
-class LTXPipeline:
+def _renamed_keyword(kwargs: dict, old: str, new: str, value: bool | None) -> bool | None:
+    """``value``, or what the caller passed under the keyword's former name ``old``, removed from ``kwargs``."""
+    if old not in kwargs:
+        return value
+    legacy = kwargs.pop(old)
+    if value is not None and bool(value) != bool(legacy):
+        msg = f"create_pipeline got {new}={value!r} and its deprecated name {old}={legacy!r}; pass only {new}"
+        raise TypeError(msg)
+    logger.warning(
+        f"LTX create_pipeline: `{old}` is deprecated, pass `{new}`. `{old}` will be removed after "
+        "tt-inference-server passes trace at construction (TDM-130 follow-up)."
+    )
+    return legacy
+
+
+class LTXPipeline(Pipeline):
     """
     LTX-2 text-to-audio-video generation pipeline.
 
@@ -229,25 +245,25 @@ class LTXPipeline:
         positional_embedding_theta: float = 10000.0,
         positional_embedding_max_pos: list[int] | None = None,
         is_fsdp: bool = False,
-        dynamic_load: bool = False,
+        offload_weights: bool = False,
         num_frames: int = 0,
         height: int = 0,
         width: int = 0,
         fps: float = 24.0,
         run_warmup: bool = False,
-        traced: bool = False,
+        trace: bool = False,
         extra_transformer_variants: list[tuple[str, list[LoraSpec]]] | None = None,
         lora_enabled: bool = False,
         lora_cache_capacity: int = 2,
         image_conditioning: bool | None = None,
     ):
+        super().__init__(offload_weights=offload_weights, trace=trace)
         self.mesh_device = mesh_device
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
         self.encoder_parallel_config = EncoderParallelConfig(
             tensor_parallel=ParallelFactor(factor=self.mesh_device.shape[1], mesh_axis=1),
         )
-        self._traced = traced
         # FPS is pipeline-level state, not a per-request argument: it sets the audio latent
         # length (audio_frames = round(num_frames / fps * 25)) and scales the A/V cross-PE's
         # temporal axis into seconds. Both are baked into the captured traces, so changing it
@@ -276,7 +292,7 @@ class LTXPipeline:
         self.lora_enabled = lora_enabled
         # How many registered adapters keep their A/B factors resident on device
         # (per-Linear LRU). Larger = fewer host re-uploads on swap and after each
-        # dynamic_load page-in, at the cost of holding that many rank-sized factor
+        # offload_weights page-in, at the cost of holding that many rank-sized factor
         # sets in DRAM. 0 disables the cache.
         self.lora_cache_capacity = int(lora_cache_capacity)
         self._active_lora: LTXAdapterHandle | None = None
@@ -292,7 +308,6 @@ class LTXPipeline:
         self.positional_embedding_max_pos = positional_embedding_max_pos or [20, 2048, 2048]
 
         self.is_fsdp = is_fsdp
-        self.dynamic_load = dynamic_load
         self._init_num_frames = num_frames
         self._init_height = height
         self._init_width = width
@@ -307,9 +322,11 @@ class LTXPipeline:
             parallel_config=self.encoder_parallel_config,
             checkpoint_name=self.checkpoint_name,
             mode=self.mode,
-            dynamic_load=self.dynamic_load,
+            offload_weights=self.offload_weights,
+            trace=self.trace,
+            register_exclusions=self.register_coresident_exclusions,
         )
-        if self._traced and not self.dynamic_load and self.DEFERS_ENCODE_TRACE:
+        if self.trace and self.DEFERS_ENCODE_TRACE:
             self.gemma_encoder_pair.defer_trace_capture()
         self.gemma_path: str | None = self.gemma_encoder_pair.gemma_path
 
@@ -336,15 +353,26 @@ class LTXPipeline:
             self._register_coresident_exclusions()
             self._prime_caches()
             valid_shape = num_frames > 0 and height > 0 and width > 0
-            if (run_warmup or traced) and valid_shape:
-                if traced and not run_warmup:
-                    logger.info("traced=True: forcing warmup (trace capture requires precompiled kernels)")
+            if (run_warmup or trace) and valid_shape:
+                if trace and not run_warmup:
+                    logger.info("trace=True: forcing warmup (trace capture requires precompiled kernels)")
                 self.warmup_buffers(num_frames=num_frames, height=height, width=width)
-            elif traced:
+            elif trace:
                 logger.warning(
-                    f"traced=True but invalid shape ({num_frames=}, {height=}, {width=}); "
+                    f"trace=True but invalid shape ({num_frames=}, {height=}, {width=}); "
                     "skipping forced warmup — trace capture will likely fail"
                 )
+
+    def generate(self, *args, **kwargs):
+        """One generation; the same as calling the pipeline."""
+        return self(*args, **kwargs)
+
+    def run_untraced(self, *args, **kwargs):
+        """Not supported: the traced stages are fixed when the pipeline is built (its modules and warm-up
+        follow ``trace``). Build the pipeline with ``trace=False`` for an eager one."""
+        del args, kwargs
+        msg = "LTX pipelines have no per-call eager run: construct the pipeline with trace=False instead"
+        raise NotImplementedError(msg)
 
     def release_traces(self) -> None:
         """Release captured denoise traces and free their device trace memory."""
@@ -407,13 +435,13 @@ class LTXPipeline:
         sp_axis: int | None = None,
         tp_axis: int | None = None,
         num_links: int | None = None,
-        dynamic_load: bool | None = None,
+        offload_weights: bool | None = None,
         topology: ttnn.Topology | None = None,
         is_fsdp: bool | None = None,
         mode: str = "av",
         pipeline_class: type["LTXPipeline"] | None = None,
         run_warmup: bool = False,
-        traced: bool = False,
+        trace: bool | None = None,
         num_frames: int = 0,
         height: int = 0,
         width: int = 0,
@@ -425,7 +453,11 @@ class LTXPipeline:
         ``checkpoint_name`` / ``gemma_path`` accept local paths or HuggingFace
         repo strings (auto-downloaded on first use). Subclass-specific kwargs
         (e.g. ``distilled_lora_path``) flow through ``extra_pipeline_kwargs``.
+
+        ``dynamic_load`` and ``traced`` are the deprecated names of ``offload_weights`` and ``trace``.
         """
+        offload_weights = _renamed_keyword(extra_pipeline_kwargs, "dynamic_load", "offload_weights", offload_weights)
+        trace = bool(_renamed_keyword(extra_pipeline_kwargs, "traced", "trace", trace))
         mesh_shape = tuple(mesh_device.shape)
         device_configs: dict[tuple[int, int], dict] = {}
         if ttnn.device.is_blackhole():
@@ -433,7 +465,7 @@ class LTXPipeline:
                 "sp_axis": 1,
                 "tp_axis": 0,
                 "num_links": 2,
-                "dynamic_load": True,
+                "offload_weights": True,
                 "topology": ttnn.Topology.Linear,
                 "is_fsdp": False,
             }
@@ -441,7 +473,7 @@ class LTXPipeline:
                 "sp_axis": 1,
                 "tp_axis": 0,
                 "num_links": 2,
-                "dynamic_load": False,
+                "offload_weights": False,
                 "topology": ttnn.Topology.Ring,
                 "is_fsdp": False,
             }
@@ -451,7 +483,7 @@ class LTXPipeline:
                 "sp_axis": 1,
                 "tp_axis": 0,
                 "num_links": 1,
-                "dynamic_load": False,
+                "offload_weights": False,
                 "topology": ttnn.Topology.Linear,
                 "is_fsdp": False,
             }
@@ -459,7 +491,7 @@ class LTXPipeline:
                 "sp_axis": 0,
                 "tp_axis": 1,
                 "num_links": 2,
-                "dynamic_load": False,
+                "offload_weights": False,
                 "topology": ttnn.Topology.Linear,
                 "is_fsdp": False,
             }
@@ -467,7 +499,7 @@ class LTXPipeline:
                 "sp_axis": 1,
                 "tp_axis": 0,
                 "num_links": 4,
-                "dynamic_load": False,
+                "offload_weights": False,
                 "topology": ttnn.Topology.Ring,
                 "is_fsdp": False,
             }
@@ -475,7 +507,7 @@ class LTXPipeline:
         sp_axis = sp_axis if sp_axis is not None else defaults["sp_axis"]
         tp_axis = tp_axis if tp_axis is not None else defaults["tp_axis"]
         num_links = num_links if num_links is not None else defaults["num_links"]
-        dynamic_load = dynamic_load if dynamic_load is not None else defaults["dynamic_load"]
+        offload_weights = offload_weights if offload_weights is not None else defaults["offload_weights"]
         topology = topology if topology is not None else defaults["topology"]
         is_fsdp = is_fsdp if is_fsdp is not None else defaults["is_fsdp"]
 
@@ -504,13 +536,13 @@ class LTXPipeline:
             checkpoint_name=checkpoint_name,
             gemma_path=gemma_path,
             is_fsdp=is_fsdp,
-            dynamic_load=dynamic_load,
+            offload_weights=offload_weights,
             num_frames=num_frames,
             height=height,
             width=width,
             fps=fps,
             run_warmup=run_warmup,
-            traced=traced,
+            trace=trace,
             **extra_pipeline_kwargs,
         )
 
@@ -604,14 +636,14 @@ class LTXPipeline:
                 mesh_device=self.mesh_device,
                 vae_ccl_manager=self.vae_ccl_manager,
                 dit_parallel_config=self.parallel_config,
-                traced=self._traced,
+                traced=self.trace,
             )
 
     def _register_coresident_exclusions(self) -> None:
         """All transformer variants exclude each other AND the VAE. LTX-22B +
         LTX-VAE don't both fit on BH LB; VAE must evict the active transformer
         before decode. LTX needs the eviction on both WH and BH."""
-        if not self.dynamic_load:
+        if not self.offload_weights:
             return
         models = [s.model for s in self.transformer_states]
 
@@ -628,7 +660,7 @@ class LTXPipeline:
             if m is not None:
                 for peer in m._coresident_peers:
                     if peer is not None:
-                        m.register_coresident_exclusions(peer)
+                        self.register_coresident_exclusions(m, peer)
 
         encoder_peers = [*models] + ([self.vae_decoder] if self.vae_decoder is not None else [])
         self.gemma_encoder_pair.register_coresident_peers(encoder_peers)
@@ -683,7 +715,7 @@ class LTXPipeline:
             quant_tag=getattr(self, "_quant_cache_tag", None),
         )
         self.transformer = state.model
-        # dynamic_load restores the cached (LoRA-free) base weights on every
+        # offload_weights restores the cached (LoRA-free) base weights on every
         # page-in, so re-merge the active adapter's delta onto the fresh weights.
         if self.lora_enabled:
             for _, mod in iter_lora_modules(state.model):

@@ -126,6 +126,15 @@ The text encoder (UMT5) is parallelized with tensor parallelism. The VAE is para
 
 Both variants use the same MoE two-stage denoising architecture with separate high-noise and low-noise expert transformers.
 
+## Tracing
+
+`trace` is set when the pipeline is constructed. By default it is on for meshes that keep their weights
+resident and off for meshes that offload them (`offload_weights`). Pass `trace=False` to
+`WanPipelineConfig.default`, or `config_overrides={"trace": False}` to `create_pipeline`, to run eager.
+A traced pipeline on a mesh opened without a `trace_region_size` takes its trace buffers from DRAM.
+Replacing a module's weights after the first call (for example a LoRA re-seed with `load_torch_state_dict`)
+requires `pipeline.release_traces()` before the next call.
+
 ## Step caching (DBCache)
 
 The pipeline runs [cache-dit](https://github.com/vipshop/cache-dit) style **Dual Block Cache** step
@@ -235,7 +244,7 @@ from uncached. T2V is uncached by default: the same recipe gives 1.88x on T2V bu
 and >= 0.99 on I2V at 1.3x). Note that `flow_shift=5`
 changes the generated video relative to the official `flow_shift=12` schedule independently of caching.
 
-The traced path (`traced=True`, three traces per expert) makes the same cache decisions and produces the same
+The traced path (`trace=True`, three traces per expert) makes the same cache decisions and produces the same
 video as the untraced path (PCC 0.974 vs. the untraced baseline); the split-without-caching traced run is
 bit-exact as well.
 

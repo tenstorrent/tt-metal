@@ -150,7 +150,7 @@ def _flow_shifts() -> list[float | None]:
 
 
 @pytest.mark.parametrize(
-    "mesh_device, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp, traced",
+    "mesh_device, sp_axis, tp_axis, num_links, offload_weights, device_params, topology, is_fsdp, traced",
     [
         # The only 4x8 Blackhole config test_pipeline_wan.py runs I2V on (it skips the 4x8 ring for I2V).
         [(4, 8), 1, 0, 2, False, line_params_req_exact_devices, ttnn.Topology.Linear, False, False],
@@ -188,7 +188,7 @@ def test_wan_i2v_dbcache_ab(
     sp_axis: int,
     tp_axis: int,
     num_links: int,
-    dynamic_load: bool,
+    offload_weights: bool,
     topology: ttnn.Topology,
     is_fsdp: bool,
     traced: bool,
@@ -240,7 +240,8 @@ def test_wan_i2v_dbcache_ab(
             vae_parallel_config=vae_parallel_config,
             encoder_parallel_config=encoder_parallel_config,
             num_links=num_links,
-            dynamic_load=dynamic_load,
+            offload_weights=offload_weights,
+            trace=traced,
             topology=topology,
             is_fsdp=is_fsdp,
             checkpoint_name="Wan-AI/Wan2.2-I2V-A14B-Diffusers",
@@ -274,9 +275,10 @@ def test_wan_i2v_dbcache_ab(
         pipeline._vae.reload_weights()  # noqa: SLF001 - __call__ does not reload the decoder
     if evict_t5:
         t5 = pipeline._text_encoder._tt_encoder  # noqa: SLF001
-        pipeline.transformer.register_coresident_exclusions(t5)
-        pipeline.transformer_2.register_coresident_exclusions(t5)
-        t5.register_coresident_exclusions(pipeline.transformer, pipeline.transformer_2)
+        # Registered through the pipeline: it then counts as offloading weights, and refuses a traced row.
+        pipeline.register_coresident_exclusions(pipeline.transformer, t5)
+        pipeline.register_coresident_exclusions(pipeline.transformer_2, t5)
+        pipeline.register_coresident_exclusions(t5, pipeline.transformer, pipeline.transformer_2)
         # The chain only acts on a load, and init left T5 + transformer[0] resident: drop the
         # experts now so the warmup's first expert load evicts T5 before the VAE encode runs.
         for ts in pipeline.transformer_states:
@@ -286,9 +288,9 @@ def test_wan_i2v_dbcache_ab(
         # Also keep the experts out of DRAM during the VAE decode (the WH T3K chain); the decoder
         # adapter reloads its own weights in decode(), and the next call reloads the experts anyway.
         dec = pipeline._vae.decoder  # noqa: SLF001
-        pipeline.transformer.register_coresident_exclusions(dec)
-        pipeline.transformer_2.register_coresident_exclusions(dec)
-        dec.register_coresident_exclusions(pipeline.transformer, pipeline.transformer_2)
+        pipeline.register_coresident_exclusions(pipeline.transformer, dec)
+        pipeline.register_coresident_exclusions(pipeline.transformer_2, dec)
+        pipeline.register_coresident_exclusions(dec, pipeline.transformer, pipeline.transformer_2)
         logger.info("VAE decoder added to the dynamic-load swap chain")
     # WAN_DBCACHE_FREE_CCL=1: release the DiT CCL manager's persistent gather buffers before the
     # VAE decode and before the T5 load (see _free_ccl_buffers). WAN_DBCACHE_DRAM_PROBE=1: per-owner
@@ -375,7 +377,6 @@ def test_wan_i2v_dbcache_ab(
                     guidance_scale=3.5,
                     guidance_scale_2=3.5,
                     output_type="uint8",
-                    traced=traced,
                     on_event=timer,
                     cache_config=cache_config,
                 )

@@ -134,13 +134,12 @@ def test_serving(*, mesh_device, expect_error) -> None:
         dram = _dram_allocated(dev)
         timer = SectionTimer(dev, sync_steps=False)
         start = time.perf_counter()
-        image = pipe(
+        image = (pipe if traced else pipe.run_untraced)(
             prompts=[prompts[prompt_name]],
             preset=preset,
             seed=SEED,
             width=width,
             height=height,
-            traced=traced,
             on_event=timer,
         )[0]
         ttnn.synchronize_device(dev)

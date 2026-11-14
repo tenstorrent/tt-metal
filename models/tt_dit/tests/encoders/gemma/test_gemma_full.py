@@ -179,10 +179,10 @@ def test_gemma_encoder(*, mesh_device):
     if not ckpt:
         pytest.skip("LTX checkpoint not found")
 
-    # Bare pipeline: checkpoint_name=None skips the heavy transformer/VAE load. dynamic_load=False
+    # Bare pipeline: checkpoint_name=None skips the heavy transformer/VAE load. offload_weights=False
     # keeps the encoder resident so the whole-encode trace (default when resident) is exercised.
     pipe = LTXPipeline.create_pipeline(
-        mesh_device, checkpoint_name=None, gemma_path=gemma, mode="av", dynamic_load=False
+        mesh_device, checkpoint_name=None, gemma_path=gemma, mode="av", offload_weights=False
     )
 
     # On-device Gemma encoder (full 48 layers). TP follows the T5 pattern (axis-1 width):

@@ -162,6 +162,8 @@ def _quantize_weight(param, new_dtype: ttnn.DataType) -> None:
         return
     param._data = ttnn.typecast(param._data, new_dtype)
     param.dtype = new_dtype
+    # The typecast moved the weight without going through the setter, which is what tells the traces.
+    param._invalidate_traces("replaced")  # noqa: SLF001
 
 
 def _make_linear_compute_config(arch, lc: LinearQuantConfig):
@@ -207,7 +209,7 @@ def apply_quant_config(model, config: QuantConfig) -> None:
     Compute configs are always applied (they are module attributes, not weight
     data).
 
-    With ``dynamic_load=True`` the pipeline evicts transformer weights between
+    With ``offload_weights=True`` the pipeline evicts transformer weights between
     uses.  In that case, call this function again after each reload so the
     freshly-loaded weights get quantized.  See ``set_quant_config`` for a
     convenience wrapper that patches ``_prepare_transformer`` automatically.
@@ -290,7 +292,7 @@ def set_quant_config(pipeline, config: QuantConfig) -> None:
 
     Patches ``pipeline._prepare_transformer`` so that ``apply_quant_config``
     runs automatically after every weight load (including dynamic reloads).
-    This is necessary because ``dynamic_load=True`` evicts and reloads
+    This is necessary because ``offload_weights=True`` evicts and reloads
     transformer weights from cache, which would overwrite any earlier
     typecast.
 
