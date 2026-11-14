@@ -52,6 +52,7 @@ def siglip_patch_embeddings(
     pixel_values,
     *,
     parameters,
+    pos_embed=None,
 ):
     batch_size, img_h, img_w, img_c = pixel_values.shape  # permuted input NHWC
     patch_size = 14
@@ -76,6 +77,19 @@ def siglip_patch_embeddings(
 
     patch_embedding_output = ttnn.to_layout(patch_embedding_output, layout=ttnn.ROW_MAJOR_LAYOUT)
     patch_embedding_output = ttnn.reshape(patch_embedding_output, (batch_size, patch_count_all, -1))
+
+    if pos_embed is None:
+        if isinstance(parameters, dict):
+            pos_embed = parameters.get("pos_embed")
+        else:
+            pos_embed = getattr(parameters, "pos_embed", None)
+
+    if pos_embed is not None:
+        patch_embedding_output = ttnn.to_layout(patch_embedding_output, layout=ttnn.TILE_LAYOUT)
+        if pos_embed.layout != ttnn.TILE_LAYOUT:
+            pos_embed = ttnn.to_layout(pos_embed, layout=ttnn.TILE_LAYOUT)
+        patch_embedding_output = ttnn.add(patch_embedding_output, pos_embed)
+        patch_embedding_output = ttnn.to_layout(patch_embedding_output, layout=ttnn.ROW_MAJOR_LAYOUT)
 
     return patch_embedding_output
 
