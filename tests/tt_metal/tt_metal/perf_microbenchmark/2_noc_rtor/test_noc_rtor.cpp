@@ -23,6 +23,7 @@
 #include <vector>
 
 #include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
@@ -171,6 +172,8 @@ int main(int argc, char** argv) {
             }
         }
 
+        std::vector<uint32_t> noc_compile_args;
+        tt_metal::TensorAccessorArgs(*l1_mesh_buffer).append_to(noc_compile_args);
         auto noc_kernel = tt_metal::CreateKernel(
             program,
             (access_type == 0) ? "tests/tt_metal/tt_metal/perf_microbenchmark/"
@@ -181,7 +184,8 @@ int main(int argc, char** argv) {
             tt_metal::DataMovementConfig{
                 .processor = (noc_index == 0) ? tt_metal::DataMovementProcessor::RISCV_0
                                               : tt_metal::DataMovementProcessor::RISCV_1,
-                .noc = (noc_index == 0) ? tt_metal::NOC::RISCV_0_default : tt_metal::NOC::RISCV_1_default});
+                .noc = (noc_index == 0) ? tt_metal::NOC::RISCV_0_default : tt_metal::NOC::RISCV_1_default,
+                .compile_args = noc_compile_args});
 
         for (int i = 0; i < num_cores_r; i++) {
             for (int j = 0; j < num_cores_c; j++) {
@@ -248,9 +252,8 @@ int main(int argc, char** argv) {
 
     if (pass) {
         log_info(LogTest, "Test Passed");
-    } else {
-        log_error(LogTest, "Test Failed");
+        return 0;
     }
-
-    return 0;
+    log_error(LogTest, "Test Failed");
+    return 1;
 }
