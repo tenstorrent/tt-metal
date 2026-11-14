@@ -101,7 +101,7 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: 🧬 Checkout Repository
-        uses: tenstorrent/.github/actions/cachew-checkout@c7d9356436c5bc586799dc53901a66a78c36b5c6 # cachew checkout
+        uses: tenstorrent/.github/actions/cachew-checkout@7831e94481138d903fdabeb739a7552e064c234a # cachew checkout
         timeout-minutes: 10
         with:
           fetch-depth: 1

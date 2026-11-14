@@ -898,7 +898,7 @@ jobs:
       }}
     steps:
       - name: 🧬 Checkout Repository
-        uses: tenstorrent/.github/actions/cachew-checkout@c7d9356436c5bc586799dc53901a66a78c36b5c6 # cachew checkout
+        uses: tenstorrent/.github/actions/cachew-checkout@7831e94481138d903fdabeb739a7552e064c234a # cachew checkout
         timeout-minutes: 20
         with:
           submodules: recursive
@@ -1063,7 +1063,7 @@ jobs:
       }}
     steps:
       - name: 🧬 Checkout Repository
-        uses: tenstorrent/.github/actions/cachew-checkout@c7d9356436c5bc586799dc53901a66a78c36b5c6 # cachew checkout
+        uses: tenstorrent/.github/actions/cachew-checkout@7831e94481138d903fdabeb739a7552e064c234a # cachew checkout
         timeout-minutes: 20
         with:
           submodules: recursive
