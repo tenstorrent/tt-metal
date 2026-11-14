@@ -521,6 +521,16 @@ enum class DestReuseType : uint8_t {
     DEST_TO_SRCB,  // CB → srca, DEST → srcb
 };
 
+/// DestReuseBinary: format of the source register that DEST is moved into.
+/// The DEST → src move converts using that register's configured ALU format, which nothing in the
+/// element programs by default, so it inherits whatever the last element to load that side left
+/// behind (e.g. a bf16 input truncating an fp32 DEST value).
+enum class DestOperandFormat : uint8_t {
+    Inherit,    // leave the DEST-fed side's format as previously programmed (legacy behaviour)
+    FromInput,  // program the DEST-fed side with the input buffer's format too (e.g. an fp32 buffer
+                // under fp32_dest_acc_en gives Tf32, keeping DEST's precision through the move)
+};
+
 // =============================================================================
 // 5. Chain element declarations
 // =============================================================================
@@ -535,7 +545,7 @@ constexpr uint32_t binary_fpu_config_bits(
     BinaryFpuOp op, InputSpec a, BroadcastInputSpec b, Dst dst, DestAccumulation accumulation) noexcept;
 
 constexpr uint32_t dest_reuse_binary_config_bits(
-    BinaryFpuOp op, DestReuseType reuse, InputSpec input_spec, Dst dst) noexcept;
+    BinaryFpuOp op, DestReuseType reuse, InputSpec input_spec, Dst dst, DestOperandFormat dest_format) noexcept;
 
 template <uint32_t Cb, uint32_t ConfigBits, class DataflowBufferType>
 struct CopyTileImpl;
@@ -576,10 +586,17 @@ using BinaryFpu = detail::BinaryFpuImpl<
 /// The LLK operation is in-place in DEST: it reads and overwrites the same slot.
 /// `Op` is the first template argument, matching `BinaryFpu`.
 /// Constructor: `{in}`, `{in, base}` or `{in, range}`, where `in` is the DataflowBuffer named by `Input`.
-template <BinaryFpuOp Op, InputSpec Input, DestReuseType ReuseType, Dst DstSlot = Dst::D0>
+/// `DestFormat` selects the format DEST is converted to on its way into the source register; see
+/// `DestOperandFormat`. `FromInput` requires `Input` to have data-format reconfig enabled.
+template <
+    BinaryFpuOp Op,
+    InputSpec Input,
+    DestReuseType ReuseType,
+    Dst DstSlot = Dst::D0,
+    DestOperandFormat DestFormat = DestOperandFormat::Inherit>
 using DestReuseBinary = detail::DestReuseBinaryImpl<
     Input.cb_id,
-    detail::dest_reuse_binary_config_bits(Op, ReuseType, Input, DstSlot),
+    detail::dest_reuse_binary_config_bits(Op, ReuseType, Input, DstSlot, DestFormat),
     DataflowBufferFor<Input.producer_access_pattern, Input.consumer_access_pattern>>;
 
 /// Pack `DstSlot` to an output tile. Constructor: `{out}`, `{out, base}` or `{out, range}`, where `out` is the
