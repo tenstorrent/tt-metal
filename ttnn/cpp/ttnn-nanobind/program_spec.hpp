@@ -9,8 +9,8 @@
 namespace ttnn::program_spec {
 namespace nb = nanobind;
 
-// Python classes for the Metal 2.0 ProgramSpec and ProgramRunArgs types (tt::tt_metal), re-exported under
-// ttnn.experimental.
+// Python classes for the Metal 2.0 ProgramSpec and ProgramRunArgs types (tt::tt_metal) and for generic_op's
+// MeshProgramSpec and MeshProgramRunArgs, re-exported under ttnn.experimental.
 void py_module_types(nb::module_& mod);
 
 }  // namespace ttnn::program_spec

@@ -1,0 +1,100 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <functional>
+#include <tuple>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt_stl/reflection.hpp>
+
+#include "generic_op_device_operation_types.hpp"
+#include "ttnn/distributed/types.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
+#include "ttnn/prefetcher_pipe.hpp"
+#include "ttnn/tensor/tensor.hpp"
+
+namespace ttnn::operations::generic {
+
+// generic_op on a Metal 2.0 ProgramSpec and ProgramRunArgs. Like the ProgramDescriptor form, it hands the caller's
+// programs to Metal unchanged and adds program caching, mesh dispatch and per-call argument checks.
+struct GenericProgramSpecDeviceOperation {
+    struct operation_attributes_t {
+        // A program, the devices it runs on, and its run args. The program and run args refer to the caller's
+        // objects, which outlive the call.
+        struct Program {
+            ttnn::MeshCoordinateRange range;
+            std::reference_wrapper<const tt::tt_metal::ProgramSpec> spec;
+            std::reference_wrapper<const tt::tt_metal::ProgramRunArgs> run_args;
+        };
+        std::vector<Program> programs;
+        // The run args' PrefetcherPipes, which ttnn's framework rebinds on a cache hit. The ttnn::prim overloads fill
+        // it. It points at the caller's pipes without owning them.
+        ttnn::PrefetcherPipeList prefetcher_pipes;
+
+        // Op logging and the profiler show the number of programs, not whole specs.
+        static constexpr auto attribute_names = std::forward_as_tuple("num_programs");
+        auto attribute_values() const { return std::make_tuple(programs.size()); }
+    };
+    using tensor_args_t = generic::tensor_args_t;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
+    using tensor_return_value_t = Tensor;
+
+    // Returns the caller's programs on the first call and the caller's run args on every later call.
+    struct ProgramFactory {
+        static ttnn::device_operation::MeshWorkloadArtifacts create_mesh_workload_artifacts(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value,
+            const ttnn::MeshCoordinateRangeSet& tensor_coords);
+
+        static tt::tt_metal::ProgramRunArgs override_runtime_arguments(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value,
+            const ttnn::MeshCoordinateRange& range);
+    };
+    using program_factory_t = std::variant<ProgramFactory>;
+
+    static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
+    static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
+    static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
+    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
+    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+};
+
+// Hash of everything in a ProgramSpec that changes the compiled program. generic_op keys its program cache on it,
+// combined with each program's mesh range.
+ttsl::hash::hash_t compute_program_spec_hash(const tt::tt_metal::ProgramSpec& spec);
+
+}  // namespace ttnn::operations::generic
+
+namespace ttnn::prim {
+
+// The ProgramSpec form. The program runs on the ranges that ttnn's framework gives the tensors, as it would in a
+// MeshProgramSpec with those ranges, so the two forms share cache entries.
+Tensor generic_op(
+    const std::vector<Tensor>& io_tensors,
+    const tt::tt_metal::ProgramSpec& spec,
+    const tt::tt_metal::ProgramRunArgs& run_args);
+
+void prepare_generic_op(
+    const std::vector<Tensor>& io_tensors,
+    const tt::tt_metal::ProgramSpec& spec,
+    const tt::tt_metal::ProgramRunArgs& run_args);
+
+// The MeshProgramSpec form: a program for each range.
+Tensor generic_op(
+    const std::vector<Tensor>& io_tensors,
+    const ttnn::operations::generic::GenericProgramSpecDeviceOperation::operation_attributes_t& operation_attributes);
+
+void prepare_generic_op(
+    const std::vector<Tensor>& io_tensors,
+    const ttnn::operations::generic::GenericProgramSpecDeviceOperation::operation_attributes_t& operation_attributes);
+
+}  // namespace ttnn::prim
