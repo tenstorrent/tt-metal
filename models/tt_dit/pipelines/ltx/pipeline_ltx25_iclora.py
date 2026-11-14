@@ -104,6 +104,7 @@ def _verify_file(binding, root):
 def _still_image(path, geometry=None):
     from PIL import Image
 
+    _require(Path(path).is_file(), f"not a regular image file: {path}")
     with Image.open(path) as image:
         _require(getattr(image, "n_frames", 1) == 1, f"expected a still image: {path}")
         if geometry is not None:
@@ -132,6 +133,18 @@ def _native_factory():
     return LTX25DistilledPipeline.create_pipeline
 
 
+def _unique_object(pairs):
+    result = {}
+    for key, value in pairs:
+        _require(key not in result, f"duplicate fixture key: {key}")
+        result[key] = value
+    return result
+
+
+def _keys(mapping, expected, label):
+    _require(isinstance(mapping, dict) and set(mapping) == set(expected), f"unexpected or missing {label} fields")
+
+
 def load_fixture(fixture_path):
     """Validate local assets and return a resolved manifest using only CPU imports.
 
@@ -139,8 +152,17 @@ def load_fixture(fixture_path):
     Relative asset paths are resolved against the manifest, not the process cwd.
     """
     path = Path(fixture_path).resolve(strict=True)
-    fixture = json.loads(path.read_text())
+    _require(path.is_file(), "fixture must be a regular file")
+    with path.open() as stream:
+        raw = stream.read(1024 * 1024 + 1)
+    _require(len(raw) <= 1024 * 1024, "fixture exceeds 1 MiB")
+    fixture = json.loads(raw, object_pairs_hook=_unique_object)
     try:
+        _keys(
+            fixture,
+            ("schema_version", "resolved", "assets", "fusion", "reference", "generation", "environment", "acceptance"),
+            "fixture",
+        )
         _require(
             type(fixture["schema_version"]) is int and fixture["schema_version"] == 1,
             "unsupported fixture schema_version",
@@ -150,10 +172,12 @@ def load_fixture(fixture_path):
         _require(set(assets) == set(ASSET_KINDS), "fixture must bind all five split assets")
         for name, kind in ASSET_KINDS.items():
             binding = assets[name]
+            _keys(binding, ("path", "sha256", "revision", "model_version", "kind"), name)
             _require(binding["model_version"] == "2.5" and binding["kind"] == kind, f"incompatible {name} kind/version")
             _hash(binding["revision"], f"{name} revision", (40, 64))
             _verify_file(binding, path.parent)
         fusion = fixture["fusion"]
+        _keys(fusion, ("fused_sha256", "base", "adapter", "recipe"), "fusion")
         _require(
             fusion["fused_sha256"] == assets["transformer"]["sha256"], "fusion digest does not bind primary transformer"
         )
@@ -170,6 +194,25 @@ def load_fixture(fixture_path):
         _text(fusion["recipe"]["description"], "fusion recipe")
         _hash(fusion["recipe"]["revision"], "fusion tool revision", (40, 64))
         g = fixture["generation"]
+        _keys(
+            g,
+            (
+                "mode",
+                "quality_variant",
+                "height",
+                "width",
+                "num_frames",
+                "ref_frames",
+                "fps",
+                "reference_strength",
+                "pin_s1_strength",
+                "pin_s2_strength",
+                "sampler",
+                "s1_sigmas",
+                "s2_sigmas",
+            ),
+            "generation",
+        )
         _require(g["mode"] in ("r2v", "fl2v"), "mode must be r2v or fl2v")
         _text(g["quality_variant"], "quality_variant")
         for key in ("height", "width"):

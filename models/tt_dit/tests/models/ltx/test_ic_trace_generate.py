@@ -34,6 +34,7 @@ Run: PYTHONPATH=<worktree> python -m pytest <file> -v -p no:cacheprovider
 from __future__ import annotations
 
 import ast
+import contextlib
 import hashlib
 from pathlib import Path
 from types import SimpleNamespace
@@ -47,6 +48,22 @@ DISTILLED_PATH = Path(__file__).resolve().parents[3] / "pipelines" / "ltx" / "pi
 
 _TEMPORAL_COMPRESSION = 8
 _SPATIAL_COMPRESSION = 32
+
+
+@pytest.fixture
+def expect_error():
+    """CPU equivalent of the root fixture; native conftests are intentionally excluded."""
+
+    @contextlib.contextmanager
+    def expected(error, message):
+        print(f'[EXPECTED_ERROR BEGIN] {error.__name__} message="{message}"')
+        try:
+            with pytest.raises(error, match=message) as caught:  # allow-pytest.raises: CPU fixture implementation
+                yield caught
+        finally:
+            print(f'[EXPECTED_ERROR END] {error.__name__} message="{message}"')
+
+    return expected
 
 
 def _latent_grid(num_frames: int, height: int, width: int) -> tuple[int, int, int]:
@@ -85,6 +102,15 @@ def _build_shim() -> tuple[type, dict]:
     p2l = "\n\n".join(_lines(_top(n)) for n in ("pixel_to_latent_frame", "_env_on", "_s1_pin_strength"))
     methods = ("warmup_buffers", "_prealloc_trace_io", "generate", "_assert_trace_family_warmed")
     method_blocks = [_lines(_method(n)) for n in methods]
+    # generate now delegates reference encoding to the base pipeline. Execute that
+    # real method too, so digest-cache coverage follows the current still encoder.
+    base_source = DISTILLED_PATH.with_name("pipeline_ltx.py").read_text()
+    base_tree = ast.parse(base_source)
+    base_class = next(n for n in base_tree.body if isinstance(n, ast.ClassDef) and n.name == "LTXPipeline")
+    encode = next(n for n in base_class.body if isinstance(n, ast.FunctionDef) and n.name == "encode_reference")
+    method_blocks.append("".join(base_source.splitlines(keepends=True)[encode.lineno - 1 : encode.end_lineno]))
+    still = next(n for n in base_tree.body if isinstance(n, ast.FunctionDef) and n.name == "ref_still_encode")
+    p2l += "\n\n" + ast.get_source_segment(base_source, still)
 
     shim_src = (
         "from __future__ import annotations\n\n" + p2l + "\n\nclass LTXDistilledPipeline:\n" + "\n".join(method_blocks)
@@ -448,6 +474,7 @@ def _make_generate_pipe():
     obj._device_resident = mock.MagicMock(return_value=False)
     obj._prefetch_noise = mock.MagicMock()
     obj._log_latent_stats = mock.MagicMock()
+    obj._sync_for_stage_timing = mock.MagicMock()
     obj._vae_traced = False
     obj._trace_euler_tail = False
     obj.transformer = SimpleNamespace(image_conditioning=False)
@@ -502,7 +529,7 @@ def _make_generate_pipe():
     obj._vae_per_channel_stats = mock.MagicMock(return_value=())
     obj._ensure_vae_decoder_frames = mock.MagicMock()
     obj._prepare_vae = mock.MagicMock()
-    obj.decode_latents = mock.MagicMock(side_effect=lambda v, lf, lh, lw, output_type: torch.zeros(1, 3, 17, 64, 64))
+    obj.decode_latents = mock.MagicMock(side_effect=lambda v, lf, lh, lw, **kw: torch.zeros(1, 3, 17, 64, 64))
     obj.decode_audio = mock.MagicMock(return_value=mock.MagicMock(name="audio"))
     return obj, ns
 
@@ -526,8 +553,8 @@ def test_generate_routes_trace_key_to_ref_family(monkeypatch, tmp_path):
     # Reference latents + strength threaded into both stages.
     assert s1.kwargs["ref_latent"] is not None and s1.kwargs["ref_strength"] == 0.9
     assert s2.kwargs["ref_latent"] is not None and s2.kwargs["ref_strength"] == 0.9
-    # Ref encoders built + looped-still encoded per stage.
-    obj._build_ref_vae_encoders.assert_called_once_with(17, 64, 64)
+    # Current default: single-frame encode at each resolution, expanded over time.
+    obj._build_ref_vae_encoders.assert_not_called()
     assert obj.encode_image.call_count == 2
 
 

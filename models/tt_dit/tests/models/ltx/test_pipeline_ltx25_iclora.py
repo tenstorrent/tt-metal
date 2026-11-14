@@ -20,8 +20,11 @@ from .ltx_mesh_params import LTX_DISTILLED_MESH_PARAMS_DL
 
 
 def _digest(path):
+    digest = hashlib.sha256()
     with open(path, "rb") as stream:
-        return hashlib.file_digest(stream, "sha256").hexdigest()
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
 
 
 def _now():

@@ -2,10 +2,12 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 """CPU contract tests: real public wrapper, synthetic assets, no native imports."""
+import ast
 import hashlib
 import importlib.util
 import json
 import os
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -92,13 +94,22 @@ def contract(tmp_path, monkeypatch):
         native.factory = kwargs
         return native
 
+    raw_native_factory = module._native_factory
     monkeypatch.setattr(module, "_native_factory", lambda: factory)
 
     def create(**kwargs):
         path.write_text(json.dumps(fixture))
         return module.LTX25ICLoRAPipeline.create_pipeline(None, fixture_path=path, **kwargs)
 
-    return SimpleNamespace(module=module, fixture=fixture, path=path, native=native, create=create, bind=bind)
+    return SimpleNamespace(
+        module=module,
+        fixture=fixture,
+        path=path,
+        native=native,
+        create=create,
+        bind=bind,
+        raw_native_factory=raw_native_factory,
+    )
 
 
 def test_fused_conv_warmup_and_r2v_wiring(contract):
@@ -269,3 +280,112 @@ def test_example_is_explicitly_unresolved():
     module = load_module()
     with pytest.raises(ValueError, match="unresolved"):  # allow-pytest.raises: CPU-only run excludes native conftest
         module.load_fixture(SOURCE.parents[2] / "tests/fixtures/ltx25_iclora/fixture.example.json")
+
+
+@pytest.mark.parametrize("form", ["duplicate", "unknown", "boolean_version", "oversized"])
+def test_manifest_parser_bypasses(contract, form):
+    c = contract
+    c.create()
+    data = c.path.read_text()
+    if form == "duplicate":
+        data = data.replace('"schema_version": 1', '"schema_version": 1, "schema_version": 1')
+    elif form == "unknown":
+        value = json.loads(data)
+        value["generation"]["extra_transformer_variants"] = ["bare"]
+        data = json.dumps(value)
+    elif form == "boolean_version":
+        data = data.replace('"schema_version": 1', '"schema_version": true')
+    else:
+        data += " " * (1024 * 1024)
+    c.path.write_text(data)
+    with pytest.raises(ValueError):  # allow-pytest.raises: CPU-only run excludes native conftest
+        c.module.load_fixture(c.path)
+
+
+def test_relative_paths_animation_and_missing_assets(contract):
+    c = contract
+    for asset in c.fixture["assets"].values():
+        asset["path"] = Path(asset["path"]).name
+    assert c.create().resolved_fixture["assets"]["video_vae"]["path"].startswith(str(c.path.parent))
+    sheet = c.path.parent / "animated.gif"
+    Image.new("RGB", (128, 128), "red").save(sheet, save_all=True, append_images=[Image.new("RGB", (128, 128), "blue")])
+    c.fixture["reference"].update(path=str(sheet), sha256=hashlib.sha256(sheet.read_bytes()).hexdigest())
+    with pytest.raises(ValueError, match="still"):  # allow-pytest.raises: CPU-only run excludes native conftest
+        c.create()
+    del c.fixture["assets"]["video_vae"]
+    with pytest.raises(ValueError, match="five"):  # allow-pytest.raises: CPU-only run excludes native conftest
+        c.create()
+
+
+def test_concurrent_session_is_refused_without_wait(contract):
+    pipe = contract.create()
+    pipe._call_lock.acquire()
+    try:
+        with pytest.raises(
+            ValueError, match="concurrent"
+        ):  # allow-pytest.raises: CPU-only run excludes native conftest
+            pipe.generate_r2v("x", seed=1)
+        with pytest.raises(
+            ValueError, match="concurrent"
+        ):  # allow-pytest.raises: CPU-only run excludes native conftest
+            pipe.warmup_buffers()
+    finally:
+        pipe._call_lock.release()
+
+
+def test_native_factory_and_imported_schedule_drift(contract, monkeypatch):
+    c = contract
+    package = SimpleNamespace()
+    distilled = SimpleNamespace(
+        DISTILLED_SIGMA_VALUES=list(c.module.S1_SIGMAS),
+        STAGE_2_DISTILLED_SIGMA_VALUES=list(c.module.S2_SIGMAS),
+        KEYFRAME_S1_STRENGTH=0.5,
+        KEYFRAME_S1_STRENGTH_COARSE=0.25,
+    )
+    factory = object()
+    package.pipeline_ltx_distilled = distilled
+    monkeypatch.setattr(c.module, "__package__", "synthetic_ltx")
+    monkeypatch.setitem(sys.modules, "synthetic_ltx", package)
+    monkeypatch.setitem(
+        sys.modules,
+        "synthetic_ltx.pipeline_ltx25_distilled",
+        SimpleNamespace(LTX25DistilledPipeline=SimpleNamespace(create_pipeline=factory)),
+    )
+    assert c.raw_native_factory() is factory
+    for field, wrong in [
+        ("DISTILLED_SIGMA_VALUES", [1, 0]),
+        ("STAGE_2_DISTILLED_SIGMA_VALUES", [1, 0]),
+        ("KEYFRAME_S1_STRENGTH", 0.1),
+        ("KEYFRAME_S1_STRENGTH_COARSE", 0.1),
+    ]:
+        original = getattr(distilled, field)
+        setattr(distilled, field, wrong)
+        with pytest.raises(ValueError, match="imported"):  # allow-pytest.raises: CPU-only run excludes native conftest
+            c.raw_native_factory()
+        setattr(distilled, field, original)
+
+
+def test_existing_ltx25_reference_sampler_is_deterministic(monkeypatch):
+    # Execute the unchanged native override against a recorder, without importing ttnn.
+    import textwrap
+
+    path = SOURCE.with_name("pipeline_ltx25_distilled.py")
+    source = path.read_text()
+    cls = next(n for n in ast.parse(source).body if isinstance(n, ast.ClassDef) and n.name == "LTX25DistilledPipeline")
+    method = next(n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == "_denoise_no_guidance")
+    method_source = ast.get_source_segment(source, method)
+    monkeypatch.setitem(
+        sys.modules, "sampler_test.pipeline_ltx_distilled", SimpleNamespace(ANCESTRAL_NOISE_SEED_OFFSET=42)
+    )
+
+    class Recorder:
+        def _denoise_no_guidance(self, *args, **kwargs):
+            return kwargs
+
+    namespace = dict(__package__="sampler_test", Recorder=Recorder)
+    exec("class NativeOverride(Recorder):\n" + textwrap.indent(method_source, "    "), namespace)
+    native = namespace["NativeOverride"]()
+    native.use_ancestral_sampler = True
+    assert native._denoise_no_guidance(None, None, trace_key="s1")["ancestral"] is True
+    for trace_key in ("s1_ref", "s2_ref"):
+        assert native._denoise_no_guidance(None, None, trace_key=trace_key)["ancestral"] is False
