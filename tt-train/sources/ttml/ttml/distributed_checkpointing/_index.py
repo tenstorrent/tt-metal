@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import math
 import os
 import re
 import secrets
@@ -366,6 +367,40 @@ def _fsync_dir(path: str) -> None:
         os.fsync(fd)
     finally:
         os.close(fd)
+
+
+def check_json(name: str, value: Any) -> Any:
+    """``value`` as plain JSON types (tuples become lists), or a ``CheckpointError`` naming ``name`` and the path of
+    the first value that would not read back as written: a dict key that is not a string (JSON turns it into one), a
+    float that is not finite (no standard JSON form), or a type JSON has no form for, which includes most numpy
+    scalars (``np.int64``, ``np.float32``, ``np.bool_``). ``np.float64`` subclasses ``float``, so it is accepted and
+    stored as a plain float. Checking before a save writes anything keeps such state from failing the save at its
+    end, or from coming back changed on load."""
+
+    def walk(node: Any, path: str) -> Any:
+        where = path or "/"
+        if node is None or isinstance(node, (bool, str)):
+            return node
+        if isinstance(node, int):
+            return int(node)
+        if isinstance(node, float):
+            if not math.isfinite(node):
+                raise CheckpointError(f"{name} at {where}: {node} is not finite and has no JSON form")
+            return float(node)
+        if isinstance(node, dict):
+            out = {}
+            for key, child in node.items():
+                if not isinstance(key, str):
+                    raise CheckpointError(
+                        f"{name} at {where}: key {key!r} is a {type(key).__name__}, which JSON would turn into a string"
+                    )
+                out[key] = walk(child, f"{path}/{key}")
+            return out
+        if isinstance(node, (list, tuple)):
+            return [walk(child, f"{path}[{i}]") for i, child in enumerate(node)]
+        raise CheckpointError(f"{name} at {where}: a {type(node).__name__} has no JSON form")
+
+    return walk(value, "")
 
 
 def _atomic_write_json(path: str, value: Any) -> None:
