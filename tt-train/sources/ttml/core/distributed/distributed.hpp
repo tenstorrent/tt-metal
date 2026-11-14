@@ -14,6 +14,16 @@ using Rank = tt::tt_metal::distributed::multihost::Rank;
 using Tag = tt::tt_metal::distributed::multihost::Tag;
 using DistributedContext = tt::tt_metal::distributed::multihost::DistributedContext;
 
+// Throws std::invalid_argument (ValueError in Python) unless `reduce_dtype` is unset, BFLOAT16 or FLOAT32, the dtypes
+// a gradient sum runs in.
+void check_reduce_dtype(std::optional<ttnn::DataType> reduce_dtype);
+
+// The dtype a gradient sum runs in: `reduce_dtype` once check_reduce_dtype accepts it, else the training config's
+// precision.reduce_dtype that apply_precision_config stores (autograd::AutoContext::get_gradient_reduce_dtype), which
+// may be unset too. synchronize_gradients and FSDP's backward hook resolve an unset value with it;
+// synchronize_tensor takes reduce_dtype only as an argument.
+std::optional<ttnn::DataType> resolve_reduce_dtype(std::optional<ttnn::DataType> reduce_dtype);
+
 // Averages `tensor` over the devices of `cluster_axes`. `reduce_dtype` is the dtype the values are summed in: unset or
 // BFLOAT16 sums in the tensor's own dtype (bf16 gradients in tt-train); FLOAT32 sums a narrower tensor in fp32 and
 // writes the mean back in the tensor's dtype, which keeps most of the low bits a bf16 sum rounds away at every hop. The

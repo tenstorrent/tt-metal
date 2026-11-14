@@ -7,6 +7,7 @@
 #include <optional>
 #include <sstream>
 
+#include "core/distributed/distributed.hpp"
 #include "core/tt_profiler.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
 
@@ -258,10 +259,7 @@ void AutoContext::initialize_parallelism_context(const DistributedConfig& config
 }
 
 void AutoContext::set_gradient_reduce_dtype(std::optional<ttnn::DataType> dtype) {
-    TT_FATAL(
-        !dtype.has_value() || *dtype == ttnn::DataType::BFLOAT16 || *dtype == ttnn::DataType::FLOAT32,
-        "The gradient reduce dtype must be BFLOAT16 or FLOAT32, got {}",
-        *dtype);
+    core::distributed::check_reduce_dtype(dtype);
     m_gradient_reduce_dtype = dtype;
 }
 

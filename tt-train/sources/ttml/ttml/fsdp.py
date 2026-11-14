@@ -53,7 +53,6 @@ import ttnn
 import ttml
 from ttml.modules import AbstractModuleBase
 from ttml.modules.parameter import Parameter, TensorMetadata, replace_lazy_mapper
-from ttml._mesh import _check_reduce_dtype
 
 # ---------------------------------------------------------------------------
 # Utility functions
@@ -224,9 +223,7 @@ class FSDPState:
         DDP sync reads it: this hook first runs in the first backward, after the
         optimizer exists.
         """
-        reduce_dtype = self.reduce_dtype
-        if reduce_dtype is None:
-            reduce_dtype = ttml.autograd.AutoContext.get_instance().get_gradient_reduce_dtype()
+        reduce_dtype = ttml.core.distributed.resolve_reduce_dtype(self.reduce_dtype)
         for parameter, shard_dim in self.managed:
             param_tensor = parameter.tensor
             if not param_tensor.is_grad_initialized():
@@ -757,7 +754,7 @@ def fully_shard(
     Returns:
         ``module`` (modified in place).
     """
-    _check_reduce_dtype(reduce_dtype)
+    ttml.core.distributed.check_reduce_dtype(reduce_dtype)
     if _is_fsdp_wrapped_module(module):
         raise RuntimeError(f"Module {module.get_name()!r} already wrapped with fully_shard.")
     replicate_res = _compile_replicate_patterns(replicate)

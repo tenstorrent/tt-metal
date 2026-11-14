@@ -230,6 +230,17 @@ void py_module(nb::module_& m) {
             nb::kw_only(),
             nb::arg("reduce_dtype") = nb::none());
         py_distributed.def(
+            "check_reduce_dtype",
+            &ttml::core::distributed::check_reduce_dtype,
+            nb::arg("reduce_dtype").none(),
+            "Raise ValueError unless reduce_dtype is None, BFLOAT16 or FLOAT32, the dtypes a gradient sum runs in.");
+        py_distributed.def(
+            "resolve_reduce_dtype",
+            &ttml::core::distributed::resolve_reduce_dtype,
+            nb::arg("reduce_dtype").none(),
+            "The dtype a gradient sum runs in: reduce_dtype once check_reduce_dtype accepts it, else the stored "
+            "training_config.precision.reduce_dtype (AutoContext.get_gradient_reduce_dtype), which may be None.");
+        py_distributed.def(
             "synchronize_tensor",
             [](const ttnn::Tensor& tensor,
                const std::vector<uint32_t>& cluster_axes,

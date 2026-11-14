@@ -5,6 +5,7 @@
 #include "core/distributed/distributed.hpp"
 
 #include <core/ttnn_all_includes.hpp>
+#include <stdexcept>
 #include <ttnn/operations/creation/creation.hpp>
 #include <ttnn/operations/eltwise/binary/binary.hpp>
 
@@ -78,15 +79,24 @@ std::optional<int> whole_tile_scatter_dim(const ttnn::Tensor& tensor, uint32_t n
 
 }  // namespace
 
+void check_reduce_dtype(std::optional<ttnn::DataType> reduce_dtype) {
+    if (reduce_dtype.has_value() && *reduce_dtype != ttnn::DataType::BFLOAT16 &&
+        *reduce_dtype != ttnn::DataType::FLOAT32) {
+        throw std::invalid_argument(
+            fmt::format("reduce_dtype must be BFLOAT16, FLOAT32 or unset, got {}", *reduce_dtype));
+    }
+}
+
+std::optional<ttnn::DataType> resolve_reduce_dtype(std::optional<ttnn::DataType> reduce_dtype) {
+    check_reduce_dtype(reduce_dtype);
+    return reduce_dtype.has_value() ? reduce_dtype : autograd::ctx().get_gradient_reduce_dtype();
+}
+
 ttnn::Tensor synchronize_tensor(
     const ttnn::Tensor& tensor,
     const ttsl::SmallVector<uint32_t>& cluster_axes,
     std::optional<ttnn::DataType> reduce_dtype) {
-    TT_FATAL(
-        !reduce_dtype.has_value() || *reduce_dtype == ttnn::DataType::BFLOAT16 ||
-            *reduce_dtype == ttnn::DataType::FLOAT32,
-        "reduce_dtype must be BFLOAT16 or FLOAT32, got {}",
-        *reduce_dtype);
+    check_reduce_dtype(reduce_dtype);
     auto* device = &autograd::ctx().get_device();
     if (cluster_axes.size() == 0) {
         return tensor;
@@ -155,9 +165,7 @@ void synchronize_gradients_along(
     const serialization::NamedParameters& parameters,
     const ttsl::SmallVector<uint32_t>& cluster_axes,
     std::optional<ttnn::DataType> reduce_dtype) {
-    if (!reduce_dtype.has_value()) {
-        reduce_dtype = autograd::ctx().get_gradient_reduce_dtype();
-    }
+    reduce_dtype = resolve_reduce_dtype(reduce_dtype);
     for (auto& [name, tensor] : parameters) {
         if (!tensor->is_grad_initialized()) {
             continue;

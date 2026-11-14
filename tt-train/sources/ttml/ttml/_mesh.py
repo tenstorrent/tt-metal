@@ -263,7 +263,7 @@ def sync_gradients(
             (``AutoContext.get_gradient_reduce_dtype``); with no default set either, it sums in each gradient's own
             dtype.
     """
-    _check_reduce_dtype(reduce_dtype)
+    ttml.core.distributed.check_reduce_dtype(reduce_dtype)
     m = maybe_mesh()
     if m is None or not axis_names:
         return
@@ -274,9 +274,3 @@ def sync_gradients(
     if not axes:
         return
     ttml.core.distributed.synchronize_gradients(parameters, axes, reduce_dtype=reduce_dtype)
-
-
-def _check_reduce_dtype(reduce_dtype) -> None:
-    """Raise unless ``reduce_dtype`` is ``None``, ``ttnn.DataType.BFLOAT16`` or ``ttnn.DataType.FLOAT32``."""
-    if reduce_dtype not in (None, ttnn.DataType.BFLOAT16, ttnn.DataType.FLOAT32):
-        raise ValueError(f"reduce_dtype must be None, BFLOAT16 or FLOAT32, got {reduce_dtype}")
