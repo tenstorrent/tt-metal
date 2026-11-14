@@ -321,15 +321,44 @@ def test_verify_block_is_flattened_by_column_and_answers_per_slot():
 
 
 def test_kv_pool_follows_max_model_len():
-    """The pool is one request of the served context plus the sliding windows and in-flight prefill tokens."""
-    full = Gemma4ForCausalLM.get_max_tokens_all_users(max_num_seqs=32, max_model_len=262144)
-    half = Gemma4ForCausalLM.get_max_tokens_all_users(max_num_seqs=32, max_model_len=131072)
-    assert full == Gemma4ForCausalLM.get_max_tokens_all_users(max_num_seqs=32)
-    assert full - half == 131072
-    assert full == 262144 + 5 * (
+    """The pool is at least one request of the served context plus the sliding windows and in-flight prefill tokens."""
+    needed = lambda length: length + 5 * (
         (Decoder.SLIDING_WINDOW_PAGES * Decoder.PAGE_SIZE * 32 + (Decoder.SLIDING_WINDOW_PAGES - 1) * Decoder.PAGE_SIZE)
         + 2 * Gemma4ForCausalLM.MAX_PREFILL_TOKENS
     )
+    # a context so long that one request needs more than the DRAM budget still gets its pool (vLLM then refuses or fits it)
+    huge = 8 * 262144
+    assert Gemma4ForCausalLM.get_max_tokens_all_users(max_num_seqs=32, max_model_len=huge) == needed(huge)
+    assert needed(262144) == 533504
+
+
+def test_kv_pool_takes_the_dram_budget():
+    """At 32 slots the pool is the DRAM budget in rows of the wide backing: bank - reserve - non-KV, minus the plugin's output pages."""
+    cls = Gemma4ForCausalLM
+    row = 10 * 2 * 4 * 128 * 256 * 17 // 16 // 8
+    assert cls.KV_ROW_BYTES == row == 348160
+    tokens = cls.get_max_tokens_all_users(max_num_seqs=32, max_model_len=262144)
+    assert tokens == cls.get_max_tokens_all_users(max_num_seqs=32)
+    assert tokens == 688000 and tokens % Decoder.PAGE_SIZE == 0 and tokens > 533504
+    # shorter contexts use the same budget (more cache), they no longer shrink the pool
+    assert cls.get_max_tokens_all_users(max_num_seqs=32, max_model_len=131072) == tokens
+    # the rows the plugin allocates (tokens / 128 + one output page per request) leave the reserve free after start-up
+    rows = tokens // Decoder.PAGE_SIZE + 32
+    free = cls.DRAM_BANK_BYTES - cls.NON_KV_BYTES - rows * row
+    assert cls.DRAM_RESERVE_BYTES <= free < cls.DRAM_RESERVE_BYTES + row
+    assert free >= cls.MIN_FREE_AFTER_STARTUP_BYTES + (200 << 20)
+    # calibration points measured on the device (speculative profile; the plain profile is 3 MiB lower: 2696 and 3095)
+    for blocks, measured_mib in ((4200, 2699), (5400, 3098)):
+        predicted = (cls.NON_KV_BYTES + blocks * row) >> 20
+        assert abs(predicted - measured_mib) <= 4
+
+
+def test_free_dram_guard_stops_startup(expect_error):
+    cls = Gemma4ForCausalLM
+    cls.check_free_dram(cls.MIN_FREE_AFTER_STARTUP_BYTES)
+    cls.check_free_dram(900 << 20)
+    with expect_error(RuntimeError, "free after start-up"):
+        cls.check_free_dram((699 << 20))
 
 
 def stub_state(rows, columns, slots, table_width=4):
@@ -502,10 +531,31 @@ def test_warm_up_captures_every_decode_and_verify_trace(monkeypatch):
         prepare_entries=lambda states: captured.extend(states) or [{"tokens": None}] * len(states),
     )
     model.mesh = None
-    monkeypatch.setattr(ttnn, "get_memory_view", lambda *a: SimpleNamespace(total_bytes_allocated_per_bank=0))
+    monkeypatch.setattr(
+        ttnn,
+        "get_memory_view",
+        lambda *a: SimpleNamespace(total_bytes_allocated_per_bank=0, total_bytes_free_per_bank=1000 << 20),
+    )
     model.warmup_model_decode(model.cache, True)
     expected = [model.cache, *model.sub_caches.values(), *model.verify_caches.values()]
     assert len(captured) == len(expected) == 1 + 2 + 2 and all(any(c is e for c in captured) for e in expected)
+
+
+def test_warm_up_stops_when_the_traces_leave_too_little_dram(monkeypatch, expect_error):
+    model = serving_model(8, 5, (1, 4))
+    model.generator = SimpleNamespace(
+        _tables=lambda state, tables: None,
+        configure_sampling=lambda **kw: None,
+        prepare_entries=lambda states: [{"tokens": None}] * len(states),
+    )
+    model.mesh = None
+    monkeypatch.setattr(
+        ttnn,
+        "get_memory_view",
+        lambda *a: SimpleNamespace(total_bytes_allocated_per_bank=0, total_bytes_free_per_bank=100 << 20),
+    )
+    with expect_error(RuntimeError, "free after start-up"):
+        model.warmup_model_decode(model.cache, True)
 
 
 @pytest.mark.parametrize("context", [100096, 1152, 129 * 128])
