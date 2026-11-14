@@ -56,6 +56,7 @@ from models.ttt_compat.tt.load_checkpoints import (
     standardize_hf_keys_multimodal,
 )
 from models.ttt_compat.tt.prefetcher import Prefetcher
+from models.ttt_compat.tt.stop_tokens import build_stop_tokens
 
 _HF_LAYER_KEY_RE = re.compile(r"^model\.layers\.(\d+)\.")
 
@@ -4212,6 +4213,19 @@ class ModelArgs:
             inplace=False,
         )
 
+    def _load_generation_config_eos(self):
+        """eos_token_id from the checkpoint's generation_config.json (int or list), or None."""
+        if self.dummy_weights:
+            return None
+        try:
+            from transformers import GenerationConfig
+
+            gen_config = GenerationConfig.from_pretrained(self.CKPT_DIR, local_files_only=os.getenv("CI") == "true")
+            return gen_config.eos_token_id
+        except Exception as e:
+            logger.info(f"No generation_config eos ids for {self.CKPT_DIR}: {e}")
+            return None
+
     def create_tokenizer(self):
         from transformers import AutoTokenizer
 
@@ -4319,10 +4333,17 @@ class ModelArgs:
 
         # Add meta-compatible stop token list to the HF tokenizer
         if not hasattr(tokenizer, "stop_tokens") or tokenizer.stop_tokens is None:
-            tokenizer.stop_tokens = [tokenizer.eos_token_id]
+            extra = []
             # Phi-3-mini uses "<|end|>" as EOS token
             if "phi-3-mini" in self.base_model_name.lower():
-                tokenizer.stop_tokens.append(tokenizer.encode("<|end|>")[0])
+                extra.append(tokenizer.encode("<|end|>")[0])
+            # The checkpoint lists every id that ends a turn (e.g. Gemma <end_of_turn>), not only the tokenizer eos
+            tokenizer.stop_tokens = build_stop_tokens(
+                tokenizer.eos_token_id,
+                getattr(self, "eos_token_id", None),
+                self._load_generation_config_eos(),
+                extra,
+            )
         return tokenizer
 
     def create_processor(self):
