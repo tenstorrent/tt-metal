@@ -106,6 +106,15 @@ def test_mk_backend_probe(mesh_device, monkeypatch):
     cur = torch.full((B,), POS, dtype=torch.int32)
     cur[LIVE:] = -1  # (GLM53_MK_PROBE_LIVE: the idle rows)
     backend.write(io.cur_pos, cur)
+    # GLM53_MK_PROBE_DISTINCT=1 (2026-11-14, the B 16 base-step study): every row starts from its own token instead of
+    # the zero-filled token page, so the rows route to different experts. With identical rows the routed-expert union
+    # stays at 8 per layer at every width and the probe misses the union's weight bytes (~3 ms at B 16 distinct, the
+    # 2026-11-10 e2e vs probe gap). The trace's device sampler feeds io.tokens from then on (rows stay distinct).
+    if os.environ.get("GLM53_MK_PROBE_DISTINCT", "0") == "1":
+        tgen = torch.Generator().manual_seed(4321)
+        toks = torch.randint(1000, 150000, (B,), generator=tgen, dtype=torch.int32)
+        backend.write(io.tokens, toks)
+        logger.info(f"MK_PROBE_DISTINCT: rows start from tokens {toks[:WIDTH].tolist()}")
     # GLM53_MK_PROBE_RANDKEYS=1 (2026-11-13, the long-context B 16 decode study): the DSA layers' pooled-key stores hold
     # random keys, different on every chip, instead of zeros. With zeros every index score ties: the radix rounds never
     # compact, the tie round resolves every key, and the ties pick the lowest pools, so a few chips do every user's
