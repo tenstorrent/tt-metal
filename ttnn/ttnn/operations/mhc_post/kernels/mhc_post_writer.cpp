@@ -14,14 +14,18 @@
 //     the chunk's slowest member): hand the slots to compute; send the folded chunk sum into root(t)'s
 //     cb_root_slots, inc SEM_ROOT_COUNT; then re-reserve the slots (compute popped them) and announce my next led
 //     row (t + chunk_size) to the chunk's members.
-//   root(t) = member ((t - t_start) mod Q), DEFERRED past the root's own rows so that no core's row loop ever
-//     waits on a root: every rooted row k has its own region of cb_root_slots (no reuse, no announcement); at the
-//     end the root hands them to compute, writes stats; collapse: permutes the stats tile into SFPU lane layout for
-//     the hc step and the hc result back into a row tile; writes hc. All semaphores are back to 0 at kernel end.
+//   root(t) = member ((t - t_start) mod Q). Without norm its work is DEFERRED past the root's own rows so that no
+//     core's row loop ever waits on a root: every rooted row k has its own region of cb_root_slots (no reuse, no
+//     announcement); at the end the root hands them to compute, writes stats; collapse: permutes the stats tile
+//     into SFPU lane layout for the hc step and the hc result back into a row tile; writes hc. Knob (norm,
+//     root_lag > 0, Refinement 3): LAGGED root_lag rows — virtual row i runs the root work of row i - root_lag, so
+//     rstd returns within the row loop. All semaphores are back to 0 at kernel end.
 // norm: the partial's column ng+1 carries sum y_b^2 (second page of cb_sumsq_col). The root's hc step leaves
 //   rstd in lane vector ng+1; the root copies it to token order (128 B) and unicasts it into slot (t - t_start) of
-//   every group member's cb_rstd_land, then incs their SEM_RSTD_COUNT. y is written after the root work (the
-//   compute normalizes every row once its rstd landed).
+//   every group member's cb_rstd_land, then incs their SEM_RSTD_COUNT. Deferred (default) the member's reader
+//   expands every row's rstd once all landed, and the writer writes y after the root work. Lagged: the root sets bit
+//   (t - t_start) % 32 instead and the member's writer expands the row's rstd norm_lag rows after it, then writes
+//   its y — so the y writes and the feed publication stream with the rows.
 // feed (R4): y tile (t, c) of column block p = c / Cb goes to the feed output D at rows [me*T, ..) of block me
 //   when p == me (written locally; the host passes me = G when T % 32 != 0, where my rows do not start on a D tile
 //   boundary and the ports place my own block too), else to y_output (staging, at its natural page) for the
@@ -83,7 +87,7 @@ inline void permute_vector(uint32_t* col, uint32_t* vec) {
 void kernel_main() {
     constexpr uint32_t cb_mixed_out_tiles = get_compile_time_arg_val(0);
     constexpr uint32_t n = get_compile_time_arg_val(1);
-    constexpr uint32_t block_rows = get_compile_time_arg_val(2);
+    [[maybe_unused]] constexpr uint32_t block_rows = get_compile_time_arg_val(2);
     constexpr uint32_t block_cols = get_compile_time_arg_val(3);
     constexpr uint32_t c_tiles = get_compile_time_arg_val(4);
     constexpr uint32_t out_ring_tiles = get_compile_time_arg_val(5);  // cb_mixed_out_tiles capacity
@@ -111,9 +115,15 @@ void kernel_main() {
     constexpr uint32_t sem_rstd_count_id = get_compile_time_arg_val(27);
     constexpr bool feed = get_compile_time_arg_val(28) != 0;
     constexpr uint32_t sem_feed_rows_id = get_compile_time_arg_val(29);
+    constexpr uint32_t cb_rstd_col = get_compile_time_arg_val(30);
+    // norm schedule knob: root_lag == 0 deferred roots + norm tail; > 0 root work of row t after my row t + root_lag,
+    // y of row t after my row t + norm_lag (see the compute)
+    constexpr uint32_t root_lag = get_compile_time_arg_val(31);
+    constexpr uint32_t norm_lag = get_compile_time_arg_val(32);
+    constexpr bool lagged = norm && root_lag > 0;
     constexpr uint32_t sumsq_pages = norm ? 2 : 1;  // per row: sum X'^2 [, sum y_b^2]
     constexpr uint32_t rstd_bytes = 32 * sizeof(uint32_t);
-    constexpr auto out_args = TensorAccessorArgs<30>();
+    constexpr auto out_args = TensorAccessorArgs<33>();
     [[maybe_unused]] constexpr auto stats_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto hc_args = TensorAccessorArgs<stats_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto y_args = TensorAccessorArgs<hc_args.next_compile_time_args_offset()>();
@@ -235,10 +245,91 @@ void kernel_main() {
         }
     }
 
-    for (uint32_t rb = 0; rb < t_count; rb += block_rows) {
-        const uint32_t rows_in_block = (t_count - rb) < block_rows ? (t_count - rb) : block_rows;
-        for (uint32_t r = 0; r < rows_in_block; ++r) {
-            const uint32_t t = t_start + rb + r;
+    // ---- root work of row t (t - t_start = member_q + k*Q): the chunk sums landed in region k of cb_root_slots ->
+    // compute; stats (+ hc) -> DRAM; norm: rstd -> every member ----
+    [[maybe_unused]] auto root_step = [&](uint32_t t) {
+        const auto stats_acc = TensorAccessor(stats_args, get_common_arg_val<uint32_t>(1), f32_page);
+        [[maybe_unused]] const auto hc_acc = TensorAccessor(hc_args, get_common_arg_val<uint32_t>(2), f32_page);
+        cb_wait_front(cb_stats, 1);
+        noc_async_write(get_read_ptr(cb_stats), stats_acc.get_noc_addr(t), f32_page);
+        if constexpr (collapse) {
+            // stats tile (token l = row, value v = column) -> SFPU lane layout (value v = vector v, token = lane)
+            uint32_t* st = reinterpret_cast<uint32_t*>(get_read_ptr(cb_stats));
+            cb_reserve_back(cb_hc_in, 1);
+            uint32_t* lanes = reinterpret_cast<uint32_t*>(get_write_ptr(cb_hc_in));
+            for (uint32_t v = 0; v <= ng + (norm ? 1 : 0); ++v) {  // [norm: + sum y_b^2 -> rstd]
+                permute_vector<true>(st + tile_word(0, v), lanes + lane_word(v, 0));
+            }
+            cb_push_back(cb_hc_in, 1);
+        }
+        noc_async_write_barrier();
+        cb_pop_front(cb_stats, 1);
+        if constexpr (collapse) {
+            cb_wait_front(cb_hc_out, 1);
+            uint32_t* lanes = reinterpret_cast<uint32_t*>(get_read_ptr(cb_hc_out));
+            uint32_t* hct = reinterpret_cast<uint32_t*>(get_write_ptr(cb_hc_tile));
+            for (uint32_t v = 0; v < ng; ++v) {  // padding columns ng.. are left as they are
+                permute_vector<false>(hct + tile_word(0, v), lanes + lane_word(v, 0));
+            }
+            noc_async_write(get_write_ptr(cb_hc_tile), hc_acc.get_noc_addr(t), f32_page);
+            if constexpr (norm) {
+                // rstd (lane vector ng+1) -> token order -> slot (t - t_start) of every member's landing; the
+                // member's SEM_RSTD_COUNT gets bit (t - t_start) % 32 (rows land in any order; a bit is consumed
+                // long before its row + 32 can land: that row needs the member's own partial, norm_lag < 32 rows on)
+                uint32_t* send = reinterpret_cast<uint32_t*>(get_write_ptr(cb_rstd_send));
+                for (uint32_t l = 0; l < 32; ++l) {
+                    send[l] = lanes[lane_word(ng + 1, l)];
+                }
+                const uint32_t land = get_write_ptr(cb_rstd_land) + (t - t_start) * rstd_bytes;
+                for (uint32_t q = 0; q < group_q; ++q) {
+                    noc_async_write(get_write_ptr(cb_rstd_send), member_noc(q, land), rstd_bytes);
+                }
+                noc_async_write_barrier();  // landed before the bits (and before the next row reuses send)
+                for (uint32_t q = 0; q < group_q; ++q) {  // deferred: a count (every row lands before any is read)
+                    noc_semaphore_inc(
+                        member_noc(q, get_semaphore(sem_rstd_count_id)), lagged ? 1u << ((t - t_start) % 32) : 1u);
+                }
+            }
+            noc_async_write_barrier();
+            cb_pop_front(cb_hc_out, 1);
+        }
+    };
+    // lagged norm: rstd of my local row r (wait for bit r % 32) -> column 0 of a cb_rstd_col page (the compute's COL
+    // broadcast; deferred, the reader expands every row after its rows)
+    [[maybe_unused]] auto expand_rstd = [&](uint32_t r) {
+        if constexpr (lagged) {
+            const uint32_t bit = 1u << (r % 32);
+            const uint32_t sem = get_semaphore(sem_rstd_count_id);
+            volatile tt_l1_ptr uint32_t* landed = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem);
+            while ((*landed & bit) == 0) {
+                invalidate_l1_cache();
+            }
+            noc_semaphore_inc(get_noc_addr(sem), 0u - bit);  // consume (atomic: other rows' bits may land now)
+            const volatile tt_l1_ptr uint32_t* src = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                get_write_ptr(cb_rstd_land) + r * rstd_bytes);  // private landing, same address everywhere
+            cb_reserve_back(cb_rstd_col, 1);
+            uint32_t* dst = reinterpret_cast<uint32_t*>(get_write_ptr(cb_rstd_col));
+            for (uint32_t l = 0; l < 32; ++l) {  // token l -> (row l, column 0): face 0 rows 0..15, face 2 16..31
+                dst[(l / FACE_DIM) * 2 * FACE_WORDS + (l % FACE_DIM) * FACE_DIM] = src[l];
+            }
+            cb_push_back(cb_rstd_col, 1);
+        }
+    };
+    // norm: the row's y (normalized by the compute) -> DRAM / feed, then publish it
+    [[maybe_unused]] auto write_norm_row = [&](uint32_t r) {
+        for (uint32_t cb0 = 0; cb0 < c_count; cb0 += block_cols) {
+            write_y_pass(t_start + r, cb0, (c_count - cb0) < block_cols ? (c_count - cb0) : block_cols);
+        }
+        publish_row();
+    };
+
+    // Virtual rows (the compute walks the same order): rows 0..t_count-1 store X' and send their partial; with norm
+    // the loop runs norm_lag rows further and virtual row i also runs the root work of row i - root_lag (before
+    // partial(i): its chunk sums need only rows <= i - root_lag + 1 of the leaders) and the y of row i - norm_lag.
+    const uint32_t vrows = t_count + (lagged ? norm_lag : 0);
+    for (uint32_t i = 0; i < vrows; ++i) {
+        const uint32_t t = t_start + i;
+        if (i < t_count) {
             const uint32_t x_row = t * n * c_tiles;
             for (uint32_t cb0 = 0; cb0 < c_count; cb0 += block_cols) {
                 const uint32_t cols_in_pass = (c_count - cb0) < block_cols ? (c_count - cb0) : block_cols;
@@ -272,11 +363,26 @@ void kernel_main() {
             if constexpr (collapse && !norm) {
                 publish_row();
             }
+        }
 
-            if constexpr (has_w) {
-                if (t > t_start && is_leader(t - 1)) {  // before partial(t): a 1-member chunk announces row t there
-                    lead(t - 1);
+        if constexpr (has_w) {
+            if (i > 0 && i <= t_count && is_leader(t - 1)) {  // before partial(t): a 1-member chunk announces row t
+                lead(t - 1);
+            }
+            if constexpr (lagged) {
+                const uint32_t rr = i - root_lag;  // root work of row rr, if I root it
+                if (i >= root_lag && rr < t_count && rr % group_q == member_q) {
+                    // only row rr's chunk sums can have landed: the next row I root (rr + Q, Q >= root_lag) needs my
+                    // own partial(rr + Q), which comes after this
+                    volatile tt_l1_ptr uint32_t* cnt = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_root);
+                    noc_semaphore_wait_min(cnt, num_chunks);
+                    noc_semaphore_set(cnt, 0);
+                    cb_reserve_back(cb_root_slots, num_chunks);  // region rr / Q, in order
+                    cb_push_back(cb_root_slots, num_chunks);
+                    root_step(t_start + rr);
                 }
+            }
+            if (i < t_count) {
                 // ---- partial(t): merge sum X'^2 into column ng, send to leader(t) ----
                 cb_wait_front(cb_proj_out, 1);
                 cb_wait_front(cb_sumsq_col, sumsq_pages);
@@ -307,17 +413,20 @@ void kernel_main() {
                 cb_pop_front(cb_sumsq_col, sumsq_pages);
             }
         }
-    }
-    if constexpr (has_w) {
-        if (t_count > 0 && is_leader(t_start + t_count - 1)) {  // the lagged duty of my last row
-            lead(t_start + t_count - 1);
+        if constexpr (lagged) {
+            if (i >= norm_lag) {
+                expand_rstd(i - norm_lag);
+                write_norm_row(i - norm_lag);
+            }
         }
     }
 
-    // ---- root work, deferred past my own rows (never on the grid's critical path): for every row t I root
-    // (t - t_start = member_q + k*Q), the chunk sums landed in region k of cb_root_slots -> compute; stats (+ hc)
-    // -> DRAM ----
-    if constexpr (has_w) {
+    // ---- !norm: root work, deferred past my own rows (never on the grid's critical path): every row t I root has
+    // its own region of cb_root_slots, all handed to the compute at once ----
+    if constexpr (has_w && !lagged) {
+        if (t_count > 0 && is_leader(t_start + t_count - 1)) {  // the lagged duty of my last row
+            lead(t_start + t_count - 1);
+        }
         const uint32_t rooted = member_q < t_count ? (t_count - member_q + group_q - 1) / group_q : 0;
         if (rooted > 0) {
             volatile tt_l1_ptr uint32_t* cnt = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_root);
@@ -326,59 +435,13 @@ void kernel_main() {
             cb_reserve_back(cb_root_slots, rooted * num_chunks);
             cb_push_back(cb_root_slots, rooted * num_chunks);
         }
-        const auto stats_acc = TensorAccessor(stats_args, get_common_arg_val<uint32_t>(1), f32_page);
-        [[maybe_unused]] const auto hc_acc = TensorAccessor(hc_args, get_common_arg_val<uint32_t>(2), f32_page);
         for (uint32_t k = 0; k < rooted; ++k) {
-            const uint32_t t = t_start + member_q + k * group_q;
-            cb_wait_front(cb_stats, 1);
-            noc_async_write(get_read_ptr(cb_stats), stats_acc.get_noc_addr(t), f32_page);
-            if constexpr (collapse) {
-                // stats tile (token l = row, value v = column) -> SFPU lane layout (value v = vector v, token = lane)
-                uint32_t* st = reinterpret_cast<uint32_t*>(get_read_ptr(cb_stats));
-                cb_reserve_back(cb_hc_in, 1);
-                uint32_t* lanes = reinterpret_cast<uint32_t*>(get_write_ptr(cb_hc_in));
-                for (uint32_t v = 0; v <= ng + (norm ? 1 : 0); ++v) {  // [norm: + sum y_b^2 -> rstd]
-                    permute_vector<true>(st + tile_word(0, v), lanes + lane_word(v, 0));
-                }
-                cb_push_back(cb_hc_in, 1);
-            }
-            noc_async_write_barrier();
-            cb_pop_front(cb_stats, 1);
-            if constexpr (collapse) {
-                cb_wait_front(cb_hc_out, 1);
-                uint32_t* lanes = reinterpret_cast<uint32_t*>(get_read_ptr(cb_hc_out));
-                uint32_t* hct = reinterpret_cast<uint32_t*>(get_write_ptr(cb_hc_tile));
-                for (uint32_t v = 0; v < ng; ++v) {  // padding columns ng.. are left as they are
-                    permute_vector<false>(hct + tile_word(0, v), lanes + lane_word(v, 0));
-                }
-                noc_async_write(get_write_ptr(cb_hc_tile), hc_acc.get_noc_addr(t), f32_page);
-                if constexpr (norm) {
-                    // rstd (lane vector ng+1) -> token order -> slot (t - t_start) of every member's landing
-                    uint32_t* send = reinterpret_cast<uint32_t*>(get_write_ptr(cb_rstd_send));
-                    for (uint32_t l = 0; l < 32; ++l) {
-                        send[l] = lanes[lane_word(ng + 1, l)];
-                    }
-                    const uint32_t land = get_write_ptr(cb_rstd_land) + (t - t_start) * rstd_bytes;
-                    for (uint32_t q = 0; q < group_q; ++q) {
-                        noc_async_write(get_write_ptr(cb_rstd_send), member_noc(q, land), rstd_bytes);
-                    }
-                    noc_async_write_barrier();  // landed before the counts (and before the next row reuses send)
-                    for (uint32_t q = 0; q < group_q; ++q) {
-                        noc_semaphore_inc(member_noc(q, get_semaphore(sem_rstd_count_id)), 1);
-                    }
-                }
-                noc_async_write_barrier();
-                cb_pop_front(cb_hc_out, 1);
-            }
+            root_step(t_start + member_q + k * group_q);
         }
     }
-    // ---- norm: y of every row, after its rstd returned (the compute normalizes rows in order) ----
-    if constexpr (norm) {
+    if constexpr (norm && !lagged) {  // deferred: the y rows in order (the reader expands rstd, the compute normalizes)
         for (uint32_t r = 0; r < t_count; ++r) {
-            for (uint32_t cb0 = 0; cb0 < c_count; cb0 += block_cols) {
-                write_y_pass(t_start + r, cb0, (c_count - cb0) < block_cols ? (c_count - cb0) : block_cols);
-            }
-            publish_row();
+            write_norm_row(r);
         }
     }
     noc_async_atomic_barrier();

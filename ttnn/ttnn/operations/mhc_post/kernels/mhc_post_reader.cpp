@@ -22,7 +22,8 @@
 // norm: the norm weight tiles of my columns (filler zeroed) are resident in cb_norm_w (issued up front, pushed
 //   behind the first row's barrier). After my rows, the roots unicast each row's rstd (32 fp32 tokens) into slot
 //   (t - t_start) of my private landing cb_rstd_land and inc SEM_RSTD_COUNT; once all my rows' rstd landed, each is
-//   expanded into column 0 of a cb_rstd_col page (the compute's COL broadcast), row by row.
+//   expanded into column 0 of a cb_rstd_col page (the compute's COL broadcast), row by row. (Lagged norm knob,
+//   Refinement 3: the writer does this per row instead.)
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
@@ -78,7 +79,11 @@ void kernel_main() {
     constexpr uint32_t cb_rstd_col = get_compile_time_arg_val(17);
     constexpr uint32_t cb_rstd_land = get_compile_time_arg_val(18);
     constexpr uint32_t sem_rstd_count_id = get_compile_time_arg_val(19);
-    constexpr auto f_args = TensorAccessorArgs<20>();
+    // norm schedule knob (Refinement 3): 0 = deferred roots, rstd expanded here after my rows; > 0 = lagged, the
+    // writer expands each row's rstd norm_lag rows after it (this tail is compiled out)
+    constexpr uint32_t root_lag = get_compile_time_arg_val(20);
+    constexpr bool deferred_norm = norm && root_lag == 0;
+    constexpr auto f_args = TensorAccessorArgs<21>();
     constexpr auto x_args = TensorAccessorArgs<f_args.next_compile_time_args_offset()>();
     constexpr auto post_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
     constexpr auto comb_args = TensorAccessorArgs<post_args.next_compile_time_args_offset()>();
@@ -275,8 +280,8 @@ void kernel_main() {
         }
     }
 
-    // ---- norm: every row's rstd from its root -> column 0 of a cb_rstd_col page, in row order ----
-    if constexpr (norm) {
+    // ---- norm (deferred): every row's rstd from its root -> column 0 of a cb_rstd_col page, in row order ----
+    if constexpr (deferred_norm) {
         volatile tt_l1_ptr uint32_t* landed =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_rstd_count_id));
         noc_semaphore_wait_min(landed, t_count);  // the roots finish their rows in any order: wait for all

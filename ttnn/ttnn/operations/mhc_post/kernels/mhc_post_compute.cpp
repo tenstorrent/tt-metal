@@ -19,12 +19,13 @@
 // k = j*B + u (the reader lays W out the same way). A ragged pass runs the full block on zeroed filler units.
 // finalize_row: cb_sumsq_acc --SFPU row sum--> column 0 of cb_sumsq_col (the writer merges it into col 24).
 // combine_row: fixed slot-order SFPU fold — level 1 eager at the row boundary on the row's leader, level 2 on the
-// row's root deferred past the root's own rows.
+// row's root deferred past the root's own rows (or, norm with root_lag > 0, lagged inside the row loop).
 // hc_step_row (collapse, root): the DeepSeek-V4 hc step as one custom SFPU program in lane layout.
 // norm: collapse packs y_b into cb_y_hold (held until rstd returns) and accumulates sum y_b^2 of the bf16 y_b
 // (reloaded, exact) into cb_ysq_acc; finalize_row row-sums it into a second cb_sumsq_col page (partial column
-// ng+1). The root's hc step also computes rstd = rsqrt(sum y^2 / C + norm_eps) in lane vector ng+1. After the root
-// work, norm_block per row: y = (y_b * rstd) * w (fp32 SFPU, one bf16 rounding) -> cb_y_out.
+// ng+1). The root's hc step also computes rstd = rsqrt(sum y^2 / C + norm_eps) in lane vector ng+1. norm_block:
+// y = (y_b * rstd) * w (fp32 SFPU, one bf16 rounding) -> cb_y_out, after the roots (default) or norm_lag rows after
+// the row (lagged knob).
 //
 // Raw-LLK deviation (documented per the helper-first policy): the combine fold sums a RUNTIME number of slot
 // tiles (chunk size / chunk count) in one DEST window; eltwise_chain needs a compile-time element list, so the
@@ -90,6 +91,15 @@ constexpr uint32_t cb_y_hold = get_compile_time_arg_val(28);
 constexpr uint32_t cb_ysq_acc = get_compile_time_arg_val(29);
 constexpr uint32_t cb_rstd_col = get_compile_time_arg_val(30);
 constexpr uint32_t cb_norm_w = get_compile_time_arg_val(31);
+// norm schedule knob (Refinement 3). root_lag == 0: the roots are deferred past every row, norm_block runs after them
+// and cb_y_hold holds every row (the default). root_lag > 0 (lagged): the root work of row t runs root_lag rows after
+// t and norm_block(t) norm_lag rows after t, inside the row loop, so rstd / the y writes / the feed publication stream
+// with the rows; cb_y_hold holds norm_lag + 1 rows.
+constexpr uint32_t root_lag = get_compile_time_arg_val(32);
+constexpr uint32_t norm_lag = get_compile_time_arg_val(33);
+constexpr bool lagged = norm && root_lag > 0;
+static_assert(!lagged || norm_lag > root_lag, "lagged norm: 1 <= root_lag < norm_lag");
+constexpr uint32_t hold_pages = get_compile_time_arg_val(34);    // norm: cb_y_hold capacity
 constexpr uint32_t cb_y_collapse = norm ? cb_y_hold : cb_y_out;  // collapse_block's destination
 
 constexpr uint32_t n_mix_coef = n + n * n;
@@ -243,15 +253,17 @@ ALWI void collapse_pass() {
     }
 }
 
-// norm: Dsq_y += y_b[u]^2 for the pass's units — the bf16 y_b as packed (cb_y_hold pages base..base+B-1, the
-// hold is never popped before the norm phase so `base` counts from its first page).
+// norm: Dsq_y += y_b[u]^2 for the pass's units — the bf16 y_b as packed (cb_y_hold pages base..base+B-1 from the
+// front, whose ring position is `front`). The held rows wrap the ring: a page past its end is addressed as
+// base + u - hold_pages (the unpacker forms rd_ptr + page * index in uint32 arithmetic, so this is the wrapped page).
 using HoldCopy = ckl::CopyTile<caller_managed(cb_y_hold), ckl::Dst::D1>;
+ALWI uint32_t hold_index(uint32_t front, uint32_t idx) { return front + idx >= hold_pages ? idx - hold_pages : idx; }
 template <size_t... U>
-ALWI void ysq_pass_impl(uint32_t base, std::index_sequence<U...>) {
+ALWI void ysq_pass_impl(uint32_t front, uint32_t base, std::index_sequence<U...>) {
     auto elems = std::tuple_cat(
         std::make_tuple(ckl::CopyTile<ckl::input(cb_ysq_acc), ckl::Dst::D0>{}),
         std::make_tuple(
-            HoldCopy{base + U},
+            HoldCopy{hold_index(front, base + U)},
             ckl::Addcmul<DataFormat::Float32, ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D1, ckl::Dst::D0>{ONE_F32})...,
         std::make_tuple(ckl::PackTile<ckl::output(cb_ysq_acc), ckl::Dst::D0>{}));
     std::apply([](auto... e) { ckl::eltwise_chain(ckl::IterationShape::one_tile(), e...); }, elems);
@@ -292,14 +304,15 @@ struct PassCols {
 // units of a ragged pass are zeros, their X' is 0 and their W rows are zeroed by the reader).
 struct MixPassFn {
     PassCols pc;
-    uint32_t hold_base;  // norm: cb_y_hold page of this row's first unit
+    uint32_t hold_base;   // norm: cb_y_hold page (from the front) of this row's first unit
+    uint32_t hold_front;  // norm: ring position of the front page
     ALWI void operator()(uint32_t pass, uint32_t /*num_k_blocks*/, bool /*is_last*/) const {
         mix_pass(pc.cols(pass));
         collapse_pass();
         if constexpr (norm) {
             const uint32_t base = hold_base + pass * block_cols;
             cb_wait_front(cb_y_hold, base + block_cols);
-            ysq_pass_impl(base, std::make_index_sequence<block_cols>{});
+            ysq_pass_impl(hold_front, base, std::make_index_sequence<block_cols>{});
         }
     }
 };
@@ -556,9 +569,44 @@ void kernel_main() {
     [[maybe_unused]] const uint32_t chunk_size =
         (group_q - my_chunk * fanin) < fanin ? (group_q - my_chunk * fanin) : fanin;
 
-    for (uint32_t rb = 0; rb < t_count; rb += block_rows) {
-        const uint32_t rows_in_block = (t_count - rb) < block_rows ? (t_count - rb) : block_rows;
-        for (uint32_t r = 0; r < rows_in_block; ++r) {
+    [[maybe_unused]] const uint32_t num_passes_all = (c_count + block_cols - 1) / block_cols;
+    // combine_row level 1 of row index i (local), lagged one row: I lead my chunk for it
+    [[maybe_unused]] auto lead_fold = [&](uint32_t i) __attribute__((always_inline)) {
+        if (member_q == my_chunk * fanin + ((t_start + i) % chunk_size)) {
+            fold_slots(cb_leader_slots, fanin, chunk_size, cb_chunk_sum);
+        }
+    };
+    // combine_row level 2 + hc_step_row of a row I root (the writer hands its slot region over in order)
+    [[maybe_unused]] auto root_step = [&]() __attribute__((always_inline)) {
+        fold_slots(cb_root_slots, num_chunks, num_chunks, cb_stats);
+        if constexpr (collapse) {
+            // hc_step_row: the writer permutes the stats tile into lane layout (cb_hc_in)
+            ckl::eltwise_chain(
+                ckl::IterationShape::one_tile(),
+                ckl::CopyTile<ckl::input(cb_hc_in), ckl::Dst::D0>{},
+                HcStep<ckl::Dst::D0>{{}, &hcp},
+                ckl::PackTile<ckl::output(cb_hc_out), ckl::Dst::D0>{});
+        }
+    };
+    // norm_block of the oldest held row: y = (y_b * rstd) * w per pass (filler units included: the writer drops
+    // them); rstd arrives in column 0 of a cb_rstd_col page (the writer expands the root's unicast)
+    [[maybe_unused]] auto norm_row = [&]() __attribute__((always_inline)) {
+        cb_wait_front(cb_norm_w, num_passes_all * block_cols);  // resident, never popped
+        cb_wait_front(cb_rstd_col, 1);
+        for (uint32_t p = 0; p < num_passes_all; ++p) {
+            cb_wait_front(cb_y_hold, block_cols);
+            norm_pass(p * block_cols, std::make_index_sequence<block_cols>{});
+            cb_pop_front(cb_y_hold, block_cols);
+        }
+        cb_pop_front(cb_rstd_col, 1);
+    };
+
+    // Virtual rows: rows 0..t_count-1 do their row work; with norm the loop runs norm_lag rows further, and every
+    // virtual row i then also runs the root work of row i - root_lag (if I root it) and norm_block(i - norm_lag).
+    // The writer walks the same order (lead / root / partial / norm writes).
+    const uint32_t vrows = t_count + (lagged ? norm_lag : 0);
+    for (uint32_t i = 0; i < vrows; ++i) {
+        if (i < t_count) {
             cb_wait_front(cb_coef_cols, n_coef);  // the row's expanded coefficients, held for every block
             if constexpr (!has_w) {
                 for (uint32_t cb0 = 0; cb0 < c_count; cb0 += block_cols) {
@@ -567,9 +615,8 @@ void kernel_main() {
                 }
                 cb_pop_front(cb_coef_cols, n_coef);
             } else {
-                const uint32_t t = t_start + rb + r;
                 const PassCols pc{c_count};
-                const uint32_t num_passes = (c_count + block_cols - 1) / block_cols;
+                const uint32_t num_passes = num_passes_all;
                 if constexpr (norm) {  // the row's sums of squares start at 0
                     ckl::eltwise_chain(
                         ckl::IterationShape::one_tile(),
@@ -606,7 +653,10 @@ void kernel_main() {
                     interm_buf,
                     ckl::MatmulBlockShape::of(1, 1, 1, 1, pass_k_tiles, num_passes),
                     ckl::NoPostCompute{},
-                    MixPassFn{pc, (rb + r) * num_passes * block_cols},
+                    MixPassFn{
+                        pc,
+                        (!lagged || i < norm_lag ? i : norm_lag) * num_passes * block_cols,  // held rows ahead of i
+                        lagged ? ((i < norm_lag ? 0 : i - norm_lag) * num_passes * block_cols) % hold_pages : 0},
                     1,
                     0,
                     ckl::NoPostKBlock{},
@@ -629,51 +679,41 @@ void kernel_main() {
                         ckl::PackTile<ckl::output(cb_sumsq_col), ckl::Dst::D0>{});
                 }
 
-                // combine_row level 1, lagged one row: I lead my chunk for row t-1 (rotating leaders spread the folds;
-                // the lag means the chunk's partials have landed by the time I get here)
-                if (t > t_start && member_q == my_chunk * fanin + ((t - 1) % chunk_size)) {
-                    fold_slots(cb_leader_slots, fanin, chunk_size, cb_chunk_sum);
+                // combine_row level 1, lagged one row (rotating leaders spread the folds; the lag means the chunk's
+                // partials have landed by the time I get here)
+                if (i > 0) {
+                    lead_fold(i - 1);
                 }
             }
+        } else if constexpr (has_w) {
+            if (i == t_count && t_count > 0) {  // the lagged level-1 fold of my last row
+                lead_fold(t_count - 1);
+            }
+        }
+        if constexpr (lagged) {
+            if (i >= root_lag && i - root_lag < t_count && (i - root_lag) % group_q == member_q) {
+                root_step();
+            }
+            if (i >= norm_lag) {
+                norm_row();
+            }
         }
     }
 
-    if constexpr (has_w) {  // the lagged level-1 fold of my last row
-        if (t_count > 0 && member_q == my_chunk * fanin + ((t_start + t_count - 1) % chunk_size)) {
-            fold_slots(cb_leader_slots, fanin, chunk_size, cb_chunk_sum);
+    if constexpr (has_w && !lagged) {
+        if (t_count > 0) {  // the lagged level-1 fold of my last row
+            lead_fold(t_count - 1);
         }
-    }
-
-    // combine_row level 2 + hc_step_row, DEFERRED past my own rows (no core's row loop waits on a root): every row
-    // t I root (t - t_start = member_q + k*Q) has its own slot region, handed over by the writer in order k.
-    if constexpr (has_w) {
+        // combine_row level 2 + hc_step_row, DEFERRED past my own rows (no core's row loop waits on a root): every
+        // row t I root (t - t_start = member_q + k*Q) has its own slot region, handed over by the writer in order k.
         const uint32_t rooted = member_q < t_count ? (t_count - member_q + group_q - 1) / group_q : 0;
         for (uint32_t k = 0; k < rooted; ++k) {
-            fold_slots(cb_root_slots, num_chunks, num_chunks, cb_stats);
-            if constexpr (collapse) {
-                // hc_step_row: the writer permutes the stats tile into lane layout (cb_hc_in)
-                ckl::eltwise_chain(
-                    ckl::IterationShape::one_tile(),
-                    ckl::CopyTile<ckl::input(cb_hc_in), ckl::Dst::D0>{},
-                    HcStep<ckl::Dst::D0>{{}, &hcp},
-                    ckl::PackTile<ckl::output(cb_hc_out), ckl::Dst::D0>{});
-            }
+            root_step();
         }
     }
-
-    // norm_block, after the root work (rstd of a row returns only once its root has run): per row, per pass,
-    // y = (y_b * rstd) * w for the pass's units (filler units included: the writer drops them).
-    if constexpr (norm) {
-        const uint32_t num_passes = (c_count + block_cols - 1) / block_cols;
-        cb_wait_front(cb_norm_w, num_passes * block_cols);  // resident, never popped
+    if constexpr (norm && !lagged) {  // deferred: every row's rstd returns once the roots have run
         for (uint32_t r = 0; r < t_count; ++r) {
-            cb_wait_front(cb_rstd_col, 1);
-            for (uint32_t p = 0; p < num_passes; ++p) {
-                cb_wait_front(cb_y_hold, block_cols);
-                norm_pass(p * block_cols, std::make_index_sequence<block_cols>{});
-                cb_pop_front(cb_y_hold, block_cols);
-            }
-            cb_pop_front(cb_rstd_col, 1);
+            norm_row();
         }
     }
 }

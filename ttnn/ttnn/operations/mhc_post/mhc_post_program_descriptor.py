@@ -56,10 +56,18 @@ FEED_LAND_BUDGET = 768 * 1024
 COMBINE_FANIN = 11  # leader fan-in of the 2-level combine tree (<= 16, ledger symbol)
 PARTIAL_DEPTH = 2  # per-row partial / sum-of-squares pages in flight to the writer
 Y_BLOCKS = 2  # collapse: y blocks in flight to the writer
-NORM_ROWS_IN_FLIGHT = 2  # norm: rstd rows expanded ahead of the norm phase (cb_rstd_col depth)
+# norm schedule knob (Refinement 3). NORM_ROOT_LAG = 0 (default): the roots run after their own rows and norm_block
+# after them, cb_y_hold holds every row of the core. NORM_ROOT_LAG > 0 (lagged): the root work of row t runs
+# NORM_ROOT_LAG rows after t and norm_block(t) NORM_ROWS_IN_FLIGHT - 1 rows after it, inside the row loop, so the y
+# writes and the feed publication stream with the rows; cb_y_hold holds NORM_ROWS_IN_FLIGHT rows. Measured at the
+# perf-flagged T160 (5 rows a core): lagged 1/3 +43 us, 2/5 +32 us — the root chain (fold, hc, rstd: ~25 us) is
+# longer than a row (~14 us) and the mid-loop hc on the root cores (also workers) stalls the combine, so deferred wins.
+NORM_ROWS_IN_FLIGHT = 3
+NORM_ROOT_LAG = 0
+RSTD_COL_DEPTH = 2  # norm: expanded rstd pages in flight (writer -> compute)
 RSTD_SLOT_BYTES = 128  # norm: one row's rstd = 32 fp32 tokens
-# norm: y_b of all a core's rows stays in L1 until rstd returns (the roots run after their own rows, Refinement 1);
-# the largest golden shape (T2048 C7168: 64 rows x 3 cols) needs 384 KiB.
+# norm: cb_y_hold bytes; deferred it holds every row of the core (largest golden shape, T2048 C7168: 64 rows x 3 cols,
+# 384 KiB)
 Y_HOLD_BUDGET = 512 * 1024
 
 # Split-chooser model constants (catalog double_buffer measurements, Blackhole)
@@ -323,10 +331,16 @@ def create_program_descriptor(
     max_rows = row_ranges[0][1]
     max_rooted = -(-max_rows // Q)  # rows a core roots (root(t) = member (t - t0) mod Q), deferred
     core_cols_padded = max_passes * block_cols  # a core's columns incl. the filler units of a ragged pass
-    hold_pages = max_rows * core_cols_padded if norm else 0
+    # norm lags (one source: NORM_ROWS_IN_FLIGHT / NORM_ROOT_LAG). The root counter of a row is exact only while the
+    # next row a root roots (Q rows on) needs the root's own later partial: Q >= root lag.
+    root_lag = min(NORM_ROOT_LAG, Q) if norm else 0
+    norm_lag = max(NORM_ROWS_IN_FLIGHT - 1, root_lag + 1) if root_lag > 0 else 0
+    assert norm_lag < 32, "lagged norm: rstd landing bits are row % 32"
+    hold_rows = min(max_rows, norm_lag + 1) if root_lag > 0 else max_rows
+    hold_pages = hold_rows * core_cols_padded if norm else 0
     if hold_pages * bf16_page > Y_HOLD_BUDGET:
         raise ValueError(
-            f"mhc_post: norm holds {hold_pages} y tiles per core ({max_rows} rows x {core_cols_padded} cols), "
+            f"mhc_post: norm holds {hold_pages} y tiles per core ({hold_rows} rows x {core_cols_padded} cols), "
             f"over Y_HOLD_BUDGET; use a larger max_grid"
         )
 
@@ -366,7 +380,7 @@ def create_program_descriptor(
         cbs += [
             _cb(CB_Y_HOLD, ttnn.bfloat16, bf16_page, hold_pages, core_ranges),
             _cb(CB_YSQ_ACC, ttnn.float32, f32_page, 1, core_ranges),
-            _cb(CB_RSTD_COL, ttnn.float32, f32_page, NORM_ROWS_IN_FLIGHT, core_ranges),
+            _cb(CB_RSTD_COL, ttnn.float32, f32_page, RSTD_COL_DEPTH, core_ranges),
             _cb(CB_NORM_W, ttnn.float32, f32_page, core_cols_padded, core_ranges),
             _cb(CB_RSTD_LAND, ttnn.float32, RSTD_SLOT_BYTES, max_rows, core_ranges),
             _cb(CB_RSTD_SEND, ttnn.float32, RSTD_SLOT_BYTES, 1, core_ranges),
@@ -414,6 +428,7 @@ def create_program_descriptor(
         CB_RSTD_COL,
         CB_RSTD_LAND,
         SEM_RSTD_COUNT,
+        root_lag,
     ]
     pre_for_args = pre_tensor if collapse else post_tensor
     w_for_args = w_tensor if has_w else post_tensor
@@ -478,6 +493,9 @@ def create_program_descriptor(
         SEM_RSTD_COUNT,
         int(feed is not None),
         SEM_FEED_ROWS,
+        CB_RSTD_COL,
+        root_lag,
+        norm_lag,
     ]
     writer_ct.extend(ttnn.TensorAccessorArgs(out_tensor).get_compile_time_args())
     writer_ct.extend(ttnn.TensorAccessorArgs(stats_for_args).get_compile_time_args())
@@ -565,6 +583,9 @@ def create_program_descriptor(
         CB_YSQ_ACC,
         CB_RSTD_COL,
         CB_NORM_W,
+        root_lag,
+        norm_lag,
+        max(hold_pages, 1),
     ]
     compute_common = []
     if collapse:
