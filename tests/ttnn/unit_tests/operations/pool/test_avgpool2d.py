@@ -304,3 +304,30 @@ def test_avg_pool2d_global_rejects_zero_batch(device, expect_error):
             stride=[1, 1],
             padding=[0, 0],
         )
+
+
+def test_avg_pool2d_tile_nhwc_input_padded_width(device):
+    """A [N, H, W, C] TILE input whose W is not a tile multiple, height sharded by the op. The input shard spec used to
+    be built from the 4-D padded shape (W rounded up to a tile in every image row), so the halo waited for input rows the
+    flattened tensor does not have and the device hung (#63639)."""
+    n, h, w, c = 3, 5, 5, 32
+    x = ((torch.arange(n * h * w * c) % 33 - 16) / 8).reshape(n, h, w, c).to(torch.bfloat16)  # exact in bfloat16
+    ttnn_input = ttnn.from_torch(
+        x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    ttnn_output = ttnn.avg_pool2d(
+        input_tensor=ttnn_input,
+        batch_size=n,
+        input_h=h,
+        input_w=w,
+        channels=c,
+        kernel_size=[2, 2],
+        stride=[2, 2],
+        padding=[0, 0],
+        ceil_mode=False,
+        count_include_pad=True,
+        applied_shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        config_tensor_in_dram=True,  # this module's shared device has no L1_SMALL for the halo config tensors
+    )
+    expected = torch.nn.functional.avg_pool2d(x.float().permute(0, 3, 1, 2), 2, 2).permute(0, 2, 3, 1).reshape(-1, c)
+    assert torch.equal(ttnn.to_torch(ttnn_output).float().reshape(-1, c), expected)
