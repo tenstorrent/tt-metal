@@ -271,8 +271,8 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_TwoLinked1x2Meshes_OnFour
 }
 
 // Solving on a subset of a larger system: host1's ASIC 103 still reports its eth link to ASIC 104 on
-// host2, which is not part of the solve and so has no ASIC descriptor. That link leaves the graph
-// being solved against and must not reach the solver.
+// host2, which is not part of the solve and so has no ASIC descriptor. The descriptor drops that link
+// when it is built, so it never reaches the solver.
 TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_SubsetOfHosts_IgnoresLinksLeavingSubset) {
     using namespace ::tt::tt_fabric;
 
@@ -292,11 +292,22 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_SubsetOfHosts_IgnoresLink
         ::testing::UnorderedElementsAre(std::set<uint64_t>{100, 101}, std::set<uint64_t>{102, 103}));
 }
 
-TEST_F(TopologyMapperUtilsTest, BuildFlatAdjacencyMapFromPsd_SubsetOfHosts_PrunesLinksLeavingSubset) {
+TEST_F(TopologyMapperUtilsTest, PsdFromProto_SubsetOfHosts_PrunesLinksLeavingSubset) {
+    using tt::tt_metal::AsicID;
+
     const auto full_psd =
         build_mock_psd({"host0", "host0", "host1", "host1", "host2", "host2"}, line_edges(6), /*channels=*/2);
     auto psd = restrict_mock_psd_to_hosts(full_psd, {"host0", "host1"});
-    auto node = [&](uint64_t asic_id) { return psd.get_physical_node_id(tt::tt_metal::AsicID{asic_id}); };
+    auto node = [&](uint64_t asic_id) { return psd.get_physical_node_id(AsicID{asic_id}); };
+
+    EXPECT_THAT(psd.get_asic_neighbors(AsicID{103}), ::testing::ElementsAre(AsicID{102}));
+    EXPECT_THAT(psd.get_host_neighbors("host1"), ::testing::ElementsAre("host0"));
+    for (const auto& [host_name, exit_nodes] : psd.get_exit_node_connection_table()) {
+        for (const auto& exit_node : exit_nodes) {
+            EXPECT_TRUE(psd.find_physical_node_id(exit_node.dst_exit_node).has_value())
+                << host_name << " keeps an exit node to undescribed ASIC " << *exit_node.dst_exit_node;
+        }
+    }
 
     const auto flat_adj = build_flat_adjacency_map_from_psd(psd);
 
