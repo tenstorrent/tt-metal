@@ -58,15 +58,12 @@ MuonComposite::MuonComposite(
 }
 
 void MuonComposite::zero_grad() {
-    for (auto& [name, tensor_ptr] : m_parameters) {
-        if (tensor_ptr->get_requires_grad() && tensor_ptr->is_grad_initialized()) {
-            tensor_ptr->set_grad(core::zeros_like(tensor_ptr->get_value()));
-        }
-    }
+    clear_gradients();
 }
 
 void MuonComposite::step() {
     core::cast_fp32_gradients_to_bf16(m_parameters);
+    restore_cleared_gradients_as_zeros();
     if (core::debug::Debug::enable_print_tensor_stats()) {
         print_stats();
     }
