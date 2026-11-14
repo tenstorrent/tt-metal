@@ -24,9 +24,6 @@ from test_matmul_custom import (
     _run_matmul_custom,
 )
 
-# Blaze reports cycles per output tile (`rt * ct`) for this matmul, matching the
-# established matmul reports. The K-tile work therefore remains visible in the metric.
-
 
 def _perf_kwargs(perf_report, run_types, loop_factor, is_perf):
     return dict(
