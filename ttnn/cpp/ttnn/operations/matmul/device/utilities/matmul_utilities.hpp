@@ -378,6 +378,23 @@ struct DramBankReaderAssignment {
     uint32_t worker_index;
 };
 
+// N tiles each DRAM bank holds for a width-sharded in1, read from its shard spec. A shard can be wider than
+// ceil(N / banks), e.g. when the weight is padded so every bank splits evenly across its readers; the last bank then
+// holds fewer tiles.
+inline uint32_t get_dram_width_shard_tiles(
+    uint32_t shard_width, uint32_t tile_width, uint32_t N, uint32_t num_dram_banks) {
+    TT_FATAL(
+        shard_width % tile_width == 0, "DRAM width-sharded in1 needs whole-tile shards, got width {}", shard_width);
+    const uint32_t shard_tiles = shard_width / tile_width;
+    TT_FATAL(
+        shard_tiles * num_dram_banks >= N,
+        "DRAM width-sharded in1 shards ({} tiles x {} banks) do not cover N = {} tiles",
+        shard_tiles,
+        num_dram_banks,
+        N);
+    return shard_tiles;
+}
+
 void validate_num_workers_per_dram_bank(std::size_t workers_per_bank);
 
 // use_multicore_pipeline with num_workers_per_dram_bank >= 2 runs the multi-core pipeline
