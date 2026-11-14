@@ -8,6 +8,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/metal_v2_artifacts.hpp"
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/math.hpp>
 #include <array>
 #include <bit>
 #include <cstdint>
@@ -62,9 +63,9 @@ inline std::uint32_t pack_fill_value_for_dtype(ttnn::DataType dtype, const ttnn:
     switch (dtype) {
         case ttnn::DataType::FLOAT32:
         case ttnn::DataType::BFLOAT16: return pack_fill_value(fill_value);
-        case ttnn::DataType::UINT16: return pack_fill_value(static_cast<std::uint16_t>(fill_value));
-        case ttnn::DataType::UINT32: return pack_fill_value(static_cast<std::uint32_t>(fill_value));
-        case ttnn::DataType::INT32: return pack_fill_value(static_cast<std::int32_t>(fill_value));
+        case ttnn::DataType::UINT16: return pack_fill_value(tt::saturating_cast<std::uint16_t>(fill_value));
+        case ttnn::DataType::UINT32: return pack_fill_value(tt::saturating_cast<std::uint32_t>(fill_value));
+        case ttnn::DataType::INT32: return pack_fill_value(tt::saturating_cast<std::int32_t>(fill_value));
         default: TT_THROW("fill_pad: unsupported dtype"); return 0u;
     }
 }
