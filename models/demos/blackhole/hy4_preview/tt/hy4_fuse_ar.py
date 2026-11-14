@@ -64,6 +64,8 @@ class Hy4FuseAR:
         assert cols == RING
         self.rows, self.stop, self.links, self.tileb = rows, stop, links, tileb
         assert NT % nred == 0 and nred % NPL == 0, nred
+        # fabric packet payload: one chunk (Q tiles of tileb bytes) is ONE packet; 6 x 1024 B = 6 KB (NP 4 at T 9..16) hung the device (persist w3 2026-11-14 12:11, triage unavailable): chunks must stay <= 4 KB
+        assert (NT // nred) * tileb <= 4096, (nred, tileb)
         self.NP, self.Q = (
             nred,
             NT // nred,
@@ -137,7 +139,8 @@ class Hy4FuseAR:
         c = self.md.worker_core_from_logical_core(ttnn.CoreCoord(x, y))
         return c.x, c.y
 
-    def _build(self, part, T):
+    def _build(self, part, T, ihc=None):
+        """ihc = (kernels, cbs) of the iHC pre program: they join every chip's program (the landing cores wait inside the iHC reader, so ar_land is not added)."""
         md = self.md
         TILE_B = tile_bytes(T)
         assert TILE_B <= self.tileb, (T, self.tileb)
@@ -256,17 +259,18 @@ class Hy4FuseAR:
                         config=ttnn.WriterConfigDescriptor(),
                     )
                 )
-                kernels.append(
-                    ttnn.KernelDescriptor(
-                        kernel_source=f"{KDIR}/ar_land.cpp",
-                        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-                        core_ranges=self.land_set,
-                        compile_time_args=[NP // NPL],
-                        runtime_args=ttnn.RuntimeArgs(),
-                        common_runtime_args=[gsem_addr],
-                        config=ttnn.ReaderConfigDescriptor(),
+                if ihc is None:
+                    kernels.append(
+                        ttnn.KernelDescriptor(
+                            kernel_source=f"{KDIR}/ar_land.cpp",
+                            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+                            core_ranges=self.land_set,
+                            compile_time_args=[NP // NPL],
+                            runtime_args=ttnn.RuntimeArgs(),
+                            common_runtime_args=[gsem_addr],
+                            config=ttnn.ReaderConfigDescriptor(),
+                        )
                     )
-                )
                 comm_kidx = {}
                 for name, ndist, dr in (("fwd", 4, 0), ("bwd", 3, 1)):
                     for lk in range(self.links):
@@ -304,6 +308,9 @@ class Hy4FuseAR:
                             )
                         )
                         comm_kidx[(name, lk)] = len(kernels) - 1
+                if ihc is not None:
+                    kernels += list(ihc[0])
+                    cbs += list(ihc[1])
                 prog = ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=cbs)
                 for (name, lk), ki in comm_kidx.items():
                     dst = fwd_n if name == "fwd" else bwd_n
@@ -391,6 +398,10 @@ def pre_with(ihc, far, x, w4, y, pp_prev, x_out):
     if part is None:
         return ihc.pre(x, w4, y=y, pp_prev=pp_prev, x_out=x_out)
     T = int(x.shape[2]) // 4
+    if os.environ.get("HY4_FAR_FUSED", "1") == "1":  # stage 2b: AR + iHC pre in ONE mesh program
+        res = ihc.pre(x, w4, fuse=(far, part), pp_prev=pp_prev, x_out=x_out)
+        ttnn.deallocate(part)
+        return res
     far(part, T=T)
     res = ihc.pre(x, w4, land=(far.out.buffer_address(), tile_bytes(T)), pp_prev=pp_prev, x_out=x_out)
     ttnn.deallocate(part)

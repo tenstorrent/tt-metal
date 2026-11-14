@@ -102,6 +102,10 @@ void kernel_main() {
     // landed in this core's persistent L1 buffer as LANDB / 64-row compact tiles (rows 0..LANDB/64-1 of face 0 at +0
     // and of face 1 at +LANDB/2) of the GPC tile columns of this core
     constexpr uint32_t LANDB = get_compile_time_arg_val(c_args.next_compile_time_args_offset());
+    // LANDW != 0: the all-reduce runs in THIS program (hy4_fuse_ar fused build): wait for the landing semaphore (one
+    // increment per reducer chunk of this core) before reading the landing buffer; the wait comes after every other
+    // read of the prologue was issued, so the DRAM traffic of the prologue overlaps the all-reduce
+    constexpr uint32_t LANDW = get_compile_time_arg_val(c_args.next_compile_time_args_offset() + 1);
     const auto b_acc = TensorAccessor(b_args, b_addr, TILE);
     const auto n_acc = TensorAccessor(n_args, n_addr, TILE);
     const auto p_acc = TensorAccessor(p_args, p_addr, TILE);
@@ -206,17 +210,7 @@ void kernel_main() {
     if constexpr (EXPAND) {
         // y [1,1,T,D] bf16 TILE: rows 0..T-1 of faces 0 and 1 of tile j (32 B per row); the previous pre|post tile
         // (face 0)
-        if constexpr (LANDB) {
-            volatile tt_l1_ptr uint32_t* ly =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_common_arg_val<uint32_t>(9));
-            volatile tt_l1_ptr uint32_t* yb = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cby.get_write_ptr());
-            for (uint32_t j = 0; j < GPC; ++j) {
-                for (uint32_t w = 0; w < T * 8; ++w) {
-                    yb[j * 512 + w] = ly[j * (LANDB / 4) + w];                      // face 0 rows 0..T-1
-                    yb[j * 512 + 128 + w] = ly[j * (LANDB / 4) + (LANDB / 8) + w];  // face 1 rows 0..T-1
-                }
-            }
-        } else {
+        if constexpr (!LANDB) {
             for (uint32_t j = 0; j < GPC; ++j) {
                 noc.async_read(y_acc, cby, T * 32, {.page_id = j0 + j, .offset_bytes = 0}, {.offset_bytes = j * 2048});
                 noc.async_read(
@@ -256,6 +250,23 @@ void kernel_main() {
             for (uint32_t i = 0; i < 4; ++i) {
                 const uint32_t r = 4 * (t & 7) + i;
                 Mg[((r >> 4) << 9) + ((t >> 4) << 8) + ((r & 15) << 4) + (t & 15)] = qq[t * 16 + 4 + i];
+            }
+        }
+        if constexpr (LANDB) {
+            if constexpr (LANDW) {
+                volatile tt_l1_ptr uint32_t* lsem =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_common_arg_val<uint32_t>(10));
+                noc_semaphore_wait_min(lsem, LANDW);
+                noc_semaphore_set(lsem, 0);
+            }
+            volatile tt_l1_ptr uint32_t* ly =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_common_arg_val<uint32_t>(9));
+            volatile tt_l1_ptr uint32_t* yb = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cby.get_write_ptr());
+            for (uint32_t j = 0; j < GPC; ++j) {
+                for (uint32_t w = 0; w < T * 8; ++w) {
+                    yb[j * 512 + w] = ly[j * (LANDB / 4) + w];                      // face 0 rows 0..T-1
+                    yb[j * 512 + 128 + w] = ly[j * (LANDB / 4) + (LANDB / 8) + w];  // face 1 rows 0..T-1
+                }
             }
         }
         cbxr.push_back(G * GPC);

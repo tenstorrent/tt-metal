@@ -12,6 +12,7 @@ import torch
 
 import ttnn
 from models.demos.blackhole.hy4_preview.tests.dev_common import ACTS, pcc, rep
+from models.demos.blackhole.hy4_preview.tt import hy4_fuse_ar as FAR
 from models.demos.blackhole.hy4_preview.tt.hy4_fuse_ar import Hy4FuseAR
 from models.demos.blackhole.hy4_preview.tt.hy4_ihc_fused import R0, Hy4IHCFused
 from models.demos.gpt_oss.tt.ccl import CCLManager
@@ -80,7 +81,7 @@ def main():
             ccl = CCLManager(md, num_links=2, topology=ttnn.Topology.Ring)
         far = Hy4FuseAR(
             md,
-            tileb=512,
+            tileb=1024 if max(TS) > 8 else 512,
             links=int(os.environ.get("LINKS", 2)),
             ihc_row0=R0,
             nred=int(os.environ.get("NRED", 4)),
@@ -139,13 +140,24 @@ def main():
                 # new path: one-shot AR -> landing -> pre(land=...)
                 far(part, T=T)
                 h_n, _, pp_n, xn_n = fu.pre(
-                    x_b, w4, land=(far.out.buffer_address(), 512), pp_prev=pp0, x_out=rep(md, xin, dtype=ttnn.float32)
+                    x_b,
+                    w4,
+                    land=(far.out.buffer_address(), FAR.tile_bytes(T)),
+                    pp_prev=pp0,
+                    x_out=rep(md, xin, dtype=ttnn.float32),
+                )
+                # stage 2b: AR + iHC in ONE mesh program
+                x_c = rep(md, xin, dtype=ttnn.float32)
+                h_f, _, pp_f, xn_f = fu.pre(
+                    x_c, w4, fuse=(far, part), pp_prev=pp0, x_out=rep(md, xin, dtype=ttnn.float32)
                 )
                 ttnn.synchronize_device(md)
                 ysum = parts.float().sum(0)[0, :T]
                 row0 = dict(stock_vs_torch=round(pcc(d0(y).reshape(32, HID).float()[:T], ysum), 6))
                 lh = ttnn.to_torch(far.out, mesh_composer=ttnn.ConcatMeshToTensor(md, dim=0))
-                row0["far_vs_torch"] = round(pcc(Hy4FuseAR.decode(lh[0:32].reshape(32, -1), T, 512), ysum), 6)
+                row0["far_vs_torch"] = round(
+                    pcc(Hy4FuseAR.decode(lh[0:32].reshape(32, -1), T, FAR.tile_bytes(T)), ysum), 6
+                )
                 print("IFAR direct", T, call, row0, flush=True)
                 post = d0(pp0).reshape(32, 32).float()[:T, 4:8]
                 xn_t = xin.reshape(T, 4, HID).float() + post[:, :, None] * ysum[:, None, :]
@@ -160,6 +172,9 @@ def main():
                         pcc(d0(pp_n).reshape(32, 32).float()[:T, :8], d0(pp_r).reshape(32, 32).float()[:T, :8]), 6
                     ),
                 )
+                row["fused_h_vs_ref"] = round(pcc(d0(h_f).reshape(T, HID).float(), d0(h_r).reshape(T, HID).float()), 6)
+                row["fused_xnew_vs_ref"] = round(pcc(d0(xn_f).reshape(T, 4, HID).float(), ref), 6)
+                row["fused_xnew_vs_torch"] = round(pcc(d0(xn_f).reshape(T, 4, HID).float(), xn_t), 6)
                 ok.append(row)
                 print("IFAR gate", T, call, row, flush=True)
             res[f"gate_T{T}"] = ok
@@ -174,7 +189,7 @@ def main():
             )
             xs = rep(md, X4[:T].reshape(1, 1, 4 * T, HID), dtype=ttnn.float32)
             _, _, ppT = fu.pre(rep(md, X4[:T].reshape(1, 1, 4 * T, HID), dtype=ttnn.float32), w4)
-            land = (far.out.buffer_address(), 512)
+            land = (far.out.buffer_address(), FAR.tile_bytes(T))
 
             def ref_chain():
                 yy = stock(part)
@@ -184,6 +199,9 @@ def main():
                 far(part, T=T)
                 return fu.pre(xs, w4, land=land, pp_prev=ppT, x_out=xs)
 
+            def fused_chain():
+                return fu.pre(xs, w4, fuse=(far, part), pp_prev=ppT, x_out=xs)
+
             for name, fn in (
                 ("ihc_only_dram_y", lambda: fu.pre(xs, w4, y=part, pp_prev=ppT, x_out=xs)),
                 ("far_only", lambda: far(part, T=T)),
@@ -191,6 +209,7 @@ def main():
                 ("ihc_only_land", lambda: fu.pre(xs, w4, land=land, pp_prev=ppT, x_out=xs)),
                 ("ref_chain_stockAR+ihc", ref_chain),
                 ("new_chain_far+ihc", new_chain),
+                ("fused_chain_far+ihc_1prog", fused_chain),
             ):
                 try:
                     res[f"{name}_us_T{T}"] = slope(md, fn)
