@@ -328,3 +328,20 @@ def test_sampling_subcores_callback(shape, k, p, seed, k_dtype, device, sub_core
 
     logger.info(f"cache_entries_counter.total={device.cache_entries_counter.total}")
     assert device.cache_entries_counter.total > 0
+
+
+def test_sampling_rejects_single_tile_candidates(device):
+    values = ttnn.from_torch(torch.randn(1, 1, 32, 32), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    indices = ttnn.from_torch(
+        torch.arange(32, dtype=torch.int32).repeat(1, 1, 32, 1),
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+    k = ttnn.from_torch(
+        torch.ones(32, dtype=torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    p = ttnn.from_torch(torch.zeros(32), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    temp = ttnn.from_torch(torch.ones(32), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    with pytest.raises(RuntimeError, match="at least 2"):
+        ttnn.sampling(values, indices, k=k, p=p, temp=temp, seed=1)
