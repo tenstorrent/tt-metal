@@ -121,5 +121,6 @@ if __name__ == "__main__":
         config=grpo_config,
         reward_funcs=[accuracy_reward, brevity_reward],
         optimizer_dict=optimizer_dict,
+        precision=training_config.precision,
     )
     grpo_trainer.train()

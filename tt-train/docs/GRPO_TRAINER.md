@@ -330,6 +330,8 @@ GRPOTrainer(
     optimizer_dict=None,
     callbacks=None,
     reward_funcs=None,
+    *,
+    precision=None,
 )
 ```
 
@@ -344,6 +346,7 @@ GRPOTrainer(
 | `optimizer_dict` | `dict` | Optimizer config dict passed to the [ttml optimizer registry](TTML_ONBOARDING.md). Must include a `"type"` key. |
 | `callbacks` | `list[TrainerCallback] \| None` | Hooks into the training loop (see [Callbacks](#callbacks)). |
 | `reward_funcs` | `list[Callable] \| None` | Reward functions summed per completion; with more than one, each one's mean is logged as `<name>_mean`. |
+| `precision` | `dict \| None` | Keyword argument. The YAML's `training_config.precision` block as a dict, applied right after the model is built, before its weights load (see [Precision](#precision)). `None` (default) means no block. |
 
 The constructor opens the device, loads the model, builds the rollout
 sampler (in-process), the optimizer and the LR scheduler, tokenizes the
@@ -598,6 +601,26 @@ built-in optimizers.
 
 ---
 
+## Precision
+
+`precision=` takes the YAML's `training_config.precision` block as a dict (see [Mixed Precision](MIXED_PRECISION.md)):
+
+```python
+raw = load_config(config_path)
+training_config = TrainingConfig(raw)  # checks the block: a typo stops here, before the model is built
+trainer = GRPOTrainer(..., optimizer_dict=raw["training_config"]["optimizer"], precision=training_config.precision)
+```
+
+The trainer applies it once, right after it builds the model and before the weights or a trainer checkpoint load, so
+fp32 master weights resume from a checkpoint bit for bit and the optimizer state follows the stored dtype. Qwen3 under
+eager FSDP loads the HF weights into the replicated model and converts after sharding, so no device holds the whole
+model in fp32; the HF weights are bf16, so the values are the same. `None` (default) means no block: the parameters
+keep their dtype and no reduce dtype is stored. fp32 master weights (`master_dtype: float32`) need `"type": "AdamW"`,
+because `MorehAdamW` takes bf16 parameters only. `reduce_dtype: float32` works with either optimizer and also adds up
+the micro-batches' gradients in fp32.
+
+---
+
 ## Device Config
 
 `GRPOTrainer` opens the mesh from `device_config` and reads the topology
@@ -696,8 +719,9 @@ To start from a checkpoint's weights, point `model_source` at the checkpoint
 directory (it contains `checkpoint.pkl` and the tokenizer files). A
 `model.safetensors` with ttml parameter names (the old GRPO checkpoint format)
 raises `ValueError`, and a HuggingFace source must provide every model weight.
-Only the weights are loaded: the optimizer starts fresh and the LR schedule
-restarts at step 0. The checkpoint directory must hold `config.json`;
+Only the weights are loaded, each in the dtype its parameter is stored in, so with
+the same `precision` block fp32 master weights resume bit for bit: the optimizer
+starts fresh and the LR schedule restarts at step 0. The checkpoint directory must hold `config.json`;
 `save_checkpoint` writes it from `model_source`. If that write fails,
 `save_checkpoint` only logs a warning, and the checkpoint cannot be resumed.
 
