@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <optional>
 #include <string>
 #include <tuple>
@@ -176,6 +177,33 @@ PreprocessedPyTensor parse_py_tensor(nb::ndarray<nb::array_api> py_tensor, std::
 
     TT_FATAL(converted_tensor_handle != nullptr, "parse_py_tensor: ndarray_import failed.");
     return {.contiguous_py_tensor = nb::ndarray<nb::array_api>(converted_tensor_handle), .data_type = data_type};
+}
+
+// torch.int64 has no ttnn counterpart and defaults to UINT32. Refuse values UINT32 cannot hold instead of letting the
+// import wrap them (-2 would become 4294967294).
+void validate_int64_fits_default_uint32(nb::ndarray<nb::array_api> py_tensor) {
+    nb::detail::ndarray_config config(decltype(py_tensor)::Config{});
+    config.dtype = nb::dtype<int64_t>();
+    config.order = nb::c_contig::value;
+    config.device_type = nb::device::cpu::value;
+
+    nb::detail::ndarray_handle* handle = nanobind::detail::ndarray_import(
+        py_tensor.cast(nb::rv_policy::automatic).ptr(), &config, true /*convert*/, nullptr /*cleanup*/);
+    TT_FATAL(handle != nullptr, "validate_int64_fits_default_uint32: ndarray_import failed.");
+    const nb::ndarray<nb::array_api> contiguous(handle);
+
+    const auto* data = static_cast<const int64_t*>(contiguous.data());
+    const auto* end = data + contiguous.size();
+    const auto [min_it, max_it] = std::minmax_element(data, end);
+    if (min_it == end) {
+        return;
+    }
+    TT_FATAL(
+        *min_it >= 0 && *max_it <= static_cast<int64_t>(std::numeric_limits<uint32_t>::max()),
+        "torch.int64 tensors default to ttnn.uint32, which cannot hold values in [{}, {}]; pass an explicit dtype, "
+        "e.g. dtype=ttnn.int32",
+        *min_it,
+        *max_it);
 }
 
 // Wrapper around HostBuffer that provides a row-major view of the data, handles padding / logical view, and provides
@@ -778,6 +806,9 @@ void pytensor_module(nb::module_& mod) {
 
                 auto src_dtype = get_PyDType_from_dtype(py_tensor_dtype);
                 auto dst_dtype = optional_data_type.value_or(get_ttnn_datatype_from_dtype(py_tensor_dtype));
+                if (!optional_data_type.has_value() && src_dtype == PyDType::INT64) {
+                    CMAKE_UNIQUE_NAMESPACE::validate_int64_fits_default_uint32(dlpack_tensor);
+                }
 
                 const bool tile_layout_by_default =
                     (dst_dtype == DataType::BFLOAT4_B || dst_dtype == DataType::BFLOAT8_B || is_mx(dst_dtype));

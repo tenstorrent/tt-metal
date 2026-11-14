@@ -16,6 +16,37 @@ def test_from_torch_none():
     assert ttnn.from_torch(None) is None
 
 
+def test_from_torch_int16_default_keeps_negative_values():
+    torch_input = torch.tensor([-32768, -2, -1, 0, 1, 32767], dtype=torch.int16)
+    tensor = ttnn.from_torch(torch_input)
+    assert tensor.dtype == ttnn.int32
+    assert torch.equal(ttnn.to_torch(tensor), torch_input.to(torch.int32))
+
+
+@pytest.mark.parametrize(
+    "values",
+    [[-2, -1, 0, 1], [0, 2**32], [-(2**40), 5]],
+    ids=["negative", "above_uint32_max", "far_negative"],
+)
+def test_from_torch_int64_default_rejects_values_outside_uint32(expect_error, values):
+    with expect_error(RuntimeError, "cannot hold values"):
+        ttnn.from_torch(torch.tensor(values, dtype=torch.int64))
+
+
+def test_from_torch_int64_default_in_range_is_uint32():
+    torch_input = torch.tensor([0, 1, 65535, 2**32 - 1], dtype=torch.int64)
+    tensor = ttnn.from_torch(torch_input)
+    assert tensor.dtype == ttnn.uint32
+    assert torch.equal(ttnn.to_torch(tensor).to(torch.int64), torch_input)
+
+
+def test_from_torch_int64_negative_with_explicit_int32():
+    torch_input = torch.tensor([-(2**31), -2, -1, 0, 2**31 - 1], dtype=torch.int64)
+    tensor = ttnn.from_torch(torch_input, dtype=ttnn.int32)
+    assert tensor.dtype == ttnn.int32
+    assert torch.equal(ttnn.to_torch(tensor), torch_input.to(torch.int32))
+
+
 @pytest.mark.parametrize(
     "shape",
     [
