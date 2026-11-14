@@ -26,7 +26,11 @@ SHARED_ATT = {
     "1M": {1: 153.0, 2: 160.0, 4: 187.0},
 }
 # MTP layer (no routed experts) us per call, S rows: filled from bench2 (S=1) / bench3 (S=4); S=2 interpolated
-MTP_US = {"2k": {1: 1482.0, 4: 1650.0}, "64k": {1: 1596.0, 4: 1778.0}, "1M": {1: 2330.0, 4: 2508.0}}
+MTP_US = {
+    "2k": {1: 1469.0, 2: 1515.0, 4: 1583.0},
+    "64k": {1: 1586.0, 2: 1616.0, 4: 1687.0},
+    "1M": {1: 2320.0, 2: 2360.0, 4: 2431.0},
+}  # bench5/6/7 logs (merged vrows code)
 HEAD_SAMPLE_MS = 0.62
 ROUND_OVH_MS = 0.91  # accept + derive x k + feedback glue in the trace: measured tail (7722 us, k=3, no routed experts) minus 3 MTP passes (3 x 1650) minus 3 heads (3 x 620)
 
@@ -49,7 +53,10 @@ def verify_ms(ctx, k):
 
 def mtp_ms(ctx, S):
     t = MTP_US[ctx]
-    us = t[1] + (t[4] - t[1]) * (S - 1) / 3
+    if S in t:
+        us = t[S]
+    else:  # S = 3: between S = 2 and S = 4
+        us = t[2] + (t[4] - t[2]) * (S - 2) / 2
     return (us + moe(4 * S)) / 1e3 + HEAD_SAMPLE_MS
 
 

@@ -15,7 +15,8 @@ import torch
 from models.demos.blackhole.hy4_preview.reference.dump_ref import SHORT, long_prompt  # noqa: F401
 from models.demos.blackhole.hy4_preview.reference.oracle import Conv, Hy4Oracle, mtp_forward
 
-CHUNK = 24
+CHUNK = int(os.environ.get("ALPHA_CHUNK", "24"))
+STRIDE = int(os.environ.get("ALPHA_STRIDE", "1"))  # recursion (alpha_2, alpha_3) on every STRIDE-th row t only
 
 
 def chain_alpha(o, ids, H, k=3, zero0=False, conv=None):
@@ -35,38 +36,42 @@ def chain_alpha(o, ids, H, k=3, zero0=False, conv=None):
     hit = [(d[0][: N - 1] == main[1:N])]  # vs main[t+1]
     res["alpha_1"] = hit[0].float().mean().item()
     res["n1"] = int(hit[0].numel())
-    ok = hit[0].clone()
+    ok = {t: bool(hit[0][t]) for t in range(N - 1)}  # chain alive after step 1 (d_1 accepted)
+    dmap = [{t: d[0][t] for t in range(N - 1)}]  # dmap[i][t] = draft token of step i+1 for row t
+    omap = [{t: o0[t] for t in range(N - 1)}]  # omap[i][t] = MTP output hidden of step i+1 for row t
     for j in range(1, k):
-        T = N - 1 - j  # rows t with main[t+j+1] defined: t+j+1 <= N-1
-        if T <= 0:
+        ts = [
+            t for t in range(0, N - 1 - j) if t % STRIDE == 0 and t in dmap[j - 1]
+        ]  # rows with main[t+j+1] defined (t+j+1 <= N-1)
+        if not ts:
             break
         L = N  # padded length
-        oj_last = []
+        newd, newo = {}, {}
         for c0 in range(
-            0, T, CHUNK
-        ):  # sequences of different t share nothing but the prefix: chunked (attention scores are [chunk, 64, L, L] fp32)
-            tt_ = range(c0, min(T, c0 + CHUNK))
+            0, len(ts), CHUNK
+        ):  # sequences of different t share only the prefix: chunked (attention scores are [chunk, 64, L, L] fp32)
+            tt_ = ts[c0 : c0 + CHUNK]
             toks = torch.zeros(len(tt_), L, dtype=torch.long)
             hid = torch.zeros(len(tt_), L, D)
             for b, t in enumerate(tt_):
                 toks[b, : t + 1] = ids[1 : t + 2]
                 hid[b, : t + 1] = H[: t + 1]
-                for i in range(1, j + 1):  # recursive rows t+i (previous recursive outputs from the earlier j loops)
-                    toks[b, t + i] = d[i - 1][t]
-                    hid[b, t + i] = outs[i - 1][t]
+                for i in range(1, j + 1):  # recursive rows t+i
+                    toks[b, t + i] = dmap[i - 1][t]
+                    hid[b, t + i] = omap[i - 1][t]
             oj = mtp_forward(o.ck, hid, toks, conv, embed=embed, zero_pos0=zero0)  # [B,L,D]
-            oj_last += [oj[b, t + j] for b, t in enumerate(tt_)]
-        oj_last = torch.stack(oj_last)
-        dj = o.logits(oj_last).argmax(-1)
-        d.append(dj)
-        outs.append(oj_last)
-        tgt = main[j + 1 : j + 1 + T]  # main[t+j+1]
-        hj = dj == tgt
-        cond = ok[:T]
-        res[f"alpha_{j+1}_cond"] = (hj & cond).float().sum().item() / max(1, cond.float().sum().item())
-        res[f"alpha_{j+1}_uncond"] = hj.float().mean().item()
-        res[f"n{j+1}"] = int(cond.sum())
-        ok = ok[:T] & hj
+            last = torch.stack([oj[b, t + j] for b, t in enumerate(tt_)])
+            dj = o.logits(last).argmax(-1)
+            for b, t in enumerate(tt_):
+                newd[t], newo[t] = dj[b], last[b]
+        dmap.append(newd)
+        omap.append(newo)
+        hj = {t: bool(newd[t] == main[t + j + 1]) for t in ts}
+        alive = [t for t in ts if ok[t]]
+        res[f"alpha_{j+1}_cond"] = sum(hj[t] for t in alive) / max(1, len(alive))
+        res[f"alpha_{j+1}_uncond"] = sum(hj.values()) / len(ts)
+        res[f"n{j+1}"] = len(alive)
+        ok = {t: ok[t] and hj[t] for t in ts}
     return res
 
 

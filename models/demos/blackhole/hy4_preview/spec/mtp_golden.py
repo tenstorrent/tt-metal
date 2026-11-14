@@ -51,6 +51,7 @@ def mtp_taps(o, ids, H, conv=None):
         x2=x2[0],
         out=out[0],
         d1=d1,
+        main=main,
         routes=routes[0][0],
         idx=None if idx is None else idx[0],
     )
