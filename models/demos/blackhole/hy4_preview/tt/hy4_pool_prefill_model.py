@@ -10,12 +10,14 @@ One user per mesh row (4 on the 4x8 mesh; 1 on a 1x8 slot for wiring tests). Chu
 one computes pad tokens (id PAD) in the remaining chunks; those pool rows lie at positions >= its length, are masked by the decode (ids < pos + 1) and overwritten as it generates.
 MTP prompt KV (layer 78) is NOT written (see INTERFACE.md of this task): a spec round at the first step reads an empty MTP prompt cache (lower acceptance only; the target verification stays exact).
 """
+import threading
 import time
 from dataclasses import dataclass, field
 
 import torch
 
 import ttnn
+from models.demos.blackhole.hy4_preview.tt.hy4_chain import dram_view
 
 PAD = 120002  # same pad id as the needle runners
 
@@ -37,14 +39,44 @@ def decode_bucket(max_len, pages):
     return min(pages * 512 // 256 * 256, (-(-max_len // 4096)) * 4096)
 
 
+class MemSampler:
+    """background sampler of the mesh DRAM allocator (host-side state, updated at op dispatch): records the peak allocated bytes per bank (= low-water mark of the free DRAM) between reset() calls.
+    Opt-in (mem_sample_s > 0): get_memory_view from a second thread every mem_sample_s seconds (misses allocations shorter than the interval; chunk-boundary values are a lower bound of use).
+    """
+
+    def __init__(self, md, interval):
+        self.md, self.interval, self.stop = md, interval, False
+        self.peak, self.min_free, self.n = 0, 1 << 62, 0
+        self.th = threading.Thread(target=self._run, daemon=True)
+        self.th.start()
+
+    def _run(self):
+        while not self.stop:
+            v = dram_view(self.md)
+            a = v.get("alloc_per_bank", -1)
+            if a >= 0:
+                self.peak = max(self.peak, a)
+                self.min_free = min(self.min_free, v["free_per_bank"])
+                self.n += 1
+            time.sleep(self.interval)
+
+    def reset(self):
+        r = (self.peak, self.min_free, self.n)
+        self.peak, self.min_free, self.n = 0, 1 << 62, 0
+        return r
+
+
 class Hy4PoolPrefill:
-    def __init__(self, dec, pf_rows=512, log=None):
+    def __init__(self, dec, pf_rows=512, log=None, mem_sample_s=0.0):
         assert pf_rows in (512, 1024)
         self.dec, self.ch, self.md = dec, dec.ch, dec.ch.md
         self.rows = int(self.md.shape[0])
         self.cols = int(self.md.shape[1])
         self.pf_rows = pf_rows
         self.log = log or (lambda **kw: None)
+        self.mem = MemSampler(self.md, mem_sample_s) if mem_sample_s > 0 else None
+        self.mem_peak_per_bank = 0  # max over all prefill chunks of the sampled peak allocation
+        self.mem_min_free_per_bank = 1 << 62
         for ly in self.ch.layers:
             assert hasattr(ly.attn, "_pf_chunk512"), "chain not built with HY4_POOL=1 HY4_POOL_PF=1"
 
@@ -79,6 +111,8 @@ class Hy4PoolPrefill:
                 if seg:
                     ids[r, : len(seg)] = torch.tensor(seg)
             tc = time.time()
+            if self.mem:
+                self.mem.reset()
             x4, ids_by_layer = ch.prefill(ids, start=c * PF, ids_by_layer=ids_by_layer)
             enders = [r for r in range(self.rows) if c * PF <= lens[r] - 1 < (c + 1) * PF]
             if enders:
@@ -102,7 +136,13 @@ class Hy4PoolPrefill:
             ttnn.deallocate(x4)
             dt = time.time() - tc
             res.chunk_sec.append(dt)
-            self.log(event="prefill_chunk", c=c, of=nch, chunk_sec=round(dt, 3), sec=round(time.time() - t0, 1))
+            mem = {}
+            if self.mem:
+                pk, mf, n = self.mem.reset()
+                self.mem_peak_per_bank = max(self.mem_peak_per_bank, pk)
+                self.mem_min_free_per_bank = min(self.mem_min_free_per_bank, mf)
+                mem = dict(peak_alloc_per_bank=pk, min_free_per_bank=mf, mem_samples=n)
+            self.log(event="prefill_chunk", c=c, of=nch, chunk_sec=round(dt, 3), sec=round(time.time() - t0, 1), **mem)
         for t in ids_by_layer.values():
             ttnn.deallocate(t)
         res.total_sec = time.time() - t0
