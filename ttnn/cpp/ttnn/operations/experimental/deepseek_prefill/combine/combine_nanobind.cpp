@@ -89,7 +89,7 @@ void bind_combine(nb::module_& mod) {
         nb::arg("seq_len_per_chip"),
         nb::arg("memory_config") = nb::none(),
         nb::arg("subdevice_id") = nb::none(),
-        nb::arg("cluster_axis") = nb::none(),
+        nb::arg("cluster_axis") = 0,
         nb::arg("num_links") = 1,
         nb::arg("topology") = nb::cast(tt::tt_fabric::Topology::Linear),
         nb::arg("init_zeros") = true,

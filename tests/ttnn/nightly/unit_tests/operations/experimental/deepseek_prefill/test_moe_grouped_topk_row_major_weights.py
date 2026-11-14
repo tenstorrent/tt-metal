@@ -111,3 +111,15 @@ def test_row_major_weights_rejects_unsupported_width(device, expect_error):
     inputs = _inputs(device, (1, 1, 32, 256), ttnn.float32, 1049)
     with expect_error(RuntimeError, "at most 32 activated experts"):
         _gate(inputs, 64, 1, ttnn.L1_MEMORY_CONFIG, ttnn.ROW_MAJOR_LAYOUT)
+
+
+def test_tile_weights_rejects_more_than_one_tile_of_experts(device, expect_error):
+    inputs = _inputs(device, (1, 1, 256, 384), ttnn.float32, 1049)
+    with expect_error(RuntimeError, "one tile of weights"):
+        _gate(inputs, 64, 1, ttnn.L1_MEMORY_CONFIG, ttnn.TILE_LAYOUT)
+
+
+def test_single_group_rejects_one_tile_of_experts(device, expect_error):
+    inputs = _inputs(device, (1, 1, 32, 32), ttnn.float32, 1049)
+    with expect_error(RuntimeError, "at least 64 experts"):
+        _gate(inputs, 8, 1, ttnn.L1_MEMORY_CONFIG, ttnn.TILE_LAYOUT)

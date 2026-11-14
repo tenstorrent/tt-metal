@@ -201,11 +201,18 @@ void kernel_main() {
                     noc.async_read(
                         weight_addrg,
                         cb_weights,
-                        weight_tile_size,
+                        weights_aligned_page_size,
                         {.page_id = weight_page_idx},
                         {.offset_bytes = slot_offset});
                 }
                 noc.async_read_barrier();
+                if constexpr (!weights_per_token) {
+                    // A page read fills element 0 only; the zero test also reads element 1, as above.
+                    for (uint32_t e = 0; e < weights_per_batch; ++e) {
+                        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(
+                            cb_weights.get_write_ptr() + e * weight_tile_size)[1] = 0;
+                    }
+                }
                 cb_weights.push_back(weights_per_batch);
             }
         }

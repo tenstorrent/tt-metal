@@ -126,7 +126,7 @@ void bind_dispatch(nb::module_& mod) {
         nb::arg("scales_tensor") = nb::none(),
         nb::arg("memory_config") = nb::none(),
         nb::arg("subdevice_id") = nb::none(),
-        nb::arg("cluster_axis") = nb::none(),
+        nb::arg("cluster_axis") = 0,
         nb::arg("num_links") = 1,
         nb::arg("topology") = nb::cast(tt::tt_fabric::Topology::Linear),
         nb::arg("use_l1_small_for_semaphores") = false,

@@ -82,10 +82,13 @@ void MoeGroupedTopkDeviceOperation::validate_on_program_cache_miss(
         // topk_groups / summed_experts_per_group are unused by the kernel on this path. The expert
         // count is variable (any tile-aligned width, e.g. Kimi's 384), not hardcoded to DeepSeek.
         TT_FATAL(experts % 32 == 0, "Number of experts must be a multiple of the tile width (32). Got {}", experts);
+        // blocks::topk starts by sorting the first two tiles of experts together.
+        TT_FATAL(experts >= 64, "A single expert group needs at least 64 experts (two tiles). Got {}", experts);
         TT_FATAL(attributes.n_activated_experts > 0, "n_activated_experts must be > 0");
+        // The weights are gathered into and normalized from a single tile of 32 experts.
         TT_FATAL(
-            attributes.n_activated_experts <= 64,
-            "n_activated_experts must be <= 64 (topk limit). Got {}",
+            attributes.n_activated_experts <= 32,
+            "n_activated_experts must be <= 32 (one tile of weights). Got {}",
             attributes.n_activated_experts);
         TT_FATAL(
             attributes.n_activated_experts <= experts,
