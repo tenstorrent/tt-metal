@@ -1,0 +1,4 @@
+{
+  "arch": "HYV4ForCausalLM",
+  "main_class": "models.demos.blackhole.hy4_preview.tt.generator_vllm:HYV4ForCausalLM"
+}
