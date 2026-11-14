@@ -23,7 +23,7 @@ from models.demos.vision.generative.stable_diffusion.wormhole.tt.ttnn_functional
     post_process_output_and_move_to_host,
     preprocess_and_push_input_to_device,
 )
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SD_L1_SMALL_SIZE}], indirect=True)

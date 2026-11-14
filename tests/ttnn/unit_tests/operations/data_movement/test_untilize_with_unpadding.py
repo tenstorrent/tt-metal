@@ -27,7 +27,7 @@ def isolate_program_cache(device):
     device.disable_and_clear_program_cache()
 
 
-@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16, ttnn.uint16])
 @pytest.mark.parametrize(
     "shape_output_end",
     [
@@ -46,7 +46,10 @@ def isolate_program_cache(device):
 def test_untilize_with_unpadding_fp32(device, dtype, shape_output_end, input_buffer_type, output_buffer_type):
     torch.manual_seed(42)
     shape, output_end = shape_output_end
-    torch_tensor = torch.rand(shape, dtype=TTNN_TO_TORCH_DTYPE[dtype])
+    if dtype == ttnn.uint16:
+        torch_tensor = torch.randint(0, 2**16, shape, dtype=torch.uint16)
+    else:
+        torch_tensor = torch.rand(shape, dtype=TTNN_TO_TORCH_DTYPE[dtype])
 
     input_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, input_buffer_type)
     output_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, output_buffer_type)

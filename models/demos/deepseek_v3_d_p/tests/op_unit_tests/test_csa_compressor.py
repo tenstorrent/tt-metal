@@ -20,7 +20,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.compressor import (
     csa_state_predecessor_ca,
     csa_state_rows,
 )
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 _BATCH = 1
 _COMPRESS_RATE = 4

@@ -53,7 +53,7 @@ import torch
 
 import ttnn
 from models.common.utility_functions import is_wormhole_b0
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 # bf16 + LoFi accumulation over a deep K (up to 144) is noisy -> 0.98 (matches test_matmul_dram_weights_kspill).
 PCC = 0.98

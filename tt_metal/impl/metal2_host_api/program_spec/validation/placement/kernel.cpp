@@ -11,7 +11,7 @@
 #include "impl/metal2_host_api/helpers.hpp"
 #include "impl/metal2_host_api/program_spec/validation/placement/placement.hpp"
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal {
 
 // On Gen1 (WH/BH), the DM kernels sharing a node must be mutually coherent:
 //   1. Distinct DM processors (RISCV_0 vs RISCV_1) — no two kernels may pin the same RISC.
@@ -106,4 +106,4 @@ void ValidateGen1DMPlacement(const ValidationContext& ctx, tt::ARCH arch) {
     }
 }
 
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal

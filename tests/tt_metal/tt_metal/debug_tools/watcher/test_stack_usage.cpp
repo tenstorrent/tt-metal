@@ -63,8 +63,8 @@ void RunOneTest(
     auto num_compute_types = hal.get_processor_types_count(HalProgrammableCoreType::TENSIX, 1);
 
     // TENSIX kernels are launched via Metal 2.0 on both gen1 (WH/BH) and gen2 (Quasar).
-    std::vector<experimental::KernelSpec> kernel_specs;
-    std::vector<experimental::KernelSpecName> kernel_names;
+    std::vector<KernelSpec> kernel_specs;
+    std::vector<KernelSpecName> kernel_names;
 
     if (is_quasar) {
         // On Quasar, DM0/DM1 are reserved for internal use; user kernels can only run on DM2..DM7.
@@ -85,24 +85,24 @@ void RunOneTest(
 
         for (uint32_t i = 0; i < num_kernels; i++) {
             std::string name = fmt::format("dm_{}", i);
-            kernel_specs.push_back(experimental::KernelSpec{
-                .unique_id = experimental::KernelSpecName{name},
+            kernel_specs.push_back(KernelSpec{
+                .unique_id = KernelSpecName{name},
                 .source = path_metal2,
                 .num_threads = dms_per_kernel,
                 .compile_time_args = {{"usage", free}},
-                .hw_config = experimental::DataMovementHardwareConfig{},
+                .hw_config = DataMovementHardwareConfig{},
             });
             kernel_names.emplace_back(name);
         }
-        const experimental::KernelSpecName COMPUTE_NAME{"compute"};
-        kernel_specs.push_back(experimental::KernelSpec{
+        const KernelSpecName COMPUTE_NAME{"compute"};
+        kernel_specs.push_back(KernelSpec{
             .unique_id = COMPUTE_NAME,
             .source = path_metal2,
             // One thread per Neo (Quasar Tensix has 4) so the compute kernel fans out across
             // all Neos; each Neo internally runs the kernel on its 4 TRISCs.
             .num_threads = 4,
             .compile_time_args = {{"usage", free}},
-            .hw_config = experimental::ComputeHardwareConfig{},
+            .hw_config = ComputeHardwareConfig{},
         });
         kernel_names.push_back(COMPUTE_NAME);
     } else {
@@ -113,15 +113,15 @@ void RunOneTest(
             std::string name = fmt::format("dm_{}", type_idx);
             auto processor = static_cast<tt::tt_metal::DataMovementProcessor>(type_idx);
             auto noc = (type_idx == 1) ? tt::tt_metal::NOC::RISCV_1_default : tt::tt_metal::NOC::RISCV_0_default;
-            kernel_specs.push_back(experimental::KernelSpec{
-                .unique_id = experimental::KernelSpecName{name},
+            kernel_specs.push_back(KernelSpec{
+                .unique_id = KernelSpecName{name},
                 .source = path_metal2,
                 .num_threads = 1,
                 .compile_time_args = {{"usage", free}},
                 .hw_config =
-                    experimental::DataMovementHardwareConfig{
+                    DataMovementHardwareConfig{
                         .config_1xx =
-                            experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                            DataMovementHardwareConfig::DataMovement1XXConfig{
                                 .processor = processor,
                                 .noc = noc,
                             },
@@ -129,28 +129,28 @@ void RunOneTest(
             });
             kernel_names.emplace_back(name);
         }
-        const experimental::KernelSpecName COMPUTE_NAME{"compute"};
-        kernel_specs.push_back(experimental::KernelSpec{
+        const KernelSpecName COMPUTE_NAME{"compute"};
+        kernel_specs.push_back(KernelSpec{
             .unique_id = COMPUTE_NAME,
             .source = path_metal2,
             .num_threads = 1,
             .compile_time_args = {{"usage", free}},
-            .hw_config = experimental::ComputeHardwareConfig{},
+            .hw_config = ComputeHardwareConfig{},
         });
         kernel_names.push_back(COMPUTE_NAME);
     }
 
-    experimental::WorkUnitSpec wu{
+    WorkUnitSpec wu{
         .name = "main",
         .kernels = kernel_names,
-        .target_nodes = experimental::NodeCoord{coord},
+        .target_nodes = NodeCoord{coord},
     };
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "watcher_stack",
         .kernels = kernel_specs,
         .work_units = {wu},
     };
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = tt_metal::experimental::MakeProgramFromSpec(*mesh_device, spec);
 
     // Idle-ETH cores: invoke the original (legacy) kernel via the legacy host API.
     if (!is_quasar) {

@@ -2423,31 +2423,20 @@ class CUSTOM_MM_REUSE_CFG(TemplateParameter):
 
 @dataclass
 class SDPA_CUSTOM_MM_FLAGS(TemplateParameter):
-    """Compile-time knobs for the experimental sdpa_custom_mm block matmul test.
-
-    Emitted as #defines (not constexpr) because the C++ driver both consumes
-    SIGNAL_GRANULARITY as a non-type template argument and guards each name with an
-    #ifndef default, so a standalone compile of the source still works.
-
-    signal_granularity : FPU->SFPU post cadence (llk_math_sdpa_custom_mm template arg).
-                         Must divide ct_dim. Purely a signalling cadence; does not change
-                         the numeric result.
-    read_transposed    : selects the transposed SrcA (in1) L1 walk in the unpack LLK.
-    mm_transpose       : the `transpose` init flag threaded through the unpack/math inits
-                         (addr_mod SrcA increment + Haloize_mode).
-    sdpa_row_stride    : physical SrcA row width in tiles for read_transposed. None
-                         omits the LLK argument; zero and kt_dim retain tight packing.
-    sdpa_input_tile_offset : leading SrcA tiles skipped before the matmul input.
-    preserve_src_zero_flag : math leaves the Src zero flag at keep before the init, as a preceding
-                         copy_init does.
-    """
+    """Compile-time knobs for sdpa_custom_mm; -1/None omits row stride,
+    while 0 explicitly selects tight packing."""
 
     signal_granularity: int = 1
     read_transposed: bool = False
     mm_transpose: bool = False
-    sdpa_row_stride: int | None = None
+    sdpa_row_stride: int | None = -1
     sdpa_input_tile_offset: int = 0
     preserve_src_zero_flag: bool = False
+
+    def __post_init__(self):
+        # Keep implicit stride schema-visible while preserving the omitted define.
+        if self.sdpa_row_stride is None:
+            self.sdpa_row_stride = -1
 
     def convert_to_cpp(self) -> str:
         lines = [
@@ -2457,7 +2446,7 @@ class SDPA_CUSTOM_MM_FLAGS(TemplateParameter):
             f"#define SDPA_INPUT_TILE_OFFSET {self.sdpa_input_tile_offset}",
             f"#define SDPA_PRESERVE_SRC_ZERO_FLAG {str(self.preserve_src_zero_flag).lower()}",
         ]
-        if self.sdpa_row_stride is not None:
+        if self.sdpa_row_stride not in (None, -1):
             lines.append(f"#define SDPA_ROW_STRIDE {self.sdpa_row_stride}")
         return "\n".join(lines)
 

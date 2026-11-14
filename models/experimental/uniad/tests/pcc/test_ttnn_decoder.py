@@ -16,7 +16,7 @@ from models.experimental.uniad.tt.model_preprocessing_perception_transformer imp
 
 from ttnn.model_preprocessing import preprocess_model_parameters, preprocess_linear_weight, preprocess_linear_bias
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 from models.experimental.uniad.tests.common import load_torch_model
 

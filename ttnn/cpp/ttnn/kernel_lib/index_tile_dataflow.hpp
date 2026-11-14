@@ -62,7 +62,7 @@ FORCE_INLINE void store_index_tile(Ptr ptr, const uint32_t wt) {
  * index tile on Quasar, ordinary RISC-V stores write all 1024 entries to SRAM.
  *
  * T selects the index width, which must match the top-k LLK's dest mode: uint16_t for a 16-bit
- * index tile (UInt16 with LO16 dest on WH/BH; Int16 with UINT16 dest on Quasar, where tt-metal does
+ * index tile (UInt16 with UINT16 dest on WH/BH; Int16 with UINT16 dest on Quasar, where tt-metal does
  * not yet support UInt16 dataflow buffers), uint32_t for a 32-bit index tile (INT32 dest).
  *
  * @param dfb The kernel's dataflow buffer to write the generated index tile to. Construct it once at

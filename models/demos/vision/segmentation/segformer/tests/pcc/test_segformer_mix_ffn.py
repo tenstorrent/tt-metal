@@ -15,7 +15,7 @@ from models.demos.vision.segmentation.segformer.tests.pcc.test_segformer_dwconv 
 )
 from models.demos.vision.segmentation.segformer.tt.common import preprocess_linear_bias, preprocess_linear_weight
 from models.demos.vision.segmentation.segformer.tt.ttnn_segformer_mix_ffn import TtSegformerMixFFN
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 
 def create_custom_mesh_preprocessor(mesh_mapper=None):

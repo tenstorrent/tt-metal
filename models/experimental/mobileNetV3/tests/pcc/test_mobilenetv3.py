@@ -8,7 +8,7 @@ import ttnn
 from loguru import logger
 
 from ttnn.model_preprocessing import preprocess_model_parameters
-from tests.ttnn.utils_for_testing import check_with_pcc
+from tt_py_test_utils_common.utils_for_testing import check_with_pcc
 from torchvision import models
 from models.experimental.mobileNetV3.tt.ttnn_mobileNetV3 import ttnn_MobileNetV3
 from models.experimental.mobileNetV3.tt.custom_preprocessor import create_custom_preprocessor

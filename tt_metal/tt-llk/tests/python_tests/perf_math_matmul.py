@@ -267,7 +267,11 @@ def test_perf_math_matmul(
                 matmul_config.tile_dimensions.in1_tile_r_dim,
                 matmul_config.tile_dimensions.in1_tile_c_dim,
             ),
-            LOOP_FACTOR(1024),
+            # 128 is 8× faster than the original 1024 and within 0.2% of its
+            # TILE_LOOP mean/median/max on a WH card (counters off).  Every
+            # variant still exceeds MOP_LOOP_MAX (127) so the mop_loops()
+            # factoring path remains exercised.
+            LOOP_FACTOR(128),
         ],
         variant_stimuli=StimuliConfig(
             None,

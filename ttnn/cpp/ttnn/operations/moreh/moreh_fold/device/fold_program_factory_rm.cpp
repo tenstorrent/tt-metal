@@ -8,15 +8,14 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 namespace ttnn::operations::moreh::moreh_fold {
 
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 static constexpr const char* READER_KERNEL_PATH =
     "ttnn/cpp/ttnn/operations/moreh/moreh_fold/device/kernels/reader_fold_rm.cpp";

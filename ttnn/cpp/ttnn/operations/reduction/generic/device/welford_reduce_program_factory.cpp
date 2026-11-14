@@ -121,7 +121,6 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
     tensor_return_value_t& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
-    using namespace tt::tt_metal::experimental;
 
     const auto& input = tensor_arg.mesh_tensor();
     const auto& output = tensor_return_value.mesh_tensor();
@@ -735,14 +734,12 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
-tt::tt_metal::experimental::ProgramRunArgs
-WelfordReduceDeviceOperation::WelfordReduceProgramFactory::override_runtime_arguments(
+tt::tt_metal::ProgramRunArgs WelfordReduceDeviceOperation::WelfordReduceProgramFactory::override_runtime_arguments(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_arg,
     tensor_return_value_t& tensor_return_value,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
     using namespace tt::tt_metal;
-    using namespace tt::tt_metal::experimental;
     const auto& input = tensor_arg.mesh_tensor();
     const auto& output = tensor_return_value.mesh_tensor();
 

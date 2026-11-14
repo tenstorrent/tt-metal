@@ -4,10 +4,10 @@
 
 #pragma once
 
-#include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/scratchpad_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
+#include <tt-metalium/workload/specification/kernel_spec.hpp>
+#include <tt-metalium/workload/specification/dataflow_buffer_spec.hpp>
+#include <tt-metalium/workload/specification/scratchpad_spec.hpp>
+#include <tt-metalium/workload/specification/tensor_parameter.hpp>
 
 // Shared Metal 2.0 named-resource vocabulary for the three rotary_embedding_llama program
 // factories. Hoisted into a header (with inline linkage) because ttnn enables unity builds:
@@ -18,10 +18,10 @@
 
 namespace ttnn::experimental::prim::rope_metal2 {
 
-using tt::tt_metal::experimental::DFBSpecName;
-using tt::tt_metal::experimental::KernelSpecName;
-using tt::tt_metal::experimental::ScratchpadSpecName;
-using tt::tt_metal::experimental::TensorParamName;
+using tt::tt_metal::DFBSpecName;
+using tt::tt_metal::KernelSpecName;
+using tt::tt_metal::ScratchpadSpecName;
+using tt::tt_metal::TensorParamName;
 
 // Kernels
 inline const KernelSpecName READER{"reader"};
@@ -59,9 +59,9 @@ inline const TensorParamName OUTPUT_PARAM{"output"};
 // Runtime args of the two prefill factories' reader and writer kernels: each core's (batch, sequence tile, head)
 // ranges. The compute kernel only counts heads, so it takes n_heads instead of the head range (the same contract
 // rotary_embedding_indexed uses for this compute source).
-inline const tt::tt_metal::experimental::Group<std::string> kPrefillRangeArgNames{
+inline const tt::tt_metal::Group<std::string> kPrefillRangeArgNames{
     "batch_start", "batch_end", "seq_t_start", "seq_t_end", "head_start", "head_end"};
-inline const tt::tt_metal::experimental::Group<std::string> kPrefillComputeArgNames{
+inline const tt::tt_metal::Group<std::string> kPrefillComputeArgNames{
     "batch_start", "batch_end", "seq_t_start", "seq_t_end", "n_heads"};
 
 // Kernel source paths. Defined once here (uniquely named, inline) rather than in each factory's
