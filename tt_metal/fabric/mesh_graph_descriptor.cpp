@@ -500,12 +500,24 @@ MeshGraphDescriptor MeshGraphDescriptor::merge(
 }
 
 proto::Architecture MeshGraphDescriptor::get_arch() const {
-    // All meshes must have the same arch
-    return proto_->mesh_descriptors(0).arch();
+    // All meshes and switches share one architecture (enforced by validate_architecture_consistency).
+    if (proto_->mesh_descriptors_size() > 0) {
+        return proto_->mesh_descriptors(0).arch();
+    }
+    TT_FATAL(
+        proto_->switch_descriptors_size() > 0,
+        "MeshGraphDescriptor has neither mesh_descriptors nor switch_descriptors");
+    return proto_->switch_descriptors(0).arch();
 }
 
 uint32_t MeshGraphDescriptor::get_num_eth_ports_per_direction() const {
-    return proto_->mesh_descriptors(0).channels().count();
+    if (proto_->mesh_descriptors_size() > 0) {
+        return proto_->mesh_descriptors(0).channels().count();
+    }
+    TT_FATAL(
+        proto_->switch_descriptors_size() > 0,
+        "MeshGraphDescriptor has neither mesh_descriptors nor switch_descriptors");
+    return proto_->switch_descriptors(0).channels().count();
 }
 
 std::vector<std::string> MeshGraphDescriptor::get_all_mesh_names() const {
@@ -919,13 +931,24 @@ void MeshGraphDescriptor::validate_mesh_topology(
     const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages) {
     // Validate basic mesh properties (names and dimensions)
     for (const auto& mesh : proto.mesh_descriptors()) {
-        // Check that all dims are positive
+        // Check that all device and host topology dims are positive before divisibility modulo
+        bool has_non_positive_dim = false;
         for (const auto& dim : mesh.device_topology().dims()) {
             if (dim <= 0) {
                 error_messages.push_back(
                     fmt::format("Device topology dimensions must be positive (Mesh: {})", mesh.name()));
-                continue;
+                has_non_positive_dim = true;
             }
+        }
+        for (const auto& dim : mesh.host_topology().dims()) {
+            if (dim <= 0) {
+                error_messages.push_back(
+                    fmt::format("Host topology dimensions must be positive (Mesh: {})", mesh.name()));
+                has_non_positive_dim = true;
+            }
+        }
+        if (has_non_positive_dim) {
+            continue;
         }
 
         // Check that device topology dimensions and types are the same size
@@ -1022,12 +1045,16 @@ void MeshGraphDescriptor::validate_switch_descriptors(
     // Validate basic switch properties (names and dimensions)
     for (const auto& switch_desc : proto.switch_descriptors()) {
         // Check that all dims are positive
+        bool has_non_positive_dim = false;
         for (const auto& dim : switch_desc.device_topology().dims()) {
             if (dim <= 0) {
                 error_messages.push_back(
                     fmt::format("Device topology dimensions must be positive (Switch: {})", switch_desc.name()));
-                continue;
+                has_non_positive_dim = true;
             }
+        }
+        if (has_non_positive_dim) {
+            continue;
         }
 
         // Check that device topology dimensions and types are the same size
