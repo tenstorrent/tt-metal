@@ -57,9 +57,7 @@ void PagedFillCacheDeviceOperation::validate_on_program_cache_miss(
     auto page_table_shape = page_table_tensor.padded_shape();
 
     // batch_idx indexes the page table, not the cache's block dimension.
-    TT_FATAL(
-        args.batch_idx_fallback < page_table_shape[0],
-        "Batch idx must be within the page_table batch size");
+    TT_FATAL(args.batch_idx_fallback < page_table_shape[0], "Batch idx must be within the page_table batch size");
 
     // Per-block element-count consistency. The program factory reads num_heads,
     // block_size, and head_dim from the *input* tensor and computes the kernel's
@@ -150,8 +148,7 @@ void PagedFillCacheDeviceOperation::validate_on_program_cache_miss(
             tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
             "Batch idx tensor must have INTERLEAVED memory layout");
         TT_FATAL(
-            tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
-            "Batch idx tensor must be DRAM-resident");
+            tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM, "Batch idx tensor must be DRAM-resident");
     }
 
     // valid_seq_len tensor: a single int (block-aligned token count). Read by the
@@ -211,6 +208,14 @@ Tensor PagedFillCacheDeviceOperation::create_output_tensors(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     // In-place operation, return the cache tensor
     return tensor_args.cache_tensor;
+}
+
+PagedFillCacheDeviceOperation::topology_return_value_t PagedFillCacheDeviceOperation::compute_output_topologies(
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
+    // In-place: the cache keeps its own distribution. The framework's default otherwise unions the cache's
+    // label with the input/page_table labels, so a replicated cache filled from a mesh-sharded input came
+    // back labelled as sharded (same contract as update_padded_kv_cache / indexed_fused_update_cache).
+    return {tensor_args.cache_tensor.tensor_topology()};
 }
 
 ttsl::hash::hash_t PagedFillCacheDeviceOperation::compute_program_hash(
