@@ -38,6 +38,11 @@ bool can_use_sharded_optimized_factory(const PadParams& operation_attributes, co
     if (!operation_attributes.output_mem_config.is_sharded()) {
         return false;
     }
+    // Both sharded factories place dataflow buffers on the output buffer as well as the input, so the output
+    // must be in L1 too.
+    if (!operation_attributes.output_mem_config.is_l1()) {
+        return false;
+    }
     if (operation_attributes.output_mem_config.memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED) {
         return false;
     }
