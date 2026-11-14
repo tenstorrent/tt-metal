@@ -13,7 +13,9 @@ from tt_py_test_utils_common.utility_functions import tt2torch_tensor, torch2tt_
 from loguru import logger
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 from tests.ttnn.nightly.unit_tests.operations.fused.utility_functions import (
+    ttnn_rms_norm_pre_all_gather,
     ttnn_rms_norm_post_all_gather,
+    ttnn_layer_norm_pre_all_gather,
     ttnn_layer_norm_post_all_gather,
 )
 
@@ -444,3 +446,51 @@ def test_layer_norm_post_all_gather_bias_only_rejects_mismatched_beta_row_major(
             dtype=ttnn.bfloat16,
             memory_config=dram_memcfg,
         )
+
+
+@pytest.mark.parametrize("variant", ["rms_norm", "rms_norm_2d", "layer_norm"])
+@pytest.mark.parametrize("n_devices", [1, 4])
+@pytest.mark.parametrize("fast_and_approximate_mode", [False, True], ids=["sfpu_accurate", "fpu_fast_approx"])
+def test_post_all_gather_fp32_stats_from_pre_all_gather(device, variant, n_devices, fast_and_approximate_mode):
+    torch.manual_seed(0)
+    is_rmsnorm = variant != "layer_norm"
+    use_2d = {"use_2d_core_grid": True} if variant == "rms_norm_2d" else {}
+    torch_input = torch.randn(1, 1, 64, 1024, dtype=torch.float32)
+    kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+
+    def to_device(t):
+        return ttnn.from_torch(t, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    pre_op = ttnn_rms_norm_pre_all_gather if is_rmsnorm else ttnn_layer_norm_pre_all_gather
+    post_op = ttnn_rms_norm_post_all_gather if is_rmsnorm else ttnn_layer_norm_post_all_gather
+    chunks = [to_device(c) for c in torch_input.chunk(n_devices, dim=-1)]
+    stats = [
+        ttnn.to_torch(
+            pre_op(
+                c,
+                dtype=ttnn.float32,
+                compute_kernel_config=kernel_config,
+                fast_and_approximate_mode=fast_and_approximate_mode,
+                **use_2d,
+            )
+        )
+        for c in chunks
+    ]
+    tt_stats = to_device(torch.cat(stats, dim=-1))
+    output = torch.cat(
+        [
+            ttnn.to_torch(post_op(c, tt_stats, epsilon=1e-5, compute_kernel_config=kernel_config, **use_2d))
+            for c in chunks
+        ],
+        dim=-1,
+    )
+
+    ref = reference_layernorm(torch_input.double(), torch.ones(1024, dtype=torch.float64), None, 1e-5, is_rmsnorm)
+    max_err = (output.double() - ref).abs().max().item()
+    assert max_err < 3e-2, f"max abs error {max_err}"
