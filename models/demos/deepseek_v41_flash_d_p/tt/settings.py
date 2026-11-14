@@ -552,6 +552,18 @@ TABLE = {
         "fill args are then the same every call and a cache hit writes none (routed_experts_combine's fill signature); "
         "the planner takes one ring address instead of W. Same plans, slots, pages and math: outputs bit-identical",
     ),
+    "MOE_PREV_HOST2": Setting(
+        "lean",
+        ("legacy", "lean"),
+        "P.62 (owner 2026-11-14, MOE_REPLICAS=prev with MOE_PREV_HOST=device only): the host cost prev adds over off. "
+        "legacy = P.60 as built (the planner and the reset: one program a chip, 32 a launch; the combine's fill args "
+        "handed to the fork every call). lean (tt/expert_prev.py): the planner and the reset ONE program for the whole "
+        "mesh (kernel MESH1: a chip finds its position, targets and fabric channel in tables keyed by the routing "
+        "table's my_device_id, DS41-225), the fill args set once (fill_off() / set_mode() set them again), the "
+        "planner's dispatch without per-call settings reads. Measured (P.62, 8x4, chunks 1..10): prev's host over off "
+        "is the planner launch ~90-100 us a call (one program or 32: within ~5 us), the combine's fill path ~27-38 us a "
+        "call, Python ~5 us a call; lean removes ~0.2-0.7 ms a chunk of it. Same plans: outputs bit-identical",
+    ),
     "MOE_TRACE": Setting(
         "off",
         ("off", "moe"),

@@ -13,6 +13,7 @@
 // emptied, a new epoch (every layer's state then reads as empty).
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "hostdevcommon/fabric_common.h"
 #include "hostdev/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
@@ -42,6 +43,10 @@ constexpr uint32_t MAPPAGE = get_compile_time_arg_val(19);  // the router bias's
 // P.60 (MOE_PREV_HOST=device): > 0 - ONE job tensor of W page sets (slot s = pages s x RINGPG ..), its address the only
 // ring arg; 0 - W job tensors, one address arg each (P.56)
 constexpr uint32_t RINGPG = get_compile_time_arg_val(20);
+// P.62 (MOE_PREV_HOST2=lean): 1 - ONE program for the whole mesh (DS41-225's pattern): a chip finds its position from
+// the fabric routing table's my_device_id and a table in its runtime args (planner: after the ring args; sender: the
+// mesh layout below), so every chip runs the same runtime args; 0 - one program a chip, the position an arg (P.56)
+constexpr uint32_t MESH1 = get_compile_time_arg_val(21);
 constexpr uint32_t E = NC * EPC;
 constexpr uint32_t NO_EXPERT = 0xFFFFFFFFu;
 constexpr uint32_t PG = 1024;                   // a job page's bytes
@@ -53,6 +58,21 @@ inline uint32_t al64(uint32_t x) { return (x + 63) & ~63u; }
 // ring slot s's job tensor (its address: runtime arg a0 + s, or a0 alone) and page pg of its page set
 inline uint32_t ring_at(uint32_t a0, uint32_t s) { return get_arg_val<uint32_t>(RINGPG ? a0 : a0 + s); }
 inline uint32_t ring_page(uint32_t s, uint32_t pg) { return RINGPG ? s * RINGPG + pg : pg; }
+
+// byte k of the runtime args from a0 (4 a word, little end first)
+inline uint32_t arg_byte(uint32_t a0, uint32_t k) {
+    return (get_arg_val<uint32_t>(a0 + k / 4) >> (8 * (k % 4))) & 0xFFu;
+}
+
+// 2-bit field k of the runtime args from a0 (16 a word, low bits first)
+inline uint32_t arg_2bit(uint32_t a0, uint32_t k) {
+    return (get_arg_val<uint32_t>(a0 + k / 16) >> (2 * (k % 16))) & 3u;
+}
+
+// MESH1: this chip's fabric chip id (the routing table in L1, as mhc_post_feed_common.hpp's Table)
+inline uint32_t my_dev() {
+    return reinterpret_cast<tt_l1_ptr tt::tt_fabric::routing_l1_info_t*>(ROUTING_TABLE_BASE)->my_device_id;
+}
 
 inline uint32_t f32_bits(uint32_t v) {  // an integer below 2^24 as fp32 bits (exact)
     if (v == 0) {
@@ -106,7 +126,61 @@ inline void write_page(uint32_t base, uint32_t page_bytes, uint32_t page, uint32
 
 void kernel_main() {
     const uint32_t base = al64(get_write_ptr(0));
-    if constexpr (ROLE == 1) {
+    if constexpr (ROLE == 1 && MESH1) {
+        // ---------------------------------------------------------------- sender (one mesh program, P.62)
+        // args: 0 counts, 1 landing, 2 global state, 3 arrival sem, 4 / 5 the planner core's x / y, 6 this core's
+        // direction d, 7 mesh id, 8 table bytes of me (fabric chip id -> position), then 9 .. 11 the fabric connection
+        // (9: the eth channel, overwritten from the table), then at 12 the tables (bytes, 4 a word): me[NDEV words x 4]
+        // at TME, chip id of each position [NC] at TCH, first hop direction of (me, k) [NC x NC] at THP (two
+        // bits each, 16 a word; (me, me) unused), the eth channel of (me, d) [NC x 4] at TCN (0xFF: no port)
+        const uint32_t cnt = get_arg_val<uint32_t>(0), land = get_arg_val<uint32_t>(1), gst = get_arg_val<uint32_t>(2);
+        const uint32_t sem = get_arg_val<uint32_t>(3), px = get_arg_val<uint32_t>(4), py = get_arg_val<uint32_t>(5);
+        const uint32_t d = get_arg_val<uint32_t>(6), mesh_id = get_arg_val<uint32_t>(7);
+        const uint32_t ndev = get_arg_val<uint32_t>(8);
+        constexpr uint32_t TME = 12;
+        const uint32_t TCH = TME + (ndev + 3) / 4, THP = TCH + (NC + 3) / 4, TCN = THP + (NC * NC + 15) / 16;
+        const uint32_t me = arg_byte(TME, my_dev());
+        uint32_t nd = 0;
+        for (uint32_t k = 0; k < NC; ++k) {
+            nd += (k != me && arg_2bit(THP, me * NC + k) == d) ? 1u : 0u;
+        }
+        if (nd == 0) {
+            return;  // (no target through this direction from my chip: no connection opened)
+        }
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_addr(9)) = arg_byte(TCN, me * 4 + d);
+        size_t fa = 9;
+        const uint32_t l_cnt = base, l_g = al64(l_cnt + CPAGE), l_pay = l_g + 64;
+        read_page(gst, GW * 4, 0, l_g, 64);
+        read_page(cnt, CPAGE, 0, l_cnt, CPAGE);
+        noc_async_read_barrier();
+        invalidate_l1_cache();
+        const volatile tt_l1_ptr uint32_t* cw = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l_cnt);
+        volatile tt_l1_ptr uint32_t* pay = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l_pay);
+        for (uint32_t j = 0; j < SPW; ++j) {
+            pay[j] = j < SPC ? cw[me * SPC + j] : 0u;
+        }
+        const uint32_t par = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l_g)[0] & 1;
+        auto conn = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(fa);
+        volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = PacketHeaderPool::allocate_header();
+        conn.open();
+        const InterleavedAddrGen<true> lg = {.bank_base_address = land, .page_size = SPW * 4};
+        const uint64_t to = lg.get_noc_addr(par * NC + me);  // (my row on every receiver: the same address)
+        const uint64_t arrival = get_noc_addr(px, py, sem);
+        for (uint32_t k = 0; k < NC; ++k) {
+            if (k == me || arg_2bit(THP, me * NC + k) != d) {
+                continue;
+            }
+            route_to(hdr, static_cast<uint16_t>(arg_byte(TCH, k)), static_cast<uint16_t>(mesh_id));
+            hdr->to_noc_fused_unicast_write_atomic_inc(
+                NocUnicastAtomicIncFusedCommandHeader{to, arrival, 1, true}, SPW * 4);
+            conn.wait_for_empty_write_slot();
+            conn.send_current_slot_non_blocking(l_pay, SPW * 4, reinterpret_cast<uint32_t>(hdr));
+            noc_async_writes_flushed();  // (the payload and the header left L1 before the header is rewritten)
+        }
+        conn.close();
+        return;
+    }
+    if constexpr (ROLE == 1 && !MESH1) {
         // ---------------------------------------------------------------- sender: my counts to the other chips
         const uint32_t cnt = get_arg_val<uint32_t>(0), land = get_arg_val<uint32_t>(1), gst = get_arg_val<uint32_t>(2);
         const uint32_t me = get_arg_val<uint32_t>(3), sem = get_arg_val<uint32_t>(4);
@@ -175,8 +249,10 @@ void kernel_main() {
     const uint32_t cnt = get_arg_val<uint32_t>(0), land = get_arg_val<uint32_t>(1), gst = get_arg_val<uint32_t>(2);
     const uint32_t sta = get_arg_val<uint32_t>(3), rb = get_arg_val<uint32_t>(4);
     const uint32_t gu = get_arg_val<uint32_t>(5), dw = get_arg_val<uint32_t>(6), cst = get_arg_val<uint32_t>(7);
-    const uint32_t me = get_arg_val<uint32_t>(8), sem = get_arg_val<uint32_t>(9);
     constexpr uint32_t RING0 = 10;
+    // (MESH1: arg 8 unused; the table of positions by fabric chip id follows the ring args)
+    const uint32_t me = MESH1 ? arg_byte(RING0 + (RINGPG ? 1 : W), my_dev()) : get_arg_val<uint32_t>(8);
+    const uint32_t sem = get_arg_val<uint32_t>(9);
     // L1: counts page, landing rows, global state, layer state, directions, map tile, header / job staging, work
     const uint32_t l_cnt = base, l_land = al64(l_cnt + CPAGE), l_g = al64(l_land + NC * SPW * 4);
     const uint32_t l_st = al64(l_g + GW * 4), l_dir = al64(l_st + SW * 4), l_map = al64(l_dir + NC * NC * 4);

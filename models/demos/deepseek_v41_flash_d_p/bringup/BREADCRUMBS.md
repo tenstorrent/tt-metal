@@ -1431,3 +1431,87 @@ The one this change broke (test_seeded: `git add state.json`) is fixed.
 - Next (not done): the remaining wall - device (~15 ms a chunk) is eager idle at the chunk's start and layer 1's
   engram wait (DS41-251 fix 4: the engram job one chunk ahead), and ~2.7 ms at the 40 replay boundaries (Metal's drain
   before each replay: fewer, longer traces need the attention's start-dependent arguments on the device).
+
+## P.62 (perf, attempt 1): why prev costs host over off, accounted call by call; MOE_PREV_HOST2 legacy | lean
+- Expected per chunk (written before the first measurement of the change; perf_guide 3; real novel / code chunks 1..10,
+  MOE_REPLICAS=prev MOE_PREV_HOST=device on both A/B sides): device ~0 (+-0.3 ms: the planner's program is the same
+  work, its senders read a table instead of their args); host -2 to -3 ms of the ~7.7 ms prev adds over off: the
+  planner launch ~95 -> ~45-55 us a call as ONE program for the 32 chips (DS41-225: 336 -> 110 us for a feed op) =
+  -1.6 to -2.0 ms; the combine's fill args set once instead of a C++ call a layer (~5 us) = -0.2 ms. The rest of the
+  7.7 ms is not attributed yet (STEP 1 measures it); the target (prev <= off + 1 ms) needs that part too.
+- Terms: host = first host call of a chunk to the last layer's enqueue (includes the engram worker waits at layers 1
+  and 14); busy = host - those waits (the main thread's own work); wall = to the sync after the last layer; device =
+  rt profiler, each program's slowest chip summed. prev = MOE_REPLICAS=prev; off = prev switched off in the same model.
+  legacy / device / lean = the prev host paths P.56 / P.60 / P.62 (MOE_PREV_HOST, MOE_PREV_HOST2). All means: chunks
+  1..10 of fresh requests, novel and code prompts, 8x4.
+- STEP 1, accounting (tests/test_prev_host_account.py, new, diagnostic: one load, sides alternating, 10 clean rounds
+  a side for host / busy, 2 instrumented rounds for per-op exclusive host (P.57's HostClock), 1 cProfile round).
+  prev - off, us a chunk:
+
+  | term | novel legacy | novel lean | code legacy | code lean |
+  |---|---|---|---|---|
+  | planner launch (run_prepared, 40 a chunk) | +4083 | +3772 | +4080 | +3735 |
+  | routed_experts_combine launch (fill path) | +1521 | +1078 | +1333 | +1504 |
+  | fused_head launch | +354 | +156 | +499 | +535 |
+  | PrevReplicas.before Python (guard + fill args) | +266 | +76 | +272 | +83 |
+  | PrevReplicas.after Python (instrumented, wrapper included) | +443 | +435 | +446 | +439 |
+  | sum | +6667 | +5517 | +6630 | +6296 |
+  | clean busy difference (10 rounds, +- standard error) | +6701 +-1484 | +5289 +-1159 | +6231 +-873 | +6555 +-1023 |
+  | residual (busy - sum) | +34 | -228 | -399 | +259 |
+
+  Every other op's difference changes sign between runs (+-0.1..0.8 ms each, both directions: noise). The engram
+  wait in host differs by -1.9..+0.5 ms between sides (clean) and -2..-3.4 ms (instrumented: a slower main thread
+  waits less at layer 14). P.60's "~2.5 ms not attributed" was this noise (one pass a side; a pass's mean swings +-4
+  ms, DS41-259). So prev's host over off = one extra 32-chip launch a MoE layer (~93-102 us) + the combine's fill path
+  (~15-38 us a call) + ~5 us Python a call; nothing else.
+- STEP 2, what lean (MOE_PREV_HOST2=lean, default) changes, bit-identical (same programs' work, same plans):
+  (1) planner and reset as ONE mesh program (kernel compile arg 21 MESH1: the chip's position from the routing
+  table's my_device_id and a byte table; the senders' targets from a 2-bit first-hop table and their eth channel
+  overwritten into the connection's first runtime arg, DS41-225's pattern; tt/expert_prev.py _mesh_tables /
+  _planner_desc_mesh); (2) the combine's fill args set once (they are the same every call under MOE_PREV_HOST=device;
+  fill_off() / set_mode() re-arm); (3) after() without per-call settings reads. Gate unit (one pass a side) host us a
+  call lean vs device: planner 85.3-85.5 vs 91.5-92.2, before 2.0-2.1 vs 6.7; combine 352-354 vs 352-357 (off
+  336-341): lean saves ~11 us a call = ~0.45 ms a chunk. Expected -2 to -3 ms: missed, because one mesh program costs
+  the same to launch as 32 (DS41-258: on a prepared hit only per-device dispatch is left).
+- Not done, with the reason:
+  - Fold the planner into the fused head: the head drives the fabric on every link (x all-gather, reduce-scatter,
+    routing exchange); the planner's senders need their own connection per direction on the same EDM channels.
+  - Fold it into the combine: the combine holds 110 cores (rule 18 cap) and its port cores are the fabric workers; it
+    needs the counts packets inside combine_port_writer.cpp (31 x 64 B a chip, after the main loop, link-0 ports) and
+    the planner core in a program that already runs (the next layer's head; it needs no fabric), with the G[0] /
+    ring-slot order kept. A fork rewrite in two C++ ops with hang risk: the next step if the owner wants prev's host
+    <= off + 1 ms (saves ~3.7 ms a chunk; the combine fill path's ~0.6-1.5 ms is the other part).
+  - Guard device-side: on steady chunks it issues no device work; its Python is 2.0 us a call under lean (0.08 ms a
+    chunk). A device guard would cost a read in the head; nothing to gain.
+  - Combine fill-path host trims (set_fill builds a 10-word signature per program per call on 32 programs; the fill
+    words' TensorSpec per call): estimated <= 0.3 ms a chunk, below the noise; not worth a fork rebuild here.
+- Gate unit P.62#test_moe_prev_replicas (PASS; one pass a side, so host/wall carry +-4 ms noise):
+
+  | prompt | side | host ms | wall ms | device ms | experts ms |
+  |---|---|---|---|---|---|
+  | novel | off | 170.7 | 186.2 | 167.43 | 46.42 |
+  | novel | prev lean (P.62) | 168.5 | 176.0 | 153.87 | 41.18 |
+  | novel | prev device (P.60) | 172.2 | 179.4 | 152.18 | 40.70 |
+  | novel | prev legacy (P.56) | 180.5 | 181.7 | 155.02 | 42.99 |
+  | code | off | 164.5 | 174.7 | 157.46 | 42.26 |
+  | code | prev lean | 167.0 | 172.9 | 148.43 | 38.36 |
+  | code | prev device | 167.4 | 172.8 | 148.66 | 38.44 |
+  | code | prev legacy | 181.9 | 182.8 | 151.39 | 40.67 |
+
+  maxdiff 0 every mode, repeat 0, mirror 0 mismatches, plans identical across the three host paths (both prompts),
+  ready 1.0. Planner device ms a chunk 3.76 / 4.96 (novel / code), unchanged by MESH1.
+- Cores (rule 18): planner 1 + up to 4 sender cores a chip (cores (0,0), (1..4,0)), as before. Prepared (OV-23): the
+  planner and the reset stay prepared programs; no other Python-built op touched.
+- Gotcha: never edit a kernel the running job has not compiled yet: the first accounting run read the kernel at its
+  first prev call after my MESH1 edit (22 compile args expected, 21 given) and failed to compile (no device harm).
+- Re-run: accounting `P62_SIDES=off,prev:legacy,prev:lean scripts/run_safe_pytest.sh --run-all --no-precompile
+  models/demos/deepseek_v41_flash_d_p/tests/test_prev_host_account.py` (~11 min with the load, devjob); gate unit
+  `gate P.62 --spec <spec> --check --unit 'P.62#test_moe_prev_replicas'`; quick `P56_QUICK=1` on that test (~3 min).
+- `gate P.62 --check`: PASS, every unit (determinism 0; ladder rung last: every err_layer / err_state within its noise
+  floor, err_final_hidden 0.132 <= 0.242, top5 1.0; test_moe_prev_replicas as above; profile chunk_wall_ms 170.1,
+  device_ms_total 151.4).
+- `measure --task P.62` (change on: MOE_PREV_HOST2=lean ENGRAM_TABLE=resident): determinism 0 (novel, code, state);
+  quick min layer PCC 0.60548579 at L39 (= P.52-P.61: the same output bytes), host transfers per layer 0, clean wall
+  171.3 ms (spread 8.2); p51200 (random ids, DS41-228) device_ms_total 156.49, device_ms_experts 75.99, wall 177.6
+  (spread 42.6: two runs of 10 at 207.7 / 215.9 ms, loadavg 11.8; the other eight 173.3-182.2), host overhead 21.1,
+  1656 launches (run_prepared not counted), 0 new programs.

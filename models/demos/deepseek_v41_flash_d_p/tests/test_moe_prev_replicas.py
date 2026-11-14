@@ -41,6 +41,10 @@ inclusive, median) beside the planner's (`after`) and the guard's (`before`).
 
     PYTHONPATH=$PWD scripts/run_safe_pytest.sh --run-all --no-precompile \\
         models/demos/deepseek_v41_flash_d_p/tests/test_moe_prev_replicas.py
+P.62 (owner 2026-11-14): a third host path, lean (MOE_PREV_HOST=device MOE_PREV_HOST2=lean: the planner as one mesh
+program, the combine's fill args set once, the per-call Python trimmed), switched the same way (expert_prev.set_host2);
+the modes are legacy (P.56), device (P.60) and lean; the settings' one first (P.56's metric names), the others with
+the suffix _<mode>. All three must give off's outputs bit for bit and the same plans.
 P56_QUICK=1 (iterating only): 4 layers, chunks 0..3, novel, MOE_FILL_PIECES=2000 (a whole copy a call).
 """
 
@@ -156,17 +160,30 @@ def _prevs(mesh):
     return [pr for _, pr in A._PREV.values() if pr.mesh is mesh]
 
 
+MODES = ("legacy", "device", "lean")  # (P.56, P.60, P.62: MOE_PREV_HOST / MOE_PREV_HOST2 below)
+
+
+def _mode_of(host: str, host2: str) -> str:
+    """The host path's name: legacy = MOE_PREV_HOST=legacy (P.56); device = MOE_PREV_HOST=device with
+    MOE_PREV_HOST2=legacy (P.60); lean = MOE_PREV_HOST=device MOE_PREV_HOST2=lean (P.62)."""
+    return "legacy" if host == "legacy" else ("lean" if host2 == "lean" else "device")
+
+
 def _side(mesh, side: str, mode: str | None = None) -> None:
     """off: prev switched off in the loaded model (no planner, the stock combine, the empty map); prev: on, with host
-    path `mode` (MOE_PREV_HOST: legacy | device; None: the setting's)."""
+    path `mode` (MODES; None: the settings')."""
     if side == "prev" and mode is not None:
+        from models.demos.deepseek_v41_flash_d_p.tt import expert_prev as XP
+
+        host = "legacy" if mode == "legacy" else "device"
+        XP.set_host2("lean" if mode == "lean" else "legacy")
         prs = _prevs(mesh)
         for pr in prs:
-            pr.mode = mode
+            pr.set_mode(host)
         if not prs:  # (made at the first MoE call: from the setting)
             from models.demos.deepseek_v41_flash_d_p.tt.settings import settings
 
-            assert settings.get("MOE_PREV_HOST") == mode, (settings.get("MOE_PREV_HOST"), mode)
+            assert settings.get("MOE_PREV_HOST") == host, (settings.get("MOE_PREV_HOST"), host)
     for m in _main().values():
         m._prev = side == "prev"
         if side == "off":
@@ -175,7 +192,7 @@ def _side(mesh, side: str, mode: str | None = None) -> None:
             m._prev_dirty, m._prev_ord = False, None
     if side == "off":
         for pr in _prevs(mesh):
-            ttnn.bringup.moe_block_main.set_combine_fill_exact(pr.res, False)
+            pr.fill_off()
     ttnn.synchronize_device(mesh)
 
 
@@ -411,8 +428,8 @@ def test_moe_prev_replicas(mesh_device, monkeypatch):
         monkeypatch.setenv("DS41_MOE_FILL_PIECES", "2000")
     settings.thaw()
     assert settings.get("MOE_REPLICAS") == "prev" and settings.get("MOE_COUNTS") == "on"
-    first = settings.get("MOE_PREV_HOST")
-    modes = [first] + [m for m in ("legacy", "device") if m != first]  # (the setting's host path first)
+    first = _mode_of(settings.get("MOE_PREV_HOST"), settings.get("MOE_PREV_HOST2"))
+    modes = [first] + [m for m in MODES if m != first]  # (the settings' host path first)
     layers = S.layers()[:4] if QUICK else S.layers()
     model = batch.device_model(S, mesh_device, layers, lm_head=False)
     spy = _Spy(monkeypatch)
@@ -568,13 +585,15 @@ def test_moe_prev_replicas(mesh_device, monkeypatch):
                 f"{s['experts_ms_prev']:.2f}, planner {s['planner_ms']:.2f}; host us a call {dm.get('host_us')}; "
                 f"maxdiff {md}, repeat {rep}, mirror {mm} mismatches of {dm['mirror']['checks']} checks"
             )
-        if len(plans_of) == 2:  # (P.60: both host paths plan the same, chunk by chunk)
-            a, b = plans_of["legacy"], plans_of["device"]
-            same = int(a == b)
+        if len(plans_of) > 1:  # (P.60 / P.62: every host path plans the same, chunk by chunk)
+            a = plans_of[first]
+            same = 1
+            for m, b in plans_of.items():
+                if b != a:
+                    same = 0
+                    bad = [c for c in range(min(len(a), len(b))) if a[c] != b[c]]
+                    fails.append(f"{wl}: host paths {first} and {m} planned differently at chunks {bad[:5]}")
             metrics.record(f"prev_plans_identical_{wl}", same)
-            if not same:
-                bad = [c for c in range(min(len(a), len(b))) if a[c] != b[c]]
-                fails.append(f"{wl}: legacy and device host paths planned differently at chunks {bad[:5]}")
     metrics.record_json(
         "prev_replicas", {"mesh": list(mesh_device.shape), "quick": QUICK, "first": first, "workloads": summary}
     )

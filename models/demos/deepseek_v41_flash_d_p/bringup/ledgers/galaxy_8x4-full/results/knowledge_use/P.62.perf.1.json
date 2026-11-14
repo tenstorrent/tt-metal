@@ -1,0 +1,93 @@
+{
+ "used": [
+  {
+   "id": "DS41-225",
+   "how": "built the planner and reset as ONE mesh program with its pattern (my_device_id -> position table, eth channel overwritten into the connection's first arg before build_from_args); measured: no launch gain for a prepared program (DS41-258)",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-254",
+   "how": "started from its combine attribution (fill args written only on change under MOE_PREV_HOST=device) and kept the device host path as lean's base; the combine's remaining +15-38 us a call measured, not re-attributed to set_fill rewrites",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-251",
+   "how": "reused its HostClock breakdown method (tests/test_host_bound.py) for the per-op prev - off accounting",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-228",
+   "how": "judged the host change on real novel / code prompts chunks 1..10 (test_moe_prev_replicas, test_prev_host_account), not on the random-token profile",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-183",
+   "how": "every model-level device run (accounting, quick test, gate, measure) started detached through devjob",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "K-53",
+   "how": "PYTHONPATH=$PWD on every command",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "whether DS41-225's one-mesh-program lever applies to an already prepared (patch-only) program: it does not; a prepared launch on 32 chips costs ~90-100 us either way (added DS41-258)",
+  "host_ms of a single pass a side swings +-4 ms and includes the engram worker waits, so a few-ms host difference needs alternating rounds and busy = host - waits (added DS41-259)",
+  "a kernel file read at first use must not be edited while a device job that has not reached that use is running"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "no padding or duplicated work added; the MESH1 sender exits without opening a connection when its direction has no target"
+  },
+  {
+   "id": "OV-23",
+   "answer": "done",
+   "evidence": "the planner and reset stay prepare_program / run_prepared (now one mesh program each under lean); host us a call measured: planner 85.3-85.5 lean vs 91.5-92.2 device (results/P.62.json prev_host_us_after_*); no non-prepared Python-built op is called by this change"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork regression suite run; only the model-level tests (test_moe_prev_replicas quick + gate unit, the new test_prev_host_account) and the gate"
+  }
+ ],
+ "cited_only": [
+  "DS41-258",
+  "DS41-259"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "moe_replication",
+  "task": "P.62",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-14T12:23:14",
+  "head": "b8c62f14983",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.62.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.62_ops.json.gz",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.62_prev_replicas.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.62_profile.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.62.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_moe_prev_host_probe.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_moe_prev_replicas.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_prev_host_account.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/expert_prev.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/kernels/moe_prev_planner.cpp",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py"
+  ]
+ }
+}

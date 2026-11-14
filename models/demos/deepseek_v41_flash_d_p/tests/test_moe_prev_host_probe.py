@@ -139,7 +139,7 @@ def test_moe_prev_host_probe(mesh_device, monkeypatch):
         from models.demos.deepseek_v41_flash_d_p.tests.test_moe_prev_replicas import _main
 
         pr = _prevs(mesh_device)[0]
-        pp = pr._plan_pp[pr.mode]
+        pp = pr._plan_pp[(pr.mode, pr.lean())]
         mains = list(_main().values())
         ios = []
         for m in mains:

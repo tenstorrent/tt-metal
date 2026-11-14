@@ -70,6 +70,19 @@ def _mb():
     return ttnn.bringup.moe_block_main
 
 
+_HOST2: list = [None]  # (MOE_PREV_HOST2 override: tests switch it in a loaded model, set_host2)
+
+
+def set_host2(mode: str | None) -> None:
+    """Tests: MOE_PREV_HOST2 (legacy | lean) for every PrevReplicas from now on (None: the setting's)."""
+    assert mode in (None, "legacy", "lean"), mode
+    _HOST2[0] = mode
+
+
+def host2() -> str:
+    return _HOST2[0] or settings.get("MOE_PREV_HOST2")
+
+
 def _u32(host: np.ndarray, mesh, shard: bool = False) -> ttnn.Tensor:
     t = torch.from_numpy(host.astype(np.uint32).view(np.int32).copy())
     return ttnn.from_torch(
@@ -80,6 +93,20 @@ def _u32(host: np.ndarray, mesh, shard: bool = False) -> ttnn.Tensor:
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0) if shard else ttnn.ReplicateTensorToMesh(mesh),
     )
+
+
+def _bytes_to_words(vals) -> list:
+    """Bytes (each < 256) packed 4 a word, little end first (the kernel's arg_byte)."""
+    v = [int(x) for x in vals] + [0] * (-len(vals) % 4)
+    assert all(0 <= x < 256 for x in v), v
+    return [v[i] | v[i + 1] << 8 | v[i + 2] << 16 | v[i + 3] << 24 for i in range(0, len(v), 4)]
+
+
+def _2bits_to_words(vals) -> list:
+    """Directions 0..3 packed 16 a word, low bits first (the kernel's arg_2bit); 0xFF (unused) packs as 0."""
+    v = [0 if int(x) == 0xFF else int(x) for x in vals] + [0] * (-len(vals) % 16)
+    assert all(0 <= x < 4 for x in v), v
+    return [sum(v[i + j] << (2 * j) for j in range(16)) for i in range(0, len(v), 16)]
 
 
 def _al16(x: int) -> int:
@@ -111,8 +138,9 @@ class Geometry:
         self.sw = _al16(16 + 4 * self.n)
         self.mappage = self.E // 32
 
-    def ct(self, role: int, ringpg: int = 0) -> list:
-        """ringpg: 0 - W job tensors (MOE_PREV_HOST=legacy); > 0 - one job tensor of W page sets of ringpg pages."""
+    def ct(self, role: int, ringpg: int = 0, mesh1: int = 0) -> list:
+        """ringpg: 0 - W job tensors (MOE_PREV_HOST=legacy); > 0 - one job tensor of W page sets of ringpg pages.
+        mesh1 (P.62, MOE_PREV_HOST2=lean): 1 - one program for the whole mesh (positions from a table)."""
         return [
             role,
             self.n,
@@ -135,6 +163,7 @@ class Geometry:
             self.sw,
             self.mappage,
             int(ringpg),
+            int(mesh1),
         ]
 
     def l1_bytes(self) -> int:
@@ -332,6 +361,7 @@ class PrevReplicas:
         # (the job page ring: built per host mode at first use - legacy W tensors, device one tensor of W page sets)
         self._rings: dict = {}
         self.mode = settings.get("MOE_PREV_HOST")
+        self._host2 = settings.get("MOE_PREV_HOST2")  # (read once: lean() runs every call)
         cc = ttnn.CoreCoord(0, 0)
         self.sem = ttnn.create_global_semaphore(
             mesh, ttnn.CoreRangeSet([ttnn.CoreRange(cc, cc)]), 0, ttnn.BufferType.L1_SMALL
@@ -346,6 +376,7 @@ class PrevReplicas:
         self._plan_pp: dict = {}  # (host mode -> the prepared planner / reset)
         self._reset_pp: dict = {}
         self._fx_w = None  # (device mode: the fill args' gate_up / down - fixed; the planner's jobs name their own)
+        self._fx_on = False  # (P.62 lean: the combine's fill args set (device mode); fill_off() clears it)
         self.stats = {"calls": 0, "ready": 0, "off": 0, "off_copies": 0, "plans": 0}
         logger.info(
             f"MOE_REPLICAS=prev: {n} chips, {ncall} MoE calls a chunk, ring {geo.W}, {geo.pcs} pieces a copy, "
@@ -483,18 +514,156 @@ class PrevReplicas:
                 md[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(r, c), ttnn.MeshCoordinate(r, c))] = prog
         return md, cores, want
 
+    def lean(self) -> bool:
+        """MOE_PREV_HOST2=lean (P.62) on the device host path: one planner program for the mesh, the fill args once."""
+        return self.mode == "device" and (_HOST2[0] or self._host2) == "lean"
+
+    def _mesh_tables(self):
+        """P.62: the chip-independent tables of the one-program planner (memoized): (mesh id, me by fabric chip id,
+        chip id by position, first hop direction by (me, k), eth channel by (me, direction), a chip of each direction
+        and its port)."""
+        if getattr(self, "_mt", None) is not None:
+            return self._mt
+        from ttnn.bringup.combine_rf.sparse_all_gather_2d import DIRS
+        from ttnn.bringup.combine_rf.sparse_combine_l1 import route
+
+        n, R, C = self.geo.n, self.R, self.C
+        nodes = [self._node((k // C, k % C)) for k in range(n)]
+        mesh_ids = {int(x.mesh_id) for x in nodes}
+        assert len(mesh_ids) == 1, mesh_ids
+        chip_of = [int(x.chip_id) for x in nodes]
+        ndev = max(chip_of) + 1
+        assert ndev < 255 and len(set(chip_of)) == n, chip_of
+        me_of = [0xFF] * ndev
+        for k, c in enumerate(chip_of):
+            me_of[c] = k
+        hop = [0xFF] * (n * n)
+        for me in range(n):
+            r, c = divmod(me, C)
+            for k in range(n):
+                if k == me:
+                    continue
+                hops = route((r, c), divmod(k, C), R, C, self.wraps[0], self.wraps[1], 0)
+                assert hops and hops[0][0] == (r, c), ((r, c), divmod(k, C), hops)
+                hop[me * n + k] = DIRS.index(hops[0][1])
+        chan = [0xFF] * (n * 4)
+        rep: dict = {}
+        for me in range(n):
+            ports = self.chips[divmod(me, C)]
+            for di, dn in enumerate(DIRS):
+                port = ports.get(dn)
+                if port is None:
+                    continue
+                scratch = ttnn.ProgramDescriptor()
+                a = list(
+                    ttnn.setup_fabric_connection(
+                        nodes[me], self._node(port["peer"]), port["links"][0], scratch, ttnn.CoreCoord(1 + di, 0)
+                    )
+                )
+                # (device-init fabric: [eth channel, two semaphore ids]; only the channel is the chip's)
+                assert len(a) == 3 and 0 <= int(a[0]) < 255, a
+                chan[me * 4 + di] = int(a[0])
+                rep.setdefault(di, (me, port))
+        used = sorted({h for h in hop if h != 0xFF})
+        for di in used:
+            assert di in rep, (di, rep)
+            assert all(chan[me * 4 + di] != 0xFF for me in range(n) if di in hop[me * n : (me + 1) * n]), di
+        self._mt = (mesh_ids.pop(), ndev, me_of, chip_of, hop, chan, rep, used, nodes)
+        return self._mt
+
+    def _planner_desc_mesh(self, io: list):
+        """P.62 (MOE_PREV_HOST2=lean): the planner as ONE program for the whole mesh (DS41-225): the planner core and
+        one sender core a first-hop direction (cores 1 + d), every chip the same runtime args; a chip finds its
+        position, targets and fabric channel in tables keyed by its fabric chip id (kernel MESH1)."""
+        geo = self.geo
+        counts, landing, G, st, rb, gu, d, consts = io
+        mesh_id, ndev, me_of, chip_of, hop, chan, rep, used, nodes = self._mesh_tables()
+        prog = ttnn.ProgramDescriptor()
+        dm = ttnn.DataMovementConfigDescriptor(
+            processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.RISCV_0_default
+        )
+        l1 = geo.l1_bytes()
+        cc = ttnn.CoreCoord(0, 0)
+        crs = ttnn.CoreRangeSet([ttnn.CoreRange(cc, cc)])
+        cbs = [
+            ttnn.CBDescriptor(
+                total_size=l1, core_ranges=crs, format_descriptors=[ttnn.CBFormatDescriptor(0, ttnn.uint8, l1)]
+            )
+        ]
+        rt = ttnn.RuntimeArgs()
+        rt[0][0] = (
+            [int(t.buffer_address()) for t in (counts, landing, G, st, rb, gu, d, consts)]
+            + [0, self.sem_addr]
+            + self._ring_args()
+            + _bytes_to_words(me_of)
+        )
+        kernels = [
+            ttnn.KernelDescriptor(
+                kernel_source=self.src,
+                source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
+                core_ranges=crs,
+                compile_time_args=geo.ct(0, self._ringpg(), 1),
+                runtime_args=rt,
+                config=dm,
+            )
+        ]
+        tables = _bytes_to_words(me_of) + _bytes_to_words(chip_of) + _2bits_to_words(hop) + _bytes_to_words(chan)
+        for di in used:
+            sc = ttnn.CoreCoord(1 + di, 0)
+            scr = ttnn.CoreRangeSet([ttnn.CoreRange(sc, sc)])
+            sl1 = -(-geo.cpage // 64) * 64 + 64 + geo.spw * 4 + 128
+            cbs.append(
+                ttnn.CBDescriptor(
+                    total_size=sl1, core_ranges=scr, format_descriptors=[ttnn.CBFormatDescriptor(0, ttnn.uint8, sl1)]
+                )
+            )
+            me, port = rep[di]
+            fab = list(ttnn.setup_fabric_connection(nodes[me], self._node(port["peer"]), port["links"][0], prog, sc))
+            assert len(fab) == 3, fab
+            args = [
+                int(counts.buffer_address()),
+                int(landing.buffer_address()),
+                int(G.buffer_address()),
+                self.sem_addr,
+                self.pxy[0],
+                self.pxy[1],
+                di,
+                mesh_id,
+                ndev,
+            ]
+            args += fab + tables
+            assert len(args) <= 200, len(args)  # (runtime args: at most 341 a core)
+            srt = ttnn.RuntimeArgs()
+            srt[sc.x][sc.y] = args
+            kernels.append(
+                ttnn.KernelDescriptor(
+                    kernel_source=self.src,
+                    source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
+                    core_ranges=scr,
+                    compile_time_args=geo.ct(1, self._ringpg(), 1),
+                    runtime_args=srt,
+                    config=dm,
+                )
+            )
+        prog.cbs = cbs
+        prog.kernels = kernels
+        md = ttnn.MeshProgramDescriptor()
+        md[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(self.R - 1, self.C - 1))] = prog
+        return md, 1 + len(used), 8 + 3 * len(used)
+
     def _reset_desc(self):
         geo = self.geo
         md = ttnn.MeshProgramDescriptor()
         rings = self._ring_args()
         l1 = -(-geo.gw * 4 // 64) * 64 + 256
-        for r in range(self.R):
-            for c in range(self.C):
+        one = self.lean()  # (P.62: ROLE 2 reads arg 0 and the rings only - arg 1, the position, is not read)
+        for r in range(1 if one else self.R):
+            for c in range(1 if one else self.C):
                 prog = ttnn.ProgramDescriptor()
                 cc = ttnn.CoreCoord(0, 0)
                 crs = ttnn.CoreRangeSet([ttnn.CoreRange(cc, cc)])
                 rt = ttnn.RuntimeArgs()
-                rt[0][0] = [int(self.G.buffer_address()), r * self.C + c] + rings
+                rt[0][0] = [int(self.G.buffer_address()), 0 if one else r * self.C + c] + rings
                 prog.cbs = [
                     ttnn.CBDescriptor(
                         total_size=l1, core_ranges=crs, format_descriptors=[ttnn.CBFormatDescriptor(0, ttnn.uint8, l1)]
@@ -512,16 +681,22 @@ class PrevReplicas:
                         ),
                     )
                 ]
-                md[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(r, c), ttnn.MeshCoordinate(r, c))] = prog
+                rng = (
+                    ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(self.R - 1, self.C - 1))
+                    if one
+                    else ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(r, c), ttnn.MeshCoordinate(r, c))
+                )
+                md[rng] = prog
         return md
 
     # ------------------------------------------------------------------ the model's hooks
     def reset(self, layers) -> None:
         """A request starts (begin_chunk at start 0 / a replay): every job page and the global state emptied on the
         device (a new epoch), every layer's plan forgotten (its first call runs off)."""
-        pp = self._reset_pp.get(self.mode)
+        key = (self.mode, self.lean())
+        pp = self._reset_pp.get(key)
         if pp is None:
-            pp = self._reset_pp[self.mode] = ttnn.bringup.prepare_program(self._reset_desc(), [self.G])
+            pp = self._reset_pp[key] = ttnn.bringup.prepare_program(self._reset_desc(), [self.G])
         ttnn.bringup.run_prepared(pp, [self.G])
         for m in layers:
             m._prev_ord = None
@@ -541,6 +716,8 @@ class PrevReplicas:
                 layer._prev_dirty = False
                 self.stats["off_copies"] += 1
         layer._prev_used = ok
+        if self._fx_on:  # (P.62 lean: the device mode's fill args are already set - the same every call)
+            return
         if self.mode == "device":  # (P.60: the same args every call - the ports read their ring slot from G[0])
             if self._fx_w is None:
                 self._fx_w = (layer.w_gu, layer.w_d)  # (unused by the ports: every job names its layer's buffers)
@@ -556,13 +733,45 @@ class PrevReplicas:
                 ordinal=self.G,
                 wait=False,
             )
+            self._fx_on = self.lean()
             return
         _mb().set_combine_fill_exact(
             self.res, True, layer.w_gu, layer.w_d, self.tables.runs, self.rings()[o % self.geo.W], self.limit
         )
 
+    def fill_off(self) -> None:
+        """The combine's exact fill switched off (prev off in a loaded model, tests): the next before() sets it again."""
+        _mb().set_combine_fill_exact(self.res, False)
+        self._fx_on = False
+
+    def set_mode(self, mode: str) -> None:
+        """Tests: the host path (MOE_PREV_HOST) switched in a loaded model; the fill args are set again."""
+        self.mode = mode
+        self._fx_on = False
+
     def after(self, layer, counts: ttnn.Tensor) -> None:
         """After layer's MoE call (counts: its fused head's per-chip counts): the planner (device) for its next call."""
+        lean = self.lean()
+        pp = self._plan_pp.get((self.mode, lean))
+        if lean and pp is not None:  # (P.62 lean: the steady call - dispatch and the ordinals, nothing else)
+            ttnn.bringup.run_prepared(
+                pp,
+                [
+                    counts,
+                    self.landing,
+                    self.G,
+                    layer._prev_state,
+                    layer.head_w.router_bias,
+                    layer.w_gu,
+                    layer.w_d,
+                    self.consts,
+                ],
+            )
+            layer._prev_ord = self.ord
+            layer._prev_dirty = True
+            self.ord += 1
+            self.stats["plans"] += 1
+            return
         io = [
             counts,
             self.landing,
@@ -573,17 +782,19 @@ class PrevReplicas:
             layer.w_d,
             self.consts,
         ]
-        pp = self._plan_pp.get(self.mode)
         if pp is None:
             assert int(counts.shape[-1]) == self.geo.n * self.geo.spc, (counts.shape, self.geo.n, self.geo.spc)
             assert counts.dtype == ttnn.uint32 and counts.layout == ttnn.ROW_MAJOR_LAYOUT, (counts.dtype, counts.layout)
-            md, cores, want = self._planner_desc(io, self.geo.cpage)
-            pp = self._plan_pp[self.mode] = ttnn.bringup.prepare_program(md, io)
+            md, cores, want = self._planner_desc_mesh(io) if lean else self._planner_desc(io, self.geo.cpage)
+            if lean:
+                cores *= self.geo.n  # (cores over the mesh, as the per-chip descriptor counts them)
+            pp = self._plan_pp[(self.mode, lean)] = ttnn.bringup.prepare_program(md, io)
             self._plan_cores = cores
             # (8 io addresses on each planner core, 3 on each sender core: anything else matched a frozen value)
             assert pp.patch_count == want, f"planner: {pp.patch_count} patched slots, want {want}"
             logger.info(
-                f"MOE_REPLICAS=prev: planner prepared ({self.mode}), {cores} cores ({cores / self.geo.n:.1f} a chip)"
+                f"MOE_REPLICAS=prev: planner prepared ({self.mode}, {'one mesh program' if lean else 'a program a chip'}),"
+                f" {cores} cores ({cores / self.geo.n:.1f} a chip)"
             )
         ttnn.bringup.run_prepared(pp, io)
         self.after_host(layer)
