@@ -496,8 +496,12 @@ constexpr float GELU_DERIV_SAT_ONE = 3.1719f;
 // - Zero saturation: x <= -13.375 (GELU'(x) becomes 0 in BF16)
 // - One saturation: x >= 3.1719 (GELU'(x) becomes exactly 1 in BF16)
 // Note: GELU'(x) has a "hump" exceeding 1.0 for x in [0.77, 3.16]
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
-sfpi_inline sfpi::vFloat calculate_gelu_derivative_simple(sfpi::vFloat x) {
+// h4 / h5 are GELU_DERIV_H4 / H5 as whatever the caller holds: a float (materialised where used,
+// as the literal is) or a vFloat the caller loaded once before its row loop. The approximation
+// arm passes vFloats (LReg6/7 are free there); the accurate arm passes the literals.
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, typename H4 = float, typename H5 = float>
+sfpi_inline sfpi::vFloat calculate_gelu_derivative_simple(
+    sfpi::vFloat x, H4 h4 = GELU_DERIV_H4, H5 h5 = GELU_DERIV_H5) {
     sfpi::vFloat result = 0.0f;  // Default: 0 for x <= -13.375
 
     // NaN (fp32 destination only). The region tests are sign-magnitude ordered compares, which
@@ -530,17 +534,35 @@ sfpi_inline sfpi::vFloat calculate_gelu_derivative_simple(sfpi::vFloat x) {
     // is odd and can be written as x * h(x²). Degree-8 in u=x² (~12 ops vs ~32).
     v_elseif(x >= -3.0f) {
         sfpi::vFloat u = is_fp32_dest_acc_en ? x2 : x * x;
-        sfpi::vFloat h = PolynomialEvaluator::eval(
-            u,
-            GELU_DERIV_H0,
-            GELU_DERIV_H1,
-            GELU_DERIV_H2,
-            GELU_DERIV_H3,
-            GELU_DERIV_H4,
-            GELU_DERIV_H5,
-            GELU_DERIV_H6,
-            GELU_DERIV_H7,
-            GELU_DERIV_H8);
+        sfpi::vFloat h;
+        if constexpr (APPROXIMATION_MODE) {
+            // No reciprocal in approximation mode, so gelu_derivative_polynomial_init<true> holds
+            // H6..H8 in the programmable constant registers, and the caller H4/H5 in LRegs,
+            // instead of reloading them (an SFPLOADI pair each) every row.
+            h = PolynomialEvaluator::eval(
+                u,
+                GELU_DERIV_H0,
+                GELU_DERIV_H1,
+                GELU_DERIV_H2,
+                GELU_DERIV_H3,
+                h4,
+                h5,
+                sfpi::vConstFloatPrgm0,
+                sfpi::vConstFloatPrgm1,
+                sfpi::vConstFloatPrgm2);
+        } else {
+            h = PolynomialEvaluator::eval(
+                u,
+                GELU_DERIV_H0,
+                GELU_DERIV_H1,
+                GELU_DERIV_H2,
+                GELU_DERIV_H3,
+                GELU_DERIV_H4,
+                GELU_DERIV_H5,
+                GELU_DERIV_H6,
+                GELU_DERIV_H7,
+                GELU_DERIV_H8);
+        }
         result = 0.5f + x * h;
     }
     // Tail region (-13.375, -3): asymptotic formula with fused x*exp(t)
@@ -582,15 +604,32 @@ sfpi_inline sfpi::vFloat calculate_gelu_derivative_simple(sfpi::vFloat x) {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_gelu_derivative_polynomial() {
+    if constexpr (APPROXIMATION_MODE) {
+        // H4 and H5 live in LRegs for the whole loop (the approximation arm leaves two free);
+        // H6..H8 come from the programmable constants (gelu_derivative_polynomial_init<true>).
+        sfpi::vFloat h4 = GELU_DERIV_H4;
+        sfpi::vFloat h5 = GELU_DERIV_H5;
 #pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat val = sfpi::dst_reg[0];
-        sfpi::vFloat result = calculate_gelu_derivative_simple<APPROXIMATION_MODE, is_fp32_dest_acc_en>(val);
-        if constexpr (!is_fp32_dest_acc_en) {
-            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
+        for (int d = 0; d < ITERATIONS; d++) {
+            sfpi::vFloat val = sfpi::dst_reg[0];
+            sfpi::vFloat result = calculate_gelu_derivative_simple<true, is_fp32_dest_acc_en>(val, h4, h5);
+            if constexpr (!is_fp32_dest_acc_en) {
+                result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
+            }
+            sfpi::dst_reg[0] = result;
+            sfpi::dst_reg++;
         }
-        sfpi::dst_reg[0] = result;
-        sfpi::dst_reg++;
+    } else {
+#pragma GCC unroll 8
+        for (int d = 0; d < ITERATIONS; d++) {
+            sfpi::vFloat val = sfpi::dst_reg[0];
+            sfpi::vFloat result = calculate_gelu_derivative_simple<false, is_fp32_dest_acc_en>(val);
+            if constexpr (!is_fp32_dest_acc_en) {
+                result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
+            }
+            sfpi::dst_reg[0] = result;
+            sfpi::dst_reg++;
+        }
     }
 }
 
@@ -610,6 +649,12 @@ inline void gelu_derivative_polynomial_init() {
         // asymmetry vs gelu_init() (which gained an fp32-specific branch) is
         // intentional — the derivative path has no LUT to load.
         sfpu_reciprocal_init<false>();
+    } else {
+        // No reciprocal in approximation mode: the programmable constant registers hold the
+        // three highest Horner coefficients for calculate_gelu_derivative_simple.
+        sfpi::vConstFloatPrgm0 = GELU_DERIV_H6;
+        sfpi::vConstFloatPrgm1 = GELU_DERIV_H7;
+        sfpi::vConstFloatPrgm2 = GELU_DERIV_H8;
     }
 }
 
