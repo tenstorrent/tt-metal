@@ -153,6 +153,16 @@ Tensor invoke_impl(
     const std::optional<CoreRangeSet>& sub_core_grids) {
     validate_where_scalar_for_integer_tensor(scalar_false, t_true.dtype());
     Tensor condition = predicate;
+    // The scalar route sends predicate and operand straight into binary_ng, which reconciles dtypes but not
+    // layouts: a TILE predicate with a ROW_MAJOR operand (or the reverse) reads the operand's buffer as tiles
+    // and returns roughly half-wrong values with no error. The TTT route is guarded by the ternary device op
+    // requiring TILE; ask for matching layouts here instead of forwarding the mixed pair.
+    TT_FATAL(
+        condition.layout() == t_true.layout(),
+        "ttnn.where with a scalar operand requires the predicate and the tensor operand to have the same layout "
+        "(both TILE or both ROW_MAJOR). predicate layout: {}, tensor operand layout: {}",
+        condition.layout(),
+        t_true.layout());
     bool typecast_needed = ternary_utils::typecast_predicate(predicate, t_true);
     if (typecast_needed) {
         condition = ttnn::typecast(predicate, t_true.dtype(), std::nullopt, std::nullopt, sub_core_grids);
@@ -177,6 +187,14 @@ Tensor invoke_impl(
     const std::optional<CoreRangeSet>& sub_core_grids) {
     validate_where_scalar_for_integer_tensor(scalar_true, t_false.dtype());
     Tensor condition = predicate;
+    // See the TTS overload: the scalar route does not reconcile layouts, and a mixed predicate/operand
+    // layout silently returns wrong values.
+    TT_FATAL(
+        condition.layout() == t_false.layout(),
+        "ttnn.where with a scalar operand requires the predicate and the tensor operand to have the same layout "
+        "(both TILE or both ROW_MAJOR). predicate layout: {}, tensor operand layout: {}",
+        condition.layout(),
+        t_false.layout());
     bool typecast_needed = ternary_utils::typecast_predicate(predicate, t_false);
     if (typecast_needed) {
         condition = ttnn::typecast(predicate, t_false.dtype(), std::nullopt, std::nullopt, sub_core_grids);
