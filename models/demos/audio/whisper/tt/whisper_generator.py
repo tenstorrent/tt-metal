@@ -23,6 +23,37 @@ from . import ttnn_optimized_functional_whisper
 from .ttnn_optimized_functional_whisper import WHISPER_BATCH_SIZE
 
 
+def _is_unspaced_script_char(ch: str) -> bool:
+    """True for characters of scripts written without inter-word spaces (CJK ideographs, kana, CJK and fullwidth punctuation, Thai)."""
+    cp = ord(ch)
+    return (
+        0x3000 <= cp <= 0x30FF
+        or 0x3400 <= cp <= 0x4DBF
+        or 0x4E00 <= cp <= 0x9FFF
+        or 0xF900 <= cp <= 0xFAFF
+        or 0xFF00 <= cp <= 0xFFEF
+        or 0x0E00 <= cp <= 0x0E7F
+        or 0x20000 <= cp <= 0x2FA1F
+    )
+
+
+def join_segment_texts(texts) -> str:
+    """Join stripped segment texts, inserting a space only where the text on both sides of the cut uses spaces.
+
+    A plain " ".join adds a space inside CJK/Thai sentences at every segment boundary, which the one-shot
+    decode (and the Hugging Face pipeline, which concatenates the raw decoded chunks) never does.
+    """
+    out = ""
+    for text in texts:
+        text = text.strip()
+        if not text:
+            continue
+        if out and not (_is_unspaced_script_char(out[-1]) or _is_unspaced_script_char(text[0])):
+            out += " "
+        out += text
+    return out
+
+
 @dataclass
 class GenerationParams:
     """Dataclass for Whisper generation parameters.
@@ -1512,7 +1543,7 @@ class WhisperGenerator:
                 if return_timestamps_per_item[batch_idx]:
                     final_result.append(segments_with_timestamps[batch_idx])
                 else:
-                    final_result.append(" ".join(seg["text"] for seg in segments_with_timestamps[batch_idx]).strip())
+                    final_result.append(join_segment_texts(seg["text"] for seg in segments_with_timestamps[batch_idx]))
 
             # Yield final result (works for both streaming and non-streaming)
             # For streaming mode, include is_final=True to mark this as the final result
