@@ -1190,14 +1190,6 @@ class LTXPipeline:
         # half-written cache is served back silently instead of missing and rebuilding.
         sources = [self.checkpoint_name, *(s.path for s in state.lora_specs)]
         post_load_hook = getattr(self, "_transformer_post_load_hook", None)
-        if LTX_FUSE_GATE_ON_DEVICE:
-            quant_hook = post_load_hook
-
-            def post_load_hook(model):
-                if quant_hook is not None:
-                    quant_hook(model)
-                model.fold_gates_on_device()
-
         cache_module.load_model(
             state.model,
             model_name=state.cache_name,
@@ -1210,6 +1202,13 @@ class LTXPipeline:
             get_torch_state_dict=state.state_dict_provider,
             post_load_hook=post_load_hook,
         )
+        # The gate fold runs after load_model, never as its post_load_hook: on a cache miss that hook
+        # runs before the cache is written, and the fold releases the unfused Q/QKV and gate shards the
+        # write still reads ("parameter has no data" on a 4x8 Ring, FastH3 #650 blx04 job 716). Here it
+        # folds the weights every load path leaves in place: a hit, a miss reloaded from the cache it
+        # wrote, or a state-dict build with no cache. An already-folded module is skipped per attention.
+        if LTX_FUSE_GATE_ON_DEVICE:
+            state.model.fold_gates_on_device()
         self.transformer = state.model
         if self.dynamic_load and self._traced:
             self._release_dit_traces_if_weights_moved(state.model)

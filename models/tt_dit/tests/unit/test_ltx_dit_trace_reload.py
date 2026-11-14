@@ -204,3 +204,64 @@ def test_distilled_pipeline_releases_its_stage_transition_beside_the_dit():
     assert p._tracers_replayed_beside_dit() == []
     Pipe._stage_transition._tracers_keyed[p] = {"t12": t12}
     assert p._tracers_replayed_beside_dit() == [t12]
+
+
+class FoldingDit(Mod):
+    """A DiT whose gate fold releases the unfused shards, as attention_ltx.fold_gate_on_device does."""
+
+    def __init__(self):
+        super().__init__(params=[0x1000, 0x2000])
+        self.folds = 0
+
+    def fold_gates_on_device(self):
+        if all(p._data is None for p in self.params):
+            return  # already folded
+        self.folds += 1
+        for p in self.params:
+            p._data = None
+
+
+def _cache_miss_load(events):
+    """Fake cache.load_model on a miss: build, post_load_hook, write the cache, reload from it, hook again."""
+
+    def load_model(model, *, post_load_hook=None, **kw):
+        for p in model.params:
+            p._data = Buffer(0x1000)
+        if post_load_hook is not None:
+            post_load_hook(model)
+        if any(p._data is None for p in model.params):
+            raise RuntimeError("parameter has no data")  # Parameter.save on the cache write
+        events.append("saved")
+        for p in model.params:
+            p._data = Buffer(0x5000)
+        if post_load_hook is not None:
+            post_load_hook(model)
+
+    return load_model
+
+
+def test_gate_fold_runs_after_the_cache_write_on_a_miss():
+    ns, base, _, _ = _namespace()
+    events = []
+    ns["LTX_FUSE_GATE_ON_DEVICE"] = True
+    ns["cache_module"] = SimpleNamespace(load_model=_cache_miss_load(events))
+    dit = FoldingDit()
+    pipe = _pipeline(base, dit, dynamic_load=False)
+    pipe._transformer_post_load_hook = None
+    pipe._prepare_transformer(0)  # 4x8 Ring miss: before the fix the fold ran in the hook and the write raised
+    assert events == ["saved"] and dit.folds == 1
+    assert all(p._data is None for p in dit.params)  # folded once, after the write
+    pipe._prepare_transformer(0)  # a later load folds what it loaded
+    assert dit.folds == 2
+
+
+def test_quant_hook_still_runs_before_the_cache_write():
+    ns, base, _, _ = _namespace()
+    events = []
+    ns["LTX_FUSE_GATE_ON_DEVICE"] = True
+    ns["cache_module"] = SimpleNamespace(load_model=_cache_miss_load(events))
+    dit = FoldingDit()
+    pipe = _pipeline(base, dit, dynamic_load=False)
+    pipe._transformer_post_load_hook = lambda model: events.append("quant")
+    pipe._prepare_transformer(0)
+    assert events == ["quant", "saved", "quant"] and dit.folds == 1
