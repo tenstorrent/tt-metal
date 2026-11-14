@@ -27,6 +27,7 @@
 #include "nb_export_enum.hpp"
 #include "nb_fwd.hpp"
 #include "ops/binary_ops.hpp"
+#include "ops/chunk_gated_delta_rule_composite.hpp"
 #include "ops/conv3d_op.hpp"
 #include "ops/distributed/comm_ops.hpp"
 #include "ops/distributed/losses.hpp"
@@ -62,6 +63,7 @@ void py_module_types(nb::module_& m) {
     ttml::nanobind::util::export_enum<ReduceType>(m);
 
     m.def_submodule("binary");
+    m.def_submodule("chunk_gated_delta_rule");
     m.def_submodule("conv");
     m.def_submodule("distributed");
     m.def_submodule("dropout");
@@ -567,6 +569,57 @@ void py_module(nb::module_& m) {
             nb::arg("shape"));
     }
 
+    {
+        auto py_cgdr = static_cast<nb::module_>(m.attr("chunk_gated_delta_rule"));
+        py_cgdr.def(
+            "chunk_gated_delta_rule_fw_composite",
+            [](const ttnn::Tensor& q,
+               const ttnn::Tensor& k,
+               const ttnn::Tensor& v,
+               const ttnn::Tensor& g,
+               const ttnn::Tensor& beta,
+               uint32_t key_head_dim,
+               const std::optional<ttnn::Tensor>& initial_state,
+               uint32_t chunk_size,
+               std::optional<float> scale,
+               bool output_head_major,
+               tt::tt_metal::DataType output_dtype,
+               bool save_for_backward) {
+                auto r = ttml::ops::chunk_gated_delta_rule_fw_composite(
+                    q,
+                    k,
+                    v,
+                    g,
+                    beta,
+                    key_head_dim,
+                    initial_state,
+                    chunk_size,
+                    scale,
+                    output_head_major,
+                    output_dtype,
+                    save_for_backward);
+                return std::make_tuple(r.output, r.final_state, r.h, r.v_new, r.a);
+            },
+            nb::arg("q"),
+            nb::arg("k"),
+            nb::arg("v"),
+            nb::arg("g"),
+            nb::arg("beta"),
+            nb::arg("key_head_dim"),
+            nb::arg("initial_state") = nb::none(),
+            nb::arg("chunk_size") = 64U,
+            nb::arg("scale") = nb::none(),
+            nb::arg("output_head_major") = false,
+            nb::arg("output_dtype") = tt::tt_metal::DataType::FLOAT32,
+            nb::arg("save_for_backward") = true,
+            "Chunked gated delta rule forward from existing ttnn ops, with the intermediates the backward needs.\n"
+            "q, k [B,1,T,HK*K] bf16 (L2-normalized along K); v [B,1,T,HV*V] bf16; g, beta [B,1,T,HV];\n"
+            "initial_state [B,HV,K,V] fp32 (optional).\n"
+            "Returns (o [B,1,T,HV*V] or [B*HV,1,T,V] if output_head_major, final_state [B,HV,K,V], h [B*HV,NC,K,V], "
+            "v_new [B*HV,1,T,V],\n"
+            "A [B*HV,1,T,C]).  All fp32 except o, which is output_dtype (float32 or bfloat16).\n"
+            "With save_for_backward=False the h, v_new and A entries are None.");
+    }
     {
         auto py_rmsnorm = static_cast<nb::module_>(m.attr("rmsnorm"));
         py_rmsnorm.def("rmsnorm", &ttml::ops::rmsnorm, nb::arg("tensor"), nb::arg("gamma"), nb::arg("epsilon"));
