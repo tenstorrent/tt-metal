@@ -41,6 +41,7 @@
 #include "tt-metalium/program.hpp"
 #include "dispatch/system_memory_manager.hpp"
 #include "trace/trace_buffer.hpp"
+#include "trace/trace_capture_buffer.hpp"
 #include "tt_metal/impl/threading/thread_pool.hpp"
 #include "tt_metal/common/multi_producer_single_consumer_queue.hpp"
 #include "tt_metal/distributed/mesh_workload_utils.hpp"
@@ -228,6 +229,10 @@ FDMeshCommandQueue::FDMeshCommandQueue(
 }
 
 FDMeshCommandQueue::~FDMeshCommandQueue() {
+    if (trace_id_.has_value()) {
+        // Destroyed mid-capture: the trace is dropped, so this CQ no longer blocks the others.
+        cq_shared_state_->num_cqs_capturing_trace.fetch_sub(1, std::memory_order_relaxed);
+    }
     // Mock/emulated devices don't have actual completion queues, skip validation
     auto target_type = this->get_target_device_type();
     bool is_mock = target_type == tt::TargetDevice::Mock || target_type == tt::TargetDevice::Emule;
@@ -411,8 +416,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     SubDeviceId sub_device_id = *(sub_device_ids.begin());
     auto mesh_device_id = mesh_device_->id();
     const ProgramBinaryStatus program_binary_status = mesh_workload.impl().get_program_binary_status(mesh_device_id);
-    auto& sysmem_manager = this->reference_sysmem_manager();
-    if (!sysmem_manager.get_bypass_mode()) {
+    if (!trace_id_.has_value()) {
         auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
         auto& sub_device = sub_device_cq_owner[*sub_device_id];
         sub_device.take_ownership(sub_device_id, this->id_);
@@ -432,7 +436,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
 
     TracyTTMetalEnqueueMeshWorkloadTrace(mesh_device_, mesh_workload, this->trace_id());
 
-    if (sysmem_manager.get_bypass_mode()) {
+    if (trace_id_.has_value()) {
         TT_FATAL(!blocking, "Blocking is not supported when recording a trace.");
         trace_nodes_.push_back(MeshTraceNode{});
         auto& trace_node = trace_nodes_.back();
@@ -450,7 +454,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
 
     program_dispatch::ProgramDispatchMetadata dispatch_metadata;
     // Expected number of workers from the previous run
-    uint32_t expected_num_workers_completed = sysmem_manager.get_bypass_mode()
+    uint32_t expected_num_workers_completed = trace_id_.has_value()
                                                   ? trace_ctx_->descriptors[sub_device_id].num_completion_worker_cores
                                                   : expected_num_workers_completed_[*sub_device_id];
     const auto updated_worker_counts =
@@ -1261,9 +1265,7 @@ void FDMeshCommandQueue::reset_worker_state(
     uint32_t num_sub_devices,
     const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping,
     ttsl::Span<const uint32_t> workers_per_sub_device) {
-    for (auto* device : mesh_device_->impl().get_devices()) {
-        TT_FATAL(!device->sysmem_manager().get_bypass_mode(), "Cannot reset worker state during trace capture");
-    }
+    TT_FATAL(!any_cq_capturing_trace(), "Cannot reset worker state during trace capture");
     // The launch message ring buffer and the worker GO mailboxes are shared across hardware CQs, and only the
     // CQ that is passed reset_launch_msg_state resets them. Nothing orders that reset against worker programs
     // still outstanding on the other CQs, so drain this CQ before the resetting CQ remaps the mailboxes. The
@@ -1367,8 +1369,8 @@ void FDMeshCommandQueue::write_program_commands_to_devices(
         }
     }
     for (auto* device : devices) {
-        program_dispatch::write_program_command_sequence(
-            program_cmd_seq, device->sysmem_manager(), id_, stall_first, stall_before_program);
+        CqCommandSink sink(device->sysmem_manager(), id_);
+        program_dispatch::write_program_command_sequence(program_cmd_seq, sink, stall_first, stall_before_program);
     }
 }
 
@@ -1388,11 +1390,11 @@ void FDMeshCommandQueue::write_go_signal_sequences_to_unused_sub_grids(
 
     for (auto& device : mesh_device_->impl().get_devices()) {
         if (!chip_ids_in_workload.contains(device->id())) {
+            CqCommandSink sink(device->sysmem_manager(), id_);
             write_go_signal_sequence(
-                id_,
+                sink,
                 mesh_device_,
                 sub_device_id,
-                device->sysmem_manager(),
                 expected_num_workers_completed,
                 mcast_go_signals,
                 go_ring_slot,
@@ -1404,6 +1406,7 @@ void FDMeshCommandQueue::write_go_signal_sequences_to_unused_sub_grids(
 
 void FDMeshCommandQueue::enqueue_trace(const MeshTraceId& trace_id, bool blocking) {
     auto lock = lock_api_function_();
+    TT_FATAL(!trace_id_.has_value(), "Trace replay is not supported during trace capture.");
     in_use_ = true;
     auto trace_inst = mesh_device_->get_mesh_trace(trace_id);
     submit_replay_buffer(trace_inst->desc->descriptors, trace_inst->desc->sub_device_ids, *trace_inst->mesh_buffer);
@@ -1612,20 +1615,9 @@ void FDMeshCommandQueue::submit_replay_buffer(
 
 void FDMeshCommandQueue::record_begin(const MeshTraceId& trace_id, const std::shared_ptr<MeshTraceDescriptor>& ctx) {
     auto lock = lock_api_function_();
-    trace_dispatch::reset_host_dispatch_state_for_trace(
-        mesh_device_->num_sub_devices(),
-        cq_shared_state_->worker_launch_message_buffer_state,
-        expected_num_workers_completed_,
-        config_buffer_mgr_,
-        worker_launch_message_buffer_state_reset_,
-        expected_num_workers_completed_reset_,
-        config_buffer_mgr_reset_);
-
     trace_id_ = trace_id;
     trace_ctx_ = ctx;
-    for (auto* device : mesh_device_->impl().get_devices()) {
-        device->sysmem_manager().set_bypass_mode(/*enable*/ true, /*clear*/ true);
-    }
+    cq_shared_state_->num_cqs_capturing_trace.fetch_add(1, std::memory_order_relaxed);
 
     swap(this->dummy_prefetcher_cache_manager_, this->prefetcher_cache_manager_);
 }
@@ -1721,11 +1713,9 @@ void FDMeshCommandQueue::record_end() {
         // cache manager to give each range a clean slate.
         this->reset_prefetcher_cache_manager();
 
-        auto& sysmem_manager_for_trace = internal::get_device(*mesh_device_, range.start_coord())->sysmem_manager();
-        auto& worker_launch_message_buffer_state = cq_shared_state_->worker_launch_message_buffer_state;
-        for (uint32_t sub_device_id = 0; sub_device_id < mesh_device_->num_sub_devices(); sub_device_id++) {
-            worker_launch_message_buffer_state[sub_device_id].reset();
-        }
+        TraceCaptureBuffer trace_buffer;
+        // The trace starts from launch message slot 0. The live state, shared by the mesh's CQs, is left alone.
+        DispatchArray<LaunchMessageRingBufferState> worker_launch_message_buffer_state{};
         std::unordered_map<SubDeviceId, TraceWorkerDescriptor> trace_worker_descriptors;
         // Output a GO signal for each unused mesh node, to ensure that the launch message buffer write pointer and
         // number of expected workers matches across all devices. We do this at the beginning of the trace, becaue the
@@ -1739,10 +1729,9 @@ void FDMeshCommandQueue::record_end() {
                 program_dispatch::ProgramDispatchMetadata go_signal_md;
                 go_signal_md.prefetcher_cache_info.is_cached = true;
                 write_go_signal_sequence(
-                    this->id_,
+                    trace_buffer,
                     this->mesh_device_,
                     sub_device,
-                    sysmem_manager_for_trace,
                     trace_worker_descriptor.num_completion_worker_cores,
                     /*send_mcast=*/true,
                     worker_launch_msg_state.get_mcast_wptr(),
@@ -1830,8 +1819,7 @@ void FDMeshCommandQueue::record_end() {
             // Issue dispatch commands for this program
             program_dispatch::write_program_command_sequence(
                 cached_program_command_sequence,
-                sysmem_manager_for_trace,
-                this->id_,
+                trace_buffer,
                 node.dispatch_metadata.stall_first,
                 node.dispatch_metadata.stall_before_program,
                 node.dispatch_metadata.send_binary);
@@ -1844,12 +1832,12 @@ void FDMeshCommandQueue::record_end() {
             trace_worker_descriptors[sub_device_id].num_completion_worker_cores += num_workers;
         }
 
-        auto& bypass_data = sysmem_manager_for_trace.get_bypass_data();
-        bypass_data.insert(bypass_data.end(), exec_buf_end.begin(), exec_buf_end.end());
+        std::vector<uint32_t> trace_data = std::move(trace_buffer).take();
+        trace_data.insert(trace_data.end(), exec_buf_end.begin(), exec_buf_end.end());
 
-        max_trace_size = std::max(max_trace_size, bypass_data.size());
+        max_trace_size = std::max(max_trace_size, trace_data.size());
 
-        trace_ctx_->ordered_trace_data.push_back(MeshTraceData{range, std::move(bypass_data)});
+        trace_ctx_->ordered_trace_data.push_back(MeshTraceData{range, std::move(trace_data)});
 
         if (!overall_trace_worker_descriptors) {
             overall_trace_worker_descriptors = trace_worker_descriptors;
@@ -1874,19 +1862,7 @@ void FDMeshCommandQueue::record_end() {
 
     trace_id_ = std::nullopt;
     trace_ctx_ = nullptr;
-
-    trace_dispatch::load_host_dispatch_state(
-        mesh_device_->num_sub_devices(),
-        cq_shared_state_->worker_launch_message_buffer_state,
-        expected_num_workers_completed_,
-        config_buffer_mgr_,
-        worker_launch_message_buffer_state_reset_,
-        expected_num_workers_completed_reset_,
-        config_buffer_mgr_reset_);
-
-    for (auto* device : mesh_device_->impl().get_devices()) {
-        device->sysmem_manager().set_bypass_mode(/*enable*/ false, /*clear*/ true);
-    }
+    cq_shared_state_->num_cqs_capturing_trace.fetch_sub(1, std::memory_order_relaxed);
 
     // Trace has modified the prefetcher cache manager so reset it first and then swap to restore the state as before
     // the recording
@@ -1894,9 +1870,8 @@ void FDMeshCommandQueue::record_end() {
     swap(this->dummy_prefetcher_cache_manager_, this->prefetcher_cache_manager_);
 }
 
-SystemMemoryManager& FDMeshCommandQueue::reference_sysmem_manager() {
-    auto local_devices = mesh_device_->impl().get_devices();
-    return local_devices.at(0)->sysmem_manager();
+bool FDMeshCommandQueue::any_cq_capturing_trace() const {
+    return cq_shared_state_->num_cqs_capturing_trace.load(std::memory_order_relaxed) != 0;
 }
 
 std::pair<bool, size_t> FDMeshCommandQueue::query_prefetcher_cache(uint64_t workload_id, uint32_t lengthB) {
@@ -1920,9 +1895,7 @@ int FDMeshCommandQueue::get_prefetcher_cache_sizeB() const {
 void FDMeshCommandQueue::wait_for_completion(bool reset_launch_msg_state) {
     if (in_use_) {
         size_t num_sub_devices = mesh_device_->num_sub_devices();
-        for (auto* device : mesh_device_->impl().get_devices()) {
-            TT_FATAL(!device->sysmem_manager().get_bypass_mode(), "Cannot reset worker state during trace capture");
-        }
+        TT_FATAL(!any_cq_capturing_trace(), "Cannot reset worker state during trace capture");
         cq_shared_state_->sub_device_cq_owner.clear();
         cq_shared_state_->sub_device_cq_owner.resize(num_sub_devices);
         for (auto* device : mesh_device_->impl().get_devices()) {

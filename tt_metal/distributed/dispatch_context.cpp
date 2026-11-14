@@ -419,6 +419,9 @@ void DispatchContext::terminate_fast_dispatch(distributed::MeshDevice* mesh_devi
     const auto& device_manager = metal_context.device_manager();
     const auto& active_devices = device_manager->get_all_active_devices();
 
+    for (const auto& cq : mesh_device_impl.mesh_command_queues_) {
+        TT_FATAL(!cq->trace_id().has_value(), "Terminate cannot be used with tracing");
+    }
     mesh_device_impl.mesh_command_queues_.clear();
 
     // Restore stashed SD queues to preserve pre-FD state (e.g. asynchronous_slow_dispatch_enabled_)
