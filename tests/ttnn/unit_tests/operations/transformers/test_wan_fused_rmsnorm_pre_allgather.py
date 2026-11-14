@@ -36,6 +36,52 @@ def test_wan_fused_rmsnorm_pre_allgather_rejects_zero_width(device, expect_error
         ttnn.experimental.wan_fused_rmsnorm_pre_allgather(tt_input, dtype=ttnn.bfloat16)
 
 
+@pytest.mark.parametrize(
+    "input_memory_config, output_memory_config",
+    [
+        (ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG),
+        (ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+        (ttnn.DRAM_MEMORY_CONFIG, None),
+        (ttnn.L1_MEMORY_CONFIG, None),
+    ],
+    ids=["dram_to_l1", "l1_to_dram", "dram_default", "l1_default"],
+)
+def test_wan_fused_rmsnorm_pre_allgather_memory_config(device, input_memory_config, output_memory_config):
+    torch.manual_seed(0)
+    torch_input = torch.randn(1, 1, 64, 256)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=input_memory_config,
+    )
+    reference = ttnn.experimental.wan_fused_rmsnorm_pre_allgather(tt_input, dtype=ttnn.bfloat16)
+    tt_stats = ttnn.experimental.wan_fused_rmsnorm_pre_allgather(
+        tt_input, dtype=ttnn.bfloat16, memory_config=output_memory_config
+    )
+
+    expected_memory_config = output_memory_config if output_memory_config is not None else input_memory_config
+    assert tt_stats.memory_config().buffer_type == expected_memory_config.buffer_type
+    assert tt_stats.memory_config().memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
+    assert torch.equal(ttnn.to_torch(tt_stats), ttnn.to_torch(reference))
+
+
+def test_wan_fused_rmsnorm_pre_allgather_rejects_sharded_output(device, expect_error):
+    # The writer addresses the output as interleaved tiles.
+    tt_input = ttnn.from_torch(torch.randn(1, 1, 32, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    sharded_memory_config = ttnn.create_sharded_memory_config(
+        (32, 32),
+        core_grid=ttnn.CoreGrid(y=1, x=1),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        use_height_and_width_as_shard_shape=True,
+    )
+    with expect_error(RuntimeError, "Output memory config must use INTERLEAVED memory layout"):
+        ttnn.experimental.wan_fused_rmsnorm_pre_allgather(
+            tt_input, dtype=ttnn.bfloat16, memory_config=sharded_memory_config
+        )
+
+
 # compute_output_specs divides the width by num_heads_per_device before validate runs.
 def test_wan_fused_rmsnorm_post_allgather_rejects_zero_heads(device, expect_error):
     tt_input = ttnn.from_torch(torch.randn(1, 1, 32, 128), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)

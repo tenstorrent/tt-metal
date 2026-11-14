@@ -39,5 +39,8 @@ struct FusedRMSNormPreAllGatherDeviceOperation {
 
 namespace ttnn::prim {
 Tensor fused_rmsnorm_pre_all_gather(
-    const Tensor& input_tensor, tt::tt_metal::DataType dtype, const DeviceComputeKernelConfig& compute_kernel_config);
+    const Tensor& input_tensor,
+    tt::tt_metal::DataType dtype,
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    const tt::tt_metal::MemoryConfig& memory_config);
 }  // namespace ttnn::prim
