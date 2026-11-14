@@ -8,15 +8,13 @@
 #include "ckernel_defs.h"
 #include "cmath_common.h"
 #include "sfpi.h"
+#include "ckernel_sfpu_row_pair.h"
 
 namespace ckernel::sfpu {
 
 inline void square_init() {
-    // The paired store walks dest through physical addr_mod slot 6, advancing by the two
-    // rows the loop just wrote (one sfpi row is two dest counter steps), so the loop body
-    // needs no separate increment. Unary SFPU sets addr_mod_base, so the store names
-    // ADDR_MOD_2, which maps to physical slot 6.
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 4}}.set(ADDR_MOD_6);
+    // The two-row body advances Dest from its second store (see ckernel_sfpu_row_pair.h).
+    _init_sfpu_row_pair_();
     math::reset_counters(p_setrwc::SET_ABD_F);
 
     sfpi::vConstIntPrgm0 = 1;
@@ -47,7 +45,8 @@ inline void calculate_square() {
             r1 = float32_to_bf16_rne_prgm(r1);
         }
         sfpi::dst_reg[0] = r0;
-        sfpi::dst_reg[1].mode(ADDR_MOD_2) = r1;
+        _sfpu_row_pair_store_second_(r1);
+        _sfpu_row_pair_end_();
     }
 }
 
