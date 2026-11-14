@@ -156,11 +156,33 @@ def test_unary_composite_clip_ttnn(input_shapes, min_val, max_val, device, expec
         with expect_error(RuntimeError, "Only one of 'min' or 'max' can be None. Please provide one value"):
             ttnn.clip(input_tensor1, min_tensor, max_tensor)
     else:
-        output_tensor = ttnn.clip(input_tensor1, min_tensor, max_tensor)
-        golden_function = ttnn.get_golden_function(ttnn.clip)
+        output_tensor = ttnn.clamp(input_tensor1, min_tensor, max_tensor)
+        golden_function = ttnn.get_golden_function(ttnn.clamp)
         golden_tensor = golden_function(in_data1, min, max)
         comp_pass = compare_pcc([output_tensor], [golden_tensor])
         assert comp_pass
+
+
+def test_unary_composite_clip_int_scalar_bounds(device):
+    torch.manual_seed(0)
+    lo = 2**24 + 1  # 16777217, not representable in float32
+    hi = 2**31 - 2  # 2147483646
+    in_data = torch.tensor([0, 1, 16777216, 16777217, 16777218, 2147483646, 2147483647, -5], dtype=torch.int32)
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.clip(input_tensor, lo, hi)
+    golden = torch.clip(in_data.to(torch.int64), lo, hi)
+    assert torch.equal(ttnn.to_torch(output_tensor).to(torch.int64), golden)
+
+
+def test_unary_composite_clip_float_control(device):
+    torch.manual_seed(0)
+    in_data = torch.randn((1, 1, 4, 4), dtype=torch.float32)
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.clip(input_tensor, -0.5, 0.5)
+    golden = torch.clip(in_data, -0.5, 0.5)
+    assert torch.equal(ttnn.to_torch(output_tensor), golden)
 
 
 @pytest.mark.parametrize(
