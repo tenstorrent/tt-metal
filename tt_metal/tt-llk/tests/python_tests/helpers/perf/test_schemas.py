@@ -519,8 +519,10 @@ PERF_TEST_SCHEMAS = {
         "test_name_aliases": {"perf_matmul": "perf_matmul"},
     },
     "perf_pack_dest_bank": {
-        "version": 4,
+        "version": 5,
         "columns": [
+            "block_ct_dim",
+            "block_rt_dim",
             "dest_acc",
             "dst_index",
             "formats.input_A",
@@ -530,6 +532,8 @@ PERF_TEST_SCHEMAS = {
             "formats.register_B",
             "formats.sfpu_src",
             "formats.sfpu_dst",
+            "full_ct_dim",
+            "full_rt_dim",
             "input_num_blocks",
             "input_num_tiles_in_block",
             "l1_acc",
