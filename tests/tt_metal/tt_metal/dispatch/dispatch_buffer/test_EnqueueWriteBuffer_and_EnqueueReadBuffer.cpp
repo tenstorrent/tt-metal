@@ -24,9 +24,7 @@
 #include <optional>
 #include <set>
 #include <string>
-#include <string_view>
 #include <utility>
-#include <variant>
 #include <vector>
 
 #include <tt_stl/assert.hpp>
@@ -2369,31 +2367,18 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, ShardedBufferL1ReadWrites) {
     std::map<std::string, std::vector<std::array<uint32_t, 2>>> test_params;
 
     for (const auto& mesh_device : devices_) {
-        // This test hangs on Blackhole A0 when using static VCs through static TLBs and there are large number of
-        // reads/writes issued
-        //  workaround is to use dynamic VC (implemented in UMD)
-        if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
-            test_params = {
-                {"cores",
-                 {{1, 1},
-                  {static_cast<uint32_t>(mesh_device->compute_with_storage_grid_size().x),
-                   static_cast<uint32_t>(mesh_device->compute_with_storage_grid_size().y)}}},
-                {"num_pages", {{3, 65}}},
-                {"page_shape", {{32, 32}}}};
-        } else {
-            test_params = {
-                {"cores",
-                 {{1, 1},
-                  {5, 1},
-                  {1, 5},
-                  {5, 3},
-                  {3, 5},
-                  {5, 5},
-                  {static_cast<uint32_t>(mesh_device->compute_with_storage_grid_size().x),
-                   static_cast<uint32_t>(mesh_device->compute_with_storage_grid_size().y)}}},
-                {"num_pages", {{1, 1}, {2, 1}, {1, 2}, {2, 2}, {7, 11}, {3, 65}, {67, 4}, {3, 137}}},
-                {"page_shape", {{32, 32}, {1, 4}, {1, 120}, {1, 1024}, {1, 2048}}}};
-        }
+        test_params = {
+            {"cores",
+             {{1, 1},
+              {5, 1},
+              {1, 5},
+              {5, 3},
+              {3, 5},
+              {5, 5},
+              {static_cast<uint32_t>(mesh_device->compute_with_storage_grid_size().x),
+               static_cast<uint32_t>(mesh_device->compute_with_storage_grid_size().y)}}},
+            {"num_pages", {{1, 1}, {2, 1}, {1, 2}, {2, 2}, {7, 11}, {3, 65}, {67, 4}, {3, 137}}},
+            {"page_shape", {{32, 32}, {1, 4}, {1, 120}, {1, 1024}, {1, 2048}}}};
         for (const std::array<uint32_t, 2> cores : test_params.at("cores")) {
             for (const std::array<uint32_t, 2> num_pages : test_params.at("num_pages")) {
                 for (const std::array<uint32_t, 2> page_shape : test_params.at("page_shape")) {

@@ -23,21 +23,19 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/device.hpp>
-#include "tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp"
 #include "fabric_fixture.hpp"
 #include "utils.hpp"
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
-#include <tt_stl/span.hpp>
-#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include <tt-umd/types/core_coordinates.hpp>
+#include "impl/dispatch/slow_dispatch.hpp"
 #include "test_host_kernel_common.hpp"
 
 namespace tt::tt_fabric::fabric_router_tests {
