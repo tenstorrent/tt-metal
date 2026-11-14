@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-#include <array>
 #include <cstdint>
 #include <cstdio>
 
@@ -21,16 +19,8 @@ std::uint32_t math_sync_tile_dst_index = 0;
 
 constexpr std::uint32_t num_calls = CUSTOM_MM_NUM_CALLS;
 
-static constexpr std::uint32_t METAS_PER_WORD   = 5;
-static constexpr std::uint32_t META_STRIDE      = 6;
-static constexpr std::uint32_t META_HEADER_BITS = 2;
-static constexpr std::uint32_t FACES_PER_META   = 4;
-static constexpr std::uint32_t META_MASK        = (1u << META_STRIDE) - 1;
-static constexpr std::uint32_t FACE_BITS_MASK   = (1u << FACES_PER_META) - 1;
-static constexpr std::uint32_t METAS_PER_BLOCK  = 2 * CT_DIM;
-static constexpr std::uint32_t NUM_BLOCKS       = KT_DIM / 2;
+static constexpr std::uint32_t METAS_PER_WORD = 5;
 
-// Copy the compile-time metadata into the reserved perf buffer.
 inline void initialize_perf_compressed_meta(const std::uint32_t meta_base)
 {
 #ifdef LLK_PROFILER
@@ -50,92 +40,9 @@ inline void initialize_perf_compressed_meta(const std::uint32_t meta_base)
 #endif
 }
 
-struct FaceCompressedBurst
-{
-    std::uint32_t nonzero_faces;
-    bool last_nonzero;
-};
-
-#ifdef LLK_PROFILER
-constexpr std::array<FaceCompressedBurst, NUM_BLOCKS> make_face_compressed_bursts()
-{
-    std::array<FaceCompressedBurst, NUM_BLOCKS> bursts {};
-    for (std::uint32_t block = 0; block < NUM_BLOCKS; ++block)
-    {
-        for (std::uint32_t m = 0; m < METAS_PER_BLOCK; ++m)
-        {
-            const std::uint32_t meta_index = block * METAS_PER_BLOCK + m;
-            const std::uint32_t meta = (PERF_COMPRESSED_META_WORDS[meta_index / METAS_PER_WORD] >> (META_STRIDE * (meta_index % METAS_PER_WORD))) & META_MASK;
-            const std::uint32_t face_bits = (meta >> META_HEADER_BITS) & FACE_BITS_MASK;
-            for (std::uint32_t face = 0; face < FACES_PER_META; ++face)
-            {
-                const bool nonzero = (face_bits & (1u << face)) != 0;
-                bursts[block].nonzero_faces += nonzero;
-                if (m + 1 == METAS_PER_BLOCK && face + 1 == FACES_PER_META)
-                {
-                    bursts[block].last_nonzero = nonzero;
-                }
-            }
-        }
-    }
-    return bursts;
-}
-
-static constexpr auto FACE_COMPRESSED_BURSTS = make_face_compressed_bursts();
-#endif
-
-// Count-equivalent approximation: coalesce each block into bursts instead of
-// reproducing the unpacker's up-to-three-face SrcB lookahead.
-template <bool post>
-inline void face_compressed_isolate_dvalids(const std::uint32_t loop_factor)
-{
-#ifdef LLK_PROFILER
-    for (std::uint32_t loop = 0; loop < loop_factor; ++loop)
-    {
-        for (const FaceCompressedBurst burst : FACE_COMPRESSED_BURSTS)
-        {
-            if constexpr (post)
-            {
-                _perf_unpack_loop_set_valid<false /* set_a */, true /* set_b */>(1 /* iterations */);
-                if (burst.nonzero_faces > 0)
-                {
-                    _perf_unpack_loop_set_valid<true /* set_a */, false /* set_b */>(burst.nonzero_faces);
-                }
-            }
-            else if (burst.last_nonzero)
-            {
-                if (burst.nonzero_faces > 1)
-                {
-                    _perf_math_loop_clear_valid<true /* clear_a */, false /* clear_b */>(burst.nonzero_faces - 1);
-                }
-                _perf_math_loop_clear_valid<true /* clear_a */, true /* clear_b */>(1 /* iterations */);
-            }
-            else
-            {
-                if (burst.nonzero_faces > 0)
-                {
-                    _perf_math_loop_clear_valid<true /* clear_a */, false /* clear_b */>(burst.nonzero_faces);
-                }
-                _perf_math_loop_clear_valid<false /* clear_a */, true /* clear_b */>(1 /* iterations */);
-            }
-        }
-        if constexpr (CT_DIM == 1)
-        {
-            if constexpr (post)
-            {
-                _perf_unpack_loop_set_valid<false /* set_a */, true /* set_b */>(1 /* iterations */);
-                _perf_unpack_loop_set_valid<true /* set_a */, false /* set_b */>(1 /* iterations */);
-            }
-            else
-            {
-                _perf_math_loop_clear_valid<true /* clear_a */, true /* clear_b */>(1 /* iterations */);
-            }
-        }
-    }
-#else
-    (void)loop_factor;
-#endif
-}
+static_assert(
+    PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE,
+    "Face-compressed matmul supports only end-to-end and pack-isolate perf runs");
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -183,10 +90,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
-        {
-            face_compressed_isolate_dvalids<true>(LOOP_FACTOR);
-        }
         else
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
@@ -233,10 +136,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
-        }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
-        {
-            face_compressed_isolate_dvalids<false>(LOOP_FACTOR);
         }
         else
         {
@@ -294,25 +193,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         START_PERF_MEASURE("TILE_LOOP")
-        if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
         {
-        }
-        else
-        {
-            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
             {
-                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
-                {
-                    _llk_packer_wait_for_math_done_();
-                }
-                for (std::uint32_t i = 0; i < CT_DIM; i++)
-                {
-                    _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default, true /* mutex_ADC */>(i, L1_ADDRESS(buffer_Res[i]));
-                }
-                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
-                {
-                    _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
-                }
+                _llk_packer_wait_for_math_done_();
+            }
+            for (std::uint32_t i = 0; i < CT_DIM; i++)
+            {
+                _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default, true /* mutex_ADC */>(i, L1_ADDRESS(buffer_Res[i]));
+            }
+            if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+            {
+                _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
             }
         }
         PROFILER_SYNC();

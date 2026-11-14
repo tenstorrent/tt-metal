@@ -11,6 +11,7 @@ from helpers.compressed_utils import (
     assign_tile_matched,
     generate_refined_face_assignment,
 )
+from helpers.llk_params import PerfRunType
 from helpers.param_config import parametrize
 from helpers.perf.blaze import PERF_MEASUREMENT_AXES
 from test_matmul_face_compressed import (
@@ -24,6 +25,10 @@ from test_matmul_face_compressed import (
 )
 
 PERF_SEED = 0
+FACE_COMPRESSED_PERF_MEASUREMENT_AXES = {
+    **PERF_MEASUREMENT_AXES,
+    "run_types": [[PerfRunType.L1_TO_L1, PerfRunType.PACK_ISOLATE]],
+}
 
 
 def _perf_kwargs(perf_report, run_types, loop_factor, is_perf, compression_case):
@@ -42,7 +47,7 @@ def _perf_kwargs(perf_report, run_types, loop_factor, is_perf, compression_case)
 @parametrize(
     shape=SHAPES,
     formats=SINGLE_FORMATS,
-    **PERF_MEASUREMENT_AXES,
+    **FACE_COMPRESSED_PERF_MEASUREMENT_AXES,
 )
 def test_perf_matmul_face_compressed_single(
     perf_report, shape, formats, run_types, loop_factor, is_perf
@@ -70,7 +75,7 @@ def test_perf_matmul_face_compressed_single(
 @parametrize(
     shape=SHAPES,
     formats=MULTI_FORMATS,
-    **PERF_MEASUREMENT_AXES,
+    **FACE_COMPRESSED_PERF_MEASUREMENT_AXES,
 )
 def test_perf_matmul_face_compressed_random(
     perf_report, shape, formats, run_types, loop_factor, is_perf
@@ -98,7 +103,7 @@ def test_perf_matmul_face_compressed_random(
 @parametrize(
     shape=SHAPES,
     formats=MULTI_FORMATS,
-    **PERF_MEASUREMENT_AXES,
+    **FACE_COMPRESSED_PERF_MEASUREMENT_AXES,
 )
 def test_perf_matmul_face_compressed_clustered(
     perf_report, shape, formats, run_types, loop_factor, is_perf
@@ -127,7 +132,7 @@ def test_perf_matmul_face_compressed_clustered(
     shape=SHAPES,
     formats=MULTI_FORMATS,
     interleave_n=[1, 2, 4, 8, 16, 32],
-    **PERF_MEASUREMENT_AXES,
+    **FACE_COMPRESSED_PERF_MEASUREMENT_AXES,
 )
 def test_perf_matmul_face_compressed_interleaved(
     perf_report, shape, formats, interleave_n, run_types, loop_factor, is_perf
@@ -157,7 +162,7 @@ def test_perf_matmul_face_compressed_interleaved(
 @parametrize(
     shape=SHAPES,
     formats=SINGLE_FORMATS,
-    **PERF_MEASUREMENT_AXES,
+    **FACE_COMPRESSED_PERF_MEASUREMENT_AXES,
 )
 def test_perf_matmul_face_compressed_single_matched(
     perf_report, shape, formats, run_types, loop_factor, is_perf
@@ -185,7 +190,7 @@ def test_perf_matmul_face_compressed_single_matched(
 @parametrize(
     shape=SHAPES,
     formats=MULTI_FORMATS,
-    **PERF_MEASUREMENT_AXES,
+    **FACE_COMPRESSED_PERF_MEASUREMENT_AXES,
 )
 def test_perf_matmul_face_compressed_random_matched(
     perf_report, shape, formats, run_types, loop_factor, is_perf
@@ -213,7 +218,7 @@ def test_perf_matmul_face_compressed_random_matched(
 @parametrize(
     shape=SHAPES,
     formats=MULTI_FORMATS,
-    **PERF_MEASUREMENT_AXES,
+    **FACE_COMPRESSED_PERF_MEASUREMENT_AXES,
 )
 def test_perf_matmul_face_compressed_clustered_matched(
     perf_report, shape, formats, run_types, loop_factor, is_perf
@@ -242,7 +247,7 @@ def test_perf_matmul_face_compressed_clustered_matched(
     shape=SHAPES,
     formats=MULTI_FORMATS,
     interleave_n=[1, 2, 4, 8, 16, 32],
-    **PERF_MEASUREMENT_AXES,
+    **FACE_COMPRESSED_PERF_MEASUREMENT_AXES,
 )
 def test_perf_matmul_face_compressed_interleaved_matched(
     perf_report, shape, formats, interleave_n, run_types, loop_factor, is_perf
@@ -269,7 +274,7 @@ def test_perf_matmul_face_compressed_interleaved_matched(
 @parametrize(
     shape=DEEPSEEK_SHAPES,
     switch_mult=FACE_SWITCH_MULTS,
-    **PERF_MEASUREMENT_AXES,
+    **FACE_COMPRESSED_PERF_MEASUREMENT_AXES,
 )
 def test_perf_matmul_face_compressed_deepseek(
     perf_report, shape, switch_mult, run_types, loop_factor, is_perf
