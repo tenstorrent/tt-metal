@@ -15,7 +15,7 @@ enum class RouterState : uint32_t { INITIALIZING = 0, RUNNING = 1, PAUSED = 2, D
 
 enum class FabricArch : uint8_t { WORMHOLE_B0 = 0, BLACKHOLE = 1, QUASAR = 2, STATIC_ONLY = 3 };
 
-static constexpr uint32_t FABRIC_TELEMETRY_VERSION = 1;
+static constexpr uint32_t FABRIC_TELEMETRY_VERSION = 2;
 
 // TODO: this V2 needs to be deleted.
 //       Just for avoiding conflicts.
@@ -73,7 +73,10 @@ struct StaticInfo {
     uint8_t neighbor_device_id;
     uint8_t direction;
     DynamicStatistics supported_stats;
-    uint32_t fabric_config;
+    uint16_t fabric_config;
+    // 1 when fabric routes over this channel, 0 on an active ethernet channel fabric does not use.
+    uint8_t channel_in_use;
+    uint8_t reserved;
 };
 
 struct FabricTelemetryStaticOnly {
