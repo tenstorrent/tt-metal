@@ -64,8 +64,6 @@ class PoolCtx:
         )
         self.colid = up(HP.colid_host(rows), ttnn.uint32)
         self.colinfo = up(HP.colid_host(rows, [1 << 20] * rows, S), ttnn.uint32)
-        # compact attend (HY4_VR_COMPACT: 1 on, 0 off, default on for S >= 2): the split kernel packs the 8 real head rows of up to 4 users into one 32-row tile (all_to_all payload 4x smaller), the A1 merge works on TR = ceil(S/4) tile rows
-        self.compact = (os.environ.get("HY4_VR_COMPACT", "1") == "1") and S > 1 and not self.xchg
         self.TR = (S + 3) // 4
         self.perrow = S > 1  # verify rows: per-row causal limits in the score kernel (kvcnt) and in id_filter (colinfo)
         self.wr = up(HP.write_rows([0] * rows, rows, S), ttnn.int32)
@@ -108,12 +106,17 @@ class PoolCtx:
         if "HY4_VR_G" in os.environ:  # probe override: split G / k_chunk
             self.G, self.kc = int(os.environ["HY4_VR_G"]), int(os.environ.get("HY4_VR_KC", self.kc))
         self.xm = xm  # an existing XMerge (tests that rebuild the ctx per bucket must share the ONE per-process object)
+        if self.xchg and xm is None and S > int(os.environ.get("HY4_XM_MAXS", "1")):
+            # verify rows (S > 1): ONE XMerge per process (the S=1 decode context owns it) and the exchange is slower than the compact a2a + A1 merge at S >= 2 (verify-rows lat: +12..+60 us): A1 merge here
+            self.xchg = False
         if self.xchg and xm is None:
             from models.demos.blackhole.hy4_preview.tt import hy4_xmerge
 
             self.xm = hy4_xmerge.XMerge(
                 md, S, nsplit=int(os.environ.get("HY4_XM_NSPLIT", "2"))
             )  # ONE per process, before the first trace capture
+        # compact attend (HY4_VR_COMPACT: 1 on, 0 off, default on for S >= 2): the split kernel packs the 8 real head rows of up to 4 users into one 32-row tile (all_to_all payload 4x smaller), the A1 merge works on TR = ceil(S/4) tile rows
+        self.compact = (os.environ.get("HY4_VR_COMPACT", "1") == "1") and S > 1 and not self.xchg
         self.ids8 = {}  # index-source layer -> idx8 tensor of the current step
         self.ids8_dense = None
         self.step_pos = None
