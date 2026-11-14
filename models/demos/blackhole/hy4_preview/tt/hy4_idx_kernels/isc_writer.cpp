@@ -13,14 +13,27 @@ void kernel_main() {
     constexpr uint32_t CB_STRIP = get_compile_time_arg_val(3);
     constexpr uint32_t ROW_B = get_compile_time_arg_val(4);   // output page bytes (n * 2)
     constexpr uint32_t MAXR = get_compile_time_arg_val(5);    // max key row tiles per core
-    constexpr auto o_args = TensorAccessorArgs<6, 1>();
+    constexpr uint32_t KVT = get_compile_time_arg_val(6);     // 1: kv_len is element 0 of a device tensor (trace-safe: per-device count of valid keys), else the runtime arg
+    constexpr uint32_t CB_KV = get_compile_time_arg_val(7);
+    constexpr auto o_args = TensorAccessorArgs<8, 1>();
+    constexpr auto k_args = TensorAccessorArgs<o_args.next_compile_time_args_offset(), o_args.next_common_runtime_args_offset()>();
     constexpr uint32_t TILE_B = 2048;
     const uint32_t o_addr = get_common_arg_val<uint32_t>(0);
-    const uint32_t kv_len = get_common_arg_val<uint32_t>(1);
+    uint32_t kv_len = get_common_arg_val<uint32_t>(1);
     const uint32_t row0 = get_arg_val<uint32_t>(0);
     const uint32_t nrows = get_arg_val<uint32_t>(1);
     const auto oa = TensorAccessor(o_args, o_addr, ROW_B);
     CircularBuffer co(CB_OUT), cs(CB_STRIP);
+    if constexpr (KVT) {
+        CircularBuffer ck(CB_KV);
+        ck.reserve_back(1);
+        const uint32_t kp = ck.get_write_ptr();
+        const auto ka = TensorAccessor(k_args, get_common_arg_val<uint32_t>(2), 64);
+        noc_async_read(ka.get_noc_addr(0, 0), kp, 64);
+        noc_async_read_barrier();
+        invalidate_l1_cache();
+        kv_len = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kp);
+    }
     cs.reserve_back(1);
     const uint32_t strip = cs.get_write_ptr();  // S rows x (MAXR * 64 B)
     constexpr uint32_t SROW = MAXR * 64;

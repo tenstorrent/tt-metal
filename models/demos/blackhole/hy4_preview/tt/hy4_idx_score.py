@@ -26,7 +26,8 @@ def q_headrows(q, S):
     return ttnn.to_layout(x, ttnn.TILE_LAYOUT)
 
 
-def idx_score(q, keys, w, kv_len, S, ncores=None, kc=None, out=None, fid=None):
+def idx_score(q, keys, w, kv_len, S, ncores=None, kc=None, out=None, fid=None, kvt=None):
+    """kvt (optional): uint32/int32 ROW_MAJOR [.,16] per-device tensor whose element 0 is the number of valid keys of THIS device (trace-safe; kv_len is then ignored)."""
     md = keys.device()
     n = int(keys.shape[2])
     assert n % 32 == 0 and S <= 16
@@ -56,7 +57,7 @@ def idx_score(q, keys, w, kv_len, S, ncores=None, kc=None, out=None, fid=None):
         out = ttnn.allocate_tensor_on_device(
             ttnn.Shape([1, 1, S, n]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, md, ttnn.DRAM_MEMORY_CONFIG
         )
-    Q, W, K, TMP, QK, OUT, STRIP = range(7)
+    Q, W, K, TMP, QK, OUT, STRIP, KVCB = range(8)
     bf = ttnn.bfloat16
     KT = 1088
 
@@ -79,6 +80,7 @@ def idx_score(q, keys, w, kv_len, S, ncores=None, kc=None, out=None, fid=None):
             core_ranges=core_set,
             format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=STRIP, data_format=bf, page_size=S * maxr * 64)],
         ),
+        cb(KVCB, 1, 64, ttnn.int32),
     ]
     rt_r, rt_w, rt_c = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
     for (cx, cy), (a, nr) in zip(cores, rows):
@@ -98,9 +100,9 @@ def idx_score(q, keys, w, kv_len, S, ncores=None, kc=None, out=None, fid=None):
         kernel_source=f"{KDIR}/isc_writer.cpp",
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=core_set,
-        compile_time_args=[S, KC, OUT, STRIP, n * 2, maxr] + _acc(out),
+        compile_time_args=[S, KC, OUT, STRIP, n * 2, maxr, int(kvt is not None), KVCB] + _acc(out) + (_acc(kvt) if kvt is not None else []),
         runtime_args=rt_w,
-        common_runtime_args=[out.buffer_address(), int(kv_len)],
+        common_runtime_args=[out.buffer_address(), int(kv_len) if kvt is None else 0] + ([kvt.buffer_address()] if kvt is not None else []),
         config=ttnn.WriterConfigDescriptor(),
     )
     fid = fid or {"hifi4": ttnn.MathFidelity.HiFi4, "hifi2": ttnn.MathFidelity.HiFi2, "lofi": ttnn.MathFidelity.LoFi}[
@@ -118,8 +120,8 @@ def idx_score(q, keys, w, kv_len, S, ncores=None, kc=None, out=None, fid=None):
     )
     prog = ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=[], cbs=cbs)
     prog.custom_program_hash = (0x1D5 << 40) | (
-        hash((S, n, ncores, KC, str(fid), tuple(_acc(keys)), tuple(_acc(q)), tuple(_acc(w)), tuple(_acc(out))))
+        hash((S, n, ncores, KC, str(fid), int(kvt is not None), tuple(_acc(keys)), tuple(_acc(q)), tuple(_acc(w)), tuple(_acc(out))))
         & ((1 << 40) - 1)
     )
-    ttnn.generic_op([q, keys, w, out], prog)
+    ttnn.generic_op([q, keys, w] + ([kvt] if kvt is not None else []) + [out], prog)
     return out
