@@ -12,11 +12,21 @@
 
 using namespace sfpi;
 
+#include "ckernel_sfpu_rsqrt_bf16.h"
+
 namespace ckernel {
 namespace sfpu {
 
+// Whether BF16 DEST runs the generated rsqrt kernel as one call over the whole tile.
+inline constexpr bool rsqrt_bf16_whole_tile = true;
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool fp32_dest_acc_en, bool FAST_APPROX>
 inline void calculate_rsqrt() {
+    if constexpr (!fp32_dest_acc_en && !FAST_APPROX && !APPROXIMATION_MODE && ITERATIONS == 32) {
+        if (bf16_dest_rsqrt()) {
+            calculate_rsqrt_bf16<ITERATIONS>();
+            return;
+        }
+    }
     _calculate_sqrt_internal_<APPROXIMATION_MODE, ITERATIONS, fp32_dest_acc_en, true, FAST_APPROX>();
 }
 
