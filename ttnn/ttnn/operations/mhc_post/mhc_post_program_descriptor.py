@@ -112,6 +112,7 @@ CB_FEED_CHUNKS = 25  # feed (port cores): chunk ring between the port reader and
 CB_FEED_POLL = 26  # feed (workers + ports, one address): the workers' published-row counts on the ports, 16 B each
 CB_FEED_YSCR = 27  # feed, T % 32 != 0 (port cores): port reader's private y tiles of a shifted chunk (2 per tile)
 CB_FEED_LAND = 28  # feed, T % 32 != 0 (port cores): landing of the shared D tile rows (compact contributor blocks)
+CB_RSTD_LANE = 29  # norm: root's rstd in SFPU lane layout, computed before the hc step (compute -> writer)
 
 # Semaphore ids (R2)
 SEM_LEADER_COUNT = 0  # partials landed in my leader slots
@@ -402,6 +403,7 @@ def create_program_descriptor(
             _cb(CB_NORM_W, ttnn.float32, f32_page, core_cols_padded, core_ranges),
             _cb(CB_RSTD_LAND, ttnn.float32, RSTD_SLOT_BYTES, max_rows, core_ranges),
             _cb(CB_RSTD_SEND, ttnn.float32, RSTD_SLOT_BYTES, 1, core_ranges),
+            _cb(CB_RSTD_LANE, ttnn.float32, f32_page, 1, core_ranges),
         ]
 
     # ---------------- per-core runtime args ----------------
@@ -523,6 +525,7 @@ def create_program_descriptor(
         root_lag,
         norm_lag,
         CB_FEED_POLL,
+        CB_RSTD_LANE,
     ]
     writer_ct.extend(ttnn.TensorAccessorArgs(out_tensor).get_compile_time_args())
     writer_ct.extend(ttnn.TensorAccessorArgs(stats_for_args).get_compile_time_args())
@@ -618,6 +621,7 @@ def create_program_descriptor(
         root_lag,
         norm_lag,
         max(hold_pages, 1),
+        CB_RSTD_LANE,
     ]
     compute_common = []
     if collapse:

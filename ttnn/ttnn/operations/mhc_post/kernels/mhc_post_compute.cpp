@@ -100,6 +100,7 @@ constexpr uint32_t norm_lag = get_compile_time_arg_val(33);
 constexpr bool lagged = norm && root_lag > 0;
 static_assert(!lagged || norm_lag > root_lag, "lagged norm: 1 <= root_lag < norm_lag");
 constexpr uint32_t hold_pages = get_compile_time_arg_val(34);    // norm: cb_y_hold capacity
+constexpr uint32_t cb_rstd_lane = get_compile_time_arg_val(35);  // norm: the root's rstd in lane layout
 constexpr uint32_t cb_y_collapse = norm ? cb_y_hold : cb_y_out;  // collapse_block's destination
 
 constexpr uint32_t n_mix_coef = n + n * n;
@@ -487,15 +488,26 @@ inline void hc_step(const HcParams* p) {
         rows_step(e);
         cols_step(e);
     }
-    if constexpr (norm) {  // rstd of y in vector V_SUMSQ + 1 (in place of sum y_b^2)
-        to_vector<V_SUMSQ + 1>();
-        dst_reg[0] = rsqrt(vFloat(dst_reg[0]) * p->inv_c + p->y_norm_eps);
-    }
+    ckernel::math::clear_dst_reg_addr();
+}
+// norm: rstd of y in vector V_SUMSQ + 1 (in place of sum y_b^2) — its own step, run (and sent) before the hc step
+inline void rstd_step(const HcParams* p) {
+    to_vector<V_SUMSQ + 1>();
+    dst_reg[0] = rsqrt(vFloat(dst_reg[0]) * p->inv_c + p->y_norm_eps);
     ckernel::math::clear_dst_reg_addr();
 }
 }  // namespace hc
 #endif
 
+template <ckl::Dst Slot>
+struct RstdStep : ckl::UnaryOp<RstdStep<Slot>, Slot> {
+    const HcParams* params;
+    static ALWI void init() { MATH((SFPU_UNARY_INIT(unused))); }
+    ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const {
+        MATH((_llk_math_eltwise_unary_sfpu_params_(
+            hc::rstd_step, ckl::to_u32(Slot) + slot_offset, VectorMode::RC_custom, params)));
+    }
+};
 template <ckl::Dst Slot>
 struct HcStep : ckl::UnaryOp<HcStep<Slot>, Slot> {
     const HcParams* params;
@@ -580,6 +592,16 @@ void kernel_main() {
     // combine_row level 2 + hc_step_row of a row I root (the writer hands its slot region over in order)
     [[maybe_unused]] auto root_step = [&]() __attribute__((always_inline)) {
         fold_slots(cb_root_slots, num_chunks, num_chunks, cb_stats);
+        if constexpr (norm) {
+            // rstd first (it needs sum y_b^2 only): the writer sends it to the members while the hc step runs; the
+            // lane tile stays in cb_hc_in for the hc step (which pops it)
+            cb_wait_front(cb_hc_in, 1);
+            ckl::eltwise_chain(
+                ckl::IterationShape::one_tile(),
+                ckl::CopyTile<caller_managed(cb_hc_in), ckl::Dst::D0>{0},
+                RstdStep<ckl::Dst::D0>{{}, &hcp},
+                ckl::PackTile<ckl::output(cb_rstd_lane), ckl::Dst::D0>{});
+        }
         if constexpr (collapse) {
             // hc_step_row: the writer permutes the stats tile into lane layout (cb_hc_in)
             ckl::eltwise_chain(

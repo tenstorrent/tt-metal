@@ -125,7 +125,8 @@ void kernel_main() {
     constexpr uint32_t sumsq_pages = norm ? 2 : 1;  // per row: sum X'^2 [, sum y_b^2]
     constexpr uint32_t rstd_bytes = 32 * sizeof(uint32_t);
     constexpr uint32_t cb_feed_poll = get_compile_time_arg_val(33);  // feed: the ports' published-row slots
-    constexpr auto out_args = TensorAccessorArgs<34>();
+    constexpr uint32_t cb_rstd_lane = get_compile_time_arg_val(34);  // norm: the root's rstd in lane layout
+    constexpr auto out_args = TensorAccessorArgs<35>();
     [[maybe_unused]] constexpr auto stats_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto hc_args = TensorAccessorArgs<stats_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto y_args = TensorAccessorArgs<hc_args.next_compile_time_args_offset()>();
@@ -277,6 +278,28 @@ void kernel_main() {
             }
             cb_push_back(cb_hc_in, 1);
         }
+        if constexpr (norm) {
+            // rstd (lane vector ng+1 of the compute's rstd step, run before the hc step) -> token order -> slot
+            // (t - t_start) of every member's landing; the member's SEM_RSTD_COUNT gets bit (t - t_start) % 32 (rows
+            // land in any order; a bit is consumed long before its row + 32 can land: that row needs the member's
+            // own partial, norm_lag < 32 rows on), deferred a count (every row lands before any is read)
+            cb_wait_front(cb_rstd_lane, 1);
+            const uint32_t* rl = reinterpret_cast<const uint32_t*>(get_read_ptr(cb_rstd_lane));
+            uint32_t* send = reinterpret_cast<uint32_t*>(get_write_ptr(cb_rstd_send));
+            for (uint32_t l = 0; l < 32; ++l) {
+                send[l] = rl[lane_word(ng + 1, l)];
+            }
+            const uint32_t land = get_write_ptr(cb_rstd_land) + (t - t_start) * rstd_bytes;
+            for (uint32_t q = 0; q < group_q; ++q) {
+                noc_async_write(get_write_ptr(cb_rstd_send), member_noc(q, land), rstd_bytes);
+            }
+            noc_async_write_barrier();  // landed before the bits (and before the next row reuses send)
+            for (uint32_t q = 0; q < group_q; ++q) {
+                noc_semaphore_inc(
+                    member_noc(q, get_semaphore(sem_rstd_count_id)), lagged ? 1u << ((t - t_start) % 32) : 1u);
+            }
+            cb_pop_front(cb_rstd_lane, 1);
+        }
         noc_async_write_barrier();
         cb_pop_front(cb_stats, 1);
         if constexpr (collapse) {
@@ -287,24 +310,6 @@ void kernel_main() {
                 permute_vector<false>(hct + tile_word(0, v), lanes + lane_word(v, 0));
             }
             noc_async_write(get_write_ptr(cb_hc_tile), hc_acc.get_noc_addr(t), f32_page);
-            if constexpr (norm) {
-                // rstd (lane vector ng+1) -> token order -> slot (t - t_start) of every member's landing; the
-                // member's SEM_RSTD_COUNT gets bit (t - t_start) % 32 (rows land in any order; a bit is consumed
-                // long before its row + 32 can land: that row needs the member's own partial, norm_lag < 32 rows on)
-                uint32_t* send = reinterpret_cast<uint32_t*>(get_write_ptr(cb_rstd_send));
-                for (uint32_t l = 0; l < 32; ++l) {
-                    send[l] = lanes[lane_word(ng + 1, l)];
-                }
-                const uint32_t land = get_write_ptr(cb_rstd_land) + (t - t_start) * rstd_bytes;
-                for (uint32_t q = 0; q < group_q; ++q) {
-                    noc_async_write(get_write_ptr(cb_rstd_send), member_noc(q, land), rstd_bytes);
-                }
-                noc_async_write_barrier();  // landed before the bits (and before the next row reuses send)
-                for (uint32_t q = 0; q < group_q; ++q) {  // deferred: a count (every row lands before any is read)
-                    noc_semaphore_inc(
-                        member_noc(q, get_semaphore(sem_rstd_count_id)), lagged ? 1u << ((t - t_start) % 32) : 1u);
-                }
-            }
             noc_async_write_barrier();
             cb_pop_front(cb_hc_out, 1);
         }
@@ -358,89 +363,83 @@ void kernel_main() {
                     for (uint32_t j = 0; j < n; ++j) {  // block order: j-major, then unit
                         for (uint32_t u = 0; u < b; ++u) {
                             if (u < valid) {
-#ifndef ABL_NOWRITE
                                 noc_async_write(
-#else
-                                if (0) {
-                                    noc_async_write(
-#endif
                                     ring_base + ring_slot * out_page,
                                     out_acc.get_noc_addr(x_row + j * c_tiles + c + u),
                                     out_page);
                             }
+                            ring_slot = (ring_slot + 1 == out_ring_tiles) ? 0 : ring_slot + 1;
                         }
-                        ring_slot = (ring_slot + 1 == out_ring_tiles) ? 0 : ring_slot + 1;
+                    }
+                    noc_async_writes_flushed();  // the block's bytes have left L1: free the slots, no ack wait
+                    for (uint32_t k = 0; k < b * n; ++k) {  // single-tile pops: a pop may not cross the ring end
+                        cb_pop_front(cb_mixed_out_tiles, 1);
                     }
                 }
-                noc_async_writes_flushed();             // the block's bytes have left L1: free the slots, no ack wait
-                for (uint32_t k = 0; k < b * n; ++k) {  // single-tile pops: a pop may not cross the ring end
-                    cb_pop_front(cb_mixed_out_tiles, 1);
+                if constexpr (collapse && !norm) {  // the pass's y tiles
+                    write_y_pass(t, cb0, cols_in_pass);
                 }
             }
-            if constexpr (collapse && !norm) {  // the pass's y tiles
-                write_y_pass(t, cb0, cols_in_pass);
+            if constexpr (collapse && !norm) {
+                publish_row();
             }
         }
-        if constexpr (collapse && !norm) {
-            publish_row();
-        }
-    }
 
-    if constexpr (has_w) {
-        if (i > 0 && i <= t_count && is_leader(t - 1)) {  // before partial(t): a 1-member chunk announces row t
-            lead(t - 1);
+        if constexpr (has_w) {
+            if (i > 0 && i <= t_count && is_leader(t - 1)) {  // before partial(t): a 1-member chunk announces row t
+                lead(t - 1);
+            }
+            if constexpr (lagged) {
+                const uint32_t rr = i - root_lag;  // root work of row rr, if I root it
+                if (i >= root_lag && rr < t_count && rr % group_q == member_q) {
+                    // only row rr's chunk sums can have landed: the next row I root (rr + Q, Q >= root_lag) needs my
+                    // own partial(rr + Q), which comes after this
+                    volatile tt_l1_ptr uint32_t* cnt = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_root);
+                    noc_semaphore_wait_min(cnt, num_chunks);
+                    noc_semaphore_set(cnt, 0);
+                    cb_reserve_back(cb_root_slots, num_chunks);  // region rr / Q, in order
+                    cb_push_back(cb_root_slots, num_chunks);
+                    root_step(t_start + rr);
+                }
+            }
+            if (i < t_count) {
+                // ---- partial(t): merge sum X'^2 into column ng, send to leader(t) ----
+                cb_wait_front(cb_proj_out, 1);
+                cb_wait_front(cb_sumsq_col, sumsq_pages);
+                volatile tt_l1_ptr uint32_t* proj =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_proj_out));
+                volatile tt_l1_ptr uint32_t* sq =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_sumsq_col));
+                for (uint32_t row = 0; row < 32; ++row) {
+                    proj[tile_word(row, ng)] = sq[tile_word(row, 0)];
+                }
+                if constexpr (norm) {  // sum y_b^2 -> column ng+1 (the second page)
+                    for (uint32_t row = 0; row < 32; ++row) {
+                        proj[tile_word(row, ng + 1)] = sq[f32_page / sizeof(uint32_t) + tile_word(row, 0)];
+                    }
+                }
+                const uint32_t leader_q = chunk_first + (t % chunk_size);
+                const uint32_t bit = 1u << (t % 32);
+                volatile tt_l1_ptr uint32_t* ready = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_ready);
+                while ((*ready & bit) == 0) {
+                    invalidate_l1_cache();
+                }
+                noc_semaphore_inc(get_noc_addr(sem_ready), 0u - bit);  // consume the announcement (atomic)
+                noc_async_write(
+                    get_read_ptr(cb_proj_out), member_noc(leader_q, leader_slots_base + my_pos * f32_page), f32_page);
+                noc_async_write_barrier();
+                noc_semaphore_inc(member_noc(leader_q, sem_leader), 1);
+                cb_pop_front(cb_proj_out, 1);
+                cb_pop_front(cb_sumsq_col, sumsq_pages);
+            }
         }
         if constexpr (lagged) {
-            const uint32_t rr = i - root_lag;  // root work of row rr, if I root it
-            if (i >= root_lag && rr < t_count && rr % group_q == member_q) {
-                // only row rr's chunk sums can have landed: the next row I root (rr + Q, Q >= root_lag) needs my
-                // own partial(rr + Q), which comes after this
-                volatile tt_l1_ptr uint32_t* cnt = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_root);
-                noc_semaphore_wait_min(cnt, num_chunks);
-                noc_semaphore_set(cnt, 0);
-                cb_reserve_back(cb_root_slots, num_chunks);  // region rr / Q, in order
-                cb_push_back(cb_root_slots, num_chunks);
-                root_step(t_start + rr);
+            if (i >= norm_lag) {
+                expand_rstd(i - norm_lag);
+                write_norm_row(i - norm_lag);
             }
-        }
-        if (i < t_count) {
-            // ---- partial(t): merge sum X'^2 into column ng, send to leader(t) ----
-            cb_wait_front(cb_proj_out, 1);
-            cb_wait_front(cb_sumsq_col, sumsq_pages);
-            volatile tt_l1_ptr uint32_t* proj =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_proj_out));
-            volatile tt_l1_ptr uint32_t* sq =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_sumsq_col));
-            for (uint32_t row = 0; row < 32; ++row) {
-                proj[tile_word(row, ng)] = sq[tile_word(row, 0)];
-            }
-            if constexpr (norm) {  // sum y_b^2 -> column ng+1 (the second page)
-                for (uint32_t row = 0; row < 32; ++row) {
-                    proj[tile_word(row, ng + 1)] = sq[f32_page / sizeof(uint32_t) + tile_word(row, 0)];
-                }
-            }
-            const uint32_t leader_q = chunk_first + (t % chunk_size);
-            const uint32_t bit = 1u << (t % 32);
-            volatile tt_l1_ptr uint32_t* ready = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_ready);
-            while ((*ready & bit) == 0) {
-                invalidate_l1_cache();
-            }
-            noc_semaphore_inc(get_noc_addr(sem_ready), 0u - bit);  // consume the announcement (atomic)
-            noc_async_write(
-                get_read_ptr(cb_proj_out), member_noc(leader_q, leader_slots_base + my_pos * f32_page), f32_page);
-            noc_async_write_barrier();
-            noc_semaphore_inc(member_noc(leader_q, sem_leader), 1);
-            cb_pop_front(cb_proj_out, 1);
-            cb_pop_front(cb_sumsq_col, sumsq_pages);
         }
     }
-    if constexpr (lagged) {
-        if (i >= norm_lag) {
-            expand_rstd(i - norm_lag);
-            write_norm_row(i - norm_lag);
-        }
-    }
-}
 
     // ---- !norm: root work, deferred past my own rows (never on the grid's critical path): every row t I root has
     // its own region of cb_root_slots, all handed to the compute at once ----
