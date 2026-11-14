@@ -3,8 +3,8 @@
 //
 // Types for the standalone fused_recurrent_gated_delta_rule ttnn op.
 // Algorithm: flash-linear-attention `naive_recurrent_gated_delta_rule` (the recurrent form the
-// vLLM `fused_sigmoid_gating_delta_rule_update` implements). One Tensix core per head walks the
-// T token axis sequentially, holding the recurrent state S [K,V] on-core.
+// vLLM `fused_sigmoid_gating_delta_rule_update` implements). Each Tensix core takes a contiguous run of
+// heads; for each head it walks the T token axis sequentially, holding the recurrent state S [K,V] on-core.
 //
 // Per token t (S = state, g_t log-decay, beta_t gate, q pre-scaled + L2-normed, k L2-normed):
 //   S      <- exp(g_t) * S                 (scalar decay)
@@ -22,12 +22,13 @@
 namespace ttnn::prim {
 
 struct FusedRecurrentGatedDeltaRuleParams {
-    uint32_t BH;       // B * HV  (one Tensix core per head)
+    uint32_t BH;       // B * HV  (split into contiguous runs, one run per Tensix core)
     uint32_t T;        // number of tokens processed sequentially per head
     uint32_t key_dim;  // K (multiple of 32)
     uint32_t val_dim;  // V (multiple of 32)
     bool output_final_state;
     bool output_per_token_state;  // emit S after EVERY token (spec-decode verify slots)
+    bool paged_state;             // initial_state is a state pool addressed by initial_state_block_idx
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
 };
@@ -43,6 +44,9 @@ struct FusedRecurrentGatedDeltaRuleParams {
 //
 // "Ring" mode (initial_state_block_idx present): initial_state is the [BH*T, K, V] ring and also the state output;
 // see the Python binding for the contract.
+//
+// "Paged" mode (paged_state): initial_state is a [P, K, V] pool of per-head states and also the state output.
+// Head h reads its initial state from pool page idx[h] and writes its final state back to that page.
 struct FusedRecurrentGatedDeltaRuleInputs {
     Tensor q;
     Tensor k;

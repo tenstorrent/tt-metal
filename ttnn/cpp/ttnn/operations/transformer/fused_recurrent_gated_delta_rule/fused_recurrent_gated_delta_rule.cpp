@@ -66,8 +66,12 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
     bool output_per_token_state,
     bool use_qk_l2norm,
     const std::optional<ttnn::MemoryConfig>& memory_config,
-    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    bool paged_state) {
     TT_FATAL(!use_qk_l2norm, "fused_recurrent_gated_delta_rule: use_qk_l2norm not done here; L2-normalize q/k on host");
+    TT_FATAL(
+        !paged_state || initial_state_block_idx.has_value(),
+        "fused_recurrent_gated_delta_rule: paged_state requires initial_state_block_idx");
 
     auto* dev = q_in.device();
     const auto& qs = q_in.logical_shape();  // [B,T,H,K]
@@ -118,8 +122,8 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
     // pass a persistent state buffer (never absent); the zeros() fallback here is eager-only
     // (device-side fill, uncached), same caveat as chunk_gated_delta_rule.
     //
-    // Ring mode: initial_state is the [T*BH,K,V] ring and also the state output; pass it through untouched, since a
-    // reshape or typecast would break the in-place aliasing. The device op validates it.
+    // Ring and paged modes: initial_state is the [T*BH,K,V] ring or the [P,K,V] pool and also the state output; pass
+    // it through untouched, since a reshape or typecast would break the in-place aliasing. The device op validates it.
     const bool ring = initial_state_block_idx.has_value();
     std::optional<ttnn::Tensor> s0 = initial_state;
     if (!ring) {
@@ -153,7 +157,8 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
         want_state && !output_per_token_state,
         output_per_token_state,
         out_mem,
-        kernel_cfg);
+        kernel_cfg,
+        paged_state);
     const ttnn::Tensor& o_pt = res[0];  // [BH*T, 1, V]
     const ttnn::Tensor& st = res[1];    // [BH*T,K,V] per-token, else [BH,K,V]
 
@@ -165,7 +170,7 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
 
     std::optional<ttnn::Tensor> state_opt;
     if (ring) {
-        // res[1] is the caller's ring; return it as-is so the buffer stays aliased.
+        // res[1] is the caller's ring or pool; return it as-is so the buffer stays aliased.
         state_opt = st;
     } else if (output_per_token_state) {
         // The writer lays per-token state out token-major, so the raw [BH*T,K,V] buffer already

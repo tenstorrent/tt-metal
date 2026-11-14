@@ -16,7 +16,8 @@ namespace ttnn::transformer {
  * Fused recurrent Gated Delta Rule forward (flash-linear-attention `fused_recurrent_gated_delta_rule`).
  *
  * The single-token decode kernel (T=1) and the K+1-token speculative-verify kernel are the same op:
- * one Tensix core per head walks the T token axis sequentially, holding the recurrent state on-core,
+ * each Tensix core takes a contiguous run of heads and, head by head, walks the T token axis sequentially,
+ * holding the recurrent state on-core,
  * and matches FLA `naive_recurrent_gated_delta_rule` numerics (fp32/HiFi4). The vLLM
  * `fused_sigmoid_gating_delta_rule_update` is exactly this recurrence over the speculative tokens.
  *
@@ -34,6 +35,9 @@ namespace ttnn::transformer {
  *
  * "Ring" mode (initial_state_block_idx): in-place per-head initial-state select; see the Python binding for the
  * contract.
+ *
+ * "Paged" mode (paged_state with initial_state_block_idx): initial_state is a [P, K, V] state pool; head h reads
+ * and writes pool page idx[h] in place.
  */
 std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delta_rule(
     const ttnn::Tensor& q,
@@ -48,6 +52,7 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
     bool output_per_token_state = false,
     bool use_qk_l2norm = false,
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
+    bool paged_state = false);
 
 }  // namespace ttnn::transformer
