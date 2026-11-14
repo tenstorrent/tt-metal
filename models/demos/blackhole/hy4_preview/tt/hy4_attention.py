@@ -20,6 +20,7 @@ from models.demos.blackhole.hy4_preview.tt.hy4_attn_weights import build_attn_ho
 from models.demos.blackhole.hy4_preview.tt.hy4_common import RopeDev, compute_cfg, upload
 from models.demos.blackhole.hy4_preview.tt.hy4_indexer import Hy4Indexer
 from models.demos.blackhole.hy4_preview.tt.hy4_kv_cache import KVCache
+from models.demos.blackhole.hy4_preview.tt.hy4_pf_opt import PfOpt, plinear
 
 
 class Hy4Attention:
@@ -37,6 +38,7 @@ class Hy4Attention:
         wdtype=ttnn.bfloat16,
         sink_over_scale_dtype=ttnn.bfloat16,
         wdtypes=None,
+        pf_opt=None,
     ):
         """sd: checkpoint tensors of the layer keyed by the path after ``model.layers.<i>.`` (torch)."""
         self.md, self.mesh_config, self.ccl, self.cfg, self.layer, self.kv_fmt = (
@@ -79,6 +81,10 @@ class Hy4Attention:
             Hy4Indexer(md, cfg, hw, self.idx_rope, wdtype=wdtype, wdtypes=wdtypes) if self.has_indexer else None
         )
         self.ckc = compute_cfg(md, "hifi4", True)
+        self.pf = pf_opt if pf_opt is not None else PfOpt.from_env()  # HY4_PF_OPT: prefill-only levers, default OFF
+        self.ckc_pf = compute_cfg(md, "hifi2", True) if self.pf.hifi2 else self.ckc
+        if self.indexer is not None:
+            self.indexer.set_pf(self.pf, self.ckc_pf)
         self.ckc_sdpa = ttnn.init_device_compute_kernel_config(
             md.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -151,14 +157,14 @@ class Hy4Attention:
         n = h.shape[2]
         cos, sin, icos, isin = tabs if tabs is not None else self.rope_tabs(start, n)
         # q_a (N-sharded) -> gather -> norm
-        qa_c = ttnn.linear(h, self.w_q_a, compute_kernel_config=self.ckc)
+        qa_c = plinear(self.pf, h, self.w_q_a, self.ckc_pf)
         qa_g = self.mesh_config.allgather(qa_c, self.ccl, axis=1, dim=3)
         ttnn.deallocate(qa_c)
         qa = self._rms(qa_g, self.q_a_norm)
         ttnn.deallocate(qa_g)
         self._tap("qa", qa)
         # kv latent + rope key -> cache
-        kv = ttnn.linear(h, self.w_kv_a, compute_kernel_config=self.ckc)  # [1,1,n,576]
+        kv = plinear(self.pf, h, self.w_kv_a, self.ckc_pf)  # [1,1,n,576]
         lat = self._rms(ttnn.slice(kv, [0, 0, 0, 0], [1, 1, n, cfg.kv_lora_rank]), self.kv_a_norm)
         k_pe = self.rope.apply(ttnn.slice(kv, [0, 0, 0, cfg.kv_lora_rank], [1, 1, n, cfg.kv_a_out]), cos, sin, self.ckc)
         ttnn.deallocate(kv)
@@ -175,13 +181,13 @@ class Hy4Attention:
         if ids_override is not None:  # experiments: attention uses these ids instead
             ids = ids_override
         # query
-        q = ttnn.linear(qa, self.w_q_b, compute_kernel_config=self.ckc)  # [1,1,n,2048]
+        q = plinear(self.pf, qa, self.w_q_b, self.ckc_pf)  # [1,1,n,2048]
         self._free(qa, "qa")
         q_nope, q_pe = ttnn.experimental.nlp_create_q_heads_split(
             q, num_heads=self.hc, split_head_dim=cfg.qk_nope_head_dim, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )  # [1,8,n,192], [1,8,n,64]
         ttnn.deallocate(q)
-        q_abs = ttnn.matmul(q_nope, self.w_uk, compute_kernel_config=self.ckc)  # [1,8,n,512]
+        q_abs = ttnn.matmul(q_nope, self.w_uk, compute_kernel_config=self.ckc_pf)  # [1,8,n,512]
         ttnn.deallocate(q_nope)
         q_pe = self.rope.apply(q_pe, cos, sin, self.ckc)
         qfull = ttnn.concat([q_abs, q_pe], dim=3)  # [1,8,n,576]
@@ -198,7 +204,7 @@ class Hy4Attention:
         """heads->sequence all_to_all over the columns, stock sparse_sdpa on H=64 x n/8 rows, back."""
         n = qfull.shape[2]
         q_t = ttnn.experimental.all_to_all_async_generic(
-            qfull, in_dim=1, out_dim=2, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG, cluster_axis=1
+            qfull, in_dim=1, out_dim=2, num_links=2 if self.pf.a2a2 else 1, memory_config=ttnn.DRAM_MEMORY_CONFIG, cluster_axis=1
         )  # [1,64,n/8,576] TILE (the op takes TILE only)
         q_seq = ttnn.to_layout(q_t, ttnn.ROW_MAJOR_LAYOUT)
         ttnn.deallocate(q_t)
@@ -210,7 +216,7 @@ class Hy4Attention:
             self.cfg.kv_lora_rank,
             kv_format=self._kv_format(),
             scale=self.scale,
-            k_chunk_size=128,
+            k_chunk_size=64 if self.pf.kc64 else 128,
             compute_kernel_config=self.ckc_sdpa,
             attention_sink=self.sink_full,
         )  # [1,64,n/8,512] RM
@@ -219,20 +225,22 @@ class Hy4Attention:
         out_t = ttnn.to_layout(out, ttnn.TILE_LAYOUT)
         ttnn.deallocate(out)
         o_lat = ttnn.experimental.all_to_all_async_generic(
-            out_t, in_dim=2, out_dim=1, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG, cluster_axis=1
+            out_t, in_dim=2, out_dim=1, num_links=2 if self.pf.a2a2 else 1, memory_config=ttnn.DRAM_MEMORY_CONFIG, cluster_axis=1
         )  # [1,8,n,512]
         ttnn.deallocate(out_t)
         return o_lat
 
     def _finish(self, o_lat, h):
         """o_lat [1,8,n,512] -> value up-projection, gate, o_proj, all-reduce -> [1,1,n,6144]."""
-        o = ttnn.matmul(o_lat, self.w_uv_t, compute_kernel_config=self.ckc)  # [1,8,n,256]
+        pf = o_lat.shape[2] >= 256  # prefill rows: HY4_PF_OPT levers (decode keeps the stock path)
+        ckc = self.ckc_pf if pf else self.ckc
+        o = ttnn.matmul(o_lat, self.w_uv_t, compute_kernel_config=ckc)  # [1,8,n,256]
         o = ttnn.experimental.nlp_concat_heads(o, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # [1,1,n,2048]
         self._tap("o", o)
-        g = ttnn.linear(h, self.w_gate, compute_kernel_config=self.ckc, activation="sigmoid")
+        g = plinear(self.pf if pf else None, h, self.w_gate, ckc, act="sigmoid")
         og = ttnn.multiply(o, g)
         ttnn.deallocate(g)
-        part = ttnn.linear(og, self.w_o, compute_kernel_config=self.ckc)  # [1,1,n,6144] partial
+        part = plinear(self.pf if pf else None, og, self.w_o, ckc)  # [1,1,n,6144] partial
         ttnn.deallocate(og)
         return self.mesh_config.allreduce(part, self.ccl, axis=1)
 

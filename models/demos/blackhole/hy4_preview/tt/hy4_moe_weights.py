@@ -21,8 +21,18 @@ HIDDEN, INTER, NUM_ROUTED = 6144, 2048, 256
 WEIGHT_CACHE = os.environ.get("HY4_WEIGHT_CACHE", "/home/ttuser/ssinghal/tt-metal-cache/hy4_weight_cache")
 
 
+def ring_suffix():
+    """MOE_COMPUTE_RING=N (moe-perf lever, default off): the packed expert tensors are laid out for a matmul ring of N cores -> own cache directory."""
+    r = os.environ.get("MOE_COMPUTE_RING", "")
+    return f"_r{r}" if r else ""
+
+
 def expert_cache_dir(layer_id: int, tag: str = ""):
-    return os.path.join(WEIGHT_CACHE, f"layer_{layer_id}{tag}") if WEIGHT_CACHE and WEIGHT_CACHE != "0" else None
+    return (
+        os.path.join(WEIGHT_CACHE, f"layer_{layer_id}{ring_suffix()}{tag}")
+        if WEIGHT_CACHE and WEIGHT_CACHE != "0"
+        else None
+    )
 
 
 def _cache_warm(layer_id: int, bfp8: bool = False):
