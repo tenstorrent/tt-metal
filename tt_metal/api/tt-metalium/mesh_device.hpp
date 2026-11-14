@@ -251,11 +251,9 @@ public:
     [[deprecated("Deprecated, use get_device(const MeshCoordinate&) instead. This will be removed after 2026-11-19.")]]
     IDevice* get_device(size_t row_idx, size_t col_idx) const;
 
-    // Returns true if the coordinate is local to this mesh device.
+    // Returns true if the device at `coord` is local to this process (i.e. attached to this host). In multi-host
+    // meshes, use this to skip remote coordinates before doing per-device work.
     // Throws if the coordinate is out of bounds of this mesh device.
-    [[deprecated(
-        "Deprecated, is_local should be avoided as it is likely to cause issues in distributed contexts. This will be "
-        "removed after 28-02-2026.")]]
     bool is_local(const MeshCoordinate& coord) const;
 
     const MeshShape& shape() const;
