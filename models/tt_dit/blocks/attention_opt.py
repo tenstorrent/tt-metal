@@ -97,6 +97,7 @@ class Attention(Module):
         ring_sdpa_q_chunk_max: int | None = None,
         ring_sdpa_k_chunk_max: int | None = None,
         ring_sdpa_exp_approx: bool = False,
+        sdpa_fp32_dest_acc: bool = False,
     ) -> None:
         super().__init__()
 
@@ -156,7 +157,7 @@ class Attention(Module):
             self.mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
-            fp32_dest_acc_en=False,  # NOTE: Set to True if there's a correctness issue
+            fp32_dest_acc_en=sdpa_fp32_dest_acc,
         )
         self.mm_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),

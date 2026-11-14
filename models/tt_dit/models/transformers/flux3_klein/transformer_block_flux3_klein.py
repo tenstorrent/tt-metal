@@ -59,12 +59,7 @@ class Flux3KleinTransformerBlock(Module):
             shard_prompt=False,
             ring_sdpa_q_chunk_max=128,
             ring_sdpa_exp_approx=True,
-        )
-        self.attn.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
-            device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
+            sdpa_fp32_dest_acc=True,
         )
 
         self.norm = DistributedLayerNorm(
