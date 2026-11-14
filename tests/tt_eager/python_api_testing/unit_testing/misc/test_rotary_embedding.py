@@ -409,6 +409,44 @@ def test_rotary_embedding_rejects_cos_seq_not_covering_token_index(token_idx, he
             ttnn.experimental.rotary_embedding(xt, cost, sint, token_idx)
 
 
+def test_rotary_embedding_rejects_implicit_tile_padded_head_dim(device, expect_error):
+    # A logical head_dim of 48 pads to 64, so it slips past the padded-width check. Both factories take
+    # the rotate_half midpoint from the padded width, so without a guard the head would rotate at 32
+    # instead of 24 and the output would come back at the padded width, silently. rotary_embedding_hf
+    # already rejects this; prove the non-hf op now does too.
+    torch.manual_seed(0)
+    batch, n_heads, seq_len, head_dim = 1, 8, 64, 48
+    x = torch.randn([batch, n_heads, seq_len, head_dim]).bfloat16().float()
+    cos = torch.randn([1, 1, seq_len, head_dim]).bfloat16().float()
+    sin = torch.randn([1, 1, seq_len, head_dim]).bfloat16().float()
+
+    xt = ttnn.Tensor(x, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
+    cost = ttnn.Tensor(cos, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
+    sint = ttnn.Tensor(sin, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
+
+    with expect_error(RuntimeError, "implicit tile padding"):
+        ttnn.experimental.rotary_embedding(xt, cost, sint)
+
+
+def test_rotary_embedding_identity_cos_sin_tile_aligned_control(device):
+    # Control: a tile-aligned head_dim with cos = 1 and sin = 0 leaves the input unchanged, so the
+    # output must equal the input bit for bit. This keeps the new guard from over-rejecting a valid
+    # head_dim.
+    torch.manual_seed(0)
+    batch, n_heads, seq_len, head_dim = 1, 8, 64, 64
+    x = torch.randn([batch, n_heads, seq_len, head_dim]).bfloat16()
+    cos = torch.ones([1, 1, seq_len, head_dim]).bfloat16()
+    sin = torch.zeros([1, 1, seq_len, head_dim]).bfloat16()
+
+    xt = ttnn.Tensor(x, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
+    cost = ttnn.Tensor(cos, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
+    sint = ttnn.Tensor(sin, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
+
+    out = ttnn.experimental.rotary_embedding(xt, cost, sint)
+    got = out.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+    assert torch.equal(x.float(), got.float())
+
+
 def _run_rotary_decode_once(device, input_shape, cache_size, token_idx, in_sharded, out_sharded):
     """Run one decode-mode rotary_embedding call and return whether the PCC check passed."""
     W, Z, Y, X = input_shape
