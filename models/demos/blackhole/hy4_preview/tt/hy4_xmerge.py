@@ -320,20 +320,22 @@ class XMergeFused(XMerge):
                         config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True)),
                 ]
                 comm_kidx = {}
-                for name, ndist, dr in (("fwd", 4, 0), ("bwd", 3, 1)):
-                    for lk in range(self.links):
-                        if os.environ.get("HY4_XM_NOCOMM") == "1":
-                            continue
-                        cx, cy = self.comm[(dr, lk)]
-                        rt = ttnn.RuntimeArgs()
-                        rt[cx][cy] = [col] + [v for xy in m_xy for v in xy]
-                        kernels.append(ttnn.KernelDescriptor(
-                            kernel_source=f"{KDIR}/xm_comm_v2.cpp", source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-                            core_ranges=_cores([(cx, cy)]),
-                            compile_time_args=[dr, ndist, S, tpc, ns, lk, self.links, self.SEMX, 1 + 2 * len(m_xy), int(os.environ.get("HY4_XM_DBG", "0"))],
-                            runtime_args=rt, common_runtime_args=[stage_base, land_base, gsem_addr],
-                            config=ttnn.WriterConfigDescriptor()))
-                        comm_kidx[(name, lk)] = len(kernels) - 1
+                if os.environ.get("HY4_XM_NOCOMM") != "1":
+                    rt = ttnn.RuntimeArgs()
+                    for name, ndist, dr in (("fwd", 4, 0), ("bwd", 3, 1)):
+                        for lk in range(self.links):
+                            cx, cy = self.comm[(dr, lk)]
+                            rt[cx][cy] = [col, dr, ndist, lk] + [v for xy in m_xy for v in xy]
+                    kernels.append(ttnn.KernelDescriptor(
+                        kernel_source=f"{KDIR}/xm_comm_v3.cpp", source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+                        core_ranges=_cores(list(self.comm.values())),
+                        compile_time_args=[0, 0, S, tpc, ns, 0, self.links, self.SEMX, 4 + 2 * len(m_xy), int(os.environ.get("HY4_XM_DBG", "0"))],
+                        runtime_args=rt, common_runtime_args=[stage_base, land_base, gsem_addr],
+                        config=ttnn.WriterConfigDescriptor()))
+                    ki = len(kernels) - 1
+                    for name, ndist, dr in (("fwd", 4, 0), ("bwd", 3, 1)):
+                        for lk in range(self.links):
+                            comm_kidx[(name, lk)] = ki
                 sem_cores = _cores(list(parts["cores"]) + list(self.comm.values()))
                 sems = list(parts["semaphores"]) + [ttnn.SemaphoreDescriptor(self.SEMX, ttnn.CoreType.WORKER, sem_cores, 0)]
                 prog = ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=cbs)
