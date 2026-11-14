@@ -38,24 +38,15 @@ jobs:
       - name: Verify all checkout consumers use cachew
         run: python3 .github/scripts/utils/cachew_checkout.py --check
       - name: Verify the action pins match this tree
-        # The consumers' pin (ACTION_SHA) is the only pin. It must point at a pushed
-        # commit whose action runtime files match this tree. Squash merges leave a
-        # PR pin off main's history; refs/pull/<n>/head keeps it fetchable, so on
-        # main that only warns until the follow-up re-pin to the merge commit lands.
-        env:
-          GH_TOKEN: ${{ github.token }}
+        # The consumers' pin (ACTION_SHA) is the only pin. It must be a commit of
+        # tenstorrent/.github whose actions/cachew-checkout runtime files match this
+        # tree's .github/actions/cachew-checkout; --verify-pins fetches it from there.
+        # On main, also require the pin to be on tenstorrent/.github main.
         run: |
-          pins=$(grep -rhoE 'tenstorrent/tt-metal/\.github/actions/cachew-checkout@[0-9a-f]{40}' .github | cut -d@ -f2 | sort -u)
-          for sha in $pins; do git fetch --no-tags --depth=1 origin "$sha"; done
-          python3 .github/scripts/utils/cachew_checkout.py --verify-pins
           if [ "$GITHUB_EVENT_NAME" = push ]; then
-            for sha in $pins; do
-              status=$(gh api "repos/$GITHUB_REPOSITORY/compare/main...$sha" --jq .status)
-              case "$status" in
-                behind|identical) ;;
-                *) echo "::warning::cachew pin $sha is not on main ($status); re-pin ACTION_SHA to the merge commit" ;;
-              esac
-            done
+            python3 .github/scripts/utils/cachew_checkout.py --verify-pins --require-main
+          else
+            python3 .github/scripts/utils/cachew_checkout.py --verify-pins
           fi
       - name: Working-tree action is a strict no-op on GitHub-hosted runners
         id: hosted

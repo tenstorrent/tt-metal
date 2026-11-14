@@ -29,9 +29,24 @@ import sys
 
 
 ACTION_DIR = Path(".github/actions/cachew-checkout")
-ACTION_REPO = "tenstorrent/tt-metal/.github/actions/cachew-checkout"
-ACTION_SHA = "8146c9d2746a20109da97143663494805274ce8c"
+# Consumers run a published copy of ACTION_DIR from the small tenstorrent/.github
+# repository. A remote `uses:` makes the runner download the whole host repository
+# for every job, so hosting it in tt-metal cost a full tt-metal tarball per job.
+# TEST ONLY (MINFRA-2477): hosted on a personal fork of tenstorrent/tt-github-actions to
+# prove the fix before the upstream PR lands. Switch to tenstorrent/tt-github-actions
+# before merging.
+HOST_REPO = "asattaurTT/tt-github-actions"
+HOST_URL = f"https://github.com/{HOST_REPO}"
+HOST_DIR = ".github/actions/cachew-checkout"
+ACTION_REPO = f"{HOST_REPO}/{HOST_DIR}"
+ACTION_SHA = "66fab509e2c11f6d518f82d16d3409041432877c"
 ACTION = f"{ACTION_REPO}@{ACTION_SHA}"
+# Earlier pins hosted the action in tt-metal itself; --write moves them to ACTION.
+LEGACY_ACTION_REPOS = (
+    "tenstorrent/tt-metal/.github/actions/cachew-checkout",
+    "tenstorrent/.github/actions/cachew-checkout",
+)
+PIN_REPOS = (ACTION_REPO, *LEGACY_ACTION_REPOS)
 UPSTREAM_WRAPPER = ACTION_DIR / "action.yml"
 FORWARDED_CHECKOUT = "de0fac2e4500dabe0009e67214ff5f5447ce83dd"
 MIGRATABLE_REFS = (FORWARDED_CHECKOUT, "v6", "v6.0.2")
@@ -40,12 +55,14 @@ CHECKOUT = re.compile(
     r"(?m)^(?P<prefix>[ \t]*(?:-[ \t]+)?uses:[ \t]*)(?P<quote>['\"]?)"
     r"(?:actions/checkout@(?:"
     + "|".join(map(re.escape, MIGRATABLE_REFS))
-    + r")|"
-    + re.escape(ACTION_REPO)
-    + r"@[0-9a-f]{40})"
+    + r")|(?:"
+    + "|".join(map(re.escape, PIN_REPOS))
+    + r")@[0-9a-f]{40})"
     r"(?P=quote)(?:[ \t]*#[^\n]*)?[ \t]*$"
 )
-ANY_PIN = re.compile(re.escape(ACTION_REPO) + r"(?P<subpath>/[\w./-]+)?@(?P<sha>[0-9a-f]{40})")
+ANY_PIN = re.compile(
+    r"(?P<repo>" + "|".join(map(re.escape, PIN_REPOS)) + r")(?P<subpath>/[\w./-]+)?@(?P<sha>[0-9a-f]{40})"
+)
 PLAIN_CHECKOUT = f"actions/checkout@{FORWARDED_CHECKOUT} # v6.0.2"
 HOSTED_LABEL = re.compile(r"(?:ubuntu|windows|macos)-[\w.-]+")
 TOP_LEVEL = re.compile(r"^(?P<key>[\w-]+):")
@@ -102,7 +119,8 @@ def rewrite(text):
         if "cachew: keep" in match[0]:
             return match[0]
         if any(start <= match.start() < end for start, end in hosted):
-            return f"{match['prefix']}{PLAIN_CHECKOUT}" if ACTION_REPO in match[0] else match[0]
+            pinned = any(repo in match[0] for repo in PIN_REPOS)
+            return f"{match['prefix']}{PLAIN_CHECKOUT}" if pinned else match[0]
         return f"{match['prefix']}{ACTION} # cachew checkout"
 
     return CHECKOUT.sub(replace, text)
@@ -144,27 +162,59 @@ def git_ok(root, *arguments):
     return subprocess.run(["git", *arguments], cwd=root, capture_output=True).returncode == 0
 
 
+def git_out(root, *arguments):
+    return subprocess.run(["git", *arguments], cwd=root, capture_output=True, text=True)
+
+
+def runtime_blobs(root, sha=None):
+    """{runtime path relative to the action: blob id}, from the published action
+    at sha, or from this tree's ACTION_DIR (working tree contents) without one."""
+    if sha:
+        listing = git_out(root, "ls-tree", "-r", sha, "--", f"{HOST_DIR}/").stdout.splitlines()
+        blobs = {}
+        for line in listing:
+            meta, path = line.split("\t", 1)
+            blobs[path[len(HOST_DIR) + 1 :]] = meta.split()[2]
+    else:
+        listing = git_out(root, "ls-files", "--", str(ACTION_DIR)).stdout.splitlines()
+        paths = [path[len(ACTION_DIR.as_posix()) + 1 :] for path in listing]
+        blobs = {path: git_out(root, "hash-object", str(ACTION_DIR / path)).stdout.strip() for path in paths}
+    return {path: blob for path, blob in blobs.items() if path.split("/")[0] in RUNTIME_FILES}
+
+
+def fetch_from_host(root, *refspecs):
+    return git_ok(root, "fetch", "--quiet", "--no-tags", HOST_URL, *refspecs)
+
+
 def verify_pins(root, require_main):
     """The consumers' pin to this action is the only pin. Fail if any consumer
-    pins something else, or if the pin is unknown, differs from this tree, or
-    (after merge) is not on main."""
+    pins something else (including the legacy tt-metal-hosted path), or if the
+    pin is unknown in HOST_REPO, its runtime files differ from this tree's
+    ACTION_DIR, or (with require_main) it is not on HOST_REPO's main."""
     problems = []
     pins = {}
     for path in tracked_consumers(root):
         for match in ANY_PIN.finditer((root / path).read_text()):
             if match["subpath"]:
                 problems.append(f"{path} references {match[0]}; reference the action itself, not a subdirectory")
+            if match["repo"] != ACTION_REPO:
+                problems.append(f"{path} pins legacy {match['repo']}; run --write to move it to {ACTION_REPO}")
             pins.setdefault(match["sha"], []).append(path.as_posix())
     if set(pins) - {ACTION_SHA}:
         problems.append(f"consumers pin {sorted(pins)}, expected only ACTION_SHA {ACTION_SHA}")
+    if require_main and pins and not fetch_from_host(root, "+refs/heads/main:refs/cachew-host/main"):
+        problems.append(f"could not fetch {HOST_REPO} main")
+    local = runtime_blobs(root)
     for sha, files in sorted(pins.items()):
-        if not git_ok(root, "cat-file", "-e", f"{sha}^{{commit}}"):
-            problems.append(f"pin {sha} is not a known commit (fetch it, or it was never pushed)")
+        if not git_ok(root, "cat-file", "-e", f"{sha}^{{commit}}") and not fetch_from_host(root, "--depth=1", sha):
+            problems.append(f"pin {sha} is not a known {HOST_REPO} commit (was it pushed?)")
             continue
-        if not git_ok(root, "diff", "--quiet", sha, "--", *(str(ACTION_DIR / name) for name in RUNTIME_FILES)):
-            problems.append(f"pin {sha} differs from this tree's {ACTION_DIR} runtime files (used by {files[0]})")
-        if require_main and not git_ok(root, "merge-base", "--is-ancestor", sha, "origin/main"):
-            problems.append(f"pin {sha} is not reachable from origin/main and may be garbage-collected")
+        if runtime_blobs(root, sha) != local:
+            problems.append(
+                f"pin {sha} {HOST_REPO}/{HOST_DIR} differs from this tree's {ACTION_DIR} runtime files (used by {files[0]})"
+            )
+        if require_main and not git_ok(root, "merge-base", "--is-ancestor", sha, "refs/cachew-host/main"):
+            problems.append(f"pin {sha} is not reachable from {HOST_REPO} main and may be garbage-collected")
     for problem in problems:
         print(problem)
     print("Pins verified." if not problems else f"{len(problems)} pin problem(s).")
