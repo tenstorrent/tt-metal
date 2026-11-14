@@ -20,6 +20,7 @@ NB_MAKE_OPAQUE(ttml::serialization::NamedParameters)
 #include <nanobind/stl/unordered_map.h>
 #include <yaml-cpp/yaml.h>
 
+#include <algorithm>
 #include <stdexcept>
 
 #include "nanobind/nb_export_enum.hpp"
@@ -229,6 +230,19 @@ void py_module(nb::module_& m) {
         nb::arg("type"),
         nb::arg("creator"),
         "Register a custom optimizer creator function");
+
+    m.def(
+        "registered_optimizer_types",
+        [py_registry]() {
+            auto types = OptimizerRegistry::instance().types();
+            for (auto [type, creator] : py_registry) {
+                types.push_back(nb::cast<std::string>(type));
+            }
+            std::ranges::sort(types);
+            types.erase(std::unique(types.begin(), types.end()), types.end());
+            return types;
+        },
+        "The optimizer types create_optimizer accepts: the C++ ones and those registered from Python, sorted");
 
     {
         auto py_optimizer_base =

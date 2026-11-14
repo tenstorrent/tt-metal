@@ -7,6 +7,7 @@
 #include <fmt/format.h>
 #include <fmt/ranges.h>
 
+#include <algorithm>
 #include <sstream>
 #include <unordered_set>
 #include <vector>
@@ -161,6 +162,16 @@ OptimizerRegistry::OptimizerRegistry() {
 
 void OptimizerRegistry::register_optimizer(const std::string& type, OptimizerCreator creator) {
     m_creators[type] = std::move(creator);
+}
+
+std::vector<std::string> OptimizerRegistry::types() const {
+    std::vector<std::string> types;
+    types.reserve(m_creators.size());
+    for (const auto& [type, creator] : m_creators) {
+        types.push_back(type);
+    }
+    std::ranges::sort(types);
+    return types;
 }
 
 std::unique_ptr<OptimizerBase> OptimizerRegistry::create(
