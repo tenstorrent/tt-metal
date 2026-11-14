@@ -922,6 +922,9 @@ ALWI void matmul_block(
 // A plain call goes through the macros at the end of this file with the cb ids that are constant where it is written;
 // each choice is an if constexpr at instantiation, so a call it does not apply to keeps its instantiation.
 
+// a block dim by value (MATMUL_FE_SHAPE)
+constexpr std::uint32_t matmul_fe_dim(const std::uint32_t dim) { return dim; }
+
 // a cb id as a template argument; 0xFF for an argument that is not one
 template <typename T>
 constexpr std::uint32_t matmul_fe_cb(const T& cb) {

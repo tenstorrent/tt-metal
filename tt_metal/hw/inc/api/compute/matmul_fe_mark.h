@@ -55,7 +55,11 @@ static_assert(!is_used<2>(0), "matmul_fe_mark: an untouched tag<N> must read unu
 #define MATMUL_FE_MARK() \
     (sizeof(::ckernel::matmul_fe_mark::set<MATMUL_FE_TTSYNC_OK() ? 0 : 4>) + (MATMUL_FE_TTSYNC_OK() ? 0 : 1))
 #define FAST_TILIZE_MARK() sizeof(::ckernel::matmul_fe_mark::set<3>)
-// 0, completing tag 8 for a plain call whose ct and rt are constant expressions and tag 7 otherwise
-#define MATMUL_FE_SHAPE(ct, rt) \
-    (0 * sizeof(::ckernel::matmul_fe_mark::set<(MATMUL_FE_C(ct) == 0xFFu || MATMUL_FE_C(rt) == 0xFFu) ? 7 : 8>))
+// 0, completing tag 8 for a plain call whose ct and rt are constant expressions and tag 7 otherwise; the dims pass by value, so
+// the test takes no address of them (a reference moved the register allocation of run-time-dim kernels)
+#define MATMUL_FE_SHAPE(ct, rt)                                                                               \
+    (0 * sizeof(::ckernel::matmul_fe_mark::set<(__builtin_constant_p(::ckernel::matmul_fe_dim(ct)) &&         \
+                                                __builtin_constant_p(::ckernel::matmul_fe_dim(rt)))            \
+                                                   ? 8                                                          \
+                                                   : 7>))
 #endif
