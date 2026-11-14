@@ -16,8 +16,12 @@ REPO_IDS = {
 IGNORE_PATTERNS = ["transformer/*", "variants/*", "assets/*", "*.jpg"]
 
 
-def resolve_weights_dir(model: str) -> Path:
+def snapshot(repo_id: str, ignore_patterns: list[str] | None = None) -> Path:
     try:
-        return Path(snapshot_download(REPO_IDS[model], local_files_only=True))
+        return Path(snapshot_download(repo_id, local_files_only=True))
     except LocalEntryNotFoundError:
-        return Path(snapshot_download(REPO_IDS[model], ignore_patterns=IGNORE_PATTERNS))
+        return Path(snapshot_download(repo_id, ignore_patterns=ignore_patterns))
+
+
+def resolve_weights_dir(model: str) -> Path:
+    return snapshot(REPO_IDS[model], IGNORE_PATTERNS)

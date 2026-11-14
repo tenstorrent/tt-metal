@@ -44,13 +44,9 @@ DIT_L1_MARGIN = 2 << 10
 
 
 def resolve_weights_dir() -> Path:
-    from huggingface_hub import snapshot_download
-    from huggingface_hub.errors import LocalEntryNotFoundError
+    from .weights_flux3_klein import snapshot
 
-    try:
-        return Path(snapshot_download(REPO_ID, local_files_only=True))
-    except LocalEntryNotFoundError:
-        return Path(snapshot_download(REPO_ID))
+    return snapshot(REPO_ID)
 
 
 def reference_size(width: int, height: int) -> tuple[int, int]:
