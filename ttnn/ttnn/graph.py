@@ -312,39 +312,58 @@ def begin_graph_capture(run_mode=None, *, _internal=False):
     return _cpp_begin_graph_capture(run_mode)
 
 
+def _end_python_session_if_outermost() -> bool:
+    """After a C++ capture has ended, successfully or not: when no capture is left active, stop Python I/O recording
+    and turn off the stack traces this session's begin turned on. Returns whether that was the outermost capture."""
+    global _python_io_recording_enabled, _python_stack_traces_auto_for_session
+    if is_graph_capture_active():
+        return False
+    _python_io_recording_enabled = False
+    if _python_stack_traces_auto_for_session:
+        disable_python_stack_traces()
+        _python_stack_traces_auto_for_session = False
+    return True
+
+
 def end_graph_capture():
     """End graph capture and return the captured graph.
 
     Automatically disables Python I/O recording when the outermost
     capture session ends.  If Python stack traces were enabled by auto-capture they are disabled again.
     """
-    global _python_io_recording_enabled, _python_stack_traces_auto_for_session
-    result = _cpp_end_graph_capture()
-    if not is_graph_capture_active():
-        _python_io_recording_enabled = False
-        if _python_stack_traces_auto_for_session:
-            disable_python_stack_traces()
-            _python_stack_traces_auto_for_session = False
+    try:
+        result = _cpp_end_graph_capture()
+    finally:
+        # The C++ capture ends even when finalizing it throws, so end the Python side on that path too.
+        _end_python_session_if_outermost()
     return result
 
 
 def end_graph_capture_to_file(report_path):
-    """Wrapper that appends Python I/O data to the JSON report."""
-    global _python_io_recording_enabled, _python_stack_traces_auto_for_session
+    """End graph capture, write the C++ report to *report_path* and the Python I/O and comparison records to sidecars
+    beside it, and return the captured graph.
+
+    The capture ends even when a write fails. When it was the outermost capture, the Python side ends with it: I/O
+    recording stops, the stack traces this capture turned on are turned off, and its I/O and comparison records are
+    dropped, whether they were written or not. A failed nested write leaves the records to the outer capture, which can
+    still write them.
+    """
+    global _python_io_data
     try:
         result_str = _cpp_end_graph_capture_to_file(report_path)
         if _python_io_data:
             _write_python_io_sidecar(report_path)
         if has_comparison_records():
             _write_comparison_records_sidecar(report_path)
-            reset_comparison_records_data()
+            if is_graph_capture_active():
+                # Written to this nested capture's sidecar; the outer capture's starts from what comes after.
+                reset_comparison_records_data()
     finally:
-        # The C++ call ends the capture even when the report write fails.
-        if not is_graph_capture_active():
-            _python_io_recording_enabled = False
-            if _python_stack_traces_auto_for_session:
-                disable_python_stack_traces()
-                _python_stack_traces_auto_for_session = False
+        if _end_python_session_if_outermost():
+            # Kept, the records of a report that may not exist would wait for the next capture, and the comparison
+            # records be stored by a later flush_comparison_records_to_db with another session's.
+            reset_comparison_records_data()
+            _python_io_data = []
     return json.loads(result_str)
 
 
@@ -695,16 +714,18 @@ def full_graph_capture(report_path: str, *, run_mode=None, slow_dispatch: bool =
         begin_graph_capture(run_mode if run_mode is not None else RunMode.NORMAL)
         capture_open = True
         yield
-        # end_graph_capture_to_file ends this capture even when it raises, so an
-        # enclosing capture must not be ended below.
+        # Ends this context's capture whether or not the report is written.
         capture_open = False
         end_graph_capture_to_file(report_path)
     finally:
+        # Only when the body raised. Ending whatever capture is active instead would end an enclosing one (the graph
+        # report fixture's, say) after this context's own capture had already ended.
         if capture_open:
             try:
                 end_graph_capture()
-            except Exception:
-                pass
+            except Exception as exception:
+                # Finalizing the capture threw. It has still ended; the body's own error is the one to raise.
+                logger.warning(f"full_graph_capture could not end its graph capture: {exception}")
         if not prev_buffer_tracing:
             disable_detailed_buffer_tracing()
         if not prev_stack_traces:
