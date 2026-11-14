@@ -37,7 +37,7 @@ def configure_math(
 
 
 def math_pack_sync_init(config: "GlobalConfig", operation: "L1Operation") -> str:
-    if not config.quasar_use_dvalid and operation.stage_id != 1:
+    if operation.stage_id != 1:
         return ""
     dest_sync = operation.dest_sync.cpp_enum_value
     dest_acc = config.dest_acc.cpp_enum_value

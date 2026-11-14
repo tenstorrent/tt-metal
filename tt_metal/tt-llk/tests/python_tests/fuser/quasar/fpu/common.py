@@ -5,7 +5,6 @@
 from typing import TYPE_CHECKING
 
 from helpers.format_config import DataFormat
-from helpers.llk_params import DestSync, PerfRunType
 
 if TYPE_CHECKING:
     from fuser.fpu_node import FpuNode
@@ -47,56 +46,15 @@ def configure_math(
 
 
 def math_pack_sync_init(config: "GlobalConfig", operation: "L1Operation") -> str:
-    dest_sync = operation.dest_sync.cpp_enum_value
-    if config.quasar_use_dvalid:
-        if config.perf_run_type in (None, PerfRunType.L1_TO_L1):
-            return "set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});\n"
-        return "set_up_zero_dest_dvalid_handshake_for_math();\n"
-    if operation.stage_id != 1:
-        return ""
-    code = f"_llk_math_pack_sync_init_<{dest_sync}>();\n"
-    if config.uses_unpack_to_dest_sync:
-        code += (
-            "set_up_zero_dest_dvalid_handshake_for_math();\n"
-            "_llk_sync_spin_until_posted_(semaphore::UNPACK_MATH);\n"
-        )
-    return code
+    return ""
 
 
 def math_wait_for_dest(config: "GlobalConfig", operation: "L1Operation") -> str:
-    if config.uses_unpack_to_dest_sync:
-        code = ""
-        if config.uses_unpack_to_dest_pack_sync:
-            code += "_llk_math_wait_for_dest_available_();\n"
-        code += "_llk_sync_wait_<p_stall::STALL_MATH | p_stall::STALL_SFPU | p_stall::STALL_SYNC, p_stall::STALL_ON_ZERO>(semaphore::UNPACK_MATH);\n"
-        return code
-    if config.skip_sync or config.quasar_use_dvalid:
-        return ""
-    return "_llk_math_wait_for_dest_available_();\n"
+    return ""
 
 
 def math_dest_section_done(config: "GlobalConfig", operation: "L1Operation") -> str:
-    if config.uses_unpack_to_dest_sync:
-        if config.uses_unpack_to_dest_pack_sync:
-            code = (
-                "_llk_sync_post_<p_stall::MATH, p_stall::WAIT_SFPU>(semaphore::MATH_PACK);\n"
-                "_llk_sync_get_(semaphore::UNPACK_MATH);\n"
-            )
-        else:
-            code = "_llk_sync_get_<p_stall::MATH, p_stall::WAIT_SFPU>(semaphore::UNPACK_MATH);\n"
-        if operation.dest_sync == DestSync.Half:
-            code += (
-                "_llk_sync_advance_dest_section_<ckernel::TRISC_ID, "
-                f"{config.dest_acc.cpp_enum_value}, p_stall::WAIT_SFPU, p_stall::MATH>();\n"
-            )
-        return code
-    if config.skip_sync:
-        return ""
-    dest_sync = operation.dest_sync.cpp_enum_value
-    dest_acc = config.dest_acc.cpp_enum_value
-    if config.quasar_use_dvalid:
-        return f"_llk_math_set_dvalid_<p_cleardvalid::FPU, {dest_sync}>();\n"
-    return f"_llk_math_dest_section_done_<{dest_sync}, {dest_acc}>();\n"
+    return ""
 
 
 def math_dest_remap_config(required: bool) -> str:
