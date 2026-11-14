@@ -27,6 +27,7 @@
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include <capnp/message.h>
@@ -516,14 +517,33 @@ std::optional<std::string> toolchain_context(const std::string& gpp) {
         }
         std::sort(files.begin(), files.end());
         tt::StableHasher hash;
-        hash_field(hash, "prewarm-failure-context-v1");
+        hash_field(hash, "prewarm-failure-context-v2");
         hash_field(hash, jit_build::utils::compiler_version(gpp));
         for (const auto& file : files) {
             hash_file(hash, file);
         }
         std::vector<std::string> environment;
         for (auto entry = ::environ; *entry; ++entry) {
-            if (std::string_view(*entry).starts_with("TT_METAL_KERNEL_PREWARM_RETRY_FAILED=")) {
+            const std::string_view variable(*entry);
+            const auto name = variable.substr(0, variable.find('='));
+            // Session/service metadata cannot affect the directly invoked SFPI compiler. Keep
+            // every other variable (even unknown ones) so compiler search, locale and injected
+            // flags retain conservative invalidation; unsupported toolchains still retry.
+            constexpr std::string_view ignored[] = {
+                "TT_METAL_KERNEL_PREWARM_RETRY_FAILED",
+                "INVOCATION_ID",
+                "SYSTEMD_EXEC_PID",
+                "SSH_CONNECTION",
+                "SSH_CLIENT",
+                "SSH_TTY",
+                "JOURNAL_STREAM",
+                "XDG_SESSION_ID",
+                "XDG_SESSION_TYPE",
+                "XDG_SEAT",
+                "XDG_VTNR",
+                "SHLVL",
+                "_"};
+            if (std::find(std::begin(ignored), std::end(ignored), name) != std::end(ignored)) {
                 continue;
             }
             environment.emplace_back(*entry);
@@ -634,8 +654,7 @@ std::size_t run_prewarm(
 
     std::vector<std::shared_future<void>> events;
     std::atomic<size_t> successful{0}, failed{0}, previously_failed{0};
-    size_t deferred = 0;
-    size_t genfiles_failed = 0;
+    std::atomic<size_t> deferred{0}, genfiles_failed{0};
     std::unordered_map<std::string, std::optional<std::string>> toolchains;
     const bool retry_failed = env_truthy("TT_METAL_KERNEL_PREWARM_RETRY_FAILED");
     size_t skipped_build_key = 0;
@@ -647,7 +666,17 @@ std::size_t run_prewarm(
     // concurrent builds of one out_dir collide on the temp .o and destructively corrupt the final
     // .elf (leaving "no ELF magic" for the op-by-op reader). Build each unique out_dir exactly once.
     std::unordered_set<std::string> built_out_dirs;
-    std::unordered_map<std::string, std::shared_ptr<failure::KernelLock>> kernel_locks;
+    struct TargetWork {
+        const jit_server::CompileRequest* request;
+        jit_build::TargetRecipe target;
+    };
+    struct KernelWork {
+        const jit_server::CompileRequest* request;
+        std::string directory;
+        std::vector<TargetWork> targets;
+    };
+    std::vector<KernelWork> kernels;
+    std::unordered_map<std::string, size_t> kernel_indices;
     for (const auto& req : requests) {
         if (req.build_key != build_key) {
             ++skipped_build_key;
@@ -676,27 +705,13 @@ std::size_t run_prewarm(
         // Generated files live in the kernel dir (parent of the per-target dirs); target srcs
         // reference them via "../". Write once per kernel dir (stable wrappers, identical content).
         const std::string kernel_dir = out_kernel_root + req.kernel_name + "/";
-        auto [lock_it, inserted] = kernel_locks.try_emplace(kernel_dir);
+        const auto [kernel_it, inserted] = kernel_indices.try_emplace(kernel_dir, kernels.size());
         if (inserted) {
-            try {
-                lock_it->second = std::make_shared<failure::KernelLock>(kernel_dir + ".prewarm.lock");
-                if (lock_it->second->acquired()) {
-                    write_generated_files(kernel_dir, req.generated_files);
-                }
-            } catch (const std::exception& e) {
-                lock_it->second.reset();
-                ++genfiles_failed;
-                log_warning(tt::LogMetal, "kernel prewarm: genfiles/lock failed for {}: {}", req.kernel_name, e.what());
-            }
-        }
-        if (!lock_it->second || !lock_it->second->acquired()) {
-            deferred += req.targets.size();
-            continue;
+            kernels.push_back({&req, kernel_dir, {}});
         }
         if (!toolchains.contains(req.gpp)) {
             toolchains.emplace(req.gpp, toolchain_context(req.gpp));
         }
-        const auto toolchain = toolchains.at(req.gpp);
         for (const auto& target : req.targets) {
             const std::string out_dir = kernel_dir + target.target_name + "/";
             if (!built_out_dirs.insert(out_dir).second) {
@@ -710,14 +725,44 @@ std::size_t run_prewarm(
                     resolved.weakened_firmware_name = it->second;
                 }
             }
-            const auto kernel_lock = lock_it->second;
-            launch_build_step(
-                [&, req, resolved, out_dir, kernel_dir, kernel_lock, toolchain, retry_failed]() {
+            kernels[kernel_it->second].targets.push_back({&req, std::move(resolved)});
+        }
+    }
+    // Queue data only, never lock descriptors. Each active worker owns one kernel through
+    // genfiles, all distinct targets (including split manifest entries), and failure publication.
+    // Completion, skip and exceptions release the lock before the future becomes ready.
+    for (const auto& kernel : kernels) {
+        launch_build_step(
+            [&, kernel]() {
+                const auto& kernel_dir = kernel.directory;
+                std::optional<failure::KernelLock> lock;
+                try {
+                    lock.emplace(kernel_dir + ".prewarm.lock");
+                    if (!lock->acquired()) {
+                        deferred += kernel.targets.size();
+                        return;
+                    }
+                    write_generated_files(kernel_dir, kernel.request->generated_files);
+                } catch (const std::exception& e) {
+                    ++genfiles_failed;
+                    deferred += kernel.targets.size();
+                    log_warning(
+                        tt::LogMetal,
+                        "kernel prewarm: genfiles/lock failed for {}: {}",
+                        kernel.request->kernel_name,
+                        e.what());
+                    return;
+                }
+                for (const auto& work : kernel.targets) {
+                    const auto& req = *work.request;
+                    const auto& resolved = work.target;
+                    const auto& toolchain = std::as_const(toolchains).at(req.gpp);
+                    const std::string out_dir = kernel_dir + resolved.target_name + "/";
                     if (resolved.target_name.empty() || resolved.target_name == "." || resolved.target_name == ".." ||
                         resolved.target_name.find('/') != std::string::npos) {
                         ++failed;
                         log_warning(tt::LogMetal, "kernel prewarm: invalid target name");
-                        return;
+                        continue;
                     }
                     const auto result = failure::target(
                         kernel_dir + ".prewarm-failed-" + resolved.target_name,
@@ -737,9 +782,9 @@ std::size_t run_prewarm(
                                 tt::LogMetal, "kernel prewarm: build {} failed: {}", out_dir, result.diagnostic);
                             break;
                     }
-                },
-                events);
-        }
+                }
+            },
+            events);
     }
     sync_build_steps(events);
     auto elapsed_ms =
@@ -758,8 +803,8 @@ std::size_t run_prewarm(
         skipped_device_init,
         skipped_build_key,
         skipped_foreign_tree,
-        deferred,
-        genfiles_failed);
+        deferred.load(),
+        genfiles_failed.load());
     if (skipped_foreign_tree > 0) {
         log_warning(
             tt::LogMetal,

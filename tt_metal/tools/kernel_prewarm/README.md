@@ -196,7 +196,7 @@ or template deduction failure) can create a separate
 `.prewarm-failed-<target>` record in the kernel directory, outside the target
 artifacts removed after failure. Subsequent passes skip that failure only when
 its context still matches. The context includes the complete target recipe,
-generated inputs, build key, environment and SFPI toolchain contents. Fresh
+generated inputs, build key, compiler environment and SFPI toolchain contents. Fresh
 compiler dependency discovery (`-M`, including system headers) and content
 hashes detect edited sources, edited dependencies and newly shadowing headers;
 a stale `build_key` or old `.dephash` alone cannot suppress a retry.
@@ -205,6 +205,11 @@ Set `TT_METAL_KERNEL_PREWARM_RETRY_FAILED=1` (also `true` or `on`) to retry all
 recorded failures. Alternatively, while no pass is running, remove the relevant
 `.prewarm-failed-<target>` files. Neither action edits the manifest. Changed
 context automatically retries. Successful targets clear their failure records.
+
+Service/session metadata (`INVOCATION_ID`, `SYSTEMD_EXEC_PID`, SSH connection/client/TTY,
+`JOURNAL_STREAM`, XDG session/type/seat/VT, `SHLVL` and `_`) is excluded from
+the identity. All other environment entries remain part of the identity, including
+unknown variables, compiler search paths and locale.
 
 Negative caching currently requires a directly invoked absolute compiler in a
 self-contained `sfpi/.../bin` installation. Unknown wrappers (including ccache),
@@ -232,6 +237,9 @@ are per-build-key filtering counts, not compiler errors.
 
 A nonblocking kernel lock covers generated files, compilation and atomic failure
 record publication across concurrent prewarm passes. A competing pass reports
-the kernel's targets as deferred. These locks coordinate prewarm processes;
+the kernel's distinct targets as deferred. Each active worker acquires one lock,
+runs that kernel's targets sequentially and releases the lock before completing.
+Queued or completed kernels retain no open lock descriptors; duplicate and split
+manifest entries are grouped before dispatch. These locks coordinate prewarm processes;
 callers must still keep an offline prewarm separate from active device JIT work.
 CPU regression coverage is in `tests/tt_metal/tt_metal/tools/test_kernel_prewarm_failures.py`.

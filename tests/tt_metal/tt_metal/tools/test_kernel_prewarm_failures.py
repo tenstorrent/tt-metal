@@ -151,6 +151,7 @@ INTEGRATION_PREFIX = r"""
 #include <sstream>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 namespace fs=std::filesystem;
 namespace tt {
 constexpr int LogMetal=0, LogBuildKernels=0;
@@ -255,27 +256,36 @@ int main(int argc,char** argv) {
  std::string mode=argv[2]; int expected=std::stoi(argv[3]);
  if(mode=="batch") {
   struct rlimit limit{32,32};assert(setrlimit(RLIMIT_NOFILE,&limit)==0);
+  fail_generated=expected==3;
   std::vector<jit_server::CompileRequest> requests;
   for(int i=0;i<96;++i) {
-   jit_server::CompileRequest req;req.kernel_name="kernel"+std::to_string(i);req.gpp="batch";
+   jit_server::CompileRequest req;req.kernel_name="kernel"+std::to_string(i);req.gpp=expected==2 ? "batch-fail" : "batch";
    jit_build::TargetRecipe target;target.target_name="first";req.targets={target};
    requests.push_back(req);requests.push_back(req); // duplicate target
    req.targets[0].target_name="second";requests.push_back(req); // same kernel, distinct request
   }
   auto run=[&](){
    auto count=run_prewarm(requests,root.string()+"/","",7,"",false);
-   assert(summary[2]==0 && summary[10]==0);
-   assert(count+summary[9]==192);
-   if(!expected)assert(count==192 && summary[5]==96);
+   assert(summary[2]==size_t(expected==2 ? 96 : 0));
+   assert(summary[10]==size_t(expected==3 ? 96 : 0));
+   assert(count+summary[2]+summary[9]==192);
+   assert(summary[5]==96);
+   if(expected==0)assert(count==192);
+   if(expected==2)assert(count==96 && summary[9]==0);
+   if(expected==3)assert(count==0 && summary[9]==192);
   };
-  if(expected) {
+  if(expected==1) {
    pid_t child=fork();assert(child>=0);
    run();
    if(child==0)_exit(0);
    int status;assert(waitpid(child,&status,0)==child && WIFEXITED(status) && WEXITSTATUS(status)==0);
   } else run();
-  for(int i=0;i<96;++i)for(const char* target:{"first","second"})
-   assert(fs::exists(root/("kernel"+std::to_string(i))/target/"complete"));
+  for(int i=0;i<96;++i)for(const char* target:{"first","second"}) {
+   bool success=expected!=3 && !(expected==2 && std::string(target)=="second");
+   assert(fs::exists(root/("kernel"+std::to_string(i))/target/"complete")==success);
+   failure::KernelLock released(root/("kernel"+std::to_string(i))/".prewarm.lock");
+   assert(released.acquired());
+  }
   std::cout<<"96 kernels, 192 distinct targets, RLIMIT_NOFILE=32; concurrent="<<expected<<" passed\n";
   return 0;
  }
@@ -332,40 +342,83 @@ class PrewarmFailureTests(unittest.TestCase):
 
     def test_review_regressions(self):
         source = (ROOT / "tt_metal/impl/program/kernel_prewarm.cpp").read_text()
-        production = source[source.index("void hash_field(") : source.index("void initialize_prewarm_shutdown_dependencies()")]
+        production = source[
+            source.index("void hash_field(") : source.index("void initialize_prewarm_shutdown_dependencies()")
+        ]
         dependencies = (ROOT / "tt_metal/jit_build/depend.cpp").read_text()
-        parser = dependencies[dependencies.index("ParsedDependencies parse_dependency_file(") : dependencies.index("\nnamespace {")]
+        parser = dependencies[
+            dependencies.index("ParsedDependencies parse_dependency_file(") : dependencies.index("\nnamespace {")
+        ]
         # One active worker makes dispatch-time descriptor retention deterministic.
-        prefix = INTEGRATION_PREFIX.replace("std::launch::async", "std::launch::deferred")
+        prefix = INTEGRATION_PREFIX.replace("std::launch::async", "std::launch::deferred").replace(
+            "void write_generated_files(", "bool fail_generated=false;\nvoid write_generated_files("
+        )
         prefix = prefix.replace(
             " ++attempts; fs::create_directories(dir);",
-            r''' ++attempts; fs::create_directories(dir);
- if(gpp=="batch") {
+            r""" ++attempts; fs::create_directories(dir);
+ if(gpp.starts_with("batch")) {
   failure::KernelLock competing(fs::path(dir).parent_path().parent_path()/".prewarm.lock");
   assert(!competing.acquired());
   int fd=::open((dir+"active").c_str(),O_CREAT|O_EXCL|O_WRONLY,0600);assert(fd>=0);
   usleep(1000);assert(::close(fd)==0);assert(::unlink((dir+"active").c_str())==0);
+  if(gpp=="batch-fail" && t.target_name=="second")throw std::runtime_error("injected build failure");
   std::ofstream(dir+"complete")<<"ok";return;
- }''',
+ }""",
         )
         prefix = prefix.replace(
             "{fs::create_directories(dir);for(const auto& f:files)",
-            '{failure::KernelLock competing(dir+".prewarm.lock");assert(!competing.acquired());fs::create_directories(dir);for(const auto& f:files)',
+            '{failure::KernelLock competing(dir+".prewarm.lock");assert(!competing.acquired());if(fail_generated)throw std::runtime_error("injected genfiles failure");fs::create_directories(dir);for(const auto& f:files)',
         )
         with tempfile.TemporaryDirectory(prefix="prewarm-review-") as work:
             path = Path(work)
-            (path / "test.cpp").write_text(prefix + "namespace tt::jit_build {" + parser + "}\n" + production + REVIEW_MAIN)
-            subprocess.run(["c++", "-std=c++20", "-Wall", "-Wextra", "-Werror", "-pthread", "-I", str(ROOT), str(path / "test.cpp"), "-o", str(path / "test")], check=True, timeout=60)
-            for concurrent in (0, 1):
+            (path / "test.cpp").write_text(
+                prefix + "namespace tt::jit_build {" + parser + "}\n" + production + REVIEW_MAIN
+            )
+            subprocess.run(
+                [
+                    "c++",
+                    "-std=c++20",
+                    "-Wall",
+                    "-Wextra",
+                    "-Werror",
+                    "-pthread",
+                    "-I",
+                    str(ROOT),
+                    str(path / "test.cpp"),
+                    "-o",
+                    str(path / "test"),
+                ],
+                check=True,
+                timeout=60,
+            )
+            for concurrent in (0, 1, 2, 3):
                 with self.subTest(batch_concurrent=concurrent):
-                    subprocess.run([str(path / "test"), str(path / f"batch{concurrent}"), "batch", str(concurrent)], check=True, timeout=30)
+                    subprocess.run(
+                        [str(path / "test"), str(path / f"batch{concurrent}"), "batch", str(concurrent)],
+                        check=True,
+                        timeout=30,
+                    )
             env = os.environ.copy()
-            for key in ("LD_LIBRARY_PATH", "LD_PRELOAD", "GCC_EXEC_PREFIX", "COMPILER_PATH", "TT_METAL_KERNEL_PREWARM_RETRY_FAILED"):
+            for key in (
+                "LD_LIBRARY_PATH",
+                "LD_PRELOAD",
+                "GCC_EXEC_PREFIX",
+                "COMPILER_PATH",
+                "TT_METAL_KERNEL_PREWARM_RETRY_FAILED",
+            ):
                 env.pop(key, None)
             env["LANG"] = "C"
             command = [str(path / "test"), str(path / "environment"), "environment"]
             subprocess.run(command + ["1"], env=env, check=True, timeout=30)
-            for key in ("INVOCATION_ID", "SYSTEMD_EXEC_PID", "SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY", "JOURNAL_STREAM", "XDG_SESSION_ID"):
+            for key in (
+                "INVOCATION_ID",
+                "SYSTEMD_EXEC_PID",
+                "SSH_CONNECTION",
+                "SSH_CLIENT",
+                "SSH_TTY",
+                "JOURNAL_STREAM",
+                "XDG_SESSION_ID",
+            ):
                 env[key] = "changed-session-metadata"
                 with self.subTest(unrelated_environment=key):
                     subprocess.run(command + ["0"], env=env, check=True, timeout=30)
