@@ -616,14 +616,13 @@ tests/ttnn/docs_examples/test_normalization_examples.py @tenstorrent/metalium-de
 tests/ttnn/docs_examples/test_pointwise_*_examples.py @tenstorrent/metalium-developers-eltwise
 tests/ttnn/docs_examples/test_pooling_examples.py @tenstorrent/metalium-developers-convolutions
 tests/ttnn/docs_examples/test_reduction_examples.py @tenstorrent/metalium-developers-mmfusedreduce
-tests/ttnn/docs_examples/test_tensor_creation_examples.py
 
 # TTNN Distributed
 tests/ttnn/distributed/ @tenstorrent/metalium-developers-ttnn-core
 ttnn/ttnn/distributed/ @tenstorrent/metalium-developers-ttnn-core
 
 # ttnn-core keeps the TTNN framework and steps back from tests and bindings of code other teams build.
-# Code other teams build under ttnn/ stays with ttnn-core until its developers take it over.
+# Code other teams build under ttnn/ that matters stays with ttnn-core until its developers take it over.
 # TTNN framework tests stay with ttnn-core and the other tests/ttnn/ owners.
 tests/ttnn/unit_tests/base_functionality/ @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
 tests/ttnn/unit_tests/tensor/ @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
@@ -644,6 +643,7 @@ tests/ttnn/unit_tests/gtests/test_command_list_tensor_prefetcher.cpp @tenstorren
 tests/ttnn/unit_tests/gtests/test_command_list.cpp @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
 tests/ttnn/unit_tests/gtests/multiprocess/test_host_all_gather.cpp @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
 tests/ttnn/unit_tests/gtests/multiprocess/test_tensor_to_string.cpp @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
+tests/ttnn/unit_tests/gtests/multiprocess/main.cpp @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
 tests/ttnn/unit_tests/gtests/ttnn_test_fixtures.hpp @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
 tests/ttnn/unit_tests/gtests/common_test_utils.* @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
 tests/ttnn/unit_tests/gtests/tests_main.cpp @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
@@ -716,7 +716,6 @@ ttnn/cpp/ttnn-nanobind/global_circular_buffer.* @nsextonTT
 ttnn/cpp/ttnn-nanobind/prefetcher_pipe.* @nsextonTT
 tests/ttnn/unit_tests/base_functionality/*prefetcher* @razorback3 @dongjin-na @bbradelTT
 tests/ttnn/unit_tests/base_functionality/test_global_circular_buffer.py @razorback3 @dongjin-na @bbradelTT
-tests/ttnn/unit_tests/base_functionality/test_reload_host_support.py @razorback3 @dongjin-na @bbradelTT
 # Bindings and tests for fabric, mesh sockets and disaggregation.
 ttnn/cpp/ttnn-nanobind/fabric.* @nsextonTT
 ttnn/cpp/ttnn-nanobind/mesh_socket.* @nsextonTT
@@ -724,6 +723,7 @@ tests/ttnn/unit_tests/base_functionality/*fabric* @razorback3 @dongjin-na @bbrad
 ttnn/cpp/ttnn-nanobind/disaggregation.* @nsextonTT
 tests/ttnn/unit_tests/base_functionality/test_kv_chunk_table_strided_bindings.py @razorback3 @dongjin-na @bbradelTT
 # Bindings and tests for code other teams own.
+tests/ttnn/unit_tests/base_functionality/test_reload_host_support.py @razorback3 @dongjin-na @bbradelTT
 tests/ttnn/unit_tests/base_functionality/test_graph_report_device_tensors_unit.py @razorback3 @dongjin-na @bbradelTT
 ttnn/cpp/ttnn-nanobind/pipeline_module_nanobind.* @nsextonTT
 ttnn/cpp/ttnn-nanobind/mcast_host.* @nsextonTT
@@ -732,6 +732,7 @@ ttnn/cpp/ttnn-nanobind/profiler.* @nsextonTT
 # Outside ttnn-core's scope and rarely changed: no owner, so anyone with write access can approve.
 tests/ttnn/distributed/test_matmul_send_recv_pipeline.py
 tests/ttnn/distributed/test_distributed_layernorm_TG.py
+tests/ttnn/docs_examples/test_tensor_creation_examples.py
 ttnn/tt_lib/fused_ops/
 ttnn/tt_lib/fallback_ops/
 ttnn/ttnn/_experimental/fabric_mux.py
