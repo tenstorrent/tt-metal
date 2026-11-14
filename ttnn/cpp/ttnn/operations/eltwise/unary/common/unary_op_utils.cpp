@@ -1235,7 +1235,13 @@ std::uint32_t pack_scalar_runtime_arg_impl(float param, DataType dtype) {
     if (dtype == DataType::UINT32 || dtype == DataType::INT32) {
         return std::bit_cast<std::uint32_t>(static_cast<std::int32_t>(param));
     }
-    // This handles the case where dtype is not an integer type
+    TT_FATAL(
+        dtype != DataType::UINT16 && dtype != DataType::UINT8 && dtype != DataType::INT8,
+        "pack_scalar_runtime_arg_impl(float, {}): narrow integer scalar dtype is not supported. "
+        "The fallthrough packs IEEE-754 float bits into the uint32 runtime arg (e.g. scalar 1.0 "
+        "becomes 0x3f800000 = 1065353216), which the kernel reads as an integer scalar and "
+        "silently corrupts narrow-integer unary ops.",
+        dtype);
     return std::bit_cast<std::uint32_t>(param);
 }
 
@@ -1243,6 +1249,12 @@ std::uint32_t pack_scalar_runtime_arg_impl(std::uint32_t param, DataType dtype) 
     if (dtype == DataType::INT32 || dtype == DataType::UINT32) {
         return param;
     }
+    TT_FATAL(
+        dtype != DataType::UINT16 && dtype != DataType::UINT8 && dtype != DataType::INT8,
+        "pack_scalar_runtime_arg_impl(uint32_t, {}): narrow integer scalar dtype is not supported. "
+        "The fallthrough casts the integer value to float and packs the IEEE-754 bits, silently "
+        "corrupting the scalar when the kernel reads it as a narrow integer.",
+        dtype);
     return std::bit_cast<std::uint32_t>(static_cast<float>(param));
 }
 
@@ -1250,6 +1262,12 @@ std::uint32_t pack_scalar_runtime_arg_impl(std::int32_t param, DataType dtype) {
     if (dtype == DataType::INT32 || dtype == DataType::UINT32) {
         return std::bit_cast<std::uint32_t>(param);
     }
+    TT_FATAL(
+        dtype != DataType::UINT16 && dtype != DataType::UINT8 && dtype != DataType::INT8,
+        "pack_scalar_runtime_arg_impl(int32_t, {}): narrow integer scalar dtype is not supported. "
+        "The fallthrough casts the integer value to float and packs the IEEE-754 bits, silently "
+        "corrupting the scalar when the kernel reads it as a narrow integer.",
+        dtype);
     return std::bit_cast<std::uint32_t>(static_cast<float>(param));
 }
 
