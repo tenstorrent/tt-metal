@@ -125,12 +125,13 @@ from safetensors.torch import load_file as _load_file
 from safetensors.torch import save_file as _save_file
 
 from ...encoders.qwen3vl.model_qwen3vl import Qwen3VlTextEncoder, create_rope_tensors
-from ...models.transformers.transformer_ideogram4 import Ideogram4Transformer, rope_halfsplit_to_interleaved
+from ...models.transformers.transformer_ideogram4 import Ideogram4Transformer
 from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, VAEParallelConfig
 from ...parallel.manager import CCLManager
 from ...reference.ideogram4 import modeling_ideogram4
 from ...reference.ideogram4.constants import IMAGE_POSITION_OFFSET, QWEN3_VL_ACTIVATION_LAYERS
 from ...reference.ideogram4.dequant import dequant_fp8_state_dict
+from ...utils.mochi import rope_halfsplit_to_interleaved
 from ..cfg import create_submeshes
 from ..events import DenoiseStep, PipelineEventCallback, SectionEnd, SectionStart, null_callback
 from ..pipeline_api import PipelineAPIMixin
