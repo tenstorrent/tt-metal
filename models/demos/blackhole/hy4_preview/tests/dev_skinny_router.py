@@ -42,7 +42,12 @@ try:
     sks = {}
     for v in VARS:
         name, kw = parse(v)
+        l1out = kw.pop("l1out", 0)
         sks[name] = SkinnyRouter(md, W["gate_weight"], W["gate_bias"], **kw)
+        if l1out:  # dispatch-like input formats: weights height-sharded L1 [1, k] shards, indices L1 interleaved
+            from models.demos.blackhole.deepseek_v41_flash.tt.router_mm import scores_shard_config
+
+            sks[name].out_mcs = (scores_shard_config(max(TS), 8), ttnn.L1_MEMORY_CONFIG)
     _, ids_ref, _ = route_cpu(X[:NTOK], gs["mlp.gate.weight"], gs["mlp.gate.e_score_correction_bias"], emulate_device=True)
     if os.environ.get("SK_DBG"):
         T = TS[0]

@@ -73,3 +73,60 @@ FORCE_INLINE void sk_mm(uint32_t a_off, uint32_t kt_stride) {
         deepseek_compute_kernel_hw_startup<DST_ACCUM_MODE>(CB_A, CB_W, CB_O);
     }
 }
+
+// sk_mm with an epilogue on the accumulators: after the K loops of a sub-block (MT * SBW tiles in dest, tile m * SBW + w) `epi()` runs on dest, then NPACK tiles
+// (dest tiles 0 .. NPACK - 1) are packed to CB_O.  Used by the shared expert: dest[0] = gate, dest[1] = up -> act = silu(min(g, L)) * clamp(u, -L, L) in fp32, ONE tile packed.
+template <
+    uint32_t CB_A,
+    uint32_t CB_W,
+    uint32_t CB_O,
+    uint32_t SBK,
+    uint32_t PN,
+    uint32_t SBW,
+    uint32_t NSUBK,
+    uint32_t MT,
+    bool FP32,
+    uint32_t NPACK,
+    typename EPI>
+FORCE_INLINE void sk_mm_epi(uint32_t a_off, uint32_t kt_stride, EPI epi) {
+    constexpr bool transpose = false, split_acc = true, dense_packing = false;
+    if constexpr (FP32 != DST_ACCUM_MODE) {
+        custom_mm_block_init<transpose, split_acc, dense_packing, FP32>(CB_A, CB_W, CB_O, 1);
+    } else {
+        reconfig_full_operand<SrcOrder::Reverse>(CB_A, CB_W);
+        pack_reconfig_data_format<true>(CB_O);
+        custom_mm_block_init_short<transpose, split_acc, dense_packing>(CB_A, CB_W, CB_O, 1);
+    }
+    pack_block_contiguous_init(CB_O);
+    static_assert(PN % SBW == 0, "per-core columns must be a multiple of the sub-block width");
+    static_assert(MT * SBW <= (FP32 ? 4 : 8), "dest registers");
+    for (uint32_t sb_n = 0; sb_n < PN / SBW; ++sb_n) {
+        cb_reserve_back(CB_O, NPACK);
+        tile_regs_acquire();
+        for (uint32_t w = 0; w < SBW; ++w) {
+            for (uint32_t sb_k = 0; sb_k < NSUBK; ++sb_k) {
+                cb_wait_front(CB_W, SBK);
+                if (sb_k + 1 < NSUBK) {
+                    for (uint32_t m = 0; m < MT; ++m) {
+                        custom_mm_block<false>(CB_A, CB_W, a_off + m * kt_stride + sb_k * SBK, 0, m * SBW + w, SBK, 1);
+                    }
+                } else {
+                    for (uint32_t m = 0; m < MT; ++m) {
+                        custom_mm_block<true>(CB_A, CB_W, a_off + m * kt_stride + sb_k * SBK, 0, m * SBW + w, SBK, 1);
+                    }
+                }
+                cb_pop_front(CB_W, SBK);
+            }
+        }
+        epi();
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_block_contiguous(0, CB_O, NPACK);
+        tile_regs_release();
+        cb_push_back(CB_O, NPACK);
+    }
+    custom_mm_block_uninit<dense_packing>();
+    if constexpr (FP32 != DST_ACCUM_MODE) {
+        deepseek_compute_kernel_hw_startup<DST_ACCUM_MODE>(CB_A, CB_W, CB_O);
+    }
+}

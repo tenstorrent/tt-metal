@@ -46,7 +46,7 @@ class SkinnyShared:
     KA = 8  # intermediate tiles per mesh column (256)
     NCOL = 24  # down columns (tiles) per bank core: 192 / 8
 
-    def __init__(self, md, w0, w1, w2, limit=10.0, sbk1=None, sbk2=None, ring=None, xsplit=None, approx=None, fp32=None, banknoc=None, remap=None, tiny=None, act8=None):
+    def __init__(self, md, w0, w1, w2, limit=10.0, sbk1=None, sbk2=None, ring=None, xsplit=None, approx=None, fp32=None, banknoc=None, remap=None, tiny=None, act8=None, epi=None):
         """w0 (gate), w1 (up): [1,1,6144,2048]; w2 (down): [1,1,2048,6144] host tensors ([in, out])."""
         self.md = md
         rows, cols = tuple(md.shape)
@@ -68,6 +68,7 @@ class SkinnyShared:
         self.w2 = bank_seq_weight(md, w2t)
         self.tiny = int(os.environ.get("HY4_SKINNY_TINY", "1") if tiny is None else tiny)  # in0 tiles with R = 1/2/4/8 rows (x and act exchange 8/R times smaller)
         self.act8 = int(os.environ.get("HY4_SKINNY_ACT8", "0") if act8 is None else act8)
+        self.epi = int(os.environ.get("HY4_SKINNY_EPI", "0") if epi is None else epi)  # swiglu on the dest accumulators (T <= 8)
         self.banknoc = int(os.environ.get("HY4_SKINNY_BANKNOC", "0") if banknoc is None else banknoc)
         self.cores = bank_cores(md, self.banknoc)
         for ent in filter(None, (remap if remap is not None else os.environ.get("HY4_SKINNY_REMAP", DEFAULT_REMAP)).split("/")):  # "bank@x.y/bank@x.y": move a bank's worker core
@@ -163,7 +164,7 @@ class SkinnyShared:
             core_ranges=core_set,
             compile_time_args=[
                 CB_X, CB_W, CB_GU, CB_GU16, CB_ACTL, CB_ACTL16, CB_ACT, CB_O, CB_ZERO, CB_ZERO16, CB_TMP, CB_TMP16,
-                self.KT, self.fp32, _fb(L), _fb(-L), _fb(-3.0e38), sbk1, nsub1, self.KA, self.NCOL, SBWC, MT,
+                self.KT, self.fp32, _fb(L), _fb(-L), _fb(-3.0e38), sbk1, nsub1, self.KA, self.NCOL, SBWC, MT, self.epi,
             ],
             runtime_args=rt_c,
             common_runtime_args=[],
@@ -179,7 +180,7 @@ class SkinnyShared:
             cbs=cbs,
         )
         prog.custom_program_hash = _hash(
-            0x7B1, MT, R, RA, self.xsplit, self.approx, self.fp32, ring, sbk1, sbk2, self.w01.buffer_address(),
+            0x7B1, MT, R, RA, self.epi, self.xsplit, self.approx, self.fp32, ring, sbk1, sbk2, self.w01.buffer_address(),
             self.w2.buffer_address(), tuple(_acc(h)), tuple(_acc(out)),
         )
         ttnn.generic_op([h, self.w01, self.w2, out], prog)
@@ -234,9 +235,11 @@ class SkinnyRouter:
     KT = 192  # hidden tiles
     NE = 256  # experts = 8 tile columns = one per DRAM bank
 
-    def __init__(self, md, gate_weight, gate_bias, k=8, scale=2.827, sbk=None, ring=None, remap=None, tiny=None, ksplit=None):
+    def __init__(self, md, gate_weight, gate_bias, k=8, scale=2.827, sbk=None, ring=None, remap=None, tiny=None, ksplit=None, fsel=None):
         """gate_weight [256, 6144] (checkpoint layout), gate_bias [256] fp32."""
         self.md, self.k, self.scale = md, k, float(scale)
+        self.fsel = int(os.environ.get("HY4_SKINNY_RT_SELECT", "1") if fsel is None else fsel)  # fuse router_select (T <= HY4_SKINNY_RT_SELECT_MAXT)
+        self.out_mcs = None  # (weights memory config, indices memory config) of the dispatch inputs (set by Hy4MoEBlock): the fused select writes them in place
         assert tuple(gate_weight.shape) == (self.NE, 6144)
         w = gate_weight.to(torch.bfloat16).float().T.contiguous()  # [6144, 256]
         tl = lambda kk, n: w[32 * kk : 32 * kk + 32, 32 * n : 32 * n + 32]
@@ -265,15 +268,23 @@ class SkinnyRouter:
         assert self.KT % self.sbk == 0 and self.ring % self.sbk == 0 and self.ring // self.sbk <= 15
         from models.demos.blackhole.hy4_preview.tt.hy4_router_select import router_select  # noqa: F401  (import check)
 
-    def _scores_ks(self, x, T):
+    def _scores_ks(self, x, T, select=False):
         assert T <= 8
         md, KL = self.md, self.KT // NB
         core_set = _core_set(self.cores)
-        mk = lambda: ttnn.allocate_tensor_on_device(
-            ttnn.Shape([1, 1, T, self.NE]), ttnn.float32, ttnn.TILE_LAYOUT, md, ttnn.DRAM_MEMORY_CONFIG
-        )
-        score, rank = mk(), mk()
+        if select:
+            from models.demos.blackhole.hy4_preview.tt.hy4_router import EPS
+
+            wmc, imc = self.out_mcs or (ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG)
+            mk8 = lambda dt, mc: ttnn.allocate_tensor_on_device(ttnn.Shape([T, 1, 1, self.k]), dt, ttnn.ROW_MAJOR_LAYOUT, md, mc)
+            score, rank = mk8(ttnn.bfloat16, wmc), mk8(ttnn.uint16, imc)  # (weights, indices) in the roles of the score / rank outputs of the writer
+        else:
+            mk = lambda: ttnn.allocate_tensor_on_device(
+                ttnn.Shape([1, 1, T, self.NE]), ttnn.float32, ttnn.TILE_LAYOUT, md, ttnn.DRAM_MEMORY_CONFIG
+            )
+            score, rank = mk(), mk()
         CB_X, CB_W, CB_P, CB_RED, CB_B, CB_S, CB_R = range(7)
+        CB_SEL, CB_STG = 7, 8
         f32tile = lambda idx, n: ttnn.CBDescriptor(
             total_size=1024 * n,
             core_ranges=core_set,
@@ -302,6 +313,13 @@ class SkinnyRouter:
             f32tile(CB_S, 1),
             f32tile(CB_R, 1),
         ]
+        if select:
+            raw = lambda idx, nbytes: ttnn.CBDescriptor(
+                total_size=nbytes,
+                core_ranges=core_set,
+                format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=idx, data_format=ttnn.uint32, page_size=nbytes)],
+            )
+            cbs += [raw(CB_SEL, 1024), raw(CB_STG, 1280)]
         readers = []
         for i, cc in enumerate(self.cores):
             ph = [dict(addr=self.w.buffer_address(), sbk=KL, pn=NB, nsub=1, nbuf=ring // KL)]
@@ -323,11 +341,14 @@ class SkinnyRouter:
         for q in self.phys:
             common_w += [q.x, q.y]
         PW = 4
+        ct_w = [CB_X, CB_B, CB_S, CB_R, NB, KL, CB_P, CB_RED, PW, XR]
+        if select:
+            ct_w += [CB_SEL, CB_STG, T, _fb(EPS), _fb(self.scale)]
         writer = ttnn.KernelDescriptor(
-            kernel_source=f"{KDIR}/hsk_rk_writer.cpp",
+            kernel_source=f"{KDIR}/{'hsk_rs_writer.cpp' if select else 'hsk_rk_writer.cpp'}",
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=core_set,
-            compile_time_args=[CB_X, CB_B, CB_S, CB_R, NB, KL, CB_P, CB_RED, PW, XR]
+            compile_time_args=ct_w
             + _acc(x) + _acc(self.bias) + _acc(score) + _acc(rank),
             runtime_args=rt_w,
             common_runtime_args=common_w,
@@ -354,16 +375,16 @@ class SkinnyRouter:
             cbs=cbs,
         )
         prog.custom_program_hash = _hash(
-            0x7B3, T, XR, ring, self.w.buffer_address(), self.bias.buffer_address(), tuple(_acc(x)), tuple(_acc(score)), tuple(_acc(rank)),
+            0x7B3, int(select), T, XR, ring, self.w.buffer_address(), self.bias.buffer_address(), tuple(_acc(x)), tuple(_acc(score)), tuple(_acc(rank)),
         )
         ttnn.generic_op([x, self.w, self.bias, score, rank], prog)
-        return rank, score
+        return (score, rank) if select else (rank, score)
 
-    def scores(self, x, T):
-        """x std tile bf16 [1,1,T,6144] -> (rank, score) fp32 TILE [1,1,T,256] DRAM (T <= 8)."""
+    def scores(self, x, T, select=False):
+        """x std tile bf16 [1,1,T,6144] -> (rank, score) fp32 TILE [1,1,T,256] DRAM (T <= 8); select=True (K-split only): the router_select is fused in the program -> (weights, indices)."""
         assert T <= 8
         if self.ksplit:
-            return self._scores_ks(x, T)
+            return self._scores_ks(x, T, select)
         md = self.md
         R = 32 if self.tiny == 2 else 16 if self.tiny == 3 else 8 if not self.tiny else (2 if T <= 2 else 4 if T <= 4 else 8)
         core_set = _core_set(self.cores)
@@ -461,6 +482,8 @@ class SkinnyRouter:
         from models.demos.blackhole.hy4_preview.tt.hy4_router import EPS
         from models.demos.blackhole.hy4_preview.tt.hy4_router_select import router_select
 
+        if self.ksplit and self.fsel and T <= int(os.environ.get("HY4_SKINNY_RT_SELECT_MAXT", "2")):  # select fused in the program
+            return self.scores(x, T, select=True)
         rank, score = self.scores(x, T)
         w, idx = router_select(rank, score, self.k, EPS, self.scale)
         ttnn.deallocate(rank)
@@ -471,6 +494,14 @@ class SkinnyRouter:
 # --------------------------------------------------------------------------------------------------------------------------------------------------
 # o_proj (and any [K, N] linear with K sharded over the mesh columns): out partial = x @ W_c, N split over the 8 bank cores
 # --------------------------------------------------------------------------------------------------------------------------------------------------
+def round_sig(w, bits):
+    """round-to-nearest each element to `bits` significant mantissa bits (per element exponent); bits <= 0: unchanged.  Probe for the LoFi custom_mm weight truncation."""
+    if bits <= 0:
+        return w
+    m, e = torch.frexp(w.float())
+    return torch.ldexp(torch.round(m * (1 << bits)) / (1 << bits), e)
+
+
 class SkinnyLinear:
     """y [1,1,T,N] (bf16 TILE, partial per mesh column) = x [1,1,T,Kc] @ W_c, W [Ktot, N] host ([in, out]) split on K over the mesh columns, N = 8 banks x NCOL tiles.
     Per core 'NCOL x KT' bfp8 tiles streamed column by column; x (KT tiles of rows 0..T-1) exchanged between the cores (tiny tiles), custom_mm LoFi fp32 accumulation."""
@@ -483,7 +514,7 @@ class SkinnyLinear:
         self.KT, self.NT = Kt // cols // 32, N // 32
         self.NCOL = self.NT // NB
         self.N = N
-        w = w.float().reshape(cols, self.KT * 32, N)
+        w = round_sig(w.float(), int(os.environ.get("HY4_SKINNY_WROUND", "0"))).reshape(cols, self.KT * 32, N)
         tl = lambda c, k, n: w[c, 32 * k : 32 * k + 32, 32 * n : 32 * n + 32]
         tiles = torch.zeros(cols, NB, self.NCOL * self.KT, 32, 32)
         for c in range(cols):
