@@ -10,6 +10,9 @@
 #include "api/compute/sentinel/compute_kernel_sentinel.h"
 #include "sanitizer/api.h"
 #include "llk_assert.h"
+#ifdef ARCH_BLACKHOLE
+#include "llk_size_mode.h"
+#endif
 
 #ifdef TRISC_MATH
 #include "llk_math_unary_datacopy_api.h"
@@ -129,8 +132,9 @@ ALWI void copy_tile(std::uint32_t in_cb_id, std::uint32_t in_tile_index, std::ui
     LLK_SAN_FUNCTION();
 #endif
 #if defined(ARCH_BLACKHOLE)
-    // The context semaphore is read before the address writes, so the per-tile chain overlaps its latency
-    UNPACK((llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn, true>(
+    // The context semaphore is read before the address writes, so the per-tile chain overlaps its latency; a size-mode
+    // kernel keeps main's smaller call
+    UNPACK((llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn, !LLK_SIZE_MODE>(
         in_cb_id, in_tile_index, dst_tile_index)));
 #else
     UNPACK((llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
