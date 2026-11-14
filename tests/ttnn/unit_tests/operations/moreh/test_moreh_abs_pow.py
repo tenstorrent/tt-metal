@@ -69,3 +69,23 @@ def test_moreh_abs_pow(p, device):
 def test_moreh_abs_pow_corner_cases(input_shape, fp32_dest_acc_en, provide_output, device):
     torch.manual_seed(0)
     run_moreh_abs_pow_test(input_shape, 2.5, device, fp32_dest_acc_en=fp32_dest_acc_en, provide_output=provide_output)
+
+
+@pytest.mark.parametrize("p", [0.0, 1.0, 2.0, 3.0], ids=["p0", "p1", "p2", "p3"])
+def test_moreh_abs_pow_int32_input_rejected(p, device, expect_error):
+    # The kernel computes |x|^p with log/exp on float tiles; an INT32 tile used to
+    # be accepted and came back as all zeros. It must raise instead.
+    torch_input = torch.randint(-10, 10, (32, 32), dtype=torch.int32)
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(RuntimeError, "moreh_abs_pow input only supports specific data types"):
+        ttnn.moreh_abs_pow(tt_input, p)
+
+
+def test_moreh_abs_pow_int32_output_rejected(device, expect_error):
+    torch_input = torch.rand((32, 32)).to(torch.bfloat16)
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_output = ttnn.from_torch(
+        torch.zeros((32, 32), dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    with expect_error(RuntimeError, "moreh_abs_pow output only supports specific data types"):
+        ttnn.moreh_abs_pow(tt_input, 2.0, output=tt_output)
