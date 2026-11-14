@@ -1,12 +1,16 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import contextlib
+import io
 import json
-import subprocess
+import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+
+from unittest.mock import patch
 
 from validate_api import (
     ALLOWED_PREFIXES,
@@ -14,6 +18,8 @@ from validate_api import (
     BANNED_HEADERS,
     SKIP_FILES,
     load_exceptions,
+    main,
+    skip_unrelated_commit,
     source_lines,
     validate,
 )
@@ -292,6 +298,37 @@ class ApiValidationTests(unittest.TestCase):
         (self.root / "tt-metalium/alias.hpp").symlink_to("../internal/private.hpp")
         self.assertTrue(any("must not include internal" in error for error in self.errors()))
 
+    def test_dangling_symlink_is_classified_by_its_target(self):
+        # The target is absent, so isfile() is false. The include is still internal.
+        self.header("tt-metalium/a.hpp", "#pragma once\n#include <tt-metalium/alias.hpp>\n")
+        (self.root / "tt-metalium/alias.hpp").symlink_to("../internal/private.hpp")
+        self.assertTrue(any("must not include internal" in error for error in self.errors()))
+
+    def test_dangling_source_relative_symlink_does_not_hide_api_root_header(self):
+        # The quoted path hits a dangling link first. The API-root header exists, and
+        # that is the file the compiler opens.
+        self.header("internal/private.hpp")
+        self.header("tt-metalium/a.hpp", '#pragma once\n#include "internal/private.hpp"\n')
+        (self.root / "tt-metalium/internal").mkdir()
+        (self.root / "tt-metalium/internal/private.hpp").symlink_to("../../tt-metalium/missing.hpp")
+        self.assertTrue(any("must not include internal" in error for error in self.errors()))
+
+    def test_directory_symlink_does_not_hide_internal_target(self):
+        self.header("internal/private.hpp")
+        self.header("tt-metalium/a.hpp", "#pragma once\n#include <tt-metalium/alias/private.hpp>\n")
+        (self.root / "tt-metalium/alias").symlink_to("../internal")
+        self.assertTrue(any("must not include internal" in error for error in self.errors()))
+
+    def test_directory_symlink_parent_traversal_is_not_collapsed_first(self):
+        # normpath("tt-metalium/alias/../private.hpp") is the stable header. The
+        # symlink has to be followed before `..` is removed, or the include looks stable.
+        self.header("internal/private.hpp")
+        self.header("tt-metalium/private.hpp")
+        (self.root / "internal/deep").mkdir()
+        (self.root / "tt-metalium/alias").symlink_to("../internal/deep")
+        self.header("tt-metalium/a.hpp", "#pragma once\n#include <tt-metalium/alias/../private.hpp>\n")
+        self.assertTrue(any("must not include internal" in error for error in self.errors()))
+
     def test_macro_include_cannot_silently_escape_check(self):
         self.header("tt-metalium/a.hpp", "#pragma once\n#include PRIVATE_HEADER\n")
         self.assertTrue(any("literal #include" in error for error in self.errors()))
@@ -441,28 +478,79 @@ class ApiValidationTests(unittest.TestCase):
         self.populate_prefixes()
         self.assertEqual(validate(self.root, set())[0], [])
 
+    def _run_cli(self, exceptions):
+        # PRE_COMMIT makes main() skip a commit that does not touch the API. This fixture is a
+        # temporary directory, so drop those variables for the call instead of spawning a process
+        # with the parent environment.
+        argv = ["validate_api.py", str(self.root), "--exceptions", str(exceptions)]
+        output = io.StringIO()
+        cleaned = {key: value for key, value in os.environ.items() if not key.startswith("PRE_COMMIT")}
+        with patch.dict(os.environ, cleaned, clear=True), patch.object(sys, "argv", argv):
+            with contextlib.redirect_stdout(output):
+                code = main()
+        return code, output.getvalue()
+
     def test_existing_cli_runs_both_include_and_header_checks(self):
         self.populate_prefixes()
         exceptions = self.root / "exceptions.json"
         exceptions.write_text("[]")
-        command = [
-            sys.executable,
-            str(Path(__file__).with_name("validate_api.py")),
-            str(self.root),
-            "--exceptions",
-            str(exceptions),
-        ]
-        result = subprocess.run(command, capture_output=True, text=True)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        code, output = self._run_cli(exceptions)
+        self.assertEqual(code, 0, output)
         self.header("tt-metalium/a.hpp", '#include "internal/private.hpp"\n')
-        result = subprocess.run(command, capture_output=True, text=True)
-        self.assertEqual(result.returncode, 1)
+        code, output = self._run_cli(exceptions)
+        self.assertEqual(code, 1)
         for diagnostic in (
             "unconditional #pragma once",
             "Quoted includes are not allowed",
             "must not include internal",
         ):
-            self.assertIn(diagnostic, result.stdout)
+            self.assertIn(diagnostic, output)
+
+
+class PrecommitSkipTests(unittest.TestCase):
+    def _skip(self, payload, filenames=()):
+        with patch.dict(os.environ, {"PRE_COMMIT": "1"}, clear=False):
+            os.environ.pop("PRE_COMMIT_FROM_REF", None)
+            os.environ.pop("PRE_COMMIT_TO_REF", None)
+            with patch("validate_api.git_output", return_value=payload):
+                return skip_unrelated_commit(list(filenames))
+
+    def test_deletion_of_an_api_header_still_validates(self):
+        self.assertFalse(self._skip("D\0tt_metal/api/tt-metalium/a.hpp\0"))
+
+    def test_a_rename_out_of_the_api_still_validates(self):
+        self.assertFalse(self._skip("R100\0tt_metal/api/tt-metalium/a.hpp\0elsewhere/a.hpp\0"))
+
+    def test_a_shared_helper_change_validates(self):
+        self.assertFalse(self._skip("M\0scripts/precommit_common.py\0"))
+
+    def test_git_failure_validates(self):
+        self.assertFalse(self._skip(None))
+
+    def test_unrelated_commit_skips(self):
+        self.assertTrue(self._skip("M\0ttnn/foo.py\0"))
+
+    def test_a_passed_filename_does_not_skip(self):
+        self.assertFalse(self._skip("M\0ttnn/foo.py\0", ["tt_metal/api/tt-metalium/a.hpp"]))
+
+    def test_local_run_diffs_the_work_tree_against_head(self):
+        with patch.dict(os.environ, {"PRE_COMMIT": "1"}, clear=False):
+            os.environ.pop("PRE_COMMIT_FROM_REF", None)
+            os.environ.pop("PRE_COMMIT_TO_REF", None)
+            with patch("validate_api.git_output", return_value="D\0tt_metal/api/tt-metalium/a.hpp\0") as git:
+                self.assertFalse(skip_unrelated_commit([]))
+        args = git.call_args.args[0]
+        self.assertIn("HEAD", args)
+        self.assertNotIn("--cached", args)
+        self.assertIn("tt_metal/api/", args)
+
+    def test_ci_range_keeps_the_given_revisions(self):
+        env = {"PRE_COMMIT": "1", "PRE_COMMIT_FROM_REF": "aaa", "PRE_COMMIT_TO_REF": "bbb"}
+        with patch.dict(os.environ, env, clear=False):
+            with patch("validate_api.git_output", return_value="M\0ttnn/foo.py\0") as git:
+                self.assertTrue(skip_unrelated_commit([]))
+        args = git.call_args.args[0]
+        self.assertEqual(args[4:6], ["aaa", "bbb"])
 
 
 if __name__ == "__main__":

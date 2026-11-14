@@ -81,13 +81,18 @@ repos:
       name: validate-metalium-api
       entry: python3 scripts/validate_api/validate_api.py tt_metal/api
       language: system
+      # Deletions never reach `files` (pre-commit drops them), so the hook always
+      # starts. The script returns immediately unless the API tree or the checker
+      # changed, and a deleted header still counts.
       always_run: true
-      pass_filenames: false
+      files: ^(tt_metal/api/|scripts/validate_api/|scripts/precommit_common\.py$)
+      pass_filenames: true
+      require_serial: true
     - id: test-metalium-api
       name: test-metalium-api
       entry: python3 -m unittest discover -s scripts/validate_api -p 'test_*.py'
       language: system
-      files: ^scripts/validate_api/
+      files: ^(scripts/validate_api/|scripts/precommit_common\.py$)
       pass_filenames: false
 - repo: local
   hooks:
@@ -95,7 +100,8 @@ repos:
       name: Verify that there is no global torch import in ttnn
       entry: python3 scripts/validate_no_global_torch_imports.py
       language: system
-      pass_filenames: false
+      # Editing the script (or its exception list) rescans the whole tree.
+      files: ^(ttnn/ttnn/.*\.py|scripts/validate_no_global_torch_imports\.py)$
 - repo: local
   hooks:
     - id: check-models-do-not-import-tests
@@ -127,6 +133,8 @@ repos:
       name: Convert .ipynb to .py for ttnn basic examples
       entry: python3 scripts/convert_notebooks_to_python.py
       language: system
+      # The script only converts staged notebooks under ttnn/tutorials.
+      files: ^ttnn/tutorials/.*\.ipynb$
 - repo: local
   hooks:
     - id: detect-legacy-device-op
@@ -158,13 +166,6 @@ repos:
       types: [file]
       files: ^(tt_metal|ttnn|tt_stl|tt-train|tests)/.*\.(c|cc|cpp|cxx|h|hpp|inl)$
       pass_filenames: true
-    - id: check-bool-from-arithmetic-tests
-      name: Run the bool-from-arithmetic checker's tests when it or they change
-      entry: pytest -q -p no:cacheprovider --noconftest scripts/test_check_bool_from_arithmetic.py
-      language: python
-      additional_dependencies: ["pytest==8.3.5"]
-      files: ^scripts/(precommit_common\.py|(test_)?check_bool_from_arithmetic\.py)$
-      pass_filenames: false
     - id: check-redefined-helpers
       name: Use the shared host and device helpers instead of a local copy
       entry: python3 scripts/check_redefined_helpers.py
@@ -172,13 +173,24 @@ repos:
       types: [file]
       files: ^(?:ttnn|tt_stl|tt-train|tests|models|tools|tt_metal/(?!third_party/|tt-llk/)).*\.(?:c|cc|cpp|cxx|h|hpp|inl)$
       pass_filenames: true
-    - id: check-redefined-helpers-tests
-      name: Run the redefined-helper checker's tests when it or they change
-      entry: pytest -q -p no:cacheprovider --noconftest scripts/test_check_redefined_helpers.py
+    # The suites share one pytest invocation. scripts/run_checker_tests.py runs only the ones
+    # whose checker, helper, or tests are among the paths this hook is given.
+    - id: checker-tests
+      name: Run a checker's tests when it or they change
+      entry: python3 scripts/run_checker_tests.py
       language: python
       additional_dependencies: ["pytest==8.3.5"]
-      files: ^scripts/(precommit_common\.py|(test_)?check_redefined_helpers\.py)$
-      pass_filenames: false
+      pass_filenames: true
+      files: |
+        (?x)^(
+          scripts/(test_)?run_checker_tests\.py|
+          scripts/precommit_common\.py|
+          scripts/(test_)?check_bool_from_arithmetic\.py|
+          scripts/(test_)?check_redefined_helpers\.py|
+          tt_metal/tt-llk/infra/check_dest_to_src_wait\.py|
+          tt_metal/tt-llk/infra/check_mutex_balance\.py|
+          tt_metal/tt-llk/infra/tests/test_check_dest_to_src_wait\.py
+        )$
 - repo: local
   hooks:
     - id: validate-golden-csv-columns
@@ -258,11 +270,15 @@ repos:
       # Every run parses the whole tree for wait helpers; one run, not one per file batch.
       require_serial: true
       # All three architectures: each one's STALLWAIT names SRCA_VLD / SRCB_VLD, whatever the
-      # argument layout. The op-local LLK copies under ttnn kernel_includes/ too.
+      # argument layout. The op-local LLK copies under ttnn kernel_includes/ too. A change to
+      # this checker or to the lexer it imports rescans every header: the script treats those
+      # paths as a whole-tree run. Its tests run under the checker-tests hook.
       files: |
         (?x)^(
           tt_metal/tt-llk/tt_llk_.*\.(h|hpp)|
-          ttnn/.*/kernel_includes/.*\.(h|hpp)
+          ttnn/.*/kernel_includes/.*\.(h|hpp)|
+          tt_metal/tt-llk/infra/check_dest_to_src_wait\.py|
+          tt_metal/tt-llk/infra/check_mutex_balance\.py
         )$
     - id: llk-sticky-cfg-restore
       name: "llk: sticky config fields restored after a fixed write"
@@ -368,12 +384,18 @@ repos:
       # parallel batches would print findings and the summary more than once.
       require_serial: true
       args: ["--baseline", "tt_metal/tt-llk/infra/redundant_drain_baseline.txt"]
-      # The whole repository: LLK trees, ckernels, compute API, firmware and every compute
-      # kernel. The script reads only files that call a drain. Quasar's drains are a different
-      # mechanism and are skipped; vendored code is not ours.
+      # Device code, where tensix_sync/mop_sync can be called: the LLK trees, ckernels,
+      # firmware, hw/inc and any directory with "kernel" in its name (kernels/, kernel_lib/,
+      # kernels_ng/, kernel_includes/, ...). Other host C++ does not start the hook. The
+      # llk-redundant-drain workflow still scans the repository after merge.
+      # Quasar and vendored code are skipped by the script.
       files: |
         (?x)^(
-          .*\.(h|hpp|cpp|cc)|
+          tt_metal/tt-llk/.*\.(h|hpp|cpp|cc)|
+          tt_metal/hw/ckernels/.*\.(h|hpp|cpp|cc)|
+          tt_metal/hw/firmware/.*\.(h|hpp|cpp|cc)|
+          tt_metal/hw/inc/.*\.(h|hpp|cpp|cc)|
+          (?:.*/)?[^/]*kernel[^/]*/.*\.(h|hpp|cpp|cc)|
           tt_metal/tt-llk/infra/check_redundant_drain\.py|
           tt_metal/tt-llk/infra/redundant_drain_baseline\.txt
         )$

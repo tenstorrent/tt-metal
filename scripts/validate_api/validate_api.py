@@ -9,13 +9,19 @@ See scripts/validate_api/README.md for its scope and the compiler-based follow-u
 
 import argparse
 import json
+import os
+import posixpath
 import re
+import sys
 from bisect import bisect_left, bisect_right
 from collections import defaultdict
 from pathlib import Path
 from typing import NamedTuple, Optional
 
 from common import CPP_EXTENSIONS
+
+sys.path.append(str(Path(__file__).resolve().parents[1]))
+from precommit_common import git_output, name_status_entries, precommit_revisions  # noqa: E402
 
 
 # Legacy include-style exceptions; guards and tier boundaries still apply.
@@ -321,6 +327,73 @@ def include_target(api_root: Path, source: Path, name: str, quoted: bool) -> str
         return None
 
 
+class ApiTree:
+    """Files under the API root, indexed once so that include_target needs no per-include stat.
+
+    Each call to resolve() or is_file() is a filesystem round trip, which is slow on network
+    mounts. File symlinks are resolved up front, including a link whose target is absent:
+    dropping that link classifies the include by its spelling. A directory symlink, or a
+    target that leaves the root, falls back to include_target.
+    """
+
+    def __init__(self, root: Path):
+        self.root = root
+        self.real_root = root.resolve()
+        self.files: dict[str, str | None] = {}
+        self.readable: set[str] = set()
+        self.has_dir_links = False
+        if root.is_dir():
+            self._scan(root, "")
+
+    def _scan(self, directory: Path | str, prefix: str) -> None:
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                rel = prefix + entry.name
+                if entry.is_dir(follow_symlinks=False):
+                    self._scan(entry.path, rel + "/")
+                elif entry.is_symlink():
+                    if os.path.isdir(entry.path):
+                        self.has_dir_links = True
+                    else:
+                        # isfile() is false when the target is absent. The link still names
+                        # an API path, and resolve() follows it.
+                        try:
+                            self.files[rel] = Path(entry.path).resolve().relative_to(self.real_root).as_posix()
+                        except (OSError, ValueError):
+                            self.files[rel] = None
+                        if os.path.isfile(entry.path):
+                            self.readable.add(rel)
+                elif entry.is_file():
+                    self.files[rel] = rel
+                    self.readable.add(rel)
+
+    def paths(self) -> list[Path]:
+        return [self.root / rel for rel in self.readable]
+
+    def target(self, source: Path, name: str, quoted: bool) -> str | None:
+        # Follow a directory symlink before removing `..`. Lexical normpath turns
+        # `alias/../private.hpp` into a stable header when `alias` points at an
+        # internal directory, and the boundary check then misses the include.
+        if self.has_dir_links:
+            return include_target(self.root, source, name, quoted)
+        candidates = [posixpath.normpath(name)]
+        if quoted:
+            source_dir = source.parent.relative_to(self.root).as_posix()
+            candidates.insert(0, posixpath.normpath(posixpath.join(source_dir, name)))
+        for candidate in candidates:
+            if candidate in self.files:
+                # A dangling symlink is not a file the compiler opens. The old
+                # resolver skips it and keeps looking, so an existing API-root
+                # header still wins over a source-relative link whose target is absent.
+                if candidate not in self.readable:
+                    return include_target(self.root, source, name, quoted)
+                return self.files[candidate]
+        fallback = candidates[-1] if name.startswith(("tt-metalium/", "internal/")) else candidates[0]
+        if fallback in (".", "..") or fallback.startswith(("../", "/")):
+            return include_target(self.root, source, name, quoted)
+        return fallback
+
+
 def load_exceptions(path: Path) -> set[tuple[str, str]]:
     entries = json.loads(path.read_text())
     if not isinstance(entries, list):
@@ -408,7 +481,8 @@ def validate(
     used_exceptions = set()
     prefix_counts = defaultdict(int)
     suffixes = set(CPP_EXTENSIONS) | HEADER_SUFFIXES
-    source_files = sorted(p for p in api_root.rglob("*") if p.is_file() and p.suffix in suffixes)
+    tree = ApiTree(api_root)
+    source_files = sorted(p for p in tree.paths() if p.suffix in suffixes)
     if not source_files:
         return [f"{api_root}: no API headers or sources found; check the directory"], 0
     header_count = 0
@@ -448,7 +522,7 @@ def validate(
                 )
             if not is_header:
                 continue
-            target = include_target(api_root, source_file, include.path, include.quoted)
+            target = tree.target(source_file, include.path, include.quoted)
             target_tier = tier(target) if target else None
             if target and target.startswith("tt-metalium/internal/"):
                 errors.append(
@@ -471,11 +545,64 @@ def validate(
     return errors, header_count
 
 
+_HOOK_PREFIXES = ("tt_metal/api/", "scripts/validate_api/", "scripts/precommit_common.py")
+
+
+def _interesting(path: str) -> bool:
+    path = path.replace("\\", "/")
+    return path.startswith(_HOOK_PREFIXES)
+
+
+def _changed_paths() -> list[str] | None:
+    """Paths in this pre-commit diff, including deletions. None when git cannot answer.
+
+    A local run diffs the work tree against HEAD, limited to the trees this hook cares
+    about. ``--cached`` misses an unstaged deletion, and ``pre-commit run --files`` does
+    not stash the work tree, so the stale-exception check would be skipped. CI passes an
+    explicit revision range.
+    """
+    revisions = precommit_revisions()
+    if revisions is None:
+        return None
+    if revisions:
+        payload = git_output(["diff", "--name-status", "-z", "--no-ext-diff", *revisions])
+    else:
+        payload = git_output(["diff", "--name-status", "-z", "--no-ext-diff", "HEAD", "--", *_HOOK_PREFIXES])
+        if payload is None:
+            payload = git_output(["diff", "--name-status", "-z", "--no-ext-diff", "--cached", "--", *_HOOK_PREFIXES])
+    if payload is None:
+        return None
+    return [path for _status, paths in name_status_entries(payload) for path in paths]
+
+
+def skip_unrelated_commit(filenames: list[str]) -> bool:
+    """True when pre-commit invoked the hook for a change outside the API and the checker.
+
+    Pre-commit omits deletions from the filenames it matches, so a commit that only
+    deletes an API header arrives with an empty list. The name-status diff still
+    contains that deletion, and a stale include exception has to fail the commit.
+    """
+    if not os.environ.get("PRE_COMMIT") or filenames:
+        return False
+    paths = _changed_paths()
+    if paths is None:
+        return False
+    return not any(_interesting(path) for path in paths)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("directory", type=Path, help="API root, normally tt_metal/api")
+    parser.add_argument(
+        "filenames",
+        nargs="*",
+        help="Matching files from pre-commit. Ignored except as a signal that the API changed.",
+    )
     parser.add_argument("--exceptions", type=Path, default=Path(__file__).with_name(EXCEPTIONS.name))
     args = parser.parse_args()
+    if skip_unrelated_commit(args.filenames):
+        print("API validation: skipped, this change does not touch the API or the checker")
+        return 0
     try:
         exceptions = load_exceptions(args.exceptions)
         errors, count = validate(args.directory, exceptions)
