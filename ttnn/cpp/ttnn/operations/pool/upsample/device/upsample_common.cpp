@@ -11,6 +11,26 @@ namespace ttnn::operations::pool::upsample {
 
 bool is_integer_scale(float scale) { return scale == std::floor(scale); }
 
+namespace {
+double snapped_scale(uint32_t in_extent, float scale) {
+    const double s = static_cast<double>(scale);
+    const double exact = static_cast<double>(in_extent) * s;
+    const double rounded = std::round(exact);
+    if (rounded >= 1.0 && std::abs(exact - rounded) <= rounded * 2.4e-7) {
+        return rounded / static_cast<double>(in_extent);
+    }
+    return s;
+}
+}  // namespace
+
+double compute_upsample_output_extent(uint32_t in_extent, float scale) {
+    return std::floor(static_cast<double>(in_extent) * snapped_scale(in_extent, scale));
+}
+
+float compute_upsample_nearest_reciprocal(uint32_t in_extent, float scale) {
+    return static_cast<float>(1.0 / snapped_scale(in_extent, scale));
+}
+
 uint32_t compute_num_cores_nhw(const tt::tt_metal::ShardSpec& shard_spec, tt::tt_metal::TensorMemoryLayout mem_layout) {
     if (mem_layout == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED) {
         return shard_spec.grid.num_cores();
