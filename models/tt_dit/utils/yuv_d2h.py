@@ -500,6 +500,26 @@ def fast_device_to_host_yuv(
     return out
 
 
+class DeferredYuvPlanar:
+    """A yuv420p planar array whose host assembly runs on :meth:`result`.
+
+    Wraps the callable ``fast_device_to_host_yuv(..., defer=True)`` returns, plus the ``shape`` the result
+    will have, so a consumer that needs the frame geometry up front (the mp4 export worker) can take it
+    in place of the array and resolve it off the caller's thread.
+    """
+
+    def __init__(self, produce: Callable[[], np.ndarray], shape: tuple[int, ...]) -> None:
+        self._produce = produce
+        self.shape = tuple(int(d) for d in shape)
+
+    def result(self) -> np.ndarray:
+        out = self._produce()
+        if tuple(out.shape) != self.shape:
+            msg = f"deferred YUV produced {tuple(out.shape)}, expected {self.shape}"
+            raise RuntimeError(msg)
+        return out
+
+
 def replicated_to_host_yuv(
     tt_video_BCTHW: ttnn.Tensor,
     mesh_device: ttnn.MeshDevice,

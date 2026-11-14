@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import subprocess
+import threading
 from dataclasses import dataclass
 from fractions import Fraction
 
@@ -184,6 +185,77 @@ def export_video_audio_yuv(yuv_planar, output_path: str, fps: int = 24, audio: A
 
     container.close()
     logger.info(f"Saved: {output_path} ({t}f @ {fps}fps, yuv420p fast path)")
+
+
+class YuvVideoExport:
+    """:func:`export_video_audio_yuv` with the video track encoded on a worker thread, so the caller can
+    produce the audio (e.g. decode it on device) while libx264 runs; :meth:`finish` then muxes the audio.
+
+    The audio stream is declared up front from its sampling rate because PyAV forbids adding streams once
+    muxing starts. Streams are added and packets muxed in the same order as the serial export, so the file is
+    byte-identical to one. PyAV encodes with the GIL released, so the worker does not stall the caller.
+
+    ``yuv_planar`` is read until :meth:`finish` returns: the caller must not reuse its buffer before then. It
+    may also be a deferred array (with ``shape`` and ``result()``), which the worker resolves before encoding.
+    """
+
+    def __init__(self, yuv_planar, output_path: str, fps: int = 24, audio_sampling_rate: int | None = None) -> None:
+        import av
+
+        t, h32, width = yuv_planar.shape
+        self._output_path = output_path
+        self._fps = fps
+        self._frames = t
+        self._audio_sampling_rate = audio_sampling_rate
+
+        self._container = av.open(output_path, mode="w")
+        stream = self._container.add_stream("libx264", rate=int(fps))
+        stream.width = width
+        stream.height = h32 * 2 // 3
+        stream.pix_fmt = "yuv420p"
+        stream.options = {"preset": "veryfast", "crf": "23"}
+        stream.thread_type = "AUTO"
+        self._audio_stream = None
+        if audio_sampling_rate is not None:
+            self._audio_stream = _add_audio_stream(self._container, Audio(torch.empty(0), audio_sampling_rate))
+
+        self._error: BaseException | None = None
+        self._thread = threading.Thread(
+            target=self._encode_video, args=(stream, yuv_planar), name="yuv-video-export", daemon=True
+        )
+        self._thread.start()
+
+    def _encode_video(self, stream, yuv_planar) -> None:
+        import av
+
+        try:
+            if hasattr(yuv_planar, "result"):
+                yuv_planar = yuv_planar.result()
+            for frame_array in yuv_planar:
+                frame = av.VideoFrame.from_ndarray(frame_array, format="yuv420p")
+                for packet in stream.encode(frame):
+                    self._container.mux(packet)
+            for packet in stream.encode():
+                self._container.mux(packet)
+        except BaseException as e:  # re-raised on the caller's thread by finish()
+            self._error = e
+
+    def finish(self, audio: Audio | None) -> None:
+        """Wait for the video track, mux ``audio`` and close the file. Always closes, also on error."""
+        try:
+            self._thread.join()
+            if self._error is not None:
+                raise self._error
+            if (audio is None) != (self._audio_stream is None) or (
+                audio is not None and audio.sampling_rate != self._audio_sampling_rate
+            ):
+                msg = f"audio {audio!r} does not match the declared rate {self._audio_sampling_rate}"
+                raise ValueError(msg)
+            if audio is not None:
+                _mux_audio(self._container, self._audio_stream, audio)
+        finally:
+            self._container.close()
+        logger.info(f"Saved: {self._output_path} ({self._frames}f @ {self._fps}fps, yuv420p fast path)")
 
 
 def export_video_audio(video_pixels: torch.Tensor, output_path: str, fps: int = 24, audio: Audio | None = None) -> None:
