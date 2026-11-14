@@ -45,6 +45,11 @@ void CollectNameLookups(const ProgramSpec& spec, CollectedSpecData& collected) {
         TT_FATAL(inserted, "Duplicate TensorParameter name '{}'", tensor_parameter.unique_id);
     }
 
+    for (const auto& parameter : spec.global_semaphore_parameters) {
+        auto [it, inserted] = collected.global_semaphore_parameter_by_name.try_emplace(parameter.unique_id, &parameter);
+        TT_FATAL(inserted, "Duplicate GlobalSemaphoreParameter name '{}'", parameter.unique_id);
+    }
+
     for (const auto& parameter : spec.advanced_options.sram_arena_parameters) {
         auto [it, inserted] = collected.sram_arena_parameter_by_name.try_emplace(parameter.unique_id, &parameter);
         TT_FATAL(inserted, "Duplicate SRAMArenaParameter name '{}'", parameter.unique_id);
@@ -155,6 +160,13 @@ void CollectResourceUsers(const ProgramSpec& spec, CollectedSpecData& collected)
                 "Kernel '{}' references unknown TensorParameter '{}'",
                 kernel.unique_id,
                 binding.tensor_parameter_name);
+        }
+        for (const auto& binding : kernel.global_semaphore_bindings) {
+            TT_FATAL(
+                collected.global_semaphore_parameter_by_name.contains(binding.global_semaphore_parameter_name),
+                "Kernel '{}' references unknown GlobalSemaphoreParameter '{}'",
+                kernel.unique_id,
+                binding.global_semaphore_parameter_name);
         }
         for (const auto& binding : kernel.advanced_options.prefetcher_pipe_bindings) {
             for (const auto& pipe_name : binding.pipe_parameter_names) {

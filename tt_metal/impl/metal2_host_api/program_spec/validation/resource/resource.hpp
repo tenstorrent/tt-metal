@@ -89,6 +89,8 @@ void ValidateSemaphoreSpec(const SemaphoreSpec& sem, tt::ARCH arch);
 void ValidateSemaphoreBindings(const KernelSpec& kernel, tt::ARCH arch);
 void ValidateComputeSemaphores(const ValidationContext& ctx);
 // no all-used requirement for semaphore
+void ValidateGlobalSemaphoreBindings(const KernelSpec& kernel);
+void ValidateGlobalSemaphoreParametersUsed(const ValidationContext& ctx);
 
 // tensor.cpp
 void ValidateTensorBindings(const KernelSpec& kernel);

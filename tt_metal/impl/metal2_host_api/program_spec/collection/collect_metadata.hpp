@@ -27,6 +27,7 @@ struct CollectedSpecData {
     std::unordered_map<SemaphoreSpecName, const SemaphoreSpec*> semaphore_by_name;
     std::unordered_map<ScratchpadSpecName, const ScratchpadSpec*> scratchpad_by_name;
     std::unordered_map<TensorParamName, const TensorParameter*> tensor_parameter_by_name;
+    std::unordered_map<GlobalSemaphoreParamName, const GlobalSemaphoreParameter*> global_semaphore_parameter_by_name;
     std::unordered_map<experimental::SRAMArenaParamName, const experimental::SRAMArenaParameter*>
         sram_arena_parameter_by_name;
     std::unordered_map<experimental::PrefetcherPipeParamName, const experimental::PrefetcherPipeParameter*>

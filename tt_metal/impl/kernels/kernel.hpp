@@ -204,6 +204,14 @@ struct ScratchpadBindingHandle {
     std::optional<SRAMArenaSource> allocation_override;
 };
 
+// Metal 2.0: per-kernel resolved GlobalSemaphore binding. The address is a run argument: SetProgramRunArgs
+// writes the bound GlobalSemaphore's address into the word at addr_crta_word.
+struct GlobalSemaphoreBindingHandle {
+    std::string accessor_name;                    // user-facing identifier (kernel symbol in `global_sem::`)
+    std::string global_semaphore_parameter_name;  // refers back to the program-level GlobalSemaphoreParameter
+    uint32_t addr_crta_word = 0;                  // word index of the address slot within the kernel's CRTA buffer
+};
+
 // Metal 2.0: per-kernel resolved PrefetcherPipe accessor (KernelAdvancedOptions::PrefetcherPipeBinding).
 // One accessor names one program PrefetcherPipe slot (dense id the kernel constructs its
 // PrefetcherPipe with); the slot resolves to whichever pipe of the accessor's group is present
@@ -373,6 +381,16 @@ public:
     void set_scratchpad_binding_handles(std::vector<ScratchpadBindingHandle> handles) {
         scratchpad_binding_handles_ = std::move(handles);
     }
+    // GlobalSemaphore binding handles are set post-construction (before compile: they are part of
+    // the kernel cache key and of kernel_bindings_generated.h).
+    void process_global_semaphore_binding_handles(
+        std::function<void(const std::string& accessor_name, uint32_t addr_crta_word)>) const override;
+    const std::vector<GlobalSemaphoreBindingHandle>& global_semaphore_binding_handles() const {
+        return global_semaphore_binding_handles_;
+    }
+    void set_global_semaphore_binding_handles(std::vector<GlobalSemaphoreBindingHandle> handles) {
+        global_semaphore_binding_handles_ = std::move(handles);
+    }
     // PrefetcherPipe binding handles are set post-construction (before compile: they are part of
     // the kernel cache key and of kernel_bindings_generated.h).
     void process_prefetcher_pipe_binding_handles(
@@ -514,6 +532,8 @@ protected:
     std::vector<ScratchpadBindingHandle> scratchpad_binding_handles_;
     // Metal 2.0: tensor binding sequences (set post-construction, like scratchpads).
     std::vector<TensorBindingSequenceHandle> tensor_binding_sequences_;
+    // Metal 2.0: GlobalSemaphore bindings (set post-construction, like scratchpads).
+    std::vector<GlobalSemaphoreBindingHandle> global_semaphore_binding_handles_;
     // Metal 2.0: PrefetcherPipe accessors -> program slot (set post-construction, like scratchpads).
     std::vector<PrefetcherPipeBindingHandle> prefetcher_pipe_binding_handles_;
     // Metal 2.0: number of user CTA-vararg words at the start of compile_time_args_.

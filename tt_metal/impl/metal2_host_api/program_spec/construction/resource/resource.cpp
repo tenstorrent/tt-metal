@@ -80,6 +80,9 @@ ProgramResources RegisterResources(
         program_impl.register_sram_arena_parameter(parameter.unique_id.get(), parameter.properties, mesh_device);
     }
     resources.tensor_parameters = RegisterTensorParameters(spec, mesh_device, program_impl);
+    for (const auto& parameter : spec.global_semaphore_parameters) {
+        program_impl.register_global_semaphore_parameter(parameter.unique_id.get(), mesh_device);
+    }
     resources.dfbs = RegisterDataflowBuffers(spec, collected, risc_masks, program_impl);
 
     // Reserve PrefetcherPipe slots (one per kernel accessor group) from the spec geometry, register

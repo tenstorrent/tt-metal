@@ -130,7 +130,9 @@ struct KernelCrtaLayout {
     uint32_t binding_section_words = 0;
     // Section 3 size, in words. Equals the number of scratchpad bindings (one address word each).
     uint32_t scratchpad_section_words = 0;
-    // Start offset of section 4 (varargs), in words.
+    // Section 4 size, in words. Equals the number of GlobalSemaphore bindings (one address word each).
+    uint32_t global_semaphore_section_words = 0;
+    // Start offset of section 5 (varargs), in words.
     // Stored (not computed on demand) so it can be set from a known value at spec resolution
     // and asserted against the derived sum if a consumer wants belt-and-suspenders verification.
     uint32_t vararg_section_offset = 0;
@@ -287,6 +289,14 @@ public:
                                                         uint32_t size_bytes,
                                                         uint32_t addr_crta_word,
                                                         const std::optional<LLKMetadata>&)>&) const {}
+
+    // GlobalSemaphore binding callback (Metal 2.0):
+    //  - accessor_name: kernel-side identifier, used as the symbol name in the `global_sem::` namespace
+    //  - addr_crta_word: word index, within the kernel's CRTA buffer, of the word holding the
+    //    bound GlobalSemaphore's address
+    virtual void process_global_semaphore_binding_handles(
+        // NOLINTNEXTLINE(performance-unnecessary-value-param)
+        std::function<void(const std::string& accessor_name, uint32_t addr_crta_word)>) const {}
 
     // PrefetcherPipe binding callback (Metal 2.0):
     //  - accessor_name: kernel-side identifier, used as the symbol name in the `pipe::` namespace
