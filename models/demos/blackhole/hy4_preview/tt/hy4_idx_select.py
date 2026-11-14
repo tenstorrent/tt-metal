@@ -11,6 +11,7 @@ import ttnn
 COLS, TOPK = 8, 2048
 KDIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hy4_idx_cs_kernels")
 
+
 def _cb(core_set, idx, pages, page, dt):
     return ttnn.CBDescriptor(
         total_size=pages * page,
@@ -64,6 +65,9 @@ def cs_cand2(sc, ids, colid, layout=1, blks=0, nblk=1, split=1, ncores=None):
     R, N, K = int(sc.shape[0]), int(sc.shape[-1]), int(ids.shape[-1])
     mesh = sc.device()
     KP = K // split
+    rowmode = (
+        os.environ.get("HY4_CS_ROW", "1") == "1" and N * 2 <= 65536
+    )  # whole score row in L1 (identical outputs, no per-id DRAM reads)
     vals = ttnn.allocate_tensor_on_device(
         ttnn.Shape([R, 1, 1, K]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, mesh, ttnn.DRAM_MEMORY_CONFIG
     )
@@ -75,8 +79,14 @@ def cs_cand2(sc, ids, colid, layout=1, blks=0, nblk=1, split=1, ncores=None):
         "cs_cand2.cpp",
         mesh,
         R * split,
-        [(1, KP * 4, u32), (1, KP * 64, u32), (1, KP * 2, bf), (1, KP * 4, u32), (1, 64, u32)],
-        [K, COLS, N, layout, blks, nblk, split],
+        [
+            (1, KP * 4, u32),
+            (1, max(KP * 64, N * 2) if rowmode else KP * 64, u32),
+            (1, KP * 2, bf),
+            (1, KP * 4, u32),
+            (1, 64, u32),
+        ],
+        [K, COLS, N, layout, blks, nblk, split, int(rowmode)],
         [sc, ids, colid, vals, gids],
         [
             sc.buffer_address(),
