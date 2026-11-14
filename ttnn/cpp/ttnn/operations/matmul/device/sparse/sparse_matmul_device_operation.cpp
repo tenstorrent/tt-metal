@@ -240,6 +240,10 @@ void SparseMatmulDeviceOperation::validate_on_program_cache_miss(
         "Sparsity tensor must be ROW_MAJOR layout, got {}",
         sparsity.layout());
     TT_FATAL(
+        sparsity.dtype() == tt::tt_metal::DataType::BFLOAT16 || sparsity.dtype() == tt::tt_metal::DataType::UINT16,
+        "Sparsity tensor holds one 16-bit word per batch, so it must be BFLOAT16 or UINT16, got {}",
+        sparsity.dtype());
+    TT_FATAL(
         operation_attributes.is_input_a_sparse || operation_attributes.is_input_b_sparse,
         "sparse_matmul requires at least one of is_input_a_sparse or is_input_b_sparse to be true");
 
