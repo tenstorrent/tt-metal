@@ -6,6 +6,7 @@
 
 #include <numbers>
 #include <cstdint>
+#include <fmt/format.h>
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 
 #include "ttnn/operations/data_movement/slice/slice.hpp"
@@ -47,6 +48,65 @@ void preallocated_tensors_check(
     if (required_outputs[1] && !other_grad.has_value()) {
         other_grad = ttnn::empty_like(other, std::nullopt, std::nullopt, std::nullopt, memory_config);
     }
+}
+
+// addalpha_bw/subalpha_bw fill the first required gradient with ttnn::assign and concat_bw with
+// ttnn::slice before the op that fills the second gradient (multiply / neg / slice) validates it,
+// so a caller error in the second preallocated grad used to raise only after the first grad was
+// already overwritten. Validate every caller-supplied preallocated grad up front instead, the way
+// add_bw/sub_bw/rsub_bw do via hard_invariants_reason.
+// Only caller-supplied tensors are checked (auto-allocated ones are built to match by
+// preallocated_tensors_check), and layout/dtype only where the op that fills the tensor enforces
+// them: multiply (addalpha's second grad) and the converting assign/unary writers accept layout or
+// dtype mismatches, while slice (concat_bw) requires dtype and page layout to match its spec.
+std::optional<std::string> preallocated_grad_reject_reason(
+    std::string_view op_name,
+    const std::optional<Tensor>& grad,
+    const ttnn::Shape& expected_shape,
+    const Tensor& spec_reference,
+    std::string_view role,
+    bool check_layout,
+    bool check_dtype) {
+    if (!grad.has_value()) {
+        return std::nullopt;
+    }
+    const auto& out = grad.value();
+    if (out.storage_type() != StorageType::DEVICE) {
+        return fmt::format(
+            "{} requires the preallocated {} to be on device, got storage_type={}", op_name, role, out.storage_type());
+    }
+    if (!out.is_allocated()) {
+        return fmt::format(
+            "{} requires the preallocated {} to be allocated in a buffer on the device; buffer is null", op_name, role);
+    }
+    if (out.device() != spec_reference.device()) {
+        return fmt::format("{} requires the preallocated {} to be on the same device as the gradient", op_name, role);
+    }
+    if (out.logical_shape() != expected_shape) {
+        return fmt::format(
+            "{} requires the preallocated {} logical shape to be {} (the gradient shape the op writes), got {}",
+            op_name,
+            role,
+            expected_shape,
+            out.logical_shape());
+    }
+    if (check_layout && out.layout() != spec_reference.layout()) {
+        return fmt::format(
+            "{} requires the preallocated {} layout {} to match the gradient tensor's {}",
+            op_name,
+            role,
+            out.layout(),
+            spec_reference.layout());
+    }
+    if (check_dtype && out.dtype() != spec_reference.dtype()) {
+        return fmt::format(
+            "{} requires the preallocated {} dtype {} to match the gradient tensor's {}",
+            op_name,
+            role,
+            out.dtype(),
+            spec_reference.dtype());
+    }
+    return std::nullopt;
 }
 
 // Sum-reduce broadcast axes back to operand shape (mirrors tt-train unbroadcast_grad).
@@ -155,6 +215,33 @@ std::vector<std::optional<Tensor>> addalpha_bw(
     std::optional<Tensor> other_grad) {
     std::vector<std::optional<Tensor>> result = {std::nullopt, std::nullopt};
 
+    // Both grads come from grad_tensor's spec here (assign/multiply write grad_tensor-shaped
+    // results; broadcast reduction is tracked in #64859), so a preallocated grad must match
+    // grad_tensor. Validate before any write so a bad second grad cannot leave the first
+    // overwritten.
+    if (auto reason = operations::binary_backward::detail::preallocated_grad_reject_reason(
+            "addalpha_bw",
+            are_required_outputs[0] ? input_grad : std::nullopt,
+            grad_tensor.logical_shape(),
+            grad_tensor,
+            "input_a_grad",
+            /*check_layout=*/true,
+            /*check_dtype=*/false);
+        reason.has_value()) {
+        TT_FATAL(!reason.has_value(), "{}", reason.value_or(std::string{}));
+    }
+    if (auto reason = operations::binary_backward::detail::preallocated_grad_reject_reason(
+            "addalpha_bw",
+            are_required_outputs[1] ? other_grad : std::nullopt,
+            grad_tensor.logical_shape(),
+            grad_tensor,
+            "input_b_grad",
+            /*check_layout=*/false,
+            /*check_dtype=*/false);
+        reason.has_value()) {
+        TT_FATAL(!reason.has_value(), "{}", reason.value_or(std::string{}));
+    }
+
     operations::binary_backward::detail::preallocated_tensors_check(
         input_grad, other_grad, input_a, other, {are_required_outputs[0], are_required_outputs[1]}, output_mem_config);
 
@@ -179,6 +266,30 @@ std::vector<std::optional<Tensor>> subalpha_bw(
     std::optional<Tensor> input_grad,
     std::optional<Tensor> other_grad) {
     std::vector<std::optional<Tensor>> result = {std::nullopt, std::nullopt};
+    // See addalpha_bw: validate before any write; neg additionally rejects a layout that differs
+    // from grad_tensor's, so the second grad's layout is checked here too.
+    if (auto reason = operations::binary_backward::detail::preallocated_grad_reject_reason(
+            "subalpha_bw",
+            are_required_outputs.at(0) ? input_grad : std::nullopt,
+            grad_tensor.logical_shape(),
+            grad_tensor,
+            "input_grad",
+            /*check_layout=*/true,
+            /*check_dtype=*/false);
+        reason.has_value()) {
+        TT_FATAL(!reason.has_value(), "{}", reason.value_or(std::string{}));
+    }
+    if (auto reason = operations::binary_backward::detail::preallocated_grad_reject_reason(
+            "subalpha_bw",
+            are_required_outputs.at(1) ? other_grad : std::nullopt,
+            grad_tensor.logical_shape(),
+            grad_tensor,
+            "other_grad",
+            /*check_layout=*/true,
+            /*check_dtype=*/false);
+        reason.has_value()) {
+        TT_FATAL(!reason.has_value(), "{}", reason.value_or(std::string{}));
+    }
     operations::binary_backward::detail::preallocated_tensors_check(
         input_grad, other_grad, input_a, other, {are_required_outputs[0], are_required_outputs[1]}, output_mem_config);
     if (are_required_outputs.at(0)) {
@@ -705,6 +816,39 @@ std::vector<std::optional<Tensor>> concat_bw(
         other.logical_shape().rank());
     // Accept negative dims like the forward concat does.
     dim = grad_tensor_arg.logical_shape().get_normalized_index(dim);
+
+    // The first slice writes input_a_grad before the second slice validates input_b_grad, so both
+    // caller-supplied grads are validated here, before any device op runs. Each grad must match the
+    // region its slice writes: grad_tensor's shape cut down to input_tensor_a's extent along dim,
+    // and the remainder for the second grad. Slice requires the destination's dtype and page layout
+    // to match the spec it computes from grad_tensor, so both are checked.
+    if (are_required_outputs[0]) {
+        auto reason = operations::binary_backward::detail::preallocated_grad_reject_reason(
+            "concat_bw",
+            input_grad,
+            input_tensor_a_arg.logical_shape(),
+            grad_tensor_arg,
+            "input_a_grad",
+            /*check_layout=*/true,
+            /*check_dtype=*/true);
+        TT_FATAL(!reason.has_value(), "{}", reason.value_or(std::string{}));
+    }
+    if (are_required_outputs[1]) {
+        ttsl::SmallVector<uint32_t> second_grad_shape(grad_tensor_arg.logical_shape().rank());
+        for (uint32_t d = 0; d < grad_tensor_arg.logical_shape().rank(); ++d) {
+            second_grad_shape[d] = grad_tensor_arg.logical_shape()[d];
+        }
+        second_grad_shape[dim] -= input_tensor_a_arg.logical_shape()[dim];
+        auto reason = operations::binary_backward::detail::preallocated_grad_reject_reason(
+            "concat_bw",
+            other_grad,
+            ttnn::Shape(second_grad_shape),
+            grad_tensor_arg,
+            "input_b_grad",
+            /*check_layout=*/true,
+            /*check_dtype=*/true);
+        TT_FATAL(!reason.has_value(), "{}", reason.value_or(std::string{}));
+    }
 
     operations::binary_backward::detail::preallocated_tensors_check(
         input_grad,

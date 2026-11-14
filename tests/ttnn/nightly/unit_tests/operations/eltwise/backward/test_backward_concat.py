@@ -243,3 +243,48 @@ def test_bw_concat_rejects_lower_rank_operand(device, which, expect_error):
     a, b = (low, full) if which == "input" else (full, low)
     with expect_error(RuntimeError, "concat_bw expects rank-4 tensors"):
         ttnn.concat_bw(to_tt(torch.rand(1, 1, 32, 64)), to_tt(a), to_tt(b), 3)
+
+
+# concat_bw writes input_a_grad (first half) before the second slice validates input_b_grad, so a
+# bad second grad used to raise only after input_a_grad was already overwritten. The op must reject
+# the bad grad before any device op runs.
+def test_bw_concat_bad_other_grad_leaves_input_grad_unwritten(device, expect_error):
+    to_tt = lambda x: ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    torch.manual_seed(0)
+    input_grad = to_tt(torch.full((1, 1, 32, 32), 7.0))
+    bad_other_grad = to_tt(torch.full((1, 1, 64, 32), 1.0))
+
+    before = ttnn.to_torch(input_grad)
+    with expect_error(RuntimeError, "concat_bw requires the preallocated input_b_grad logical shape"):
+        ttnn.concat_bw(
+            to_tt(torch.rand(1, 1, 32, 64)),
+            to_tt(torch.rand(1, 1, 32, 32)),
+            to_tt(torch.rand(1, 1, 32, 32)),
+            3,
+            are_required_outputs=[True, True],
+            input_a_grad=input_grad,
+            input_b_grad=bad_other_grad,
+        )
+    assert torch.equal(before, ttnn.to_torch(input_grad)), "input_a_grad was written before the call raised"
+
+
+def test_bw_concat_preallocated_grads_valid_control(device):
+    to_tt = lambda x: ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    torch.manual_seed(0)
+    a, b, g = torch.rand(1, 1, 32, 32), torch.rand(1, 1, 32, 32), torch.rand(1, 1, 32, 64)
+    input_grad, other_grad = to_tt(torch.full((1, 1, 32, 32), 7.0)), to_tt(torch.full((1, 1, 32, 32), 7.0))
+
+    got_a, got_b = ttnn.concat_bw(
+        to_tt(g),
+        to_tt(a),
+        to_tt(b),
+        3,
+        are_required_outputs=[True, True],
+        input_a_grad=input_grad,
+        input_b_grad=other_grad,
+    )
+
+    gq = ttnn.to_torch(to_tt(g)).float()
+    expect_a, expect_b = torch.split(gq, 32, dim=3)
+    assert torch.equal(ttnn.to_torch(got_a).float(), expect_a)
+    assert torch.equal(ttnn.to_torch(got_b).float(), expect_b)
