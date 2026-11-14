@@ -1595,6 +1595,30 @@ def test_matmul_batched_weights_with_output_dtype_in_comparison_mode(device):
         device.remove_sub_device_manager(sub_device_manager)
 
 
+@pytest.mark.requires_fast_runtime_mode_off
+def test_linear_in0_column_offset_in_comparison_mode(device):
+    torch.manual_seed(0)
+    wide = torch.randn((1, 64, 192), dtype=torch.bfloat16)
+    weight = (torch.randn((64, 64)) * 0.1).to(torch.bfloat16)
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(2, 2),
+        in0_block_w=1,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        per_core_M=1,
+        per_core_N=1,
+        transpose_mcast=False,
+        fuse_batch=True,
+    )
+
+    with comparison_mode():
+        output_tensor = ttnn.linear(
+            _to_device(wide, device), _to_device(weight, device), program_config=program_config, in0_column_offset=64
+        )
+
+    assert isinstance(output_tensor, ttnn.Tensor)
+
+
 def _indexed_sparse_matmul_kwargs(device, num_experts):
     active_ids = [5, 1]
     sparsity_values = torch.zeros((1, 1, 1, num_experts), dtype=torch.bfloat16)
