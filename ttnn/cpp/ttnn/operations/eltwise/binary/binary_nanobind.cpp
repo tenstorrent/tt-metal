@@ -97,7 +97,9 @@ constexpr auto kAdditiveFastApproxPostNote =
         `False` is only accepted when the output dtype is BFLOAT16, since the accurate path exists to round the bfloat16 result; requesting it for any other output dtype raises an error. Leave the flag unset (or pass `True`) for those.)doc";
 constexpr auto kMultiplyFastApproxPostNote =
     R"doc(When :attr:`fast_and_approximate_mode` is `True` for bfloat16 datatype, the operation uses FPU implementation for better performance.
-        When :attr:`fast_and_approximate_mode` is `False` for bfloat16 datatype, the operation uses SFPU with the result rounded to nearest even (RNE).)doc";
+        When :attr:`fast_and_approximate_mode` is `False` for bfloat16 datatype, the operation uses SFPU with the result rounded to nearest even (RNE).
+        The FPU result depends on the operand order: the order decides which operand is read into srcA, and the two source slots do not reduce the bfloat16 mantissa alike, so the two orders of one multiply are within a few ULP of each other instead of bit-identical. The SFPU result does not depend on the order.
+        Block-float operands (BFLOAT8_B, BFLOAT4_B) are computed on the FPU whatever this flag says, so they always carry that order dependence.)doc";
 constexpr auto kBiasGeluFastApproxPostNote =
     R"doc(When :attr:`fast_and_approximate_mode` is `True`, the gelu is computed with the fast lookup-table approximation.
         When it is `False` (default), the accurate gelu is used, matching the default of :attr:`ttnn.gelu`.)doc";
@@ -113,6 +115,8 @@ constexpr auto kDivFastApproxPostNote =
 constexpr auto kMultiplyInplaceFastApproxPostNote =
     R"doc(When :attr:`fast_and_approximate_mode` is `True` for bfloat16 datatype, the operation uses FPU implementation for better performance.
         When :attr:`fast_and_approximate_mode` is `False` for bfloat16 datatype, the operation uses SFPU with the result rounded to nearest even (RNE).
+        The FPU result depends on the operand order: the order decides which operand is read into srcA, and the two source slots do not reduce the bfloat16 mantissa alike, so the two orders of one multiply are within a few ULP of each other instead of bit-identical. The SFPU result does not depend on the order.
+        Block-float operands (BFLOAT8_B, BFLOAT4_B) are computed on the FPU whatever this flag says, so they always carry that order dependence.
         The operation is not supported for INT32 inputs since the outputs are returned as FLOAT32.)doc";
 constexpr auto kDivideInplaceFastApproxPostNote =
     R"doc(When :attr:`fast_and_approximate_mode` is `True`, the operation uses FPU+SFPU implementation for better performance.
