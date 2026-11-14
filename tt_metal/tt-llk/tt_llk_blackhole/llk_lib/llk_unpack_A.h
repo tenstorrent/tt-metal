@@ -453,6 +453,7 @@ inline void _llk_unpack_A_uninit_()
  * @tparam binary_reuse_dest: Reuse dest as a source operand, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
  * @tparam unpack_to_dest: Unpack directly into the dest register (32-bit datums).
  * @tparam early_context_poll: Read the context semaphore before the counter reset and flip the context from a local copy (opt in).
+ * @tparam z_stride_per_tile: Rewrite the canonical srcA Z stride around each unpack-to-dest tile, as main does (smaller callers).
  * @param address: L1 address of the source tile.
  * @param unpack_src_format: Source data format of the operand in L1.
  * @param unpack_dst_format: Destination data format the operand is converted to.
@@ -467,7 +468,8 @@ template <
     bool acc_to_dest                             = false,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
     bool unpack_to_dest                          = false,
-    bool early_context_poll                      = false>
+    bool early_context_poll                      = false,
+    bool z_stride_per_tile                       = false>
 inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpack_src_format = 0, const std::uint32_t unpack_dst_format = 0)
 {
     LLK_ASSERT(is_valid_L1_address(address), "L1 address must be in valid L1 memory region");
@@ -541,7 +543,14 @@ inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpa
     {
         if (is_32bit_input(unpack_src_format, unpack_dst_format))
         {
-            set_dst_write_addr(unp_cfg_context);
+            if constexpr (z_stride_per_tile)
+            {
+                set_dst_write_addr(unp_cfg_context, unpack_dst_format);
+            }
+            else
+            {
+                set_dst_write_addr(unp_cfg_context);
+            }
             wait_for_dest_available();
         }
     }
@@ -569,7 +578,14 @@ inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpa
     {
         if (is_32bit_input(unpack_src_format, unpack_dst_format))
         {
-            unpack_to_dest_tile_done(unp_cfg_context);
+            if constexpr (z_stride_per_tile)
+            {
+                unpack_to_dest_tile_done(unp_cfg_context, unpack_dst_format);
+            }
+            else
+            {
+                unpack_to_dest_tile_done(unp_cfg_context);
+            }
         }
     }
 

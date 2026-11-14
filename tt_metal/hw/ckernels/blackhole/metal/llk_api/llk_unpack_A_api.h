@@ -65,7 +65,9 @@ template <
 inline void llk_unpack_A_impl(
     const std::uint32_t address, const std::uint32_t src_format, const std::uint32_t dst_format) {
     WAYPOINT("UPAW");
-    _llk_unpack_A_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest, early_context_poll>(address, src_format, dst_format);
+    // A size-mode kernel keeps main's per-tile Z stride writes: the shorter body inlines into more call sites
+    _llk_unpack_A_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest, early_context_poll, LLK_SIZE_MODE>(
+        address, src_format, dst_format);
     WAYPOINT("UPAD");
 }
 
@@ -237,7 +239,7 @@ inline void llk_unpack_A_block(
 
     for (std::uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
         WAYPOINT("UPAW");
-        _llk_unpack_A_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(
+        _llk_unpack_A_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest, false, LLK_SIZE_MODE>(
             address, unpack_src_format[operand_id], unpack_dst_format[operand_id]);
         address += offset_address;
         WAYPOINT("UPAD");
