@@ -3086,6 +3086,22 @@ bool run_coordinated_resize(
     // Subsequent FD work waits for SD1 idle (not long-running A on SD0).
     mesh_device->set_sub_device_stall_group({{SubDeviceId{1}}});
 
+    // On Quasar the sender's credit count is cached on the core so the host may read a stale value, so
+    // probe the receiver's count instead; it is updated with NoC atomics and always reads correctly.
+    const CoreCoord probe_core = is_quasar_arch() ? receiver_core : sender_core;
+    if (pad_room == ResizePadRoom::PENDING) {
+        // Wait until all E1 entries have arrived before checking that the resize is still blocked.
+        const uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
+        const uint32_t e1_units = total_entries_e1 * (e1 / l1_alignment);
+        for (uint32_t i = 0; i < 10000; ++i) {
+            const auto [sent, acked] = prefetcher_pipe_test::read_pipe_credits(device, pipe, probe_core);
+            if (sent - acked >= e1_units) {
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    }
+
     // A resizes before any receiver is enqueued exactly when the pad fits.
     const bool resized_early =
         poll_sem_set(device, sender_core, resized_sem.address(), pad_room == ResizePadRoom::FITS ? 10000 : 100);
@@ -3097,11 +3113,8 @@ bool run_coordinated_resize(
         EXPECT_FALSE(resized_early) << "set_entry_size(E2) published its pad into a full ring; sender credits="
                                     << sender_sent << "/" << sender_acked;
     }
-    // Quasar: local pages_sent is updated via cached stores; mid-run host TL1 peeks of the
-    // sender slot often still see 0 even after an L2 flush on emu. The receiver slot is
-    // incremented by NOC atomics into TL1, so it is the reliable undrained-E1 probe.
     if (is_quasar_arch()) {
-        const auto [recv_sent, recv_acked] = prefetcher_pipe_test::read_pipe_credits(device, pipe, receiver_core);
+        const auto [recv_sent, recv_acked] = prefetcher_pipe_test::read_pipe_credits(device, pipe, probe_core);
         EXPECT_LT(recv_acked, recv_sent)
             << "E1 unexpectedly drained before its receiver program was enqueued; receiver credits=" << recv_sent << "/"
             << recv_acked << " sender credits=" << sender_sent << "/" << sender_acked;
