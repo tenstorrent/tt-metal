@@ -125,6 +125,20 @@ ProgramDescriptor merge_program_descriptors(const std::vector<ProgramDescriptor>
 
         // One launch message per merged program, so one reload table; two different ones is an error.
         result.reload_table = internal::merge_reload_tables(result.reload_table, other.reload_table);
+
+        // The merged program does the work of both
+        if (other.performance) {
+            if (!result.performance) {
+                result.performance = other.performance;
+            } else {
+                result.performance->dram_bytes_read += other.performance->dram_bytes_read;
+                result.performance->dram_bytes_written += other.performance->dram_bytes_written;
+                result.performance->flops += other.performance->flops;
+                if (result.performance->math_fidelity != other.performance->math_fidelity) {
+                    result.performance->math_fidelity = std::nullopt;
+                }
+            }
+        }
     }
 
     // Custom program hash is invalidated after merge

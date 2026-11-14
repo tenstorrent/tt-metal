@@ -1109,6 +1109,41 @@ void py_module_types(nb::module_& mod) {
         .def_rw("core_ranges", &tt::tt_metal::SemaphoreDescriptor::core_ranges, "Core ranges for the semaphore")
         .def_rw("initial_value", &tt::tt_metal::SemaphoreDescriptor::initial_value, "Initial value for the semaphore");
 
+    nb::class_<tt::tt_metal::ProgramPerformanceDescriptor>(mod, "ProgramPerformanceDescriptor", R"pbdoc(
+        Work a program declares for performance reporting, per device it runs on.
+
+        Execution ignores it. The op profiler reports it (ATTRIBUTES and PM columns of the ops report),
+        so tools can compute DRAM and FLOPs utilization for programs it cannot model, such as generic_op.
+    )pbdoc")
+        .def(
+            "__init__",
+            [](tt::tt_metal::ProgramPerformanceDescriptor* t,
+               uint64_t dram_bytes_read,
+               uint64_t dram_bytes_written,
+               uint64_t flops,
+               std::optional<tt::tt_metal::MathFidelity> math_fidelity) {
+                new (t) tt::tt_metal::ProgramPerformanceDescriptor{
+                    .dram_bytes_read = dram_bytes_read,
+                    .dram_bytes_written = dram_bytes_written,
+                    .flops = flops,
+                    .math_fidelity = math_fidelity};
+            },
+            nb::arg("dram_bytes_read") = 0,
+            nb::arg("dram_bytes_written") = 0,
+            nb::arg("flops") = 0,
+            nb::arg("math_fidelity") = nb::none(),
+            R"pbdoc(
+                Args:
+                    dram_bytes_read: Bytes the program reads from DRAM on one device
+                    dram_bytes_written: Bytes the program writes to DRAM on one device
+                    flops: Floating-point operations on the matrix engine on one device
+                    math_fidelity: Fidelity the FLOPs run at; None uses the first compute kernel's fidelity
+            )pbdoc")
+        .def_rw("dram_bytes_read", &tt::tt_metal::ProgramPerformanceDescriptor::dram_bytes_read)
+        .def_rw("dram_bytes_written", &tt::tt_metal::ProgramPerformanceDescriptor::dram_bytes_written)
+        .def_rw("flops", &tt::tt_metal::ProgramPerformanceDescriptor::flops)
+        .def_rw("math_fidelity", &tt::tt_metal::ProgramPerformanceDescriptor::math_fidelity);
+
     nb::class_<tt::tt_metal::ProgramDescriptor>(mod, "ProgramDescriptor", R"pbdoc(
         Descriptor for a complete program.
 
@@ -1141,6 +1176,10 @@ void py_module_types(nb::module_& mod) {
             "custom_program_hash",
             &tt::tt_metal::ProgramDescriptor::custom_program_hash,
             "Optional memoized program hash (skips full descriptor walk when set)")
+        .def_rw(
+            "performance",
+            &tt::tt_metal::ProgramDescriptor::performance,
+            "Optional ProgramPerformanceDescriptor reported by the op profiler; not part of the program hash")
         // Blaze-only internal runtime binary reload (internal::ReloadTable), exposed as
         // the two values Blaze sets. Setting the address to None drops the table.
         .def_prop_rw(

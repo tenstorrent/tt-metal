@@ -218,6 +218,16 @@ struct KernelDescriptor {
     void emplace_common_runtime_args(const RTArgList& args);
 };
 
+// Work a program declares for performance reporting, per device it runs on. Execution ignores it; the op profiler
+// reports it so tools can place the program against the DRAM and math roofline.
+struct ProgramPerformanceDescriptor {
+    std::uint64_t dram_bytes_read = 0;
+    std::uint64_t dram_bytes_written = 0;
+    std::uint64_t flops = 0;
+    // std::nullopt: the math fidelity of the program's first compute kernel
+    std::optional<MathFidelity> math_fidelity;
+};
+
 struct ProgramDescriptor {
     using KernelDescriptors = ttsl::SmallVector<KernelDescriptor, 3>;
     using SemaphoreDescriptors = ttsl::SmallVector<SemaphoreDescriptor, 3>;
@@ -229,6 +239,9 @@ struct ProgramDescriptor {
     std::optional<std::uint64_t> custom_program_hash;
     // Blaze-only internal runtime binary reload; std::nullopt when the program does not reload.
     std::optional<internal::ReloadTable> reload_table;
+    // Not part of the program hash: the op profiler caches op info per program hash, so set
+    // TT_METAL_PROFILER_NO_CACHE_OP_INFO=1 when declared values change while the program structure does not.
+    std::optional<ProgramPerformanceDescriptor> performance;
 
     std::optional<uint32_t> find_available_semaphore_id(const CoreCoord& core, CoreType core_type) const;
 };

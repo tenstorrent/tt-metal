@@ -8,6 +8,11 @@
 
 #include <tt_stl/reflection.hpp>
 
+#include <algorithm>
+#include <cmath>
+#include <variant>
+#include <vector>
+
 namespace ttnn::operations::generic {
 
 using namespace tt::tt_metal;
@@ -47,6 +52,63 @@ tensor_return_value_t GenericOpDeviceOperation::create_output_tensors(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     // Don't create anything, user is passing output tensor.
     return tensor_args.output_tensor;
+}
+
+tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t>
+GenericOpDeviceOperation::create_op_performance_model(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    using PerformanceModel = tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t>;
+
+    // Largest declared value over the devices' programs, as in MeshProgramDescriptor::attribute_values
+    const ProgramDescriptor* first_declaring_program = nullptr;
+    ProgramPerformanceDescriptor declared;
+    for (const auto& [range, program] : operation_attributes.mesh_programs) {
+        if (!program.performance) {
+            continue;
+        }
+        if (first_declaring_program == nullptr) {
+            first_declaring_program = &program;
+            declared.math_fidelity = program.performance->math_fidelity;
+        }
+        declared.dram_bytes_read = std::max(declared.dram_bytes_read, program.performance->dram_bytes_read);
+        declared.dram_bytes_written = std::max(declared.dram_bytes_written, program.performance->dram_bytes_written);
+        declared.flops = std::max(declared.flops, program.performance->flops);
+    }
+    const auto& output = tensor_args.output_tensor;
+    if (first_declaring_program == nullptr || output.storage_type() != StorageType::DEVICE) {
+        return PerformanceModel{};
+    }
+
+    MathFidelity math_fidelity = MathFidelity::LoFi;
+    if (declared.math_fidelity) {
+        math_fidelity = *declared.math_fidelity;
+    } else {
+        for (const auto& kernel : first_declaring_program->kernels) {
+            if (const auto* config = std::get_if<ComputeConfigDescriptor>(&kernel.config)) {
+                math_fidelity = config->math_fidelity;
+                break;
+            }
+        }
+    }
+
+    // Same peak as the matmul model: 4096 FLOPs per core per cycle at LoFi on the full compute grid
+    constexpr double tensix_flops_per_cycle_lofi = 4096;
+    const CoreCoord compute_grid = output.device()->compute_with_storage_grid_size();
+    const double num_cores = static_cast<double>(compute_grid.x * compute_grid.y);
+    const int ideal_compute_cycles = static_cast<int>(std::ceil(
+        static_cast<double>(declared.flops) / (num_cores * tensix_flops_per_cycle_lofi) *
+        PerformanceModel::fidelity_multiplier(math_fidelity)));
+
+    std::vector<Tensor> input_tensors(tensor_args.io_tensors.begin(), tensor_args.io_tensors.end() - 1);
+    PerformanceModel model(input_tensors, tensor_return_value, ideal_compute_cycles);
+
+    const double dram_bytes = static_cast<double>(declared.dram_bytes_read + declared.dram_bytes_written);
+    model.ideal_bandwidth_ns = static_cast<int>(
+        std::ceil(dram_bytes / tt::tt_metal::operation::peak_dram_bandwidth_gb_s(output.device()->arch())));
+    model.ideal_ns = std::max(model.ideal_compute_ns, model.ideal_bandwidth_ns);
+    return model;
 }
 
 ttsl::hash::hash_t compute_program_descriptor_hash(const tt::tt_metal::ProgramDescriptor& program_descriptor) {

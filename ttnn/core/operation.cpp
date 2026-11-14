@@ -11,6 +11,16 @@ namespace tt::tt_metal::operation {
 using ttnn::StorageType;
 using ttnn::Tensor;
 
+float peak_dram_bandwidth_gb_s(ARCH arch) {
+    if (arch == ARCH::WORMHOLE_B0) {
+        return 6 * 2 * 21.5;  // 258 GB/s
+    }
+    if (arch == ARCH::BLACKHOLE) {
+        return 512.0;  // 512 GB/s
+    }
+    TT_THROW("Unsupported architecture for OpPerformanceModel");
+}
+
 template <typename OutputTensorsT>
 OpPerformanceModelGeneral<OutputTensorsT>::OpPerformanceModelGeneral(
     Tensors input_tensors, const OutputTensors& output_tensors, int ideal_compute_cycles) :
@@ -35,14 +45,7 @@ OpPerformanceModelGeneral<OutputTensorsT>::OpPerformanceModelGeneral(
 
     // BH DRAM bandwidth: 512 GB/s (32GB GDDR6 @ 16 GT/sec)
 
-    float peak_dram_bw;
-    if (arch == ARCH::WORMHOLE_B0) {
-        peak_dram_bw = 6 * 2 * 21.5;  // 258 GB/s
-    } else if (arch == ARCH::BLACKHOLE) {
-        peak_dram_bw = 512.0;  // 512 GB/s
-    } else {
-        TT_THROW("Unsupported architecture for OpPerformanceModel");
-    }
+    const float peak_dram_bw = peak_dram_bandwidth_gb_s(arch);
 
     auto tensor_ns = [peak_dram_bw](const Tensor& t) {
         int size_bytes = t.physical_volume() * t.element_size();
