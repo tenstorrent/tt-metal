@@ -204,7 +204,6 @@ ttnn::device_operation::ProgramArtifacts FillPadProgramFactory::create_program_a
     if (has_bottom_pad) {
         writer_dfb_bindings.push_back(DFBBinding{
             .dfb_spec_name = BOT_MASK, .accessor_name = "bot_mask", .endpoint_type = DFBEndpointType::PRODUCER});
-        writer_cta.insert({"H_mod32", H_mod32});
     }
     KernelSpec writer_spec{
         .unique_id = WRITER,
@@ -218,6 +217,11 @@ ttnn::device_operation::ProgramArtifacts FillPadProgramFactory::create_program_a
         .hw_config = ttnn::create_writer_datamovement_config(),
     };
     writer_spec.compiler_options.defines = mask_defines;
+    if (has_bottom_pad) {
+        // H_mod32 is a common runtime arg so every logical height with the same padded height
+        // reuses one program (see FillPadDeviceOperation::compute_program_hash).
+        writer_spec.runtime_arg_schema.common_runtime_arg_names.push_back("H_mod32");
+    }
 
     // ---- Compute KernelSpec ----
     Group<DFBBinding> compute_dfb_bindings = {
@@ -264,7 +268,10 @@ ttnn::device_operation::ProgramArtifacts FillPadProgramFactory::create_program_a
         .name = "fill_pad_dram",
         .kernels = {std::move(reader_spec), std::move(writer_spec), std::move(compute_spec)},
         .dataflow_buffers = std::move(dataflow_buffers),
-        .tensor_parameters = {TensorParameter{.unique_id = INPUT, .spec = input_tensor.tensor_spec()}},
+        .tensor_parameters = {TensorParameter{
+            .unique_id = INPUT,
+            .spec = input_tensor.tensor_spec(),
+            .relaxations = {.match_padded_shape_only = has_bottom_pad}}},
         .work_units = {WorkUnitSpec{.name = "main", .kernels = {READER, WRITER, COMPUTE}, .target_nodes = all_cores}},
     };
 
@@ -346,11 +353,36 @@ ttnn::device_operation::ProgramArtifacts FillPadProgramFactory::create_program_a
         work_start = work_end;
     }
 
+    if (has_bottom_pad) {
+        writer_run.common_runtime_arg_values = {{"H_mod32", H_mod32}};
+    }
+
     ProgramRunArgs run_args;
     run_args.kernel_run_args = {std::move(reader_run), std::move(writer_run), std::move(compute_run)};
     run_args.tensor_args.insert({INPUT, TensorArgument{tensor_args.input.mesh_tensor()}});
 
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
+}
+
+tt::tt_metal::experimental::ProgramRunArgs FillPadProgramFactory::override_runtime_arguments(
+    const FillPadParams& /*operation_attributes*/,
+    const FillPadInputs& tensor_args,
+    Tensor& /*tensor_return_value*/,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    // A cache hit matches on padded shape, so only the logical height's remainder (the bottom mask
+    // threshold) can differ from the cached run; every other argument is padded-shape derived.
+    const KernelSpecName WRITER{"writer"};
+    const TensorParamName INPUT{"input"};
+    const Tensor& input_tensor = tensor_args.input;
+    const std::uint32_t H_mod32 = input_tensor.logical_shape()[-2] % input_tensor.tensor_spec().tile().get_height();
+
+    ProgramRunArgs run_args;
+    if (H_mod32 != 0) {
+        run_args.kernel_run_args = {
+            KernelRunArgs{.kernel = WRITER, .common_runtime_arg_values = {{"H_mod32", H_mod32}}}};
+    }
+    run_args.tensor_args.insert({INPUT, TensorArgument{input_tensor.mesh_tensor()}});
+    return run_args;
 }
 
 ttnn::device_operation::ProgramArtifacts FillPadL1ShardedProgramFactory::create_program_artifacts(

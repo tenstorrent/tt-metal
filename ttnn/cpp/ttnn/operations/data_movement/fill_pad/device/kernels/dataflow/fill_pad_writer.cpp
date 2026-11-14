@@ -98,8 +98,8 @@ void kernel_main() {
     push_right_mask_tile<mask_t, W_mod32, TILE>(dfb_right_mask, static_cast<mask_t>(MASK_VALUE));
 #endif
 #ifdef HAS_BOTTOM_PAD
-    constexpr auto H_mod32 = get_arg(args::H_mod32);
-    push_bottom_mask_tile<mask_t, H_mod32, TILE>(dfb_bot_mask, static_cast<mask_t>(MASK_VALUE));
+    // Common runtime arg: one program serves every height with the same tile count.
+    push_bottom_mask_tile_runtime<mask_t, TILE>(dfb_bot_mask, static_cast<mask_t>(MASK_VALUE), get_arg(args::H_mod32));
 #endif
 
     // ---- Phase 2: write-back loop ----
