@@ -14,6 +14,7 @@
 #include "llk_outputs.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
+#include "llk_size_mode.h"
 #include "llk_pack_block_tile.h"
 
 /*************************************************************************
@@ -180,7 +181,7 @@ constexpr bool llk_pack_reconfig_table_ok() {
          ckernel::packer::LLK_PACK_RECONFIG_SKIP_ALL) != 0;
     constexpr ckernel::packer::llk_pack_reconfig_profiles_t prof =
         ckernel::packer::llk_pack_reconfig_profiles(pack_src_format, pack_dst_format, pack_tile_num_faces);
-    return imm.ok && !skip_all && prof.n >= 1 && prof.n <= 8;
+    return !LLK_SIZE_MODE && imm.ok && !skip_all && prof.n >= 1 && prof.n <= 8;
 }
 
 template <bool is_fp32_dest_acc_en, std::uint32_t k, bool gate = true>
