@@ -63,9 +63,11 @@ ttnn::device_operation::ProgramArtifacts ConcatProgramFactory::create_program_ar
 
     uint32_t num_output_pages;
     uint32_t single_page_size;
-    const uint32_t common_align_len = std::max(
-        inputs[0].get().mesh_buffer().get_reference_buffer()->alignment(),
-        output.mesh_buffer().get_reference_buffer()->alignment());
+    // Max over every input's alignment (not just inputs[0]) so mixed L1/DRAM inputs don't overflow the DFB page.
+    uint32_t common_align_len = output.mesh_buffer().get_reference_buffer()->alignment();
+    for (const auto& in : inputs) {
+        common_align_len = std::max(common_align_len, in.get().mesh_buffer().get_reference_buffer()->alignment());
+    }
     if (rm_layout) {
         num_output_pages = output.physical_volume() / output.padded_shape()[-1];
         single_page_size = tt::align(output.element_size() * output.padded_shape()[-1], common_align_len);
