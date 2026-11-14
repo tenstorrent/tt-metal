@@ -42,8 +42,8 @@ private:
 
     void wait_for_dispatch_cores() const;
 
-    // Writes the registered termination signals with the given timing.
-    void process_termination_signals(TerminationTiming timing) const;
+    // Writes the termination signals of the kernels of `kernel_type`.
+    void process_termination_signals(FDKernelType kernel_type) const;
 
     bool using_fast_dispatch() const;
 

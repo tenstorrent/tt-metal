@@ -111,11 +111,14 @@ void DispatchKernelInitializer::teardown(std::unordered_set<InitializerKey>& ini
     if (dispatch_live) {
         terminate_command_queues();
     }
-    process_termination_signals(TerminationTiming::BeforeDispatchWait);
+    // A dispatch core reports done only once every kernel on it has returned, so the dispatch kernels that exit on
+    // a termination signal get it before the wait. Routing kernels carry the CQ kernels' traffic until those exit,
+    // so theirs comes after.
+    process_termination_signals(FDKernelType::DISPATCH);
     if (dispatch_live) {
         wait_for_dispatch_cores();
     }
-    process_termination_signals(TerminationTiming::AfterDispatchDone);
+    process_termination_signals(FDKernelType::ROUTING);
 
     devices_.clear();
     initialized_ = false;
@@ -261,13 +264,10 @@ void DispatchKernelInitializer::wait_for_dispatch_cores() const {
     }
 }
 
-void DispatchKernelInitializer::process_termination_signals(TerminationTiming timing) const {
+void DispatchKernelInitializer::process_termination_signals(FDKernelType kernel_type) const {
     for (auto* dev : devices_) {
-        const auto& info = dispatch_topology_->get_registered_termination_cores(dev->id());
+        const auto& info = dispatch_topology_->get_registered_termination_cores(dev->id(), kernel_type);
         for (const auto& core_to_terminate : info) {
-            if (core_to_terminate.timing != timing) {
-                continue;
-            }
             std::vector<uint32_t> val{core_to_terminate.val};
             detail::WriteToDeviceL1(
                 dev, core_to_terminate.logical_core, core_to_terminate.address, val, core_to_terminate.core_type);

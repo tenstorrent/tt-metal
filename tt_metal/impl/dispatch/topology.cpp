@@ -754,9 +754,20 @@ void DispatchTopology::create_cq_program(Device* device) {
             continue;
         }
 
+        const auto termination = node_and_kernel->GetTerminationInfo();
         switch (node_and_kernel->GetKernelType()) {
-            case FDKernelType::DISPATCH: dispatch_cores_[device->id()].insert(node_and_kernel->GetVirtualCore()); break;
-            case FDKernelType::ROUTING: routing_cores_[device->id()].insert(node_and_kernel->GetVirtualCore()); break;
+            case FDKernelType::DISPATCH:
+                dispatch_cores_[device->id()].insert(node_and_kernel->GetVirtualCore());
+                if (termination.has_value()) {
+                    dispatch_termination_info_[device->id()].insert(*termination);
+                }
+                break;
+            case FDKernelType::ROUTING:
+                routing_cores_[device->id()].insert(node_and_kernel->GetVirtualCore());
+                if (termination.has_value()) {
+                    routing_termination_info_[device->id()].insert(*termination);
+                }
+                break;
             case FDKernelType::VIRTUAL:
                 // Not a real kernel
                 break;
@@ -767,18 +778,6 @@ void DispatchTopology::create_cq_program(Device* device) {
                     typeid(*node_and_kernel).name(),
                     device->id());
                 break;
-        }
-    }
-
-    // Register termination info
-    for (auto* node_and_kernel : node_id_to_kernel_) {
-        if (node_and_kernel->GetDeviceId() != device->id()) {
-            continue;
-        }
-
-        const auto& info = node_and_kernel->GetTerminationInfo();
-        if (info.has_value()) {
-            termination_info_[device->id()].insert(info.value());
         }
     }
 }
@@ -877,11 +876,16 @@ const std::unordered_set<CoreCoord>& DispatchTopology::get_virtual_dispatch_rout
     return routing_cores_.at(dev_id);
 }
 
-const std::unordered_set<TerminationInfo>& DispatchTopology::get_registered_termination_cores(ChipId dev_id) const {
-    if (!termination_info_.contains(dev_id)) {
-        return this->empty_termination_info_container_;
-    }
-    return termination_info_.at(dev_id);
+const std::unordered_set<TerminationInfo>& DispatchTopology::get_registered_termination_cores(
+    ChipId dev_id, FDKernelType kernel_type) const {
+    TT_FATAL(
+        kernel_type == FDKernelType::DISPATCH || kernel_type == FDKernelType::ROUTING,
+        "Only dispatch and routing kernels register termination signals, not {}",
+        enchantum::to_string(kernel_type));
+    const auto& termination_info =
+        kernel_type == FDKernelType::DISPATCH ? dispatch_termination_info_ : routing_termination_info_;
+    const auto it = termination_info.find(dev_id);
+    return it == termination_info.end() ? this->empty_termination_info_container_ : it->second;
 }
 
 void DispatchTopology::reset() {
@@ -892,7 +896,8 @@ void DispatchTopology::reset() {
     command_queue_compile_group_->clear();
     dispatch_cores_.clear();
     routing_cores_.clear();
-    termination_info_.clear();
+    dispatch_termination_info_.clear();
+    routing_termination_info_.clear();
 }
 
 }  // namespace tt::tt_metal

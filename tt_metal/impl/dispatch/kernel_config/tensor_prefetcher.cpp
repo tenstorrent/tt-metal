@@ -122,7 +122,6 @@ std::optional<TerminationInfo> TensorPrefetcherKernel::GetTerminationInfo() cons
         .core_type = CoreType::DISPATCH,
         .address = region_base_ + fifo::kTerminateOffset,
         .val = 1,
-        .timing = TerminationTiming::BeforeDispatchWait,
     };
 }
 
