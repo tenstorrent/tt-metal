@@ -396,6 +396,11 @@ constexpr bool matmul_fe_hifi3_wide() {
 #endif
 }
 
+}  // namespace ckernel
+// the TRISC wrapper's reading of the cut (matmul.h defines it, so a kernel without the matmul API skips the wrapper's ttsync)
+#define MATMUL_FE_TTSYNC_CUT() (::ckernel::matmul_fe_hifi3_wide() && !::ckernel::matmul_fe_mark::is_used<8>(0))
+namespace ckernel {
+
 #ifdef TRISC_MATH
 }  // namespace ckernel
 #include "llk_math_matmul_main.h"
