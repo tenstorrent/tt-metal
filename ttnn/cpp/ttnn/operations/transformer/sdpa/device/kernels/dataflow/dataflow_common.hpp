@@ -1801,7 +1801,8 @@ void generate_mask(
     const bool generate_mask_1,
     const uint32_t unpadded_Sk_mask_0,
     const uint32_t unpadded_Sk_mask_1,
-    const bool is_causal) {
+    const bool is_causal,
+    const uint32_t k_extent_t = 0xFFFFFFFFu) {
     if (is_causal || sliding_window_size > 0) {
         uint32_t offset_q_chunk = q_chunk;
         if constexpr (is_chunked) {
@@ -1813,9 +1814,11 @@ void generate_mask(
 
         // Non-causal legacy compute consumes every K chunk, including those
         // beyond this Q chunk. Produce the same number of masks or it waits
-        // forever for the first missing mask. Causal compute stops at Q's end.
+        // forever for the first missing mask. Causal compute stops at Q's end,
+        // or at K's padded extent (k_extent_t) when the last Q chunk reaches past K.
         const uint32_t mask_k_end =
-            is_causal ? q_high_idx : (unpadded_Sk_mask_0 + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT;
+            is_causal ? std::min(q_high_idx, k_extent_t)
+                      : (unpadded_Sk_mask_0 + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT;
         for (uint32_t k_chunk = 0; (k_chunk * Sk_chunk_t) < mask_k_end; ++k_chunk) {
             const uint32_t k_low_idx = k_chunk * Sk_chunk_t;
             const uint32_t k_high_idx = k_low_idx + Sk_chunk_t;
