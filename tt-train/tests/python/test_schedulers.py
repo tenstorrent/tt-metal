@@ -18,11 +18,13 @@ import math
 import pytest
 import torch
 import ttml
+from ttml.common.config import SpeedrunSchedulerConfig
 from ttml.common.schedulers import (
     CosineAnnealingScheduler,
     LambdaScheduler,
     LinearScheduler,
     SequentialScheduler,
+    SpeedrunScheduler,
     StepScheduler,
     linear_warmup_lambda,
 )
@@ -1690,3 +1692,40 @@ def test_set_lr_scales_every_group_keeping_their_ratios():
     assert opt.get_group_lrs() == pytest.approx([5e-4, 1e-3])
     assert opt.get_lr() == pytest.approx(5e-4)
     assert opt.get_initial_lr() == pytest.approx(5e-4)  # nothing recorded before, so the current LR is the base
+
+
+@pytest.mark.parametrize("total_steps", [50, 110, 1000])
+def test_speedrun_lr_stays_within_min_and_max_lr(total_steps):
+    """When total_steps <= warmup + hold there is no decay window, so the LR stays at max_lr after the hold
+    instead of extrapolating the decay line past max_lr."""
+    sched = SpeedrunScheduler(
+        SpeedrunSchedulerConfig(max_lr=1.0, min_lr=0.1, warmup_steps=10, hold_steps=100, total_steps=total_steps)
+    )
+    lrs = [sched.lr_at(step) for step in range(2000)]
+    assert max(lrs) == pytest.approx(1.0)
+    assert min(lrs[10:]) >= 0.1 - 1e-12
+    expected_last = 1.0 if total_steps <= 110 else 0.1
+    assert lrs[-1] == pytest.approx(expected_last)
+
+
+def test_speedrun_decays_linearly_to_min_lr_at_total_steps():
+    sched = SpeedrunScheduler(
+        SpeedrunSchedulerConfig(max_lr=1.0, min_lr=0.2, warmup_steps=10, hold_steps=0, total_steps=100)
+    )
+    assert sched.lr_at(0) == pytest.approx(0.1)
+    assert sched.lr_at(9) == pytest.approx(1.0)
+    assert sched.lr_at(55) == pytest.approx(0.6)
+    assert sched.lr_at(100) == pytest.approx(0.2)
+    assert sched.lr_at(150) == pytest.approx(0.2)
+
+
+@pytest.mark.parametrize(
+    "training_config, expected_total_steps",
+    [
+        ({"max_steps": 5000}, 5000),
+        ({}, 1000),
+    ],
+)
+def test_speedrun_config_from_yaml_reads_max_steps(training_config, expected_total_steps):
+    cfg = SpeedrunSchedulerConfig.from_yaml({"training_config": training_config, "scheduler_config": {}})
+    assert cfg.total_steps == expected_total_steps

@@ -28,13 +28,13 @@ class SpeedrunScheduler:
         if s < w:
             # Linear warmup to lr_max over exactly w steps.
             return peak * ((s + 1) / w)
-        elif s <= w + h:
-            # hold at lr_max
+        elif s <= w + h or T <= w + h:
+            # Hold at lr_max; with no decay window (T <= w + h), stay there for the rest of the run.
             return peak
         else:
             # linear decay from lr_max at (w+h) to min_lr at T
             s2 = min(s, T)
-            frac = (s2 - (w + h)) / max(1, (T - (w + h)))
+            frac = (s2 - (w + h)) / (T - (w + h))
             return peak + (min_lr - peak) * frac
 
     def beta1_at(self, step: int) -> Optional[float]:
