@@ -175,7 +175,7 @@ tt_metal/hw/inc/hostdev/streaming_profiler_common.h @mo-tenstorrent @yusufbashiT
 tt_metal/hw/inc/internal/ethernet/ @aliuTT @ubcheema
 tt_metal/hw/inc/internal/ethernet/eth_ptp.hpp @mo-tenstorrent @yusufbashiTT @aliuTT @ubcheema
 tt_metal/hw/inc/internal/tt-1xx/wormhole/eth_l1_address_map.h @aliuTT @ubcheema
-tt_metal/hw/inc/**/tensor/ @tenstorrent/metalium-developers-ttnn-core
+tt_metal/hw/inc/**/tensor/ @abhullar-tt @akerteszTT @riverwuTT
 tt_metal/hw/inc/api/tensor/ @abhullar-tt @akerteszTT @riverwuTT
 tt_metal/hw/toolchain/ @jbaumanTT @nathan-TT
 tt_metal/hw/**/CMakeLists.txt @tenstorrent/metalium-developers-infra @jbaumanTT @nathan-TT
@@ -716,6 +716,12 @@ ttnn/cpp/ttnn-nanobind/global_circular_buffer.* @nsextonTT
 ttnn/cpp/ttnn-nanobind/prefetcher_pipe.* @nsextonTT
 tests/ttnn/unit_tests/base_functionality/*prefetcher* @razorback3 @dongjin-na @bbradelTT
 tests/ttnn/unit_tests/base_functionality/test_global_circular_buffer.py @razorback3 @dongjin-na @bbradelTT
+# The prefetcher and global circular buffer code itself: owned by the people who build it.
+ttnn/core/global_circular_buffer.cpp @jbaumanTT @abhullar-tt
+ttnn/api/ttnn/global_circular_buffer.hpp @jbaumanTT @abhullar-tt
+ttnn/core/prefetcher_pipe.cpp @jbaumanTT @abhullar-tt
+ttnn/api/ttnn/prefetcher_pipe.hpp @jbaumanTT @abhullar-tt
+ttnn/ttnn/_experimental/tensor_prefetcher_matmul.py @jbaumanTT @abhullar-tt
 # Bindings and tests for fabric, mesh sockets and disaggregation.
 ttnn/cpp/ttnn-nanobind/fabric.* @nsextonTT
 ttnn/cpp/ttnn-nanobind/mesh_socket.* @nsextonTT
@@ -729,6 +735,12 @@ ttnn/cpp/ttnn-nanobind/pipeline_module_nanobind.* @nsextonTT
 ttnn/cpp/ttnn-nanobind/mcast_host.* @nsextonTT
 tests/ttnn/unit_tests/base_functionality/test_mcast_host_bindings.py @razorback3 @dongjin-na @bbradelTT
 ttnn/cpp/ttnn-nanobind/profiler.* @nsextonTT
+# The TTNN profiler code itself, and its multi-host smoke test with that test's configs: owned by the profiler's owners.
+ttnn/cpp/tools/profiler/ @mo-tenstorrent @akerteszTT @yusufbashiTT
+ttnn/ttnn/profiler.py @mo-tenstorrent @akerteszTT @yusufbashiTT
+tests/ttnn/distributed/test_tracy_multi_host_smoke.py @mo-tenstorrent @akerteszTT @yusufbashiTT
+tests/ttnn/distributed/config/t3k_tracy_smoke_rank_bindings.yaml @mo-tenstorrent @akerteszTT @yusufbashiTT
+tests/ttnn/distributed/config/t3k_2x1x1_mesh_graph_descriptor.textproto @mo-tenstorrent @akerteszTT @yusufbashiTT
 # Outside ttnn-core's scope and rarely changed: no owner, so anyone with write access can approve.
 tests/ttnn/distributed/test_matmul_send_recv_pipeline.py
 tests/ttnn/distributed/test_distributed_layernorm_TG.py
