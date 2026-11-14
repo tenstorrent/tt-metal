@@ -62,10 +62,9 @@ const std::string& runtime_root();
 // `root` ends in '/'.
 metal_SocDescriptor soc_descriptor(tt::umd::Cluster& cluster, ChipId chip, const std::string& root = runtime_root());
 
-// Host memory on `chip` the service can copy to or from, zeroed. Sets `device_addr` to the address a command names
-// for its first byte (pair it with SeatClient::host_endpoint). The IOVA is remapped through the iATU when it lies at or
-// above 1 << 58, which the PCIe tile does not pass through. Throws when the chip has no sysmem manager or the remap
-// fails.
+// Host memory on `chip` the service can copy to or from, zeroed. Sets `device_addr` to its IOVA, the address a command
+// names for its first byte (pair it with SeatClient::host_endpoint). Throws when the chip has no sysmem manager or the
+// IOVA lies at or above 1 << 58, which the PCIe tile does not pass through.
 std::unique_ptr<tt::umd::SysmemBuffer> allocate_host_buffer(
     tt::umd::Cluster& cluster, ChipId chip, size_t size, uint64_t& device_addr);
 
@@ -110,8 +109,8 @@ public:
     // True once this seat issues through a window of its own (see IssuePath); false before its first issue.
     bool has_window() const { return window_ != nullptr; }
 
-    // Writes `command` into the slot's next queue entry and rings its doorbell. Returns false and does nothing when
-    // abi::CLIENT_QUEUE_CAPACITY commands are in flight.
+    // Writes `command` into the slot's next queue entry and rings its doorbell, and returns its ticket for done().
+    // Returns nothing and does nothing when abi::CLIENT_QUEUE_CAPACITY commands are in flight.
     // Throws, issuing nothing, when the command is not CMD_SINGLE or CMD_LOCAL, its size is 0, its source coords do not
     // fit in abi::CMD_KIND_SHIFT bits, src or dst is not 64 B aligned, src and dst overlap on one endpoint, a CMD_LOCAL
     // size is not a multiple of abi::LOCAL_SIZE_ALIGN or runs past the NoC-addressable part of the bank, or its source
@@ -119,15 +118,21 @@ public:
     // sizes are otherwise not checked.
     // Commands run concurrently and complete in issue order, with no ordering between their data: drain() between a
     // command and one that reads what it wrote.
-    [[nodiscard]] bool issue(const abi::KernelCommand& command);
+    [[nodiscard]] std::optional<uint64_t> issue(const abi::KernelCommand& command);
 
-    // Copies `commands` into the host batch slot of the next queue entry and issues one CMD_BATCH for them. Returns
-    // false and does nothing when the queue is full. Throws, issuing nothing, when `commands` is empty, longer than
-    // abi::BATCH_MAX_COMMANDS, or holds a command issue() would reject.
-    [[nodiscard]] bool issue_batch(std::span<const abi::KernelCommand> commands);
+    // Copies `commands` into the host batch slot of the next queue entry and issues one CMD_BATCH for them, and returns
+    // its one ticket. Returns nothing and does nothing when the queue is full. Throws, issuing nothing, when `commands`
+    // is empty, longer than abi::BATCH_MAX_COMMANDS, or holds a command issue() would reject.
+    [[nodiscard]] std::optional<uint64_t> issue_batch(std::span<const abi::KernelCommand> commands);
 
     // Commands issued and not yet completed (a CMD_BATCH counts once).
     uint32_t in_flight() const;
+
+    // Commands completed so far (a CMD_BATCH counts once). 64-bit, so it does not wrap.
+    uint64_t completed() const { return issued_ - in_flight(); }
+
+    // True once the command behind `ticket` has completed. Does not block.
+    bool done(uint64_t ticket) const { return completed() >= ticket; }
 
     // Spins until in_flight() is 0. Throws on `timeout`, with the counters, the seat's state and heartbeat, and the
     // slot words.
@@ -137,8 +142,8 @@ public:
     uint32_t state() const;
     uint32_t heartbeat() const;
 
-    // The endpoint a command names for host memory at `device_addr` (a sysmem IOVA or iATU NoC address on this
-    // chip): `device_addr` paired with the chip's PCIe tile coords.
+    // The endpoint a command names for host memory at `device_addr` (a sysmem IOVA on this chip): `device_addr` paired
+    // with the chip's PCIe tile coords.
     abi::NocEndpoint host_endpoint(uint64_t device_addr) const;
 
     const Seat& seat() const { return seat_; }
@@ -155,7 +160,7 @@ private:
     void launch(const ll_api::ElfFile& image, uint32_t slot);
     void request_attach(uint32_t slot);
     bool acked() const;
-    bool post(const abi::KernelCommand& command);
+    std::optional<uint64_t> post(const abi::KernelCommand& command);
     std::string describe_state() const;
     void validate(const abi::KernelCommand& command) const;
 

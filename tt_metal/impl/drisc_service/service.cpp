@@ -38,8 +38,7 @@ namespace {
 // must be too. Destinations are held to the same rule.
 constexpr uint64_t command_alignment = 64;
 
-// The Blackhole PCIe tile passes NoC addresses below this to PCIe unchanged (KMD's noc_dma_limit); a device address at
-// or above it needs an iATU region.
+// The Blackhole PCIe tile passes NoC addresses below this to PCIe unchanged (KMD's noc_dma_limit).
 constexpr uint64_t pcie_direct_window_end = 1ULL << 58;
 
 // Covers a launching client's whole attach, the longest any client holds the gate.
@@ -242,16 +241,16 @@ std::unique_ptr<tt::umd::SysmemBuffer> allocate_host_buffer(
     tt::umd::Cluster& cluster, ChipId chip, size_t size, uint64_t& device_addr) {
     auto* sysmem = cluster.get_chip(chip)->get_sysmem_manager();
     TT_FATAL(sysmem != nullptr, "drisc_service: chip {} has no sysmem manager", chip);
+    // Never mapped to the NoC: KMD hands out iATU regions from address 0 up, and tt-metal requires its own at 0.
     auto buffer = sysmem->allocate_sysmem_buffer(size, false);
-    if (buffer->get_iova() + size > pcie_direct_window_end) {
-        buffer.reset();
-        buffer = sysmem->allocate_sysmem_buffer(size, true);
-        TT_FATAL(
-            buffer->get_noc_address().has_value(),
-            "drisc_service: host buffer on chip {} needs an iATU mapping and got none",
-            chip);
-    }
-    device_addr = buffer->get_noc_address().value_or(buffer->get_iova());
+    TT_FATAL(
+        buffer->get_iova() + size <= pcie_direct_window_end,
+        "drisc_service: host buffer on chip {} got IOVA {:#x}, past the {:#x} its PCIe tile passes through. KMD 2.9 "
+        "hands out 64-bit IOVAs once a chip's low 4 GiB runs out (tt-kmd#268): use KMD 2.10, or dma_address_bits=58",
+        chip,
+        buffer->get_iova(),
+        pcie_direct_window_end);
+    device_addr = buffer->get_iova();
     std::memset(buffer->get_va(), 0, size);
     return buffer;
 }
@@ -517,14 +516,14 @@ void SeatClient::validate(const abi::KernelCommand& command) const {
         command.size);
 }
 
-bool SeatClient::issue(const abi::KernelCommand& command) {
+std::optional<uint64_t> SeatClient::issue(const abi::KernelCommand& command) {
     validate(command);
     return post(command);
 }
 
-bool SeatClient::post(const abi::KernelCommand& command) {
+std::optional<uint64_t> SeatClient::post(const abi::KernelCommand& command) {
     if (in_flight() >= abi::CLIENT_QUEUE_CAPACITY) {
-        return false;
+        return std::nullopt;
     }
     const uint32_t entry_addr = abi::L1CommandBlockLayout::command_queue_addr(slot_) +
                                 (issued_ % abi::CLIENT_QUEUE_CAPACITY) * sizeof(abi::KernelCommand);
@@ -550,11 +549,10 @@ bool SeatClient::post(const abi::KernelCommand& command) {
         tt_driver_atomics::sfence();
         core_.write_l1_u32(abi::L1CommandBlockLayout::doorbell_addr(slot_), doorbell);
     }
-    issued_++;
-    return true;
+    return ++issued_;
 }
 
-bool SeatClient::issue_batch(std::span<const abi::KernelCommand> commands) {
+std::optional<uint64_t> SeatClient::issue_batch(std::span<const abi::KernelCommand> commands) {
     TT_FATAL(
         !commands.empty() && commands.size() <= abi::BATCH_MAX_COMMANDS,
         "drisc_service: a batch carries 1 to {} commands, got {}",
@@ -564,7 +562,7 @@ bool SeatClient::issue_batch(std::span<const abi::KernelCommand> commands) {
         validate(command);
     }
     if (in_flight() >= abi::CLIENT_QUEUE_CAPACITY) {
-        return false;
+        return std::nullopt;
     }
     const uint32_t entry = issued_ % abi::CLIENT_QUEUE_CAPACITY;
     std::copy(commands.begin(), commands.end(), batch_slots_ + entry * abi::BATCH_MAX_COMMANDS);

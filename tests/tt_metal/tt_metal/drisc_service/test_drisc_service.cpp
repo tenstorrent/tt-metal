@@ -677,7 +677,8 @@ std::pair<double, double> bench_run(std::vector<BenchLane>& lanes, bool batched,
         while (clock::now() < end) {
             for (BenchLane& lane : lanes) {
                 for (uint32_t k = 0; k < abi::CLIENT_QUEUE_CAPACITY; k++) {
-                    const bool ok = batched ? lane.seat->issue_batch(lane.batch) : lane.seat->issue(lane.batch[0]);
+                    const bool ok =
+                        (batched ? lane.seat->issue_batch(lane.batch) : lane.seat->issue(lane.batch[0])).has_value();
                     if (!ok) {
                         break;
                     }
@@ -1436,6 +1437,39 @@ TEST_F(DriscService, HungKernelIsRelaunchedOnlyBySoleClient) {
     expect_all_stopped({0});
 }
 
+// issue() and issue_batch() return consecutive tickets (a batch takes one), and done() turns true for each, without
+// blocking, once it completes.
+TEST_F(DriscService, Tickets) {
+    std::optional<Client> client;
+    attach(client, {0});
+    SeatClient& seat = client->seat(0, 0);
+    constexpr uint32_t big = 64 << 20;
+    const uint64_t big_base = device().bank_offset(0) + (3ull << 30);
+    const abi::KernelCommand slow = abi::make_local_command(big_base, big_base + big, big);
+    std::vector<uint64_t> tickets;
+    for (uint32_t i = 0; i + 1 < abi::CLIENT_QUEUE_CAPACITY; i++) {
+        const std::optional<uint64_t> ticket = seat.issue(slow);
+        ASSERT_TRUE(ticket) << "command " << i << " found the queue full";
+        tickets.push_back(*ticket);
+    }
+    const std::optional<uint64_t> batch_ticket = seat.issue_batch(std::array{slow, slow});
+    ASSERT_TRUE(batch_ticket) << "the batch found the queue full";
+    tickets.push_back(*batch_ticket);
+    for (size_t i = 1; i < tickets.size(); i++) {
+        EXPECT_EQ(tickets[i], tickets[0] + i) << "ticket " << i;
+    }
+    EXPECT_FALSE(seat.done(tickets.back())) << "the last of 9 x 64 MB copies was done right after issue";
+    const auto deadline = std::chrono::steady_clock::now() + drain_timeout;
+    for (const uint64_t ticket : tickets) {
+        while (!seat.done(ticket)) {
+            ASSERT_LT(std::chrono::steady_clock::now(), deadline)
+                << "ticket " << ticket << " not done; completed " << seat.completed();
+        }
+    }
+    EXPECT_EQ(seat.completed(), tickets.back());
+    EXPECT_EQ(seat.in_flight(), 0u);
+}
+
 // A full queue refuses the next command without issuing it. Host copies of sizes off the 64 B grid write exactly
 // their bytes: the guard bands on both sides of the destination keep their sentinel.
 TEST_F(DriscService, QueueFullAndOddSizes) {
@@ -2119,7 +2153,7 @@ TEST_F(DriscService, PerfBench) {
                     const auto end = clock::now() + interval;
                     while (clock::now() < end) {
                         const auto t0 = clock::now();
-                        const bool ok = batched ? seat.issue_batch(batch) : seat.issue(cmd);
+                        const bool ok = (batched ? seat.issue_batch(batch) : seat.issue(cmd)).has_value();
                         const auto t1 = clock::now();
                         if (ok) {
                             total_us += std::chrono::duration<double, std::micro>(t1 - t0).count();
