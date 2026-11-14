@@ -378,6 +378,20 @@ repos:
           tt_metal/tt-llk/infra/redundant_drain_baseline\.txt
         )$
       exclude: ^tt_metal/third_party/
+    - id: llk-compute-api-order
+      name: "llk: compute-kernel API ordering rules (advisory)"
+      entry: python3 tt_metal/tt-llk/infra/check_compute_api_order.py
+      language: system
+      verbose: true
+      require_serial: true
+      args: ["--advisory"]
+      files: |
+        (?x)^(
+          (ttnn|models|tests|tt-train)/.*/kernels/compute/.*\.(cpp|cc|h|hpp)|
+          tt_metal/tt-llk/infra/check_compute_api_order\.py|
+          tt_metal/tt-llk/infra/compute_api_rules\.yaml
+        )$
+      exclude: ^tt_metal/third_party/
     - id: llk-fix-cstdint
       name: "llk: fix std::uint*_t and add cstdint include"
       entry: python3 tt_metal/tt-llk/infra/fix_cstdint.py
