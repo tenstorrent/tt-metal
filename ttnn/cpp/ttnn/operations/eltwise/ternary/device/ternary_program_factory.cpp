@@ -1484,16 +1484,29 @@ ttnn::device_operation::ProgramArtifacts TernaryDeviceOperation::TernaryProgramF
     // ---- Compute Kernel ----
     // Any 32-bit operand needs a 32-bit Dest: a 32-bit input DFB is unpacked with UnpackToDest below,
     // and that lands corrupted in a Dest configured for 16-bit datums.
+    // 8-bit integer operands need the same treatment. An 8-bit CB is unpacked into a 16-bit Datum when
+    // Dest is 16-bit, but the where/lerp/addcmul/addcdiv SFPU variants that an 8-bit dtype selects read
+    // and write those Datums 32 bits at a time, so the operand lanes come back as zero (ttnn.where with
+    // UINT8 predicate/values returned all-zero results before this). The unary and typecast factories
+    // already force a 32-bit Dest for 8-bit int dtypes; do the same here.
     auto is_32bit_format = [](tt::DataFormat format) {
         return format == tt::DataFormat::UInt32 || format == tt::DataFormat::Int32 || format == tt::DataFormat::Float32;
     };
+    auto is_8bit_format = [](tt::DataFormat format) {
+        return format == tt::DataFormat::UInt8 || format == tt::DataFormat::Int8;
+    };
     bool fp32_dest_acc_en = is_32bit_format(output_data_format) || is_32bit_format(predicate_data_format) ||
-                            is_32bit_format(value_true_data_format) || is_32bit_format(value_false_data_format);
+                            is_32bit_format(value_true_data_format) || is_32bit_format(value_false_data_format) ||
+                            is_8bit_format(output_data_format) || is_8bit_format(predicate_data_format) ||
+                            is_8bit_format(value_true_data_format) || is_8bit_format(value_false_data_format);
 
-    // A 32-bit DFB (Float32, Int32 or UInt32) unpacks straight to Dest (UnpackToDest).  Every other DFB
-    // has no entry and takes the default path through SrcA / SrcB.
+    // A 32-bit DFB (Float32, Int32 or UInt32) unpacks straight to Dest (UnpackToDest).  So does an 8-bit
+    // integer DFB (Int8 or UInt8): fp32_dest_acc_en is always set for it above, and the SrcA path would
+    // load Int8 as sign-magnitude, which has no -128 (an int32 predicate with int8 values returned 0 for
+    // every -128).  Every other DFB has no entry and takes the default path through SrcA / SrcB.
     auto is_32bit_dtype = [](DataType dtype) {
-        return dtype == DataType::FLOAT32 || dtype == DataType::INT32 || dtype == DataType::UINT32;
+        return dtype == DataType::FLOAT32 || dtype == DataType::INT32 || dtype == DataType::UINT32 ||
+               dtype == DataType::INT8 || dtype == DataType::UINT8;
     };
     ComputeHardwareConfig::ComputeUnpackModes unpack_modes;
 
@@ -1523,8 +1536,9 @@ ttnn::device_operation::ProgramArtifacts TernaryDeviceOperation::TernaryProgramF
         }
     }
 
-    // Output DFB
-    if (is_32bit_dtype(output.dtype())) {
+    // Output DFB (an 8-bit output is packed from Dest, so only the 32-bit dtypes get an entry)
+    if (output.dtype() == DataType::FLOAT32 || output.dtype() == DataType::INT32 ||
+        output.dtype() == DataType::UINT32) {
         unpack_modes.emplace(OUT_DFB, UnpackMode::UnpackToDest);
     }
 
