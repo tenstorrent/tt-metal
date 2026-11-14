@@ -302,7 +302,9 @@ class HYV4ForCausalLM:
         n0 = min(1024, self.pages * PAGE)
         self._prefill_rows(mk(n0))
         t1 = time.perf_counter()
-        self.dec.set_inputs([PAD_TOKEN] * ROWS, [n0] * ROWS)
+        # capture at the LAST position of the pool: the t1 server (captured at 1024) produced garbage above position ~1024 (see RESULT.md); HY4_SERVE_CAPTURE_POS overrides
+        cpos = int(os.environ.get("HY4_SERVE_CAPTURE_POS", str(self.pages * PAGE - 2)))
+        self.dec.set_inputs([PAD_TOKEN] * ROWS, [cpos] * ROWS)
         self.dec.capture()
         t2 = time.perf_counter()
         dv = dram_view(self.md)
