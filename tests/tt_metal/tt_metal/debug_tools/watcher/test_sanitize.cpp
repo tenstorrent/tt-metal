@@ -54,7 +54,7 @@ enum watcher_features_t {
     SanitizeNOCAlignmentL1Read,
     SanitizeNOCZeroL1Write,
     SanitizeNOCMailboxWrite,
-    SanitizeNOCMailboxWriteUncachedAlias,
+    SanitizeNOCLocalUncachedAlias,
     SanitizeNOCInlineWriteDram,
     SanitizeNOCLinkedTransaction,
     SanitizeL1Overflow,
@@ -141,7 +141,7 @@ void RunTestOnCore(
         GTEST_SKIP() << "Quasar NOC has no L1 alignment restriction; misaligned transfers are legal";
     }
     // Both exercise Quasar's uncached L1 alias, which only exists on Quasar DM cores.
-    if ((feature == SanitizeNOCMailboxWriteUncachedAlias || feature == SanitizeL1OverflowStraddle) &&
+    if ((feature == SanitizeNOCLocalUncachedAlias || feature == SanitizeL1OverflowStraddle) &&
         (!is_quasar || is_eth_core)) {
         GTEST_SKIP() << "Uncached-alias tests only apply to Quasar DM cores";
     }
@@ -323,7 +323,8 @@ void RunTestOnCore(
                       "use_inline_dw_write_from_state",
                       "use_inline_dw_write_with_state",
                       "invalid_txn_id",
-                      "use_dram_bank_dst"}},
+                      "use_dram_bank_dst",
+                      "raw_local_noc_read"}},
             .hw_config = dm_cfg,
         };
         WorkUnitSpec wu{
@@ -369,6 +370,7 @@ void RunTestOnCore(
     const uint32_t k_invalid_txn_id = k_max_user_txn_id + 1;
     uint32_t invalid_txn_id = 0;
     bool use_dram_bank_dst = false;
+    bool raw_local_noc_read = false;
     switch (feature) {
         case SanitizeNOCAddress:
             output_buf_noc_xy.x = 26;
@@ -388,14 +390,14 @@ void RunTestOnCore(
             // This is illegal because we'd be writing to the mailbox memory
             buffer_addr = get_address_for_test(is_eth_core, HalL1MemAddrType::MAILBOX);
             break;
-        case SanitizeNOCMailboxWriteUncachedAlias:
-            // Quasar-only (skipped at the top otherwise): the mailbox is aliased into the uncached L1
-            // window (upper 4 MB, same physical memory as the cached view). Target the alias so a NoC
-            // access landing in the mailbox through it is still flagged. Complements
-            // SanitizeNOCMailboxWrite, which covers the cached view.
-            buffer_addr = get_address_for_test(is_eth_core, HalL1MemAddrType::MAILBOX) +
-                          hal.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
+        case SanitizeNOCLocalUncachedAlias: {
+            // The uncached alias (MEM_L1_UNCACHED_BASE) is a DM CPU view; the NoC takes only physical L1
+            // addresses. The legacy read passes the local address to the NoC unchanged.
+            constexpr uint32_t l1_uncached_base = 0x400000;
+            buffer_addr += l1_uncached_base;
+            raw_local_noc_read = true;
             break;
+        }
         case SanitizeNOCInlineWriteDram:
             use_inline_dw_write = true;
             // Under ATT the destination is addressed as DRAM bank 0.
@@ -536,7 +538,8 @@ void RunTestOnCore(
         use_inline_dw_write_from_state,
         use_inline_dw_write_with_state,
         invalid_txn_id,
-        use_dram_bank_dst};
+        use_dram_bank_dst,
+        raw_local_noc_read};
 
     if (is_eth_core) {
         // ETH cores still go through the legacy API.
@@ -568,7 +571,8 @@ void RunTestOnCore(
                  {"use_inline_dw_write_from_state", use_inline_dw_write_from_state},
                  {"use_inline_dw_write_with_state", use_inline_dw_write_with_state},
                  {"invalid_txn_id", invalid_txn_id},
-                 {"use_dram_bank_dst", use_dram_bank_dst}}),
+                 {"use_dram_bank_dst", use_dram_bank_dst},
+                 {"raw_local_noc_read", raw_local_noc_read}}),
         }};
         tt_metal::experimental::SetProgramRunArgs(program, params);
     }
@@ -694,12 +698,11 @@ void RunTestOnCore(
                 input_core_virtual_coords,
                 output_buffer_addr);
         } break;
-        case SanitizeNOCMailboxWriteUncachedAlias:
+        case SanitizeNOCLocalUncachedAlias:
         case SanitizeNOCMailboxWrite: {
             expected = fmt::format(
                 "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc{} tried to unicast read {} "
-                "bytes to local L1[{:#08x}] from Tensix core w/ virtual coords {} L1[addr=0x{:08x}] (Local L1 "
-                "overwrites mailboxes).",
+                "bytes to local L1[{:#08x}] from Tensix core w/ virtual coords {} L1[addr=0x{:08x}] (Local L1 {}).",
                 device->id(),
                 core_name,
                 core.x,
@@ -711,7 +714,8 @@ void RunTestOnCore(
                 buffer_size,
                 buffer_addr,
                 input_buf_noc_xy.str(),
-                input_buffer_addr);
+                input_buffer_addr,
+                feature == SanitizeNOCMailboxWrite ? "overwrites mailboxes" : "address overflow");
         } break;
         case SanitizeNOCInlineWriteDram: {
             expected = fmt::format(
@@ -1025,11 +1029,11 @@ TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeNOCMailboxWrite) {
         this->devices_[0]);
 }
 
-TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeNOCMailboxWriteUncachedAlias) {
+TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeNOCLocalUncachedAlias) {
     this->RunTestOnDevice(
         [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
             CoreCoord core{0, 0};
-            RunTestOnCore(fixture, mesh_device, core, false, SanitizeNOCMailboxWriteUncachedAlias);
+            RunTestOnCore(fixture, mesh_device, core, false, SanitizeNOCLocalUncachedAlias);
         },
         this->devices_[0]);
 }

@@ -191,30 +191,17 @@ inline bool debug_valid_reg_addr(
            (len == 4);
 }
 
-inline uint16_t debug_valid_worker_addr(uint64_t addr, uint64_t len, bool write, bool is_local_buffer = false) {
+inline uint16_t debug_valid_worker_addr(uint64_t addr, uint64_t len, bool write) {
     if (addr + len <= addr) {
         return DebugSanitizeNocAddrZeroLength;
     }
     if (addr < MEM_L1_BASE) {
         return DebugSanitizeNocAddrUnderflow;
     }
-#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
-    // Local buffers may use the cached view or the uncached alias (and must not straddle the seam).
-    // Remote NOC target offsets are always physical (cached-range) and must stay within MEM_L1_SIZE.
-    if (is_local_buffer) {
-        if (!debug_l1_access_within_single_view(addr, len)) {
-            return DebugSanitizeNocAddrOverflow;
-        }
-    } else {
-        if (addr + len > MEM_L1_BASE + MEM_L1_SIZE) {
-            return DebugSanitizeNocAddrOverflow;
-        }
-    }
-#else
+    // On Quasar the NoC takes only physical L1 addresses; the uncached alias is a DM CPU view.
     if (addr + len > MEM_L1_BASE + MEM_L1_SIZE) {
         return DebugSanitizeNocAddrOverflow;
     }
-#endif
 
 #if !defined(DISPATCH_KERNEL) || (DISPATCH_KERNEL == 0)
 #if defined(COMPILE_FOR_DISPATCH_ENGINE)
@@ -225,14 +212,6 @@ inline uint16_t debug_valid_worker_addr(uint64_t addr, uint64_t len, bool write,
     if (write && (addr < read_only_end)) {
         return DebugSanitizeNocAddrMailbox;
     }
-#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
-    // The read-only region is aliased into the uncached view; a write there hits the same reserved
-    // memory. Only local buffers use the alias (remote targets are physical, bounded above). Raw
-    // address kept for reporting.
-    if (is_local_buffer && write && addr >= MEM_L1_UNCACHED_BASE && addr < MEM_L1_UNCACHED_BASE + read_only_end) {
-        return DebugSanitizeNocAddrMailbox;
-    }
-#endif
 #endif
     return DebugSanitizeOK;
 }
@@ -545,8 +524,7 @@ uint32_t debug_sanitize_noc_addr(
             multicast,
             dir,
             DEBUG_SANITIZE_NOC_TARGET,
-            debug_valid_worker_addr(
-                noc_local_addr, noc_len, dir == DEBUG_SANITIZE_NOC_WRITE, false));  // remote NOC target
+            debug_valid_worker_addr(noc_local_addr, noc_len, dir == DEBUG_SANITIZE_NOC_WRITE));
     }
     return alignment_mask;
 }
@@ -683,8 +661,7 @@ uint32_t debug_sanitize_noc_addr(
             multicast,
             dir,
             DEBUG_SANITIZE_NOC_TARGET,
-            debug_valid_worker_addr(
-                noc_local_addr, noc_len, dir == DEBUG_SANITIZE_NOC_WRITE, false));  // remote NOC target
+            debug_valid_worker_addr(noc_local_addr, noc_len, dir == DEBUG_SANITIZE_NOC_WRITE));
     } else {
         // Bad XY
         debug_sanitize_post_addr_and_hang(
@@ -737,8 +714,7 @@ void debug_sanitize_noc_and_worker_addr(
 #elif defined(COMPILE_FOR_DRISC)
         uint16_t return_code = debug_valid_drisc_addr(worker_addr, len, dir == DEBUG_SANITIZE_NOC_READ);
 #else
-        uint16_t return_code =
-            debug_valid_worker_addr(worker_addr, len, dir == DEBUG_SANITIZE_NOC_READ, true);  // local buffer
+        uint16_t return_code = debug_valid_worker_addr(worker_addr, len, dir == DEBUG_SANITIZE_NOC_READ);
 #endif
         debug_sanitize_post_addr_and_hang(
             noc_id, noc_addr, worker_addr, len, multicast, dir, DEBUG_SANITIZE_NOC_LOCAL, return_code);
