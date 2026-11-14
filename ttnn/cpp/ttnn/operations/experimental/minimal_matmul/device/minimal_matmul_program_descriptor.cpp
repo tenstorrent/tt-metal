@@ -15,6 +15,7 @@
 //
 
 #include "minimal_matmul_device_operation.hpp"
+#include "ternary_gate_buffer.hpp"
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
@@ -534,6 +535,22 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
         ternary_c_data_format = tt::tt_metal::datatype_to_dataformat_converter(fused_ternary_input_b.value().dtype());
         auto ternary_c_tile_size = tt::tile_size(ternary_c_data_format);
         uint32_t ternary_c_num_tiles = N_block_tiles;  // Single row (like bias), broadcast across M
+        // A full-shape ternary_b gets a whole-block DFB when L1 allows (see use_full_block_ternary_gate).
+        const bool gate_is_full_shape =
+            fused_ternary_input_b.value().padded_shape()[-2] / tt::constants::TILE_HEIGHT != 1;
+        uint64_t dfb_bytes_with_full_gate = static_cast<uint64_t>(ternary_c_tile_size) * out_block_num_tiles;
+        for (const auto& dfb : spec.dataflow_buffers) {
+            dfb_bytes_with_full_gate += static_cast<uint64_t>(dfb.entry_size) * dfb.num_entries;
+        }
+        if (use_full_block_ternary_gate(device, gate_is_full_shape, dfb_bytes_with_full_gate)) {
+            ternary_c_num_tiles = out_block_num_tiles;
+        }
+        log_debug(
+            tt::LogOp,
+            "minimal_matmul ternary_b DFB: {} tiles (full-shape gate: {}, L1 with a whole-block gate: {} B)",
+            ternary_c_num_tiles,
+            gate_is_full_shape,
+            dfb_bytes_with_full_gate);
 
         push_dfb(DFB_TERNARY_B, ternary_c_tile_size, ternary_c_num_tiles, ternary_c_data_format);
     }
