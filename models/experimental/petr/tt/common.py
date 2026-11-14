@@ -571,9 +571,9 @@ def generate_petr_inputs():
     inputs = dict()
     inputs["imgs"] = torch.randn(B, num_cams, C, H, W, dtype=torch.float32)
 
-    # metadata for the input
-    scale_x = 800 / 1600
-    scale_y = 320 / 900
+    # metadata for the input: PETR's test pipeline resizes 1600x900 by 0.5 and crops the top 130 rows
+    scale = 800 / 1600
+    crop_top = 130
 
     # intrinsics for the input used from the nuscenes mini dataset
     intrinsics_original = [
@@ -612,11 +612,8 @@ def generate_petr_inputs():
     cam2img = []
     for intrinsic in intrinsics_original:
         K = np.array(intrinsic, dtype=np.float32)
-        # Scale for 800x320 resolution
-        K[0, 0] *= scale_x  # fx
-        K[1, 1] *= scale_y  # fy
-        K[0, 2] *= scale_x  # cx
-        K[1, 2] *= scale_y  # cy
+        K[:2] *= scale
+        K[1, 2] -= crop_top
 
         # Convert to 4x4
         K_4x4 = np.array(
@@ -624,7 +621,7 @@ def generate_petr_inputs():
         )
         cam2img.append(K_4x4)
 
-    # extrinsics for the input used from the nuscenes mini dataset
+    # sensor-to-ego poses from the nuscenes mini dataset (quaternions as stored: w, x, y, z)
     translations = [
         [1.70079118954, 0.0159456324149, 1.51095763913],
         [1.5508477543, -0.493404796419, 1.49574800619],
@@ -633,7 +630,6 @@ def generate_petr_inputs():
         [1.03569100218, 0.484795032713, 1.59097014818],
         [1.0148780988, -0.480568219723, 1.56239545128],
     ]
-    # rotations for the input used from the nuscenes mini dataset
     rotations_quat = [
         [0.4998015430569128, -0.5030316162024876, 0.4997798114386805, -0.49737083824542755],
         [0.2060347966337182, -0.2026940577919598, 0.6824507824531167, -0.6713610884174485],
@@ -643,11 +639,11 @@ def generate_petr_inputs():
         [0.12280980120078765, -0.132400842670559, -0.7004305821388234, 0.690496031265798],
     ]
 
-    # Convert to lidar2cam
-    lidar2cam = []
-    for trans, rot_quat in zip(translations, rotations_quat):
-        x, y, z, w = rot_quat
-        # Normalize
+    lidar_translation = [0.943713, 0.0, 1.84023]
+    lidar_rotation_quat = [0.7077955119163518, -0.006492242056004365, 0.010646214713995808, -0.7063073142877817]
+
+    def pose(trans, rot_quat):
+        w, x, y, z = rot_quat
         norm = np.sqrt(x * x + y * y + z * z + w * w)
         x, y, z, w = x / norm, y / norm, z / norm, w / norm
         rot_matrix = np.array(
@@ -657,13 +653,16 @@ def generate_petr_inputs():
                 [2 * x * z - 2 * y * w, 2 * y * z + 2 * x * w, 1 - 2 * x * x - 2 * y * y],
             ]
         )
+        T = np.eye(4)
+        T[:3, :3] = rot_matrix
+        T[:3, 3] = trans
+        return T
 
-        # Build 4x4 transformation
-        T = np.eye(4, dtype=np.float32)
-        T[:3, :3] = rot_matrix.astype(np.float32)
-        T[:3, 3] = np.array(trans, dtype=np.float32)
-
-        lidar2cam.append(T)
+    # lidar2cam = inverse(cam2ego) @ lidar2ego
+    lidar2ego = pose(lidar_translation, lidar_rotation_quat)
+    lidar2cam = []
+    for trans, rot_quat in zip(translations, rotations_quat):
+        lidar2cam.append((np.linalg.inv(pose(trans, rot_quat)) @ lidar2ego).astype(np.float32))
 
     lidar2cam = np.stack(lidar2cam)
 
@@ -676,7 +675,7 @@ def generate_petr_inputs():
     img_metas_dict["ori_shape"] = (900, 1600)
     img_metas_dict["pad_shape"] = (320, 800)
     img_metas_dict["input_shape"] = (320, 800)
-    img_metas_dict["scale_factor"] = np.array([scale_x, scale_y, scale_x, scale_y], dtype=np.float32)
+    img_metas_dict["scale_factor"] = np.array([scale, scale, scale, scale], dtype=np.float32)
     img_metas_dict["box_type_3d"] = type("LiDARInstance3DBoxes", (), {})
     img_metas_dict["cam2img"] = cam2img
     img_metas_dict["lidar2img"] = lidar2img

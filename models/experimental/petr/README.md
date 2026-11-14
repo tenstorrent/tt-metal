@@ -110,7 +110,7 @@ Then re-run either the demo:
 ```
 python3 models/experimental/petr/demo/demo.py
 ```
-Note: In the current demo, the calibration needs to be corrected. Since we do not use the nuScenes dataset fully at the moment, approximate calibration values were used. As a result, the predicted images shown in the visualization may not be fully accurate.
+Note: The demo uses the nuScenes v1.0-mini calibration of the sample (camera and LIDAR_TOP poses, camera intrinsics) and PETR's test-time preprocessing (resize to 800x450, crop the top 130 rows).
 
 ## Performance
 ### Single Device (BS=1):
