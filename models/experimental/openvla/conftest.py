@@ -42,3 +42,26 @@ def mesh_device_type():
 def is_multi_device(mesh_device_type):
     """Check if running on multi-device setup."""
     return mesh_device_type in ["N300", "T3K", "TG"]
+
+
+@pytest.fixture
+def device_params(request):
+    """Sanitize device_params for single-chip N150/P150 runs where FABRIC_1D is rejected."""
+    params = getattr(request, "param", {}).copy()
+    callspec = getattr(request.node, "callspec", None)
+    mesh_device = callspec.params.get("mesh_device") if callspec else None
+    if mesh_device is None:
+        mesh_env = os.environ.get("MESH_DEVICE")
+        if mesh_env in ("N150", "P150"):
+            mesh_device = (1, 1)
+        elif mesh_env is None:
+            try:
+                import ttnn
+
+                mesh_device = len(ttnn.get_device_ids())
+            except Exception:
+                mesh_device = 1
+    is_single_device = (mesh_device == (1, 1)) if isinstance(mesh_device, tuple) else (mesh_device == 1)
+    if is_single_device and "fabric_config" in params:
+        params["fabric_config"] = None
+    return params
