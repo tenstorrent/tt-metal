@@ -10,6 +10,9 @@
 
 namespace ckernel::sfpu {
 
+// Whether BF16 DEST runs the generated silu kernel as one call over the whole tile.
+inline constexpr bool silu_bf16_whole_tile = false;
+
 template <bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_silu() {
 #pragma GCC unroll 8
