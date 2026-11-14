@@ -83,7 +83,10 @@ void kernel_main() {
     // writer expands each row's rstd norm_lag rows after it (this tail is compiled out)
     constexpr uint32_t root_lag = get_compile_time_arg_val(20);
     constexpr bool deferred_norm = norm && root_lag == 0;
-    constexpr auto f_args = TensorAccessorArgs<21>();
+    // slice sharing across the R row groups (see issue_slices); 1 = every core reads its whole slices
+    constexpr uint32_t slice_share = get_compile_time_arg_val(21);
+    constexpr uint32_t sem_w_share_id = get_compile_time_arg_val(22);
+    constexpr auto f_args = TensorAccessorArgs<23>();
     constexpr auto x_args = TensorAccessorArgs<f_args.next_compile_time_args_offset()>();
     constexpr auto post_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
     constexpr auto comb_args = TensorAccessorArgs<post_args.next_compile_time_args_offset()>();
@@ -98,6 +101,8 @@ void kernel_main() {
     const uint32_t t_count = get_arg_val<uint32_t>(1);
     const uint32_t c_start = get_arg_val<uint32_t>(2);
     const uint32_t c_count = get_arg_val<uint32_t>(3);
+    [[maybe_unused]] const uint32_t group = get_arg_val<uint32_t>(4);
+    [[maybe_unused]] const uint32_t member_q = get_arg_val<uint32_t>(5);
 
     const uint32_t f_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t x_addr = get_common_arg_val<uint32_t>(1);
@@ -166,7 +171,8 @@ void kernel_main() {
     };
     // W slice (R2): the W tile rows of my columns for column pass `p`, in the matmul's K order.
     [[maybe_unused]] const uint32_t w_page = get_tile_size(cb_w_slice);
-    auto read_w_pass = [&](uint32_t p, uint32_t l1) {
+    // Only the pass's slots k in [k_lo, k_hi) (W sharing: my share of the slice; default the whole pass).
+    auto read_w_pass = [&](uint32_t p, uint32_t l1, uint32_t k_lo, uint32_t k_hi) {
         if constexpr (has_w) {
             const auto w_acc = TensorAccessor(w_args, w_addr, w_page);
             const uint32_t cb0 = p * block_cols;
@@ -174,6 +180,9 @@ void kernel_main() {
             for (uint32_t j = 0; j < n; ++j) {
                 for (uint32_t u = 0; u < block_cols; ++u) {
                     const uint32_t k = j * block_cols + u;
+                    if (k < k_lo || k >= k_hi) {
+                        continue;
+                    }
                     if (u < cols) {
                         noc_async_read(w_acc.get_noc_addr(j * c_tiles + c_start + cb0 + u), l1 + k * w_page, w_page);
                     } else {
@@ -183,33 +192,100 @@ void kernel_main() {
             }
         }
     };
-    // Resident W slice: issued up front, pushed behind the first row's barrier (it overlaps that row's reads).
-    [[maybe_unused]] uint32_t w_total = 0;
-    if constexpr (has_w && w_resident) {
-        const uint32_t passes = (c_count + block_cols - 1) / block_cols;
-        w_total = get_local_cb_interface(cb_w_slice).fifo_num_pages;
-        cb_reserve_back(cb_w_slice, w_total);
-        const uint32_t l1 = get_write_ptr(cb_w_slice);
-        for (uint32_t p = 0; p < passes; ++p) {
-            read_w_pass(p, l1 + p * w_pass_tiles * w_page);
-        }
-    }
-    // norm weight slice (resident): one tile per column of mine, per pass block_cols slots (filler zeroed)
-    [[maybe_unused]] uint32_t nw_total = 0;
-    if constexpr (norm) {
-        nw_total = get_local_cb_interface(cb_norm_w).fifo_num_pages;
-        const uint32_t nw_page = get_tile_size(cb_norm_w);
-        const auto nw_acc = TensorAccessor(nw_args, nw_addr, nw_page);
-        cb_reserve_back(cb_norm_w, nw_total);
-        const uint32_t l1 = get_write_ptr(cb_norm_w);
-        for (uint32_t k = 0; k < nw_total; ++k) {
-            if (k < c_count) {
-                noc_async_read(nw_acc.get_noc_addr(c_start + k), l1 + k * nw_page, nw_page);
-            } else {
-                zero_l1(l1 + k * nw_page, nw_page);
+    // Resident slices — the W slice (R2, W-resident) and the norm weight tiles (norm), both one per column of mine
+    // (+ zeroed filler of a ragged pass), identical on the R cores of my column member. Issued behind the first
+    // block's barrier (the first block and the coefficients land first, so the compute mixes pass 0 while they
+    // arrive; it waits for W only at its first matmul K-block, for the norm weight only in norm_block), pushed
+    // behind the next barrier. Slice sharing (slice_share = R > 1): each of the R cores reads 1/R of every slice
+    // from DRAM and NoC-writes it into the same L1 of the other R - 1 (a slice crosses DRAM once, not R times), then
+    // incs their SEM_W_SHARE.
+    struct Slice {
+        uint32_t l1, page, used, lo, hi;  // used: slots of my columns (+ filler); [lo, hi): my share
+    };
+    [[maybe_unused]] Slice w_sl{0, 0, 0, 0, 0}, nw_sl{0, 0, 0, 0, 0};
+    [[maybe_unused]] uint32_t w_total = 0, nw_total = 0;
+    auto my_share = [&](Slice& sl) {
+        const uint32_t share = (sl.used + slice_share - 1) / slice_share;
+        const uint32_t idx = slice_share > 1 ? group : 0;
+        sl.lo = idx * share < sl.used ? idx * share : sl.used;
+        sl.hi = sl.lo + share < sl.used ? sl.lo + share : sl.used;
+    };
+    auto issue_slices = [&]() {
+        if constexpr (has_w && w_resident) {
+            const uint32_t passes = (c_count + block_cols - 1) / block_cols;
+            w_total = get_local_cb_interface(cb_w_slice).fifo_num_pages;
+            cb_reserve_back(cb_w_slice, w_total);
+            w_sl = Slice{get_write_ptr(cb_w_slice), w_page, passes * w_pass_tiles, 0, 0};
+            my_share(w_sl);
+            for (uint32_t p = 0; p < passes; ++p) {
+                const uint32_t s0 = p * w_pass_tiles;
+                const uint32_t lo = w_sl.lo > s0 ? w_sl.lo - s0 : 0;
+                const uint32_t hi = w_sl.hi > s0 ? (w_sl.hi - s0 < w_pass_tiles ? w_sl.hi - s0 : w_pass_tiles) : 0;
+                if (lo < hi) {
+                    read_w_pass(p, w_sl.l1 + s0 * w_page, lo, hi);
+                }
             }
         }
-    }
+        if constexpr (norm) {
+            nw_total = get_local_cb_interface(cb_norm_w).fifo_num_pages;
+            const uint32_t nw_page = get_tile_size(cb_norm_w);
+            const auto nw_acc = TensorAccessor(nw_args, nw_addr, nw_page);
+            cb_reserve_back(cb_norm_w, nw_total);
+            nw_sl = Slice{get_write_ptr(cb_norm_w), nw_page, nw_total, 0, 0};
+            my_share(nw_sl);
+            for (uint32_t k = nw_sl.lo; k < nw_sl.hi; ++k) {
+                if (k < c_count) {
+                    noc_async_read(nw_acc.get_noc_addr(c_start + k), nw_sl.l1 + k * nw_page, nw_page);
+                } else {
+                    zero_l1(nw_sl.l1 + k * nw_page, nw_page);
+                }
+            }
+        }
+    };
+    // Slice sharing: forward my shares (landed behind a read barrier) to the R - 1 peers, then wait for theirs.
+    auto share_slices = [&]() {
+        if constexpr (slice_share > 1) {
+            const uint32_t sem = get_semaphore(sem_w_share_id);
+            auto peer = [&](uint32_t g, uint32_t addr) {  // RT args 6..: the R cores of my column member, by group
+                const uint32_t xy = get_arg_val<uint32_t>(6 + g);
+                return get_noc_addr(xy & 0xFFFF, xy >> 16, addr);
+            };
+            auto forward = [&](const Slice& sl) {
+                if (sl.lo < sl.hi) {
+                    const uint32_t a = sl.l1 + sl.lo * sl.page;
+                    for (uint32_t g = 0; g < slice_share; ++g) {
+                        if (g != group) {
+                            noc_async_write(a, peer(g, a), (sl.hi - sl.lo) * sl.page);
+                        }
+                    }
+                }
+            };
+            forward(w_sl);
+            forward(nw_sl);
+            noc_async_write_barrier();
+            for (uint32_t g = 0; g < slice_share; ++g) {  // every peer counts every core (empty shares too)
+                if (g != group) {
+                    noc_semaphore_inc(peer(g, sem), 1);
+                }
+            }
+            volatile tt_l1_ptr uint32_t* cnt = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem);
+            noc_semaphore_wait_min(cnt, slice_share - 1);
+            noc_semaphore_set(cnt, 0);
+            noc_async_atomic_barrier();
+        }
+    };
+    // behind a read barrier that covered issue_slices: share them, push W and the norm weight
+    [[maybe_unused]] bool slices_pending = false;
+    auto push_slices = [&]() {
+        share_slices();
+        if constexpr (has_w && w_resident) {
+            cb_push_back(cb_w_slice, w_total);
+        }
+        if constexpr (norm) {
+            cb_push_back(cb_norm_w, nw_total);
+        }
+        slices_pending = false;
+    };
     if (t_count > 0) {
         issue_coef(t_start, 0);
     }
@@ -232,7 +308,7 @@ void kernel_main() {
                 const uint32_t cols_in_pass = (c_count - cb0) < block_cols ? (c_count - cb0) : block_cols;
                 if constexpr (has_w && !w_resident) {  // R2-W-streamed: this pass's W rows again
                     cb_reserve_back(cb_w_slice, w_pass_tiles);
-                    read_w_pass(cb0 / block_cols, get_write_ptr(cb_w_slice));
+                    read_w_pass(cb0 / block_cols, get_write_ptr(cb_w_slice), 0, w_pass_tiles);
                 }
                 cb_reserve_back(cb_sublayer_tiles, block_cols);
                 cb_reserve_back(cb_stream_tiles, block_cols * n);
@@ -240,10 +316,14 @@ void kernel_main() {
                 uint32_t x_l1 = get_write_ptr(cb_stream_tiles);
                 for (uint32_t u = 0; u < cols_in_pass; ++u) {
                     const uint32_t c = c_start + cb0 + u;
+#ifndef ABL_NOREAD
                     noc_async_read(f_acc.get_noc_addr(f_row + c), f_l1, f_page);
+#endif
                     f_l1 += f_page;
                     for (uint32_t i = 0; i < n; ++i) {
+#ifndef ABL_NOREAD
                         noc_async_read(x_acc.get_noc_addr(x_row + i * c_tiles + c), x_l1, x_page);
+#endif
                         x_l1 += x_page;
                     }
                 }
@@ -255,17 +335,14 @@ void kernel_main() {
                     }
                 }
                 noc_async_read_barrier();
+                if (slices_pending) {
+                    push_slices();
+                }
+                if (row_idx == 0 && cb0 == 0) {
+                    issue_slices();
+                    slices_pending = (has_w && w_resident) || norm || slice_share > 1;
+                }
                 if (cb0 == 0) {
-                    if constexpr (has_w && w_resident) {
-                        if (row_idx == 0) {
-                            cb_push_back(cb_w_slice, w_total);
-                        }
-                    }
-                    if constexpr (norm) {
-                        if (row_idx == 0) {
-                            cb_push_back(cb_norm_w, nw_total);
-                        }
-                    }
                     if (row_idx + 1 < t_count) {
                         issue_coef(t + 1, buf ^ 1);
                     }
@@ -278,6 +355,11 @@ void kernel_main() {
                 cb_push_back(cb_stream_tiles, block_cols * n);
             }
         }
+    }
+
+    if (slices_pending) {  // my only block was the first: W / the norm weight still in flight
+        noc_async_read_barrier();
+        push_slices();
     }
 
     // ---- norm (deferred): every row's rstd from its root -> column 0 of a cb_rstd_col page, in row order ----

@@ -314,6 +314,9 @@ struct MixPassFn {
             cb_wait_front(cb_y_hold, base + block_cols);
             ysq_pass_impl(hold_front, base, std::make_index_sequence<block_cols>{});
         }
+        if constexpr (w_resident) {  // resident W lands behind the first block: wait only before the first K-block
+            cb_wait_front(cb_w_slice, w_pages);
+        }
     }
 };
 struct PassIn1Offset {
@@ -561,9 +564,7 @@ void kernel_main() {
         hcp.y_norm_eps = f(8 + n * (n + 2));
     }
 
-    if constexpr (has_w && w_resident) {
-        cb_wait_front(cb_w_slice, w_pages);  // resident for the whole kernel (never popped)
-    }
+    // has_w && w_resident: W is resident for the whole kernel (never popped), waited in MixPassFn
     // my chunk (combine tree level 1) and its size
     [[maybe_unused]] const uint32_t my_chunk = member_q / fanin;
     [[maybe_unused]] const uint32_t chunk_size =

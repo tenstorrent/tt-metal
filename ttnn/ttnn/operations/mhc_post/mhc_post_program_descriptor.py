@@ -46,6 +46,10 @@ COEF_RAW_BUFS = 2  # reader landing buffers of raw coefficient tiles (row t+1 pr
 BLOCK_L1_BUDGET = 384 * 1024  # bytes available to block-scaled CBs (ledger symbol)
 W_RESIDENT_BUDGET = 256 * 1024  # bytes of resident W slice (R2 vs R2-W-streamed predicate)
 W_STREAM_BLOCKS = 2  # W-streamed: column passes of W in flight
+# R > 1 row groups: the R cores of one column member read 1/R of their (common) resident W slice and norm weight
+# tiles each and forward it to each other over the NoC, so these cross DRAM once instead of R times (Refinement 4).
+# Knob: False = every core reads its whole slices.
+SLICE_SHARE = True
 MAX_FEED_LINKS = 2  # feed: port cores reserved per direction (2 directions), whatever feed_num_links is
 FEED_CHUNKS_IN_FLIGHT = 4  # feed: packets in flight per port (fabric_all_gather's 4-chunk batch, 112 KiB ring)
 FEED_READ_BATCH = 4  # feed: chunks the port reader keeps in flight per read barrier (ring = in-flight packets + this)
@@ -115,6 +119,7 @@ SEM_ROOT_COUNT = 1  # chunk sums landed in my root slots
 SEM_READY_BITS = 2  # bit (t mod 32): leader(t) has freed its slots for row t
 SEM_RSTD_COUNT = 3  # norm: rstd rows landed in my cb_rstd_land slots
 SEM_FEED_ROWS = 4  # feed (workers): armed by every port (its count slots are zeroed) before my first count
+SEM_W_SHARE = 5  # R2 W sharing: peers (same column member, other row groups) that forwarded their W share to me
 
 NUM_CBS = 64
 
@@ -247,6 +252,11 @@ def _f32_bits(v):
     return struct.unpack("<I", struct.pack("<f", float(v)))[0]
 
 
+import os as _abl_os
+
+_ABL = [(d, "1") for d in _abl_os.environ.get("MHC_ABL", "").split(",") if d]
+
+
 def create_program_descriptor(
     f_tensor,
     x_tensor,
@@ -303,6 +313,11 @@ def create_program_descriptor(
     # the score sees (T, C, dtypes, has_W, |L|) only; with W the unit always counts the y tile (op_design.md)
     unit_bytes = f_page + 2 * n * x_page + (bf16_page if has_w else 0)
     R, Q = choose_split(t_tiles, c_tiles, len(workers), unit_bytes, int(has_w), n, C)
+    import os as _os
+
+    if _os.environ.get("MHC_FORCE_R"):
+        R = int(_os.environ["MHC_FORCE_R"])
+        Q = min(len(workers) // R, c_tiles)
     row_ranges = _split(t_tiles, R)
     col_ranges = _split(c_tiles, Q)
     used = workers[: R * Q]
@@ -311,6 +326,9 @@ def create_program_descriptor(
 
     # R2-W-streamed predicate (regime selection, exact): depends on the split only, never on the mode
     w_resident = int(n * max_core_c_tiles * f32_page <= W_RESIDENT_BUDGET)
+    # slice sharing: the R cores of a column member hold the same resident W slice / norm weight tiles; each reads
+    # 1/R of them from DRAM and forwards it to the others
+    w_share = R if (has_w and R > 1 and SLICE_SHARE) else 1
     # block-scaled bytes per column tile: IN_BLOCKS units of F + n X in, OUT_BLOCKS units of n X' out;
     # R2 adds the bf16 X' of the pass, the y blocks (always counted with W: block_cols must not depend on
     # the mode, it orders the stats sums) and, W-streamed, the W passes in flight.
@@ -395,7 +413,12 @@ def create_program_descriptor(
         for q in range(Q):
             c0, cn = col_ranges[q]
             core = used[g * Q + q]
-            reader_rt[core.x][core.y] = [t0, tn, c0, cn]
+            # W sharing: + the R cores of my column member (by group), packed x | y << 16
+            peers = []
+            if w_share > 1:
+                peers = [device.worker_core_from_logical_core(used[g2 * Q + q]) for g2 in range(R)]
+                peers = [v.x | (v.y << 16) for v in peers]
+            reader_rt[core.x][core.y] = [t0, tn, c0, cn, g, q] + peers
             writer_rt[core.x][core.y] = [t0, tn, c0, cn, g, q]
             compute_rt[core.x][core.y] = [t0, tn, cn, q]
 
@@ -429,6 +452,8 @@ def create_program_descriptor(
         CB_RSTD_LAND,
         SEM_RSTD_COUNT,
         root_lag,
+        w_share,
+        SEM_W_SHARE,
     ]
     pre_for_args = pre_tensor if collapse else post_tensor
     w_for_args = w_tensor if has_w else post_tensor
@@ -442,6 +467,7 @@ def create_program_descriptor(
     reader_ct.extend(ttnn.TensorAccessorArgs(nw_for_args).get_compile_time_args())
     reader = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "mhc_post_reader.cpp"),
+        defines=_ABL,
         core_ranges=core_ranges,
         compile_time_args=reader_ct,
         runtime_args=reader_rt,
@@ -518,6 +544,7 @@ def create_program_descriptor(
         feed_common += [0] * (2 * MAX_FEED_LINKS - len(port_xy))
     writer = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "mhc_post_writer.cpp"),
+        defines=_ABL,
         core_ranges=core_ranges,
         compile_time_args=writer_ct,
         runtime_args=writer_rt,
@@ -607,6 +634,7 @@ def create_program_descriptor(
         ]
     compute = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "mhc_post_compute.cpp"),
+        defines=_ABL,
         core_ranges=core_ranges,
         compile_time_args=compute_ct,
         runtime_args=compute_rt,
@@ -618,7 +646,7 @@ def create_program_descriptor(
     if has_w:
         semaphores = [
             ttnn.SemaphoreDescriptor(id=s, core_ranges=core_ranges, initial_value=0)
-            for s in (SEM_LEADER_COUNT, SEM_ROOT_COUNT, SEM_READY_BITS, SEM_RSTD_COUNT)
+            for s in (SEM_LEADER_COUNT, SEM_ROOT_COUNT, SEM_READY_BITS, SEM_RSTD_COUNT, SEM_W_SHARE)
         ]
     if feed is not None:
         semaphores.append(ttnn.SemaphoreDescriptor(id=SEM_FEED_ROWS, core_ranges=core_ranges, initial_value=0))
