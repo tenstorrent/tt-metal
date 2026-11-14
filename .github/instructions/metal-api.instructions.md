@@ -51,6 +51,15 @@ Promoting experimental functionality to the stable API requires consultation wit
 - **Audience**: `internal/` is for Tenstorrent teams only. Flag PRs that treat `internal/` headers or symbols as a public or downstream-facing contract.
 - **No promotion path**: unlike `experimental/`, `internal/` has no commitment to stabilization. Do not graduate `internal/` APIs into the stable surface.
 
+### Command Queue Addressing (no `cq_id`)
+
+Raw command queue ids are being removed from the host API. Command queues are addressed through `distributed::MeshCommandQueue`, never through a `cq_id`.
+
+- Flag any new or changed public API (stable, `experimental/`, or `internal/`) that takes, returns, or stores a raw `cq_id` (`uint8_t`, `QueueId`, `std::optional<uint8_t>`), including a new overload that adds a `cq_id` parameter.
+- Flag new code that reads or sets the thread-local command queue id.
+- New APIs that need a command queue must take a `distributed::MeshCommandQueue&`.
+- Existing `cq_id` APIs are legacy: do not add new callers, and do not extend them.
+
 ## Review Checklist
 
 - [ ] New experimental work lives in `tt::tt_metal::experimental` with headers under `experimental/`
@@ -66,3 +75,4 @@ Promoting experimental functionality to the stable API requires consultation wit
 - [ ] Graduation from experimental to stable has Runtime team consultation and formal design review
 - [ ] New internal APIs go in `api/internal/`, not `api/tt-metalium/internal/`
 - [ ] `api/internal/` contains only non-productizable, Tenstorrent-internal functionality (productizable work goes in `experimental/`)
+- [ ] No new API takes, returns, or stores a raw `cq_id`; command queues are addressed via `MeshCommandQueue`
