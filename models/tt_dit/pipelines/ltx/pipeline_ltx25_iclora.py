@@ -130,6 +130,7 @@ def _native_factory():
         distilled.KEYFRAME_S1_STRENGTH == 0.5 and distilled.KEYFRAME_S1_STRENGTH_COARSE == 0.25,
         "imported keyframe strengths differ",
     )
+
     class ReferencePipeline(LTX25DistilledPipeline):
         def __init__(self, *args, ref_num_frames, **kwargs):
             # The base constructor forces warmup when traced, including its cold

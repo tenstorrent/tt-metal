@@ -343,6 +343,7 @@ def test_native_factory_and_imported_schedule_drift(contract, monkeypatch):
         KEYFRAME_S1_STRENGTH=0.5,
         KEYFRAME_S1_STRENGTH_COARSE=0.25,
     )
+
     class NativeFactory:
         @classmethod
         def create_pipeline(cls):
@@ -440,12 +441,16 @@ def constructor_native(contract, monkeypatch):
         # Retain the exact production methods, including decorators and super() dispatch.
         node.bases = [ast.Name(id=base, ctx=ast.Load())] if base else []
         node.body = [
-            n for n in node.body
+            n
+            for n in node.body
             if isinstance(n, ast.AnnAssign)
             or (isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id.isupper() for t in n.targets))
-            or (isinstance(n, ast.FunctionDef) and n.name in {"__init__", "create_pipeline"})
+            or (isinstance(n, ast.FunctionDef) and n.name in {"__init__", "create_pipeline", "release_traces"})
         ]
-        module = ast.Module(body=[ast.ImportFrom(module="__future__", names=[ast.alias(name="annotations")], level=0), node], type_ignores=[])
+        module = ast.Module(
+            body=[ast.ImportFrom(module="__future__", names=[ast.alias(name="annotations")], level=0), node],
+            type_ignores=[],
+        )
         exec(compile(ast.fix_missing_locations(module), str(SOURCE.with_name(filename)), "exec"), namespace)
         return namespace[name]
 
@@ -456,9 +461,21 @@ def constructor_native(contract, monkeypatch):
     base._make_gemma_encoder_pair = lambda self, path: SimpleNamespace(
         gemma_path=path, defer_trace_capture=lambda: events.append(("defer_encode",))
     )
-    for name in ("_load_config_from_checkpoint", "_instantiate_modules", "_register_coresident_exclusions", "_maybe_apply_quant_config", "_prime_caches"):
+    for name in (
+        "_load_config_from_checkpoint",
+        "_instantiate_modules",
+        "_register_coresident_exclusions",
+        "_maybe_apply_quant_config",
+        "_prime_caches",
+    ):
         setattr(base, name, lambda *a, **kw: None)
-    base.release_traces = lambda self: events.append(("release",))
+    release_traces = base.release_traces
+
+    def release(self):
+        events.append(("release",))
+        release_traces(self)
+
+    base.release_traces = release
 
     def warmup(self, **kwargs):
         stages = kwargs.get("stages", ("s1", "s2"))
@@ -468,7 +485,7 @@ def constructor_native(contract, monkeypatch):
         for stage in stages:
             if self._traced and stage not in self._trace_state:
                 events.append(("allocate", stage))
-                self._trace_state[stage] = object()
+                self._trace_state[stage] = SimpleNamespace(_euler_tail=None)
         if self._traced and not state.capture_only:
             events.append(("capture", stages))
 
@@ -481,7 +498,9 @@ def constructor_native(contract, monkeypatch):
     )
     monkeypatch.setattr(contract.module, "__package__", "constructor_ltx")
     monkeypatch.setitem(sys.modules, "constructor_ltx", SimpleNamespace(pipeline_ltx_distilled=distilled))
-    monkeypatch.setitem(sys.modules, "constructor_ltx.pipeline_ltx25_distilled", SimpleNamespace(LTX25DistilledPipeline=native))
+    monkeypatch.setitem(
+        sys.modules, "constructor_ltx.pipeline_ltx25_distilled", SimpleNamespace(LTX25DistilledPipeline=native)
+    )
     mesh = SimpleNamespace(shape=(4, 8), clear_program_cache=lambda: events.append(("clear_cache",)))
     factory = contract.raw_native_factory
     monkeypatch.setattr(contract.module, "_native_factory", lambda: lambda ignored, **kw: factory()(mesh, **kw))
@@ -515,8 +534,9 @@ def test_constructor_reference_allocation_before_capture(contract, constructor_n
     if traced:
         assert captures
         assert [e for e in events[:captures[0]] if e[0] == "allocate"] == [
-            ("allocate", "s1_ref"), ("allocate", "s2_ref")
-        ]
+            ("allocate", "s1_ref"),
+            ("allocate", "s2_ref"),
+        ] * (2 if cold and not dynamic_load else 1)
         assert not any(e[0] == "allocate" for e in events[captures[0]:])
         assert implicit[-1][1]["capture_all"] is cold
     else:
