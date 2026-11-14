@@ -19,6 +19,9 @@ from models.demos.blackhole.deepseek_v41_flash.tt.mhc_collapse import _acc, _cb,
 
 KDIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ihc_kernels")
 NC, GX, GY = 32, 4, 8
+R0 = int(
+    os.environ.get("HY4_IHC_ROW0", "0")
+)  # first logical row of the 4x8 rectangle (the CCL workers of the line reduce_scatter live in row 0, columns 1,2,4,5,...)
 f32, bf16 = ttnn.float32, ttnn.bfloat16
 
 
@@ -117,7 +120,18 @@ class Hy4IHCFused:
             for r in range(32):
                 t[9 + G, r, r] = 1.0  # IDENT
             host = t.reshape(1, 1, n * 32, 32).repeat(1, 1, NC, 1).reshape(NC * n * 32, 32)
-            grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(GX - 1, GY - 1))])
+            if int(os.environ.get("HY4_IHC_CSTD", "1")):
+                c = ttnn.from_torch(
+                    host,
+                    device=mesh,
+                    dtype=f32,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+                )
+                _CST[key] = c
+                return c
+            grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, R0), ttnn.CoreCoord(GX - 1, R0 + GY - 1))])
             mc = ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
                 ttnn.BufferType.L1,
@@ -159,10 +173,10 @@ class Hy4IHCFused:
         pp = ttnn.allocate_tensor_on_device(
             ttnn.Shape([1, 1, 32, 32]), f32, ttnn.TILE_LAYOUT, mesh, ttnn.DRAM_MEMORY_CONFIG
         )
-        cores = [(cx, cy) for cy in range(GY) for cx in range(GX)]  # core k = cy * GX + cx
-        core_set = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(GX - 1, GY - 1))])
-        p0 = mesh.worker_core_from_logical_core(ttnn.CoreCoord(0, 0))
-        p1 = mesh.worker_core_from_logical_core(ttnn.CoreCoord(GX - 1, GY - 1))
+        cores = [(cx, R0 + cy) for cy in range(GY) for cx in range(GX)]  # core k = cy * GX + cx
+        core_set = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, R0), ttnn.CoreCoord(GX - 1, R0 + GY - 1))])
+        p0 = mesh.worker_core_from_logical_core(ttnn.CoreCoord(0, R0))
+        p1 = mesh.worker_core_from_logical_core(ttnn.CoreCoord(GX - 1, R0 + GY - 1))
         assert p1.x - p0.x == GX - 1 and p1.y - p0.y == GY - 1
         rt = ttnn.RuntimeArgs()
         for k, (cx, cy) in enumerate(cores):
@@ -258,13 +272,17 @@ class Hy4IHCFused:
         )
         DBG = int(os.environ.get("HY4_IHC_DBG", "0"))
         DUAL = int(os.environ.get("HY4_IHC_DUAL", "1"))
+        CSTD = int(os.environ.get("HY4_IHC_CSTD", "1"))
         dbg = _DBG.get(id(mesh))
         if dbg is None:
             dbg = _DBG[id(mesh)] = ttnn.allocate_tensor_on_device(
                 ttnn.Shape([NC, 1, 32, 32]), f32, ttnn.TILE_LAYOUT, mesh, ttnn.DRAM_MEMORY_CONFIG
             )
         self.dbg = dbg
-        cbs.append(ttnn.cb_descriptor_from_sharded_tensor(CST, cst_t))
+        if CSTD:
+            cbs.append(_cb(core_set, CST, NCST, 4096, f32))
+        else:
+            cbs.append(ttnn.cb_descriptor_from_sharded_tensor(CST, cst_t))
         eps_n, eps_2, inv_n = _bits(self.norm_eps), _bits(D * self.norm_eps), _bits(1.0 / (4 * D))
         reader = _kernel(
             "ihc_pre_reader.cpp",
@@ -279,7 +297,8 @@ class Hy4IHCFused:
             + [int(os.environ.get("HY4_IHC_ABL", "0")), DBG, EXPAND, XR, YC, MC]
             + _acc(y_t)
             + _acc(q_t)
-            + [DUAL, 1088 if self.wdt == ttnn.bfloat8_b else 2048],
+            + [DUAL, 1088 if self.wdt == ttnn.bfloat8_b else 2048, CSTD]
+            + _acc(cst_t),
             rt,
             ttnn.ReaderConfigDescriptor(),
             common=[
@@ -291,6 +310,7 @@ class Hy4IHCFused:
                 dbg.buffer_address(),
                 y_t.buffer_address(),
                 q_t.buffer_address(),
+                cst_t.buffer_address(),
             ],
         )
         writer = _kernel(
@@ -377,6 +397,7 @@ class Hy4IHCFused:
             int(os.environ.get("HY4_IHC_ABL", "0")),
             EXPAND,
             DUAL,
+            CSTD,
             tuple(_acc(y_t)),
             tuple(_acc(q_t)),
             tuple(_acc(x_new)),
