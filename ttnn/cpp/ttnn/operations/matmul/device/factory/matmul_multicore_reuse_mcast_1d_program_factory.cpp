@@ -2183,9 +2183,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     uint32_t per_core_N_size_bytes = per_core_N * in1_single_tile_size;
     uint32_t max_packet_size = 8192;
     uint32_t in1_block_page_size = per_core_N_size_bytes > max_packet_size ? max_packet_size : per_core_N_size_bytes;
-    uint32_t in1_block_page_size_last =
-        per_core_N_size_bytes > max_packet_size ? per_core_N_size_bytes % max_packet_size : per_core_N_size_bytes;
     uint32_t in1_block_width_num_pages = (per_core_N_size_bytes + in1_block_page_size - 1) / in1_block_page_size;
+    uint32_t in1_block_page_size_last = per_core_N_size_bytes - (in1_block_width_num_pages - 1) * in1_block_page_size;
     uint32_t in1_shard_width_in_dram = 0;
     if (in1_is_dram_sharded) {
         in1_shard_width_in_dram = in1_tensor.shard_spec()->shape[1] / in1_tile.get_width();
@@ -2606,7 +2605,9 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
             in1_tensor.shard_spec()->grid.num_cores());
         num_receiver_cores_per_dram = ring_size / in1_tensor.shard_spec()->grid.num_cores();
         if (device.arch() == tt::ARCH::WORMHOLE_B0) {
+            // Row 3 takes row 9's banks on grids without a row 9 (test_ring_matmul.py).
             worker_y_to_dram_bank_first_col[0] = 1;
+            worker_y_to_dram_bank_first_col[3] = 0;
             worker_y_to_dram_bank_first_col[4] = 2;
             worker_y_to_dram_bank_first_col[5] = 3;
             worker_y_to_dram_bank_first_col[9] = 0;
@@ -2614,6 +2615,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
             worker_y_to_dram_bank_second_col[0] = 4;
             worker_y_to_dram_bank_second_col[1] = 6;
             worker_y_to_dram_bank_second_col[2] = 9;
+            worker_y_to_dram_bank_second_col[3] = 5;
             worker_y_to_dram_bank_second_col[4] = 10;
             worker_y_to_dram_bank_second_col[5] = 11;
             worker_y_to_dram_bank_second_col[6] = 8;
@@ -2718,31 +2720,19 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
             // Look up bank_id based on core.y and which column group core.x belongs to
             if (core.x <= first_col_max_x) {
                 auto it = worker_y_to_dram_bank_first_col.find(core.y);
-                if (it == worker_y_to_dram_bank_first_col.end()) {
-                    log_info(
-                        tt::LogOp,
-                        "ERROR: Worker core ({}, {}) y={} NOT FOUND in first-col map! Available y values:",
-                        core.x,
-                        core.y,
-                        core.y);
-                    for (const auto& [y, bank] : worker_y_to_dram_bank_first_col) {
-                        log_info(tt::LogOp, "  y={}", y);
-                    }
-                }
+                TT_FATAL(
+                    it != worker_y_to_dram_bank_first_col.end(),
+                    "Ring matmul worker core ({}, {}) has no DRAM bank in the first-column map",
+                    core.x,
+                    core.y);
                 bank_id = it->second;
             } else {
                 auto it = worker_y_to_dram_bank_second_col.find(core.y);
-                if (it == worker_y_to_dram_bank_second_col.end()) {
-                    log_info(
-                        tt::LogOp,
-                        "ERROR: Worker core ({}, {}) y={} NOT FOUND in second-col map! Available y values:",
-                        core.x,
-                        core.y,
-                        core.y);
-                    for (const auto& [y, bank] : worker_y_to_dram_bank_second_col) {
-                        log_info(tt::LogOp, "  y={}", y);
-                    }
-                }
+                TT_FATAL(
+                    it != worker_y_to_dram_bank_second_col.end(),
+                    "Ring matmul worker core ({}, {}) has no DRAM bank in the second-column map",
+                    core.x,
+                    core.y);
                 bank_id = it->second;
             }
 
