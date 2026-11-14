@@ -459,7 +459,7 @@ inline void pack_init_apply(
  * @param partial_face: True if packing a partial (sub-face-row) face.
  */
 // skip: LLK_PACK_RECONFIG_SKIP_* writes the caller knows are redundant (kernel-wide uniform formats).
-template <bool is_fp32_dest_acc_en, std::uint32_t skip = 0, bool inl = false>
+template <bool is_fp32_dest_acc_en, std::uint32_t skip = 0, bool inl = false, bool size = false>
 inline void _llk_pack_reconfig_data_format_(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
@@ -474,7 +474,7 @@ inline void _llk_pack_reconfig_data_format_(
         return;
     }
 
-    reconfig_packer_data_format_and_state<is_fp32_dest_acc_en, skip, inl>(pack_src_format, pack_dst_format, tile_size, tile_c_dim, num_faces, partial_face);
+    reconfig_packer_data_format_and_state<is_fp32_dest_acc_en, skip, inl, size>(pack_src_format, pack_dst_format, tile_size, tile_c_dim, num_faces, partial_face);
 }
 
 /**
@@ -499,7 +499,7 @@ inline void _llk_pack_reconfig_data_format_(
  * @note For 8-bit unpack-source datums, do not use PackMode::Tilize: the Blackhole row-unswizzling workaround is skipped (and is unnecessary, as 8-bit formats
  * are unaffected by the issue).
  */
-template <bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
+template <bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default, bool size = false>
 inline void _llk_pack_hw_configure_(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
@@ -513,7 +513,7 @@ inline void _llk_pack_hw_configure_(
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
 
     LLK_ASSERT_BLOCK(llk_assert_fp32_dest_acc_en = is_fp32_dest_acc_en);
-    configure_pack<is_fp32_dest_acc_en, pack_mode>(pack_src_format, pack_dst_format, tile_size, face_r_dim, tile_c_dim, num_faces, partial_face, relu_config);
+    configure_pack<is_fp32_dest_acc_en, pack_mode, size>(pack_src_format, pack_dst_format, tile_size, face_r_dim, tile_c_dim, num_faces, partial_face, relu_config);
 }
 
 /**

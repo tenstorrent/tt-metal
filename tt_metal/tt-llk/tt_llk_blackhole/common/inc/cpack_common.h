@@ -637,6 +637,11 @@ template <DstSync>
 inline constexpr bool pack_reconfig_u2d = true;
 #endif
 
+// A kernel bound by the kernel config buffer (LLK_SIZE_MODE): the metal API sets it, for the calls a kernel may wrap and so
+// cannot take a template argument.
+template <DstSync>
+inline constexpr bool pack_size_mode = false;
+
 // Half sync, fp32 DEST and an unpack to DEST: a reconfigure whose writes the skip mask drops lets the pack start into the
 // unpack to DEST of the other half, so the reconfigure helpers gate it (gate = true) unless the caller waits for the unpacker.
 template <bool is_fp32_dest_acc_en, DstSync sync>
@@ -959,7 +964,8 @@ inline void set_packer_config(
 __attribute__((noinline)) bool is_pack_reads_per_xy_plane(const std::uint32_t expected, const std::uint32_t nop_count = 10);
 
 // impl: the body, inlined both into the out-of-line form below and into a caller that needs no out-of-line copy.
-template <bool is_fp32_dest_acc_en, std::uint32_t skip = 0>
+// size: LLK_SIZE_MODE, main's dest_rd_ctrl branches and the strides through hw_configure's out-of-line copy.
+template <bool is_fp32_dest_acc_en, std::uint32_t skip = 0, bool size = false>
 __attribute__((always_inline)) inline void reconfig_packer_data_format_impl(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
@@ -999,7 +1005,7 @@ __attribute__((always_inline)) inline void reconfig_packer_data_format_impl(
     // Read_int8 is what makes an Int8/UInt8 pack read 16-bit Dest datums as 8-bit integers, so a
     // reconfig onto or away from Int8/UInt8 must write it like the full configure does: the RMW
     // covers every dest_rd_ctrl field.
-    if constexpr (skip == 0)
+    if constexpr (skip == 0 || size)
     {
         // Mask 0 (the u2d gate among them) keeps main's branches: the branch-free word costs its serial path a cycle.
         dest_rd_ctrl_u dest_rd_ctrl;
@@ -1057,7 +1063,11 @@ __attribute__((always_inline)) inline void reconfig_packer_data_format_impl(
     }
 
     // Set packer strides
-    if constexpr (!(skip & LLK_PACK_RECONFIG_SKIP_STRIDES))
+    if constexpr (!(skip & LLK_PACK_RECONFIG_SKIP_STRIDES) && size)
+    {
+        set_packer_strides<PackMode::Default, false, true, false, is_fp32_dest_acc_en>(pack_output_src_format, tile_c_dim);
+    }
+    else if constexpr (!(skip & LLK_PACK_RECONFIG_SKIP_STRIDES))
     {
         set_packer_strides<PackMode::Default, true, false, false, is_fp32_dest_acc_en>(pack_output_src_format, tile_c_dim);
     }
@@ -1068,7 +1078,7 @@ __attribute__((always_inline)) inline void reconfig_packer_data_format_impl(
     TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
 }
 
-template <bool is_fp32_dest_acc_en, std::uint32_t skip = 0>
+template <bool is_fp32_dest_acc_en, std::uint32_t skip = 0, bool size = false>
 __attribute__((noinline)) inline void reconfig_packer_data_format(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
@@ -1077,11 +1087,11 @@ __attribute__((noinline)) inline void reconfig_packer_data_format(
     const std::uint32_t num_faces,
     const bool partial_face)
 {
-    reconfig_packer_data_format_impl<is_fp32_dest_acc_en, skip>(pack_src_format, pack_dst_format, tile_size, tile_c_dim, num_faces, partial_face);
+    reconfig_packer_data_format_impl<is_fp32_dest_acc_en, skip, size>(pack_src_format, pack_dst_format, tile_size, tile_c_dim, num_faces, partial_face);
 }
 
 // The packer reconfigure with its pack state store, which set_packer_strides makes in every other call.
-template <bool is_fp32_dest_acc_en, std::uint32_t skip = 0, bool inl = false>
+template <bool is_fp32_dest_acc_en, std::uint32_t skip = 0, bool inl = false, bool size = false>
 inline void reconfig_packer_data_format_and_state(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
@@ -1092,11 +1102,11 @@ inline void reconfig_packer_data_format_and_state(
 {
     if constexpr (inl)
     {
-        reconfig_packer_data_format_impl<is_fp32_dest_acc_en, skip>(pack_src_format, pack_dst_format, tile_size, tile_c_dim, num_faces, partial_face);
+        reconfig_packer_data_format_impl<is_fp32_dest_acc_en, skip, size>(pack_src_format, pack_dst_format, tile_size, tile_c_dim, num_faces, partial_face);
     }
     else
     {
-        reconfig_packer_data_format<is_fp32_dest_acc_en, skip>(pack_src_format, pack_dst_format, tile_size, tile_c_dim, num_faces, partial_face);
+        reconfig_packer_data_format<is_fp32_dest_acc_en, skip, size>(pack_src_format, pack_dst_format, tile_size, tile_c_dim, num_faces, partial_face);
     }
     if constexpr (!(skip & LLK_PACK_RECONFIG_SKIP_STRIDES))
     {
@@ -1330,7 +1340,8 @@ TT_ALWAYS_INLINE void reconfig_packer_data_format_imm_and_state()
     llk_pack_state_store<strides_full && is_fp32_dest_acc_en && pack_strides_u2d<llk_pack_default_mode<format_mask>>>(0x100);
 }
 
-template <bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
+// size: LLK_SIZE_MODE, main's strides (channel 1 untouched), the one copy every pack program's strides then share.
+template <bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default, bool size = false>
 inline void configure_pack(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
@@ -1358,7 +1369,7 @@ inline void configure_pack(
 
     const std::uint32_t pack_output_src_format = masked_data_format(pack_src_format);
 
-    set_packer_strides<pack_mode, false, true, true>(pack_src_format, tile_c_dim);
+    set_packer_strides<pack_mode, false, true, !size>(pack_src_format, tile_c_dim);
 
     // NOTE: the packer X (datum) counter (SETADCXX PAC) is intentionally NOT programmed here. It is
     // owned by _llk_pack_init_, which runs after hw-configure and sets its own value per the

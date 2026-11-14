@@ -107,7 +107,7 @@ inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32
         StateDiscard<std::uint32_t>(tile_index),
         StateDiscard<std::uint32_t>(output_tile_index)));
 
-    llk_pack_tile_of_output<is_fp32_dest_acc_en, pack_mode>(tile_index, pack_tile_addr, output_id);
+    llk_pack_tile_of_output<is_fp32_dest_acc_en, pack_mode, true, LLK_SIZE_MODE>(tile_index, pack_tile_addr, output_id);
 }
 
 template <bool is_fp32_dest_acc_en, bool out_of_order_output = false, PackMode pack_mode = PackMode::Default>
@@ -137,7 +137,7 @@ inline void llk_matmul_pack(
         std::uint32_t pack_tile_addr =
             get_output_tile_address<out_of_order_output, pack_mode>(output_id, output_tile_index);
 
-        llk_pack_tile_of_output<is_fp32_dest_acc_en, pack_mode>(tile_index, pack_tile_addr, output_id);
+        llk_pack_tile_of_output<is_fp32_dest_acc_en, pack_mode, true, LLK_SIZE_MODE>(tile_index, pack_tile_addr, output_id);
     }
 }
 

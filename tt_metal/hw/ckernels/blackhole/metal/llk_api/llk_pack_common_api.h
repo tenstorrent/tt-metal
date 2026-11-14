@@ -17,6 +17,11 @@
 #include "llk_size_mode.h"
 #include "llk_pack_block_tile.h"
 
+namespace ckernel::packer {
+template <>
+inline constexpr bool pack_size_mode<DST_SYNC_MODE> = LLK_SIZE_MODE;
+}  // namespace ckernel::packer
+
 /*************************************************************************
  * LLK PACK COMMON
  *************************************************************************/
@@ -63,7 +68,7 @@ inline void llk_pack_hw_configure(std::uint32_t pack_output) {
         StateVal<Operand<Exu::Pack>::NumFaces>(num_faces),
         StateVal<Operand<Exu::Pack>::PartialFace>(partial_face),
         StateDiscard<std::uint32_t>(tile_size)));
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, PackMode::Default>(
+    _llk_pack_hw_configure_<is_fp32_dest_acc_en, PackMode::Default, LLK_SIZE_MODE>(
         pack_src_format[output_id],
         pack_dst_format[output_id],
         tile_size,
@@ -288,7 +293,7 @@ inline void llk_pack_reconfig_data_format_body(const std::uint32_t new_output) {
         constexpr std::uint32_t skip = ckernel::packer::
             llk_pack_reconfig_skip_all<is_fp32_dest_acc_en, DST_SYNC_MODE, sizeof(pack_dst_format), gate>(
                 pack_src_format, pack_dst_format, pack_tile_num_faces, pack_partial_face);
-        _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en, skip, inl>(
+        _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en, skip, inl, LLK_SIZE_MODE>(
             pack_src_format[output_id],
             pack_dst_format[output_id],
             get_local_cb_interface(output_id).fifo_page_size,
@@ -376,7 +381,9 @@ __attribute__((always_inline)) inline void llk_pack_reconfig_data_format_ct_gate
 
 template <bool is_fp32_dest_acc_en, std::uint32_t new_output>
 __attribute__((always_inline)) inline void llk_pack_reconfig_data_format_ct() {
-    if constexpr (
+    if constexpr (LLK_SIZE_MODE) {
+        llk_pack_reconfig_data_format<is_fp32_dest_acc_en>(new_output);
+    } else if constexpr (
         ckernel::packer::llk_pack_reconfig_u2d_half<is_fp32_dest_acc_en, DST_SYNC_MODE>() &&
         new_output < sizeof(pack_dst_format)) {
         if constexpr (ckernel::packer::llk_pack_out32(pack_dst_format[new_output])) {

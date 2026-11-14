@@ -130,15 +130,16 @@ inline void llk_pack_hw_configure_live(const std::uint32_t face_r_dim, const std
     }
 }
 
-template <bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default, bool w_invalidate = true>
+// size: a kernel bound by the kernel config buffer (LLK_SIZE_MODE) takes main's destination write.
+template <bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default, bool w_invalidate = true, bool size = false>
 inline void llk_pack_impl(std::uint32_t tile_index, std::uint32_t pack_tile_addr)
 {
-    _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, pack_mode, false, llk_pack_rmw_per_tile<is_fp32_dest_acc_en, pack_mode>, w_invalidate>(
+    _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, pack_mode, false, llk_pack_rmw_per_tile<is_fp32_dest_acc_en, pack_mode> && !size, w_invalidate>(
         tile_index, pack_tile_addr);
 }
 
-template <bool is_fp32_dest_acc_en, PackMode pack_mode, bool w_invalidate = true>
+template <bool is_fp32_dest_acc_en, PackMode pack_mode, bool w_invalidate = true, bool size = false>
 inline void llk_pack_tile_of_output(std::uint32_t tile_index, std::uint32_t pack_tile_addr, [[maybe_unused]] const std::uint8_t output_id)
 {
-    llk_pack_impl<is_fp32_dest_acc_en, pack_mode, w_invalidate>(tile_index, pack_tile_addr);
+    llk_pack_impl<is_fp32_dest_acc_en, pack_mode, w_invalidate, size>(tile_index, pack_tile_addr);
 }
