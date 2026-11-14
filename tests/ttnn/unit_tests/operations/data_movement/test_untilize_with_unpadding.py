@@ -1642,3 +1642,21 @@ def test_untilize_with_unpadding_rank_5_zero_volume(device, shape, ends):
 
     assert list(output.shape) == list(shape)
     assert output.layout == ttnn.ROW_MAJOR_LAYOUT
+
+
+@pytest.mark.parametrize("dtype", [ttnn.uint16, ttnn.uint8])
+def test_untilize_with_unpadding_extra_dtypes(device, dtype):
+    """UINT16 and UINT8 inputs untilize with unpadding to the same dtype bit-exactly."""
+    torch.manual_seed(0)
+    shape = [1, 1, 64, 64]
+    output_end = [0, 0, 32, 32]
+    if dtype == ttnn.uint16:
+        input_torch = torch.randint(0, 65536, shape, dtype=torch.int32)
+    else:
+        input_torch = torch.randint(0, 256, shape, dtype=torch.uint8)
+
+    tt_input = ttnn.from_torch(input_torch, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    output = ttnn.untilize_with_unpadding(tt_input, output_tensor_end=output_end, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    got = ttnn.to_torch(output)
+    ref = input_torch[: output_end[0] + 1, : output_end[1] + 1, : output_end[2] + 1, : output_end[3] + 1]
+    assert torch.equal(got.to(torch.int64), ref.to(torch.int64))

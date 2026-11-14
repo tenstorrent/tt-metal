@@ -3619,6 +3619,28 @@ def test_untilize_multi_core_width_or_dtype_change_misses(device):
     assert_program_cache_flat(device, run, variants, miss_indices=(3, 4, 5))
 
 
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.uint16, ttnn.uint8])
+def test_untilize_extra_dtypes(device, dtype):
+    """FLOAT32, UINT16 and UINT8 inputs untilize to the same dtype bit-exactly."""
+    torch.manual_seed(0)
+    tensor_shape = [1, 1, 64, 64]
+    if dtype == ttnn.float32:
+        input_torch = torch.randn(tensor_shape, dtype=torch.float32)
+    elif dtype == ttnn.uint16:
+        input_torch = torch.randint(0, 65536, tensor_shape, dtype=torch.int32)
+    else:
+        input_torch = torch.randint(0, 256, tensor_shape, dtype=torch.uint8)
+
+    tt_input = ttnn.from_torch(input_torch, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    output = ttnn.untilize(tt_input, memory_config=ttnn.DRAM_MEMORY_CONFIG, use_multicore=False)
+    got = ttnn.to_torch(output)
+
+    if dtype == ttnn.float32:
+        assert torch.equal(got, input_torch)
+    else:
+        assert torch.equal(got.to(torch.int64), input_torch.to(torch.int64))
+
+
 # ND-sharded DRAM input: the kernels run on the DRAM-bank worker cores, which are not the cores of the shard grid.
 # The per-core block count must follow the shards each worker processes, otherwise the device never finishes.
 @pytest.mark.parametrize("tensor_shape", [[1, 1, 64, 64], [2, 1, 96, 128]])
