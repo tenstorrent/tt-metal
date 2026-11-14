@@ -9,6 +9,7 @@
 #include <cstring>
 #include <string>
 #include <thread>
+#include <tuple>
 #include <utility>
 
 #include <internal/l1_ecc_halt.hpp>
@@ -101,7 +102,8 @@ public:
     static constexpr uint32_t kMockCqSize = 256 * 1024;
     static constexpr uint32_t kMockCqRegionSize = 2 * kMockCqSize;
 
-    MockCqBacking(MetalEnvImpl& env, MetalContext& ctx, uint8_t num_hw_cqs) :
+    MockCqBacking(MetalEnvImpl& env, MetalContext& ctx, ChipId device_id, uint8_t num_hw_cqs) :
+        CqBacking(env, ctx, device_id),
         buffer_(std::make_unique<char[]>(static_cast<size_t>(num_hw_cqs) * kMockCqRegionSize)) {
         const uint32_t max_command_size_B = ctx.dispatch_mem_map().max_prefetch_command_size();
         TT_FATAL(
@@ -115,7 +117,7 @@ public:
             .cq_size = kMockCqRegionSize,
             .issue_alignment = env.get_hal().get_alignment(HalMemType::HOST),
         });
-        log_debug(tt::LogMetal, "SystemMemoryManager: Initialized with a host buffer for mock device");
+        log_debug(tt::LogMetal, "CqBacking: Initialized with a host buffer for mock device");
     }
 
     std::vector<SystemMemoryCQInterface> make_cq_interfaces(uint8_t num_hw_cqs) const override {
@@ -144,6 +146,14 @@ public:
     uint32_t completion_queue_wait_front(uint8_t, const SystemMemoryCQInterface&, std::atomic<bool>&) const override {
         return 0;
     }
+
+    void read_cq_memory(void* dst, uint32_t size_B, uint32_t cq_addr) const override {
+        std::memcpy(dst, host_ptr(cq_addr), size_B);
+    }
+
+    void write_cq_memory(ChipId, uint16_t, const void*, uint32_t, uint32_t) const override {}
+
+    uint32_t read_host_cq_word(uint8_t, uint32_t, bool) const override { return 0; }
 
 private:
     std::unique_ptr<char[]> buffer_;
@@ -177,7 +187,7 @@ public:
     }
 
     void send_completion_queue_read_ptr(uint8_t cq_id, uint32_t read_ptr_and_toggle) const override {
-        this->completion_q_windows_[cq_id]->write32(this->completion_byte_addrs_[cq_id], read_ptr_and_toggle);
+        cqs_[cq_id].completion_q_window->write32(cqs_[cq_id].completion_q_rd_ptr_addr, read_ptr_and_toggle);
         write_host_cq_word(
             cq_id,
             ctx_.dispatch_mem_map().get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_RD),
@@ -196,8 +206,9 @@ public:
         const uint32_t prefetch_q_rd_ptr =
             mem_map.get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_RD, cq_id);
 
+        DispatchCores& cq = cqs_[cq_id];
         auto wait_for_fetch_q_space = [&]() {
-            if (this->prefetch_q_dev_ptrs_[cq_id] != this->prefetch_q_dev_fences_[cq_id]) {
+            if (cq.prefetch_q_dev_ptr != cq.prefetch_q_dev_fence) {
                 return;
             }
             TTZoneScopedDN(DISPATCH, "wait_for_fetch_q_space");
@@ -205,10 +216,9 @@ public:
                 cq_id,
                 [&]() {
                     uint32_t fence;
-                    env_.get_cluster().read_core(
-                        &fence, sizeof(uint32_t), this->prefetcher_cores_[cq_id], prefetch_q_rd_ptr);
-                    this->prefetch_q_dev_fences_[cq_id] = fence;
-                    return this->prefetch_q_dev_ptrs_[cq_id] == fence;
+                    env_.get_cluster().read_core(&fence, sizeof(uint32_t), cq.prefetcher_core, prefetch_q_rd_ptr);
+                    cq.prefetch_q_dev_fence = fence;
+                    return cq.prefetch_q_dev_ptr == fence;
                 },
                 [this]() {
                     ctx_.on_dispatch_timeout_detected();
@@ -218,16 +228,17 @@ public:
 
         wait_for_fetch_q_space();
         // Wrap at the end of the fetch queue.
-        if (this->prefetch_q_dev_ptrs_[cq_id] == prefetch_q_limit(cq_id)) {
-            this->prefetch_q_dev_ptrs_[cq_id] = prefetch_q_base(cq_id);
+        if (cq.prefetch_q_dev_ptr == prefetch_q_limit(cq_id)) {
+            cq.prefetch_q_dev_ptr = prefetch_q_base(cq_id);
             if (mem_map.prefetch_q_cached()) {
-                this->prefetch_q_phases_[cq_id] ^= 1U;
+                cq.prefetch_q_phase ^= 1U;
             }
             wait_for_fetch_q_space();
         }
     }
 
     void fetch_queue_write(uint32_t command_size_B, uint8_t cq_id, bool stall_prefetcher) override {
+        DispatchCores& cq = cqs_[cq_id];
         const DispatchMemMap& dispatch_mem_map = ctx_.dispatch_mem_map();
         const uint32_t max_command_size_B = dispatch_mem_map.max_prefetch_command_size();
         TT_ASSERT(
@@ -258,26 +269,27 @@ public:
             static_assert(
                 sizeof(command_size_B) * 8 - DispatchSettings::PREFETCH_Q_LOG_MINSIZE <= phase_bit,
                 "FetchQ entry size field would overlap the phase bit");
-            entry_val |= this->prefetch_q_phases_[cq_id] << phase_bit;
+            entry_val |= cq.prefetch_q_phase << phase_bit;
         }
 
         if (entry_bytes == 2) {
-            this->prefetch_q_windows_[cq_id]->write16(
-                this->prefetch_q_dev_ptrs_[cq_id], static_cast<uint16_t>(entry_val));
+            cq.prefetch_q_window->write16(cq.prefetch_q_dev_ptr, static_cast<uint16_t>(entry_val));
         } else {
             TT_ASSERT(entry_bytes == 4);
-            this->prefetch_q_windows_[cq_id]->write32(this->prefetch_q_dev_ptrs_[cq_id], entry_val);
+            cq.prefetch_q_window->write32(cq.prefetch_q_dev_ptr, entry_val);
         }
-        this->prefetch_q_dev_ptrs_[cq_id] += entry_bytes;
+        cq.prefetch_q_dev_ptr += entry_bytes;
     }
 
     uint32_t completion_queue_wait_front(
         uint8_t cq_id, const SystemMemoryCQInterface& cq_interface, std::atomic<bool>& exit_condition) const override {
+        const uint32_t completion_q_wr_ptr_addr =
+            ctx_.dispatch_mem_map().get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_WR);
         uint32_t write_ptr_and_toggle = 0;
         wait_with_timeout(
             cq_id,
             [&]() {
-                write_ptr_and_toggle = get_cq_completion_wr_ptr<true>(ctx_, this->device_id_, cq_id, this->cq_size());
+                write_ptr_and_toggle = read_host_cq_word(cq_id, completion_q_wr_ptr_addr, /*device_written=*/true);
                 return cq_interface.completion_fifo_rd_ptr == (write_ptr_and_toggle & 0x7fffffff) and
                        cq_interface.completion_fifo_rd_toggle == (write_ptr_and_toggle >> 31);
             },
@@ -292,19 +304,7 @@ public:
 
 protected:
     DeviceCqBacking(MetalEnvImpl& env, MetalContext& ctx, ChipId device_id, uint8_t num_hw_cqs, uint16_t channel) :
-        env_(env),
-        ctx_(ctx),
-        device_id_(device_id),
-        channel_(channel),
-        prefetcher_cores_(num_hw_cqs),
-        completion_byte_addrs_(num_hw_cqs),
-        prefetch_q_dev_ptrs_(num_hw_cqs),
-        prefetch_q_dev_fences_(num_hw_cqs),
-        // The ring starts zeroed, which reads as phase 0, so the first lap writes phase 1.
-        prefetch_q_phases_(num_hw_cqs, 1) {
-        prefetch_q_windows_.reserve(num_hw_cqs);
-        completion_q_windows_.reserve(num_hw_cqs);
-    }
+        CqBacking(env, ctx, device_id), channel_(channel), cqs_(num_hw_cqs) {}
 
     // Takes each CQ's aux share out of layout.cq_size, puts the aux region after the CQs, sets the layout, and opens
     // the IO windows onto each CQ's dispatch cores.
@@ -330,28 +330,22 @@ protected:
             // Per CQ, since CQs can share a dispatch core.
             const uint32_t completion_q_rd_ptr = ctx_.dispatch_mem_map().get_device_command_queue_addr(
                 CommandQueueDeviceAddrType::COMPLETION_Q_RD, cq_id);
-            auto [prefetcher_core, prefetch_q_window] = open_dispatch_core_window(
+            DispatchCores& cq = cqs_[cq_id];
+            std::tie(cq.prefetcher_core, cq.prefetch_q_window) = open_dispatch_core_window(
                 core_manager.prefetcher_core(device_id_, channel_, cq_id), prefetch_q_limit(cq_id));
-            this->prefetcher_cores_[cq_id] = prefetcher_core;
-            this->prefetch_q_windows_.push_back(std::move(prefetch_q_window));
-            this->completion_q_windows_.push_back(
-                open_dispatch_core_window(
-                    core_manager.completion_queue_writer_core(device_id_, channel_, cq_id),
-                    completion_q_rd_ptr + sizeof(uint32_t))
-                    .second);
-            this->completion_byte_addrs_[cq_id] = completion_q_rd_ptr;
-
-            this->prefetch_q_dev_ptrs_[cq_id] = prefetch_q_base(cq_id);
-            this->prefetch_q_dev_fences_[cq_id] = prefetch_q_limit(cq_id);
+            cq.completion_q_window = open_dispatch_core_window(
+                                         core_manager.completion_queue_writer_core(device_id_, channel_, cq_id),
+                                         completion_q_rd_ptr + sizeof(uint32_t))
+                                         .second;
+            cq.completion_q_rd_ptr_addr = completion_q_rd_ptr;
+            cq.prefetch_q_dev_ptr = prefetch_q_base(cq_id);
+            cq.prefetch_q_dev_fence = prefetch_q_limit(cq_id);
         }
     }
 
     // Stores a host-side CQ pointer (a CommandQueueHostAddrType address) in the device-visible CQ, for hang debugging.
     virtual void write_host_cq_word(uint8_t cq_id, uint32_t host_cq_addr, uint32_t value) const = 0;
 
-    MetalEnvImpl& env_;
-    MetalContext& ctx_;
-    const ChipId device_id_;
     const uint16_t channel_;
     // Base address passed to SystemMemoryCQInterface: the DRAM region for DRAM-backed CQs, 0 for the hugepage.
     uint32_t interface_base_ = 0;
@@ -406,14 +400,19 @@ private:
             exit_condition);
     }
 
-    std::vector<tt_cxy_pair> prefetcher_cores_;
-    std::vector<std::unique_ptr<tt::umd::IoWindow>> prefetch_q_windows_;
-    std::vector<std::unique_ptr<tt::umd::IoWindow>> completion_q_windows_;
-    std::vector<uint32_t> completion_byte_addrs_;
-    std::vector<uint32_t> prefetch_q_dev_ptrs_;
-    std::vector<uint32_t> prefetch_q_dev_fences_;
-    // Phase bit value for the current lap of each fetch queue, used when the prefetcher polls it through its cache.
-    std::vector<uint32_t> prefetch_q_phases_;
+    // One CQ's view of its dispatch cores: the prefetcher's fetch queue and the completion queue writer's read pointer.
+    struct DispatchCores {
+        tt_cxy_pair prefetcher_core;
+        std::unique_ptr<tt::umd::IoWindow> prefetch_q_window;
+        std::unique_ptr<tt::umd::IoWindow> completion_q_window;
+        uint32_t completion_q_rd_ptr_addr = 0;
+        uint32_t prefetch_q_dev_ptr = 0;
+        uint32_t prefetch_q_dev_fence = 0;
+        // Phase bit of the fetch queue's current lap, for a prefetcher that polls it through its cache. The ring starts
+        // zeroed, which reads as phase 0, so the first lap writes phase 1.
+        uint32_t prefetch_q_phase = 1;
+    };
+    std::vector<DispatchCores> cqs_;
 };
 
 class HugepageCqBacking final : public DeviceCqBacking {
@@ -457,6 +456,25 @@ public:
 
     void sync_completion_queue(uint8_t, const SystemMemoryCQInterface&) const override {}
 
+    void read_cq_memory(void* dst, uint32_t size_B, uint32_t cq_addr) const override {
+        env_.get_cluster().read_sysmem(dst, size_B, cq_addr, mmio_device_id_, channel_);
+    }
+
+    void write_cq_memory(
+        ChipId /*device_id*/, uint16_t channel, const void* src, uint32_t size_B, uint32_t cq_addr) const override {
+        env_.get_cluster().write_sysmem(src, size_B, cq_addr, mmio_device_id_, get_umd_channel(channel));
+    }
+
+    uint32_t read_host_cq_word(uint8_t cq_id, uint32_t host_cq_addr, bool device_written) const override {
+        uint32_t offset = host_cq_addr + get_relative_cq_offset(cq_id, cq_size());
+        if (device_written) {
+            offset += (channel_ >> 2) * DispatchSettings::MAX_DEV_CHANNEL_SIZE;
+        }
+        uint32_t value = 0;
+        env_.get_cluster().read_sysmem(&value, sizeof(uint32_t), offset, mmio_device_id_, channel_);
+        return value;
+    }
+
 protected:
     void write_host_cq_word(uint8_t cq_id, uint32_t host_cq_addr, uint32_t value) const override {
         env_.get_cluster().write_sysmem(
@@ -495,8 +513,7 @@ public:
             device->is_mmio_capable() || env_.get_cluster().get_target_device_type() == tt::TargetDevice::Simulator,
             "Device {} is not an MMIO device",
             device_id_);
-        // The CQ region is in DRAM bank 0.
-        dram_channel_ = device->allocator_impl()->get_dram_channel_from_bank_id(0);
+        dram_channel_ = device->allocator_impl()->get_dram_channel_from_bank_id(kDramBankId);
         staging_buffer_ = std::make_unique<char[]>(dram_backed_command_queues_size);
         dram_base_ = env_.get_hal().get_dev_addr(HalDramMemAddrType::DRAM_BACKED_COMMAND_QUEUES);
 
@@ -534,6 +551,27 @@ public:
                 cq_interface.command_issue_region_size);
     }
 
+    void read_cq_memory(void* dst, uint32_t size_B, uint32_t cq_addr) const override {
+        env_.get_cluster().read_dram_vec(dst, size_B, device_id_, dram_channel_, cq_addr);
+    }
+
+    void write_cq_memory(
+        ChipId device_id, uint16_t /*channel*/, const void* src, uint32_t size_B, uint32_t cq_addr) const override {
+        // Each device keeps its CQs in its own DRAM.
+        env_.get_cluster().write_dram_vec(src, size_B, device_id, dram_channel_, cq_addr);
+    }
+
+    uint32_t read_host_cq_word(uint8_t cq_id, uint32_t host_cq_addr, bool /*device_written*/) const override {
+        uint32_t value = 0;
+        env_.get_cluster().read_dram_vec(
+            &value,
+            sizeof(uint32_t),
+            device_id_,
+            dram_channel_,
+            dram_base_ + get_relative_cq_offset(cq_id, cq_size()) + host_cq_addr);
+        return value;
+    }
+
 protected:
     void write_host_cq_word(uint8_t cq_id, uint32_t host_cq_addr, uint32_t value) const override {
         env_.get_cluster().write_dram_vec(
@@ -552,6 +590,10 @@ private:
 
 }  // namespace
 
+uint32_t CqBacking::cq_base_addr(uint8_t cq_id, uint16_t channel) const {
+    return get_absolute_cq_offset(channel, cq_id, cq_size_, is_dram_backed_ ? cq_addr_base_ : 0);
+}
+
 void CqBacking::set_layout(Layout layout) {
     TT_ASSERT(cq_size_ == 0, "CQ backing layout is set once");
     TT_ASSERT(layout.host_base != nullptr, "CQ backing has no host memory");
@@ -569,7 +611,7 @@ std::unique_ptr<CqBacking> CqBacking::create(
     MetalEnvImpl& env, MetalContext& ctx, ChipId device_id, uint8_t num_hw_cqs) {
     std::unique_ptr<CqBacking> backing;
     if (env.get_cluster().is_mock_or_emulated()) {
-        backing = std::make_unique<MockCqBacking>(env, ctx, num_hw_cqs);
+        backing = std::make_unique<MockCqBacking>(env, ctx, device_id, num_hw_cqs);
     } else if (env.get_rtoptions().get_dram_backed_cq()) {
         backing = std::make_unique<DramCqBacking>(env, ctx, device_id, num_hw_cqs);
     } else {

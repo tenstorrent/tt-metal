@@ -38,6 +38,15 @@ public:
     CqBacking(CqBacking&&) = delete;
     CqBacking& operator=(CqBacking&&) = delete;
 
+    // DRAM bank that holds DRAM-backed CQs.
+    static constexpr uint32_t kDramBankId = 0;
+
+    MetalEnvImpl& env() const { return env_; }
+
+    MetalContext& context() const { return ctx_; }
+
+    ChipId device_id() const { return device_id_; }
+
     // Bytes per CQ, after the aux region reservation.
     uint32_t cq_size() const { return cq_size_; }
 
@@ -49,6 +58,21 @@ public:
 
     // Host pointer for a CQ address, the address the device uses for the same byte.
     char* host_ptr(uint32_t cq_addr) const { return host_base_ + (cq_addr - cq_addr_base_); }
+
+    // CQ address where cq_id's region starts, for the device on the given host channel.
+    uint32_t cq_base_addr(uint8_t cq_id, uint16_t channel) const;
+
+    // Reads size_B bytes of this device's CQ memory, as the device last wrote it, at a CQ address.
+    virtual void read_cq_memory(void* dst, uint32_t size_B, uint32_t cq_addr) const = 0;
+
+    // Writes the CQ memory of device_id, serviced by this device on the given host channel. The hugepage backing
+    // addresses it by channel, the DRAM backing by device_id; each ignores the other.
+    virtual void write_cq_memory(
+        ChipId device_id, uint16_t channel, const void* src, uint32_t size_B, uint32_t cq_addr) const = 0;
+
+    // Reads a host-side CQ pointer (a CommandQueueHostAddrType address) of cq_id. Pointers the device writes sit past
+    // its channel offset in a shared hugepage; pointers the host writes don't.
+    virtual uint32_t read_host_cq_word(uint8_t cq_id, uint32_t host_cq_addr, bool device_written) const = 0;
 
     // Builds the per-CQ ring state the manager starts from.
     virtual std::vector<SystemMemoryCQInterface> make_cq_interfaces(uint8_t num_hw_cqs) const = 0;
@@ -76,7 +100,7 @@ public:
         uint8_t cq_id, const SystemMemoryCQInterface& cq_interface, std::atomic<bool>& exit_condition) const = 0;
 
 protected:
-    CqBacking() = default;
+    CqBacking(MetalEnvImpl& env, MetalContext& ctx, ChipId device_id) : env_(env), ctx_(ctx), device_id_(device_id) {}
 
     // Where the CQs are and how they are addressed; each backing's constructor sets it once.
     struct Layout {
@@ -90,6 +114,10 @@ protected:
     };
 
     void set_layout(Layout layout);
+
+    MetalEnvImpl& env_;
+    MetalContext& ctx_;
+    const ChipId device_id_;
 
 private:
     char* host_base_ = nullptr;

@@ -297,11 +297,9 @@ std::unique_ptr<AllocatorImpl> Device::initialize_allocator(
 // cores
 void Device::configure_command_queue_programs(DispatchTopology* dispatch_topology) {
     ChipId device_id = this->id();
-    ChipId mmio_device_id = MetalEnvAccessor(*env_).impl().get_cluster().get_associated_mmio_device(device_id);
 
     std::vector<uint32_t> zero = {0x0};  // Reset state in case L1 Clear is disabled.
     std::vector<uint32_t> pointers;
-    uint32_t cq_size = this->sysmem_manager().get_cq_size();
     TT_ASSERT(this->command_queue_programs_.size() == 1);
 
     Program& command_queue_program = *this->command_queue_programs_[0];
@@ -328,40 +326,16 @@ void Device::configure_command_queue_programs(DispatchTopology* dispatch_topolog
                 // Reset the host manager's pointer for this command queue
                 this->sysmem_manager_->reset(cq_id);
 
-                const uint32_t cq_offset =
-                    this->sysmem_manager_->is_dram_backed()
-                        ? get_absolute_cq_offset(
-                              channel, cq_id, cq_size, this->sysmem_manager_->get_dram_region_base_addr())
-                        : get_absolute_cq_offset(channel, cq_id, cq_size);
-
+                const CqBacking& backing = this->sysmem_manager_->backing();
+                const uint32_t cq_offset = backing.cq_base_addr(cq_id, channel);
                 pointers[host_issue_q_rd_ptr / sizeof(uint32_t)] = (cq_start + cq_offset) >> 4;
                 pointers[host_issue_q_wr_ptr / sizeof(uint32_t)] = (cq_start + cq_offset) >> 4;
                 pointers[host_completion_q_wr_ptr / sizeof(uint32_t)] =
                     (cq_start + this->sysmem_manager_->get_issue_queue_size(cq_id) + cq_offset) >> 4;
                 pointers[host_completion_q_rd_ptr / sizeof(uint32_t)] =
                     (cq_start + this->sysmem_manager_->get_issue_queue_size(cq_id) + cq_offset) >> 4;
-
-                if (this->sysmem_manager_->is_dram_backed()) {
-                    // With DRAM-backed CQs, each device stores its command queue in its own DRAM. The CQ
-                    // pointers for a serviced device must therefore be written into that device's DRAM, not
-                    // the MMIO device's DRAM. Writing to this->id() left non-MMIO devices with an uninitialized
-                    // (zero) completion write pointer, causing completion_queue_wait_front to return spuriously.
-                    const uint32_t dram_channel = this->allocator_impl()->get_dram_channel_from_bank_id(
-                        this->sysmem_manager_->get_dram_region_bank_id());
-                    MetalEnvAccessor(*env_).impl().get_cluster().write_dram_vec(
-                        pointers.data(),
-                        pointers.size() * sizeof(uint32_t),
-                        serviced_device_id,
-                        dram_channel,
-                        cq_offset);
-                } else {
-                    MetalEnvAccessor(*env_).impl().get_cluster().write_sysmem(
-                        pointers.data(),
-                        pointers.size() * sizeof(uint32_t),
-                        cq_offset,
-                        mmio_device_id,
-                        get_umd_channel(channel));
-                }
+                backing.write_cq_memory(
+                    serviced_device_id, channel, pointers.data(), pointers.size() * sizeof(uint32_t), cq_offset);
             }
         }
     }

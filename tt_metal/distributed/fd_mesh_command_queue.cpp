@@ -1188,17 +1188,9 @@ MultiProducerSingleConsumerQueue<CompletionReaderVariant>& FDMeshCommandQueue::g
 void FDMeshCommandQueue::copy_buffer_data_to_user_space(MeshBufferReadDescriptor& read_buffer_descriptor) {
     auto reader_lambda = [this](IDevice* device, uint32_t num_reads) {
         auto& read_descriptor_queue = this->get_read_descriptor_queue(device);
-        const auto cid = this->mesh_device_->impl().get_context_id();
-        ChipId mmio_device_id =
-            tt::tt_metal::MetalContext::instance(cid).get_cluster().get_associated_mmio_device(device->id());
-        uint16_t channel =
-            tt::tt_metal::MetalContext::instance(cid).get_cluster().get_assigned_channel_for_device(device->id());
-
         for (int i = 0; i < num_reads; i++) {
             buffer_dispatch::copy_completion_queue_data_into_user_space(
                 std::get<ReadBufferDescriptor>(*(read_descriptor_queue.pop())),
-                mmio_device_id,
-                channel,
                 id_,
                 device->sysmem_manager(),
                 exit_condition_);
@@ -1230,24 +1222,13 @@ void FDMeshCommandQueue::read_completion_queue_event(MeshReadEventDescriptor& re
     auto& device_range = read_event_descriptor.device_range;
     for_each_local(mesh_device_, device_range, [&](const auto& coord) {
         auto device = mesh_device_->impl().get_device(coord);
-        ChipId mmio_device_id = tt::tt_metal::MetalContext::instance(mesh_device_->impl().get_context_id())
-                                    .get_cluster()
-                                    .get_associated_mmio_device(device->id());
-        uint16_t channel = tt::tt_metal::MetalContext::instance(mesh_device_->impl().get_context_id())
-                               .get_cluster()
-                               .get_assigned_channel_for_device(device->id());
         device->sysmem_manager().completion_queue_wait_front(id_, exit_condition_);
 
         if (exit_condition_.load()) {
             return;
         }
         event_dispatch::read_events_from_completion_queue(
-            read_event_descriptor.single_device_descriptor,
-            mmio_device_id,
-            device->id(),
-            channel,
-            id_,
-            device->sysmem_manager());
+            read_event_descriptor.single_device_descriptor, device->id(), id_, device->sysmem_manager());
     });
 }
 
@@ -1256,18 +1237,8 @@ void FDMeshCommandQueue::read_l1_data_from_completion_queue(MeshCoreDataReadDesc
         return;
     }
     Device* device = mesh_device_->impl().get_device(read_l1_data_descriptor.device_coord);
-    const auto cid = mesh_device_->impl().get_context_id();
-    const ChipId mmio_device_id =
-        tt::tt_metal::MetalContext::instance(cid).get_cluster().get_associated_mmio_device(device->id());
-    const uint16_t channel =
-        tt::tt_metal::MetalContext::instance(cid).get_cluster().get_assigned_channel_for_device(device->id());
     device_dispatch::read_core_data_from_completion_queue(
-        read_l1_data_descriptor.single_core_descriptor,
-        mmio_device_id,
-        channel,
-        id_,
-        device->sysmem_manager(),
-        exit_condition_);
+        read_l1_data_descriptor.single_core_descriptor, id_, device->sysmem_manager(), exit_condition_);
 }
 
 void FDMeshCommandQueue::reset_worker_state(
