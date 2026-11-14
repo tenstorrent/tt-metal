@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Regression test: rand stores the whole tile even when another op's init (topk) last programmed
-the dest address-mode slot it stores under; with a 16-bit Dest only the top half of each face's rows
-carry draws (32-bit stores over a 16-bit Dest), so the checks cover those rows."""
+the dest address-mode slot it stores under; the checks cover every element in both Dest modes.
+"""
 
 import struct
 
@@ -30,9 +30,6 @@ from helpers.test_variant_parameters import (
 from helpers.tile_constants import (
     DEFAULT_TILE_C_DIM,
     DEFAULT_TILE_R_DIM,
-    FACE_C_DIM,
-    MAX_FACE_ELEMENTS,
-    MAX_FACE_R_DIM,
     MAX_TILE_ELEMENTS,
 )
 
@@ -48,10 +45,7 @@ SENTINEL = 2.0  # exact in every format; outside the draw interval
 assert not (
     DRAW_LOW <= SENTINEL <= DRAW_HIGH
 ), "the sentinel must lie outside the draw interval"
-# Rows of each face that hold a draw with a 16-bit Dest: a 32-bit store at row r lands its high half
-# at 16-bit row 2 * (r & ~7) + (r & 7), so the top half of each face.
-DRAW_ROWS_PER_FACE_16B_DEST = MAX_FACE_R_DIM // 2
-# At least 512 draws from a 31-bit grid; even in bfloat16 far more than a quarter are distinct.
+# 1024 draws from a 31-bit grid; even in bfloat16 several hundred are distinct.
 MIN_DISTINCT = 128
 SURVIVORS_SHOWN = 8
 
@@ -102,29 +96,16 @@ def test_sfpu_rand_stale_addrmod(formats, dest_acc):
     )
 
     res_from_L1 = configuration.run().result[:MAX_TILE_ELEMENTS]
-    tile = (
+    draws = (
         torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
         .flatten()
         .to(torch.float32)
     )
 
-    # Elements that can hold a draw: all of them with a 32-bit Dest; the top rows of each face with
-    # a 16-bit Dest (face-major tile layout: element = face * MAX_FACE_ELEMENTS + row * FACE_C_DIM + column).
-    rows = torch.arange(MAX_TILE_ELEMENTS) % MAX_FACE_ELEMENTS // FACE_C_DIM
-    draw_rows = (
-        torch.ones(MAX_TILE_ELEMENTS, dtype=torch.bool)
-        if dest_acc == DestAccumulation.Yes
-        else rows < DRAW_ROWS_PER_FACE_16B_DEST
-    )
-    draw_elements = draw_rows.nonzero().flatten()
-    draws = tile[draw_rows]
-
     sentinel_count = int((draws == SENTINEL).sum().item())
-    survivors = draw_elements[
-        (draws == SENTINEL).nonzero().flatten()[:SURVIVORS_SHOWN]
-    ].tolist()
+    survivors = (draws == SENTINEL).nonzero().flatten()[:SURVIVORS_SHOWN].tolist()
     assert sentinel_count == 0, (
-        f"{sentinel_count} of {draws.numel()} draw elements still hold the sentinel after rand: rand "
+        f"{sentinel_count} of {draws.numel()} elements still hold the sentinel after rand: rand "
         f"stored under the address mode the topk init left (first survivors at elements {survivors})"
     )
     in_range = (draws >= DRAW_LOW) & (draws <= DRAW_HIGH)  # False for NaN as well
