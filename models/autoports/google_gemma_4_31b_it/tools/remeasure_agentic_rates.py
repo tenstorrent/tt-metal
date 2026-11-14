@@ -41,6 +41,47 @@ def validate_raw(raw, row, count):
         raise ValueError("Incomplete or mismatched request population")
 
 
+def rate_prediction(prior, original_server, candidate_server):
+    ranges = {"decode_tok_s_user": (0.90, 1.05), "prefill_tok_s": (0.85, 1.05)}
+    return {
+        "written_unix": time.time(),
+        "basis": "Head-only BFP8 short-control slowdown1.46%; decode predicted0.90–1.05x prior, prefill0.85–1.05x prior. Head fraction and workload length/concurrency can differ from short control.",
+        "original_row": prior,
+        "original_source_commits": original_server["source_commits"],
+        "candidate_source_commits": candidate_server["source_commits"],
+        "original_configuration_evidence_sha256": original_server.get("configuration_evidence_sha256"),
+        "candidate_configuration_evidence_sha256": candidate_server["configuration_evidence_sha256"],
+        "ranges": {
+            key: {
+                "prior": prior[key],
+                "ratio_low": low,
+                "ratio_high": high,
+                "low": low * prior[key],
+                "high": high * prior[key],
+            }
+            for key, (low, high) in ranges.items()
+        },
+    }
+
+
+def compare_prediction(measured, prediction):
+    comparisons = {}
+    for key, expected in prediction["ranges"].items():
+        ratio = measured[key] / expected["prior"]
+        hit = expected["ratio_low"] <= ratio <= expected["ratio_high"]
+        comparisons[key] = {
+            "measured": measured[key],
+            "ratio_to_prior": ratio,
+            "range_hit": hit,
+            "explanation_required": not hit,
+        }
+    return {
+        "rates": comparisons,
+        "explanation_required": any(item["explanation_required"] for item in comparisons.values()),
+        "explanation": None,
+    }
+
+
 def measured_row(row, raw, directory, policy):
     validate_raw(raw, row, row["requests"])
     if raw["mean_ttft_ms"] <= 0 or raw["mean_tpot_ms"] <= 0:
@@ -176,7 +217,9 @@ def main():
                 break
             dest = args.output / "grid" / row["id"]
             dest.mkdir(parents=True)
-            save(dest / "prediction.json", dict(row, estimated_seconds=estimate, written_unix=time.time()))
+            prediction = rate_prediction(prior, original["server_config"], server)
+            prediction.update(row=row, estimated_seconds=estimate)
+            save(dest / "prediction.json", prediction)
             save(dest / "perf-b32-server.json", server)
             shutil.copy2(
                 args.server_identity.parent / server["configuration_evidence"], dest / server["configuration_evidence"]
@@ -221,7 +264,11 @@ def main():
                 invoke(argv, env, dest / (name + ".log"), remaining)
                 validate_raw(read(dest / (name + ".json")), row, count)
             collect(argparse.Namespace(run_dir=dest, concurrency=32), server)
-            completed.append(measured_row(row, read(dest / "perf-b32.json"), dest, policy))
+            measured = measured_row(row, read(dest / "perf-b32.json"), dest, policy)
+            measured["prediction"] = str(dest / "prediction.json")
+            measured["prediction_comparison"] = compare_prediction(measured, prediction)
+            save(dest / "prediction_comparison.json", measured["prediction_comparison"])
+            completed.append(measured)
             save(dest / "complete.json", {"row": row, "finished_unix": time.time()})
             persist()
         else:

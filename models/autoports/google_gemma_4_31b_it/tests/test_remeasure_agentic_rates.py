@@ -94,3 +94,20 @@ def test_timeout_stops_only_client_and_reports_pending_drain(tmp_path):
 
     with unittest.TestCase().assertRaisesRegex(RuntimeError, "server may still drain"):
         r.invoke([sys.executable, "-c", "import time; time.sleep(10)"], dict(os.environ), tmp_path / "client.log", 0.02)
+
+
+def test_rate_prediction_preserves_prior_and_source_identities():
+    prior = {"id": "row", "decode_tok_s_user": 40, "prefill_tok_s": 1000}
+    original = {"source_commits": {"tt-metal": "original"}, "configuration_evidence_sha256": "old-hash"}
+    candidate = {"source_commits": {"tt-metal": "candidate"}, "configuration_evidence_sha256": "new-hash"}
+    prediction = r.rate_prediction(prior, original, candidate)
+    assert prediction["original_row"] == prior
+    assert prediction["candidate_source_commits"]["tt-metal"] == "candidate"
+    assert prediction["ranges"]["decode_tok_s_user"]["low"] == 36
+    assert prediction["ranges"]["prefill_tok_s"]["high"] == 1050
+    hit = r.compare_prediction({"decode_tok_s_user": 39.416, "prefill_tok_s": 900}, prediction)
+    assert not hit["explanation_required"]
+    miss = r.compare_prediction({"decode_tok_s_user": 35, "prefill_tok_s": 1100}, prediction)
+    assert miss["explanation_required"] and miss["explanation"] is None
+    assert miss["rates"]["decode_tok_s_user"]["ratio_to_prior"] == 0.875
+    assert not miss["rates"]["prefill_tok_s"]["range_hit"]
