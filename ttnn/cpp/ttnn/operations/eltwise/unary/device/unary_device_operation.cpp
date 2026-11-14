@@ -115,6 +115,40 @@ void validate_integer_input_dtype(const std::vector<EltwiseUnaryWithParam>& op_c
     }
 }
 
+bool unary_op_requires_integer_dtype(UnaryOpType op_type) {
+    switch (op_type) {
+        case UnaryOpType::BITWISE_NOT:
+        case UnaryOpType::BITWISE_AND:
+        case UnaryOpType::BITWISE_OR:
+        case UnaryOpType::BITWISE_XOR:
+        case UnaryOpType::LEFT_SHIFT:
+        case UnaryOpType::RIGHT_SHIFT: return true;
+        default: return false;
+    }
+}
+
+void validate_float_input_dtype(const std::vector<EltwiseUnaryWithParam>& op_chain, DataType input_dtype) {
+    if (is_integer_dtype(input_dtype)) {
+        return;
+    }
+    // A TYPECAST in a multi-op chain changes the dtype for later ops; this checker only
+    // sees the original tensor dtype, so skip rather than reject a valid post-cast bitwise op.
+    if (op_chain.size() > 1) {
+        for (const auto& op : op_chain) {
+            if (op.type() == UnaryOpType::TYPECAST) {
+                return;
+            }
+        }
+    }
+    for (const auto& op : op_chain) {
+        TT_FATAL(
+            !unary_op_requires_integer_dtype(op.type()),
+            "Unary: {} requires an integer input dtype, got {}",
+            op.type(),
+            input_dtype);
+    }
+}
+
 }  // namespace
 
 ttsl::hash::hash_t UnaryDeviceOperation::operation_attributes_t::to_hash() const {
@@ -161,6 +195,7 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
         input_tensor.is_allocated(), "Unary: Operands need to be allocated in buffers on the device. Buffer is null.");
 
     validate_integer_input_dtype(args.op_chain, input_tensor.dtype());
+    validate_float_input_dtype(args.op_chain, input_tensor.dtype());
 
     // The compute kernel and its scalar runtime args come from op_chain[0] alone, and dedicated kernels
     // hard-code their op and never expand SFPU_OP_CHAIN_0, while those same ops emit an empty init/func
