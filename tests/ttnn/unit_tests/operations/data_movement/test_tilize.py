@@ -403,11 +403,6 @@ def test_deepseek_v3_mla_tilize_trace_mode(
       - INTERLEAVED: no sharding
       - WIDTH_SHARDED: width-wise sharding configuration as defined by the test's shard_spec
     """
-    # Both variants are failing in CI:
-    #   interleaved  — TT_FATAL: trace buffers (4112384B) exceed trace_region_size (1671168B)
-    #   width_sharded — TT_FATAL: not on_dispatch_core (program.cpp:146)
-    # Tracked in: https://github.com/tenstorrent/tt-metal/issues/50679
-    pytest.skip(f"Skipping {memory_config_type} variant: known CI failure — #50679")
     torch.manual_seed(2003)
 
     # Create random tensor for input
@@ -436,8 +431,12 @@ def test_deepseek_v3_mla_tilize_trace_mode(
             ttnn.BufferType.L1,
             shard_spec,
         )
+        # 16 cores, each 1024 wide. Derive the grid from the device: harvested devices
+        # (e.g. BH p100/p150 with COL dispatch) expose fewer than 8 compute columns.
+        grid = device.compute_with_storage_grid_size()
+        out_end = ttnn.CoreCoord(7, 1) if grid.x >= 8 else ttnn.CoreCoord(3, 3)
         shard_spec = ttnn.ShardSpec(
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 1))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), out_end)}),
             [32, 1024],
             ttnn.ShardOrientation.ROW_MAJOR,
         )
