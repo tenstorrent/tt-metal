@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <chrono>
 #include <fmt/base.h>
 #include <gtest/gtest.h>
@@ -23,6 +24,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include "llk_device_fixture.hpp"
+#include "single_node_dfb_program.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
@@ -30,6 +32,7 @@
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/df/float32.hpp"
 #include "tt_metal/test_utils/float8_utils.hpp"
+#include "tt_metal/test_utils/int8.hpp"
 #include "tt_metal/test_utils/packing.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
@@ -67,6 +70,21 @@ void convert_to_sign_mag(std::vector<int8_t>& vec) {
             i = temp;
         }
     }
+}
+
+// in0 x in1 for one 32x32 int8 tile in face-major order, unclamped.
+std::vector<int32_t> golden_single_tile_matmul_int8(
+    const std::vector<int8_t>& input_0, const std::vector<int8_t>& input_1) {
+    std::vector<int32_t> golden(32 * 32, 0);
+    for (int x = 0; x < 32; x++) {
+        for (int y = 0; y < 32; y++) {
+            for (int z = 0; z < 32; z++) {
+                golden[byte_tile_face_major_index(x, y)] += (int32_t)input_0[byte_tile_face_major_index(z, y)] *
+                                                            (int32_t)input_1[byte_tile_face_major_index(x, z)];
+            }
+        }
+    }
+    return golden;
 }
 
 bool single_tile_matmul_int8(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
@@ -156,18 +174,8 @@ bool single_tile_matmul_int8(const std::shared_ptr<distributed::MeshDevice>& mes
     ////////////////////////////////////////////////////////////////////////////
     //                      Golden Generation
     ////////////////////////////////////////////////////////////////////////////
-    std::vector<int32_t> golden_output_int32(tile_size, 0);
+    std::vector<int32_t> golden_output_int32 = golden_single_tile_matmul_int8(input_0, input_1);
     std::vector<int8_t> golden_output(tile_size, 0);
-    // matmul
-    for (int x = 0; x < 32; x++) {
-        for (int y = 0; y < 32; y++) {
-            for (int z = 0; z < 32; z++) {
-                golden_output_int32[byte_tile_face_major_index(x, y)] +=
-                    (int32_t)input_0[byte_tile_face_major_index(z, y)] *
-                    (int32_t)input_1[byte_tile_face_major_index(x, z)];
-            }
-        }
-    }
     // clamping to int8
     for (int i = 0; i < 1024; i++) {
         if (golden_output_int32[i] > 127) {
@@ -229,6 +237,46 @@ bool single_tile_matmul_int8(const std::shared_ptr<distributed::MeshDevice>& mes
     return pass;
 }
 
+// Quasar port of single_tile_matmul_int8 on the Quasar kernel API, with an Int32 output as tt-llk's Quasar int8 matmul
+// tests use. Each fidelity phase multiplies int8 operands in full, so the LLK must program LoFi for them whatever
+// fidelity the kernel asks for.
+bool single_tile_matmul_int8_quasar(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, MathFidelity fidelity) {
+    constexpr uint32_t tile_size = 32 * 32;  // one byte per Int8 datum
+    int8_t min = -5, max = 5;
+    std::vector<int8_t> input_0 = generate_uniform_int8(tile_size, min, max, 0 /*seed*/);
+    std::vector<int8_t> input_1 = generate_uniform_int8(tile_size, min, max, 1 /*different seed*/);
+    std::vector<int32_t> golden_int32 = golden_single_tile_matmul_int8(input_0, input_1);
+    std::vector<uint32_t> golden_output(golden_int32.size());
+    std::transform(golden_int32.begin(), golden_int32.end(), golden_output.begin(), int32_to_sign_mag_word);
+    convert_to_sign_mag(input_0);
+    convert_to_sign_mag(input_1);
+
+    auto input = [](const std::vector<int8_t>& data, const char* accessor) {
+        return llk::single_node_dfb::Input{
+            .data = pack_vector<uint32_t>(data),
+            .format = tt::DataFormat::Int8,
+            .num_tiles = 1,
+            .accessor = accessor,
+            .num_entries = 1};
+    };
+    std::vector<uint32_t> dest_buffer_data = llk::single_node_dfb::run(
+        *mesh_device,
+        {.name = "matmul_int8",
+         .inputs = {input(input_0, "in0"), input(input_1, "in1")},
+         .output = {.format = tt::DataFormat::Int32, .num_tiles = 1, .accessor = "out", .num_entries = 1},
+         .compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/matmul_single_tile_quasar.cpp",
+         .hw_config = experimental::ComputeHardwareConfig{.fpu_math_fidelity = fidelity, .enable_32_bit_dest = true}});
+
+    size_t mismatches = 0;
+    for (size_t i = 0; i < tile_size; i++) {
+        if (dest_buffer_data[i] != golden_output[i] && mismatches++ < 8) {
+            log_info(tt::LogTest, "element {}: {} vs. golden {}", i, dest_buffer_data[i], golden_output[i]);
+        }
+    }
+    return mismatches == 0;
+}
+
 }  // namespace unit_tests::compute::matmul
 
 TEST_F(LLKMeshDeviceFixture, TensixTestSingleCoreSingleTileComputeMatmulInt8) {
@@ -237,5 +285,20 @@ TEST_F(LLKMeshDeviceFixture, TensixTestSingleCoreSingleTileComputeMatmulInt8) {
     }
     ASSERT_TRUE(unit_tests::compute::matmul::single_tile_matmul_int8(this->devices_.at(0)));
 }
+
+class LLKQuasarMatmulInt8Fixture : public LLKQuasarMeshDeviceSingleCardFixture,
+                                   public testing::WithParamInterface<MathFidelity> {};
+
+TEST_P(LLKQuasarMatmulInt8Fixture, TensixTestSingleCoreSingleTileComputeMatmulInt8) {
+    ASSERT_TRUE(unit_tests::compute::matmul::single_tile_matmul_int8_quasar(this->devices_.at(0), GetParam()));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    QuasarMatmulInt8,
+    LLKQuasarMatmulInt8Fixture,
+    testing::Values(MathFidelity::LoFi, MathFidelity::HiFi4),
+    [](const testing::TestParamInfo<MathFidelity>& info) {
+        return info.param == MathFidelity::LoFi ? "LoFi" : "HiFi4";
+    });
 
 }  // namespace tt::tt_metal
