@@ -57,6 +57,7 @@ public:
 
     virtual void zero_grad() = 0;
 
+    // An optimizer whose kernels take bf16 gradients calls core::cast_fp32_gradients_to_bf16() first.
     virtual void step() = 0;
 
     [[nodiscard]] virtual serialization::StateDict get_state_dict() const = 0;
