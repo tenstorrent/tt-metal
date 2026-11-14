@@ -126,7 +126,7 @@ def _read_block_on_device(op, tt_block, tt_prefix, tt_queries):
     `read_block` without the host: composing each site would sync the chips 24 times a block
     and hide the skew a reuse race needs.
     """
-    partials, shifts, masses, _ = op.inter_block(tt_block, tt_queries)
+    partials, shifts, masses = op.inter_block(tt_block, tt_queries)
     reads = [op.merge(partials, shifts, masses, tt_prefix, q, site) for site, q in enumerate(tt_queries)]
     for tensor in (partials, shifts, masses):
         ttnn.deallocate(tensor)
@@ -217,7 +217,7 @@ def test_trace_replay_matches_eager(mesh_device, device_params, sp_axis):
     tt_prefix, tt_block = place_case(op, running_sum, block_residual)
     tt_queries = [op.to_query(q) for q in queries]
 
-    partials, shifts, masses, _ = op.inter_block(tt_block, tt_queries)
+    partials, shifts, masses = op.inter_block(tt_block, tt_queries)
 
     # Capture replays programs, it does not build them: the compile pass, the query stack and
     # the lazily-created scratch and semaphore all have to exist before the region opens.

@@ -72,11 +72,6 @@ void AttnResBlockMixDeviceOperation::validate_on_program_cache_miss(
         "AttnResBlockMix mixes {} sites, but a statistics tile column holds the sum of squares and at most {}",
         args.num_sites,
         TILE_WIDTH - 1);
-    TT_FATAL(
-        args.num_closed_sites < args.num_sites,
-        "AttnResBlockMix closes {} of its {} sites, and needs at least one open",
-        args.num_closed_sites,
-        args.num_sites);
 }
 
 AttnResBlockMixDeviceOperation::spec_return_value_t AttnResBlockMixDeviceOperation::compute_output_specs(
@@ -84,20 +79,14 @@ AttnResBlockMixDeviceOperation::spec_return_value_t AttnResBlockMixDeviceOperati
     const auto& first = tensor_args.sealed.front();
     const uint32_t num_tokens = first.logical_shape()[2];
     const uint32_t width = first.logical_shape()[3];
-    const uint32_t num_open = args.num_sites - args.num_closed_sites;
     const auto wide_layout =
         operations::TensorLayout(first.dtype(), operations::PageConfig(Layout::TILE), args.output_mem_config);
     const auto scalar_layout =
         operations::TensorLayout(DataType::FLOAT32, operations::PageConfig(Layout::TILE), args.output_mem_config);
-    spec_return_value_t specs = {
-        tt::tt_metal::TensorSpec(ttnn::Shape({num_open, 1, num_tokens, width}), wide_layout),
-        tt::tt_metal::TensorSpec(ttnn::Shape({num_open, 1, num_tokens, 1}), scalar_layout),
-        tt::tt_metal::TensorSpec(ttnn::Shape({num_open, 1, num_tokens, 1}), scalar_layout)};
-    if (args.num_closed_sites > 0) {
-        specs.push_back(
-            tt::tt_metal::TensorSpec(ttnn::Shape({args.num_closed_sites, 1, num_tokens, width}), wide_layout));
-    }
-    return specs;
+    return {
+        tt::tt_metal::TensorSpec(ttnn::Shape({args.num_sites, 1, num_tokens, width}), wide_layout),
+        tt::tt_metal::TensorSpec(ttnn::Shape({args.num_sites, 1, num_tokens, 1}), scalar_layout),
+        tt::tt_metal::TensorSpec(ttnn::Shape({args.num_sites, 1, num_tokens, 1}), scalar_layout)};
 }
 
 AttnResBlockMixDeviceOperation::tensor_return_value_t AttnResBlockMixDeviceOperation::create_output_tensors(
@@ -119,14 +108,12 @@ std::vector<Tensor> attn_res_block_mix(
     const Tensor& stats,
     uint32_t num_sites,
     float eps,
-    uint32_t num_closed_sites,
     const MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config) {
     using OperationType = ttnn::experimental::prim::AttnResBlockMixDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
         .num_sites = num_sites,
-        .num_closed_sites = num_closed_sites,
         .eps = eps,
         .output_mem_config = output_mem_config,
         .compute_kernel_config = compute_kernel_config};

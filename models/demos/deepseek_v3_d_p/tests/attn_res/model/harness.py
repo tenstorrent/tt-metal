@@ -205,7 +205,7 @@ def read_block(op, tt_block, tt_prefix, tt_queries):
     soon as it is composed, so the block holds one output at a time — a caller that needs
     them together builds its own list.
     """
-    partials, shifts, masses, _ = op.inter_block(tt_block, tt_queries)
+    partials, shifts, masses = op.inter_block(tt_block, tt_queries)
     try:
         for site, tt_query in enumerate(tt_queries):
             merged = op.merge(partials, shifts, masses, tt_prefix, tt_query, site)
