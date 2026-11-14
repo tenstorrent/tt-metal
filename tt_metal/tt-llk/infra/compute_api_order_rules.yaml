@@ -1,0 +1,460 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Compute-kernel API ordering rules, expressed at the LLK API level.
+#
+# The compute API (tt_metal/hw/inc/api/compute/) is a thin layer over the LLK API
+# (tt_metal/hw/ckernels/<arch>/metal/llk_api/).  The LLK API is stateful: an
+# operation runs only after a matching init has configured the engine, an init
+# snapshot must still match the operand/format configuration at execute time, and
+# a different init on the same engine replaces the seated operation.  These rules
+# used to live only in prose; this file makes them data.
+#
+# Each operation cites the sanitizer hook / API doc / bug that defines it.  The
+# sanitizer-agreement test (tests/test_check_compute_api_order.py) parses the
+# SAN_HOOKs in tt_metal/hw/ckernels/*/metal/llk_api/ and fails if this table and
+# the sanitizer's operation model disagree for an operation both cover.
+#
+# match syntax:
+#   template: [[init_index, execute_index], ...]   non-type template args
+#   args:     [[init_index, execute_index], ...]   runtime arguments
+# A value that is not a compile-time constant compares as unknown: the checker
+# reports "unknown" in JSON and never guesses a mismatch from it.
+#
+# requires_uninit is curated, not "every init needs an uninit": only operations
+# that arm persistent state the next operation would trip over are listed.
+version: 1
+
+threads:
+  UNPACK: {define: TRISC_UNPACK, compile_for_trisc: 0}
+  MATH: {define: TRISC_MATH, compile_for_trisc: 1}
+  PACK: {define: TRISC_PACK, compile_for_trisc: 2}
+
+# Calls that change operand/format configuration, invalidating inits that
+# snapshotted the changed fields.  The sanitizer models this as an operand-state
+# update: an init snapshot that no longer equals the operand state fails at
+# execute.  Statically we invalidate the operations named by each op's
+# `invalidated_by` list.
+invalidators:
+  - functions: [llk_unpack_reconfig_data_format_srca, llk_unpack_reconfig_data_format_srcb, llk_unpack_reconfig_data_format, llk_unpack_hw_configure]
+    exu: Unpack
+    thread: UNPACK
+    citation: tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_unpack_common_api.h (reconfigure/configure hooks); issue #61146
+  - functions: [llk_math_reconfig_data_format_srca, llk_math_reconfig_data_format_srcb, llk_math_reconfig_data_format, llk_math_hw_configure]
+    exu: Fpu
+    thread: MATH
+    citation: tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_math_common_api.h (reconfigure/configure hooks)
+  - functions: [llk_pack_reconfig_data_format, llk_pack_hw_configure]
+    exu: Pack
+    thread: PACK
+    citation: tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_pack_common_api.h (reconfigure/configure hooks); issue #61146
+
+operations:
+  # ------------------------------------------------------------------ UNPACK
+  - id: unpack.unary
+    compared_fields: [BroadcastType, AccumulateToDest, BinaryReuseDest, UnpackToDest]
+    sanitizer_operation: OperationUnpackUnary
+    exu: Unpack
+    thread: UNPACK
+    requires_uninit: false
+    invalidated_by: []
+    transitions:
+      - architectures: [wormhole_b0]
+        init: llk_unpack_A_init
+        execute: [llk_unpack_A, llk_unpack_A_block]
+        uninit: [llk_unpack_A_uninit]
+        match:
+          template: [[0, 0], [1, 1], [2, 2], [3, 3]]
+      - architectures: [blackhole]
+        init: llk_unpack_A_init_impl
+        execute: [llk_unpack_A, llk_unpack_A_block]
+        uninit: [llk_unpack_A_uninit]
+        match:
+          template: [[0, 0], [1, 1], [2, 2], [3, 3]]
+    citation: tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_unpack_A_api.h:24 (init hook); compute API doc tt_metal/hw/inc/api/compute/tile_move_copy.h:25
+
+  # The init/execute argument equality check below is the static form of the
+  # LLK_ASSERT unpack-configuration failures in #39184 and #39945: the init and
+  # the operation must agree on the configuration the unpacker was programmed
+  # with.  Runtime CB-descriptor mismatches remain host-data dependent and are
+  # reported by the LLK_ASSERT build, not guessed from a runtime value.
+  - id: unpack.binary
+    compared_fields: [BroadcastType]
+    sanitizer_operation: OperationUnpackBinary
+    exu: Unpack
+    thread: UNPACK
+    requires_uninit: false
+    invalidated_by: []
+    transitions:
+      - init: llk_unpack_AB_init
+        execute: [llk_unpack_AB]
+        match:
+          template: [[0, 0]]
+    citation: tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_unpack_AB_api.h:15 (init hook)
+
+  - id: unpack.matmul
+    compared_fields: [CtDim, RtDim, KtDim]
+    sanitizer_operation: OperationUnpackMatmul
+    exu: Unpack
+    thread: UNPACK
+    requires_uninit: false
+    invalidated_by: []
+    transitions:
+      - init: llk_unpack_AB_matmul_init
+        execute: [llk_unpack_AB_matmul]
+        match:
+          args: [[3, 4], [4, 5], [5, 6]]
+    citation: tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_unpack_AB_matmul_api.h:22 (init hook)
+
+  - id: unpack.reduce
+    compared_fields: [PoolType, ReduceDim]
+    sanitizer_operation: OperationUnpackReduce
+    exu: Unpack
+    thread: UNPACK
+    requires_uninit: false
+    invalidated_by: []
+    transitions:
+      - architectures: [wormhole_b0]
+        init: llk_unpack_AB_reduce_init
+        execute: [llk_unpack_AB_reduce]
+        match:
+          template: [[0, 0], [1, 1]]
+      - architectures: [blackhole]
+        init: llk_unpack_AB_reduce_init_impl
+        execute: [llk_unpack_AB_reduce]
+        match:
+          template: [[0, 0], [1, 1]]
+    citation: tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_unpack_AB_reduce_api.h:15 (init hook)
+
+  - id: unpack.tilize
+    compared_fields: [BlockCtDim]
+    sanitizer_operation: OperationUnpackTilize
+    exu: Unpack
+    thread: UNPACK
+    requires_uninit: true
+    invalidated_by: []
+    transitions:
+      - architectures: [wormhole_b0]
+        init: llk_unpack_tilize_init
+        execute: [llk_unpack_tilize]
+        uninit: [llk_unpack_tilize_uninit]
+        match:
+          args: [[1, 2]]
+      - architectures: [blackhole]
+        init: llk_unpack_tilize_init_impl
+        execute: [llk_unpack_tilize_impl]
+        uninit: [llk_unpack_tilize_uninit_impl]
+        match: {}
+    citation: tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_unpack_tilize_api.h:24 (init hook); compute API doc tt_metal/hw/inc/api/compute/tilize.h:220 (uninit required before re-init)
+
+  - id: unpack.untilize
+    compared_fields: []
+    sanitizer_operation: null
+    exu: Unpack
+    thread: UNPACK
+    requires_uninit: true
+    invalidated_by: []
+    transitions:
+      - init: llk_unpack_untilize_init
+        execute: [llk_unpack_untilize]
+        uninit: [llk_unpack_untilize_uninit]
+        match: {}
+    citation: tt_metal/hw/inc/api/compute/untilize.h:20 (deprecated; uninit contract); llk_unpack_untilize_api.h is not modelled by the sanitizer (SAN_HOOK(unsupported))
+
+  - id: unpack.fast_tilize
+    compared_fields: [AddrMod]
+    sanitizer_operation: OperationUnpackFastTilizeWh
+    exu: Unpack
+    thread: UNPACK
+    architectures: [wormhole_b0]
+    requires_uninit: true
+    invalidated_by: []
+    transitions:
+      - init: llk_unpack_fast_tilize_init
+        execute: [llk_unpack_fast_tilize_block]
+        uninit: [llk_unpack_fast_tilize_uninit]
+        match: {}
+    citation: tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_unpack_tilize_api.h:292 (init hook)
+
+  # -------------------------------------------------------------------- MATH
+  - id: math.eltwise_binary
+    compared_fields: [EltwiseBinaryType, BroadcastType, MathFidelity, ReuseDest]
+    sanitizer_operation: OperationFpuEltwiseBinary
+    exu: Fpu
+    thread: MATH
+    requires_uninit: false
+    invalidated_by: []
+    transitions:
+      - architectures: [wormhole_b0]
+        init: llk_math_eltwise_binary_init
+        execute: [llk_math_eltwise_binary]
+        match:
+          template: [[0, 0], [1, 1], [2, 3], [3, 4]]
+      - architectures: [blackhole]
+        init: llk_math_eltwise_binary_init_impl
+        execute: [llk_math_eltwise_binary]
+        match:
+          template: [[0, 0], [1, 1], [2, 3], [3, 4]]
+    citation: tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_math_binary_api.h:41 (init hook); issue #59276
+
+  - id: math.matmul
+    compared_fields: [MathFidelity, ThrottleLevel, CtDim, RtDim]
+    sanitizer_operation: OperationFpuMatmul
+    exu: Fpu
+    thread: MATH
+    requires_uninit: false
+    invalidated_by: []
+    transitions:
+      - init: llk_math_matmul_init
+        execute: [llk_math_matmul]
+        match:
+          template: [[0, 0], [1, 1]]
+          args: [[3, 1], [4, 2]]
+    citation: tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_math_matmul_api.h:32 (init hook)
+
+  - id: math.reduce
+    compared_fields: [PoolType, ReduceDim, MathFidelity]
+    sanitizer_operation: OperationFpuReduce
+    exu: Fpu
+    thread: MATH
+    requires_uninit: false
+    invalidated_by: []
+    transitions:
+      - architectures: [wormhole_b0]
+        init: llk_math_reduce_init
+        execute: [llk_math_reduce]
+        uninit: [llk_math_reduce_uninit]
+        match:
+          template: [[0, 0], [1, 1], [3, 3]]
+      - architectures: [blackhole]
+        init: llk_math_reduce_init_impl
+        execute: [llk_math_reduce]
+        uninit: [llk_math_reduce_uninit]
+        match:
+          template: [[0, 0], [1, 1], [3, 3]]
+    citation: tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_math_reduce_api.h:67 (init hook)
+
+  - id: math.datacopy
+    compared_fields: [DataCopyType, BroadcastType]
+    sanitizer_operation: OperationFpuEltwiseUnaryDatacopy
+    exu: Fpu
+    thread: MATH
+    requires_uninit: false
+    invalidated_by: []
+    transitions:
+      - architectures: [wormhole_b0]
+        init: llk_math_eltwise_unary_datacopy_init
+        execute: [llk_math_eltwise_unary_datacopy, llk_math_eltwise_unary_datacopy_block]
+        uninit: [llk_math_eltwise_unary_datacopy_uninit]
+        match:
+          template: [[0, 0], [2, 2]]
+      - architectures: [blackhole]
+        init: llk_math_eltwise_unary_datacopy_init_impl
+        execute: [llk_math_eltwise_unary_datacopy, llk_math_eltwise_unary_datacopy_block]
+        uninit: [llk_math_eltwise_unary_datacopy_uninit]
+        match:
+          template: [[0, 0], [2, 2]]
+    citation: tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_math_unary_datacopy_api.h:69 (init hook); broadcast uninit contract in tt_metal/hw/inc/api/compute/bcast.h:122
+
+  - id: math.fast_tilize
+    compared_fields: [AddrMod]
+    sanitizer_operation: OperationFpuFastTilizeWh
+    exu: Fpu
+    thread: MATH
+    architectures: [wormhole_b0]
+    requires_uninit: true
+    invalidated_by: []
+    transitions:
+      - init: llk_math_fast_tilize_init
+        execute: [llk_math_fast_tilize_block_]
+        uninit: [llk_math_fast_tilize_uninit]
+        match: {}
+    citation: tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_math_unary_datacopy_api.h:llk_math_fast_tilize_init (init hook)
+
+
+  - id: math.transpose_dest
+    compared_fields: []
+    sanitizer_operation: null
+    exu: Fpu
+    thread: MATH
+    requires_uninit: false
+    additive: true
+    # The LLK transpose-dest init has no sanitizer hook, so it does not displace
+    # the datacopy operation seated by transpose_init's datacopy init.
+    invalidated_by: []
+    transitions:
+      - init: llk_math_transpose_dest_init
+        execute: [llk_math_transpose_dest]
+        match:
+          template: [[0, 0], [1, 1]]
+    citation: tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_math_transpose_dest_api.h:20; issue #59276 (init configured differently from the operation that follows it)
+
+  # Compute-API-level broadcast rule: the LLK unpack_A / unary_datacopy inits are
+  # shared with copy_init (which does not need an uninit), so the "broadcast must
+  # be uninitialized" contract only exists at this level.
+  - id: compute.broadcast_unpack
+    sanitizer_operation: null
+    exu: Unpack
+    thread: UNPACK
+    requires_uninit: true
+    descend: true
+    additive: true
+    transitions:
+      - init: unary_bcast_init
+        execute: [unary_bcast]
+        uninit: [unary_bcast_uninit]
+        match: {}
+    citation: tt_metal/hw/inc/api/compute/bcast.h:122 (unary_bcast_uninit)
+
+  - id: compute.broadcast_math
+    sanitizer_operation: null
+    exu: Fpu
+    thread: MATH
+    requires_uninit: true
+    descend: true
+    additive: true
+    transitions:
+      - init: unary_bcast_init
+        execute: [unary_bcast]
+        uninit: [unary_bcast_uninit]
+        match: {}
+    citation: tt_metal/hw/inc/api/compute/bcast.h:122 (unary_bcast_uninit)
+
+  # PACK-side tilize context: tilize_init arms the packer's tilize mode; a
+  # pack_reconfig_data_format in between breaks it even though it re-runs
+  # llk_pack_init (issue #61146).  Additive so it does not collide with pack.tile.
+  - id: compute.tilize_pack
+    sanitizer_operation: null
+    exu: Pack
+    thread: PACK
+    requires_uninit: true
+    additive: true
+    descend: true
+    invalidated_by: [llk_pack_reconfig_data_format]
+    transitions:
+      - init: tilize_init
+        execute: [tilize_block]
+        uninit: [tilize_uninit]
+        match: {}
+    citation: tt_metal/hw/inc/api/compute/tilize.h:51; issue #61146 (pack_reconfig_data_format after tilize_init corrupts output)
+
+  # -------------------------------------------------------------------- PACK
+  - id: pack.tile
+    compared_fields: []
+    sanitizer_operation: OperationPack
+    exu: Pack
+    thread: PACK
+    requires_uninit: false
+    invalidated_by: [llk_pack_hw_configure]
+    transitions:
+      - architectures: [wormhole_b0]
+        init: llk_pack_init
+        execute: [llk_pack, llk_matmul_pack]
+        match: {}
+      - architectures: [blackhole]
+        init: llk_pack_init_impl
+        execute: [llk_pack, llk_matmul_pack]
+        match: {}
+    citation: tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_pack_tile_api.h:29 (init hook)
+
+  - id: pack.untilize
+    compared_fields: [BlockCtDim, FullCtDim, Diagonal]
+    sanitizer_operation: OperationPackUntilize
+    exu: Pack
+    thread: PACK
+    requires_uninit: true
+    invalidated_by: [llk_pack_reconfig_data_format, llk_pack_hw_configure]
+    transitions:
+      - architectures: [wormhole_b0]
+        init: llk_pack_untilize_init
+        execute: [llk_pack_untilize]
+        uninit: [llk_pack_untilize_uninit]
+        match:
+          template: [[0, 0], [1, 1], [2, 2]]
+      - architectures: [blackhole]
+        init: llk_pack_untilize_init_impl
+        execute: [llk_pack_untilize_impl]
+        uninit: [llk_pack_untilize_uninit_impl]
+        match:
+          template: [[0, 0], [1, 1], [2, 2]]
+    citation: tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_pack_untilize_api.h:37 (init hook); compute API tt_metal/hw/inc/api/compute/pack_untilize.h:374
+
+  - id: pack.fast_tilize
+    compared_fields: [AddrMod, Use32BitDest]
+    sanitizer_operation: OperationPackFastTilizeWh
+    exu: Pack
+    thread: PACK
+    architectures: [wormhole_b0]
+    requires_uninit: true
+    invalidated_by: [llk_pack_reconfig_data_format, llk_pack_hw_configure]
+    transitions:
+      - init: llk_pack_fast_tilize_init
+        execute: [llk_pack_fast_tilize_block]
+        uninit: [llk_pack_fast_tilize_uninit]
+        match: {}
+    citation: tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_pack_fast_tilize_api.h:llk_pack_fast_tilize_uninit (nested init<OperationPack> hook)
+
+# SFPU init/execute pairs are generated from the host-side source generator; see
+# compute_api_order_sfpu.yaml.  These three pairs are emitted only through
+# std::make_pair / direct returns the generator does not parse.
+sfpu_extra_groups:
+  - id: sfpu.mac_tile
+    init: [mac_tile_init]
+    execute: [mac_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:684
+  - id: sfpu.where_tile
+    init: [where_tile_init]
+    execute: [where_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:678
+  - id: sfpu.signbit_tile
+    init: [signbit_tile_init]
+    execute: [signbit_tile]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:784
+  - id: sfpu.negative_tile
+    init: [negative_tile_init]
+    execute: [negative_tile, negative_tile_int32]
+    citation: ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp:951
+
+# Sequence postconditions.  After the trigger init body has been followed, the
+# required operation must be seated with matching arguments.  require_args maps
+# trigger-argument index -> required-init argument index, compared as canonical
+# values.  This is how #52175 is kept from regressing: tilize_init must re-point
+# the packer at the OCB, otherwise a previous operation's geometry is reused.
+sequence_rules:
+  - id: tilize-packer-seated-wh
+    trigger: tilize_init
+    thread: PACK
+    architectures: [wormhole_b0]
+    require_init: pack.tile
+    # WH llk_pack_init takes the output operand first; compare it with
+    # tilize_init(icb, block, ocb) argument 2.
+    require_args: [[2, 0]]
+    message: "tilize_init did not re-initialize the packer for its output operand; the packer would use the previous operation's tile geometry"
+    citation: "tt_metal/hw/inc/api/compute/tilize.h:51; issue #52175"
+  - id: tilize-packer-seated-bh
+    trigger: tilize_init
+    thread: PACK
+    architectures: [blackhole]
+    require_init: pack.tile
+    # BH packs through llk_pack_init_impl, whose arguments are the resolved
+    # descriptor fields; freshness is the invariant, not the operand spelling.
+    require_args: []
+    message: "tilize_init did not re-initialize the packer for its output operand; the packer would use the previous operation's tile geometry"
+    citation: "tt_metal/hw/inc/api/compute/tilize.h:51; issue #52175"
+
+# Deprecated init APIs called out by .github/deprecations.json.  The checker also
+# reports any call whose C++ declaration carries [[deprecated]]: init-style
+# functions produce deprecated-init, everything else (e.g. acquire_dst) produces
+# deprecated-api.  This list is only for deprecations tracked outside the headers.
+# Keys must exist in .github/deprecations.json (checked by the tests).
+deprecated_init_apis: []
+
+# Nested hooks: a rule function that also performs another operation's init/uninit.
+# llk_pack_fast_tilize_uninit re-seats OperationPack with llk_pack_init<Default>
+# (it undo-tilizes the packer), so a later pack_tile does not need another init.
+extra_events:
+  - function: llk_pack_fast_tilize_uninit
+    architectures: [wormhole_b0]
+    kind: init
+    op: pack.tile
+    match: {}
