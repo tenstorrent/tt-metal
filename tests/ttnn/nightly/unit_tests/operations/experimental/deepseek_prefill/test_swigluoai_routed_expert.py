@@ -247,3 +247,68 @@ def test_swigluoai_routed_expert_deterministic(mesh_device, device_params):
         activation=ttnn.RoutedExpertActivation.SwiGluOai,
         repeat=10,
     )
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="unified_routed_expert op requires a Blackhole grid")
+@pytest.mark.parametrize("op_name", ["unified", "hybrid"])
+def test_routed_expert_compute_kernel_fidelity(device, op_name):
+    """Caller fidelity changes the program and improves its float64 reference error."""
+    torch.manual_seed(42)
+    num_tokens, width = 32, 352  # One tile per column of the fixed 11-column grid.
+    x = torch.rand(num_tokens, width) * 0.5 + 0.25
+    weights = [torch.rand(width, width) * 0.03 + 0.01 for _ in range(3)]
+    weight_tensors = [ttnn.from_torch(w, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT) for w in weights]
+    # The tiled path writes in place. Give every call identical, fresh input words.
+    inputs = [ttnn.from_torch(x, device=device, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT) for _ in range(3)]
+    x64 = ttnn.to_torch(inputs[0]).double()
+    gate64, up64, down64 = [ttnn.to_torch(w).double() for w in weight_tensors]
+    reference = (F.silu(x64 @ gate64) * (x64 @ up64)) @ down64
+
+    def index(values):
+        return ttnn.from_torch(
+            torch.tensor(values, dtype=torch.int32), device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
+        )
+
+    offsets, counts, expert_ids = index([0]), index([num_tokens]), index([0])
+    configs = [
+        ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.LoFi),
+        ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
+        None,
+    ]
+    op = getattr(ttnn.experimental.deepseek_prefill, f"{op_name}_routed_expert_moe")
+    outputs, entries = [], []
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
+    for inp, config in zip(inputs, configs):
+        kwargs = {} if config is None else {"compute_kernel_config": config}
+        if op_name == "hybrid":
+            # Only the hybrid op's own unified half runs; no combine arguments.
+            kwargs["hybrid_token_threshold"] = 0
+        result = op(
+            inp,
+            offsets,
+            counts,
+            expert_ids,
+            [weight_tensors[0]],
+            [weight_tensors[1]],
+            [weight_tensors[2]],
+            num_tokens,
+            **kwargs,
+        )
+        outputs.append(ttnn.to_torch(result).float().contiguous())
+        entries.append(device.num_program_cache_entries())
+
+    def errors(output):
+        difference = output.double() - reference
+        rel_l2 = (torch.linalg.vector_norm(difference) / torch.linalg.vector_norm(reference)).item()
+        return rel_l2, difference.abs().max().item()
+
+    lofi, hifi, default = outputs
+    assert all(torch.isfinite(output).all() for output in outputs)
+    assert not torch.equal(lofi.view(torch.int32), hifi.view(torch.int32)), "HiFi4 was ignored: output equals LoFi"
+    (lofi_rel_l2, lofi_max_abs), (hifi_rel_l2, hifi_max_abs) = errors(lofi), errors(hifi)
+    assert hifi_rel_l2 <= lofi_rel_l2, f"HiFi4 relative L2 {hifi_rel_l2:.4f} is worse than LoFi's {lofi_rel_l2:.4f}"
+    assert hifi_max_abs <= lofi_max_abs, f"HiFi4 max error {hifi_max_abs:.3f} is worse than LoFi's {lofi_max_abs:.3f}"
+    assert torch.equal(lofi.view(torch.int32), default.view(torch.int32)), "Omitting the config must preserve LoFi"
+    # The explicit optional config is the key: nullopt is a third identity.
+    assert entries == [1, 2, 3]
