@@ -212,7 +212,11 @@ def _collect_pairs(raw: dict[str, torch.Tensor]):
         if m:
             pairs.setdefault(m.group("base"), {})[_SLOT_MAP[m.group("slot")]] = tensor
         elif key.endswith(".alpha"):
-            alphas[key[: -len(".alpha")]] = float(tensor.item())
+            alpha_base = key[: -len(".alpha")]
+            # Block targets are keyed by the canonical name _alpha_key() builds at lookup time,
+            # so every spelling (blocks.N / transformer_blocks.N, to_out.0, ff.net.*) resolves.
+            parsed = _parse_target(alpha_base)
+            alphas[_alpha_key(*parsed) if parsed is not None else alpha_base] = float(tensor.item())
         elif key.endswith((".diff", ".diff_b")):
             skipped_direct += 1
         else:
