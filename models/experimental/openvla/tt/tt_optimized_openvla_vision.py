@@ -52,6 +52,7 @@ def siglip_patch_embeddings(
     pixel_values,
     *,
     parameters,
+    pos_embed=None,
 ):
     batch_size, img_h, img_w, img_c = pixel_values.shape  # permuted input NHWC
     patch_size = 14
@@ -76,6 +77,18 @@ def siglip_patch_embeddings(
 
     patch_embedding_output = ttnn.to_layout(patch_embedding_output, layout=ttnn.ROW_MAJOR_LAYOUT)
     patch_embedding_output = ttnn.reshape(patch_embedding_output, (batch_size, patch_count_all, -1))
+
+    # Add positional embeddings if provided
+    pos_embed_tensor = pos_embed
+    if pos_embed_tensor is None and hasattr(parameters, "pos_embed") and parameters.pos_embed is not None:
+        pos_embed_tensor = parameters.pos_embed
+
+    if pos_embed_tensor is not None:
+        if ttnn.get_layout(pos_embed_tensor) != ttnn.TILE_LAYOUT:
+            pos_embed_tensor = ttnn.to_layout(pos_embed_tensor, layout=ttnn.TILE_LAYOUT)
+        patch_embedding_output = ttnn.to_layout(patch_embedding_output, layout=ttnn.TILE_LAYOUT)
+        patch_embedding_output = ttnn.add(patch_embedding_output, pos_embed_tensor)
+        patch_embedding_output = ttnn.to_layout(patch_embedding_output, layout=ttnn.ROW_MAJOR_LAYOUT)
 
     return patch_embedding_output
 
@@ -586,6 +599,10 @@ def custom_preprocessor_siglip(torch_model, name):
         parameters["patch_embeddings"]["projection"]["bias"] = ttnn.from_torch(
             bias.unsqueeze(0), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
         )
+        if hasattr(torch_model, "pos_embed") and torch_model.pos_embed is not None:
+            parameters["patch_embeddings"]["pos_embed"] = ttnn.from_torch(
+                torch_model.pos_embed, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+            )
     elif isinstance(torch_model, attention_class):
         num_heads = 16
         qkv_weight, qkv_bias, proj_weight, proj_bias = (

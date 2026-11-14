@@ -81,6 +81,19 @@ python models/experimental/openvla/references/run_pytorch_openvla.py --benchmark
 
 > **Note**: Llama-2 requires access permission from Meta. Request access at [meta-llama/Llama-2-7b-hf](https://huggingface.co/meta-llama/Llama-2-7b-hf), then create an HF token at [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens).
 
+### Run Correctness and PCC Tests
+
+```bash
+# OpenVLA correctness regression tests (deterministic layout, token sequence ordering, EOS exclusion)
+pytest models/experimental/openvla/tests/test_openvla_correctness.py -v
+
+# SigLIP PCC tests with positional embeddings
+pytest models/experimental/openvla/tests/test_siglip_pcc.py -v
+
+# Full vision encoder tests
+pytest models/experimental/openvla/tests/test_openvla_vision_pcc.py -v
+```
+
 ### Run Full Model Test
 
 ```bash
@@ -92,21 +105,21 @@ pytest models/experimental/openvla/tt/open_vla.py::test_openvla_model -v
 
 ## Precision Notes
 
-- Precision is auto-selected based on device (see table above)
+- Precision is auto-selected based on device (see table above).
+- On single device (P150/N150), default performance mode is used without requiring multi-chip fabric (`fabric_config=None`).
+- Q/K weights are mapped from Hugging Face format into Meta RoPE layout (`dim1 // n_heads // 2, 2`).
+- SigLIP patch embeddings add checkpoint positional embeddings before transformer blocks.
+- Action generation combines the prefill token (dimension 0) with decode tokens, preserving the exact 7-DoF action sequence without EOS dimension leakage.
 
-## PCC Test Results
+## PCC and Numerical Tolerances
 
-| Component | PCC |
-|-----------|-----|
-| Vision Encoder (DINOv2) | 0.98+ |
-| Vision Encoder (SigLIP) | 0.99+ |
-| Full Model | TBD |
-
-## Known Issues
-
-1. **Layer 0-2 Hidden State Divergence**: There's a numerical divergence in early LLM layers between PyTorch and TT implementations that needs investigation.
-
-2. **Token 31872 Inflation**: When using BFP8 for LM head, token 31872 can have inflated logits. Fixed by using BF16 for LM head.
+| Component | Target PCC / Metric | Reference Environment |
+|-----------|---------------------|-----------------------|
+| Vision Encoder (DINOv2) | PCC > 0.98 | PyTorch timm ViT-L/14 |
+| Vision Encoder (SigLIP) | PCC > 0.9998 | PyTorch timm ViT-SO400M with pos_embed |
+| SigLIP Patch Embeddings + pos_embed | PCC > 0.9998 | PyTorch `patch_embed(x) + pos_embed` |
+| Q/K Permutation Mapping | Bitwise / Exact Match | Hugging Face to Meta RoPE layout |
+| Action Token Sequence | Exact Match (7 dims) | HF `openvla/openvla-7b` greedy decoding |
 
 ## References
 
