@@ -210,7 +210,7 @@ class DramByCategory(unittest.TestCase):
 class PipelineResetForShape(unittest.TestCase):
     def test_releases_everything_before_freeing_ccl_and_warms_at_the_new_shape(self):
         log = []
-        names = ["_ccl_managers", "_shape_state_tensors", "release_shape_buffers", "reset_for_shape"]
+        names = ["_ccl_managers", "_shape_state_tensors", "_release_ccl", "release_shape_buffers", "reset_for_shape"]
         ttnn = SimpleNamespace(synchronize_device=lambda m: log.append("sync"))
         ns = _lift(
             "pipelines/ltx/pipeline_ltx.py",
@@ -274,6 +274,8 @@ class PipelineResetForShape(unittest.TestCase):
         self.assertEqual(stats["traces_left"], 0)
         self.assertIn("warmup_s", stats)
         self.assertEqual(stats["dram_warm"], {"allocated": 1})
+        log.clear()
+        self.assertEqual(p.release_shape_buffers(), 4)  # an int: ltx-server reads it as ccl_freed
 
 
 class FakeState:

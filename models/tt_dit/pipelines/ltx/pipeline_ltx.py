@@ -556,10 +556,14 @@ class LTXPipeline:
         out += [v for v in io.values() if isinstance(v, StateTensor)] if isinstance(io, dict) else []
         return out
 
-    def release_shape_buffers(self) -> tuple[int, int]:
-        """Free every CCL manager's shape-keyed buffers; (tensors, bytes). Only once no trace is live."""
+    def _release_ccl(self) -> tuple[int, int]:
         counts = [m.release_shape_buffers() for m in self._ccl_managers()]
         return sum(c for c, _ in counts), sum(b for _, b in counts)
+
+    def release_shape_buffers(self) -> int:
+        """Free every CCL manager's shape-keyed buffers; the tensor count (ltx-server's hotswap.reshape
+        reads it as ccl_freed). Only once no trace is live."""
+        return self._release_ccl()[0]
 
     def dram_by_category(self) -> dict:
         """One chip's DRAM by category (see utils.dram_accounting); the audio submesh's CCL is not counted."""
@@ -601,7 +605,7 @@ class LTXPipeline:
         left = sum(t.trace_captured for t in live_tracers())
         if left:
             logger.warning(f"reset_for_shape: {left} trace(s) outside the pipeline are still captured")
-        ccl_tensors, ccl_bytes = self.release_shape_buffers()
+        ccl_tensors, ccl_bytes = self._release_ccl()
         released = self.dram_by_category()
         t_release = clock()
         stats = {"release_s": round(t_release - t0, 3), "traces_released": traces, "ccl_freed": ccl_tensors,
