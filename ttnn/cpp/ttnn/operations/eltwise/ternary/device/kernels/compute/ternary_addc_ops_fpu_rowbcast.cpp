@@ -128,6 +128,9 @@ void kernel_main() {
         dfb_in0.pop_front(num_tiles_per_cycle);
 #endif
 
+        // Restore packer data format to output after broadcast
+        pack_reconfig_data_format(dfb::out);
+
         // Ensure sources available
         dfb_eff_a.wait_front(num_tiles_per_cycle);
         dfb_eff_b.wait_front(num_tiles_per_cycle);
