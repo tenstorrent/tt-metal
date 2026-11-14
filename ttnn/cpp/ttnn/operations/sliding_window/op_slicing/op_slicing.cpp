@@ -481,12 +481,17 @@ void run_sliced_op(
         auto sliced_input_tensor_memory_config = op_slice_attr->get_input_memory_config(
             {output_slice_height_start, output_slice_width_start}, {output_slice_height_end, output_slice_width_end});
 
+        const auto [prologue_scale, prologue_shift] = op_slice_attr->input_prologue();
         const Tensor sliced_input_tensor = ttnn::experimental::padded_slice(
             input_tensor,
             ttsl::SmallVector<uint32_t>{0, input_slice_height_start, input_slice_width_start, 0},  // Start
             ttsl::SmallVector<uint32_t>{batch_size, input_slice_height_end, input_slice_width_end, input_channels},
             ttsl::SmallVector<uint32_t>{1, 1, 1, 1},  // Step
-            sliced_input_tensor_memory_config);
+            sliced_input_tensor_memory_config,
+            /*optional_output_tensor=*/std::nullopt,
+            /*pad_value=*/std::nullopt,
+            prologue_scale,
+            prologue_shift);
 
         auto sliced_output_tensors = op_slice_attr->run_L1_op(
             sliced_input_tensor,
