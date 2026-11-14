@@ -34,16 +34,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #else
     constexpr std::uint32_t loop_factor = LOOP_FACTOR;
 #endif
-#ifdef LLK_PROFILER
-    constexpr std::uint32_t num_blocks         = 1;
-    constexpr std::uint32_t num_tiles_in_block = CT_DIM;
-    constexpr std::uint32_t test_face_r_dim    = FACE_R_DIM;
-    constexpr std::uint32_t test_num_faces     = TILE_NUM_FACES;
+    // Same geometry in every build; only speed-of-light folds it into constants. num_blocks is read
+    // by the functional loops only, so the profiler loops leave it unused.
+#ifndef SPEED_OF_LIGHT
+    [[maybe_unused]] const std::uint32_t num_blocks = params.NUM_BLOCKS;
+    const std::uint32_t num_tiles_in_block          = params.NUM_TILES_IN_BLOCK;
+    const std::uint32_t test_face_r_dim             = params.TEST_FACE_R_DIM;
+    const std::uint32_t test_num_faces              = params.num_faces;
 #else
-    const std::uint32_t num_blocks         = params.NUM_BLOCKS;
-    const std::uint32_t num_tiles_in_block = params.NUM_TILES_IN_BLOCK;
-    const std::uint32_t test_face_r_dim    = params.TEST_FACE_R_DIM;
-    const std::uint32_t test_num_faces     = params.num_faces;
+    [[maybe_unused]] constexpr std::uint32_t num_blocks = NUM_BLOCKS;
+    constexpr std::uint32_t num_tiles_in_block          = NUM_TILES_IN_BLOCK;
+    constexpr std::uint32_t test_face_r_dim             = TEST_FACE_R_DIM;
+    constexpr std::uint32_t test_num_faces              = num_faces;
 #endif
     const ckernel::TensorShape tensor_shape = ckernel::tensor_shape_from_num_faces(test_face_r_dim, test_num_faces);
 
@@ -121,16 +123,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #else
     constexpr std::uint32_t loop_factor = LOOP_FACTOR;
 #endif
-#ifdef LLK_PROFILER
-    constexpr std::uint32_t num_blocks         = 1;
-    constexpr std::uint32_t num_tiles_in_block = CT_DIM;
-    constexpr std::uint32_t test_face_r_dim    = FACE_R_DIM;
-    constexpr std::uint32_t test_num_faces     = TILE_NUM_FACES;
+    // Same geometry in every build; only speed-of-light folds it into constants. num_blocks is read
+    // by the functional loops only, so the profiler loops leave it unused.
+#ifndef SPEED_OF_LIGHT
+    [[maybe_unused]] const std::uint32_t num_blocks = params.NUM_BLOCKS;
+    const std::uint32_t num_tiles_in_block          = params.NUM_TILES_IN_BLOCK;
+    const std::uint32_t test_face_r_dim             = params.TEST_FACE_R_DIM;
+    const std::uint32_t test_num_faces              = params.num_faces;
 #else
-    const std::uint32_t num_blocks         = params.NUM_BLOCKS;
-    const std::uint32_t num_tiles_in_block = params.NUM_TILES_IN_BLOCK;
-    const std::uint32_t test_face_r_dim    = params.TEST_FACE_R_DIM;
-    const std::uint32_t test_num_faces     = params.num_faces;
+    [[maybe_unused]] constexpr std::uint32_t num_blocks = NUM_BLOCKS;
+    constexpr std::uint32_t num_tiles_in_block          = NUM_TILES_IN_BLOCK;
+    constexpr std::uint32_t test_face_r_dim             = TEST_FACE_R_DIM;
+    constexpr std::uint32_t test_num_faces              = num_faces;
 #endif
     const ckernel::TensorShape tensor_shape = ckernel::tensor_shape_from_num_faces(test_face_r_dim, test_num_faces);
 
@@ -232,14 +236,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #else
     constexpr std::uint32_t loop_factor = LOOP_FACTOR;
 #endif
-    constexpr std::uint32_t num_tiles_in_block = CT_DIM;
-    constexpr std::uint32_t test_face_r_dim    = FACE_R_DIM;
-    constexpr std::uint32_t test_num_faces     = TILE_NUM_FACES;
+#endif
+    // Same geometry in every build; only speed-of-light folds it into constants. num_blocks is read
+    // by the functional loop only, so the profiler loop leaves it unused.
+#ifndef SPEED_OF_LIGHT
+    [[maybe_unused]] const std::uint32_t num_blocks = params.NUM_BLOCKS;
+    const std::uint32_t num_tiles_in_block          = params.NUM_TILES_IN_BLOCK;
+    const std::uint32_t test_face_r_dim             = params.TEST_FACE_R_DIM;
+    const std::uint32_t test_num_faces              = params.num_faces;
 #else
-    const std::uint32_t num_blocks         = params.NUM_BLOCKS;
-    const std::uint32_t num_tiles_in_block = params.NUM_TILES_IN_BLOCK;
-    const std::uint32_t test_face_r_dim    = params.TEST_FACE_R_DIM;
-    const std::uint32_t test_num_faces     = params.num_faces;
+    [[maybe_unused]] constexpr std::uint32_t num_blocks = NUM_BLOCKS;
+    constexpr std::uint32_t num_tiles_in_block          = NUM_TILES_IN_BLOCK;
+    constexpr std::uint32_t test_face_r_dim             = TEST_FACE_R_DIM;
+    constexpr std::uint32_t test_num_faces              = num_faces;
 #endif
 
     {

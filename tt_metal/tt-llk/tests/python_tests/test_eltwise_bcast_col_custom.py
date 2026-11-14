@@ -124,10 +124,8 @@ def create_eltwise_bcast_col_custom_config(
     if is_perf and preserve_src_zero_flag:
         raise ValueError("preserve_src_zero_flag is functional-only")
     geometry = (num_faces, face_r_dim, num_blocks, num_tiles_in_block)
-    if is_perf and any(value is not None for value in geometry):
-        raise ValueError("Face and block geometry is functional-only")
-    if not is_perf and None in geometry:
-        raise ValueError("Functional bcast-column geometry is incomplete")
+    if None in geometry:
+        raise ValueError("Bcast-column geometry is incomplete")
 
     templates = [
         MATH_FIDELITY(math_fidelity),
@@ -135,9 +133,14 @@ def create_eltwise_bcast_col_custom_config(
         BROADCAST_TYPE(broadcast_type),
         CT_DIM(ct_dim),
     ]
+    # The tile shape and block split are emitted in every mode: the kernel reads them in perf too.
     runtimes = [
         TILE_COUNT(tile_count),
         LOOP_FACTOR(loop_factor),
+        NUM_FACES(num_faces, num_faces, num_faces),
+        TEST_FACE_DIMS(face_r_dim),
+        NUM_BLOCKS(num_blocks),
+        NUM_TILES_IN_BLOCK(num_tiles_in_block),
     ]
 
     if not is_perf:
@@ -150,14 +153,6 @@ def create_eltwise_bcast_col_custom_config(
                     block_rt_dim=_BCST_COL_RT_DIM,
                 ),
                 PRESERVE_SRC_ZERO_FLAG(preserve_src_zero_flag),
-            ]
-        )
-        runtimes.extend(
-            [
-                NUM_FACES(num_faces, num_faces, num_faces),
-                TEST_FACE_DIMS(face_r_dim),
-                NUM_BLOCKS(num_blocks),
-                NUM_TILES_IN_BLOCK(num_tiles_in_block),
             ]
         )
 
