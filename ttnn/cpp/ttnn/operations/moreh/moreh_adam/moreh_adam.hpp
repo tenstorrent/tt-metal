@@ -20,7 +20,7 @@ std::vector<std::optional<Tensor>> moreh_adam(
     std::optional<float> beta2 = 0.999f,
     std::optional<float> eps = 1e-8f,
     std::optional<float> weight_decay = 0.0f,
-    std::optional<uint32_t> step = 0,
+    std::optional<uint32_t> step = 1,
     std::optional<bool> amsgrad = false,
     const std::optional<const Tensor>& max_exp_avg_sq_in = std::nullopt,
     const std::optional<const Tensor>& param_out = std::nullopt,

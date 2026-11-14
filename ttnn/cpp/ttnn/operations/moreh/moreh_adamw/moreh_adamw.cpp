@@ -31,6 +31,13 @@ std::vector<std::optional<Tensor>> moreh_adamw(
     const std::optional<Tensor>& max_exp_avg_sq_out,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    // Adam's bias corrections divide by 1 - beta^step, which is 0 at step 0, so the first update must be step 1
+    // (as torch counts it); step 0, including an omitted step, would scale the update by 1/0.
+    TT_FATAL(
+        step.value_or(0) >= 1,
+        "{}: step must be >= 1 (the first optimizer step is 1), got {}",
+        "moreh_adamw",
+        step.value_or(0));
     return prim::moreh_adamw(
         param_in,
         grad,

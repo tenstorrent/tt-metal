@@ -33,7 +33,7 @@ void bind_moreh_adam_operation(nb::module_& mod) {
         nb::arg("beta2") = 0.999f,
         nb::arg("eps") = 1e-8f,
         nb::arg("weight_decay") = 0.0f,
-        nb::arg("step") = 0,
+        nb::arg("step") = 1,
         nb::arg("amsgrad") = false,
 
         nb::arg("max_exp_avg_sq_in") = nb::none(),
