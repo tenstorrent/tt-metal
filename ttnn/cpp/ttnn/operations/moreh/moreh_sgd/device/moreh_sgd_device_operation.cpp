@@ -120,6 +120,11 @@ ttnn::operations::moreh::moreh_sgd::MorehSgdOperation::tensor_return_value_t mor
         momentum_buffer_out_memory_config.value_or(param_in.memory_config()),
         init_device_compute_kernel_config(param_in.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4)};
     auto tensor_args = OperationType::tensor_args_t{param_in, grad, momentum_buffer_in, param_out, momentum_buffer_out};
+    // An empty param has nothing to update, and the factory divides by its dims.
+    if (param_in.logical_volume() == 0) {
+        OperationType::validate_on_program_cache_miss(operation_attributes, tensor_args);
+        return OperationType::create_output_tensors(operation_attributes, tensor_args);
+    }
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 }  // namespace ttnn::prim
