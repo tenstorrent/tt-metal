@@ -2873,6 +2873,12 @@ class StackBackend(ModelBackend):
             return [int(n_valid)], ""
         return tpp.slice_plan(int(chunk_start), int(n_valid), int(front))
 
+    def prefill_resume_max(self) -> Optional[int]:
+        """the largest prefill chunk start that still plans (TPPrefill.resume_max, F27); None without the TP prefill
+        (no captured-window bound): the served adapter keeps exact splits, prefix hits and snapshots at or below it"""
+        tpp = getattr(self, "tpp", None)
+        return None if tpp is None else int(tpp.resume_max())
+
     def prefill_slice_rows(self, rows: int) -> int:
         """rows per chip of a `rows`-row TP prefill replay (bucket, packed T, batched nb x s) when sequence-parallel; 0
         when replicated, with the rule off (GLM53_PF_SLICE_RULE=0) or without the TP prefill (the generator's packed /

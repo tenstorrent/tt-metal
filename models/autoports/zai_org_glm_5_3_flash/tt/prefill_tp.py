@@ -3502,14 +3502,24 @@ class TPPrefill:
             return False
         return True
 
-    def clamp_lengths(self, chunk_start: int, n_valid: int) -> list:
-        """the max_seq clamp (coordinator 2026-10-23 03:30:50Z: n29h5's 64K prompt died in plan() -- 'chunk [59392,
-        67584) past the cache (66048 tokens)': the generator's 8,192-token chunk grid gave the prompt's LAST chunk the
-        8,192 bucket although its replay ran past the cache / the captured window). A chunk whose replay would not fit
-        runs as pieces: each the LARGEST bucket < the tokens left whose replay fits (a full bucket of tokens, so every
-        next start stays on the bucket's 128-row grid), then the rest in its own bucket -- e.g. 4,608 tokens at 59,392
-        under a 65,536 window: 2,048 + 2,048 + 512. [n_valid] when the chunk fits (every chunk but a long prompt's
-        last) or when no piece does (plan() then raises exactly as before)."""
+    def resume_max(self) -> int:
+        """the largest chunk START at which a continuation still plans (F27 2026-11-14): in the sparse regime a piece
+        needs a captured window >= start + its bucket, so a start past (the top window - the smallest sequence-parallel
+        bucket) has no key at all ('chunk [1046912, 1048960) past the captured sparse windows': the served
+        exact-snapshot split of a 1,047,000-token prompt put its 87-row tail at 1,046,912 and killed the engine). The
+        served adapter keeps every start at or below it (exact split, prefix confirm, snapshots); clamp_lengths and
+        slice_plan keep their pieces there. Rounded down to start_align; max_seq without sparse windows."""
+        if not self.has_dsa() or not self.sparse_ts:
+            return int(self.max_seq)
+        sp = [int(c) for c in self.buckets if self.ndev == 1 or self.mode(c) == "sp"]
+        if not sp:
+            return int(self.max_seq)
+        al = int(getattr(self, "start_align", TILE))
+        r = min(max(self.sparse_ts), int(self.max_seq)) - min(sp)
+        return max(0, r) // al * al
+
+    def _clamp_greedy(self, chunk_start: int, n_valid: int) -> tuple:
+        """clamp_lengths' greedy pass -> (pieces before the remainder, the remainder's start, the remainder)"""
         al = int(getattr(self, "start_align", TILE))
         lens, s, left = [], int(chunk_start), int(n_valid)
         while not self._plan_ok(s, left):
@@ -3519,7 +3529,38 @@ class TPPrefill:
             c = max(fit)
             lens.append(c)
             s, left = s + c, left - c
-        return lens + [left]
+        return lens, s, left
+
+    def clamp_lengths(self, chunk_start: int, n_valid: int) -> list:
+        """the max_seq clamp (coordinator 2026-10-23 03:30:50Z: n29h5's 64K prompt died in plan() -- 'chunk [59392,
+        67584) past the cache (66048 tokens)': the generator's 8,192-token chunk grid gave the prompt's LAST chunk the
+        8,192 bucket although its replay ran past the cache / the captured window). A chunk whose replay would not fit
+        runs as pieces: each the LARGEST bucket < the tokens left whose replay fits (a full bucket of tokens, so every
+        next start stays on the bucket's 128-row grid), then the rest in its own bucket -- e.g. 4,608 tokens at 59,392
+        under a 65,536 window: 2,048 + 2,048 + 512. [n_valid] when the chunk fits (every chunk but a long prompt's
+        last) or when no piece does (plan() then raises exactly as before)."""
+        lens, s, left = self._clamp_greedy(int(chunk_start), int(n_valid))
+        if self._plan_ok(s, left):
+            return lens + [left]
+        # F27: the greedy full-bucket pieces walked the remainder's start past resume_max (e.g. 1,040,512 + 7,999
+        # tokens under the 1,048,576 window: 2,048 x 3 then 1,855 rows at 1,046,656, no key). Tail first: the latest
+        # aligned start <= resume_max whose tail [s_last, end) plans, then the greedy pass over [chunk_start, s_last).
+        tail = self._clamp_tail_first(int(chunk_start), int(n_valid))
+        return tail if tail is not None else lens + [left]
+
+    def _clamp_tail_first(self, chunk_start: int, n_valid: int):
+        """[head pieces..., tail] covering [chunk_start, chunk_start + n_valid) with every piece planned, the tail at the
+        latest start_align position <= resume_max whose tail plans; None when no such split exists"""
+        al = int(getattr(self, "start_align", TILE))
+        end = int(chunk_start) + int(n_valid)
+        s_last = min(self.resume_max(), (end - 1) // al * al)
+        while s_last > chunk_start:
+            if self._plan_ok(s_last, end - s_last):
+                head, s, left = self._clamp_greedy(int(chunk_start), s_last - int(chunk_start))
+                if self._plan_ok(s, left):
+                    return head + [left, end - s_last]
+            s_last -= al
+        return None
 
     def slice_plan(self, chunk_start: int, n_valid: int, front: int) -> tuple:
         """the generator's per-chunk rule (tt/generator.py slice_plan over slice_choice) -> (chunk lengths, branch):
@@ -3542,6 +3583,12 @@ class TPPrefill:
         if not self.slice_rule:
             return [int(n_valid)], ""
         lens, branch = _slice_plan(int(chunk_start), int(n_valid), int(front), self.slice_choice)
+        if len(lens) > 1:  # F27: a split whose rest would start past resume_max has no key -- keep the chunk whole
+            s, ok = int(chunk_start), True
+            for n in lens:
+                ok, s = ok and self._plan_ok(s, int(n)), s + int(n)
+            if not ok and self._plan_ok(int(chunk_start), int(n_valid)):
+                lens, branch = [int(n_valid)], "unavoidable"
         if n_valid == 1 and self.slice_rows(self.slice_choice(chunk_start, 1)[0]):
             branch = "row0"
         return lens, branch

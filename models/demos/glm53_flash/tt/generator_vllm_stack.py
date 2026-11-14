@@ -914,6 +914,10 @@ class StackPrefixCache:
             if old is not None:  # the same prompt confirmed again (the scheduler retries a waiting request)
                 self._unpin(old)
             cap = int(num_computed_tokens)
+            rmax = self.resume_max
+            if rmax is not None and cap > rmax:  # F27: a hit past it leaves a continuation no bucket can plan
+                cap = rmax
+                self.stats["confirm_capped"] = self.stats.get("confirm_capped", 0) + 1
             while cap >= self.store.boundary:
                 pos, e = self.store.longest_cached(ids, max_tokens=cap)
                 if e is None:
@@ -987,9 +991,13 @@ class StackPrefixCache:
                     )
                     logger.warning(f"GLM53 stack prefix: generator slot {g}'s hit at {s0}: {why}, prefilled from 0")
             planned = set()
+            rmax = self.resume_max
             for i, (s0, end) in enumerate(zip(starts, ends)):
                 end = int(end)
                 if end % self.store.boundary or end <= s0 or (end % self.grid and not self.exact):
+                    continue
+                if rmax is not None and end > rmax:  # F27: never resumable (confirm caps hits at rmax): no pool entry
+                    self.stats["snapshots_unresumable"] = self.stats.get("snapshots_unresumable", 0) + 1
                     continue
                 if i in skip:  # an image request's state depends on pixels its token-id key does not carry
                     self.stats["mm_excluded"] += 1
@@ -1012,6 +1020,16 @@ class StackPrefixCache:
             extra["snapshot_after"] = snap
         return starts, extra
 
+    @property
+    def resume_max(self):
+        """the largest position a request may resume (or a prompt's tail may start) from: the backend's last plannable
+        prefill start (StackBackend.prefill_resume_max, F27) on the snapshot boundary grid; None = unbounded"""
+        fn = getattr(self.gen.backend, "prefill_resume_max", None)
+        r = fn() if fn is not None else None
+        return (
+            int(r) // self.store.boundary * self.store.boundary if isinstance(r, int) else None
+        )  # (a mock: unbounded)
+
     def exact_splits(self, starts: list, ends: list, skip=()) -> dict:
         """GLM53_STACK_PREFIX_EXACT: {row: P} for the rows to split -- a chunk that ends off the snapshot grid (a
         prompt's last: vLLM cuts every other chunk on the grid) and not on the 128 boundary, whose last boundary P
@@ -1020,11 +1038,15 @@ class StackPrefixCache:
         if not self.exact:
             return {}
         b, g, out = self.store.boundary, self.grid, {}
+        rmax = self.resume_max
         for i, (s0, end) in enumerate(zip(starts, ends)):
             s0, end = int(s0), int(end)
             if i in skip or end % g == 0 or end % b == 0:
                 continue  # a grid / boundary end snapshots without a split (plan)
             pos = end // b * b
+            if rmax is not None and pos > rmax:  # F27: the tail [pos, end) would start where no bucket has a key
+                pos = rmax
+                self.stats["exact_capped"] = self.stats.get("exact_capped", 0) + 1
             if pos > s0 and pos - max(end // g * g, s0) >= self.exact_min:
                 out[i] = pos
         if out:
