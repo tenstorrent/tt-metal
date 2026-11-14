@@ -11,6 +11,7 @@ import torch
 import ttnn
 from models.demos.blackhole.hy4_preview.tests.dev_common import ACTS, p, pcc, traced_us
 from models.demos.blackhole.hy4_preview.tt import hy4_moe_tp32_layout as L
+from models.demos.blackhole.hy4_preview.tt.hy4_moe_tp24 import Tp24Experts
 from models.demos.blackhole.hy4_preview.tt.hy4_moe_tp32 import Tp32Experts, route_tensor
 from models.demos.blackhole.hy4_preview.tt.hy4_moe_weights import load_moe_layer
 
@@ -38,14 +39,15 @@ try:
     W = load_moe_layer(1, load_experts=True)
     w0, w1, w2 = [W[k].reshape(W[k].shape[-3], W[k].shape[-2], W[k].shape[-1]) for k in ("w0", "w1", "w2")]
     p("weights", tuple(w0.shape), tuple(w2.shape))
-    tp = Tp32Experts(md, w0, w1, w2, chip0=CHIP0)
+    IMPL = Tp24Experts if os.environ.get("TP_IMPL", "32") == "24" else Tp32Experts
+    tp = IMPL(md, w0, w1, w2, chip0=CHIP0)
     p(
         "cores",
         [(c.x, c.y) for c in tp.cores],
         "cb bytes T=4",
-        Tp32Experts.cb_bytes(4),
+        IMPL.cb_bytes(16),
         "sum",
-        sum(Tp32Experts.cb_bytes(4).values()),
+        sum(IMPL.cb_bytes(16).values()),
     )
     ref_ok = os.environ.get("TP_REF", "1") == "1"
     if ref_ok:
