@@ -22,6 +22,15 @@ enum class AttentionMaskType {
 };
 
 /**
+ * Rows [begin, begin + count) of the sequence, in tiles of 32 tokens.
+ * The same range applies to every (batch, head).
+ */
+struct SeqTileRange {
+    uint32_t begin = 0;
+    uint32_t count = 0;
+};
+
+/**
  * Specifies whether stochastic rounding is applied during optimizer updates.
  *
  * Stochastic rounding can help maintain training accuracy when using

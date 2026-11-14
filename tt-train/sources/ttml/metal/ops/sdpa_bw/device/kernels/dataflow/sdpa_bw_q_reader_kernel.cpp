@@ -129,8 +129,14 @@ void kernel_main() {
         read_row(light_global_row);
     }
 #else
+    // Query rows to compute and the key rows they attend to, in tiles of each (batch, head) sequence.
+    const uint32_t q_begin = get_arg_val<uint32_t>(runtime_args_counter++);
+    const uint32_t q_count = get_arg_val<uint32_t>(runtime_args_counter++);
+    const uint32_t k_begin = get_arg_val<uint32_t>(runtime_args_counter++);
+    const uint32_t k_count = get_arg_val<uint32_t>(runtime_args_counter++);
+
     for (uint32_t i = 0; i < num_rows_to_process; ++i) {
-        const uint32_t global_row_idx = start_row + i;
+        const uint32_t global_row_idx = ranged_row(start_row + i, Ht, q_begin, q_count);
 
         // Read attn_output and grad_output rows (V-dim width)
         const uint32_t vo_start_idx = global_row_idx * vWt;
@@ -164,7 +170,7 @@ void kernel_main() {
         // For causal mask: only read K/V tiles up to and including the diagonal
         const uint32_t num_kv_tiles_to_read = q_row_tile + 1;
 #else
-        const uint32_t num_kv_tiles_to_read = Ht;
+        const uint32_t num_kv_tiles_to_read = k_count;
 #endif
 
 #ifdef USE_ATTN_MASK
@@ -183,7 +189,7 @@ void kernel_main() {
             interm_tile_bytes,
             num_of_interm_tiles);
 
-        for (uint32_t h = 0; h < num_kv_tiles_to_read; ++h) {
+        for (uint32_t h = k_begin; h < k_begin + num_kv_tiles_to_read; ++h) {
             // Read one row of K (Q/K-dim width)
             read_tiles_by_row(cb_key, key_addr_generator, key_offset + h * qWt, qWt, tile_bytes, qWt);
 

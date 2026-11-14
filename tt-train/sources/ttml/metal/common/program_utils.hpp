@@ -15,6 +15,7 @@
 #include <utility>
 #include <vector>
 
+#include "metal/common/const_utils.hpp"
 #include "metal/ttnn_all_includes.hpp"
 
 inline uint32_t get_block_size(uint32_t num_inner, const uint32_t max_block_size = 4U) {
@@ -24,6 +25,19 @@ inline uint32_t get_block_size(uint32_t num_inner, const uint32_t max_block_size
         }
     }
     return 1U;
+}
+
+// Resolves an optional tile range of a sequence of St tiles; std::nullopt is the whole sequence.
+inline ttml::metal::SeqTileRange resolve_seq_tile_range(
+    const std::optional<ttml::metal::SeqTileRange>& range, uint32_t St) {
+    const auto resolved = range.value_or(ttml::metal::SeqTileRange{.begin = 0U, .count = St});
+    TT_FATAL(
+        resolved.count > 0U && resolved.begin <= St && resolved.count <= St - resolved.begin,
+        "Tile range (begin {}, count {}) must be non-empty and within the sequence of {} tiles",
+        resolved.begin,
+        resolved.count,
+        St);
+    return resolved;
 }
 
 /**
