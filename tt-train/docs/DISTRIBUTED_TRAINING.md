@@ -579,8 +579,9 @@ export TT_METAL_RUNTIME_ROOT=/path/to/tt-metal
 ### 3. Run Training
 
 ```bash
-./build/examples/nano_gpt/nano_gpt \
-    --config configs/training_configs/training_llama8b_tp_ddp_galaxy.yaml
+cd "$TT_METAL_RUNTIME_ROOT"
+./build/tt-train/sources/examples/nano_gpt/nano_gpt \
+    --config tt-train/configs/training_configs/training_llama8b_tp_ddp_galaxy.yaml
 ```
 
 ### 4. What Happens
