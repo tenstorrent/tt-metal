@@ -851,6 +851,7 @@ inline void send_init_semaphore_to_configured_targets(
                 init_noc_semaphore_addr,
                 1,
                 flush);
+            noc_async_writes_flushed();
         }
     }
 }
