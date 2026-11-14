@@ -9,7 +9,7 @@ import time
 import torch
 
 import ttnn
-from models.demos.blackhole.hy4_preview.tests.dev_common import close_mesh, open_mesh
+from models.demos.blackhole.hy4_preview.tests.dev_common import close_mesh, open_mesh, pcc
 from models.demos.blackhole.hy4_preview.tt.hy4_chain import CHUNK, Hy4Chain, dram_view
 from models.demos.blackhole.hy4_preview.tt.hy4_decode import Hy4Decoder
 from models.demos.gpt_oss.config import mesh_4x8
