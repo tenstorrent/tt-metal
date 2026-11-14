@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ckernel.h"
+#include "cmath_common.h"
 #include "llk_defs.h"
 #include "lltt.h"
 #include "sfpi.h"
@@ -19,27 +20,28 @@ namespace ckernel::sfpu {
 // recorded under NoExec and so never runs inline, leaving the SFPU unsynchronised
 // against MATH before the first replay.
 //
-// The lengths below are the instructions sfpi emits for mac_init()'s body:
-//   3x SFPLOAD, SFPMAD, [SFPSTOCHRND for bf16,] SFPSTORE
-// Wormhole records a two-row body instead (its SFPMAD has a write latency that a one-row
-// body could only fill with an SFPNOP), so its lengths differ.
+// The lengths below are the instructions sfpi emits for mac_init()'s two-row body:
+//   6x SFPLOAD, 2x SFPMAD, [2x SFPSTOCHRND for bf16,] 2x SFPSTORE
+// Two rows per record so the second row's SFPMAD and store sit between the first row's
+// dependent SFPMAD and store, which a one-row body issues back to back and stalls on.
 // The count is therefore a property of what sfpi emits for this arch, not of the source
 // below - if mac_init()'s body changes, or sfpi changes how it schedules the block,
 // re-check these against the generated kernel's disassembly.
 inline constexpr int MAC_REPLAY_SLOT = 0;
 template <bool is_fp32_dest_acc_en>
-inline constexpr int mac_replay_len = is_fp32_dest_acc_en ? 5 : 6;
+inline constexpr int mac_replay_len = is_fp32_dest_acc_en ? 10 : 12;
 
 template <bool APPROXIMATE, bool is_fp32_dest_acc_en, DataFormat data_format>
 inline void mac_init() {
     // eltwise_ternary_sfpu_configure_addrmod only sets ADDR_MOD_6 (dest.incr=2)
-    // for SfpuType::where.  mac's replay sequence uses ADDR_MOD_6 on SFPSTORE
-    // (physical slot 6, direct on Blackhole since there is no addr_mod_base
-    // offset), so we must configure it explicitly here.
+    // for SfpuType::where.  mac's replay sequence uses ADDR_MOD_6 on the second row's
+    // SFPSTORE (physical slot 6, direct on Blackhole since there is no addr_mod_base
+    // offset) to advance dest by the two rows the record just wrote, so we must
+    // configure it explicitly here.
     addr_mod_t{
         .srca = {.incr = 0},
         .srcb = {.incr = 0},
-        .dest = {.incr = 2},
+        .dest = {.incr = 4},
     }
         .set(ADDR_MOD_6);
 
@@ -56,29 +58,40 @@ inline void mac_init() {
     // format DST is configured with".
     //
     // sfpi defaults the loads to the arch's no-increment addr_mod (ADDR_MOD_7 here), which
-    // is what we want; only the store overrides it, with the auto-advancing mod set above.
+    // is what we want; only the second row's store overrides it, with the auto-advancing mod
+    // set above. Rows +0 and +1 are computed together so their dependent chains interleave.
     constexpr sfpi::DataLayout dst_fmt = is_fp32_dest_acc_en ? sfpi::DataLayout::F32 : sfpi::DataLayout::FSrcB;
 
+    // Slots from replay_buf_offset up belong to the FPU; the recording must stay below them.
+    static_assert(
+        MAC_REPLAY_SLOT + mac_replay_len<is_fp32_dest_acc_en> <= ckernel::math::replay_buf_offset,
+        "mac replay overflows the SFPU replay window");
     load_replay_buf(MAC_REPLAY_SLOT, mac_replay_len<is_fp32_dest_acc_en>, [] {
-        sfpi::vFloat a = sfpi::dst_reg[0].mode<dst_fmt>();
-        sfpi::vFloat b = sfpi::dst_reg[32].mode<dst_fmt>();
-        sfpi::vFloat c = sfpi::dst_reg[64].mode<dst_fmt>();
-        sfpi::vFloat result = a * b + c;
+        sfpi::vFloat a0 = sfpi::dst_reg[0].mode<dst_fmt>();
+        sfpi::vFloat b0 = sfpi::dst_reg[32].mode<dst_fmt>();
+        sfpi::vFloat c0 = sfpi::dst_reg[64].mode<dst_fmt>();
+        sfpi::vFloat a1 = sfpi::dst_reg[1].mode<dst_fmt>();
+        sfpi::vFloat b1 = sfpi::dst_reg[33].mode<dst_fmt>();
+        sfpi::vFloat c1 = sfpi::dst_reg[65].mode<dst_fmt>();
+        sfpi::vFloat r0 = a0 * b0 + c0;
+        sfpi::vFloat r1 = a1 * b1 + c1;
         if constexpr (!is_fp32_dest_acc_en) {
             // SFPMAD accumulates in fp32; an SFPSTORE into a 16-bit DST truncates the
             // mantissa, so round to nearest-even on the way down to bf16 instead.
-            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
+            r0 = sfpi::convert<sfpi::vFloat16b>(r0, sfpi::RoundMode::Nearest);
+            r1 = sfpi::convert<sfpi::vFloat16b>(r1, sfpi::RoundMode::Nearest);
         }
-        sfpi::dst_reg[0].mode<dst_fmt>(ADDR_MOD_6) = result;
+        sfpi::dst_reg[0].mode<dst_fmt>() = r0;
+        sfpi::dst_reg[1].mode<dst_fmt>(ADDR_MOD_6) = r1;
     });
 }
 
 // mac: out = a * b + c, computed in FP32 accumulator via SFPMAD.
 //
 // The replay sequence is recorded once in mac_init (with fixed dest offsets 0, 64, 128
-// matching tile indices 0, 1, 2) and replayed ITERATIONS times here.
-// ADDR_MOD_6 on SFPSTORE auto-advances the dest base register by 2 rows per
-// replay, so the next replay's SFPLOADs read the next row group automatically.
+// matching tile indices 0, 1, 2, two rows each) and replayed ITERATIONS / 2 times here.
+// ADDR_MOD_6 on the second row's SFPSTORE auto-advances the dest base register by 4
+// (two rows) per replay, so the next replay's SFPLOADs read the next row pair automatically.
 // This avoids the explicit sfpi::dst_reg++ used in a plain for-loop, which
 // only advances the write counter and not the read counter.
 //
@@ -100,8 +113,9 @@ inline void calculate_mac(
         data_format == DataFormat::Float32 || data_format == DataFormat::Float16_b,
         "Unsupported data format for calculate_mac(). Supported data formats are: Float32, Float16_b.");
 
+    static_assert(ITERATIONS % 2 == 0, "two rows per replay");
 #pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
+    for (int d = 0; d < ITERATIONS; d += 2) {
         lltt::replay(MAC_REPLAY_SLOT, mac_replay_len<is_fp32_dest_acc_en>);
     }
 }
