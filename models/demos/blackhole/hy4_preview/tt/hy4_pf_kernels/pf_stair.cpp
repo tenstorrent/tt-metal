@@ -9,14 +9,15 @@
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
 void kernel_main() {
-    constexpr uint32_t N = get_compile_time_arg_val(0);
+    constexpr uint32_t N = get_compile_time_arg_val(0);  // row width (bucket)
     constexpr uint32_t R = get_compile_time_arg_val(1);
     constexpr uint32_t NC = get_compile_time_arg_val(2);
     constexpr uint32_t cb_id = get_compile_time_arg_val(3);
     constexpr auto s_args = TensorAccessorArgs<4>();
     constexpr auto c_args = TensorAccessorArgs<s_args.next_compile_time_args_offset()>();
     const uint32_t core = get_arg_val<uint32_t>(0);
-    const uint32_t a_s = get_common_arg_val<uint32_t>(0), a_c = get_common_arg_val<uint32_t>(1);
+    const uint32_t a_s = get_common_arg_val<uint32_t>(0), a_c = get_common_arg_val<uint32_t>(1),
+                   n_local = get_common_arg_val<uint32_t>(2);
     Noc noc;
     const auto s_acc = TensorAccessor(s_args, a_s, N * 2);
     const auto c_acc = TensorAccessor(c_args, a_c, 64);
@@ -28,7 +29,7 @@ void kernel_main() {
     invalidate_l1_cache();
     const uint32_t c = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base);
     constexpr uint32_t TAIL = 128;
-    constexpr uint32_t OFF = (N - 64) * 2;
+    const uint32_t OFF = (n_local - 64) * 2;
     for (uint32_t i = core; i < R; i += NC) {
         noc.async_read(s_acc, cb, TAIL, {.page_id = i, .offset_bytes = OFF}, {.offset_bytes = 64});
         noc.async_read_barrier();

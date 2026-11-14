@@ -2,7 +2,7 @@
 # pfp_run.sh <tag> <script under hy4_preview/tests> [K=V env...] : RUN ON the claimed host (ssh there); SLOT=<k> (default 2). Image 13cc5087d5f7 (stock ttnn), worktree WT mounted read-only. TERM-only watchdog.
 TAG=$1; SCRIPT=$2; shift 2
 SLOT=${SLOT:-2}; HOST=${HOST:-10.82.97.45}
-IMAGE=${IMAGE:-13cc5087d5f7}; P=/mnt/tt-data/ssinghal/hy4-logs/program/pool-prefill; C=/home/ttuser/ssinghal/tt-metal-cache; O=$C/pfpool/${HOST}_slot$SLOT; TM=/home/container_app_user/tt-metal
+IMAGE=${IMAGE:-13cc5087d5f7}; P=/mnt/tt-data/ssinghal/hy4-logs/program/pool-prefill; C=/home/ttuser/ssinghal/tt-metal-cache; O=$C/pfpool/${HOST}_slot$SLOT${CACHE:+_$CACHE}; TM=/home/container_app_user/tt-metal
 WT=${WT:-/mnt/tt-data/ssinghal/wt/hy4_pfpool}
 eval "$(/mnt/tt-data/ssinghal/hy4-logs/program/bin/slot_env.sh $SLOT $HOST | grep TT_VISIBLE)"
 mkdir -p $O/traces $O/kern $O/gen $O/root $O/logs $P/logs; chmod -R 777 $O

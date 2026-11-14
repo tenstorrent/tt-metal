@@ -122,28 +122,45 @@ class Hy4AttentionPF(Hy4AttentionPool):
         return self._pf_select_core(q, w, p)
 
     def _pf_select_core(self, q, w, p, return_global=False):
-        """q [1,32,512,128] (rope applied), w [1,1,512,32]: score against this column's keys of pages 0..p (page p = this chunk, already written), staircase, two-stage top-2048, local ids."""
+        """q [1,32,512,128] (rope applied), w [1,1,512,32]: score against this column's keys of pages 0..p (page p = this chunk, already written), staircase, two-stage top-2048, local ids.
+        The score rows are a BUCKET wide (HY4_PF_BUCKET local rows, default 1024 = 8192 tokens; clamped to the pool): the stock score kernels and cs_cand2 have the key count in their compile-time
+        arguments, so a per-page width recompiled 5 kernels (~1.5 s) at every chunk; only the first n_local columns are ranked (top-k valid_length is a runtime arg) and the staircase kernel takes n_local at runtime.
+        """
         ctx = self.ctx
         n = q.shape[2]
         n_local = 64 * (p + 1)
-        ksl = ttnn.slice(self.key_view, [0, 0, 0, 0], [1, 1, n_local, 128])
+        G = int(os.environ.get("HY4_PF_BUCKET", "1024"))
+        pool_rows = int(self.key_view.shape[2])
+        nb = min(-(-n_local // G) * G, pool_rows)
+        ksl = ttnn.slice(self.key_view, [0, 0, 0, 0], [1, 1, nb, 128])
         score = ttnn.experimental.indexer_score_dsa(
             q,
             ksl,
             w,
-            chunk_start_idx=n_local - 32,
+            chunk_start_idx=nb - 32,
             program_config=self.pf_score_cfg,
             compute_kernel_config=self.pf_score_ckc,
-            kv_len=n_local,
-        )  # [1,1,n,n_local] bf16 RM
+            kv_len=nb,
+        )  # [1,1,n,nb] bf16 RM; columns >= n_local are stale pool rows (never ranked)
         for t in (q, w):
             ttnn.deallocate(t)
-        if n_local != int(self.key_view.shape[2]):  # a full-length slice is the pool view itself
+        if nb != pool_rows:  # a full-length slice is the pool view itself
             ttnn.deallocate(ksl)
-        PP.pf_stair(score, ctx.colid)
+        PP.pf_stair(score, ctx.colid, n_local)
         kloc = min(int(os.environ.get("HY4_PF_KLOC", "512")), n_local)
         gids = select_v2(
-            ctx.ag, ctx.colid, ttnn.reshape(score, [1, 1, n, n_local]), n_local, 1, kloc, kloc, 2048, 1, False, None
+            ctx.ag,
+            ctx.colid,
+            ttnn.reshape(score, [1, 1, n, nb]),
+            nb,
+            1,
+            kloc,
+            kloc,
+            2048,
+            1,
+            False,
+            None,
+            valid_local=n_local,
         )  # [n,1,1,2048] global ids
         ttnn.deallocate(score)
         loc = PP.pf_id_filter(gids, ctx.colid)

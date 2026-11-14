@@ -386,11 +386,13 @@ def _cbd(core_set, total):
     )
 
 
-def pf_stair(score, colid):
-    """in place: causal staircase of this chunk's own 64-key slice (the last 64 columns of ``score`` RM [1,1,R,N], N % 64 == 0); colid per-device uint32 page (element 0 = column)."""
+def pf_stair(score, colid, n_local=None):
+    """in place: causal staircase of this chunk's own 64-key slice = columns [n_local - 64, n_local) of ``score`` RM [1,1,R,W] (W = bucket width >= n_local, W % 64 == 0; n_local is a runtime arg
+    so one program serves every chunk page of a bucket); colid per-device uint32 page (element 0 = column)."""
     md = score.device()
     R, N = int(score.shape[2]), int(score.shape[3])
-    assert N % 64 == 0
+    n_local = N if n_local is None else int(n_local)
+    assert N % 64 == 0 and n_local % 64 == 0 and 64 <= n_local <= N
     grid = md.compute_with_storage_grid_size()
     nc = min(R, grid.x * grid.y)
     cores = _cores(nc, grid.x)
@@ -405,7 +407,7 @@ def pf_stair(score, colid):
         core_ranges=cs,
         compile_time_args=ct,
         runtime_args=rt,
-        common_runtime_args=[score.buffer_address(), colid.buffer_address()],
+        common_runtime_args=[score.buffer_address(), colid.buffer_address(), n_local],
         config=ttnn.ReaderConfigDescriptor(),
     )
     prog = ttnn.ProgramDescriptor(kernels=[k], semaphores=[], cbs=[_cbd(cs, 64 + 128)])
