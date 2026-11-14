@@ -87,7 +87,14 @@ Tensor pre_sort_transform_tensor(
     if (!is_row_major) {
         // TILE layout: fill the implicit tile-row padding so the bitonic sort
         // ignores it (pads with ±inf or UINT16 sentinel).
-        padded_tensor = ttnn::fill_implicit_tile_padding(transformed_tensor, pad_fill);
+        // fill_implicit_tile_padding writes in place, so never write the caller's tensor.
+        if (transformed_tensor.logical_shape()[-2] % tt::constants::TILE_HEIGHT != 0 ||
+            transformed_tensor.logical_shape()[-1] % tt::constants::TILE_WIDTH != 0) {
+            padded_tensor = ttnn::fill_implicit_tile_padding(
+                ttnn::clone(transformed_tensor, std::nullopt, std::nullopt, std::nullopt), pad_fill);
+        } else {
+            padded_tensor = transformed_tensor;
+        }
     } else {
         // ROW_MAJOR: the kernel processes rows in groups of TILE_HEIGHT (32).
         // If combined_h (= shape[0]*shape[1]*shape[2]) is not a multiple of

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/data_movement/clone/clone.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/fill_pad/device/fill_pad_device_operation.hpp"
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
@@ -589,7 +590,13 @@ ttnn::Tensor invoke_tile(
         return requested_padded_shape[i] == input_padded_shape[i];
     };
 
-    ttnn::Tensor output_tensor = ttnn::fill_implicit_tile_padding(input_tensor, value, memory_config_arg);
+    ttnn::Tensor output_tensor = input_tensor;
+    if (input_tensor.logical_shape()[-2] % tt::constants::TILE_HEIGHT != 0 ||
+        input_tensor.logical_shape()[-1] % tt::constants::TILE_WIDTH != 0) {
+        // fill_implicit_tile_padding writes in place, so never write the caller's tensor.
+        output_tensor = ttnn::fill_implicit_tile_padding(
+            ttnn::clone(input_tensor, std::nullopt, std::nullopt, std::nullopt), value, memory_config_arg);
+    }
     if (requested_rank == 1 || (!pad_upper_dims && pad_current_tile_dim(-1) && pad_current_tile_dim(-2))) {
         output_tensor = ttnn::experimental::view(output_tensor, requested_logical_shape, requested_padded_shape);
 
