@@ -14,8 +14,10 @@ using namespace ckernel::math;
 
 #ifdef ENV_LLK_INFRA
 static DataFormatConfigSet data_format_config_set = DataFormatConfigSet::UNCONFIGURED;
+static AluSrcFormatState alu_src_format_state     = {};
 #else
 extern thread_local DataFormatConfigSet data_format_config_set;
+extern thread_local AluSrcFormatState alu_src_format_state;
 #endif
 
 // Bitmask helper: maps a DataFormat enum value to its corresponding bit in a 64-bit set
@@ -113,6 +115,8 @@ inline void _configure_alu_formats_(DataFormat srcA_format, DataFormat srcB_form
     {
         cfg[ALU_FORMAT_SPEC_REG_SrcA_val_ADDR32 + i] = alu_config.val[i];
     }
+
+    alu_src_format_state = {srcA_format, srcB_format, en_int32_dest_format};
 }
 
 /**

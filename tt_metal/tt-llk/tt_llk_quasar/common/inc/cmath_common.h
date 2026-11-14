@@ -164,6 +164,17 @@ enum class DataFormatConfigSet : std::uint8_t
     MOV_OPS_EXPLICIT_FMT = 2
 };
 
+// Source formats and int32-dest flag last written by _configure_alu_formats_. The ALU format words cannot be read
+// back (and RMWCIB reads them), so a single-side data-format reconfig rewrites the words from this copy.
+// Zero-initialized on purpose: math hw_configure fills it before any reconfig reads it, and a non-zero initializer
+// would put the firmware's thread-local copy in .tdata, which the host cannot load into TRISC local memory.
+struct AluSrcFormatState
+{
+    DataFormat srca_format;
+    DataFormat srcb_format;
+    bool en_int32_dest_format;
+};
+
 // /**
 // * @brief Helper function to calculate log2,
 // * only works for 32 bit unsigned inputs
