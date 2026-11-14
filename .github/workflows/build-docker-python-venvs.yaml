@@ -113,8 +113,6 @@ jobs:
           echo "targets=$TARGETS" >> $GITHUB_OUTPUT
           echo "ubuntu-version=$UBUNTU_VERSION" >> $GITHUB_OUTPUT
           echo "python-version=$PYTHON_VERSION" >> $GITHUB_OUTPUT
-          # docker-bake-publish requires a revision label on every published image.
-          SET+="*.labels.org.opencontainers.image.revision=$(git rev-parse HEAD)"$'\n'
           {
             echo "set<<EOF"
             echo "$SET"
@@ -123,7 +121,7 @@ jobs:
 
       - name: Build and push missing venv images
         if: steps.bake.outputs.targets != ''
-        uses: tenstorrent/.github/actions/docker-bake-publish@51a19619cec70224addf9b389f2b160144d192fa # nsexton/docker-sbom
+        uses: tenstorrent/.github/actions/docker-bake-publish@8e8393cc4f82ee6cf4c7c0a614896f52dd104188 # nsexton/docker-sbom
         env:
           # Bake variables are read from the environment.
           UBUNTU_VERSION: ${{ steps.bake.outputs.ubuntu-version }}
@@ -132,6 +130,7 @@ jobs:
           bake-file: dockerfile/docker-bake.hcl
           targets: ${{ steps.bake.outputs.targets }}
           set-lines: ${{ steps.bake.outputs.set }}
+          labels: org.opencontainers.image.revision=${{ github.sha }}
           # Signing needs id-token/attestations permissions on every workflow that
           # reaches this job (pr-gate, merge-gate, ...). Off until those are granted.
           attest-sbom: "false"

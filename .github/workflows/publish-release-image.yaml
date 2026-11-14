@@ -158,8 +158,6 @@ jobs:
             SET+="${TARGET}.args.HTTP_PROXY=${PROXY_HTTP}"$'\n'
             SET+="${TARGET}.args.HTTPS_PROXY=${PROXY_HTTPS}"$'\n'
           fi
-          # docker-bake-publish requires a revision label on every published image.
-          SET+="${TARGET}.labels.org.opencontainers.image.revision=${GIT_SHA}"$'\n'
           {
             echo "set<<EOF"
             echo "$SET"
@@ -167,11 +165,12 @@ jobs:
           } >> "$GITHUB_OUTPUT"
       - name: Build and push (skipped for dry run)
         if: ${{ !inputs.dry-run }}
-        uses: tenstorrent/.github/actions/docker-bake-publish@51a19619cec70224addf9b389f2b160144d192fa # nsexton/docker-sbom
+        uses: tenstorrent/.github/actions/docker-bake-publish@8e8393cc4f82ee6cf4c7c0a614896f52dd104188 # nsexton/docker-sbom
         with:
           bake-file: dockerfile/docker-bake.hcl
           targets: ${{ inputs.image }}
           set-lines: ${{ steps.bake.outputs.set }}
+          labels: org.opencontainers.image.revision=${{ github.sha }}
           # Cheap insurance against transient blips - the actual fix for the
           # timeouts we hit is the proxy env forwarded above.
           retries: "2"
