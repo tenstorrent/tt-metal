@@ -10,6 +10,7 @@
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <flatbuffers/flatbuffers.h>
 
 #include "ttnn/tensor/types.hpp"
@@ -28,7 +29,11 @@
 
 #include <vector>
 #include <cstdint>
+#include <map>
 #include <optional>
+#include <set>
+#include <sstream>
+#include <string>
 #include <unordered_map>
 
 namespace ttnn {
@@ -174,6 +179,111 @@ tt::tt_metal::TensorTopology from_flatbuffer(const ttnn::flatbuffer::TensorTopol
     return tt::tt_metal::TensorTopology(dist_shape, placements, mesh_coords);
 }
 
+// Renders the topology for a diagnostic. Only evaluated on the failure path.
+std::string describe(const tt::tt_metal::TensorTopology& topology) {
+    std::ostringstream os;
+    os << topology;
+    return os.str();
+}
+
+// One `TensorShard` record of a file: where the shard sits in the mesh and where its bytes sit in the data region.
+struct ShardRecord {
+    tt::tt_metal::distributed::MeshCoordinate coord;
+    uint64_t offset = 0;
+    uint64_t size = 0;
+};
+
+// Checks a topology read from a file against the shard records it came with, before any shard is placed. The
+// writer enforces the same rules on the tensor it writes (verify_shards_match_topology), so a failure means the
+// header does not describe the data: corruption, or a file assembled by something other than `to_flatbuffer`.
+void validate_loaded_topology(
+    const tt::tt_metal::TensorTopology& topology,
+    const std::vector<ShardRecord>& records,
+    const tt::tt_metal::distributed::MeshShape& storage_shape) {
+    const auto& dist_shape = topology.distribution_shape();
+    const auto& placements = topology.placements();
+    const auto& mesh_coords = topology.mesh_coords();
+
+    // `TensorTopology` itself checks nothing, and everything below indexes by these sizes.
+    TT_FATAL(
+        placements.size() == dist_shape.dims(),
+        "Tensor file topology has {} placement(s) for the {}-dimensional distribution shape {} (host storage shape "
+        "{}); the header is corrupt. Re-dump the tensor.",
+        placements.size(),
+        dist_shape.dims(),
+        dist_shape,
+        storage_shape);
+    TT_FATAL(
+        mesh_coords.size() == dist_shape.mesh_size(),
+        "Tensor file topology lists {} mesh coordinate(s) for distribution shape {}, which has {} position(s) (host "
+        "storage shape {}); the header is corrupt. Re-dump the tensor.",
+        mesh_coords.size(),
+        dist_shape,
+        dist_shape.mesh_size(),
+        storage_shape);
+
+    // Every record must be reachable through the label, or the loaded tensor's topology does not describe its data.
+    const std::set<tt::tt_metal::distributed::MeshCoordinate> labelled_coords(mesh_coords.begin(), mesh_coords.end());
+    std::map<tt::tt_metal::distributed::MeshCoordinate, uint64_t> offset_at;
+    for (const auto& record : records) {
+        TT_FATAL(
+            labelled_coords.contains(record.coord),
+            "Tensor file holds a shard at mesh coordinate {} that its topology does not cover ({}; host storage shape "
+            "{}). The label does not describe the data; the header is corrupt. Re-dump the tensor.",
+            record.coord,
+            describe(topology),
+            storage_shape);
+        offset_at[record.coord] = record.offset;
+    }
+
+    // Fewer records than labelled coordinates is legitimate: a LOCAL-mode dump from one host of a multi-host job
+    // records only that host's shards. The file does not say which mode wrote it, so this can only be a warning.
+    if (offset_at.size() < mesh_coords.size()) {
+        log_warning(
+            tt::LogAlways,
+            "Tensor file holds {} of the {} shards its topology lists ({}; host storage shape {}). A LOCAL-mode dump "
+            "from one host of a multi-host job records only that host's shards; the other coordinates load "
+            "unpopulated.",
+            offset_at.size(),
+            mesh_coords.size(),
+            describe(topology),
+            storage_shape);
+    }
+
+    // Records of one replica group must point at the same copy, since that is how the writer stores them. Different
+    // groups pointing at one copy is fine: shards backed by the same HostBuffer are written once whatever the label.
+    struct GroupRecord {
+        uint64_t offset = 0;
+        tt::tt_metal::distributed::MeshCoordinate coord;
+    };
+    std::vector<std::optional<GroupRecord>> groups(num_replica_groups(topology));
+    size_t dist_idx = 0;
+    for (const auto& dist_coord : tt::tt_metal::distributed::MeshCoordinateRange(dist_shape)) {
+        const auto& coord = mesh_coords[dist_idx++];
+        const auto it = offset_at.find(coord);
+        if (it == offset_at.end()) {
+            continue;
+        }
+        auto& group = groups[replica_group_key(topology, dist_coord)];
+        if (!group.has_value()) {
+            group = GroupRecord{.offset = it->second, .coord = coord};
+            continue;
+        }
+        TT_FATAL(
+            group->offset == it->second,
+            "Tensor file topology labels mesh coordinates {} and {} as replicas of each other ({}; host storage shape "
+            "{}), but their records point at different data (offsets {} and {} in the data region). The writer "
+            "stores replicas once, so this is not the label the shards were written under; the header is corrupt. "
+            "Re-dump the tensor.",
+            group->coord,
+            coord,
+            describe(topology),
+            storage_shape,
+            group->offset,
+            it->second);
+    }
+}
+
 }  // namespace
 
 flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
@@ -269,8 +379,8 @@ flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
 
     auto topology_offset = to_flatbuffer(topology, builder);
 
-    auto tensor_offset =
-        ttnn::flatbuffer::CreateTensor(builder, tensor_spec_offset, mesh_shape_offset, shards, topology_offset);
+    auto tensor_offset = ttnn::flatbuffer::CreateTensor(
+        builder, tensor_spec_offset, mesh_shape_offset, shards, topology_offset, kTensorFileSchemaVersion);
 
     return tensor_offset;
 }
@@ -279,24 +389,29 @@ Tensor from_flatbuffer(
     const ttnn::flatbuffer::Tensor* fb_tensor,
     ttsl::Span<std::byte> tensor_data,
     const tt::tt_metal::MemoryPin& memory_pin) {
+    // Absent (0) in files written before the field existed. A reader understands every revision up to its own.
+    const uint32_t schema_version = fb_tensor->schema_version();
+    TT_FATAL(
+        schema_version <= kTensorFileSchemaVersion,
+        "Tensor file records schema version {}, but this build reads versions up to {}. The file was written by a "
+        "newer tt-metal; load it with that version or re-dump the tensor with this one.",
+        schema_version,
+        kTensorFileSchemaVersion);
+
     auto spec = ttnn::from_flatbuffer(fb_tensor->tensor_spec());
 
     const auto* mesh_shape = fb_tensor->mesh_shape();
     TT_FATAL(mesh_shape != nullptr, "Mesh shape is required for tensor");
     const tt::tt_metal::distributed::MeshShape ttnn_mesh_shape = from_flatbuffer(mesh_shape);
 
-    // File shards are host-local. Loading them must not initialize MetalContext or acquire device locks.
-    auto distributed_buffer = tt::tt_metal::DistributedHostBuffer::create(
-        ttnn_mesh_shape,
-        ttnn_mesh_shape,
-        tt::tt_metal::distributed::MeshCoordinate::zero_coordinate(ttnn_mesh_shape.dims()),
-        /*context=*/nullptr);
-    for (size_t i = 0; i < fb_tensor->shards()->size(); ++i) {
-        const auto* shard = fb_tensor->shards()->Get(i);
-
+    // Read every shard record first: the topology is checked against them before any shard is placed.
+    TT_FATAL(fb_tensor->shards() != nullptr, "Shards are required for tensor");
+    std::vector<ShardRecord> records;
+    records.reserve(fb_tensor->shards()->size());
+    for (const auto* shard : *fb_tensor->shards()) {
         const auto* inline_storage = shard->buffer_as<ttnn::flatbuffer::InlineFileStorage>();
         TT_FATAL(inline_storage != nullptr, "Only InlineFileStorage is supported in flatbuffer deserialization");
-
+        TT_FATAL(shard->mesh_coordinate() != nullptr, "Mesh coordinate is required for each shard");
         const uint64_t offset = inline_storage->offset();
         const uint64_t size = inline_storage->size();
         // The header is verified, but the data section is not: a file cut short after its header
@@ -305,26 +420,60 @@ Tensor from_flatbuffer(
         TT_FATAL(
             offset <= tensor_data.size() && size <= tensor_data.size() - offset,
             "Tensor shard {} spans bytes [{}, {}) of a {}-byte data section: the file is truncated or corrupt",
-            i,
+            records.size(),
             offset,
             offset + size,
             tensor_data.size());
-
-        tt::tt_metal::HostBuffer host_buffer = create_host_buffer_from_bytes(
-            size, spec, ttsl::Span<std::byte>(tensor_data.data() + offset, size), memory_pin);
-
-        TT_FATAL(shard->mesh_coordinate() != nullptr, "Mesh coordinate is required for each shard");
-        const auto coord = from_flatbuffer(shard->mesh_coordinate());
-        distributed_buffer.emplace_shard(
-            coord, [host_buffer = std::move(host_buffer)]() mutable { return std::move(host_buffer); });
+        records.push_back(
+            ShardRecord{.coord = from_flatbuffer(shard->mesh_coordinate()), .offset = offset, .size = size});
     }
 
-    // NOTE: Existing tensor cache files may not have a tensor topology.
-    // Create tensor topology from flatbuffer if it exists, otherwise create a fully replicated topology.
-    const auto* fb_topology = fb_tensor->tensor_topology();
-    tt::tt_metal::TensorTopology topology =
-        fb_topology != nullptr ? from_flatbuffer(fb_topology)
-                               : tt::tt_metal::TensorTopology::create_fully_replicated_tensor_topology(ttnn_mesh_shape);
+    tt::tt_metal::TensorTopology topology = [&]() {
+        if (const auto* fb_topology = fb_tensor->tensor_topology(); fb_topology != nullptr) {
+            auto loaded = from_flatbuffer(fb_topology);
+            validate_loaded_topology(loaded, records, ttnn_mesh_shape);
+            return loaded;
+        }
+        // A versioned writer always records the topology, so a versioned file without one is corrupt.
+        TT_FATAL(
+            schema_version == 0,
+            "Tensor file records schema version {} but no tensor topology; a writer of that version always records "
+            "one, so the header is corrupt. Re-dump the tensor.",
+            schema_version);
+        // Files written before the topology field existed (#29158) are labelled fully replicated, as they always
+        // were. That is right for a single buffer; for several, the placement cannot be known from the file. The
+        // shards still load intact, so this is a warning rather than a refusal.
+        std::set<uint64_t> distinct_offsets;
+        for (const auto& record : records) {
+            distinct_offsets.insert(record.offset);
+        }
+        if (distinct_offsets.size() > 1) {
+            log_warning(
+                tt::LogAlways,
+                "Tensor file records no tensor topology (it predates the field) and holds {} distinct shard buffers "
+                "for {} mesh coordinates (host storage shape {}). The placement label is unknown, so the tensor is "
+                "labelled fully replicated as before: the shards load intact, but anything that reads the label sees "
+                "copies of one shard, and re-dumping under it fails the replica check. Set the right label with "
+                "update_tensor_topology() and re-dump to record the topology.",
+                distinct_offsets.size(),
+                records.size(),
+                ttnn_mesh_shape);
+        }
+        return tt::tt_metal::TensorTopology::create_fully_replicated_tensor_topology(ttnn_mesh_shape);
+    }();
+
+    // File shards are host-local. Loading them must not initialize MetalContext or acquire device locks.
+    auto distributed_buffer = tt::tt_metal::DistributedHostBuffer::create(
+        ttnn_mesh_shape,
+        ttnn_mesh_shape,
+        tt::tt_metal::distributed::MeshCoordinate::zero_coordinate(ttnn_mesh_shape.dims()),
+        /*context=*/nullptr);
+    for (const auto& record : records) {
+        tt::tt_metal::HostBuffer host_buffer = create_host_buffer_from_bytes(
+            record.size, spec, ttsl::Span<std::byte>(tensor_data.data() + record.offset, record.size), memory_pin);
+        distributed_buffer.emplace_shard(
+            record.coord, [host_buffer = std::move(host_buffer)]() mutable { return std::move(host_buffer); });
+    }
 
     return Tensor(
         tt::tt_metal::host_tensor_from_buffer_with_topology(std::move(distributed_buffer), spec, std::move(topology)));
