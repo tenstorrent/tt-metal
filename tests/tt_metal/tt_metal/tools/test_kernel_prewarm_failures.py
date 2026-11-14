@@ -250,23 +250,14 @@ class PrewarmFailureTests(unittest.TestCase):
     def test_production_context_and_batch_loop(self):
         source = (ROOT / "tt_metal/impl/program/kernel_prewarm.cpp").read_text()
         context_and_loop = source[
-            source.index("void hash_field(") : source.index(
-                "void initialize_prewarm_shutdown_dependencies()"
-            )
+            source.index("void hash_field(") : source.index("void initialize_prewarm_shutdown_dependencies()")
         ]
         dependencies = (ROOT / "tt_metal/jit_build/depend.cpp").read_text()
         parser = dependencies[
-            dependencies.index(
-                "ParsedDependencies parse_dependency_file("
-            ) : dependencies.index("\nnamespace {")
+            dependencies.index("ParsedDependencies parse_dependency_file(") : dependencies.index("\nnamespace {")
         ]
         harness = (
-            INTEGRATION_PREFIX
-            + "namespace tt::jit_build {"
-            + parser
-            + "}\n"
-            + context_and_loop
-            + INTEGRATION_MAIN
+            INTEGRATION_PREFIX + "namespace tt::jit_build {" + parser + "}\n" + context_and_loop + INTEGRATION_MAIN
         )
         with tempfile.TemporaryDirectory(prefix="prewarm-integration-") as work:
             path = Path(work)
@@ -288,9 +279,7 @@ class PrewarmFailureTests(unittest.TestCase):
                 check=True,
                 timeout=60,
             )
-            subprocess.run(
-                [str(path / "test"), str(path / "state")], check=True, timeout=60
-            )
+            subprocess.run([str(path / "test"), str(path / "state")], check=True, timeout=60)
 
     def test_native_failure_policy(self):
         with tempfile.TemporaryDirectory(prefix="prewarm-policy-") as work:

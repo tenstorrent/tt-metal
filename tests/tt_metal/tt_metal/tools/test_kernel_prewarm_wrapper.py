@@ -53,6 +53,4 @@ def test_capture_stage_exports_capture_only_into_compound_command(tmp_path):
         check=True,
     )
 
-    assert record.read_text() == (
-        "export TT_METAL_KERNEL_PREWARM=1 TT_METAL_KERNEL_CAPTURE_ONLY=1; cd /tmp && env"
-    )
+    assert record.read_text() == ("export TT_METAL_KERNEL_PREWARM=1 TT_METAL_KERNEL_CAPTURE_ONLY=1; cd /tmp && env")
