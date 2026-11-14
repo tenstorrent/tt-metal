@@ -488,12 +488,18 @@ ALWI void pack_reconfig_data_format(const uint32_t new_cb_id) {
 /**
  * Reconfigures the packer output data format by specifying the CB IDs of the old and new operands.
  * This function internally calls the reconfiguration function with the new CB ID, but before it does so,
- * it checks if the old and new data formats are different. If they are the same, it does not perform
- * the reconfiguration. This function is useful when you want to ensure that the packer only reconfigures
- * when different data format is wanted, avoiding unnecessary reconfiguration overhead.
+ * it checks whether the two operands differ in data format (source or destination) or in tile geometry
+ * (face height, face count; tile width on Blackhole, narrow-tile flag on Wormhole). If they match in all of
+ * these, it does not perform the reconfiguration. Face height and face count are compared because the
+ * reconfiguration programs the block-float exponent section size from them, so two block-float outputs of
+ * the same format but different face geometry still need it; the tile-width / narrow-tile compare keeps
+ * the sanitizer state current and catches a same-format 16x32 -> 32x16 switch. This function is useful when you want to
+ * ensure that the packer only reconfigures when a different configuration is wanted, avoiding
+ * unnecessary reconfiguration overhead.
  *
- * NOTE(ARCH_QUASAR): See pack_reconfig_data_format(new_cb_id). Call pack_init(new_cb_id) before pack_tile
- * when switching pack output operand.
+ * NOTE(ARCH_QUASAR): See pack_reconfig_data_format(new_cb_id). Quasar compares the source and
+ * destination formats only (not tile geometry). Call pack_init(new_cb_id) before pack_tile when
+ * switching pack output operand.
  *
  * NOTE: Packer reconfiguration functions are used similarly to the initialization function, in a sense
  * that they are called before the call to the packer function that uses the new configuration. It is
