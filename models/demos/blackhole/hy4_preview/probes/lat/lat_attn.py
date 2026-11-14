@@ -85,7 +85,7 @@ def main():
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             kview = ttnn.reshape(kp, [1, 1, pages * 64, 128])
-            ctx0 = PoolCtx(md, mc, ccl, pages, rows=1, S=1, mode="topk", bucket_tokens=N, xm=None)
+            ctx0 = PoolCtx(md, mc, ccl, pages, rows=1, S=1, mode="topk", bucket_tokens=N, fuse="sparse")
             nchunk = min(CH, N)
             lat = torch.randn(nchunk, 512, generator=gen)
             rope = torch.randn(nchunk, 64, generator=gen)
@@ -114,7 +114,7 @@ def main():
                         while -(-(2048 // kc) // G) > 2:
                             kc *= 2
                         ctx.G, ctx.kc = G, kc
-                    ctx.set_step([N - 1])
+                    ctx.set_step([N - S])  # S verify rows end at position N-1
                     qh = rep(md, torch.randn(S, 1, 32, 128).bfloat16(), ttnn.bfloat16, ttnn.TILE_LAYOUT)
                     wp = torch.zeros(1, 1, 32, 32)
                     wp[0, 0, :S] = 1.0 / 32
@@ -125,12 +125,12 @@ def main():
                     )
                     ttnn.synchronize_device(md)
                     gids = select_global(ctx, qh, w32, kview)
-                    idx8 = HP.id_filter(gids, ctx.colinfo, S)
+                    idx8 = HP.id_filter(gids, ctx.colinfo, S, perrow=ctx.perrow)
                     ttnn.synchronize_device(md)
 
                     def chain():
                         g = select_global(ctx, qh, w32, kview)
-                        i8 = HP.id_filter(g, ctx.colinfo, S)
+                        i8 = HP.id_filter(g, ctx.colinfo, S, perrow=ctx.perrow)
                         ttnn.deallocate(g)
                         o = ctx.attend(qfull, kv, i8, sink)
                         ttnn.deallocate(i8)
@@ -146,10 +146,18 @@ def main():
                         xm_nsplit=os.environ.get("HY4_XM_NSPLIT", ""),
                     )
                     r["us_score"] = round(
-                        traced_us(md, lambda: IS.idx_score(qh, kview, w32, 0, S, kvt=ctx.kvcnt, n_rows=ctx.n_local)), 1
+                        traced_us(
+                            md,
+                            lambda: IS.idx_score(
+                                qh, kview, w32, 0, S, kvt=ctx.kvcnt, n_rows=ctx.n_local, kvt_rows=ctx.perrow
+                            ),
+                        ),
+                        1,
                     )
                     r["us_select"] = round(traced_us(md, lambda: select_global(ctx, qh, w32, kview)), 1)
-                    r["us_filter"] = round(traced_us(md, lambda: HP.id_filter(gids, ctx.colinfo, S)), 1)
+                    r["us_filter"] = round(
+                        traced_us(md, lambda: HP.id_filter(gids, ctx.colinfo, S, perrow=ctx.perrow)), 1
+                    )
                     r["us_attend"] = round(traced_us(md, lambda: ctx.attend(qfull, kv, idx8, sink)), 1)
                     r["us_chain"] = round(traced_us(md, chain), 1)
                     R(**r)

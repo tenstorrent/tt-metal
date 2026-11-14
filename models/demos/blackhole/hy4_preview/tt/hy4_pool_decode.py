@@ -63,14 +63,22 @@ class PoolCtx:
             md, t, dt, ttnn.ROW_MAJOR_LAYOUT, shard_dim=shard_dim, row_dim=row_dim
         )
         self.colid = up(HP.colid_host(rows), ttnn.uint32)
-        self.colinfo = up(HP.colid_host(rows, [1 << 20] * rows), ttnn.uint32)
-        self.wr = up(HP.write_rows([0] * rows, rows), ttnn.int32)
-        self.upd = upload(
-            md, torch.zeros(rows, NC, dtype=torch.int32), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, shard_dim=1, row_dim=0
-        )
-        self.kvcnt = up(HP.key_counts([0] * rows, rows), ttnn.uint32)
+        self.colinfo = up(HP.colid_host(rows, [1 << 20] * rows, S), ttnn.uint32)
+        self.perrow = S > 1  # verify rows: per-row causal limits in the score kernel (kvcnt) and in id_filter (colinfo)
+        self.wr = up(HP.write_rows([0] * rows, rows, S), ttnn.int32)
+        # verify rows (S = k+1 query rows per user, positions pos..pos+S-1): one key-append index tensor per row (the S appends run one after the other: two rows of the same key tile must not race)
+        self.upd_rows = [
+            upload(
+                md, torch.zeros(rows, NC, dtype=torch.int32), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, shard_dim=1, row_dim=0
+            )
+            for _ in range(S)
+        ]
+        self.upd = self.upd_rows[0]
+        self.kvcnt = up(
+            HP.key_counts([0] * rows, rows, S), ttnn.uint32
+        )  # element j = valid local keys of verify row j (causal)
         self.ids_g = upload(
-            md, torch.full((rows, 1, 1, K), -1, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, row_dim=0
+            md, torch.full((rows * S, 1, 1, K), -1, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, row_dim=0
         )
         self.pt = upload(
             md, torch.arange(pages, dtype=torch.int32).reshape(1, pages), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT
@@ -128,15 +136,18 @@ class PoolCtx:
             tgt,
         )
         pos = [int(p) for p in pos]
-        wr = HP.write_rows(pos, self.rows)
+        S = self.S
+        wr = HP.write_rows(pos, self.rows, S)
         up(wr, ttnn.int32, self.wr)
-        up(wr[:, :, 0, 0], ttnn.int32, self.upd)  # [rows, 8]
-        up(HP.key_counts(pos, self.rows), ttnn.uint32, self.kvcnt)
-        up(HP.colid_host(self.rows, [p + 1 for p in pos]), ttnn.uint32, self.colinfo)
-        ids = torch.full((self.rows, 1, 1, K), -1, dtype=torch.int32)
+        for j in range(S):
+            up(wr[:, :, 0, j], ttnn.int32, self.upd_rows[j])  # [rows, 8]
+        up(HP.key_counts(pos, self.rows, S), ttnn.uint32, self.kvcnt)
+        up(HP.colid_host(self.rows, [p + 1 for p in pos], S), ttnn.uint32, self.colinfo)
+        ids = torch.full((self.rows * S, 1, 1, K), -1, dtype=torch.int32)
         for r, p in enumerate(pos):
-            n = min(p + 1, K)
-            ids[r, 0, 0, :n] = torch.arange(n, dtype=torch.int32)
+            for j in range(S):  # verify row j sees the tokens 0..p+j
+                n = min(p + j + 1, K)
+                ids[r * S + j, 0, 0, :n] = torch.arange(n, dtype=torch.int32)
         up(ids, ttnn.uint32, self.ids_g, shard_dim=None, row_dim=0)
         self.step_pos = pos
 
@@ -171,7 +182,7 @@ class PoolCtx:
         """host-built global ids -> local per-column ids of every user (dense mode: shared by all layers of the step)."""
         if self.ids8_dense is None:  # persistent output (no allocation inside traces)
             self.ids8_dense = self.new_idx8()
-        HP.id_filter(self.ids_g, self.colinfo, self.S, out=self.ids8_dense)
+        HP.id_filter(self.ids_g, self.colinfo, self.S, out=self.ids8_dense, perrow=self.perrow)
         return self.ids8_dense
 
     def new_idx8(self):
@@ -210,6 +221,17 @@ class PoolCtx:
         return ttnn.to_layout(r, ttnn.TILE_LAYOUT)
 
 
+def append_key_rows(ctx, key_pool4, k):
+    """k [1,1,S,128] TILE (S verify rows of the step, already norm + rope) -> the key pool at the S positions of ``ctx.upd_rows``: one ``paged_update_cache`` per row, in order (two rows of the same bfp8 tile must not race)."""
+    for j in range(ctx.S):
+        kj = k if ctx.S == 1 else ttnn.slice(k, [0, 0, j, 0], [1, 1, j + 1, 128])
+        kd = ttnn.to_memory_config(kj, ctx.kcfg_key)
+        ttnn.experimental.paged_update_cache(key_pool4, kd, update_idxs_tensor=ctx.upd_rows[j], page_table=ctx.pt)
+        ttnn.deallocate(kd)
+        if kj is not k:
+            ttnn.deallocate(kj)
+
+
 def select_global(ctx, qh, w32, key_view):
     """decode indexer chain on the key pool: score kernel (kv_len per column from ctx.kvcnt) -> select_v2 -> global top-2048 ids uint32 [S,1,1,2048] (identical on all columns).
     qh [S,1,32,128] TILE (heads = tile rows), w32 [1,1,32,32] TILE (row = query row, col = head), key_view [1,1,pages*64,128] bfp8 TILE.
@@ -218,7 +240,7 @@ def select_global(ctx, qh, w32, key_view):
     from models.demos.blackhole.hy4_preview.tt.hy4_idx_select import select_v2
 
     S, n = ctx.S, ctx.n_local
-    score = IS.idx_score(qh, key_view, w32, 0, S, kvt=ctx.kvcnt, n_rows=n)  # [1,1,S,n]
+    score = IS.idx_score(qh, key_view, w32, 0, S, kvt=ctx.kvcnt, n_rows=n, kvt_rows=ctx.perrow)  # [1,1,S,n]
     sel = ctx.sel
     B = max(1, min(sel["B"], n // sel["kb"]))
     kb, kloc = min(sel["kb"], n // B), min(sel["kloc"], n)
@@ -275,9 +297,7 @@ class Hy4AttentionPool(Hy4AttentionOpt):
         cos, sin, icos, isin, c128, s128 = tabs
         k = ttnn.layer_norm(ik, weight=ix.k_norm_w, bias=ix.k_norm_b, epsilon=ix.ln_eps)
         k = self._idx_rot(o, k, icos, isin, c128, s128)
-        kd = ttnn.to_memory_config(k, ctx.kcfg_key)
-        ttnn.experimental.paged_update_cache(self.key_pool4, kd, update_idxs_tensor=ctx.upd, page_table=ctx.pt)
-        ttnn.deallocate(kd)
+        append_key_rows(ctx, self.key_pool4, k)
         ttnn.deallocate(k)
 
     def pool_select(self, d, o, tabs):
@@ -306,7 +326,7 @@ class Hy4AttentionPool(Hy4AttentionOpt):
                 idx8 = dense_ids8
             else:
                 gids = self.pool_select(d, o, tabs)
-                idx8 = HP.id_filter(gids, ctx.colinfo, ctx.S, out=self.idx8_buf)
+                idx8 = HP.id_filter(gids, ctx.colinfo, ctx.S, out=self.idx8_buf, perrow=ctx.perrow)
                 ttnn.deallocate(gids)
             ctx.ids8[self.layer] = idx8
         else:
