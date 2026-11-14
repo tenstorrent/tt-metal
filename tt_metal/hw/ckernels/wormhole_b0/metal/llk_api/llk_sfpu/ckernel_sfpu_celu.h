@@ -24,10 +24,11 @@ inline void celu_init() {
 
 // NEG_ALPHA: alpha < 0 makes x / alpha positive and unbounded on the x < 0 branch. The helper
 // clamps only the negative side, and its 2^k reconstruction writes k + 127 into an 8-bit exponent
-// field, so past k = 128 it wraps and the result flips sign instead of overflowing. At 89 the
-// helper is already +inf (k = 128), so alpha * (+inf) is the -inf the reference gives everywhere
-// beyond the overflow point. The clamp is an SFPSWAP, which orders +NaN above every number and so
-// turns a NaN argument into 89; a non-finite x (exponent field all ones) is therefore passed
+// field, so past k = 128 it wraps and the result flips sign instead of overflowing. The clamp must
+// stay below 128*ln(2) = 88.72 to avoid the NaN band at k=128 with r<0 (x/alpha in 88.38..88.72).
+// At 88.3 the helper is finite (k=127), so alpha * finite is the correct overflow behavior.
+// The clamp is an SFPSWAP, which orders +NaN above every number and so
+// turns a NaN argument into 88.3; a non-finite x (exponent field all ones) is therefore passed
 // through unchanged, which keeps NaN and gives -inf for x = -inf, as the reference does.
 template <bool is_fp32_dest_acc_en, int ITERATIONS, bool NEG_ALPHA>
 sfpi_inline void celu_loop(sfpi::vFloat alpha, sfpi::vFloat alpha_recip) {
@@ -44,7 +45,7 @@ sfpi_inline void celu_loop(sfpi::vFloat alpha, sfpi::vFloat alpha_recip) {
         sfpi::vFloat x = sfpi::dst_reg[0];
         sfpi::vFloat arg = alpha_recip * x;
         if constexpr (NEG_ALPHA) {
-            arg = sfpi::min(arg, 89.0f);
+            arg = sfpi::min(arg, 88.3f);
         }
         sfpi::vFloat result = alpha * expm1_cw_clamped_prgm(arg, h_top1, h_top0);
 
