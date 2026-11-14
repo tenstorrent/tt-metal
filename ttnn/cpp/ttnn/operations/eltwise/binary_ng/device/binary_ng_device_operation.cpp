@@ -130,6 +130,78 @@ ShardSpec generate_shard_spec_specless(
 }
 }  // namespace utils
 
+// A sharded operand keeps every shard on its own shard-grid core, and when the native L1 path is taken the
+// factory splits the per-core work over the input's shard grid while the kernels go on the worker grid.
+// A worker grid that misses any shard core leaves that shard without a kernel, so its output is never
+// written (silently wrong values), and a worker grid with fewer cores than shards deadlocks the program.
+// The composite eltwise path rejects exactly this configuration, so the native path must too. The gate is
+// the same predicate the program factory uses to decide it is on that path, so an op that reads its operands
+// through the TensorAccessor path is unaffected no matter what grid it is given.
+void validate_sub_core_grids_contain_shard_cores(
+    const BinaryNgDeviceOperation::operation_attributes_t& attributes,
+    const BinaryNgDeviceOperation::tensor_args_t& tensor_args) {
+    if (not attributes.sub_core_grids.has_value()) {
+        return;
+    }
+    const auto& input_tensor_a = tensor_args.input_tensor_a;
+    const auto& input_tensor_b = tensor_args.input_tensor_b;
+
+    const bool any_operand_sharded = input_tensor_a.memory_config().is_sharded() ||
+                                     (input_tensor_b.has_value() && input_tensor_b->memory_config().is_sharded()) ||
+                                     attributes.memory_config.is_sharded();
+    if (!any_operand_sharded) {
+        return;
+    }
+
+    const bool native_L1_sharding = is_native_L1_sharding(
+        input_tensor_a.tensor_spec(),
+        input_tensor_b.has_value() ? std::optional<tt::tt_metal::TensorSpec>{input_tensor_b->tensor_spec()}
+                                   : std::nullopt,
+        attributes.memory_config);
+    if (!native_L1_sharding) {
+        return;
+    }
+
+    const auto& worker_grid = attributes.sub_core_grids.value();
+
+    // A sharded tensor may carry a legacy 2-D ShardSpec or an NdShardSpec; only the former has a grid.
+    auto shard_grid_of = [](const Tensor& tensor) -> std::optional<CoreRangeSet> {
+        const auto& memory_config = tensor.memory_config();
+        if (memory_config.shard_spec().has_value()) {
+            return memory_config.shard_spec()->grid;
+        }
+        if (memory_config.nd_shard_spec().has_value()) {
+            return memory_config.nd_shard_spec()->grid;
+        }
+        return std::nullopt;
+    };
+
+    auto check = [&worker_grid, &shard_grid_of](const Tensor& tensor, const char* name) {
+        if (not tensor.memory_config().is_sharded()) {
+            return;
+        }
+        auto shard_grid = shard_grid_of(tensor);
+        if (not shard_grid.has_value()) {
+            return;
+        }
+        TT_FATAL(
+            worker_grid.contains(*shard_grid),
+            "sub_core_grids {} must contain all shard cores of {} ({}); a grid that misses a shard core leaves "
+            "that shard without a kernel, so its output is never written",
+            worker_grid.str(),
+            name,
+            shard_grid->str());
+    };
+
+    check(input_tensor_a, "the LHS operand");
+    if (input_tensor_b.has_value()) {
+        check(*input_tensor_b, "the RHS operand");
+    }
+    if (tensor_args.output_tensor.has_value()) {
+        check(*tensor_args.output_tensor, "the output tensor");
+    }
+}
+
 CoreRangeSet get_worker_grid(
     const Tensor& input_tensor_a,
     const Tensor* input_tensor_b,
@@ -427,10 +499,14 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
                 "RHS operand must be either sharded or interleaved");
         }
     }
+
+    validate_sub_core_grids_contain_shard_cores(attributes, tensor_args);
 }
 
 void BinaryNgDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    validate_sub_core_grids_contain_shard_cores(attributes, tensor_args);
+
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto& input_tensor_b = tensor_args.input_tensor_b;
     const auto& output_tensor = tensor_args.output_tensor;
