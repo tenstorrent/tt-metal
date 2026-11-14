@@ -16,7 +16,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[4]
 
-NATIVE = r'''
+NATIVE = r"""
 #include "tt_metal/impl/program/prewarm_failure.hpp"
 #include <cassert>
 #include <iostream>
@@ -134,8 +134,7 @@ int main(int, char** argv) {
     std::cout << "policy: retry, invalidation, reset, success, interruption, atomic state, concurrency passed; "
               << noisy.bytes << " output bytes retained in " << noisy.head.size() + noisy.tail.size() << " bytes\n";
 }
-'''
-
+"""
 
 
 # Only external dependencies are substituted: hash backend, JIT cache operations and executor.
@@ -246,18 +245,52 @@ int main(int,char** argv) {
 }
 """
 
+
 class PrewarmFailureTests(unittest.TestCase):
     def test_production_context_and_batch_loop(self):
         source = (ROOT / "tt_metal/impl/program/kernel_prewarm.cpp").read_text()
-        context_and_loop = source[source.index("void hash_field(") : source.index("void initialize_prewarm_shutdown_dependencies()")]
+        context_and_loop = source[
+            source.index("void hash_field(") : source.index(
+                "void initialize_prewarm_shutdown_dependencies()"
+            )
+        ]
         dependencies = (ROOT / "tt_metal/jit_build/depend.cpp").read_text()
-        parser = dependencies[dependencies.index("ParsedDependencies parse_dependency_file(") : dependencies.index("\nnamespace {")]
-        harness = INTEGRATION_PREFIX + "namespace tt::jit_build {" + parser + "}\n" + context_and_loop + INTEGRATION_MAIN
+        parser = dependencies[
+            dependencies.index(
+                "ParsedDependencies parse_dependency_file("
+            ) : dependencies.index("\nnamespace {")
+        ]
+        harness = (
+            INTEGRATION_PREFIX
+            + "namespace tt::jit_build {"
+            + parser
+            + "}\n"
+            + context_and_loop
+            + INTEGRATION_MAIN
+        )
         with tempfile.TemporaryDirectory(prefix="prewarm-integration-") as work:
             path = Path(work)
             (path / "test.cpp").write_text(harness)
-            subprocess.run(["c++", "-std=c++20", "-Wall", "-Wextra", "-Werror", "-pthread", "-I", str(ROOT), str(path / "test.cpp"), "-o", str(path / "test")], check=True, timeout=60)
-            subprocess.run([str(path / "test"), str(path / "state")], check=True, timeout=60)
+            subprocess.run(
+                [
+                    "c++",
+                    "-std=c++20",
+                    "-Wall",
+                    "-Wextra",
+                    "-Werror",
+                    "-pthread",
+                    "-I",
+                    str(ROOT),
+                    str(path / "test.cpp"),
+                    "-o",
+                    str(path / "test"),
+                ],
+                check=True,
+                timeout=60,
+            )
+            subprocess.run(
+                [str(path / "test"), str(path / "state")], check=True, timeout=60
+            )
 
     def test_native_failure_policy(self):
         with tempfile.TemporaryDirectory(prefix="prewarm-policy-") as work:
@@ -267,7 +300,19 @@ class PrewarmFailureTests(unittest.TestCase):
             source.write_text("#include <atomic>\n" + NATIVE)
             binary = path / "test"
             subprocess.run(
-                ["c++", "-std=c++20", "-Wall", "-Wextra", "-Werror", "-pthread", "-I", str(ROOT), str(source), "-o", str(binary)],
+                [
+                    "c++",
+                    "-std=c++20",
+                    "-Wall",
+                    "-Wextra",
+                    "-Werror",
+                    "-pthread",
+                    "-I",
+                    str(ROOT),
+                    str(source),
+                    "-o",
+                    str(binary),
+                ],
                 check=True,
                 timeout=60,
             )

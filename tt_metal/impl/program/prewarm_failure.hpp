@@ -59,14 +59,27 @@ struct CommandResult {
         error_marker |= scan.find(": error:") != std::string::npos;
         // Only known semantic diagnostics qualify. A generic rc=1 / "error:" can be an
         // output-directory, quota or other infrastructure fault with unchanged source inputs.
-        for (const char* text : {"static assertion failed", "was not declared in this scope", "is not a member of",
-                                 "has not been declared", "no matching function for call",
-                                 "class template argument deduction failed"}) {
+        for (const char* text :
+             {"static assertion failed",
+              "was not declared in this scope",
+              "is not a member of",
+              "has not been declared",
+              "no matching function for call",
+              "class template argument deduction failed"}) {
             semantic_error |= scan.find(text) != std::string::npos;
         }
-        for (const char* text : {"fatal error:", "internal compiler error", "No space left", "Permission denied",
-                                 "Cannot allocate memory", "cannot execute", "Killed signal", "Input/output error",
-                                 "Read-only file system", "Disk quota exceeded", "Too many open files"}) {
+        for (const char* text :
+             {"fatal error:",
+              "internal compiler error",
+              "No space left",
+              "Permission denied",
+              "Cannot allocate memory",
+              "cannot execute",
+              "Killed signal",
+              "Input/output error",
+              "Read-only file system",
+              "Disk quota exceeded",
+              "Too many open files"}) {
             infrastructure_error |= scan.find(text) != std::string::npos;
         }
         scan_tail = scan.substr(scan.size() > 128 ? scan.size() - 128 : 0);
@@ -113,13 +126,25 @@ inline CommandResult command(
     error = posix_spawnattr_init(&attr);
     if (error == 0) {
         error = posix_spawn_file_actions_adddup2(&actions, pipes[1], STDOUT_FILENO);
-        if (!error) error = posix_spawn_file_actions_adddup2(&actions, pipes[1], STDERR_FILENO);
-        if (!error) error = posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0);
-        if (!error && !cwd.empty()) error = posix_spawn_file_actions_addchdir_np(&actions, cwd.c_str());
-        if (!error) error = posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETPGROUP);
-        if (!error) error = posix_spawnattr_setpgroup(&attr, 0);
+        if (!error) {
+            error = posix_spawn_file_actions_adddup2(&actions, pipes[1], STDERR_FILENO);
+        }
+        if (!error) {
+            error = posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0);
+        }
+        if (!error && !cwd.empty()) {
+            error = posix_spawn_file_actions_addchdir_np(&actions, cwd.c_str());
+        }
+        if (!error) {
+            error = posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETPGROUP);
+        }
+        if (!error) {
+            error = posix_spawnattr_setpgroup(&attr, 0);
+        }
         pid_t pid = -1;
-        if (!error) error = posix_spawnp(&pid, argv[0], &actions, &attr, argv.data(), ::environ);
+        if (!error) {
+            error = posix_spawnp(&pid, argv[0], &actions, &attr, argv.data(), ::environ);
+        }
         posix_spawnattr_destroy(&attr);
         posix_spawn_file_actions_destroy(&actions);
         ::close(pipes[1]);
@@ -171,8 +196,12 @@ inline CommandResult command(
                 }
             }
         }
-        if (WIFEXITED(status)) result.exit_code = WEXITSTATUS(status);
-        if (WIFSIGNALED(status)) result.interrupted = true;
+        if (WIFEXITED(status)) {
+            result.exit_code = WEXITSTATUS(status);
+        }
+        if (WIFSIGNALED(status)) {
+            result.interrupted = true;
+        }
         return result;
     }
     posix_spawn_file_actions_destroy(&actions);
@@ -196,20 +225,29 @@ public:
 // another prewarm owns this kernel, so defer instead of waiting while holding a pool thread.
 class KernelLock {
     int fd_ = -1;
+
 public:
     explicit KernelLock(const std::filesystem::path& path) {
         std::filesystem::create_directories(path.parent_path());
         fd_ = ::open(path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0600);
-        if (fd_ < 0) throw std::runtime_error("cannot open prewarm lock");
+        if (fd_ < 0) {
+            throw std::runtime_error("cannot open prewarm lock");
+        }
         if (::flock(fd_, LOCK_EX | LOCK_NB) != 0) {
             const int error = errno;
             ::close(fd_);
             fd_ = -1;
-            if (error != EWOULDBLOCK && error != EAGAIN) throw std::runtime_error("cannot lock prewarm kernel");
+            if (error != EWOULDBLOCK && error != EAGAIN) {
+                throw std::runtime_error("cannot lock prewarm kernel");
+            }
         }
     }
     bool acquired() const { return fd_ >= 0; }
-    ~KernelLock() { if (fd_ >= 0) ::close(fd_); }
+    ~KernelLock() {
+        if (fd_ >= 0) {
+            ::close(fd_);
+        }
+    }
     KernelLock(const KernelLock&) = delete;
     KernelLock& operator=(const KernelLock&) = delete;
 };
@@ -217,20 +255,33 @@ public:
 inline void save(const std::filesystem::path& path, const std::string& context) {
     std::string name = path.string() + ".XXXXXX";
     const int fd = ::mkstemp(name.data());
-    if (fd < 0) throw std::runtime_error("cannot create prewarm failure state");
+    if (fd < 0) {
+        throw std::runtime_error("cannot create prewarm failure state");
+    }
     ::fcntl(fd, F_SETFD, FD_CLOEXEC);
     const std::string data = "prewarm-failure-v1 " + context + "\n";
     size_t offset = 0;
     bool ok = true;
     while (offset < data.size()) {
         const auto n = ::write(fd, data.data() + offset, data.size() - offset);
-        if (n < 0 && errno == EINTR) continue;
-        if (n <= 0) { ok = false; break; }
+        if (n < 0 && errno == EINTR) {
+            continue;
+        }
+        if (n <= 0) {
+            ok = false;
+            break;
+        }
         offset += n;
     }
-    if (::fsync(fd) != 0) ok = false;
-    if (::close(fd) != 0) ok = false;
-    if (ok && ::rename(name.c_str(), path.c_str()) == 0) return;
+    if (::fsync(fd) != 0) {
+        ok = false;
+    }
+    if (::close(fd) != 0) {
+        ok = false;
+    }
+    if (ok && ::rename(name.c_str(), path.c_str()) == 0) {
+        return;
+    }
     ::unlink(name.c_str());
     throw std::runtime_error("cannot publish prewarm failure state");
 }
@@ -259,8 +310,13 @@ inline TargetResult target(
     const std::function<void()>& build,
     const std::function<void()>& cleanup) {
     std::optional<std::string> before;
-    try { before = fingerprint(); } catch (const std::exception&) { }
-    if (!retry && before && matches(state, *before)) return {Outcome::PreviouslyFailed, {}};
+    try {
+        before = fingerprint();
+    } catch (const std::exception&) {
+    }
+    if (!retry && before && matches(state, *before)) {
+        return {Outcome::PreviouslyFailed, {}};
+    }
     std::error_code ec;
     std::filesystem::remove(state, ec);
     try {
@@ -271,12 +327,23 @@ inline TargetResult target(
         bool persist = false;
         const auto* failure = dynamic_cast<const CompileFailure*>(&e);
         if (failure != nullptr && failure->definite && before) {
-            try { persist = fingerprint() == before; } catch (const std::exception&) { }
+            try {
+                persist = fingerprint() == before;
+            } catch (const std::exception&) {
+            }
         }
         std::string state_error;
-        try { cleanup(); } catch (const std::exception&) { state_error = " (cleanup failed)"; }
+        try {
+            cleanup();
+        } catch (const std::exception&) {
+            state_error = " (cleanup failed)";
+        }
         if (persist && state_error.empty()) {
-            try { save(state, *before); } catch (const std::exception&) { state_error = " (state not saved; will retry)"; }
+            try {
+                save(state, *before);
+            } catch (const std::exception&) {
+                state_error = " (state not saved; will retry)";
+            }
         }
         return {Outcome::Failed, detail + state_error};
     }

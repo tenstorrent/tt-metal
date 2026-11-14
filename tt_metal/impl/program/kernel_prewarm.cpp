@@ -446,7 +446,6 @@ bool is_device_init_kernel(const std::string& base_name) {
     return base_name.starts_with("cq_") || base_name.find("fabric") != std::string::npos;
 }
 
-
 void hash_field(tt::StableHasher& hash, std::string_view value) {
     hash.update(static_cast<uint64_t>(value.size()));
     hash.update(value);
@@ -455,13 +454,17 @@ void hash_field(tt::StableHasher& hash, std::string_view value) {
 void hash_file(tt::StableHasher& hash, const fs::path& path) {
     hash_field(hash, fs::canonical(path).string());
     std::ifstream file(path, std::ios::binary);
-    if (!file) throw std::runtime_error("unreadable context file");
+    if (!file) {
+        throw std::runtime_error("unreadable context file");
+    }
     std::array<char, 65536> buffer{};
     while (file) {
         file.read(buffer.data(), buffer.size());
         hash.update(buffer.data(), file.gcount());
     }
-    if (!file.eof()) throw std::runtime_error("incomplete context file");
+    if (!file.eof()) {
+        throw std::runtime_error("incomplete context file");
+    }
     hash.update(static_cast<uint64_t>(fs::file_size(path)));
 }
 
@@ -471,7 +474,9 @@ void hash_file(tt::StableHasher& hash, const fs::path& path) {
 std::optional<std::string> toolchain_context(const std::string& gpp) {
     try {
         auto args = jit_build::utils::tokenize_flags(gpp);
-        if (args.size() != 1 || !fs::path(args[0]).is_absolute()) return std::nullopt;
+        if (args.size() != 1 || !fs::path(args[0]).is_absolute()) {
+            return std::nullopt;
+        }
         const auto compiler = fs::canonical(args[0]);
         const auto root = compiler.parent_path().parent_path();
         if (compiler.parent_path().filename() != "bin" || root.string().find("/sfpi/") == std::string::npos) {
@@ -479,21 +484,33 @@ std::optional<std::string> toolchain_context(const std::string& gpp) {
         }
         // GCC's environment and flags can redirect its internal executable/spec/plugin search.
         for (const char* name : {"GCC_EXEC_PREFIX", "COMPILER_PATH", "LD_PRELOAD"}) {
-            if (env_or_null(name)) return std::nullopt;
+            if (env_or_null(name)) {
+                return std::nullopt;
+            }
         }
         std::vector<fs::path> files;
         for (const auto& item : fs::recursive_directory_iterator(root)) {
-            if (item.is_symlink() && item.is_directory()) return std::nullopt;
-            if (item.is_regular_file()) files.push_back(item.path());
+            if (item.is_symlink() && item.is_directory()) {
+                return std::nullopt;
+            }
+            if (item.is_regular_file()) {
+                files.push_back(item.path());
+            }
         }
         if (const char* search = env_or_null("LD_LIBRARY_PATH")) {
             std::istringstream paths(search);
             std::string directory;
             while (std::getline(paths, directory, ':')) {
-                if (directory.empty() || !fs::path(directory).is_absolute()) return std::nullopt;
-                if (!fs::exists(directory)) continue;
+                if (directory.empty() || !fs::path(directory).is_absolute()) {
+                    return std::nullopt;
+                }
+                if (!fs::exists(directory)) {
+                    continue;
+                }
                 for (const auto& item : fs::directory_iterator(directory)) {
-                    if (item.is_regular_file()) files.push_back(item.path());
+                    if (item.is_regular_file()) {
+                        files.push_back(item.path());
+                    }
                 }
             }
         }
@@ -501,14 +518,20 @@ std::optional<std::string> toolchain_context(const std::string& gpp) {
         tt::StableHasher hash;
         hash_field(hash, "prewarm-failure-context-v1");
         hash_field(hash, jit_build::utils::compiler_version(gpp));
-        for (const auto& file : files) hash_file(hash, file);
+        for (const auto& file : files) {
+            hash_file(hash, file);
+        }
         std::vector<std::string> environment;
         for (auto entry = ::environ; *entry; ++entry) {
-            if (std::string_view(*entry).starts_with("TT_METAL_KERNEL_PREWARM_RETRY_FAILED=")) continue;
+            if (std::string_view(*entry).starts_with("TT_METAL_KERNEL_PREWARM_RETRY_FAILED=")) {
+                continue;
+            }
             environment.emplace_back(*entry);
         }
         std::sort(environment.begin(), environment.end());
-        for (const auto& entry : environment) hash_field(hash, entry);
+        for (const auto& entry : environment) {
+            hash_field(hash, entry);
+        }
         return std::to_string(hash.digest());
     } catch (const std::exception&) {
         return std::nullopt;
@@ -520,21 +543,33 @@ std::optional<std::string> failure_context(
     const jit_build::TargetRecipe& target,
     const std::string& out_dir,
     const std::optional<std::string>& toolchain) {
-    if (!toolchain) return std::nullopt;
+    if (!toolchain) {
+        return std::nullopt;
+    }
     tt::StableHasher hash;
     hash_field(hash, *toolchain);
     hash_field(hash, out_dir);
     hash_field(hash, request.gpp);
     hash_field(hash, request.kernel_name);
     hash.update(request.build_key);
-    for (const auto* field : {&target.target_name, &target.cflags, &target.includes, &target.pch_umbrella,
-                              &target.compiler_opt_level, &target.lflags, &target.extra_link_objs,
-                              &target.linker_script, &target.weakened_firmware_name, &target.linker_opt_level}) {
+    for (const auto* field :
+         {&target.target_name,
+          &target.cflags,
+          &target.includes,
+          &target.pch_umbrella,
+          &target.compiler_opt_level,
+          &target.lflags,
+          &target.extra_link_objs,
+          &target.linker_script,
+          &target.weakened_firmware_name,
+          &target.linker_opt_level}) {
         hash_field(hash, *field);
     }
     for (const auto* values : {&target.defines, &target.srcs, &target.objs}) {
         hash.update(static_cast<uint64_t>(values->size()));
-        for (const auto& value : *values) hash_field(hash, value);
+        for (const auto& value : *values) {
+            hash_field(hash, value);
+        }
     }
     hash.update(static_cast<uint64_t>(target.firmware_is_kernel_object));
     hash.update(target.build_state_hash);
@@ -553,24 +588,32 @@ std::optional<std::string> failure_context(
         // These may inject dependencies outside normal preprocessing; fail open (retry).
         for (const auto& arg : args) {
             if (arg.starts_with("@") || arg.starts_with("-fplugin") || arg.starts_with("-specs") ||
-                arg.starts_with("--specs") || arg.starts_with("-B")) return std::nullopt;
+                arg.starts_with("--specs") || arg.starts_with("-B")) {
+                return std::nullopt;
+            }
         }
         args.insert(args.end(), {"-M", "-MF", "-", "-MT", "prewarm", src});
         // Resolve includes afresh on EVERY comparison: a newly added/shadowing header invalidates
         // even when old .d/.dephash files and build_key are unchanged. -M includes system headers.
         const auto deps = failure::command(args, out_dir, std::chrono::minutes(1), 512 * 1024);
-        if (!deps.success() || deps.bytes > deps.head.size() + deps.tail.size()) return std::nullopt;
+        if (!deps.success() || deps.bytes > deps.head.size() + deps.tail.size()) {
+            return std::nullopt;
+        }
         std::istringstream input(deps.diagnostic());
         const auto parsed = jit_build::parse_dependency_file(input);
         const auto found = parsed.find("prewarm");
-        if (found == parsed.end() || found->second.empty()) return std::nullopt;
+        if (found == parsed.end() || found->second.empty()) {
+            return std::nullopt;
+        }
         hash_field(hash, deps.diagnostic());
         for (const auto& dep : found->second) {
             const fs::path path(dep);
             hash_file(hash, path.is_absolute() ? path : fs::path(out_dir) / path);
         }
     }
-    if (target.srcs.empty()) return std::nullopt;
+    if (target.srcs.empty()) {
+        return std::nullopt;
+    }
     return std::to_string(hash.digest());
 }
 
@@ -637,7 +680,9 @@ std::size_t run_prewarm(
         if (inserted) {
             try {
                 lock_it->second = std::make_shared<failure::KernelLock>(kernel_dir + ".prewarm.lock");
-                if (lock_it->second->acquired()) write_generated_files(kernel_dir, req.generated_files);
+                if (lock_it->second->acquired()) {
+                    write_generated_files(kernel_dir, req.generated_files);
+                }
             } catch (const std::exception& e) {
                 lock_it->second.reset();
                 ++genfiles_failed;
@@ -648,7 +693,9 @@ std::size_t run_prewarm(
             deferred += req.targets.size();
             continue;
         }
-        if (!toolchains.contains(req.gpp)) toolchains.emplace(req.gpp, toolchain_context(req.gpp));
+        if (!toolchains.contains(req.gpp)) {
+            toolchains.emplace(req.gpp, toolchain_context(req.gpp));
+        }
         const auto toolchain = toolchains.at(req.gpp);
         for (const auto& target : req.targets) {
             const std::string out_dir = kernel_dir + target.target_name + "/";
@@ -686,7 +733,8 @@ std::size_t run_prewarm(
                         case failure::Outcome::PreviouslyFailed: ++previously_failed; break;
                         case failure::Outcome::Failed:
                             ++failed;
-                            log_warning(tt::LogMetal, "kernel prewarm: build {} failed: {}", out_dir, result.diagnostic);
+                            log_warning(
+                                tt::LogMetal, "kernel prewarm: build {} failed: {}", out_dir, result.diagnostic);
                             break;
                     }
                 },
