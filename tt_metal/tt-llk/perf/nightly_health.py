@@ -1,7 +1,13 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Check the LLK perf nightlies of one day and build a Slack health message."""
+"""Check the LLK perf nightlies of one day and build a Slack health message.
+
+One run of this covers the whole day. It is scheduled after every nightly is
+expected to be done, rather than driven by their completions: the nightlies
+start two hours apart, so the first one to finish would ask about a run that
+does not exist yet and report it missing.
+"""
 
 import argparse
 import datetime as dt
@@ -242,12 +248,6 @@ def build_text(day, reports):
     return "\n".join(lines)
 
 
-def last_to_finish(runs, trigger_run):
-    if any(r is None or r["status"] != "completed" for r in runs):
-        return False
-    return max(runs, key=lambda r: r["updated_at"])["id"] == trigger_run
-
-
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--repo", required=True)
@@ -257,20 +257,10 @@ def main(argv=None):
     ap.add_argument(
         "--date", default=dt.datetime.now(dt.timezone.utc).date().isoformat()
     )
-    ap.add_argument(
-        "--trigger-run",
-        type=int,
-        help="send only once every nightly of the day is done and this run finished last",
-    )
     ap.add_argument("--out", default="health_payloads.json")
     a = ap.parse_args(argv)
     day = dt.date.fromisoformat(a.date)
     runs = [scheduled_run(a.repo, workflow, a.date) for _, workflow in NIGHTLIES]
-    if a.trigger_run and not last_to_finish(
-        [r for r in runs if r is not None], a.trigger_run
-    ):
-        print("not the last nightly of the day to finish; that one sends the message")
-        return 0
     limits = leg_limits(a.tests_yaml)
     reports = []
     for (name, _), run in zip(NIGHTLIES, runs):
