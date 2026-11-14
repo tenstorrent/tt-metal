@@ -20,13 +20,9 @@ void kernel_main() {
 
     constexpr uint32_t B = get_compile_time_arg_val(0);
     constexpr uint32_t NQH = get_compile_time_arg_val(1);
-    constexpr uint32_t valid_Sqt = get_compile_time_arg_val(2);
-    constexpr uint32_t unpadded_Sk = get_compile_time_arg_val(3);
     constexpr uint32_t vDHt = get_compile_time_arg_val(4);
     constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(5);
-    constexpr uint32_t q_num_chunks = get_compile_time_arg_val(6);
     constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(7);
-    constexpr uint32_t k_num_chunks = get_compile_time_arg_val(8);
     constexpr uint32_t identity_scalar_packed = get_compile_time_arg_val(9);
     constexpr uint32_t num_cores = get_compile_time_arg_val(10);
     constexpr uint32_t is_causal = get_compile_time_arg_val(11) == 1;
@@ -96,14 +92,20 @@ void kernel_main() {
         q_tok_offset_addr = get_arg_val<uint32_t>(12);
     }
 
+    // Sequence geometry (compile-time args 2, 3, 6 and 8 are retired placeholders).
+    const uint32_t valid_Sqt = get_arg_val<uint32_t>(13);
+    const uint32_t unpadded_Sk = get_arg_val<uint32_t>(14);
+    const uint32_t q_num_chunks = get_arg_val<uint32_t>(15);
+    const uint32_t k_num_chunks = get_arg_val<uint32_t>(16);
+
     // Causal chain tail: the host pushes it from kv chain mode 2 on, only mode 3 reads it.
     uint32_t is_chain_participant = 0;
     uint32_t next_physical_x = 0;
     uint32_t next_physical_y = 0;
     if constexpr (causal_chain) {
-        is_chain_participant = get_arg_val<uint32_t>(13);
-        next_physical_x = get_arg_val<uint32_t>(14);
-        next_physical_y = get_arg_val<uint32_t>(15);
+        is_chain_participant = get_arg_val<uint32_t>(17);
+        next_physical_x = get_arg_val<uint32_t>(18);
+        next_physical_y = get_arg_val<uint32_t>(19);
     }
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;  // non-streaming drain only
 
@@ -242,7 +244,7 @@ void kernel_main() {
             // output. The call resolves to a no-op overload for WindowedMode::None, so the generator is only
             // instantiated in a windowed mode (kernel_main is not a template, so a bare `if constexpr` here
             // would still compile the discarded body). valid_Skt derived from the unpadded K length.
-            constexpr uint32_t windowed_valid_Skt =
+            const uint32_t windowed_valid_Skt =
                 (unpadded_Sk + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT;
             windowed_generate_if_enabled<windowed_mode, cb_mask_in, cb_cu_window_in>(
                 noc,

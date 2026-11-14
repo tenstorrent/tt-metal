@@ -73,21 +73,15 @@ void kernel_main() {
     constexpr uint32_t NQH = get_compile_time_arg_val(1);
     constexpr uint32_t NKH = get_compile_time_arg_val(2);
     constexpr uint32_t NVH = get_compile_time_arg_val(3);
-    constexpr uint32_t Skt = get_compile_time_arg_val(4);
-    constexpr uint32_t valid_Sqt = get_compile_time_arg_val(5);
-    constexpr uint32_t valid_Skt = get_compile_time_arg_val(6);
     constexpr uint32_t DHt = get_compile_time_arg_val(7);
     constexpr uint32_t vDHt = get_compile_time_arg_val(8);
     constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(9);
-    constexpr uint32_t q_num_chunks = get_compile_time_arg_val(10);
     constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(11);
-    constexpr uint32_t k_num_chunks = get_compile_time_arg_val(12);
     constexpr uint32_t num_cores = get_compile_time_arg_val(13);
     constexpr uint32_t is_causal = get_compile_time_arg_val(14) == 1;
     constexpr uint32_t use_provided_mask = get_compile_time_arg_val(15) == 1;
     constexpr uint32_t broadcast_provided_mask_batch = get_compile_time_arg_val(16) == 1;
     constexpr uint32_t broadcast_provided_mask_heads = get_compile_time_arg_val(17) == 1;
-    constexpr uint32_t use_padded_mask = get_compile_time_arg_val(18) == 1;
     constexpr uint32_t is_chunked = get_compile_time_arg_val(19) == 1;
     constexpr uint32_t block_size_t = get_compile_time_arg_val(20);
     constexpr uint32_t page_table_stick_size = get_compile_time_arg_val(21);
@@ -153,6 +147,22 @@ void kernel_main() {
         chunked_q_chunk_offset_phase_2 = get_arg_val<uint32_t>(argidx++);
         read_offset_phase_2 = get_arg_val<uint32_t>(argidx++);
     }
+    // Sequence geometry (compile-time args 4-6, 10, 12 and 18 are retired placeholders).
+    const uint32_t Skt = get_arg_val<uint32_t>(argidx++);
+    const uint32_t valid_Sqt = get_arg_val<uint32_t>(argidx++);
+    const uint32_t valid_Skt = get_arg_val<uint32_t>(argidx++);
+    const uint32_t q_num_chunks = get_arg_val<uint32_t>(argidx++);
+    const uint32_t k_num_chunks = get_arg_val<uint32_t>(argidx++);
+    // Windowed K-range narrowing: the same four values the writer receives, so both kernels resolve each
+    // Q chunk's global row range and windows identically (the writer self-computes the range this reader
+    // feeds to compute — they must agree or the CB counts desync). Then the mask block map. Both are
+    // always sent so that every slot a program-cache hit patches sits at a fixed index.
+    uint32_t cu_window_seqlens_addr = get_arg_val<uint32_t>(argidx++);
+    uint32_t cu_window_seqlens_eles = get_arg_val<uint32_t>(argidx++);
+    uint32_t windowed_q_tok_offset = get_arg_val<uint32_t>(argidx++);
+    uint32_t windowed_q_tok_offset_addr = get_arg_val<uint32_t>(argidx++);
+    uint32_t block_map_addr = get_arg_val<uint32_t>(argidx++);
+    uint32_t block_map_stick_bytes = get_arg_val<uint32_t>(argidx++);
     uint32_t chunked_q_chunk_offset_phase_1_local = chunked_q_chunk_offset_phase_1;
     uint32_t chunked_q_chunk_offset_phase_2_local = chunked_q_chunk_offset_phase_2;
 
@@ -214,28 +224,7 @@ void kernel_main() {
     global_q_start = get_arg_val<uint32_t>(argidx++);
     global_q_count = get_arg_val<uint32_t>(argidx++);
 
-    // Windowed K-range narrowing tail: the same four values the writer receives, so both kernels
-    // resolve each Q chunk's global row range and windows identically (the writer self-computes the
-    // range this reader feeds to compute — they must agree or the CB counts desync).
-    uint32_t cu_window_seqlens_addr = 0;
-    uint32_t cu_window_seqlens_eles = 0;
-    uint32_t windowed_q_tok_offset = 0;
-    uint32_t windowed_q_tok_offset_addr = 0;
-    if constexpr (use_windowed_narrowing) {
-        cu_window_seqlens_addr = get_arg_val<uint32_t>(argidx++);
-        cu_window_seqlens_eles = get_arg_val<uint32_t>(argidx++);
-        windowed_q_tok_offset = get_arg_val<uint32_t>(argidx++);
-        windowed_q_tok_offset_addr = get_arg_val<uint32_t>(argidx++);
-    } else if constexpr (use_mask_block_map || causal_chain) {
-        argidx += 4;
-    }
-    // Feature tails, sent only when the feature is on (never both: chains need a plain K/V stream).
-    uint32_t block_map_addr = 0;
-    uint32_t block_map_stick_bytes = 0;
-    if constexpr (use_mask_block_map) {
-        block_map_addr = get_arg_val<uint32_t>(argidx++);
-        block_map_stick_bytes = get_arg_val<uint32_t>(argidx++);
-    }
+    // Causal chain tail, sent only when chains are on.
     if constexpr (causal_chain) {
         prev_seg_global_start = get_arg_val<uint32_t>(argidx++);
         prev_seg_count = get_arg_val<uint32_t>(argidx++);
@@ -838,13 +827,13 @@ void kernel_main() {
 
                     for (uint32_t row = 0; row < Sq_chunk_t; ++row) {
                         const uint32_t global_q_tile = q_chunk * Sq_chunk_t + row;
-                        const bool q_valid = !use_padded_mask || (global_q_tile < valid_Sqt);
+                        const bool q_valid = global_q_tile < valid_Sqt;
                         cb_mask.reserve_back(Sk_chunk_t);
                         uint32_t mask_write_ptr = cb_mask.get_write_ptr();
                         uint32_t barrier_count = 0;
                         for (uint32_t col = 0; col < Sk_chunk_t; ++col) {
                             const uint32_t global_k_tile = k_chunk * Sk_chunk_t + col;
-                            const bool k_valid = !use_padded_mask || (global_k_tile < valid_Skt);
+                            const bool k_valid = global_k_tile < valid_Skt;
                             if (q_valid && k_valid) {
                                 noc.async_read(
                                     mask_reader,

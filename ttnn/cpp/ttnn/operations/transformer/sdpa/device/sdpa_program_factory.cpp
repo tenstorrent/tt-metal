@@ -68,6 +68,29 @@ struct CoreChainInfo {
 
 namespace {
 
+using RuntimeArgs = std::vector<std::variant<uint32_t, tt::tt_metal::Buffer*>>;
+
+// Runtime arg slots that change between program-cache hits; override_runtime_arguments patches them in
+// place. Every other runtime arg is fixed by compute_program_hash.
+namespace rt {
+constexpr uint32_t reader_kernel = 0;
+constexpr uint32_t writer_kernel = 1;
+constexpr uint32_t compute_kernel = 2;
+constexpr uint32_t reader_q_addr = 0;  // then k, v, mask, page table, attention sink, chunk start idx
+constexpr uint32_t reader_chunked_q_chunk_offset = 8;
+constexpr uint32_t reader_geometry = 10;  // Skt, valid_Sqt, valid_Skt, q_num_chunks, k_num_chunks
+constexpr uint32_t reader_cu_window_addr = 15;
+constexpr uint32_t reader_windowed_q_offset_addr = 18;
+constexpr uint32_t reader_block_map_addr = 19;
+constexpr uint32_t writer_out_addr = 0;
+constexpr uint32_t writer_chunked_q_chunk_offset = 3;
+constexpr uint32_t writer_cu_window_addr = 9;
+constexpr uint32_t writer_windowed_q_offset_addr = 12;
+constexpr uint32_t writer_geometry = 13;  // valid_Sqt, Sk, q_num_chunks, k_num_chunks
+constexpr uint32_t compute_chunked_q_chunk_offset = 2;
+constexpr uint32_t compute_geometry = 6;  // Skt, valid_Skt, q_num_chunks, k_num_chunks
+}  // namespace rt
+
 // Select the mask data format: user-provided mask dtype, or Float16_b for streaming (avoids Bfp4_b precision loss),
 // or Bfp4_b for legacy path.
 tt::DataFormat select_mask_dataformat(const std::optional<Tensor>& attn_mask, bool use_streaming_compute) {
@@ -1139,6 +1162,92 @@ KvChains build_kv_chains(
 
 }  // namespace
 
+SDPASeqGeometry sdpa_seq_geometry(const SDPAParams& attrs, const SDPAInputs& tensors) {
+    const auto& q_shape = tensors.q.logical_shape();
+    const auto& k_shape = tensors.k.logical_shape();
+    const auto& v_shape = tensors.v.value_or(tensors.k).logical_shape();
+    const bool is_windowed = is_windowed_mode(attrs.windowed_mode);
+    const bool use_causal_kernel = attrs.is_causal && !is_windowed;
+    const std::size_t q_chunk_size = attrs.program_config ? attrs.program_config->q_chunk_size : 32;
+    const std::size_t k_chunk_size = attrs.program_config ? attrs.program_config->k_chunk_size : 32;
+
+    // compute_program_hash calls this before validate_on_program_cache_miss runs, so everything the helper
+    // divides by or dereferences is checked here first, with the validator's messages.
+    TT_FATAL(tensors.q.device() != nullptr, "Operands to SDPA need to be allocated in buffers on device");
+    TT_FATAL(
+        q_chunk_size > 0 && q_chunk_size % TILE_HEIGHT == 0,
+        "q_chunk_size must be a positive multiple of TILE_SIZE. Got q_chunk_size: {}, TILE_SIZE: {}",
+        q_chunk_size,
+        TILE_HEIGHT);
+    TT_FATAL(
+        k_chunk_size > 0 && k_chunk_size % TILE_HEIGHT == 0,
+        "k_chunk_size must be a positive multiple of TILE_SIZE. Got k_chunk_size: {}, TILE_SIZE: {}",
+        k_chunk_size,
+        TILE_HEIGHT);
+    TT_FATAL(
+        !attrs.chunk_start_idx_tensor.has_value() || tensors.page_table.has_value(),
+        "chunk_start_idx_tensor requires a page_table");
+
+    const uint32_t B = q_shape[0];
+    const auto kv_geo =
+        resolve_effective_kv_geometry(attrs.paged_cache_geometry, attrs.use_mla, k_shape[1], v_shape[1], k_shape[2]);
+    const uint32_t NKH = kv_geo.nkh;
+    const uint32_t NVH = kv_geo.nvh;
+    const bool flexible_chunked = attrs.chunk_start_idx_tensor.has_value();
+    const bool is_chunked = flexible_chunked || attrs.chunk_start_idx.has_value();
+
+    SDPASeqGeometry g;
+    // Q-head crossing (gqa_crossing_factor): Q [B, NQH, Sq, d] is scheduled as [B, NQH / gqa_pack, Sq * gqa_pack, d],
+    // so every Q value below is the scheduled one. Only the concatenated output layout needs the true head and
+    // sequence length (writer args 28 / 29).
+    const bool crossing_eligible =
+        !attrs.is_causal && !is_windowed && !tensors.attn_mask.has_value() && !tensors.page_table.has_value() &&
+        !tensors.attention_sink.has_value() && !is_chunked && !tensors.chunk_start_idx_tensor.has_value() &&
+        !attrs.sliding_window_size.has_value() && !attrs.use_mla && tensors.v.has_value() && NKH == k_shape[1] &&
+        NVH == NKH && q_shape[2] % TILE_HEIGHT == 0 && tensors.q.padded_shape()[2] == q_shape[2];
+    const CoreCoord crossing_grid = attrs.program_config ? attrs.program_config->compute_with_storage_grid_size
+                                                         : tensors.q.device()->compute_with_storage_grid_size();
+    g.gqa_pack = gqa_crossing_factor(
+        crossing_eligible, B, q_shape[1], NKH, q_shape[2], q_chunk_size, crossing_grid.x * crossing_grid.y);
+    g.NQH = q_shape[1] / g.gqa_pack;
+    g.q_tiles = std::ceil(static_cast<float>(q_shape[2]) / TILE_HEIGHT);
+    g.writer_gqa_pack_sqt =
+        writer_gqa_pack_args(attrs.output_concat_heads, g.gqa_pack, q_shape[2] / TILE_HEIGHT).gqa_pack_sqt;
+    g.Sq = q_shape[2] * g.gqa_pack;
+    if (flexible_chunked) {
+        // The page table's capacity bounds the prefix; the kernels read the live offset from its tensor.
+        g.Sk = g.Sq + tensors.page_table.value().padded_shape()[1] * kv_geo.block_size;
+    } else if (attrs.chunk_start_idx.has_value()) {
+        g.Sk = attrs.chunk_start_idx.value() + g.Sq;
+    } else {
+        g.Sk = k_shape[2];
+    }
+    g.padded_Sq = std::ceil(static_cast<float>(g.Sq) / q_chunk_size) * q_chunk_size;
+    g.padded_Sk = std::ceil(static_cast<float>(g.Sk) / k_chunk_size) * k_chunk_size;
+    g.Sqt = g.padded_Sq / TILE_HEIGHT;
+    g.Skt = g.padded_Sk / TILE_HEIGHT;
+    g.valid_Sqt = std::ceil(static_cast<float>(g.Sq) / TILE_HEIGHT);
+    g.valid_Skt = std::ceil(static_cast<float>(g.Sk) / TILE_HEIGHT);
+    g.Sq_chunk_t = q_chunk_size / TILE_HEIGHT;
+    g.Sk_chunk_t = k_chunk_size / TILE_HEIGHT;
+    g.q_num_chunks = g.padded_Sq / q_chunk_size;
+    g.k_num_chunks = g.padded_Sk / k_chunk_size;
+    g.use_padded_mask = !use_causal_kernel && ((g.padded_Sk != g.Sk) || (g.padded_Sq != g.Sq));
+    g.kernel_padding_mask = g.use_padded_mask && !is_windowed && !tensors.attn_mask.has_value();
+    [[maybe_unused]] const auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(tensors.q.device()->arch(), attrs.compute_kernel_config);
+    const bool use_streaming_compute = can_use_streaming_compute(fp32_dest_acc_en);
+    g.k_partial_col =
+        (use_streaming_compute && g.kernel_padding_mask && (g.Sk % TILE_HEIGHT != 0)) ? (g.Sk % TILE_HEIGHT) : 0;
+    g.kv_retain =
+        kv_retain_group(use_streaming_compute && !is_chunked && !attrs.use_mla, g.k_num_chunks, g.NQH, NKH, NVH);
+    return g;
+}
+
+bool sdpa_causal_pairs_uniform(const SDPASeqGeometry& g) {
+    return causal_pairs_uniform(g.q_num_chunks, g.Sq_chunk_t, g.Sk_chunk_t, g.Skt);
+}
+
 ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
@@ -1199,20 +1308,12 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     const uint32_t NKH = kv_geo.nkh;
     const uint32_t NVH = kv_geo.nvh;
     const uint32_t effective_kv_block_size = kv_geo.block_size;
-    // Q-head crossing (gqa_crossing_factor): only the concatenated output layout needs the true head and sequence
-    // length (writer args 28 / 29).
-    const bool crossing_eligible = !operation_attributes.is_causal && !is_windowed && !attn_mask.has_value() &&
-                                   !page_table.has_value() && !attention_sink.has_value() &&
-                                   !chunk_start_idx.has_value() && !tensor_args.chunk_start_idx_tensor.has_value() &&
-                                   !sliding_window_size.has_value() && !use_mla && tensor_args.v.has_value() &&
-                                   NKH == k_shape[1] && NVH == NKH && q_shape[2] % TILE_HEIGHT == 0 &&
-                                   input_tensor_q.padded_shape()[2] == q_shape[2];
-    const CoreCoord crossing_grid = program_config.has_value()
-                                        ? program_config->compute_with_storage_grid_size
-                                        : input_tensor_q.device()->compute_with_storage_grid_size();
-    const uint32_t gqa_pack = gqa_crossing_factor(
-        crossing_eligible, B, q_shape[1], NKH, q_shape[2], q_chunk_size, crossing_grid.x * crossing_grid.y);
-    const uint32_t NQH = q_shape[1] / gqa_pack, Sq = q_shape[2] * gqa_pack;
+    // Q-head crossing (gqa_crossing_factor, resolved in sdpa_seq_geometry with the rest of the sequence geometry so
+    // the program hash sees the same values): Q is scheduled as [B, NQH / gqa_pack, Sq * gqa_pack, d]. Only the
+    // concatenated output layout needs the true head and sequence length (writer args 28 / 29).
+    const auto geo = sdpa_seq_geometry(operation_attributes, tensor_args);
+    const uint32_t gqa_pack = geo.gqa_pack;
+    const uint32_t NQH = geo.NQH, Sq = geo.Sq;
 
     // In flash mla prefill, we have to support the case where NKH != NVH
     // We are calling op with the following shapes:
@@ -1225,17 +1326,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     const bool flexible_chunked = operation_attributes.chunk_start_idx_tensor.has_value();
     const bool is_chunked_legacy = chunk_start_idx.has_value() && !flexible_chunked;
     const bool is_chunked = is_chunked_legacy || flexible_chunked;
-    // For flexible chunked: max prefix length = page_table num_pages * block_size (from K/V layout).
-    uint32_t max_prefix_tokens_flexible = 0;
-    if (is_chunked && flexible_chunked) {
-        const uint32_t block_size_for_sk = effective_kv_block_size;
-        const uint32_t max_blocks = page_table.value().padded_shape()[1];
-        max_prefix_tokens_flexible = max_blocks * block_size_for_sk;
-    }
-    // In chunked mode: legacy uses chunk_start_idx + Sq; flexible uses Sq + max prefix from page table.
-    const uint32_t Sk = is_chunked
-                            ? (flexible_chunked ? (Sq + max_prefix_tokens_flexible) : (chunk_start_idx.value() + Sq))
-                            : k_shape[2];
+    const uint32_t Sk = geo.Sk;
 
     /*
     Note about tensor shapes:
@@ -1245,29 +1336,28 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     and handle masking pad tokens when appropriate.
     */
 
-    // Calculate padded sequence length
-    const uint32_t padded_Sq = std::ceil(static_cast<float>(Sq) / q_chunk_size) * q_chunk_size;
-    const uint32_t padded_Sk = std::ceil(static_cast<float>(Sk) / k_chunk_size) * k_chunk_size;
+    const uint32_t padded_Sq = geo.padded_Sq;
+    const uint32_t padded_Sk = geo.padded_Sk;
 
-    const uint32_t Sqt = padded_Sq / TILE_HEIGHT;
-    const uint32_t Skt = padded_Sk / TILE_HEIGHT;
+    const uint32_t Sqt = geo.Sqt;
+    const uint32_t Skt = geo.Skt;
     const uint32_t DHt = DH / TILE_WIDTH;
     const uint32_t vDHt = use_mla ? head_dim_v / TILE_WIDTH : DHt;
 
-    const uint32_t valid_Sqt = std::ceil(static_cast<float>(Sq) / TILE_HEIGHT);
-    const uint32_t valid_Skt = std::ceil(static_cast<float>(Sk) / TILE_HEIGHT);
+    const uint32_t valid_Sqt = geo.valid_Sqt;
+    const uint32_t valid_Skt = geo.valid_Skt;
     /*
     For non-causal case with Q/K padding:
     - If user provides a mask: reader reads unpadded mask and fills padded K positions with -inf
     - If no mask provided: writer generates a mask with 0 for valid K and -inf for padded K
     In causal case, the causal mask naturally handles masking of padded K tokens.
     */
-    const bool use_padded_mask = (!use_causal_kernel) && ((padded_Sk != Sk) || (padded_Sq != Sq));
+    const bool use_padded_mask = geo.use_padded_mask;
 
-    const uint32_t Sq_chunk_t = q_chunk_size / TILE_HEIGHT;
-    const uint32_t Sk_chunk_t = k_chunk_size / TILE_HEIGHT;
-    const uint32_t q_num_chunks = padded_Sq / q_chunk_size;
-    const uint32_t k_num_chunks = padded_Sk / k_chunk_size;
+    const uint32_t Sq_chunk_t = geo.Sq_chunk_t;
+    const uint32_t Sk_chunk_t = geo.Sk_chunk_t;
+    const uint32_t q_num_chunks = geo.q_num_chunks;
+    const uint32_t k_num_chunks = geo.k_num_chunks;
     const bool use_provided_mask = attn_mask.has_value();
     const bool broadcast_provided_mask_batch = use_provided_mask ? (attn_mask.value().logical_shape()[0] == 1) : false;
     const bool broadcast_provided_mask_heads = use_provided_mask ? (attn_mask.value().logical_shape()[1] == 1) : false;
@@ -1279,6 +1369,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     const bool generated_padding_mask = use_padded_mask && !is_windowed;
     const bool use_mask_block_map = tensor_args.attn_mask_block_map.has_value();
     const bool use_k_range_ctrl = is_windowed || use_mask_block_map;
+    const bool kernel_padding_mask = geo.kernel_padding_mask;
 
     // log_debug all of the above
     log_debug(tt::LogOp, "B: {}", B);
@@ -1408,13 +1499,9 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     const bool lightweight_mask = lightweight_causal || lightweight_streaming_mask;
     // Non-causal partial-tile K (Sk % TILE != 0) needs a partial-tile mask in cb_mask_in.
     // Not used for a dense provided mask (the reader neginf-fills padded positions in the mask).
-    const uint32_t k_partial_col =
-        (use_streaming_compute && generated_padding_mask && !use_provided_mask && (Sk % TILE_HEIGHT != 0))
-            ? (Sk % TILE_HEIGHT)
-            : 0;
+    const uint32_t k_partial_col = geo.k_partial_col;
     const bool lw_partial_active = (k_partial_col > 0);
-    const uint32_t kv_retain =
-        kv_retain_group(use_streaming_compute && !is_chunked && !use_mla, k_num_chunks, NQH, NKH, NVH);
+    const uint32_t kv_retain = geo.kv_retain;
     // 0: no K/V chains, 1: the non causal lock step chain, 2 and 3: causal prefix chains (see build_causal_chains).
     const bool block_float_kv =
         input_tensor_k.dtype() == DataType::BFLOAT8_B || input_tensor_k.dtype() == DataType::BFLOAT4_B;
@@ -1558,21 +1645,21 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
                                                       NQH,
                                                       NKH,
                                                       NVH,
-                                                      Skt,
-                                                      valid_Sqt,
-                                                      valid_Skt,
+                                                      0,  // arg 4: Skt, a runtime arg
+                                                      0,  // arg 5: valid_Sqt, a runtime arg
+                                                      0,  // arg 6: valid_Skt, a runtime arg
                                                       DHt,
                                                       vDHt,
                                                       Sq_chunk_t,
-                                                      q_num_chunks,
+                                                      0,  // arg 10: q_num_chunks, a runtime arg
                                                       Sk_chunk_t,
-                                                      k_num_chunks,
+                                                      0,  // arg 12: k_num_chunks, a runtime arg
                                                       num_cores,
                                                       static_cast<uint32_t>(use_causal_kernel),
                                                       static_cast<uint32_t>(use_provided_mask),
                                                       static_cast<uint32_t>(broadcast_provided_mask_batch),
                                                       static_cast<uint32_t>(broadcast_provided_mask_heads),
-                                                      static_cast<uint32_t>(generated_padding_mask),
+                                                      0,  // arg 18: retired, the mask reader always bounds-checks
                                                       static_cast<uint32_t>(is_chunked),
                                                       block_size_t,
                                                       page_table_stick_size,
@@ -1648,18 +1735,18 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         // interleaved accessor args
         B,
         NQH,
-        valid_Sqt,
-        Sk,
+        0,  // arg 2: valid_Sqt, a runtime arg
+        0,  // arg 3: unpadded Sk, a runtime arg
         vDHt,
         Sq_chunk_t,
-        q_num_chunks,
+        0,  // arg 6: q_num_chunks, a runtime arg
         Sk_chunk_t,
-        k_num_chunks,
+        0,  // arg 8: k_num_chunks, a runtime arg
         packed_identity_scalar,
         num_cores,
         static_cast<uint32_t>(use_causal_kernel),
         static_cast<uint32_t>(use_provided_mask),
-        static_cast<uint32_t>(generated_padding_mask),
+        static_cast<uint32_t>(kernel_padding_mask),
         static_cast<uint32_t>(is_chunked),
         sliding_window_size.value_or(0),
         static_cast<uint32_t>(lightweight_mask),       // arg 16: lightweight mask
@@ -1688,13 +1775,13 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
 
     std::vector<uint32_t> compute_compile_time_args = {
         // matmul args
-        Skt,  // Padded K tile count — used by standard SDPA path for loop bounds
+        0,  // arg 0: Skt, a runtime arg
         DHt,
         vDHt,
         Sq_chunk_t,
-        q_num_chunks,
+        0,  // arg 4: q_num_chunks, a runtime arg
         Sk_chunk_t,
-        k_num_chunks,
+        0,  // arg 6: k_num_chunks, a runtime arg
         qk_in0_block_w,
         qk_out_subblock_w,
         qk_out_subblock_h,
@@ -1707,17 +1794,17 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         out_in1_num_subblocks,
         static_cast<uint32_t>(use_causal_kernel),
         static_cast<uint32_t>(compute_use_provided_mask),
-        static_cast<uint32_t>(generated_padding_mask),
+        static_cast<uint32_t>(kernel_padding_mask),
         static_cast<uint32_t>(is_chunked),
         scale_packed,
         sliding_window_size.value_or(0),
         static_cast<std::uint32_t>(use_attention_sink),
-        static_cast<std::uint32_t>(use_streaming_compute),  // arg 26
-        valid_Skt,                                    // arg 27: unpadded K tile count for streaming padded_k_tiles
-        k_partial_col,                                // arg 28: K partial-tile col (0 = no partial)
-        static_cast<uint32_t>(use_zigzag_balancing),  // arg 29: unified zigzag remap
-        static_cast<uint32_t>(use_k_range_ctrl),      // arg 28: K-range narrowing (windowed mode or a mask block map)
-        kv_retain,                                    // arg 29: K/V retention, Q heads per retention key (0 = off)
+        static_cast<std::uint32_t>(use_streaming_compute),  // arg 24
+        0,                                                  // arg 25: valid_Skt, a runtime arg
+        k_partial_col,                                      // arg 26: K partial-tile col (0 = no partial)
+        static_cast<uint32_t>(use_zigzag_balancing),        // arg 27: unified zigzag remap
+        static_cast<uint32_t>(use_k_range_ctrl),  // arg 28: K-range narrowing (windowed mode or a mask block map)
+        kv_retain,                                // arg 29: K/V retention, Q heads per retention key (0 = off)
     };
 
     std::map<std::string, std::string> defines_map;
@@ -2033,8 +2120,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         // Get chain info for this core
         const auto& chain = core_chain_info[i];
 
-        KernelDescriptor::RTArgList reader_args;
-        reader_args.push_back(q_buffer);
+        RuntimeArgs reader_args;
+        reader_args.push_back(q_buffer);  // rt::reader_q_addr
         reader_args.push_back(k_buffer);
         reader_args.push_back(v_buffer);
         reader_args.push_back(mask_buffer);
@@ -2042,8 +2129,24 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         reader_args.push_back(attention_sink_buffer);
         reader_args.push_back(chunk_start_idx_buffer);
         reader_args.push_back(num_phases);
-        reader_args.push_back(chunked_q_chunk_offset);
-        reader_args.push_back(read_offset);  // read_offset
+        reader_args.push_back(chunked_q_chunk_offset);  // rt::reader_chunked_q_chunk_offset
+        reader_args.push_back(read_offset);
+        TT_ASSERT(reader_args.size() == rt::reader_geometry);
+        reader_args.push_back(Skt);
+        reader_args.push_back(valid_Sqt);
+        reader_args.push_back(valid_Skt);
+        reader_args.push_back(q_num_chunks);
+        reader_args.push_back(k_num_chunks);
+        // Windowed K-range narrowing: the same four values the writer gets at slots 9-12, so the reader
+        // resolves each Q chunk's global row range and windows identically. Then the mask block map. Both are
+        // always sent so that every slot a cache hit patches sits at a fixed index.
+        TT_ASSERT(reader_args.size() == rt::reader_cu_window_addr);
+        reader_args.push_back(cu_window_buffer);
+        reader_args.push_back(cu_window_seqlens_eles);
+        reader_args.push_back(windowed_q_token_offset);
+        reader_args.push_back(windowed_q_offset_buffer);                         // rt::reader_windowed_q_offset_addr
+        reader_args.push_back(buffer_or_null(tensor_args.attn_mask_block_map));  // rt::reader_block_map_addr
+        reader_args.push_back(block_map_stick_size);
 
         if (!use_causal_kernel || kv_chain_mode >= 2) {
             reader_args.push_back(static_cast<uint32_t>(chain.participates));
@@ -2065,17 +2168,6 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         reader_args.push_back(global_q_start);
         reader_args.push_back(global_q_count);
 
-        // Windowed K-range narrowing tail: same four values the writer gets at slots 9-12, so the
-        // reader resolves each Q chunk's global row range and windows identically.
-        reader_args.push_back(cu_window_buffer);
-        reader_args.push_back(cu_window_seqlens_eles);
-        reader_args.push_back(windowed_q_token_offset);
-        reader_args.push_back(windowed_q_offset_buffer);
-        // Feature tails: the kernel reads them behind the same flags.
-        if (use_mask_block_map) {
-            reader_args.push_back(buffer_or_null(tensor_args.attn_mask_block_map));
-            reader_args.push_back(block_map_stick_size);
-        }
         if (kv_chain_mode >= 2) {
             reader_args.push_back(chain.prev_seg_global_start);
             reader_args.push_back(chain.prev_seg_count);
@@ -2084,21 +2176,27 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
 
         reader_desc.emplace_runtime_args(core, reader_args);
 
-        KernelDescriptor::RTArgList writer_args;
-        writer_args.push_back(out0_buffer);
+        RuntimeArgs writer_args;
+        writer_args.push_back(out0_buffer);                                      // rt::writer_out_addr
         writer_args.push_back(num_phases);                                       // 1
         writer_args.push_back(static_cast<uint32_t>(flexible_chunked ? 1 : 0));  // 2
-        writer_args.push_back(chunked_q_chunk_offset);                           // 3: phase_1
+        writer_args.push_back(chunked_q_chunk_offset);                           // 3: rt::writer_chunked_q_chunk_offset
         writer_args.push_back(write_offset);                                     // 4
         writer_args.push_back(0u);                        // 5: phase_2 chunk_start (unused, num_phases==1)
         writer_args.push_back(0u);                        // 6: phase_2 write_offset (unused, num_phases==1)
         writer_args.push_back(global_q_start);            // 7
         writer_args.push_back(global_q_count);            // 8
+        TT_ASSERT(writer_args.size() == rt::writer_cu_window_addr);
         writer_args.push_back(cu_window_buffer);          // 9: windowed mask src (nullptr if unused)
         writer_args.push_back(cu_window_seqlens_eles);    // 10: window count + 1
         writer_args.push_back(windowed_q_token_offset);   // 11: global origin of this Q shard (scalar)
         writer_args.push_back(windowed_q_offset_buffer);  // 12: same, per-device (nullptr => use 11)
-        // Causal chain tail, parsed by the writer at 13..15.
+        TT_ASSERT(writer_args.size() == rt::writer_geometry);
+        writer_args.push_back(valid_Sqt);     // 13
+        writer_args.push_back(Sk);            // 14: unpadded K length
+        writer_args.push_back(q_num_chunks);  // 15
+        writer_args.push_back(k_num_chunks);  // 16
+        // Causal chain tail, parsed by the writer at 17..19.
         if (kv_chain_mode >= 2) {
             writer_args.push_back(static_cast<uint32_t>(chain.participates));
             writer_args.push_back(static_cast<uint32_t>(chain.next_physical.x));
@@ -2110,10 +2208,14 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
             core,
             {num_phases,                                       // 0
              static_cast<uint32_t>(flexible_chunked ? 1 : 0),  // 1
-             chunked_q_chunk_offset,                           // 2: phase_1
+             chunked_q_chunk_offset,                           // 2: rt::compute_chunked_q_chunk_offset
              0u,                                               // 3: phase_2 chunked offset (unused, num_phases==1)
              global_q_start,                                   // 4
-             global_q_count});                                 // 5
+             global_q_count,                                   // 5
+             Skt,                                              // 6: rt::compute_geometry
+             valid_Skt,                                        // 7
+             q_num_chunks,                                     // 8
+             k_num_chunks});                                   // 9
     }
 
     desc.kernels.push_back(std::move(reader_desc));
@@ -2121,6 +2223,81 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     desc.kernels.push_back(std::move(compute_desc));
 
     return desc;
+}
+
+void SDPAOperation::SDPAProgramFactory::override_runtime_arguments(
+    tt::tt_metal::Program& program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    // compute_program_hash leaves only these free between hits: buffer addresses, the sequence geometry
+    // and the legacy chunk offset. The per-core Q split, the chain topology and the windowed scalars are
+    // fixed by the key, so the rt:: slots are patched in place and nothing else is touched.
+    const auto geo = sdpa_seq_geometry(operation_attributes, tensor_args);
+    const bool flexible_chunked = operation_attributes.chunk_start_idx_tensor.has_value();
+    const bool is_chunked = flexible_chunked || operation_attributes.chunk_start_idx.has_value();
+    const bool is_windowed = is_windowed_mode(operation_attributes.windowed_mode);
+    const std::size_t q_chunk_size =
+        operation_attributes.program_config ? operation_attributes.program_config->q_chunk_size : 32;
+    const uint32_t chunked_q_chunk_offset =
+        (is_chunked && !flexible_chunked) ? operation_attributes.chunk_start_idx.value() / q_chunk_size : 0;
+    const auto address = [](const std::optional<Tensor>& tensor) -> uint32_t {
+        return tensor.has_value() ? tensor->buffer()->address() : 0;
+    };
+    const uint32_t q_addr = tensor_args.q.buffer()->address();
+    const uint32_t k_addr = tensor_args.k.buffer()->address();
+    const uint32_t v_addr = tensor_args.v.has_value() ? tensor_args.v->buffer()->address() : k_addr;
+    const uint32_t mask_addr = address(tensor_args.attn_mask);
+    const uint32_t page_table_addr = is_chunked ? address(tensor_args.page_table) : 0;
+    const uint32_t attention_sink_addr = address(tensor_args.attention_sink);
+    const uint32_t chunk_start_idx_addr = flexible_chunked ? address(tensor_args.chunk_start_idx_tensor) : 0;
+    const uint32_t cu_window_addr = is_windowed ? address(tensor_args.cu_window_seqlens) : 0;
+    const uint32_t windowed_q_offset_addr = is_windowed ? address(tensor_args.windowed_q_token_offset_tensor) : 0;
+    const uint32_t block_map_addr = address(tensor_args.attn_mask_block_map);
+    const uint32_t out_addr = tensor_return_value.buffer()->address();
+
+    const CoreCoord grid_size = operation_attributes.program_config
+                                    ? operation_attributes.program_config->compute_with_storage_grid_size
+                                    : tensor_args.q.device()->compute_with_storage_grid_size();
+    for (uint32_t i = 0; i < grid_size.x * grid_size.y; ++i) {
+        const CoreCoord core = {i % grid_size.x, i / grid_size.x};
+
+        auto& reader = tt::tt_metal::GetRuntimeArgs(program, rt::reader_kernel, core);
+        reader[rt::reader_q_addr + 0] = q_addr;
+        reader[rt::reader_q_addr + 1] = k_addr;
+        reader[rt::reader_q_addr + 2] = v_addr;
+        reader[rt::reader_q_addr + 3] = mask_addr;
+        reader[rt::reader_q_addr + 4] = page_table_addr;
+        reader[rt::reader_q_addr + 5] = attention_sink_addr;
+        reader[rt::reader_q_addr + 6] = chunk_start_idx_addr;
+        reader[rt::reader_chunked_q_chunk_offset] = chunked_q_chunk_offset;
+        reader[rt::reader_geometry + 0] = geo.Skt;
+        reader[rt::reader_geometry + 1] = geo.valid_Sqt;
+        reader[rt::reader_geometry + 2] = geo.valid_Skt;
+        reader[rt::reader_geometry + 3] = geo.q_num_chunks;
+        reader[rt::reader_geometry + 4] = geo.k_num_chunks;
+        reader[rt::reader_cu_window_addr] = cu_window_addr;
+        reader[rt::reader_windowed_q_offset_addr] = windowed_q_offset_addr;
+        reader[rt::reader_block_map_addr] = block_map_addr;
+
+        auto& writer = tt::tt_metal::GetRuntimeArgs(program, rt::writer_kernel, core);
+        writer[rt::writer_out_addr] = out_addr;
+        writer[rt::writer_chunked_q_chunk_offset] = chunked_q_chunk_offset;
+        writer[rt::writer_cu_window_addr] = cu_window_addr;
+        writer[rt::writer_windowed_q_offset_addr] = windowed_q_offset_addr;
+        writer[rt::writer_geometry + 0] = geo.valid_Sqt;
+        writer[rt::writer_geometry + 1] = geo.Sk;
+        writer[rt::writer_geometry + 2] = geo.q_num_chunks;
+        writer[rt::writer_geometry + 3] = geo.k_num_chunks;
+
+        auto& compute = tt::tt_metal::GetRuntimeArgs(program, rt::compute_kernel, core);
+        compute[rt::compute_chunked_q_chunk_offset] = chunked_q_chunk_offset;
+        compute[rt::compute_geometry + 0] = geo.Skt;
+        compute[rt::compute_geometry + 1] = geo.valid_Skt;
+        compute[rt::compute_geometry + 2] = geo.q_num_chunks;
+        compute[rt::compute_geometry + 3] = geo.k_num_chunks;
+    }
 }
 
 }  // namespace ttnn::prim

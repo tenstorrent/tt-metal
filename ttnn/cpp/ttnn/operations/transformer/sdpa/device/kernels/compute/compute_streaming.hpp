@@ -2161,7 +2161,6 @@ static void sdpa_inner_loop_step(
  *
  * @tparam Sq_chunk_t   Q chunk size in tiles (rows per attention block)
  * @tparam Sk_chunk_t   K chunk size in tiles (columns per attention block)
- * @tparam Skt          Total K sequence length in tiles (used for last-chunk padding detection)
  * @tparam DHt          Head dimension in tiles
  * @tparam vDHt         V head dimension in tiles (== DHt unless V has different width)
  * @tparam scale_fp32   Attention scale factor as raw uint32_t bits (reinterpreted as float)
@@ -2169,6 +2168,7 @@ static void sdpa_inner_loop_step(
  *
  * @param q_chunks_per_core  Number of Q chunks this core processes
  * @param k_num_chunks       Total number of K chunks in the sequence
+ * @param Skt                Unpadded K length in tiles (last-chunk padding detection)
  * @param cb_out_im_A/B      Ping-pong output accumulator CBs (hold un-normalized QK@V)
  * @param cb_max_A/B          Ping-pong row-max CBs (for numerical stability)
  * @param cb_sum_A/B          Ping-pong row-sum CBs (softmax denominator)
@@ -2176,7 +2176,6 @@ static void sdpa_inner_loop_step(
 template <
     uint32_t Sq_chunk_t,
     uint32_t Sk_chunk_t,
-    uint32_t Skt,
     uint32_t DHt,
     uint32_t vDHt,
     uint32_t scale_fp32,
@@ -2205,6 +2204,7 @@ template <
 void sdpa_standard_v2(
     const uint32_t q_chunks_per_core,
     const uint32_t k_num_chunks,
+    const uint32_t Skt,
     const uint32_t cb_out_im_A,
     const uint32_t cb_out_im_B,
     const uint32_t cb_max_A,
@@ -2240,12 +2240,14 @@ void sdpa_standard_v2(
     // Neginf tile is permanently fronted by the writer — wait once before any K-chunk loop.
     // Skipped for a user-provided mask: the writer generates no palette; the reader streams the
     // dense mask (with padded positions neginf-filled) per chunk instead.
-    constexpr uint32_t padded_k_tiles_inner = (Sk_chunk_t - (Skt % Sk_chunk_t)) % Sk_chunk_t;
-    if constexpr (use_padded_mask && padded_k_tiles_inner > 0 && !use_provided_mask) {
-        CircularBuffer(cb_mask_in).wait_front(1);
+    const uint32_t padded_k_tiles_inner = (Sk_chunk_t - (Skt % Sk_chunk_t)) % Sk_chunk_t;
+    if constexpr (use_padded_mask && !use_provided_mask) {
+        if (padded_k_tiles_inner > 0) {
+            CircularBuffer(cb_mask_in).wait_front(1);
+        }
     }
 
-    constexpr uint32_t last_chunk_Sk = Sk_chunk_t - padded_k_tiles_inner;
+    const uint32_t last_chunk_Sk = Sk_chunk_t - padded_k_tiles_inner;
 
     for (uint32_t q = 0; q < q_chunks_per_core; q++) {
         AccumulatorHalf prev = {cb_sum_A, cb_max_A, cb_out_im_A};
@@ -2259,15 +2261,15 @@ void sdpa_standard_v2(
 
         // Pre-compute subblock width: compile-time for full chunks, hoisted for padded last chunk.
         constexpr uint32_t full_sbw = qkt_subblock_w;
-        constexpr uint32_t padded_sbw = (last_chunk_Sk < Sk_chunk_t && last_chunk_Sk % qkt_subblock_w != 0)
-                                            ? largest_factor_le(last_chunk_Sk, qkt_subblock_w)
-                                            : qkt_subblock_w;
+        const uint32_t padded_sbw = (last_chunk_Sk < Sk_chunk_t && last_chunk_Sk % qkt_subblock_w != 0)
+                                        ? largest_factor_le(last_chunk_Sk, qkt_subblock_w)
+                                        : qkt_subblock_w;
 
         // With largest_factor_le, padded chunks also have evenly-dividing subblocks,
         // so reduce_trigger can be enabled when the same constraints hold for last_chunk_Sk.
-        constexpr bool can_reduce_trigger_padded = reduce_trigger_supported && (padded_k_tiles_inner > 0) &&
-                                                   (last_chunk_Sk % padded_sbw == 0) &&
-                                                   (last_chunk_Sk / padded_sbw > 1) && (last_chunk_Sk % 2 == 0);
+        const bool can_reduce_trigger_padded = reduce_trigger_supported && (padded_k_tiles_inner > 0) &&
+                                               (last_chunk_Sk % padded_sbw == 0) && (last_chunk_Sk / padded_sbw > 1) &&
+                                               (last_chunk_Sk % 2 == 0);
 
         // Optional zigzag Q-chunk remap plus per-Q K-chunk bounds. Causal uses the
         // diagonal upper bound; sliding-window adds a lower bound and, for non-causal
@@ -2332,7 +2334,7 @@ void sdpa_standard_v2(
                 decltype(profiling_tag)::value,
                 Sq_chunk_t,
                 Sk_chunk_t,
-                Skt,
+                0u,  // Skt: unused by sdpa_inner_loop_step
                 DHt,
                 vDHt,
                 scale_fp32,

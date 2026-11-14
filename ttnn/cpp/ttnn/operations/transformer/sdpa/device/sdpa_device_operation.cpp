@@ -15,6 +15,65 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
+namespace {
+
+// A tensor's contribution to the program hash with its sequence dimensions dropped.
+std::tuple<ttnn::Shape, TensorLayout> seq_free_key(const Tensor& tensor, const ttsl::SmallVector<int>& seq_dims) {
+    ttnn::Shape shape = tensor.logical_shape();
+    for (int dim : seq_dims) {
+        shape[dim] = 0;
+    }
+    return {shape, tensor.tensor_spec().tensor_layout()};
+}
+
+std::optional<std::tuple<ttnn::Shape, TensorLayout>> seq_free_key(
+    const std::optional<Tensor>& tensor, const ttsl::SmallVector<int>& seq_dims) {
+    if (!tensor.has_value()) {
+        return std::nullopt;
+    }
+    return seq_free_key(*tensor, seq_dims);
+}
+
+}  // namespace
+
+ttsl::hash::hash_t SDPAOperation::compute_program_hash(const SDPAParams& attrs, const SDPAInputs& tensors) {
+    // The Q and K lengths and the legacy chunk offset are runtime arguments
+    // (SDPAProgramFactory::override_runtime_arguments), so the key keeps what sizes the program: every other
+    // attribute, each tensor's layout and non-sequence dimensions, and the derived values that pick a kernel
+    // variant or the core split (Q chunk count, GQA Q-head crossing, K/V retention, the synthesized padding
+    // mask, the streaming partial-tile column). A paged K/V cache's shape is its capacity, not a length.
+    const auto geo = sdpa_seq_geometry(attrs, tensors);
+    SDPAParams keyed = attrs;
+    if (keyed.chunk_start_idx.has_value()) {
+        keyed.chunk_start_idx = 0;
+    }
+    const ttsl::SmallVector<int> kv_seq_dims =
+        tensors.page_table.has_value() ? ttsl::SmallVector<int>{} : ttsl::SmallVector<int>{2};
+    // A sharded output bakes its tile shape into the writer's and compute kernel's accessor compile-time args,
+    // so its Q tile count stays in the key. An interleaved accessor carries no shape.
+    const uint32_t sharded_output_q_tiles = attrs.output_mem_config.is_sharded() ? geo.q_tiles : 0u;
+    return tt::tt_metal::operation::hash_operation<SDPAOperation>(
+        keyed,
+        geo.q_num_chunks,
+        geo.gqa_pack,
+        geo.writer_gqa_pack_sqt,
+        geo.kv_retain,
+        sharded_output_q_tiles,
+        geo.kernel_padding_mask,
+        geo.k_partial_col,
+        attrs.is_causal && sdpa_causal_pairs_uniform(geo),
+        seq_free_key(tensors.q, {2}),
+        seq_free_key(tensors.k, kv_seq_dims),
+        seq_free_key(tensors.v, kv_seq_dims),
+        seq_free_key(tensors.attn_mask, {2, 3}),
+        tensors.page_table,
+        tensors.chunk_start_idx_tensor,
+        tensors.attention_sink,
+        tensors.cu_window_seqlens,
+        tensors.windowed_q_token_offset_tensor,
+        tensors.attn_mask_block_map);
+}
+
 void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, const SDPAInputs& tensors) {
     const bool use_mla = attrs.use_mla;
 
