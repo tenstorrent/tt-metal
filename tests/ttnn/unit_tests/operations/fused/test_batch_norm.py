@@ -1293,3 +1293,67 @@ def test_batch_norm_running_var_bessel_correction(device):
         atol=1e-3,
         check_pcc=False,
     )
+
+
+@pytest.mark.parametrize(
+    "input_shape, output_shape",
+    [
+        ((1, 64, 32, 32), (1, 64, 32, 32)),
+        ((2, 64, 32, 32), (1, 64, 32, 32)),
+        ((1, 64, 32, 32), (1, 64, 32, 64)),
+    ],
+    ids=["control", "n_mismatch", "h_mismatch"],
+)
+def test_batch_norm_preallocated_output_shape(input_shape, output_shape, device, expect_error):
+    """A matching preallocated output is exact; N and H mismatches must be rejected.
+
+    The output check only compared rank and C, so an output with a smaller N silently processed
+    only that many batches and a different H walked the input with the wrong strides. With
+    running_mean 5.0 and input 5.0, (5 - 5) is exactly zero for both torch and the kernel, so
+    the control stays exact.
+    """
+    torch.manual_seed(11)
+    input_data = torch.full(input_shape, 5.0, dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(input_data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    channels = input_shape[1]
+    running_mean = ttnn.from_torch(
+        torch.full((1, channels, 1, 1), 5.0, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    running_var = ttnn.from_torch(
+        torch.ones(1, channels, 1, 1, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    output = ttnn.from_torch(
+        torch.full(output_shape, 42.0, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+
+    if input_shape == output_shape:
+        ttnn.batch_norm(
+            input_tensor,
+            running_mean=running_mean,
+            running_var=running_var,
+            training=False,
+            eps=1e-5,
+            output=output,
+        )
+        assert torch.equal(
+            ttnn.to_torch(output).float(), torch.zeros(output_shape)
+        ), "matching preallocated output must stay exact"
+    else:
+        with expect_error(RuntimeError, "must match the input logical shape"):
+            ttnn.batch_norm(
+                input_tensor,
+                running_mean=running_mean,
+                running_var=running_var,
+                training=False,
+                eps=1e-5,
+                output=output,
+            )
