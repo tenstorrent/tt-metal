@@ -16,6 +16,7 @@ import json
 import math
 import os
 import sys
+import time
 import weakref
 from dataclasses import dataclass, field
 from io import BytesIO
@@ -56,7 +57,9 @@ from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
 from ...utils.progress import Watchdog
 from ...utils.tensor import bf16_tensor
 from ...utils.torch_threads import cap_torch_threads_to_half_the_cpus
-from ...utils.tracing import StateTensor, set_kernel_prewarm_capturing
+from ...utils.dram_accounting import dram_by_category
+from ...utils.dram_accounting import format_row as format_dram_row
+from ...utils.tracing import StateTensor, live_tracers, release_traced_functions, set_kernel_prewarm_capturing
 from ...utils.video import Audio
 
 
@@ -537,6 +540,80 @@ class LTXPipeline:
         self._warmup_capture_pending = []
         self._prompt_v = StateTensor()
         self._prompt_a = StateTensor()
+
+    def _ccl_managers(self) -> list[CCLManager]:
+        out: list[CCLManager] = []
+        for m in (self.ccl_manager, self.vae_ccl_manager, self.audio_ccl_manager):
+            if m is not None and all(m is not o for o in out):
+                out.append(m)
+        return out
+
+    def _shape_state_tensors(self) -> list[StateTensor]:
+        """The StateTensors sized by the warm shape: per-stage trace I/O, prompts, stage-transition I/O."""
+        out = [v for s in self._trace_state.values() for k, v in vars(s).items() if isinstance(v, StateTensor)]
+        out += [self._prompt_v, self._prompt_a]
+        io = getattr(self, "_t12_io", None)
+        out += [v for v in io.values() if isinstance(v, StateTensor)] if isinstance(io, dict) else []
+        return out
+
+    def release_shape_buffers(self) -> tuple[int, int]:
+        """Free every CCL manager's shape-keyed buffers; (tensors, bytes). Only once no trace is live."""
+        counts = [m.release_shape_buffers() for m in self._ccl_managers()]
+        return sum(c for c, _ in counts), sum(b for _, b in counts)
+
+    def dram_by_category(self) -> dict:
+        """One chip's DRAM by category (see utils.dram_accounting); the audio submesh's CCL is not counted."""
+        roots = [s.model for s in self.transformer_states]
+        roots += [m for m in (self.vae_decoder, self.vae_encoder, self.upsampler, self._audio_adapter) if m is not None]
+        roots.append(self.gemma_encoder_pair)
+        managers = [m for m in self._ccl_managers() if m.mesh_device is self.mesh_device]
+        return dram_by_category(
+            self.mesh_device, weight_roots=roots, ccl_managers=managers, state_tensors=self._shape_state_tensors()
+        )
+
+    def reset_for_shape(self, num_frames: int, height: int, width: int, *, warmup: bool = True) -> dict:
+        """Make the pipeline warm at a new (num_frames, height, width) in-process.
+
+        Frees every shape-sized device state: all traces (Gemma's encode trace too: it runs through
+        vae_ccl_manager's buffers), their I/O tensors, the frame-baked VAE decoder and upsampler, and
+        the CCL managers' shape-keyed buffers. Keeps the weights, mesh, fabric and global semaphores
+        (reset, not recreated). Every trace is released before the warmup captures any, so the trace
+        region is one free block again. Returns timings in seconds and the DRAM rows ("released",
+        "warm"; see dram_by_category).
+        """
+        clock = time.monotonic
+        t0 = clock()
+        ttnn.synchronize_device(self.mesh_device)
+        for st in self._shape_state_tensors():
+            st.release()
+        self.release_traces()
+        contexts = [self, *(s.model for s in self.transformer_states), self.gemma_encoder_pair]
+        contexts += [m for m in (self.vae_decoder, self.vae_encoder, self.upsampler) if m is not None]
+        traces = sum(release_traced_functions(c) for c in contexts)
+        self._t12_io = None
+        self._cached_trans_mat = None
+        self._init_num_frames, self._init_height, self._init_width = num_frames, height, width
+        # The decoder and upsampler bake the init dims at construction: rebuild them even when only H/W changed.
+        self._vae_decoder_nf = self._upsampler_nf = None
+        self._ensure_vae_decoder_frames(num_frames)
+        self._ensure_upsampler_frames(num_frames)
+        # A trace still captured here (another store, another object) would bake buffers freed below.
+        left = sum(t.trace_captured for t in live_tracers())
+        if left:
+            logger.warning(f"reset_for_shape: {left} trace(s) outside the pipeline are still captured")
+        ccl_tensors, ccl_bytes = self.release_shape_buffers()
+        released = self.dram_by_category()
+        t_release = clock()
+        stats = {"release_s": round(t_release - t0, 3), "traces_released": traces, "ccl_freed": ccl_tensors,
+                 "ccl_freed_bytes": ccl_bytes, "traces_left": left, "dram_released": released}
+        logger.info(format_dram_row("released", released))
+        if warmup:
+            self.warmup_buffers(num_frames=num_frames, height=height, width=width, capture_all=True)
+            stats["warmup_s"] = round(clock() - t_release, 3)
+            stats["dram_warm"] = self.dram_by_category()
+            logger.info(format_dram_row(f"warm {num_frames}x{height}x{width}", stats["dram_warm"]))
+        stats["took_s"] = round(clock() - t0, 3)
+        return stats
 
     def release_audio_submesh(self) -> None:
         """Release audio tensors and leave the shared queues safe for mesh teardown.
