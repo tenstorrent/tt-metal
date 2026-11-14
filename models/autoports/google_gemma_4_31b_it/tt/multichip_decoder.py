@@ -31,6 +31,7 @@ class MultichipDecoder(OptimizedDecoder):
         obj.prefill_ccl_phase = 0
         obj.prefill_ccl_padding = {}
         obj.prefill_ccl_bfp8 = kwargs.pop("prefill_ccl_bfp8", not candidate_baseline)
+        sdpa_fidelity = getattr(ttnn.MathFidelity, kwargs.pop("sdpa_compute_fidelity", "HiFi2"))
         cache_dtype = kwargs.pop("cache_dtype", ttnn.bfloat8_b)
         activation_dtype = kwargs.pop("activation_dtype", ttnn.bfloat8_b)
         obj.carry_reduced = not candidate_baseline
@@ -231,11 +232,14 @@ class MultichipDecoder(OptimizedDecoder):
                 )
                 obj.weights[name] = ttnn.to_memory_config(weight, memory)
         obj.sdpa_kernel = BlackholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=True
+            math_fidelity=sdpa_fidelity, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=True
         )
 
         obj.prefill_sdpa_kernel = BlackholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=False, packer_l1_acc=True
+            math_fidelity=sdpa_fidelity,
+            math_approx_mode=False,
+            fp32_dest_acc_en=sdpa_fidelity == ttnn.MathFidelity.HiFi4,
+            packer_l1_acc=True,
         )
 
         def decode_program(size, chunk):

@@ -33,3 +33,57 @@ def test_policy_does_not_mutate_caller():
     policy = precision.load_precision(precision.BASELINE)
     policy["weight_groups"]["down"] = "bf16"
     assert precision.BASELINE["weight_groups"]["down"] == "bfp4"
+
+
+def test_optional_sdpa_policy_preserves_default_and_rejects_unknown(expect_error):
+    assert "sdpa_compute_fidelity" not in precision.load_precision(precision.BASELINE)
+    for fidelity in ("HiFi2", "HiFi4"):
+        candidate = dict(precision.BASELINE, sdpa_compute_fidelity=fidelity)
+        assert precision.load_precision(candidate)["sdpa_compute_fidelity"] == fidelity
+    with expect_error(ValueError, "SDPA"):
+        precision.load_precision(dict(precision.BASELINE, sdpa_compute_fidelity="LoFi"))
+
+
+@pytest.mark.parametrize("fidelity", ["HiFi2", "HiFi4"])
+def test_sdpa_policy_reaches_both_kernel_constructors(fidelity):
+    """Execute actual constructor expressions with host stubs, without loading TTNN."""
+    import ast
+    from types import SimpleNamespace
+
+    root = Path(__file__).parents[1] / "tt"
+    model_tree = ast.parse((root / "model.py").read_text())
+    forwarded = next(
+        kw.value
+        for node in ast.walk(model_tree)
+        if isinstance(node, ast.Call)
+        for kw in node.keywords
+        if kw.arg == "sdpa_compute_fidelity"
+    )
+    value = eval(
+        compile(ast.Expression(forwarded), "model.py", "eval"), {"policy": {"sdpa_compute_fidelity": fidelity}}
+    )
+    tree = ast.parse((root / "multichip_decoder.py").read_text())
+    target_names = {"sdpa_fidelity", "sdpa_kernel", "prefill_sdpa_kernel"}
+    statements = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and any(
+            (isinstance(t, ast.Name) and t.id in target_names)
+            or (isinstance(t, ast.Attribute) and t.attr in target_names)
+            for t in node.targets
+        )
+    ]
+    statements.sort(key=lambda node: node.lineno)
+    obj = SimpleNamespace()
+    env = {
+        "kwargs": {"sdpa_compute_fidelity": value},
+        "obj": obj,
+        "ttnn": SimpleNamespace(MathFidelity=SimpleNamespace(HiFi2="HiFi2", HiFi4="HiFi4")),
+        "BlackholeComputeKernelConfig": lambda **kwargs: kwargs,
+    }
+    exec(compile(ast.Module(body=statements, type_ignores=[]), "multichip_decoder.py", "exec"), env)
+    assert obj.sdpa_kernel["math_fidelity"] == obj.prefill_sdpa_kernel["math_fidelity"] == fidelity
+    assert obj.sdpa_kernel["fp32_dest_acc_en"] is True
+    assert obj.prefill_sdpa_kernel["fp32_dest_acc_en"] is (fidelity == "HiFi4")
+    assert not env["kwargs"]

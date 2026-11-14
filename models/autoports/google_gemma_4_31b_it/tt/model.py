@@ -52,6 +52,7 @@ class Gemma4Model:
                     layer_idx=index,
                     mesh_device=mesh_device,
                     decode_gather_buffers=self.gather_pool,
+                    sdpa_compute_fidelity=policy.get("sdpa_compute_fidelity", "HiFi2"),
                     precision=groups["mlp"],
                     attention_precision=groups["attention"],
                     down_precision=groups["down"],

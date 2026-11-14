@@ -36,7 +36,7 @@ def load_precision(value=None):
     if isinstance(value, (str, Path)):
         value = json.loads(Path(value).read_text())
     policy = copy.deepcopy(value)
-    if set(policy) != set(BASELINE):
+    if set(policy) - {"sdpa_compute_fidelity"} != set(BASELINE):
         raise ValueError("Precision policy fields must exactly match the construction schema")
     if set(policy["weight_groups"]) != set(BASELINE["weight_groups"]) or set(policy["compute_fidelities"]) != set(
         BASELINE["compute_fidelities"]
@@ -46,6 +46,8 @@ def load_precision(value=None):
         raise ValueError("CCL requires separate prefill and decode policies")
     if any(str(int(i)) != i or not 0 <= int(i) < 60 for i in policy["layer_exceptions"]):
         raise ValueError("Layer exceptions require indices 0 through 59")
+    if policy.get("sdpa_compute_fidelity", "HiFi2") not in ("HiFi2", "HiFi4"):
+        raise ValueError("SDPA supports HiFi2 or HiFi4 policy")
     for group, name in policy["weight_groups"].items():
         if policy["compute_fidelities"][group] != POLICIES[name][1]:
             raise ValueError("Weight policy and compute fidelity disagree")
