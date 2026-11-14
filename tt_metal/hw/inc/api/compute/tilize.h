@@ -6,6 +6,7 @@
 
 #include "api/compute/common.h"
 #include "api/compute/sentinel/compute_kernel_sentinel.h"
+#include "api/compute/matmul_fe_mark.h"
 #ifdef TRISC_MATH
 #include "llk_math_unary_datacopy_api.h"
 #ifdef ARCH_BLACKHOLE
@@ -285,12 +286,12 @@ ALWI void fast_tilize_init_impl(uint32_t icb, uint32_t full_dim, uint32_t ocb, u
 
 }  // namespace fast_tilize_detail
 
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, std::size_t = 0>
 ALWI void fast_tilize_init(uint32_t icb, uint32_t full_dim, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
     fast_tilize_detail::fast_tilize_init_impl<true, is_fp32_dest_acc_en>(icb, full_dim, ocb, call_line);
 }
 
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, std::size_t = 0>
 ALWI void fast_tilize_init_skip_remap(
     uint32_t icb, uint32_t full_dim, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
     fast_tilize_detail::fast_tilize_init_impl<false, is_fp32_dest_acc_en>(icb, full_dim, ocb, call_line);
@@ -311,12 +312,12 @@ ALWI void fast_tilize_init_with_dt_impl(uint32_t icb, uint32_t full_dim, uint32_
 
 }  // namespace fast_tilize_detail
 
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, std::size_t = 0>
 ALWI void fast_tilize_init_with_dt(uint32_t icb, uint32_t full_dim, uint32_t ocb) {
     fast_tilize_detail::fast_tilize_init_with_dt_impl<true, is_fp32_dest_acc_en>(icb, full_dim, ocb);
 }
 
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, std::size_t = 0>
 ALWI void fast_tilize_init_with_dt_skip_remap(uint32_t icb, uint32_t full_dim, uint32_t ocb) {
     fast_tilize_detail::fast_tilize_init_with_dt_impl<false, is_fp32_dest_acc_en>(icb, full_dim, ocb);
 }
@@ -453,6 +454,15 @@ ALWI void fast_tilize_block(
     }
 #endif
 }
+
+#ifdef ARCH_BLACKHOLE
+// a plain call marks the kernel as naming fast tilize (matmul_fe_mark.h)
+#define fast_tilize_init(...) fast_tilize_init<DST_ACCUM_MODE, FAST_TILIZE_MARK()>(__VA_ARGS__)
+#define fast_tilize_init_skip_remap(...) fast_tilize_init_skip_remap<DST_ACCUM_MODE, FAST_TILIZE_MARK()>(__VA_ARGS__)
+#define fast_tilize_init_with_dt(...) fast_tilize_init_with_dt<DST_ACCUM_MODE, FAST_TILIZE_MARK()>(__VA_ARGS__)
+#define fast_tilize_init_with_dt_skip_remap(...) \
+    fast_tilize_init_with_dt_skip_remap<DST_ACCUM_MODE, FAST_TILIZE_MARK()>(__VA_ARGS__)
+#endif
 
 #else   // ARCH_QUASAR
 // Quasar has no separate fast-tilize LLK path -- its regular unpack_tilize is already fast, so these

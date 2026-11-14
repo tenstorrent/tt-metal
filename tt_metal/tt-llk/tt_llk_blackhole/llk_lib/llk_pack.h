@@ -761,6 +761,43 @@ inline void _llk_pack_block_(const std::uint32_t start_tile_index, const std::ui
     }
 }
 
+// The destination words of _llk_pack_block_closed_, issued ahead of the math wait of a full-sync block.
+template <bool rmw_dest = false, bool w_invalidate = true>
+inline void _llk_pack_block_closed_pre_(const std::uint32_t start_tile_index, const std::uint32_t address)
+{
+    // The pack head's order: the byte-wise write before SETADC, the word write after it.
+    if constexpr (rmw_dest)
+    {
+        program_packer_destination_t<false, w_invalidate>(address);
+        set_dst_write_addr(start_tile_index);
+    }
+    else
+    {
+        set_dst_write_addr(start_tile_index);
+        program_packer_destination_t<true, w_invalidate>(address);
+    }
+}
+
+// The pack of _llk_pack_block_closed_ once its destination words are set.
+inline void _llk_pack_block_closed_run_(const std::uint32_t num_tiles, const std::uint32_t tile_stride, const std::uint32_t num_faces)
+{
+    // The output address adds the packer W counter of channel 1 times this stride; no other pack program moves it.
+    // Rewriting an unchanged stride cost the call up to 8 cycles.
+    if (tile_stride != pack_ch1_w_stride())
+    {
+        cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_1_Wstride_RMW>(tile_stride);
+        pack_ch1_w_stride_set(tile_stride);
+    }
+
+    for (std::uint32_t tile = 0; tile < num_tiles; tile++)
+    {
+        TT_MOP(1, 0, num_faces << 10);
+        TTI_INCADCZW(p_setadc::PAC, 1, 0, 1, 0);
+    }
+
+    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b1101);
+}
+
 // Packs num_tiles tiles to L1 tiles tile_stride bytes apart (a multiple of 16 below 64 KB), closing every tile so
 // block-float and padded pages stay intact.
 template <DstSync Dst, bool is_fp32_dest_acc_en, bool rmw_dest = false, bool w_invalidate = true>

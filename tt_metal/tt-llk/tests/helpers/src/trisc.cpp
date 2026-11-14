@@ -105,6 +105,15 @@ __attribute__((noinline)) int main(void) // not in the naked _start (no stack fr
 
         ckernel::fence_compiler();
 
+#if defined(ARCH_BLACKHOLE) && defined(LLK_TRISC_UNPACK) && (defined(MATMUL_UNPACK_TTSYNC) || defined(MATMUL_UNPACK_TTSYNC_EXCL))
+        _llk_unpack_AB_matmul_ttsync_enable_();
+#elif defined(ARCH_BLACKHOLE) && defined(LLK_TRISC_UNPACK) && defined(MATMUL_PRODUCTION)
+        // as the firmware
+        if constexpr (ckernel::matmul_kernel_ttsync(MATH_FIDELITY, dest_sync == ckernel::DstSync::SyncFull, is_fp32_dest_acc_en, MATMUL_KERNEL_FORMATS))
+        {
+            _llk_unpack_AB_matmul_ttsync_enable_();
+        }
+#endif
         run_kernel(temp_args);
 
         ckernel::fence_compiler();
@@ -113,6 +122,16 @@ __attribute__((noinline)) int main(void) // not in the naked _start (no stack fr
     }
 
     llk_perf::read_last_zone();
+
+#if defined(ARCH_BLACKHOLE) && defined(LLK_TRISC_UNPACK) && (defined(MATMUL_UNPACK_TTSYNC) || defined(MATMUL_UNPACK_TTSYNC_EXCL))
+    _llk_unpack_AB_matmul_ttsync_restore_();
+#elif defined(ARCH_BLACKHOLE) && defined(LLK_TRISC_UNPACK) && defined(MATMUL_PRODUCTION)
+    // as the firmware
+    if constexpr (ckernel::matmul_kernel_ttsync(MATH_FIDELITY, dest_sync == ckernel::DstSync::SyncFull, is_fp32_dest_acc_en, MATMUL_KERNEL_FORMATS))
+    {
+        _llk_unpack_AB_matmul_ttsync_restore_();
+    }
+#endif
 
 #if (defined(ARCH_WORMHOLE) || defined(ARCH_BLACKHOLE)) && !(defined(TT_METAL_TTSIM) && defined(COVERAGE))
     ckernel::store_blocking(mailbox, ckernel::KERNEL_COMPLETE); // landed before BRISC can reset this core (_start)

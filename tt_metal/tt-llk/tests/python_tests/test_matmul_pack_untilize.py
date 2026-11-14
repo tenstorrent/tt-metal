@@ -14,6 +14,7 @@ from helpers.test_variant_parameters import (
     MATH_FIDELITY,
     NUM_BLOCKS,
     NUM_TILES_IN_BLOCK,
+    PACK_SRC_FROM_OUTPUT,
     generate_input_dim,
 )
 from helpers.tilize_untilize import tilize_block
@@ -69,6 +70,7 @@ def test_matmul_pack_untilize(
         templates=[
             generate_input_dim(input_dimensions, input_dimensions),
             MATH_FIDELITY(math_fidelity),
+            PACK_SRC_FROM_OUTPUT(),
         ],
         runtimes=[NUM_BLOCKS(num_blocks), NUM_TILES_IN_BLOCK(1)],
         variant_stimuli=StimuliConfig(

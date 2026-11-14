@@ -7,3 +7,5 @@ python_tests/ttsim_results/
 python_tests/accuracy/_csv_output/
 python_tests/_plot_output/
 python_tests/tensor_shape_coverage/
+# junit reports run_hardware_free.sh writes
+python_tests/pytest-report-hardware-free-*.xml

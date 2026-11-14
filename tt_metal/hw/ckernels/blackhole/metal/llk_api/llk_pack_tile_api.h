@@ -4,6 +4,7 @@
 
 #pragma once
 #include <cstdint>
+#include "llk_matmul_forms.h"
 #include "llk_pack_common_api.h"
 #include "sanitizer/api.h"
 
@@ -142,3 +143,44 @@ inline void llk_matmul_pack(
 }
 
 #include "llk_pack_block.h"
+
+// Whether the prepared block takes the closed form, whose destination words llk_pack_block_prepare can issue early. Int8 and UInt8 from a 16 bit DEST stay per tile, as in llk_pack_block.
+template <bool is_fp32_dest_acc_en>
+inline bool llk_pack_block_is_closed_form(std::uint32_t output, std::uint32_t ntiles) {
+    const std::uint8_t output_id = get_output_id(output);
+    return ntiles > 1 && (is_fp32_dest_acc_en || !llk_pack_dst_is_int8(output_id)) && !llk_pack_block_is_contiguous(output_id) &&
+           llk_pack_block_is_closable(output_id);
+}
+
+// Full sync only: issues the closed block pack's destination words before the math wait of the block.
+template <std::uint32_t ntiles, bool is_fp32_dest_acc_en, std::uint32_t matmul_kt = 0>
+inline void llk_pack_block_prepare(std::uint32_t start_tile_index, std::uint32_t output) {
+    if constexpr (DST_SYNC_MODE == DstSync::SyncFull) {
+        if (llk_pack_block_is_closed_form<is_fp32_dest_acc_en>(output, ntiles)) {
+            const std::uint8_t output_id = get_output_id(output);
+            _llk_pack_close_fast_untilize_<DST_SYNC_MODE>();
+            _llk_pack_block_closed_pre_<llk_pack_rmw_tile<PackMode::Default>, false>(
+                start_tile_index,
+                get_local_cb_interface(output_id).fifo_wr_ptr + get_local_cb_interface(output_id).fifo_wr_tile_ptr - 1);
+#ifdef LLK_PACK_W_OFFSET
+            // a closed block of the output, as llk_pack_block marks it: the next W offset block programs its base again
+            llk_pack_state_set_half(output_id + 1);
+#endif
+        }
+    }
+}
+
+// llk_pack_block after llk_pack_block_prepare of the same block, with no pack in between.
+template <std::uint32_t ntiles, bool is_fp32_dest_acc_en, std::uint32_t matmul_kt = 0>
+inline void llk_pack_block_prepared(std::uint32_t start_tile_index, std::uint32_t output) {
+    if constexpr (DST_SYNC_MODE == DstSync::SyncFull) {
+        if (llk_pack_block_is_closed_form<is_fp32_dest_acc_en>(output, ntiles)) {
+            const std::uint8_t output_id = get_output_id(output);
+            const std::uint32_t page_size = get_local_cb_interface(output_id).fifo_page_size;
+            get_local_cb_interface(output_id).fifo_wr_tile_ptr += page_size * ntiles;
+            _llk_pack_block_closed_run_(ntiles, page_size << 4, get_output_num_faces(output_id));
+            return;
+        }
+    }
+    llk_pack_block<ntiles, is_fp32_dest_acc_en, false, matmul_kt>(start_tile_index, output);
+}
