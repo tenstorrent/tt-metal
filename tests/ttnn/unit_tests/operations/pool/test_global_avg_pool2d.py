@@ -24,9 +24,15 @@ pytestmark = pytest.mark.use_module_device
     "dtype",
     (ttnn.bfloat16,),
 )
+@pytest.mark.parametrize(
+    "out_dtype",
+    (ttnn.bfloat16, ttnn.bfloat8_b),
+    ids=["out_bf16", "out_bf8_b"],
+)
 def test_run_average_pool2d(
     input_shape,
     dtype,
+    out_dtype,
     device,
 ):
     torch.manual_seed(0)
@@ -36,11 +42,38 @@ def test_run_average_pool2d(
 
     input_tensor = torch.permute(torch_input_tensor, (0, 2, 3, 1))  # ttnn operates on channels-last tensors
     input_tensor = ttnn.from_torch(input_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
-    output_tensor = ttnn.global_avg_pool2d(input_tensor)
+    output_tensor = ttnn.global_avg_pool2d(input_tensor, dtype=out_dtype)
+    assert output_tensor.dtype == out_dtype
     output_tensor = ttnn.to_torch(output_tensor)
     output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
 
-    assert_with_pcc(torch_output_tensor, output_tensor)
+    pcc = 0.99 if out_dtype == ttnn.bfloat8_b else 0.9999
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)
+
+
+def test_global_avg_pool2d_dtype_rejection(device):
+    torch.manual_seed(0)
+    torch_input_tensor = torch.randn(1, 7, 7, 64)
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    # Unsupported output dtype (e.g. float32) should TT_FATAL / raise RuntimeError
+    with pytest.raises(RuntimeError):
+        ttnn.global_avg_pool2d(input_tensor, dtype=ttnn.float32)
+
+    # Requesting block float with ROW_MAJOR layout in avg_pool2d directly should TT_FATAL / raise RuntimeError
+    with pytest.raises(RuntimeError):
+        ttnn.avg_pool2d(
+            input_tensor=input_tensor,
+            batch_size=1,
+            input_h=7,
+            input_w=7,
+            channels=64,
+            kernel_size=(7, 7),
+            stride=(1, 1),
+            padding=(0, 0),
+            dtype=ttnn.bfloat8_b,
+            output_layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
 
 
 @pytest.mark.parametrize(
