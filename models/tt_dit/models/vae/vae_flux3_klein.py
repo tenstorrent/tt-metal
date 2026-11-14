@@ -64,20 +64,34 @@ def decoder_slice_params(sizes, h_factor: int, w_factor: int = 1) -> dict[tuple[
 CONV_FULL_K_L1_BYTES = 1_350_000
 # Decoder convs whose double-buffered program clashes with the resident DiT's L1 (job 210339: 1024 x 1024, level 0)
 DECODER_SINGLE_BUFFER_CONVS = frozenset({(130, 258, 256, 128)})
+# Per-device input pixels from which a conv whose full-K weights do not fit runs as output-channel slices that do
+OUT_CHANNEL_SPLIT_MIN_PIXELS = 100_000
+
+
+def _full_k_fits(cin: int, cout: int) -> bool:
+    return 2 * 9 * cin * (cout + 64) <= CONV_FULL_K_L1_BYTES
+
+
+def _out_channel_splits(cin: int, cout: int) -> int:
+    return next((n for n in (2, 4, 8, 16) if cout % n == 0 and cout // n >= 32 and _full_k_fits(cin, cout // n)), 1)
 
 
 def decoder_conv_blocking(slice_table) -> dict[tuple[int, int, int, int], Conv2dBlocking]:
     """64 activation rows per core with double-buffered activations and weights; the full inner dimension and
-    height-sharded activations where a 3 x 3 conv's full-K weights fit in L1, block-sharded where they do not."""
+    height-sharded activations where a 3 x 3 conv's full-K weights fit in L1. Where they do not, large inputs run as
+    output-channel slices whose weights fit, small ones block-shard."""
     table = {}
     for key in slice_table:
-        cin, cout = key[2:]
-        fits = 2 * 9 * cin * (cout + 64) <= CONV_FULL_K_L1_BYTES
+        h, w, cin, cout = key
+        fits = _full_k_fits(cin, cout)
+        splits = 1 if fits or h * w < OUT_CHANNEL_SPLIT_MIN_PIXELS else _out_channel_splits(cin, cout)
+        full_k = fits or splits > 1
         table[key] = Conv2dBlocking(
             act_block_h_override=64,
             double_buffer=key not in DECODER_SINGLE_BUFFER_CONVS,
-            full_inner_dim=fits,
-            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED if fits else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            full_inner_dim=full_k,
+            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED if full_k else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            out_channel_splits=splits,
         )
     return table
 
