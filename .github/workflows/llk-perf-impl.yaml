@@ -222,7 +222,7 @@ jobs:
       options: "--rm"
     steps:
       - name: Checkout code
-        uses: tenstorrent/.github/actions/cachew-checkout@e0302d6af3504b1f3d8b64ad6fba7d88276a23f4 # cachew checkout
+        uses: tenstorrent/.github/actions/cachew-checkout@45a9f39cef658f4047a577b4c853f18aa1b8db9d # cachew checkout
         timeout-minutes: 20
         with:
           ref: ${{ inputs.ref }}
@@ -363,7 +363,7 @@ jobs:
         if: ${{ inputs.shadow-compile-runner != '' || inputs.stage2-baseline-ref != '' }}
         run: echo "JOB_START_EPOCH=$(date +%s)" >> "$GITHUB_ENV"
       - name: Checkout code
-        uses: tenstorrent/.github/actions/cachew-checkout@e0302d6af3504b1f3d8b64ad6fba7d88276a23f4 # cachew checkout
+        uses: tenstorrent/.github/actions/cachew-checkout@45a9f39cef658f4047a577b4c853f18aa1b8db9d # cachew checkout
         timeout-minutes: 20
         with:
           ref: ${{ inputs.ref }}

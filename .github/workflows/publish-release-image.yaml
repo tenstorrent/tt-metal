@@ -45,7 +45,7 @@ jobs:
       image_digest: ${{ steps.get-digest.outputs.IMAGE_DIGEST }}
     steps:
       - name: Checkout
-        uses: tenstorrent/.github/actions/cachew-checkout@e0302d6af3504b1f3d8b64ad6fba7d88276a23f4 # cachew checkout
+        uses: tenstorrent/.github/actions/cachew-checkout@45a9f39cef658f4047a577b4c853f18aa1b8db9d # cachew checkout
         timeout-minutes: 20
       - name: Extract Ubuntu version
         id: extract-version
@@ -223,7 +223,7 @@ jobs:
         run: |
           apt-get update && apt-get install -y git
       - name: ⬇️ Checkout
-        uses: tenstorrent/.github/actions/cachew-checkout@e0302d6af3504b1f3d8b64ad6fba7d88276a23f4 # cachew checkout
+        uses: tenstorrent/.github/actions/cachew-checkout@45a9f39cef658f4047a577b4c853f18aa1b8db9d # cachew checkout
         timeout-minutes: 20
         with:
           submodules: recursive

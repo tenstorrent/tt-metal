@@ -24,9 +24,9 @@ permissions:
   contents: read
 
 jobs:
-  # The action and its unit tests live in tenstorrent/.github
-  # (actions/cachew-checkout). This repository checks its own consumers: the
-  # migration script, its tests, and that the pin exists there.
+  # The action, its migration helper and their tests live in
+  # tenstorrent/.github (actions/cachew-checkout). This repository checks its
+  # own consumers against the pin in .github/cachew-checkout.json.
   consumers:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -35,27 +35,22 @@ jobs:
         with:
           sparse-checkout: .github
           persist-credentials: false
-      - name: Test the migration script
-        run: python3 .github/scripts/utils/test_cachew_checkout.py -v
+      # cachew_checkout.py runs tenstorrent/.github's migrate.py at the pinned
+      # commit, so this also proves the pin is a pushed commit there.
       - name: Verify all checkout consumers use cachew
         run: python3 .github/scripts/utils/cachew_checkout.py --check
-      - name: Verify every consumer pins ACTION_SHA
+      - name: Verify every consumer pins action_sha
         run: python3 .github/scripts/utils/cachew_checkout.py --verify-pins
-      - name: Verify the pin exists in tenstorrent/.github
-        # Fetching by SHA fails unless the commit was pushed there. Before the
-        # action change merges, the pin is on a pull request branch, so not
-        # being on main only warns.
+      - name: Warn while the pin is not on tenstorrent/.github main
+        # Before an action change merges, the pin is on a pull request branch.
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          sha=$(python3 -c 'import importlib.util as u; s=u.spec_from_file_location("m", ".github/scripts/utils/cachew_checkout.py"); m=u.module_from_spec(s); s.loader.exec_module(m); print(m.ACTION_SHA)')
-          git init -q pin-check
-          git -C pin-check fetch --no-tags --depth=1 https://github.com/tenstorrent/.github "$sha"
-          git -C pin-check cat-file -e "$sha:actions/cachew-checkout/action.yml"
+          sha=$(jq -r .action_sha .github/cachew-checkout.json)
           status=$(gh api "repos/tenstorrent/.github/compare/main...$sha" --jq .status)
           case "$status" in
             behind|identical) ;;
-            *) echo "::warning::cachew pin $sha is not on tenstorrent/.github main ($status); re-pin ACTION_SHA once it merges" ;;
+            *) echo "::warning::cachew pin $sha is not on tenstorrent/.github main ($status); re-pin once it merges" ;;
           esac
 
   live-smoke:
@@ -65,7 +60,7 @@ jobs:
     steps:
       - name: Checkout through cachew with upstream fallback
         id: checkout
-        uses: tenstorrent/.github/actions/cachew-checkout@e0302d6af3504b1f3d8b64ad6fba7d88276a23f4 # cachew checkout
+        uses: tenstorrent/.github/actions/cachew-checkout@45a9f39cef658f4047a577b4c853f18aa1b8db9d # cachew checkout
         with:
           cachew-url: ${{ inputs.cachew-url }}
           ref: ${{ github.sha }}
