@@ -5823,3 +5823,95 @@ def test_matmul_l1_sharded_b_unsupported_rejected(device, m, k, program_config, 
 )
 def test_matmul_l1_sharded_b_supported(device, m, k, b_sharded, program_config, transpose_b):
     _run_l1_sharded_b_matmul(device, m, k, b_sharded, program_config, transpose_b)
+
+
+@pytest.mark.parametrize("nd_operand", ["a", "b"])
+@pytest.mark.parametrize("core_grid", [None, ttnn.CoreGrid(y=1, x=2)])
+@pytest.mark.parametrize("batch", [1, 2])
+def test_matmul_nd_sharded_without_2d_shard_spec(device, nd_operand, core_grid, batch):
+    # [1, 1, 32, 32] shards of a [batch, 1, 64, 64] tensor form 2 shard columns, which cannot block-shard
+    # a grid of 4 cores in a row, so the ND spec has no 2D shard spec.
+    cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
+    nd_spec = ttnn.NdShardSpec(
+        ttnn.Shape([1, 1, 32, 32]),
+        cores,
+        ttnn.ShardOrientation.ROW_MAJOR,
+        ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+    )
+    nd_memory_config = ttnn.MemoryConfig(ttnn.BufferType.L1, nd_spec)
+
+    torch.manual_seed(0)
+    torch_a = torch.randint(-1, 2, (batch, 1, 64, 64)).bfloat16()
+    torch_b = torch.randint(-1, 2, (batch, 1, 64, 64)).bfloat16()
+
+    def upload(t, operand):
+        memory_config = nd_memory_config if operand == nd_operand else ttnn.DRAM_MEMORY_CONFIG
+        return ttnn.from_torch(
+            t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
+        )
+
+    a = upload(torch_a, "a")
+    b = upload(torch_b, "b")
+    assert (a if nd_operand == "a" else b).memory_config().shard_spec is None
+
+    output = ttnn.matmul(a, b, core_grid=core_grid)
+
+    assert_equal(torch_a @ torch_b, ttnn.to_torch(output))
+
+
+def test_matmul_auto_2d_mcast_reads_nd_sharded_dram_b_in_place(device):
+    # A user core grid makes the auto config 2D multicast, whose in1 reader takes a DRAM ND-sharded B as is.
+    if device.dram_grid_size().x < 4:
+        pytest.skip("needs at least 4 DRAM banks")
+    torch.manual_seed(0)
+    torch_a = torch.randint(-1, 2, (1, 1, 512, 512)).bfloat16()
+    torch_b = torch.randint(-1, 2, (1, 1, 512, 512)).bfloat16()
+    dram_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
+    nd_spec = ttnn.NdShardSpec(ttnn.Shape([512, 64]), dram_cores)
+    a = ttnn.from_torch(torch_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    b = ttnn.from_torch(
+        torch_b,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.MemoryConfig(ttnn.BufferType.DRAM, nd_spec),
+    )
+    assert b.memory_config().shard_spec is None
+
+    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+    output = ttnn.matmul(a, b, core_grid=ttnn.CoreGrid(y=4, x=4))
+    graph = ttnn.graph.end_graph_capture()
+
+    ops = {node["params"]["name"] for node in graph if node.get("node_type") == "function_start"}
+    assert "CopyDeviceOperation" not in ops
+    assert_equal(torch_a @ torch_b, ttnn.to_torch(output))
+
+
+def test_matmul_program_config_rejects_nd_sharded_a_without_2d_shard_spec(device, expect_error):
+    cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))})
+    nd_spec = ttnn.NdShardSpec(
+        ttnn.Shape([1, 1, 32, 32]),
+        cores,
+        ttnn.ShardOrientation.ROW_MAJOR,
+        ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+    )
+    a = ttnn.from_torch(
+        torch.ones(1, 1, 64, 64),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.MemoryConfig(ttnn.BufferType.L1, nd_spec),
+    )
+    b = ttnn.from_torch(torch.ones(1, 1, 64, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(2, 2),
+        in0_block_w=1,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        per_core_M=1,
+        per_core_N=1,
+        transpose_mcast=False,
+        fused_activation=None,
+    )
+    with expect_error(RuntimeError, "Sharded input A needs a 2D shard spec"):
+        ttnn.matmul(a, b, program_config=program_config)
