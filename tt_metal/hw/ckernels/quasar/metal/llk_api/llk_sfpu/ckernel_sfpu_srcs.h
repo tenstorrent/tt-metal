@@ -23,6 +23,7 @@ static_assert(sfpi::SFP_SRCSREG_STRIDE == ckernel::math::SFP_ROWS, "one sfpi ind
  * @brief Slot offsets (SFPI steps) and formats of one SrcS slice.
  *
  * @note Slot order must match the SrcS slice convention in llk_sfpu_srcs_api.h: in0 slice 0, in1 slice 1, out slice 2.
+ *       A ternary op's in2 aliases out; load every input before storing (calculate_ternary_operands does).
  */
 template <sfpi::DataLayout LAYOUT>
 struct SrcsLayout {
@@ -40,6 +41,7 @@ struct SrcsLayout {
     static constexpr int in0 = 0;
     static constexpr int in1 = ops;
     static constexpr int out = 2 * ops;
+    static constexpr int in2 = out;  // ternary only
 
     // SrcS register format (unpack destination = pack source) implied by the layout.
     static constexpr DataFormat format = LAYOUT == sfpi::DataLayout::F32    ? DataFormat::Float32
@@ -138,6 +140,47 @@ struct SrcsBinary<MATH, LAYOUT, SfpuImpl::Sfpi> : SfpuSrcsBinaryOp<SrcsBinary<MA
     }
 };
 
+/**
+ * @brief CRTP base for ternary SrcS ops; all inputs share formats. Experimental, see llk_sfpu_srcs_ternary_impl.
+ *
+ * @note init() and run() are defined in llk_sfpu_srcs_api.h; include it to use them.
+ */
+template <typename Op>
+struct SfpuSrcsTernaryOp {
+    // True when the op's own instructions release the SrcS banks (SFPLOADMACRO).
+    static constexpr bool hw_clears_valids = false;
+
+    static void init_op() {}
+
+    // Takes only the L1 formats; the SrcS register format comes from Op::Layout. No INSTRN_COUNT: no auto-loop.
+    static void init(
+        const std::uint32_t l1_in0_addr_16B,
+        const std::uint32_t l1_in1_addr_16B,
+        const std::uint32_t l1_in2_addr_16B,
+        const DataFormat l1_in_format,
+        const std::uint32_t l1_out_addr_16B,
+        const DataFormat l1_out_format);
+
+    static void run(const std::uint32_t num_tiles);
+};
+
+/** @brief Ternary SrcS op; only Sfpi exists. */
+template <typename MATH, sfpi::DataLayout LAYOUT, SfpuImpl IMPL>
+struct SrcsTernary {
+    static_assert(sizeof(MATH) == 0, "This SFPU op has no SrcS implementation for the requested SfpuImpl");
+};
+
+template <typename MATH, sfpi::DataLayout LAYOUT>
+struct SrcsTernary<MATH, LAYOUT, SfpuImpl::Sfpi> : SfpuSrcsTernaryOp<SrcsTernary<MATH, LAYOUT, SfpuImpl::Sfpi>> {
+    using Layout = SrcsLayout<LAYOUT>;
+
+    sfpi_inline static void calculate() {
+        using Operand = SfpuOperand<SfpuReg::SrcS, SfpiFormat<LAYOUT, typename Layout::value_type>>;
+        calculate_ternary_operands<MATH, Layout::ops>(
+            Operand{Layout::in0}, Operand{Layout::in1}, Operand{Layout::in2}, Operand{Layout::out});
+    }
+};
+
 namespace detail {
 
 // MATH of a SrcS op shape.
@@ -149,6 +192,10 @@ struct srcs_op_math<SrcsUnary<MATH, LAYOUT, IMPL>> {
 };
 template <typename MATH, sfpi::DataLayout LAYOUT, SfpuImpl IMPL>
 struct srcs_op_math<SrcsBinary<MATH, LAYOUT, IMPL>> {
+    using type = MATH;
+};
+template <typename MATH, sfpi::DataLayout LAYOUT, SfpuImpl IMPL>
+struct srcs_op_math<SrcsTernary<MATH, LAYOUT, IMPL>> {
     using type = MATH;
 };
 

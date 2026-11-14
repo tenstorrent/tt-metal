@@ -33,8 +33,8 @@ enum class L1AccessMode : std::uint8_t
 // Real UNPACR/PACR hardware engines that consume buffer descriptors. One "current id" slot each;
 // compile-time ownership ties each engine to a TRISC role (see bfd_engine_owned_by_trisc).
 //
-// Unp2_Slice0/Unp2_Slice1 are one engine, not two: a binary SrcS op needs both input descriptors
-// live at once, so UNPACR2 gets two current[] slots.
+// Unp2_Slice0..2 are one engine, not three: a SrcS op needs all of its input descriptors live at
+// once, so UNPACR2 gets one current[] slot per slice.
 enum class BfdResource : std::uint8_t
 {
     Unp0 = 0,
@@ -43,6 +43,7 @@ enum class BfdResource : std::uint8_t
     Pack1,
     Unp2_Slice0,
     Unp2_Slice1,
+    Unp2_Slice2,
     Count
 };
 

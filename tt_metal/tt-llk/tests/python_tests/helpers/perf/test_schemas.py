@@ -1287,6 +1287,33 @@ PERF_TEST_SCHEMAS_QSR = {
         "aliases": {},
         "test_name_aliases": {"perf_fused_quasar": "perf_fused_quasar"},
     },
+    "perf_isolate_sfpu_where_quasar": {
+        "version": 1,
+        "columns": [
+            "dest_acc",
+            "dst_index",
+            "face_c_dim",
+            "face_r_dim",
+            "formats.input_A",
+            "formats.input_B",
+            "formats.output",
+            "formats.register_A",
+            "formats.register_B",
+            "formats.sfpu_src",
+            "formats.sfpu_dst",
+            "loop_factor",
+            "marker",
+            "num_faces",
+            "num_faces_A",
+            "num_faces_B",
+            "tile_cnt",
+            "unpack_to_dest",
+        ],
+        "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
+        "test_name_aliases": {
+            "perf_isolate_sfpu_where_quasar": "perf_isolate_sfpu_where_quasar"
+        },
+    },
     "perf_matmul_int4_dequant_quasar": {
         "version": 1,
         "columns": [
