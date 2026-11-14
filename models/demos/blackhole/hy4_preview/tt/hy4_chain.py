@@ -77,6 +77,22 @@ def wdtypes_from_env():
     return {n: ttnn.bfloat4_b for n in names} or None
 
 
+def rms_exact(x32, w32, eps):
+    """fp32 rms norm of the 6144-wide rows of x32 [1,1,n,D] fp32 with weight w32 [1,1,1,D] fp32 -> bf16. ``ttnn.rms_norm`` at D = 6144 does not fit L1 with fp32 accumulation, and without
+    it the sum of squares carries 3-4 % systematic error (dump-diff of layer 0: h rel L2 0.04); this composite equals the oracle to bf16 output rounding.
+    """
+    sq = ttnn.multiply(x32, x32)
+    ss = ttnn.sum(sq, dim=3, keepdim=True)
+    ttnn.deallocate(sq)
+    r = ttnn.rsqrt(ttnn.add(ttnn.multiply(ss, 1.0 / x32.shape[3]), eps))
+    ttnn.deallocate(ss)
+    y = ttnn.multiply(x32, r)
+    ttnn.deallocate(r)
+    z = ttnn.multiply(y, w32, dtype=ttnn.bfloat16)
+    ttnn.deallocate(y)
+    return z
+
+
 # ------------------------------------------------------------------ iHC (generic T)
 class Hy4IHCGen:
     """One iHC site (attn or mlp of a layer): m = (x_flat * rsqrt(mean(x_flat^2) + eps)) @ fn^T ; pre = sigmoid(m[:4] s0 + b[:4]) + hc_eps ; post = 2 sigmoid(m[4:] s1 + b[4:]).
@@ -146,6 +162,8 @@ class Hy4ChainLayer:
         t0 = time.time()
         rms = lambda k: upload(md, sd[k].float().reshape(1, 1, -1, 32), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT)
         self.w_in, self.w_post = rms("input_layernorm.weight"), rms("post_attention_layernorm.weight")
+        f32row = lambda k: upload(md, sd[k].float().reshape(1, 1, 1, HID), ttnn.float32)
+        self.w_in32, self.w_post32 = f32row("input_layernorm.weight"), f32row("post_attention_layernorm.weight")
         hc = lambda s: Hy4IHCGen(
             md,
             sd[f"hc_{s}_layer.hc_pre.hc_fn"],
@@ -224,6 +242,8 @@ class Hy4ChainLayer:
 
     # --- helpers
     def _norm(self, h32, w):
+        if os.environ.get("HY4_NORM", "exact") == "exact":
+            return rms_exact(h32, self.w_in32 if w is self.w_in else self.w_post32, self.ch.cfg.rms_norm_eps)
         h = ttnn.typecast(h32, ttnn.bfloat16)
         out = ttnn.rms_norm(h, weight=w, epsilon=self.ch.cfg.rms_norm_eps, compute_kernel_config=self.ckc_norm)
         ttnn.deallocate(h)
@@ -363,6 +383,7 @@ class Hy4Chain:
         self.final_norm = upload(
             md, g("model.norm.weight").float().reshape(1, 1, -1, 32), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT
         )
+        self.final_norm32 = upload(md, g("model.norm.weight").float().reshape(1, 1, 1, HID), ttnn.float32)
         self.ckc_head = compute_cfg(md, "hifi4", True)
         self.ckc_norm = compute_cfg(md, "hifi4", False)
 
@@ -392,10 +413,13 @@ class Hy4Chain:
         w = ttnn.permute(ttnn.to_layout(w, ttnn.ROW_MAJOR_LAYOUT), (0, 3, 2, 1))  # [1,4,n,1]
         w = ttnn.to_layout(w, ttnn.TILE_LAYOUT)
         h = ttnn.sum(ttnn.multiply(x4, w), dim=1, keepdim=True)  # [1,1,n,D] fp32
-        hb = ttnn.typecast(h, ttnn.bfloat16)
-        hn = ttnn.rms_norm(
-            hb, weight=self.final_norm, epsilon=self.cfg.rms_norm_eps, compute_kernel_config=self.ckc_norm
-        )
+        if os.environ.get("HY4_NORM", "exact") == "exact":
+            hn = rms_exact(h, self.final_norm32, self.cfg.rms_norm_eps)
+        else:
+            hb = ttnn.typecast(h, ttnn.bfloat16)
+            hn = ttnn.rms_norm(
+                hb, weight=self.final_norm, epsilon=self.cfg.rms_norm_eps, compute_kernel_config=self.ckc_norm
+            )
         logits = ttnn.linear(hn, self.lm_head, compute_kernel_config=self.ckc_head)
         return hn, logits
 
