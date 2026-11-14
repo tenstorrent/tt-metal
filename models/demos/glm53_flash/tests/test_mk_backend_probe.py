@@ -24,7 +24,6 @@ from loguru import logger
 import ttnn
 from models.autoports.zai_org_glm_5_3_flash.tt import optimized_decoder as OD
 from models.autoports.zai_org_glm_5_3_flash.tt.config import load_hf_text_config
-from models.autoports.zai_org_glm_5_3_flash.tt.mk_sources import HFSource
 from models.demos.glm53_flash.reference.checkpoint import default_snapshot_dir
 from models.demos.glm53_flash.tt.mesh import mesh_device_params
 
@@ -70,7 +69,11 @@ def test_mk_backend_probe(mesh_device, monkeypatch):
 
     snapshot = default_snapshot_dir()
     cfg = load_hf_text_config(str(snapshot))
-    source = HFSource(snapshot, cfg)
+    # the e2e's weight source (GLM53_MK_TILE_CACHE_V3 -> MkTileCacheSource READ): a full-model probe on the bare HFSource
+    # re-packed all 45 layers on the host (bfp4 tiles, ~30+ min, 2026-11-14 ctx_full_p1m_rand)
+    from models.autoports.zai_org_glm_5_3_flash.tt.mk_sources import open_weight_source
+
+    source = open_weight_source(snapshot, cfg)
     monkeypatch.setattr(OD, "FdTileCacheSource", lambda cache_dir, manifest: source)
     layers = _layers()
     ep = os.environ.get("GLM53_MK_EP", "0") == "1"
