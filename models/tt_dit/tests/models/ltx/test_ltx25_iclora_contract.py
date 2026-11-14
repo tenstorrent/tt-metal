@@ -566,3 +566,67 @@ def test_constructor_cold_capture_cleanup(contract, constructor_native, error):
     assert state.capture_only is False
     assert events[-2:] == [("tracer_capture_only", False), ("capture_only", False)]
     assert ("compile",) not in events
+
+
+@pytest.mark.parametrize("cold", [False, True])
+@pytest.mark.parametrize("dynamic_load", [False, True])
+def test_native_collector_warms_reference_once(contract, constructor_native, monkeypatch, tmp_path, cold, dynamic_load):
+    """Run the real collector through its first generation with real constructor dispatch."""
+    state, events = constructor_native
+    state.cold = cold
+    contract.path.write_text(json.dumps(contract.fixture))
+    target = tmp_path / "collection"
+    monkeypatch.setenv("TT_ICLORA_FIXTURE", str(contract.path))
+    monkeypatch.setenv("TT_ICLORA_OUTPUT", str(target))
+    monkeypatch.setitem(sys.modules, "models.tt_dit.pipelines.ltx.pipeline_ltx25_iclora", contract.module)
+    monkeypatch.setitem(sys.modules, "models.tt_dit.utils.video", SimpleNamespace(export_video_audio=None))
+
+    class FirstGeneration(Exception):
+        pass
+
+    def generate(pipe, prompt, **kwargs):
+        assert pipe._pipeline._traced
+        assert pipe._pipeline._audio_traced
+        assert pipe._pipeline._vae_traced
+        assert kwargs["first_frame"] == contract.fixture["acceptance"]["first_frame"]["path"]
+        assert kwargs["output_type"] == "float"
+        events.append(("generate",))
+        raise FirstGeneration
+
+    monkeypatch.setattr(contract.module.LTX25ICLoRAPipeline, "generate_r2v", generate)
+    path = Path(__file__).with_name("test_pipeline_ltx25_iclora.py")
+    tree = ast.parse(path.read_text())
+    collector = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name.startswith("test_"))
+    collector.decorator_list = []  # Device parametrization only; execute the entire unchanged body.
+    namespace = dict(os=os, json=json, Path=Path, pytest=pytest, _now=lambda: "synthetic", _digest=contract.module.file_digest)
+    exec(compile(ast.Module(body=[collector], type_ignores=[]), str(path), "exec"), namespace)
+    with pytest.raises(FirstGeneration):  # allow-pytest.raises: CPU-only run excludes native conftest
+        namespace[collector.name](None, 1, 0, 2, "ring", False, dynamic_load)
+
+    warmups = [e for e in events if e[0] == "warmup"]
+    real = [e for e in warmups if not e[3]]
+    assert len(real) == 1  # A cold manifest pass is distinct from the required dispatched warmup.
+    assert len(warmups) == (2 if cold and not dynamic_load else 1)
+    for _, kwargs, traced, _ in warmups:
+        assert traced
+        assert (kwargs["num_frames"], kwargs["height"], kwargs["width"]) == (9, 128, 128)
+        assert kwargs["ref_num_frames"] == 9
+        assert kwargs["stages"] == ("s1_ref", "s2_ref")
+    assert real[0][1]["capture_all"] is cold
+    assert events.index(("allocate", "s1_ref")) < events.index(("capture", ("s1_ref", "s2_ref")))
+    assert events.index(("allocate", "s2_ref")) < events.index(("capture", ("s1_ref", "s2_ref")))
+    assert events[-1] == ("generate",)
+    assert json.loads((target / "runtime-options.json").read_text())["traced"] is True
+    assert json.loads((target / "resolved-fixture.json").read_text()) == contract.fixture
+    assert json.loads((target / "calls.jsonl").read_text())["error"].startswith("FirstGeneration")
+
+
+def test_explicit_warmup_after_trace_release_is_preserved(contract, constructor_native):
+    _, events = constructor_native
+    pipe = contract.create(traced=True)
+    pipe._pipeline.release_traces()
+    events.clear()
+    pipe.warmup_buffers()
+    assert [e for e in events if e[0] == "allocate"] == [("allocate", "s1_ref"), ("allocate", "s2_ref")]
+    assert len([e for e in events if e[0] == "warmup"]) == 1
+    assert events[-1] == ("capture", ("s1_ref", "s2_ref"))
