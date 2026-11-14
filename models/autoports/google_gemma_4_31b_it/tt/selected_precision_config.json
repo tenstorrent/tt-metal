@@ -1,10 +1,10 @@
 {
-  "config_id": "head_bfp4",
+  "config_id": "stage12_head_bfp8_lofi",
   "weight_groups": {
     "attention": "bfp4",
     "mlp": "bfp4",
     "down": "bfp4",
-    "lm_head": "bfp4"
+    "lm_head": "bfp8_lofi"
   },
   "layer_exceptions": {},
   "compute_fidelities": {
