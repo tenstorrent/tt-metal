@@ -5,6 +5,7 @@
 #include "tilize.hpp"
 
 #include "device/tilize_device_operation.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
@@ -42,6 +43,8 @@ MassagedTilize build_ndiml_tilize(BaseTilizeType base_tilize, const std::optiona
 
 namespace ttnn {
 
+using ttnn::operations::data_movement::uint16_output_dtype_needs_typecast;
+
 ttnn::Tensor tilize(
     const ttnn::Tensor& input_tensor,
     const std::optional<MemoryConfig>& memory_config,
@@ -61,6 +64,21 @@ ttnn::Tensor tilize(
                 PageConfig(Layout::TILE, tile),
                 memory_config.value_or(input_tensor.memory_config())));
         return create_device_tensor(spec, input_tensor.device());
+    }
+
+    // Tilize at the source dtype (an exact copy: matching unpack/pack CB formats) and convert by value
+    // on the tiled result. Converting the row-major input first is not an option -- a row-major tensor
+    // is not the input typecast is tested against, and the requested dtype belongs to the tiled output.
+    if (uint16_output_dtype_needs_typecast(input_tensor.dtype(), output_dtype.value_or(input_tensor.dtype()))) {
+        ttnn::Tensor tiled = tilize(
+            input_tensor,
+            memory_config,
+            /*output_dtype=*/std::nullopt,
+            use_multicore,
+            use_low_perf,
+            tile,
+            sub_core_grids);
+        return ttnn::typecast(tiled, output_dtype.value(), memory_config.value_or(tiled.memory_config()));
     }
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());

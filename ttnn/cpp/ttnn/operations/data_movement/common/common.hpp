@@ -39,6 +39,18 @@ inline bool requires_unpack_to_dest(tt::tt_metal::DataType dtype) {
            dtype == tt::tt_metal::DataType::UINT32;
 }
 
+// True when a data-movement ops' requested output dtype makes it reinterpret a UINT16 source's bits
+// instead of converting them. Those ops move tile data between differently formatted unpacker and
+// packer CBs and back the conversion with the shared eltwise-copy compute kernel (copy_tile into a
+// differently formatted DFB, then pack_tile out of it), which is a raw bit copy: a uint16 value lands
+// in the target format's exponent field (uint16 0 arrives as int32 1024, uint16 1 as 8421375).
+// A UINT8 source converts correctly through the same path, so only the 16-bit source needs this.
+// Callers must route by value through ttnn::typecast and let the move run at the converted dtype.
+constexpr bool uint16_output_dtype_needs_typecast(
+    tt::tt_metal::DataType input_dtype, tt::tt_metal::DataType output_dtype) {
+    return input_dtype == tt::tt_metal::DataType::UINT16 && output_dtype != tt::tt_metal::DataType::UINT16;
+}
+
 // Deprecated: use requires_unpack_to_dest(fmt) directly. Kept until all callers migrate.
 inline bool needs_fp32_unpack_to_dest(bool fp32_dest_acc_en, tt::tt_metal::DataType dtype) {
     return fp32_dest_acc_en && requires_unpack_to_dest(dtype);

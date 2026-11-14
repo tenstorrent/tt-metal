@@ -5,6 +5,7 @@
 #include "tilize_with_val_padding.hpp"
 
 #include "device/tilize_with_val_padding_device_operation.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
@@ -65,6 +66,8 @@ ttnn::Shape squeeze_output_shape(const ttnn::Shape& output_shape) {
 
 namespace ttnn {
 
+using ttnn::operations::data_movement::uint16_output_dtype_needs_typecast;
+
 ttnn::Tensor tilize_with_val_padding(
     const ttnn::Tensor& input_tensor,
     const ttnn::Shape& output_padded_shape,
@@ -94,6 +97,20 @@ ttnn::Tensor tilize_with_val_padding(
                 PageConfig(Layout::TILE),
                 memory_config.value_or(input_tensor.memory_config())));
         return create_device_tensor(spec, input_tensor.device());
+    }
+
+    // As in tilize: pad-and-tilize at the source dtype (an exact copy) and convert by value on the
+    // tiled result, so the widening never goes through the copy kernel's raw bit move.
+    if (uint16_output_dtype_needs_typecast(input_tensor.dtype(), output_dtype.value_or(input_tensor.dtype()))) {
+        ttnn::Tensor tiled = tilize_with_val_padding(
+            input_tensor,
+            output_padded_shape,
+            pad_value,
+            memory_config,
+            /*output_dtype=*/std::nullopt,
+            use_multicore,
+            sub_core_grids);
+        return ttnn::typecast(tiled, output_dtype.value(), memory_config.value_or(tiled.memory_config()));
     }
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
