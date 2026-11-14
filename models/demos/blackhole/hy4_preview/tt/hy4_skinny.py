@@ -605,6 +605,13 @@ class SkinnyLinear:
 # --------------------------------------------------------------------------------------------------------------------------------------------------
 # fused h-proj: [q_a | kv_a | gate | (idx_wk | idx_wp)] = h @ W_c (N sharded over the mesh columns, K = 6144 full), output split in the writer
 # --------------------------------------------------------------------------------------------------------------------------------------------------
+def proj_assignment(nt):
+    """output tiles of a projection over the 8 banks as evenly as possible: (valid tiles per bank, first tile per bank, padded tiles per bank)."""
+    q, r = divmod(nt, NB)
+    valid = [q + 1 if b < r else q for b in range(NB)]
+    return valid, [sum(valid[:b]) for b in range(NB)], q + (1 if r else 0)
+
+
 class SkinnyProj:
     """parts = SkinnyProj(md, wcat [1,1,6144, cols * nloc] host, widths)(h, T): the fused projection of Hy4AttentionOpt (``fuseproj``) on the 8 bank cores, the output columns of
     every mesh column split into len(widths) tensors [1,1,T,width] (no ttnn.slice ops).  Output tiles (nloc / 32 per chip) are spread over the banks as evenly as possible; weight tiles of a
@@ -622,10 +629,7 @@ class SkinnyProj:
         assert sum(widths) == nloc
         self.widths = list(widths)
         self.NT = nloc // 32
-        q, r = divmod(self.NT, NB)
-        self.valid = [q + 1 if b < r else q for b in range(NB)]
-        self.first = [sum(self.valid[:b]) for b in range(NB)]
-        self.PNC = q + (1 if r else 0)
+        self.valid, self.first, self.PNC = proj_assignment(self.NT)
         ends, acc = [], 0
         for w in widths:
             acc += w // 32
